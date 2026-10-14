@@ -6625,13 +6625,27 @@ fn z80_design(undocumented: &str) -> Design {
     design_of("z80", "z80", &[("UNDOCUMENTED_FLAGS", undocumented)])
 }
 
-/// True for the three prefixes `ip/cpu/z80` does not decode.
+/// True for an encoding `ip/cpu/z80` does not decode: the `DD` and `FD`
+/// prefixes, and `ED`'s block instructions.
 ///
-/// The matrix leaves no holes for them: `ED`, `DD` and `FD` all land on
-/// `x = 3, z = 5, q = 1`, which is `CALL nn`. A core that only documented
-/// them as unimplemented would push a return address and jump.
+/// The matrix leaves no holes for the prefixes: `ED`, `DD` and `FD` all
+/// land on `x = 3, z = 5, q = 1`, which is `CALL nn`. A core that only
+/// documented them as unimplemented would push a return address and
+/// jump.
+///
+/// `ED`'s second quadrant is `LDI`, `CPI`, `INI`, `OUTI` and their
+/// repeating and decrementing forms, which are the eight that carry a
+/// second T-state count and the ones the core still traps.
 fn z80_undecoded(code: &[u8]) -> bool {
-    matches!(code[0], 0xED | 0xDD | 0xFD)
+    if matches!(code[0], 0xDD | 0xFD) {
+        return true;
+    }
+    if code[0] == 0xED && code.len() >= 2 {
+        let op = code[1];
+        // x == 2, z < 4, y >= 4.
+        return (op >> 6) == 2 && (op & 0x04) == 0 && (op & 0x20) != 0;
+    }
+    false
 }
 
 /// One encoding with zeros in whatever holes it has. The operand's value
@@ -6681,6 +6695,7 @@ struct Z80<'d> {
     wr_n: NetHandle,
     dbg_retire: NetHandle,
     dbg_trap: NetHandle,
+    dbg_pc: NetHandle,
     mem: Vec<u8>,
     traps: u64,
 }
@@ -6699,6 +6714,7 @@ impl<'d> Z80<'d> {
             wr_n: h("wr_n"),
             dbg_retire: h("dbg_retire"),
             dbg_trap: h("dbg_trap"),
+            dbg_pc: h("dbg_pc"),
             sim,
             mem: vec![0u8; 0x1_0000],
             traps: 0,
@@ -6749,6 +6765,11 @@ impl<'d> Z80<'d> {
             }
         }
         panic!("{what} did not finish in 64 T-states");
+    }
+
+    /// The address of the opcode whose instruction finished last.
+    fn retired_at(&self) -> u16 {
+        (get_u64(&self.sim, self.dbg_pc) & 0xFFFF) as u16
     }
 
     fn run(&mut self, instructions: usize, clocks: usize) {
@@ -6809,11 +6830,16 @@ fn z80_counts_the_t_states_of_every_instruction_it_implements() {
         assert_eq!(cpu.traps, 0, "{name} raised dbg_trap");
         checked += 1;
     }
-    // The two spaces the core claims, against the three it does not.
+    // What the core claims, against what it still traps.
+    // 542 is the unprefixed 252, the CB 248 and the 42 of ED that are
+    // not block instructions. The 156 are DD and FD with their own CB
+    // subspaces, and ED's sixteen blocks -- four groups of four, since
+    // each of LDI, CPI, INI and OUTI has a decrementing and two
+    // repeating forms.
     assert_eq!(
         (checked, skipped),
-        (500, 198),
-        "the unprefixed and CB encodings, against ED, DD and FD"
+        (542, 156),
+        "the unprefixed, CB and ED encodings, against DD, FD and the blocks"
     );
 }
 
@@ -6830,16 +6856,162 @@ fn z80_counts_the_t_states_of_every_instruction_it_implements() {
 #[test]
 fn z80_traps_the_prefixes_it_does_not_decode() {
     let design = z80_design("1");
-    for prefix in [0xEDu8, 0xDD, 0xFD] {
+    for prefix in [0xDDu8, 0xFD] {
         let mut cpu = Z80::new(&design, &[prefix, 0x00, 0x00]);
         let got = cpu.run_one("an undecoded prefix");
         assert_eq!(got, 4, "an undecoded prefix takes a NOP's four T-states");
         assert_eq!(cpu.traps, 1, "{prefix:#04x} raised dbg_trap once");
     }
-    // `CB` is a prefix the core does decode, and it says nothing.
+    // A block instruction is decoded as far as its two fetches and then
+    // trapped, so it is eight T-states and not four.
+    for block in [0xA0u8, 0xB0, 0xA1, 0xB9] {
+        let mut cpu = Z80::new(&design, &[0xED, block]);
+        let got = cpu.run_one("a block instruction");
+        assert_eq!(got, 8, "ED {block:#04x} is two fetches");
+        assert_eq!(cpu.traps, 1, "ED {block:#04x} raised dbg_trap once");
+    }
+    // `CB` and the rest of `ED` are decoded, and say nothing.
     let mut cpu = Z80::new(&design, &[0xCB, 0x00]);
     cpu.run_one("rlc b");
     assert_eq!(cpu.traps, 0, "CB is decoded and raises nothing");
+    let mut cpu = Z80::new(&design, &[0xED, 0x44]);
+    cpu.run_one("neg");
+    assert_eq!(cpu.traps, 0, "ED 44 is NEG and raises nothing");
+}
+
+/// True for an instruction that moves PC somewhere of its own choosing,
+/// so "PC is just past it" is the wrong question to ask.
+fn z80_branches(name: &str) -> bool {
+    matches!(
+        name,
+        "jp" | "jr" | "call" | "ret" | "reti" | "retn" | "rst" | "djnz" | "halt"
+    )
+}
+
+/// # Every implemented encoding leaves PC just past itself
+///
+/// **The complement to the T-state sweep, and not a duplicate of it.**
+/// That test runs each instruction alone from a reset, which means it
+/// cannot see a wrong *fetch* address: the shape that decides where an
+/// opcode is read from is the **previous** instruction's, because `ir` is
+/// not latched until the rising edge of T3. An instruction that puts the
+/// wrong address on the bus during its own first M-cycle therefore
+/// damages whatever follows it and is invisible when nothing does.
+///
+/// `LD (HL),n` did exactly that. Its first M-cycle addressed HL instead
+/// of PC, so the next opcode was fetched from HL — in a program that had
+/// just stored `31` there, the following instruction read as `LD SP,nn`,
+/// three bytes disappeared and the accumulator was never loaded. Its own
+/// ten T-states were correct throughout, and `z80_computes` happened not
+/// to use it.
+///
+/// So this runs each encoding **followed by a NOP** and asks where that
+/// NOP was fetched from: `dbg_pc` after it retires is its own address,
+/// which must be the length of the instruction before it.
+///
+/// What this would not catch: the branching instructions, which are
+/// skipped because PC is supposed to move; and anything about flags or
+/// results, which `z80_computes` and `z80_computes_the_ed_quadrant` own.
+#[test]
+fn z80_advances_pc_by_each_instructions_length() {
+    let design = z80_design("1");
+    let mut checked = 0usize;
+    for insn in z80::TABLE {
+        if z80_undecoded(insn.code) || z80_branches(insn.name) {
+            continue;
+        }
+        let mut program = z80_with_zero_operands(insn);
+        let name = insn.syntax();
+        assert_eq!(
+            u16::try_from(program.len()).unwrap_or(0),
+            insn.len(),
+            "{name}: the table's length and its encoding disagree"
+        );
+        program.push(0x00); // the NOP whose address is the answer
+        let mut cpu = Z80::new(&design, &program);
+        cpu.run_one(&name);
+        cpu.run_one(&format!("the NOP after {name}"));
+        assert_eq!(
+            cpu.retired_at(),
+            insn.len(),
+            "{name}: the next opcode was fetched from {:#06x}, not {:#06x}",
+            cpu.retired_at(),
+            insn.len()
+        );
+        checked += 1;
+    }
+    assert!(checked > 470, "only {checked} encodings were checked");
+}
+
+/// # ED's first quadrant computes
+///
+/// A T-state count says nothing about what came out, and ED's quadrant
+/// is where the arithmetic gets wider and the flag rules stop being the
+/// 8-bit ones: `SBC HL,rp` borrows across sixteen bits, `NEG` is the one
+/// subtraction whose left operand is not A, `RRD` moves nibbles between
+/// A and memory, and `LD A,I` reports IFF2 in the parity bit.
+///
+/// What this would not catch: the block instructions, which the core
+/// traps and `z80_traps_the_prefixes_it_does_not_decode` pins as
+/// trapping; `IM`, whose only observable effect is on an interrupt
+/// response nothing here drives; and `IN r,(C)` / `OUT (C),r`, which
+/// want an I/O device rather than this bench's flat memory.
+#[test]
+fn z80_computes_the_ed_quadrant() {
+    let design = z80_design("1");
+    let image = z80::assemble(
+        "
+        .org $0000
+            ld   a,1
+            neg                  ; ff, with carry set
+            ld   ($9100),a
+            ld   hl,$1234
+            ld   de,$0234
+            or   a               ; clears carry for the borrow below
+            sbc  hl,de
+            ld   ($9102),hl      ; 1000
+            ld   hl,$1000
+            ld   de,$0234
+            or   a
+            adc  hl,de
+            ld   ($9104),hl      ; 1234
+            ld   bc,$abcd
+            ld   ($9106),bc      ; ED 43, the long encoding
+            ld   bc,$0000
+            ld   bc,($9106)      ; ED 4B
+            ld   ($9108),bc      ; cd ab again
+            ld   hl,$910a
+            ld   (hl),$31
+            ld   a,$7a
+            rrd                  ; (hl) = a3, a = 71
+            ld   ($910b),a
+            ld   a,$5a
+            ld   i,a
+            ld   a,$00
+            ld   a,i
+            ld   ($910c),a       ; 5a
+            halt
+        ",
+    )
+    .unwrap_or_else(|e| panic!("the program does not assemble: {e}"));
+
+    let mut program = vec![0u8; 0x1_0000];
+    for (at, byte) in &image.bytes {
+        program[usize::from(*at)] = *byte;
+    }
+    let mut cpu = Z80::new(&design, &program);
+    cpu.run(200, 4000);
+
+    let at = |a: u16| cpu.mem[usize::from(a)];
+    let pair = |a: u16| u16::from(at(a)) | (u16::from(at(a + 1)) << 8);
+    assert_eq!(at(0x9100), 0xff, "neg of 1");
+    assert_eq!(pair(0x9102), 0x1000, "sbc hl,de with carry clear");
+    assert_eq!(pair(0x9104), 0x1234, "adc hl,de with carry clear");
+    assert_eq!(pair(0x9108), 0xabcd, "bc through LD (nn),bc and LD bc,(nn)");
+    assert_eq!(at(0x910a), 0xa3, "rrd wrote the low nibble of a into (hl)");
+    assert_eq!(at(0x910b), 0x71, "and took (hl)'s low nibble into a");
+    assert_eq!(at(0x910c), 0x5a, "a through I and back");
+    assert_eq!(cpu.traps, 0, "nothing in the program trapped");
 }
 
 /// # The core computes, and the flags say what the reference says

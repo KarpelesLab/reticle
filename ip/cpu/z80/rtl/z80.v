@@ -1,27 +1,49 @@
 // z80 — a T-state accurate Zilog Z80 core.
 //
 // What it does
-//   The unprefixed opcode space in full — all 256 encodings — and the
-//   whole of the `CB` space: the eight rotates and shifts, `BIT`, `RES`
-//   and `SET` on every register and on `(HL)`. That is the 8-bit load
-//   and arithmetic set, the 16-bit loads and `ADD HL,rp`, the stack,
-//   the jumps and calls including every condition, `DJNZ`, `RST`,
-//   `IN A,(n)` / `OUT (n),A`, `EX` in all four forms, `EXX`, `DAA`,
-//   `HALT`, `DI` / `EI`, and `NMI` and `INT` in interrupt mode 1.
+//   The unprefixed opcode space in full — all 256 encodings — the
+//   whole of the `CB` space, and the first quadrant of `ED`.
+//
+//   Unprefixed: the 8-bit load and arithmetic set, the 16-bit loads and
+//   `ADD HL,rp`, the stack, the jumps and calls including every
+//   condition, `DJNZ`, `RST`, `IN A,(n)` / `OUT (n),A`, `EX` in all
+//   four forms, `EXX`, `DAA`, `HALT`, `DI` / `EI`, and `NMI` and `INT`
+//   in interrupt mode 1.
+//
+//   `CB`: the eight rotates and shifts, `BIT`, `RES` and `SET` on every
+//   register and on `(HL)`.
+//
+//   `ED`: `ADC HL,rp` and `SBC HL,rp`, `LD (nn),rp` and `LD rp,(nn)`,
+//   `IN r,(C)` and `OUT (C),r` — which set flags where `IN A,(n)`
+//   leaves them alone — `NEG`, `RETN` and `RETI`, `IM 0` / `IM 1` /
+//   `IM 2`, `LD I,A` / `LD R,A` / `LD A,I` / `LD A,R`, and `RRD` /
+//   `RLD`.
 //
 //   This is a reimplementation from the published description of the
 //   part — a machine's observable behaviour, not anyone's creative
 //   work. No ROM, no system software and no vendor netlist is in this
 //   package, and none is needed to run it.
 //
-//   **What is not here, and traps rather than guesses:** the `ED`,
-//   `DD` and `FD` prefixes, and therefore `IX`, `IY`, the block
-//   instructions, the 16-bit `ADC` / `SBC`, `LD I,A`, `IM 0` / `IM 2`
-//   and `RETN` / `RETI`. Fetching one of those three bytes raises
-//   `dbg_trap` for a cycle and the core treats it as a `NOP`, so a
-//   program that reaches one says so instead of quietly computing
-//   something else. `BUSRQ` / `BUSAK` are not implemented either: this
+//   **What is not here, and traps rather than guesses:** the `DD` and
+//   `FD` prefixes, and therefore `IX` and `IY`; and `ED`'s second
+//   quadrant, which is `LDI`, `CPI`, `INI`, `OUTI` and their
+//   decrementing and repeating forms. Reaching one raises `dbg_trap`
+//   for a cycle and the core treats it as a `NOP` — eight T-states for
+//   a block instruction, whose prefix was fetched, and four for `DD` or
+//   `FD`. A program that reaches one says so instead of quietly
+//   computing something else. `IM 0`'s and `IM 2`'s *interrupt
+//   responses* are not implemented either: the mode is stored, and
+//   `INT` always answers as mode 1. `BUSRQ` / `BUSAK` are absent: this
 //   core never gives up the bus.
+//
+//   That trap is a mechanism and not a comment, and it has to be,
+//   because **the matrix leaves no holes for the prefix bytes**. `ED`,
+//   `DD` and `FD` all decode as `x = 3, z = 5, q = 1`, which is
+//   `CALL nn` — so a core that merely documented them as unimplemented
+//   would push a return address and jump somewhere, which is what this
+//   one did until
+//   `tests/ip_library.rs::z80_traps_the_prefixes_it_does_not_decode`
+//   asked. `ir_is_prefix` names them before the shape decode runs.
 //
 // The bus is the part's own, and that is the point
 //   `M1`, `MREQ`, `IORQ`, `RD`, `WR`, `RFSH`, `HALT` and `WAIT`, all
@@ -41,11 +63,15 @@
 //   bus a pad drives: see `usb_device_ulpi`. `dout_oe` is high for
 //   exactly the T-states in which the real part drives D.
 //
-//   `din` is sampled at the **end of the T-state in which the real
-//   part latches it** — T3 of an opcode fetch or a memory read, the
-//   last T-state of an I/O read. A synchronous core has no falling
-//   edge to use, and this is the edge that gives a memory the same
-//   setup time the part's own timing diagram asks for.
+//   `din` is sampled on the **rising edge of T3**, which is where the
+//   part latches both an opcode and a memory read, and which in a
+//   synchronous core is the edge that ends T2. It has to be that edge
+//   and not the end of T3: the refresh address goes out *during* T3, so
+//   a core that waited until T3 had finished would latch whatever the
+//   refresh address points at rather than the opcode — which this one
+//   did, and every instruction longer than one M-cycle came apart. An
+//   I/O read is a T-state longer and latches at the end of its wait
+//   state.
 //
 //   `WAIT` is sampled in T2 of a memory cycle and in the wait state of
 //   an I/O cycle, as the part does, and extends that T-state for as
@@ -95,6 +121,19 @@
 //     NMI                             M1(5) + 3 + 3                = 11
 //     INT, mode 1                     M1(6) + 3 + 3                = 13
 //
+//   And the ED quadrant, every one of which begins with two fetches
+//   because a prefix is a byte like any other:
+//
+//     NEG, IM n, and ED's undefined bytes
+//                                     M1(4) + M1(4)                = 8
+//     LD I,A / LD R,A / LD A,I / LD A,R
+//                                     M1(4) + M1(4) + 1            = 9
+//     IN r,(C) / OUT (C),r            M1(4) + M1(4) + io 4         = 12
+//     RETN / RETI                     M1(4) + M1(4) + 3 + 3        = 14
+//     ADC HL,rp / SBC HL,rp           M1(4) + M1(4) + 4 + 3        = 15
+//     RRD / RLD                       M1(4) + M1(4) + 3 + 4 + 3    = 18
+//     LD (nn),rp / LD rp,(nn)         M1(4) + M1(4) + 3+3 + 3+3    = 20
+//
 //   An `M1(4)` whose instruction is longer than one byte spends its
 //   fetch on the opcode; the operand bytes are the 3-T-state reads
 //   after it. `JP cc,nn` reads both operand bytes whether it jumps or
@@ -132,6 +171,23 @@
 //   After a reset: `PC` and `I` and `R` are zero, both interrupt
 //   enables are clear, and `AF` and `SP` are `FFFF` — the state a Z80
 //   comes up in, not zero.
+//
+// One invariant that belongs to no single instruction
+//   **Every shape's first M-cycle addresses PC.** During T1 and T2 of
+//   an opcode fetch the shape in effect is still the *previous*
+//   instruction's, because `ir` is not latched until the rising edge of
+//   T3 — so a shape whose first M-cycle puts anything else on the bus
+//   corrupts the fetch of whatever follows it and never its own
+//   behaviour. `LD (HL),n` addressed HL there, and in a program that
+//   had just stored a byte through HL the next opcode was read from
+//   that data instead of from the program: it decoded as `LD SP,nn`,
+//   three bytes vanished and the accumulator was never loaded. The
+//   instruction's own ten T-states were right throughout.
+//
+//   `tests/ip_library.rs::z80_advances_pc_by_each_instructions_length`
+//   is the check — every encoding followed by a `NOP`, whose own
+//   address has to be the length of what came before it. A sweep that
+//   runs one instruction from a reset cannot see this class at all.
 //
 // What a reader should check before trusting a number here
 //   The T-state counts above are quoted from the Zilog tables. What
@@ -171,7 +227,11 @@ module z80 #(
 
     // Retirement trace, the same three signals `mos6502` offers.
     // `dbg_pc` is the address of the opcode whose instruction finished
-    // on the previous edge.
+    // on the previous edge, which means both it and `dbg_retire` are
+    // **registered**: a bench reads them after taking the edge, the way
+    // `tests/ip_library.rs` drives this core and `mos6502`'s own bench
+    // drives that one. They were combinational for a while, which
+    // contradicted this sentence and could not be read that way at all.
     output wire [15:0] dbg_pc,
     output wire        dbg_retire,
     output wire        dbg_trap
@@ -213,7 +273,9 @@ module z80 #(
     reg        ei_pending = 1'b0;   // EI enables after the next opcode
     reg        nmi_seen = 1'b0;     // the edge, latched until taken
     reg        nmi_last = 1'b1;
-    reg [7:0]  cbop = 8'h00;     // the opcode after a CB prefix
+    reg [7:0]  op2 = 8'h00;     // the opcode after a CB or ED prefix
+    reg [7:0]  ireg = 8'h00;    // I, the interrupt vector page
+    reg [1:0]  im = 2'd0;       // the interrupt mode
     reg        in_nmi = 1'b0;    // an interrupt is being taken, and the
     reg        in_int = 1'b0;    // shape has to stay its shape
     reg        trap = 1'b0;
@@ -274,12 +336,26 @@ module z80 #(
     wire [1:0] p = ir[5:4];
     wire       q = ir[3];
 
-    // The three prefixes this core does not decode. They have to be
-    // named here because the matrix does not leave holes for them:
-    // `ED`, `DD` and `FD` all land on `x = 3, z = 5, q = 1`, which is
+    // The two prefixes this core still does not decode. They have to be
+    // named here because the matrix does not leave holes for them: `ED`,
+    // `DD` and `FD` all land on `x = 3, z = 5, q = 1`, which is
     // `CALL nn`, so a core that only *documented* them as unimplemented
-    // would quietly push a return address and jump.
-    wire ir_is_prefix = (ir == 8'hed) || (ir == 8'hdd) || (ir == 8'hfd);
+    // would quietly push a return address and jump. `ED` is decoded now;
+    // these two are not.
+    wire ir_is_prefix = (ir == 8'hdd) || (ir == 8'hfd);
+
+    // ED's second byte, taken apart the same way. Its first quadrant
+    // holds everything this core implements; the second holds the block
+    // instructions, which it does not.
+    wire       ed_pfx   = (ir == 8'hed);
+    wire [1:0] ex       = op2[7:6];
+    wire [2:0] ey       = op2[5:3];
+    wire [2:0] ez       = op2[2:0];
+    wire [1:0] ep       = op2[5:4];
+    wire       eq       = op2[3];
+    // LDI, CPI, INI, OUTI and their repeating and decrementing forms.
+    wire       ed_block = (ex == 2'd2) && (ez[2] == 1'b0) && ey[2];
+
 
     // The condition codes, in the order the matrix puts them. The
     // fourth quadrant names all eight in `y`; `JR cc,e` has room for
@@ -470,7 +546,16 @@ module z80 #(
         SH_EXSP     = 5'd18,  // M1(4) + read 3 + read 4 + write 3 + write 5
         SH_CB       = 5'd19,  // M1(4) + M1(4) [+ read 4 [+ write 3]]
         SH_NMI      = 5'd20,  // M1(5) + write + write
-        SH_INT      = 5'd21;  // M1(6) + write + write
+        SH_INT      = 5'd21,  // M1(6) + write + write
+        // The ED quadrant. Every one of these begins with two opcode
+        // fetches, because the prefix is fetched like any other byte.
+        SH_ED_NOP   = 5'd22,  // M1(4) + M1(4)                       = 8
+        SH_ED_SPEC  = 5'd23,  // + 1                                 = 9
+        SH_ED_IO    = 5'd24,  // + io 4                              = 12
+        SH_ED_ALU16 = 5'd25,  // + 4 + 3                             = 15
+        SH_ED_RETN  = 5'd26,  // + read 3 + read 3                   = 14
+        SH_ED_RRD   = 5'd27,  // + read 3 + 4 + write 3              = 18
+        SH_ED_ADDR  = 5'd28;  // + read + read + two reads or writes = 20
 
     reg [2:0] m = 3'd0;        // which M-cycle of the instruction
     reg [2:0] t = 3'd1;        // which T-state of that M-cycle
@@ -533,6 +618,24 @@ module z80 #(
                 default: shape = SH_PUSH;                   // RST n
             endcase
         endcase
+        // An ED instruction's shape is its *second* byte's, which is
+        // not known until that byte has been fetched -- so until then
+        // this reads whatever `op2` still holds. It does not matter:
+        // every one of these begins with the same two 4-T-state
+        // fetches, and nothing reads the shape before the second ends.
+        if (ed_pfx) begin
+            if (ex != 2'd1)     shape = SH_ED_NOP;   // and the blocks
+            else case (ez)
+                3'd0, 3'd1: shape = SH_ED_IO;        // IN r,(C) OUT (C),r
+                3'd2:       shape = SH_ED_ALU16;     // ADC/SBC HL,rp
+                3'd3:       shape = SH_ED_ADDR;      // LD (nn),rp / rp,(nn)
+                3'd5:       shape = SH_ED_RETN;      // RETN / RETI
+                3'd7:       shape = (ey < 3'd4) ? SH_ED_SPEC   // LD I,A ...
+                                  : (ey < 3'd6) ? SH_ED_RRD    // RRD / RLD
+                                  :               SH_ED_NOP;
+                default:    shape = SH_ED_NOP;       // NEG, IM
+            endcase
+        end
         // An undecoded prefix is one M-cycle and raises `dbg_trap`,
         // which is the whole of its behaviour: see `ir_is_prefix`.
         if (ir_is_prefix) shape = SH_ONE;
@@ -543,11 +646,11 @@ module z80 #(
         else if (in_int) shape = SH_INT;
     end
 
-    // The CB opcode, taken apart the same way. `cbop` has held it since
+    // The CB opcode, taken apart the same way. `op2` has held it since
     // the rising edge of its own T3, which is before anything below
     // reads it. Taking it off `din` instead would read the refresh
     // address, since that is what the bus carries by the end of an M1.
-    wire [7:0] cbo = cbop;
+    wire [7:0] cbo = op2;
     wire [1:0] cbx = cbo[7:6];
     wire [2:0] cby = cbo[5:3];
     wire [2:0] cbz = cbo[2:0];
@@ -612,6 +715,73 @@ module z80 #(
             default: begin cb_res = cb_val | cb_mask; cb_f = f_reg; end
         endcase
     end
+
+    // The pair an ED instruction names, and the 16-bit add-with-carry
+    // and subtract-with-borrow built on it. A subtraction is the
+    // complement added, so the carry in and the carry out are both the
+    // borrow's complement -- the same arrangement the 8-bit adder uses.
+    reg [15:0] ed_rp;
+    always @(*) begin
+        case (ep)
+            2'd0: ed_rp = bc;
+            2'd1: ed_rp = de;
+            2'd2: ed_rp = hl;
+            default: ed_rp = sp;
+        endcase
+    end
+    wire [16:0] alu16_b   = eq ? {1'b0, ed_rp} : {1'b0, ~ed_rp};
+    wire [16:0] alu16_sum = {1'b0, hl} + alu16_b
+                          + {16'd0, eq ? f_reg[F_C] : ~f_reg[F_C]};
+    wire [15:0] alu16_res = alu16_sum[15:0];
+    wire        alu16_h   = hl[12] ^ alu16_b[12] ^ alu16_sum[12];
+    wire        alu16_v   = eq
+                            ? (~(hl[15] ^ ed_rp[15]) & (hl[15] ^ alu16_res[15]))
+                            : ( (hl[15] ^ ed_rp[15]) & (hl[15] ^ alu16_res[15]));
+    wire [7:0]  alu16_f   = {alu16_res[15], alu16_res == 16'h0000,
+                             UNDOCUMENTED_FLAGS ? alu16_res[13] : 1'b0,
+                             alu16_h,
+                             UNDOCUMENTED_FLAGS ? alu16_res[11] : 1'b0,
+                             alu16_v, ~eq,
+                             eq ? alu16_sum[16] : ~alu16_sum[16]};
+
+    // NEG is the only subtraction whose left operand is not A, so it
+    // cannot go through the adder above. H is a borrow out of bit 3, V
+    // is set only for the one value with no negation, and C for every
+    // value but zero.
+    wire [7:0] neg_res = 8'h00 - a_reg;
+    wire [7:0] neg_f   = {neg_res[7], neg_res == 8'h00,
+                          UNDOCUMENTED_FLAGS ? neg_res[5] : 1'b0,
+                          a_reg[3:0] != 4'h0,
+                          UNDOCUMENTED_FLAGS ? neg_res[3] : 1'b0,
+                          a_reg == 8'h80, 1'b1, a_reg != 8'h00};
+
+    // RRD and RLD move one nibble each way between A and `(HL)`.
+    wire [7:0] rrd_mem = {a_reg[3:0], tmp[7:4]};
+    wire [7:0] rrd_acc = {a_reg[7:4], tmp[3:0]};
+    wire [7:0] rld_mem = {tmp[3:0], a_reg[3:0]};
+    wire [7:0] rld_acc = {a_reg[7:4], tmp[7:4]};
+    wire [7:0] rxd_acc = (ey == 3'd4) ? rrd_acc : rld_acc;
+    wire [7:0] rxd_f   = {rxd_acc[7], rxd_acc == 8'h00,
+                          UNDOCUMENTED_FLAGS ? rxd_acc[5] : 1'b0, 1'b0,
+                          UNDOCUMENTED_FLAGS ? rxd_acc[3] : 1'b0,
+                          ~(^rxd_acc), 1'b0, f_reg[F_C]};
+
+    // What `LD A,I` and `LD A,R` put in F: the byte's own sign and zero,
+    // and IFF2 in the parity bit, which is how a program reads the
+    // interrupt enable it cannot otherwise see.
+    wire [7:0] ir_byte = (ey == 3'd2) ? ireg : {rbit7, rreg};
+    wire [7:0] ir_f    = {ir_byte[7], ir_byte == 8'h00,
+                          UNDOCUMENTED_FLAGS ? ir_byte[5] : 1'b0, 1'b0,
+                          UNDOCUMENTED_FLAGS ? ir_byte[3] : 1'b0,
+                          iff2, 1'b0, f_reg[F_C]};
+
+    // What `IN r,(C)` puts in F, which is not what `IN A,(n)` does:
+    // that one leaves every flag alone, and this one sets them from the
+    // byte it read.
+    wire [7:0] in_f = {din[7], din == 8'h00,
+                       UNDOCUMENTED_FLAGS ? din[5] : 1'b0, 1'b0,
+                       UNDOCUMENTED_FLAGS ? din[3] : 1'b0,
+                       ~(^din), 1'b0, f_reg[F_C]};
 
     // ------------------------------------------------------------------
     // THE SEQUENCER
@@ -744,6 +914,48 @@ module z80 #(
                 3'd3: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b0; end
                 default: begin kind = CY_WR; tlen = 3'd5; last_cycle = 1'b1; end
             endcase
+            SH_ED_NOP: case (m)
+                3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                default: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b1; end
+            endcase
+            SH_ED_SPEC: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                default: begin kind = CY_NONE; tlen = 3'd1; last_cycle = 1'b1; end
+            endcase
+            SH_ED_IO: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                default: begin
+                    kind = (ez == 3'd0) ? CY_IOR : CY_IOW;
+                    tlen = 3'd4;
+                    last_cycle = 1'b1;
+                end
+            endcase
+            SH_ED_ALU16: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_NONE; tlen = 3'd4; last_cycle = 1'b0; end
+                default: begin kind = CY_NONE; tlen = 3'd3; last_cycle = 1'b1; end
+            endcase
+            SH_ED_RETN: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                default: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b1; end
+            endcase
+            SH_ED_RRD: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd3: begin kind = CY_NONE; tlen = 3'd4; last_cycle = 1'b0; end
+                default: begin kind = CY_WR; tlen = 3'd3; last_cycle = 1'b1; end
+            endcase
+            SH_ED_ADDR: case (m)
+                3'd0, 3'd1: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
+                3'd2, 3'd3: begin kind = CY_RD; tlen = 3'd3; last_cycle = 1'b0; end
+                3'd4: begin
+                    kind = eq ? CY_RD : CY_WR; tlen = 3'd3; last_cycle = 1'b0;
+                end
+                default: begin
+                    kind = eq ? CY_RD : CY_WR; tlen = 3'd3; last_cycle = 1'b1;
+                end
+            endcase
             default: case (m)   // SH_CB
                 3'd0: begin kind = CY_M1; tlen = 3'd4; last_cycle = 1'b0; end
                 3'd1: begin
@@ -822,6 +1034,9 @@ module z80 #(
             SH_EXSP:  dout_r = (m == 3'd3) ? reg_h : reg_l;
             SH_IO:    dout_r = a_reg;
             SH_CB:    dout_r = cb_res;
+            SH_ED_IO:   dout_r = rd8(ey);                  // OUT (C),r
+            SH_ED_RRD:  dout_r = (ey == 3'd4) ? rrd_mem : rld_mem;
+            SH_ED_ADDR: dout_r = (m == 3'd4) ? ed_rp[7:0] : ed_rp[15:8];
             default:  dout_r = a_reg;
         endcase
     end
@@ -836,7 +1051,16 @@ module z80 #(
             SH_WR8: addr_r = (m == 3'd0) ? pc
                            : (x == 2'd1) ? hl
                            : ((p == 2'd0) ? bc : de);
-            SH_RD_WR: addr_r = (m == 3'd1) ? pc : hl;
+            // **Every shape's `m == 0` address is PC**, and this one was
+            // `hl`. During T1 and T2 of an opcode fetch the shape is
+            // still the *previous* instruction's, because `ir` is not
+            // latched until the rising edge of T3 -- so a shape whose
+            // first M-cycle addresses anything else puts that address on
+            // the bus for the fetch of whatever follows it. `LD (HL),n`
+            // did, and the instruction after it was fetched from HL: in
+            // a program that had just written 31 there, the next opcode
+            // read as `LD SP,nn` and three bytes vanished.
+            SH_RD_WR: addr_r = (m <= 3'd1) ? pc : hl;
             SH_RMW:   addr_r = (m == 3'd0) ? pc : hl;
             SH_ADDR_RD, SH_ADDR_WR, SH_ADDR_RD16, SH_ADDR_WR16:
                 addr_r = (m <= 3'd2) ? pc
@@ -853,6 +1077,14 @@ module z80 #(
             SH_EXSP: addr_r = (m == 3'd0) ? pc
                             : ((m == 3'd1) || (m == 3'd4)) ? sp : (sp + 16'd1);
             SH_CB:   addr_r = (m <= 3'd1) ? pc : hl;
+            // The port address of `IN r,(C)` is the whole of BC, not
+            // just C: B reaches A15..A8.
+            SH_ED_IO:   addr_r = (m <= 3'd1) ? pc : bc;
+            SH_ED_RETN: addr_r = (m <= 3'd1) ? pc
+                               : (sp + {15'd0, (m == 3'd3)});
+            SH_ED_RRD:  addr_r = (m <= 3'd1) ? pc : hl;
+            SH_ED_ADDR: addr_r = (m <= 3'd3) ? pc
+                               : ((m == 3'd4) ? wz : (wz + 16'd1));
             default: addr_r = pc;
         endcase
         // M1's second half puts the refresh address out instead.
@@ -903,7 +1135,9 @@ module z80 #(
             ei_pending <= 1'b0;
             nmi_seen <= 1'b0;
             nmi_last <= 1'b1;
-            cbop <= 8'h00;
+            op2 <= 8'h00;
+            ireg <= 8'h00;
+            im <= 2'd0;
             in_nmi <= 1'b0;
             in_int <= 1'b0;
             trap <= 1'b0;
@@ -951,11 +1185,21 @@ module z80 #(
                 if ((kind == CY_M1) && (m == 3'd0)) begin
                     ir <= din;
                 end else if ((kind == CY_M1) && (m == 3'd1)) begin
-                    cbop <= din;           // the CB opcode
+                    op2 <= din;           // the CB opcode
                 end else begin
                     tmp <= din;
-                    if (m == 3'd1) wz[7:0] <= din;
-                    if (m == 3'd2) wz[15:8] <= din;
+                    // The two operand bytes land in WZ, and an ED
+                    // instruction's arrive one M-cycle later than an
+                    // unprefixed one's because the prefix is fetched
+                    // first. Hardcoding the unprefixed positions put
+                    // the low byte of `LD (nn),rp` into W.
+                    if (ed_pfx) begin
+                        if (m == 3'd2) wz[7:0]  <= din;
+                        if (m == 3'd3) wz[15:8] <= din;
+                    end else begin
+                        if (m == 3'd1) wz[7:0]  <= din;
+                        if (m == 3'd2) wz[15:8] <= din;
+                    end
                 end
             end
 
@@ -1141,6 +1385,12 @@ module z80 #(
                 SH_IO: exec_io;
                 SH_EXSP: exec_exsp;
                 SH_CB: exec_cb;
+                SH_ED_NOP, SH_ED_SPEC: exec_ed_short;
+                SH_ED_IO: exec_ed_io;
+                SH_ED_ALU16: exec_ed_alu16;
+                SH_ED_RETN: exec_ed_retn;
+                SH_ED_RRD: exec_ed_rrd;
+                SH_ED_ADDR: exec_ed_addr;
                 SH_NMI: exec_nmi;
                 default: exec_int;
             endcase
@@ -1352,6 +1602,123 @@ module z80 #(
                 end
             end else if (m == 3'd2) begin
                 r_f <= cb_f;
+            end
+        end
+    endtask
+
+    // ED's one- and two-M-cycle instructions: NEG, IM, LD I,A and its
+    // three relatives, and everything the quadrant does not define,
+    // which is a NOP of eight T-states. The block instructions arrive
+    // here too and trap, because this core does not implement them.
+    task exec_ed_short;
+        begin
+            if (m == 3'd0) pc <= pc + 16'd1;
+            else if (m == 3'd1) begin
+                pc <= pc + 16'd1;
+                if (ed_block) trap <= 1'b1;
+                else if (ex == 2'd1) begin
+                    case (ez)
+                        3'd4: begin                     // NEG
+                            r_a <= neg_res;
+                            r_f <= neg_f;
+                        end
+                        3'd6: begin                     // IM
+                            case (ey)
+                                3'd0, 3'd1, 3'd4, 3'd5: im <= 2'd0;
+                                3'd2, 3'd6: im <= 2'd1;
+                                default: im <= 2'd2;
+                            endcase
+                        end
+                        default: ;
+                    endcase
+                end
+            end else begin
+                // SH_ED_SPEC's extra T-state: LD I,A and its relatives.
+                case (ey)
+                    3'd0: ireg <= a_reg;                // LD I,A
+                    3'd1: begin                         // LD R,A
+                        rreg  <= a_reg[6:0];
+                        rbit7 <= a_reg[7];
+                    end
+                    default: begin                      // LD A,I / LD A,R
+                        r_a <= ir_byte;
+                        r_f <= ir_f;
+                    end
+                endcase
+            end
+        end
+    endtask
+
+    task exec_ed_io;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (ez == 3'd0) begin                  // IN r,(C)
+                wr8(ey, din);
+                r_f <= in_f;
+            end
+        end
+    endtask
+
+    task exec_ed_alu16;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd3) begin
+                r_h <= alu16_res[15:8];
+                r_l <= alu16_res[7:0];
+                r_f <= alu16_f;
+            end
+        end
+    endtask
+
+    // RETN and RETI pop like RET. RETN is the one that matters: it puts
+    // IFF2 back into IFF1, which is how a non-maskable handler restores
+    // the interrupt enable the NMI cleared.
+    task exec_ed_retn;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd3) begin
+                sp <= sp + 16'd2;
+                pc <= {din, wz[7:0]};
+                iff1 <= iff2;
+            end
+        end
+    endtask
+
+    // RRD and RLD, which exchange nibbles between A and `(HL)`.
+    //
+    // A is not written until the **last** M-cycle, because the byte
+    // going out to memory is built from A's *original* low nibble and
+    // the write happens two M-cycles after the read. Updating A when
+    // the read landed left the write putting the new nibble back.
+    task exec_ed_rrd;
+        begin
+            if (m <= 3'd1) pc <= pc + 16'd1;
+            else if (m == 3'd4) begin
+                r_a <= rxd_acc;
+                r_f <= rxd_f;
+            end
+        end
+    endtask
+
+    task exec_ed_addr;
+        begin
+            if (m <= 3'd3) pc <= pc + 16'd1;
+            else if (eq) begin                          // LD rp,(nn)
+                if (m == 3'd4) begin
+                    case (ep)
+                        2'd0: r_c <= din;
+                        2'd1: r_e <= din;
+                        2'd2: r_l <= din;
+                        default: sp[7:0] <= din;
+                    endcase
+                end else begin
+                    case (ep)
+                        2'd0: r_b <= din;
+                        2'd1: r_d <= din;
+                        2'd2: r_h <= din;
+                        default: sp[15:8] <= din;
+                    endcase
+                end
             end
         end
     endtask
