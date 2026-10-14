@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/KarpelesLab/reticle/compare/v0.0.6...v0.0.7) - 2026-10-14
+
+### Added
+
+- *(ip)* z80: DD CB and FD CB, and every documented encoding is decoded
+- *(ip)* z80: the DD and FD prefixes, so IX and IY address with a displacement
+- *(ip)* z80: ED's block instructions, and the whole ED space is decoded
+- *(ip)* z80: ED's first quadrant, and the fetch address every shape owes
+- *(ip)* a Z80, T-state accurate over the unprefixed and CB opcode spaces
+- *(fpga)* route: an option to reroute only the signals in contention
+- *(basys3)* push and release each of the device's buttons from the console
+- *(ip)* seph_mcu, the MCU's end of Ledger's SEPROXYHAL link, and `W` on the card bench
+- *(uray)* `reticle fpga` builds ZCU104 bitstreams from Verilog
+- *(uray)* tie the processor's unused inputs, as Vivado does
+- *(uray)* write an UltraScale+ bitstream, and run one on the ZCU104
+- *(uray)* an UltraScale+ routing fabric that fits Vivado's routing
+- *(uray)* read UltraScale+ frames and give every bit to its tile
+
+### Fixed
+
+- *(ip)* z80: the three undecoded prefixes trap instead of calling, and every implemented encoding is timed
+- *(uray)* give the router 100 passes rather than 40
+- *(fpga)* route: judge a signal's contention by its physical nodes
+- *(uray)* tie the processor's inputs before the design is routed
+- *(uray)* route a large design in minutes rather than not at all
+- *(fpga)* the ECP5's narrow block RAM modes are right, and the measurement that said otherwise was confounded
+- *(seph_mcu)* a characteristic's handle follows its properties, as the radio's did
+- *(fpga)* a block RAM mode no part has confirmed is a last resort, and the ECP5's 4-bit one is wrong
+- *(fpga)* a block RAM pin one bit wide reaches the fabric, and a pin nothing drives refuses the build
+- *(basys3)* the device's buttons press, and the FPGA runs the secure element to its PIN screen
+- *(route)* two signals never share one piece of metal, and the readback that found it
+- *(basys3)* queue the console's requests, so none sent without waiting is lost
+- *(uray)* stop the region before the first UltraRAM column
+- *(fpga)* refuse an instance the place-and-route netlist cannot hold
+- *(xray)* keep a global clock on the global network, and refuse when it is not
+- *(xray)* a block RAM data bit nothing stores or reads cannot fail a build
+- *(fpga)* `--place-*` reaches the placer for 7-series and Gowin bitstreams
+
+### Other
+
+- *(ip)* z80: plain registers instead of an indexed file, 3650 to 2885 LUT4
+- *(uray)* a binarized network on the ZCU104, and how fast it answers
+- *(cynthion)* a distributed RAM read and written at one address in one cycle, measured on a part
+- *(cynthion)* a block RAM read in the cycle its address is written, measured on a part
+- *(inflate)* the corpus in corpus order, through one instance, with the deflate cases refused
+- *(card-bench)* the initialisation frame itself
+- what another machine needs to drive the card bench
+- what another machine needs to drive the card bench
+- *(uray)* count the processor's clocks on the ZCU104 — PL_CLK0 is 100 MHz
+- *(uray)* a flip-flop clocked by hand from Linux behaves as an FDRE
+- *(uray)* the ZCU104 takes zero ECC, and how far ZU3EG routing carries
+- *(fpga)* the nine placements were one, and what nine really give
+
 ## [0.0.6](https://github.com/KarpelesLab/reticle/compare/v0.0.5...v0.0.6) - 2026-10-09
 
 ### Added
