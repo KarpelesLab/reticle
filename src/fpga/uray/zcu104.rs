@@ -45,6 +45,11 @@ pub const MAX_EAST: u32 = 36;
 /// large design".
 pub const ASTAR_WEIGHT: f64 = 2.0;
 
+/// How many passes the router gets. The default 40 left one node shared
+/// on a 6 992-table network whose answer is combinational; with only the
+/// contested signals rerouted, a late pass costs little.
+pub const MAX_ITERATIONS: u32 = 100;
+
 /// The horizontal distribution track that carries `PL_CLK0` in Vivado's
 /// clock network for the PYNQ base overlay. Measured on the ZCU104 at
 /// 100.001 MHz (`docs/fpga-uray.md`).
@@ -1123,6 +1128,7 @@ pub fn implement(
         node_base: board.node_bases(),
         astar_weight: ASTAR_WEIGHT,
         reroute_congested_only: true,
+        max_iterations: MAX_ITERATIONS,
         ..RouteOptions::default()
     };
     let (routing, routed) =
