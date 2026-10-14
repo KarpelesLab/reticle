@@ -180,15 +180,24 @@ module z80 #(
     // ------------------------------------------------------------------
     // THE REGISTERS
     // ------------------------------------------------------------------
-    // The general-purpose file holds both banks, so `EXX` is a bit and
-    // not a dozen byte moves. Index is {bank, r} with r in 0..5 for
-    // B C D E H L; 6 is `(HL)` and never names a register, and 7 is A,
-    // which lives in its own pair because the ALU reads it every cycle.
-    reg [7:0] gp [0:15];
-    reg [7:0] accs [0:1];
-    reg [7:0] flagss [0:1];
-    reg       bank  = 1'b0;      // selects BC DE HL or BC' DE' HL'
-    reg       abank = 1'b0;      // selects AF or AF'
+    // **Plain registers, not an indexed file.** Sixteen bytes behind a
+    // variable index cost eleven 16:1 byte multiplexers to read and
+    // eighty-one write ports to maintain, which is where more than half
+    // of this core's area went; `docs/ip-library.md` had the count. A
+    // named register costs one multiplexer on its own D input and
+    // nothing at all to read.
+    //
+    // The alternate set is **swapped** rather than selected, so `EXX`
+    // and `EX AF,AF'` move bytes instead of flipping a bit that then
+    // appears in every index. Both are single-M-cycle instructions and
+    // have the cycle to spare, and a byte swap between two registers is
+    // a multiplexer each and no decode.
+    reg [7:0] r_b = 8'h00, r_c = 8'h00, r_d = 8'h00;
+    reg [7:0] r_e = 8'h00, r_h = 8'h00, r_l = 8'h00;
+    reg [7:0] r_a = 8'hff, r_f = 8'hff;
+    reg [7:0] x_b = 8'h00, x_c = 8'h00, x_d = 8'h00;
+    reg [7:0] x_e = 8'h00, x_h = 8'h00, x_l = 8'h00;
+    reg [7:0] x_a = 8'hff, x_f = 8'hff;
 
     reg [15:0] pc = 16'h0000;
     reg [15:0] sp = 16'hffff;
@@ -216,17 +225,35 @@ module z80 #(
     reg [15:0] retire_pc = 16'h0000;
     reg [15:0] op_pc = 16'h0000;    // the opcode being executed
 
-    wire [7:0] a_reg = accs[abank];
-    wire [7:0] f_reg = flagss[abank];
-    wire [7:0] reg_b = gp[{bank, 3'd0}];
-    wire [7:0] reg_c = gp[{bank, 3'd1}];
-    wire [7:0] reg_d = gp[{bank, 3'd2}];
-    wire [7:0] reg_e = gp[{bank, 3'd3}];
-    wire [7:0] reg_h = gp[{bank, 3'd4}];
-    wire [7:0] reg_l = gp[{bank, 3'd5}];
-    wire [15:0] bc = {reg_b, reg_c};
-    wire [15:0] de = {reg_d, reg_e};
-    wire [15:0] hl = {reg_h, reg_l};
+    wire [7:0] a_reg = r_a;
+    wire [7:0] f_reg = r_f;
+    wire [7:0] reg_b = r_b;
+    wire [7:0] reg_c = r_c;
+    wire [7:0] reg_d = r_d;
+    wire [7:0] reg_e = r_e;
+    wire [7:0] reg_h = r_h;
+    wire [7:0] reg_l = r_l;
+    wire [15:0] bc = {r_b, r_c};
+    wire [15:0] de = {r_d, r_e};
+    wire [15:0] hl = {r_h, r_l};
+
+    // One byte of the `r[]` encoding: 0..5 are B C D E H L, 6 is `(HL)`
+    // and never reaches here, and 7 is A.
+    function [7:0] rd8;
+        input [2:0] idx;
+        begin
+            case (idx)
+                3'd0: rd8 = r_b;
+                3'd1: rd8 = r_c;
+                3'd2: rd8 = r_d;
+                3'd3: rd8 = r_e;
+                3'd4: rd8 = r_h;
+                3'd5: rd8 = r_l;
+                3'd7: rd8 = r_a;
+                default: rd8 = 8'h00;
+            endcase
+        end
+    endfunction
 
     // Flag bit positions, named because `f_reg[2]` meaning overflow in
     // one instruction and parity in the next is the subject of a
@@ -271,8 +298,8 @@ module z80 #(
 
     // The register a `LD (HL),r` or an ALU operation reads, and the one
     // a `LD r,n` or `LD r,(HL)` writes.
-    wire [7:0] gp_rd = (z == 3'd7) ? a_reg : gp[{bank, z}];
-    wire [7:0] gp_rd_y = (y == 3'd7) ? a_reg : gp[{bank, y}];
+    wire [7:0] gp_rd = rd8(z);
+    wire [7:0] gp_rd_y = rd8(y);
 
     // `POP rp` and `RET` take their two bytes off the stack; `LD rp,nn`
     // and the jumps take theirs from the program. Of the `q == 1` row
@@ -526,8 +553,7 @@ module z80 #(
     wire [2:0] cbz = cbo[2:0];
     // The operand: a register, or the byte read from `(HL)` — which is
     // on `din` at the end of that read and in `tmp` by the write.
-    wire [7:0] cb_val = (cbz == 3'd6) ? ((m == 3'd2) ? din : tmp)
-                      : (cbz == 3'd7) ? a_reg : gp[{bank, cbz}];
+    wire [7:0] cb_val = (cbz == 3'd6) ? ((m == 3'd2) ? din : tmp) : rd8(cbz);
     reg  [7:0] cb_mask;
     always @(*) begin
         case (cby)
@@ -857,14 +883,13 @@ module z80 #(
     // ------------------------------------------------------------------
     // THE STATE
     // ------------------------------------------------------------------
-    integer k;
     always @(posedge clk) begin
         if (!rst_n) begin
             // The state a Z80 comes up in, which is not all zeros.
-            for (k = 0; k < 16; k = k + 1) gp[k] <= 8'h00;
-            accs[0] <= 8'hff; accs[1] <= 8'hff;
-            flagss[0] <= 8'hff; flagss[1] <= 8'hff;
-            bank <= 1'b0; abank <= 1'b0;
+            r_b <= 8'h00; r_c <= 8'h00; r_d <= 8'h00; r_e <= 8'h00;
+            r_h <= 8'h00; r_l <= 8'h00; r_a <= 8'hff; r_f <= 8'hff;
+            x_b <= 8'h00; x_c <= 8'h00; x_d <= 8'h00; x_e <= 8'h00;
+            x_h <= 8'h00; x_l <= 8'h00; x_a <= 8'hff; x_f <= 8'hff;
             pc <= 16'h0000;
             sp <= 16'hffff;
             wz <= 16'h0000;
@@ -943,6 +968,26 @@ module z80 #(
     // ------------------------------------------------------------------
     // Everything an instruction does happens at the end of one of its
     // M-cycles, which is where the part does it too.
+    // The one write port of the `r[]` encoding. Every variable-index
+    // write goes through it, which is what keeps the register file out
+    // of a memory with a port per statement.
+    task wr8;
+        input [2:0] idx;
+        input [7:0] v;
+        begin
+            case (idx)
+                3'd0: r_b <= v;
+                3'd1: r_c <= v;
+                3'd2: r_d <= v;
+                3'd3: r_e <= v;
+                3'd4: r_h <= v;
+                3'd5: r_l <= v;
+                3'd7: r_a <= v;
+                default: ;
+            endcase
+        end
+    endtask
+
     task exec;
         begin
             case (shape)
@@ -961,42 +1006,40 @@ module z80 #(
             if (ir_is_prefix) trap <= 1'b1;
             case (x)
                 2'd0: case (z)
-                    3'd0: if (y == 3'd1) abank <= ~abank;      // EX AF,AF'
+                    3'd0: if (y == 3'd1) begin                 // EX AF,AF'
+                    r_a <= x_a; r_f <= x_f;
+                    x_a <= r_a; x_f <= r_f;
+                end
                     3'd3: begin                                // INC/DEC rp
                         case (p)
-                            2'd0: {gp[{bank, 3'd0}], gp[{bank, 3'd1}]} <=
-                                  q ? (bc - 16'd1) : (bc + 16'd1);
-                            2'd1: {gp[{bank, 3'd2}], gp[{bank, 3'd3}]} <=
-                                  q ? (de - 16'd1) : (de + 16'd1);
-                            2'd2: {gp[{bank, 3'd4}], gp[{bank, 3'd5}]} <=
-                                  q ? (hl - 16'd1) : (hl + 16'd1);
+                            2'd0: {r_b, r_c} <= q ? (bc - 16'd1) : (bc + 16'd1);
+                            2'd1: {r_d, r_e} <= q ? (de - 16'd1) : (de + 16'd1);
+                            2'd2: {r_h, r_l} <= q ? (hl - 16'd1) : (hl + 16'd1);
                             default: sp <= q ? (sp - 16'd1) : (sp + 16'd1);
                         endcase
                     end
                     3'd4, 3'd5: begin                          // INC/DEC r
-                        if (y == 3'd7) accs[abank] <= step_res;
-                        else gp[{bank, y}] <= step_res;
-                        flagss[abank] <= step_f;
+                        wr8(y, step_res);
+                        r_f <= step_f;
                     end
                     default: exec_accops;                      // z == 7
                 endcase
                 2'd1: begin                                    // LD r,r' / HALT
                     if ((y == 3'd6) && (z == 3'd6)) halted <= 1'b1;
-                    else if (y == 3'd7) accs[abank] <= gp_rd;
-                    else gp[{bank, y}] <= gp_rd;
+                    else wr8(y, gp_rd);
                 end
                 2'd2: begin                                    // ALU A,r
-                    if (y != 3'd7) accs[abank] <= alu_res;     // CP keeps A
-                    flagss[abank] <= alu_f;
+                    if (y != 3'd7) r_a <= alu_res;     // CP keeps A
+                    r_f <= alu_f;
                 end
                 default: case (z)                              // x == 3
                     3'd1: if (q && (p == 2'd3)) sp <= hl;      // LD SP,HL
                     3'd3: case (y)
                         3'd5: begin                            // EX DE,HL
-                            gp[{bank, 3'd2}] <= reg_h;
-                            gp[{bank, 3'd3}] <= reg_l;
-                            gp[{bank, 3'd4}] <= reg_d;
-                            gp[{bank, 3'd5}] <= reg_e;
+                            r_d <= reg_h;
+                            r_e <= reg_l;
+                            r_h <= reg_d;
+                            r_l <= reg_e;
                         end
                         3'd6: begin iff1 <= 1'b0; iff2 <= 1'b0; end  // DI
                         3'd7: ei_pending <= 1'b1;                    // EI
@@ -1008,7 +1051,13 @@ module z80 #(
             // `JP (HL)` is the one shape-one instruction that does not
             // advance PC past itself.
             if ((x == 2'd3) && (z == 3'd1) && q && (p == 2'd2)) pc <= hl;
-            if ((x == 2'd3) && (z == 3'd1) && q && (p == 2'd1)) bank <= ~bank;  // EXX
+            // EXX
+            if ((x == 2'd3) && (z == 3'd1) && q && (p == 2'd1)) begin
+                r_b <= x_b; r_c <= x_c; r_d <= x_d;
+                r_e <= x_e; r_h <= x_h; r_l <= x_l;
+                x_b <= r_b; x_c <= r_c; x_d <= r_d;
+                x_e <= r_e; x_h <= r_h; x_l <= r_l;
+            end
             // HALT holds PC on the HALT itself so an interrupt returns
             // to the instruction after it.
             if ((x == 2'd1) && (y == 3'd6) && (z == 3'd6)) pc <= pc;
@@ -1028,40 +1077,40 @@ module z80 #(
         begin
             case (y)
                 3'd0, 3'd1, 3'd2, 3'd3: begin
-                    accs[abank] <= rot_res;
+                    r_a <= rot_res;
                     // These four keep S, Z and P/V and take H and N
                     // clear, unlike their CB cousins.
-                    flagss[abank] <= {f_reg[F_S], f_reg[F_Z],
+                    r_f <= {f_reg[F_S], f_reg[F_Z],
                                       UNDOCUMENTED_FLAGS ? rot_res[5] : 1'b0,
                                       1'b0,
                                       UNDOCUMENTED_FLAGS ? rot_res[3] : 1'b0,
                                       f_reg[F_PV], 1'b0, rot_cout};
                 end
                 3'd4: begin                                   // DAA
-                    accs[abank] <= daa_res;
-                    flagss[abank] <= {daa_res[7], daa_res == 8'h00,
+                    r_a <= daa_res;
+                    r_f <= {daa_res[7], daa_res == 8'h00,
                                       UNDOCUMENTED_FLAGS ? daa_res[5] : 1'b0,
                                       daa_h,
                                       UNDOCUMENTED_FLAGS ? daa_res[3] : 1'b0,
                                       ~(^daa_res), f_reg[F_N], daa_c};
                 end
                 3'd5: begin                                   // CPL
-                    accs[abank] <= ~a_reg;
-                    flagss[abank] <= {f_reg[F_S], f_reg[F_Z],
+                    r_a <= ~a_reg;
+                    r_f <= {f_reg[F_S], f_reg[F_Z],
                                       UNDOCUMENTED_FLAGS ? ~a_reg[5] : 1'b0,
                                       1'b1,
                                       UNDOCUMENTED_FLAGS ? ~a_reg[3] : 1'b0,
                                       f_reg[F_PV], 1'b1, f_reg[F_C]};
                 end
                 3'd6: begin                                   // SCF
-                    flagss[abank] <= {f_reg[F_S], f_reg[F_Z],
+                    r_f <= {f_reg[F_S], f_reg[F_Z],
                                       UNDOCUMENTED_FLAGS ? a_reg[5] : 1'b0,
                                       1'b0,
                                       UNDOCUMENTED_FLAGS ? a_reg[3] : 1'b0,
                                       f_reg[F_PV], 1'b0, 1'b1};
                 end
                 default: begin                                // CCF
-                    flagss[abank] <= {f_reg[F_S], f_reg[F_Z],
+                    r_f <= {f_reg[F_S], f_reg[F_Z],
                                       UNDOCUMENTED_FLAGS ? a_reg[5] : 1'b0,
                                       f_reg[F_C],
                                       UNDOCUMENTED_FLAGS ? a_reg[3] : 1'b0,
@@ -1106,19 +1155,17 @@ module z80 #(
                 // The byte is in `din` this edge, not yet in `tmp`.
                 if (x == 2'd0) begin
                     if (z == 3'd2) begin
-                        accs[abank] <= din;                   // LD A,(BC)/(DE)
+                        r_a <= din;                   // LD A,(BC)/(DE)
                     end else begin
                         pc <= pc + 16'd1;                     // LD r,n
-                        if (y == 3'd7) accs[abank] <= din;
-                        else gp[{bank, y}] <= din;
+                        wr8(y, din);
                     end
                 end else if (x == 2'd1) begin
-                    if (y == 3'd7) accs[abank] <= din;        // LD r,(HL)
-                    else gp[{bank, y}] <= din;
+                    wr8(y, din);                      // LD r,(HL)
                 end else begin
                     if (x == 2'd3) pc <= pc + 16'd1;          // ALU A,n
-                    if (y != 3'd7) accs[abank] <= alu_res;
-                    flagss[abank] <= alu_f;
+                    if (y != 3'd7) r_a <= alu_res;
+                    r_f <= alu_f;
                 end
             end
         end
@@ -1148,17 +1195,17 @@ module z80 #(
                     sp <= sp + 16'd2;
                     if (q) pc <= {din, wz[7:0]};              // RET
                     else case (p)
-                        2'd0: begin gp[{bank, 3'd1}] <= wz[7:0]; gp[{bank, 3'd0}] <= din; end
-                        2'd1: begin gp[{bank, 3'd3}] <= wz[7:0]; gp[{bank, 3'd2}] <= din; end
-                        2'd2: begin gp[{bank, 3'd5}] <= wz[7:0]; gp[{bank, 3'd4}] <= din; end
-                        default: begin flagss[abank] <= wz[7:0]; accs[abank] <= din; end
+                        2'd0: begin r_c <= wz[7:0]; r_b <= din; end
+                        2'd1: begin r_e <= wz[7:0]; r_d <= din; end
+                        2'd2: begin r_l <= wz[7:0]; r_h <= din; end
+                        default: begin r_f <= wz[7:0]; r_a <= din; end
                     endcase
                 end else if (x == 2'd0) begin
                     pc <= pc + 16'd1;                         // LD rp,nn
                     case (p)
-                        2'd0: begin gp[{bank, 3'd1}] <= wz[7:0]; gp[{bank, 3'd0}] <= din; end
-                        2'd1: begin gp[{bank, 3'd3}] <= wz[7:0]; gp[{bank, 3'd2}] <= din; end
-                        2'd2: begin gp[{bank, 3'd5}] <= wz[7:0]; gp[{bank, 3'd4}] <= din; end
+                        2'd0: begin r_c <= wz[7:0]; r_b <= din; end
+                        2'd1: begin r_e <= wz[7:0]; r_d <= din; end
+                        2'd2: begin r_l <= wz[7:0]; r_h <= din; end
                         default: sp <= {din, wz[7:0]};
                     endcase
                 end else begin
@@ -1175,7 +1222,7 @@ module z80 #(
         begin
             if (m == 3'd0) pc <= pc + 16'd1;
             else if (m <= 3'd2) pc <= pc + 16'd1;
-            else accs[abank] <= din;
+            else r_a <= din;
         end
     endtask
 
@@ -1188,8 +1235,8 @@ module z80 #(
     task exec_addr_rd16;
         begin
             if (m <= 3'd2) pc <= pc + 16'd1;
-            else if (m == 3'd3) gp[{bank, 3'd5}] <= din;
-            else gp[{bank, 3'd4}] <= din;
+            else if (m == 3'd3) r_l <= din;
+            else r_h <= din;
         end
     endtask
 
@@ -1204,7 +1251,7 @@ module z80 #(
     task exec_rmw;
         begin
             if (m == 3'd0) pc <= pc + 16'd1;
-            else if (m == 3'd1) flagss[abank] <= step_f;
+            else if (m == 3'd1) r_f <= step_f;
         end
     endtask
 
@@ -1212,9 +1259,9 @@ module z80 #(
         begin
             if (m == 3'd0) pc <= pc + 16'd1;
             else if (m == 3'd2) begin
-                gp[{bank, 3'd4}] <= add16_sum[15:8];
-                gp[{bank, 3'd5}] <= add16_sum[7:0];
-                flagss[abank] <= {f_reg[F_S], f_reg[F_Z],
+                r_h <= add16_sum[15:8];
+                r_l <= add16_sum[7:0];
+                r_f <= {f_reg[F_S], f_reg[F_Z],
                                   UNDOCUMENTED_FLAGS ? add16_sum[13] : 1'b0,
                                   add16_h,
                                   UNDOCUMENTED_FLAGS ? add16_sum[11] : 1'b0,
@@ -1247,7 +1294,7 @@ module z80 #(
         begin
             if (m == 3'd0) begin
                 pc <= pc + 16'd1;
-                gp[{bank, 3'd0}] <= reg_b - 8'd1;
+                r_b <= reg_b - 8'd1;
             end else if (m == 3'd1) pc <= pc + 16'd1;
             else pc <= pc + {{8{tmp[7]}}, tmp};
         end
@@ -1276,7 +1323,7 @@ module z80 #(
     task exec_io;
         begin
             if (m <= 3'd1) pc <= pc + 16'd1;
-            else if (y == 3'd3) accs[abank] <= din;    // IN A,(n)
+            else if (y == 3'd3) r_a <= din;    // IN A,(n)
         end
     endtask
 
@@ -1284,8 +1331,8 @@ module z80 #(
         begin
             if (m == 3'd0) pc <= pc + 16'd1;
             else if (m == 3'd2) begin
-                gp[{bank, 3'd5}] <= wz[7:0];
-                gp[{bank, 3'd4}] <= din;
+                r_l <= wz[7:0];
+                r_h <= din;
             end
         end
     endtask
@@ -1299,13 +1346,12 @@ module z80 #(
                 pc <= pc + 16'd1;
                 if (cbz != 3'd6) begin
                     if (cbx != 2'd1) begin                 // not BIT
-                        if (cbz == 3'd7) accs[abank] <= cb_res;
-                        else gp[{bank, cbz}] <= cb_res;
+                        wr8(cbz, cb_res);
                     end
-                    flagss[abank] <= cb_f;
+                    r_f <= cb_f;
                 end
             end else if (m == 3'd2) begin
-                flagss[abank] <= cb_f;
+                r_f <= cb_f;
             end
         end
     endtask
