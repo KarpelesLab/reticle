@@ -1,0 +1,19 @@
+top array_out_of_range
+
+module array_out_of_range
+  net %a u8 wire
+  net %b u8 wire
+  net %c u8 wire
+  net %y0 u8 wire
+  net %y2 u8 wire
+  port a in %a
+  port b in %b
+  port c in %c
+  port y0 out %y0
+  port y2 out %y2
+  memory @m 2 x u8
+  assign @m[32'sd0] = %a
+  assign @m[32'sd1] = %b
+  assign %y0 = @m[32'sd0]
+  assign %y2 = 8'bxxxxxxxx
+end

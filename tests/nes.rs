@@ -1884,8 +1884,12 @@ fn reticle_build_builds_the_project() {
         &["build", "--synth", "--lock", &lock_arg, "reticle.proj"],
     );
     assert_eq!(code, 0, "reticle build failed:\n{err}");
+    // Nine: the top and the modules under it. The project names its top,
+    // so a library module nothing here instantiates is not elaborated with
+    // its default parameters as well, which is where the eleven this used
+    // to count came from.
     assert!(
-        err.contains("note: built `nes`: 11 module(s) from 11 source(s)"),
+        err.contains("note: built `nes`: 9 module(s) from 11 source(s)"),
         "{err}"
     );
     assert!(

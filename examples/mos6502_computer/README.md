@@ -95,12 +95,14 @@ resolves the two packages, writes `reticle.lock`, elaborates the design
 and synthesises it:
 
 ```text
-note: built `mos6502_computer`: 12 module(s) from 6 source(s)
+note: built `mos6502_computer`: 7 module(s) from 6 source(s)
 ```
 
-Twelve modules out of six files is `ip/bus/uart`: each of its four files
-holds two modules, the fixed-format one this design instantiates and the
-run-time-configurable one it is built on.
+Seven modules out of six files: the top, the processor, and from
+`ip/bus/uart` the five this design reaches. Each of that package's four
+files holds two modules, the fixed-format one this design instantiates and the
+run-time-configurable one it is built on; the project names its top, so a module
+nothing under it instantiates is not elaborated.
 `ip/bus/uart/README.md` §2 says why they share a file, and the short
 version is this command line — a package whose file set changes forces
 every list of sources in the repository to be edited.

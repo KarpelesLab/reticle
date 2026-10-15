@@ -119,6 +119,22 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             AstStmt::Assign(a) => self.assign_stmt(a, s.span, out),
             AstStmt::Expr(e) => self.expr_stmt(e, s.span, out),
             AstStmt::If(i) => {
+                // A condition fixed at elaboration — a genvar or a parameter,
+                // as in `if (j == 1) count <= 0;` inside a generate loop —
+                // keeps only the branch it takes. The other is not code that
+                // can run, and lowering it would make every iteration of the
+                // loop a driver of what only one of them writes.
+                let fixed = self
+                    .env
+                    .probe(|env| Evaluator::new(env).eval_i64(&i.cond).ok());
+                if let Some(value) = fixed {
+                    if value != 0 {
+                        self.stmt(&i.then_stmt, out);
+                    } else if let Some(e) = &i.else_stmt {
+                        self.stmt(e, out);
+                    }
+                    return;
+                }
                 let cond = self.expr_bit(&i.cond, &mut Sink::Proc(out));
                 let mut then_b = self.b.block();
                 then_b.span = i.then_stmt.span;

@@ -1,0 +1,25 @@
+top generate_constant_if
+
+module generate_constant_if
+  net %clk u1 wire
+  net %d u4 wire
+  net %q u4 reg
+  net %first u1 reg
+  port clk in %clk
+  port d in %d
+  port q out %q
+  port first out %first
+  process seq posedge %clk
+    %q[0:0] <= %d[0:0]
+    %first <= %d[0:0]
+  end
+  process seq posedge %clk
+    %q[1:1] <= %d[1:1]
+  end
+  process seq posedge %clk
+    %q[2:2] <= %d[2:2]
+  end
+  process seq posedge %clk
+    %q[3:3] <= %d[3:3]
+  end
+end

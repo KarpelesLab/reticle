@@ -1249,3 +1249,70 @@ fn defines_include_dirs_and_macros_carry_across_files() {
     let netlist = std::fs::read_to_string(&out).unwrap();
     assert!(netlist.contains("assign %y = 4'd9"), "{netlist}");
 }
+
+/// `net[base +: width] = value` with `base` known only at run time — 78
+/// such writes in NewAE's ChipWhisperer-Husky gateware were refused as
+/// unsupported. Each line below is what IEEE 1364-2005 §5.2.1 says the
+/// write leaves, worked out by hand: a descending vector, an ascending
+/// one (where `a[8 +: 8]` is `a[8:15]`, the second byte from the top), a
+/// range that does not start at zero, and three selections that are
+/// partly out of range, whose in-range bits are written and the rest
+/// dropped.
+///
+/// Would catch: the bits written in the wrong order on either kind of
+/// range, `-:` taken as `+:`, an offset range ignored, and a partly
+/// out-of-range write dropped whole or wrapped back into range.
+///
+/// The second half only checks that synthesis accepts the form in a
+/// clocked process. It does not check the logic synthesis makes of it:
+/// each bit is the variable bit-select write `q[i] <= ..` already used,
+/// and `synth --verify` is inconclusive on the shifts that write
+/// becomes, so it is not asked for here.
+#[test]
+fn a_part_select_with_a_variable_base_is_written_bit_by_bit() {
+    let dir = scratch("indexed_part_lvalue");
+    let tb = dir.join("tb.v");
+    std::fs::write(
+        &tb,
+        "module tb;\n\
+         reg [31:0] d; reg [0:31] a; reg [19:4] o; integer i;\n\
+         initial begin\n\
+         d = 0; a = 0; o = 0;\n\
+         i = 8;  d[i +: 8] = 8'hA5;  $display(\"d1 %h\", d);\n\
+         i = 15; d[i -: 4] = 4'hF;   $display(\"d2 %h\", d);\n\
+         i = 28; d[i +: 8] = 8'hFF;  $display(\"d3 %h\", d);\n\
+         i = 8;  a[i +: 8] = 8'hA5;  $display(\"a1 %h\", a);\n\
+         i = 15; a[i -: 4] = 4'h9;   $display(\"a2 %h\", a);\n\
+         i = 4;  o[i +: 4] = 4'hC;   $display(\"o1 %h\", o);\n\
+         i = 2;  o[i +: 4] = 4'hF;   $display(\"o2 %h\", o);\n\
+         i = -1; d[i +: 4] = 4'hF;   $display(\"d4 %h\", d);\n\
+         end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["sim", tb.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    let want = [
+        "d1 0000a500",
+        "d2 0000f500",
+        "d3 f000f500",
+        "a1 00a50000",
+        "a2 00a90000",
+        "o1 000c",
+        "o2 000f",
+        "d4 f000f507",
+    ];
+    let got: Vec<&str> = stdout.lines().filter(|l| !l.starts_with("note")).collect();
+    assert_eq!(got, want, "{stdout}");
+
+    let reg = dir.join("reg.v");
+    std::fs::write(
+        &reg,
+        "module r(input clk, input [2:0] sel, input [7:0] v, output reg [31:0] q);\n\
+         always @(posedge clk) q[sel*4 +: 8] <= v;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = run(&["synth", reg.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+}

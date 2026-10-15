@@ -1,0 +1,12 @@
+warning[V0018]: index 2 is outside [0:1]; the assignment is dropped
+ --> array_out_of_range.v:8:12
+  |
+8 |   assign m[2] = c;
+  |            ^
+
+warning[V0018]: index 2 is outside [0:1]; the result is always x
+  --> array_out_of_range.v:10:17
+   |
+10 |   assign y2 = m[2];
+   |                 ^
+

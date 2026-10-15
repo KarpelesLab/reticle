@@ -463,6 +463,27 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     ) -> ExprId {
         match self.place(base, sink) {
             Place::Mem(mem) => {
+                // A fixed element the array does not have reads x (IEEE
+                // 1364-2005 §5.2.1), as it does from a vector.
+                let range = self.mems[mem.index()].range;
+                let constant = self
+                    .env
+                    .probe(|env| Evaluator::new(env).eval_i64(index).ok());
+                if let Some(i) = constant
+                    && range.offset(i).is_none()
+                {
+                    self.env.warning(
+                        codes::OUT_OF_RANGE,
+                        index.span,
+                        format!("index {i} is outside {range}; the result is always x"),
+                    );
+                    let width = self.mems[mem.index()]
+                        .elem
+                        .packed()
+                        .map_or(1, Packed::width);
+                    self.b.span = e.span;
+                    return self.b.constant(Logic::x(width));
+                }
                 let addr = self.mem_address(mem, index, sink);
                 self.b.span = e.span;
                 self.b.mem_read(mem, addr)
@@ -518,6 +539,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         bits: u32,
         sink: &mut Sink<'_>,
     ) -> ExprId {
+        self.normalise_index_sized(index, range, bits, sink).0
+    }
+
+    /// [`Self::normalise_index`], also giving the width and signedness
+    /// the offset was computed in, so a caller can do arithmetic on it.
+    fn normalise_index_sized(
+        &mut self,
+        index: &'ast Expr,
+        range: Range,
+        bits: u32,
+        sink: &mut Sink<'_>,
+    ) -> (ExprId, u32, bool) {
         let info = self.info_of(index);
         let base_bits = info
             .width()
@@ -527,16 +560,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let signed = info.is_signed();
         let id = self.expr(index, Some(Ctx { width, signed }), sink);
         if range.right == 0 && range.is_descending() {
-            return id;
+            return (id, width, signed);
         }
         let k = self
             .b
             .constant(Logic::from_i64(range.right, width).with_signed(signed));
-        if range.is_descending() {
+        let off = if range.is_descending() {
             self.b.sub(id, k)
         } else {
             self.b.sub(k, id)
-        }
+        };
+        (off, width, signed)
     }
 
     /// `base[index]` on an integral value.
@@ -1367,6 +1401,24 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             ExprKind::Index { base, index } => match self.env.probe(|env| env.resolve_path(base)) {
                 Some(Symbol::Memory { mem, .. }) => {
+                    // A write to a fixed element the array does not have
+                    // writes nothing (IEEE 1364-2005 §5.2.1), as a read of
+                    // one reads x: `assign mask[7] = ..;` into a `mask` of
+                    // two, kept for the configurations with eight.
+                    let range = self.mems[mem.index()].range;
+                    let constant = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(index).ok());
+                    if let Some(i) = constant
+                        && range.offset(i).is_none()
+                    {
+                        self.env.warning(
+                            codes::OUT_OF_RANGE,
+                            index.span,
+                            format!("index {i} is outside {range}; the assignment is dropped"),
+                        );
+                        return None;
+                    }
                     let addr = self.mem_address(mem, index, &mut Sink::Cont);
                     Some(ir::Lvalue::MemElem { mem, addr })
                 }
@@ -1432,6 +1484,14 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     .env
                     .probe(|env| Evaluator::new(env).eval_i64(right).ok());
                 let (Some(a), Some(b)) = (a, b) else {
+                    if let (
+                        None,
+                        Some(w),
+                        ast::RangeKind::IndexedUp | ast::RangeKind::IndexedDown,
+                    ) = (a, b, kind)
+                    {
+                        return self.indexed_part_lvalue(net, p, left, w, *kind, e.span);
+                    }
                     self.env.unsupported(
                         e.span,
                         "an assignment to a part-select with a non-constant bound",
@@ -1468,6 +1528,75 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 None
             }
         }
+    }
+
+    /// `net[base +: width] = ..` or `net[base -: width] = ..` with a base
+    /// known only at run time.
+    ///
+    /// Written as the concatenation of one variable bit-select per bit of
+    /// the selection, so it needs nothing the IR does not already have: a
+    /// bit whose offset falls outside the net is dropped, which is what
+    /// IEEE 1364-2005 §5.2.1 says of an out-of-range write, and the rest
+    /// of the selection is still written. The offsets are computed wide
+    /// enough that a base below the range wraps to a value above it rather
+    /// than back into it.
+    ///
+    /// Only a vector: a variable element of a packed array is refused as
+    /// it is for a single element (`lvalue`), because the IR's variable
+    /// select writes one bit.
+    fn indexed_part_lvalue(
+        &mut self,
+        net: NetId,
+        p: &Packed,
+        base: &'ast Expr,
+        width: i64,
+        kind: ast::RangeKind,
+        span: Span,
+    ) -> Option<ir::Lvalue> {
+        let outer = p.outer();
+        if p.element().width() > 1 {
+            self.env.unsupported(
+                span,
+                "an assignment to a variable part-select of a packed array",
+            );
+            return None;
+        }
+        let w = match u32::try_from(width) {
+            Ok(w) if w > 0 => w,
+            _ => {
+                self.env
+                    .error(codes::TYPE, span, format!("a part-select of width {width}"));
+                return None;
+            }
+        };
+        let bits = bits_needed(u64::from(p.width()) + u64::from(w)) + 2;
+        let (off, iw, signed) = self.normalise_index_sized(base, outer, bits, &mut Sink::Cont);
+        // Bit `j` of the selection counted from the base is index `base + j`
+        // (`+:`) or `base - j` (`-:`); its offset moves the same way on a
+        // descending range and the other way on an ascending one.
+        let rising = matches!(kind, ast::RangeKind::IndexedUp) == outer.is_descending();
+        let mut parts = Vec::with_capacity(w as usize);
+        for j in 0..w {
+            let index = if j == 0 {
+                off
+            } else {
+                let k = self
+                    .b
+                    .constant(Logic::from_i64(i64::from(j), iw).with_signed(signed));
+                if rising {
+                    self.b.add(off, k)
+                } else {
+                    self.b.sub(off, k)
+                }
+            };
+            parts.push(ir::Lvalue::Index { net, index });
+        }
+        // `Concat` takes its most significant target first, and the
+        // selection's most significant bit is the one at the highest offset.
+        if rising {
+            parts.reverse();
+        }
+        Some(ir::Lvalue::Concat(parts))
     }
 
     /// An assignment to a packed struct field.

@@ -658,8 +658,12 @@ fn reticle_build_builds_the_project() {
         &["build", "--synth", "--lock", &lock_arg, "reticle.proj"],
     );
     assert_eq!(code, 0, "reticle build failed:\n{err}");
+    // Seven: `soc_top` and the six specialised modules under it. The
+    // project names its top, so the library's modules are not also
+    // elaborated a second time with their default parameters, which is
+    // where the twelve this used to count came from.
     assert!(
-        err.contains("note: built `soc`: 12 module(s) from 6 source(s)"),
+        err.contains("note: built `soc`: 7 module(s) from 6 source(s)"),
         "{err}"
     );
     // The binary hands synthesis a file provider rooted at the manifest's

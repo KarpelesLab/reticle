@@ -281,17 +281,189 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return;
         }
         for one in &inst.instances {
-            if !one.dims.is_empty() {
-                self.env
-                    .unsupported(one.span, "an instance array (`name [3:0] (...)`)");
-                continue;
-            }
             let Some(name) = &one.name else {
                 self.env.unsupported(one.span, "an instance without a name");
                 continue;
             };
-            self.one_instance(&module, &inst.params, name, one, item);
+            if one.dims.is_empty() {
+                self.one_instance(&module, &inst.params, name, one, item);
+                continue;
+            }
+            let indices = match one.dims.as_slice() {
+                [dim] => self.array_indices(dim),
+                _ => {
+                    self.env
+                        .unsupported(one.span, "an instance array of more than one dimension");
+                    None
+                }
+            };
+            if let Some(indices) = indices {
+                self.instance_array(&module, &inst.params, name, &indices, one, item);
+            }
         }
+    }
+
+    /// The indices of an instance array's `[left:right]` or `[n]`, left
+    /// first.
+    fn array_indices(&mut self, dim: &'ast ast::Dim) -> Option<Vec<i64>> {
+        let (left, right) = match &dim.kind {
+            ast::DimKind::Range(l, r) => {
+                let l = Evaluator::new(&mut self.env).eval_i64(l).ok()?;
+                let r = Evaluator::new(&mut self.env).eval_i64(r).ok()?;
+                (l, r)
+            }
+            ast::DimKind::Size(n) => {
+                let n = Evaluator::new(&mut self.env).eval_i64(n).ok()?;
+                if n < 1 {
+                    self.env
+                        .error(codes::TYPE, dim.span, format!("an instance array of {n}"));
+                    return None;
+                }
+                (0, n - 1)
+            }
+            _ => {
+                self.env
+                    .unsupported(dim.span, "this form of instance array dimension");
+                return None;
+            }
+        };
+        Some(if left >= right {
+            (right..=left).rev().collect()
+        } else {
+            (left..=right).collect()
+        })
+    }
+
+    /// `module name [left:right] (...)`: one instance per index, named
+    /// `name[index]`.
+    ///
+    /// Each connection either goes to every instance whole, when it is
+    /// as wide as the port, or is cut into one port's width per instance,
+    /// when it is that times the number of instances — the instance with
+    /// the rightmost index taking the least significant bits (IEEE
+    /// 1364-2005 §12.1.2). A module nothing declares has no port widths
+    /// to go by, so there a connection one bit wide goes to every
+    /// instance and a wider one whose width the count divides is cut;
+    /// that is the reading every vendor primitive used this way takes
+    /// (`PULLUP p[7:0] (.O(bus))`), and the warning that the module is a
+    /// black box already says its ports are not checked.
+    fn instance_array(
+        &mut self,
+        module: &str,
+        params: &'ast [ast::ParamOverride],
+        name: &ast::Ident,
+        indices: &[i64],
+        one: &'ast ast::Instance,
+        item: &'ast Item,
+    ) {
+        let overrides = self.build_overrides(params, &name.name);
+        let known = self.env.cx.table.modules.contains_key(module);
+        let target = if known {
+            super::elaborate_module(self.env.cx, module, overrides, name.span)
+        } else {
+            self.env.report(
+                Diagnostic::warning(format!("no module named `{module}` was found"))
+                    .with_code(codes::BLACKBOX)
+                    .with_label(name.span, "instantiated here")
+                    .with_note("the instance is kept as a black box; its ports are not checked")
+                    .with_note(format!(
+                        "Reticle has no library search path, so nothing will find `{module}` \
+                         later unless the target supplies it: add the file that defines it"
+                    )),
+            );
+            None
+        };
+        let params_for_ir = if known {
+            Vec::new()
+        } else {
+            self.build_overrides(params, &name.name).applied()
+        };
+        let ports = target.map(|id| self.port_infos(id));
+        self.natural_connections = true;
+        let connections = self.connections(one, ports.as_deref(), module, target, name);
+        self.natural_connections = false;
+        let count = u32::try_from(indices.len()).unwrap_or(u32::MAX);
+
+        // How each connection reaches the instances: whole, or cut into
+        // `per` bits each.
+        let mut plan: Vec<(Name, ExprId, Option<u32>)> = Vec::new();
+        for (port, expr) in &connections {
+            let width = self.b.module().expr(*expr).ty.width().unwrap_or(1);
+            let port_width = ports
+                .as_ref()
+                .and_then(|ps| ps.iter().find(|p| p.name == port.as_str()))
+                .map(|p| p.width);
+            let per = match port_width {
+                Some(pw) if width == pw => None,
+                Some(pw) if Some(width) == pw.checked_mul(count) => Some(pw),
+                Some(pw) => {
+                    self.env.error(
+                        codes::TYPE,
+                        one.span,
+                        format!(
+                            "port `{port}` is {pw} bit(s) wide and the array has {count} \
+                             instances, so its connection must be {pw} or {} bits, not {width}",
+                            u64::from(pw) * u64::from(count)
+                        ),
+                    );
+                    continue;
+                }
+                None if width > 1 && width.is_multiple_of(count) => Some(width / count),
+                None => None,
+            };
+            plan.push((port.clone(), *expr, per));
+        }
+
+        let module_ref = match target {
+            Some(id) => ModuleRef::Resolved(id),
+            None => ModuleRef::Unresolved(Name::new(module)),
+        };
+        let attrs = self.attrs_of(&item.attrs);
+        for (position, index) in indices.iter().enumerate() {
+            // The rightmost index takes the lowest bits.
+            let from_right = count - 1 - u32::try_from(position).unwrap_or(0);
+            self.b.span = one.span;
+            let mut conns: Vec<(Name, ExprId)> = Vec::with_capacity(plan.len());
+            for (port, expr, per) in &plan {
+                let piece = match per {
+                    None => *expr,
+                    Some(w) => self.b.slice(*expr, from_right * w + w - 1, from_right * w),
+                };
+                conns.push((port.clone(), piece));
+            }
+            let ir_name = self.env.qualified(&format!("{}[{index}]", name.name));
+            let id = self.b.instance(ir_name, module_ref.clone(), conns.clone());
+            {
+                let inst = &mut self.b.module_mut().instances[id];
+                inst.attrs = attrs.clone();
+                for (p, v) in &params_for_ir {
+                    match v {
+                        Override::Value(Value::Logic(l)) => inst.params.set(p.clone(), l.clone()),
+                        other => inst.params.set(p.clone(), other.key_text()),
+                    }
+                }
+            }
+            if let Some(ports) = &ports {
+                for (port, expr) in &conns {
+                    let Some(info) = ports.iter().find(|p| p.name == port.as_str()) else {
+                        continue;
+                    };
+                    if info.dir == PortDir::In {
+                        continue;
+                    }
+                    for (net, whole) in self.expr_nets(*expr) {
+                        self.record_driver(net, DriverKey::Instance(id.index()), whole, one.span);
+                    }
+                }
+            }
+        }
+        self.env.declare(
+            &name.name,
+            Symbol::Instance {
+                module: module.to_owned(),
+            },
+            name.span,
+        );
     }
 
     /// Elaborates the target and connects one instance.
@@ -664,9 +836,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return None;
         }
 
-        let info = ports.and_then(|ps| ps.iter().find(|p| p.name == port));
+        let info = ports
+            .and_then(|ps| ps.iter().find(|p| p.name == port))
+            .filter(|_| !self.natural_connections);
         let Some(info) = info else {
-            // A black box: the connection keeps its natural width.
+            // A black box, or an instance array, whose connections are
+            // cut to the port width afterwards: the connection keeps its
+            // natural width.
             let id = self.expr_cont(expr, None);
             return Some(id);
         };

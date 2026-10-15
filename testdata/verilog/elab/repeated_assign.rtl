@@ -1,0 +1,16 @@
+top repeated_assign
+
+module repeated_assign
+  net %d u6 wire
+  net %q u6 wire
+  net %delayed u6 wire
+  port d in %d
+  port q out %q
+  assign %delayed = %d
+  assign %q[0:0] = %delayed[0:0]
+  assign %q[1:1] = %delayed[1:1]
+  assign %q[2:2] = %delayed[2:2]
+  assign %q[3:3] = %delayed[3:3]
+  assign %q[4:4] = %delayed[4:4]
+  assign %q[5:5] = %delayed[5:5]
+end

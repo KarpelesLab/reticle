@@ -275,7 +275,7 @@ resolves the four packages, writes `reticle.lock`, elaborates the design
 and synthesises it:
 
 ```text
-note: built `nes`: 11 module(s) from 11 source(s)
+note: built `nes`: 9 module(s) from 11 source(s)
 ```
 
 Simulation and the FPGA flow from the command line:

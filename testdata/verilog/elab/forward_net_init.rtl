@@ -1,0 +1,22 @@
+top forward_net_init
+
+module forward_net_init
+  net %clk u1 wire
+  net %d u8 wire
+  net %on u1 wire
+  net %mode u4 wire
+  net %on_w u1 wire
+  net %mode_w u4 wire
+  net %cfg u8 reg
+  port clk in %clk
+  port d in %d
+  port on out %on
+  port mode out %mode
+  assign %on_w = %cfg[7:7]
+  assign %mode_w = %cfg[3:0]
+  assign %on = %on_w
+  assign %mode = %mode_w
+  process seq posedge %clk
+    %cfg <= %d
+  end
+end

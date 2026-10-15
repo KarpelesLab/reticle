@@ -1,0 +1,32 @@
+top instance_array
+
+module ia_cell
+  net %a u2 wire
+  net %en u1 wire
+  net %y u2 wire
+  port a in %a
+  port en in %en
+  port y out %y
+  assign %y = mux(%en, %a, 2'd0)
+end
+
+module instance_array
+  net %up u8 wire
+  net %down u8 wire
+  net %en u1 wire
+  net %y_up u8 wire
+  net %y_down u8 wire
+  port up in %up
+  port down in %down
+  port en in %en
+  port y_up out %y_up
+  port y_down out %y_down
+  instance "u[3]" of ia_cell (a=%up[7:6], en=%en, y=%y_up[7:6])
+  instance "u[2]" of ia_cell (a=%up[5:4], en=%en, y=%y_up[5:4])
+  instance "u[1]" of ia_cell (a=%up[3:2], en=%en, y=%y_up[3:2])
+  instance "u[0]" of ia_cell (a=%up[1:0], en=%en, y=%y_up[1:0])
+  instance "d[0]" of ia_cell (a=%down[7:6], en=%en, y=%y_down[7:6])
+  instance "d[1]" of ia_cell (a=%down[5:4], en=%en, y=%y_down[5:4])
+  instance "d[2]" of ia_cell (a=%down[3:2], en=%en, y=%y_down[3:2])
+  instance "d[3]" of ia_cell (a=%down[1:0], en=%en, y=%y_down[1:0])
+end

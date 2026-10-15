@@ -163,6 +163,12 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     /// One entry per inlined subroutine: its result net and its "has
     /// returned" flag, when it needs one.
     inline_frames: Vec<(Option<NetId>, Option<NetId>)>,
+    /// `wire x = expr;` initialisers waiting for the rest of their scope's
+    /// declarations; see [`Lowerer::declarations`].
+    net_inits: Vec<(NetId, &'ast ast::Expr, Option<Delay>, Span)>,
+    /// True while an instance array's connections are lowered: each keeps
+    /// its own width, to be shared or cut per instance afterwards.
+    natural_connections: bool,
 }
 
 /// Elaborates every root module of `files` and returns the design.
@@ -210,15 +216,23 @@ pub(crate) fn lower_all(
         );
     }
 
-    // Every root is elaborated with its default parameters, so a file of
-    // independent modules yields a design holding all of them.
+    // Without a top named, every root is elaborated with its default
+    // parameters, so a file of independent modules yields a design holding
+    // all of them. Naming the top keeps only its hierarchy, as Vivado and
+    // Yosys' `hierarchy -top` do: a project's file list routinely carries
+    // modules its configuration does not use — NewAE's Husky gateware has
+    // one per SAD variant, and the ones its defines do not select drive
+    // one register from two clock domains — and an error in a module
+    // nothing instantiates says nothing about the design.
     let mut order: Vec<String> = Vec::new();
     if let Some(top) = &top_name {
         order.push(top.clone());
     }
-    for r in &roots {
-        if !order.contains(r) {
-            order.push(r.clone());
+    if opts.top.is_none() {
+        for r in &roots {
+            if !order.contains(r) {
+                order.push(r.clone());
+            }
         }
     }
     let mut top_id = None;
@@ -387,6 +401,8 @@ pub(crate) fn elaborate_module(
             defparams: Vec::new(),
             inlining: Vec::new(),
             inline_frames: Vec::new(),
+            net_inits: Vec::new(),
+            natural_connections: false,
         }
     };
     low.b.span = decl.span();
@@ -801,6 +817,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         overrides: &mut Overrides,
         params: &mut Vec<(String, Value)>,
     ) {
+        let outer = std::mem::take(&mut self.net_inits);
         for item in items {
             match &item.kind {
                 ItemKind::Import(refs) => decls::import(&mut self.env, refs),
@@ -814,6 +831,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 ItemKind::Directive(d) => self.directive(d),
                 _ => {}
             }
+        }
+        // A net's initialiser is lowered once every name of the scope is
+        // declared, because it is a continuous assignment, and a
+        // continuous assignment may read a net declared further down —
+        // `wire on = cfg[7];` above `reg [7:0] cfg;`. IEEE 1364 asks for
+        // the declaration first; Vivado, Quartus and Verilator accept it
+        // with a warning, and NewAE's ChipWhisperer-Husky gateware relies
+        // on that in seven files.
+        for (net, init, delay, span) in std::mem::replace(&mut self.net_inits, outer) {
+            self.continuous_assign_to(net, init, delay, span);
         }
     }
 
@@ -879,7 +906,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             // `wire x = expr;` is a continuous assignment.
             if let Some(init) = &d.init {
                 let delay = nd.delay.as_ref().and_then(|dl| self.delay_of(dl));
-                self.continuous_assign_to(net, init, delay, d.span);
+                self.net_inits.push((net, init, delay, d.span));
             }
         }
     }
@@ -1167,6 +1194,21 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.record_driver(*net, DriverKey::Instance(index), true, pair.span);
                 continue;
             }
+            // The same assignment made again — `assign a = b;` inside a
+            // generate loop that does not use the loop variable, as NewAE's
+            // Husky gateware does six times over — is the same connection,
+            // not a second driver: a wire driven twice with one value holds
+            // that value. Only a copy of a net, a constant, or slices and
+            // concatenations of those count as the same, so two different
+            // computations of one value are still reported.
+            let repeated = self.b.module().assigns.iter().any(|a| {
+                a.target == target
+                    && a.delay == delay
+                    && same_wiring(self.b.module(), a.value, value)
+            });
+            if repeated {
+                continue;
+            }
             self.b.assign_after(target.clone(), value, delay);
             let attrs = self.attrs_of(&item.attrs);
             if let Some(a) = self.b.module_mut().assigns.last_mut() {
@@ -1335,3 +1377,36 @@ pub(crate) struct Ctx {
 }
 
 pub(crate) use expr::Sink;
+
+/// True when `a` and `b` are the same wiring: the same net, the same
+/// constant, or slices and concatenations of those. Anything with an
+/// operator in it is not compared and answers false.
+fn same_wiring(m: &ir::Module, a: ir::ExprId, b: ir::ExprId) -> bool {
+    if a == b {
+        return true;
+    }
+    let (ea, eb) = (m.expr(a), m.expr(b));
+    if ea.ty != eb.ty {
+        return false;
+    }
+    match (&ea.kind, &eb.kind) {
+        (ir::ExprKind::Net(x), ir::ExprKind::Net(y)) => x == y,
+        (ir::ExprKind::Const(x), ir::ExprKind::Const(y)) => x == y,
+        (
+            ir::ExprKind::Slice {
+                base: x,
+                hi: xh,
+                lo: xl,
+            },
+            ir::ExprKind::Slice {
+                base: y,
+                hi: yh,
+                lo: yl,
+            },
+        ) => xh == yh && xl == yl && same_wiring(m, *x, *y),
+        (ir::ExprKind::Concat(xs), ir::ExprKind::Concat(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| same_wiring(m, *x, *y))
+        }
+        _ => false,
+    }
+}
