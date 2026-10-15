@@ -144,6 +144,115 @@ mutually deaf, and it looks like the card ignoring what follows rather than a
 negotiation that never happened. One run drew a logo and the next did not,
 for exactly that reason.
 
+## USB over the console
+
+`U`, `X` and `!` let a host at the console be the device's USB host. Nothing
+here is a USB controller: the SE has its own USB stack, a real Nano X's MCU
+only carries packets between it and the wire, and so does this.
+
+**Status: CHECKED in simulation against the capture's own packets; not yet
+run against an SE that turned USB on.** On 16 October 2026 an SE 2.5.1 at
+boot was given `U` and sent no USB_CONFIG at all in 21 s, so the engine
+correctly sent nothing. That SE did configure USB after the onboarding
+restarts of 15 October. The first run against a connecting SE is the test
+this section is written for: please record what happens here, including
+where it differs from what follows.
+
+### Who does what
+
+Every USB packet in the capture (`visgrok`,
+`capture-20261009-125946.seph.log`) is one of these. The engine
+(`ip/bus/seph_mcu`) does the first three by itself; the host does the
+fourth with `!`.
+
+| packet | bytes | when | done by |
+|---|---|---|---|
+| USB_EVENT reset | `0F 00 01 01` | cable in (`U`) **and** the SE has sent USB_CONFIG connect `4F 00 01 01`; once per plug | engine |
+| "IN done" | `10 00 03 80 02 <len>` on endpoint 0, `10 00 03 82 02 00` on endpoint 2 | the turn after each IN the SE prepares | engine |
+| status flags | STATUS_EVENT byte 6: `09` cable in, `0B` after the reset, `0F` with BLE on too | every REQUEST_STATUS | engine |
+| SETUP, OUT | `10 00 0B 00 01 08 <8-byte setup>`; `10 00 43 82 04 40 <64 bytes>` | whenever the host has something to say | **host**, with `!` |
+
+The SE's answers are its own packets and come back in the card hex like
+everything else it sends (keep `u`, not `m`):
+
+| SE packet | bytes | meaning |
+|---|---|---|
+| USB_CONFIG | `4F 00 01 01` connect, `4F 00 01 02` disconnect, `4F 00 02 03 <addr>` address, `4F 00 05 04 …` endpoints | needs no answer |
+| USB_EP_PREPARE, IN | `50 <len16> <ep> 20 <n> <n bytes>` | data for the host: **this is the answer**. `<ep>` is `00` for endpoint 0, `82` for HID endpoint 2 |
+| USB_EP_PREPARE, ready | `50 00 03 <ep> 30 <n>` | the SE will take an OUT of up to `n` bytes; needs no answer |
+
+### Sending: `!`
+
+`!`, then the event as hex, then CR. Like a `:` run it holds the display
+half off and ends on any non-hex character. The engine sends it whole on
+its next turn, ahead of the ticker; the host sees nothing for that, since
+the monitor does not print the engine's bytes while `W` runs.
+
+`-INJ` and nothing sent when the event is not exactly one packet (the
+length field must equal the bytes after it), when the digits are odd,
+when `W` is not running, or when an earlier `!` event has not gone out
+yet. Wait for the SE's answer before the next one; the engine holds one.
+
+### Enumerating, step by step
+
+After `A`, `P` (echo `FF109778`), `F`, `W`, then `U` (`+USB`). Wait for
+`4F 00 01 01` from the SE; the engine resets the bus by itself, and the SE
+then sends `4F 00 05 04 01 00 01 40` and `4F 00 05 04 01 80 01 40`
+(endpoint 0, both directions, 64 bytes). Then, as the capture's host did,
+each line one `!` event, waiting for the IN after each:
+
+| send | the SE should prepare |
+|---|---|
+| `!10000B0001080005010000000000` SET_ADDRESS 1 | `4F 00 02 03 01`, then `50 00 03 00 20 00` (status stage) |
+| `!10000B0001088006000100000800` device descriptor, 8 | `50 00 0B 00 20 08 12 01 10 02 00 00 00 40` |
+| `!10000B0001088006000100001200` device descriptor, 18 | 18 bytes: VID `2c97`, PID `4000` on the capture's device |
+| `!10000B0001088006020309040E00` string 2 | `"Nano X"` in UTF-16 |
+| `!10000B0001088006010309040E00` string 1 | `"Ledger"` |
+| `!10000B0001088006000200000900` configuration, 9 | its total length in bytes 2-3 |
+| `!10000B0001088006000200006000` configuration, 96 | **two** INs, 64 then 32: see below |
+| `!10000B0001080009010000000000` SET_CONFIGURATION 1 | `50 00 03 00 20 00` |
+
+Each SETUP is `10 00 0B 00 01 08` then the eight setup bytes as USB sends
+them: bmRequestType, bRequest, wValue, wIndex, wLength, little-endian.
+
+**An IN longer than 64 bytes comes in pieces.** The SE prepares 64, the
+engine completes it, and the SE prepares the rest on its next turn. Keep
+reading INs on that endpoint until one is shorter than 64 or the total
+reaches wLength.
+
+### An APDU over HID
+
+Ledger's HID framing on endpoint 2, 64-byte reports: channel (2 bytes),
+tag `05`, sequence number (2 bytes, from 0), and in the first report only
+the APDU's length (2 bytes); then the APDU, continued in later reports, the
+last padded with zeros. Each report is one OUT event:
+
+```
+!10004382 04 40 <64-byte report>          (spaces here for reading only)
+```
+
+The capture's host sent GET_APP_NAME_AND_VERSION (`B0 01 00 00 00`) on
+channel `09DD`:
+
+```
+!100043820440 09DD050000 0005 B001000000 <zeros to 64 bytes>
+```
+
+and the SE answered with `50 00 03 02 30 40` (ready for the next) and an
+IN on `82` carrying the same framing: `09DD050000 0002 5515` -- two bytes,
+status word `5515`, device locked. The engine completes it with
+`10 00 03 82 02 00` by itself. Responses longer than one report arrive as
+several INs on `82`, sequence numbers counting up.
+
+### If the SE never connects
+
+What an SE does with a bus reset it did not connect for has not been
+seen. `!0F000101` sends one by hand -- the engine does not refuse it -- and
+the status still says the cable is in. If the SE answers descriptor
+requests after that, USB works without its own connect; if not, it needs
+whatever state makes it connect (the capture's SE 2.6.0 connected 2 s after
+boot; the bench's 2.5.1 has done so only after an onboarding restart).
+
 ## Gotchas that cost hours
 
 - **Drain the port to quiet before measuring.** A frame dump is 2064
