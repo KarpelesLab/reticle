@@ -46,7 +46,10 @@ module seph_mcu_tb;
         .clk(clk), .rst_n(rst_n), .start(start), .stop(1'b0),
         .rx_data(rx_data), .rx_valid(rx_valid),
         .tx_data(tx_data), .tx_valid(tx_valid), .tx_ready(tx_ready),
-        .buttons(buttons), .active(active), .started(started),
+        .buttons(buttons),
+        .usb_plugged(1'b0), .usb_on(),
+        .inj_start(1'b0), .inj_data(8'd0), .inj_valid(1'b0), .inj_commit(1'b0),
+        .inj_busy(), .inj_bad(), .active(active), .started(started),
         .rx_packets(rx_packets), .tx_events(tx_events),
         .last_rx_tag(last_rx_tag), .ms(ms));
 

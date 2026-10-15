@@ -5020,6 +5020,34 @@ fn seph_mcu_answers_a_real_configuration_as_the_real_mcu_did() {
     );
 }
 
+/// `seph_mcu`'s USB against the capture's packets: no bus reset until the
+/// cable is in and the SE connected, the status flags following the cable,
+/// injected SETUP and OUT transfers byte for byte, IN completions as the
+/// real MCU sent them, and malformed or overlapping injections refused.
+/// It would not catch anything a real host does that the capture's does
+/// not.
+#[test]
+fn seph_mcu_carries_usb_as_the_real_mcu_did() {
+    let design = testbench_design("seph_mcu", "rtl/seph_mcu_usb_tb.v", "seph_mcu_usb_tb");
+    let mut sim = simulate(&design, "seph_mcu_usb_tb");
+    sim.run();
+    let printed = sim.output().to_owned();
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(
+        messages.is_empty(),
+        "the simulator complained:\n  {}\noutput:\n{printed}",
+        messages.join("\n  ")
+    );
+    assert!(
+        sim.finished(),
+        "the testbench did not reach $finish:\n{printed}"
+    );
+    assert!(
+        printed.starts_with("PASS:"),
+        "the USB session did not pass:\n{printed}"
+    );
+}
+
 /// One command for the I²C master: what to put on the bus and what the
 /// slave model should do about it.
 struct I2cCommand {

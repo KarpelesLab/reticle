@@ -106,6 +106,14 @@ D                 deactivate: reset, clock, line, then power, in that order
 s                 card status, 32 hex characters
 ?  g              display status; dump the frame buffer as hex
 m  u              mute / unmute the printing of card bytes
+U  X              a USB cable in / out (+USB / -USB): with it in, the engine
+                  resets the bus once the SE connects, completes every IN the
+                  SE prepares, and the status says USB powered and on
+!<hex>            one SEPROXYHAL event for the engine's next turn, ended like
+                  a `:` run: a host's SETUP or OUT transfer, for example
+                  `!10000B0001088006000100001200` (GET_DESCRIPTOR, device,
+                  18 bytes); -INJ if refused. What the SE answers comes back
+                  as its USB_EP_PREPARE in the hex like everything it sends
 ```
 
 ### The initialisation frame

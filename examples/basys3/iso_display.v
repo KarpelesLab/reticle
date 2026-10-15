@@ -80,6 +80,13 @@
 //   C          the same with the pad's data input left on the constant leg
 //   D          deactivate: reset, clock, line, then power — in that order
 //   s          status, 32 hex characters        k   a known constant
+//   W          become the SE's MCU (`ip/bus/seph_mcu`); only after `F`
+//   U          a USB cable in: the engine resets the bus once the SE has
+//              connected, and the status says USB    X   the cable out
+//   !<hex>     one whole SEPROXYHAL event for the engine to send on its next
+//              turn -- a SETUP or OUT transfer from the host at this console.
+//              Ended like a `:` run; `-INJ` if it is not one well-formed
+//              packet or one is still waiting
 //
 // The **display** half's letters moved, and `s d a q r L R` are what they
 // were:

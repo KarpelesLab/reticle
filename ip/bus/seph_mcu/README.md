@@ -30,22 +30,53 @@ each turn, the block sends the first of these that is due:
    `aci_gatt_add_char` (`fd04`) are reproduced. A characteristic's handle
    advances by two, or by three if its properties include notify or
    indicate (`0x30`), as the real radio's did.
-2. **STATUS_EVENT** (`0x15`), the `STATUS` parameter verbatim, for a
-   REQUEST_STATUS (`0x52`).
-3. **BUTTON_PUSH_EVENT** (`0x05`) when `buttons` differs from what was
+2. **STATUS_EVENT** (`0x15`), the `STATUS` parameter with the USB and BLE
+   flags (USB, below) added to its low flag byte, for a REQUEST_STATUS
+   (`0x52`).
+3. **USB_EP_XFER_EVENT** (`0x10`) "IN done" for each IN transfer the SE
+   prepares (USB_EP_PREPARE `0x50`, type `0x20`), endpoint 0 first.
+4. **USB_EVENT** (`0x0F`) reset, once, when `usb_plugged` is high and the
+   SE has connected (USB_CONFIG `0x4F`, `01`).
+5. **An injected event**, verbatim: whatever the host behind `inj_*` wants
+   the SE to see.
+6. **BUTTON_PUSH_EVENT** (`0x05`) when `buttons` differs from what was
    last reported: `buttons << BUTTON_SHIFT`.
-4. **TICKER_EVENT** (`0x0E`), milliseconds since `start`, once the SE's
+7. **TICKER_EVENT** (`0x0E`), milliseconds since `start`, once the SE's
    interval has passed since the last one. SET_TICKER_INTERVAL (`0x4E`)
    sets it; 100 ms until then.
 
-If nothing is due the turn waits. Every other SE command — USB
-configuration, MCU lock, MORE_TIME — is counted and needs no answer.
+If nothing is due the turn waits. Every other SE command — the rest of
+USB configuration, MCU lock, MORE_TIME — is counted and needs no answer.
 
-**USB needs no answer because no host is plugged in.** In the capture the
-SE's USB_CONFIG `connect` was followed by the MCU's USB_EVENT `reset`, and
-then by enumeration, only because a host was attached and reset the bus.
-With no host, a real MCU sees no reset and reports none. What an SE does
-while it waits for one is not measured here.
+### USB
+
+This block is not a USB host; it is the MCU between the SE and one. In the
+capture everything the MCU sends for USB is one of four things, and this
+block does three of them itself:
+
+| event | when | done by |
+|---|---|---|
+| USB_EVENT reset `0f 00 01 01` | a host sees the device: cable in and SE connected | this block, once per plug |
+| "IN done" `10 00 03 <ep, bit 7 set> 02 <len>` | after each IN the SE prepares | this block, on its next turn |
+| STATUS's USB flags | always | this block: `0x09` cable in, `0x02` added after the reset |
+| SETUP and OUT transfers `10 …` | whenever the host has something to say | **the host**, through `inj_*` |
+
+An IN completion carries the prepared length on endpoint 0 and **zero** on
+any other endpoint, because that is what the capture's MCU sent: 1632 of
+1632 on endpoint 2 say length 0 after 64 bytes.
+
+The data the SE prepares is not repeated anywhere: it is in the SE's own
+USB_EP_PREPARE, which whoever carries this block's bytes already sees.
+
+**The injected event is checked, not trusted.** `inj_start`, then one
+`inj_valid` per byte, then `inj_commit`; the commit is refused with a
+one-cycle `inj_bad`, and nothing is sent, unless the bytes are exactly one
+packet — a tag, a length, and that many bytes — and nothing else is
+waiting. A packet out of step with its length would put the link out of
+step with the SE for good. Up to 2047 bytes; a HID OUT is 70. (The buffer is 2048 so that it fills a block RAM exactly: at 256, a block RAM address pin the design left undriven could not be tied on `iso_display.v`, because the router had used its ground fan.)
+
+With the cable out, nothing happens on USB at all, which is what a real MCU
+does with no host: the SE's USB_CONFIG `connect` goes unanswered.
 
 ## 2. Parameters
 
@@ -114,7 +145,7 @@ the router, not here: see `docs/card-bench.md`.)
   instead;
 - what an SE does with a status it does not like.
 
-## 4. The testbench
+## 4. The testbenches
 
 `rtl/seph_mcu_tb.v` plays a scripted SE and checks every byte the block
 sends: SESSION_START byte for byte, nothing before the SE's first status
@@ -130,3 +161,10 @@ was answered, USB_CONFIG included, and each BLE answer must equal the real
 MCU's byte for byte. It caught the characteristic handles, which the block
 counted two at a time and so answered `0d 0f 11` where the radio had said
 `0d 10 12`.
+
+`rtl/seph_mcu_usb_tb.v` drives USB with the capture's own packets: the
+reset only once the cable is in and the SE connected, and again after the
+cable goes out and back; the status flags at each step; SET_ADDRESS,
+GET_DESCRIPTOR and a 70-byte HID OUT injected and sent byte for byte; each
+IN completed as the real MCU completed it; and a malformed injection, and
+one made while another waited, refused without disturbing the one waiting.

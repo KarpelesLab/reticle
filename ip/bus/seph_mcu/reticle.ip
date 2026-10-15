@@ -6,8 +6,10 @@
 # the SE sends -- one event: an HCI "command complete" for a BLE command,
 # a STATUS_EVENT for a status request, a BUTTON_PUSH_EVENT when `buttons`
 # changes, or a TICKER_EVENT at the SE's interval. That is enough to bring
-# an SE up and keep it running; USB and BLE configuration are read and
-# accepted, not acted on.
+# an SE up and keep it running; BLE configuration is accepted, not acted on.
+# For USB it does the MCU's part -- the bus reset when `usb_plugged`, IN
+# completions, the status flags -- and sends a host's own transfers, given
+# whole through `inj_*`.
 #
 # It moves bytes with a valid/ready handshake and knows nothing of ISO 7816;
 # `iso7816_uart` carries them on a real contact. README.md has the protocol,
@@ -15,7 +17,7 @@
 name seph_mcu
 version 1.0.0
 license MIT
-description "Ledger SEPROXYHAL MCU side: session start, turn-based events (ticker, status, button, BLE command complete) answering a secure element's commands, over a byte stream"
+description "Ledger SEPROXYHAL MCU side: session start, turn-based events (ticker, status, button, BLE command complete, USB reset and IN completion, injected host transfers) answering a secure element's commands, over a byte stream"
 
 top seph_mcu
 target ice40
@@ -39,6 +41,14 @@ port tx_data out 8
 port tx_valid out
 port tx_ready in
 port buttons in 2
+port usb_plugged in
+port usb_on out
+port inj_start in
+port inj_data in 8
+port inj_valid in
+port inj_commit in
+port inj_busy out
+port inj_bad out
 port active out
 port started out
 port rx_packets out 16

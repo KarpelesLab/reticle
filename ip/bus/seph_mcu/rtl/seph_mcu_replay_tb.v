@@ -48,7 +48,10 @@ module seph_mcu_replay_tb;
         .clk(clk), .rst_n(rst_n), .start(start), .stop(1'b0),
         .rx_data(rx_data), .rx_valid(rx_valid),
         .tx_data(tx_data), .tx_valid(tx_valid), .tx_ready(1'b1),
-        .buttons(2'b00), .active(active), .started(started),
+        .buttons(2'b00),
+        .usb_plugged(1'b0), .usb_on(),
+        .inj_start(1'b0), .inj_data(8'd0), .inj_valid(1'b0), .inj_commit(1'b0),
+        .inj_busy(), .inj_bad(), .active(active), .started(started),
         .rx_packets(rx_packets), .tx_events(tx_events),
         .last_rx_tag(last_rx_tag), .ms(ms));
 

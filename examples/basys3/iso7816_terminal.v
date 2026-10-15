@@ -246,7 +246,8 @@ module iso7816_terminal #(
     // `in_hex` is exported so that `iso_display.v` can hold the display half
     // off for exactly the same characters, with the same bit rather than a
     // second copy of this state.
-    reg       in_hex   = 1'b0;      // inside a `:` run
+    reg       in_hex   = 1'b0;      // inside a `:` or `!` run
+    reg       run_seph = 1'b0;      // ... and it is a `!` run
     assign    hex_run  = in_hex;
     // Every command below is decoded through this and never through
     // `cmd_valid` alone.
@@ -543,12 +544,33 @@ module iso7816_terminal #(
     wire [7:0]  seph_last_tag;
     wire        seph_start = cmd_now && cmd_data == 8'h57 && card_active;   // 'W'
 
+    // `U` puts a USB cable in and `X` takes it out. Nothing is on the other
+    // end but a host at this console: the engine does the MCU's part --
+    // the bus reset, IN completions, the status flags -- and a `!` run
+    // carries the host's own transfers. See `seph_mcu.v`, "USB".
+    // The `:` and `!` runs' half-assembled byte, declared here because the
+    // engine below takes `!` bytes from it.
+    reg       have_hi  = 1'b0;
+    reg [3:0] hi_nib   = 4'd0;
+    reg         usb_plugged = 1'b0;
+    wire        seph_usb_on, seph_inj_busy, seph_inj_bad;
+    wire        inj_start, inj_valid, inj_end, inj_commit, inj_odd;
+    always @(posedge sys) begin
+        if (!rst_n)                                usb_plugged <= 1'b0;
+        else if (cmd_now && cmd_data == 8'h55)     usb_plugged <= 1'b1;   // 'U'
+        else if (cmd_now && cmd_data == 8'h58)     usb_plugged <= 1'b0;   // 'X'
+    end
+
     seph_mcu #(.MS_CYCLES(SEPH_MS_CYCLES), .TURN_CYCLES(SEPH_TURN_CYCLES)) seph (
         .clk(sys), .rst_n(rst_n),
         .start(seph_start), .stop(!card_active),
         .rx_data(card_rx), .rx_valid(card_rx_valid),
         .tx_data(seph_tx_data), .tx_valid(seph_tx_valid), .tx_ready(seph_tx_ready),
         .buttons(seph_buttons),
+        .usb_plugged(usb_plugged), .usb_on(seph_usb_on),
+        .inj_start(inj_start), .inj_data({hi_nib, hex_val(cmd_data)}),
+        .inj_valid(inj_valid), .inj_commit(inj_commit),
+        .inj_busy(seph_inj_busy), .inj_bad(seph_inj_bad),
         .active(seph_active), .started(seph_started),
         .rx_packets(seph_rx_packets), .tx_events(seph_tx_events),
         .last_rx_tag(seph_last_tag), .ms());
@@ -561,8 +583,6 @@ module iso7816_terminal #(
                      SRC_SEPH = 2'd3;
 
     reg [1:0] tx_src   = SRC_IDLE;
-    reg       have_hi  = 1'b0;
-    reg [3:0] hi_nib   = 4'd0;
     reg [1:0]  pps_idx = 2'd0;
     // Four etu of silence between the characters of a sequence this module
     // sends itself, which is comfortably more than the two the standard
@@ -593,8 +613,13 @@ module iso7816_terminal #(
             have_hi <= 1'b0;
         end else if (cmd_valid) begin
             if (cmd_data == 8'h3A) begin        // ':'
-                in_hex  <= 1'b1;
-                have_hi <= 1'b0;
+                in_hex   <= 1'b1;
+                run_seph <= 1'b0;
+                have_hi  <= 1'b0;
+            end else if (cmd_data == 8'h21 && !(in_hex && run_seph)) begin   // '!'
+                in_hex   <= 1'b1;
+                run_seph <= 1'b1;
+                have_hi  <= 1'b0;
             end else if (in_hex && !is_hex_char(cmd_data)) begin
                 in_hex  <= 1'b0;
                 have_hi <= 1'b0;
@@ -610,8 +635,17 @@ module iso7816_terminal #(
     end
 
     // A byte is complete when the second nibble of a pair arrives.
-    wire host_byte_ready = cmd_valid && in_hex && is_hex_char(cmd_data)
+    wire host_byte_ready = cmd_valid && in_hex && !run_seph && is_hex_char(cmd_data)
                         && have_hi;
+
+    // A `!` run goes to the engine instead: one whole event, offered when
+    // the run ends. An odd number of digits is refused here, since the
+    // engine never sees the half byte.
+    assign inj_start  = cmd_valid && cmd_data == 8'h21 && !(in_hex && run_seph);
+    assign inj_valid  = cmd_valid && in_hex && run_seph && is_hex_char(cmd_data) && have_hi;
+    assign inj_end    = cmd_valid && in_hex && run_seph && !is_hex_char(cmd_data);
+    assign inj_commit = inj_end && !have_hi;
+    assign inj_odd    = inj_end && have_hi;
     wire [7:0] host_byte = {hi_nib, hex_val(cmd_data)};
 
     // The engine's byte is taken exactly when the branch below that loads
@@ -868,10 +902,12 @@ module iso7816_terminal #(
                          : GAP_LOAD_SLOW;
 
     reg p_vcc = 1'b0, p_clk = 1'b0, p_rst = 1'b0, p_off = 1'b0,
-        p_fast = 1'b0, p_slow = 1'b0, p_pad = 1'b0, p_cst = 1'b0;
+        p_fast = 1'b0, p_slow = 1'b0, p_pad = 1'b0, p_cst = 1'b0,
+        p_inj = 1'b0, p_usb_in = 1'b0, p_usb_out = 1'b0;
     wire [3:0] want_banner = p_vcc ? 4'd1 : p_clk ? 4'd2 : p_rst ? 4'd3
                            : p_fast ? 4'd5 : p_slow ? 4'd6 : p_pad ? 4'd7
                            : p_cst ? 4'd8 : p_off ? 4'd4
+                           : p_inj ? 4'd9 : p_usb_in ? 4'd10 : p_usb_out ? 4'd11
                            : 4'd0;
 
     wire banner_done = (phase == P_BANNER) && (pos == 4'd5) && host_valid && host_ready;
@@ -882,7 +918,12 @@ module iso7816_terminal #(
         if (!rst_n) begin
             p_vcc <= 1'b0; p_clk <= 1'b0; p_rst <= 1'b0; p_off <= 1'b0;
             p_fast <= 1'b0; p_slow <= 1'b0; p_pad <= 1'b0; p_cst <= 1'b0;
+            p_inj <= 1'b0; p_usb_in <= 1'b0; p_usb_out <= 1'b0;
         end else begin
+            // `-INJ`: a `!` run the engine refused, or an odd digit count.
+            if (seph_inj_bad || inj_odd)                 p_inj     <= 1'b1;
+            if (cmd_now && cmd_data == 8'h55)            p_usb_in  <= 1'b1;
+            if (cmd_now && cmd_data == 8'h58)            p_usb_out <= 1'b1;
             case (banner)
                 4'd1: p_vcc <= 1'b1;
                 4'd2: p_clk <= 1'b1;
@@ -903,6 +944,9 @@ module iso7816_terminal #(
                     4'd6: p_slow <= 1'b0;
                     4'd7: p_pad  <= 1'b0;
                     4'd8: p_cst  <= 1'b0;
+                    4'd9: p_inj  <= 1'b0;
+                    4'd10: p_usb_in  <= 1'b0;
+                    4'd11: p_usb_out <= 1'b0;
                     default: p_off <= 1'b0;
                 endcase
             end
@@ -1100,6 +1144,18 @@ module iso7816_terminal #(
             {4'd6, 2'd1}: banner_ch = "S";
             {4'd6, 2'd2}: banner_ch = "L";
             {4'd6, 2'd3}: banner_ch = "W";
+            {4'd9, 2'd0}: banner_ch = "-";
+            {4'd9, 2'd1}: banner_ch = "I";
+            {4'd9, 2'd2}: banner_ch = "N";
+            {4'd9, 2'd3}: banner_ch = "J";
+            {4'd10, 2'd0}: banner_ch = "+";
+            {4'd10, 2'd1}: banner_ch = "U";
+            {4'd10, 2'd2}: banner_ch = "S";
+            {4'd10, 2'd3}: banner_ch = "B";
+            {4'd11, 2'd0}: banner_ch = "-";
+            {4'd11, 2'd1}: banner_ch = "U";
+            {4'd11, 2'd2}: banner_ch = "S";
+            {4'd11, 2'd3}: banner_ch = "B";
             default:      banner_ch = "T";
         endcase
     endfunction
@@ -1108,8 +1164,11 @@ module iso7816_terminal #(
         bytes_q, perr_q, sent_q, tmo_q,
         etu_div, CARD_DIV16,
         // Bit 0 the fast rate; bits 7 and 6 the right and left button
-        // lines as read, which is how a host learns their idle levels.
-        {buttons_in, 5'd0, etu_div == FAST_DIV16}, {5'd0, state},
+        // lines as read, which is how a host learns their idle levels;
+        // bit 5 the USB cable in (`U`), bit 4 the engine's bus reset sent,
+        // bit 3 a `!` event still waiting to go.
+        {buttons_in, usb_plugged, seph_usb_on, seph_inj_busy, 2'd0,
+         etu_div == FAST_DIV16}, {5'd0, state},
         8'hA5,
         // The two samples `L` took, because `-PAD` alone does not say which
         // half failed and they mean different things: a line that would not

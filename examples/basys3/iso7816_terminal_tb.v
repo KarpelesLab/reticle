@@ -559,6 +559,51 @@ module iso7816_terminal_tb;
         repeat (card_etu * 40) @(posedge clk);
         rx_rd = rx_wr;
 
+        // ---- USB: the cable, and an event injected with `!` ----
+        //
+        // `!` then hex then CR hands the engine one whole event, which it
+        // sends on its next turn: here a USB_EVENT reset, `0F 00 01 01`,
+        // after the card's status. `seph_mcu_usb_tb.v` checks what the
+        // engine does with USB; this checks the console's end of it.
+        host_send(8'h55);                      // 'U'
+        expect_banner("+USB");
+        host_send(8'h21);                      // '!'
+        host_send(8'h30); host_send(8'h46);    // 0F
+        host_send(8'h30); host_send(8'h30);    // 00
+        host_send(8'h30); host_send(8'h31);    // 01
+        host_send(8'h30); host_send(8'h31);    // 01
+        host_send(8'h0D);
+        card_send(8'h60); card_send(8'h00); card_send(8'h02);
+        card_send(8'h00); card_send(8'h00);
+        base = got_n;
+        deact = 0;
+        while (got_n < base + 4 && deact < 4 * 100 * 4 + card_etu * 12 * 4 * 4) begin
+            @(posedge clk); deact = deact + 1;
+        end
+        if (got_n < base + 4 || got[base % 64] !== 8'h0f || got[(base + 1) % 64] !== 8'h00
+            || got[(base + 2) % 64] !== 8'h01 || got[(base + 3) % 64] !== 8'h01) begin
+            $display("FAIL: `!0F000101` then the card's status: the terminal sent %0d byte(s), first %02x %02x %02x %02x; wanted 0F 00 01 01",
+                     got_n - base, got[base % 64], got[(base + 1) % 64],
+                     got[(base + 2) % 64], got[(base + 3) % 64]);
+            $finish;
+        end
+        repeat (card_etu * 40) @(posedge clk);
+        rx_rd = rx_wr;
+        // A length that does not match the bytes, and an odd digit count:
+        // both refused, and said so.
+        host_send(8'h21);                      // '!0F0001'
+        host_send(8'h30); host_send(8'h46); host_send(8'h30); host_send(8'h30);
+        host_send(8'h30); host_send(8'h31);
+        host_send(8'h0D);
+        expect_banner("-INJ");
+        host_send(8'h21);                      // '!0F0'
+        host_send(8'h30); host_send(8'h46); host_send(8'h30);
+        host_send(8'h0D);
+        expect_banner("-INJ");
+        host_send(8'h58);                      // 'X'
+        expect_banner("-USB");
+        rx_rd = rx_wr;
+
         host_send(8'h44);                      // 'D'
         // Reset must drop before power does. Bounded, and each way of
         // failing says which it was: an unbounded wait here reported
@@ -624,7 +669,7 @@ module iso7816_terminal_tb;
             end
         end
 
-        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at the fast rate afterwards; 40 bytes received while the port was held printed whole and in order; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order; `W` sent SESSION_START whole and a ticker after the card's status");
+        $display("PASS: activation in order; the real 14-byte ATR received; PPS FF 10 97 78 sent and received byte-for-byte by the card, echoed and compared by this testbench as a host would; the rate switched on `F`; two bytes received and one sent at the fast rate afterwards; 40 bytes received while the port was held printed whole and in order; deactivation dropped reset and the clock before power; and k, s, k sent back to back answered in full and in order; `W` sent SESSION_START whole and a ticker after the card's status; `U` and `X` answered, a `!` event reached the card after its status, and a malformed one and an odd digit count were refused");
         $finish;
     end
 endmodule
