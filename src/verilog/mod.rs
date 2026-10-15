@@ -82,7 +82,23 @@ pub fn lex_source_full(
     resolver: &mut dyn IncludeResolver,
     diags: &mut Diagnostics,
 ) -> Lexed {
-    let pre = Preprocessor::new().run(map, id, resolver, diags);
+    lex_source_in(map, id, dialect, &mut Preprocessor::new(), resolver, diags)
+}
+
+/// Like [`lex_source_full`] for one file of a compilation: the file
+/// starts with the macros `compilation` holds (its predefined ones, or
+/// what the previous file left defined) and `compilation` is left
+/// holding what this file leaves defined, ready for the next.
+pub fn lex_source_in(
+    map: &mut SourceMap,
+    id: SourceId,
+    dialect: Dialect,
+    compilation: &mut Preprocessor,
+    resolver: &mut dyn IncludeResolver,
+    diags: &mut Diagnostics,
+) -> Lexed {
+    let pre = compilation.run(map, id, resolver, diags);
+    compilation.continue_from(&pre);
     let mut lexed = Lexer::new(&pre.text, id, dialect, diags)
         .with_span_map(&pre.spans)
         .run();
@@ -125,7 +141,38 @@ pub fn parse_source(
     resolver: &mut dyn IncludeResolver,
     diags: &mut Diagnostics,
 ) -> ast::SourceFile {
-    let tokens = lex_source(map, id, dialect, resolver, diags);
+    parse_source_in(map, id, dialect, &mut Preprocessor::new(), resolver, diags)
+}
+
+/// Like [`parse_source`] for one file of a compilation, as
+/// [`lex_source_in`] describes: predefined macros are in scope, and a
+/// macro one file defines is defined in the files parsed after it.
+///
+/// ```
+/// use reticle::diag::Diagnostics;
+/// use reticle::source::SourceMap;
+/// use reticle::verilog::ast::ItemKind;
+/// use reticle::verilog::{Dialect, NoIncludes, Preprocessor, parse_source_in};
+///
+/// let mut map = SourceMap::new();
+/// let regs = map.add("regs.v", "`define NAME m").unwrap();
+/// let top = map.add("top.v", "`ifdef WIDE module `NAME; endmodule `endif").unwrap();
+/// let mut diags = Diagnostics::new();
+/// let mut compilation = Preprocessor::new().define("WIDE", "");
+/// for id in [regs, top] {
+///     parse_source_in(&mut map, id, Dialect::Verilog2005, &mut compilation, &mut NoIncludes, &mut diags);
+/// }
+/// assert!(diags.is_empty());
+/// ```
+pub fn parse_source_in(
+    map: &mut SourceMap,
+    id: SourceId,
+    dialect: Dialect,
+    compilation: &mut Preprocessor,
+    resolver: &mut dyn IncludeResolver,
+    diags: &mut Diagnostics,
+) -> ast::SourceFile {
+    let tokens = lex_source_in(map, id, dialect, compilation, resolver, diags).tokens;
     let mut parser = Parser::new(&tokens, dialect);
     let file = parser.parse_source_file();
     diags.append(&mut parser.take_diagnostics());

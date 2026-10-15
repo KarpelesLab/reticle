@@ -1171,3 +1171,81 @@ fn the_iso_display_testbench_passes() {
     sources.extend(UART);
     basys3_testbench("examples/basys3/iso_display_tb.v", &sources);
 }
+
+/// A project's defines, its include directories and a macro one file
+/// defines for the files after it: the three things a Vivado project
+/// gives its Verilog that a bare file list does not. NewAE's
+/// ChipWhisperer-Husky gateware needs all three — `userio.v` uses
+/// `USERIO_CONFIG` from `registers.v` without including it.
+///
+/// Would catch: `--define` not reaching every file, an include directory
+/// not searched, and macros reset between files (each file then reports
+/// `undefined macro`). Would not catch: a define reaching only the
+/// parser of `check` and not the elaboration of `synth`, which is why
+/// the second half runs `synth` too.
+#[test]
+fn defines_include_dirs_and_macros_carry_across_files() {
+    let dir = scratch("defines_carry");
+    let inc = dir.join("inc");
+    std::fs::create_dir_all(&inc).unwrap();
+    std::fs::write(inc.join("width.vh"), "`define WIDTH 4\n").unwrap();
+    std::fs::write(dir.join("regs.v"), "`define REG_ARM 4'd9\n").unwrap();
+    std::fs::write(
+        dir.join("top.v"),
+        "`include \"width.vh\"\n\
+         module top(output [`WIDTH-1:0] y);\n\
+         `ifdef ARMED\n  assign y = `REG_ARM;\n`else\n  assign y = 0;\n`endif\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let regs = dir.join("regs.v");
+    let top = dir.join("top.v");
+    let (regs, top, inc) = (
+        regs.to_str().unwrap(),
+        top.to_str().unwrap(),
+        inc.to_str().unwrap(),
+    );
+
+    // Without the include directory the header is not found.
+    let (code, _, stderr) = run(&["check", regs, top]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("width.vh"), "{stderr}");
+
+    let (code, _, stderr) = run(&["check", "--include-dir", inc, regs, top]);
+    assert_eq!(code, 0, "{stderr}");
+
+    // In the other order, `REG_ARM` is used before any file defines it.
+    let (code, _, stderr) = run(&[
+        "check",
+        "--include-dir",
+        inc,
+        "--define",
+        "ARMED",
+        top,
+        regs,
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("undefined macro `REG_ARM`"), "{stderr}");
+
+    // A malformed define is a usage error, not a silently empty macro.
+    let (code, _, _) = run(&["check", "--define", "=1", regs]);
+    assert_eq!(code, 2);
+
+    // And through elaboration: the constant the define selects is the
+    // one that comes out.
+    let out = dir.join("top.rtl");
+    let (code, _, stderr) = run(&[
+        "synth",
+        "--include-dir",
+        inc,
+        "--define",
+        "ARMED",
+        "--output",
+        out.to_str().unwrap(),
+        regs,
+        top,
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    let netlist = std::fs::read_to_string(&out).unwrap();
+    assert!(netlist.contains("assign %y = 4'd9"), "{netlist}");
+}

@@ -232,6 +232,38 @@ pub struct Preprocessed {
     pub spans: SpanMap,
     /// Every `` `timescale `` directive seen, in expansion order.
     pub timescales: Vec<Timescale>,
+    /// The macros still defined at the end of the file, which the next
+    /// file of the same compilation starts with
+    /// ([`Preprocessor::continue_from`]).
+    pub macros: Macros,
+}
+
+/// The macros defined at some point of a compilation.
+///
+/// Opaque: it exists to be handed from one file to the next, because a
+/// `` `define `` stays in effect across the files of a compilation
+/// (IEEE 1364-2005 §19.3.1; IEEE 1800-2017 §22.5.1 keeps it across
+/// compilation units too). A project that defines its register map in one
+/// file and uses it in another without including it relies on exactly
+/// that, and every vendor tool accepts it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Macros(BTreeMap<String, Macro>);
+
+impl Macros {
+    /// True when `name` is defined.
+    pub fn is_defined(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+
+    /// How many macros are defined.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// True when no macro is defined.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// A macro definition.
@@ -310,6 +342,10 @@ struct Conditional {
 #[derive(Clone, Debug, Default)]
 pub struct Preprocessor {
     predefined: Vec<(String, String)>,
+    /// What an earlier file of the compilation left defined; when set it
+    /// replaces `predefined`, which it already holds unless a file
+    /// `` `undef ``ed one.
+    inherited: Option<Macros>,
 }
 
 impl Preprocessor {
@@ -322,6 +358,29 @@ impl Preprocessor {
     pub fn define(mut self, name: impl Into<String>, body: impl Into<String>) -> Self {
         self.predefined.push((name.into(), body.into()));
         self
+    }
+
+    /// Starts the next file with the macros `previous` left defined, so
+    /// that files run one after another form one compilation.
+    ///
+    /// ```
+    /// use reticle::diag::Diagnostics;
+    /// use reticle::source::SourceMap;
+    /// use reticle::verilog::preprocess::{NoIncludes, Preprocessor};
+    ///
+    /// let mut map = SourceMap::new();
+    /// let a = map.add("regs.v", "`define REG_ARM 8'd3").unwrap();
+    /// let b = map.add("use.v", "`REG_ARM").unwrap();
+    /// let mut diags = Diagnostics::new();
+    /// let mut pre = Preprocessor::new();
+    /// let first = pre.run(&mut map, a, &mut NoIncludes, &mut diags);
+    /// pre.continue_from(&first);
+    /// let second = pre.run(&mut map, b, &mut NoIncludes, &mut diags);
+    /// assert_eq!(second.text.trim(), "8'd3");
+    /// assert!(diags.is_empty());
+    /// ```
+    pub fn continue_from(&mut self, previous: &Preprocessed) {
+        self.inherited = Some(previous.macros.clone());
     }
 
     /// Preprocesses the file `id` of `map`, adding included files to the
@@ -345,21 +404,26 @@ impl Preprocessor {
         };
         state.out.spans.root = Some(id);
         let root = Span::new(id, 0, 0);
-        for (name, body) in &self.predefined {
-            state.macros.insert(
-                name.clone(),
-                Macro {
-                    formals: None,
-                    body: body.clone(),
-                    span: root,
-                },
-            );
+        if let Some(inherited) = &self.inherited {
+            state.macros = inherited.0.clone();
+        } else {
+            for (name, body) in &self.predefined {
+                state.macros.insert(
+                    name.clone(),
+                    Macro {
+                        formals: None,
+                        body: body.clone(),
+                        span: root,
+                    },
+                );
+            }
         }
         // The file's text is cloned so the map can be borrowed mutably for
         // includes while scanning; files are small relative to the work
         // done per byte.
         let text = state.map.file(id).text().to_string();
         state.scan(&text, Origin::File(id), 0);
+        state.out.macros = Macros(state.macros);
         state.out
     }
 }

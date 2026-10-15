@@ -169,6 +169,9 @@ Options:
   --liberty <file>  The Liberty library to map onto; required
   --top <module>    Treat this module as the top
   --param <N=V>     Override a top-level parameter or generic; repeatable
+  --define <N[=V]>  Define a Verilog macro in every file; repeatable
+  --include-dir <d>
+                    Search here for `include files; repeatable
   --output <file>   Write the mapped netlist as .rtl
   --verilog <file>  Write the mapped netlist as structural Verilog
   --quiet           Suppress the summary line
@@ -182,6 +185,10 @@ validated against the IR's structural rules.
 
 Options:
   --param <N=V>  Override a top-level parameter or generic; repeatable
+  --define <N[=V]>
+                 Define a Verilog macro in every file; repeatable
+  --include-dir <d>
+                 Search here for `include files; repeatable
   --quiet   Print diagnostics only, no summary line
 ";
 
@@ -199,6 +206,8 @@ Options:
   --constraints <f>  Read pin and placement constraints from an .rcf file
   --top <module>     Treat this module as the top
   --param <N=V>      Override a top-level parameter or generic; repeatable
+  --define <N[=V]>   Define a Verilog macro in every file; repeatable
+  --include-dir <d>  Search here for `include files; repeatable
   --output-dir <d>   Write <top>.json and the constraints here (default: .)
   --netlist <file>   Also write the mapped design in the .rtl text format
   --verify           Prove the LUT mapping equivalent to the logic it was
@@ -319,6 +328,8 @@ Options:
   --output <file>     Write the netlist here (default: stdout)
   --top <module>      Treat this module as the top
   --param <N=V>       Override a top-level parameter or generic; repeatable
+  --define <N[=V]>    Define a Verilog macro in every file; repeatable
+  --include-dir <d>   Search here for `include files; repeatable
   --fsm <encoding>    auto, binary, one-hot, gray or none
   --max-iterations <n>  Optimisation-loop cap (default 8)
   --lut <k>           Also map the logic onto k-input lookup tables (2..8)
@@ -336,6 +347,10 @@ Options:
   --format <fmt>   verilog, vhdl, json, blif or edif (default verilog)
   --output <file>  Write here (default: stdout)
   --param <N=V>    Override a top-level parameter or generic; repeatable
+  --define <N[=V]>
+                   Define a Verilog macro in every file; repeatable
+  --include-dir <d>
+                   Search here for `include files; repeatable
 ";
 
 const SIM_USAGE: &str = "\
@@ -347,6 +362,10 @@ limit. Text from $display and report statements goes to stdout.
 Options:
   --top <module>   Instantiate this module as the root
   --param <N=V>    Override a top-level parameter or generic; repeatable
+  --define <N[=V]>
+                   Define a Verilog macro in every file; repeatable
+  --include-dir <d>
+                   Search here for `include files; repeatable
   --until <ticks>  Stop at this time (in the design's precision)
   --seed <n>       Seed for $random (default 1)
   --vcd <file>     Write a VCD waveform here
@@ -373,6 +392,8 @@ Options:
   --period <ns>      Period for a clock no constraint names (default 10)
   --top <module>     Analyse this module
   --param <N=V>      Override a top-level parameter or generic; repeatable
+  --define <N[=V]>   Define a Verilog macro in every file; repeatable
+  --include-dir <d>  Search here for `include files; repeatable
   --paths <n>        Worst paths to report (default 10)
   --hold             Report hold instead of setup
   --cdc              Report clock domain crossings instead of timing
@@ -396,6 +417,8 @@ Options:
   --output-dir <d>   Write the pages here (default: viewer)
   --top <module>     Treat this module as the top
   --param <N=V>      Override a top-level parameter or generic; repeatable
+  --define <N[=V]>   Define a Verilog macro in every file; repeatable
+  --include-dir <d>  Search here for `include files; repeatable
   --module <names>   Render only these modules (comma separated)
   --title <text>     Heading of the index page
   --synth            Synthesise first, so the schematic shows cells
@@ -423,6 +446,10 @@ the `formal_assert`, `formal_assume` and `formal_cover` attributes.
 Options:
   --top <module>   Check this module (default: the design's top)
   --param <N=V>    Override a top-level parameter or generic; repeatable
+  --define <N[=V]>
+                   Define a Verilog macro in every file; repeatable
+  --include-dir <d>
+                   Search here for `include files; repeatable
   --depth <n>      Bounded-check depth (default 20)
   --max-k <n>      Largest induction depth to try (default 10)
   --init <mode>    reset, zero or free (default reset)
@@ -645,7 +672,7 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["liberty", "top", "output", "verilog"],
             flags: &["quiet"],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, BUILD_USAGE) {
         Spec {
@@ -665,7 +692,7 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &[],
             flags: &["quiet"],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, FMT_USAGE) {
         Spec {
@@ -677,7 +704,7 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["output", "top", "fsm", "max-iterations", "lut"],
             flags: &["report", "quiet", "gates", "verify"],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, FPGA_USAGE) {
         Spec {
@@ -709,7 +736,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-hot-start",
                 "timing-driven",
             ],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
         Spec {
@@ -721,13 +748,13 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["constraints", "period", "top", "paths", "device"],
             flags: &["hold", "cdc", "summary"],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, VIEWER_USAGE) {
         Spec {
             options: &["output-dir", "top", "module", "title", "max-nodes"],
             flags: &["synth", "no-schematic", "no-doc", "no-source", "quiet"],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, PROGRAM_USAGE) {
         Spec {
@@ -745,7 +772,7 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &["format", "output"],
             flags: &[],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, SIM_USAGE) {
         Spec {
@@ -760,13 +787,13 @@ fn spec_for(usage: &str) -> Spec {
                 "coverage",
             ],
             flags: &["quiet", "interactive"],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     } else {
         Spec {
             options: &["top", "depth", "max-k", "init", "trace"],
             flags: &[],
-            repeated: &["param"],
+            repeated: &["param", "define", "include-dir"],
         }
     }
 }
@@ -953,6 +980,8 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
 
     // Verilog: parse every file, then elaborate them together so a design
     // split across files resolves its instances.
+    let mut pre = verilog_preprocessor(args)?;
+    let include_dirs = args.repeated("include-dir");
     let mut files = Vec::new();
     for path in paths {
         let Some(id) = load(&mut map, path, &mut diags) else {
@@ -962,11 +991,12 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
             .as_deref()
             .and_then(reticle::verilog::Dialect::for_extension)
             .unwrap_or_default();
-        let mut resolver = IncludesFrom(path.clone());
-        files.push(reticle::verilog::parse_source(
+        let mut resolver = IncludesFrom(path.clone(), include_dirs);
+        files.push(reticle::verilog::parse_source_in(
             &mut map,
             id,
             dialect,
+            &mut pre,
             &mut resolver,
             &mut diags,
         ));
@@ -1757,6 +1787,8 @@ fn check(args: &Args) -> Result<Outcome, ArgError> {
     if paths.is_empty() {
         return Ok(Outcome::Usage("no input file given".into()));
     }
+    let mut pre = verilog_preprocessor(args)?;
+    let include_dirs = args.repeated("include-dir");
     let mut map = SourceMap::new();
     let mut diags = Diagnostics::new();
     let mut checked = 0usize;
@@ -1776,15 +1808,16 @@ fn check(args: &Args) -> Result<Outcome, ArgError> {
                 Err(mut errors) => diags.append(&mut errors),
             },
             Some("v" | "sv" | "vh" | "svh") => {
-                let mut resolver = IncludesFrom(path.clone());
+                let mut resolver = IncludesFrom(path.clone(), include_dirs);
                 let dialect = extension(path)
                     .as_deref()
                     .and_then(reticle::verilog::Dialect::for_extension)
                     .unwrap_or_default();
-                let file = reticle::verilog::parse_source(
+                let file = reticle::verilog::parse_source_in(
                     &mut map,
                     id,
                     dialect,
+                    &mut pre,
                     &mut resolver,
                     &mut diags,
                 );
@@ -1813,16 +1846,46 @@ fn check(args: &Args) -> Result<Outcome, ArgError> {
     Ok(if failed { Outcome::Failed } else { Outcome::Ok })
 }
 
-/// Resolves `` `include `` relative to the including file's directory.
-struct IncludesFrom(String);
+/// Resolves `` `include `` relative to the including file's directory,
+/// then in each `--include-dir` in the order given.
+struct IncludesFrom<'a>(String, &'a [String]);
 
-impl reticle::verilog::IncludeResolver for IncludesFrom {
+impl reticle::verilog::IncludeResolver for IncludesFrom<'_> {
     fn resolve(&mut self, path: &str, _from: SourceId) -> Option<(String, String)> {
         let base = Path::new(&self.0).parent().unwrap_or(Path::new("."));
-        let full = base.join(path);
-        let text = std::fs::read_to_string(&full).ok()?;
-        Some((full.to_string_lossy().into_owned(), text))
+        std::iter::once(base)
+            .chain(self.1.iter().map(Path::new))
+            .find_map(|dir| {
+                let full = dir.join(path);
+                let text = std::fs::read_to_string(&full).ok()?;
+                Some((full.to_string_lossy().into_owned(), text))
+            })
     }
+}
+
+/// A preprocessor with every `--define NAME[=VALUE]` predefined. A
+/// define with no value is defined empty, as `+define+NAME` is.
+fn verilog_preprocessor(args: &Args) -> Result<reticle::verilog::Preprocessor, ArgError> {
+    let mut pre = reticle::verilog::Preprocessor::new();
+    for text in args.repeated("define") {
+        let (name, body) = text.split_once('=').unwrap_or((text.as_str(), ""));
+        let valid = name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        if !valid {
+            return Err(ArgError::BadValue {
+                option: "define".to_string(),
+                value: text.clone(),
+                expected: "a macro name, optionally followed by `=VALUE`",
+            });
+        }
+        pre = pre.define(name, body);
+    }
+    Ok(pre)
 }
 
 /// `reticle synth`: processes to cells, then optimisation.
