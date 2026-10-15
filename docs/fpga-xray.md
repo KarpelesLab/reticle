@@ -1552,8 +1552,9 @@ since been shown to compute the wrong thing.
 
 It is [`f4pga/prjxray-db`](https://github.com/f4pga/prjxray-db), Project
 X-Ray's chip database, **CC0-1.0 — public domain**. It is not in this
-repository and must not be. The whole repository is large; 275 files and
-45 MB of it are needed for the Artix-7.
+repository and must not be. The whole repository is large; 278 files and
+45 MB of it are needed for the Artix-7: the XC7A35T's fabric, and two of
+its packages, the Basys 3's CPG236 and the ChipWhisperer-Husky's FTG256.
 
 **The command line fetches it by itself.** The first `reticle fpga
 --bitstream` that needs it downloads that part into the per-user cache,
@@ -1570,7 +1571,11 @@ against a SHA-256 digest recorded from a checkout of that commit and
 built into the binary (`src/bin/reticle/prjxray-db.manifest`). Upstream
 moving on changes nothing here, and a file that does not match is refused
 with nothing installed. The download is done by the system's `curl`,
-over HTTPS only.
+over HTTPS only. When the manifest gains a file — the FTG256 package was
+added after the first caches were filled — a cached copy lacking it is
+completed by the next run that looks for the database, with only the
+missing files fetched; a copy named by `RETICLE_CHIPDB` or `--chipdb` is
+left alone.
 
 **The library still never fetches anything.** It is sans-I/O: the
 database reaches it through a `FileProvider` the caller supplies, rooted
@@ -1586,6 +1591,7 @@ git clone --filter=blob:none --no-checkout --depth 1 \
 cd prjxray-db
 git sparse-checkout set --no-cone \
     '/artix7/*.db' '/artix7/*.csv' '/artix7/xc7a35tcpg236-1/' \
+    '/artix7/xc7a35tftg256-1/' \
     '/artix7/xc7a50t/' '/artix7/mapping/' '/artix7/harness/'
 export RETICLE_CHIPDB=$PWD
 ```

@@ -305,6 +305,7 @@ mod tests {
                 "ecp5-12f-CABGA256",
                 "ecp5-45f-CABGA381",
                 "xc7a35t-cpg236",
+                "xc7a35t-ftg256",
                 "xczu7ev-ffvc1156",
                 "gw2a-18-pg256",
                 "generic",

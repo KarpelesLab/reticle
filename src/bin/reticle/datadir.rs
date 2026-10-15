@@ -279,8 +279,16 @@ impl Database {
     pub(crate) fn locate(&self, explicit: Option<&str>, offline: bool) -> Result<PathBuf, String> {
         let env = std::env::var(self.env).ok();
         let cache = cache_root();
+        let named = explicit.is_some() || env.as_deref().is_some_and(|e| !e.is_empty());
         match self.find(explicit, env.as_deref(), cache.as_deref())? {
-            Found::At(dir) => Ok(dir),
+            // A copy somebody named is theirs and left alone; the cache is
+            // ours, and is completed when the manifest has grown since it
+            // was filled.
+            Found::At(dir) if named => Ok(dir),
+            Found::At(dir) => {
+                self.top_up(&dir, offline || offline_from_env())?;
+                Ok(dir)
+            }
             Found::Missing(dir) if offline || offline_from_env() => Err(format!(
                 "{} is not in the cache (`{}`) and fetching is off: run `reticle fetch {}` \
                  with a network, or set {} to a copy",
@@ -294,6 +302,77 @@ impl Database {
                 Ok(dir)
             }
         }
+    }
+
+    /// The manifest lines of the files `dir` does not hold. Empty for a
+    /// database fetched whole, as a wheel is.
+    pub(crate) fn missing_files(&self, dir: &Path) -> Result<Vec<String>, String> {
+        let Source::Files { manifest, .. } = &self.source else {
+            return Ok(Vec::new());
+        };
+        let files = parse_manifest(manifest)?;
+        Ok(manifest
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .zip(files)
+            .filter(|(_, f)| !dir.join(f.path).is_file())
+            .map(|(line, _)| line.to_owned())
+            .collect())
+    }
+
+    /// Downloads into a cached copy the files its manifest lists and it
+    /// lacks, and says how many.
+    ///
+    /// A copy is found by one probe file, so a manifest that gains files
+    /// — the FTG256 package of the XC7A35T was added for NewAE's
+    /// ChipWhisperer-Husky — would otherwise never reach a cache filled
+    /// before it did. The version is the same upstream commit either way,
+    /// so the files that are there are already right. Offline, nothing is
+    /// fetched and the flow that wanted the file says which.
+    fn top_up(&self, dir: &Path, offline: bool) -> Result<usize, String> {
+        let missing = self.missing_files(dir)?;
+        if missing.is_empty() {
+            return Ok(0);
+        }
+        let Source::Files { base, .. } = &self.source else {
+            return Ok(0);
+        };
+        if offline {
+            eprintln!(
+                "note: {} in `{}` lacks {} file(s) its manifest lists, and fetching is off",
+                self.name,
+                dir.display(),
+                missing.len()
+            );
+            return Ok(0);
+        }
+        eprintln!(
+            "note: fetching {} file(s) {} has gained since `{}` was filled",
+            missing.len(),
+            self.name,
+            dir.display()
+        );
+        let parent = dir.parent().ok_or("a cache directory with no parent")?;
+        let scratch = parent.join(format!(".{}.topup-{}", self.version, std::process::id()));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch)
+            .map_err(|e| format!("cannot create `{}`: {e}", scratch.display()))?;
+        let manifest = missing.join("\n");
+        let fetched = fetch_files(base, &manifest, &scratch).and_then(|()| {
+            for f in parse_manifest(&manifest)? {
+                let to = dir.join(f.path);
+                if let Some(up) = to.parent() {
+                    fs::create_dir_all(up)
+                        .map_err(|e| format!("cannot create `{}`: {e}", up.display()))?;
+                }
+                fs::rename(scratch.join(f.path), &to)
+                    .map_err(|e| format!("cannot move `{}` into the cache: {e}", f.path))?;
+            }
+            Ok(())
+        });
+        let _ = fs::remove_dir_all(&scratch);
+        fetched.map_err(|err| format!("fetching {} failed: {err}", self.name))?;
+        Ok(missing.len())
     }
 
     /// A one-line summary of what a fetch downloads.
@@ -626,6 +705,37 @@ mod tests {
         fs::write(probe, b"").unwrap();
     }
 
+    /// A cache filled before the manifest grew is found incomplete, file
+    /// by file, so `locate` can fetch what it lacks. Would catch the check
+    /// looking only at the probe; would not catch the download itself,
+    /// which needs a network.
+    #[test]
+    fn a_cache_missing_files_the_manifest_lists_is_found_incomplete() {
+        let dir = scratch("topup");
+        fake_copy(&dir, &PRJXRAY);
+        let missing = PRJXRAY.missing_files(&dir).unwrap();
+        let all = parse_manifest(match &PRJXRAY.source {
+            Source::Files { manifest, .. } => manifest,
+            Source::Wheel { .. } => unreachable!(),
+        })
+        .unwrap();
+        // Only the probe is there.
+        assert_eq!(missing.len(), all.len() - 1);
+        assert!(
+            missing
+                .iter()
+                .any(|l| l.ends_with("artix7/xc7a35tftg256-1/package_pins.csv"))
+        );
+        // Every file present: nothing missing.
+        for f in &all {
+            let p = dir.join(f.path);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, b"").unwrap();
+        }
+        assert!(PRJXRAY.missing_files(&dir).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_named_path_wins_and_a_wrong_one_is_an_error_not_a_download() {
         let dir = scratch("named");
@@ -685,12 +795,14 @@ mod tests {
             panic!("prjxray-db is fetched file by file")
         };
         let files = parse_manifest(manifest).expect("every line parses");
-        assert_eq!(files.len(), 275);
+        assert_eq!(files.len(), 278);
         let has = |p: &str| files.iter().any(|f| f.path == p);
         assert!(has("LICENSE"));
         assert!(has(PRJXRAY.probe));
         assert!(has("artix7/harness/basys3/swbut/design.bit"));
         assert!(has("artix7/xc7a35tcpg236-1/package_pins.csv"));
+        // The ChipWhisperer-Husky's package.
+        assert!(has("artix7/xc7a35tftg256-1/package_pins.csv"));
         assert!(
             files
                 .iter()
