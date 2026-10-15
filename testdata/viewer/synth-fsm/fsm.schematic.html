@@ -129,161 +129,214 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
 </div>
 <div class="canvas">
   <div class="frame">
-    <svg class="schematic" id="schematic" viewBox="0 0 1102 494" preserveAspectRatio="xMinYMin meet" role="img">
+    <svg class="schematic" id="schematic" viewBox="0 0 1282 637" preserveAspectRatio="xMinYMin meet" role="img">
       <title>schematic of module fsm</title>
       <g id="view">
         <g class="wires">
-          <polyline class="wire" points="476,67 498,67 498,105 634,105 634,144 774,144 774,182 910,182 910,221 938,221" data-net="busy" />
-          <polyline class="wire bus" points="308,122 320,122 320,67 380,67" data-net="state$fsm" />
-          <polyline class="wire bus" points="308,122 344,122 344,211 380,211" data-net="state$fsm" />
-          <polyline class="wire" points="476,211 498,211 498,236 526,236" data-net="state$ff$not" />
-          <polyline class="wire" points="164,261 200,261 200,251 320,251 320,255 498,255 498,254 526,254" data-net="done" />
-          <polyline class="wire bus" points="308,122 332,122 332,147 498,147 498,172 634,172 634,208 662,208" data-net="state$fsm" />
-          <polyline class="wire" points="622,236 634,236 634,226 662,226" data-net="state$ff$or" />
-          <polyline class="wire" points="762,208 774,208 774,246 802,246" data-net="state$ff$or_2" />
-          <polyline class="wire" points="164,341 200,341 200,320 320,320 320,311 498,311 498,326 646,326 646,298 774,298 774,264 802,264" data-net="go" />
-          <polyline class="wire bus" points="308,122 356,122 356,283 498,283 498,298 634,298 634,270 786,270 786,282 802,282" data-net="state$fsm" />
-          <polyline class="wire" points="164,101 176,101 176,122 212,122" data-net="clk" />
-          <polyline class="wire bus" points="486,375 498,375 498,452 176,452 176,140 212,140" data-net="state$pmux$fsm" />
-          <polyline class="wire" points="898,246 910,246 910,466 188,466 188,158 212,158" data-net="state$ff$mux" />
-          <polyline class="wire" points="164,181 200,181 200,176 212,176" data-net="rst" />
-          <polyline class="wire" points="266,356 320,356 320,375 380,375" />
-          <polyline class="wire" points="272,400 320,400 320,393 380,393" />
-          <polyline class="wire bus" points="308,122 368,122 368,411 380,411" data-net="state$fsm" />
-          <text class="label" x="483" y="62" data-net="busy">busy</text>
-          <text class="label" x="315" y="117" data-net="state$fsm">state$fsm /3</text>
-          <text class="label" x="483" y="206" data-net="state$ff$not">state…</text>
-          <text class="label" x="171" y="256" data-net="done">done</text>
-          <text class="label" x="629" y="231" data-net="state$ff$or">sta…</text>
-          <text class="label" x="769" y="203" data-net="state$ff$or_2">state$ff$or_2</text>
-          <text class="label" x="171" y="336" data-net="go">go</text>
-          <text class="label" x="171" y="96" data-net="clk">clk</text>
-          <text class="label" x="493" y="370" data-net="state$pmux$fsm">state$pmux$fsm /3</text>
-          <text class="label" x="905" y="241" data-net="state$ff$mux">sta…</text>
-          <text class="label" x="171" y="176" data-net="rst">rst</text>
+          <polyline class="wire" points="512,67 534,67 534,113 674,113 674,160 810,160 810,206 950,206 950,253 1090,253 1090,300 1118,300" data-net="busy" />
+          <polyline class="wire bus" points="308,201 320,201 320,67 416,67" data-net="state$fsm" />
+          <polyline class="wire bus" points="308,201 392,201 392,420 416,420" data-net="state$fsm" />
+          <polyline class="wire" points="164,420 200,420 200,419 320,419 320,438 416,438" data-net="go" />
+          <polyline class="wire" points="512,420 546,420 546,368 562,368" data-net="state$ff$and" />
+          <polyline class="wire bus" points="308,201 380,201 380,356 534,356 534,386 562,386" data-net="state$fsm" />
+          <polyline class="wire bus" points="308,201 368,201 368,294 416,294" data-net="state$fsm" />
+          <polyline class="wire" points="164,340 200,340 200,316 320,316 320,312 416,312" data-net="done" />
+          <polyline class="wire bus" points="308,201 332,201 332,147 416,147" data-net="state$fsm" />
+          <polyline class="wire bus" points="308,201 344,201 344,165 416,165" data-net="state$fsm" />
+          <polyline class="wire" points="516,147 534,147 534,242 562,242" data-net="state$ff$or_2" />
+          <polyline class="wire bus" points="308,201 356,201 356,230 546,230 546,260 562,260" data-net="state$fsm" />
+          <polyline class="wire" points="662,242 674,242 674,286 702,286" data-net="state$ff$or_3" />
+          <polyline class="wire" points="522,294 534,294 534,304 674,304 674,330 822,330 822,291 838,291" data-net="state$ff$and_2" />
+          <polyline class="wire" points="798,286 810,286 810,309 838,309" data-net="state$ff$not" />
+          <polyline class="wire" points="658,368 674,368 674,358 810,358 810,353 962,353 962,317 978,317" data-net="state$ff$or" />
+          <polyline class="wire" points="938,291 950,291 950,335 978,335" data-net="state$ff$or_4" />
+          <polyline class="wire" points="164,180 176,180 176,201 212,201" data-net="clk" />
+          <polyline class="wire bus" points="522,518 534,518 534,595 176,595 176,219 212,219" data-net="state$pmux$fsm" />
+          <polyline class="wire" points="1078,317 1090,317 1090,609 188,609 188,237 212,237" data-net="state$ff$or_5" />
+          <polyline class="wire" points="164,260 200,260 200,255 212,255" data-net="rst" />
+          <polyline class="wire" points="266,455 320,455 320,518 416,518" />
+          <polyline class="wire" points="272,499 332,499 332,536 416,536" />
+          <polyline class="wire bus" points="308,201 404,201 404,554 416,554" data-net="state$fsm" />
+          <text class="label" x="519" y="62" data-net="busy">busy</text>
+          <text class="label" x="315" y="196" data-net="state$fsm">state$fsm /3</text>
+          <text class="label" x="171" y="415" data-net="go">go</text>
+          <text class="label" x="519" y="415" data-net="state$ff$and">state$ff$and</text>
+          <text class="label" x="171" y="335" data-net="done">done</text>
+          <text class="label" x="523" y="142" data-net="state$ff$or_2">state$ff$or_2</text>
+          <text class="label" x="669" y="237" data-net="state$ff$or_3">state$ff$or_3</text>
+          <text class="label" x="529" y="289" data-net="state$ff$and_2">state$ff$and_2</text>
+          <text class="label" x="805" y="281" data-net="state$ff$not">sta…</text>
+          <text class="label" x="665" y="363" data-net="state$ff$or">state$ff$or</text>
+          <text class="label" x="945" y="286" data-net="state$ff$or_4">sta…</text>
+          <text class="label" x="171" y="175" data-net="clk">clk</text>
+          <text class="label" x="529" y="513" data-net="state$pmux$fsm">state$pmux$fsm /3</text>
+          <text class="label" x="1085" y="312" data-net="state$ff$or_5">sta…</text>
+          <text class="label" x="171" y="255" data-net="rst">rst</text>
         </g>
         <g class="nodes">
-          <g class="node port" data-detail="0" data-search="clk port in" data-cx="116" data-cy="91">
-            <polygon class="box" points="68,62 153,62 164,91 153,120 68,120" />
-            <text class="kind" x="77" y="79">port in</text>
-            <text class="label" x="77" y="90">clk</text>
-            <circle class="pin" cx="164" cy="101" r="3" data-net="clk" />
+          <g class="node port" data-detail="0" data-search="clk port in" data-cx="116" data-cy="170">
+            <polygon class="box" points="68,141 153,141 164,170 153,199 68,199" />
+            <text class="kind" x="77" y="158">port in</text>
+            <text class="label" x="77" y="169">clk</text>
+            <circle class="pin" cx="164" cy="180" r="3" data-net="clk" />
           </g>
-          <g class="node port" data-detail="1" data-search="port in rst" data-cx="116" data-cy="171">
-            <polygon class="box" points="68,142 153,142 164,171 153,200 68,200" />
-            <text class="kind" x="77" y="159">port in</text>
-            <text class="label" x="77" y="170">rst</text>
-            <circle class="pin" cx="164" cy="181" r="3" data-net="rst" />
+          <g class="node port" data-detail="1" data-search="port in rst" data-cx="116" data-cy="250">
+            <polygon class="box" points="68,221 153,221 164,250 153,279 68,279" />
+            <text class="kind" x="77" y="238">port in</text>
+            <text class="label" x="77" y="249">rst</text>
+            <circle class="pin" cx="164" cy="260" r="3" data-net="rst" />
           </g>
-          <g class="node port" data-detail="2" data-search="go port in" data-cx="116" data-cy="331">
-            <polygon class="box" points="68,302 153,302 164,331 153,360 68,360" />
-            <text class="kind" x="77" y="319">port in</text>
-            <text class="label" x="77" y="330">go</text>
-            <circle class="pin" cx="164" cy="341" r="3" data-net="go" />
+          <g class="node port" data-detail="2" data-search="go port in" data-cx="116" data-cy="410">
+            <polygon class="box" points="68,381 153,381 164,410 153,439 68,439" />
+            <text class="kind" x="77" y="398">port in</text>
+            <text class="label" x="77" y="409">go</text>
+            <circle class="pin" cx="164" cy="420" r="3" data-net="go" />
           </g>
-          <g class="node port" data-detail="3" data-search="done port in" data-cx="116" data-cy="251">
-            <polygon class="box" points="68,222 153,222 164,251 153,280 68,280" />
-            <text class="kind" x="77" y="239">port in</text>
-            <text class="label" x="77" y="250">done</text>
-            <circle class="pin" cx="164" cy="261" r="3" data-net="done" />
+          <g class="node port" data-detail="3" data-search="done port in" data-cx="116" data-cy="330">
+            <polygon class="box" points="68,301 153,301 164,330 153,359 68,359" />
+            <text class="kind" x="77" y="318">port in</text>
+            <text class="label" x="77" y="329">done</text>
+            <circle class="pin" cx="164" cy="340" r="3" data-net="done" />
           </g>
-          <g class="node port" data-detail="4" data-search="busy port out" data-cx="986" data-cy="211">
-            <polygon class="box" points="949,182 1023,182 1034,211 1023,240 949,240 938,211" />
-            <text class="kind" x="947" y="199">port out</text>
-            <text class="label" x="947" y="210">busy</text>
-            <circle class="pin" cx="938" cy="221" r="3" data-net="busy" />
+          <g class="node port" data-detail="4" data-search="busy port out" data-cx="1166" data-cy="290">
+            <polygon class="box" points="1129,261 1203,261 1214,290 1203,319 1129,319 1118,290" />
+            <text class="kind" x="1127" y="278">port out</text>
+            <text class="label" x="1127" y="289">busy</text>
+            <circle class="pin" cx="1118" cy="300" r="3" data-net="busy" />
           </g>
-          <g class="node comb" data-detail="5" data-search="a busy busy$not not state$fsm[0] y" data-cx="428" data-cy="57">
-            <rect class="box" x="380" y="28" width="96" height="58" rx="4" />
-            <text class="kind" x="389" y="45">not</text>
-            <text class="label" x="389" y="56">busy$not</text>
-            <circle class="pin" cx="380" cy="67" r="3" />
-            <text class="pinname" x="387" y="70">a</text>
-            <circle class="pin" cx="476" cy="67" r="3" data-net="busy" />
-            <text class="pinname" x="469" y="70" text-anchor="end">y</text>
+          <g class="node comb" data-detail="5" data-search="a busy busy$not not state$fsm[0] y" data-cx="464" data-cy="57">
+            <rect class="box" x="416" y="28" width="96" height="58" rx="4" />
+            <text class="kind" x="425" y="45">not</text>
+            <text class="label" x="425" y="56">busy$not</text>
+            <circle class="pin" cx="416" cy="67" r="3" />
+            <text class="pinname" x="423" y="70">a</text>
+            <circle class="pin" cx="512" cy="67" r="3" data-net="busy" />
+            <text class="pinname" x="505" y="70" text-anchor="end">y</text>
           </g>
-          <g class="node comb" data-detail="6" data-search="a not state$ff$not state$fsm[2] y" data-cx="428" data-cy="201">
-            <rect class="box" x="380" y="172" width="96" height="58" rx="4" />
-            <text class="kind" x="389" y="189">not</text>
-            <text class="label" x="389" y="200">state$ff$not</text>
-            <circle class="pin" cx="380" cy="211" r="3" />
-            <text class="pinname" x="387" y="214">a</text>
-            <circle class="pin" cx="476" cy="211" r="3" data-net="state$ff$not" />
-            <text class="pinname" x="469" y="214" text-anchor="end">y</text>
+          <g class="node comb" data-detail="6" data-search="a and b go state$ff$and state$fsm[0] y" data-cx="464" data-cy="419">
+            <rect class="box" x="416" y="381" width="96" height="76" rx="4" />
+            <text class="kind" x="425" y="398">and</text>
+            <text class="label" x="425" y="409">state$ff$and</text>
+            <circle class="pin" cx="416" cy="420" r="3" />
+            <text class="pinname" x="423" y="423">a</text>
+            <circle class="pin" cx="416" cy="438" r="3" data-net="go" />
+            <text class="pinname" x="423" y="441">b</text>
+            <circle class="pin" cx="512" cy="420" r="3" data-net="state$ff$and" />
+            <text class="pinname" x="505" y="423" text-anchor="end">y</text>
           </g>
-          <g class="node comb" data-detail="7" data-search="a b done or state$ff$not state$ff$or y" data-cx="574" data-cy="235">
-            <rect class="box" x="526" y="197" width="96" height="76" rx="4" />
-            <text class="kind" x="535" y="214">or</text>
-            <text class="label" x="535" y="225">state$ff$or</text>
-            <circle class="pin" cx="526" cy="236" r="3" data-net="state$ff$not" />
-            <text class="pinname" x="533" y="239">a</text>
-            <circle class="pin" cx="526" cy="254" r="3" data-net="done" />
-            <text class="pinname" x="533" y="257">b</text>
-            <circle class="pin" cx="622" cy="236" r="3" data-net="state$ff$or" />
-            <text class="pinname" x="615" y="239" text-anchor="end">y</text>
+          <g class="node comb" data-detail="7" data-search="a b or state$ff$and state$ff$or state$fsm[1] y" data-cx="610" data-cy="367">
+            <rect class="box" x="562" y="329" width="96" height="76" rx="4" />
+            <text class="kind" x="571" y="346">or</text>
+            <text class="label" x="571" y="357">state$ff$or</text>
+            <circle class="pin" cx="562" cy="368" r="3" data-net="state$ff$and" />
+            <text class="pinname" x="569" y="371">a</text>
+            <circle class="pin" cx="562" cy="386" r="3" />
+            <text class="pinname" x="569" y="389">b</text>
+            <circle class="pin" cx="658" cy="368" r="3" data-net="state$ff$or" />
+            <text class="pinname" x="651" y="371" text-anchor="end">y</text>
           </g>
-          <g class="node comb" data-detail="8" data-search="a b or state$ff$or state$ff$or_2 state$fsm[1] y" data-cx="712" data-cy="207">
-            <rect class="box" x="662" y="169" width="100" height="76" rx="4" />
-            <text class="kind" x="671" y="186">or</text>
-            <text class="label" x="671" y="197">state$ff$or_2</text>
-            <circle class="pin" cx="662" cy="208" r="3" />
-            <text class="pinname" x="669" y="211">a</text>
-            <circle class="pin" cx="662" cy="226" r="3" data-net="state$ff$or" />
-            <text class="pinname" x="669" y="229">b</text>
-            <circle class="pin" cx="762" cy="208" r="3" data-net="state$ff$or_2" />
-            <text class="pinname" x="755" y="211" text-anchor="end">y</text>
+          <g class="node comb" data-detail="8" data-search="a and b done state$ff$and_2 state$fsm[2] y" data-cx="469" data-cy="293">
+            <rect class="box" x="416" y="255" width="106" height="76" rx="4" />
+            <text class="kind" x="425" y="272">and</text>
+            <text class="label" x="425" y="283">state$ff$and_2</text>
+            <circle class="pin" cx="416" cy="294" r="3" />
+            <text class="pinname" x="423" y="297">a</text>
+            <circle class="pin" cx="416" cy="312" r="3" data-net="done" />
+            <text class="pinname" x="423" y="315">b</text>
+            <circle class="pin" cx="522" cy="294" r="3" data-net="state$ff$and_2" />
+            <text class="pinname" x="515" y="297" text-anchor="end">y</text>
           </g>
-          <g class="node comb" data-detail="9" data-search="a b go mux s state$ff$mux state$ff$or_2 state$fsm[0] y" data-cx="850" data-cy="254">
-            <rect class="box" x="802" y="207" width="96" height="94" rx="4" />
-            <text class="kind" x="811" y="224">mux</text>
-            <text class="label" x="811" y="235">state$ff$mux</text>
-            <circle class="pin" cx="802" cy="246" r="3" data-net="state$ff$or_2" />
-            <text class="pinname" x="809" y="249">a</text>
-            <circle class="pin" cx="802" cy="264" r="3" data-net="go" />
-            <text class="pinname" x="809" y="267">b</text>
-            <circle class="pin" cx="802" cy="282" r="3" />
-            <text class="pinname" x="809" y="285">s</text>
-            <circle class="pin" cx="898" cy="246" r="3" data-net="state$ff$mux" />
-            <text class="pinname" x="891" y="249" text-anchor="end">y</text>
+          <g class="node comb" data-detail="9" data-search="a b or state$ff$or_2 state$fsm[0] state$fsm[1] y" data-cx="466" data-cy="146">
+            <rect class="box" x="416" y="108" width="100" height="76" rx="4" />
+            <text class="kind" x="425" y="125">or</text>
+            <text class="label" x="425" y="136">state$ff$or_2</text>
+            <circle class="pin" cx="416" cy="147" r="3" />
+            <text class="pinname" x="423" y="150">a</text>
+            <circle class="pin" cx="416" cy="165" r="3" />
+            <text class="pinname" x="423" y="168">b</text>
+            <circle class="pin" cx="516" cy="147" r="3" data-net="state$ff$or_2" />
+            <text class="pinname" x="509" y="150" text-anchor="end">y</text>
           </g>
-          <g class="node seq" data-detail="10" data-search="clk d dff pos en q rst state$ff state$ff$mux state$fsm state$pmux$fsm" data-cx="260" data-cy="139">
-            <rect class="box" x="212" y="83" width="96" height="112" rx="4" />
-            <text class="kind" x="221" y="100">dff pos</text>
-            <text class="label" x="221" y="111">state$ff</text>
-            <circle class="pin" cx="212" cy="122" r="3" data-net="clk" />
-            <polyline class="clkmark" points="215,117 222,122 215,127" />
-            <text class="pinname" x="226" y="125">clk</text>
-            <circle class="pin" cx="212" cy="140" r="3" data-net="state$pmux$fsm" />
-            <text class="pinname" x="219" y="143">d</text>
-            <circle class="pin" cx="212" cy="158" r="3" data-net="state$ff$mux" />
-            <text class="pinname" x="219" y="161">en</text>
-            <circle class="pin" cx="212" cy="176" r="3" data-net="rst" />
-            <text class="pinname" x="219" y="179">rst</text>
-            <circle class="pin" cx="308" cy="122" r="3" data-net="state$fsm" />
-            <text class="pinname" x="301" y="125" text-anchor="end">q</text>
+          <g class="node comb" data-detail="10" data-search="a b or state$ff$or_2 state$ff$or_3 state$fsm[2] y" data-cx="612" data-cy="241">
+            <rect class="box" x="562" y="203" width="100" height="76" rx="4" />
+            <text class="kind" x="571" y="220">or</text>
+            <text class="label" x="571" y="231">state$ff$or_3</text>
+            <circle class="pin" cx="562" cy="242" r="3" data-net="state$ff$or_2" />
+            <text class="pinname" x="569" y="245">a</text>
+            <circle class="pin" cx="562" cy="260" r="3" />
+            <text class="pinname" x="569" y="263">b</text>
+            <circle class="pin" cx="662" cy="242" r="3" data-net="state$ff$or_3" />
+            <text class="pinname" x="655" y="245" text-anchor="end">y</text>
           </g>
-          <g class="node comb" data-detail="11" data-search="3&#39;d1 9&#39;d98 a b pmux s state$fsm state$pmux$fsm y" data-cx="433" data-cy="383">
-            <rect class="box" x="380" y="336" width="106" height="94" rx="4" />
-            <text class="kind" x="389" y="353">pmux</text>
-            <text class="label" x="389" y="364">state$pmux$fsm</text>
-            <circle class="pin" cx="380" cy="375" r="3" />
-            <text class="pinname" x="387" y="378">a</text>
-            <circle class="pin" cx="380" cy="393" r="3" />
-            <text class="pinname" x="387" y="396">b</text>
-            <circle class="pin" cx="380" cy="411" r="3" data-net="state$fsm" />
-            <text class="pinname" x="387" y="414">s</text>
-            <circle class="pin" cx="486" cy="375" r="3" data-net="state$pmux$fsm" />
-            <text class="pinname" x="479" y="378" text-anchor="end">y</text>
+          <g class="node comb" data-detail="11" data-search="a not state$ff$not state$ff$or_3 y" data-cx="750" data-cy="276">
+            <rect class="box" x="702" y="247" width="96" height="58" rx="4" />
+            <text class="kind" x="711" y="264">not</text>
+            <text class="label" x="711" y="275">state$ff$not</text>
+            <circle class="pin" cx="702" cy="286" r="3" data-net="state$ff$or_3" />
+            <text class="pinname" x="709" y="289">a</text>
+            <circle class="pin" cx="798" cy="286" r="3" data-net="state$ff$not" />
+            <text class="pinname" x="791" y="289" text-anchor="end">y</text>
           </g>
-          <g class="node konst" data-detail="12" data-search="3&#39;d1" data-cx="239" data-cy="356">
-            <polygon class="box" points="246,345 266,356 246,367" />
-            <text class="kind" x="214" y="360">3&#39;d1</text>
-            <circle class="pin" cx="266" cy="356" r="3" />
+          <g class="node comb" data-detail="12" data-search="a b or state$ff$and_2 state$ff$not state$ff$or_4 y" data-cx="888" data-cy="290">
+            <rect class="box" x="838" y="252" width="100" height="76" rx="4" />
+            <text class="kind" x="847" y="269">or</text>
+            <text class="label" x="847" y="280">state$ff$or_4</text>
+            <circle class="pin" cx="838" cy="291" r="3" data-net="state$ff$and_2" />
+            <text class="pinname" x="845" y="294">a</text>
+            <circle class="pin" cx="838" cy="309" r="3" data-net="state$ff$not" />
+            <text class="pinname" x="845" y="312">b</text>
+            <circle class="pin" cx="938" cy="291" r="3" data-net="state$ff$or_4" />
+            <text class="pinname" x="931" y="294" text-anchor="end">y</text>
           </g>
-          <g class="node konst" data-detail="13" data-search="9&#39;d98" data-cx="242" data-cy="400">
-            <polygon class="box" points="252,389 272,400 252,411" />
-            <text class="kind" x="214" y="404">9&#39;d98</text>
-            <circle class="pin" cx="272" cy="400" r="3" />
+          <g class="node comb" data-detail="13" data-search="a b or state$ff$or state$ff$or_4 state$ff$or_5 y" data-cx="1028" data-cy="316">
+            <rect class="box" x="978" y="278" width="100" height="76" rx="4" />
+            <text class="kind" x="987" y="295">or</text>
+            <text class="label" x="987" y="306">state$ff$or_5</text>
+            <circle class="pin" cx="978" cy="317" r="3" data-net="state$ff$or" />
+            <text class="pinname" x="985" y="320">a</text>
+            <circle class="pin" cx="978" cy="335" r="3" data-net="state$ff$or_4" />
+            <text class="pinname" x="985" y="338">b</text>
+            <circle class="pin" cx="1078" cy="317" r="3" data-net="state$ff$or_5" />
+            <text class="pinname" x="1071" y="320" text-anchor="end">y</text>
+          </g>
+          <g class="node seq" data-detail="14" data-search="clk d dff pos en q rst state$ff state$ff$or_5 state$fsm state$pmux$fsm" data-cx="260" data-cy="218">
+            <rect class="box" x="212" y="162" width="96" height="112" rx="4" />
+            <text class="kind" x="221" y="179">dff pos</text>
+            <text class="label" x="221" y="190">state$ff</text>
+            <circle class="pin" cx="212" cy="201" r="3" data-net="clk" />
+            <polyline class="clkmark" points="215,196 222,201 215,206" />
+            <text class="pinname" x="226" y="204">clk</text>
+            <circle class="pin" cx="212" cy="219" r="3" data-net="state$pmux$fsm" />
+            <text class="pinname" x="219" y="222">d</text>
+            <circle class="pin" cx="212" cy="237" r="3" data-net="state$ff$or_5" />
+            <text class="pinname" x="219" y="240">en</text>
+            <circle class="pin" cx="212" cy="255" r="3" data-net="rst" />
+            <text class="pinname" x="219" y="258">rst</text>
+            <circle class="pin" cx="308" cy="201" r="3" data-net="state$fsm" />
+            <text class="pinname" x="301" y="204" text-anchor="end">q</text>
+          </g>
+          <g class="node comb" data-detail="15" data-search="3&#39;d1 9&#39;d98 a b pmux s state$fsm state$pmux$fsm y" data-cx="469" data-cy="526">
+            <rect class="box" x="416" y="479" width="106" height="94" rx="4" />
+            <text class="kind" x="425" y="496">pmux</text>
+            <text class="label" x="425" y="507">state$pmux$fsm</text>
+            <circle class="pin" cx="416" cy="518" r="3" />
+            <text class="pinname" x="423" y="521">a</text>
+            <circle class="pin" cx="416" cy="536" r="3" />
+            <text class="pinname" x="423" y="539">b</text>
+            <circle class="pin" cx="416" cy="554" r="3" data-net="state$fsm" />
+            <text class="pinname" x="423" y="557">s</text>
+            <circle class="pin" cx="522" cy="518" r="3" data-net="state$pmux$fsm" />
+            <text class="pinname" x="515" y="521" text-anchor="end">y</text>
+          </g>
+          <g class="node konst" data-detail="16" data-search="3&#39;d1" data-cx="239" data-cy="455">
+            <polygon class="box" points="246,444 266,455 246,466" />
+            <text class="kind" x="214" y="459">3&#39;d1</text>
+            <circle class="pin" cx="266" cy="455" r="3" />
+          </g>
+          <g class="node konst" data-detail="17" data-search="9&#39;d98" data-cx="242" data-cy="499">
+            <polygon class="box" points="252,488 272,499 252,510" />
+            <text class="kind" x="214" y="503">9&#39;d98</text>
+            <circle class="pin" cx="272" cy="499" r="3" />
           </g>
         </g>
       </g>
@@ -306,7 +359,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>clk</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L16">fsm.cells.rtl:16:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L20">fsm.cells.rtl:20:3</a>
       </p>
     </div>
     <div class="detail" id="d1" hidden="hidden">
@@ -324,7 +377,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>rst</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L17">fsm.cells.rtl:17:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L21">fsm.cells.rtl:21:3</a>
       </p>
     </div>
     <div class="detail" id="d2" hidden="hidden">
@@ -342,7 +395,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>go</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L18">fsm.cells.rtl:18:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L22">fsm.cells.rtl:22:3</a>
       </p>
     </div>
     <div class="detail" id="d3" hidden="hidden">
@@ -360,7 +413,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>done</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L19">fsm.cells.rtl:19:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L23">fsm.cells.rtl:23:3</a>
       </p>
     </div>
     <div class="detail" id="d4" hidden="hidden">
@@ -378,7 +431,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>busy</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L20">fsm.cells.rtl:20:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L24">fsm.cells.rtl:24:3</a>
       </p>
     </div>
     <div class="detail" id="d5" hidden="hidden">
@@ -394,23 +447,25 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>busy</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L21">fsm.cells.rtl:21:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L25">fsm.cells.rtl:25:3</a>
       </p>
     </div>
     <div class="detail" id="d6" hidden="hidden">
-      <h3>state$ff$not</h3>
+      <h3>state$ff$and</h3>
       <dl>
         <dt>kind</dt>
-        <dd>not</dd>
+        <dd>and</dd>
         <dt>cell</dt>
-        <dd>not</dd>
+        <dd>and</dd>
         <dt>in a</dt>
-        <dd>state$fsm[2]</dd>
+        <dd>state$fsm[0]</dd>
+        <dt>in b</dt>
+        <dd>go</dd>
         <dt>out y</dt>
-        <dd>state$ff$not</dd>
+        <dd>state$ff$and</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L22">fsm.cells.rtl:22:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L26">fsm.cells.rtl:26:3</a>
       </p>
     </div>
     <div class="detail" id="d7" hidden="hidden">
@@ -421,17 +476,35 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dt>cell</dt>
         <dd>or</dd>
         <dt>in a</dt>
-        <dd>state$ff$not</dd>
+        <dd>state$ff$and</dd>
         <dt>in b</dt>
-        <dd>done</dd>
+        <dd>state$fsm[1]</dd>
         <dt>out y</dt>
         <dd>state$ff$or</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L23">fsm.cells.rtl:23:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L27">fsm.cells.rtl:27:3</a>
       </p>
     </div>
     <div class="detail" id="d8" hidden="hidden">
+      <h3>state$ff$and_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>and</dd>
+        <dt>cell</dt>
+        <dd>and</dd>
+        <dt>in a</dt>
+        <dd>state$fsm[2]</dd>
+        <dt>in b</dt>
+        <dd>done</dd>
+        <dt>out y</dt>
+        <dd>state$ff$and_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-fsm.cells.rtl.html#L28">fsm.cells.rtl:28:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d9" hidden="hidden">
       <h3>state$ff$or_2</h3>
       <dl>
         <dt>kind</dt>
@@ -439,37 +512,87 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dt>cell</dt>
         <dd>or</dd>
         <dt>in a</dt>
-        <dd>state$fsm[1]</dd>
-        <dt>in b</dt>
-        <dd>state$ff$or</dd>
-        <dt>out y</dt>
-        <dd>state$ff$or_2</dd>
-      </dl>
-      <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L24">fsm.cells.rtl:24:3</a>
-      </p>
-    </div>
-    <div class="detail" id="d9" hidden="hidden">
-      <h3>state$ff$mux</h3>
-      <dl>
-        <dt>kind</dt>
-        <dd>mux</dd>
-        <dt>cell</dt>
-        <dd>mux</dd>
-        <dt>in a</dt>
-        <dd>state$ff$or_2</dd>
-        <dt>in b</dt>
-        <dd>go</dd>
-        <dt>in s</dt>
         <dd>state$fsm[0]</dd>
+        <dt>in b</dt>
+        <dd>state$fsm[1]</dd>
         <dt>out y</dt>
-        <dd>state$ff$mux</dd>
+        <dd>state$ff$or_2</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L25">fsm.cells.rtl:25:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L29">fsm.cells.rtl:29:3</a>
       </p>
     </div>
     <div class="detail" id="d10" hidden="hidden">
+      <h3>state$ff$or_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>or</dd>
+        <dt>cell</dt>
+        <dd>or</dd>
+        <dt>in a</dt>
+        <dd>state$ff$or_2</dd>
+        <dt>in b</dt>
+        <dd>state$fsm[2]</dd>
+        <dt>out y</dt>
+        <dd>state$ff$or_3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-fsm.cells.rtl.html#L30">fsm.cells.rtl:30:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d11" hidden="hidden">
+      <h3>state$ff$not</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>not</dd>
+        <dt>cell</dt>
+        <dd>not</dd>
+        <dt>in a</dt>
+        <dd>state$ff$or_3</dd>
+        <dt>out y</dt>
+        <dd>state$ff$not</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-fsm.cells.rtl.html#L31">fsm.cells.rtl:31:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d12" hidden="hidden">
+      <h3>state$ff$or_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>or</dd>
+        <dt>cell</dt>
+        <dd>or</dd>
+        <dt>in a</dt>
+        <dd>state$ff$and_2</dd>
+        <dt>in b</dt>
+        <dd>state$ff$not</dd>
+        <dt>out y</dt>
+        <dd>state$ff$or_4</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-fsm.cells.rtl.html#L32">fsm.cells.rtl:32:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d13" hidden="hidden">
+      <h3>state$ff$or_5</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>or</dd>
+        <dt>cell</dt>
+        <dd>or</dd>
+        <dt>in a</dt>
+        <dd>state$ff$or</dd>
+        <dt>in b</dt>
+        <dd>state$ff$or_4</dd>
+        <dt>out y</dt>
+        <dd>state$ff$or_5</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-fsm.cells.rtl.html#L33">fsm.cells.rtl:33:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d14" hidden="hidden">
       <h3>state$ff</h3>
       <dl>
         <dt>kind</dt>
@@ -487,17 +610,17 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dt>in d</dt>
         <dd>state$pmux$fsm</dd>
         <dt>in en</dt>
-        <dd>state$ff$mux</dd>
+        <dd>state$ff$or_5</dd>
         <dt>in rst</dt>
         <dd>rst</dd>
         <dt>out q</dt>
         <dd>state$fsm</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L26">fsm.cells.rtl:26:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L34">fsm.cells.rtl:34:3</a>
       </p>
     </div>
-    <div class="detail" id="d11" hidden="hidden">
+    <div class="detail" id="d15" hidden="hidden">
       <h3>state$pmux$fsm</h3>
       <dl>
         <dt>kind</dt>
@@ -514,10 +637,10 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>state$pmux$fsm</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L27">fsm.cells.rtl:27:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L35">fsm.cells.rtl:35:3</a>
       </p>
     </div>
-    <div class="detail" id="d12" hidden="hidden">
+    <div class="detail" id="d16" hidden="hidden">
       <h3>3&#39;d1</h3>
       <dl>
         <dt>kind</dt>
@@ -528,10 +651,10 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>3&#39;d1</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L27">fsm.cells.rtl:27:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L35">fsm.cells.rtl:35:3</a>
       </p>
     </div>
-    <div class="detail" id="d13" hidden="hidden">
+    <div class="detail" id="d17" hidden="hidden">
       <h3>9&#39;d98</h3>
       <dl>
         <dt>kind</dt>
@@ -542,7 +665,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
         <dd>9&#39;d98</dd>
       </dl>
       <p class="loc">
-        <a href="source/0-fsm.cells.rtl.html#L27">fsm.cells.rtl:27:3</a>
+        <a href="source/0-fsm.cells.rtl.html#L35">fsm.cells.rtl:35:3</a>
       </p>
     </div>
   </aside>
@@ -552,7 +675,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   <span class="l-seq">state</span>
   <span class="l-inst">instance or process</span>
   <span class="l-port">port</span>
-  <span>7 cells, 1 holding state, 17 wires</span>
+  <span>11 cells, 1 holding state, 24 wires</span>
 </p>
     </main>
     <script>

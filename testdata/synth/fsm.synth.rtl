@@ -15,6 +15,6 @@ module fsm
   port done in %done
   port busy out %busy
   assign %busy = not(%state$fsm[0:0])
-  cell state$ff dff pos en srst pos 3'd1 (clk=%clk, d=%state$pmux$fsm, en=mux(%state$fsm[0:0], %go, or(%state$fsm[1:1], or(not(%state$fsm[2:2]), %done))), rst=%rst) -> (q=%state$fsm)
+  cell state$ff dff pos en srst pos 3'd1 (clk=%clk, d=%state$pmux$fsm, en=or(or(and(%state$fsm[0:0], %go), %state$fsm[1:1]), or(and(%state$fsm[2:2], %done), not(or(or(%state$fsm[0:0], %state$fsm[1:1]), %state$fsm[2:2])))), rst=%rst) -> (q=%state$fsm)
   cell state$pmux$fsm pmux (a=3'd1, b=9'd98, s=%state$fsm) -> (y=%state$pmux$fsm)
 end

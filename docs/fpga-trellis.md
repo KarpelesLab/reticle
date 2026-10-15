@@ -1,12 +1,55 @@
 # A real Lattice ECP5, and a real `.bit`
 
-## A dynamic-Huffman stream decodes once, and a correlation looked like a cause
+## Four bytes and a stall was a timing failure, and the clock enable was a chain
 
-**CHECKED on a part, 13 October 2026. OPEN.** With the window routed, 55
-of the corpus' 59 zlib cases decode on a Cynthion. Which four do not
-depends on the stream decoded immediately before, and the honest form of
-that is the matrix rather than a rule. One fresh configuration per cell,
-the first stream run and checked, then the second:
+**CHECKED on a part, 15 October 2026. CLOSED.** All 59 zlib cases of the
+corpus decode on a Cynthion and all 64 raw-deflate cases are refused with
+`E_HEADER` — 123 of 123, in corpus order, on one configuration. It had
+been 55 of 59, and *which* four failed depended on the stream decoded
+immediately before.
+
+It was never a fault in `inflate`, in the window, in a block RAM or in a
+distributed RAM. **The design did not meet timing**, and Reticle built
+it that way: a `case` statement's clock enable was a chain of one
+multiplexer per arm.
+
+### The defect
+
+[`src/synth/proc/exec.rs`]'s `extract` turns a `case` into the condition
+under which each register is assigned. It folded the arms into a
+priority chain:
+
+```rust
+let mut acc = self.en_expr(ed);
+for (m, (e, _)) in matches.iter().zip(&ex).rev() {
+    acc = mk_mux(self.m, *m, v, acc, span);
+}
+```
+
+Correct, and **as deep as the case is wide**. `ip/compress/inflate`'s
+`case (state_q)` has 29 arms, so every register assigned in it — the bit
+reader's `nbit_q`, the decoder's `code_q`, `first_q`, `dlen_q`,
+`dret_q` — got a 29-deep enable. With the surrounding `if`s that is 38
+levels of generic gates, and `usb_inflate` mapped to **19 LUT4 levels**
+between registers at **60 MHz**, which an ECP5 will not do.
+
+The same case's *data* path had been a flat `pmux` all along, which is
+why this went unnoticed: the arms were already known to be mutually
+exclusive, and only the enable was still paying for a priority nothing
+needed. The enable is now a balanced OR of `match & enable` over the
+arms, plus the default under "no item matched", which is `ceil(log2 n)`
+deep. On `usb_inflate` that is **depth 19 → 12 and 3139 → 3006 LUTs**:
+shallower *and* smaller, because a tree of ANDs and ORs is cheaper than
+a chain of multiplexers.
+
+`a_parallel_cases_enable_is_a_tree_and_not_a_chain` is the tripwire. It
+builds a sixteen-arm parallel case and fails if the enable is more than
+nine levels deep; against the chain it measures **17**.
+
+### What the matrix really was, and the rule that fitted it anyway
+
+The failures were recorded as this, one fresh configuration per cell,
+the first stream run and checked and then the second:
 
 | first ↓ · second → | text1_100 | text1_1000 | text5_1000 | pattern_9 |
 |---|---|---|---|---|
@@ -15,42 +58,57 @@ the first stream run and checked, then the second:
 | **text5_1000** | 4 bytes, `C0` | ok | ok | ok |
 | **pattern_9** | 4 bytes, `C0` | 4 bytes, `C0` | 4 bytes, `C0` | ok |
 
-Every failure is **exactly four correct bytes and then a stall**, whatever
-the stream, which is the clearest thing in the table: the decoder produces
-four bytes and then waits for input that never comes, and the bridge's
-counter reports it. Four bytes is the same count for a hundred-byte answer
-and a thousand-byte one.
+Every cell of it is real and every cell of it is a timing failure. A
+path that is too slow fails only when it actually toggles that far, so
+which streams fail is a function of the data and of the state the
+memories are left in — deterministic, reproducible, and invisible to a
+simulator that has no clock.
 
-**No rule has been established.** It is not "a different stream": 100 then
-1000 is fine and 1000 then 100 is not. It is not output length, which
-orders the cells no better — 100 → 1000 works and 10 → 1000 does not, and
-1000 → 10 works. It is not block type: the fixed-Huffman case breaks
-dynamic ones and is broken by none. Compressed lengths are 78, 308, 308 and
-17 bytes, which fits nothing above either. The table is the finding.
+**A rule fits that table exactly, and it is not the cause.** Parse the
+dynamic headers and `HLIT + HDIST` is 276, 289 and 289; `pattern_9` is a
+*fixed* block, which fills all 320 code lengths. The second stream fails
+in every cell where its total is smaller than the first's, and in no
+other — sixteen for sixteen. It is a good rule and it explains nothing:
+it is sixteen cells and one degree of freedom, and the mechanism it
+suggests (a stale tail of the code-length memory) was already ruled out,
+because the sort never reads past the current total. **A rule read off
+sixteen cells is a shape, not a cause.** This is the fourth hypothesis
+this one fault has produced and the third that had to be dropped.
 
-### Two readings withdrawn, and the one mistake behind both
+### What found it
 
-This section first said *"a dynamic stream that follows a refused one"*.
-All four failures sit immediately after a raw-deflate case in corpus order
-— the cases this `WRAPPER=1` build refuses — and each decodes correctly on
-its own. A real correlation, and not the cause: a refusal alone is
-harmless, and what the corpus order hid is that each of those cases also
-followed a *successful* decode.
+Not reasoning. Four rounds of eliminating one candidate per build had
+each cost a build and a load, and all four eliminations were correct —
+the decoder re-arms, the window reads back, a block RAM reads before it
+writes, a distributed RAM reads before it adds. None of them could see
+the clock.
 
-It then said *"only if no different stream has decoded since
-configuration"*, which the matrix above contradicts in its first row.
+What found it was **an instrument that made the fault worse**. The
+sixteen-byte stall dump was added to photograph the decoder where it
+stopped; with it in the design, streams that had always decoded stopped
+decoding. Extra logic cannot change what a design computes, so a change
+that changed which streams fail is not a logic fault.
 
-Both came from the same mistake, and so did the retraction in the section
-below. **A part that carries state between frames gives one measurement
-per configuration.** The first attempt at a table like this one ran every
-row against a single load; the third row wedged the device, and rows four
-to eight then read `C0` and agreed with whatever was being proposed. One
-failure wedges this design until it is reconfigured — a fact about the
-bridge worth having on its own — so a row is evidence only if the part was
-loaded fresh for it. Three conclusions have had to be withdrawn for want of
-that, and each looked like a clean single-variable comparison at the time.
+The confirmation was one experiment: **the same source, placed twice**.
+`--place-effort 10` and `--place-effort 1` give the same netlist and
+different placements, 139048 and 141545 configuration bits. On the first
+`text1_1000` returned `E_CODE` with no output; on the second it returned
+sixteen bytes and a broken frame, and `text1_100` returned 178 bytes
+where 100 were expected. The flow proves the routing implements the
+netlist — every sink walked back to its driver, every set bit decoding
+into exactly the arcs the router chose — and simulation proves the
+netlist computes the right answer. What is left to vary with placement
+is delay.
 
-### What has been eliminated
+`reticle timing` then named every violating endpoint, and all 64 of them
+were a register's **clock enable** inside `inflate`.
+
+### What was eliminated on the way, and all of it still stands
+
+Four rounds of elimination preceded this and not one of them was wrong.
+They are measurements of the part and they are worth keeping on their
+own account, because each is the first time this flow read that
+behaviour off silicon:
 
 - **`inflate.v`'s own state, for every pair of streams there is.**
   Three tests run the sequences a part runs: a refusal followed by a
@@ -58,73 +116,63 @@ that, and each looked like a clean single-variable comparison at the time.
   corpus order through a single `WRAPPER=1` instance with `E_HEADER`
   asserted for each of the 64 deflate ones; and **every ordered pair of
   the 59 zlib cases — 3481 of them — each pair on a simulator of its
-  own**, which is the shape of the matrix above rather than of the
-  corpus. All 3481 second streams decode byte for byte. The last of
-  those is `inflate_decodes_every_zlib_stream_after_every_other_one`,
+  own**, which is the shape of the matrix rather than of the corpus.
+  All 3481 second streams decode byte for byte. That sweep is
+  `inflate_decodes_every_zlib_stream_after_every_other_one`,
   `#[ignore]`d for its four minutes; the sixteen cells of the matrix
-  itself run on every gate as
+  run on every gate as
   `inflate_decodes_the_four_streams_a_part_gets_wrong_after_each_other`.
 
   A fresh simulator per pair is the point and not an accident: these
   memories have no reset, so one simulator reused across pairs is a part
-  that was never reconfigured, which is the mistake recorded two
-  sections down. So "a stream this block leaves behind breaks the next
-  one" is now closed as an explanation, and this is a hardware-only
-  divergence.
+  that was never reconfigured, which is the mistake recorded in the
+  section below.
 - **The window**, by `testdata/fpga/cynthion/bram_echo.v`: 32768 bytes
-  written and read back over sixteen blocks.
+  written and read back over sixteen blocks. Its *contents* could not
+  have been the carry-over in any case, which is a reading rather than a
+  measurement but a short one: `start` puts `inflate_window`'s `wptr_q`
+  back to zero and clears `full_q`, so `have` grows from nothing and
+  `dist_bad` refuses any distance reaching behind the second stream's
+  own output.
 - **A block RAM read in the cycle its own address is written**, which is
-  what a counting sort does and what `bram_echo.v`'s header named as the
-  nearest untested thing. `testdata/fpga/cynthion/bram_rw.v` measures it
-  and the answer is **read-before-write**, as the Verilog and
-  `WRITEMODE_A/B = READBEFOREWRITE` both say. This flow had never read
-  that behaviour off a part before; it is not the fault.
+  what a counting sort does. `testdata/fpga/cynthion/bram_rw.v` measures
+  it and the answer is **read-before-write**, as the Verilog and
+  `WRITEMODE_A/B = READBEFOREWRITE` both say.
 - **A distributed RAM read and written at one address in one cycle, with
-  the read feeding the write.** This is the sharper version, and it is
-  what `inflate`'s count file literally does: `lcnt[cnt_addr]` is a
-  *combinational* read and `lcnt[cnt_addr] <= cnt_rd + 1` is a write of
-  the same address in the same cycle. The reason to care is what sits
-  downstream — **`lsym` is never cleared between streams.** The decoder
-  only indexes the slots the counts say were filled this time, so stale
-  entries are unreachable *if the counts are right*; a count wrong by
-  anything reads a symbol the previous stream left, which is invisible
-  while `lsym` is still all zeros and wrong the moment a different stream
-  has written it. That is the observed rule exactly.
-  `testdata/fpga/cynthion/lutram_rw.v` measures it on two
-  `TRELLIS_DPR16X4`, the same primitive and the same sixteen-word depth,
-  and the answer is read, add, write — as modelled. Not the fault either.
+  the read feeding the write** — what `inflate`'s count file literally
+  does, since `lcnt[cnt_addr]` is a combinational read and
+  `lcnt[cnt_addr] <= cnt_rd + 1` writes the same address in the same
+  cycle. `testdata/fpga/cynthion/lutram_rw.v` measures it on two
+  `TRELLIS_DPR16X4`, the same primitive at the same depth, and the
+  answer is read, add, write — as modelled.
 
-That last one also cost a false positive worth recording. Its first
+That last one cost a false positive worth recording. Its first
 measurement came back as the *new* data for fifteen of sixteen bytes and
 the old data for the first, which reads exactly like a block that writes
 before it reads. It was the design's own output register: `rd_q <=
 mem[addr]` unconditionally keeps re-reading while the host has not yet
-taken the byte, and by then the write has landed. Byte 0 was taken at once
-and so was right. **The shape of the number gave it away** — one byte
-behaving differently from fifteen is a handshake, not a memory — which is
-the third time on this backend that a suspected hardware fault has turned
-out to be the harness.
+taken the byte, and by then the write has landed. Byte 0 was taken at
+once and so was right. **The shape of the number gave it away** — one
+byte behaving differently from fifteen is a handshake, not a memory —
+which is the third time on this backend that a suspected hardware fault
+has turned out to be the harness.
 
-### What is left
+### What is still a reading
 
-Something the first decode leaves behind that differs between the part and
-the simulator while that decode's own output is correct. Both start from
-the same state — a configured part's memories and registers are at the
-values the bitstream set, and the simulator's at the same zeros — which is
-why the first stream is right on both, and the four mechanisms above are
-now measured to agree, so the difference is somewhere narrower than any of
-them.
+**How many nanoseconds.** Reticle's delay model for this family is
+placeholders — one unit per cell — so the slack the timing report prints
+is a count of logic levels and not a time. "19 levels will not run at
+60 MHz on an ECP5" is an inference from the level count and from the
+placement experiment, not something measured in nanoseconds on this
+part. Settling it properly wants a real delay model for the ECP5, which
+this flow does not have, and that is the next thing this backend needs:
+a design that misses timing currently reports nothing a reader can act
+on.
 
-The next step is instrumentation rather than more reasoning, and the
-reasoning above is why: each of these four rounds cost a build and a load
-to eliminate one candidate, and the candidate list is no longer short
-enough for that to pay. What is wanted is the decoder's own state at the
-moment the second stream stalls — the counts it computed, and the index it
-took into `lsym` — which means a trace buffer in the fabric and a console
-to read it out. `testdata/fpga/cynthion/` already holds both, from the
-eight rounds that found the register this backend brought up wrong; that
-is the shape of thing that found all three of this backend's earlier
-hardware-only faults, and none of them was found by reading.
+**Whether depth 12 has margin or merely enough.** 123 of 123 decode, and
+that is the whole of the evidence. A design that passes at 12 levels and
+failed at 19 has its threshold somewhere between, and nothing here has
+found it.
 
 ## The narrow block RAM modes are right, and the measurement that said otherwise was confounded
 

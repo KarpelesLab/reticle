@@ -172,6 +172,35 @@ pub(crate) fn mk_or(m: &mut Module, a: ExprId, b: ExprId, span: Span) -> ExprId 
     mk_binary(m, BinaryOp::Or, a, b, span)
 }
 
+/// `or` over a list of single bits as a **balanced tree**, so the
+/// result is `ceil(log2(n))` deep instead of `n`.
+///
+/// A chain is the obvious way to fold a list and it is the wrong one
+/// where the result feeds a clock enable: a `case` of 29 arms gave
+/// every register it assigns a 29-deep enable, which on an ECP5 at
+/// 60 MHz is the difference between a design that works and one that
+/// decodes four bytes and stops. `docs/fpga-trellis.md` has that
+/// account. The folding in [`mk_or`] still applies at every node, so a
+/// list with constants in it collapses as before.
+pub(crate) fn mk_or_tree(m: &mut Module, terms: &[ExprId], span: Span) -> ExprId {
+    if terms.is_empty() {
+        return mk_bit(m, false, span);
+    }
+    let mut level: Vec<ExprId> = terms.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        for pair in level.chunks(2) {
+            next.push(match pair {
+                [a, b] => mk_or(m, *a, *b, span),
+                [a] => *a,
+                _ => unreachable!("chunks(2)"),
+            });
+        }
+        level = next;
+    }
+    level[0]
+}
+
 /// The value of a known single-bit constant node.
 pub(crate) fn const_bit(m: &Module, id: ExprId) -> Option<bool> {
     let c = m.expr(id).as_const()?;

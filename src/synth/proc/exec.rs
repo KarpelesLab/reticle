@@ -30,7 +30,7 @@ use crate::synth::opt::const_fold::simplify;
 use crate::synth::opt::replace_operands;
 use crate::synth::util::{
     add_cell, add_wire, mk, mk_and, mk_binary, mk_bit, mk_concat, mk_const, mk_mux, mk_net, mk_not,
-    mk_or, mk_slice, mk_unary, mk_undef,
+    mk_or, mk_or_tree, mk_slice, mk_unary, mk_undef,
 };
 
 /// Index of a node in the symbolic-value arena.
@@ -1208,6 +1208,35 @@ impl<'a> Exec<'a> {
                 } else {
                     let en = if ex.iter().all(|(e, _)| *e == En::Always) && ed == En::Always {
                         En::Always
+                    } else if parallel {
+                        // **A parallel case's enable is an OR, not a
+                        // chain.** At most one item matches, so the
+                        // priority the chain below encodes is priority
+                        // over nothing, and the chain's depth is the
+                        // number of arms: `ip/compress/inflate`'s
+                        // 29-arm `case (state_q)` gave every register it
+                        // assigns a 29-deep clock enable, which mapped
+                        // to 19 LUT4 levels and did not meet 60 MHz on
+                        // an ECP5. `docs/fpga-trellis.md` has what that
+                        // cost. The data path of the same case has been
+                        // a flat `pmux` all along; this is the enable
+                        // catching up with it.
+                        let mut terms: Vec<ExprId> = Vec::with_capacity(matches.len() + 1);
+                        for (m, (e, _)) in matches.iter().zip(&ex) {
+                            match e {
+                                En::Never => {}
+                                En::Always => terms.push(*m),
+                                En::Cond(c) => terms.push(mk_and(self.m, *m, *c, span)),
+                            }
+                        }
+                        if ed != En::Never {
+                            // The default arm fires when no item did.
+                            let any = mk_or_tree(self.m, &matches, span);
+                            let none = mk_not(self.m, any, span);
+                            let e = self.en_expr(ed);
+                            terms.push(mk_and(self.m, none, e, span));
+                        }
+                        En::Cond(mk_or_tree(self.m, &terms, span))
                     } else {
                         let mut acc = self.en_expr(ed);
                         for (m, (e, _)) in matches.iter().zip(&ex).rev() {

@@ -1194,6 +1194,68 @@ mod tests {
         }
     }
 
+    /// A parallel case's clock enable is **logarithmic in its arms, not
+    /// linear**.
+    ///
+    /// Sixteen arms, each assigning the same register under the same
+    /// condition. The arms are disjoint constants, so at most one can
+    /// match and the enable is an OR of them: a tree a handful of
+    /// levels deep. Built as the priority chain it used to be it is one
+    /// mux per arm, and the depth is the arm count.
+    ///
+    /// **This is a tripwire and not a golden.** It exists because the
+    /// chain cost a real fault: `ip/compress/inflate`'s 29-arm
+    /// `case (state_q)` gave every register it assigns a 29-deep
+    /// enable, the design mapped to 19 LUT4 levels, and on a Cynthion
+    /// at 60 MHz it decoded four bytes of a dynamic-Huffman stream and
+    /// stopped. `docs/fpga-trellis.md` has the account, including the
+    /// four candidates eliminated before anyone measured the depth.
+    /// The bound is loose on purpose: what must not come back is the
+    /// linear term.
+    #[test]
+    fn a_parallel_cases_enable_is_a_tree_and_not_a_chain() {
+        use crate::synth::report::Report;
+
+        const ARMS: u64 = 16;
+        let mut b = ModuleBuilder::new("wide_case", span());
+        let clk = b.input("clk", Type::bit());
+        let sel = b.input("sel", Type::bits(4));
+        let en = b.input("en", Type::bit());
+        let d = b.input("d", Type::bits(4));
+        let q = b.output_reg("q", Type::bits(4));
+        let (sv, ev, dv) = (b.net(sel), b.net(en), b.net(d));
+
+        let mut arms = Vec::new();
+        for i in 0..ARMS {
+            let k = b.const_u64(4, i);
+            let mut body = b.block();
+            body.nonblocking(q, dv);
+            let mut guarded = b.block();
+            guarded.if_(ev, body.finish(), Vec::new());
+            arms.push(CaseArm {
+                values: vec![k],
+                body: guarded.finish(),
+            });
+        }
+        let mut p = b.process(Some("wide"), ProcessKind::posedge(clk));
+        p.case(sv, CaseKind::Plain, CaseQualifier::None, arms, None);
+        b.end_process(p);
+
+        let mut m = b.finish();
+        let (_stats, diags) = lower(&mut m);
+        assert!(diags.is_empty(), "{diags:?}");
+        let mut d2 = Diagnostics::new();
+        crate::synth::cellify::Cellify.run(&mut m, &mut d2);
+
+        let depth = Report::of_module(&m).depth;
+        assert!(
+            depth < 10,
+            "a {ARMS}-arm parallel case gave a clock enable {depth} levels deep; \
+             a chain would be about {ARMS} and a tree is a handful:\n{}",
+            text(&m)
+        );
+    }
+
     #[test]
     fn comb_full_and_partial_case() {
         let mut b = ModuleBuilder::new("dec", span());
@@ -1252,7 +1314,19 @@ mod tests {
         let t = text(&m);
         assert!(t.contains("cell y$pmux pmux (a=4'bxxxx, b={or(%a, %b), xor(%a, %b), %b, %a}, s={eq(%sel, 2'd3), eq(%sel, 2'd2), eq(%sel, 2'd1), eq(%sel, 2'd0)}) -> (y=%y$pmux)"), "{t}");
         assert!(t.contains("assign %y = %y$pmux"), "{t}");
-        assert!(t.contains("cell z$latch dlatch (en=mux(eq(%sel, 2'd0), 1'd1, mux(eq(%sel, 2'd1), 1'd1, 1'd0)), d=%z$pmux) -> (q=%z)"), "{t}");
+        // **The latch's enable is an OR of the two items that assign
+        // `z`, not a chain of muxes over them.** It was the chain until
+        // `a_parallel_cases_enable_is_a_tree_and_not_a_chain`'s fault was
+        // found: the arms of a parallel case are mutually exclusive, so
+        // the priority a chain encodes is priority over nothing, and its
+        // depth is the arm count. Two arms makes that invisible, which is
+        // why the tripwire uses sixteen.
+        assert!(
+            t.contains(
+                "cell z$latch dlatch (en=or(eq(%sel, 2'd0), eq(%sel, 2'd1)), d=%z$pmux) -> (q=%z)"
+            ),
+            "{t}"
+        );
     }
 
     #[test]

@@ -28,27 +28,33 @@
 // WHERE IT HAS GOT TO ON A PART, 12 OCTOBER 2026
 // ===================================================================
 //
-// **CHECKED: 55 of the corpus' 59 zlib cases decode on a Cynthion**,
-// byte for byte, status `00`. That includes every stored and fixed-Huffman
-// case, `text3_1000_l1`, and the four-thousand-byte cases that cross the
-// window. Three faults were in the way and each is recorded where it was
-// fixed:
+// **CHECKED: 123 of 123 on a Cynthion, 15 October 2026.** All 59 zlib
+// cases decode byte for byte and all 64 raw-deflate cases are refused
+// with `E_HEADER`, run in corpus order on one configuration.
+//
+// Four faults were in the way and each is recorded where it was fixed:
 //
 //   * sixteen block RAM read-data nets nothing drove, so the 32768-byte
 //     window read `ff` for every byte -- `docs/fpga-trellis.md` and
 //     `bram_echo.v`;
 //   * a refused stream wedging the bridge for good, because `S_FEED` read
-//     neither `error` nor a timer -- `inflate_bridge.v`.
+//     neither `error` nor a timer -- `inflate_bridge.v`;
+//   * `in_last` raised on the byte count alone, which ends a stream while
+//     its last byte is still on the way -- `inflate_bridge.v`;
+//   * and the one that took four rounds to find: **this design did not
+//     meet timing.** Reticle built a `case` statement's clock enable as
+//     a chain of one multiplexer per arm, so `inflate`'s 29-arm
+//     `case (state_q)` gave every register it assigns a 29-deep enable
+//     and the design mapped to 19 LUT4 levels at 60 MHz. The enable is
+//     a balanced OR now and the depth is 12.
 //
-// A third was reported and withdrawn: the `DP16KD`'s 4-bit mode, which a
+// A fifth was reported and withdrawn: the `DP16KD`'s 4-bit mode, which a
 // block-count tie put the 320 x 4 code-length memory into, was recorded as
 // wrong on silicon. It is not. `bram_probe.v` reads all three narrow modes
-// back off a part and finds every address and every value right, and this
-// design decodes the three cases said to fail when it is loaded fresh with
-// that memory in the 4-bit mode. The comparison behind the claim had the
-// 4-bit build measured after a 123-case corpus run and the 9-bit build on
-// a fresh load, which on a part that carries state between frames is not a
-// comparison at all.
+// back off a part and finds every address and every value right. The
+// comparison behind the claim had the 4-bit build measured after a
+// 123-case corpus run and the 9-bit build on a fresh load, which on a part
+// that carried state between frames was not a comparison at all.
 //
 // **The 64 raw-deflate cases are refused, by construction.** This design
 // builds `inflate` with `WRAPPER(1)`, so a stream with no zlib header is a
@@ -57,86 +63,17 @@
 // between them. A mode byte in the framing would fix it and has not been
 // written.
 //
-// **OPEN, and it depends on the stream before it. No rule has been
-// established.** Four of the 59 zlib cases are wrong, and which four
-// depends on what decoded immediately before. One fresh configuration per
-// cell, the first stream run and checked, then the second:
-//
-//     first \ second   text1_100   text1_1000  text5_1000  pattern_9
-//     ---------------  ----------  ----------  ----------  ---------
-//     text1_100            ok          ok          ok          ok
-//     text1_1000       4B then C0      ok          ok          ok
-//     text5_1000       4B then C0      ok          ok          ok
-//     pattern_9        4B then C0  4B then C0  4B then C0      ok
-//
-// Every failure is **exactly four correct bytes and then a stall**,
-// whatever the stream -- the same count for a hundred-byte answer and a
-// thousand-byte one -- so the decoder produces four bytes and then waits
-// for input that never comes.
-//
-// It is not "a different stream before it": 100 then 1000 is fine and 1000
-// then 100 is not. It is not output length; it is not block type, since
-// the fixed-Huffman case breaks dynamic ones and is broken by none; and
-// the compressed lengths (78, 308, 308, 17) order it no better. The matrix
-// is the finding.
-//
-// **Two readings have been withdrawn here and both came of the same
-// mistake.** The first said "a dynamic stream that follows a refused one",
-// because all four failures sit immediately after a raw-deflate case in
-// corpus order; a refusal alone is harmless, and what the order hid is
-// that each also followed a successful decode. The second said "only if no
-// different stream has decoded since configuration", which the first row
-// above contradicts. A part that carries state between frames gives **one
-// measurement per configuration**, and rows run against a part that
-// earlier rows had already wedged are what made a correlation look like a
-// cause twice.
-//
-// Four things have been eliminated, one by test and three by measurement:
-//
-//   * `inflate.v`'s own state, for every pair of streams there is.
-//     `tests/ip_library.rs` runs the pairing three times over
-//     (`inflate_rearms_after_a_refusal_for_a_dynamic_huffman_stream`),
-//     all 123 cases in corpus order through one `WRAPPER=1` instance
-//     with the refusals included
-//     (`inflate_takes_the_corpus_in_order_with_the_deflate_cases_refused`),
-//     and **every ordered pair of the 59 zlib cases, 3481 of them, each
-//     pair on a simulator of its own** -- which is the shape of the
-//     matrix above rather than of the corpus, and a fresh simulator per
-//     pair because these memories have no reset and a reused one is a
-//     part that was never reconfigured. All 3481 second streams decode
-//     byte for byte. The sixteen cells of the matrix itself run on every
-//     gate as
-//     `inflate_decodes_the_four_streams_a_part_gets_wrong_after_each_other`;
-//     the full sweep is `#[ignore]`d for its four minutes. So the
-//     decoder re-arms after anything, and this is a hardware-only
-//     divergence.
-//   * the window. `bram_echo.v` reads 32768 bytes back off the part.
-//   * a block RAM read in the cycle its own address is written, which is
-//     what a counting sort does and what `bram_echo.v`'s header named as
-//     the nearest untested thing. `bram_rw.v` measures it: the part reads
-//     **before** the write, which is what the Verilog and
-//     `WRITEMODE_A/B = READBEFOREWRITE` both say. Not the fault.
-//   * a distributed RAM read and written at one address in one cycle with
-//     the read feeding the write, which is what this block's count file
-//     literally does -- `lcnt[cnt_addr]` is combinational and
-//     `lcnt[cnt_addr] <= cnt_rd + 1` writes the same address in the same
-//     cycle. It matters because **`lsym` is never cleared between
-//     streams**: the decoder only indexes slots the counts say were filled
-//     this time, so a count wrong by anything reads a symbol the previous
-//     stream left -- invisible while `lsym` is all zeros, wrong once a
-//     different stream has written it, which is this rule exactly.
-//     `lutram_rw.v` measures it on the same primitive at the same depth:
-//     read, add, write, as modelled. Not the fault either.
-//
-// So what remains is something the first decode leaves behind that differs
-// between the part and the simulator while its own output is correct. The
-// next step is instrumentation rather than more reasoning: four rounds have
-// each cost a build and a load to eliminate one candidate, and what is
-// wanted now is the decoder's own state at the moment the second stream
-// stalls -- the counts it computed and the index it took into `lsym`.
-// `testdata/fpga/cynthion/` already holds the serial console and the trace
-// buffer that found this backend's earlier hardware-only faults, none of
-// which was found by reading.
+// **What the timing fault looked like, and why it is worth reading
+// `docs/fpga-trellis.md` for.** It presented as four corpus cases coming
+// back as four correct bytes and a stall, and *which* four depended on the
+// stream decoded immediately before. That is exactly what a path too slow
+// to make its clock does -- it fails only when it toggles that far, which
+// is a function of the data and of what the memories were left holding --
+// and it is nothing a simulator can see, because a simulator has no clock.
+// Four candidates were eliminated by measurement before anyone counted the
+// logic levels, a rule was found that fitted all sixteen cells of the
+// matrix and was not the cause, and what settled it was building the same
+// source at two placements and watching it fail differently.
 //
 // ===================================================================
 // THE FRAMING, AND WHY THERE IS ANY
@@ -158,6 +95,17 @@
 // 3 nlen, 4 code, 5 dist, 6 trunc, 7 adler. A host that knows the expected
 // plaintext -- which is the only kind of host this is for -- reads that many
 // bytes and then one more, so the status is never confused with data.
+//
+// `C0` is the one status that is not an error code: the bridge's timer
+// ran out, and **sixteen bytes of state follow it and nothing else**.
+// That is the instrument the section above asks for -- four bytes from
+// the bridge saying whether it was waiting on the host, on its own
+// output, or on neither, then `inflate`'s own twelve saying where it was
+// standing. `inflate_bridge.v` lists the sixteen and `inflate.v`'s `dbg`
+// lists the twelve. The next stream is armed only once the sixteenth
+// byte is out, so the framing is unchanged -- but a host that reads one
+// status byte and stops leaves sixteen in its receive buffer, and they
+// will look like the next frame's answer. `C0` means read sixteen more.
 //
 // A length of zero is legal and means an empty stream: `in_last` with no
 // byte, which `inflate.v`'s header says is the only way to say so.

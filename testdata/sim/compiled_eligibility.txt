@@ -164,13 +164,13 @@ testdata/synth/dup_logic.synth.rtl
   dup_logic: eligible (2 comb ops, 2 edge ops, 1 registers, 4 bits)
 
 testdata/synth/fsm.cells.rtl
-  fsm: eligible (9 comb ops, 3 edge ops, 1 registers, 3 bits)
+  fsm: eligible (13 comb ops, 3 edge ops, 1 registers, 3 bits)
 
 testdata/synth/fsm.rtl
   fsm: eligible (1 comb ops, 26 edge ops, 1 registers, 2 bits)
 
 testdata/synth/fsm.synth.rtl
-  fsm: eligible (3 comb ops, 9 edge ops, 1 registers, 3 bits)
+  fsm: eligible (3 comb ops, 13 edge ops, 1 registers, 3 bits)
 
 testdata/synth/keep_reg.cells.rtl
   keep_reg: eligible (3 comb ops, 6 edge ops, 4 registers, 4 bits)

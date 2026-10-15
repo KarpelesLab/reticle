@@ -6,7 +6,9 @@
 // path is CHECKED separately by `usb_cdc_uart.v` on this same board.
 module inflate_bridge #(
     parameter integer WINDOW_BITS = 15,
-    parameter integer STALL_BITS = 22
+    parameter integer STALL_BITS = 22,
+    // Send the sixteen-byte dump after a `C0`. See `S_DBG`.
+    parameter integer DEBUG = 1
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -40,6 +42,9 @@ module inflate_bridge #(
     // report at once, and the bytes still in flight would then be read as
     // the next frame's length. See `S_SINK` below.
     localparam [2:0] S_SINK   = 3'd5;
+    // Sixteen bytes of state after a `C0`, and only after a `C0`. See
+    // `dbg_q` below.
+    localparam [2:0] S_DBG    = 3'd6;
 
     reg [2:0]  state = S_LEN_HI;
     reg [15:0] left  = 16'd0;
@@ -50,6 +55,34 @@ module inflate_bridge #(
     // than a person waiting.
     reg [STALL_BITS-1:0] stall_q = {STALL_BITS{1'b0}};
     reg        hung_q  = 1'b0;
+
+    // -----------------------------------------------------------------
+    // SIXTEEN BYTES FROM A DEVICE THAT STOPPED
+    // -----------------------------------------------------------------
+    //
+    // **A stall says nothing about where.** This design decodes four of
+    // the corpus' streams wrongly on a Cynthion, and only after a
+    // particular stream decoded before them; every failure is four
+    // correct bytes and then a timeout, and `docs/fpga-trellis.md`
+    // records four rounds that each cost a build and a load to eliminate
+    // one candidate. Reading has not reached it and cannot: the
+    // simulator never stalls, so there is nothing in it to look at.
+    //
+    // So the timeout takes a photograph. The four bytes this half owns
+    // say whether the decompressor was waiting on the host, on its own
+    // output, or on neither; the twelve from `inflate` say where it was
+    // standing. They follow the `C0` status byte and nothing else, so a
+    // host that does not know about them reads one byte and stops, as
+    // before.
+    //
+    //   0      {5'd0, state}        which state the bridge was in
+    //   1      dev_ready, host_valid, inf_in_ready, inf_out_valid,
+    //          inf_done, inf_error, feeding, sinking
+    //   2..3   left                 frame bytes the host still owes
+    //   4..15  `inflate`'s own twelve; its header lists them
+    localparam integer DBG_BYTES = 16;
+    reg [DBG_BYTES*8-1:0] dbg_q = {(DBG_BYTES*8){1'b0}};
+    reg [4:0]             dbg_n = 5'd0;
 
     wire [7:0] inf_out;
     wire       inf_out_valid, inf_in_ready, inf_done, inf_error, inf_busy;
@@ -78,9 +111,12 @@ module inflate_bridge #(
     wire last_byte = feeding && host_valid && (left == 16'd1);
     wire empty_now = (state == S_LEN_LO) && took_host && ({left[15:8], host_data} == 16'd0);
 
+    wire [95:0] inf_dbg;
+
     inflate #(
         .WINDOW_BITS (WINDOW_BITS),
-        .WRAPPER     (1)
+        .WRAPPER     (1),
+        .DEBUG       (DEBUG)
     ) u_inflate (
         .clk        (clk),
         .rst_n      (rst_n),
@@ -95,7 +131,8 @@ module inflate_bridge #(
         .done       (inf_done),
         .error      (inf_error),
         .error_code (inf_code),
-        .busy       (inf_busy)
+        .busy       (inf_busy),
+        .dbg        (inf_dbg)
     );
 
     // Giving a byte to the host: the plaintext while draining, then one
@@ -111,11 +148,14 @@ module inflate_bridge #(
     wire give_out = ((state == S_FEED) || (state == S_DRAIN))
                     && inf_out_valid && dev_ready;
     wire give_sts = (state == S_STATUS) && dev_ready;
-    assign dev_data  = (state == S_STATUS)
+    wire give_dbg = (state == S_DBG) && dev_ready;
+    assign dev_data  = (state == S_DBG)
+                       ? dbg_q[DBG_BYTES*8-1 -: 8]
+                       : (state == S_STATUS)
                        ? (hung_q ? 8'hC0
                                  : err_q ? {1'b1, 4'd0, inf_code} : 8'h00)
                        : inf_out;
-    assign dev_valid = give_out || give_sts;
+    assign dev_valid = give_out || give_sts || give_dbg;
     assign dev_commit = dev_valid;
 
     always @(posedge clk) begin
@@ -126,6 +166,7 @@ module inflate_bridge #(
             err_q   <= 1'b0;
             hung_q  <= 1'b0;
             stall_q <= {STALL_BITS{1'b0}};
+            dbg_n   <= 5'd0;
         end else begin
             start_q <= 1'b0;
             // **The stall counter runs in every state that waits on the
@@ -143,7 +184,7 @@ module inflate_bridge #(
             // The two length states are excluded on purpose: waiting
             // there is the device being idle between frames, and must
             // never time out.
-            if (want_len || took_host || give_out || give_sts)
+            if (want_len || took_host || give_out || give_sts || give_dbg)
                 stall_q <= {STALL_BITS{1'b0}};
             else
                 stall_q <= stall_q + 1'b1;
@@ -197,8 +238,26 @@ module inflate_bridge #(
                 end
                 S_STATUS:
                     if (give_sts) begin
-                        start_q <= 1'b1;      // arm the next stream
-                        state   <= S_LEN_HI;
+                        if ((DEBUG != 0) && hung_q) begin
+                            // The dump, and then the next stream. The
+                            // arming waits until the last byte is out,
+                            // because `start` clears what is in `dbg_q`'s
+                            // sources and there is no reason to race it.
+                            dbg_n <= DBG_BYTES[4:0];
+                            state <= S_DBG;
+                        end else begin
+                            start_q <= 1'b1;  // arm the next stream
+                            state   <= S_LEN_HI;
+                        end
+                    end
+                S_DBG:
+                    if (give_dbg) begin
+                        dbg_q <= {dbg_q[DBG_BYTES*8-9:0], 8'h00};
+                        dbg_n <= dbg_n - 5'd1;
+                        if (dbg_n == 5'd1) begin
+                            start_q <= 1'b1;
+                            state   <= S_LEN_HI;
+                        end
                     end
                 default: state <= S_LEN_HI;
             endcase
@@ -216,7 +275,28 @@ module inflate_bridge #(
             if (!want_len && &stall_q) begin
                 err_q  <= 1'b1;
                 hung_q <= 1'b1;
-                state  <= (state == S_FEED) ? S_SINK : S_STATUS;
+                if (state == S_DBG) begin
+                    // The host stopped reading part-way through the
+                    // dump. Sending it is worth a timeout and not worth
+                    // a wedge, which is the whole reason this counter
+                    // exists, so the rest is dropped and the next frame
+                    // is taken.
+                    start_q <= 1'b1;
+                    state   <= S_LEN_HI;
+                end else begin
+                    state <= (state == S_FEED) ? S_SINK : S_STATUS;
+                    // **The first stall of the frame, not the last.** A
+                    // timeout in `S_FEED` goes to `S_SINK`, which may
+                    // well time out in its turn; that second photograph
+                    // is of the swallow and the first is of the fault.
+                    if (!hung_q)
+                        dbg_q <= {5'd0, state,
+                                  dev_ready, host_valid, inf_in_ready,
+                                  inf_out_valid, inf_done, inf_error,
+                                  feeding, sinking,
+                                  left,
+                                  inf_dbg};
+                end
             end
         end
     end

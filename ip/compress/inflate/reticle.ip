@@ -36,6 +36,9 @@ source rtl/inflate.v
 
 param WINDOW_BITS int 15 8..15
 param WRAPPER int 1 0..1
+# Build `dbg`, the twelve bytes of internal state a stopped part
+# cannot otherwise be asked for. Zero and folded away by default.
+param DEBUG int 0 0..1
 
 port clk in
 port rst_n in
@@ -51,3 +54,8 @@ port done out
 port error out
 port error_code out 3
 port busy out
+# One bit wide as declared here, because `DEBUG` is 0 by default; the
+# port is 96 bits when `DEBUG` is 1. A port cannot be declared away in
+# Verilog-2005 and ninety-six constant outputs on a block built as a top
+# would ask for ninety-six pads.
+port dbg out 1

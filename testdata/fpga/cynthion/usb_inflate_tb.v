@@ -15,10 +15,14 @@
 //
 // What this would catch: a length prefix read in the wrong order, a stream
 // fed with `in_last` in the wrong place, a status byte that does not follow
-// the plaintext, a decoder left unable to start a second stream, and an
-// error reported as success. What it would not: anything the corpus covers
-// and this does not -- dynamic Huffman tables, long matches, a window that
-// wraps -- and anything about USB.
+// the plaintext, a decoder left unable to start a second stream, an error
+// reported as success, and -- since the timeout now photographs the two
+// halves and sends the sixteen bytes after its `C0` -- a dump of the wrong
+// length, in the wrong order, or taken at the wrong stall. What it would
+// not: anything the corpus covers and this does not -- dynamic Huffman
+// tables, long matches, a window that wraps -- and anything about USB. Nor
+// whether the numbers in a dump are *true*: this bench can only say that
+// what the bridge was holding is what came out.
 
 `timescale 1ns / 1ps
 module usb_inflate_tb;
@@ -37,7 +41,11 @@ module usb_inflate_tb;
 
     // 9 is enough for "hello" and keeps the simulation small; the board
     // builds 15, which is the only setting that decodes every legal stream.
-    inflate_bridge #(.WINDOW_BITS(9)) dut (
+    // `STALL_BITS` is 10 here and 22 on the board: 1024 clocks is long
+    // enough that nothing this bench does legitimately reaches it -- a
+    // stored block never runs a counting sort -- and short enough that a
+    // deliberate stall finishes inside one `settle`.
+    inflate_bridge #(.WINDOW_BITS(9), .STALL_BITS(10)) dut (
         .clk(clk), .rst_n(rst_n),
         .host_data(host_data), .host_valid(host_valid), .host_ready(host_ready),
         .dev_data(dev_data), .dev_valid(dev_valid), .dev_ready(dev_ready),
@@ -93,6 +101,17 @@ module usb_inflate_tb;
             put(8'd0);
             put(n[7:0]);
             for (i = 0; i < n; i = i + 1) put(stream[i]);
+        end
+    endtask
+
+    // A frame that declares `n` bytes and hands over only `k`, so the
+    // bridge waits in `S_FEED` for bytes that are not coming.
+    task send_short;
+        input integer k;
+        begin
+            put(8'd0);
+            put(n[7:0]);
+            for (i = 0; i < k; i = i + 1) put(stream[i]);
         end
     endtask
 
@@ -273,6 +292,59 @@ module usb_inflate_tb;
             $finish;
         end
         $display("note: a refusal on the second byte swallowed exactly the rest, and the next frame decoded");
+
+        // ---- A host that stops mid-frame, and the photograph ----
+        //
+        // **The one fault reading cannot localise is a hang**, and four
+        // of this decompressor's streams hang a Cynthion after four
+        // correct bytes -- `docs/fpga-trellis.md` has the matrix and the
+        // four candidates it has cost to eliminate. So the timeout now
+        // sends sixteen bytes of state after its `C0`, and this is what
+        // says they are the right sixteen and that they arrive in order.
+        //
+        // The stall is made by declaring sixteen bytes and handing over
+        // four: `S_FEED` waits, times out to `S_SINK`, waits again for
+        // the twelve the host still owes, and times out to `S_STATUS`.
+        // The photograph is of the **first** stall, which is the one
+        // about the fault rather than about the swallow -- so byte 0
+        // must read `S_FEED` and not `S_SINK`.
+        stream[0] = 8'h78; stream[1] = 8'h01;
+        n = 16;
+        got_n = 0;
+        send_short(4);
+        settle(4000);
+        if (got_n != 17) begin
+            $display("FAIL: a stalled frame gave %0d byte(s), wanted a C0 and sixteen more", got_n);
+            for (k = 0; k < got_n; k = k + 1) $display("   [%0d] %02x", k, got[k]);
+            $finish;
+        end
+        if (got[0] !== 8'hC0) begin
+            $display("FAIL: a stalled frame reported %02x, wanted C0", got[0]);
+            $finish;
+        end
+        // `S_FEED` is 2, and the frame still owed twelve of its sixteen.
+        if (got[1] !== 8'h02 || {got[3], got[4]} !== 16'd12) begin
+            $display("FAIL: the dump says state %02x and %0d byte(s) left, wanted 02 and 12",
+                     got[1], {got[3], got[4]});
+            for (k = 0; k < got_n; k = k + 1) $display("   [%0d] %02x", k, got[k]);
+            $finish;
+        end
+        $display("note: a stalled frame reported C0 and sixteen bytes of state, the first stall's");
+        for (k = 1; k < got_n; k = k + 1) $display("   dbg[%0d] %02x", k - 1, got[k]);
+
+        // ---- And a stream after the dump, which is the assertion ----
+        //
+        // The dump must not cost the framing: the next stream is armed
+        // only once its last byte is out.
+        got_n = 0;
+        send;
+        settle(4000);
+        if (got_n != 6 || got[5] !== 8'h00 || got[0] !== 8'h68) begin
+            $display("FAIL: the frame after a dump came back as %0d byte(s)", got_n);
+            for (k = 0; k < got_n; k = k + 1) $display("   [%0d] %02x", k, got[k]);
+            $finish;
+        end
+        $display("note: and the stream after the dump decoded");
 
         $display("PASS: a zlib stored block decoded through the length-prefix framing, a wrong check byte reported 80|E_ADLER after its plaintext, a bad header reported 80|E_HEADER with nothing before it, and a stream decoded after each of them");
         $finish;

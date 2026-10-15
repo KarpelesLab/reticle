@@ -161,7 +161,12 @@ module inflate #(
     // 1 parses RFC 1950's two-byte header and checks its trailing
     // Adler-32. 0 decodes a raw RFC 1951 stream, which is what a
     // container that carries its own checksum (gzip, zip, PNG) wants.
-    parameter WRAPPER     = 1
+    parameter WRAPPER     = 1,
+    // Build `dbg`. Off by default, and off means the twelve bytes are a
+    // constant zero that synthesis folds away, so a design that does not
+    // ask for it pays nothing and its footprint does not move. See
+    // `dbg` below for what the bytes are and why they exist.
+    parameter DEBUG       = 0
 ) (
     input  wire        clk,
     input  wire        rst_n,
@@ -194,7 +199,42 @@ module inflate #(
     output wire        error,
     output wire [2:0]  error_code,
     // Neither finished nor failed.
-    output wire        busy
+    output wire        busy,
+
+    // ---------------------------------------------------------------
+    // Twelve bytes of internal state, for a part that has stopped
+    // ---------------------------------------------------------------
+    //
+    // **This exists because a hang is the one fault reading cannot
+    // localise.** Four of this block's streams decode wrongly on a
+    // Cynthion and only when a particular stream decoded before them,
+    // and four rounds of eliminating one candidate per build have not
+    // reached it -- `docs/fpga-trellis.md` is the account. Every failure
+    // is four correct bytes and then nothing, so what is wanted is where
+    // the block was standing when it stopped, and no simulation can say:
+    // in simulation it does not stop.
+    //
+    // **Ninety-six bits wide only when `DEBUG` is set, and one bit
+    // otherwise.** A port cannot be declared away in Verilog-2005, and
+    // a block built as a top with ninety-six constant outputs asks for
+    // ninety-six pads: the iCE40 HX1K footprint in `docs/ip-library.md`
+    // went from 30 `SB_IO` to 126, which is more pads than that part
+    // has. One bit costs one, and the rest of the row does not move,
+    // which is the gate saying so.
+    //
+    // Zero unless `DEBUG`. Byte 0 is the first, which is the order
+    // `inflate_bridge` sends them in:
+    //
+    //   0      {3'd0, state_q}              which state
+    //   1      nxt_full, last, done, err,   the handshakes, MSB first
+    //          ov, in_ready, win_rd_valid, win_dist_bad
+    //   2      {4'd0, cnt_q}                bits left in the reader
+    //   3      {2'd0, dret_q, dlen_q}       which table, and how deep
+    //   4..5   {7'd0, rem_q}                bytes left in a copy
+    //   6..7   dist_q                       how far back it is copying
+    //   8..9   {7'd0, lix_q}                how far the header build got
+    //   10..11 {7'd0, bix_q}                how far the counting sort got
+    output wire [((DEBUG != 0) ? 96 : 1) - 1:0] dbg
 );
     // -----------------------------------------------------------------
     // Errors
@@ -657,6 +697,20 @@ module inflate #(
     assign error      = err_q;
     assign error_code = ecode_q;
     assign busy       = !done_q && !err_q;
+
+    // The twelve bytes the header lists, byte 0 in the high bits so that
+    // a shift register sends them in that order.
+    assign dbg = (DEBUG == 0) ? 1'b0 : {
+        3'd0, state_q,
+        nxt_full_q, last_q, done_q, err_q,
+        ov_q, in_ready, win_rd_valid, win_dist_bad,
+        4'd0, cnt_q,
+        2'd0, dret_q, dlen_q,
+        7'd0, rem_q,
+        dist_q,
+        7'd0, lix_q,
+        7'd0, bix_q
+    };
 
     // -----------------------------------------------------------------
     // The memories. One write port and one read port each, written the

@@ -113,7 +113,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <span class="brand">reticle viewer</span>
     </header>
     <main class="wide"><h1>fsm.cells.rtl
-  <span class="kind"> 29 lines</span>
+  <span class="kind"> 37 lines</span>
 </h1>
 <ol class="src">
   <li id="L1">top fsm</li>
@@ -127,24 +127,32 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   <li id="L9">  attr fsm_encoded = &quot;one-hot&quot;</li>
   <li id="L10">  net %state$fsm u3 wire</li>
   <li id="L11">  net %state$pmux$fsm u3 wire</li>
-  <li id="L12">  net %state$ff$not u1 wire</li>
+  <li id="L12">  net %state$ff$and u1 wire</li>
   <li id="L13">  net %state$ff$or u1 wire</li>
-  <li id="L14">  net %state$ff$or_2 u1 wire</li>
-  <li id="L15">  net %state$ff$mux u1 wire</li>
-  <li id="L16">  port clk in %clk</li>
-  <li id="L17">  port rst in %rst</li>
-  <li id="L18">  port go in %go</li>
-  <li id="L19">  port done in %done</li>
-  <li id="L20">  port busy out %busy</li>
-  <li id="L21">  cell busy$not not (a=%state$fsm[0:0]) -&gt; (y=%busy)</li>
-  <li id="L22">  cell state$ff$not not (a=%state$fsm[2:2]) -&gt; (y=%state$ff$not)</li>
-  <li id="L23">  cell state$ff$or or (a=%state$ff$not, b=%done) -&gt; (y=%state$ff$or)</li>
-  <li id="L24">  cell state$ff$or_2 or (a=%state$fsm[1:1], b=%state$ff$or) -&gt; (y=%state$ff$or_2)</li>
-  <li id="L25">  cell state$ff$mux mux (a=%state$ff$or_2, b=%go, s=%state$fsm[0:0]) -&gt; (y=%state$ff$mux)</li>
-  <li id="L26">  cell state$ff dff pos en srst pos 3&#39;d1 (clk=%clk, d=%state$pmux$fsm, en=%state$ff$mux, rst=%rst) -&gt; (q=%state$fsm)</li>
-  <li id="L27">  cell state$pmux$fsm pmux (a=3&#39;d1, b=9&#39;d98, s=%state$fsm) -&gt; (y=%state$pmux$fsm)</li>
-  <li id="L28">end</li>
-  <li id="L29"></li>
+  <li id="L14">  net %state$ff$and_2 u1 wire</li>
+  <li id="L15">  net %state$ff$or_2 u1 wire</li>
+  <li id="L16">  net %state$ff$or_3 u1 wire</li>
+  <li id="L17">  net %state$ff$not u1 wire</li>
+  <li id="L18">  net %state$ff$or_4 u1 wire</li>
+  <li id="L19">  net %state$ff$or_5 u1 wire</li>
+  <li id="L20">  port clk in %clk</li>
+  <li id="L21">  port rst in %rst</li>
+  <li id="L22">  port go in %go</li>
+  <li id="L23">  port done in %done</li>
+  <li id="L24">  port busy out %busy</li>
+  <li id="L25">  cell busy$not not (a=%state$fsm[0:0]) -&gt; (y=%busy)</li>
+  <li id="L26">  cell state$ff$and and (a=%state$fsm[0:0], b=%go) -&gt; (y=%state$ff$and)</li>
+  <li id="L27">  cell state$ff$or or (a=%state$ff$and, b=%state$fsm[1:1]) -&gt; (y=%state$ff$or)</li>
+  <li id="L28">  cell state$ff$and_2 and (a=%state$fsm[2:2], b=%done) -&gt; (y=%state$ff$and_2)</li>
+  <li id="L29">  cell state$ff$or_2 or (a=%state$fsm[0:0], b=%state$fsm[1:1]) -&gt; (y=%state$ff$or_2)</li>
+  <li id="L30">  cell state$ff$or_3 or (a=%state$ff$or_2, b=%state$fsm[2:2]) -&gt; (y=%state$ff$or_3)</li>
+  <li id="L31">  cell state$ff$not not (a=%state$ff$or_3) -&gt; (y=%state$ff$not)</li>
+  <li id="L32">  cell state$ff$or_4 or (a=%state$ff$and_2, b=%state$ff$not) -&gt; (y=%state$ff$or_4)</li>
+  <li id="L33">  cell state$ff$or_5 or (a=%state$ff$or, b=%state$ff$or_4) -&gt; (y=%state$ff$or_5)</li>
+  <li id="L34">  cell state$ff dff pos en srst pos 3&#39;d1 (clk=%clk, d=%state$pmux$fsm, en=%state$ff$or_5, rst=%rst) -&gt; (q=%state$fsm)</li>
+  <li id="L35">  cell state$pmux$fsm pmux (a=3&#39;d1, b=9&#39;d98, s=%state$fsm) -&gt; (y=%state$pmux$fsm)</li>
+  <li id="L36">end</li>
+  <li id="L37"></li>
 </ol>
     </main>
   </body>
