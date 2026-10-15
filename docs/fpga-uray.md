@@ -912,8 +912,33 @@ all. Neither stuck pixels nor misplaced words explain the 30 answers
 recorded. The likely cause is the write path, which took a pin, two
 lookup tables and a register across the die in one clock; the EMIO
 design held its data still for several clocks before latching it, and
-never needed that. The router knows nothing of delay. A version that
-registers every input pin before any logic reads it is being built.
+never needed that. The router knows nothing of delay.
+
+**That was it.** A version that registers every pin coming from the
+processor before any logic reads it — write address, data, strobes,
+the valid and ready bits, the read address — and otherwise the same
+network and slave (8 148 instances, routed in 5 hours 4 minutes;
+1 037 537 set bits, every one decoded) answers every image at 100 MHz:
+
+| `PL_CLK0` | One read | One store (posted) | Per image | Bit-exact |
+|---|---|---|---|---|
+| 100 MHz | 203 ns | 30 ns | 1.26 µs | 10 000 / 10 000, accuracy 71.07 % |
+| 125 MHz | | | 1.14 µs | 1 255 / 2 000 |
+| 150 MHz | | | 1.05 µs | 640 / 2 000 |
+| 187.5 MHz | | | 0.97 µs | 1 243 / 2 000 |
+
+The extra register costs a cycle each way, which is the 20 ns more a
+read takes and why 100 MHz is slower per image than the unregistered
+design at 100 MHz claimed to be — that one was fast and wrong. Above
+100 MHz it fails again. Nothing there was expected to work: the slave
+takes the network's answer a fixed four clocks after the start, and the
+network needs 37 ns, so at 125 MHz the answer is taken before it is
+ready. That is a property of this slave, not a limit of the port.
+
+So the measured figure for this network on this part is **1.26 µs an
+image from a C program on the processor, 85 times faster than over
+EMIO**, and of that the network is 37 ns; the rest is eleven bus
+transactions.
 
 ## What remains, in order
 

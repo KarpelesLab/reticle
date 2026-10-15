@@ -7,7 +7,8 @@
 # load, capture, hold and synchronous reset; and 32-stage ripple counters
 # of FDREs and inverters at 100 and 300 MHz on the processor's clocks.
 # On 2026-10-15, an AXI slave on M_AXI_HPM0_LPD, read and written by
-# Linux at 0x8000_0000, at 50 MHz (not yet at 100: docs/fpga-uray.md).
+# Linux at 0x8000_0000, at 100 MHz once every pin from the processor is registered
+# before logic reads it (docs/fpga-uray.md).
 # Everything else a 7-series file declares — carry chains, wide muxes,
 # DSPs, block RAMs, LUT RAMs, the other flip-flop primitives, I/O pads —
 # is absent on purpose: a primitive Reticle cannot place correctly is
