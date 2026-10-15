@@ -47,7 +47,7 @@
 //! pin order, and the priority queue breaks ties by node id, so the same
 //! placement always produces the same routing.
 
-use std::collections::{BTreeSet, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::error::Error;
 use std::fmt;
 
@@ -221,6 +221,81 @@ pub struct RouteOptions {
     /// still see the history and present costs every other node has
     /// accumulated.
     pub reroute_congested_only: bool,
+    /// What makes the router timing-driven, or `None` for a router that
+    /// minimises wire alone; see [`Timing`].
+    pub timing: Option<Timing>,
+}
+
+/// What the router needs to weigh delay against congestion.
+///
+/// This is the criticality of VPR's timing-driven router (Betz, Rose and
+/// Marquardt, 1999) on top of PathFinder. After each pass a static timing
+/// analysis over the routed netlist gives every connection a slack, and
+/// its criticality is `1 - slack / longest path`: one on the longest path,
+/// falling towards zero the more slack it has. On the next pass a
+/// connection pays for each node it enters
+///
+/// ```text
+/// criticality * delay(n) + (1 - criticality) * cost(n)
+/// ```
+///
+/// with `cost(n)` the congestion cost of this module's header, so a
+/// critical connection takes the fast path and a slack one the
+/// uncongested one. Its start counts too: a sink joining the tree at a
+/// node far from the source inherits the delay to that node.
+///
+/// **The delays are a model, not a measurement.** They are numbers the
+/// caller chose for each node and for a lookup table, in units only the
+/// ratio of which matters; the analysis is as good as they are, and what
+/// it reports ([`Iteration::critical`]) is in the same units.
+#[derive(Clone, Debug)]
+pub struct Timing {
+    /// Each node's delay, by node id, in the caller's unit. A node not
+    /// listed costs nothing.
+    pub node_delay: Vec<u32>,
+    /// The delay through an instance [`Timing::combinational`] marks, input
+    /// to output, in the same unit.
+    pub cell_delay: u32,
+    /// The instances whose outputs follow their inputs within a cycle, by
+    /// instance index; every other instance starts and ends paths. Every
+    /// input of a combinational instance is taken to reach every output,
+    /// which is what a lookup table does.
+    pub combinational: Vec<bool>,
+    /// Pin roles that are not data, and that the analysis leaves out: a
+    /// flip-flop's clock pin ends no path, and the clock network's delay
+    /// is skew, which this does not model.
+    pub clock_roles: Vec<String>,
+    /// The highest criticality any connection is given, below one so that
+    /// congestion still costs a critical connection something.
+    pub max_criticality: f64,
+    /// How many passes to make at least, so that the analysis of one pass
+    /// steers another: a design that routes cleanly at the first pass
+    /// would otherwise never see its timing.
+    pub passes: u32,
+    /// After the first pass, reroute also every signal one of whose
+    /// connections is at least this critical, even when
+    /// [`RouteOptions::reroute_congested_only`] would leave it.
+    pub reroute_above: f64,
+}
+
+impl Timing {
+    /// Timing for `netlist` with every node delaying by `node_delay`,
+    /// `lut` and `carry` instances combinational and `clk` pins left out.
+    pub fn for_netlist(netlist: &Netlist, node_delay: Vec<u32>, cell_delay: u32) -> Timing {
+        Timing {
+            node_delay,
+            cell_delay,
+            combinational: netlist
+                .instances
+                .iter()
+                .map(|i| matches!(i.kind.as_str(), "lut" | "carry"))
+                .collect(),
+            clock_roles: vec!["clk".to_owned()],
+            max_criticality: 0.99,
+            passes: 4,
+            reroute_above: 0.9,
+        }
+    }
 }
 
 impl Default for RouteOptions {
@@ -235,6 +310,7 @@ impl Default for RouteOptions {
             network: Vec::new(),
             network_signals: Vec::new(),
             reroute_congested_only: false,
+            timing: None,
         }
     }
 }
@@ -432,6 +508,9 @@ pub struct Iteration {
     pub total_overuse: usize,
     /// How many pips the routing used at the end of the iteration.
     pub pips: usize,
+    /// The longest path the timing analysis found after it, in
+    /// [`Timing`]'s unit, or `None` when the router is not timing-driven.
+    pub critical: Option<u64>,
 }
 
 /// What [`route`] did.
@@ -461,11 +540,17 @@ impl RoutingReport {
         use std::fmt::Write as _;
         let mut out = String::from("routing:\n");
         for it in &self.iterations {
-            let _ = writeln!(
+            let _ = write!(
                 out,
                 "  iteration {}: {} pips, {} overused node(s), {} total overuse",
                 it.index, it.pips, it.overused_nodes, it.total_overuse
             );
+            match it.critical {
+                Some(delay) => {
+                    let _ = writeln!(out, ", longest path {delay}");
+                }
+                None => out.push('\n'),
+            }
         }
         let _ = writeln!(
             out,
@@ -516,11 +601,20 @@ struct Geometry {
     global: bool,
     /// True when it is one of [`RouteOptions::network`]'s nodes.
     reserved: bool,
+    /// Its [`Timing::node_delay`] in units of cost: see [`delay_scale`].
+    delay: f32,
 }
 
 impl Geometry {
     /// The table for a whole graph.
-    fn of(graph: &RoutingGraph, base: &[f32], reserved: &[bool]) -> Vec<Geometry> {
+    fn of(
+        graph: &RoutingGraph,
+        base: &[f32],
+        reserved: &[bool],
+        timing: Option<&Timing>,
+    ) -> Vec<Geometry> {
+        let delays = timing.map_or(&[][..], |t| &t.node_delay[..]);
+        let scale = delay_scale(graph.nodes.len(), base, delays);
         graph
             .nodes
             .iter()
@@ -531,6 +625,8 @@ impl Geometry {
                 base: base.get(index).copied().unwrap_or(1.0),
                 global: wire.global,
                 reserved: reserved.get(index).copied().unwrap_or(false),
+                #[allow(clippy::cast_possible_truncation, reason = "a delay in cost units")]
+                delay: (f64::from(delays.get(index).copied().unwrap_or(0)) * scale) as f32,
             })
             .collect()
     }
@@ -630,14 +726,19 @@ pub fn route(
             // says they are, so the router sees them as it sees any other
             // fan-out.
             let nodes = nodes_of(netlist, graph, placement, *pin)?;
-            let pin = &netlist.pins[*pin];
+            let index = *pin;
+            let pin = &netlist.pins[index];
             let name = format!(
                 "{}.{}[{}]",
                 netlist.instances[pin.instance].name, pin.port, pin.bit
             );
             for node in nodes {
-                if node != source && !sinks.iter().any(|(n, _)| *n == node) {
-                    sinks.push((node, name.clone()));
+                if node != source && !sinks.iter().any(|s: &Sink| s.node == node) {
+                    sinks.push(Sink {
+                        node,
+                        name: name.clone(),
+                        pin: index,
+                    });
                 }
             }
         }
@@ -649,7 +750,12 @@ pub fn route(
     }
 
     let mut state = State::new(physical_nodes(graph));
-    let geometry = Geometry::of(graph, &options.node_base, &options.network);
+    let geometry = Geometry::of(
+        graph,
+        &options.node_base,
+        &options.network,
+        options.timing.as_ref(),
+    );
     // The node every outgoing pip reaches, in the order
     // [`RoutingGraph::outgoing`] hands the pips over, so the inner loop of
     // the expansion walks two sequential arrays instead of chasing a
@@ -669,10 +775,20 @@ pub fn route(
     let mut report = RoutingReport::default();
     let mut present = options.present_factor;
 
+    // Each signal's sinks' criticality, in `terminals` order, all zero
+    // until a pass has been analysed.
+    let mut criticality: Vec<Vec<f64>> =
+        terminals.iter().map(|t| vec![0.0; t.sinks.len()]).collect();
     for index in 1..=options.max_iterations {
-        for terminals in &terminals {
+        for (which, terminals) in terminals.iter().enumerate() {
+            let critical = options.timing.as_ref().is_some_and(|timing| {
+                criticality[which]
+                    .iter()
+                    .any(|c| *c >= timing.reroute_above)
+            });
             if index > 1
                 && options.reroute_congested_only
+                && !critical
                 && routing.routes[terminals.signal].as_ref().is_some_and(|r| {
                     state
                         .roots(&r.nodes)
@@ -690,6 +806,7 @@ pub fn route(
                 &state,
                 &mut scratch,
                 terminals,
+                &criticality[which],
                 present,
                 options,
                 netlist,
@@ -700,13 +817,20 @@ pub fn route(
             routing.routes[terminals.signal] = Some(route);
         }
         let (overused_nodes, total_overuse) = state.overuse();
+        let critical = options.timing.as_ref().map(|timing| {
+            let (sinks, longest) = analyse(netlist, graph, &terminals, &routing, timing);
+            criticality = sinks;
+            longest
+        });
         report.iterations.push(Iteration {
             index,
             overused_nodes,
             total_overuse,
             pips: routing.pip_count(),
+            critical,
         });
-        if overused_nodes == 0 {
+        let passes = options.timing.as_ref().map_or(0, |t| t.passes);
+        if overused_nodes == 0 && index >= passes {
             break;
         }
         for node in 0..graph.nodes.len() {
@@ -748,6 +872,202 @@ pub fn route(
     report.queued = scratch.queued;
     report.nodes = state.occupancy.iter().filter(|c| **c > 0).count();
     Ok((routing, report))
+}
+
+/// What one unit of [`Timing::node_delay`] costs, so that a critical
+/// connection weighs delay and an uncritical one congestion on the same
+/// scale: the mean base cost of the nodes that have a delay, over their
+/// mean delay. A wire of average delay then costs what a wire of average
+/// base cost does.
+fn delay_scale(nodes: usize, base: &[f32], delays: &[u32]) -> f64 {
+    let (mut cost, mut delay) = (0.0, 0.0);
+    for node in 0..nodes {
+        let d = delays.get(node).copied().unwrap_or(0);
+        if d > 0 {
+            cost += f64::from(base.get(node).copied().unwrap_or(1.0));
+            delay += f64::from(d);
+        }
+    }
+    if delay > 0.0 { cost / delay } else { 0.0 }
+}
+
+/// Static timing analysis of a routing: every connection's criticality,
+/// by signal in `terminals` order and sink in its order, and the longest
+/// path, in [`Timing`]'s unit.
+///
+/// A path starts at an output of an instance [`Timing::combinational`]
+/// does not mark — a flip-flop, a pad, the processor — at time zero, and
+/// ends at an input of one. A connection's delay is the sum of the
+/// [`Timing::node_delay`] of the nodes from its source to its sink along
+/// the routed tree, the source's own excluded. A combinational loop is
+/// broken where it is met, which under-reports it rather than looping.
+fn analyse(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    terminals: &[Terminals],
+    routing: &Routing,
+    timing: &Timing,
+) -> (Vec<Vec<f64>>, u64) {
+    let pins = netlist.pins.len();
+    let combinational =
+        |instance: usize| timing.combinational.get(instance).copied().unwrap_or(false);
+    let timed = |pin: usize| {
+        !timing
+            .clock_roles
+            .iter()
+            .any(|r| *r == netlist.pins[pin].role)
+    };
+    // Each input pin's connection delay.
+    let mut wire = vec![0u64; pins];
+    for terminals in terminals {
+        let Some(route) = routing.routes[terminals.signal].as_ref() else {
+            continue;
+        };
+        let mut delay: HashMap<NodeId, u64> = HashMap::new();
+        delay.insert(route.source, 0);
+        for pip in &route.pips {
+            let pip = graph.pip(*pip);
+            let to = delay.get(&pip.from).copied().unwrap_or(0)
+                + u64::from(timing.node_delay.get(pip.to as usize).copied().unwrap_or(0));
+            delay.insert(pip.to, to);
+        }
+        for sink in &terminals.sinks {
+            let d = delay.get(&sink.node).copied().unwrap_or(0);
+            wire[sink.pin] = wire[sink.pin].max(d);
+        }
+    }
+    let driver = |pin: usize| -> Option<usize> {
+        netlist.pins[pin]
+            .signal
+            .and_then(|s| netlist.signals[s].driver)
+    };
+    // The instances in an order in which every combinational instance
+    // comes after the combinational instances driving it.
+    let mut waiting = vec![0usize; netlist.instances.len()];
+    for (index, instance) in netlist.instances.iter().enumerate() {
+        if !combinational(index) {
+            continue;
+        }
+        for pin in &instance.pins {
+            if !netlist.pins[*pin].output
+                && timed(*pin)
+                && driver(*pin).is_some_and(|d| combinational(netlist.pins[d].instance))
+            {
+                waiting[index] += 1;
+            }
+        }
+    }
+    let mut order: Vec<usize> = (0..netlist.instances.len())
+        .filter(|i| waiting[*i] == 0)
+        .collect();
+    let mut placed = vec![false; netlist.instances.len()];
+    for i in &order {
+        placed[*i] = true;
+    }
+    let mut next = 0;
+    loop {
+        while next < order.len() {
+            let instance = order[next];
+            next += 1;
+            if !combinational(instance) {
+                continue;
+            }
+            for pin in &netlist.instances[instance].pins {
+                let pin = &netlist.pins[*pin];
+                let Some(signal) = pin.signal.filter(|_| pin.output) else {
+                    continue;
+                };
+                for sink in &netlist.signals[signal].sinks {
+                    let reader = netlist.pins[*sink].instance;
+                    if combinational(reader) && timed(*sink) && !placed[reader] {
+                        waiting[reader] = waiting[reader].saturating_sub(1);
+                        if waiting[reader] == 0 {
+                            placed[reader] = true;
+                            order.push(reader);
+                        }
+                    }
+                }
+            }
+        }
+        // A loop: take the first instance it holds up, and go on.
+        match (0..netlist.instances.len()).find(|i| !placed[*i]) {
+            Some(i) => {
+                placed[i] = true;
+                order.push(i);
+            }
+            None => break,
+        }
+    }
+    // Arrival at every output pin.
+    let mut arrival = vec![0u64; pins];
+    let arrives =
+        |arrival: &[u64], pin: usize| -> u64 { driver(pin).map_or(0, |d| arrival[d]) + wire[pin] };
+    for instance in &order {
+        if !combinational(*instance) {
+            continue;
+        }
+        let pins = &netlist.instances[*instance].pins;
+        let latest = pins
+            .iter()
+            .filter(|p| !netlist.pins[**p].output && timed(**p))
+            .map(|p| arrives(&arrival, *p))
+            .max()
+            .unwrap_or(0)
+            + u64::from(timing.cell_delay);
+        for pin in pins {
+            if netlist.pins[*pin].output {
+                arrival[*pin] = latest;
+            }
+        }
+    }
+    let mut longest = 0;
+    for (index, pin) in netlist.pins.iter().enumerate() {
+        if !pin.output && timed(index) && !combinational(pin.instance) {
+            longest = longest.max(arrives(&arrival, index));
+        }
+    }
+    // Required time at every input pin, backwards.
+    let mut required = vec![longest; pins];
+    for instance in order.iter().rev() {
+        if !combinational(*instance) {
+            continue;
+        }
+        let pins = &netlist.instances[*instance].pins;
+        let mut latest = longest;
+        for pin in pins.iter().filter(|p| netlist.pins[**p].output) {
+            let Some(signal) = netlist.pins[*pin].signal else {
+                continue;
+            };
+            for sink in &netlist.signals[signal].sinks {
+                if timed(*sink) {
+                    latest = latest.min(required[*sink].saturating_sub(wire[*sink]));
+                }
+            }
+        }
+        let latest = latest.saturating_sub(u64::from(timing.cell_delay));
+        for pin in pins.iter().filter(|p| !netlist.pins[**p].output) {
+            required[*pin] = latest;
+        }
+    }
+    let criticality = terminals
+        .iter()
+        .map(|terminals| {
+            terminals
+                .sinks
+                .iter()
+                .map(|sink| {
+                    if longest == 0 || !timed(sink.pin) {
+                        return 0.0;
+                    }
+                    let slack = required[sink.pin].saturating_sub(arrives(&arrival, sink.pin));
+                    #[allow(clippy::cast_precision_loss, reason = "a ratio of delays")]
+                    let ratio = slack as f64 / longest as f64;
+                    (1.0 - ratio).clamp(0.0, timing.max_criticality)
+                })
+                .collect()
+        })
+        .collect();
+    (criticality, longest)
 }
 
 /// How many pips forward [`contention`] looks for the cell pins a wire
@@ -987,8 +1307,18 @@ struct Terminals {
     signal: usize,
     /// The node its driver reaches.
     source: NodeId,
-    /// The nodes its sinks reach, each with a name for diagnostics.
-    sinks: Vec<(NodeId, String)>,
+    /// The nodes its sinks reach.
+    sinks: Vec<Sink>,
+}
+
+/// One node a signal has to reach.
+struct Sink {
+    node: NodeId,
+    /// `cell.port[bit]`, for diagnostics.
+    name: String,
+    /// The pin, as an index into [`Netlist::pins`]; one pin may reach
+    /// several nodes.
+    pin: usize,
 }
 
 /// Routes one signal onto a tree that starts at its source.
@@ -1000,31 +1330,51 @@ fn route_one(
     state: &State,
     scratch: &mut Scratch,
     terminals: &Terminals,
+    criticality: &[f64],
     present: f64,
     options: &RouteOptions,
     netlist: &Netlist,
 ) -> Result<Route, RouteError> {
     let source = terminals.source;
     let signal = terminals.signal;
-    let mut tree: BTreeSet<NodeId> = BTreeSet::new();
-    tree.insert(source);
+    // Each tree node's delay from the source, in cost units, which is
+    // where a critical sink joining the tree there starts.
+    let mut tree: BTreeMap<NodeId, f64> = BTreeMap::new();
+    tree.insert(source, 0.0);
     let mut pips: Vec<PipId> = Vec::new();
     let barred = !options
         .network_signals
         .get(signal)
         .copied()
         .unwrap_or(options.network_signals.is_empty());
-    for (sink, name) in &terminals.sinks {
+    // The most critical sinks first, so that they have the tree's choice
+    // of trunk; with no timing every criticality is zero and the order is
+    // the netlist's.
+    let mut order: Vec<usize> = (0..terminals.sinks.len()).collect();
+    order.sort_by(|a, b| {
+        let (a, b) = (
+            criticality.get(*a).copied().unwrap_or(0.0),
+            criticality.get(*b).copied().unwrap_or(0.0),
+        );
+        b.total_cmp(&a)
+    });
+    for which in order {
+        let sink = &terminals.sinks[which];
+        let critical = criticality.get(which).copied().unwrap_or(0.0);
         let Some(path) = maze(
-            graph, geometry, edges, state, scratch, &tree, *sink, present, options, barred,
+            graph, geometry, edges, state, scratch, &tree, sink.node, critical, present, options,
+            barred,
         ) else {
             return Err(RouteError::Unroutable {
                 signal: netlist.signals[signal].name.clone(),
-                sink: name.clone(),
+                sink: sink.name.clone(),
             });
         };
         for pip in path {
-            tree.insert(graph.pip(pip).to);
+            let pip_ = graph.pip(pip);
+            let delay = tree.get(&pip_.from).copied().unwrap_or(0.0)
+                + f64::from(geometry[pip_.to as usize].delay);
+            tree.insert(pip_.to, delay);
             pips.push(pip);
         }
     }
@@ -1032,7 +1382,7 @@ fn route_one(
         signal,
         source,
         pips,
-        nodes: tree.into_iter().collect(),
+        nodes: tree.into_keys().collect(),
     })
 }
 
@@ -1108,12 +1458,14 @@ fn maze(
     edges: (&[u32], &[NodeId]),
     state: &State,
     scratch: &mut Scratch,
-    tree: &BTreeSet<NodeId>,
+    tree: &BTreeMap<NodeId, f64>,
     sink: NodeId,
+    critical: f64,
     present: f64,
     options: &RouteOptions,
     barred: bool,
 ) -> Option<Vec<PipId>> {
+    let slack = 1.0 - critical;
     let target = geometry[sink as usize].tile;
     // The per-tile charge is scaled by the node's own base cost, because
     // the estimate has to stay below what the rest of the journey really
@@ -1128,14 +1480,17 @@ fn maze(
         let geometry = &geometry[node as usize];
         let (x, y) = geometry.nearest_tile(target.0, target.1);
         let distance = u64::from(x.abs_diff(target.0)) + u64::from(y.abs_diff(target.1));
-        options.astar_weight * distance as f64 * f64::from(geometry.base)
+        options.astar_weight
+            * distance as f64
+            * (slack * f64::from(geometry.base) + critical * f64::from(geometry.delay))
     };
 
     scratch.start();
     let mut heap: BinaryHeap<std::cmp::Reverse<(u64, NodeId)>> = BinaryHeap::new();
-    for node in tree {
-        let estimate = heuristic(*node);
-        scratch.set(*node, 0.0, estimate, PipId::MAX);
+    for (node, delay) in tree {
+        let start = critical * delay;
+        let estimate = start + heuristic(*node);
+        scratch.set(*node, start, estimate, PipId::MAX);
         heap.push(std::cmp::Reverse((score(estimate), *node)));
     }
     let (reach_start, reach) = edges;
@@ -1155,7 +1510,12 @@ fn maze(
             if barred && geometry[*next as usize].reserved {
                 continue;
             }
-            let step = state.node_cost(*next, geometry[*next as usize].base, present);
+            let at = &geometry[*next as usize];
+            let step = if critical > 0.0 {
+                slack * state.node_cost(*next, at.base, present) + critical * f64::from(at.delay)
+            } else {
+                state.node_cost(*next, at.base, present)
+            };
             let candidate = here + step;
             if candidate < scratch.cost_of(*next) {
                 let estimate = candidate + heuristic(*next);
@@ -1170,7 +1530,7 @@ fn maze(
     }
     let mut path = Vec::new();
     let mut node = sink;
-    while !tree.contains(&node) {
+    while !tree.contains_key(&node) {
         let pip = scratch.from[node as usize];
         if pip == PipId::MAX {
             return None;
@@ -1188,6 +1548,7 @@ mod tests {
     use crate::fpga::arch::{Arch, BelDecl, ConfigBit, PipDecl, TileType, WireDecl, WireRef};
     use crate::fpga::place::{Instance, NetPin, Signal};
     use crate::ir::{CellId, Id};
+    use std::collections::BTreeSet;
 
     /// A line of tiles, each with two source bels and two sink bels
     /// joined by `tracks` parallel tracks running the length of the row.
@@ -1775,6 +2136,166 @@ mod tests {
         };
         let (ignored, _) = route(&netlist, &graph, &placement, &options).unwrap();
         assert!(!on_second_row(&ignored));
+    }
+
+    /// [`Timing`]: a critical connection leaves a cheap long path for the
+    /// fast short one. This is `a_cheap_class_of_wire_is_taken_although_the_path_is_longer`
+    /// with the router told about delay: the second row is cheap, so the
+    /// first pass takes it, and the one connection there is is the longest
+    /// path, so the analysis makes it as critical as anything can be and
+    /// the next pass weighs its delay and takes the main row.
+    ///
+    /// It pins the reported longest path too, which is the analysis' sum:
+    /// one unit for the lookup table and one for each node after the
+    /// source. It would catch the criticality never reaching the cost (the
+    /// route would stay on the second row), the delay never reaching the
+    /// sum, or the router stopping before the analysis had been used. It
+    /// would not catch a wrong criticality of an uncritical connection:
+    /// there is only one connection, and `the_analysis_finds_the_longest_path_and_who_is_on_it`
+    /// is the test of that.
+    #[test]
+    fn a_critical_connection_takes_the_fast_path_over_the_cheap_one() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let on_second_row = |routing: &Routing| {
+            routing
+                .routes()
+                .any(|r| r.nodes.iter().any(|n| graph.wire(*n).tile.1 == 1))
+        };
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if wire.tile.1 == 1 {
+                base[index] = 0.05;
+            }
+        }
+        let options = RouteOptions {
+            node_base: base,
+            timing: Some(Timing::for_netlist(&netlist, vec![1; graph.nodes.len()], 1)),
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(!on_second_row(&routing), "{}", report.to_text());
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        let critical: Vec<u64> = report
+            .iterations
+            .iter()
+            .map(|i| i.critical.unwrap())
+            .collect();
+        // The cheap way: up, along nine tracks, down and in, and the table.
+        // The fast way: eight tracks and in, and the table.
+        let fast = u64::try_from(routing.pips(0).len()).unwrap() + 1;
+        assert_eq!(fast, 10);
+        assert!(critical[0] > fast, "{critical:?}");
+        assert_eq!(*critical.last().unwrap(), fast, "{critical:?}");
+        assert_eq!(report.iterations.len(), 4, "{}", report.to_text());
+        assert!(report.to_text().contains("longest path 10"));
+    }
+
+    /// The analysis on its own: a register drives two tables in a row into
+    /// another register, and straight into a third. With no wires routed,
+    /// the longest path is the two tables, every connection on it is as
+    /// critical as the cap allows, and the direct one has all the slack
+    /// there is. A loop of two tables is broken rather than looped on, and
+    /// a clock pin is left out: a clock's delay is skew, not a path. It
+    /// would catch arrival or required times summed
+    /// the wrong way, a missing cell delay, or a criticality that does not
+    /// fall with slack; it would not catch a wrong wire delay, which the
+    /// routed test above pins.
+    #[test]
+    fn the_analysis_finds_the_longest_path_and_who_is_on_it() {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let mut add = |name: &str, kind: &str, pins: &[(&str, bool, usize)]| {
+            let instance = netlist.instances.len();
+            let mut ids = Vec::new();
+            for (role, output, signal) in pins {
+                ids.push(netlist.pins.len());
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: name.to_owned(),
+                primitive: kind.to_uppercase(),
+                kind: kind.to_owned(),
+                pins: ids,
+                pin: None,
+            });
+        };
+        // Signals: 0 a.q, 1 t1.o, 2 t2.o, 3 the clock, 4 and 5 the loop.
+        add("a", "ff", &[("q", true, 0), ("clk", false, 3)]);
+        add(
+            "t1",
+            "lut",
+            &[("i0", false, 0), ("i1", false, 3), ("o", true, 1)],
+        );
+        add("t2", "lut", &[("i0", false, 1), ("o", true, 2)]);
+        add("b", "ff", &[("d", false, 2), ("clk", false, 3)]);
+        add("c", "ff", &[("d", false, 0), ("clk", false, 3)]);
+        add("pad", "io", &[("o", true, 3)]);
+        add("l1", "lut", &[("i0", false, 5), ("o", true, 4)]);
+        add("l2", "lut", &[("i0", false, 4), ("o", true, 5)]);
+        for signal in 0..6 {
+            netlist.signals.push(Signal {
+                name: format!("s{signal}"),
+                driver: netlist
+                    .pins
+                    .iter()
+                    .position(|p| p.output && p.signal == Some(signal)),
+                sinks: (0..netlist.pins.len())
+                    .filter(|p| !netlist.pins[*p].output && netlist.pins[*p].signal == Some(signal))
+                    .collect(),
+            });
+        }
+        let (_, graph) = line(1, 1);
+        let terminals: Vec<Terminals> = (0..6)
+            .map(|signal| Terminals {
+                signal,
+                source: 0,
+                sinks: netlist.signals[signal]
+                    .sinks
+                    .iter()
+                    .map(|pin| Sink {
+                        node: 0,
+                        name: String::new(),
+                        pin: *pin,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let routing = Routing::new(netlist.signals.len());
+        let mut timing = Timing::for_netlist(&netlist, Vec::new(), 10);
+        timing.max_criticality = 0.9;
+        let (criticality, longest) = analyse(&netlist, &graph, &terminals, &routing, &timing);
+        assert_eq!(longest, 20);
+        // a.q reaches t1 (on the path) and c (twenty units of slack).
+        assert_eq!(criticality[0], vec![0.9, 0.0]);
+        assert_eq!(criticality[1], vec![0.9]);
+        assert_eq!(criticality[2], vec![0.9]);
+        // The clock reaches a, t1, b and c. Its clock pins are left out;
+        // t1 takes it on a data pin, where it is data, and starts as early
+        // as a.q does.
+        assert_eq!(criticality[3], vec![0.0, 0.9, 0.0, 0.0]);
+        assert_eq!(criticality[4].len(), 1);
+        assert_eq!(criticality[5].len(), 1);
     }
 
     /// [`RouteOptions::network`] closes the cheap class to a signal

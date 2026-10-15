@@ -50,6 +50,17 @@ pub const ASTAR_WEIGHT: f64 = 2.0;
 /// contested signals rerouted, a late pass costs little.
 pub const MAX_ITERATIONS: u32 = 100;
 
+/// The model delay of a buffered wire, for the timing-driven router; see
+/// [`Board::node_delays`]. Its unit is a tenth of a hop and nothing more.
+pub const WIRE_DELAY: u32 = 10;
+
+/// The model delay of each further tile-piece of a wire.
+pub const PIECE_DELAY: u32 = 1;
+
+/// The model delay through a lookup table or a carry block, input to
+/// output: half a hop.
+pub const LUT_DELAY: u32 = 5;
+
 /// The horizontal distribution track that carries `PL_CLK0` in Vivado's
 /// clock network for the PYNQ base overlay. Measured on the ZCU104 at
 /// 100.001 MHz (`docs/fpga-uray.md`).
@@ -511,6 +522,24 @@ impl<'a> Board<'a> {
                     1.0
                 }
             })
+            .collect()
+    }
+
+    /// Each node's delay for the timing-driven router
+    /// (`Timing::node_delay`): [`WIRE_DELAY`] for a node a configurable pip
+    /// enters, which is a buffered wire, and [`PIECE_DELAY`] for each
+    /// further piece of it (see [`Board::node_bases`]), so a wire's delay
+    /// grows with its length but a hop dominates.
+    ///
+    /// **A model, not a measurement**: nobody has measured these wires'
+    /// delays, and Reticle reads no vendor timing. What it encodes is the
+    /// one thing taken as given — that a path is slow by its hops rather
+    /// than by its length — and it is judged by what it does to a
+    /// network's measured latency on the part (`docs/fpga-uray.md`).
+    pub fn node_delays(&self) -> Vec<u32> {
+        self.node_bases()
+            .iter()
+            .map(|base| if *base > 0.0 { WIRE_DELAY } else { PIECE_DELAY })
             .collect()
     }
 
@@ -1075,6 +1104,9 @@ pub struct ImplementOptions<'a> {
     /// How far east the region reaches, as an interconnect column
     /// ([`DEFAULT_EAST`] to [`MAX_EAST`]).
     pub east: u32,
+    /// Route timing-driven, with [`Board::node_delays`] and
+    /// [`LUT_DELAY`] as the delay model.
+    pub timing: bool,
 }
 
 /// The whole flow for a design `synthesize_for` has mapped onto
@@ -1096,7 +1128,8 @@ pub fn implement(
     options: &ImplementOptions<'_>,
 ) -> Result<Written, String> {
     let (oracle, place_options, east) = (options.oracle, options.place, options.east);
-    use crate::fpga::route::{RouteOptions, route};
+    let timing = options.timing;
+    use crate::fpga::route::{RouteOptions, Timing, route};
     use crate::fpga::{Netlist, bitstream, place};
 
     let mut board = Board::reaching(db, Some(PL_CLK0_TRACK), east).map_err(|e| e.to_string())?;
@@ -1126,10 +1159,12 @@ pub fn implement(
         astar_weight: ASTAR_WEIGHT,
         reroute_congested_only: true,
         max_iterations: MAX_ITERATIONS,
+        timing: timing.then(|| Timing::for_netlist(&netlist, board.node_delays(), LUT_DELAY)),
         ..RouteOptions::default()
     };
     let (routing, routed) =
         route(&netlist, &board.graph, &placement, &options).map_err(|e| e.to_string())?;
+    let longest = routed.iterations.last().and_then(|i| i.critical);
     let problems = routing.verify(&netlist, &board.graph, &placement);
     if !problems.is_empty() {
         return Err(format!(
@@ -1165,5 +1200,17 @@ pub fn implement(
             routed.pips
         ),
     );
+    if let Some(longest) = longest {
+        written.report.insert(
+            1,
+            format!(
+                "timing-driven over {} passes: longest path {longest} by the model \
+                 (a wire {WIRE_DELAY}, a piece of one {PIECE_DELAY}, a table {LUT_DELAY}), \
+                 {} at the first pass",
+                routed.iterations.len(),
+                routed.iterations[0].critical.unwrap_or(0)
+            ),
+        );
+    }
     Ok(written)
 }

@@ -853,8 +853,62 @@ Two things the build showed in passing. `--place-effort` 12 gave a
 bitstream byte-identical to the default 10: the placer clamps its moves
 per temperature at a million (`moves_for`), and at 7 689 instances any
 effort above 7 reaches it. And neither build was given a timing goal;
-the router knows nothing of delay, so 37 ns is what the placement
+the router knew nothing of delay, so 37 ns is what the placement
 happened to give, not what the part can do.
+
+## Timing-driven routing
+
+`reticle fpga --timing-driven` gives the router a delay to weigh against
+congestion (`route::Timing`). After each pass a static timing analysis
+over the routed netlist gives every connection a criticality, one on the
+longest path and falling with its slack. The next pass charges a
+connection `criticality × delay + (1 − criticality) × congestion` for
+each node it enters, routes a signal's most critical sinks first, and
+reroutes any signal with a connection at 0.9 or more even when nothing
+contends with it. That is VPR's timing-driven router on PathFinder,
+written from the published description.
+
+**The delays are a model, not a measurement.** Reticle reads no vendor
+timing for this die, so `Board::node_delays` charges 10 for each buffered
+wire (a node a configurable pip enters), 1 for each further tile-piece of
+it, and 5 for a lookup table: the one assumption is that a path is slow
+by its hops more than by its length. Whether that is good enough was
+settled on the part rather than argued.
+
+**Measured, 2026-10-15.** The same combinational network as above, from
+the same placement (the placer is deterministic and was not changed), so
+any difference is the routing. Both bitstreams were loaded the same
+afternoon and swept with the same harness; the untimed one reproduced
+its earlier figures to within 2 %.
+
+| `PL_CLK0` | Period | Untimed routing | Timing-driven |
+|---|---|---|---|
+| 41.67 MHz | 24 ns | | 822 / 2 000 |
+| 37.5 MHz | 26.7 ns | | 1 426 / 2 000 |
+| 33.3 MHz | 30 ns | 879 / 2 000 | 1 960 / 2 000 |
+| 31.25 MHz | 32 ns | 1 555 / 2 000 | 1 995 / 2 000 |
+| 30 MHz | 33.3 ns | 1 803 / 2 000 | 2 000, and 10 000 / 10 000 |
+| 27.78 MHz | 36 ns | 1 995 / 2 000 | 2 000 / 2 000 |
+| 26.79 MHz | 37.3 ns | 2 000 (earlier) | 2 000 / 2 000 |
+
+**The network answers within 33.3 ns rather than 37.3, about 11 %
+faster, and most images within 30 rather than 32.** The routing took
+1 129 485 pips against 1 068 663 (6 % more wire) and 56 passes against
+the untimed build's convergence, 6 hours 53 minutes against 2 hours 34;
+every set bit decoded.
+
+What the model reported is a warning about the model. Its longest path
+was 9 329 units after the first pass and **10 079** after the last, so
+by its own account the routing got worse while the part got faster. The
+first pass is not the untimed build (it is routed under the same timing
+options with every criticality still zero), so the two numbers do not
+compare the two builds either; but they do say the model's arithmetic
+is not the part's, and most likely that charging every tile-piece of a
+long wire over-counts the wires that are fastest per tile. The
+criticalities it hands out evidently point at the right connections
+more often than not. Calibrating the three numbers against the part —
+a ring oscillator, or this sweep on a design built to isolate one wire
+class — is what would turn the model into a measurement.
 
 ## Reaching the fabric over AXI
 
@@ -912,7 +966,8 @@ all. Neither stuck pixels nor misplaced words explain the 30 answers
 recorded. The likely cause is the write path, which took a pin, two
 lookup tables and a register across the die in one clock; the EMIO
 design held its data still for several clocks before latching it, and
-never needed that. The router knows nothing of delay.
+never needed that. The router knew nothing of delay then (see
+"Timing-driven routing").
 
 **That was it.** A version that registers every pin coming from the
 processor before any logic reads it — write address, data, strobes,

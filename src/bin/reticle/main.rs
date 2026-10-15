@@ -303,6 +303,10 @@ Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
                      column: 31 (the default, 11 520 lookup tables) up to
                      36 (26 880), for a design that does not fit. A wider
                      fabric takes longer to load and route.
+  --timing-driven    Weigh each connection's delay against congestion,
+                     by its criticality, and run at least four routing
+                     passes. The delays are a model, not a measurement:
+                     docs/fpga-uray.md says what it did on the part.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -703,6 +707,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-schedule",
                 "place-wide-moves",
                 "place-hot-start",
+                "timing-driven",
             ],
             repeated: &["param"],
         }
@@ -3093,6 +3098,7 @@ fn write_uray_bitstream(
             oracle: &oracle,
             place: &place,
             east,
+            timing: args.flag("timing-driven"),
         },
     )?;
     std::fs::write(path, &written.bit).map_err(|e| format!("cannot write `{path}`: {e}"))?;
