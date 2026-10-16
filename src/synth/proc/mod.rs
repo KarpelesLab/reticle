@@ -47,6 +47,7 @@
 //! (`$writememh`, or `$readmemh` outside an `initial` block).
 
 mod exec;
+mod split;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -95,13 +96,18 @@ impl Pass for ProcLower {
 
     fn run(&self, m: &mut Module, diags: &mut Diagnostics) -> PassStats {
         let mut stats = PassStats::default();
-        let processes = std::mem::take(&mut m.processes);
+        let mut processes = std::mem::take(&mut m.processes);
         if processes.is_empty()
             && !has_continuous_mem_read(m)
             && m.assigns.iter().all(|a| a.delay.is_none())
         {
             m.processes = processes;
             return stats;
+        }
+        let mut parts = Vec::new();
+        let split = split::split_shared_registers(m, &mut processes, &mut parts);
+        if split > 0 {
+            stats.bump("registers split between processes", split);
         }
         let reads: Vec<BTreeSet<NetId>> = processes.values().map(|p| process_reads(m, p)).collect();
         let base_external = external_reads(m);
@@ -165,6 +171,18 @@ impl Pass for ProcLower {
         }
         for p in kept {
             m.processes.push(p);
+        }
+        // An initial value of a split net belongs to its parts, which are
+        // the flip-flops now; an `initial` block set it on the net itself.
+        for (net, made) in parts {
+            if let Some(AttrValue::Const(init)) = m.nets[net].attrs.get("init").cloned() {
+                for (part, order) in made {
+                    let bits: Vec<_> = order.iter().map(|b| init.bit(*b)).collect();
+                    m.nets[part]
+                        .attrs
+                        .set("init", AttrValue::Const(Const::from_bits(&bits)));
+                }
+            }
         }
         lower_continuous_mem_reads(m, &mut stats);
         let mut delays = 0u64;

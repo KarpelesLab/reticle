@@ -1,0 +1,27 @@
+top split_bits
+
+module split_bits
+  net %clk u1 wire
+  net %rst u1 wire
+  net %a u6 wire
+  attr init = 6'd37
+  net %r u6 wire
+  net %y u6 wire
+  attr init = 1'd1
+  net %r$part u1 wire
+  attr init = 3'd2
+  net %r$part_2 u3 wire
+  attr init = 2'd2
+  net %r$part_3 u2 wire
+  port clk in %clk
+  port rst in %rst
+  port a in %a
+  port y out %y
+  assign %y = %r
+  assign %r[0:0] = %r$part
+  assign %r[3:1] = %r$part_2
+  assign %r[5:4] = %r$part_3
+  cell r$part$ff dff pos (clk=%clk, d=xor(%a[0:0], %r[5:5])) -> (q=%r$part)
+  cell r$part_2$ff dff pos srst pos 3'd5 (clk=%clk, d=add(%r[3:1], %a[3:1]), rst=%rst) -> (q=%r$part_2)
+  cell r$part_3$ff dff pos (clk=%clk, d={not(%a[5:5]), %r[0:0]}) -> (q=%r$part_3)
+end
