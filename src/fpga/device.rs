@@ -618,6 +618,13 @@ pub struct BelKind {
     /// Basys 3. Same source defect, one family has a mechanism for it and
     /// the other has not, and this is where that is written down.
     pub absorbs: Vec<String>,
+    /// The **port names** (not roles) that are outputs, written
+    /// `outputs O,LOCKED`. Only a primitive a design may instantiate by
+    /// name needs it: a black-box instance carries its connections and
+    /// nothing about which way they point, and a cell must have its
+    /// outputs apart from its inputs. Empty means the primitive is only
+    /// ever made by mapping, which knows.
+    pub outputs: Vec<String>,
 }
 
 impl BelKind {
@@ -634,6 +641,7 @@ impl BelKind {
             ff: None,
             io_dirs: Vec::new(),
             absorbs: Vec::new(),
+            outputs: Vec::new(),
         }
     }
 
@@ -2313,6 +2321,9 @@ fn write_bel(bel: &BelKind) -> String {
     if !bel.absorbs.is_empty() {
         line.push_str(&format!(" absorbs {}", join(&bel.absorbs)));
     }
+    if !bel.outputs.is_empty() {
+        line.push_str(&format!(" outputs {}", join(&bel.outputs)));
+    }
     line.push_str(&write_pairs("port", &bel.ports));
     write_params(&mut line, "param", &bel.params);
     for (condition, params) in &bel.cond_params {
@@ -2972,6 +2983,16 @@ impl<'a> Parser<'a> {
                     index += 1;
                     for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
                         bel.absorbs.push(word.to_owned());
+                    }
+                }
+                "outputs" => {
+                    let Some(token) = line.get(index) else {
+                        self.error(line.span, "expected port names after `outputs`");
+                        break;
+                    };
+                    index += 1;
+                    for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
+                        bel.outputs.push(word.to_owned());
                     }
                 }
                 "port" => bel.ports.extend(self.pairs(line, &mut index)),

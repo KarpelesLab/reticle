@@ -576,7 +576,7 @@ impl<'a> Flattener<'a> {
 /// The lvalue an instance connection denotes, if it denotes one: a net, a
 /// constant slice of one, or a concatenation of those. Nested slices are
 /// composed, so `%a[7:4][1:0]` becomes `%a[5:4]`.
-fn expr_to_lvalue(module: &Module, id: ExprId) -> Option<Lvalue> {
+pub(crate) fn expr_to_lvalue(module: &Module, id: ExprId) -> Option<Lvalue> {
     match &module.exprs.get(id)?.kind {
         ExprKind::Net(net) => Some(Lvalue::Net(*net)),
         ExprKind::Slice { base, hi, lo } => match expr_to_lvalue(module, *base)? {

@@ -1030,28 +1030,51 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
         return Vec::new();
     }
     (0..16u32)
-        .map(|n| ExtraBel {
-            name: format!("BUFGCTRL_X0Y{n}"),
-            kind: "gb",
-            pins: vec![
-                BelPin {
-                    role: "i",
-                    wire: format!("CLK_BUFG_BUFGCTRL{n}_I0"),
-                },
-                BelPin {
-                    role: "o",
-                    wire: format!("CLK_BUFG_BUFGCTRL{n}_O"),
-                },
-            ],
-            cells: vec![(
+        .map(|n| {
+            let feature = |name: &str| format!("BUFGCTRL.BUFGCTRL_X0Y{n}.{name}");
+            // The data pins and the output are the tile's own wires; the
+            // six controls are `CLK_BUFG_R_*`, each reached from an
+            // interconnect `IMUX` by an `always` pseudo-pip
+            // (`ppips_clk_bufg_{bot,top}_r.db`).
+            let data = |role: &'static str, pin: &str| BelPin {
+                role,
+                wire: format!("CLK_BUFG_BUFGCTRL{n}_{pin}"),
+            };
+            let control = |role: &'static str, pin: &str| BelPin {
+                role,
+                wire: format!("CLK_BUFG_R_BUFGCTRL{n}_{pin}"),
+            };
+            let mut cells: Vec<(&'static str, Vec<String>)> = vec![(
                 "BUFG",
                 vec![
-                    format!("BUFGCTRL.BUFGCTRL_X0Y{n}.IN_USE"),
-                    format!("BUFGCTRL.BUFGCTRL_X0Y{n}.IS_IGNORE1_INVERTED"),
-                    format!("BUFGCTRL.BUFGCTRL_X0Y{n}.ZINV_CE0"),
-                    format!("BUFGCTRL.BUFGCTRL_X0Y{n}.ZINV_S0"),
+                    feature("IN_USE"),
+                    feature("IS_IGNORE1_INVERTED"),
+                    feature("ZINV_CE0"),
+                    feature("ZINV_S0"),
                 ],
-            )],
+            )];
+            // One entry per feature, for `super::bufg`, which decides them
+            // per cell; no primitive is named like these, so nothing else
+            // sets them.
+            for name in super::bufg::FEATURES {
+                cells.push((name, vec![feature(name.trim_start_matches('='))]));
+            }
+            ExtraBel {
+                name: format!("BUFGCTRL_X0Y{n}"),
+                kind: "gb",
+                pins: vec![
+                    data("i", "I0"),
+                    data("i1", "I1"),
+                    data("o", "O"),
+                    control("ce", "CE0"),
+                    control("ce1", "CE1"),
+                    control("s0", "S0"),
+                    control("s1", "S1"),
+                    control("ignore0", "IGNORE0"),
+                    control("ignore1", "IGNORE1"),
+                ],
+                cells,
+            }
         })
         .collect()
 }

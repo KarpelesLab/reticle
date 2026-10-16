@@ -139,6 +139,11 @@ pub enum FlowError {
     /// this point would be about the real problem. The instances are named,
     /// with their spans, in the diagnostics the caller passed in.
     UndefinedModule,
+    /// A device primitive is instantiated by name in a way the flow cannot
+    /// build: one whose port directions the device does not record, or an
+    /// output wired to something that is not a net. Each instance is
+    /// named in the diagnostics the caller passed in.
+    Instantiation,
     /// The hierarchy under the module could not be flattened (a
     /// recursive hierarchy, a connection that cannot be inlined), so
     /// nothing was mapped. The reasons are in the diagnostics the caller
@@ -184,6 +189,10 @@ impl fmt::Display for FlowError {
             FlowError::Hierarchy => {
                 f.write_str("the design could not be flattened; see the reported errors")
             }
+            FlowError::Instantiation => f.write_str(
+                "a device primitive is instantiated in a way this flow cannot build; see the \
+                 reported errors",
+            ),
             FlowError::UndefinedModule => f.write_str(
                 "the design instantiates a module nothing defines; see the reported errors",
             ),
@@ -501,6 +510,12 @@ pub fn synthesize_for(
         }
     }
 
+    // 0b. A primitive the design instantiates by name — a `BUFGMUX`, an
+    // `IBUFG` — is a black box until here; every later step wants a cell.
+    if primitive_instances(design, module, device, diags) > 0 {
+        return Err(FlowError::Instantiation);
+    }
+
     // 1. Generic synthesis. Its own diagnostics decide whether the rest
     // of the flow is worth running at all, so they are collected apart
     // from whatever the caller already had.
@@ -578,6 +593,157 @@ pub fn synthesize_for(
         );
     }
     Ok(report)
+}
+
+/// Turns every instance of a device primitive left in `module` into a
+/// cell of that primitive, and returns how many could not be.
+///
+/// A primitive a design names (`BUFGMUX mx (.I0(a), .I1(b), .S(s),
+/// .O(o))`) elaborates to an instance of a module nothing declares, and
+/// survives flattening as one, because nothing knows what is inside it.
+/// Every step after this one works on cells — the netlist the placer
+/// reads refuses an instance outright — so this is where it becomes the
+/// [`CellKind::Blackbox`] cell mapping would have made.
+///
+/// A cell keeps its inputs apart from its outputs, and an instance does
+/// not say which is which. The device does, for a primitive meant to be
+/// instantiated: its `bel` line's `outputs` clause
+/// ([`super::device::BelKind::outputs`]). An output wired to part of a
+/// net gets a net of its own, assigned into that part.
+///
+/// An input or output IO buffer instantiated by name — `IBUF`, `IBUFG`,
+/// `OBUF` — is a wire here: every port of the top gets its buffer from
+/// [`super::map`] already, with the standard its constraint gives, and
+/// a second buffer would sit in the fabric with no pad to reach.
+#[cfg(feature = "synth")]
+fn primitive_instances(
+    design: &mut Design,
+    module: ModuleId,
+    device: &Device,
+    diags: &mut Diagnostics,
+) -> usize {
+    use crate::ir::{Assign, Attrs, Cell, ExprKind, InstanceId, ModuleRef, Name, Net, NetKind};
+    let Some(m) = design.modules.get_mut(module) else {
+        return 0;
+    };
+    let mut refused = 0usize;
+    let ids: Vec<InstanceId> = m.instances.iter().map(|(id, _)| id).collect();
+    let mut done: Vec<InstanceId> = Vec::new();
+    for id in ids {
+        let inst = m.instances[id].clone();
+        let ModuleRef::Unresolved(primitive) = &inst.module else {
+            continue;
+        };
+        let Some(bel) = device.bels.iter().find(|b| b.name == primitive.as_str()) else {
+            continue;
+        };
+        let pass_through = bel.role == super::device::BelRole::Io
+            && matches!(bel.io_dirs.as_slice(), [d] if d == "in" || d == "out");
+        if pass_through {
+            let (from, to) = match (bel.port("pad"), bel.port("din"), bel.port("dout")) {
+                (Some(pad), Some(din), _) if bel.io_dirs[0] == "in" => (pad, din),
+                (Some(pad), _, Some(dout)) => (dout, pad),
+                _ => continue,
+            };
+            let (Some(value), Some(target)) = (inst.connection(from), inst.connection(to)) else {
+                done.push(id);
+                continue;
+            };
+            let Some(target) = crate::ir::hier::expr_to_lvalue(m, target) else {
+                refused += 1;
+                diags.push(
+                    Diagnostic::error(format!(
+                        "`{}`: the `{to}` of a `{primitive}` must be wired to a net",
+                        inst.name
+                    ))
+                    .with_span(inst.span),
+                );
+                continue;
+            };
+            m.assigns.push(Assign {
+                target,
+                value,
+                delay: None,
+                attrs: Attrs::new(),
+                span: inst.span,
+            });
+            done.push(id);
+            continue;
+        }
+        if bel.outputs.is_empty() {
+            refused += 1;
+            diags.push(
+                Diagnostic::error(format!(
+                    "`{}` instantiates `{primitive}`, which `{}` provides only through mapping",
+                    inst.name, device.name
+                ))
+                .with_span(inst.span)
+                .with_note(
+                    "the device does not record which of its ports are outputs, so the instance \
+                     cannot become a cell; describe the logic and let mapping infer it",
+                ),
+            );
+            continue;
+        }
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for (port, expr) in &inst.connections {
+            if !bel.outputs.iter().any(|o| o == port.as_str()) {
+                inputs.push((port.clone(), *expr));
+                continue;
+            }
+            if let ExprKind::Net(net) = m.expr(*expr).kind {
+                outputs.push((port.clone(), net));
+                continue;
+            }
+            let Some(target) = crate::ir::hier::expr_to_lvalue(m, *expr) else {
+                refused += 1;
+                diags.push(
+                    Diagnostic::error(format!(
+                        "`{}`: output `{port}` of a `{primitive}` must be wired to a net",
+                        inst.name
+                    ))
+                    .with_span(inst.span),
+                );
+                continue;
+            };
+            let ty = m.expr(*expr).ty.clone();
+            let net = m.nets.push(Net {
+                name: Name::new(format!("{}${port}", inst.name)),
+                ty,
+                kind: NetKind::Wire,
+                attrs: Attrs::new(),
+                span: inst.span,
+            });
+            let value = m.add_expr(crate::ir::Expr::new(
+                ExprKind::Net(net),
+                m.nets[net].ty.clone(),
+                inst.span,
+            ));
+            m.assigns.push(Assign {
+                target,
+                value,
+                delay: None,
+                attrs: Attrs::new(),
+                span: inst.span,
+            });
+            outputs.push((port.clone(), net));
+        }
+        m.cells.push(Cell {
+            name: inst.name.clone(),
+            kind: CellKind::Blackbox(primitive.clone()),
+            inputs,
+            outputs,
+            params: inst.params.clone(),
+            attrs: inst.attrs.clone(),
+            span: inst.span,
+        });
+        done.push(id);
+    }
+    if !done.is_empty() {
+        m.instances.retain(|id, _| !done.contains(&id));
+    }
+    refused
 }
 
 /// The modules that are not black boxes and that `module` does not reach

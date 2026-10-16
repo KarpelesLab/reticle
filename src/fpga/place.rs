@@ -519,79 +519,85 @@ impl Netlist {
                 connections.push((port.as_str().to_owned(), true, bits));
             }
             for (port, output, bits) in connections {
-                let base = bases
+                let mut roles_of_port: Vec<Option<String>> = bases
                     .iter()
-                    .find(|(p, _)| *p == port)
-                    .map(|(_, b)| b.clone());
-                let width = u32::try_from(bits.len()).unwrap_or(u32::MAX);
-                for (index, bit) in bits.iter().enumerate() {
-                    let index = u32::try_from(index).unwrap_or(u32::MAX);
-                    let role = match &base {
-                        // A one-bit port's pin is usually the base with no
-                        // index at all -- a flip-flop's `d`, a block RAM's
-                        // `we` -- and the architecture is the only thing
-                        // that knows which. Asking it, rather than reading
-                        // the width, is the whole of this: a `DP16KD` in
-                        // 1-bit mode has a one-bit `DOB` whose pin is
-                        // still `p0_dout0`, so dropping the index named a
-                        // role the fabric has no wire for, the pin went to
-                        // `off_fabric`, and the net was left with nothing
-                        // driving it. See [`Netlist::driverless`] for what
-                        // that costs on a part.
-                        Some(base)
-                            if width == 1 && roles.contains(&(kind.clone(), base.clone())) =>
-                        {
-                            base.clone()
-                        }
-                        Some(base) => format!("{base}{index}"),
-                        None => format!("{port}{index}"),
-                    };
-                    if !roles.contains(&(kind.clone(), role.clone())) {
-                        out.off_fabric
-                            .push(format!("{}.{port}[{index}]", cell.name));
-                        continue;
-                    }
-                    let mut constant = None;
-                    let signal = match view.canonical(*bit) {
-                        SigBit::Slot(slot) => {
-                            let next = out.signals.len();
-                            let index = *by_slot.entry(slot).or_insert(next);
-                            if index == next {
-                                let (net, netbit) = view.owner(slot);
-                                let name = if m.nets[net].ty.width().unwrap_or(1) == 1 {
-                                    m.nets[net].name.as_str().to_owned()
-                                } else {
-                                    format!("{}[{netbit}]", m.nets[net].name)
-                                };
-                                out.signals.push(Signal {
-                                    name,
-                                    driver: None,
-                                    sinks: Vec::new(),
-                                });
+                    .filter(|(p, _)| *p == port)
+                    .map(|(_, b)| Some(b.clone()))
+                    .collect();
+                if roles_of_port.is_empty() {
+                    roles_of_port.push(None);
+                }
+                for base in roles_of_port {
+                    let width = u32::try_from(bits.len()).unwrap_or(u32::MAX);
+                    for (index, bit) in bits.iter().enumerate() {
+                        let index = u32::try_from(index).unwrap_or(u32::MAX);
+                        let role = match &base {
+                            // A one-bit port's pin is usually the base with no
+                            // index at all -- a flip-flop's `d`, a block RAM's
+                            // `we` -- and the architecture is the only thing
+                            // that knows which. Asking it, rather than reading
+                            // the width, is the whole of this: a `DP16KD` in
+                            // 1-bit mode has a one-bit `DOB` whose pin is
+                            // still `p0_dout0`, so dropping the index named a
+                            // role the fabric has no wire for, the pin went to
+                            // `off_fabric`, and the net was left with nothing
+                            // driving it. See [`Netlist::driverless`] for what
+                            // that costs on a part.
+                            Some(base)
+                                if width == 1 && roles.contains(&(kind.clone(), base.clone())) =>
+                            {
+                                base.clone()
                             }
-                            Some(index)
+                            Some(base) => format!("{base}{index}"),
+                            None => format!("{port}{index}"),
+                        };
+                        if !roles.contains(&(kind.clone(), role.clone())) {
+                            out.off_fabric
+                                .push(format!("{}.{port}[{index}]", cell.name));
+                            continue;
                         }
-                        SigBit::Const(value) => {
-                            constant = Some(value);
-                            None
-                        }
-                    };
-                    let pin = out.pins.len();
-                    out.pins.push(NetPin {
-                        instance,
-                        port: port.clone(),
-                        bit: index,
-                        role,
-                        output,
-                        signal,
-                        constant,
-                    });
-                    pins.push(pin);
-                    if let Some(signal) = signal {
-                        if output {
-                            out.signals[signal].driver = Some(pin);
-                        } else {
-                            out.signals[signal].sinks.push(pin);
+                        let mut constant = None;
+                        let signal = match view.canonical(*bit) {
+                            SigBit::Slot(slot) => {
+                                let next = out.signals.len();
+                                let index = *by_slot.entry(slot).or_insert(next);
+                                if index == next {
+                                    let (net, netbit) = view.owner(slot);
+                                    let name = if m.nets[net].ty.width().unwrap_or(1) == 1 {
+                                        m.nets[net].name.as_str().to_owned()
+                                    } else {
+                                        format!("{}[{netbit}]", m.nets[net].name)
+                                    };
+                                    out.signals.push(Signal {
+                                        name,
+                                        driver: None,
+                                        sinks: Vec::new(),
+                                    });
+                                }
+                                Some(index)
+                            }
+                            SigBit::Const(value) => {
+                                constant = Some(value);
+                                None
+                            }
+                        };
+                        let pin = out.pins.len();
+                        out.pins.push(NetPin {
+                            instance,
+                            port: port.clone(),
+                            bit: index,
+                            role,
+                            output,
+                            signal,
+                            constant,
+                        });
+                        pins.push(pin);
+                        if let Some(signal) = signal {
+                            if output {
+                                out.signals[signal].driver = Some(pin);
+                            } else {
+                                out.signals[signal].sinks.push(pin);
+                            }
                         }
                     }
                 }
@@ -721,7 +727,11 @@ fn describe(device: &Device, primitive: &str) -> Option<(String, Vec<(String, St
                 } else {
                     format!("{role}{index}")
                 };
-                if !bases.iter().any(|(p, _)| p == name) {
+                // A port may reach more than one pin of its site: a
+                // `BUFGMUX`'s `S` is both `CE0` and `CE1` of the
+                // `BUFGCTRL` it is (`port ce0=S ce1=S`), and each pin is
+                // routed to on its own.
+                if !bases.iter().any(|(p, b)| p == name && *b == base) {
                     bases.push(((*name).to_owned(), base));
                 }
             }

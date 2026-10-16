@@ -161,6 +161,7 @@ use crate::ir::memfile::FileProvider;
 use crate::json::Json;
 
 mod bram;
+mod bufg;
 mod carry;
 mod cmt;
 mod dsp;
@@ -171,6 +172,7 @@ mod sites;
 pub use bram::{
     BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, mode_features, tie_policy,
 };
+pub use bufg::GlobalBufferError;
 pub use carry::{CarryPacking, legalise_carries};
 pub use cmt::{ClockManagerError, Counter, PllSettings, counter, pll_registers};
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};

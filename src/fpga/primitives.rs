@@ -4183,13 +4183,32 @@ impl Mapper<'_> {
                 entry.pins += pins;
             }
         }
+        // A clock the design already buffers itself — the output of a
+        // `BUFGMUX` or a `BUFGCE` it instantiated — is on the network, and
+        // a second buffer behind the first would only take a site and a
+        // track. Each one also counts against the device's supply.
+        let global = |primitive: &str| {
+            self.device
+                .bels
+                .iter()
+                .any(|b| b.role == BelRole::GlobalBuffer && b.name == primitive)
+        };
+        let mut buffered_already: Vec<NetId> = Vec::new();
+        for (_, cell) in module.cells.iter() {
+            if let CellKind::Blackbox(primitive) = &cell.kind
+                && global(primitive.as_str())
+            {
+                buffered_already.extend(cell.outputs.iter().map(|(_, net)| *net));
+            }
+        }
+        fanout.retain(|_, entry| !buffered_already.contains(&entry.net));
         // Highest fanout first, ties broken by name so the choice is
         // reproducible.
         let mut candidates: Vec<(String, ClockFanout)> = fanout.into_iter().collect();
         candidates.sort_by(|a, b| b.1.pins.cmp(&a.1.pins).then_with(|| a.0.cmp(&b.0)));
 
         let available = self.device.clock_resources.global_buffers;
-        let mut used = 0u32;
+        let mut used = u32::try_from(buffered_already.len()).unwrap_or(u32::MAX);
         for (
             name,
             ClockFanout {

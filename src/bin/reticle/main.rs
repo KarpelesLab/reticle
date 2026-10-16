@@ -3245,9 +3245,17 @@ fn write_xc7_bitstream(
         if let Some(region) = options.region
             && needs_global_buffer(design, top, device)
         {
+            // A buffer's six controls arrive from the interconnect two
+            // columns to its left and up to three rows below its tile
+            // (`tileconn.json`: `CLK_BUFG_IMUX<n>_<k>` from the
+            // `INT_INTERFACE_R` at `[-1, -k]`), so a `BUFGCE`'s enable or a
+            // `BUFGMUX`'s select has no path unless those are loaded too.
             options.region = db
                 .region_with_site_type(&files, region, "BUFGCTRL")
                 .map_err(|e| e.to_string())?
+                .map(|r| {
+                    GridRegion::new(r.x0.saturating_sub(2), r.y0.saturating_sub(4), r.x1, r.y1)
+                })
                 .or(Some(region));
         }
         // A PLL lives in a clock management tile at the die's edge, in a
@@ -3427,6 +3435,11 @@ fn write_xc7_bitstream(
     // its reset was routed. See `XrayFabric::configure_clock_managers`.
     let pll_bits = fabric
         .configure_clock_managers(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
+    // A `BUFGCE` or `BUFGMUX` is a `BUFGCTRL` whose control inverters
+    // depend on what was routed to it. See `xray::bufg`.
+    fabric
+        .configure_global_buffers(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
     // A block RAM's modes, and a value on every input the design leaves
     // alone: an undriven interconnect input reads one on this family. See

@@ -2596,6 +2596,56 @@ four tie-highs and its own enable).
 4. Only the true-dual-port widths 1, 2, 4, 9 and 18 are described;
    `RAM_MODE = "SDP"` and the 36-bit width are refused by name.
 
+## Global clock buffers by name: `BUFGCE`, `BUFGMUX`, `IBUFG`
+
+A design may now instantiate the 7-series clock buffers it used to get
+only by inference. Three things had to change, and each was found by
+building the buffers NewAE's ChipWhisperer-Husky gateware instantiates:
+
+- **An instantiated primitive was never a cell.** It elaborates to an
+  instance of a module nothing declares, and survived flattening as one,
+  which the placer's netlist refuses. `primitive_instances` in
+  `src/fpga/flow.rs` now turns it into the cell mapping would have made.
+  An instance does not say which of its ports are outputs, so the device
+  does: a `bel` line's `outputs O` clause. An `IBUF`, `IBUFG` or `OBUF`
+  instantiated by name becomes a wire, because every top-level port
+  already gets its buffer, with the standard its constraint gives.
+- **A `BUFGMUX`'s `S` is two pins.** Every global buffer is a `BUFGCTRL`
+  (UG472), and a `BUFGMUX` selects with its *enables*: `CE0` is `!S` and
+  `CE1` is `S`. A device port may now map to more than one role
+  (`port ce=S ce1=S`), and each pin is routed on its own.
+- **Its bits depend on what was routed.** `XrayFabric::configure_global_buffers`
+  (`src/fpga/xray/bufg.rs`) writes each control's inverter from whether the
+  pin is routed or fixed, and from `CLK_SEL_TYPE`. An unrouted control
+  reads one; `ZINV_<pin>` and `IS_IGNORE<n>_INVERTED` *set* mean the
+  inverter is off.
+
+**CHECKED against Vivado**, not against a reading. Decoded through this
+database, NewAE's shipped image holds thirteen `BUFGCTRL`s in exactly
+three configurations, and its source predicts the counts: eight `ASYNC`
+`BUFGMUX`es, two `SYNC`, and three plain buffers. The `IGNORE` reading was
+fixed by those counts — the other way round, eight and two would swap.
+`tests/fpga_xray_bufg.rs` builds `testdata/fpga/husky/clock_buffers.v`
+with the command line and requires every buffer it configures to be one of
+Vivado's three, with one of each `BUFGMUX`.
+
+Two defects the test found on the way, both fixed: the elaborator dropped
+a black box's parameters, so `CLK_SEL_TYPE("ASYNC")` never reached the
+cell; and clock inference put a second `BUFG` behind a clock the design
+had already buffered.
+
+What is **not** the same as Vivado: a buffer's output reaches another
+buffer's input directly only from the sites beside it
+(`CLK_BUFG_R_FBG_OUT<n±1>`), and this placer does not yet put a chain of
+buffers side by side. The router then passes the clock through a free
+`BUFGCTRL`, configured as a `BUFG` — a cascade that computes the same
+thing and costs a site. And the region the command line loads now
+reaches the interconnect two columns left of the buffer column and three
+rows down, where the controls come from; before, a `BUFGCE`'s enable had
+no path at all.
+
+Nothing here has run on a part.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -3025,6 +3075,7 @@ will have.
 | `src/fpga/xray/carry.rs` | `legalise_carries`: a lookup table for every propagate bit of a `CARRY4` that has none, and the constant generates in `O5` |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
+| `src/fpga/xray/bufg.rs` | a `BUFGCE` and a `BUFGMUX` on a `BUFGCTRL`: each control's inverter from what was routed to it, checked against the thirteen buffers of NewAE's Husky image |
 | `src/fpga/xray/cmt.rs` | the clock management tile: the PLL as a bel, its DRP register values (computed and quoted, each said which), and `XrayFabric::configure_clock_managers` |
 | `tests/fpga_xray_pll.rs` | the PLL design end to end, and two register settings decoded back |
 | `src/fpga/devices/xc7.dev` | the device: primitives, pins, and now the IDCODE |
