@@ -1,5 +1,5 @@
-//! The clock management tile: a `PLLE2_BASE` as a bel, and the registers
-//! that configure it.
+//! The clock management tile: a PLL and an MMCM as bels, and the registers
+//! that configure them.
 //!
 //! # Why a PLL is not configured like every other bel
 //!
@@ -41,10 +41,20 @@
 //! multiplier of 8, the entries this file holds are `0xB5BE8FA401` and
 //! `0x3B4`, which are the very constants nextpnr-xilinx hard-codes for
 //! every PLL (`write_pll` in `xilinx/fasm.cc`); and the register layout
-//! the field names imply is the one XAPP888 states. **Nothing here has
-//! been compared with a Vivado bitstream holding a PLL** — the four
-//! harness designs in `artix7/harness/` have none — and nothing has been
-//! run on a part.
+//! the field names imply is the one XAPP888 states. Until 2026-10-16
+//! **nothing here had been compared with a Vivado bitstream holding a
+//! PLL** — the four harness designs in `artix7/harness/` have none. NewAE's
+//! ChipWhisperer-Husky image has one `PLLE2_ADV` and three `MMCME2_ADV`s,
+//! and `tests/fpga_xray_cmt.rs` finds every register field of the same four
+//! instances built here equal to Vivado's.
+//!
+//! # The MMCM
+//!
+//! An `MMCME2_ADV` sits on the `LOWER_B` quarter and has the same register
+//! layout, with its own filter table and a power register;
+//! [`mmcm_registers`] says where each difference came from. Only integer
+//! dividers, zero static phase and a 50 % duty cycle are configured, and
+//! `COMPENSATION = INTERNAL`; anything else is refused by name.
 //!
 //! # The reset that reads as one
 //!
@@ -97,32 +107,131 @@ use crate::logic::Bit;
 /// the kind and the pins, and the register values are
 /// [`XrayFabric::configure_clock_managers`]'s.
 pub(super) fn clock_manager_bels(tile_type: &str) -> Vec<ExtraBel> {
-    if !matches!(tile_type, "CMT_TOP_L_UPPER_T" | "CMT_TOP_R_UPPER_T") {
-        return Vec::new();
+    match tile_type {
+        "CMT_TOP_L_UPPER_T" | "CMT_TOP_R_UPPER_T" => vec![pll_bel()],
+        "CMT_TOP_L_LOWER_B" | "CMT_TOP_R_LOWER_B" => vec![mmcm_bel()],
+        _ => Vec::new(),
     }
-    let wire = |pin: &str| format!("CMT_TOP_R_UPPER_T_PLLE2_{pin}");
-    let pins = [
+}
+
+/// The DRP's indexed pins, as roles: the same on a PLL and an MMCM. Written
+/// out because a [`BelPin`]'s role is a `&'static str`.
+const DADDR: [&str; 7] = [
+    "daddr0", "daddr1", "daddr2", "daddr3", "daddr4", "daddr5", "daddr6",
+];
+const DI: [&str; 16] = [
+    "di0", "di1", "di2", "di3", "di4", "di5", "di6", "di7", "di8", "di9", "di10", "di11", "di12",
+    "di13", "di14", "di15",
+];
+const DO: [&str; 16] = [
+    "do0", "do1", "do2", "do3", "do4", "do5", "do6", "do7", "do8", "do9", "do10", "do11", "do12",
+    "do13", "do14", "do15",
+];
+const OUT: [&str; 7] = ["out0", "out1", "out2", "out3", "out4", "out5", "out6"];
+const OUTB: [&str; 4] = ["out0b", "out1b", "out2b", "out3b"];
+
+/// The DRP's pins, as roles and pin names.
+fn drp_pins() -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = vec![
+        ("dclk", "DCLK".to_owned()),
+        ("den", "DEN".to_owned()),
+        ("dwe", "DWE".to_owned()),
+        ("drdy", "DRDY".to_owned()),
+    ];
+    out.extend(
+        DADDR
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (*r, format!("DADDR{i}"))),
+    );
+    out.extend(DI.iter().enumerate().map(|(i, r)| (*r, format!("DI{i}"))));
+    out.extend(DO.iter().enumerate().map(|(i, r)| (*r, format!("DO{i}"))));
+    out
+}
+
+/// A bel from roles and the pin names its wires are spelt with.
+fn manager_bel(
+    name: &str,
+    kind: &'static str,
+    wire: &dyn Fn(&str) -> String,
+    pins: Vec<(&'static str, String)>,
+) -> ExtraBel {
+    ExtraBel {
+        name: name.to_owned(),
+        kind,
+        pins: pins
+            .into_iter()
+            .map(|(role, pin)| BelPin {
+                role,
+                wire: wire(&pin),
+            })
+            .collect(),
+        cells: Vec::new(),
+    }
+}
+
+/// The PLL of an `UPPER_T` quarter, with every pin a `PLLE2_ADV` has.
+fn pll_bel() -> ExtraBel {
+    let mut pins: Vec<(&'static str, String)> = [
         ("ref", "CLKIN1"),
+        ("clkin2", "CLKIN2"),
+        ("clkinsel", "CLKINSEL"),
         ("fb", "CLKFBIN"),
         ("out", "CLKOUT0"),
         ("fbout", "CLKFBOUT"),
         ("lock", "LOCKED"),
         ("rst", "RST"),
         ("pwrdwn", "PWRDWN"),
-    ];
-    vec![ExtraBel {
-        name: PLL_BEL.to_owned(),
-        kind: "pll",
-        pins: pins
-            .iter()
-            .map(|&(role, pin)| BelPin {
-                role,
-                wire: wire(pin),
-            })
-            .collect(),
-        cells: Vec::new(),
-    }]
+    ]
+    .iter()
+    .map(|(r, p)| (*r, (*p).to_owned()))
+    .collect();
+    pins.extend((1..6).map(|i| (OUT[i], format!("CLKOUT{i}"))));
+    pins.extend(drp_pins());
+    manager_bel(
+        PLL_BEL,
+        "pll",
+        &|pin| format!("CMT_TOP_R_UPPER_T_PLLE2_{pin}"),
+        pins,
+    )
 }
+
+/// The MMCM of a `LOWER_B` quarter. Its wires are `CMT_LR_LOWER_B_MMCM_*`
+/// in both orientations (`ppips_cmt_top_{l,r}_lower_b.db`).
+fn mmcm_bel() -> ExtraBel {
+    let mut pins: Vec<(&'static str, String)> = [
+        ("ref", "CLKIN1"),
+        ("clkin2", "CLKIN2"),
+        ("clkinsel", "CLKINSEL"),
+        ("fb", "CLKFBIN"),
+        ("fbout", "CLKFBOUT"),
+        ("fboutb", "CLKFBOUTB"),
+        ("lock", "LOCKED"),
+        ("clkinstopped", "CLKINSTOPPED"),
+        ("clkfbstopped", "CLKFBSTOPPED"),
+        ("rst", "RST"),
+        ("pwrdwn", "PWRDWN"),
+        ("psclk", "PSCLK"),
+        ("psen", "PSEN"),
+        ("psincdec", "PSINCDEC"),
+        ("psdone", "PSDONE"),
+    ]
+    .iter()
+    .map(|(r, p)| (*r, (*p).to_owned()))
+    .collect();
+    pins.extend((0..7).map(|i| (OUT[i], format!("CLKOUT{i}"))));
+    pins.extend((0..4).map(|i| (OUTB[i], format!("CLKOUT{i}B"))));
+    pins.extend(drp_pins());
+    manager_bel(
+        MMCM_BEL,
+        "mmcm",
+        &|pin| format!("CMT_LR_LOWER_B_MMCM_{pin}"),
+        pins,
+    )
+}
+
+/// The name the feature reader gives a CMT's MMCM bel.
+const MMCM_BEL: &str = "MMCME2_ADV";
 
 /// The name the feature reader gives a CMT's PLL bel: its feature prefix.
 const PLL_BEL: &str = "PLLE2_ADV";
@@ -296,6 +405,40 @@ pub struct PllSettings {
     pub invert_rst: bool,
     /// The same for `PWRDWN`.
     pub invert_pwrdwn: bool,
+    /// `CLKOUT1_DIVIDE` to `CLKOUT5_DIVIDE` and whether each output drives
+    /// anything: a `PLLE2_ADV`'s other five outputs. A `PLLE2_BASE` as
+    /// mapping makes one leaves them at a division of one, unused.
+    pub more_outputs: [(u64, bool); 5],
+    /// Whether `CLKINSEL` must be inverted: tied low and left unrouted, it
+    /// would read the one that selects `CLKIN1`.
+    pub invert_clkinsel: bool,
+}
+
+/// What an `MMCME2_ADV` is asked to do, in its own parameter names. Only
+/// integer dividers are taken: a fractional `CLKFBOUT_MULT_F` or
+/// `CLKOUT0_DIVIDE_F` is refused by [`XrayFabric::configure_clock_managers`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MmcmSettings {
+    /// `DIVCLK_DIVIDE`, 1..=106.
+    pub divclk_divide: u64,
+    /// `CLKFBOUT_MULT_F`, 2..=64.
+    pub clkfbout_mult: u64,
+    /// `CLKFBOUT_USE_FINE_PS`.
+    pub clkfbout_fine_ps: bool,
+    /// Whether `CLKFBOUT` or `CLKFBOUTB` drives anything.
+    pub clkfbout_used: bool,
+    /// `CLKOUT0_DIVIDE_F` .. `CLKOUT6_DIVIDE`, whether the output (or its
+    /// inverse) drives anything, and `CLKOUT<n>_USE_FINE_PS`.
+    pub outputs: [(u64, bool, bool); 7],
+    /// `BANDWIDTH`: `LOW`, `HIGH` or `OPTIMIZED`.
+    pub bandwidth: String,
+    /// `STARTUP_WAIT = "TRUE"`.
+    pub startup_wait: bool,
+    /// Which control pins read the wrong value unrouted and must be
+    /// inverted: `RST`, `PWRDWN`, `PSEN`, `PSINCDEC`, as for the PLL.
+    pub invert: [bool; 4],
+    /// Whether `CLKINSEL` must be inverted.
+    pub invert_clkinsel: bool,
 }
 
 /// Why a PLL could not be configured.
@@ -337,8 +480,9 @@ impl fmt::Display for ClockManagerError {
                 primitive,
             } => write!(
                 f,
-                "`{instance}` is a `{primitive}` on a PLL site; this flow configures only \
-                 `{PLL_PRIMITIVE}`, and another block's registers would configure nothing"
+                "`{instance}` is a `{primitive}` on a clock management site; this flow \
+                 configures `{PLL_PRIMITIVE}` and `PLLE2_ADV` on a PLL and `MMCME2_ADV` on an \
+                 MMCM, and another block's registers would configure nothing"
             ),
             ClockManagerError::BadParameter {
                 instance,
@@ -347,8 +491,8 @@ impl fmt::Display for ClockManagerError {
             } => write!(f, "`{instance}`: `{name}` {message}"),
             ClockManagerError::MissingField { field } => write!(
                 f,
-                "the chip database has no `PLLE2_ADV.{field}` feature, which a PLL needs; \
-                 the database is not the one this flow was written against"
+                "the chip database has no `{field}` feature for a clock manager; the \
+                 database is not the one this flow was written against"
             ),
             ClockManagerError::Bitstream(e) => write!(f, "{e}"),
         }
@@ -387,7 +531,10 @@ pub fn pll_registers(settings: &PllSettings) -> BTreeMap<String, u64> {
     put("STARTUP_WAIT".to_owned(), u64::from(settings.startup_wait));
     put("ZINV_RST".to_owned(), u64::from(settings.invert_rst));
     put("ZINV_PWRDWN".to_owned(), u64::from(settings.invert_pwrdwn));
-    put("INV_CLKINSEL".to_owned(), 0);
+    put(
+        "INV_CLKINSEL".to_owned(),
+        u64::from(settings.invert_clkinsel),
+    );
 
     let divclk = counter(settings.divclk_divide);
     put("DIVCLK_DIVCLK_HIGH_TIME".to_owned(), divclk.high);
@@ -402,28 +549,17 @@ pub fn pll_registers(settings: &PllSettings) -> BTreeMap<String, u64> {
     // Every output counter is written, used or not: an unused one keeps
     // the library default of a division by one, as f4pga writes it, and
     // its output enable stays off.
+    let more = settings.more_outputs;
     for (name, divide, used) in [
         ("CLKFBOUT", settings.clkfbout_mult, settings.clkfbout_used),
         ("CLKOUT0", settings.clkout0_divide, settings.clkout0_used),
-        ("CLKOUT1", 1, false),
-        ("CLKOUT2", 1, false),
-        ("CLKOUT3", 1, false),
-        ("CLKOUT4", 1, false),
-        ("CLKOUT5", 1, false),
+        ("CLKOUT1", more[0].0, more[0].1),
+        ("CLKOUT2", more[1].0, more[1].1),
+        ("CLKOUT3", more[2].0, more[2].1),
+        ("CLKOUT4", more[3].0, more[3].1),
+        ("CLKOUT5", more[4].0, more[4].1),
     ] {
-        let c = counter(divide);
-        put(format!("{name}_CLKOUT1_HIGH_TIME"), c.high);
-        put(format!("{name}_CLKOUT1_LOW_TIME"), c.low);
-        put(format!("{name}_CLKOUT1_OUTPUT_ENABLE"), u64::from(used));
-        put(format!("{name}_CLKOUT1_PHASE_MUX"), 0);
-        put(format!("{name}_CLKOUT2_DELAY_TIME"), 0);
-        put(format!("{name}_CLKOUT2_EDGE"), u64::from(c.edge));
-        put(format!("{name}_CLKOUT2_NO_COUNT"), u64::from(c.no_count));
-        put(format!("{name}_CLKOUT2_MX"), 0);
-        put(format!("{name}_CLKOUT2_FRAC"), 0);
-        put(format!("{name}_CLKOUT2_FRAC_EN"), 0);
-        put(format!("{name}_CLKOUT2_FRAC_WF_R"), 0);
-        put(format!("{name}_CLKOUT2_RESERVED"), 0);
+        divider_fields(&mut put, name, divide, used, 0, false);
     }
 
     let index = usize::try_from(settings.clkfbout_mult.clamp(1, 64) - 1).unwrap_or(0);
@@ -440,6 +576,166 @@ pub fn pll_registers(settings: &PllSettings) -> BTreeMap<String, u64> {
     put("LOCKREG2_RESERVED".to_owned(), 0);
     put("LOCKREG3_RESERVED".to_owned(), 1);
     put("POWER_REG_POWER_REG_POWER_REG".to_owned(), 0);
+    out
+}
+
+/// The fields of one divider of a PLL or MMCM, written into `put`:
+/// XAPP888's `ClkReg1` (high time, low time, output enable, phase mux) and
+/// `ClkReg2` (delay, edge, no-count, `MX`, and the fractional fields, all
+/// zero for an integer division with no phase).
+///
+/// An MMCM's `CLKOUT5` and `CLKOUT6` spell their `ClkReg2` differently —
+/// prjxray calls it `CLKOUT2_FRACTIONAL_*`, because on those two it holds
+/// the fractional phase of `CLKOUT0` and `CLKFBOUT` — and `fractional`
+/// selects that spelling.
+fn divider_fields(
+    put: &mut dyn FnMut(String, u64),
+    name: &str,
+    divide: u64,
+    used: bool,
+    mx: u64,
+    fractional: bool,
+) {
+    let c = counter(divide);
+    put(format!("{name}_CLKOUT1_HIGH_TIME"), c.high);
+    put(format!("{name}_CLKOUT1_LOW_TIME"), c.low);
+    put(format!("{name}_CLKOUT1_OUTPUT_ENABLE"), u64::from(used));
+    put(format!("{name}_CLKOUT1_PHASE_MUX"), 0);
+    if fractional {
+        put(format!("{name}_CLKOUT2_FRACTIONAL_DELAY_TIME"), 0);
+        put(format!("{name}_CLKOUT2_FRACTIONAL_EDGE"), u64::from(c.edge));
+        put(
+            format!("{name}_CLKOUT2_FRACTIONAL_NO_COUNT"),
+            u64::from(c.no_count),
+        );
+        put(format!("{name}_CLKOUT2_FRACTIONAL_MX"), mx);
+        put(format!("{name}_CLKOUT2_FRACTIONAL_FRAC_WF_F"), 0);
+        put(format!("{name}_CLKOUT2_FRACTIONAL_PHASE_MUX_F"), 0);
+        put(format!("{name}_CLKOUT2_FRACTIONAL_RESERVED"), 0);
+    } else {
+        put(format!("{name}_CLKOUT2_DELAY_TIME"), 0);
+        put(format!("{name}_CLKOUT2_EDGE"), u64::from(c.edge));
+        put(format!("{name}_CLKOUT2_NO_COUNT"), u64::from(c.no_count));
+        put(format!("{name}_CLKOUT2_MX"), mx);
+        put(format!("{name}_CLKOUT2_FRAC"), 0);
+        put(format!("{name}_CLKOUT2_FRAC_EN"), 0);
+        put(format!("{name}_CLKOUT2_FRAC_WF_R"), 0);
+        put(format!("{name}_CLKOUT2_RESERVED"), 0);
+    }
+}
+
+/// An MMCM's loop filter `{CP, RES, LFHF}` for `BANDWIDTH = "LOW"`, by
+/// multiplier minus one. **Quoted**: XAPP888's table as f4pga-arch-defs
+/// transcribes it (`mmcm_table_lookup` in `xilinx/xc7/techmap/cells_map.v`),
+/// extracted by script. It is not the PLL's.
+const MMCM_FILTER_LOW: [u16; 64] = [
+    0x0bc, 0x0bc, 0x0bc, 0x0bc, 0x09c, 0x0ac, 0x0b4, 0x08c, // 1..8
+    0x094, 0x094, 0x0a4, 0x0b8, 0x0b8, 0x0b8, 0x0b8, 0x084, // 9..16
+    0x084, 0x084, 0x098, 0x098, 0x098, 0x098, 0x098, 0x098, // 17..24
+    0x098, 0x0a8, 0x0a8, 0x0a8, 0x0a8, 0x0a8, 0x0b0, 0x0b0, // 25..32
+    0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, // 33..40
+    0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x0b0, 0x088, // 41..48
+    0x088, 0x088, 0x088, 0x088, 0x088, 0x088, 0x088, 0x088, // 49..56
+    0x088, 0x088, 0x088, 0x088, 0x088, 0x088, 0x088, 0x088, // 57..64
+];
+
+/// The MMCM's filter for `HIGH` and `OPTIMIZED`, which f4pga's
+/// transcription gives identical tables. **Quoted** the same way, and
+/// **checked**: Vivado wrote `0x3AC` for a multiplier of 6 and `0x0D0` for
+/// 32 into NewAE's Husky image, which are entries 6 and 32 here.
+const MMCM_FILTER_HIGH: [u16; 64] = [
+    0x0bc, 0x13c, 0x16c, 0x1dc, 0x35c, 0x3ac, 0x3b4, 0x3cc, // 1..8
+    0x394, 0x3d4, 0x3e4, 0x344, 0x3e4, 0x3e4, 0x3e4, 0x3e4, // 9..16
+    0x3d4, 0x3d4, 0x304, 0x304, 0x304, 0x170, 0x170, 0x170, // 17..24
+    0x170, 0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, // 25..32
+    0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, 0x0d0, // 33..40
+    0x0d0, 0x0a0, 0x0a0, 0x0a0, 0x0a0, 0x0a0, 0x1c4, 0x1c4, // 41..48
+    0x130, 0x130, 0x130, 0x130, 0x184, 0x184, 0x158, 0x158, // 49..56
+    0x158, 0x090, 0x090, 0x090, 0x090, 0x128, 0x0f0, 0x0f0, // 57..64
+];
+
+/// Every register field of a configured MMCM, in the database's own names
+/// (without `MMCME2_ADV.`), with its value.
+///
+/// The arithmetic is [`pll_registers`]'s; what differs, and where each
+/// difference came from:
+///
+/// | Field | Value | Source |
+/// |---|---|---|
+/// | `TABLE` | `MMCM_FILTER_LOW` / `MMCM_FILTER_HIGH` in this module | quoted from f4pga, two entries checked against Vivado |
+/// | `LKTABLE` | the PLL's table | f4pga's `mmcm_lktable_lookup` *is* `pll_lktable_lookup`; Vivado's 6 and 32 match |
+/// | `POWER_REG` | `0x0199` when an output uses fine phase shift, else `0x0100` | **Vivado**, four MMCMs in NewAE's image. f4pga writes `0x9900` and `0x0100`: the same pattern in other bits, which no Husky disagrees with only because none uses it |
+/// | `<out>_CLKOUT2_MX` | 1 on an output with `USE_FINE_PS`, else 0 | **Vivado**, the same four |
+/// | `COMP.Z_ZHOLD` | set, for `COMPENSATION = INTERNAL` | **Vivado**, the same four |
+/// | `ZINV_RST`, `ZINV_PWRDWN`, `ZINV_PSEN`, `ZINV_PSINCDEC` | set when the pin is tied low and left unrouted | the PLL's reading of `ZINV_RST`; **Vivado** set `ZINV_PSEN`/`ZINV_PSINCDEC` on the one MMCM whose phase-shift pins are unconnected and on none of the three that route them |
+pub fn mmcm_registers(settings: &MmcmSettings) -> BTreeMap<String, u64> {
+    let mut out: BTreeMap<String, u64> = BTreeMap::new();
+    let mut put = |name: String, value: u64| {
+        out.insert(name, value);
+    };
+    put("IN_USE".to_owned(), 1);
+    put("COMP.Z_ZHOLD".to_owned(), 1);
+    put("COMP.ZHOLD".to_owned(), 0);
+    put("STARTUP_WAIT".to_owned(), u64::from(settings.startup_wait));
+    put("SS_EN".to_owned(), 0);
+    for (name, invert) in ["ZINV_RST", "ZINV_PWRDWN", "ZINV_PSEN", "ZINV_PSINCDEC"]
+        .iter()
+        .zip(settings.invert)
+    {
+        put((*name).to_owned(), u64::from(invert));
+    }
+    put(
+        "INV_CLKINSEL".to_owned(),
+        u64::from(settings.invert_clkinsel),
+    );
+
+    let divclk = counter(settings.divclk_divide);
+    put("DIVCLK_DIVCLK_HIGH_TIME".to_owned(), divclk.high);
+    put("DIVCLK_DIVCLK_LOW_TIME".to_owned(), divclk.low);
+    put("DIVCLK_DIVCLK_EDGE".to_owned(), u64::from(divclk.edge));
+    put(
+        "DIVCLK_DIVCLK_NO_COUNT".to_owned(),
+        u64::from(divclk.no_count),
+    );
+    put("DIVCLK_DIVCLK_RESERVED".to_owned(), 0);
+
+    divider_fields(
+        &mut put,
+        "CLKFBOUT",
+        settings.clkfbout_mult,
+        settings.clkfbout_used,
+        u64::from(settings.clkfbout_fine_ps),
+        false,
+    );
+    for (index, (divide, used, fine)) in settings.outputs.iter().enumerate() {
+        divider_fields(
+            &mut put,
+            &format!("CLKOUT{index}"),
+            *divide,
+            *used,
+            u64::from(*fine),
+            index >= 5,
+        );
+    }
+
+    let index = usize::try_from(settings.clkfbout_mult.clamp(1, 64) - 1).unwrap_or(0);
+    put("LKTABLE".to_owned(), LOCK_TABLE[index]);
+    let filter = if settings.bandwidth == "LOW" {
+        MMCM_FILTER_LOW[index]
+    } else {
+        MMCM_FILTER_HIGH[index]
+    };
+    put("TABLE".to_owned(), u64::from(filter));
+    put("FILTREG1_RESERVED".to_owned(), 0x008);
+    put("FILTREG2_RESERVED".to_owned(), 0);
+    put("LOCKREG1_RESERVED".to_owned(), 0);
+    put("LOCKREG2_RESERVED".to_owned(), 0);
+    put("LOCKREG3_RESERVED".to_owned(), 1);
+    let fine = settings.clkfbout_fine_ps || settings.outputs.iter().any(|o| o.2);
+    put(
+        "POWER_REG_POWER_REG_POWER_REG".to_owned(),
+        if fine { 0x0199 } else { 0x0100 },
+    );
     out
 }
 
@@ -539,30 +835,53 @@ impl XrayFabric {
             let Some(bel) = self.arch.tile_types[site.tile_type].bel(&site.bel) else {
                 continue;
             };
-            if bel.name != PLL_BEL {
-                continue;
-            }
-            if instance.primitive != PLL_PRIMITIVE {
-                return Err(ClockManagerError::Unsupported {
-                    instance: instance.name.clone(),
-                    primitive: instance.primitive.clone(),
-                });
-            }
+            let mmcm = match (bel.name.as_str(), instance.primitive.as_str()) {
+                (PLL_BEL, PLL_PRIMITIVE | "PLLE2_ADV") => false,
+                (MMCM_BEL, "MMCME2_ADV") => true,
+                (PLL_BEL | MMCM_BEL, _) => {
+                    return Err(ClockManagerError::Unsupported {
+                        instance: instance.name.clone(),
+                        primitive: instance.primitive.clone(),
+                    });
+                }
+                _ => continue,
+            };
             let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+            let bad = |name: &str, message: String| ClockManagerError::BadParameter {
+                instance: instance.name.clone(),
+                name: name.to_owned(),
+                message,
+            };
+            // An integer parameter, or a real one holding an integer: an
+            // MMCM's `CLKFBOUT_MULT_F` arrives as `6.0`, which a black box
+            // keeps as the text `6`.
             let integer = |name: &str, default: i64, lo: u64, hi: u64| {
-                let value = params
-                    .and_then(|p| p.get(name))
-                    .map_or(Some(default), AttrValue::as_int);
-                let bad = |message: String| ClockManagerError::BadParameter {
-                    instance: instance.name.clone(),
-                    name: name.to_owned(),
-                    message,
+                let value = match params.and_then(|p| p.get(name)) {
+                    None => Some(default),
+                    Some(v) => v.as_int().or_else(|| {
+                        // `6`, or `6.0` written out: an integer either way.
+                        let t = v.as_str()?.trim();
+                        match t.split_once('.') {
+                            Some((whole, frac)) if frac.chars().all(|c| c == '0') => {
+                                whole.parse::<i64>().ok()
+                            }
+                            Some(_) => None,
+                            None => t.parse::<i64>().ok(),
+                        }
+                    }),
                 };
-                let value = value.ok_or_else(|| bad("is not an integer".to_owned()))?;
-                let value =
-                    u64::try_from(value).map_err(|_| bad(format!("is {value}, below {lo}")))?;
+                let value = value.ok_or_else(|| {
+                    bad(
+                        name,
+                        "is not an integer; a fractional divider is not one this flow \
+                         configures"
+                            .to_owned(),
+                    )
+                })?;
+                let value = u64::try_from(value)
+                    .map_err(|_| bad(name, format!("is {value}, below {lo}")))?;
                 if value < lo || value > hi {
-                    return Err(bad(format!("is {value}, outside {lo}..={hi}")));
+                    return Err(bad(name, format!("is {value}, outside {lo}..={hi}")));
                 }
                 Ok(value)
             };
@@ -573,45 +892,126 @@ impl XrayFabric {
                     .unwrap_or(default)
                     .to_ascii_uppercase()
             };
-            // The library defaults for the ones a design may leave out.
-            let divclk_divide = integer("DIVCLK_DIVIDE", 1, 1, 56)?;
-            let clkfbout_mult = integer("CLKFBOUT_MULT", 5, 2, 64)?;
-            let clkout0_divide = integer("CLKOUT0_DIVIDE", 1, 1, 128)?;
+            // A phase other than zero or a duty cycle other than one half
+            // needs arithmetic this module does not do.
+            let real = |name: &str| -> Option<f64> {
+                params.and_then(|p| p.get(name)).and_then(|v| {
+                    v.as_int()
+                        .map(|i| i as f64)
+                        .or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok()))
+                })
+            };
+            for n in [
+                "CLKFBOUT", "CLKOUT0", "CLKOUT1", "CLKOUT2", "CLKOUT3", "CLKOUT4", "CLKOUT5",
+                "CLKOUT6",
+            ] {
+                let phase = format!("{n}_PHASE");
+                if real(&phase).is_some_and(|p| p != 0.0) {
+                    return Err(bad(
+                        &phase,
+                        "is not 0, which is the only phase configured here".to_owned(),
+                    ));
+                }
+                let duty = format!("{n}_DUTY_CYCLE");
+                if real(&duty).is_some_and(|d| (d - 0.5).abs() > 1e-9) {
+                    return Err(bad(
+                        &duty,
+                        "is not 0.5, the only duty cycle configured here".to_owned(),
+                    ));
+                }
+            }
+            let compensation = text("COMPENSATION", "ZHOLD");
+            if mmcm && compensation != "INTERNAL" {
+                return Err(bad(
+                    "COMPENSATION",
+                    format!(
+                        "is `{compensation}`; only INTERNAL, the feedback inside the tile, is configured"
+                    ),
+                ));
+            }
             let bandwidth = text("BANDWIDTH", "OPTIMIZED");
             if !matches!(bandwidth.as_str(), "LOW" | "HIGH" | "OPTIMIZED") {
-                return Err(ClockManagerError::BadParameter {
-                    instance: instance.name.clone(),
-                    name: "BANDWIDTH".to_owned(),
-                    message: format!("is `{bandwidth}`, not LOW, HIGH or OPTIMIZED"),
-                });
+                return Err(bad(
+                    "BANDWIDTH",
+                    format!("is `{bandwidth}`, not LOW, HIGH or OPTIMIZED"),
+                ));
             }
 
-            let pin = |role: &str| {
+            let pins_of = |role: &str| -> Vec<&crate::fpga::place::NetPin> {
                 instance
                     .pins
                     .iter()
                     .map(|p| &netlist.pins[*p])
-                    .find(|p| p.role == role)
+                    .filter(|p| p.role == role)
+                    .collect()
             };
-            let used = |role: &str| pin(role).is_some_and(|p| p.signal.is_some());
+            let used = |role: &str| pins_of(role).iter().any(|p| p.signal.is_some());
             // A control pin with no signal is left unrouted and reads one;
-            // it has to be inverted to mean the zero a `PLLE2_BASE`
-            // ties it to. One tied *high* reads what it asks for.
-            let invert = |role: &str| match pin(role) {
+            // it has to be inverted to mean a zero. One tied *high* reads
+            // what it asks for.
+            let invert = |role: &str| match pins_of(role).first() {
                 Some(p) if p.signal.is_some() => false,
                 Some(p) => p.constant != Some(Bit::One),
                 None => true,
             };
+            // `CLKINSEL` is the other way round: left out, it is high and
+            // selects `CLKIN1`, which is what a primitive without the pin
+            // means.
+            let invert_clkinsel = pins_of("clkinsel")
+                .first()
+                .is_some_and(|p| p.signal.is_none() && p.constant != Some(Bit::One));
+            let startup_wait = text("STARTUP_WAIT", "FALSE") == "TRUE";
+
+            if mmcm {
+                let fine = |name: &str| text(&format!("{name}_USE_FINE_PS"), "FALSE") == "TRUE";
+                let mut outputs = [(1u64, false, false); 7];
+                for (n, out) in outputs.iter_mut().enumerate() {
+                    let divide = if n == 0 {
+                        integer("CLKOUT0_DIVIDE_F", 1, 1, 128)?
+                    } else {
+                        integer(&format!("CLKOUT{n}_DIVIDE"), 1, 1, 128)?
+                    };
+                    let on = used(OUT[n]) || OUTB.get(n).is_some_and(|b| used(b));
+                    *out = (divide, on, fine(&format!("CLKOUT{n}")));
+                }
+                let settings = MmcmSettings {
+                    divclk_divide: integer("DIVCLK_DIVIDE", 1, 1, 106)?,
+                    clkfbout_mult: integer("CLKFBOUT_MULT_F", 5, 2, 64)?,
+                    clkfbout_fine_ps: fine("CLKFBOUT"),
+                    clkfbout_used: used("fbout") || used("fboutb"),
+                    outputs,
+                    bandwidth,
+                    startup_wait,
+                    invert: [
+                        invert("rst"),
+                        invert("pwrdwn"),
+                        invert("psen"),
+                        invert("psincdec"),
+                    ],
+                    invert_clkinsel,
+                };
+                count += self.write_mmcm(site.tile, &settings, bits)?;
+                continue;
+            }
+            let mut more_outputs = [(1u64, false); 5];
+            for (n, out) in more_outputs.iter_mut().enumerate() {
+                *out = (
+                    integer(&format!("CLKOUT{}_DIVIDE", n + 1), 1, 1, 128)?,
+                    used(OUT[n + 1]),
+                );
+            }
             let settings = PllSettings {
-                divclk_divide,
-                clkfbout_mult,
-                clkout0_divide,
+                divclk_divide: integer("DIVCLK_DIVIDE", 1, 1, 56)?,
+                clkfbout_mult: integer("CLKFBOUT_MULT", 5, 2, 64)?,
+                clkout0_divide: integer("CLKOUT0_DIVIDE", 1, 1, 128)?,
                 bandwidth,
-                startup_wait: text("STARTUP_WAIT", "FALSE") == "TRUE",
+                startup_wait,
                 clkout0_used: used("out"),
                 clkfbout_used: used("fbout"),
                 invert_rst: invert("rst"),
                 invert_pwrdwn: invert("pwrdwn"),
+                more_outputs,
+                invert_clkinsel,
             };
             count += self.write_pll(site.tile, &settings, bits)?;
         }
@@ -645,6 +1045,28 @@ impl XrayFabric {
                 field: "IN_USE".to_owned(),
             })?;
         apply_registers(&bel.config, &pll_registers(settings), tile, bits)
+    }
+
+    /// Writes one MMCM's registers into the clock management tile at
+    /// `tile`, as [`XrayFabric::write_pll`] does a PLL's.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`XrayFabric::write_pll`].
+    pub fn write_mmcm(
+        &self,
+        tile: (u32, u32),
+        settings: &MmcmSettings,
+        bits: &mut Bitstream,
+    ) -> Result<usize, ClockManagerError> {
+        let bel = self
+            .arch
+            .tile_index_at(tile.0, tile.1)
+            .and_then(|index| self.arch.tile_types[index].bel(MMCM_BEL))
+            .ok_or_else(|| ClockManagerError::MissingField {
+                field: "IN_USE".to_owned(),
+            })?;
+        apply_registers(&bel.config, &mmcm_registers(settings), tile, bits)
     }
 }
 
@@ -694,6 +1116,8 @@ mod tests {
             clkfbout_used: true,
             invert_rst: true,
             invert_pwrdwn: true,
+            more_outputs: [(1, false); 5],
+            invert_clkinsel: false,
         };
         let r = pll_registers(&settings);
         assert_eq!(r["LKTABLE"], 0xB5_BE8F_A401);

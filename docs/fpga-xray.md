@@ -2443,10 +2443,15 @@ What checks these values, and how far:
   `0x3B4`, **the constants nextpnr-xilinx writes for every PLL**. That
   is a second, independent source for one entry of each table, and no
   more than that.
-- **Nothing here has been compared with a Vivado bitstream holding a
-  PLL.** The four harness designs in `artix7/harness/` contain none, and
-  Vivado was not available. A reserved field Vivado sets that both open
-  tools leave clear would be invisible to every check above.
+- ~~**Nothing here has been compared with a Vivado bitstream holding a
+  PLL.**~~ The four harness designs in `artix7/harness/` contain none, and
+  Vivado was not available, so a reserved field Vivado sets that both open
+  tools leave clear would have been invisible to every check above.
+  **Since compared, 2026-10-16:** NewAE's shipped ChipWhisperer-Husky image
+  holds a `PLLE2_ADV` (multiply 10, six dividers, `CLKINSEL` routed), and
+  `tests/fpga_xray_cmt.rs` builds the same instance and finds its whole
+  register file — zeros included, the quoted lock and filter tables at a
+  multiplier of 10 included — equal to Vivado's. No reserved field differs.
 
 ### The reset that reads as one
 
@@ -2479,17 +2484,47 @@ well, and so read one. `DCLK` is left unrouted too, so it never changes,
 and a DRP access needs a `DCLK` edge. That is the reasoning, and it has
 not been tried.
 
+### `PLLE2_ADV` and `MMCME2_ADV` by name
+
+A design may instantiate both now: the PLL with all six outputs, both
+clock inputs and `CLKINSEL`, and the DRP; the MMCM — on its own sites, the
+`LOWER_B` quarter of each CMT, as a bel of kind `mmcm` so the placer never
+puts it where a PLL goes — with `CLKOUT0B`, the stopped flags, fine phase
+shift (`PSCLK`, `PSEN`, `PSINCDEC`, `PSDONE`) and the DRP. A clock
+manager's clock outputs may use the global network on their way to a
+`BUFG`; its `LOCKED` and DRP outputs may not, being data.
+
+The MMCM's registers are `cmt::mmcm_registers`, the PLL's arithmetic with
+three differences, each **checked against Vivado** on the Husky's three
+MMCMs — the glitch generator's (multiply 6, divide 6, fine phase shift),
+the logic analyser's (6 and 5, its phase-shift pins unconnected) and the
+trace block's (32 and 32):
+
+- its filter table is its own, quoted from f4pga, and equals Vivado's at 6
+  and at 32;
+- `POWER_REG` is `0x0199` with fine phase shift and `0x0100` without,
+  which is Vivado's. f4pga writes the first as `0x9900`, the same pattern in
+  other bits;
+- an output with fine phase shift sets its phase mux `MX`, which f4pga
+  does not.
+
+`tests/fpga_xray_cmt.rs` builds all four of the Husky's clock managers and
+requires each register file to equal Vivado's for the same instance.
+
+The DRP's own inputs have no inverter, so they are never absorbed: a
+`DEN` tied low and left unrouted would read one and, with `DCLK` running,
+write the registers on every edge. A constant there gets a driver like
+any other.
+
 ### What is not done
 
-- **`MMCME2_BASE`.** Its register map differs from the PLL's: fractional
-  dividers, a `POWER_REG` f4pga computes, a filter table of its own. The
-  mapper's solver can choose an MMCM for a frequency the PLL cannot hit
-  exactly. Such a cell would land on a PLL site, which is the only kind
-  `pll` here, and `configure_clock_managers` refuses it by name rather
-  than configure an MMCM with a PLL's registers.
-- **Phase shift, duty cycle other than one half, `CLKOUT1`..`5`.**
-  `PLLE2_BASE` as `xc7.dev` maps it uses only `CLKOUT0`, and the arithmetic
-  above is for 50 % and zero phase.
+- **An inferred `MMCME2_BASE`.** The mapper's solver can choose an MMCM
+  for a frequency the PLL cannot hit exactly, and that cell still lands
+  on a PLL site and is refused by name. An MMCM a design instantiates is
+  done, above.
+- **A fractional divider, a phase shift fixed at build time, a duty cycle
+  other than one half.** Refused with the parameter's name; the Husky
+  shifts phase only at run time.
 - **`COMPENSATION = ZHOLD`, or feedback through a `BUFG`.** Only the
   internal loop is written.
 
@@ -2953,7 +2988,9 @@ In rough order of how much stands behind each.
    `examples/basys3/pll_blink.v` is the test that settles it on a board,
    and until someone runs it, every register value the PLL section
    calls quoted is a reading and not a measurement. The `MMCME2_BASE` is
-   still not done.
+   still not done. (Since 2026-10-16 the register values have been
+   compared with Vivado's — *`PLLE2_ADV` and `MMCME2_ADV` by name* — which
+   settles the bits and still not the board.)
 
 Until 1 is done, what this flow writes for a clocked design is a
 bitstream whose every feature on the clock path matches a working one and

@@ -522,6 +522,8 @@ fn case_a() -> Case {
             clkfbout_used: true,
             invert_rst: true,
             invert_pwrdwn: true,
+            more_outputs: [(1, false); 5],
+            invert_clkinsel: false,
         },
         expected,
     }
@@ -589,6 +591,8 @@ fn case_b() -> Case {
             clkfbout_used: true,
             invert_rst: false,
             invert_pwrdwn: true,
+            more_outputs: [(1, false); 5],
+            invert_clkinsel: false,
         },
         expected,
     }

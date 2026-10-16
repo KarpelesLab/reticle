@@ -176,7 +176,9 @@ pub use bram::{
 };
 pub use bufg::GlobalBufferError;
 pub use carry::{CarryPacking, legalise_carries};
-pub use cmt::{ClockManagerError, Counter, PllSettings, counter, pll_registers};
+pub use cmt::{
+    ClockManagerError, Counter, MmcmSettings, PllSettings, counter, mmcm_registers, pll_registers,
+};
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 
