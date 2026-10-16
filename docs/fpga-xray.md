@@ -2832,6 +2832,34 @@ image with other values would confirm it.
 
 Nothing here has run on a part.
 
+## Two functions in one lookup table: `LUT6_2`
+
+A slice's six-input table is two five-input ones sharing their inputs:
+with `A6` high `O6` reads the upper 32 bits of `INIT`, and `O5` reads the
+lower 32 whatever `A6` is. `xray::pack_lut_pairs` runs after the carry
+chains are legalised and puts two mapped tables whose inputs number five
+or fewer between them into one `LUT6_2`: the first on `O6`, the second on
+`O5`, `INIT = {first, second}`, and `I5` tied to one — what an unrouted
+`A6` reads here, so no route is needed for it. Tables on a carry chain,
+tables using all six inputs and kept ones are left alone.
+
+`O5` sits on an invented wire (`<wires>_MUX_<L>O5`) whose one way out is
+the output mux, `<L>OUTMUX.O5`. The flip-flop's data mux has an `O5`
+choice too (`<L>FFMUX.O5`) and it is deliberately **not** offered: the
+placer counts every wire of that mux as a way in for any signal, `O5`
+carries only its own table's lower half, and with it offered a 72 x 4096
+FIFO placed flip-flops beside single-function tables on the strength of a
+source that did not exist; the router then fought over the bypass inputs
+and did not converge (66 nodes oversubscribed, iteration after iteration).
+
+| Claim | Status | Source |
+|---|---|---|
+| `O6` reads `INIT[63:32]` with `A6` high, `O5` reads `INIT[31:0]` | **quoted** | UG474, the `LUT6_2` primitive |
+| an unrouted `A6` reads one | **the database's statement** (`IMUX` default `VCC_WIRE`) | `ppips_int_l.db` |
+| the packed tables compute what the two did | **checked** exhaustively, six tables with constants on some pins | `two_tables_in_one_answer_as_they_did_apart` |
+| a design packed this way routes and every bit decodes | **checked**: eight small functions in four `LUT6_2`s; the 72 x 4096 FIFO saves 52 of 248 sites | `small_functions_share_lookup_tables_and_still_route` |
+| it works on a part | **not checked** | — |
+
 ## NewAE's ChipWhisperer-Husky: the whole design, and where it stops
 
 Every primitive section above was found by building NewAE's Husky

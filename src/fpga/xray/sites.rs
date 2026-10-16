@@ -301,6 +301,13 @@ fn ff_data_wire(wires: &str, letter: char) -> String {
     format!("{wires}_MUX_{letter}FF_D")
 }
 
+/// The wire a lookup table's `O5` sits on, invented like
+/// [`ff_data_wire`]: the database gives `O5` no tile wire, only the muxes
+/// that select it (`<L>OUTMUX.O5`, `<L>FFMUX.O5`).
+fn lut5_wire(wires: &str, letter: impl std::fmt::Display) -> String {
+    format!("{wires}_MUX_{letter}O5")
+}
+
 /// The slice position a flip-flop sub-element names: `AFF` is `A`.
 ///
 /// The five-input flip-flops (`A5FF`) are deliberately **not** here.
@@ -381,6 +388,13 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
             pins.push(BelPin {
                 role: "o",
                 wire: format!("{wires}_{letter}"),
+            });
+            // The lower half's own output, which a `LUT6_2` drives and a
+            // single-function table leaves alone. It leaves the slice
+            // through the output mux; see [`slice_pass_throughs`].
+            pins.push(BelPin {
+                role: "o5",
+                wire: lut5_wire(wires, letter),
             });
             return pins;
         }
@@ -671,6 +685,20 @@ fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
         });
         for letter in SLICE_LETTERS {
             let data = ff_data_wire(wires, letter);
+            // A `LUT6_2`'s second output leaves the slice through the
+            // output mux (prjxray's `016-clb-noutmux` documents the `O5`
+            // choice, quoted). It is **not** offered to the flip-flop's data
+            // mux, though `<L>FFMUX.O5` exists: the placer counts every wire
+            // of that mux as a way in for any signal, and `O5` carries only
+            // its own table's lower half. Offered, it read as a free source
+            // beside every single-function table, the placer filled slices
+            // on the strength of it, and the flip-flops it promised went to
+            // the bypass input instead and could not all be routed.
+            out.push(PassThrough {
+                to: format!("{wires}_{letter}MUX"),
+                from: lut5_wire(wires, letter),
+                features: vec![format!("{prefix}.{letter}OUTMUX.O5")],
+            });
             out.push(PassThrough {
                 to: data.clone(),
                 from: format!("{wires}_{letter}"),
@@ -1495,6 +1523,9 @@ mod tests {
                 ("i4", "CLBLL_LL_A5"),
                 ("i5", "CLBLL_LL_A6"),
                 ("o", "CLBLL_LL_A"),
+                // A `LUT6_2`'s second output, on the invented wire the
+                // output mux reads.
+                ("o5", "CLBLL_LL_MUX_AO5"),
             ]
         );
         // The other slice of the same tile is the `_L_` one.
@@ -1669,11 +1700,19 @@ mod tests {
         let p = pass_throughs("CLBLL_L");
         assert!(!p.is_empty(), "a flip-flop needs a path to its `D`");
 
-        // Two slices, each with a clock enable, a set/reset, and two ways
-        // into each of four flip-flops; and a carry chain with two ways
-        // in, and per bit the sum and the carry each out to the output mux
-        // and to the flip-flop.
-        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 2 + 4 * 2 * 2));
+        // Two slices, each with a clock enable, a set/reset, two ways into
+        // each of four flip-flops, and each lookup table's `O5` out to the
+        // output mux; and a carry chain with two ways in, and per bit the
+        // sum and the carry each out to the output mux and to the
+        // flip-flop.
+        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 4 + 2 + 4 * 2 * 2));
+        // `O5` reaches the output mux and never a flip-flop: offered to the
+        // data mux it read as a free way in beside every table.
+        assert!(
+            !p.iter()
+                .any(|h| h.features.first().is_some_and(|f| f.ends_with("FFMUX.O5"))),
+            "an `O5` hop into a flip-flop: {p:?}"
+        );
 
         for hop in &p {
             assert_eq!(

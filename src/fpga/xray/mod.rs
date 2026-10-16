@@ -167,6 +167,7 @@ mod cmt;
 mod dsp;
 mod io;
 mod iologic;
+mod lutpack;
 mod lutram;
 mod parse;
 mod sites;
@@ -181,6 +182,7 @@ pub use cmt::{
     ClockManagerError, Counter, MmcmSettings, PllSettings, counter, mmcm_registers, pll_registers,
 };
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
+pub use lutpack::{LutPairing, pack_lut_pairs};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 
 /// Reads one `segbits_<type>.db`: a feature name and its bits per line.

@@ -3335,6 +3335,9 @@ fn write_xc7_bitstream(
     // every propagate bit that has none. See `xray::legalise_carries`.
     let mut design = design.clone();
     let packing = reticle::fpga::xray::legalise_carries(&mut design, top, device)?;
+    // Two functions of five inputs or fewer between them share a lookup
+    // table. See `xray::pack_lut_pairs`.
+    let pairing = reticle::fpga::xray::pack_lut_pairs(&mut design, top, device)?;
     let design = &design;
 
     let graph = fabric.arch.build_graph();
@@ -3530,6 +3533,7 @@ fn write_xc7_bitstream(
     if packing.carries > 0 {
         note.push_str(&format!("note: {}", packing.to_text()));
     }
+    note.push_str(&pairing.to_text());
     note.push_str(&format!(
         "note: wrote {path}, {} byte(s), {} frame(s), {} configuration bit(s) set\n",
         bytes.len(),

@@ -329,9 +329,10 @@ fn real_slices_become_real_bels() {
         .iter()
         .map(|(role, wire)| (role.as_str(), wire.name.as_str()))
         .collect();
-    assert_eq!(pins.len(), 7, "six inputs and an output: {pins:?}");
+    assert_eq!(pins.len(), 8, "six inputs and two outputs: {pins:?}");
     assert_eq!(pins[0].0, "i0");
     assert_eq!(pins[6].0, "o");
+    assert_eq!(pins[7].0, "o5", "a `LUT6_2`'s second output");
     // Every one of them names a wire the tile type really declares, or
     // the graph would grow a dangling edge.
     for (_, wire) in &pins {

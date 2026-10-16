@@ -1527,3 +1527,64 @@ fn a_block_ram_fifo_ties_its_resets_with_the_router_kept_off_the_ground_fans() {
     assert!(stderr.contains("16 block RAM(s) configured"), "{stderr}");
     assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
 }
+
+/// Small functions of shared inputs share lookup tables in a 7-series
+/// bitstream: eight one- to three-input functions of a shift register go
+/// into four `LUT6_2`s, every signal routes through their `O5` and `O6`,
+/// and every set bit decodes. The packing is
+/// `xray::pack_lut_pairs`; its truth tables are checked exhaustively
+/// in its own unit test.
+///
+/// Would catch the second output having no way out of the slice (the
+/// route fails) or its mux bit missing from the database (a bit left
+/// unexplained). Would not catch `O5` reading the lower half on silicon,
+/// which nothing here has measured.
+#[cfg(feature = "fpga")]
+#[test]
+fn small_functions_share_lookup_tables_and_still_route() {
+    let dir = scratch("lut_pairs");
+    let v = dir.join("p.v");
+    std::fs::write(
+        &v,
+        "module p(input wire clk, input wire d, output wire q);\n\
+         \x20 reg [15:0] s;\n\
+         \x20 always @(posedge clk) s <= {s[14:0], d};\n\
+         \x20 wire [7:0] f = {s[0]^s[1], s[2]&s[3], s[4]|s[5], ~s[6], s[7]^s[8]^s[9], \
+         s[10]&s[11]&s[12], s[13]|s[14], s[15]^s[0]};\n\
+         \x20 reg [7:0] r;\n\
+         \x20 always @(posedge clk) r <= f;\n\
+         \x20 assign q = ^r;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let rcf = dir.join("p.rcf");
+    std::fs::write(
+        &rcf,
+        "set_io -io_standard LVCMOS33 clk D4\nset_io -io_standard LVCMOS33 d L2\n\
+         set_io -io_standard LVCMOS33 q G1\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", v.to_str().unwrap(), "--device", "xc7a35t-ftg256"])
+        .arg("--constraints")
+        .arg(&rcf)
+        .arg("--output-dir")
+        .arg(&dir)
+        .arg("--bitstream")
+        .arg(dir.join("p.bit"))
+        .env("RETICLE_OFFLINE", "1")
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("needs a chip database") || stderr.contains("not in the cache") {
+        eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("share a site with another (`LUT6_2`)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("saving 0 site(s)"), "{stderr}");
+    assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
+}

@@ -366,6 +366,7 @@ device xc7a35t-cpg236
   bel LUT4 lut port i=I0,I1,I2,I3 o=O param INIT=16'h0000
   bel LUT3 lut port i=I0,I1,I2 o=O param INIT=8'h00
   bel LUT2 lut port i=I0,I1 o=O param INIT=4'h0
+  bel LUT6_2 lut port i=I0,I1,I2,I3,I4,I5 o=O6 o5=O5 param INIT=64'h0000000000000000
   bel LUT1 lut port i=I0 o=O param INIT=2'h0
   bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
   bel FDRE ff count 41600 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
@@ -572,6 +573,7 @@ device xc7a35t-ftg256
   bel LUT4 lut port i=I0,I1,I2,I3 o=O param INIT=16'h0000
   bel LUT3 lut port i=I0,I1,I2 o=O param INIT=8'h00
   bel LUT2 lut port i=I0,I1 o=O param INIT=4'h0
+  bel LUT6_2 lut port i=I0,I1,I2,I3,I4,I5 o=O6 o5=O5 param INIT=64'h0000000000000000
   bel LUT1 lut port i=I0 o=O param INIT=2'h0
   bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
   bel FDRE ff count 41600 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
