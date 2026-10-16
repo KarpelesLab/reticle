@@ -3385,8 +3385,15 @@ impl Mapper<'_> {
                 .collect();
             (cells, net_expr(module, drive, span), oes)
         });
-        if let Some((cells, ..)) = &tristate {
+        if let Some((cells, data, _)) = &tristate {
             absorbed.extend(cells.iter().copied());
+            // A tri-stated *output* has no way back in, so what the design
+            // reads of its own port is what it drives. Without this the
+            // net went undriven once its cell was taken over, and NewAE's
+            // Husky reads `target_hs2`, which it drives that way.
+            if dir == PortDir::Out {
+                add_assign(module, core, *data, span);
+            }
         }
 
         let pad = add_net(module, &format!("{name}$pad"), Type::bits(pins), span);
@@ -3606,7 +3613,11 @@ impl Mapper<'_> {
 
     /// The tri-state driver of `net`, as `(cell, data, enable)`, when
     /// exactly one cell drives the whole net and it is a
-    /// [`CellKind::Tristate`].
+    /// [`CellKind::Tristate`] — directly, or through one assignment of the
+    /// whole of another net that one tri-state drives, which is what
+    /// flattening makes of a submodule's tri-stated `output` connected to
+    /// a port. That assignment is turned round, so the inner net reads the
+    /// port's: whatever read the inner net reads what the port carries.
     ///
     /// # Why the whole net and nothing less
     ///
@@ -3618,36 +3629,82 @@ impl Mapper<'_> {
     /// bit — so requiring that one such cell drives the whole net is the
     /// same requirement, stated where it can be checked.
     ///
-    /// Anything else answers `None` and the port is buffered as an output,
-    /// with a warning saying so: a net two tri-states share (a real bus,
-    /// resolved in the fabric, which no FPGA does), a net a tri-state
-    /// drives only part of, a tri-state whose output is not the port's own
-    /// net. None of those is refused, because refusing would make a design
-    /// that used to build stop building; each is reported.
+    /// Anything else answers `None`: a net two tri-states share (a real
+    /// bus, resolved in the fabric, which no FPGA does), a net a tri-state
+    /// drives only part of, or a port with an assignment beside its
+    /// tri-state. An `inout` port then tries `absorbed_bitwise`, and failing
+    /// that is buffered as an output with a warning saying so. None of those
+    /// is refused, because refusing would make a design that used to build
+    /// stop building; each is reported.
     fn absorbed_tristate(
         &mut self,
-        module: &Module,
+        module: &mut Module,
         net: NetId,
     ) -> Option<(CellId, ExprId, ExprId)> {
-        let mut found = None;
-        for (id, cell) in module.cells.iter() {
-            let drives = cell.outputs.iter().any(|(_, out)| *out == net);
-            if !drives {
+        let only = |module: &Module, net: NetId| -> Option<Option<CellId>> {
+            let mut found = None;
+            for (id, cell) in module.cells.iter() {
+                if !cell.outputs.iter().any(|(_, out)| *out == net) {
+                    continue;
+                }
+                // Two drivers, or one that is not a tri-state: a bus the
+                // fabric would have to resolve, or no enable to read.
+                if cell.kind != CellKind::Tristate || found.is_some() {
+                    return None;
+                }
+                found = Some(id);
+            }
+            Some(found)
+        };
+        let tristate = |module: &Module, id: CellId| -> Option<(ExprId, ExprId)> {
+            let cell = &module.cells[id];
+            Some((cell.input("a")?, cell.input("en")?))
+        };
+        if let Some(id) = only(module, net)? {
+            if module
+                .assigns
+                .iter()
+                .any(|a| a.target.nets().contains(&net))
+            {
+                return None;
+            }
+            let (data, enable) = tristate(module, id)?;
+            return Some((id, data, enable));
+        }
+        // No cell drives the port, so perhaps one assignment of a whole
+        // net does, and a tri-state drives that: what flattening makes of
+        // a submodule's tri-stated `output` connected to the port. The
+        // assignment turns round, so the inner net reads the port's.
+        let mut via = None;
+        for (index, assign) in module.assigns.iter().enumerate() {
+            if !assign.target.nets().contains(&net) {
                 continue;
             }
-            if cell.kind != CellKind::Tristate {
+            let (Lvalue::Net(_), Some(inner)) =
+                (&assign.target, module.expr(assign.value).as_net())
+            else {
+                return None;
+            };
+            if via.is_some() {
                 return None;
             }
-            if found.is_some() {
-                // Two tri-states on one net: a bus the fabric would have
-                // to resolve, which it cannot.
-                return None;
-            }
-            let data = cell.inputs.iter().find(|(p, _)| p.as_str() == "a")?;
-            let enable = cell.inputs.iter().find(|(p, _)| p.as_str() == "en")?;
-            found = Some((id, data.1, enable.1));
+            via = Some((index, inner));
         }
-        found
+        let (index, inner) = via?;
+        let id = only(module, inner)??;
+        if module
+            .assigns
+            .iter()
+            .any(|a| a.target.nets().contains(&inner))
+            || module.nets[inner].ty.width() != module.nets[net].ty.width()
+        {
+            return None;
+        }
+        let (data, enable) = tristate(module, id)?;
+        let span = module.assigns[index].span;
+        module.assigns[index].target = Lvalue::Net(inner);
+        module.assigns[index].value = net_expr(module, net, span);
+        Some((id, data, enable))
     }
 
     /// An `inout` port's drivers bit by bit, as `(cells, data, enables)`,
@@ -6773,6 +6830,67 @@ mod tests {
                 .any(|a| matches!(a.target, Lvalue::Net(n) if n == t)),
             "nothing drives the tri-state's net now"
         );
+        assert!(validate(&design).is_empty(), "{:?}", validate(&design));
+    }
+
+    /// A tri-stated `output` that a submodule drives and the design reads:
+    /// flattening leaves `port = inner` and the tri-state on `inner`, as
+    /// NewAE's Husky does with `target_hs2`, which `reg_la` reads. The port
+    /// becomes an `OBUFT`, the tri-state goes, the inner net reads the
+    /// port's, and the port's net carries what is driven, so the reader is
+    /// not left on a net nothing drives.
+    ///
+    /// What this catches: the assignment not being followed (a `$tristate`
+    /// left for the netlist check to refuse), and the port's net going
+    /// undriven once the cell is taken over. It cannot catch `T`'s sense on
+    /// silicon.
+    #[test]
+    fn a_tristated_output_behind_an_assignment_is_followed_and_still_read() {
+        let (sources, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let data = b.input("data", Type::bit());
+        let oe = b.input("oe", Type::bit());
+        let hs2 = b.output("hs2", Type::bit());
+        let seen = b.output("seen", Type::bit());
+        let inner = b.add_net("inner", Type::bit());
+        let (data_e, oe_e) = (b.net(data), b.net(oe));
+        b.cell(
+            "tri",
+            CellKind::Tristate,
+            vec![(Name::new("a"), data_e), (Name::new("en"), oe_e)],
+            vec![(Name::new("y"), inner)],
+        );
+        let inner_e = b.net(inner);
+        b.assign(hs2, inner_e);
+        let hs2_e = b.net(hs2);
+        b.assign(seen, hs2_e);
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+
+        let mut diags = Diagnostics::new();
+        let constraints = Constraints::default();
+        let _ = map_with(&mut design, top, "xc7a35t-ftg256", &constraints, &mut diags);
+        let text = diags.render(&sources);
+        assert!(!diags.has_errors(), "{text}");
+        assert_eq!(cells_named(&design, top, "OBUFT"), 1, "{text}");
+        let module = design.module(top);
+        assert!(
+            module
+                .cells
+                .iter()
+                .all(|(_, c)| c.kind != CellKind::Tristate),
+            "the tri-state cell is still there"
+        );
+        let driven = |net: NetId| {
+            module
+                .assigns
+                .iter()
+                .any(|a| matches!(a.target, Lvalue::Net(n) if n == net))
+        };
+        assert!(driven(inner), "the inner net reads nothing");
+        let core = module.net_by_name("hs2").expect("the port's net");
+        assert!(driven(core), "the port's net carries nothing");
         assert!(validate(&design).is_empty(), "{:?}", validate(&design));
     }
 
