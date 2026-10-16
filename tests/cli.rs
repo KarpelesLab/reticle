@@ -1450,3 +1450,80 @@ fn a_carry_in_added_to_a_difference_places_and_routes() {
     assert_eq!(out.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
 }
+
+/// A 72 x 4096 FIFO between two clocks — the ChipWhisperer-Husky's
+/// `fast_slower_fifo` stand-in, sixteen block RAMs — builds to a bitstream.
+/// It did not: the tie that holds a block RAM's reset at zero, made after
+/// routing, found both of the interconnect tile's ground fans spent by the
+/// router as hops, and a reset arrives on a `CTRL` wire, which has no
+/// default of one to fall back on. The fans those ties need are now closed
+/// to the router (`XrayFabric::block_ram_ground_fans`).
+///
+/// It would catch the reservation lost or naming the wrong fans, in this
+/// placement; a placement that happens to leave the fans free would pass
+/// either way, which is why this is a design that failed three runs out of
+/// three before.
+///
+/// Ignored because it places and routes sixteen block RAMs and their
+/// FIFO: about 70 s from a release build. Run it with `cargo test --release
+/// --all-features --test cli -- --include-ignored a_block_ram_fifo`.
+#[cfg(feature = "fpga")]
+#[test]
+#[ignore = "places and routes sixteen block RAMs; run with --release --include-ignored"]
+fn a_block_ram_fifo_ties_its_resets_with_the_router_kept_off_the_ground_fans() {
+    let dir = scratch("bram_ground_fans");
+    let v = dir.join("w.v");
+    std::fs::write(
+        &v,
+        "module w(input wire clk, input wire clk2, input wire rst, input wire d, input wire wr, \
+         input wire rd, output wire q, output wire e, output wire pe);\n\
+         \x20 reg [71:0] sh;\n\
+         \x20 always @(posedge clk) sh <= {sh[70:0], d};\n\
+         \x20 wire [71:0] dout;\n\
+         \x20 wire full, ov, un;\n\
+         \x20 fast_slower_fifo u (.rst(rst), .wr_clk(clk), .rd_clk(clk2), .din(sh), .wr_en(wr), \
+         .rd_en(rd), .dout(dout), .full(full), .empty(e), .prog_empty(pe), .overflow(ov), \
+         .underflow(un));\n\
+         \x20 assign q = ^dout ^ full ^ ov ^ un;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let rcf = dir.join("w.rcf");
+    let pins = [
+        ("clk", "D4"),
+        ("clk2", "N12"),
+        ("rst", "L3"),
+        ("d", "L2"),
+        ("wr", "B6"),
+        ("rd", "G2"),
+        ("q", "G1"),
+        ("e", "E2"),
+        ("pe", "A7"),
+    ];
+    let text: String = pins
+        .iter()
+        .map(|(port, pin)| format!("set_io -io_standard LVCMOS33 {port} {pin}\n"))
+        .collect();
+    std::fs::write(&rcf, text).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga"])
+        .arg(&v)
+        .arg("examples/husky/fifo_generator.v")
+        .args(["--top", "w", "--device", "xc7a35t-ftg256", "--constraints"])
+        .arg(&rcf)
+        .arg("--output-dir")
+        .arg(&dir)
+        .arg("--bitstream")
+        .arg(dir.join("w.bit"))
+        .env("RETICLE_OFFLINE", "1")
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("needs a chip database") || stderr.contains("not in the cache") {
+        eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("16 block RAM(s) configured"), "{stderr}");
+    assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
+}

@@ -467,6 +467,10 @@ pub fn tie_policy(role: &str) -> TiePolicy {
     }
 }
 
+/// One input to make read something: the policy, the instance, the pin's
+/// role, and the pin's node.
+type Want = (TiePolicy, String, String, NodeId);
+
 /// The inverting pins of a `RAMB18E1` half, each of which has a
 /// `ZINV_<pin>` feature: set means **not** inverted. nextpnr-xilinx sets it
 /// for every one of them unless the cell's `IS_<pin>_INVERTED` is 1.
@@ -840,6 +844,168 @@ fn tie(
 }
 
 impl XrayFabric {
+    /// What every input pin of one placed `RAMB18E1` is to be made to
+    /// read, appended to `wants`: the pins a signal reaches are left
+    /// alone, every other one gets a [`TiePolicy`]. `is_routed` says which
+    /// signals reach their pins; before routing it is "all of them", which
+    /// is what [`XrayFabric::block_ram_ground_fans`] asks.
+    #[allow(clippy::too_many_arguments, reason = "one instance's whole context")]
+    fn instance_wants(
+        params: &dyn Fn(&str) -> Option<AttrValue>,
+        instance: &crate::fpga::place::Instance,
+        site: &crate::fpga::arch::ArchSite,
+        netlist: &Netlist,
+        is_routed: &dyn Fn(usize) -> bool,
+        wants: &mut Vec<Want>,
+    ) -> Result<(), String> {
+        // Every input pin of the bel: routed, a constant, or unconnected.
+        let mut given: HashMap<&str, Option<Bit>> = HashMap::new();
+        for pin in &instance.pins {
+            let pin = &netlist.pins[*pin];
+            if pin.output {
+                continue;
+            }
+            let value = match (pin.signal, pin.constant) {
+                (Some(signal), _) if is_routed(signal) => None,
+                (Some(_), _) => {
+                    return Err(format!(
+                        "`{}` carries a signal the router did not route",
+                        pin.role
+                    ));
+                }
+                (None, Some(bit)) => Some(bit),
+                (None, None) => continue,
+            };
+            given.insert(pin.role.as_str(), value);
+        }
+        // The data bits some port's output is routed from: a `din<i>`
+        // outside this set stores a value nobody reads.
+        let read: HashSet<u32> = instance
+            .pins
+            .iter()
+            .map(|pin| &netlist.pins[*pin])
+            .filter(|pin| pin.output)
+            .filter(|pin| pin.signal.is_some_and(is_routed))
+            .filter_map(|pin| pin.role.split_once("_dout"))
+            .filter_map(|(_, bit)| bit.parse::<u32>().ok())
+            .collect();
+        // Whether the port a role belongs to is ever enabled: its
+        // enable is routed or tied to one.
+        let enabled = |role: &str| -> bool {
+            let port = role.strip_prefix(TIE_ONLY).unwrap_or(role);
+            let Some((port, _)) = port.split_once('_') else {
+                return true;
+            };
+            !matches!(
+                given.get(format!("{port}_en").as_str()),
+                None | Some(Some(Bit::Zero))
+            )
+        };
+        for (role, node) in &site.pins {
+            if is_output(role) {
+                continue;
+            }
+            // An address bit below the width mode's own range, or a data
+            // bit nothing stores or nothing reads, is one that does not matter,
+            // whether the netlist gives it a constant or nothing at all,
+            // so it must not be able to fail a build: see
+            // [`unused_address_bit`] and [`unused_data_bit`].
+            let idle = unused_address_bit(role, &params) || unused_data_bit(role, &params, &read);
+            let want = match given.get(role.as_str()) {
+                Some(None) => continue,
+                Some(Some(Bit::Zero)) if idle => TiePolicy::Idle,
+                Some(Some(Bit::Zero)) => TiePolicy::Zero,
+                Some(Some(Bit::One)) => TiePolicy::One,
+                Some(Some(other)) => {
+                    return Err(format!("`{role}` is the constant `{other:?}`"));
+                }
+                None if idle => TiePolicy::Idle,
+                None => match tie_policy(role) {
+                    // A port whose enable is tied low reads and writes
+                    // nothing, so its address is as idle as data.
+                    TiePolicy::Zero if !role.ends_with("_en") && !enabled(role) => TiePolicy::Idle,
+                    other => other,
+                },
+            };
+            if want != TiePolicy::Leave {
+                wants.push((want, instance.name.clone(), role.clone(), *node));
+            }
+        }
+        Ok(())
+    }
+
+    /// The ground fans the block RAMs' zero ties will need, for the router
+    /// to leave alone.
+    ///
+    /// A zero on a block RAM's input is `GND_WIRE -> GFAN<n> -> the input`
+    /// in the interconnect tile the input enters from, and a tile has two
+    /// such fans. They are ordinary wires to the router, which spends them
+    /// on signals as hops, and the tie, made after routing, then finds both
+    /// taken: a block RAM's reset arrives on a `CTRL` wire, which has no
+    /// default of one to fall back on either. The ChipWhisperer-Husky's
+    /// FIFOs failed exactly so. Asked before routing, with every signal
+    /// taken to reach its pins, this names every fan that could serve a pin
+    /// [`TiePolicy::Zero`] will tie, so that none of them carries a signal.
+    /// A fan serves any number of zero ties at once, so reserving it costs
+    /// the tie nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`XrayFabric::configure_block_rams`], for an instance it would
+    /// refuse anyway.
+    pub fn block_ram_ground_fans(
+        &self,
+        design: &Design,
+        module: ModuleId,
+        graph: &RoutingGraph,
+        netlist: &Netlist,
+        placement: &Placement,
+    ) -> Result<Vec<NodeId>, BlockRamError> {
+        let Some(m) = design.modules.get(module) else {
+            return Ok(Vec::new());
+        };
+        let mut wants: Vec<Want> = Vec::new();
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.primitive != PRIMITIVE {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let cell = m.cells.get(instance.cell);
+            let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            Self::instance_wants(&params, instance, site, netlist, &|_| true, &mut wants).map_err(
+                |message| BlockRamError {
+                    instance: instance.name.clone(),
+                    message,
+                },
+            )?;
+        }
+        let mut fans: Vec<NodeId> = Vec::new();
+        for (want, _, _, node) in &wants {
+            if *want != TiePolicy::Zero {
+                continue;
+            }
+            for behind in fixed_chain(graph, *node) {
+                for pip in graph.incoming(behind) {
+                    if graph.pip_bits(*pip).is_empty() {
+                        continue;
+                    }
+                    let fan = graph.pip(*pip).from;
+                    let grounded = graph.incoming(fan).iter().any(|p| {
+                        !graph.pip_bits(*p).is_empty()
+                            && graph.wire(graph.pip(*p).from).name == "GND_WIRE"
+                    });
+                    if grounded && !fans.contains(&fan) {
+                        fans.push(fan);
+                    }
+                }
+            }
+        }
+        Ok(fans)
+    }
+
     /// Configures every placed `RAMB18E1`: its mode features and a value
     /// on every input the
     /// design does not drive. Run after routing and after
@@ -873,7 +1039,7 @@ impl XrayFabric {
             .flat_map(|route| route.nodes.iter().copied())
             .collect();
         let mut ties = Ties::default();
-        let mut wants: Vec<(TiePolicy, String, String, NodeId)> = Vec::new();
+        let mut wants: Vec<Want> = Vec::new();
 
         for (index, instance) in netlist.instances.iter().enumerate() {
             if instance.primitive != PRIMITIVE {
@@ -907,89 +1073,22 @@ impl XrayFabric {
                 report.features += 1;
             }
 
-            // Every input pin of the bel: routed, a constant, or unconnected.
-            let mut given: HashMap<&str, Option<Bit>> = HashMap::new();
-            for pin in &instance.pins {
-                let pin = &netlist.pins[*pin];
-                if pin.output {
-                    continue;
-                }
-                let value = match (pin.signal, pin.constant) {
-                    (Some(signal), _) if routing.route(signal).is_some() => None,
-                    (Some(_), _) => {
-                        return Err(fail(format!(
-                            "`{}` carries a signal the router did not route",
-                            pin.role
-                        )));
-                    }
-                    (None, Some(bit)) => Some(bit),
-                    (None, None) => continue,
-                };
-                given.insert(pin.role.as_str(), value);
-            }
-            // The data bits some port's output is routed from: a `din<i>`
-            // outside this set stores a value nobody reads.
-            let read: HashSet<u32> = instance
-                .pins
-                .iter()
-                .map(|pin| &netlist.pins[*pin])
-                .filter(|pin| pin.output)
-                .filter(|pin| pin.signal.is_some_and(|s| routing.route(s).is_some()))
-                .filter_map(|pin| pin.role.split_once("_dout"))
-                .filter_map(|(_, bit)| bit.parse::<u32>().ok())
-                .collect();
-            // Whether the port a role belongs to is ever enabled: its
-            // enable is routed or tied to one.
-            let enabled = |role: &str| -> bool {
-                let port = role.strip_prefix(TIE_ONLY).unwrap_or(role);
-                let Some((port, _)) = port.split_once('_') else {
-                    return true;
-                };
-                !matches!(
-                    given.get(format!("{port}_en").as_str()),
-                    None | Some(Some(Bit::Zero))
-                )
-            };
-            for (role, node) in &site.pins {
-                if is_output(role) {
-                    continue;
-                }
-                // An address bit below the width mode's own range, or a data
-                // bit nothing stores or nothing reads, is one that does not matter,
-                // whether the netlist gives it a constant or nothing at all,
-                // so it must not be able to fail a build: see
-                // [`unused_address_bit`] and [`unused_data_bit`].
-                let idle =
-                    unused_address_bit(role, &params) || unused_data_bit(role, &params, &read);
-                let want = match given.get(role.as_str()) {
-                    Some(None) => continue,
-                    Some(Some(Bit::Zero)) if idle => TiePolicy::Idle,
-                    Some(Some(Bit::Zero)) => TiePolicy::Zero,
-                    Some(Some(Bit::One)) => TiePolicy::One,
-                    Some(Some(other)) => {
-                        return Err(fail(format!("`{role}` is the constant `{other:?}`")));
-                    }
-                    None if idle => TiePolicy::Idle,
-                    None => match tie_policy(role) {
-                        // A port whose enable is tied low reads and writes
-                        // nothing, so its address is as idle as data.
-                        TiePolicy::Zero if !role.ends_with("_en") && !enabled(role) => {
-                            TiePolicy::Idle
-                        }
-                        other => other,
-                    },
-                };
-                if want != TiePolicy::Leave {
-                    wants.push((want, instance.name.clone(), role.clone(), *node));
-                }
-            }
+            Self::instance_wants(
+                &params,
+                instance,
+                site,
+                netlist,
+                &|signal| routing.route(signal).is_some(),
+                &mut wants,
+            )
+            .map_err(fail)?;
             report.rams += 1;
         }
 
         // The ties that matter first, so that a fan wire the router left
         // free goes to a write enable before it goes to a data bit nobody
         // writes.
-        wants.sort_by_key(|(want, _, _, _)| *want == TiePolicy::Idle);
+        wants.sort_by_key(|(want, ..)| *want == TiePolicy::Idle);
         for (want, instance, role, node) in wants {
             let fail = |message: String| BlockRamError {
                 instance: instance.clone(),
