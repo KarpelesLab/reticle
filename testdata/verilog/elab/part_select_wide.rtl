@@ -1,0 +1,11 @@
+top part_select_wide
+
+module part_select_wide
+  net %r u5 wire
+  net %i u2 wire
+  net %y u8 wire
+  port r in %r
+  port i in %i
+  port y out %y
+  assign %y = {8'bxxxxxxxx, %r}[mul(resize(%i, u32), 32'd8) +: 8]
+end

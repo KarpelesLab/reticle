@@ -740,6 +740,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     let scale = self.b.const_u64(nw, u64::from(ew));
                     self.b.binary(IrBin::Mul, base_off, scale)
                 };
+                // A selection wider than the vector itself — `r[i*8 +: 8]`
+                // of a five-bit `r`, as NewAE's `esad` reads its trigger
+                // time — reads `x` above the top, which is what the bits it
+                // runs past are. The IR's selection must fit its operand, so
+                // the operand grows by that many `x` bits first.
+                let have = self.expr_width(id);
+                let id = if count > have {
+                    let pad = self.b.constant(Logic::x(count));
+                    self.b.concat(vec![pad, id])
+                } else {
+                    id
+                };
                 self.b.indexed_slice(id, offset, count, true)
             }
         }
