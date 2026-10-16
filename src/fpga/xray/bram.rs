@@ -151,6 +151,7 @@ struct Side {
     din: &'static str,
     dout: &'static str,
     dinp: &'static str,
+    doutp: &'static str,
     regce: &'static str,
     rstreg: &'static str,
     addr_tie: &'static str,
@@ -165,6 +166,7 @@ const SIDES: [Side; 2] = [
         din: "DIADI",
         dout: "DOADO",
         dinp: "DIPADIP",
+        doutp: "DOPADOP",
         regce: "REGCEAREGCE",
         rstreg: "RSTREGARSTREG",
         addr_tie: "ADDRATIEHIGH",
@@ -177,6 +179,7 @@ const SIDES: [Side; 2] = [
         din: "DIBDI",
         dout: "DOBDO",
         dinp: "DIPBDIP",
+        doutp: "DOPBDOP",
         regce: "REGCEB",
         rstreg: "RSTREGB",
         addr_tie: "ADDRBTIEHIGH",
@@ -226,7 +229,8 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str) -> Vec<(String, String)> {
             pin(format!("{p}dout{i}"), format!("{}{i}", side.dout));
         }
         for i in 0..2 {
-            pin(format!("{TIE_ONLY}{p}dinp{i}"), format!("{}{i}", side.dinp));
+            pin(format!("{p}dinp{i}"), format!("{}{i}", side.dinp));
+            pin(format!("{p}doutp{i}"), format!("{}{i}", side.doutp));
             pin(
                 format!("{TIE_ONLY}{p}addrtie{i}"),
                 format!("{}{i}", side.addr_tie),
@@ -1078,7 +1082,7 @@ mod tests {
         // write enables there are, which `TDP` does not use. A write
         // enable the netlist *does* map a port onto stays `Zero`, which is
         // the pair of assertions that matter here.
-        for role in ["p0_din2", "tie_p1_dinp1", "tie_p1_we4", "tie_p1_we7"] {
+        for role in ["p0_din2", "p1_dinp1", "tie_p1_we4", "tie_p1_we7"] {
             assert_eq!(tie_policy(role), TiePolicy::Idle, "{role}");
         }
         assert_eq!(tie_policy("tie_p0_addrtie1"), TiePolicy::One);
@@ -1086,6 +1090,10 @@ mod tests {
         assert_eq!(tie_policy("tie_p1_regce"), TiePolicy::Leave);
         assert!(is_output("p0_dout7"));
         assert!(!is_output("p0_din7"));
+        // The parity pins are roles of their own since the 18- and 9-bit
+        // modes carry data on them.
+        assert!(is_output("p1_doutp1"));
+        assert!(!is_output("p1_dinp1"));
     }
 
     /// Which address bits a width mode leaves unread, which is what stops
@@ -1158,7 +1166,7 @@ mod tests {
                 "{bit}"
             );
         }
-        assert!(!unused_data_bit("tie_p0_dinp1", &mixed, &all_read));
+        assert!(!unused_data_bit("p0_dinp1", &mixed, &all_read));
         // 9 bits stores `DI[7:0]` and `DIP[0]`; the read width is 18 and
         // does not decide.
         assert!(!unused_data_bit("p1_din7", &mixed, &all_read));
@@ -1168,8 +1176,8 @@ mod tests {
                 "{bit}"
             );
         }
-        assert!(!unused_data_bit("tie_p1_dinp0", &mixed, &all_read));
-        assert!(unused_data_bit("tie_p1_dinp1", &mixed, &all_read));
+        assert!(!unused_data_bit("p1_dinp0", &mixed, &all_read));
+        assert!(unused_data_bit("p1_dinp1", &mixed, &all_read));
         // Mixed widths: an unread bit inside the write width is not
         // claimed, because bit `i` in is not bit `i` out.
         assert!(!unused_data_bit("p0_din13", &mixed, &HashSet::new()));

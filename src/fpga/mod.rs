@@ -421,6 +421,12 @@ mod tests {
                 };
                 for &(width, depth) in &bram.width_modes {
                     let layout = bram.layout_for_mode((width, depth));
+                    // A mode whose top bits are parity describes no
+                    // contents, by design (`BramModeLayout::parity`).
+                    if layout.parity > 0 {
+                        assert!(layout.init.is_none(), "{}", device.name);
+                        continue;
+                    }
                     let init = layout.init.as_ref().unwrap_or_else(|| {
                         panic!("{}: the {width}x{depth} mode has no layout", device.name)
                     });

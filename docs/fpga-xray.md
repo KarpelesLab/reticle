@@ -2639,6 +2639,30 @@ four tie-highs and its own enable).
 4. Only the true-dual-port widths 1, 2, 4, 9 and 18 are described;
    `RAM_MODE = "SDP"` and the 36-bit width are refused by name.
 
+### The parity bits, as data (2026-10-16)
+
+Until this date the device file used the 16 kbit of data in each
+`RAMB18E1` and left the 2 kbit of parity alone, because the parity
+bits' initial contents live in a second parameter series (`INITP_xx`)
+that the contents model does not describe. NewAE's ChipWhisperer-Husky
+made that untenable: its FIFOs hold 1.83 Mbit on a part with 1.84 Mbit,
+which is 100 blocks at 18 bits wide and 112 at 16 — on a part with 100.
+
+There are now two more modes, `18 1024` and `9 2048`, whose top bits
+travel on `DIPADIP`/`DIPBDIP` in and `DOPADOP`/`DOPBDOP` out. A `mode`
+line says so with `parity 2` or `parity 1`, and the ports with
+`dinp=`/`doutp=`; the netlist's roles are `p<n>_dinp<i>` and
+`p<n>_doutp<i>`, which used to be tie-only. Because the modes describe no
+contents, the mapper offers them only to a memory with no initial value,
+and because a mode without parity wins a tie, a 16-bit memory keeps the
+16-bit mode it always had.
+
+| Claim | Status | Source |
+|---|---|---|
+| 18 bits is `DI[15:0]` + `DIP[1:0]`, 9 bits `DI[7:0]` + `DIP[0]`, at the same `READ/WRITE_WIDTH` values the data-only modes already set | **quoted** | UG473's port tables; the widths the database's fuzzers set |
+| an 18 × 1024 memory takes one block, its four parity pins carry routed signals, every set bit decodes and the arcs are the router's | **checked** | `tests/fpga_xray_bram.rs::an_eighteen_bit_memory_uses_the_parity_pins` |
+| a parity bit stores and returns the bit written | **not checked**: nothing has read one back off a part | — |
+
 ## Global clock buffers by name: `BUFGCE`, `BUFGMUX`, `IBUFG`
 
 A design may now instantiate the 7-series clock buffers it used to get

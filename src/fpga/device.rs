@@ -1108,6 +1108,19 @@ pub struct BramModeLayout {
     /// correct. `docs/fpga-trellis.md` has that measurement and the
     /// confounded comparison that asked for the flag.
     pub neighbours: u32,
+    /// How many of the mode's top data bits travel on the parity pins
+    /// (`dinp` and `doutp` on each port) rather than the data pins: a
+    /// 7-series `RAMB18E1` stores 18 bits as `DI[15:0]` and `DIP[1:0]`,
+    /// and 9 as `DI[7:0]` and `DIP[0]`. Written `parity 2` on the `mode`
+    /// line.
+    ///
+    /// Such a mode has no `init` layout, because the parity bits' contents
+    /// are a second parameter series (`INITP_xx`) that the contents model
+    /// does not describe; the mapper gives it only memories with no initial
+    /// contents, and prefers a mode without parity when the two cost the
+    /// same, so a memory that never needed the extra bits keeps the layout
+    /// it always had.
+    pub parity: u32,
 }
 
 impl BramModeLayout {
@@ -2451,6 +2464,9 @@ fn write_mode_layout(line: &mut String, layout: &BramModeLayout) {
     if layout.neighbours > 0 {
         line.push_str(&format!(" neighbours {}", layout.neighbours));
     }
+    if layout.parity > 0 {
+        line.push_str(&format!(" parity {}", layout.parity));
+    }
 }
 
 /// Writes bit positions as a comma-separated list, with a run of three
@@ -3161,6 +3177,34 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        // A parity mode puts its top bits on pins of their own, so it
+        // spreads nothing, describes no contents, and needs those pins on
+        // every port that moves data.
+        for (&(width, _), layout) in bram.width_modes.iter().zip(&bram.mode_layouts) {
+            if layout.parity == 0 {
+                continue;
+            }
+            let problem = if layout.parity >= width {
+                Some(format!("`parity {}` leaves no data bits", layout.parity))
+            } else if !layout.data_bits.is_empty() {
+                Some("a parity mode cannot also spread its bits with `data`".to_owned())
+            } else if layout.init.is_some() {
+                Some("a parity mode cannot describe its contents with `init`".to_owned())
+            } else if bram.port_map.iter().any(|port| {
+                (port.signal("din").is_some() && port.signal("dinp").is_none())
+                    || (port.signal("dout").is_some() && port.signal("doutp").is_none())
+            }) {
+                Some("a parity mode needs `dinp` and `doutp` on every port with data".to_owned())
+            } else {
+                None
+            };
+            if let Some(problem) = problem {
+                self.error(
+                    header.span,
+                    format!("block RAM `{}`, mode {width}: {problem}", bram.name),
+                );
+            }
+        }
         Some(bram)
     }
 
@@ -3259,6 +3303,12 @@ impl<'a> Parser<'a> {
                 "neighbours" => {
                     if let Some(value) = self.number_at(line, index, "a number of blocks") {
                         layout.neighbours = value;
+                    }
+                    index += 1;
+                }
+                "parity" => {
+                    if let Some(value) = self.number_at(line, index, "a number of parity bits") {
+                        layout.parity = value;
                     }
                     index += 1;
                 }

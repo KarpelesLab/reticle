@@ -1124,7 +1124,11 @@ impl Mapper<'_> {
             );
         }
 
-        let Some((shape_index, mode, wide, deep)) = self.choose_bram(width, depth) else {
+        let has_init = module.memories[mem]
+            .init
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        let Some((shape_index, mode, wide, deep)) = self.choose_bram(width, depth, has_init) else {
             return give_up(
                 self,
                 format!(
@@ -1288,7 +1292,8 @@ impl Mapper<'_> {
     }
 
     /// Picks the mode that costs the fewest blocks, then the one that
-    /// spreads a word over fewest blocks, then the widest.
+    /// spreads a word over fewest blocks, then one without parity bits,
+    /// then the widest.
     ///
     /// **Cost, not count.** A mode can cost more than the blocks it
     /// occupies: `blocks * (1 + neighbours)`, where
@@ -1312,6 +1317,13 @@ impl Mapper<'_> {
     /// side by side is a different arrangement from one a single block
     /// holds, and the one this flow has evidence for is the single block.
     ///
+    /// **Without parity** before widest: a 16-bit memory fits one block of
+    /// a `RAMB18E1` at 16 bits or at 18, and the 16-bit mode is the one it
+    /// always had. A mode with parity is for the memory that needs the
+    /// bits — 72 bits wide is four blocks at 18 and five at 16 — and is
+    /// never offered one with initial contents
+    /// ([`BramModeLayout::parity`](crate::fpga::device::BramModeLayout::parity)).
+    ///
     /// **Widest** last, which is the oldest rule here and keeps a memory
     /// that fits either way on the simplest addressing. It is also what
     /// keeps a 320 x 4 memory in the 9-bit mode rather than the 4-bit one,
@@ -1323,12 +1335,23 @@ impl Mapper<'_> {
     /// narrow modes back off a Cynthion and found every address and every
     /// value correct, and `docs/fpga-trellis.md` has that measurement and
     /// the confounded comparison that had asked for the term.
-    fn choose_bram(&self, width: u32, depth: u64) -> Option<(usize, (u32, u32), u32, u32)> {
+    fn choose_bram(
+        &self,
+        width: u32,
+        depth: u64,
+        has_init: bool,
+    ) -> Option<(usize, (u32, u32), u32, u32)> {
         let mut best: Option<(usize, (u32, u32), u32, u32)> = None;
-        let mut best_key: Option<(u64, u32, u32)> = None;
+        let mut best_key: Option<(u64, u32, bool, u32)> = None;
         for (index, shape) in self.device.block_rams.iter().enumerate() {
             for (mode, &(mode_width, mode_depth)) in shape.width_modes.iter().enumerate() {
                 if mode_width == 0 || mode_depth == 0 {
+                    continue;
+                }
+                // A mode with parity bits has nowhere to put their initial
+                // contents (`BramModeLayout::parity`).
+                let parity = shape.mode_layouts.get(mode).is_some_and(|l| l.parity > 0);
+                if parity && has_init {
                     continue;
                 }
                 let wide = div_ceil_u32(width, mode_width);
@@ -1348,7 +1371,7 @@ impl Mapper<'_> {
                 // The blocks the mode really costs, then fewest blocks per
                 // word, then the widest. See the doc comment.
                 let cost = blocks * (1 + neighbours);
-                let key = (cost, wide, u32::MAX - mode_width);
+                let key = (cost, wide, parity, u32::MAX - mode_width);
                 if best_key.is_none_or(|b| key < b) {
                     best_key = Some(key);
                     best = Some((index, (mode_width, mode_depth), wide, deep));
@@ -1426,7 +1449,9 @@ impl Mapper<'_> {
             .data_bits
             .iter()
             .max()
-            .map_or(mode_width, |top| top + 1);
+            .map_or(mode_width - layout.parity, |top| top + 1);
+        // The mode's top bits on the parity pins, when it has any.
+        let parity = layout.parity;
 
         // For each read port, the value read by each depth slice.
         let mut rows: Vec<Vec<ExprId>> = vec![Vec::new(); read_ports.len()];
@@ -1475,7 +1500,18 @@ impl Mapper<'_> {
                             span,
                         );
                         outputs.push((Name::new(name), net));
-                        let value = net_expr(module, net, span);
+                        let mut value = net_expr(module, net, span);
+                        if let (true, Some(name)) = (parity > 0, map.signal("doutp")) {
+                            let top = add_net(
+                                module,
+                                &format!("{base}$rdp{index}_w{w}_d{d}"),
+                                Type::bits(parity),
+                                span,
+                            );
+                            outputs.push((Name::new(name), top));
+                            let top = net_expr(module, top, span);
+                            value = expr(module, ExprKind::Concat(vec![top, value]), span);
+                        }
                         let part = if layout.data_bits.is_empty() {
                             slice_expr(module, value, hi - lo, 0, span)
                         } else {
@@ -1537,7 +1573,16 @@ impl Mapper<'_> {
                         } else {
                             spread_data(module, data, layout, lo, hi, data_pins, span)
                         };
-                        inputs.push((Name::new(name), value));
+                        match (parity > 0, map.signal("dinp")) {
+                            (true, Some(pins)) => {
+                                let low = slice_expr(module, value, data_pins - 1, 0, span);
+                                let top =
+                                    slice_expr(module, value, mode_width - 1, data_pins, span);
+                                inputs.push((Name::new(name), low));
+                                inputs.push((Name::new(pins), top));
+                            }
+                            _ => inputs.push((Name::new(name), value)),
+                        }
                     }
                 }
                 let cell = add_cell(

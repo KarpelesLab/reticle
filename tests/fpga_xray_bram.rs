@@ -102,6 +102,7 @@ fn block_ram_halves_become_bels_with_pins() {
             let width = match role.as_str() {
                 "addr" => 14,
                 "din" | "dout" => 16,
+                "dinp" | "doutp" => 2,
                 "we" => port.width(role),
                 _ => 1,
             };
@@ -117,7 +118,9 @@ fn block_ram_halves_become_bels_with_pins() {
     for name in ["RAMB18_Y0", "RAMB18_Y1"] {
         let bel = ty.bel(name).unwrap_or_else(|| panic!("no bel {name}"));
         assert_eq!(bel.kind, "bram");
-        assert_eq!(bel.pins.len(), 122, "{name}");
+        // 126 since the parity outputs became pins of their own; 122
+        // when the parity inputs were tie-only and the outputs absent.
+        assert_eq!(bel.pins.len(), 126, "{name}");
         for role in &wanted {
             assert!(
                 bel.pins.iter().any(|(r, _)| r == role),
@@ -225,6 +228,9 @@ struct Built {
     /// Pips taken through a site (an IO logic hop), whose bits are site
     /// features rather than an arc of their own.
     site_hops: usize,
+    /// The roles of every block RAM pin whose signal was routed
+    /// (`p0_doutp1`), over all the block RAMs.
+    routed_roles: std::collections::BTreeSet<String>,
 }
 
 /// Builds a design the way `reticle fpga --bitstream` does: synthesis,
@@ -432,8 +438,21 @@ fn build(root: &str, verilog: &str, rcf: &str, half: Option<&str>) -> Built {
         }
         rams.push((names[&site.tile].clone(), site.bel.clone(), inits));
     }
+    let mut routed_roles = BTreeSet::new();
+    for instance in netlist.instances.iter() {
+        if instance.primitive != "RAMB18E1" {
+            continue;
+        }
+        for pin in &instance.pins {
+            let pin = &netlist.pins[*pin];
+            if pin.signal.is_some_and(|s| routing.route(s).is_some()) {
+                routed_roles.insert(pin.role.clone());
+            }
+        }
+    }
     let routable = netlist.signals.iter().filter(|s| s.is_routable()).count();
     Built {
+        routed_roles,
         decoded,
         arcs,
         wires,
@@ -684,6 +703,83 @@ fn a_one_bit_wide_memorys_data_pin_reaches_the_fabric() {
     assert_eq!(built.signals.0, built.signals.1, "not every signal routed");
     assert_eq!(built.decoded.unexplained, 0);
     assert_arcs_are_the_routers(&built);
+}
+
+/// An 18-bit memory with no initial contents, which fits **one** block
+/// only in the mode whose top two bits travel on the parity pins
+/// (`DIPADIP`/`DIPBDIP` in, `DOPADOP`/`DOPBDOP` out): the 16-bit mode
+/// takes two. NewAE's ChipWhisperer-Husky fits its FIFOs in the part only
+/// this way.
+///
+/// What this establishes: the mapper takes the parity mode, the netlist's
+/// parity roles are pins of the bel with wires behind them, every bit
+/// written and read reaches one (no pin reads a signal nothing drives),
+/// every set bit decodes, and the arcs are exactly the router's — with
+/// the two parity outputs among them. It would catch a parity pin left
+/// off the bel (then the role has no wire and its signal no driver), and
+/// the tie-break going the wrong way (two blocks).
+///
+/// What it would not catch: that the parity bits store and return the
+/// right data. The pins are UG473's, quoted; nothing here has read a
+/// parity bit back off a part.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn an_eighteen_bit_memory_uses_the_parity_pins() {
+    let Some(root) = chipdb() else { return };
+    let verilog = "module parity18 (input wire clk, input wire we, input wire [9:0] a, \
+                   input wire d, output wire q);
+        reg [17:0] mem [0:1023];
+        reg [17:0] mem_q;
+        reg [17:0] shift;
+        always @(posedge clk) begin
+            shift <= {shift[16:0], d};
+            if (we) mem[a] <= shift;
+            mem_q <= mem[a];
+        end
+        assign q = ^mem_q;
+    endmodule";
+    let mut rcf = String::from("set_io -io_standard LVCMOS33 clk W5\n");
+    let pins = [
+        "V17", "V16", "W16", "W17", "W15", "V15", "W14", "W13", "U16", "E19",
+    ];
+    for (i, pin) in pins.iter().enumerate() {
+        rcf.push_str(&format!("set_io -io_standard LVCMOS33 a[{i}] {pin}\n"));
+    }
+    rcf.push_str("set_io -io_standard LVCMOS33 we V14\n");
+    rcf.push_str("set_io -io_standard LVCMOS33 d V13\n");
+    rcf.push_str("set_io -io_standard LVCMOS33 q W3\n");
+    let built = build(&root, verilog, &rcf, None);
+    eprint!("{}", built.report.to_text());
+
+    assert_eq!(built.rams.len(), 1, "one `RAMB18E1`: the 18-bit mode");
+    assert!(
+        built.driverless.is_empty(),
+        "a pin reads a signal nothing drives: {}",
+        built.driverless.join("; ")
+    );
+    assert_eq!(built.signals.0, built.signals.1, "not every signal routed");
+    assert_eq!(built.decoded.unexplained, 0);
+    assert_arcs_are_the_routers(&built);
+    let (tile, bel, _) = &built.rams[0];
+    let here = built.decoded.at(tile);
+    for mode in ["READ_WIDTH_A_18", "WRITE_WIDTH_B_18"] {
+        let full = format!("{bel}.{mode}");
+        assert!(here.contains(&full.as_str()), "{full} not decoded");
+    }
+    // Both parity outputs of the reading port and both parity inputs of
+    // the writing one carry a routed signal. Which port does which is the
+    // mapper's choice, so any pairing will do as long as all four are
+    // there. (The routed arcs are interconnect pips under interconnect
+    // wire names; a pin's own name never appears in one.)
+    let routed = |role: &str| built.routed_roles.contains(role);
+    let side = |read: &str, write: &str| {
+        (0..2).all(|i| routed(&format!("{read}_doutp{i}")) && routed(&format!("{write}_dinp{i}")))
+    };
+    assert!(
+        side("p0", "p1") || side("p1", "p0") || side("p0", "p0") || side("p1", "p1"),
+        "the parity pins are not all routed: {:?}",
+        built.routed_roles
+    );
 }
 
 /// Four block RAMs with different contents, so that both halves of a tile

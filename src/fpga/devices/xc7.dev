@@ -130,6 +130,18 @@
 #     4/2/1 are the legal values; MEDIUM-HIGH that pairing them with a
 #     16/8/4/2/1-bit data connection is right, which is what every
 #     inferred 16-bit block RAM does.
+#     That was the whole story until 2026-10-16, and it stopped being
+#     enough: NewAE's ChipWhisperer-Husky buffers 1.83 Mbit in FIFOs on
+#     a part with 1.84 Mbit of block RAM, which fits only if the parity
+#     bits hold data (100 blocks at 18 bits, 112 at 16). So there are
+#     now two more modes, `18 1024` and `9 2048`, whose top bits travel
+#     on DIPADIP/DOPADOP and DIPBDIP/DOPBDOP (`parity 2`, `parity 1`,
+#     and `dinp`/`doutp` on the ports). They describe no contents, so
+#     the mapper offers them only to a memory with no initial value, and
+#     a memory that fits the data-only mode as well keeps it. HIGH
+#     confidence in the pins and that 18 is DI[15:0]+DIP[1:0] and 9 is
+#     DI[7:0]+DIP[0] (UG473's port tables, and the widths the database's
+#     fuzzers set); the rest of what is said above is unchanged.
 #   * RAMB18E1 ADDRESS ALIGNMENT (`addr` on each `mode` line). The
 #     address port is 14 bits in every mode and counts in units of the
 #     NARROWEST mode, so a wider mode ignores the low pins: the word
@@ -404,10 +416,12 @@ device xc7a35t-cpg236
     mode 4 4096 param READ_WIDTH_A=4 WRITE_WIDTH_A=4 READ_WIDTH_B=4 WRITE_WIDTH_B=4 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 2 init low 0-3 4-7 8-11 12-15
     mode 2 8192 param READ_WIDTH_A=2 WRITE_WIDTH_A=2 READ_WIDTH_B=2 WRITE_WIDTH_B=2 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 1 init low 0,1 2,3 4,5 6,7 8,9 10,11 12,13 14,15
     mode 1 16384 param READ_WIDTH_A=1 WRITE_WIDTH_A=1 READ_WIDTH_B=1 WRITE_WIDTH_B=1 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" init low 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+    mode 18 1024 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 parity 2
+    mode 9 2048 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 parity 1
     flags byte_enable dual_port init
     init_params INIT_ count 64 digits 2 rows 16 slot 16
-    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM
-    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB
+    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP
+    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP
   end
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
@@ -608,10 +622,12 @@ device xc7a35t-ftg256
     mode 4 4096 param READ_WIDTH_A=4 WRITE_WIDTH_A=4 READ_WIDTH_B=4 WRITE_WIDTH_B=4 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 2 init low 0-3 4-7 8-11 12-15
     mode 2 8192 param READ_WIDTH_A=2 WRITE_WIDTH_A=2 READ_WIDTH_B=2 WRITE_WIDTH_B=2 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 1 init low 0,1 2,3 4,5 6,7 8,9 10,11 12,13 14,15
     mode 1 16384 param READ_WIDTH_A=1 WRITE_WIDTH_A=1 READ_WIDTH_B=1 WRITE_WIDTH_B=1 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" init low 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+    mode 18 1024 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 parity 2
+    mode 9 2048 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 parity 1
     flags byte_enable dual_port init
     init_params INIT_ count 64 digits 2 rows 16 slot 16
-    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM
-    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB
+    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP
+    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP
   end
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast

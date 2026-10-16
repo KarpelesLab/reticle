@@ -767,11 +767,12 @@ fn the_artix7_matches_its_datasheet_figures() {
     assert_eq!(device.bel(BelRole::Lut).unwrap().count, Some(20_800));
     assert_eq!(device.bel(BelRole::Ff).unwrap().count, Some(41_600));
     assert_eq!(device.clock_resources.global_buffers, 32);
-    // 100 RAMB18E1 of 18 kbit; Reticle uses the 16 kbit of data and
-    // leaves the parity bits, which is what the device file says.
+    // 100 RAMB18E1 of 18 kbit. Reticle used to use only the 16 kbit of
+    // data and leave the parity bits; since the 18- and 9-bit modes carry
+    // data on the parity pins, the block is the datasheet's 18 kbit.
     assert_eq!(device.block_rams.len(), 1);
     assert_eq!(device.block_rams[0].name, "RAMB18E1");
-    assert_eq!(device.block_rams[0].bits(), 16_384);
+    assert_eq!(device.block_rams[0].bits(), 18_432);
     assert!(device.block_rams[0].has_byte_enable);
     // One clock generator of each kind in each of the five tiles.
     let plls: Vec<&str> = device
