@@ -41,7 +41,7 @@ use crate::synth::eval::eval_closed;
 use crate::synth::keep::{cell_is_kept, is_kept};
 use crate::synth::opt::{expr_net_refs, rewrite_exprs, root_net_refs};
 use crate::synth::util::{
-    coerce, is_port, mk, mk_binary, mk_const, mk_mux, mk_not, mk_slice, mk_unary,
+    coerce, is_port, mk, mk_binary, mk_concat, mk_const, mk_mux, mk_not, mk_slice, mk_unary,
 };
 use crate::synth::{Pass, PassStats};
 
@@ -373,6 +373,19 @@ fn simplify_unary(m: &mut Module, id: ExprId, op: UnaryOp, expr: ExprId, span: S
     }
 }
 
+/// `Some(k)` when `c` is `2^k` with `k > 0`.
+fn power_of_two(c: &Const) -> Option<u32> {
+    let mut found = None;
+    for i in 0..c.width() {
+        match c.bit(i) {
+            Bit::Zero => {}
+            Bit::One if found.is_none() => found = Some(i),
+            _ => return None,
+        }
+    }
+    found.filter(|k| *k > 0)
+}
+
 fn simplify_binary(
     m: &mut Module,
     id: ExprId,
@@ -451,6 +464,24 @@ fn simplify_binary(
             }
             if is_one(m, lhs) {
                 return rhs;
+            }
+            // `x * 2^k` is `x` moved up `k` bits: wiring, not a multiplier.
+            // `r[sel*32 +: 32]` offsets a part-select by one, and left as a
+            // multiplier the shift behind the select could not see that the
+            // offset's low five bits are zero — 222 LUTs for a 2:1 choice
+            // of 32-bit words that takes 32.
+            if !ty.is_signed() && ty.width() == Some(w) {
+                for (x, k) in [(lhs, rhs), (rhs, lhs)] {
+                    let Some(shift) = c(m, k).and_then(power_of_two) else {
+                        continue;
+                    };
+                    if shift >= w {
+                        return zero(m);
+                    }
+                    let low = mk_slice(m, x, w - 1 - shift, 0, span);
+                    let pad = mk_const(m, Const::zero(shift), span);
+                    return mk_concat(m, vec![low, pad], span);
+                }
             }
         }
         BinaryOp::Div => {
@@ -1106,6 +1137,29 @@ mod tests {
         assert!(t.contains("assign %f = %s\n"), "{t}");
         assert!(t.contains("assign %g = not(%s)\n"), "{t}");
         assert!(!run(&ConstFold, &mut m).changed);
+    }
+
+    /// A product with a power of two is the other operand moved up, and
+    /// one with a constant that is not stays a product. Would catch the
+    /// rewrite taking the wrong low bits or the wrong number of zeros,
+    /// and it reaching a signed product, where it is not attempted.
+    #[test]
+    fn a_product_with_a_power_of_two_is_wiring() {
+        let mut b = ModuleBuilder::new("m", span());
+        let a = b.input("a", Type::bits(8));
+        let y = b.output("y", Type::bits(8));
+        let z = b.output("z", Type::bits(8));
+        let an = b.net(a);
+        let (eight, six) = (b.const_u64(8, 8), b.const_u64(8, 6));
+        let p = b.mul(eight, an);
+        b.assign(y, p);
+        let q = b.mul(an, six);
+        b.assign(z, q);
+        let mut m = b.finish();
+        run_fix(&ConstFold, &mut m);
+        let t = text(&m);
+        assert!(t.contains("assign %y = {%a[4:0], 3'd0}\n"), "{t}");
+        assert!(t.contains("assign %z = mul(%a, 8'd6)\n"), "{t}");
     }
 
     #[test]
