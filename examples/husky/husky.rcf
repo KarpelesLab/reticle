@@ -1,0 +1,110 @@
+# NewAE ChipWhisperer-Husky (XC7A35T-FTG256): every pin of `cwhusky_top`.
+#
+# PROVENANCE: transcribed by script from NewAE's `fpga/vivado/cwhusky.xdc`
+# at chipwhisperer-husky-fpga 2dfe1bc, one `set_io` per
+# `set_property -dict { PACKAGE_PIN ... IOSTANDARD ... }`, in the file's
+# order, with its `DRIVE 8` on the four LEDs and its `PULLTYPE PULLDOWN`
+# on target_io4. USERIO_CLK's pull-up is not here: it is a `PULLUP` cell
+# in `userio.v`, and the cell is what sets it.
+#
+# Not carried over: the timing exceptions (`set_false_path`,
+# `set_clock_groups`, `set_max_delay`, the IO delays), the generated
+# clocks, and the clocks Vivado declares on internal nets — Reticle's
+# constraints name ports. The three clocks below are the ones on ports.
+create_clock -name clk_usb -period 10.4 clk_usb
+create_clock -name target_hs1 -period 20.0 target_hs1
+create_clock -name AUXIO -period 20.0 AUXIO
+set_io -io_standard LVCMOS33 -drive 8 LED_ADC C7
+set_io -io_standard LVCMOS33 -drive 8 LED_GLITCH C6
+set_io -io_standard LVCMOS33 -drive 8 LED_ARMED D3
+set_io -io_standard LVCMOS33 -drive 8 LED_CAP C3
+set_io -io_standard LVCMOS33 clk_usb D4
+set_io -io_standard LVCMOS33 USB_Data[7] L3
+set_io -io_standard LVCMOS33 USB_Data[6] L2
+set_io -io_standard LVCMOS33 USB_Data[5] B6
+set_io -io_standard LVCMOS33 USB_Data[4] G2
+set_io -io_standard LVCMOS33 USB_Data[3] G1
+set_io -io_standard LVCMOS33 USB_Data[2] E2
+set_io -io_standard LVCMOS33 USB_Data[1] A7
+set_io -io_standard LVCMOS33 USB_Data[0] B7
+set_io -io_standard LVCMOS33 USB_Addr[7] K2
+set_io -io_standard LVCMOS33 USB_Addr[6] J1
+set_io -io_standard LVCMOS33 USB_Addr[5] H1
+set_io -io_standard LVCMOS33 USB_Addr[4] K3
+set_io -io_standard LVCMOS33 USB_Addr[3] K1
+set_io -io_standard LVCMOS33 USB_Addr[2] E1
+set_io -io_standard LVCMOS33 USB_Addr[1] D1
+set_io -io_standard LVCMOS33 USB_Addr[0] C1
+set_io -io_standard LVCMOS33 USB_RDn A5
+set_io -io_standard LVCMOS33 USB_WRn A4
+set_io -io_standard LVCMOS33 USB_CEn B4
+set_io -io_standard LVCMOS33 USB_ALEn B5
+set_io -io_standard LVCMOS33 USB_SPARE0 H2
+set_io -io_standard LVCMOS33 FPGA_BONUS1 R1
+set_io -io_standard LVCMOS33 FPGA_BONUS2 P1
+set_io -io_standard LVCMOS33 FPGA_BONUS3 N1
+set_io -io_standard LVCMOS33 FPGA_BONUS4 N2
+set_io -io_standard LVCMOS33 target_PDID T2
+set_io -io_standard LVCMOS33 target_SCK N3
+set_io -io_standard LVCMOS33 target_io2 R2
+set_io -io_standard LVCMOS33 target_MISO B2
+set_io -io_standard LVCMOS33 target_io1 B1
+set_io -io_standard LVCMOS33 target_hs2 A3
+set_io -io_standard LVCMOS33 -pulldown yes target_io4 T4
+set_io -io_standard LVCMOS33 target_io3 T3
+set_io -io_standard LVCMOS33 target_PDIC P3
+set_io -io_standard LVCMOS33 target_MOSI C2
+set_io -io_standard LVCMOS33 target_nRST A2
+set_io -io_standard LVCMOS33 target_hs1 F5
+set_io -io_standard LVCMOS33 target_poweron H3
+set_io -io_standard LVCMOS33 USERIO_D[0] T15
+set_io -io_standard LVCMOS33 USERIO_D[1] T14
+set_io -io_standard LVCMOS33 USERIO_D[2] R13
+set_io -io_standard LVCMOS33 USERIO_D[3] T13
+set_io -io_standard LVCMOS33 USERIO_D[4] R12
+set_io -io_standard LVCMOS33 USERIO_D[5] T12
+set_io -io_standard LVCMOS33 USERIO_D[6] R11
+set_io -io_standard LVCMOS33 USERIO_D[7] T10
+set_io -io_standard LVCMOS33 USERIO_CLK N12
+set_io -io_standard LVCMOS33 TRIG_GLITCHOUT R15
+set_io -io_standard LVCMOS33 AUXIO N14
+set_io -io_standard LVCMOS33 SAM_MOSI T7
+set_io -io_standard LVCMOS33 SAM_MISO R7
+set_io -io_standard LVCMOS33 SAM_SPCK T8
+set_io -io_standard LVCMOS33 SAM_CS T9
+set_io -io_standard LVCMOS33 FPGA_CDIN J13
+set_io -io_standard LVCMOS33 FPGA_CDOUT J14
+set_io -io_standard LVCMOS25 ADC_SCLK A9
+set_io -io_standard LVCMOS25 ADC_SDATA B9
+set_io -io_standard LVCMOS25 ADC_SEN A8
+set_io -io_standard LVCMOS25 ADC_RESET A10
+set_io -io_standard LVCMOS25 ADC_DFS G12
+set_io -io_standard LVCMOS25 ADC_OE H12
+set_io -io_standard LVCMOS25 ADC_OVR_SDOUT G16
+set_io -io_standard LVDS_25 ADC_DP[0] B12
+set_io -io_standard LVDS_25 ADC_DN[0] A12
+set_io -io_standard LVDS_25 ADC_DP[1] A13
+set_io -io_standard LVDS_25 ADC_DN[1] A14
+set_io -io_standard LVDS_25 ADC_DP[2] B15
+set_io -io_standard LVDS_25 ADC_DN[2] A15
+set_io -io_standard LVDS_25 ADC_DP[3] C16
+set_io -io_standard LVDS_25 ADC_DN[3] B16
+set_io -io_standard LVDS_25 ADC_DP[4] D14
+set_io -io_standard LVDS_25 ADC_DN[4] D15
+set_io -io_standard LVDS_25 ADC_DP[5] F15
+set_io -io_standard LVDS_25 ADC_DN[5] E15
+set_io -io_standard LVDS_25 ADC_CLKP J15
+set_io -io_standard LVDS_25 ADC_CLKN J16
+set_io -io_standard LVDS_25 ADC_clk_fbp E12
+set_io -io_standard LVDS_25 ADC_clk_fbn E13
+set_io -io_standard LVCMOS25 PLL_STATUS C11
+set_io -io_standard LVDS_25 PLLFPGAP D13
+set_io -io_standard LVDS_25 PLLFPGAN C13
+set_io -io_standard LVCMOS33 VMAG_D[4] L15
+set_io -io_standard LVCMOS33 VMAG_D[3] M16
+set_io -io_standard LVCMOS33 VMAG_D[2] M15
+set_io -io_standard LVCMOS33 VMAG_D[1] N16
+set_io -io_standard LVCMOS33 VMAG_D[0] P16
+set_io -io_standard LVCMOS33 VDBSPWM R16
+set_io -io_standard LVCMOS33 glitchout_highpwr C4
+set_io -io_standard LVCMOS33 glitchout_lowpwr E3

@@ -1353,3 +1353,47 @@ fn a_vector_only_partly_second_balls_is_refused() {
         "{stderr}"
     );
 }
+
+/// The ChipWhisperer-Husky's FIFO Generator stand-ins do what their
+/// header promises: order, `empty` and `full`, standard and fall-through
+/// reads, the programmable thresholds, `overflow` and `underflow`, and a
+/// crossing between two clocks. The testbench's own header says what it
+/// would not catch. Its `prog_full` check found the stand-in a word late
+/// in fall-through mode, which is why the word waiting on `dout` counts.
+#[cfg(feature = "sim")]
+#[test]
+fn the_husky_fifo_stand_ins_pass_their_testbench() {
+    basys3_testbench(
+        "examples/husky/fifo_generator_tb.v",
+        &["examples/husky/fifo_generator.v"],
+    );
+}
+
+/// The largest of them, 72 x 16384, is 64 `RAMB18E1` in the 18-bit mode
+/// whose top two bits are parity: the Husky's FIFOs fit the part only that
+/// way. Would catch the parity modes lost, or a tie-break that put the
+/// memory in a data-only mode (80 blocks at 16 bits, 72 at 8).
+#[cfg(feature = "fpga")]
+#[test]
+fn the_husky_fifo_stand_in_fills_block_ram_through_the_parity_bits() {
+    let dir = scratch("husky_fifo_bram");
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "examples/husky/fifo_generator.v",
+            "--top",
+            "usb_slow_fifo2",
+            "--device",
+            "xc7a35t-ftg256",
+            "--report",
+            "--output-dir",
+        ])
+        .arg(&dir)
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("(16384x72) -> 64 x RAMB18E1 in 18x1024 mode (4 wide, 16 deep)"),
+        "{stderr}"
+    );
+}

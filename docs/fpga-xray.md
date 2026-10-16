@@ -2832,6 +2832,18 @@ image with other values would confirm it.
 
 Nothing here has run on a part.
 
+## NewAE's ChipWhisperer-Husky: the whole design, and where it stops
+
+Every primitive section above was found by building NewAE's Husky
+gateware, an XC7A35T-FTG256 design of about 23,300 lookup tables in
+Vivado's hands. [`examples/husky/`](../examples/husky/README.md) is the
+recipe: stand-ins for its Vivado IP cores, its pins, and the command
+line. It elaborates, synthesises and maps in about 25 seconds and then
+**stops at placement**: 35,176 `LUT6` and 27,618 flip-flops against a die
+this backend offers 32,600 of each, because it places one function per
+lookup table (no `LUT6_2`) and four flip-flops per slice of the eight.
+The README has the measurements and what is checked and what is not.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
