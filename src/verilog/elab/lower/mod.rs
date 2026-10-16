@@ -1176,22 +1176,42 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             // same cell through `inst.rs`, and VHDL's `x when en else 'Z'`
             // through `vhdl::elab::conc`.
             if delay.is_none()
-                && let ir::Lvalue::Net(net) = &target
-                && let Some((data, cond, invert)) = self.tristate_shape(value)
+                && matches!(
+                    target,
+                    ir::Lvalue::Net(_) | ir::Lvalue::Slice { .. } | ir::Lvalue::Index { .. }
+                )
+                && let Some((data, enable)) = self.tristate_tree(value)
             {
                 self.b.span = pair.span;
-                let enable = if invert { self.b.lnot(cond) } else { cond };
+                // A whole net is the cell's own output. One bit of a net —
+                // `assign d[i] = ...` in a `generate` loop, which is how
+                // NewAE's Husky drives each USERIO pin — gets a net of its
+                // own, assigned into that bit, and `fpga::primitives`
+                // follows the assignment back to the cell.
+                let (out, into) = match &target {
+                    ir::Lvalue::Net(net) => (*net, None),
+                    _ => {
+                        let name = self.fresh("tri_out");
+                        let net = self.b.add_net(name, ir::Type::bits(width));
+                        (net, Some(target.clone()))
+                    }
+                };
                 let name = self.fresh("tri");
                 let index = self.b.module().cells.len();
                 let cell = self.b.cell(
                     name,
                     ir::CellKind::Tristate,
                     vec![(ir::Name::new("a"), data), (ir::Name::new("en"), enable)],
-                    vec![(ir::Name::new("y"), *net)],
+                    vec![(ir::Name::new("y"), out)],
                 );
                 let attrs = self.attrs_of(&item.attrs);
                 self.b.module_mut().cells[cell].attrs = attrs;
-                self.record_driver(*net, DriverKey::Instance(index), true, pair.span);
+                self.record_driver(out, DriverKey::Instance(index), true, pair.span);
+                if let Some(into) = into {
+                    let read = self.b.net(out);
+                    self.b.assign_after(into.clone(), read, None);
+                    self.note_assign_drivers(&into, DriverKey::Continuous, pair.span, false);
+                }
                 continue;
             }
             // The same assignment made again — `assign a = b;` inside a
@@ -1218,37 +1238,95 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
-    /// A bus driver written as a conditional, as `(data, condition, invert)`
-    /// where `invert` says the condition **releases** the net rather than
-    /// driving it.
+    /// A bus driver written as a conditional, as `(data, enable)`: the
+    /// value driven, and when it is.
     ///
-    /// Both ways round occur, and a ULPI data bus is usually the second,
-    /// because the transceiver's `dir` says when the transceiver owns it:
+    /// The plain shapes are a choice between data and an all-`z` value,
+    /// either way round — a ULPI data bus is usually the second, because the
+    /// transceiver's `dir` says when the transceiver owns it:
     ///
     /// ```text
     /// assign bus = oe  ? data : 8'bz;   // drive while `oe`
     /// assign bus = dir ? 8'bz : data;   // release while `dir`
     /// ```
     ///
-    /// Only an **all-`z`** alternative counts, and only a whole net as the
-    /// target. `en ? a : 1'bx` is not this, and neither is a ternary whose
-    /// `z` half is one bit of a wider value: a partial tri-state has no IR
-    /// form, and turning one into a full one would change what the design
-    /// means. `8'bz` and `{8{1'bz}}` are both taken, because the operand is
-    /// read after folding, which is where they become the same constant.
-    fn tristate_shape(&self, value: ir::ExprId) -> Option<(ir::ExprId, ir::ExprId, bool)> {
-        let ir::ExprKind::Ternary { cond, then_, else_ } = &self.b.module().expr(value).kind else {
-            return None;
-        };
-        let all_z = |id: ir::ExprId, data: ir::ExprId| {
-            let value = self.b.module().expr(id).as_const()?;
-            let width = self.b.module().expr(data).ty.width()?;
-            (*value == crate::logic::Logic::z(width)).then_some(())
-        };
-        if all_z(*else_, *then_).is_some() {
-            return Some((*then_, *cond, false));
+    /// and the `z` may sit anywhere in a tree of choices, which NewAE's
+    /// Husky gateware writes for every pin it shares between functions:
+    ///
+    /// ```text
+    /// assign io = highz ? 1'bz : sel ? (drive ? out : 1'bz) : route ? tx : 1'bz;
+    /// ```
+    ///
+    /// The enable is the same tree with every `z` leaf a zero and every
+    /// other leaf a one; the data is the tree with each `z` leaf replaced by
+    /// the other side of its choice, which is never driven when the enable
+    /// says so. Only an **all-`z`** leaf counts: `en ? a : 1'bx` is not a
+    /// driver, and a value with a `z` among other bits is a partial
+    /// tri-state, which has no IR form. A tree with no `z` leaf, and a value
+    /// that is `z` throughout, are not drivers either. `8'bz` and
+    /// `{8{1'bz}}` are both taken, because the operand is read after
+    /// folding, which is where they become the same constant.
+    fn tristate_tree(&mut self, value: ir::ExprId) -> Option<(ir::ExprId, ir::ExprId)> {
+        match self.tristate_split(value) {
+            Split::Driver(data, enable) => Some((data, enable)),
+            Split::Released | Split::Value => None,
         }
-        all_z(*then_, *else_).map(|()| (*else_, *cond, true))
+    }
+
+    fn tristate_split(&mut self, value: ir::ExprId) -> Split {
+        let expr = self.b.module().expr(value).clone();
+        if let (Some(c), Some(width)) = (expr.as_const(), expr.ty.width())
+            && *c == crate::logic::Logic::z(width)
+        {
+            return Split::Released;
+        }
+        let ir::ExprKind::Ternary { cond, then_, else_ } = expr.kind else {
+            return Split::Value;
+        };
+        let (t, f) = (self.tristate_split(then_), self.tristate_split(else_));
+        // What each side drives and when, with a released side taking the
+        // other's data: it is never seen while released.
+        let side = |b: &mut Self, s: &Split, own: ir::ExprId, other: ir::ExprId| match s {
+            Split::Driver(d, e) => (*d, Some(*e)),
+            Split::Value => (own, None),
+            Split::Released => (other, Some(b.b.const_bit(false))),
+        };
+        let other_data = |s: &Split, own: ir::ExprId| match s {
+            Split::Driver(d, _) => *d,
+            _ => own,
+        };
+        match (&t, &f) {
+            (Split::Value, Split::Value) => Split::Value,
+            (Split::Released, Split::Released) => Split::Released,
+            _ => {
+                let (td, te) = side(self, &t, then_, other_data(&f, else_));
+                let (fd, fe) = side(self, &f, else_, other_data(&t, then_));
+                let data = if td == fd {
+                    td
+                } else {
+                    self.b.mux(cond, td, fd)
+                };
+                let enable = match (te, fe) {
+                    (None, Some(e)) if self.is_false(e) => cond,
+                    (Some(e), None) if self.is_false(e) => self.b.lnot(cond),
+                    (te, fe) => {
+                        let te = te.unwrap_or_else(|| self.b.const_bit(true));
+                        let fe = fe.unwrap_or_else(|| self.b.const_bit(true));
+                        self.b.mux(cond, te, fe)
+                    }
+                };
+                Split::Driver(data, enable)
+            }
+        }
+    }
+
+    /// Whether `e` is the constant zero bit.
+    fn is_false(&self, e: ir::ExprId) -> bool {
+        self.b
+            .module()
+            .expr(e)
+            .as_const()
+            .is_some_and(|c| c.width() == 1 && c.is_zero())
     }
 
     /// A continuous assignment to one net, used by `wire x = e;`.
@@ -1409,4 +1487,12 @@ fn same_wiring(m: &ir::Module, a: ir::ExprId, b: ir::ExprId) -> bool {
         }
         _ => false,
     }
+}
+
+/// What a tree of choices drives: a value always, nothing ever, or a value
+/// under an enable. See `tristate_tree`.
+enum Split {
+    Value,
+    Released,
+    Driver(ir::ExprId, ir::ExprId),
 }

@@ -13,6 +13,13 @@ module tristate
   net %bus2 u8 wire
   net %not_a_bus u8 wire
   net %partly u8 wire
+  net %b u1 wire
+  net %c u1 wire
+  net %e u1 wire
+  net %io_tree u1 wire
+  net %io_bits u2 wire
+  net %tri_out$5 u1 wire
+  net %tri_out$7 u1 wire
   port a in %a
   port en in %en
   port d in %d
@@ -25,6 +32,13 @@ module tristate
   port bus2 inout %bus2
   port not_a_bus out %not_a_bus
   port partly out %partly
+  port b in %b
+  port c in %c
+  port e in %e
+  port io_tree inout %io_tree
+  port io_bits inout %io_bits
+  assign %io_bits[0:0] = %tri_out$5
+  assign %io_bits[1:1] = %tri_out$7
   assign %not_a_bus = mux(%en, %d, 8'bxxxxxxxx)
   assign %partly = mux(%en, %d, 8'bzzzzzzz0)
   cell t0 tristate (a=%a, en=%en) -> (y=%y0)
@@ -34,4 +48,7 @@ module tristate
   cell tri$1 tristate (a=%d, en=%en) -> (y=%bus0)
   cell tri$2 tristate (a=%d, en=%en) -> (y=%bus1)
   cell tri$3 tristate (a=%d, en=lnot(%en)) -> (y=%bus2)
+  cell tri$4 tristate (a=mux(%b, %e, %d[0:0]), en=mux(%a, 1'd0, mux(%b, %c, 1'd1))) -> (y=%io_tree)
+  cell tri$6 tristate (a=mux(1'd1, %c, %e), en=mux(1'd1, %b, lnot(%c))) -> (y=%tri_out$5)
+  cell tri$8 tristate (a=mux(1'd0, %c, %e), en=mux(1'd0, %b, lnot(%c))) -> (y=%tri_out$7)
 end
