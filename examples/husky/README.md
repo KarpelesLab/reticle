@@ -35,8 +35,9 @@ git -C husky/fpga/tracewhisperer submodule update --init
 examples/husky/build.sh husky /tmp/husky
 ```
 
-The design fits the part as of 2026-10-17; whether it places and routes
-is the open question, and the section at the end says what is known.
+The design fits the part as of 2026-10-17 and then stops at placement,
+about half an hour in, on a flip-flop that finds no legal site; the
+section at the end says what is known.
 
 The superproject pins `fpga/tracewhisperer` at a commit that is not
 public; `542b1cc` on its `pro` branch is the newest public one, and is
@@ -138,12 +139,12 @@ of its own:
 | the pins, standards, drive and pulls are NewAE's | **transcribed** from `cwhusky.xdc` by script |
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
 | the whole design fits the part | **checked**: 30,855 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
-| it places and routes | **not yet known**: see below |
+| it places and routes | **no**: placement stops on a flip-flop, see below |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status
 
-**It fits; it has not yet been shown to place and route.** The whole
+**It fits, and placement then stops.** The whole
 design elaborates, synthesises and maps — in about 25 seconds, where the
 first attempt did not finish in 83 minutes — and the result is, measured
 on 2026-10-17:
@@ -181,7 +182,22 @@ What is known about the gap that remains:
 - **`esad`**, NewAE's extended SAD trigger, is half the design: 256
   counters, about 53 lookup tables each after the sharing (59 before).
 
-Past fitting, nothing has placed and routed a design this full on this
-die, and the ADC side runs at up to 200 MHz while the 7-series placer is
+Fitting is not placing. On 2026-10-17, with the whole die asked for,
+the legaliser stopped with
+
+    error: `oadc.U_reg_openadc_adcfifo.ddr_la_start_address$ff$ff7` found
+    no `ff` site it may take: the design needs 27618 of the 32600 the part
+    has, and every one still free shares a pin or a tile's own wires with
+    something placed that wants another signal there
+
+— the sites are there and were refused. The error now counts the free
+sites by the rule that refused each, and of the 8,926 still free 6,214
+were in slices whose clock already carried another clock, 876 in slices
+whose clock enable did, and 1,836 had no wire left for `D`. That is the
+legaliser filling slices with no regard to control sets — each
+flip-flop takes the nearest legal site, and a slice one flip-flop of a
+clock domain opened is closed to every other — more than it is a lack of
+sites. Nothing has placed and routed a design this
+full on this die, and the ADC side runs at up to 200 MHz while the 7-series placer is
 not timing-driven. Nothing has been loaded into a Husky; none is attached
 to the machine this was built on.

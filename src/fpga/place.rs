@@ -199,6 +199,9 @@ pub enum PlaceError {
         needed: usize,
         /// How many the part has.
         available: usize,
+        /// The sites still free that it could have taken, counted by the
+        /// rule that refused each, most common first.
+        refused: Vec<(String, usize)>,
     },
     /// A package pin the architecture cannot place: either it maps to no
     /// site, or the site it maps to is not one this cell can use.
@@ -330,12 +333,24 @@ impl fmt::Display for PlaceError {
                 kind,
                 needed,
                 available,
-            } => write!(
-                f,
-                "`{cell}` found no `{kind}` site it may take: the design needs {needed} of \
-                 the {available} the part has, and every one still free shares a pin or a \
-                 tile's own wires with something placed that wants another signal there"
-            ),
+                refused,
+            } => {
+                write!(
+                    f,
+                    "`{cell}` found no `{kind}` site it may take: the design needs {needed} of \
+                     the {available} the part has, and every one still free shares a pin or a \
+                     tile's own wires with something placed that wants another signal there"
+                )?;
+                let free: usize = refused.iter().map(|(_, n)| n).sum();
+                if free > 0 {
+                    write!(f, "; of the {free} free:")?;
+                    for (i, (why, n)) in refused.iter().enumerate() {
+                        let sep = if i == 0 { " " } else { ", " };
+                        write!(f, "{sep}{n} because {why}")?;
+                    }
+                }
+                Ok(())
+            }
             PlaceError::NoPinSite { cell, pin, why } => match why {
                 Some(why) => write!(
                     f,
@@ -1784,6 +1799,69 @@ impl SiteRules {
         true
     }
 
+    /// Why `instance` may not take the free `site`, in words, or `None`
+    /// when it may: the first rule of [`SiteRules::allows`] that refuses
+    /// it, naming the pin. For the error a legaliser that ran out of
+    /// sites reports, which was "every one is refused" and left the
+    /// question of *which rule* to a debugger.
+    fn refusal(&self, placement: &Placement, instance: usize, site: usize) -> Option<String> {
+        if self.trivial() {
+            return None;
+        }
+        let after = |at: usize| -> Option<usize> {
+            if at == site {
+                return Some(instance);
+            }
+            placement.instance_at(at).filter(|i| *i != instance)
+        };
+        let name = |role: u32| -> &str {
+            self.roles
+                .iter()
+                .find(|(_, id)| **id == role)
+                .map_or("?", |(name, _)| name.as_str())
+        };
+        if self.excludes[site]
+            .iter()
+            .any(|other| after(*other).is_some())
+        {
+            return Some("a site it excludes is taken".to_owned());
+        }
+        for (other, start, len) in &self.per_site[site] {
+            let Some(neighbour) = after(*other) else {
+                continue;
+            };
+            let run = *start as usize..(*start + *len) as usize;
+            if let Some((mine, _)) = self.pairs[run].iter().find(|(mine, theirs)| {
+                self.signal(instance, *mine) != self.signal(neighbour, *theirs)
+            }) {
+                return Some(format!(
+                    "its `{}` pin is shared and wanted otherwise",
+                    name(*mine)
+                ));
+            }
+        }
+        let group = self.site_group[site];
+        if group == u32::MAX {
+            return None;
+        }
+        let group = &self.groups[group as usize];
+        for (pool, _) in group.pools.iter().enumerate() {
+            let pool = u32::try_from(pool).unwrap_or(u32::MAX);
+            if !self.pool_fits(group, pool, &after) {
+                let roles: Vec<&str> = self.captive[site]
+                    .iter()
+                    .filter(|(_, which, _)| *which == pool)
+                    .map(|(role, _, _)| name(*role))
+                    .collect();
+                return Some(format!(
+                    "the tile has no wire left for its `{}`",
+                    roles.join("`/`")
+                ));
+            }
+        }
+        None
+    }
+
     /// Whether every pool of one tile can give each of the signals that
     /// want it a wire of its own.
     ///
@@ -1866,45 +1944,55 @@ impl SiteRules {
         group: &ControlGroup,
         after: &impl Fn(usize) -> Option<usize>,
     ) -> bool {
-        for (pool, wires) in group.pools.iter().enumerate() {
-            let pool = u32::try_from(pool).unwrap_or(u32::MAX);
-            let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
-            for site in &group.sites {
-                let Some(instance) = after(*site) else {
+        (0..group.pools.len())
+            .all(|pool| self.pool_fits(group, u32::try_from(pool).unwrap_or(u32::MAX), after))
+    }
+
+    /// Whether one pool of a tile can give each of its signals a wire,
+    /// asking `after` for every site of the group.
+    fn pool_fits(
+        &self,
+        group: &ControlGroup,
+        pool: u32,
+        after: &impl Fn(usize) -> Option<usize>,
+    ) -> bool {
+        let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
+        for site in &group.sites {
+            let Some(instance) = after(*site) else {
+                continue;
+            };
+            for (role, which, mask) in &self.captive[*site] {
+                if *which != pool {
+                    continue;
+                }
+                let Some((signal, drives)) = self.signal_driven(instance, *role) else {
                     continue;
                 };
-                for (role, which, mask) in &self.captive[*site] {
-                    if *which != pool {
-                        continue;
+                // A pin the instance drives puts the signal on its
+                // wire; one it reads narrows the wires it may come in
+                // on. They are kept apart: a lookup table's `O5` and
+                // a flip-flop it feeds in the same lane are one signal
+                // on two wires, out through the output mux and back
+                // through the bypass input.
+                let (sinks, driven) = if drives {
+                    (u32::MAX, *mask)
+                } else {
+                    (*mask, 0)
+                };
+                match wanted.iter_mut().find(|(s, _, _)| *s == signal) {
+                    Some((_, allowed, on)) => {
+                        *allowed &= sinks;
+                        *on |= driven;
                     }
-                    let Some((signal, drives)) = self.signal_driven(instance, *role) else {
-                        continue;
-                    };
-                    // A pin the instance drives puts the signal on its
-                    // wire; one it reads narrows the wires it may come in
-                    // on. They are kept apart: a lookup table's `O5` and
-                    // a flip-flop it feeds in the same lane are one signal
-                    // on two wires, out through the output mux and back
-                    // through the bypass input.
-                    let (sinks, driven) = if drives {
-                        (u32::MAX, *mask)
-                    } else {
-                        (*mask, 0)
-                    };
-                    match wanted.iter_mut().find(|(s, _, _)| *s == signal) {
-                        Some((_, allowed, on)) => {
-                            *allowed &= sinks;
-                            *on |= driven;
-                        }
-                        None => wanted.push((signal, sinks, driven)),
-                    }
+                    None => wanted.push((signal, sinks, driven)),
                 }
             }
-            if !fits(&wanted, group.sources[pool as usize], wires.len()) {
-                return false;
-            }
         }
-        true
+        fits(
+            &wanted,
+            group.sources[pool as usize],
+            group.pools[pool as usize].len(),
+        )
     }
 }
 
@@ -3413,7 +3501,17 @@ fn legalise(
         );
         match site {
             Some(site) => placement.place(index, site),
-            None => return Err(no_room(netlist, graph, sites_by_kind, index, info)),
+            None => {
+                return Err(no_room(
+                    netlist,
+                    graph,
+                    sites_by_kind,
+                    index,
+                    info,
+                    shared,
+                    placement,
+                ));
+            }
         }
     }
     Ok(())
@@ -3426,6 +3524,8 @@ fn no_room(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     index: usize,
     info: &[Placeable],
+    shared: &SiteRules,
+    placement: &Placement,
 ) -> PlaceError {
     let kind = netlist.instances[index].kind.clone();
     let empty = Vec::new();
@@ -3472,11 +3572,26 @@ fn no_room(
                 .as_ref()
                 .map_or_else(|| sites.len(), Vec::len);
             if needed <= available {
+                // Every free site this cell could have had, by the rule
+                // that refused it, most common first.
+                let mut refused: BTreeMap<String, usize> = BTreeMap::new();
+                for site in sites {
+                    if placement.instance_at(*site).is_some() || !info[index].may_take(*site) {
+                        continue;
+                    }
+                    let why = shared
+                        .refusal(placement, index, *site)
+                        .unwrap_or_else(|| "nothing refuses it".to_owned());
+                    *refused.entry(why).or_default() += 1;
+                }
+                let mut refused: Vec<(String, usize)> = refused.into_iter().collect();
+                refused.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
                 return PlaceError::NoLegalSite {
                     cell: netlist.instances[index].name.clone(),
                     kind,
                     needed,
                     available,
+                    refused,
                 };
             }
             PlaceError::NoSites {
@@ -3582,7 +3697,15 @@ fn legalise_macro(
             kind,
         });
     }
-    Err(no_room(netlist, graph, sites_by_kind, m.anchor, info))
+    Err(no_room(
+        netlist,
+        graph,
+        sites_by_kind,
+        m.anchor,
+        info,
+        shared,
+        placement,
+    ))
 }
 
 /// The sites a macro anchored at `(ax, ay)` would take, or `None` when
@@ -5699,8 +5822,10 @@ mod tests {
     /// signal driven onto `O5` held to `O5` for its readers too, which
     /// refused a flip-flop reading its own lane's `O5` (it goes out
     /// through the output mux and back in on `AX`) and stopped the Husky's
-    /// placement with every site of the kind free. Would not catch a pool
-    /// wrongly drawn, which is `captive_pool`'s and not this.
+    /// placement with every site of the kind free. Also that
+    /// `SiteRules::refusal`, which the legaliser's error is made of, says
+    /// no exactly when `allows` does and names the carry's `di`. Would not
+    /// catch a pool wrongly drawn, which is `captive_pool`'s and not this.
     #[test]
     fn a_wire_nothing_routes_into_carries_only_what_drives_it() {
         let (_, graph) = lane();
@@ -5719,7 +5844,15 @@ mod tests {
             let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
             placement.place(0, lut);
             placement.place(1, ff);
-            rules.allows(&placement, &[(2, carry)])
+            let allowed = rules.allows(&placement, &[(2, carry)]);
+            // What the legaliser's error reports agrees with the check,
+            // and names the pin that ran out.
+            let why = rules.refusal(&placement, 2, carry);
+            assert_eq!(allowed, why.is_none(), "{why:?}");
+            if let Some(why) = why {
+                assert!(why.contains("`di`"), "{why}");
+            }
+            allowed
         };
         // A plain table, a flip-flop and a generate both fed from
         // elsewhere: one bypass wire for two signals, and `O5` is no help

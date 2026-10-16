@@ -2970,7 +2970,15 @@ line. It elaborates, synthesises and maps in about 25 seconds. On
 flip-flops against a die this backend offers 32,600 of each, because it
 placed one function per lookup table and four flip-flops per slice of
 the eight. With the two sections above it fits — 30,855 lookup-table
-sites — and whether it then places and routes is not yet known. The
+sites — and on 2026-10-17 placement then stopped in the legaliser, on
+`oadc.U_reg_openadc_adcfifo.ddr_la_start_address$ff$ff7`, which found no
+flip-flop site it may take: every free one was refused by a shared pin or
+a tile's pool, not missing. Counted by refusal (`SiteRules::refusal`,
+which the error now reports): of 8,926 free, 6,214 for the slice's clock,
+876 for its clock enable and 1,836 for `D`'s wire — control-set
+fragmentation in the legaliser, measured. The guess before the
+count was a shortage of sites from offering four flip-flops per slice
+of the eight; with 8,926 free, it was not that. The
 README has the measurements and what is checked and what is not.
 
 ## What remains before an LED could light
