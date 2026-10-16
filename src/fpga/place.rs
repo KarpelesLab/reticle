@@ -88,7 +88,7 @@
 //! [`Constraints::keeps_hierarchy`]: super::Constraints::keeps_hierarchy
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::rc::Rc;
@@ -180,6 +180,20 @@ pub enum PlaceError {
     /// few of them.
     NoSites {
         /// The site kind (`lut`, `ff`, `io`, ...).
+        kind: String,
+        /// How many the design wants.
+        needed: usize,
+        /// How many the part has.
+        available: usize,
+    },
+    /// There are sites of the kind enough for the design, and none left
+    /// that this cell may legally take: every free one shares a pin, or a
+    /// pool of its tile's own wires, with something already placed that
+    /// wants a different signal there.
+    NoLegalSite {
+        /// The cell.
+        cell: String,
+        /// The site kind.
         kind: String,
         /// How many the design wants.
         needed: usize,
@@ -310,6 +324,17 @@ impl fmt::Display for PlaceError {
             } => write!(
                 f,
                 "the design needs {needed} `{kind}` site(s) and the part has {available}"
+            ),
+            PlaceError::NoLegalSite {
+                cell,
+                kind,
+                needed,
+                available,
+            } => write!(
+                f,
+                "`{cell}` found no `{kind}` site it may take: the design needs {needed} of \
+                 the {available} the part has, and every one still free shares a pin or a \
+                 tile's own wires with something placed that wants another signal there"
             ),
             PlaceError::NoPinSite { cell, pin, why } => match why {
                 Some(why) => write!(
@@ -1351,9 +1376,10 @@ struct SiteRules {
     /// both directions. Empty for every site of every family whose
     /// architecture declares no exclusion.
     excludes: Vec<Vec<usize>>,
-    /// Per instance, the signal on each of its pins, as `(role, signal)`,
-    /// for the pins that carry one. A role that is absent carries none.
-    per_instance: Vec<Vec<(u32, usize)>>,
+    /// Per instance, the signal on each of its pins, as `(role, signal,
+    /// whether the instance drives it)`, for the pins that carry one. A
+    /// role that is absent carries none.
+    per_instance: Vec<Vec<(u32, usize, bool)>>,
     /// Every role name that takes part, so the checks compare integers.
     roles: BTreeMap<String, u32>,
     /// Per site, one entry per pin that draws on a contended pool of the
@@ -1380,6 +1406,18 @@ struct ControlGroup {
     /// in two. An ECP5 logic tile has one pool for `{LSR0, LSR1}`, one for
     /// `{CLK0, CLK1}` and one per slice for its `CE`.
     pools: Vec<Vec<NodeId>>,
+    /// Per pool, the wires that are a bel's output — nothing routes into
+    /// them, and a pin on them is one the netlist drives, or none on them
+    /// is one it reads: a lookup table's `O6`, and its `O5` whether or not
+    /// any table in the design uses it — one bit per wire as in
+    /// [`SiteRules::captive`]'s masks. Such a wire carries what its bel
+    /// drives and nothing else, so only that signal may be given it: a
+    /// 7-series flip-flop's data mux reads `O6` or the bypass `<L>X`, and
+    /// counted as a wire like any other, an empty lookup table's `O6`
+    /// looked like room for a flip-flop fed from elsewhere. Offering the
+    /// mux `O5` as well made every single-output table such room, and the
+    /// placer filled slices the router then could not.
+    sources: Vec<u32>,
 }
 
 /// How many wires a pool may hold, and how far the walk that finds one may
@@ -1488,6 +1526,20 @@ impl SiteRules {
         for (index, site) in graph.sites.iter().enumerate() {
             by_tile.entry(site.tile).or_default().push(index);
         }
+        // Which `(kind, role)` pins the netlist drives and which it reads:
+        // the routing graph says where a pin is and not which way it
+        // points, and a wire nothing routes into is a bel's output only
+        // when its pins are.
+        let mut driven: HashSet<(&str, &str)> = HashSet::new();
+        let mut read: HashSet<(&str, &str)> = HashSet::new();
+        for pin in &netlist.pins {
+            let kind = netlist.instances[pin.instance].kind.as_str();
+            if pin.output {
+                driven.insert((kind, pin.role.as_str()));
+            } else {
+                read.insert((kind, pin.role.as_str()));
+            }
+        }
         let role_id = |roles: &mut BTreeMap<String, u32>, name: &str| -> u32 {
             if let Some(id) = roles.get(name) {
                 return *id;
@@ -1588,6 +1640,32 @@ impl SiteRules {
             if too_wide {
                 continue;
             }
+            group.sources = group
+                .pools
+                .iter()
+                .map(|pool| {
+                    pool.iter()
+                        .enumerate()
+                        .filter(|(_, node)| {
+                            if !graph.incoming(**node).is_empty() {
+                                return false;
+                            }
+                            let on: Vec<(&str, &str)> = sites
+                                .iter()
+                                .flat_map(|site| {
+                                    let site = &graph.sites[*site];
+                                    site.pins
+                                        .iter()
+                                        .filter(|(_, n)| n == *node)
+                                        .map(|(role, _)| (site.kind.as_str(), role.as_str()))
+                                })
+                                .collect();
+                            on.iter().any(|pin| driven.contains(pin))
+                                || !on.iter().any(|pin| read.contains(pin))
+                        })
+                        .fold(0u32, |mask, (bit, _)| mask | 1 << bit)
+                })
+                .collect();
             let index = u32::try_from(out.groups.len()).unwrap_or(u32::MAX);
             for (site, role, pool) in &drawn {
                 let which = group
@@ -1617,7 +1695,7 @@ impl SiteRules {
             if let Some(signal) = pin.signal
                 && let Some(role) = out.roles.get(pin.role.as_str())
             {
-                out.per_instance[pin.instance].push((*role, signal));
+                out.per_instance[pin.instance].push((*role, signal, pin.output));
             }
         }
         out
@@ -1634,8 +1712,16 @@ impl SiteRules {
     fn signal(&self, instance: usize, role: u32) -> Option<usize> {
         self.per_instance[instance]
             .iter()
-            .find(|(r, _)| *r == role)
-            .map(|(_, s)| *s)
+            .find(|(r, _, _)| *r == role)
+            .map(|(_, s, _)| *s)
+    }
+
+    /// [`SiteRules::signal`], and whether the instance drives it.
+    fn signal_driven(&self, instance: usize, role: u32) -> Option<(usize, bool)> {
+        self.per_instance[instance]
+            .iter()
+            .find(|(r, _, _)| *r == role)
+            .map(|(_, s, out)| (*s, *out))
     }
 
     /// Whether `moving` can be applied: every shared pin of every site it
@@ -1732,23 +1818,38 @@ impl SiteRules {
         }
         for (pool, wires) in group.pools.iter().enumerate() {
             let pool = u32::try_from(pool).unwrap_or(u32::MAX);
-            // Per signal, the wires every pin wanting it would accept.
-            let mut wanted: Vec<(usize, u32)> = Vec::new();
+            // Per signal, the wires every pin wanting it would accept, and
+            // the source wires it is driven onto.
+            let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
             for (site, instance) in &occupied[..taken] {
                 for (role, which, mask) in &self.captive[*site] {
                     if *which != pool {
                         continue;
                     }
-                    let Some(signal) = self.signal(*instance, *role) else {
+                    let Some((signal, drives)) = self.signal_driven(*instance, *role) else {
                         continue;
                     };
-                    match wanted.iter_mut().find(|(s, _)| *s == signal) {
-                        Some((_, allowed)) => *allowed &= *mask,
-                        None => wanted.push((signal, *mask)),
+                    // A pin the instance drives puts the signal on its
+                    // wire; one it reads narrows the wires it may come in
+                    // on. They are kept apart: a lookup table's `O5` and
+                    // a flip-flop it feeds in the same lane are one signal
+                    // on two wires, out through the output mux and back
+                    // through the bypass input.
+                    let (sinks, driven) = if drives {
+                        (u32::MAX, *mask)
+                    } else {
+                        (*mask, 0)
+                    };
+                    match wanted.iter_mut().find(|(s, _, _)| *s == signal) {
+                        Some((_, allowed, on)) => {
+                            *allowed &= sinks;
+                            *on |= driven;
+                        }
+                        None => wanted.push((signal, sinks, driven)),
                     }
                 }
             }
-            if wanted.len() > wires.len() || !matchable(&wanted) {
+            if !fits(&wanted, group.sources[pool as usize], wires.len()) {
                 return false;
             }
         }
@@ -1767,7 +1868,7 @@ impl SiteRules {
     ) -> bool {
         for (pool, wires) in group.pools.iter().enumerate() {
             let pool = u32::try_from(pool).unwrap_or(u32::MAX);
-            let mut wanted: Vec<(usize, u32)> = Vec::new();
+            let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
             for site in &group.sites {
                 let Some(instance) = after(*site) else {
                     continue;
@@ -1776,21 +1877,62 @@ impl SiteRules {
                     if *which != pool {
                         continue;
                     }
-                    let Some(signal) = self.signal(instance, *role) else {
+                    let Some((signal, drives)) = self.signal_driven(instance, *role) else {
                         continue;
                     };
-                    match wanted.iter_mut().find(|(s, _)| *s == signal) {
-                        Some((_, allowed)) => *allowed &= *mask,
-                        None => wanted.push((signal, *mask)),
+                    // A pin the instance drives puts the signal on its
+                    // wire; one it reads narrows the wires it may come in
+                    // on. They are kept apart: a lookup table's `O5` and
+                    // a flip-flop it feeds in the same lane are one signal
+                    // on two wires, out through the output mux and back
+                    // through the bypass input.
+                    let (sinks, driven) = if drives {
+                        (u32::MAX, *mask)
+                    } else {
+                        (*mask, 0)
+                    };
+                    match wanted.iter_mut().find(|(s, _, _)| *s == signal) {
+                        Some((_, allowed, on)) => {
+                            *allowed &= sinks;
+                            *on |= driven;
+                        }
+                        None => wanted.push((signal, sinks, driven)),
                     }
                 }
             }
-            if wanted.len() > wires.len() || !matchable(&wanted) {
+            if !fits(&wanted, group.sources[pool as usize], wires.len()) {
                 return false;
             }
         }
         true
     }
+}
+
+/// Whether each of `wanted`'s signals, as `(signal, the wires every pin
+/// reading it would accept — all of them when none reads it — the source
+/// wires it is driven onto)`, can reach its readers in a pool of `wires`
+/// wires whose `sources` carry only what is driven onto them.
+///
+/// A signal its readers can take off the wire it is driven onto costs no
+/// wire more: a lookup table and the flip-flop beside it reading its `O6`.
+/// Any other signal with a reader needs a wire of its own that is not a
+/// source, since a source carries its own driver's signal or nothing.
+fn fits(wanted: &[(usize, u32, u32)], sources: u32, wires: usize) -> bool {
+    // A pool is at most 32 wires; this is asked on every move, so it
+    // stays on the stack.
+    let mut need = [(0usize, 0u32); 32];
+    let mut count = 0usize;
+    for (signal, readers, driven) in wanted {
+        if *readers == u32::MAX || readers & driven != 0 {
+            continue;
+        }
+        if count == wires.min(32) {
+            return false;
+        }
+        need[count] = (*signal, readers & !sources);
+        count += 1;
+    }
+    matchable(&need[..count])
 }
 
 /// Whether each signal can be given a wire of its own, as `(signal, the
@@ -3329,6 +3471,14 @@ fn no_room(
                 .allowed
                 .as_ref()
                 .map_or_else(|| sites.len(), Vec::len);
+            if needed <= available {
+                return PlaceError::NoLegalSite {
+                    cell: netlist.instances[index].name.clone(),
+                    kind,
+                    needed,
+                    available,
+                };
+            }
             PlaceError::NoSites {
                 kind,
                 needed,
@@ -5443,6 +5593,158 @@ mod tests {
             shared_same.allows(&both, &[(1, pair[1])]),
             "two flip-flops with one enable belong in one tile"
         );
+    }
+
+    /// One lane of a 7-series slice, reduced to what the pool rule is
+    /// about: a lookup table driving `o6` and `o5`, a flip-flop whose data
+    /// mux reads `o6` or the bypass `ax`, and a carry generate whose mux
+    /// reads `ax` or `o5`. `ax` is the only one of them the interconnect
+    /// reaches, from the next tile, so the tile at `(0, 0)` is the one to
+    /// ask about.
+    fn lane() -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clb", "logic_tile", 8, 8);
+        for name in ["o6", "o5", "ax", "d", "di", "track"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for (from, to) in [("o6", "d"), ("ax", "d"), ("ax", "di"), ("o5", "di")] {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: Vec::new(),
+            });
+        }
+        tile.pips.push(PipDecl {
+            from: WireRef::at("track", 1, 0),
+            to: WireRef::local("ax"),
+            bits: Vec::new(),
+        });
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("o".to_owned(), WireRef::local("o6")));
+        lut.pins.push(("o5".to_owned(), WireRef::local("o5")));
+        tile.bels.push(lut);
+        let mut ff = BelDecl::new("ff", "ff");
+        ff.pins.push(("d".to_owned(), WireRef::local("d")));
+        tile.bels.push(ff);
+        let mut carry = BelDecl::new("carry", "carry");
+        carry.pins.push(("di".to_owned(), WireRef::local("di")));
+        tile.bels.push(carry);
+        arch.tile_types.push(tile);
+        for x in 0..2 {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// A lookup table, a flip-flop and a carry, each pin `(role, signal,
+    /// whether the instance drives it)`.
+    fn lane_netlist(pins: [&[(&str, usize, bool)]; 3]) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: (0..4)
+                .map(|n| Signal {
+                    name: format!("s{n}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            off_fabric: Vec::new(),
+        };
+        for (instance, (kind, pins)) in ["lut", "ff", "carry"].iter().zip(pins).enumerate() {
+            let mut own = Vec::new();
+            for (role, signal, output) in pins {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+                if *output {
+                    netlist.signals[*signal].driver = Some(pin);
+                } else {
+                    netlist.signals[*signal].sinks.push(pin);
+                }
+                own.push(pin);
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("{kind}{instance}"),
+                primitive: (*kind).to_uppercase(),
+                kind: (*kind).to_owned(),
+                pins: own,
+                pin: None,
+            });
+        }
+        netlist
+    }
+
+    /// **A wire nothing routes into carries what its bel drives, or
+    /// nothing.** The rule `SiteRules::fits` adds to the pool matching,
+    /// asked of one lane in its three cases.
+    ///
+    /// Would catch: an idle `O5` counted as room for any signal, which is
+    /// what offering it to the flip-flop's data mux did — the placer
+    /// filled slices on it, and the router then had one bypass wire for
+    /// two signals (66 nodes overused on the ChipWhisperer-Husky); and a
+    /// signal driven onto `O5` held to `O5` for its readers too, which
+    /// refused a flip-flop reading its own lane's `O5` (it goes out
+    /// through the output mux and back in on `AX`) and stopped the Husky's
+    /// placement with every site of the kind free. Would not catch a pool
+    /// wrongly drawn, which is `captive_pool`'s and not this.
+    #[test]
+    fn a_wire_nothing_routes_into_carries_only_what_drives_it() {
+        let (_, graph) = lane();
+        let here: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].tile == (0, 0))
+            .collect();
+        let site = |kind: &str| {
+            *here
+                .iter()
+                .find(|s| graph.sites[**s].kind == kind)
+                .unwrap_or_else(|| panic!("no `{kind}` site"))
+        };
+        let (lut, ff, carry) = (site("lut"), site("ff"), site("carry"));
+        let fits = |netlist: &Netlist| -> bool {
+            let rules = SiteRules::find(netlist, &graph);
+            let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+            placement.place(0, lut);
+            placement.place(1, ff);
+            rules.allows(&placement, &[(2, carry)])
+        };
+        // A plain table, a flip-flop and a generate both fed from
+        // elsewhere: one bypass wire for two signals, and `O5` is no help
+        // because nothing drives it.
+        let plain = lane_netlist([&[("o", 0, true)], &[("d", 1, false)], &[("di", 2, false)]]);
+        assert!(!fits(&plain), "an idle `O5` counted as a wire");
+        // The generate off the table's own `O5`: the bypass is the
+        // flip-flop's.
+        let paired = lane_netlist([
+            &[("o", 0, true), ("o5", 2, true)],
+            &[("d", 1, false)],
+            &[("di", 2, false)],
+        ]);
+        assert!(fits(&paired), "a generate off its own table's `O5`");
+        // A flip-flop reading the table's `O5`, with no generate in the
+        // way: out through the output mux and back in on the bypass.
+        let looped = lane_netlist([&[("o", 0, true), ("o5", 1, true)], &[("d", 1, false)], &[]]);
+        assert!(fits(&looped), "a flip-flop reading its own lane's `O5`");
+        // And beside a generate that needs the bypass too, it cannot.
+        let crowded = lane_netlist([
+            &[("o", 0, true), ("o5", 1, true)],
+            &[("d", 1, false)],
+            &[("di", 2, false)],
+        ]);
+        assert!(!fits(&crowded), "two signals on one bypass wire");
     }
 
     /// A tile with **two** control wires for four flip-flops, and a
