@@ -456,8 +456,9 @@ struct FfCtx<'a> {
     /// `None` when the device declares none, in which case no polarity
     /// can be fixed and a mismatch is reported as before.
     lut: Option<BelKind>,
-    /// The complement of each net that has one, by net.
-    inverted: BTreeMap<NetId, NetId>,
+    /// The complement of each net, or constant part of one, that has
+    /// one: by net, and by `(hi, lo)` when it is a part.
+    inverted: BTreeMap<(NetId, Option<(u32, u32)>), NetId>,
     /// Where the counts, the inversions and the declines go.
     report: &'a mut CellMapReport,
     /// Where the refusals go.
@@ -484,12 +485,27 @@ impl FfCtx<'_> {
             .lut
             .clone()
             .expect("a polarity is only flipped when the device has a LUT");
-        let key = module.expr(signal).as_net();
-        if let Some(net) = key.and_then(|net| self.inverted.get(&net)) {
+        // A part of a net is cached as well as a whole one: a reset that
+        // is one bit of a vector — `compare_en_r[i]` in NewAE's `esad`,
+        // read by the eight bits of a counter — was otherwise inverted
+        // once per flip-flop, and every bit had a reset net of its own.
+        let key = match &module.expr(signal).kind {
+            ExprKind::Net(net) => Some((*net, None)),
+            ExprKind::Slice { base, hi, lo } => module
+                .expr(*base)
+                .as_net()
+                .map(|net| (net, Some((*hi, *lo)))),
+            _ => None,
+        };
+        if let Some(net) = key.and_then(|key| self.inverted.get(&key)) {
             return net_expr(module, *net, span);
         }
         let base = match key {
-            Some(net) => format!("{}$n", module.nets[net].name),
+            Some((net, None)) => format!("{}$n", module.nets[net].name),
+            Some((net, Some((hi, lo)))) if hi == lo => {
+                format!("{}${lo}$n", module.nets[net].name)
+            }
+            Some((net, Some((hi, lo)))) => format!("{}${hi}_{lo}$n", module.nets[net].name),
             None => "ff$n".to_owned(),
         };
         let out = add_net(module, &base, Type::bit(), span);
@@ -508,9 +524,15 @@ impl FfCtx<'_> {
         );
         map_lut(module, self.device, &bel, cell, self.report, self.diags);
         let named = match key {
-            Some(net) => {
-                self.inverted.insert(net, out);
-                module.nets[net].name.as_str().to_owned()
+            Some(key) => {
+                self.inverted.insert(key, out);
+                match key {
+                    (net, None) => module.nets[net].name.as_str().to_owned(),
+                    (net, Some((hi, lo))) if hi == lo => {
+                        format!("{}[{lo}]", module.nets[net].name)
+                    }
+                    (net, Some((hi, lo))) => format!("{}[{hi}:{lo}]", module.nets[net].name),
+                }
             }
             None => base,
         };
@@ -1607,6 +1629,64 @@ mod tests {
         assert_eq!(cells_named(&design, top, "SB_DFFR"), 4);
         assert_eq!(report.inverters(), 1);
         assert_eq!(cells_named(&design, top, "SB_LUT4"), 2);
+        assert!(!validate(&design).has_errors());
+    }
+
+    /// **A part of a net is inverted once too.** Four one-bit registers,
+    /// each reading its reset as its own `rsts[1]` expression, which is
+    /// what NewAE's `esad` became: `compare_en_r[i]` resets the eight bits
+    /// of counter `i`. The cache was keyed by whole nets, so each bit got
+    /// an inverter and a reset net of its own — 2,048 lookup tables and
+    /// 2,048 control sets on the Husky, where a slice's flip-flops share
+    /// one reset. Would catch the cache missing a part-select; would not
+    /// catch two *different* expressions of one value (`~x` and a LUT
+    /// computing it) being inverted twice, which no key on the expression
+    /// can see.
+    #[test]
+    fn a_bit_of_a_vector_is_inverted_once_for_every_flip_flop() {
+        let (_map, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let clk = b.input("clk", Type::bit());
+        let rsts = b.input("rsts", Type::bits(2));
+        let d = b.input("d", Type::bit());
+        for n in 0..4 {
+            let q = b.output(format!("q{n}"), Type::bit());
+            let rsts_e = b.net(rsts);
+            let rst = b.slice(rsts_e, 1, 1);
+            let inputs = vec![
+                (Name::new("clk"), b.net(clk)),
+                (Name::new("d"), b.net(d)),
+                (Name::new("rst"), rst),
+            ];
+            b.cell(
+                format!("r{n}"),
+                CellKind::Dff {
+                    clk_pos: true,
+                    has_enable: false,
+                    reset: Some(Reset {
+                        asynchronous: true,
+                        active_high: false,
+                        value: Const::zero(1),
+                    }),
+                },
+                inputs,
+                vec![(Name::new("q"), q)],
+            );
+        }
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        let mut diags = Diagnostics::new();
+        let device = target("ice40-hx1k-tq144").unwrap();
+        let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert_eq!(cells_named(&design, top, "SB_DFFR"), 4);
+        assert_eq!(report.inverters(), 1, "{:?}", report.inverted);
+        assert_eq!(
+            report.inverted,
+            [("rsts[1]".to_owned(), "set/reset".to_owned())]
+        );
+        assert_eq!(cells_named(&design, top, "SB_LUT4"), 1);
         assert!(!validate(&design).has_errors());
     }
 
