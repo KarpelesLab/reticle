@@ -199,6 +199,15 @@ testdata/synth/ram_regread.rtl
 testdata/synth/ram_regread.synth.rtl
   ram_regread: eligible (2 comb ops, 4 edge ops, 1 registers, 8 bits)
 
+testdata/synth/split_bits.cells.rtl
+  split_bits: eligible (11 comb ops, 6 edge ops, 3 registers, 6 bits)
+
+testdata/synth/split_bits.rtl
+  split_bits: refused - split_bits.r: several clocked processes write bits of this register, and the compiled form gives a register one writer
+
+testdata/synth/split_bits.synth.rtl
+  split_bits: eligible (3 comb ops, 14 edge ops, 3 registers, 6 bits)
+
 testdata/synth/unsynth.cells.rtl
   unsynth: refused - process unsynth.ticker: a free-running process controls its own timing, which a cycle-based run has none of
 

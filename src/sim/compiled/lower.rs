@@ -1654,7 +1654,7 @@ impl<'d> Lowerer<'d> {
                 };
                 if next[idx].is_some() {
                     let name = self.sig_name(sig);
-                    self.err(name, Reason::MultiplyDriven, Some(process.span));
+                    self.err(name, Reason::SharedRegister, Some(process.span));
                 }
                 next[idx] = Some(value);
             }

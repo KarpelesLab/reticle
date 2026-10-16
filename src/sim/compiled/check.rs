@@ -106,6 +106,11 @@ pub enum Reason {
     Tristate,
     /// A net several drivers write the same bits of.
     MultiplyDriven,
+    /// A register two clocked processes each write some bits of. The
+    /// bits may well be disjoint, which is legal Verilog and which
+    /// synthesis splits (`synth::proc::split`); this form gives a register
+    /// one writer and does not.
+    SharedRegister,
     /// Level-sensitive storage: a `dlatch`, or a combinational unit that
     /// leaves a net unassigned on some path.
     Latch,
@@ -174,6 +179,10 @@ impl fmt::Display for Reason {
             Reason::MultiplyDriven => {
                 f.write_str("several drivers write the same bits, which needs wire resolution")
             }
+            Reason::SharedRegister => f.write_str(
+                "several clocked processes write bits of this register, and the compiled form \
+                 gives a register one writer",
+            ),
             Reason::Latch => f.write_str(
                 "level-sensitive storage: the value is kept when no branch assigns it",
             ),
@@ -324,6 +333,7 @@ mod tests {
             Reason::UnsupportedCell("dlatch".into()),
             Reason::Tristate,
             Reason::MultiplyDriven,
+            Reason::SharedRegister,
             Reason::Latch,
             Reason::CombinationalLoop,
             Reason::SeveralClocks("top.clk".into()),
