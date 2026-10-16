@@ -1220,7 +1220,10 @@ says anything.
   `GTP_CHANNEL_*` and `MONITOR_BOT` have no `segbits` and no alias, and
   a design constraining a port to one of their balls now gets a
   diagnostic naming the ball, the site, the tile and the tile type
-  instead of a bare "maps to no usable site".
+  instead of a bare "maps to no usable site". (`MONITOR_BOT` has features
+  of this flow's own since, the XADC's — *The XADC* below — and its two
+  analogue balls are still refused, now because no feature names their
+  pad sites.)
 
 ### It is the clock: flip-flops outside some set of columns never tick
 
@@ -2765,6 +2768,46 @@ infers onto, and `xc7.dev` says so.
 
 Nothing here has run on a part.
 
+## The XADC: a tile prjxray never described
+
+prjxray-db has no `segbits` and no `ppips` for `MONITOR_BOT`, the tile
+that holds the `XADC`: every image that uses one has bits there no
+decoder could name, and its pins reached nothing in this loader's graph.
+NewAE's ChipWhisperer-Husky uses one, through Vivado's `xadc_wiz`, for its
+temperature and supply alarms, which gate its SAD trigger. Both halves are
+supplied now (`src/fpga/xray/xadc.rs`).
+
+**The pins** are prjxray's own: its `tile_type_MONITOR_BOT.json`, which the
+fetch does not take, gives every site pin's wire and the one fixed
+connection from it to the interconnect side. That was read once by script
+into a table — 71 fabric-facing pins, the DRP, the alarms, `OT`, the
+status outputs — and each connection is a free fixed path. The analogue
+inputs are the dedicated pads' and are not offered.
+
+**The register layout** was derived, and how is the evidence. The
+wizard's `.xci` records the 27 initial registers it writes; leaving out
+the six that exist only on a Zynq, they hold 92 ones, and NewAE's image
+holds exactly 92 bits in the tile besides frame ECC. The layout prjxray
+found for a PLL's DRP registers — register `r`, bit `b`,
+`i = (r - 0x40) * 16 + b`, frame `28 + i % 2`, bit `1696 + i / 2` — places
+88 of the 89 that are in frames 28 and 29 exactly. The 89th is register
+`0x5C`, the VBRAM lower alarm, where Vivado wrote `0x5111` and the
+`.xci` records `0x9999`: which wizard field feeds that register is a
+question about the wizard, and with Vivado's value all 89 land. The other
+three bits belong to no register and are set whenever an XADC is used;
+they are called `XADC.IN_USE` here. The layout becomes decoder features,
+so **NewAE's image now decodes with no tile lacking a description**, its
+unexplained bits falling from 24 211 to 24 119 — the 92 — and the rest is
+frame ECC and the other gaps listed at the top of this account.
+
+`tests/fpga_xray_xadc.rs` builds an `XADC` with the Husky's values and
+requires the tile's register file to read back as Vivado's. What one image
+cannot settle is a register bit Vivado's values never set; the layout is
+regular and is the PLL's, so it is taken to hold there too, and a second
+image with other values would confirm it.
+
+Nothing here has run on a part.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -3196,6 +3239,7 @@ will have.
 | `src/fpga/xray/carry.rs` | `legalise_carries`: a lookup table for every propagate bit of a `CARRY4` that has none, and the constant generates in `O5` |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
+| `src/fpga/xray/xadc.rs` | the XADC: its pins from prjxray's tile JSON, and its register layout, derived from NewAE's Husky image |
 | `src/fpga/xray/iologic.rs` | an `IDDR` on an `ILOGIC` and an `ODDR` on an `OLOGIC`, each configured from its parameters and pins as Vivado configured the Husky's |
 | `src/fpga/xray/io.rs` | a pad per buffer: its standard, drive, slew and pull, and a differential pair across its tile, each recipe checked against NewAE's Husky image |
 | `src/fpga/xray/bufg.rs` | a `BUFGCE` and a `BUFGMUX` on a `BUFGCTRL`: each control's inverter from what was routed to it, checked against the thirteen buffers of NewAE's Husky image |

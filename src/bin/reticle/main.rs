@@ -3067,17 +3067,19 @@ fn needs_clock_manager(
     })
 }
 
-/// True when the mapped design instantiates an MMCM, whose sites are
-/// beside the PLLs' and no nearer a pad.
-fn needs_mmcm(
+/// True when the mapped design instantiates a primitive of `role`, whose
+/// sites are where they are and no nearer a pad: an MMCM beside the PLLs,
+/// the XADC in the middle of the die.
+fn needs_role(
     design: &reticle::ir::Design,
     top: reticle::ir::ModuleId,
     device: &reticle::fpga::Device,
+    role: reticle::fpga::BelRole,
 ) -> bool {
     use reticle::ir::CellKind;
     design.modules[top].cells.iter().any(|(_, cell)| {
         matches!(&cell.kind, CellKind::Blackbox(name)
-            if device.bel_named(name.as_str()).is_some_and(|b| b.role == reticle::fpga::BelRole::Mmcm))
+            if device.bel_named(name.as_str()).is_some_and(|b| b.role == role))
     })
 }
 
@@ -3281,13 +3283,18 @@ fn write_xc7_bitstream(
                 .or(Some(region));
         }
         // And an MMCM, in the same tiles' lower quarter.
-        if let Some(region) = options.region
-            && needs_mmcm(design, top, device)
-        {
-            options.region = db
-                .region_with_site_type(&files, region, "MMCME2_ADV")
-                .map_err(|e| e.to_string())?
-                .or(Some(region));
+        for (role, site_type) in [
+            (reticle::fpga::BelRole::Mmcm, "MMCME2_ADV"),
+            (reticle::fpga::BelRole::Sysmon, "XADC"),
+        ] {
+            if let Some(region) = options.region
+                && needs_role(design, top, device, role)
+            {
+                options.region = db
+                    .region_with_site_type(&files, region, site_type)
+                    .map_err(|e| e.to_string())?
+                    .or(Some(region));
+            }
         }
         // And a design with a block RAM needs a block RAM column, which
         // a pad's neighbourhood may not reach. The tile is five

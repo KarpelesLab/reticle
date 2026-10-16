@@ -170,6 +170,7 @@ mod iologic;
 mod lutram;
 mod parse;
 mod sites;
+mod xadc;
 
 pub use bram::{
     BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, mode_features, tie_policy,
@@ -197,6 +198,7 @@ pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
 pub use io::{IoError, IoTables, io_standards};
 pub use iologic::IoLogicError;
 pub use sites::SiteCoverage;
+pub use xadc::xadc_init_bit;
 
 /// Why a Project X-Ray database could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1140,7 +1142,9 @@ impl XrayDatabase {
         );
         let path = format!("{base}.db");
         let Some(text) = files.read_file(&path) else {
-            return Ok(None);
+            // A tile type the database never fuzzed, whose features this
+            // flow derived: the XADC's. See `xadc`.
+            return Ok(xadc::derived_features(tile_type).map(FeatureSet::new));
         };
         let set = parse::segbits(&text, &path)?;
         let Some(row) = block_ram_row else {

@@ -481,6 +481,9 @@ pub enum BelRole {
     /// its own register map and pins the PLL does not have (fine phase
     /// shift), so it must not be placed where a PLL goes.
     Mmcm,
+    /// A system monitor: the 7 series' `XADC`, one hard block on the die,
+    /// instantiated by name.
+    Sysmon,
     /// A double-data-rate input register beside the IO buffer: `d` from
     /// the pad side, `clk`, and `q0` / `q1` for the bits captured on the
     /// rising and the falling edge (ECP5 `IDDRX1F`). A family whose IO
@@ -501,7 +504,7 @@ pub enum BelRole {
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 14] = [
+    pub const ALL: [BelRole; 15] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
@@ -512,6 +515,7 @@ impl BelRole {
         BelRole::Dsp,
         BelRole::Pll,
         BelRole::Mmcm,
+        BelRole::Sysmon,
         BelRole::DdrIn,
         BelRole::DdrOut,
         BelRole::IoDelay,
@@ -531,6 +535,7 @@ impl BelRole {
             BelRole::Dsp => "dsp",
             BelRole::Pll => "pll",
             BelRole::Mmcm => "mmcm",
+            BelRole::Sysmon => "sysmon",
             BelRole::DdrIn => "ddr_in",
             BelRole::DdrOut => "ddr_out",
             BelRole::IoDelay => "iodelay",
@@ -4021,6 +4026,7 @@ end
                     ("IDDR", vec!["ce", "sr"]),
                     ("ODDR", vec!["d1", "d2", "ce", "sr"]),
                     ("PLLE2_ADV", vec!["rst", "pwrdwn", "clkinsel", "clkin2"]),
+                    ("XADC", vec!["vp", "vn", "vauxp", "vauxn"]),
                     (
                         "MMCME2_ADV",
                         vec!["rst", "pwrdwn", "psen", "psincdec", "clkinsel", "clkin2"]

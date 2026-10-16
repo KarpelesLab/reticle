@@ -129,8 +129,13 @@ fn wire_prefix(tile_type: &str, prefix: &str) -> Option<&'static str> {
 /// `RAMB36` is the same shape and is deliberately not here: its seven
 /// features configure the two halves as one 36 kbit block, and nothing
 /// places a `RAMB36E1`.
+///
+/// The XADC is here too, though not a block RAM: its features are this
+/// flow's own (`xadc::derived_features`, `XADC.INIT_41[13]`), named in the
+/// same two-part spelling so that the generic reader turns each register
+/// bit into a parameter bit of the bel.
 pub(super) fn is_two_part_site(head: &str) -> bool {
-    matches!(head, "RAMB18_Y0" | "RAMB18_Y1")
+    matches!(head, "RAMB18_Y0" | "RAMB18_Y1" | "XADC")
 }
 
 /// The two ports of a `RAMB18E1` as `xc7.dev` declares them, in its

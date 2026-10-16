@@ -519,6 +519,9 @@ pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
     if matches!(tile_type, "CLK_BUFG_BOT_R" | "CLK_BUFG_TOP_R") {
         return global_clock_buffers();
     }
+    if tile_type == "MONITOR_BOT" {
+        return super::xadc::xadc_pass_throughs(tile_type);
+    }
     let (side, single) = match tile_type {
         "LIOI3" | "LIOI3_TBYTESRC" | "LIOI3_TBYTETERM" => ("LIOI", false),
         "RIOI3" | "RIOI3_TBYTESRC" | "RIOI3_TBYTETERM" => ("RIOI", false),
@@ -1029,6 +1032,10 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
     let io_logic = super::iologic::io_logic_bels(tile_type);
     if !io_logic.is_empty() {
         return io_logic;
+    }
+    let xadc = super::xadc::xadc_bels(tile_type);
+    if !xadc.is_empty() {
+        return xadc;
     }
     if !matches!(tile_type, "CLK_BUFG_BOT_R" | "CLK_BUFG_TOP_R") {
         return Vec::new();
