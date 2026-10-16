@@ -553,6 +553,9 @@ impl<'a> Exec<'a> {
                 self.set(*net, kind, new, span);
             }
             Lvalue::Concat(parts) => {
+                if self.assign_aligned_part(parts, value, kind, span)? {
+                    return Ok(());
+                }
                 let total = self.lvalue_width(target, span)?;
                 let mut hi = total;
                 for part in parts {
@@ -572,6 +575,194 @@ impl<'a> Exec<'a> {
             }
         }
         Ok(())
+    }
+
+    /// `r[x*S +: P] <= v`, which the Verilog frontend hands over as `P`
+    /// one-bit writes at `x*S`, `x*S + 1`, …: when the stride `S` is a
+    /// power of two no smaller than `P`, bit `t` of `r` is written exactly
+    /// when `t % S < P` and `x == t / S`, from bit `t % S` of the value.
+    /// That is one comparison per group of `S` bits and a choice per bit,
+    /// which becomes a flip-flop's enable.
+    ///
+    /// Lowered one bit at a time instead, each write was two shifts the
+    /// width of `r`: a byte written into a 1024-bit register file cost
+    /// over twenty thousand LUTs. Returns false, having done nothing, for
+    /// anything that is not exactly that shape.
+    fn assign_aligned_part(
+        &mut self,
+        parts: &[Lvalue],
+        value: ExprId,
+        kind: AssignKind,
+        span: Span,
+    ) -> Result<bool, Failed> {
+        let count = parts.len();
+        if count < 2 {
+            return Ok(false);
+        }
+        // Each part is `net[base + k]`, one net and one base for all.
+        let mut target = None;
+        let mut base = None;
+        let mut offsets = Vec::with_capacity(count);
+        for part in parts {
+            let Lvalue::Index { net, index } = part else {
+                return Ok(false);
+            };
+            let (b, k) = match &self.m.expr(*index).kind {
+                ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs,
+                    rhs,
+                } => match self.m.expr(*rhs).as_const().and_then(Const::to_u64) {
+                    Some(k) => (*lhs, k),
+                    None => return Ok(false),
+                },
+                _ => (*index, 0),
+            };
+            if *target.get_or_insert(*net) != *net {
+                return Ok(false);
+            }
+            // The elaborator shares one base node between the parts; a
+            // netlist read back from text spells it once per part.
+            let first = *base.get_or_insert(b);
+            if first != b && !same_expr(self.m, first, b, 16) {
+                return Ok(false);
+            }
+            offsets.push(k);
+        }
+        let (Some(net), Some(base)) = (target, base) else {
+            return Ok(false);
+        };
+        // The parts cover `base .. base + P` exactly once each.
+        let mut sorted = offsets.clone();
+        sorted.sort_unstable();
+        if sorted
+            .iter()
+            .enumerate()
+            .any(|(i, k)| u64::try_from(i).ok() != Some(*k))
+        {
+            return Ok(false);
+        }
+        let Some(width) = self.m.nets[net].ty.width() else {
+            return Ok(false);
+        };
+        let off = self.subst(base);
+        let Some((group, shift)) = self.aligned_base(off, span) else {
+            return Ok(false);
+        };
+        if shift >= 32 || count > (1usize << shift) {
+            return Ok(false);
+        }
+        let stride = 1u32 << shift;
+        let group_width = self.m.expr(group).ty.width().unwrap_or(0);
+        let cur = self.current(net, kind, span);
+        let count = u32::try_from(count).unwrap_or(u32::MAX);
+        let mut bits = Vec::with_capacity(width as usize);
+        for g in 0..width.div_ceil(stride) {
+            // A group the index cannot name is never written.
+            let reachable = group_width >= 64 || u64::from(g) < (1u64 << group_width);
+            let eq = if reachable {
+                let k = mk_const(self.m, Const::from_u64(u64::from(g), group_width), span);
+                Some(mk_binary(self.m, BinaryOp::Eq, group, k, span))
+            } else {
+                None
+            };
+            for k in 0..stride {
+                let t = g * stride + k;
+                if t >= width {
+                    break;
+                }
+                let old = mk_slice(self.m, cur, t, t, span);
+                let bit = match eq {
+                    Some(eq) if k < count => {
+                        // The part written at offset `k`; the first part
+                        // of a concatenation takes the value's top bit.
+                        let i = offsets.iter().position(|o| *o == u64::from(k)).unwrap_or(0);
+                        let v = count - 1 - u32::try_from(i).unwrap_or(0);
+                        let new = mk_slice(self.m, value, v, v, span);
+                        mk_mux(self.m, eq, new, old, span)
+                    }
+                    _ => old,
+                };
+                bits.push(bit);
+            }
+        }
+        bits.reverse();
+        let new = mk_concat(self.m, bits, span);
+        self.set(net, kind, new, span);
+        Ok(true)
+    }
+
+    /// `(x, shift)` when `off` is `x * 2^shift` as an unsigned value: a
+    /// product with a power of two, a shift by a constant, or `x` above
+    /// `shift` zero bits — under any number of widening, zero-filling
+    /// resizes. The `x` returned is cut to the bits that survive the
+    /// product's own width.
+    fn aligned_base(&mut self, off: ExprId, span: Span) -> Option<(ExprId, u32)> {
+        let expr = self.m.expr(off).clone();
+        if expr.ty.is_signed() {
+            return None;
+        }
+        let width = expr.ty.width()?;
+        let low = |m: &mut Module, x: ExprId, shift: u32| -> Option<(ExprId, u32)> {
+            if width <= shift {
+                return None;
+            }
+            let xw = m.expr(x).ty.width()?;
+            let x = if xw > width - shift {
+                mk_slice(m, x, width - shift - 1, 0, span)
+            } else {
+                x
+            };
+            Some((x, shift))
+        };
+        let power = |m: &Module, e: ExprId| -> Option<u32> {
+            let v = m.expr(e).as_const()?.to_u64()?;
+            (v.is_power_of_two() && v > 1).then(|| v.trailing_zeros())
+        };
+        match &expr.kind {
+            ExprKind::Resize {
+                expr: inner,
+                signed: false,
+                ..
+            } => {
+                let inner = *inner;
+                let iw = self.m.expr(inner).ty.width()?;
+                if iw > width {
+                    return None;
+                }
+                self.aligned_base(inner, span)
+            }
+            ExprKind::Binary {
+                op: BinaryOp::Mul,
+                lhs,
+                rhs,
+            } => {
+                let (lhs, rhs) = (*lhs, *rhs);
+                if let Some(shift) = power(self.m, rhs) {
+                    low(self.m, lhs, shift)
+                } else if let Some(shift) = power(self.m, lhs) {
+                    low(self.m, rhs, shift)
+                } else {
+                    None
+                }
+            }
+            ExprKind::Binary {
+                op: BinaryOp::Shl,
+                lhs,
+                rhs,
+            } => {
+                let lhs = *lhs;
+                let shift = self.m.expr(*rhs).as_const()?.to_u64()?;
+                low(self.m, lhs, u32::try_from(shift).ok().filter(|s| *s > 0)?)
+            }
+            ExprKind::Concat(parts) => match parts.as_slice() {
+                [x, zeros] if self.m.expr(*zeros).as_const().is_some_and(Const::is_zero) => {
+                    Some((*x, self.m.expr(*zeros).ty.width()?))
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// The width of a net that must be a bit vector.
@@ -1317,6 +1508,35 @@ pub(super) fn patterns_overlap(a: &Const, b: &Const, wildcard: bool) -> bool {
         let (x, y) = (a.bit(i), b.bit(i));
         !x.is_known() || !y.is_known() || x == y
     })
+}
+
+/// Whether `a` and `b` are the same expression, node for node, looking at
+/// most `depth` levels down; false when that is not enough to tell.
+fn same_expr(m: &Module, a: ExprId, b: ExprId, depth: u32) -> bool {
+    if a == b {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let (x, y) = (m.expr(a), m.expr(b));
+    if x.ty != y.ty {
+        return false;
+    }
+    let (ox, oy) = (operands(&x.kind), operands(&y.kind));
+    // The node itself, with its operands blanked out, must match; then
+    // every operand in turn.
+    let mut kx = x.kind.clone();
+    let mut ky = y.kind.clone();
+    let blank = <ExprId as crate::ir::arena::Id>::from_index(0);
+    replace_operands(&mut kx, &mut |e| *e = blank);
+    replace_operands(&mut ky, &mut |e| *e = blank);
+    kx == ky
+        && ox.len() == oy.len()
+        && ox
+            .iter()
+            .zip(&oy)
+            .all(|(p, q)| same_expr(m, *p, *q, depth - 1))
 }
 
 #[cfg(test)]

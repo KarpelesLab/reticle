@@ -1,0 +1,3565 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>part_write schematic</title>
+    <style>
+:root {
+  --bg: #fbfbfa; --fg: #1d2021; --dim: #6b7378; --line: #d6d9dc;
+  --panel: #ffffff; --accent: #1d6fb8; --comb: #eef3f8; --comb-line: #7a9cbb;
+  --seq: #fdf0e0; --seq-line: #c6852a; --port: #e9f4ec; --port-line: #4c8f63;
+  --inst: #f1edf8; --inst-line: #7c6bab; --wire: #7c8790; --hot: #d1440a;
+  --mono: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'DejaVu Sans', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191c; --fg: #e4e6e8; --dim: #97a0a6; --line: #333a40;
+    --panel: #1d2125; --accent: #6db3f2; --comb: #23303b; --comb-line: #5b87ad;
+    --seq: #382b1b; --seq-line: #d29a45; --port: #1e3327; --port-line: #5ea678;
+    --inst: #2a2440; --inst-line: #9385c9; --wire: #79858e; --hot: #ff7a45;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+header.top { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 2; }
+.crumbs { font-family: var(--mono); font-size: 13px; }
+.crumbs .sep { color: var(--dim); margin: 0 0.35rem; }
+.crumbs .here { font-weight: 600; }
+.brand { color: var(--dim); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+main { padding: 1rem; margin: 0 auto; }
+main.narrow { max-width: 70rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 1.5rem; margin: 0.2rem 0 0.4rem; }
+h2 { font-size: 1.1rem; margin: 1.6rem 0 0.4rem; border-bottom: 1px solid var(--line);
+  padding-bottom: 0.2rem; }
+h1 .kind, .loc { color: var(--dim); font-weight: 400; font-size: 0.8rem; font-family: var(--mono); }
+p.desc { margin: 0.4rem 0 1rem; max-width: 46rem; white-space: pre-wrap; }
+p.none, td.none { color: var(--dim); font-style: italic; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code, td.mono { font-family: var(--mono); font-size: 13px; }
+ul.tree { list-style: none; padding-left: 1.1rem; margin: 0.2rem 0; border-left: 1px solid var(--line); }
+ul.tree li { padding: 0.1rem 0; font-family: var(--mono); font-size: 13px; }
+.toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.toolbar input { font: inherit; font-size: 13px; padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); min-width: 14rem; }
+.toolbar button { font: inherit; font-size: 13px; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); cursor: pointer; }
+.toolbar .hint { color: var(--dim); font-size: 12px; }
+.canvas { display: flex; gap: 0.75rem; align-items: stretch; flex-wrap: wrap; }
+.frame { flex: 1 1 28rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); overflow: hidden; }
+svg.schematic { display: block; width: 100%; height: 72vh; touch-action: none; cursor: grab; }
+aside.info { flex: 0 1 17rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); padding: 0.6rem 0.8rem; font-size: 13px; overflow: auto;
+  max-height: 72vh; }
+aside.info h3 { margin: 0 0 0.4rem; font-size: 0.95rem; font-family: var(--mono); }
+aside.info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; }
+aside.info dt { color: var(--dim); font-size: 12px; }
+aside.info dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.legend { display: flex; gap: 0.9rem; flex-wrap: wrap; color: var(--dim); font-size: 12px;
+  margin-top: 0.5rem; }
+.legend span::before { content: ''; display: inline-block; width: 0.7rem; height: 0.7rem;
+  margin-right: 0.3rem; border: 1px solid var(--line); vertical-align: -1px; }
+.legend .l-comb::before { background: var(--comb); border-color: var(--comb-line); }
+.legend .l-seq::before { background: var(--seq); border-color: var(--seq-line); }
+.legend .l-port::before { background: var(--port); border-color: var(--port-line); }
+.legend .l-inst::before { background: var(--inst); border-color: var(--inst-line); }
+.box { fill: var(--comb); stroke: var(--comb-line); stroke-width: 1; }
+.seq .box { fill: var(--seq); stroke: var(--seq-line); stroke-width: 2; }
+.port .box { fill: var(--port); stroke: var(--port-line); }
+.inst .box { fill: var(--inst); stroke: var(--inst-line); stroke-width: 1.5; }
+.kind { fill: var(--fg); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.label { fill: var(--dim); font-family: var(--mono); font-size: 10px; }
+.pinname { fill: var(--dim); font-family: var(--mono); font-size: 9px; }
+.pin { fill: var(--wire); stroke: none; }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.4; stroke-linejoin: round; }
+.wire.bus { stroke-width: 2.6; }
+.clkmark { fill: none; stroke: var(--seq-line); stroke-width: 1.4; }
+.node { cursor: pointer; }
+polyline.hl { stroke: var(--hot); }
+circle.hl { fill: var(--hot); }
+text.hl { fill: var(--hot); }
+.hl-node .box { stroke: var(--hot); }
+.found .box { stroke: var(--hot); stroke-dasharray: 4 2; }
+.sel .box { stroke: var(--accent); stroke-width: 2.5; }
+ol.src { font-family: var(--mono); font-size: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 0.6rem 0.6rem 4rem;
+  overflow-x: auto; }
+ol.src li { white-space: pre; padding: 0 0.3rem; }
+ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line); }
+
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <nav class="crumbs">
+        <a href="index.html">index</a>
+        <span class="sep">/</span>
+        <span class="here">part_write (schematic)</span>
+      </nav>
+      <span class="brand">reticle viewer</span>
+    </header>
+    <main class="wide"><h1>part_write
+  <span class="kind"> schematic</span>
+</h1>
+<p class="loc">
+  <a href="source/0-part_write.cells.rtl.html#L3">part_write.cells.rtl:3:1</a> · 
+  <a href="part_write.doc.html">documentation</a> · 
+  <a href="index.html">index</a>
+</p>
+<div class="toolbar">
+  <input type="search" id="search" placeholder="find a cell or a net" aria-label="find a cell or a net" />
+  <button type="button" id="zoom-out">−</button>
+  <button type="button" id="zoom-in">+</button>
+  <button type="button" id="zoom-reset">reset</button>
+  <span class="hint">drag to pan, wheel to zoom, hover a wire to trace it, click a cell for its details</span>
+</div>
+<div class="canvas">
+  <div class="frame">
+    <svg class="schematic" id="schematic" viewBox="0 0 5528 6766" preserveAspectRatio="xMinYMin meet" role="img">
+      <title>schematic of module part_write</title>
+      <g id="view">
+        <g class="wires">
+          <polyline class="wire bus" points="872,3201 944,3201 944,2189 1712,2189 1712,2217 4796,2217 4796,2246 5072,2246 5072,2274 5336,2274 5336,2303 5364,2303" data-net="r" />
+          <polyline class="wire bus" points="164,2569 176,2569 176,993 776,993" data-net="k" />
+          <polyline class="wire" points="122,1789 188,1789 188,1011 776,1011" />
+          <polyline class="wire bus" points="164,2241 368,2241 368,2481 776,2481" data-net="i" />
+          <polyline class="wire" points="122,1877 200,1877 200,2499 776,2499" />
+          <polyline class="wire bus" points="872,3201 968,3201 968,2533 1604,2533" data-net="r" />
+          <polyline class="wire bus" points="164,2445 308,2445 308,2389 884,2389 884,2551 1604,2551" data-net="d" />
+          <polyline class="wire" points="872,2481 896,2481 896,2569 1604,2569" data-net="r$ff$eq_2" />
+          <polyline class="wire bus" points="872,3201 1004,3201 1004,2649 1604,2649" data-net="r" />
+          <polyline class="wire bus" points="164,2445 320,2445 320,2417 932,2417 932,2667 1604,2667" data-net="d" />
+          <polyline class="wire" points="872,2481 908,2481 908,2685 1604,2685" data-net="r$ff$eq_2" />
+          <polyline class="wire bus" points="872,3201 1052,3201 1052,2765 1604,2765" data-net="r" />
+          <polyline class="wire bus" points="164,2445 332,2445 332,2543 980,2543 980,2783 1604,2783" data-net="d" />
+          <polyline class="wire" points="872,2481 920,2481 920,2801 1604,2801" data-net="r$ff$eq_2" />
+          <polyline class="wire bus" points="872,3201 1100,3201 1100,2881 1604,2881" data-net="r" />
+          <polyline class="wire bus" points="164,2445 356,2445 356,2571 884,2571 884,2899 1604,2899" data-net="d" />
+          <polyline class="wire" points="872,2481 956,2481 956,2917 1604,2917" data-net="r$ff$eq_2" />
+          <polyline class="wire bus" points="164,2241 380,2241 380,2691 776,2691" data-net="i" />
+          <polyline class="wire" points="122,1921 212,1921 212,2709 776,2709" />
+          <polyline class="wire bus" points="872,3201 1136,3201 1136,2997 1604,2997" data-net="r" />
+          <polyline class="wire bus" points="164,2445 500,2445 500,2599 896,2599 896,3015 1604,3015" data-net="d" />
+          <polyline class="wire" points="872,2691 932,2691 932,3033 1604,3033" data-net="r$ff$eq_3" />
+          <polyline class="wire bus" points="872,3201 932,3201 932,3113 1604,3113" data-net="r" />
+          <polyline class="wire bus" points="164,2445 512,2445 512,2627 992,2627 992,3131 1604,3131" data-net="d" />
+          <polyline class="wire" points="872,2691 1016,2691 1016,3149 1604,3149" data-net="r$ff$eq_3" />
+          <polyline class="wire bus" points="872,3201 992,3201 992,3229 1604,3229" data-net="r" />
+          <polyline class="wire bus" points="164,2445 524,2445 524,2753 908,2753 908,3247 1604,3247" data-net="d" />
+          <polyline class="wire" points="872,2691 1028,2691 1028,3265 1604,3265" data-net="r$ff$eq_3" />
+          <polyline class="wire bus" points="872,3201 1016,3201 1016,3345 1604,3345" data-net="r" />
+          <polyline class="wire bus" points="164,2445 536,2445 536,2781 1064,2781 1064,3363 1604,3363" data-net="d" />
+          <polyline class="wire" points="872,2691 1040,2691 1040,3381 1604,3381" data-net="r$ff$eq_3" />
+          <polyline class="wire bus" points="164,2241 392,2241 392,3711 776,3711" data-net="i" />
+          <polyline class="wire" points="122,2621 176,2621 176,3729 776,3729" />
+          <polyline class="wire bus" points="872,3201 1412,3201 1412,5201 1604,5201" data-net="r" />
+          <polyline class="wire bus" points="164,2445 596,2445 596,3521 896,3521 896,5219 1604,5219" data-net="d" />
+          <polyline class="wire" points="872,3711 1184,3711 1184,5237 1604,5237" data-net="r$ff$eq_4" />
+          <polyline class="wire bus" points="872,3201 1424,3201 1424,5317 1604,5317" data-net="r" />
+          <polyline class="wire bus" points="164,2445 608,2445 608,3647 980,3647 980,5335 1604,5335" data-net="d" />
+          <polyline class="wire" points="872,3711 1244,3711 1244,5353 1604,5353" data-net="r$ff$eq_4" />
+          <polyline class="wire bus" points="872,3201 1436,3201 1436,5433 1604,5433" data-net="r" />
+          <polyline class="wire bus" points="164,2445 620,2445 620,3773 884,3773 884,5451 1604,5451" data-net="d" />
+          <polyline class="wire" points="872,3711 1256,3711 1256,5469 1604,5469" data-net="r$ff$eq_4" />
+          <polyline class="wire bus" points="872,3201 1448,3201 1448,5549 1604,5549" data-net="r" />
+          <polyline class="wire bus" points="164,2445 632,2445 632,3801 1148,3801 1148,5567 1604,5567" data-net="d" />
+          <polyline class="wire" points="872,3711 1532,3711 1532,5585 1604,5585" data-net="r$ff$eq_4" />
+          <polyline class="wire bus" points="164,2241 404,2241 404,3949 776,3949" data-net="i" />
+          <polyline class="wire" points="122,2665 332,2665 332,3967 776,3967" />
+          <polyline class="wire bus" points="872,3201 1460,3201 1460,5665 1604,5665" data-net="r" />
+          <polyline class="wire bus" points="164,2445 644,2445 644,3829 1268,3829 1268,5683 1604,5683" data-net="d" />
+          <polyline class="wire" points="872,3949 1280,3949 1280,5701 1604,5701" data-net="r$ff$eq_5" />
+          <polyline class="wire bus" points="872,3201 1472,3201 1472,5781 1604,5781" data-net="r" />
+          <polyline class="wire bus" points="164,2445 656,2445 656,3857 908,3857 908,5799 1604,5799" data-net="d" />
+          <polyline class="wire" points="872,3949 1544,3949 1544,5817 1604,5817" data-net="r$ff$eq_5" />
+          <polyline class="wire bus" points="872,3201 1484,3201 1484,5897 1604,5897" data-net="r" />
+          <polyline class="wire bus" points="164,2445 668,2445 668,3885 1076,3885 1076,5915 1604,5915" data-net="d" />
+          <polyline class="wire" points="872,3949 1556,3949 1556,5933 1604,5933" data-net="r$ff$eq_5" />
+          <polyline class="wire bus" points="872,3201 1508,3201 1508,6185 1604,6185" data-net="r" />
+          <polyline class="wire bus" points="164,2445 692,2445 692,4067 1292,4067 1292,6203 1604,6203" data-net="d" />
+          <polyline class="wire" points="872,3949 1568,3949 1568,6221 1604,6221" data-net="r$ff$eq_5" />
+          <polyline class="wire bus" points="164,2081 260,2081 260,2845 776,2845" data-net="j" />
+          <polyline class="wire" points="122,1965 224,1965 224,2863 776,2863" />
+          <polyline class="wire bus" points="164,2445 548,2445 548,3041 776,3041" data-net="d" />
+          <polyline class="wire bus" points="872,3201 1232,3201 1232,3461 1604,3461" data-net="r" />
+          <polyline class="wire bus" points="872,3041 896,3041 896,3479 1604,3479" data-net="r$ff$not" />
+          <polyline class="wire" points="872,2845 920,2845 920,3497 1604,3497" data-net="r$ff$eq_6" />
+          <polyline class="wire bus" points="164,2445 560,2445 560,3121 776,3121" data-net="d" />
+          <polyline class="wire bus" points="872,3201 1244,3201 1244,3577 1604,3577" data-net="r" />
+          <polyline class="wire bus" points="872,3121 1184,3121 1184,3595 1604,3595" data-net="r$ff$not_2" />
+          <polyline class="wire" points="872,2845 980,2845 980,3613 1604,3613" data-net="r$ff$eq_6" />
+          <polyline class="wire bus" points="164,2445 572,2445 572,3299 776,3299" data-net="d" />
+          <polyline class="wire bus" points="872,3201 1268,3201 1268,3809 1604,3809" data-net="r" />
+          <polyline class="wire bus" points="872,3299 908,3299 908,3827 1604,3827" data-net="r$ff$not_3" />
+          <polyline class="wire" points="872,2845 1076,2845 1076,3845 1604,3845" data-net="r$ff$eq_6" />
+          <polyline class="wire bus" points="164,2445 584,2445 584,3477 776,3477" data-net="d" />
+          <polyline class="wire bus" points="872,3201 1292,3201 1292,4041 1604,4041" data-net="r" />
+          <polyline class="wire" points="872,3477 1040,3477 1040,4059 1604,4059" data-net="r$ff$not_4" />
+          <polyline class="wire" points="872,2845 1088,2845 1088,4077 1604,4077" data-net="r$ff$eq_6" />
+          <polyline class="wire bus" points="164,2081 272,2081 272,2943 776,2943" data-net="j" />
+          <polyline class="wire" points="122,2009 236,2009 236,2961 776,2961" />
+          <polyline class="wire bus" points="872,3201 1256,3201 1256,3693 1604,3693" data-net="r" />
+          <polyline class="wire bus" points="872,3041 1148,3041 1148,3711 1604,3711" data-net="r$ff$not" />
+          <polyline class="wire" points="872,2943 884,2943 884,3729 1604,3729" data-net="r$ff$eq_7" />
+          <polyline class="wire bus" points="872,3201 1280,3201 1280,3925 1604,3925" data-net="r" />
+          <polyline class="wire bus" points="872,3121 1196,3121 1196,3943 1604,3943" data-net="r$ff$not_2" />
+          <polyline class="wire" points="872,2943 956,2943 956,3961 1604,3961" data-net="r$ff$eq_7" />
+          <polyline class="wire bus" points="872,3201 1304,3201 1304,4157 1604,4157" data-net="r" />
+          <polyline class="wire bus" points="872,3299 932,3299 932,4175 1604,4175" data-net="r$ff$not_3" />
+          <polyline class="wire" points="872,2943 1112,2943 1112,4193 1604,4193" data-net="r$ff$eq_7" />
+          <polyline class="wire bus" points="872,3201 1328,3201 1328,4389 1604,4389" data-net="r" />
+          <polyline class="wire" points="872,3477 1052,3477 1052,4407 1604,4407" data-net="r$ff$not_4" />
+          <polyline class="wire" points="872,2943 1124,2943 1124,4425 1604,4425" data-net="r$ff$eq_7" />
+          <polyline class="wire bus" points="164,2081 284,2081 284,3379 776,3379" data-net="j" />
+          <polyline class="wire" points="122,2373 188,2373 188,3397 776,3397" />
+          <polyline class="wire bus" points="872,3201 1316,3201 1316,4273 1604,4273" data-net="r" />
+          <polyline class="wire bus" points="872,3041 1160,3041 1160,4291 1604,4291" data-net="r$ff$not" />
+          <polyline class="wire" points="872,3379 992,3379 992,4309 1604,4309" data-net="r$ff$eq_8" />
+          <polyline class="wire bus" points="872,3201 1340,3201 1340,4505 1604,4505" data-net="r" />
+          <polyline class="wire bus" points="872,3121 1208,3121 1208,4523 1604,4523" data-net="r$ff$not_2" />
+          <polyline class="wire" points="872,3379 1004,3379 1004,4541 1604,4541" data-net="r$ff$eq_8" />
+          <polyline class="wire bus" points="872,3201 1352,3201 1352,4621 1604,4621" data-net="r" />
+          <polyline class="wire bus" points="872,3299 944,3299 944,4639 1604,4639" data-net="r$ff$not_3" />
+          <polyline class="wire" points="872,3379 1016,3379 1016,4657 1604,4657" data-net="r$ff$eq_8" />
+          <polyline class="wire bus" points="872,3201 1364,3201 1364,4737 1604,4737" data-net="r" />
+          <polyline class="wire" points="872,3477 1064,3477 1064,4755 1604,4755" data-net="r$ff$not_4" />
+          <polyline class="wire" points="872,3379 1028,3379 1028,4773 1604,4773" data-net="r$ff$eq_8" />
+          <polyline class="wire bus" points="164,2081 296,2081 296,3585 776,3585" data-net="j" />
+          <polyline class="wire" points="122,2497 248,2497 248,3603 776,3603" />
+          <polyline class="wire bus" points="872,3201 1376,3201 1376,4853 1604,4853" data-net="r" />
+          <polyline class="wire bus" points="872,3041 1172,3041 1172,4871 1604,4871" data-net="r$ff$not" />
+          <polyline class="wire" points="872,3585 920,3585 920,4889 1604,4889" data-net="r$ff$eq_9" />
+          <polyline class="wire bus" points="872,3201 1388,3201 1388,4969 1604,4969" data-net="r" />
+          <polyline class="wire bus" points="872,3121 1220,3121 1220,4987 1604,4987" data-net="r$ff$not_2" />
+          <polyline class="wire" points="872,3585 1136,3585 1136,5005 1604,5005" data-net="r$ff$eq_9" />
+          <polyline class="wire bus" points="872,3201 1400,3201 1400,5085 1604,5085" data-net="r" />
+          <polyline class="wire bus" points="872,3299 968,3299 968,5103 1604,5103" data-net="r$ff$not_3" />
+          <polyline class="wire" points="872,3585 1232,3585 1232,5121 1604,5121" data-net="r$ff$eq_9" />
+          <polyline class="wire bus" points="872,3201 1496,3201 1496,6069 1604,6069" data-net="r" />
+          <polyline class="wire" points="872,3477 1100,3477 1100,6087 1604,6087" data-net="r$ff$not_4" />
+          <polyline class="wire" points="872,3585 1520,3585 1520,6105 1604,6105" data-net="r$ff$eq_9" />
+          <polyline class="wire" points="1700,3461 1748,3461 1748,2309 4688,2309" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 1760,3577 1760,2309 4688,2309" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 1784,3809 1784,2309 4688,2309" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 1808,4041 1808,2309 4688,2309" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 1772,3693 1772,2309 4688,2309" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 1796,3925 1796,2309 4688,2309" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 1820,4157 1820,2309 4688,2309" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 1844,4389 1844,2309 4688,2309" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 1832,4273 1832,2309 4688,2309" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 1856,4505 1856,2309 4688,2309" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 1868,4621 1868,2309 4688,2309" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 1880,4737 1880,2309 4688,2309" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 1892,4853 1892,2309 4688,2309" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 1904,4969 1904,2309 4688,2309" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 1916,5085 1916,2309 4688,2309" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 1928,6069 1928,2309 4688,2309" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 1940,2533 1940,2327 4688,2327" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 1952,2649 1952,2327 4688,2327" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 1964,2765 1964,2327 4688,2327" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 1976,2881 1976,2327 4688,2327" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 1988,2997 1988,2327 4688,2327" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 2000,3113 2000,2327 4688,2327" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 2012,3229 2012,2327 4688,2327" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2024,3345 2024,2327 4688,2327" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 2036,5201 2036,2327 4688,2327" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 2048,5317 2048,2327 4688,2327" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 2060,5433 2060,2327 4688,2327" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 2072,5549 2072,2327 4688,2327" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 2084,5665 2084,2327 4688,2327" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 2096,5781 2096,2327 4688,2327" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 2108,5897 2108,2327 4688,2327" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 2120,6185 2120,2327 4688,2327" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 248,2321 248,2043 896,2043 896,2245 1712,2245 1712,2345 4688,2345" data-net="we" />
+          <polyline class="wire bus" points="164,2569 416,2569 416,2271 776,2271" data-net="k" />
+          <polyline class="wire" points="122,1833 188,1833 188,2289 776,2289" />
+          <polyline class="wire" points="1700,3461 1940,3461 1940,2801 4688,2801" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 1964,3577 1964,2801 4688,2801" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 2396,3809 2396,2801 4688,2801" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 3464,4041 3464,2801 4688,2801" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2372,3693 2372,2801 4688,2801" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 3452,3925 3452,2801 4688,2801" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 3476,4157 3476,2801 4688,2801" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 3500,4389 3500,2801 4688,2801" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 3488,4273 3488,2801 4688,2801" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 3512,4505 3512,2801 4688,2801" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 3524,4621 3524,2801 4688,2801" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 3536,4737 3536,2801 4688,2801" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 3548,4853 3548,2801 4688,2801" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 3560,4969 3560,2801 4688,2801" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 3572,5085 3572,2801 4688,2801" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 3584,6069 3584,2801 4688,2801" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2588,2533 2588,2819 4688,2819" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 1736,2649 1736,2819 4688,2819" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 1712,2765 1712,2819 4688,2819" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 3596,2881 3596,2819 4688,2819" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 3608,2997 3608,2819 4688,2819" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 3620,3113 3620,2819 4688,2819" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 3632,3229 3632,2819 4688,2819" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 3644,3345 3644,2819 4688,2819" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 3656,5201 3656,2819 4688,2819" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 3668,5317 3668,2819 4688,2819" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 3680,5433 3680,2819 4688,2819" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 3692,5549 3692,2819 4688,2819" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 3704,5665 3704,2819 4688,2819" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 3716,5781 3716,2819 4688,2819" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 3728,5897 3728,2819 4688,2819" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 3740,6185 3740,2819 4688,2819" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 356,2321 356,2207 956,2207 956,2385 2144,2385 2144,2837 4688,2837" data-net="we" />
+          <polyline class="wire bus" points="4784,2801 4796,2801 4796,2478 4964,2478" data-net="r$ff$mux_34" />
+          <polyline class="wire bus" points="164,2445 248,2445 248,2333 908,2333 908,2413 2156,2413 2156,2881 4832,2881 4832,2496 4964,2496" data-net="d" />
+          <polyline class="wire" points="872,2271 884,2271 884,2357 1712,2357 1712,2737 4844,2737 4844,2514 4964,2514" data-net="r$ff$eq_10" />
+          <polyline class="wire" points="1700,3461 1952,3461 1952,2973 4688,2973" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 1976,3577 1976,2973 4688,2973" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 2360,3809 2360,2973 4688,2973" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 2864,4041 2864,2973 4688,2973" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2156,3693 2156,2973 4688,2973" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 2408,3925 2408,2973 4688,2973" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 3596,4157 3596,2973 4688,2973" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 3788,4389 3788,2973 4688,2973" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 3776,4273 3776,2973 4688,2973" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 3800,4505 3800,2973 4688,2973" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 3812,4621 3812,2973 4688,2973" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 3824,4737 3824,2973 4688,2973" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 3836,4853 3836,2973 4688,2973" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 3848,4969 3848,2973 4688,2973" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 3860,5085 3860,2973 4688,2973" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 3872,6069 3872,2973 4688,2973" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2600,2533 2600,2991 4688,2991" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 3020,2649 3020,2991 4688,2991" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 1724,2765 1724,2991 4688,2991" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 1712,2881 1712,2991 4688,2991" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 3884,2997 3884,2991 4688,2991" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 3896,3113 3896,2991 4688,2991" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 3908,3229 3908,2991 4688,2991" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 3920,3345 3920,2991 4688,2991" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 3932,5201 3932,2991 4688,2991" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 3944,5317 3944,2991 4688,2991" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 3956,5433 3956,2991 4688,2991" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 3968,5549 3968,2991 4688,2991" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 3980,5665 3980,2991 4688,2991" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 3992,5781 3992,2991 4688,2991" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 4004,5897 4004,2991 4688,2991" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 4016,6185 4016,2991 4688,2991" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 188,2321 188,2361 920,2361 920,2469 2564,2469 2564,3009 4688,3009" data-net="we" />
+          <polyline class="wire bus" points="4784,2973 4808,2973 4808,2594 4964,2594" data-net="r$ff$mux_36" />
+          <polyline class="wire bus" points="164,2445 680,2445 680,4011 956,4011 956,5977 1712,5977 1712,3053 4856,3053 4856,2612 4964,2612" data-net="d" />
+          <polyline class="wire" points="872,2271 896,2271 896,2441 2360,2441 2360,2909 4868,2909 4868,2630 4964,2630" data-net="r$ff$eq_10" />
+          <polyline class="wire" points="1700,3461 2168,3461 2168,2425 4688,2425" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 2180,3577 2180,2425 4688,2425" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 2204,3809 2204,2425 4688,2425" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 2228,4041 2228,2425 4688,2425" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2192,3693 2192,2425 4688,2425" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 2216,3925 2216,2425 4688,2425" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 2240,4157 2240,2425 4688,2425" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 2264,4389 2264,2425 4688,2425" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 2252,4273 2252,2425 4688,2425" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 2276,4505 2276,2425 4688,2425" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 2288,4621 2288,2425 4688,2425" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 2300,4737 2300,2425 4688,2425" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 2312,4853 2312,2425 4688,2425" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 2324,4969 2324,2425 4688,2425" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 2336,5085 2336,2425 4688,2425" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 2348,6069 2348,2425 4688,2425" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2372,2533 2372,2443 4688,2443" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 2384,2649 2384,2443 4688,2443" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 2396,2765 2396,2443 4688,2443" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 2408,2881 2408,2443 4688,2443" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 2420,2997 2420,2443 4688,2443" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 2432,3113 2432,2443 4688,2443" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 2444,3229 2444,2443 4688,2443" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2456,3345 2456,2443 4688,2443" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 2468,5201 2468,2443 4688,2443" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 2480,5317 2480,2443 4688,2443" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 2492,5433 2492,2443 4688,2443" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 2504,5549 2504,2443 4688,2443" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 2516,5665 2516,2443 4688,2443" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 2528,5781 2528,2443 4688,2443" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 2540,5897 2540,2443 4688,2443" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 2552,6185 2552,2443 4688,2443" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 308,2321 308,2082 908,2082 908,2273 1724,2273 1724,2461 4688,2461" data-net="we" />
+          <polyline class="wire bus" points="164,2569 200,2569 200,4187 776,4187" data-net="k" />
+          <polyline class="wire" points="122,2709 356,2709 356,4205 776,4205" />
+          <polyline class="wire" points="1700,3461 2600,3461 2600,3117 4688,3117" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 2876,3577 2876,3117 4688,3117" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 3608,3809 3608,3117 4688,3117" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 4088,4041 4088,3117 4688,3117" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 3020,3693 3020,3117 4688,3117" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 3884,3925 3884,3117 4688,3117" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 4100,4157 4100,3117 4688,3117" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 4124,4389 4124,3117 4688,3117" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 4112,4273 4112,3117 4688,3117" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 4136,4505 4136,3117 4688,3117" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 4148,4621 4148,3117 4688,3117" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 4160,4737 4160,3117 4688,3117" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 4172,4853 4172,3117 4688,3117" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 4184,4969 4184,3117 4688,3117" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 4196,5085 4196,3117 4688,3117" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 4208,6069 4208,3117 4688,3117" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2612,2533 2612,3135 4688,3135" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 3032,2649 3032,3135 4688,3135" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 2132,2765 2132,3135 4688,3135" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 1736,2881 1736,3135 4688,3135" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 4028,2997 4028,3135 4688,3135" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 1724,3113 1724,3135 4688,3135" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 2000,3229 2000,3135 4688,3135" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2432,3345 2432,3135 4688,3135" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 2888,5201 2888,3135 4688,3135" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 3284,5317 3284,3135 4688,3135" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 3620,5433 3620,3135 4688,3135" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 3896,5549 3896,3135 4688,3135" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 4220,5665 4220,3135 4688,3135" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 4232,5781 4232,3135 4688,3135" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 4244,5897 4244,3135 4688,3135" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 4256,6185 4256,3135 4688,3135" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 428,2321 428,4039 1196,4039 1196,6005 1724,6005 1724,3153 4688,3153" data-net="we" />
+          <polyline class="wire bus" points="4784,3117 4820,3117 4820,2710 4964,2710" data-net="r$ff$mux_39" />
+          <polyline class="wire bus" points="164,2445 704,2445 704,4095 1040,4095 1040,6265 1736,6265 1736,3197 4880,3197 4880,2728 4964,2728" data-net="d" />
+          <polyline class="wire" points="872,4187 932,4187 932,6293 2132,6293 2132,3225 4844,3225 4844,2746 4964,2746" data-net="r$ff$eq_11" />
+          <polyline class="wire" points="1700,3461 2000,3461 2000,3289 4688,3289" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 2012,3577 2012,3289 4688,3289" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 2900,3809 2900,3289 4688,3289" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 3632,4041 3632,3289 4688,3289" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2444,3693 2444,3289 4688,3289" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 3296,3925 3296,3289 4688,3289" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 3908,4157 3908,3289 4688,3289" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 4292,4389 4292,3289 4688,3289" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 4280,4273 4280,3289 4688,3289" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 4304,4505 4304,3289 4688,3289" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 4316,4621 4316,3289 4688,3289" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 4328,4737 4328,3289 4688,3289" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 4340,4853 4340,3289 4688,3289" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 4352,4969 4352,3289 4688,3289" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 4364,5085 4364,3289 4688,3289" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 4376,6069 4376,3289 4688,3289" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2624,2533 2624,3307 4688,3307" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 3044,2649 3044,3307 4688,3307" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 2576,2765 2576,3307 4688,3307" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 2144,2881 2144,3307 4688,3307" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 4040,2997 4040,3307 4688,3307" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 1988,3113 1988,3307 4688,3307" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 2612,3229 2612,3307 4688,3307" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 4388,3345 4388,3307 4688,3307" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 4400,5201 4400,3307 4688,3307" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 4412,5317 4412,3307 4688,3307" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 4424,5433 4424,3307 4688,3307" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 4436,5549 4436,3307 4688,3307" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 4448,5665 4448,3307 4688,3307" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 4460,5781 4460,3307 4688,3307" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 4472,5897 4472,3307 4688,3307" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 4484,6185 4484,3307 4688,3307" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 440,2321 440,4123 1088,4123 1088,6321 1988,6321 1988,3325 4688,3325" data-net="we" />
+          <polyline class="wire bus" points="4784,3289 4796,3289 4796,2826 4964,2826" data-net="r$ff$mux_41" />
+          <polyline class="wire bus" points="164,2445 716,2445 716,4249 1112,4249 1112,6349 2024,6349 2024,3369 4892,3369 4892,2844 4964,2844" data-net="d" />
+          <polyline class="wire" points="872,4187 1304,4187 1304,6377 2432,6377 2432,3397 4904,3397 4904,2862 4964,2862" data-net="r$ff$eq_11" />
+          <polyline class="wire" points="1700,3461 2672,3461 2672,2541 4688,2541" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 2684,3577 2684,2541 4688,2541" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 2708,3809 2708,2541 4688,2541" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 2732,4041 2732,2541 4688,2541" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2696,3693 2696,2541 4688,2541" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 2720,3925 2720,2541 4688,2541" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 2744,4157 2744,2541 4688,2541" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 2768,4389 2768,2541 4688,2541" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 2756,4273 2756,2541 4688,2541" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 2780,4505 2780,2541 4688,2541" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 2792,4621 2792,2541 4688,2541" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 2804,4737 2804,2541 4688,2541" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 2816,4853 2816,2541 4688,2541" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 2828,4969 2828,2541 4688,2541" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 2840,5085 2840,2541 4688,2541" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 2852,6069 2852,2541 4688,2541" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 1724,2533 1724,2559 4688,2559" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 1940,2649 1940,2559 4688,2559" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 2372,2765 2372,2559 4688,2559" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 2864,2881 2864,2559 4688,2559" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 2876,2997 2876,2559 4688,2559" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 2888,3113 2888,2559 4688,2559" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 2900,3229 2900,2559 4688,2559" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2912,3345 2912,2559 4688,2559" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 2924,5201 2924,2559 4688,2559" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 2936,5317 2936,2559 4688,2559" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 2948,5433 2948,2559 4688,2559" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 2960,5549 2960,2559 4688,2559" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 2972,5665 2972,2559 4688,2559" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 2984,5781 2984,2559 4688,2559" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 2996,5897 2996,2559 4688,2559" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 3008,6185 3008,2559 4688,2559" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 320,2321 320,2121 920,2121 920,2301 1736,2301 1736,2577 4688,2577" data-net="we" />
+          <polyline class="wire bus" points="164,2569 308,2569 308,4397 776,4397" data-net="k" />
+          <polyline class="wire" points="122,2753 212,2753 212,4415 776,4415" />
+          <polyline class="wire" points="1700,3461 4688,3461" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 2456,3577 2456,3461 4688,3461" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 3308,3809 3308,3461 4688,3461" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 3920,4041 3920,3461 4688,3461" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2912,3693 2912,3461 4688,3461" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 3644,3925 3644,3461 4688,3461" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 4040,4157 4040,3461 4688,3461" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 4496,4389 4496,3461 4688,3461" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 4388,4273 4388,3461 4688,3461" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 4508,4505 4508,3461 4688,3461" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 4520,4621 4520,3461 4688,3461" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 4532,4737 4532,3461 4688,3461" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 4544,4853 4544,3461 4688,3461" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 4556,4969 4556,3461 4688,3461" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 4568,5085 4568,3461 4688,3461" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 4580,6069 4580,3461 4688,3461" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2636,2533 2636,3479 4688,3479" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 3056,2649 3056,3479 4688,3479" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 3416,2765 3416,3479 4688,3479" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 2588,2881 2588,3479 4688,3479" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 4052,2997 4052,3479 4688,3479" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 2384,3113 2384,3479 4688,3479" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 3032,3229 3032,3479 4688,3479" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2144,3345 2144,3479 4688,3479" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 1748,5201 1748,3479 4688,3479" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 1940,5317 1940,3479 4688,3479" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 1952,5433 1952,3479 4688,3479" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 2000,5549 2000,3479 4688,3479" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 2168,5665 2168,3479 4688,3479" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 2600,5781 2600,3479 4688,3479" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 2672,5897 2672,3479 4688,3479" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 3092,6185 3092,3479 4688,3479" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 452,2321 452,4277 1580,4277 1580,6405 2144,6405 2144,3497 4688,3497" data-net="we" />
+          <polyline class="wire bus" points="4784,3461 4832,3461 4832,2942 4964,2942" data-net="r$ff$mux_44" />
+          <polyline class="wire bus" points="164,2445 728,2445 728,4305 1160,4305 1160,6433 2384,6433 2384,3541 4868,3541 4868,2960 4964,2960" data-net="d" />
+          <polyline class="wire" points="872,4397 1316,4397 1316,6461 2588,6461 2588,3569 4916,3569 4916,2978 4964,2978" data-net="r$ff$eq_12" />
+          <polyline class="wire" points="1700,3461 2624,3461 2624,3633 4688,3633" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 2636,3577 2636,3633 4688,3633" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 1964,3809 1964,3633 4688,3633" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 2012,4041 2012,3633 4688,3633" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 1760,3693 1760,3633 4688,3633" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 1976,3925 1976,3633 4688,3633" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 2180,4157 2180,3633 4688,3633" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 2684,4389 2684,3633 4688,3633" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 2456,4273 2456,3633 4688,3633" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 2876,4505 2876,3633 4688,3633" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 3056,4621 3056,3633 4688,3633" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 3104,4737 3104,3633 4688,3633" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 3416,4853 3416,3633 4688,3633" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 4052,4969 4052,3633 4688,3633" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 4592,5085 4592,3633 4688,3633" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 4604,6069 4604,3633 4688,3633" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2648,2533 2648,3651 4688,3651" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 3068,2649 3068,3651 4688,3651" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 3428,2765 3428,3651 4688,3651" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 3752,2881 3752,3651 4688,3651" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 4064,2997 4064,3651 4688,3651" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 2420,3113 2420,3651 4688,3651" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 4028,3229 4028,3651 4688,3651" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2576,3345 2576,3651 4688,3651" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 2624,5201 2624,3651 4688,3651" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 2636,5317 2636,3651 4688,3651" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 4616,5433 4616,3651 4688,3651" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 4628,5549 4628,3651 4688,3651" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 4640,5665 4640,3651 4688,3651" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 4652,5781 4652,3651 4688,3651" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 4664,5897 4664,3651 4688,3651" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 4676,6185 4676,3651 4688,3651" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 464,2321 464,4333 992,4333 992,6489 2420,6489 2420,3669 4688,3669" data-net="we" />
+          <polyline class="wire bus" points="4784,3633 4808,3633 4808,3058 4964,3058" data-net="r$ff$mux_46" />
+          <polyline class="wire bus" points="164,2445 740,2445 740,4459 1052,4459 1052,6517 1760,6517 1760,3713 4856,3713 4856,3076 4964,3076" data-net="d" />
+          <polyline class="wire" points="872,4397 1592,4397 1592,6545 1772,6545 1772,3741 4928,3741 4928,3094 4964,3094" data-net="r$ff$eq_12" />
+          <polyline class="wire" points="1700,3461 3092,3461 3092,2657 4688,2657" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 3104,3577 3104,2657 4688,2657" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 3128,3809 3128,2657 4688,2657" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 3152,4041 3152,2657 4688,2657" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 3116,3693 3116,2657 4688,2657" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 3140,3925 3140,2657 4688,2657" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 3164,4157 3164,2657 4688,2657" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 3188,4389 3188,2657 4688,2657" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 3176,4273 3176,2657 4688,2657" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 3200,4505 3200,2657 4688,2657" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 3212,4621 3212,2657 4688,2657" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 3224,4737 3224,2657 4688,2657" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 3236,4853 3236,2657 4688,2657" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 3248,4969 3248,2657 4688,2657" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 3260,5085 3260,2657 4688,2657" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 3272,6069 3272,2657 4688,2657" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2576,2533 2576,2675 4688,2675" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 1724,2649 1724,2675 4688,2675" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 1940,2765 1940,2675 4688,2675" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 1952,2881 1952,2675 4688,2675" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 2384,2997 2384,2675 4688,2675" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 3284,3113 3284,2675 4688,2675" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 3296,3229 3296,2675 4688,2675" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 3308,3345 3308,2675 4688,2675" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 3320,5201 3320,2675 4688,2675" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 3332,5317 3332,2675 4688,2675" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 3344,5433 3344,2675 4688,2675" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 3356,5549 3356,2675 4688,2675" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 3368,5665 3368,2675 4688,2675" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 3380,5781 3380,2675 4688,2675" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 3392,5897 3392,2675 4688,2675" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 3404,6185 3404,2675 4688,2675" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 332,2321 332,2159 932,2159 932,2329 2132,2329 2132,2693 4688,2693" data-net="we" />
+          <polyline class="wire bus" points="164,2569 320,2569 320,4607 776,4607" data-net="k" />
+          <polyline class="wire" points="122,2797 368,2797 368,4625 776,4625" />
+          <polyline class="wire" points="1700,3461 3044,3461 3044,3805 4688,3805" data-net="r$ff$mux_17" />
+          <polyline class="wire" points="1700,3577 3032,3577 3032,3805 4688,3805" data-net="r$ff$mux_18" />
+          <polyline class="wire" points="1700,3809 2156,3809 2156,3805 4688,3805" data-net="r$ff$mux_19" />
+          <polyline class="wire" points="1700,4041 2372,4041 2372,3805 4688,3805" data-net="r$ff$mux_20" />
+          <polyline class="wire" points="1700,3693 2576,3693 2576,3805 4688,3805" data-net="r$ff$mux_21" />
+          <polyline class="wire" points="1700,3925 2192,3925 2192,3805 4688,3805" data-net="r$ff$mux_22" />
+          <polyline class="wire" points="1700,4157 2444,4157 2444,3805 4688,3805" data-net="r$ff$mux_23" />
+          <polyline class="wire" points="1700,4389 2696,4389 2696,3805 4688,3805" data-net="r$ff$mux_24" />
+          <polyline class="wire" points="1700,4273 2648,4273 2648,3805 4688,3805" data-net="r$ff$mux_25" />
+          <polyline class="wire" points="1700,4505 2912,4505 2912,3805 4688,3805" data-net="r$ff$mux_26" />
+          <polyline class="wire" points="1700,4621 3020,4621 3020,3805 4688,3805" data-net="r$ff$mux_27" />
+          <polyline class="wire" points="1700,4737 3068,4737 3068,3805 4688,3805" data-net="r$ff$mux_28" />
+          <polyline class="wire" points="1700,4853 3116,4853 3116,3805 4688,3805" data-net="r$ff$mux_29" />
+          <polyline class="wire" points="1700,4969 3428,4969 3428,3805 4688,3805" data-net="r$ff$mux_30" />
+          <polyline class="wire" points="1700,5085 3752,5085 3752,3805 4688,3805" data-net="r$ff$mux_31" />
+          <polyline class="wire" points="1700,6069 4028,6069 4028,3805 4688,3805" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,2533 2660,2533 2660,3823 4688,3823" data-net="r$ff$mux" />
+          <polyline class="wire" points="1700,2649 3080,2649 3080,3823 4688,3823" data-net="r$ff$mux_2" />
+          <polyline class="wire" points="1700,2765 3440,2765 3440,3823 4688,3823" data-net="r$ff$mux_3" />
+          <polyline class="wire" points="1700,2881 3764,2881 3764,3823 4688,3823" data-net="r$ff$mux_4" />
+          <polyline class="wire" points="1700,2997 4076,2997 4076,3823 4688,3823" data-net="r$ff$mux_5" />
+          <polyline class="wire" points="1700,3113 2564,3113 2564,3823 4688,3823" data-net="r$ff$mux_6" />
+          <polyline class="wire" points="1700,3229 4268,3229 4268,3823 4688,3823" data-net="r$ff$mux_7" />
+          <polyline class="wire" points="1700,3345 2612,3345 2612,3823 4688,3823" data-net="r$ff$mux_8" />
+          <polyline class="wire" points="1700,5201 1784,5201 1784,3823 4688,3823" data-net="r$ff$mux_9" />
+          <polyline class="wire" points="1700,5317 1964,5317 1964,3823 4688,3823" data-net="r$ff$mux_10" />
+          <polyline class="wire" points="1700,5433 2156,5433 2156,3823 4688,3823" data-net="r$ff$mux_11" />
+          <polyline class="wire" points="1700,5549 2204,5549 2204,3823 4688,3823" data-net="r$ff$mux_12" />
+          <polyline class="wire" points="1700,5665 2360,5665 2360,3823 4688,3823" data-net="r$ff$mux_13" />
+          <polyline class="wire" points="1700,5781 2396,5781 2396,3823 4688,3823" data-net="r$ff$mux_14" />
+          <polyline class="wire" points="1700,5897 2576,5897 2576,3823 4688,3823" data-net="r$ff$mux_15" />
+          <polyline class="wire" points="1700,6185 2708,6185 2708,3823 4688,3823" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 476,2321 476,4487 1124,4487 1124,6573 2564,6573 2564,3841 4688,3841" data-net="we" />
+          <polyline class="wire bus" points="4784,3805 4820,3805 4820,3174 4964,3174" data-net="r$ff$mux_49" />
+          <polyline class="wire bus" points="164,2445 752,2445 752,4515 1328,4515 1328,6601 2612,6601 2612,3885 4940,3885 4940,3192 4964,3192" data-net="d" />
+          <polyline class="wire" points="872,4607 1004,4607 1004,6629 2660,6629 2660,3913 4880,3913 4880,3210 4964,3210" data-net="r$ff$eq_13" />
+          <polyline class="wire" points="1700,6069 1796,6069 1796,3977 4688,3977" data-net="r$ff$mux_32" />
+          <polyline class="wire" points="1700,6185 1976,6185 1976,3995 4688,3995" data-net="r$ff$mux_16" />
+          <polyline class="wire" points="164,2321 488,2321 488,4543 1208,4543 1208,6657 2192,6657 2192,4013 4688,4013" data-net="we" />
+          <polyline class="wire" points="4784,3977 4844,3977 4844,3290 4964,3290" data-net="r$ff$mux_51" />
+          <polyline class="wire bus" points="164,2445 764,2445 764,4669 944,4669 944,6685 1808,6685 1808,4057 4796,4057 4796,3308 4964,3308" data-net="d" />
+          <polyline class="wire" points="872,4607 1340,4607 1340,6713 2012,6713 2012,4085 4952,4085 4952,3326 4964,3326" data-net="r$ff$eq_13" />
+          <polyline class="wire bus" points="4784,2309 4796,2309 4796,2302 5072,2302 5072,2338 5228,2338" data-net="r$ff$mux_33" />
+          <polyline class="wire bus" points="4784,2309 4808,2309 4808,2330 5096,2330 5096,2356 5228,2356" data-net="r$ff$mux_33" />
+          <polyline class="wire" points="5060,2478 5132,2478 5132,2356 5228,2356" data-net="r$ff$mux_35" />
+          <polyline class="wire" points="5060,2594 5144,2594 5144,2356 5228,2356" data-net="r$ff$mux_37" />
+          <polyline class="wire bus" points="4784,2425 4796,2425 4796,2358 5072,2358 5072,2356 5228,2356" data-net="r$ff$mux_38" />
+          <polyline class="wire" points="5060,2710 5156,2710 5156,2356 5228,2356" data-net="r$ff$mux_40" />
+          <polyline class="wire" points="5060,2826 5168,2826 5168,2356 5228,2356" data-net="r$ff$mux_42" />
+          <polyline class="wire bus" points="4784,2541 4808,2541 4808,2386 5108,2386 5108,2356 5228,2356" data-net="r$ff$mux_43" />
+          <polyline class="wire" points="5060,2942 5180,2942 5180,2356 5228,2356" data-net="r$ff$mux_45" />
+          <polyline class="wire" points="5060,3058 5192,3058 5192,2356 5228,2356" data-net="r$ff$mux_47" />
+          <polyline class="wire bus" points="4784,2657 4820,2657 4820,2414 5120,2414 5120,2356 5228,2356" data-net="r$ff$mux_48" />
+          <polyline class="wire" points="5060,3174 5204,3174 5204,2356 5228,2356" data-net="r$ff$mux_50" />
+          <polyline class="wire" points="5060,3290 5216,3290 5216,2356 5228,2356" data-net="r$ff$mux_52" />
+          <polyline class="wire" points="872,993 884,993 884,2217 1724,2217 1724,2245 4808,2245 4808,2274 5084,2274 5084,2374 5228,2374" data-net="r$ff$eq" />
+          <polyline class="wire" points="164,2161 344,2161 344,3201 776,3201" data-net="clk" />
+          <polyline class="wire bus" points="5324,2338 5336,2338 5336,6738 224,6738 224,3219 776,3219" data-net="r$ff$mux_53" />
+          <text class="label" x="879" y="3196" data-net="r">r /16</text>
+          <text class="label" x="171" y="2564" data-net="k">k /4</text>
+          <text class="label" x="171" y="2236" data-net="i">i /4</text>
+          <text class="label" x="171" y="2440" data-net="d">d /4</text>
+          <text class="label" x="879" y="2476" data-net="r$ff$eq_2">r$ff$eq_2</text>
+          <text class="label" x="879" y="2686" data-net="r$ff$eq_3">r$ff$eq_3</text>
+          <text class="label" x="879" y="3706" data-net="r$ff$eq_4">r$ff$eq_4</text>
+          <text class="label" x="879" y="3944" data-net="r$ff$eq_5">r$ff$eq_5</text>
+          <text class="label" x="171" y="2076" data-net="j">j /2</text>
+          <text class="label" x="879" y="3036" data-net="r$ff$not">r$ff$not /4</text>
+          <text class="label" x="879" y="2840" data-net="r$ff$eq_6">r$ff$eq_6</text>
+          <text class="label" x="879" y="3116" data-net="r$ff$not_2">r$ff$not_2 /3</text>
+          <text class="label" x="879" y="3294" data-net="r$ff$not_3">r$ff$not_3 /2</text>
+          <text class="label" x="879" y="3472" data-net="r$ff$not_4">r$ff$not_4</text>
+          <text class="label" x="879" y="2938" data-net="r$ff$eq_7">r$ff$eq_7</text>
+          <text class="label" x="879" y="3374" data-net="r$ff$eq_8">r$ff$eq_8</text>
+          <text class="label" x="879" y="3580" data-net="r$ff$eq_9">r$ff$eq_9</text>
+          <text class="label" x="1707" y="3456" data-net="r$ff$mux_17">r$ff$mux_17</text>
+          <text class="label" x="1707" y="3572" data-net="r$ff$mux_18">r$ff$mux_18</text>
+          <text class="label" x="1707" y="3804" data-net="r$ff$mux_19">r$ff$mux_19</text>
+          <text class="label" x="1707" y="4036" data-net="r$ff$mux_20">r$ff$mux_20</text>
+          <text class="label" x="1707" y="3688" data-net="r$ff$mux_21">r$ff$mux_21</text>
+          <text class="label" x="1707" y="3920" data-net="r$ff$mux_22">r$ff$mux_22</text>
+          <text class="label" x="1707" y="4152" data-net="r$ff$mux_23">r$ff$mux_23</text>
+          <text class="label" x="1707" y="4384" data-net="r$ff$mux_24">r$ff$mux_24</text>
+          <text class="label" x="1707" y="4268" data-net="r$ff$mux_25">r$ff$mux_25</text>
+          <text class="label" x="1707" y="4500" data-net="r$ff$mux_26">r$ff$mux_26</text>
+          <text class="label" x="1707" y="4616" data-net="r$ff$mux_27">r$ff$mux_27</text>
+          <text class="label" x="1707" y="4732" data-net="r$ff$mux_28">r$ff$mux_28</text>
+          <text class="label" x="1707" y="4848" data-net="r$ff$mux_29">r$ff$mux_29</text>
+          <text class="label" x="1707" y="4964" data-net="r$ff$mux_30">r$ff$mux_30</text>
+          <text class="label" x="1707" y="5080" data-net="r$ff$mux_31">r$ff$mux_31</text>
+          <text class="label" x="1707" y="6064" data-net="r$ff$mux_32">r$ff$mux_32</text>
+          <text class="label" x="1707" y="2528" data-net="r$ff$mux">r$ff$mux</text>
+          <text class="label" x="1707" y="2644" data-net="r$ff$mux_2">r$ff$mux_2</text>
+          <text class="label" x="1707" y="2760" data-net="r$ff$mux_3">r$ff$mux_3</text>
+          <text class="label" x="1707" y="2876" data-net="r$ff$mux_4">r$ff$mux_4</text>
+          <text class="label" x="1707" y="2992" data-net="r$ff$mux_5">r$ff$mux_5</text>
+          <text class="label" x="1707" y="3108" data-net="r$ff$mux_6">r$ff$mux_6</text>
+          <text class="label" x="1707" y="3224" data-net="r$ff$mux_7">r$ff$mux_7</text>
+          <text class="label" x="1707" y="3340" data-net="r$ff$mux_8">r$ff$mux_8</text>
+          <text class="label" x="1707" y="5196" data-net="r$ff$mux_9">r$ff$mux_9</text>
+          <text class="label" x="1707" y="5312" data-net="r$ff$mux_10">r$ff$mux_10</text>
+          <text class="label" x="1707" y="5428" data-net="r$ff$mux_11">r$ff$mux_11</text>
+          <text class="label" x="1707" y="5544" data-net="r$ff$mux_12">r$ff$mux_12</text>
+          <text class="label" x="1707" y="5660" data-net="r$ff$mux_13">r$ff$mux_13</text>
+          <text class="label" x="1707" y="5776" data-net="r$ff$mux_14">r$ff$mux_14</text>
+          <text class="label" x="1707" y="5892" data-net="r$ff$mux_15">r$ff$mux_15</text>
+          <text class="label" x="1707" y="6180" data-net="r$ff$mux_16">r$ff$mux_16</text>
+          <text class="label" x="171" y="2316" data-net="we">we</text>
+          <text class="label" x="4791" y="2796" data-net="r$ff$mux_34">r$ff$mux_34 /14</text>
+          <text class="label" x="879" y="2266" data-net="r$ff$eq_10">r$ff$eq_10</text>
+          <text class="label" x="4791" y="2968" data-net="r$ff$mux_36">r$ff$mux_36 /13</text>
+          <text class="label" x="4791" y="3112" data-net="r$ff$mux_39">r$ff$mux_39 /10</text>
+          <text class="label" x="879" y="4182" data-net="r$ff$eq_11">r$ff$eq_11</text>
+          <text class="label" x="4791" y="3284" data-net="r$ff$mux_41">r$ff$mux_41 /9</text>
+          <text class="label" x="4791" y="3456" data-net="r$ff$mux_44">r$ff$mux_44 /6</text>
+          <text class="label" x="879" y="4392" data-net="r$ff$eq_12">r$ff$eq_12</text>
+          <text class="label" x="4791" y="3628" data-net="r$ff$mux_46">r$ff$mux_46 /5</text>
+          <text class="label" x="4791" y="3800" data-net="r$ff$mux_49">r$ff$mux_49 /2</text>
+          <text class="label" x="879" y="4602" data-net="r$ff$eq_13">r$ff$eq_13</text>
+          <text class="label" x="4791" y="3972" data-net="r$ff$mux_51">r$ff$mux_51</text>
+          <text class="label" x="4791" y="2304" data-net="r$ff$mux_33">r$ff$mux_33 /16</text>
+          <text class="label" x="5067" y="2473" data-net="r$ff$mux_35">r$ff$mux_35</text>
+          <text class="label" x="5067" y="2589" data-net="r$ff$mux_37">r$ff$mux_37</text>
+          <text class="label" x="4791" y="2420" data-net="r$ff$mux_38">r$ff$mux_38 /12</text>
+          <text class="label" x="5067" y="2705" data-net="r$ff$mux_40">r$ff$mux_40</text>
+          <text class="label" x="5067" y="2821" data-net="r$ff$mux_42">r$ff$mux_42</text>
+          <text class="label" x="4791" y="2536" data-net="r$ff$mux_43">r$ff$mux_43 /8</text>
+          <text class="label" x="5067" y="2937" data-net="r$ff$mux_45">r$ff$mux_45</text>
+          <text class="label" x="5067" y="3053" data-net="r$ff$mux_47">r$ff$mux_47</text>
+          <text class="label" x="4791" y="2652" data-net="r$ff$mux_48">r$ff$mux_48 /4</text>
+          <text class="label" x="5067" y="3169" data-net="r$ff$mux_50">r$ff$mux_50</text>
+          <text class="label" x="5067" y="3285" data-net="r$ff$mux_52">r$ff$mux_52</text>
+          <text class="label" x="879" y="988" data-net="r$ff$eq">r$ff$eq</text>
+          <text class="label" x="171" y="2156" data-net="clk">clk</text>
+          <text class="label" x="5331" y="2333" data-net="r$ff$mux_53">r$ff$mux_53 /16</text>
+        </g>
+        <g class="nodes">
+          <g class="node port" data-detail="0" data-search="clk port in" data-cx="116" data-cy="2151">
+            <polygon class="box" points="68,2122 153,2122 164,2151 153,2180 68,2180" />
+            <text class="kind" x="77" y="2139">port in</text>
+            <text class="label" x="77" y="2150">clk</text>
+            <circle class="pin" cx="164" cy="2161" r="3" data-net="clk" />
+          </g>
+          <g class="node port" data-detail="1" data-search="port in we" data-cx="116" data-cy="2311">
+            <polygon class="box" points="68,2282 153,2282 164,2311 153,2340 68,2340" />
+            <text class="kind" x="77" y="2299">port in</text>
+            <text class="label" x="77" y="2310">we</text>
+            <circle class="pin" cx="164" cy="2321" r="3" data-net="we" />
+          </g>
+          <g class="node port" data-detail="2" data-search="i port in" data-cx="116" data-cy="2231">
+            <polygon class="box" points="68,2202 153,2202 164,2231 153,2260 68,2260" />
+            <text class="kind" x="77" y="2219">port in</text>
+            <text class="label" x="77" y="2230">i</text>
+            <circle class="pin" cx="164" cy="2241" r="3" data-net="i" />
+          </g>
+          <g class="node port" data-detail="3" data-search="j port in" data-cx="116" data-cy="2071">
+            <polygon class="box" points="68,2042 153,2042 164,2071 153,2100 68,2100" />
+            <text class="kind" x="77" y="2059">port in</text>
+            <text class="label" x="77" y="2070">j</text>
+            <circle class="pin" cx="164" cy="2081" r="3" data-net="j" />
+          </g>
+          <g class="node port" data-detail="4" data-search="k port in" data-cx="116" data-cy="2559">
+            <polygon class="box" points="68,2530 153,2530 164,2559 153,2588 68,2588" />
+            <text class="kind" x="77" y="2547">port in</text>
+            <text class="label" x="77" y="2558">k</text>
+            <circle class="pin" cx="164" cy="2569" r="3" data-net="k" />
+          </g>
+          <g class="node port" data-detail="5" data-search="d port in" data-cx="116" data-cy="2435">
+            <polygon class="box" points="68,2406 153,2406 164,2435 153,2464 68,2464" />
+            <text class="kind" x="77" y="2423">port in</text>
+            <text class="label" x="77" y="2434">d</text>
+            <circle class="pin" cx="164" cy="2445" r="3" data-net="d" />
+          </g>
+          <g class="node port" data-detail="6" data-search="port out r" data-cx="5412" data-cy="2293">
+            <polygon class="box" points="5375,2264 5449,2264 5460,2293 5449,2322 5375,2322 5364,2293" />
+            <text class="kind" x="5373" y="2281">port out</text>
+            <text class="label" x="5373" y="2292">r</text>
+            <circle class="pin" cx="5364" cy="2303" r="3" data-net="r" />
+          </g>
+          <g class="node comb" data-detail="7" data-search="4&#39;d2 a b eq k r$ff$eq y" data-cx="824" data-cy="992">
+            <rect class="box" x="776" y="954" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="971">eq</text>
+            <text class="label" x="785" y="982">r$ff$eq</text>
+            <circle class="pin" cx="776" cy="993" r="3" data-net="k" />
+            <text class="pinname" x="783" y="996">a</text>
+            <circle class="pin" cx="776" cy="1011" r="3" />
+            <text class="pinname" x="783" y="1014">b</text>
+            <circle class="pin" cx="872" cy="993" r="3" data-net="r$ff$eq" />
+            <text class="pinname" x="865" y="996" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="8" data-search="2&#39;d3 a b eq i[1:0] r$ff$eq_2 y" data-cx="824" data-cy="2480">
+            <rect class="box" x="776" y="2442" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="2459">eq</text>
+            <text class="label" x="785" y="2470">r$ff$eq_2</text>
+            <circle class="pin" cx="776" cy="2481" r="3" />
+            <text class="pinname" x="783" y="2484">a</text>
+            <circle class="pin" cx="776" cy="2499" r="3" />
+            <text class="pinname" x="783" y="2502">b</text>
+            <circle class="pin" cx="872" cy="2481" r="3" data-net="r$ff$eq_2" />
+            <text class="pinname" x="865" y="2484" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="9" data-search="a b d[3] mux r$ff$eq_2 r$ff$mux r[15] s y" data-cx="1652" data-cy="2541">
+            <rect class="box" x="1604" y="2494" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="2511">mux</text>
+            <text class="label" x="1613" y="2522">r$ff$mux</text>
+            <circle class="pin" cx="1604" cy="2533" r="3" />
+            <text class="pinname" x="1611" y="2536">a</text>
+            <circle class="pin" cx="1604" cy="2551" r="3" />
+            <text class="pinname" x="1611" y="2554">b</text>
+            <circle class="pin" cx="1604" cy="2569" r="3" data-net="r$ff$eq_2" />
+            <text class="pinname" x="1611" y="2572">s</text>
+            <circle class="pin" cx="1700" cy="2533" r="3" data-net="r$ff$mux" />
+            <text class="pinname" x="1693" y="2536" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="10" data-search="a b d[2] mux r$ff$eq_2 r$ff$mux_2 r[14] s y" data-cx="1652" data-cy="2657">
+            <rect class="box" x="1604" y="2610" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="2627">mux</text>
+            <text class="label" x="1613" y="2638">r$ff$mux_2</text>
+            <circle class="pin" cx="1604" cy="2649" r="3" />
+            <text class="pinname" x="1611" y="2652">a</text>
+            <circle class="pin" cx="1604" cy="2667" r="3" />
+            <text class="pinname" x="1611" y="2670">b</text>
+            <circle class="pin" cx="1604" cy="2685" r="3" data-net="r$ff$eq_2" />
+            <text class="pinname" x="1611" y="2688">s</text>
+            <circle class="pin" cx="1700" cy="2649" r="3" data-net="r$ff$mux_2" />
+            <text class="pinname" x="1693" y="2652" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="11" data-search="a b d[1] mux r$ff$eq_2 r$ff$mux_3 r[13] s y" data-cx="1652" data-cy="2773">
+            <rect class="box" x="1604" y="2726" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="2743">mux</text>
+            <text class="label" x="1613" y="2754">r$ff$mux_3</text>
+            <circle class="pin" cx="1604" cy="2765" r="3" />
+            <text class="pinname" x="1611" y="2768">a</text>
+            <circle class="pin" cx="1604" cy="2783" r="3" />
+            <text class="pinname" x="1611" y="2786">b</text>
+            <circle class="pin" cx="1604" cy="2801" r="3" data-net="r$ff$eq_2" />
+            <text class="pinname" x="1611" y="2804">s</text>
+            <circle class="pin" cx="1700" cy="2765" r="3" data-net="r$ff$mux_3" />
+            <text class="pinname" x="1693" y="2768" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="12" data-search="a b d[0] mux r$ff$eq_2 r$ff$mux_4 r[12] s y" data-cx="1652" data-cy="2889">
+            <rect class="box" x="1604" y="2842" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="2859">mux</text>
+            <text class="label" x="1613" y="2870">r$ff$mux_4</text>
+            <circle class="pin" cx="1604" cy="2881" r="3" />
+            <text class="pinname" x="1611" y="2884">a</text>
+            <circle class="pin" cx="1604" cy="2899" r="3" />
+            <text class="pinname" x="1611" y="2902">b</text>
+            <circle class="pin" cx="1604" cy="2917" r="3" data-net="r$ff$eq_2" />
+            <text class="pinname" x="1611" y="2920">s</text>
+            <circle class="pin" cx="1700" cy="2881" r="3" data-net="r$ff$mux_4" />
+            <text class="pinname" x="1693" y="2884" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="13" data-search="2&#39;d2 a b eq i[1:0] r$ff$eq_3 y" data-cx="824" data-cy="2690">
+            <rect class="box" x="776" y="2652" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="2669">eq</text>
+            <text class="label" x="785" y="2680">r$ff$eq_3</text>
+            <circle class="pin" cx="776" cy="2691" r="3" />
+            <text class="pinname" x="783" y="2694">a</text>
+            <circle class="pin" cx="776" cy="2709" r="3" />
+            <text class="pinname" x="783" y="2712">b</text>
+            <circle class="pin" cx="872" cy="2691" r="3" data-net="r$ff$eq_3" />
+            <text class="pinname" x="865" y="2694" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="14" data-search="a b d[3] mux r$ff$eq_3 r$ff$mux_5 r[11] s y" data-cx="1652" data-cy="3005">
+            <rect class="box" x="1604" y="2958" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="2975">mux</text>
+            <text class="label" x="1613" y="2986">r$ff$mux_5</text>
+            <circle class="pin" cx="1604" cy="2997" r="3" />
+            <text class="pinname" x="1611" y="3000">a</text>
+            <circle class="pin" cx="1604" cy="3015" r="3" />
+            <text class="pinname" x="1611" y="3018">b</text>
+            <circle class="pin" cx="1604" cy="3033" r="3" data-net="r$ff$eq_3" />
+            <text class="pinname" x="1611" y="3036">s</text>
+            <circle class="pin" cx="1700" cy="2997" r="3" data-net="r$ff$mux_5" />
+            <text class="pinname" x="1693" y="3000" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="15" data-search="a b d[2] mux r$ff$eq_3 r$ff$mux_6 r[10] s y" data-cx="1652" data-cy="3121">
+            <rect class="box" x="1604" y="3074" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3091">mux</text>
+            <text class="label" x="1613" y="3102">r$ff$mux_6</text>
+            <circle class="pin" cx="1604" cy="3113" r="3" />
+            <text class="pinname" x="1611" y="3116">a</text>
+            <circle class="pin" cx="1604" cy="3131" r="3" />
+            <text class="pinname" x="1611" y="3134">b</text>
+            <circle class="pin" cx="1604" cy="3149" r="3" data-net="r$ff$eq_3" />
+            <text class="pinname" x="1611" y="3152">s</text>
+            <circle class="pin" cx="1700" cy="3113" r="3" data-net="r$ff$mux_6" />
+            <text class="pinname" x="1693" y="3116" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="16" data-search="a b d[1] mux r$ff$eq_3 r$ff$mux_7 r[9] s y" data-cx="1652" data-cy="3237">
+            <rect class="box" x="1604" y="3190" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3207">mux</text>
+            <text class="label" x="1613" y="3218">r$ff$mux_7</text>
+            <circle class="pin" cx="1604" cy="3229" r="3" />
+            <text class="pinname" x="1611" y="3232">a</text>
+            <circle class="pin" cx="1604" cy="3247" r="3" />
+            <text class="pinname" x="1611" y="3250">b</text>
+            <circle class="pin" cx="1604" cy="3265" r="3" data-net="r$ff$eq_3" />
+            <text class="pinname" x="1611" y="3268">s</text>
+            <circle class="pin" cx="1700" cy="3229" r="3" data-net="r$ff$mux_7" />
+            <text class="pinname" x="1693" y="3232" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="17" data-search="a b d[0] mux r$ff$eq_3 r$ff$mux_8 r[8] s y" data-cx="1652" data-cy="3353">
+            <rect class="box" x="1604" y="3306" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3323">mux</text>
+            <text class="label" x="1613" y="3334">r$ff$mux_8</text>
+            <circle class="pin" cx="1604" cy="3345" r="3" />
+            <text class="pinname" x="1611" y="3348">a</text>
+            <circle class="pin" cx="1604" cy="3363" r="3" />
+            <text class="pinname" x="1611" y="3366">b</text>
+            <circle class="pin" cx="1604" cy="3381" r="3" data-net="r$ff$eq_3" />
+            <text class="pinname" x="1611" y="3384">s</text>
+            <circle class="pin" cx="1700" cy="3345" r="3" data-net="r$ff$mux_8" />
+            <text class="pinname" x="1693" y="3348" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="18" data-search="2&#39;d1 a b eq i[1:0] r$ff$eq_4 y" data-cx="824" data-cy="3710">
+            <rect class="box" x="776" y="3672" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="3689">eq</text>
+            <text class="label" x="785" y="3700">r$ff$eq_4</text>
+            <circle class="pin" cx="776" cy="3711" r="3" />
+            <text class="pinname" x="783" y="3714">a</text>
+            <circle class="pin" cx="776" cy="3729" r="3" />
+            <text class="pinname" x="783" y="3732">b</text>
+            <circle class="pin" cx="872" cy="3711" r="3" data-net="r$ff$eq_4" />
+            <text class="pinname" x="865" y="3714" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="19" data-search="a b d[3] mux r$ff$eq_4 r$ff$mux_9 r[7] s y" data-cx="1652" data-cy="5209">
+            <rect class="box" x="1604" y="5162" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5179">mux</text>
+            <text class="label" x="1613" y="5190">r$ff$mux_9</text>
+            <circle class="pin" cx="1604" cy="5201" r="3" />
+            <text class="pinname" x="1611" y="5204">a</text>
+            <circle class="pin" cx="1604" cy="5219" r="3" />
+            <text class="pinname" x="1611" y="5222">b</text>
+            <circle class="pin" cx="1604" cy="5237" r="3" data-net="r$ff$eq_4" />
+            <text class="pinname" x="1611" y="5240">s</text>
+            <circle class="pin" cx="1700" cy="5201" r="3" data-net="r$ff$mux_9" />
+            <text class="pinname" x="1693" y="5204" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="20" data-search="a b d[2] mux r$ff$eq_4 r$ff$mux_10 r[6] s y" data-cx="1652" data-cy="5325">
+            <rect class="box" x="1604" y="5278" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5295">mux</text>
+            <text class="label" x="1613" y="5306">r$ff$mux_10</text>
+            <circle class="pin" cx="1604" cy="5317" r="3" />
+            <text class="pinname" x="1611" y="5320">a</text>
+            <circle class="pin" cx="1604" cy="5335" r="3" />
+            <text class="pinname" x="1611" y="5338">b</text>
+            <circle class="pin" cx="1604" cy="5353" r="3" data-net="r$ff$eq_4" />
+            <text class="pinname" x="1611" y="5356">s</text>
+            <circle class="pin" cx="1700" cy="5317" r="3" data-net="r$ff$mux_10" />
+            <text class="pinname" x="1693" y="5320" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="21" data-search="a b d[1] mux r$ff$eq_4 r$ff$mux_11 r[5] s y" data-cx="1652" data-cy="5441">
+            <rect class="box" x="1604" y="5394" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5411">mux</text>
+            <text class="label" x="1613" y="5422">r$ff$mux_11</text>
+            <circle class="pin" cx="1604" cy="5433" r="3" />
+            <text class="pinname" x="1611" y="5436">a</text>
+            <circle class="pin" cx="1604" cy="5451" r="3" />
+            <text class="pinname" x="1611" y="5454">b</text>
+            <circle class="pin" cx="1604" cy="5469" r="3" data-net="r$ff$eq_4" />
+            <text class="pinname" x="1611" y="5472">s</text>
+            <circle class="pin" cx="1700" cy="5433" r="3" data-net="r$ff$mux_11" />
+            <text class="pinname" x="1693" y="5436" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="22" data-search="a b d[0] mux r$ff$eq_4 r$ff$mux_12 r[4] s y" data-cx="1652" data-cy="5557">
+            <rect class="box" x="1604" y="5510" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5527">mux</text>
+            <text class="label" x="1613" y="5538">r$ff$mux_12</text>
+            <circle class="pin" cx="1604" cy="5549" r="3" />
+            <text class="pinname" x="1611" y="5552">a</text>
+            <circle class="pin" cx="1604" cy="5567" r="3" />
+            <text class="pinname" x="1611" y="5570">b</text>
+            <circle class="pin" cx="1604" cy="5585" r="3" data-net="r$ff$eq_4" />
+            <text class="pinname" x="1611" y="5588">s</text>
+            <circle class="pin" cx="1700" cy="5549" r="3" data-net="r$ff$mux_12" />
+            <text class="pinname" x="1693" y="5552" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="23" data-search="2&#39;d0 a b eq i[1:0] r$ff$eq_5 y" data-cx="824" data-cy="3948">
+            <rect class="box" x="776" y="3910" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="3927">eq</text>
+            <text class="label" x="785" y="3938">r$ff$eq_5</text>
+            <circle class="pin" cx="776" cy="3949" r="3" />
+            <text class="pinname" x="783" y="3952">a</text>
+            <circle class="pin" cx="776" cy="3967" r="3" />
+            <text class="pinname" x="783" y="3970">b</text>
+            <circle class="pin" cx="872" cy="3949" r="3" data-net="r$ff$eq_5" />
+            <text class="pinname" x="865" y="3952" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="24" data-search="a b d[3] mux r$ff$eq_5 r$ff$mux_13 r[3] s y" data-cx="1652" data-cy="5673">
+            <rect class="box" x="1604" y="5626" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5643">mux</text>
+            <text class="label" x="1613" y="5654">r$ff$mux_13</text>
+            <circle class="pin" cx="1604" cy="5665" r="3" />
+            <text class="pinname" x="1611" y="5668">a</text>
+            <circle class="pin" cx="1604" cy="5683" r="3" />
+            <text class="pinname" x="1611" y="5686">b</text>
+            <circle class="pin" cx="1604" cy="5701" r="3" data-net="r$ff$eq_5" />
+            <text class="pinname" x="1611" y="5704">s</text>
+            <circle class="pin" cx="1700" cy="5665" r="3" data-net="r$ff$mux_13" />
+            <text class="pinname" x="1693" y="5668" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="25" data-search="a b d[2] mux r$ff$eq_5 r$ff$mux_14 r[2] s y" data-cx="1652" data-cy="5789">
+            <rect class="box" x="1604" y="5742" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5759">mux</text>
+            <text class="label" x="1613" y="5770">r$ff$mux_14</text>
+            <circle class="pin" cx="1604" cy="5781" r="3" />
+            <text class="pinname" x="1611" y="5784">a</text>
+            <circle class="pin" cx="1604" cy="5799" r="3" />
+            <text class="pinname" x="1611" y="5802">b</text>
+            <circle class="pin" cx="1604" cy="5817" r="3" data-net="r$ff$eq_5" />
+            <text class="pinname" x="1611" y="5820">s</text>
+            <circle class="pin" cx="1700" cy="5781" r="3" data-net="r$ff$mux_14" />
+            <text class="pinname" x="1693" y="5784" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="26" data-search="a b d[1] mux r$ff$eq_5 r$ff$mux_15 r[1] s y" data-cx="1652" data-cy="5905">
+            <rect class="box" x="1604" y="5858" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5875">mux</text>
+            <text class="label" x="1613" y="5886">r$ff$mux_15</text>
+            <circle class="pin" cx="1604" cy="5897" r="3" />
+            <text class="pinname" x="1611" y="5900">a</text>
+            <circle class="pin" cx="1604" cy="5915" r="3" />
+            <text class="pinname" x="1611" y="5918">b</text>
+            <circle class="pin" cx="1604" cy="5933" r="3" data-net="r$ff$eq_5" />
+            <text class="pinname" x="1611" y="5936">s</text>
+            <circle class="pin" cx="1700" cy="5897" r="3" data-net="r$ff$mux_15" />
+            <text class="pinname" x="1693" y="5900" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="27" data-search="a b d[0] mux r$ff$eq_5 r$ff$mux_16 r[0] s y" data-cx="1652" data-cy="6193">
+            <rect class="box" x="1604" y="6146" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="6163">mux</text>
+            <text class="label" x="1613" y="6174">r$ff$mux_16</text>
+            <circle class="pin" cx="1604" cy="6185" r="3" />
+            <text class="pinname" x="1611" y="6188">a</text>
+            <circle class="pin" cx="1604" cy="6203" r="3" />
+            <text class="pinname" x="1611" y="6206">b</text>
+            <circle class="pin" cx="1604" cy="6221" r="3" data-net="r$ff$eq_5" />
+            <text class="pinname" x="1611" y="6224">s</text>
+            <circle class="pin" cx="1700" cy="6185" r="3" data-net="r$ff$mux_16" />
+            <text class="pinname" x="1693" y="6188" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="28" data-search="2&#39;d3 a b eq j r$ff$eq_6 y" data-cx="824" data-cy="2844">
+            <rect class="box" x="776" y="2806" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="2823">eq</text>
+            <text class="label" x="785" y="2834">r$ff$eq_6</text>
+            <circle class="pin" cx="776" cy="2845" r="3" data-net="j" />
+            <text class="pinname" x="783" y="2848">a</text>
+            <circle class="pin" cx="776" cy="2863" r="3" />
+            <text class="pinname" x="783" y="2866">b</text>
+            <circle class="pin" cx="872" cy="2845" r="3" data-net="r$ff$eq_6" />
+            <text class="pinname" x="865" y="2848" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="29" data-search="a d not r$ff$not y" data-cx="824" data-cy="3031">
+            <rect class="box" x="776" y="3002" width="96" height="58" rx="4" />
+            <text class="kind" x="785" y="3019">not</text>
+            <text class="label" x="785" y="3030">r$ff$not</text>
+            <circle class="pin" cx="776" cy="3041" r="3" data-net="d" />
+            <text class="pinname" x="783" y="3044">a</text>
+            <circle class="pin" cx="872" cy="3041" r="3" data-net="r$ff$not" />
+            <text class="pinname" x="865" y="3044" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="30" data-search="a b mux r$ff$eq_6 r$ff$mux_17 r$ff$not[3] r[15] s y" data-cx="1652" data-cy="3469">
+            <rect class="box" x="1604" y="3422" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3439">mux</text>
+            <text class="label" x="1613" y="3450">r$ff$mux_17</text>
+            <circle class="pin" cx="1604" cy="3461" r="3" />
+            <text class="pinname" x="1611" y="3464">a</text>
+            <circle class="pin" cx="1604" cy="3479" r="3" />
+            <text class="pinname" x="1611" y="3482">b</text>
+            <circle class="pin" cx="1604" cy="3497" r="3" data-net="r$ff$eq_6" />
+            <text class="pinname" x="1611" y="3500">s</text>
+            <circle class="pin" cx="1700" cy="3461" r="3" data-net="r$ff$mux_17" />
+            <text class="pinname" x="1693" y="3464" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="31" data-search="a d[2:0] not r$ff$not_2 y" data-cx="824" data-cy="3111">
+            <rect class="box" x="776" y="3082" width="96" height="58" rx="4" />
+            <text class="kind" x="785" y="3099">not</text>
+            <text class="label" x="785" y="3110">r$ff$not_2</text>
+            <circle class="pin" cx="776" cy="3121" r="3" />
+            <text class="pinname" x="783" y="3124">a</text>
+            <circle class="pin" cx="872" cy="3121" r="3" data-net="r$ff$not_2" />
+            <text class="pinname" x="865" y="3124" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="32" data-search="a b mux r$ff$eq_6 r$ff$mux_18 r$ff$not_2[2] r[14] s y" data-cx="1652" data-cy="3585">
+            <rect class="box" x="1604" y="3538" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3555">mux</text>
+            <text class="label" x="1613" y="3566">r$ff$mux_18</text>
+            <circle class="pin" cx="1604" cy="3577" r="3" />
+            <text class="pinname" x="1611" y="3580">a</text>
+            <circle class="pin" cx="1604" cy="3595" r="3" />
+            <text class="pinname" x="1611" y="3598">b</text>
+            <circle class="pin" cx="1604" cy="3613" r="3" data-net="r$ff$eq_6" />
+            <text class="pinname" x="1611" y="3616">s</text>
+            <circle class="pin" cx="1700" cy="3577" r="3" data-net="r$ff$mux_18" />
+            <text class="pinname" x="1693" y="3580" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="33" data-search="a d[1:0] not r$ff$not_3 y" data-cx="824" data-cy="3289">
+            <rect class="box" x="776" y="3260" width="96" height="58" rx="4" />
+            <text class="kind" x="785" y="3277">not</text>
+            <text class="label" x="785" y="3288">r$ff$not_3</text>
+            <circle class="pin" cx="776" cy="3299" r="3" />
+            <text class="pinname" x="783" y="3302">a</text>
+            <circle class="pin" cx="872" cy="3299" r="3" data-net="r$ff$not_3" />
+            <text class="pinname" x="865" y="3302" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="34" data-search="a b mux r$ff$eq_6 r$ff$mux_19 r$ff$not_3[1] r[13] s y" data-cx="1652" data-cy="3817">
+            <rect class="box" x="1604" y="3770" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3787">mux</text>
+            <text class="label" x="1613" y="3798">r$ff$mux_19</text>
+            <circle class="pin" cx="1604" cy="3809" r="3" />
+            <text class="pinname" x="1611" y="3812">a</text>
+            <circle class="pin" cx="1604" cy="3827" r="3" />
+            <text class="pinname" x="1611" y="3830">b</text>
+            <circle class="pin" cx="1604" cy="3845" r="3" data-net="r$ff$eq_6" />
+            <text class="pinname" x="1611" y="3848">s</text>
+            <circle class="pin" cx="1700" cy="3809" r="3" data-net="r$ff$mux_19" />
+            <text class="pinname" x="1693" y="3812" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="35" data-search="a d[0] not r$ff$not_4 y" data-cx="824" data-cy="3467">
+            <rect class="box" x="776" y="3438" width="96" height="58" rx="4" />
+            <text class="kind" x="785" y="3455">not</text>
+            <text class="label" x="785" y="3466">r$ff$not_4</text>
+            <circle class="pin" cx="776" cy="3477" r="3" />
+            <text class="pinname" x="783" y="3480">a</text>
+            <circle class="pin" cx="872" cy="3477" r="3" data-net="r$ff$not_4" />
+            <text class="pinname" x="865" y="3480" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="36" data-search="a b mux r$ff$eq_6 r$ff$mux_20 r$ff$not_4 r[12] s y" data-cx="1652" data-cy="4049">
+            <rect class="box" x="1604" y="4002" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4019">mux</text>
+            <text class="label" x="1613" y="4030">r$ff$mux_20</text>
+            <circle class="pin" cx="1604" cy="4041" r="3" />
+            <text class="pinname" x="1611" y="4044">a</text>
+            <circle class="pin" cx="1604" cy="4059" r="3" data-net="r$ff$not_4" />
+            <text class="pinname" x="1611" y="4062">b</text>
+            <circle class="pin" cx="1604" cy="4077" r="3" data-net="r$ff$eq_6" />
+            <text class="pinname" x="1611" y="4080">s</text>
+            <circle class="pin" cx="1700" cy="4041" r="3" data-net="r$ff$mux_20" />
+            <text class="pinname" x="1693" y="4044" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="37" data-search="2&#39;d2 a b eq j r$ff$eq_7 y" data-cx="824" data-cy="2942">
+            <rect class="box" x="776" y="2904" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="2921">eq</text>
+            <text class="label" x="785" y="2932">r$ff$eq_7</text>
+            <circle class="pin" cx="776" cy="2943" r="3" data-net="j" />
+            <text class="pinname" x="783" y="2946">a</text>
+            <circle class="pin" cx="776" cy="2961" r="3" />
+            <text class="pinname" x="783" y="2964">b</text>
+            <circle class="pin" cx="872" cy="2943" r="3" data-net="r$ff$eq_7" />
+            <text class="pinname" x="865" y="2946" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="38" data-search="a b mux r$ff$eq_7 r$ff$mux_21 r$ff$not[3] r[11] s y" data-cx="1652" data-cy="3701">
+            <rect class="box" x="1604" y="3654" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3671">mux</text>
+            <text class="label" x="1613" y="3682">r$ff$mux_21</text>
+            <circle class="pin" cx="1604" cy="3693" r="3" />
+            <text class="pinname" x="1611" y="3696">a</text>
+            <circle class="pin" cx="1604" cy="3711" r="3" />
+            <text class="pinname" x="1611" y="3714">b</text>
+            <circle class="pin" cx="1604" cy="3729" r="3" data-net="r$ff$eq_7" />
+            <text class="pinname" x="1611" y="3732">s</text>
+            <circle class="pin" cx="1700" cy="3693" r="3" data-net="r$ff$mux_21" />
+            <text class="pinname" x="1693" y="3696" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="39" data-search="a b mux r$ff$eq_7 r$ff$mux_22 r$ff$not_2[2] r[10] s y" data-cx="1652" data-cy="3933">
+            <rect class="box" x="1604" y="3886" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="3903">mux</text>
+            <text class="label" x="1613" y="3914">r$ff$mux_22</text>
+            <circle class="pin" cx="1604" cy="3925" r="3" />
+            <text class="pinname" x="1611" y="3928">a</text>
+            <circle class="pin" cx="1604" cy="3943" r="3" />
+            <text class="pinname" x="1611" y="3946">b</text>
+            <circle class="pin" cx="1604" cy="3961" r="3" data-net="r$ff$eq_7" />
+            <text class="pinname" x="1611" y="3964">s</text>
+            <circle class="pin" cx="1700" cy="3925" r="3" data-net="r$ff$mux_22" />
+            <text class="pinname" x="1693" y="3928" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="40" data-search="a b mux r$ff$eq_7 r$ff$mux_23 r$ff$not_3[1] r[9] s y" data-cx="1652" data-cy="4165">
+            <rect class="box" x="1604" y="4118" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4135">mux</text>
+            <text class="label" x="1613" y="4146">r$ff$mux_23</text>
+            <circle class="pin" cx="1604" cy="4157" r="3" />
+            <text class="pinname" x="1611" y="4160">a</text>
+            <circle class="pin" cx="1604" cy="4175" r="3" />
+            <text class="pinname" x="1611" y="4178">b</text>
+            <circle class="pin" cx="1604" cy="4193" r="3" data-net="r$ff$eq_7" />
+            <text class="pinname" x="1611" y="4196">s</text>
+            <circle class="pin" cx="1700" cy="4157" r="3" data-net="r$ff$mux_23" />
+            <text class="pinname" x="1693" y="4160" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="41" data-search="a b mux r$ff$eq_7 r$ff$mux_24 r$ff$not_4 r[8] s y" data-cx="1652" data-cy="4397">
+            <rect class="box" x="1604" y="4350" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4367">mux</text>
+            <text class="label" x="1613" y="4378">r$ff$mux_24</text>
+            <circle class="pin" cx="1604" cy="4389" r="3" />
+            <text class="pinname" x="1611" y="4392">a</text>
+            <circle class="pin" cx="1604" cy="4407" r="3" data-net="r$ff$not_4" />
+            <text class="pinname" x="1611" y="4410">b</text>
+            <circle class="pin" cx="1604" cy="4425" r="3" data-net="r$ff$eq_7" />
+            <text class="pinname" x="1611" y="4428">s</text>
+            <circle class="pin" cx="1700" cy="4389" r="3" data-net="r$ff$mux_24" />
+            <text class="pinname" x="1693" y="4392" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="42" data-search="2&#39;d1 a b eq j r$ff$eq_8 y" data-cx="824" data-cy="3378">
+            <rect class="box" x="776" y="3340" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="3357">eq</text>
+            <text class="label" x="785" y="3368">r$ff$eq_8</text>
+            <circle class="pin" cx="776" cy="3379" r="3" data-net="j" />
+            <text class="pinname" x="783" y="3382">a</text>
+            <circle class="pin" cx="776" cy="3397" r="3" />
+            <text class="pinname" x="783" y="3400">b</text>
+            <circle class="pin" cx="872" cy="3379" r="3" data-net="r$ff$eq_8" />
+            <text class="pinname" x="865" y="3382" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="43" data-search="a b mux r$ff$eq_8 r$ff$mux_25 r$ff$not[3] r[7] s y" data-cx="1652" data-cy="4281">
+            <rect class="box" x="1604" y="4234" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4251">mux</text>
+            <text class="label" x="1613" y="4262">r$ff$mux_25</text>
+            <circle class="pin" cx="1604" cy="4273" r="3" />
+            <text class="pinname" x="1611" y="4276">a</text>
+            <circle class="pin" cx="1604" cy="4291" r="3" />
+            <text class="pinname" x="1611" y="4294">b</text>
+            <circle class="pin" cx="1604" cy="4309" r="3" data-net="r$ff$eq_8" />
+            <text class="pinname" x="1611" y="4312">s</text>
+            <circle class="pin" cx="1700" cy="4273" r="3" data-net="r$ff$mux_25" />
+            <text class="pinname" x="1693" y="4276" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="44" data-search="a b mux r$ff$eq_8 r$ff$mux_26 r$ff$not_2[2] r[6] s y" data-cx="1652" data-cy="4513">
+            <rect class="box" x="1604" y="4466" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4483">mux</text>
+            <text class="label" x="1613" y="4494">r$ff$mux_26</text>
+            <circle class="pin" cx="1604" cy="4505" r="3" />
+            <text class="pinname" x="1611" y="4508">a</text>
+            <circle class="pin" cx="1604" cy="4523" r="3" />
+            <text class="pinname" x="1611" y="4526">b</text>
+            <circle class="pin" cx="1604" cy="4541" r="3" data-net="r$ff$eq_8" />
+            <text class="pinname" x="1611" y="4544">s</text>
+            <circle class="pin" cx="1700" cy="4505" r="3" data-net="r$ff$mux_26" />
+            <text class="pinname" x="1693" y="4508" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="45" data-search="a b mux r$ff$eq_8 r$ff$mux_27 r$ff$not_3[1] r[5] s y" data-cx="1652" data-cy="4629">
+            <rect class="box" x="1604" y="4582" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4599">mux</text>
+            <text class="label" x="1613" y="4610">r$ff$mux_27</text>
+            <circle class="pin" cx="1604" cy="4621" r="3" />
+            <text class="pinname" x="1611" y="4624">a</text>
+            <circle class="pin" cx="1604" cy="4639" r="3" />
+            <text class="pinname" x="1611" y="4642">b</text>
+            <circle class="pin" cx="1604" cy="4657" r="3" data-net="r$ff$eq_8" />
+            <text class="pinname" x="1611" y="4660">s</text>
+            <circle class="pin" cx="1700" cy="4621" r="3" data-net="r$ff$mux_27" />
+            <text class="pinname" x="1693" y="4624" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="46" data-search="a b mux r$ff$eq_8 r$ff$mux_28 r$ff$not_4 r[4] s y" data-cx="1652" data-cy="4745">
+            <rect class="box" x="1604" y="4698" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4715">mux</text>
+            <text class="label" x="1613" y="4726">r$ff$mux_28</text>
+            <circle class="pin" cx="1604" cy="4737" r="3" />
+            <text class="pinname" x="1611" y="4740">a</text>
+            <circle class="pin" cx="1604" cy="4755" r="3" data-net="r$ff$not_4" />
+            <text class="pinname" x="1611" y="4758">b</text>
+            <circle class="pin" cx="1604" cy="4773" r="3" data-net="r$ff$eq_8" />
+            <text class="pinname" x="1611" y="4776">s</text>
+            <circle class="pin" cx="1700" cy="4737" r="3" data-net="r$ff$mux_28" />
+            <text class="pinname" x="1693" y="4740" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="47" data-search="2&#39;d0 a b eq j r$ff$eq_9 y" data-cx="824" data-cy="3584">
+            <rect class="box" x="776" y="3546" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="3563">eq</text>
+            <text class="label" x="785" y="3574">r$ff$eq_9</text>
+            <circle class="pin" cx="776" cy="3585" r="3" data-net="j" />
+            <text class="pinname" x="783" y="3588">a</text>
+            <circle class="pin" cx="776" cy="3603" r="3" />
+            <text class="pinname" x="783" y="3606">b</text>
+            <circle class="pin" cx="872" cy="3585" r="3" data-net="r$ff$eq_9" />
+            <text class="pinname" x="865" y="3588" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="48" data-search="a b mux r$ff$eq_9 r$ff$mux_29 r$ff$not[3] r[3] s y" data-cx="1652" data-cy="4861">
+            <rect class="box" x="1604" y="4814" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4831">mux</text>
+            <text class="label" x="1613" y="4842">r$ff$mux_29</text>
+            <circle class="pin" cx="1604" cy="4853" r="3" />
+            <text class="pinname" x="1611" y="4856">a</text>
+            <circle class="pin" cx="1604" cy="4871" r="3" />
+            <text class="pinname" x="1611" y="4874">b</text>
+            <circle class="pin" cx="1604" cy="4889" r="3" data-net="r$ff$eq_9" />
+            <text class="pinname" x="1611" y="4892">s</text>
+            <circle class="pin" cx="1700" cy="4853" r="3" data-net="r$ff$mux_29" />
+            <text class="pinname" x="1693" y="4856" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="49" data-search="a b mux r$ff$eq_9 r$ff$mux_30 r$ff$not_2[2] r[2] s y" data-cx="1652" data-cy="4977">
+            <rect class="box" x="1604" y="4930" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="4947">mux</text>
+            <text class="label" x="1613" y="4958">r$ff$mux_30</text>
+            <circle class="pin" cx="1604" cy="4969" r="3" />
+            <text class="pinname" x="1611" y="4972">a</text>
+            <circle class="pin" cx="1604" cy="4987" r="3" />
+            <text class="pinname" x="1611" y="4990">b</text>
+            <circle class="pin" cx="1604" cy="5005" r="3" data-net="r$ff$eq_9" />
+            <text class="pinname" x="1611" y="5008">s</text>
+            <circle class="pin" cx="1700" cy="4969" r="3" data-net="r$ff$mux_30" />
+            <text class="pinname" x="1693" y="4972" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="50" data-search="a b mux r$ff$eq_9 r$ff$mux_31 r$ff$not_3[1] r[1] s y" data-cx="1652" data-cy="5093">
+            <rect class="box" x="1604" y="5046" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="5063">mux</text>
+            <text class="label" x="1613" y="5074">r$ff$mux_31</text>
+            <circle class="pin" cx="1604" cy="5085" r="3" />
+            <text class="pinname" x="1611" y="5088">a</text>
+            <circle class="pin" cx="1604" cy="5103" r="3" />
+            <text class="pinname" x="1611" y="5106">b</text>
+            <circle class="pin" cx="1604" cy="5121" r="3" data-net="r$ff$eq_9" />
+            <text class="pinname" x="1611" y="5124">s</text>
+            <circle class="pin" cx="1700" cy="5085" r="3" data-net="r$ff$mux_31" />
+            <text class="pinname" x="1693" y="5088" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="51" data-search="a b mux r$ff$eq_9 r$ff$mux_32 r$ff$not_4 r[0] s y" data-cx="1652" data-cy="6077">
+            <rect class="box" x="1604" y="6030" width="96" height="94" rx="4" />
+            <text class="kind" x="1613" y="6047">mux</text>
+            <text class="label" x="1613" y="6058">r$ff$mux_32</text>
+            <circle class="pin" cx="1604" cy="6069" r="3" />
+            <text class="pinname" x="1611" y="6072">a</text>
+            <circle class="pin" cx="1604" cy="6087" r="3" data-net="r$ff$not_4" />
+            <text class="pinname" x="1611" y="6090">b</text>
+            <circle class="pin" cx="1604" cy="6105" r="3" data-net="r$ff$eq_9" />
+            <text class="pinname" x="1611" y="6108">s</text>
+            <circle class="pin" cx="1700" cy="6069" r="3" data-net="r$ff$mux_32" />
+            <text class="pinname" x="1693" y="6072" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="52" data-search="a b mux r$ff$mux_33 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="2317">
+            <rect class="box" x="4688" y="2270" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="2287">mux</text>
+            <text class="label" x="4697" y="2298">r$ff$mux_33</text>
+            <circle class="pin" cx="4688" cy="2309" r="3" />
+            <text class="pinname" x="4695" y="2312">a</text>
+            <circle class="pin" cx="4688" cy="2327" r="3" />
+            <text class="pinname" x="4695" y="2330">b</text>
+            <circle class="pin" cx="4688" cy="2345" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="2348">s</text>
+            <circle class="pin" cx="4784" cy="2309" r="3" data-net="r$ff$mux_33" />
+            <text class="pinname" x="4777" y="2312" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="53" data-search="2&#39;d3 a b eq k[1:0] r$ff$eq_10 y" data-cx="824" data-cy="2270">
+            <rect class="box" x="776" y="2232" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="2249">eq</text>
+            <text class="label" x="785" y="2260">r$ff$eq_10</text>
+            <circle class="pin" cx="776" cy="2271" r="3" />
+            <text class="pinname" x="783" y="2274">a</text>
+            <circle class="pin" cx="776" cy="2289" r="3" />
+            <text class="pinname" x="783" y="2292">b</text>
+            <circle class="pin" cx="872" cy="2271" r="3" data-net="r$ff$eq_10" />
+            <text class="pinname" x="865" y="2274" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="54" data-search="a b mux r$ff$mux_34 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="2809">
+            <rect class="box" x="4688" y="2762" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="2779">mux</text>
+            <text class="label" x="4697" y="2790">r$ff$mux_34</text>
+            <circle class="pin" cx="4688" cy="2801" r="3" />
+            <text class="pinname" x="4695" y="2804">a</text>
+            <circle class="pin" cx="4688" cy="2819" r="3" />
+            <text class="pinname" x="4695" y="2822">b</text>
+            <circle class="pin" cx="4688" cy="2837" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="2840">s</text>
+            <circle class="pin" cx="4784" cy="2801" r="3" data-net="r$ff$mux_34" />
+            <text class="pinname" x="4777" y="2804" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="55" data-search="a b d[1] mux r$ff$eq_10 r$ff$mux_34[13] r$ff$mux_35 s y" data-cx="5012" data-cy="2486">
+            <rect class="box" x="4964" y="2439" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="2456">mux</text>
+            <text class="label" x="4973" y="2467">r$ff$mux_35</text>
+            <circle class="pin" cx="4964" cy="2478" r="3" />
+            <text class="pinname" x="4971" y="2481">a</text>
+            <circle class="pin" cx="4964" cy="2496" r="3" />
+            <text class="pinname" x="4971" y="2499">b</text>
+            <circle class="pin" cx="4964" cy="2514" r="3" data-net="r$ff$eq_10" />
+            <text class="pinname" x="4971" y="2517">s</text>
+            <circle class="pin" cx="5060" cy="2478" r="3" data-net="r$ff$mux_35" />
+            <text class="pinname" x="5053" y="2481" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="56" data-search="a b mux r$ff$mux_36 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="2981">
+            <rect class="box" x="4688" y="2934" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="2951">mux</text>
+            <text class="label" x="4697" y="2962">r$ff$mux_36</text>
+            <circle class="pin" cx="4688" cy="2973" r="3" />
+            <text class="pinname" x="4695" y="2976">a</text>
+            <circle class="pin" cx="4688" cy="2991" r="3" />
+            <text class="pinname" x="4695" y="2994">b</text>
+            <circle class="pin" cx="4688" cy="3009" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="3012">s</text>
+            <circle class="pin" cx="4784" cy="2973" r="3" data-net="r$ff$mux_36" />
+            <text class="pinname" x="4777" y="2976" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="57" data-search="a b d[0] mux r$ff$eq_10 r$ff$mux_36[12] r$ff$mux_37 s y" data-cx="5012" data-cy="2602">
+            <rect class="box" x="4964" y="2555" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="2572">mux</text>
+            <text class="label" x="4973" y="2583">r$ff$mux_37</text>
+            <circle class="pin" cx="4964" cy="2594" r="3" />
+            <text class="pinname" x="4971" y="2597">a</text>
+            <circle class="pin" cx="4964" cy="2612" r="3" />
+            <text class="pinname" x="4971" y="2615">b</text>
+            <circle class="pin" cx="4964" cy="2630" r="3" data-net="r$ff$eq_10" />
+            <text class="pinname" x="4971" y="2633">s</text>
+            <circle class="pin" cx="5060" cy="2594" r="3" data-net="r$ff$mux_37" />
+            <text class="pinname" x="5053" y="2597" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="58" data-search="a b mux r$ff$mux_38 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="2433">
+            <rect class="box" x="4688" y="2386" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="2403">mux</text>
+            <text class="label" x="4697" y="2414">r$ff$mux_38</text>
+            <circle class="pin" cx="4688" cy="2425" r="3" />
+            <text class="pinname" x="4695" y="2428">a</text>
+            <circle class="pin" cx="4688" cy="2443" r="3" />
+            <text class="pinname" x="4695" y="2446">b</text>
+            <circle class="pin" cx="4688" cy="2461" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="2464">s</text>
+            <circle class="pin" cx="4784" cy="2425" r="3" data-net="r$ff$mux_38" />
+            <text class="pinname" x="4777" y="2428" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="59" data-search="2&#39;d2 a b eq k[1:0] r$ff$eq_11 y" data-cx="824" data-cy="4186">
+            <rect class="box" x="776" y="4148" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="4165">eq</text>
+            <text class="label" x="785" y="4176">r$ff$eq_11</text>
+            <circle class="pin" cx="776" cy="4187" r="3" />
+            <text class="pinname" x="783" y="4190">a</text>
+            <circle class="pin" cx="776" cy="4205" r="3" />
+            <text class="pinname" x="783" y="4208">b</text>
+            <circle class="pin" cx="872" cy="4187" r="3" data-net="r$ff$eq_11" />
+            <text class="pinname" x="865" y="4190" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="60" data-search="a b mux r$ff$mux_39 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="3125">
+            <rect class="box" x="4688" y="3078" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="3095">mux</text>
+            <text class="label" x="4697" y="3106">r$ff$mux_39</text>
+            <circle class="pin" cx="4688" cy="3117" r="3" />
+            <text class="pinname" x="4695" y="3120">a</text>
+            <circle class="pin" cx="4688" cy="3135" r="3" />
+            <text class="pinname" x="4695" y="3138">b</text>
+            <circle class="pin" cx="4688" cy="3153" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="3156">s</text>
+            <circle class="pin" cx="4784" cy="3117" r="3" data-net="r$ff$mux_39" />
+            <text class="pinname" x="4777" y="3120" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="61" data-search="a b d[1] mux r$ff$eq_11 r$ff$mux_39[9] r$ff$mux_40 s y" data-cx="5012" data-cy="2718">
+            <rect class="box" x="4964" y="2671" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="2688">mux</text>
+            <text class="label" x="4973" y="2699">r$ff$mux_40</text>
+            <circle class="pin" cx="4964" cy="2710" r="3" />
+            <text class="pinname" x="4971" y="2713">a</text>
+            <circle class="pin" cx="4964" cy="2728" r="3" />
+            <text class="pinname" x="4971" y="2731">b</text>
+            <circle class="pin" cx="4964" cy="2746" r="3" data-net="r$ff$eq_11" />
+            <text class="pinname" x="4971" y="2749">s</text>
+            <circle class="pin" cx="5060" cy="2710" r="3" data-net="r$ff$mux_40" />
+            <text class="pinname" x="5053" y="2713" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="62" data-search="a b mux r$ff$mux_41 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="3297">
+            <rect class="box" x="4688" y="3250" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="3267">mux</text>
+            <text class="label" x="4697" y="3278">r$ff$mux_41</text>
+            <circle class="pin" cx="4688" cy="3289" r="3" />
+            <text class="pinname" x="4695" y="3292">a</text>
+            <circle class="pin" cx="4688" cy="3307" r="3" />
+            <text class="pinname" x="4695" y="3310">b</text>
+            <circle class="pin" cx="4688" cy="3325" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="3328">s</text>
+            <circle class="pin" cx="4784" cy="3289" r="3" data-net="r$ff$mux_41" />
+            <text class="pinname" x="4777" y="3292" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="63" data-search="a b d[0] mux r$ff$eq_11 r$ff$mux_41[8] r$ff$mux_42 s y" data-cx="5012" data-cy="2834">
+            <rect class="box" x="4964" y="2787" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="2804">mux</text>
+            <text class="label" x="4973" y="2815">r$ff$mux_42</text>
+            <circle class="pin" cx="4964" cy="2826" r="3" />
+            <text class="pinname" x="4971" y="2829">a</text>
+            <circle class="pin" cx="4964" cy="2844" r="3" />
+            <text class="pinname" x="4971" y="2847">b</text>
+            <circle class="pin" cx="4964" cy="2862" r="3" data-net="r$ff$eq_11" />
+            <text class="pinname" x="4971" y="2865">s</text>
+            <circle class="pin" cx="5060" cy="2826" r="3" data-net="r$ff$mux_42" />
+            <text class="pinname" x="5053" y="2829" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="64" data-search="a b mux r$ff$mux_43 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="2549">
+            <rect class="box" x="4688" y="2502" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="2519">mux</text>
+            <text class="label" x="4697" y="2530">r$ff$mux_43</text>
+            <circle class="pin" cx="4688" cy="2541" r="3" />
+            <text class="pinname" x="4695" y="2544">a</text>
+            <circle class="pin" cx="4688" cy="2559" r="3" />
+            <text class="pinname" x="4695" y="2562">b</text>
+            <circle class="pin" cx="4688" cy="2577" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="2580">s</text>
+            <circle class="pin" cx="4784" cy="2541" r="3" data-net="r$ff$mux_43" />
+            <text class="pinname" x="4777" y="2544" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="65" data-search="2&#39;d1 a b eq k[1:0] r$ff$eq_12 y" data-cx="824" data-cy="4396">
+            <rect class="box" x="776" y="4358" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="4375">eq</text>
+            <text class="label" x="785" y="4386">r$ff$eq_12</text>
+            <circle class="pin" cx="776" cy="4397" r="3" />
+            <text class="pinname" x="783" y="4400">a</text>
+            <circle class="pin" cx="776" cy="4415" r="3" />
+            <text class="pinname" x="783" y="4418">b</text>
+            <circle class="pin" cx="872" cy="4397" r="3" data-net="r$ff$eq_12" />
+            <text class="pinname" x="865" y="4400" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="66" data-search="a b mux r$ff$mux_44 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="3469">
+            <rect class="box" x="4688" y="3422" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="3439">mux</text>
+            <text class="label" x="4697" y="3450">r$ff$mux_44</text>
+            <circle class="pin" cx="4688" cy="3461" r="3" />
+            <text class="pinname" x="4695" y="3464">a</text>
+            <circle class="pin" cx="4688" cy="3479" r="3" />
+            <text class="pinname" x="4695" y="3482">b</text>
+            <circle class="pin" cx="4688" cy="3497" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="3500">s</text>
+            <circle class="pin" cx="4784" cy="3461" r="3" data-net="r$ff$mux_44" />
+            <text class="pinname" x="4777" y="3464" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="67" data-search="a b d[1] mux r$ff$eq_12 r$ff$mux_44[5] r$ff$mux_45 s y" data-cx="5012" data-cy="2950">
+            <rect class="box" x="4964" y="2903" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="2920">mux</text>
+            <text class="label" x="4973" y="2931">r$ff$mux_45</text>
+            <circle class="pin" cx="4964" cy="2942" r="3" />
+            <text class="pinname" x="4971" y="2945">a</text>
+            <circle class="pin" cx="4964" cy="2960" r="3" />
+            <text class="pinname" x="4971" y="2963">b</text>
+            <circle class="pin" cx="4964" cy="2978" r="3" data-net="r$ff$eq_12" />
+            <text class="pinname" x="4971" y="2981">s</text>
+            <circle class="pin" cx="5060" cy="2942" r="3" data-net="r$ff$mux_45" />
+            <text class="pinname" x="5053" y="2945" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="68" data-search="a b mux r$ff$mux_46 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="3641">
+            <rect class="box" x="4688" y="3594" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="3611">mux</text>
+            <text class="label" x="4697" y="3622">r$ff$mux_46</text>
+            <circle class="pin" cx="4688" cy="3633" r="3" />
+            <text class="pinname" x="4695" y="3636">a</text>
+            <circle class="pin" cx="4688" cy="3651" r="3" />
+            <text class="pinname" x="4695" y="3654">b</text>
+            <circle class="pin" cx="4688" cy="3669" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="3672">s</text>
+            <circle class="pin" cx="4784" cy="3633" r="3" data-net="r$ff$mux_46" />
+            <text class="pinname" x="4777" y="3636" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="69" data-search="a b d[0] mux r$ff$eq_12 r$ff$mux_46[4] r$ff$mux_47 s y" data-cx="5012" data-cy="3066">
+            <rect class="box" x="4964" y="3019" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="3036">mux</text>
+            <text class="label" x="4973" y="3047">r$ff$mux_47</text>
+            <circle class="pin" cx="4964" cy="3058" r="3" />
+            <text class="pinname" x="4971" y="3061">a</text>
+            <circle class="pin" cx="4964" cy="3076" r="3" />
+            <text class="pinname" x="4971" y="3079">b</text>
+            <circle class="pin" cx="4964" cy="3094" r="3" data-net="r$ff$eq_12" />
+            <text class="pinname" x="4971" y="3097">s</text>
+            <circle class="pin" cx="5060" cy="3058" r="3" data-net="r$ff$mux_47" />
+            <text class="pinname" x="5053" y="3061" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="70" data-search="a b mux r$ff$mux_48 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="2665">
+            <rect class="box" x="4688" y="2618" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="2635">mux</text>
+            <text class="label" x="4697" y="2646">r$ff$mux_48</text>
+            <circle class="pin" cx="4688" cy="2657" r="3" />
+            <text class="pinname" x="4695" y="2660">a</text>
+            <circle class="pin" cx="4688" cy="2675" r="3" />
+            <text class="pinname" x="4695" y="2678">b</text>
+            <circle class="pin" cx="4688" cy="2693" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="2696">s</text>
+            <circle class="pin" cx="4784" cy="2657" r="3" data-net="r$ff$mux_48" />
+            <text class="pinname" x="4777" y="2660" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="71" data-search="2&#39;d0 a b eq k[1:0] r$ff$eq_13 y" data-cx="824" data-cy="4606">
+            <rect class="box" x="776" y="4568" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="4585">eq</text>
+            <text class="label" x="785" y="4596">r$ff$eq_13</text>
+            <circle class="pin" cx="776" cy="4607" r="3" />
+            <text class="pinname" x="783" y="4610">a</text>
+            <circle class="pin" cx="776" cy="4625" r="3" />
+            <text class="pinname" x="783" y="4628">b</text>
+            <circle class="pin" cx="872" cy="4607" r="3" data-net="r$ff$eq_13" />
+            <text class="pinname" x="865" y="4610" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="72" data-search="a b mux r$ff$mux_49 s we y {r$ff$mux, r$ff$mux_2, r$ff… {r$ff$mux_17, r$ff$mux_18, …" data-cx="4736" data-cy="3813">
+            <rect class="box" x="4688" y="3766" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="3783">mux</text>
+            <text class="label" x="4697" y="3794">r$ff$mux_49</text>
+            <circle class="pin" cx="4688" cy="3805" r="3" />
+            <text class="pinname" x="4695" y="3808">a</text>
+            <circle class="pin" cx="4688" cy="3823" r="3" />
+            <text class="pinname" x="4695" y="3826">b</text>
+            <circle class="pin" cx="4688" cy="3841" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="3844">s</text>
+            <circle class="pin" cx="4784" cy="3805" r="3" data-net="r$ff$mux_49" />
+            <text class="pinname" x="4777" y="3808" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="73" data-search="a b d[1] mux r$ff$eq_13 r$ff$mux_49[1] r$ff$mux_50 s y" data-cx="5012" data-cy="3182">
+            <rect class="box" x="4964" y="3135" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="3152">mux</text>
+            <text class="label" x="4973" y="3163">r$ff$mux_50</text>
+            <circle class="pin" cx="4964" cy="3174" r="3" />
+            <text class="pinname" x="4971" y="3177">a</text>
+            <circle class="pin" cx="4964" cy="3192" r="3" />
+            <text class="pinname" x="4971" y="3195">b</text>
+            <circle class="pin" cx="4964" cy="3210" r="3" data-net="r$ff$eq_13" />
+            <text class="pinname" x="4971" y="3213">s</text>
+            <circle class="pin" cx="5060" cy="3174" r="3" data-net="r$ff$mux_50" />
+            <text class="pinname" x="5053" y="3177" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="74" data-search="a b mux r$ff$mux_16 r$ff$mux_32 r$ff$mux_51 s we y" data-cx="4736" data-cy="3985">
+            <rect class="box" x="4688" y="3938" width="96" height="94" rx="4" />
+            <text class="kind" x="4697" y="3955">mux</text>
+            <text class="label" x="4697" y="3966">r$ff$mux_51</text>
+            <circle class="pin" cx="4688" cy="3977" r="3" data-net="r$ff$mux_32" />
+            <text class="pinname" x="4695" y="3980">a</text>
+            <circle class="pin" cx="4688" cy="3995" r="3" data-net="r$ff$mux_16" />
+            <text class="pinname" x="4695" y="3998">b</text>
+            <circle class="pin" cx="4688" cy="4013" r="3" data-net="we" />
+            <text class="pinname" x="4695" y="4016">s</text>
+            <circle class="pin" cx="4784" cy="3977" r="3" data-net="r$ff$mux_51" />
+            <text class="pinname" x="4777" y="3980" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="75" data-search="a b d[0] mux r$ff$eq_13 r$ff$mux_51 r$ff$mux_52 s y" data-cx="5012" data-cy="3298">
+            <rect class="box" x="4964" y="3251" width="96" height="94" rx="4" />
+            <text class="kind" x="4973" y="3268">mux</text>
+            <text class="label" x="4973" y="3279">r$ff$mux_52</text>
+            <circle class="pin" cx="4964" cy="3290" r="3" data-net="r$ff$mux_51" />
+            <text class="pinname" x="4971" y="3293">a</text>
+            <circle class="pin" cx="4964" cy="3308" r="3" />
+            <text class="pinname" x="4971" y="3311">b</text>
+            <circle class="pin" cx="4964" cy="3326" r="3" data-net="r$ff$eq_13" />
+            <text class="pinname" x="4971" y="3329">s</text>
+            <circle class="pin" cx="5060" cy="3290" r="3" data-net="r$ff$mux_52" />
+            <text class="pinname" x="5053" y="3293" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="76" data-search="a b mux r$ff$eq r$ff$mux_33 r$ff$mux_53 s y {r$ff$mux_33[15:14], r$ff$m…" data-cx="5276" data-cy="2346">
+            <rect class="box" x="5228" y="2299" width="96" height="94" rx="4" />
+            <text class="kind" x="5237" y="2316">mux</text>
+            <text class="label" x="5237" y="2327">r$ff$mux_53</text>
+            <circle class="pin" cx="5228" cy="2338" r="3" data-net="r$ff$mux_33" />
+            <text class="pinname" x="5235" y="2341">a</text>
+            <circle class="pin" cx="5228" cy="2356" r="3" />
+            <text class="pinname" x="5235" y="2359">b</text>
+            <circle class="pin" cx="5228" cy="2374" r="3" data-net="r$ff$eq" />
+            <text class="pinname" x="5235" y="2377">s</text>
+            <circle class="pin" cx="5324" cy="2338" r="3" data-net="r$ff$mux_53" />
+            <text class="pinname" x="5317" y="2341" text-anchor="end">y</text>
+          </g>
+          <g class="node seq" data-detail="77" data-search="clk d dff pos q r r$ff r$ff$mux_53" data-cx="824" data-cy="3200">
+            <rect class="box" x="776" y="3162" width="96" height="76" rx="4" />
+            <text class="kind" x="785" y="3179">dff pos</text>
+            <text class="label" x="785" y="3190">r$ff</text>
+            <circle class="pin" cx="776" cy="3201" r="3" data-net="clk" />
+            <polyline class="clkmark" points="779,3196 786,3201 779,3206" />
+            <text class="pinname" x="790" y="3204">clk</text>
+            <circle class="pin" cx="776" cy="3219" r="3" data-net="r$ff$mux_53" />
+            <text class="pinname" x="783" y="3222">d</text>
+            <circle class="pin" cx="872" cy="3201" r="3" data-net="r" />
+            <text class="pinname" x="865" y="3204" text-anchor="end">q</text>
+          </g>
+          <g class="node konst" data-detail="78" data-search="4&#39;d2" data-cx="95" data-cy="1789">
+            <polygon class="box" points="102,1778 122,1789 102,1800" />
+            <text class="kind" x="70" y="1793">4&#39;d2</text>
+            <circle class="pin" cx="122" cy="1789" r="3" />
+          </g>
+          <g class="node konst" data-detail="79" data-search="2&#39;d3" data-cx="95" data-cy="1877">
+            <polygon class="box" points="102,1866 122,1877 102,1888" />
+            <text class="kind" x="70" y="1881">2&#39;d3</text>
+            <circle class="pin" cx="122" cy="1877" r="3" />
+          </g>
+          <g class="node konst" data-detail="80" data-search="2&#39;d2" data-cx="95" data-cy="1921">
+            <polygon class="box" points="102,1910 122,1921 102,1932" />
+            <text class="kind" x="70" y="1925">2&#39;d2</text>
+            <circle class="pin" cx="122" cy="1921" r="3" />
+          </g>
+          <g class="node konst" data-detail="81" data-search="2&#39;d1" data-cx="95" data-cy="2621">
+            <polygon class="box" points="102,2610 122,2621 102,2632" />
+            <text class="kind" x="70" y="2625">2&#39;d1</text>
+            <circle class="pin" cx="122" cy="2621" r="3" />
+          </g>
+          <g class="node konst" data-detail="82" data-search="2&#39;d0" data-cx="95" data-cy="2665">
+            <polygon class="box" points="102,2654 122,2665 102,2676" />
+            <text class="kind" x="70" y="2669">2&#39;d0</text>
+            <circle class="pin" cx="122" cy="2665" r="3" />
+          </g>
+          <g class="node konst" data-detail="83" data-search="2&#39;d3" data-cx="95" data-cy="1965">
+            <polygon class="box" points="102,1954 122,1965 102,1976" />
+            <text class="kind" x="70" y="1969">2&#39;d3</text>
+            <circle class="pin" cx="122" cy="1965" r="3" />
+          </g>
+          <g class="node konst" data-detail="84" data-search="2&#39;d2" data-cx="95" data-cy="2009">
+            <polygon class="box" points="102,1998 122,2009 102,2020" />
+            <text class="kind" x="70" y="2013">2&#39;d2</text>
+            <circle class="pin" cx="122" cy="2009" r="3" />
+          </g>
+          <g class="node konst" data-detail="85" data-search="2&#39;d1" data-cx="95" data-cy="2373">
+            <polygon class="box" points="102,2362 122,2373 102,2384" />
+            <text class="kind" x="70" y="2377">2&#39;d1</text>
+            <circle class="pin" cx="122" cy="2373" r="3" />
+          </g>
+          <g class="node konst" data-detail="86" data-search="2&#39;d0" data-cx="95" data-cy="2497">
+            <polygon class="box" points="102,2486 122,2497 102,2508" />
+            <text class="kind" x="70" y="2501">2&#39;d0</text>
+            <circle class="pin" cx="122" cy="2497" r="3" />
+          </g>
+          <g class="node konst" data-detail="87" data-search="2&#39;d3" data-cx="95" data-cy="1833">
+            <polygon class="box" points="102,1822 122,1833 102,1844" />
+            <text class="kind" x="70" y="1837">2&#39;d3</text>
+            <circle class="pin" cx="122" cy="1833" r="3" />
+          </g>
+          <g class="node konst" data-detail="88" data-search="2&#39;d2" data-cx="95" data-cy="2709">
+            <polygon class="box" points="102,2698 122,2709 102,2720" />
+            <text class="kind" x="70" y="2713">2&#39;d2</text>
+            <circle class="pin" cx="122" cy="2709" r="3" />
+          </g>
+          <g class="node konst" data-detail="89" data-search="2&#39;d1" data-cx="95" data-cy="2753">
+            <polygon class="box" points="102,2742 122,2753 102,2764" />
+            <text class="kind" x="70" y="2757">2&#39;d1</text>
+            <circle class="pin" cx="122" cy="2753" r="3" />
+          </g>
+          <g class="node konst" data-detail="90" data-search="2&#39;d0" data-cx="95" data-cy="2797">
+            <polygon class="box" points="102,2786 122,2797 102,2808" />
+            <text class="kind" x="70" y="2801">2&#39;d0</text>
+            <circle class="pin" cx="122" cy="2797" r="3" />
+          </g>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <aside class="info" id="info">
+    <p id="info-empty" class="none">Click a cell to see its parameters and where it came from.</p>
+    <div class="detail" id="d0" hidden="hidden">
+      <h3>clk</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>clk</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L82">part_write.cells.rtl:82:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d1" hidden="hidden">
+      <h3>we</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>we</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out we</dt>
+        <dd>we</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L83">part_write.cells.rtl:83:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d2" hidden="hidden">
+      <h3>i</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>i</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out i</dt>
+        <dd>i</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L84">part_write.cells.rtl:84:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d3" hidden="hidden">
+      <h3>j</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>j</dd>
+        <dt>type</dt>
+        <dd>u2</dd>
+        <dt>out j</dt>
+        <dd>j</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L85">part_write.cells.rtl:85:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d4" hidden="hidden">
+      <h3>k</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>k</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out k</dt>
+        <dd>k</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L86">part_write.cells.rtl:86:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d5" hidden="hidden">
+      <h3>d</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>d</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out d</dt>
+        <dd>d</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L87">part_write.cells.rtl:87:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d6" hidden="hidden">
+      <h3>r</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>r</dd>
+        <dt>type</dt>
+        <dd>u16</dd>
+        <dt>attr init</dt>
+        <dd>16&#39;h0000</dd>
+        <dt>in r</dt>
+        <dd>r</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L88">part_write.cells.rtl:88:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d7" hidden="hidden">
+      <h3>r$ff$eq</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>k</dd>
+        <dt>in b</dt>
+        <dd>4&#39;d2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L89">part_write.cells.rtl:89:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d8" hidden="hidden">
+      <h3>r$ff$eq_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>i[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L90">part_write.cells.rtl:90:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d9" hidden="hidden">
+      <h3>r$ff$mux</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[15]</dd>
+        <dt>in b</dt>
+        <dd>d[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L91">part_write.cells.rtl:91:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d10" hidden="hidden">
+      <h3>r$ff$mux_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[14]</dd>
+        <dt>in b</dt>
+        <dd>d[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L92">part_write.cells.rtl:92:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d11" hidden="hidden">
+      <h3>r$ff$mux_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[13]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L93">part_write.cells.rtl:93:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d12" hidden="hidden">
+      <h3>r$ff$mux_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[12]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_4</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L94">part_write.cells.rtl:94:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d13" hidden="hidden">
+      <h3>r$ff$eq_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>i[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L95">part_write.cells.rtl:95:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d14" hidden="hidden">
+      <h3>r$ff$mux_5</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[11]</dd>
+        <dt>in b</dt>
+        <dd>d[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_5</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L96">part_write.cells.rtl:96:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d15" hidden="hidden">
+      <h3>r$ff$mux_6</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[10]</dd>
+        <dt>in b</dt>
+        <dd>d[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_6</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L97">part_write.cells.rtl:97:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d16" hidden="hidden">
+      <h3>r$ff$mux_7</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[9]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_7</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L98">part_write.cells.rtl:98:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d17" hidden="hidden">
+      <h3>r$ff$mux_8</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[8]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_8</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L99">part_write.cells.rtl:99:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d18" hidden="hidden">
+      <h3>r$ff$eq_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>i[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_4</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L100">part_write.cells.rtl:100:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d19" hidden="hidden">
+      <h3>r$ff$mux_9</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[7]</dd>
+        <dt>in b</dt>
+        <dd>d[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_4</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_9</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L101">part_write.cells.rtl:101:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d20" hidden="hidden">
+      <h3>r$ff$mux_10</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[6]</dd>
+        <dt>in b</dt>
+        <dd>d[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_4</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_10</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L102">part_write.cells.rtl:102:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d21" hidden="hidden">
+      <h3>r$ff$mux_11</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[5]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_4</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_11</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L103">part_write.cells.rtl:103:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d22" hidden="hidden">
+      <h3>r$ff$mux_12</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[4]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_4</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_12</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L104">part_write.cells.rtl:104:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d23" hidden="hidden">
+      <h3>r$ff$eq_5</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>i[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_5</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L105">part_write.cells.rtl:105:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d24" hidden="hidden">
+      <h3>r$ff$mux_13</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[3]</dd>
+        <dt>in b</dt>
+        <dd>d[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_5</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_13</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L106">part_write.cells.rtl:106:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d25" hidden="hidden">
+      <h3>r$ff$mux_14</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[2]</dd>
+        <dt>in b</dt>
+        <dd>d[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_5</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_14</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L107">part_write.cells.rtl:107:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d26" hidden="hidden">
+      <h3>r$ff$mux_15</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[1]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_5</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_15</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L108">part_write.cells.rtl:108:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d27" hidden="hidden">
+      <h3>r$ff$mux_16</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[0]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_5</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_16</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L109">part_write.cells.rtl:109:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d28" hidden="hidden">
+      <h3>r$ff$eq_6</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>j</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_6</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L110">part_write.cells.rtl:110:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d29" hidden="hidden">
+      <h3>r$ff$not</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>not</dd>
+        <dt>cell</dt>
+        <dd>not</dd>
+        <dt>in a</dt>
+        <dd>d</dd>
+        <dt>out y</dt>
+        <dd>r$ff$not</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L111">part_write.cells.rtl:111:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d30" hidden="hidden">
+      <h3>r$ff$mux_17</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[15]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_6</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_17</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L112">part_write.cells.rtl:112:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d31" hidden="hidden">
+      <h3>r$ff$not_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>not</dd>
+        <dt>cell</dt>
+        <dd>not</dd>
+        <dt>in a</dt>
+        <dd>d[2:0]</dd>
+        <dt>out y</dt>
+        <dd>r$ff$not_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L113">part_write.cells.rtl:113:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d32" hidden="hidden">
+      <h3>r$ff$mux_18</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[14]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_2[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_6</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_18</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L114">part_write.cells.rtl:114:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d33" hidden="hidden">
+      <h3>r$ff$not_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>not</dd>
+        <dt>cell</dt>
+        <dd>not</dd>
+        <dt>in a</dt>
+        <dd>d[1:0]</dd>
+        <dt>out y</dt>
+        <dd>r$ff$not_3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L115">part_write.cells.rtl:115:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d34" hidden="hidden">
+      <h3>r$ff$mux_19</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[13]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_3[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_6</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_19</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L116">part_write.cells.rtl:116:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d35" hidden="hidden">
+      <h3>r$ff$not_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>not</dd>
+        <dt>cell</dt>
+        <dd>not</dd>
+        <dt>in a</dt>
+        <dd>d[0]</dd>
+        <dt>out y</dt>
+        <dd>r$ff$not_4</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L117">part_write.cells.rtl:117:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d36" hidden="hidden">
+      <h3>r$ff$mux_20</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[12]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_4</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_6</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_20</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L118">part_write.cells.rtl:118:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d37" hidden="hidden">
+      <h3>r$ff$eq_7</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>j</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_7</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L119">part_write.cells.rtl:119:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d38" hidden="hidden">
+      <h3>r$ff$mux_21</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[11]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_7</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_21</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L120">part_write.cells.rtl:120:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d39" hidden="hidden">
+      <h3>r$ff$mux_22</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[10]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_2[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_7</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_22</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L121">part_write.cells.rtl:121:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d40" hidden="hidden">
+      <h3>r$ff$mux_23</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[9]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_3[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_7</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_23</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L122">part_write.cells.rtl:122:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d41" hidden="hidden">
+      <h3>r$ff$mux_24</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[8]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_4</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_7</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_24</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L123">part_write.cells.rtl:123:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d42" hidden="hidden">
+      <h3>r$ff$eq_8</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>j</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_8</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L124">part_write.cells.rtl:124:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d43" hidden="hidden">
+      <h3>r$ff$mux_25</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[7]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_8</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_25</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L125">part_write.cells.rtl:125:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d44" hidden="hidden">
+      <h3>r$ff$mux_26</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[6]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_2[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_8</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_26</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L126">part_write.cells.rtl:126:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d45" hidden="hidden">
+      <h3>r$ff$mux_27</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[5]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_3[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_8</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_27</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L127">part_write.cells.rtl:127:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d46" hidden="hidden">
+      <h3>r$ff$mux_28</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[4]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_4</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_8</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_28</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L128">part_write.cells.rtl:128:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d47" hidden="hidden">
+      <h3>r$ff$eq_9</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>j</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_9</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L129">part_write.cells.rtl:129:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d48" hidden="hidden">
+      <h3>r$ff$mux_29</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[3]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not[3]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_9</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_29</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L130">part_write.cells.rtl:130:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d49" hidden="hidden">
+      <h3>r$ff$mux_30</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[2]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_2[2]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_9</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_30</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L131">part_write.cells.rtl:131:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d50" hidden="hidden">
+      <h3>r$ff$mux_31</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[1]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_3[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_9</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_31</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L132">part_write.cells.rtl:132:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d51" hidden="hidden">
+      <h3>r$ff$mux_32</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r[0]</dd>
+        <dt>in b</dt>
+        <dd>r$ff$not_4</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_9</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_32</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L133">part_write.cells.rtl:133:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d52" hidden="hidden">
+      <h3>r$ff$mux_33</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_33</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L134">part_write.cells.rtl:134:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d53" hidden="hidden">
+      <h3>r$ff$eq_10</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>k[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_10</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L135">part_write.cells.rtl:135:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d54" hidden="hidden">
+      <h3>r$ff$mux_34</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_34</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L136">part_write.cells.rtl:136:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d55" hidden="hidden">
+      <h3>r$ff$mux_35</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_34[13]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_10</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_35</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L137">part_write.cells.rtl:137:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d56" hidden="hidden">
+      <h3>r$ff$mux_36</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_36</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L138">part_write.cells.rtl:138:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d57" hidden="hidden">
+      <h3>r$ff$mux_37</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_36[12]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_10</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_37</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L139">part_write.cells.rtl:139:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d58" hidden="hidden">
+      <h3>r$ff$mux_38</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_38</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L140">part_write.cells.rtl:140:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d59" hidden="hidden">
+      <h3>r$ff$eq_11</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>k[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_11</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L141">part_write.cells.rtl:141:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d60" hidden="hidden">
+      <h3>r$ff$mux_39</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_39</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L142">part_write.cells.rtl:142:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d61" hidden="hidden">
+      <h3>r$ff$mux_40</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_39[9]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_11</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_40</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L143">part_write.cells.rtl:143:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d62" hidden="hidden">
+      <h3>r$ff$mux_41</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_41</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L144">part_write.cells.rtl:144:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d63" hidden="hidden">
+      <h3>r$ff$mux_42</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_41[8]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_11</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_42</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L145">part_write.cells.rtl:145:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d64" hidden="hidden">
+      <h3>r$ff$mux_43</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_43</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L146">part_write.cells.rtl:146:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d65" hidden="hidden">
+      <h3>r$ff$eq_12</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>k[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_12</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L147">part_write.cells.rtl:147:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d66" hidden="hidden">
+      <h3>r$ff$mux_44</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_44</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L148">part_write.cells.rtl:148:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d67" hidden="hidden">
+      <h3>r$ff$mux_45</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_44[5]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_12</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_45</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L149">part_write.cells.rtl:149:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d68" hidden="hidden">
+      <h3>r$ff$mux_46</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_46</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L150">part_write.cells.rtl:150:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d69" hidden="hidden">
+      <h3>r$ff$mux_47</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_46[4]</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_12</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_47</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L151">part_write.cells.rtl:151:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d70" hidden="hidden">
+      <h3>r$ff$mux_48</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_48</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L152">part_write.cells.rtl:152:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d71" hidden="hidden">
+      <h3>r$ff$eq_13</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>k[1:0]</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out y</dt>
+        <dd>r$ff$eq_13</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L153">part_write.cells.rtl:153:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d72" hidden="hidden">
+      <h3>r$ff$mux_49</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>{r$ff$mux_17, r$ff$mux_18, …</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux, r$ff$mux_2, r$ff…</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_49</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L154">part_write.cells.rtl:154:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d73" hidden="hidden">
+      <h3>r$ff$mux_50</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_49[1]</dd>
+        <dt>in b</dt>
+        <dd>d[1]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_13</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_50</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L155">part_write.cells.rtl:155:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d74" hidden="hidden">
+      <h3>r$ff$mux_51</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_32</dd>
+        <dt>in b</dt>
+        <dd>r$ff$mux_16</dd>
+        <dt>in s</dt>
+        <dd>we</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_51</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L156">part_write.cells.rtl:156:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d75" hidden="hidden">
+      <h3>r$ff$mux_52</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_51</dd>
+        <dt>in b</dt>
+        <dd>d[0]</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq_13</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_52</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L157">part_write.cells.rtl:157:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d76" hidden="hidden">
+      <h3>r$ff$mux_53</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>r$ff$mux_33</dd>
+        <dt>in b</dt>
+        <dd>{r$ff$mux_33[15:14], r$ff$m…</dd>
+        <dt>in s</dt>
+        <dd>r$ff$eq</dd>
+        <dt>out y</dt>
+        <dd>r$ff$mux_53</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L158">part_write.cells.rtl:158:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d77" hidden="hidden">
+      <h3>r$ff</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>dff pos</dd>
+        <dt>cell</dt>
+        <dd>dff</dd>
+        <dt>clock</dt>
+        <dd>posedge</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+        <dt>in d</dt>
+        <dd>r$ff$mux_53</dd>
+        <dt>out q</dt>
+        <dd>r</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L159">part_write.cells.rtl:159:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d78" hidden="hidden">
+      <h3>4&#39;d2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>4&#39;d2</dd>
+        <dt>constant</dt>
+        <dd>4&#39;d2</dd>
+        <dt>out </dt>
+        <dd>4&#39;d2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L89">part_write.cells.rtl:89:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d79" hidden="hidden">
+      <h3>2&#39;d3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d3</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out </dt>
+        <dd>2&#39;d3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L90">part_write.cells.rtl:90:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d80" hidden="hidden">
+      <h3>2&#39;d2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d2</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out </dt>
+        <dd>2&#39;d2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L95">part_write.cells.rtl:95:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d81" hidden="hidden">
+      <h3>2&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out </dt>
+        <dd>2&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L100">part_write.cells.rtl:100:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d82" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L105">part_write.cells.rtl:105:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d83" hidden="hidden">
+      <h3>2&#39;d3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d3</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out </dt>
+        <dd>2&#39;d3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L110">part_write.cells.rtl:110:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d84" hidden="hidden">
+      <h3>2&#39;d2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d2</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out </dt>
+        <dd>2&#39;d2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L119">part_write.cells.rtl:119:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d85" hidden="hidden">
+      <h3>2&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out </dt>
+        <dd>2&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L124">part_write.cells.rtl:124:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d86" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L129">part_write.cells.rtl:129:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d87" hidden="hidden">
+      <h3>2&#39;d3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d3</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d3</dd>
+        <dt>out </dt>
+        <dd>2&#39;d3</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L135">part_write.cells.rtl:135:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d88" hidden="hidden">
+      <h3>2&#39;d2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d2</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out </dt>
+        <dd>2&#39;d2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L141">part_write.cells.rtl:141:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d89" hidden="hidden">
+      <h3>2&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out </dt>
+        <dd>2&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L147">part_write.cells.rtl:147:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d90" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-part_write.cells.rtl.html#L153">part_write.cells.rtl:153:3</a>
+      </p>
+    </div>
+  </aside>
+</div>
+<p class="legend">
+  <span class="l-comb">combinational</span>
+  <span class="l-seq">state</span>
+  <span class="l-inst">instance or process</span>
+  <span class="l-port">port</span>
+  <span>71 cells, 1 holding state, 533 wires</span>
+</p>
+    </main>
+    <script>
+(function () {
+  var svg = document.getElementById('schematic');
+  if (!svg) { return; }
+  var view = document.getElementById('view');
+  var info = document.getElementById('info');
+  var tx = 0, ty = 0, scale = 1;
+  function apply() {
+    view.setAttribute('transform', 'translate(' + tx.toFixed(2) + ' ' + ty.toFixed(2) +
+      ') scale(' + scale.toFixed(4) + ')');
+  }
+  function zoom(factor, cx, cy) {
+    var next = Math.min(8, Math.max(0.05, scale * factor));
+    factor = next / scale;
+    tx = cx - (cx - tx) * factor;
+    ty = cy - (cy - ty) * factor;
+    scale = next;
+    apply();
+  }
+  function centre() {
+    var r = svg.getBoundingClientRect();
+    return [r.width / 2, r.height / 2];
+  }
+  var down = false, lastX = 0, lastY = 0, moved = 0;
+  svg.addEventListener('pointerdown', function (e) {
+    down = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    svg.setPointerCapture(e.pointerId); svg.style.cursor = 'grabbing';
+  });
+  svg.addEventListener('pointermove', function (e) {
+    if (!down) { return; }
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; lastX = e.clientX; lastY = e.clientY;
+    apply();
+  });
+  function release(e) {
+    down = false; svg.style.cursor = 'grab';
+    if (svg.hasPointerCapture(e.pointerId)) { svg.releasePointerCapture(e.pointerId); }
+  }
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = svg.getBoundingClientRect();
+    zoom(e.deltaY > 0 ? 1 / 1.12 : 1.12, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  var netted = svg.querySelectorAll('[data-net]');
+  var nodes = svg.querySelectorAll('.node');
+  for (var i = 0; i !== netted.length; i++) { netted[i].nodeOwner = netted[i].closest('.node'); }
+
+  function highlight(net) {
+    for (var j = 0; j !== nodes.length; j++) { nodes[j].classList.remove('hl-node'); }
+    for (var k = 0; k !== netted.length; k++) {
+      var el = netted[k];
+      if (net !== null && el.getAttribute('data-net') === net) {
+        el.classList.add('hl');
+        if (el.nodeOwner) { el.nodeOwner.classList.add('hl-node'); }
+      } else {
+        el.classList.remove('hl');
+      }
+    }
+  }
+  svg.addEventListener('pointerover', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-net]') : null;
+    highlight(t ? t.getAttribute('data-net') : null);
+  });
+  svg.addEventListener('pointerleave', function () { highlight(null); });
+
+  var selected = null;
+  function select(node) {
+    if (selected) { selected.classList.remove('sel'); }
+    selected = node;
+    var panes = info ? info.querySelectorAll('.detail') : [];
+    for (var j = 0; j !== panes.length; j++) { panes[j].hidden = true; }
+    var empty = document.getElementById('info-empty');
+    if (!node) { if (empty) { empty.hidden = false; } return; }
+    node.classList.add('sel');
+    if (empty) { empty.hidden = true; }
+    var pane = document.getElementById('d' + node.getAttribute('data-detail'));
+    if (pane) { pane.hidden = false; }
+  }
+  svg.addEventListener('click', function (e) {
+    if (moved > 4) { return; }
+    select(e.target.closest ? e.target.closest('.node') : null);
+  });
+
+  var search = document.getElementById('search');
+  if (search) {
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      var first = null;
+      for (var j = 0; j !== nodes.length; j++) {
+        var hay = nodes[j].getAttribute('data-search') || '';
+        var hit = q !== '' && hay.indexOf(q) !== -1;
+        nodes[j].classList.toggle('found', hit);
+        if (hit && first === null) { first = nodes[j]; }
+      }
+      if (first) {
+        var c = centre();
+        tx = c[0] - parseFloat(first.getAttribute('data-cx')) * scale;
+        ty = c[1] - parseFloat(first.getAttribute('data-cy')) * scale;
+        apply();
+      }
+    });
+  }
+  function reset() { tx = 0; ty = 0; scale = 1; apply(); }
+  var zin = document.getElementById('zoom-in');
+  var zout = document.getElementById('zoom-out');
+  var zfit = document.getElementById('zoom-reset');
+  if (zin) { zin.addEventListener('click', function () { var c = centre(); zoom(1.25, c[0], c[1]); }); }
+  if (zout) { zout.addEventListener('click', function () { var c = centre(); zoom(0.8, c[0], c[1]); }); }
+  if (zfit) { zfit.addEventListener('click', reset); }
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'INPUT') { return; }
+    var c = centre();
+    if (e.key === '+' || e.key === '=') { zoom(1.25, c[0], c[1]); }
+    else if (e.key === '-') { zoom(0.8, c[0], c[1]); }
+    else if (e.key === '0') { reset(); }
+    else if (e.key === 'Escape') { select(null); highlight(null); }
+  });
+  apply();
+})();
+
+    </script>
+  </body>
+</html>

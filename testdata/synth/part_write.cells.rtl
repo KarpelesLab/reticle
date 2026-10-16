@@ -1,0 +1,160 @@
+top part_write
+
+module part_write
+  net %clk u1 wire
+  net %we u1 wire
+  net %i u4 wire
+  net %j u2 wire
+  net %k u4 wire
+  net %d u4 wire
+  attr init = 16'd0
+  net %r u16 wire
+  net %r$ff$eq u1 wire
+  net %r$ff$eq_2 u1 wire
+  net %r$ff$mux u1 wire
+  net %r$ff$mux_2 u1 wire
+  net %r$ff$mux_3 u1 wire
+  net %r$ff$mux_4 u1 wire
+  net %r$ff$eq_3 u1 wire
+  net %r$ff$mux_5 u1 wire
+  net %r$ff$mux_6 u1 wire
+  net %r$ff$mux_7 u1 wire
+  net %r$ff$mux_8 u1 wire
+  net %r$ff$eq_4 u1 wire
+  net %r$ff$mux_9 u1 wire
+  net %r$ff$mux_10 u1 wire
+  net %r$ff$mux_11 u1 wire
+  net %r$ff$mux_12 u1 wire
+  net %r$ff$eq_5 u1 wire
+  net %r$ff$mux_13 u1 wire
+  net %r$ff$mux_14 u1 wire
+  net %r$ff$mux_15 u1 wire
+  net %r$ff$mux_16 u1 wire
+  net %r$ff$eq_6 u1 wire
+  net %r$ff$not u4 wire
+  net %r$ff$mux_17 u1 wire
+  net %r$ff$not_2 u3 wire
+  net %r$ff$mux_18 u1 wire
+  net %r$ff$not_3 u2 wire
+  net %r$ff$mux_19 u1 wire
+  net %r$ff$not_4 u1 wire
+  net %r$ff$mux_20 u1 wire
+  net %r$ff$eq_7 u1 wire
+  net %r$ff$mux_21 u1 wire
+  net %r$ff$mux_22 u1 wire
+  net %r$ff$mux_23 u1 wire
+  net %r$ff$mux_24 u1 wire
+  net %r$ff$eq_8 u1 wire
+  net %r$ff$mux_25 u1 wire
+  net %r$ff$mux_26 u1 wire
+  net %r$ff$mux_27 u1 wire
+  net %r$ff$mux_28 u1 wire
+  net %r$ff$eq_9 u1 wire
+  net %r$ff$mux_29 u1 wire
+  net %r$ff$mux_30 u1 wire
+  net %r$ff$mux_31 u1 wire
+  net %r$ff$mux_32 u1 wire
+  net %r$ff$mux_33 u16 wire
+  net %r$ff$eq_10 u1 wire
+  net %r$ff$mux_34 u14 wire
+  net %r$ff$mux_35 u1 wire
+  net %r$ff$mux_36 u13 wire
+  net %r$ff$mux_37 u1 wire
+  net %r$ff$mux_38 u12 wire
+  net %r$ff$eq_11 u1 wire
+  net %r$ff$mux_39 u10 wire
+  net %r$ff$mux_40 u1 wire
+  net %r$ff$mux_41 u9 wire
+  net %r$ff$mux_42 u1 wire
+  net %r$ff$mux_43 u8 wire
+  net %r$ff$eq_12 u1 wire
+  net %r$ff$mux_44 u6 wire
+  net %r$ff$mux_45 u1 wire
+  net %r$ff$mux_46 u5 wire
+  net %r$ff$mux_47 u1 wire
+  net %r$ff$mux_48 u4 wire
+  net %r$ff$eq_13 u1 wire
+  net %r$ff$mux_49 u2 wire
+  net %r$ff$mux_50 u1 wire
+  net %r$ff$mux_51 u1 wire
+  net %r$ff$mux_52 u1 wire
+  net %r$ff$mux_53 u16 wire
+  port clk in %clk
+  port we in %we
+  port i in %i
+  port j in %j
+  port k in %k
+  port d in %d
+  port r out %r
+  cell r$ff$eq eq (a=%k, b=4'd2) -> (y=%r$ff$eq)
+  cell r$ff$eq_2 eq (a=%i[1:0], b=2'd3) -> (y=%r$ff$eq_2)
+  cell r$ff$mux mux (a=%r[15:15], b=%d[3:3], s=%r$ff$eq_2) -> (y=%r$ff$mux)
+  cell r$ff$mux_2 mux (a=%r[14:14], b=%d[2:2], s=%r$ff$eq_2) -> (y=%r$ff$mux_2)
+  cell r$ff$mux_3 mux (a=%r[13:13], b=%d[1:1], s=%r$ff$eq_2) -> (y=%r$ff$mux_3)
+  cell r$ff$mux_4 mux (a=%r[12:12], b=%d[0:0], s=%r$ff$eq_2) -> (y=%r$ff$mux_4)
+  cell r$ff$eq_3 eq (a=%i[1:0], b=2'd2) -> (y=%r$ff$eq_3)
+  cell r$ff$mux_5 mux (a=%r[11:11], b=%d[3:3], s=%r$ff$eq_3) -> (y=%r$ff$mux_5)
+  cell r$ff$mux_6 mux (a=%r[10:10], b=%d[2:2], s=%r$ff$eq_3) -> (y=%r$ff$mux_6)
+  cell r$ff$mux_7 mux (a=%r[9:9], b=%d[1:1], s=%r$ff$eq_3) -> (y=%r$ff$mux_7)
+  cell r$ff$mux_8 mux (a=%r[8:8], b=%d[0:0], s=%r$ff$eq_3) -> (y=%r$ff$mux_8)
+  cell r$ff$eq_4 eq (a=%i[1:0], b=2'd1) -> (y=%r$ff$eq_4)
+  cell r$ff$mux_9 mux (a=%r[7:7], b=%d[3:3], s=%r$ff$eq_4) -> (y=%r$ff$mux_9)
+  cell r$ff$mux_10 mux (a=%r[6:6], b=%d[2:2], s=%r$ff$eq_4) -> (y=%r$ff$mux_10)
+  cell r$ff$mux_11 mux (a=%r[5:5], b=%d[1:1], s=%r$ff$eq_4) -> (y=%r$ff$mux_11)
+  cell r$ff$mux_12 mux (a=%r[4:4], b=%d[0:0], s=%r$ff$eq_4) -> (y=%r$ff$mux_12)
+  cell r$ff$eq_5 eq (a=%i[1:0], b=2'd0) -> (y=%r$ff$eq_5)
+  cell r$ff$mux_13 mux (a=%r[3:3], b=%d[3:3], s=%r$ff$eq_5) -> (y=%r$ff$mux_13)
+  cell r$ff$mux_14 mux (a=%r[2:2], b=%d[2:2], s=%r$ff$eq_5) -> (y=%r$ff$mux_14)
+  cell r$ff$mux_15 mux (a=%r[1:1], b=%d[1:1], s=%r$ff$eq_5) -> (y=%r$ff$mux_15)
+  cell r$ff$mux_16 mux (a=%r[0:0], b=%d[0:0], s=%r$ff$eq_5) -> (y=%r$ff$mux_16)
+  cell r$ff$eq_6 eq (a=%j, b=2'd3) -> (y=%r$ff$eq_6)
+  cell r$ff$not not (a=%d) -> (y=%r$ff$not)
+  cell r$ff$mux_17 mux (a=%r[15:15], b=%r$ff$not[3:3], s=%r$ff$eq_6) -> (y=%r$ff$mux_17)
+  cell r$ff$not_2 not (a=%d[2:0]) -> (y=%r$ff$not_2)
+  cell r$ff$mux_18 mux (a=%r[14:14], b=%r$ff$not_2[2:2], s=%r$ff$eq_6) -> (y=%r$ff$mux_18)
+  cell r$ff$not_3 not (a=%d[1:0]) -> (y=%r$ff$not_3)
+  cell r$ff$mux_19 mux (a=%r[13:13], b=%r$ff$not_3[1:1], s=%r$ff$eq_6) -> (y=%r$ff$mux_19)
+  cell r$ff$not_4 not (a=%d[0:0]) -> (y=%r$ff$not_4)
+  cell r$ff$mux_20 mux (a=%r[12:12], b=%r$ff$not_4, s=%r$ff$eq_6) -> (y=%r$ff$mux_20)
+  cell r$ff$eq_7 eq (a=%j, b=2'd2) -> (y=%r$ff$eq_7)
+  cell r$ff$mux_21 mux (a=%r[11:11], b=%r$ff$not[3:3], s=%r$ff$eq_7) -> (y=%r$ff$mux_21)
+  cell r$ff$mux_22 mux (a=%r[10:10], b=%r$ff$not_2[2:2], s=%r$ff$eq_7) -> (y=%r$ff$mux_22)
+  cell r$ff$mux_23 mux (a=%r[9:9], b=%r$ff$not_3[1:1], s=%r$ff$eq_7) -> (y=%r$ff$mux_23)
+  cell r$ff$mux_24 mux (a=%r[8:8], b=%r$ff$not_4, s=%r$ff$eq_7) -> (y=%r$ff$mux_24)
+  cell r$ff$eq_8 eq (a=%j, b=2'd1) -> (y=%r$ff$eq_8)
+  cell r$ff$mux_25 mux (a=%r[7:7], b=%r$ff$not[3:3], s=%r$ff$eq_8) -> (y=%r$ff$mux_25)
+  cell r$ff$mux_26 mux (a=%r[6:6], b=%r$ff$not_2[2:2], s=%r$ff$eq_8) -> (y=%r$ff$mux_26)
+  cell r$ff$mux_27 mux (a=%r[5:5], b=%r$ff$not_3[1:1], s=%r$ff$eq_8) -> (y=%r$ff$mux_27)
+  cell r$ff$mux_28 mux (a=%r[4:4], b=%r$ff$not_4, s=%r$ff$eq_8) -> (y=%r$ff$mux_28)
+  cell r$ff$eq_9 eq (a=%j, b=2'd0) -> (y=%r$ff$eq_9)
+  cell r$ff$mux_29 mux (a=%r[3:3], b=%r$ff$not[3:3], s=%r$ff$eq_9) -> (y=%r$ff$mux_29)
+  cell r$ff$mux_30 mux (a=%r[2:2], b=%r$ff$not_2[2:2], s=%r$ff$eq_9) -> (y=%r$ff$mux_30)
+  cell r$ff$mux_31 mux (a=%r[1:1], b=%r$ff$not_3[1:1], s=%r$ff$eq_9) -> (y=%r$ff$mux_31)
+  cell r$ff$mux_32 mux (a=%r[0:0], b=%r$ff$not_4, s=%r$ff$eq_9) -> (y=%r$ff$mux_32)
+  cell r$ff$mux_33 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}, b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}, s=%we) -> (y=%r$ff$mux_33)
+  cell r$ff$eq_10 eq (a=%k[1:0], b=2'd3) -> (y=%r$ff$eq_10)
+  cell r$ff$mux_34 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[13:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[13:0], s=%we) -> (y=%r$ff$mux_34)
+  cell r$ff$mux_35 mux (a=%r$ff$mux_34[13:13], b=%d[1:1], s=%r$ff$eq_10) -> (y=%r$ff$mux_35)
+  cell r$ff$mux_36 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[12:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[12:0], s=%we) -> (y=%r$ff$mux_36)
+  cell r$ff$mux_37 mux (a=%r$ff$mux_36[12:12], b=%d[0:0], s=%r$ff$eq_10) -> (y=%r$ff$mux_37)
+  cell r$ff$mux_38 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[11:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[11:0], s=%we) -> (y=%r$ff$mux_38)
+  cell r$ff$eq_11 eq (a=%k[1:0], b=2'd2) -> (y=%r$ff$eq_11)
+  cell r$ff$mux_39 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[9:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[9:0], s=%we) -> (y=%r$ff$mux_39)
+  cell r$ff$mux_40 mux (a=%r$ff$mux_39[9:9], b=%d[1:1], s=%r$ff$eq_11) -> (y=%r$ff$mux_40)
+  cell r$ff$mux_41 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[8:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[8:0], s=%we) -> (y=%r$ff$mux_41)
+  cell r$ff$mux_42 mux (a=%r$ff$mux_41[8:8], b=%d[0:0], s=%r$ff$eq_11) -> (y=%r$ff$mux_42)
+  cell r$ff$mux_43 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[7:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[7:0], s=%we) -> (y=%r$ff$mux_43)
+  cell r$ff$eq_12 eq (a=%k[1:0], b=2'd1) -> (y=%r$ff$eq_12)
+  cell r$ff$mux_44 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[5:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[5:0], s=%we) -> (y=%r$ff$mux_44)
+  cell r$ff$mux_45 mux (a=%r$ff$mux_44[5:5], b=%d[1:1], s=%r$ff$eq_12) -> (y=%r$ff$mux_45)
+  cell r$ff$mux_46 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[4:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[4:0], s=%we) -> (y=%r$ff$mux_46)
+  cell r$ff$mux_47 mux (a=%r$ff$mux_46[4:4], b=%d[0:0], s=%r$ff$eq_12) -> (y=%r$ff$mux_47)
+  cell r$ff$mux_48 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[3:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[3:0], s=%we) -> (y=%r$ff$mux_48)
+  cell r$ff$eq_13 eq (a=%k[1:0], b=2'd0) -> (y=%r$ff$eq_13)
+  cell r$ff$mux_49 mux (a={%r$ff$mux_17, %r$ff$mux_18, %r$ff$mux_19, %r$ff$mux_20, %r$ff$mux_21, %r$ff$mux_22, %r$ff$mux_23, %r$ff$mux_24, %r$ff$mux_25, %r$ff$mux_26, %r$ff$mux_27, %r$ff$mux_28, %r$ff$mux_29, %r$ff$mux_30, %r$ff$mux_31, %r$ff$mux_32}[1:0], b={%r$ff$mux, %r$ff$mux_2, %r$ff$mux_3, %r$ff$mux_4, %r$ff$mux_5, %r$ff$mux_6, %r$ff$mux_7, %r$ff$mux_8, %r$ff$mux_9, %r$ff$mux_10, %r$ff$mux_11, %r$ff$mux_12, %r$ff$mux_13, %r$ff$mux_14, %r$ff$mux_15, %r$ff$mux_16}[1:0], s=%we) -> (y=%r$ff$mux_49)
+  cell r$ff$mux_50 mux (a=%r$ff$mux_49[1:1], b=%d[1:1], s=%r$ff$eq_13) -> (y=%r$ff$mux_50)
+  cell r$ff$mux_51 mux (a=%r$ff$mux_32, b=%r$ff$mux_16, s=%we) -> (y=%r$ff$mux_51)
+  cell r$ff$mux_52 mux (a=%r$ff$mux_51, b=%d[0:0], s=%r$ff$eq_13) -> (y=%r$ff$mux_52)
+  cell r$ff$mux_53 mux (a=%r$ff$mux_33, b={%r$ff$mux_33[15:14], %r$ff$mux_35, %r$ff$mux_37, %r$ff$mux_38[11:10], %r$ff$mux_40, %r$ff$mux_42, %r$ff$mux_43[7:6], %r$ff$mux_45, %r$ff$mux_47, %r$ff$mux_48[3:2], %r$ff$mux_50, %r$ff$mux_52}, s=%r$ff$eq) -> (y=%r$ff$mux_53)
+  cell r$ff dff pos (clk=%clk, d=%r$ff$mux_53) -> (q=%r)
+end

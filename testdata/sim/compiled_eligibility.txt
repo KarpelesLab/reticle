@@ -190,6 +190,15 @@ testdata/synth/mux_tree.rtl
 testdata/synth/mux_tree.synth.rtl
   mux_tree: eligible (6 comb ops, 0 edge ops, 0 registers, 0 bits)
 
+testdata/synth/part_write.cells.rtl
+  part_write: eligible (131 comb ops, 1 edge ops, 1 registers, 16 bits)
+
+testdata/synth/part_write.rtl
+  part_write: eligible (0 comb ops, 38 edge ops, 1 registers, 16 bits)
+
+testdata/synth/part_write.synth.rtl
+  part_write: eligible (0 comb ops, 132 edge ops, 1 registers, 16 bits)
+
 testdata/synth/ram_regread.cells.rtl
   ram_regread: eligible (2 comb ops, 4 edge ops, 1 registers, 8 bits)
 

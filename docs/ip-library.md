@@ -2723,7 +2723,7 @@ exactly what this table is for.
 | `uart` | `uart_baud_div` | (defaults) | ECP5 45F | 20 x CCU2C, 1 x DCCA, 264 x LUT4, 184 x TRELLIS_FF, 52 x TRELLIS_IO | 23 |
 | `uart` | `uart_frame` | CLK_DIV=104 | LUT4 | 21 x dff, 300 x lut | 8 |
 | `uart` | `uart_frame` | CLK_DIV=104 | LUT6 | 21 x dff, 252 x lut | 6 |
-| `uart` | `uart_frame` | CLK_DIV=104 | iCE40 HX1K | 42 x SB_CARRY, 83 x SB_DFFER, 28 x SB_DFFES, 18 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 53 x SB_IO, 342 x SB_LUT4 | 8 |
+| `uart` | `uart_frame` | CLK_DIV=104 | iCE40 HX1K | 42 x SB_CARRY, 83 x SB_DFFER, 28 x SB_DFFES, 18 x SB_DFFR, 2 x SB_DFFS, 1 x SB_GB, 53 x SB_IO, 339 x SB_LUT4 | 8 |
 | `uart` | `uart_frame` | CLK_DIV=104 | ECP5 45F | 30 x CCU2C, 1 x DCCA, 315 x LUT4, 131 x TRELLIS_FF, 53 x TRELLIS_IO | 8 |
 | `uart` | `uart_line_coding` | (defaults) | LUT4 | 18 x lut | 3 |
 | `uart` | `uart_line_coding` | (defaults) | LUT6 | 15 x lut | 3 |
@@ -2779,28 +2779,28 @@ exactly what this table is for.
 | `ram_wrapper` | `ram_sdp` | WIDTH=8, DEPTH=256, OUT_REG=0 | ECP5 45F | 1 x DP16KD, 1 x LUT4, 36 x TRELLIS_IO | 0 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT4 | 14 x dff, 2680 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | LUT6 | 14 x dff, 2044 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 29 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1024 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5175 x SB_LUT4 | 36 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=0 | iCE40 HX1K | 220 x SB_CARRY, 1024 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 5172 x SB_LUT4 | 36 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=0 | ECP5 45F | 117 x CCU2C, 1 x DCCA, 2077 x LUT4, 32 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 208 x TRELLIS_IO | 33 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT4 | 16 x dff, 2439 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | LUT6 | 16 x dff, 2176 x lut, 1 x memory 32x32, 2 x memrd, 1 x memwr | 28 |
-| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2351 x SB_LUT4, 4 x SB_RAM40_4K | 34 |
+| `rv32i` | `rv32i` | REGFILE_BRAM=1 | iCE40 HX1K | 220 x SB_CARRY, 2 x SB_DFFE, 292 x SB_DFFER, 66 x SB_DFFR, 1 x SB_GB, 208 x SB_IO, 2358 x SB_LUT4, 4 x SB_RAM40_4K | 34 |
 | `rv32i` | `rv32i` | REGFILE_BRAM=1 | ECP5 45F | 117 x CCU2C, 1 x DCCA, 4 x DP16KD, 2041 x LUT4, 360 x TRELLIS_FF, 208 x TRELLIS_IO | 33 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=1 | LUT4 | 25 x dff, 1710 x lut | 18 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=1 | LUT6 | 25 x dff, 1364 x lut | 18 |
-| `mos6502` | `mos6502` | DECIMAL_MODE=1 | iCE40 HX1K | 179 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1733 x SB_LUT4 | 16 |
+| `mos6502` | `mos6502` | DECIMAL_MODE=1 | iCE40 HX1K | 179 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1731 x SB_LUT4 | 16 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=1 | ECP5 45F | 119 x CCU2C, 1 x DCCA, 1588 x LUT4, 139 x TRELLIS_FF, 57 x TRELLIS_IO | 16 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | LUT4 | 25 x dff, 1658 x lut | 18 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | LUT6 | 25 x dff, 1332 x lut | 18 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | iCE40 HX1K | 125 x SB_CARRY, 132 x SB_DFFER, 4 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 1645 x SB_LUT4 | 16 |
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | ECP5 45F | 83 x CCU2C, 1 x DCCA, 1542 x LUT4, 139 x TRELLIS_FF, 57 x TRELLIS_IO | 16 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT4 | 44 x dff, 4359 x lut | 19 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT6 | 44 x dff, 3699 x lut | 18 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | iCE40 HX1K | 299 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4385 x SB_LUT4 | 15 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | ECP5 45F | 184 x CCU2C, 1 x DCCA, 4166 x LUT4, 306 x TRELLIS_FF, 63 x TRELLIS_IO | 15 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT4 | 44 x dff, 4315 x lut | 19 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT6 | 44 x dff, 3682 x lut | 18 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | iCE40 HX1K | 292 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4326 x SB_LUT4 | 15 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | ECP5 45F | 179 x CCU2C, 1 x DCCA, 4136 x LUT4, 306 x TRELLIS_FF, 63 x TRELLIS_IO | 15 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT4 | 44 x dff, 4350 x lut | 19 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT6 | 44 x dff, 3706 x lut | 18 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | iCE40 HX1K | 299 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4373 x SB_LUT4 | 15 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | ECP5 45F | 184 x CCU2C, 1 x DCCA, 4159 x LUT4, 306 x TRELLIS_FF, 63 x TRELLIS_IO | 15 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT4 | 44 x dff, 4302 x lut | 19 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT6 | 44 x dff, 3685 x lut | 18 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | iCE40 HX1K | 292 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4310 x SB_LUT4 | 15 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | ECP5 45F | 179 x CCU2C, 1 x DCCA, 4128 x LUT4, 306 x TRELLIS_FF, 63 x TRELLIS_IO | 15 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 314 x lut | 3 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 278 x lut | 3 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | iCE40 HX1K | 10 x SB_CARRY, 127 x SB_DFFER, 64 x SB_DFFES, 3 x SB_DFFR, 1 x SB_GB, 34 x SB_IO, 313 x SB_LUT4 | 3 |
@@ -2819,11 +2819,11 @@ exactly what this table is for.
 | `hyperram_ctrl` | `hyperram_ctrl` | ADDR_WIDTH=22, CK_DELAY=100 | ECP5 45F | 11 x CCU2C, 1 x DCCA, 1 x DELAYG, 9 x IDDRX1F, 208 x LUT4, 10 x ODDRX1F, 118 x TRELLIS_FF, 91 x TRELLIS_IO | 5 |
 | `dvi_tx` | `dvi_tx` | MODE=0 | LUT4 | 18 x dff, 480 x lut | 9 |
 | `dvi_tx` | `dvi_tx` | MODE=0 | LUT6 | 18 x dff, 357 x lut | 7 |
-| `dvi_tx` | `dvi_tx` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 571 x SB_LUT4 | 8 |
+| `dvi_tx` | `dvi_tx` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 547 x SB_LUT4 | 8 |
 | `dvi_tx` | `dvi_tx` | MODE=0 | ECP5 45F | 164 x CCU2C, 1 x DCCA, 349 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 5 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT4 | 18 x dff, 480 x lut | 9 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | LUT6 | 18 x dff, 357 x lut | 7 |
-| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 571 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
+| `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | iCE40 HX1K | 187 x SB_CARRY, 72 x SB_DFFER, 52 x SB_DFFR, 1 x SB_GB, 57 x SB_IO, 547 x SB_LUT4, 1 x SB_PLL40_CORE | 8 |
 | `dvi_tx_pll` | `dvi_tx_pll` | MODE=0 | ECP5 45F | 164 x CCU2C, 1 x DCCA, 1 x EHXPLLL, 349 x LUT4, 4 x ODDRX1F, 124 x TRELLIS_FF, 57 x TRELLIS_IO | 5 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT4 | 7 x dff, 80 x lut | 4 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT6 | 7 x dff, 68 x lut | 3 |
@@ -2880,34 +2880,34 @@ exactly what this table is for.
 | `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT4 | 212 x dff, 3038 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 11 |
 | `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | LUT6 | 212 x dff, 2604 x lut, 1 x memory 2x8, 1 x memory 64x8, 2 x memrd, 2 x memwr | 9 |
 | `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | iCE40 HX1K | 190 x SB_CARRY, 528 x SB_DFFE, 870 x SB_DFFER, 91 x SB_DFFES, 38 x SB_DFFR, 1 x SB_GB, 87 x SB_IO, 4012 x SB_LUT4 | 10 |
-| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 122 x CCU2C, 1 x DCCA, 2870 x LUT4, 10 x TRELLIS_DPR16X4, 999 x TRELLIS_FF, 87 x TRELLIS_IO | 10 |
+| `usb_proxy` | `usb_hub_proxy_ulpi` | VID=16'h1209, PID=16'h0001 | ECP5 45F | 122 x CCU2C, 1 x DCCA, 2864 x LUT4, 10 x TRELLIS_DPR16X4, 999 x TRELLIS_FF, 87 x TRELLIS_IO | 10 |
 | `sha256` | `sha256_core` | (defaults) | LUT4 | 7 x dff, 3043 x lut | 39 |
 | `sha256` | `sha256_core` | (defaults) | LUT6 | 7 x dff, 2013 x lut | 33 |
-| `sha256` | `sha256_core` | (defaults) | iCE40 HX1K | 568 x SB_CARRY, 902 x SB_DFFER, 136 x SB_DFFES, 1 x SB_DFFR, 1 x SB_GB, 270 x SB_IO, 2406 x SB_LUT4 | 9 |
+| `sha256` | `sha256_core` | (defaults) | iCE40 HX1K | 568 x SB_CARRY, 902 x SB_DFFER, 136 x SB_DFFES, 1 x SB_DFFR, 1 x SB_GB, 270 x SB_IO, 2393 x SB_LUT4 | 9 |
 | `sha256` | `sha256_core` | (defaults) | ECP5 45F | 314 x CCU2C, 1 x DCCA, 1693 x LUT4, 1039 x TRELLIS_FF, 270 x TRELLIS_IO | 7 |
 | `sha256` | `sha256` | (defaults) | LUT4 | 13 x dff, 3207 x lut | 39 |
 | `sha256` | `sha256` | (defaults) | LUT6 | 13 x dff, 2272 x lut | 33 |
-| `sha256` | `sha256` | (defaults) | iCE40 HX1K | 633 x SB_CARRY, 1231 x SB_DFFER, 136 x SB_DFFES, 2 x SB_DFFR, 1 x SB_GB, 272 x SB_IO, 2561 x SB_LUT4 | 9 |
+| `sha256` | `sha256` | (defaults) | iCE40 HX1K | 633 x SB_CARRY, 1231 x SB_DFFER, 136 x SB_DFFES, 2 x SB_DFFR, 1 x SB_GB, 272 x SB_IO, 2548 x SB_LUT4 | 9 |
 | `sha256` | `sha256` | (defaults) | ECP5 45F | 349 x CCU2C, 1 x DCCA, 1844 x LUT4, 1369 x TRELLIS_FF, 272 x TRELLIS_IO | 7 |
 | `sha256` | `sha256` | LEN_BITS=32 | LUT4 | 13 x dff, 3137 x lut | 39 |
 | `sha256` | `sha256` | LEN_BITS=32 | LUT6 | 13 x dff, 2221 x lut | 33 |
-| `sha256` | `sha256` | LEN_BITS=32 | iCE40 HX1K | 604 x SB_CARRY, 1202 x SB_DFFER, 136 x SB_DFFES, 2 x SB_DFFR, 1 x SB_GB, 272 x SB_IO, 2505 x SB_LUT4 | 9 |
+| `sha256` | `sha256` | LEN_BITS=32 | iCE40 HX1K | 604 x SB_CARRY, 1202 x SB_DFFER, 136 x SB_DFFES, 2 x SB_DFFR, 1 x SB_GB, 272 x SB_IO, 2492 x SB_LUT4 | 9 |
 | `sha256` | `sha256` | LEN_BITS=32 | ECP5 45F | 335 x CCU2C, 1 x DCCA, 1786 x LUT4, 1340 x TRELLIS_FF, 272 x TRELLIS_IO | 7 |
 | `chacha20` | `chacha20_qr` | (defaults) | LUT4 | 573 x lut | 87 |
 | `chacha20` | `chacha20_qr` | (defaults) | LUT6 | 441 x lut | 75 |
-| `chacha20` | `chacha20_qr` | (defaults) | iCE40 HX1K | 124 x SB_CARRY, 256 x SB_IO, 447 x SB_LUT4 | 5 |
+| `chacha20` | `chacha20_qr` | (defaults) | iCE40 HX1K | 124 x SB_CARRY, 256 x SB_IO, 443 x SB_LUT4 | 5 |
 | `chacha20` | `chacha20_qr` | (defaults) | ECP5 45F | 68 x CCU2C, 128 x LUT4, 256 x TRELLIS_IO | 1 |
 | `chacha20` | `chacha20_core` | (defaults) | LUT4 | 4 x dff, 5828 x lut | 87 |
 | `chacha20` | `chacha20_core` | (defaults) | LUT6 | 4 x dff, 4189 x lut | 76 |
-| `chacha20` | `chacha20_core` | (defaults) | iCE40 HX1K | 996 x SB_CARRY, 519 x SB_DFFER, 1 x SB_DFFR, 1 x SB_GB, 902 x SB_IO, 4643 x SB_LUT4 | 8 |
+| `chacha20` | `chacha20_core` | (defaults) | iCE40 HX1K | 996 x SB_CARRY, 519 x SB_DFFER, 1 x SB_DFFR, 1 x SB_GB, 902 x SB_IO, 4593 x SB_LUT4 | 8 |
 | `chacha20` | `chacha20_core` | (defaults) | ECP5 45F | 547 x CCU2C, 1 x DCCA, 2905 x LUT4, 520 x TRELLIS_FF, 902 x TRELLIS_IO | 4 |
 | `chacha20` | `chacha20` | (defaults) | LUT4 | 11 x dff, 5972 x lut | 87 |
 | `chacha20` | `chacha20` | (defaults) | LUT6 | 11 x dff, 3809 x lut | 76 |
-| `chacha20` | `chacha20` | (defaults) | iCE40 HX1K | 1030 x SB_CARRY, 590 x SB_DFFER, 3 x SB_DFFR, 1 x SB_GB, 456 x SB_IO, 4766 x SB_LUT4 | 8 |
+| `chacha20` | `chacha20` | (defaults) | iCE40 HX1K | 1030 x SB_CARRY, 590 x SB_DFFER, 3 x SB_DFFR, 1 x SB_GB, 456 x SB_IO, 4716 x SB_LUT4 | 8 |
 | `chacha20` | `chacha20` | (defaults) | ECP5 45F | 567 x CCU2C, 1 x DCCA, 2997 x LUT4, 593 x TRELLIS_FF, 456 x TRELLIS_IO | 4 |
 | `inflate` | `inflate_adler` | (defaults) | LUT4 | 2 x dff, 152 x lut | 26 |
 | `inflate` | `inflate_adler` | (defaults) | LUT6 | 2 x dff, 130 x lut | 20 |
-| `inflate` | `inflate_adler` | (defaults) | iCE40 HX1K | 32 x SB_CARRY, 31 x SB_DFFER, 1 x SB_DFFES, 1 x SB_GB, 44 x SB_IO, 124 x SB_LUT4 | 20 |
+| `inflate` | `inflate_adler` | (defaults) | iCE40 HX1K | 32 x SB_CARRY, 31 x SB_DFFER, 1 x SB_DFFES, 1 x SB_GB, 44 x SB_IO, 123 x SB_LUT4 | 20 |
 | `inflate` | `inflate_adler` | (defaults) | ECP5 45F | 18 x CCU2C, 1 x DCCA, 91 x LUT4, 32 x TRELLIS_FF, 44 x TRELLIS_IO | 6 |
 | `inflate` | `inflate_window` | WINDOW_BITS=15 | LUT4 | 6 x dff, 157 x lut, 1 x memory 32768x8, 1 x memrd, 1 x memwr | 12 |
 | `inflate` | `inflate_window` | WINDOW_BITS=15 | LUT6 | 6 x dff, 114 x lut, 1 x memory 32768x8, 1 x memrd, 1 x memwr | 8 |
@@ -2915,16 +2915,16 @@ exactly what this table is for.
 | `inflate` | `inflate_window` | WINDOW_BITS=15 | ECP5 45F | 16 x CCU2C, 1 x DCCA, 16 x DP16KD, 287 x LUT4, 45 x TRELLIS_FF, 41 x TRELLIS_IO | 12 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT4 | 57 x dff, 1671 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | LUT6 | 57 x dff, 1405 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | iCE40 HX1K | 223 x SB_CARRY, 412 x SB_DFFE, 369 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 31 x SB_IO, 3192 x SB_LUT4, 67 x SB_RAM40_4K | 28 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 143 x CCU2C, 1 x DCCA, 18 x DP16KD, 1538 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 31 x TRELLIS_IO | 12 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | iCE40 HX1K | 223 x SB_CARRY, 412 x SB_DFFE, 369 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 31 x SB_IO, 3167 x SB_LUT4, 67 x SB_RAM40_4K | 28 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=1 | ECP5 45F | 143 x CCU2C, 1 x DCCA, 18 x DP16KD, 1516 x LUT4, 9 x TRELLIS_DPR16X4, 390 x TRELLIS_FF, 31 x TRELLIS_IO | 12 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT4 | 55 x dff, 1478 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 20 |
 | `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | LUT6 | 55 x dff, 1251 x lut, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32768x8, 1 x memory 32x5, 6 x memrd, 6 x memwr | 16 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | iCE40 HX1K | 191 x SB_CARRY, 412 x SB_DFFE, 337 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 31 x SB_IO, 3027 x SB_LUT4, 67 x SB_RAM40_4K | 23 |
-| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 125 x CCU2C, 1 x DCCA, 18 x DP16KD, 1423 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 31 x TRELLIS_IO | 12 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | iCE40 HX1K | 191 x SB_CARRY, 412 x SB_DFFE, 337 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 31 x SB_IO, 3003 x SB_LUT4, 67 x SB_RAM40_4K | 23 |
+| `inflate` | `inflate` | WINDOW_BITS=15, WRAPPER=0 | ECP5 45F | 125 x CCU2C, 1 x DCCA, 18 x DP16KD, 1401 x LUT4, 9 x TRELLIS_DPR16X4, 358 x TRELLIS_FF, 31 x TRELLIS_IO | 12 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT4 | 57 x dff, 1618 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 31 |
 | `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | LUT6 | 57 x dff, 1373 x lut, 1 x memory 1024x8, 1 x memory 16x6, 1 x memory 16x9, 1 x memory 288x9, 1 x memory 320x4, 1 x memory 32x5, 6 x memrd, 6 x memwr | 26 |
-| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | iCE40 HX1K | 213 x SB_CARRY, 407 x SB_DFFE, 359 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 31 x SB_IO, 2457 x SB_LUT4, 5 x SB_RAM40_4K | 24 |
-| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 139 x CCU2C, 1 x DCCA, 3 x DP16KD, 1347 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 31 x TRELLIS_IO | 12 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | iCE40 HX1K | 213 x SB_CARRY, 407 x SB_DFFE, 359 x SB_DFFER, 7 x SB_DFFES, 5 x SB_DFFR, 1 x SB_GB, 31 x SB_IO, 2432 x SB_LUT4, 5 x SB_RAM40_4K | 24 |
+| `inflate` | `inflate` | WINDOW_BITS=10, WRAPPER=1 | ECP5 45F | 139 x CCU2C, 1 x DCCA, 3 x DP16KD, 1325 x LUT4, 9 x TRELLIS_DPR16X4, 376 x TRELLIS_FF, 31 x TRELLIS_IO | 12 |
 <!-- end footprints -->
 
 ### Seven things writing these blocks found

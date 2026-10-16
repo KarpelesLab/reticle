@@ -1,0 +1,37 @@
+top part_write
+
+// `r[i*4 +: 4] <= d` as the Verilog frontend hands it over: four one-bit
+// writes at `i*4`, `i*4 + 1`, ... Process lowering builds it as one
+// comparison of `i` per group of four bits rather than two shifts per bit;
+// a second write at `{j, 2'b00}` takes the same path through a
+// concatenated base, and a third at `k*4` with `k` four bits wide can
+// name groups past the end of `r`, which must write nothing.
+module part_write
+  net %clk u1 wire
+  net %we u1 wire
+  net %i u4 wire
+  net %j u2 wire
+  net %k u4 wire
+  net %d u4 wire
+  net %r u16 reg
+  port clk in %clk
+  port we in %we
+  port i in %i
+  port j in %j
+  port k in %k
+  port d in %d
+  port r out %r
+  process init initial
+    %r = 16'd0
+  end
+  process p seq posedge %clk
+    if %we
+      {%r[add(mul(%i, 4'd4), 4'd3)], %r[add(mul(%i, 4'd4), 4'd2)], %r[add(mul(%i, 4'd4), 4'd1)], %r[mul(%i, 4'd4)]} <= %d
+    else
+      {%r[add({%j, 2'd0}, 4'd3)], %r[add({%j, 2'd0}, 4'd2)], %r[add({%j, 2'd0}, 4'd1)], %r[{%j, 2'd0}]} <= not(%d)
+    end
+    if eq(%k, 4'd2)
+      {%r[add(mul(%k, 4'd4), 4'd1)], %r[mul(%k, 4'd4)]} <= %d[1:0]
+    end
+  end
+end
