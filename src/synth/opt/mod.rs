@@ -16,12 +16,14 @@
 pub(crate) mod const_fold;
 mod dce;
 mod ff_opt;
+mod mem_scalarize;
 pub(crate) mod merge;
 mod wreduce;
 
 pub use const_fold::ConstFold;
 pub use dce::Dce;
 pub use ff_opt::FfOpt;
+pub use mem_scalarize::MemScalarize;
 pub use merge::Merge;
 pub use wreduce::WReduce;
 

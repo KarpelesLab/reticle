@@ -181,6 +181,15 @@ testdata/synth/keep_reg.rtl
 testdata/synth/keep_reg.synth.rtl
   keep_reg: eligible (3 comb ops, 6 edge ops, 4 registers, 4 bits)
 
+testdata/synth/mem_regs.cells.rtl
+  mem_regs: eligible (2 comb ops, 6 edge ops, 5 registers, 40 bits)
+
+testdata/synth/mem_regs.rtl
+  mem_regs: eligible (2 comb ops, 13 edge ops, 1 registers, 8 bits)
+
+testdata/synth/mem_regs.synth.rtl
+  mem_regs: eligible (0 comb ops, 8 edge ops, 5 registers, 40 bits)
+
 testdata/synth/mux_tree.cells.rtl
   mux_tree: eligible (6 comb ops, 0 edge ops, 0 registers, 0 bits)
 

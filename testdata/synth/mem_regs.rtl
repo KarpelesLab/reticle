@@ -1,0 +1,51 @@
+top mem_regs
+
+// An array written and read element by element at constant addresses, as
+// a Verilog `generate` loop of `always` blocks leaves it: a shift register
+// of four words through `@c`, two writers on word 3 of which the later
+// wins, a word nothing writes that keeps its initial value, a clocked
+// read with an enable. (A read past the end the IR's validator refuses
+// outright.) `mem_scalarize` makes it
+// registers; the behavioural self-check runs it before and after.
+module mem_regs
+  net %clk u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %sel u1 wire
+  net %en u1 wire
+  net %y u8 wire
+  net %z u8 wire
+  net %r u8 reg
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port sel in %sel
+  port en in %en
+  port y out %y
+  port z out %z
+  port r out %r
+  memory @c 6 x u8
+    init 8'd1 8'd2 8'd3 8'd4 8'd5 8'd6
+  process p0 seq posedge %clk
+    memwrite @c[3'd0] = %a
+  end
+  process p1 seq posedge %clk
+    memwrite @c[3'd1] = @c[3'd0]
+  end
+  process p2 seq posedge %clk
+    memwrite @c[3'd2] = add(@c[3'd1], 8'd1)
+  end
+  process p3 seq posedge %clk
+    memwrite @c[3'd3] = @c[3'd2]
+    if %sel
+      memwrite @c[3'd3] = %b
+    end
+  end
+  process p4 seq posedge %clk
+    if %en
+      %r <= @c[3'd3]
+    end
+  end
+  assign %y = @c[3'd3]
+  assign %z = @c[3'd5]
+end

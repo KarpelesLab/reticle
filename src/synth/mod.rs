@@ -15,8 +15,8 @@
 //!    process into mux trees, flip-flop / latch / memory-port inference,
 //!    `initial` blocks turned into init values.
 //! 2. An optimisation loop iterated to a fixpoint (capped by
-//!    [`SynthOptions::max_iterations`]): [`opt::ConstFold`], [`opt::Dce`],
-//!    [`fsm::Fsm`] (when enabled), [`opt::Merge`], [`opt::ConstFold`],
+//!    [`SynthOptions::max_iterations`]): [`opt::ConstFold`],
+//!    [`opt::MemScalarize`], [`opt::Dce`], [`fsm::Fsm`] (when enabled), [`opt::Merge`], [`opt::ConstFold`],
 //!    [`opt::WReduce`], [`opt::FfOpt`], [`opt::Dce`].
 //! 3. [`cellify::Cellify`] (unless [`SynthOptions::cellify`] is off),
 //!    followed by [`opt::Merge`] and [`opt::Dce`]: the expression trees
@@ -367,7 +367,11 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
     let lowered = run_pass(&proc::ProcLower::new(options), design, options, diags);
     stats.passes.push(("proc_lower".to_owned(), lowered));
 
-    let mut loop_passes: Vec<Box<dyn Pass>> = vec![Box::new(opt::ConstFold), Box::new(opt::Dce)];
+    let mut loop_passes: Vec<Box<dyn Pass>> = vec![
+        Box::new(opt::ConstFold),
+        Box::new(opt::MemScalarize),
+        Box::new(opt::Dce),
+    ];
     if options.fsm_encoding != FsmEncoding::None {
         loop_passes.push(Box::new(fsm::Fsm::new(options.fsm_encoding)));
     }
