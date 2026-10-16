@@ -381,14 +381,17 @@ impl<'m> Blaster<'m> {
                 if std::mem::replace(&mut seen[id.index()], true) {
                     continue;
                 }
-                match &expr.kind {
-                    ExprKind::Net(n) => all(&mut needed, *n),
-                    ExprKind::Slice { base, hi, lo }
-                        if let Some(ExprKind::Net(n)) = m.exprs.get(*base).map(|b| &b.kind) =>
-                    {
-                        mark_bits(&mut needed, *n, *lo, *hi);
-                    }
-                    kind => stack.extend(crate::ir::expr::operands(kind)),
+                let sliced = match &expr.kind {
+                    ExprKind::Slice { base, hi, lo } => match m.exprs.get(*base).map(|b| &b.kind) {
+                        Some(ExprKind::Net(n)) => Some((*n, *lo, *hi)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                match (&expr.kind, sliced) {
+                    (_, Some((n, lo, hi))) => mark_bits(&mut needed, n, lo, hi),
+                    (ExprKind::Net(n), None) => all(&mut needed, *n),
+                    (kind, None) => stack.extend(crate::ir::expr::operands(kind)),
                 }
             }
         };
