@@ -8,6 +8,10 @@
 # not here: it is the `PULLUP` cell in the design, as in `userio.v`.
 set_io -io_standard LVDS_25 PLLFPGAP D13
 set_io -io_standard LVDS_25 PLLFPGAN C13
+set_io -io_standard LVDS_25 ADC_DP[0] B12
+set_io -io_standard LVDS_25 ADC_DN[0] A12
+set_io -io_standard LVDS_25 ADC_DP[1] A13
+set_io -io_standard LVDS_25 ADC_DN[1] A14
 set_io -io_standard LVDS_25 ADC_CLKP J15
 set_io -io_standard LVDS_25 ADC_CLKN J16
 set_io -io_standard LVCMOS25 ADC_DFS G12

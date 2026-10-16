@@ -1316,3 +1316,40 @@ fn a_part_select_with_a_variable_base_is_written_bit_by_bit() {
     let (code, _, stderr) = run(&["synth", reg.to_str().unwrap()]);
     assert_eq!(code, 0, "{stderr}");
 }
+
+/// A differential pair's ball may be one bit of a vector port, as the
+/// ChipWhisperer-Husky's ADC lanes are (`ADC_DP[i]` from a `generate`
+/// loop), but the second ball gets no buffer of its own and that is
+/// decided per port: a vector only some of whose bits are second balls is
+/// refused, naming it, rather than leaving its other bits unbuffered.
+///
+/// It would catch the check lost — the build would then succeed with
+/// `n[1]` silently cut off from its pad. `tests/fpga_xray_io.rs` is what
+/// checks that the pairs on vector bits build, against Vivado's bits.
+#[cfg(feature = "fpga")]
+#[test]
+fn a_vector_only_partly_second_balls_is_refused() {
+    let dir = scratch("partial_pair");
+    let v = dir.join("pair.v");
+    std::fs::write(
+        &v,
+        "module pair(input wire [1:0] p, input wire [1:0] n, output wire y);\n\
+         \x20 wire d;\n\
+         \x20 IBUFDS u (.I(p[0]), .IB(n[0]), .O(d));\n\
+         \x20 assign y = d ^ p[1] ^ n[1];\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", v.to_str().unwrap(), "--device", "xc7a35t-ftg256"])
+        .arg("--output-dir")
+        .arg(&dir)
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("only 1 of the 2 bit(s) of `n` are the second ball"),
+        "{stderr}"
+    );
+}

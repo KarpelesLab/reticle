@@ -23,8 +23,10 @@
 //! field, a differential pair configured on one half only or without its
 //! tile's `DIFF.ZIBUF_LOW_PWR`, an `OBUFDS`'s second ball driven as an
 //! output of its own, and an `IBUFDS`'s `IBUF_LOW_PWR` lost on the way
-//! from the source. It would not catch a pad that is right in its bits and
-//! wrong in its routing — the decode's `0 bit(s) unexplained` and the
+//! from the source. It would also catch the two input pairs whose balls
+//! are bits of vector ports being refused, which is what the flow did
+//! until the Husky's ADC lanes needed them. It would not catch a pad that
+//! is right in its bits and wrong in its routing — the decode's `0 bit(s) unexplained` and the
 //! routing checks the command line runs are what cover that — nor
 //! anything about the board: nothing here has run on a Husky.
 
@@ -81,7 +83,7 @@ const RECEIVER: &str = "LVCMOS25_LVCMOS33_LVTTL.IN";
 
 /// Each ball, its tile, its half, and the features Vivado set on that half
 /// in NewAE's image — quoted, as the module documentation says.
-const VIVADO: [(&str, &str, &str, &[&str]); 10] = [
+const VIVADO: [(&str, &str, &str, &[&str]); 14] = [
     // PLLFPGAP / PLLFPGAN: an `IBUFDS`, `IBUF_LOW_PWR("FALSE")`.
     (
         "D13",
@@ -93,6 +95,32 @@ const VIVADO: [(&str, &str, &str, &[&str]); 10] = [
         "C13",
         "LIOB33_X0Y75",
         "IOB_Y1",
+        &[IN_ONLY, "LVDS_25_SSTL135_SSTL15.IN_DIFF", "PULLTYPE.NONE"],
+    ),
+    // ADC_DP[0] / ADC_DN[0] and ADC_DP[1] / ADC_DN[1]: `IBUFDS`es on bits
+    // of vector ports, from a `generate` loop, `IBUF_LOW_PWR("FALSE")`.
+    (
+        "B12",
+        "LIOB33_X0Y89",
+        "IOB_Y1",
+        &[IN_ONLY, "LVDS_25_SSTL135_SSTL15.IN_DIFF", "PULLTYPE.NONE"],
+    ),
+    (
+        "A12",
+        "LIOB33_X0Y89",
+        "IOB_Y0",
+        &[IN_ONLY, "LVDS_25_SSTL135_SSTL15.IN_DIFF", "PULLTYPE.NONE"],
+    ),
+    (
+        "A13",
+        "LIOB33_X0Y85",
+        "IOB_Y1",
+        &[IN_ONLY, "LVDS_25_SSTL135_SSTL15.IN_DIFF", "PULLTYPE.NONE"],
+    ),
+    (
+        "A14",
+        "LIOB33_X0Y85",
+        "IOB_Y0",
         &[IN_ONLY, "LVDS_25_SSTL135_SSTL15.IN_DIFF", "PULLTYPE.NONE"],
     ),
     // ADC_CLKP / ADC_CLKN: an `OBUFDS`.
@@ -213,7 +241,7 @@ fn every_husky_pad_is_configured_as_vivado_configured_it() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 
-    // The input pair's tile has the one feature of the pair, because the
+    // Each input pair's tile has the one feature of the pair, because the
     // `IBUFDS` said `IBUF_LOW_PWR("FALSE")`; the output pair's has none.
     let pair = |tile: &str| -> BTreeSet<&str> {
         by_tile
@@ -224,6 +252,8 @@ fn every_husky_pad_is_configured_as_vivado_configured_it() {
             .filter(|f| !f.starts_with("IOB_Y"))
             .collect()
     };
-    assert_eq!(pair("LIOB33_X0Y75"), BTreeSet::from(["DIFF.ZIBUF_LOW_PWR"]));
+    for tile in ["LIOB33_X0Y75", "LIOB33_X0Y89", "LIOB33_X0Y85"] {
+        assert_eq!(pair(tile), BTreeSet::from(["DIFF.ZIBUF_LOW_PWR"]), "{tile}");
+    }
     assert!(pair("LIOB33_X0Y53").is_empty());
 }

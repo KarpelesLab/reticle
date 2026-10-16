@@ -627,6 +627,14 @@ fn primitive_instances(
         return 0;
     };
     let mut refused = 0usize;
+    // What the differential buffers said of each port they reached.
+    #[derive(Default)]
+    struct PairPort {
+        low_power: Vec<(bool, crate::source::Span)>,
+        second: Vec<(Option<u32>, crate::source::Span)>,
+    }
+    let mut pair_ports: std::collections::BTreeMap<crate::ir::NetId, PairPort> =
+        std::collections::BTreeMap::new();
     let ids: Vec<InstanceId> = m.instances.iter().map(|(id, _)| id).collect();
     let mut done: Vec<InstanceId> = Vec::new();
     for id in ids {
@@ -651,12 +659,24 @@ fn primitive_instances(
             // no buffer of its own. What the instance said of its receiver
             // rides on the first port's net to the buffer built there.
             if let Some(pad_n) = bel.port("pad_n") {
+                // A ball is a port, or one bit of a vector port (`ADC_DP[i]`
+                // from a `generate` loop): the net and, for a bit, which.
                 let port_net = |m: &crate::ir::Module, name: &str| {
-                    inst.connection(name)
-                        .and_then(|e| m.expr(e).as_net())
-                        .filter(|net| m.ports.iter().any(|p| p.net == *net))
+                    let e = inst.connection(name)?;
+                    let (net, bit) = match &m.expr(e).kind {
+                        ExprKind::Net(net) => (*net, None),
+                        ExprKind::Slice { base, hi, lo } if hi == lo => {
+                            (m.expr(*base).as_net()?, Some(*lo))
+                        }
+                        ExprKind::Index { base, index } => {
+                            let bit = m.expr(*index).as_const()?.to_u64()?;
+                            (m.expr(*base).as_net()?, Some(u32::try_from(bit).ok()?))
+                        }
+                        _ => return None,
+                    };
+                    m.ports.iter().any(|p| p.net == net).then_some((net, bit))
                 };
-                let (Some(p), Some(n)) = (
+                let (Some((p, _)), Some((n, n_bit))) = (
                     port_net(m, bel.port("pad").unwrap_or("")),
                     port_net(m, pad_n),
                 ) else {
@@ -690,7 +710,19 @@ fn primitive_instances(
                     );
                     continue;
                 }
-                if input && text("IBUF_LOW_PWR").as_deref() == Some("FALSE") {
+                // A buffer is configured per port, so what is said of one
+                // bit is said of the whole vector: every pair on it must
+                // say the same, and every bit of the second port must be
+                // the second ball of some pair.
+                let low_power = !(input && text("IBUF_LOW_PWR").as_deref() == Some("FALSE"));
+                pair_ports
+                    .entry(p)
+                    .or_default()
+                    .low_power
+                    .push((low_power, inst.span));
+                let n_port = pair_ports.entry(n).or_default();
+                n_port.second.push((n_bit, inst.span));
+                if !low_power {
                     m.nets[p].attrs.set("ibuf_low_pwr", 0i64);
                 }
                 m.nets[n].attrs.set("io_differential_n", 1i64);
@@ -822,6 +854,55 @@ fn primitive_instances(
             span: inst.span,
         });
         done.push(id);
+    }
+    for (net, port) in &pair_ports {
+        let name = m.nets[*net].name.as_str();
+        if let Some(&(_, span)) = port
+            .low_power
+            .iter()
+            .find(|(lp, _)| *lp != port.low_power[0].0)
+        {
+            refused += 1;
+            diags.push(
+                Diagnostic::error(format!(
+                    "the bits of `{name}` disagree about `IBUF_LOW_PWR`, and a port's receivers \
+                     are configured together"
+                ))
+                .with_span(span),
+            );
+        }
+        let Some(&(_, span)) = port.second.first() else {
+            continue;
+        };
+        if !port.low_power.is_empty() {
+            refused += 1;
+            diags.push(
+                Diagnostic::error(format!(
+                    "`{name}` is the first ball of one differential pair and the second of another"
+                ))
+                .with_span(span),
+            );
+            continue;
+        }
+        let width = m.nets[*net].ty.width().unwrap_or(1);
+        let whole = port.second.iter().any(|(bit, _)| bit.is_none());
+        let covered: std::collections::BTreeSet<u32> =
+            port.second.iter().filter_map(|(bit, _)| *bit).collect();
+        if !whole && covered.len() != width as usize {
+            refused += 1;
+            diags.push(
+                Diagnostic::error(format!(
+                    "only {} of the {width} bit(s) of `{name}` are the second ball of a \
+                     differential pair",
+                    covered.len()
+                ))
+                .with_span(span)
+                .with_note(
+                    "the second ball gets no buffer of its own, and that is decided per port: \
+                     put the other bits on a port of their own",
+                ),
+            );
+        }
     }
     if !done.is_empty() {
         m.instances.retain(|id, _| !done.contains(&id));
