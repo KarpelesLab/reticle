@@ -14,6 +14,16 @@
 //! | `BUFG` | `I` | — | 1 | 0 | 1 | 0 | 0 | 1 |
 //! | `BUFGCE` | `I` | — | `CE` | 0 | 1 | 0 | 0 | 1 |
 //! | `BUFGMUX` | `I0` | `I1` | `!S` | `S` | 1 | 1 | `ASYNC` | `ASYNC` |
+//! | `BUFMRCE` | `I` | — | `CE` | 0 | 1 | 0 | 0 | 1 |
+//! | `BUFR`, not dividing | `I` | — | 1 | 0 | 1 | 0 | 0 | 1 |
+//!
+//! The last two are **not** what Vivado does with them: they are regional
+//! buffers, and here they are global ones. A `BUFMRCE` driving a `BUFR`
+//! that does not divide is a gated clock, which is what the Husky's logic
+//! analyser uses the pair for, and a `BUFGCE` followed by a `BUFG` is the
+//! same function on the global network, at the cost of two of the part's
+//! 32 global buffers instead of two regional ones. A `BUFR` that divides,
+//! or whose enable or clear is used, is refused.
 //!
 //! A `BUFGMUX` selects with the **enables**, not the selects, because an
 //! enable is what the site switches synchronously on (UG472, "BUFGMUX");
@@ -83,7 +93,7 @@ pub(super) const FEATURES: [&str; 7] = [
 /// The primitives configured here. A `BUFG` keeps the four fixed
 /// features its bel declares for it, which every path through this flow
 /// writes, so a design with only `BUFG`s is unchanged by this pass.
-const CONFIGURED: [&str; 2] = ["BUFGCE", "BUFGMUX"];
+const CONFIGURED: [&str; 4] = ["BUFGCE", "BUFGMUX", "BUFMRCE", "BUFR"];
 
 /// What one control pin of a placed buffer is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +267,40 @@ impl XrayFabric {
                     fixed(ignore),
                 ]
             } else {
+                // A regional buffer pair the design asks for, built on the
+                // global network instead: a `BUFR` that does not divide, is
+                // always enabled and never cleared is a buffer and nothing
+                // else, and a `BUFMRCE` in front of it is a gated one —
+                // so the first is a `BUFG` and the second a `BUFGCE`.
+                // Anything a `BUFR` does beyond that is refused.
+                if instance.primitive == "BUFR" {
+                    let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+                    let divide = params
+                        .and_then(|p| p.get("BUFR_DIVIDE"))
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .or_else(|| v.as_int().map(|i| i.to_string()))
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or_else(|| "BYPASS".to_owned());
+                    if !matches!(divide.as_str(), "1" | "BYPASS") {
+                        return Err(GlobalBufferError::BadParameter {
+                            instance: instance.name.clone(),
+                            name: "BUFR_DIVIDE".to_owned(),
+                            value: divide,
+                        });
+                    }
+                    for (role, wanted) in [("ce", true), ("clr", false)] {
+                        if control(role, wanted) != Control::Fixed(wanted) {
+                            return Err(GlobalBufferError::BadParameter {
+                                instance: instance.name.clone(),
+                                name: role.to_ascii_uppercase(),
+                                value: "a signal or the other constant".to_owned(),
+                            });
+                        }
+                    }
+                }
                 // `BUFGCE`: a `BUFG` whose `CE0` is the enable.
                 [
                     (control("ce", true), false),

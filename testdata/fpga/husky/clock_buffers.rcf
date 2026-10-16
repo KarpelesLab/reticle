@@ -1,12 +1,13 @@
 # NewAE ChipWhisperer-Husky (XC7A35T-FTG256), five of its pins.
 #
-# PROVENANCE: D4 (clk_usb), C7 (LED_ADC), C6 (LED_GLITCH) and D3
-# (LED_ARMED) are transcribed from NewAE's `fpga/vivado/cwhusky.xdc` at
+# PROVENANCE: D4 (clk_usb), C7 (LED_ADC), C6 (LED_GLITCH), D3
+# (LED_ARMED) and C3 (LED_CAP) are transcribed from NewAE's `fpga/vivado/cwhusky.xdc` at
 # chipwhisperer-husky-fpga 2dfe1bc. A2 and A3 are any two free IO balls of
 # bank 35, standing in for a select and an enable.
 set_io -io_standard LVCMOS33 clk_usb D4
 set_io -io_standard LVCMOS33 LED_ADC C7
 set_io -io_standard LVCMOS33 LED_GLITCH C6
 set_io -io_standard LVCMOS33 LED_ARMED D3
+set_io -io_standard LVCMOS33 LED_CAP C3
 set_io -io_standard LVCMOS33 sel A2
 set_io -io_standard LVCMOS33 en A3

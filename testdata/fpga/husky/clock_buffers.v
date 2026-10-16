@@ -15,7 +15,8 @@ module clock_buffers (
     input  wire en,
     output wire LED_ADC,
     output wire LED_GLITCH,
-    output wire LED_ARMED
+    output wire LED_ARMED,
+    output wire LED_CAP
 );
   wire clk_in, clk, muxed, muxed_sync, gated;
   IBUFG u_ibufg (.I(clk_usb), .O(clk_in));
@@ -27,6 +28,13 @@ module clock_buffers (
   BUFGMUX #(.CLK_SEL_TYPE("ASYNC")) u_mux (.I0(clk), .I1(half), .S(sel), .O(muxed));
   BUFGMUX u_mux_sync (.I0(clk), .I1(half), .S(sel), .O(muxed_sync));
   BUFGCE u_gate (.I(clk), .CE(en), .O(gated));
+
+  wire observer_mr, observer;
+  BUFMRCE #(.INIT_OUT(0), .CE_TYPE("ASYNC")) u_mr (.I(clk), .O(observer_mr), .CE(~sel));
+  BUFR #(.BUFR_DIVIDE("1")) u_r (.I(observer_mr), .O(observer), .CE(1'b1), .CLR(1'b0));
+  reg [24:0] o = 0;
+  always @(posedge observer) o <= o + 1;
+  assign LED_CAP = o[24];
 
   reg [24:0] a = 0, b = 0, c = 0;
   always @(posedge muxed) a <= a + 1;

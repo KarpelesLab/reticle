@@ -720,6 +720,39 @@ fn primitive_instances(
             done.push(id);
             continue;
         }
+        // A pull on a pad, instantiated as a cell (`PULLUP p (.O(pad))`):
+        // the pad's buffer takes it, as it takes `set_io -pullup yes`. The
+        // whole port is pulled, since a buffer is configured per port.
+        if bel.role == super::device::BelRole::Other
+            && let pull @ ("PULLUP" | "PULLDOWN") = primitive.as_str()
+        {
+            let port = inst.connection("O").and_then(|e| {
+                crate::ir::hier::expr_to_lvalue(m, e).and_then(|lv| lv.nets().first().copied())
+            });
+            match port.filter(|net| m.ports.iter().any(|p| p.net == *net)) {
+                Some(net) => {
+                    let key = if pull == "PULLUP" {
+                        "pullup"
+                    } else {
+                        "pulldown"
+                    };
+                    m.nets[net].attrs.set(key, 1i64);
+                    done.push(id);
+                }
+                None => {
+                    refused += 1;
+                    diags.push(
+                        Diagnostic::error(format!(
+                            "`{}`: a `{pull}` pulls a pad, so its `O` must be wired to a port \
+                             of the top module",
+                            inst.name
+                        ))
+                        .with_span(inst.span),
+                    );
+                }
+            }
+            continue;
+        }
         if bel.outputs.is_empty() {
             refused += 1;
             diags.push(

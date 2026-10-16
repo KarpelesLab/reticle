@@ -3,8 +3,9 @@
 // pair through an `IBUFDS` (its PLL's reference, D13/C13), an LVDS_25
 // output pair through an `OBUFDS` (the ADC's clock, J15/J16), an LVCMOS25
 // output and input (G12, C11), an LVCMOS33 output at 8 mA (an LED, C7), an
-// LVCMOS33 input (T7), and two bidirectional pads, one pulled down (T4) and
-// one pulled up (N12).
+// LVCMOS33 input (T7), and two bidirectional pads, one pulled down (T4) by
+// its constraint and one pulled up (N12) by a `PULLUP` cell, which is how
+// `userio.v` pulls it.
 //
 // `tests/fpga_xray_io.rs` builds it with `reticle fpga --bitstream` and
 // compares each pad, half by half, with what Vivado wrote on the same ball
@@ -37,6 +38,8 @@ module io_standards (
   always @(posedge clk) count <= count + 1;
 
   OBUFDS u_adc_clk (.I(count[3]), .O(ADC_CLKP), .OB(ADC_CLKN));
+
+  PULLUP u_pull (.O(USERIO_CLK));
 
   assign target_io4 = count[10] ? count[11] : 1'bz;
   assign USERIO_CLK = count[12] ? count[13] : 1'bz;

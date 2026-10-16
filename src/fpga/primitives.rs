@@ -3615,10 +3615,15 @@ impl Mapper<'_> {
         if let Some(pulldown) = io.pulldown {
             attrs.set("pulldown", i64::from(pulldown));
         }
-        // What an instantiated `IBUFDS` or `IBUF` said of its receiver,
-        // carried on the port's net by `flow::primitive_instances`.
-        if let Some(value) = module.nets[site.net].attrs.get("ibuf_low_pwr").cloned() {
-            module.cells[cell].attrs.set("ibuf_low_pwr", value);
+        // What an instantiated `IBUFDS` said of its receiver, and a
+        // `PULLUP` or `PULLDOWN` cell on the pad, carried on the port's net
+        // by `flow::primitive_instances`.
+        for key in ["ibuf_low_pwr", "pullup", "pulldown"] {
+            if module.cells[cell].attrs.get(key).is_none()
+                && let Some(value) = module.nets[site.net].attrs.get(key).cloned()
+            {
+                module.cells[cell].attrs.set(key, value);
+            }
         }
         cell
     }

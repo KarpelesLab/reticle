@@ -379,6 +379,8 @@ device xc7a35t-cpg236
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel PULLUP other port o=O
+  bel PULLDOWN other port o=O
   bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
@@ -386,6 +388,8 @@ device xc7a35t-cpg236
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
+  bel BUFMRCE gb absorbs ce port i=I ce=CE o=O outputs O
+  bel BUFR gb absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
   bel IDDR ddr_in absorbs ce,sr port d=D clk=C clkb=C ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
   bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C ce=CE sr=R sr=S q=Q outputs Q
   bel PLLE2_ADV pll absorbs rst,pwrdwn,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out=CLKOUT0 out1=CLKOUT1 out2=CLKOUT2 out3=CLKOUT3 out4=CLKOUT4 out5=CLKOUT5 fbout=CLKFBOUT lock=LOCKED rst=RST pwrdwn=PWRDWN dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT1,CLKOUT2,CLKOUT3,CLKOUT4,CLKOUT5,CLKFBOUT,LOCKED,DRDY,DO
@@ -578,6 +582,8 @@ device xc7a35t-ftg256
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel PULLUP other port o=O
+  bel PULLDOWN other port o=O
   bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
@@ -585,6 +591,8 @@ device xc7a35t-ftg256
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
+  bel BUFMRCE gb absorbs ce port i=I ce=CE o=O outputs O
+  bel BUFR gb absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
   bel IDDR ddr_in absorbs ce,sr port d=D clk=C clkb=C ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
   bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C ce=CE sr=R sr=S q=Q outputs Q
   bel PLLE2_ADV pll absorbs rst,pwrdwn,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out=CLKOUT0 out1=CLKOUT1 out2=CLKOUT2 out3=CLKOUT3 out4=CLKOUT4 out5=CLKOUT5 fbout=CLKFBOUT lock=LOCKED rst=RST pwrdwn=PWRDWN dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT1,CLKOUT2,CLKOUT3,CLKOUT4,CLKOUT5,CLKFBOUT,LOCKED,DRDY,DO

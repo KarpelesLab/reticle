@@ -2146,7 +2146,8 @@ without handing Vivado an instance parameter its library lacks.
 placement instead, and `reticle fpga --bitstream` ran it. Every pad is now
 configured that way, standard and drive included, by
 `XrayFabric::configure_io` (`src/fpga/xray/io.rs`), which gives a pad
-`PULLTYPE.PULLUP` in place of `NONE`, and `-pulldown yes` asks for
+`PULLTYPE.PULLUP` in place of `NONE` — whether a `set_io -pullup yes`
+or a `PULLUP` cell on the port asked for it — and `-pulldown yes` asks for
 `PULLDOWN` — the field with all three bits clear, as NewAE's Husky image
 has it on its one pulled-down pad. `-pullup no` leaves `NONE`; there is
 still no way to ask for a keeper.
@@ -2682,6 +2683,13 @@ thing and costs a site. And the region the command line loads now
 reaches the interconnect two columns left of the buffer column and three
 rows down, where the controls come from; before, a `BUFGCE`'s enable had
 no path at all.
+
+A `BUFMRCE` and a `BUFR` are **built as global buffers**, which is not
+what Vivado does with them: the Husky's logic analyser uses the pair as a
+gated clock (`BUFR_DIVIDE("1")`, always enabled, never cleared), and a
+`BUFGCE` followed by a `BUFG` is the same function on the global network,
+at the cost of two of the part's 32 global buffers. A `BUFR` that divides,
+or whose enable or clear is used, is refused by name.
 
 Nothing here has run on a part.
 
