@@ -3319,8 +3319,13 @@ impl Mapper<'_> {
             .flatten()
             .cloned();
         let tristate = match (dir, &ddr) {
-            (PortDir::InOut, None) => self.absorbed_tristate(module, core),
-            (PortDir::Out, None) if tristate_out.is_some() => self.absorbed_tristate(module, core),
+            (PortDir::InOut, None) => self
+                .absorbed_tristate(module, core)
+                .map(|(cell, data, enable)| (vec![cell], data, vec![enable; pins as usize]))
+                .or_else(|| self.absorbed_bitwise(module, core, width)),
+            (PortDir::Out, None) if tristate_out.is_some() => self
+                .absorbed_tristate(module, core)
+                .map(|(cell, data, enable)| (vec![cell], data, vec![enable; pins as usize])),
             // A registered pad's data comes from the IO register, so the
             // tri-state driver is not what reaches the pin and absorbing
             // it would move the enable ahead of the register.
@@ -3341,31 +3346,47 @@ impl Mapper<'_> {
         // put it — and a tri-state's data and enable are arbitrary
         // expressions (`bufif1 (bus, data, ~oe_n)`). Naming them here puts
         // the logic in an assignment, which is what LUT mapping consumes.
-        let tristate = tristate.map(|(cell, data, enable)| {
+        let tristate = tristate.map(|(cells, data, enables)| {
             let drive = add_net(module, &format!("{name}$drive"), Type::bits(width), span);
             add_assign(module, drive, data, span);
-            let enable = if let Some((_, true)) = bel.enable_port() {
-                expr(
-                    module,
-                    ExprKind::Unary {
-                        op: UnaryOp::Not,
-                        expr: enable,
-                    },
-                    span,
-                )
-            } else {
-                enable
-            };
-            let oe = add_net(module, &format!("{name}$oe"), Type::bit(), span);
-            add_assign(module, oe, enable, span);
-            (
-                cell,
-                net_expr(module, drive, span),
-                net_expr(module, oe, span),
-            )
+            // One enable for the bus when one cell said when it drives,
+            // so one net; one per bit when each bit has its own.
+            let mut named: Vec<(ExprId, ExprId)> = Vec::new();
+            let oes: Vec<ExprId> = enables
+                .iter()
+                .enumerate()
+                .map(|(bit, enable)| {
+                    if let Some((_, oe)) = named.iter().find(|(e, _)| e == enable) {
+                        return *oe;
+                    }
+                    let inverted = if let Some((_, true)) = bel.enable_port() {
+                        expr(
+                            module,
+                            ExprKind::Unary {
+                                op: UnaryOp::Not,
+                                expr: *enable,
+                            },
+                            span,
+                        )
+                    } else {
+                        *enable
+                    };
+                    let suffix = if named.is_empty() {
+                        String::new()
+                    } else {
+                        bit.to_string()
+                    };
+                    let oe = add_net(module, &format!("{name}$oe{suffix}"), Type::bit(), span);
+                    add_assign(module, oe, inverted, span);
+                    let oe = net_expr(module, oe, span);
+                    named.push((*enable, oe));
+                    oe
+                })
+                .collect();
+            (cells, net_expr(module, drive, span), oes)
         });
-        if let Some(cell) = tristate.map(|(cell, ..)| cell) {
-            absorbed.push(cell);
+        if let Some((cells, ..)) = &tristate {
+            absorbed.extend(cells.iter().copied());
         }
 
         let pad = add_net(module, &format!("{name}$pad"), Type::bits(pins), span);
@@ -3463,7 +3484,7 @@ impl Mapper<'_> {
                     // enable was absorbed that is the tri-state's data,
                     // which is *not* the port's net any more: the net now
                     // carries what the pad reads back.
-                    let from = tristate.map_or(core_value, |(_, data, _)| data);
+                    let from = tristate.as_ref().map_or(core_value, |(_, data, _)| *data);
                     let mut value = match beside {
                         Some(DdrPlan::Beside { bel: reg, clk }) => {
                             let lo = slice_expr(module, from, bit, bit, span);
@@ -3486,11 +3507,11 @@ impl Mapper<'_> {
                         // One bit, whatever the port's width: an enable
                         // turns the whole bus around at once, which is what
                         // a ULPI bus and every other turnaround does.
-                        let enable = match tristate {
+                        let enable = match &tristate {
                             // Already in the sense this pin wants: the
                             // inversion, if the pin needed one, happened
                             // where the enable was named.
-                            Some((_, _, enable)) => enable,
+                            Some((_, _, enables)) => enables[bit as usize],
                             // No enable stated, so the pad drives always,
                             // which on a tri-state pin is a *zero* and on
                             // an output enable a one. Writing the same
@@ -3627,6 +3648,190 @@ impl Mapper<'_> {
             found = Some((id, data.1, enable.1));
         }
         found
+    }
+
+    /// An `inout` port's drivers bit by bit, as `(cells, data, enables)`,
+    /// when no one tri-state drives the whole net but each bit is either
+    /// one bit of a tri-state's output, driven by an ordinary assignment,
+    /// or driven by nothing at all.
+    ///
+    /// A pin shared between functions has its own enable: NewAE's
+    /// ChipWhisperer-Husky drives each of its eight USERIO pins from its own
+    /// `assign d[i] = ... ? ... : 1'bz`, and reads `target_MISO` without
+    /// ever driving it. Every IO buffer has its own enable pin, so nothing
+    /// in the fabric asks for one enable per bus; `absorbed_tristate`'s
+    /// rule is the right one for a bus a single driver turns around, and
+    /// this is the case beside it. A bit nothing drives is an input: its
+    /// enable is zero. A bit an ordinary assignment drives is driven
+    /// always.
+    ///
+    /// The assignments that put a tri-state's output into the port are
+    /// turned round, so the tri-state's net reads the pin back, as the
+    /// port's own net does once the buffer is built: anything that read the
+    /// net before reads what is on the pin now. A port with any other
+    /// driver — a cell other than a tri-state, a variable index — answers
+    /// `None`, and is buffered as it always was.
+    fn absorbed_bitwise(
+        &mut self,
+        module: &mut Module,
+        net: NetId,
+        width: u32,
+    ) -> Option<(Vec<CellId>, ExprId, Vec<ExprId>)> {
+        if module
+            .cells
+            .iter()
+            .any(|(_, c)| c.outputs.iter().any(|(_, out)| *out == net))
+        {
+            return None;
+        }
+        // Who drives each bit: a tri-state's output bit, a value bit, or
+        // nothing.
+        #[derive(Clone, Copy)]
+        enum Bit {
+            Free,
+            Tri { cell: CellId, bit: u32 },
+            Value { assign: usize, bit: u32 },
+        }
+        let mut bits = vec![Bit::Free; width as usize];
+        let mut used_assigns = Vec::new();
+        let tristate_of = |module: &Module, t: NetId| -> Option<CellId> {
+            let mut found = None;
+            for (id, cell) in module.cells.iter() {
+                if cell.outputs.iter().any(|(_, out)| *out == t) {
+                    if cell.kind != CellKind::Tristate || found.is_some() {
+                        return None;
+                    }
+                    found = Some(id);
+                }
+            }
+            found
+        };
+        for (index, assign) in module.assigns.iter().enumerate() {
+            let (lo, hi) = match &assign.target {
+                Lvalue::Net(n) if *n == net => (0, width - 1),
+                Lvalue::Slice { net: n, hi, lo } if *n == net => (*lo, *hi),
+                other if other.nets().contains(&net) => return None,
+                _ => continue,
+            };
+            // The value: a tri-state's output, or a slice of one, or
+            // anything else.
+            let value = module.expr(assign.value);
+            let source = match &value.kind {
+                ExprKind::Net(t) => Some((*t, 0)),
+                ExprKind::Slice { base, lo: from, .. } => {
+                    module.expr(*base).as_net().map(|t| (t, *from))
+                }
+                _ => None,
+            };
+            let cell = source.and_then(|(t, from)| tristate_of(module, t).map(|c| (c, from)));
+            for (k, bit) in (lo..=hi).enumerate() {
+                let k = u32::try_from(k).unwrap_or(0);
+                let slot = bits.get_mut(bit as usize)?;
+                if !matches!(slot, Bit::Free) {
+                    return None;
+                }
+                *slot = match cell {
+                    Some((cell, from)) => Bit::Tri {
+                        cell,
+                        bit: from + k,
+                    },
+                    None => Bit::Value {
+                        assign: index,
+                        bit: k,
+                    },
+                };
+            }
+            used_assigns.push(index);
+        }
+        // Nothing to say beyond the plain output buffer: every bit an
+        // ordinary value.
+        if bits.iter().all(|b| matches!(b, Bit::Value { .. })) {
+            return None;
+        }
+        let span = module.span;
+        let mut data = Vec::with_capacity(width as usize);
+        let mut enables = Vec::with_capacity(width as usize);
+        let mut cells: Vec<CellId> = Vec::new();
+        for bit in &bits {
+            match *bit {
+                Bit::Free => {
+                    data.push(const_expr(module, Const::zero(1), span));
+                    enables.push(const_expr(module, Const::zero(1), span));
+                }
+                Bit::Value { assign, bit } => {
+                    let value = module.assigns[assign].value;
+                    data.push(slice_expr(module, value, bit, bit, span));
+                    enables.push(const_expr(module, Const::ones(1), span));
+                }
+                Bit::Tri { cell, bit } => {
+                    let c = &module.cells[cell];
+                    let (a, en) = (c.input("a")?, c.input("en")?);
+                    data.push(slice_expr(module, a, bit, bit, span));
+                    enables.push(en);
+                    if !cells.contains(&cell) {
+                        cells.push(cell);
+                    }
+                }
+            }
+        }
+        // The assignments into the port turned round: each tri-state's
+        // output reads the pin back. An ordinary value's assignment simply
+        // goes, since the port's net is about to carry the pin.
+        let mut back = Vec::new();
+        for &index in &used_assigns {
+            let assign = &module.assigns[index];
+            let (lo, hi) = match &assign.target {
+                Lvalue::Slice { lo, hi, .. } => (*lo, *hi),
+                _ => (0, width - 1),
+            };
+            let value = module.expr(assign.value);
+            let target = match &value.kind {
+                ExprKind::Net(t) if tristate_of(module, *t).is_some() => Some(Lvalue::Net(*t)),
+                ExprKind::Slice {
+                    base,
+                    lo: from,
+                    hi: to,
+                } if module
+                    .expr(*base)
+                    .as_net()
+                    .is_some_and(|t| tristate_of(module, t).is_some()) =>
+                {
+                    module.expr(*base).as_net().map(|t| Lvalue::Slice {
+                        net: t,
+                        hi: *to,
+                        lo: *from,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                back.push((target, lo, hi));
+            }
+        }
+        let mut index = 0usize;
+        module.assigns.retain(|_| {
+            let keep = !used_assigns.contains(&index);
+            index += 1;
+            keep
+        });
+        let pin = net_expr(module, net, span);
+        for (target, lo, hi) in back {
+            let value = slice_expr(module, pin, hi, lo, span);
+            module.assigns.push(crate::ir::Assign {
+                target,
+                value,
+                delay: None,
+                attrs: crate::ir::Attrs::new(),
+                span,
+            });
+        }
+        data.reverse();
+        let data = if data.len() == 1 {
+            data[0]
+        } else {
+            expr(module, ExprKind::Concat(data), span)
+        };
+        Some((cells, data, enables))
     }
 
     /// One IO buffer cell, with the parameters its direction and options
@@ -6474,6 +6679,101 @@ mod tests {
                 "{device}: `{enable}` does not hold the pad driving"
             );
         }
+    }
+
+    /// An `inout` port whose bits each have their own driver: bit 0 one
+    /// bit of a tri-state's output, through an assignment, as a Verilog
+    /// `assign d[i] = c ? v : 1'bz` in a `generate` loop leaves it, and
+    /// bit 1 driven by nothing, as NewAE's Husky leaves `target_MISO`.
+    /// Each bit's buffer gets its own enable, the bit nothing drives is an
+    /// input (its `T` holds the pad off), the tri-state's own net reads
+    /// the pin back, and no warning is given.
+    ///
+    /// What this catches: the port falling back to an output-only buffer
+    /// (the warning, and on the undriven bit a read of a net nothing
+    /// drives), one enable shared by both bits, and the tri-state's net
+    /// left without a driver once its cell is gone. It cannot catch `T`'s
+    /// sense on silicon; `tests/fpga_xray_tristate.rs` is about that.
+    #[test]
+    fn an_inout_port_takes_its_drivers_bit_by_bit() {
+        let (sources, span) = span();
+        let mut b = ModuleBuilder::new("top", span);
+        let data = b.input("data", Type::bit());
+        let oe = b.input("oe", Type::bit());
+        let bus = b.inout("bus", Type::bits(2));
+        let seen = b.output("seen", Type::bits(2));
+        let back = b.output("back", Type::bit());
+        let t = b.add_net("t", Type::bit());
+        let (data_e, oe_e) = (b.net(data), b.net(oe));
+        b.cell(
+            "tri",
+            CellKind::Tristate,
+            vec![(Name::new("a"), data_e), (Name::new("en"), oe_e)],
+            vec![(Name::new("y"), t)],
+        );
+        let t_e = b.net(t);
+        b.assign(
+            Lvalue::Slice {
+                net: bus,
+                hi: 0,
+                lo: 0,
+            },
+            t_e,
+        );
+        let bus_e = b.net(bus);
+        b.assign(seen, bus_e);
+        let t_read = b.net(t);
+        b.assign(back, t_read);
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+
+        let mut diags = Diagnostics::new();
+        let constraints = Constraints::default();
+        let _ = map_with(&mut design, top, "xc7a35t-ftg256", &constraints, &mut diags);
+        let text = diags.render(&sources);
+        assert!(!diags.has_errors(), "{text}");
+        assert!(!text.contains("output-only"), "{text}");
+        let module = design.module(top);
+        assert!(
+            module
+                .cells
+                .iter()
+                .all(|(_, c)| c.kind != CellKind::Tristate),
+            "the tri-state cell is still there"
+        );
+        // Two buffers, two different enables.
+        let enable_of = |name: &str| {
+            let cell = &module.cells[module.cell_by_name(name).unwrap()];
+            let (_, e) = cell.inputs.iter().find(|(p, _)| p.as_str() == "T").unwrap();
+            *e
+        };
+        let (t0, t1) = (enable_of("bus$io0"), enable_of("bus$io1"));
+        assert_ne!(module.expr(t0).as_net(), module.expr(t1).as_net());
+        // The undriven bit's enable is "never": `T` is active low, so the
+        // net carries the inverse of a constant zero.
+        let t1_net = module.expr(t1).as_net().expect("an enable net");
+        let assign = module
+            .assigns
+            .iter()
+            .find(|a| matches!(a.target, Lvalue::Net(n) if n == t1_net))
+            .expect("the enable net is assigned");
+        let ExprKind::Unary { expr: inner, .. } = module.expr(assign.value).kind else {
+            panic!("`T` is not the inverse of the enable");
+        };
+        assert_eq!(
+            module.expr(inner).as_const(),
+            Some(&crate::logic::Logic::zero(1))
+        );
+        // The tri-state's net reads the pin back.
+        assert!(
+            module
+                .assigns
+                .iter()
+                .any(|a| matches!(a.target, Lvalue::Net(n) if n == t)),
+            "nothing drives the tri-state's net now"
+        );
+        assert!(validate(&design).is_empty(), "{:?}", validate(&design));
     }
 
     #[test]
