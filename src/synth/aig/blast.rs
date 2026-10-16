@@ -105,11 +105,22 @@ pub fn from_module(module: &Module) -> (Aig, Mapping) {
     b.classify();
     let needed = b.needed_nets();
     for net in module.nets.ids() {
-        if !needed[net.index()] || b.boundary[net.index()] {
+        let Some(read) = &needed[net.index()] else {
+            continue;
+        };
+        if b.boundary[net.index()] {
             continue;
         }
         let bits = b.net(net);
         for (i, &e) in bits.iter().enumerate() {
+            // Only the bits something outside the AIG reads are outputs:
+            // `r[sel]` arrives as one bit of `r >> sel`, and mapping the
+            // other bits of the shift cost a 32-way select 101 LUTs where
+            // 11 do. `write_back` drives a bit with no output as zero,
+            // which nothing reads.
+            if !read.get(i).copied().unwrap_or(true) {
+                continue;
+            }
             b.aig.add_output(e);
             b.mapping.outputs.push(BitRef {
                 net,
@@ -333,22 +344,52 @@ impl<'m> Blaster<'m> {
 
     /// Nets whose value something outside the absorbed logic reads (or a
     /// port exposes), so they must be AIG outputs.
-    fn needed_nets(&self) -> Vec<bool> {
+    /// Which bits of each net something outside the AIG reads: `None`
+    /// for a net nothing reads, otherwise one flag per bit. A read through
+    /// a constant slice of the net marks that slice; any other read marks
+    /// every bit.
+    fn needed_nets(&self) -> Vec<Option<Vec<bool>>> {
         let m = self.m;
-        let mut needed = vec![false; m.nets.len()];
+        let mut needed: Vec<Option<Vec<bool>>> = vec![None; m.nets.len()];
+        let width = |n: NetId| m.nets[n].ty.width().unwrap_or(1) as usize;
+        let mark_bits = |needed: &mut Vec<Option<Vec<bool>>>, n: NetId, lo: u32, hi: u32| {
+            let bits = needed[n.index()].get_or_insert_with(|| vec![false; width(n)]);
+            for bit in lo..=hi {
+                if let Some(b) = bits.get_mut(bit as usize) {
+                    *b = true;
+                }
+            }
+        };
+        let all = |needed: &mut Vec<Option<Vec<bool>>>, n: NetId| {
+            needed[n.index()] = Some(vec![true; width(n)]);
+        };
         for port in &m.ports {
-            needed[port.net.index()] = true;
+            all(&mut needed, port.net);
         }
         for (id, net) in m.nets.iter() {
             if net.attrs.is_kept() {
-                needed[id.index()] = true;
+                all(&mut needed, id);
             }
         }
+        let mut seen = vec![false; m.exprs.len()];
         let mut mark = |e: ExprId| {
-            let mut nets = Vec::new();
-            collect_nets(m, e, &mut nets);
-            for n in nets {
-                needed[n.index()] = true;
+            let mut stack = vec![e];
+            while let Some(id) = stack.pop() {
+                let Some(expr) = m.exprs.get(id) else {
+                    continue;
+                };
+                if std::mem::replace(&mut seen[id.index()], true) {
+                    continue;
+                }
+                match &expr.kind {
+                    ExprKind::Net(n) => all(&mut needed, *n),
+                    ExprKind::Slice { base, hi, lo }
+                        if let Some(ExprKind::Net(n)) = m.exprs.get(*base).map(|b| &b.kind) =>
+                    {
+                        mark_bits(&mut needed, *n, *lo, *hi);
+                    }
+                    kind => stack.extend(crate::ir::expr::operands(kind)),
+                }
             }
         };
         let absorbed: std::collections::HashSet<CellId> =
@@ -933,6 +974,42 @@ mod tests {
         let mut map = SourceMap::new();
         let id = map.add("t", "").unwrap();
         Span::new(id, 0, 0)
+    }
+
+    /// A flip-flop reading one bit of a 16-bit shift is one AIG output,
+    /// not sixteen. `r[sel]` arrives as bit 0 of `r >> sel`, and with every
+    /// bit of the shift an output a 32-way select mapped to 101 LUTs where
+    /// 18 do. Would catch the per-bit liveness going back to per-net; would
+    /// not catch a bit marked dead that something reads, which the
+    /// behavioural self-check and the mapped-netlist proofs are for.
+    #[test]
+    fn only_the_bits_something_reads_are_outputs() {
+        let mut b = ModuleBuilder::new("m", span());
+        let clk = b.input("clk", Type::bit());
+        let r = b.input("r", Type::bits(16));
+        let sel = b.input("sel", Type::bits(4));
+        let q = b.add_reg("q", Type::bit());
+        let t = b.add_net("t", Type::bits(16));
+        let (rn, seln) = (b.net(r), b.net(sel));
+        let shifted = b.binary(BinaryOp::Shr, rn, seln);
+        b.assign(t, shifted);
+        let tn = b.net(t);
+        let bit = b.slice(tn, 0, 0);
+        let clkn = b.net(clk);
+        b.cell(
+            "ff",
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: None,
+            },
+            vec![(Name::new("clk"), clkn), (Name::new("d"), bit)],
+            vec![(Name::new("q"), q)],
+        );
+        let m = b.finish();
+        let (_, mapping) = from_module(&m);
+        let outputs: Vec<(NetId, u32)> = mapping.outputs.iter().map(|o| (o.net, o.bit)).collect();
+        assert_eq!(outputs, [(t, 0)]);
     }
 
     #[test]
