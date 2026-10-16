@@ -330,11 +330,15 @@ fn net_drivers(module: &Module) -> HashMap<NetId, CellId> {
 /// Every net an expression tree reads.
 fn expr_nets(module: &Module, root: ExprId) -> Vec<NetId> {
     let mut out = Vec::new();
+    let mut seen = vec![false; module.exprs.len()];
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
         let Some(expr) = module.exprs.get(id) else {
             continue;
         };
+        if std::mem::replace(&mut seen[id.index()], true) {
+            continue;
+        }
         if let ExprKind::Net(net) = expr.kind {
             out.push(net);
         }

@@ -267,11 +267,17 @@ impl SynthStats {
 /// Every net an expression reads.
 fn expr_nets(m: &Module, root: ExprId) -> Vec<NetId> {
     let mut out = Vec::new();
+    // Expressions are shared, so a walk without marks is exponential in
+    // the depth: the Husky's gateware asked one for 64 GiB.
+    let mut seen = vec![false; m.exprs.len()];
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
         let Some(expr) = m.exprs.get(id) else {
             continue;
         };
+        if std::mem::replace(&mut seen[id.index()], true) {
+            continue;
+        }
         if let Some(net) = expr.as_net() {
             out.push(net);
         }
@@ -398,6 +404,32 @@ mod tests {
 
     use super::*;
     use crate::ir::Design;
+
+    /// Expressions are shared: `e = e & e` repeated sixty times is sixty
+    /// nodes, and a walk that does not mark what it has seen visits 2^60.
+    /// The ChipWhisperer-Husky's gateware made the report ask for 64 GiB
+    /// in one allocation this way.
+    ///
+    /// It counts the nets the walk returns rather than timing it: one net,
+    /// read once. Before the fix the same call returned 2^24 copies at a
+    /// depth of 24 and never returned at 60.
+    #[test]
+    fn a_shared_expression_is_walked_once() {
+        use crate::ir::Type;
+        use crate::ir::builder::ModuleBuilder;
+        use crate::source::SourceMap;
+
+        let mut map = SourceMap::new();
+        let file = map.add("t", "").unwrap();
+        let mut b = ModuleBuilder::new("shared", Span::new(file, 0, 0));
+        let a = b.input("a", Type::bit());
+        let mut e = b.net(a);
+        for _ in 0..60 {
+            e = b.and(e, e);
+        }
+        let m = b.finish();
+        assert_eq!(expr_nets(&m, e), vec![a]);
+    }
 
     #[test]
     fn renders_netlist_report() {

@@ -1522,11 +1522,15 @@ fn driven_without_instances(module: &Module) -> Vec<bool> {
 
 /// Every net `id` reads, into `out`.
 fn collect_net_ids(module: &Module, id: ExprId, out: &mut Vec<crate::ir::NetId>) {
+    let mut seen = vec![false; module.exprs.len()];
     let mut stack = vec![id];
     while let Some(id) = stack.pop() {
         let Some(node) = module.exprs.get(id) else {
             continue;
         };
+        if std::mem::replace(&mut seen[id.index()], true) {
+            continue;
+        }
         if let Some(net) = node.as_net() {
             out.push(net);
             continue;
