@@ -123,15 +123,15 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
 <table>
   <tr>
     <th>ports</th>
-    <td class="mono">8</td>
+    <td class="mono">11</td>
   </tr>
   <tr>
     <th>nets</th>
-    <td class="mono">14</td>
+    <td class="mono">19</td>
   </tr>
   <tr>
     <th>cells</th>
-    <td class="mono">7</td>
+    <td class="mono">9</td>
   </tr>
   <tr>
     <th>logic depth</th>
@@ -139,7 +139,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   </tr>
   <tr>
     <th>continuous assigns</th>
-    <td class="mono">2</td>
+    <td class="mono">3</td>
   </tr>
   <tr>
     <th>processes</th>
@@ -151,7 +151,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   </tr>
   <tr>
     <th>cell kinds</th>
-    <td class="mono">add 1, dff 5, mux 1</td>
+    <td class="mono">add 1, dff 6, mux 2</td>
   </tr>
 </table>
 <h2>Ports</h2>
@@ -208,6 +208,30 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <td class="none">—</td>
     </tr>
     <tr>
+      <td class="mono">ce</td>
+      <td>in</td>
+      <td class="num">1</td>
+      <td class="mono">u1</td>
+      <td class="mono">ce</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="mono">d</td>
+      <td>in</td>
+      <td class="num">1</td>
+      <td class="mono">u1</td>
+      <td class="mono">d</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
+      <td class="mono">w</td>
+      <td>out</td>
+      <td class="num">8</td>
+      <td class="mono">u8</td>
+      <td class="mono">w</td>
+      <td class="none">—</td>
+    </tr>
+    <tr>
       <td class="mono">y</td>
       <td>out</td>
       <td class="num">8</td>
@@ -255,7 +279,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <td class="num">8</td>
       <td>posedge</td>
       <td class="loc">
-        <a href="source/0-mem_regs.cells.rtl.html#L32">mem_regs.cells.rtl:32:3</a>
+        <a href="source/0-mem_regs.cells.rtl.html#L42">mem_regs.cells.rtl:42:3</a>
       </td>
     </tr>
     <tr>
@@ -265,7 +289,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <td class="num">8</td>
       <td>posedge</td>
       <td class="loc">
-        <a href="source/0-mem_regs.cells.rtl.html#L33">mem_regs.cells.rtl:33:3</a>
+        <a href="source/0-mem_regs.cells.rtl.html#L43">mem_regs.cells.rtl:43:3</a>
       </td>
     </tr>
     <tr>
@@ -275,7 +299,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <td class="num">8</td>
       <td>posedge</td>
       <td class="loc">
-        <a href="source/0-mem_regs.cells.rtl.html#L35">mem_regs.cells.rtl:35:3</a>
+        <a href="source/0-mem_regs.cells.rtl.html#L45">mem_regs.cells.rtl:45:3</a>
       </td>
     </tr>
     <tr>
@@ -285,7 +309,17 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <td class="num">8</td>
       <td>posedge</td>
       <td class="loc">
-        <a href="source/0-mem_regs.cells.rtl.html#L37">mem_regs.cells.rtl:37:3</a>
+        <a href="source/0-mem_regs.cells.rtl.html#L47">mem_regs.cells.rtl:47:3</a>
+      </td>
+    </tr>
+    <tr>
+      <td>flip-flop</td>
+      <td class="mono">c$4$ff</td>
+      <td class="mono">c$4</td>
+      <td class="num">8</td>
+      <td>posedge, sync reset active-low, value 8&#39;d0</td>
+      <td class="loc">
+        <a href="source/0-mem_regs.cells.rtl.html#L49">mem_regs.cells.rtl:49:3</a>
       </td>
     </tr>
     <tr>
@@ -295,7 +329,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <td class="num">8</td>
       <td>posedge, enable</td>
       <td class="loc">
-        <a href="source/0-mem_regs.cells.rtl.html#L38">mem_regs.cells.rtl:38:3</a>
+        <a href="source/0-mem_regs.cells.rtl.html#L50">mem_regs.cells.rtl:50:3</a>
       </td>
     </tr>
   </tbody>

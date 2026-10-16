@@ -25,10 +25,12 @@
 
 use crate::diag::Diagnostics;
 use crate::ir::{
-    Assign, AttrValue, Attrs, CellId, CellKind, ExprId, ExprKind, Lvalue, MemoryId, Module, NetId,
+    Assign, AttrValue, Attrs, BinaryOp, CellId, CellKind, ExprId, ExprKind, Lvalue, MemoryId,
+    Module, NetId, UnaryOp,
 };
+use crate::source::Span;
 use crate::synth::eval::eval_closed;
-use crate::synth::util::{add_cell, add_wire, mk_const, mk_mux, mk_net, mk_undef};
+use crate::synth::util::{add_cell, add_wire, const_bit, mk_const, mk_mux, mk_net, mk_undef};
 use crate::synth::{Pass, PassStats};
 
 /// The memory-scalarisation pass; see the module docs.
@@ -178,15 +180,21 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             });
             continue;
         }
-        // The latest port is the outermost choice, so it wins.
-        let mut d = mk_net(m, *net, span);
-        let mut clk = None;
-        for port in writers {
-            if let (Some(en), Some(data)) = (port.en, port.data) {
-                d = mk_mux(m, en, data, d, span);
+        let hold = mk_net(m, *net, span);
+        let clk = writers.last().and_then(|p| p.clk);
+        let d = match decision_tree(m, &writers, hold, span) {
+            Some(d) => d,
+            None => {
+                // The latest port is the outermost choice, so it wins.
+                let mut d = hold;
+                for port in &writers {
+                    if let (Some(en), Some(data)) = (port.en, port.data) {
+                        d = mk_mux(m, en, data, d, span);
+                    }
+                }
+                d
             }
-            clk = port.clk;
-        }
+        };
         let Some(clk) = clk else { continue };
         add_cell(
             m,
@@ -239,4 +247,146 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
     let ports: Vec<CellId> = reads.iter().chain(&writes).map(|p| p.cell).collect();
     m.cells.retain(|id, _| !ports.contains(&id));
     u64::try_from(size).ok()
+}
+
+/// What one literal of an enable tests: a whole one-bit net, one bit of a
+/// net, or, for anything else, the expression node itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Atom {
+    Net(NetId),
+    Bit(NetId, u32),
+    Node(ExprId),
+}
+
+/// One literal: what it tests, whether it wants it high, and an
+/// expression for the thing tested (un-negated), to choose on.
+type Literal = (Atom, bool, ExprId);
+
+/// `e` as a product of literals, or `None` when it is constant false or
+/// contradicts itself. A constant true is the empty product. Anything that
+/// is not an AND of (possibly negated) single bits is one literal.
+fn product(m: &Module, e: ExprId, out: &mut Vec<Literal>) -> Option<()> {
+    if let Some(v) = const_bit(m, e) {
+        return v.then_some(());
+    }
+    let node = m.expr(e);
+    if node.ty.is_bit() {
+        match node.kind {
+            ExprKind::Binary {
+                op: BinaryOp::And | BinaryOp::LogicAnd,
+                lhs,
+                rhs,
+            } if m.expr(lhs).ty.is_bit() && m.expr(rhs).ty.is_bit() => {
+                product(m, lhs, out)?;
+                return product(m, rhs, out);
+            }
+            _ => {}
+        }
+    }
+    let (inner, want) = match node.kind {
+        ExprKind::Unary {
+            op: UnaryOp::Not | UnaryOp::LogicNot,
+            expr,
+        } if m.expr(expr).ty.is_bit() => (expr, false),
+        _ => (e, true),
+    };
+    let atom = match m.expr(inner).kind {
+        ExprKind::Net(n) => Atom::Net(n),
+        ExprKind::Slice { base, hi, lo } if hi == lo => match m.expr(base).kind {
+            ExprKind::Net(n) => Atom::Bit(n, lo),
+            _ => Atom::Node(inner),
+        },
+        _ => Atom::Node(inner),
+    };
+    match out.iter().find(|(a, _, _)| *a == atom) {
+        Some((_, w, _)) if *w != want => None,
+        Some(_) => Some(()),
+        None => {
+            out.push((atom, want, inner));
+            Some(())
+        }
+    }
+}
+
+/// A word's next value as a tree of choices on its writers' enables,
+/// rather than one multiplexer per writer in priority order — or `None`,
+/// and the caller builds the chain.
+///
+/// The chain `en2 ? d2 : (en1 ? d1 : (en0 ? d0 : q))` is what the memory
+/// meant, and when the enables are the arms of an `if` / `else if` it
+/// hides that they never overlap: `esad`'s `counter_incr[i]` is written
+/// under `~ce`, `ce & d` and `ce & ~d`, and the chain left behind is a
+/// multiplexer a bit for a hold that cannot happen, in front of two
+/// adders that nothing then sees are alternatives. Split on the literal
+/// most enables test, cofactor, and repeat, and the same writers give
+/// `ce ? (d ? d1 : d2) : d0` — the shape a plain register's `if` makes,
+/// which `FfOpt` turns into a synchronous reset and FPGA mapping into one
+/// adder.
+///
+/// Only for two or more writers whose enables are all products of
+/// literals, and only when the hold is reached from at most one leaf:
+/// `FfOpt` lifts an enable off a hold at the top of `d` and could not
+/// lift two, so a tree that scatters it is not used. The tree is at most
+/// a few nodes per writer or it is not used either.
+fn decision_tree(m: &mut Module, writers: &[&Port], hold: ExprId, span: Span) -> Option<ExprId> {
+    if writers.len() < 2 {
+        return None;
+    }
+    let mut ports: Vec<(Vec<Literal>, ExprId)> = Vec::with_capacity(writers.len());
+    for port in writers {
+        let mut cube = Vec::new();
+        if product(m, port.en?, &mut cube).is_some() {
+            ports.push((cube, port.data?));
+        }
+    }
+    let mut budget = 4 * writers.len() + 4;
+    let mut holds = 0usize;
+    let d = build(m, &ports, hold, &mut budget, &mut holds, span)?;
+    (holds <= 1).then_some(d)
+}
+
+fn build(
+    m: &mut Module,
+    ports: &[(Vec<Literal>, ExprId)],
+    hold: ExprId,
+    budget: &mut usize,
+    holds: &mut usize,
+    span: Span,
+) -> Option<ExprId> {
+    let Some((last, data)) = ports.last() else {
+        *holds += 1;
+        return Some(hold);
+    };
+    if last.is_empty() {
+        return Some(*data);
+    }
+    *budget = budget.checked_sub(1)?;
+    // The literal of the latest writer that the most writers test.
+    let (atom, _, chooser) = *last
+        .iter()
+        .max_by_key(|(atom, _, _)| {
+            ports
+                .iter()
+                .filter(|(cube, _)| cube.iter().any(|(a, _, _)| a == atom))
+                .count()
+        })
+        .expect("not empty");
+    let cofactor = |value: bool| -> Vec<(Vec<Literal>, ExprId)> {
+        ports
+            .iter()
+            .filter(|(cube, _)| !cube.iter().any(|(a, w, _)| *a == atom && *w != value))
+            .map(|(cube, data)| {
+                let rest = cube
+                    .iter()
+                    .filter(|(a, _, _)| *a != atom)
+                    .copied()
+                    .collect();
+                (rest, *data)
+            })
+            .collect()
+    };
+    let (high, low) = (cofactor(true), cofactor(false));
+    let then_ = build(m, &high, hold, budget, holds, span)?;
+    let else_ = build(m, &low, hold, budget, holds, span)?;
+    Some(mk_mux(m, chooser, then_, else_, span))
 }

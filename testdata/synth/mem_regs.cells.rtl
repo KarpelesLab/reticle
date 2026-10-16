@@ -6,6 +6,9 @@ module mem_regs
   net %b u8 wire
   net %sel u1 wire
   net %en u1 wire
+  net %ce u1 wire
+  net %d u1 wire
+  net %w u8 wire
   net %y u8 wire
   net %z u8 wire
   net %r u8 wire
@@ -17,16 +20,23 @@ module mem_regs
   net %c$2 u8 wire
   attr init = 8'd4
   net %c$3 u8 wire
+  attr init = 8'd5
+  net %c$4 u8 wire
   net %c$2$ff$add u8 wire
   net %c$3$ff$mux u8 wire
+  net %c$4$ff$mux u8 wire
   port clk in %clk
   port a in %a
   port b in %b
   port sel in %sel
   port en in %en
+  port ce in %ce
+  port d in %d
+  port w out %w
   port y out %y
   port z out %z
   port r out %r
+  assign %w = %c$4
   assign %y = %c$3
   assign %z = 8'd6
   cell c$0$ff dff pos (clk=%clk, d=%a) -> (q=%c$0)
@@ -35,5 +45,7 @@ module mem_regs
   cell c$2$ff dff pos (clk=%clk, d=%c$2$ff$add) -> (q=%c$2)
   cell c$3$ff$mux mux (a=%c$2, b=%b, s=%sel) -> (y=%c$3$ff$mux)
   cell c$3$ff dff pos (clk=%clk, d=%c$3$ff$mux) -> (q=%c$3)
+  cell c$4$ff$mux mux (a=%b, b=%a, s=%d) -> (y=%c$4$ff$mux)
+  cell c$4$ff dff pos srst neg 8'd0 (clk=%clk, d=%c$4$ff$mux, rst=%ce) -> (q=%c$4)
   cell c$rd$ff dff pos en (clk=%clk, d=%c$3, en=%en) -> (q=%r)
 end

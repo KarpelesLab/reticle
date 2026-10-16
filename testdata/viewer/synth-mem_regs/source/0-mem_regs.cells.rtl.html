@@ -113,7 +113,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <span class="brand">reticle viewer</span>
     </header>
     <main class="wide"><h1>mem_regs.cells.rtl
-  <span class="kind"> 40 lines</span>
+  <span class="kind"> 52 lines</span>
 </h1>
 <ol class="src">
   <li id="L1">top mem_regs</li>
@@ -124,38 +124,50 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   <li id="L6">  net %b u8 wire</li>
   <li id="L7">  net %sel u1 wire</li>
   <li id="L8">  net %en u1 wire</li>
-  <li id="L9">  net %y u8 wire</li>
-  <li id="L10">  net %z u8 wire</li>
-  <li id="L11">  net %r u8 wire</li>
-  <li id="L12">  attr init = 8&#39;d1</li>
-  <li id="L13">  net %c$0 u8 wire</li>
-  <li id="L14">  attr init = 8&#39;d2</li>
-  <li id="L15">  net %c$1 u8 wire</li>
-  <li id="L16">  attr init = 8&#39;d3</li>
-  <li id="L17">  net %c$2 u8 wire</li>
-  <li id="L18">  attr init = 8&#39;d4</li>
-  <li id="L19">  net %c$3 u8 wire</li>
-  <li id="L20">  net %c$2$ff$add u8 wire</li>
-  <li id="L21">  net %c$3$ff$mux u8 wire</li>
-  <li id="L22">  port clk in %clk</li>
-  <li id="L23">  port a in %a</li>
-  <li id="L24">  port b in %b</li>
-  <li id="L25">  port sel in %sel</li>
-  <li id="L26">  port en in %en</li>
-  <li id="L27">  port y out %y</li>
-  <li id="L28">  port z out %z</li>
-  <li id="L29">  port r out %r</li>
-  <li id="L30">  assign %y = %c$3</li>
-  <li id="L31">  assign %z = 8&#39;d6</li>
-  <li id="L32">  cell c$0$ff dff pos (clk=%clk, d=%a) -&gt; (q=%c$0)</li>
-  <li id="L33">  cell c$1$ff dff pos (clk=%clk, d=%c$0) -&gt; (q=%c$1)</li>
-  <li id="L34">  cell c$2$ff$add add (a=%c$1, b=8&#39;d1) -&gt; (y=%c$2$ff$add)</li>
-  <li id="L35">  cell c$2$ff dff pos (clk=%clk, d=%c$2$ff$add) -&gt; (q=%c$2)</li>
-  <li id="L36">  cell c$3$ff$mux mux (a=%c$2, b=%b, s=%sel) -&gt; (y=%c$3$ff$mux)</li>
-  <li id="L37">  cell c$3$ff dff pos (clk=%clk, d=%c$3$ff$mux) -&gt; (q=%c$3)</li>
-  <li id="L38">  cell c$rd$ff dff pos en (clk=%clk, d=%c$3, en=%en) -&gt; (q=%r)</li>
-  <li id="L39">end</li>
-  <li id="L40"></li>
+  <li id="L9">  net %ce u1 wire</li>
+  <li id="L10">  net %d u1 wire</li>
+  <li id="L11">  net %w u8 wire</li>
+  <li id="L12">  net %y u8 wire</li>
+  <li id="L13">  net %z u8 wire</li>
+  <li id="L14">  net %r u8 wire</li>
+  <li id="L15">  attr init = 8&#39;d1</li>
+  <li id="L16">  net %c$0 u8 wire</li>
+  <li id="L17">  attr init = 8&#39;d2</li>
+  <li id="L18">  net %c$1 u8 wire</li>
+  <li id="L19">  attr init = 8&#39;d3</li>
+  <li id="L20">  net %c$2 u8 wire</li>
+  <li id="L21">  attr init = 8&#39;d4</li>
+  <li id="L22">  net %c$3 u8 wire</li>
+  <li id="L23">  attr init = 8&#39;d5</li>
+  <li id="L24">  net %c$4 u8 wire</li>
+  <li id="L25">  net %c$2$ff$add u8 wire</li>
+  <li id="L26">  net %c$3$ff$mux u8 wire</li>
+  <li id="L27">  net %c$4$ff$mux u8 wire</li>
+  <li id="L28">  port clk in %clk</li>
+  <li id="L29">  port a in %a</li>
+  <li id="L30">  port b in %b</li>
+  <li id="L31">  port sel in %sel</li>
+  <li id="L32">  port en in %en</li>
+  <li id="L33">  port ce in %ce</li>
+  <li id="L34">  port d in %d</li>
+  <li id="L35">  port w out %w</li>
+  <li id="L36">  port y out %y</li>
+  <li id="L37">  port z out %z</li>
+  <li id="L38">  port r out %r</li>
+  <li id="L39">  assign %w = %c$4</li>
+  <li id="L40">  assign %y = %c$3</li>
+  <li id="L41">  assign %z = 8&#39;d6</li>
+  <li id="L42">  cell c$0$ff dff pos (clk=%clk, d=%a) -&gt; (q=%c$0)</li>
+  <li id="L43">  cell c$1$ff dff pos (clk=%clk, d=%c$0) -&gt; (q=%c$1)</li>
+  <li id="L44">  cell c$2$ff$add add (a=%c$1, b=8&#39;d1) -&gt; (y=%c$2$ff$add)</li>
+  <li id="L45">  cell c$2$ff dff pos (clk=%clk, d=%c$2$ff$add) -&gt; (q=%c$2)</li>
+  <li id="L46">  cell c$3$ff$mux mux (a=%c$2, b=%b, s=%sel) -&gt; (y=%c$3$ff$mux)</li>
+  <li id="L47">  cell c$3$ff dff pos (clk=%clk, d=%c$3$ff$mux) -&gt; (q=%c$3)</li>
+  <li id="L48">  cell c$4$ff$mux mux (a=%b, b=%a, s=%d) -&gt; (y=%c$4$ff$mux)</li>
+  <li id="L49">  cell c$4$ff dff pos srst neg 8&#39;d0 (clk=%clk, d=%c$4$ff$mux, rst=%ce) -&gt; (q=%c$4)</li>
+  <li id="L50">  cell c$rd$ff dff pos en (clk=%clk, d=%c$3, en=%en) -&gt; (q=%r)</li>
+  <li id="L51">end</li>
+  <li id="L52"></li>
 </ol>
     </main>
   </body>

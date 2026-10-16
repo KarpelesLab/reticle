@@ -4,7 +4,11 @@ top mem_regs
 // a Verilog `generate` loop of `always` blocks leaves it: a shift register
 // of four words through `@c`, two writers on word 3 of which the later
 // wins, a word nothing writes that keeps its initial value, a clocked
-// read with an enable. (A read past the end the IR's validator refuses
+// read with an enable, and a word written by the three arms of an `if` /
+// `else if` — zero under `~ce`, then `a` or `b` by `d` — which has to
+// come out as `ce ? (d ? a : b) : 0`, a register with a synchronous
+// reset, and not as three multiplexers in priority order ending in a hold
+// that cannot happen. (A read past the end the IR's validator refuses
 // outright.) `mem_scalarize` makes it
 // registers; the behavioural self-check runs it before and after.
 module mem_regs
@@ -13,6 +17,9 @@ module mem_regs
   net %b u8 wire
   net %sel u1 wire
   net %en u1 wire
+  net %ce u1 wire
+  net %d u1 wire
+  net %w u8 wire
   net %y u8 wire
   net %z u8 wire
   net %r u8 reg
@@ -21,6 +28,9 @@ module mem_regs
   port b in %b
   port sel in %sel
   port en in %en
+  port ce in %ce
+  port d in %d
+  port w out %w
   port y out %y
   port z out %z
   port r out %r
@@ -46,6 +56,18 @@ module mem_regs
       %r <= @c[3'd3]
     end
   end
+  process p5 seq posedge %clk
+    if %ce
+      if %d
+        memwrite @c[3'd4] = %a
+      else
+        memwrite @c[3'd4] = %b
+      end
+    else
+      memwrite @c[3'd4] = 8'd0
+    end
+  end
+  assign %w = @c[3'd4]
   assign %y = @c[3'd3]
   assign %z = @c[3'd5]
 end
