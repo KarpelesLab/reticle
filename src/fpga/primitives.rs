@@ -931,22 +931,50 @@ fn net_use_counts(module: &Module) -> Vec<usize> {
     let mut counts = vec![0usize; module.nets.len()];
     let mut roots = Vec::new();
     module.for_each_root_expr(|id| roots.push(id));
+    let mut visits = vec![0u8; module.exprs.len()];
+    let mut touched = Vec::new();
     for id in roots {
-        count_nets(module, id, &mut counts);
+        count_nets(module, id, &mut counts, &mut visits, &mut touched);
+        for t in touched.drain(..) {
+            visits[t] = 0;
+        }
     }
     counts
 }
 
-/// Adds one to `counts` for every net `id` reads.
-fn count_nets(module: &Module, id: ExprId, counts: &mut [usize]) {
+/// Adds one to `counts` for every read of a net under `id`, **saturating
+/// at two**: one is the only count anything asks about.
+///
+/// An expression is a graph, and a node two operands share is read twice.
+/// Counting that by walking every path, as this did, is exponential in the
+/// depth of the sharing: on the flattened ChipWhisperer-Husky the DSP step,
+/// which asks once per multiplier, ran for over half an hour on 78 MB. A
+/// node walked a third time can only add to counts already at two, so
+/// each is walked at most twice; `visits` is per root and reset through
+/// `touched`.
+fn count_nets(
+    module: &Module,
+    id: ExprId,
+    counts: &mut [usize],
+    visits: &mut [u8],
+    touched: &mut Vec<usize>,
+) {
     let mut stack = vec![id];
     while let Some(id) = stack.pop() {
         let Some(node) = module.exprs.get(id) else {
             continue;
         };
+        let seen = &mut visits[id.index()];
+        if *seen == 0 {
+            touched.push(id.index());
+        }
+        if *seen >= 2 {
+            continue;
+        }
+        *seen += 1;
         if let ExprKind::Net(net) = node.kind {
             if let Some(slot) = counts.get_mut(net.index()) {
-                *slot += 1;
+                *slot = (*slot + 1).min(2);
             }
             continue;
         }
@@ -2540,9 +2568,13 @@ impl Mapper<'_> {
             .filter(|(_, c)| c.kind == CellKind::Mul)
             .map(|(id, _)| id)
             .collect();
+        // Who reads what, counted once and again only after a multiplier
+        // became a block, which is when a count can have changed.
+        let mut uses = net_use_counts(module);
         for mul in muls {
-            if let Some(used) = self.dsp(module, mul) {
+            if let Some(used) = self.dsp(module, mul, &uses) {
                 removed.extend(used);
+                uses = net_use_counts(module);
             }
         }
         if !removed.is_empty() {
@@ -2550,7 +2582,7 @@ impl Mapper<'_> {
         }
     }
 
-    fn dsp(&mut self, module: &mut Module, mul: CellId) -> Option<Vec<CellId>> {
+    fn dsp(&mut self, module: &mut Module, mul: CellId, uses: &[usize]) -> Option<Vec<CellId>> {
         let cell = module.cells.get(mul)?;
         let name = cell.name.as_str().to_owned();
         let span = cell.span;
@@ -2562,7 +2594,6 @@ impl Mapper<'_> {
 
         // Fold a following adder in when the device has an accumulator and
         // the multiplier's result goes nowhere else.
-        let uses = net_use_counts(module);
         let single_use = uses.get(y.index()).copied().unwrap_or(0) == 1;
         let add = if single_use {
             self.adder_fed_by(module, y)
@@ -5163,6 +5194,28 @@ mod tests {
             vec![(Name::new("data"), out)],
             span,
         );
+    }
+
+    /// A net read through a node shared sixty levels deep counts as read
+    /// twice, not 2^60 times, and the count comes back. Counting every path
+    /// made the DSP step run for over half an hour on the flattened
+    /// ChipWhisperer-Husky. Would catch the walk going back to following
+    /// paths (at depth 24 the old count was 2^24); would not catch a count
+    /// of one where the truth is two, which nothing here constructs.
+    #[test]
+    fn a_shared_read_is_counted_without_walking_every_path() {
+        let mut map = SourceMap::new();
+        let file = map.add("t", "").unwrap();
+        let mut b = ModuleBuilder::new("shared", Span::new(file, 0, 0));
+        let a = b.input("a", Type::bit());
+        let y = b.output("y", Type::bit());
+        let mut e = b.net(a);
+        for _ in 0..60 {
+            e = b.and(e, e);
+        }
+        b.assign(y, e);
+        let m = b.finish();
+        assert_eq!(net_use_counts(&m)[a.index()], 2);
     }
 
     #[test]
