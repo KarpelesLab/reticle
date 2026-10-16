@@ -166,6 +166,7 @@ mod carry;
 mod cmt;
 mod dsp;
 mod io;
+mod iologic;
 mod lutram;
 mod parse;
 mod sites;
@@ -192,6 +193,7 @@ pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
     parse::segbits(text, path)
 }
 pub use io::{IoError, IoTables, io_standards};
+pub use iologic::IoLogicError;
 pub use sites::SiteCoverage;
 
 /// Why a Project X-Ray database could not be read.

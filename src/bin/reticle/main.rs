@@ -3437,6 +3437,10 @@ fn write_xc7_bitstream(
     fabric
         .configure_global_buffers(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // An `IDDR` or `ODDR` beside its pad, the same way. See `xray::iologic`.
+    fabric
+        .configure_io_logic(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
     // A block RAM's modes, and a value on every input the design leaves
     // alone: an undriven interconnect input reads one on this family. See
     // `xray::bram`.

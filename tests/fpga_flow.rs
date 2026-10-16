@@ -725,10 +725,20 @@ fn the_unsupported_corners_are_reported() {
     assert!(fpga::check_nextpnr_json(&run.design, top, run.device, &run.constraints).is_empty());
 
     let device = fpga::target("xc7a35t-cpg236").expect("the part");
+    // `IDDR` and `ODDR` are declared, for a design that instantiates them
+    // by name (`xray::iologic` wires and configures them), but under their
+    // own pin names: a `ddr` port constraint maps onto `q0`/`q1` and
+    // `d0`/`d1`, which they do not have, so mapping still refuses to infer
+    // one on this family rather than build a register half connected.
+    let iddr = device.bel(BelRole::DdrIn).expect("IDDR is declared");
+    let oddr = device.bel(BelRole::DdrOut).expect("ODDR is declared");
+    assert_eq!((iddr.name.as_str(), oddr.name.as_str()), ("IDDR", "ODDR"));
     assert!(
-        device.bel(BelRole::DdrIn).is_none() && device.bel(BelRole::DdrOut).is_none(),
-        "the 7-series file declares a DDR register it cannot wire"
+        !iddr.has_ports(&["d", "clk", "q0", "q1"]) && !oddr.has_ports(&["d0", "d1", "clk", "q"]),
+        "a `ddr` constraint would now infer a 7-series DDR register"
     );
+    assert_eq!(iddr.outputs, ["Q1", "Q2"]);
+    assert_eq!(oddr.outputs, ["Q"]);
     assert!(device.bel(BelRole::IoDelay).is_none());
     // DSP48E1 used to be here, deliberately undeclared, because the `dsp`
     // line could not tie its mode pins and an untied block does not

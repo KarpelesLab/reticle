@@ -3980,14 +3980,45 @@ end
         assert_eq!(device, again);
         assert!(device.to_text().contains(" absorbs dout,oe "));
 
-        // The shipped files: the ECP5's `TRELLIS_IO` is the only `bel`
-        // line in the tree with a clause, and the 7 series' buffers have
-        // none, which is exactly the difference.
+        // The shipped files: the ECP5's `TRELLIS_IO` absorbs a constant on
+        // its data pin and the 7 series' IO buffers do not, which is exactly
+        // the difference.
         let ecp5 = super::super::target("ecp5-12f-CABGA256").unwrap();
         let io = ecp5.bel(BelRole::Io).unwrap();
         assert_eq!(io.name, "TRELLIS_IO");
         assert!(io.absorbs_constant("dout"), "{:?}", io.absorbs);
-        for name in ["xc7a35t-cpg236", "ice40-hx1k-tq144", "gw2a-18-pg256"] {
+        // The 7 series' clause is on its clock buffers' and IO registers'
+        // control pins, and on nothing else: each one's backend pass
+        // (`xray::bufg`, `xray::iologic`) gives a constant
+        // there by the pin's inverter instead of a lookup table.
+        for name in ["xc7a35t-cpg236", "xc7a35t-ftg256"] {
+            let device = super::super::target(name).unwrap();
+            let absorbing: Vec<(&str, Vec<&str>)> = device
+                .bels
+                .iter()
+                .filter(|b| !b.absorbs.is_empty())
+                .map(|b| {
+                    (
+                        b.name.as_str(),
+                        b.absorbs.iter().map(String::as_str).collect(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                absorbing,
+                vec![
+                    ("BUFGCE", vec!["ce"]),
+                    ("BUFGMUX", vec!["ce", "ce1"]),
+                    ("IDDR", vec!["ce", "sr"]),
+                    ("ODDR", vec!["d1", "d2", "ce", "sr"]),
+                ],
+                "{name}"
+            );
+            for bel in device.bels.iter().filter(|b| b.role == BelRole::Io) {
+                assert!(bel.absorbs.is_empty(), "{name}: `{}`", bel.name);
+            }
+        }
+        for name in ["ice40-hx1k-tq144", "gw2a-18-pg256"] {
             let device = super::super::target(name).unwrap();
             for bel in &device.bels {
                 assert!(

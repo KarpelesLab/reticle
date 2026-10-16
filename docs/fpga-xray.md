@@ -2682,6 +2682,46 @@ documentation. A standard with no recipe is refused by name.
 
 Nothing here has run on a part.
 
+## The registers beside a pad: `IDDR` and `ODDR` by name
+
+The `ILOGIC` and `OLOGIC` beside every pad were wires to this flow, the
+fixed paths a plain input or output takes through them. NewAE's
+ChipWhisperer-Husky samples its ADC with ten `IDDR`s and forwards clocks
+with five `ODDR`s, so they are bels now as well (`src/fpga/xray/iologic.rs`),
+of kind `ddr_in` and `ddr_out`, with their bits written per cell by
+`XrayFabric::configure_io_logic`.
+
+An `IDDR`'s `D` comes only from its own pad and an `ODDR`'s `Q` goes only
+to its own, and the pad's buffer is the instance a `set_io` fixes. The
+placer's dedicated-wiring groups leave fixed instances out, so a new step,
+`place::follow_fixed_ends`, fixes the other end: walking from the free
+end's pin away from the design, on every site of its kind, closes within a
+few wires, and the one site whose walk reaches the fixed pin is where it
+goes. It asks from the register's side because the pad's side is not
+dedicated — an output pad is also the plain path from the interconnect,
+through the very `OLOGIC` the `ODDR` takes. A lookup table's walk never
+closes, so nothing else is ever fixed this way.
+
+**CHECKED against Vivado.** `tests/fpga_xray_iologic.rs` builds
+`testdata/fpga/husky/io_registers.v` — an `IDDR` behind an `IBUFDS` on the
+ADC's first data pair, an `ODDR` into an `OBUFDS` on its clock pair, both
+on the Husky's own balls and with its own parameters, and a third `ODDR`
+with the glitch outputs' `ASYNC` reset type and routed reset — and every
+one decodes to exactly the features Vivado set for the same register in
+NewAE's image, the `IDDR`'s clock reaching both `CLK` and `CLKB` as
+Vivado routes it. Only the clock's route differs: Vivado took the
+forwarded clock to its `ODDR` through interconnect, and this flow takes
+it off the leaf clock.
+
+What is refused rather than guessed, because no Husky instance does it: a
+clock edge other than `OPPOSITE_EDGE` and `SAME_EDGE`, a set or reset tied
+to one, an enable tied to zero, an inverted clock, and an `IDDR` whose set
+or reset is routed. A `ddr` *port* constraint still does not build one: the
+roles are the primitives' own pin names, not the `q0`/`d0` that mapping
+infers onto, and `xc7.dev` says so.
+
+Nothing here has run on a part.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -3111,6 +3151,7 @@ will have.
 | `src/fpga/xray/carry.rs` | `legalise_carries`: a lookup table for every propagate bit of a `CARRY4` that has none, and the constant generates in `O5` |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
+| `src/fpga/xray/iologic.rs` | an `IDDR` on an `ILOGIC` and an `ODDR` on an `OLOGIC`, each configured from its parameters and pins as Vivado configured the Husky's |
 | `src/fpga/xray/io.rs` | a pad per buffer: its standard, drive, slew and pull, and a differential pair across its tile, each recipe checked against NewAE's Husky image |
 | `src/fpga/xray/bufg.rs` | a `BUFGCE` and a `BUFGMUX` on a `BUFGCTRL`: each control's inverter from what was routed to it, checked against the thirteen buffers of NewAE's Husky image |
 | `src/fpga/xray/cmt.rs` | the clock management tile: the PLL as a bel, its DRP register values (computed and quoted, each said which), and `XrayFabric::configure_clock_managers` |

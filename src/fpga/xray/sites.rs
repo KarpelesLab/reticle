@@ -1026,6 +1026,10 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
     if !managers.is_empty() {
         return managers;
     }
+    let io_logic = super::iologic::io_logic_bels(tile_type);
+    if !io_logic.is_empty() {
+        return io_logic;
+    }
     if !matches!(tile_type, "CLK_BUFG_BOT_R" | "CLK_BUFG_TOP_R") {
         return Vec::new();
     }

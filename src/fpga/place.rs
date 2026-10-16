@@ -1927,6 +1927,7 @@ pub fn place(
         })
         .collect();
     fix_pins(netlist, arch, graph, &mut info, &mut report)?;
+    report.fixed += follow_fixed_ends(netlist, graph, &sites_by_kind, &mut info);
     apply_regions(netlist, graph, constraints, &mut info);
     // After the pin constraints and the regions, because both of them
     // narrow where the *other* end of a global signal can be, and before
@@ -1976,6 +1977,142 @@ pub fn place(
     }
     report.work = WORK.with(Cell::get);
     Ok((placement, report))
+}
+
+/// Fixes every instance whose site follows from a fixed neighbour through
+/// wiring nothing else reaches, and returns how many it fixed.
+///
+/// [`build_clusters`] makes a rigid group of two instances that dedicated
+/// wiring ties together, and leaves out an instance a package pin fixes:
+/// two rigid shapes cannot both be obeyed. But one fixed end decides the
+/// other completely when the free end's pin is dedicated, and it is the
+/// common case at a pad: a 7-series `IDDR`'s `D` comes only from its own
+/// pad's input buffer, and an `ODDR`'s `Q` goes only to its own pad's
+/// output buffer, and the buffer is the instance a `set_io` fixes.
+///
+/// The test, for a link whose one end is fixed and other is free: walk
+/// from the free end's pin, on every site of its kind, **away** from the
+/// rest of the design — forwards from a driver, backwards from a sink —
+/// for at most [`DEDICATED_WALK`] wires. If every such walk closes, the
+/// free end's pin reaches nothing but those wires, and the one site whose
+/// walk reaches the fixed end's pin is where it must sit. The walk is not
+/// [`dedicated_drivers`]'s: that one starts at the *sink* and asks whether
+/// the sink is fed only from a few wires, which an output pad is not — it
+/// is also the plain path from the interconnect, through the same `OLOGIC`
+/// an `ODDR` would occupy. Asking from the `ODDR`'s side instead, its `OQ`
+/// reaches its pad and nothing else.
+///
+/// An instance whose pin walk does not close — a lookup table, whose
+/// output reaches the whole interconnect — is never fixed this way, so a
+/// family whose IO logic is on the general interconnect places exactly as
+/// before. Repeated until nothing changes, so a chain of such links
+/// resolves from its fixed end.
+fn follow_fixed_ends(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+) -> usize {
+    // The wires a pin reaches going away from the design, or `None` when
+    // that is more than a handful.
+    let closure = |site: usize, role: &str, forward: bool| -> Option<Vec<NodeId>> {
+        let mut seen: Vec<NodeId> = graph.sites[site].pin_nodes(role).collect();
+        if seen.is_empty() {
+            return None;
+        }
+        let mut next = 0;
+        while next < seen.len() {
+            let node = seen[next];
+            next += 1;
+            let pips = if forward {
+                graph.outgoing(node)
+            } else {
+                graph.incoming(node)
+            };
+            for pip in pips {
+                let pip = graph.pip(*pip);
+                let other = if forward { pip.to } else { pip.from };
+                if !seen.contains(&other) {
+                    seen.push(other);
+                    if seen.len() > DEDICATED_WALK {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(seen)
+    };
+    let mut taken: BTreeMap<usize, usize> = info
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| p.fixed.map(|s| (s, i)))
+        .collect();
+    let mut fixed = 0usize;
+    loop {
+        let mut changed = false;
+        for signal in &netlist.signals {
+            let Some(driver) = signal.driver else {
+                continue;
+            };
+            for sink in &signal.sinks {
+                let (dpin, spin) = (&netlist.pins[driver], &netlist.pins[*sink]);
+                let (x, y) = (dpin.instance, spin.instance);
+                if x == y {
+                    continue;
+                }
+                // Which end is free, and which is fixed where.
+                let (free, free_role, forward, anchor_site, anchor_role) =
+                    match (info[x].fixed, info[y].fixed) {
+                        (Some(site), None) => (y, &spin.role, false, site, &dpin.role),
+                        (None, Some(site)) => (x, &dpin.role, true, site, &spin.role),
+                        _ => continue,
+                    };
+                if info[free].macro_index.is_some() {
+                    continue;
+                }
+                let anchor: Vec<NodeId> = graph.sites[anchor_site].pin_nodes(anchor_role).collect();
+                if anchor.is_empty() {
+                    continue;
+                }
+                let Some(candidates) = sites_by_kind.get(&netlist.instances[free].kind) else {
+                    continue;
+                };
+                let mut found: Option<usize> = None;
+                let mut dedicated = true;
+                for &site in candidates {
+                    match closure(site, free_role, forward) {
+                        None => {
+                            dedicated = false;
+                            break;
+                        }
+                        Some(reach) => {
+                            if reach.iter().any(|n| anchor.contains(n)) {
+                                if found.is_some() {
+                                    dedicated = false;
+                                    break;
+                                }
+                                found = Some(site);
+                            }
+                        }
+                    }
+                }
+                let (true, Some(site)) = (dedicated, found) else {
+                    continue;
+                };
+                if taken.contains_key(&site) || !info[free].may_take(site) {
+                    continue;
+                }
+                info[free].fixed = Some(site);
+                taken.insert(site, free);
+                fixed += 1;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    fixed
 }
 
 /// Ties every pin-constrained instance to its site.
