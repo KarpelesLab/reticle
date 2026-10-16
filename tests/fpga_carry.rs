@@ -119,6 +119,12 @@ enum Shape {
     /// `y = a - b`, which no family lowers through the carry path; it is
     /// here to prove that it still comes out right.
     Subtract,
+    /// `y = (a - b) + cin`: a carry-in added to a difference that stays
+    /// in lookup tables, so every lane `cin` does not reach has its
+    /// generate equal to its propagate, a lookup table's output. That is
+    /// the lane `legalise_carries` ties to zero, and the shape NewAE's
+    /// Husky FIFO's `rused` has.
+    SubtractThenCarryIn,
 }
 
 impl Shape {
@@ -137,6 +143,18 @@ impl Shape {
                     CellKind::Sub
                 };
                 b.cell2("sum", kind, ae, be, y);
+            }
+            Shape::SubtractThenCarryIn => {
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let cin = b.input("cin", Type::bit());
+                let y = b.output("y", Type::bits(width));
+                let (ae, be) = (b.net(a), b.net(bn));
+                let partial = b.add_net("partial", Type::bits(width));
+                b.cell2("difference", CellKind::Sub, ae, be, partial);
+                let (pe, ce) = (b.net(partial), b.net(cin));
+                let widened = b.zext(ce, width);
+                b.cell2("bump", CellKind::Add, pe, widened, y);
             }
             Shape::CarryIn => {
                 let a = b.input("a", Type::bits(width));
@@ -194,6 +212,7 @@ impl Shape {
             Shape::Widened => (a + b) & mask(width + 1),
             Shape::Constant(k) => a.wrapping_add(k) & mask(width),
             Shape::Subtract => a.wrapping_sub(b) & mask(width),
+            Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
         }
     }
 
@@ -201,7 +220,9 @@ impl Shape {
     fn inputs(self, width: u32) -> Vec<(&'static str, u32)> {
         match self {
             Shape::Constant(_) => vec![("a", width)],
-            Shape::CarryIn => vec![("a", width), ("b", width), ("cin", 1)],
+            Shape::CarryIn | Shape::SubtractThenCarryIn => {
+                vec![("a", width), ("b", width), ("cin", 1)]
+            }
             _ => vec![("a", width), ("b", width)],
         }
     }
@@ -565,7 +586,7 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
         }
         let (a, b, cin) = match shape {
             Shape::Constant(_) => (values[0], 0, 0),
-            Shape::CarryIn => (values[0], values[1], values[2]),
+            Shape::CarryIn | Shape::SubtractThenCarryIn => (values[0], values[1], values[2]),
             _ => (values[0], values[1], 0),
         };
         let got = netlist.eval(&inputs);
@@ -648,6 +669,9 @@ fn legalising_a_chain_for_a_slice_changes_no_sum() {
         }
     }
     check(Shape::CarryIn, 5, MapOptions::default(), true);
+    // A generate that is its own lane's propagate, from a lookup table,
+    // tied to zero: would catch the identity misapplied.
+    check(Shape::SubtractThenCarryIn, 5, MapOptions::default(), true);
     let one = MapOptions {
         min_carry_width: 1,
         ..MapOptions::default()

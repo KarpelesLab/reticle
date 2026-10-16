@@ -1397,3 +1397,56 @@ fn the_husky_fifo_stand_in_fills_block_ram_through_the_parity_bits() {
         "{stderr}"
     );
 }
+
+/// `(a - b) + c` places, routes and decodes. Its difference stays in
+/// lookup tables, so every lane `c` does not reach has a generate equal to
+/// its propagate, and that propagate is a lookup table's output: the same
+/// signal would have to be the slice's own table and arrive on its bypass
+/// input at once. The placer refused every site for the chain — NewAE's
+/// Husky FIFO's `rused` is this shape — until `legalise_carries` tied such
+/// a generate to the zero it amounts to.
+///
+/// What it would not catch: that the sum is right on a part. The
+/// identity is simulated exhaustively in `tests/fpga_carry.rs`
+/// (`SubtractThenCarryIn`).
+#[cfg(feature = "fpga")]
+#[test]
+fn a_carry_in_added_to_a_difference_places_and_routes() {
+    let dir = scratch("carry_after_difference");
+    let v = dir.join("v.v");
+    std::fs::write(
+        &v,
+        "module v(input wire clk, input wire d, input wire c, output wire q);\n\
+         \x20 reg [12:0] a, b; reg [12:0] y;\n\
+         \x20 always @(posedge clk) begin a <= {a[11:0], d}; b <= {b[11:0], a[12]}; \
+         y <= (a - b) + c; end\n\
+         \x20 assign q = ^y;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let rcf = dir.join("v.rcf");
+    std::fs::write(
+        &rcf,
+        "set_io -io_standard LVCMOS33 clk D4\nset_io -io_standard LVCMOS33 d L2\n\
+         set_io -io_standard LVCMOS33 c B6\nset_io -io_standard LVCMOS33 q G1\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", v.to_str().unwrap(), "--device", "xc7a35t-ftg256"])
+        .arg("--constraints")
+        .arg(&rcf)
+        .arg("--output-dir")
+        .arg(&dir)
+        .arg("--bitstream")
+        .arg(dir.join("v.bit"))
+        .env("RETICLE_OFFLINE", "1")
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("needs a chip database") || stderr.contains("not in the cache") {
+        eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
+}

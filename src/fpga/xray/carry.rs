@@ -272,6 +272,25 @@ pub fn legalise_carries(
                     continue;
                 }
                 let generate = match di_bits[lane] {
+                    // The generate *is* the propagate, and a lookup table
+                    // drives it: `CO = S ? CI : S`, which is `S ? CI : 0`.
+                    // A slice cannot have it both ways — that table is the
+                    // propagate's own, and the same signal on the bypass
+                    // input would have to leave the slice and come back —
+                    // so it is the constant it amounts to. `(a - b) + c`
+                    // makes this lane for every bit `c` does not reach,
+                    // and the placer refused every site for it. A counter's
+                    // propagate is a flip-flop's output and gets a buffer
+                    // table, so its generate stays on the bypass input.
+                    SigBit::Slot(s)
+                        if di_bits[lane] == s_bits[lane]
+                            && driver.get(&s).is_some_and(|(d, port)| {
+                                matches!(&m.cells[*d].kind, CellKind::Blackbox(n) if n.as_str() == lut.name)
+                                    && *port == lut_output
+                            }) =>
+                    {
+                        Some(false)
+                    }
                     SigBit::Slot(_) => None,
                     SigBit::Const(b) => Some(b == Bit::One),
                 };
