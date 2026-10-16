@@ -16,6 +16,7 @@
 //!    # pins
 //!    set_io -io_standard LVCMOS33 -drive 8 -pullup yes clk 21
 //!    set_io led[0] 99
+//!    set_io -pulldown yes sense A4
 //!    set_io -ddr clk -delay 12 dq[0] A3
 //!
 //!    # placement
@@ -33,6 +34,7 @@
 //!
 //! 2. Attributes on the IR, read by [`Constraints::merge_attrs`]: `(* PIN
 //!    = "A3" *)` (also `LOC`), `io_standard`, `drive`, `slew`, `pullup`,
+//!    `pulldown`,
 //!    `ddr` (the clock of a double-data-rate register at the pin) and
 //!    `io_delay` on a port's net, `clock_period` or `clock_mhz` on any
 //!    net, and `keep_hierarchy`, `rloc` and `region` on an
@@ -139,6 +141,10 @@ pub struct IoAttrs {
     /// `Some(true)` enables the pull-up, `Some(false)` disables it
     /// explicitly, `None` leaves it to the tool's default.
     pub pullup: Option<bool>,
+    /// `Some(true)` enables the pull-down. A pad has one pull, so a pin
+    /// asking for both is the constraint's mistake; the backend that
+    /// configures the pad says so.
+    pub pulldown: Option<bool>,
     /// The clock of a double-data-rate register at the pin, when the port
     /// is one. A DDR port carries twice as many bits as it has pins: bit
     /// `i` and bit `i + N` of an `2N`-bit port share pin `i`, the low
@@ -172,6 +178,9 @@ impl IoAttrs {
         }
         if self.pullup.is_none() {
             self.pullup = other.pullup;
+        }
+        if self.pulldown.is_none() {
+            self.pulldown = other.pulldown;
         }
         if self.ddr.is_none() {
             self.ddr = other.ddr.clone();
@@ -1149,10 +1158,11 @@ impl Constraints {
             if let Some(slew) = &pin.io.slew {
                 let _ = write!(options, " SLEWRATE={}", slew.to_ascii_uppercase());
             }
-            match pin.io.pullup {
-                Some(true) => options.push_str(" PULLMODE=UP"),
-                Some(false) => options.push_str(" PULLMODE=NONE"),
-                None => {}
+            match (pin.io.pullup, pin.io.pulldown) {
+                (Some(true), _) => options.push_str(" PULLMODE=UP"),
+                (_, Some(true)) => options.push_str(" PULLMODE=DOWN"),
+                (Some(false), _) | (_, Some(false)) => options.push_str(" PULLMODE=NONE"),
+                (None, None) => {}
             }
             if !options.is_empty() {
                 let _ = writeln!(out, "IOBUF PORT \"{}\"{options};", pin.signal());
@@ -1212,6 +1222,10 @@ impl Constraints {
             if let Some(pullup) = pin.io.pullup {
                 let value = if pullup { "TRUE" } else { "FALSE" };
                 let _ = writeln!(out, "set_property PULLUP {value} {ports}");
+            }
+            if let Some(pulldown) = pin.io.pulldown {
+                let value = if pulldown { "TRUE" } else { "FALSE" };
+                let _ = writeln!(out, "set_property PULLDOWN {value} {ports}");
             }
         }
         for region in &self.regions {
@@ -1677,6 +1691,7 @@ fn io_attrs_of(attrs: &Attrs) -> IoAttrs {
         drive: attr_u32(attrs, &["drive"]),
         slew: attr_str(attrs, &["slew", "slewrate"]).map(|s| s.to_ascii_lowercase()),
         pullup: attr_bool(attrs, &["pullup", "pullmode"]),
+        pulldown: attr_bool(attrs, &["pulldown"]),
         ddr: attr_str(attrs, &["ddr", "ddr_clock"]),
         delay: attr_u32(attrs, &["io_delay", "delay_value"]),
     }
@@ -1829,7 +1844,15 @@ impl<'a> LineParser<'a> {
 
     fn set_io(&mut self, out: &mut Constraints) {
         let (options, words) = self.split(
-            &["io_standard", "drive", "slew", "pullup", "ddr", "delay"],
+            &[
+                "io_standard",
+                "drive",
+                "slew",
+                "pullup",
+                "pulldown",
+                "ddr",
+                "delay",
+            ],
             &["nowarn"],
         );
         if !self.expect_count(&words, 2, "a port and a pin: `set_io <port> <pin>`") {
@@ -1843,8 +1866,8 @@ impl<'a> LineParser<'a> {
                 "slew" => io.slew = Some(value.as_str().to_ascii_lowercase()),
                 "ddr" => io.ddr = Some(value.as_str().to_owned()),
                 "delay" => io.delay = self.number(value),
-                "pullup" => {
-                    io.pullup = match value.as_str() {
+                "pullup" | "pulldown" => {
+                    let wanted = match value.as_str() {
                         "yes" | "true" | "1" => Some(true),
                         "no" | "false" | "0" => Some(false),
                         other => {
@@ -1852,6 +1875,11 @@ impl<'a> LineParser<'a> {
                             self.error(span, format!("expected `yes` or `no`, found `{other}`"));
                             None
                         }
+                    };
+                    if name == "pullup" {
+                        io.pullup = wanted;
+                    } else {
+                        io.pulldown = wanted;
                     }
                 }
                 _ => {}
@@ -2082,7 +2110,7 @@ mod tests {
             "\
 # a comment
 set_io -io_standard LVCMOS33 -drive 8 -slew FAST -pullup yes clk 21
-set_io q[0] 99
+set_io -pulldown yes q[0] 99
 region core 0 0 7 7
 assign ff region core
 rloc ff 1 -2 group adder
@@ -2102,8 +2130,11 @@ set_multicycle_path 2 -hold -from d -to q
         assert_eq!(clk.io.drive, Some(8));
         assert_eq!(clk.io.slew.as_deref(), Some("fast"));
         assert_eq!(clk.io.pullup, Some(true));
+        assert_eq!(clk.io.pulldown, None);
         assert_eq!(clk.signal(), "clk");
         assert_eq!(c.pins[1].bit, Some(0));
+        assert_eq!(c.pins[1].io.pulldown, Some(true));
+        assert_eq!(c.pins[1].io.pullup, None);
         assert_eq!(c.pins[1].signal(), "q[0]");
         assert_eq!(c.regions[0].x1, 7);
         assert_eq!(c.region_assignments[0].region, "core");
@@ -2481,6 +2512,7 @@ set_multicycle_path 2 -from d -to q
             drive: Some(4),
             slew: Some("fast".into()),
             pullup: Some(false),
+            pulldown: None,
             ddr: Some("clk".into()),
             delay: Some(12),
         });

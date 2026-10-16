@@ -621,7 +621,6 @@ pub(super) fn bels_of(
     tile: &XrayTile,
     features: &FeatureSet,
     wires: &HashSet<&str>,
-    standard: Option<&sites::IoStandard>,
     coverage: &mut sites::SiteCoverage,
 ) -> Vec<BelDecl> {
     let prefixes = site_prefixes(features);
@@ -814,49 +813,14 @@ pub(super) fn bels_of(
         }
     }
 
-    // An IO buffer's standard. The features above are attached one to a
-    // `ConfigEntry::Cell` keyed on the database's own tail, which no
-    // primitive is ever named after, so they are inert. These are the
-    // ones that fire: the whole set of features a buffer of the chosen
-    // standard needs, gathered under the name of the primitive that
-    // wants them.
-    if let Some(standard) = standard {
-        for prefix in &prefixes {
-            if kinds.get(prefix).copied() != Some("io") {
-                continue;
-            }
-            let Some(index) = sites::prefix_index(prefix) else {
-                continue;
-            };
-            for primitive in sites::IO_PRIMITIVES {
-                let Some(names) = sites::io_features(standard, primitive) else {
-                    continue;
-                };
-                let mut bits = Vec::new();
-                let mut missing: Vec<String> = Vec::new();
-                for name in names {
-                    let name = sites::with_index(name, index);
-                    match features.feature(&name) {
-                        Some(feature) => bits.extend(feature.ones.iter().copied()),
-                        None => missing.push(name),
-                    }
-                }
-                if !missing.is_empty() {
-                    // Half an IO standard is worse than none: it would be
-                    // a buffer configured for a voltage nobody asked for.
-                    coverage.io_unresolved += missing.len();
-                    continue;
-                }
-                if let Some(bel) = bels.get_mut(*prefix) {
-                    bel.config.push(ConfigEntry::Cell {
-                        primitive: primitive.to_owned(),
-                        bits,
-                    });
-                    coverage.io_buffers += 1;
-                }
-            }
-        }
-    }
+    // An IO buffer's pad is configured per buffer, by
+    // `XrayFabric::configure_io` from the cell's own standard, drive and
+    // pull, reading the features above by name; nothing is attached here
+    // for it. See `super::io`.
+    coverage.io_buffers += prefixes
+        .iter()
+        .filter(|prefix| kinds.get(*prefix).copied() == Some("io"))
+        .count();
 
     // And the bels the prefix machinery cannot find at all, which today
     // is the sixteen global clock buffers of a `CLK_BUFG_*` tile: they

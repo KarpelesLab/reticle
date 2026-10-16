@@ -332,6 +332,9 @@ fn build(root: &str, init: Option<i64>) -> Option<Built> {
     )
     .unwrap();
     fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles_out)
+        .unwrap();
+    fabric
         .enable_global_clocks(&graph, &routing, &mut tiles_out)
         .unwrap();
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles_out, &fabric.frames).unwrap();

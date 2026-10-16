@@ -1870,7 +1870,13 @@ impl Device {
     /// assert_eq!(ice40.io_bel("inout").unwrap().name, "SB_IO");
     /// ```
     pub fn io_bel(&self, dir: &str) -> Option<&BelKind> {
-        let io = || self.bels.iter().filter(|b| b.role == BelRole::Io);
+        // A differential buffer (one with a `pad_n`) is instantiated by name
+        // and never inserted on a port by itself.
+        let io = || {
+            self.bels
+                .iter()
+                .filter(|b| b.role == BelRole::Io && b.port("pad_n").is_none())
+        };
         io().find(|b| b.io_dirs.iter().any(|d| d == dir))
             .or_else(|| io().find(|b| b.io_dirs.is_empty()))
     }

@@ -1,0 +1,18 @@
+# NewAE ChipWhisperer-Husky (XC7A35T-FTG256): the pins, standards, drive
+# and pulls of `io_standards.v`.
+#
+# PROVENANCE: every line is transcribed from NewAE's
+# `fpga/vivado/cwhusky.xdc` at chipwhisperer-husky-fpga 2dfe1bc, port for
+# port: `set_property -dict { PACKAGE_PIN ... IOSTANDARD ... }`, LED_ADC's
+# `DRIVE 8`, and target_io4's `PULLTYPE PULLDOWN`. USERIO_CLK's pull-up is
+# the `PULLUP` primitive `userio.v` instantiates on it.
+set_io -io_standard LVDS_25 PLLFPGAP D13
+set_io -io_standard LVDS_25 PLLFPGAN C13
+set_io -io_standard LVDS_25 ADC_CLKP J15
+set_io -io_standard LVDS_25 ADC_CLKN J16
+set_io -io_standard LVCMOS25 ADC_DFS G12
+set_io -io_standard LVCMOS25 PLL_STATUS C11
+set_io -io_standard LVCMOS33 -drive 8 LED_ADC C7
+set_io -io_standard LVCMOS33 SAM_MOSI T7
+set_io -io_standard LVCMOS33 -pulldown yes target_io4 T4
+set_io -io_standard LVCMOS33 -pullup yes USERIO_CLK N12

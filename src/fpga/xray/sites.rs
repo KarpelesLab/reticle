@@ -35,7 +35,7 @@
 //! # What has been tried on a part
 //!
 //! The IO recipe below is a transcription of what Vivado itself did for
-//! this exact board — see [`IO_STANDARDS`] — not a reading of a
+//! this exact board — see [`super::io`] — not a reading of a
 //! datasheet. On 2026-09-24 it lit an LED: a lookup table and three
 //! LVCMOS33 pins on a Basys 3, watched working.
 //!
@@ -507,7 +507,7 @@ pub(super) struct PassThrough {
 /// path through them: an `ILOGICE3` passing its pad input to the
 /// interconnect, and an `OLOGICE3` passing interconnect data to the pad.
 /// The features are the ones Vivado's own bitstream for this board sets
-/// on exactly those two paths and nothing else — see [`IO_STANDARDS`]
+/// on exactly those two paths and nothing else — see [`super::io`]
 /// for how that was read.
 pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
     if clb_shared_prefix(tile_type).is_some() {
@@ -1302,133 +1302,6 @@ pub(super) fn global_clock_enable_track(feature: &str) -> Option<u32> {
     index.parse().ok()
 }
 
-// ---------------------------------------------------------------------------
-// IO standards
-// ---------------------------------------------------------------------------
-
-/// What an IO buffer of a given standard costs, as feature names of the
-/// `LIOB33` / `RIOB33` tile type with `{}` standing for the half.
-///
-/// # Where this came from
-///
-/// Not from a datasheet: from Vivado. `artix7/harness/basys3/swbut/`
-/// ships a working bitstream for this exact board together with
-/// `design.json`, whose `required_features` list names every feature the
-/// design occupies. Filtering it to the two `LIOB33` tiles that hold a
-/// switch and an LED gives, for an input and an output respectively,
-/// exactly the lists below — four names each, out of the eighty-three
-/// the tile type has. `tests/fpga_xray.rs` re-derives them from that
-/// file rather than trusting this table.
-///
-/// Features whose bits are all zeros (`IN_TERM.NONE`, an input's
-/// `SLEW.FAST`) are kept in the list because they are what Vivado
-/// recorded; they set nothing, and saying so is cheaper than explaining
-/// their absence.
-pub(super) struct IoStandard {
-    /// The name a `set_io -io_standard` uses.
-    pub name: &'static str,
-    /// The features an input buffer of this standard needs.
-    pub input: &'static [&'static str],
-    /// The features an output buffer of this standard needs.
-    pub output: &'static [&'static str],
-    /// What a bidirectional buffer needs **on top of** [`IoStandard::output`]:
-    /// the input receiver, without the input-only setting that switches
-    /// the driver off. See [`io_features`].
-    pub receiver: &'static [&'static str],
-}
-
-/// Every IO standard this flow can configure, which is one.
-///
-/// A design whose constraints ask for anything else is refused with its
-/// name rather than silently given LVCMOS33 bits: an IO standard is a
-/// voltage, and guessing one is how a board gets damaged.
-pub(super) const IO_STANDARDS: &[IoStandard] = &[IoStandard {
-    name: "LVCMOS33",
-    input: &[
-        "IOB_Y{}.IN_TERM.NONE",
-        "IOB_Y{}.LVCMOS12_LVCMOS15_LVCMOS18_LVCMOS25_LVCMOS33_LVDS_25_LVTTL_SSTL135_SSTL15_TMDS_33.IN_ONLY",
-        "IOB_Y{}.LVCMOS12_LVCMOS15_LVCMOS18_LVCMOS25_LVCMOS33_LVTTL.SLEW.FAST",
-        "IOB_Y{}.LVCMOS25_LVCMOS33_LVTTL.IN",
-        "IOB_Y{}.PULLTYPE.NONE",
-    ],
-    output: &[
-        "IOB_Y{}.IN_TERM.NONE",
-        "IOB_Y{}.LVCMOS12_LVCMOS15_LVCMOS18_LVCMOS25_LVCMOS33_LVTTL_SSTL135_SSTL15.SLEW.SLOW",
-        "IOB_Y{}.LVCMOS33_LVTTL.DRIVE.I12_I16",
-        "IOB_Y{}.PULLTYPE.NONE",
-    ],
-    receiver: &["IOB_Y{}.LVCMOS25_LVCMOS33_LVTTL.IN"],
-}];
-
-/// The standard of that name.
-pub(super) fn io_standard(name: &str) -> Option<&'static IoStandard> {
-    IO_STANDARDS.iter().find(|s| s.name == name)
-}
-
-/// The names of every IO standard the flow can configure, for an error
-/// message.
-pub fn io_standards() -> Vec<&'static str> {
-    IO_STANDARDS.iter().map(|s| s.name).collect()
-}
-
-/// Every IO primitive of `xc7.dev` that an IO buffer site configures, so
-/// a [`ConfigEntry::Cell`](crate::fpga::ConfigEntry) can select each.
-///
-/// `IBUF` drives the fabric from the pad and `OBUF` the pad from the
-/// fabric. `OBUFT` and `IOBUF` were left out until 2026-10-08 because
-/// their tristate path needed `OLOGIC` `T` features nothing here had
-/// read; [`tristate_through`] is that path now, and these two are what
-/// the pad itself costs — see [`io_features`].
-pub(super) const IO_PRIMITIVES: [&str; 4] = ["IBUF", "OBUF", "OBUFT", "IOBUF"];
-
-/// The features, as templates over the half, that a pad of `standard`
-/// costs when `primitive` sits on it.
-///
-/// # What a tristate or a bidirectional pad costs at the pad
-///
-/// The pad itself does not know whether its `T` is routed: `segbits_liob33.db`
-/// has no feature that mentions a tristate at all, out of eighty-three.
-/// The tristate lives entirely in the `OLOGIC` beside it
-/// ([`tristate_through`]). So an `OBUFT` costs exactly what an `OBUF`
-/// costs.
-///
-/// An `IOBUF` is an output with the **input receiver** switched on
-/// as well: [`IoStandard::output`] plus [`IoStandard::receiver`], and
-/// **not** `IN_ONLY`. The two input features do different things, which
-/// the bits say by themselves: `LVCMOS25_LVCMOS33_LVTTL.IN` is
-/// `38_86 39_85 39_87` for `Y0` and touches no drive bit, while `IN_ONLY`
-/// is a *value of the drive field*: it is written over the same eighteen
-/// bits as every `DRIVE.*` pattern, with `38_64` and `39_65` — which
-/// every `DRIVE.*` value sets — required clear. An `IBUF` takes both; an
-/// `IOBUF` must take the first and must not take the second, or its
-/// drive field would hold two values at once.
-///
-/// That split is **quoted**: it is what nextpnr-xilinx's
-/// `write_io_config` writes (`LVCMOS25_LVCMOS33_LVTTL.IN` when the pad has
-/// an input buffer, `IN_ONLY` only `if (!is_output)`), and the bit
-/// patterns agree with it. No Vivado bitstream in `artix7/harness/` has a
-/// bidirectional pad to measure it against.
-pub(super) fn io_features(standard: &IoStandard, primitive: &str) -> Option<Vec<&'static str>> {
-    match primitive {
-        "IBUF" => Some(standard.input.to_vec()),
-        "OBUF" | "OBUFT" => Some(standard.output.to_vec()),
-        "IOBUF" => Some(
-            standard
-                .output
-                .iter()
-                .chain(standard.receiver)
-                .copied()
-                .collect(),
-        ),
-        _ => None,
-    }
-}
-
-/// Substitutes a bel index into a feature template.
-pub(super) fn with_index(template: &str, index: u32) -> String {
-    template.replace("{}", &index.to_string())
-}
-
 /// A report of what the site tables covered in one load, so a caller can
 /// say how much of a fabric it actually understands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1442,12 +1315,9 @@ pub struct SiteCoverage {
     pub pass_throughs: usize,
     /// Fixed paths whose feature the `segbits` file does not have.
     pub pass_throughs_unresolved: usize,
-    /// IO buffers given a standard's bits.
+    /// IO buffer sites in the region. What each one's pad is given is
+    /// decided per buffer by [`super::XrayFabric::configure_io`].
     pub io_buffers: usize,
-    /// Features an IO standard asked for that the `segbits` file has
-    /// not got. Any at all means that buffer was left unconfigured
-    /// rather than half configured.
-    pub io_unresolved: usize,
     /// Cell modes given their bits: a flip-flop primitive's mode field,
     /// a global buffer's, and the inverted-parameter entries beside
     /// them.
@@ -1475,13 +1345,12 @@ impl SiteCoverage {
         let _ = writeln!(
             out,
             "  site pins: {} resolved, {} not; {} fixed path(s) through a site, {} not; \
-             {} io buffer(s), {} feature(s) missing",
+             {} io buffer site(s)",
             self.pins,
             self.pins_unresolved,
             self.pass_throughs,
             self.pass_throughs_unresolved,
             self.io_buffers,
-            self.io_unresolved
         );
         let _ = writeln!(
             out,
@@ -1771,31 +1640,6 @@ mod tests {
         }
     }
 
-    /// An `IOBUF` is an output plus the receiver, and never `IN_ONLY`; an
-    /// `OBUFT` is an output and nothing more.
-    ///
-    /// What this catches: a bidirectional pad given the input recipe
-    /// (whose `IN_ONLY` is a value of the drive field, so the pad would be
-    /// configured as two drive strengths at once), or given no receiver
-    /// (so it would drive and never read). It does not check that the
-    /// receiver feature is the right one on silicon; that is quoted from
-    /// nextpnr-xilinx, and the harness has no bidirectional pad.
-    #[test]
-    fn a_bidirectional_pad_is_an_output_with_its_receiver_on() {
-        let s = io_standard("LVCMOS33").unwrap();
-        let iobuf = io_features(s, "IOBUF").unwrap();
-        assert!(iobuf.iter().all(|f| !f.ends_with(".IN_ONLY")), "{iobuf:?}");
-        assert!(iobuf.contains(&"IOB_Y{}.LVCMOS25_LVCMOS33_LVTTL.IN"));
-        assert!(iobuf.contains(&"IOB_Y{}.LVCMOS33_LVTTL.DRIVE.I12_I16"));
-        assert_eq!(io_features(s, "OBUFT").unwrap(), s.output.to_vec());
-        assert_eq!(io_features(s, "OBUF").unwrap(), s.output.to_vec());
-        assert_eq!(io_features(s, "IBUF").unwrap(), s.input.to_vec());
-        assert!(io_features(s, "BUFG").is_none());
-        for primitive in IO_PRIMITIVES {
-            assert!(io_features(s, primitive).is_some(), "{primitive}");
-        }
-    }
-
     /// A slice's pass-throughs are the ones a clocked design and a carry
     /// chain need, and nothing else.
     ///
@@ -1983,13 +1827,5 @@ mod tests {
         // And the IO rule is untouched: `IOB_Y0` is still the higher site.
         let io = tile(&[("IOB_X0Y11", "IOB33S"), ("IOB_X0Y12", "IOB33M")]);
         assert_eq!(site_of_prefix(&io, "IOB_Y0").unwrap().0, "IOB_X0Y12");
-    }
-
-    #[test]
-    fn only_lvcmos33_is_offered() {
-        assert_eq!(io_standards(), vec!["LVCMOS33"]);
-        assert!(io_standard("LVCMOS18").is_none());
-        let s = io_standard("LVCMOS33").unwrap();
-        assert_eq!(with_index(s.input[4], 1), "IOB_Y1.PULLTYPE.NONE");
     }
 }

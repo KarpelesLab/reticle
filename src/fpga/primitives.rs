@@ -3128,6 +3128,16 @@ impl Mapper<'_> {
         let port = &module.ports[index];
         let name = port.name.as_str().to_owned();
         let dir = port.dir;
+        // The second ball of a differential pair the design instantiated:
+        // the buffer on the first configures it, and a buffer of its own
+        // would drive or read it on its own. See `flow::primitive_instances`.
+        if module.nets[port.net]
+            .attrs
+            .get("io_differential_n")
+            .is_some()
+        {
+            return;
+        }
         // Which buffer serves this direction. A family with one
         // configurable buffer answers the same primitive every time; a
         // family with one primitive per direction (Xilinx's IBUF, OBUF
@@ -3296,6 +3306,7 @@ impl Mapper<'_> {
         };
         let site = IoSite {
             port: &name,
+            net: core,
             pin: pin.as_deref(),
             io: &io,
             conditions: dir_key,
@@ -3600,6 +3611,14 @@ impl Mapper<'_> {
         }
         if let Some(pullup) = io.pullup {
             attrs.set("pullup", i64::from(pullup));
+        }
+        if let Some(pulldown) = io.pulldown {
+            attrs.set("pulldown", i64::from(pulldown));
+        }
+        // What an instantiated `IBUFDS` or `IBUF` said of its receiver,
+        // carried on the port's net by `flow::primitive_instances`.
+        if let Some(value) = module.nets[site.net].attrs.get("ibuf_low_pwr").cloned() {
+            module.cells[cell].attrs.set("ibuf_low_pwr", value);
         }
         cell
     }
@@ -4609,6 +4628,9 @@ struct DelayPlan {
 struct IoSite<'a> {
     /// The port's name, which the cells are named after.
     port: &'a str,
+    /// The port's net, whose attributes carry what an instantiated
+    /// buffer said of the pad.
+    net: NetId,
     /// The package pin, if one is assigned.
     pin: Option<&'a str>,
     /// The electrical options.

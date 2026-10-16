@@ -183,9 +183,24 @@ fn build(root: &str, name: &str, verilog: &str, rcf: &str) -> Built {
         &routing,
     )
     .unwrap();
-    let pulled = fabric
-        .apply_pullups(&design, top, &graph, &netlist, &placement, &mut tiles)
+    fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles)
         .unwrap();
+    // How many pads asked for a pull-up; the decoded features below are
+    // what says each one got it.
+    let pulled = netlist
+        .instances
+        .iter()
+        .filter(|i| {
+            i.kind == "io"
+                && design.modules[top]
+                    .cells
+                    .get(i.cell)
+                    .and_then(|c| c.attrs.get("pullup"))
+                    .and_then(reticle::ir::AttrValue::as_int)
+                    == Some(1)
+        })
+        .count();
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
     let header = BitHeader::new(
         format!("{name};UserID=0XFFFFFFFF;Version=reticle"),

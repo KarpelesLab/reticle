@@ -376,6 +376,8 @@ device xc7a35t-cpg236
   bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
+  bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
   bel OBUFT io for out port pad=O dout=I oen=T
@@ -569,6 +571,8 @@ device xc7a35t-ftg256
   bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
+  bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
   bel OBUFT io for out port pad=O dout=I oen=T

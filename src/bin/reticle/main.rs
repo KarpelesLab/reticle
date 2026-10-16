@@ -3216,10 +3216,6 @@ fn write_xc7_bitstream(
         }
     }
 
-    if let Some(standard) = single_io_standard(constraints)? {
-        options.io_standard = standard;
-    }
-
     let db =
         XrayDatabase::open(&files, &root, &device.name, &options).map_err(|e| e.to_string())?;
 
@@ -3425,11 +3421,11 @@ fn write_xc7_bitstream(
     let clock_bits = fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .map_err(|e| e.to_string())?;
-    // A pull-up is a constraint, not a cell parameter, so it is read off
-    // the buffer's attribute once placement says which pad it is on. See
-    // `XrayFabric::apply_pullups`.
-    let pulled = fabric
-        .apply_pullups(design, top, &graph, &netlist, &placement, &mut tiles)
+    // Every pad for its own standard, drive, slew and pull, read off the
+    // buffer's attributes once placement says which pad it is on. See
+    // `xray::io`.
+    let pads = fabric
+        .configure_io(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
     // A PLL's registers are computed from its parameters and from whether
     // its reset was routed. See `XrayFabric::configure_clock_managers`.
@@ -3512,8 +3508,10 @@ fn write_xc7_bitstream(
             clocks.unbuffered
         ));
     }
-    if pulled > 0 {
-        note.push_str(&format!("note: {pulled} pad(s) given a weak pull-up\n"));
+    if pads > 0 {
+        note.push_str(&format!(
+            "note: {pads} pad bit(s) set for the io standards, drives and pulls the buffers ask for\n"
+        ));
     }
     if pll_bits > 0 {
         note.push_str(&format!(

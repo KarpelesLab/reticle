@@ -352,17 +352,30 @@ fn real_slices_become_real_bels() {
         .expect("an IO tile has buffers");
     assert!(buffer.pin("din").is_some() && buffer.pin("dout").is_some());
     assert!(buffer.pin("pad").is_none());
-    // And it carries a whole IO standard under the name of the
-    // primitive that wants it.
-    for primitive in ["IBUF", "OBUF"] {
+    // And the fabric holds every pad feature of the tile type by name, for
+    // `configure_io` to give each buffer its own standard: the halves'
+    // own and the pair's, which no bel holds. It used to carry one whole
+    // standard on the bel under each primitive's name, which could not
+    // say two standards in one design.
+    let pads = fabric
+        .io
+        .features
+        .get(&iob.name)
+        .expect("an IO tile type has a pad table");
+    for feature in [
+        "IOB_Y0.PULLTYPE.NONE",
+        "IOB_Y1.LVCMOS25_LVCMOS33_LVTTL.IN",
+        "IOB_Y0.LVCMOS33_LVTTL.DRIVE.I12_I16",
+        "IOB_Y0.LVDS_25.OUT",
+    ] {
         assert!(
-            buffer.config.iter().any(|entry| matches!(
-                entry,
-                reticle::fpga::ConfigEntry::Cell { primitive: p, bits } if p == primitive && !bits.is_empty()
-            )),
-            "no bits for {primitive}"
+            pads.get(feature).is_some_and(|bits| !bits.is_empty()),
+            "no bits for {feature}"
         );
     }
+    // `PULLDOWN` is the field with every bit clear, and is kept anyway,
+    // so asking for it is not mistaken for asking for nothing.
+    assert_eq!(pads.get("IOB_Y0.PULLTYPE.PULLDOWN").map(Vec::len), Some(0));
 }
 
 #[test]
@@ -737,7 +750,7 @@ fn milestone(root: &str) -> Option<Decoded> {
     );
     eprintln!("{}", routing_report.to_text());
 
-    let tiles = bitstream::generate(
+    let mut tiles = bitstream::generate(
         &design,
         top,
         &fabric.arch,
@@ -747,6 +760,9 @@ fn milestone(root: &str) -> Option<Decoded> {
         &routing,
     )
     .unwrap();
+    fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles)
+        .unwrap();
     // The LUT's INIT for `a ^ b` over six inputs is half the table, and
     // every one of those bits came from the database; the rest is the
     // route and the three buffers.
@@ -1220,6 +1236,9 @@ fn blink(root: &str) -> Option<Blink> {
         &routing,
     )
     .unwrap();
+    fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles)
+        .unwrap();
     let clock_bits = fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .unwrap();
@@ -1858,7 +1877,7 @@ fn one_build(root: &str, theirs: &Decoded, companion: &str, margin: u32) {
         routing.to_text(&netlist, &graph)
     );
 
-    let tiles = bitstream::generate(
+    let mut tiles = bitstream::generate(
         &design,
         top,
         &fabric.arch,
@@ -1868,6 +1887,9 @@ fn one_build(root: &str, theirs: &Decoded, companion: &str, margin: u32) {
         &routing,
     )
     .unwrap();
+    fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles)
+        .unwrap();
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
     let ours = db.decode(&DiskFiles, &frames).unwrap();
     eprintln!("led6 ({companion}, margin {margin}): {}", ours.to_text());

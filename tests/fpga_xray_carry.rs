@@ -200,6 +200,9 @@ fn built_from(root: &str) -> Option<Built> {
     )
     .unwrap();
     fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles)
+        .unwrap();
+    fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .unwrap();
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();

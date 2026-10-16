@@ -2142,10 +2142,14 @@ into `PULLUP` and makes `NONE` stop decoding.
 A pull-up is a constraint on this family, not an `IBUF` parameter (Vivado
 takes it from an XDC), so it cannot ride a bel's configuration entry
 without handing Vivado an instance parameter its library lacks.
-`XrayFabric::apply_pullups` reads the cell's `pullup` attribute after
-placement instead, and `reticle fpga --bitstream` runs it. `-pullup no`
-leaves `NONE`, as before; there is no way to ask for a pull-down or a
-keeper.
+`XrayFabric::apply_pullups` read the cell's `pullup` attribute after
+placement instead, and `reticle fpga --bitstream` ran it. Every pad is now
+configured that way, standard and drive included, by
+`XrayFabric::configure_io` (`src/fpga/xray/io.rs`), which gives a pad
+`PULLTYPE.PULLUP` in place of `NONE`, and `-pulldown yes` asks for
+`PULLDOWN` — the field with all three bits clear, as NewAE's Husky image
+has it on its one pulled-down pad. `-pullup no` leaves `NONE`; there is
+still no way to ask for a keeper.
 
 ### What was checked instead
 
@@ -2646,6 +2650,38 @@ no path at all.
 
 Nothing here has run on a part.
 
+## Every pad its own standard: LVCMOS25, LVDS_25, a drive, a pull
+
+Until NewAE's ChipWhisperer-Husky, one IO standard was chosen at load
+time and attached to every pad as a fixed feature list, and a design whose
+constraints named two standards was refused. The Husky has three on one
+part — LVCMOS33, LVCMOS25 and LVDS_25 — four LVCMOS33 outputs at 8 mA,
+pull-ups, and a pull-down. Each pad is now configured on its own, after
+placement, by `XrayFabric::configure_io` (`src/fpga/xray/io.rs`), from the
+buffer cell's own attributes, which mapping sets from the pin's
+constraint. The loader keeps every pad feature of every IO tile type by
+name (`XrayFabric::io`), the pair's (`DIFF.ZIBUF_LOW_PWR`) included, which
+no bel holds.
+
+A differential pair is an `IBUFDS` or `OBUFDS` instantiated by name: its
+first ball's buffer configures both halves of the tile, and the second
+ball's port gets no buffer of its own (`pad_n` on the device's `bel`
+line). The first ball must be the pair's `_P`, which prjxray calls
+`IOB_Y0`; a pair constrained the other way round is refused.
+
+**CHECKED against Vivado, ball for ball.** `tests/fpga_xray_io.rs` builds
+`testdata/fpga/husky/io_standards.v` on ten of the Husky's own pins with
+its own standards, drive and pulls, and every half of every one of those
+pads decodes to exactly the features Vivado set on the same ball in
+NewAE's image: an LVDS input pair with its tile's `DIFF.ZIBUF_LOW_PWR`, an
+LVDS output pair whose second ball is input-only, LVCMOS25 in and out,
+LVCMOS33 at 8 mA, and a pull-up and a pull-down on bidirectional pads. The
+recipe for every request, and which ones only the database's feature names
+say (the 4 and 16 mA drives, a fast slew), is in the module's
+documentation. A standard with no recipe is refused by name.
+
+Nothing here has run on a part.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
@@ -3075,6 +3111,7 @@ will have.
 | `src/fpga/xray/carry.rs` | `legalise_carries`: a lookup table for every propagate bit of a `CARRY4` that has none, and the constant generates in `O5` |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
 | `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
+| `src/fpga/xray/io.rs` | a pad per buffer: its standard, drive, slew and pull, and a differential pair across its tile, each recipe checked against NewAE's Husky image |
 | `src/fpga/xray/bufg.rs` | a `BUFGCE` and a `BUFGMUX` on a `BUFGCTRL`: each control's inverter from what was routed to it, checked against the thirteen buffers of NewAE's Husky image |
 | `src/fpga/xray/cmt.rs` | the clock management tile: the PLL as a bel, its DRP register values (computed and quoted, each said which), and `XrayFabric::configure_clock_managers` |
 | `tests/fpga_xray_pll.rs` | the PLL design end to end, and two register settings decoded back |

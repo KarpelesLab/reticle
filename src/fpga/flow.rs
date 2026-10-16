@@ -640,11 +640,61 @@ fn primitive_instances(
         let pass_through = bel.role == super::device::BelRole::Io
             && matches!(bel.io_dirs.as_slice(), [d] if d == "in" || d == "out");
         if pass_through {
+            let input = bel.io_dirs[0] == "in";
             let (from, to) = match (bel.port("pad"), bel.port("din"), bel.port("dout")) {
-                (Some(pad), Some(din), _) if bel.io_dirs[0] == "in" => (pad, din),
+                (Some(pad), Some(din), _) if input => (pad, din),
                 (Some(pad), _, Some(dout)) => (dout, pad),
                 _ => continue,
             };
+            // A differential buffer: its second ball is the pair's slave,
+            // which the buffer on the first configures, so that port gets
+            // no buffer of its own. What the instance said of its receiver
+            // rides on the first port's net to the buffer built there.
+            if let Some(pad_n) = bel.port("pad_n") {
+                let port_net = |m: &crate::ir::Module, name: &str| {
+                    inst.connection(name)
+                        .and_then(|e| m.expr(e).as_net())
+                        .filter(|net| m.ports.iter().any(|p| p.net == *net))
+                };
+                let (Some(p), Some(n)) = (
+                    port_net(m, bel.port("pad").unwrap_or("")),
+                    port_net(m, pad_n),
+                ) else {
+                    refused += 1;
+                    diags.push(
+                        Diagnostic::error(format!(
+                            "`{}`: both balls of a `{primitive}` must be ports of the top module",
+                            inst.name
+                        ))
+                        .with_span(inst.span)
+                        .with_note(
+                            "a differential pair is two package pins, and only a port reaches one",
+                        ),
+                    );
+                    continue;
+                };
+                let text = |key: &str| {
+                    inst.params
+                        .get(key)
+                        .and_then(crate::ir::AttrValue::as_str)
+                        .map(str::to_ascii_uppercase)
+                };
+                if text("DIFF_TERM").as_deref() == Some("TRUE") {
+                    refused += 1;
+                    diags.push(
+                        Diagnostic::error(format!(
+                            "`{}`: `DIFF_TERM(\"TRUE\")` is not one this flow knows the bits of",
+                            inst.name
+                        ))
+                        .with_span(inst.span),
+                    );
+                    continue;
+                }
+                if input && text("IBUF_LOW_PWR").as_deref() == Some("FALSE") {
+                    m.nets[p].attrs.set("ibuf_low_pwr", 0i64);
+                }
+                m.nets[n].attrs.set("io_differential_n", 1i64);
+            }
             let (Some(value), Some(target)) = (inst.connection(from), inst.connection(to)) else {
                 done.push(id);
                 continue;
@@ -1196,6 +1246,11 @@ pub fn check_nextpnr_json(
         }
     }
     for port in &m.ports {
+        // The second ball of a differential pair is driven by the pad of
+        // the first, not by the fabric (`primitive_instances`).
+        if m.nets[port.net].attrs.get("io_differential_n").is_some() {
+            continue;
+        }
         if port.dir == PortDir::Out
             && let Ok(bits) = view.net_bits(port.net, port.span)
         {

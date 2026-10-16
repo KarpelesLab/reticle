@@ -335,6 +335,9 @@ fn build(root: &str, verilog: &str, rcf: &str, half: Option<&str>) -> Built {
     )
     .unwrap();
     fabric
+        .configure_io(&design, top, &graph, &netlist, &placement, &mut tiles)
+        .unwrap();
+    fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .unwrap();
     let report = fabric
