@@ -101,6 +101,15 @@ impl Overrides {
 
     /// The `name=value` pairs that were applied, for the uniquified module
     /// name and for the IR's parameter metadata.
+    /// Every entry, used or not: what a black box is given, since no
+    /// parameter declaration of its own will ever take one.
+    pub(crate) fn all(&self) -> Vec<(String, Override)> {
+        self.items
+            .iter()
+            .map(|(n, v, ..)| (n.clone(), v.clone()))
+            .collect()
+    }
+
     pub(crate) fn applied(&self) -> Vec<(String, Override)> {
         self.items
             .iter()

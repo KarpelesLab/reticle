@@ -7,5 +7,5 @@ module blackbox_user
   port clk in %clk
   port d in %d
   port q out %q
-  instance u_ram of vendor_ram (clk=%clk, d=%d, q=%q)
+  instance u_ram of vendor_ram #(WIDTH=32'sd8, MODE="FAST") (clk=%clk, d=%d, q=%q)
 end

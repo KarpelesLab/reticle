@@ -10,7 +10,7 @@ module tb
   net %fd s32 reg
   net %"check$2.expected" u8 var
   net %"check$3.expected" u8 var
-  instance dut of counter (clk=%clk, rst_n=not(%rst), en=1'd1, up=1'd1, load=1'd0, d=%d, q=%q)
+  instance dut of counter #(WIDTH=32'sd8) (clk=%clk, rst_n=not(%rst), en=1'd1, up=1'd1, load=1'd0, d=%d, q=%q)
   process initial
     %clk = 1'd0
   end

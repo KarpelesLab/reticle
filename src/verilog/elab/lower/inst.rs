@@ -376,7 +376,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let params_for_ir = if known {
             Vec::new()
         } else {
-            self.build_overrides(params, &name.name).applied()
+            self.build_overrides(params, &name.name).all()
         };
         let ports = target.map(|id| self.port_infos(id));
         self.natural_connections = true;
@@ -439,6 +439,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 for (p, v) in &params_for_ir {
                     match v {
                         Override::Value(Value::Logic(l)) => inst.params.set(p.clone(), l.clone()),
+                        // A string is its text: `CLK_SEL_TYPE("ASYNC")` is
+                        // read as `ASYNC`, not as a quoted key.
+                        Override::Value(Value::Str(text)) => {
+                            inst.params.set(p.clone(), text.clone())
+                        }
                         other => inst.params.set(p.clone(), other.key_text()),
                     }
                 }
@@ -498,7 +503,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let params_for_ir = if known {
             Vec::new()
         } else {
-            self.build_overrides(params, &name.name).applied()
+            self.build_overrides(params, &name.name).all()
         };
 
         let ports = target.map(|id| self.port_infos(id));
@@ -517,6 +522,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             for (p, v) in &params_for_ir {
                 match v {
                     Override::Value(Value::Logic(l)) => inst.params.set(p.clone(), l.clone()),
+                    // A string is its text: `CLK_SEL_TYPE("ASYNC")` is read
+                    // as `ASYNC`, not as a quoted key.
+                    Override::Value(Value::Str(text)) => inst.params.set(p.clone(), text.clone()),
                     other => inst.params.set(p.clone(), other.key_text()),
                 }
             }
