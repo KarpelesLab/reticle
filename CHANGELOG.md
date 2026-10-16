@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/KarpelesLab/reticle/compare/v0.0.6...v0.0.7) - 2026-10-16
+
+### Added
+
+- *(place)* a cell that finds no legal site says which rule refused each
+- *(xray)* two adders behind a multiplexer share one chain, its generate on O5
+- *(synth)* a word's writers as a decision tree, not a priority chain
+- *(xray)* two functions in one lookup table, as LUT6_2
+- *(examples)* NewAE's ChipWhisperer-Husky gateware, as far as it builds
+- *(fpga)* a tri-stated output behind an assignment, read inside
+- *(fpga)* an inout port's drivers taken bit by bit
+- *(verilog)* a tri-state written as a tree of choices, or on one bit
+- *(synth)* an array addressed only by constants is registers
+- *(synth)* an aligned part-select write is a comparison per group
+- *(synth)* a product with a power of two is wiring
+- *(synth)* map only the bits of a net something reads
+- *(xray)* block RAM parity bits as data, in 18- and 9-bit modes
+- *(fpga)* differential pairs on bits of vector ports
+- *(synth)* bits of one register driven by several clocked processes
+- *(xray)* the XADC, its pins and the register layout prjxray never fuzzed
+- *(xray)* BUFMRCE, BUFR and PULLUP instantiated by name
+- *(xray)* PLLE2_ADV and MMCME2_ADV instantiated by name
+- *(xray)* IDDR and ODDR beside their pads, instantiated by name
+- *(xray)* every pad its own io standard, drive and pull, and LVDS pairs
+- *(xray)* BUFGCE, BUFGMUX and IBUFG instantiated by name
+- *(xc7)* the XC7A35T in its FTG256 package, NewAE's ChipWhisperer-Husky
+- *(verilog)* what NewAE's Husky gateware needs from the frontend
+- *(verilog)* --define, --include-dir, and macros that carry across files
+- *(route)* a timing-driven router, weighing delay by criticality
+- *(seph_mcu)* USB from the console, with the MCU's part done in the engine
+- *(uray)* a design can bind the processor's AXI master port
+- *(ip)* z80: DD CB and FD CB, and every documented encoding is decoded
+- *(ip)* z80: the DD and FD prefixes, so IX and IY address with a displacement
+- *(ip)* z80: ED's block instructions, and the whole ED space is decoded
+- *(ip)* z80: ED's first quadrant, and the fetch address every shape owes
+- *(ip)* a Z80, T-state accurate over the unprefixed and CB opcode spaces
+- *(fpga)* route: an option to reroute only the signals in contention
+- *(basys3)* push and release each of the device's buttons from the console
+- *(ip)* seph_mcu, the MCU's end of Ledger's SEPROXYHAL link, and `W` on the card bench
+- *(uray)* `reticle fpga` builds ZCU104 bitstreams from Verilog
+- *(uray)* tie the processor's unused inputs, as Vivado does
+- *(uray)* write an UltraScale+ bitstream, and run one on the ZCU104
+- *(uray)* an UltraScale+ routing fabric that fits Vivado's routing
+- *(uray)* read UltraScale+ frames and give every bit to its tile
+
+### Fixed
+
+- *(place)* a wire nothing routes into carries only what its bel drives
+- *(xray)* keep the router off the ground fans block RAM zero ties need
+- *(xray)* a generate that is its lane's own propagate is a zero
+- *(verilog)* an indexed part-select wider than its vector reads x above
+- *(synth)* no if-let guard, which the minimum Rust version lacks
+- *(fpga)* count a net's readers without walking every path
+- *(sim)* say why the compiled form refuses a register shared by processes
+- *(synth)* walks over shared expressions mark what they have seen
+- *(verilog)* a black box keeps the parameters it was given
+- *(synth)* a parallel case's clock enable is a tree, not a chain
+- *(seph_mcu)* the status says what a real MCU on battery says
+- *(verilog)* an output port's initialiser is its time-zero value
+- *(ip)* z80: the three undecoded prefixes trap instead of calling, and every implemented encoding is timed
+- *(uray)* give the router 100 passes rather than 40
+- *(fpga)* route: judge a signal's contention by its physical nodes
+- *(uray)* tie the processor's inputs before the design is routed
+- *(uray)* route a large design in minutes rather than not at all
+- *(fpga)* the ECP5's narrow block RAM modes are right, and the measurement that said otherwise was confounded
+- *(seph_mcu)* a characteristic's handle follows its properties, as the radio's did
+- *(fpga)* a block RAM mode no part has confirmed is a last resort, and the ECP5's 4-bit one is wrong
+- *(fpga)* a block RAM pin one bit wide reaches the fabric, and a pin nothing drives refuses the build
+- *(basys3)* the device's buttons press, and the FPGA runs the secure element to its PIN screen
+- *(route)* two signals never share one piece of metal, and the readback that found it
+- *(basys3)* queue the console's requests, so none sent without waiting is lost
+- *(uray)* stop the region before the first UltraRAM column
+- *(fpga)* refuse an instance the place-and-route netlist cannot hold
+- *(xray)* keep a global clock on the global network, and refuse when it is not
+- *(xray)* a block RAM data bit nothing stores or reads cannot fail a build
+- *(fpga)* `--place-*` reaches the placer for 7-series and Gowin bitstreams
+
+### Other
+
+- *(viewer)* the rendered site of the split-register golden
+- *(uray)* the AXI slave answers at 100 MHz with its inputs registered
+- *(ip)* z80: the opcode table checked against a second reference
+- *(ip)* inflate: every ordered pair of the 59 zlib streams decodes
+- *(card-bench)* USB over the console, step by step, for the bench
+- *(ip)* z80: plain registers instead of an indexed file, 3650 to 2885 LUT4
+- *(uray)* a binarized network on the ZCU104, and how fast it answers
+- *(cynthion)* a distributed RAM read and written at one address in one cycle, measured on a part
+- *(cynthion)* a block RAM read in the cycle its address is written, measured on a part
+- *(inflate)* the corpus in corpus order, through one instance, with the deflate cases refused
+- *(card-bench)* the initialisation frame itself
+- what another machine needs to drive the card bench
+- what another machine needs to drive the card bench
+- *(uray)* count the processor's clocks on the ZCU104 — PL_CLK0 is 100 MHz
+- *(uray)* a flip-flop clocked by hand from Linux behaves as an FDRE
+- *(uray)* the ZCU104 takes zero ECC, and how far ZU3EG routing carries
+- *(fpga)* the nine placements were one, and what nine really give
+
 ## [0.0.6](https://github.com/KarpelesLab/reticle/compare/v0.0.5...v0.0.6) - 2026-10-09
 
 ### Added
