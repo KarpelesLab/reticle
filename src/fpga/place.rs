@@ -1799,6 +1799,32 @@ impl SiteRules {
         true
     }
 
+    /// Whether `instance` on `site` would put a signal on a pin shared
+    /// with other sites, none of which is taken: it opens the group, and
+    /// sets that signal for the cells that come after. False for a site
+    /// that shares nothing, and for a cell that uses none of the pins it
+    /// shares.
+    fn opens(&self, placement: &Placement, instance: usize, site: usize) -> bool {
+        if self.trivial() {
+            return false;
+        }
+        let mut uses = false;
+        for (other, start, len) in &self.per_site[site] {
+            let run = *start as usize..(*start + *len) as usize;
+            if !self.pairs[run]
+                .iter()
+                .any(|(mine, _)| self.signal(instance, *mine).is_some())
+            {
+                continue;
+            }
+            if placement.instance_at(*other).is_some() {
+                return false;
+            }
+            uses = true;
+        }
+        uses
+    }
+
     /// Why `instance` may not take the free `site`, in words, or `None`
     /// when it may: the first rule of [`SiteRules::allows`] that refuses
     /// it, naming the pin. For the error a legaliser that ran out of
@@ -3603,8 +3629,22 @@ fn no_room(
     }
 }
 
+/// How much farther, in tiles, the legaliser will carry a cell to join a
+/// group of sites already in use than to open an empty one.
+///
+/// The group is the sites that share a pin — a 7-series slice's flip-flops,
+/// which have one clock, one clock enable and one set/reset among them. A
+/// flip-flop that opens a slice closes it to every other control set, and
+/// taking the nearest legal site regardless did exactly that on the
+/// ChipWhisperer-Husky: placement stopped with 8,926 flip-flop sites free,
+/// 6,214 of them in slices whose clock already carried another one. A
+/// site that shares no pin with any other opens nothing and is not
+/// charged, so lookup tables place as before.
+const OPENING: u64 = 4;
+
 /// The free site of `kind` closest to `target`, inside `region` and among
-/// `allowed`, that `instance` may legally take.
+/// `allowed`, that `instance` may legally take, counting a site that opens
+/// a group of shared pins [`OPENING`] tiles farther than it is.
 ///
 /// `allowed` is [`Placeable::allowed`]: the sites reachability left, or
 /// `None` for every site of the kind.
@@ -3635,7 +3675,10 @@ fn nearest_free(
         {
             continue;
         }
-        let distance = manhattan(target, (x, y));
+        let mut distance = manhattan(target, (x, y));
+        if shared.opens(placement, instance, *site) {
+            distance += OPENING;
+        }
         if best.is_none_or(|(d, _)| distance < d) && shared.allows(placement, &[(instance, *site)])
         {
             best = Some((distance, *site));
@@ -4271,6 +4314,25 @@ fn anneal(
             ) else {
                 continue;
             };
+            // A global buffer moved within its tile changes no wirelength
+            // and nothing the router weighs — which of a 7-series tile's
+            // 32 `BUFGCTRL`s it is only picks the clock track — so the
+            // move is a random walk among equal sites, and which one
+            // blink's clock buffer ended on changed with a flip-flop
+            // legalisation rule that had nothing to do with it. Such a
+            // move is not made; the site is the legaliser's. Every other
+            // cell keeps its moves within a tile: an iCE40 logic cell's
+            // position in its tile is invisible to the wirelength and not
+            // to the router, and refusing them all cost `blinky_ice40` a
+            // tenth of its pips.
+            if candidate.iter().all(|(instance, site)| {
+                netlist.instances[*instance].kind == BelRole::GlobalBuffer.keyword()
+                    && placement
+                        .site_of(*instance)
+                        .is_some_and(|was| graph.sites[was].tile == graph.sites[*site].tile)
+            }) {
+                continue;
+            }
             step.tried += 1;
             let delta = apply(graph, &mut churn, placement, &candidate);
             if delta <= 0.0 || rng.unit() * (temperature + delta) < temperature {
@@ -6091,6 +6153,119 @@ mod tests {
             SiteRules::find(&chain(2), &plain).groups.is_empty(),
             "a one-bel tile shares nothing, so there is no budget to keep"
         );
+    }
+
+    /// A row of tiles, each one slice of two flip-flops sharing a clock.
+    fn clocked(width: u32) -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", width, 1);
+        let mut tile = TileType::new("slice", "logic_tile", 8, 8);
+        tile.wires.push(WireDecl {
+            name: "clk".to_owned(),
+            dx: 0,
+            dy: 0,
+        });
+        for n in 0..2 {
+            let mut ff = BelDecl::new(format!("ff{n}"), "ff");
+            ff.pins.push(("clk".to_owned(), WireRef::local("clk")));
+            tile.bels.push(ff);
+        }
+        arch.tile_types.push(tile);
+        for x in 0..width {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// Flip-flops clocked by `clocks[i]`, each its own instance.
+    fn clocked_by(clocks: &[usize]) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: (0..=clocks.iter().copied().max().unwrap_or(0))
+                .map(|n| Signal {
+                    name: format!("clk{n}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            off_fabric: Vec::new(),
+        };
+        for (instance, clock) in clocks.iter().enumerate() {
+            let pin = netlist.pins.len();
+            netlist.pins.push(NetPin {
+                instance,
+                port: "C".to_owned(),
+                bit: 0,
+                role: "clk".to_owned(),
+                output: false,
+                signal: Some(*clock),
+                constant: None,
+            });
+            netlist.signals[*clock].sinks.push(pin);
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("ff{instance}"),
+                primitive: "FD".to_owned(),
+                kind: "ff".to_owned(),
+                pins: vec![pin],
+                pin: None,
+            });
+        }
+        netlist
+    }
+
+    /// **The legaliser joins a slice before it opens one.**
+    ///
+    /// Two slices of two flip-flops, two clocks with two flip-flops each:
+    /// exactly full. The second flip-flop of clock 0 wants the right-hand
+    /// tile. Taking the nearest legal site, it opened that slice, and the
+    /// two flip-flops of clock 1 then had no slice left — the shape of the
+    /// ChipWhisperer-Husky's stop, in four cells. Would catch an
+    /// [`OPENING`] of zero, or `SiteRules::opens` answering for a slice
+    /// that is in use. One would pass by the tie going to the earlier
+    /// site. Would not catch a penalty so large it drags
+    /// cells across the die, which is a wirelength question and not a
+    /// legality one.
+    #[test]
+    fn the_legaliser_joins_a_slice_before_it_opens_one() {
+        let (_, graph) = clocked(2);
+        let netlist = clocked_by(&[0, 0, 1, 1]);
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        let info: Vec<Placeable> = (0..4)
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+            })
+            .collect();
+        // The order is by target, then by name: ff0 at the left, then
+        // ff1, ff2 and ff3 at the right.
+        let positions = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0)];
+        let shared = SiteRules::find(&netlist, &graph);
+        let mut placement = Placement::new(4, graph.sites.len());
+        legalise(
+            &netlist,
+            &graph,
+            &info,
+            &[],
+            &positions,
+            &sites_by_kind,
+            &shared,
+            &mut placement,
+        )
+        .expect("two clocks fit two slices");
+        let tile = |i: usize| graph.sites[placement.site_of(i).unwrap()].tile;
+        assert_eq!(tile(0), tile(1), "clock 0 shares a slice");
+        assert_eq!(tile(2), tile(3), "clock 1 shares a slice");
+        assert_ne!(tile(0), tile(2));
     }
 
     #[test]
