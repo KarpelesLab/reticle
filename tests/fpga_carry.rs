@@ -71,7 +71,7 @@ use reticle::fpga::{self, BelRole, Constraints, FpgaOptions, MapOptions};
 use reticle::ir::builder::ModuleBuilder;
 use reticle::ir::validate::validate_module;
 use reticle::ir::{
-    AttrValue, Cell, CellId, CellKind, Design, ExprKind, Module, ModuleId, NetId, Type,
+    AttrValue, Cell, CellId, CellKind, Design, ExprKind, Module, ModuleId, Name, NetId, Type,
 };
 use reticle::logic::{Bit, Logic};
 use reticle::source::{SourceMap, Span};
@@ -125,6 +125,12 @@ enum Shape {
     /// the lane `legalise_carries` ties to zero, and the shape NewAE's
     /// Husky FIFO's `rused` has.
     SubtractThenCarryIn,
+    /// `y = s ? (c ± d) : (a ± b)`, each side a subtraction when its flag
+    /// says so: two adders behind a multiplexer, which `primitives` maps
+    /// as one chain with its operands chosen instead, the carry in a
+    /// subtraction needs riding in an extra low lane. NewAE's `esad` is
+    /// `decision ? x - r : y + r` in each of 256 counters.
+    Chosen { low_sub: bool, high_sub: bool },
 }
 
 impl Shape {
@@ -183,6 +189,32 @@ impl Shape {
                 let ke = b.const_u64(width, k);
                 b.cell2("sum", CellKind::Add, ae, ke, y);
             }
+            Shape::Chosen { low_sub, high_sub } => {
+                let ports: Vec<NetId> = ["a", "b", "c", "d"]
+                    .iter()
+                    .map(|n| b.input(*n, Type::bits(width)))
+                    .collect();
+                let sel = b.input("s", Type::bit());
+                let y = b.output("y", Type::bits(width));
+                let kind = |sub: bool| if sub { CellKind::Sub } else { CellKind::Add };
+                let low = b.add_net("low", Type::bits(width));
+                let high = b.add_net("high", Type::bits(width));
+                let (ae, be) = (b.net(ports[0]), b.net(ports[1]));
+                b.cell2("low", kind(low_sub), ae, be, low);
+                let (ce, de) = (b.net(ports[2]), b.net(ports[3]));
+                b.cell2("high", kind(high_sub), ce, de, high);
+                let (le, he, se) = (b.net(low), b.net(high), b.net(sel));
+                b.cell(
+                    "choose",
+                    CellKind::Mux,
+                    vec![
+                        (Name::new("a"), le),
+                        (Name::new("b"), he),
+                        (Name::new("s"), se),
+                    ],
+                    vec![(Name::new("y"), y)],
+                );
+            }
         }
         let module = b.finish();
         let problems = validate_module(&module);
@@ -203,10 +235,31 @@ impl Shape {
         }
     }
 
-    /// What the module must answer for the given inputs.
-    fn expected(self, width: u32, a: u64, b: u64, cin: u64) -> u64 {
+    /// What the module must answer for the given inputs, in
+    /// [`Shape::inputs`]' order.
+    fn expected(self, width: u32, values: &[u64]) -> u64 {
         let mask = |w: u32| if w >= 64 { u64::MAX } else { (1u64 << w) - 1 };
+        let at = |i: usize| values.get(i).copied().unwrap_or(0);
+        let (a, b, cin) = match self {
+            Shape::Constant(_) => (at(0), 0, 0),
+            _ => (at(0), at(1), at(2)),
+        };
         match self {
+            Shape::Chosen { low_sub, high_sub } => {
+                let op = |sub: bool, x: u64, y: u64| {
+                    if sub {
+                        x.wrapping_sub(y)
+                    } else {
+                        x.wrapping_add(y)
+                    }
+                };
+                let value = if at(4) == 1 {
+                    op(high_sub, at(2), at(3))
+                } else {
+                    op(low_sub, a, b)
+                };
+                value & mask(width)
+            }
             Shape::Plain => a.wrapping_add(b) & mask(width),
             Shape::CarryIn => a.wrapping_add(b).wrapping_add(cin) & mask(width),
             Shape::Widened => (a + b) & mask(width + 1),
@@ -223,6 +276,13 @@ impl Shape {
             Shape::CarryIn | Shape::SubtractThenCarryIn => {
                 vec![("a", width), ("b", width), ("cin", 1)]
             }
+            Shape::Chosen { .. } => vec![
+                ("a", width),
+                ("b", width),
+                ("c", width),
+                ("d", width),
+                ("s", 1),
+            ],
             _ => vec![("a", width), ("b", width)],
         }
     }
@@ -451,6 +511,25 @@ impl<'m> Netlist<'m> {
                 let (_, out) = cell.outputs.first().expect("a LUT has an output");
                 values.insert(*out, Logic::from_bit(init.bit(index)));
             }
+            // Two functions of one table (UG474's `LUT6_2`): `O6` reads
+            // the whole of `INIT`, `O5` its lower half whatever `I5` is.
+            "LUT6_2" => {
+                let init = match cell.params.get("INIT") {
+                    Some(AttrValue::Const(c)) => c.clone(),
+                    other => panic!("`{}` has INIT {other:?}", cell.name),
+                };
+                let mut index = 0u32;
+                for pin in 0..6u32 {
+                    if one(&format!("I{pin}"), values) == Bit::One {
+                        index |= 1 << pin;
+                    }
+                }
+                for (port, at) in [("O6", index), ("O5", index & 31)] {
+                    if let Some(out) = cell.output(port) {
+                        values.insert(out, Logic::from_bit(init.bit(at)));
+                    }
+                }
+            }
             // CARRY4, straight from the equations in `cells_sim.v` that
             // `xc7.dev` quotes.
             "CARRY4" => {
@@ -520,6 +599,59 @@ impl<'m> Netlist<'m> {
     }
 }
 
+/// The part of a packed chain a simulation cannot see: **which pin** of a
+/// `LUT6_2` each carry input is wired to. Simulated, a net has its value
+/// whichever output drives it, so a pairing with its halves swapped
+/// answers every sum correctly; on the slice `S` is the table's `O6` and
+/// nothing else, and a generate from the table is its `O5` through
+/// `<L>CY0`. So: every lane whose generate a `LUT6_2` drives takes it off
+/// that cell's `O5`, and takes its propagate off the same cell's `O6`.
+fn generates_come_off_their_own_o5(module: &Module) {
+    use reticle::ir::emit::{BitView, SigBit};
+    let view = BitView::new(module).expect("the packed module is structural");
+    let mut driver: std::collections::HashMap<SigBit, (CellId, String)> =
+        std::collections::HashMap::new();
+    for (id, cell) in module.cells.iter() {
+        for (port, net) in &cell.outputs {
+            for bit in view.net_bits(*net, cell.span).expect("a bit vector") {
+                driver.insert(view.canonical(bit), (id, port.as_str().to_owned()));
+            }
+        }
+    }
+    let bits = |e| -> Vec<SigBit> {
+        view.expr_bits(e)
+            .expect("a structural pin")
+            .into_iter()
+            .map(|b| view.canonical(b))
+            .collect()
+    };
+    let mut lanes = 0;
+    for (_, cell) in module.cells.iter() {
+        if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == "CARRY4") {
+            continue;
+        }
+        let s = bits(cell.input("S").expect("`S`"));
+        let di = bits(cell.input("DI").expect("`DI`"));
+        for (s, di) in s.iter().zip(&di) {
+            let Some((dual, port)) = driver.get(di) else {
+                continue;
+            };
+            if !matches!(&module.cells[*dual].kind, CellKind::Blackbox(n) if n.as_str() == "LUT6_2")
+            {
+                continue;
+            }
+            assert_eq!(port, "O5", "a generate off a `LUT6_2`'s `{port}`");
+            assert_eq!(
+                driver.get(s),
+                Some(&(*dual, "O6".to_owned())),
+                "a generate off one table's `O5` and a propagate off another's"
+            );
+            lanes += 1;
+        }
+    }
+    assert!(lanes > 0, "no lane took its generate off `O5`");
+}
+
 /// The net of a port, by name.
 fn port_net(module: &Module, name: &str) -> NetId {
     module
@@ -533,24 +665,32 @@ fn port_net(module: &Module, name: &str) -> NetId {
 /// Simulates every input combination of `shape` at `width` bits and
 /// compares with the arithmetic it stands for.
 fn check_exhaustively(shape: Shape, width: u32, map: MapOptions) {
-    check_full(shape, width, XC7, map, false);
+    check_full(shape, width, XC7, map, false, false);
 }
 
 /// The same, on a named device.
 fn check_on(shape: Shape, width: u32, device: &str, map: MapOptions) {
-    check_full(shape, width, device, map, false);
+    check_full(shape, width, device, map, false, false);
 }
 
 /// [`check_exhaustively`], optionally after `fpga::xray::legalise_carries`
 /// has given every propagate bit a lookup table of its own.
 fn check(shape: Shape, width: u32, map: MapOptions, legalise: bool) {
-    check_full(shape, width, XC7, map, legalise);
+    check_full(shape, width, XC7, map, legalise, false);
 }
 
-/// The one simulation the three wrappers above all reach: map `shape` at
+/// [`check`] with the chain legalised and then the lookup tables paired
+/// into `LUT6_2` by `fpga::xray::pack_lut_pairs`, which is the netlist
+/// the 7-series bitstream is built from: a lane's generate then comes off
+/// its propagate table's `O5`.
+fn check_packed(shape: Shape, width: u32) {
+    check_full(shape, width, XC7, MapOptions::default(), true, true);
+}
+
+/// The one simulation the wrappers above all reach: map `shape` at
 /// `width` bits for `device`, legalise the chain for a slice if asked,
-/// then evaluate every input combination.
-fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise: bool) {
+/// pair its lookup tables if asked, then evaluate every input combination.
+fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise: bool, pack: bool) {
     assert!(
         !legalise || device == XC7,
         "`legalise_carries` is the 7 series' own pass and there is nothing to ask it on {device}"
@@ -559,6 +699,12 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
     if legalise {
         let device = fpga::target(device).expect("a built-in device");
         fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
+        if pack {
+            let pairing = fpga::xray::pack_lut_pairs(&mut design, top, device)
+                .expect("the lookup tables pair");
+            assert!(pairing.pairs > 0, "nothing paired: {pairing:?}");
+            generates_come_off_their_own_o5(design.module(top));
+        }
         let problems = validate_module(design.module(top));
         assert!(
             !problems.has_errors(),
@@ -576,7 +722,7 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
     for pattern in 0..(1u64 << bits) {
         let mut inputs = BTreeMap::new();
         let mut taken = 0;
-        let mut values = [0u64; 3];
+        let mut values = [0u64; 5];
         for (index, (name, w)) in ports.iter().enumerate() {
             let mask = (1u64 << w) - 1;
             let value = (pattern >> taken) & mask;
@@ -584,23 +730,19 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
             values[index] = value;
             inputs.insert(port_net(module, name), Logic::from_u64(value, *w));
         }
-        let (a, b, cin) = match shape {
-            Shape::Constant(_) => (values[0], 0, 0),
-            Shape::CarryIn | Shape::SubtractThenCarryIn => (values[0], values[1], values[2]),
-            _ => (values[0], values[1], 0),
-        };
         let got = netlist.eval(&inputs);
         let got = got
             .get(&result)
             .unwrap_or_else(|| panic!("`y` was not driven"))
             .clone();
-        let want = shape.expected(width, a, b, cin);
+        let want = shape.expected(width, &values[..ports.len()]);
         let want = Logic::from_u64(want, result_width);
         assert_eq!(
             got.to_u64(),
             want.to_u64(),
-            "{shape:?} at {width} bits: a={a} b={b} cin={cin} gave {got}, wanted {want}\n\
+            "{shape:?} at {width} bits: inputs {:?} gave {got}, wanted {want}\n\
              the netlist was {:?}",
+            &values[..ports.len()],
             report.netlist
         );
     }
@@ -678,6 +820,37 @@ fn legalising_a_chain_for_a_slice_changes_no_sum() {
     };
     for width in [1, 3, 6] {
         check(Shape::Widened, width, one.clone(), true);
+    }
+}
+
+/// **Two adders behind a multiplexer share one chain, and each answer is
+/// still its own.** Every input of all four combinations of adding and
+/// subtracting, at four bits: mapped, then legalised, then with the
+/// lookup tables paired, which is where each lane's generate moves onto
+/// its propagate table's `O5`.
+///
+/// Would catch: a carry in of the wrong polarity for the side that
+/// subtracts, the complemented operand on the wrong side, the extra low
+/// lane's sum leaking into the answer, and a paired table whose halves
+/// are swapped or whose `O5` is not the generate it replaced. Would not
+/// catch: `CARRY4.<L>CY0` selecting something other than `O5` on
+/// silicon, which is prjxray's fuzzer, quoted; the netlist says what the
+/// slice is believed to do, and a routed bitstream's every bit decoding
+/// says only that the bit was meant.
+#[test]
+fn a_chosen_sum_shares_a_chain_and_is_still_right() {
+    for low_sub in [false, true] {
+        for high_sub in [false, true] {
+            let shape = Shape::Chosen { low_sub, high_sub };
+            check_exhaustively(shape, 4, MapOptions::default());
+            check_packed(shape, 4);
+            let (_, _, report) = mapped(shape, 8, XC7, MapOptions::default());
+            assert_eq!(
+                report.primitives.carry_chains.len(),
+                1,
+                "{shape:?}: one chain for the two"
+            );
+        }
     }
 }
 
@@ -1160,6 +1333,18 @@ mod proofs {
         prove(Shape::Constant(1), 16);
         prove(Shape::Constant(0xdead), 16);
         prove(Shape::CarryIn, 16);
+    }
+
+    /// Two adders behind a multiplexer, sharing one chain, at a width
+    /// simulation cannot enumerate: every combination of adding and
+    /// subtracting on each side.
+    #[test]
+    fn a_chosen_sum_is_proved_equivalent() {
+        for low_sub in [false, true] {
+            for high_sub in [false, true] {
+                prove(Shape::Chosen { low_sub, high_sub }, 13);
+            }
+        }
     }
 
     /// The same proof for the ECP5's `CCU2C`, at the widths simulation

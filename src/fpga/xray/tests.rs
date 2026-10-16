@@ -372,9 +372,15 @@ fn a_whole_database_loads_from_memory() {
     // The grid is the extent of the tiles, so the CLB at grid (10, 155)
     // makes it 11 x 156.
     assert_eq!((fabric.arch.width, fabric.arch.height), (11, 156));
-    // The pip, plus the two directions of the one join.
-    assert_eq!(fabric.stats.pips, 3);
-    assert_eq!(fabric.stats.joins, 2);
+    // The pip, plus the two directions of the one join, plus each slice's
+    // four hops from its bypass inputs into its lanes' generate muxes:
+    // those name no feature (the mux's cleared state is the bypass input),
+    // so they need nothing from this database's `segbits` and are fixed
+    // wiring like the join. The four from `O5` name `<L>CY0`, which this
+    // database does not list, so they are left out rather than built
+    // half-set.
+    assert_eq!(fabric.stats.pips, 3 + 2 * 4);
+    assert_eq!(fabric.stats.joins, 2 + 2 * 4);
     // Only the pin whose site the grid really has, and named the way
     // the architecture names bels rather than the way `tilegrid.json`
     // names sites: `SLICE_X0Y0` is the first site of the tile, so it is

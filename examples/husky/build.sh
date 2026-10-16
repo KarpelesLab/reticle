@@ -14,6 +14,10 @@
 # path outside the checkout (`../../plus_optimization/...`), and the copy
 # inside it is used instead. `hdl/trigger_cdc.v` is not in the xpr's list
 # but `reg_chipwhisperer.v` instantiates it.
+#
+# The region is the whole die (the database's grid runs to 114,156): the
+# design fills it, and the default, a box around the constrained pins,
+# holds 26 800 flip-flop sites against the design's 27 618.
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -31,6 +35,7 @@ exec "$reticle" fpga \
     --constraints "$here/husky.rcf" \
     --output-dir "$out" \
     --bitstream "$out/cwhusky_top.bit" \
+    --region 0,0,114,156 \
     "$fpga/hdl/includes.v" "$fpga/hdl/setup.v" "$fpga/hdl/registers.v" \
     "$fpga/hdl/clock_managment_advanced.v" "$fpga/hdl/fifo_top_husky.v" \
     "$fpga/hdl/openadc_interface.v" "$fpga/hdl/reg_chipwhisperer.v" \

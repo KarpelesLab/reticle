@@ -748,12 +748,17 @@ fn carry_wire(wires: &str, what: &str) -> String {
 ///   signal arrives only when the cell driving it is the lookup table at
 ///   that position of that slice, and the placer reads the same fact off
 ///   the graph (see `place`'s dedicated connections).
-/// - **`di<n>` (`DI`)** sits on the slice's bypass input `<L>X` itself.
-///   The generate mux's cleared state (`CARRY4.<L>CY0` clear) *is* that
-///   input, so a routed generate costs nothing and takes the wire, and
-///   nothing else can use `<L>X` while it does. A tied generate is not
-///   routed and comes from the lookup table's `O5` instead — see
-///   [`carry_tied`].
+/// - **`di<n>` (`DI`)** sits on an invented wire, the output of the
+///   generate mux, which reads the slice's bypass input `<L>X` with
+///   `CARRY4.<L>CY0` clear and the lookup table's `O5` with it set
+///   ([`carry_pass_throughs`]). A generate from `<L>X` costs no bit and
+///   takes the wire, and nothing else can use `<L>X` while it does; one
+///   that `xray::lutpack` put in the lower half of the propagate's own
+///   table costs the bit and no wire at all. A tied generate is not
+///   routed and comes from `O5` too — see [`carry_tied`].
+///
+///   It sat on `<L>X` itself until the second path was wanted, which was
+///   right for the first and could not say the second.
 /// - **`s<n>` (`O`) and `co<n>` (`CO`)** sit on invented wires that the
 ///   output mux and the flip-flop's data mux can select
 ///   ([`carry_pass_throughs`]); `co3` is the exception and sits on the
@@ -774,7 +779,7 @@ fn carry_pins(wires: &str) -> Vec<BelPin> {
         });
         pins.push(BelPin {
             role: DI[n],
-            wire: format!("{wires}_{letter}X"),
+            wire: carry_wire(wires, &format!("DI_{letter}")),
         });
         pins.push(BelPin {
             role: S[n],
@@ -814,6 +819,8 @@ fn carry_out_wire(wires: &str, letter: char) -> String {
 /// |---|---|---|
 /// | `CARRY_CI` ← `CIN` | `PRECYINIT.CIN` | the chain continues from the slice below |
 /// | `CARRY_CYINIT` ← `<A>X` | `PRECYINIT.AX` | the chain starts from a fabric signal |
+/// | `CARRY_DI_<L>` ← `<L>X` | none (`<L>CY0` clear) | the generate from the fabric |
+/// | `CARRY_DI_<L>` ← `O5` | `CARRY4.<L>CY0` | the generate from the lookup table's lower half |
 /// | `<L>MUX` ← `CARRY_XOR_<L>` | `<L>OUTMUX.XOR` | the sum out of the slice |
 /// | `<L>MUX` ← carry out | `<L>OUTMUX.CY` | the carry out of the slice |
 /// | flip-flop `D` ← `CARRY_XOR_<L>` | `<L>FFMUX.XOR` | the sum into the flip-flop beside it |
@@ -823,8 +830,9 @@ fn carry_out_wire(wires: &str, letter: char) -> String {
 /// `017-clb-precyinit` documents `PRECYINIT` as `C0` logic 0, `C1` logic 1,
 /// `AX` the bypass input and `CIN` the carry from the slice below;
 /// `013-clb-ncy0` documents `<L>CY0` as **clear** selecting the bypass
-/// input `<L>X` and **set** selecting `O5`, which is why the generate pin
-/// sits on `<L>X` with no hop at all; and `016-clb-noutmux` drives its `XOR`
+/// input `<L>X` and **set** selecting `O5`, which is why the hop from
+/// `<L>X` names no feature and the one from `O5` names `<L>CY0`; and
+/// `016-clb-noutmux` drives its `XOR`
 /// variant from `CARRY4.O[n]` and its `CY` variant from `CARRY4.CO[n]`.
 /// The `CIN` hop's feature is the one nextpnr-xilinx writes whenever a
 /// `CARRY4`'s `CIN` is connected.
@@ -842,6 +850,17 @@ fn carry_pass_throughs(wires: &str, prefix: &str) -> Vec<PassThrough> {
         },
     ];
     for letter in SLICE_LETTERS {
+        let generate = carry_wire(wires, &format!("DI_{letter}"));
+        out.push(PassThrough {
+            to: generate.clone(),
+            from: format!("{wires}_{letter}X"),
+            features: Vec::new(),
+        });
+        out.push(PassThrough {
+            to: generate,
+            from: lut5_wire(wires, letter),
+            features: vec![format!("{prefix}.CARRY4.{letter}CY0")],
+        });
         let sum = carry_wire(wires, &format!("XOR_{letter}"));
         let carry = carry_out_wire(wires, letter);
         for (from, what) in [(&sum, "XOR"), (&carry, "CY")] {
@@ -1691,10 +1710,11 @@ mod tests {
     /// path to its `D`, and its clock enable and reset come off the
     /// slice's shared control lines. The carry chain changed it again: it
     /// needs its carry in from `CIN` or `AX`, a generate from the bypass
-    /// input, and a way out for its sums and carries. So the guard is
-    /// about *which* paths exist rather than whether any do — every one is
-    /// a multiplexer inside the slice, named by the feature that selects
-    /// it, and none crosses the slice from one side to the other.
+    /// input or `O5`, and a way out for its sums and carries. So the guard
+    /// is about *which* paths exist rather than whether any do — every one
+    /// is a multiplexer inside the slice, named by the feature that
+    /// selects it (or, for the generate mux's cleared state, by no feature
+    /// at all), and none crosses the slice from one side to the other.
     #[test]
     fn a_slice_passes_through_only_where_a_flip_flop_or_a_carry_needs_it() {
         let p = pass_throughs("CLBLL_L");
@@ -1702,10 +1722,10 @@ mod tests {
 
         // Two slices, each with a clock enable, a set/reset, two ways into
         // each of four flip-flops, and each lookup table's `O5` out to the
-        // output mux; and a carry chain with two ways in, and per bit the
-        // sum and the carry each out to the output mux and to the
-        // flip-flop.
-        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 4 + 2 + 4 * 2 * 2));
+        // output mux; and a carry chain with two ways in, and per bit two
+        // ways into the generate and the sum and the carry each out to the
+        // output mux and to the flip-flop.
+        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 4 + 2 + 4 * 2 + 4 * 2 * 2));
         // `O5` reaches the output mux and never a flip-flop: offered to the
         // data mux it read as a free way in beside every table.
         assert!(
@@ -1715,6 +1735,15 @@ mod tests {
         );
 
         for hop in &p {
+            // The generate mux reading the bypass input is the mux with
+            // its bit clear, and the only hop with no bit of its own.
+            if hop.features.is_empty() {
+                assert!(
+                    hop.to.contains("_CARRY_DI_") && hop.from.ends_with('X'),
+                    "a slice hop with no bit that is not the bypass generate: {hop:?}"
+                );
+                continue;
+            }
             assert_eq!(
                 hop.features.len(),
                 1,
@@ -1725,6 +1754,7 @@ mod tests {
                 feature.contains("FFMUX")
                     || feature.contains("OUTMUX")
                     || feature.contains("PRECYINIT")
+                    || (feature.contains("CARRY4.") && feature.ends_with("CY0"))
                     || feature.ends_with("CEUSEDMUX")
                     || feature.ends_with("SRUSEDMUX"),
                 "unexpected slice pass-through `{feature}`"
@@ -1754,8 +1784,9 @@ mod tests {
     ///
     /// Would catch: `S` put on an invented wire (the placer would then
     /// see no dedicated connection and the router no path), `CO[3]` off
-    /// `COUT` (the chain would have no way up), or the two slices' pins
-    /// crossed. Would not catch: the letters being in the wrong order —
+    /// `COUT` (the chain would have no way up), the generate's two ways in
+    /// crossed (an `O5` generate would leave `<L>CY0` clear and read the
+    /// bypass input), or the two slices' pins crossed. Would not catch: the letters being in the wrong order —
     /// that is UG474's drawing, and `tests/fpga_xray_carry.rs` reads it
     /// back out of a routed bitstream.
     #[test]
@@ -1774,10 +1805,22 @@ mod tests {
         assert_eq!(wire("co0"), "CLBLL_L_CARRY_CY_A");
         assert_eq!(wire("s2"), "CLBLL_L_CARRY_XOR_C");
         assert_eq!(wire("ci"), "CLBLL_L_CARRY_CI");
+        assert_eq!(wire("di1"), "CLBLL_L_CARRY_DI_B");
+        let hops = pass_throughs("CLBLL_L");
+        let into = |from: &str| {
+            hops.iter()
+                .find(|h| h.to == "CLBLL_L_CARRY_DI_B" && h.from == from)
+                .map(|h| h.features.clone())
+        };
         assert_eq!(
-            wire("di1"),
-            "CLBLL_L_BX",
-            "a routed generate is the bypass input"
+            into("CLBLL_L_BX"),
+            Some(Vec::new()),
+            "the bypass input is the generate mux with its bit clear"
+        );
+        assert_eq!(
+            into("CLBLL_L_MUX_BO5"),
+            Some(vec!["SLICEL_X1.CARRY4.BCY0".to_owned()]),
+            "`O5` is the generate mux with its bit set"
         );
         assert_eq!(
             bel_pins("CLBLM_R", "SLICEM_X0", "CARRY4")[0].wire,

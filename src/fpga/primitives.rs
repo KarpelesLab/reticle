@@ -2805,6 +2805,9 @@ impl Mapper<'_> {
             }
             return;
         }
+        if bel.operand_carry().is_none() && bel.wide_carry().is_some() {
+            self.share_muxed_adders(module);
+        }
         let adders: Vec<CellId> = module
             .cells
             .iter()
@@ -2851,6 +2854,155 @@ impl Mapper<'_> {
         }
         if !removed.is_empty() {
             module.cells.retain(|id, _| !removed.contains(&id));
+        }
+    }
+
+    /// Rewrites `s ? (c ± d) : (a ± b)` into one adder whose operands are
+    /// chosen instead of its results: `(s ? c : a) + (s ? d' : b')`, where
+    /// a subtraction's second operand is complemented, and the `+ 1` a
+    /// subtraction needs is a carry in of `s` (or `~s`, or one).
+    ///
+    /// Two chains and a multiplexer behind them are three lookup tables a
+    /// bit; one chain with the multiplexers in front is a propagate table
+    /// and a generate table a bit. The ChipWhisperer-Husky's `esad`
+    /// computes `decision ? x - r : y + r` in each of its 256 counters,
+    /// and a subtraction is not mapped onto the chain at all, so there it
+    /// was a 14-table ripple next to an 8-table chain.
+    ///
+    /// The carry in rides in an extra low bit: `{X, cin} + {Y, cin}` has
+    /// `cin` as the carry out of bit 0 and zero as its sum, so the upper
+    /// bits are `X + Y + cin`. That costs one lane, and the wide carry's
+    /// own fabric carry in is left alone.
+    ///
+    /// Only for a wide carry element (the 7-series `CARRY4`), whose
+    /// generate input is what makes the shared form cheaper; an adder or a
+    /// subtraction anything else reads stays as it is, as does any operand
+    /// whose width is not the result's.
+    fn share_muxed_adders(&mut self, module: &mut Module) {
+        /// One adder or subtraction feeding a multiplexer: the cell, its
+        /// two operands, and whether it subtracts.
+        type Arith = (CellId, ExprId, ExprId, bool);
+        let uses = net_use_counts(module);
+        let mut driver: std::collections::HashMap<NetId, CellId> = std::collections::HashMap::new();
+        for (id, cell) in module.cells.iter() {
+            if matches!(cell.kind, CellKind::Add | CellKind::Sub)
+                && let Some(y) = cell.output("y")
+            {
+                driver.insert(y, id);
+            }
+        }
+        let muxes: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| c.kind == CellKind::Mux)
+            .map(|(id, _)| id)
+            .collect();
+        // The adder behind `e` when `e` is a whole net of `width` bits that
+        // nothing else reads, and its operands are as wide.
+        let arith = |module: &Module, e: ExprId, width: u32| -> Option<Arith> {
+            let net = module.exprs.get(e).and_then(Expr::as_net)?;
+            if uses.get(net.index()).copied() != Some(1) || net_width(module, net) != width {
+                return None;
+            }
+            let id = *driver.get(&net)?;
+            let c = &module.cells[id];
+            let (x, z) = (c.input("a")?, c.input("b")?);
+            let wide = |e: ExprId| module.exprs.get(e).and_then(|e| e.ty.width()) == Some(width);
+            (wide(x) && wide(z)).then_some((id, x, z, c.kind == CellKind::Sub))
+        };
+        let mut removed: Vec<CellId> = Vec::new();
+        let mut shared = 0usize;
+        for mux in muxes {
+            let cell = &module.cells[mux];
+            let (Some(a), Some(b), Some(sel), Some(y)) = (
+                cell.input("a"),
+                cell.input("b"),
+                cell.input("s"),
+                cell.output("y"),
+            ) else {
+                continue;
+            };
+            let width = net_width(module, y);
+            if width < self.options.min_carry_width {
+                continue;
+            }
+            let (span, name) = (cell.span, cell.name.as_str().to_owned());
+            let (Some(low), Some(high)) = (arith(module, a, width), arith(module, b, width)) else {
+                continue;
+            };
+            if low.0 == high.0 || removed.contains(&low.0) || removed.contains(&high.0) {
+                continue;
+            }
+            let mut fresh = 0usize;
+            let mut gate =
+                |module: &mut Module, kind: CellKind, inputs: Vec<(&str, ExprId)>, ty: Type| {
+                    fresh += 1;
+                    let label = format!("{name}$share${fresh}");
+                    let net = add_net(module, &label, ty, span);
+                    let inputs = inputs.into_iter().map(|(n, e)| (Name::new(n), e)).collect();
+                    add_cell(
+                        module,
+                        &label,
+                        kind,
+                        inputs,
+                        vec![(Name::new("y"), net)],
+                        span,
+                    );
+                    net_expr(module, net, span)
+                };
+            let ty = Type::bits(width);
+            let low_b = if low.3 {
+                gate(module, CellKind::Not, vec![("a", low.2)], ty.clone())
+            } else {
+                low.2
+            };
+            let high_b = if high.3 {
+                gate(module, CellKind::Not, vec![("a", high.2)], ty.clone())
+            } else {
+                high.2
+            };
+            let x = gate(
+                module,
+                CellKind::Mux,
+                vec![("a", low.1), ("b", high.1), ("s", sel)],
+                ty.clone(),
+            );
+            let z = gate(
+                module,
+                CellKind::Mux,
+                vec![("a", low_b), ("b", high_b), ("s", sel)],
+                ty.clone(),
+            );
+            let cin = match (low.3, high.3) {
+                (false, false) => None,
+                (true, true) => Some(const_expr(module, Const::ones(1), span)),
+                (false, true) => Some(sel),
+                (true, false) => Some(gate(module, CellKind::Not, vec![("a", sel)], Type::bit())),
+            };
+            let (x, z, sum_width) = match cin {
+                None => (x, z, width),
+                Some(c) => (
+                    expr(module, ExprKind::Concat(vec![x, c]), span),
+                    expr(module, ExprKind::Concat(vec![z, c]), span),
+                    width + 1,
+                ),
+            };
+            let sum = gate(
+                module,
+                CellKind::Add,
+                vec![("a", x), ("b", z)],
+                Type::bits(sum_width),
+            );
+            let sum = slice_expr(module, sum, sum_width - 1, sum_width - width, span);
+            add_assign(module, y, sum, span);
+            removed.extend([mux, low.0, high.0]);
+            shared += 1;
+        }
+        if shared > 0 {
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!(
+                "{shared} pair(s) of adders behind a multiplexer share one carry chain"
+            ));
         }
     }
 

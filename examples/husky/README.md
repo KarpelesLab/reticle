@@ -35,8 +35,8 @@ git -C husky/fpga/tracewhisperer submodule update --init
 examples/husky/build.sh husky /tmp/husky
 ```
 
-**Today this stops at placement**: the design does not yet fit, and the
-section at the end says by how much and why.
+The design fits the part as of 2026-10-17; whether it places and routes
+is the open question, and the section at the end says what is known.
 
 The superproject pins `fpga/tracewhisperer` at a commit that is not
 public; `542b1cc` on its `pro` branch is the newest public one, and is
@@ -137,21 +137,31 @@ of its own:
 | each primitive's configuration bits equal Vivado's for the same cell on the same site | **checked**, per primitive, against NewAE's `cwhusky_top.bit` decoded through prjxray-db |
 | the pins, standards, drive and pulls are NewAE's | **transcribed** from `cwhusky.xdc` by script |
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
-| the whole design fits the part and routes | **no**: see below |
+| the whole design fits the part | **checked**: 30,855 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
+| it places and routes | **not yet known**: see below |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status
 
-**It does not fit yet.** The whole design elaborates, synthesises and
-maps — in about 25 seconds, where the first attempt did not finish in
-83 minutes — and the result is, measured on 2026-10-16:
+**It fits; it has not yet been shown to place and route.** The whole
+design elaborates, synthesises and maps — in about 25 seconds, where the
+first attempt did not finish in 83 minutes — and the result is, measured
+on 2026-10-17:
 
 | | Reticle | NewAE's image (Vivado 2022.1) |
 |---|---|---|
-| LUTs | 35,176 `LUT6` cells | 23,274 lookup tables with contents |
+| lookup tables | 39,026 functions in 30,855 sites (8,171 `LUT6_2` pairs) | 23,274 lookup tables with contents |
 | flip-flops | 27,618 | about 26,000 with an initial value of zero |
-| `CARRY4` | 1,429 | — |
 | `RAMB18E1` | 100 | 100 |
+
+On 2026-10-16 it was 35,176 single-function `LUT6` cells and did not fit.
+What closed it, in `docs/fpga-xray.md`'s two sections on the lookup
+table's second output: pairing small functions into `LUT6_2`, then
+sharing `esad`'s two adders per counter as one carry chain whose generate
+comes off the propagate table's `O5`. The functions went *up* (39,026)
+and the sites down. `build.sh` asks for the whole die (`--region
+0,0,114,156`) because the default region, a box around the constrained
+pins, holds 26,800 flip-flop sites.
 
 The database describes this part with the XC7A50T's tile grid, 8,150
 slices or 32,600 lookup tables, and decoding NewAE's image finds
@@ -160,22 +170,16 @@ lookup tables the XC7A35T is specified with. Why Vivado uses them has not
 been looked into; what is measured is that it does, so 32,600 is the
 ceiling that matters, and Reticle's netlist is over it.
 
-What is known about the gap:
+What is known about the gap that remains:
 
-- **No dual-output lookup tables.** The 7-series backend places one
-  function per `LUT6`; Vivado packs two of up to five shared inputs into
-  one (`LUT6_2`). In a 64-sample `esad`, 1,014 of 2,095 lookup tables use
-  three inputs or fewer.
 - **Four flip-flops per slice, of eight.** The backend offers each
   slice's `AFF`..`DFF` and not the `A5FF`..`D5FF` beside them, which it
   cannot yet wire, so the slices hold half the flip-flops Vivado can put
-  in them. `build.sh` stops at placement on exactly this: *the design needs
-  27618 `ff` site(s) and the part has 26800* (the default region, around
-  the constrained pins).
+  in them. That is why the whole die is asked for.
 - **No wide multiplexers.** Vivado builds 7- and 8-input selections from
   the slice's `MUXF7`/`MUXF8`; Reticle from lookup tables.
 - **`esad`**, NewAE's extended SAD trigger, is half the design: 256
-  counters at about 62 lookup tables and 76 flip-flops each.
+  counters, about 53 lookup tables each after the sharing (59 before).
 
 Past fitting, nothing has placed and routed a design this full on this
 die, and the ADC side runs at up to 200 MHz while the 7-series placer is

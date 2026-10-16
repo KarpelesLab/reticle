@@ -2840,8 +2840,10 @@ lower 32 whatever `A6` is. `xray::pack_lut_pairs` runs after the carry
 chains are legalised and puts two mapped tables whose inputs number five
 or fewer between them into one `LUT6_2`: the first on `O6`, the second on
 `O5`, `INIT = {first, second}`, and `I5` tied to one — what an unrouted
-`A6` reads here, so no route is needed for it. Tables on a carry chain,
-tables using all six inputs and kept ones are left alone.
+`A6` reads here, so no route is needed for it. Tables using all six
+inputs and kept ones are left alone, and so are tables on a carry chain,
+except that a lane's propagate and generate tables pair with each other
+(the next section).
 
 `O5` sits on an invented wire (`<wires>_MUX_<L>O5`) whose one way out is
 the output mux, `<L>OUTMUX.O5`. The flip-flop's data mux has an `O5`
@@ -2852,6 +2854,14 @@ FIFO placed flip-flops beside single-function tables on the strength of a
 source that did not exist; the router then fought over the bypass inputs
 and did not converge (66 nodes oversubscribed, iteration after iteration).
 
+That account was right about the effect and vague about the cause, which
+was in the placer's pool matching rather than in the mux: it treated a
+wire nothing routes into — a table's `O6` or `O5` — as room for any
+signal at all, so every table that left its `O5` idle looked like a spare
+way into the flip-flop beside it. The next section fixes the matching,
+because the carry chain's generate needed `O5` too. `<L>FFMUX.O5` is still
+not offered; nothing has needed it since.
+
 | Claim | Status | Source |
 |---|---|---|
 | `O6` reads `INIT[63:32]` with `A6` high, `O5` reads `INIT[31:0]` | **quoted** | UG474, the `LUT6_2` primitive |
@@ -2860,17 +2870,108 @@ and did not converge (66 nodes oversubscribed, iteration after iteration).
 | a design packed this way routes and every bit decodes | **checked**: eight small functions in four `LUT6_2`s; the 72 x 4096 FIFO saves 52 of 248 sites | `small_functions_share_lookup_tables_and_still_route` |
 | it works on a part | **not checked** | — |
 
+## Two adders behind a multiplexer, and a generate on `O5` (2026-10-17)
+
+NewAE's `esad` has 256 counters, and each computes
+`decision ? x - r : y + r` into an 8-bit register. Mapped as written that
+was an adder on a `CARRY4` (eight propagate tables) and a subtraction in
+lookup tables — a subtraction is not put on the chain — whose fourteen
+tables also absorbed the multiplexer: 22 per counter, 5,600 for the
+design. Vivado shares the two (`-resource_sharing`): one adder whose
+*operands* are chosen.
+
+Three things stood in the way, found in this order by building the
+design.
+
+**The registers' shape.** `counter_incr` is an array, written element by
+element from a `generate` loop, so it reaches synthesis as a memory and
+`MemScalarize` makes it registers. A word with several writers became a
+chain of multiplexers in port order ending in the word itself:
+`ce&~d ? add : (ce&d ? sub : (ce ? q : 0))`, whose hold can never happen
+and which nothing downstream could see through. `MemScalarize` now builds
+a word's next value as a decision tree over its writers' enables when they
+are products of literals — split on the literal most of them test, then
+cofactor — so the same writers give `ce ? (d ? sub : add) : 0`, the shape
+a plain register's `if` makes, and `FfOpt` turns the zero into a
+synchronous reset. It keeps the chain when the tree would put the hold on
+more than one leaf, since `FfOpt` lifts an enable off one hold at the top
+of `d` and no more. Pinned by `testdata/synth/mem_regs.rtl`, whose word 4
+is exactly this, and checked by the golden's own simulation before and
+after.
+
+**One adder.** `primitives::share_muxed_adders` rewrites
+`s ? (c ± d) : (a ± b)` — two adders or subtractions of the result's
+width that nothing else reads — into one adder of
+`(s ? c : a) + (s ? d' : b')`, the second operand complemented on a
+side that subtracts, and the `+ 1` a subtraction needs as a carry in of
+`s`, `~s` or one. The carry in rides in an extra low bit,
+`{X, cin} + {Y, cin}`, whose bit 0 sums to zero and carries `cin` out, so
+it costs a lane and leaves the chain's fabric carry in alone. Only for the
+wide carry (`CARRY4`). Each lane then has a propagate table,
+`S = X ^ Y` over `s`, `a`, `c`, `b`, and a generate table, `DI = X`,
+which the bypass input carried in from a table somewhere else — so on its
+own it saves little, and a first version that took the priority chain as
+it stood, sharing through the nested multiplexer, made the Husky
+**worse**: the hold kept a multiplexer on every bit.
+
+| Husky, whole die | lookup-table sites |
+|---|---|
+| before | 34,010 |
+| shared through the nested multiplexer (withdrawn) | 34,186 |
+| the decision tree, then sharing | 32,906 |
+| and the generate on `O5` | 30,855 |
+
+**The generate on `O5`.** A lane's generate mux reads the bypass input
+`<L>X` with `CARRY4.<L>CY0` clear and the lane table's `O5` with it set
+(prjxray's `013-clb-ncy0`, quoted). The `di` pin used to sit on `<L>X`
+itself, which could say the first and not the second; it now sits on an
+invented wire, `<wires>_CARRY_DI_<L>`, reached from `<L>X` by a hop with
+no bit and from `O5` by a hop setting `<L>CY0`. `pack_lut_pairs` pairs a
+lane's two tables first — propagate on `O6`, where `S` is wired, generate
+on `O5` — whenever their inputs number five or fewer, which for a shared
+adder they always do.
+
+That needed the placer's pool matching to know what `O5` is. A pool is
+the set of a tile's own wires some pins must arrive through, and the
+matching gives each signal a wire of its own; it now also knows that a
+wire nothing routes into is a bel's **output** (a pin on it is one the
+netlist drives, or none on it is one it reads) and carries that bel's
+signal or nothing. A signal its readers can take off the wire it is
+driven onto costs no wire more; any other signal with a reader needs a
+wire that is not an output. The first version of the rule held a
+signal's readers to its driver's wire, which refused a flip-flop reading
+its own lane's `O5` — legal: out through the output mux and back in on
+the bypass — and stopped the Husky's placement with every flip-flop site
+of the part free; it surfaced as *the design needs 27618 `ff` site(s)
+and the part has 32600*, an error that now names the cell and says the
+sites were refused rather than missing (`PlaceError::NoLegalSite`).
+
+| Claim | Status | Source |
+|---|---|---|
+| the tree computes what the chain did | **checked**: the golden's simulation before and after | `testdata/synth/mem_regs.rtl` |
+| a shared adder answers what the two did | **checked** exhaustively at 4 bits, all four add/subtract combinations, mapped, legalised and packed; **proved** at 13 bits | `a_chosen_sum_shares_a_chain_and_is_still_right`, `a_chosen_sum_is_proved_equivalent` |
+| a packed lane's generate is its own table's `O5` and its propagate that table's `O6` | **checked** structurally — a simulation cannot see which pin a net leaves by, and a mutation swapping the halves passed it until this was added | `generates_come_off_their_own_o5` |
+| the pool rule refuses an idle `O5` and allows a flip-flop reading its own lane's | **checked**, each with a mutation that fails it | `a_wire_nothing_routes_into_carries_only_what_drives_it` |
+| a design using it routes and every bit decodes | **checked**: `sel ? a - b : c + b` on eight bits, eight lanes paired, 0 bits unexplained | by hand, `reticle fpga --bitstream` |
+| `<L>CY0` set selects `O5` | **quoted** | prjxray `013-clb-ncy0` |
+| it works on a part | **not checked** | — |
+
+On the Husky: 39,026 lookup tables, 8,171 pairs of which 2,051 are carry
+lanes, **30,855 sites of the 32,600** — the first build that fits.
+
 ## NewAE's ChipWhisperer-Husky: the whole design, and where it stops
 
 Every primitive section above was found by building NewAE's Husky
 gateware, an XC7A35T-FTG256 design of about 23,300 lookup tables in
 Vivado's hands. [`examples/husky/`](../examples/husky/README.md) is the
 recipe: stand-ins for its Vivado IP cores, its pins, and the command
-line. It elaborates, synthesises and maps in about 25 seconds and then
-**stops at placement**: 35,176 `LUT6` and 27,618 flip-flops against a die
-this backend offers 32,600 of each, because it places one function per
-lookup table (no `LUT6_2`) and four flip-flops per slice of the eight.
-The README has the measurements and what is checked and what is not.
+line. It elaborates, synthesises and maps in about 25 seconds. On
+2026-10-16 it then **stopped at placement**: 35,176 `LUT6` and 27,618
+flip-flops against a die this backend offers 32,600 of each, because it
+placed one function per lookup table and four flip-flops per slice of
+the eight. With the two sections above it fits — 30,855 lookup-table
+sites — and whether it then places and routes is not yet known. The
+README has the measurements and what is checked and what is not.
 
 ## What remains before an LED could light
 

@@ -14,9 +14,19 @@
 //! (the database's `IMUX` default is `VCC_WIRE`), so the netlist and the
 //! silicon agree on it without a route.
 //!
-//! Left alone: a lookup table using all six inputs, one that drives a
-//! carry chain's propagate or generate (the chain needs the table at its
-//! own position, and its generate tables already use `O5`), and one marked
+//! A carry chain's lane is paired first, and only with itself: the table
+//! computing its propagate (`S`, which must be `O6` of the table at that
+//! position) and the one computing its generate (`DI`) become one, the
+//! generate on `O5`, which the slice's generate mux reads with
+//! `CARRY4.<L>CY0` set. An adder whose operands are chosen by a
+//! multiplexer (`primitives`' shared adders) has a table for each, and
+//! this is what puts the second one in the first one's site rather than
+//! one of its own and a trip through the bypass input.
+//!
+//! Left alone otherwise: a lookup table using all six inputs, one that
+//! drives a carry chain's propagate or generate and could not be paired
+//! with its own lane (the chain needs the table at its own position, and
+//! `xray::carry`'s generate tables already use `O5`), and one marked
 //! `keep`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -38,6 +48,8 @@ pub struct LutPairing {
     pub candidates: usize,
     /// Pairs packed into one `LUT6_2` each: the sites saved.
     pub pairs: usize,
+    /// Of those, a carry lane's propagate and generate.
+    pub lanes: usize,
 }
 
 impl LutPairing {
@@ -49,10 +61,13 @@ impl LutPairing {
         }
         format!(
             "note: lookup tables: {} of {} share a site with another (`{DUAL}`), saving {} \
-             site(s)\n",
+             site(s); {} could have; {} of the pairs are a carry lane's propagate and \
+             generate\n",
             2 * self.pairs,
             self.luts,
-            self.pairs
+            self.pairs,
+            self.candidates,
+            self.lanes
         )
     }
 }
@@ -68,6 +83,8 @@ struct Table {
     /// is bit `j` of `i`.
     truth: Vec<bool>,
     output: NetId,
+    /// The bit it drives.
+    out_bit: SigBit,
 }
 
 /// Packs pairs of lookup tables into `LUT6_2` cells; see the module docs.
@@ -105,6 +122,8 @@ pub fn pack_lut_pairs(
     };
 
     let mut tables: Vec<Table> = Vec::new();
+    let mut lanes: Vec<(SigBit, SigBit)> = Vec::new();
+    let mut lane_tables: HashSet<SigBit> = HashSet::new();
     {
         let view = BitView::new(m).map_err(|e| e.to_string())?;
         let bit = |e: ExprId| -> Option<SigBit> {
@@ -115,8 +134,13 @@ pub fn pack_lut_pairs(
             }
         };
         // What the carry chains read through their propagate and generate:
-        // those tables stay where the chain needs them.
+        // those tables stay where the chain needs them, unless a lane's
+        // two are paired with each other below.
         let mut chained: HashSet<SigBit> = HashSet::new();
+        // How many carry pins each bit feeds, and every lane as its
+        // `(propagate, generate)` bits.
+        let mut chain_uses: HashMap<SigBit, usize> = HashMap::new();
+        let shape = device.bel(BelRole::Carry).and_then(|c| c.wide_carry());
         for (_, cell) in m.cells.iter() {
             if !matches!(&cell.kind, CellKind::Blackbox(n) if device
                 .bel(BelRole::Carry)
@@ -126,7 +150,18 @@ pub fn pack_lut_pairs(
             }
             for (_, e) in &cell.inputs {
                 for b in view.expr_bits(*e).map_err(|e| e.to_string())? {
-                    chained.insert(view.canonical(b));
+                    let b = view.canonical(b);
+                    chained.insert(b);
+                    *chain_uses.entry(b).or_default() += 1;
+                }
+            }
+            if let Some(shape) = shape
+                && let (Some(p), Some(d)) = (cell.input(shape.propagate), cell.input(shape.data))
+            {
+                let p = view.expr_bits(p).map_err(|e| e.to_string())?;
+                let d = view.expr_bits(d).map_err(|e| e.to_string())?;
+                for (p, d) in p.iter().zip(&d) {
+                    lanes.push((view.canonical(*p), view.canonical(*d)));
                 }
             }
         }
@@ -144,11 +179,17 @@ pub fn pack_lut_pairs(
             let Ok(out_bits) = view.net_bits(output, cell.span) else {
                 continue;
             };
-            if out_bits
-                .iter()
-                .any(|b| chained.contains(&view.canonical(*b)))
-            {
+            let [out_bit] = out_bits.as_slice() else {
                 continue;
+            };
+            let out_bit = view.canonical(*out_bit);
+            // A table on a carry pin is a candidate only for its own lane,
+            // and only when it feeds that one pin.
+            if chained.contains(&out_bit) {
+                if chain_uses.get(&out_bit) != Some(&1) {
+                    continue;
+                }
+                lane_tables.insert(out_bit);
             }
             let Some(AttrValue::Const(init)) = cell.params.get("INIT") else {
                 continue;
@@ -208,13 +249,16 @@ pub fn pack_lut_pairs(
                 }
                 *slot = init.bit(u32::try_from(index).unwrap_or(0)) == Bit::One;
             }
-            report.candidates += 1;
+            if !lane_tables.contains(&out_bit) {
+                report.candidates += 1;
+            }
             tables.push(Table {
                 cell: id,
                 inputs: signals,
                 exprs,
                 truth,
                 output,
+                out_bit,
             });
         }
     }
@@ -239,6 +283,35 @@ pub fn pack_lut_pairs(
     let union = |a: &Table, b: &Table| -> usize {
         a.inputs.len() + b.inputs.iter().filter(|s| !a.inputs.contains(s)).count()
     };
+    // A carry lane's own two tables first: the propagate on `O6`, which is
+    // what `S` is wired to, and the generate on `O5`. Every table on a
+    // carry pin is then out of the greedy pairing below whether it paired
+    // here or not.
+    let by_output: HashMap<SigBit, usize> = tables
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.out_bit, i))
+        .collect();
+    for (p, d) in &lanes {
+        let (Some(&i), Some(&j)) = (by_output.get(p), by_output.get(d)) else {
+            continue;
+        };
+        if i == j || taken[i] || taken[j] || union(&tables[i], &tables[j]) > 5 {
+            continue;
+        }
+        taken[i] = true;
+        taken[j] = true;
+        pairs.push((i, j));
+        report.lanes += 1;
+    }
+    for (i, t) in tables.iter().enumerate() {
+        if lane_tables.contains(&t.out_bit) {
+            taken[i] = true;
+        }
+        if taken[i] {
+            narrow.remove(&(t.inputs.len(), i));
+        }
+    }
     for &i in &order {
         if taken[i] {
             continue;
