@@ -1433,6 +1433,10 @@ struct ControlGroup {
     /// mux `O5` as well made every single-output table such room, and the
     /// placer filled slices the router then could not.
     sources: Vec<u32>,
+    /// Per pool, every pin that draws on it, as `(site, role, which wires
+    /// of it)`: [`SiteRules::captive`] turned round, so that a check of one
+    /// pool reads its own handful of pins and not every pin of the tile.
+    entries: Vec<Vec<(usize, u32, u32)>>,
 }
 
 /// How many wires a pool may hold, and how far the walk that finds one may
@@ -1442,15 +1446,6 @@ struct ControlGroup {
 /// two dozen interconnect wires, and stopping there costs nothing but the
 /// look: a pool nobody else in the tile draws on is dropped anyway.
 const MAX_POOL: usize = 8;
-
-/// How many occupied sites of one tile [`SiteRules::control_fits`] keeps on
-/// the stack before it falls back to
-/// [`SiteRules::control_fits_unbounded`].
-///
-/// An ECP5 logic tile has seventeen sites in all — eight lookup tables,
-/// eight flip-flops and the distributed RAM — so this is never reached
-/// today and is a bound on the scratch rather than on what is legal.
-const OCCUPANTS: usize = 32;
 
 /// The wires of `tile` that a signal arriving at `pin` must pass through,
 /// or `None` when it can also arrive from outside the tile.
@@ -1696,6 +1691,10 @@ impl SiteRules {
                 }
                 let role = role_id(&mut out.roles, role);
                 out.captive[*site].push((role, u32::try_from(which).unwrap_or(0), mask));
+                if group.entries.len() < group.pools.len() {
+                    group.entries.resize(group.pools.len(), Vec::new());
+                }
+                group.entries[which].push((*site, role, mask));
                 if !group.sites.contains(site) {
                     group.sites.push(*site);
                 }
@@ -1785,18 +1784,39 @@ impl SiteRules {
         if !pinned {
             return false;
         }
-        let mut seen: Vec<u32> = Vec::new();
-        for (_, site) in moving {
-            let group = self.site_group[*site];
-            if group == u32::MAX || seen.contains(&group) {
+        // Every pool a moved cell arrives at **or leaves**. Leaving matters
+        // as much as arriving: a lookup table that goes takes its `O6` with
+        // it, and the flip-flop beside it that read that `O6` now needs the
+        // bypass wire, which a carry's generate may hold. Only the tiles
+        // arrived at used to be checked, and a whole tile at that — every
+        // pool of it, twenty on a 7-series logic tile, for a move that
+        // touches two or three.
+        let mut touched: [(u32, u32); 16] = [(0, 0); 16];
+        let mut many: Vec<(u32, u32)> = Vec::new();
+        let mut count_touched = 0usize;
+        let origins = moving.iter().filter_map(|(i, _)| placement.site_of(*i));
+        for site in moving.iter().map(|(_, s)| *s).chain(origins) {
+            let group = self.site_group[site];
+            if group == u32::MAX {
                 continue;
             }
-            seen.push(group);
-            if !self.control_fits(&self.groups[group as usize], &after) {
-                return false;
+            for (_, pool, _) in &self.captive[site] {
+                let key = (group, *pool);
+                if touched[..count_touched].contains(&key) || many.contains(&key) {
+                    continue;
+                }
+                if count_touched < touched.len() {
+                    touched[count_touched] = key;
+                    count_touched += 1;
+                } else {
+                    many.push(key);
+                }
             }
         }
-        true
+        touched[..count_touched]
+            .iter()
+            .chain(&many)
+            .all(|(group, pool)| self.pool_fits(&self.groups[*group as usize], *pool, &after))
     }
 
     /// Whether `instance` on `site` would put a signal on a pin shared
@@ -1888,8 +1908,8 @@ impl SiteRules {
         None
     }
 
-    /// Whether every pool of one tile can give each of the signals that
-    /// want it a wire of its own.
+    /// Whether one pool of a tile can give each of the signals that want
+    /// it a wire of its own.
     ///
     /// The question is a bipartite matching and it is answered as one:
     /// signals on one side, the pool's wires on the other, an edge where a
@@ -1897,125 +1917,66 @@ impl SiteRules {
     /// wire and cost nothing, which is the whole reason a flip-flop may sit
     /// beside a distributed RAM whose write clock it shares; a pin with no
     /// signal on that role — a flip-flop with no reset — asks for nothing.
-    fn control_fits(&self, group: &ControlGroup, after: &impl Fn(usize) -> Option<usize>) -> bool {
-        // Who is on each site of the group, worked out **once**. `after`
-        // is a scan of the move and a look in the placement, and asking
-        // it again for every pool — six of them on an ECP5 logic tile —
-        // was most of what a legality check cost. The sites of one tile
-        // are few and mostly empty, so what the pools below walk is the
-        // occupied handful rather than all of them.
-        let mut occupied: [(usize, usize); OCCUPANTS] = [(0, 0); OCCUPANTS];
-        let mut taken = 0usize;
-        count(
-            |work| &mut work.legality_steps,
-            u64::try_from(group.sites.len()).unwrap_or(0),
-        );
-        for site in &group.sites {
-            let Some(instance) = after(*site) else {
-                continue;
-            };
-            if taken == OCCUPANTS {
-                return self.control_fits_unbounded(group, after);
-            }
-            occupied[taken] = (*site, instance);
-            taken += 1;
-        }
-        for (pool, wires) in group.pools.iter().enumerate() {
-            let pool = u32::try_from(pool).unwrap_or(u32::MAX);
-            // Per signal, the wires every pin wanting it would accept, and
-            // the source wires it is driven onto.
-            let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
-            for (site, instance) in &occupied[..taken] {
-                for (role, which, mask) in &self.captive[*site] {
-                    if *which != pool {
-                        continue;
-                    }
-                    let Some((signal, drives)) = self.signal_driven(*instance, *role) else {
-                        continue;
-                    };
-                    // A pin the instance drives puts the signal on its
-                    // wire; one it reads narrows the wires it may come in
-                    // on. They are kept apart: a lookup table's `O5` and
-                    // a flip-flop it feeds in the same lane are one signal
-                    // on two wires, out through the output mux and back
-                    // through the bypass input.
-                    let (sinks, driven) = if drives {
-                        (u32::MAX, *mask)
-                    } else {
-                        (*mask, 0)
-                    };
-                    match wanted.iter_mut().find(|(s, _, _)| *s == signal) {
-                        Some((_, allowed, on)) => {
-                            *allowed &= sinks;
-                            *on |= driven;
-                        }
-                        None => wanted.push((signal, sinks, driven)),
-                    }
-                }
-            }
-            if !fits(&wanted, group.sources[pool as usize], wires.len()) {
-                return false;
-            }
-        }
-        true
-    }
-
-    /// [`SiteRules::control_fits`] for a tile with more occupied sites
-    /// than [`OCCUPANTS`], which no family here has. It asks `after` once
-    /// per pool per site, which is what the fast path above exists to
-    /// avoid; it is here so that the bound is a performance choice and
-    /// never a correctness one.
-    fn control_fits_unbounded(
-        &self,
-        group: &ControlGroup,
-        after: &impl Fn(usize) -> Option<usize>,
-    ) -> bool {
-        (0..group.pools.len())
-            .all(|pool| self.pool_fits(group, u32::try_from(pool).unwrap_or(u32::MAX), after))
-    }
-
-    /// Whether one pool of a tile can give each of its signals a wire,
-    /// asking `after` for every site of the group.
     fn pool_fits(
         &self,
         group: &ControlGroup,
         pool: u32,
         after: &impl Fn(usize) -> Option<usize>,
     ) -> bool {
-        let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
-        for site in &group.sites {
+        let entries = &group.entries[pool as usize];
+        count(
+            |work| &mut work.legality_steps,
+            u64::try_from(entries.len()).unwrap_or(0),
+        );
+        // Per signal, the wires every pin reading it would accept, and the
+        // source wires it is driven onto; on the stack, since this is asked
+        // on every move, and a pool's pins are a handful.
+        let mut stack = [(0usize, 0u32, 0u32); 32];
+        let mut heap: Vec<(usize, u32, u32)> = Vec::new();
+        let mut len = 0usize;
+        for (site, role, mask) in entries {
             let Some(instance) = after(*site) else {
                 continue;
             };
-            for (role, which, mask) in &self.captive[*site] {
-                if *which != pool {
-                    continue;
+            let Some((signal, drives)) = self.signal_driven(instance, *role) else {
+                continue;
+            };
+            // A pin the instance drives puts the signal on its wire; one
+            // it reads narrows the wires it may come in on. They are kept
+            // apart: a lookup table's `O5` and a flip-flop it feeds in the
+            // same lane are one signal on two wires, out through the output
+            // mux and back through the bypass input.
+            let (sinks, driven) = if drives {
+                (u32::MAX, *mask)
+            } else {
+                (*mask, 0)
+            };
+            let spilled = !heap.is_empty();
+            let wanted = if spilled {
+                &mut heap[..]
+            } else {
+                &mut stack[..len]
+            };
+            if let Some((_, allowed, on)) = wanted.iter_mut().find(|(s, _, _)| *s == signal) {
+                *allowed &= sinks;
+                *on |= driven;
+            } else if !spilled && len < stack.len() {
+                stack[len] = (signal, sinks, driven);
+                len += 1;
+            } else {
+                if !spilled {
+                    heap.extend_from_slice(&stack[..len]);
                 }
-                let Some((signal, drives)) = self.signal_driven(instance, *role) else {
-                    continue;
-                };
-                // A pin the instance drives puts the signal on its
-                // wire; one it reads narrows the wires it may come in
-                // on. They are kept apart: a lookup table's `O5` and
-                // a flip-flop it feeds in the same lane are one signal
-                // on two wires, out through the output mux and back
-                // through the bypass input.
-                let (sinks, driven) = if drives {
-                    (u32::MAX, *mask)
-                } else {
-                    (*mask, 0)
-                };
-                match wanted.iter_mut().find(|(s, _, _)| *s == signal) {
-                    Some((_, allowed, on)) => {
-                        *allowed &= sinks;
-                        *on |= driven;
-                    }
-                    None => wanted.push((signal, sinks, driven)),
-                }
+                heap.push((signal, sinks, driven));
             }
         }
+        let wanted = if heap.is_empty() {
+            &stack[..len]
+        } else {
+            &heap[..]
+        };
         fits(
-            &wanted,
+            wanted,
             group.sources[pool as usize],
             group.pools[pool as usize].len(),
         )
@@ -3304,6 +3265,22 @@ impl Sparse {
         }
     }
 
+    /// Adds `value` at `(i, j)` and `(j, i)`, off the diagonal, knowing
+    /// neither entry exists yet: a star net's centre is a variable of its
+    /// own, so its entries are new, and [`Sparse::add`]'s search along the
+    /// row was what made a 13,000-pin clock net quadratic.
+    fn add_new_pair(&mut self, i: usize, j: usize, value: f64) {
+        self.rows[i].push((j, value));
+        self.rows[j].push((i, value));
+    }
+
+    /// Grows the matrix by `extra` rows and columns of zeros.
+    fn grow(&mut self, extra: usize) {
+        let n = self.diagonal.len() + extra;
+        self.diagonal.resize(n, 0.0);
+        self.rows.resize(n, Vec::new());
+    }
+
     /// The order of the matrix.
     pub fn len(&self) -> usize {
         self.diagonal.len()
@@ -3390,6 +3367,18 @@ fn solve_analytic(
     info: &[Placeable],
     options: &PlaceOptions,
 ) -> Vec<(f64, f64)> {
+    solve_analytic_with(netlist, graph, info, options, CLIQUE_PINS)
+}
+
+/// [`solve_analytic`] with the clique bound a parameter, so that a test
+/// can solve one net both ways.
+fn solve_analytic_with(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    options: &PlaceOptions,
+    clique_pins: usize,
+) -> Vec<(f64, f64)> {
     let n = netlist.instances.len();
     let mut a = Sparse::new(n);
     let mut bx = vec![0.0; n];
@@ -3410,11 +3399,16 @@ fn solve_analytic(
             by[i] += FIXED_WEIGHT * f64::from(y);
         }
     }
-    for signal in &netlist.signals {
-        let mut members: Vec<usize> = Vec::new();
+    // Which signal last counted each instance, so that a net's members are
+    // found in one pass: `members.contains` was quadratic in the fan-out.
+    let mut seen: Vec<usize> = vec![usize::MAX; n];
+    let mut members: Vec<usize> = Vec::new();
+    for (index, signal) in netlist.signals.iter().enumerate() {
+        members.clear();
         for pin in signal.driver.iter().chain(signal.sinks.iter()) {
             let instance = netlist.pins[*pin].instance;
-            if !members.contains(&instance) {
+            if seen[instance] != index {
+                seen[instance] = index;
                 members.push(instance);
             }
         }
@@ -3423,7 +3417,27 @@ fn solve_analytic(
         }
         // The clique model: every pair, weighted so that the total weight
         // of a k-pin net does not grow with k^2.
-        let weight = 2.0 / (members.len() as f64 - 1.0) / members.len() as f64;
+        let k = members.len() as f64;
+        let weight = 2.0 / (k - 1.0) / k;
+        if members.len() > clique_pins {
+            // The same net as a star: a centre of its own, joined to each
+            // member with weight `k * weight`. Eliminating the centre gives
+            // `weight * (k I - 1 1')`, which is the clique's Laplacian, so
+            // the system's solution is the clique's — a conjugate gradient
+            // cut off early lands near it rather than on it — and the cost
+            // is k entries, not k^2.
+            let centre = a.len();
+            a.grow(1);
+            bx.push(0.0);
+            by.push(0.0);
+            let star = k * weight;
+            for i in &members {
+                a.add(*i, *i, star);
+                a.add(centre, centre, star);
+                a.add_new_pair(*i, centre, -star);
+            }
+            continue;
+        }
         for (index, i) in members.iter().enumerate() {
             for j in &members[index + 1..] {
                 a.add(*i, *i, weight);
@@ -3435,11 +3449,19 @@ fn solve_analytic(
     }
     let x = solve(&a, &bx, options.analytic_iterations);
     let y = solve(&a, &by, options.analytic_iterations);
-    x.into_iter().zip(y).collect()
+    x.into_iter().zip(y).take(n).collect()
 }
 
 /// The pull of the die's middle on every instance.
 const ANCHOR_WEIGHT: f64 = 1e-3;
+
+/// The most pins a net may have and still be modelled as a clique by the
+/// analytic solve; a larger one is the equivalent star. Small enough that
+/// a clock or reset net — 13,000 pins on the ChipWhisperer-Husky, whose
+/// clique took the solve hours — is a star, and large enough that every
+/// net of the designs the golden placements pin is still the clique it
+/// was, summed in the same order.
+const CLIQUE_PINS: usize = 64;
 /// The pull of a package pin on the instance tied to it, which has to
 /// dominate every net the instance is on.
 const FIXED_WEIGHT: f64 = 1e3;
@@ -3676,6 +3698,11 @@ fn nearest_free(
             continue;
         }
         let mut distance = manhattan(target, (x, y));
+        // The penalty only adds, so a site already no nearer than the best
+        // is not worth asking about.
+        if best.is_some_and(|(d, _)| distance >= d) {
+            continue;
+        }
         if shared.opens(placement, instance, *site) {
             distance += OPENING;
         }
@@ -4524,7 +4551,7 @@ fn propose(
     shared: &SiteRules,
     movable: &[usize],
     rng: &mut Rng,
-    placement: &Placement,
+    placement: &mut Placement,
     reach: u32,
 ) -> Option<Move> {
     let instance = movable[rng.below(movable.len())];
@@ -4541,21 +4568,33 @@ fn propose(
         let rect = window_of(graph, None, ax0, ay0, reach)?;
         let ax = rect.x0 + u32::try_from(rng.below((rect.x1 - rect.x0 + 1) as usize)).unwrap_or(0);
         let ay = rect.y0 + u32::try_from(rng.below((rect.y1 - rect.y0 + 1) as usize)).unwrap_or(0);
-        let mut free = placement.clone();
+        // The members are taken off the placement while their new sites
+        // are looked for, and put back before the answer is returned.
+        // This used to be a clone of the whole placement per proposal —
+        // two vectors the size of the design for a macro of four — and was
+        // most of what the Husky's anneal spent.
+        let mut lifted: Vec<(usize, usize)> = Vec::with_capacity(m.members.len());
         for (member, _, _) in &m.members {
-            free.unplace(*member);
+            if let Some(site) = placement.site_of(*member) {
+                lifted.push((*member, site));
+                placement.unplace(*member);
+            }
         }
-        return macro_sites(
+        let found = macro_sites(
             netlist,
             graph,
             info,
             m,
             sites_by_kind,
             shared,
-            &free,
+            placement,
             ax,
             ay,
         );
+        for (member, site) in lifted {
+            placement.place(member, site);
+        }
+        return found;
     }
     let kind = &netlist.instances[instance].kind;
     let rect = window_of(
@@ -5942,6 +5981,40 @@ mod tests {
         assert!(!fits(&crowded), "two signals on one bypass wire");
     }
 
+    /// **A cell that leaves a tile can break it.** A lookup table whose
+    /// `O6` the flip-flop beside it reads, and a carry whose generate
+    /// comes in on the bypass: legal, the flip-flop off `O6` and the carry
+    /// off `ax`. Moving the table to the next tile leaves the flip-flop
+    /// wanting `ax` too, and two signals on one wire.
+    ///
+    /// Would catch the legality check looking only at the tiles a move
+    /// arrives at, which is what it did: the annealer would accept the
+    /// move and the router find the conflict. Would not catch a pool drawn
+    /// wrongly in the first place.
+    #[test]
+    fn a_cell_that_leaves_a_tile_can_break_it() {
+        let (_, graph) = lane();
+        let site = |kind: &str, x: u32| {
+            (0..graph.sites.len())
+                .find(|s| graph.sites[*s].kind == kind && graph.sites[*s].tile == (x, 0))
+                .unwrap_or_else(|| panic!("no `{kind}` site at {x}"))
+        };
+        let netlist = lane_netlist([&[("o", 0, true)], &[("d", 0, false)], &[("di", 2, false)]]);
+        let rules = SiteRules::find(&netlist, &graph);
+        let mut placement = Placement::new(3, graph.sites.len());
+        placement.place(0, site("lut", 0));
+        placement.place(1, site("ff", 0));
+        assert!(
+            rules.allows(&placement, &[(2, site("carry", 0))]),
+            "the flip-flop reads `O6` and the carry has `ax`"
+        );
+        placement.place(2, site("carry", 0));
+        assert!(
+            !rules.allows(&placement, &[(0, site("lut", 1))]),
+            "with the table gone, the flip-flop and the carry both want `ax`"
+        );
+    }
+
     /// A tile with **two** control wires for four flip-flops, and a
     /// memory whose own control pin is joined to one of them: the shape of
     /// an ECP5 logic tile's `LSR0`/`LSR1` with a `TRELLIS_DPR16X4` in it.
@@ -6227,6 +6300,42 @@ mod tests {
     /// site. Would not catch a penalty so large it drags
     /// cells across the die, which is a wirelength question and not a
     /// legality one.
+    /// **A star is the clique it replaces.** A fan-out of 100 from a cell
+    /// fixed at one corner, its sinks held between it and the weak pull to
+    /// the middle every cell has, solved with the net as a clique and as a
+    /// star: the positions agree to well under a tile. Would catch a star weight that is not `k`
+    /// times the clique's, or a centre counted among the cells; would not
+    /// catch the two agreeing and both being wrong, which
+    /// `the_solver_finds_the_obvious_answer` is for.
+    #[test]
+    fn a_star_net_solves_to_the_clique_it_replaces() {
+        let (_, graph) = grid(16, 16);
+        let netlist = fan_out(100);
+        let mut info: Vec<Placeable> = (0..netlist.instances.len())
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+            })
+            .collect();
+        info[0].fixed = Some(0);
+        let options = PlaceOptions {
+            analytic_iterations: 2000,
+            ..PlaceOptions::default()
+        };
+        let clique = solve_analytic_with(&netlist, &graph, &info, &options, usize::MAX);
+        let star = solve_analytic_with(&netlist, &graph, &info, &options, 2);
+        assert_eq!(clique.len(), netlist.instances.len());
+        assert_eq!(star.len(), clique.len(), "a centre leaked into the answer");
+        for (i, (c, s)) in clique.iter().zip(&star).enumerate() {
+            assert!(
+                (c.0 - s.0).abs() < 0.05 && (c.1 - s.1).abs() < 0.05,
+                "cell {i}: clique {c:?}, star {s:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_legaliser_joins_a_slice_before_it_opens_one() {
         let (_, graph) = clocked(2);
