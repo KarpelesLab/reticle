@@ -2405,6 +2405,21 @@ pub struct XrayClockUse {
 /// twentieth of an ordinary wire the ECP5 flow uses.
 pub const CLOCK_PREFERENCE: f32 = 0.05;
 
+/// The router's distance charge per tile on this fabric
+/// ([`RouteOptions::astar_weight`](crate::fpga::route::RouteOptions)).
+///
+/// The router's default, 0.3, is a quarter of a node per tile, which is
+/// what an iCE40's span-4 lines cost. A 7-series search at 0.3 visited
+/// some thirty thousand nodes per sink on the ChipWhisperer-Husky, and a
+/// first pass over its tens of thousands of nets did not finish in an
+/// hour. Measured on blink (`examples/basys3/blink.v`) on 2026-10-17, the
+/// route took 2.46 s at 0.3, 0.88 s at 1.0 and 0.72 s at 2.0, using 2,404,
+/// 2,419 and 2,489 pips, each converging in five passes with every bit
+/// decoding: 1.0 is nearly all of the speed for under one percent more
+/// wire. A speed setting, like the UltraScale+ flow's 2.0, and not a
+/// measured optimum.
+pub const ASTAR_WEIGHT: f64 = 1.0;
+
 /// Whether a wire belongs to the global clock network.
 ///
 /// **Not a tile prefix.** The clock tiles are crossed by ordinary

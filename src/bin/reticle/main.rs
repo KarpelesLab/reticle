@@ -3434,6 +3434,13 @@ fn write_xc7_bitstream(
         network,
         network_signals,
         on_iteration: laps.on.then_some(print_iteration as fn(&_)),
+        // See `xray::ASTAR_WEIGHT`. After the first pass only the signals
+        // that share a node are rerouted, as the UltraScale+ flow does: a
+        // pass over every net of a design the size of the
+        // ChipWhisperer-Husky is minutes, and most of them were never in
+        // contention.
+        astar_weight: reticle::fpga::xray::ASTAR_WEIGHT,
+        reroute_congested_only: true,
         ..RouteOptions::default()
     };
     let mut failure = None;
