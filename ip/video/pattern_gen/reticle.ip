@@ -1,0 +1,42 @@
+# pattern_gen: the pixel source `dvi_tx` and `vga_out` had no occupant
+# for. Both hand out `x`, `y`, `de` and `frame` and expect a colour
+# back; every design in this tree brought its own picture, so bringing
+# up a board's video meant writing one before anything could be seen.
+#
+# Eight patterns, selected at run time so a board can put `pattern` on
+# switches. Tying it to a constant folds the other seven away, which is
+# why there is no parameter for which to build.
+#
+# It takes the active size rather than `video_timing`'s MODE on purpose:
+# `ip/video/vga_out`'s README argues that the mode table should be one
+# statement in one file, and a third copy of it would be a third thing
+# to keep in step. `H_ACTIVE` and `V_ACTIVE` are what this block
+# actually needs, and they work for a raster `video_timing` has not got.
+name pattern_gen
+version 1.0.0
+license MIT
+description "Video test patterns as a function of the raster position: colour bars, greyscale staircase, checkerboard, crosshatch, RGB steps, a solid colour, a sweeping bar and full white"
+
+top pattern_gen
+target ice40
+target ecp5
+target xc7
+
+source rtl/pattern_gen.v
+
+param H_ACTIVE int 640 1..4095
+param V_ACTIVE int 480 1..4095
+param SQUARE int 16 1..2048
+param GRID_PITCH int 32 1..2048
+
+port clk in
+port rst_n in
+port pix_en in
+port de in
+port frame in
+port x in 12
+port y in 12
+port pattern in 3
+port r out 8
+port g out 8
+port b out 8

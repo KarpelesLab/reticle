@@ -422,6 +422,11 @@ const VARIANTS: &[Variant] = &[
         params: &[("MODE", "0"), ("BPC", "4")],
     },
     Variant {
+        package: "pattern_gen",
+        top: "pattern_gen",
+        params: &[("H_ACTIVE", "640"), ("V_ACTIVE", "480")],
+    },
+    Variant {
         package: "eth_mac_rgmii",
         top: "eth_mac_rgmii",
         params: &[("IFG_CYCLES", "12"), ("TX_DELAY", "80"), ("RX_DELAY", "80")],
@@ -12221,6 +12226,271 @@ fn vga_out_truncates_the_colour_to_the_boards_width() {
                 rgb.map(|v| v >> (8 - bpc)),
                 "pixel {pixel} at {bpc} bit(s) a channel"
             );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// pattern_gen
+// ---------------------------------------------------------------------------
+
+/// What the eight patterns are, written from `pattern_gen.v`'s header
+/// and from nothing else.
+///
+/// **This is the reference and the RTL is on trial.** It is the method
+/// `tests/video/mod.rs` uses for a picture and `tests/z80_asm` for an
+/// instruction set: a second statement of the specification, derived
+/// from the prose rather than from the implementation, so that the two
+/// agreeing means something. A model read off the Verilog would agree
+/// with it however wrong both were.
+struct PatternSpec {
+    h_active: u64,
+    v_active: u64,
+    square: u64,
+    pitch: u64,
+}
+
+impl PatternSpec {
+    /// Seventeen per step, so sixteen steps reach 255 exactly.
+    fn level(i: u64) -> u64 {
+        17 * i
+    }
+
+    /// How many of the `n - 1` interior boundaries `pos` has passed.
+    fn step(pos: u64, width: u64, n: u64) -> u64 {
+        (1..n).filter(|k| pos >= width * k).count() as u64
+    }
+
+    /// The colour of the pixel at `x`, `y` with the sweep bar at
+    /// `sweep`, or black if the pixel is outside the active area.
+    fn colour(&self, pattern: u64, x: u64, y: u64, sweep: u64) -> [u64; 3] {
+        if x >= self.h_active || y >= self.v_active {
+            return [0, 0, 0];
+        }
+        let on = |b: bool| if b { 255 } else { 0 };
+        let sx = Self::step(x, self.h_active / 16, 16);
+        let sy = Self::step(y, self.v_active / 16, 16);
+        match pattern {
+            // Eight bars, descending in luminance: white yellow cyan
+            // green magenta red blue black.
+            0 => {
+                let bar = Self::step(x, self.h_active / 8, 8);
+                [
+                    on(bar & 0b010 == 0),
+                    on(bar & 0b100 == 0),
+                    on(bar & 0b001 == 0),
+                ]
+            }
+            1 => [Self::level(sx); 3],
+            2 => {
+                let lit = (x / self.square) % 2 != (y / self.square) % 2;
+                [on(lit); 3]
+            }
+            3 => {
+                let lit = x.is_multiple_of(self.pitch)
+                    || y.is_multiple_of(self.pitch)
+                    || x == 0
+                    || x == self.h_active - 1
+                    || y == 0
+                    || y == self.v_active - 1;
+                [on(lit); 3]
+            }
+            4 => [Self::level(sx), Self::level(sy), 0],
+            5 => [0x80, 0x80, 0x80],
+            6 => [on(x >= sweep && x < sweep + 16); 3],
+            7 => [255; 3],
+            _ => unreachable!("three bits"),
+        }
+    }
+}
+
+/// Everything a bench needs to hold of `pattern_gen`.
+struct Pattern<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    pix_en: NetHandle,
+    de: NetHandle,
+    frame: NetHandle,
+    x: NetHandle,
+    y: NetHandle,
+    pattern: NetHandle,
+    r: NetHandle,
+    g: NetHandle,
+    b: NetHandle,
+    spec: PatternSpec,
+}
+
+impl<'d> Pattern<'d> {
+    fn new(design: &'d Design, spec: PatternSpec) -> Pattern<'d> {
+        let sim = simulate(design, "pattern_gen");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let mut bench = Pattern {
+            pix_en: top_net(&sim, "pix_en"),
+            de: top_net(&sim, "de"),
+            frame: top_net(&sim, "frame"),
+            x: top_net(&sim, "x"),
+            y: top_net(&sim, "y"),
+            pattern: top_net(&sim, "pattern"),
+            r: top_net(&sim, "r"),
+            g: top_net(&sim, "g"),
+            b: top_net(&sim, "b"),
+            clk,
+            spec,
+            sim,
+        };
+        bench.sim.set(bench.pix_en, bit(true));
+        bench.sim.set(bench.frame, bit(false));
+        bench.sim.set(bench.de, bit(false));
+        bench.sim.set(bench.x, word(12, 0));
+        bench.sim.set(bench.y, word(12, 0));
+        bench.sim.set(bench.pattern, word(3, 0));
+        reset(&mut bench.sim, clk, rst_n);
+        bench
+    }
+
+    /// Presents one pixel and reads the colour back. The output is
+    /// combinational, so no edge is needed and none is taken: an edge
+    /// here would advance the sweep counter and the caller is sweeping
+    /// a still frame.
+    fn pixel(&mut self, pattern: u64, x: u64, y: u64) -> [u64; 3] {
+        let de = x < self.spec.h_active && y < self.spec.v_active;
+        self.sim.set(self.pattern, word(3, pattern));
+        self.sim.set(self.x, word(12, x));
+        self.sim.set(self.y, word(12, y));
+        self.sim.set(self.de, bit(de));
+        self.sim.run_for(1);
+        [
+            get_u64(&self.sim, self.r),
+            get_u64(&self.sim, self.g),
+            get_u64(&self.sim, self.b),
+        ]
+    }
+
+    /// One whole frame boundary: `frame` high for `enables` enabled
+    /// edges, which is what `video_timing` presents — it asserts
+    /// `frame` combinationally for the whole of pixel (0, 0), so at one
+    /// pixel in five it is high across five clocks and exactly one of
+    /// them is enabled.
+    fn tick_frame(&mut self, period: u64) {
+        self.sim.set(self.frame, bit(true));
+        for phase in 0..period {
+            self.sim.set(self.pix_en, bit(phase == 0));
+            cycle(&mut self.sim, self.clk, HALF);
+        }
+        self.sim.set(self.frame, bit(false));
+        self.sim.set(self.pix_en, bit(true));
+    }
+}
+
+fn pattern_design(h: u64, v: u64, square: u64, pitch: u64) -> Design {
+    design_of(
+        "pattern_gen",
+        "pattern_gen",
+        &[
+            ("H_ACTIVE", &h.to_string()),
+            ("V_ACTIVE", &v.to_string()),
+            ("SQUARE", &square.to_string()),
+            ("GRID_PITCH", &pitch.to_string()),
+        ],
+    )
+}
+
+/// Every pixel of every pattern, against the specification.
+///
+/// The raster is 64 x 32 rather than 640 x 480 so that *every* pixel
+/// can be compared rather than a sample of them, which is what the
+/// block being parameterised by size buys: 64 and 32 divide by sixteen,
+/// so the bars and the staircases land on exact boundaries the same way
+/// 640 and 480 do. The sweep is checked a column at a time by the test
+/// below; here it sits where reset left it.
+///
+/// What this would catch: a channel swapped, a bar or step boundary off
+/// by one, a checkerboard or crosshatch at the wrong pitch, a pattern
+/// wired to the wrong selector value, colour leaking into the blanking,
+/// and any arithmetic that disagrees with the header's prose. What it
+/// would not: anything about the raster, which this block does not
+/// make; anything at a size whose sixteenth is not a whole number,
+/// where the header says the last step is wider and nothing here
+/// measures that.
+#[test]
+fn pattern_gen_draws_every_pattern_the_specification_describes() {
+    const H: u64 = 64;
+    const V: u64 = 32;
+    let design = pattern_design(H, V, 4, 8);
+    let spec = PatternSpec {
+        h_active: H,
+        v_active: V,
+        square: 4,
+        pitch: 8,
+    };
+    let mut bench = Pattern::new(&design, spec);
+    let model = PatternSpec {
+        h_active: H,
+        v_active: V,
+        square: 4,
+        pitch: 8,
+    };
+
+    let mut pixels = 0u64;
+    for pattern in 0..8u64 {
+        // Four columns and two lines past the active area, so the
+        // blanking is swept too and not merely assumed.
+        for y in 0..V + 2 {
+            for x in 0..H + 4 {
+                let got = bench.pixel(pattern, x, y);
+                let want = model.colour(pattern, x, y, 0);
+                assert_eq!(
+                    got, want,
+                    "pattern {pattern} at ({x}, {y}): the block says {got:?}, \
+                     the specification says {want:?}"
+                );
+                pixels += 1;
+            }
+        }
+    }
+    assert_eq!(pixels, 8 * (V + 2) * (H + 4));
+}
+
+/// The sweeping bar advances one pixel a frame and wraps at the right
+/// edge, at one pixel per clock and at one pixel in five.
+///
+/// **Both rates, because `frame` is a level and not a pulse.**
+/// `video_timing` asserts it while `h` and `v` are both zero, so
+/// `dvi_tx` holds it across five clocks and `vga_out` across one; a
+/// counter clocked on `frame` alone would advance five times as fast on
+/// one path as on the other.
+///
+/// **And it runs past the right-hand edge**, which is the half that
+/// matters: a counter reduced into the active width by a single
+/// subtraction is right for two laps and then walks the bar off the
+/// screen for good. This fails on the second lap if that comes back.
+#[test]
+fn pattern_gen_sweeps_one_pixel_a_frame_at_either_pixel_rate() {
+    const H: u64 = 64;
+    const V: u64 = 32;
+    for period in [1u64, 5] {
+        let design = pattern_design(H, V, 4, 8);
+        let spec = PatternSpec {
+            h_active: H,
+            v_active: V,
+            square: 4,
+            pitch: 8,
+        };
+        let mut bench = Pattern::new(&design, spec);
+        // Two and a bit laps, so the wrap is exercised more than once.
+        for frame in 0..(2 * H + 7) {
+            let want = frame % H;
+            // The bar's left edge is the first lit column of pattern 6.
+            let lit = (0..H)
+                .find(|&x| bench.pixel(6, x, 0) == [255, 255, 255])
+                .unwrap_or_else(|| panic!("frame {frame}: no lit column at all"));
+            assert_eq!(
+                lit, want,
+                "frame {frame} at one pixel in {period}: the bar starts at \
+                 {lit} and should start at {want}"
+            );
+            bench.tick_frame(period);
         }
     }
 }

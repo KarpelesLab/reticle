@@ -73,6 +73,7 @@ ip/
     dvi_tx/      reticle.ip  rtl/tmds_encoder.v  rtl/video_timing.v
                  rtl/dvi_tx.v
     dvi_tx_pll/  reticle.ip  rtl/dvi_tx_pll.v
+    pattern_gen/ reticle.ip  README.md  rtl/pattern_gen.v
     ppu2c02/     reticle.ip  README.md  rtl/ppu_palette.v  rtl/ppu2c02.v
     vga_out/     reticle.ip  README.md  rtl/vga_out.v
 ```
@@ -121,6 +122,7 @@ It is distributed as part of the repository instead.
 | `dvi_tx` | `dvi_tx`, `tmds_encoder`, `video_timing` | DVI output: 640x480, 800x600 and 1280x720 timings, TMDS 8b/10b with DC balance, 10:1 serialisation through DDR outputs | — |
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
 | `vga_out` | `vga_out` | VGA output: the same three timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity | `dvi_tx` |
+| `pattern_gen` | `pattern_gen` | video test patterns as a function of the raster position: colour bars, a greyscale staircase, a checkerboard, a crosshatch, RGB steps, a solid colour, a sweeping bar and full white | — |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_dev_core`, `usb_pkt_rx`, `usb_ctrl_ep`, `usb_bulk_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates, and a bulk endpoint pair with a byte interface | — |
 | `usb_device_fs_pll` | `usb_device_fs_pll` | `usb_device_fs` with its 48 MHz from the device's PLL and a 12 MHz board clock | `usb_device_fs` |
@@ -2008,6 +2010,26 @@ is the part that matters:
   it for the Basys 3, and the NES is where the truncation shows: its
   palette is in colour, and `examples/nes/README.md` names the one pair
   of its sixty-four entries that stops being two at four bits a channel.
+- **`pattern_gen`** — the pixel source those two had no occupant for.
+  Both hand out `x`, `y`, `de` and `frame` and expect a colour back, and
+  every design in this tree brought its own picture, so bringing up a
+  board's video began with writing one. Eight patterns, selected at run
+  time off three pins so a board can put them on switches, and folded
+  away to one by constant propagation if those pins are tied. Every
+  pixel of every pattern is compared against a model written from the
+  README and the module header rather than from the RTL, at a 64 x 32
+  raster so that *every* pixel can be compared and not a sample of them
+  — 64 and 32 divide by sixteen exactly as 640 and 480 do, so the bar
+  and staircase boundaries fall the same way. The sweeping bar is run
+  over two full laps at one pixel per clock and at one pixel in five,
+  which is the pair of rates that matters: `video_timing` asserts
+  `frame` combinationally for a whole pixel period, so it is one clock
+  wide on the VGA path and five on the DVI path, and a counter clocked
+  on it alone would move the bar five times as fast on one as on the
+  other. It takes the active size rather than a `MODE`, for the reason
+  `vga_out`'s README gives for depending on `dvi_tx`: the mode table
+  should be one statement in one file, and this block needs only where
+  the right edge and the bottom are.
 - **`eth_mac_rgmii`** — the transmitter's pins looped into the
   receiver's, as the RMII test does, through the DDR registers modelled
   as the backend builds them: what the output registers take at one edge
@@ -2829,6 +2851,10 @@ exactly what this table is for.
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | LUT6 | 7 x dff, 68 x lut | 3 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | iCE40 HX1K | 22 x SB_CARRY, 36 x SB_DFFER, 2 x SB_DFFES, 1 x SB_GB, 67 x SB_IO, 78 x SB_LUT4 | 3 |
 | `vga_out` | `vga_out` | MODE=0, BPC=4 | ECP5 45F | 14 x CCU2C, 1 x DCCA, 66 x LUT4, 38 x TRELLIS_FF, 67 x TRELLIS_IO | 3 |
+| `pattern_gen` | `pattern_gen` | H_ACTIVE=640, V_ACTIVE=480 | LUT4 | 1 x dff, 208 x lut | 11 |
+| `pattern_gen` | `pattern_gen` | H_ACTIVE=640, V_ACTIVE=480 | LUT6 | 1 x dff, 166 x lut | 10 |
+| `pattern_gen` | `pattern_gen` | H_ACTIVE=640, V_ACTIVE=480 | iCE40 HX1K | 120 x SB_CARRY, 12 x SB_DFFER, 1 x SB_GB, 56 x SB_IO, 379 x SB_LUT4 | 13 |
+| `pattern_gen` | `pattern_gen` | H_ACTIVE=640, V_ACTIVE=480 | ECP5 45F | 108 x CCU2C, 1 x DCCA, 262 x LUT4, 12 x TRELLIS_FF, 56 x TRELLIS_IO | 9 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT4 | 28 x dff, 392 x lut | 5 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | LUT6 | 28 x dff, 343 x lut | 3 |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | IFG_CYCLES=12, TX_DELAY=80, RX_DELAY=80 | iCE40 HX1K | 10 x SB_CARRY, 119 x SB_DFFER, 64 x SB_DFFES, 7 x SB_DFFR, 2 x SB_GB, 39 x SB_IO, 392 x SB_LUT4 | 5 |
