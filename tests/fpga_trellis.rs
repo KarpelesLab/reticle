@@ -1241,7 +1241,7 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
     assert_eq!(
         bits.ones(),
-        1352,
+        1335,
         "set bits in the whole image, pads, pipeline registers and routing included. This was \
          1274 when the block RAM was written, against the fixed-schedule annealer; the adaptive \
          one placed the same design better and brought it to 1259; and it is 1352 now because a \
@@ -1253,7 +1253,13 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
          has the zeros, and every bit of the old image decoded. The extra bits are one constant \
          lookup table and the arcs that carry it to eight address pins over two blocks. The two \
          assertions above are what say the blocks' own settings did not change — two cells, and \
-         the same thirty-three bits"
+         the same thirty-three bits. It is 1335 now, seventeen fewer, and the **placer** is why: \
+         the two assertions above still read the same thirty-three bits, so nothing about the \
+         blocks moved, and the image shrank because `feat(place): the legaliser joins a slice \
+         before it opens one` and `perf(place): a large net is a star` place this netlist \
+         differently and the routing that follows is shorter. Attributed by measurement and not \
+         by reading: the count is 1335 with `synth::proc`'s balanced case enable switched off as \
+         well as on, so the synthesiser is not what moved it"
     );
     // The buffer is on a site the clock's own pad can drive, and the
     // placer is what knows that rather than the constraints file. Ball A2
@@ -1873,7 +1879,7 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        57,
+        63,
         "logic tiles the design occupies. **This was 65 before the ECP5 inferred a carry chain**, \
          and the eight it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
          and an XOR per bit and is three `CCU2C` plus a share of two constant lookup tables now, \
@@ -1901,7 +1907,15 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
          design is bound by its 226 lookup tables and not by its flip-flops, and a RAM's tile \
          keeps two lookup tables either way. What the weak rule buys is **capacity** — the eight \
          flip-flop sites of every tile that holds a RAM, 24288 of them on this part — which is \
-         what a design with 530 RAMs and a thousand flip-flops spends and this one does not"
+         what a design with 530 RAMs and a thousand flip-flops spends and this one does not. \
+         **It is 63 now, six more, and the placer is why.** `feat(place): the legaliser joins a \
+         slice before it opens one` and `perf(place): a large net is a star` changed how this \
+         netlist packs. Attributed by measurement and not by reading: the count is 63 with \
+         `synth::proc`'s balanced case enable switched off as well as on, so the synthesiser is \
+         not what moved it. Six tiles wider is the opposite direction to the paragraph above and \
+         is recorded, not defended — nothing here has measured whether the wirelength and the \
+         pip count paid for them, and until something does this is a number that moved and not a \
+         number that improved"
     );
 
     // ---- every bit decodes, and nothing is unexplained ----
