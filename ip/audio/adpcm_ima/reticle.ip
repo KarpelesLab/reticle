@@ -1,0 +1,44 @@
+# adpcm_ima — IMA/DVI ADPCM, the scheme WAV calls format 0x11 and AVI
+# carries beside MJPEG. Four bits a sample, fixed rate, 4:1.
+#
+# Three modules. `adpcm_ima_enc` is the encoder and is `top`;
+# `adpcm_ima_dec` is its peer and not a dependency of it; `adpcm_step`
+# is the 89-entry step table both of them look up, in a module of its
+# own because this flow has no include mechanism and a table copied
+# into two files is two tables.
+#
+# **The two halves are not verified the same way, because they are not
+# specified the same way.** What a decoder does with a nibble is fixed
+# and `adpcm_ima_dec` is checked sample for sample against ffmpeg's
+# decoder; which nibble an encoder picks is a choice, and
+# `adpcm_ima_enc` is checked by round trip — ffmpeg's decoder must
+# rebuild exactly the predictor sequence the encoder said it would.
+# `ip/audio/adpcm_ima/README.md` §"Against ffmpeg" has both, and the
+# measurement of where the two encoders differ.
+name adpcm_ima
+version 1.0.0
+license MIT
+description "IMA/DVI ADPCM encoder and decoder: four bits a sample at a fixed 4:1, the 89-step table shared, with the predictor and step index a WAV block header carries brought out"
+
+top adpcm_ima_enc
+target ice40
+target ecp5
+target xc7
+
+source rtl/adpcm_step.v
+source rtl/adpcm_ima_enc.v
+source rtl/adpcm_ima_dec.v
+
+port clk in
+port rst_n in
+port load in
+port load_pred in 16
+port load_index in 7
+port in_sample in 16
+port in_valid in
+port in_ready out
+port out_nibble out 4
+port out_valid out
+port out_ready in
+port predictor out 16
+port step_index out 7

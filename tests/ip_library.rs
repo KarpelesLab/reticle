@@ -422,6 +422,16 @@ const VARIANTS: &[Variant] = &[
         params: &[("MODE", "0"), ("BPC", "4")],
     },
     Variant {
+        package: "adpcm_ima",
+        top: "adpcm_ima_enc",
+        params: &[],
+    },
+    Variant {
+        package: "adpcm_ima",
+        top: "adpcm_ima_dec",
+        params: &[],
+    },
+    Variant {
         package: "pattern_gen",
         top: "pattern_gen",
         params: &[("H_ACTIVE", "640"), ("V_ACTIVE", "480")],
@@ -625,8 +635,8 @@ fn board_constraints(variant: &Variant) -> &'static str {
 /// They are a filing system and nothing more: no code reads a category,
 /// a package's identity is the name its manifest declares, and a block
 /// resolves by that name wherever it sits.
-const CATEGORIES: [&str; 9] = [
-    "bus", "compress", "cpu", "crypto", "memory", "net", "usb", "util", "video",
+const CATEGORIES: [&str; 10] = [
+    "audio", "bus", "compress", "cpu", "crypto", "memory", "net", "usb", "util", "video",
 ];
 
 /// The devices the footprint table reports, besides the generic LUT
@@ -12231,6 +12241,546 @@ fn vga_out_truncates_the_colour_to_the_boards_width() {
 }
 
 // ---------------------------------------------------------------------------
+// adpcm_ima
+// ---------------------------------------------------------------------------
+
+/// One record of `testdata/ip/adpcm_corpus.txt`.
+struct Adpcm {
+    name: String,
+    rule: String,
+    samples: usize,
+    adler: u32,
+    start_pred: i16,
+    start_index: u8,
+    /// The nibbles, packed two to a byte, low nibble first.
+    enc: Vec<u8>,
+    /// What ffmpeg's decoder made of them.
+    dec: Vec<i16>,
+}
+
+impl Adpcm {
+    /// The nibbles, unpacked in the order they were encoded.
+    fn nibbles(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.enc.len() * 2);
+        for byte in &self.enc {
+            out.push(byte & 0x0F);
+            out.push(byte >> 4);
+        }
+        out
+    }
+}
+
+fn adpcm_corpus() -> &'static [Adpcm] {
+    static CORPUS: OnceLock<Vec<Adpcm>> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/adpcm_corpus.txt");
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let mut out: Vec<Adpcm> = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (tag, rest) = line.split_once(' ').expect("a tagged line");
+            let rest = rest.trim();
+            match tag {
+                "case" => out.push(Adpcm {
+                    name: rest.to_owned(),
+                    rule: String::new(),
+                    samples: 0,
+                    adler: 0,
+                    start_pred: 0,
+                    start_index: 0,
+                    enc: Vec::new(),
+                    dec: Vec::new(),
+                }),
+                "gen" => {
+                    let f: Vec<&str> = rest.split_whitespace().collect();
+                    let c = out.last_mut().expect("a case first");
+                    c.rule = f[0].to_owned();
+                    c.samples = f[1].parse().expect("a sample count");
+                    c.adler = u32::from_str_radix(f[2], 16).expect("an adler32");
+                }
+                "start" => {
+                    let f: Vec<&str> = rest.split_whitespace().collect();
+                    let c = out.last_mut().expect("a case first");
+                    c.start_pred = f[0].parse().expect("a predictor");
+                    c.start_index = f[1].parse().expect("a step index");
+                }
+                "enc" => {
+                    let c = out.last_mut().expect("a case first");
+                    c.enc.extend(hex_bytes(rest));
+                }
+                "dec" => {
+                    let c = out.last_mut().expect("a case first");
+                    let bytes = hex_bytes(rest);
+                    for pair in bytes.chunks(2) {
+                        c.dec
+                            .push(i16::from_le_bytes([pair[0], *pair.get(1).expect("a pair")]));
+                    }
+                }
+                other => panic!("unknown tag `{other}` in the ADPCM corpus"),
+            }
+        }
+        out
+    })
+}
+
+/// The sixteen bits a port carries for a signed sample, and back. Named
+/// rather than cast, because `as` between these two says nothing about
+/// which direction loses what and this pair loses nothing either way.
+fn sample_bits(v: i16) -> u64 {
+    u64::from(u16::from_le_bytes(v.to_le_bytes()))
+}
+
+fn sample_of(bits: u64) -> i16 {
+    let w = u16::try_from(bits).expect("sixteen bits");
+    i16::from_le_bytes(w.to_le_bytes())
+}
+
+fn hex_bytes(text: &str) -> Vec<u8> {
+    assert!(text.len().is_multiple_of(2), "an even number of digits");
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("a hex byte"))
+        .collect()
+}
+
+/// The sample rules the corpus was generated from, integer-only so
+/// that the generator's Python and this Rust cannot disagree by a
+/// rounding.
+fn adpcm_pcm(rule: &str, n: usize) -> Vec<i16> {
+    let (kind, arg) = match rule.split_once(':') {
+        Some((k, a)) => (k, a.parse::<u32>().expect("a rule argument")),
+        None => (rule, 0),
+    };
+    let mut out = Vec::with_capacity(n);
+    match kind {
+        "zeros" => out.resize(n, 0),
+        "ramp" => {
+            for i in 0..n {
+                let v = i64::try_from((i as u64 * 1711) & 0xFFFF).expect("sixteen bits");
+                out.push(i16::try_from(v - 32768).expect("a sample"));
+            }
+        }
+        "saw" => {
+            let p = i64::from(arg);
+            for i in 0..n {
+                let v = (i as i64 % p) * (65536 / p) - 32768;
+                out.push(i16::try_from(v).expect("a sample"));
+            }
+        }
+        "square" => {
+            let p = arg as usize;
+            for i in 0..n {
+                out.push(if (i / p).is_multiple_of(2) {
+                    20000
+                } else {
+                    -20000
+                });
+            }
+        }
+        "quiet" => {
+            for i in 0..n {
+                let v = 300 * (i as i64 % 16 - 8);
+                out.push(i16::try_from(v).expect("a sample"));
+            }
+        }
+        // The same multiplier and addend the inflate corpus' `lcg` rule
+        // uses, taking bits 16 to 31 as a signed sample.
+        "lcg" => {
+            let mut x = arg | 1;
+            for _ in 0..n {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                out.push(((x >> 16) & 0xFFFF) as u16 as i16);
+            }
+        }
+        // The same generator reduced to plus or minus fifty, which is
+        // where the quantiser's floor of step/8 decides everything.
+        "small" => {
+            let mut x = arg | 1;
+            for _ in 0..n {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let v = i64::from((x >> 16) % 101) - 50;
+                out.push(i16::try_from(v).expect("a sample"));
+            }
+        }
+        "steps" => {
+            const LEVELS: [i16; 4] = [0, 20000, -20000, 1000];
+            for i in 0..n {
+                out.push(LEVELS[(i / 64) % 4]);
+            }
+        }
+        other => panic!("no ADPCM rule `{other}`"),
+    }
+    out
+}
+
+fn adler32_of(samples: &[i16]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for s in samples {
+        for byte in s.to_le_bytes() {
+            a = (a + u32::from(byte)) % 65521;
+            b = (b + a) % 65521;
+        }
+    }
+    (b << 16) | a
+}
+
+/// The 89 step sizes are a geometric progression in 1.1, each rounded.
+///
+/// **This is the only check on that table that is not a second copy of
+/// it.** A table compared against a table typed out again catches a
+/// typo in one of them and nothing else; a table compared against the
+/// rule it was built from catches a wrong entry wherever it is. The
+/// first entry is 7 and the last is 32767, both pinned, because a
+/// progression can satisfy the ratio everywhere and still start in the
+/// wrong place.
+///
+/// What this would not catch: a pair of adjacent entries swapped whose
+/// ratio happens to stay inside the tolerance. Nothing here would, and
+/// the corpus is what covers it — a wrong step moves every sample
+/// after it.
+#[test]
+fn adpcm_step_is_a_rounded_geometric_progression() {
+    let design = design_of("adpcm_ima", "adpcm_step", &[]);
+    let mut sim = simulate(&design, "adpcm_step");
+    let index = top_net(&sim, "index");
+    let step = top_net(&sim, "step");
+    let read = |sim: &mut Simulator<'_>, i: u64| -> u64 {
+        sim.set(index, word(7, i));
+        sim.run_for(1);
+        get_u64(sim, step)
+    };
+    assert_eq!(read(&mut sim, 0), 7, "the first step");
+    assert_eq!(read(&mut sim, 88), 32767, "the last step");
+    let mut prev = 7f64;
+    for i in 1..89u64 {
+        let got = read(&mut sim, i) as f64;
+        let want = prev * 1.1;
+        assert!(
+            (got - want).abs() <= 1.0 + 0.01 * want,
+            "step {i} is {got}, and 1.1 times step {} is {want}",
+            i - 1
+        );
+        prev = got;
+    }
+}
+
+/// Everything a bench needs of either half of the codec: they have the
+/// same ports but for the width of what goes in and comes out.
+struct Codec<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    load: NetHandle,
+    load_pred: NetHandle,
+    load_index: NetHandle,
+    in_value: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    out_value: NetHandle,
+    out_valid: NetHandle,
+    out_ready: NetHandle,
+    predictor: NetHandle,
+    step_index: NetHandle,
+}
+
+impl<'d> Codec<'d> {
+    fn new(design: &'d Design, top: &str, in_port: &str, out_port: &str) -> Codec<'d> {
+        let sim = simulate(design, top);
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let mut c = Codec {
+            load: top_net(&sim, "load"),
+            load_pred: top_net(&sim, "load_pred"),
+            load_index: top_net(&sim, "load_index"),
+            in_value: top_net(&sim, in_port),
+            in_valid: top_net(&sim, "in_valid"),
+            in_ready: top_net(&sim, "in_ready"),
+            out_value: top_net(&sim, out_port),
+            out_valid: top_net(&sim, "out_valid"),
+            out_ready: top_net(&sim, "out_ready"),
+            predictor: top_net(&sim, "predictor"),
+            step_index: top_net(&sim, "step_index"),
+            clk,
+            sim,
+        };
+        c.sim.set(c.load, bit(false));
+        c.sim.set(c.load_pred, word(16, 0));
+        c.sim.set(c.load_index, word(7, 0));
+        c.sim.set(c.in_valid, bit(false));
+        c.sim.set(c.out_ready, bit(false));
+        reset(&mut c.sim, clk, rst_n);
+        c
+    }
+
+    fn seed(&mut self, pred: i16, index: u8) {
+        self.sim.set(self.load, bit(true));
+        self.sim.set(self.load_pred, word(16, sample_bits(pred)));
+        self.sim.set(self.load_index, word(7, u64::from(index)));
+        cycle(&mut self.sim, self.clk, HALF);
+        self.sim.set(self.load, bit(false));
+        assert_eq!(
+            sample_of(get_u64(&self.sim, self.predictor)),
+            pred,
+            "the predictor `load` wrote"
+        );
+        assert_eq!(get_u64(&self.sim, self.step_index), u64::from(index));
+    }
+
+    /// Hands one value over and takes the one that comes back, which is
+    /// one cycle because the block answers in one. `stall` inserts that
+    /// many idle cycles first, with `out_ready` low, so the one-deep
+    /// output slot is left full and `in_ready` has to fall.
+    fn step(&mut self, value: u64, width: u32, stall: u32) -> (u64, i16, u8) {
+        for _ in 0..stall {
+            self.sim.set(self.in_valid, bit(false));
+            self.sim.set(self.out_ready, bit(false));
+            cycle(&mut self.sim, self.clk, HALF);
+        }
+        self.sim.set(self.in_value, word(width, value));
+        self.sim.set(self.in_valid, bit(true));
+        self.sim.set(self.out_ready, bit(true));
+        // `in_ready` is combinational off `out_ready`, so it has to be
+        // let settle before it is read: driving a net does not evaluate
+        // what reads it.
+        self.sim.run_for(1);
+        assert!(
+            high(&self.sim, self.in_ready),
+            "the block refused a value with its output being taken"
+        );
+        cycle(&mut self.sim, self.clk, HALF);
+        self.sim.set(self.in_valid, bit(false));
+        // **A loop bound and not a time-out.** Either half iterates --
+        // five cycles a sample for the encoder and four a nibble for
+        // the decoder -- so the answer is not ready on the next edge.
+        // Sixteen is comfortably more than either and is a count of
+        // simulated edges, so it is the same number on every machine;
+        // reaching it is a sequencer that does not return to `S_IDLE`.
+        let mut waited = 0;
+        while !high(&self.sim, self.out_valid) {
+            cycle(&mut self.sim, self.clk, HALF);
+            waited += 1;
+            assert!(waited < 16, "nothing came out in {waited} cycle(s)");
+        }
+        (
+            get_u64(&self.sim, self.out_value),
+            sample_of(get_u64(&self.sim, self.predictor)),
+            u8::try_from(get_u64(&self.sim, self.step_index)).expect("seven bits"),
+        )
+    }
+}
+
+fn adpcm_enc_design() -> Design {
+    design_of("adpcm_ima", "adpcm_ima_enc", &[])
+}
+
+fn adpcm_dec_design() -> Design {
+    design_of("adpcm_ima", "adpcm_ima_dec", &[])
+}
+
+/// The rules in this file are the generator's rules.
+///
+/// What it would catch: a rule here that has drifted from the one the
+/// corpus was built against, which would otherwise look like a codec
+/// fault in every case of that rule. What it would not: anything about
+/// the codec at all. It does not simulate.
+#[test]
+fn adpcm_pcm_rules_match_the_corpus() {
+    for case in adpcm_corpus() {
+        let pcm = adpcm_pcm(&case.rule, case.samples);
+        assert_eq!(pcm.len(), case.samples, "{}: sample count", case.name);
+        assert_eq!(
+            adler32_of(&pcm),
+            case.adler,
+            "{}: rule `{}` has drifted from the corpus",
+            case.name,
+            case.rule
+        );
+    }
+    assert_eq!(adpcm_corpus().len(), 9, "the cases this file holds");
+}
+
+/// **The specified half.** ffmpeg encoded nothing here; it *decoded*,
+/// and this is the comparison that matters, because what a decoder does
+/// with a nibble is fixed and what an encoder picks is not.
+///
+/// Every nibble of every case goes through `adpcm_ima_dec` and every
+/// sample must equal what ffmpeg's decoder produced from exactly those
+/// nibbles, starting from exactly that block header.
+///
+/// What this would catch: a wrong step table entry, a wrong weight in
+/// the reconstruction, a missing floor of step/8, a clamp at the wrong
+/// bound or missing, a wrong index adjustment, and a sign bit read from
+/// the wrong place. What it would not: anything about the encoder's
+/// choice of nibble, which the test below covers from the other side.
+#[test]
+fn adpcm_ima_dec_matches_ffmpegs_decoder() {
+    let design = adpcm_dec_design();
+    let mut samples = 0usize;
+    for case in adpcm_corpus() {
+        let mut dec = Codec::new(&design, "adpcm_ima_dec", "in_nibble", "out_sample");
+        dec.seed(case.start_pred, case.start_index);
+        let nibbles = case.nibbles();
+        assert_eq!(nibbles.len(), case.dec.len(), "{}: lengths", case.name);
+        for (i, (nibble, want)) in nibbles.iter().zip(&case.dec).enumerate() {
+            // Every fifth nibble is offered after two idle cycles, so
+            // the handshake is exercised rather than assumed.
+            let stall = if i % 5 == 0 { 2 } else { 0 };
+            let (got, pred, _) = dec.step(u64::from(*nibble), 4, stall);
+            let got = sample_of(got);
+            assert_eq!(
+                got, *want,
+                "{}: sample {i} is {got} and ffmpeg's decoder says {want}",
+                case.name
+            );
+            assert_eq!(
+                pred, *want,
+                "{}: sample {i} is not the predictor",
+                case.name
+            );
+            samples += 1;
+        }
+    }
+    assert_eq!(samples, 9 * 512, "the samples this decoded");
+}
+
+/// The encoder picks the reference's nibbles, and its predictor is what
+/// ffmpeg's decoder will build from them.
+///
+/// Two assertions and they are not the same strength. The nibbles are
+/// compared against this project's own reference algorithm, which is a
+/// *choice* and could legitimately be another: that comparison says the
+/// RTL implements the algorithm the README describes, and no more. The
+/// predictor is compared against **ffmpeg's decode of those nibbles**,
+/// which is the claim the encoder actually makes about the outside
+/// world — "a decoder will reconstruct this" — and it is checked
+/// against a decoder nobody here wrote.
+///
+/// What this would catch: any arithmetic error in the quantiser or the
+/// state update; a predictor that is not what a decoder would build,
+/// which is the one error that produces a stream that decodes to
+/// something nobody intended; and `load` not taking. What it would not:
+/// that the quantiser's choice is *good*, which is a question about
+/// signal-to-noise ratio and not about correctness —
+/// `ip/audio/adpcm_ima/README.md` measures it against ffmpeg's encoder
+/// instead.
+#[test]
+fn adpcm_ima_enc_chooses_the_reference_nibbles_and_predicts_the_decoder() {
+    let design = adpcm_enc_design();
+    let mut samples = 0usize;
+    for case in adpcm_corpus() {
+        let mut enc = Codec::new(&design, "adpcm_ima_enc", "in_sample", "out_nibble");
+        enc.seed(case.start_pred, case.start_index);
+        let pcm = adpcm_pcm(&case.rule, case.samples);
+        let want_nibbles = case.nibbles();
+        for (i, sample) in pcm.iter().enumerate() {
+            let stall = if i % 7 == 0 { 3 } else { 0 };
+            let (nibble, pred, index) = enc.step(sample_bits(*sample), 16, stall);
+            assert_eq!(
+                nibble,
+                u64::from(want_nibbles[i]),
+                "{}: nibble {i} is {nibble:x} and the reference picks {:x}",
+                case.name,
+                want_nibbles[i]
+            );
+            assert_eq!(
+                pred, case.dec[i],
+                "{}: after sample {i} the encoder predicts {pred} and ffmpeg's \
+                 decoder produces {}",
+                case.name, case.dec[i]
+            );
+            assert!(
+                index <= 88,
+                "{}: step index {index} is off the table",
+                case.name
+            );
+            samples += 1;
+        }
+    }
+    assert_eq!(samples, 9 * 512, "the samples this encoded");
+}
+
+/// The two halves against each other, with nothing committed between
+/// them.
+///
+/// The corpus pins the encoder and the decoder separately against an
+/// outside tool; this runs one into the other over inputs the corpus
+/// does not contain, so a sample the generator never saw is still
+/// covered. The decoder's output must equal the encoder's predictor at
+/// every step — exactly, not approximately, because both run the same
+/// reconstruction and that is the whole basis of the scheme.
+///
+/// What this would catch: a disagreement between the two halves at any
+/// input, including the ones that saturate the predictor at both rails
+/// and drive the step index to either end. What it would not: anything
+/// either half gets wrong *in the same way*, which is what the corpus
+/// is for.
+#[test]
+fn adpcm_ima_round_trips_through_its_own_decoder() {
+    let enc_design = adpcm_enc_design();
+    let dec_design = adpcm_dec_design();
+    // Full-scale alternation pins the predictor at both rails and the
+    // step index at the top; a slow walk through zero exercises the
+    // bottom of the table, where the step is 7 and the floor decides.
+    let mut pcm: Vec<i16> = Vec::new();
+    for i in 0..256 {
+        pcm.push(if i % 2 == 0 { i16::MAX } else { i16::MIN });
+    }
+    for i in 0..256i32 {
+        pcm.push(i16::try_from(i - 128).expect("a sample"));
+    }
+    let mut x: u32 = 12345;
+    for _ in 0..512 {
+        x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        pcm.push(((x >> 16) & 0xFFFF) as u16 as i16);
+    }
+
+    let mut enc = Codec::new(&enc_design, "adpcm_ima_enc", "in_sample", "out_nibble");
+    let mut dec = Codec::new(&dec_design, "adpcm_ima_dec", "in_nibble", "out_sample");
+    for (i, sample) in pcm.iter().enumerate() {
+        let (nibble, epred, eindex) = enc.step(sample_bits(*sample), 16, 0);
+        let (out, dpred, dindex) = dec.step(nibble, 4, 0);
+        let out = sample_of(out);
+        assert_eq!(
+            out, epred,
+            "sample {i} ({sample}): the decoder made {out} and the encoder \
+             predicted {epred}"
+        );
+        assert_eq!(dpred, epred, "sample {i}: predictors diverged");
+        assert_eq!(dindex, eindex, "sample {i}: step indices diverged");
+    }
+}
+
+/// A step index above the table's end is clamped by `load` rather than
+/// read off the end of it.
+///
+/// A WAV block header carries the index as a byte, so 89 to 255 are
+/// values a file can legally contain and a decoder can be handed. The
+/// table has 89 entries. What this pins is that such a header gives the
+/// last step rather than whatever the `default` arm of a case statement
+/// happens to be — and `adpcm_step`'s `default` exists so that the arm
+/// is defined at all, which is also what keeps it free of a latch.
+#[test]
+fn adpcm_ima_clamps_a_step_index_a_file_could_carry() {
+    let design = adpcm_dec_design();
+    for index in [88u8, 89, 100, 127] {
+        let mut dec = Codec::new(&design, "adpcm_ima_dec", "in_nibble", "out_sample");
+        dec.sim.set(dec.load, bit(true));
+        dec.sim.set(dec.load_pred, word(16, 0));
+        dec.sim.set(dec.load_index, word(7, u64::from(index)));
+        cycle(&mut dec.sim, dec.clk, HALF);
+        dec.sim.set(dec.load, bit(false));
+        assert_eq!(
+            get_u64(&dec.sim, dec.step_index),
+            88,
+            "a header index of {index} should be held at 88"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // pattern_gen
 // ---------------------------------------------------------------------------
 
@@ -23693,8 +24243,9 @@ fn every_block_is_findable_by_the_name_it_declares() {
         assert_eq!(parts[0], "ip");
         assert!(
             CATEGORIES.contains(&parts[1]),
-            "`{}` is not one of the eight categories {CATEGORIES:?}",
-            parts[1]
+            "`{}` is not one of the {} categories {CATEGORIES:?}",
+            parts[1],
+            CATEGORIES.len()
         );
         assert_eq!(
             parts[2], entry.name,
