@@ -140,7 +140,7 @@ of its own:
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
 | the whole design fits the part | **checked**: 30,855 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
 | it places | **checked**: legalisation and annealing complete, in 220–290 s |
-| it routes | **not yet known**: the first pass takes about 70 s, the later ones ten minutes and more, and none has been seen to converge; see below |
+| it routes | **not yet known**: the first pass takes about 70 s, the second most of an hour, and none has been seen to converge; see below |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status

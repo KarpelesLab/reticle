@@ -3044,7 +3044,7 @@ Where a Husky build stands with all of it:
 | carry legalisation, pairing, the graph | about 25 s |
 | placement | 220–290 s |
 | routing, first pass | about 70 s |
-| routing, each later pass | **ten minutes and more**, not yet seen to converge |
+| routing, the second pass | **most of an hour**: 45,000 of its 70,000-odd nets in 38 minutes, each 5,000 slower than the last; not yet seen to converge |
 
 The later passes are what remain, and they are not a slow algorithm so
 much as a hard problem: the first pass leaves about 160,000 nodes
