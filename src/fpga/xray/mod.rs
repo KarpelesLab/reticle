@@ -2261,6 +2261,31 @@ impl XrayFabric {
         out
     }
 
+    /// [`XrayFabric::clock_node_costs`], and nothing for a node only
+    /// bit-less pips enter.
+    ///
+    /// The loader gives every wire span zero and joins a wire's pieces in
+    /// neighbouring tiles with a bit-less pip each way (the module docs'
+    /// first mismatch), so a hex line is seven nodes and a long line
+    /// nineteen. At one apiece a tile cost the router more than a node: a
+    /// ChipWhisperer-Husky path of 118 tiles cost 145. A node only
+    /// bit-less pips enter is never a choice — it is the rest of a wire
+    /// already taken, or a site pin a fixed connection feeds — so it costs
+    /// nothing, and a wire costs one, where its driver's pip reaches it.
+    /// The UltraScale+ flow found the same and does the same
+    /// (`Board::node_bases`).
+    #[must_use]
+    pub fn node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
+        let mut out = self.clock_node_costs(graph, preference);
+        for (node, cost) in out.iter_mut().enumerate() {
+            let into = graph.incoming(super::arch::NodeId::try_from(node).unwrap_or(u32::MAX));
+            if !into.is_empty() && into.iter().all(|pip| graph.pip_bits(*pip).is_empty()) {
+                *cost = 0.0;
+            }
+        }
+        out
+    }
+
     /// The global clock network's nodes, for
     /// [`super::route::RouteOptions::network`]: what a signal no global
     /// buffer drives may not enter. See [`XrayFabric::clock_node_costs`].

@@ -3416,7 +3416,7 @@ fn write_xc7_bitstream(
     // The ground fans the block RAMs' zero ties will need are closed to
     // every signal, the clocks included: a tie made after routing found
     // them spent as hops. See `XrayFabric::block_ram_ground_fans`.
-    let mut node_base = fabric.clock_node_costs(&graph, reticle::fpga::xray::CLOCK_PREFERENCE);
+    let mut node_base = fabric.node_costs(&graph, reticle::fpga::xray::CLOCK_PREFERENCE);
     let mut network = fabric.clock_network_nodes(&graph);
     let fans = fabric
         .block_ram_ground_fans(design, top, &graph, &netlist, &placement)

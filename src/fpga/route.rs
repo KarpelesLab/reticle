@@ -1757,6 +1757,16 @@ impl Bounds {
     }
 }
 
+/// The base cost the distance estimate scales by at a node: its own, but
+/// one for a node that costs nothing. A free node is the rest of a wire
+/// already paid for (`XrayFabric::node_costs`, the UltraScale+ flow's
+/// `Board::node_bases`), and the journey from it costs what any other
+/// wire's does; scaled by its zero, every piece of every wire looked as
+/// if it stood on the sink.
+fn heuristic_base(base: f32) -> f32 {
+    if base == 0.0 { 1.0 } else { base }
+}
+
 /// A\* from every node of `tree` to `sink`, returning the pips of the
 /// path from the tree to the sink, nearest the tree first.
 #[allow(clippy::too_many_arguments, reason = "the expansion's whole state")]
@@ -1791,7 +1801,8 @@ fn maze(
         let distance = u64::from(x.abs_diff(target.0)) + u64::from(y.abs_diff(target.1));
         options.astar_weight
             * distance as f64
-            * (slack * f64::from(geometry.base) + critical * f64::from(geometry.delay))
+            * (slack * f64::from(heuristic_base(geometry.base))
+                + critical * f64::from(geometry.delay))
     };
 
     scratch.start();
