@@ -2978,8 +2978,81 @@ which the error now reports): of 8,926 free, 6,214 for the slice's clock,
 876 for its clock enable and 1,836 for `D`'s wire — control-set
 fragmentation in the legaliser, measured. The guess before the
 count was a shortage of sites from offering four flip-flops per slice
-of the eight; with 8,926 free, it was not that. The
+of the eight; with 8,926 free, it was not that.
+
+**That last sentence was half wrong**, and counting control sets is what
+showed it. Grouped by clock, clock enable, set/reset and its kind, the
+27,618 flip-flops made 2,764 control sets, 2,249 of them a single
+flip-flop; at four per slice they need at least 8,779 slices, and the
+part has 8,150. No legaliser could have placed it. 2,051 of the
+singletons were `esad`'s `counter_incr` bits, each reset by its own
+one-input lookup table inverting `compare_en_r[i]`: the flip-flop
+mapper's inverter cache was keyed by whole nets, and a part-select
+missed it every time, so counter *i*'s eight bits had eight reset nets.
+Keyed by part too (`a_bit_of_a_vector_is_inverted_once_for_every_flip_flop`),
+the design has 1,014 control sets and needs at least 7,278 slices at
+four per slice, 3,936 at eight. The legaliser then charges a cell
+`OPENING` = 4 tiles for putting a signal on a shared pin of a slice
+nobody uses yet (`the_legaliser_joins_a_slice_before_it_opens_one`),
+which took the clock refusals at the stop from 6,214 to 1,056, measured
+before the inverter fix; with both, legalisation completes. The
 README has the measurements and what is checked and what is not.
+
+## Why a Husky build took hours, and what it takes now
+
+Once the design fitted and legalised, a build ran for hours with no
+output, and "it is slow" was all that could be said. Two things made it
+something more. `--timing` now laps every stage of the 7-series flow and
+prints each routing pass as it ends (`RouteOptions::on_iteration`). And
+a sampling profile: no profiler is installed on the machine this was
+measured on and `ptrace_scope` is 1, so the build was started through a
+wrapper that calls `prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)` before
+`exec`, and `eu-stack -i -s` took a stack every two seconds from a
+release build with line tables. Each finding below is what those
+samples said, in the order they said it, measured on 2026-10-17.
+
+| Where | What it was | Fix |
+|---|---|---|
+| analytic solve | all 61 samples in `Sparse::add`: a net is a clique, and a 13,000-pin clock or reset net is 10⁸ pairs, each added with a search along its row | a net of more than 64 pins is the equivalent star (`a_star_net_solves_to_the_clique_it_replaces`); hours to seconds |
+| annealer | most of its samples cloning the whole placement to propose a macro move | the macro's members lifted off and put back |
+| annealer | the legality check walking every pool of the tile arrived at, about twenty | only the pools the moved sites draw on — and the tile *left*, which it had not checked at all (`a_cell_that_leaves_a_tile_can_break_it`) |
+| router | each sink of a net searched from the net's whole tree: quadratic in fan-out | a data net of more than 64 sinks starts from the tree near each sink (`NearTree`); a clock does not, see below |
+| router | a distance charge of 0.3 a tile, an iCE40's figure, where a 7-series path cost 1.23 nodes a tile: every search flooded | 2.0 (`xray::ASTAR_WEIGHT`); the first 5,000 nets went from 553 s to 16 s |
+| router | the first pass charging for congestion: late nets paid for wires early ones took and flooded, 700,000 visits a net | the first pass free, as VPR's is |
+
+**The near-tree search was pushed once with its gate failing, and
+reverted.** Applied to every net, it routed a clock from the clock leaves
+near each pin, and a 7-series leaf also drives the slices' bypass
+inputs: the shift register of `fpga_xray_wide` no longer converged, six
+`BYP_ALT` wires shared after forty passes. Kept to signals barred from the
+clock network, it passes. The gate had said `CHECKEXIT=101`; the number
+was misread, which is the mistake the gate's instructions warn about.
+
+**A bounding box was a regression until it was drawn round the right
+wires.** Drawn round the terminals' tiles it left a 7-series MMCM's DRP
+pins — a site one tile wide whose interconnect is fifty rows of it —
+outside their boxes, their searches failed and flooded the box before
+retrying without, and the first pass took five times as long. It now
+takes in the wires two hops from each terminal, applies from the second
+pass, and a signal whose bounded search fails once is not boxed again.
+
+Where a Husky build stands with all of it:
+
+| Stage | Time |
+|---|---|
+| synthesis and mapping | about 25 s |
+| carry legalisation, pairing, the graph | about 25 s |
+| placement | 220–290 s |
+| routing, first pass | about 70 s |
+| routing, each later pass | **ten minutes and more**, not yet seen to converge |
+
+The later passes are what remain, and they are not a slow algorithm so
+much as a hard problem: the first pass leaves about 160,000 nodes
+overused, and with 95 % of the lookup-table sites used, every reroute
+is through wires that cost two or three times their base, which the
+distance estimate cannot see. A routing of 6.3 million pips — about ninety
+a net — also says the placement is spread wider than a design this full
+can afford. Whether the route converges at all is not yet known.
 
 ## What remains before an LED could light
 

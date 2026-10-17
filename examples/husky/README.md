@@ -35,9 +35,9 @@ git -C husky/fpga/tracewhisperer submodule update --init
 examples/husky/build.sh husky /tmp/husky
 ```
 
-The design fits the part as of 2026-10-17 and then stops at placement,
-about half an hour in, on a flip-flop that finds no legal site; the
-section at the end says what is known.
+The design fits and places as of 2026-10-17, in about six minutes;
+whether it routes is the open question, and the section at the end says
+what is known.
 
 The superproject pins `fpga/tracewhisperer` at a commit that is not
 public; `542b1cc` on its `pro` branch is the newest public one, and is
@@ -139,12 +139,13 @@ of its own:
 | the pins, standards, drive and pulls are NewAE's | **transcribed** from `cwhusky.xdc` by script |
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
 | the whole design fits the part | **checked**: 30,855 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
-| it places and routes | **no**: placement stops on a flip-flop, see below |
+| it places | **checked**: legalisation and annealing complete, in 220–290 s |
+| it routes | **not yet known**: the first pass takes about 70 s, the later ones ten minutes and more, and none has been seen to converge; see below |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status
 
-**It fits, and placement then stops.** The whole
+**It fits and places; whether it routes is not yet known.** The whole
 design elaborates, synthesises and maps — in about 25 seconds, where the
 first attempt did not finish in 83 minutes — and the result is, measured
 on 2026-10-17:
@@ -197,7 +198,13 @@ whose clock enable did, and 1,836 had no wire left for `D`. That is the
 legaliser filling slices with no regard to control sets — each
 flip-flop takes the nearest legal site, and a slice one flip-flop of a
 clock domain opened is closed to every other — more than it is a lack of
-sites. Nothing has placed and routed a design this
-full on this die, and the ADC side runs at up to 200 MHz while the 7-series placer is
+sites. *That was half the story*: counted by control set, the design
+needed more slices than the part has at four flip-flops a slice, because
+the flip-flop mapper gave each bit of `esad`'s counters a reset net of
+its own (2,764 control sets, 1,014 once fixed). With that fixed and the
+legaliser joining a slice before opening one, placement completes;
+`docs/fpga-xray.md` has both, and the section after them has why a
+build then took hours and what it takes now. Nothing has routed a design
+this full on this die, and the ADC side runs at up to 200 MHz while the 7-series placer is
 not timing-driven. Nothing has been loaded into a Husky; none is attached
 to the machine this was built on.
