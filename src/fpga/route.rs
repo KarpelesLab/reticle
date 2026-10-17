@@ -150,6 +150,35 @@ pub struct RouteOptions {
     /// What the present-congestion factor is multiplied by each
     /// iteration. Growing it is what forces a decision.
     pub present_growth: f64,
+    /// The present-congestion factor of the first iteration only, or
+    /// `None` for [`RouteOptions::present_factor`]; when set, the second
+    /// iteration starts at `present_factor` and growth runs from there.
+    ///
+    /// VPR routes its first iteration with no congestion cost at all
+    /// (`first_iter_pres_fac`, 0 by default). Charging for it from the
+    /// first net makes each later net of that pass pay for wires the
+    /// earlier ones took, which the distance estimate knows nothing of,
+    /// so its search floods: on the ChipWhisperer-Husky the visits per net
+    /// rose tenfold across the pass, to 700 000. With no charge every net
+    /// takes its own shortest path and the negotiation starts at the
+    /// second pass, where it belongs.
+    pub first_pass_present: Option<f64>,
+    /// Confine a signal kept off [`RouteOptions::network`] to the box
+    /// around its terminals widened by this many tiles, from the second
+    /// iteration on, or `None` for no box. A search that finds nothing
+    /// inside it is made again without, and that signal is not boxed
+    /// again: a pin whose wires lie outside the box its tile draws — a
+    /// 7-series MMCM's, whose site is one tile and whose interconnect is
+    /// fifty rows of it — would otherwise pay for a failed search every
+    /// pass. The first pass is not boxed because it is the cheap one, and
+    /// on the Husky boxing it made it five times slower.
+    ///
+    /// This is VPR's bounding box (`bb_factor`, 3 by default). Without one
+    /// a search on a congested pass is free to flood the die, and on the
+    /// ChipWhisperer-Husky the second pass did: congestion made every
+    /// wire dearer than the distance estimate says, so the estimate held
+    /// nothing back.
+    pub bounding_margin: Option<u32>,
     /// How much one iteration of overuse adds to a node's history cost.
     pub history_factor: f64,
     /// The cost the distance heuristic charges per tile of Manhattan
@@ -309,6 +338,8 @@ impl Default for RouteOptions {
             max_iterations: 40,
             present_factor: 0.5,
             present_growth: 1.8,
+            first_pass_present: None,
+            bounding_margin: None,
             history_factor: 1.0,
             astar_weight: 0.3,
             node_base: Vec::new(),
@@ -780,6 +811,14 @@ pub fn route(
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
     let mut present = options.present_factor;
+    // The signals a bounded search failed for; see `route_one`.
+    let mut unboxed = vec![false; netlist.signals.len()];
+    let present_at = |index: u32, present: f64| -> f64 {
+        match options.first_pass_present {
+            Some(first) if index == 1 => first,
+            _ => present,
+        }
+    };
 
     // Each signal's sinks' criticality, in `terminals` order, all zero
     // until a pass has been analysed.
@@ -805,7 +844,12 @@ pub fn route(
                 continue;
             }
             rip_up(&mut state, &mut routing, terminals.signal);
-            let route = route_one(
+            // The box from the second pass on: the first is free, and so
+            // quick, and a box costs a failed search wherever a pin's
+            // wires lie outside the box its tile draws. A signal that has
+            // failed one is unboxed from then on.
+            let boxed = index > 1 && !unboxed[terminals.signal];
+            let (route, escaped) = route_one(
                 graph,
                 &geometry,
                 (&reach_start, &reach),
@@ -813,10 +857,14 @@ pub fn route(
                 &mut scratch,
                 terminals,
                 &criticality[which],
-                present,
+                present_at(index, present),
                 options,
                 netlist,
+                boxed,
             )?;
+            if escaped {
+                unboxed[terminals.signal] = true;
+            }
             for root in state.roots(&route.nodes) {
                 state.occupancy[root as usize] += 1;
             }
@@ -847,7 +895,9 @@ pub fn route(
                 state.history[node] += options.history_factor;
             }
         }
-        present *= options.present_growth;
+        if index > 1 || options.first_pass_present.is_none() {
+            present *= options.present_growth;
+        }
     }
 
     let (overused, _) = state.overuse();
@@ -1343,8 +1393,10 @@ fn route_one(
     present: f64,
     options: &RouteOptions,
     netlist: &Netlist,
-) -> Result<Route, RouteError> {
+    boxed: bool,
+) -> Result<(Route, bool), RouteError> {
     let source = terminals.source;
+    let mut escaped = false;
     let signal = terminals.signal;
     // Each tree node's delay from the source, in cost units, which is
     // where a critical sink joining the tree there starts.
@@ -1373,6 +1425,12 @@ fn route_one(
     if let Some(near) = &mut near {
         near.add(geometry, source);
     }
+    // A data signal's searches stay in the box around its terminals; see
+    // `RouteOptions::bounding_margin`.
+    let mut bounds = options
+        .bounding_margin
+        .filter(|_| barred && boxed)
+        .map(|margin| Bounds::around(geometry, terminal_reach(graph, terminals), margin));
     for which in order {
         let sink = &terminals.sinks[which];
         let critical = criticality.get(which).copied().unwrap_or(0.0);
@@ -1381,7 +1439,7 @@ fn route_one(
             let seeds = near.around(geometry, &tree, sink.node);
             path = maze(
                 graph, geometry, edges, state, scratch, &seeds, sink.node, critical, present,
-                options, barred,
+                options, barred, bounds,
             );
             // A search from part of the tree may cross a tree node it was
             // not started from, and taking that pip would give the node a
@@ -1398,7 +1456,15 @@ fn route_one(
         if path.is_none() {
             path = maze(
                 graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
-                options, barred,
+                options, barred, bounds,
+            );
+        }
+        if path.is_none() && bounds.is_some() {
+            escaped = true;
+            bounds = None;
+            path = maze(
+                graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
+                options, barred, None,
             );
         }
         let Some(path) = path else {
@@ -1419,12 +1485,15 @@ fn route_one(
             pips.push(pip);
         }
     }
-    Ok(Route {
-        signal,
-        source,
-        pips,
-        nodes: tree.into_keys().collect(),
-    })
+    Ok((
+        Route {
+            signal,
+            source,
+            pips,
+            nodes: tree.into_keys().collect(),
+        },
+        escaped,
+    ))
 }
 
 /// The per-expansion arrays, reused across the sinks of one signal.
@@ -1597,6 +1666,97 @@ impl NearTree {
     }
 }
 
+/// How many pips of each wire the walk that draws a box follows; see
+/// [`terminal_reach`]. A pin has a few dozen at most, a wire in the
+/// interconnect a few dozen more, so this bounds the walk without cutting
+/// it short anywhere it matters.
+const BOX_HOP_FAN: usize = 64;
+
+/// The terminals of a signal and the wires two hops from each, outwards
+/// from the source and inwards to the sinks, which is what its box is
+/// drawn round. A pin's own tile is not always where the interconnect that
+/// serves it is: drawn round the tiles alone, the box left a 7-series
+/// MMCM's DRP pins outside it, and their searches failed and flooded it.
+fn terminal_reach(graph: &RoutingGraph, terminals: &Terminals) -> impl Iterator<Item = NodeId> {
+    let mut nodes: Vec<NodeId> = Vec::new();
+    let walk = |start: NodeId, forward: bool, nodes: &mut Vec<NodeId>| {
+        nodes.push(start);
+        let mut frontier = vec![start];
+        for _ in 0..2 {
+            let mut next = Vec::new();
+            for node in &frontier {
+                let pips = if forward {
+                    graph.outgoing(*node)
+                } else {
+                    graph.incoming(*node)
+                };
+                for pip in pips.iter().take(BOX_HOP_FAN) {
+                    let pip = graph.pip(*pip);
+                    next.push(if forward { pip.to } else { pip.from });
+                }
+            }
+            nodes.extend_from_slice(&next);
+            frontier = next;
+        }
+    };
+    walk(terminals.source, true, &mut nodes);
+    for sink in &terminals.sinks {
+        walk(sink.node, false, &mut nodes);
+    }
+    nodes.into_iter()
+}
+
+/// The tiles a search may enter; see [`RouteOptions::bounding_margin`].
+#[derive(Clone, Copy, Debug)]
+struct Bounds {
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+}
+
+impl Bounds {
+    /// The box around `nodes`, widened by `margin` tiles.
+    fn around(geometry: &[Geometry], nodes: impl Iterator<Item = NodeId>, margin: u32) -> Bounds {
+        let mut b = Bounds {
+            x0: u32::MAX,
+            y0: u32::MAX,
+            x1: 0,
+            y1: 0,
+        };
+        for node in nodes {
+            if geometry[node as usize].global {
+                continue;
+            }
+            let (x, y) = geometry[node as usize].tile;
+            b.x0 = b.x0.min(x);
+            b.y0 = b.y0.min(y);
+            b.x1 = b.x1.max(x);
+            b.y1 = b.y1.max(y);
+        }
+        Bounds {
+            x0: b.x0.saturating_sub(margin),
+            y0: b.y0.saturating_sub(margin),
+            x1: b.x1.saturating_add(margin),
+            y1: b.y1.saturating_add(margin),
+        }
+    }
+
+    /// Whether any tile `at` reaches is inside.
+    fn touches(&self, at: &Geometry) -> bool {
+        if at.global {
+            return true;
+        }
+        let ends = |start: u32, span: i32| {
+            let end = u32::try_from(i64::from(start) + i64::from(span)).unwrap_or(0);
+            (start.min(end), start.max(end))
+        };
+        let (x0, x1) = ends(at.tile.0, at.span.0);
+        let (y0, y1) = ends(at.tile.1, at.span.1);
+        x1 >= self.x0 && x0 <= self.x1 && y1 >= self.y0 && y0 <= self.y1
+    }
+}
+
 /// A\* from every node of `tree` to `sink`, returning the pips of the
 /// path from the tree to the sink, nearest the tree first.
 #[allow(clippy::too_many_arguments, reason = "the expansion's whole state")]
@@ -1612,6 +1772,7 @@ fn maze(
     present: f64,
     options: &RouteOptions,
     barred: bool,
+    bounds: Option<Bounds>,
 ) -> Option<Vec<PipId>> {
     let slack = 1.0 - critical;
     let target = geometry[sink as usize].tile;
@@ -1659,6 +1820,9 @@ fn maze(
                 continue;
             }
             let at = &geometry[*next as usize];
+            if bounds.is_some_and(|b| !b.touches(at)) {
+                continue;
+            }
             let step = if critical > 0.0 {
                 slack * state.node_cost(*next, at.base, present) + critical * f64::from(at.delay)
             } else {
@@ -2115,6 +2279,119 @@ mod tests {
     /// The property PathFinder exists for: two signals want one track,
     /// the detour is too expensive to take at first, and the growing
     /// present-congestion cost makes one of them take it anyway.
+    #[test]
+    fn a_free_first_pass_collides_and_the_second_starts_the_negotiation() {
+        // The detour fabric with a present factor high enough that a
+        // charged first pass would send the second signal round at once:
+        // with the first pass free, both take the short track, collide,
+        // and the negotiation from the second pass on resolves it. Would
+        // catch `first_pass_present` being ignored (no collision, one
+        // pass) or applied past the first pass (a free second pass
+        // collides again, and so does every one after it); would not
+        // catch a growth that started a pass late.
+        let (_, graph) = detour(8);
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7), ("src1", 1), ("dst1", 6)]
+            .into_iter()
+            .enumerate()
+        {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let options = RouteOptions {
+            present_factor: 10.0,
+            first_pass_present: Some(0.0),
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(
+            report.iterations[0].total_overuse > 0,
+            "{}",
+            report.to_text()
+        );
+        assert_eq!(report.iterations.len(), 2, "{}", report.to_text());
+        assert_eq!(report.iterations[1].overused_nodes, 0);
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// **A signal's box is drawn round where its terminals are served,
+    /// and holds the search to it.** On the detour fabric the second
+    /// signal has to go round by the row above. The box takes in the wires
+    /// two hops from each terminal (`terminal_reach`), and the sink's
+    /// track reaches the row above in one, so even a margin of zero holds
+    /// the detour and the two separate. Drawn round the terminals' tiles
+    /// alone it would not, and a congested path inside a box is still a
+    /// path: the negotiation could not have finished. That is what left a
+    /// 7-series MMCM's pins outside their boxes.
+    ///
+    /// Would catch the two hops being dropped (margin zero would no longer
+    /// converge); the box's own geometry is the next test's.
+    #[test]
+    fn a_signals_box_takes_in_the_wires_that_serve_its_terminals() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7), ("src1", 1), ("dst1", 6)]
+            .into_iter()
+            .enumerate()
+        {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let options = RouteOptions {
+            present_factor: 0.05,
+            present_growth: 3.0,
+            max_iterations: 12,
+            bounding_margin: Some(0),
+            // The box is for signals kept off a clock network; these two
+            // are, though this fabric has none.
+            network_signals: vec![false, false],
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options)
+            .expect("the row above is two hops from the sinks, so inside the box");
+        assert_eq!(report.iterations.last().unwrap().overused_nodes, 0);
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// The box's own geometry: a wire is inside when any tile it reaches
+    /// is, and a global wire always is. Would catch a wire judged by its
+    /// first tile alone, which would shut a long line out of a box it
+    /// crosses.
+    #[test]
+    fn a_wire_is_in_a_box_when_any_tile_it_reaches_is() {
+        let at = |tile: (u32, u32), span: (i32, i32), global: bool| Geometry {
+            tile,
+            span,
+            base: 1.0,
+            global,
+            reserved: false,
+            delay: 0.0,
+        };
+        let b = Bounds {
+            x0: 4,
+            y0: 4,
+            x1: 6,
+            y1: 6,
+        };
+        assert!(b.touches(&at((5, 5), (0, 0), false)));
+        assert!(!b.touches(&at((8, 5), (0, 0), false)));
+        assert!(
+            b.touches(&at((8, 5), (-3, 0), false)),
+            "a long line west into the box"
+        );
+        assert!(
+            !b.touches(&at((8, 5), (3, 0), false)),
+            "and one east, away from it"
+        );
+        assert!(b.touches(&at((0, 0), (0, 0), true)));
+    }
+
     #[test]
     fn congestion_is_negotiated_away() {
         let (_, graph) = detour(8);

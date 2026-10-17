@@ -3438,9 +3438,13 @@ fn write_xc7_bitstream(
         // that share a node are rerouted, as the UltraScale+ flow does: a
         // pass over every net of a design the size of the
         // ChipWhisperer-Husky is minutes, and most of them were never in
-        // contention.
+        // contention. The first pass charges nothing for congestion and
+        // the later ones keep a data signal in its box, both as VPR does;
+        // `RouteOptions` has why each.
         astar_weight: reticle::fpga::xray::ASTAR_WEIGHT,
         reroute_congested_only: true,
+        first_pass_present: Some(0.0),
+        bounding_margin: Some(3),
         ..RouteOptions::default()
     };
     let mut failure = None;

@@ -2409,16 +2409,18 @@ pub const CLOCK_PREFERENCE: f32 = 0.05;
 /// ([`RouteOptions::astar_weight`](crate::fpga::route::RouteOptions)).
 ///
 /// The router's default, 0.3, is a quarter of a node per tile, which is
-/// what an iCE40's span-4 lines cost. A 7-series search at 0.3 visited
-/// some thirty thousand nodes per sink on the ChipWhisperer-Husky, and a
-/// first pass over its tens of thousands of nets did not finish in an
-/// hour. Measured on blink (`examples/basys3/blink.v`) on 2026-10-17, the
-/// route took 2.46 s at 0.3, 0.88 s at 1.0 and 0.72 s at 2.0, using 2,404,
-/// 2,419 and 2,489 pips, each converging in five passes with every bit
-/// decoding: 1.0 is nearly all of the speed for under one percent more
-/// wire. A speed setting, like the UltraScale+ flow's 2.0, and not a
-/// measured optimum.
-pub const ASTAR_WEIGHT: f64 = 1.0;
+/// what an iCE40's span-4 lines cost. A 7-series tile costs more: a search
+/// on the ChipWhisperer-Husky from `(97, 141)` to `(8, 112)`, 118 tiles,
+/// found a path of 145 nodes, 1.23 a tile, so any charge at or below one
+/// still underestimates and the search floods everything cheaper than
+/// the answer — 1.7 million nodes for that one connection. Measured on
+/// 2026-10-17, the Husky's first 5,000 nets of a first pass took 553 s at
+/// 1.0, 33 s at 1.5 and 16 s at 2.0; blink (`examples/basys3/blink.v`)
+/// routed in 2.46 s at 0.3, 0.88 s at 1.0 and 0.66 s at 2.0 with 2,404,
+/// 2,423 and 2,516 pips, every bit decoding at each. 2.0 is the UltraScale+
+/// flow's figure too. A speed setting, which buys time with longer routes,
+/// and not a measured optimum.
+pub const ASTAR_WEIGHT: f64 = 2.0;
 
 /// Whether a wire belongs to the global clock network.
 ///
