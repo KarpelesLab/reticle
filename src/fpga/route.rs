@@ -1367,13 +1367,41 @@ fn route_one(
         );
         b.total_cmp(&a)
     });
+    // A net of many sinks starts each search from the part of its tree
+    // near the sink rather than from all of it; see `HIGH_FANOUT`.
+    let mut near = (barred && terminals.sinks.len() > HIGH_FANOUT).then(NearTree::default);
+    if let Some(near) = &mut near {
+        near.add(geometry, source);
+    }
     for which in order {
         let sink = &terminals.sinks[which];
         let critical = criticality.get(which).copied().unwrap_or(0.0);
-        let Some(path) = maze(
-            graph, geometry, edges, state, scratch, &tree, sink.node, critical, present, options,
-            barred,
-        ) else {
+        let mut path = None;
+        if let Some(near) = &near {
+            let seeds = near.around(geometry, &tree, sink.node);
+            path = maze(
+                graph, geometry, edges, state, scratch, &seeds, sink.node, critical, present,
+                options, barred,
+            );
+            // A search from part of the tree may cross a tree node it was
+            // not started from, and taking that pip would give the node a
+            // second driver. What joins the sink to the tree is the path
+            // after the last tree node it reaches.
+            if let Some(found) = &mut path
+                && let Some(last) = found
+                    .iter()
+                    .rposition(|pip| tree.contains_key(&graph.pip(*pip).to))
+            {
+                found.drain(..=last);
+            }
+        }
+        if path.is_none() {
+            path = maze(
+                graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
+                options, barred,
+            );
+        }
+        let Some(path) = path else {
             return Err(RouteError::Unroutable {
                 signal: netlist.signals[signal].name.clone(),
                 sink: sink.name.clone(),
@@ -1383,7 +1411,11 @@ fn route_one(
             let pip_ = graph.pip(pip);
             let delay = tree.get(&pip_.from).copied().unwrap_or(0.0)
                 + f64::from(geometry[pip_.to as usize].delay);
-            tree.insert(pip_.to, delay);
+            if tree.insert(pip_.to, delay).is_none()
+                && let Some(near) = &mut near
+            {
+                near.add(geometry, pip_.to);
+            }
             pips.push(pip);
         }
     }
@@ -1455,6 +1487,113 @@ impl Scratch {
         self.estimate[index] = estimate;
         self.from[index] = from;
         self.stamp[index] = self.generation;
+    }
+}
+
+/// The most sinks a net may have and still start every search from its
+/// whole tree.
+///
+/// A sink's search is seeded with every node of the tree built so far, so
+/// a net of `k` sinks pushes and expands `O(k)` nodes per sink and
+/// `O(k^2)` in all: the ChipWhisperer-Husky's resets, thousands of sinks
+/// on general routing, made one routing pass take longer than the rest of
+/// the build together. Above this a search starts from the tree nodes
+/// near its sink ([`NearTree`]), as VPR's high-fanout routing does, and
+/// falls back to the whole tree when that finds nothing. Below it nothing
+/// changed, and every design the golden routes pin is below it.
+///
+/// **Only a signal kept off [`RouteOptions::network`] does this.** A clock
+/// net's tree near a sink is clock leaves, and on a 7-series a leaf also
+/// drives the slices' bypass inputs: seeded from them, the clock found its
+/// way to its pins through `BYP_ALT` wires the data needed, and a shift
+/// register that had routed in a few iterations no longer converged in
+/// forty (`the_placed_design_keeps_every_pin_on_the_signal_the_netlist_names`,
+/// six `BYP_ALT` nodes shared). From its whole tree the clock comes down
+/// its own row. A family with no network bars nothing, so for it nothing
+/// changed at all.
+const HIGH_FANOUT: usize = 64;
+
+/// The tree nodes a high-fanout search starts from at least, before the
+/// box around its sink stops growing.
+const NEAR_SEEDS: usize = 16;
+
+/// The side of [`NearTree`]'s bins, in tiles.
+const NEAR_BIN: u32 = 4;
+
+/// A routing tree's nodes binned by where they are, so that the part near
+/// a sink can be found without looking at the rest; see [`HIGH_FANOUT`].
+#[derive(Default)]
+struct NearTree {
+    /// Bin `(x / NEAR_BIN, y / NEAR_BIN)` to the nodes reaching it. A wire
+    /// is filed under every bin it spans.
+    bins: HashMap<(u32, u32), Vec<NodeId>>,
+    /// Nodes that reach every tile, which are near everything.
+    everywhere: Vec<NodeId>,
+}
+
+impl NearTree {
+    /// Files `node`.
+    fn add(&mut self, geometry: &[Geometry], node: NodeId) {
+        let at = &geometry[node as usize];
+        if at.global {
+            self.everywhere.push(node);
+            return;
+        }
+        let ends = |start: u32, span: i32| {
+            let end = u32::try_from(i64::from(start) + i64::from(span)).unwrap_or(0);
+            (start.min(end) / NEAR_BIN, start.max(end) / NEAR_BIN)
+        };
+        let (x0, x1) = ends(at.tile.0, at.span.0);
+        let (y0, y1) = ends(at.tile.1, at.span.1);
+        for bx in x0..=x1 {
+            for by in y0..=y1 {
+                self.bins.entry((bx, by)).or_default().push(node);
+            }
+        }
+    }
+
+    /// The tree nodes within a box around `sink`, with their delays from
+    /// `tree`: the box doubles until it holds [`NEAR_SEEDS`] of them or
+    /// every bin there is.
+    fn around(
+        &self,
+        geometry: &[Geometry],
+        tree: &BTreeMap<NodeId, f64>,
+        sink: NodeId,
+    ) -> BTreeMap<NodeId, f64> {
+        let (sx, sy) = geometry[sink as usize].tile;
+        let (cx, cy) = (sx / NEAR_BIN, sy / NEAR_BIN);
+        let mut out: BTreeMap<NodeId, f64> = self
+            .everywhere
+            .iter()
+            .map(|n| (*n, tree.get(n).copied().unwrap_or(0.0)))
+            .collect();
+        let mut radius = 0u32;
+        let mut inside: Option<u32> = None;
+        let mut scanned = 0usize;
+        loop {
+            // Only the bins the box grew by are new: farther than the last
+            // box reached and within this one.
+            for bx in cx.saturating_sub(radius)..=cx + radius {
+                for by in cy.saturating_sub(radius)..=cy + radius {
+                    let distance = bx.abs_diff(cx).max(by.abs_diff(cy));
+                    if inside.is_some_and(|last| distance <= last) {
+                        continue;
+                    }
+                    if let Some(nodes) = self.bins.get(&(bx, by)) {
+                        scanned += 1;
+                        for node in nodes {
+                            out.insert(*node, tree.get(node).copied().unwrap_or(0.0));
+                        }
+                    }
+                }
+            }
+            if out.len() >= NEAR_SEEDS || scanned >= self.bins.len() {
+                return out;
+            }
+            inside = Some(radius);
+            radius = if radius == 0 { 1 } else { radius * 2 };
+        }
     }
 }
 
@@ -2482,6 +2621,70 @@ mod tests {
         routing.routes[0] = None;
         let problems = routing.verify(&netlist, &graph, &placement);
         assert!(problems[0].contains("no route"), "{problems:?}");
+    }
+
+    #[test]
+    fn a_high_fanout_signal_routes_from_the_tree_near_each_sink() {
+        // A source at one end and 120 sinks along 60 tiles, two a tile:
+        // above `HIGH_FANOUT`, so each sink's search starts from the tree
+        // near it. It has to reach every sink, and it has to share its
+        // trunk as the whole-tree search does.
+        //
+        // Would catch a path from part of the tree kept whole when it
+        // crosses a tree node it did not start from: with `NearTree`
+        // cut to one seed, that gave a node two drivers and failed the
+        // verification below, and the trim in `route_one` is what passes
+        // it. Would not catch a search seeded worse than it could be —
+        // one seed, or none and the whole-tree fallback — since both
+        // still find a shared tree here, only more slowly.
+        let sinks = 120;
+        assert!(sinks > HIGH_FANOUT);
+        let (_, graph) = line(64, 2);
+        let mut netlist = pairs(1);
+        netlist.signals[0].sinks.clear();
+        netlist.instances.truncate(1);
+        netlist.pins.truncate(1);
+        for k in 0..sinks {
+            let instance = netlist.instances.len();
+            let pin = netlist.pins.len();
+            netlist.pins.push(NetPin {
+                instance,
+                port: "D".to_owned(),
+                bit: 0,
+                role: "d".to_owned(),
+                output: false,
+                signal: Some(0),
+                constant: None,
+            });
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("dst{k}"),
+                primitive: "F".to_owned(),
+                kind: "ff".to_owned(),
+                pins: vec![pin],
+                pin: None,
+            });
+            netlist.signals[0].sinks.push(pin);
+        }
+        let tiles: Vec<u32> = std::iter::once(0)
+            .chain((0..sinks).map(|k| 2 + u32::try_from(k).unwrap() / 2))
+            .collect();
+        let placement = place_in_order(&netlist, &graph, &tiles);
+        // Kept off a clock network, which this fabric does not have: that
+        // is the kind of signal the near-tree search is for.
+        let options = RouteOptions {
+            network_signals: vec![false],
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        // The trunk is a track along 62 tiles, and each sink a tap off it.
+        assert!(
+            report.pips < 62 + 2 * sinks,
+            "{} pips: the tree was not shared\n{}",
+            report.pips,
+            report.to_text()
+        );
     }
 
     #[test]
