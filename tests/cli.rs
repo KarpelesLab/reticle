@@ -1451,6 +1451,87 @@ fn a_carry_in_added_to_a_difference_places_and_routes() {
     assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
 }
 
+/// A multiply becomes a bitstream on the ECP5, in lookup tables.
+///
+/// **It did not.** `--bitstream` turned DSP inference off only when the
+/// family was `xc7`, and the ECP5 is the family with no DSP site at all:
+/// `trellis/sites.rs` names no such bel and holds no table of its pins.
+/// So a multiply narrow enough to fit the raw widths — `18 x 18` written
+/// into eighteen bits — mapped to a `MULT18X18D`, the placer ignored it,
+/// and the flow stopped at the driverless check with
+///
+/// ```text
+/// error: nothing drives 18 signal(s) that something reads ... `p$ff$mul[0]`
+/// is read by p$ff$ff0.DI[0] and nothing drives it
+/// ```
+///
+/// which reads as a routing fault on a family whose unrouted inputs read
+/// as a one, and is nothing of the kind: the multiplier was never built.
+/// The guard is about the backend now and not about the family, because
+/// no backend here places a hard multiplier.
+///
+/// What this would catch: that guard narrowing back to one family, and
+/// the ECP5 flow growing a DSP site without the placer to go with it.
+/// What it would not: anything about the netlist path, where the hard
+/// block is still used on purpose for nextpnr — `18 x 18 -> MULT18X18D`
+/// is what `--report` prints without `--bitstream`, and that is correct.
+#[test]
+fn a_multiply_becomes_an_ecp5_bitstream_in_lookup_tables() {
+    let dir = scratch("ecp5_multiply_bitstream");
+    let v = dir.join("m.v");
+    // The operands come out of shift registers rather than off pins, so
+    // the design needs three balls instead of thirty-seven and the test
+    // is about the multiply and not about a pinout. `a * b` written into
+    // eighteen bits is the one shape whose raw widths fit an 18x18
+    // block, which is what made this reachable at all.
+    std::fs::write(
+        &v,
+        "module m(input wire clk, input wire d, output wire q);\n\
+         \x20 reg [17:0] a, b, p;\n\
+         \x20 always @(posedge clk) begin\n\
+         \x20   a <= {a[16:0], d}; b <= {b[16:0], a[17]}; p <= a * b;\n\
+         \x20 end\n\
+         \x20 assign q = ^p;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let rcf = dir.join("m.rcf");
+    std::fs::write(
+        &rcf,
+        "set_io -io_standard LVCMOS33 clk A8\n\
+         set_io -io_standard LVCMOS33 d L2\n\
+         set_io -io_standard LVCMOS33 q G1\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", v.to_str().unwrap(), "--device", "ecp5-12f-CABGA256"])
+        .arg("--constraints")
+        .arg(&rcf)
+        .arg("--output-dir")
+        .arg(&dir)
+        .arg("--bitstream")
+        .arg(dir.join("m.bit"))
+        .env("RETICLE_OFFLINE", "1")
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("needs a chip database")
+        || stderr.contains("not in the cache")
+        || stderr.contains("no Project Trellis")
+    {
+        eprintln!("skipped: needs a Project Trellis database; run `reticle fetch prjtrellis-db`");
+        return;
+    }
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" 0 unexplained"), "{stderr}");
+    // And it says what it did, so the lookup tables are a choice on the
+    // record rather than a surprise.
+    assert!(
+        stderr.contains("keeps multiplies in lookup tables"),
+        "the note about the hard multiplier is missing:\n{stderr}"
+    );
+}
+
 /// A 72 x 4096 FIFO between two clocks — the ChipWhisperer-Husky's
 /// `fast_slower_fifo` stand-in, sixteen block RAMs — builds to a bitstream.
 /// It did not: the tie that holds a block RAM's reset at zero, made after

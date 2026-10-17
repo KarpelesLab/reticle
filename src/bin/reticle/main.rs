@@ -2082,16 +2082,29 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             .then(reticle::synth::techmap::MapVerifyOptions::default),
         ..FpgaOptions::default()
     };
-    // Reticle's own 7-series backend cannot place a DSP48E1
-    // (`fpga::xray::dsp` says why), so for its bitstream a multiply stays
-    // in lookup tables, which are slower and correct. The Vivado files
-    // this run also writes follow the same netlist.
-    if args.option("bitstream").is_some() && device.family == "xc7" {
+    // **No backend here can place a hard multiplier**, so for any
+    // bitstream a multiply stays in lookup tables, which are slower and
+    // correct. `fpga::xray::dsp` and `fpga::trellis::dsp` each say why
+    // for their family: the 7-series has no `USE_MULT` bits in
+    // prjxray-db and no constant route for `CARRYINSEL`, and the ECP5
+    // has no DSP site at all. The netlists this run also writes follow
+    // the same mapping, so a design handed to Vivado or to nextpnr gets
+    // lookup tables too; dropping `--bitstream` is what asks for the
+    // hard block.
+    //
+    // **This used to be `device.family == "xc7"`**, which left the ECP5
+    // out, and the ECP5 is the family with no site: a multiply that
+    // happened to fit — `18 x 18` into eighteen bits — mapped to a
+    // `MULT18X18D`, was ignored by the placer, and stopped the flow at
+    // the driverless check blaming the router. `fpga::trellis::dsp` has
+    // that account.
+    if args.option("bitstream").is_some() {
         options.map.infer_dsp = false;
-        if !args.flag("quiet") {
+        if !args.flag("quiet") && !device.dsps.is_empty() {
             eprintln!(
-                "note: `--bitstream` keeps multiplies out of DSP48E1, which this backend cannot \
-                 place; without it the netlist for Vivado uses them"
+                "note: `--bitstream` keeps multiplies in lookup tables; no backend here \
+                 places a hard multiplier, and without `--bitstream` the exported netlist \
+                 uses one"
             );
         }
     }
@@ -2699,6 +2712,14 @@ fn write_ecp5_bitstream(
 ) -> Result<String, String> {
     use reticle::fpga::trellis::{self, TrellisOptions};
     use reticle::fpga::{Netlist, Routing, bitstream, place, route};
+
+    // A MULT18X18D instantiated in the source reaches here even with
+    // inference off; refuse it by name before loading anything, the way
+    // the 7-series flow refuses a DSP48E1. Without this the placer
+    // ignores it and the driverless check blames the router.
+    if let Some(message) = trellis::dsp_refusal(design, top) {
+        return Err(message);
+    }
 
     let mut laps = Laps::new(args.flag("timing"));
 

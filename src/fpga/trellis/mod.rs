@@ -120,8 +120,11 @@
 //! handed in, rooted at the directory holding `devices.json`.
 //! `reticle fetch prjtrellis-db` puts one in the per-user cache;
 //! `docs/fpga-trellis.md` has the command and what is downloaded.
+mod dsp;
 pub mod parse;
 pub mod sites;
+
+pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;

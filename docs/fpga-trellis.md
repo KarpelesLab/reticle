@@ -174,6 +174,75 @@ that is the whole of the evidence. A design that passes at 12 levels and
 failed at 19 has its threshold somewhere between, and nothing here has
 found it.
 
+## A multiply refused a bitstream, and blamed the router for it
+
+**CHECKED, 18 October 2026. FIXED.** A design with `p <= a * b` in it,
+eighteen bits by eighteen into eighteen, would not build for this family:
+
+```text
+error: nothing drives 18 signal(s) that something reads (an unrouted input
+reads as a one on an ECP5 and a zero on the 7 series, not as the value the
+netlist meant): `p$ff$mul[0]` is read by p$ff$ff0.DI[0] and nothing drives it
+```
+
+Which reads as a routing fault, on the family whose unrouted inputs this
+whole document is about, and is nothing of the kind. **The multiplier was
+never built.** `ecp5.dev` declares `MULT18X18D` and `fpga::primitives`
+maps a multiply onto it, which is right for the nextpnr route; but
+`trellis/sites.rs` names no DSP bel and holds no table of its pins, so
+the cell reached the placer with nowhere to go, the placer ignored it,
+and the driverless check — added for a quite different fault, further up
+this page — caught the hole it left.
+
+The 7-series has had three things for this all along and the ECP5 had
+none of them: an account of why the backend cannot place the block
+(`fpga::xray::dsp`), a command line that turns DSP inference off when it
+is asked for a bitstream, and a refusal that names a hand-instantiated
+`DSP48E1` instead of letting it reach the placer. The guard was written
+
+```rust
+if args.option("bitstream").is_some() && device.family == "xc7" {
+```
+
+and **no backend here places a hard multiplier**, so the family test was
+the bug. It is gone, `fpga::trellis::dsp` is the ECP5's account and its
+refusal, and
+`a_multiply_becomes_an_ecp5_bitstream_in_lookup_tables` is the
+tripwire — it fails with that same driverless error if the guard ever
+narrows again.
+
+### Why nobody met it sooner
+
+Almost nothing fits. Verilog widens both operands of `a * b` to the
+width of whatever it is assigned to, so a useful multiply arrives as a
+cell as wide as its **product** — 29 by 29 for a 15-bit by 14-bit one —
+and `fpga::primitives` only looks through that widening for a DSP shape
+declared `signed`. `xc7.dev` declares one; `ecp5.dev`, `gowin.dev` and
+`generic.dev` do not. So on this family the only multiply that ever fit
+was one written into a result as narrow as its operands, which throws
+the top half away and is not what anyone writes on purpose.
+
+That look-through is still only on the signed path, and widening it
+would make *more* multiplies reach a block nothing can place — which is
+why the guard had to come first. Measured, for the record:
+
+| | ECP5 | 7-series |
+|---|---|---|
+| signed 15x14 into 29 | fits no DSP block | `-> DSP48E1 multiply`, 0 LUTs |
+| unsigned 18x18 into 36 | fits no DSP block, 962 LUT4, depth 49 | — |
+| unsigned 18x18 into 18 | `-> MULT18X18D`, and then unplaceable | — |
+
+### What this costs a design that wants a multiplier
+
+Lookup tables, and a great many of them: 962 LUT4 at depth 49 for one
+18 by 18. A four-multiplier 8x8 forward DCT written for this library
+measured 7948 LUT4 at depth 56 on an ECP5 45F, which is the measurement
+that sent anyone looking at the DSP path in the first place. **The
+answer for such a design cannot be the hard block**, because no
+bitstream this flow writes can hold one; it has to be arithmetic that
+needs no multiplier at all — constant multiplies as shift-add, one
+addition a cycle.
+
 ## The narrow block RAM modes are right, and the measurement that said otherwise was confounded
 
 **CHECKED on a part, 13 October 2026.** This section said, for a day, that
