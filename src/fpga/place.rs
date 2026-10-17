@@ -996,8 +996,21 @@ pub struct PlaceOptions {
     /// keeping and everything worth mixing. Here an analytic solve and a
     /// legaliser have already put every cell roughly where it belongs,
     /// and a die-wide move at any temperature warm enough to accept one
-    /// undoes that. The limiter will widen the window on its own if the
-    /// acceptance rate asks it to.
+    /// undoes that.
+    ///
+    /// **It is a floor, not the start.** The window starts at least as
+    /// wide as legalisation moved a cell on average
+    /// ([`PlacementReport::displacement`]), because a cell the legaliser
+    /// sent ten tiles from where it belongs cannot come back one tile at a
+    /// time. The limiter was meant to widen a window that is too narrow
+    /// and in practice does not: on the ChipWhisperer-Husky — 95 % of its
+    /// lookup tables used, 98 pins fixed, the solve's cells piled at the
+    /// middle and the legaliser spreading them outward — the window was
+    /// one tile at the first temperature and one at the last, and the
+    /// anneal took the wirelength from 4,176,953 to 3,948,882. Started at
+    /// sixteen tiles it reached 1,752,306, at forty-eight 1,639,339, and at
+    /// the whole die 1,710,199. A design the solve placed well is legalised
+    /// a tile or less away and starts where it always did.
     pub start_window: Option<u32>,
     /// The acceptance rate the move window aims to hold, 0.44 by default.
     ///
@@ -1126,6 +1139,11 @@ pub struct PlacementReport {
     pub hpwl_before: u64,
     /// Half-perimeter wirelength after annealing.
     pub hpwl_after: u64,
+    /// How far legalisation moved the cells that were free to move from
+    /// where the analytic solve put them, as `(tiles in all, cells)`. The
+    /// anneal starts with a move window at least as wide as the average;
+    /// see [`PlaceOptions::start_window`].
+    pub displacement: (u64, u64),
     /// Instances held at a package pin.
     pub fixed: usize,
     /// Instances confined to a region, including the ones
@@ -1164,6 +1182,16 @@ pub struct PlacementReport {
 }
 
 impl PlacementReport {
+    /// [`PlacementReport::displacement`] as an average, in tiles.
+    pub fn mean_displacement(&self) -> f64 {
+        let (total, cells) = self.displacement;
+        if cells == 0 {
+            0.0
+        } else {
+            total as f64 / cells as f64
+        }
+    }
+
     /// The report as plain text.
     pub fn to_text(&self) -> String {
         use std::fmt::Write as _;
@@ -1175,6 +1203,11 @@ impl PlacementReport {
             out,
             "  wirelength: {} before annealing, {} after",
             self.hpwl_before, self.hpwl_after
+        );
+        let _ = writeln!(
+            out,
+            "  legalisation moved a cell {:.1} tile(s) on average",
+            self.mean_displacement()
         );
         if self.fixed > 0 || self.confined > 0 || self.macros.0 > 0 {
             let _ = writeln!(
@@ -2173,6 +2206,7 @@ pub fn place(
         &shared,
         &mut placement,
     )?;
+    report.displacement = displacement(graph, &info, &positions, &placement);
     confine_hierarchy(netlist, graph, constraints, &placement, &mut info);
     report.confined = info.iter().filter(|i| i.region.is_some()).count();
     report.hpwl_before = hpwl(netlist, graph, &placement);
@@ -3487,6 +3521,32 @@ fn to_grid(value: f64, size: u32) -> u32 {
     clamped as u32
 }
 
+/// How far, in tiles in all and over how many instances, legalisation
+/// moved the instances that were free to move from where the analytic
+/// solve wanted them.
+fn displacement(
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    positions: &[(f64, f64)],
+    placement: &Placement,
+) -> (u64, u64) {
+    let mut total = 0u64;
+    let mut count = 0u64;
+    for (index, place) in info.iter().enumerate() {
+        if place.fixed.is_some() {
+            continue;
+        }
+        let Some(site) = placement.site_of(index) else {
+            continue;
+        };
+        let (x, y) = positions[index];
+        let target = (to_grid(x, graph.width), to_grid(y, graph.height));
+        total += manhattan(target, graph.sites[site].tile);
+        count += 1;
+    }
+    (total, count)
+}
+
 /// Assigns every instance a site.
 #[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn legalise(
@@ -4263,7 +4323,9 @@ fn anneal(
         .unwrap_or_else(|| moves_for(movable.len(), options.move_effort));
     let widest = f64::from(graph.width.max(graph.height).max(1));
     let mut window = match options.start_window {
-        Some(start) => f64::from(start).clamp(1.0, widest),
+        Some(start) => f64::from(start)
+            .max(report.mean_displacement().ceil())
+            .clamp(1.0, widest),
         None => widest,
     };
     // The probe samples the same window the walk will start in, so that
@@ -6300,6 +6362,37 @@ mod tests {
     /// site. Would not catch a penalty so large it drags
     /// cells across the die, which is a wirelength question and not a
     /// legality one.
+    /// **The anneal starts no narrower than legalisation moved a cell.**
+    /// Forty sinks of one net on an eight-by-eight grid: the solve puts
+    /// them all on the driver, the legaliser spreads them over several
+    /// tiles, and the first temperature's window has to reach that far.
+    /// Would catch the floor being dropped, which left the ChipWhisperer-
+    /// Husky annealing one tile at a time from a placement legalisation
+    /// had scattered; would not catch a floor set too high, which costs
+    /// time and not correctness.
+    #[test]
+    fn the_anneal_starts_as_wide_as_legalisation_moved_a_cell() {
+        let (arch, graph) = grid(8, 8);
+        let netlist = fan_out(40);
+        let (_, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        let mean = report.mean_displacement();
+        assert!(mean > 1.0, "the fixture should displace: {mean}");
+        let first = report.schedule.first().expect("an anneal ran");
+        assert!(
+            f64::from(first.range_limit) >= mean.ceil(),
+            "first window {} for a mean displacement of {mean}",
+            first.range_limit
+        );
+        assert!(report.to_text().contains("legalisation moved a cell"));
+    }
+
     /// **A star is the clique it replaces.** A fan-out of 100 from a cell
     /// fixed at one corner, its sinks held between it and the weak pull to
     /// the middle every cell has, solved with the net as a clique and as a
