@@ -224,6 +224,11 @@ pub struct RouteOptions {
     /// What makes the router timing-driven, or `None` for a router that
     /// minimises wire alone; see [`Timing`].
     pub timing: Option<Timing>,
+    /// Called with each iteration as it finishes, or `None`. The router
+    /// writes nothing itself; this is how a caller that does — the
+    /// command line's `--timing` — shows a route of many minutes moving
+    /// rather than only its summary at the end.
+    pub on_iteration: Option<fn(&Iteration)>,
 }
 
 /// What the router needs to weigh delay against congestion.
@@ -311,6 +316,7 @@ impl Default for RouteOptions {
             network_signals: Vec::new(),
             reroute_congested_only: false,
             timing: None,
+            on_iteration: None,
         }
     }
 }
@@ -829,6 +835,9 @@ pub fn route(
             pips: routing.pip_count(),
             critical,
         });
+        if let (Some(hook), Some(last)) = (options.on_iteration, report.iterations.last()) {
+            hook(last);
+        }
         let passes = options.timing.as_ref().map_or(0, |t| t.passes);
         if overused_nodes == 0 && index >= passes {
             break;

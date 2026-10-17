@@ -537,6 +537,7 @@ Options:
 ";
 
 fn main() -> ExitCode {
+    process_started();
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = argv.first().map(String::as_str) else {
         eprint!("{USAGE}");
@@ -2580,6 +2581,27 @@ impl Laps {
     }
 }
 
+/// Prints one routing iteration for `--timing` as it finishes, with the
+/// time since the process started: a route of many minutes otherwise says
+/// nothing until it is over.
+fn print_iteration(iteration: &reticle::fpga::route::Iteration) {
+    eprintln!(
+        "timing:   route pass {:>3}: {} node(s) overused ({} in all), {} pip(s), at {:.1} s",
+        iteration.index,
+        iteration.overused_nodes,
+        iteration.total_overuse,
+        iteration.pips,
+        process_started().elapsed().as_secs_f64()
+    );
+}
+
+/// When the process started, near enough: the first call fixes it, and
+/// `main` makes that call.
+fn process_started() -> std::time::Instant {
+    static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *STARTED.get_or_init(std::time::Instant::now)
+}
+
 /// The placer's settings from `--place-*`, shared by every backend that
 /// places: a flag one writer reads and another ignores builds the same
 /// placement whatever it is given, and says nothing.
@@ -3234,8 +3256,10 @@ fn write_xc7_bitstream(
         }
     }
 
+    let mut laps = Laps::new(args.flag("timing"));
     let db =
         XrayDatabase::open(&files, &root, &device.name, &options).map_err(|e| e.to_string())?;
+    laps.lap("open the database");
 
     // Without an explicit region, load the fabric around the pins the
     // constraints name. The whole die does not fit; the loader would
@@ -3324,6 +3348,7 @@ fn write_xc7_bitstream(
     }
 
     let fabric = db.load(&files, &options).map_err(|e| e.to_string())?;
+    laps.lap("load the fabric");
 
     // Refuse before writing anything if the database is for another die.
     if let Some(idcode) = device.idcode {
@@ -3335,9 +3360,11 @@ fn write_xc7_bitstream(
     // every propagate bit that has none. See `xray::legalise_carries`.
     let mut design = design.clone();
     let packing = reticle::fpga::xray::legalise_carries(&mut design, top, device)?;
+    laps.lap("legalise the carries");
     // Two functions of five inputs or fewer between them share a lookup
     // table. See `xray::pack_lut_pairs`.
     let pairing = reticle::fpga::xray::pack_lut_pairs(&mut design, top, device)?;
+    laps.lap("pair the lookup tables");
     // Said now rather than with the rest: a design that then does not fit
     // stops in placement, and how many sites the pairing saved is what
     // that refusal should be read beside.
@@ -3345,7 +3372,9 @@ fn write_xc7_bitstream(
     let design = &design;
 
     let graph = fabric.arch.build_graph();
+    laps.lap("build the graph");
     let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    laps.lap("build the netlist");
     check_driverless(&netlist)?;
     let (placement, placement_report) = place(
         &netlist,
@@ -3355,6 +3384,7 @@ fn write_xc7_bitstream(
         &place_options(args)?,
     )
     .map_err(|e| e.to_string())?;
+    laps.lap("place");
 
     // A route that fails says why. Writing the file anyway is the right
     // thing — a partly configured bitstream is still worth looking at —
@@ -3403,10 +3433,13 @@ fn write_xc7_bitstream(
         node_base,
         network,
         network_signals,
+        on_iteration: laps.on.then_some(print_iteration as fn(&_)),
         ..RouteOptions::default()
     };
     let mut failure = None;
-    let (routing, routed) = match route(&netlist, &graph, &placement, &route_options) {
+    let routed_at = route(&netlist, &graph, &placement, &route_options);
+    laps.lap("route");
+    let (routing, routed) = match routed_at {
         Ok((routing, report)) => (routing, report.signals),
         Err(e) => {
             failure = Some(e.to_string());
@@ -3531,6 +3564,7 @@ fn write_xc7_bitstream(
     );
     let bytes = xc7::write_bit(&header, &fabric.part, &frames).map_err(|e| e.to_string())?;
     std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    laps.lap("configure and write");
 
     let mut note = String::new();
     note.push_str(&fabric.stats.to_text());
@@ -3595,6 +3629,7 @@ fn write_xc7_bitstream(
     // Every set bit read back through the database, as the ECP5 flow
     // does: a bit nothing names is a bit nobody can account for.
     let decoded = db.decode(&files, &frames).map_err(|e| e.to_string())?;
+    laps.lap("decode it back");
     note.push_str(&format!("note: {}", decoded.to_text()));
     if decoded.unexplained > 0 {
         note.push_str(
