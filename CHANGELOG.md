@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/KarpelesLab/reticle/compare/v0.0.7...v0.0.8) - 2026-10-17
+
+### Added
+
+- *(ip)* adpcm_ima, IMA ADPCM both ways, checked against ffmpeg
+- *(ip)* pattern_gen, the pixel source the video outputs had no occupant for
+- *(cli)* --timing times the 7-series flow, and each routing pass as it ends
+- *(place)* the legaliser joins a slice before it opens one
+
+### Fixed
+
+- *(techcells)* a reset that is one bit of a vector is inverted once
+
+### Other
+
+- *(xray)* a wire costs the router one, not one per tile it crosses
+- *(xray)* the Husky's second routing pass is most of an hour, not ten minutes
+- *(xray)* the Husky places, and why a build took hours
+- *(route)* a free first pass, a box from the second, and a charge of two a tile
+- *(fpga)* the trellis tripwires move with the new placer, not the synthesiser
+- *(xray)* route at a distance charge of one node a tile, rerouting only the contested
+- *(route)* a high-fanout data net's search starts from the tree near it
+- Revert "perf(route): a high-fanout sink's search starts from the tree near it"
+- *(route)* a high-fanout sink's search starts from the tree near it
+- *(place)* a large net is a star, and a move checks the pools it touches
+
 ## [0.0.7](https://github.com/KarpelesLab/reticle/compare/v0.0.6...v0.0.7) - 2026-10-16
 
 ### Added
