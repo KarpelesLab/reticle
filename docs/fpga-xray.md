@@ -3092,6 +3092,18 @@ the time.
 | 2026-10-17 | 3,948,882 | diverging, 422,000 at the fifth |
 | anneal started wide | 1,670,844 | 130,508 at the eighth, passes of up to 40 minutes |
 | and spread before legalising | 1,288,014 | 82,014, passes of a few minutes to twenty |
+| and a carry's flip-flops in its macro | 1,201,682 | 92,621; 59,587 at the seventeenth, passes of ten to twenty minutes by then |
+
+The last row is `registered_outputs`: a flip-flop that registers a
+carry's sum or carry-out from the site beside it joins the carry's macro
+there, as Vivado packs it, and the 2,946 two-pin nets from a carry to a
+flip-flop went from 36.7 tiles long on average to 0.2. Doing the same
+for a lookup table and the flip-flop on its lane, the 11,354 nets of
+which average 14.4 tiles, stopped legalisation — 9,908 flip-flop sites
+free and every one refused for its clock or enable — because two-cell
+macros are legalised before the free flip-flops and set slices' control
+sets all over the die; that wants clustering by control set first, and
+is not done.
 
 The route now converges, and too slowly to finish: the overuse falls by
 about seven per cent a pass, and from 80,000 nodes that is well over a
