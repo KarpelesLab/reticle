@@ -2612,6 +2612,185 @@ struct Exact {
     anchor_sites: HashMap<(u32, u32), Vec<usize>>,
 }
 
+/// How many wires of its own tile the walk from a carry's output visits
+/// looking for the flip-flop beside it; see [`registered_outputs`]. The
+/// flip-flop is a hop or two away, so this only bounds a walk that has
+/// wandered into a tile's interconnect.
+const LOCAL_WIRES: usize = 48;
+
+/// Adds to `links` each flip-flop that registers a carry chain's output
+/// from the site beside it, so that it joins the chain's macro.
+///
+/// A carry's sum reaches the flip-flop of its own lane through the slice's
+/// data mux and reaches anything else through the interconnect, so the
+/// link is no dedicated wiring and [`dedicated_drivers`] does not find it.
+/// Left to itself the flip-flop was placed apart from its chain: on the
+/// ChipWhisperer-Husky the 2,946 two-pin nets from a carry to a flip-flop
+/// were 36.7 tiles long on average, because a chain is a rigid macro the
+/// legaliser places first and the annealer can seldom move on a die 95 %
+/// full. Vivado packs such a flip-flop into the carry's slice; this makes
+/// it a member of the macro on the site the walk from the carry's pin
+/// reaches inside the tile.
+///
+/// The flip-flops of a slice share one clock, enable and set/reset, so a
+/// carry's registered outputs join only when every flip-flop joining that
+/// carry agrees on them and on its primitive; otherwise none does, and the
+/// macro stays one the legaliser can always place.
+fn registered_outputs(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &[Placeable],
+    relations: &mut BTreeMap<(String, String, String, String), Option<Rc<Relation>>>,
+    links: &mut Vec<(usize, usize, Rc<Relation>)>,
+) {
+    let carry = BelRole::Carry.keyword();
+    let free = |i: usize| info[i].fixed.is_none() && info[i].macro_index.is_none();
+    // Only a chain that is a macro already: a carry with no dedicated link
+    // is placed on its own, and so is what it drives.
+    let in_macro: HashSet<usize> = links.iter().flat_map(|(x, y, _)| [*x, *y]).collect();
+    let mut joining: BTreeMap<usize, Vec<(usize, usize, Rc<Relation>)>> = BTreeMap::new();
+    for signal in &netlist.signals {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let dpin = &netlist.pins[driver];
+        let x = dpin.instance;
+        if netlist.instances[x].kind != carry || !in_macro.contains(&x) {
+            continue;
+        }
+        for sink in &signal.sinks {
+            let spin = &netlist.pins[*sink];
+            let y = spin.instance;
+            if y == x || !free(y) || in_macro.contains(&y) {
+                continue;
+            }
+            let key = (
+                netlist.instances[y].kind.clone(),
+                spin.role.clone(),
+                netlist.instances[x].kind.clone(),
+                format!("local:{}", dpin.role),
+            );
+            let relation = relations
+                .entry(key)
+                .or_insert_with(|| {
+                    local_relation(
+                        graph,
+                        sites_by_kind,
+                        &netlist.instances[y].kind,
+                        &spin.role,
+                        carry,
+                        &dpin.role,
+                    )
+                })
+                .clone();
+            if let Some(relation) = relation {
+                joining.entry(x).or_default().push((x, y, relation));
+            }
+        }
+    }
+    // A flip-flop registered twice — two outputs of one chain into one
+    // cell — would be two sites for one member.
+    let mut taken: HashSet<usize> = HashSet::new();
+    for (_, mut candidates) in joining {
+        let control = |y: usize| -> Vec<(String, Option<usize>)> {
+            let mut out: Vec<(String, Option<usize>)> = netlist.instances[y]
+                .pins
+                .iter()
+                .map(|p| &netlist.pins[*p])
+                .filter(|p| !p.output && p.role != "d")
+                .map(|p| (p.role.clone(), p.signal))
+                .collect();
+            out.sort();
+            out
+        };
+        candidates.retain(|(_, y, _)| !taken.contains(y));
+        // Two outputs of one lane — its sum and its carry — reach the one
+        // flip-flop beside it, and two cells cannot both have that site:
+        // the macro would fit nowhere. Compared on one carry site, which
+        // stands for them all.
+        let mut sites: Vec<Option<usize>> = candidates
+            .iter()
+            .map(|(_, _, r)| {
+                r.sink_of
+                    .keys()
+                    .min()
+                    .and_then(|s| r.sink_of.get(s))
+                    .copied()
+            })
+            .collect();
+        let all = sites.len();
+        sites.sort_unstable();
+        sites.dedup();
+        if sites.len() != all || sites.contains(&None) {
+            continue;
+        }
+        let Some((_, first, _)) = candidates.first() else {
+            continue;
+        };
+        let (want, primitive) = (control(*first), &netlist.instances[*first].primitive);
+        if candidates
+            .iter()
+            .all(|(_, y, _)| control(*y) == want && netlist.instances[*y].primitive == *primitive)
+        {
+            for (x, y, relation) in candidates {
+                if taken.insert(y) {
+                    links.push((x, y, relation));
+                }
+            }
+        }
+    }
+}
+
+/// The sites of kind `sink_kind` whose `sink_role` pin each `driver_kind`
+/// site's `driver_role` pin reaches through wires of its own tile, when
+/// that is exactly one per driver site: [`registered_outputs`]' relation.
+fn local_relation(
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    sink_kind: &str,
+    sink_role: &str,
+    driver_kind: &str,
+    driver_role: &str,
+) -> Option<Rc<Relation>> {
+    let mut pins_at: HashMap<NodeId, usize> = HashMap::new();
+    for site in sites_by_kind.get(sink_kind)? {
+        for node in graph.sites[*site].pin_nodes(sink_role) {
+            pins_at.insert(node, *site);
+        }
+    }
+    let mut relation = Relation::default();
+    for site in sites_by_kind.get(driver_kind)? {
+        let tile = graph.sites[*site].tile;
+        let mut seen: Vec<NodeId> = graph.sites[*site].pin_nodes(driver_role).collect();
+        let mut reached: Vec<usize> = Vec::new();
+        let mut next = 0;
+        while next < seen.len() && seen.len() <= LOCAL_WIRES {
+            let node = seen[next];
+            next += 1;
+            if let Some(sink) = pins_at.get(&node)
+                && !reached.contains(sink)
+            {
+                reached.push(*sink);
+            }
+            for pip in graph.outgoing(node) {
+                let to = graph.pip(*pip).to;
+                let wire = graph.wire(to);
+                if !wire.global && wire.tile == tile && !seen.contains(&to) {
+                    seen.push(to);
+                }
+            }
+        }
+        if let [one] = reached.as_slice()
+            && (relation.sink_of.insert(*site, *one).is_some()
+                || relation.driver_of.insert(*one, *site).is_some())
+        {
+            return None;
+        }
+    }
+    (!relation.driver_of.is_empty()).then(|| Rc::new(relation))
+}
+
 /// The sites of kind `driver_kind` whose `driver_role` pin can reach the
 /// `role` pin of `site` **only** through wires nothing else drives, or
 /// `None` when the walk back from the pin reaches more than
@@ -2776,6 +2955,14 @@ fn build_clusters(
             }
         }
     }
+    registered_outputs(
+        netlist,
+        graph,
+        sites_by_kind,
+        info,
+        &mut relations,
+        &mut links,
+    );
     if links.is_empty() {
         return Vec::new();
     }
@@ -5630,6 +5817,180 @@ mod tests {
         )
         .unwrap();
         assert_eq!(report.dedicated, 0);
+    }
+
+    /// [`chained`] with a flip-flop beside each carry that its sum `s0`
+    /// reaches through the tile's own `dmux`, and that a `track` the
+    /// interconnect drives reaches too: the link is local and preferred,
+    /// not dedicated.
+    fn chained_with_flip_flops(width: u32, height: u32) -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", width, height);
+        let mut tile = TileType::new("logic", "logic_tile", 4, 4);
+        for name in [
+            "i", "o", "j", "q", "cin", "cout", "sum", "dmux", "track", "clk",
+        ] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("i0".to_owned(), WireRef::local("i")));
+        lut.pins.push(("o".to_owned(), WireRef::local("o")));
+        tile.bels.push(lut);
+        let mut carry = BelDecl::new("cy", "carry");
+        carry.pins.push(("p0".to_owned(), WireRef::local("o")));
+        carry.pins.push(("ci".to_owned(), WireRef::local("cin")));
+        carry.pins.push(("co3".to_owned(), WireRef::local("cout")));
+        carry.pins.push(("s0".to_owned(), WireRef::local("sum")));
+        tile.bels.push(carry);
+        let mut ff = BelDecl::new("ff", "ff");
+        ff.pins.push(("d".to_owned(), WireRef::local("dmux")));
+        ff.pins.push(("clk".to_owned(), WireRef::local("clk")));
+        tile.bels.push(ff);
+        for (from, to) in [
+            (WireRef::at("cout", 0, 1), WireRef::local("cin")),
+            (WireRef::local("sum"), WireRef::local("dmux")),
+            (WireRef::local("sum"), WireRef::at("track", 1, 0)),
+            (WireRef::at("track", -1, 0), WireRef::local("dmux")),
+        ] {
+            tile.pips.push(PipDecl {
+                from,
+                to,
+                bits: Vec::new(),
+            });
+        }
+        arch.tile_types.push(tile);
+        for y in 0..height {
+            for x in 0..width {
+                arch.set_tile(x, y, 0);
+            }
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// **A flip-flop that registers a carry's sum joins the carry's
+    /// macro, beside it.** A chain of four, each carry's `s0` read by a
+    /// flip-flop of one clock: the four flip-flops end in their carries'
+    /// tiles, as members of the one macro. On the ChipWhisperer-Husky the
+    /// two-pin nets from a carry to a flip-flop went from 36.7 tiles long
+    /// on average to 0.2. A carry no macro holds draws nothing in.
+    ///
+    /// Would catch the link not being made (the flip-flops would place on
+    /// their own, and the annealer on this tiny die might still put them
+    /// close — the macro count is the check), or a carry outside any
+    /// macro drawing its flip-flop in; would not catch two flip-flops of
+    /// one carry that disagree on their clock joining, which this fixture
+    /// has no second output to show.
+    #[test]
+    fn a_flip_flop_that_registers_a_carry_joins_its_macro() {
+        let (arch, graph) = chained_with_flip_flops(4, 6);
+        let mut netlist = carry_chain(4);
+        netlist.signals.push(Signal {
+            name: "clk".to_owned(),
+            driver: None,
+            sinks: Vec::new(),
+        });
+        let clk = netlist.signals.len() - 1;
+        let push =
+            |netlist: &mut Netlist, instance: usize, role: &str, output: bool, signal: usize| {
+                let index = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_owned(),
+                    bit: 0,
+                    role: role.to_owned(),
+                    output,
+                    signal: Some(signal),
+                    constant: None,
+                });
+                if output {
+                    netlist.signals[signal].driver = Some(index);
+                } else {
+                    netlist.signals[signal].sinks.push(index);
+                }
+                netlist.instances[instance].pins.push(index);
+            };
+        for k in 0..4 {
+            netlist.signals.push(Signal {
+                name: format!("sum{k}"),
+                driver: None,
+                sinks: Vec::new(),
+            });
+            let sum = netlist.signals.len() - 1;
+            let ff = netlist.instances.len();
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(ff),
+                name: format!("ff{k}"),
+                primitive: "FDRE".to_owned(),
+                kind: "ff".to_owned(),
+                pins: Vec::new(),
+                pin: None,
+            });
+            push(&mut netlist, 2 * k + 1, "s0", true, sum);
+            push(&mut netlist, ff, "d", false, sum);
+            push(&mut netlist, ff, "clk", false, clk);
+        }
+        let (placement, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            report.macros,
+            (1, 12),
+            "four carries, their tables and flip-flops"
+        );
+        let tile = |i: usize| graph.sites[placement.site_of(i).unwrap()].tile;
+        for k in 0..4 {
+            assert_eq!(tile(8 + k), tile(2 * k + 1), "ff{k} beside cy{k}");
+        }
+
+        // A lone carry, which no macro holds: its flip-flop is its own.
+        let mut lone = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: vec![
+                Signal {
+                    name: "sum".to_owned(),
+                    driver: None,
+                    sinks: Vec::new(),
+                },
+                Signal {
+                    name: "clk".to_owned(),
+                    driver: None,
+                    sinks: Vec::new(),
+                },
+            ],
+            off_fabric: Vec::new(),
+        };
+        for (name, kind) in [("cy", "carry"), ("ff", "ff")] {
+            lone.instances.push(Instance {
+                cell: CellId::from_index(lone.instances.len()),
+                name: name.to_owned(),
+                primitive: kind.to_owned(),
+                kind: kind.to_owned(),
+                pins: Vec::new(),
+                pin: None,
+            });
+        }
+        push(&mut lone, 0, "s0", true, 0);
+        push(&mut lone, 1, "d", false, 0);
+        push(&mut lone, 1, "clk", false, 1);
+        let (_, report) = place(
+            &lone,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(report.macros, (0, 0));
     }
 
     #[test]
