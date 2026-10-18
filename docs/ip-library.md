@@ -77,7 +77,7 @@ ip/
                  rtl/dvi_tx.v
     dvi_tx_pll/  reticle.ip  rtl/dvi_tx_pll.v
     mjpeg_enc/   reticle.ip  README.md  rtl/jpeg_fdct.v
-                 rtl/jpeg_quant.v
+                 rtl/jpeg_quant.v  rtl/jpeg_entropy.v
     pattern_gen/ reticle.ip  README.md  rtl/pattern_gen.v
     ppu2c02/     reticle.ip  README.md  rtl/ppu_palette.v  rtl/ppu2c02.v
     vga_out/     reticle.ip  README.md  rtl/vga_out.v
@@ -128,7 +128,7 @@ It is distributed as part of the repository instead.
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
 | `vga_out` | `vga_out` | VGA output: the same three timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity | `dvi_tx` |
 | `pattern_gen` | `pattern_gen` | video test patterns as a function of the raster position: colour bars, a greyscale staircase, a checkerboard, a crosshatch, RGB steps, a solid colour, a sweeping bar and full white | — |
-| `mjpeg_enc` | `jpeg_fdct`, `jpeg_quant` | baseline JPEG, in progress: the 8x8 forward DCT of T.81 A.3.3 with the level shift, and quantisation with the zig-zag of A.3.4 — both multiplierless, and neither needing a divider | — |
+| `mjpeg_enc` | `jpeg_fdct`, `jpeg_quant`, `jpeg_entropy` | baseline JPEG, in progress: the 8x8 forward DCT of T.81 A.3.3, quantisation with the zig-zag of A.3.4, and the entropy coder of F.1.2 — DC prediction, run-length, Huffman and byte stuffing, checked byte for byte | — |
 | `adpcm_ima` | `adpcm_ima_enc`, `adpcm_ima_dec`, `adpcm_step` | IMA/DVI ADPCM encoder and decoder: four bits a sample at a fixed 4:1, the 89-step table shared, with the predictor and step index a WAV block header carries brought out | — |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_dev_core`, `usb_pkt_rx`, `usb_ctrl_ep`, `usb_bulk_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates, and a bulk endpoint pair with a byte interface | — |
@@ -2866,6 +2866,10 @@ exactly what this table is for.
 | `mjpeg_enc` | `jpeg_quant` | (defaults) | LUT6 | 5 x dff, 159 x lut, 1 x memory 64x12, 1 x memory 64x8, 2 x memrd, 2 x memwr | 14 |
 | `mjpeg_enc` | `jpeg_quant` | (defaults) | iCE40 HX1K | 40 x SB_CARRY, 38 x SB_DFFER, 1 x SB_GB, 45 x SB_IO, 321 x SB_LUT4, 2 x SB_RAM40_4K | 12 |
 | `mjpeg_enc` | `jpeg_quant` | (defaults) | ECP5 45F | 25 x CCU2C, 1 x DCCA, 2 x DP16KD, 304 x LUT4, 38 x TRELLIS_FF, 45 x TRELLIS_IO | 10 |
+| `mjpeg_enc` | `jpeg_entropy` | (defaults) | LUT4 | 17 x dff, 685 x lut, 1 x memory 512x21, 1 x memrd, 1 x memwr | 14 |
+| `mjpeg_enc` | `jpeg_entropy` | (defaults) | LUT6 | 17 x dff, 548 x lut, 1 x memory 512x21, 1 x memrd, 1 x memwr | 13 |
+| `mjpeg_enc` | `jpeg_entropy` | (defaults) | iCE40 HX1K | 45 x SB_CARRY, 115 x SB_DFFER, 1 x SB_GB, 59 x SB_IO, 728 x SB_LUT4, 3 x SB_RAM40_4K | 15 |
+| `mjpeg_enc` | `jpeg_entropy` | (defaults) | ECP5 45F | 31 x CCU2C, 1 x DCCA, 3 x DP16KD, 715 x LUT4, 115 x TRELLIS_FF, 59 x TRELLIS_IO | 13 |
 | `adpcm_ima` | `adpcm_ima_enc` | (defaults) | LUT4 | 10 x dff, 804 x lut | 15 |
 | `adpcm_ima` | `adpcm_ima_enc` | (defaults) | LUT6 | 10 x dff, 640 x lut | 12 |
 | `adpcm_ima` | `adpcm_ima_enc` | (defaults) | iCE40 HX1K | 58 x SB_CARRY, 69 x SB_DFFER, 12 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 73 x SB_IO, 761 x SB_LUT4 | 14 |

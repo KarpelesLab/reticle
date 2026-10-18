@@ -432,6 +432,11 @@ const VARIANTS: &[Variant] = &[
         params: &[],
     },
     Variant {
+        package: "mjpeg_enc",
+        top: "jpeg_entropy",
+        params: &[],
+    },
+    Variant {
         package: "adpcm_ima",
         top: "adpcm_ima_enc",
         params: &[],
@@ -12253,6 +12258,308 @@ fn vga_out_truncates_the_colour_to_the_boards_width() {
 // ---------------------------------------------------------------------------
 // mjpeg_enc
 // ---------------------------------------------------------------------------
+
+/// One record of `testdata/ip/jpeg_entropy_corpus.txt`.
+struct Entropy {
+    name: String,
+    blocks: Vec<Vec<i32>>,
+    bytes: Vec<u8>,
+}
+
+/// The corpus, and the two Annex K tables in the form `DHT` stores
+/// them: a count of codes per length, then the symbols.
+struct EntropyCorpus {
+    dc_bits: [u8; 16],
+    dc_vals: Vec<u8>,
+    ac_bits: [u8; 16],
+    ac_vals: Vec<u8>,
+    cases: Vec<Entropy>,
+}
+
+fn entropy_corpus() -> &'static EntropyCorpus {
+    static CORPUS: OnceLock<EntropyCorpus> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/jpeg_entropy_corpus.txt");
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let mut c = EntropyCorpus {
+            dc_bits: [0; 16],
+            dc_vals: Vec::new(),
+            ac_bits: [0; 16],
+            ac_vals: Vec::new(),
+            cases: Vec::new(),
+        };
+        let nums = |rest: &str| -> Vec<i32> {
+            rest.split_whitespace()
+                .map(|f| f.parse().expect("a number"))
+                .collect()
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (tag, rest) = line.split_once(' ').expect("a tagged line");
+            let rest = rest.trim();
+            match tag {
+                "dcbits" | "acbits" => {
+                    let v = nums(rest);
+                    assert_eq!(v.len(), 16, "{tag}");
+                    let into = if tag == "dcbits" {
+                        &mut c.dc_bits
+                    } else {
+                        &mut c.ac_bits
+                    };
+                    for (slot, n) in into.iter_mut().zip(&v) {
+                        *slot = u8::try_from(*n).expect("a count");
+                    }
+                }
+                "dcvals" | "acvals" => {
+                    let v: Vec<u8> = nums(rest)
+                        .iter()
+                        .map(|n| u8::try_from(*n).expect("a symbol"))
+                        .collect();
+                    if tag == "dcvals" {
+                        c.dc_vals = v;
+                    } else {
+                        c.ac_vals = v;
+                    }
+                }
+                "case" => c.cases.push(Entropy {
+                    name: rest.to_owned(),
+                    blocks: Vec::new(),
+                    bytes: Vec::new(),
+                }),
+                "levels" => {
+                    let v = nums(rest);
+                    assert_eq!(v.len(), 64, "a block is 64 levels");
+                    c.cases.last_mut().expect("a case first").blocks.push(v);
+                }
+                "bytes" => {
+                    let case = c.cases.last_mut().expect("a case first");
+                    case.bytes.extend(hex_bytes(rest));
+                }
+                other => panic!("unknown tag `{other}` in the entropy corpus"),
+            }
+        }
+        c
+    })
+}
+
+/// T.81 §C.2: the canonical code for each symbol, as `(symbol, code,
+/// length)`.
+///
+/// Derived here rather than stored, so the derivation is checked too: a
+/// `DHT` segment holds the counts and the symbols and every decoder in
+/// the world builds the codes from them this way.
+fn huffman_codes(bits: &[u8; 16], vals: &[u8]) -> Vec<(u8, u16, u8)> {
+    let mut out = Vec::with_capacity(vals.len());
+    let mut code: u32 = 0;
+    let mut k = 0usize;
+    for length in 1..=16u8 {
+        for _ in 0..bits[usize::from(length) - 1] {
+            out.push((
+                vals[k],
+                u16::try_from(code).expect("a sixteen-bit code"),
+                length,
+            ));
+            code += 1;
+            k += 1;
+        }
+        code <<= 1;
+    }
+    assert_eq!(k, vals.len(), "every symbol got a code");
+    out
+}
+
+/// A bench over `jpeg_entropy`.
+struct EntropyBench<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    tbl_addr: NetHandle,
+    tbl_code: NetHandle,
+    tbl_len: NetHandle,
+    tbl_ac: NetHandle,
+    tbl_we: NetHandle,
+    start: NetHandle,
+    in_level: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    flush: NetHandle,
+    out_byte: NetHandle,
+    out_valid: NetHandle,
+    out_ready: NetHandle,
+}
+
+impl<'d> EntropyBench<'d> {
+    fn new(design: &'d Design, c: &EntropyCorpus) -> EntropyBench<'d> {
+        let sim = simulate(design, "jpeg_entropy");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let mut e = EntropyBench {
+            tbl_addr: top_net(&sim, "tbl_addr"),
+            tbl_code: top_net(&sim, "tbl_code"),
+            tbl_len: top_net(&sim, "tbl_len"),
+            tbl_ac: top_net(&sim, "tbl_ac"),
+            tbl_we: top_net(&sim, "tbl_we"),
+            start: top_net(&sim, "start"),
+            in_level: top_net(&sim, "in_level"),
+            in_valid: top_net(&sim, "in_valid"),
+            in_ready: top_net(&sim, "in_ready"),
+            flush: top_net(&sim, "flush"),
+            out_byte: top_net(&sim, "out_byte"),
+            out_valid: top_net(&sim, "out_valid"),
+            out_ready: top_net(&sim, "out_ready"),
+            clk,
+            sim,
+        };
+        for h in [
+            e.tbl_we,
+            e.tbl_ac,
+            e.start,
+            e.in_valid,
+            e.flush,
+            e.out_ready,
+        ] {
+            e.sim.set(h, bit(false));
+        }
+        reset(&mut e.sim, clk, rst_n);
+        for (ac, bits, vals) in [
+            (false, &c.dc_bits, &c.dc_vals),
+            (true, &c.ac_bits, &c.ac_vals),
+        ] {
+            for (sym, code, len) in huffman_codes(bits, vals) {
+                e.sim.set(e.tbl_we, bit(true));
+                e.sim.set(e.tbl_ac, bit(ac));
+                e.sim.set(e.tbl_addr, word(8, u64::from(sym)));
+                e.sim.set(e.tbl_code, word(16, u64::from(code)));
+                e.sim.set(e.tbl_len, word(5, u64::from(len)));
+                cycle(&mut e.sim, clk, HALF);
+            }
+        }
+        e.sim.set(e.tbl_we, bit(false));
+        e
+    }
+
+    /// A whole scan: `start`, the blocks, then `flush`, collecting every
+    /// byte that comes out.
+    fn scan(&mut self, blocks: &[Vec<i32>]) -> Vec<u8> {
+        self.sim.set(self.start, bit(true));
+        cycle(&mut self.sim, self.clk, HALF);
+        self.sim.set(self.start, bit(false));
+
+        let levels: Vec<i32> = blocks.iter().flatten().copied().collect();
+        let mut sent = 0usize;
+        let mut got: Vec<u8> = Vec::new();
+        let mut idle = 0u32;
+        let mut cycles = 0u32;
+        loop {
+            let feeding = sent < levels.len();
+            let v = levels[sent.min(levels.len() - 1)];
+            let narrow = i16::try_from(v).expect("a twelve-bit level");
+            let bits = u64::from(u16::from_le_bytes(narrow.to_le_bytes())) & 0x0FFF;
+            self.sim.set(self.in_valid, bit(feeding));
+            self.sim.set(self.in_level, word(12, bits));
+            // Flush only once every level has gone in, which is what
+            // the end of a scan is.
+            self.sim.set(self.flush, bit(!feeding));
+            self.sim.set(self.out_ready, bit(true));
+            self.sim.run_for(1);
+            let took = feeding && high(&self.sim, self.in_ready);
+            let byte = high(&self.sim, self.out_valid)
+                .then(|| u8::try_from(get_u64(&self.sim, self.out_byte)).expect("a byte"));
+            cycle(&mut self.sim, self.clk, HALF);
+            if took {
+                sent += 1;
+            }
+            match byte {
+                Some(b) => {
+                    got.push(b);
+                    idle = 0;
+                }
+                None => {
+                    if !feeding {
+                        idle += 1;
+                    }
+                }
+            }
+            // Thirty quiet cycles after the last level is more than any
+            // code and magnitude can take, so the scan is over.
+            if !feeding && idle > 30 {
+                break;
+            }
+            cycles += 1;
+            assert!(
+                cycles < 200_000,
+                "the coder stalled: {sent} of {} level(s) in, {} byte(s) out",
+                levels.len(),
+                got.len()
+            );
+        }
+        got
+    }
+}
+
+/// Every case of the corpus, byte for byte.
+///
+/// **This is the one part of the encoder with a right answer.** T.81
+/// §F.1.2 determines the bitstream completely from the levels and the
+/// code tables, so unlike `jpeg_fdct` — whose arithmetic the standard
+/// leaves to the implementer — there is nothing to be within a
+/// tolerance of. The expected bytes came from a Python model of §F.1.2
+/// that was itself checked by building whole greyscale JPEGs and having
+/// **ffmpeg** decode them: 40.5 dB against the original at a flat
+/// quantisation table of 16, with ffmpeg reporting nothing.
+///
+/// The codes are derived here from the `DHT` counts and symbols by
+/// §C.2, so that derivation is checked as well, and the corpus holds
+/// the tables in the form a file carries rather than as codes somebody
+/// worked out once.
+///
+/// What this would catch: a wrong code or length, the magnitude bits of
+/// §F.1.2.1.1 taken from the value instead of the value minus one for a
+/// negative, a DC difference against the wrong predecessor, a run
+/// counted wrongly, `ZRL` missing or emitted once where twice was
+/// needed, `EOB` missing or spurious, the byte stuffing of §F.1.2.3
+/// absent, and the final byte padded with zeros instead of ones. Four
+/// of the nine cases contain an `FF`, so the stuffing is exercised and
+/// not merely hoped for. What it would not: anything about the tables
+/// themselves, which are the caller's to write into both this block and
+/// the file.
+#[test]
+fn jpeg_entropy_codes_the_corpus_byte_for_byte() {
+    let c = entropy_corpus();
+    assert_eq!(c.cases.len(), 9, "the cases this file holds");
+    assert_eq!(c.ac_vals.len(), 162, "Annex K's AC luminance symbols");
+    let design = design_of("mjpeg_enc", "jpeg_entropy", &[]);
+    for case in &c.cases {
+        let mut bench = EntropyBench::new(&design, c);
+        let got = bench.scan(&case.blocks);
+        assert_eq!(
+            got.len(),
+            case.bytes.len(),
+            "{}: {} byte(s) out, {} expected\n got  {}\n want {}",
+            case.name,
+            got.len(),
+            case.bytes.len(),
+            hex_of(&got),
+            hex_of(&case.bytes)
+        );
+        assert_eq!(
+            got,
+            case.bytes,
+            "{}:\n got  {}\n want {}",
+            case.name,
+            hex_of(&got),
+            hex_of(&case.bytes)
+        );
+    }
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 /// The zig-zag of T.81 Figure A.6, walked rather than recalled: the
 /// natural position of the coefficient that belongs at each zig-zag

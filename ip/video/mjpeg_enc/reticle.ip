@@ -24,6 +24,7 @@ target xc7
 
 source rtl/jpeg_fdct.v
 source rtl/jpeg_quant.v
+source rtl/jpeg_entropy.v
 
 port clk in
 port rst_n in

@@ -8,10 +8,10 @@ Baseline JPEG, on the way to Motion JPEG.
 |---|---|
 | `jpeg_fdct` | the 8x8 forward DCT of §A.3.3, with the level shift of §A.3.1 |
 | `jpeg_quant` | quantisation and the zig-zag of §A.3.4 and Figure A.6 |
+| `jpeg_entropy` | the entropy coder of §F.1.2: DC prediction, run-length, Huffman, byte stuffing |
 
-Still to come: the entropy coder of §F.1.2 with Annex K's tables, the
-colour transform, and the framing that turns a stream of blocks into a
-file. The version is 0.1.0 and `top` will become `mjpeg_enc` when
+Still to come: the colour transform, and the framing that turns a
+stream of blocks into a file. The version is 0.1.0 and `top` will become `mjpeg_enc` when
 there is one.
 
 **Nothing in this package has been run on a board.**
@@ -220,6 +220,126 @@ Each was checked against a deliberately broken quantiser:
 | truncation instead of rounding | two |
 | the zero-divisor guard removed | two |
 
+## `jpeg_entropy`, and the one part with a right answer
+
+**This module is checked byte for byte, and the other two are not.**
+That is not a difference in rigour, it is a difference in what the
+standard says. T.81 leaves the transform's arithmetic to the
+implementer, so no two encoders agree and there is nothing to compare
+against. §F.1.2 leaves nothing open: given the levels and the code
+tables, every bit of the entropy-coded data is determined. So there is
+a right answer, and `testdata/ip/jpeg_entropy_corpus.txt` holds it.
+
+Three things happen to a block's 64 levels:
+
+* the **DC level is differenced** against the previous block's
+  (§F.1.2.1), which `start` clears at the beginning of a scan;
+* the **AC levels are run-length coded** (§F.1.2.2) into symbols
+  `(run << 4) | size` — sixteen or more zeros emit `ZRL` first, as
+  many times as needed, and a tail of zeros emits `EOB`;
+* each symbol becomes a **Huffman code** followed by the magnitude bits
+  of §F.1.2.1.1: the low `size` bits of the value, or of the value
+  **minus one** when it is negative.
+
+Then §F.1.2.3's byte stuffing: an `FF` in the data is followed by a
+`00`, because `FF` begins a marker, and the final partial byte is
+padded with ones.
+
+### The tables are the caller's, and so is Annex K
+
+Nothing in this package contains Annex K. The DC and AC code tables
+are written through a port, a code and a length per symbol, so a caller
+writes the same table it puts in the file's `DHT`. That is the same
+choice `jpeg_quant` makes about the quantisation table and for the same
+reason: one copy, in the caller, that goes to both places.
+
+The corpus holds the tables in the form a file carries them — a count
+of codes per length, then the symbols — and the test derives the codes
+by §C.2, so **that derivation is checked too**. They were taken from
+the `DHT` segments of a file ffmpeg wrote with `-huffman default`
+rather than typed out here: 162 AC symbols is a great deal to copy by
+hand, and a copy is not a second opinion.
+
+### How the corpus was validated
+
+The expected bytes come from a Python model of §F.1.2 — and a model is
+only worth what checked it. That one was used to build **whole
+greyscale JPEG files**, which **ffmpeg decoded**: 40.5 dB against the
+original at a flat quantisation table of 16, with ffmpeg reporting
+nothing. A wrong code, a wrong run, a missing `EOB` or absent stuffing
+does not decode to a slightly worse picture; it does not decode.
+
+Nine cases, each a whole scan with a flush so the byte stream is
+self-contained: an empty block, DC only, three blocks exercising the
+DC predictor, one `ZRL`, two `ZRL`s in a row, a block with all 64
+levels non-zero, the largest categories baseline allows, four sparse
+blocks, and one chosen by search because its bytes contain an `FF`.
+**Four of the nine contain an `FF`**, so the stuffing is exercised and
+not merely hoped for.
+
+### What baseline JPEG cannot code
+
+Writing the corpus turned this up and it is worth stating: **Annex K's
+AC table stops at size 10 and its DC table at 11**, which is Tables
+F.1 and F.2. An AC level needing eleven bits has no code at all, and a
+test case asking for one simply failed to encode. With 8-bit samples
+the transform's DC reaches −1024 and its AC about 1020, so a
+quantisation table of all ones is the worst case and it fits — but only
+just. The generator now checks every symbol it needs has a code, so an
+impossible case is reported rather than crashing.
+
+### A bit a cycle, and the depth
+
+The bits go out one at a time rather than through a barrel shifter,
+which is what the rest of this package does for want of a multiplier.
+A code is at most sixteen bits and a magnitude at most eleven, so a
+block of ten non-zero levels is some ninety cycles — less than the
+quantiser spends on it and far less than the transform.
+
+**713 LUT4 at depth 13 and three block RAMs** on an ECP5 45F. Two
+measurements got it there, and neither was visible from the Verilog:
+
+* **Depth 16 → 13.** The magnitude's category was thirteen `else if`s,
+  which is thirteen levels of logic in front of the register holding
+  the symbol. Halving the field four times instead — four ORs and four
+  multiplexers — costs 23 lookup tables and brings it under the 19
+  that did not meet 60 MHz in `docs/fpga-trellis.md`.
+* **The tables were not memory.** A DC and an AC table, each with a
+  code and a length, is the obvious four arrays — and read that way
+  two arrays drive each output register, which is not the bare
+  `q <= mem[a]` this flow builds a memory from. It cost 102
+  distributed RAMs on an ECP5 and, on an iCE40, **5712 flip-flops and
+  11617 lookup tables**: the tables became registers, nine times the
+  whole part. One 512-word memory of 21 bits, addressed by the table
+  bit and the symbol, is three block RAMs and 728 lookup tables there.
+
+| | ECP5 LUT4 | ECP5 depth | iCE40 LUT4 | iCE40 flip-flops |
+|---|---|---|---|---|
+| four arrays, priority category | 1028 | 16 | 11617 | 5712 |
+| **one memory, balanced category** | **713** | **13** | **728** | **115** |
+
+The DC half uses sixteen of its 256 words and the waste is not worth a
+second memory and a multiplexer to save.
+
+### What the tests would and would not catch
+
+Each was checked against a deliberately broken coder, and all six fail
+it:
+
+| defect introduced |
+|---|
+| magnitude bits taken from the value instead of the value minus one |
+| the byte stuffing of §F.1.2.3 removed |
+| the final byte padded with zeros instead of ones |
+| `EOB` never emitted |
+| one `ZRL` where two were needed |
+| the DC level coded without differencing |
+
+What it would not catch: anything about the tables themselves, which
+are the caller's to write into both this block and the file; and a
+`DHT` that gives a symbol no code at all, which this block cannot
+detect and which makes a file nothing can read.
+
 ## What is and is not proved
 
 Proved, by `tests/ip_library.rs`:
@@ -244,8 +364,12 @@ rounding against the documented rule over 44 blocks, every divisor
 from 1 to 64, both twelve-bit extremes and the exact ties where the
 rounding shows; and a zero divisor treated as a one.
 
-Not proved, and not claimed: that this agrees with any other encoder,
-which it will not and need not; that the rounding or any particular
-quantisation table is a *good* choice, which is a question about
-pictures and not about correctness; anything about entropy coding,
-colour or framing, none of which exists yet; and anything on a part.
+Proved for `jpeg_entropy`: every byte of all nine corpus cases, exactly
+— against a model that whole-file decoding by ffmpeg validated — with
+the codes derived in the test from the `DHT` form by §C.2.
+
+Not proved, and not claimed: that the transform agrees with any other
+encoder, which it will not and need not; that the quantiser's rounding
+or any particular table is a *good* choice, which is a question about
+pictures and not about correctness; anything about colour or framing,
+neither of which exists yet; and anything on a part.

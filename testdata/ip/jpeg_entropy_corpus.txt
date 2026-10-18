@@ -1,0 +1,73 @@
+# The JPEG entropy coder's corpus: levels in, bytes out.
+#
+# **This half of the encoder is exact.** Given the same levels and
+# the same code tables, T.81 F.1.2 determines the bitstream
+# completely, so unlike the transform there is a right answer and
+# this file holds it. The bytes were produced by a Python model of
+# F.1.2 that was itself checked by building whole greyscale JPEGs
+# with it and having ffmpeg decode them -- 40.5 dB against the
+# original at a flat quantisation table of 16, with ffmpeg
+# reporting nothing.
+#
+# The tables are Annex K's, taken from the `DHT` segments of a file
+# ffmpeg wrote with `-huffman default` rather than typed out here:
+# 162 AC symbols is a great deal to copy by hand and a copy is not
+# a second opinion. They are stored as `DHT` stores them, as a
+# count of codes per length and then the symbols, and the test
+# derives the codes by T.81 C.2 -- so the derivation is checked too.
+#
+# One record per case. Each is a whole scan: the blocks in order,
+# then a flush, so the byte stream is self-contained and the DC
+# predictor's behaviour across blocks is covered.
+#   case   <name>
+#   levels <64 signed decimals>      -- repeated, one line per block
+#   bytes  <hex>
+
+dcbits 0 1 5 1 1 1 1 1 1 0 0 0 0 0 0 0
+dcvals 0 1 2 3 4 5 6 7 8 9 10 11
+acbits 0 2 1 3 3 2 4 3 5 5 4 4 0 0 1 125
+acvals 1 2 3 0 4 17 5 18 33 49 65 6 19 81 97 7 34 113 20 50 129 145 161 8 35 66 177 193 21 82 209 240 36 51 98 114 130 9 10 22 23 24 25 26 37 38 39 40 41 42 52 53 54 55 56 57 58 67 68 69 70 71 72 73 74 83 84 85 86 87 88 89 90 99 100 101 102 103 104 105 106 115 116 117 118 119 120 121 122 131 132 133 134 135 136 137 138 146 147 148 149 150 151 152 153 154 162 163 164 165 166 167 168 169 170 178 179 180 181 182 183 184 185 186 194 195 196 197 198 199 200 201 202 210 211 212 213 214 215 216 217 218 225 226 227 228 229 230 231 232 233 234 241 242 243 244 245 246 247 248 249 250
+
+case   empty
+levels 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+bytes  2b
+
+case   dconly
+levels 73 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+bytes  f49a
+
+case   dcrun
+levels 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+levels 5 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+levels -200 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+bytes  968af8cabf
+
+case   zrl
+levels 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+bytes  5ff3fe7feb857f
+
+case   zrl2
+levels 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3 0 0 0 0 0 0 0 0 0 0 0 0 0
+bytes  3fcff9ff003beb
+
+case   dense
+levels 8 5 1 3 1 -4 9 -1 -6 -9 -2 4 5 -1 8 2 4 -5 9 -8 -5 -3 -5 9 9 -3 2 9 -6 -7 1 5 -7 8 7 -5 5 8 2 -9 5 3 -8 3 -8 7 3 -9 4 -2 -6 9 -3 -2 8 3 -8 -1 -7 -1 -3 9 9 9
+bytes  b129731dc886d964945c34915cdbc4915cdca35cc301960b89e296e1ada57b77b79deda4586e516e1edc4012e6e6e7
+
+case   big
+levels -1024 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+levels 1016 -1023 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1023
+bytes  ff003ffaff007f8ff83003fcff009ff3ff00d5ff00ff00
+
+case   sparse
+levels -168 0 0 0 -39 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5 -6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 34 0 0 0 0 -8 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -28 0 0 0 0
+levels 56 0 23 0 0 -7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -15 0 0 0 0 0 0 0 0 0 -38 -6 0 0 0 0 0 40 0 0 0 0 0 0 28 0 0 -34 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+levels -159 0 0 0 -13 0 0 0 0 0 0 0 11 0 0 0 0 -15 0 0 29 0 0 0 0 0 0 0 0 0 0 0 12 0 0 0 0 0 0 0 0 0 0 0 -21 0 0 0 0 0 0 0 0 36 0 0 0 0 0 -26 0 0 0 0
+levels 23 0 0 0 1 0 14 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12 0 0 0 -30 0 0 0 0 0 0 0 -8 0 0 0 0 0 0 0 0 0 0 -1 0 0 0 0 0 -20 0 0 0
+bytes  f95ffe458ff32c3fff00517fcbbfff00c8ebee0fed7fdc7ff707fe1330ff00d0d1ff0051cff8a76be28ff8f2ff00afbff970ff0089effe967fe9abfee64ffa02
+bytes  d7d6dd7eddfe7fedf3fe403ff5effa7fd02ebf
+
+case   stuffed
+levels -70 0 0 0 -3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -7 23 0 0 0 0 0 0 0 0 0 0 0 0 0 -20 0 0 0 0 0 0 0 0 0 29 0
+levels 198 0 0 0 0 17 0 0 0 0 0 0 0 0 0 -13 0 0 0 0 0 22 0 0 0 0 0 0 0 0 0 0 0 0 13 0 -12 0 0 7 0 0 0 0 0 0 0 0 0 19 0 0 0 0 0 0 0 0 0 0 0 0 0 -16
+bytes  f39fb9fe7fcc1abfff002aff00f07b5fa19ff311ff00c02ffa0b7fedefd8ff007fff00833ffe57ff00
