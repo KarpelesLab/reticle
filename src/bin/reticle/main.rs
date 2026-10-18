@@ -3461,11 +3461,18 @@ fn write_xc7_bitstream(
         // ChipWhisperer-Husky is minutes, and most of them were never in
         // contention. The first pass charges nothing for congestion and
         // the later ones keep a data signal in its box, both as VPR does;
-        // `RouteOptions` has why each.
+        // `RouteOptions` has why each. The congestion charge grows by
+        // VPR's 1.3 a pass, not the default 1.8: on the
+        // ChipWhisperer-Husky the two reached the same overuse, 83,000
+        // nodes, at the twelfth pass and 2,049 s and at the ninth and
+        // 3,216 s — a charge that grows fast makes every wire through a
+        // congested tile dear before the estimate knows it, and the
+        // searches flood.
         astar_weight: reticle::fpga::xray::ASTAR_WEIGHT,
         reroute_congested_only: true,
         first_pass_present: Some(0.0),
         bounding_margin: Some(3),
+        present_growth: reticle::fpga::xray::PRESENT_GROWTH,
         ..RouteOptions::default()
     };
     let mut failure = None;

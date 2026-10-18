@@ -2447,6 +2447,14 @@ pub const CLOCK_PREFERENCE: f32 = 0.05;
 /// and not a measured optimum.
 pub const ASTAR_WEIGHT: f64 = 2.0;
 
+/// What the router's congestion charge is multiplied by each pass on this
+/// fabric ([`RouteOptions::present_growth`](crate::fpga::route::RouteOptions)):
+/// VPR's `pres_fac_mult`. The router's default, 1.8, reached the
+/// ChipWhisperer-Husky's 83,000 overused nodes at the ninth pass and
+/// 3,216 s; this at the twelfth and 2,049 s, measured 2026-10-18. blink,
+/// pll_blink, bram_rom and lutram route as well either way.
+pub const PRESENT_GROWTH: f64 = 1.3;
+
 /// Whether a wire belongs to the global clock network.
 ///
 /// **Not a tile prefix.** The clock tiles are crossed by ordinary
