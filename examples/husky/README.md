@@ -139,8 +139,8 @@ of its own:
 | the pins, standards, drive and pulls are NewAE's | **transcribed** from `cwhusky.xdc` by script |
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
 | the whole design fits the part | **checked**: 30,855 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
-| it places | **checked**: legalisation and annealing complete, in 220–290 s |
-| it routes | **not yet known**: the first pass takes about 70 s, the second most of an hour, and none has been seen to converge; see below |
+| it places | **checked**: legalisation and annealing complete, in about six minutes |
+| it routes | **not yet**: the route converges, by about seven per cent of its overuse a pass, which is too slowly to finish; `docs/fpga-xray.md` has where it stands |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status

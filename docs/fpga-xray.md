@@ -3036,7 +3036,7 @@ retrying without, and the first pass took five times as long. It now
 takes in the wires two hops from each terminal, applies from the second
 pass, and a signal whose bounded search fails once is not boxed again.
 
-Where a Husky build stands with all of it:
+Where a Husky build stood with all of it, on 2026-10-17:
 
 | Stage | Time |
 |---|---|
@@ -3044,15 +3044,65 @@ Where a Husky build stands with all of it:
 | carry legalisation, pairing, the graph | about 25 s |
 | placement | 220–290 s |
 | routing, first pass | about 70 s |
-| routing, the second pass | **most of an hour**: 45,000 of its 70,000-odd nets in 38 minutes, each 5,000 slower than the last; not yet seen to converge |
+| routing, the second pass | **over an hour**: 65,000 of its 70,000-odd nets in 68 minutes; the overuse then *grew* pass on pass, 162,000 nodes to 422,000 over five passes of two and a half hours each |
 
-The later passes are what remain, and they are not a slow algorithm so
-much as a hard problem: the first pass leaves about 160,000 nodes
-overused, and with 95 % of the lookup-table sites used, every reroute
-is through wires that cost two or three times their base, which the
-distance estimate cannot see. A routing of 6.3 million pips — about ninety
-a net — also says the placement is spread wider than a design this full
-can afford. Whether the route converges at all is not yet known.
+### The next day: the wires cost too much, and the placement was not one
+
+The route was diverging, and the wire classes said why. After the first
+pass 457,471 uses of the north hex `NN6END` and 447,063 of the south hex
+`SS6BEG` — north and south almost exactly equal, thirteen vertical hexes
+a net. Two separate faults were behind it.
+
+**A wire cost one per tile it crosses.** The loader gives every wire
+span zero and joins its pieces with bit-less pips (this module's first
+mismatch), so a hex line is seven nodes, and at one apiece a tile cost
+more than a node: a path of 118 tiles cost 145. The UltraScale+ flow had
+met exactly this (`Board::node_bases`) and the 7-series flow never took
+the fix. `XrayFabric::node_costs` makes a node only bit-less pips enter
+free; and the distance estimate, which scales by a node's own base
+cost, now takes one for a free node, which had made every piece of every
+wire look as if it stood on the sink (`route::heuristic_base`). The
+second pass went from about 85 minutes to about 220 s.
+
+**And the placer had thrown its analytic solve away.** Reported now
+(`PlacementReport::displacement`): legalisation moved a cell **sixty
+tiles** on average from where the solve had put it. The solve piled the
+cells about the middle, the legaliser took sites outward from there in
+the order of the targets, and an anneal that starts one tile wide —
+which the range limiter was meant to widen, and did not: one tile at the
+first temperature and one at the last — took the wirelength only from
+4,176,953 to 3,948,882, leaving 11,451 nets of four sinks or fewer more
+than a hundred tiles long. Two changes:
+
+- the anneal starts at least as wide as legalisation moved a cell
+  (`the_anneal_starts_as_wide_as_legalisation_moved_a_cell`): 1,670,844;
+- a site kind of 256 cells or more filling over half its sites is spread
+  by recursive bisection before it is legalised, keeping the solve's
+  order (`spread_dense`), and the kinds it cannot spread — a slice's
+  flip-flops, whose sites share a control set — are solved again with the
+  spread cells held: 1,288,014 after annealing, 2,144,236 before; a cell
+  moves 25 tiles in legalisation.
+
+More annealing is not the next step: 300 temperature steps reached
+1,278,228, and twice the moves a step 1,215,133 for two and a half times
+the time.
+
+| | wirelength after annealing | routing, overused nodes at the ninth pass |
+|---|---|---|
+| 2026-10-17 | 3,948,882 | diverging, 422,000 at the fifth |
+| anneal started wide | 1,670,844 | 130,508 at the eighth, passes of up to 40 minutes |
+| and spread before legalising | 1,288,014 | 82,014, passes of a few minutes to twenty |
+
+The route now converges, and too slowly to finish: the overuse falls by
+about seven per cent a pass, and from 80,000 nodes that is well over a
+hundred passes. By the ninth pass nearly every overused node carries
+exactly one signal too many, and they are every class of wire — hexes,
+doubles, bypass inputs — so this is not a bottleneck but demand a little
+above what the fabric has, everywhere: the placement is still too
+spread for a design this full. A two-pin net is 11.3 tiles long on
+average, and nets of two to four sinks 29.3. The congestion charge now
+grows by VPR's 1.3 a pass rather than 1.8 (`xray::PRESENT_GROWTH`),
+which reached the same overuse in two thirds of the time.
 
 ## What remains before an LED could light
 
