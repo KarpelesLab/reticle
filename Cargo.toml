@@ -233,6 +233,14 @@ unsafe_code = "deny"
 cast_possible_truncation = "warn"
 cast_sign_loss = "warn"
 
+# The test suite synthesises, places and routes real designs, and the
+# gate runs it twice. At opt-level 0 `cargo test --all-features` took 66 s
+# to build and 1,456 s to run; at 1, 100 s and 354 s (measured
+# 2026-10-18). Debug assertions and overflow checks stay on: they are what
+# the dev profile is for, and opt-level changes neither.
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
