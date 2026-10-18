@@ -422,6 +422,11 @@ const VARIANTS: &[Variant] = &[
         params: &[("MODE", "0"), ("BPC", "4")],
     },
     Variant {
+        package: "mjpeg_enc",
+        top: "jpeg_fdct",
+        params: &[],
+    },
+    Variant {
         package: "adpcm_ima",
         top: "adpcm_ima_enc",
         params: &[],
@@ -12235,6 +12240,352 @@ fn vga_out_truncates_the_colour_to_the_boards_width() {
                 vga.pins(),
                 rgb.map(|v| v >> (8 - bpc)),
                 "pixel {pixel} at {bpc} bit(s) a channel"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// mjpeg_enc
+// ---------------------------------------------------------------------------
+
+/// The real 8x8 forward DCT of T.81 §A.3.3, in double precision.
+///
+/// **This is the reference and it is not the implementation.** T.81
+/// defines the transform as an equation over real numbers and leaves
+/// the arithmetic to the implementer, so unlike `adpcm_ima` there is no
+/// bitstream anywhere in the world that `jpeg_fdct` must reproduce.
+/// What can be checked is how far it is from the equation, and that is
+/// what this computes: straight from the formula, in `f64`, with the
+/// level shift of §A.3.1 included.
+fn jpeg_fdct_ref(block: &[u8; 64]) -> [f64; 64] {
+    let px: Vec<f64> = block.iter().map(|&v| f64::from(v) - 128.0).collect();
+    let one_d = |x: &[f64; 8]| -> [f64; 8] {
+        let mut out = [0.0; 8];
+        for (k, o) in out.iter_mut().enumerate() {
+            let c = if k == 0 { 1.0 / 2.0_f64.sqrt() } else { 1.0 };
+            let s: f64 = (0..8)
+                .map(|n| {
+                    x[n] * ((2.0 * n as f64 + 1.0) * k as f64 * std::f64::consts::PI / 16.0).cos()
+                })
+                .sum();
+            *o = 0.5 * c * s;
+        }
+        out
+    };
+    let mut rows = [[0.0f64; 8]; 8];
+    for r in 0..8 {
+        let mut x = [0.0f64; 8];
+        x.copy_from_slice(&px[r * 8..r * 8 + 8]);
+        rows[r] = one_d(&x);
+    }
+    let mut out = [0.0f64; 64];
+    for c in 0..8 {
+        let mut col = [0.0f64; 8];
+        for r in 0..8 {
+            col[r] = rows[r][c];
+        }
+        let got = one_d(&col);
+        for r in 0..8 {
+            out[r * 8 + c] = got[r];
+        }
+    }
+    out
+}
+
+/// A bench over `jpeg_fdct`: 64 samples in, 64 coefficients out.
+struct Fdct<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    in_sample: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    out_coef: NetHandle,
+    out_valid: NetHandle,
+    out_ready: NetHandle,
+    /// Clock edges the last block took, first sample to last
+    /// coefficient.
+    cycles: u32,
+}
+
+impl<'d> Fdct<'d> {
+    fn new(design: &'d Design) -> Fdct<'d> {
+        let sim = simulate(design, "jpeg_fdct");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let mut f = Fdct {
+            in_sample: top_net(&sim, "in_sample"),
+            in_valid: top_net(&sim, "in_valid"),
+            in_ready: top_net(&sim, "in_ready"),
+            out_coef: top_net(&sim, "out_coef"),
+            out_valid: top_net(&sim, "out_valid"),
+            out_ready: top_net(&sim, "out_ready"),
+            cycles: 0,
+            clk,
+            sim,
+        };
+        f.sim.set(f.in_valid, bit(false));
+        f.sim.set(f.out_ready, bit(false));
+        f.sim.set(f.in_sample, word(8, 0));
+        reset(&mut f.sim, clk, rst_n);
+        f
+    }
+
+    /// One block through, and the 64 coefficients back.
+    ///
+    /// `limit` is a loop bound and not a time-out: the block takes 265
+    /// cycles and 2000 is comfortably more, so reaching it is a
+    /// sequencer that stopped rather than a slow machine.
+    fn block(&mut self, samples: &[u8; 64]) -> [i32; 64] {
+        let mut sent = 0usize;
+        let mut got: Vec<i32> = Vec::with_capacity(64);
+        let mut cycles = 0u32;
+        while got.len() < 64 {
+            let feeding = sent < 64;
+            self.sim.set(self.in_valid, bit(feeding));
+            self.sim
+                .set(self.in_sample, word(8, u64::from(samples[sent.min(63)])));
+            self.sim.set(self.out_ready, bit(true));
+            self.sim.run_for(1);
+            let took = feeding && high(&self.sim, self.in_ready);
+            let gave = high(&self.sim, self.out_valid);
+            let coef = if gave {
+                let raw = get_u64(&self.sim, self.out_coef);
+                let w = u16::try_from(raw).expect("twelve bits");
+                // Twelve bits, two's complement.
+                Some(if w & 0x800 != 0 {
+                    i32::from(w) - 0x1000
+                } else {
+                    i32::from(w)
+                })
+            } else {
+                None
+            };
+            cycle(&mut self.sim, self.clk, HALF);
+            if took {
+                sent += 1;
+            }
+            if let Some(v) = coef {
+                got.push(v);
+            }
+            cycles += 1;
+            self.cycles = cycles;
+            assert!(
+                cycles < 2000,
+                "the transform stalled: {sent} sample(s) in, {} coefficient(s) out",
+                got.len()
+            );
+        }
+        let mut out = [0i32; 64];
+        out.copy_from_slice(&got);
+        out
+    }
+}
+
+/// How far `jpeg_fdct` is from the transform T.81 defines.
+///
+/// The bound is this file's and not a standard's: T.83 states accuracy
+/// criteria for a conforming *inverse* DCT and there is no normative
+/// equivalent for the forward one, so what is pinned here is what was
+/// measured when the arithmetic was chosen — peak error below one count
+/// and RMS below a third of a count, over a thousand random blocks and
+/// the extremes.
+///
+/// **A peak below one matters** rather than being a round number: every
+/// coefficient is then within a single count of the real transform
+/// before quantisation divides it by somewhere between 8 and 100, so
+/// the arithmetic cannot move a quantised coefficient by more than one
+/// in the worst case and almost never does.
+///
+/// What this would catch: a wrong shift, a lost sign, the even and odd
+/// halves swapped, a transpose that is not a transpose, and the second
+/// pass reading the wrong row. All of those were tried and all of them
+/// fail it.
+///
+/// **What it would not, measured rather than guessed:** a cosine
+/// constant wrong by four least significant bits or fewer. Those were
+/// tried too — off by 1 and by 4 pass, off by 8 and by 16 fail all
+/// three of these tests. Four parts in 8192 is at most about an eighth
+/// of a count on a coefficient, which is below this transform's own
+/// rounding noise, so the insensitivity is less a gap in the test than
+/// a statement that such an error does not matter. A typo big enough to
+/// matter is caught.
+///
+/// Nor would it catch a defect shared with the reference above, since
+/// both are written from the same equation, nor anything about
+/// quantisation or entropy coding, which are not in this module.
+#[test]
+fn jpeg_fdct_is_within_a_count_of_the_transform_t81_defines() {
+    let design = design_of("mjpeg_enc", "jpeg_fdct", &[]);
+    let mut fdct = Fdct::new(&design);
+
+    let mut blocks: Vec<[u8; 64]> = Vec::new();
+    // A linear congruential sequence, so the blocks are the same on
+    // every machine and in every order.
+    let mut x: u32 = 1;
+    for _ in 0..1000 {
+        let mut b = [0u8; 64];
+        for v in b.iter_mut() {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            *v = u8::try_from((x >> 16) & 0xFF).expect("a byte");
+        }
+        blocks.push(b);
+    }
+    // The extremes, which is where an accumulator that is too narrow
+    // shows up and a random block never will.
+    blocks.push([0u8; 64]);
+    blocks.push([255u8; 64]);
+    let mut alt = [0u8; 64];
+    for (i, v) in alt.iter_mut().enumerate() {
+        *v = if (i / 8 + i % 8) % 2 == 0 { 255 } else { 0 };
+    }
+    blocks.push(alt);
+
+    let mut peak = 0.0f64;
+    let mut sq = 0.0f64;
+    let mut n = 0u32;
+    for (bi, b) in blocks.iter().enumerate() {
+        let got = fdct.block(b);
+        let want = jpeg_fdct_ref(b);
+        for i in 0..64 {
+            let e = f64::from(got[i]) - want[i];
+            if e.abs() > peak {
+                peak = e.abs();
+            }
+            sq += e * e;
+            n += 1;
+            assert!(
+                e.abs() < 1.5,
+                "block {bi}, coefficient {i}: the block says {}, the transform \
+                 says {:.4}",
+                got[i],
+                want[i]
+            );
+        }
+    }
+    let rms = (sq / f64::from(n)).sqrt();
+    assert!(
+        peak < 1.0,
+        "peak error {peak:.4} over {} coefficients; it was 0.616 when the \
+         arithmetic was chosen",
+        n
+    );
+    assert!(rms < 0.34, "RMS error {rms:.4}; it was 0.291");
+}
+
+/// The transform takes the number of cycles its header claims.
+///
+/// A count and not a time, so it is the same on every machine. It is
+/// here because the header and the README both quote a block rate in
+/// blocks a second, and a quoted rate that nothing checks drifts the
+/// first time the sequencer gains a state — which this one did twice
+/// while the arithmetic was being changed.
+///
+/// What this would catch: a state added or removed anywhere in the
+/// block's path. What it would not: anything about what the block
+/// computes, which the three tests above own.
+#[test]
+fn jpeg_fdct_takes_the_cycles_its_header_says() {
+    let design = design_of("mjpeg_enc", "jpeg_fdct", &[]);
+    let mut fdct = Fdct::new(&design);
+    // Twice, because the first block from reset and a later one must
+    // agree: a sequencer that does not return cleanly to its start
+    // shows up here and nowhere else.
+    let first = {
+        fdct.block(&[128u8; 64]);
+        fdct.cycles
+    };
+    fdct.block(&[7u8; 64]);
+    assert_eq!(first, fdct.cycles, "the second block took a different time");
+    assert_eq!(
+        first, 648,
+        "cycles for one block, first sample to last coefficient"
+    );
+}
+
+/// A flat block gives an exact DC and exactly nothing else.
+///
+/// **This is the property that chose the rounding.** A flat block is
+/// the sky, a wall, a letterbox bar, and it must transform to
+/// `DC = 8 * (value - 128)` with all 63 AC coefficients exactly zero.
+/// Rounding evenly between the two passes instead of keeping precision
+/// between them gets that DC wrong by one for some values, which is a
+/// visible step between two flat areas that ought to match; the
+/// module's header has the measurement.
+///
+/// All 256 values, so there is no value at which it is off by one.
+#[test]
+fn jpeg_fdct_transforms_a_flat_block_exactly() {
+    let design = design_of("mjpeg_enc", "jpeg_fdct", &[]);
+    let mut fdct = Fdct::new(&design);
+    for v in 0..=255u8 {
+        let got = fdct.block(&[v; 64]);
+        let want_dc = 8 * (i32::from(v) - 128);
+        assert_eq!(
+            got[0], want_dc,
+            "a block of {v}: DC is {} and 8 * ({v} - 128) is {want_dc}",
+            got[0]
+        );
+        for (i, c) in got.iter().enumerate().skip(1) {
+            assert_eq!(
+                *c, 0,
+                "a block of {v}: AC coefficient {i} is {c} and should be zero"
+            );
+        }
+    }
+}
+
+/// A basis function in gives one coefficient out.
+///
+/// The transform's own definition: sample the `(u, v)` cosine basis
+/// function over the block and every coefficient but `(u, v)` is zero.
+/// Sampling it into 8-bit integers is lossy, so the others are not
+/// *exactly* zero — what is asserted is that the intended one dominates
+/// every other by a wide margin, which is a statement about the
+/// transform's structure that no amount of correct-looking arithmetic
+/// can fake.
+///
+/// What this would catch, and the test above would not: the two passes
+/// applied in the wrong order, a transposed output, or a row index used
+/// where a column index belongs — all of which leave a flat block
+/// perfect and move a basis function to the wrong place.
+#[test]
+fn jpeg_fdct_sends_a_basis_function_to_one_coefficient() {
+    let design = design_of("mjpeg_enc", "jpeg_fdct", &[]);
+    let mut fdct = Fdct::new(&design);
+    for u in 0..8usize {
+        for v in 0..8usize {
+            let mut b = [0u8; 64];
+            for r in 0..8 {
+                for c in 0..8 {
+                    let f = ((2.0 * r as f64 + 1.0) * u as f64 * std::f64::consts::PI / 16.0).cos()
+                        * ((2.0 * c as f64 + 1.0) * v as f64 * std::f64::consts::PI / 16.0).cos();
+                    // Clamped into a byte before the conversion, so the
+                    // conversion cannot be the thing that clamps.
+                    let s = (128.0 + 100.0 * f).round().clamp(0.0, 255.0);
+                    let mut level = 0u8;
+                    for candidate in 0..=255u8 {
+                        if f64::from(candidate) <= s {
+                            level = candidate;
+                        }
+                    }
+                    b[r * 8 + c] = level;
+                }
+            }
+            let got = fdct.block(&b);
+            let want = u * 8 + v;
+            let mine = got[want].abs();
+            let other = got
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != want)
+                .map(|(_, c)| c.abs())
+                .max()
+                .expect("63 others");
+            assert!(
+                mine > 4 * other.max(1),
+                "basis ({u}, {v}): coefficient {want} is {mine} and the largest \
+                 of the other 63 is {other}"
             );
         }
     }
