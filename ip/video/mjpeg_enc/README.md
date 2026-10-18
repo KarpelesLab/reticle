@@ -2,13 +2,17 @@
 
 Baseline JPEG, on the way to Motion JPEG.
 
-**This package is not finished.** What exists is `jpeg_fdct`, the 8x8
-forward discrete cosine transform of ITU T.81 §A.3.3 with the level
-shift of §A.3.1. Still to come: quantisation and the zig-zag of §A.3.6,
-the entropy coder of §F.1.2 with Annex K's tables, the colour
-transform, and the framing that turns a stream of blocks into a file.
-The version is 0.1.0 and `top` will become `mjpeg_enc` when there is
-one.
+**This package is not finished.** What exists:
+
+| module | what it is |
+|---|---|
+| `jpeg_fdct` | the 8x8 forward DCT of §A.3.3, with the level shift of §A.3.1 |
+| `jpeg_quant` | quantisation and the zig-zag of §A.3.4 and Figure A.6 |
+
+Still to come: the entropy coder of §F.1.2 with Annex K's tables, the
+colour transform, and the framing that turns a stream of blocks into a
+file. The version is 0.1.0 and `top` will become `mjpeg_enc` when
+there is one.
 
 **Nothing in this package has been run on a board.**
 
@@ -158,6 +162,64 @@ transform are the bit-serial arithmetic and the rest are moving the
 block in and out, so a design that needed more could overlap the output
 of one block with the input of the next; this one does not.
 
+## `jpeg_quant`
+
+64 coefficients in, row-major; 64 quantised levels out, in **zig-zag
+order**, which is the order the entropy coder wants and the order a
+JPEG file stores a table in.
+
+The table is written through a port of its own and is indexed exactly
+as `DQT` stores it — in zig-zag order — so output position `p` divides
+the coefficient at natural position `zigzag[p]` by `table[p]`, and a
+caller hands this block the same 64 bytes it writes into the file
+without permuting them. **Getting that round the wrong way is the
+classic way to produce a file that decodes to something recognisable
+and wrong**, which is why
+`jpeg_quant_reorders_into_the_zigzag_of_figure_a6` checks the ordering
+on its own, with every divisor set to one so a wrong permutation
+cannot hide behind a plausible quotient.
+
+### Division is a loop, and usually a short one
+
+No multiplier means no divider either, so the quotient is built a bit
+at a time by restoring division — compare, subtract, shift — eleven
+cycles for a quotient that cannot exceed eleven bits.
+
+**Most coefficients take two cycles instead of eleven.** After the
+transform and a realistic table most of the 63 AC coefficients
+quantise to zero, and a magnitude below its divisor is recognised in
+one comparison. A block with ten non-zero coefficients takes about 240
+cycles rather than 830, so the timing is data-dependent and a caller
+should pace itself by the handshake rather than by a cycle count.
+There is no cycle-count test for this module for that reason, where
+`jpeg_fdct` has one.
+
+### Rounding is the encoder's choice
+
+`round(coefficient / q)` with ties away from zero, done by adding
+`q / 2` to the magnitude before dividing. **A decoder multiplies by
+`q` and cannot tell**, so this is a choice exactly as the nibble is in
+`ip/audio/adpcm_ima`: any rule produces a legal file and the
+difference is quality. Truncation, which a bare divide gives, is
+measurably worse and this costs one adder.
+
+A zero in the table divides by one. `DQT` forbids zero and nothing
+here can police what a caller writes, so the only question is what
+happens when one arrives — and a divider left to run on a zero divisor
+takes every quotient bit and answers with all ones, which is worse
+than a lie because it looks like data.
+
+### What the tests would and would not catch
+
+Each was checked against a deliberately broken quantiser:
+
+| defect introduced | tests failing |
+|---|---|
+| the table indexed naturally instead of in zig-zag order | all three |
+| the inverse permutation applied | all three |
+| truncation instead of rounding | two |
+| the zero-divisor guard removed | two |
+
 ## What is and is not proved
 
 Proved, by `tests/ip_library.rs`:
@@ -176,7 +238,14 @@ Proved, by `tests/ip_library.rs`:
   maps for the iCE40 and the ECP5 with the footprint
   `docs/ip-library.md` records.
 
+Proved for `jpeg_quant`: the zig-zag permutation, all 64 positions
+pinned by distinct coefficients and a table of ones; division and
+rounding against the documented rule over 44 blocks, every divisor
+from 1 to 64, both twelve-bit extremes and the exact ties where the
+rounding shows; and a zero divisor treated as a one.
+
 Not proved, and not claimed: that this agrees with any other encoder,
-which it will not and need not; anything about quantisation, zig-zag,
-entropy coding, colour or framing, none of which exists yet; and
-anything on a part.
+which it will not and need not; that the rounding or any particular
+quantisation table is a *good* choice, which is a question about
+pictures and not about correctness; anything about entropy coding,
+colour or framing, none of which exists yet; and anything on a part.

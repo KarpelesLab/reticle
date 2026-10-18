@@ -23,6 +23,7 @@ target ecp5
 target xc7
 
 source rtl/jpeg_fdct.v
+source rtl/jpeg_quant.v
 
 port clk in
 port rst_n in

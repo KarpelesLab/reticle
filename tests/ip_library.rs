@@ -427,6 +427,11 @@ const VARIANTS: &[Variant] = &[
         params: &[],
     },
     Variant {
+        package: "mjpeg_enc",
+        top: "jpeg_quant",
+        params: &[],
+    },
+    Variant {
         package: "adpcm_ima",
         top: "adpcm_ima_enc",
         params: &[],
@@ -12248,6 +12253,259 @@ fn vga_out_truncates_the_colour_to_the_boards_width() {
 // ---------------------------------------------------------------------------
 // mjpeg_enc
 // ---------------------------------------------------------------------------
+
+/// The zig-zag of T.81 Figure A.6, walked rather than recalled: the
+/// natural position of the coefficient that belongs at each zig-zag
+/// position.
+fn jpeg_zigzag() -> [usize; 64] {
+    let mut out = [0usize; 64];
+    let (mut r, mut c, mut up) = (0usize, 0usize, true);
+    for slot in out.iter_mut() {
+        *slot = r * 8 + c;
+        if up {
+            if c == 7 {
+                r += 1;
+                up = false;
+            } else if r == 0 {
+                c += 1;
+                up = false;
+            } else {
+                r -= 1;
+                c += 1;
+            }
+        } else if r == 7 {
+            c += 1;
+            up = true;
+        } else if c == 0 {
+            r += 1;
+            up = true;
+        } else {
+            r += 1;
+            c -= 1;
+        }
+    }
+    out
+}
+
+/// A bench over `jpeg_quant`.
+struct Quant<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    tbl_addr: NetHandle,
+    tbl_data: NetHandle,
+    tbl_we: NetHandle,
+    in_coef: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    out_level: NetHandle,
+    out_valid: NetHandle,
+    out_ready: NetHandle,
+}
+
+impl<'d> Quant<'d> {
+    fn new(design: &'d Design, table: &[u8; 64]) -> Quant<'d> {
+        let sim = simulate(design, "jpeg_quant");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let mut q = Quant {
+            tbl_addr: top_net(&sim, "tbl_addr"),
+            tbl_data: top_net(&sim, "tbl_data"),
+            tbl_we: top_net(&sim, "tbl_we"),
+            in_coef: top_net(&sim, "in_coef"),
+            in_valid: top_net(&sim, "in_valid"),
+            in_ready: top_net(&sim, "in_ready"),
+            out_level: top_net(&sim, "out_level"),
+            out_valid: top_net(&sim, "out_valid"),
+            out_ready: top_net(&sim, "out_ready"),
+            clk,
+            sim,
+        };
+        q.sim.set(q.tbl_we, bit(false));
+        q.sim.set(q.in_valid, bit(false));
+        q.sim.set(q.out_ready, bit(false));
+        reset(&mut q.sim, clk, rst_n);
+        for (i, v) in table.iter().enumerate() {
+            q.sim.set(q.tbl_we, bit(true));
+            q.sim.set(q.tbl_addr, word(6, i as u64));
+            q.sim.set(q.tbl_data, word(8, u64::from(*v)));
+            cycle(&mut q.sim, clk, HALF);
+        }
+        q.sim.set(q.tbl_we, bit(false));
+        q
+    }
+
+    /// One block through. The timing is data-dependent — most
+    /// coefficients leave in two cycles and a large one in eleven — so
+    /// this follows the handshake and counts only to bound the loop.
+    fn block(&mut self, coefs: &[i32; 64]) -> [i32; 64] {
+        let mut sent = 0usize;
+        let mut got: Vec<i32> = Vec::with_capacity(64);
+        let mut cycles = 0u32;
+        while got.len() < 64 {
+            let feeding = sent < 64;
+            let v = coefs[sent.min(63)];
+            self.sim.set(self.in_valid, bit(feeding));
+            // The twelve bits a port carries for a signed coefficient,
+            // written as a conversion rather than a cast so the
+            // truncation is the masking and not the `as`.
+            let narrow = i16::try_from(v).expect("a twelve-bit coefficient");
+            let bits = u64::from(u16::from_le_bytes(narrow.to_le_bytes())) & 0x0FFF;
+            self.sim.set(self.in_coef, word(12, bits));
+            self.sim.set(self.out_ready, bit(true));
+            self.sim.run_for(1);
+            let took = feeding && high(&self.sim, self.in_ready);
+            let gave = high(&self.sim, self.out_valid);
+            let level = gave.then(|| {
+                let raw = u16::try_from(get_u64(&self.sim, self.out_level)).expect("twelve bits");
+                if raw & 0x800 != 0 {
+                    i32::from(raw) - 0x1000
+                } else {
+                    i32::from(raw)
+                }
+            });
+            cycle(&mut self.sim, self.clk, HALF);
+            if took {
+                sent += 1;
+            }
+            if let Some(l) = level {
+                got.push(l);
+            }
+            cycles += 1;
+            assert!(
+                cycles < 4000,
+                "the quantiser stalled: {sent} in, {} out",
+                got.len()
+            );
+        }
+        let mut out = [0i32; 64];
+        out.copy_from_slice(&got);
+        out
+    }
+}
+
+/// `round(coefficient / q)`, ties away from zero — the rule the module
+/// documents, which is the encoder's to choose because a decoder only
+/// ever multiplies by `q`.
+fn jpeg_quant_ref(coefs: &[i32; 64], table: &[u8; 64]) -> [i32; 64] {
+    let zz = jpeg_zigzag();
+    let mut out = [0i32; 64];
+    for p in 0..64 {
+        let c = coefs[zz[p]];
+        let q = i32::from(if table[p] == 0 { 1 } else { table[p] });
+        let mag = c.abs();
+        let level = (mag + q / 2) / q;
+        out[p] = if c < 0 { -level } else { level };
+    }
+    out
+}
+
+/// With a table of ones the output is the zig-zag permutation and
+/// nothing else.
+///
+/// **This checks the ordering on its own**, with the division reduced
+/// to the identity, so a wrong permutation cannot hide behind a
+/// plausible quotient. The coefficients are all distinct, so every one
+/// of the 64 positions is pinned rather than a sample of them: 0 to 63
+/// in natural order must come back as T.81 Figure A.6's own sequence.
+///
+/// Getting this round the wrong way — applying the inverse permutation,
+/// or indexing the table naturally instead of in zig-zag order — is the
+/// classic way to make a file that decodes to something recognisable
+/// and wrong, which is why the module's header says it twice and why
+/// this test exists separately from the arithmetic.
+#[test]
+fn jpeg_quant_reorders_into_the_zigzag_of_figure_a6() {
+    let design = design_of("mjpeg_enc", "jpeg_quant", &[]);
+    let mut q = Quant::new(&design, &[1u8; 64]);
+    let mut coefs = [0i32; 64];
+    for (i, c) in coefs.iter_mut().enumerate() {
+        *c = i32::try_from(i).expect("0 to 63");
+    }
+    let got = q.block(&coefs);
+    let zz = jpeg_zigzag();
+    let want: Vec<i32> = zz
+        .iter()
+        .map(|&n| i32::try_from(n).expect("0 to 63"))
+        .collect();
+    assert_eq!(got.to_vec(), want, "the zig-zag order");
+    // And the first few by hand, from the figure: along the top, down
+    // the left diagonal, back up.
+    assert_eq!(&got[..8], &[0, 1, 8, 16, 9, 2, 3, 10]);
+    assert_eq!(got[63], 63, "the last is the corner");
+}
+
+/// Division and rounding, against the rule the module documents.
+///
+/// Every divisor from 1 to 64 in one table, and coefficients that span
+/// the whole twelve-bit range including both extremes, so the
+/// restoring loop is exercised at every quotient width and at both
+/// signs. The early exit for a coefficient smaller than its divisor is
+/// the common path and is covered by the small values; the long path by
+/// the large ones.
+///
+/// What this would catch: a quotient bit dropped or doubled, the
+/// remainder not restored, the sign lost, rounding toward zero instead
+/// of to nearest, and the table indexed naturally rather than in
+/// zig-zag order. What it would not: whether this rounding is the
+/// *best* choice, which it is not the standard's business to say — a
+/// decoder multiplies by `q` and cannot tell the difference.
+#[test]
+fn jpeg_quant_divides_and_rounds_as_its_header_says() {
+    let design = design_of("mjpeg_enc", "jpeg_quant", &[]);
+    let mut table = [0u8; 64];
+    for (i, t) in table.iter_mut().enumerate() {
+        *t = u8::try_from(i + 1).expect("1 to 64");
+    }
+    let mut q = Quant::new(&design, &table);
+
+    let mut blocks: Vec<[i32; 64]> = Vec::new();
+    let mut x: u32 = 7;
+    for _ in 0..40 {
+        let mut b = [0i32; 64];
+        for c in b.iter_mut() {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            *c = i32::try_from((x >> 16) & 0xFFF).expect("twelve bits") - 2048;
+        }
+        blocks.push(b);
+    }
+    // The extremes and the ties, which random values reach rarely.
+    blocks.push([0i32; 64]);
+    blocks.push([2047i32; 64]);
+    blocks.push([-2048i32; 64]);
+    let mut ties = [0i32; 64];
+    for (i, c) in ties.iter_mut().enumerate() {
+        // Exactly half a divisor, where the rounding rule shows.
+        *c = i32::try_from(i + 1).expect("a divisor") / 2;
+    }
+    blocks.push(ties);
+
+    for (bi, b) in blocks.iter().enumerate() {
+        let got = q.block(b);
+        let want = jpeg_quant_ref(b, &table);
+        assert_eq!(got, want, "block {bi}");
+    }
+}
+
+/// A zero in the table divides by one rather than by zero.
+///
+/// `DQT` forbids a zero and nothing here can police what a caller
+/// writes, so the only question is what happens when one arrives. It
+/// is treated as a one, which is the only answer that is not a lie —
+/// and a divider left to run on a zero divisor would hang, which on a
+/// block with a handshake means the whole encoder stops.
+#[test]
+fn jpeg_quant_treats_a_zero_divisor_as_a_one() {
+    let design = design_of("mjpeg_enc", "jpeg_quant", &[]);
+    let mut table = [4u8; 64];
+    table[0] = 0;
+    table[37] = 0;
+    let mut q = Quant::new(&design, &table);
+    let coefs = [100i32; 64];
+    let got = q.block(&coefs);
+    assert_eq!(got[0], 100, "divided by one");
+    assert_eq!(got[37], 100, "divided by one");
+    assert_eq!(got[1], 25, "divided by four");
+}
 
 /// The real 8x8 forward DCT of T.81 §A.3.3, in double precision.
 ///
