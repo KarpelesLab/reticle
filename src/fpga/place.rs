@@ -1139,6 +1139,9 @@ pub struct PlacementReport {
     pub hpwl_before: u64,
     /// Half-perimeter wirelength after annealing.
     pub hpwl_after: u64,
+    /// The site kinds `spread_dense` spread before legalisation, as
+    /// `(kind, cells)`.
+    pub spread: Vec<(String, usize)>,
     /// How far legalisation moved the cells that were free to move from
     /// where the analytic solve put them, as `(tiles in all, cells)`. The
     /// anneal starts with a move window at least as wide as the average;
@@ -1204,6 +1207,9 @@ impl PlacementReport {
             "  wirelength: {} before annealing, {} after",
             self.hpwl_before, self.hpwl_after
         );
+        for (kind, cells) in &self.spread {
+            let _ = writeln!(out, "  spread {cells} {kind} cell(s) before legalising");
+        }
         let _ = writeln!(
             out,
             "  legalisation moved a cell {:.1} tile(s) on average",
@@ -2195,7 +2201,29 @@ pub fn place(
 
     let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
     let shared = SiteRules::find(netlist, graph);
-    let positions = solve_analytic(netlist, graph, &info, options);
+    let mut positions = solve_analytic(netlist, graph, &info, options);
+    let (spread, pinned) = spread_dense(
+        netlist,
+        graph,
+        &info,
+        &macros,
+        &sites_by_kind,
+        &shared,
+        &mut positions,
+    );
+    if !spread.is_empty() {
+        // Everything spreading left alone is solved again with the spread
+        // cells held where they now are: a flip-flop goes to the lookup
+        // tables it is wired to rather than to where the first solve, with
+        // everything piled at the middle, had put it.
+        let again = solve_analytic_with(netlist, graph, &info, options, CLIQUE_PINS, &pinned);
+        for (index, held) in pinned.iter().enumerate() {
+            if held.is_none() && info[index].fixed.is_none() {
+                positions[index] = again[index];
+            }
+        }
+    }
+    report.spread = spread;
     legalise(
         netlist,
         graph,
@@ -3401,17 +3429,19 @@ fn solve_analytic(
     info: &[Placeable],
     options: &PlaceOptions,
 ) -> Vec<(f64, f64)> {
-    solve_analytic_with(netlist, graph, info, options, CLIQUE_PINS)
+    solve_analytic_with(netlist, graph, info, options, CLIQUE_PINS, &[])
 }
 
 /// [`solve_analytic`] with the clique bound a parameter, so that a test
-/// can solve one net both ways.
+/// can solve one net both ways, and with `pinned` cells held where it
+/// says as a package pin holds a cell: see [`spread_dense`].
 fn solve_analytic_with(
     netlist: &Netlist,
     graph: &RoutingGraph,
     info: &[Placeable],
     options: &PlaceOptions,
     clique_pins: usize,
+    pinned: &[Option<(f64, f64)>],
 ) -> Vec<(f64, f64)> {
     let n = netlist.instances.len();
     let mut a = Sparse::new(n);
@@ -3426,11 +3456,17 @@ fn solve_analytic_with(
         by[i] += ANCHOR_WEIGHT * centre.1;
     }
     for i in 0..n {
-        if let Some(site) = info[i].fixed {
-            let (x, y) = graph.sites[site].tile;
+        let held = match (info[i].fixed, pinned.get(i).copied().flatten()) {
+            (Some(site), _) => {
+                let (x, y) = graph.sites[site].tile;
+                Some((f64::from(x), f64::from(y)))
+            }
+            (None, held) => held,
+        };
+        if let Some((x, y)) = held {
             a.add(i, i, FIXED_WEIGHT);
-            bx[i] += FIXED_WEIGHT * f64::from(x);
-            by[i] += FIXED_WEIGHT * f64::from(y);
+            bx[i] += FIXED_WEIGHT * x;
+            by[i] += FIXED_WEIGHT * y;
         }
     }
     // Which signal last counted each instance, so that a net's members are
@@ -3519,6 +3555,150 @@ fn to_grid(value: f64, size: u32) -> u32 {
     let limit = f64::from(size.saturating_sub(1));
     let clamped = value.round().clamp(0.0, limit);
     clamped as u32
+}
+
+/// What [`spread_dense`] returns: the kinds it spread, as `(kind, cells)`,
+/// and where it put each cell it spread.
+type Spread = (Vec<(String, usize)>, Vec<Option<(f64, f64)>>);
+
+/// The share of a kind's sites its cells must fill before
+/// [`spread_dense`] spreads them.
+const SPREAD_FROM: f64 = 0.5;
+
+/// And how many cells it must have. A handful of clock managers on a part
+/// with five sites fill most of them, and the legaliser places a handful
+/// as well as bisection could; spreading the four MMCMs of
+/// `testdata/fpga/husky/clock_managers.v` moved them, and with them where
+/// the second solve put the flip-flops they clock, onto general
+/// interconnect the flow then refused (`fpga_xray_cmt`).
+const SPREAD_MIN: usize = 256;
+
+/// Spreads the analytic solution of every site kind of [`SPREAD_MIN`]
+/// cells or more that fill more than [`SPREAD_FROM`] of its sites, by
+/// recursive bisection, and returns the kinds
+/// it spread and where it put each cell it spread.
+///
+/// A quadratic solve puts a design's cells where its nets pull them and
+/// nowhere near where they fit: on the ChipWhisperer-Husky, 95 % of whose
+/// lookup-table sites are used and 98 of whose cells a pin fixes, the
+/// solve piled them about the middle, the legaliser took sites outward
+/// from there in the order of the targets, and a cell ended **sixty
+/// tiles** on average from where the solve had put it — the solve's
+/// answer thrown away, and the anneal left to find a placement from
+/// scratch. Here a kind's movable cells and its sites are each sorted
+/// along the longer side of the sites' extent, the cells split in half
+/// and the sites in the same proportion, and each half recursed into, so
+/// every cell ends on a site of its own in the order the solve put them.
+/// A kind below the threshold is left alone: a small design's solve is
+/// legalised a tile or so away, and spreading it over the die would be
+/// a wrong answer, not a better one.
+///
+/// Left out: cells a pin fixes, cells confined to a region or by
+/// reachability, and the members of a macro other than its anchor, whose
+/// sites follow from the anchor's.
+fn spread_dense(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    macros: &[Macro],
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SiteRules,
+    positions: &mut [(f64, f64)],
+) -> Spread {
+    let mut pinned: Vec<Option<(f64, f64)>> = vec![None; info.len()];
+    let mut follower = vec![false; info.len()];
+    for m in macros {
+        for (member, _, _) in &m.members {
+            if *member != m.anchor {
+                follower[*member] = true;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (kind, sites) in sites_by_kind {
+        // A kind whose sites share pins with each other — a 7-series
+        // slice's flip-flops, one clock, enable and reset among four — is
+        // legalised by control set, and that needs the freedom a cell
+        // spread to a site of its own does not leave: spread too, the
+        // Husky's flip-flops took every slice in turn whatever its clock,
+        // and legalisation stopped with 6,177 sites free. Such a kind
+        // follows the others in a second solve instead. A lookup table
+        // shares its output with the carry beside it, which is no control
+        // set, and is spread.
+        if !shared.trivial()
+            && sites.iter().any(|s| {
+                shared.per_site[*s]
+                    .iter()
+                    .any(|(other, _, _)| graph.sites[*other].kind == *kind)
+            })
+        {
+            continue;
+        }
+        let cells: Vec<usize> = (0..netlist.instances.len())
+            .filter(|i| {
+                netlist.instances[*i].kind == *kind
+                    && info[*i].fixed.is_none()
+                    && info[*i].region.is_none()
+                    && info[*i].allowed.is_none()
+                    && !follower[*i]
+            })
+            .collect();
+        // Sites a fixed cell holds are not there to be spread onto.
+        let taken: HashSet<usize> = info.iter().filter_map(|p| p.fixed).collect();
+        let mut free: Vec<(u32, u32)> = sites
+            .iter()
+            .filter(|s| !taken.contains(s))
+            .map(|s| graph.sites[*s].tile)
+            .collect();
+        if cells.len() < SPREAD_MIN || (cells.len() as f64) < SPREAD_FROM * free.len() as f64 {
+            continue;
+        }
+        let mut items: Vec<(usize, f64, f64)> = cells
+            .iter()
+            .map(|i| (*i, positions[*i].0, positions[*i].1))
+            .collect();
+        bisect(&mut items, &mut free, positions);
+        for cell in &cells {
+            pinned[*cell] = Some(positions[*cell]);
+        }
+        out.push((kind.clone(), cells.len()));
+    }
+    (out, pinned)
+}
+
+/// One step of [`spread_dense`]: `cells` onto `sites`, in proportion.
+fn bisect(cells: &mut [(usize, f64, f64)], sites: &mut [(u32, u32)], out: &mut [(f64, f64)]) {
+    if cells.is_empty() || sites.is_empty() {
+        return;
+    }
+    let (x0, x1, y0, y1) = sites
+        .iter()
+        .fold((u32::MAX, 0, u32::MAX, 0), |(a, b, c, d), (x, y)| {
+            (a.min(*x), b.max(*x), c.min(*y), d.max(*y))
+        });
+    let along_x = x1 - x0 >= y1 - y0;
+    if cells.len() == 1 || (x0 == x1 && y0 == y1) {
+        // Down to one cell, or to one tile: the cells take the sites in
+        // turn, which in a tile are all the same place.
+        for (n, (cell, _, _)) in cells.iter().enumerate() {
+            let (x, y) = sites[n * sites.len() / cells.len()];
+            out[*cell] = (f64::from(x), f64::from(y));
+        }
+        return;
+    }
+    if along_x {
+        cells.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        sites.sort_unstable_by_key(|(x, y)| (*x, *y));
+    } else {
+        cells.sort_by(|a, b| a.2.total_cmp(&b.2).then(a.0.cmp(&b.0)));
+        sites.sort_unstable_by_key(|(x, y)| (*y, *x));
+    }
+    let half = cells.len() / 2;
+    let cut = (sites.len() * half / cells.len()).clamp(1, sites.len() - 1);
+    let (left_cells, right_cells) = cells.split_at_mut(half);
+    let (left_sites, right_sites) = sites.split_at_mut(cut);
+    bisect(left_cells, left_sites, out);
+    bisect(right_cells, right_sites, out);
 }
 
 /// How far, in tiles in all and over how many instances, legalisation
@@ -6363,7 +6543,8 @@ mod tests {
     /// cells across the die, which is a wirelength question and not a
     /// legality one.
     /// **The anneal starts no narrower than legalisation moved a cell.**
-    /// Forty sinks of one net on an eight-by-eight grid: the solve puts
+    /// Twenty-five sinks of one net on an eight-by-eight grid — under
+    /// half its sites, so `spread_dense` leaves them — : the solve puts
     /// them all on the driver, the legaliser spreads them over several
     /// tiles, and the first temperature's window has to reach that far.
     /// Would catch the floor being dropped, which left the ChipWhisperer-
@@ -6373,7 +6554,7 @@ mod tests {
     #[test]
     fn the_anneal_starts_as_wide_as_legalisation_moved_a_cell() {
         let (arch, graph) = grid(8, 8);
-        let netlist = fan_out(40);
+        let netlist = fan_out(25);
         let (_, report) = place(
             &netlist,
             &arch,
@@ -6384,6 +6565,7 @@ mod tests {
         .unwrap();
         let mean = report.mean_displacement();
         assert!(mean > 1.0, "the fixture should displace: {mean}");
+        assert!(report.spread.is_empty(), "{:?}", report.spread);
         let first = report.schedule.first().expect("an anneal ran");
         assert!(
             f64::from(first.range_limit) >= mean.ceil(),
@@ -6391,6 +6573,52 @@ mod tests {
             first.range_limit
         );
         assert!(report.to_text().contains("legalisation moved a cell"));
+    }
+
+    /// **Bisection keeps the solve's order and gives each cell a site.**
+    /// Four cells piled near the origin in a known left-to-right order,
+    /// and four sites in a row: each cell takes its own site, in that
+    /// order. Would catch the cut taking sites out of proportion (two
+    /// cells on one site) or the sort losing the order; would not catch
+    /// a poor choice of axis on a square, which only costs wirelength.
+    #[test]
+    fn bisection_keeps_the_solves_order_and_gives_each_cell_a_site() {
+        let mut cells = vec![
+            (2usize, 0.3, 0.0),
+            (0, 0.1, 0.0),
+            (3, 0.4, 0.0),
+            (1, 0.2, 0.0),
+        ];
+        let mut sites = vec![(3u32, 0u32), (0, 0), (2, 0), (1, 0)];
+        let mut out = vec![(0.0, 0.0); 4];
+        bisect(&mut cells, &mut sites, &mut out);
+        assert_eq!(out, vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)]);
+    }
+
+    /// **A kind that fills most of its sites is spread before it is
+    /// legalised.** Three hundred sinks of one net on a twenty-by-twenty
+    /// grid, three quarters of its sites: piled on the driver by the solve,
+    /// spread, and legalised close to where spreading put them. Would catch the spread
+    /// not running above the threshold, or its targets ignored; the
+    /// threshold itself is the previous test's.
+    #[test]
+    fn a_full_kind_is_spread_before_it_is_legalised() {
+        let (arch, graph) = grid(20, 20);
+        let netlist = fan_out(300);
+        let (_, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(report.spread, vec![("lut".to_owned(), 301)]);
+        assert!(
+            report.mean_displacement() < 1.0,
+            "spread cells moved {} tiles in legalisation",
+            report.mean_displacement()
+        );
     }
 
     /// **A star is the clique it replaces.** A fan-out of 100 from a cell
@@ -6417,8 +6645,8 @@ mod tests {
             analytic_iterations: 2000,
             ..PlaceOptions::default()
         };
-        let clique = solve_analytic_with(&netlist, &graph, &info, &options, usize::MAX);
-        let star = solve_analytic_with(&netlist, &graph, &info, &options, 2);
+        let clique = solve_analytic_with(&netlist, &graph, &info, &options, usize::MAX, &[]);
+        let star = solve_analytic_with(&netlist, &graph, &info, &options, 2, &[]);
         assert_eq!(clique.len(), netlist.instances.len());
         assert_eq!(star.len(), clique.len(), "a centre leaked into the answer");
         for (i, (c, s)) in clique.iter().zip(&star).enumerate() {
