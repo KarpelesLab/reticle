@@ -1241,7 +1241,7 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
     assert_eq!(
         bits.ones(),
-        1335,
+        1333,
         "set bits in the whole image, pads, pipeline registers and routing included. This was \
          1274 when the block RAM was written, against the fixed-schedule annealer; the adaptive \
          one placed the same design better and brought it to 1259; and it is 1352 now because a \
@@ -1259,7 +1259,8 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
          before it opens one` and `perf(place): a large net is a star` place this netlist \
          differently and the routing that follows is shorter. Attributed by measurement and not \
          by reading: the count is 1335 with `synth::proc`'s balanced case enable switched off as \
-         well as on, so the synthesiser is not what moved it"
+         well as on, so the synthesiser is not what moved it. **18 October 2026:** \
+         the placer and the router moved it again, to 1333, on `perf(place): the anneal starts as wide as legalisation moved a cell`, `perf(route): a free first pass, a box from the second, and a charge of two a tile` and `perf(xray): a wire costs the router one, not one per tile it crosses`. Attributed by running these three tests on `origin/master` alone in a worktree, where they fail with the same numbers."
     );
     // The buffer is on a site the clock's own pad can drive, and the
     // placer is what knows that rather than the constraints file. Ball A2
@@ -1879,7 +1880,7 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        63,
+        74,
         "logic tiles the design occupies. **This was 65 before the ECP5 inferred a carry chain**, \
          and the eight it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
          and an XOR per bit and is three `CCU2C` plus a share of two constant lookup tables now, \
@@ -1915,7 +1916,8 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
          not what moved it. Six tiles wider is the opposite direction to the paragraph above and \
          is recorded, not defended — nothing here has measured whether the wirelength and the \
          pip count paid for them, and until something does this is a number that moved and not a \
-         number that improved"
+         number that improved. **18 October 2026:** the placer and the router moved it again, to 74, on `perf(place): the anneal starts as wide as legalisation moved a cell`, `perf(route): a free first pass, a box from the second, and a charge of two a tile` and `perf(xray): a wire costs the router one, not one per tile it crosses`. Attributed by running these three tests on `origin/master` alone in a worktree, where they fail with the same numbers. Eleven tiles wider \
+         again, and the same caveat stands: nothing here has measured what it bought"
     );
 
     // ---- every bit decodes, and nothing is unexplained ----
@@ -5247,7 +5249,9 @@ fn a_register_bit_nothing_drives_is_built_from_a_constant() {
     // `M` wire, two bits each. The structural checks above are what pin
     // those; this total is here so that a change which quietly doubles the
     // image is noticed.
-    assert_eq!(decoded.bits, 180, "the size of the finished image");
+    //
+    // **18 October 2026:** the placer and the router moved it again, to 187, on `perf(place): the anneal starts as wide as legalisation moved a cell`, `perf(route): a free first pass, a box from the second, and a charge of two a tile` and `perf(xray): a wire costs the router one, not one per tile it crosses`. Attributed by running these three tests on `origin/master` alone in a worktree, where they fail with the same numbers.
+    assert_eq!(decoded.bits, 187, "the size of the finished image");
     assert_eq!(decoded.words.len(), 5, "four mapped LUTs and the constant");
 }
 
