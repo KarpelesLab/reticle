@@ -437,6 +437,11 @@ const VARIANTS: &[Variant] = &[
         params: &[],
     },
     Variant {
+        package: "mjpeg_enc",
+        top: "mjpeg_enc",
+        params: &[("WIDTH", "640"), ("HEIGHT", "480")],
+    },
+    Variant {
         package: "adpcm_ima",
         top: "adpcm_ima_enc",
         params: &[],
@@ -12258,6 +12263,322 @@ fn vga_out_truncates_the_colour_to_the_boards_width() {
 // ---------------------------------------------------------------------------
 // mjpeg_enc
 // ---------------------------------------------------------------------------
+
+/// One record of `testdata/ip/mjpeg_enc_corpus.txt`.
+struct TopCase {
+    name: String,
+    width: u32,
+    height: u32,
+    /// What ffmpeg measured when the case was generated, in decibels.
+    psnr: f64,
+    qtable: [u8; 64],
+    /// The samples, block by block and row-major inside each.
+    pixels: Vec<u8>,
+    /// The whole file, from `SOI` to `EOI`.
+    file: Vec<u8>,
+}
+
+struct TopCorpus {
+    dc_bits: [u8; 16],
+    dc_vals: Vec<u8>,
+    ac_bits: [u8; 16],
+    ac_vals: Vec<u8>,
+    cases: Vec<TopCase>,
+}
+
+fn top_corpus() -> &'static TopCorpus {
+    static CORPUS: OnceLock<TopCorpus> = OnceLock::new();
+    CORPUS.get_or_init(|| {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/mjpeg_enc_corpus.txt");
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let mut c = TopCorpus {
+            dc_bits: [0; 16],
+            dc_vals: Vec::new(),
+            ac_bits: [0; 16],
+            ac_vals: Vec::new(),
+            cases: Vec::new(),
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let (tag, rest) = line.split_once(' ').expect("a tagged line");
+            let rest = rest.trim();
+            match tag {
+                "dcbits" | "acbits" => {
+                    let v = hex_bytes(rest);
+                    assert_eq!(v.len(), 16, "{tag}");
+                    let into = if tag == "dcbits" {
+                        &mut c.dc_bits
+                    } else {
+                        &mut c.ac_bits
+                    };
+                    into.copy_from_slice(&v);
+                }
+                "dcvals" => c.dc_vals = hex_bytes(rest),
+                "acvals" => c.ac_vals = hex_bytes(rest),
+                "case" => {
+                    let f: Vec<&str> = rest.split_whitespace().collect();
+                    c.cases.push(TopCase {
+                        name: f[0].to_owned(),
+                        width: f[1].parse().expect("a width"),
+                        height: f[2].parse().expect("a height"),
+                        psnr: f[3].parse().expect("a PSNR"),
+                        qtable: [0; 64],
+                        pixels: Vec::new(),
+                        file: Vec::new(),
+                    });
+                }
+                "qtable" => {
+                    let v = hex_bytes(rest);
+                    let case = c.cases.last_mut().expect("a case first");
+                    assert_eq!(v.len(), 64, "a quantisation table is 64 bytes");
+                    case.qtable.copy_from_slice(&v);
+                }
+                "pixels" => c
+                    .cases
+                    .last_mut()
+                    .expect("a case first")
+                    .pixels
+                    .extend(hex_bytes(rest)),
+                "file" => c
+                    .cases
+                    .last_mut()
+                    .expect("a case first")
+                    .file
+                    .extend(hex_bytes(rest)),
+                other => panic!("unknown tag `{other}` in the encoder corpus"),
+            }
+        }
+        c
+    })
+}
+
+/// A bench over `mjpeg_enc`.
+struct Encoder<'d> {
+    sim: Simulator<'d>,
+    clk: NetHandle,
+    cfg_sel: NetHandle,
+    cfg_addr: NetHandle,
+    cfg_data: NetHandle,
+    cfg_we: NetHandle,
+    start: NetHandle,
+    in_pixel: NetHandle,
+    in_valid: NetHandle,
+    in_ready: NetHandle,
+    out_byte: NetHandle,
+    out_valid: NetHandle,
+    out_ready: NetHandle,
+    done: NetHandle,
+}
+
+impl<'d> Encoder<'d> {
+    fn new(design: &'d Design) -> Encoder<'d> {
+        let sim = simulate(design, "mjpeg_enc");
+        let clk = top_net(&sim, "clk");
+        let rst_n = top_net(&sim, "rst_n");
+        let mut e = Encoder {
+            cfg_sel: top_net(&sim, "cfg_sel"),
+            cfg_addr: top_net(&sim, "cfg_addr"),
+            cfg_data: top_net(&sim, "cfg_data"),
+            cfg_we: top_net(&sim, "cfg_we"),
+            start: top_net(&sim, "start"),
+            in_pixel: top_net(&sim, "in_pixel"),
+            in_valid: top_net(&sim, "in_valid"),
+            in_ready: top_net(&sim, "in_ready"),
+            out_byte: top_net(&sim, "out_byte"),
+            out_valid: top_net(&sim, "out_valid"),
+            out_ready: top_net(&sim, "out_ready"),
+            done: top_net(&sim, "done"),
+            clk,
+            sim,
+        };
+        for h in [e.cfg_we, e.start, e.in_valid, e.out_ready] {
+            e.sim.set(h, bit(false));
+        }
+        reset(&mut e.sim, clk, rst_n);
+        e
+    }
+
+    /// Writes one byte into one of the three table regions.
+    fn cfg(&mut self, sel: u64, addr: u64, data: u8) {
+        self.sim.set(self.cfg_we, bit(true));
+        self.sim.set(self.cfg_sel, word(2, sel));
+        self.sim.set(self.cfg_addr, word(8, addr));
+        self.sim.set(self.cfg_data, word(8, u64::from(data)));
+        cycle(&mut self.sim, self.clk, HALF);
+        self.sim.set(self.cfg_we, bit(false));
+    }
+
+    /// Loads the tables in the form the file carries them.
+    fn load(&mut self, qtable: &[u8; 64], c: &TopCorpus) {
+        for (i, v) in qtable.iter().enumerate() {
+            self.cfg(0, i as u64, *v);
+        }
+        for (sel, bits, vals) in [(1u64, &c.dc_bits, &c.dc_vals), (2, &c.ac_bits, &c.ac_vals)] {
+            for (i, v) in bits.iter().enumerate() {
+                self.cfg(sel, i as u64, *v);
+            }
+            for (i, v) in vals.iter().enumerate() {
+                self.cfg(sel, 16 + i as u64, *v);
+            }
+        }
+    }
+
+    /// One frame: `start`, the pixels, and every byte of the file.
+    fn frame(&mut self, pixels: &[u8]) -> Vec<u8> {
+        self.sim.set(self.start, bit(true));
+        cycle(&mut self.sim, self.clk, HALF);
+        self.sim.set(self.start, bit(false));
+
+        let mut sent = 0usize;
+        let mut got: Vec<u8> = Vec::new();
+        let mut cycles = 0u32;
+        loop {
+            let feeding = sent < pixels.len();
+            self.sim.set(self.in_valid, bit(feeding));
+            self.sim.set(
+                self.in_pixel,
+                word(8, u64::from(pixels[sent.min(pixels.len() - 1)])),
+            );
+            self.sim.set(self.out_ready, bit(true));
+            self.sim.run_for(1);
+            let took = feeding && high(&self.sim, self.in_ready);
+            let byte = high(&self.sim, self.out_valid)
+                .then(|| u8::try_from(get_u64(&self.sim, self.out_byte)).expect("a byte"));
+            let finished = high(&self.sim, self.done);
+            cycle(&mut self.sim, self.clk, HALF);
+            if took {
+                sent += 1;
+            }
+            if let Some(b) = byte {
+                got.push(b);
+            }
+            if finished {
+                break;
+            }
+            cycles += 1;
+            assert!(
+                cycles < 2_000_000,
+                "the encoder stalled: {sent} of {} pixel(s) in, {} byte(s) out",
+                pixels.len(),
+                got.len()
+            );
+        }
+        got
+    }
+}
+
+/// The whole encoder, against whole files that ffmpeg decoded.
+///
+/// **The strongest check in this package, and the reason the other
+/// three exist.** Every `file` in the corpus was decoded by ffmpeg when
+/// it was generated — no warning, no error, and the PSNR against the
+/// pixels that went in is on the case line. A wrong marker, a wrong
+/// length field, a `DHT` that disagrees with the codes used to write
+/// the scan, a missing `EOB` or absent byte stuffing does not make a
+/// worse picture: it makes a file nothing opens. So a case that
+/// survives that round trip says the file is really a JPEG, and this
+/// corpus is what lets the gate say it again without ffmpeg installed.
+///
+/// Six pictures — flat, a ramp, hard block edges, a noisy sine at a
+/// width that is not a multiple of sixteen, noise at a quantisation
+/// table of all ones where the categories reach what Annex K can just
+/// about code, and a varied table so the divisors are not all equal.
+///
+/// What this would catch: anything any of the three blocks gets wrong,
+/// since every byte of the scan passes through all of them; a header
+/// byte wrong anywhere; a `DHT` length field that does not match the
+/// symbols; the Huffman codes derived wrongly from the `DHT` form by
+/// §C.2; the quantisation table written to the file and to the
+/// quantiser in different orders; and the pixels taken before the
+/// header is out. What it would not: colour, which this encoder has
+/// not got; anything about line buffering, since the pixels arrive a
+/// block at a time; and whether the picture *looks* right, which is
+/// the PSNR on the case line and was ffmpeg's to judge.
+#[test]
+fn mjpeg_enc_writes_files_ffmpeg_decoded() {
+    let c = top_corpus();
+    assert_eq!(c.cases.len(), 6, "the cases this file holds");
+    for case in &c.cases {
+        assert_eq!(
+            case.pixels.len(),
+            (case.width * case.height) as usize,
+            "{}: the pixel count",
+            case.name
+        );
+        assert!(case.psnr > 30.0, "{}: {} dB", case.name, case.psnr);
+        let design = design_of(
+            "mjpeg_enc",
+            "mjpeg_enc",
+            &[
+                ("WIDTH", &case.width.to_string()),
+                ("HEIGHT", &case.height.to_string()),
+            ],
+        );
+        let mut enc = Encoder::new(&design);
+        enc.load(&case.qtable, c);
+        let got = enc.frame(&case.pixels);
+        if got != case.file {
+            let at = got
+                .iter()
+                .zip(&case.file)
+                .position(|(a, b)| a != b)
+                .unwrap_or(got.len().min(case.file.len()));
+            panic!(
+                "{}: {} byte(s) out, {} expected; first difference at {at}\n \
+                 got  {}\n want {}",
+                case.name,
+                got.len(),
+                case.file.len(),
+                hex_of(&got[at.saturating_sub(8)..(at + 8).min(got.len())]),
+                hex_of(&case.file[at.saturating_sub(8)..(at + 8).min(case.file.len())])
+            );
+        }
+    }
+}
+
+/// Two frames from one instance, and the second identical to the first.
+///
+/// **Motion JPEG is this module run again**, so the frame boundary is
+/// the ordinary case. Everything a frame leaves behind has to be put
+/// back: the coder's DC predictor and coefficient position, the header
+/// builder's pointers, and the tables, which are derived again from the
+/// configuration memory rather than remembered. A single `start` has to
+/// be enough, too — `S_DONE` once only fell back to the state that
+/// waits for `start`, so a caller that sent one pulse waited for ever.
+///
+/// What this would catch: any of that state surviving a frame, and a
+/// second `start` being needed. What it would not: a frame whose
+/// *pixels* differ from the first's, since this sends the same ones —
+/// the corpus covers the content and this covers the boundary.
+#[test]
+fn mjpeg_enc_encodes_a_second_frame_the_same_as_the_first() {
+    let c = top_corpus();
+    for case in c.cases.iter().filter(|c| c.name != "flat16") {
+        let design = design_of(
+            "mjpeg_enc",
+            "mjpeg_enc",
+            &[
+                ("WIDTH", &case.width.to_string()),
+                ("HEIGHT", &case.height.to_string()),
+            ],
+        );
+        let mut enc = Encoder::new(&design);
+        enc.load(&case.qtable, c);
+        let first = enc.frame(&case.pixels);
+        let second = enc.frame(&case.pixels);
+        assert_eq!(first, case.file, "{}: the first frame", case.name);
+        assert_eq!(
+            hex_of(&second),
+            hex_of(&first),
+            "{}: the second frame differs from the first",
+            case.name
+        );
+    }
+}
 
 /// One record of `testdata/ip/jpeg_entropy_corpus.txt`.
 struct Entropy {

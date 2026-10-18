@@ -1,20 +1,25 @@
 # `mjpeg_enc`
 
-Baseline JPEG, on the way to Motion JPEG.
-
-**This package is not finished.** What exists:
+A baseline **greyscale** JPEG encoder: pixels in, a whole file out,
+from its `SOI` to its `EOI`.
 
 | module | what it is |
 |---|---|
+| `mjpeg_enc` | the whole encoder, and the package's `top` |
 | `jpeg_fdct` | the 8x8 forward DCT of §A.3.3, with the level shift of §A.3.1 |
 | `jpeg_quant` | quantisation and the zig-zag of §A.3.4 and Figure A.6 |
 | `jpeg_entropy` | the entropy coder of §F.1.2: DC prediction, run-length, Huffman, byte stuffing |
 
-Still to come: the colour transform, and the framing that turns a
-stream of blocks into a file. The version is 0.1.0 and `top` will become `mjpeg_enc` when
-there is one.
+**Greyscale, and the version 0.1.0 says so.** Colour wants a DC
+predictor and a pair of tables for each of three components, and 4:2:0
+wants the subsampling and the macroblock order on top; neither is here.
+Nor are restart markers, a JFIF `APP0` segment, progressive mode or
+arithmetic coding. Pixels arrive a block at a time, not in raster
+order — see *The pixel order is block order* below.
 
-**Nothing in this package has been run on a board.**
+**Nothing in this package has been run on a board.** What is proved is
+what `tests/ip_library.rs` checks in simulation and what the FPGA flow
+reports; *What is and is not proved* at the end says which is which.
 
 ## Why the DCT is not checked the way `adpcm_ima` is
 
@@ -340,6 +345,185 @@ are the caller's to write into both this block and the file; and a
 `DHT` that gives a symbol no code at all, which this block cannot
 detect and which makes a file nothing can read.
 
+## `mjpeg_enc`, the whole thing
+
+### One source of truth for each table
+
+A JPEG carries its quantisation table in `DQT` and its Huffman tables
+in `DHT`, and the encoder needs the same numbers. **The caller writes
+each table once**, through `cfg_*`, in exactly the form the file
+carries it: 64 bytes in zig-zag order for `DQT`, and for each `DHT` the
+sixteen counts of codes per length followed by the symbols. This module
+puts them in the file *and* derives what the blocks need from them —
+the quantiser's divisors verbatim, and the coder's codes by the
+canonical procedure of §C.2.
+
+That is the whole reason `jpeg_quant` and `jpeg_entropy` take tables
+rather than containing Annex K. **A table written twice is a table that
+can disagree with itself**, and a file whose `DHT` does not match the
+codes used to write the scan decodes to nothing — which makes it a
+defect that no amount of looking at the picture would find, because
+there is no picture.
+
+So the §C.2 derivation is exercised by every case in the corpus rather
+than tested on its own: the codes in the scan and the counts in the
+`DHT` come from the same walk, and ffmpeg read both.
+
+### How a frame goes
+
+`start` begins one.
+
+| phase | what happens | cycles |
+|---|---|---|
+| prepare | the Huffman codes derived, the divisors copied into the quantiser, the header assembled in memory | about 700 |
+| header | the header emitted as one run | 2 a byte |
+| data | pixels in, coded bytes out behind them | the blocks' |
+| flush | the last code, `EOB`, the padded byte, then `FF D9` | tens |
+
+The coder has no "finished" line, so the flush ends when nothing has
+come out for 64 cycles. **That number was measured and not guessed**:
+shrinking it, the corpus passes at 16 and fails at 15, so the longest
+gap the coder leaves between two bytes is sixteen cycles — a code and
+its magnitude bits shifted a bit a cycle. Four times that is the
+margin, and a `DHT` with longer codes than Annex K's would eat into it.
+
+**Pixels are not accepted until the header is out.** They could be,
+with another buffer; they are not, because the coded bytes would then
+queue behind a header that is still going and the buffer would have to
+be as deep as the header is long. `in_ready` says so and a caller that
+honours the handshake needs to know nothing about it.
+
+`done` rises when the last byte has been taken, and **one more `start`
+begins the next frame** — which is what Motion JPEG is. Everything a
+frame leaves behind is put back, including the tables, which are
+derived again rather than remembered.
+
+### The pixel order is block order
+
+64 samples a block, row-major inside the block, and the blocks in
+raster order across the picture. **Not raster order over the whole
+picture**, which would need eight lines of it buffered — 15 kilobytes
+at 640 wide, four block RAMs, and a module about line buffering rather
+than about JPEG. A design with a frame buffer has blocks for the
+asking; one with a camera needs those line buffers, and they are not
+here. `WIDTH` and `HEIGHT` must both be multiples of eight, because
+this encoder does not pad an edge block.
+
+### The configuration memory, and the frame that read its own wreckage
+
+One 2048-byte memory holds all of it: the quantisation table at
+`0x000`, the two `DHT`s at `0x100` and `0x200`, and the assembled
+header at `0x400`. One read port and **one** write port, the caller's
+writes and the builder's multiplexed outside it — written as two write
+arms, inference saw two ports and left a generic `memory 2048x8` in the
+netlist that neither backend could map.
+
+The header region is 1024 bytes for 310 bytes of header, and the margin
+is the point. At `0x300` in a 1024-byte memory the header ran off the
+end and wrapped onto the quantisation table. **The first frame was
+perfect**: the quantiser had already been loaded from the table before
+the builder overwrote it. The second read the wreckage and wrote a file
+whose `DQT` was the tail of the AC symbol list. A single-frame test
+could not have found that, and
+`mjpeg_enc_encodes_a_second_frame_the_same_as_the_first` is there
+because of it.
+
+### Three off-by-ones, all the same off-by-one
+
+The memory answers a cycle late, and every reader of it got that wrong
+once:
+
+* **the quantiser's divisors.** `tbl_we` is registered, so the write
+  lands the cycle after the state that asks for it — by which time
+  `q_addr` has moved on but `cfg_q` has not. Divisor `k` went into
+  entry `k + 1`, entry 0 was never written at all, the DC coefficient
+  was divided by an undefined value, and the coder's table lookup
+  never resolved. The whole encoder stalled with a quarter of a
+  million bytes of nothing out.
+* **the header's copied runs.** The read issued when a copy is
+  dispatched lands two cycles later, so going straight to the first
+  write copied whatever the previous read had left behind and shifted
+  the run by a byte: a header of exactly the right length with every
+  table one entry out.
+* **and then the same run one cycle the other way.** `rd_addr` is a
+  register too, so the address has to be *assigned* two cycles before
+  the byte is wanted, not one. One ahead made every byte of a run the
+  byte before it.
+
+They are listed because the shape recurs: in this flow a memory read is
+`cfg_q` a cycle after `rd_addr`, and `rd_addr` a cycle after what was
+assigned to it, so **a value is wanted two assignments early**. The
+emitting path got it right by accident — its armed/unarmed alternation
+is exactly two cycles a byte.
+
+### Against ffmpeg, whole files
+
+`testdata/ip/mjpeg_enc_corpus.txt` holds six pictures, and every `file`
+in it was **decoded by ffmpeg** when it was generated: no warning, no
+error, and the PSNR against the pixels that went in is on the case
+line.
+
+| case | size | what it is for | PSNR |
+|---|---|---|---|
+| `flat16` | 16x16 | the degenerate scan: one DC code and `EOB` | 99.00 |
+| `ramp16` | 16x16 | a gradient, so the DC predictor differences | 46.37 |
+| `edges16` | 16x16 | hard block edges, so the AC categories spread | 51.14 |
+| `sine24` | 24x16 | a width that is not a multiple of sixteen | 34.96 |
+| `noise16q1` | 16x16 | a divisor of one everywhere: the largest categories Annex K can code | 60.45 |
+| `sine16qv` | 16x16 | a varied table, so the divisors are not all equal | 33.40 |
+
+This is **the strongest check in the package and the reason the other
+three exist**. A wrong marker, a wrong length field, a `DHT` that
+disagrees with the scan, a missing `EOB` or absent byte stuffing does
+not make a worse picture: it makes a file nothing opens. A case that
+survives that round trip says the file is really a JPEG, and the corpus
+is what lets the gate say it again without ffmpeg installed.
+
+### What the tests would and would not catch
+
+Each was checked against a deliberately broken encoder:
+
+| defect introduced | caught by |
+|---|---|
+| the quantiser's divisors written one entry out | the corpus — it stalls outright |
+| the copy's read one cycle late | the corpus, at the first `DHT` |
+| a byte of `SOF0` wrong (the width's low byte) | the corpus, at that byte |
+| a `DHT` length field wrong | the corpus, at that byte |
+| the header region overrunning the memory | **only** the second-frame test |
+| the header pointer not reset between frames | both |
+
+The fifth row is the one worth keeping in view: a defect that leaves
+the first frame byte-perfect is invisible to any test that encodes one
+frame.
+
+What none of them would catch: colour, which this encoder has not got;
+anything about line buffering, since the pixels arrive a block at a
+time; a `DHT` giving some symbol no code, which makes an unreadable
+file and which nothing here checks; and whether the picture *looks*
+right, which is the PSNR on the case line and was ffmpeg's to judge.
+
+### Area, and the depth to watch
+
+Whole, at 640x480, from `docs/ip-library.md`:
+
+| | LUT4 | depth | flip-flops | block RAM |
+|---|---|---|---|---|
+| ECP5 45F | 3042 | 14 | 886 | 7 x DP16KD |
+| iCE40 HX1K | 3473 | 19 | 888 | 10 x SB_RAM40_4K |
+
+**19 on a four-input fabric is the depth that did not meet 60 MHz** in
+`docs/fpga-trellis.md`, and it is a statement about four-input parts
+rather than about this design: an HX1K has 1280 lookup tables and this
+needs 3473, so it will not go on one anyway. On the ECP5 it is 14. No
+part has been asked to run it.
+
+Of the seven ECP5 blocks, one is the transform's transpose buffer,
+three are the coder's symbol table, two are the quantiser's divisors
+and natural-order block, and one is the configuration memory. Giving
+the header a kilobyte it does not need costs nothing there, because
+2048 bytes and 1024 are both one `DP16KD`; on the iCE40, whose blocks
+are 4 kilobits, it is two more.
+
 ## What is and is not proved
 
 Proved, by `tests/ip_library.rs`:
@@ -368,8 +552,15 @@ Proved for `jpeg_entropy`: every byte of all nine corpus cases, exactly
 — against a model that whole-file decoding by ffmpeg validated — with
 the codes derived in the test from the `DHT` form by §C.2.
 
+Proved for `mjpeg_enc`: every byte of six whole files that ffmpeg
+decoded, at four picture sizes and three quantisation tables; and a
+second frame from the same instance identical to the first, on five of
+the six, which is the only check that sees what a frame leaves behind.
+
 Not proved, and not claimed: that the transform agrees with any other
 encoder, which it will not and need not; that the quantiser's rounding
 or any particular table is a *good* choice, which is a question about
-pictures and not about correctness; anything about colour or framing,
-neither of which exists yet; and anything on a part.
+pictures and not about correctness; anything about colour, which does
+not exist here; anything about line buffering, since pixels arrive a
+block at a time; and anything on a part — no bitstream containing this
+encoder has been built or loaded.

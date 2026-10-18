@@ -1,11 +1,21 @@
-# mjpeg_enc — baseline JPEG, towards Motion JPEG.
+# mjpeg_enc — a baseline greyscale JPEG encoder: pixels in, a whole
+# file out, from `SOI` to `EOI`.
 #
-# **Not finished.** What exists is `jpeg_fdct`, the 8x8 forward
-# discrete cosine transform of ITU T.81 §A.3.3 with the level shift of
-# §A.3.1. Still to come: quantisation and the zig-zag of §A.3.6, the
-# entropy coder of §F.1.2 with Annex K's tables, the colour transform,
-# and the framing that turns a block stream into a file. The version is
-# 0.1.0 and the `top` will become `mjpeg_enc` when there is one.
+# `mjpeg_enc` puts the three blocks below in a row and writes T.81's
+# markers around them. The caller writes each table **once**, in the
+# form the file carries it, and this module both puts it in the file
+# and derives what the blocks need from it -- the quantiser's divisors
+# verbatim, and the coder's Huffman codes by the canonical procedure of
+# §C.2. A table written twice is a table that can disagree with
+# itself, and a file whose `DHT` does not match the codes used to write
+# it decodes to nothing.
+#
+# **Greyscale only, and the version says so.** Colour wants a DC
+# predictor and a pair of tables for each of three components, and
+# 4:2:0 wants the subsampling and the macroblock order on top. The
+# pixels go in a block at a time rather than in raster order: eight
+# buffered lines of a 640-wide picture is four block RAMs and a module
+# about line buffering rather than about JPEG.
 #
 # The transform is **not bit-exact against any other implementation and
 # cannot be**: T.81 defines it mathematically and leaves the arithmetic
@@ -15,9 +25,9 @@
 name mjpeg_enc
 version 0.1.0
 license MIT
-description "Baseline JPEG, in progress: the 8x8 forward DCT of T.81 A.3.3 in fixed point, with the level shift, measured against a double-precision transform"
+description "Baseline greyscale JPEG encoder: pixels in, a whole file out, with the Huffman codes derived from the DHT the file carries; whole files checked against ffmpeg's decoder"
 
-top jpeg_fdct
+top mjpeg_enc
 target ice40
 target ecp5
 target xc7
@@ -25,12 +35,19 @@ target xc7
 source rtl/jpeg_fdct.v
 source rtl/jpeg_quant.v
 source rtl/jpeg_entropy.v
+source rtl/mjpeg_enc.v
 
 port clk in
 port rst_n in
-port in_sample in 8
+port cfg_sel in 2
+port cfg_addr in 8
+port cfg_data in 8
+port cfg_we in
+port start in
+port in_pixel in 8
 port in_valid in
 port in_ready out
-port out_coef out 12
+port out_byte out 8
 port out_valid out
 port out_ready in
+port done out
