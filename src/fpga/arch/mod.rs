@@ -804,13 +804,13 @@ impl RoutingGraph {
         // names; with an owned key each of those resolutions allocates a
         // `String` only to throw it away. The names live in `arch`, which
         // outlives this function.
-        let mut index: FastMap<(u32, u32, &str), NodeId> = FastMap::default();
+        let mut globals: FastMap<&str, NodeId> = FastMap::default();
         let mut dangling = 0usize;
 
         // Globals first, so their ids are the lowest and stable.
         for name in &arch.globals {
             let id = node_id(nodes.len());
-            index.insert((0, 0, name.as_str()), id);
+            globals.insert(name.as_str(), id);
             nodes.push(Wire {
                 name: name.clone(),
                 tile: (0, 0),
@@ -824,11 +824,38 @@ impl RoutingGraph {
         let reaching: BTreeSet<&str> = arch.globals.iter().map(String::as_str).collect();
         let is_global = |name: &str| reaching.contains(name);
 
+        // A tile's wires are one contiguous run of node ids, in its type's
+        // declaration order less the ones a global shadows, so a wire is
+        // its tile's first id plus its offset in its type. Resolving a
+        // reference used to hash `(x, y, name)` for both ends of every pip
+        // of every tile, sixteen million times on a die and most of the
+        // graph's cost; the offsets are per type, and a name is looked up
+        // once per type a reference lands on (`Memo`).
+        let offsets: Vec<FastMap<&str, u32>> = arch
+            .tile_types
+            .iter()
+            .map(|t| {
+                let mut map = FastMap::default();
+                let mut next = 0u32;
+                for wire in &t.wires {
+                    if !is_global(&wire.name) {
+                        // A name declared twice is its later wire, as it
+                        // was when a map keyed by name was filled in
+                        // order.
+                        map.insert(wire.name.as_str(), next);
+                        next += 1;
+                    }
+                }
+                map
+            })
+            .collect();
+        let mut tile_base: Vec<NodeId> = vec![NodeId::MAX; arch.tiles.len()];
         for y in 0..arch.height {
             for x in 0..arch.width {
                 let Some(tile) = arch.tile_at(x, y) else {
                     continue;
                 };
+                tile_base[(y * arch.width + x) as usize] = node_id(nodes.len());
                 for wire in &tile.wires {
                     if is_global(&wire.name) {
                         // A tile wire may not shadow a global; the
@@ -836,8 +863,6 @@ impl RoutingGraph {
                         dangling += 1;
                         continue;
                     }
-                    let id = node_id(nodes.len());
-                    index.insert((x, y, wire.name.as_str()), id);
                     nodes.push(Wire {
                         name: wire.name.clone(),
                         tile: (x, y),
@@ -848,24 +873,37 @@ impl RoutingGraph {
             }
         }
 
-        let resolve = |wref: &WireRef, x: u32, y: u32| -> Option<NodeId> {
+        // What one reference resolved to the last time, keyed by the type
+        // of the tile it landed on: `(type + 1, offset)`, with `u32::MAX`
+        // for a wire that type does not have. A type's tiles sit among
+        // the same neighbours across most of a die, so this is nearly
+        // always a hit.
+        type Memo = (u32, u32);
+        let resolve = |wref: &WireRef, x: u32, y: u32, memo: &mut Memo| -> Option<NodeId> {
             if wref.global {
-                return index.get(&(0, 0, wref.name.as_str())).copied();
+                return globals.get(wref.name.as_str()).copied();
             }
             let ox = i64::from(x) + i64::from(wref.dx);
             let oy = i64::from(y) + i64::from(wref.dy);
             let ox = u32::try_from(ox).ok()?;
             let oy = u32::try_from(oy).ok()?;
-            // A reference that names a tile type resolves only against a
-            // tile of that type: see `WireRef::tile_type`.
-            let wrong_type = wref
-                .tile_type
-                .as_deref()
-                .is_some_and(|want| arch.tile_at(ox, oy).map(|t| t.name.as_str()) != Some(want));
-            if wrong_type {
-                return None;
+            let ti = arch.tile_index_at(ox, oy)?;
+            let key = u32::try_from(ti).ok()?.checked_add(1)?;
+            if memo.0 != key {
+                // A reference that names a tile type resolves only against
+                // a tile of that type: see `WireRef::tile_type`.
+                let wrong_type = wref
+                    .tile_type
+                    .as_deref()
+                    .is_some_and(|want| arch.tile_types[ti].name != want);
+                let offset = if wrong_type {
+                    None
+                } else {
+                    offsets[ti].get(wref.name.as_str()).copied()
+                };
+                *memo = (key, offset.unwrap_or(u32::MAX));
             }
-            index.get(&(ox, oy, wref.name.as_str())).copied()
+            (memo.1 != u32::MAX).then(|| tile_base[(oy * arch.width + ox) as usize] + memo.1)
         };
 
         // Every distinct bit pattern once. A pattern belongs to a tile
@@ -893,12 +931,31 @@ impl RoutingGraph {
 
         let mut pips: Vec<Pip> = Vec::new();
         let mut sites: Vec<ArchSite> = Vec::new();
+        // Per type: a memo for each end of each pip, then one for each bel
+        // pin; and each pip's interned bits, filled the first time a tile of
+        // the type uses the pip, so the ids come out in the order they
+        // always did.
+        let mut memos: Vec<Vec<Memo>> = arch
+            .tile_types
+            .iter()
+            .map(|t| {
+                let pins: usize = t.bels.iter().map(|b| b.pins.len()).sum();
+                vec![(0, 0); 2 * t.pips.len() + pins]
+            })
+            .collect();
+        let mut pip_bits: Vec<Vec<Option<BitsId>>> = arch
+            .tile_types
+            .iter()
+            .map(|t| vec![None; t.pips.len()])
+            .collect();
         for y in 0..arch.height {
             for x in 0..arch.width {
                 let Some(ti) = arch.tile_index_at(x, y) else {
                     continue;
                 };
                 let tile = &arch.tile_types[ti];
+                let memo = &mut memos[ti];
+                let mut pin_slot = 2 * tile.pips.len();
                 // Every bel of one tile is one contiguous run of sites, so
                 // a `blocks` name resolves to `base` plus the bel's own
                 // position in the type's declaration order.
@@ -906,10 +963,11 @@ impl RoutingGraph {
                 for bel in &tile.bels {
                     let mut pins = Vec::new();
                     for (role, wref) in &bel.pins {
-                        match resolve(wref, x, y) {
+                        match resolve(wref, x, y, &mut memo[pin_slot]) {
                             Some(node) => pins.push((role.clone(), node)),
                             None => dangling += 1,
                         }
+                        pin_slot += 1;
                     }
                     let blocks = bel
                         .blocks
@@ -931,17 +989,19 @@ impl RoutingGraph {
                         blocks,
                     });
                 }
-                for pip in &tile.pips {
-                    let (Some(from), Some(to)) = (resolve(&pip.from, x, y), resolve(&pip.to, x, y))
-                    else {
+                for (k, pip) in tile.pips.iter().enumerate() {
+                    let from = resolve(&pip.from, x, y, &mut memo[2 * k]);
+                    let to = resolve(&pip.to, x, y, &mut memo[2 * k + 1]);
+                    let (Some(from), Some(to)) = (from, to) else {
                         dangling += 1;
                         continue;
                     };
+                    let bits = *pip_bits[ti][k].get_or_insert_with(|| intern(&pip.bits));
                     pips.push(Pip {
                         from,
                         to,
                         tile: (x, y),
-                        bits: intern(&pip.bits),
+                        bits,
                     });
                 }
             }
@@ -1273,6 +1333,70 @@ mod tests {
             graph.site("X0Y0/lut").unwrap().pin("i0")
         );
         assert!(graph.sites[0].pin("nope").is_none());
+    }
+
+    /// **A reference resolves into whatever type of tile it lands on.**
+    /// Types `a` and `b` both declare `w`, at different places in their
+    /// lists; a `src` tile reaches one tile east for `w` and, by type,
+    /// for `b`'s `v`. With the eastern neighbour alternating `a`, `b`,
+    /// `a`, `b`, each reference lands on its own tile's wire, and the
+    /// typed one only on `b`. Would catch a resolution remembered across
+    /// tiles of different types (every `w` would be the first one's
+    /// offset), an offset counted across the global a type shadows, or a
+    /// tile's wires numbered from the wrong base.
+    #[test]
+    fn a_reference_resolves_into_the_type_of_tile_it_lands_on() {
+        let mut arch = Arch::new("alt", "test", 8, 1);
+        arch.globals.push("g".to_owned());
+        let decl = |name: &str| WireDecl {
+            name: name.to_owned(),
+            dx: 0,
+            dy: 0,
+        };
+        let mut a = TileType::new("a", "a", 1, 1);
+        a.wires.extend([decl("w"), decl("x")]);
+        let mut b = TileType::new("b", "b", 1, 1);
+        // `g` is a global, and this declaration of it is dropped: `w`
+        // is the second wire `b` keeps, not the third.
+        b.wires.extend([decl("v"), decl("g"), decl("w")]);
+        let mut src = TileType::new("src", "src", 1, 1);
+        src.wires.push(decl("s"));
+        src.pips.push(PipDecl {
+            from: WireRef::local("s"),
+            to: WireRef::at("w", 1, 0),
+            bits: vec![ConfigBit::new(0, 0)],
+        });
+        src.pips.push(PipDecl {
+            from: WireRef::local("s"),
+            to: WireRef::at_in("v", 1, 0, "b"),
+            bits: vec![ConfigBit::new(0, 1)],
+        });
+        arch.tile_types.extend([a, b, src]);
+        for x in 0..4 {
+            arch.set_tile(2 * x, 0, 2);
+            arch.set_tile(2 * x + 1, 0, x as usize % 2);
+        }
+        let graph = arch.build_graph();
+        for x in 0..4u32 {
+            let east = (2 * x + 1, 0);
+            let to: Vec<&Wire> = graph
+                .pips
+                .iter()
+                .filter(|p| p.tile == (2 * x, 0))
+                .map(|p| graph.wire(p.to))
+                .collect();
+            assert!(to.iter().all(|w| w.tile == east), "{to:?}");
+            let names: Vec<&str> = to.iter().map(|w| w.name.as_str()).collect();
+            if x % 2 == 0 {
+                assert_eq!(
+                    names,
+                    ["w"],
+                    "the `b`-only reference stays unresolved on `a`"
+                );
+            } else {
+                assert_eq!(names, ["w", "v"]);
+            }
+        }
     }
 
     #[test]
