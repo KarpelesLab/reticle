@@ -35,7 +35,7 @@ git -C husky/fpga/tracewhisperer submodule update --init
 examples/husky/build.sh husky /tmp/husky
 ```
 
-The design fits and places as of 2026-10-17, in about six minutes;
+The design fits and places as of 2026-10-19, in four to five minutes;
 whether it routes is the open question, and the section at the end says
 what is known.
 
@@ -138,9 +138,9 @@ of its own:
 | each primitive's configuration bits equal Vivado's for the same cell on the same site | **checked**, per primitive, against NewAE's `cwhusky_top.bit` decoded through prjxray-db |
 | the pins, standards, drive and pulls are NewAE's | **transcribed** from `cwhusky.xdc` by script |
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
-| the whole design fits the part | **checked**: 30,855 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
-| it places | **checked**: legalisation and annealing complete, in about six minutes |
-| it routes | **not yet**: the route converges, by about seven per cent of its overuse a pass, which is too slowly to finish; `docs/fpga-xray.md` has where it stands |
+| the whole design fits the part | **checked**: 21,217 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
+| it places | **checked**: legalisation and annealing complete, in four to five minutes |
+| it routes | **not yet**: the route converges, to 20,644 overused nodes at the twentieth pass, falling about five per cent a pass by then, which is too slowly to finish; `docs/fpga-xray.md` has where it stands |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status
@@ -148,11 +148,11 @@ of its own:
 **It fits and places; whether it routes is not yet known.** The whole
 design elaborates, synthesises and maps — in about 25 seconds, where the
 first attempt did not finish in 83 minutes — and the result is, measured
-on 2026-10-17:
+on 2026-10-19:
 
 | | Reticle | NewAE's image (Vivado 2022.1) |
 |---|---|---|
-| lookup tables | 39,026 functions in 30,855 sites (8,171 `LUT6_2` pairs) | 23,274 lookup tables with contents |
+| lookup tables | 27,158 functions in 21,217 sites (5,941 `LUT6_2` pairs) | 23,274 lookup tables with contents |
 | flip-flops | 27,618 | about 26,000 with an initial value of zero |
 | `RAMB18E1` | 100 | 100 |
 
@@ -161,9 +161,23 @@ What closed it, in `docs/fpga-xray.md`'s two sections on the lookup
 table's second output: pairing small functions into `LUT6_2`, then
 sharing `esad`'s two adders per counter as one carry chain whose generate
 comes off the propagate table's `O5`. The functions went *up* (39,026)
-and the sites down. `build.sh` asks for the whole die (`--region
-0,0,114,156`) because the default region, a box around the constrained
-pins, holds 26,800 flip-flop sites.
+and the sites down, to 30,855 on 2026-10-17.
+
+On 2026-10-19 the mapper stopped spending lookup tables on three things,
+which `docs/fpga-xray.md`'s section on them has: a hold multiplexer for
+every bit of a register written a byte at a time from the bus, which is
+every register file here; a multiplexer for every bit of `esad`'s
+counters, which restart at their increment; and a barrel shifter where
+the clock-glitch module picks a 13-bit field at a stride of 13. It also
+started spending some where it had spent none, and **that was a fault**:
+the trigger sequencer's wait windows and TraceWhisperer's match patterns
+are unpacked wire arrays, and synthesis had read every element of them
+as `x`. Fixed, they cost 77 lookup tables, and every earlier build of
+this design had those triggers built from constants.
+
+`build.sh` asks for the whole die (`--region 0,0,114,156`) because the
+default region, a box around the constrained pins, holds 26,800
+flip-flop sites.
 
 The database describes this part with the XC7A50T's tile grid, 8,150
 slices or 32,600 lookup tables, and decoding NewAE's image finds

@@ -3116,6 +3116,82 @@ average, and nets of two to four sinks 29.3. The congestion charge now
 grows by VPR's 1.3 a pass rather than 1.8 (`xray::PRESENT_GROWTH`),
 which reached the same overuse in two thirds of the time.
 
+### Two days on: fewer lookup tables, and two triggers that were constants (2026-10-19)
+
+The run above was left going. It reached the 38th pass after eighteen
+hours with 46,347 nodes still overused, falling by under one per cent a
+pass: demand above the fabric, as said. So the next question was what
+the demand is, and the answer was mostly the mapper's, not the
+placer's. Counted by the hierarchy each lookup table reads, three kinds
+of logic were far larger than what they compute:
+
+- **A register written a byte at a time.** `registers[bc*8 +: 8] <=
+  reg_datai` under a bus address leaves `d = {bc == 3 ? x : r[31:24],
+  …, bc == 0 ? x : r[7:0]}`, and enable extraction only knew a `d`
+  that is one multiplexer. Every bit's hold multiplexer was a lookup
+  table: a bank of sixteen 64-bit registers was 1,642 of them, and is
+  756 with each byte its own register on its own enable
+  (`ff_opt::split_by_slice`). The Husky went from 33,636 `LUT6` to
+  26,751.
+- **A counter that restarts at its increment**, each of `esad`'s 256:
+  `if (restart) c <= {0, inc}; else if (~&c) c <= c + inc;`. As an
+  array element the hold is one multiplexer further down than enable
+  extraction looked, and a reset value only some of whose bits are
+  constant was not a reset at all, so every bit chose between the
+  restart and the sum. Found through the tree (`hold_split`) and split
+  by the constant bits (`split_by_reset`), it is 24,924 `LUT6`.
+- **A field at a stride that is not a power of two.** The clock-glitch
+  module picks one of 32 13-bit glitch lengths as
+  `all_max_glitches_reg[glitch_count*13 +: 13]`, which was cellified as
+  a shift of the 416-bit register by the product — a barrel shifter over
+  every amount up to 416, since the mapper cannot see through the
+  multiplication. A model of it was 1,191 lookup tables, and as a
+  32-way multiplexer of constant slices (`cellify::select_by_stride`) is
+  234. The Husky maps to 23,967 `LUT6`.
+
+Looking at those found a fault, not a cost. **An unpacked wire array
+was `x`.** `wire [W-1:0] min_wait [0:N-2]; assign min_wait[i] = …;` is a
+memory written by continuous assignments to its elements: `dce` woke a
+memory's writers through its ports only and deleted the assignments,
+`mem_scalarize` read a word only an assignment writes as one nothing
+writes, and removing a memory renumbered the rest in the ports alone, so
+a surviving assignment named whichever memory took its id — on the
+Husky, a 6-bit FIFO given a byte. The trigger sequencer's wait windows
+and TraceWhisperer's match patterns and masks were therefore constants
+in every earlier build, and nothing said so; nothing could, since the
+mapped-netlist check starts after synthesis and the bit-level checks
+after mapping. Fixed, they cost 77 lookup tables. The synthesis golden
+`wire_array` is what would have caught it: its behavioural self-check
+reads `xx` where the reference reads a value.
+
+Tried and dropped: cutting a variable part-select's offset to the bits
+that reach inside its base, since an offset past the end reads `x`.
+Alone, `r[bc*8 +: 8]` of a 32-bit `r` with a seven-bit `bc` went from 24
+lookup tables to 8; inside the Husky's `case` of registers it was 35
+*more*, and in the IP library a dozen fewer on one block and two more on
+another. Not kept.
+
+Before the odd stride, with the pairing, 28,523 functions took 22,447
+sites, from 30,855: 69 per cent of the die, from 95. Placement took
+239 s, from 361. With it, 27,158 functions take 21,217 sites.
+
+The route, measured on the netlist before the odd stride against the
+run of the day before:
+
+| pass | 2026-10-17's netlist | 2026-10-19's |
+|---|---|---|
+| 1 | 163,828 overused, 3,291,352 pips | 137,592, 2,585,698 pips |
+| 9 | 92,621 at 931 s | 49,754 at 580 s |
+| 14 | 67,291 at 2,586 s | 30,609 at 1,060 s |
+| 20 | 55,116 at 9,796 s | 20,644 at 4,121 s |
+
+It converges faster and further, and **it still does not finish**: by
+the twentieth pass it falls about five per cent a pass, and the passes
+grow, from thirty seconds to over a thousand, while the overuse they
+work on shrinks. Each pass now reports the signals it rerouted and the
+nodes its searches visited (`Iteration::rerouted`, `visited`), so a
+late pass can say whether it is doing more searches or longer ones.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
