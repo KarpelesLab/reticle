@@ -1173,11 +1173,55 @@ fn measure_device(variant: &Variant, label: &str, device: &str) -> Measurement {
 
 /// The whole table, as it appears between the markers in
 /// `docs/ip-library.md`.
+/// `f` over `items` on every core, the results in `items`' order: the
+/// variants here are independent, and one at a time they were most of a
+/// minute of every gate. A panic in `f` is raised again, payload and all.
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .clamp(1, items.len().max(1));
+    let done: Vec<Vec<(usize, R)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(i) else { break };
+                        mine.push((i, f(item)));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    });
+    let mut out: Vec<Option<R>> = (0..items.len()).map(|_| None).collect();
+    for (i, r) in done.into_iter().flatten() {
+        out[i] = Some(r);
+    }
+    out.into_iter()
+        .map(|r| r.expect("every item was taken"))
+        .collect()
+}
+
 fn footprint_table() -> String {
     let mut out = String::new();
     out.push_str("| Block | Top | Parameters | Target | Cells | LUT depth |\n");
     out.push_str("|-------|-----|------------|--------|-------|-----------|\n");
-    for variant in VARIANTS {
+    let measured = par_map(VARIANTS, |variant| {
+        let mut rows = vec![measure_lut(variant, 4), measure_lut(variant, 6)];
+        for (label, device) in DEVICES {
+            rows.push(measure_device(variant, label, device));
+        }
+        rows
+    });
+    for (variant, rows) in VARIANTS.iter().zip(measured) {
         let params = if variant.params.is_empty() {
             "(defaults)".to_owned()
         } else {
@@ -1188,10 +1232,6 @@ fn footprint_table() -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let mut rows = vec![measure_lut(variant, 4), measure_lut(variant, 6)];
-        for (label, device) in DEVICES {
-            rows.push(measure_device(variant, label, device));
-        }
         for row in rows {
             out.push_str(&format!(
                 "| `{}` | `{}` | {} | {} | {} | {} |\n",
@@ -1252,35 +1292,45 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
     let mut unproved: Vec<String> = Vec::new();
     let mut wrong: Vec<String> = Vec::new();
     let mut checked = 0usize;
-    for variant in VARIANTS {
-        for k in [4u32, 6] {
-            let (mut design, id) = flattened(variant.package, variant.top, variant.params);
-            let mut diags = Diagnostics::new();
-            synth_run(&mut design, &SynthOptions::default(), &mut diags);
-            assert!(
-                !diags.has_errors(),
-                "{}.{} does not synthesise",
-                variant.package,
-                variant.top
+    let jobs: Vec<(&Variant, u32)> = VARIANTS
+        .iter()
+        .flat_map(|variant| [(variant, 4u32), (variant, 6)])
+        .collect();
+    // Every mapping proved as before, on every core at once; the verdicts
+    // come back in the order the loop took them one at a time.
+    let verdicts = par_map(&jobs, |(variant, k)| {
+        let (mut design, id) = flattened(variant.package, variant.top, variant.params);
+        let mut diags = Diagnostics::new();
+        synth_run(&mut design, &SynthOptions::default(), &mut diags);
+        assert!(
+            !diags.has_errors(),
+            "{}.{} does not synthesise",
+            variant.package,
+            variant.top
+        );
+        let (stats, equivalence) = map_module_checked(
+            &mut design.modules[id],
+            &MapOptions::lut(*k),
+            Some(&options),
+        );
+        let equivalence = equivalence.expect("the check was asked for");
+        let what = format!("{}.{} at LUT{k}", variant.package, variant.top);
+        (what, stats, equivalence)
+    });
+    for (what, stats, equivalence) in verdicts {
+        if report {
+            println!(
+                "{what}: {} aig nodes, {} cells: {}",
+                stats.after.nodes,
+                stats.cells,
+                equivalence.render()
             );
-            let (stats, equivalence) =
-                map_module_checked(&mut design.modules[id], &MapOptions::lut(k), Some(&options));
-            let equivalence = equivalence.expect("the check was asked for");
-            let what = format!("{}.{} at LUT{k}", variant.package, variant.top);
-            if report {
-                println!(
-                    "{what}: {} aig nodes, {} cells: {}",
-                    stats.after.nodes,
-                    stats.cells,
-                    equivalence.render()
-                );
-            }
-            checked += 1;
-            if equivalence.wrong() {
-                wrong.push(format!("{what}: {}", equivalence.render()));
-            } else if !equivalence.proved() {
-                unproved.push(format!("{what}: {}", equivalence.render()));
-            }
+        }
+        checked += 1;
+        if equivalence.wrong() {
+            wrong.push(format!("{what}: {}", equivalence.render()));
+        } else if !equivalence.proved() {
+            unproved.push(format!("{what}: {}", equivalence.render()));
         }
     }
     assert!(

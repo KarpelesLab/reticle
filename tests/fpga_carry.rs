@@ -719,33 +719,55 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
     assert!(bits <= 20, "{bits} bits is too many to enumerate");
     let result = port_net(module, "y");
     let result_width = shape.result_width(width);
-    for pattern in 0..(1u64 << bits) {
-        let mut inputs = BTreeMap::new();
-        let mut taken = 0;
-        let mut values = [0u64; 5];
-        for (index, (name, w)) in ports.iter().enumerate() {
-            let mask = (1u64 << w) - 1;
-            let value = (pattern >> taken) & mask;
-            taken += w;
-            values[index] = value;
-            inputs.insert(port_net(module, name), Logic::from_u64(value, *w));
+    // Every pattern is checked, the range cut into one run per core: the
+    // patterns are independent, and a 17-bit shape is 131,072 of them
+    // through an interpreter. A run that fails panics with its own
+    // message, and the scope then fails the test.
+    let total = 1u64 << bits;
+    let runs = std::thread::available_parallelism()
+        .map_or(1, |n| n.get() as u64)
+        .clamp(1, 16)
+        .min(total);
+    let checked = std::sync::atomic::AtomicU64::new(0);
+    let check_range = |range: std::ops::Range<u64>| {
+        for pattern in range {
+            checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut inputs = BTreeMap::new();
+            let mut taken = 0;
+            let mut values = [0u64; 5];
+            for (index, (name, w)) in ports.iter().enumerate() {
+                let mask = (1u64 << w) - 1;
+                let value = (pattern >> taken) & mask;
+                taken += w;
+                values[index] = value;
+                inputs.insert(port_net(module, name), Logic::from_u64(value, *w));
+            }
+            let got = netlist.eval(&inputs);
+            let got = got
+                .get(&result)
+                .unwrap_or_else(|| panic!("`y` was not driven"))
+                .clone();
+            let want = shape.expected(width, &values[..ports.len()]);
+            let want = Logic::from_u64(want, result_width);
+            assert_eq!(
+                got.to_u64(),
+                want.to_u64(),
+                "{shape:?} at {width} bits: inputs {:?} gave {got}, wanted {want}\n\
+                 the netlist was {:?}",
+                &values[..ports.len()],
+                report.netlist
+            );
         }
-        let got = netlist.eval(&inputs);
-        let got = got
-            .get(&result)
-            .unwrap_or_else(|| panic!("`y` was not driven"))
-            .clone();
-        let want = shape.expected(width, &values[..ports.len()]);
-        let want = Logic::from_u64(want, result_width);
-        assert_eq!(
-            got.to_u64(),
-            want.to_u64(),
-            "{shape:?} at {width} bits: inputs {:?} gave {got}, wanted {want}\n\
-             the netlist was {:?}",
-            &values[..ports.len()],
-            report.netlist
-        );
-    }
+    };
+    std::thread::scope(|scope| {
+        for run in 0..runs {
+            let range = total * run / runs..total * (run + 1) / runs;
+            let check_range = &check_range;
+            scope.spawn(move || check_range(range));
+        }
+    });
+    // The runs cover the range once: none of it was left out.
+    assert_eq!(checked.into_inner(), total, "{shape:?} at {width} bits");
 }
 
 // ---------------------------------------------------------------------------
