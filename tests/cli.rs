@@ -1669,3 +1669,31 @@ fn small_functions_share_lookup_tables_and_still_route() {
     assert!(!stderr.contains("saving 0 site(s)"), "{stderr}");
     assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
 }
+
+/// `--top` names a module before `--param` specialises it: elaboration
+/// names the result after the values (`inv$W_4`), and the commands that
+/// looked `--top` up again afterwards by its own name found nothing and
+/// said `no module named `inv``. Every command that takes `--top` went
+/// through one lookup that missed; `synth` and `verify` stand for them.
+#[test]
+fn top_names_a_module_that_a_parameter_specialises() {
+    let dir = scratch("top_with_param");
+    let v = dir.join("inv.v");
+    std::fs::write(
+        &v,
+        "module inv #(parameter W = 2) (input [W-1:0] a, output [W-1:0] y);\n\
+         assign y = ~a;\nendmodule\n",
+    )
+    .unwrap();
+    let v = v.to_str().unwrap();
+    let (code, stdout, stderr) = run(&["synth", "--top", "inv", "--param", "W=4", v]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("net %a u4 wire"), "{stdout}");
+    let (code, _, stderr) = run(&["verify", "--top", "inv", "--param", "W=4", v]);
+    assert!(!stderr.contains("no module named"), "{stderr}");
+    assert_ne!(code, 2, "{stderr}");
+    // A name that is only a prefix of the top is still not the top.
+    let (code, _, stderr) = run(&["synth", "--top", "in", "--param", "W=4", v]);
+    assert_ne!(code, 0, "{stderr}");
+    assert!(stderr.contains("no module named `in`"), "{stderr}");
+}

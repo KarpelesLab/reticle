@@ -891,6 +891,24 @@ fn param_overrides(args: &Args) -> Result<Vec<(String, String)>, ArgError> {
         .collect()
 }
 
+/// The module `--top` names. Elaboration has chosen it already and, when
+/// `--param` overrides one of its parameters, named it after the values
+/// (`p$W_4` for `p` with `W = 4`), so looking `p` up by name finds nothing.
+/// The elaborated top is the answer when its name is `name` followed by
+/// `$`; a design read from `.rtl`, which nothing elaborated, is looked up
+/// by name alone.
+fn named_top(design: &Design, name: &str) -> Option<reticle::ir::ModuleId> {
+    if let Some(id) = design.module_by_name(name) {
+        return Some(id);
+    }
+    let top = design.top?;
+    let elaborated = design.module(top).name.as_str();
+    elaborated
+        .strip_prefix(name)
+        .is_some_and(|rest| rest.starts_with('$'))
+        .then_some(top)
+}
+
 fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
     let paths = args.positionals();
     if paths.is_empty() {
@@ -1324,7 +1342,7 @@ fn asic(args: &Args) -> Result<Outcome, ArgError> {
     }
 
     let top = match args.option("top") {
-        Some(name) => match design.module_by_name(name) {
+        Some(name) => match named_top(&design, name) {
             Some(id) => id,
             None => return Ok(Outcome::Usage(format!("no module named `{name}`"))),
         },
@@ -1932,7 +1950,7 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
     }
     options.verify_equivalence = args.flag("verify");
     if let Some(top) = args.option("top") {
-        match design.module_by_name(top) {
+        match named_top(&design, top) {
             Some(id) => design.top = Some(id),
             None => return Ok(Outcome::Usage(format!("no module named `{top}`"))),
         }
@@ -3927,7 +3945,7 @@ fn timing(args: &Args) -> Result<Outcome, ArgError> {
     }
 
     let top = match args.option("top") {
-        Some(name) => match design.module_by_name(name) {
+        Some(name) => match named_top(&design, name) {
             Some(id) => id,
             None => return Ok(Outcome::Usage(format!("no module named `{name}`"))),
         },
@@ -4172,7 +4190,7 @@ fn verify(args: &Args) -> Result<Outcome, ArgError> {
     };
 
     let module = match args.option("top") {
-        Some(name) => match design.module_by_name(name) {
+        Some(name) => match named_top(&design, name) {
             Some(id) => id,
             None => return Ok(Outcome::Usage(format!("no module named `{name}`"))),
         },
@@ -4227,7 +4245,7 @@ fn viewer(args: &Args) -> Result<Outcome, ArgError> {
         Err(outcome) => return Ok(outcome),
     };
     if let Some(top) = args.option("top") {
-        match design.module_by_name(top) {
+        match named_top(&design, top) {
             Some(id) => design.top = Some(id),
             None => return Ok(Outcome::Usage(format!("no module named `{top}`"))),
         }
