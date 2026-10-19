@@ -2592,9 +2592,55 @@ const DEDICATED_WALK: usize = 8;
 #[derive(Debug, Default)]
 struct Relation {
     /// Sink site to the one driver site that can reach it.
-    driver_of: HashMap<usize, usize>,
+    driver_of: SiteMap,
     /// Driver site to the one sink site it reaches.
-    sink_of: HashMap<usize, usize>,
+    sink_of: SiteMap,
+}
+
+/// A map from site to site, as an array over every site of the graph.
+///
+/// A macro's members are found from its anchor through these on every
+/// move the annealer proposes for it, several lookups a candidate site;
+/// as hash maps they were a fifth of the Husky's placement. There are a
+/// handful of relations, one per kind of dedicated connection, so an
+/// array of every site each costs a few megabytes on a whole die.
+#[derive(Debug, Default)]
+struct SiteMap {
+    to: Vec<u32>,
+    len: usize,
+}
+
+impl SiteMap {
+    /// The site `site` maps to.
+    fn get(&self, site: usize) -> Option<usize> {
+        let at = *self.to.get(site)?;
+        (at != u32::MAX).then_some(at as usize)
+    }
+
+    /// Maps `site` to `to`, returning what it mapped to before.
+    fn insert(&mut self, site: usize, to: usize) -> Option<usize> {
+        if site >= self.to.len() {
+            self.to.resize(site + 1, u32::MAX);
+        }
+        let before = self.get(site);
+        self.to[site] = u32::try_from(to).unwrap_or(u32::MAX);
+        if before.is_none() {
+            self.len += 1;
+        }
+        before
+    }
+
+    /// The site the lowest mapped site maps to.
+    fn first(&self) -> Option<usize> {
+        self.to
+            .iter()
+            .find(|at| **at != u32::MAX)
+            .map(|at| *at as usize)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 }
 
 /// A group whose members' sites follow from one another through dedicated
@@ -2711,13 +2757,7 @@ fn registered_outputs(
         // stands for them all.
         let mut sites: Vec<Option<usize>> = candidates
             .iter()
-            .map(|(_, _, r)| {
-                r.sink_of
-                    .keys()
-                    .min()
-                    .and_then(|s| r.sink_of.get(s))
-                    .copied()
-            })
+            .map(|(_, _, r)| r.sink_of.first())
             .collect();
         let all = sites.len();
         sites.sort_unstable();
@@ -3109,9 +3149,9 @@ fn exact_sites(
         for (link, driver_side) in &exact.order {
             let (x, y, relation) = &exact.links[*link];
             let site = if *driver_side {
-                relation.driver_of.get(at.get(y)?).copied()
+                relation.driver_of.get(*at.get(y)?)
             } else {
-                relation.sink_of.get(at.get(x)?).copied()
+                relation.sink_of.get(*at.get(x)?)
             };
             let Some(site) = site else { continue 'anchor };
             at.insert(if *driver_side { *x } else { *y }, site);
@@ -3121,7 +3161,7 @@ fn exact_sites(
             let (Some(sx), Some(sy)) = (at.get(x), at.get(y)) else {
                 continue 'anchor;
             };
-            if relation.driver_of.get(sy) != Some(sx) {
+            if relation.driver_of.get(*sy) != Some(*sx) {
                 continue 'anchor;
             }
         }
@@ -6991,6 +7031,27 @@ mod tests {
             "spread cells moved {} tiles in legalisation",
             report.mean_displacement()
         );
+    }
+
+    /// A [`SiteMap`] answers as the hash map it replaced: nothing for a
+    /// site never mapped or past the end, the previous value from an
+    /// `insert` that replaces one — which is how the relation builders
+    /// see a site claimed twice — and, from `first`, what the lowest
+    /// mapped site maps to.
+    #[test]
+    fn a_site_map_answers_as_a_map() {
+        let mut map = SiteMap::default();
+        assert!(map.is_empty());
+        assert_eq!(map.get(3), None);
+        assert_eq!(map.insert(7, 2), None);
+        assert_eq!(map.insert(4, 9), None);
+        assert_eq!(map.get(7), Some(2));
+        assert_eq!(map.get(5), None);
+        assert_eq!(map.get(1000), None);
+        assert_eq!(map.first(), Some(9));
+        assert_eq!(map.insert(7, 0), Some(2));
+        assert_eq!(map.get(7), Some(0));
+        assert!(!map.is_empty());
     }
 
     /// **The threshold is a third of a kind's sites, not a half.** The
