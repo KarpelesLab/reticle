@@ -449,7 +449,7 @@ impl<'d> Simulator<'d> {
         {
             return Logic::from_u64(r.to_bits(), 64);
         }
-        value.to_logic()
+        value.into_logic()
     }
 
     /// Evaluates the dynamic parts of a target into concrete stores.

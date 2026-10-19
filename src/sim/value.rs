@@ -47,6 +47,17 @@ impl Value {
         }
     }
 
+    /// [`Value::to_logic`], consuming the value: a bit vector is handed
+    /// over rather than copied. Every operand of every expression a
+    /// process evaluates passes through here, and the copy was a quarter
+    /// of an event-driven simulation's time.
+    pub fn into_logic(self) -> Logic {
+        match self {
+            Value::Bits(l) => l,
+            other => other.to_logic(),
+        }
+    }
+
     /// The value as a real: bit vectors convert through their integer
     /// value (`x` and `z` give NaN).
     pub fn to_real(&self) -> f64 {

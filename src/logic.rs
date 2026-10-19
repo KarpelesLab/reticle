@@ -603,8 +603,120 @@ fn shr_words(src: &[u64], n: u32, width: u32, fill: bool) -> Vec<u64> {
 pub struct Logic {
     width: u32,
     signed: bool,
-    value: Vec<u64>,
-    unknown: Vec<u64>,
+    value: Words,
+    unknown: Words,
+}
+
+/// How many words of a plane [`Words`] keeps without allocating.
+const INLINE_WORDS: usize = 2;
+
+/// One plane of a [`Logic`]: its words, up to [`INLINE_WORDS`] of them
+/// kept inline and more on the heap.
+///
+/// Nearly every value a simulation or a synthesis pass makes fits in a
+/// word or two. On the heap each one was two allocations to build and two
+/// more to copy, and in an event-driven simulation of the `apple2`
+/// example the copies alone were a quarter of the time.
+#[derive(Clone)]
+enum Words {
+    Inline { len: u8, words: [u64; INLINE_WORDS] },
+    Heap(Vec<u64>),
+}
+
+impl Words {
+    /// `len` zero words.
+    fn zeroed(len: usize) -> Words {
+        if len <= INLINE_WORDS {
+            Words::Inline {
+                len: u8::try_from(len).unwrap_or(0),
+                words: [0; INLINE_WORDS],
+            }
+        } else {
+            Words::Heap(vec![0; len])
+        }
+    }
+
+    /// The words as a vector, for the arithmetic that grows one.
+    fn to_vec(&self) -> Vec<u64> {
+        (**self).to_vec()
+    }
+}
+
+impl Default for Words {
+    fn default() -> Self {
+        Words::zeroed(0)
+    }
+}
+
+impl From<Vec<u64>> for Words {
+    fn from(v: Vec<u64>) -> Self {
+        if v.len() <= INLINE_WORDS {
+            let mut words = [0; INLINE_WORDS];
+            words[..v.len()].copy_from_slice(&v);
+            Words::Inline {
+                len: u8::try_from(v.len()).unwrap_or(0),
+                words,
+            }
+        } else {
+            Words::Heap(v)
+        }
+    }
+}
+
+impl std::ops::Deref for Words {
+    type Target = [u64];
+    fn deref(&self) -> &[u64] {
+        match self {
+            Words::Inline { len, words } => &words[..usize::from(*len)],
+            Words::Heap(v) => v,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Words {
+    fn deref_mut(&mut self) -> &mut [u64] {
+        match self {
+            Words::Inline { len, words } => &mut words[..usize::from(*len)],
+            Words::Heap(v) => v,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Words {
+    type Item = &'a u64;
+    type IntoIter = std::slice::Iter<'a, u64>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl From<&[u64]> for Words {
+    fn from(v: &[u64]) -> Self {
+        if v.len() <= INLINE_WORDS {
+            let mut words = [0; INLINE_WORDS];
+            words[..v.len()].copy_from_slice(v);
+            Words::Inline {
+                len: u8::try_from(v.len()).unwrap_or(0),
+                words,
+            }
+        } else {
+            Words::Heap(v.to_vec())
+        }
+    }
+}
+
+impl PartialEq for Words {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl Eq for Words {}
+
+impl std::hash::Hash for Words {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).hash(state);
+    }
 }
 
 impl Logic {
@@ -638,8 +750,8 @@ impl Logic {
         Logic {
             width,
             signed,
-            value,
-            unknown,
+            value: value.into(),
+            unknown: unknown.into(),
         }
     }
 
@@ -655,7 +767,12 @@ impl Logic {
     }
 
     /// Builds an unsigned value from planes that are already normalised.
-    fn raw(width: u32, signed: bool, value: Vec<u64>, unknown: Vec<u64>) -> Self {
+    fn raw(width: u32, signed: bool, value: impl Into<Words>, unknown: impl Into<Words>) -> Self {
+        Logic::raw_words(width, signed, value.into(), unknown.into())
+    }
+
+    /// [`Logic::raw`] from planes already in their own storage.
+    fn raw_words(width: u32, signed: bool, value: Words, unknown: Words) -> Self {
         let l = Logic {
             width,
             signed,
@@ -671,13 +788,13 @@ impl Logic {
         let words = word_count(width);
         let (v, u) = bit.planes();
         let plane = |on: bool| {
-            let mut w = vec![0u64; words];
+            let mut w = Words::zeroed(words);
             if on {
                 fill_ones(&mut w, 0, width);
             }
             w
         };
-        Logic::raw(width, false, plane(v), plane(u))
+        Logic::raw_words(width, false, plane(v), plane(u))
     }
 
     /// All zeros, unsigned.
@@ -982,15 +1099,27 @@ impl Logic {
     }
 
     /// `width` bits starting at `lo`, zero-filled past the end; unsigned.
+    ///
+    /// Only the words the result needs are read: a simulator keeps an
+    /// unpacked array as one wide value, and shifting all of it to take
+    /// one element made every element read as dear as the whole array.
     fn extract(&self, lo: u32, width: u32) -> Self {
         let words = word_count(width);
-        let mut value = shr_words(&self.value, lo, self.width, false);
-        let mut unknown = shr_words(&self.unknown, lo, self.width, false);
-        value.resize(words, 0);
-        unknown.resize(words, 0);
-        mask_top(&mut value, width);
-        mask_top(&mut unknown, width);
-        Logic::raw(width, false, value, unknown)
+        let (ws, bs) = locate(lo);
+        let take = |src: &[u64]| {
+            let mut out = Words::zeroed(words);
+            for (i, o) in out.iter_mut().enumerate() {
+                let j = i + ws;
+                let mut v = src.get(j).copied().unwrap_or(0) >> bs;
+                if bs != 0 {
+                    v |= src.get(j + 1).copied().unwrap_or(0) << (64 - bs);
+                }
+                *o = v;
+            }
+            mask_top(&mut out, width);
+            out
+        };
+        Logic::raw_words(width, false, take(&self.value), take(&self.unknown))
     }
 
     /// `{self, lsb}`: this value in the high bits, `lsb` in the low bits.
@@ -1066,9 +1195,9 @@ impl Logic {
     /// One plane copied and zero-extended to the word count of `width`.
     fn padded(&self, width: u32, unknown: bool) -> Vec<u64> {
         let mut w = if unknown {
-            self.unknown.clone()
+            self.unknown.to_vec()
         } else {
-            self.value.clone()
+            self.value.to_vec()
         };
         w.resize(word_count(width), 0);
         w
@@ -2528,6 +2657,42 @@ mod tests {
     }
 
     // ---- structural operations ----
+
+    /// Every slice of four-state values up to five words wide, at every
+    /// offset, against the bits read one at a time: the planes held
+    /// inline and on the heap, slices that cross words and ones that take
+    /// whole words. Would catch `extract` reading a word too few or too
+    /// many, a shift of 64, or a top word left unmasked; it is how the
+    /// word-at-a-time `extract` was checked against the bit it replaced.
+    #[test]
+    fn every_slice_is_its_bits() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for width in [1u32, 5, 63, 64, 65, 127, 128, 129, 200, 300] {
+            let words = word_count(width);
+            let value: Vec<u64> = (0..words).map(|_| next()).collect();
+            let unknown: Vec<u64> = (0..words).map(|_| next() & next()).collect();
+            let l = Logic::from_planes(width, false, value, unknown);
+            for lo in 0..width {
+                for len in [1, 2, 7, 63, 64, 65, 129] {
+                    let hi = lo + len - 1;
+                    if hi >= width {
+                        continue;
+                    }
+                    let s = l.slice(hi, lo);
+                    assert_eq!(s.width(), len);
+                    for i in 0..len {
+                        assert_eq!(s.bit(i), l.bit(lo + i), "[{hi}:{lo}] of {width}, bit {i}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn slice_concat_replicate() {

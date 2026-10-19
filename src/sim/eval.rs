@@ -27,11 +27,28 @@ pub(crate) trait Env<'d> {
     fn module(&self) -> &'d Module;
     /// The current value of a net.
     fn read_net(&mut self, net: NetId) -> Value;
+    /// `width` bits of a net from bit `lo`, as [`select_bits`] takes them
+    /// from [`Env::read_net`]. An environment that holds the net can read
+    /// them where they are: a simulator keeps an unpacked array as one
+    /// wide value, and copying all of it to read one element was most of
+    /// what reading one cost.
+    fn read_net_bits(&mut self, net: NetId, lo: i64, width: u32) -> Logic {
+        select_bits(&self.read_net(net).into_logic(), lo, width)
+    }
     /// The element at `addr`, or `None` when out of range.
     fn read_mem(&mut self, mem: MemoryId, addr: u64) -> Option<Logic>;
     /// A function call with evaluated arguments; `ty` is the cached result
     /// type.
     fn call(&mut self, name: &str, args: Vec<Value>, ty: &Type, span: Span) -> Value;
+}
+
+/// The net expression `id` reads whole, when it is one: a select of it is
+/// read through [`Env::read_net_bits`] rather than by copying the net.
+fn net_of(m: &Module, id: ExprId) -> Option<NetId> {
+    match m.exprs.get(id)?.kind {
+        ExprKind::Net(n) => Some(n),
+        _ => None,
+    }
 }
 
 /// An index operand as an integer: `None` when it has unknown bits;
@@ -62,20 +79,32 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
         ExprKind::Net(n) => env.read_net(*n),
         ExprKind::Slice { base, hi, lo } => {
             let ew = m.exprs.get(*base).map_or(1, |b| elem_width(&b.ty));
-            let b = eval(env, *base).to_logic();
             let width = hi.saturating_sub(*lo).saturating_add(1).saturating_mul(ew);
-            Value::Bits(select_bits(&b, i64::from(*lo) * i64::from(ew), width))
+            let at = i64::from(*lo) * i64::from(ew);
+            if let Some(net) = net_of(m, *base) {
+                return Value::Bits(env.read_net_bits(net, at, width));
+            }
+            let b = eval(env, *base).into_logic();
+            Value::Bits(select_bits(&b, at, width))
         }
         ExprKind::Index { base, index } => {
             let (ew, count) = m
                 .exprs
                 .get(*base)
                 .map_or((1, 0), |b| (elem_width(&b.ty), elem_count(&b.ty)));
-            let b = eval(env, *base).to_logic();
-            let i = eval(env, *index).to_logic();
+            // The base is evaluated first, as it always was, unless it is a
+            // net that can be read in place.
+            let net = net_of(m, *base);
+            let b = net.is_none().then(|| eval(env, *base).into_logic());
+            let i = eval(env, *index).into_logic();
             match index_value(&i) {
                 Some(i) if i >= 0 && u64::try_from(i).is_ok_and(|i| i < count) => {
-                    Value::Bits(select_bits(&b, i * i64::from(ew), ew))
+                    Value::Bits(match (net, b) {
+                        (Some(net), _) => env.read_net_bits(net, i * i64::from(ew), ew),
+                        (None, b) => {
+                            select_bits(&b.unwrap_or_else(|| Logic::x(1)), i * i64::from(ew), ew)
+                        }
+                    })
                 }
                 _ => Value::Bits(Logic::x(ew)),
             }
@@ -86,8 +115,9 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
             width,
             up,
         } => {
-            let b = eval(env, *base).to_logic();
-            let off = eval(env, *offset).to_logic();
+            let net = net_of(m, *base);
+            let b = net.is_none().then(|| eval(env, *base).into_logic());
+            let off = eval(env, *offset).into_logic();
             match index_value(&off) {
                 Some(o) => {
                     let lo = if *up {
@@ -95,17 +125,20 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
                     } else {
                         o.saturating_sub(i64::from(*width)).saturating_add(1)
                     };
-                    Value::Bits(select_bits(&b, lo, *width))
+                    Value::Bits(match (net, b) {
+                        (Some(net), _) => env.read_net_bits(net, lo, *width),
+                        (None, b) => select_bits(&b.unwrap_or_else(|| Logic::x(1)), lo, *width),
+                    })
                 }
                 None => Value::Bits(Logic::x(*width)),
             }
         }
         ExprKind::Concat(parts) => {
-            let vals: Vec<Logic> = parts.iter().map(|p| eval(env, *p).to_logic()).collect();
+            let vals: Vec<Logic> = parts.iter().map(|p| eval(env, *p).into_logic()).collect();
             Value::Bits(Logic::concat_all(vals.iter()))
         }
         ExprKind::Replicate { count, expr } => {
-            Value::Bits(eval(env, *expr).to_logic().replicate(*count))
+            Value::Bits(eval(env, *expr).into_logic().replicate(*count))
         }
         ExprKind::Unary { op, expr } => unary(*op, eval(env, *expr)),
         ExprKind::Binary { op, lhs, rhs } => {
@@ -131,12 +164,12 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
             width,
             signed,
         } => {
-            let v = eval(env, *expr).to_logic();
+            let v = eval(env, *expr).into_logic();
             Value::Bits(v.resize(*width).with_signed(*signed))
         }
         ExprKind::MemRead { mem, addr } => {
             let width = flat_width(&node.ty);
-            let a = eval(env, *addr).to_logic();
+            let a = eval(env, *addr).into_logic();
             let elem = match a.to_u64() {
                 Some(a) => env.read_mem(*mem, a),
                 None => None,
@@ -159,7 +192,7 @@ pub(crate) fn unary(op: UnaryOp, v: Value) -> Value {
             _ => unary(op, Value::Bits(Value::Real(r).to_logic())),
         };
     }
-    let l = v.to_logic();
+    let l = v.into_logic();
     Value::Bits(match op {
         UnaryOp::Not => l.not(),
         UnaryOp::Neg => l.neg(),
@@ -189,7 +222,7 @@ pub(crate) fn binary(op: BinaryOp, a: Value, b: Value) -> Value {
         }
         _ => {}
     }
-    Value::Bits(bits_binary(op, a.to_logic(), b.to_logic()))
+    Value::Bits(bits_binary(op, a.into_logic(), b.into_logic()))
 }
 
 /// Real arithmetic; `None` for operators that have no real form.
@@ -292,6 +325,19 @@ impl<'d> Env<'d> for SimEnv<'_, 'd> {
         }
     }
 
+    fn read_net_bits(&mut self, net: NetId, lo: i64, width: u32) -> Logic {
+        let state = &self.sim.instances[self.inst.idx()];
+        let in_place = state.nets.get(net.index()).filter(|_| {
+            // A real is read as a number and a string as characters;
+            // their bits are not the stored ones, so they go the long way.
+            !matches!(state.m.nets[net].ty, Type::Real | Type::String)
+        });
+        match in_place {
+            Some(sig) => select_bits(self.sim.signals[sig.idx()].effective(), lo, width),
+            None => select_bits(&self.read_net(net).into_logic(), lo, width),
+        }
+    }
+
     fn read_mem(&mut self, mem: MemoryId, addr: u64) -> Option<Logic> {
         let mid = *self.sim.instances[self.inst.idx()].mems.get(mem.index())?;
         let index = usize::try_from(addr).ok()?;
@@ -311,7 +357,7 @@ impl<'d> Simulator<'d> {
 
     /// Evaluates `e` as a bit vector.
     pub(crate) fn eval_logic(&mut self, inst: InstId, e: ExprId) -> Logic {
-        self.eval(inst, e).to_logic()
+        self.eval(inst, e).into_logic()
     }
 }
 
