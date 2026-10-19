@@ -3427,6 +3427,15 @@ fn write_xc7_bitstream(
     )
     .map_err(|e| e.to_string())?;
     laps.lap("place");
+    // As the ECP5 flow does: what legalisation moved and the wirelength
+    // the anneal reached, which is what a route's congestion is read
+    // against, and the schedule when it is asked for.
+    if args.flag("report") {
+        eprint!("{}", placement_report.to_text());
+    }
+    if args.flag("place-schedule") {
+        eprint!("{}", placement_report.schedule_text());
+    }
 
     // A route that fails says why. Writing the file anyway is the right
     // thing — a partly configured bitstream is still worth looking at —
