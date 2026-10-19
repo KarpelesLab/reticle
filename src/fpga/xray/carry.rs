@@ -152,8 +152,13 @@ pub fn legalise_carries(
         return Err("the module is not part of the design".to_owned());
     };
 
-    // The plan is made against an immutable view, then applied.
-    let mut plans: Vec<(CellId, Vec<Lane>)> = Vec::new();
+    // The plan is made against an immutable view, then applied. Each plan
+    // carries, per lane, the net and bit a buffer lane reads, found in the
+    // same view its slot numbers came from: building a view of the whole
+    // module again for every chain to ask it was a quadratic, 17 s of the
+    // Husky's 1,681 chains.
+    type Owners = Vec<Option<(crate::ir::NetId, u32)>>;
+    let mut plans: Vec<(CellId, Vec<Lane>, Owners)> = Vec::new();
     {
         let view = BitView::new(m).map_err(|e| e.to_string())?;
         let bits = |id: ExprId| -> Result<Vec<SigBit>, String> {
@@ -320,7 +325,14 @@ pub fn legalise_carries(
                     generate,
                 });
             }
-            plans.push((id, plan));
+            let owners = plan
+                .iter()
+                .map(|lane| match lane.propagate {
+                    Propagate::Buffer(s) => Some(view.owner(s)),
+                    _ => None,
+                })
+                .collect();
+            plans.push((id, plan, owners));
         }
     }
 
@@ -328,18 +340,9 @@ pub fn legalise_carries(
     let Some(m) = design.modules.get_mut(module) else {
         return Err("the module is not part of the design".to_owned());
     };
-    for (id, plan) in plans {
+    for (id, plan, view_owner) in plans {
         let span = m.cells[id].span;
         let name = m.cells[id].name.as_str().to_owned();
-        let view_owner: Vec<Option<(crate::ir::NetId, u32)>> = {
-            let view = BitView::new(m).map_err(|e| e.to_string())?;
-            plan.iter()
-                .map(|lane| match lane.propagate {
-                    Propagate::Buffer(s) => Some(view.owner(s)),
-                    _ => None,
-                })
-                .collect()
-        };
         let old_s = m.cells[id]
             .input(shape.propagate)
             .expect("checked in the plan");
