@@ -2617,11 +2617,14 @@ impl Laps {
 /// nothing until it is over.
 fn print_iteration(iteration: &reticle::fpga::route::Iteration) {
     eprintln!(
-        "timing:   route pass {:>3}: {} node(s) overused ({} in all), {} pip(s), at {:.1} s",
+        "timing:   route pass {:>3}: {} node(s) overused ({} in all), {} pip(s), {} signal(s) \
+         rerouted visiting {} node(s), at {:.1} s",
         iteration.index,
         iteration.overused_nodes,
         iteration.total_overuse,
         iteration.pips,
+        iteration.rerouted,
+        iteration.visited,
         process_started().elapsed().as_secs_f64()
     );
 }

@@ -548,6 +548,12 @@ pub struct Iteration {
     /// The longest path the timing analysis found after it, in
     /// [`Timing`]'s unit, or `None` when the router is not timing-driven.
     pub critical: Option<u64>,
+    /// How many signals it ripped up and routed again.
+    pub rerouted: usize,
+    /// How many nodes its maze expansions took off the queue: the
+    /// iteration's work, as [`RoutingReport::visited`] is the whole
+    /// route's.
+    pub visited: u64,
 }
 
 /// What [`route`] did.
@@ -825,6 +831,8 @@ pub fn route(
     let mut criticality: Vec<Vec<f64>> =
         terminals.iter().map(|t| vec![0.0; t.sinks.len()]).collect();
     for index in 1..=options.max_iterations {
+        let visited_before = scratch.visited;
+        let mut rerouted = 0;
         for (which, terminals) in terminals.iter().enumerate() {
             let critical = options.timing.as_ref().is_some_and(|timing| {
                 criticality[which]
@@ -844,6 +852,7 @@ pub fn route(
                 continue;
             }
             rip_up(&mut state, &mut routing, terminals.signal);
+            rerouted += 1;
             // The box from the second pass on: the first is free, and so
             // quick, and a box costs a failed search wherever a pin's
             // wires lie outside the box its tile draws. A signal that has
@@ -882,6 +891,8 @@ pub fn route(
             total_overuse,
             pips: routing.pip_count(),
             critical,
+            rerouted,
+            visited: scratch.visited - visited_before,
         });
         if let (Some(hook), Some(last)) = (options.on_iteration, report.iterations.last()) {
             hook(last);
@@ -2326,6 +2337,12 @@ mod tests {
         assert_eq!(report.iterations.len(), 2, "{}", report.to_text());
         assert_eq!(report.iterations[1].overused_nodes, 0);
         assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        // Each pass's own work adds up to the route's, and the first pass
+        // routes every signal: the counts a long route's log is read by.
+        let visited: u64 = report.iterations.iter().map(|i| i.visited).sum();
+        assert_eq!(visited, report.visited);
+        assert!(report.iterations.iter().all(|i| i.visited > 0));
+        assert_eq!(report.iterations[0].rerouted, 2);
     }
 
     /// **A signal's box is drawn round where its terminals are served,
