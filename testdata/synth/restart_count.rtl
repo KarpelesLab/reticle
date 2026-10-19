@@ -1,0 +1,55 @@
+top restart_count
+
+// A saturating counter that restarts at its increment, as each of the
+// 256 counters of NewAE's `esad` trigger is written:
+//
+//     if (restart) c <= {0, inc}; else if (~&c) c <= c + inc;
+//
+// Process lowering gives `c` the enable `restart | ~&c` itself, loading
+// `restart ? {0, inc} : c + inc`. The bits whose restart value is a
+// constant then become a register of their own with a synchronous reset
+// on `restart` — the enable is high whenever it is, so the reset needs
+// no `and` with it — and only the bottom bit keeps the multiplexer.
+//
+// `@a` is the same counter as an element of an array, as `esad`'s
+// generate loop has it. There `mem_scalarize` writes the word as
+// `~restart & ~&a ? a + inc : (restart ? {0, inc} : a)`, with the hold
+// one multiplexer down, and `ff_opt` has to find the enable in that
+// before it can split the reset. The initial values give the checker a
+// state to start from.
+module restart_count
+  net %clk u1 wire
+  net %restart u1 wire
+  net %inc u1 wire
+  net %c u4 reg
+  net %ac u4 wire
+  port clk in %clk
+  port restart in %restart
+  port inc in %inc
+  port c out %c
+  port ac out %ac
+  memory @a 1 x u4
+    init 4'd0
+  process init initial
+    %c = 4'd0
+  end
+  process p seq posedge %clk
+    if %restart
+      %c <= {3'd0, %inc}
+    else
+      if not(rand(%c))
+        %c <= add(%c, {3'd0, %inc})
+      end
+    end
+  end
+  process q seq posedge %clk
+    if %restart
+      memwrite @a[1'd0] = {3'd0, %inc}
+    else
+      if not(rand(@a[1'd0]))
+        memwrite @a[1'd0] = add(@a[1'd0], {3'd0, %inc})
+      end
+    end
+  end
+  assign %ac = @a[1'd0]
+end

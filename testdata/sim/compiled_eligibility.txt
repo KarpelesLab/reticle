@@ -226,6 +226,15 @@ testdata/synth/ram_regread.rtl
 testdata/synth/ram_regread.synth.rtl
   ram_regread: eligible (2 comb ops, 4 edge ops, 1 registers, 8 bits)
 
+testdata/synth/restart_count.cells.rtl
+  restart_count: eligible (17 comb ops, 12 edge ops, 4 registers, 8 bits)
+
+testdata/synth/restart_count.rtl
+  restart_count: eligible (1 comb ops, 19 edge ops, 1 registers, 4 bits)
+
+testdata/synth/restart_count.synth.rtl
+  restart_count: eligible (2 comb ops, 27 edge ops, 4 registers, 8 bits)
+
 testdata/synth/split_bits.cells.rtl
   split_bits: eligible (11 comb ops, 6 edge ops, 3 registers, 6 bits)
 

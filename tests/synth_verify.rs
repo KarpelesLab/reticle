@@ -87,6 +87,7 @@ fn check(name: &str, options: &VerifyOptions) -> SynthVerifyReport {
 const EXPECTED: &[(&str, Verdict)] = &[
     ("adder_tree", Verdict::Proved),
     ("byte_write", Verdict::Proved),
+    ("restart_count", Verdict::Proved),
     ("async_reg", Verdict::Proved),
     ("blocking_ssa", Verdict::Proved),
     ("casez_priority", Verdict::Proved),

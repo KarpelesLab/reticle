@@ -1,0 +1,30 @@
+top restart_count
+
+module restart_count
+  net %clk u1 wire
+  net %restart u1 wire
+  net %inc u1 wire
+  net %c u4 wire
+  net %ac u4 wire
+  attr init = 3'd0
+  net %c$1 u3 wire
+  attr init = 1'd0
+  net %c$0 u1 wire
+  net %a$0 u4 wire
+  attr init = 3'd0
+  net %a$0$1 u3 wire
+  attr init = 1'd0
+  net %a$0$0 u1 wire
+  port clk in %clk
+  port restart in %restart
+  port inc in %inc
+  port c out %c
+  port ac out %ac
+  assign %ac = %a$0
+  assign %c = {%c$1, %c$0}
+  assign %a$0 = {%a$0$1, %a$0$0}
+  cell c$ff dff pos en srst pos 3'd0 (clk=%clk, d=add(%c, {3'd0, %inc})[3:1], en=or(%restart, not(rand(%c))), rst=%restart) -> (q=%c$1)
+  cell c$ff$0 dff pos en (clk=%clk, d=mux(%restart, %inc, add(%c[0:0], %inc)), en=or(%restart, not(rand(%c)))) -> (q=%c$0)
+  cell a$0$ff dff pos en srst pos 3'd0 (clk=%clk, d=add(%a$0, {3'd0, %inc})[3:1], en=or(%restart, not(rand(%a$0))), rst=%restart) -> (q=%a$0$1)
+  cell a$0$ff$0 dff pos en (clk=%clk, d=mux(%restart, %inc, add(%a$0[0:0], %inc)), en=or(%restart, not(rand(%a$0)))) -> (q=%a$0$0)
+end
