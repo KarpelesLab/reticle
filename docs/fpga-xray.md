@@ -3046,6 +3046,25 @@ Where a Husky build stood with all of it, on 2026-10-17:
 | routing, first pass | about 70 s |
 | routing, the second pass | **over an hour**: 65,000 of its 70,000-odd nets in 68 minutes; the overuse then *grew* pass on pass, 162,000 nodes to 422,000 over five passes of two and a half hours each |
 
+And on 2026-10-19, after three more found the same way. Carry
+legalisation built a bit-level view of the whole module for each of the
+1,681 chains, to ask it one thing the planning view already knew (15.8 s
+to 1.3 s). The routing graph hashed `(x, y, name)` to resolve both ends
+of every pip of every tile, though a tile type's pips are the same in
+every tile of it (4.9 s to 0.7 s on `blink_carry`'s region). And the
+annealer found a macro's members through hash maps keyed by site, which
+are arrays now (`SiteMap`; placement 285 s to 237 s side by side). Each
+left the result as it was — `blink_carry`'s bitstream byte for byte, the
+Husky's wirelength to the unit:
+
+| Stage | Time |
+|---|---|
+| synthesis and mapping | about 25 s |
+| carry legalisation, pairing, the graph | about 6 s (the graph 0.8 s, from 5–7) |
+| placement | about 240 s |
+| routing, the first pass | about 40 s |
+| routing, the later passes | thirty seconds each at first, twenty-five minutes each by the twentieth; see the next sections |
+
 ### The next day: the wires cost too much, and the placement was not one
 
 The route was diverging, and the wire classes said why. After the first
