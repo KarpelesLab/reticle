@@ -1,0 +1,49 @@
+top wire_array
+
+// An unpacked wire array, `wire [7:0] w [0:2]; assign w[0] = a; ...`, as
+// the Verilog frontend hands it over: a memory written by continuous
+// assignments to its elements, read at constant and variable addresses.
+// It is wires, and synthesis has to keep it so: `dce` used to drop the
+// assignments, which drive no net, and `mem_scalarize` to take a word
+// only an assignment writes for one nothing writes, so every read was
+// `x`. The register array `@r` before it is split into registers first,
+// which moves `@w`'s id; renumbering only the ports left the assignments
+// naming the wrong memory; `mem_scalarize`'s own tests have that case,
+// since a memory that survives with an assignment cannot be written as a
+// netlist. NewAE's Husky gateware lost its trigger sequencer's wait
+// windows and TraceWhisperer's match patterns to the first two, and the
+// third gave one of its FIFOs a byte-wide write it does not have.
+module wire_array
+  net %clk u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %s u2 wire
+  net %y0 u8 wire
+  net %y2 u8 wire
+  net %ys u8 wire
+  net %q u8 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port s in %s
+  port y0 out %y0
+  port y2 out %y2
+  port ys out %ys
+  port q out %q
+  memory @r 2 x u8
+    init 8'd0 8'd0
+  memory @w 3 x u8
+  process p0 seq posedge %clk
+    memwrite @r[1'd0] = %a
+  end
+  process p1 seq posedge %clk
+    memwrite @r[1'd1] = @r[1'd0]
+  end
+  assign @w[2'd0] = %a
+  assign @w[2'd1] = %b
+  assign @w[2'd2] = add(%a, %b)
+  assign %y0 = @w[2'd0]
+  assign %y2 = @w[2'd2]
+  assign %ys = @w[%s]
+  assign %q = @r[1'd1]
+end

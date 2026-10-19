@@ -19,18 +19,29 @@
 //! writes holds its initial value. An address past the end reads `x` and
 //! writes nothing, which is what the memory did.
 //!
-//! It is left alone when any port's address is not constant, a write port
-//! is not clocked, the writers of one word disagree about their clock, or
-//! anything reads the memory other than through a port.
+//! An unpacked wire array, `wire [7:0] w [0:2]; assign w[0] = a;`, is a
+//! memory written by continuous assignments to its elements. Each of
+//! those drives its word as a wire, and since nothing about such a memory
+//! is stored, a read of it at a variable address becomes a multiplexer
+//! over the words, up to [`VARIABLE_READ_WORDS`] of them.
+//!
+//! It is left alone when any write's address is not constant, a read's is
+//! not and the memory is not all wires, a write port is not clocked, one
+//! word is both a wire and a register, the writers of one word disagree
+//! about their clock, or anything reads the memory other than through a
+//! port.
 
 use crate::diag::Diagnostics;
 use crate::ir::{
-    Assign, AttrValue, Attrs, BinaryOp, CellId, CellKind, ExprId, ExprKind, Lvalue, MemoryId,
-    Module, NetId, UnaryOp,
+    Assign, AttrValue, Attrs, BinaryOp, CellId, CellKind, Const, ExprId, ExprKind, Lvalue,
+    MemoryId, Module, NetId, UnaryOp,
 };
 use crate::source::Span;
 use crate::synth::eval::eval_closed;
-use crate::synth::util::{add_cell, add_wire, const_bit, mk_const, mk_mux, mk_net, mk_undef};
+use crate::synth::opt::dce::map_memories;
+use crate::synth::util::{
+    add_cell, add_wire, const_bit, mk_binary, mk_const, mk_mux, mk_net, mk_undef,
+};
 use crate::synth::{Pass, PassStats};
 
 /// The memory-scalarisation pass; see the module docs.
@@ -54,27 +65,30 @@ impl Pass for MemScalarize {
             }
         }
         if !gone.is_empty() {
-            // The memories' ports went with them, so only the ids of the
-            // memories left need moving.
+            // The memories' ports and element assignments went with them,
+            // so only the ids of the memories left need moving — in every
+            // place one is named. Moving them in the port cells alone left
+            // an `assign w[0] = a` naming whichever memory took its old
+            // id, which on the Husky was a 6-bit FIFO given a byte.
             let remap = m.memories.retain(|id, _| !gone.contains(&id));
-            for (_, cell) in m.cells.iter_mut() {
-                if let CellKind::MemRdPort { mem, .. } | CellKind::MemWrPort { mem, .. } =
-                    &mut cell.kind
-                    && let Some(Some(new)) = remap.get(mem.index())
-                {
-                    *mem = *new;
-                }
-            }
+            map_memories(m, |old| remap[old.index()].unwrap_or(old));
         }
         stats
     }
 }
+
+/// The most words a memory of wires is built as a multiplexer for, when a
+/// read's address is not constant.
+const VARIABLE_READ_WORDS: usize = 256;
 
 /// One port, with its address resolved and its pins read out.
 struct Port {
     cell: CellId,
     /// The word, or `None` for an address past the end.
     word: Option<usize>,
+    /// The address, when it is not a constant: only a read of a memory
+    /// that is all wires may have one.
+    variable: Option<ExprId>,
     clk: Option<ExprId>,
     en: Option<ExprId>,
     /// The written value, for a write port.
@@ -118,13 +132,22 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             CellKind::MemWrPort { mem: x, clocked } if *x == mem => (true, *clocked),
             _ => continue,
         };
-        let addr = eval_closed(m, cell.input("addr")?)?.to_u64();
-        let word = addr
-            .and_then(|a| usize::try_from(a).ok())
-            .filter(|a| *a < size);
+        let address = cell.input("addr")?;
+        let (word, variable) = match eval_closed(m, address) {
+            Some(value) => (
+                value
+                    .to_u64()
+                    .and_then(|a| usize::try_from(a).ok())
+                    .filter(|a| *a < size),
+                None,
+            ),
+            None if is_write || m.expr(address).ty.is_signed() => return None,
+            None => (None, Some(address)),
+        };
         let port = Port {
             cell: id,
             word,
+            variable,
             clk: cell.input("clk"),
             en: cell.input("en"),
             data: cell.input("data"),
@@ -144,6 +167,44 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             reads.push(port);
         }
     }
+    // Continuous assignments to an element, `assign w[0] = a` on an
+    // unpacked wire array: each drives its word as a wire does. One whose
+    // address is not constant, or that writes this memory inside a
+    // concatenation, leaves the memory as it is.
+    let mut driven: Vec<Option<ExprId>> = vec![None; size];
+    let mut assigned: Vec<usize> = Vec::new();
+    for (i, a) in m.assigns.iter().enumerate() {
+        match &a.target {
+            Lvalue::MemElem { mem: x, addr } if *x == mem => {
+                let addr = eval_closed(m, *addr)?.to_u64()?;
+                if let Some(word) = usize::try_from(addr).ok().filter(|w| *w < size) {
+                    if driven[word].is_some() {
+                        return None;
+                    }
+                    driven[word] = Some(a.value);
+                }
+                assigned.push(i);
+            }
+            Lvalue::Concat(parts) if writes_memory(parts, mem) => return None,
+            _ => {}
+        }
+    }
+    // A read at a variable address is a multiplexer over the words, which
+    // is worth building only where the words are wires: a memory with
+    // write ports and a read like that is a memory in earnest.
+    if reads.iter().any(|p| p.variable.is_some())
+        && (!writes.is_empty() || assigned.is_empty() || size > VARIABLE_READ_WORDS)
+    {
+        return None;
+    }
+    // A word is a register or a wire, not both.
+    if writes
+        .iter()
+        .any(|p| p.word.is_some_and(|w| driven[w].is_some()))
+    {
+        return None;
+    }
+
     // One clock per word.
     for word in 0..size {
         let mut clock: Option<NetId> = None;
@@ -164,6 +225,16 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             m.nets[*net]
                 .attrs
                 .set("init", AttrValue::Const(value.clone()));
+        }
+        if let Some(value) = driven[k] {
+            m.assigns.push(Assign {
+                target: Lvalue::Net(*net),
+                value,
+                delay: None,
+                attrs: Attrs::new(),
+                span,
+            });
+            continue;
         }
         let writers: Vec<&Port> = writes.iter().filter(|p| p.word == Some(k)).collect();
         if writers.is_empty() {
@@ -213,9 +284,24 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
     // The reads.
     for port in &reads {
         let Some(out) = port.out else { continue };
-        let value = match port.word {
-            Some(k) => mk_net(m, words[k], span),
-            None => mk_undef(m, &ty, span),
+        let value = match (port.variable, port.word) {
+            (Some(addr), _) => {
+                let bits = m.expr(addr).ty.width().unwrap_or(0);
+                let mut value = mk_undef(m, &ty, span);
+                for (k, word) in words.iter().enumerate() {
+                    let Ok(k) = u64::try_from(k) else { break };
+                    if bits < 64 && k >> bits != 0 {
+                        break;
+                    }
+                    let at = mk_const(m, Const::from_u64(k, bits), span);
+                    let hit = mk_binary(m, BinaryOp::Eq, addr, at, span);
+                    let word = mk_net(m, *word, span);
+                    value = mk_mux(m, hit, word, value, span);
+                }
+                value
+            }
+            (None, Some(k)) => mk_net(m, words[k], span),
+            (None, None) => mk_undef(m, &ty, span),
         };
         if let (true, Some(clk)) = (port.clocked, port.clk) {
             let mut inputs = vec![("clk", clk), ("d", value)];
@@ -246,7 +332,22 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
     }
     let ports: Vec<CellId> = reads.iter().chain(&writes).map(|p| p.cell).collect();
     m.cells.retain(|id, _| !ports.contains(&id));
+    let mut index = 0;
+    m.assigns.retain(|_| {
+        let keep = !assigned.contains(&index);
+        index += 1;
+        keep
+    });
     u64::try_from(size).ok()
+}
+
+/// True when any of `parts` writes an element of `mem`.
+fn writes_memory(parts: &[Lvalue], mem: MemoryId) -> bool {
+    parts.iter().any(|p| match p {
+        Lvalue::MemElem { mem: x, .. } => *x == mem,
+        Lvalue::Concat(inner) => writes_memory(inner, mem),
+        _ => false,
+    })
 }
 
 /// What one literal of an enable tests: a whole one-bit net, one bit of a
@@ -389,4 +490,78 @@ fn build(
     let then_ = build(m, &high, hold, budget, holds, span)?;
     let else_ = build(m, &low, hold, budget, holds, span)?;
     Some(mk_mux(m, chooser, then_, else_, span))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::builder::ModuleBuilder;
+    use crate::ir::{Name, Type};
+    use crate::synth::opt::testutil::{run, span};
+
+    /// A memory removed renumbers the ones after it **everywhere** one is
+    /// named. `@r` is split into registers; `@v` stays a memory, since a
+    /// port writes it at a variable address, and an assignment writes its
+    /// word 0. Renumbering only the port cells left that assignment
+    /// naming `@v`'s old id, a memory that is no longer there — or, in a
+    /// module with more of them, whichever took the id, which is what
+    /// NewAE's Husky gateware had: a FIFO given another array's byte.
+    #[test]
+    fn an_element_assignment_follows_its_memory_when_another_goes() {
+        let mut b = ModuleBuilder::new("m", span());
+        let clk = b.input("clk", Type::bit());
+        let a = b.input("a", Type::bits(8));
+        let t = b.input("t", Type::bit());
+        let q = b.output("q", Type::bits(8));
+        let v0 = b.output("v0", Type::bits(8));
+        let (clkn, an, tn) = (b.net(clk), b.net(a), b.net(t));
+        let r = b.memory("r", Type::bits(8), 2);
+        let v = b.memory("v", Type::bits(8), 2);
+        let zero = b.const_u64(1, 0);
+        let one = b.const_bit(true);
+        for (mem, addr) in [(r, zero), (v, tn)] {
+            b.cell(
+                "wr",
+                CellKind::MemWrPort { mem, clocked: true },
+                vec![
+                    (Name::new("addr"), addr),
+                    (Name::new("data"), an),
+                    (Name::new("en"), one),
+                    (Name::new("clk"), clkn),
+                ],
+                vec![],
+            );
+        }
+        for (mem, out) in [(r, q), (v, v0)] {
+            b.cell(
+                "rd",
+                CellKind::MemRdPort {
+                    mem,
+                    clocked: false,
+                },
+                vec![(Name::new("addr"), zero)],
+                vec![(Name::new("data"), out)],
+            );
+        }
+        let mut m = b.finish();
+        m.assigns.push(Assign {
+            target: Lvalue::MemElem { mem: v, addr: zero },
+            value: an,
+            delay: None,
+            attrs: Attrs::new(),
+            span: span(),
+        });
+        let stats = run(&MemScalarize, &mut m);
+        assert_eq!(stats.get("memories split into registers"), 1);
+        let survivor = m.memory_by_name("v").expect("`v` is still a memory");
+        let named: Vec<MemoryId> = m
+            .assigns
+            .iter()
+            .filter_map(|a| match a.target {
+                Lvalue::MemElem { mem, .. } => Some(mem),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, vec![survivor]);
+    }
 }

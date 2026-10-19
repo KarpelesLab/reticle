@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wire_array schematic</title>
+    <style>
+:root {
+  --bg: #fbfbfa; --fg: #1d2021; --dim: #6b7378; --line: #d6d9dc;
+  --panel: #ffffff; --accent: #1d6fb8; --comb: #eef3f8; --comb-line: #7a9cbb;
+  --seq: #fdf0e0; --seq-line: #c6852a; --port: #e9f4ec; --port-line: #4c8f63;
+  --inst: #f1edf8; --inst-line: #7c6bab; --wire: #7c8790; --hot: #d1440a;
+  --mono: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'DejaVu Sans', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191c; --fg: #e4e6e8; --dim: #97a0a6; --line: #333a40;
+    --panel: #1d2125; --accent: #6db3f2; --comb: #23303b; --comb-line: #5b87ad;
+    --seq: #382b1b; --seq-line: #d29a45; --port: #1e3327; --port-line: #5ea678;
+    --inst: #2a2440; --inst-line: #9385c9; --wire: #79858e; --hot: #ff7a45;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+header.top { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 2; }
+.crumbs { font-family: var(--mono); font-size: 13px; }
+.crumbs .sep { color: var(--dim); margin: 0 0.35rem; }
+.crumbs .here { font-weight: 600; }
+.brand { color: var(--dim); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+main { padding: 1rem; margin: 0 auto; }
+main.narrow { max-width: 70rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 1.5rem; margin: 0.2rem 0 0.4rem; }
+h2 { font-size: 1.1rem; margin: 1.6rem 0 0.4rem; border-bottom: 1px solid var(--line);
+  padding-bottom: 0.2rem; }
+h1 .kind, .loc { color: var(--dim); font-weight: 400; font-size: 0.8rem; font-family: var(--mono); }
+p.desc { margin: 0.4rem 0 1rem; max-width: 46rem; white-space: pre-wrap; }
+p.none, td.none { color: var(--dim); font-style: italic; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code, td.mono { font-family: var(--mono); font-size: 13px; }
+ul.tree { list-style: none; padding-left: 1.1rem; margin: 0.2rem 0; border-left: 1px solid var(--line); }
+ul.tree li { padding: 0.1rem 0; font-family: var(--mono); font-size: 13px; }
+.toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.toolbar input { font: inherit; font-size: 13px; padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); min-width: 14rem; }
+.toolbar button { font: inherit; font-size: 13px; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); cursor: pointer; }
+.toolbar .hint { color: var(--dim); font-size: 12px; }
+.canvas { display: flex; gap: 0.75rem; align-items: stretch; flex-wrap: wrap; }
+.frame { flex: 1 1 28rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); overflow: hidden; }
+svg.schematic { display: block; width: 100%; height: 72vh; touch-action: none; cursor: grab; }
+aside.info { flex: 0 1 17rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); padding: 0.6rem 0.8rem; font-size: 13px; overflow: auto;
+  max-height: 72vh; }
+aside.info h3 { margin: 0 0 0.4rem; font-size: 0.95rem; font-family: var(--mono); }
+aside.info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; }
+aside.info dt { color: var(--dim); font-size: 12px; }
+aside.info dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.legend { display: flex; gap: 0.9rem; flex-wrap: wrap; color: var(--dim); font-size: 12px;
+  margin-top: 0.5rem; }
+.legend span::before { content: ''; display: inline-block; width: 0.7rem; height: 0.7rem;
+  margin-right: 0.3rem; border: 1px solid var(--line); vertical-align: -1px; }
+.legend .l-comb::before { background: var(--comb); border-color: var(--comb-line); }
+.legend .l-seq::before { background: var(--seq); border-color: var(--seq-line); }
+.legend .l-port::before { background: var(--port); border-color: var(--port-line); }
+.legend .l-inst::before { background: var(--inst); border-color: var(--inst-line); }
+.box { fill: var(--comb); stroke: var(--comb-line); stroke-width: 1; }
+.seq .box { fill: var(--seq); stroke: var(--seq-line); stroke-width: 2; }
+.port .box { fill: var(--port); stroke: var(--port-line); }
+.inst .box { fill: var(--inst); stroke: var(--inst-line); stroke-width: 1.5; }
+.kind { fill: var(--fg); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.label { fill: var(--dim); font-family: var(--mono); font-size: 10px; }
+.pinname { fill: var(--dim); font-family: var(--mono); font-size: 9px; }
+.pin { fill: var(--wire); stroke: none; }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.4; stroke-linejoin: round; }
+.wire.bus { stroke-width: 2.6; }
+.clkmark { fill: none; stroke: var(--seq-line); stroke-width: 1.4; }
+.node { cursor: pointer; }
+polyline.hl { stroke: var(--hot); }
+circle.hl { fill: var(--hot); }
+text.hl { fill: var(--hot); }
+.hl-node .box { stroke: var(--hot); }
+.found .box { stroke: var(--hot); stroke-dasharray: 4 2; }
+.sel .box { stroke: var(--accent); stroke-width: 2.5; }
+ol.src { font-family: var(--mono); font-size: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 0.6rem 0.6rem 4rem;
+  overflow-x: auto; }
+ol.src li { white-space: pre; padding: 0 0.3rem; }
+ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line); }
+
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <nav class="crumbs">
+        <a href="index.html">index</a>
+        <span class="sep">/</span>
+        <span class="here">wire_array (schematic)</span>
+      </nav>
+      <span class="brand">reticle viewer</span>
+    </header>
+    <main class="wide"><h1>wire_array
+  <span class="kind"> schematic</span>
+</h1>
+<p class="loc">
+  <a href="source/0-wire_array.cells.rtl.html#L3">wire_array.cells.rtl:3:1</a> · 
+  <a href="wire_array.doc.html">documentation</a> · 
+  <a href="index.html">index</a>
+</p>
+<div class="toolbar">
+  <input type="search" id="search" placeholder="find a cell or a net" aria-label="find a cell or a net" />
+  <button type="button" id="zoom-out">−</button>
+  <button type="button" id="zoom-in">+</button>
+  <button type="button" id="zoom-reset">reset</button>
+  <span class="hint">drag to pan, wheel to zoom, hover a wire to trace it, click a cell for its details</span>
+</div>
+<div class="canvas">
+  <div class="frame">
+    <svg class="schematic" id="schematic" viewBox="0 0 816 707" preserveAspectRatio="xMinYMin meet" role="img">
+      <title>schematic of module wire_array</title>
+      <g id="view">
+        <g class="wires">
+          <polyline class="wire bus" points="332,310 356,310 356,218 500,218 500,263 624,263 624,265 652,265" data-net="y0" />
+          <polyline class="wire bus" points="476,282 488,282 488,313 624,313 624,345 652,345" data-net="y2" />
+          <polyline class="wire bus" points="612,377 624,377 624,425 652,425" data-net="ys" />
+          <polyline class="wire bus" points="612,219 624,219 624,185 652,185" data-net="q" />
+          <polyline class="wire bus" points="164,221 200,221 200,390 236,390" data-net="a" />
+          <polyline class="wire bus" points="164,301 176,301 176,408 236,408" data-net="b" />
+          <polyline class="wire bus" points="164,425 200,425 200,642 236,642" data-net="s" />
+          <polyline class="wire" points="122,477 212,477 212,660 236,660" />
+          <polyline class="wire bus" points="164,425 176,425 176,544 236,544" data-net="s" />
+          <polyline class="wire" points="122,353 188,353 188,562 236,562" />
+          <polyline class="wire bus" points="164,221 212,221 212,452 368,452 368,390 380,390" data-net="a" />
+          <polyline class="wire bus" points="164,301 224,301 224,480 344,480 344,408 380,408" data-net="b" />
+          <polyline class="wire" points="332,544 356,544 356,426 380,426" data-net="ys$eq_2" />
+          <polyline class="wire bus" points="476,390 500,390 500,377 516,377" data-net="ys$mux" />
+          <polyline class="wire bus" points="332,390 356,390 356,326 488,326 488,395 516,395" data-net="w$2" />
+          <polyline class="wire" points="332,642 368,642 368,470 488,470 488,413 516,413" data-net="ys$eq" />
+          <polyline class="wire" points="164,141 188,141 188,212 236,212" data-net="clk" />
+          <polyline class="wire bus" points="164,221 176,221 176,230 236,230" data-net="a" />
+          <polyline class="wire" points="164,141 176,141 176,148 344,148 344,156 380,156" data-net="clk" />
+          <polyline class="wire bus" points="332,212 344,212 344,174 380,174" data-net="r$0" />
+          <polyline class="wire bus" points="476,156 488,156 488,219 516,219" data-net="r$1" />
+          <polyline class="wire bus" points="164,221 188,221 188,310 236,310" data-net="a" />
+          <polyline class="wire bus" points="332,390 344,390 344,282 380,282" data-net="w$2" />
+          <text class="label" x="339" y="305" data-net="y0">y0 /8</text>
+          <text class="label" x="483" y="277" data-net="y2">y2 /8</text>
+          <text class="label" x="619" y="372" data-net="ys">ys…</text>
+          <text class="label" x="619" y="214" data-net="q">q /8</text>
+          <text class="label" x="171" y="216" data-net="a">a /8</text>
+          <text class="label" x="171" y="296" data-net="b">b /8</text>
+          <text class="label" x="171" y="420" data-net="s">s /2</text>
+          <text class="label" x="339" y="539" data-net="ys$eq_2">ys$eq_2</text>
+          <text class="label" x="483" y="385" data-net="ys$mux">ys$…</text>
+          <text class="label" x="339" y="385" data-net="w$2">w… /8</text>
+          <text class="label" x="339" y="637" data-net="ys$eq">ys$eq</text>
+          <text class="label" x="171" y="136" data-net="clk">clk</text>
+          <text class="label" x="339" y="207" data-net="r$0">r$0 /8</text>
+          <text class="label" x="483" y="151" data-net="r$1">r$1 /8</text>
+        </g>
+        <g class="nodes">
+          <g class="node port" data-detail="0" data-search="clk port in" data-cx="116" data-cy="131">
+            <polygon class="box" points="68,102 153,102 164,131 153,160 68,160" />
+            <text class="kind" x="77" y="119">port in</text>
+            <text class="label" x="77" y="130">clk</text>
+            <circle class="pin" cx="164" cy="141" r="3" data-net="clk" />
+          </g>
+          <g class="node port" data-detail="1" data-search="a port in" data-cx="116" data-cy="211">
+            <polygon class="box" points="68,182 153,182 164,211 153,240 68,240" />
+            <text class="kind" x="77" y="199">port in</text>
+            <text class="label" x="77" y="210">a</text>
+            <circle class="pin" cx="164" cy="221" r="3" data-net="a" />
+          </g>
+          <g class="node port" data-detail="2" data-search="b port in" data-cx="116" data-cy="291">
+            <polygon class="box" points="68,262 153,262 164,291 153,320 68,320" />
+            <text class="kind" x="77" y="279">port in</text>
+            <text class="label" x="77" y="290">b</text>
+            <circle class="pin" cx="164" cy="301" r="3" data-net="b" />
+          </g>
+          <g class="node port" data-detail="3" data-search="port in s" data-cx="116" data-cy="415">
+            <polygon class="box" points="68,386 153,386 164,415 153,444 68,444" />
+            <text class="kind" x="77" y="403">port in</text>
+            <text class="label" x="77" y="414">s</text>
+            <circle class="pin" cx="164" cy="425" r="3" data-net="s" />
+          </g>
+          <g class="node port" data-detail="4" data-search="port out y0" data-cx="700" data-cy="255">
+            <polygon class="box" points="663,226 737,226 748,255 737,284 663,284 652,255" />
+            <text class="kind" x="661" y="243">port out</text>
+            <text class="label" x="661" y="254">y0</text>
+            <circle class="pin" cx="652" cy="265" r="3" data-net="y0" />
+          </g>
+          <g class="node port" data-detail="5" data-search="port out y2" data-cx="700" data-cy="335">
+            <polygon class="box" points="663,306 737,306 748,335 737,364 663,364 652,335" />
+            <text class="kind" x="661" y="323">port out</text>
+            <text class="label" x="661" y="334">y2</text>
+            <circle class="pin" cx="652" cy="345" r="3" data-net="y2" />
+          </g>
+          <g class="node port" data-detail="6" data-search="port out ys" data-cx="700" data-cy="415">
+            <polygon class="box" points="663,386 737,386 748,415 737,444 663,444 652,415" />
+            <text class="kind" x="661" y="403">port out</text>
+            <text class="label" x="661" y="414">ys</text>
+            <circle class="pin" cx="652" cy="425" r="3" data-net="ys" />
+          </g>
+          <g class="node port" data-detail="7" data-search="port out q" data-cx="700" data-cy="175">
+            <polygon class="box" points="663,146 737,146 748,175 737,204 663,204 652,175" />
+            <text class="kind" x="661" y="163">port out</text>
+            <text class="label" x="661" y="174">q</text>
+            <circle class="pin" cx="652" cy="185" r="3" data-net="q" />
+          </g>
+          <g class="node comb" data-detail="8" data-search="a add b w$2 w$2$add y" data-cx="284" data-cy="389">
+            <rect class="box" x="236" y="351" width="96" height="76" rx="4" />
+            <text class="kind" x="245" y="368">add</text>
+            <text class="label" x="245" y="379">w$2$add</text>
+            <circle class="pin" cx="236" cy="390" r="3" data-net="a" />
+            <text class="pinname" x="243" y="393">a</text>
+            <circle class="pin" cx="236" cy="408" r="3" data-net="b" />
+            <text class="pinname" x="243" y="411">b</text>
+            <circle class="pin" cx="332" cy="390" r="3" data-net="w$2" />
+            <text class="pinname" x="325" y="393" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="9" data-search="2&#39;d2 a b eq s y ys$eq" data-cx="284" data-cy="641">
+            <rect class="box" x="236" y="603" width="96" height="76" rx="4" />
+            <text class="kind" x="245" y="620">eq</text>
+            <text class="label" x="245" y="631">ys$eq</text>
+            <circle class="pin" cx="236" cy="642" r="3" data-net="s" />
+            <text class="pinname" x="243" y="645">a</text>
+            <circle class="pin" cx="236" cy="660" r="3" />
+            <text class="pinname" x="243" y="663">b</text>
+            <circle class="pin" cx="332" cy="642" r="3" data-net="ys$eq" />
+            <text class="pinname" x="325" y="645" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="10" data-search="2&#39;d1 a b eq s y ys$eq_2" data-cx="284" data-cy="543">
+            <rect class="box" x="236" y="505" width="96" height="76" rx="4" />
+            <text class="kind" x="245" y="522">eq</text>
+            <text class="label" x="245" y="533">ys$eq_2</text>
+            <circle class="pin" cx="236" cy="544" r="3" data-net="s" />
+            <text class="pinname" x="243" y="547">a</text>
+            <circle class="pin" cx="236" cy="562" r="3" />
+            <text class="pinname" x="243" y="565">b</text>
+            <circle class="pin" cx="332" cy="544" r="3" data-net="ys$eq_2" />
+            <text class="pinname" x="325" y="547" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="11" data-search="a b mux s y ys$eq_2 ys$mux" data-cx="428" data-cy="398">
+            <rect class="box" x="380" y="351" width="96" height="94" rx="4" />
+            <text class="kind" x="389" y="368">mux</text>
+            <text class="label" x="389" y="379">ys$mux</text>
+            <circle class="pin" cx="380" cy="390" r="3" data-net="a" />
+            <text class="pinname" x="387" y="393">a</text>
+            <circle class="pin" cx="380" cy="408" r="3" data-net="b" />
+            <text class="pinname" x="387" y="411">b</text>
+            <circle class="pin" cx="380" cy="426" r="3" data-net="ys$eq_2" />
+            <text class="pinname" x="387" y="429">s</text>
+            <circle class="pin" cx="476" cy="390" r="3" data-net="ys$mux" />
+            <text class="pinname" x="469" y="393" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="12" data-search="a b mux s w$2 y ys ys$eq ys$mux ys$mux_2" data-cx="564" data-cy="385">
+            <rect class="box" x="516" y="338" width="96" height="94" rx="4" />
+            <text class="kind" x="525" y="355">mux</text>
+            <text class="label" x="525" y="366">ys$mux_2</text>
+            <circle class="pin" cx="516" cy="377" r="3" data-net="ys$mux" />
+            <text class="pinname" x="523" y="380">a</text>
+            <circle class="pin" cx="516" cy="395" r="3" data-net="w$2" />
+            <text class="pinname" x="523" y="398">b</text>
+            <circle class="pin" cx="516" cy="413" r="3" data-net="ys$eq" />
+            <text class="pinname" x="523" y="416">s</text>
+            <circle class="pin" cx="612" cy="377" r="3" data-net="ys" />
+            <text class="pinname" x="605" y="380" text-anchor="end">y</text>
+          </g>
+          <g class="node seq" data-detail="13" data-search="a clk d dff pos q r$0 r$0$ff" data-cx="284" data-cy="211">
+            <rect class="box" x="236" y="173" width="96" height="76" rx="4" />
+            <text class="kind" x="245" y="190">dff pos</text>
+            <text class="label" x="245" y="201">r$0$ff</text>
+            <circle class="pin" cx="236" cy="212" r="3" data-net="clk" />
+            <polyline class="clkmark" points="239,207 246,212 239,217" />
+            <text class="pinname" x="250" y="215">clk</text>
+            <circle class="pin" cx="236" cy="230" r="3" data-net="a" />
+            <text class="pinname" x="243" y="233">d</text>
+            <circle class="pin" cx="332" cy="212" r="3" data-net="r$0" />
+            <text class="pinname" x="325" y="215" text-anchor="end">q</text>
+          </g>
+          <g class="node seq" data-detail="14" data-search="clk d dff pos q r$0 r$1 r$1$ff" data-cx="428" data-cy="155">
+            <rect class="box" x="380" y="117" width="96" height="76" rx="4" />
+            <text class="kind" x="389" y="134">dff pos</text>
+            <text class="label" x="389" y="145">r$1$ff</text>
+            <circle class="pin" cx="380" cy="156" r="3" data-net="clk" />
+            <polyline class="clkmark" points="383,151 390,156 383,161" />
+            <text class="pinname" x="394" y="159">clk</text>
+            <circle class="pin" cx="380" cy="174" r="3" data-net="r$0" />
+            <text class="pinname" x="387" y="177">d</text>
+            <circle class="pin" cx="476" cy="156" r="3" data-net="r$1" />
+            <text class="pinname" x="469" y="159" text-anchor="end">q</text>
+          </g>
+          <g class="node comb" data-detail="15" data-search="assign q r$1" data-cx="564" data-cy="209">
+            <rect class="box" x="516" y="180" width="96" height="58" rx="4" />
+            <text class="kind" x="525" y="197">assign</text>
+            <circle class="pin" cx="516" cy="219" r="3" data-net="r$1" />
+            <circle class="pin" cx="612" cy="219" r="3" data-net="q" />
+          </g>
+          <g class="node comb" data-detail="16" data-search="a assign y0" data-cx="284" data-cy="300">
+            <rect class="box" x="236" y="271" width="96" height="58" rx="4" />
+            <text class="kind" x="245" y="288">assign</text>
+            <circle class="pin" cx="236" cy="310" r="3" data-net="a" />
+            <circle class="pin" cx="332" cy="310" r="3" data-net="y0" />
+          </g>
+          <g class="node comb" data-detail="17" data-search="assign w$2 y2" data-cx="428" data-cy="272">
+            <rect class="box" x="380" y="243" width="96" height="58" rx="4" />
+            <text class="kind" x="389" y="260">assign</text>
+            <circle class="pin" cx="380" cy="282" r="3" data-net="w$2" />
+            <circle class="pin" cx="476" cy="282" r="3" data-net="y2" />
+          </g>
+          <g class="node konst" data-detail="18" data-search="2&#39;d2" data-cx="95" data-cy="477">
+            <polygon class="box" points="102,466 122,477 102,488" />
+            <text class="kind" x="70" y="481">2&#39;d2</text>
+            <circle class="pin" cx="122" cy="477" r="3" />
+          </g>
+          <g class="node konst" data-detail="19" data-search="2&#39;d1" data-cx="95" data-cy="353">
+            <polygon class="box" points="102,342 122,353 102,364" />
+            <text class="kind" x="70" y="357">2&#39;d1</text>
+            <circle class="pin" cx="122" cy="353" r="3" />
+          </g>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <aside class="info" id="info">
+    <p id="info-empty" class="none">Click a cell to see its parameters and where it came from.</p>
+    <div class="detail" id="d0" hidden="hidden">
+      <h3>clk</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>clk</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L20">wire_array.cells.rtl:20:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d1" hidden="hidden">
+      <h3>a</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>a</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>out a</dt>
+        <dd>a</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L21">wire_array.cells.rtl:21:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d2" hidden="hidden">
+      <h3>b</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>b</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>out b</dt>
+        <dd>b</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L22">wire_array.cells.rtl:22:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d3" hidden="hidden">
+      <h3>s</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>s</dd>
+        <dt>type</dt>
+        <dd>u2</dd>
+        <dt>out s</dt>
+        <dd>s</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L23">wire_array.cells.rtl:23:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d4" hidden="hidden">
+      <h3>y0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>y0</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>in y0</dt>
+        <dd>y0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L24">wire_array.cells.rtl:24:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d5" hidden="hidden">
+      <h3>y2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>y2</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>in y2</dt>
+        <dd>y2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L25">wire_array.cells.rtl:25:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d6" hidden="hidden">
+      <h3>ys</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>ys</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>in ys</dt>
+        <dd>ys</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L26">wire_array.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d7" hidden="hidden">
+      <h3>q</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>q</dd>
+        <dt>type</dt>
+        <dd>u8</dd>
+        <dt>in q</dt>
+        <dd>q</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L27">wire_array.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d8" hidden="hidden">
+      <h3>w$2$add</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>add</dd>
+        <dt>cell</dt>
+        <dd>add</dd>
+        <dt>in a</dt>
+        <dd>a</dd>
+        <dt>in b</dt>
+        <dd>b</dd>
+        <dt>out y</dt>
+        <dd>w$2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L31">wire_array.cells.rtl:31:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d9" hidden="hidden">
+      <h3>ys$eq</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>s</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out y</dt>
+        <dd>ys$eq</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L32">wire_array.cells.rtl:32:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d10" hidden="hidden">
+      <h3>ys$eq_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>eq</dd>
+        <dt>cell</dt>
+        <dd>eq</dd>
+        <dt>in a</dt>
+        <dd>s</dd>
+        <dt>in b</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out y</dt>
+        <dd>ys$eq_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L33">wire_array.cells.rtl:33:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d11" hidden="hidden">
+      <h3>ys$mux</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>a</dd>
+        <dt>in b</dt>
+        <dd>b</dd>
+        <dt>in s</dt>
+        <dd>ys$eq_2</dd>
+        <dt>out y</dt>
+        <dd>ys$mux</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L34">wire_array.cells.rtl:34:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d12" hidden="hidden">
+      <h3>ys$mux_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>mux</dd>
+        <dt>cell</dt>
+        <dd>mux</dd>
+        <dt>in a</dt>
+        <dd>ys$mux</dd>
+        <dt>in b</dt>
+        <dd>w$2</dd>
+        <dt>in s</dt>
+        <dd>ys$eq</dd>
+        <dt>out y</dt>
+        <dd>ys</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L35">wire_array.cells.rtl:35:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d13" hidden="hidden">
+      <h3>r$0$ff</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>dff pos</dd>
+        <dt>cell</dt>
+        <dd>dff</dd>
+        <dt>clock</dt>
+        <dd>posedge</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+        <dt>in d</dt>
+        <dd>a</dd>
+        <dt>out q</dt>
+        <dd>r$0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L36">wire_array.cells.rtl:36:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d14" hidden="hidden">
+      <h3>r$1$ff</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>dff pos</dd>
+        <dt>cell</dt>
+        <dd>dff</dd>
+        <dt>clock</dt>
+        <dd>posedge</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+        <dt>in d</dt>
+        <dd>r$0</dd>
+        <dt>out q</dt>
+        <dd>r$1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L37">wire_array.cells.rtl:37:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d15" hidden="hidden">
+      <h3>assign</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>assign</dd>
+        <dt>assign</dt>
+        <dd>r$1</dd>
+        <dt>in </dt>
+        <dd>r$1</dd>
+        <dt>out </dt>
+        <dd>q</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L28">wire_array.cells.rtl:28:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d16" hidden="hidden">
+      <h3>assign</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>assign</dd>
+        <dt>assign</dt>
+        <dd>a</dd>
+        <dt>in </dt>
+        <dd>a</dd>
+        <dt>out </dt>
+        <dd>y0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L29">wire_array.cells.rtl:29:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d17" hidden="hidden">
+      <h3>assign</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>assign</dd>
+        <dt>assign</dt>
+        <dd>w$2</dd>
+        <dt>in </dt>
+        <dd>w$2</dd>
+        <dt>out </dt>
+        <dd>y2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L30">wire_array.cells.rtl:30:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d18" hidden="hidden">
+      <h3>2&#39;d2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d2</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d2</dd>
+        <dt>out </dt>
+        <dd>2&#39;d2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L32">wire_array.cells.rtl:32:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d19" hidden="hidden">
+      <h3>2&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d1</dd>
+        <dt>out </dt>
+        <dd>2&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-wire_array.cells.rtl.html#L33">wire_array.cells.rtl:33:3</a>
+      </p>
+    </div>
+  </aside>
+</div>
+<p class="legend">
+  <span class="l-comb">combinational</span>
+  <span class="l-seq">state</span>
+  <span class="l-inst">instance or process</span>
+  <span class="l-port">port</span>
+  <span>7 cells, 2 holding state, 23 wires</span>
+</p>
+    </main>
+    <script>
+(function () {
+  var svg = document.getElementById('schematic');
+  if (!svg) { return; }
+  var view = document.getElementById('view');
+  var info = document.getElementById('info');
+  var tx = 0, ty = 0, scale = 1;
+  function apply() {
+    view.setAttribute('transform', 'translate(' + tx.toFixed(2) + ' ' + ty.toFixed(2) +
+      ') scale(' + scale.toFixed(4) + ')');
+  }
+  function zoom(factor, cx, cy) {
+    var next = Math.min(8, Math.max(0.05, scale * factor));
+    factor = next / scale;
+    tx = cx - (cx - tx) * factor;
+    ty = cy - (cy - ty) * factor;
+    scale = next;
+    apply();
+  }
+  function centre() {
+    var r = svg.getBoundingClientRect();
+    return [r.width / 2, r.height / 2];
+  }
+  var down = false, lastX = 0, lastY = 0, moved = 0;
+  svg.addEventListener('pointerdown', function (e) {
+    down = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    svg.setPointerCapture(e.pointerId); svg.style.cursor = 'grabbing';
+  });
+  svg.addEventListener('pointermove', function (e) {
+    if (!down) { return; }
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; lastX = e.clientX; lastY = e.clientY;
+    apply();
+  });
+  function release(e) {
+    down = false; svg.style.cursor = 'grab';
+    if (svg.hasPointerCapture(e.pointerId)) { svg.releasePointerCapture(e.pointerId); }
+  }
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = svg.getBoundingClientRect();
+    zoom(e.deltaY > 0 ? 1 / 1.12 : 1.12, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  var netted = svg.querySelectorAll('[data-net]');
+  var nodes = svg.querySelectorAll('.node');
+  for (var i = 0; i !== netted.length; i++) { netted[i].nodeOwner = netted[i].closest('.node'); }
+
+  function highlight(net) {
+    for (var j = 0; j !== nodes.length; j++) { nodes[j].classList.remove('hl-node'); }
+    for (var k = 0; k !== netted.length; k++) {
+      var el = netted[k];
+      if (net !== null && el.getAttribute('data-net') === net) {
+        el.classList.add('hl');
+        if (el.nodeOwner) { el.nodeOwner.classList.add('hl-node'); }
+      } else {
+        el.classList.remove('hl');
+      }
+    }
+  }
+  svg.addEventListener('pointerover', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-net]') : null;
+    highlight(t ? t.getAttribute('data-net') : null);
+  });
+  svg.addEventListener('pointerleave', function () { highlight(null); });
+
+  var selected = null;
+  function select(node) {
+    if (selected) { selected.classList.remove('sel'); }
+    selected = node;
+    var panes = info ? info.querySelectorAll('.detail') : [];
+    for (var j = 0; j !== panes.length; j++) { panes[j].hidden = true; }
+    var empty = document.getElementById('info-empty');
+    if (!node) { if (empty) { empty.hidden = false; } return; }
+    node.classList.add('sel');
+    if (empty) { empty.hidden = true; }
+    var pane = document.getElementById('d' + node.getAttribute('data-detail'));
+    if (pane) { pane.hidden = false; }
+  }
+  svg.addEventListener('click', function (e) {
+    if (moved > 4) { return; }
+    select(e.target.closest ? e.target.closest('.node') : null);
+  });
+
+  var search = document.getElementById('search');
+  if (search) {
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      var first = null;
+      for (var j = 0; j !== nodes.length; j++) {
+        var hay = nodes[j].getAttribute('data-search') || '';
+        var hit = q !== '' && hay.indexOf(q) !== -1;
+        nodes[j].classList.toggle('found', hit);
+        if (hit && first === null) { first = nodes[j]; }
+      }
+      if (first) {
+        var c = centre();
+        tx = c[0] - parseFloat(first.getAttribute('data-cx')) * scale;
+        ty = c[1] - parseFloat(first.getAttribute('data-cy')) * scale;
+        apply();
+      }
+    });
+  }
+  function reset() { tx = 0; ty = 0; scale = 1; apply(); }
+  var zin = document.getElementById('zoom-in');
+  var zout = document.getElementById('zoom-out');
+  var zfit = document.getElementById('zoom-reset');
+  if (zin) { zin.addEventListener('click', function () { var c = centre(); zoom(1.25, c[0], c[1]); }); }
+  if (zout) { zout.addEventListener('click', function () { var c = centre(); zoom(0.8, c[0], c[1]); }); }
+  if (zfit) { zfit.addEventListener('click', reset); }
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'INPUT') { return; }
+    var c = centre();
+    if (e.key === '+' || e.key === '=') { zoom(1.25, c[0], c[1]); }
+    else if (e.key === '-') { zoom(0.8, c[0], c[1]); }
+    else if (e.key === '0') { reset(); }
+    else if (e.key === 'Escape') { select(null); highlight(null); }
+  });
+  apply();
+})();
+
+    </script>
+  </body>
+</html>

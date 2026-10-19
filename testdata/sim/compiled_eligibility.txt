@@ -243,3 +243,12 @@ testdata/synth/unsynth.rtl
 
 testdata/synth/unsynth.synth.rtl
   unsynth: refused - process unsynth.ticker: a free-running process controls its own timing, which a cycle-based run has none of
+
+testdata/synth/wire_array.cells.rtl
+  wire_array: eligible (5 comb ops, 2 edge ops, 2 registers, 16 bits)
+
+testdata/synth/wire_array.rtl
+  wire_array: refused - driver: the memory is written outside a clock edge
+
+testdata/synth/wire_array.synth.rtl
+  wire_array: eligible (5 comb ops, 2 edge ops, 2 registers, 16 bits)

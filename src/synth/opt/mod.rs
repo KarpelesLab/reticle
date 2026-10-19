@@ -14,7 +14,7 @@
 //! | [`FfOpt`]     | Simplifies flip-flops: constant / feedback D, enable and sync-reset extraction, unused and duplicate registers |
 
 pub(crate) mod const_fold;
-mod dce;
+pub(crate) mod dce;
 mod ff_opt;
 mod mem_scalarize;
 pub(crate) mod merge;

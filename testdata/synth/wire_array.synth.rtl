@@ -1,0 +1,32 @@
+top wire_array
+
+module wire_array
+  net %clk u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %s u2 wire
+  net %y0 u8 wire
+  net %y2 u8 wire
+  net %ys u8 wire
+  net %q u8 wire
+  attr init = 8'd0
+  net %r$0 u8 wire
+  attr init = 8'd0
+  net %r$1 u8 wire
+  net %w$2 u8 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port s in %s
+  port y0 out %y0
+  port y2 out %y2
+  port ys out %ys
+  port q out %q
+  assign %q = %r$1
+  assign %w$2 = add(%a, %b)
+  assign %y0 = %a
+  assign %y2 = %w$2
+  assign %ys = mux(eq(%s, 2'd2), %w$2, mux(eq(%s, 2'd1), %b, %a))
+  cell r$0$ff dff pos (clk=%clk, d=%a) -> (q=%r$0)
+  cell r$1$ff dff pos (clk=%clk, d=%r$0) -> (q=%r$1)
+end

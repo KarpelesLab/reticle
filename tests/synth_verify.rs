@@ -106,6 +106,10 @@ const EXPECTED: &[(&str, Verdict)] = &[
     ("case_latch", Verdict::Inconclusive),
     // Keeps a `wait` process on purpose, which the blaster refuses.
     ("unsynth", Verdict::Inconclusive),
+    // The reference writes a memory from continuous assignments, which
+    // the blaster does not model (`F0012`); the behavioural self-check
+    // is what covers it.
+    ("wire_array", Verdict::Inconclusive),
 ];
 
 #[test]
@@ -142,6 +146,12 @@ fn inconclusive_verdicts_say_why() {
     assert!(
         report.diags.iter().any(|d| d.code == Some("F0001")),
         "unsynth: no process diagnostic\n{}",
+        report.render()
+    );
+    let report = check("wire_array", &options);
+    assert!(
+        report.diags.iter().any(|d| d.code == Some("F0012")),
+        "wire_array: no continuous memory write diagnostic\n{}",
         report.render()
     );
 }

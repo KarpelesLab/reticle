@@ -84,6 +84,15 @@ impl Pass for Dce {
     }
 }
 
+/// The memories an assignment's target writes an element of.
+fn lvalue_memories(target: &Lvalue) -> Vec<MemoryId> {
+    match target {
+        Lvalue::MemElem { mem, .. } => vec![*mem],
+        Lvalue::Concat(parts) => parts.iter().flat_map(lvalue_memories).collect(),
+        Lvalue::Net(_) | Lvalue::Slice { .. } | Lvalue::Index { .. } => Vec::new(),
+    }
+}
+
 /// Liveness of every removable object.
 struct Liveness {
     nets: Vec<bool>,
@@ -117,6 +126,17 @@ impl Liveness {
         for (id, c) in m.cells.iter() {
             if let CellKind::MemWrPort { mem, .. } = c.kind {
                 mem_writers.entry(mem).or_default().push(id.index());
+            }
+        }
+        // A continuous assignment to an element, `assign w[0] = a` on an
+        // unpacked wire array, writes the memory as a write port does. It
+        // drives no net, so the walk from the nets never reaches it: it
+        // has to be woken by its memory, or the memory is left with no
+        // writer and every read of it is `x`.
+        let mut mem_assigns: HashMap<MemoryId, Vec<usize>> = HashMap::new();
+        for (i, a) in m.assigns.iter().enumerate() {
+            for mem in lvalue_memories(&a.target) {
+                mem_assigns.entry(mem).or_default().push(i);
             }
         }
 
@@ -210,6 +230,9 @@ impl Liveness {
                 l.memories[mem.index()] = true;
                 for i in mem_writers.get(&mem).into_iter().flatten() {
                     l.mark_cell(m, *i, &mut expr_work, &mut mem_work);
+                }
+                for i in mem_assigns.get(&mem).into_iter().flatten() {
+                    l.mark_assign(m, *i, &mut expr_work);
                 }
                 continue;
             }

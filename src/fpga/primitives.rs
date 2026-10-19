@@ -921,6 +921,19 @@ fn expr_width(module: &Module, id: ExprId) -> u32 {
 }
 
 /// The width of a net, or 1 when it is not a bit vector.
+/// True when a continuous assignment of `module` writes an element of
+/// `mem`.
+fn assigns_an_element(module: &Module, mem: MemoryId) -> bool {
+    fn writes(target: &Lvalue, mem: MemoryId) -> bool {
+        match target {
+            Lvalue::MemElem { mem: m, .. } => *m == mem,
+            Lvalue::Concat(parts) => parts.iter().any(|p| writes(p, mem)),
+            _ => false,
+        }
+    }
+    module.assigns.iter().any(|a| writes(&a.target, mem))
+}
+
 fn net_width(module: &Module, id: NetId) -> u32 {
     module.nets.get(id).and_then(|n| n.ty.width()).unwrap_or(1)
 }
@@ -994,6 +1007,23 @@ impl Mapper<'_> {
         let mut mapped: Vec<CellId> = Vec::new();
         let mut lowered: Vec<MemoryId> = Vec::new();
         for mem in memories {
+            if assigns_an_element(module, mem) {
+                // Neither a block RAM nor the logic fallback builds a
+                // continuous `assign w[k] = v`: both read the write
+                // ports, and building without it would make every read
+                // of that word `x`, silently. Synthesis turns a memory
+                // written only that way into wires; one also written
+                // through a port is refused here, out loud.
+                let memory = &module.memories[mem];
+                let (name, span) = (memory.name.as_str().to_owned(), memory.span);
+                self.decline_lowering(
+                    &name,
+                    "a continuous assignment writes an element of it, which neither a block \
+                     RAM nor the logic fallback can build",
+                    span,
+                );
+                continue;
+            }
             if let Some(used) = self.block_ram(module, mem) {
                 mapped.extend(used);
             } else if let Some(used) = self.lower_memory(module, mem) {
@@ -1007,16 +1037,12 @@ impl Mapper<'_> {
         if !lowered.is_empty() {
             // The memories are gone, so the ids of the ones left move.
             // Every port cell of a lowered memory went with it, so the
-            // only references to fix are those of the survivors.
+            // only references to fix are those of the survivors, wherever
+            // they are named: a port, a read expression or an assignment.
             let remap = module.memories.retain(|id, _| !lowered.contains(&id));
-            for (_, cell) in module.cells.iter_mut() {
-                if let CellKind::MemRdPort { mem, .. } | CellKind::MemWrPort { mem, .. } =
-                    &mut cell.kind
-                    && let Some(Some(new)) = remap.get(mem.index())
-                {
-                    *mem = *new;
-                }
-            }
+            crate::synth::opt::dce::map_memories(module, |old| {
+                remap.get(old.index()).copied().flatten().unwrap_or(old)
+            });
         }
     }
 
@@ -5582,6 +5608,51 @@ mod tests {
         assert_eq!(design.module(top).memories.len(), 1);
         let text = diags.render(&sources);
         assert!(text.contains("is left as a memory"), "{text}");
+    }
+
+    /// A continuous assignment to an element writes the memory as a port
+    /// does, and neither the block RAM nor the logic fallback reads it:
+    /// building this one would make word 0 whatever the port last wrote,
+    /// where the assignment holds it at `wdata`. It is left as a memory
+    /// and said so instead. Without the check the fallback builds it, and
+    /// the memory count below is 0.
+    #[test]
+    fn a_memory_an_assignment_writes_is_reported_rather_than_built() {
+        let (mut design, top, sources) = memory_design(8, 4);
+        let module = design.module_mut(top);
+        let mem = module.memories.ids().next().unwrap();
+        let span = module.span;
+        let wdata = module.nets.find(|n| n.name.as_str() == "wdata").unwrap();
+        let value = net_expr(module, wdata, span);
+        let addr = const_expr(module, Const::zero(2), span);
+        module.assigns.push(Assign {
+            target: Lvalue::MemElem { mem, addr },
+            value,
+            delay: None,
+            attrs: Attrs::new(),
+            span,
+        });
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let device = target("ice40-hx1k-tq144").unwrap();
+        let mut diags = Diagnostics::new();
+        map(
+            &mut design,
+            top,
+            device,
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        );
+        assert_eq!(design.module(top).memories.len(), 1);
+        let text = diags.render(&sources);
+        assert!(
+            text.contains("a continuous assignment writes an element of it"),
+            "{text}"
+        );
     }
 
     /// Adds a second read port to the memory of [`memory_design`].

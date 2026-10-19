@@ -1,0 +1,38 @@
+top wire_array
+
+module wire_array
+  net %clk u1 wire
+  net %a u8 wire
+  net %b u8 wire
+  net %s u2 wire
+  net %y0 u8 wire
+  net %y2 u8 wire
+  net %ys u8 wire
+  net %q u8 wire
+  attr init = 8'd0
+  net %r$0 u8 wire
+  attr init = 8'd0
+  net %r$1 u8 wire
+  net %w$2 u8 wire
+  net %ys$eq u1 wire
+  net %ys$eq_2 u1 wire
+  net %ys$mux u8 wire
+  port clk in %clk
+  port a in %a
+  port b in %b
+  port s in %s
+  port y0 out %y0
+  port y2 out %y2
+  port ys out %ys
+  port q out %q
+  assign %q = %r$1
+  assign %y0 = %a
+  assign %y2 = %w$2
+  cell w$2$add add (a=%a, b=%b) -> (y=%w$2)
+  cell ys$eq eq (a=%s, b=2'd2) -> (y=%ys$eq)
+  cell ys$eq_2 eq (a=%s, b=2'd1) -> (y=%ys$eq_2)
+  cell ys$mux mux (a=%a, b=%b, s=%ys$eq_2) -> (y=%ys$mux)
+  cell ys$mux_2 mux (a=%ys$mux, b=%w$2, s=%ys$eq) -> (y=%ys)
+  cell r$0$ff dff pos (clk=%clk, d=%a) -> (q=%r$0)
+  cell r$1$ff dff pos (clk=%clk, d=%r$0) -> (q=%r$1)
+end
