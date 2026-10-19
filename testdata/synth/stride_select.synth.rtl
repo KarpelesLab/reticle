@@ -1,0 +1,11 @@
+top stride_select
+
+module stride_select
+  net %r u52 wire
+  net %i u2 wire
+  net %y u13 wire
+  port r in %r
+  port i in %i
+  port y out %y
+  assign %y = %r[mul(resize(%i, u6), 6'd13) +: 13]
+end

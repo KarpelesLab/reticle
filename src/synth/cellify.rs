@@ -109,6 +109,58 @@ enum Sink {
     Net(NetId),
 }
 
+/// The widest index [`Cellifier::select_by_stride`] enumerates.
+const STRIDE_INDEX_BITS: u32 = 6;
+
+/// `offset` as `index * stride` taken modulo `2^bits`, with `index`
+/// unsigned and as narrow as it really is. The frontend widens the index
+/// to 32 bits before multiplying and `wreduce` narrows the product again,
+/// so `r[i*13 +: 13]` arrives as `resize(mul(resize(i, u9), 13), u32)`:
+/// `i`, 13 and nine bits.
+fn strided_index(m: &Module, offset: ExprId) -> Option<(ExprId, u64, u32)> {
+    let mut product = offset;
+    // A zero-extension of the product leaves its value alone.
+    if let ExprKind::Resize {
+        expr,
+        width,
+        signed: false,
+    } = m.expr(product).kind
+        && !m.expr(expr).ty.is_signed()
+        && m.expr(expr).ty.width().is_some_and(|w| w <= width)
+    {
+        product = expr;
+    }
+    let bits = m.expr(product).ty.width()?;
+    let ExprKind::Binary {
+        op: BinaryOp::Mul,
+        lhs,
+        rhs,
+    } = m.expr(product).kind
+    else {
+        return None;
+    };
+    let (index, stride) = match (m.expr(lhs).as_const(), m.expr(rhs).as_const()) {
+        (None, Some(c)) => (lhs, c.to_u64()?),
+        (Some(c), None) => (rhs, c.to_u64()?),
+        _ => return None,
+    };
+    if stride == 0 {
+        return None;
+    }
+    let narrow = match m.expr(index).kind {
+        ExprKind::Resize {
+            expr,
+            signed: false,
+            ..
+        } if !m.expr(expr).ty.is_signed() => expr,
+        _ => index,
+    };
+    if m.expr(narrow).ty.is_signed() || m.expr(product).ty.is_signed() {
+        return None;
+    }
+    Some((narrow, stride, bits))
+}
+
 /// The state of one module's rewrite.
 struct Cellifier<'a> {
     module: &'a mut Module,
@@ -639,6 +691,9 @@ impl<'a> Cellifier<'a> {
                 span,
             );
         }
+        if up && let Some(selected) = self.select_by_stride(base, offset, width, ctx, span) {
+            return selected;
+        }
         let amount = if up || width <= 1 {
             offset
         } else {
@@ -662,6 +717,87 @@ impl<'a> Cellifier<'a> {
         };
         let shifted = self.shift_down(base, amount, ctx, span);
         mk_slice(self.module, shifted, width - 1, 0, span)
+    }
+
+    /// `base[index * stride +: width]` as a tree of multiplexers on the
+    /// bits of `index`, when `index` is narrow: one leaf per value it can
+    /// take, each a constant slice. A slice past the end reads zeros, as
+    /// the shifter this replaces makes them — the language says `x`, but
+    /// zeros are what the equivalence checker reads the unsynthesised
+    /// select as, and keeping them keeps the result provable.
+    ///
+    /// A shifter by `index * stride` is the wrong structure when the
+    /// stride is not a power of two: the amount is a product the mapper
+    /// cannot see through, so the shifter has to serve every amount up to
+    /// the base's width. NewAE's Husky gateware selects a 13-bit field by
+    /// `glitch_count * 13` from a 416-bit register, which as a shifter was
+    /// 1,191 lookup tables and as this is 234. A power-of-two stride is a
+    /// shifter whose amount has its low bits constant, which the mapper
+    /// already sees through, so it is left to that path.
+    fn select_by_stride(
+        &mut self,
+        base: ExprId,
+        offset: ExprId,
+        width: u32,
+        ctx: &str,
+        span: Span,
+    ) -> Option<ExprId> {
+        let (index, stride, modulo) = strided_index(self.module, offset)?;
+        if stride.is_power_of_two() {
+            return None;
+        }
+        let bits = self.module.expr(index).ty.width()?;
+        let reach = u64::from(self.module.expr(base).ty.width()?);
+        if bits == 0 || bits > STRIDE_INDEX_BITS {
+            return None;
+        }
+        let b = self.lower(base, ctx);
+        let ty = Type::bits(width);
+        let mut level: Vec<ExprId> = Vec::with_capacity(1 << bits);
+        for v in 0..1u64 << bits {
+            let lo = v.checked_mul(stride)?;
+            let lo = if modulo < 64 {
+                lo & ((1u64 << modulo) - 1)
+            } else {
+                lo
+            };
+            let leaf = if lo >= reach {
+                mk_const(self.module, Const::zero(width), span)
+            } else {
+                let lo32 = u32::try_from(lo).ok()?;
+                if lo + u64::from(width) <= reach {
+                    mk_slice(self.module, b, lo32 + width - 1, lo32, span)
+                } else {
+                    // Partly past the end: the bits that are there, and
+                    // zeros above them.
+                    let have = u32::try_from(reach - lo).ok()?;
+                    let top = u32::try_from(reach).ok()? - 1;
+                    let part = mk_slice(self.module, b, top, lo32, span);
+                    let pad = mk_const(self.module, Const::zero(width - have), span);
+                    mk(self.module, ExprKind::Concat(vec![pad, part]), span)
+                }
+            };
+            level.push(leaf);
+        }
+        let i = self.lower(index, ctx);
+        for bit in 0..bits {
+            let s = mk_slice(self.module, i, bit, bit, span);
+            level = level
+                .chunks(2)
+                .map(|pair| {
+                    self.emit_cell(
+                        Sink::Fresh,
+                        ctx,
+                        CellKind::Mux,
+                        vec![("a", pair[0]), ("b", pair[1]), ("s", s)],
+                        "y",
+                        ty.clone(),
+                        span,
+                    )
+                })
+                .collect();
+        }
+        level.first().copied()
     }
 
     /// A `shr` cell shifting `base` right by `amount`, both cellified.
@@ -1262,6 +1398,52 @@ mod tests {
             state.run_cells(&m);
             assert_eq!(state.nets[&bit].to_u64(), Some(want_bit), "a[{index}]");
             assert_eq!(state.nets[&up].to_u64(), Some(want_up), "a[{index} +: 2]");
+        }
+    }
+
+    /// `r[i*13 +: 13]` becomes a multiplexer on the bits of `i` with a
+    /// constant slice per value, and reads exactly what the shifter it
+    /// replaces read: zeros past the end of `r` (`i = 3` is partly past
+    /// it, `i = 4` wholly), and the product taken at its own six bits, so
+    /// `i = 5` wraps round to offset 1. Without the wrap `i = 5..7` would
+    /// read zeros; with `x` for the slices past the end they would read
+    /// whatever the pruning left.
+    #[test]
+    fn a_select_at_an_odd_stride_is_a_multiplexer_on_its_index() {
+        let mut b = ModuleBuilder::new("sel", span());
+        let r = b.input("r", Type::bits(40));
+        let i = b.input("i", Type::bits(3));
+        let y = b.output("y", Type::bits(13));
+        let (rv, iv) = (b.net(r), b.net(i));
+        let wide = b.resize(iv, 6, false);
+        let thirteen = b.const_u64(6, 13);
+        let offset = b.binary(BinaryOp::Mul, wide, thirteen);
+        let e = b.indexed_slice(rv, offset, 13, true);
+        b.assign(y, e);
+        let mut m = b.finish();
+        cellify(&mut m);
+        BitView::new(&m).expect("the result is a netlist");
+        let text = m.to_text();
+        assert_eq!(text.matches(" shr ").count(), 0, "{text}");
+        assert_eq!(text.matches(" mux ").count(), 7, "{text}");
+
+        let mut state = State {
+            nets: HashMap::new(),
+            mems: HashMap::new(),
+        };
+        let (r, i, y) = (
+            m.net_by_name("r").unwrap(),
+            m.net_by_name("i").unwrap(),
+            m.net_by_name("y").unwrap(),
+        );
+        let value: u64 = 0xa5_c3f0_9e17;
+        for index in 0..8u64 {
+            state.nets.insert(r, Const::from_u64(value, 40));
+            state.nets.insert(i, Const::from_u64(index, 3));
+            state.run_cells(&m);
+            let want = (value >> ((index * 13) % 64).min(63)) & 0x1fff;
+            let want = if (index * 13) % 64 >= 40 { 0 } else { want };
+            assert_eq!(state.nets[&y].to_u64(), Some(want), "r[{index}*13 +: 13]");
         }
     }
 

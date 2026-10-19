@@ -244,6 +244,15 @@ testdata/synth/split_bits.rtl
 testdata/synth/split_bits.synth.rtl
   split_bits: eligible (3 comb ops, 14 edge ops, 3 registers, 6 bits)
 
+testdata/synth/stride_select.cells.rtl
+  stride_select: eligible (9 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/stride_select.rtl
+  stride_select: eligible (3 comb ops, 0 edge ops, 0 registers, 0 bits)
+
+testdata/synth/stride_select.synth.rtl
+  stride_select: eligible (3 comb ops, 0 edge ops, 0 registers, 0 bits)
+
 testdata/synth/unsynth.cells.rtl
   unsynth: refused - process unsynth.ticker: a free-running process controls its own timing, which a cycle-based run has none of
 

@@ -1,0 +1,21 @@
+top stride_select
+
+// A field selected at a stride that is not a power of two, `r[i*13 +:
+// 13]`, as NewAE's clock-glitch module picks one of 32 glitch lengths out
+// of a 416-bit register. As a shifter by the product it was a barrel
+// shifter over every amount up to the base's width; `cellify` makes it a
+// multiplexer on the bits of `i` instead, with a constant slice per value
+// of `i`. Every value of `i` selects inside `r` here: past the end the
+// unsynthesised select reads `x`, which the equivalence checker takes as
+// free, so a golden that went there could only be `Different`.
+// `cellify`'s own tests have the slices past the end and the product
+// that wraps.
+module stride_select
+  net %r u52 wire
+  net %i u2 wire
+  net %y u13 wire
+  port r in %r
+  port i in %i
+  port y out %y
+  assign %y = %r[mul(resize(%i, u6), 6'd13) +: 13]
+end

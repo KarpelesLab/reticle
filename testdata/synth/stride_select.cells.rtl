@@ -1,0 +1,17 @@
+top stride_select
+
+module stride_select
+  net %r u52 wire
+  net %i u2 wire
+  net %y u13 wire
+  net %y$mux u13 wire
+  net %y$mux_2 u13 wire
+  net %y$mux_3 u13 wire
+  port r in %r
+  port i in %i
+  port y out %y
+  assign %y = %y$mux_3
+  cell y$mux mux (a=%r[12:0], b=%r[25:13], s=%i[0:0]) -> (y=%y$mux)
+  cell y$mux_2 mux (a=%r[38:26], b=%r[51:39], s=%i[0:0]) -> (y=%y$mux_2)
+  cell y$mux_3 mux (a=%y$mux, b=%y$mux_2, s=%i[1:1]) -> (y=%y$mux_3)
+end
