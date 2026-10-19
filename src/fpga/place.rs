@@ -3750,7 +3750,18 @@ type Spread = (Vec<(String, usize)>, Vec<Option<(f64, f64)>>);
 
 /// The share of a kind's sites its cells must fill before
 /// [`spread_dense`] spreads them.
-const SPREAD_FROM: f64 = 0.5;
+///
+/// It was a half, and on NewAE's Husky gateware that was a switch thrown
+/// by noise: 16,842 spreadable lookup tables against 32,600 sites were
+/// spread, and once the mapper needed fewer, 15,612 were not, so
+/// legalisation moved a cell 48.3 tiles where it had moved one 20.9 and
+/// the wirelength after annealing was 1,184,807 where it could be
+/// 889,405 — and the route was the worse for it from the first pass. At
+/// a third those 15,612 are spread. At zero the carry chains are spread
+/// too, 1,681 of 8,150 sites, and their macros' flip-flops with them,
+/// all over the die: flip-flop legalisation then stops, refused by
+/// control sets, which is the reason there is a threshold at all.
+const SPREAD_FROM: f64 = 0.3;
 
 /// And how many cells it must have. A handful of clock managers on a part
 /// with five sites fill most of them, and the legaliser places a handful
@@ -6980,6 +6991,35 @@ mod tests {
             "spread cells moved {} tiles in legalisation",
             report.mean_displacement()
         );
+    }
+
+    /// **The threshold is a third of a kind's sites, not a half.** The
+    /// same three hundred sinks on a twenty-five-by-twenty-five grid fill
+    /// 48 per cent of it and are spread, which at a half they were not;
+    /// on a forty-by-forty grid, 19 per cent, they are left to the
+    /// legaliser. Would catch the threshold back at a half (the first
+    /// spreads nothing) or gone (the second spreads); what spreading
+    /// does is the previous test's.
+    #[test]
+    fn a_kind_a_third_full_is_spread_and_a_fifth_full_is_not() {
+        for (side, spread) in [(25, true), (40, false)] {
+            let (arch, graph) = grid(side, side);
+            let netlist = fan_out(300);
+            let (_, report) = place(
+                &netlist,
+                &arch,
+                &graph,
+                &Constraints::new(),
+                &PlaceOptions::default(),
+            )
+            .unwrap();
+            let want = if spread {
+                vec![("lut".to_owned(), 301)]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(report.spread, want, "on a {side}x{side} grid");
+        }
     }
 
     /// **A star is the clique it replaces.** A fan-out of 100 from a cell
