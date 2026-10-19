@@ -1,0 +1,45 @@
+top byte_write
+
+// A register bank written a nibble at a time from a bus, the shape of
+// every memory-mapped register file: `r0[bc*4 +: 4] <= d` under a case
+// on the address, as the Verilog frontend hands it over. Each register's
+// `d` is then a concatenation of `bc == g ? d : r0[g*4 +: 4]`, and
+// `ff_opt` splits the register by nibble so each takes its condition as
+// an enable instead of a hold multiplexer per bit. `r1` loads the
+// inverse to keep the two arms apart, and the reset gives the checker a
+// state to start from.
+module byte_write
+  net %clk u1 wire
+  net %rst u1 wire
+  net %we u1 wire
+  net %addr u2 wire
+  net %bc u2 wire
+  net %d u4 wire
+  net %r0 u16 reg
+  net %r1 u16 reg
+  port clk in %clk
+  port rst in %rst
+  port we in %we
+  port addr in %addr
+  port bc in %bc
+  port d in %d
+  port r0 out %r0
+  port r1 out %r1
+  process p seq posedge %clk
+    if %rst
+      %r0 <= 16'd4660
+      %r1 <= 16'd0
+    else
+      if %we
+        case %addr
+          when 2'd1
+            {%r0[add({%bc, 2'd0}, 4'd3)], %r0[add({%bc, 2'd0}, 4'd2)], %r0[add({%bc, 2'd0}, 4'd1)], %r0[{%bc, 2'd0}]} <= %d
+          end
+          when 2'd2
+            {%r1[add({%bc, 2'd0}, 4'd3)], %r1[add({%bc, 2'd0}, 4'd2)], %r1[add({%bc, 2'd0}, 4'd1)], %r1[{%bc, 2'd0}]} <= not(%d)
+          end
+        end
+      end
+    end
+  end
+end

@@ -1,0 +1,78 @@
+top byte_write
+
+module byte_write
+  net %clk u1 wire
+  net %rst u1 wire
+  net %we u1 wire
+  net %addr u2 wire
+  net %bc u2 wire
+  net %d u4 wire
+  net %r0 u16 wire
+  net %r1 u16 wire
+  net %r1$12 u4 wire
+  net %r1$8 u4 wire
+  net %r1$4 u4 wire
+  net %r1$0 u4 wire
+  net %r0$12 u4 wire
+  net %r0$8 u4 wire
+  net %r0$4 u4 wire
+  net %r0$0 u4 wire
+  net %r0$ff$eq u1 wire
+  net %r0$ff$and u1 wire
+  net %r0$ff$eq_2 u1 wire
+  net %r0$ff$and_2 u1 wire
+  net %r1$ff$not u4 wire
+  net %r1$ff$not_2 u3 wire
+  net %r1$ff$not_3 u2 wire
+  net %r1$ff$not_4 u1 wire
+  net %r1$ff$eq u1 wire
+  net %r1$ff$and u1 wire
+  net %r1$ff$and_2 u1 wire
+  net %r1$ff$8$eq u1 wire
+  net %r1$ff$8$and u1 wire
+  net %r1$ff$4$eq u1 wire
+  net %r1$ff$4$and u1 wire
+  net %r1$ff$0$eq u1 wire
+  net %r1$ff$0$and u1 wire
+  net %r0$ff$8$and u1 wire
+  net %r0$ff$4$and u1 wire
+  net %r0$ff$0$and u1 wire
+  port clk in %clk
+  port rst in %rst
+  port we in %we
+  port addr in %addr
+  port bc in %bc
+  port d in %d
+  port r0 out %r0
+  port r1 out %r1
+  assign %r1 = {%r1$12, %r1$8, %r1$4, %r1$0}
+  assign %r0 = {%r0$12, %r0$8, %r0$4, %r0$0}
+  cell r0$ff$eq eq (a=%addr, b=2'd1) -> (y=%r0$ff$eq)
+  cell r0$ff$and and (a=%we, b=%r0$ff$eq) -> (y=%r0$ff$and)
+  cell r0$ff$eq_2 eq (a=%bc, b=2'd3) -> (y=%r0$ff$eq_2)
+  cell r0$ff$and_2 and (a=%r0$ff$and, b=%r0$ff$eq_2) -> (y=%r0$ff$and_2)
+  cell r0$ff dff pos en srst pos 4'd1 (clk=%clk, d=%d, en=%r0$ff$and_2, rst=%rst) -> (q=%r0$12)
+  cell r1$ff$not not (a=%d) -> (y=%r1$ff$not)
+  cell r1$ff$not_2 not (a=%d[2:0]) -> (y=%r1$ff$not_2)
+  cell r1$ff$not_3 not (a=%d[1:0]) -> (y=%r1$ff$not_3)
+  cell r1$ff$not_4 not (a=%d[0:0]) -> (y=%r1$ff$not_4)
+  cell r1$ff$eq eq (a=%addr, b=2'd2) -> (y=%r1$ff$eq)
+  cell r1$ff$and and (a=%we, b=%r1$ff$eq) -> (y=%r1$ff$and)
+  cell r1$ff$and_2 and (a=%r1$ff$and, b=%r0$ff$eq_2) -> (y=%r1$ff$and_2)
+  cell r1$ff dff pos en srst pos 4'd0 (clk=%clk, d={%r1$ff$not[3:3], %r1$ff$not_2[2:2], %r1$ff$not_3[1:1], %r1$ff$not_4}, en=%r1$ff$and_2, rst=%rst) -> (q=%r1$12)
+  cell r1$ff$8$eq eq (a=%bc, b=2'd2) -> (y=%r1$ff$8$eq)
+  cell r1$ff$8$and and (a=%r1$ff$and, b=%r1$ff$8$eq) -> (y=%r1$ff$8$and)
+  cell r1$ff$8 dff pos en srst pos 4'd0 (clk=%clk, d={%r1$ff$not[3:3], %r1$ff$not_2[2:2], %r1$ff$not_3[1:1], %r1$ff$not_4}, en=%r1$ff$8$and, rst=%rst) -> (q=%r1$8)
+  cell r1$ff$4$eq eq (a=%bc, b=2'd1) -> (y=%r1$ff$4$eq)
+  cell r1$ff$4$and and (a=%r1$ff$and, b=%r1$ff$4$eq) -> (y=%r1$ff$4$and)
+  cell r1$ff$4 dff pos en srst pos 4'd0 (clk=%clk, d={%r1$ff$not[3:3], %r1$ff$not_2[2:2], %r1$ff$not_3[1:1], %r1$ff$not_4}, en=%r1$ff$4$and, rst=%rst) -> (q=%r1$4)
+  cell r1$ff$0$eq eq (a=%bc, b=2'd0) -> (y=%r1$ff$0$eq)
+  cell r1$ff$0$and and (a=%r1$ff$and, b=%r1$ff$0$eq) -> (y=%r1$ff$0$and)
+  cell r1$ff$0 dff pos en srst pos 4'd0 (clk=%clk, d={%r1$ff$not[3:3], %r1$ff$not_2[2:2], %r1$ff$not_3[1:1], %r1$ff$not_4}, en=%r1$ff$0$and, rst=%rst) -> (q=%r1$0)
+  cell r0$ff$8$and and (a=%r0$ff$and, b=%r1$ff$8$eq) -> (y=%r0$ff$8$and)
+  cell r0$ff$8 dff pos en srst pos 4'd2 (clk=%clk, d=%d, en=%r0$ff$8$and, rst=%rst) -> (q=%r0$8)
+  cell r0$ff$4$and and (a=%r0$ff$and, b=%r1$ff$4$eq) -> (y=%r0$ff$4$and)
+  cell r0$ff$4 dff pos en srst pos 4'd3 (clk=%clk, d=%d, en=%r0$ff$4$and, rst=%rst) -> (q=%r0$4)
+  cell r0$ff$0$and and (a=%r0$ff$and, b=%r1$ff$0$eq) -> (y=%r0$ff$0$and)
+  cell r0$ff$0 dff pos en srst pos 4'd4 (clk=%clk, d=%d, en=%r0$ff$0$and, rst=%rst) -> (q=%r0$0)
+end

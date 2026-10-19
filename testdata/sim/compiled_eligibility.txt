@@ -106,6 +106,15 @@ testdata/synth/blocking_ssa.rtl
 testdata/synth/blocking_ssa.synth.rtl
   blocking_ssa: eligible (5 comb ops, 0 edge ops, 0 registers, 0 bits)
 
+testdata/synth/byte_write.cells.rtl
+  byte_write: eligible (25 comb ops, 28 edge ops, 8 registers, 32 bits)
+
+testdata/synth/byte_write.rtl
+  byte_write: eligible (0 comb ops, 42 edge ops, 2 registers, 32 bits)
+
+testdata/synth/byte_write.synth.rtl
+  byte_write: eligible (2 comb ops, 51 edge ops, 8 registers, 32 bits)
+
 testdata/synth/case_latch.cells.rtl
   case_latch: refused - cell case_latch.z$latch: level-sensitive storage: the value is kept when no branch assigns it
 

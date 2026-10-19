@@ -86,6 +86,7 @@ fn check(name: &str, options: &VerifyOptions) -> SynthVerifyReport {
 /// Every golden design with the verdict it must receive.
 const EXPECTED: &[(&str, Verdict)] = &[
     ("adder_tree", Verdict::Proved),
+    ("byte_write", Verdict::Proved),
     ("async_reg", Verdict::Proved),
     ("blocking_ssa", Verdict::Proved),
     ("casez_priority", Verdict::Proved),

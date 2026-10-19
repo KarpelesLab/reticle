@@ -1,0 +1,38 @@
+top byte_write
+
+module byte_write
+  net %clk u1 wire
+  net %rst u1 wire
+  net %we u1 wire
+  net %addr u2 wire
+  net %bc u2 wire
+  net %d u4 wire
+  net %r0 u16 wire
+  net %r1 u16 wire
+  net %r1$12 u4 wire
+  net %r1$8 u4 wire
+  net %r1$4 u4 wire
+  net %r1$0 u4 wire
+  net %r0$12 u4 wire
+  net %r0$8 u4 wire
+  net %r0$4 u4 wire
+  net %r0$0 u4 wire
+  port clk in %clk
+  port rst in %rst
+  port we in %we
+  port addr in %addr
+  port bc in %bc
+  port d in %d
+  port r0 out %r0
+  port r1 out %r1
+  assign %r1 = {%r1$12, %r1$8, %r1$4, %r1$0}
+  assign %r0 = {%r0$12, %r0$8, %r0$4, %r0$0}
+  cell r0$ff dff pos en srst pos 4'd1 (clk=%clk, d=%d, en=and(and(%we, eq(%addr, 2'd1)), eq(%bc, 2'd3)), rst=%rst) -> (q=%r0$12)
+  cell r1$ff dff pos en srst pos 4'd0 (clk=%clk, d={not(%d)[3:3], not(%d[2:0])[2:2], not(%d[1:0])[1:1], not(%d[0:0])}, en=and(and(%we, eq(%addr, 2'd2)), eq(%bc, 2'd3)), rst=%rst) -> (q=%r1$12)
+  cell r1$ff$8 dff pos en srst pos 4'd0 (clk=%clk, d={not(%d)[3:3], not(%d[2:0])[2:2], not(%d[1:0])[1:1], not(%d[0:0])}, en=and(and(%we, eq(%addr, 2'd2)), eq(%bc, 2'd2)), rst=%rst) -> (q=%r1$8)
+  cell r1$ff$4 dff pos en srst pos 4'd0 (clk=%clk, d={not(%d)[3:3], not(%d[2:0])[2:2], not(%d[1:0])[1:1], not(%d[0:0])}, en=and(and(%we, eq(%addr, 2'd2)), eq(%bc, 2'd1)), rst=%rst) -> (q=%r1$4)
+  cell r1$ff$0 dff pos en srst pos 4'd0 (clk=%clk, d={not(%d)[3:3], not(%d[2:0])[2:2], not(%d[1:0])[1:1], not(%d[0:0])}, en=and(and(%we, eq(%addr, 2'd2)), eq(%bc, 2'd0)), rst=%rst) -> (q=%r1$0)
+  cell r0$ff$8 dff pos en srst pos 4'd2 (clk=%clk, d=%d, en=and(and(%we, eq(%addr, 2'd1)), eq(%bc, 2'd2)), rst=%rst) -> (q=%r0$8)
+  cell r0$ff$4 dff pos en srst pos 4'd3 (clk=%clk, d=%d, en=and(and(%we, eq(%addr, 2'd1)), eq(%bc, 2'd1)), rst=%rst) -> (q=%r0$4)
+  cell r0$ff$0 dff pos en srst pos 4'd4 (clk=%clk, d=%d, en=and(and(%we, eq(%addr, 2'd1)), eq(%bc, 2'd0)), rst=%rst) -> (q=%r0$0)
+end

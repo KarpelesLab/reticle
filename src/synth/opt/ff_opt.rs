@@ -14,6 +14,10 @@
 //! - **Enable extraction**: `d = mux(c, v, q)` becomes `en = c, d = v`
 //!   (`mux(c, q, v)` becomes `en = not(c)`); an existing enable is
 //!   ANDed in.
+//! - **Enable extraction by slice**: a register whose `d` is a
+//!   concatenation of `mux(c, v, q[slice])` parts, which a part-select
+//!   write leaves, is split into one register per run of bits sharing a
+//!   condition, each with its own enable; `split_by_slice` has why.
 //! - A register whose `d` is its own `q` never changes: it is replaced by
 //!   its initial value, its reset value when both agree, or `x`
 //!   (don't-care) when it has neither.
@@ -30,16 +34,18 @@
 //! lands — is exempt from all three. It is still canonicalised by the rules
 //! above it, since those leave the same flip-flop on the same net.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diag::Diagnostics;
 use crate::ir::{
-    Assign, AttrValue, Attrs, CellId, CellKind, Const, ExprId, ExprKind, Lvalue, Module, Name,
-    NetId, Reset, UnaryOp,
+    Assign, AttrValue, Attrs, Cell, CellId, CellKind, Const, ExprId, ExprKind, Lvalue, Module,
+    Name, Net, NetId, NetKind, Reset, Type, UnaryOp,
 };
+use crate::logic::Bit;
+use crate::source::Span;
 use crate::synth::keep::cell_is_kept;
 use crate::synth::opt::{expr_net_refs, root_net_refs};
-use crate::synth::util::{is_port, mk_and, mk_const, mk_net, mk_not};
+use crate::synth::util::{coerce, is_port, mk_and, mk_concat, mk_const, mk_net, mk_not};
 use crate::synth::{Pass, PassStats};
 
 /// The flip-flop optimisation pass; see the module docs.
@@ -59,18 +65,32 @@ impl Pass for FfOpt {
             .filter(|(_, c)| matches!(c.kind, CellKind::Dff { .. }))
             .map(|(id, _)| id)
             .collect();
+        let pmuxes: HashMap<NetId, CellId> = m
+            .cells
+            .iter()
+            .filter(|(_, c)| c.kind == CellKind::Pmux)
+            .filter_map(|(id, c)| Some((c.output("y")?, id)))
+            .collect();
+        let mut names: Option<Names> = None;
         let mut constants: Vec<(CellId, Const)> = Vec::new();
-        for id in ids {
+        let mut work = ids;
+        while let Some(id) = work.pop() {
             // A kept register is still canonicalised: a constant enable is
             // dropped and an enable or synchronous reset is lifted out of
             // its `d` mux, which leaves the same flip-flop driving the same
             // net. What it never does is stop being a flip-flop, so the one
-            // outcome it refuses is becoming a constant.
+            // outcome it refuses is becoming a constant — or several.
             let kept = cell_is_kept(m, &m.cells[id]);
             loop {
                 match step(m, id, &mut stats) {
                     Step::Again => {}
-                    Step::Done => break,
+                    Step::Done => {
+                        if !kept {
+                            let names = names.get_or_insert_with(|| Names::of(m));
+                            work.extend(split_by_slice(m, id, &pmuxes, names, &mut stats));
+                        }
+                        break;
+                    }
                     Step::Constant(v) => {
                         if !kept {
                             constants.push((id, v));
@@ -307,6 +327,303 @@ fn step(m: &mut Module, id: CellId, stats: &mut PassStats) -> Step {
         }
     }
     Step::Done
+}
+
+/// The net and cell names a module already uses, collected once: asking
+/// [`crate::synth::util::fresh_net_name`] per new register would rebuild
+/// the set every time, and a register bank splits into thousands.
+struct Names {
+    nets: HashSet<String>,
+    cells: HashSet<String>,
+}
+
+impl Names {
+    fn of(m: &Module) -> Self {
+        Self {
+            nets: m
+                .nets
+                .values()
+                .map(|n| n.name.as_str().to_owned())
+                .collect(),
+            cells: m
+                .cells
+                .values()
+                .map(|c| c.name.as_str().to_owned())
+                .collect(),
+        }
+    }
+
+    fn fresh(taken: &mut HashSet<String>, base: &str) -> Name {
+        let mut name = base.to_owned();
+        let mut i = 2u32;
+        while taken.contains(&name) {
+            name = format!("{base}_{i}");
+            i += 1;
+        }
+        taken.insert(name.clone());
+        Name::new(name)
+    }
+}
+
+/// What a run of a register's `d` does with the register's own bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// `cond ? value : q` (or, `inverted`, `cond ? q : value`).
+    Load { cond: ExprId, inverted: bool },
+    /// The register's own bits: these never change.
+    Hold,
+    /// Anything else, kept as it is.
+    Other,
+}
+
+/// Contiguous bits of a register that share a [`Role`]; `parts` are the
+/// values loaded (for [`Role::Load`]) or the `d` parts themselves, most
+/// significant first.
+struct Run {
+    role: Role,
+    lo: u32,
+    width: u32,
+    parts: Vec<ExprId>,
+}
+
+/// `d` seen through a one-arm `pmux` whose default is all `x`: the
+/// default is a don't-care, so the cell is its arm, as `const_fold` takes
+/// the other branch of a `mux` with an all-`x` one.
+fn through_pmux(m: &Module, d: ExprId, pmuxes: &HashMap<NetId, CellId>) -> ExprId {
+    let ExprKind::Net(n) = m.expr(d).kind else {
+        return d;
+    };
+    let Some(&pm) = pmuxes.get(&n) else {
+        return d;
+    };
+    let cell = &m.cells[pm];
+    let (Some(a), Some(b), Some(s)) = (cell.input("a"), cell.input("b"), cell.input("s")) else {
+        return d;
+    };
+    let undefined = const_of(m, a).is_some_and(|c| c.bits().iter().all(|b| *b == Bit::X));
+    if undefined && m.expr(s).ty.width() == Some(1) {
+        b
+    } else {
+        d
+    }
+}
+
+fn flatten(m: &Module, e: ExprId, out: &mut Vec<ExprId>) {
+    if let ExprKind::Concat(parts) = &m.expr(e).kind {
+        for p in parts.clone() {
+            flatten(m, p, out);
+        }
+    } else {
+        out.push(e);
+    }
+}
+
+/// True when `e` is bits `lo .. lo + width` of `q`, where they sit.
+fn is_own_bits(m: &Module, e: ExprId, q: NetId, lo: u32, width: u32, total: u32) -> bool {
+    match m.expr(e).kind {
+        ExprKind::Net(n) => n == q && lo == 0 && width == total,
+        ExprKind::Slice { base, hi, lo: l } => {
+            m.expr(base).kind == ExprKind::Net(q) && l == lo && hi + 1 == lo + width
+        }
+        _ => false,
+    }
+}
+
+/// **Enable extraction by slice.** A register whose `d` is a
+/// concatenation of `cond ? value : q[slice]` parts — which is what a
+/// part-select write, `r[i*8 +: 8] <= x`, lowers to — is split into one
+/// register per run of bits that share a condition, each loading its
+/// `value` under its own enable. Left whole, every bit's hold multiplexer
+/// is a lookup table of its own; split, `d` is the value and the condition
+/// is one enable for the run. A register written a byte at a time from a
+/// bus is what every memory-mapped register bank is, and NewAE's Husky
+/// gateware spent several thousand lookup tables on those multiplexers.
+///
+/// Returns the registers to look at again: the original, changed in
+/// place, and any it was split into.
+fn split_by_slice(
+    m: &mut Module,
+    id: CellId,
+    pmuxes: &HashMap<NetId, CellId>,
+    names: &mut Names,
+    stats: &mut PassStats,
+) -> Vec<CellId> {
+    let cell = m.cells[id].clone();
+    let CellKind::Dff {
+        clk_pos,
+        has_enable,
+        reset,
+    } = cell.kind.clone()
+    else {
+        return Vec::new();
+    };
+    let (Some(q), Some(d), Some(clk)) = (cell.output("q"), cell.input("d"), cell.input("clk"))
+    else {
+        return Vec::new();
+    };
+    let Some(total) = m.nets[q].ty.width() else {
+        return Vec::new();
+    };
+    let mut parts = Vec::new();
+    flatten(m, through_pmux(m, d, pmuxes), &mut parts);
+    // Most significant first; `lo` counts down from the top.
+    let mut runs: Vec<Run> = Vec::new();
+    let mut top = total;
+    for p in parts {
+        let Some(width) = m.expr(p).ty.width().filter(|w| *w > 0 && *w <= top) else {
+            return Vec::new();
+        };
+        let lo = top - width;
+        top = lo;
+        let own = |e| is_own_bits(m, e, q, lo, width, total);
+        let (role, value) = match m.expr(p).kind {
+            ExprKind::Ternary { cond, then_, else_ } if own(else_) => (
+                Role::Load {
+                    cond,
+                    inverted: false,
+                },
+                then_,
+            ),
+            ExprKind::Ternary { cond, then_, else_ } if own(then_) => (
+                Role::Load {
+                    cond,
+                    inverted: true,
+                },
+                else_,
+            ),
+            _ if own(p) => (Role::Hold, p),
+            _ => (Role::Other, p),
+        };
+        match runs.last_mut() {
+            Some(r) if r.role == role => {
+                r.lo = lo;
+                r.width += width;
+                r.parts.push(value);
+            }
+            _ => runs.push(Run {
+                role,
+                lo,
+                width,
+                parts: vec![value],
+            }),
+        }
+    }
+    if top != 0 || !runs.iter().any(|r| matches!(r.role, Role::Load { .. })) {
+        return Vec::new();
+    }
+    let span = cell.span;
+    let whole = runs.len() == 1;
+    let init = init_of(m, q);
+    let en = cell.input("en").filter(|_| has_enable);
+    let rst = cell.input("rst");
+    let qname = m.nets[q].name.as_str().to_owned();
+    let mut outs: Vec<ExprId> = Vec::with_capacity(runs.len());
+    let mut again = Vec::with_capacity(runs.len());
+    for (i, run) in runs.iter().enumerate() {
+        let hi = run.lo + run.width - 1;
+        let out = if whole {
+            q
+        } else {
+            let net = add_wire_named(
+                m,
+                Names::fresh(&mut names.nets, &format!("{qname}${}", run.lo)),
+                Type::bits(run.width),
+                span,
+            );
+            if let Some(c) = &init {
+                m.nets[net]
+                    .attrs
+                    .set("init", AttrValue::Const(c.slice(hi, run.lo)));
+            }
+            net
+        };
+        outs.push(mk_net(m, out, span));
+        let (d, en) = match run.role {
+            Role::Load { cond, inverted } => {
+                let c = if inverted {
+                    mk_not(m, cond, span)
+                } else {
+                    cond
+                };
+                let en = match en {
+                    Some(e) => mk_and(m, e, c, span),
+                    None => c,
+                };
+                (mk_concat(m, run.parts.clone(), span), Some(en))
+            }
+            Role::Hold => (mk_net(m, out, span), en),
+            Role::Other => (mk_concat(m, run.parts.clone(), span), en),
+        };
+        let mut inputs = vec![(Name::new("clk"), clk), (Name::new("d"), d)];
+        if let Some(e) = en {
+            inputs.push((Name::new("en"), e));
+        }
+        if let Some(r) = rst {
+            inputs.push((Name::new("rst"), r));
+        }
+        let kind = CellKind::Dff {
+            clk_pos,
+            has_enable: en.is_some(),
+            reset: reset.as_ref().map(|r| Reset {
+                value: if whole {
+                    r.value.clone()
+                } else {
+                    r.value.slice(hi, run.lo)
+                },
+                ..r.clone()
+            }),
+        };
+        let outputs = vec![(Name::new("q"), out)];
+        if i == 0 {
+            let c = &mut m.cells[id];
+            c.kind = kind;
+            c.inputs = inputs;
+            c.outputs = outputs;
+            again.push(id);
+        } else {
+            let name = Names::fresh(
+                &mut names.cells,
+                &format!("{}${}", cell.name.as_str(), run.lo),
+            );
+            again.push(m.cells.push(Cell {
+                name,
+                kind,
+                inputs,
+                outputs,
+                params: cell.params.clone(),
+                attrs: cell.attrs.clone(),
+                span,
+            }));
+        }
+    }
+    if whole {
+        stats.bump("enables extracted", 1);
+    } else {
+        m.nets[q].attrs.remove("init");
+        let ty = m.nets[q].ty.clone();
+        let joined = mk_concat(m, outs, span);
+        let value = coerce(m, joined, &ty, span);
+        m.assigns.push(Assign {
+            target: Lvalue::Net(q),
+            value,
+            delay: None,
+            attrs: Attrs::new(),
+            span,
+        });
+        stats.bump("registers split by enable", 1);
+        stats.bump("enables extracted", again.len() as u64);
+    }
+    again
+}
+
+fn add_wire_named(m: &mut Module, name: Name, ty: Type, span: Span) -> NetId {
+    m.nets.push(Net {
+        name,
+        ty,
+        kind: NetKind::Wire,
+        attrs: Attrs::new(),
+        span,
+    })
 }
 
 /// Removes registers whose output nothing reads.
@@ -638,5 +955,94 @@ mod tests {
             "{}",
             m.to_text()
         );
+    }
+
+    /// A register written a byte at a time is split by byte, each byte
+    /// loading under its own condition: the shape a part-select write
+    /// leaves, seen through the one-arm `pmux` process lowering puts round
+    /// it. The second byte holds on its condition rather than loading on
+    /// it, and the reset value and `init` are split with the bits.
+    ///
+    /// Without the split this register stays whole with every bit's hold
+    /// multiplexer in `d`; with the polarity of the inverted arm wrong its
+    /// enable would read `and(%we, %c0)`; with the reset or `init` taken
+    /// from the wrong end, the byte values below would swap.
+    #[test]
+    fn a_register_written_a_byte_at_a_time_takes_an_enable_per_byte() {
+        let mut b = ModuleBuilder::new("m", span());
+        let clk = b.input("clk", Type::bit());
+        let rst = b.input("rst", Type::bit());
+        let we = b.input("we", Type::bit());
+        let c1 = b.input("c1", Type::bit());
+        let c0 = b.input("c0", Type::bit());
+        let hi = b.input("hi", Type::bits(8));
+        let lo = b.input("lo", Type::bits(8));
+        let q = b.output("q", Type::bits(16));
+        let arm = b.add_net("arm", Type::bits(16));
+        let (clkn, rstn, wen, c1n, c0n) = (b.net(clk), b.net(rst), b.net(we), b.net(c1), b.net(c0));
+        let (hin, lon, qn) = (b.net(hi), b.net(lo), b.net(q));
+        b.net_attr(q, "init", Const::from_u64(0x1234, 16));
+        let q_hi = b.slice(qn, 15, 8);
+        let q_lo = b.slice(qn, 7, 0);
+        let load_hi = b.mux(c1n, hin, q_hi);
+        let load_lo = b.mux(c0n, q_lo, lon);
+        let parts = b.concat(vec![load_hi, load_lo]);
+        let undefined = b.expr(ExprKind::Const(Const::x(16)));
+        b.cell(
+            "pm",
+            CellKind::Pmux,
+            vec![
+                (Name::new("a"), undefined),
+                (Name::new("b"), parts),
+                (Name::new("s"), wen),
+            ],
+            vec![(Name::new("y"), arm)],
+        );
+        let armn = b.net(arm);
+        let r = Reset {
+            asynchronous: false,
+            active_high: true,
+            value: Const::from_u64(0xabcd, 16),
+        };
+        dff(&mut b, "ff", clkn, armn, q, Some(wen), Some((r, rstn)));
+        let mut m = b.finish();
+        let stats = run(&FfOpt, &mut m);
+        assert_eq!(stats.get("registers split by enable"), 1);
+        let t = m.to_text();
+        for line in [
+            "cell ff dff pos en srst pos 8'd171 (clk=%clk, d=%hi, en=and(%we, %c1), rst=%rst) -> (q=%q$8)",
+            "cell ff$0 dff pos en srst pos 8'd205 (clk=%clk, d=%lo, en=and(%we, not(%c0)), rst=%rst) -> (q=%q$0)",
+            "assign %q = {%q$8, %q$0}",
+            "attr init = 8'd18\n  net %q$8 u8 wire",
+            "attr init = 8'd52\n  net %q$0 u8 wire",
+        ] {
+            assert!(t.contains(line), "missing `{line}`:\n{t}");
+        }
+    }
+
+    /// A hold arm only counts as one when its bits are the register's own
+    /// bits **in the same place**: `c ? x : q[7:0]` in the top byte is a
+    /// rotation, and splitting it into an enable would make the top byte
+    /// hold its own value instead of taking the bottom byte's.
+    #[test]
+    fn a_hold_arm_from_other_bits_is_not_an_enable() {
+        let mut b = ModuleBuilder::new("m", span());
+        let clk = b.input("clk", Type::bit());
+        let c = b.input("c", Type::bit());
+        let x = b.input("x", Type::bits(8));
+        let q = b.output("q", Type::bits(16));
+        let (clkn, cn, xn, qn) = (b.net(clk), b.net(c), b.net(x), b.net(q));
+        let q_lo = b.slice(qn, 7, 0);
+        let q_lo2 = b.slice(qn, 7, 0);
+        let top = b.mux(cn, xn, q_lo);
+        let bottom = b.mux(cn, xn, q_lo2);
+        let d = b.concat(vec![top, bottom]);
+        dff(&mut b, "ff", clkn, d, q, None, None);
+        let mut m = b.finish();
+        let stats = run(&FfOpt, &mut m);
+        assert_eq!(stats.get("registers split by enable"), 1);
+        let t = m.to_text();
+        assert!(t.contains("d=%x, en=%c) -> (q=%q$0)"), "{t}");
+        assert!(!t.contains("d=%x, en=%c) -> (q=%q$8)"), "{t}");
     }
 }
