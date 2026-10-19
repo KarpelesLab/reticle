@@ -140,7 +140,7 @@ of its own:
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
 | the whole design fits the part | **checked**: 21,217 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
 | it places | **checked**: legalisation and annealing complete, in four to five minutes |
-| it routes | **not yet**: the route converges, to 20,644 overused nodes at the twentieth pass, falling about five per cent a pass by then, which is too slowly to finish; `docs/fpga-xray.md` has where it stands |
+| it routes | **not yet**: the route converges, to 14,766 overused nodes at the twentieth pass and 11,962 at the twenty-fourth, falling four or five per cent a pass by then, which is too slowly to finish in forty; `docs/fpga-xray.md` has where it stands |
 | it works on a Husky | **not checked**: nothing has been loaded into one |
 
 ## Status

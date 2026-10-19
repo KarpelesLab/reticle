@@ -3192,6 +3192,57 @@ work on shrinks. Each pass now reports the signals it rerouted and the
 nodes its searches visited (`Iteration::rerouted`, `visited`), so a
 late pass can say whether it is doing more searches or longer ones.
 
+They said longer ones: from pass 3 to pass 14 the signals rerouted fell
+from 45,117 to 26,255 while the nodes visited rose from 126 million to
+1.6 billion, some sixty thousand a search. Two things were tried
+against that, and one thing found on the way that mattered more.
+
+- **Keeping a congested signal's legal branches** (VPR does it for its
+  high-fan-out nets): rip up only what crosses an overused node and
+  search only for the sinks that cut off. It saved three per cent of the
+  visits by the tenth pass and none by the fourteenth, at the same
+  overuse, because most rerouted signals here have two or three sinks
+  and the work is in each search, not in their number. Not kept.
+- **A smaller history factor.** History grows by one each pass a node
+  is overused and never decays, so whole regions stay dear after they
+  are free and the searches flood round them. At 0.2 a pass visits a
+  third of the nodes and converges more slowly per pass;
+
+  at equal time it is ahead throughout, but not by much. On the
+  placement below, at about 8,300 s of routing, the default 1.0 had
+  12,437 nodes overused, 0.5 had 11,659 at 8,749 s and 0.2 about 11,300.
+  Seven to ten per cent, with every setting still falling four or five
+  per cent a pass by then and the passes twenty-five minutes long: not
+  the lever, and left at 1.0.
+
+**And the odd stride made the route worse**, from the first pass,
+though it took 1,241 sites out. Not its logic: `spread_dense` spread a
+kind once its cells filled **half** its sites, and with the smaller
+netlist 15,612 spreadable lookup tables against 32,600 sites no longer
+did, where 16,842 had. Legalisation then moved a cell 48.3 tiles where
+it had moved one 20.9, and the wirelength after annealing was 1,184,807
+where it had been 927,882. The threshold is a third now
+(`place::SPREAD_FROM`): 20.1 tiles and 889,405, and at the thirteenth
+pass 27,658 nodes overused where the unspread placement had 48,126.
+At zero the carry chains are spread too, with their macros' flip-flops,
+and flip-flop legalisation stops on control sets.
+
+Where it stands, with all of that: 14,766 nodes overused at the
+twentieth pass after 4,336 s, 11,962 at the twenty-fourth after
+10,277 s, and that pass visiting 5.7 billion nodes for 10,144
+signals, some 560,000 a search — a search floods its whole
+box, because what blocks it is at its sink. It will not finish in forty
+passes. What would change that is fewer signals fighting for the same
+wires, and the largest thing the backend leaves on the table there is
+**half of every slice's flip-flops**: Vivado puts 6,700 of the Husky's
+26,000 in the `A5FF`..`D5FF` this backend does not offer. Their `D`
+comes from the bypass input with `<L>5FFMUX.IN_B`, which is checked
+here against NewAE's bitstream (in all 1,219 `CLBLL_L` slices where
+Vivado set `IN_B`, the slice's `AX` is driven; with `IN_A` it is often
+not, so `IN_A` is the other source, `O5`), and their `Q` leaves only
+through the output mux the carry and `O5` also use — which is what a
+placer would have to know before it could be offered them.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
