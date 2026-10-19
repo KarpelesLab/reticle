@@ -3243,6 +3243,20 @@ not, so `IN_A` is the other source, `O5`), and their `Q` leaves only
 through the output mux the carry and `O5` also use — which is what a
 placer would have to know before it could be offered them.
 
+**They were offered, and it was not enough.** With the five-input
+flip-flops as sites — `D` off the bypass input, `Q` out through the
+output mux, their own `ZINI` and `ZRST` — and a placer rule that two
+outputs whose one way out of the tile is the same wire carry one signal
+between them, `blink_carry` and the IO-register design placed, routed
+and decoded with nothing unexplained, and the Husky had 65,200
+flip-flop sites where it had 32,600. Its route was no better: 33,469
+nodes overused at the twelfth pass against 30,973, and a wirelength
+after annealing of 930,313 against 889,405. More sites a slice do not
+shorten the net from a lookup table to the flip-flop it feeds unless
+the placer puts the two together, which is the clustering by control
+set that is not done. And offering them would move the flip-flops of
+the two designs a person has watched work on a Basys 3. Not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
