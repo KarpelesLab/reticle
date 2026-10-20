@@ -169,6 +169,7 @@ mod io;
 mod iologic;
 mod lutpack;
 mod lutram;
+mod lutswap;
 mod parse;
 mod sites;
 mod xadc;
@@ -183,6 +184,7 @@ pub use cmt::{
 };
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
 pub use lutpack::{LutPairing, pack_lut_pairs};
+pub use lutswap::{apply_lut_moves, lut_input_classes};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 
 /// Reads one `segbits_<type>.db`: a feature name and its bits per line.
@@ -961,6 +963,94 @@ impl XrayDatabase {
             io: IoTables::new(&features, &options.io_standard),
             stats,
         })
+    }
+
+    /// The interconnect arcs `decoded` selects that `routing` did not
+    /// choose, and the ones it chose that `decoded` does not select, each
+    /// as `tile feature`: the second half of "every bit decodes", which
+    /// asks whether the bits mean the connections they were written for.
+    ///
+    /// An arc is a pip of the tile's type in `arch` whose name, `DST.SRC`,
+    /// is also a feature its `segbits` file names: the pips the router can
+    /// choose that a decoding can find. A slice's own muxes are not, since
+    /// their features are named for the mux, and nor is what `NOT_ARCS`
+    /// names. `also` are pips something other than the router switched on
+    /// — a block RAM's zero ties (`BlockRamReport::tie_pips`) — and count
+    /// as chosen.
+    ///
+    /// # Errors
+    ///
+    /// When the tile grid or a `segbits` file cannot be read.
+    pub fn arc_differences(
+        &self,
+        files: &dyn FileProvider,
+        arch: &Arch,
+        graph: &super::arch::RoutingGraph,
+        routing: &super::Routing,
+        also: &[super::arch::PipId],
+        decoded: &Decoded,
+    ) -> Result<(Vec<String>, Vec<String>), XrayError> {
+        let tiles = self.tiles(files)?;
+        let block_ram_rows = block_ram_rows(&tiles);
+        let at: HashMap<(u32, u32), &XrayTile> =
+            tiles.iter().map(|t| ((t.grid_x, t.grid_y), t)).collect();
+        let by_name: HashMap<&str, &XrayTile> =
+            tiles.iter().map(|t| (t.name.as_str(), t)).collect();
+        // Per tile type of `arch`, the names of its arcs.
+        let mut arcs: HashMap<usize, HashSet<String>> = HashMap::new();
+        let mut arcs_of = |tile: &XrayTile| -> Result<Option<HashSet<String>>, XrayError> {
+            let Some(index) = arch.tile_index_at(tile.grid_x, tile.grid_y) else {
+                return Ok(None);
+            };
+            if let Some(known) = arcs.get(&index) {
+                return Ok(Some(known.clone()));
+            }
+            let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
+            let set = self.features_for(files, tile, row)?.unwrap_or_default();
+            let named: HashSet<&str> = set
+                .features()
+                .iter()
+                .filter(|f| !f.ones.is_empty())
+                .map(|f| f.name.as_str())
+                .collect();
+            let names: HashSet<String> = arch.tile_types[index]
+                .pips
+                .iter()
+                .filter(|p| !p.bits.is_empty() && !NOT_ARCS.contains(&p.to.name.as_str()))
+                .map(|p| format!("{}.{}", p.to.name, p.from.name))
+                .filter(|name| named.contains(name.as_str()))
+                .collect();
+            arcs.insert(index, names.clone());
+            Ok(Some(names))
+        };
+        let mut chosen: BTreeSet<(String, String)> = BTreeSet::new();
+        for id in routing.routes().flat_map(|r| r.pips.iter()).chain(also) {
+            if graph.pip_bits(*id).is_empty() {
+                continue;
+            }
+            let pip = graph.pip(*id);
+            let Some(tile) = at.get(&pip.tile) else {
+                continue;
+            };
+            let name = format!("{}.{}", graph.wire(pip.to).name, graph.wire(pip.from).name);
+            if arcs_of(tile)?.is_some_and(|arcs| arcs.contains(&name)) {
+                chosen.insert((tile.name.clone(), name));
+            }
+        }
+        let mut selected: BTreeSet<(String, String)> = BTreeSet::new();
+        for (tile, feature) in &decoded.features {
+            let Some(xtile) = by_name.get(tile.as_str()) else {
+                continue;
+            };
+            if arcs_of(xtile)?.is_some_and(|arcs| arcs.contains(feature)) {
+                selected.insert((tile.clone(), feature.clone()));
+            }
+        }
+        let show = |(tile, feature): &(String, String)| format!("{tile} {feature}");
+        Ok((
+            selected.difference(&chosen).map(show).collect(),
+            chosen.difference(&selected).map(show).collect(),
+        ))
     }
 
     /// Reads a bitstream back into the database's own feature names.
@@ -2286,6 +2376,44 @@ impl XrayFabric {
         out
     }
 
+    /// The nodes in front of every clock pin [`XrayFabric::clock_network_use`]
+    /// judges, for
+    /// [`RouteOptions::network_entry`](super::route::RouteOptions): walking
+    /// back from a flip-flop's `clk`, a distributed RAM's `wclk` or a block
+    /// RAM's port clocks through bit-less pips, each node some programmable
+    /// pip also enters — `CLK_L0` in front of `CLBLL_CLK0` — which is where
+    /// the network check looks.
+    #[must_use]
+    pub fn clock_pin_entries(&self, graph: &super::arch::RoutingGraph) -> Vec<bool> {
+        let mut out = vec![false; graph.nodes.len()];
+        for site in &graph.sites {
+            let roles: &[&str] = match site.kind.as_str() {
+                "ff" => &["clk"],
+                "lutram" => &["wclk"],
+                "bram" => &["p0_clk", "p1_clk"],
+                _ => continue,
+            };
+            for role in roles {
+                let mut work: Vec<super::arch::NodeId> = site.pin_nodes(role).collect();
+                let mut seen = 0;
+                while let Some(node) = work.pop() {
+                    seen += 1;
+                    if seen > 16 {
+                        break;
+                    }
+                    for pip in graph.incoming(node) {
+                        if graph.pip_bits(*pip).is_empty() {
+                            work.push(graph.pip(*pip).from);
+                        } else {
+                            out[node as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The global clock network's nodes, for
     /// [`super::route::RouteOptions::network`]: what a signal no global
     /// buffer drives may not enter. See [`XrayFabric::clock_node_costs`].
@@ -2352,6 +2480,7 @@ impl XrayFabric {
                 }
                 let mut node = pin;
                 let mut on_network = false;
+                let mut entered = None;
                 for _ in 0..32 {
                     let Some(id) = route.pips.iter().find(|id| graph.pip(**id).to == node) else {
                         break;
@@ -2359,6 +2488,7 @@ impl XrayFabric {
                     let pip = graph.pip(*id);
                     if !graph.pip_bits(*id).is_empty() {
                         on_network = is_clock_wire(&graph.wire(pip.from).name);
+                        entered = Some(pip.from);
                         break;
                     }
                     node = pip.from;
@@ -2366,8 +2496,27 @@ impl XrayFabric {
                 if on_network {
                     out.on_network += 1;
                 } else {
+                    // Which wire it came in on, and that wire's own way in,
+                    // which says whether the clock left the network one hop
+                    // before the pin or never reached it.
+                    let from = |node: super::arch::NodeId| {
+                        route
+                            .pips
+                            .iter()
+                            .find(|id| graph.pip(**id).to == node)
+                            .map(|id| graph.pip(*id).from)
+                    };
+                    let path = match entered {
+                        Some(wire) => {
+                            let before = from(wire).map_or_else(String::new, |w| {
+                                format!(" from {}", graph.wire(w).full_name())
+                            });
+                            format!(", entered from {}{before}", graph.wire(wire).full_name())
+                        }
+                        None => String::new(),
+                    };
                     out.off_network
-                        .push(format!("{} ({role}) on {}", instance.name, site.name));
+                        .push(format!("{} ({role}) on {}{path}", instance.name, site.name));
                 }
             }
         }
@@ -2426,6 +2575,18 @@ pub struct XrayClockUse {
     pub unbuffered: usize,
 }
 
+/// The destinations of features that have a pip's `DST.SRC` shape, that
+/// the loader makes pips of, and that are not connections the router
+/// chooses, for [`XrayDatabase::arc_differences`]:
+///
+/// - `DIFF`: an IO tile's `DIFF.ZIBUF_LOW_PWR` and its siblings, which
+///   describe the differential pair (`parse::is_pip_feature` has why they
+///   are read as pips), and which `XrayFabric::configure_io` sets;
+/// - `ENABLE_BUFFER`: a clock row's buffer enable for a track, whose bits
+///   a routed pip of that track switches on with its own, so that a
+///   decoding finds both.
+const NOT_ARCS: [&str; 2] = ["DIFF", "ENABLE_BUFFER"];
+
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
 /// twentieth of an ordinary wire the ECP5 flow uses.
 pub const CLOCK_PREFERENCE: f32 = 0.05;
@@ -2454,6 +2615,14 @@ pub const ASTAR_WEIGHT: f64 = 2.0;
 /// 3,216 s; this at the twelfth and 2,049 s, measured 2026-10-18. blink,
 /// pll_blink, bram_rom and lutram route as well either way.
 pub const PRESENT_GROWTH: f64 = 1.3;
+
+/// How many passes the router may make on this fabric
+/// ([`RouteOptions::max_iterations`](crate::fpga::route::RouteOptions)),
+/// against the default forty: with the growth above a congested design
+/// converges slowly and steadily. On 2026-10-20 the ChipWhisperer-Husky
+/// had 166 nodes overused at the 40th pass and converged at the 87th; with
+/// a congested signal's box growing (`route::BOX_GROWTH`), at the 48th.
+pub const ROUTE_PASSES: u32 = 100;
 
 /// Whether a wire belongs to the global clock network.
 ///

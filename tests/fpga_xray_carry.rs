@@ -79,6 +79,8 @@ fn chipdb() -> Option<String> {
 
 /// Everything one build produced, for the tests to look at.
 struct Built {
+    /// The fabric's architecture, which `arc_differences` reads.
+    arch: reticle::fpga::arch::Arch,
     netlist: Netlist,
     graph: RoutingGraph,
     placement: Placement,
@@ -215,6 +217,7 @@ fn built_from(root: &str) -> Option<Built> {
         types.insert((tile.grid_x, tile.grid_y), tile.tile_type.clone());
     }
     Some(Built {
+        arch: fabric.arch.clone(),
         netlist,
         graph,
         placement,
@@ -224,6 +227,75 @@ fn built_from(root: &str) -> Option<Built> {
         types,
         root: root.to_owned(),
     })
+}
+
+/// **The flow's arc check agrees with this file's, and can disagree.**
+/// `XrayDatabase::arc_differences`, which `reticle fpga --bitstream` now
+/// runs on every 7-series build before writing it, finds nothing between
+/// the counter's bits and its routing — as the test above finds by its
+/// own reading — and finds one arc chosen and not selected when it is
+/// told of a pip with bits that the bitstream does not have, and one
+/// selected and not chosen when a routed pip is struck off the decoding.
+/// Would catch the check comparing nothing (an empty set on both sides
+/// agrees with everything); would not catch it and this file's reading
+/// sharing a wrong idea of what an arc is, which the decoding of Vivado's
+/// own bitstreams elsewhere is for.
+#[test]
+fn the_flows_arc_check_agrees_and_can_disagree() {
+    let Some(b) = built() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &b.root, DEVICE, &XrayOptions::new()).unwrap();
+    let check = |also: &[reticle::fpga::arch::PipId], decoded: &Decoded| {
+        db.arc_differences(&DiskFiles, &b.arch, &b.graph, &b.routing, also, decoded)
+            .unwrap()
+    };
+    let (extra, lost) = check(&[], &b.decoded);
+    assert!(extra.is_empty() && lost.is_empty(), "{extra:?} {lost:?}");
+
+    // A pip with bits in an interconnect tile, that nothing routed.
+    let used: HashSet<_> = b
+        .routing
+        .routes()
+        .flat_map(|r| r.pips.iter().copied())
+        .collect();
+    let unused = (0..b.graph.pips.len())
+        .map(|i| reticle::fpga::arch::PipId::try_from(i).unwrap())
+        .find(|id| {
+            !used.contains(id)
+                && !b.graph.pip_bits(*id).is_empty()
+                && b.types
+                    .get(&b.graph.pip(*id).tile)
+                    .is_some_and(|t| t.starts_with("INT_"))
+        })
+        .expect("an interconnect pip nothing routed");
+    let (extra, lost) = check(&[unused], &b.decoded);
+    assert!(extra.is_empty(), "{extra:?}");
+    assert_eq!(lost.len(), 1, "{lost:?}");
+
+    // A routed interconnect arc struck off the decoding.
+    let routed = b
+        .routing
+        .routes()
+        .flat_map(|r| r.pips.iter())
+        .find(|id| {
+            !b.graph.pip_bits(**id).is_empty()
+                && b.types
+                    .get(&b.graph.pip(**id).tile)
+                    .is_some_and(|t| t.starts_with("INT_"))
+        })
+        .expect("a routed interconnect pip");
+    let pip = b.graph.pip(*routed);
+    let name = format!(
+        "{}.{}",
+        b.graph.wire(pip.to).name,
+        b.graph.wire(pip.from).name
+    );
+    let tile = &b.names[&pip.tile];
+    let mut decoded = b.decoded.clone();
+    decoded.features.retain(|(t, f)| !(t == tile && *f == name));
+    assert_eq!(decoded.features.len() + 1, b.decoded.features.len());
+    let (extra, lost) = check(&[], &decoded);
+    assert!(extra.is_empty(), "{extra:?}");
+    assert_eq!(lost, vec![format!("{tile} {name}")]);
 }
 
 impl Built {

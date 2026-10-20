@@ -3416,7 +3416,7 @@ fn write_xc7_bitstream(
 
     let graph = fabric.arch.build_graph();
     laps.lap("build the graph");
-    let netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    let mut netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
     let (placement, placement_report) = place(
@@ -3485,6 +3485,9 @@ fn write_xc7_bitstream(
         node_base,
         network,
         network_signals,
+        // And a clock comes off the network at the pin, not a hop before:
+        // see `RouteOptions::network_entry`.
+        network_entry: fabric.clock_pin_entries(&graph),
         on_iteration: laps.on.then_some(print_iteration as fn(&_)),
         // See `xray::ASTAR_WEIGHT`. After the first pass only the signals
         // that share a node are rerouted, as the UltraScale+ flow does: a
@@ -3504,6 +3507,12 @@ fn write_xc7_bitstream(
         first_pass_present: Some(0.0),
         bounding_margin: Some(3),
         present_growth: reticle::fpga::xray::PRESENT_GROWTH,
+        max_iterations: reticle::fpga::xray::ROUTE_PASSES,
+        // A lookup table's inputs are the router's to choose among, and
+        // the truth table follows them below. See `xray::lutswap`.
+        equivalent: reticle::fpga::xray::lut_input_classes(
+            design, top, &netlist, &graph, &placement,
+        ),
         ..RouteOptions::default()
     };
     let mut failure = None;
@@ -3515,6 +3524,28 @@ fn write_xc7_bitstream(
             failure = Some(e.to_string());
             (reticle::fpga::Routing::new(netlist.signals.len()), 0)
         }
+    };
+    // Every table a signal reached on another input than the one it was
+    // mapped to gets the truth table, the connection and the netlist pin
+    // that say so, before anything is checked or written from them.
+    let moved_design;
+    let design = if failure.is_none() {
+        let mut swapped = design.clone();
+        let tables = reticle::fpga::xray::apply_lut_moves(
+            &mut swapped,
+            top,
+            &mut netlist,
+            &graph,
+            &placement,
+            &routing,
+        )?;
+        if tables > 0 {
+            eprintln!("note: {tables} lookup table(s) take their inputs on other pins than mapped");
+        }
+        moved_design = swapped;
+        &moved_design
+    } else {
+        design
     };
 
     // The router says it connected every sink; this walks each sink back
@@ -3622,6 +3653,45 @@ fn write_xc7_bitstream(
     };
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
+    // Every set bit read back through the database, as the ECP5 flow
+    // does: a bit nothing names is a bit nobody can account for. And the
+    // arcs those bits select must be the ones the router chose and the
+    // block RAM ties added, exactly; a routed design that does not say
+    // what it was routed to is not written.
+    let decoded = db.decode(&files, &frames).map_err(|e| e.to_string())?;
+    laps.lap("decode it back");
+    if failure.is_none() {
+        let (extra, lost) = db
+            .arc_differences(
+                &files,
+                &fabric.arch,
+                &graph,
+                &routing,
+                &block_rams.tie_pips,
+                &decoded,
+            )
+            .map_err(|e| e.to_string())?;
+        if !extra.is_empty() || !lost.is_empty() {
+            let first: Vec<String> = extra
+                .iter()
+                .take(8)
+                .map(|a| format!("{a} (selected, not chosen)"))
+                .chain(
+                    lost.iter()
+                        .take(8)
+                        .map(|a| format!("{a} (chosen, not selected)")),
+                )
+                .collect();
+            return Err(format!(
+                "the bits of this bitstream do not select the connections the router chose, so \
+                 nothing was written: {} arc(s) selected and not chosen, {} chosen and not \
+                 selected: {}",
+                extra.len(),
+                lost.len(),
+                first.join(", ")
+            ));
+        }
+    }
 
     let name = design.modules[top].name.as_str();
     let header = BitHeader::new(
@@ -3696,11 +3766,13 @@ fn write_xc7_bitstream(
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
     }
-    // Every set bit read back through the database, as the ECP5 flow
-    // does: a bit nothing names is a bit nobody can account for.
-    let decoded = db.decode(&files, &frames).map_err(|e| e.to_string())?;
-    laps.lap("decode it back");
     note.push_str(&format!("note: {}", decoded.to_text()));
+    if failure.is_none() {
+        note.push_str(
+            "note: the interconnect arcs those bits select are exactly the ones the router \
+             chose and the block RAM ties added\n",
+        );
+    }
     if decoded.unexplained > 0 {
         note.push_str(
             "warning: some set bits name no feature of the database; the bitstream holds \

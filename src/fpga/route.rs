@@ -238,6 +238,19 @@ pub struct RouteOptions {
     /// The signals allowed onto [`RouteOptions::network`], by signal index,
     /// or empty for "every signal".
     pub network_signals: Vec<bool>,
+    /// Nodes a signal allowed onto [`RouteOptions::network`] may enter
+    /// through a programmable pip only from a node of the network, by node
+    /// id, or empty for none: the interconnect wire in front of a clock
+    /// pin.
+    ///
+    /// The network is a preference (`node_base`), and a preference loses to
+    /// congestion. On the ChipWhisperer-Husky, the first route to converge
+    /// brought 99 flip-flops' clocks in off general interconnect a hop
+    /// before the pin, which `xray::XrayFabric::clock_network_use` refuses
+    /// because it is skew no model accounts for. A signal the network bars
+    /// is not held to this: a clock no global buffer drives has no network
+    /// to come from.
+    pub network_entry: Vec<bool>,
     /// After the first iteration, reroute only the signals whose route
     /// shares a node, and leave the rest where they are.
     ///
@@ -250,6 +263,21 @@ pub struct RouteOptions {
     /// still see the history and present costs every other node has
     /// accumulated.
     pub reroute_congested_only: bool,
+    /// Classes of interchangeable sink nodes, by node id, or empty for
+    /// none: a sink on a node of class `c` (anything but `u32::MAX`) may
+    /// end instead on any other node of class `c` that no signal holds, and
+    /// [`Route::moved`] says where it did.
+    ///
+    /// This is a lookup table's inputs. The six of a 7-series slice's table
+    /// are one function of whichever wires reach them, so the truth table
+    /// can follow the wires rather than the wires the truth table; and each
+    /// input's own multiplexer reaches only some of the tile's wires, so a
+    /// router held to the pin the mapper named has to bounce through a
+    /// bypass or fan wire to get there. Vivado permutes them as it routes.
+    /// The caller decides what is interchangeable — inputs the function
+    /// does not read, or that are tied to a constant it does, are not —
+    /// and rewrites the truth table afterwards.
+    pub equivalent: Vec<u32>,
     /// What makes the router timing-driven, or `None` for a router that
     /// minimises wire alone; see [`Timing`].
     pub timing: Option<Timing>,
@@ -345,7 +373,9 @@ impl Default for RouteOptions {
             node_base: Vec::new(),
             network: Vec::new(),
             network_signals: Vec::new(),
+            network_entry: Vec::new(),
             reroute_congested_only: false,
+            equivalent: Vec::new(),
             timing: None,
             on_iteration: None,
         }
@@ -363,6 +393,11 @@ pub struct Route {
     pub pips: Vec<PipId>,
     /// Every node it occupies, including the source, sorted.
     pub nodes: Vec<NodeId>,
+    /// The sinks that ended on a node [`RouteOptions::equivalent`] puts in
+    /// their own pin's class rather than on that pin's, as `(the pin, as an
+    /// index into [`Netlist::pins`], the node it ended on)`. Empty when
+    /// the caller gave no classes.
+    pub moved: Vec<(usize, NodeId)>,
 }
 
 /// Every signal's route.
@@ -819,6 +854,8 @@ pub fn route(
     let mut present = options.present_factor;
     // The signals a bounded search failed for; see `route_one`.
     let mut unboxed = vec![false; netlist.signals.len()];
+    // How many tiles each signal's box has grown by; see `BOX_GROWTH`.
+    let mut widened = vec![0u32; netlist.signals.len()];
     let present_at = |index: u32, present: f64| -> f64 {
         match options.first_pass_present {
             Some(first) if index == 1 => first,
@@ -856,8 +893,12 @@ pub fn route(
             // The box from the second pass on: the first is free, and so
             // quick, and a box costs a failed search wherever a pin's
             // wires lie outside the box its tile draws. A signal that has
-            // failed one is unboxed from then on.
-            let boxed = index > 1 && !unboxed[terminals.signal];
+            // failed one is unboxed from then on, and one that is still
+            // congested has its box grown each pass: see `BOX_GROWTH`.
+            let margin = options
+                .bounding_margin
+                .filter(|_| index > 1 && !unboxed[terminals.signal])
+                .map(|margin| margin.saturating_add(widened[terminals.signal]));
             let (route, escaped) = route_one(
                 graph,
                 &geometry,
@@ -869,7 +910,7 @@ pub fn route(
                 present_at(index, present),
                 options,
                 netlist,
-                boxed,
+                margin,
             )?;
             if escaped {
                 unboxed[terminals.signal] = true;
@@ -880,6 +921,19 @@ pub fn route(
             routing.routes[terminals.signal] = Some(route);
         }
         let (overused_nodes, total_overuse) = state.overuse();
+        if options.bounding_margin.is_some() {
+            for terminals in &terminals {
+                let congested = routing.routes[terminals.signal].as_ref().is_some_and(|r| {
+                    state
+                        .roots(&r.nodes)
+                        .iter()
+                        .any(|n| state.occupancy[*n as usize] > 1)
+                });
+                if congested {
+                    widened[terminals.signal] += BOX_GROWTH;
+                }
+            }
+        }
         let critical = options.timing.as_ref().map(|timing| {
             let (sinks, longest) = analyse(netlist, graph, &terminals, &routing, timing);
             criticality = sinks;
@@ -1404,7 +1458,7 @@ fn route_one(
     present: f64,
     options: &RouteOptions,
     netlist: &Netlist,
-    boxed: bool,
+    margin: Option<u32>,
 ) -> Result<(Route, bool), RouteError> {
     let source = terminals.source;
     let mut escaped = false;
@@ -1414,6 +1468,7 @@ fn route_one(
     let mut tree: BTreeMap<NodeId, f64> = BTreeMap::new();
     tree.insert(source, 0.0);
     let mut pips: Vec<PipId> = Vec::new();
+    let mut moved: Vec<(usize, NodeId)> = Vec::new();
     let barred = !options
         .network_signals
         .get(signal)
@@ -1438,9 +1493,8 @@ fn route_one(
     }
     // A data signal's searches stay in the box around its terminals; see
     // `RouteOptions::bounding_margin`.
-    let mut bounds = options
-        .bounding_margin
-        .filter(|_| barred && boxed)
+    let mut bounds = margin
+        .filter(|_| barred)
         .map(|margin| Bounds::around(geometry, terminal_reach(graph, terminals), margin));
     for which in order {
         let sink = &terminals.sinks[which];
@@ -1484,6 +1538,12 @@ fn route_one(
                 sink: sink.name.clone(),
             });
         };
+        if let Some(last) = path.last() {
+            let end = graph.pip(*last).to;
+            if end != sink.node {
+                moved.push((sink.pin, end));
+            }
+        }
         for pip in path {
             let pip_ = graph.pip(pip);
             let delay = tree.get(&pip_.from).copied().unwrap_or(0.0)
@@ -1502,6 +1562,7 @@ fn route_one(
             source,
             pips,
             nodes: tree.into_keys().collect(),
+            moved,
         },
         escaped,
     ))
@@ -1717,6 +1778,20 @@ fn terminal_reach(graph: &RoutingGraph, terminals: &Terminals) -> impl Iterator<
     nodes.into_iter()
 }
 
+/// How many tiles a signal's box grows by after each pass that leaves it
+/// on an overused node.
+///
+/// A box of three tiles is VPR's, and VPR grows a net's box when its route
+/// reaches the edge; this grows it when the route is still congested,
+/// which is the case that matters. On the ChipWhisperer-Husky the route
+/// fell to about 110 overused nodes by the 43rd pass and stayed there:
+/// the last congested signals, in one crowded stretch of the die, had no
+/// uncongested path inside their boxes, and a box widens only when a
+/// search finds no path at all, which a congested path never is. It
+/// converged at the 87th pass after 4,383 s of routing; growing the box,
+/// at the 48th after 2,781 s, from the same placement.
+const BOX_GROWTH: u32 = 1;
+
 /// The tiles a search may enter; see [`RouteOptions::bounding_margin`].
 #[derive(Clone, Copy, Debug)]
 struct Bounds {
@@ -1826,19 +1901,42 @@ fn maze(
     }
     let (reach_start, reach) = edges;
     let mut reached = false;
+    // The node the search ended on: the sink's own, or one of its class
+    // that nobody holds; see `RouteOptions::equivalent`. A node already in
+    // this signal's tree is its own other input and is not a new one.
+    let class = options
+        .equivalent
+        .get(sink as usize)
+        .copied()
+        .unwrap_or(u32::MAX);
+    let interchangeable = |node: NodeId| {
+        class != u32::MAX
+            && options.equivalent.get(node as usize) == Some(&class)
+            && state.occupancy[state.group[node as usize] as usize] == 0
+            && !tree.contains_key(&node)
+    };
+    let mut end = sink;
     while let Some(std::cmp::Reverse((estimate, node))) = heap.pop() {
         scratch.visited += 1;
         if estimate > score(scratch.estimate_of(node)) {
             continue;
         }
-        if node == sink {
+        if node == sink || interchangeable(node) {
             reached = true;
+            end = node;
             break;
         }
         let here = scratch.cost_of(node);
         let run = reach_start[node as usize] as usize..reach_start[node as usize + 1] as usize;
         for (pip, next) in graph.outgoing(node).iter().zip(&reach[run]) {
             if barred && geometry[*next as usize].reserved {
+                continue;
+            }
+            if !barred
+                && options.network_entry.get(*next as usize) == Some(&true)
+                && !geometry[node as usize].reserved
+                && !graph.pip_bits(*pip).is_empty()
+            {
                 continue;
             }
             let at = &geometry[*next as usize];
@@ -1863,7 +1961,7 @@ fn maze(
         return None;
     }
     let mut path = Vec::new();
-    let mut node = sink;
+    let mut node = end;
     while !tree.contains_key(&node) {
         let pip = scratch.from[node as usize];
         if pip == PipId::MAX {
@@ -2019,6 +2117,91 @@ mod tests {
             .map(|w| if w.name == "long" { base_long } else { 1.0 })
             .collect();
         (graph, base)
+    }
+
+    /// **A sink may end on an interchangeable node, and says so.** Two
+    /// sources and one table with inputs `a` and `b`: the first source
+    /// reaches only `b`, the second both. Mapped to `a` and `b`, the first
+    /// signal has no way to its pin, and without classes the route fails.
+    /// With `a` and `b` one class the first signal ends on `b`, the
+    /// second is negotiated off `b` and onto `a`, and each route's
+    /// `moved` names its pin and where it ended. Would catch the class
+    /// ignored (no route) and `moved` left empty or pointing at the pin's
+    /// own node. Would not catch a held alternative taken: here the
+    /// negotiation moves the second signal off `b` either way (checked by
+    /// dropping the occupancy test), so that rule is a saving in passes
+    /// rather than in correctness. Nor a class spanning two instances,
+    /// which is the caller's to build and `xray::lutswap`'s to refuse.
+    #[test]
+    fn a_sink_may_end_on_another_node_of_its_class() {
+        let mut arch = Arch::new("swap", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["out0", "out1", "a", "b"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "lut");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+        }
+        let mut dst = BelDecl::new("dst", "lut");
+        dst.pins.push(("i0".to_owned(), WireRef::local("a")));
+        dst.pins.push(("i1".to_owned(), WireRef::local("b")));
+        tile.bels.push(dst);
+        for (k, (from, to)) in [("out0", "b"), ("out1", "a"), ("out1", "b")]
+            .iter()
+            .enumerate()
+        {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(*from),
+                to: WireRef::local(*to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+
+        let mut netlist = pairs(2);
+        // The two sinks become one table's two inputs.
+        netlist.pins[3].instance = 1;
+        netlist.pins[1].role = "i0".to_owned();
+        netlist.pins[3].role = "i1".to_owned();
+        netlist.instances[1].kind = "lut".to_owned();
+        netlist.instances[1].pins = vec![1, 3];
+        netlist.instances[3].pins.clear();
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["X0Y0/src0", "X0Y0/dst", "X0Y0/src1"].iter().enumerate() {
+            placement.place(index, graph.site_index(site).expect("site"));
+        }
+        assert!(matches!(
+            route(&netlist, &graph, &placement, &RouteOptions::default()),
+            Err(RouteError::Unroutable { .. })
+        ));
+
+        let node = |name: &str| -> NodeId {
+            let index = (0..graph.nodes.len())
+                .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
+                .unwrap_or_else(|| panic!("no node {name}"));
+            NodeId::try_from(index).unwrap_or(0)
+        };
+        let (a, b) = (node("X0Y0/a"), node("X0Y0/b"));
+        let mut equivalent = vec![u32::MAX; graph.nodes.len()];
+        equivalent[a as usize] = 7;
+        equivalent[b as usize] = 7;
+        let options = RouteOptions {
+            equivalent,
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).expect("it routes");
+        assert_eq!(report.iterations.last().map(|i| i.overused_nodes), Some(0));
+        assert_eq!(routing.route(0).unwrap().moved, vec![(1, b)]);
+        assert_eq!(routing.route(1).unwrap().moved, vec![(3, a)]);
     }
 
     /// Two signals may not share a physical wire just because it has a
