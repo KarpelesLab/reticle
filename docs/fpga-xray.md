@@ -3331,7 +3331,7 @@ So, in the order they went in:
   flip-flops were spread with the rest, all landed between 639,724 and
   703,803. It replaces the one spread only where that spread ran: a
   design with no kind a third full and 256 cells strong is placed as
-  before.
+  before. (A fifth since the Husky Plus: see the section after this.)
 - **The five-input flip-flops, and a lookup table's flip-flops with
   it.** `A5FF`..`D5FF` are offered, `D` from the bypass input (`IN_B`,
   checked before) or from the lane's `O5` (`IN_A`, the other source of

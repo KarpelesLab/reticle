@@ -4306,7 +4306,20 @@ fn to_grid(value: f64, size: u32) -> u32 {
 /// too, 1,681 of 8,150 sites, and their macros' flip-flops with them,
 /// all over the die: flip-flop legalisation then stops, refused by
 /// control sets, which is the reason there is a threshold at all.
-const SPREAD_FROM: f64 = 0.3;
+///
+/// A third was then too high for the Husky Plus, the same gateware on an
+/// XC7A100T: its 16,712 spreadable lookup tables fill 26.4 % of 63,400
+/// sites, so it was placed by one solve, to a half-perimeter wirelength
+/// after annealing of 860,323 against the Husky's 635,591, and the route
+/// never converged — at the twentieth pass a pass took seventeen minutes
+/// and was getting slower. Placed globally, 691,296, and the route fell to
+/// 8,561 overused nodes by the eighth pass where it had been at 31,461.
+/// A fifth spreads it. The carry chains' trouble above was the one spread
+/// that preceded [`global_place`], which spreads every kind of
+/// [`GLOBAL_SPREAD_MIN`] cells once it runs, the Husky's carry chains
+/// among them. What a design a tenth full gains or loses by global
+/// placement has not been measured.
+const SPREAD_FROM: f64 = 0.2;
 
 /// And how many cells it must have. A handful of clock managers on a part
 /// with five sites fill most of them, and the legaliser places a handful
@@ -7735,16 +7748,17 @@ mod tests {
         assert!(!map.is_empty());
     }
 
-    /// **The threshold is a third of a kind's sites, not a half.** The
-    /// same three hundred sinks on a twenty-five-by-twenty-five grid fill
-    /// 48 per cent of it and are spread, which at a half they were not;
-    /// on a forty-by-forty grid, 19 per cent, they are left to the
-    /// legaliser. Would catch the threshold back at a half (the first
-    /// spreads nothing) or gone (the second spreads); what spreading
+    /// **The threshold is a fifth of a kind's sites.** The same three
+    /// hundred sinks fill 48 per cent of a twenty-five-by-twenty-five grid
+    /// and 24.5 per cent of a thirty-five-by-thirty-five one, and both are
+    /// spread — the second is the Husky Plus's share, which at a third was
+    /// not; on a fifty-by-fifty grid, 12 per cent, they are left to the
+    /// legaliser. Would catch the threshold back at a third or a half (the
+    /// second spreads nothing) or gone (the third spreads); what spreading
     /// does is the previous test's.
     #[test]
-    fn a_kind_a_third_full_is_spread_and_a_fifth_full_is_not() {
-        for (side, spread) in [(25, true), (40, false)] {
+    fn a_kind_a_fifth_full_is_spread_and_a_tenth_full_is_not() {
+        for (side, spread) in [(25, true), (35, true), (50, false)] {
             let (arch, graph) = grid(side, side);
             let netlist = fan_out(300);
             let (_, report) = place(
