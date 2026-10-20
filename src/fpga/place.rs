@@ -1058,6 +1058,9 @@ pub struct PlaceOptions {
     /// moves and at most a million, so a tiny design still gets a walk and
     /// a huge one does not get an unbounded one.
     pub move_effort: usize,
+    /// What makes the placement timing-driven, or `None` for one that
+    /// minimises wirelength alone; see [`PlaceTiming`].
+    pub timing: Option<PlaceTiming>,
 }
 
 impl Default for PlaceOptions {
@@ -1075,6 +1078,7 @@ impl Default for PlaceOptions {
             max_temperatures: 120,
             moves_per_temperature: None,
             move_effort: 10,
+            timing: None,
         }
     }
 }
@@ -1182,6 +1186,23 @@ pub struct PlacementReport {
     pub reach: Vec<(String, usize, usize)>,
     /// What the pass cost, in work rather than in seconds.
     pub work: PlaceWork,
+    /// What each round of a timing-driven placement estimated, the
+    /// wirelength placement's first: empty when [`PlaceOptions::timing`] is
+    /// `None`.
+    pub timing: Vec<TimingRound>,
+}
+
+/// One round of [`PlaceOptions::timing`]: the estimate the placement it
+/// started from gave.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TimingRound {
+    /// Per domain of [`PlaceTiming::periods`], the longest estimated path,
+    /// in picoseconds.
+    pub longest_ps: Vec<u64>,
+    /// How many signals had a connection over half critical.
+    pub critical: usize,
+    /// The half-perimeter wirelength.
+    pub hpwl: u64,
 }
 
 impl PlacementReport {
@@ -2308,6 +2329,7 @@ struct Macro {
 }
 
 /// Everything the placer knows about one instance beyond the netlist.
+#[derive(Clone)]
 struct Placeable {
     /// The site it must be on, from a package pin constraint.
     fixed: Option<usize>,
@@ -2438,9 +2460,58 @@ pub fn place(
             &sites_by_kind,
             &shared,
             options,
+            &[],
             &mut placement,
             &mut report,
         );
+        report.hpwl_after = hpwl(netlist, graph, &placement);
+    }
+    if let Some(timing) = &options.timing {
+        let order = timing_order(netlist, timing);
+        // Each round refines the last: a narrow window and a cool start,
+        // so that the weights move the critical cells and the rest stays
+        // where the wirelength placement put it.
+        let refine = PlaceOptions {
+            start_window: Some(TIMING_WINDOW),
+            start_acceptance: Some(TIMING_ACCEPTANCE),
+            timing: None,
+            ..options.clone()
+        };
+        let mut held = info.clone();
+        for (instance, place) in held.iter_mut().enumerate() {
+            if timing.frozen.get(instance).copied().unwrap_or(false)
+                && let Some(site) = placement.site_of(instance)
+            {
+                place.allowed = Some(vec![site]);
+            }
+        }
+        for _ in 0..timing.rounds {
+            let (critical, round) = estimate_timing(netlist, graph, &placement, timing, &order);
+            report.timing.push(TimingRound {
+                hpwl: hpwl(netlist, graph, &placement),
+                ..round
+            });
+            let weights = timing_weights(&critical, timing);
+            if options.anneal {
+                anneal(
+                    netlist,
+                    graph,
+                    &held,
+                    &macros,
+                    &sites_by_kind,
+                    &shared,
+                    &refine,
+                    &weights,
+                    &mut placement,
+                    &mut report,
+                );
+            }
+        }
+        let (_, round) = estimate_timing(netlist, graph, &placement, timing, &order);
+        report.timing.push(TimingRound {
+            hpwl: hpwl(netlist, graph, &placement),
+            ..round
+        });
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
     report.work = WORK.with(Cell::get);
@@ -4891,6 +4962,9 @@ struct Spans {
     /// Per signal, `(x0, x1, y0, y1)`: the lowest and highest occupied
     /// column and row. Meaningless while `placed` is zero.
     extent: Vec<(u32, u32, u32, u32)>,
+    /// Per signal, how much its box costs per tile: empty for one each,
+    /// which is a wirelength placement; see [`PlaceTiming`].
+    weight: Vec<u32>,
     /// Per signal, how many of its pins are on a placed instance.
     placed: Vec<u32>,
 }
@@ -4907,6 +4981,7 @@ impl Spans {
             columns: vec![0; signals * width],
             rows: vec![0; signals * height],
             extent: vec![(0, 0, 0, 0); signals],
+            weight: Vec::new(),
             placed: vec![0; signals],
         };
         for (signal, s) in netlist.signals.iter().enumerate() {
@@ -4992,10 +5067,17 @@ impl Spans {
         u64::from(x1 - x0) + u64::from(y1 - y0)
     }
 
-    /// Every signal's, summed. This is [`hpwl`] by another route and has to
-    /// agree with it.
+    /// What `signal`'s box costs the anneal: its wirelength, times its
+    /// weight when there are weights.
+    fn cost_of(&self, signal: usize) -> u64 {
+        let weight = self.weight.get(signal).copied().unwrap_or(1);
+        self.hpwl_of(signal) * u64::from(weight)
+    }
+
+    /// Every signal's cost, summed. Unweighted, this is [`hpwl`] by
+    /// another route and has to agree with it.
     fn total(&self) -> u64 {
-        (0..self.placed.len()).map(|s| self.hpwl_of(s)).sum()
+        (0..self.placed.len()).map(|s| self.cost_of(s)).sum()
     }
 }
 
@@ -5256,6 +5338,7 @@ fn anneal(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     shared: &SiteRules,
     options: &PlaceOptions,
+    weights: &[u32],
     placement: &mut Placement,
     report: &mut PlacementReport,
 ) {
@@ -5303,6 +5386,7 @@ fn anneal(
     // cost change a move makes *here*.
     let mut samples = Vec::new();
     let mut churn = Churn::new(netlist, graph, placement);
+    churn.spans.weight = weights.to_vec();
     for _ in 0..movable.len().clamp(20, 100_000) {
         if let Some(candidate) = propose(
             netlist,
@@ -5329,7 +5413,11 @@ fn anneal(
     let mut stalled = 0u32;
     let signals = netlist.signals.len().max(1) as f64;
     report.stop = AnnealStop::Exhausted;
-    while report.temperatures < options.max_temperatures {
+    // Counted here, not in the report, which a timing-driven placement
+    // accumulates over several anneals.
+    let mut temperatures = 0;
+    while temperatures < options.max_temperatures {
+        temperatures += 1;
         let reach = if options.range_limit {
             window_tiles(window)
         } else {
@@ -5707,7 +5795,7 @@ fn retile(
             }
         }
     }
-    let before: u64 = churn.touched.iter().map(|s| churn.spans.hpwl_of(*s)).sum();
+    let before: u64 = churn.touched.iter().map(|s| churn.spans.cost_of(*s)).sum();
     let mut pins = 0u64;
     for (instance, _) in plan.clone() {
         if let Some(site) = placement.site_of(instance) {
@@ -5734,9 +5822,332 @@ fn retile(
         let signal = churn.touched[index];
         churn.spans.settle(signal);
     }
-    let after: u64 = churn.touched.iter().map(|s| churn.spans.hpwl_of(*s)).sum();
+    let after: u64 = churn.touched.iter().map(|s| churn.spans.cost_of(*s)).sum();
     count(|work| &mut work.cost_pins, pins);
     after as f64 - before as f64
+}
+
+// ---------------------------------------------------------------------------
+// Timing
+// ---------------------------------------------------------------------------
+
+/// What one pin does in [`PlaceTiming`]'s analysis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinTiming {
+    /// Not followed: a clock pin, or a pin with no timing worth estimating.
+    Ignored,
+    /// An input that reaches the instance's `Through` outputs, or an
+    /// output those inputs reach, [`PlaceTiming::cell`] later.
+    Through,
+    /// An output that starts paths, [`PlaceTiming::launch`] after the
+    /// instance's clock.
+    Start,
+    /// An input that ends paths: checked against its domain's period,
+    /// [`PlaceTiming::capture`] before the edge.
+    End,
+}
+
+/// Which clock domain an instance's paths start and end in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathDomain {
+    /// None the analysis times.
+    Untimed,
+    /// One of [`PlaceTiming::periods`].
+    Clock(usize),
+    /// Every one: a package pin, which an outside device clocks.
+    Every,
+}
+
+/// What a timing-driven placement needs: how delay is estimated, and what
+/// it is measured against.
+///
+/// **The delays are an estimate.** A connection's is a straight line in
+/// its tile distance (`wire`), fitted by the caller to what its router
+/// made of a placement; a cell's is a number the caller chose. Paths are
+/// timed within a domain only: one that crosses from one clock to another
+/// is taken to be synchronised, which is what a design's own constraints
+/// usually say of it and what this cannot check.
+///
+/// Each of [`PlaceTiming::rounds`] estimates every connection's
+/// criticality — one less its slack over its domain's period, as VPR's
+/// timing-driven placer has it (Marquardt, Betz and Rose, 2000) — weights
+/// each signal's box by `1 + weight * criticality^exponent`, and anneals
+/// again from where the last round left the cells. A signal's weight is its
+/// most critical connection's, which over-weights a wide net for one late
+/// sink: net weighting is the cruder relative of VPR's per-connection
+/// timing cost, chosen because the annealer's cost is per net.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaceTiming {
+    /// Per netlist pin, what the analysis does with it.
+    pub pins: Vec<PinTiming>,
+    /// Per instance, the delay from a `Through` input to a `Through`
+    /// output, in nanoseconds.
+    pub cell: Vec<f64>,
+    /// Per instance, the delay from its clock to a `Start` output.
+    pub launch: Vec<f64>,
+    /// Per instance, how long before the clock an `End` input must settle:
+    /// a flip-flop's setup, or an output buffer's own delay.
+    pub capture: Vec<f64>,
+    /// Per instance, the domain its paths start and end in.
+    pub domain: Vec<PathDomain>,
+    /// Each domain's period, in nanoseconds.
+    pub periods: Vec<f64>,
+    /// A connection's delay: `wire.0 + wire.1 * tiles`, plus `wire.2 *
+    /// tiles` on a signal of more than [`WIDE_FANOUT`] sinks, whose tree
+    /// detours.
+    pub wire: (f64, f64, f64),
+    /// How many rounds of estimate and anneal follow the wirelength
+    /// placement.
+    pub rounds: u32,
+    /// How much a fully critical signal's box costs over a slack one's.
+    pub weight: f64,
+    /// How sharply the weight falls off below fully critical.
+    pub exponent: i32,
+    /// Per instance, whether the timing rounds leave it on the site the
+    /// wirelength placement gave it. For cells whose connections have few
+    /// ways to be made at all, which moving can leave with none: see
+    /// `xray::place_timing`.
+    pub frozen: Vec<bool>,
+}
+
+/// The fanout above which [`PlaceTiming::wire`]'s third term applies.
+pub const WIDE_FANOUT: usize = 4;
+
+/// The move window a timing round starts with, in tiles.
+const TIMING_WINDOW: u32 = 8;
+
+/// The acceptance a timing round's start temperature aims for: cool, so
+/// that a round refines the placement rather than redoing it.
+const TIMING_ACCEPTANCE: f64 = 0.2;
+
+/// The instances with `Through` outputs, each after every instance one of
+/// its `Through` inputs is driven through; an instance on a loop comes
+/// after the instances it can, and the loop is cut there.
+fn timing_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<usize> {
+    let through = |pin: usize| timing.pins.get(pin) == Some(&PinTiming::Through);
+    let n = netlist.instances.len();
+    let mut is_comb = vec![false; n];
+    for (i, inst) in netlist.instances.iter().enumerate() {
+        is_comb[i] = inst
+            .pins
+            .iter()
+            .any(|p| netlist.pins[*p].output && through(*p));
+    }
+    // Kahn's algorithm over "a Through input driven by a Through output".
+    let mut waiting = vec![0usize; n];
+    let mut readers: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, inst) in netlist.instances.iter().enumerate() {
+        if !is_comb[i] {
+            continue;
+        }
+        for pin in &inst.pins {
+            let p = &netlist.pins[*pin];
+            if p.output || !through(*pin) {
+                continue;
+            }
+            let Some(driver) = p.signal.and_then(|s| netlist.signals[s].driver) else {
+                continue;
+            };
+            let d = netlist.pins[driver].instance;
+            if is_comb[d] && through(driver) && d != i {
+                waiting[i] += 1;
+                readers[d].push(i);
+            }
+        }
+    }
+    let mut order: Vec<usize> = (0..n).filter(|i| is_comb[*i] && waiting[*i] == 0).collect();
+    let mut done = vec![false; n];
+    let mut next = 0;
+    loop {
+        while next < order.len() {
+            let i = order[next];
+            next += 1;
+            done[i] = true;
+            for r in &readers[i] {
+                waiting[*r] -= 1;
+                if waiting[*r] == 0 {
+                    order.push(*r);
+                }
+            }
+        }
+        // A loop: take the first instance still waiting, as if its loop
+        // inputs were not there.
+        let Some(stuck) = (0..n).find(|i| is_comb[*i] && !done[*i] && waiting[*i] > 0) else {
+            break;
+        };
+        waiting[stuck] = 0;
+        order.push(stuck);
+    }
+    order
+}
+
+/// Per signal, the criticality of its most critical connection over every
+/// domain; and the round's longest path per domain.
+fn estimate_timing(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    timing: &PlaceTiming,
+    order: &[usize],
+) -> (Vec<f64>, TimingRound) {
+    let pins = netlist.pins.len();
+    let tile = |instance: usize| placement.site_of(instance).map(|s| graph.sites[s].tile);
+    // Each input pin's connection delay, from its driver.
+    let mut wire = vec![0.0f64; pins];
+    for signal in &netlist.signals {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let Some(from) = tile(netlist.pins[driver].instance) else {
+            continue;
+        };
+        let wide = signal.sinks.len() > WIDE_FANOUT;
+        for sink in &signal.sinks {
+            let Some(to) = tile(netlist.pins[*sink].instance) else {
+                continue;
+            };
+            let tiles = f64::from(from.0.abs_diff(to.0) + from.1.abs_diff(to.1));
+            let (a, b, c) = timing.wire;
+            wire[*sink] = a + b * tiles + if wide { c * tiles } else { 0.0 };
+        }
+    }
+    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
+    let driver = |pin: usize| {
+        netlist.pins[pin]
+            .signal
+            .and_then(|s| netlist.signals[s].driver)
+    };
+    let mut critical = vec![0.0f64; netlist.signals.len()];
+    let mut longest_ps = Vec::with_capacity(timing.periods.len());
+    for (domain, period) in timing.periods.iter().enumerate() {
+        let here = |instance: usize| match timing.domain.get(instance) {
+            Some(PathDomain::Clock(d)) => *d == domain,
+            Some(PathDomain::Every) => true,
+            _ => false,
+        };
+        // Forwards: every output pin's arrival.
+        let mut arrival = vec![f64::NEG_INFINITY; pins];
+        for (index, inst) in netlist.instances.iter().enumerate() {
+            if !here(index) {
+                continue;
+            }
+            for pin in &inst.pins {
+                if netlist.pins[*pin].output && class(*pin) == PinTiming::Start {
+                    arrival[*pin] = timing.launch[index];
+                }
+            }
+        }
+        let input_arrival = |pin: usize, arrival: &[f64]| -> f64 {
+            driver(pin).map_or(f64::NEG_INFINITY, |d| arrival[d] + wire[pin])
+        };
+        for &index in order {
+            let inst = &netlist.instances[index];
+            let latest = inst
+                .pins
+                .iter()
+                .filter(|p| !netlist.pins[**p].output && class(**p) == PinTiming::Through)
+                .map(|p| input_arrival(*p, &arrival))
+                .fold(f64::NEG_INFINITY, f64::max);
+            if latest == f64::NEG_INFINITY {
+                continue;
+            }
+            for pin in &inst.pins {
+                if netlist.pins[*pin].output && class(*pin) == PinTiming::Through {
+                    arrival[*pin] = arrival[*pin].max(latest + timing.cell[index]);
+                }
+            }
+        }
+        // Backwards: every pin's required time, from the endpoints.
+        let mut required = vec![f64::INFINITY; pins];
+        let mut longest = 0.0f64;
+        for (index, inst) in netlist.instances.iter().enumerate() {
+            if !here(index) {
+                continue;
+            }
+            for pin in &inst.pins {
+                if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
+                    let at = input_arrival(*pin, &arrival) + timing.capture[index];
+                    if at.is_finite() {
+                        longest = longest.max(at);
+                    }
+                    required[*pin] = period - timing.capture[index];
+                }
+            }
+        }
+        let output_required = |pin: usize, required: &[f64]| -> f64 {
+            let Some(signal) = netlist.pins[pin].signal else {
+                return f64::INFINITY;
+            };
+            netlist.signals[signal]
+                .sinks
+                .iter()
+                .map(|s| required[*s] - wire[*s])
+                .fold(f64::INFINITY, f64::min)
+        };
+        for &index in order.iter().rev() {
+            let inst = &netlist.instances[index];
+            let earliest = inst
+                .pins
+                .iter()
+                .filter(|p| netlist.pins[**p].output && class(**p) == PinTiming::Through)
+                .map(|p| output_required(*p, &required))
+                .fold(f64::INFINITY, f64::min);
+            if earliest == f64::INFINITY {
+                continue;
+            }
+            for pin in &inst.pins {
+                if !netlist.pins[*pin].output && class(*pin) == PinTiming::Through {
+                    required[*pin] = required[*pin].min(earliest - timing.cell[index]);
+                }
+            }
+        }
+        // Each connection's slack, and from it its criticality.
+        for (index, signal) in netlist.signals.iter().enumerate() {
+            let Some(d) = signal.driver else { continue };
+            if arrival[d] == f64::NEG_INFINITY {
+                continue;
+            }
+            for sink in &signal.sinks {
+                if required[*sink] == f64::INFINITY {
+                    continue;
+                }
+                let slack = required[*sink] - (arrival[d] + wire[*sink]);
+                let c = (1.0 - slack / period).clamp(0.0, 1.0);
+                critical[index] = critical[index].max(c);
+            }
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a path of a few microseconds at most, rounded to picoseconds"
+        )]
+        longest_ps.push((longest * 1000.0).round().max(0.0) as u64);
+    }
+    let round = TimingRound {
+        critical: critical.iter().filter(|c| **c > 0.5).count(),
+        longest_ps,
+        hpwl: 0,
+    };
+    (critical, round)
+}
+
+/// Each signal's weight for [`Spans`], from its criticality: sixteenths,
+/// so that a slack signal costs 16 a tile and a fully critical one
+/// `16 * (1 + weight)`.
+fn timing_weights(critical: &[f64], timing: &PlaceTiming) -> Vec<u32> {
+    critical
+        .iter()
+        .map(|c| {
+            let w = 16.0 * (1.0 + timing.weight * c.powi(timing.exponent));
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a weight of 16 to a few thousand, clamped"
+            )]
+            let w = w.round().clamp(16.0, 1.0e6) as u32;
+            w
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -5927,6 +6338,88 @@ mod tests {
             });
         }
         netlist
+    }
+
+    /// The four-cell chain of [`chain`] on a row of ten tiles, at
+    /// columns 0, 3, 4 and 9, timed from its first cell to its last.
+    fn timed_chain() -> (RoutingGraph, Netlist, Placement, PlaceTiming) {
+        let (_, graph) = grid(10, 1);
+        let netlist = chain(4);
+        let mut placement = Placement::new(4, graph.sites.len());
+        for (instance, x) in [0u32, 3, 4, 9].iter().enumerate() {
+            let site = graph.sites.iter().position(|s| s.tile == (*x, 0)).unwrap();
+            placement.place(instance, site);
+        }
+        let mut pins = vec![PinTiming::Through; netlist.pins.len()];
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            if pin.instance == 0 {
+                pins[index] = PinTiming::Start;
+            }
+            if pin.instance == 3 {
+                pins[index] = PinTiming::End;
+            }
+        }
+        let timing = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.1, 0.1, 0.0],
+            launch: vec![0.3, 0.0, 0.0, 0.0],
+            capture: vec![0.0, 0.0, 0.0, 0.05],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+            ],
+            periods: vec![5.0],
+            wire: (0.2, 0.1, 0.0),
+            rounds: 1,
+            weight: 8.0,
+            exponent: 3,
+            frozen: vec![false; 4],
+        };
+        (graph, netlist, placement, timing)
+    }
+
+    /// **A path's estimate is its cells and its wires, summed.** The
+    /// chain's first cell launches at 0.3 ns; its three connections cross
+    /// 3, 1 and 5 tiles at 0.2 ns and 0.1 ns a tile; the two cells between
+    /// add 0.1 ns each and the last needs 0.05 ns before the edge: 2.05 ns
+    /// in all, by hand. Every connection is on that one path, so each has
+    /// its slack, 5 - 2.05 = 2.95 ns, and a criticality of 1 - 2.95 / 5.
+    /// Would catch a cell's delay or a connection's left out or counted
+    /// twice, the capture time forgotten, and the backward pass's slack
+    /// taken from the wrong end; would not catch a delay model that is
+    /// wrong about the fabric, which is the caller's numbers.
+    #[test]
+    fn a_paths_estimate_is_its_cells_and_wires_summed() {
+        let (graph, netlist, placement, timing) = timed_chain();
+        let order = timing_order(&netlist, &timing);
+        assert_eq!(order, vec![1, 2]);
+        let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![2050]);
+        for c in &critical {
+            assert!((c - (1.0 - 2.95 / 5.0)).abs() < 1e-9, "{critical:?}");
+        }
+        assert_eq!(round.critical, 0);
+        // Out of its domain, nothing is timed.
+        let mut other = timing.clone();
+        other.domain[0] = PathDomain::Clock(1);
+        other.periods.push(5.0);
+        let (critical, round) = estimate_timing(&netlist, &graph, &placement, &other, &order);
+        assert_eq!(round.longest_ps, vec![0, 0]);
+        assert!(critical.iter().all(|c| *c == 0.0), "{critical:?}");
+    }
+
+    /// **A critical signal's box costs more, and a slack one's what it
+    /// did.** Weights are sixteenths: criticality 0 is 16, 1 is
+    /// `16 * (1 + weight)`, and half is `16 * (1 + weight / 8)` at an
+    /// exponent of three. Would catch the exponent or the weight dropped,
+    /// and a slack signal weighted (the placement would no longer be the
+    /// wirelength one where nothing is critical).
+    #[test]
+    fn a_signals_weight_grows_with_its_criticality() {
+        let (_, _, _, timing) = timed_chain();
+        assert_eq!(timing_weights(&[0.0, 1.0, 0.5], &timing), vec![16, 144, 32]);
     }
 
     #[test]
