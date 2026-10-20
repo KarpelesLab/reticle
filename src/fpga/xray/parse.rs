@@ -870,14 +870,14 @@ pub(super) fn bels_of(
 
 /// What a slice sub-element is, in Reticle's bel vocabulary.
 ///
-/// Only the four six-input lookup tables and the four flip-flops beside
-/// them become placeable elements, plus the carry chain. The five-input
-/// halves (`A5LUT`, `A5FF`) are real and are deliberately left out: a
-/// site this module cannot wire is a site the placer will fill and the
-/// router will then fail on, so offering eight flip-flops per slice when
-/// four can be reached would turn a clean refusal into a puzzle.
-/// `PRECYINIT` is left out for the same reason — it is the carry
-/// chain's input mux, not a second carry chain.
+/// The four six-input lookup tables, the eight flip-flops — `AFF`..`DFF`
+/// and the `A5FF`..`D5FF` beside them — and the carry chain become
+/// placeable elements. The five-input flip-flops were left out until
+/// their wiring was described (`sites::slice_pass_throughs`): a site this
+/// module cannot wire is a site the placer will fill and the router will
+/// then fail on. The five-input lookup tables (`A5LUT`) still are, since
+/// a `LUT6_2` is how the lower half is used here. `PRECYINIT` is left out
+/// too — it is the carry chain's input mux, not a second carry chain.
 fn slice_sub_kind(sub: &str) -> Option<&'static str> {
     const LETTERS: [&str; 4] = ["A", "B", "C", "D"];
     if let Some(letter) = sub.strip_suffix("LUT")
@@ -885,10 +885,11 @@ fn slice_sub_kind(sub: &str) -> Option<&'static str> {
     {
         return Some("lut");
     }
-    if let Some(letter) = sub.strip_suffix("FF")
-        && LETTERS.contains(&letter)
-    {
-        return Some("ff");
+    if let Some(rest) = sub.strip_suffix("FF") {
+        let letter = rest.strip_suffix('5').unwrap_or(rest);
+        if LETTERS.contains(&letter) {
+            return Some("ff");
+        }
     }
     if sub == "CARRY4" {
         return Some("carry");

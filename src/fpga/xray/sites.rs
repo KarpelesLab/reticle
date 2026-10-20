@@ -308,22 +308,40 @@ fn lut5_wire(wires: &str, letter: impl std::fmt::Display) -> String {
     format!("{wires}_MUX_{letter}O5")
 }
 
-/// The slice position a flip-flop sub-element names: `AFF` is `A`.
+/// The slice position a flip-flop sub-element names, and whether it is
+/// the five-input half's: `AFF` is `('A', false)`, `A5FF` `('A', true)`.
 ///
-/// The five-input flip-flops (`A5FF`) are deliberately **not** here.
-/// They exist, but their data comes from a mux this module does not
-/// describe and their output reaches the fabric only through the same
-/// `AMUX` the main flip-flop and the carry chain want, so declaring them
-/// would offer a placer eight sites per slice of which only four can be
-/// wired. Four is the honest number.
-fn slice_ff_letter(sub: &str) -> Option<char> {
-    let letter = sub.strip_suffix("FF")?;
+/// The `A5FF`..`D5FF` were left out until their wiring was described,
+/// since a site that cannot be wired is a site the placer fills and the
+/// router fails on. Their data comes from `<L>5FFMUX` and their output
+/// leaves the slice only through `<L>MUX` — the same output mux a
+/// `LUT6_2`'s `O5` and the carry's sum use — which is what
+/// [`slice_pass_throughs`] describes and `place`'s exit rule keeps
+/// apart.
+fn slice_ff(sub: &str) -> Option<(char, bool)> {
+    let rest = sub.strip_suffix("FF")?;
+    let (letter, five) = match rest.strip_suffix('5') {
+        Some(letter) => (letter, true),
+        None => (rest, false),
+    };
     let mut chars = letter.chars();
     let first = chars.next()?;
     if chars.next().is_some() || !SLICE_LETTERS.contains(&first) {
         return None;
     }
-    Some(first)
+    Some((first, five))
+}
+
+/// What a five-input flip-flop's `D` reads: the output of `<L>5FFMUX`,
+/// invented like [`ff_data_wire`].
+fn five_ff_data_wire(wires: &str, letter: char) -> String {
+    format!("{wires}_MUX_{letter}5FF_D")
+}
+
+/// A five-input flip-flop's `Q`, which reaches nothing but the output mux
+/// `<L>MUX`; invented like [`ff_data_wire`].
+fn five_ff_q_wire(wires: &str, letter: char) -> String {
+    format!("{wires}_MUX_{letter}5Q")
 }
 
 /// The interconnect-side wires that feed the slice at `index` with its
@@ -407,20 +425,24 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
         // `D` is the exception: it is the output of the `<letter>FFMUX`
         // and never leaves the site, so it sits on the wire
         // [`ff_data_wire`] invents and [`pass_throughs`] feeds.
-        if let Some(letter) = slice_ff_letter(sub) {
+        if let Some((letter, five)) = slice_ff(sub) {
+            // A five-input flip-flop's `D` and `Q` are both inside the
+            // slice: see [`slice_ff`].
+            let (d, q) = if five {
+                (
+                    five_ff_data_wire(wires, letter),
+                    five_ff_q_wire(wires, letter),
+                )
+            } else {
+                (ff_data_wire(wires, letter), format!("{wires}_{letter}Q"))
+            };
             return vec![
                 BelPin {
                     role: "clk",
                     wire: format!("{wires}_CLK"),
                 },
-                BelPin {
-                    role: "d",
-                    wire: ff_data_wire(wires, letter),
-                },
-                BelPin {
-                    role: "q",
-                    wire: format!("{wires}_{letter}Q"),
-                },
+                BelPin { role: "d", wire: d },
+                BelPin { role: "q", wire: q },
                 BelPin {
                     role: "en",
                     wire: format!("{wires}_CE"),
@@ -708,6 +730,35 @@ fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
                 to: data,
                 from: format!("{wires}_{letter}X"),
                 features: vec![format!("{prefix}.{letter}FFMUX.{letter}X")],
+            });
+            // The five-input flip-flop beside it: `D` from the bypass
+            // input or the lookup table's `O5`, and `Q` out through the
+            // output mux. `IN_B` is the bypass input, which is checked: in
+            // every `CLBLL_L` slice of NewAE's Husky bitstream where Vivado
+            // set `<L>5FFMUX.IN_B` (1,219 of them), the slice's `<L>X` is
+            // driven, and with `IN_A` (the lookup table's `O5`, the mux's
+            // other source in UG474) it often is not. Vivado's commonest
+            // use of `IN_A` there is a `LUT6_2` with both halves
+            // registered, 1,950 lanes of `<L>FFMUX.O6` and
+            // `<L>5FFMUX.IN_A` together. `O5` is offered here and not to
+            // the main flip-flop because the placer now sees it for what it
+            // is: a source wire only its own table's lower half may use
+            // (`place::ControlGroup::sources`), which it was not when
+            // `<L>FFMUX.O5` was tried.
+            out.push(PassThrough {
+                to: five_ff_data_wire(wires, letter),
+                from: format!("{wires}_{letter}X"),
+                features: vec![format!("{prefix}.{letter}5FFMUX.IN_B")],
+            });
+            out.push(PassThrough {
+                to: five_ff_data_wire(wires, letter),
+                from: lut5_wire(wires, letter),
+                features: vec![format!("{prefix}.{letter}5FFMUX.IN_A")],
+            });
+            out.push(PassThrough {
+                to: format!("{wires}_{letter}MUX"),
+                from: five_ff_q_wire(wires, letter),
+                features: vec![format!("{prefix}.{letter}OUTMUX.{letter}5Q")],
             });
         }
         out.extend(carry_pass_throughs(wires, prefix));
@@ -1199,13 +1250,14 @@ pub(super) fn bel_config(tile_type: &str, prefix: &str, sub: &str) -> BelConfig 
         out.tied = carry_tied(prefix);
         return out;
     }
-    let (Some(_), Some(letter)) = (slice_feature_prefix(tile_type, index), slice_ff_letter(sub))
-    else {
+    let (Some(_), Some(_)) = (slice_feature_prefix(tile_type, index), slice_ff(sub)) else {
         return out;
     };
     // The prefix the caller already knows; the features below are named
-    // relative to it, exactly as `segbits_<type>.db` spells them.
-    let ff = format!("{prefix}.{letter}FF");
+    // relative to it, exactly as `segbits_<type>.db` spells them, and a
+    // five-input flip-flop's own two (`A5FF.ZINI`, `A5FF.ZRST`) by its
+    // own name.
+    let ff = format!("{prefix}.{sub}");
     let sync = format!("{prefix}.FFSYNC");
     let inv = format!("{prefix}.CLKINV");
     let zrst = format!("{ff}.ZRST");
@@ -1721,17 +1773,34 @@ mod tests {
         assert!(!p.is_empty(), "a flip-flop needs a path to its `D`");
 
         // Two slices, each with a clock enable, a set/reset, two ways into
-        // each of four flip-flops, and each lookup table's `O5` out to the
-        // output mux; and a carry chain with two ways in, and per bit two
-        // ways into the generate and the sum and the carry each out to the
-        // output mux and to the flip-flop.
-        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 4 + 2 + 4 * 2 + 4 * 2 * 2));
-        // `O5` reaches the output mux and never a flip-flop: offered to the
-        // data mux it read as a free way in beside every table.
+        // each of four flip-flops, each lookup table's `O5` out to the
+        // output mux, and each five-input flip-flop's two ways in (the
+        // bypass input and `O5`) and one way out (the output mux); and a
+        // carry chain with two ways in, and per bit two ways into the
+        // generate and the sum and the carry each out to the output mux
+        // and to the flip-flop.
+        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 4 + 4 * 3 + 2 + 4 * 2 + 4 * 2 * 2));
+        // The five-input flip-flops read the bypass input with `IN_B` and
+        // their lane's `O5` with `IN_A`, and nothing else. Would catch the
+        // two the other way round, which is UG474's order and not what
+        // NewAE's bitstream says.
         assert!(
-            !p.iter()
-                .any(|h| h.features.first().is_some_and(|f| f.ends_with("FFMUX.O5"))),
-            "an `O5` hop into a flip-flop: {p:?}"
+            p.iter()
+                .filter(|h| h.features.first().is_some_and(|f| f.contains("5FFMUX")))
+                .all(
+                    |h| (h.features[0].ends_with(".IN_B") && h.from.ends_with('X'))
+                        || (h.features[0].ends_with(".IN_A") && h.from.ends_with("O5"))
+                ),
+            "a five-input flip-flop read something but its bypass input or `O5`: {p:?}"
+        );
+        // `O5` reaches the main flip-flop never: offered to its data mux it
+        // read as a free way in beside every table.
+        assert!(
+            !p.iter().any(|h| h
+                .features
+                .first()
+                .is_some_and(|f| f.ends_with("FFMUX.O5") && !f.contains("5FFMUX"))),
+            "an `O5` hop into a main flip-flop: {p:?}"
         );
 
         for hop in &p {

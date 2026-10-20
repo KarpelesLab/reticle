@@ -232,6 +232,7 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
         "CLBLL_L.SLICEL_X0.ALUT.INIT[0] 32_00\n\
          CLBLL_L.SLICEL_X0.ALUT.INIT[1] 32_01\n\
          CLBLL_L.SLICEL_X0.AFF.ZINI 31_03\n\
+         CLBLL_L.SLICEL_X0.A5FF.ZINI 31_06\n\
          CLBLL_L.SLICEL_X0.PRECYINIT.AX 20_00\n\
          CLBLL_L.SLICEL_X0.CLKINV 20_01\n",
         "segbits_clbll_l.db",
@@ -247,15 +248,12 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
     // `PRECYINIT` is the carry chain's input multiplexer, not a second
     // carry chain, so it is deliberately not a placeable element: a site
     // the loader cannot wire is one the placer would fill and the router
-    // would then fail on. The same reasoning leaves out the five-input
-    // halves. See `slice_sub_kind`.
+    // would then fail on. The five-input flip-flops were left out for the
+    // same reason until their wiring was described, and are placeable
+    // now. See `slice_sub_kind`.
     assert!(
         !names.contains(&"SLICEL_X0_PRECYINIT"),
         "the carry input mux is not a placeable site: {names:?}"
-    );
-    assert!(
-        !names.iter().any(|n| n.ends_with("_A5FF")),
-        "the five-input flip-flop halves cannot be wired: {names:?}"
     );
 
     let lut = bels.iter().find(|b| b.name == "SLICEL_X0_ALUT").unwrap();
@@ -310,6 +308,22 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
             },
         ]
     );
+    // The five-input flip-flop beside it is a flip-flop too, with its own
+    // initial value, `A5FF.ZINI`, and the slice's clock inverter: it was
+    // left out until its data and output muxes were described. Would
+    // catch the five-input half dropped again, or its `INIT` taken from
+    // the main flip-flop's bit.
+    let five = bels.iter().find(|b| b.name == "SLICEL_X0_A5FF").unwrap();
+    assert_eq!(five.kind, "ff");
+    assert!(five.config.contains(&ConfigEntry::ParamZero {
+        name: "INIT".to_owned(),
+        index: 0,
+        at: ConfigBit::new(31, 6),
+    }));
+    assert!(five.config.contains(&ConfigEntry::Cell {
+        primitive: "FDPE_1".to_owned(),
+        bits: vec![ConfigBit::new(20, 1)],
+    }));
     // The gap that stops a signal reaching any of them.
     assert!(bels.iter().all(|b| b.pins.is_empty()));
 }

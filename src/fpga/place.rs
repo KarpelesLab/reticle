@@ -1139,7 +1139,7 @@ pub struct PlacementReport {
     pub hpwl_before: u64,
     /// Half-perimeter wirelength after annealing.
     pub hpwl_after: u64,
-    /// The site kinds `spread_dense` spread before legalisation, as
+    /// The site kinds `global_place` spread before legalisation, as
     /// `(kind, cells)`.
     pub spread: Vec<(String, usize)>,
     /// How far legalisation moved the cells that were free to move from
@@ -1442,6 +1442,18 @@ struct SiteRules {
     /// *n* is that pool's *n*th wire. Empty for every site of every family
     /// whose bels do not share a control wire.
     captive: Vec<Vec<(u32, u32, u32)>>,
+    /// Per site, one entry per output pin of another site of its tile
+    /// that may not carry a signal other than this one's, as `(the other
+    /// site, this site's role, the other's role)`. Both directions are
+    /// recorded. See [`exits_of`] for which pins pair.
+    exits: Vec<Vec<(usize, u32, u32)>>,
+    /// Per instance, the slice-wide mode its primitive needs, or zero for
+    /// none; see [`slice_mode`].
+    mode: Vec<u8>,
+    /// Per signal, whether every reader is in its driver's rigid group
+    /// and so never leaves the tile, by signal index; empty for none. Set
+    /// once the groups are known: see [`SiteRules::exit_shared`].
+    contained: Vec<bool>,
     /// Per site, the group it belongs to, or `u32::MAX` for none.
     site_group: Vec<u32>,
     /// One per tile that has a contended pool at all.
@@ -1485,6 +1497,32 @@ struct ControlGroup {
 /// two dozen interconnect wires, and stopping there costs nothing but the
 /// look: a pool nobody else in the tile draws on is dropped anyway.
 const MAX_POOL: usize = 8;
+
+/// The mode a storage primitive needs of the sites it shares its control
+/// pins with, as a small number, or zero for a primitive that needs none.
+///
+/// A 7-series slice has one `FFSYNC` and one `CLKINV` for all eight of its
+/// flip-flops (`xray::sites::slice_pass_throughs`), so an `FDCE` beside an
+/// `FDRE` gets a synchronous reset, and an `FDRE_1` beside an `FDRE` an
+/// inverted clock: the bits of the two are OR-ed, and one of them is
+/// wrong with nothing to say so. NewAE's ChipWhisperer-Husky has 505
+/// asynchronous flip-flops and 576 on a falling edge among 27,618. The
+/// primitives are named here because the device file does not say which
+/// share a field; any other family's flip-flops get zero, and are placed
+/// as before.
+fn slice_mode(primitive: &str) -> u8 {
+    let (base, inverted) = match primitive.strip_suffix("_1") {
+        Some(base) => (base, true),
+        None => (primitive, false),
+    };
+    match (base, inverted) {
+        ("FDRE" | "FDSE", false) => 1,
+        ("FDRE" | "FDSE", true) => 2,
+        ("FDCE" | "FDPE", false) => 3,
+        ("FDCE" | "FDPE", true) => 4,
+        _ => 0,
+    }
+}
 
 /// The wires of `tile` that a signal arriving at `pin` must pass through,
 /// or `None` when it can also arrive from outside the tile.
@@ -1534,6 +1572,59 @@ fn captive_pool(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<V
     None
 }
 
+/// Where an output pin's signal can leave `tile`: walked forward from the
+/// pin through the tile's own wires, the wires with a way out of the tile
+/// (the exits), and whether the walk also reaches a bel input inside the
+/// tile — a wire nothing leads on from — which an output with somewhere
+/// else to go does. `None` for a pin something routes into, which is not
+/// an output, and for a walk wider than [`MAX_POOL`].
+///
+/// A 7-series slice's five-input flip-flop is the case this is for: its
+/// `Q` reaches nothing but the output mux `<L>MUX`, and so do a `LUT6_2`'s
+/// `O5` and the carry's sum, which have the mux as their only way out of
+/// the tile. Two of those in one lane cannot both leave it, and nothing
+/// the router does can make them; [`SiteRules::exits`] pairs a pin that
+/// can only leave by one wire with every other output whose one way out
+/// is that wire. An `O6`, which also leaves by its own wire, pairs with
+/// nothing, and two outputs that each have somewhere inside the tile to
+/// go are left alone, since either may be read only there: the carry's
+/// sum and the `O5` its lane's generate rides on are such a pair.
+fn exits_of(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<(Vec<NodeId>, bool)> {
+    let local = |node: NodeId| {
+        let wire = graph.wire(node);
+        !wire.global && wire.tile == tile
+    };
+    if !local(pin) || !graph.incoming(pin).is_empty() {
+        return None;
+    }
+    let mut seen: Vec<NodeId> = vec![pin];
+    let mut work: Vec<NodeId> = vec![pin];
+    let mut exits: Vec<NodeId> = Vec::new();
+    let mut inside = false;
+    while let Some(node) = work.pop() {
+        let ways = graph.outgoing(node);
+        if ways.is_empty() {
+            inside |= node != pin;
+            continue;
+        }
+        if ways.iter().any(|pip| !local(graph.pip(*pip).to)) {
+            exits.push(node);
+        }
+        for pip in ways {
+            let to = graph.pip(*pip).to;
+            if local(to) && !seen.contains(&to) {
+                if seen.len() >= MAX_POOL {
+                    return None;
+                }
+                seen.push(to);
+                work.push(to);
+            }
+        }
+    }
+    exits.sort_unstable();
+    Some((exits, inside))
+}
+
 impl SiteRules {
     /// Finds every pair of bel pins in one tile that are one wire, every
     /// pair of sites that exclude each other, and every pool of a tile's
@@ -1551,8 +1642,15 @@ impl SiteRules {
             pairs: Vec::new(),
             excludes: vec![Vec::new(); graph.sites.len()],
             per_instance: vec![Vec::new(); netlist.instances.len()],
+            mode: netlist
+                .instances
+                .iter()
+                .map(|i| slice_mode(&i.primitive))
+                .collect(),
             roles: BTreeMap::new(),
             captive: vec![Vec::new(); graph.sites.len()],
+            exits: vec![Vec::new(); graph.sites.len()],
+            contained: Vec::new(),
             site_group: vec![u32::MAX; graph.sites.len()],
             groups: Vec::new(),
         };
@@ -1629,6 +1727,41 @@ impl SiteRules {
                     );
                     out.per_site[*left].push((*right, start, shared));
                     out.per_site[*right].push((*left, flipped, shared));
+                }
+            }
+            // Output pins that leave the tile by one wire only: a pin that
+            // can do nothing else and another whose one exit is that wire
+            // may not carry two signals. See [`exits_of`].
+            let mut outputs: Vec<(usize, &str, Vec<NodeId>, bool)> = Vec::new();
+            for site in sites {
+                let kind = graph.sites[*site].kind.as_str();
+                for (role, node) in &graph.sites[*site].pins {
+                    if !driven.contains(&(kind, role.as_str())) {
+                        continue;
+                    }
+                    if let Some((exits, inside)) = exits_of(graph, *tile, *node) {
+                        outputs.push((*site, role.as_str(), exits, inside));
+                    }
+                }
+            }
+            for (site, role, exits, inside) in &outputs {
+                if *inside || exits.len() != 1 {
+                    continue;
+                }
+                for (other, theirs, their_exits, _) in &outputs {
+                    if other == site || their_exits != exits {
+                        continue;
+                    }
+                    let (mine, theirs) = (
+                        role_id(&mut out.roles, role),
+                        role_id(&mut out.roles, theirs),
+                    );
+                    if !out.exits[*site].contains(&(*other, mine, theirs)) {
+                        out.exits[*site].push((*other, mine, theirs));
+                    }
+                    if !out.exits[*other].contains(&(*site, theirs, mine)) {
+                        out.exits[*other].push((*site, theirs, mine));
+                    }
                 }
             }
             // Every pin of the tile whose signal has to come through the
@@ -1769,6 +1902,52 @@ impl SiteRules {
             .map(|(_, s, _)| *s)
     }
 
+    /// Whether two outputs whose one way out of the tile is the same wire
+    /// can both be placed: unless one of them carries nothing, they must
+    /// carry the same signal.
+    ///
+    /// A signal that never leaves the tile needs no exit: a `LUT6_2`'s
+    /// lower half read only by the five-input flip-flop of its lane, which
+    /// [`registered_tables`] put there, shares nothing with that
+    /// flip-flop's `Q` on the output mux.
+    fn exit_shared(&self, a: usize, a_role: u32, b: usize, b_role: u32) -> bool {
+        let inside = |signal: usize| self.contained.get(signal).copied().unwrap_or(false);
+        match (self.signal(a, a_role), self.signal(b, b_role)) {
+            (Some(x), Some(y)) => x == y || inside(x) || inside(y),
+            _ => true,
+        }
+    }
+
+    /// Whether two instances on sites that share a pin agree on the mode
+    /// their sites share: either needs none, or both the same.
+    fn same_mode(&self, a: usize, b: usize) -> bool {
+        let (a, b) = (self.mode[a], self.mode[b]);
+        a == 0 || b == 0 || a == b
+    }
+
+    /// Marks each signal whose readers are all in its driver's rigid
+    /// group, which [`SiteRules::exit_shared`] lets off.
+    fn contain(&mut self, netlist: &Netlist, info: &[Placeable], macros: &[Macro]) {
+        self.contained = netlist
+            .signals
+            .iter()
+            .map(|signal| {
+                let Some(group) = signal
+                    .driver
+                    .and_then(|d| info[netlist.pins[d].instance].macro_index)
+                else {
+                    return false;
+                };
+                macros[group].exact.is_some()
+                    && !signal.sinks.is_empty()
+                    && signal
+                        .sinks
+                        .iter()
+                        .all(|p| info[netlist.pins[*p].instance].macro_index == Some(group))
+            })
+            .collect();
+    }
+
     /// [`SiteRules::signal`], and whether the instance drives it.
     fn signal_driven(&self, instance: usize, role: u32) -> Option<(usize, bool)> {
         self.per_instance[instance]
@@ -1814,9 +1993,15 @@ impl SiteRules {
                 && self.per_site[*site].iter().all(|(other, start, len)| {
                     after(*other).is_none_or(|neighbour| {
                         let run = *start as usize..(*start + *len) as usize;
-                        self.pairs[run].iter().all(|(mine, theirs)| {
-                            self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
-                        })
+                        self.same_mode(*instance, neighbour)
+                            && self.pairs[run].iter().all(|(mine, theirs)| {
+                                self.signal(*instance, *mine) == self.signal(neighbour, *theirs)
+                            })
+                    })
+                })
+                && self.exits[*site].iter().all(|(other, mine, theirs)| {
+                    after(*other).is_none_or(|neighbour| {
+                        self.exit_shared(*instance, *mine, neighbour, *theirs)
                     })
                 })
         });
@@ -1915,12 +2100,27 @@ impl SiteRules {
             let Some(neighbour) = after(*other) else {
                 continue;
             };
+            if !self.same_mode(instance, neighbour) {
+                return Some(
+                    "a flip-flop of another reset kind or clock edge shares its pins".to_owned(),
+                );
+            }
             let run = *start as usize..(*start + *len) as usize;
             if let Some((mine, _)) = self.pairs[run].iter().find(|(mine, theirs)| {
                 self.signal(instance, *mine) != self.signal(neighbour, *theirs)
             }) {
                 return Some(format!(
                     "its `{}` pin is shared and wanted otherwise",
+                    name(*mine)
+                ));
+            }
+        }
+        for (other, mine, theirs) in &self.exits[site] {
+            if let Some(neighbour) = after(*other)
+                && !self.exit_shared(instance, *mine, neighbour, *theirs)
+            {
+                return Some(format!(
+                    "its `{}` leaves the tile by a wire another output needs",
                     name(*mine)
                 ));
             }
@@ -2200,30 +2400,19 @@ pub fn place(
     );
 
     let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
-    let shared = SiteRules::find(netlist, graph);
+    let mut shared = SiteRules::find(netlist, graph);
+    shared.contain(netlist, &info, &macros);
     let mut positions = solve_analytic(netlist, graph, &info, options);
-    let (spread, pinned) = spread_dense(
-        netlist,
-        graph,
-        &info,
-        &macros,
-        &sites_by_kind,
-        &shared,
-        &mut positions,
-    );
-    if !spread.is_empty() {
-        // Everything spreading left alone is solved again with the spread
-        // cells held where they now are: a flip-flop goes to the lookup
-        // tables it is wired to rather than to where the first solve, with
-        // everything piled at the middle, had put it.
-        let again = solve_analytic_with(netlist, graph, &info, options, CLIQUE_PINS, &pinned);
-        for (index, held) in pinned.iter().enumerate() {
-            if held.is_none() && info[index].fixed.is_none() {
-                positions[index] = again[index];
-            }
-        }
-    }
-    report.spread = spread;
+    let dense = dense_kinds(netlist, graph, &info, &macros, &sites_by_kind, &shared);
+    // A design dense enough to spread is placed globally instead: see
+    // `global_place` for what one solve and one spread did to it.
+    report.spread = if dense.is_empty() {
+        dense
+    } else {
+        let (global, spread) = global_place(netlist, graph, &info, &macros, &sites_by_kind);
+        positions = global;
+        spread
+    };
     legalise(
         netlist,
         graph,
@@ -2782,6 +2971,106 @@ fn registered_outputs(
     }
 }
 
+/// The control pins of a flip-flop, as `(role, signal)` sorted: what the
+/// flip-flops of one slice must agree on, with the primitive.
+fn control_set(netlist: &Netlist, ff: usize) -> Vec<(String, Option<usize>)> {
+    let mut out: Vec<(String, Option<usize>)> = netlist.instances[ff]
+        .pins
+        .iter()
+        .map(|p| &netlist.pins[*p])
+        .filter(|p| !p.output && p.role != "d")
+        .map(|p| (p.role.clone(), p.signal))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Adds to `links` the flip-flop a lookup table's output feeds, on the
+/// site that output reaches inside its tile: one per output, so a
+/// `LUT6_2` may take two, when they agree on a control set.
+///
+/// This is the packing Vivado does and this placer did not. A lookup
+/// table's `O6` reaches the flip-flop of its own lane through the slice's
+/// data mux, and its `O5` the five-input flip-flop beside it; anything
+/// else is a trip out to the interconnect and back in through a bypass
+/// input. Left to the anneal, the two were placed apart: on NewAE's
+/// ChipWhisperer-Husky the flip-flops took 85 % of the four per slice that
+/// were offered, wherever there was room, and their bypass inputs and the
+/// `BYP_ALT` wires that feed them were what the route ran out of first.
+/// In Vivado's bitstream of the same design 8,475 flip-flops read `O6`
+/// and 1,963 five-input ones `O5`.
+///
+/// Like [`registered_outputs`] it joins only cells nothing else holds,
+/// and a table's two flip-flops only when they share a clock, enable,
+/// set/reset and primitive, since one slice has one of each. An `O5` that
+/// also leaves the tile is left alone: its one way out is the output mux
+/// the five-input flip-flop's `Q` needs.
+fn registered_tables(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &[Placeable],
+    relations: &mut BTreeMap<(String, String, String, String), Option<Rc<Relation>>>,
+    links: &mut Vec<(usize, usize, Rc<Relation>)>,
+) {
+    let lut = BelRole::Lut.keyword();
+    let ff = BelRole::Ff.keyword();
+    let in_macro: HashSet<usize> = links.iter().flat_map(|(x, y, _)| [*x, *y]).collect();
+    let free = |i: usize| {
+        info[i].fixed.is_none() && info[i].macro_index.is_none() && !in_macro.contains(&i)
+    };
+    let mut taken: HashSet<usize> = HashSet::new();
+    // A table's flip-flop already joined, which a second must agree with.
+    let mut partner: HashMap<usize, usize> = HashMap::new();
+    for signal in &netlist.signals {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let dpin = &netlist.pins[driver];
+        let x = dpin.instance;
+        if netlist.instances[x].kind != lut
+            || !free(x)
+            || (dpin.role == "o5" && signal.sinks.len() != 1)
+        {
+            continue;
+        }
+        for sink in &signal.sinks {
+            let spin = &netlist.pins[*sink];
+            let y = spin.instance;
+            if y == x
+                || !free(y)
+                || taken.contains(&y)
+                || netlist.instances[y].kind != ff
+                || spin.role != "d"
+            {
+                continue;
+            }
+            if let Some(other) = partner.get(&x)
+                && (control_set(netlist, *other) != control_set(netlist, y)
+                    || netlist.instances[*other].primitive != netlist.instances[y].primitive)
+            {
+                continue;
+            }
+            let key = (
+                ff.to_owned(),
+                spin.role.clone(),
+                lut.to_owned(),
+                format!("local:{}", dpin.role),
+            );
+            let relation = relations
+                .entry(key)
+                .or_insert_with(|| local_relation(graph, sites_by_kind, ff, "d", lut, &dpin.role))
+                .clone();
+            if let Some(relation) = relation {
+                taken.insert(y);
+                partner.insert(x, y);
+                links.push((x, y, relation));
+                break;
+            }
+        }
+    }
+}
+
 /// The sites of kind `sink_kind` whose `sink_role` pin each `driver_kind`
 /// site's `driver_role` pin reaches through wires of its own tile, when
 /// that is exactly one per driver site: [`registered_outputs`]' relation.
@@ -2996,6 +3285,14 @@ fn build_clusters(
         }
     }
     registered_outputs(
+        netlist,
+        graph,
+        sites_by_kind,
+        info,
+        &mut relations,
+        &mut links,
+    );
+    registered_tables(
         netlist,
         graph,
         sites_by_kind,
@@ -3656,20 +3953,34 @@ fn solve_analytic(
     info: &[Placeable],
     options: &PlaceOptions,
 ) -> Vec<(f64, f64)> {
-    solve_analytic_with(netlist, graph, info, options, CLIQUE_PINS, &[])
+    solve_analytic_with(netlist, graph, info, options, CLIQUE_PINS)
 }
 
 /// [`solve_analytic`] with the clique bound a parameter, so that a test
-/// can solve one net both ways, and with `pinned` cells held where it
-/// says as a package pin holds a cell: see [`spread_dense`].
+/// can solve one net both ways.
 fn solve_analytic_with(
     netlist: &Netlist,
     graph: &RoutingGraph,
     info: &[Placeable],
     options: &PlaceOptions,
     clique_pins: usize,
-    pinned: &[Option<(f64, f64)>],
 ) -> Vec<(f64, f64)> {
+    let n = netlist.instances.len();
+    let (a, bx, by) = net_system(netlist, graph, info, clique_pins);
+    let x = solve(&a, &bx, options.analytic_iterations);
+    let y = solve(&a, &by, options.analytic_iterations);
+    x.into_iter().zip(y).take(n).collect()
+}
+
+/// The two linear systems [`solve_analytic_with`] solves, one per axis,
+/// sharing their matrix: every net as a clique or a star, each instance
+/// pulled weakly to the middle, and the fixed ones held.
+fn net_system(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    clique_pins: usize,
+) -> (Sparse, Vec<f64>, Vec<f64>) {
     let n = netlist.instances.len();
     let mut a = Sparse::new(n);
     let mut bx = vec![0.0; n];
@@ -3683,17 +3994,11 @@ fn solve_analytic_with(
         by[i] += ANCHOR_WEIGHT * centre.1;
     }
     for i in 0..n {
-        let held = match (info[i].fixed, pinned.get(i).copied().flatten()) {
-            (Some(site), _) => {
-                let (x, y) = graph.sites[site].tile;
-                Some((f64::from(x), f64::from(y)))
-            }
-            (None, held) => held,
-        };
-        if let Some((x, y)) = held {
+        if let Some(site) = info[i].fixed {
+            let (x, y) = graph.sites[site].tile;
             a.add(i, i, FIXED_WEIGHT);
-            bx[i] += FIXED_WEIGHT * x;
-            by[i] += FIXED_WEIGHT * y;
+            bx[i] += FIXED_WEIGHT * f64::from(x);
+            by[i] += FIXED_WEIGHT * f64::from(y);
         }
     }
     // Which signal last counted each instance, so that a net's members are
@@ -3744,13 +4049,216 @@ fn solve_analytic_with(
             }
         }
     }
-    let x = solve(&a, &bx, options.analytic_iterations);
-    let y = solve(&a, &by, options.analytic_iterations);
-    x.into_iter().zip(y).take(n).collect()
+    (a, bx, by)
 }
 
 /// The pull of the die's middle on every instance.
 const ANCHOR_WEIGHT: f64 = 1e-3;
+
+/// Solves `a x = b` by conjugate gradient preconditioned with `a`'s
+/// diagonal, starting from `x` and leaving the answer there.
+///
+/// [`solve`] starts from zero and is unpreconditioned, which is all a
+/// small design's one solve needs. [`global_place`] solves the same system
+/// thirty times with a little more pull each time, so it starts each solve
+/// from the last answer; and a design's diagonal runs from a cell on one
+/// two-pin net to a star's centre on a clock of thousands, which is what
+/// the preconditioner evens out.
+fn solve_from(a: &Sparse, b: &[f64], x: &mut [f64], iterations: u32) {
+    let n = a.len();
+    if n == 0 {
+        return;
+    }
+    let mut ap = vec![0.0; n];
+    a.multiply(x, &mut ap);
+    let mut r: Vec<f64> = b.iter().zip(&ap).map(|(b, ax)| b - ax).collect();
+    let inverse: Vec<f64> = a
+        .diagonal
+        .iter()
+        .map(|d| if *d > 0.0 { 1.0 / d } else { 1.0 })
+        .collect();
+    let mut z: Vec<f64> = r.iter().zip(&inverse).map(|(r, m)| r * m).collect();
+    let mut p = z.clone();
+    let mut rz = dot(&r, &z);
+    let tolerance = 1e-14 * dot(b, b).max(1.0);
+    for _ in 0..iterations {
+        if dot(&r, &r) <= tolerance {
+            break;
+        }
+        a.multiply(&p, &mut ap);
+        let denominator = dot(&p, &ap);
+        if denominator.abs() < f64::MIN_POSITIVE {
+            break;
+        }
+        let alpha = rz / denominator;
+        for i in 0..n {
+            x[i] += alpha * p[i];
+            r[i] -= alpha * ap[i];
+            z[i] = r[i] * inverse[i];
+        }
+        let next = dot(&r, &z);
+        let beta = next / rz;
+        for i in 0..n {
+            p[i] = z[i] + beta * p[i];
+        }
+        rz = next;
+    }
+}
+
+/// How many rounds of spreading and solving [`global_place`] makes.
+const GLOBAL_ROUNDS: u32 = 30;
+
+/// How strongly, per round, [`global_place`] pulls a cell to where it was
+/// spread, against a two-pin net's pull of one.
+const GLOBAL_PULL: f64 = 0.05;
+
+/// The conjugate-gradient iterations of each of [`global_place`]'s solves
+/// after the first, which gets four times as many.
+const GLOBAL_ITERATIONS: u32 = 300;
+
+/// The fewest cells a kind needs before [`global_place`] spreads it. A
+/// handful of clock managers or global buffers are placed by the nets
+/// that reach them, as before; spreading four MMCMs over five sites moved
+/// them onto interconnect the flow then refused (`fpga_xray_cmt`).
+const GLOBAL_SPREAD_MIN: usize = 32;
+
+/// What [`global_place`] returns: where every cell should go, and the
+/// kinds it spread as `(kind, cells)`.
+type GlobalPlacement = (Vec<(f64, f64)>, Vec<(String, usize)>);
+
+/// One kind [`global_place`] spreads: its name, its movable cells, and the
+/// tiles of the sites they may go to.
+type SpreadKind = (String, Vec<usize>, Vec<(u32, u32)>);
+
+/// Global placement for a design dense enough that one solve and one
+/// spread throw the solve's answer away: what [`dense_kinds`] decides.
+/// Returns where every cell should go and the kinds it spread.
+///
+/// # What it replaced, and why
+///
+/// One quadratic solve piles a design at the middle of the die; spreading
+/// that by bisection keeps the solve's order along each axis but not its
+/// neighbourhoods, and a cell the one spread left alone — a flip-flop,
+/// whose slice shares its clock — was then solved again around the spread
+/// ones, which piled the flip-flops instead. On NewAE's ChipWhisperer-Husky
+/// the 17,333 flip-flops in no macro ended 35 tiles from where that solve
+/// put them, and `esad`'s 256-stage chain of reference samples had its
+/// neighbouring stages 60 to 70 tiles apart: the anneal, whose moves are a
+/// few tiles once it is cool, cannot untangle a chain scrambled across the
+/// die. Its wirelength after annealing was 964,496.
+///
+/// This is SimPL (Kim, Lee and Markov, 2012) in its simplest form. Each
+/// round spreads every kind of at least [`GLOBAL_SPREAD_MIN`] cells over its
+/// own sites by [`bisect`] — an *upper bound*, legal-ish and long — and
+/// solves again with each cell drawn towards its spread position — the
+/// *lower bound*, short and piled — by a pull that grows each round, so
+/// that the two meet. The pull is divided by the square root of the
+/// distance between them, which makes a far cell's pull nearer linear in
+/// the distance than quadratic, as SimPL's own anchors are. A macro's
+/// members other than its anchor follow the anchor. The answer is the last
+/// round's spread positions, so every kind is legalised from a place that
+/// has room, flip-flops included.
+///
+/// Measured on the Husky with the same netlist: 30 rounds at a pull of
+/// 0.05 took legalisation's displacement from 20.2 tiles to 5.5 and the
+/// wirelength after annealing from 964,496 to 636,749, and the route's
+/// overuse at the sixth pass from 71,569 nodes to 48,589. A pull of 0.01,
+/// 0.1, 0.2 or 0.5 and 50 or 60 rounds all ended between 639,724 and
+/// 703,803: the anneal, not the rounds, is what is left.
+fn global_place(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    macros: &[Macro],
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+) -> GlobalPlacement {
+    let n = netlist.instances.len();
+    let mut follower = vec![false; n];
+    for m in macros {
+        for (member, _, _) in &m.members {
+            if *member != m.anchor {
+                follower[*member] = true;
+            }
+        }
+    }
+    let taken: HashSet<usize> = info.iter().filter_map(|p| p.fixed).collect();
+    // Each spread kind's movable cells and the sites they may go to.
+    let mut kinds: Vec<SpreadKind> = Vec::new();
+    for (kind, sites) in sites_by_kind {
+        let cells: Vec<usize> = (0..n)
+            .filter(|i| {
+                netlist.instances[*i].kind == *kind
+                    && info[*i].fixed.is_none()
+                    && info[*i].region.is_none()
+                    && info[*i].allowed.is_none()
+                    && !follower[*i]
+            })
+            .collect();
+        if cells.len() < GLOBAL_SPREAD_MIN {
+            continue;
+        }
+        let free: Vec<(u32, u32)> = sites
+            .iter()
+            .filter(|s| !taken.contains(s))
+            .map(|s| graph.sites[*s].tile)
+            .collect();
+        kinds.push((kind.clone(), cells, free));
+    }
+    let spread_all = |positions: &[(f64, f64)]| -> Vec<(f64, f64)> {
+        let mut upper = positions.to_vec();
+        for (_, cells, sites) in &kinds {
+            let mut items: Vec<(usize, f64, f64)> = cells
+                .iter()
+                .map(|i| (*i, positions[*i].0, positions[*i].1))
+                .collect();
+            let mut sites = sites.clone();
+            bisect(&mut items, &mut sites, &mut upper);
+        }
+        for m in macros {
+            let dx = upper[m.anchor].0 - positions[m.anchor].0;
+            let dy = upper[m.anchor].1 - positions[m.anchor].1;
+            for (member, _, _) in &m.members {
+                if *member != m.anchor && info[*member].fixed.is_none() {
+                    upper[*member] = (positions[*member].0 + dx, positions[*member].1 + dy);
+                }
+            }
+        }
+        upper
+    };
+
+    let (nets, bx, by) = net_system(netlist, graph, info, CLIQUE_PINS);
+    let centre = (f64::from(graph.width) / 2.0, f64::from(graph.height) / 2.0);
+    let mut x = vec![centre.0; nets.len()];
+    let mut y = vec![centre.1; nets.len()];
+    solve_from(&nets, &bx, &mut x, 4 * GLOBAL_ITERATIONS);
+    solve_from(&nets, &by, &mut y, 4 * GLOBAL_ITERATIONS);
+    let mut positions: Vec<(f64, f64)> = x.iter().zip(&y).take(n).map(|(a, b)| (*a, *b)).collect();
+    for round in 1..=GLOBAL_ROUNDS {
+        let upper = spread_all(&positions);
+        let pull = GLOBAL_PULL * f64::from(round);
+        let mut a = nets.clone();
+        let (mut bx, mut by) = (bx.clone(), by.clone());
+        for i in 0..n {
+            if info[i].fixed.is_some() {
+                continue;
+            }
+            let (ux, uy) = upper[i];
+            let (px, py) = positions[i];
+            let weight = pull / ((ux - px).abs() + (uy - py).abs()).max(1.0).sqrt();
+            a.add(i, i, weight);
+            bx[i] += weight * ux;
+            by[i] += weight * uy;
+        }
+        solve_from(&a, &bx, &mut x, GLOBAL_ITERATIONS);
+        solve_from(&a, &by, &mut y, GLOBAL_ITERATIONS);
+        positions = x.iter().zip(&y).take(n).map(|(a, b)| (*a, *b)).collect();
+    }
+    let spread = kinds
+        .iter()
+        .map(|(kind, cells, _)| (kind.clone(), cells.len()))
+        .collect();
+    (spread_all(&positions), spread)
+}
 
 /// The most pins a net may have and still be modelled as a clique by the
 /// analytic solve; a larger one is the equivalent star. Small enough that
@@ -3784,12 +4292,9 @@ fn to_grid(value: f64, size: u32) -> u32 {
     clamped as u32
 }
 
-/// What [`spread_dense`] returns: the kinds it spread, as `(kind, cells)`,
-/// and where it put each cell it spread.
-type Spread = (Vec<(String, usize)>, Vec<Option<(f64, f64)>>);
-
 /// The share of a kind's sites its cells must fill before
-/// [`spread_dense`] spreads them.
+/// [`dense_kinds`] counts it, and the design is placed by
+/// [`global_place`].
 ///
 /// It was a half, and on NewAE's Husky gateware that was a switch thrown
 /// by noise: 16,842 spreadable lookup tables against 32,600 sites were
@@ -3811,10 +4316,13 @@ const SPREAD_FROM: f64 = 0.3;
 /// interconnect the flow then refused (`fpga_xray_cmt`).
 const SPREAD_MIN: usize = 256;
 
-/// Spreads the analytic solution of every site kind of [`SPREAD_MIN`]
-/// cells or more that fill more than [`SPREAD_FROM`] of its sites, by
-/// recursive bisection, and returns the kinds
-/// it spread and where it put each cell it spread.
+/// The site kinds of [`SPREAD_MIN`] cells or more that fill more than
+/// [`SPREAD_FROM`] of their sites, as `(kind, cells)`: a design with any is
+/// placed by [`global_place`], and one with none by one solve, which a
+/// small design's legaliser moves a tile or so.
+///
+/// Until 2026-10-20 this spread those kinds itself, once, and what follows
+/// is why that was needed and what it did.
 ///
 /// A quadratic solve puts a design's cells where its nets pull them and
 /// nowhere near where they fit: on the ChipWhisperer-Husky, 95 % of whose
@@ -3834,16 +4342,14 @@ const SPREAD_MIN: usize = 256;
 /// Left out: cells a pin fixes, cells confined to a region or by
 /// reachability, and the members of a macro other than its anchor, whose
 /// sites follow from the anchor's.
-fn spread_dense(
+fn dense_kinds(
     netlist: &Netlist,
     graph: &RoutingGraph,
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     shared: &SiteRules,
-    positions: &mut [(f64, f64)],
-) -> Spread {
-    let mut pinned: Vec<Option<(f64, f64)>> = vec![None; info.len()];
+) -> Vec<(String, usize)> {
     let mut follower = vec![false; info.len()];
     for m in macros {
         for (member, _, _) in &m.members {
@@ -3883,28 +4389,17 @@ fn spread_dense(
             .collect();
         // Sites a fixed cell holds are not there to be spread onto.
         let taken: HashSet<usize> = info.iter().filter_map(|p| p.fixed).collect();
-        let mut free: Vec<(u32, u32)> = sites
-            .iter()
-            .filter(|s| !taken.contains(s))
-            .map(|s| graph.sites[*s].tile)
-            .collect();
-        if cells.len() < SPREAD_MIN || (cells.len() as f64) < SPREAD_FROM * free.len() as f64 {
+        let free = sites.iter().filter(|s| !taken.contains(s)).count();
+        if cells.len() < SPREAD_MIN || (cells.len() as f64) < SPREAD_FROM * free as f64 {
             continue;
-        }
-        let mut items: Vec<(usize, f64, f64)> = cells
-            .iter()
-            .map(|i| (*i, positions[*i].0, positions[*i].1))
-            .collect();
-        bisect(&mut items, &mut free, positions);
-        for cell in &cells {
-            pinned[*cell] = Some(positions[*cell]);
         }
         out.push((kind.clone(), cells.len()));
     }
-    (out, pinned)
+    out
 }
 
-/// One step of [`spread_dense`]: `cells` onto `sites`, in proportion.
+/// One step of [`global_place`]'s spreading: `cells` onto `sites`, in
+/// proportion.
 fn bisect(cells: &mut [(usize, f64, f64)], sites: &mut [(u32, u32)], out: &mut [(f64, f64)]) {
     if cells.is_empty() || sites.is_empty() {
         return;
@@ -4140,7 +4635,15 @@ fn no_room(
 /// 6,214 of them in slices whose clock already carried another one. A
 /// site that shares no pin with any other opens nothing and is not
 /// charged, so lookup tables place as before.
-const OPENING: u64 = 4;
+///
+/// It was four tiles until the flip-flops were spread before legalising
+/// (`global_place`) and packed with the tables that feed them
+/// (`registered_tables`). Spread, they reach every slice in turn, and at
+/// four the Husky's flip-flops on a clock of their own found every slice
+/// already holding another (`O_trace_pattern5`, 36,991 of 37,765 free
+/// sites refused for their clock); at sixteen they legalise, and the
+/// wirelength after annealing was within one per cent of sixty-four's.
+const OPENING: u64 = 16;
 
 /// The free site of `kind` closest to `target`, inside `region` and among
 /// `allowed`, that `instance` may legally take, counting a site that opens
@@ -4214,7 +4717,16 @@ fn legalise_macro(
         }
     }
     candidates.sort();
-    for (_, ax, ay) in candidates {
+    // The nearest tile that fits, counting one where a member would open a
+    // slice [`OPENING`] tiles farther, as `nearest_free` does for a single
+    // cell: a macro is a flip-flop too, and once [`registered_tables`] made
+    // thousands of them, taking the nearest fit regardless gave every slice
+    // of the Husky a clock before the flip-flops on their own were placed.
+    let mut best: Option<(u64, Vec<(usize, usize)>)> = None;
+    for (distance, ax, ay) in candidates {
+        if best.as_ref().is_some_and(|(cost, _)| distance >= *cost) {
+            break;
+        }
         if let Some(sites) = macro_sites(
             netlist,
             graph,
@@ -4226,11 +4738,20 @@ fn legalise_macro(
             ax,
             ay,
         ) {
-            for (member, site) in sites {
-                placement.place(member, site);
+            let opens = sites
+                .iter()
+                .any(|(member, site)| shared.opens(placement, *member, *site));
+            let cost = distance + if opens { OPENING } else { 0 };
+            if best.as_ref().is_none_or(|(c, _)| cost < *c) {
+                best = Some((cost, sites));
             }
-            return Ok(());
         }
+    }
+    if let Some((_, sites)) = best {
+        for (member, site) in sites {
+            placement.place(member, site);
+        }
+        return Ok(());
     }
     // A rigid group that fits nowhere is not a part that ran out of
     // sites, and saying so would send the reader to the wrong question:
@@ -6519,6 +7040,129 @@ mod tests {
         (arch, graph)
     }
 
+    /// One lookup table and two flip-flops a tile, sharing one clock: the
+    /// table's `o` reaches the first flip-flop's `d` inside the tile and
+    /// its `o5` the second's, as a 7-series lane's `O6` reaches `AFF` and
+    /// its `O5` `A5FF`, and either `d` can also come from the tile to the
+    /// east, so that neither is dedicated wiring `build_clusters` would
+    /// have tied already.
+    fn registered_lane() -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clb", "logic_tile", 8, 8);
+        for name in ["o6", "o5", "da", "db", "clk", "track"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for (from, to) in [
+            (WireRef::local("o6"), WireRef::local("da")),
+            (WireRef::local("o5"), WireRef::local("db")),
+            (WireRef::at("track", 1, 0), WireRef::local("da")),
+            (WireRef::at("track", 1, 0), WireRef::local("db")),
+            (WireRef::local("o6"), WireRef::local("track")),
+            (WireRef::local("o5"), WireRef::local("track")),
+        ] {
+            tile.pips.push(PipDecl {
+                from,
+                to,
+                bits: Vec::new(),
+            });
+        }
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("o".to_owned(), WireRef::local("o6")));
+        lut.pins.push(("o5".to_owned(), WireRef::local("o5")));
+        tile.bels.push(lut);
+        for (name, d) in [("ffa", "da"), ("ffb", "db")] {
+            let mut ff = BelDecl::new(name, "ff");
+            ff.pins.push(("d".to_owned(), WireRef::local(d)));
+            ff.pins.push(("clk".to_owned(), WireRef::local("clk")));
+            tile.bels.push(ff);
+        }
+        arch.tile_types.push(tile);
+        for x in 0..2 {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// **A lookup table takes the flip-flops it feeds into its macro, one
+    /// an output, and a second only on the first one's control set.** A
+    /// table's `o` and `o5` each register into a flip-flop of `
+    /// registered_lane`: on one clock both join the table, on two clocks
+    /// only the first does, and an `o5` someone else reads too is left
+    /// alone, since its one way out of the tile is the output mux the
+    /// second flip-flop's `Q` needs. Would catch `registered_tables`
+    /// gone (no macro), one flip-flop per table (two members where three
+    /// are wanted), the control set unchecked (three on two clocks, which
+    /// no slice can hold) and the shared `o5` taken; would not catch a
+    /// relation found on the wrong site, which `local_relation`'s own
+    /// walk decides and `registered_outputs`' tests pin.
+    #[test]
+    fn a_lookup_table_takes_the_flip_flops_it_feeds_on_one_control_set() {
+        let (_, graph) = registered_lane();
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        // Signals: 0 = o, 1 = o5, 2 and 3 = clocks.
+        let members = |b_clock: usize, o5_elsewhere: bool| -> Vec<Vec<usize>> {
+            let mut netlist = lane_netlist([
+                &[("o", 0, true), ("o5", 1, true)],
+                &[("d", 0, false), ("clk", 2, false)],
+                &[("d", 1, false), ("clk", b_clock, false)],
+            ]);
+            netlist.instances[2].kind = "ff".to_owned();
+            netlist.instances[2].primitive = "FF".to_owned();
+            if o5_elsewhere {
+                // A fourth instance, a lookup table that reads `o5` too.
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance: 3,
+                    port: "I0".to_owned(),
+                    bit: 0,
+                    role: "i0".to_owned(),
+                    output: false,
+                    signal: Some(1),
+                    constant: None,
+                });
+                netlist.signals[1].sinks.push(pin);
+                netlist.instances.push(Instance {
+                    cell: CellId::from_index(3),
+                    name: "reader".to_owned(),
+                    primitive: "LUT".to_owned(),
+                    kind: "lut".to_owned(),
+                    pins: vec![pin],
+                    pin: None,
+                });
+            }
+            let mut info: Vec<Placeable> = (0..netlist.instances.len())
+                .map(|_| Placeable {
+                    fixed: None,
+                    region: None,
+                    macro_index: None,
+                    allowed: None,
+                })
+                .collect();
+            build_clusters(&netlist, &graph, &sites_by_kind, &mut info, 0)
+                .iter()
+                .map(|m| {
+                    let mut members: Vec<usize> = m.members.iter().map(|(i, _, _)| *i).collect();
+                    members.sort_unstable();
+                    members
+                })
+                .collect()
+        };
+        assert_eq!(members(2, false), vec![vec![0, 1, 2]]);
+        assert_eq!(members(3, false), vec![vec![0, 1]]);
+        assert_eq!(members(2, true), vec![vec![0, 1]]);
+    }
+
     /// A lookup table, a flip-flop and a carry, each pin `(role, signal,
     /// whether the instance drives it)`.
     fn lane_netlist(pins: [&[(&str, usize, bool)]; 3]) -> Netlist {
@@ -6942,6 +7586,43 @@ mod tests {
         netlist
     }
 
+    /// **Flip-flops that share a slice's pins agree on its reset kind and
+    /// clock edge.** Two flip-flops on one clock in one two-site slice:
+    /// an `FDRE` beside an `FDSE` is allowed, since both are synchronous
+    /// and `ZRST` is each one's own; beside an `FDCE`, an `FDPE` or an
+    /// `FDRE_1` it is refused, and the refusal says why. Would catch the mode ignored, which is a
+    /// bitstream whose asynchronous resets are synchronous with nothing
+    /// to say so; would not catch a primitive missing from `slice_mode`,
+    /// which places as it always did.
+    #[test]
+    fn flip_flops_sharing_a_slice_agree_on_reset_kind_and_clock_edge() {
+        let (_, graph) = clocked(1);
+        for (other, allowed) in [
+            ("FDSE", true),
+            ("FDRE", true),
+            ("FDCE", false),
+            ("FDPE", false),
+            ("FDRE_1", false),
+        ] {
+            let mut netlist = clocked_by(&[0, 0]);
+            netlist.instances[0].primitive = "FDRE".to_owned();
+            netlist.instances[1].primitive = other.to_owned();
+            let shared = SiteRules::find(&netlist, &graph);
+            let mut placement = Placement::new(2, graph.sites.len());
+            placement.place(0, 0);
+            assert_eq!(
+                shared.allows(&placement, &[(1, 1)]),
+                allowed,
+                "an FDRE beside an {other}"
+            );
+            assert_eq!(
+                shared.refusal(&placement, 1, 1).is_none(),
+                allowed,
+                "{other}"
+            );
+        }
+    }
+
     /// **The legaliser joins a slice before it opens one.**
     ///
     /// Two slices of two flip-flops, two clocks with two flip-flops each:
@@ -6956,7 +7637,7 @@ mod tests {
     /// legality one.
     /// **The anneal starts no narrower than legalisation moved a cell.**
     /// Twenty-five sinks of one net on an eight-by-eight grid — under
-    /// half its sites, so `spread_dense` leaves them — : the solve puts
+    /// half its sites, so `dense_kinds` does not count them — : the solve puts
     /// them all on the driver, the legaliser spreads them over several
     /// tiles, and the first temperature's window has to reach that far.
     /// Would catch the floor being dropped, which left the ChipWhisperer-
@@ -7083,6 +7764,70 @@ mod tests {
         }
     }
 
+    /// A chain of `n` lookup tables whose order along the chain is not the
+    /// order of their indices: link `t` joins instance `(t * 7) % n` to
+    /// instance `((t + 1) * 7) % n`.
+    fn scrambled_chain(n: usize) -> Netlist {
+        let mut netlist = chain(n);
+        let at = |t: usize| (t * 7) % n;
+        for (t, signal) in netlist.signals.iter().enumerate() {
+            let (driver, sink) = (signal.driver.unwrap(), signal.sinks[0]);
+            netlist.pins[driver].instance = at(t);
+            netlist.pins[sink].instance = at(t + 1);
+        }
+        for instance in &mut netlist.instances {
+            instance.pins.clear();
+        }
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            netlist.instances[pin.instance].pins.push(index);
+        }
+        netlist
+    }
+
+    /// **Global placement keeps a chain's neighbours together.** Five
+    /// hundred lookup tables in a chain on a twenty-five-by-twenty-five
+    /// grid, 80 % full, numbered out of the chain's order: the stages one
+    /// link apart end 2.42 tiles apart on average, where one solve and one
+    /// spread — `GLOBAL_ROUNDS` or `GLOBAL_PULL` at zero — leave them 6.16
+    /// apart. The shape is `esad`'s 256-stage chain of reference samples on
+    /// the ChipWhisperer-Husky. Would catch the rounds or the pull gone;
+    /// would not catch a slower convergence that still ends under three
+    /// and a half tiles, which only the Husky's wirelength shows.
+    #[test]
+    fn global_placement_keeps_a_chains_neighbours_together() {
+        let n = 500;
+        let (_, graph) = grid(25, 25);
+        let netlist = scrambled_chain(n);
+        let info: Vec<Placeable> = (0..n)
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+            })
+            .collect();
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        let (positions, spread) = global_place(&netlist, &graph, &info, &[], &sites_by_kind);
+        assert_eq!(spread, vec![("lut".to_owned(), n)]);
+        let links: f64 = netlist
+            .signals
+            .iter()
+            .map(|signal| {
+                let a = positions[netlist.pins[signal.driver.unwrap()].instance];
+                let b = positions[netlist.pins[signal.sinks[0]].instance];
+                (a.0 - b.0).abs() + (a.1 - b.1).abs()
+            })
+            .sum();
+        let mean = links / (n - 1) as f64;
+        assert!(mean < 3.5, "chain links {mean:.2} tiles long on average");
+    }
+
     /// **A star is the clique it replaces.** A fan-out of 100 from a cell
     /// fixed at one corner, its sinks held between it and the weak pull to
     /// the middle every cell has, solved with the net as a clique and as a
@@ -7107,8 +7852,8 @@ mod tests {
             analytic_iterations: 2000,
             ..PlaceOptions::default()
         };
-        let clique = solve_analytic_with(&netlist, &graph, &info, &options, usize::MAX, &[]);
-        let star = solve_analytic_with(&netlist, &graph, &info, &options, 2, &[]);
+        let clique = solve_analytic_with(&netlist, &graph, &info, &options, usize::MAX);
+        let star = solve_analytic_with(&netlist, &graph, &info, &options, 2);
         assert_eq!(clique.len(), netlist.instances.len());
         assert_eq!(star.len(), clique.len(), "a centre leaked into the answer");
         for (i, (c, s)) in clique.iter().zip(&star).enumerate() {
