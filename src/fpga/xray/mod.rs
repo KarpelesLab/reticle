@@ -267,7 +267,8 @@ impl fmt::Display for XrayError {
             XrayError::TooLarge { pips, limit, tiles } => write!(
                 f,
                 "that region is {tiles} tile(s) and {pips} pip(s), past the limit of {limit}; \
-                 narrow it with a region or raise the limit and expect to need the memory"
+                 narrow it with a region or raise the limit (`--max-pips`) and expect to need \
+                 the memory"
             ),
         }
     }

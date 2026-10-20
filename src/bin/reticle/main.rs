@@ -287,9 +287,11 @@ GW2A and Lattice ECP5):
                      export.
   --region <box>     7 series: which tiles of the fabric to load, as
                      x0,y0,x1,y1 in the database's grid coordinates. The
-                     default is a box around the constrained pins,
-                     because the whole die is 20 million pips and will
-                     not fit.
+                     default is a box around the constrained pins.
+  --max-pips <n>     7 series: the most interconnect pips the loader will
+                     build before refusing (default 48000000). The whole
+                     XC7A50T die is 44 million, about 2 GiB at peak; the
+                     whole XC7A100T is 77 million.
 
 Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
   A design's ports are the processor's, not the package's: bind inputs to
@@ -718,6 +720,7 @@ fn spec_for(usage: &str) -> Spec {
                 "chipdb",
                 "bitstream",
                 "region",
+                "max-pips",
                 "borrow-clock",
                 "east",
                 "place-effort",
@@ -3297,6 +3300,11 @@ fn write_xc7_bitstream(
             }
             _ => return Err(format!("`--region {text}` is not `x0,y0,x1,y1`")),
         }
+    }
+    if let Some(text) = args.option("max-pips") {
+        options.max_pips = text
+            .parse::<usize>()
+            .map_err(|_| format!("`--max-pips {text}` is not a count of pips"))?;
     }
 
     let mut laps = Laps::new(args.flag("timing"));
