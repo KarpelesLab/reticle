@@ -323,3 +323,42 @@ module usb_slow_fifo2 (
       .prog_empty(), .overflow(overflow), .underflow(underflow)
   );
 endmodule
+
+// The Husky Plus's (`cwhusky_plus.xpr`). Its `.xci` is not in the
+// checkout — the xpr reaches it through `../../plus_optimization/`, a
+// path outside it — so these parameters are from NewAE's functional
+// simulation netlist of the same core, `fpga/tracewhisperer/sim/vivado/
+// fifo_generator_semipro_sim_netlist.v`: `C_DIN_WIDTH`, `C_WR_DEPTH`,
+// `C_PRELOAD_REGS` 1 with `C_PRELOAD_LATENCY` 0 (fall-through),
+// `C_PROG_FULL_THRESH_ASSERT_VAL`, `C_PROG_EMPTY_THRESH_ASSERT_VAL`,
+// `C_HAS_OVERFLOW` 0 and `C_HAS_UNDERFLOW` 1.
+
+// 18 x 16384, independent clocks, fall-through, `prog_full` at 14376
+// and `prog_empty` at 128, no `overflow`. `fifo_generator_semipro`.
+module fifo_generator_semipro (
+    input  wire        rst,
+    input  wire        wr_clk,
+    input  wire        rd_clk,
+    input  wire [17:0] din,
+    input  wire        wr_en,
+    input  wire        rd_en,
+    output wire [17:0] dout,
+    output wire        full,
+    output wire        empty,
+    output wire        prog_full,
+    output wire        prog_empty,
+    output wire        underflow
+);
+  husky_fifo #(
+      .WIDTH(18),
+      .AW(14),
+      .FWFT(1),
+      .ASYNC(1),
+      .PROG_FULL(14376),
+      .PROG_EMPTY(128)
+  ) u_fifo (
+      .rst(rst), .wr_clk(wr_clk), .rd_clk(rd_clk), .din(din), .wr_en(wr_en), .rd_en(rd_en),
+      .dout(dout), .full(full), .empty(empty), .prog_full(prog_full),
+      .prog_empty(prog_empty), .overflow(), .underflow(underflow)
+  );
+endmodule
