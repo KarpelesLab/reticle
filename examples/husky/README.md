@@ -8,12 +8,15 @@ This directory is what Reticle needs beyond that source to build it:
 stand-ins for the Vivado IP cores the gateware instantiates, its pin
 constraints in Reticle's form, and the command line.
 
-**Nothing built here has run on a Husky.** It builds a bitstream now, in
-which every set bit decodes and selects exactly the connections the
-router chose; whether that bitstream does what NewAE's does has not been
-tested on a part. What is checked, and what is only quoted, is at the
-end of this page; read it before loading anything into an instrument
-somebody depends on.
+**The Husky Plus build has been loaded into a Husky Plus, and it does
+not yet work as one.** Its USB register interface works, and the carry
+chains and clock inputs a smaller design on the same bus uses were
+checked on the part; NewAE's own test suite passes 4 of the 47 tests
+that their bitstream passes 42 of, and the faults are believed to be
+timing. The section *On a Husky Plus* says what was measured. The
+plain Husky's build has not been on a part. What is checked, and what is
+only quoted, is at the end of this page; read it before loading
+anything into an instrument somebody depends on.
 
 ## What is here
 
@@ -24,6 +27,8 @@ examples/husky/
   fifo_generator.v    the six FIFO Generator cores, as one behavioural FIFO
   xadc_wiz_0.v        the XADC Wizard core: the XADC with the wizard's registers
   usr_accesse2.v      USR_ACCESSE2, which reads the build time: here, zero
+  build_plus.sh       the Husky Plus: cwhusky_plus.xpr's files and defines, an XC7A100T
+  probe/              a small design on NewAE's USB bus, and the script that checks it on a part
 ```
 
 ## Building
@@ -143,8 +148,71 @@ of its own:
 | the FIFO stand-ins behave as the FIFO Generator does where NewAE's logic looks | **a reading** of PG057 and of NewAE's source |
 | the whole design fits the part | **checked**: 21,217 lookup-table sites of 32,600, 27,618 flip-flops of 32,600 |
 | it places | **checked**: legalisation and annealing complete, in four to five minutes |
-| it routes | **not yet**: the route converges, to 14,766 overused nodes at the twentieth pass and 11,962 at the twenty-fourth, falling four or five per cent a pass by then, which is too slowly to finish in forty; `docs/fpga-xray.md` has where it stands |
-| it works on a Husky | **not checked**: nothing has been loaded into one |
+| it routes | **checked**: the Husky's converged at the 78th pass on 2026-10-20, the Plus's at the 50th on 2026-10-21; earlier, this row said it did not |
+| it works on a Husky | **not checked**: nothing of the Husky's has been loaded into one |
+| the Plus's bitstream configures a Husky Plus and answers on its USB bus | **checked** on 2026-10-21: `chipwhisperer` connects, reads its version and reads back what it writes |
+| it works as a Husky Plus | **no**: 4 of NewAE's 47 tests that their bitstream passes; see *On a Husky Plus* |
+| carry chains compute what they should | **checked** on the part: `probe/`, 309 of 309 sums, differences and comparisons, and a counter at 96 MHz |
+
+## On a Husky Plus
+
+A ChipWhisperer-Husky Plus (`2b3e:ace6`, firmware 1.2.0) is an XC7A100T
+in the same package, and `build_plus.sh` builds its gateware from the
+same checkout: `cwhusky_plus.xpr`'s files, the `PLUS` define, and the
+pins of `husky.rcf`, which `cwhusky_100.xdc` puts on the same balls.
+It takes 17.5 minutes and prints the same four notes the Husky's does,
+with 64,596 signals and 28,185 clock pins. NewAE's reference here is
+their Vivado build of the same commit, `fpga/vivado/cwhusky_plus_top.bit`,
+which `chipwhisperer`'s develop branch (61aec0925) ships byte for byte
+and whose register map is the checkout's; the PyPI release's is not.
+
+**What was measured, 2026-10-21**, with `chipwhisperer` at 61aec0925
+and its `tests/test_husky_dev.py` (no target attached, so 166 tests
+skip either way):
+
+| | NewAE's bitstream | this flow's |
+|---|---|---|
+| `test_husky_dev.py` | 42 passed, 5 failed | 4 passed, 43 failed |
+| connects, reads the version (2, 88: Husky Plus) | yes | yes |
+| ECHO register, written and read back | yes | yes |
+| the 16-byte SAMPLES register, written and read back | yes | no |
+| the board PLL's clock, as the FPGA measures it, 7.37 MHz asked for | 7,363,735 Hz | 0 |
+| the ADC's clock, as the FPGA measures it, 10 MHz asked for | 10,000,133 Hz | 0 |
+| TraceWhisperer's front-end clock, from the USB clock | 96 MHz | 0 |
+| XADC | good | good |
+| an ADC capture | the samples | 0 samples |
+
+The five NewAE fails are four glitch-width ratios and one PLL test, on
+their own bitstream; whatever they are, they are this bench's.
+
+**What the first load showed** was the bitstream placed for wirelength
+alone: it configured, answered on the bus, and read back nearly every
+bit as zero. NewAE give the read path 15 ns (`set_max_delay 15` in
+`cwhusky_100.xdc`) and this flow's estimate of it was 29 ns; placed with
+`--timing-driven` (`xray::place_timing`), the version and ECHO read
+back right. So the flow's first timing-driven placement is what made
+the bus work, and it is in `build_plus.sh`.
+
+**What is not the fault**, each checked on the part with `probe/`, a
+small design on NewAE's own bus logic: carry chains (309 of 309 sums,
+differences and comparisons; a 32-bit counter at 96 MHz), and the LVDS
+clock from the board's PLL through `IBUFDS` and `BUFG` to a counter,
+which counts 10.02 MHz once NewAE's gateware has set the PLL to 10. The
+LVDS inputs' configuration bits are Vivado's, decoded, and the pulse
+synchroniser every frequency measurement goes through simulates
+correctly.
+
+**What is believed to be**, and not yet shown: timing in the 96 MHz
+`clk_usb` domain. A register write is decoded and lands within one
+cycle, 10.4 ns, at registers across the die, and this flow's routed
+estimate (Project X-Ray's pip delays, slow corner) puts 8,353 of the
+domain's endpoints past that and its longest path at 41 ns: a register
+read mux thirteen lookup tables deep, where Vivado uses the slice's
+`F7`/`F8` multiplexers and this flow has none. The estimate is
+pessimistic — it put the bus's read path at 26 ns, and the bus reads —
+but not by that much. A write that does not land would leave the clock
+sources and capture settings as they came up, which is what the table
+shows.
 
 ## Status
 

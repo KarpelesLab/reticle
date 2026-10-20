@@ -1,0 +1,27 @@
+# The pins husky_probe.v uses, as husky.rcf gives them.
+create_clock -name clk_usb -period 10.4 clk_usb
+set_io -io_standard LVCMOS33 clk_usb D4
+set_io -io_standard LVCMOS33 USB_Data[7] L3
+set_io -io_standard LVCMOS33 USB_Data[6] L2
+set_io -io_standard LVCMOS33 USB_Data[5] B6
+set_io -io_standard LVCMOS33 USB_Data[4] G2
+set_io -io_standard LVCMOS33 USB_Data[3] G1
+set_io -io_standard LVCMOS33 USB_Data[2] E2
+set_io -io_standard LVCMOS33 USB_Data[1] A7
+set_io -io_standard LVCMOS33 USB_Data[0] B7
+set_io -io_standard LVCMOS33 USB_Addr[7] K2
+set_io -io_standard LVCMOS33 USB_Addr[6] J1
+set_io -io_standard LVCMOS33 USB_Addr[5] H1
+set_io -io_standard LVCMOS33 USB_Addr[4] K3
+set_io -io_standard LVCMOS33 USB_Addr[3] K1
+set_io -io_standard LVCMOS33 USB_Addr[2] E1
+set_io -io_standard LVCMOS33 USB_Addr[1] D1
+set_io -io_standard LVCMOS33 USB_Addr[0] C1
+set_io -io_standard LVCMOS33 USB_RDn A5
+set_io -io_standard LVCMOS33 USB_WRn A4
+set_io -io_standard LVCMOS33 USB_CEn B4
+set_io -io_standard LVCMOS33 USB_ALEn B5
+set_io -io_standard LVDS_25 ADC_clk_fbp E12
+set_io -io_standard LVDS_25 ADC_clk_fbn E13
+set_io -io_standard LVDS_25 PLLFPGAP D13
+set_io -io_standard LVDS_25 PLLFPGAN C13
