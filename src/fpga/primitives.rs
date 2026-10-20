@@ -143,7 +143,10 @@ pub struct MapOptions {
     /// when it misses a block RAM: it is left as a memory and reported,
     /// since some thousands of flip-flops are almost never what the
     /// designer meant and the honest answer is that the design does not
-    /// fit the part.
+    /// fit the part. Built of the device's distributed RAM, each block
+    /// counts as one bit does: a 7-series `RAM64X1D` holds 64 of them in
+    /// two lookup tables, so the count is of what would be built, not of
+    /// what is stored.
     pub max_logic_bits: u64,
     /// Map multipliers onto DSP blocks.
     pub infer_dsp: bool,
@@ -2022,12 +2025,28 @@ impl Mapper<'_> {
             self.decline_lowering(&name, "it has more words than this machine can count", span);
             return None;
         };
-        if !asked_for_logic && u64::from(width) * depth > self.options.max_logic_bits {
+        // The limit is on what would be built: a flip-flop per bit, or a
+        // distributed RAM block per block's worth of words and bits for
+        // each read port, which holds as many bits as it has.
+        let shape = self.lutram_shape().filter(|_| writes.len() == 1);
+        let bits = u64::from(width) * depth;
+        let cells = match &shape {
+            Some(shape) => {
+                let words = 1u64 << shape.addr_bits;
+                let blocks = depth.div_ceil(words) * u64::from(width.div_ceil(shape.width));
+                blocks * reads.len() as u64
+            }
+            None => bits,
+        };
+        if !asked_for_logic && cells > self.options.max_logic_bits {
+            let what = match &shape {
+                Some(shape) => format!("{cells} `{}` blocks", shape.bel.name),
+                None => format!("{bits} bits"),
+            };
             self.decline_lowering(
                 &name,
                 &format!(
-                    "{} bits is over the {} bit limit for building a memory out of logic",
-                    u64::from(width) * depth,
+                    "{what} is over the {} bit limit for building a memory out of logic",
                     self.options.max_logic_bits
                 ),
                 span,
@@ -2074,7 +2093,6 @@ impl Mapper<'_> {
             return None;
         }
 
-        let shape = self.lutram_shape().filter(|_| writes.len() == 1);
         let plan = LogicPlan {
             name: name.clone(),
             span,
@@ -5608,6 +5626,42 @@ mod tests {
         assert_eq!(design.module(top).memories.len(), 1);
         let text = diags.render(&sources);
         assert!(text.contains("is left as a memory"), "{text}");
+    }
+
+    /// **The limit counts what would be built.** 6 x 1024 is 6144 bits,
+    /// over the default 4096, and on a family without distributed RAM
+    /// (the test above) that many flip-flops is refused. The 7 series
+    /// stores it in 96 `RAM64X1D`, sixteen deep blocks of 64 words per
+    /// bit — NewAE's Husky Plus has exactly this memory, in `hw_bb_trig`'s
+    /// pattern FIFO, with an asynchronous read no block RAM can take.
+    /// Would catch the limit counted in bits again (the memory is left
+    /// and `built` is false); would not catch a wrong block count that
+    /// stays under the limit, which `cells` below pins.
+    #[test]
+    fn a_memory_over_the_bit_limit_is_built_when_lut_ram_holds_it_in_few_blocks() {
+        let (mut design, top, _map) = memory_design(6, 1024);
+        let options = MapOptions {
+            insert_io_buffers: false,
+            insert_clock_buffers: false,
+            ..MapOptions::default()
+        };
+        let mut device = target("xc7a35t-cpg236").unwrap().clone();
+        device.block_rams.clear();
+        let mut diags = Diagnostics::new();
+        let report = map(
+            &mut design,
+            top,
+            &device,
+            &Constraints::new(),
+            &options,
+            &mut diags,
+        );
+        let fallback = &report.bram_fallbacks[0];
+        assert!(fallback.built, "{fallback:?}");
+        assert_eq!(fallback.style, "distributed LUT RAM");
+        assert_eq!(fallback.primitive.as_deref(), Some("RAM64X1D"));
+        assert_eq!(fallback.cells, 96);
+        assert_eq!(design.module(top).memories.len(), 0);
     }
 
     /// A continuous assignment to an element writes the memory as a port
