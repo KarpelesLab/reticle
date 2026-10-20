@@ -314,10 +314,14 @@ Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
                      column: 31 (the default, 11 520 lookup tables) up to
                      36 (26 880), for a design that does not fit. A wider
                      fabric takes longer to load and route.
-  --timing-driven    Weigh each connection's delay against congestion,
-                     by its criticality, and run at least four routing
-                     passes. The delays are a model, not a measurement:
-                     docs/fpga-uray.md says what it did on the part.
+  --timing-driven    UltraScale+: weigh each connection's delay against
+                     congestion, by its criticality, and run at least four
+                     routing passes; docs/fpga-uray.md says what it did on
+                     the part. 7 series: weigh each signal's wirelength by
+                     its estimated criticality in its clock's domain, for
+                     a few rounds after the wirelength placement, and
+                     print what each round estimated. The delays are a
+                     model, not a measurement, in both.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -3427,15 +3431,39 @@ fn write_xc7_bitstream(
     let mut netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
-    let (placement, placement_report) = place(
-        &netlist,
-        &fabric.arch,
-        &graph,
-        constraints,
-        &place_options(args)?,
-    )
-    .map_err(|e| e.to_string())?;
+    let mut options = place_options(args)?;
+    // `--timing-driven`: the placement weighs each signal by how critical
+    // its estimated delay is in its clock's domain. See `xray::timing`.
+    let domains = if args.flag("timing-driven") {
+        let (timing, names) = reticle::fpga::xray::place_timing(&netlist, constraints);
+        options.timing = Some(timing);
+        names
+    } else {
+        Vec::new()
+    };
+    let (placement, placement_report) =
+        place(&netlist, &fabric.arch, &graph, constraints, &options).map_err(|e| e.to_string())?;
     laps.lap("place");
+    for (round, estimate) in placement_report.timing.iter().enumerate() {
+        let paths: Vec<String> = domains
+            .iter()
+            .zip(&estimate.longest_ps)
+            .zip(options.timing.iter().flat_map(|t| t.periods.iter()))
+            .map(|((name, ps), period)| {
+                format!("{name} {:.2} ns of {period} ns", *ps as f64 / 1000.0)
+            })
+            .collect();
+        eprintln!(
+            "note: placement timing estimate, round {round}: {}; {} signal(s) over half critical, wirelength {}",
+            if paths.is_empty() {
+                "no clock is constrained".to_owned()
+            } else {
+                paths.join(", ")
+            },
+            estimate.critical,
+            estimate.hpwl
+        );
+    }
     // As the ECP5 flow does: what legalisation moved and the wirelength
     // the anneal reached, which is what a route's congestion is read
     // against, and the schedule when it is asked for.

@@ -15,6 +15,13 @@
 # internal nets and not in husky.rcf. The region is the XC7A100T's whole
 # grid, 147 by 208 tiles, which declares 77 million pips, past the
 # loader's default limit of 48 million; hence `--max-pips`.
+#
+# `--timing-driven` is what makes the USB register interface work: placed
+# for wirelength alone the bitstream configured and answered on the bus,
+# but read back nearly every bit as zero, and NewAE's constraints give
+# that read path 15 ns (`set_max_delay 15` in cwhusky_100.xdc). Weighted
+# by estimated criticality in `clk_usb`'s domain, it reads back what it
+# was written. See README.md.
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -32,7 +39,7 @@ exec "$reticle" fpga \
     --constraints "$here/husky.rcf" \
     --output-dir "$out" \
     --bitstream "$out/cwhusky_plus_top.bit" \
-    --region 0,0,147,208 --max-pips 80000000 \
+    --region 0,0,147,208 --max-pips 80000000 --timing-driven \
     "$fpga/hdl/includes.v" "$fpga/hdl/setup.v" "$fpga/hdl/registers.v" \
     "$fpga/hdl/clock_managment_advanced.v" "$fpga/hdl/fifo_top_husky.v" \
     "$fpga/hdl/openadc_interface.v" "$fpga/hdl/reg_chipwhisperer.v" \

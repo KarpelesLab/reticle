@@ -172,6 +172,7 @@ mod lutram;
 mod lutswap;
 mod parse;
 mod sites;
+mod timing;
 mod xadc;
 
 pub use bram::{
@@ -202,6 +203,7 @@ pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
 pub use io::{IoError, IoTables, io_standards};
 pub use iologic::IoLogicError;
 pub use sites::SiteCoverage;
+pub use timing::place_timing;
 pub use xadc::xadc_init_bit;
 
 /// Why a Project X-Ray database could not be read.
