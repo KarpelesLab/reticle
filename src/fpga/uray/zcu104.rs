@@ -1107,6 +1107,9 @@ pub struct ImplementOptions<'a> {
     /// Route timing-driven, with [`Board::node_delays`] and
     /// [`LUT_DELAY`] as the delay model.
     pub timing: bool,
+    /// Called with each routing pass as it finishes
+    /// (`RouteOptions::on_iteration`), or `None`.
+    pub on_iteration: Option<fn(&crate::fpga::route::Iteration)>,
 }
 
 /// The whole flow for a design `synthesize_for` has mapped onto
@@ -1160,6 +1163,7 @@ pub fn implement(
         reroute_congested_only: true,
         max_iterations: MAX_ITERATIONS,
         timing: timing.then(|| Timing::for_netlist(&netlist, board.node_delays(), LUT_DELAY)),
+        on_iteration: options.on_iteration,
         ..RouteOptions::default()
     };
     let (routing, routed) =

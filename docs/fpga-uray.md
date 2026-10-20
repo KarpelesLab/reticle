@@ -757,6 +757,25 @@ that. Spreading the same design to six or four tables a slice made it
 worse while a wire still cost one a piece, which was what pointed at
 the costs; with free pieces it is being measured again.
 
+**It routes now, in ten passes and ten minutes.** Built through
+`reticle fpga --timing` on 2026-10-20, the same 12 800-table network (32
+neurons, below) converged at the tenth pass: 33 590 nodes shared after
+the first, 995 after the sixth, none after the tenth, 623 seconds into
+the run; 1 012 938 pips, 1 271 637 set bits, every one decoded. The
+build of 2026-10-15, from a binary of that day, had run five days
+without reporting anything and was stopped.
+
+What changed between them is the placement, measured with the same
+probe at both commits: the placer of 2026-10-15 filled **1 509** of its
+used slices with all eight tables in rows 171 to 328, the figure above,
+and the placer of 2026-10-20 (which since spreads a kind that fills a
+third of its sites before legalising it) fills **406**, over rows 129 to
+370. The router changed too in between — a net of more than 64 sinks
+now starts each search from the part of its tree near the sink — so the
+spread placement is the difference that was measured, and the reason
+given above for the failure is borne out, but which of the two changes
+did the work was not isolated.
+
 The settings the flow uses are the ones that converged: free pieces,
 `astar_weight` 2.0 (`zcu104::ASTAR_WEIGHT`), and rerouting only the
 signals that share a node after the first pass
@@ -855,6 +874,12 @@ per temperature at a million (`moves_for`), and at 7 689 instances any
 effort above 7 reaches it. And neither build was given a timing goal;
 the router knew nothing of delay, so 37 ns is what the placement
 happened to give, not what the part can do.
+
+**Thirty-two neurons.** The same network with 32 hidden neurons scores
+73.84 % on the test set: 13 457 instances, built as above. **Measured,
+2026-10-20, at 100 MHz over EMIO:** all 10 000 test images gave the
+model's scores and class bit for bit, accuracy 73.84 %, at 107.3 µs an
+image — the time is the bus, as before.
 
 ## Timing-driven routing
 

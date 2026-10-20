@@ -387,6 +387,7 @@ fn verilog_counter() {
             place: &reticle::fpga::PlaceOptions::default(),
             east: reticle::fpga::uray::zcu104::DEFAULT_EAST,
             timing: false,
+            on_iteration: None,
         },
     )
     .unwrap();

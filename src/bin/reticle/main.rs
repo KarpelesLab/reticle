@@ -3244,6 +3244,7 @@ fn write_uray_bitstream(
             place: &place,
             east,
             timing: args.flag("timing-driven"),
+            on_iteration: args.flag("timing").then_some(print_iteration as fn(&_)),
         },
     )?;
     std::fs::write(path, &written.bit).map_err(|e| format!("cannot write `{path}`: {e}"))?;
