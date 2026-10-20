@@ -4053,7 +4053,7 @@ end
         // control pins, and on nothing else: each one's backend pass
         // (`xray::bufg`, `xray::iologic`, `xray::cmt`) gives a constant
         // there by the pin's inverter instead of a lookup table.
-        for name in ["xc7a35t-cpg236", "xc7a35t-ftg256"] {
+        for name in ["xc7a35t-cpg236", "xc7a35t-ftg256", "xc7a100t-ftg256"] {
             let device = super::super::target(name).unwrap();
             let absorbing: Vec<(&str, Vec<&str>)> = device
                 .bels

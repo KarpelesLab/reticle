@@ -795,7 +795,7 @@ mod tests {
             panic!("prjxray-db is fetched file by file")
         };
         let files = parse_manifest(manifest).expect("every line parses");
-        assert_eq!(files.len(), 278);
+        assert_eq!(files.len(), 284);
         let has = |p: &str| files.iter().any(|f| f.path == p);
         assert!(has("LICENSE"));
         assert!(has(PRJXRAY.probe));
@@ -803,6 +803,9 @@ mod tests {
         assert!(has("artix7/xc7a35tcpg236-1/package_pins.csv"));
         // The ChipWhisperer-Husky's package.
         assert!(has("artix7/xc7a35tftg256-1/package_pins.csv"));
+        // The Husky Plus: its part, and the XC7A100T's own fabric.
+        assert!(has("artix7/xc7a100tftg256-1/part.json"));
+        assert!(has("artix7/xc7a100t/tilegrid.json"));
         assert!(
             files
                 .iter()
