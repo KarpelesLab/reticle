@@ -681,7 +681,10 @@ fn tristate_through(side: &str, wire: u32, n: u32) -> PassThrough {
 /// and their mode bits will be OR-ed together rather than refused. The
 /// device file's `shared_reset` says the same thing about the control
 /// set. Until the placer packs a slice, a design that mixes `FDRE` with
-/// `FDCE` can be built and will be wrong; `docs/fpga-xray.md` says so.
+/// `FDCE` can be built and will be wrong — and that was so until
+/// 2026-10-20, when the placer began refusing two flip-flops of different
+/// reset kinds or clock edges on sites that share pins
+/// (`place::slice_mode`).
 fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
     let Some(shared) = clb_shared_prefix(tile_type) else {
         return Vec::new();

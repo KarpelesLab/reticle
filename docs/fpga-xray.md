@@ -3276,6 +3276,160 @@ the placer puts the two together, which is the clustering by control
 set that is not done. And offering them would move the flip-flops of
 the two designs a person has watched work on a Basys 3. Not kept.
 
+### Three days on: it routes (2026-10-20)
+
+The question the last section left was *what the demand is*, and this
+time it was asked of the route itself and of Vivado's bitstream rather
+than of the netlist. Three measurements, each of which changed what was
+worked on.
+
+**Which wires ran out.** Counted by class at each pass (a wire's name
+with its digits taken off), the overused nodes of the second pass were
+`BYP_ALT` 14,554, `FAN_ALT` 14,543, `FAN_BOUNCE` 12,944 and the doubles
+after them; and **used**, not overused, the first two were 48,764 and
+48,478 signal-nodes over 45,200 nodes each — more than one signal per
+wire across the whole die — while the bypass pins they exist to feed
+carried 10,701. The router was using the slices' input-side local wires
+as general detours, and nearly every slice wanted all its bypass inputs.
+
+**What feeds the flip-flops.** 16,988 of the netlist's 27,618
+flip-flops are fed by another flip-flop and 4,621 by a carry; 3,952 by a
+lookup table's `O6` and 1,948 by an `O5`. Filling 85 % of the four
+flip-flop sites a slice was offered, wherever there was room, nearly
+every one came in on a bypass input. Vivado's
+bitstream of the same design, decoded (`<L>FFMUX` and `<L>5FFMUX` per
+lane, and each lookup table's `INIT`), puts 8,475 flip-flops on their
+own lane's `O6` and 1,963 five-input ones on `O5`, 4,769 five-input
+ones on the bypass input, and uses 3,808 tables as nothing but a wire
+into the flip-flop beside them (an `INIT` that is one of its inputs). It also routes the whole design in about
+300,000 configured interconnect pips; this flow's route used 570,000 to
+630,000 in its early passes.
+
+**Where the wire went.** Per net, after annealing: two-sink nets 32.8
+tiles of half-perimeter on average, and the longest of them almost all
+`esad`'s reference-sample chain — `nextrefsample_short[i] <=
+nextrefsample_short[i-1]` for 256 stages, each stage also read by its
+own counter — at 60 to 70 tiles between neighbouring stages. A chain
+that long, scrambled across the die, is not something the anneal's
+few-tile moves at a low temperature can undo. Legalisation moved a
+cell 20.2 tiles on average, and the 17,333 flip-flops outside any
+macro 35 tiles: one quadratic solve, one spread of the lookup tables,
+and a second solve of the flip-flops around them piled the flip-flops
+where the lookup tables had been.
+
+So, in the order they went in:
+
+- **Global placement** (`place::global_place`). SimPL in its plainest
+  form: thirty rounds of spreading every kind over its own sites by
+  bisection and solving again with each cell drawn to where it was
+  spread, harder each round, from a Jacobi-preconditioned solve warm
+  started from the last. Legalisation's displacement went from 20.2
+  tiles to 5.5, the flip-flops' from 35 to 12.8, the reference chain's
+  links to about 30 tiles, and the wirelength after annealing from
+  964,496 to 636,749; overuse at the sixth pass from 71,569 to 48,589.
+  Pulls of 0.01 to 0.5 and 30 to 60 rounds, measured before the
+  flip-flops were spread with the rest, all landed between 639,724 and
+  703,803. It replaces the one spread only where that spread ran: a
+  design with no kind a third full and 256 cells strong is placed as
+  before.
+- **The five-input flip-flops, and a lookup table's flip-flops with
+  it.** `A5FF`..`D5FF` are offered, `D` from the bypass input (`IN_B`,
+  checked before) or from the lane's `O5` (`IN_A`, the other source of
+  the mux, and Vivado's use of it: 1,950 lanes with `FFMUX.O6` and
+  `5FFMUX.IN_A` together). And a lookup table now takes the flip-flop
+  its `O6` feeds, and the five-input one its `O5` feeds, into a rigid
+  macro (`place::registered_tables`) — one slice, so only on one control
+  set, and not an `O5` that also leaves the tile, whose one way out is
+  the output mux the five-input flip-flop's `Q` needs. On the Husky that
+  is 5,722 tables. Offered alone the five-input flip-flops did nothing
+  (the previous section); packed, the lookup-table side of the
+  congestion went, and the legaliser needed two more things: a macro
+  pays the same penalty for opening a slice that a lone flip-flop does,
+  and the penalty is sixteen tiles, not four — spread flip-flops reach
+  every slice in turn, and at four the flip-flops of a clock of their
+  own found 36,991 of 37,765 free sites in slices another clock held.
+  On iCE40, whose logic cell is a table and a flip-flop, the same rule
+  packs them as nextpnr does: `blinky_ice40` and `carry_ice40`'s goldens
+  moved, and still route and decode.
+- **A lookup table's inputs are the router's to choose**
+  (`RouteOptions::equivalent`, `xray::lutswap`). The six inputs are one
+  function of whatever arrives, and each input's own multiplexer takes
+  only some of the tile's wires, so a router held to the pin the mapper
+  named has to bounce to it. A sink on a table input may now end on any
+  of the table's inputs that carry a signal or that its truth table does
+  not read, and nobody holds; afterwards each moved table's `INIT`, its
+  connections and the netlist's pins are rewritten, before the route is
+  checked or anything written. An input tied to a constant the table
+  reads stays — a `LUT6_2`'s `I5` is high because an unrouted input
+  reads one here. Measured on one placement with a first version of it:
+  13,731 nodes overused at the thirteenth pass without it, 9,698 with
+  it, and the later passes cheaper. Vivado's 3,808 tables that are only
+  a wire, a flip-flop's way in through the table's own inputs, are not
+  done. `tests/fpga_xray_lutswap.rs` re-derives what each moved table
+  of a routed Basys 3 design must compute from the pins alone and
+  compares all 64 entries.
+- **A congested signal's box grows** (`route::BOX_GROWTH`). Three tiles
+  around its terminals, VPR's, held the last hundred-odd overused nodes
+  where they were: the route fell to 110 by the 43rd pass and stayed
+  there until the 87th, because a box widened only when a search found
+  no path at all and a congested path is a path. Grown by a tile each
+  pass a signal ends on an overused node, the route converged at the
+  48th pass, in 2,781 s of routing, where it had needed 87 and 4,383 s.
+  The pass limit for this fabric is 100 (`xray::ROUTE_PASSES`).
+
+**And then the clocks.** The first route to converge was refused by the
+flow's own check: 99 flip-flops' clock pins came in off general
+interconnect, `FAN_ALT5` to `FAN_BOUNCE5` to the slice's clock wire, a
+hop before the pin, instead of off a leaf of the clock network. The
+network is a cost the router prefers, and a preference loses to
+congestion. A signal the network carries may now enter the wire in front
+of a clock pin only from the network (`RouteOptions::network_entry`,
+`XrayFabric::clock_pin_entries`); the refusal, for whatever else trips
+it, now names the wire each pin came in on. With it the route converged
+at the 59th pass, and every one of the 27,882 clock pins a global buffer
+drives arrived on the network.
+
+**Two checks that had not been there.** A slice has one `FFSYNC` and
+one `CLKINV` for its eight flip-flops, and the model gives each
+flip-flop a bel of its own, so an `FDCE` placed beside an `FDRE` became
+synchronous with nothing to say so — written down in `xray::sites` as a
+known hazard, and with eight flip-flops a slice and 505 asynchronous and
+576 falling-edge ones in the Husky, no longer one to leave. Flip-flops that
+share a slice's pins must now agree on both (`place::slice_mode`). And
+the flow decoded every bitstream back and counted unexplained bits, but
+did not ask, as the ECP5 flow does, whether the arcs the bits select are
+the router's: it does now, before writing
+(`XrayDatabase::arc_differences`), and `tests/fpga_xray_carry.rs` checks
+that it agrees with that file's own reading and that it can disagree.
+
+Where it stands, built by `examples/husky/build.sh` on 2026-10-20: 200 s
+to place, to a wirelength of 635,591 after annealing; the route
+converged at the 78th pass after 2,956 s; and
+
+    note: 62989 of 62989 signal(s) with a reader routed
+    note: 27882 of 27882 clock pin(s) a global buffer drives arrived on the global clock network
+    note: decoded: 2103642 bit(s) over 10304 tile(s) into 1290860 feature(s); 0 bit(s) unexplained, 0 tile(s) with no segbits file
+    note: the interconnect arcs those bits select are exactly the ones the router chose and the block RAM ties added
+
+Compared by feature class with NewAE's bitstream of the same design,
+digits taken off, outside the interconnect: 626 classes against 721, of
+which 26 only here — block RAM width and inversion settings, and clock
+paths through regional clock wires and a non-dividing `BUFR` that
+Vivado's routing did not take. None is a slice's. That says the
+bitstream uses no kind of setting Vivado's does not, almost; it says
+nothing about whether it computes what Vivado's computes, which only a
+Husky can.
+
+Tried and dropped, on the way:
+
+- **A hotter, wider anneal** (`--place-hot-start --place-start-window
+  0`): 1,136,561 after annealing, against 964,496. And
+  **`--place-effort` did nothing on this design**: the moves per
+  temperature are capped at a million, which `n^(4/3)` passes at ten
+  thousand cells. Raised to three million, the wirelength fell from
+  636,749 to 604,480 and the route was a few per cent ahead pass for
+  pass, for more than twice the placement time. Not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

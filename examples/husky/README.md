@@ -8,9 +8,12 @@ This directory is what Reticle needs beyond that source to build it:
 stand-ins for the Vivado IP cores the gateware instantiates, its pin
 constraints in Reticle's form, and the command line.
 
-**Nothing built here has run on a Husky.** What is checked, and what is
-only quoted, is at the end of this page; read it before loading anything
-into an instrument somebody depends on.
+**Nothing built here has run on a Husky.** It builds a bitstream now, in
+which every set bit decodes and selects exactly the connections the
+router chose; whether that bitstream does what NewAE's does has not been
+tested on a part. What is checked, and what is only quoted, is at the
+end of this page; read it before loading anything into an instrument
+somebody depends on.
 
 ## What is here
 
@@ -145,10 +148,28 @@ of its own:
 
 ## Status
 
-**It fits and places; whether it routes is not yet known.** The whole
-design elaborates, synthesises and maps — in about 25 seconds, where the
-first attempt did not finish in 83 minutes — and the result is, measured
-on 2026-10-19:
+**It places, routes and writes a bitstream** (2026-10-20). `build.sh`
+takes about 53 minutes on the machine this was built on: 25 seconds to
+map, 200 to place, and the rest to route, which converged at the 78th
+pass. What the flow then checked and printed:
+
+    note: 62989 of 62989 signal(s) with a reader routed
+    note: 27882 of 27882 clock pin(s) a global buffer drives arrived on the global clock network
+    note: decoded: 2103642 bit(s) over 10304 tile(s) into 1290860 feature(s); 0 bit(s) unexplained, 0 tile(s) with no segbits file
+    note: the interconnect arcs those bits select are exactly the ones the router chose and the block RAM ties added
+
+What it took is the section of `docs/fpga-xray.md` dated 2026-10-20: a
+global placer, the five-input flip-flops and a lookup table's flip-flops
+packed beside it, a router that chooses a lookup table's inputs, a
+congested signal's box that grows, and a clock that may enter its pin
+only off the clock network. Not done, and the next things to know
+before a part is loaded: the route is not timing-driven, and the ADC
+side runs at up to 200 MHz; and nothing has compared this bitstream's
+behaviour with NewAE's.
+
+The whole design elaborates, synthesises and maps — in about 25 seconds,
+where the first attempt did not finish in 83 minutes — and the result
+is, measured on 2026-10-19:
 
 | | Reticle | NewAE's image (Vivado 2022.1) |
 |---|---|---|
@@ -184,14 +205,14 @@ slices or 32,600 lookup tables, and decoding NewAE's image finds
 configured slices in about 93 % of those tiles — more than the 20,800
 lookup tables the XC7A35T is specified with. Why Vivado uses them has not
 been looked into; what is measured is that it does, so 32,600 is the
-ceiling that matters, and Reticle's netlist is over it.
+ceiling that matters. Reticle's netlist was over it until 2026-10-17,
+and is 21,217 sites of it now.
 
 What is known about the gap that remains:
 
-- **Four flip-flops per slice, of eight.** The backend offers each
-  slice's `AFF`..`DFF` and not the `A5FF`..`D5FF` beside them, which it
-  cannot yet wire, so the slices hold half the flip-flops Vivado can put
-  in them. That is why the whole die is asked for.
+- **Four flip-flops per slice, of eight** — until 2026-10-20, when the
+  `A5FF`..`D5FF` were offered, fed from the bypass input or the lookup
+  table's `O5`, as Vivado feeds them. The whole die is still asked for.
 - **No wide multiplexers.** Vivado builds 7- and 8-input selections from
   the slice's `MUXF7`/`MUXF8`; Reticle from lookup tables.
 - **`esad`**, NewAE's extended SAD trigger, is half the design: 256
@@ -218,7 +239,8 @@ the flip-flop mapper gave each bit of `esad`'s counters a reset net of
 its own (2,764 control sets, 1,014 once fixed). With that fixed and the
 legaliser joining a slice before opening one, placement completes;
 `docs/fpga-xray.md` has both, and the section after them has why a
-build then took hours and what it takes now. Nothing has routed a design
-this full on this die, and the ADC side runs at up to 200 MHz while the 7-series placer is
-not timing-driven. Nothing has been loaded into a Husky; none is attached
+build then took hours and what it takes now. Nothing routed a design
+this full on this die until 2026-10-20 (the status above), and the ADC
+side runs at up to 200 MHz while the 7-series placer is not
+timing-driven. Nothing has been loaded into a Husky; none is attached
 to the machine this was built on.
