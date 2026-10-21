@@ -151,7 +151,7 @@ of its own:
 | it routes | **checked**: the Husky's converged at the 78th pass on 2026-10-20, the Plus's at the 50th on 2026-10-21; earlier, this row said it did not |
 | it works on a Husky | **not checked**: nothing of the Husky's has been loaded into one |
 | the Plus's bitstream configures a Husky Plus and answers on its USB bus | **checked** on 2026-10-21: `chipwhisperer` connects, reads its version and reads back what it writes |
-| it works as a Husky Plus | **no**: 4 of NewAE's 47 tests that their bitstream passes; see *On a Husky Plus* |
+| it works as a Husky Plus | **no**: its registers read and write (one read in a few hundred loses a bit), and 3 of NewAE's tests pass where their bitstream passes 42; see *On a Husky Plus* |
 | carry chains compute what they should | **checked** on the part: `probe/`, 309 of 309 sums, differences and comparisons, and a counter at 96 MHz |
 
 ## On a Husky Plus
@@ -213,6 +213,38 @@ pessimistic — it put the bus's read path at 26 ns, and the bus reads —
 but not by that much. A write that does not land would leave the clock
 sources and capture settings as they came up, which is what the table
 shows.
+
+**The bus clock's own road** (2026-10-21). Until then `clk_usb` reached
+its buffer over general routing, 4.4 to 12.4 ns that moved with every
+placement, where Vivado uses the clock-capable pin's dedicated road; the
+section of `docs/fpga-xray.md` dated 2026-10-21 has the three reasons and
+the fixes. It now takes the road, 2.18 ns, and the probe passes on the
+part with it. The first full build with it read nothing at all.
+
+**What the bus needs of its inputs** (2026-10-21) is why. The SAM3U
+launches the bus's strobes, address and data on the very edge of
+`clk_usb` that `usb_reg_main` must capture them on, so each must reach
+its register before the clock does; a long clock insertion gave that for
+free, and the road's does not. Measured on the part, then constrained:
+`husky.rcf`'s `set_input_delay`, which the placer turns into a distance
+from each pad (`docs/fpga-xray.md` has the measurements). With it, placed
+afresh and nothing moved by hand:
+
+| | NewAE's bitstream | this flow's, 2026-10-21 |
+|---|---|---|
+| VERSION | (2, 88) | (2, 88) |
+| ECHO, 300 random 8-byte writes and reads | right | 7 wrong, all bit 5 of an odd byte |
+| SAMPLES, 300 random writes and reads | right | right |
+| MAX_SAMPLES, read-only | NewAE's values | the same values |
+| `test_husky_dev.py` | 42 passed, 5 failed | 3 passed, 43 failed |
+
+What NewAE's tests still fail on, by cause: `test_reg_rw`, bit 5 of a
+byte at some burst positions, one read in a few hundred — a path inside
+the design from the byte counter to the read register, which the
+estimate puts at twice the period; the glitch modules (19), whose clock
+managers do not report lock; every capture (16), which returns no
+samples; the PLL (4); and `test_fpga_version`, which reads the build
+time from `USR_ACCESSE2`, and the stand-in here reads zero.
 
 ## Status
 

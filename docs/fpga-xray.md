@@ -3430,6 +3430,153 @@ Tried and dropped, on the way:
   636,749 to 604,480 and the route was a few per cent ahead pass for
   pass, for more than twice the placement time. Not kept.
 
+### A clock pad's road to its buffer (2026-10-21)
+
+On a Husky Plus the 96 MHz bus clock, `clk_usb` on a clock-capable pin,
+went from its pad to its `BUFG` over **133 to 361 pips of general
+routing**, 4.4 to 12.4 ns by the routed estimate, a figure that moved
+with every placement. Vivado takes the pin's own road: the input logic's
+`I2GCLK`, the `HCLK` row's `CCIO` to the clock management tile, its
+`HCLK_CMT_CK_IN`, the row's `CK_IN` to the centre, `CLK_HROW_CK_IN`,
+and up the buffer cascade (`CASCO`, `CK_BUFG_CASC`, `CK_MUXED`) into a
+`BUFGCTRL`. NewAE's image of the 35T Husky sets `HCLK_CMT_CCIO0_ACTIVE`,
+`_USED` and `HCLK_CMT_CK_IN0.HCLK_CMT_CCIO0` in `HCLK_CMT_L_X106Y78`
+for D4; built here, `testdata/fpga/husky/clock_buffers.v` on the same
+pin set none of them. The graph had the road all along — a search from
+the pad's `RIOI_ILOGIC0_D` reached every `BUFGCTRL` of one buffer tile,
+for a cost of 8 — and the enables (`sites::wire_enable_features`) were
+already right, as the Basys 3's W5 showed. Three things kept the clock
+off it, found one behind the other:
+
+1. **The estimate.** The router's A\* charges `ASTAR_WEIGHT` per tile,
+   scaled by the cost of the node it stands on, and a node that costs
+   nothing is charged a full wire (`route::heuristic_base`). The road's
+   links are mostly bit-less pips, so cost nothing, so were estimated as
+   dear as general routing; its first step, at the pad's own tile, lost
+   by the three tiles general routing could gain from there, and the
+   search never came back to it. The road's wires now cost what the
+   clock network's do, bit-less ones included
+   (`xray::is_clock_input_wire`). Read off the `xc7a100t` graph, every
+   pip into or out of them: none comes from or goes to general
+   interconnect, once three families that share the spelling are left
+   out (the row's `*TEST*` wires, `CLK_HROW_CK_INT_<n>_` which general
+   routing drives, and `HCLK_CK_INOUT_<L|R>` which the horizontal
+   buffers drive). With that alone, `examples/husky/probe` routed its
+   clock in 2.18 ns and passed on the part, as it had at 7.68.
+2. **The order.** On the Plus it changed nothing: 10.77 ns. A sink's
+   search starts from the tree built so far, and `clk_usb` has fifteen
+   sinks; the first, in netlist order, was a PLL's `CLKIN2` across the
+   die, which the road does not reach (a pad's road reaches the clock
+   management tiles of its own clock region only), and its branch of
+   general routing passed the buffer column, where the four buffers the
+   pad feeds joined it two to six pips away. `RouteOptions::first`
+   names pins to reach while the tree is still the pad; the flow names
+   a pad's buffer inputs, and not a clock manager's, for that reason.
+3. **The half.** Still general routing: the first buffer, routed from
+   the pad alone, took 58 pips. The road climbs the cascade from the
+   pad's own clock row and reaches the sixteen buffers of that half of
+   the die — the search from the pad reached `X78Y103`'s and none of
+   `X78Y108`'s — and the placer had put all four in the other half.
+   `PlaceOptions::clock_roads` confines a buffer a pad drives to the
+   sites the pad's road reaches.
+
+With the three, the Plus's bus clock reaches its buffer in 2.18 ns over
+94 pips — `IOI_ILOGIC0_O`, `HCLK_CMT_CCIO0`, `HCLK_CMT_CK_IN0`,
+`CLK_HROW_CK_IN_R0`, `CASCO25`, `BUFGCTRL12_I1` — and the other three
+buffers branch off at the clock row in two pips each; every bit decodes
+and the arcs are the router's.
+
+**It did not make the Plus read its registers.** That build, and the same
+placement routed without the road (its clock 12.41 ns late), both read
+VERSION as zeros and ECHO as a constant. So the clock's road was not
+what stood between this build and a working bus; it is what Vivado
+does, and it takes a clock insertion that moved by eight nanoseconds
+with the placement out of the question.
+
+### What the bus needs of its inputs (2026-10-21)
+
+The routed estimate was asked what it had not been: for every register
+a bus pad feeds, when the pad's data arrives and when the clock does
+(each from its edge at the pad, with the input buffer). Of the builds on
+the part:
+
+| build | NRD at `reg_read` | its clock | on the part |
+|---|---|---|---|
+| tdp7 (clock over general routing) | 3.85 ns | 6.80 ns | reads every register |
+| tdp7's placement, routed again | 3.99 ns | 7.48 ns | reads, bit 5 lost by burst position |
+| the road's first full build | 4.81 ns | 4.62 ns | reads nothing |
+
+`usb_reg_main` registers `~NRD` as `reg_read` and drives the pins from a
+read register a cycle after that; the SAM3U samples them when NRD rises,
+three cycles after it fell. It launches NRD on the very edge the FPGA must
+catch it on: caught one edge late, the data reaches the pins after NRD
+has risen. So each of the bus's strobes must reach its register **before**
+the clock does — which a long clock insertion gives for free and the
+road's does not, and which no constraint of NewAE's states; Vivado's
+placement of those registers keeps them close to their pads. The third
+build had `reg_read` 73 tiles from its pad.
+
+**Shown on the part.** That build's placement with the eleven input
+registers — `reg_read` and its inverter, the address, NWE's and ALE's
+first synchroniser stage — moved into the nearest empty slices, 10 to 17
+tiles from their pads, and nothing else changed: NRD then arrived 1.64
+ns ahead of the clock and the bus came back — VERSION's second byte,
+ECHO 0x5A, 0xA5 and 0x20 exactly, OFFSET, SAMPLES, DECIMATE and
+GLITCH_OFFSET written and read back. What it still gets wrong follows
+the byte's place in a burst (`reg_bytecnt`), which is a path inside the
+design and the next thing.
+
+**What does it now** is `set_input_delay`, SDC's, which the constraints
+read and the timing model applies: a pad it names launches that long after
+its clock's edge, plus its input buffer, less the clock's own arrival at
+the register (`xray::timing::CLOCK_INSERTION`, 4.6 ns, the least the
+routed estimate gave any of the Plus's bus registers), in that clock's
+domain alone. `husky.rcf` gives the bus's inputs a period and a margin
+for the SAM3U's clock to output and the routed estimate's error
+together, which the part bounds below by −0.19 ns (failed) and 1.64
+(worked). It is not NewAE's; it is what their bus needs of a placer that
+does not do what Vivado's did on its own.
+
+**A weight was not enough.** With the delay in the model and nothing
+else, the timing rounds left `reg_read` where the wirelength placement
+had put it, 73 tiles from its pad: they move a cell a few tiles at a
+time, and its one connection to the pad is outweighed by the dozens to
+its readers. NRD arrived at 5.42 ns, the clock at 4.62. So the placer
+turns such a budget into a distance before it places anything
+(`place::confine_to_input_budget`): what the period leaves after the
+pad's launch, the register's setup and a connection's fixed part, at a
+connection's cost per tile — 26.9 tiles for an address bit, 4.4 for
+`reg_read` behind its inverter, each of the two hops held to a third. And
+the legaliser now takes the cells confined to a few sites first: the
+inverter is one half of a `LUT6_2` whose other half feeds six more
+registers of four control sets, all held near the same pad, and placed
+after cells free to go anywhere they found every site taken. The fewest
+sites a cell keeps grows with the cells of its kind held near one pad,
+sixteen each.
+
+Three builds, each placed afresh, on the part:
+
+| `husky.rcf` | latest bus input, against the clock's 4.62 ns | on the part |
+|---|---|---|
+| strobes and address, 2.0 ns | NRD 2.84; write data bit 1 8.89 | VERSION, ECHO (300 of 300), MAX_SAMPLES right; SAMPLES and SAD_THRESHOLD written with bit 1 a one |
+| and the write data, 2.0 ns | write data bit 7 4.88 | bit 7 written wrong (ECHO byte 6, 84 of 300); SAMPLES read as zero |
+| all of them, 3.0 ns | write data bit 4 5.97 | VERSION, MAX_SAMPLES, SAMPLES (300 of 300) right, every register of the check written and read back; ECHO 7 of 300 wrong, bit 5 of an odd byte |
+
+The write data was first left out, on the reading that `reg_datao`
+takes it a cycle after NWE's rise is seen and so has time; the first
+build's failing bit was its latest by 0.7 ns, and tdp7, which also
+failed SAMPLES, had the same bit latest, so it went in. At 2.0 ns the
+budget allowed a register 27 tiles from its pad at the wire model's
+0.035 ns a tile, and the routed estimate put the one connection that
+used it at 3.68 ns: a pad's own connection costs far more than the fit
+says, which is a line through every connection in the design. At 3.0 the
+budget is spent before any wire and each register is held to the sites
+nearest its pad. That build's write data bit 4 still arrived behind the
+clock, by a route that detoured — the router takes no account of timing
+— and wrote correctly, so the estimate is not exact either. The ECHO
+errors left follow the byte's place in a burst, a path inside the
+design (`reg_bytecnt` to `read_data_reg`), which is the next thing.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
