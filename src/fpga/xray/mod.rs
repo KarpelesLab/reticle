@@ -2347,7 +2347,7 @@ impl XrayFabric {
     pub fn clock_node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
         let mut out = vec![1.0f32; graph.nodes.len()];
         for (index, wire) in graph.nodes.iter().enumerate() {
-            if is_clock_wire(&wire.name) {
+            if is_clock_wire(&wire.name) || is_clock_input_wire(&wire.name) {
                 out[index] = preference;
             }
         }
@@ -2367,16 +2367,48 @@ impl XrayFabric {
     /// nothing, and a wire costs one, where its driver's pip reaches it.
     /// The UltraScale+ flow found the same and does the same
     /// (`Board::node_bases`).
+    ///
+    /// **Except on the roads into a global buffer** (`is_clock_input_wire`),
+    /// which keep the preference. The router's distance estimate is scaled
+    /// by the cost of the node it stands on, and a node costing nothing is
+    /// estimated at a full wire per tile (`route::heuristic_base`), so a
+    /// road of free nodes looked as dear from its start as general routing
+    /// did. Its first step lost by the three tiles general routing could
+    /// gain from the pad and was never taken: on the ChipWhisperer-Husky
+    /// Plus the bus clock went from its clock-capable pad to its buffer
+    /// over 164 pips of general routing, 4.4 to 7.7 ns depending on the
+    /// placement, where the dedicated road is about 1.
     #[must_use]
     pub fn node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
         let mut out = self.clock_node_costs(graph, preference);
         for (node, cost) in out.iter_mut().enumerate() {
             let into = graph.incoming(super::arch::NodeId::try_from(node).unwrap_or(u32::MAX));
-            if !into.is_empty() && into.iter().all(|pip| graph.pip_bits(*pip).is_empty()) {
+            if !into.is_empty()
+                && into.iter().all(|pip| graph.pip_bits(*pip).is_empty())
+                && !is_clock_input_wire(&graph.nodes[node].name)
+            {
                 *cost = 0.0;
             }
         }
         out
+    }
+
+    /// The roads into a global buffer, by node id, for
+    /// [`PlaceOptions::clock_roads`](super::place::PlaceOptions): every
+    /// wire [`XrayFabric::clock_node_costs`] makes cheap for them
+    /// (`is_clock_input_wire`), and the input logic's output a pad's
+    /// signal leaves its tile on (`IOI_ILOGIC0_O`), which is where the road
+    /// begins and which general routing is entered from too.
+    #[must_use]
+    pub fn clock_roads(&self, graph: &super::arch::RoutingGraph) -> Vec<bool> {
+        graph
+            .nodes
+            .iter()
+            .map(|wire| {
+                is_clock_input_wire(&wire.name)
+                    || (wire.name.contains("ILOGIC") && wire.name.ends_with("_O"))
+            })
+            .collect()
     }
 
     /// The nodes in front of every clock pin [`XrayFabric::clock_network_use`]
@@ -2671,6 +2703,50 @@ fn is_clock_wire(name: &str) -> bool {
     .iter()
     .any(|part| name.contains(part))
         || (name.starts_with("CLK_BUFG_BUFGCTRL") && name.ends_with("_O"))
+}
+
+/// Whether a wire is on a dedicated road into a global buffer or a clock
+/// tile: from a clock-capable pad (`IOI_ILOGIC0_O -> RIOI_I2GCLK_TOP0 ->
+/// HCLK_IOI_I2IOCLK_TOP0 -> HCLK_CCIO0 -> HCLK_CMT_CCIO0`), from a clock
+/// management tile's outputs (`HCLK_CMT_MUX_CLK_MMCM -> HCLK_CMT_CK_IN`),
+/// along the clock row to the centre (`HCLK_CK_IN`, `HCLK_VBRK_MUX_CLK`,
+/// `CLK_HROW_CK_IN_R0`) and up or down the buffer cascade
+/// (`CLK_HROW_TOP_R_CK_BUFG_CASCO0`, `CLK_FEED_R_CK_BUFG_CASC0`,
+/// `CLK_BUFG_TOP_R_CK_MUXED0`) to a `BUFGCTRL`'s input.
+///
+/// [`XrayFabric::clock_node_costs`] makes them as cheap as the network.
+/// They are not the network, and [`XrayFabric::clock_network_nodes`] does
+/// not bar a signal from them: a pad's clock is not driven by a global
+/// buffer, and these are how it reaches one.
+///
+/// Read off the `xc7a100t` graph, every pip into and out of a wire this
+/// names: none comes from or goes to general interconnect. They are
+/// entered from a pad's input logic, a clock management tile, a regional
+/// or horizontal buffer or a transceiver's reference clock, and leave for
+/// a buffer's or a clock management tile's input or the clock row's
+/// multiplexers, so a data signal has no way through them to anywhere it
+/// is going, and nothing cheap to take. Three families that match the
+/// names and are left out for that reason: the clock row's `*TEST*`
+/// wires; `CLK_HROW_CK_INT_<n>_`, the row's input from general routing;
+/// and `HCLK_CK_INOUT_<L|R>`, which the horizontal buffers drive.
+fn is_clock_input_wire(name: &str) -> bool {
+    if ["TEST", "CK_INT_", "CK_INOUT"]
+        .iter()
+        .any(|part| name.contains(part))
+    {
+        return false;
+    }
+    [
+        "I2GCLK",
+        "I2IOCLK",
+        "CCIO",
+        "_CK_IN",
+        "VBRK_MUX_CLK",
+        "BUFG_CASC",
+        "CK_MUXED",
+    ]
+    .iter()
+    .any(|part| name.contains(part))
 }
 
 #[cfg(test)]

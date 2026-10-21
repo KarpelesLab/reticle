@@ -1061,6 +1061,11 @@ pub struct PlaceOptions {
     /// What makes the placement timing-driven, or `None` for one that
     /// minimises wirelength alone; see [`PlaceTiming`].
     pub timing: Option<PlaceTiming>,
+    /// The nodes of a fabric's dedicated roads into its global buffers, by
+    /// node id, or empty for none: a global buffer (`gb`) whose input a
+    /// package pin's buffer drives is confined to the buffer sites that
+    /// pad reaches over these alone. See `confine_to_roads`.
+    pub clock_roads: Vec<bool>,
 }
 
 impl Default for PlaceOptions {
@@ -1079,6 +1084,7 @@ impl Default for PlaceOptions {
             moves_per_temperature: None,
             move_effort: 10,
             timing: None,
+            clock_roads: Vec::new(),
         }
     }
 }
@@ -2412,6 +2418,13 @@ pub fn place(
     // legalisation, because the answer is a constraint on every site this
     // pass or the annealer may choose.
     confine_to_reachable(netlist, graph, &sites_by_kind, &mut info, &mut report)?;
+    confine_to_roads(
+        netlist,
+        graph,
+        &sites_by_kind,
+        &mut info,
+        &options.clock_roads,
+    );
     let mut macros = build_macros(netlist, constraints, &mut info);
     let clusters = build_clusters(netlist, graph, &sites_by_kind, &mut info, macros.len());
     report.dedicated = clusters.len();
@@ -3720,6 +3733,96 @@ impl Sweep {
 /// pad, which is how a clock enters the die — is one seed and the answer
 /// is exact; and a kind no site of which is reachable is rejected
 /// whatever the relaxation.
+/// Confines a global buffer a pad drives to the buffer sites the pad's
+/// dedicated road reaches ([`PlaceOptions::clock_roads`]).
+///
+/// General routing reaches every buffer, so nothing here is about whether
+/// a site works; it is about how. On a 7-series a clock-capable pad's
+/// road climbs the buffer cascade from its own clock row, and so reaches
+/// the sixteen buffers of its half of the die and not the other sixteen.
+/// A buffer the placer put in the other half is fed over general routing,
+/// a clock insertion that moves with every placement: on the
+/// ChipWhisperer-Husky Plus the bus clock's buffers went to the half its
+/// road does not reach, and their inputs arrived 4.9 to 10.8 ns after the
+/// pad. Vivado will not place a pad's buffer there at all.
+///
+/// The sweep starts at the pad's pin and follows road nodes and the
+/// bit-less pips that join a wire's pieces, and stops at a candidate
+/// buffer's input. Each input a pad drives narrows the sites the inputs
+/// before it left, so a `BUFGMUX` between two pads keeps the buffers both
+/// reach; an input whose pad reaches none of them, whether a pad on no
+/// road or one whose road and the others' do not meet, narrows nothing.
+/// Only global buffers: a clock manager a pad feeds is reached by the
+/// road only in the pad's own clock region, and nothing measured here
+/// says it should be moved there.
+fn confine_to_roads(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+    roads: &[bool],
+) {
+    if roads.is_empty() {
+        return;
+    }
+    let Some(candidates) = sites_by_kind.get("gb") else {
+        return;
+    };
+    for index in 0..netlist.instances.len() {
+        if netlist.instances[index].kind != "gb" || info[index].fixed.is_some() {
+            continue;
+        }
+        let mut allowed: Vec<usize> = info[index]
+            .allowed
+            .clone()
+            .unwrap_or_else(|| candidates.clone());
+        for pin in &netlist.instances[index].pins {
+            let pin = &netlist.pins[*pin];
+            if pin.output {
+                continue;
+            }
+            let Some(driver) = pin.signal.and_then(|signal| netlist.signals[signal].driver) else {
+                continue;
+            };
+            let driver = &netlist.pins[driver];
+            let Some(pad) = info[driver.instance].fixed else {
+                continue;
+            };
+            let targets: BTreeMap<NodeId, usize> = allowed
+                .iter()
+                .filter_map(|site| graph.sites[*site].pin(&pin.role).map(|node| (node, *site)))
+                .collect();
+            let mut seen: HashSet<NodeId> = graph.sites[pad].pin_nodes(&driver.role).collect();
+            let mut work: Vec<NodeId> = seen.iter().copied().collect();
+            let mut reached: Vec<usize> = Vec::new();
+            while let Some(node) = work.pop() {
+                for pip in graph.outgoing(node) {
+                    let to = graph.pip(*pip).to;
+                    if !seen.insert(to) {
+                        continue;
+                    }
+                    if let Some(site) = targets.get(&to) {
+                        reached.push(*site);
+                    } else if roads.get(to as usize) == Some(&true)
+                        || graph.pip_bits(*pip).is_empty()
+                    {
+                        work.push(to);
+                    }
+                }
+            }
+            if reached.is_empty() {
+                continue;
+            }
+            reached.sort_unstable();
+            reached.dedup();
+            allowed = reached;
+        }
+        if allowed.len() < candidates.len() {
+            info[index].allowed = Some(allowed);
+        }
+    }
+}
+
 fn confine_to_reachable(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -8370,6 +8473,143 @@ mod tests {
             SiteRules::find(&chain(2), &plain).groups.is_empty(),
             "a one-bel tile shares nothing, so there is no budget to keep"
         );
+    }
+
+    /// A row of three tiles, each with a pad and a global buffer, joined
+    /// by general `track` both ways and by a `road` that runs east only
+    /// from a pad to the buffers: a clock pad's own way up the buffer
+    /// cascade, which reaches some buffers and not others.
+    fn roads() -> RoutingGraph {
+        let mut arch = Arch::new("t", "test", 3, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["track", "road", "pad_o", "gin"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut pad = BelDecl::new("pad", "io");
+        pad.pins.push(("din".to_owned(), WireRef::local("pad_o")));
+        tile.bels.push(pad);
+        let mut buffer = BelDecl::new("buf", "gb");
+        buffer.pins.push(("i".to_owned(), WireRef::local("gin")));
+        tile.bels.push(buffer);
+        for (from, to) in [
+            (WireRef::local("pad_o"), "track"),
+            (WireRef::at("track", -1, 0), "track"),
+            (WireRef::at("track", 1, 0), "track"),
+            (WireRef::local("track"), "gin"),
+            (WireRef::local("pad_o"), "road"),
+            (WireRef::at("road", -1, 0), "road"),
+            (WireRef::local("road"), "gin"),
+        ] {
+            tile.pips.push(PipDecl {
+                from,
+                to: WireRef::local(to),
+                bits: vec![crate::fpga::arch::ConfigBit::new(0, 0)],
+            });
+        }
+        arch.tile_types.push(tile);
+        for x in 0..3 {
+            arch.set_tile(x, 0, 0);
+        }
+        arch.build_graph()
+    }
+
+    /// **A pad's buffer is confined to the buffers its road reaches.** The
+    /// pad in the middle tile: general routing reaches all three buffers
+    /// and the road the middle and east ones, so those two are what the
+    /// buffer may take. With no roads named, nothing is confined; and a
+    /// buffer whose driver is not fixed is left alone. Would catch the
+    /// sweep following general routing (all three allowed), not following
+    /// the road past its first wire (the east one missing), or confining a
+    /// buffer no pad fixes; would not catch a real fabric's road named
+    /// wrongly, which is `xray::XrayFabric::clock_roads`' and the Husky
+    /// Plus build's business.
+    #[test]
+    fn a_pads_buffer_is_confined_to_the_buffers_its_road_reaches() {
+        let graph = roads();
+        let netlist = Netlist {
+            instances: vec![
+                Instance {
+                    cell: CellId::from_index(0),
+                    name: "pad".to_owned(),
+                    primitive: "IBUF".to_owned(),
+                    kind: "io".to_owned(),
+                    pins: vec![0],
+                    pin: None,
+                },
+                Instance {
+                    cell: CellId::from_index(1),
+                    name: "buffer".to_owned(),
+                    primitive: "BUFG".to_owned(),
+                    kind: "gb".to_owned(),
+                    pins: vec![1],
+                    pin: None,
+                },
+            ],
+            pins: vec![
+                NetPin {
+                    instance: 0,
+                    port: "O".to_owned(),
+                    bit: 0,
+                    role: "din".to_owned(),
+                    output: true,
+                    signal: Some(0),
+                    constant: None,
+                },
+                NetPin {
+                    instance: 1,
+                    port: "I".to_owned(),
+                    bit: 0,
+                    role: "i".to_owned(),
+                    output: false,
+                    signal: Some(0),
+                    constant: None,
+                },
+            ],
+            signals: vec![Signal {
+                name: "clk".to_owned(),
+                driver: Some(0),
+                sinks: vec![1],
+            }],
+            off_fabric: Vec::new(),
+        };
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        let site = |name: &str| graph.site_index(name).expect("the bel exists");
+        let info = |pad: Option<usize>| -> Vec<Placeable> {
+            [pad, None]
+                .into_iter()
+                .map(|fixed| Placeable {
+                    fixed,
+                    region: None,
+                    macro_index: None,
+                    allowed: None,
+                })
+                .collect()
+        };
+        let road: Vec<bool> = graph.nodes.iter().map(|w| w.name == "road").collect();
+
+        let mut fixed = info(Some(site("X1Y0/pad")));
+        confine_to_roads(&netlist, &graph, &sites_by_kind, &mut fixed, &road);
+        let mut want = vec![site("X1Y0/buf"), site("X2Y0/buf")];
+        want.sort_unstable();
+        assert_eq!(fixed[1].allowed, Some(want));
+
+        let mut unnamed = info(Some(site("X1Y0/pad")));
+        confine_to_roads(&netlist, &graph, &sites_by_kind, &mut unnamed, &[]);
+        assert_eq!(unnamed[1].allowed, None, "no roads, no confinement");
+
+        let mut loose = info(None);
+        confine_to_roads(&netlist, &graph, &sites_by_kind, &mut loose, &road);
+        assert_eq!(loose[1].allowed, None, "a pad no pin fixes has no road");
     }
 
     /// A row of tiles, each one slice of two flip-flops sharing a clock.

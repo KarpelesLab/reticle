@@ -251,6 +251,21 @@ pub struct RouteOptions {
     /// is not held to this: a clock no global buffer drives has no network
     /// to come from.
     pub network_entry: Vec<bool>,
+    /// Pins a signal reaches before its others, by index into
+    /// [`Netlist::pins`], or empty for none; among themselves, and among
+    /// the rest, the order is as it would have been.
+    ///
+    /// A sink's search starts from the whole tree built so far, which is
+    /// what makes it a tree. But a clock-capable pad has a road of its own
+    /// to a global buffer that general routing does not join, and once the
+    /// pad's signal has gone some way over general routing to a data sink,
+    /// reaching the buffer from there is shorter than taking the road from
+    /// the pad. On the ChipWhisperer-Husky Plus the bus clock is also read
+    /// as data (a debug bus), and its buffer and the six other buffers it
+    /// feeds all joined a data branch: 4.9 ns of general routing, 261 pips,
+    /// in front of the clock of the whole register interface. A pin named
+    /// here is routed while the tree is still only the pad.
+    pub first: Vec<bool>,
     /// After the first iteration, reroute only the signals whose route
     /// shares a node, and leave the rest where they are.
     ///
@@ -374,6 +389,7 @@ impl Default for RouteOptions {
             network: Vec::new(),
             network_signals: Vec::new(),
             network_entry: Vec::new(),
+            first: Vec::new(),
             reroute_congested_only: false,
             equivalent: Vec::new(),
             timing: None,
@@ -1474,16 +1490,16 @@ fn route_one(
         .get(signal)
         .copied()
         .unwrap_or(options.network_signals.is_empty());
-    // The most critical sinks first, so that they have the tree's choice
-    // of trunk; with no timing every criticality is zero and the order is
-    // the netlist's.
+    // The pins `RouteOptions::first` names, and then the most critical
+    // sinks first, so that they have the tree's choice of trunk; with no
+    // timing every criticality is zero and the order is the netlist's.
     let mut order: Vec<usize> = (0..terminals.sinks.len()).collect();
+    let first = |sink: usize| options.first.get(terminals.sinks[sink].pin) == Some(&true);
     order.sort_by(|a, b| {
-        let (a, b) = (
-            criticality.get(*a).copied().unwrap_or(0.0),
-            criticality.get(*b).copied().unwrap_or(0.0),
-        );
-        b.total_cmp(&a)
+        let critical = |sink: usize| criticality.get(sink).copied().unwrap_or(0.0);
+        first(*b)
+            .cmp(&first(*a))
+            .then_with(|| critical(*b).total_cmp(&critical(*a)))
     });
     // A net of many sinks starts each search from the part of its tree
     // near the sink rather than from all of it; see `HIGH_FANOUT`.
@@ -2998,6 +3014,128 @@ mod tests {
             "a barred signal went onto the network however cheap it was"
         );
         assert!(kept_off.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// A line of tiles with general `track` both ways, as [`line`] has,
+    /// and a `road` that only a tile's `src0` enters and that only leads
+    /// east and on to `dst1`: a clock pad's own way to its buffer, which
+    /// general routing neither joins nor leaves by.
+    fn road(length: u32) -> RoutingGraph {
+        let mut arch = Arch::new("road", "test", length, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["track", "road", "out0", "in0", "in1"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut src = BelDecl::new("src0", "lut");
+        src.pins.push(("o".to_owned(), WireRef::local("out0")));
+        tile.bels.push(src);
+        for (bel, wire) in [("dst0", "in0"), ("dst1", "in1")] {
+            let mut dst = BelDecl::new(bel, "ff");
+            dst.pins.push(("d".to_owned(), WireRef::local(wire)));
+            tile.bels.push(dst);
+        }
+        let mut bit = 0u32;
+        let mut pip = |from: WireRef, to: &str| {
+            let at = ConfigBit::new(bit / 8, bit % 8);
+            bit += 1;
+            tile.pips.push(PipDecl {
+                from,
+                to: WireRef::local(to),
+                bits: vec![at],
+            });
+        };
+        pip(WireRef::local("out0"), "track");
+        pip(WireRef::at("track", -1, 0), "track");
+        pip(WireRef::at("track", 1, 0), "track");
+        pip(WireRef::local("track"), "in0");
+        pip(WireRef::local("track"), "in1");
+        pip(WireRef::local("out0"), "road");
+        pip(WireRef::at("road", -1, 0), "road");
+        pip(WireRef::local("road"), "in1");
+        arch.tile_types.push(tile);
+        for x in 0..length {
+            arch.set_tile(x, 0, 0);
+        }
+        arch.build_graph()
+    }
+
+    /// [`RouteOptions::first`]: a signal from tile 0 to a data sink in
+    /// tile 5 and a "buffer" in tile 7, which the `road` reaches for 4 and
+    /// the data's branch, once it is there, for 2. Routed data first, the
+    /// buffer joins the branch, as the Husky Plus's bus clock joined its
+    /// debug bus's; named first, it takes the road while the tree is
+    /// only the source, and the data goes its own way. Would catch the
+    /// option ignored or applied to the wrong sinks; would not catch a
+    /// real fabric's pins named wrongly, which is the 7-series flow's
+    /// business and `tests/fpga_xray_bufg.rs`'s.
+    #[test]
+    fn a_pin_named_first_is_reached_before_the_tree_grows() {
+        let graph = road(8);
+        let mut netlist = pairs(1);
+        let pin = netlist.pins.len();
+        netlist.pins.push(NetPin {
+            instance: netlist.instances.len(),
+            port: "D".to_owned(),
+            bit: 0,
+            role: "d".to_owned(),
+            output: false,
+            signal: Some(0),
+            constant: None,
+        });
+        netlist.instances.push(Instance {
+            cell: CellId::from_index(netlist.instances.len()),
+            name: "buffer".to_owned(),
+            primitive: "F".to_owned(),
+            kind: "ff".to_owned(),
+            pins: vec![pin],
+            pin: None,
+        });
+        netlist.signals[0].sinks.push(pin);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["X0Y0/src0", "X5Y0/dst0", "X7Y0/dst1"]
+            .into_iter()
+            .enumerate()
+        {
+            placement.place(index, graph.site_index(site).expect("the bel exists"));
+        }
+        let base: Vec<f32> = graph
+            .nodes
+            .iter()
+            .map(|wire| if wire.name == "road" { 0.5 } else { 1.0 })
+            .collect();
+        let on_the_road = |routing: &Routing| {
+            routing
+                .route(0)
+                .expect("routed")
+                .nodes
+                .iter()
+                .any(|n| graph.wire(*n).name == "road" && graph.wire(*n).tile.0 == 7)
+        };
+
+        let options = RouteOptions {
+            node_base: base.clone(),
+            ..RouteOptions::default()
+        };
+        let (joined, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(
+            !on_the_road(&joined),
+            "routed after the data, the buffer should have joined its branch"
+        );
+
+        let mut first = vec![false; netlist.pins.len()];
+        first[pin] = true;
+        let options = RouteOptions {
+            node_base: base,
+            first,
+            ..RouteOptions::default()
+        };
+        let (taken, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(on_the_road(&taken), "the buffer named first took no road");
+        assert!(taken.verify(&netlist, &graph, &placement).is_empty());
     }
 
     #[test]

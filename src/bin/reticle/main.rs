@@ -3432,6 +3432,9 @@ fn write_xc7_bitstream(
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
     let mut options = place_options(args)?;
+    // A pad's global buffer goes where the pad's own road reaches: see
+    // `PlaceOptions::clock_roads`.
+    options.clock_roads = fabric.clock_roads(&graph);
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let domains = if args.flag("timing-driven") {
@@ -3524,6 +3527,27 @@ fn write_xc7_bitstream(
         // And a clock comes off the network at the pin, not a hop before:
         // see `RouteOptions::network_entry`.
         network_entry: fabric.clock_pin_entries(&graph),
+        // A pad's clock reaches its global buffers before anything else
+        // it drives: see `RouteOptions::first`. Not its clock managers:
+        // the pad's road reaches only those of its own clock region, and
+        // on the Husky Plus the bus clock's other was a PLL across the
+        // die, which, routed first, laid a trunk of general routing past
+        // the buffer column that all four buffers then joined.
+        first: netlist
+            .pins
+            .iter()
+            .map(|pin| {
+                let from_a_pad = pin
+                    .signal
+                    .and_then(|signal| netlist.signals[signal].driver)
+                    .is_some_and(|driver| {
+                        netlist.instances[netlist.pins[driver].instance].kind == "io"
+                    });
+                from_a_pad
+                    && netlist.instances[pin.instance].kind == "gb"
+                    && (pin.role == "i" || pin.role == "i1")
+            })
+            .collect(),
         on_iteration: laps.on.then_some(print_iteration as fn(&_)),
         // See `xray::ASTAR_WEIGHT`. After the first pass only the signals
         // that share a node are rerouted, as the UltraScale+ flow does: a

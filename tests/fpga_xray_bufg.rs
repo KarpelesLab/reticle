@@ -34,6 +34,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use reticle::fpga::xc7;
 use reticle::fpga::xray::{XrayDatabase, XrayOptions};
@@ -97,13 +98,20 @@ fn buffer_configurations(features: &[(String, String)]) -> BTreeMap<String, Vec<
     out
 }
 
-#[test]
-fn the_husky_clock_buffers_are_the_ones_vivado_wrote() {
-    let Some(root) = chipdb() else { return };
+/// `clock_buffers.v` built by the command line and decoded, once for the
+/// tests here: its features, or `None` when there is nothing to build it
+/// with.
+fn built() -> Option<&'static [(String, String)]> {
+    static BUILT: OnceLock<Option<Vec<(String, String)>>> = OnceLock::new();
+    BUILT.get_or_init(build).as_deref()
+}
+
+fn build() -> Option<Vec<(String, String)>> {
+    let root = chipdb()?;
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/husky");
     if !dir.join("clock_buffers.v").is_file() {
         eprintln!("skipped: `testdata/` is not in the published crate");
-        return;
+        return None;
     }
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("husky-clock-buffers");
     let _ = std::fs::remove_dir_all(&out);
@@ -139,8 +147,13 @@ fn the_husky_clock_buffers_are_the_ones_vivado_wrote() {
     let frames = xc7::FrameData::from_stream(part.layout.clone(), read.frames).unwrap();
     let decoded = db.decode(&DiskFiles, &frames).unwrap();
     assert_eq!(decoded.unexplained, 0, "{}", decoded.to_text());
+    Some(decoded.features)
+}
 
-    let configurations = buffer_configurations(&decoded.features);
+#[test]
+fn the_husky_clock_buffers_are_the_ones_vivado_wrote() {
+    let Some(features) = built() else { return };
+    let configurations = buffer_configurations(features);
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for names in configurations.values() {
         *counts.entry(names.join(" ")).or_default() += 1;
@@ -168,5 +181,60 @@ fn the_husky_clock_buffers_are_the_ones_vivado_wrote() {
     assert!(
         counts.get(bufg).copied().unwrap_or(0) >= 2,
         "{configurations:#?}"
+    );
+}
+
+/// **The 96 MHz clock reaches its buffer the way Vivado's does**: from
+/// `D4`, a clock-capable pin, through the clock management tile beside
+/// its bank and along the clock row to the buffer column, on wires that
+/// go nowhere else, and not over general routing.
+///
+/// The features are the ones NewAE's own image sets for the same pin, read
+/// off it through this database (`HCLK_CMT_L_X106Y78`, `CLK_HROW_TOP_R_X60Y78`):
+/// the pad's `CCIO0` marked active and used, taken onto the row's
+/// `CK_IN0`, and the row's `CK_IN_R0` marked active where it arrives. Which
+/// buffer cascade (`CASCO<n>`) it then takes follows from which buffer the
+/// placer chose, and that is not asked.
+///
+/// It would catch the clock going from its pad over general routing, which
+/// it did, on this design and on the ChipWhisperer-Husky Plus: the router's
+/// distance estimate charged the dedicated road's first step a full wire a
+/// tile while general routing got three tiles closer, so the road was never
+/// tried (`XrayFabric::node_costs`). On the Plus that was 4.4 to 7.7 ns of
+/// clock insertion that moved with every placement, on a bus synchronous
+/// to the microcontroller driving it, and builds failed to read back their
+/// registers. It would also catch the road's enables left unset, which
+/// leaves it undriven. It would not catch a road that is longer than it
+/// need be, nor say anything about timing. Nor would it catch the second
+/// half of what the Plus needed, the pad's buffers routed before its data
+/// readers (`RouteOptions::first`): given a flip-flop reading the pad as
+/// data, this design passed with that order taken away, its data branch
+/// going nowhere near the buffer column. The router's own
+/// `a_pin_named_first_is_reached_before_the_tree_grows` catches that.
+#[test]
+fn the_husky_clock_reaches_its_buffer_on_the_clock_pins_own_road() {
+    let Some(features) = built() else { return };
+    let at = |tile: &str| -> Vec<&str> {
+        features
+            .iter()
+            .filter(|(t, _)| t == tile)
+            .map(|(_, f)| f.as_str())
+            .collect()
+    };
+    let cmt = at("HCLK_CMT_L_X106Y78");
+    for feature in [
+        "HCLK_CMT_CCIO0_ACTIVE",
+        "HCLK_CMT_CCIO0_USED",
+        "HCLK_CMT_CK_IN0.HCLK_CMT_CCIO0",
+    ] {
+        assert!(cmt.contains(&feature), "{feature} missing: {cmt:?}");
+    }
+    let row = at("CLK_HROW_TOP_R_X60Y78");
+    assert!(row.contains(&"CLK_HROW_CK_IN_R0_ACTIVE"), "{row:?}");
+    assert!(
+        row.iter()
+            .any(|f| f.starts_with("CLK_HROW_TOP_R_CK_BUFG_CASCO")
+                && f.ends_with(".CLK_HROW_CK_IN_R0")),
+        "the row's input goes on to no buffer: {row:?}"
     );
 }

@@ -628,3 +628,57 @@ fn the_clock_network_is_told_from_the_routing_that_crosses_it() {
         );
     }
 }
+
+/// The roads into a global buffer, by the names on the `xc7a100t` road
+/// from the ChipWhisperer-Husky Plus's clock pad to its buffer, and the
+/// wires that share their spelling without being on them. Would catch
+/// the general-routing entry to the clock row (`CLK_HROW_CK_INT_0_1`) or
+/// the horizontal buffers' `HCLK_CK_INOUT_L0` made cheap — a way for data
+/// onto clock wires — and a link of the road left out of the set; would
+/// not catch a road this list does not walk.
+#[test]
+fn the_roads_into_a_buffer_are_told_from_what_shares_their_names() {
+    for name in [
+        "RIOI_I2GCLK_TOP0",
+        "LIOI_I2GCLK_BOT1",
+        "HCLK_IOI_I2IOCLK_TOP0",
+        "HCLK_TERM_CCIO0",
+        "HCLK_INT_INTERFACE_CCIO0",
+        "HCLK_CCIO0",
+        "HCLK_FIFO_CCIO0",
+        "HCLK_CMT_CCIO0",
+        "HCLK_CMT_CK_IN0",
+        "HCLK_VBRK_MUX_CLK0",
+        "HCLK_CLB_CK_IN0",
+        "HCLK_CK_IN0",
+        "HCLK_BRAM_CK_IN0",
+        "HCLK_DSP_CK_IN0",
+        "HCLK_INT_INTERFACE_CK_IN0",
+        "CLK_HROW_CK_IN_R0",
+        "CLK_HROW_TOP_R_CK_BUFG_CASCO0",
+        "CLK_HROW_BOT_R_CK_BUFG_CASCIN1",
+        "CLK_FEED_R_CK_BUFG_CASC0",
+        "CLK_BUFG_REBUF_R_CK_BUFG_CASC0",
+        "CLK_BUFG_TOP_R_CK_MUXED10",
+    ] {
+        assert!(super::is_clock_input_wire(name), "{name} is on the road");
+    }
+    for name in [
+        "CLK_HROW_CK_INT_0_1",
+        "HCLK_CK_INOUT_L0",
+        "CLK_HROW_CK_IN_L_TEST_IN0",
+        "CLK_BUFG_BUFGCTRL5_I0",
+        "CLK_BUFG_IMUX27_0",
+        "CLK_BUFG_R_FBG_OUT3",
+        "HCLK_CK_BUFHCLK4",
+        "CLK_HROW_CK_MUX_OUT_L4",
+        "LOGIC_OUTS18",
+        "SL1END0",
+        "IMUX_L16",
+    ] {
+        assert!(
+            !super::is_clock_input_wire(name),
+            "{name} is not on the road"
+        );
+    }
+}
