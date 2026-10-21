@@ -2533,8 +2533,218 @@ pub fn place(
         });
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
+    seat_buffer_chains(netlist, graph, &sites_by_kind, &info, &mut placement);
     report.work = WORK.with(Cell::get);
     Ok((placement, report))
+}
+
+/// Moves global buffers that feed one another to sites the first's output
+/// reaches the second's input from directly.
+///
+/// A global buffer's output reaches another buffer's input only through
+/// the cascade between neighbouring buffers — on a 7-series,
+/// `CLK_BUFG_R_FBG_OUT<n>` into the next one's `I0` — or else over general
+/// routing, or through a free buffer between the two configured to pass
+/// the clock on. Placed apart, the router takes general routing: on the
+/// ChipWhisperer-Husky Plus a logic analyser's two output buffers were
+/// joined by 164 pips, and its third clock multiplexer took the trace
+/// clock over 401 pips and 24.8 ns, and neither clock worked on the part.
+/// No placement cost sees it: the buffers sit in one column and their
+/// wirelength is nothing. So after the anneal, each join of one buffer's
+/// output to another's input is made one hop where it can be — a site
+/// whose output pin reaches the next's input over bit-less pips and a
+/// single programmable one, which is what the graph says a cascade is.
+/// An unmet join moves one of its ends to a free site, honouring its
+/// allowed sites, and only if every join already met at that end stays
+/// met. One join at a time and not a seating of every join at once: on
+/// the Plus nine buffers are joined by eight, one of them to three others,
+/// and a site has two neighbours, so no seating meets them all and a
+/// search for one moved nothing. Returns how many moves were made.
+fn seat_buffer_chains(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &[Placeable],
+    placement: &mut Placement,
+) -> usize {
+    let Some(sites) = sites_by_kind.get("gb") else {
+        return 0;
+    };
+    // The joins: (driving buffer, its output's role, driven buffer, the
+    // input's role).
+    let mut joins: Vec<(usize, String, usize, String)> = Vec::new();
+    for (sink, inst) in netlist.instances.iter().enumerate() {
+        if inst.kind != "gb" {
+            continue;
+        }
+        for pin in &inst.pins {
+            let pin = &netlist.pins[*pin];
+            if pin.output || !(pin.role == "i" || pin.role == "i1") {
+                continue;
+            }
+            let Some(driver) = pin.signal.and_then(|s| netlist.signals[s].driver) else {
+                continue;
+            };
+            let from = &netlist.pins[driver];
+            if from.instance != sink && netlist.instances[from.instance].kind == "gb" {
+                joins.push((from.instance, from.role.clone(), sink, pin.role.clone()));
+            }
+        }
+    }
+    if joins.is_empty() {
+        return 0;
+    }
+    // What a buffer's output reaches in one hop — bit-less pips, one
+    // programmable pip, bit-less pips — from every buffer site, for each
+    // output role a join leaves by.
+    let mut hops: HashMap<(usize, String), HashSet<NodeId>> = HashMap::new();
+    for (_, out, _, _) in &joins {
+        for from in sites {
+            if hops.contains_key(&(*from, out.clone())) {
+                continue;
+            }
+            let mut seen: HashSet<(NodeId, bool)> = HashSet::new();
+            let mut work: Vec<(NodeId, bool)> = graph.sites[*from]
+                .pin_nodes(out)
+                .map(|n| (n, false))
+                .collect();
+            let mut reached = HashSet::new();
+            while let Some((node, used)) = work.pop() {
+                if !seen.insert((node, used)) || seen.len() > 200_000 {
+                    continue;
+                }
+                if used {
+                    reached.insert(node);
+                }
+                for pip in graph.outgoing(node) {
+                    let next = graph.pip(*pip).to;
+                    if graph.pip_bits(*pip).is_empty() {
+                        work.push((next, used));
+                    } else if !used {
+                        work.push((next, true));
+                    }
+                }
+            }
+            hops.insert((*from, out.clone()), reached);
+        }
+    }
+    let one_hop = |from: usize, out: &str, to: usize, role: &str| -> bool {
+        hops.get(&(from, out.to_owned())).is_some_and(|reached| {
+            graph.sites[to]
+                .pin(role)
+                .is_some_and(|node| reached.contains(&node))
+        })
+    };
+    // One join at a time: an unmet one is met by moving either end to a
+    // free site one hop from the other, if every join already met at the
+    // end that moves stays met. Repeated while that moves anything.
+    let mut moved = 0usize;
+    let movable = |cell: usize, site: usize, placement: &Placement| {
+        info[cell].fixed.is_none()
+            && info[cell].may_take(site)
+            && placement.instance_at(site).is_none()
+    };
+    for _ in 0..4 {
+        let mut changed = false;
+        for (a, out, b, role) in &joins {
+            let (Some(sa), Some(sb)) = (placement.site_of(*a), placement.site_of(*b)) else {
+                continue;
+            };
+            if one_hop(sa, out, sb, role) {
+                continue;
+            }
+            // The joins at `cell` other than this one that are met now, and
+            // whether each would still be with `cell` at `site`.
+            let keeps = |cell: usize, site: usize, placement: &Placement| -> bool {
+                joins.iter().all(|(x, xo, y, yr)| {
+                    if (*x, *y) == (*a, *b) || (*x != cell && *y != cell) {
+                        return true;
+                    }
+                    let (Some(sx), Some(sy)) = (placement.site_of(*x), placement.site_of(*y))
+                    else {
+                        return true;
+                    };
+                    if !one_hop(sx, xo, sy, yr) {
+                        return true;
+                    }
+                    let (nx, ny) = if *x == cell { (site, sy) } else { (sx, site) };
+                    one_hop(nx, xo, ny, yr)
+                })
+            };
+            let mut target = None;
+            for site in sites {
+                if movable(*b, *site, placement)
+                    && one_hop(sa, out, *site, role)
+                    && keeps(*b, *site, placement)
+                {
+                    target = Some((*b, *site));
+                    break;
+                }
+            }
+            if target.is_none() {
+                for site in sites {
+                    if movable(*a, *site, placement)
+                        && one_hop(*site, out, sb, role)
+                        && keeps(*a, *site, placement)
+                    {
+                        target = Some((*a, *site));
+                        break;
+                    }
+                }
+            }
+            if let Some((cell, site)) = target {
+                placement.unplace(cell);
+                placement.place(cell, site);
+                moved += 1;
+                changed = true;
+                continue;
+            }
+            // Neither end alone: both, to a free pair one hop apart, if
+            // neither has another join met now.
+            let alone = |cell: usize| {
+                joins.iter().all(|(x, xo, y, yr)| {
+                    (*x, *y) == (*a, *b)
+                        || (*x != cell && *y != cell)
+                        || match (placement.site_of(*x), placement.site_of(*y)) {
+                            (Some(sx), Some(sy)) => !one_hop(sx, xo, sy, yr),
+                            _ => true,
+                        }
+                })
+            };
+            if !(alone(*a) && alone(*b)) {
+                continue;
+            }
+            // Free, or held by one of the two that move.
+            let open = |cell: usize, site: usize| {
+                info[cell].fixed.is_none()
+                    && info[cell].may_take(site)
+                    && placement
+                        .instance_at(site)
+                        .is_none_or(|other| other == *a || other == *b)
+            };
+            let pair = sites.iter().find_map(|from| {
+                if !open(*a, *from) {
+                    return None;
+                }
+                sites
+                    .iter()
+                    .find(|to| *to != from && open(*b, **to) && one_hop(*from, out, **to, role))
+                    .map(|to| (*from, *to))
+            });
+            if let Some((from, to)) = pair {
+                placement.unplace(*a);
+                placement.unplace(*b);
+                placement.place(*a, from);
+                placement.place(*b, to);
+                moved += 2;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    moved
 }
 
 /// Fixes every instance whose site follows from a fixed neighbour through
@@ -8925,6 +9135,157 @@ mod tests {
         assert_eq!(info[4].allowed, within("lut", 39, 5), "pad1's table");
         assert_eq!(info[5].allowed, within("ff", 39, 5), "pad1's register");
         assert_eq!(info[6].allowed, None, "pad2 has no input delay");
+    }
+
+    /// **Buffers that feed one another are seated a cascade apart.** One
+    /// tile of four global buffer sites, each one's output reaching the
+    /// next's input over a single programmable pip — the cascade — and
+    /// every input from every output over a shared general track, two
+    /// pips. A buffer feeding another, legalised two sites apart, is moved
+    /// so the join is the one pip; placed one apart already, nothing moves;
+    /// and a buffer a table drives is left where it is. Would catch the
+    /// two-pip track taken for a join (nothing moved), the search
+    /// returning a seating that breaks the join, or a buffer moved that no
+    /// buffer drives; would not catch a real fabric's cascade read wrongly,
+    /// which the Husky Plus build exercises.
+    #[test]
+    fn buffers_that_feed_one_another_are_seated_a_cascade_apart() {
+        let mut arch = Arch::new("t", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        tile.wires.push(WireDecl {
+            name: "track".to_owned(),
+            dx: 0,
+            dy: 0,
+        });
+        let mut bit = 0u32;
+        for n in 0..4 {
+            for name in [format!("in{n}"), format!("out{n}")] {
+                tile.wires.push(WireDecl { name, dx: 0, dy: 0 });
+            }
+            let mut buffer = BelDecl::new(format!("buf{n}"), "gb");
+            buffer
+                .pins
+                .push(("i".to_owned(), WireRef::local(format!("in{n}"))));
+            buffer
+                .pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(buffer);
+        }
+        let mut pip = |from: String, to: String| {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: vec![crate::fpga::arch::ConfigBit::new(bit / 8, bit % 8)],
+            });
+            bit += 1;
+        };
+        for n in 0..4 {
+            if n < 3 {
+                pip(format!("out{n}"), format!("in{}", n + 1));
+            }
+            pip(format!("out{n}"), "track".to_owned());
+            pip("track".to_owned(), format!("in{n}"));
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+        let site = |n: usize| graph.site_index(&format!("X0Y0/buf{n}")).unwrap();
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, s) in graph.sites.iter().enumerate() {
+            sites_by_kind.entry(s.kind.clone()).or_default().push(index);
+        }
+
+        // c0 (a buffer) -> c1 (a buffer); c2 (a table, off-fabric here) -> c3.
+        let pin = |instance: usize, role: &str, output: bool, signal: usize| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let instance = |i: usize, kind: &str, pins: Vec<usize>| Instance {
+            cell: CellId::from_index(i),
+            name: format!("c{i}"),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(0, "gb", vec![0]),
+                instance(1, "gb", vec![1]),
+                instance(2, "lut", vec![2]),
+                instance(3, "gb", vec![3]),
+            ],
+            pins: vec![
+                pin(0, "o", true, 0),
+                pin(1, "i", false, 0),
+                pin(2, "o", true, 1),
+                pin(3, "i", false, 1),
+            ],
+            signals: vec![
+                Signal {
+                    name: "a".to_owned(),
+                    driver: Some(0),
+                    sinks: vec![1],
+                },
+                Signal {
+                    name: "b".to_owned(),
+                    driver: Some(2),
+                    sinks: vec![3],
+                },
+            ],
+            off_fabric: Vec::new(),
+        };
+        let info: Vec<Placeable> = (0..4)
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+            })
+            .collect();
+        let joined = |placement: &Placement| {
+            let (a, b) = (placement.site_of(0).unwrap(), placement.site_of(1).unwrap());
+            graph.sites[b]
+                .name
+                .trim_start_matches("X0Y0/buf")
+                .parse::<usize>()
+                .unwrap()
+                == graph.sites[a]
+                    .name
+                    .trim_start_matches("X0Y0/buf")
+                    .parse::<usize>()
+                    .unwrap()
+                    + 1
+        };
+
+        let mut apart = Placement::new(4, graph.sites.len());
+        apart.place(0, site(0));
+        apart.place(1, site(2));
+        apart.place(3, site(1));
+        let moved = seat_buffer_chains(&netlist, &graph, &sites_by_kind, &info, &mut apart);
+        assert!(moved > 0, "nothing moved");
+        assert!(
+            joined(&apart),
+            "{:?} {:?}",
+            apart.site_of(0),
+            apart.site_of(1)
+        );
+        assert_eq!(apart.site_of(3), Some(site(1)), "a table's buffer moved");
+
+        let mut beside = Placement::new(4, graph.sites.len());
+        beside.place(0, site(1));
+        beside.place(1, site(2));
+        beside.place(3, site(0));
+        assert_eq!(
+            seat_buffer_chains(&netlist, &graph, &sites_by_kind, &info, &mut beside),
+            0
+        );
+        assert_eq!(beside.site_of(1), Some(site(2)));
     }
 
     /// A row of tiles, each one slice of two flip-flops sharing a clock.
