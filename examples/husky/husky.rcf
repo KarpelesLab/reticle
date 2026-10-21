@@ -188,3 +188,30 @@ set_false_path -to target_io3
 set_false_path -to target_io4
 set_false_path -to target_nRST
 set_false_path -to target_poweron
+
+# Not NewAE's, and measured on a Husky Plus rather than read from their
+# constraints, which say nothing of it. The SAM3U launches the bus's
+# strobes and address on the very edge of clk_usb that `usb_reg_main` must
+# capture them on: caught a cycle late, `reg_read` rises a cycle late and
+# the read data reaches the pins after NRD has risen. So each must reach its
+# register before the clock does, and in SDC terms arrives a period (10.4)
+# plus the SAM3U's clock to output after the edge before. Builds whose NRD
+# reached `reg_read` 1.64, 2.95 and 3.49 ns ahead of its clock read their
+# registers; one 0.19 ns behind it read nothing, and read once its input
+# registers alone were moved beside their pads (2026-10-21). The margin
+# is 3.0 ns, not the 2.0 first asked: at 2.0 the placer's wire estimate
+# (0.035 ns a tile) allowed a register 27 tiles from its pad, and the
+# routed estimate put one such connection, write data bit 7, at 3.68 ns
+# and behind the clock, and that bit was the one written wrong. At 3.0 the
+# budget is spent before any wire, and each register is held to the sites
+# nearest its pad.
+#
+# The write data too, which was first left out on the reading that
+# `reg_datao` takes it a cycle after NWE's rise is seen and so has time:
+# the build with the strobes and address constrained wrote bit 1 as a one
+# where a zero was written, in SAMPLES and SAD_THRESHOLD, and its bit 1
+# reached `reg_datao` 4.27 ns behind the clock, the latest of the eight by
+# 0.7 ns; the build placed before any of this, which also failed SAMPLES,
+# had bit 1 the latest too. Every bit that arrived ahead of the clock was
+# written right in every build.
+set_input_delay -clock clk_usb 13.4 USB_RDn USB_WRn USB_ALEn USB_Addr USB_Data
