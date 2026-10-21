@@ -2460,7 +2460,7 @@ pub fn place(
             &sites_by_kind,
             &shared,
             options,
-            &[],
+            &Weights::default(),
             &mut placement,
             &mut report,
         );
@@ -2491,7 +2491,10 @@ pub fn place(
                 hpwl: hpwl(netlist, graph, &placement),
                 ..round
             });
-            let weights = timing_weights(&critical, timing);
+            let weights = Weights {
+                nets: vec![16; netlist.signals.len()],
+                pins: connection_weights(&critical.pins, timing),
+            };
             if options.anneal {
                 anneal(
                     netlist,
@@ -5099,6 +5102,96 @@ struct Churn {
     touched: Vec<usize>,
     /// Where each instance of the move in hand came from, for [`undo`].
     previous: Vec<(usize, Option<usize>)>,
+    /// The critical connections' pull, for a timing-driven placement:
+    /// empty for a wirelength one.
+    pull: Pull,
+}
+
+/// What a timing-driven anneal charges on top of the wirelength
+/// ([`PlaceTiming`]): each critical connection's weight times its tile
+/// distance, driver to sink. A signal's box is no measure of one late
+/// connection on it — the box of a wide bus is the die whatever is moved —
+/// and this is, which is why it is per connection, as VPR's timing cost
+/// is, and not a weight on the box.
+#[derive(Default)]
+struct Pull {
+    /// Per netlist pin, for a sink: its connection's weight.
+    weight: Vec<u32>,
+    /// Per instance, the weighted sink pins on it and the weighted sink
+    /// pins it drives: the connections a move of it changes.
+    touches: Vec<Vec<usize>>,
+    /// The connections the move in hand touches, without repeats.
+    touched: Vec<usize>,
+}
+
+/// The weights an anneal runs with: per signal for its box (empty for one
+/// each) and per sink pin for its connection (empty for none).
+#[derive(Default)]
+struct Weights {
+    nets: Vec<u32>,
+    pins: Vec<u32>,
+}
+
+impl Pull {
+    /// The pull of `weight`'s connections over `netlist`.
+    fn new(netlist: &Netlist, weight: &[u32]) -> Pull {
+        let mut touches = vec![Vec::new(); netlist.instances.len()];
+        if weight.iter().any(|w| *w > 0) {
+            for signal in &netlist.signals {
+                let Some(driver) = signal.driver else {
+                    continue;
+                };
+                for sink in &signal.sinks {
+                    if weight.get(*sink).copied().unwrap_or(0) == 0 {
+                        continue;
+                    }
+                    touches[netlist.pins[driver].instance].push(*sink);
+                    touches[netlist.pins[*sink].instance].push(*sink);
+                }
+            }
+        }
+        Pull {
+            weight: weight.to_vec(),
+            touches,
+            touched: Vec::new(),
+        }
+    }
+
+    /// What one connection costs where its two ends are now.
+    fn cost_of(
+        &self,
+        netlist: &Netlist,
+        graph: &RoutingGraph,
+        placement: &Placement,
+        sink: usize,
+    ) -> u64 {
+        let weight = self.weight.get(sink).copied().unwrap_or(0);
+        if weight == 0 {
+            return 0;
+        }
+        let Some(driver) = netlist.pins[sink]
+            .signal
+            .and_then(|s| netlist.signals[s].driver)
+        else {
+            return 0;
+        };
+        let tile = |pin: usize| {
+            placement
+                .site_of(netlist.pins[pin].instance)
+                .map(|s| graph.sites[s].tile)
+        };
+        match (tile(driver), tile(sink)) {
+            (Some(a), Some(b)) => u64::from(weight) * manhattan(a, b),
+            _ => 0,
+        }
+    }
+
+    /// Every weighted connection's cost, summed.
+    fn total(&self, netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u64 {
+        (0..self.weight.len())
+            .map(|pin| self.cost_of(netlist, graph, placement, pin))
+            .sum()
+    }
 }
 
 impl Churn {
@@ -5118,7 +5211,13 @@ impl Churn {
                 .collect(),
             touched: Vec::new(),
             previous: Vec::new(),
+            pull: Pull::default(),
         }
+    }
+
+    /// The anneal's cost: the boxes, and the critical connections' pull.
+    fn total(&self, netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u64 {
+        self.spans.total() + self.pull.total(netlist, graph, placement)
     }
 }
 
@@ -5338,7 +5437,7 @@ fn anneal(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     shared: &SiteRules,
     options: &PlaceOptions,
-    weights: &[u32],
+    weights: &Weights,
     placement: &mut Placement,
     report: &mut PlacementReport,
 ) {
@@ -5386,7 +5485,8 @@ fn anneal(
     // cost change a move makes *here*.
     let mut samples = Vec::new();
     let mut churn = Churn::new(netlist, graph, placement);
-    churn.spans.weight = weights.to_vec();
+    churn.spans.weight.clone_from(&weights.nets);
+    churn.pull = Pull::new(netlist, &weights.pins);
     for _ in 0..movable.len().clamp(20, 100_000) {
         if let Some(candidate) = propose(
             netlist,
@@ -5401,13 +5501,13 @@ fn anneal(
             placement,
             probe_reach,
         ) {
-            samples.push(apply(graph, &mut churn, placement, &candidate));
-            undo(graph, &mut churn, placement);
+            samples.push(apply(netlist, graph, &mut churn, placement, &candidate));
+            undo(netlist, graph, &mut churn, placement);
         }
     }
     let mut temperature = start_temperature(&samples, options.start_acceptance);
 
-    let mut current = churn.spans.total();
+    let mut current = churn.total(netlist, graph, placement);
     let mut best = placement.clone();
     let mut best_cost = current;
     let mut stalled = 0u32;
@@ -5463,18 +5563,18 @@ fn anneal(
                 continue;
             }
             step.tried += 1;
-            let delta = apply(graph, &mut churn, placement, &candidate);
+            let delta = apply(netlist, graph, &mut churn, placement, &candidate);
             if delta <= 0.0 || rng.unit() * (temperature + delta) < temperature {
                 step.accepted += 1;
             } else {
-                undo(graph, &mut churn, placement);
+                undo(netlist, graph, &mut churn, placement);
             }
         }
         // Recounted, not accumulated: a few million `+= delta` on an f64
         // drift, and both the exit criterion and the best-so-far compare
         // against this number. The recount is one pass over the signals
         // per temperature, which is nothing beside the moves.
-        current = churn.spans.total();
+        current = churn.total(netlist, graph, placement);
         step.cost = current;
         let rate = if step.tried == 0 {
             0.0
@@ -5750,13 +5850,20 @@ fn propose(
 /// Where each instance came from is recorded in [`Churn::previous`], which
 /// is what [`undo`] puts back; the wirelength comes out of [`Spans`] and
 /// not out of a rescan of the nets.
-fn apply(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement, m: &Move) -> f64 {
+fn apply(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    churn: &mut Churn,
+    placement: &mut Placement,
+    m: &Move,
+) -> f64 {
     churn.previous.clear();
     for (instance, _) in m {
         let was = placement.site_of(*instance);
         churn.previous.push((*instance, was));
     }
     retile(
+        netlist,
         graph,
         churn,
         placement,
@@ -5765,11 +5872,11 @@ fn apply(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement, m: 
 }
 
 /// Puts back what [`apply`] moved.
-fn undo(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement) {
+fn undo(netlist: &Netlist, graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement) {
     // `previous` is borrowed from the same value `retile` writes into, so
     // the plan is taken out and put back rather than aliased.
     let back = std::mem::take(&mut churn.previous);
-    let _ = retile(graph, churn, placement, back.iter().copied());
+    let _ = retile(netlist, graph, churn, placement, back.iter().copied());
     churn.previous = back;
 }
 
@@ -5782,11 +5889,30 @@ fn undo(graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement) {
 /// may be swapping places and a box told of the arrival first would
 /// believe a column still holds a pin it has lost.
 fn retile(
+    netlist: &Netlist,
     graph: &RoutingGraph,
     churn: &mut Churn,
     placement: &mut Placement,
     plan: impl Iterator<Item = (usize, Option<usize>)> + Clone,
 ) -> f64 {
+    // The critical connections the move changes, priced before it.
+    churn.pull.touched.clear();
+    if !churn.pull.weight.is_empty() {
+        for (instance, _) in plan.clone() {
+            for index in 0..churn.pull.touches[instance].len() {
+                let pin = churn.pull.touches[instance][index];
+                if !churn.pull.touched.contains(&pin) {
+                    churn.pull.touched.push(pin);
+                }
+            }
+        }
+    }
+    let pulled_before: u64 = churn
+        .pull
+        .touched
+        .iter()
+        .map(|pin| churn.pull.cost_of(netlist, graph, placement, *pin))
+        .sum();
     churn.touched.clear();
     for (instance, _) in plan.clone() {
         for (signal, _) in &churn.carried[instance] {
@@ -5824,7 +5950,13 @@ fn retile(
     }
     let after: u64 = churn.touched.iter().map(|s| churn.spans.cost_of(*s)).sum();
     count(|work| &mut work.cost_pins, pins);
-    after as f64 - before as f64
+    let pulled_after: u64 = churn
+        .pull
+        .touched
+        .iter()
+        .map(|pin| churn.pull.cost_of(netlist, graph, placement, *pin))
+        .sum();
+    (after + pulled_after) as f64 - (before + pulled_before) as f64
 }
 
 // ---------------------------------------------------------------------------
@@ -5890,6 +6022,16 @@ pub struct PlaceTiming {
     pub capture: Vec<f64>,
     /// Per instance, the domain its paths start and end in.
     pub domain: Vec<PathDomain>,
+    /// Per instance, how many periods a path ending at it may take: one,
+    /// or what a multicycle constraint says. Empty is one for every
+    /// instance.
+    pub cycles: Vec<u32>,
+    /// Per instance, whether paths starting at it are not timed (a false
+    /// path from it), and whether paths ending at it are not. Empty is
+    /// every one timed.
+    pub untimed_from: Vec<bool>,
+    /// See [`PlaceTiming::untimed_from`].
+    pub untimed_to: Vec<bool>,
     /// Each domain's period, in nanoseconds.
     pub periods: Vec<f64>,
     /// A connection's delay: `wire.0 + wire.1 * tiles`, plus `wire.2 *
@@ -5903,6 +6045,13 @@ pub struct PlaceTiming {
     pub weight: f64,
     /// How sharply the weight falls off below fully critical.
     pub exponent: i32,
+    /// Per netlist pin, for a `Through` input: which of its instance's
+    /// `Through` outputs it reaches, bit `j` for the `j`th in the
+    /// instance's pin order. Empty, or a pin past its end, reaches them
+    /// all. A `LUT6_2` holds two functions, and an input only one of them
+    /// reads is no path to the other's output: taken as one, the
+    /// analysis finds paths that are not there.
+    pub reaches: Vec<u8>,
     /// Per instance, whether the timing rounds leave it on the site the
     /// wirelength placement gave it. For cells whose connections have few
     /// ways to be made at all, which moving can leave with none: see
@@ -5989,7 +6138,7 @@ fn estimate_timing(
     placement: &Placement,
     timing: &PlaceTiming,
     order: &[usize],
-) -> (Vec<f64>, TimingRound) {
+) -> (Criticality, TimingRound) {
     let pins = netlist.pins.len();
     let tile = |instance: usize| placement.site_of(instance).map(|s| graph.sites[s].tile);
     // Each input pin's connection delay, from its driver.
@@ -6012,12 +6161,27 @@ fn estimate_timing(
         }
     }
     let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
+    let reaches = |pin: usize, j: usize| {
+        timing
+            .reaches
+            .get(pin)
+            .is_none_or(|mask| j >= 8 || mask & (1 << j) != 0)
+    };
+    let through_outputs = |inst: &Instance| {
+        inst.pins
+            .iter()
+            .copied()
+            .filter(|p| netlist.pins[*p].output && class(*p) == PinTiming::Through)
+            .collect::<Vec<usize>>()
+            .into_iter()
+    };
     let driver = |pin: usize| {
         netlist.pins[pin]
             .signal
             .and_then(|s| netlist.signals[s].driver)
     };
     let mut critical = vec![0.0f64; netlist.signals.len()];
+    let mut pin_critical = vec![0.0f64; pins];
     let mut longest_ps = Vec::with_capacity(timing.periods.len());
     for (domain, period) in timing.periods.iter().enumerate() {
         let here = |instance: usize| match timing.domain.get(instance) {
@@ -6025,10 +6189,11 @@ fn estimate_timing(
             Some(PathDomain::Every) => true,
             _ => false,
         };
+        let flag = |flags: &[bool], instance: usize| flags.get(instance).copied().unwrap_or(false);
         // Forwards: every output pin's arrival.
         let mut arrival = vec![f64::NEG_INFINITY; pins];
         for (index, inst) in netlist.instances.iter().enumerate() {
-            if !here(index) {
+            if !here(index) || flag(&timing.untimed_from, index) {
                 continue;
             }
             for pin in &inst.pins {
@@ -6042,35 +6207,54 @@ fn estimate_timing(
         };
         for &index in order {
             let inst = &netlist.instances[index];
-            let latest = inst
-                .pins
-                .iter()
-                .filter(|p| !netlist.pins[**p].output && class(**p) == PinTiming::Through)
-                .map(|p| input_arrival(*p, &arrival))
-                .fold(f64::NEG_INFINITY, f64::max);
-            if latest == f64::NEG_INFINITY {
-                continue;
-            }
-            for pin in &inst.pins {
-                if netlist.pins[*pin].output && class(*pin) == PinTiming::Through {
-                    arrival[*pin] = arrival[*pin].max(latest + timing.cell[index]);
+            for (j, out) in through_outputs(inst).enumerate() {
+                let latest = inst
+                    .pins
+                    .iter()
+                    .filter(|p| !netlist.pins[**p].output && class(**p) == PinTiming::Through)
+                    .filter(|p| reaches(**p, j))
+                    .map(|p| input_arrival(*p, &arrival))
+                    .fold(f64::NEG_INFINITY, f64::max);
+                if latest > f64::NEG_INFINITY {
+                    arrival[out] = arrival[out].max(latest + timing.cell[index]);
                 }
             }
         }
-        // Backwards: every pin's required time, from the endpoints.
-        let mut required = vec![f64::INFINITY; pins];
+        // The longest path, a path allowed several periods measured in
+        // one: what it is late by, in the period's terms.
+        let ends = |index: usize| here(index) && !flag(&timing.untimed_to, index);
+        let cycles_of =
+            |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
         let mut longest = 0.0f64;
         for (index, inst) in netlist.instances.iter().enumerate() {
-            if !here(index) {
+            if !ends(index) {
                 continue;
             }
             for pin in &inst.pins {
                 if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
                     let at = input_arrival(*pin, &arrival) + timing.capture[index];
                     if at.is_finite() {
-                        longest = longest.max(at);
+                        longest = longest.max(at / cycles_of(index));
                     }
-                    required[*pin] = period - timing.capture[index];
+                }
+            }
+        }
+        // Backwards: every pin's required time, from the endpoints, against
+        // the period or the longest path, whichever is longer. Against the
+        // period alone every late connection is equally critical, and on
+        // the Husky Plus thousands were: the 15 ns read path to the USB pins
+        // was one of them, weighed as no worse than a path two ns late.
+        // Against the longest, the latest path is 1 and the rest in
+        // proportion, as VPR has it.
+        let span = period.max(longest);
+        let mut required = vec![f64::INFINITY; pins];
+        for (index, inst) in netlist.instances.iter().enumerate() {
+            if !ends(index) {
+                continue;
+            }
+            for pin in &inst.pins {
+                if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
+                    required[*pin] = cycles_of(index) * span - timing.capture[index];
                 }
             }
         }
@@ -6086,17 +6270,20 @@ fn estimate_timing(
         };
         for &index in order.iter().rev() {
             let inst = &netlist.instances[index];
-            let earliest = inst
-                .pins
-                .iter()
-                .filter(|p| netlist.pins[**p].output && class(**p) == PinTiming::Through)
-                .map(|p| output_required(*p, &required))
-                .fold(f64::INFINITY, f64::min);
-            if earliest == f64::INFINITY {
-                continue;
-            }
+            let outputs: Vec<f64> = through_outputs(inst)
+                .map(|p| output_required(p, &required))
+                .collect();
             for pin in &inst.pins {
-                if !netlist.pins[*pin].output && class(*pin) == PinTiming::Through {
+                if netlist.pins[*pin].output || class(*pin) != PinTiming::Through {
+                    continue;
+                }
+                let earliest = outputs
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| reaches(*pin, *j))
+                    .map(|(_, r)| *r)
+                    .fold(f64::INFINITY, f64::min);
+                if earliest < f64::INFINITY {
                     required[*pin] = required[*pin].min(earliest - timing.cell[index]);
                 }
             }
@@ -6112,8 +6299,9 @@ fn estimate_timing(
                     continue;
                 }
                 let slack = required[*sink] - (arrival[d] + wire[*sink]);
-                let c = (1.0 - slack / period).clamp(0.0, 1.0);
+                let c = (1.0 - slack / span).clamp(0.0, 1.0);
                 critical[index] = critical[index].max(c);
+                pin_critical[*sink] = pin_critical[*sink].max(c);
             }
         }
         #[allow(
@@ -6128,23 +6316,31 @@ fn estimate_timing(
         longest_ps,
         hpwl: 0,
     };
-    (critical, round)
+    (Criticality { pins: pin_critical }, round)
 }
 
-/// Each signal's weight for [`Spans`], from its criticality: sixteenths,
-/// so that a slack signal costs 16 a tile and a fully critical one
-/// `16 * (1 + weight)`.
-fn timing_weights(critical: &[f64], timing: &PlaceTiming) -> Vec<u32> {
+/// What [`estimate_timing`] found critical: each connection, by its sink
+/// pin.
+struct Criticality {
+    /// Per netlist pin, for a sink; zero for anything else.
+    pins: Vec<f64>,
+}
+
+/// Each connection's pull for [`Pull`], by its sink pin, from its
+/// criticality: in sixteenths of a tile of wirelength, `16 * weight *
+/// criticality^exponent`, so that a fully critical connection costs
+/// `weight` times what a tile of a box does, and a slack one nothing.
+fn connection_weights(critical: &[f64], timing: &PlaceTiming) -> Vec<u32> {
     critical
         .iter()
         .map(|c| {
-            let w = 16.0 * (1.0 + timing.weight * c.powi(timing.exponent));
+            let w = 16.0 * timing.weight * c.powi(timing.exponent);
             #[allow(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
-                reason = "a weight of 16 to a few thousand, clamped"
+                reason = "a weight of zero to a few thousand, clamped"
             )]
-            let w = w.round().clamp(16.0, 1.0e6) as u32;
+            let w = w.round().clamp(0.0, 1.0e6) as u32;
             w
         })
         .collect()
@@ -6375,6 +6571,10 @@ mod tests {
             rounds: 1,
             weight: 8.0,
             exponent: 3,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
             frozen: vec![false; 4],
         };
         (graph, netlist, placement, timing)
@@ -6397,8 +6597,9 @@ mod tests {
         assert_eq!(order, vec![1, 2]);
         let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
         assert_eq!(round.longest_ps, vec![2050]);
-        for c in &critical {
-            assert!((c - (1.0 - 2.95 / 5.0)).abs() < 1e-9, "{critical:?}");
+        for signal in &netlist.signals {
+            let c = critical.pins[signal.sinks[0]];
+            assert!((c - (1.0 - 2.95 / 5.0)).abs() < 1e-9, "{:?}", critical.pins);
         }
         assert_eq!(round.critical, 0);
         // Out of its domain, nothing is timed.
@@ -6407,19 +6608,114 @@ mod tests {
         other.periods.push(5.0);
         let (critical, round) = estimate_timing(&netlist, &graph, &placement, &other, &order);
         assert_eq!(round.longest_ps, vec![0, 0]);
-        assert!(critical.iter().all(|c| *c == 0.0), "{critical:?}");
+        assert!(
+            critical.pins.iter().all(|c| *c == 0.0),
+            "{:?}",
+            critical.pins
+        );
     }
 
-    /// **A critical signal's box costs more, and a slack one's what it
-    /// did.** Weights are sixteenths: criticality 0 is 16, 1 is
-    /// `16 * (1 + weight)`, and half is `16 * (1 + weight / 8)` at an
-    /// exponent of three. Would catch the exponent or the weight dropped,
-    /// and a slack signal weighted (the placement would no longer be the
+    /// **Criticality is against the longest path when it is past the
+    /// period.** The chain split at its third cell, which ends one path
+    /// and starts another: cells 0, 1, 2 at columns 0, 3, 4 make 1.25 ns,
+    /// cells 2, 3 at 4 and 9 make 1.05 ns, and the period is 0.5. Both are
+    /// late; against the period both would be fully critical, and on the
+    /// Husky Plus thousands of connections were, a path two ns late
+    /// weighed as heavily as the read path to the USB pins. Against the
+    /// longest, the first path is 1 and the second `1 - 0.2 / 1.25`. Would
+    /// catch the normalisation back on the period (the second is 1 too);
+    /// would not catch a domain whose longest path is wrongly computed,
+    /// which the test above pins.
+    #[test]
+    fn criticality_is_against_the_longest_path_past_the_period() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            if pin.instance == 2 {
+                timing.pins[index] = if pin.output {
+                    PinTiming::Start
+                } else {
+                    PinTiming::End
+                };
+            }
+        }
+        timing.domain[2] = PathDomain::Clock(0);
+        timing.launch[2] = 0.3;
+        timing.capture[2] = 0.05;
+        timing.periods = vec![0.5];
+        let order = timing_order(&netlist, &timing);
+        let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![1250]);
+        let into = |instance: usize| {
+            netlist.instances[instance]
+                .pins
+                .iter()
+                .copied()
+                .find(|p| !netlist.pins[*p].output)
+                .unwrap()
+        };
+        assert!(
+            (critical.pins[into(1)] - 1.0).abs() < 1e-9,
+            "{:?}",
+            critical.pins
+        );
+        assert!(
+            (critical.pins[into(2)] - 1.0).abs() < 1e-9,
+            "{:?}",
+            critical.pins
+        );
+        let second = 1.0 - 0.2 / 1.25;
+        assert!(
+            (critical.pins[into(3)] - second).abs() < 1e-9,
+            "{:?}",
+            critical.pins
+        );
+    }
+
+    /// **An input reaches only the outputs its mask names.** The same
+    /// chain, with the middle cell's input marked as reaching none of its
+    /// outputs: there is no path from the first cell to the last, so the
+    /// longest path is nothing and no connection is critical; with the
+    /// mask reaching its one output, it is the 2.05 ns above. Would catch
+    /// the forward pass or the backward pass ignoring the mask (the path
+    /// or the slack would come back); would not catch a wrong mask, which
+    /// is `xray::timing`'s to compute and test.
+    #[test]
+    fn an_input_reaches_only_the_outputs_its_mask_names() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        let order = timing_order(&netlist, &timing);
+        let input = netlist.instances[1]
+            .pins
+            .iter()
+            .copied()
+            .find(|p| !netlist.pins[*p].output)
+            .unwrap();
+        timing.reaches = vec![u8::MAX; netlist.pins.len()];
+        timing.reaches[input] = 0;
+        let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![0]);
+        assert!(
+            critical.pins.iter().all(|c| *c == 0.0),
+            "{:?}",
+            critical.pins
+        );
+        timing.reaches[input] = 1;
+        let (_, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![2050]);
+    }
+
+    /// **A critical connection pulls, and a slack one does not.**
+    /// Weights are sixteenths of a tile of box: criticality 0 is nothing,
+    /// 1 is `16 * weight`, and half is `16 * weight / 8` at an exponent of
+    /// three. Would catch the exponent or the weight dropped, and a slack
+    /// connection pulling (the placement would no longer be the
     /// wirelength one where nothing is critical).
     #[test]
-    fn a_signals_weight_grows_with_its_criticality() {
+    fn a_connections_pull_grows_with_its_criticality() {
         let (_, _, _, timing) = timed_chain();
-        assert_eq!(timing_weights(&[0.0, 1.0, 0.5], &timing), vec![16, 144, 32]);
+        assert_eq!(
+            connection_weights(&[0.0, 1.0, 0.5], &timing),
+            vec![0, 128, 16]
+        );
     }
 
     #[test]
@@ -6564,6 +6860,50 @@ mod tests {
         }
         assert_eq!(spans.total(), hpwl(&netlist, &graph, &placement));
         assert_eq!(report.hpwl_after, spans.total());
+    }
+
+    /// **A move's cost change is what the cost changed by, pull
+    /// included.** The timed chain, its boxes weighted as a timing round
+    /// weights them and every connection pulling: moves of one cell and
+    /// swaps of two, each of whose deltas must equal the difference of the
+    /// recounted totals, and each undone to the total it started from.
+    /// Would catch a connection priced only on one side of the move (its
+    /// driver's or its sink's), a connection counted twice when both ends
+    /// move, and an undo that leaves the pull behind; would not catch a
+    /// pull that is consistent and wrong, which the weights' own test is
+    /// for.
+    #[test]
+    fn a_moves_cost_change_includes_the_pull() {
+        let (graph, netlist, mut placement, _) = timed_chain();
+        let mut churn = Churn::new(&netlist, &graph, &placement);
+        churn.spans.weight = vec![16; netlist.signals.len()];
+        let mut weight = vec![0; netlist.pins.len()];
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            if !pin.output {
+                weight[index] = 40 + 10 * u32::try_from(index).unwrap();
+            }
+        }
+        churn.pull = Pull::new(&netlist, &weight);
+        let start = churn.total(&netlist, &graph, &placement);
+        let site = |x: u32| graph.sites.iter().position(|s| s.tile == (x, 0)).unwrap();
+        let moves: Vec<Move> = vec![
+            vec![(1, site(8))],
+            vec![(0, site(5)), (3, site(0))],
+            vec![(2, site(9)), (3, site(4))],
+            vec![(1, site(1)), (2, site(2))],
+        ];
+        for m in &moves {
+            let before = churn.total(&netlist, &graph, &placement);
+            let delta = apply(&netlist, &graph, &mut churn, &mut placement, m);
+            let after = churn.total(&netlist, &graph, &placement);
+            assert_eq!(delta, after as f64 - before as f64, "{m:?}");
+            undo(&netlist, &graph, &mut churn, &mut placement);
+            assert_eq!(
+                churn.total(&netlist, &graph, &placement),
+                start,
+                "{m:?} undone"
+            );
+        }
     }
 
     #[test]
