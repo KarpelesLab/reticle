@@ -3577,6 +3577,44 @@ clock, by a route that detoured — the router takes no account of timing
 errors left follow the byte's place in a burst, a path inside the
 design (`reg_bytecnt` to `read_data_reg`), which is the next thing.
 
+### Buffers that feed buffers (2026-10-22)
+
+NewAE's glitch module, logic analyser and trace front end each choose
+their clock through a chain of `BUFGMUX`es, and the analyser's MMCM output
+goes through two `BUFG`s in a row. A buffer's output reaches another
+buffer's input only through the cascade between neighbours —
+`CLK_BUFG_BUFGCTRL<n>_O` joins `CLK_BUFG_R_FBG_OUT<n>` with no bits, and
+that reaches `I0` and `I1` of buffers `n-1` and `n+1` through one pip — or
+else over general routing. The placer did not know: the buffers sit in
+one column and their wirelength is nothing, so where it put them was an
+accident, and the routed estimate of one build had the analyser's two
+output buffers joined over 164 pips and its third multiplexer taking the
+trace clock over 401 pips and 24.8 ns. On the part, that build's analyser
+sampling clock measured 11 Hz where it should be some hundreds of MHz,
+and the trace front end's clock was dead.
+
+`place::seat_buffer_chains`, after the anneal, makes each such join one
+hop where it can: an unmet join moves one end to a free site the graph
+says is one programmable pip from the other, provided every join already
+met at that end stays met, or both ends to a free pair when neither has
+another. Not a seating of every join at once, which was the first
+version: nine of the Plus's buffers are joined by eight, one of them to
+three others, and a site has two neighbours, so no seating met them all
+and the search moved nothing. Greedily, the next build had every join
+but two at 2 pips and 0.14 ns.
+
+What it did on the part is less than that. The trace front end's clock
+is still not alive, the glitch module's MMCMs still do not lock with the
+board PLL as their source (they lock with the bus clock, and an MMCM from
+this flow — two cascaded, with internal feedback, reprogrammed through
+its DRP with exactly the words NewAE's software writes — locks on the
+part in `examples/husky/probe`'s way of building), and the ADC clock
+counted zero in that build where it had counted 29 MHz in the one before.
+Each build also loses a different bit of some register now and then: a
+placement that moves the read paths moves which of them fails, because
+the design's own paths in `clk_usb`'s domain are, by the estimate, about
+twice its period. Those are the next things, and the last is the largest.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
