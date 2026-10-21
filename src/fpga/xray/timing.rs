@@ -37,9 +37,20 @@
 //! names is not timed. A package pin starts and ends paths in every
 //! timed domain, which is pessimistic for a pin no clock drives and is
 //! what a design whose bus is synchronous to one clock wants.
+//!
+//! The constraints' exceptions are honoured where they name one end: a
+//! `set_false_path -from` or `-to` takes the instances its glob matches
+//! out of the paths they start or end, and a `set_multicycle_path -to`
+//! gives the paths ending at them that many periods. A constraint naming
+//! both ends is not applied — telling which paths run between the two
+//! takes an analysis per start point — and neither is a hold multicycle,
+//! since nothing here checks hold.
 
 use crate::fpga::Constraints;
+use crate::fpga::constraints::matches_glob;
 use crate::fpga::place::{Netlist, PathDomain, PinTiming, PlaceTiming};
+use crate::ir::{AttrValue, Design, ModuleId};
+use crate::logic::Bit;
 
 /// A lookup table's input to output, ns.
 pub(crate) const LUT: f64 = 0.124;
@@ -67,11 +78,70 @@ fn is_clock(role: &str) -> bool {
     role.contains("clk") || role == "c"
 }
 
+/// Which of a lookup table's outputs each of its inputs reaches, as
+/// [`PlaceTiming::reaches`] wants it: bit `j` for the `j`th output pin.
+/// `O6` reads the upper half of the truth table when `I5` is tied high —
+/// a `LUT6_2`, whose `O5` is the lower half — and all of it otherwise.
+fn lut_reaches(netlist: &Netlist, instance: usize, init: &crate::ir::Const, out: &mut [u8]) {
+    let inst = &netlist.instances[instance];
+    let pin = |role: &str| {
+        inst.pins
+            .iter()
+            .copied()
+            .find(|p| netlist.pins[*p].role == role)
+    };
+    let i5_high = pin("i5").is_none_or(|p| {
+        netlist.pins[p].signal.is_none() && netlist.pins[p].constant != Some(Bit::Zero)
+    });
+    let outputs: Vec<&str> = inst
+        .pins
+        .iter()
+        .filter(|p| netlist.pins[**p].output)
+        .map(|p| netlist.pins[*p].role.as_str())
+        .collect();
+    for p in &inst.pins {
+        let pin = &netlist.pins[*p];
+        if pin.output {
+            continue;
+        }
+        let Some(k) = pin
+            .role
+            .strip_prefix('i')
+            .and_then(|r| r.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let differs = |from: u32, to: u32| {
+            (from..to)
+                .filter(|i| i & (1 << k) == 0)
+                .any(|i| init.bit(i) != init.bit(i | (1 << k)))
+        };
+        let mut mask = 0u8;
+        for (j, role) in outputs.iter().enumerate() {
+            let read = match *role {
+                "o5" => k < 5 && differs(0, 32),
+                _ if i5_high && k != 5 => differs(32, 64),
+                _ => differs(0, 64),
+            };
+            if read && j < 8 {
+                mask |= 1 << j;
+            }
+        }
+        out[*p] = mask;
+    }
+}
+
 /// The timing a placement of `netlist` is driven by, and the name of each
 /// of its domains (the clock's `create_clock` name), in
-/// [`PlaceTiming::periods`] order.
+/// [`PlaceTiming::periods`] order. `design`'s module `top` is what the
+/// netlist was built from, for the lookup tables' truth tables.
 #[must_use]
-pub fn place_timing(netlist: &Netlist, constraints: &Constraints) -> (PlaceTiming, Vec<String>) {
+pub fn place_timing(
+    design: &Design,
+    top: ModuleId,
+    netlist: &Netlist,
+    constraints: &Constraints,
+) -> (PlaceTiming, Vec<String>) {
     let n = netlist.instances.len();
     let mut pins = vec![PinTiming::Ignored; netlist.pins.len()];
     let mut cell = vec![0.0; n];
@@ -145,6 +215,72 @@ pub fn place_timing(netlist: &Netlist, constraints: &Constraints) -> (PlaceTimin
                 })
         })
         .collect();
+    // The constraints' exceptions, by instance name. A path constraint
+    // naming one end is applied to the instances that end matches; one
+    // naming both needs the paths between them told apart, which this
+    // analysis does not do, and it is left out (see the module docs).
+    // An instance answers to its own name and, for a pad's buffer
+    // (`LED_ADC$io0`), to its port's (`LED_ADC`), which is what a
+    // constraint names and what the constraints' own check knows.
+    let answers = |glob: &str, instance: usize| {
+        let inst = &netlist.instances[instance];
+        matches_glob(glob, &inst.name)
+            || (inst.kind == "io"
+                && inst
+                    .name
+                    .split_once('$')
+                    .is_some_and(|(port, _)| matches_glob(glob, port)))
+    };
+    let matching = |glob: &Option<String>| -> Vec<bool> {
+        (0..n)
+            .map(|i| glob.as_ref().is_some_and(|g| answers(g, i)))
+            .collect()
+    };
+    let mut untimed_from = vec![false; n];
+    let mut untimed_to = vec![false; n];
+    for path in &constraints.false_paths {
+        match (&path.from, &path.to) {
+            (Some(_), None) => {
+                for (i, m) in matching(&path.from).iter().enumerate() {
+                    untimed_from[i] |= m;
+                }
+            }
+            (None, Some(_)) => {
+                for (i, m) in matching(&path.to).iter().enumerate() {
+                    untimed_to[i] |= m;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut cycles = vec![1u32; n];
+    for multi in &constraints.multicycle_paths {
+        if multi.hold || multi.path.from.is_some() || multi.path.to.is_none() {
+            continue;
+        }
+        for (i, m) in matching(&multi.path.to).iter().enumerate() {
+            if *m {
+                cycles[i] = cycles[i].max(multi.cycles);
+            }
+        }
+    }
+    let mut reaches = vec![u8::MAX; netlist.pins.len()];
+    for (index, inst) in netlist.instances.iter().enumerate() {
+        if inst.kind != "lut" {
+            continue;
+        }
+        let init =
+            design.modules[top]
+                .cells
+                .get(inst.cell)
+                .and_then(|c| match c.params.get("INIT") {
+                    Some(AttrValue::Const(init)) if init.width() == 64 => Some(init),
+                    _ => None,
+                });
+        if let Some(init) = init {
+            lut_reaches(netlist, index, init, &mut reaches);
+        }
+    }
     for (index, inst) in netlist.instances.iter().enumerate() {
         let kind = inst.kind.as_str();
         let clock = inst
@@ -231,8 +367,86 @@ pub fn place_timing(netlist: &Netlist, constraints: &Constraints) -> (PlaceTimin
             rounds: 3,
             weight: 8.0,
             exponent: 3,
+            reaches,
+            cycles,
+            untimed_from,
+            untimed_to,
             frozen,
         },
         names,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpga::place::{Instance, NetPin, Signal};
+    use crate::ir::{CellId, Const, Id};
+
+    /// **A `LUT6_2`'s inputs reach the half that reads them.** One table,
+    /// `O6` and `O5`, `I5` tied high so `O6` is the upper half: the lower
+    /// half is `I1`, the upper `I0 & I2`. So `I0` and `I2` reach `O6` only,
+    /// `I1` reaches `O5` only, and `I3` neither. Would catch the halves
+    /// swapped, `I5` taken as a signal (the whole table, so `I1` would reach
+    /// `O6` too), and a mask that ignores the truth table; would not catch a
+    /// table whose model differs from the silicon's, which the mapped
+    /// netlist's own checks are for.
+    #[test]
+    fn a_paired_tables_inputs_reach_the_half_that_reads_them() {
+        let mut init = Const::zero(64);
+        for i in 0..64u32 {
+            let bit = |k: u32| i & (1 << k) != 0;
+            let value = if bit(5) { bit(0) && bit(2) } else { bit(1) };
+            if value {
+                init.set_bit(i, Bit::One);
+            }
+        }
+        let mut pins = Vec::new();
+        for (role, output, constant) in [
+            ("i0", false, None),
+            ("i1", false, None),
+            ("i2", false, None),
+            ("i3", false, None),
+            ("i5", false, Some(Bit::One)),
+            ("o", true, None),
+            ("o5", true, None),
+        ] {
+            pins.push(NetPin {
+                instance: 0,
+                port: role.to_uppercase(),
+                bit: 0,
+                role: role.to_owned(),
+                output,
+                signal: if constant.is_some() {
+                    None
+                } else {
+                    Some(pins.len())
+                },
+                constant,
+            });
+        }
+        let netlist = Netlist {
+            instances: vec![Instance {
+                cell: CellId::from_index(0),
+                name: "t".to_owned(),
+                primitive: "LUT6_2".to_owned(),
+                kind: "lut".to_owned(),
+                pins: (0..pins.len()).collect(),
+                pin: None,
+            }],
+            signals: (0..pins.len())
+                .map(|i| Signal {
+                    name: format!("s{i}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            pins,
+            off_fabric: Vec::new(),
+        };
+        let mut reaches = vec![u8::MAX; netlist.pins.len()];
+        lut_reaches(&netlist, 0, &init, &mut reaches);
+        // Bit 0 is `O6` (the first output pin), bit 1 `O5`.
+        assert_eq!(&reaches[..4], &[0b01, 0b10, 0b01, 0b00]);
+    }
 }

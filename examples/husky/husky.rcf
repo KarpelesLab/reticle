@@ -108,3 +108,94 @@ set_io -io_standard LVCMOS33 VMAG_D[0] P16
 set_io -io_standard LVCMOS33 VDBSPWM R16
 set_io -io_standard LVCMOS33 glitchout_highpwr C4
 set_io -io_standard LVCMOS33 glitchout_lowpwr E3
+
+# NewAE's false paths, transcribed by script from cwhusky_100.xdc (the
+# Husky's cwhusky.xdc has the same set). A port is named as itself, every
+# bit of it (NewAE name VMAG_D[0] to [4] one by one: all of them); a
+# register's clock pin `-to [all_registers]` is a false path from that
+# register; `reg_arm_pipe_reg[0]/D` is every bit of `reg_arm_pipe` here,
+# its first stage being the only one a path from elsewhere reaches. Two are
+# not here: the trace module's pulse synchronisers, `-from .../src_req_reg/C
+# -to .../req_pipe_reg[0]/D` and its acknowledgement, which cross clock
+# domains and so are not timed anyway.
+set_false_path -from ADC_OVR_SDOUT
+set_false_path -from ADC_clk_fbp
+set_false_path -from AUXIO
+set_false_path -from FPGA_CDOUT
+set_false_path -from PLLFPGAP
+set_false_path -from PLL_STATUS
+set_false_path -from USERIO_CLK
+set_false_path -from USERIO_D
+set_false_path -from U_trace_top.U_reg_main.reg_capture_len*
+set_false_path -from U_trace_top.U_reg_main.reg_capture_while_trig*
+set_false_path -from U_trace_top.U_reg_main.reg_count_writes*
+set_false_path -from U_trace_top.U_reg_main.reg_counter_quick_start*
+set_false_path -from U_trace_top.U_reg_main.reg_max_timestamp*
+set_false_path -from U_trace_top.U_reg_main.reg_num_triggers*
+set_false_path -from U_trace_top.U_reg_main.reg_reset*
+set_false_path -from U_trace_top.U_reg_main.reg_timestamps_disable*
+set_false_path -from U_trace_top.U_reg_main.reg_trigger_delay*
+set_false_path -from U_trace_top.U_reg_main.reg_trigger_enable*
+set_false_path -from U_trace_top.U_reg_main.reg_trigger_width*
+set_false_path -from U_trace_top.U_reg_trace.O_capture_raw*
+set_false_path -from U_trace_top.U_reg_trace.O_pattern_enable*
+set_false_path -from U_trace_top.U_reg_trace.O_pattern_trig_enable*
+set_false_path -from U_trace_top.U_reg_trace.O_record_syncs*
+set_false_path -from U_trace_top.U_reg_trace.O_soft_trig_enable*
+set_false_path -from U_trace_top.U_reg_trace.O_swo_bitrate_div*
+set_false_path -from U_trace_top.U_reg_trace.O_swo_enable*
+set_false_path -from U_trace_top.U_reg_trace.O_trace_mask**
+set_false_path -from U_trace_top.U_reg_trace.O_trace_pattern**
+set_false_path -from U_trace_top.U_reg_trace.O_trace_width*
+set_false_path -from U_trace_top.U_reg_trace.O_uart_data_bits*
+set_false_path -from U_trace_top.U_reg_trace.O_uart_stop_bits*
+set_false_path -from target_io1
+set_false_path -from target_io2
+set_false_path -from target_io3
+set_false_path -from target_io4
+set_false_path -from target_nRST
+set_false_path -to ADC_CLKP
+set_false_path -to ADC_DFS
+set_false_path -to ADC_OE
+set_false_path -to ADC_RESET
+set_false_path -to ADC_SCLK
+set_false_path -to ADC_SDATA
+set_false_path -to ADC_SEN
+set_false_path -to AUXIO
+set_false_path -to FPGA_CDIN
+set_false_path -to LED_ADC
+set_false_path -to LED_ARMED
+set_false_path -to LED_CAP
+set_false_path -to LED_GLITCH
+set_false_path -to SAM_MISO
+set_false_path -to TRIG_GLITCHOUT
+set_false_path -to USB_SPARE0
+set_false_path -to USERIO_CLK
+set_false_path -to USERIO_D
+set_false_path -to U_trace_top.U_reg_main.reg_arm_pipe*
+set_false_path -to VDBSPWM
+set_false_path -to VMAG_D
+set_false_path -to glitchout_highpwr
+set_false_path -to glitchout_lowpwr
+set_false_path -to target_MOSI
+set_false_path -to target_PDIC
+set_false_path -to target_PDID
+set_false_path -to target_SCK
+set_false_path -to target_hs2
+set_false_path -to target_io1
+set_false_path -to target_io2
+set_false_path -to target_io3
+set_false_path -to target_io4
+set_false_path -to target_nRST
+set_false_path -to target_poweron
+
+# Not NewAE's, and measured rather than read: the register read path into
+# the top level's `read_data_reg` may take three periods of clk_usb. The
+# SAM3U holds the address on the bus for several clock cycles of a read,
+# and a Husky Plus build whose estimated path into it was 31.6 ns -- three
+# periods -- read every register back right on the part (2026-10-21); what
+# does have to be fast is the path from it to the USB_Data pins, which the
+# same build had at 16 ns and a build at 18 ns did not meet. Vivado meets
+# this one in a single period, which is why NewAE's constraints say nothing
+# of it; this is a statement about the bus, for a placer that cannot.
+set_multicycle_path 3 -to read_data_reg*

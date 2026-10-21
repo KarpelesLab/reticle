@@ -3435,7 +3435,7 @@ fn write_xc7_bitstream(
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let domains = if args.flag("timing-driven") {
-        let (timing, names) = reticle::fpga::xray::place_timing(&netlist, constraints);
+        let (timing, names) = reticle::fpga::xray::place_timing(design, top, &netlist, constraints);
         options.timing = Some(timing);
         names
     } else {
