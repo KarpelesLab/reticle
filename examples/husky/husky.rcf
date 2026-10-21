@@ -188,14 +188,3 @@ set_false_path -to target_io3
 set_false_path -to target_io4
 set_false_path -to target_nRST
 set_false_path -to target_poweron
-
-# Not NewAE's, and measured rather than read: the register read path into
-# the top level's `read_data_reg` may take three periods of clk_usb. The
-# SAM3U holds the address on the bus for several clock cycles of a read,
-# and a Husky Plus build whose estimated path into it was 31.6 ns -- three
-# periods -- read every register back right on the part (2026-10-21); what
-# does have to be fast is the path from it to the USB_Data pins, which the
-# same build had at 16 ns and a build at 18 ns did not meet. Vivado meets
-# this one in a single period, which is why NewAE's constraints say nothing
-# of it; this is a statement about the bus, for a placer that cannot.
-set_multicycle_path 3 -to read_data_reg*
