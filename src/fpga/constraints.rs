@@ -1057,7 +1057,7 @@ impl Constraints {
                 );
             }
         }
-        let names = timing_point_names(module);
+        let names = timing_point_names(design, module);
         for path in &self.false_paths {
             check_path(path, &names, diags);
         }
@@ -1383,12 +1383,44 @@ fn placeable_names(module: &Module) -> Vec<String> {
 }
 
 /// The names a timing exception may match: instances, cells, nets and
-/// ports.
-fn timing_point_names(module: &Module) -> Vec<String> {
-    let mut names = placeable_names(module);
-    names.extend(module.nets.iter().map(|(_, n)| n.name.as_str().to_owned()));
-    names.extend(module.ports.iter().map(|p| p.name.as_str().to_owned()));
+/// ports, and those of every module instantiated below, under the dotted
+/// path a flattened design gives them (`U_trace_top.U_reg_trace.O_swo_enable`).
+/// Exceptions are applied after flattening, so a register deep in the
+/// hierarchy is what one names; checked against the top module's own names
+/// alone, every such name was reported as matching nothing.
+fn timing_point_names(design: &Design, module: &Module) -> Vec<String> {
+    let mut names = Vec::new();
+    hierarchical_names(design, module, "", &mut names, 0);
     names
+}
+
+/// The names [`timing_point_names`] collects for `module`, each under
+/// `prefix`.
+fn hierarchical_names(
+    design: &Design,
+    module: &Module,
+    prefix: &str,
+    out: &mut Vec<String>,
+    depth: usize,
+) {
+    let local = placeable_names(module)
+        .into_iter()
+        .chain(module.nets.iter().map(|(_, n)| n.name.as_str().to_owned()))
+        .chain(module.ports.iter().map(|p| p.name.as_str().to_owned()));
+    out.extend(local.map(|name| format!("{prefix}{name}")));
+    // A recursive instantiation is an elaboration error; the depth limit
+    // only keeps a malformed design from running this forever.
+    if depth >= 64 {
+        return;
+    }
+    for (_, instance) in module.instances.iter() {
+        if let crate::ir::ModuleRef::Resolved(id) = instance.module
+            && let Some(child) = design.modules.get(id)
+        {
+            let prefix = format!("{prefix}{}.", instance.name.as_str());
+            hierarchical_names(design, child, &prefix, out, depth + 1);
+        }
+    }
 }
 
 /// The nets that reach a flip-flop clock pin, by name.
@@ -2106,6 +2138,46 @@ mod tests {
         let device = target(device_name).unwrap();
         constraints.check(&design(), device, &mut diags);
         diags.render(&map)
+    }
+
+    /// **A timing exception may name what lies below the top module.**
+    /// `top` instantiates `child` as `u_sub`, which holds a net `count`:
+    /// `u_sub.count*` names it as a flattened design does and draws no
+    /// warning; `u_sub.nothing` and the bare `count` (not the top's) do.
+    /// Would catch the hierarchy left out of the names, which reported
+    /// every register a design's exceptions named below the top (24 of
+    /// NewAE's false paths on the ChipWhisperer-Husky); would not catch a
+    /// name the check accepts and the flattened design spells otherwise,
+    /// which is the flattener's.
+    #[test]
+    fn a_timing_exception_may_name_what_lies_below_the_top() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut child = ModuleBuilder::new("child", span);
+        let _ = child.add_net("count", Type::bits(4));
+        let mut design = Design::new();
+        let child = design.add_module(child.finish());
+        let mut top = ModuleBuilder::new("top", span);
+        top.instance("u_sub", ModuleRef::Resolved(child), Vec::new());
+        let top = design.add_module(top.finish());
+        design.top = Some(top);
+        let device = target("generic").unwrap();
+        for (text, warns) in [
+            ("set_false_path -from u_sub.count*\n", false),
+            ("set_multicycle_path 2 -to u_sub.count\n", false),
+            ("set_false_path -from u_sub.nothing\n", true),
+            ("set_false_path -to count\n", true),
+        ] {
+            let (constraints, mut diags, map) = parse(text);
+            constraints.check(&design, device, &mut diags);
+            let rendered = diags.render(&map);
+            assert_eq!(
+                rendered.contains("no object matches"),
+                warns,
+                "{text}: {rendered}"
+            );
+        }
     }
 
     #[test]
