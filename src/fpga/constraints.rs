@@ -30,6 +30,7 @@
 //!    clock_domain sys clk
 //!    set_false_path -from rst -to *
 //!    set_multicycle_path 2 -setup -from mul_a -to mul_q
+//!    set_input_delay -clock sys 12.4 bus_rd bus_addr*
 //!    ```
 //!
 //! 2. Attributes on the IR, read by [`Constraints::merge_attrs`]: `(* PIN
@@ -317,6 +318,25 @@ pub struct MulticyclePath {
     pub path: PathSpec,
 }
 
+/// When an input port's data arrives, after an edge of the clock that
+/// launched it: SDC's `set_input_delay -max`.
+///
+/// As in SDC, the data is captured on the clock's next edge after the one
+/// that launched it. A bus whose data its sender launches on the very edge
+/// the design must capture it on says so with a delay one period past the
+/// sender's own clock to output.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputDelay {
+    /// The clock, by its `create_clock` name.
+    pub clock: String,
+    /// The delay in nanoseconds.
+    pub delay_ns: f64,
+    /// Globs over the input ports it applies to.
+    pub ports: Vec<String>,
+    /// Where the constraint was written.
+    pub span: Span,
+}
+
 /// A named group of nets that belong to one clock domain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClockDomain {
@@ -347,6 +367,8 @@ pub struct Constraints {
     pub false_paths: Vec<PathSpec>,
     /// Paths given more than one period.
     pub multicycle_paths: Vec<MulticyclePath>,
+    /// When input ports' data arrives, against their clocks.
+    pub input_delays: Vec<InputDelay>,
     /// Declared clock domains.
     pub clock_domains: Vec<ClockDomain>,
 }
@@ -1071,6 +1093,24 @@ impl Constraints {
             }
             check_path(&path.path, &names, diags);
         }
+        let inputs: Vec<String> = module
+            .ports
+            .iter()
+            .filter(|p| p.dir != PortDir::Out)
+            .map(|p| p.name.as_str().to_owned())
+            .collect();
+        for delay in &self.input_delays {
+            if !self.clocks.iter().any(|c| c.name == delay.clock) {
+                diags.push(
+                    Diagnostic::error(format!("no clock named `{}`", delay.clock))
+                        .with_code(BAD_CLOCK)
+                        .with_span(delay.span),
+                );
+            }
+            for port in &delay.ports {
+                check_pattern(port, &inputs, "input port", delay.span, diags);
+            }
+        }
         for domain in &self.clock_domains {
             for net in &domain.nets {
                 if module.net_by_name(net).is_none() {
@@ -1311,6 +1351,15 @@ impl Constraints {
                 "set_multicycle_path {}{when}{}",
                 path.cycles,
                 self.path_options(&path.path)
+            );
+        }
+        for delay in &self.input_delays {
+            let _ = writeln!(
+                out,
+                "set_input_delay -clock {} -max {:.3} [get_ports {{{}}}]",
+                delay.clock,
+                delay.delay_ns,
+                delay.ports.join(" ")
             );
         }
         out
@@ -1870,6 +1919,7 @@ impl<'a> LineParser<'a> {
                 }
             }
             "set_multicycle_path" => self.set_multicycle_path(out),
+            "set_input_delay" => self.set_input_delay(out),
             "clock_domain" => self.clock_domain(out),
             other => {
                 let span = self.line.tokens[0].span;
@@ -2060,6 +2110,34 @@ impl<'a> LineParser<'a> {
         });
     }
 
+    fn set_input_delay(&mut self, out: &mut Constraints) {
+        let usage = "`set_input_delay -clock <clock> [-max] <ns> <port>...`";
+        let (options, words) = self.split(&["clock"], &["max"]);
+        if words.len() < 2 {
+            let span = self.line.span;
+            self.error(span, format!("expected {usage}"));
+            return;
+        }
+        let Some(clock) = options
+            .iter()
+            .find(|(name, _)| name == "clock")
+            .map(|(_, value)| value.as_str().to_owned())
+        else {
+            let span = self.line.span;
+            self.error(span, format!("`set_input_delay` needs `-clock`: {usage}"));
+            return;
+        };
+        let Some(delay_ns) = self.float(&words[0]) else {
+            return;
+        };
+        out.input_delays.push(InputDelay {
+            clock,
+            delay_ns,
+            ports: words[1..].iter().map(|t| t.as_str().to_owned()).collect(),
+            span: self.line.span,
+        });
+    }
+
     fn clock_domain(&mut self, out: &mut Constraints) {
         let (_, words) = self.split(&[], &[]);
         if words.len() < 2 {
@@ -2138,6 +2216,51 @@ mod tests {
         let device = target(device_name).unwrap();
         constraints.check(&design(), device, &mut diags);
         diags.render(&map)
+    }
+
+    /// **An input delay is parsed, checked and written.** It needs a
+    /// clock, names a defined one, and matches input ports: `d` is one,
+    /// `q` is an output and `nowhere` is nothing, and each of those says
+    /// so. Would catch the delay lost on the way to `input_delays` or to
+    /// the SDC, a missing `-clock` let through, or an output accepted as
+    /// an input; would not catch what the timing model makes of it, which
+    /// `xray::timing`'s own test is for.
+    #[test]
+    fn an_input_delay_is_parsed_checked_and_written() {
+        let (c, diags, map) = parse(
+            "create_clock -name sys -period 10 clk\nset_input_delay -clock sys -max 12.4 d\n",
+        );
+        assert_eq!(diags.render(&map), "");
+        assert_eq!(c.input_delays.len(), 1);
+        assert_eq!(c.input_delays[0].clock, "sys");
+        assert!((c.input_delays[0].delay_ns - 12.4).abs() < 1e-9);
+        assert_eq!(c.input_delays[0].ports, vec!["d".to_owned()]);
+        let device = target("generic").unwrap();
+        assert!(
+            c.write_sdc(device)
+                .contains("set_input_delay -clock sys -max 12.400 [get_ports {d}]")
+        );
+        assert_eq!(
+            check(
+                "create_clock -name sys -period 10 clk\nset_input_delay -clock sys 12 d\n",
+                "generic"
+            ),
+            ""
+        );
+
+        let (_, diags, map) = parse("set_input_delay 12 d\n");
+        assert!(diags.render(&map).contains("needs `-clock`"));
+        let text = check(
+            "create_clock -name sys -period 10 clk\nset_input_delay -clock other 12 d\n",
+            "generic",
+        );
+        assert!(text.contains("no clock named `other`"), "{text}");
+        let text = check(
+            "create_clock -name sys -period 10 clk\nset_input_delay -clock sys 12 q nowhere\n",
+            "generic",
+        );
+        assert!(text.contains("no input port matches `q`"), "{text}");
+        assert!(text.contains("no input port matches `nowhere`"), "{text}");
     }
 
     /// **A timing exception may name what lies below the top module.**

@@ -45,6 +45,10 @@
 //! both ends is not applied — telling which paths run between the two
 //! takes an analysis per start point — and neither is a hold multicycle,
 //! since nothing here checks hold.
+//!
+//! A `set_input_delay` puts the pads it names in its clock's domain alone,
+//! launched that long after the clock's edge less [`CLOCK_INSERTION`], the
+//! clock's own way from its pad to the register the data races.
 
 use crate::fpga::Constraints;
 use crate::fpga::constraints::matches_glob;
@@ -67,6 +71,15 @@ pub(crate) const BRAM_LAUNCH: f64 = 2.45;
 pub(crate) const BRAM_SETUP: f64 = 0.5;
 /// A pad to the fabric through an input buffer, ns.
 pub(crate) const INPUT_BUFFER: f64 = 1.2;
+/// A clock's arrival at a flip-flop after its edge at the clock's pad, ns,
+/// for a clock that comes from a pad through a global buffer: the input
+/// buffer, the pad's road to the buffer and the network to a leaf. Only
+/// an input delay needs it, since there the data races the clock rather
+/// than another register's output. From this flow's own routed estimate
+/// of the ChipWhisperer-Husky Plus (2026-10-21): 1.2 + 2.18 + 1.24 ns, the
+/// least any of its bus's registers saw, on the road; not measured on a
+/// part.
+pub(crate) const CLOCK_INSERTION: f64 = 4.6;
 /// The fabric to a pad through an output buffer, ns.
 pub(crate) const OUTPUT_BUFFER: f64 = 3.0;
 /// A connection's delay: intercept, per tile, and per tile more on a wide
@@ -355,6 +368,22 @@ pub fn place_timing(
             }
         }
     }
+    // An input delay puts a pad in its clock's domain, launched that long
+    // after the clock's edge, and against the clock's arrival at the
+    // register it races (`CLOCK_INSERTION`) rather than an ideal one. A
+    // clock that clocks nothing here has no domain, and its delays nothing
+    // to apply to.
+    for delay in &constraints.input_delays {
+        let Some(index) = names.iter().position(|n| *n == delay.clock) else {
+            continue;
+        };
+        for (i, inst) in netlist.instances.iter().enumerate() {
+            if inst.kind == "io" && delay.ports.iter().any(|g| answers(g, i)) {
+                launch[i] = INPUT_BUFFER + delay.delay_ns - CLOCK_INSERTION;
+                domain[i] = PathDomain::Clock(index);
+            }
+        }
+    }
     (
         PlaceTiming {
             pins,
@@ -448,5 +477,89 @@ mod tests {
         lut_reaches(&netlist, 0, &init, &mut reaches);
         // Bit 0 is `O6` (the first output pin), bit 1 `O5`.
         assert_eq!(&reaches[..4], &[0b01, 0b10, 0b01, 0b00]);
+    }
+
+    /// **An input delay puts its pad in its clock's domain, launched late.**
+    /// A clock pad through a global buffer clocks a flip-flop that reads
+    /// two other pads, `rd` and `data`; `rd` alone has an input delay of
+    /// a period and two nanoseconds. It launches at that, plus its buffer,
+    /// less the clock's arrival, and only in the clock's domain; `data`
+    /// launches at its buffer in every domain, as a pad always did. Would
+    /// catch the delay ignored, applied to the wrong pad, applied without
+    /// the clock's arrival taken off, or left in every domain; would not
+    /// catch [`CLOCK_INSERTION`] being the wrong number for a part, which
+    /// only a part says.
+    #[test]
+    fn an_input_delay_launches_its_pad_late_in_its_clocks_domain() {
+        let pin = |instance: usize, role: &str, output: bool, signal: usize| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let instance = |i: usize, name: &str, kind: &str, pins: Vec<usize>| Instance {
+            cell: CellId::from_index(i),
+            name: name.to_owned(),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        // Signals: 0 the clock pad, 1 the buffered clock, 2 `rd`, 3 `data`.
+        let pins = vec![
+            pin(0, "din", true, 0),
+            pin(1, "i", false, 0),
+            pin(1, "o", true, 1),
+            pin(2, "din", true, 2),
+            pin(3, "din", true, 3),
+            pin(4, "clk", false, 1),
+            pin(4, "d", false, 2),
+            pin(4, "ce", false, 3),
+        ];
+        let signal = |name: &str, driver: usize, sinks: Vec<usize>| Signal {
+            name: name.to_owned(),
+            driver: Some(driver),
+            sinks,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(0, "clk$io0", "io", vec![0]),
+                instance(1, "clk$gbuf", "gb", vec![1, 2]),
+                instance(2, "rd$io0", "io", vec![3]),
+                instance(3, "data$io0", "io", vec![4]),
+                instance(4, "q", "ff", vec![5, 6, 7]),
+            ],
+            signals: vec![
+                signal("clk", 0, vec![1]),
+                signal("clk$gb", 2, vec![5]),
+                signal("rd", 3, vec![6]),
+                signal("data", 4, vec![7]),
+            ],
+            pins,
+            off_fabric: Vec::new(),
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut diags = crate::diag::Diagnostics::new();
+        let constraints = Constraints::parse(
+            "create_clock -name bus -period 10 clk\nset_input_delay -clock bus 12 rd\n",
+            file,
+            &mut diags,
+        );
+        assert!(!diags.has_errors());
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        let (timing, names) = place_timing(&design, top, &netlist, &constraints);
+        assert_eq!(names, vec!["bus".to_owned()]);
+        assert!((timing.launch[2] - (INPUT_BUFFER + 12.0 - CLOCK_INSERTION)).abs() < 1e-9);
+        assert_eq!(timing.domain[2], PathDomain::Clock(0));
+        assert!((timing.launch[3] - INPUT_BUFFER).abs() < 1e-9);
+        assert_eq!(timing.domain[3], PathDomain::Every);
     }
 }

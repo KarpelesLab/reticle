@@ -2425,6 +2425,9 @@ pub fn place(
         &mut info,
         &options.clock_roads,
     );
+    if let Some(timing) = &options.timing {
+        confine_to_input_budget(netlist, graph, &sites_by_kind, &mut info, timing);
+    }
     let mut macros = build_macros(netlist, constraints, &mut info);
     let clusters = build_clusters(netlist, graph, &sites_by_kind, &mut info, macros.len());
     report.dedicated = clusters.len();
@@ -3823,6 +3826,146 @@ fn confine_to_roads(
     }
 }
 
+/// The fewest sites [`confine_to_input_budget`] leaves a cell, for each
+/// cell of its kind held near the same pad, so that a budget too tight to
+/// meet still leaves legalisation somewhere to put them all.
+const INPUT_BUDGET_SITES: usize = 16;
+
+/// Confines the registers a timed pad feeds to the sites near it that
+/// its budget allows.
+///
+/// A pad has a domain of its own only when an input delay gives it one
+/// (`xray::place_timing`), and then its data may arrive so late that the
+/// register taking it must be close: on the ChipWhisperer-Husky Plus a
+/// bus strobe launched on the edge that has to catch it leaves its
+/// register a nanosecond or so of wire. The timing rounds cannot meet
+/// that by weight: they move a cell a few tiles at a time, and the one
+/// connection to its pad is outweighed by the dozens to its readers — the
+/// placer put the bus's `reg_read` 73 tiles from its pad, and the bus
+/// read nothing until it was moved. So the budget is turned into a
+/// distance, from the timing's own figures: what the period leaves after
+/// the pad's launch, the register's setup and a connection's fixed part,
+/// at a connection's cost per tile. A register behind one cell — an
+/// inverter between the pad and it — shares that distance with the cell,
+/// each kept within a third so that the two hops fit. A cell keeps at
+/// least [`INPUT_BUDGET_SITES`] sites for each cell of its kind held near
+/// that pad, the nearest, when the budget allows fewer. A design with no
+/// input delays confines nothing.
+fn confine_to_input_budget(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+    timing: &PlaceTiming,
+) {
+    let pin = |p: usize| timing.pins.get(p).copied().unwrap_or(PinTiming::Ignored);
+    let mut targets: Vec<(usize, (u32, u32), f64)> = Vec::new();
+    for (pad, held) in info.iter().enumerate() {
+        let Some(site) = held.fixed else {
+            continue;
+        };
+        let Some(PathDomain::Clock(domain)) = timing.domain.get(pad).copied() else {
+            continue;
+        };
+        let Some(period) = timing.periods.get(domain) else {
+            continue;
+        };
+        let at = graph.sites[site].tile;
+        let budget = period - timing.launch[pad] - timing.wire.0;
+        for out in &netlist.instances[pad].pins {
+            if pin(*out) != PinTiming::Start {
+                continue;
+            }
+            let Some(signal) = netlist.pins[*out].signal else {
+                continue;
+            };
+            for sink in &netlist.signals[signal].sinks {
+                let cell = netlist.pins[*sink].instance;
+                match pin(*sink) {
+                    PinTiming::End => {
+                        targets.push((cell, at, (budget - timing.capture[cell]) / timing.wire.1));
+                    }
+                    PinTiming::Through => {
+                        for next in &netlist.instances[cell].pins {
+                            if !netlist.pins[*next].output || pin(*next) != PinTiming::Through {
+                                continue;
+                            }
+                            let Some(through) = netlist.pins[*next].signal else {
+                                continue;
+                            };
+                            for end in &netlist.signals[through].sinks {
+                                if pin(*end) != PinTiming::End {
+                                    continue;
+                                }
+                                let register = netlist.pins[*end].instance;
+                                let tiles = (budget
+                                    - timing.cell[cell]
+                                    - timing.wire.0
+                                    - timing.capture[register])
+                                    / timing.wire.1;
+                                targets.push((cell, at, tiles / 3.0));
+                                targets.push((register, at, tiles / 3.0));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut confine = |cell: usize, at: (u32, u32), tiles: f64, least: usize| {
+        if info[cell].fixed.is_some() {
+            return;
+        }
+        let Some(candidates) = sites_by_kind.get(&netlist.instances[cell].kind) else {
+            return;
+        };
+        let mut near: Vec<(u32, usize)> = candidates
+            .iter()
+            .filter(|site| info[cell].may_take(**site))
+            .map(|site| {
+                let (x, y) = graph.sites[*site].tile;
+                (x.abs_diff(at.0) + y.abs_diff(at.1), *site)
+            })
+            .collect();
+        near.sort_unstable();
+        let keep = near
+            .iter()
+            .take_while(|(d, _)| f64::from(*d) <= tiles)
+            .count()
+            .max(least)
+            .min(near.len());
+        if keep == 0 || keep == candidates.len() {
+            return;
+        }
+        let mut allowed: Vec<usize> = near[..keep].iter().map(|(_, site)| *site).collect();
+        allowed.sort_unstable();
+        info[cell].allowed = Some(allowed);
+    };
+    // A cell some paths reach several ways is held to the tightest; and
+    // the sites kept grow with how many cells of a kind are held around
+    // one pad, since cells that may not share a slice — the Husky Plus's
+    // bus strobe reaches seven registers of four control sets through one
+    // table — need a slice each.
+    let mut tightest: BTreeMap<usize, ((u32, u32), f64)> = BTreeMap::new();
+    for (cell, at, tiles) in targets {
+        let entry = tightest.entry(cell).or_insert((at, tiles));
+        if tiles < entry.1 {
+            *entry = (at, tiles);
+        }
+    }
+    let mut crowd: BTreeMap<((u32, u32), &str), usize> = BTreeMap::new();
+    for (cell, (at, _)) in &tightest {
+        *crowd
+            .entry((*at, netlist.instances[*cell].kind.as_str()))
+            .or_default() += 1;
+    }
+    for (cell, (at, tiles)) in &tightest {
+        let n = crowd[&(*at, netlist.instances[*cell].kind.as_str())];
+        confine(*cell, *at, *tiles, INPUT_BUDGET_SITES * n);
+    }
+}
+
 fn confine_to_reachable(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -4669,13 +4812,18 @@ fn legalise(
         }
     }
     // Then the macros as units, then everything else. Within each group
-    // the order is by target position, which keeps the result stable.
+    // the order is by target position, which keeps the result stable —
+    // after the cells confined to a few sites, fewest first, which a cell
+    // free to go anywhere would otherwise take from them: the Husky Plus's
+    // bus registers, kept by `confine_to_input_budget` to the sixteen
+    // flip-flop sites nearest their pads, found them all taken.
     let mut order: Vec<usize> = (0..netlist.instances.len())
         .filter(|i| info[*i].fixed.is_none() && info[*i].macro_index.is_none())
         .collect();
     order.sort_by_key(|i| {
         let (x, y) = positions[*i];
         (
+            info[*i].allowed.as_ref().map_or(usize::MAX, Vec::len),
             to_grid(y, graph.height),
             to_grid(x, graph.width),
             netlist.instances[*i].name.clone(),
@@ -8610,6 +8758,173 @@ mod tests {
         let mut loose = info(None);
         confine_to_roads(&netlist, &graph, &sites_by_kind, &mut loose, &road);
         assert_eq!(loose[1].allowed, None, "a pad no pin fixes has no road");
+    }
+
+    /// **A register a timed pad feeds is confined to what its budget
+    /// reaches.** A row of forty tiles of four tables and four flip-flops;
+    /// `pad0` and `pad2` in the first, `pad1` in the last, so that no two
+    /// cells held near one pad crowd each other's minimum. Each pad
+    /// launches at 8 ns of a 10 ns
+    /// period and a connection costs 0.1 ns a tile, so 2 ns of wire is 20
+    /// tiles: the register `pad0` feeds may sit 20 tiles out. `pad1`'s
+    /// reaches its register through a table of 0.5 ns, 15 tiles for the
+    /// two hops, so each keeps within 5. `pad2`, in every domain as a pad
+    /// with no input delay is, confines nothing. Would catch the budget
+    /// left unconverted (nothing confined), the table's delay or the
+    /// thirds left out (the second pair kept to 6 or 15), or a pad
+    /// with no delay acted on; would not catch the estimate's wire costs
+    /// being wrong for a part, which the Husky Plus build is for, nor the
+    /// minimum's growth with the cells held near one pad, which only that
+    /// build has exercised.
+    #[test]
+    fn a_timed_pads_register_is_confined_to_what_its_budget_reaches() {
+        let mut arch = Arch::new("t", "test", 40, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        let mut wire = |name: String| {
+            tile.wires.push(WireDecl {
+                name: name.clone(),
+                dx: 0,
+                dy: 0,
+            });
+            WireRef::local(name)
+        };
+        let mut bels = Vec::new();
+        for n in 0..3 {
+            let mut pad = BelDecl::new(format!("pad{n}"), "io");
+            pad.pins.push(("din".to_owned(), wire(format!("pad{n}_o"))));
+            bels.push(pad);
+        }
+        for n in 0..4 {
+            let mut lut = BelDecl::new(format!("lut{n}"), "lut");
+            lut.pins.push(("i0".to_owned(), wire(format!("lut{n}_i"))));
+            lut.pins.push(("o".to_owned(), wire(format!("lut{n}_o"))));
+            bels.push(lut);
+            let mut ff = BelDecl::new(format!("ff{n}"), "ff");
+            ff.pins.push(("d".to_owned(), wire(format!("ff{n}_d"))));
+            bels.push(ff);
+        }
+        tile.bels = bels;
+        arch.tile_types.push(tile);
+        for x in 0..40 {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+
+        // pad0 -> f1; pad1 -> table -> f2; pad2 -> f3.
+        let kinds = ["io", "io", "io", "ff", "lut", "ff", "ff"];
+        let roles: [(usize, &str, bool, usize); 8] = [
+            (0, "din", true, 0),
+            (3, "d", false, 0),
+            (1, "din", true, 1),
+            (4, "i0", false, 1),
+            (4, "o", true, 2),
+            (5, "d", false, 2),
+            (2, "din", true, 3),
+            (6, "d", false, 3),
+        ];
+        let mut netlist = Netlist {
+            instances: kinds
+                .iter()
+                .enumerate()
+                .map(|(i, kind)| Instance {
+                    cell: CellId::from_index(i),
+                    name: format!("c{i}"),
+                    primitive: String::new(),
+                    kind: (*kind).to_owned(),
+                    pins: Vec::new(),
+                    pin: None,
+                })
+                .collect(),
+            pins: Vec::new(),
+            signals: (0..4)
+                .map(|i| Signal {
+                    name: format!("s{i}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            off_fabric: Vec::new(),
+        };
+        let mut pins = vec![PinTiming::Ignored; roles.len()];
+        for (index, (instance, role, output, signal)) in roles.into_iter().enumerate() {
+            netlist.pins.push(NetPin {
+                instance,
+                port: role.to_uppercase(),
+                bit: 0,
+                role: role.to_owned(),
+                output,
+                signal: Some(signal),
+                constant: None,
+            });
+            netlist.instances[instance].pins.push(index);
+            if output {
+                netlist.signals[signal].driver = Some(index);
+            } else {
+                netlist.signals[signal].sinks.push(index);
+            }
+            pins[index] = match (kinds[instance], output) {
+                ("io", _) => PinTiming::Start,
+                ("lut", _) => PinTiming::Through,
+                _ => PinTiming::End,
+            };
+        }
+        let timing = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0],
+            launch: vec![8.0, 8.0, 8.0, 0.0, 0.0, 0.0, 0.0],
+            capture: vec![0.0; 7],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+                PathDomain::Every,
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+            ],
+            periods: vec![10.0],
+            wire: (0.0, 0.1, 0.0),
+            rounds: 1,
+            weight: 8.0,
+            exponent: 3,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 7],
+        };
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        let mut info: Vec<Placeable> = (0..7)
+            .map(|i| Placeable {
+                fixed: (i < 3).then(|| {
+                    let x = if i == 1 { 39 } else { 0 };
+                    graph.site_index(&format!("X{x}Y0/pad{i}")).unwrap()
+                }),
+                region: None,
+                macro_index: None,
+                allowed: None,
+            })
+            .collect();
+        confine_to_input_budget(&netlist, &graph, &sites_by_kind, &mut info, &timing);
+        let within = |kind: &str, from: u32, tiles: u32| -> Option<Vec<usize>> {
+            Some(
+                sites_by_kind[kind]
+                    .iter()
+                    .copied()
+                    .filter(|s| graph.sites[*s].tile.0.abs_diff(from) <= tiles)
+                    .collect(),
+            )
+        };
+        assert_eq!(info[3].allowed, within("ff", 0, 20), "pad0's register");
+        assert_eq!(info[4].allowed, within("lut", 39, 5), "pad1's table");
+        assert_eq!(info[5].allowed, within("ff", 39, 5), "pad1's register");
+        assert_eq!(info[6].allowed, None, "pad2 has no input delay");
     }
 
     /// A row of tiles, each one slice of two flip-flops sharing a clock.
