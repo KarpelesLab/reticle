@@ -26,10 +26,23 @@
 //!
 //! **Fitted, not modelled**, is a connection's delay: [`WIRE`] is a line
 //! through what this flow's own router made of a placement of NewAE's
-//! ChipWhisperer-Husky Plus (2026-10-21), every connection's routed delay
-//! summed from its pips' delays against its tile distance — 0.35 ns at no
-//! distance and 0.035 ns a tile for a signal of four sinks or fewer, and
-//! about 0.025 ns a tile more for a wider one, whose tree detours.
+//! ChipWhisperer-Husky Plus, every connection's routed delay summed from
+//! its pips' delays (`XrayDatabase::node_delays`) against its tile
+//! distance. A timing-driven build prints the fit for its own routing
+//! (`routed connections, fitted:`), by least squares over the connections
+//! of signals of four sinks or fewer, and the extra a tile the wider ones'
+//! take over that line. On 2026-10-22, over the Plus's 192,306
+//! connections: **0.310 ns at no distance and 0.048 ns a tile**, and
+//! 0.025 ns a tile more on a wide signal, whose tree detours.
+//!
+//! It was 0.35 ns and **0.035** ns a tile until then, from the 2026-10-21
+//! routing by a method nobody recorded: a quarter too cheap a tile. On a
+//! probe of the Plus's bus it left the read logic 130 tiles from the pin
+//! it drives, a connection the estimate put at 4.9 ns and the router made
+//! 9.5. The mean by distance is not a line either — 0.28 ns under
+//! two tiles, 1.41 ns at ten to twenty, 7.67 ns at eighty to 160 — so
+//! the fit is too dear for the shortest connections and too cheap past a
+//! hundred tiles.
 //!
 //! Paths are timed within one clock's domain. A clock is the signal at a
 //! sequential cell's clock pin traced back through the global buffers;
@@ -84,7 +97,7 @@ pub(crate) const CLOCK_INSERTION: f64 = 4.6;
 pub(crate) const OUTPUT_BUFFER: f64 = 3.0;
 /// A connection's delay: intercept, per tile, and per tile more on a wide
 /// signal; see the module documentation.
-pub(crate) const WIRE: (f64, f64, f64) = (0.35, 0.035, 0.025);
+pub(crate) const WIRE: (f64, f64, f64) = (0.31, 0.048, 0.025);
 
 /// Whether `role` is a clock pin, which no path ends at.
 fn is_clock(role: &str) -> bool {

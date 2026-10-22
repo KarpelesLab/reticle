@@ -691,3 +691,27 @@ fn the_roads_into_a_buffer_are_told_from_what_shares_their_names() {
         );
     }
 }
+
+/// A pip's delay is the slow corner's maximum of `src_to_dst`, in
+/// picoseconds, and a pip with none is left out: the shape of
+/// `tile_type_INT_L.json`'s `EE2END0->>EE4BEG0`, whose four numbers are
+/// 0.057, 0.070, 0.136 and 0.165. Would catch another of the four taken
+/// (57, 70 or 136) or nanoseconds left unconverted; would not catch the
+/// corner being the wrong one to time against, which is a choice.
+#[test]
+fn a_pips_delay_is_its_slow_corners_maximum() {
+    let json = Json::parse(
+        r#"{"pips": {
+            "INT_L.EE2END0->>EE4BEG0": {"src_wire": "EE2END0", "dst_wire": "EE4BEG0",
+                "src_to_dst": {"delay": ["0.057", "0.070", "0.136", "0.165"]}},
+            "INT_L.A->>B": {"src_wire": "A", "dst_wire": "B"}
+        }}"#,
+    )
+    .unwrap();
+    let delays = parse::pip_delays(&json, "tile_type_INT_L.json").unwrap();
+    assert_eq!(
+        delays,
+        vec![("EE2END0".to_owned(), "EE4BEG0".to_owned(), 165)]
+    );
+    assert!(parse::pip_delays(&Json::parse("{}").unwrap(), "x.json").is_err());
+}

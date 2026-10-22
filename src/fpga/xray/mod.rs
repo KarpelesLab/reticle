@@ -92,9 +92,12 @@
 //!
 //! # And what the data does not name
 //!
-//! `prjxray-db` ships the *bits*, not the tile-type wire and pip lists
-//! (prjxray's own `tile_type_*.json` is generated from Vivado and is not
-//! in the repository). Two things follow:
+//! `prjxray-db` ships the *bits*; the tile-type wire and pip lists are
+//! in its `tile_type_*.json`, which this loader does not read for the
+//! fabric. This said, until 2026-10-23, that those files were not in the
+//! repository: **they are**, generated from Vivado and committed, and
+//! [`XrayDatabase::node_delays`] reads their pip delays. What follows was
+//! worked out without them, and is still how the fabric is built:
 //!
 //! - **A site pin has no name in the database.** The wiring *is* there:
 //!   `ppips_<type>.db` records the fixed connection between a site pin's
@@ -808,6 +811,84 @@ impl XrayDatabase {
             message: e.to_string(),
         })?;
         parse::part_from_json(&json, &path, &self.part_dir)
+    }
+
+    /// Each node's delay for a timing-driven route, in picoseconds, by
+    /// node id: what [`RouteOptions`](super::route::RouteOptions)'s
+    /// [`Timing::node_delay`](super::route::Timing) wants with
+    /// [`Timing::paths`](super::route::Timing) set.
+    ///
+    /// A node costs the delay of the programmable pip that enters it, the
+    /// largest where several do, read from prjxray's
+    /// `tile_type_<type>.json` (`src_to_dst.delay`, the slow corner's
+    /// maximum; see `parse::pip_delays`). A node only bit-less pips enter
+    /// costs nothing: it is the rest of a wire already paid for. A
+    /// programmable pip the file does not time — this flow's own derived
+    /// pips — costs [`UNTIMED_PIP_PS`].
+    ///
+    /// The delays are the pips' own, without the wires' resistance and
+    /// capacitance the same files carry, which is what `timing::WIRE` was
+    /// fitted to: a connection timed here and one estimated there agree.
+    ///
+    /// # Errors
+    ///
+    /// [`XrayError::Malformed`] when a tile type's file is there but is
+    /// not what prjxray writes. A tile type with no file has every pip
+    /// untimed.
+    pub fn node_delays(
+        &self,
+        files: &dyn FileProvider,
+        arch: &Arch,
+        graph: &super::arch::RoutingGraph,
+    ) -> Result<Vec<u32>, XrayError> {
+        type Delays = HashMap<(String, String), u32>;
+        let mut tables: Vec<Delays> = Vec::with_capacity(arch.tile_types.len());
+        for tile_type in &arch.tile_types {
+            // A tile type split by bit alias is `<type>_W<offset>`.
+            let name = tile_type.name.as_str();
+            let base = name
+                .rsplit_once("_W")
+                .filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                .map_or(name, |(head, _)| head);
+            let mut table = Delays::new();
+            for candidate in [name, base] {
+                let path = format!("{}/{}/tile_type_{candidate}.json", self.root, self.family);
+                let Some(text) = files.read_file(&path) else {
+                    continue;
+                };
+                let json = Json::parse(&text).map_err(|e| XrayError::Malformed {
+                    path: path.clone(),
+                    message: e.to_string(),
+                })?;
+                for (from, to, ps) in parse::pip_delays(&json, &path)? {
+                    table.insert((from, to), ps);
+                }
+                break;
+            }
+            tables.push(table);
+        }
+        let mut out = vec![0u32; graph.nodes.len()];
+        for (index, pip) in graph.pips.iter().enumerate() {
+            let index = super::arch::PipId::try_from(index).unwrap_or(u32::MAX);
+            if graph.pip_bits(index).is_empty() {
+                continue;
+            }
+            let table = arch
+                .tile_index_at(pip.tile.0, pip.tile.1)
+                .and_then(|t| tables.get(t));
+            let ps = table
+                .and_then(|t| {
+                    t.get(&(
+                        graph.wire(pip.from).name.clone(),
+                        graph.wire(pip.to).name.clone(),
+                    ))
+                })
+                .copied()
+                .unwrap_or(UNTIMED_PIP_PS);
+            let node = &mut out[pip.to as usize];
+            *node = (*node).max(ps);
+        }
+        Ok(out)
     }
 
     /// Loads the fabric.
@@ -2633,6 +2714,18 @@ const NOT_ARCS: [&str; 2] = ["DIFF", "ENABLE_BUFFER"];
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
 /// twentieth of an ordinary wire the ECP5 flow uses.
 pub const CLOCK_PREFERENCE: f32 = 0.05;
+
+/// What a timing-driven route reckons a tile of distance still to go
+/// delays, in picoseconds (`route::Timing::tile_delay`): about half of
+/// what a connection of the ChipWhisperer-Husky Plus took a tile on
+/// 2026-10-22 (48 ps, `timing::WIRE`), which is about what a long line
+/// costs a tile, so that the estimate stays under most journeys.
+pub const ROUTE_TILE_DELAY_PS: u32 = 25;
+
+/// What [`XrayDatabase::node_delays`] charges a programmable pip prjxray
+/// gives no delay for, in picoseconds: the median of those it does, over
+/// every tile type of `artix7/` at 0a0adde (0.175 ns).
+pub const UNTIMED_PIP_PS: u32 = 175;
 
 /// The router's distance charge per tile on this fabric
 /// ([`RouteOptions::astar_weight`](crate::fpga::route::RouteOptions)).

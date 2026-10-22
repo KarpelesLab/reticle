@@ -85,7 +85,9 @@ enum Source {
 
 /// Project X-Ray's database: the Artix-7 part of it, which is what the
 /// 7-series flow loads and what `tests/fpga_xray.rs` reads, including
-/// the Vivado reference bitstreams in `artix7/harness/`.
+/// the Vivado reference bitstreams in `artix7/harness/` and, since
+/// 2026-10-23, every `artix7/tile_type_*.json` (40 MB), whose pip delays a
+/// timing-driven route weighs (`XrayDatabase::node_delays`).
 pub(crate) const PRJXRAY: Database = Database {
     name: "prjxray-db",
     version: "0a0addedd73e7e4139d52a6d8db4258763e0f1f3",
@@ -795,7 +797,7 @@ mod tests {
             panic!("prjxray-db is fetched file by file")
         };
         let files = parse_manifest(manifest).expect("every line parses");
-        assert_eq!(files.len(), 284);
+        assert_eq!(files.len(), 412);
         let has = |p: &str| files.iter().any(|f| f.path == p);
         assert!(has("LICENSE"));
         assert!(has(PRJXRAY.probe));
@@ -806,6 +808,16 @@ mod tests {
         // The Husky Plus: its part, and the XC7A100T's own fabric.
         assert!(has("artix7/xc7a100tftg256-1/part.json"));
         assert!(has("artix7/xc7a100t/tilegrid.json"));
+        // Every tile type's pips and their delays, for a timing-driven
+        // route: 128 files.
+        assert!(has("artix7/tile_type_INT_L.json"));
+        assert_eq!(
+            files
+                .iter()
+                .filter(|f| f.path.starts_with("artix7/tile_type_"))
+                .count(),
+            128
+        );
         assert!(
             files
                 .iter()

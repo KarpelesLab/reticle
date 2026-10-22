@@ -3447,6 +3447,16 @@ fn write_xc7_bitstream(
     let (placement, placement_report) =
         place(&netlist, &fabric.arch, &graph, constraints, &options).map_err(|e| e.to_string())?;
     laps.lap("place");
+    // Each node's delay, for the routing and its estimate below; only a
+    // timing-driven build reads the tile types' timing files.
+    let node_delay = if options.timing.is_some() {
+        Some(
+            db.node_delays(&files, &fabric.arch, &graph)
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
     for (round, estimate) in placement_report.timing.iter().enumerate() {
         let paths: Vec<String> = domains
             .iter()
@@ -3573,6 +3583,27 @@ fn write_xc7_bitstream(
         equivalent: reticle::fpga::xray::lut_input_classes(
             design, top, &netlist, &graph, &placement,
         ),
+        // `--timing-driven` routes for time as well: each pass is analysed
+        // as the placement was, per clock domain, from each connection's
+        // routed delay, and a critical connection weighs delay over
+        // congestion. See `route::Timing::paths`.
+        timing: node_delay.as_ref().and_then(|delays| {
+            options
+                .timing
+                .clone()
+                .map(|paths| reticle::fpga::route::Timing {
+                    node_delay: delays.clone(),
+                    cell_delay: 0,
+                    combinational: Vec::new(),
+                    clock_roles: Vec::new(),
+                    max_criticality: 0.99,
+                    tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
+                    exponent: 8,
+                    passes: 4,
+                    reroute_above: 0.9,
+                    paths: Some(paths),
+                })
+        }),
         ..RouteOptions::default()
     };
     let mut failure = None;
@@ -3585,6 +3616,163 @@ fn write_xc7_bitstream(
             (reticle::fpga::Routing::new(netlist.signals.len()), 0)
         }
     };
+    // What the route made of each domain's paths, by the same model the
+    // placement estimate used: the routed counterpart of the line above.
+    if let (Some(delays), Some(paths), None) = (&node_delay, &options.timing, &failure) {
+        let wire =
+            reticle::fpga::route::connection_delays(&netlist, &graph, &placement, &routing, delays);
+        let (_, longest) = reticle::fpga::place::path_criticality(&netlist, paths, &wire);
+        let domains_text: Vec<String> = domains
+            .iter()
+            .zip(&longest)
+            .zip(&paths.periods)
+            .map(|((name, ps), period)| {
+                #[allow(clippy::cast_precision_loss, reason = "picoseconds to nanoseconds")]
+                let ns = *ps as f64 / 1000.0;
+                format!("{name} {ns:.2} ns of {period} ns")
+            })
+            .collect();
+        eprintln!("note: routed timing estimate: {}", domains_text.join(", "));
+        // What a connection costs against how far it goes, for the
+        // placement's estimate (`xray::timing::WIRE`) to be checked
+        // against: the mean routed delay of the connections in each band
+        // of tile distance.
+        let mut bands = [(0usize, 0.0f64); 8];
+        let edges = [0u32, 2, 5, 10, 20, 40, 80, 160];
+        for signal in &netlist.signals {
+            let Some(driver) = signal.driver else {
+                continue;
+            };
+            let Some(a) = placement
+                .site_of(netlist.pins[driver].instance)
+                .map(|s| graph.sites[s].tile)
+            else {
+                continue;
+            };
+            for sink in &signal.sinks {
+                let Some(b) = placement
+                    .site_of(netlist.pins[*sink].instance)
+                    .map(|s| graph.sites[s].tile)
+                else {
+                    continue;
+                };
+                if wire[*sink] <= 0.0 {
+                    continue;
+                }
+                let tiles = a.0.abs_diff(b.0) + a.1.abs_diff(b.1);
+                let band = edges.iter().rposition(|e| tiles >= *e).unwrap_or(0);
+                bands[band].0 += 1;
+                bands[band].1 += wire[*sink];
+            }
+        }
+        let text: Vec<String> = bands
+            .iter()
+            .zip(edges)
+            .filter(|((n, _), _)| *n > 0)
+            .map(|((n, sum), edge)| {
+                #[allow(clippy::cast_precision_loss, reason = "a mean")]
+                let mean = sum / *n as f64;
+                format!("{edge}+ tiles {mean:.2} ns ({n})")
+            })
+            .collect();
+        eprintln!(
+            "note: routed connections, mean delay by distance: {}",
+            text.join(", ")
+        );
+        // And as `WIRE`'s three numbers: a least-squares line through the
+        // narrow signals' connections, and the extra a tile the wide
+        // ones' take over it.
+        let mut narrow = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        let mut wide = (0.0f64, 0.0f64, 0.0f64);
+        for signal in &netlist.signals {
+            let Some(driver) = signal.driver else {
+                continue;
+            };
+            let Some(a) = placement
+                .site_of(netlist.pins[driver].instance)
+                .map(|s| graph.sites[s].tile)
+            else {
+                continue;
+            };
+            for sink in &signal.sinks {
+                let Some(b) = placement
+                    .site_of(netlist.pins[*sink].instance)
+                    .map(|s| graph.sites[s].tile)
+                else {
+                    continue;
+                };
+                if wire[*sink] <= 0.0 {
+                    continue;
+                }
+                let t = f64::from(a.0.abs_diff(b.0) + a.1.abs_diff(b.1));
+                let d = wire[*sink];
+                if signal.sinks.len() > reticle::fpga::place::WIDE_FANOUT {
+                    wide.0 += 1.0;
+                    wide.1 += t;
+                    wide.2 += d;
+                } else {
+                    narrow.0 += 1.0;
+                    narrow.1 += t;
+                    narrow.2 += d;
+                    narrow.3 += t * t;
+                    narrow.4 += t * d;
+                }
+            }
+        }
+        let (n, st, sd, stt, std) = narrow;
+        if n > 1.0 && n * stt - st * st > 0.0 {
+            let slope = (n * std - st * sd) / (n * stt - st * st);
+            let intercept = (sd - slope * st) / n;
+            // The wide signals' extra a tile: what their delay is over the
+            // narrow line, per tile they cover.
+            let extra = if wide.1 > 0.0 {
+                (wide.2 - intercept * wide.0 - slope * wide.1) / wide.1
+            } else {
+                0.0
+            };
+            eprintln!(
+                "note: routed connections, fitted: {intercept:.3} ns + {slope:.4} ns a tile, \
+                 and {extra:.4} ns a tile more on a signal of more than {} sinks",
+                reticle::fpga::place::WIDE_FANOUT
+            );
+        }
+        // Where the time goes on each domain's latest path, when it is
+        // late: each pin with its arrival, and an input's connection.
+        for (domain, ((name, ps), period)) in
+            domains.iter().zip(&longest).zip(&paths.periods).enumerate()
+        {
+            #[allow(clippy::cast_precision_loss, reason = "picoseconds to nanoseconds")]
+            if (*ps as f64) / 1000.0 <= *period {
+                continue;
+            }
+            let path = reticle::fpga::place::worst_path(&netlist, paths, &wire, domain);
+            eprintln!("note: {name}'s latest path, {} pins:", path.len());
+            let tile = |instance: usize| {
+                placement
+                    .site_of(instance)
+                    .map(|site| graph.sites[site].tile)
+            };
+            let mut from = None;
+            for step in &path {
+                let pin = &netlist.pins[step.pin];
+                let cell = &netlist.instances[step.instance].name;
+                if pin.output {
+                    eprintln!("    {:7.2} ns  {cell}.{}", step.arrival, pin.role);
+                    from = tile(step.instance);
+                } else {
+                    let tiles = from
+                        .zip(tile(step.instance))
+                        .map_or(String::new(), |(a, b)| {
+                            format!(", {} tiles", a.0.abs_diff(b.0) + a.1.abs_diff(b.1))
+                        });
+                    eprintln!(
+                        "    {:7.2} ns  {cell}.{} (+{:.2} ns of connection{tiles})",
+                        step.arrival, pin.role, step.wire
+                    );
+                }
+            }
+        }
+    }
     // Every table a signal reached on another input than the one it was
     // mapped to gets the truth table, the connection and the netlist pin
     // that say so, before anything is checked or written from them.

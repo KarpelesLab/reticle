@@ -76,11 +76,11 @@ fn unquote(text: &str) -> &str {
 /// # Why this is a rule and not a lookup
 ///
 /// `prjxray-db` ships the *bits*, in `segbits_<type>.db`, whose lines are
-/// `<TILE_TYPE>.<A>.<B> <bits>`. It does not ship the tile-type wire and
-/// pip lists that would say whether `<A>` is a wire or a site: prjxray
-/// generates those from Vivado into `tile_type_*.json`, which is not in
-/// the repository. So the distinction has to be recovered from the
-/// feature names themselves.
+/// `<TILE_TYPE>.<A>.<B> <bits>`. Whether `<A>` is a wire or a site is in
+/// prjxray's `tile_type_*.json`, which this was written believing was not
+/// in the repository; it is (see the module documentation of
+/// `xray`), but the loader does not read it for the fabric, so the
+/// distinction is recovered from the feature names themselves.
 ///
 /// The rule: a two-component feature is a pip unless its first component
 /// also heads a *longer* feature of the same tile type, because that is
@@ -509,6 +509,55 @@ pub(super) fn tileconn(json: &Json, path: &str) -> Result<Vec<TileConn>, XrayErr
             delta: (dx, dy),
             pairs,
         });
+    }
+    Ok(out)
+}
+
+/// Reads the pip delays out of a `tile_type_<type>.json`: each pip's
+/// source wire, destination wire and delay from source to destination in
+/// picoseconds, the slow corner's maximum (the fourth of the four numbers
+/// `src_to_dst.delay` carries, which is what `timing` reads its cells
+/// at). A pip with no delay is left out.
+///
+/// # Errors
+///
+/// [`XrayError::Malformed`] when the file has no `pips` object.
+pub(super) fn pip_delays(json: &Json, path: &str) -> Result<Vec<(String, String, u32)>, XrayError> {
+    let pips = json
+        .get("pips")
+        .and_then(Json::as_object)
+        .ok_or_else(|| XrayError::Malformed {
+            path: path.to_owned(),
+            message: "no `pips` object".to_owned(),
+        })?;
+    let mut out = Vec::with_capacity(pips.len());
+    for (_, pip) in pips {
+        let (Some(from), Some(to)) = (
+            pip.get("src_wire").and_then(Json::as_str),
+            pip.get("dst_wire").and_then(Json::as_str),
+        ) else {
+            continue;
+        };
+        let Some(ns) = pip
+            .get("src_to_dst")
+            .and_then(|d| d.get("delay"))
+            .and_then(Json::as_array)
+            .and_then(|d| d.get(3))
+            .and_then(Json::as_str)
+            .and_then(|d| d.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a pip's delay, a few nanoseconds at most, in picoseconds"
+        )]
+        out.push((
+            from.to_owned(),
+            to.to_owned(),
+            (ns * 1000.0).round().max(0.0) as u32,
+        ));
     }
     Ok(out)
 }
