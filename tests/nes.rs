@@ -85,6 +85,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use reticle::diag::{Diagnostics, Severity};
 use reticle::fpga::{self, Constraints, FpgaOptions};
@@ -495,12 +496,19 @@ fn the_project_resolves_and_elaborates() {
             ("dvi_tx", "rtl/video_timing.v"),
             ("dvi_tx", "rtl/dvi_tx.v"),
             ("vga_out", "rtl/vga_out.v"),
+            ("mjpeg_enc", "rtl/jpeg_fdct.v"),
+            ("mjpeg_enc", "rtl/jpeg_quant.v"),
+            ("mjpeg_enc", "rtl/jpeg_entropy.v"),
+            ("mjpeg_enc", "rtl/mjpeg_enc.v"),
             ("nes", "rtl/nes_console.v"),
             ("nes", "rtl/nes_video.v"),
+            ("nes", "rtl/nes_luma.v"),
             ("nes", "rtl/nes_top.v"),
             ("nes", "rtl/nes_basys3.v"),
+            ("nes", "rtl/nes_jpeg.v"),
         ],
-        "the processor, the picture unit and the two video outputs come from the library"
+        "the processor, the picture unit, the two video outputs and the encoder come \
+         from the library"
     );
     // `vga_out` reaches the build through its own `depends dvi_tx`, and
     // `video_timing` appears once for both video paths and not twice.
@@ -1427,6 +1435,429 @@ fn the_frame_comes_out_of_the_video_port() {
     assert_eq!(frame_hash(&got), FRAME_HASH);
 }
 
+// ---------------------------------------------------------------------------
+// The picture as a JPEG file
+//
+// `nes_jpeg` is the third top level: the same console and the same frame
+// buffer, with `mjpeg_enc` where a video output would be. Nothing about
+// JPEG is tested here — `tests/ip_library.rs` does that against whole
+// files ffmpeg decoded — and nothing about the picture either, because
+// `the_frame_comes_out_of_the_video_port` above has already held it
+// against the model. What is left, and what this section is, is the
+// join: that the buffer handed over holds one whole frame and not a
+// torn pair, that the samples reach the encoder in block order, and
+// that the bytes which come back are a file.
+// ---------------------------------------------------------------------------
+
+/// The quantisation table the capture uses: 16 in every entry.
+///
+/// Flat on purpose. A table whose entries are all equal cannot be put
+/// in the wrong order, which keeps the zig-zag of T.81 A.3.4 out of
+/// this test — the order is `mjpeg_enc`'s business and
+/// `mjpeg_enc_writes_files_ffmpeg_decoded` checks it against a varied
+/// table. 16 is also where `ip/video/mjpeg_enc/README.md` measures the
+/// transform.
+const JPEG_QTABLE: [u8; 64] = [16; 64];
+
+/// The file the capture has to produce, byte for byte.
+const JPEG_GOLDEN: &str = "testdata/nes/frame.jpg";
+
+/// The two Annex K Huffman tables, in the form `DHT` carries them: the
+/// sixteen counts of codes per length, then the symbols.
+///
+/// Read out of `testdata/ip/mjpeg_enc_corpus.txt` rather than written
+/// again here. They are data — `mjpeg_enc` derives its codes from
+/// whatever table it is given and writes that same table into the file
+/// — so this repository holds them once, where the encoder's own tests
+/// already use them.
+fn annex_k() -> Vec<(u64, Vec<u8>, Vec<u8>)> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/mjpeg_enc_corpus.txt");
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let line = |tag: &str| -> Vec<u8> {
+        let rest = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix(tag))
+            .map(str::trim)
+            .unwrap_or_else(|| panic!("{} has no `{tag}` line", path.display()));
+        assert!(rest.len().is_multiple_of(2), "`{tag}` is not whole bytes");
+        (0..rest.len() / 2)
+            .map(|i| u8::from_str_radix(&rest[2 * i..2 * i + 2], 16).expect("two hex digits"))
+            .collect()
+    };
+    let tables = vec![
+        (1u64, line("dcbits"), line("dcvals")),
+        (2u64, line("acbits"), line("acvals")),
+    ];
+    for (sel, bits, vals) in &tables {
+        assert_eq!(bits.len(), 16, "table {sel}: sixteen counts of codes");
+        let coded: usize = bits.iter().map(|b| usize::from(*b)).sum();
+        assert_eq!(coded, vals.len(), "table {sel}: the counts and the symbols");
+    }
+    tables
+}
+
+/// The design `nes_jpeg` elaborates to: the console, the frame buffer,
+/// `nes_luma` and `mjpeg_enc`.
+fn jpeg_design(dir: &Path) -> Design {
+    build(dir, |project| {
+        project.top = Some("nes_jpeg".to_owned());
+    })
+    .elaboration
+    .design
+    .expect("nes_jpeg elaborates")
+}
+
+/// One run of `nes_jpeg`.
+struct Capture {
+    /// Every byte the design gave back, which should be a whole file.
+    file: Vec<u8>,
+    /// The palette indices the frame buffer held when it was frozen,
+    /// read out of the simulated memory and not off any port.
+    frame: Vec<u8>,
+    /// Clocks from the release of reset to `done`, most of which is the
+    /// console drawing two frames before the encoder is started.
+    clocks: u64,
+    /// Clocks from the first byte of the file to `done`, which is the
+    /// part a transport would have to keep up with.
+    coding: u64,
+}
+
+/// Runs `nes_jpeg` once: the tables in, `arm`, and every byte out.
+///
+/// `arm` is set **before** reset is released, so the controller leaves
+/// `J_IDLE` on the first cycle after it and the frame it captures is
+/// the second raster pass — which is the one `FRAME` names and
+/// `expected_frame` models. The tables go in during that pass, tens of
+/// thousands of cycles before the encoder is started.
+fn capture_a_frame(dir: &Path) -> Capture {
+    let design = jpeg_design(dir);
+    let mut run = Run::new(&design, "nes_jpeg", sim_options(dir));
+
+    let clk = run.net("nes_jpeg.clk");
+    let rst_n = run.net("nes_jpeg.rst_n");
+    let cfg_sel = run.net("nes_jpeg.cfg_sel");
+    let cfg_addr = run.net("nes_jpeg.cfg_addr");
+    let cfg_data = run.net("nes_jpeg.cfg_data");
+    let cfg_we = run.net("nes_jpeg.cfg_we");
+    let arm = run.net("nes_jpeg.arm");
+    let out_byte = run.net("nes_jpeg.out_byte");
+    let out_valid = run.net("nes_jpeg.out_valid");
+    let out_ready = run.net("nes_jpeg.out_ready");
+    let done = run.net("nes_jpeg.done");
+
+    run.set(arm, 1, 1);
+    run.set(out_ready, 1, 1);
+    run.set(cfg_we, 0, 1);
+    run.set(rst_n, 0, 1);
+    for _ in 0..4 {
+        tick(&mut run, clk);
+    }
+    run.set(rst_n, 1, 1);
+
+    // The tables, each in the form the file carries it.
+    let write = |run: &mut Run<'_>, sel: u64, addr: u64, data: u8| {
+        run.set(cfg_we, 1, 1);
+        run.set(cfg_sel, sel, 2);
+        run.set(cfg_addr, addr, 8);
+        run.set(cfg_data, u64::from(data), 8);
+        tick(run, clk);
+        run.set(cfg_we, 0, 1);
+    };
+    for (i, v) in JPEG_QTABLE.iter().enumerate() {
+        write(&mut run, 0, i as u64, *v);
+    }
+    for (sel, bits, vals) in annex_k() {
+        for (i, v) in bits.iter().enumerate() {
+            write(&mut run, sel, i as u64, *v);
+        }
+        for (i, v) in vals.iter().enumerate() {
+            write(&mut run, sel, 16 + i as u64, *v);
+        }
+    }
+
+    // `out_ready` is high throughout, so every cycle `out_valid` is
+    // high is a byte taken. The outputs are read in the half cycle
+    // before the edge acts on them, which is where a ready/valid
+    // handshake lives.
+    let mut file: Vec<u8> = Vec::new();
+    let mut clocks = 0u64;
+    let mut first_byte = 0u64;
+    loop {
+        run.sim.run_for(HALF);
+        let byte = (run.get(out_valid) == 1).then(|| {
+            u8::try_from(run.maybe(out_byte).expect("a byte with no x in it")).expect("a byte")
+        });
+        let finished = run.get(done) == 1;
+        run.set(clk, 1, 1);
+        run.sim.run_for(HALF);
+        run.set(clk, 0, 1);
+        if let Some(b) = byte {
+            if file.is_empty() {
+                first_byte = clocks;
+            }
+            file.push(b);
+        }
+        clocks += 1;
+        assert!(
+            clocks < 2_000_000,
+            "nes_jpeg stalled after {clocks} clocks with {} byte(s) out",
+            file.len()
+        );
+        if finished {
+            break;
+        }
+    }
+
+    // The buffer as it was handed to the encoder. `frozen` falls on the
+    // same edge `done` rises, so nothing has been written over it yet:
+    // the loop above stops on that edge.
+    let handle = run
+        .sim
+        .memory("nes_jpeg.fb")
+        .expect("nes_jpeg has a frame buffer");
+    let frame: Vec<u8> = (0..SCREEN_W * SCREEN_H)
+        .map(|i| {
+            let value = run
+                .sim
+                .get_mem(handle, i as u64)
+                .and_then(|v| v.to_u64())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the frame buffer was never written at ({}, {})",
+                        i % SCREEN_W,
+                        i / SCREEN_W
+                    )
+                });
+            u8::try_from(value).expect("six bits")
+        })
+        .collect();
+
+    Capture {
+        file,
+        frame,
+        clocks,
+        coding: clocks - first_byte,
+    }
+}
+
+/// The one run both tests below read, because it costs a third of a
+/// million clocks of a console and an encoder together.
+fn capture() -> Option<&'static Capture> {
+    static CAPTURE: OnceLock<Option<Capture>> = OnceLock::new();
+    CAPTURE
+        .get_or_init(|| example().map(|dir| capture_a_frame(&dir)))
+        .as_ref()
+}
+
+/// Where a two-byte marker is, and that there is only the one.
+fn marker(file: &[u8], code: u8, what: &str) -> usize {
+    let found: Vec<usize> = (0..file.len().saturating_sub(1))
+        .filter(|&i| file[i] == 0xFF && file[i + 1] == code)
+        .collect();
+    assert_eq!(found.len(), 1, "{what}: {} of them", found.len());
+    found[0]
+}
+
+/// The frame handed to the encoder is one whole frame of the console's.
+///
+/// **This is the capture, not the encoder.** The frame buffer is read
+/// out of the simulated memory after `done` and hashed, and the hash is
+/// `FRAME_HASH` — the same frame that
+/// `the_frame_comes_out_of_the_video_port` holds against the model
+/// pixel by pixel. So the controller waited for a frame boundary,
+/// froze on the next one, and dropped the write that falls on the
+/// freezing edge.
+///
+/// What this would catch: a capture that starts or stops in the middle
+/// of a frame, which is a seam across the picture; the off-by-one at
+/// the freezing edge, which puts the next frame's top-left pixel in;
+/// the writes not being frozen at all, which would let the console
+/// overwrite the buffer under the encoder and show up as a band; and
+/// capturing the wrong frame, since the demo scrolls and its stars
+/// change colour. What it would not: anything about block order or
+/// luma, because this reads the buffer and not the encoder's input.
+#[test]
+fn the_captured_frame_is_one_whole_frame() {
+    let Some(cap) = capture() else { return };
+    assert_eq!(cap.frame.len(), SCREEN_W * SCREEN_H);
+    assert!(
+        cap.frame.iter().any(|&c| c != cap.frame[0]),
+        "the whole buffer is one colour"
+    );
+    if frame_hash(&cap.frame) != FRAME_HASH {
+        panic!(
+            "the frame handed to the encoder is not frame {FRAME}: hash {:08x}, \
+             expected {FRAME_HASH:08x}\n\nwhat was captured:\n{}",
+            frame_hash(&cap.frame),
+            sketch(&cap.frame)
+        );
+    }
+}
+
+/// The console's picture comes back as a JPEG file.
+///
+/// **The file is the golden**, `testdata/nes/frame.jpg`, and it is a
+/// `.jpg` you can open: it is the demo's second frame as `mjpeg_enc`
+/// wrote it, decoded by ffmpeg when it was generated, with no warning
+/// and no error, and `examples/nes/README.md` has the measurement
+/// against the luma that went in. Keeping the file rather than a hash
+/// is the point — a hash says a number changed, and this says what the
+/// console looks like.
+///
+/// Set `UPDATE_EXPECT=1` to rewrite it after a deliberate change, and
+/// then *look at it*, because nothing here can tell a picture from a
+/// mess.
+///
+/// What this would catch: the samples reaching the encoder in any order
+/// but block order, which moves every byte of the scan; a wrong luma,
+/// the same; a sample dropped or repeated by the two-cycle handshake,
+/// which would shift the rest of the file; the header's dimensions not
+/// matching the console's picture; and the encoder being started before
+/// the buffer is whole. What it would not: whether the picture *looks*
+/// right, which was ffmpeg's to judge and is in the README; and
+/// anything about a second frame, which `mjpeg_enc`'s own tests cover
+/// at the frame boundary.
+#[test]
+fn the_frame_comes_out_as_a_jpeg_file() {
+    let Some(cap) = capture() else { return };
+    let file = &cap.file;
+
+    // A file, before anything is compared with anything.
+    assert!(file.len() > 4096, "{} byte(s) is not a picture", file.len());
+    assert_eq!(&file[..2], &[0xFF, 0xD8], "no SOI");
+    assert_eq!(&file[file.len() - 2..], &[0xFF, 0xD9], "no EOI");
+    marker(file, 0xDB, "the DQT");
+    marker(file, 0xDA, "the SOS");
+    let sof = marker(file, 0xC0, "the SOF0");
+    let height = (usize::from(file[sof + 5]) << 8) | usize::from(file[sof + 6]);
+    let width = (usize::from(file[sof + 7]) << 8) | usize::from(file[sof + 8]);
+    assert_eq!(
+        (width, height),
+        (SCREEN_W, SCREEN_H),
+        "the SOF0 does not describe the console's picture"
+    );
+    assert_eq!(file[sof + 9], 1, "the SOF0 is not one component");
+
+    println!(
+        "{} byte(s), {:.2} bits a pixel; {} clock(s) from the first byte to \
+         `done`, {} from the release of reset",
+        file.len(),
+        8.0 * file.len() as f64 / (SCREEN_W * SCREEN_H) as f64,
+        cap.coding,
+        cap.clocks
+    );
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(JPEG_GOLDEN);
+    if std::env::var_os("UPDATE_EXPECT").is_some() {
+        fs::create_dir_all(path.parent().expect("a directory")).expect("the directory");
+        fs::write(&path, file).expect("write the golden");
+        println!("wrote {}", path.display());
+        return;
+    }
+    let want = fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}\nrerun with UPDATE_EXPECT=1 to write it",
+            path.display()
+        )
+    });
+    if *file != want {
+        let at = file
+            .iter()
+            .zip(&want)
+            .position(|(a, b)| a != b)
+            .unwrap_or(file.len().min(want.len()));
+        panic!(
+            "the file is not {}: {} byte(s) out, {} expected; first difference at \
+             {at}\nrerun with UPDATE_EXPECT=1 if the change was deliberate, then \
+             look at the picture",
+            path.display(),
+            file.len(),
+            want.len()
+        );
+    }
+}
+
+/// The luma that went into the encoder, as `nes_luma` computes it.
+fn capture_luma(frame: &[u8]) -> Vec<u8> {
+    frame
+        .iter()
+        .map(|i| {
+            let [r, g, b] = PALETTE[usize::from(*i)];
+            let y = (77 * u32::from(r) + 150 * u32::from(g) + 29 * u32::from(b)) >> 8;
+            u8::try_from(y).expect("eight bits")
+        })
+        .collect()
+}
+
+/// Writes the capture and the samples that made it, for ffmpeg.
+///
+/// `#[ignore]`d because it is how the golden's measurement was taken
+/// and not a check: it needs a tool the gate has not got. Run it, then
+///
+/// ```text
+/// ffmpeg -i nes_frame.jpg -pix_fmt gray -f rawvideo decoded.gray
+/// ffmpeg -s 256x240 -pix_fmt gray -i decoded.gray \
+///        -s 256x240 -pix_fmt gray -i nes_frame.gray \
+///        -lavfi psnr -f null -
+/// ```
+///
+/// and `examples/nes/README.md` has what that said.
+#[test]
+#[ignore]
+fn write_the_capture_for_ffmpeg() {
+    let Some(cap) = capture() else { return };
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("nes");
+    fs::create_dir_all(&out).expect("a scratch directory");
+    fs::write(out.join("nes_frame.jpg"), &cap.file).expect("write the file");
+    fs::write(out.join("nes_frame.gray"), capture_luma(&cap.frame)).expect("write the samples");
+    println!(
+        "wrote {}/nes_frame.jpg ({} bytes) and nes_frame.gray ({} samples)",
+        out.display(),
+        cap.file.len(),
+        SCREEN_W * SCREEN_H
+    );
+}
+
+/// `nes_luma` is the luma of the palette's own colours.
+///
+/// All 64 of them, against `PALETTE` — which is the independent
+/// transcription the VGA tests use — and against the weights written as
+/// one multiplication each rather than as the twelve shifted terms the
+/// hardware adds. So a mistyped shift is a different number here, which
+/// is the only reason comparing the two means anything.
+///
+/// What this would catch: any of the twelve terms shifted wrongly or
+/// left out, the sum taken at too few bits, the wrong slice of it
+/// returned, and a palette entry that does not match the transcription.
+/// What it would not: whether BT.601's weights are the right weights
+/// for a console that never had an RGB output, which is a matter of
+/// taste and not of correctness.
+#[test]
+fn the_luma_is_the_luma_of_the_palettes_own_colours() {
+    let Some(dir) = example() else { return };
+    let design = build(&dir, |project| {
+        project.top = Some("nes_luma".to_owned());
+    })
+    .elaboration
+    .design
+    .expect("nes_luma elaborates");
+    let mut run = Run::new(&design, "nes_luma", sim_options(&dir));
+    let index = run.net("nes_luma.index");
+    let y = run.net("nes_luma.y");
+
+    for (i, [r, g, b]) in PALETTE.iter().enumerate() {
+        run.set(index, i as u64, 6);
+        run.sim.run_for(HALF);
+        let want = (77 * u32::from(*r) + 150 * u32::from(*g) + 29 * u32::from(*b)) >> 8;
+        assert_eq!(
+            run.get(y),
+            u64::from(want),
+            "index {i:#04x}: the luma of {r:#04x} {g:#04x} {b:#04x}"
+        );
+    }
+}
+
 #[test]
 fn oam_dma_copies_a_page_and_stops_the_processor() {
     let Some(dir) = example() else { return };
@@ -1611,6 +2042,119 @@ fn the_console_maps_onto_the_ecp5_and_exports_for_nextpnr() {
     assert!(
         want_bits > 4 * hx8k_bits,
         "the memory story against the HX8K is not what the README says"
+    );
+}
+
+/// What the encoding build costs, and the part it does not fit.
+///
+/// `nes_jpeg` is the console, the frame buffer and `mjpeg_enc`, with no
+/// video output at all, and this is the only place that says what the
+/// three come to together. There are no pin constraints because there
+/// is no board: the byte stream ends at a port, and getting it off a
+/// part wants a transport this example has not got.
+///
+/// **The number that decides everything is the block RAM count.** The
+/// Cynthion this repository is otherwise built against is an
+/// `LFE5U-12F`, which Lattice's own table gives 32 sysMEM blocks, and
+/// the assertion below is that this design wants more than that. So the
+/// answer to "can this go on the Cynthion" is no, and it is the memory
+/// that says so rather than the logic.
+///
+/// What this would catch: a memory that stopped inferring as block RAM,
+/// which would leave the design unplaceable; a generic cell surviving
+/// the mapper; and the fit story in README.md going stale. What it
+/// would not: whether any of it works on a part, which nothing in this
+/// example has ever done.
+#[test]
+fn the_jpeg_build_maps_onto_the_ecp5() {
+    let Some(dir) = example() else { return };
+    let mut design = jpeg_design(&dir);
+    let top = design.top.expect("a top");
+    let device = fpga::target(DEVICE).expect("the ECP5 45F is a built-in device");
+
+    let mut diags = Diagnostics::new();
+    let options = FpgaOptions {
+        synth: synth_options(&dir),
+        ..FpgaOptions::default()
+    };
+    let flow = fpga::synthesize_for(
+        &mut design,
+        top,
+        device,
+        &Constraints::new(),
+        &options,
+        &mut diags,
+    )
+    .unwrap_or_else(|e| panic!("the ECP5 flow failed: {e:?}"));
+    let errors: Vec<String> = diags
+        .iter()
+        .filter(|d| d.severity >= Severity::Error)
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(errors.is_empty(), "the ECP5 flow reported: {errors:?}");
+
+    println!("nes_jpeg on {DEVICE}:");
+    for (cell, count) in &flow.netlist {
+        println!("  {count:>5} x {cell}");
+    }
+    println!("  {} LUTs, depth {}", flow.luts, flow.lut_depth);
+
+    assert!(
+        flow.netlist.iter().all(|(cell, _)| !cell.starts_with('$')),
+        "a generic cell survived: {:?}",
+        flow.netlist
+    );
+
+    // Every memory in the console, the frame buffer, and the five the
+    // encoder has: its configuration memory with the header built in
+    // the upper half, the transform's transpose buffer, the
+    // quantiser's block and divisors, and the coder's code table.
+    let mut in_block: Vec<&str> = flow
+        .primitives
+        .block_rams
+        .iter()
+        .map(|b| b.memory.as_str())
+        .collect();
+    in_block.sort_unstable();
+    assert_eq!(
+        in_block,
+        [
+            "fb",
+            "u_console.chr",
+            "u_console.nt",
+            "u_console.prg",
+            "u_console.ram",
+            "u_console.u_ppu.oam",
+            "u_enc.cfg",
+            "u_enc.u_ent.tbl",
+            "u_enc.u_fdct.blk",
+            "u_enc.u_quant.blk",
+            "u_enc.u_quant.tbl",
+        ],
+        "a memory did not become block RAM"
+    );
+
+    for b in &flow.primitives.block_rams {
+        println!(
+            "  {} -> {} x DP16KD in {}x{} mode",
+            b.memory,
+            b.blocks(),
+            b.mode.0,
+            b.mode.1
+        );
+    }
+
+    // The part this repository has, against the part this design wants.
+    // 12F and 25F are the same die and prjtrellis carries one database
+    // for both, so the tools would place this and warn; Lattice's table
+    // is what says the smaller part number has the sites.
+    let blocks = flow.count("DP16KD");
+    const CYNTHION_SYSMEM: usize = 32;
+    println!("block RAM: {blocks} x DP16KD wanted, {CYNTHION_SYSMEM} on an LFE5U-12F",);
+    assert!(
+        blocks > CYNTHION_SYSMEM,
+        "{blocks} blocks now fits the 12F's {CYNTHION_SYSMEM}: README.md says it \
+         does not"
     );
 }
 
@@ -1887,9 +2431,10 @@ fn reticle_build_builds_the_project() {
     // Nine: the top and the modules under it. The project names its top,
     // so a library module nothing here instantiates is not elaborated with
     // its default parameters as well, which is where the eleven this used
-    // to count came from.
+    // to count came from — and why adding `nes_jpeg`, `nes_luma` and
+    // `mjpeg_enc`'s four modules moved the source count and not this one.
     assert!(
-        err.contains("note: built `nes`: 9 module(s) from 11 source(s)"),
+        err.contains("note: built `nes`: 9 module(s) from 17 source(s)"),
         "{err}"
     );
     assert!(
@@ -1898,7 +2443,7 @@ fn reticle_build_builds_the_project() {
     );
     assert!(!err.contains("simulation-only statement dropped"), "{err}");
     let lock = fs::read_to_string(&lock).expect("a lock file");
-    for package in ["mos6502", "ppu2c02", "dvi_tx", "vga_out"] {
+    for package in ["mos6502", "ppu2c02", "dvi_tx", "vga_out", "mjpeg_enc"] {
         assert!(lock.contains(package), "{lock}");
     }
 }

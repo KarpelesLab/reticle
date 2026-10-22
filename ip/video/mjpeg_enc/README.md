@@ -21,6 +21,14 @@ order — see *The pixel order is block order* below.
 what `tests/ip_library.rs` checks in simulation and what the FPGA flow
 reports; *What is and is not proved* at the end says which is which.
 
+There is a worked integration:
+[`examples/nes`](../../../examples/nes)'s `nes_jpeg` top level wires
+this encoder to an NES console's frame buffer and encodes a frame of
+its picture into `testdata/nes/frame.jpg`. A design with a frame buffer
+is the easy case for the pixel order below, and that example says what
+it cost — 7 block RAMs on top of the console's, and a `DP16KD` count
+that no longer fits a Cynthion.
+
 ## Why the DCT is not checked the way `adpcm_ima` is
 
 `ip/audio/adpcm_ima` is checked sample for sample against ffmpeg,

@@ -11,6 +11,11 @@ resistor ladder and a DE-15 socket and no DVI connector at all, and
 whose part has no double-data-rate register for one either. The console,
 the cartridge and the frame buffer are the same in both.
 
+And a third top with no monitor on the end at all: `nes_jpeg` encodes
+the frame with [`mjpeg_enc`](../../ip/video/mjpeg_enc) and gives back a
+`.jpg`. [`testdata/nes/frame.jpg`](../../testdata/nes/frame.jpg) is one
+the hardware wrote.
+
 **There is no game here.** Every commercial NES cartridge is copyrighted
 and so is Nintendo's lockout silicon; none of it is in this repository,
 none of it is needed, and none of it would work. What runs on this
@@ -32,11 +37,13 @@ this page.**
 
 ```text
 examples/nes/
-  reticle.proj            the project: mos6502, ppu2c02, dvi_tx and vga_out by name
+  reticle.proj            the project: mos6502, ppu2c02, dvi_tx, vga_out, mjpeg_enc
   rtl/nes_console.v       the console board: the map, the cartridge, sprite DMA
   rtl/nes_video.v         the frame buffer, and the doubling onto 640 x 480
+  rtl/nes_luma.v          a palette index as one eight-bit sample
   rtl/nes_top.v           one top: the three of them on one clock, DVI on the end
-  rtl/nes_basys3.v        the other: two dividers, vga_out, and the same console
+  rtl/nes_basys3.v        the next: two dividers, vga_out, and the same console
+  rtl/nes_jpeg.v          the third: a frame buffer walked in block order, into mjpeg_enc
   sw/demo.s               the program, in 6502 assembly
   sw/demo.hex             it assembled, which the cartridge loads with $readmemh
   sw/chr.s                the tiles, drawn twice: as art and as bytes
@@ -47,13 +54,14 @@ examples/nes/
   board/basys3.rcf        pins and clock for the Basys 3's XC7A35T
 ```
 
-Four library packages and four files of HDL. `mos6502` is the processor,
-[`ppu2c02`](../../ip/video/ppu2c02) is the picture unit and
+Five library packages and six files of HDL. `mos6502` is the processor,
+[`ppu2c02`](../../ip/video/ppu2c02) is the picture unit,
 [`dvi_tx`](../../ip/video/dvi_tx) and [`vga_out`](../../ip/video/vga_out)
-are the two video outputs; everything else on this page is the console
-*board*, which is the part that is neither. `vga_out` depends on `dvi_tx`
-for the raster itself, so `video_timing` is in the design once and not
-twice.
+are the two video outputs and
+[`mjpeg_enc`](../../ip/video/mjpeg_enc) is the encoder; everything else
+on this page is the console *board*, which is the part that is none of
+them. `vga_out` depends on `dvi_tx` for the raster itself, so
+`video_timing` is in the design once and not twice.
 
 ## The processor is `mos6502` with `DECIMAL_MODE = 0`
 
@@ -126,6 +134,15 @@ What it buys is that **nothing in this design crosses between clocks**.
 There are no synchronisers, no asynchronous FIFO and no timing arcs
 between domains, which for a design with a frame buffer written by one
 raster and read by another is worth a great deal.
+
+`nes_jpeg` has no raster on the far side at all, so its only divider is
+the one that makes the dot: `DOT_DIV` cycles of `clk` per dot, exactly
+as `nes_top` takes it. **It defaults to one, which is not a board's
+number** — a board would divide down to 5.25 MHz the way the other two
+tops do. One is what makes the whole thing simulable, because a frame is
+then 89,342 clocks instead of two million, and the picture is identical
+either way: every part of the console is clocked by `en` and none of it
+can tell how often that comes.
 
 `nes_basys3` is the same arrangement on a different oscillator, and with
 no PLL at all:
@@ -203,6 +220,152 @@ truncating would buy half a step in the middle of the range, and would
 cost a saturating add per channel to stop `8'hFF` carrying out of a
 four-bit field — and a four-bit R-2R ladder built from 1 % resistors has
 more error than half a step in its own components.
+
+## The third output: the picture as a JPEG file
+
+`nes_top` puts the picture on a monitor over DVI and `nes_basys3` puts
+it on one over VGA. `nes_jpeg` puts it nowhere: it encodes the frame
+with [`mjpeg_enc`](../../ip/video/mjpeg_enc) and hands back every byte
+of a `.jpg`, from its `SOI` to its `EOI`. Run it once a frame and the
+bytes are Motion JPEG.
+
+[`testdata/nes/frame.jpg`](../../testdata/nes/frame.jpg) is one of
+those files, written by the hardware in simulation and committed. 8370
+bytes, 256 x 240, greyscale, the demo's second frame. **It opens** —
+that is the point of keeping the file rather than a hash of it.
+
+Four things stand between the console and the file, and only one of
+them is new:
+
+| | what it is |
+|---|---|
+| the frame buffer | 64 Ki palette indices, the same memory `nes_video` has |
+| [`nes_luma`](rtl/nes_luma.v) | `ppu_palette`'s RGB weighted into one sample |
+| the address generator | the buffer walked in block order, in `nes_jpeg` |
+| [`mjpeg_enc`](../../ip/video/mjpeg_enc) | the transform, the quantiser, the coder and the markers |
+
+### The frame buffer is why this is cheap here
+
+`mjpeg_enc` takes its samples in **block order**: 64 for one block,
+row-major inside it, then the next block across. Not raster order —
+eight buffered lines of a 640-wide picture is four block RAMs and a
+module about line buffering rather than about JPEG, which is the
+argument at the top of the encoder's own header.
+
+This design has a frame buffer already, because the console's 5.25 MHz
+raster and a monitor's 25 MHz one have nothing to do with each other.
+So the encoder costs it no buffering at all: the address generator
+counts `{block row, row in block}` for the Y and `{block column, column
+in block}` for the X, and that is the whole of it. **256 x 240 is
+exactly 32 x 30 blocks**, both dimensions a multiple of eight, so the
+encoder's one rule about picture size is met without padding anything.
+That is luck, and it is why this example is the one the encoder was
+wired to first.
+
+The counters stand still until the encoder takes the sample and then
+spend one cycle waiting for the memory, so a sample every two cycles at
+best. It does not matter: `jpeg_fdct` takes **648 cycles a block**,
+which is 622,080 for this picture's 960 blocks, five times what the
+feed could deliver. `in_ready` is low for most of a frame.
+
+### Greyscale, and one palette
+
+The encoder is greyscale and the console's picture is a six-bit palette
+index, so `nes_luma` sits between them: the index goes to
+`ppu_palette` — the same table the DVI and VGA tops use — and its RGB
+is weighted by BT.601's coefficients at eight bits,
+`(77 R + 150 G + 29 B) / 256`, as twelve shifted terms and no
+multiplier. The weights sum to exactly 256, so white is 255.
+
+**There is no second palette.** A 64-entry luma table would have been
+smaller than the arithmetic and it would have been the palette written
+twice, which is the thing `mjpeg_enc` refuses to do with quantisation
+tables for the same reason. `the_luma_is_the_luma_of_the_palettes_own_colours`
+checks all 64 against the independent transcription the VGA tests use.
+
+### One whole frame, and the write that has to be dropped
+
+`arm` asks for a frame. The controller waits for the start of the next
+one, lets the console fill the buffer for exactly that frame, and at the
+following frame boundary freezes the writes and starts the encoder. So
+the file is one frame as the console drew it, with no seam — which
+`nes_video` does not promise and does not need to.
+
+What is frozen is the buffer, not the console: it goes on running and
+its writes are dropped while the encode is in flight. That is what a
+capture slower than its source does, and it is why there is no second
+buffer — two would be another 24 `DP16KD`.
+
+One off-by-one is worth the sentence. `frozen` is a register, so it is
+still low on the edge that sets it, and that edge is dot 0 of line 0 of
+the *next* frame, where `vid_de` is already high. Without the term that
+drops that one write, the file is one frame plus the top-left pixel of
+the one after it. `the_captured_frame_is_one_whole_frame` catches it:
+it reads the buffer out of the simulated memory after `done` and hashes
+it, and the hash is `FRAME_HASH` — the same frame that
+`the_frame_comes_out_of_the_video_port` holds against the model pixel
+by pixel.
+
+### What came out
+
+Measured by `the_frame_comes_out_as_a_jpeg_file`, at a flat
+quantisation table of 16 and Annex K's Huffman tables:
+
+| | |
+|---|---|
+| the file | 8370 bytes, 1.09 bits a pixel |
+| what ffmpeg calls it | `mjpeg (Baseline), gray(bt470bg), 256x240` |
+| what ffmpeg's decode is worth | **39.8 dB** against the samples that went in |
+| the first byte to `done` | 713,640 clocks |
+| the release of reset to `done` | 892,913 clocks, two console frames of which are the console drawing |
+
+The quantisation table is flat on purpose: a table whose entries are
+all equal cannot be put in the wrong order, which keeps the zig-zag of
+T.81 A.3.4 out of this example entirely — it is the encoder's business
+and its own corpus checks it against a varied table.
+
+The Huffman tables are read out of
+`testdata/ip/mjpeg_enc_corpus.txt` rather than written again here. They
+are data: `mjpeg_enc` derives its codes from whatever table it is given
+and writes that same table into the file, so this repository holds
+Annex K once.
+
+What it costs on an ECP5, and the part it does not fit, are under
+[Resource use](#resource-use) with the other two tops.
+
+### What it would take to get the bytes off a part
+
+Nothing in this design is a transport: `out_byte`, `out_valid` and
+`out_ready` end at a port. What would have to go behind them, and what
+it would have to carry:
+
+8370 bytes is one frame at this quantisation table, and the encode is
+713,640 clocks. At 60 MHz that is 11.9 ms, which is less than the 17.0
+ms the console spends drawing a frame — so the steady state with `arm`
+held high is one file every two frames, about **29 a second**, or
+246 KB/s. Full-speed USB carries about 1 MB/s of bulk data in practice,
+so it would fit with room to spare, and the Cynthion's ULPI PHY is high
+speed anyway.
+
+**That arithmetic assumes a 60 MHz clock this design has not been shown
+to reach.** 25 levels of four-input LUT is deep, and
+`docs/fpga-trellis.md` puts 19 levels below 60 MHz on an ECP5 — which
+that page is careful to call an inference from the level count and a
+placement experiment rather than a measurement, because Reticle's delay
+model for this family is placeholders and the slack it reports is a
+count of levels and not a time. Halve the clock and the encode no
+longer fits inside a frame and the rate falls with it.
+
+And a host would see a byte stream, not a camera. There is no USB video
+class in `ip/usb/` — it is CDC-ACM, a full-speed device, a ULPI device,
+a host, a hub and a proxy — so the near thing is `usb_cdc_acm` and a
+program on the other end that cuts the stream at `FF D8` and writes
+files. A device a video-conferencing application opens by itself is a
+different and much larger piece of work, and so is H.264: baseline AVC
+is intra prediction, motion estimation, CAVLC and a deblocking filter,
+each of them comparable to this whole encoder, and the motion
+estimation alone wants reference frames this part has not got the
+memory for. Motion JPEG is the codec that fits.
 
 ## The demo
 
@@ -337,7 +500,7 @@ cargo test --all-features --test nes
 | `demo_hex_is_the_assembled_source` | `sw/demo.hex` is `sw/demo.s` assembled, with the three vectors pointing at the labels the source names |
 | `chr_hex_is_the_assembled_source` | and `sw/chr.hex` is `sw/chr.s` assembled, with sprite tile 0 blank because an unused slot still fetches it |
 | `the_tiles_are_the_art_drawn_above_them` | all eleven tiles' bytes are the art in the comment over them |
-| `the_project_resolves_and_elaborates` | the manifest builds from exactly three library packages and three user sources |
+| `the_project_resolves_and_elaborates` | the manifest builds from exactly five library packages and six user sources |
 | `the_console_synthesises_without_errors_or_latches` | no error, no warning and no latch, and both cartridge memories hold their hex files — with every byte the files did not name still `x` |
 | **`the_frame_comes_out_of_the_video_port`** | **two frames of the demo, and every one of the 61,440 pixels of the second compared against a frame buffer computed independently from the nametable, the tiles and the palette** |
 | `the_screen_doubles_the_console_onto_the_tmds_lanes` | and the other half of the chain: a painted frame buffer read back off the four output pins, TMDS symbols decoded, doubled, centred, black border |
@@ -349,7 +512,11 @@ cargo test --all-features --test nes
 | `the_write_latch_is_shared_by_2005_and_2006` | one `w` toggle between the two registers, read off the address pins |
 | `the_data_port_reads_one_access_behind_and_steps_by_what_2000_says` | the buffered `$2007` read, the palette read that is not buffered, `$3F10` being `$3F00`, and `$2000`'s increment and nametable bits |
 | `oam_dma_copies_a_page_and_stops_the_processor` | 513 processor cycles, and nothing retired in them |
+| `the_luma_is_the_luma_of_the_palettes_own_colours` | all 64 of `nes_luma`'s samples against the palette's own RGB, weighted independently |
+| `the_captured_frame_is_one_whole_frame` | what `nes_jpeg` hands the encoder is one frame of the demo and not a torn pair, hashed against the frame the test above checked pixel by pixel |
+| **`the_frame_comes_out_as_a_jpeg_file`** | **the picture back as 8370 bytes of `.jpg`, `SOI` to `EOI`, byte for byte against a file ffmpeg decoded** |
 | `the_console_maps_onto_the_ecp5_and_exports_for_nextpnr` | the ECP5 flow fits it, every cell a primitive, every memory in block RAM, and the files `nextpnr-ecp5` reads |
+| `the_jpeg_build_maps_onto_the_ecp5` | and what the encoding build comes to: 46 block RAMs, which is more than a Cynthion's part is specified to have |
 | `the_console_maps_onto_the_artix7_for_the_basys3` | the 7-series flow fits `nes_basys3` on an XC7A35T with no PLL and no DDR anywhere, and writes the netlist, the XDC and the Vivado script |
 | `reticle_build_builds_the_project` | `reticle build --synth` on the manifest |
 | `reticle_sim_runs_the_testbench` | the same frame hash out of `reticle sim` |
@@ -423,8 +590,9 @@ The ECP5 flow in `tests/nes.rs`, for `ecp5-45f-CABGA381`:
 
 | Resource | Used | The 45F has |
 |----------|------|-------------|
-| `LUT4` | 5409 | 43848 |
+| `LUT4` | 4946 | 43848 |
 | `TRELLIS_FF` | 1154 | 43848 |
+| `CCU2C` | 313 | — |
 | `DP16KD` | 39 | — |
 | `ODDRX1F` | 4 | — |
 | `TRELLIS_IO` | 5 | — |
@@ -456,15 +624,18 @@ The 7-series flow in `tests/nes.rs`, for `xc7a35t-cpg236`:
 
 | Resource | `nes_basys3` | `nes_top` on the same part | The XC7A35T has |
 |----------|--------------|----------------------------|-----------------|
-| `LUT6` | 3786 | 4184 | 20800 |
-| `CARRY4` | 80 | 137 | — |
+| `LUT6` | 3887 | 4184 | 20800 |
+| `CARRY4` | 81 | 137 | — |
 | flip-flops | 1082 | 1154 | 41600 |
 | `RAMB18E1` | 39 | 39 | 100 |
 | `BUFG` | 1 | 1 | 32 |
 | logic depth | 23 | 24 | — |
 
-The middle column is a measurement and not a buildable target. `nes_top`
-cannot be built *for a board* on this part — its four TMDS ports have
+The middle column is a measurement and not a buildable target, and it is
+an **older** one: the left column is what `tests/nes.rs` reports today
+and the middle is what `docs/fpga.md` recorded when the swap was made,
+so the saving below is that round's and not a subtraction of these two.
+`nes_top` cannot be built *for a board* on this part — its four TMDS ports have
 nowhere to go, which the next section quotes — so that column is what
 the flow reports when it is asked for the netlist and not for pins. It
 is here because it is the fair way to say what the swap saves: **398
@@ -483,7 +654,7 @@ in front of it.
 ### It does not fit the iCE40 HX8K
 
 `examples/soc` and `examples/mos6502_computer` both fit on an
-`ice40-hx8k-ct256`, and this does not. The logic would nearly fit — 5409
+`ice40-hx8k-ct256`, and this does not. The logic would fit — 4946
 four-input LUTs against the HX8K's 7680, though an iCE40 mapping is not
 an ECP5 one — but **the memory is nowhere near**: 39 `DP16KD` is 638,976
 bits, and the HX8K's 32 `SB_RAM40_4K` are 131,072. The frame buffer alone
@@ -498,6 +669,57 @@ cycle counts assume. The trade is stated here rather than taken.
 The other half of the problem is the clock: `dvi_tx` runs at five times
 the pixel rate, 126 MHz for 640 x 480, and the transmitter's own header
 says that is at the edge of what an iCE40 does.
+
+### And the encoding build
+
+The ECP5 flow in `tests/nes.rs`, for `ecp5-45f-CABGA381`:
+
+| Resource | `nes_jpeg` | `nes_top` | The 45F has |
+|----------|-----------|-----------|-------------|
+| `LUT4` | 7863 | 4946 | 43848 |
+| `TRELLIS_FF` | 1932 | 1154 | 43848 |
+| `CCU2C` | 645 | 313 | — |
+| `DP16KD` | 46 | 39 | — |
+| logic depth | 25 | 25 | — |
+
+The two columns are not a difference anyone can subtract: `nes_jpeg`
+has no transmitter in it, so what the encoder added and what `dvi_tx`
+took away are both in the gap. The block RAM is the exception and is
+exact — **the encoder's five memories are 7 `DP16KD`**, which is what
+`docs/ip-library.md` reports for it on its own:
+
+| Memory | `DP16KD` |
+|--------|----------|
+| `u_enc.u_ent.tbl` | 3 |
+| `u_enc.cfg` | 1 |
+| `u_enc.u_fdct.blk` | 1 |
+| `u_enc.u_quant.blk` | 1 |
+| `u_enc.u_quant.tbl` | 1 |
+
+The logic depth did not move, which says the encoder's longest path is
+shorter than the console's.
+
+### It does not fit the Cynthion either
+
+The board this repository is otherwise built against is a Cynthion,
+whose part is an `LFE5U-12F`. Lattice's own table — quoted in
+`src/fpga/devices/ecp5.dev` — gives it 12k LUTs and **32** sysMEM
+blocks. The logic would fit with room. The memory does not: 46 against
+32, and the console alone already wants 39, of which the frame buffer
+is 24.
+
+That is a statement about the part number and not about silicon.
+`src/fpga/device.rs` records that an `LFE5U-12F` and an `LFE5U-25F` are
+the same die and that Project Trellis carries **one** database for both
+— at commit `015e033` the two directories are the same git tree — so
+the fabric that comes out of it is the 25F's whichever part number
+asked, and the 25F is specified at 56 blocks. The tools would place
+this and raise a `SiteOverrun` *warning* rather than refuse it, and
+that warning is a warning precisely because which of the die's sites
+the smaller part number covers is not stated anywhere this project can
+read. Nothing here has tried it on a part.
+`the_jpeg_build_maps_onto_the_ecp5` asserts the 46, so this section
+cannot go stale quietly.
 
 ## On a board
 
@@ -660,6 +882,12 @@ Proved here, by `cargo test`:
 - what four bits a channel costs the palette, counted rather than warned
   about: 54 distinct colours become 53, and the pair that merges is
   named;
+- **and the picture comes back out as a file**: `nes_jpeg` freezes one
+  whole frame in the buffer, walks it in block order through `nes_luma`
+  into `mjpeg_enc`, and gives back 8370 bytes that are
+  `testdata/nes/frame.jpg` byte for byte — a file ffmpeg decodes as
+  baseline greyscale JPEG, 256 x 240, at 39.8 dB against the samples
+  that went in;
 - the ECP5 flow maps every cell to a device primitive, puts every memory
   into block RAM with the cartridge's contents in it, and exports the
   JSON and LPF `nextpnr-ecp5` reads, with no problem left for
@@ -698,6 +926,10 @@ Not proved:
   through `dvi_tx` the same frame is 2.1 million cycles of a design this
   size, which is minutes of simulation for a link the frame test and the
   TMDS test already cover from either end.
+- **that the bytes get anywhere.** `nes_jpeg` ends at a port. There is
+  no transport behind it, nothing in `ip/usb/` that a host would open as
+  a camera, and the rate arithmetic in the JPEG section above assumes a
+  60 MHz clock that nothing has shown this design reaches.
 - **anything about sound**, because there is none.
 
 Building this found **two defects in Reticle**, both in the FPGA flow and
