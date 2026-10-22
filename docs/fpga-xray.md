@@ -1593,8 +1593,9 @@ git clone --filter=blob:none --no-checkout --depth 1 \
     https://github.com/f4pga/prjxray-db.git
 cd prjxray-db
 git sparse-checkout set --no-cone \
-    '/artix7/*.db' '/artix7/*.csv' '/artix7/xc7a35tcpg236-1/' \
-    '/artix7/xc7a35tftg256-1/' \
+    '/artix7/*.db' '/artix7/*.csv' '/artix7/tile_type_*.json' \
+    '/artix7/xc7a35tcpg236-1/' '/artix7/xc7a35tftg256-1/' \
+    '/artix7/xc7a100tftg256-1/' '/artix7/xc7a100t/' \
     '/artix7/xc7a50t/' '/artix7/mapping/' '/artix7/harness/'
 export RETICLE_CHIPDB=$PWD
 ```
@@ -3695,6 +3696,76 @@ counted once:
 | `CMT_*`, `HCLK_CMT*` | 14 | unknown |
 
 The `ODDR`s are the ADC's forwarded clock and the two crowbar outputs.
+
+### Routing for time (2026-10-23)
+
+With the clocks and the cascades right, what the Plus still got wrong
+moved with each build: a register bit here, a capture there, the trace
+clock. Its own estimate said why — the bus clock's paths, placed, were
+about twice the 10.4 ns period — and the router was making them longer
+still, because it did not know time existed. `--timing-driven` timed the
+placement and not the route.
+
+**Measuring the route.** A pip's delay is in prjxray's
+`tile_type_<type>.json` (`src_to_dst.delay`, the slow corner's maximum),
+which this crate had never read, its module documentation saying the
+file was not in the repository; it is, and `XrayDatabase::node_delays`
+reads it. A timing-driven build now prints the routed counterpart of the
+placement's estimate, the latest path of each late domain pin by pin,
+and what a connection costs against its distance. The first of those on
+the Plus, routed as before: **24.62 ns** against 19.27 placed. The
+latest path ran from a register to two tables to a reset pin 92 tiles
+away, the last connection **16.36 ns** on its own; a probe of the bus
+had its read logic 130 tiles from its pin. The cost by distance:
+
+| tiles | mean routed delay | connections |
+|---|---|---|
+| 0–1 | 0.28 ns | 42,669 |
+| 2–4 | 0.54 ns | 18,021 |
+| 5–9 | 0.82 ns | 18,417 |
+| 10–19 | 1.41 ns | 19,498 |
+| 20–39 | 2.62 ns | 24,265 |
+| 40–79 | 4.59 ns | 34,001 |
+| 80–159 | 7.67 ns | 33,522 |
+
+and fitted by least squares, 0.310 ns and 0.048 ns a tile, where the
+placement had been told 0.035 (`xray::timing::WIRE`, now the fit).
+
+**Routing for it.** The router has had VPR's criticality since the
+UltraScale+ flow; it gets the placer's own model here
+(`route::Timing::paths`), so that each domain is timed against its own
+period, with its input delays and exceptions, from each connection's
+routed delay. Four things then had to be true before it was usable,
+each found by a build that was not:
+
+| without | what the Plus did |
+|---|---|
+| a criticality exponent | overuse rose from 135k nodes to 183k on the second pass, with the cap at 0.9: every connection at all late weighed delay over congestion |
+| an estimate of delay by distance | the sixteenth pass visited 1.9 billion nodes: a node of no delay — every bit-less piece of a wire — estimated the rest of the journey at nothing |
+| critical signals rerouted only early | the twentieth pass visited 1.5 billion: reset nets of hundreds of sinks were ripped up whole every pass |
+| a high cap on criticality | 31.17 ns at a cap of 0.9 against 21.77 at 0.99: congestion pushed the critical connections into detours |
+
+With all four (`exponent` 8 as in VPR, `tile_delay` 25 ps a tile, critical
+reroutes for the first four passes, the cap at 0.99), on one placement:
+**26.95 ns routed for congestion alone, 21.77 ns routed for time**. It
+takes longer: 48 passes, and the whole build at 7,038 s when routing
+ended, against 32 passes and 1,334 s.
+
+**What the part said.** That build, loaded: the clock looped out on AUX
+and back now counted 10.000 MHz, as did the glitch source through both
+its multiplexers, and the glitch MMCMs locked — but the bus lost a bit
+in half its reads, bit 4 of every byte of `SAMPLES`. Its latest path was
+not the bus at all: the write data register's broadcast to the design's
+registers, one connection 78 tiles and 21.3 ns.
+
+**Why the bus got worse.** A connection's criticality is its slack
+against the domain's latest path, and the bus's inputs, which have a few
+tenths of a nanosecond to reach their registers after their input delay,
+were measured against a register path of 21.8 ns: half critical, and
+with the exponent, nothing. The router let them detour. Path analysis
+tools measure each **path group** against its own latest — from a pad,
+to a pad, register to register — and so does this now
+(`place::analyse_paths`), for the placement and the route alike.
 
 ## What remains before an LED could light
 
