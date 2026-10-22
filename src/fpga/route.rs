@@ -345,14 +345,55 @@ pub struct Timing {
     /// The highest criticality any connection is given, below one so that
     /// congestion still costs a critical connection something.
     pub max_criticality: f64,
+    /// What a tile of distance still to go is reckoned to delay, in
+    /// [`Timing::node_delay`]'s unit, for the search's estimate of the
+    /// rest of a critical connection's journey; zero estimates from the
+    /// delay of the node the search stands on, as this did before it had
+    /// the choice. On a fabric whose wires are pieces joined by bit-less
+    /// pips that cost nothing, a node's own delay is mostly zero, the
+    /// estimate with it, and the search for a critical connection spreads
+    /// over the die: on the ChipWhisperer-Husky Plus its sixteenth pass
+    /// visited 1.9 billion nodes and took 700 s. VPR keeps a table of
+    /// delay against distance for the same reason; one number a tile is
+    /// the least of that.
+    pub tile_delay: u32,
+    /// The power each connection's criticality is raised to before it
+    /// weighs delay against congestion: VPR's criticality exponent (8 by
+    /// default there). At one, a connection a tenth short of the longest
+    /// path weighs delay nine times over congestion; at eight, a little
+    /// over twice — so the few connections that are really critical take
+    /// the fast way, and the many that are merely late do not crowd the
+    /// fabric doing it. [`Timing::reroute_above`] is against the raised
+    /// value too.
+    pub exponent: i32,
     /// How many passes to make at least, so that the analysis of one pass
     /// steers another: a design that routes cleanly at the first pass
     /// would otherwise never see its timing.
     pub passes: u32,
-    /// After the first pass, reroute also every signal one of whose
-    /// connections is at least this critical, even when
-    /// [`RouteOptions::reroute_congested_only`] would leave it.
+    /// After the first pass and up to [`Timing::passes`], reroute also
+    /// every signal one of whose connections is at least this critical,
+    /// even when [`RouteOptions::reroute_congested_only`] would leave it.
+    /// Not after: a signal is ripped up whole, sinks and all, and on the
+    /// ChipWhisperer-Husky Plus the critical ones include reset nets of
+    /// hundreds of sinks, which rerouted every pass made the twentieth
+    /// visit 1.5 billion nodes and take 400 s where congestion alone had
+    /// a pass visit under a hundred million. From then on a critical
+    /// signal is rerouted when it is congested, and still weighs delay
+    /// when it is.
     pub reroute_above: f64,
+    /// The placer's own model of the paths, when the caller has one: then
+    /// each pass is analysed as [`place::path_criticality`] analyses a
+    /// placement — per clock domain, against each domain's period, with
+    /// its launches, captures, input delays and exceptions — from each
+    /// connection's routed delay, and [`Timing::node_delay`] is in
+    /// picoseconds. [`Timing::cell_delay`], [`Timing::combinational`] and
+    /// [`Timing::clock_roles`] are not used then: the model has its own.
+    /// Without it, every path is in one domain and measured against the
+    /// longest, which on a design of several clocks lets the slowest
+    /// clock's long paths make a fast clock's look slack.
+    ///
+    /// [`place::path_criticality`]: crate::fpga::place::path_criticality
+    pub paths: Option<crate::fpga::place::PlaceTiming>,
 }
 
 impl Timing {
@@ -369,8 +410,11 @@ impl Timing {
                 .collect(),
             clock_roles: vec!["clk".to_owned()],
             max_criticality: 0.99,
+            tile_delay: 0,
+            exponent: 1,
             passes: 4,
             reroute_above: 0.9,
+            paths: None,
         }
     }
 }
@@ -865,6 +909,10 @@ pub fn route(
     }
     reach_start.push(u32::try_from(reach.len()).unwrap_or(u32::MAX));
     let mut scratch = Scratch::new(graph.nodes.len());
+    if let Some(timing) = options.timing.as_ref().filter(|t| t.tile_delay > 0) {
+        scratch.tile_delay = f64::from(timing.tile_delay)
+            * delay_scale(graph.nodes.len(), &options.node_base, &timing.node_delay);
+    }
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
     let mut present = options.present_factor;
@@ -888,9 +936,10 @@ pub fn route(
         let mut rerouted = 0;
         for (which, terminals) in terminals.iter().enumerate() {
             let critical = options.timing.as_ref().is_some_and(|timing| {
-                criticality[which]
-                    .iter()
-                    .any(|c| *c >= timing.reroute_above)
+                index <= timing.passes
+                    && criticality[which]
+                        .iter()
+                        .any(|c| *c >= timing.reroute_above)
             });
             if index > 1
                 && options.reroute_congested_only
@@ -1049,6 +1098,9 @@ fn analyse(
     timing: &Timing,
 ) -> (Vec<Vec<f64>>, u64) {
     let pins = netlist.pins.len();
+    if let Some(paths) = &timing.paths {
+        return analyse_paths(netlist, graph, terminals, routing, timing, paths);
+    }
     let combinational =
         |instance: usize| timing.combinational.get(instance).copied().unwrap_or(false);
     let timed = |pin: usize| {
@@ -1202,12 +1254,116 @@ fn analyse(
                     let slack = required[sink.pin].saturating_sub(arrives(&arrival, sink.pin));
                     #[allow(clippy::cast_precision_loss, reason = "a ratio of delays")]
                     let ratio = slack as f64 / longest as f64;
-                    (1.0 - ratio).clamp(0.0, timing.max_criticality)
+                    (1.0 - ratio)
+                        .clamp(0.0, 1.0)
+                        .powi(timing.exponent)
+                        .min(timing.max_criticality)
                 })
                 .collect()
         })
         .collect();
     (criticality, longest)
+}
+
+/// [`analyse`] with the placer's model of the paths ([`Timing::paths`]):
+/// each sink's routed delay, the sum of [`Timing::node_delay`] in
+/// picoseconds along its branch of the tree, given to
+/// [`place::path_criticality`](crate::fpga::place::path_criticality).
+/// The longest path reported is the longest of any domain's, in
+/// picoseconds.
+fn analyse_paths(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    terminals: &[Terminals],
+    routing: &Routing,
+    timing: &Timing,
+    paths: &crate::fpga::place::PlaceTiming,
+) -> (Vec<Vec<f64>>, u64) {
+    let mut wire = vec![0.0f64; netlist.pins.len()];
+    for terminals in terminals {
+        let Some(route) = routing.routes[terminals.signal].as_ref() else {
+            continue;
+        };
+        let mut delay: HashMap<NodeId, u64> = HashMap::new();
+        delay.insert(route.source, 0);
+        for pip in &route.pips {
+            let pip = graph.pip(*pip);
+            let to = delay.get(&pip.from).copied().unwrap_or(0)
+                + u64::from(timing.node_delay.get(pip.to as usize).copied().unwrap_or(0));
+            delay.insert(pip.to, to);
+        }
+        for sink in &terminals.sinks {
+            let ps = delay.get(&sink.node).copied().unwrap_or(0);
+            #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
+            let ns = ps as f64 / 1000.0;
+            wire[sink.pin] = wire[sink.pin].max(ns);
+        }
+    }
+    let (pins, longest) = crate::fpga::place::path_criticality(netlist, paths, &wire);
+    let criticality = terminals
+        .iter()
+        .map(|terminals| {
+            terminals
+                .sinks
+                .iter()
+                .map(|sink| {
+                    pins.get(sink.pin)
+                        .copied()
+                        .unwrap_or(0.0)
+                        .clamp(0.0, 1.0)
+                        .powi(timing.exponent)
+                        .min(timing.max_criticality)
+                })
+                .collect()
+        })
+        .collect();
+    (criticality, longest.into_iter().max().unwrap_or(0))
+}
+
+/// Each sink pin's routed delay from its driver, in nanoseconds, by
+/// netlist pin, with `node_delay` in picoseconds as [`Timing::paths`]
+/// takes it: the sum along the sink's branch of the routed tree, the
+/// source's own node excluded. A pin that is not a routed sink takes
+/// none. What a caller gives
+/// [`place::path_criticality`](crate::fpga::place::path_criticality) to
+/// time a finished route, as the router does each pass.
+pub fn connection_delays(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    routing: &Routing,
+    node_delay: &[u32],
+) -> Vec<f64> {
+    let mut wire = vec![0.0f64; netlist.pins.len()];
+    for route in routing.routes() {
+        let mut delay: HashMap<NodeId, u64> = HashMap::new();
+        delay.insert(route.source, 0);
+        for pip in &route.pips {
+            let pip = graph.pip(*pip);
+            let to = delay.get(&pip.from).copied().unwrap_or(0)
+                + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0));
+            delay.insert(pip.to, to);
+        }
+        for sink in &netlist.signals[route.signal].sinks {
+            let pin = &netlist.pins[*sink];
+            let node = route
+                .moved
+                .iter()
+                .find(|(moved, _)| moved == sink)
+                .map(|(_, node)| *node)
+                .or_else(|| {
+                    placement
+                        .site_of(pin.instance)
+                        .and_then(|site| graph.sites[site].pin(&pin.role))
+                });
+            if let Some(ps) = node.and_then(|n| delay.get(&n)) {
+                #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
+                let ns = *ps as f64 / 1000.0;
+                wire[*sink] = ns;
+            }
+        }
+    }
+    wire
 }
 
 /// How many pips forward [`contention`] looks for the cell pins a wire
@@ -1598,6 +1754,8 @@ struct Scratch {
     visited: u64,
     /// Nodes put on it, for [`RoutingReport::queued`].
     queued: u64,
+    /// [`Timing::tile_delay`] in units of cost, or zero.
+    tile_delay: f64,
 }
 
 impl Scratch {
@@ -1610,6 +1768,7 @@ impl Scratch {
             generation: 0,
             visited: 0,
             queued: 0,
+            tile_delay: 0.0,
         }
     }
 
@@ -1897,14 +2056,19 @@ fn maze(
     // walk past the network and build a clock tree out of data wires, which
     // is exactly what it did before this line. With a uniform base this is
     // what it always was.
+    let tile_delay = scratch.tile_delay;
     let heuristic = |node: NodeId| -> f64 {
         let geometry = &geometry[node as usize];
         let (x, y) = geometry.nearest_tile(target.0, target.1);
         let distance = u64::from(x.abs_diff(target.0)) + u64::from(y.abs_diff(target.1));
+        let delay = if tile_delay > 0.0 {
+            tile_delay
+        } else {
+            f64::from(geometry.delay)
+        };
         options.astar_weight
             * distance as f64
-            * (slack * f64::from(heuristic_base(geometry.base))
-                + critical * f64::from(geometry.delay))
+            * (slack * f64::from(heuristic_base(geometry.base)) + critical * delay)
     };
 
     scratch.start();
@@ -2848,6 +3012,183 @@ mod tests {
         assert_eq!(*critical.last().unwrap(), fast, "{critical:?}");
         assert_eq!(report.iterations.len(), 4, "{}", report.to_text());
         assert!(report.to_text().contains("longest path 10"));
+    }
+
+    /// **A tile's delay guides the search for a critical connection where
+    /// the nodes' own delays do not.** A connection from the middle of a
+    /// line of forty tiles to its end, made critical by being the only
+    /// one, over tracks every other piece of which has no delay, as the
+    /// bit-less pieces of a 7-series wire have. From a node of no delay
+    /// the estimate of the rest of the journey is nothing, and the search
+    /// spreads back down the line as far as it goes forward; with
+    /// [`Timing::tile_delay`] set it heads for the end, and takes the same
+    /// path visiting fewer nodes. Counts work rather than time. Would
+    /// catch the estimate ignoring `tile_delay` (the counts equal); would
+    /// not catch a `tile_delay` too large to stay under the journey, which
+    /// finds worse paths rather than more work.
+    #[test]
+    fn a_tiles_delay_guides_the_search_where_the_nodes_do_not() {
+        let (_, graph) = line(40, 2);
+        let netlist = pairs(1);
+        let placement = place_in_order(&netlist, &graph, &[20, 39]);
+        let delays: Vec<u32> = (0..graph.nodes.len())
+            .map(|n| u32::from(n % 2 == 0) * 2)
+            .collect();
+        let run = |tile_delay: u32| {
+            let mut timing = Timing::for_netlist(&netlist, delays.clone(), 1);
+            timing.tile_delay = tile_delay;
+            let options = RouteOptions {
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            route(&netlist, &graph, &placement, &options).unwrap()
+        };
+        let (blind, blind_report) = run(0);
+        let (guided, guided_report) = run(1);
+        assert_eq!(blind.pips(0), guided.pips(0), "the same path either way");
+        assert!(
+            guided_report.visited < blind_report.visited,
+            "{} visited guided, {} blind",
+            guided_report.visited,
+            blind_report.visited
+        );
+    }
+
+    /// **With the placer's model, each clock is timed against its own
+    /// period.** Two clocks: a fast one of 1 ns whose path is one table
+    /// of 0.9 ns between two registers, and a slow one of 100 ns whose
+    /// path is two tables of 2 ns each. Against its period the fast path
+    /// is nearly full and the slow one nearly empty, so the fast path's
+    /// connections are critical and the slow path's are not. The single
+    /// domain of [`Timing::for_netlist`] says the opposite, its longest
+    /// path being the slow one, and so the assertion on it is that it
+    /// does. Would catch [`analyse`] not handing over to the model when
+    /// [`Timing::paths`] is set, or the criticality mapped back to the
+    /// wrong sinks; would not catch the model's own analysis being wrong,
+    /// which `place`'s tests pin.
+    #[test]
+    fn with_the_placers_model_each_clock_is_timed_against_its_own_period() {
+        use crate::fpga::place::{PathDomain, PinTiming, PlaceTiming};
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let mut add = |name: &str, kind: &str, pins: &[(&str, bool, usize)]| {
+            let instance = netlist.instances.len();
+            let mut ids = Vec::new();
+            for (role, output, signal) in pins {
+                ids.push(netlist.pins.len());
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: name.to_owned(),
+                primitive: kind.to_uppercase(),
+                kind: kind.to_owned(),
+                pins: ids,
+                pin: None,
+            });
+        };
+        // Fast: a -> t1 -> b (signals 0, 1). Slow: c -> t2 -> t3 -> d
+        // (signals 2, 3, 4).
+        add("a", "ff", &[("q", true, 0)]);
+        add("t1", "lut", &[("i0", false, 0), ("o", true, 1)]);
+        add("b", "ff", &[("d", false, 1)]);
+        add("c", "ff", &[("q", true, 2)]);
+        add("t2", "lut", &[("i0", false, 2), ("o", true, 3)]);
+        add("t3", "lut", &[("i0", false, 3), ("o", true, 4)]);
+        add("d", "ff", &[("d", false, 4)]);
+        for signal in 0..5 {
+            netlist.signals.push(Signal {
+                name: format!("s{signal}"),
+                driver: netlist
+                    .pins
+                    .iter()
+                    .position(|p| p.output && p.signal == Some(signal)),
+                sinks: (0..netlist.pins.len())
+                    .filter(|p| !netlist.pins[*p].output && netlist.pins[*p].signal == Some(signal))
+                    .collect(),
+            });
+        }
+        let pins = netlist
+            .pins
+            .iter()
+            .map(
+                |pin| match (netlist.instances[pin.instance].kind.as_str(), pin.output) {
+                    ("ff", true) => PinTiming::Start,
+                    ("ff", false) => PinTiming::End,
+                    _ => PinTiming::Through,
+                },
+            )
+            .collect();
+        let paths = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.9, 0.0, 0.0, 2.0, 2.0, 0.0],
+            launch: vec![0.0; 7],
+            capture: vec![0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.05],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+                PathDomain::Clock(1),
+                PathDomain::Untimed,
+                PathDomain::Untimed,
+                PathDomain::Clock(1),
+            ],
+            periods: vec![1.0, 100.0],
+            wire: (0.0, 0.0, 0.0),
+            rounds: 1,
+            weight: 1.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 7],
+        };
+        let (_, graph) = line(1, 1);
+        let terminals: Vec<Terminals> = (0..5)
+            .map(|signal| Terminals {
+                signal,
+                source: 0,
+                sinks: netlist.signals[signal]
+                    .sinks
+                    .iter()
+                    .map(|pin| Sink {
+                        node: 0,
+                        name: String::new(),
+                        pin: *pin,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let routing = Routing::new(netlist.signals.len());
+        let mut timing = Timing::for_netlist(&netlist, Vec::new(), 10);
+        let (single, _) = analyse(&netlist, &graph, &terminals, &routing, &timing);
+        assert!(single[0][0] < single[2][0], "one domain: {single:?}");
+        timing.paths = Some(paths);
+        let (criticality, longest) = analyse(&netlist, &graph, &terminals, &routing, &timing);
+        assert_eq!(
+            longest, 4050,
+            "the slow clock's 4.05 ns, the longer of the two"
+        );
+        for (signal, row) in criticality.iter().enumerate() {
+            let fast = signal < 2;
+            assert!(
+                if fast { row[0] > 0.9 } else { row[0] < 0.1 },
+                "signal {signal}: {criticality:?}"
+            );
+        }
     }
 
     /// The analysis on its own: a register drives two tables in a row into
