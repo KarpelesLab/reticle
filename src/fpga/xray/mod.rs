@@ -1241,7 +1241,15 @@ impl XrayDatabase {
             // flow derived: the XADC's. See `xadc`.
             return Ok(xadc::derived_features(tile_type).map(FeatureSet::new));
         };
-        let set = parse::segbits(&text, &path)?;
+        let mut set = parse::segbits(&text, &path)?;
+        // A bit the database does not name, which this flow measured:
+        // see `bufg::cascade_enables`.
+        let cascade = bufg::cascade_enables(tile_type);
+        if !cascade.is_empty() {
+            let mut all = set.into_features();
+            all.extend(cascade);
+            set = FeatureSet::new(all);
+        }
         let Some(row) = block_ram_row else {
             return Ok(Some(set));
         };

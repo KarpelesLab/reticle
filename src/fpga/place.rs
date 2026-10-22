@@ -2552,8 +2552,9 @@ pub fn place(
 /// No placement cost sees it: the buffers sit in one column and their
 /// wirelength is nothing. So after the anneal, each join of one buffer's
 /// output to another's input is made one hop where it can be — a site
-/// whose output pin reaches the next's input over bit-less pips and a
-/// single programmable one, which is what the graph says a cascade is.
+/// whose output pin reaches the next's input over bit-less pips and
+/// programmable ones that never leave the first buffer's tile, which is
+/// what the graph says a cascade is.
 /// An unmet join moves one of its ends to a free site, honouring its
 /// allowed sites, and only if every join already met at that end stays
 /// met. One join at a time and not a seating of every join at once: on
@@ -2594,34 +2595,46 @@ fn seat_buffer_chains(
     if joins.is_empty() {
         return 0;
     }
-    // What a buffer's output reaches in one hop — bit-less pips, one
-    // programmable pip, bit-less pips — from every buffer site, for each
-    // output role a join leaves by.
+    // What a buffer's output reaches in one hop, from every buffer site,
+    // for each output role a join leaves by: over bit-less pips anywhere
+    // and programmable ones only in the buffer's own tile, stopping at any
+    // buffer's input. Not "one programmable pip", which is what this was
+    // until the cascade turned out to need a bit of its own on the way out
+    // as well as the one choosing it on the way in (`xray::bufg`, "The
+    // cascade"): every other way from one buffer to another leaves the
+    // tile, for the clock row's or the interconnect's. Stopping at an
+    // input keeps a hop from running on through the next buffer's own
+    // path from input to output, which a buffer already there would take.
+    let inputs: HashSet<NodeId> = sites
+        .iter()
+        .flat_map(|site| {
+            ["i", "i1"]
+                .into_iter()
+                .flat_map(move |role| graph.sites[*site].pin_nodes(role))
+        })
+        .collect();
     let mut hops: HashMap<(usize, String), HashSet<NodeId>> = HashMap::new();
     for (_, out, _, _) in &joins {
         for from in sites {
             if hops.contains_key(&(*from, out.clone())) {
                 continue;
             }
-            let mut seen: HashSet<(NodeId, bool)> = HashSet::new();
-            let mut work: Vec<(NodeId, bool)> = graph.sites[*from]
-                .pin_nodes(out)
-                .map(|n| (n, false))
-                .collect();
+            let home = graph.sites[*from].tile;
+            let mut seen: HashSet<NodeId> = HashSet::new();
+            let mut work: Vec<NodeId> = graph.sites[*from].pin_nodes(out).collect();
             let mut reached = HashSet::new();
-            while let Some((node, used)) = work.pop() {
-                if !seen.insert((node, used)) || seen.len() > 200_000 {
+            while let Some(node) = work.pop() {
+                if !seen.insert(node) || seen.len() > 200_000 {
                     continue;
                 }
-                if used {
+                if inputs.contains(&node) {
                     reached.insert(node);
+                    continue;
                 }
                 for pip in graph.outgoing(node) {
-                    let next = graph.pip(*pip).to;
-                    if graph.pip_bits(*pip).is_empty() {
-                        work.push((next, used));
-                    } else if !used {
-                        work.push((next, true));
+                    let pip_at = graph.pip(*pip);
+                    if graph.pip_bits(*pip).is_empty() || pip_at.tile == home {
+                        work.push(pip_at.to);
                     }
                 }
             }
@@ -9139,20 +9152,25 @@ mod tests {
 
     /// **Buffers that feed one another are seated a cascade apart.** One
     /// tile of four global buffer sites, each one's output reaching the
-    /// next's input over a single programmable pip — the cascade — and
-    /// every input from every output over a shared general track, two
-    /// pips. A buffer feeding another, legalised two sites apart, is moved
-    /// so the join is the one pip; placed one apart already, nothing moves;
-    /// and a buffer a table drives is left where it is. Would catch the
-    /// two-pip track taken for a join (nothing moved), the search
-    /// returning a seating that breaks the join, or a buffer moved that no
-    /// buffer drives; would not catch a real fabric's cascade read wrongly,
-    /// which the Husky Plus build exercises.
+    /// next's input over a programmable pip of the tile — the cascade —
+    /// and every input from every output over a shared general track in
+    /// the tile beside it, two pips there. A buffer feeding another,
+    /// legalised two sites apart, is moved so the join is the cascade;
+    /// placed one apart already, nothing moves; and a buffer a table
+    /// drives is left where it is. Would catch the track taken for a join
+    /// (nothing moved), the search returning a seating that breaks the
+    /// join, or a buffer moved that no buffer drives; would not catch a
+    /// real fabric's cascade read wrongly, which the Husky Plus build
+    /// exercises. The track was in the buffers' own tile until the
+    /// cascade was found to cost a pip of bits at each end
+    /// (`xray::bufg`): a hop is now any path that stays in the first
+    /// buffer's tile, which a track in that tile would be too.
     #[test]
     fn buffers_that_feed_one_another_are_seated_a_cascade_apart() {
-        let mut arch = Arch::new("t", "test", 1, 1);
+        let mut arch = Arch::new("t", "test", 2, 1);
         let mut tile = TileType::new("t", "t_tile", 8, 8);
-        tile.wires.push(WireDecl {
+        let mut beside = TileType::new("u", "u_tile", 8, 8);
+        beside.wires.push(WireDecl {
             name: "track".to_owned(),
             dx: 0,
             dy: 0,
@@ -9171,23 +9189,36 @@ mod tests {
                 .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
             tile.bels.push(buffer);
         }
-        let mut pip = |from: String, to: String| {
-            tile.pips.push(PipDecl {
-                from: WireRef::local(from),
-                to: WireRef::local(to),
-                bits: vec![crate::fpga::arch::ConfigBit::new(bit / 8, bit % 8)],
-            });
+        let mut next_bit = || {
             bit += 1;
+            vec![crate::fpga::arch::ConfigBit::new(
+                (bit - 1) / 8,
+                (bit - 1) % 8,
+            )]
         };
         for n in 0..4 {
             if n < 3 {
-                pip(format!("out{n}"), format!("in{}", n + 1));
+                tile.pips.push(PipDecl {
+                    from: WireRef::local(format!("out{n}")),
+                    to: WireRef::local(format!("in{}", n + 1)),
+                    bits: next_bit(),
+                });
             }
-            pip(format!("out{n}"), "track".to_owned());
-            pip("track".to_owned(), format!("in{n}"));
+            beside.pips.push(PipDecl {
+                from: WireRef::at(format!("out{n}"), -1, 0),
+                to: WireRef::local("track"),
+                bits: next_bit(),
+            });
+            beside.pips.push(PipDecl {
+                from: WireRef::local("track"),
+                to: WireRef::at(format!("in{n}"), -1, 0),
+                bits: next_bit(),
+            });
         }
         arch.tile_types.push(tile);
+        arch.tile_types.push(beside);
         arch.set_tile(0, 0, 0);
+        arch.set_tile(1, 0, 1);
         let graph = arch.build_graph();
         let site = |n: usize| graph.site_index(&format!("X0Y0/buf{n}")).unwrap();
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();

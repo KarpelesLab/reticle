@@ -68,6 +68,44 @@
 //!
 //! `INIT_OUT`, `PRESELECT_I1` and `ZPRESELECT_I0` are clear in every one
 //! of Vivado's thirteen, and are left clear here.
+//!
+//! # The cascade, and the bit the database does not have
+//!
+//! A buffer reaches its neighbours' inputs directly: `CLK_BUFG_BUFGCTRL<n>_O`
+//! onto `CLK_BUFG_R_FBG_OUT<n>`, and from there one pip into `I0` or `I1`
+//! of buffer `n-1` or `n+1` (`place::seat_buffer_chains` seats them so).
+//! prjxray's `ppips_clk_bufg_{top,bot}_r.db` calls the first hop `always`,
+//! metal with no bit. **It is not.** Measured on a ChipWhisperer-Husky
+//! Plus (2026-10-22):
+//!
+//! - Every cascade this flow built was dead — into `I0`, into `I1`, a
+//!   `BUFG` into a `BUFG`, with the wrap from 0 to 15, and at the very
+//!   pairs of sites NewAE's image cascades through — while the buffer
+//!   sending counted its clock on its own global line and the buffer
+//!   receiving passed its other input. The tile's decoded features were
+//!   Vivado's, pip for pip.
+//! - NewAE's image sets bit `26_<16n+14>` of the top buffer tile for
+//!   exactly the four buffers whose outputs it cascades (1, 2, 11, 15) and
+//!   for no other. No `segbits` entry names it; the bit falls in an
+//!   `INT_R` tile's words too, and no feature there names it either.
+//! - Cleared at `26_190` (buffer 11, which feeds 12) in NewAE's image,
+//!   the glitch module's clock stopped: zero where the board PLL's 10 MHz
+//!   had been, with the bus clock through the same multiplexer unchanged.
+//! - Set for the three cascades of a probe built here (`2 -> 1` into
+//!   `I0`, `15 -> 0` into `I1`, `11 -> 12` into `I0`, all in the top
+//!   tile), all three came alive at 10 MHz.
+//! - The bottom tile has no cascade in NewAE's image, so its bit is the
+//!   top's by the same layout (`27_<16n+14>` is each tile's global-line
+//!   enable for buffer `n`, in both) — and was then measured as well: a
+//!   cascade from buffer 5 to 6 of `CLK_BUFG_BOT_R`, built with this
+//!   enable, carried its 5 MHz.
+//!
+//! So [`cascade_enables`] names it, `CLK_BUFG_R_FBG_OUT<n>_ACTIVE` — a
+//! name this crate gives it, in the shape of the clock tiles' other wire
+//! enables, so that `sites::wire_enable_features` charges it to every pip
+//! that touches the wire and a decoded bitstream explains it. Vivado's
+//! image then decodes with four bits fewer unexplained, and nothing
+//! there or in the frames' other tiles named them before.
 
 use super::XrayFabric;
 use crate::fpga::arch::{ConfigEntry, RoutingGraph};
@@ -330,6 +368,25 @@ impl XrayFabric {
         }
         Ok(count)
     }
+}
+
+/// The bit that puts `BUFGCTRL<n>`'s output on its cascade to the
+/// neighbouring buffers, for each of a buffer tile's sixteen, as
+/// `CLK_BUFG_R_FBG_OUT<n>_ACTIVE`: frame 26, bit `16n + 14`, the bit above
+/// the same buffer's global-line enable in the next frame. Nothing for any
+/// other tile type. The module documentation has how it was found and
+/// what it would cost without it.
+pub(super) fn cascade_enables(tile_type: &str) -> Vec<super::Feature> {
+    if !matches!(tile_type, "CLK_BUFG_TOP_R" | "CLK_BUFG_BOT_R") {
+        return Vec::new();
+    }
+    (0..16u32)
+        .map(|n| super::Feature {
+            name: format!("CLK_BUFG_R_FBG_OUT{n}_ACTIVE"),
+            ones: vec![crate::fpga::arch::ConfigBit::new(26, 16 * n + 14)],
+            zeros: Vec::new(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

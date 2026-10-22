@@ -339,3 +339,40 @@ fn a_clock_pad_on_either_side_reaches_its_buffers_by_road() {
         );
     }
 }
+
+/// **A buffer that feeds another through the cascade has the cascade
+/// switched on.** For every `CLK_BUFG_BUFGCTRL<m>_I<k>.CLK_BUFG_R_FBG_OUT<n>`
+/// the build sets, the same tile sets `CLK_BUFG_R_FBG_OUT<n>_ACTIVE`, the
+/// bit that drives buffer `n`'s output onto it (`xray::bufg`, "The
+/// cascade"), and the design — a `BUFG` feeding a `BUFGMUX`, a second
+/// `BUFGMUX` and a `BUFGCE` — makes at least one such join.
+///
+/// It would catch the enable left off, as it was in every bitstream this
+/// flow wrote until 2026-10-22: the cascade decoded as Vivado's, every bit
+/// was explained, and on the ChipWhisperer-Husky Plus the receiving
+/// buffer carried nothing — the glitch module's clock through its two
+/// multiplexers, the logic analyser's and the trace front end's. It would
+/// also catch the cascade going unused, a join routed some other way. It
+/// would not catch the enable put on the wrong bit: that the bit is
+/// `26_<16n+14>` was measured on the part, in both halves of the column,
+/// and is quoted in the module documentation rather than checked here.
+#[test]
+fn a_buffer_cascade_has_its_enable() {
+    let Some(features) = built() else { return };
+    let mut cascades = 0;
+    for (tile, feature) in features {
+        let Some((_, source)) = feature.split_once(".CLK_BUFG_R_FBG_OUT") else {
+            continue;
+        };
+        if !feature.starts_with("CLK_BUFG_BUFGCTRL") {
+            continue;
+        }
+        cascades += 1;
+        let enable = format!("CLK_BUFG_R_FBG_OUT{source}_ACTIVE");
+        assert!(
+            features.iter().any(|(t, f)| t == tile && *f == enable),
+            "{tile}: {feature} with no {enable}"
+        );
+    }
+    assert!(cascades > 0, "no buffer feeds another through the cascade");
+}
