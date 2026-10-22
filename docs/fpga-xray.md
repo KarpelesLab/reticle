@@ -3585,7 +3585,10 @@ goes through two `BUFG`s in a row. A buffer's output reaches another
 buffer's input only through the cascade between neighbours —
 `CLK_BUFG_BUFGCTRL<n>_O` joins `CLK_BUFG_R_FBG_OUT<n>` with no bits, and
 that reaches `I0` and `I1` of buffers `n-1` and `n+1` through one pip — or
-else over general routing. The placer did not know: the buffers sit in
+else over general routing. (**"With no bits" is wrong**: it is what
+prjxray's `ppips` file says, read as fact. The join has a bit of its own,
+and without it every cascade this flow built was dead; see the next
+section.) The placer did not know: the buffers sit in
 one column and their wirelength is nothing, so where it put them was an
 accident, and the routed estimate of one build had the analyser's two
 output buffers joined over 164 pips and its third multiplexer taking the
@@ -3614,6 +3617,84 @@ Each build also loses a different bit of some register now and then: a
 placement that moves the read paths moves which of them fails, because
 the design's own paths in `clk_usb`'s domain are, by the estimate, about
 twice its period. Those are the next things, and the last is the largest.
+
+### The cascade's own bit (2026-10-22)
+
+The glitch module's MMCMs did not lock on the board PLL, and the path
+there turned out to have two faults, each found by measuring on the part.
+
+**The PLL's clock never took its road.** The left half of the die names
+its clock tile's outputs `HCLK_CMT_MUX_CLK_<n>` where the right half says
+`HCLK_CMT_CK_IN<n>`, and the road (`is_clock_input_wire`) knew only the
+right half's names. So the placer's walk from the PLL's pad (`D13`)
+reached no buffer and held its buffers nowhere in particular, and the
+clock went to them over 190 pips of general routing. Fixed, it takes
+`HCLK_CMT_MUX_CLK_1.HCLK_CMT_CCIO0` as NewAE's image does. The MMCMs
+still did not lock.
+
+**No buffer-to-buffer cascade worked.** The glitch module chooses its
+source through two `BUFGMUX`es in a row. Looping the chosen clock out on
+the AUX connector and counting it back with the design's own `extclk`
+counter (`CW_EXTCLK[2:0] = 0` reads AUX) gave 10.000 MHz and 96.000 MHz
+on NewAE's image and nothing at all on this flow's. A probe of three
+chains built here, counters on each end, said exactly where:
+
+| chain | sending buffer | receiving buffer, cascade input | receiving buffer, other input |
+|---|---|---|---|
+| `BUFGMUX` → `BUFGMUX`.`I0` | 10.0 MHz on its own line | 0 | 96 MHz |
+| `BUFGMUX` → `BUFGMUX`.`I1` | — | 0 | 96 MHz |
+| `BUFG` → `BUFG` | — | 0 | — |
+
+— the same with the cells forced onto the very site pairs NewAE's image
+cascades through (2 → 1, 15 → 0, 11 → 12). The buffer tile's decoded
+features were Vivado's for the same pairs, pip for pip, and every bit
+of this flow's bitstreams decoded. **Both checks passed on a fabric
+configuration that could not work**, because what was missing is a bit
+the database does not name, so neither check could see its absence.
+
+What found it was reading raw bits rather than features. NewAE's image
+sets frame 26, bit `16n + 14` of the top buffer tile for buffers 1, 2, 11
+and 15, exactly the four whose outputs it cascades, and for no other.
+No `segbits` entry has it, in the buffer tile or the `INT_R` tile whose
+words it shares, and this decoder had been counting it among NewAE's
+image's unexplained bits all along — 39,853 of them, which "every bit
+decodes" on this flow's own output says nothing about. Then, on the
+part:
+
+- NewAE's image with `26_190` (buffer 11 → 12) cleared: the glitch clock
+  from the PLL stopped, and the bus clock through the same multiplexer
+  did not.
+- The probe with the bit set on its three sending buffers: all three
+  cascades carried 10 MHz.
+- A cascade forced into the bottom buffer tile (5 → 6), which NewAE's
+  image has none of, built with the bit: 5 MHz.
+
+So `xray::bufg::cascade_enables` names it, `CLK_BUFG_R_FBG_OUT<n>_ACTIVE`
+— this crate's name, in the shape of the clock tiles' other wire enables
+— and the wire-enable rule charges it to every pip on that wire.
+`seat_buffer_chains` had counted a cascade as one programmable pip; it
+is two now, so a hop is any path whose programmable pips stay in the
+sending buffer's tile, which nothing but the cascade does.
+
+**What else NewAE's image sets that the database does not name**,
+checked by matching every set bit against `segbits` the way the decoder
+does (a measurement of the image, not of what each bit does). That
+survey, a script outside the crate, counts 31,530 unexplained bits where
+the decoder counts 39,853; the difference is not yet accounted for, and
+the rows below are the survey's. A bit in words two tiles share is
+counted once:
+
+| where | bits | what it looks like |
+|---|---|---|
+| word 50 of every frame (`HCLK_*`, `CLK_HROW_*`, `CFG_CENTER_MID` ...) | about 31,000 | the frame's ECC, which Vivado computes and this flow leaves zero |
+| `BRAM_L`/`BRAM_R` `27_173` | 131, one in each block RAM tile it uses | beside `EN_SYN` and `EN_ECC_READ`; unknown, and not needed for what was measured: a 1024 × 8 block RAM from this flow on the Plus, one clock, read back 512 random bytes of 512 right with the bit and without it |
+| `INT_L` | 2 | unknown |
+| `MONITOR_BOT` | 91 | the XADC, beyond what `xadc` derives |
+| `RIOI3`/`LIOI3` at the three `ODDR` outputs | 6 | inside the `IOI_OCLKM_<n>` pattern, from a source prjxray did not fuzz |
+| `CLK_BUFG_TOP_R` | 4 | the cascade enables above: now named |
+| `CMT_*`, `HCLK_CMT*` | 14 | unknown |
+
+The `ODDR`s are the ADC's forwarded clock and the two crowbar outputs.
 
 ## What remains before an LED could light
 

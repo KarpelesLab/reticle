@@ -151,7 +151,7 @@ of its own:
 | it routes | **checked**: the Husky's converged at the 78th pass on 2026-10-20, the Plus's at the 50th on 2026-10-21; earlier, this row said it did not |
 | it works on a Husky | **not checked**: nothing of the Husky's has been loaded into one |
 | the Plus's bitstream configures a Husky Plus and answers on its USB bus | **checked** on 2026-10-21: `chipwhisperer` connects, reads its version and reads back what it writes |
-| it works as a Husky Plus | **no**: its registers read and write (one read in a few hundred loses a bit), and 3 of NewAE's tests pass where their bitstream passes 42; see *On a Husky Plus* |
+| it works as a Husky Plus | **no**: its registers read and write (one read in a few hundred has lost a bit, varying by build), its glitch clock managers lock, and 5 of NewAE's tests pass where their bitstream passes 42; see *On a Husky Plus* |
 | carry chains compute what they should | **checked** on the part: `probe/`, 309 of 309 sums, differences and comparisons, and a counter at 96 MHz |
 
 ## On a Husky Plus
@@ -245,6 +245,28 @@ estimate puts at twice the period; the glitch modules (19), whose clock
 managers do not report lock; every capture (16), which returns no
 samples; the PLL (4); and `test_fpga_version`, which reads the build
 time from `USR_ACCESSE2`, and the stand-in here reads zero.
+
+**The glitch clock** (2026-10-22). Its MMCMs did not lock on the board
+PLL because the clock never reached them: the PLL's pad, on the die's
+left half, missed its road (the left half names the clock tile's outputs
+differently), and every buffer-to-buffer cascade this flow built was
+dead, for want of a bit the database does not name. Both are fixed, and
+the second is in `docs/fpga-xray.md`, "The cascade's own bit". Built
+again, placed afresh:
+
+| | NewAE's bitstream | this flow's, 2026-10-22 |
+|---|---|---|
+| ECHO, 200 random 8-byte writes and reads | right | right |
+| the ADC's clock, as the design measures it (`ADCFREQ`) | 10.0 MHz | 10.0 MHz |
+| glitch MMCMs, on the board PLL at NewAE's multiplier | locked | locked |
+| `test_husky_dev.py` | 42 passed, 5 failed | 5 passed, 41 failed |
+
+The glitch tests now fail later: what they capture comes back empty,
+from the logic analyser as from the ADC, so capture is the next thing.
+The trace front end's clock is still not alive, and a clock looped out
+on the AUX connector and back reads nothing here where NewAE's reads it.
+ECHO right in 200 is one build's luck, not a fix: the paths inside the
+design that made it lose a bit are as long as they were.
 
 ## Status
 
