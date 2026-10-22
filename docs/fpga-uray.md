@@ -1020,6 +1020,54 @@ image from a C program on the processor, 85 times faster than over
 EMIO**, and of that the network is 37 ns; the rest is eleven bus
 transactions.
 
+### Where a processor pin is
+
+**A slave that hung the board, 2026-10-22.** The 32-neuron network behind
+a slave taking whole 128-bit beats — an image in two stores and a start,
+the answer in one read, against eleven transactions above — matched the
+model in simulation and built with every set bit decoded (13 952
+instances, 14 minutes). Loaded at 100 MHz, the first read never came
+back: the processor stopped, the board answered neither SSH nor ping,
+and only a power cycle recovered it. A read on this port that the
+fabric never answers stalls the core.
+
+**The cause was the placer, not the slave.** Every `PS8` pin is a bel of
+the one `PSS_ALTO` tile, so to the placer all 514 of the port's pins and
+every EMIO pin sat at that tile's position, row 309 of the grid, and it
+put the logic they connect to there. The wires do not leave from there:
+`HPM0_LPD_ARVALID` reaches the interconnect at `(160, 167)`. The slave's
+ready bits are combinational, so `ARVALID` to `ARREADY` crossed some
+142 rows and back within a 10 ns clock. The 16-neuron slave had the same
+placement and happened to make it; this one did not. That is the
+diagnosis from the placement, **not a measurement of the path**: no
+delay on this die has been measured.
+
+**The fix.** `Board::processor_pin_tiles` follows each processor pin's
+wire up to four pips, either way, to the first tile outside the
+processor, and `implement` gives the placer that tile for the pin. The
+handshake logic moved from row 309 to rows 153–154. Every later step
+sees the pin's site where it really is.
+
+**The router had the same fault, and it cost most of every build.** The
+router's distance estimate aims at a sink wire's own tile, and a pin's
+wire is in `PSS_ALTO` too. With the logic moved and the estimate not,
+the build took 71 minutes and its first pass visited 7.5 billion nodes,
+against 0.95 billion before. Giving the pin wires their entry tile for
+routing too, and putting it back before the routing is verified and the
+bitstream written:
+
+| Same design, same flags | First pass visits | Passes | Build |
+|---|---|---|---|
+| Pins at `PSS_ALTO` (before) | 953 538 829 | 9 | 14 min |
+| Placer moved, router not | 7 516 089 597 | 10 | 71 min |
+| Both moved | 20 506 999 | 12 | 2 min 32 s |
+
+Every set bit decodes in all three. The 4- and 5-hour AXI builds above
+were made with the pins at `PSS_ALTO` and were probably slow for the
+same reason; that is likely, **not re-measured**. The rebuilt slave has
+**not yet been run on the board**: that waits for a power cycle, and it
+will be brought up at 25 MHz before 100.
+
 ## What remains, in order
 
 1. **More of the slice**: the carry chain, for adders that are not

@@ -61,6 +61,11 @@ pub const PIECE_DELAY: u32 = 1;
 /// output: half a hop.
 pub const LUT_DELAY: u32 = 5;
 
+/// How many pips from a processor pin `Board::processor_pin_tiles` looks
+/// for the fabric. The `PSS_ALTO` wires reach an interconnect tile in one
+/// or two.
+const PIN_SEARCH_DEPTH: usize = 4;
+
 /// The horizontal distribution track that carries `PL_CLK0` in Vivado's
 /// clock network for the PYNQ base overlay. Measured on the ZCU104 at
 /// 100.001 MHz (`docs/fpga-uray.md`).
@@ -428,6 +433,58 @@ impl<'a> Board<'a> {
                         }
                     }
                 }
+            }
+        }
+        out
+    }
+
+    /// Each processor pin site with the tile its wire meets the fabric in,
+    /// for the placer: see [`implement`]'s use of it.
+    ///
+    /// Every `PS8` pin is a bel of the one `PSS_ALTO` tile, so to the placer
+    /// all 514 of an AXI port's pins, and every EMIO pin, are at that tile's
+    /// position — row 309 of the grid — and it pulls the logic they connect
+    /// to there. The wires do not leave from there. `M_AXI_HPM0_LPD`'s
+    /// handshake pins enter the interconnect at row 167, so an `ARVALID` to
+    /// `ARREADY` path placed beside row 309 crossed 142 rows and back in one
+    /// clock, and a slave built that way hung the processor at 100 MHz
+    /// (`docs/fpga-uray.md`). A pin's position is where its wire first
+    /// reaches a tile of the fabric, a few pips from the processor in
+    /// either direction.
+    pub fn processor_pin_tiles(&self) -> Vec<(usize, (u32, u32))> {
+        let graph = &self.graph;
+        let mut out = Vec::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            if site.tile != self.ps || site.kind != "io" {
+                continue;
+            }
+            let mut found: Option<(u32, u32)> = None;
+            let mut front: Vec<NodeId> = site.pins.iter().map(|(_, n)| *n).collect();
+            let mut seen: HashSet<NodeId> = front.iter().copied().collect();
+            for _ in 0..PIN_SEARCH_DEPTH {
+                let mut next = Vec::new();
+                for node in &front {
+                    let pips = graph.outgoing(*node).iter().map(|p| graph.pip(*p).to);
+                    let back = graph.incoming(*node).iter().map(|p| graph.pip(*p).from);
+                    for other in pips.chain(back) {
+                        let wire = graph.wire(other);
+                        if wire.global {
+                            continue;
+                        }
+                        if wire.tile != self.ps {
+                            found = Some(found.map_or(wire.tile, |f| f.min(wire.tile)));
+                        } else if seen.insert(other) {
+                            next.push(other);
+                        }
+                    }
+                }
+                if found.is_some() {
+                    break;
+                }
+                front = next;
+            }
+            if let Some(tile) = found {
+                out.push((index, tile));
             }
         }
         out
@@ -1140,14 +1197,30 @@ pub fn implement(
         .replay(oracle, &clock_tile_types(&db.grid, false))
         .map_err(|e| format!("the base overlay's clock network: {e}"))?;
     let netlist = Netlist::build(design, top, device, &board.graph).map_err(|e| e.to_string())?;
-    let (placement, _) = place(
+    // The placer sees each processor pin where its wire enters the fabric
+    // (`Board::processor_pin_tiles`), and every later step sees the pin's
+    // site where it is, in the processor's tile.
+    let entries = board.processor_pin_tiles();
+    let moved: Vec<(usize, (u32, u32))> = entries
+        .iter()
+        .map(|&(site, tile)| {
+            (
+                site,
+                std::mem::replace(&mut board.graph.sites[site].tile, tile),
+            )
+        })
+        .collect();
+    let placed = place(
         &netlist,
         &board.fabric.arch,
         &board.graph,
         constraints,
         place_options,
-    )
-    .map_err(|e| e.to_string())?;
+    );
+    for (site, tile) in moved {
+        board.graph.sites[site].tile = tile;
+    }
+    let (placement, _) = placed.map_err(|e| e.to_string())?;
     // The processor inputs the design is bound to may be driven; every
     // other one, and every node Vivado's clock network drives, is closed.
     // The processor's tie-offs first, while the tables and wires they need
@@ -1166,8 +1239,24 @@ pub fn implement(
         on_iteration: options.on_iteration,
         ..RouteOptions::default()
     };
-    let (routing, routed) =
-        route(&netlist, &board.graph, &placement, &options).map_err(|e| e.to_string())?;
+    // The router aims at a sink wire's own tile, so a pin's wire is put
+    // where it enters the fabric for routing too, and put back after.
+    let mut aimed = Vec::new();
+    for &(site, tile) in &entries {
+        for &(_, node) in &board.graph.sites[site].pins {
+            let wire = &mut board.graph.nodes[node as usize];
+            aimed.push((node, wire.tile, wire.span));
+            wire.tile = tile;
+            wire.span = (0, 0);
+        }
+    }
+    let routed = route(&netlist, &board.graph, &placement, &options);
+    for (node, tile, span) in aimed.into_iter().rev() {
+        let wire = &mut board.graph.nodes[node as usize];
+        wire.tile = tile;
+        wire.span = span;
+    }
+    let (routing, routed) = routed.map_err(|e| e.to_string())?;
     let longest = routed.iterations.last().and_then(|i| i.critical);
     let problems = routing.verify(&netlist, &board.graph, &placement);
     if !problems.is_empty() {

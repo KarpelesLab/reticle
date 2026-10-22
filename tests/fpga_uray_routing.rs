@@ -605,3 +605,68 @@ fn the_axi_ports_pins_are_the_processors_in_their_direction() {
         .collect();
     assert_eq!(port.len(), 514);
 }
+
+/// The placer sees each processor pin where its wire enters the fabric
+/// (`Board::processor_pin_tiles`), not at the processor's own tile, where
+/// every `PS8` pin is a bel.
+///
+/// Before this, a slave on `M_AXI_HPM0_LPD` had its handshake tables
+/// placed at row 309, the processor tile's, while the pins enter the
+/// interconnect at row 167; the `ARVALID` to `ARREADY` path crossed 142
+/// rows and back in a clock and hung the processor at 100 MHz. This
+/// checks that every pin site of the processor gets a position, that the
+/// position is an interconnect tile and never the processor's, that the
+/// pins spread over many rows rather than one, and that `ARVALID` is the
+/// tile measured. It would catch a search that found nothing (no
+/// positions), one that stayed inside the processor, or one that returned
+/// a single tile for everything. It does not show that the positions make
+/// a design faster: that was measured on the board.
+#[test]
+fn a_processor_pin_is_placed_where_its_wire_enters_the_fabric() {
+    use reticle::fpga::uray::zcu104::{Board, DEFAULT_EAST};
+    let (Some(bits_root), Some(wiring_root)) = (uraydb(), wiringdb()) else {
+        return;
+    };
+    let inputs = inputs(&bits_root, &wiring_root);
+    let board = Board::reaching(&inputs, None, DEFAULT_EAST).unwrap();
+    let ps = position(&inputs.grid, "PSS_ALTO_X0Y60");
+    let graph = &board.graph;
+    let pin_sites = graph
+        .sites
+        .iter()
+        .filter(|s| s.tile == ps && s.kind == "io")
+        .count();
+    let tiles = board.processor_pin_tiles();
+    let name = |tile: (u32, u32)| {
+        inputs
+            .grid
+            .tiles()
+            .iter()
+            .find(|t| t.grid == tile)
+            .map(|t| t.name.clone())
+            .unwrap_or_default()
+    };
+    let rows: HashSet<u32> = tiles.iter().map(|(_, t)| t.1).collect();
+    eprintln!(
+        "{} of {pin_sites} processor pin sites placed over {} rows",
+        tiles.len(),
+        rows.len()
+    );
+    assert_eq!(tiles.len(), pin_sites);
+    for (site, tile) in &tiles {
+        assert_ne!(*tile, ps, "{}", graph.sites[*site].name);
+        assert!(
+            name(*tile).starts_with("INT_"),
+            "{} is placed at {}",
+            graph.sites[*site].name,
+            name(*tile)
+        );
+    }
+    assert!(rows.len() > 30, "{} rows", rows.len());
+    let arvalid = tiles
+        .iter()
+        .find(|(s, _)| graph.sites[*s].bel == "HPM0_LPD_ARVALID")
+        .map(|(_, t)| *t)
+        .expect("ARVALID is a pin site");
+    assert_eq!(arvalid, (160, 167), "{}", name(arvalid));
+}
