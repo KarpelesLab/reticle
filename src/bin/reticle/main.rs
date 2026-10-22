@@ -3736,6 +3736,26 @@ fn write_xc7_bitstream(
                 reticle::fpga::place::WIDE_FANOUT
             );
         }
+        // Each pad's own paths, which a bus needs every one of in time.
+        let pads = reticle::fpga::place::pad_paths(&netlist, paths, &wire);
+        let mut late: Vec<&reticle::fpga::place::PadPath> =
+            pads.iter().filter(|p| p.latest > p.required).collect();
+        late.sort_by(|a, b| (b.latest - b.required).total_cmp(&(a.latest - a.required)));
+        eprintln!(
+            "note: pads' own paths: {} in time, {} late",
+            pads.len() - late.len(),
+            late.len()
+        );
+        for pad in &late {
+            eprintln!(
+                "    {} {} {}: {:.2} ns of {:.2}",
+                netlist.instances[pad.instance].name,
+                if pad.inward { "into" } else { "out of" },
+                domains.get(pad.domain).map_or("?", String::as_str),
+                pad.latest,
+                pad.required
+            );
+        }
         // Where the time goes on each domain's latest path, when it is
         // late: each pin with its arrival, and an input's connection.
         for (domain, ((name, ps), period)) in

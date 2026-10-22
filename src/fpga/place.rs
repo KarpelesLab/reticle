@@ -7019,6 +7019,110 @@ pub fn worst_path(
     steps
 }
 
+/// One pad's latest timed path: see [`pad_paths`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PadPath {
+    /// The pad, as an index into [`Netlist::instances`].
+    pub instance: usize,
+    /// Its domain, as an index into [`PlaceTiming::periods`].
+    pub domain: usize,
+    /// Whether the paths are the pad's own, into the design, or the
+    /// design's into it.
+    pub inward: bool,
+    /// The latest of them, in nanoseconds from the clock's edge, its
+    /// capture time included.
+    pub latest: f64,
+    /// When it has to be there: the period, times the cycles a multicycle
+    /// constraint gives its end.
+    pub required: f64,
+}
+
+/// Each pad's latest timed path in each domain, given each connection's
+/// delay as [`path_criticality`] takes it: for a pad that starts paths,
+/// the latest arrival at any endpoint it reaches; for one that ends them,
+/// the latest arrival at it. What a bus whose every pin has to be in time
+/// is checked by, one pin at a time, where [`worst_path`] gives only the
+/// latest of all.
+pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<PadPath> {
+    let order = timing_order(netlist, timing);
+    let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
+    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
+    let flag = |flags: &[bool], instance: usize| flags.get(instance).copied().unwrap_or(false);
+    let cycles_of = |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
+    let mut out = Vec::new();
+    for (domain, period) in timing.periods.iter().enumerate() {
+        let here = |instance: usize| match timing.domain.get(instance) {
+            Some(PathDomain::Clock(d)) => *d == domain,
+            Some(PathDomain::Every) => true,
+            _ => false,
+        };
+        let ends = |index: usize| here(index) && !flag(&timing.untimed_to, index);
+        let pads: Vec<usize> = (0..netlist.instances.len())
+            .filter(|i| netlist.instances[*i].kind == "io" && here(*i))
+            .collect();
+        // Into the design: from each pad on its own.
+        for &pad in &pads {
+            let starts = netlist.instances[pad]
+                .pins
+                .iter()
+                .any(|p| netlist.pins[*p].output && class(*p) == PinTiming::Start);
+            if !starts || flag(&timing.untimed_from, pad) {
+                continue;
+            }
+            let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|i| i == pad);
+            let mut latest: Option<(f64, f64)> = None;
+            for (index, inst) in netlist.instances.iter().enumerate() {
+                if !ends(index) {
+                    continue;
+                }
+                for pin in &inst.pins {
+                    if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                        continue;
+                    }
+                    let at =
+                        input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
+                    if at.is_finite() && latest.is_none_or(|(l, _)| at > l) {
+                        latest = Some((at, cycles_of(index) * period));
+                    }
+                }
+            }
+            if let Some((latest, required)) = latest {
+                out.push(PadPath {
+                    instance: pad,
+                    domain,
+                    inward: true,
+                    latest,
+                    required,
+                });
+            }
+        }
+        // Out of it: to each pad, from every start.
+        let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+        for &pad in &pads {
+            if !ends(pad) {
+                continue;
+            }
+            let latest = netlist.instances[pad]
+                .pins
+                .iter()
+                .filter(|p| !netlist.pins[**p].output && class(**p) == PinTiming::End)
+                .map(|p| input_arrival(netlist, &arrival, &wire_of, *p) + timing.capture[pad])
+                .filter(|at| at.is_finite())
+                .fold(f64::NEG_INFINITY, f64::max);
+            if latest.is_finite() {
+                out.push(PadPath {
+                    instance: pad,
+                    domain,
+                    inward: false,
+                    latest,
+                    required: cycles_of(pad) * period,
+                });
+            }
+        }
+    }
+    out
+}
+
 /// What [`estimate_timing`] found critical: each connection, by its sink
 /// pin.
 struct Criticality {
@@ -7498,6 +7602,95 @@ mod tests {
             let c = critical[signal.sinks[0]];
             assert!((c - 1.0).abs() < 1e-9, "{critical:?}");
         }
+    }
+
+    /// **Each pad's own latest path is reported, in and out.** A pad
+    /// launched at 9.5 ns reaching a register over 0.5 ns with a 0.1 ns
+    /// setup — 10.1 ns of a 10 ns period — and a register launching at
+    /// 0.3 ns into an output pad over 2.0 ns with 3.0 ns before its edge:
+    /// 5.3 ns. Would catch the capture time left off, a pad's direction
+    /// mistaken, or a pad reported that has no path; would not catch an
+    /// input pad timed from every start rather than its own, since no
+    /// other path here reaches its register, nor a pad whose paths cross
+    /// domains, which are not timed.
+    #[test]
+    fn each_pads_own_latest_path_is_reported_in_and_out() {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let mut connect = |driver_kind: &str, sink_kind: &str| {
+            let signal = netlist.signals.len();
+            let a = netlist.instances.len();
+            for (instance, kind, output) in [(a, driver_kind, true), (a + 1, sink_kind, false)] {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: "P".to_owned(),
+                    bit: 0,
+                    role: if output { "o" } else { "i" }.to_owned(),
+                    output,
+                    signal: Some(signal),
+                    constant: None,
+                });
+                netlist.instances.push(Instance {
+                    cell: CellId::from_index(instance),
+                    name: format!("c{instance}"),
+                    primitive: kind.to_uppercase(),
+                    kind: kind.to_owned(),
+                    pins: vec![pin],
+                    pin: None,
+                });
+            }
+            netlist.signals.push(Signal {
+                name: format!("s{signal}"),
+                driver: Some(netlist.pins.len() - 2),
+                sinks: vec![netlist.pins.len() - 1],
+            });
+        };
+        connect("io", "ff");
+        connect("ff", "io");
+        let pins = netlist
+            .pins
+            .iter()
+            .map(|pin| {
+                if pin.output {
+                    PinTiming::Start
+                } else {
+                    PinTiming::End
+                }
+            })
+            .collect();
+        let timing = PlaceTiming {
+            pins,
+            cell: vec![0.0; 4],
+            launch: vec![9.5, 0.0, 0.3, 0.0],
+            capture: vec![0.0, 0.1, 0.0, 3.0],
+            domain: vec![PathDomain::Clock(0); 4],
+            periods: vec![10.0],
+            wire: (0.0, 0.0, 0.0),
+            rounds: 1,
+            weight: 1.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 4],
+        };
+        let mut wire = vec![0.0; netlist.pins.len()];
+        wire[netlist.signals[0].sinks[0]] = 0.5;
+        wire[netlist.signals[1].sinks[0]] = 2.0;
+        let pads = pad_paths(&netlist, &timing, &wire);
+        assert_eq!(pads.len(), 2, "{pads:?}");
+        let into = pads.iter().find(|p| p.inward).unwrap();
+        assert_eq!(into.instance, 0);
+        assert!((into.latest - 10.1).abs() < 1e-9 && (into.required - 10.0).abs() < 1e-9);
+        let out = pads.iter().find(|p| !p.inward).unwrap();
+        assert_eq!(out.instance, 3);
+        assert!((out.latest - 5.3).abs() < 1e-9, "{pads:?}");
     }
 
     /// **Criticality is against the longest path when it is past the
