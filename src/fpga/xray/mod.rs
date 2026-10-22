@@ -2714,6 +2714,19 @@ fn is_clock_wire(name: &str) -> bool {
 /// (`CLK_HROW_TOP_R_CK_BUFG_CASCO0`, `CLK_FEED_R_CK_BUFG_CASC0`,
 /// `CLK_BUFG_TOP_R_CK_MUXED0`) to a `BUFGCTRL`'s input.
 ///
+/// **The left half of the die names its clock tile's outputs the other
+/// way round.** In `HCLK_CMT_L`, on the right, a pad's `CCIO0` is taken
+/// onto `HCLK_CMT_CK_IN0` and the row goes on from there; in `HCLK_CMT`,
+/// on the left, the same pip is `HCLK_CMT_CCIO0 -> HCLK_CMT_MUX_CLK_0`,
+/// and its `CK_IN<n>` are inputs. So `HCLK_CMT_MUX_CLK_<n>` is on the
+/// road too — the plain numbered ones, not `MUX_CLK_MMCM<n>`,
+/// `MUX_CLK_PLL<n>`, `MUX_CLK_LEAF_UP0` or `MUX_CLKINT_<n>`. Without it no
+/// left-side pad reached a buffer: on the ChipWhisperer-Husky Plus the
+/// board PLL's clock (`D13`) and the ADC's (`E12`) went to their five
+/// buffers over 103 to 190 pips of general routing each, where Vivado's,
+/// in NewAE's image, take `HCLK_CMT_MUX_CLK_<n>.HCLK_CMT_CCIO<m>`, and
+/// with it so do this flow's.
+///
 /// [`XrayFabric::clock_node_costs`] makes them as cheap as the network.
 /// They are not the network, and [`XrayFabric::clock_network_nodes`] does
 /// not bar a signal from them: a pad's clock is not driven by a global
@@ -2747,6 +2760,9 @@ fn is_clock_input_wire(name: &str) -> bool {
     ]
     .iter()
     .any(|part| name.contains(part))
+        || name
+            .split_once("HCLK_CMT_MUX_CLK_")
+            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 #[cfg(test)]

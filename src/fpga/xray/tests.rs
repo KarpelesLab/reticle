@@ -631,11 +631,15 @@ fn the_clock_network_is_told_from_the_routing_that_crosses_it() {
 
 /// The roads into a global buffer, by the names on the `xc7a100t` road
 /// from the ChipWhisperer-Husky Plus's clock pad to its buffer, and the
-/// wires that share their spelling without being on them. Would catch
-/// the general-routing entry to the clock row (`CLK_HROW_CK_INT_0_1`) or
-/// the horizontal buffers' `HCLK_CK_INOUT_L0` made cheap — a way for data
-/// onto clock wires — and a link of the road left out of the set; would
-/// not catch a road this list does not walk.
+/// wires that share their spelling without being on them, and the left
+/// half's clock tile, which calls its outputs to the row `MUX_CLK_<n>`.
+/// Would catch the general-routing entry to the clock row
+/// (`CLK_HROW_CK_INT_0_1`) or the horizontal buffers' `HCLK_CK_INOUT_L0`
+/// made cheap — a way for data onto clock wires — and a link of the road
+/// left out of the set, as `HCLK_CMT_MUX_CLK_0` was; would not catch a
+/// road this list does not walk, which is how that one was missed: the
+/// list was the right half's. `the_husky_clock_reaches_its_buffer_on_the_clock_pins_own_road`
+/// walks a pad on each side.
 #[test]
 fn the_roads_into_a_buffer_are_told_from_what_shares_their_names() {
     for name in [
@@ -648,6 +652,8 @@ fn the_roads_into_a_buffer_are_told_from_what_shares_their_names() {
         "HCLK_FIFO_CCIO0",
         "HCLK_CMT_CCIO0",
         "HCLK_CMT_CK_IN0",
+        "HCLK_CMT_MUX_CLK_0",
+        "HCLK_CMT_MUX_CLK_13",
         "HCLK_VBRK_MUX_CLK0",
         "HCLK_CLB_CK_IN0",
         "HCLK_CK_IN0",
@@ -672,6 +678,9 @@ fn the_roads_into_a_buffer_are_told_from_what_shares_their_names() {
         "CLK_BUFG_R_FBG_OUT3",
         "HCLK_CK_BUFHCLK4",
         "CLK_HROW_CK_MUX_OUT_L4",
+        "HCLK_CMT_MUX_CLKINT_0",
+        "HCLK_CMT_MUX_CLK_LEAF_UP0",
+        "HCLK_CMT_MUX_CLK_MMCM0",
         "LOGIC_OUTS18",
         "SL1END0",
         "IMUX_L16",

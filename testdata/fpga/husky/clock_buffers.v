@@ -3,7 +3,10 @@
 // clock on D4 through an `IBUFG` and a `BUFG`, a `BUFGMUX` choosing between
 // it and a fabric-divided clock with `CLK_SEL_TYPE("ASYNC")`, as eight of
 // the Husky's ten do, a second `BUFGMUX` left at its `SYNC` default, as the
-// other two are, and a `BUFGCE` gating it.
+// other two are, and a `BUFGCE` gating it. And the board PLL's clock on
+// D13 and C13, the left side's clock-capable pair, through an `IBUFDS` and a
+// `BUFG`, so that a pad on each half of the die is asked to reach its
+// buffer on the dedicated road.
 //
 // `tests/fpga_xray_bufg.rs` builds it with `reticle fpga --bitstream` and
 // compares each `BUFGCTRL`'s configuration with the three Vivado wrote into
@@ -13,6 +16,8 @@ module clock_buffers (
     input  wire clk_usb,
     input  wire sel,
     input  wire en,
+    input  wire PLLFPGAP,
+    input  wire PLLFPGAN,
     output wire LED_ADC,
     output wire LED_GLITCH,
     output wire LED_ARMED,
@@ -34,7 +39,12 @@ module clock_buffers (
   BUFR #(.BUFR_DIVIDE("1")) u_r (.I(observer_mr), .O(observer), .CE(1'b1), .CLR(1'b0));
   reg [24:0] o = 0;
   always @(posedge observer) o <= o + 1;
-  assign LED_CAP = o[24];
+  wire pll_in, pll;
+  IBUFDS #(.IOSTANDARD("LVDS_25")) u_pll_ibuf (.I(PLLFPGAP), .IB(PLLFPGAN), .O(pll_in));
+  BUFG u_pll_bufg (.I(pll_in), .O(pll));
+  reg [24:0] p = 0;
+  always @(posedge pll) p <= p + 1;
+  assign LED_CAP = o[24] ^ p[24];
 
   reg [24:0] a = 0, b = 0, c = 0;
   always @(posedge muxed) a <= a + 1;

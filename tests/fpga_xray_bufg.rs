@@ -211,6 +211,18 @@ fn the_husky_clock_buffers_are_the_ones_vivado_wrote() {
 /// data, this design passed with that order taken away, its data branch
 /// going nowhere near the buffer column. The router's own
 /// `a_pin_named_first_is_reached_before_the_tree_grows` catches that.
+///
+/// **And the same on the left half**, from the board PLL's `D13`, whose
+/// clock tile names the pip onto the row `HCLK_CMT_MUX_CLK_<n>.HCLK_CMT_CCIO0`
+/// rather than `CK_IN` (`is_clock_input_wire`). NewAE's image takes
+/// `MUX_CLK_1` onto the row's `CK_IN_L1`; which `n` is the router's to
+/// choose, so the test follows the one it took to the row. It would catch
+/// this pad routed over general routing, as every left-side clock pad on
+/// the ChipWhisperer-Husky Plus was — **but it did not catch why**: with
+/// `HCLK_CMT_MUX_CLK_<n>` left off the road this still passed, the router
+/// finding the road unaided on a design this small. The Plus's failure was
+/// in placement, and `a_clock_pad_on_either_side_reaches_its_buffers_by_road`
+/// is what catches that.
 #[test]
 fn the_husky_clock_reaches_its_buffer_on_the_clock_pins_own_road() {
     let Some(features) = built() else { return };
@@ -237,4 +249,93 @@ fn the_husky_clock_reaches_its_buffer_on_the_clock_pins_own_road() {
                 && f.ends_with(".CLK_HROW_CK_IN_R0")),
         "the row's input goes on to no buffer: {row:?}"
     );
+
+    let cmt = at("HCLK_CMT_X8Y78");
+    for feature in ["HCLK_CMT_CCIO0_ACTIVE", "HCLK_CMT_CCIO0_USED"] {
+        assert!(cmt.contains(&feature), "{feature} missing: {cmt:?}");
+    }
+    let lane = cmt
+        .iter()
+        .find_map(|f| {
+            f.strip_prefix("HCLK_CMT_MUX_CLK_")?
+                .strip_suffix(".HCLK_CMT_CCIO0")
+        })
+        .unwrap_or_else(|| panic!("the PLL's pad is taken onto no row input: {cmt:?}"));
+    let input = format!("CLK_HROW_CK_IN_L{lane}");
+    assert!(row.contains(&format!("{input}_ACTIVE").as_str()), "{row:?}");
+    assert!(
+        row.iter()
+            .any(|f| f.starts_with("CLK_HROW_TOP_R_CK_BUFG_CASCO")
+                && f.ends_with(&format!(".{input}"))),
+        "{input} goes on to no buffer: {row:?}"
+    );
+}
+
+/// **A clock-capable pad on either half of the die reaches its buffers on
+/// the road the placer walks**: from the pad's input, over the wires
+/// `XrayFabric::clock_roads` names and pips that set no bit, to the
+/// `BUFGCTRL` inputs of its half of the column — sixteen, from `D4` on the
+/// right and from `D13` on the left. It is the walk `confine_to_roads`
+/// makes to keep a pad's buffer where its road arrives.
+///
+/// It would catch a link of either road left out of the set, as the left
+/// clock tile's `HCLK_CMT_MUX_CLK_<n>` was: `D13` then reached none, the
+/// placer kept the board PLL's buffers nowhere in particular, and on the
+/// ChipWhisperer-Husky Plus its clock went to them over general routing.
+/// The build above did not catch that — on a design this small the router
+/// found the road unaided — which is why this walks the graph. It would
+/// not catch a road that reaches buffers it should not, nor anything the
+/// router then does.
+#[test]
+fn a_clock_pad_on_either_side_reaches_its_buffers_by_road() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, "xc7a35t-ftg256", &XrayOptions::new()).unwrap();
+    let tiles = db.tiles(&DiskFiles).unwrap();
+    let fabric = db.load(&DiskFiles, &XrayOptions::new()).unwrap();
+    let graph = fabric.arch.build_graph();
+    let roads = fabric.clock_roads(&graph);
+    let targets: BTreeMap<u32, usize> = graph
+        .sites
+        .iter()
+        .enumerate()
+        .filter(|(_, site)| site.kind == "gb")
+        .flat_map(|(index, site)| {
+            ["i", "i1"]
+                .into_iter()
+                .filter_map(move |role| site.pin(role).map(|node| (node, index)))
+        })
+        .collect();
+    // `D4` is `IOB_X1Y76` in `RIOB33_X43Y75` and `D13` is `IOB_X0Y76` in
+    // `LIOB33_X0Y75` (`package_pins.csv`); each is the higher of its
+    // tile's two sites, which is `IOB_Y0`.
+    for (ball, tile) in [("D4", "RIOB33_X43Y75"), ("D13", "LIOB33_X0Y75")] {
+        let tile = tiles.iter().find(|t| t.name == tile).unwrap();
+        let pad = graph
+            .sites
+            .iter()
+            .find(|site| site.tile == (tile.grid_x, tile.grid_y) && site.name.ends_with("/IOB_Y0"))
+            .unwrap_or_else(|| panic!("{ball} has no site"));
+        let mut seen: std::collections::HashSet<u32> = pad.pin_nodes("din").collect();
+        let mut work: Vec<u32> = seen.iter().copied().collect();
+        let mut reached = std::collections::BTreeSet::new();
+        while let Some(node) = work.pop() {
+            for pip in graph.outgoing(node) {
+                let to = graph.pip(*pip).to;
+                if !seen.insert(to) {
+                    continue;
+                }
+                if let Some(site) = targets.get(&to) {
+                    reached.insert(*site);
+                } else if roads[to as usize] || graph.pip_bits(*pip).is_empty() {
+                    work.push(to);
+                }
+            }
+        }
+        assert_eq!(
+            reached.len(),
+            16,
+            "{ball} reaches {} buffer(s) by road",
+            reached.len()
+        );
+    }
 }
