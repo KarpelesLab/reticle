@@ -6605,7 +6605,9 @@ fn timing_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<usize> {
 }
 
 /// Per signal, the criticality of its most critical connection over every
-/// domain; and the round's longest path per domain.
+/// domain; and the round's longest path per domain. Each connection is
+/// estimated from the distance between its ends ([`PlaceTiming::wire`]);
+/// [`analyse_paths`] does the rest.
 fn estimate_timing(
     netlist: &Netlist,
     graph: &RoutingGraph,
@@ -6613,6 +6615,18 @@ fn estimate_timing(
     timing: &PlaceTiming,
     order: &[usize],
 ) -> (Criticality, TimingRound) {
+    let wire = estimated_wire(netlist, graph, placement, timing);
+    analyse_paths(netlist, timing, order, &wire)
+}
+
+/// Each sink pin's estimated connection delay from its driver, in
+/// nanoseconds, from where the two ends are placed.
+fn estimated_wire(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    timing: &PlaceTiming,
+) -> Vec<f64> {
     let pins = netlist.pins.len();
     let tile = |instance: usize| placement.site_of(instance).map(|s| graph.sites[s].tile);
     // Each input pin's connection delay, from its driver.
@@ -6634,6 +6648,41 @@ fn estimate_timing(
             wire[*sink] = a + b * tiles + if wide { c * tiles } else { 0.0 };
         }
     }
+    wire
+}
+
+/// Each connection's criticality and each domain's longest path, routed:
+/// the analysis a timing-driven placement makes, given what the router
+/// made of each connection rather than an estimate from distance. `wire` is each sink pin's delay from
+/// its driver, in nanoseconds, by netlist pin; a pin past its end, or a
+/// connection nothing routed, takes none. Returns each pin's criticality,
+/// zero for any pin that is not a sink on a timed path, and each
+/// domain's longest path in picoseconds, in [`PlaceTiming::periods`]
+/// order.
+pub fn path_criticality(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+) -> (Vec<f64>, Vec<u64>) {
+    let order = timing_order(netlist, timing);
+    let (critical, round) = analyse_paths(netlist, timing, &order, wire);
+    (critical.pins, round.longest_ps)
+}
+
+/// The path analysis behind [`estimate_timing`] and [`path_criticality`]:
+/// arrival forwards from every launch, required time backwards from every
+/// capture, per domain, and each connection's criticality from its slack
+/// against the period or the longest path, whichever is longer. `wire` is
+/// each sink pin's connection delay, in nanoseconds.
+fn analyse_paths(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    order: &[usize],
+    wire: &[f64],
+) -> (Criticality, TimingRound) {
+    let pins = netlist.pins.len();
+    let wires = wire;
+    let wire = |pin: usize| wires.get(pin).copied().unwrap_or(0.0);
     let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
     let reaches = |pin: usize, j: usize| {
         timing
@@ -6657,6 +6706,7 @@ fn estimate_timing(
     let mut critical = vec![0.0f64; netlist.signals.len()];
     let mut pin_critical = vec![0.0f64; pins];
     let mut longest_ps = Vec::with_capacity(timing.periods.len());
+    let pad = |instance: usize| netlist.instances[instance].kind == "io";
     for (domain, period) in timing.periods.iter().enumerate() {
         let here = |instance: usize| match timing.domain.get(instance) {
             Some(PathDomain::Clock(d)) => *d == domain,
@@ -6664,126 +6714,115 @@ fn estimate_timing(
             _ => false,
         };
         let flag = |flags: &[bool], instance: usize| flags.get(instance).copied().unwrap_or(false);
-        // Forwards: every output pin's arrival.
-        let mut arrival = vec![f64::NEG_INFINITY; pins];
-        for (index, inst) in netlist.instances.iter().enumerate() {
-            if !here(index) || flag(&timing.untimed_from, index) {
-                continue;
-            }
-            for pin in &inst.pins {
-                if netlist.pins[*pin].output && class(*pin) == PinTiming::Start {
-                    arrival[*pin] = timing.launch[index];
+        let mut domain_longest = 0.0f64;
+        // Each path group on its own: from a pad or a register, to a pad
+        // or a register. A bus input with a few tenths of a nanosecond to
+        // reach its register is critical against its own group's latest
+        // path; against the whole domain's, a register path twice the
+        // period long made it look half slack, and the router's exponent
+        // made that nothing.
+        for (from_pad, to_pad) in [(false, false), (true, false), (false, true), (true, true)] {
+            // Forwards: every output pin's arrival.
+            let arrival = domain_arrival(netlist, timing, order, wires, domain, &|instance| {
+                pad(instance) == from_pad
+            });
+            let input_arrival = |pin: usize, arrival: &[f64]| -> f64 {
+                driver(pin).map_or(f64::NEG_INFINITY, |d| arrival[d] + wire(pin))
+            };
+            // The longest path, a path allowed several periods measured in
+            // one: what it is late by, in the period's terms.
+            let ends = |index: usize| {
+                here(index) && !flag(&timing.untimed_to, index) && pad(index) == to_pad
+            };
+            let cycles_of =
+                |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
+            let mut longest = 0.0f64;
+            for (index, inst) in netlist.instances.iter().enumerate() {
+                if !ends(index) {
+                    continue;
                 }
-            }
-        }
-        let input_arrival = |pin: usize, arrival: &[f64]| -> f64 {
-            driver(pin).map_or(f64::NEG_INFINITY, |d| arrival[d] + wire[pin])
-        };
-        for &index in order {
-            let inst = &netlist.instances[index];
-            for (j, out) in through_outputs(inst).enumerate() {
-                let latest = inst
-                    .pins
-                    .iter()
-                    .filter(|p| !netlist.pins[**p].output && class(**p) == PinTiming::Through)
-                    .filter(|p| reaches(**p, j))
-                    .map(|p| input_arrival(*p, &arrival))
-                    .fold(f64::NEG_INFINITY, f64::max);
-                if latest > f64::NEG_INFINITY {
-                    arrival[out] = arrival[out].max(latest + timing.cell[index]);
-                }
-            }
-        }
-        // The longest path, a path allowed several periods measured in
-        // one: what it is late by, in the period's terms.
-        let ends = |index: usize| here(index) && !flag(&timing.untimed_to, index);
-        let cycles_of =
-            |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
-        let mut longest = 0.0f64;
-        for (index, inst) in netlist.instances.iter().enumerate() {
-            if !ends(index) {
-                continue;
-            }
-            for pin in &inst.pins {
-                if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
-                    let at = input_arrival(*pin, &arrival) + timing.capture[index];
-                    if at.is_finite() {
-                        longest = longest.max(at / cycles_of(index));
+                for pin in &inst.pins {
+                    if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
+                        let at = input_arrival(*pin, &arrival) + timing.capture[index];
+                        if at.is_finite() {
+                            longest = longest.max(at / cycles_of(index));
+                        }
                     }
                 }
             }
-        }
-        // Backwards: every pin's required time, from the endpoints, against
-        // the period or the longest path, whichever is longer. Against the
-        // period alone every late connection is equally critical, and on
-        // the Husky Plus thousands were: the 15 ns read path to the USB pins
-        // was one of them, weighed as no worse than a path two ns late.
-        // Against the longest, the latest path is 1 and the rest in
-        // proportion, as VPR has it.
-        let span = period.max(longest);
-        let mut required = vec![f64::INFINITY; pins];
-        for (index, inst) in netlist.instances.iter().enumerate() {
-            if !ends(index) {
-                continue;
-            }
-            for pin in &inst.pins {
-                if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
-                    required[*pin] = cycles_of(index) * span - timing.capture[index];
-                }
-            }
-        }
-        let output_required = |pin: usize, required: &[f64]| -> f64 {
-            let Some(signal) = netlist.pins[pin].signal else {
-                return f64::INFINITY;
-            };
-            netlist.signals[signal]
-                .sinks
-                .iter()
-                .map(|s| required[*s] - wire[*s])
-                .fold(f64::INFINITY, f64::min)
-        };
-        for &index in order.iter().rev() {
-            let inst = &netlist.instances[index];
-            let outputs: Vec<f64> = through_outputs(inst)
-                .map(|p| output_required(p, &required))
-                .collect();
-            for pin in &inst.pins {
-                if netlist.pins[*pin].output || class(*pin) != PinTiming::Through {
+            // Backwards: every pin's required time, from the endpoints, against
+            // the period or the longest path, whichever is longer. Against the
+            // period alone every late connection is equally critical, and on
+            // the Husky Plus thousands were: the 15 ns read path to the USB pins
+            // was one of them, weighed as no worse than a path two ns late.
+            // Against the longest, the latest path is 1 and the rest in
+            // proportion, as VPR has it.
+            let span = period.max(longest);
+            let mut required = vec![f64::INFINITY; pins];
+            for (index, inst) in netlist.instances.iter().enumerate() {
+                if !ends(index) {
                     continue;
                 }
-                let earliest = outputs
+                for pin in &inst.pins {
+                    if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
+                        required[*pin] = cycles_of(index) * span - timing.capture[index];
+                    }
+                }
+            }
+            let output_required = |pin: usize, required: &[f64]| -> f64 {
+                let Some(signal) = netlist.pins[pin].signal else {
+                    return f64::INFINITY;
+                };
+                netlist.signals[signal]
+                    .sinks
                     .iter()
-                    .enumerate()
-                    .filter(|(j, _)| reaches(*pin, *j))
-                    .map(|(_, r)| *r)
-                    .fold(f64::INFINITY, f64::min);
-                if earliest < f64::INFINITY {
-                    required[*pin] = required[*pin].min(earliest - timing.cell[index]);
+                    .map(|s| required[*s] - wire(*s))
+                    .fold(f64::INFINITY, f64::min)
+            };
+            for &index in order.iter().rev() {
+                let inst = &netlist.instances[index];
+                let outputs: Vec<f64> = through_outputs(inst)
+                    .map(|p| output_required(p, &required))
+                    .collect();
+                for pin in &inst.pins {
+                    if netlist.pins[*pin].output || class(*pin) != PinTiming::Through {
+                        continue;
+                    }
+                    let earliest = outputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| reaches(*pin, *j))
+                        .map(|(_, r)| *r)
+                        .fold(f64::INFINITY, f64::min);
+                    if earliest < f64::INFINITY {
+                        required[*pin] = required[*pin].min(earliest - timing.cell[index]);
+                    }
                 }
             }
-        }
-        // Each connection's slack, and from it its criticality.
-        for (index, signal) in netlist.signals.iter().enumerate() {
-            let Some(d) = signal.driver else { continue };
-            if arrival[d] == f64::NEG_INFINITY {
-                continue;
-            }
-            for sink in &signal.sinks {
-                if required[*sink] == f64::INFINITY {
+            // Each connection's slack, and from it its criticality.
+            for (index, signal) in netlist.signals.iter().enumerate() {
+                let Some(d) = signal.driver else { continue };
+                if arrival[d] == f64::NEG_INFINITY {
                     continue;
                 }
-                let slack = required[*sink] - (arrival[d] + wire[*sink]);
-                let c = (1.0 - slack / span).clamp(0.0, 1.0);
-                critical[index] = critical[index].max(c);
-                pin_critical[*sink] = pin_critical[*sink].max(c);
+                for sink in &signal.sinks {
+                    if required[*sink] == f64::INFINITY {
+                        continue;
+                    }
+                    let slack = required[*sink] - (arrival[d] + wire(*sink));
+                    let c = (1.0 - slack / span).clamp(0.0, 1.0);
+                    critical[index] = critical[index].max(c);
+                    pin_critical[*sink] = pin_critical[*sink].max(c);
+                }
             }
+            domain_longest = domain_longest.max(longest);
         }
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "a path of a few microseconds at most, rounded to picoseconds"
         )]
-        longest_ps.push((longest * 1000.0).round().max(0.0) as u64);
+        longest_ps.push((domain_longest * 1000.0).round().max(0.0) as u64);
     }
     let round = TimingRound {
         critical: critical.iter().filter(|c| **c > 0.5).count(),
@@ -6791,6 +6830,193 @@ fn estimate_timing(
         hpwl: 0,
     };
     (Criticality { pins: pin_critical }, round)
+}
+
+/// Every output pin's arrival in one domain, in nanoseconds, over the
+/// paths from the instances `starts` accepts: each such `Start` output of
+/// the domain at its launch time, and each `Through` output at
+/// the latest of the inputs that reach it plus the cell's delay, in
+/// `order`. An output no path of the domain reaches is negative infinity.
+fn domain_arrival(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    order: &[usize],
+    wire: &[f64],
+    domain: usize,
+    starts: &dyn Fn(usize) -> bool,
+) -> Vec<f64> {
+    let wire = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
+    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
+    let here = |instance: usize| match timing.domain.get(instance) {
+        Some(PathDomain::Clock(d)) => *d == domain,
+        Some(PathDomain::Every) => true,
+        _ => false,
+    };
+    let untimed_from =
+        |instance: usize| timing.untimed_from.get(instance).copied().unwrap_or(false);
+    let mut arrival = vec![f64::NEG_INFINITY; netlist.pins.len()];
+    for (index, inst) in netlist.instances.iter().enumerate() {
+        if !here(index) || untimed_from(index) || !starts(index) {
+            continue;
+        }
+        for pin in &inst.pins {
+            if netlist.pins[*pin].output && class(*pin) == PinTiming::Start {
+                arrival[*pin] = timing.launch[index];
+            }
+        }
+    }
+    for &index in order {
+        let inst = &netlist.instances[index];
+        let outputs: Vec<usize> = inst
+            .pins
+            .iter()
+            .copied()
+            .filter(|p| netlist.pins[*p].output && class(*p) == PinTiming::Through)
+            .collect();
+        for (j, out) in outputs.into_iter().enumerate() {
+            let latest = inst
+                .pins
+                .iter()
+                .copied()
+                .filter(|p| !netlist.pins[*p].output && class(*p) == PinTiming::Through)
+                .filter(|p| reaches_output(timing, *p, j))
+                .map(|p| input_arrival(netlist, &arrival, &wire, p))
+                .fold(f64::NEG_INFINITY, f64::max);
+            if latest > f64::NEG_INFINITY {
+                arrival[out] = arrival[out].max(latest + timing.cell[index]);
+            }
+        }
+    }
+    arrival
+}
+
+/// Whether `pin`, a `Through` input, reaches its instance's `j`th
+/// `Through` output; see [`PlaceTiming::reaches`].
+fn reaches_output(timing: &PlaceTiming, pin: usize, j: usize) -> bool {
+    timing
+        .reaches
+        .get(pin)
+        .is_none_or(|mask| j >= 8 || mask & (1 << j) != 0)
+}
+
+/// An input pin's arrival: its driver's, plus its connection.
+fn input_arrival(
+    netlist: &Netlist,
+    arrival: &[f64],
+    wire: &dyn Fn(usize) -> f64,
+    pin: usize,
+) -> f64 {
+    netlist.pins[pin]
+        .signal
+        .and_then(|s| netlist.signals[s].driver)
+        .map_or(f64::NEG_INFINITY, |d| arrival[d] + wire(pin))
+}
+
+/// One pin on a path [`worst_path`] traces.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathStep {
+    /// The instance, as an index into [`Netlist::instances`].
+    pub instance: usize,
+    /// The pin, as an index into [`Netlist::pins`].
+    pub pin: usize,
+    /// When the signal arrives at the pin, in nanoseconds from the clock's
+    /// edge; at an endpoint, with the capture time added.
+    pub arrival: f64,
+    /// For an input, its connection's delay in nanoseconds; zero for an
+    /// output.
+    pub wire: f64,
+}
+
+/// The latest path of one domain, from its launch to its capture, with
+/// `wire` each sink pin's connection delay as [`path_criticality`] takes
+/// it: the endpoint whose arrival plus capture time is latest, and back
+/// from it, at each cell, the input whose arrival was latest among those
+/// reaching the output on the path. Empty when the domain has no timed
+/// path. A path allowed several periods is not scaled here: this is where
+/// the time goes, not whether it is late.
+pub fn worst_path(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+    domain: usize,
+) -> Vec<PathStep> {
+    let order = timing_order(netlist, timing);
+    let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+    let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
+    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
+    let here = |instance: usize| match timing.domain.get(instance) {
+        Some(PathDomain::Clock(d)) => *d == domain,
+        Some(PathDomain::Every) => true,
+        _ => false,
+    };
+    let mut end: Option<(usize, f64)> = None;
+    for (index, inst) in netlist.instances.iter().enumerate() {
+        if !here(index) || timing.untimed_to.get(index).copied().unwrap_or(false) {
+            continue;
+        }
+        for pin in &inst.pins {
+            if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                continue;
+            }
+            let at = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
+            if at.is_finite() && end.is_none_or(|(_, latest)| at > latest) {
+                end = Some((*pin, at));
+            }
+        }
+    }
+    let Some((mut pin, at)) = end else {
+        return Vec::new();
+    };
+    let mut steps = vec![PathStep {
+        instance: netlist.pins[pin].instance,
+        pin,
+        arrival: at,
+        wire: wire_of(pin),
+    }];
+    while let Some(driver) = netlist.pins[pin]
+        .signal
+        .and_then(|s| netlist.signals[s].driver)
+    {
+        let instance = netlist.pins[driver].instance;
+        steps.push(PathStep {
+            instance,
+            pin: driver,
+            arrival: arrival[driver],
+            wire: 0.0,
+        });
+        if class(driver) != PinTiming::Through || steps.len() > netlist.pins.len() {
+            break;
+        }
+        let outputs: Vec<usize> = netlist.instances[instance]
+            .pins
+            .iter()
+            .copied()
+            .filter(|p| netlist.pins[*p].output && class(*p) == PinTiming::Through)
+            .collect();
+        let j = outputs.iter().position(|p| *p == driver).unwrap_or(0);
+        let Some(input) = netlist.instances[instance]
+            .pins
+            .iter()
+            .copied()
+            .filter(|p| !netlist.pins[*p].output && class(*p) == PinTiming::Through)
+            .filter(|p| reaches_output(timing, *p, j))
+            .max_by(|a, b| {
+                input_arrival(netlist, &arrival, &wire_of, *a)
+                    .total_cmp(&input_arrival(netlist, &arrival, &wire_of, *b))
+            })
+        else {
+            break;
+        };
+        steps.push(PathStep {
+            instance,
+            pin: input,
+            arrival: input_arrival(netlist, &arrival, &wire_of, input),
+            wire: wire_of(input),
+        });
+        pin = input;
+    }
+    steps.reverse();
+    steps
 }
 
 /// What [`estimate_timing`] found critical: each connection, by its sink
@@ -7087,6 +7313,191 @@ mod tests {
             "{:?}",
             critical.pins
         );
+    }
+
+    /// **A routed path is timed from the delays it is given.** The same
+    /// chain, its three connections given 1.0, 0.5 and 2.0 ns as a router
+    /// would measure them, where the placement estimates 0.5, 0.3 and 0.7:
+    /// 0.3 + 1.0 + 0.1 + 0.5 + 0.1 + 2.0 + 0.05 = 4.05 ns, by hand, and
+    /// every connection's criticality 1 - 0.95 / 5. Would catch
+    /// [`path_criticality`] timing the placement instead of the delays
+    /// (2.05 ns), or dropping them (0.55 ns); would not catch a router
+    /// that measures its connections wrongly, which is the router's to
+    /// test.
+    #[test]
+    fn a_routed_path_is_timed_from_the_delays_given() {
+        let (_, netlist, _, timing) = timed_chain();
+        let mut wire = vec![0.0; netlist.pins.len()];
+        for (signal, delay) in netlist.signals.iter().zip([1.0, 0.5, 2.0]) {
+            wire[signal.sinks[0]] = delay;
+        }
+        let (critical, longest) = path_criticality(&netlist, &timing, &wire);
+        assert_eq!(longest, vec![4050]);
+        for signal in &netlist.signals {
+            let c = critical[signal.sinks[0]];
+            assert!((c - (1.0 - 0.95 / 5.0)).abs() < 1e-9, "{critical:?}");
+        }
+    }
+
+    /// **The worst path is traced back from its latest endpoint.** The
+    /// chain with 1.0, 0.5 and 2.0 ns connections, as above: six pins from
+    /// the first cell's output at 0.3 ns to the last cell's input at
+    /// 4.0 ns plus its 0.05 ns capture, each arrival and connection delay
+    /// by hand. Would catch a step skipped or out of order, an arrival
+    /// taken from the wrong pin, or the capture time left off the end;
+    /// would not catch the latest input chosen wrongly at a cell of
+    /// several, which this one-input chain cannot show.
+    #[test]
+    fn the_worst_path_is_traced_back_from_its_latest_endpoint() {
+        let (_, netlist, _, timing) = timed_chain();
+        let mut wire = vec![0.0; netlist.pins.len()];
+        for (signal, delay) in netlist.signals.iter().zip([1.0, 0.5, 2.0]) {
+            wire[signal.sinks[0]] = delay;
+        }
+        let path = worst_path(&netlist, &timing, &wire, 0);
+        let got: Vec<(usize, bool, f64, f64)> = path
+            .iter()
+            .map(|s| (s.instance, netlist.pins[s.pin].output, s.arrival, s.wire))
+            .collect();
+        let want = [
+            (0, true, 0.3, 0.0),
+            (1, false, 1.3, 1.0),
+            (1, true, 1.4, 0.0),
+            (2, false, 1.9, 0.5),
+            (2, true, 2.0, 0.0),
+            (3, false, 4.05, 2.0),
+        ];
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert_eq!((g.0, g.1), (w.0, w.1), "{got:?}");
+            assert!(
+                (g.2 - w.2).abs() < 1e-9 && (g.3 - w.3).abs() < 1e-9,
+                "{got:?}"
+            );
+        }
+        assert!(worst_path(&netlist, &timing, &wire, 1).is_empty());
+    }
+
+    /// **A path is critical against the latest path of its own group.**
+    /// One domain of 10 ns, two paths: a pad launched at 9.5 ns — an
+    /// input delay — reaching a register over 0.5 ns, late by its 0.1 ns
+    /// setup; and a register path through two tables of 10 ns each, 20.7
+    /// ns in all. Against the domain's latest path the pad's connection
+    /// has 10.6 ns of slack and a criticality near one half; against the
+    /// latest path from a pad, which it is, it has none and is fully
+    /// critical. The register path is fully critical either way. Would
+    /// catch the groups merged back into one (the pad's connection near
+    /// a half), or a group seeded from the wrong starts (the pad's path
+    /// not found at all); would not catch a pad that is not an `io`
+    /// instance, which is the netlist's to say.
+    #[test]
+    fn a_path_is_critical_against_the_latest_of_its_own_group() {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let mut chain = |kinds: &[&str]| {
+            let first_signal = netlist.signals.len();
+            for (i, kind) in kinds.iter().enumerate() {
+                let instance = netlist.instances.len();
+                let mut pins = Vec::new();
+                if i > 0 {
+                    let pin = netlist.pins.len();
+                    netlist.pins.push(NetPin {
+                        instance,
+                        port: "I".to_owned(),
+                        bit: 0,
+                        role: "i".to_owned(),
+                        output: false,
+                        signal: Some(first_signal + i - 1),
+                        constant: None,
+                    });
+                    netlist.signals[first_signal + i - 1].sinks.push(pin);
+                    pins.push(pin);
+                }
+                if i + 1 < kinds.len() {
+                    let pin = netlist.pins.len();
+                    netlist.pins.push(NetPin {
+                        instance,
+                        port: "O".to_owned(),
+                        bit: 0,
+                        role: "o".to_owned(),
+                        output: true,
+                        signal: Some(first_signal + i),
+                        constant: None,
+                    });
+                    netlist.signals.push(Signal {
+                        name: format!("s{}", first_signal + i),
+                        driver: Some(pin),
+                        sinks: Vec::new(),
+                    });
+                    pins.push(pin);
+                }
+                netlist.instances.push(Instance {
+                    cell: CellId::from_index(instance),
+                    name: format!("c{instance}"),
+                    primitive: kind.to_uppercase(),
+                    kind: (*kind).to_owned(),
+                    pins,
+                    pin: None,
+                });
+            }
+        };
+        chain(&["io", "ff"]);
+        chain(&["ff", "lut", "lut", "ff"]);
+        let pins = netlist
+            .pins
+            .iter()
+            .map(
+                |pin| match (netlist.instances[pin.instance].kind.as_str(), pin.output) {
+                    ("lut", _) => PinTiming::Through,
+                    (_, true) => PinTiming::Start,
+                    (_, false) => PinTiming::End,
+                },
+            )
+            .collect();
+        let timing = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.0, 0.0, 10.0, 10.0, 0.0],
+            launch: vec![9.5, 0.0, 0.3, 0.0, 0.0, 0.0],
+            capture: vec![0.0, 0.1, 0.0, 0.0, 0.0, 0.1],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+            ],
+            periods: vec![10.0],
+            wire: (0.0, 0.0, 0.0),
+            rounds: 1,
+            weight: 1.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 6],
+        };
+        let mut wire = vec![0.0; netlist.pins.len()];
+        wire[netlist.signals[0].sinks[0]] = 0.5;
+        for signal in &netlist.signals[1..] {
+            wire[signal.sinks[0]] = 0.1;
+        }
+        let (critical, longest) = path_criticality(&netlist, &timing, &wire);
+        assert_eq!(longest, vec![20700]);
+        let pad = critical[netlist.signals[0].sinks[0]];
+        assert!(
+            (pad - 1.0).abs() < 1e-9,
+            "the pad's connection: {critical:?}"
+        );
+        for signal in &netlist.signals[1..] {
+            let c = critical[signal.sinks[0]];
+            assert!((c - 1.0).abs() < 1e-9, "{critical:?}");
+        }
     }
 
     /// **Criticality is against the longest path when it is past the
