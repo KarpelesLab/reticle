@@ -3767,6 +3767,24 @@ tools measure each **path group** against its own latest — from a pad,
 to a pad, register to register — and so does this now
 (`place::analyse_paths`), for the placement and the route alike.
 
+**And then it was not the bus.** Built again with path groups, routed
+for time: 23.81 ns, against 31.15 ns routed for congestion alone on the
+same placement — and on the part, every read wrong somewhere (ECHO wrong
+in 300 of 300), worse than any build before it; routed for congestion
+alone it could not even be identified. One build each, so that is not a
+verdict on path groups. What every build agrees on is where the bits go:
+a build with the new fit and no groups lost bit 5 of `SAMPLES` in bytes
+0 and 2 and not in 1 and 3 — not a pin, a register. `usb_reg_main`
+raises `reg_write` on the same edge that loads `reg_datao` from the bus,
+and every register of the design takes `reg_datao` on the next: the
+write data's broadcast to the whole die has one period, and it is the
+latest path of the domain in build after build (21.3 ns, 78 tiles, to a
+trace register). A bit that arrives late keeps its old value, and which
+bits arrive late is wherever the placement put the registers at the far
+end of the slowest branches. The bus inputs had been the suspects; the
+broadcast inside the design is the culprit, and a period of 10.4 ns for
+it is what the design needs.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
