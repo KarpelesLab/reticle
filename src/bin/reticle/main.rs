@@ -3574,6 +3574,9 @@ fn write_xc7_bitstream(
         // searches flood.
         astar_weight: reticle::fpga::xray::ASTAR_WEIGHT,
         reroute_congested_only: true,
+        // And a congested signal keeps its clear branches: see
+        // `RouteOptions::incremental`.
+        incremental: true,
         first_pass_present: Some(0.0),
         bounding_margin: Some(3),
         present_growth: reticle::fpga::xray::PRESENT_GROWTH,
@@ -3597,6 +3600,7 @@ fn write_xc7_bitstream(
                     combinational: Vec::new(),
                     clock_roles: Vec::new(),
                     max_criticality: 0.99,
+                    cleanups: 2,
                     tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
                     exponent: 8,
                     passes: 4,
@@ -3736,6 +3740,89 @@ fn write_xc7_bitstream(
                 reticle::fpga::place::WIDE_FANOUT
             );
         }
+        // The connections the route made slowest against their distance:
+        // what a detour looks like, and on which signals, against the
+        // placement's own estimate of each (`timing::WIRE`).
+        let (a, b, c) = paths.wire;
+        let mut detours: Vec<(f64, usize, usize, u32, f64)> = Vec::new();
+        for (index, signal) in netlist.signals.iter().enumerate() {
+            let Some(driver) = signal.driver else {
+                continue;
+            };
+            let Some(from) = placement
+                .site_of(netlist.pins[driver].instance)
+                .map(|s| graph.sites[s].tile)
+            else {
+                continue;
+            };
+            let wide = signal.sinks.len() > reticle::fpga::place::WIDE_FANOUT;
+            for sink in &signal.sinks {
+                let Some(to) = placement
+                    .site_of(netlist.pins[*sink].instance)
+                    .map(|s| graph.sites[s].tile)
+                else {
+                    continue;
+                };
+                let tiles = from.0.abs_diff(to.0) + from.1.abs_diff(to.1);
+                let t = f64::from(tiles);
+                let estimate = a + b * t + if wide { c * t } else { 0.0 };
+                if wire[*sink] > 0.0 {
+                    detours.push((wire[*sink] - estimate, index, *sink, tiles, wire[*sink]));
+                }
+            }
+        }
+        detours.sort_by(|x, y| y.0.total_cmp(&x.0));
+        let over = |ns: f64| detours.iter().filter(|d| d.0 > ns).count();
+        eprintln!(
+            "note: routed connections over the placement's estimate: {} by 1 ns, {} by 2, {} by 5, {} by 10, of {}",
+            over(1.0),
+            over(2.0),
+            over(5.0),
+            over(10.0),
+            detours.len()
+        );
+        for (excess, signal, sink, tiles, ns) in detours.iter().take(8) {
+            let pin = &netlist.pins[*sink];
+            eprintln!(
+                "    {:.2} ns over: {} ({} sinks) to {}.{}, {tiles} tiles, {ns:.2} ns",
+                excess,
+                netlist.signals[*signal].name,
+                netlist.signals[*signal].sinks.len(),
+                netlist.instances[pin.instance].name,
+                pin.role
+            );
+        }
+        // Where the late endpoints are, by the top-level instance their
+        // cell is under: how many, and the latest.
+        let mut by_module: std::collections::BTreeMap<String, (usize, f64)> =
+            std::collections::BTreeMap::new();
+        for (pin, domain, at, required) in
+            reticle::fpga::place::endpoint_arrivals(&netlist, paths, &wire)
+        {
+            if at <= required {
+                continue;
+            }
+            let cell = &netlist.instances[netlist.pins[pin].instance].name;
+            let module = cell.split('.').next().unwrap_or(cell);
+            let key = format!(
+                "{} {module}",
+                domains.get(domain).map_or("?", String::as_str)
+            );
+            let entry = by_module.entry(key).or_insert((0, 0.0));
+            entry.0 += 1;
+            entry.1 = entry.1.max(at);
+        }
+        let mut modules: Vec<(String, (usize, f64))> = by_module.into_iter().collect();
+        modules.sort_by_key(|m| std::cmp::Reverse(m.1.0));
+        eprintln!(
+            "note: late endpoints by top-level instance: {}",
+            modules
+                .iter()
+                .take(12)
+                .map(|(m, (n, latest))| format!("{m} {n} (latest {latest:.1} ns)"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         // Each pad's own paths, which a bus needs every one of in time.
         let pads = reticle::fpga::place::pad_paths(&netlist, paths, &wire);
         let mut late: Vec<&reticle::fpga::place::PadPath> =

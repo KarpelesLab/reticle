@@ -7019,6 +7019,46 @@ pub fn worst_path(
     steps
 }
 
+/// Every timed endpoint's arrival in each domain, given each
+/// connection's delay as [`path_criticality`] takes it: `(the endpoint
+/// pin, its domain, its arrival with its capture time, the period times
+/// its cycles)`, an endpoint no path reaches left out. What a summary of
+/// where a design is late is drawn from.
+pub fn endpoint_arrivals(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+) -> Vec<(usize, usize, f64, f64)> {
+    let order = timing_order(netlist, timing);
+    let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
+    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
+    let cycles_of = |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
+    let mut out = Vec::new();
+    for (domain, period) in timing.periods.iter().enumerate() {
+        let here = |instance: usize| match timing.domain.get(instance) {
+            Some(PathDomain::Clock(d)) => *d == domain,
+            Some(PathDomain::Every) => true,
+            _ => false,
+        };
+        let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+        for (index, inst) in netlist.instances.iter().enumerate() {
+            if !here(index) || timing.untimed_to.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            for pin in &inst.pins {
+                if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                    continue;
+                }
+                let at = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
+                if at.is_finite() {
+                    out.push((*pin, domain, at, cycles_of(index) * period));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// One pad's latest timed path: see [`pad_paths`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct PadPath {
@@ -7608,8 +7648,9 @@ mod tests {
     /// launched at 9.5 ns reaching a register over 0.5 ns with a 0.1 ns
     /// setup — 10.1 ns of a 10 ns period — and a register launching at
     /// 0.3 ns into an output pad over 2.0 ns with 3.0 ns before its edge:
-    /// 5.3 ns. Would catch the capture time left off, a pad's direction
-    /// mistaken, or a pad reported that has no path; would not catch an
+    /// 5.3 ns; and the same two ends from `endpoint_arrivals`. Would catch
+    /// the capture time left off, a pad's direction mistaken, or a pad or
+    /// endpoint reported that has no path; would not catch an
     /// input pad timed from every start rather than its own, since no
     /// other path here reaches its register, nor a pad whose paths cross
     /// domains, which are not timed.
@@ -7691,6 +7732,23 @@ mod tests {
         let out = pads.iter().find(|p| !p.inward).unwrap();
         assert_eq!(out.instance, 3);
         assert!((out.latest - 5.3).abs() < 1e-9, "{pads:?}");
+        // The same two ends, as endpoints: the register's at 10.1 ns and
+        // the output pad's at 5.3, each against the 10 ns period.
+        let mut ends = endpoint_arrivals(&netlist, &timing, &wire);
+        ends.sort_by_key(|e| e.0);
+        let got: Vec<(usize, f64, f64)> = ends.iter().map(|e| (e.0, e.2, e.3)).collect();
+        let want = [
+            (netlist.signals[0].sinks[0], 10.1, 10.0),
+            (netlist.signals[1].sinks[0], 5.3, 10.0),
+        ];
+        assert_eq!(got.len(), 2, "{got:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert_eq!(g.0, w.0);
+            assert!(
+                (g.1 - w.1).abs() < 1e-9 && (g.2 - w.2).abs() < 1e-9,
+                "{got:?}"
+            );
+        }
     }
 
     /// **Criticality is against the longest path when it is past the
