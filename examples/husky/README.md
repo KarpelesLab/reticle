@@ -29,7 +29,29 @@ examples/husky/
   usr_accesse2.v      USR_ACCESSE2, which reads the build time: here, zero
   build_plus.sh       the Husky Plus: cwhusky_plus.xpr's files and defines, an XC7A100T
   probe/              a small design on NewAE's USB bus, and the script that checks it on a part
+  xpm_memory_sdpram.v Vivado's simple dual-port RAM macro, as NewAE's own FIFOs use it
+  sim/                NewAE's own testbench in Reticle's simulator: models of the
+                      Xilinx primitives and the script that runs `cwhusky_tb.v`
 ```
+
+## Simulating NewAE's own testbench
+
+NewAE's whole-design testbench, `fpga/sim/cwhusky_tb.v`, runs in
+Reticle's simulator as NewAE's `make all VARIANT=PLUS` runs it under
+iverilog, with every testbench parameter at the makefile's default or as
+given:
+
+```sh
+examples/husky/sim/run_cwhusky_tb.sh husky /tmp/tb.log FIFO_SAMPLES=300
+```
+
+It takes about eight seconds. It uses NewAE's own FIFOs (`NOXILINXFIFO`,
+which is NewAE's default for simulation) over `xpm_memory_sdpram.v`, and
+the primitives from `sim/xilinx_primitives.v`, behavioural models written
+from UG472, UG953 and XAPP888 rather than Vivado's unisims; their header
+says what each leaves out. As of 2026-10-23 a capture of 90 samples reads
+back all 90 correctly, and one of the testbench's checks fails: the slow
+FIFO is not empty at the end of the read cycle.
 
 ## Building
 
