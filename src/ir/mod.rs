@@ -104,8 +104,8 @@ pub use arena::{Arena, Id};
 pub use attr::{AttrValue, Attrs, KEEP_ATTRS, KEEP_LOOKALIKES, is_keep_attr, looks_like_keep};
 pub use cell::{Cell, CellId, CellKind, Reset};
 pub use design::{
-    Assign, Design, Instance, InstanceId, Memory, MemoryId, Module, ModuleId, ModuleRef, Net,
-    NetId, NetKind, Param, Port, PortDir,
+    Assign, Design, HierRef, Instance, InstanceId, Memory, MemoryId, Module, ModuleId, ModuleRef,
+    Net, NetId, NetKind, Param, Port, PortDir,
 };
 pub use expr::{BinaryOp, Expr, ExprId, ExprKind, TypeError, UnaryOp, infer_type};
 pub use hier::{DedupReport, FlattenOptions, FlattenReport, UniquifyReport};

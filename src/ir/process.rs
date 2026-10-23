@@ -552,6 +552,22 @@ pub enum StmtKind {
         /// Report arguments, formatted like a `SysCall`'s.
         message: Vec<ExprId>,
     },
+    /// `force net = value;`: the net reads `value` whatever drives it, until
+    /// a `release`. The value is the expression's at the force; a
+    /// simulator that tracked it would be more exact, and the frontend warns
+    /// when it is not constant. Simulation only.
+    Force {
+        /// The whole net forced.
+        target: NetId,
+        /// The value it reads while forced.
+        value: ExprId,
+    },
+    /// `release net;`: undoes a `force`. A wire returns to its drivers; a
+    /// variable keeps the forced value until it is next assigned.
+    Release {
+        /// The net released.
+        target: NetId,
+    },
     /// End the simulation (`$finish`).
     Finish,
     /// Pause the simulation (`$stop`).

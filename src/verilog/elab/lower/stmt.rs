@@ -214,8 +214,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 .env
                 .unsupported(s.span, "a procedural continuous `assign`"),
             AstStmt::Deassign(_) => self.env.unsupported(s.span, "`deassign`"),
-            AstStmt::Force(..) => self.env.unsupported(s.span, "`force`"),
-            AstStmt::Release(_) => self.env.unsupported(s.span, "`release`"),
+            AstStmt::Force(target, value) => self.force(target, value, s.span, out),
+            AstStmt::Release(target) => {
+                if let Some(net) = self.forced_net(target, "release") {
+                    out.span = s.span;
+                    out.push(ir::StmtKind::Release { target: net });
+                }
+            }
             AstStmt::Trigger { .. } => self.env.unsupported(s.span, "an event trigger `->`"),
         }
     }
@@ -362,6 +367,62 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         self.env
             .probe(|env| width::info(e, env, &[]))
             .is_some_and(|i| i.is_signed())
+    }
+
+    /// `force net = value;`. The value is sampled when the statement runs
+    /// (see [`ir::StmtKind::Force`]); one that is not constant is warned
+    /// about, since a simulator that tracked it would follow its changes.
+    fn force(&mut self, target: &'ast Expr, value: &'ast Expr, span: Span, out: &mut BlockBuilder) {
+        let Some(net) = self.forced_net(target, "force") else {
+            return;
+        };
+        let constant = self
+            .env
+            .probe(|env| {
+                crate::verilog::elab::constant::Evaluator::new(env)
+                    .eval(value, None)
+                    .ok()
+            })
+            .is_some();
+        if !constant {
+            self.env.report(
+                crate::diag::Diagnostic::warning("this `force` takes its value once, when it runs")
+                    .with_code(codes::UNSUPPORTED)
+                    .with_label(value.span, "not constant")
+                    .with_note(
+                        "Verilog keeps a forced net following its expression until it is \
+                         released; this simulator samples the expression at the `force`",
+                    ),
+            );
+        }
+        let v = if matches!(self.net_type(net), crate::verilog::elab::types::VType::Real) {
+            self.real(value, &mut Sink::Proc(out))
+        } else {
+            let width = self.net_width(net);
+            let signed = self.net_type(net).packed().is_some_and(|p| p.signed);
+            self.expr(value, Some(Ctx { width, signed }), &mut Sink::Proc(out))
+        };
+        out.span = span;
+        out.push(ir::StmtKind::Force {
+            target: net,
+            value: v,
+        });
+    }
+
+    /// The whole net a `force` or `release` names: a net or variable of
+    /// this module, or one below it through a hierarchical name. Part of a
+    /// net is not supported.
+    fn forced_net(&mut self, target: &'ast Expr, what: &str) -> Option<NetId> {
+        match self.env.probe(|env| env.resolve_path(target)) {
+            Some(Symbol::Net { net, .. }) => Some(net),
+            _ => {
+                self.env.unsupported(
+                    target.span,
+                    &format!("`{what}` of anything but a whole net or variable"),
+                );
+                None
+            }
+        }
     }
 
     /// Emits `target <op>= value`, or `target = value` for a plain op.

@@ -258,6 +258,9 @@ pub struct Module {
     pub cells: Arena<CellId, Cell>,
     /// Continuous assignments.
     pub assigns: Vec<Assign>,
+    /// Nets of this module that are nets of instances below it, named by a
+    /// hierarchical reference; see [`HierRef`].
+    pub hier_refs: Vec<HierRef>,
     /// Source attributes.
     pub attrs: Attrs,
     /// True when the module has no implementation: only its interface is
@@ -267,6 +270,25 @@ pub struct Module {
     pub timescale: Option<Timescale>,
     /// Where the module was declared.
     pub span: Span,
+}
+
+/// A net of a module that stands for a net inside an instance below it,
+/// which a testbench names by a hierarchical reference such as
+/// `U_dut.oadc.U_fifo.error_flag`.
+///
+/// The simulator gives `local` the target net's signal, so reading it,
+/// waiting on an edge of it and forcing it all act on the target; nothing in
+/// this module drives `local`. Only simulation has hierarchical references:
+/// synthesis refuses a module that holds one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HierRef {
+    /// The net of this module that stands for the target.
+    pub local: NetId,
+    /// The instance names from this module down to the one holding the
+    /// target, outermost first.
+    pub path: Vec<Name>,
+    /// The target net's name in that instance's module.
+    pub net: Name,
 }
 
 impl Module {
@@ -283,6 +305,7 @@ impl Module {
             processes: Arena::new(),
             cells: Arena::new(),
             assigns: Vec::new(),
+            hier_refs: Vec::new(),
             attrs: Attrs::new(),
             blackbox: false,
             timescale: None,

@@ -1021,6 +1021,15 @@ impl<'a> Printer<'a> {
                 self.out.line(&format!("if (!({cond})) {call};"));
             }
             StmtKind::Finish => self.out.line("$finish;"),
+            StmtKind::Force { target, value } => {
+                let target = self.lvalue(&crate::ir::Lvalue::Net(*target))?;
+                let value = self.expr(*value)?;
+                self.out.line(&format!("force {target} = {value};"));
+            }
+            StmtKind::Release { target } => {
+                let target = self.lvalue(&crate::ir::Lvalue::Net(*target))?;
+                self.out.line(&format!("release {target};"));
+            }
             StmtKind::Stop => self.out.line("$stop;"),
             StmtKind::Break => match self.loops.last().and_then(|(b, _)| b.clone()) {
                 Some(label) => self.out.line(&format!("disable {label};")),

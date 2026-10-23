@@ -448,6 +448,10 @@ impl<'a> Checker<'a> {
         let span = stmt.span;
         match &stmt.kind {
             StmtKind::Assign { target, value, .. } => self.check_assignment(target, *value, span),
+            StmtKind::Force { target, value } => {
+                self.check_assignment(&Lvalue::Net(*target), *value, span);
+            }
+            StmtKind::Release { .. } => {}
             StmtKind::If { cond, .. } => self.check_bit(*cond, "if condition", span),
             StmtKind::Case { subject, arms, .. } => {
                 if !self.expr_exists(*subject, span) {

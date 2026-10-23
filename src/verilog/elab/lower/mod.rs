@@ -49,6 +49,7 @@
 //! overrides keeps its own name.
 
 mod expr;
+mod hier;
 mod inst;
 mod proc;
 mod stmt;
@@ -511,11 +512,14 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
 
         // Pass 2: declarations.
-        self.declarations(&m.items, overrides, &mut params);
+        let inits = self.declare(&m.items, overrides, &mut params);
         self.bind_ports();
 
-        // Pass 3: behaviour.
+        // Pass 3: behaviour. A net's initialiser waits for the hierarchical
+        // names, which `wire w = U_dut.x;` reads.
         self.collect_defparams(&m.items);
+        self.hier_aliases(&m.items);
+        self.lower_net_inits(inits);
         self.items(&m.items);
         params
     }
@@ -810,13 +814,34 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
-    /// Pass 2: every declaration of the body, in source order.
+    /// Pass 2: every declaration of the body, in source order, and then
+    /// the nets' initialisers.
     fn declarations(
         &mut self,
         items: &'ast [Item],
         overrides: &mut Overrides,
         params: &mut Vec<(String, Value)>,
     ) {
+        let inits = self.declare(items, overrides, params);
+        self.lower_net_inits(inits);
+    }
+
+    /// The nets' initialisers [`Self::declare`] left, lowered as continuous
+    /// assignments.
+    fn lower_net_inits(&mut self, inits: Vec<(NetId, &'ast ast::Expr, Option<Delay>, Span)>) {
+        for (net, init, delay, span) in inits {
+            self.continuous_assign_to(net, init, delay, span);
+        }
+    }
+
+    /// Every declaration of the body, in source order, returning the nets'
+    /// initialisers for [`Self::lower_net_inits`].
+    fn declare(
+        &mut self,
+        items: &'ast [Item],
+        overrides: &mut Overrides,
+        params: &mut Vec<(String, Value)>,
+    ) -> Vec<(NetId, &'ast ast::Expr, Option<Delay>, Span)> {
         let outer = std::mem::take(&mut self.net_inits);
         for item in items {
             match &item.kind {
@@ -839,9 +864,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         // the declaration first; Vivado, Quartus and Verilator accept it
         // with a warning, and NewAE's ChipWhisperer-Husky gateware relies
         // on that in seven files.
-        for (net, init, delay, span) in std::mem::replace(&mut self.net_inits, outer) {
-            self.continuous_assign_to(net, init, delay, span);
-        }
+        std::mem::replace(&mut self.net_inits, outer)
     }
 
     /// Applies a compiler directive that reached the parser.

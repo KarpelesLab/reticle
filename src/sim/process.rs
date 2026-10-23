@@ -573,6 +573,17 @@ impl<'d> Simulator<'d> {
                 }
                 Flow::Next
             }
+            StmtKind::Force { target, value } => {
+                let v = self.eval(inst, *value).into_logic();
+                let sig = self.instances[inst.idx()].nets[target.index()];
+                self.force(super::api::NetHandle(sig), v);
+                Flow::Next
+            }
+            StmtKind::Release { target } => {
+                let sig = self.instances[inst.idx()].nets[target.index()];
+                self.release(super::api::NetHandle(sig));
+                Flow::Next
+            }
             StmtKind::Finish => {
                 self.finish();
                 self.procs[pid.idx()].status = ProcStatus::Dead;

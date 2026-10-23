@@ -305,7 +305,9 @@ impl<'a> Sim<'a> {
             | StmtKind::MemFile { .. }
             | StmtKind::Assert { .. }
             | StmtKind::Finish
-            | StmtKind::Stop => Flow::Next,
+            | StmtKind::Stop
+            | StmtKind::Force { .. }
+            | StmtKind::Release { .. } => Flow::Next,
         }
     }
 

@@ -62,6 +62,8 @@ pub fn stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(ExprId)) {
             f(*value);
         }
         StmtKind::If { cond, .. } => f(*cond),
+        StmtKind::Force { value, .. } => f(*value),
+        StmtKind::Release { .. } => {}
         StmtKind::Case { subject, arms, .. } => {
             f(*subject);
             for arm in arms {
@@ -157,6 +159,8 @@ fn stmt_expr_slots(stmt: &mut Stmt, f: &mut dyn FnMut(&mut ExprId)) {
             f(value);
         }
         StmtKind::If { cond, .. } => f(cond),
+        StmtKind::Force { value, .. } => f(value),
+        StmtKind::Release { .. } => {}
         StmtKind::Case { subject, arms, .. } => {
             f(subject);
             for arm in arms {

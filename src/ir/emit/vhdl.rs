@@ -1608,6 +1608,15 @@ impl<'a> Printer<'a> {
                 ));
             }
             StmtKind::Finish => self.out.line("std.env.finish;"),
+            StmtKind::Force { target, value } => {
+                let (v, _) = self.expr(*value)?;
+                let (name, _) = self.lvalue_text(&crate::ir::Lvalue::Net(*target), true)?;
+                self.out.line(&format!("{name} <= force {v};"));
+            }
+            StmtKind::Release { target } => {
+                let (name, _) = self.lvalue_text(&crate::ir::Lvalue::Net(*target), true)?;
+                self.out.line(&format!("{name} <= release;"));
+            }
             StmtKind::Stop => self.out.line("std.env.stop;"),
             StmtKind::Break => match self.loops.last() {
                 Some((label, _)) => self.out.line(&format!("exit {label};")),

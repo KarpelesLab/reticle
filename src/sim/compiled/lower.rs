@@ -1954,6 +1954,13 @@ impl<'d> Lowerer<'d> {
                 let guard = ctx.guard.map(|g| self.slot(g));
                 self.side.push(Op::Finish { guard });
             }
+            StmtKind::Force { .. } | StmtKind::Release { .. } => {
+                self.err(
+                    ctx.label.clone(),
+                    Reason::UnsupportedStatement("`force` or `release`"),
+                    Some(stmt.span),
+                );
+            }
             StmtKind::Stop => {
                 let guard = ctx.guard.map(|g| self.slot(g));
                 self.side.push(Op::Stop { guard });

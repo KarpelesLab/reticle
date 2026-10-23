@@ -590,7 +590,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// Evaluates the parameter overrides of an instantiation, including
     /// any `defparam` aimed at it.
-    fn build_overrides(
+    pub(super) fn build_overrides(
         &mut self,
         params: &'ast [ast::ParamOverride],
         inst_name: &str,

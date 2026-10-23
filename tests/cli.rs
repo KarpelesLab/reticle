@@ -920,6 +920,50 @@ fn a_wire_driven_from_an_inout_and_an_assign_is_resolved() {
     assert!(!stdout.contains("FAIL"), "{stdout}");
 }
 
+/// **A testbench reaches into the design by hierarchical name.** Reads in
+/// an expression, an event control on a net two instances down, a net's
+/// initialiser, and `force` and `release` of a net below, one of the
+/// instances declared after the lines that name it, as NewAE's Husky
+/// testbench declares `U_dut`. The frontend resolved names only within a
+/// module and its generate blocks, and refused each of these. Would catch
+/// any of them refused again or resolved to a net of its own rather than
+/// the target's (the force would not reach `y`, the count would not move),
+/// or synthesis taking one for an undriven net; would not catch a
+/// reference into an instance array, which is still refused.
+#[cfg(feature = "sim")]
+#[test]
+fn a_testbench_reaches_into_the_design_by_hierarchical_name() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/hier_ref_tb.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    // Synthesis has no such thing, and says so rather than leaving the
+    // reference an undriven net.
+    let (code, _, stderr) = run(&[
+        "synth",
+        "testdata/sim/hier_ref_tb.v",
+        "--top",
+        "hier_ref_tb",
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("S0044"), "{stderr}");
+}
+
+/// **`force` and `release` follow IEEE 1364-2005 9.3.2.** A forced variable
+/// ignores an assignment and, released, keeps the forced value until it is
+/// next assigned; a released wire returns to its driver; and the same
+/// through a hierarchical name. They were refused as unsupported. Would
+/// catch either release rule swapped, or a force an assignment overrides;
+/// would not catch a forced expression that changes afterwards, which is
+/// sampled once and warned about rather than tracked.
+#[cfg(feature = "sim")]
+#[test]
+fn force_and_release_follow_the_standard() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/force_release_tb.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    assert!(!stdout.contains("FAIL"), "{stdout}");
+}
+
 #[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);

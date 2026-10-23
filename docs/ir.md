@@ -50,7 +50,15 @@ Module
   processes: Arena<ProcessId, Process>  process form
   cells:     Arena<CellId, Cell>        cell form
   assigns:   Vec<Assign>                continuous drivers: Assign { target: Lvalue, value: ExprId, delay, attrs, span }
+  hier_refs: Vec<HierRef>               HierRef { local: NetId, path: Vec<Name>, net: Name }
 ```
+
+A `HierRef` is how a testbench's hierarchical name, `U_dut.oadc.error_flag`,
+reaches the IR: `local` is a net of this module, nothing in it drives
+`local`, and the simulator gives it the signal of the net `net` in the
+instance `path` leads to, so reading it, waiting on it and forcing it act on
+the target. Only simulation has hierarchical references; synthesis refuses a
+module that holds one (`S0044`).
 
 ### Types and constants
 
@@ -127,6 +135,7 @@ Edge { net, polarity: Pos | Neg | Any }
 | `MemFile { op, mem, file, start, end, base }` | `$readmemh` `$readmemb` `$writememh` `$writememb` (`op`); names the memory by id, as no expression denotes a whole memory; `start`/`end` are zero-based element addresses, `base` is the address `@hex` lines in the file give element 0 |
 | `MemWrite { mem, addr, value, enable }` | |
 | `Assert { cond, severity: Note\|Warning\|Error\|Failure, message }` | |
+| `Force { target: NetId, value }`, `Release { target: NetId }` | a whole net; the value is sampled when the `force` runs (Verilog would track it, and the frontend warns when it is not constant); simulation only, and synthesis drops them with a note |
 | `Finish`, `Stop`, `Break`, `Continue` | |
 
 `Lvalue`: `Net`, `Slice { net, hi, lo }`, `Index { net, index }`,
@@ -417,6 +426,7 @@ module <name> [blackbox]
     init <const> <const> ...     zero or more lines; a bare `init` means "initialised, empty"
   instance <name> of <module> [#(<p>=<v>, ...)] (<port>=<expr>, ...)
   assign <lvalue> = <expr> [after <n> <unit>]
+  hier %<net> = <instance> / ... / <net name>
   process [<name>] comb|initial|free
   process [<name>] seq [posedge|negedge %clk, ...] [async posedge|negedge %rst, ...]
   process [<name>] sensitive %a, %b
@@ -459,6 +469,8 @@ sys <name>(<args>)
 readmemh|readmemb|writememh|writememb(<file>, @<mem>[, <start>[, <end>]]) [base <n>]
 memwrite @<mem>[<addr>] = <expr> [enable <expr>]
 assert note|warning|error|failure <expr> [report <args>]
+force %<net> = <expr>                    simulation only
+release %<net>
 finish | stop | break | continue
 ```
 

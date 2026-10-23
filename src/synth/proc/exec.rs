@@ -940,6 +940,10 @@ impl<'a> Exec<'a> {
                 self.dropped.push((span, "`$finish`"));
                 Ok(Flow::Next)
             }
+            StmtKind::Force { .. } | StmtKind::Release { .. } => {
+                self.dropped.push((span, "`force` or `release`"));
+                Ok(Flow::Next)
+            }
             StmtKind::Stop => {
                 self.dropped.push((span, "`$stop`"));
                 Ok(Flow::Next)

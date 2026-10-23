@@ -339,6 +339,7 @@ impl<'d> Simulator<'d> {
         let top_name = design.modules[top].name.to_string();
         let mut chain = Vec::new();
         sim.instantiate(top, top_name, None, Vec::new(), &mut chain, &mut diags);
+        sim.bind_hier_refs(&mut diags);
         for i in 0..sim.instances.len() {
             sim.elaborate_contents(InstId::at(i), &mut diags);
         }
@@ -351,6 +352,58 @@ impl<'d> Simulator<'d> {
         }
         sim.schedule_time_zero();
         Ok(sim)
+    }
+
+    /// Gives each hierarchical reference's net the signal of the net it
+    /// names, in the instance its path leads to (see
+    /// [`crate::ir::HierRef`]), so reading, waiting on and forcing the
+    /// reference act on the target. Runs once every instance exists and
+    /// before any fanout is built from the nets' signals.
+    fn bind_hier_refs(&mut self, diags: &mut Diagnostics) {
+        for i in 0..self.instances.len() {
+            let m = self.instances[i].m;
+            for href in &m.hier_refs {
+                let mut at = i;
+                let mut missing = None;
+                for name in &href.path {
+                    match self.instances[at]
+                        .children
+                        .iter()
+                        .find(|c| self.instances[c.idx()].name == name.as_str())
+                    {
+                        Some(child) => at = child.idx(),
+                        None => {
+                            missing = Some(format!("no instance `{name}`"));
+                            break;
+                        }
+                    }
+                }
+                let target = self.instances[at]
+                    .m
+                    .nets
+                    .iter()
+                    .find(|(_, n)| n.name == href.net)
+                    .map(|(id, _)| id.index());
+                match (missing, target) {
+                    (None, Some(index)) => {
+                        let sig = self.instances[at].nets[index];
+                        if let Some(slot) = self.instances[i].nets.get_mut(href.local.index()) {
+                            *slot = sig;
+                        }
+                    }
+                    (missing, _) => {
+                        let why = missing.unwrap_or_else(|| format!("no net `{}`", href.net));
+                        diags.push(
+                            Diagnostic::error(format!(
+                                "the hierarchical reference `{}` in `{}` leads nowhere: {why}",
+                                m.nets[href.local].name, self.instances[i].path
+                            ))
+                            .with_span(m.nets[href.local].span),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Creates the instance of `module` and, recursively, its children.

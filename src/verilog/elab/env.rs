@@ -88,6 +88,10 @@ pub(crate) struct ScopeEnv<'cx, 'ast> {
     quiet: u32,
     /// The dialect the current module was written in.
     pub dialect: Dialect,
+    /// Hierarchical names into instances below the module, by their dotted
+    /// text, and the alias net standing for each; see
+    /// `lower::hier`.
+    pub hier: std::collections::HashMap<String, (crate::ir::NetId, super::types::VType)>,
 }
 
 impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
@@ -98,6 +102,7 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
             scope,
             stack: Vec::new(),
             quiet: 0,
+            hier: std::collections::HashMap::new(),
             dialect,
         }
     }
@@ -302,6 +307,15 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
                 self.resolve_scoped(pkg, name)
             }
             ExprKind::Member { base, name } => {
+                if !self.hier.is_empty()
+                    && let Some(text) = dotted_text(e)
+                    && let Some((net, ty)) = self.hier.get(&text)
+                {
+                    return Some(Symbol::Net {
+                        net: *net,
+                        ty: ty.clone(),
+                    });
+                }
                 let base_sym = self.resolve_path(base)?;
                 self.member_of(base_sym, base.span, name)
             }
@@ -422,5 +436,15 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
                 None
             }
         }
+    }
+}
+
+/// A name made only of identifiers joined by `.`, as one string; `None`
+/// for anything else.
+fn dotted_text(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Ident(id) => Some(id.name.clone()),
+        ExprKind::Member { base, name } => Some(format!("{}.{}", dotted_text(base)?, name.name)),
+        _ => None,
     }
 }

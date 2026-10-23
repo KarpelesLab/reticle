@@ -352,6 +352,27 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
         return stats;
     }
 
+    // A hierarchical reference is a testbench's window into the design it
+    // tests; a circuit has no wire that is another instance's net.
+    let mut refused = false;
+    for (_, module) in design.modules.iter() {
+        if let Some(href) = module.hier_refs.first() {
+            diags.push(
+                Diagnostic::error(format!(
+                    "module `{}` reads `{}` by a hierarchical name, which only simulation has",
+                    module.name, module.nets[href.local].name
+                ))
+                .with_code("S0044")
+                .with_span(module.nets[href.local].span)
+                .with_note("synthesise the design under test, not its testbench"),
+            );
+            refused = true;
+        }
+    }
+    if refused {
+        return stats;
+    }
+
     // Before lowering, while a `keep` on a process is still on a process:
     // an attribute that cannot be honoured where it was written is worth a
     // word, since the alternative is deleting what it asked to be kept in

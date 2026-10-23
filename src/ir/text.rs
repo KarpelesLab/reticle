@@ -261,6 +261,16 @@ impl<'a> Printer<'a> {
         for assign in &module.assigns {
             self.assign(assign);
         }
+        for hier in &module.hier_refs {
+            let path: Vec<String> = hier
+                .path
+                .iter()
+                .chain(std::iter::once(&hier.net))
+                .map(name)
+                .collect();
+            let line = format!("hier {} = {}", self.net_ref(hier.local), path.join(" / "));
+            self.line(&line);
+        }
         for (_, process) in module.processes.iter() {
             self.process(process);
         }
@@ -570,6 +580,14 @@ impl<'a> Printer<'a> {
                 self.line(&line);
             }
             StmtKind::Finish => self.line("finish"),
+            StmtKind::Force { target, value } => {
+                let line = format!("force {} = {}", self.net_ref(*target), self.expr(*value));
+                self.line(&line);
+            }
+            StmtKind::Release { target } => {
+                let line = format!("release {}", self.net_ref(*target));
+                self.line(&line);
+            }
             StmtKind::Stop => self.line("stop"),
             StmtKind::Break => self.line("break"),
             StmtKind::Continue => self.line("continue"),
@@ -1585,6 +1603,23 @@ impl Parser {
                 });
                 Ok(())
             }
+            "hier" => {
+                self.bump();
+                let local = self.expect_net()?;
+                self.expect_punct("=")?;
+                // The names down the hierarchy, the last of them the net.
+                let mut path = Vec::new();
+                let mut net = self.expect_name()?;
+                while self.eat_punct("/") {
+                    let next = self.expect_name()?;
+                    path.push(std::mem::replace(&mut net, next));
+                }
+                self.expect_newline()?;
+                self.module
+                    .hier_refs
+                    .push(crate::ir::design::HierRef { local, path, net });
+                Ok(())
+            }
             "instance" => {
                 self.bump();
                 let n = self.expect_name()?;
@@ -2115,6 +2150,18 @@ impl Parser {
                         self.expect_newline()?;
                         StmtKind::Finish
                     }
+                    "force" => {
+                        let target = self.expect_net()?;
+                        self.expect_punct("=")?;
+                        let value = self.expr()?;
+                        self.expect_newline()?;
+                        StmtKind::Force { target, value }
+                    }
+                    "release" => {
+                        let target = self.expect_net()?;
+                        self.expect_newline()?;
+                        StmtKind::Release { target }
+                    }
                     "stop" => {
                         self.expect_newline()?;
                         StmtKind::Stop
@@ -2495,6 +2542,7 @@ module \"a b\"
   net %i int var
   net %io u1 wire
   net %end u1 wire
+  net %probe u8 wire
   port clk in %clk
   port rst in %rst
   port a in %a
@@ -2517,6 +2565,7 @@ module \"a b\"
   assign %t = resize(neg(%s), u8)
   assign %t = (call f(%a, \"s\") as u4)[2:0] as u8
   assign %arr[%a] = %a
+  hier %probe = u0 / \"gen[1].y\"
   process p0 comb
     %t = %a
   end
@@ -2546,6 +2595,8 @@ module \"a b\"
     end
   end
   process p3 initial
+    force %t = 8'd3
+    release %t
     for %i = resize(8'd0, s64) as int; lt(%i, 8'd4 as int); %i = %i
       break
     end
