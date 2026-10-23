@@ -964,6 +964,45 @@ fn force_and_release_follow_the_standard() {
     assert!(!stdout.contains("FAIL"), "{stdout}");
 }
 
+/// **`--top` finds the top under `--param`.** The top's variant was named
+/// after its overrides, `pt$P_2`, and `--top pt --param P=2` reported no
+/// module `pt`; NewAE's testbench is run that way, every parameter given.
+/// Would catch the rename back; would not catch two variants of one
+/// module colliding, which the elaborator's own naming guards.
+#[cfg(feature = "sim")]
+#[test]
+fn top_is_found_when_its_parameters_are_overridden() {
+    let dir = scratch("top_param");
+    let file = dir.join("pt.v");
+    std::fs::write(
+        &file,
+        "module pt #(parameter P = 1);\n  initial $display(\"P=%0d\", P);\nendmodule\n",
+    )
+    .unwrap();
+    let path = file.to_str().unwrap();
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "--top", "pt", "--param", "P=2", path]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("P=2"), "{stdout}\n{stderr}");
+}
+
+/// **The Xilinx primitive models do what the guides say**, by their own
+/// testbench: an MMCM's frequencies and phase, its relock at a divide a
+/// DRP write sets, a PLL, BUFGMUX, ODDR, IDDR and the XADC's DRP. They are
+/// what lets NewAE's Husky testbench run in this simulator. The testbench's
+/// header says what it would and would not catch.
+#[cfg(feature = "sim")]
+#[test]
+fn the_xilinx_primitive_models_pass_their_testbench() {
+    let (code, stdout, stderr) = run(&[
+        "sim",
+        "--quiet",
+        "examples/husky/sim/xilinx_primitives_tb.v",
+        "examples/husky/sim/xilinx_primitives.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+}
+
 #[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);

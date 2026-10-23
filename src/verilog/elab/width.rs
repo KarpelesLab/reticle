@@ -220,7 +220,8 @@ impl Widths<'_, '_, '_> {
                 }
             }
             ExprKind::SystemIdent(id) => Some(match id.name.as_str() {
-                "time" | "stime" | "realtime" => Info::bits(64, false),
+                "time" | "stime" => Info::bits(64, false),
+                "realtime" => Info::Real,
                 "random" | "urandom" => Info::bits(32, true),
                 _ => Info::bits(32, true),
             }),
@@ -452,7 +453,8 @@ impl Widths<'_, '_, '_> {
             "onehot" | "onehot0" | "isunknown" | "test$plusargs" | "value$plusargs" => {
                 Info::bits(1, false)
             }
-            "time" | "stime" => Info::bits(64, false),
+            // IEEE 1364-2005 17.8: the IEEE double's 64 bits.
+            "time" | "stime" | "realtobits" => Info::bits(64, false),
             "realtime" | "itor" | "bitstoreal" => Info::Real,
             name if crate::logic::REAL_FUNCTIONS.contains(&name) => Info::Real,
             "sformatf" | "psprintf" => Info::Str(8),

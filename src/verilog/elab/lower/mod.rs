@@ -301,7 +301,8 @@ fn top_overrides(cx: &mut Context<'_>, module: &str, opts: &ElabOptions) -> Over
 
 /// The name of the variant of `module` produced by `overrides`.
 fn variant_name(cx: &Context<'_>, module: &str, applied: &[(String, Override)]) -> String {
-    if applied.is_empty() {
+    // The plain name, unless a top elaborated with overrides took it.
+    if applied.is_empty() && !cx.module_names.contains(module) {
         return module.to_owned();
     }
     let mut name = String::from(module);
@@ -424,7 +425,15 @@ pub(crate) fn elaborate_module(
     let mut ir_module = low.b.finish();
 
     let cx = low.env.cx;
-    let name = variant_name(cx, module, &applied);
+    // The top keeps its own name whatever its parameters: it is what
+    // `--top` names, and `--top tb --param P=2` used to find no module
+    // `tb`, only `tb$P_2`. Nothing else is in progress when a top is.
+    let top = cx.in_progress.len() == 1;
+    let name = if top && !cx.module_names.contains(module) {
+        module.to_owned()
+    } else {
+        variant_name(cx, module, &applied)
+    };
     ir_module.name = ir::Name::new(name.clone());
     for (param, value) in params {
         ir_module.params.push(ir::Param {

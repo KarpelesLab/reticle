@@ -412,16 +412,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             ExprKind::SystemIdent(id) => {
                 let info = self.info_of(e);
-                let w = info.width().max(1);
-                self.b.span = e.span;
-                self.b.call(
-                    format!("${}", id.name),
-                    Vec::new(),
+                let ty = if matches!(info, Info::Real) {
+                    Type::Real
+                } else {
                     Type::Bits {
-                        width: w,
+                        width: info.width().max(1),
                         signed: info.is_signed(),
-                    },
-                )
+                    }
+                };
+                self.b.span = e.span;
+                self.b.call(format!("${}", id.name), Vec::new(), ty)
             }
             ExprKind::Pattern(_) => {
                 self.env
@@ -1242,7 +1242,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let mut ids = Vec::new();
                 for a in args {
                     if let Some(v) = &a.value {
-                        let id = self.build(v, 0, sink);
+                        // A real argument stays a real: built as an
+                        // integer, `$realtobits(2.5)` was the bits of 3.0.
+                        let id = if matches!(self.info_of(v), Info::Real) {
+                            self.real(v, sink)
+                        } else {
+                            self.build(v, 0, sink)
+                        };
                         ids.push(id);
                     }
                 }

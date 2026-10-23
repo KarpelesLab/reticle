@@ -1,10 +1,11 @@
 // Real arithmetic in a testbench, as NewAE's Husky testbench writes it:
 // a `.v` file declaring `int`, read with `--sv` as `iverilog -g2005-sv`
 // reads it; reals assigned, divided, compared with integers and passed to
-// `$ceil`, `$floor` and `$atan2`; and a real assigned to an integer,
+// `$ceil`, `$floor` and `$atan2`; `$realtobits` all 64 bits and `$realtime`
+// a real; and a real assigned to an integer,
 // rounded to the nearest with a tie away from zero (IEEE 1364-2005 4.8.2).
 module real_arithmetic_tb;
-  real r, q, s = 1.25;
+  real r, q, t, s = 1.25;
   integer k, m, n, p, z;
   int samples;
   initial begin
@@ -17,8 +18,10 @@ module real_arithmetic_tb;
     p = $floor(q);                 // 2
     s += 0.25;                     // 1.5
     z = (q > 2) ? 1 : 0;           // a real compared with an integer
+    #3 t = $realtime;              // a real, not a 64-bit vector
     if (k == 8 && m == -8 && n == 3 && samples == 16 && p == 2 && s == 1.5 && z == 1
-        && $atan2(1.0, 1.0) > 0.78 && $atan2(1.0, 1.0) < 0.79)
+        && $atan2(1.0, 1.0) > 0.78 && $atan2(1.0, 1.0) < 0.79
+        && $realtobits(2.5) === 64'h4004000000000000 && t == 3.0)
       $display("PASS: reals round, compare, accumulate and call");
     else
       $display("FAIL: k %0d m %0d n %0d samples %0d p %0d s %f z %0d", k, m, n, samples, p, s, z);
