@@ -2081,31 +2081,79 @@ impl NearTree {
 /// it short anywhere it matters.
 const BOX_HOP_FAN: usize = 64;
 
-/// The terminals of a signal and the wires two hops from each, outwards
-/// from the source and inwards to the sinks, which is what its box is
-/// drawn round. A pin's own tile is not always where the interconnect that
-/// serves it is: drawn round the tiles alone, the box left a 7-series
-/// MMCM's DRP pins outside it, and their searches failed and flooded it.
+/// How many nodes [`terminal_reach`] follows along bit-less pips from one
+/// node before it stops: a wire's pieces, one a tile, are joined by them,
+/// and the longest 7-series wire has about twenty; a global net, joined
+/// across the die, would otherwise take the walk everywhere.
+const BOX_JOIN_LIMIT: usize = 256;
+
+/// The terminals of a signal and the wires two programmable hops from
+/// each, outwards from the source and inwards to the sinks, which is what
+/// its box is drawn round. A pin's own tile is not always where the
+/// interconnect that serves it is: drawn round the tiles alone, the box
+/// left a 7-series MMCM's DRP pins outside it, and their searches failed
+/// and flooded it.
+///
+/// **A hop is a pip with bits.** The bit-less pips that join a wire's
+/// pieces in neighbouring tiles are followed without being counted. When
+/// they were counted, two hops back from an MMCM's `daddr0` on the
+/// XC7A100T reached three nodes, all in the CMT and its interface tiles
+/// (x 7–8, y 43–44), and not one programmable pip; the interconnect that
+/// serves the pin spans x 2–12 and y 43–53. Every search for the Husky
+/// Plus's glitch MMCMs' DRP signals failed inside its box and was made
+/// again across the die, visiting up to 23 million nodes for a signal of
+/// two sinks.
 fn terminal_reach(graph: &RoutingGraph, terminals: &Terminals) -> impl Iterator<Item = NodeId> {
     let mut nodes: Vec<NodeId> = Vec::new();
     let walk = |start: NodeId, forward: bool, nodes: &mut Vec<NodeId>| {
+        let step = |node: NodeId| {
+            let pips = if forward {
+                graph.outgoing(node)
+            } else {
+                graph.incoming(node)
+            };
+            pips.iter().take(BOX_HOP_FAN).map(move |pip| {
+                let pip = *pip;
+                let p = graph.pip(pip);
+                (
+                    if forward { p.to } else { p.from },
+                    graph.pip_bits(pip).is_empty(),
+                )
+            })
+        };
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        seen.insert(start);
         nodes.push(start);
         let mut frontier = vec![start];
-        for _ in 0..2 {
-            let mut next = Vec::new();
-            for node in &frontier {
-                let pips = if forward {
-                    graph.outgoing(*node)
-                } else {
-                    graph.incoming(*node)
-                };
-                for pip in pips.iter().take(BOX_HOP_FAN) {
-                    let pip = graph.pip(*pip);
-                    next.push(if forward { pip.to } else { pip.from });
+        for round in 0..=2 {
+            // The whole of each frontier node's wire, along its joins.
+            let mut joined = frontier.clone();
+            let mut k = 0;
+            while k < joined.len() && joined.len() < frontier.len() + BOX_JOIN_LIMIT {
+                let node = joined[k];
+                k += 1;
+                for (next, join) in step(node) {
+                    if join && seen.insert(next) {
+                        nodes.push(next);
+                        joined.push(next);
+                    }
                 }
             }
-            nodes.extend_from_slice(&next);
-            frontier = next;
+            // Then one programmable hop from any of it, but for the last
+            // wire, which is the end of the second hop.
+            if round == 2 {
+                break;
+            }
+            let mut next_frontier = Vec::new();
+            for node in &joined {
+                for (next, join) in step(*node) {
+                    if !join && seen.insert(next) {
+                        nodes.push(next);
+                        next_frontier.push(next);
+                    }
+                }
+            }
+            frontier = next_frontier;
         }
     };
     walk(terminals.source, true, &mut nodes);
@@ -2910,6 +2958,107 @@ mod tests {
             .expect("the row above is two hops from the sinks, so inside the box");
         assert_eq!(report.iterations.last().unwrap().overused_nodes, 0);
         assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// **A box's hops are programmable pips; a wire's joins are followed
+    /// free.** A column of five tiles in which a pin at the bottom is fed
+    /// along a wire that is a chain of bit-less joins up to the top, where
+    /// the only programmable pip feeds it, as a 7-series MMCM's DRP pins
+    /// are fed from interconnect up to ten rows away. The pin's reach must
+    /// take in the top tile's track. Counting every pip a hop, as the box
+    /// once did, reaches the first two rows only — checked here too, so the
+    /// fixture is known to need the change. Would catch the joins counted
+    /// as hops again; would not catch a join limit too small for a real
+    /// wire, which this chain of four is well within.
+    #[test]
+    fn a_boxs_hops_are_programmable_pips_and_a_wires_joins_are_free() {
+        let mut arch = Arch::new("column", "test", 1, 5);
+        let wire = |t: &mut TileType, name: &str| {
+            t.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        };
+        let join_from_above = |t: &mut TileType| {
+            t.pips.push(PipDecl {
+                from: WireRef::at("j", 0, 1),
+                to: WireRef::local("j"),
+                bits: vec![],
+            });
+        };
+        let mut bottom = TileType::new("bottom", "bottom", 8, 8);
+        wire(&mut bottom, "j");
+        wire(&mut bottom, "in");
+        join_from_above(&mut bottom);
+        bottom.pips.push(PipDecl {
+            from: WireRef::local("j"),
+            to: WireRef::local("in"),
+            bits: vec![],
+        });
+        let mut dst = BelDecl::new("dst", "ff");
+        dst.pins.push(("d".to_owned(), WireRef::local("in")));
+        bottom.bels.push(dst);
+        let mut middle = TileType::new("middle", "middle", 8, 8);
+        wire(&mut middle, "j");
+        join_from_above(&mut middle);
+        let mut top = TileType::new("top", "top", 8, 8);
+        wire(&mut top, "j");
+        wire(&mut top, "track");
+        top.pips.push(PipDecl {
+            from: WireRef::local("track"),
+            to: WireRef::local("j"),
+            bits: vec![ConfigBit::new(0, 0)],
+        });
+        arch.tile_types.push(bottom);
+        arch.tile_types.push(middle);
+        arch.tile_types.push(top);
+        arch.set_tile(0, 0, 0);
+        for y in 1..4 {
+            arch.set_tile(0, y, 1);
+        }
+        arch.set_tile(0, 4, 2);
+        let graph = arch.build_graph();
+        let pin = graph.sites[graph.site_index("X0Y0/dst").expect("the bel exists")]
+            .pin("d")
+            .expect("the pin has a node");
+        let track = (0..u32::try_from(graph.nodes.len()).unwrap())
+            .find(|n| graph.wire(*n).name == "track")
+            .expect("the top tile has its track");
+        // The pin as the only terminal that matters: its own walk inwards.
+        let sink_only = Terminals {
+            signal: 0,
+            source: pin,
+            sinks: vec![Sink {
+                node: pin,
+                name: "dst.d".to_owned(),
+                pin: 0,
+            }],
+        };
+        let reached: HashSet<NodeId> = terminal_reach(&graph, &sink_only).collect();
+        assert!(
+            reached.contains(&track),
+            "the top tile's track is two programmable hops at most"
+        );
+        // Every pip a hop: two from the pin are its own tile's `j` and the
+        // row above's.
+        let mut every: HashSet<NodeId> = HashSet::from([pin]);
+        let mut frontier = vec![pin];
+        for _ in 0..2 {
+            let next: Vec<NodeId> = frontier
+                .iter()
+                .flat_map(|n| graph.incoming(*n).iter().map(|p| graph.pip(*p).from))
+                .collect();
+            every.extend(next.iter().copied());
+            frontier = next;
+        }
+        let highest = every.iter().map(|n| graph.wire(*n).tile.1).max();
+        assert_eq!(
+            highest,
+            Some(1),
+            "counting joins as hops stops at the second row"
+        );
+        assert!(!every.contains(&track));
     }
 
     /// The box's own geometry: a wire is inside when any tile it reaches
