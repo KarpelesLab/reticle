@@ -12,7 +12,8 @@
 //! inputs, and the nets it reads become AIG outputs, so the logic between
 //! is exactly the combinational cloud the optimiser and the mappers work
 //! on. Module ports are boundaries too. Combinational loops are broken by
-//! turning one net on each cycle into a boundary as well.
+//! turning one net on each cycle into a boundary as well, except where
+//! the cycle is none bit by bit, which is evaluated to a fixpoint instead.
 //!
 //! The returned [`Mapping`] records which `(net, bit)` each AIG input and
 //! output stands for and which cells and assignments were absorbed, which
@@ -84,10 +85,22 @@ struct Blaster<'m> {
     drivers: Vec<Vec<Driver>>,
     net_bits: Vec<Option<Vec<Edge>>>,
     in_progress: Vec<bool>,
+    /// Nets that close a cycle, evaluated by [`Blaster::fixpoint`]
+    /// rather than made boundaries.
+    self_loop: Vec<bool>,
+    /// The expressions and nets cached since the innermost
+    /// [`Blaster::fixpoint`] round began, which are all a round has to
+    /// forget; `None` outside one.
+    journal: Option<(Vec<ExprId>, Vec<NetId>)>,
     expr_bits: Vec<Option<Vec<Edge>>>,
     expr_ok: Vec<Option<bool>>,
     mapping: Mapping,
 }
+
+/// The widest net [`Blaster::fixpoint`] is tried on; a wider one closing
+/// a cycle is a boundary, as every one was. A round costs an evaluation
+/// of the cycle and there are up to the width plus one of them.
+const FIXPOINT_WIDTH: u32 = 256;
 
 /// Extracts the combinational logic of `module` into an AIG.
 pub fn from_module(module: &Module) -> (Aig, Mapping) {
@@ -98,6 +111,8 @@ pub fn from_module(module: &Module) -> (Aig, Mapping) {
         drivers: vec![Vec::new(); module.nets.len()],
         net_bits: vec![None; module.nets.len()],
         in_progress: vec![false; module.nets.len()],
+        self_loop: vec![false; module.nets.len()],
+        journal: None,
         expr_bits: vec![None; module.exprs.len()],
         expr_ok: vec![None; module.exprs.len()],
         mapping: Mapping::default(),
@@ -258,6 +273,31 @@ impl<'m> Blaster<'m> {
         // Break combinational loops: a net on a cycle becomes a boundary,
         // and its drivers are dropped from the absorbed set.
         self.break_cycles();
+        // A net that closes a cycle is kept when its bits settle, and made
+        // a boundary like any other loop when they do not. This is decided
+        // before what is absorbed is, because a net found to be a loop
+        // after its driver had been dropped would be left undriven.
+        let looped: Vec<NetId> = m
+            .nets
+            .ids()
+            .filter(|n| self.self_loop[n.index()] && !self.boundary[n.index()])
+            .collect();
+        if !looped.is_empty() {
+            for &net in &looped {
+                if !self.closes_no_loop(net) || self.fixpoint(net).is_none() {
+                    self.self_loop[net.index()] = false;
+                    self.boundary[net.index()] = true;
+                }
+            }
+            // The trial's work is thrown away but for the inputs it made,
+            // which are boundary nets' and stay theirs.
+            self.expr_bits.fill(None);
+            for id in m.nets.ids() {
+                if !self.boundary[id.index()] {
+                    self.net_bits[id.index()] = None;
+                }
+            }
+        }
         absorbed_cells.retain(|&cid| {
             let y = m.cells[cid].output("y").expect("checked");
             !self.boundary[y.index()]
@@ -328,6 +368,14 @@ impl<'m> Blaster<'m> {
                             colour[dep.index()] = Colour::Grey;
                             let deps = self.dependencies(dep);
                             stack.push((dep, deps, 0));
+                        }
+                        // The net that closes a cycle may close no loop
+                        // bit by bit; `classify` tries it, up to a width.
+                        Colour::Grey
+                            if width_of(&self.m.nets[dep].ty)
+                                .is_some_and(|w| w <= FIXPOINT_WIDTH) =>
+                        {
+                            self.self_loop[dep.index()] = true;
                         }
                         Colour::Grey => {
                             self.boundary[dep.index()] = true;
@@ -573,7 +621,149 @@ impl<'m> Blaster<'m> {
             self.net_bits[net.index()] = Some(bits.clone());
             return bits;
         }
+        if self.self_loop[net.index()]
+            && let Some(bits) = self.fixpoint(net)
+        {
+            self.net_bits[net.index()] = Some(bits.clone());
+            if let Some((_, nets)) = &mut self.journal {
+                nets.push(net);
+            }
+            return bits;
+        }
         self.in_progress[net.index()] = true;
+        let bits = self.drive(net);
+        self.in_progress[net.index()] = false;
+        self.net_bits[net.index()] = Some(bits.clone());
+        if let Some((_, nets)) = &mut self.journal {
+            nets.push(net);
+        }
+        bits
+    }
+
+    /// A net that closes a cycle, evaluated to a fixpoint: its drivers,
+    /// round the cycle, with every bit of it taken as zero, then again with
+    /// what that gave, until two rounds agree, or `None` after one more
+    /// round than it has bits.
+    ///
+    /// `b = g ^ (b >> 1)`, NewAE's conversion of a Gray code to binary, is
+    /// a loop net by net (`b`, then the shift's net, then `b`) and none bit
+    /// by bit: each bit reads only the one above it. Treated as a loop, the net became a boundary, its
+    /// exclusive-or was left out of the AIG, and the flow stopped on a
+    /// generic `$xor` it could not map. When no bit depends on itself,
+    /// each round settles at least one more bit, so the width plus one
+    /// rounds suffice; and because the AIG hashes its structure, settled
+    /// bits are the same edges in two rounds, which is what is compared.
+    /// A real loop never settles and stays a boundary.
+    fn fixpoint(&mut self, net: NetId) -> Option<Vec<Edge>> {
+        let width = width_of(&self.m.nets[net].ty).unwrap_or(0) as usize;
+        let outer = self.journal.take();
+        let mut guess = vec![Edge::FALSE; width];
+        let mut settled = None;
+        for _ in 0..=width + 1 {
+            // What the last round cached may rest on its guess: forget it.
+            // A boundary net's inputs are made once and never journaled.
+            if let Some((exprs, nets)) = self.journal.take() {
+                for e in exprs {
+                    self.expr_bits[e.index()] = None;
+                }
+                for n in nets {
+                    self.net_bits[n.index()] = None;
+                }
+            }
+            self.journal = Some((Vec::new(), Vec::new()));
+            self.net_bits[net.index()] = Some(guess.clone());
+            let bits = self.drive(net);
+            if bits == guess {
+                settled = Some(bits);
+                break;
+            }
+            guess = bits;
+        }
+        self.net_bits[net.index()] = None;
+        let last = self.journal.take().unwrap_or_default();
+        if settled.is_some() {
+            // The last round's caches rest on the settled value, so they
+            // stand; an enclosing round must forget them with its own.
+            self.journal = outer.map(|(mut exprs, mut nets)| {
+                exprs.extend(last.0);
+                nets.extend(last.1);
+                (exprs, nets)
+            });
+        } else {
+            for e in last.0 {
+                self.expr_bits[e.index()] = None;
+            }
+            for n in last.1 {
+                self.net_bits[n.index()] = None;
+            }
+            self.journal = outer;
+        }
+        settled
+    }
+
+    /// Whether a net that closes a cycle closes no loop bit by bit: in a
+    /// scratch AIG, with a fresh variable for each of its bits, its drivers
+    /// fed their own result round the cycle one more time than it has bits
+    /// no longer read any of those variables.
+    ///
+    /// Settling from a guess of zero is not enough on its own: `z = z & a`
+    /// is a loop, a latch, and settles at zero, which would have made it a
+    /// constant. A function that has stopped reading its guess is the same
+    /// whatever the guess, so the zero guess [`Blaster::fixpoint`] starts
+    /// from finds it exactly.
+    fn closes_no_loop(&self, net: NetId) -> bool {
+        let m = self.m;
+        let mut scratch = Blaster {
+            m,
+            aig: Aig::new(),
+            boundary: self.boundary.clone(),
+            drivers: self.drivers.clone(),
+            net_bits: vec![None; m.nets.len()],
+            in_progress: vec![false; m.nets.len()],
+            self_loop: self.self_loop.clone(),
+            journal: None,
+            expr_bits: vec![None; m.exprs.len()],
+            expr_ok: self.expr_ok.clone(),
+            mapping: Mapping::default(),
+        };
+        let width = width_of(&m.nets[net].ty).unwrap_or(0) as usize;
+        let mut guess: Vec<Edge> = (0..width).map(|_| scratch.aig.add_input()).collect();
+        let placeholders: std::collections::HashSet<u32> = guess.iter().map(|e| e.node()).collect();
+        for _ in 0..=width {
+            if let Some((exprs, nets)) = scratch.journal.take() {
+                for e in exprs {
+                    scratch.expr_bits[e.index()] = None;
+                }
+                for n in nets {
+                    scratch.net_bits[n.index()] = None;
+                }
+            }
+            scratch.journal = Some((Vec::new(), Vec::new()));
+            scratch.net_bits[net.index()] = Some(guess.clone());
+            guess = scratch.drive(net);
+        }
+        // Does any placeholder remain in the result's cone?
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut stack: Vec<u32> = guess.iter().map(|e| e.node()).collect();
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if placeholders.contains(&node) {
+                return false;
+            }
+            if scratch.aig.is_and(node) {
+                let (a, b) = scratch.aig.fanins(node);
+                stack.push(a.node());
+                stack.push(b.node());
+            }
+        }
+        true
+    }
+
+    /// A net's bits from its absorbed drivers.
+    fn drive(&mut self, net: NetId) -> Vec<Edge> {
+        let width = width_of(&self.m.nets[net].ty).unwrap_or(0);
         let mut bits = vec![Edge::FALSE; width as usize];
         let mut driven = vec![false; width as usize];
         let drivers = self.drivers[net.index()].clone();
@@ -606,8 +796,6 @@ impl<'m> Blaster<'m> {
                 }
             }
         }
-        self.in_progress[net.index()] = false;
-        self.net_bits[net.index()] = Some(bits.clone());
         bits
     }
 
@@ -617,6 +805,9 @@ impl<'m> Blaster<'m> {
         }
         let bits = self.expr_uncached(id);
         self.expr_bits[id.index()] = Some(bits.clone());
+        if let Some((exprs, _)) = &mut self.journal {
+            exprs.push(id);
+        }
         bits
     }
 
@@ -1050,6 +1241,84 @@ mod tests {
         assert_eq!(mapping.absorbed_assigns, [0, 1]);
         assert!(mapping.absorbed_cells.is_empty());
         assert_eq!(aig.outputs().len(), 8);
+    }
+
+    /// **A cycle net by net that is none bit by bit is absorbed whole.**
+    /// `b = g ^ (b >> 1)`, how NewAE's FIFOs turn a Gray code back into
+    /// binary: the shift is a net of its own, so `b` closes a cycle `b`,
+    /// `t`, `b`, and was made a boundary, its exclusive-or left out of the
+    /// AIG and unmappable. Now both assignments are absorbed, no input
+    /// stands for `b`, and the AIG gives binary for every 5-bit Gray code.
+    /// And a real loop beside it, `z = z & a`, which settles at zero from
+    /// a guess of zero, is still a boundary rather than a constant.
+    ///
+    /// Would catch the cycle made a boundary again (an input for `b`), the
+    /// fixpoint stopping a round early (a wrong high bit for some code), or
+    /// convergence from a zero guess taken as proof (`z` driven by the AIG);
+    /// would not catch a loop that does not read its guess in the scratch AIG
+    /// and yet is one, which structural hashing cannot produce.
+    #[test]
+    fn a_cycle_that_is_none_bit_by_bit_is_absorbed() {
+        let mut b = ModuleBuilder::new("m", span());
+        let g = b.input("g", Type::bits(5));
+        let out = b.output("b", Type::bits(5));
+        let t = b.add_net("t", Type::bits(5));
+        let bn = b.net(out);
+        let one = b.const_u64(5, 1);
+        let shifted = b.shr(bn, one);
+        b.assign(t, shifted);
+        let gn = b.net(g);
+        let tn = b.net(t);
+        let x = b.xor(gn, tn);
+        b.assign(out, x);
+        let a = b.input("a", Type::bit());
+        let z = b.output("z", Type::bit());
+        let zn = b.net(z);
+        let an = b.net(a);
+        let l = b.and(zn, an);
+        b.assign(z, l);
+        let m = b.finish();
+        let (aig, mapping) = from_module(&m);
+        assert!(
+            mapping.inputs.iter().all(|r| r.net != out),
+            "no input stands for `b`: {:?}",
+            mapping.inputs
+        );
+        assert!(
+            mapping.outputs.iter().all(|r| r.net != z),
+            "the latch is still a boundary, not something the AIG drives"
+        );
+        let g_inputs: Vec<usize> = mapping
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.net == g)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(g_inputs.len(), 5);
+        for code in 0u32..32 {
+            let mut inputs = vec![false; mapping.inputs.len()];
+            for (i, r) in mapping.inputs.iter().enumerate() {
+                if r.net == g {
+                    inputs[i] = code >> r.bit & 1 == 1;
+                }
+            }
+            let values = aig.eval(&inputs);
+            let mut got = 0u32;
+            for (o, r) in mapping.outputs.iter().enumerate() {
+                if r.net == out && values[o] {
+                    got |= 1 << r.bit;
+                }
+            }
+            // Binary from Gray: each bit the parity of the bits above.
+            let mut want = 0u32;
+            for bit in 0..5 {
+                if (code >> bit).count_ones() % 2 == 1 {
+                    want |= 1 << bit;
+                }
+            }
+            assert_eq!(got, want, "Gray code {code:05b}");
+        }
     }
 
     #[test]
