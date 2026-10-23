@@ -453,7 +453,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     let Some(info) = ports.iter().find(|p| p.name == port.as_str()) else {
                         continue;
                     };
-                    if info.dir == PortDir::In {
+                    // An `inout` is a bus; see the single instance's case.
+                    if info.dir != PortDir::Out {
                         continue;
                     }
                     for (net, whole) in self.expr_nets(*expr) {
@@ -543,7 +544,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let Some(info) = ports.iter().find(|p| p.name == port.as_str()) else {
                     continue;
                 };
-                if info.dir == PortDir::In {
+                // An `inout` is a bus the instance may drive or leave
+                // floating, resolved with the other drivers of the wire
+                // like a tri-state, as the IR validator counts it: a
+                // testbench that drives `target_io4` beside the `inout` it
+                // is joined to is the ordinary pattern, not two drivers.
+                if info.dir != PortDir::Out {
                     continue;
                 }
                 let nets = self.expr_nets(*expr);

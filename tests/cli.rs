@@ -903,6 +903,23 @@ fn reals_simulate_and_sv_reads_a_v_file_as_systemverilog() {
     assert!(stderr.contains("`int`"), "{stderr}");
 }
 
+/// **A wire driven from an `inout` and an `assign` is a bus, resolved.**
+/// The testbench drives the wire while the pad lets it float, then the
+/// reverse, then both at once, which must read `x`. NewAE's Husky
+/// testbench drives `target_io4` beside the `inout` it is joined to, and
+/// the frontend refused that as two drivers although the simulator and the
+/// IR validator both treat an `inout` as a bus. Would catch the refusal
+/// back, or either driver lost; would not catch a strength other than
+/// strong resolved wrongly, which nothing here models.
+#[cfg(feature = "sim")]
+#[test]
+fn a_wire_driven_from_an_inout_and_an_assign_is_resolved() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/inout_bus_tb.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    assert!(!stdout.contains("FAIL"), "{stdout}");
+}
+
 #[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);
