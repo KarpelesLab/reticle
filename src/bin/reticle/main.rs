@@ -3834,8 +3834,11 @@ fn write_xc7_bitstream(
             late.len()
         );
         for pad in &late {
+            let pin = pad
+                .pin
+                .map_or(String::new(), |p| format!(".{}", netlist.pins[p].role));
             eprintln!(
-                "    {} {} {}: {:.2} ns of {:.2}",
+                "    {}{pin} {} {}: {:.2} ns of {:.2}",
                 netlist.instances[pad.instance].name,
                 if pad.inward { "into" } else { "out of" },
                 domains.get(pad.domain).map_or("?", String::as_str),

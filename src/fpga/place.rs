@@ -7069,6 +7069,11 @@ pub struct PadPath {
     /// Whether the paths are the pad's own, into the design, or the
     /// design's into it.
     pub inward: bool,
+    /// Outward, the pad's input pin they end at: each is reported on its
+    /// own, because a bidirectional pad's enable is usually shared by a
+    /// whole bus and, if later, would hide every lane's own data path.
+    /// Inward, `None`.
+    pub pin: Option<usize>,
     /// The latest of them, in nanoseconds from the clock's edge, its
     /// capture time included.
     pub latest: f64,
@@ -7131,6 +7136,7 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                     instance: pad,
                     domain,
                     inward: true,
+                    pin: None,
                     latest,
                     required,
                 });
@@ -7142,21 +7148,21 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
             if !ends(pad) {
                 continue;
             }
-            let latest = netlist.instances[pad]
-                .pins
-                .iter()
-                .filter(|p| !netlist.pins[**p].output && class(**p) == PinTiming::End)
-                .map(|p| input_arrival(netlist, &arrival, &wire_of, *p) + timing.capture[pad])
-                .filter(|at| at.is_finite())
-                .fold(f64::NEG_INFINITY, f64::max);
-            if latest.is_finite() {
-                out.push(PadPath {
-                    instance: pad,
-                    domain,
-                    inward: false,
-                    latest,
-                    required: cycles_of(pad) * period,
-                });
+            for pin in &netlist.instances[pad].pins {
+                if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                    continue;
+                }
+                let latest = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[pad];
+                if latest.is_finite() {
+                    out.push(PadPath {
+                        instance: pad,
+                        domain,
+                        inward: false,
+                        pin: Some(*pin),
+                        latest,
+                        required: cycles_of(pad) * period,
+                    });
+                }
             }
         }
     }
@@ -7648,9 +7654,10 @@ mod tests {
     /// launched at 9.5 ns reaching a register over 0.5 ns with a 0.1 ns
     /// setup — 10.1 ns of a 10 ns period — and a register launching at
     /// 0.3 ns into an output pad over 2.0 ns with 3.0 ns before its edge:
-    /// 5.3 ns; and the same two ends from `endpoint_arrivals`. Would catch
-    /// the capture time left off, a pad's direction mistaken, or a pad or
-    /// endpoint reported that has no path; would not catch an
+    /// 5.3 ns; the same pad's enable, over 0.5 ns, on its own at 3.8 ns;
+    /// and the same three ends from `endpoint_arrivals`. Would catch the capture time left off, a pad's
+    /// direction mistaken, a pad or endpoint reported that has no path,
+    /// or an output pad's pins folded into one; would not catch an
     /// input pad timed from every start rather than its own, since no
     /// other path here reaches its register, nor a pad whose paths cross
     /// domains, which are not timed.
@@ -7693,6 +7700,20 @@ mod tests {
         };
         connect("io", "ff");
         connect("ff", "io");
+        // A second input on the output pad, an enable, from the same
+        // register over less wire.
+        let enable = netlist.pins.len();
+        netlist.pins.push(NetPin {
+            instance: 3,
+            port: "T".to_owned(),
+            bit: 0,
+            role: "i".to_owned(),
+            output: false,
+            signal: Some(1),
+            constant: None,
+        });
+        netlist.instances[3].pins.push(enable);
+        netlist.signals[1].sinks.push(enable);
         let pins = netlist
             .pins
             .iter()
@@ -7724,24 +7745,31 @@ mod tests {
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
         wire[netlist.signals[1].sinks[0]] = 2.0;
+        wire[enable] = 0.5;
         let pads = pad_paths(&netlist, &timing, &wire);
-        assert_eq!(pads.len(), 2, "{pads:?}");
+        assert_eq!(pads.len(), 3, "{pads:?}");
         let into = pads.iter().find(|p| p.inward).unwrap();
-        assert_eq!(into.instance, 0);
+        assert_eq!((into.instance, into.pin), (0, None));
         assert!((into.latest - 10.1).abs() < 1e-9 && (into.required - 10.0).abs() < 1e-9);
-        let out = pads.iter().find(|p| !p.inward).unwrap();
-        assert_eq!(out.instance, 3);
-        assert!((out.latest - 5.3).abs() < 1e-9, "{pads:?}");
-        // The same two ends, as endpoints: the register's at 10.1 ns and
-        // the output pad's at 5.3, each against the 10 ns period.
+        // Out, each input pin on its own: the data at 5.3 ns, the enable
+        // at 0.3 + 0.5 + 3.0.
+        let data = netlist.signals[1].sinks[0];
+        for (pin, want) in [(data, 5.3), (enable, 3.8)] {
+            let out = pads.iter().find(|p| p.pin == Some(pin)).unwrap();
+            assert!(!out.inward && out.instance == 3, "{pads:?}");
+            assert!((out.latest - want).abs() < 1e-9, "{pads:?}");
+        }
+        // The same three ends, as endpoints: the register's at 10.1 ns and
+        // the output pad's at 5.3 and 3.8, each against the 10 ns period.
         let mut ends = endpoint_arrivals(&netlist, &timing, &wire);
         ends.sort_by_key(|e| e.0);
         let got: Vec<(usize, f64, f64)> = ends.iter().map(|e| (e.0, e.2, e.3)).collect();
         let want = [
             (netlist.signals[0].sinks[0], 10.1, 10.0),
             (netlist.signals[1].sinks[0], 5.3, 10.0),
+            (enable, 3.8, 10.0),
         ];
-        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got.len(), 3, "{got:?}");
         for (g, w) in got.iter().zip(want) {
             assert_eq!(g.0, w.0);
             assert!(
