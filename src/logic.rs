@@ -2226,6 +2226,44 @@ impl Logic {
     }
 }
 
+/// The real math functions of IEEE 1364-2005 17.11 (`$ln`, `$sqrt`,
+/// `$floor`, `$atan2`, ...), by name without the `$`, applied to `args`:
+/// `None` for a name that is not one of them or the wrong number of
+/// arguments. One table for the constant evaluator and the simulator, so
+/// that a function folded at elaboration and one called at run time agree.
+pub fn real_function(name: &str, args: &[f64]) -> Option<f64> {
+    Some(match (name, args) {
+        ("ln", [x]) => x.ln(),
+        ("log10", [x]) => x.log10(),
+        ("exp", [x]) => x.exp(),
+        ("sqrt", [x]) => x.sqrt(),
+        ("floor", [x]) => x.floor(),
+        ("ceil", [x]) => x.ceil(),
+        ("sin", [x]) => x.sin(),
+        ("cos", [x]) => x.cos(),
+        ("tan", [x]) => x.tan(),
+        ("asin", [x]) => x.asin(),
+        ("acos", [x]) => x.acos(),
+        ("atan", [x]) => x.atan(),
+        ("sinh", [x]) => x.sinh(),
+        ("cosh", [x]) => x.cosh(),
+        ("tanh", [x]) => x.tanh(),
+        ("asinh", [x]) => x.asinh(),
+        ("acosh", [x]) => x.acosh(),
+        ("atanh", [x]) => x.atanh(),
+        ("pow", [x, y]) => x.powf(*y),
+        ("atan2", [y, x]) => y.atan2(*x),
+        ("hypot", [x, y]) => x.hypot(*y),
+        _ => return None,
+    })
+}
+
+/// The names [`real_function`] knows, for a typing table to share.
+pub const REAL_FUNCTIONS: [&str; 21] = [
+    "ln", "log10", "exp", "sqrt", "floor", "ceil", "sin", "cos", "tan", "asin", "acos", "atan",
+    "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "pow", "atan2", "hypot",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

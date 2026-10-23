@@ -1414,26 +1414,21 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
                     Logic::from_i64(truncated, 32).with_signed(true),
                 ))
             }
-            "sqrt" | "ln" | "log10" | "exp" | "floor" | "ceil" => {
-                let a = self.arg_values(args, e.span, 1)?;
-                let v = self.eval(a[0], None)?;
-                let r = self.as_real(v, a[0].span)?;
-                Ok(Value::Real(match name {
-                    "sqrt" => r.sqrt(),
-                    "ln" => r.ln(),
-                    "log10" => r.log10(),
-                    "exp" => r.exp(),
-                    "floor" => r.floor(),
-                    _ => r.ceil(),
-                }))
-            }
-            "pow" => {
-                let a = self.arg_values(args, e.span, 2)?;
-                let x = self.eval(a[0], None)?;
-                let y = self.eval(a[1], None)?;
-                let x = self.as_real(x, a[0].span)?;
-                let y = self.as_real(y, a[1].span)?;
-                Ok(Value::Real(x.powf(y)))
+            name if crate::logic::REAL_FUNCTIONS.contains(&name) => {
+                let arity = if matches!(name, "pow" | "atan2" | "hypot") {
+                    2
+                } else {
+                    1
+                };
+                let a = self.arg_values(args, e.span, arity)?;
+                let mut reals = Vec::with_capacity(arity);
+                for arg in a {
+                    let v = self.eval(arg, None)?;
+                    reals.push(self.as_real(v, arg.span)?);
+                }
+                Ok(Value::Real(
+                    crate::logic::real_function(name, &reals).unwrap_or(f64::NAN),
+                ))
             }
             "countones" | "onehot" | "onehot0" | "isunknown" => {
                 let a = self.arg_values(args, e.span, 1)?;

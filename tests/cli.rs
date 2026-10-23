@@ -881,6 +881,28 @@ fn sim_loads_readmemh_files_next_to_the_design() {
     assert!(stderr.contains("data.hex"), "{stderr}");
 }
 
+/// **Reals simulate, and `--sv` reads a `.v` file as SystemVerilog.** The
+/// testbench declares an `int` and rounds, divides, compares and calls
+/// `$ceil`, `$floor` and `$atan2` on reals, checking each result itself;
+/// it passes with `--sv`, and without it `int` is not a type. Reals used
+/// to lower as one-bit vectors, and `r = 7.5;` stopped at an internal
+/// error. Would catch any of those results wrong, the flag ignored, or
+/// `.v` read as SystemVerilog without it; would not catch the rest of
+/// 17.11's functions wrong, which share one table with the constant
+/// evaluator.
+#[cfg(feature = "sim")]
+#[test]
+fn reals_simulate_and_sv_reads_a_v_file_as_systemverilog() {
+    let bench = "testdata/sim/real_arithmetic_tb.v";
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "--sv", bench]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
+    let (code, _, stderr) = run(&["sim", "--quiet", bench]);
+    assert_ne!(code, 0, "Verilog-2005 has no `int`");
+    assert!(stderr.contains("`int`"), "{stderr}");
+}
+
 #[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);

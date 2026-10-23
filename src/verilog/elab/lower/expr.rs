@@ -137,10 +137,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.b.span = self.b.module().expr(id).span;
             return self.b.constant(bits);
         }
+        if ty == Type::Real {
+            let rounded = self.real_to_integer(id);
+            return self.b.resize(rounded, width, signed);
+        }
         if !ty.is_bits() {
-            // A real reaching an integral context: a constant one was
-            // folded and rounded, so what is left is a genuine type
-            // error the IR cannot carry.
+            // A value with no integral form at all: a genuine type error
+            // the IR cannot carry.
             let span = self.b.module().expr(id).span;
             self.env.error(
                 codes::TYPE,
@@ -150,6 +153,120 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return self.b.const_u64(width, 0);
         }
         self.b.resize(id, width, signed)
+    }
+
+    /// A real value converted to a 64-bit signed integer as an assignment
+    /// converts one: rounded to the nearest integer, a tie away from zero
+    /// (IEEE 1364-2005 4.8.2). `$rtoi` truncates, so the value is moved
+    /// half a unit away from zero first: `$rtoi(r + (r < 0.0 ? -0.5 :
+    /// 0.5))`, written in standard calls so that an emitted design still
+    /// reads as Verilog.
+    fn real_to_integer(&mut self, id: ExprId) -> ExprId {
+        self.b.span = self.b.module().expr(id).span;
+        let zero = self.real_const(0.0);
+        let negative = self.b.binary(IrBin::Lt, id, zero);
+        let down = self.real_const(-0.5);
+        let up = self.real_const(0.5);
+        let half = self.b.mux(negative, down, up);
+        let moved = self.b.binary(IrBin::Add, id, half);
+        self.b.call(
+            "$rtoi",
+            vec![moved],
+            Type::Bits {
+                width: 64,
+                signed: true,
+            },
+        )
+    }
+
+    /// A real constant. The IR has no real literal, so it is the bits of
+    /// the IEEE double through `$bitstoreal`.
+    fn real_const(&mut self, value: f64) -> ExprId {
+        let bits = self.b.const_u64(64, value.to_bits());
+        self.b.call("$bitstoreal", vec![bits], Type::Real)
+    }
+
+    /// The real constant one, for `r++`.
+    pub(super) fn real_one(&mut self) -> ExprId {
+        self.real_const(1.0)
+    }
+
+    /// An integral value as a real, through `$itor`; a real one as it is.
+    fn real_of(&mut self, id: ExprId) -> ExprId {
+        if self.b.module().expr(id).ty == Type::Real {
+            return id;
+        }
+        self.b.span = self.b.module().expr(id).span;
+        self.b.call("$itor", vec![id], Type::Real)
+    }
+
+    /// Lowers `e` as a real value: an assignment to a `real`, or an
+    /// operand of an operator one of whose operands is real. A constant
+    /// is a real constant; arithmetic, negation and `?:` are real
+    /// operations on real operands; anything else is lowered as it would
+    /// be and converted, an integral value by `$itor`.
+    pub(super) fn real(&mut self, e: &'ast Expr, sink: &mut Sink<'_>) -> ExprId {
+        self.b.span = e.span;
+        if let Some(r) = self
+            .env
+            .probe(|env| Evaluator::new(env).eval(e, None).ok())
+            .and_then(|v| v.to_real())
+        {
+            return self.real_const(r);
+        }
+        match &e.kind {
+            ExprKind::Binary { op, lhs, rhs }
+                if matches!(
+                    op,
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                ) =>
+            {
+                let a = self.real(lhs, sink);
+                let b = self.real(rhs, sink);
+                self.b.span = e.span;
+                let irop = match op {
+                    BinaryOp::Add => IrBin::Add,
+                    BinaryOp::Sub => IrBin::Sub,
+                    BinaryOp::Mul => IrBin::Mul,
+                    BinaryOp::Div => IrBin::Div,
+                    BinaryOp::Mod => IrBin::Mod,
+                    _ => IrBin::Pow,
+                };
+                self.b.binary(irop, a, b)
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Minus,
+                operand,
+            } => {
+                let a = self.real(operand, sink);
+                self.b.span = e.span;
+                self.b.unary(IrUn::Neg, a)
+            }
+            ExprKind::Unary {
+                op: UnaryOp::Plus,
+                operand,
+            } => self.real(operand, sink),
+            ExprKind::Ternary {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
+                let c = self.expr_bit(cond, sink);
+                let t = self.real(then_expr, sink);
+                let f = self.real(else_expr, sink);
+                self.b.span = e.span;
+                self.b.mux(c, t, f)
+            }
+            _ => {
+                let id = self.build(e, 0, sink);
+                self.real_of(id)
+            }
+        }
     }
 
     /// The self-determined width and signedness of `e`, or one unsigned
@@ -213,6 +330,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 else_expr,
             } => {
                 let info = self.info_of(e);
+                if matches!(info, Info::Real) {
+                    return self.real(e, sink);
+                }
                 let w = eval_width(&info, want, true);
                 let signed = info.is_signed();
                 let c = self.expr_bit(cond, sink);
@@ -768,6 +888,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         match op {
             UnaryOp::Plus | UnaryOp::Minus | UnaryOp::BitNot => {
                 let info = self.info_of(e);
+                if matches!(info, Info::Real) && op != UnaryOp::BitNot {
+                    return self.real(e, sink);
+                }
                 let w = eval_width(&info, want, true);
                 let ctx = Ctx {
                     width: w,
@@ -851,6 +974,21 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         ) {
             let li = self.info_of(lhs);
             let ri = self.info_of(rhs);
+            if matches!(li, Info::Real) || matches!(ri, Info::Real) {
+                // A comparison with a real operand compares as reals.
+                let a = self.real(lhs, sink);
+                let b = self.real(rhs, sink);
+                self.b.span = e.span;
+                let irop = match op {
+                    B::Lt => IrBin::Lt,
+                    B::Le => IrBin::Le,
+                    B::Gt => IrBin::Gt,
+                    B::Ge => IrBin::Ge,
+                    B::Ne | B::CaseNe | B::WildNe => IrBin::Ne,
+                    _ => IrBin::Eq,
+                };
+                return self.b.binary(irop, a, b);
+            }
             let c = li.combine(&ri);
             let ctx = Ctx {
                 width: c.width().max(1),
@@ -876,6 +1014,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
 
         let info = self.info_of(e);
+        // Arithmetic on a real is real arithmetic; `real` lowers exactly
+        // these operators itself, so nothing else is sent back to it.
+        if matches!(info, Info::Real)
+            && matches!(op, B::Add | B::Sub | B::Mul | B::Div | B::Mod | B::Pow)
+        {
+            return self.real(e, sink);
+        }
         let w = eval_width(&info, want, truncatable(op));
         let signed = info.is_signed();
         let ctx = Ctx { width: w, signed };
@@ -1102,10 +1247,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     }
                 }
                 let ty = match info {
-                    Info::Real => Type::Bits {
-                        width: 64,
-                        signed: true,
-                    },
+                    Info::Real => Type::Real,
                     Info::Str(_) => Type::String,
                     other => Type::Bits {
                         width: other.width().max(1),
@@ -1678,6 +1820,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     /// The width an lvalue receives.
+    /// True when `lv` is a whole `real` variable, whose value is lowered by
+    /// [`Self::real`] rather than sized to a width.
+    pub(super) fn target_is_real(&self, lv: &ir::Lvalue) -> bool {
+        matches!(lv, ir::Lvalue::Net(net)
+            if matches!(self.nets.get(net.index()).map(|n| &n.ty), Some(VType::Real)))
+    }
+
     pub(super) fn lvalue_width(&self, lv: &ir::Lvalue) -> u32 {
         match lv {
             ir::Lvalue::Net(n) => self.net_width(*n),

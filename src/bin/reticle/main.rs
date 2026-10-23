@@ -170,6 +170,7 @@ Options:
   --top <module>    Treat this module as the top
   --param <N=V>     Override a top-level parameter or generic; repeatable
   --define <N[=V]>  Define a Verilog macro in every file; repeatable
+  --sv              Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>
                     Search here for `include files; repeatable
   --output <file>   Write the mapped netlist as .rtl
@@ -187,6 +188,7 @@ Options:
   --param <N=V>  Override a top-level parameter or generic; repeatable
   --define <N[=V]>
                  Define a Verilog macro in every file; repeatable
+  --sv           Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>
                  Search here for `include files; repeatable
   --quiet   Print diagnostics only, no summary line
@@ -207,6 +209,7 @@ Options:
   --top <module>     Treat this module as the top
   --param <N=V>      Override a top-level parameter or generic; repeatable
   --define <N[=V]>   Define a Verilog macro in every file; repeatable
+  --sv               Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>  Search here for `include files; repeatable
   --output-dir <d>   Write <top>.json and the constraints here (default: .)
   --netlist <file>   Also write the mapped design in the .rtl text format
@@ -335,6 +338,7 @@ Options:
   --top <module>      Treat this module as the top
   --param <N=V>       Override a top-level parameter or generic; repeatable
   --define <N[=V]>    Define a Verilog macro in every file; repeatable
+  --sv                Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>   Search here for `include files; repeatable
   --fsm <encoding>    auto, binary, one-hot, gray or none
   --max-iterations <n>  Optimisation-loop cap (default 8)
@@ -355,6 +359,7 @@ Options:
   --param <N=V>    Override a top-level parameter or generic; repeatable
   --define <N[=V]>
                    Define a Verilog macro in every file; repeatable
+  --sv             Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>
                    Search here for `include files; repeatable
 ";
@@ -370,6 +375,7 @@ Options:
   --param <N=V>    Override a top-level parameter or generic; repeatable
   --define <N[=V]>
                    Define a Verilog macro in every file; repeatable
+  --sv             Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>
                    Search here for `include files; repeatable
   --until <ticks>  Stop at this time (in the design's precision)
@@ -399,6 +405,7 @@ Options:
   --top <module>     Analyse this module
   --param <N=V>      Override a top-level parameter or generic; repeatable
   --define <N[=V]>   Define a Verilog macro in every file; repeatable
+  --sv               Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>  Search here for `include files; repeatable
   --paths <n>        Worst paths to report (default 10)
   --hold             Report hold instead of setup
@@ -424,6 +431,7 @@ Options:
   --top <module>     Treat this module as the top
   --param <N=V>      Override a top-level parameter or generic; repeatable
   --define <N[=V]>   Define a Verilog macro in every file; repeatable
+  --sv               Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>  Search here for `include files; repeatable
   --module <names>   Render only these modules (comma separated)
   --title <text>     Heading of the index page
@@ -454,6 +462,7 @@ Options:
   --param <N=V>    Override a top-level parameter or generic; repeatable
   --define <N[=V]>
                    Define a Verilog macro in every file; repeatable
+  --sv             Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>
                    Search here for `include files; repeatable
   --depth <n>      Bounded-check depth (default 20)
@@ -678,7 +687,7 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, ASIC_USAGE) {
         Spec {
             options: &["liberty", "top", "output", "verilog"],
-            flags: &["quiet"],
+            flags: &["sv", "quiet"],
             repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, BUILD_USAGE) {
@@ -698,7 +707,7 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, CHECK_USAGE) {
         Spec {
             options: &[],
-            flags: &["quiet"],
+            flags: &["sv", "quiet"],
             repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, FMT_USAGE) {
@@ -710,7 +719,7 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, SYNTH_USAGE) {
         Spec {
             options: &["output", "top", "fsm", "max-iterations", "lut"],
-            flags: &["report", "quiet", "gates", "verify"],
+            flags: &["sv", "report", "quiet", "gates", "verify"],
             repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, FPGA_USAGE) {
@@ -733,6 +742,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-start-window",
             ],
             flags: &[
+                "sv",
                 "list-devices",
                 "report",
                 "timing",
@@ -755,13 +765,20 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, TIMING_USAGE) {
         Spec {
             options: &["constraints", "period", "top", "paths", "device"],
-            flags: &["hold", "cdc", "summary"],
+            flags: &["sv", "hold", "cdc", "summary"],
             repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, VIEWER_USAGE) {
         Spec {
             options: &["output-dir", "top", "module", "title", "max-nodes"],
-            flags: &["synth", "no-schematic", "no-doc", "no-source", "quiet"],
+            flags: &[
+                "sv",
+                "synth",
+                "no-schematic",
+                "no-doc",
+                "no-source",
+                "quiet",
+            ],
             repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, PROGRAM_USAGE) {
@@ -779,7 +796,7 @@ fn spec_for(usage: &str) -> Spec {
     } else if std::ptr::eq(usage, EMIT_USAGE) {
         Spec {
             options: &["format", "output"],
-            flags: &[],
+            flags: &["sv"],
             repeated: &["param", "define", "include-dir"],
         }
     } else if std::ptr::eq(usage, SIM_USAGE) {
@@ -794,13 +811,13 @@ fn spec_for(usage: &str) -> Spec {
                 "assert-file",
                 "coverage",
             ],
-            flags: &["quiet", "interactive"],
+            flags: &["sv", "quiet", "interactive"],
             repeated: &["param", "define", "include-dir"],
         }
     } else {
         Spec {
             options: &["top", "depth", "max-k", "init", "trace"],
-            flags: &[],
+            flags: &["sv"],
             repeated: &["param", "define", "include-dir"],
         }
     }
@@ -845,6 +862,22 @@ fn report(diags: &mut Diagnostics, map: &SourceMap) -> bool {
 }
 
 /// The lowercase extension of a path, if it has one.
+/// The Verilog dialect a file is read in: its extension's, except that
+/// `--sv` reads a `.v` or `.vh` file as SystemVerilog, which is how a
+/// project that compiles with `iverilog -g2005-sv` or Vivado's
+/// SystemVerilog file type writes `.v` files that declare `int`.
+fn verilog_dialect(args: &Args, path: &str) -> reticle::verilog::Dialect {
+    let dialect = extension(path)
+        .as_deref()
+        .and_then(reticle::verilog::Dialect::for_extension)
+        .unwrap_or_default();
+    if args.flag("sv") && dialect == reticle::verilog::Dialect::Verilog2005 {
+        reticle::verilog::Dialect::SystemVerilog
+    } else {
+        dialect
+    }
+}
+
 fn extension(path: &str) -> Option<String> {
     Path::new(path)
         .extension()
@@ -1013,10 +1046,7 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
         let Some(id) = load(&mut map, path, &mut diags) else {
             continue;
         };
-        let dialect = extension(path)
-            .as_deref()
-            .and_then(reticle::verilog::Dialect::for_extension)
-            .unwrap_or_default();
+        let dialect = verilog_dialect(args, path);
         let mut resolver = IncludesFrom(path.clone(), include_dirs);
         files.push(reticle::verilog::parse_source_in(
             &mut map,
@@ -1031,10 +1061,7 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
         return Ok(Err(Outcome::Failed));
     }
 
-    let dialect = extension(&paths[0])
-        .as_deref()
-        .and_then(reticle::verilog::Dialect::for_extension)
-        .unwrap_or_default();
+    let dialect = verilog_dialect(args, &paths[0]);
     let mut options = reticle::verilog::ElabOptions::new(dialect);
     options.top = args.option("top").map(str::to_string);
     options.params = param_overrides(args)?;
@@ -1835,10 +1862,7 @@ fn check(args: &Args) -> Result<Outcome, ArgError> {
             },
             Some("v" | "sv" | "vh" | "svh") => {
                 let mut resolver = IncludesFrom(path.clone(), include_dirs);
-                let dialect = extension(path)
-                    .as_deref()
-                    .and_then(reticle::verilog::Dialect::for_extension)
-                    .unwrap_or_default();
+                let dialect = verilog_dialect(args, path);
                 let file = reticle::verilog::parse_source_in(
                     &mut map,
                     id,

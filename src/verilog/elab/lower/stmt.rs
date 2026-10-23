@@ -383,6 +383,31 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             .and_then(|t| t.packed().map(|p| p.signed))
             .unwrap_or(false);
         let ctx = Ctx { width, signed };
+        if self.target_is_real(&target) {
+            // `r += x` on a real: real arithmetic, a real result.
+            let current = self.real(lhs, &mut Sink::Proc(out));
+            let value = match rhs {
+                Some(r) => self.real(r, &mut Sink::Proc(out)),
+                None => self.real_one(),
+            };
+            self.b.span = span;
+            let irop = match op {
+                AssignOp::Add => Some(ir::BinaryOp::Add),
+                AssignOp::Sub => Some(ir::BinaryOp::Sub),
+                AssignOp::Mul => Some(ir::BinaryOp::Mul),
+                AssignOp::Div => Some(ir::BinaryOp::Div),
+                AssignOp::Mod => Some(ir::BinaryOp::Mod),
+                _ => None,
+            };
+            let result = match irop {
+                Some(irop) => self.b.binary(irop, current, value),
+                None => value,
+            };
+            out.span = span;
+            out.assign(target.clone(), result, AssignKind::Blocking);
+            self.note_assign_drivers(&target, self.driver, span, true);
+            return;
+        }
         let current = self.expr(lhs, Some(ctx), &mut Sink::Proc(out));
         let value = match rhs {
             Some(r) => {
@@ -447,11 +472,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             .probe(|env| env.type_of_path(lhs))
             .and_then(|t| t.packed().map(|p| p.signed))
             .unwrap_or(false);
-        if let Some(info) = self.env.probe(|env| width::info(rhs, env, &[])) {
-            let name = self.lvalue_name(&target);
-            width::check_assign(&mut self.env, &name, width, &info, span);
-        }
-        let value = self.expr(rhs, Some(Ctx { width, signed }), &mut Sink::Proc(out));
+        let value = if self.target_is_real(&target) {
+            self.real(rhs, &mut Sink::Proc(out))
+        } else {
+            if let Some(info) = self.env.probe(|env| width::info(rhs, env, &[])) {
+                let name = self.lvalue_name(&target);
+                width::check_assign(&mut self.env, &name, width, &info, span);
+            }
+            self.expr(rhs, Some(Ctx { width, signed }), &mut Sink::Proc(out))
+        };
         out.span = span;
         match delay {
             Some(d) => out.assign_after(target.clone(), value, kind, d),

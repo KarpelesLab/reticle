@@ -159,6 +159,11 @@ pub(crate) fn check_assign(
     from: &Info,
     span: Span,
 ) {
+    // A real is converted to the target's type, rounded, not truncated
+    // from a width it does not have.
+    if matches!(from, Info::Real) {
+        return;
+    }
     let needed = from.min_width();
     if needed > to {
         env.report(
@@ -448,9 +453,8 @@ impl Widths<'_, '_, '_> {
                 Info::bits(1, false)
             }
             "time" | "stime" => Info::bits(64, false),
-            "realtime" | "itor" | "sqrt" | "ln" | "log10" | "exp" | "pow" | "floor" | "ceil" => {
-                Info::Real
-            }
+            "realtime" | "itor" | "bitstoreal" => Info::Real,
+            name if crate::logic::REAL_FUNCTIONS.contains(&name) => Info::Real,
             "sformatf" | "psprintf" => Info::Str(8),
             _ => Info::bits(32, true),
         }

@@ -1160,9 +1160,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 continue;
             };
             let width = self.lvalue_width(&target);
-            let info = self.env.probe(|env| width::info(&pair.rhs, env, &[]));
+            let real = self.target_is_real(&target);
+            let info = self
+                .env
+                .probe(|env| width::info(&pair.rhs, env, &[]))
+                .filter(|_| !real);
             let signed = target_signed(&target, &self.nets);
-            let value = self.expr_cont(&pair.rhs, Some(Ctx { width, signed }));
+            let value = if real {
+                self.real(&pair.rhs, &mut Sink::Cont)
+            } else {
+                self.expr_cont(&pair.rhs, Some(Ctx { width, signed }))
+            };
             if let Some(info) = info {
                 let name = self.lvalue_name(&target);
                 width::check_assign(&mut self.env, &name, width, &info, pair.span);
@@ -1339,7 +1347,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     ) {
         let width = self.net_width(net);
         let signed = self.net_type(net).packed().is_some_and(|p| p.signed);
-        let value = self.expr_cont(rhs, Some(Ctx { width, signed }));
+        let value = if matches!(self.net_type(net), VType::Real) {
+            self.real(rhs, &mut Sink::Cont)
+        } else {
+            self.expr_cont(rhs, Some(Ctx { width, signed }))
+        };
         self.b.span = span;
         self.b.assign_after(net, value, delay);
         self.record_driver(net, DriverKey::Continuous, true, span);
@@ -1349,7 +1361,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     fn initial_value(&mut self, net: NetId, init: &'ast ast::Expr, span: Span) {
         let width = self.net_width(net);
         let signed = self.net_type(net).packed().is_some_and(|p| p.signed);
-        let value = self.expr_cont(init, Some(Ctx { width, signed }));
+        let value = if matches!(self.net_type(net), VType::Real) {
+            self.real(init, &mut Sink::Cont)
+        } else {
+            self.expr_cont(init, Some(Ctx { width, signed }))
+        };
         self.b.span = span;
         let mut p = self.b.process(None, ProcessKind::Initial);
         p.span = span;

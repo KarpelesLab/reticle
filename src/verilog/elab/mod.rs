@@ -329,10 +329,18 @@ mod tests {
         );
     }
 
-    /// A real is still refused where a vector is wanted: the fix above
-    /// is about strings, and must not have opened the other door.
+    /// **A real is converted where a vector is wanted, rounded, as an
+    /// assignment converts it** (IEEE 1364-2005 4.8.2). This test once
+    /// asserted the opposite, that a real argument to an `input [7:0]` was
+    /// refused; that was the frontend having no real arithmetic at all,
+    /// not the language, and NewAE's Husky testbench writes `samples =
+    /// $ceil(...) * 3` into an `int`. The conversion is `$rtoi` of the
+    /// value moved half a unit away from zero, so the argument reaches the
+    /// task through `$rtoi` and the half through `$bitstoreal`. Would catch
+    /// the refusal back, or a conversion that truncates (no half added);
+    /// the rounding's arithmetic is the simulator's and is tested there.
     #[test]
-    fn a_real_net_is_still_not_a_vector() {
+    fn a_real_reaching_a_vector_is_rounded() {
         let text = "module t;\n\
              \x20   real r;\n\
              \x20   reg [7:0] q;\n\
@@ -341,10 +349,14 @@ mod tests {
              \x20   endtask\n\
              \x20   initial take(r);\n\
              endmodule\n";
-        let (_, diags) = elab(text, Dialect::Verilog2005);
+        let (design, diags) = elab(text, Dialect::Verilog2005);
+        let design = design.unwrap_or_else(|| panic!("should elaborate:\n{diags}"));
+        assert!(!diags.contains("error["), "{diags}");
+        let rtl = design.to_text();
+        assert!(rtl.contains("$rtoi"), "no conversion in:\n{rtl}");
         assert!(
-            diags.contains("cannot be used as a"),
-            "a real argument should still be refused:\n{diags}"
+            rtl.contains(&format!("{}", 0.5f64.to_bits())) || rtl.contains("$bitstoreal"),
+            "no half unit added before truncating in:\n{rtl}"
         );
     }
 }

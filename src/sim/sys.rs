@@ -779,6 +779,15 @@ impl<'d> Simulator<'d> {
                 32,
             )),
             "$itor" => Value::Real(args.first().map_or(0.0, Value::to_real)),
+            real if crate::logic::REAL_FUNCTIONS.contains(&real.trim_start_matches('$'))
+                && real.starts_with('$') =>
+            {
+                let reals: Vec<f64> = args.iter().map(Value::to_real).collect();
+                Value::Real(
+                    crate::logic::real_function(real.trim_start_matches('$'), &reals)
+                        .unwrap_or(f64::NAN),
+                )
+            }
             "$rtoi" => {
                 let r = args.first().map_or(0.0, Value::to_real);
                 fit(Logic::from_i64(
