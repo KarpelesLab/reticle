@@ -16,6 +16,10 @@
 # grid, 147 by 208 tiles, which declares 77 million pips, past the
 # loader's default limit of 48 million; hence `--max-pips`.
 #
+# `--timing` prints how long each stage took and every routing pass as it
+# finishes: the build takes most of an hour, and without it the log says
+# nothing about where.
+#
 # `--timing-driven` is what makes the USB register interface work: placed
 # for wirelength alone the bitstream configured and answered on the bus,
 # but read back nearly every bit as zero, and NewAE's constraints give
@@ -39,7 +43,7 @@ exec "$reticle" fpga \
     --constraints "$here/husky.rcf" \
     --output-dir "$out" \
     --bitstream "$out/cwhusky_plus_top.bit" \
-    --region 0,0,147,208 --max-pips 80000000 --timing-driven \
+    --region 0,0,147,208 --max-pips 80000000 --timing-driven --timing \
     "$fpga/hdl/includes.v" "$fpga/hdl/setup.v" "$fpga/hdl/registers.v" \
     "$fpga/hdl/clock_managment_advanced.v" "$fpga/hdl/fifo_top_husky.v" \
     "$fpga/hdl/openadc_interface.v" "$fpga/hdl/reg_chipwhisperer.v" \

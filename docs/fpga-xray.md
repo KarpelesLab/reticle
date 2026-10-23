@@ -3842,6 +3842,24 @@ A bit-less pip the file times now costs that delay; one it does not list
 is a join and still costs nothing. `tests/fpga_xray_timing.rs` checks
 both kinds over a corner of the grid.
 
+**What the part said.** Build O, the same sources routed with the
+buffers charged: estimated at 16.55 ns, its latest path now the bus's
+shared output enable, which NewAE's constraints give 15 ns. Its slowest
+data lane is 13.25 ns, and it is no longer an outlier. On the part, through
+NewAE's own `cw.scope()` with nothing worked around: `ECHO` and
+`SAMPLES` 0 wrong in 200 each, `SYSTEMCLK` `00d8b805`, `VERSION`
+`[2, 88]`, the ADC clock measured at 10.000 MHz, the AUX loop and both
+glitch sources counted, and the glitch MMCMs locked. The register bus
+works. The whole build took 31 minutes, against 47 for N.
+
+**What it does not do yet: capture.** The ADC's test ramp, armed on a
+level trigger and read back, is exact at 8 and 12 bits up to 131,070
+samples on NewAE's bitstream. On O every capture times out, with `slow
+FIFO underflow` and, for the long ones, `fast FIFO overflow`. That is
+the ADC side, which `husky.rcf` does not time, and the FIFO
+stand-ins. No earlier build was tested with a capture, so this is not
+known to be a regression.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
