@@ -3447,6 +3447,14 @@ fn write_xc7_bitstream(
     let (placement, placement_report) =
         place(&netlist, &fabric.arch, &graph, constraints, &options).map_err(|e| e.to_string())?;
     laps.lap("place");
+    if !placement_report.outside_budget.is_empty() {
+        eprintln!(
+            "warning: {} register(s) held near their pads for an input's budget found no site \
+             there and were seated farther, so those inputs may be late: {}",
+            placement_report.outside_budget.len(),
+            placement_report.outside_budget.join(", ")
+        );
+    }
     // Each node's delay, for the routing and its estimate below; only a
     // timing-driven build reads the tile types' timing files.
     let node_delay = if options.timing.is_some() {

@@ -186,6 +186,21 @@ pub enum PlaceError {
         /// How many the part has.
         available: usize,
     },
+    /// A cell held to the sites near what it must reach in time — a
+    /// register after an input pad, see `confine_to_reachable` — found
+    /// none of them it may take. Reported as the part running out of
+    /// sites, it read "the design needs 27961 `ff` site(s) and the part
+    /// has 32" on an XC7A100T, which has 126,800.
+    Confined {
+        /// The cell.
+        cell: String,
+        /// The site kind.
+        kind: String,
+        /// How many sites it is held to.
+        allowed: usize,
+        /// Why each of those still free was refused, most common first.
+        refused: Vec<(String, usize)>,
+    },
     /// There are sites of the kind enough for the design, and none left
     /// that this cell may legally take: every free one shares a pin, or a
     /// pool of its tile's own wires, with something already placed that
@@ -328,6 +343,29 @@ impl fmt::Display for PlaceError {
                 f,
                 "the design needs {needed} `{kind}` site(s) and the part has {available}"
             ),
+            PlaceError::Confined {
+                cell,
+                kind,
+                allowed,
+                refused,
+            } => {
+                write!(
+                    f,
+                    "`{cell}` is held to the {allowed} `{kind}` site(s) near what it must reach \
+                     in time, and found none of them it may take"
+                )?;
+                let free: usize = refused.iter().map(|(_, n)| n).sum();
+                if free > 0 {
+                    write!(f, "; of the {free} free:")?;
+                    for (i, (why, n)) in refused.iter().enumerate() {
+                        let sep = if i == 0 { " " } else { ", " };
+                        write!(f, "{sep}{n} because {why}")?;
+                    }
+                } else {
+                    write!(f, "; every one is taken")?;
+                }
+                Ok(())
+            }
             PlaceError::NoLegalSite {
                 cell,
                 kind,
@@ -1190,6 +1228,10 @@ pub struct PlacementReport {
     /// non-empty entry is the placer saying which cells it may not place
     /// by distance alone; see `confine_to_reachable`.
     pub reach: Vec<(String, usize, usize)>,
+    /// Cells held near their pads to keep an input within its budget that
+    /// found none of those sites free and were seated on the nearest legal
+    /// site instead, by name. Each is an input path likely to be late.
+    pub outside_budget: Vec<String>,
     /// What the pass cost, in work rather than in seconds.
     pub work: PlaceWork,
     /// What each round of a timing-driven placement estimated, the
@@ -1289,6 +1331,13 @@ impl PlacementReport {
                     .map(|(cell, left, all)| format!("{cell} {left} of {all}"))
                     .collect::<Vec<_>>()
                     .join(", ")
+            );
+        }
+        if !self.outside_budget.is_empty() {
+            let _ = writeln!(
+                out,
+                "  held near their pads for time and seated farther: {}",
+                self.outside_budget.join(", ")
             );
         }
         if self.work.reach_steps > 0 {
@@ -2348,6 +2397,12 @@ struct Placeable {
     /// of its kind, which is what every cell of every family whose bels
     /// have no global pin gets. See [`confine_to_reachable`].
     allowed: Option<Vec<usize>>,
+    /// True when `allowed` is a preference, not a rule: the sites near a
+    /// pad that keep an input path within its budget
+    /// ([`confine_to_input_budget`]). A cell that finds none of them free
+    /// is seated on the nearest legal site of any and reported, where one
+    /// confined by reachability has nowhere else it could be routed.
+    soft: bool,
 }
 
 impl Placeable {
@@ -2408,6 +2463,7 @@ pub fn place(
             region: None,
             macro_index: None,
             allowed: None,
+            soft: false,
         })
         .collect();
     fix_pins(netlist, arch, graph, &mut info, &mut report)?;
@@ -2451,7 +2507,7 @@ pub fn place(
         positions = global;
         spread
     };
-    legalise(
+    let outside = legalise(
         netlist,
         graph,
         &info,
@@ -2461,6 +2517,10 @@ pub fn place(
         &shared,
         &mut placement,
     )?;
+    report.outside_budget = outside
+        .iter()
+        .map(|i| netlist.instances[*i].name.clone())
+        .collect();
     report.displacement = displacement(graph, &info, &positions, &placement);
     confine_hierarchy(netlist, graph, constraints, &placement, &mut info);
     report.confined = info.iter().filter(|i| i.region.is_some()).count();
@@ -4045,6 +4105,7 @@ fn confine_to_roads(
         }
         if allowed.len() < candidates.len() {
             info[index].allowed = Some(allowed);
+            info[index].soft = true;
         }
     }
 }
@@ -4164,6 +4225,7 @@ fn confine_to_input_budget(
         let mut allowed: Vec<usize> = near[..keep].iter().map(|(_, site)| *site).collect();
         allowed.sort_unstable();
         info[cell].allowed = Some(allowed);
+        info[cell].soft = true;
     };
     // A cell some paths reach several ways is held to the tightest; and
     // the sites kept grow with how many cells of a kind are held around
@@ -5027,7 +5089,9 @@ fn legalise(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     shared: &SiteRules,
     placement: &mut Placement,
-) -> Result<(), PlaceError> {
+) -> Result<Vec<usize>, PlaceError> {
+    // The cells seated outside the sites they were held to for time.
+    let mut outside: Vec<usize> = Vec::new();
     // Fixed instances first: their sites are not negotiable.
     for (index, place) in info.iter().enumerate() {
         if let Some(site) = place.fixed {
@@ -5081,6 +5145,31 @@ fn legalise(
             index,
             placement,
         );
+        // A cell held near its pad for time, with none of those sites
+        // left, goes to the nearest legal site of any: a late input is
+        // a timing problem the report names, and no placement at all is
+        // not. See `Placeable::soft`.
+        let site = site.or_else(|| {
+            let fallback = (info[index].soft && info[index].allowed.is_some())
+                .then(|| {
+                    nearest_free(
+                        graph,
+                        sites_by_kind,
+                        kind,
+                        region,
+                        None,
+                        target,
+                        shared,
+                        index,
+                        placement,
+                    )
+                })
+                .flatten();
+            if fallback.is_some() {
+                outside.push(index);
+            }
+            fallback
+        });
         match site {
             Some(site) => placement.place(index, site),
             None => {
@@ -5096,7 +5185,7 @@ fn legalise(
             }
         }
     }
-    Ok(())
+    Ok(outside)
 }
 
 /// The error that fits an instance that found no site.
@@ -5153,7 +5242,7 @@ fn no_room(
                 .allowed
                 .as_ref()
                 .map_or_else(|| sites.len(), Vec::len);
-            if needed <= available {
+            if needed <= available || info[index].allowed.is_some() {
                 // Every free site this cell could have had, by the rule
                 // that refused it, most common first.
                 let mut refused: BTreeMap<String, usize> = BTreeMap::new();
@@ -5168,6 +5257,14 @@ fn no_room(
                 }
                 let mut refused: Vec<(String, usize)> = refused.into_iter().collect();
                 refused.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                if info[index].allowed.is_some() {
+                    return PlaceError::Confined {
+                        cell: netlist.instances[index].name.clone(),
+                        kind,
+                        allowed: available,
+                        refused,
+                    };
+                }
                 return PlaceError::NoLegalSite {
                     cell: netlist.instances[index].name.clone(),
                     kind,
@@ -9157,6 +9254,7 @@ mod tests {
                     region: None,
                     macro_index: None,
                     allowed: None,
+                    soft: false,
                 })
                 .collect();
             build_clusters(&netlist, &graph, &sites_by_kind, &mut info, 0)
@@ -9653,6 +9751,7 @@ mod tests {
                     region: None,
                     macro_index: None,
                     allowed: None,
+                    soft: false,
                 })
                 .collect()
         };
@@ -9684,8 +9783,9 @@ mod tests {
     /// two hops, so each keeps within 5. `pad2`, in every domain as a pad
     /// with no input delay is, confines nothing. Would catch the budget
     /// left unconverted (nothing confined), the table's delay or the
-    /// thirds left out (the second pair kept to 6 or 15), or a pad
-    /// with no delay acted on; would not catch the estimate's wire costs
+    /// thirds left out (the second pair kept to 6 or 15), a pad with no
+    /// delay acted on, or a confinement not marked soft, which the
+    /// legaliser may give up; would not catch the estimate's wire costs
     /// being wrong for a part, which the Husky Plus build is for, nor the
     /// minimum's growth with the cells held near one pad, which only that
     /// build has exercised.
@@ -9822,6 +9922,7 @@ mod tests {
                 region: None,
                 macro_index: None,
                 allowed: None,
+                soft: false,
             })
             .collect();
         confine_to_input_budget(&netlist, &graph, &sites_by_kind, &mut info, &timing);
@@ -9838,6 +9939,9 @@ mod tests {
         assert_eq!(info[4].allowed, within("lut", 39, 5), "pad1's table");
         assert_eq!(info[5].allowed, within("ff", 39, 5), "pad1's register");
         assert_eq!(info[6].allowed, None, "pad2 has no input delay");
+        // Held for time, which the legaliser may give up rather than fail.
+        assert!(info[3].soft && info[4].soft && info[5].soft);
+        assert!(!info[6].soft);
     }
 
     /// **Buffers that feed one another are seated a cascade apart.** One
@@ -9967,6 +10071,7 @@ mod tests {
                 region: None,
                 macro_index: None,
                 allowed: None,
+                soft: false,
             })
             .collect();
         let joined = |placement: &Placement| {
@@ -10288,6 +10393,7 @@ mod tests {
                 region: None,
                 macro_index: None,
                 allowed: None,
+                soft: false,
             })
             .collect();
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -10329,6 +10435,7 @@ mod tests {
                 region: None,
                 macro_index: None,
                 allowed: None,
+                soft: false,
             })
             .collect();
         info[0].fixed = Some(0);
@@ -10365,6 +10472,7 @@ mod tests {
                 region: None,
                 macro_index: None,
                 allowed: None,
+                soft: false,
             })
             .collect();
         // The order is by target, then by name: ff0 at the left, then
@@ -10387,6 +10495,64 @@ mod tests {
         assert_eq!(tile(0), tile(1), "clock 0 shares a slice");
         assert_eq!(tile(2), tile(3), "clock 1 shares a slice");
         assert_ne!(tile(0), tile(2));
+    }
+
+    /// **A register held near its pad for time is seated farther when
+    /// nothing near is legal, and named; one held by a rule is not.** Two
+    /// flip-flops on different clocks, both held to the first slice of a
+    /// row of two: the first takes it, and the second cannot share it.
+    /// Held softly (`confine_to_input_budget`), the second goes to the
+    /// other slice and is reported; held as reachability holds a cell, the
+    /// legaliser refuses, since anywhere else could not be routed. On the
+    /// Husky Plus a probe build stopped at placement because a USB data
+    /// register's 32 sites were all in slices with another clock enable.
+    /// Would catch the fallback missing (the soft case fails), applied to
+    /// a hard confinement (it succeeds), or left unreported.
+    #[test]
+    fn a_register_held_for_time_is_seated_farther_when_nothing_near_is_legal() {
+        let (_, graph) = clocked(2);
+        let netlist = clocked_by(&[0, 1]);
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        let first: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].tile == (0, 0))
+            .collect();
+        assert_eq!(first.len(), 2);
+        let run = |soft: bool| {
+            let info: Vec<Placeable> = (0..2)
+                .map(|_| Placeable {
+                    fixed: None,
+                    region: None,
+                    macro_index: None,
+                    allowed: Some(first.clone()),
+                    soft,
+                })
+                .collect();
+            let positions = [(0.0, 0.0), (0.0, 0.0)];
+            let shared = SiteRules::find(&netlist, &graph);
+            let mut placement = Placement::new(2, graph.sites.len());
+            legalise(
+                &netlist,
+                &graph,
+                &info,
+                &[],
+                &positions,
+                &sites_by_kind,
+                &shared,
+                &mut placement,
+            )
+            .map(|outside| (outside, placement))
+        };
+        let (outside, placement) = run(true).expect("the second register goes farther");
+        assert_eq!(outside, vec![1]);
+        assert_eq!(graph.sites[placement.site_of(0).unwrap()].tile, (0, 0));
+        assert_eq!(graph.sites[placement.site_of(1).unwrap()].tile, (1, 0));
+        assert!(run(false).is_err(), "a hard confinement still refuses");
     }
 
     #[test]
