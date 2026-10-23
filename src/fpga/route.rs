@@ -47,7 +47,7 @@
 //! pin order, and the priority queue breaks ties by node id, so the same
 //! placement always produces the same routing.
 
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
@@ -278,6 +278,17 @@ pub struct RouteOptions {
     /// still see the history and present costs every other node has
     /// accumulated.
     pub reroute_congested_only: bool,
+    /// With [`RouteOptions::reroute_congested_only`], a signal rerouted
+    /// for congestion alone keeps every sink whose branch from the source
+    /// is clear, and only the sinks whose branches cross an overused node
+    /// are routed again, from the tree that is left. Off, the signal is
+    /// ripped up whole, as PathFinder has it. A net of hundreds of sinks
+    /// one of whose branches shares a wire was searched for again sink by
+    /// sink: on the ChipWhisperer-Husky Plus a late pass rerouted 664
+    /// signals and visited 1.8 billion nodes. A signal rerouted because it
+    /// is critical is still ripped up whole, so that its tree can change
+    /// shape.
+    pub incremental: bool,
     /// Classes of interchangeable sink nodes, by node id, or empty for
     /// none: a sink on a node of class `c` (anything but `u32::MAX`) may
     /// end instead on any other node of class `c` that no signal holds, and
@@ -345,6 +356,17 @@ pub struct Timing {
     /// The highest criticality any connection is given, below one so that
     /// congestion still costs a critical connection something.
     pub max_criticality: f64,
+    /// Once a pass ends with nothing overused, how many passes more
+    /// reroute the critical signals as the first [`Timing::passes`] do —
+    /// each followed by as many passes as congestion then needs — before
+    /// the route is done. After the first passes a signal is rerouted only
+    /// when it is congested, with the criticality of the pass before, so a
+    /// connection that had slack then may be rerouted the long way and,
+    /// its signal never congested again, stay so: on the
+    /// ChipWhisperer-Husky Plus the write data's broadcast to every
+    /// register ended at 29 ns to a register 60 tiles away. Zero routes
+    /// as before.
+    pub cleanups: u32,
     /// What a tile of distance still to go is reckoned to delay, in
     /// [`Timing::node_delay`]'s unit, for the search's estimate of the
     /// rest of a critical connection's journey; zero estimates from the
@@ -410,6 +432,7 @@ impl Timing {
                 .collect(),
             clock_roles: vec!["clk".to_owned()],
             max_criticality: 0.99,
+            cleanups: 0,
             tile_delay: 0,
             exponent: 1,
             passes: 4,
@@ -435,6 +458,7 @@ impl Default for RouteOptions {
             network_entry: Vec::new(),
             first: Vec::new(),
             reroute_congested_only: false,
+            incremental: false,
             equivalent: Vec::new(),
             timing: None,
             on_iteration: None,
@@ -931,12 +955,16 @@ pub fn route(
     // until a pass has been analysed.
     let mut criticality: Vec<Vec<f64>> =
         terminals.iter().map(|t| vec![0.0; t.sinks.len()]).collect();
+    // `Timing::cleanups`: passes left to reroute the critical signals once
+    // nothing is overused, and whether this pass is one.
+    let mut cleanups_left = options.timing.as_ref().map_or(0, |t| t.cleanups);
+    let mut cleaning = false;
     for index in 1..=options.max_iterations {
         let visited_before = scratch.visited;
         let mut rerouted = 0;
         for (which, terminals) in terminals.iter().enumerate() {
             let critical = options.timing.as_ref().is_some_and(|timing| {
-                index <= timing.passes
+                (index <= timing.passes || cleaning)
                     && criticality[which]
                         .iter()
                         .any(|c| *c >= timing.reroute_above)
@@ -953,6 +981,19 @@ pub fn route(
             {
                 continue;
             }
+            // What a signal rerouted for congestion alone keeps: see
+            // `RouteOptions::incremental`.
+            let kept = if index > 1
+                && options.reroute_congested_only
+                && options.incremental
+                && !critical
+            {
+                routing.routes[terminals.signal]
+                    .as_ref()
+                    .map(|r| kept_part(graph, &geometry, &state, r, terminals))
+            } else {
+                None
+            };
             rip_up(&mut state, &mut routing, terminals.signal);
             rerouted += 1;
             // The box from the second pass on: the first is free, and so
@@ -971,6 +1012,7 @@ pub fn route(
                 &state,
                 &mut scratch,
                 terminals,
+                kept,
                 &criticality[which],
                 present_at(index, present),
                 options,
@@ -1017,8 +1059,13 @@ pub fn route(
             hook(last);
         }
         let passes = options.timing.as_ref().map_or(0, |t| t.passes);
+        cleaning = false;
         if overused_nodes == 0 && index >= passes {
-            break;
+            if cleanups_left == 0 {
+                break;
+            }
+            cleanups_left -= 1;
+            cleaning = true;
         }
         for node in 0..graph.nodes.len() {
             if state.occupancy[node] > 1 {
@@ -1366,6 +1413,87 @@ pub fn connection_delays(
     wire
 }
 
+/// What a signal rerouted for congestion alone keeps of its route
+/// ([`RouteOptions::incremental`]): the branches of the sinks whose way
+/// from the source crosses no overused node, as the tree a new search
+/// starts from, with each node's delay from the source.
+struct Kept {
+    tree: BTreeMap<NodeId, f64>,
+    pips: Vec<PipId>,
+    moved: Vec<(usize, NodeId)>,
+    /// Per sink, in `Terminals::sinks` order, whether it is still reached.
+    connected: Vec<bool>,
+}
+
+/// [`Kept`] for `route`, with the occupancy as it stands — this signal's
+/// own share included, so a node it alone holds is clear.
+fn kept_part(
+    graph: &RoutingGraph,
+    geometry: &[Geometry],
+    state: &State,
+    route: &Route,
+    terminals: &Terminals,
+) -> Kept {
+    let bad = |node: NodeId| state.occupancy[state.group[node as usize] as usize] > 1;
+    let mut parent: HashMap<NodeId, PipId> = HashMap::new();
+    for pip in &route.pips {
+        parent.insert(graph.pip(*pip).to, *pip);
+    }
+    let mut keep: HashSet<NodeId> = HashSet::new();
+    let mut connected = vec![false; terminals.sinks.len()];
+    let mut moved = Vec::new();
+    if !bad(route.source) {
+        for (which, sink) in terminals.sinks.iter().enumerate() {
+            let end = route
+                .moved
+                .iter()
+                .find(|(pin, _)| *pin == sink.pin)
+                .map_or(sink.node, |(_, node)| *node);
+            let mut path = Vec::new();
+            let mut node = end;
+            let mut clear = true;
+            while node != route.source {
+                if bad(node) {
+                    clear = false;
+                    break;
+                }
+                path.push(node);
+                match parent.get(&node) {
+                    Some(pip) => node = graph.pip(*pip).from,
+                    None => {
+                        clear = false;
+                        break;
+                    }
+                }
+            }
+            if clear {
+                connected[which] = true;
+                keep.extend(path);
+                if end != sink.node {
+                    moved.push((sink.pin, end));
+                }
+            }
+        }
+    }
+    let mut tree = BTreeMap::from([(route.source, 0.0)]);
+    let mut pips = Vec::new();
+    for pip in &route.pips {
+        let at = graph.pip(*pip);
+        if keep.contains(&at.to) {
+            let delay = tree.get(&at.from).copied().unwrap_or(0.0)
+                + f64::from(geometry[at.to as usize].delay);
+            tree.insert(at.to, delay);
+            pips.push(*pip);
+        }
+    }
+    Kept {
+        tree,
+        pips,
+        moved,
+        connected,
+    }
+}
+
 /// How many pips forward [`contention`] looks for the cell pins a wire
 /// serves. A control wire reaches its slice's pin in one or two.
 const CONTROL_DEPTH: usize = 3;
@@ -1626,6 +1754,7 @@ fn route_one(
     state: &State,
     scratch: &mut Scratch,
     terminals: &Terminals,
+    kept: Option<Kept>,
     criticality: &[f64],
     present: f64,
     options: &RouteOptions,
@@ -1637,10 +1766,15 @@ fn route_one(
     let signal = terminals.signal;
     // Each tree node's delay from the source, in cost units, which is
     // where a critical sink joining the tree there starts.
-    let mut tree: BTreeMap<NodeId, f64> = BTreeMap::new();
-    tree.insert(source, 0.0);
-    let mut pips: Vec<PipId> = Vec::new();
-    let mut moved: Vec<(usize, NodeId)> = Vec::new();
+    let (mut tree, mut pips, mut moved, connected) = match kept {
+        Some(kept) => (kept.tree, kept.pips, kept.moved, kept.connected),
+        None => (
+            BTreeMap::from([(source, 0.0)]),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
     let barred = !options
         .network_signals
         .get(signal)
@@ -1661,7 +1795,9 @@ fn route_one(
     // near the sink rather than from all of it; see `HIGH_FANOUT`.
     let mut near = (barred && terminals.sinks.len() > HIGH_FANOUT).then(NearTree::default);
     if let Some(near) = &mut near {
-        near.add(geometry, source);
+        for node in tree.keys() {
+            near.add(geometry, *node);
+        }
     }
     // A data signal's searches stay in the box around its terminals; see
     // `RouteOptions::bounding_margin`.
@@ -1669,11 +1805,14 @@ fn route_one(
         .filter(|_| barred)
         .map(|margin| Bounds::around(geometry, terminal_reach(graph, terminals), margin));
     for which in order {
+        if connected.get(which).copied().unwrap_or(false) {
+            continue;
+        }
         let sink = &terminals.sinks[which];
         let critical = criticality.get(which).copied().unwrap_or(0.0);
         let mut path = None;
         if let Some(near) = &near {
-            let seeds = near.around(geometry, &tree, sink.node);
+            let seeds = near.seeds(geometry, &tree, sink.node, source, critical);
             path = maze(
                 graph, geometry, edges, state, scratch, &seeds, sink.node, critical, present,
                 options, barred, bounds,
@@ -1866,6 +2005,29 @@ impl NearTree {
                 self.bins.entry((bx, by)).or_default().push(node);
             }
         }
+    }
+
+    /// Where a search for `sink` starts in a net of many sinks: the tree
+    /// near it ([`NearTree::around`]), and, for a sink with any
+    /// criticality, the source too, at no delay. Seeded only from the tree
+    /// near it, a critical sink had to join whatever branch was close,
+    /// however far that branch had come, and on the ChipWhisperer-Husky
+    /// Plus the write data's broadcast to every register took 21 ns to a
+    /// register 78 tiles from its driver. Uncritical, the far source would
+    /// be a seed the search seldom expands, and is left out.
+    fn seeds(
+        &self,
+        geometry: &[Geometry],
+        tree: &BTreeMap<NodeId, f64>,
+        sink: NodeId,
+        source: NodeId,
+        critical: f64,
+    ) -> BTreeMap<NodeId, f64> {
+        let mut seeds = self.around(geometry, tree, sink);
+        if critical > 0.0 {
+            seeds.entry(source).or_insert(0.0);
+        }
+        seeds
     }
 
     /// The tree nodes within a box around `sink`, with their delays from
@@ -3012,6 +3174,213 @@ mod tests {
         assert_eq!(*critical.last().unwrap(), fast, "{critical:?}");
         assert_eq!(report.iterations.len(), 4, "{}", report.to_text());
         assert!(report.to_text().contains("longest path 10"));
+    }
+
+    /// **A signal rerouted for congestion keeps its clear branches.** One
+    /// source at the west end of a line and two sinks, three and eight
+    /// tiles along it, routed; then a node of the far branch, past the
+    /// near sink, is made overused. The near sink's branch is kept, with
+    /// its pips and the source, and the far sink is the one left to route
+    /// again; with the overused node on the shared trunk instead, neither
+    /// is kept. Would catch a branch kept through an overused node, a
+    /// clear one dropped, or a kept tree with nodes no kept sink needs;
+    /// would not catch the router then failing to join the rest, which
+    /// the congestion test with this on is for.
+    #[test]
+    fn a_signal_rerouted_for_congestion_keeps_its_clear_branches() {
+        let (_, graph) = line(10, 1);
+        let mut netlist = pairs(2);
+        // Make it one signal of two sinks: dst1 reads src0.
+        let dst1_pin = netlist.signals[1].sinks[0];
+        netlist.pins[dst1_pin].signal = Some(0);
+        netlist.signals[0].sinks.push(dst1_pin);
+        netlist.signals[1].sinks.clear();
+        let placement = place_in_order(&netlist, &graph, &[0, 3, 0, 8]);
+        let (routing, _) = route(&netlist, &graph, &placement, &RouteOptions::default()).unwrap();
+        let route = routing.route(0).unwrap().clone();
+        let node_of = |pin: usize| {
+            let p = &netlist.pins[pin];
+            graph.sites[placement.site_of(p.instance).unwrap()]
+                .pin(&p.role)
+                .unwrap()
+        };
+        let terminals = Terminals {
+            signal: 0,
+            source: route.source,
+            sinks: netlist.signals[0]
+                .sinks
+                .iter()
+                .map(|pin| Sink {
+                    node: node_of(*pin),
+                    name: String::new(),
+                    pin: *pin,
+                })
+                .collect(),
+        };
+        let geometry = Geometry::of(&graph, &[], &[], None);
+        let mut state = State::new(physical_nodes(&graph));
+        for root in state.roots(&route.nodes) {
+            state.occupancy[root as usize] += 1;
+        }
+        let track = |x: u32| {
+            graph
+                .nodes
+                .iter()
+                .position(|w| w.name == "track0" && w.tile == (x, 0))
+                .map(|n| NodeId::try_from(n).unwrap())
+                .unwrap()
+        };
+        // Past the near sink: the far one goes, the near one stays.
+        let far = state.group[track(6) as usize] as usize;
+        state.occupancy[far] += 1;
+        let kept = kept_part(&graph, &geometry, &state, &route, &terminals);
+        assert_eq!(kept.connected, vec![true, false]);
+        assert!(kept.tree.contains_key(&route.source));
+        assert!(
+            kept.tree
+                .contains_key(&node_of(netlist.signals[0].sinks[0]))
+        );
+        assert!(!kept.tree.contains_key(&track(6)));
+        assert!(
+            !kept.tree.contains_key(&track(5)),
+            "no node only the far sink needed"
+        );
+        for pip in &kept.pips {
+            assert!(kept.tree.contains_key(&graph.pip(*pip).to));
+        }
+        // On the trunk both share: nothing is kept but the source.
+        state.occupancy[far] -= 1;
+        let trunk = state.group[track(1) as usize] as usize;
+        state.occupancy[trunk] += 1;
+        let kept = kept_part(&graph, &geometry, &state, &route, &terminals);
+        assert_eq!(kept.connected, vec![false, false]);
+        assert!(kept.pips.is_empty());
+    }
+
+    /// The congestion test with [`RouteOptions::incremental`] on: the
+    /// congested signal keeps what is clear and the rest is rerouted, and
+    /// the route still converges to one the netlist says is right. Would
+    /// catch a kept tree the new branches cannot join, or a route whose
+    /// kept part and new part leave a sink unreached (the verify fails);
+    /// would not catch a convergence that is slower than ripping up whole.
+    #[test]
+    fn incremental_rerouting_still_negotiates_congestion_away() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7), ("src1", 1), ("dst1", 6)]
+            .into_iter()
+            .enumerate()
+        {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let options = RouteOptions {
+            present_factor: 0.05,
+            present_growth: 3.0,
+            reroute_congested_only: true,
+            incremental: true,
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(report.iterations.len() > 1, "{}", report.to_text());
+        assert_eq!(report.iterations.last().unwrap().overused_nodes, 0);
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// **A pass that cleans up reroutes the critical signals once the
+    /// route has converged.** The fast-path test's design, told to make
+    /// only one pass of timing: it converges on the first, cheap and slow,
+    /// and with no clean-up stops there; with one, the next pass reroutes
+    /// its connection, the longest path, and takes the fast row. Would
+    /// catch the clean-up pass not rerouting critical signals (the route
+    /// stays on the second row) or not run at all (one iteration); would
+    /// not catch a clean-up that unsettles a congested design, which this
+    /// one is not.
+    #[test]
+    fn a_pass_that_cleans_up_reroutes_the_critical_signals() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let on_second_row = |routing: &Routing| {
+            routing
+                .routes()
+                .any(|r| r.nodes.iter().any(|n| graph.wire(*n).tile.1 == 1))
+        };
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if wire.tile.1 == 1 {
+                base[index] = 0.05;
+            }
+        }
+        let run = |cleanups: u32| {
+            let mut timing = Timing::for_netlist(&netlist, vec![1; graph.nodes.len()], 1);
+            timing.passes = 1;
+            timing.cleanups = cleanups;
+            let options = RouteOptions {
+                node_base: base.clone(),
+                reroute_congested_only: true,
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            route(&netlist, &graph, &placement, &options).unwrap()
+        };
+        let (plain, report) = run(0);
+        assert!(on_second_row(&plain), "{}", report.to_text());
+        assert_eq!(report.iterations.len(), 1);
+        let (cleaned, report) = run(1);
+        assert!(!on_second_row(&cleaned), "{}", report.to_text());
+        assert_eq!(report.iterations.len(), 2, "{}", report.to_text());
+    }
+
+    /// **A critical sink of a net of many sinks may start at the
+    /// source.** A tree along a line of forty tiles from a source at its
+    /// west end, and a sink at its east end: the tree near the sink does
+    /// not reach back to the source, and a sink of no criticality starts
+    /// only from it; a critical one has the source among its seeds too,
+    /// at no delay. Would catch the source left out of a critical sink's
+    /// seeds, or put into an uncritical one's; would not catch the search
+    /// then preferring the branch, which a line, where the branch and the
+    /// direct way are the same track, cannot show.
+    #[test]
+    fn a_critical_sink_of_a_wide_net_may_start_at_the_source() {
+        let (_, graph) = line(40, 1);
+        let geometry = Geometry::of(&graph, &[], &[], None);
+        let track = |x: u32| {
+            graph
+                .nodes
+                .iter()
+                .position(|w| w.name == "track0" && w.tile == (x, 0))
+                .map(|n| NodeId::try_from(n).unwrap())
+                .unwrap()
+        };
+        let source = track(0);
+        let mut near = NearTree::default();
+        let mut tree = BTreeMap::new();
+        for x in 0..40 {
+            near.add(&geometry, track(x));
+            tree.insert(track(x), f64::from(x));
+        }
+        let sink = track(39);
+        assert!(
+            !near
+                .seeds(&geometry, &tree, sink, source, 0.0)
+                .contains_key(&source)
+        );
+        let seeds = near.seeds(&geometry, &tree, sink, source, 0.5);
+        assert_eq!(seeds.get(&source), Some(&0.0));
+        assert!(
+            seeds.contains_key(&sink),
+            "the tree near the sink is there too"
+        );
     }
 
     /// **A tile's delay guides the search for a critical connection where
