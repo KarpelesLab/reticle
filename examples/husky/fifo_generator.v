@@ -148,8 +148,21 @@ module husky_fifo #(
     always @(posedge wr_clk or posedge rst)
       if (rst) {rgray_w2, rgray_w1} <= 0;
       else {rgray_w2, rgray_w1} <= {rgray_w1, rgray};
-    assign wptr_r = gray_to_binary(wgray_r2);
-    assign rptr_w = gray_to_binary(rgray_w2);
+    // Converted back to binary in a register of its own. Unregistered,
+    // the conversion's chain of exclusive-ors led straight into `fetch`
+    // and the enable of every block RAM in the memory: on the Husky
+    // Plus that was the latest path in `clk_usb`, at 18.75 ns of 10.4,
+    // and one the FIFO Generator's built-in FIFO does not have. A
+    // pointer a cycle older only makes each side more cautious.
+    reg [AW:0] wbin_r, rbin_w;
+    always @(posedge rclk or posedge rst)
+      if (rst) wbin_r <= 0;
+      else wbin_r <= gray_to_binary(wgray_r2);
+    always @(posedge wr_clk or posedge rst)
+      if (rst) rbin_w <= 0;
+      else rbin_w <= gray_to_binary(rgray_w2);
+    assign wptr_r = wbin_r;
+    assign rptr_w = rbin_w;
   end else begin : common
     assign wptr_r = wptr;
     assign rptr_w = rptr;
