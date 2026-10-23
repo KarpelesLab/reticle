@@ -3785,6 +3785,63 @@ end of the slowest branches. The bus inputs had been the suspects; the
 broadcast inside the design is the culprit, and a period of 10.4 ns for
 it is what the design needs.
 
+*That last reading was too sure, and for the read lanes wrong: see the
+next section. The broadcast is late on paper; what took whole lanes of
+the bus was a router told that one kind of wire cost nothing.*
+
+### A lane that read zero: the buffer the delays left out (2026-10-23)
+
+Two builds, two different failures of the same shape. Build M read every
+byte with bits 0 and 1 wrong, and `VERSION` as `[0, 88]` where a Plus
+says `[2, 88]`; build N, with the FIFO stand-in's crossing registered,
+read `VERSION` right and lost bit 5 of every byte. Bit 5 of `ECHO` only
+ever came back cleared, never set; `0x20` written read `0x00`; and
+`SYSTEMCLK`, a constant, read `00d89805` for `00d8b805` — the same on
+every read. A late path flickers. This did not.
+
+`cwusb_dout` is combinational from `read_data_reg` through the
+`ADCREAD` multiplexer to the pad, and between reads every module drives
+zero, so a lane that never arrives in the strobe reads the zero that was
+there before. The pads' report could not see it: it gave each output
+pad its latest input, and all eight were the shared enable at 14.91 ns.
+Timed per pin (`PadPath::pin`), N's latest data lanes were 0 and 1 at
+12.9 ns — not 5, at 11.71. The estimate was wrong about lane 5.
+
+**Reading the bitstream.** Each lane walked back from its `OLOGIC` `D1`
+through the decoded features, a node at a time, to the table that
+drives it (a scratch tool on `RoutingGraph`; every step had exactly one
+switched-on pip into it, so nothing was disconnected). The pads were
+configured alike — `IOB_Y0` is the higher-numbered site of a pair, which
+is easy to read backwards. The routes were not:
+
+| build | lane 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | wrong on the part |
+|---|---|---|---|---|---|---|---|---|---|
+| M, pips | **125** | **78** | 34 | 19 | 19 | 26 | 35 | 30 | 0, 1 |
+| M, bypass hops | **97** | **51** | 12 | 1 | 4 | 0 | 19 | 13 | |
+| N, pips | 31 | 28 | 28 | 18 | 22 | **117** | 28 | 28 | 5 |
+| N, bypass hops | 5 | 5 | 11 | 0 | 2 | **90** | 9 | 11 | |
+
+N's lane 5 left its table at `CLBLM_L_X28Y109`, went east along row 111
+on `EE2` wires to the IO column, and then climbed **thirty-five tiles**
+up `INT_R_X57` to row 146 through `BYP_ALT` and `BYP_BOUNCE`, three
+bypass hops a tile, where one `NN6` goes six tiles.
+
+**Why the router chose it.** `node_delays` charged a node the delay of
+the programmable pip into it and gave a node only bit-less pips enter
+nothing, on the reading that a bit-less pip is the loader's join between
+a wire's pieces. Not all are. prjxray times `BYP_BOUNCE0 ->> BYP_ALT5`
+at **0.000** ns at every corner, with only an input capacitance, and
+`BYP_ALT0 ->> BYP_BOUNCE0` — always on, so bit-less here — at
+**0.178** ns: the stage's delay is in the buffer. So the climb cost the
+router 25 ps a tile, the tile charge, and an `NN6` about 30. On the
+part, ~105 buffered stages are ~19 ns by the database's own figures.
+Checked: the timing file's numbers, the routes and the lanes. Not
+measured: the lanes' delay itself.
+
+A bit-less pip the file times now costs that delay; one it does not list
+is a join and still costs nothing. `tests/fpga_xray_timing.rs` checks
+both kinds over a corner of the grid.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
