@@ -818,13 +818,26 @@ impl XrayDatabase {
     /// [`Timing::node_delay`](super::route::Timing) wants with
     /// [`Timing::paths`](super::route::Timing) set.
     ///
-    /// A node costs the delay of the programmable pip that enters it, the
-    /// largest where several do, read from prjxray's
-    /// `tile_type_<type>.json` (`src_to_dst.delay`, the slow corner's
-    /// maximum; see `parse::pip_delays`). A node only bit-less pips enter
-    /// costs nothing: it is the rest of a wire already paid for. A
-    /// programmable pip the file does not time — this flow's own derived
-    /// pips — costs [`UNTIMED_PIP_PS`].
+    /// A node costs the delay of the pip that enters it, the largest
+    /// where several do, read from prjxray's `tile_type_<type>.json`
+    /// (`src_to_dst.delay`, the slow corner's maximum; see
+    /// `parse::pip_delays`). A programmable pip the file does not time —
+    /// this flow's own derived pips — costs [`UNTIMED_PIP_PS`]; a
+    /// bit-less one it does not time costs nothing, because that is the
+    /// loader's join between a wire's pieces in neighbouring tiles, the
+    /// rest of a wire already paid for.
+    ///
+    /// **A bit-less pip the file times is charged.** Not every pip without
+    /// bits is a join: `BYP_ALT0 ->> BYP_BOUNCE0` is a buffer that is
+    /// always on, 0.178 ns, and the pips into `BYP_ALT0` from a bounce are
+    /// timed at zero, so that the stage's delay is all in the buffer.
+    /// Every bit-less pip used to cost nothing here, which made a chain of
+    /// bounces free but for the tile charge: on the ChipWhisperer-Husky
+    /// Plus a timing-driven route took USB data lane 5 thirty-five tiles
+    /// up the IO column through 105 of them, about 19 ns on the part,
+    /// estimated at a fraction of that, and the lane read back as zero on
+    /// every byte. Traced through the decoded bitstream; see
+    /// `docs/fpga-xray.md`.
     ///
     /// The delays are the pips' own, without the wires' resistance and
     /// capacitance the same files carry, which is what `timing::WIRE` was
@@ -870,9 +883,11 @@ impl XrayDatabase {
         let mut out = vec![0u32; graph.nodes.len()];
         for (index, pip) in graph.pips.iter().enumerate() {
             let index = super::arch::PipId::try_from(index).unwrap_or(u32::MAX);
-            if graph.pip_bits(index).is_empty() {
-                continue;
-            }
+            let untimed = if graph.pip_bits(index).is_empty() {
+                0
+            } else {
+                UNTIMED_PIP_PS
+            };
             let table = arch
                 .tile_index_at(pip.tile.0, pip.tile.1)
                 .and_then(|t| tables.get(t));
@@ -884,7 +899,7 @@ impl XrayDatabase {
                     ))
                 })
                 .copied()
-                .unwrap_or(UNTIMED_PIP_PS);
+                .unwrap_or(untimed);
             let node = &mut out[pip.to as usize];
             *node = (*node).max(ps);
         }

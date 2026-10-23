@@ -56,13 +56,25 @@ fn chipdb() -> Option<String> {
 /// loads: for each of four `INT_L` wires, every node of it costs the
 /// largest delay `tile_type_INT_L.json` gives a pip into it, read here
 /// independently of the loader (0.165 ns into `EE4BEG0`, also read by
-/// hand off the file); and a node only bit-less pips enter costs nothing.
-/// A wire whose largest delay is the untimed stand-in's 0.175 ns —
-/// `CLK_L0` is, by coincidence — could not tell a delay read from one
-/// missed, so it is not counted. Would catch the delays not read (every
-/// node at the stand-in), the wrong tile type's file read, the wrong
-/// corner taken, or a bit-less join charged; would not catch the
-/// database's delays being wrong about the part.
+/// hand off the file). A wire whose largest delay is the untimed
+/// stand-in's 0.175 ns — `CLK_L0` is, by coincidence — could not tell a
+/// delay read from one missed, so it is not counted.
+///
+/// **And a bit-less pip costs what the file says, which is nothing for
+/// a join.** An `INT_L` node only bit-less pips enter costs the largest
+/// delay the file gives a pip into its wire: 0.178 ns into `BYP_BOUNCE0`,
+/// which an always-on buffer drives (read by hand too), and nothing for
+/// the pieces of a wire the loader joins across tiles, which the file
+/// does not list. Both kinds must be seen. Every bit-less pip once cost
+/// nothing, and a timing-driven route on the Husky Plus took a USB data
+/// lane up thirty-five tiles of bounces that were free but for the tile
+/// charge. The lane read back as zero.
+///
+/// Would catch the delays not read (every node at the stand-in), the
+/// wrong tile type's file read, the wrong corner taken, a fixed buffer
+/// left free, or a join charged the stand-in; would not catch the
+/// database's delays being wrong about the part, nor a buffer outside
+/// `INT_L`.
 #[test]
 fn a_node_costs_the_delay_of_the_pip_into_it() {
     let Some(root) = chipdb() else { return };
@@ -118,18 +130,39 @@ fn a_node_costs_the_delay_of_the_pip_into_it() {
         }
     }
     assert!(checked > 40, "only {checked} nodes checked");
+    assert_eq!(largest_into("BYP_BOUNCE0"), 178);
+
+    let mut known: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let (mut buffers, mut joins) = (0, 0);
     for (index, wire) in graph.nodes.iter().enumerate() {
         let id = u32::try_from(index).unwrap();
-        if graph
-            .incoming(id)
-            .iter()
-            .all(|p| graph.pip_bits(*p).is_empty())
+        let into = graph.incoming(id);
+        let tile_type = fabric
+            .arch
+            .tile_index_at(wire.tile.0, wire.tile.1)
+            .map(|t| fabric.arch.tile_types[t].name.as_str());
+        if into.is_empty()
+            || tile_type != Some("INT_L")
+            || !into.iter().all(|p| graph.pip_bits(*p).is_empty())
         {
-            assert_eq!(
-                delays[index], 0,
-                "{} is entered by bit-less pips only",
-                wire.name
-            );
+            continue;
+        }
+        let want = *known
+            .entry(wire.name.clone())
+            .or_insert_with(|| largest_into(&wire.name));
+        assert_eq!(
+            delays[index], want,
+            "INT_L {:?} {} is entered by bit-less pips only",
+            wire.tile, wire.name
+        );
+        if want == 0 {
+            joins += 1;
+        } else {
+            buffers += 1;
         }
     }
+    assert!(
+        buffers > 40 && joins > 40,
+        "{buffers} buffered and {joins} joined nodes checked"
+    );
 }
