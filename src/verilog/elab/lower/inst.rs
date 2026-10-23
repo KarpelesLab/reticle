@@ -883,7 +883,37 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 );
                 return None;
             }
+            // An element of a net array, `.y(d[0])`, is a target an
+            // `assign` can write but no expression an instance can drive:
+            // the port gets a net of its own, assigned into the element,
+            // as a tri-state's output into one bit of a net already is.
+            // Left as it was, the connection reached the IR validator as an
+            // internal error, "connects out port `y` to an expression that
+            // cannot be driven".
+            if !self.drivable(id)
+                && let Some(target) = self.lvalue(expr, false)
+            {
+                let name = self.fresh(&format!("{port}_out"));
+                let net = self.b.add_net(name, ir::Type::bits(width));
+                self.b.span = span;
+                let value = self.b.net(net);
+                self.b.assign(target.clone(), value);
+                self.note_assign_drivers(&target, DriverKey::Continuous, span, false);
+                return Some(self.b.net(net));
+            }
             Some(id)
+        }
+    }
+
+    /// Whether an expression is something an instance output can drive:
+    /// a net, a constant slice of one, or a concatenation of those, which
+    /// is what the IR validator accepts.
+    fn drivable(&self, id: ExprId) -> bool {
+        match &self.b.module().expr(id).kind {
+            ir::ExprKind::Net(_) => true,
+            ir::ExprKind::Slice { base, .. } => self.drivable(*base),
+            ir::ExprKind::Concat(parts) => parts.iter().all(|p| self.drivable(*p)),
+            _ => false,
         }
     }
 
