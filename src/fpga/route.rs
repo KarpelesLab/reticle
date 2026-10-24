@@ -1179,16 +1179,8 @@ fn analyse(
         let Some(route) = routing.routes[terminals.signal].as_ref() else {
             continue;
         };
-        let mut delay: HashMap<NodeId, u64> = HashMap::new();
-        delay.insert(route.source, 0);
-        for pip in &route.pips {
-            let pip = graph.pip(*pip);
-            let to = delay.get(&pip.from).copied().unwrap_or(0)
-                + u64::from(timing.node_delay.get(pip.to as usize).copied().unwrap_or(0));
-            delay.insert(pip.to, to);
-        }
-        for sink in &terminals.sinks {
-            let d = delay.get(&sink.node).copied().unwrap_or(0);
+        let delays = sink_delays(graph, route, &terminals.sinks, &timing.node_delay);
+        for (sink, d) in terminals.sinks.iter().zip(delays) {
             wire[sink.pin] = wire[sink.pin].max(d);
         }
     }
@@ -1329,6 +1321,42 @@ fn analyse(
     (criticality, longest)
 }
 
+/// Each of `sinks`' delay along `route` from its source, the sum of
+/// `node_delay` along its branch of the tree, the source's own node
+/// excluded. A sink is timed where the route reached it: its own node, or
+/// the node of its class [`Route::moved`] names. Timing it at its own node
+/// regardless read a moved sink — on a 7-series part most lookup-table
+/// inputs, which `xray::lutswap` lets end on any pin of the table — as
+/// arriving with no delay at all whenever its own node was not on the
+/// tree, so that the router's analysis saw slack on connections that the
+/// finished route's report then found late.
+fn sink_delays(
+    graph: &RoutingGraph,
+    route: &Route,
+    sinks: &[Sink],
+    node_delay: &[u32],
+) -> Vec<u64> {
+    let mut delay: HashMap<NodeId, u64> = HashMap::new();
+    delay.insert(route.source, 0);
+    for pip in &route.pips {
+        let pip = graph.pip(*pip);
+        let to = delay.get(&pip.from).copied().unwrap_or(0)
+            + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0));
+        delay.insert(pip.to, to);
+    }
+    sinks
+        .iter()
+        .map(|sink| {
+            let node = route
+                .moved
+                .iter()
+                .find(|(pin, _)| *pin == sink.pin)
+                .map_or(sink.node, |(_, node)| *node);
+            delay.get(&node).copied().unwrap_or(0)
+        })
+        .collect()
+}
+
 /// [`analyse`] with the placer's model of the paths ([`Timing::paths`]):
 /// each sink's routed delay, the sum of [`Timing::node_delay`] in
 /// picoseconds along its branch of the tree, given to
@@ -1348,16 +1376,8 @@ fn analyse_paths(
         let Some(route) = routing.routes[terminals.signal].as_ref() else {
             continue;
         };
-        let mut delay: HashMap<NodeId, u64> = HashMap::new();
-        delay.insert(route.source, 0);
-        for pip in &route.pips {
-            let pip = graph.pip(*pip);
-            let to = delay.get(&pip.from).copied().unwrap_or(0)
-                + u64::from(timing.node_delay.get(pip.to as usize).copied().unwrap_or(0));
-            delay.insert(pip.to, to);
-        }
-        for sink in &terminals.sinks {
-            let ps = delay.get(&sink.node).copied().unwrap_or(0);
+        let delays = sink_delays(graph, route, &terminals.sinks, &timing.node_delay);
+        for (sink, ps) in terminals.sinks.iter().zip(delays) {
             #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
             let ns = ps as f64 / 1000.0;
             wire[sink.pin] = wire[sink.pin].max(ns);
@@ -2549,7 +2569,9 @@ mod tests {
     /// second is negotiated off `b` and onto `a`, and each route's
     /// `moved` names its pin and where it ended. Would catch the class
     /// ignored (no route) and `moved` left empty or pointing at the pin's
-    /// own node. Would not catch a held alternative taken: here the
+    /// own node, or the router's analysis timing a moved sink at its own
+    /// node (which is on neither tree, so read as no delay) rather than
+    /// where it ended. Would not catch a held alternative taken: here the
     /// negotiation moves the second signal off `b` either way (checked by
     /// dropping the occupancy test), so that rule is a saving in passes
     /// rather than in correctness. Nor a class spanning two instances,
@@ -2624,6 +2646,19 @@ mod tests {
         assert_eq!(report.iterations.last().map(|i| i.overused_nodes), Some(0));
         assert_eq!(routing.route(0).unwrap().moved, vec![(1, b)]);
         assert_eq!(routing.route(1).unwrap().moved, vec![(3, a)]);
+
+        // Each moved sink is timed where it ended: one pip of delay 1, not
+        // its own node's absence from the tree read as no delay.
+        let ones = vec![1u32; graph.nodes.len()];
+        for (signal, pin, own) in [(0, 1, a), (1, 3, b)] {
+            let sink = Sink {
+                node: own,
+                name: String::new(),
+                pin,
+            };
+            let route = routing.route(signal).unwrap();
+            assert_eq!(sink_delays(&graph, route, &[sink], &ones), vec![1]);
+        }
     }
 
     /// Two signals may not share a physical wire just because it has a
