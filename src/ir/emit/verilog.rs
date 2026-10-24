@@ -351,6 +351,88 @@ impl NetUse {
     }
 }
 
+/// The one-bit nets that are only a bit of an `inout` port, and the
+/// assignments that make them one, as `(net -> "port[bit]", assignments)`.
+///
+/// Technology mapping gives a bidirectional pad's buffer a net of its own
+/// for the pin and joins the port to the pins with `assign pad = {pin7,
+/// ..., pin0};`. In the IR that is a connection; in Verilog a continuous
+/// assignment carries a value one way only, so a netlist written that way
+/// never let a value driven onto the port from outside reach the buffer:
+/// NewAE's Husky testbench, run on the mapped netlist, read every register
+/// back as `x` because the data it wrote never arrived. Such a pin net is
+/// written as the port's bit instead, and the assignment is left out.
+/// Only a net that the assignment is the one reader of and a black-box
+/// cell's output is the one driver of is joined; anything else keeps its
+/// assignment.
+fn pad_joins(module: &Module) -> (BTreeMap<NetId, String>, Vec<usize>) {
+    let mut readers: BTreeMap<NetId, usize> = BTreeMap::new();
+    for (_, e) in module.exprs.iter() {
+        if let ExprKind::Net(net) = e.kind {
+            *readers.entry(net).or_default() += 1;
+        }
+    }
+    let mut drivers: BTreeMap<NetId, usize> = BTreeMap::new();
+    for (_, cell) in module.cells.iter() {
+        let blackbox = matches!(cell.kind, CellKind::Blackbox(_));
+        for (_, net) in &cell.outputs {
+            *drivers.entry(*net).or_default() += if blackbox { 1 } else { 2 };
+        }
+    }
+    for a in &module.assigns {
+        if let Lvalue::Net(net) = a.target {
+            *drivers.entry(net).or_default() += 2;
+        }
+    }
+    let mut joined = BTreeMap::new();
+    let mut joins = Vec::new();
+    for (index, a) in module.assigns.iter().enumerate() {
+        let Lvalue::Net(pad) = a.target else { continue };
+        let Some(port) = module.port_of_net(pad) else {
+            continue;
+        };
+        if port.dir != PortDir::InOut || a.delay.is_some() {
+            continue;
+        }
+        let parts = match &module.exprs[a.value].kind {
+            ExprKind::Concat(parts) => parts.clone(),
+            ExprKind::Net(_) => vec![a.value],
+            _ => continue,
+        };
+        let width = module.nets[pad].ty.width().unwrap_or(0) as usize;
+        let pins: Option<Vec<NetId>> = parts
+            .iter()
+            .map(|e| match module.exprs[*e].kind {
+                ExprKind::Net(net)
+                    if module.nets[net].ty.width() == Some(1)
+                        && readers.get(&net) == Some(&1)
+                        && drivers.get(&net) == Some(&1)
+                        && module.port_of_net(net).is_none() =>
+                {
+                    Some(net)
+                }
+                _ => None,
+            })
+            .collect();
+        let Some(pins) = pins else { continue };
+        if pins.len() != width {
+            continue;
+        }
+        let name = ident(module.nets[pad].name.as_str());
+        let scalar = module.nets[pad].ty == Type::bit();
+        for (k, net) in pins.iter().rev().enumerate() {
+            let text = if scalar {
+                name.clone()
+            } else {
+                format!("{name}[{k}]")
+            };
+            joined.insert(*net, text);
+        }
+        joins.push(index);
+    }
+    (joined, joins)
+}
+
 fn collect_nets(module: &Module, id: ExprId, f: &mut dyn FnMut(NetId)) {
     match &module.exprs[id].kind {
         ExprKind::Net(n) => f(*n),
@@ -376,6 +458,11 @@ struct Printer<'a> {
     /// Labels of the enclosing loops: (break block, continue block).
     loops: Vec<(Option<String>, Option<String>)>,
     next_label: u32,
+    /// Nets written as a bit of an `inout` port instead of on their own;
+    /// see [`pad_joins`].
+    joined: BTreeMap<NetId, String>,
+    /// The assignments [`pad_joins`] made unnecessary, by index.
+    joins: Vec<usize>,
 }
 
 impl<'a> Printer<'a> {
@@ -391,6 +478,8 @@ impl<'a> Printer<'a> {
             in_sequential: false,
             loops: Vec::new(),
             next_label: 0,
+            joined: BTreeMap::new(),
+            joins: Vec::new(),
         }
     }
 
@@ -414,6 +503,7 @@ impl<'a> Printer<'a> {
             self.out.line("(* blackbox *)");
         }
         let ansi = self.opts.ansi_ports && m.ports.iter().all(|p| p.name == m.nets[p.net].name);
+        (self.joined, self.joins) = pad_joins(m);
         self.header(ansi)?;
         self.out.indent();
         for param in &m.params {
@@ -455,7 +545,7 @@ impl<'a> Printer<'a> {
         // Declarations for nets that are not ANSI ports.
         for (id, net) in m.nets.iter() {
             let port = m.port_of_net(id);
-            if ansi && port.is_some() {
+            if (ansi && port.is_some()) || self.joined.contains_key(&id) {
                 continue;
             }
             let decl = self.net_decl(id, net, port.map(|p| p.dir))?;
@@ -471,7 +561,10 @@ impl<'a> Printer<'a> {
         let mut body = Out::new("  ");
         body.indent();
         std::mem::swap(&mut self.out, &mut body);
-        for assign in &m.assigns {
+        for (index, assign) in m.assigns.iter().enumerate() {
+            if self.joins.contains(&index) {
+                continue;
+            }
             if self.opts.keep_attrs && !assign.attrs.is_empty() {
                 self.out.line(&attrs_text(&assign.attrs));
             }
@@ -1403,10 +1496,11 @@ impl<'a> Printer<'a> {
                     conns.push((port.as_str().to_owned(), self.expr(*e)?));
                 }
                 for (port, net) in &cell.outputs {
-                    conns.push((
-                        port.as_str().to_owned(),
-                        ident(self.module.nets[*net].name.as_str()),
-                    ));
+                    let text = match self.joined.get(net) {
+                        Some(bit) => bit.clone(),
+                        None => ident(self.module.nets[*net].name.as_str()),
+                    };
+                    conns.push((port.as_str().to_owned(), text));
                 }
                 let attrs = Attrs::new();
                 self.instantiation(
@@ -1869,6 +1963,7 @@ fn paren_unless_atom(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::Name;
     use crate::ir::builder::ModuleBuilder;
     use crate::ir::process::{AssignKind, TimeUnit};
     use crate::source::SourceMap;
@@ -2084,6 +2179,45 @@ mod tests {
         let text = emit_verilog(&design).unwrap();
         assert!(text.contains("always @(posedge clk) begin"));
         assert!(text.contains("output reg q"));
+    }
+
+    /// What technology mapping makes of a bidirectional bus: a buffer per
+    /// bit whose pad pin drives a net of its own, and the port joined to
+    /// those nets by one assignment. Written as it stands, the assignment
+    /// carries values out of the module only, and a testbench driving the
+    /// port from outside never reached the buffers. Would catch the join
+    /// being dropped or a bit written to the wrong buffer; would not catch
+    /// a simulator that resolved the assignment both ways anyway.
+    #[test]
+    fn an_inout_ports_pins_are_written_as_its_bits() {
+        let span = span();
+        let mut b = ModuleBuilder::new("t", span);
+        let pad = b.inout("bus", Type::bits(2));
+        let mut pins = Vec::new();
+        for bit in 0..2 {
+            let pin = b.add_net(format!("bus$pin{bit}"), Type::bit());
+            let one = b.constant(Const::ones(1));
+            b.cell(
+                format!("bus$io{bit}"),
+                CellKind::Blackbox(Name::new("IOBUF")),
+                vec![(Name::new("I"), one)],
+                vec![(Name::new("IO"), pin)],
+            );
+            pins.push(pin);
+        }
+        let parts = pins.iter().rev().map(|p| b.net(*p)).collect();
+        let joined = b.concat(parts);
+        b.assign(pad, joined);
+        let mut design = Design::new();
+        design.add_module(b.finish());
+        let text = emit_verilog(&design).unwrap();
+        assert!(!text.contains("assign"), "{text}");
+        assert!(!text.contains("bus$pin"), "{text}");
+        assert!(
+            text.contains("IOBUF bus$io0 (\n    .I(1'b1),\n    .IO(bus[0])"),
+            "{text}"
+        );
+        assert!(text.contains(".IO(bus[1])"), "{text}");
     }
 
     #[test]
