@@ -1,7 +1,7 @@
 // Behavioural models of the 7-series cells Reticle's technology mapper
 // writes, so a mapped netlist (`<top>.v` from `reticle fpga`) can run under
 // a testbench in place of the RTL it was mapped from: flip-flops, LUT6,
-// CARRY4, RAM64X1D, RAMB18E1 in the one configuration the mapper uses
+// LUT6_2, CARRY4, RAM64X1D, RAMB18E1 in the one configuration the mapper uses
 // (true dual port, 18 bits wide on both ports, no output registers), and the
 // I/O buffers. Each follows UG953's description of the cell; none is
 // Vivado's unisim model, and none models timing.
@@ -88,6 +88,16 @@ module LUT6 #(parameter [63:0] INIT = 64'h0) (
     end
   endfunction
   assign O = lut(INIT, {I5, I4, I3, I2, I1, I0});
+endmodule
+
+// Two functions in one table, as UG953's LUT6_2: O6 is the whole table on
+// I0..I5, O5 the lower half on I0..I4 whatever I5 is.
+module LUT6_2 #(parameter [63:0] INIT = 64'h0) (
+  output wire O6, output wire O5, input wire I0, input wire I1, input wire I2,
+  input wire I3, input wire I4, input wire I5);
+  LUT6 #(.INIT(INIT)) upper (.O(O6), .I0(I0), .I1(I1), .I2(I2), .I3(I3), .I4(I4), .I5(I5));
+  LUT6 #(.INIT({INIT[31:0], INIT[31:0]})) lower (.O(O5), .I0(I0), .I1(I1), .I2(I2), .I3(I3),
+                                                 .I4(I4), .I5(1'b0));
 endmodule
 
 // UG953: O[i] = S[i] ^ carry into bit i; CO[i] = S[i] ? carry in : DI[i];

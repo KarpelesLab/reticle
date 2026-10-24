@@ -1,5 +1,6 @@
 // The cell models of xilinx_cells.v against what UG953 says the cells do:
-// each flip-flop's power-up value, enable and set or reset; a LUT6's
+// each flip-flop's power-up value, enable and set or reset; a LUT6_2's two
+// halves; a LUT6's
 // table, and its output staying known when an input its function ignores
 // is x; a CARRY4 adding; a RAM64X1D's write and two reads; a RAMB18E1's
 // write and read on its two ports; and an IOBUF both ways.
@@ -36,6 +37,11 @@ module xilinx_cells_tb;
   wire lo;
   LUT6 #(.INIT(64'h8888888888888888)) lut (.O(lo), .I0(li[0]), .I1(li[1]), .I2(li[2]),
                                             .I3(li[3]), .I4(li[4]), .I5(li[5]));
+
+  // --- LUT6_2: O6 is I0 & I1 when I5 is high, O5 is I0 | I1 always.
+  wire o6, o5;
+  LUT6_2 #(.INIT({{8{4'h8}}, {8{4'he}}})) dual (.O6(o6), .O5(o5), .I0(li[0]), .I1(li[1]),
+                                               .I2(li[2]), .I3(li[3]), .I4(li[4]), .I5(1'b1));
 
   // --- CARRY4 as a four-bit adder: S = a ^ b, DI = a.
   reg [3:0] a = 0, b = 0;
@@ -95,6 +101,8 @@ module xilinx_cells_tb;
     li = 6'bxxxx11; #1; check(lo === 1'b1, "lut ignores an x it does not read");
     li = 6'b0000x1; #1; check(lo === 1'bx, "lut passes an x it reads");
 
+    li = 6'b000001; #1; check(o6 === 1'b0 && o5 === 1'b1, "lut6_2 halves");
+    li = 6'b000011; #1; check(o6 === 1'b1 && o5 === 1'b1, "lut6_2 both");
     a = 4'd9; b = 4'd5; cin = 0; #1; check(sum === 4'd14 && co[3] === 1'b0, "carry 9 + 5");
     a = 4'd9; b = 4'd8; cin = 1; #1; check(sum === 4'd2 && co[3] === 1'b1, "carry 9 + 8 + 1");
 

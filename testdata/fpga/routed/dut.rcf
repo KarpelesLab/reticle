@@ -1,0 +1,33 @@
+# The Basys 3 pins of dut.v: its oscillator, the centre button, the sixteen
+# switches and twelve of the LEDs, from Digilent's Basys-3-Master.xdc.
+create_clock -name clk -period 10.0 clk
+set_io -io_standard LVCMOS33 clk W5
+set_io -io_standard LVCMOS33 s U18
+set_io -io_standard LVCMOS33 sw[0] V17
+set_io -io_standard LVCMOS33 sw[1] V16
+set_io -io_standard LVCMOS33 sw[2] W16
+set_io -io_standard LVCMOS33 sw[3] W17
+set_io -io_standard LVCMOS33 sw[4] W15
+set_io -io_standard LVCMOS33 sw[5] V15
+set_io -io_standard LVCMOS33 sw[6] W14
+set_io -io_standard LVCMOS33 sw[7] W13
+set_io -io_standard LVCMOS33 sw[8] V2
+set_io -io_standard LVCMOS33 sw[9] T3
+set_io -io_standard LVCMOS33 sw[10] T2
+set_io -io_standard LVCMOS33 sw[11] R3
+set_io -io_standard LVCMOS33 sw[12] W2
+set_io -io_standard LVCMOS33 sw[13] U1
+set_io -io_standard LVCMOS33 sw[14] T1
+set_io -io_standard LVCMOS33 sw[15] R2
+set_io -io_standard LVCMOS33 led[0] U16
+set_io -io_standard LVCMOS33 led[1] E19
+set_io -io_standard LVCMOS33 led[2] U19
+set_io -io_standard LVCMOS33 led[3] V19
+set_io -io_standard LVCMOS33 led[4] W18
+set_io -io_standard LVCMOS33 led[5] U15
+set_io -io_standard LVCMOS33 led[6] U14
+set_io -io_standard LVCMOS33 led[7] V14
+set_io -io_standard LVCMOS33 led[8] V13
+set_io -io_standard LVCMOS33 led[9] V3
+set_io -io_standard LVCMOS33 led[10] W3
+set_io -io_standard LVCMOS33 led[11] U3

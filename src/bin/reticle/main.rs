@@ -226,6 +226,11 @@ Options:
                      quicker; docs/fpga-trellis.md has what the
                      wirelength does at each. For iterating on hardware,
                      not for the bitstream you keep.
+  --routed-netlist <f>
+                     With --bitstream on the 7 series, write the design the
+                     bitstream is made from as structural Verilog: lookup
+                     tables paired and their inputs where the router put
+                     them. For simulating what the part is given.
   --timing-endpoints <f>
                      With --timing-driven and --bitstream, write every
                      endpoint the routed estimate puts late to this file,
@@ -747,6 +752,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-start-acceptance",
                 "place-start-window",
                 "timing-endpoints",
+                "routed-netlist",
             ],
             flags: &[
                 "sv",
@@ -3978,6 +3984,15 @@ fn write_xc7_bitstream(
     } else {
         design
     };
+    // The design the bitstream is generated from, as structural Verilog:
+    // its lookup tables paired and their inputs where the router put them,
+    // which is what simulating it checks and the netlist written before
+    // placement cannot.
+    if let Some(path) = args.option("routed-netlist") {
+        let vendor = reticle::fpga::export_vendor(design, top, device, constraints)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(path, vendor.verilog).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    }
 
     // The router says it connected every sink; this walks each sink back
     // through the pips the design was given and checks that it really did,
