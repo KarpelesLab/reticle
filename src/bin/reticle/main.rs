@@ -235,7 +235,8 @@ Options:
                      With --timing-driven and --bitstream, write every
                      endpoint the routed estimate puts late to this file,
                      latest first, each with the path to it: every pin, its
-                     arrival and its tile; then each clock's spread of
+                     arrival and its tile, and for the five latest the wires
+                     of every connection; then each clock's spread of
                      arrival, a rough hold check, and each clock's route to
                      the flip-flop it reaches last.
   --place-schedule   Print the annealing schedule as it ran, one line per
@@ -3899,7 +3900,7 @@ fn write_xc7_bitstream(
             for (domain, name) in domains.iter().enumerate() {
                 let late =
                     reticle::fpga::place::late_paths(&netlist, paths, &wire, domain, usize::MAX);
-                for path in late {
+                for (rank, path) in late.into_iter().enumerate() {
                     let Some(end) = path.last() else { continue };
                     let required = paths.periods.get(domain).copied().unwrap_or(0.0);
                     text.push_str(&format!(
@@ -3921,6 +3922,14 @@ fn write_xc7_bitstream(
                             netlist.instances[step.instance].name,
                             pin.role
                         ));
+                        // The wires of the latest paths' connections.
+                        if rank < 5 && !pin.output {
+                            for (ps, wire) in connection_wires(
+                                &netlist, &graph, &placement, &routing, delays, step.pin,
+                            ) {
+                                text.push_str(&format!("               {ps:5} ps  {wire}\n"));
+                            }
+                        }
                     }
                 }
             }
@@ -4803,6 +4812,54 @@ fn verify(args: &Args) -> Result<Outcome, ArgError> {
     } else {
         Outcome::Ok
     })
+}
+
+/// The wires a routed connection takes from its driver to sink pin `sink`,
+/// each with the delay its node adds, in picoseconds.
+fn connection_wires(
+    netlist: &reticle::fpga::Netlist,
+    graph: &reticle::fpga::arch::RoutingGraph,
+    placement: &reticle::fpga::place::Placement,
+    routing: &reticle::fpga::Routing,
+    node_delay: &[u32],
+    sink: usize,
+) -> Vec<(u32, String)> {
+    let pin = &netlist.pins[sink];
+    let (Some(signal), Some(site)) = (pin.signal, placement.site_of(pin.instance)) else {
+        return Vec::new();
+    };
+    let Some(route) = routing.route(signal) else {
+        return Vec::new();
+    };
+    let end = route
+        .moved
+        .iter()
+        .find(|(moved, _)| *moved == sink)
+        .map(|(_, node)| *node)
+        .or_else(|| graph.sites[site].pin(&pin.role));
+    let Some(end) = end else { return Vec::new() };
+    let parent: std::collections::HashMap<_, _> = route
+        .pips
+        .iter()
+        .map(|p| (graph.pip(*p).to, graph.pip(*p).from))
+        .collect();
+    let mut chain = vec![end];
+    while let Some(from) = parent.get(chain.last().unwrap()) {
+        chain.push(*from);
+        if chain.len() > 10_000 {
+            break;
+        }
+    }
+    chain.reverse();
+    chain
+        .into_iter()
+        .map(|node| {
+            (
+                node_delay.get(node as usize).copied().unwrap_or(0),
+                graph.wire(node).full_name(),
+            )
+        })
+        .collect()
 }
 
 /// For each clock, the route to the flip-flop it reaches latest: every
