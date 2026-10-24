@@ -3860,6 +3860,59 @@ the ADC side, which `husky.rcf` does not time, and the FIFO
 stand-ins. No earlier build was tested with a capture, so this is not
 known to be a regression.
 
+### Captures: a power-up value, a glitch, and a clock that left the network (2026-10-24, 25)
+
+Three faults stood between O's working bus and a capture, and none of
+them was where the estimate pointed.
+
+**A flip-flop's power-up value.** NewAE's testbench, run on Reticle's
+own mapped netlist (`examples/husky/sim/run_cwhusky_netlist.sh`), failed
+as the part did, and the first waveform to leave the RTL's was
+`presamp_running` at time zero: declared `= 1'b0`, set synchronously, so
+an `FDSE`, which the mapper gave its primitive's default of 1. Every
+flip-flop took its primitive's `INIT`; 540 of the Plus's disagreed with
+their registers. Fixed in `techcells::set_init`. Checked: the netlist
+then reads all 90 samples in simulation, and the part captured short runs
+exactly. The bitstream writer was right throughout: it writes `ZINI` from
+the cell's `INIT`.
+
+**A glitch.** The FIFO stand-in's gray pointers were an exclusive-or of
+the binary ones, sampled by the other clock's synchroniser: the textbook
+glitch, which no zero-delay simulation shows and `reticle timing --cdc`
+had called an error. Registered on their own side now.
+
+**A clock off the network.** Builds after that, from the same sources
+placed differently, never armed: the state machine stayed idle, and the
+netlist each bitstream was generated from (`--routed-netlist`) still ran
+the testbench correctly. `--timing-endpoints`, which now prints each
+clock's spread of arrival and its route to the flip-flop it reaches
+last, showed the ADC clock at 1.6 to **16.2 ns** after its buffer. The
+route to the latest:
+
+    CLK_BUFG_BUFGCTRL0_O -> CLK_FEED_R_CK_GCLK16 -> ... -> CLK_HROW_CK_MUX_OUT_L4
+    -> HCLK_LEAF_CLK_B_BOT1 (X5Y78) -> GFAN1 (X4Y103) -> FAN_BOUNCE5 -> FAN_BOUNCE2
+    -> ... (some 300 bounces, a tile at a time up column 4) ...
+    -> back onto a clock row through its interconnect input -> GCLK_L_B -> CLK
+
+The router kept a clock off general interconnect only at the wire in
+front of a clock pin (`RouteOptions::network_entry`), so a path could
+leave earlier and come back. And `XrayFabric::clock_network_use`, which
+`--bitstream` refuses on, asked only about the last programmable pip,
+which here came off the network: it reported every clock pin on it.
+
+Now a clock pin a global buffer drives is reached over the network alone
+(`RouteOptions::network_pins`: once off it, joins only), and the check
+asks every programmable pip of the path. Checked on the part, same
+sources: the ADC clock's latest arrival 6.4 ns, and test ramps at a
+10 MHz ADC clock exact at 8 and 12 bits up to 131,070 samples but for
+12-bit captures longer than the slow FIFO.
+
+**Not known**: whether the remaining spread is real. The model charges
+each of the four wires of a spine rebuffer 175 ps, which puts the far
+clock regions some 4 ns behind the near ones; 7-series clock trees are
+built for far less skew than that, and the hold check `--timing-endpoints`
+prints is no better than this.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

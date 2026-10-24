@@ -345,6 +345,43 @@ draining while the bus reads it, lose and repeat words. The routed
 estimate still puts `clk_usb`'s latest endpoints in the capture logic at
 13 to 15 ns of 10.4, which is the next suspect.
 
+**Builds that never armed** (2026-10-25). The next builds, from the same
+sources placed a little differently, captured nothing: the capture state
+machine stayed idle, though the netlist each was routed from
+(`--routed-netlist`) ran NewAE's testbench correctly. What differed was
+physical. A clock a global buffer drives used to be kept off general
+interconnect only at the wire in front of each clock pin, and the ADC
+clock left a leaf clock for a fan wire, climbed 25 tiles of general
+bounces to a clock region whose row it had not enabled, and came back
+onto the network there, reaching some flip-flops 16 ns after its buffer
+and most within 2. `--timing-endpoints` now prints each clock's spread
+and its latest route, which is what showed it; the route is in
+`docs/fpga-xray.md`'s terms a clock off the network, and the check that
+said every clock pin was on it only asked about the last pip. With clock
+pins reached over the network alone, the same sources built again:
+
+| samples | 8 bits | 12 bits |
+|---|---|---|
+| 1,000 | 3 of 3 exact | 3 of 3 exact |
+| 30,000 | 3 of 3 exact | 3 of 3 exact |
+| 131,070 | 3 of 3 exact | none: slow FIFO underflow and overflow |
+
+NewAE's bitstream gets all six. The same ramps at ADC clocks of 20, 50 and
+100 MHz, 1,000 and 30,000 samples at 8 and 12 bits: all exact.
+
+NewAE's `test_husky_dev.py` on this build: 11 passed, 36 failed, 166
+skipped (theirs: 42, 5, 166). The failures are 12-bit captures longer
+than the slow FIFO, captures at the fastest ADC clocks, and the glitch
+modules'.
+
+The ADC's domain is not timed: `husky.rcf` names no clock on it. Declared
+at NewAE's 4 ns (`create_clock -period 4.0 ADC_clk_fbp`, the pad its
+buffer is fed from), the routed estimate was 21.6 ns, 12,451 of its
+13,603 late endpoints in the SAD trigger, and the timing-driven placement
+spent itself there: `clk_usb` went from 17.5 to 20.9 ns and the long
+captures above started losing words. Left out until the placement can
+carry both.
+
 ## Status
 
 **It places, routes and writes a bitstream** (2026-10-20). `build.sh`
