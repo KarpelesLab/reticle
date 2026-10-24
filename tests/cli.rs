@@ -1530,6 +1530,31 @@ fn the_husky_fifo_stand_ins_pass_their_testbench() {
     );
 }
 
+/// **The two-clock stand-in's pointers cross from registers.** Reticle's
+/// own crossing check on `fast_slower_fifo`, the one stand-in with two
+/// clocks: no crossing it calls unsynchronised. The gray pointers used to
+/// be exclusive-ors of the binary ones, sampled straight off the other
+/// clock, which glitch; the check called that an error from the start, and
+/// on the Husky Plus the fast FIFO overflowed and underflowed while every
+/// simulation passed. Would catch combinational logic between the clocks
+/// again; would not catch a gray code that is not one, which the check
+/// says it cannot prove and warns about.
+#[cfg(feature = "timing")]
+#[test]
+fn the_husky_fifo_stand_ins_pointers_cross_from_registers() {
+    let (code, stdout, stderr) = run(&[
+        "timing",
+        "--cdc",
+        "--top",
+        "fast_slower_fifo",
+        "examples/husky/fifo_generator.v",
+    ]);
+    let all = format!("{stdout}{stderr}");
+    assert_eq!(code, 0, "{all}");
+    assert!(all.contains("2-flop synchroniser"), "{all}");
+    assert!(!all.contains("unsynchronised"), "{all}");
+}
+
 /// The largest of them, 72 x 16384, is 64 `RAMB18E1` in the 18-bit mode
 /// whose top two bits are parity: the Husky's FIFOs fit the part only that
 /// way. Would catch the parity modes lost, or a tie-break that put the

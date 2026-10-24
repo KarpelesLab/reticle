@@ -137,9 +137,22 @@ module husky_fifo #(
 
   // --- crossing ------------------------------------------------------------
   if (ASYNC) begin : crossing
-    // Gray code, two flip-flops on each side.
-    wire [AW:0] wgray = wptr ^ (wptr >> 1);
-    wire [AW:0] rgray = rptr ^ (rptr >> 1);
+    // Gray code, registered on its own side, then two flip-flops on the
+    // other. The register is the point: an exclusive-or of the binary
+    // pointer's bits glitches through other codes as the bits of an
+    // increment arrive at their own times, and a flip-flop on the other
+    // clock can take one of those. Taken straight from the pointer, as it
+    // first was here, the Husky Plus's fast FIFO overflowed and underflowed
+    // on the part, more or less often from one placement to the next, and
+    // no simulation could show it, having no glitches. A pointer a cycle
+    // older only makes each side more cautious.
+    reg [AW:0] wgray, rgray;
+    always @(posedge wr_clk or posedge rst)
+      if (rst) wgray <= 0;
+      else wgray <= wptr ^ (wptr >> 1);
+    always @(posedge rclk or posedge rst)
+      if (rst) rgray <= 0;
+      else rgray <= rptr ^ (rptr >> 1);
     (* ASYNC_REG = "TRUE" *) reg [AW:0] wgray_r1, wgray_r2;
     (* ASYNC_REG = "TRUE" *) reg [AW:0] rgray_w1, rgray_w2;
     always @(posedge rclk or posedge rst)
