@@ -251,6 +251,22 @@ pub struct RouteOptions {
     /// is not held to this: a clock no global buffer drives has no network
     /// to come from.
     pub network_entry: Vec<bool>,
+    /// Sinks, by netlist pin index, that a signal allowed onto
+    /// [`RouteOptions::network`] must reach over the network alone, or
+    /// empty for none: once a path to one leaves the network it takes only
+    /// joins, the pieces of the wire it is on, and no programmable pip out
+    /// of a wire that is not the network's (the source's own excepted).
+    ///
+    /// [`RouteOptions::network_entry`] only bars the wire in front of a
+    /// clock pin from general interconnect. A path could still leave the
+    /// network earlier and come back onto it: on the Husky Plus the ADC
+    /// clock left a leaf clock for a fan wire, climbed twenty-five tiles of
+    /// general bounces to a clock region whose row it had not enabled,
+    /// and re-entered the network there through the row's interconnect
+    /// input, reaching its flip-flop 16 ns after its buffer where the rest
+    /// were clocked at under 2. Every check of the route's last pip passed,
+    /// and the part did not capture.
+    pub network_pins: Vec<bool>,
     /// Pins a signal reaches before its others, by index into
     /// [`Netlist::pins`], or empty for none; among themselves, and among
     /// the rest, the order is as it would have been.
@@ -456,6 +472,7 @@ impl Default for RouteOptions {
             network: Vec::new(),
             network_signals: Vec::new(),
             network_entry: Vec::new(),
+            network_pins: Vec::new(),
             first: Vec::new(),
             reroute_congested_only: false,
             incremental: false,
@@ -1810,12 +1827,16 @@ fn route_one(
         }
         let sink = &terminals.sinks[which];
         let critical = criticality.get(which).copied().unwrap_or(0.0);
+        // A clock pin of a buffered clock is reached over the network alone:
+        // see `RouteOptions::network_pins`.
+        let strict =
+            (!barred && options.network_pins.get(sink.pin) == Some(&true)).then_some(source);
         let mut path = None;
         if let Some(near) = &near {
             let seeds = near.seeds(geometry, &tree, sink.node, source, critical);
             path = maze(
                 graph, geometry, edges, state, scratch, &seeds, sink.node, critical, present,
-                options, barred, bounds,
+                options, barred, strict, bounds,
             );
             // A search from part of the tree may cross a tree node it was
             // not started from, and taking that pip would give the node a
@@ -1832,7 +1853,7 @@ fn route_one(
         if path.is_none() {
             path = maze(
                 graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
-                options, barred, bounds,
+                options, barred, strict, bounds,
             );
         }
         if path.is_none() && bounds.is_some() {
@@ -1840,7 +1861,7 @@ fn route_one(
             bounds = None;
             path = maze(
                 graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
-                options, barred, None,
+                options, barred, strict, None,
             );
         }
         let Some(path) = path else {
@@ -2253,6 +2274,7 @@ fn maze(
     present: f64,
     options: &RouteOptions,
     barred: bool,
+    strict: Option<NodeId>,
     bounds: Option<Bounds>,
 ) -> Option<Vec<PipId>> {
     let slack = 1.0 - critical;
@@ -2324,6 +2346,16 @@ fn maze(
             }
             if !barred
                 && options.network_entry.get(*next as usize) == Some(&true)
+                && !geometry[node as usize].reserved
+                && !graph.pip_bits(*pip).is_empty()
+            {
+                continue;
+            }
+            // Off the network, a strict sink's path takes joins only: no
+            // programmable pip out of a wire that is not the network's but
+            // the source's own.
+            if let Some(source) = strict
+                && node != source
                 && !geometry[node as usize].reserved
                 && !graph.pip_bits(*pip).is_empty()
             {
@@ -3873,6 +3905,74 @@ mod tests {
             "a barred signal went onto the network however cheap it was"
         );
         assert!(kept_off.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// **A clock pin named in [`RouteOptions::network_pins`] is reached
+    /// over the network alone.** The detour's upper row is the network, and
+    /// so are the tracks of the two end tiles, standing for a buffer's
+    /// output and the wire in front of the pin; the network's middle node
+    /// costs fifty. By cost the clock drops to the general row round it and
+    /// climbs back, as the Husky Plus's ADC clock left a leaf for general
+    /// bounces and came back onto a clock row; named strict, it stays on
+    /// the network and pays. Would catch the option ignored, or a path off
+    /// the network let back on; would not catch the 7-series flow naming
+    /// the wrong pins, which a build's own clock check is for.
+    #[test]
+    fn a_strict_clock_pin_is_reached_over_the_network_alone() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let network: Vec<bool> = graph
+            .nodes
+            .iter()
+            .map(|wire| {
+                wire.name == "track" && (wire.tile.1 == 1 || wire.tile.0 == 0 || wire.tile.0 == 7)
+            })
+            .collect();
+        let base: Vec<f32> = graph
+            .nodes
+            .iter()
+            .zip(&network)
+            .map(|(wire, on)| match (on, wire.tile) {
+                (true, (3, 1)) => 50.0,
+                (true, _) => 0.05,
+                (false, _) => 1.0,
+            })
+            .collect();
+        let sink = netlist.signals[0].sinks[0];
+        let leaves = |routing: &Routing| {
+            routing.routes().any(|r| {
+                r.nodes.iter().any(|n| {
+                    let wire = graph.wire(*n);
+                    wire.name == "track" && wire.tile.1 == 0 && (1..7).contains(&wire.tile.0)
+                })
+            })
+        };
+        let run = |strict: bool| {
+            let mut pins = vec![false; netlist.pins.len()];
+            pins[sink] = strict;
+            let options = RouteOptions {
+                node_base: base.clone(),
+                network: network.clone(),
+                network_signals: vec![true; netlist.signals.len()],
+                network_pins: pins,
+                ..RouteOptions::default()
+            };
+            route(&netlist, &graph, &placement, &options).unwrap().0
+        };
+        assert!(leaves(&run(false)), "by cost it goes round the dear node");
+        let strict = run(true);
+        assert!(
+            !leaves(&strict),
+            "a strict clock pin's path left the network"
+        );
+        assert!(strict.verify(&netlist, &graph, &placement).is_empty());
     }
 
     /// A line of tiles with general `track` both ways, as [`line`] has,

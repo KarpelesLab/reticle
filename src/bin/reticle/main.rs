@@ -235,7 +235,9 @@ Options:
                      With --timing-driven and --bitstream, write every
                      endpoint the routed estimate puts late to this file,
                      latest first, each with the path to it: every pin, its
-                     arrival and its tile.
+                     arrival and its tile; then each clock's spread of
+                     arrival, a rough hold check, and each clock's route to
+                     the flip-flop it reaches last.
   --place-schedule   Print the annealing schedule as it ran, one line per
                      temperature: the move window, the moves tried and
                      accepted, and the wirelength at the end of the step.
@@ -3559,6 +3561,27 @@ fn write_xc7_bitstream(
             })
         })
         .collect();
+    // The clock pins `XrayFabric::clock_network_use` judges, of a clock a
+    // global buffer drives: each is reached over the network alone. See
+    // `RouteOptions::network_pins`.
+    let network_pins: Vec<bool> = netlist
+        .pins
+        .iter()
+        .map(|pin| {
+            let clock_pin = matches!(
+                (
+                    netlist.instances[pin.instance].kind.as_str(),
+                    pin.role.as_str()
+                ),
+                ("ff", "clk") | ("lutram", "wclk") | ("bram", "p0_clk" | "p1_clk")
+            );
+            clock_pin
+                && pin
+                    .signal
+                    .and_then(|s| netlist.signals[s].driver)
+                    .is_some_and(|d| netlist.instances[netlist.pins[d].instance].kind == "gb")
+        })
+        .collect();
     // The ground fans the block RAMs' zero ties will need are closed to
     // every signal, the clocks included: a tie made after routing found
     // them spent as hops. See `XrayFabric::block_ram_ground_fans`.
@@ -3582,6 +3605,7 @@ fn write_xc7_bitstream(
         // And a clock comes off the network at the pin, not a hop before:
         // see `RouteOptions::network_entry`.
         network_entry: fabric.clock_pin_entries(&graph),
+        network_pins,
         // A pad's clock reaches its global buffers before anything else
         // it drives: see `RouteOptions::first`. Not its clock managers:
         // the pad's road reaches only those of its own clock region, and
@@ -3900,6 +3924,10 @@ fn write_xc7_bitstream(
                     }
                 }
             }
+            text.push_str(&hold_report(&netlist, &wire));
+            text.push_str(&clock_paths(
+                &netlist, &graph, &placement, &routing, delays, &wire,
+            ));
             std::fs::write(file, text).map_err(|e| format!("cannot write `{file}`: {e}"))?;
         }
         // Each pad's own paths, which a bus needs every one of in time.
@@ -4775,6 +4803,198 @@ fn verify(args: &Args) -> Result<Outcome, ArgError> {
     } else {
         Outcome::Ok
     })
+}
+
+/// For each clock, the route to the flip-flop it reaches latest: every
+/// wire from the clock's source, with the delay each node adds, as the
+/// router's delays have it. For `--timing-endpoints`, to tell a clock that
+/// leaves the clock network from a model that charges the network too
+/// much.
+fn clock_paths(
+    netlist: &reticle::fpga::Netlist,
+    graph: &reticle::fpga::arch::RoutingGraph,
+    placement: &reticle::fpga::place::Placement,
+    routing: &reticle::fpga::Routing,
+    node_delay: &[u32],
+    wire: &[f64],
+) -> String {
+    let is_clock = |role: &str| role == "c" || role.contains("clk");
+    let mut latest: std::collections::BTreeMap<usize, (f64, usize)> =
+        std::collections::BTreeMap::new();
+    for inst in &netlist.instances {
+        if inst.kind != "ff" {
+            continue;
+        }
+        for p in &inst.pins {
+            let pin = &netlist.pins[*p];
+            if pin.output || !is_clock(&pin.role) {
+                continue;
+            }
+            if let Some(s) = pin.signal {
+                let at = wire.get(*p).copied().unwrap_or(0.0);
+                let e = latest.entry(s).or_insert((f64::NEG_INFINITY, *p));
+                if at > e.0 {
+                    *e = (at, *p);
+                }
+            }
+        }
+    }
+    let mut text = String::new();
+    for (signal, (at, sink)) in latest {
+        let Some(route) = routing.route(signal) else {
+            continue;
+        };
+        let pin = &netlist.pins[sink];
+        let Some(end) = placement
+            .site_of(pin.instance)
+            .and_then(|site| graph.sites[site].pin(&pin.role))
+        else {
+            continue;
+        };
+        let parent: std::collections::HashMap<_, _> = route
+            .pips
+            .iter()
+            .map(|p| (graph.pip(*p).to, graph.pip(*p).from))
+            .collect();
+        let mut chain = vec![end];
+        while let Some(from) = parent.get(chain.last().unwrap()) {
+            chain.push(*from);
+            if chain.len() > 10_000 {
+                break;
+            }
+        }
+        chain.reverse();
+        text.push_str(&format!(
+            "clock route {} to {}.{}: {at:.2} ns over {} nodes\n",
+            netlist.signals[signal].name,
+            netlist.instances[pin.instance].name,
+            pin.role,
+            chain.len()
+        ));
+        for node in chain {
+            text.push_str(&format!(
+                "    {:6} ps  {}\n",
+                node_delay.get(node as usize).copied().unwrap_or(0),
+                graph.wire(node).full_name()
+            ));
+        }
+    }
+    text
+}
+
+/// A rough hold check of a routed 7-series design, for `--timing-endpoints`:
+/// each clock's spread of arrival over the flip-flops it clocks, and every
+/// path from a flip-flop to a flip-flop on the same clock, directly or
+/// through one lookup table, whose data arrives before the capturing
+/// clock's edge plus a hold time. Nothing in the flow times hold; this
+/// says whether it would have anything to time. The clock-to-out, table
+/// and hold figures are round numbers of the order of DS181's, not read
+/// off it.
+fn hold_report(netlist: &reticle::fpga::Netlist, wire: &[f64]) -> String {
+    const CLOCK_TO_OUT: f64 = 0.3;
+    const TABLE: f64 = 0.05;
+    const HOLD: f64 = 0.1;
+    let is_clock = |role: &str| role == "c" || role.contains("clk");
+    let at = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
+    // Each flip-flop's clock signal and arrival.
+    let clock: Vec<Option<(usize, f64)>> = netlist
+        .instances
+        .iter()
+        .map(|inst| {
+            if inst.kind != "ff" {
+                return None;
+            }
+            inst.pins
+                .iter()
+                .find(|p| !netlist.pins[**p].output && is_clock(&netlist.pins[**p].role))
+                .and_then(|p| netlist.pins[*p].signal.map(|s| (s, at(*p))))
+        })
+        .collect();
+    let mut text = String::new();
+    let mut spread: std::collections::BTreeMap<usize, (f64, f64, usize)> =
+        std::collections::BTreeMap::new();
+    for (s, a) in clock.iter().flatten() {
+        let e = spread
+            .entry(*s)
+            .or_insert((f64::INFINITY, f64::NEG_INFINITY, 0));
+        *e = (e.0.min(*a), e.1.max(*a), e.2 + 1);
+    }
+    for (s, (lo, hi, n)) in &spread {
+        text.push_str(&format!(
+            "clock {}: {n} flip-flops, arrival {lo:.2} to {hi:.2} ns\n",
+            netlist.signals[*s].name
+        ));
+    }
+    // Paths, earliest first.
+    let mut paths: Vec<(f64, String)> = Vec::new();
+    let data_sinks = |signal: usize| netlist.signals[signal].sinks.iter().copied();
+    for (launch, inst) in netlist.instances.iter().enumerate() {
+        let Some((clk, arrive)) = clock[launch] else {
+            continue;
+        };
+        for q in inst.pins.iter().filter(|p| netlist.pins[**p].output) {
+            let Some(signal) = netlist.pins[*q].signal else {
+                continue;
+            };
+            for sink in data_sinks(signal) {
+                let pin = &netlist.pins[sink];
+                let to = pin.instance;
+                let first = arrive + CLOCK_TO_OUT + at(sink);
+                let mut ends = Vec::new();
+                if let Some((c, a)) = clock[to] {
+                    if !is_clock(&pin.role) && c == clk {
+                        ends.push((first, a, to, pin.role.clone()));
+                    }
+                } else if netlist.instances[to].kind == "lut" {
+                    for out in netlist.instances[to]
+                        .pins
+                        .iter()
+                        .filter(|p| netlist.pins[**p].output)
+                    {
+                        let Some(next) = netlist.pins[*out].signal else {
+                            continue;
+                        };
+                        for end in data_sinks(next) {
+                            let epin = &netlist.pins[end];
+                            if let Some((c, a)) = clock[epin.instance]
+                                && c == clk
+                                && !is_clock(&epin.role)
+                            {
+                                ends.push((
+                                    first + TABLE + at(end),
+                                    a,
+                                    epin.instance,
+                                    epin.role.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                for (data, capture, end, role) in ends {
+                    let slack = data - (capture + HOLD);
+                    paths.push((
+                        slack,
+                        format!(
+                            "{slack:6.2} ns  {} -> {}.{role} (data {data:.2}, clock {capture:.2})",
+                            inst.name, netlist.instances[end].name
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    paths.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let violated = paths.iter().filter(|p| p.0 < 0.0).count();
+    text.push_str(&format!(
+        "hold: {} path(s) of one table or none, {violated} with the data before the hold\n",
+        paths.len()
+    ));
+    for (_, line) in paths.iter().take_while(|p| p.0 < 0.5) {
+        text.push_str("    ");
+        text.push_str(line);
+        text.push('\n');
+    }
+    text
 }
 
 /// `reticle viewer`: render the design as a browsable static site.

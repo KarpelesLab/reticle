@@ -2573,9 +2573,13 @@ impl XrayFabric {
     /// as a broken bitstream — nothing else would notice — so
     /// `reticle fpga --bitstream` refuses on what this finds.
     ///
-    /// A pin is on the network when the **first programmable pip** on its
-    /// own path back through the route comes from a clock-network wire:
-    /// `CLK1 <- GCLK_B0_EAST`, not `CLK1 <- FAN_BOUNCE5`. It is asked of
+    /// A pin is on the network when **every programmable pip** on its own
+    /// path back through the route comes from a clock-network wire or the
+    /// source: `CLK1 <- GCLK_B0_EAST`, not `CLK1 <- FAN_BOUNCE5`, and not a
+    /// path that left the network for general bounces and came back onto
+    /// it through a clock row's interconnect input, which only the first
+    /// pip was once asked about and which took the Husky Plus's ADC clock
+    /// 16 ns to reach a flip-flop. It is asked of
     /// each pin's own path, because one slice of a tile can be on the
     /// network while its neighbour is not. A clock no global buffer drives
     /// is counted in [`XrayClockUse::unbuffered`] and not judged: there is
@@ -2589,6 +2593,11 @@ impl XrayFabric {
         routing: &super::Routing,
     ) -> XrayClockUse {
         let mut out = XrayClockUse::default();
+        // Each clock route's pips by the node they drive, made once.
+        let mut parents: std::collections::HashMap<
+            usize,
+            std::collections::HashMap<super::arch::NodeId, super::arch::PipId>,
+        > = std::collections::HashMap::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             let roles: &[&str] = match instance.kind.as_str() {
                 "ff" => &["clk"],
@@ -2617,18 +2626,40 @@ impl XrayFabric {
                     out.unbuffered += 1;
                     continue;
                 }
+                // The whole path back to the source: the first programmable
+                // pip before the pin must come off the network, and so must
+                // every one before it. A path that left the network and came
+                // back onto it passed when only the first was asked about.
                 let mut node = pin;
                 let mut on_network = false;
                 let mut entered = None;
-                for _ in 0..32 {
-                    let Some(id) = route.pips.iter().find(|id| graph.pip(**id).to == node) else {
+                let mut programmable = 0usize;
+                let parent = parents.entry(signal).or_insert_with(|| {
+                    route
+                        .pips
+                        .iter()
+                        .map(|id| (graph.pip(*id).to, *id))
+                        .collect()
+                });
+                for _ in 0..100_000 {
+                    let Some(id) = parent.get(&node) else {
                         break;
                     };
                     let pip = graph.pip(*id);
                     if !graph.pip_bits(*id).is_empty() {
-                        on_network = is_clock_wire(&graph.wire(pip.from).name);
-                        entered = Some(pip.from);
-                        break;
+                        let from_network =
+                            pip.from == route.source || is_clock_wire(&graph.wire(pip.from).name);
+                        if programmable == 0 {
+                            on_network = from_network;
+                            entered = Some(pip.from);
+                        } else if !from_network {
+                            on_network = false;
+                            entered = Some(pip.from);
+                        }
+                        programmable += 1;
+                        if !on_network {
+                            break;
+                        }
                     }
                     node = pip.from;
                 }
