@@ -1,0 +1,50 @@
+// Two counters, one gating the increment and one adding the enable, as
+// instances of a miter asserting they agree: `reticle verify` inlines
+// them, and refused with F0006 before it did. Written by `reticle synth`
+// from the Verilog in tests/cli.rs's test of it.
+top miter
+
+module count_mux
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %q$ff$add u4 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  cell q$ff$add add (a=%q, b=4'd1) -> (y=%q$ff$add)
+  cell q$ff dff pos en srst pos 4'd0 (clk=%clk, d=%q$ff$add, en=%en, rst=%rst) -> (q=%q)
+end
+
+module count_add
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %q u4 wire
+  net %q$ff$add u4 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  port q out %q
+  cell q$ff$add add (a=%q, b={3'd0, %en}) -> (y=%q$ff$add)
+  cell q$ff dff pos srst pos 4'd0 (clk=%clk, d=%q$ff$add, rst=%rst) -> (q=%q)
+end
+
+module miter
+  net %clk u1 wire
+  net %rst u1 wire
+  net %en u1 wire
+  net %a u4 wire
+  net %b u4 wire
+  attr keep = 1
+  attr formal_assert = 1
+  net %same u1 wire
+  port clk in %clk
+  port rst in %rst
+  port en in %en
+  instance u_mux of count_mux (clk=%clk, rst=%rst, en=%en, q=%a)
+  instance u_add of count_add (clk=%clk, rst=%rst, en=%en, q=%b)
+  cell same$eq eq (a=%a, b=%b) -> (y=%same)
+end

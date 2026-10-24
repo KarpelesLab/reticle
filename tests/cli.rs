@@ -1105,6 +1105,29 @@ fn verify_proves_a_good_design() {
     assert!(stdout.contains("PROVED"), "{stdout}");
 }
 
+/// **A module with instances is checked inlined.** A miter of two 4-bit
+/// counters, one gating its increment through `?:` and one adding the
+/// enable, each an instance, asserting they agree:
+///
+/// ```verilog
+/// count_mux u_mux (.clk(clk), .rst(rst), .en(en), .q(a));
+/// count_add u_add (.clk(clk), .rst(rst), .en(en), .q(b));
+/// (* keep, formal_assert *) wire same = a == b;
+/// ```
+///
+/// The checker reads one module, and refused the instances (`F0006`,
+/// "flatten the design first") with nothing on the command line to do it;
+/// a miter of two versions of NewAE's FIFO stand-in needed it. Would catch
+/// the instances refused again; would not catch the flattening itself
+/// being wrong, which `ir::hier`'s own tests are for.
+#[cfg(feature = "formal")]
+#[test]
+fn verify_inlines_a_module_with_instances() {
+    let (code, stdout, stderr) = run(&["verify", "testdata/formal/cli/miter_instances.rtl"]);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("PROVED"), "{stdout}");
+}
+
 #[test]
 fn verify_refutes_a_bad_design_and_writes_a_trace() {
     let dir = scratch("verify_bad");

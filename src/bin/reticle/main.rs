@@ -460,7 +460,8 @@ const VERIFY_USAGE: &str = "\
 Usage: reticle verify [options] <design.rtl>
 
 Bounded model checking followed by k-induction over the nets marked with
-the `formal_assert`, `formal_assume` and `formal_cover` attributes.
+the `formal_assert`, `formal_assume` and `formal_cover` attributes. A
+module with instances is checked with them inlined.
 
 Options:
   --top <module>   Check this module (default: the design's top)
@@ -4718,6 +4719,17 @@ fn verify(args: &Args) -> Result<Outcome, ArgError> {
             }
         },
     };
+
+    // The checker reads one module; a module with instances in it, a
+    // miter of two designs say, is checked inlined.
+    let mut design = design;
+    if !design.modules[module].instances.is_empty() {
+        let flattened = design.flatten(module, &reticle::ir::FlattenOptions::default());
+        if let Err(mut diags) = flattened {
+            report(&mut diags, &map);
+            return Ok(Outcome::Failed);
+        }
+    }
 
     let mut options = VerifyOptions {
         init,
