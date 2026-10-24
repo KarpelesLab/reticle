@@ -1,0 +1,21 @@
+top wrap
+
+module m
+  net %a_pad u1 wire
+  net %b_pad u2 wire
+  net %c u1 wire
+  port a in %a_pad
+  port b in %b_pad
+  port c out %c
+  assign %c = xor(%a_pad, %b_pad[1:1])
+end
+
+module wrap
+  net %x u1 wire
+  net %y u2 wire
+  net %z u1 wire
+  port x in %x
+  port y in %y
+  port z out %z
+  instance u of m (a=%x, b=%y, c=%z)
+end

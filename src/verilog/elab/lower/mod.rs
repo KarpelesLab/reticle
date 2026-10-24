@@ -124,6 +124,9 @@ struct Driver {
 struct PortSlot {
     /// The port name seen from outside.
     name: String,
+    /// The name of the net inside: `name` itself but for an explicit port,
+    /// `.a(a_pad)`, whose outside name `a` and net `a_pad` differ.
+    internal: String,
     /// The direction.
     dir: PortDir,
     /// The net it exposes; `None` until the declaration is seen.
@@ -736,6 +739,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             .declare(&p.name.name, Symbol::Net { net, ty }, p.name.span);
         self.ports.push(PortSlot {
             name: p.name.name.clone(),
+            internal: p.name.name.clone(),
             dir: ir_dir,
             net: Some(net),
             span: p.name.span,
@@ -761,6 +765,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             match &expr.kind {
                 ast::ExprKind::Ident(id) => self.ports.push(PortSlot {
                     name: p.name.as_ref().map_or(id.name.clone(), |n| n.name.clone()),
+                    internal: id.name.clone(),
                     dir: PortDir::In,
                     net: None,
                     span: id.span,
@@ -779,7 +784,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         for slot in &slots {
             let net = match slot.net {
                 Some(net) => Some(net),
-                None => match self.env.lookup(&slot.name) {
+                None => match self.env.lookup(&slot.internal) {
                     Some((Symbol::Net { net, .. }, _, _)) => Some(*net),
                     _ => None,
                 },
@@ -788,7 +793,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.env.error(
                     codes::UNDEFINED,
                     slot.span,
-                    format!("port `{}` has no declaration in the module body", slot.name),
+                    format!(
+                        "port `{}` has no declaration in the module body",
+                        slot.internal
+                    ),
                 );
                 continue;
             };
@@ -800,7 +808,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// The direction recorded for a non-ANSI port declaration.
     fn set_port_dir(&mut self, name: &str, dir: PortDir) {
-        if let Some(slot) = self.ports.iter_mut().find(|s| s.name == name) {
+        if let Some(slot) = self.ports.iter_mut().find(|s| s.internal == name) {
             slot.dir = dir;
         }
     }
@@ -988,7 +996,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
         // A port declared in the header and given a type here keeps its net.
         if let Some((Symbol::Net { net, .. }, _, _)) = self.env.lookup(&name.name)
-            && self.ports.iter().any(|p| p.name == name.name)
+            && self.ports.iter().any(|p| p.internal == name.name)
         {
             let net = *net;
             self.nets[net.index()].is_var |= is_var;
@@ -1019,7 +1027,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 || (pd.net_type.is_none()
                     && dir != PortDir::In
                     && self.is_variable_type(&pd.data_type));
-            if self.ports.iter().all(|p| p.name != d.name.name) {
+            if self.ports.iter().all(|p| p.internal != d.name.name) {
                 self.env.error(
                     codes::UNDEFINED,
                     d.name.span,
@@ -1052,7 +1060,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.env
                 .declare(&d.name.name, Symbol::Net { net, ty }, d.name.span);
             self.set_port_dir(&d.name.name, dir);
-            if let Some(slot) = self.ports.iter_mut().find(|p| p.name == d.name.name) {
+            if let Some(slot) = self.ports.iter_mut().find(|p| p.internal == d.name.name) {
                 slot.net = Some(net);
             }
             if is_var && let Some(init) = &d.init {
