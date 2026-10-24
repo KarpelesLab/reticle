@@ -19,7 +19,8 @@
 //!   to an output (`CLBLL_L.sdf`, `CARRY4`); [`CARRY`] is between.
 //!
 //! **Not from it**, and said so: the block RAM's clock to output, the
-//! input and output buffers, and the clock managers. `LIOB33.sdf` times
+//! input and output buffers, and the clock managers, whose register port
+//! (`DRP`) is timed with the block RAM's figures standing in. `LIOB33.sdf` times
 //! only `IBUFDISABLE`; [`BRAM_LAUNCH`], [`INPUT_BUFFER`] and
 //! [`OUTPUT_BUFFER`] are the order of Xilinx's DS181 figures, not read off
 //! it here.
@@ -309,11 +310,13 @@ pub fn place_timing(
     }
     for (index, inst) in netlist.instances.iter().enumerate() {
         let kind = inst.kind.as_str();
+        // The first clock pin that has a signal on it: a tied-off one has
+        // nothing to time against.
         let clock = inst
             .pins
             .iter()
-            .find(|p| !netlist.pins[**p].output && is_clock(&netlist.pins[**p].role))
-            .and_then(|p| netlist.pins[*p].signal);
+            .filter(|p| !netlist.pins[**p].output && is_clock(&netlist.pins[**p].role))
+            .find_map(|p| netlist.pins[*p].signal);
         match kind {
             "lut" | "carry" | "gb" => {
                 cell[index] = match kind {
@@ -355,6 +358,35 @@ pub fn place_timing(
                     } else {
                         PinTiming::End
                     };
+                }
+            }
+            "mmcm" | "pll" | "sysmon" => {
+                // A clock manager's or the XADC's register port is a
+                // synchronous interface on its `DCLK`: the address, data
+                // and strobes end paths, the data out and ready start
+                // them. Nothing else of it is a path in the fabric's
+                // sense. It used to fall to the arm below, whose clock is
+                // the first pin with a clock's name — `CLKIN2`, or
+                // `CLKINSEL`, tied off — so the whole port was in no
+                // domain and untimed, and the logic analyser's MMCM on the
+                // Husky Plus refused NewAE's divider writes in some builds
+                // and took them in others.
+                (launch[index], capture[index]) = (BRAM_LAUNCH, BRAM_SETUP);
+                for pin in &inst.pins {
+                    let role = netlist.pins[*pin].role.as_str();
+                    pins[*pin] = match role {
+                        "daddr" | "di" | "den" | "dwe" => PinTiming::End,
+                        "do" | "drdy" => PinTiming::Start,
+                        _ => PinTiming::Ignored,
+                    };
+                }
+                let dclk = inst
+                    .pins
+                    .iter()
+                    .find(|p| netlist.pins[**p].role == "dclk")
+                    .and_then(|p| netlist.pins[*p].signal);
+                if let Some(c) = dclk {
+                    domain[index] = domain_of(c);
                 }
             }
             _ => {
@@ -574,5 +606,102 @@ mod tests {
         assert_eq!(timing.domain[2], PathDomain::Clock(0));
         assert!((timing.launch[3] - INPUT_BUFFER).abs() < 1e-9);
         assert_eq!(timing.domain[3], PathDomain::Every);
+    }
+
+    /// **A clock manager's register port is timed on its `DCLK`.** An MMCM
+    /// whose `CLKIN2` and `CLKINSEL` are tied off, reference clock `ref`,
+    /// register clock `bus`, written by a flip-flop on `bus` and read back
+    /// by another. The MMCM is in `bus`'s domain, its address an endpoint
+    /// and its data out a launch at the block RAM's figure, and its clock
+    /// output no path at all. Its clock used to be the first pin named for
+    /// one, `CLKIN2`, which carries nothing, so the whole port was
+    /// untimed. Would catch the domain taken from another pin again, or a
+    /// clock output timed as data; would not catch the stand-in figures
+    /// being wrong for the part, which DS181 has and this does not.
+    #[test]
+    fn a_clock_managers_register_port_is_timed_on_its_dclk() {
+        let pin = |instance: usize, role: &str, output: bool, signal: Option<usize>| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal,
+            constant: None,
+        };
+        let instance = |i: usize, name: &str, kind: &str, pins: Vec<usize>| Instance {
+            cell: CellId::from_index(i),
+            name: name.to_owned(),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        // Signals: 0 `ref`, 1 `bus`, 2 the address, 3 the data out, 4 the
+        // clock out.
+        let pins = vec![
+            pin(0, "din", true, Some(0)),
+            pin(1, "din", true, Some(1)),
+            pin(2, "clkin2", false, None),
+            pin(2, "clkinsel", false, None),
+            pin(2, "ref", false, Some(0)),
+            pin(2, "dclk", false, Some(1)),
+            pin(2, "daddr", false, Some(2)),
+            pin(2, "do", true, Some(3)),
+            pin(2, "out0", true, Some(4)),
+            pin(3, "clk", false, Some(1)),
+            pin(3, "q", true, Some(2)),
+            pin(4, "clk", false, Some(1)),
+            pin(4, "d", false, Some(3)),
+        ];
+        let signal = |name: &str, driver: usize, sinks: Vec<usize>| Signal {
+            name: name.to_owned(),
+            driver: Some(driver),
+            sinks,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(0, "ref$io0", "io", vec![0]),
+                instance(1, "bus$io0", "io", vec![1]),
+                instance(2, "mmcm", "mmcm", vec![2, 3, 4, 5, 6, 7, 8]),
+                instance(3, "addr", "ff", vec![9, 10]),
+                instance(4, "back", "ff", vec![11, 12]),
+            ],
+            signals: vec![
+                signal("ref", 0, vec![4]),
+                signal("bus", 1, vec![5, 9, 11]),
+                signal("addr", 10, vec![6]),
+                signal("do", 7, vec![12]),
+                signal("out0", 8, vec![]),
+            ],
+            pins,
+            off_fabric: Vec::new(),
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut diags = crate::diag::Diagnostics::new();
+        let constraints = Constraints::parse(
+            "create_clock -name bus -period 10 bus\ncreate_clock -name ref -period 40 ref\n",
+            file,
+            &mut diags,
+        );
+        assert!(!diags.has_errors());
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        let (timing, names) = place_timing(&design, top, &netlist, &constraints);
+        let bus = names
+            .iter()
+            .position(|n| n == "bus")
+            .expect("bus is a domain");
+        assert_eq!(timing.domain[2], PathDomain::Clock(bus));
+        assert_eq!(timing.pins[6], PinTiming::End, "the address");
+        assert_eq!(timing.pins[7], PinTiming::Start, "the data out");
+        assert_eq!(timing.pins[8], PinTiming::Ignored, "the clock out");
+        assert_eq!(timing.pins[4], PinTiming::Ignored, "the reference clock");
+        assert!((timing.launch[2] - BRAM_LAUNCH).abs() < 1e-9);
+        assert!((timing.capture[2] - BRAM_SETUP).abs() < 1e-9);
     }
 }
