@@ -87,28 +87,47 @@ module husky_fifo #(
   reg         held;
   wire [AW:0] rptr_w;  // the read pointer as the write side sees it
   wire [AW:0] wptr_r;  // the write pointer as the read side sees it
+  // And each as it will be after this cycle's edge. The flags below are
+  // registers, set each cycle to what the pointers will make them: the
+  // value the same expression of the pointers would have the cycle after,
+  // without its subtraction and comparison in front of every write and
+  // read enable of the memory. Combinational, they were the Husky Plus's
+  // latest paths in `clk_usb`, from a pointer through `full` to the
+  // enables of the 64 block RAMs of the largest FIFO, at 14 ns of 10.4.
+  wire [AW:0] rptr_w_next;
+  wire [AW:0] wptr_r_next;
+  wire [AW:0] wptr_next;
+  wire [AW:0] rptr_next;
+  wire        held_next;
 
   // --- write side ----------------------------------------------------------
-  wire [AW:0] wused = wptr - rptr_w;
-  assign full = !wrst && wused[AW];
+  wire [AW:0] wused_next = wptr_next - rptr_w_next;
+  reg full_q;
+  assign full = !wrst && full_q;
   wire do_write = wr_en && !full && !wrst;
+  assign wptr_next = wptr + do_write;
   always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;
   always @(posedge wr_clk or posedge rst)
     if (rst) begin
       wptr <= 0;
+      full_q <= 1'b0;
+      prog_full_q <= (PROG_FULL == 0);
       overflow <= 1'b0;
     end else begin
-      if (do_write) wptr <= wptr + 1'b1;
+      wptr <= wptr_next;
+      full_q <= wused_next[AW];
+      prog_full_q <= wcount_next >= PROG_FULL;
       overflow <= wr_en && full;
     end
   // With one clock the word waiting on `dout` in fall-through mode is
   // still in the FIFO, and counts; with two the write side cannot see it.
-  wire [AW+1:0] wcount = wused + ((FWFT && !ASYNC) ? held : 1'b0);
-  assign prog_full = !wrst && (wcount >= PROG_FULL);
+  wire [AW+1:0] wcount_next = wused_next + ((FWFT && !ASYNC) ? held_next : 1'b0);
+  reg prog_full_q;
+  assign prog_full = !wrst && prog_full_q;
 
   // --- read side -----------------------------------------------------------
   reg  [WIDTH-1:0] q;
-  wire             stored = (wptr_r != rptr);  // words still in the memory
+  reg              stored;  // words still in the memory
   wire             take;  // a read the user asked for and gets
   wire             fetch;  // the memory read this cycle
   if (FWFT) begin : fall_through
@@ -120,20 +139,27 @@ module husky_fifo #(
     assign take  = rd_en && !empty;
     assign fetch = take;
   end
+  assign rptr_next = rptr + fetch;
+  assign held_next = fetch || (held && !take);
+  wire [AW:0] rused_next = (wptr_r_next - rptr_next) + (FWFT ? held_next : 1'b0);
+  reg prog_empty_q;
   always @(posedge rclk) if (fetch) q <= mem[rptr[AW-1:0]];
   always @(posedge rclk or posedge rst)
     if (rst) begin
       rptr <= 0;
       held <= 1'b0;
+      stored <= 1'b0;
+      prog_empty_q <= 1'b1;
       underflow <= 1'b0;
     end else begin
-      if (fetch) rptr <= rptr + 1'b1;
-      held <= fetch || (held && !take);
+      rptr <= rptr_next;
+      held <= held_next;
+      stored <= wptr_r_next != rptr_next;
+      prog_empty_q <= rused_next <= PROG_EMPTY;
       underflow <= rd_en && empty;
     end
   assign dout = q;
-  wire [AW:0] rused = (wptr_r - rptr) + (FWFT ? held : 1'b0);
-  assign prog_empty = rrst || (rused <= PROG_EMPTY);
+  assign prog_empty = rrst || prog_empty_q;
 
   // --- crossing ------------------------------------------------------------
   if (ASYNC) begin : crossing
@@ -176,9 +202,13 @@ module husky_fifo #(
       else rbin_w <= gray_to_binary(rgray_w2);
     assign wptr_r = wbin_r;
     assign rptr_w = rbin_w;
+    assign wptr_r_next = gray_to_binary(wgray_r2);
+    assign rptr_w_next = gray_to_binary(rgray_w2);
   end else begin : common
     assign wptr_r = wptr;
     assign rptr_w = rptr;
+    assign wptr_r_next = wptr_next;
+    assign rptr_w_next = rptr_next;
   end
 
   function [AW:0] gray_to_binary(input [AW:0] g);
