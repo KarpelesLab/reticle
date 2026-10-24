@@ -920,6 +920,25 @@ fn a_wire_driven_from_an_inout_and_an_assign_is_resolved() {
     assert!(!stdout.contains("FAIL"), "{stdout}");
 }
 
+/// **A bus joined to `inout` ports bit by bit resolves both ways.** Each
+/// buffer's `IO` is one bit of the bus, `.IO(bus[k])`, which is how a
+/// mapped netlist connects a bidirectional bus. The simulator carried the
+/// buffers' drive out and nothing back in, so NewAE's Husky testbench, run
+/// on Reticle's own netlist, read every register back as `x`. Would catch
+/// the outside drive not reaching the buffers, their drive not reaching the
+/// bus, a released bus holding its last value (two plain copies of each
+/// side do that, and fail here), or contention not resolving to `x`; would
+/// not catch a join through a concatenation of parts, which keeps the
+/// one-way driver.
+#[cfg(feature = "sim")]
+#[test]
+fn a_bus_joined_to_inout_ports_bit_by_bit_resolves_both_ways() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/inout_part_tb.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    assert!(!stdout.contains("FAIL"), "{stdout}");
+}
+
 /// **A testbench reaches into the design by hierarchical name.** Reads in
 /// an expression, an event control on a net two instances down, a net's
 /// initialiser, and `force` and `release` of a net below, one of the

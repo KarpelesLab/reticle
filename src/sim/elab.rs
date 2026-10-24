@@ -199,6 +199,20 @@ pub(crate) enum DriverSource {
     Sig(SigId),
     /// The function of a combinational cell.
     Cell(CellRef),
+    /// Bits `lo .. lo + width` of what every driver of `sig` but `except`
+    /// puts on it: one side of an `inout` port joined to a part of a
+    /// net, which has to see what the other side drives without seeing
+    /// its own drive come back. See `join_inout`.
+    Others {
+        /// The signal whose drivers are resolved.
+        sig: SigId,
+        /// Its lowest bit taken.
+        lo: u32,
+        /// How many bits.
+        width: u32,
+        /// The driver left out: the other half of the join.
+        except: DriverId,
+    },
 }
 
 /// A continuous driver of one or more signals.
@@ -305,6 +319,7 @@ impl<'d> Simulator<'d> {
             signals: Vec::new(),
             sig_fanout: Vec::new(),
             sig_drivers: Vec::new(),
+            sig_others: Vec::new(),
             sig_waiters: Vec::new(),
             sig_callbacks: Vec::new(),
             callbacks: Vec::new(),
@@ -611,6 +626,7 @@ impl<'d> Simulator<'d> {
                         contrib: Vec::new(),
                         scheduled: false,
                     }),
+                    PortDir::InOut if self.join_inout(id, child_sig, width, e) => {}
                     PortDir::Out | PortDir::InOut => match self.target_from_expr(id, e) {
                         Some(target) => self.drivers.push(Driver {
                             inst: id,
@@ -633,6 +649,69 @@ impl<'d> Simulator<'d> {
         }
         chain.pop();
         id
+    }
+
+    /// Joins an `inout` port of a child, `child` of `width` bits, to the
+    /// part of a net of `inst` that `e` selects, both ways, and returns
+    /// whether it did.
+    ///
+    /// A port connected to a whole net of its own width shares the
+    /// parent's signal and needs nothing. One connected to a part of a net
+    /// — `.IO(bus[3])`, which is how every buffer of a mapped netlist's
+    /// bidirectional bus is connected — has a signal of its own, and used
+    /// to get only a driver from it into the parent: the child's drive
+    /// went out, and nothing driven from outside ever came in, so a
+    /// buffer read back `z` from a bus a testbench was driving. A pair of
+    /// copies cannot fix that, because each would carry the other's last
+    /// value back and hold it after the drive is released. Each side here
+    /// is driven with what every *other* driver of the far side puts on
+    /// it, which is the resolution a `tran` makes. A connection that is
+    /// not one part of one net keeps the one-way driver.
+    fn join_inout(&mut self, inst: InstId, child: SigId, width: u32, e: ExprId) -> bool {
+        let Some(Target::Sig {
+            sig,
+            lo,
+            width: part,
+        }) = self.target_from_expr(inst, e)
+        else {
+            return false;
+        };
+        if part != width || sig == child {
+            return false;
+        }
+        let up = DriverId::at(self.drivers.len());
+        let down = DriverId::at(self.drivers.len() + 1);
+        self.drivers.push(Driver {
+            inst,
+            source: DriverSource::Others {
+                sig: child,
+                lo: 0,
+                width,
+                except: down,
+            },
+            target: Target::Sig { sig, lo, width },
+            delay: 0,
+            contrib: Vec::new(),
+            scheduled: false,
+        });
+        self.drivers.push(Driver {
+            inst,
+            source: DriverSource::Others {
+                sig,
+                lo,
+                width,
+                except: up,
+            },
+            target: Target::Sig {
+                sig: child,
+                lo: 0,
+                width,
+            },
+            delay: 0,
+            contrib: Vec::new(),
+            scheduled: false,
+        });
+        true
     }
 
     /// Allocates a signal. Wires start at `z` (undriven), registers and
@@ -662,6 +741,7 @@ impl<'d> Simulator<'d> {
         });
         self.sig_fanout.push(Vec::new());
         self.sig_drivers.push(Vec::new());
+        self.sig_others.push(Vec::new());
         self.sig_waiters.push(Vec::new());
         self.sig_callbacks.push(Vec::new());
         id
@@ -859,6 +939,16 @@ impl<'d> Simulator<'d> {
                 DriverSource::Expr(e) => self.fanout_expr(inst, e, Consumer::Driver(did)),
                 DriverSource::Sig(sig) => {
                     self.add_fanout(sig, Consumer::Driver(did), Polarity::Any)
+                }
+                DriverSource::Others { sig, .. } => {
+                    // A change of what one driver contributes need not
+                    // change the resolved value, and this source can change
+                    // all the same: `apply_driver` schedules it on every
+                    // contribution, and a register's value on a write.
+                    self.add_fanout(sig, Consumer::Driver(did), Polarity::Any);
+                    if !self.sig_others[sig.idx()].contains(&did) {
+                        self.sig_others[sig.idx()].push(did);
+                    }
                 }
                 DriverSource::Cell(c) => {
                     let cell = self.cells[c.idx()].cell;

@@ -251,6 +251,9 @@ pub struct Simulator<'d> {
     signals: Vec<value::Signal>,
     sig_fanout: Vec<Vec<elab::Fanout>>,
     sig_drivers: Vec<Vec<elab::DriverId>>,
+    /// The `DriverSource::Others` drivers that read each signal's
+    /// contributions.
+    sig_others: Vec<Vec<elab::DriverId>>,
     sig_waiters: Vec<Vec<(ProcId, u32)>>,
     sig_callbacks: Vec<Vec<usize>>,
     callbacks: Vec<ChangeCallback>,

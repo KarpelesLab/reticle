@@ -717,7 +717,7 @@ impl<'d> Lowerer<'d> {
             }
             match source {
                 DriverSource::Expr(e) => expr_reads(m, e, &mut nets, &mut mems),
-                DriverSource::Sig(_) => {}
+                DriverSource::Sig(_) | DriverSource::Others { .. } => {}
                 DriverSource::Cell(c) => {
                     for (_, e) in &self.sim.cells[c.idx()].cell.inputs {
                         expr_reads(m, *e, &mut nets, &mut mems);
@@ -766,7 +766,7 @@ impl<'d> Lowerer<'d> {
         match source {
             DriverSource::Expr(e) => m.exprs.get(e).map(|n| n.span),
             DriverSource::Cell(c) => Some(self.sim.cells[c.idx()].cell.span),
-            DriverSource::Sig(_) => {
+            DriverSource::Sig(_) | DriverSource::Others { .. } => {
                 let mut sigs = Vec::new();
                 target.sigs(&mut sigs);
                 sigs.first().map(|s| self.sim.signals[s.idx()].span)
@@ -1250,6 +1250,11 @@ impl<'d> Lowerer<'d> {
                 Some(v) => v,
                 None => return,
             },
+            // Half of an `inout` joined to part of a net: wire resolution.
+            DriverSource::Others { .. } => {
+                self.err(unit.label.clone(), Reason::Tristate, Some(unit.span));
+                return;
+            }
         };
         self.drive_target(&mut ctx, &target, value);
     }

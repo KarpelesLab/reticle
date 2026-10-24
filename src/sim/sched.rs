@@ -565,6 +565,12 @@ impl<'d> Simulator<'d> {
                 self.logic_for_target(&target, v)
             }
             DriverSource::Sig(s) => self.signals[s.idx()].effective().clone(),
+            DriverSource::Others {
+                sig,
+                lo,
+                width,
+                except,
+            } => self.others(sig, except).slice(lo + width - 1, lo),
             DriverSource::Cell(c) => match self.eval_comb_cell(c) {
                 Some(v) => v,
                 None => return,
@@ -576,6 +582,26 @@ impl<'d> Simulator<'d> {
         } else {
             self.apply_driver(d, value, stores);
         }
+    }
+
+    /// What every driver of `sig` but `except` resolves to; for a
+    /// register, which has no contributions, its value.
+    fn others(&self, sig: SigId, except: DriverId) -> Logic {
+        let s = &self.signals[sig.idx()];
+        if s.kind != crate::ir::NetKind::Wire {
+            return s.effective().clone();
+        }
+        let contribs = self.sig_drivers[sig.idx()]
+            .iter()
+            .filter(|dd| **dd != except)
+            .filter_map(|dd| {
+                self.drivers[dd.idx()]
+                    .contrib
+                    .iter()
+                    .find(|(x, _)| *x == sig)
+                    .map(|(_, v)| v)
+            });
+        resolve_all(s.width(), contribs)
     }
 
     /// Applies a driver's value: wires receive a contribution and are
@@ -622,6 +648,12 @@ impl<'d> Simulator<'d> {
                     *old = contrib;
                 }
                 None => dr.contrib.push((sig, contrib)),
+            }
+            for i in 0..self.sig_others[sig.idx()].len() {
+                let other = self.sig_others[sig.idx()][i];
+                if other != d {
+                    self.schedule_consumer(Consumer::Driver(other));
+                }
             }
             let width = self.signals[sig.idx()].width();
             let resolved = {
