@@ -31,7 +31,8 @@ examples/husky/
   probe/              a small design on NewAE's USB bus, and the script that checks it on a part
   xpm_memory_sdpram.v Vivado's simple dual-port RAM macro, as NewAE's own FIFOs use it
   sim/                NewAE's own testbench in Reticle's simulator: models of the
-                      Xilinx primitives and the script that runs `cwhusky_tb.v`
+                      Xilinx primitives and cells, and the scripts that run
+                      `cwhusky_tb.v` on NewAE's RTL and on Reticle's netlist
 ```
 
 ## Simulating NewAE's own testbench
@@ -52,6 +53,43 @@ from UG472, UG953 and XAPP888 rather than Vivado's unisims; their header
 says what each leaves out. As of 2026-10-23 a capture of 90 samples reads
 back all 90 correctly, and one of the testbench's checks fails: the slow
 FIFO is not empty at the end of the read cycle.
+
+### On Reticle's own netlist
+
+The same testbench runs on the netlist Reticle maps the design to, the
+`cwhusky_top.v` a `build_plus.sh` output directory gets about a minute
+into the build, before placement:
+
+```sh
+examples/husky/sim/run_cwhusky_netlist.sh husky out/cwhusky_top.v /tmp/net.log
+```
+
+It takes about three and a half minutes. The cells are modelled by
+`sim/xilinx_cells.v` (flip-flops, LUT6, CARRY4, RAM64X1D, RAMB18E1 in the
+one configuration the mapper writes, and the I/O buffers; checked by
+`sim/xilinx_cells_tb.v`), the clocking primitives by
+`sim/xilinx_primitives.v`, and the FIFO Generator cores by this directory's
+stand-ins, as in the build. The script rewrites two things on the way in,
+and its header says which and why. `SIM_ARGS="--vcd f"` passes options to
+the simulator for either script.
+
+This is what found why no capture finished on the part (2026-10-24). Run
+on the netlist, the testbench failed as the part did: the fast FIFO full,
+the slow one empty, nothing read back. The first signal whose waveform
+left the RTL's was `presamp_running`, at time zero: `reg presamp_running
+= 1'b0;` in `fifo_top_husky.v`, set synchronously and so mapped to an
+`FDSE`, whose own power-up value is 1. Reticle's flip-flop mapper gave
+every flip-flop its primitive's default and ignored the register's: 540
+of them in this design. Nothing clears `presamp_running` when there are
+no presamples, and it holds shut the gate that moves samples from the
+fast FIFO to the slow one. With the mapper fixed, the netlist reads all
+90 samples, as the RTL does, and fails only the RTL's one check.
+
+Three things in the simulator and the netlist writer had to be fixed
+before the netlist would run at all, each with its own test: a port list
+entry `.a(a_pad)` (the netlist's top level), a bus joined to `inout`
+ports bit by bit (every bidirectional buffer), and the writer joining a
+bidirectional pad's pins to its port with a one-way `assign`.
 
 ## Building
 
@@ -289,6 +327,23 @@ The trace front end's clock is still not alive, and a clock looped out
 on the AUX connector and back reads nothing here where NewAE's reads it.
 ECHO right in 200 is one build's luck, not a fix: the paths inside the
 design that made it lose a bit are as long as they were.
+
+**Capture** (2026-10-24), the first build with flip-flops powering up as
+their registers say. Through NewAE's `chipwhisperer` API: the ADC's own
+test ramp (`scope.adc.test_mode`), a 10 MHz ADC clock, triggered on
+`tio4` held high, three captures each, a capture exact when it is all
+there and every step between samples is the same:
+
+| samples | 8 bits | 12 bits |
+|---|---|---|
+| 1,000 | 3 of 3 exact | 3 of 3 exact |
+| 30,000 | 3 of 3 exact | 1 of 3: samples repeated and skipped |
+| 131,070 | 1 of 3: samples repeated and skipped | none: slow FIFO underflow and overflow |
+
+Short captures are right; long ones, which keep the slow FIFO filling and
+draining while the bus reads it, lose and repeat words. The routed
+estimate still puts `clk_usb`'s latest endpoints in the capture logic at
+13 to 15 ns of 10.4, which is the next suspect.
 
 ## Status
 

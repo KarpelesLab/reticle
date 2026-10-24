@@ -42,7 +42,7 @@ sources=$(sed -n '/exec "\$reticle" fpga/,$p' "$here/build_plus.sh" \
 
 cd "$fpga/sim"
 # shellcheck disable=SC2086
-exec "$reticle" sim --quiet --sv --top cwhusky_tb \
+exec "$reticle" sim --quiet --sv --top cwhusky_tb ${SIM_ARGS:-} \
     --define __ICARUS__ --define PLUS --define ESAD --define INTERVAL_MATCHING=1 \
     --define TRACE --define NOXILINXFIFO --define REGULARFIFO --define NOFASTFIFO \
     --include-dir "$fpga/hdl" --include-dir "$fpga/tracewhisperer/hdl" \

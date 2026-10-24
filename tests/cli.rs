@@ -1022,6 +1022,26 @@ fn the_xilinx_primitive_models_pass_their_testbench() {
     assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
 }
 
+/// **The Xilinx cell models do what UG953 says**, by their own testbench:
+/// the flip-flops' power-up values and controls, LUT6, CARRY4, RAM64X1D,
+/// RAMB18E1 and IOBUF. They are what lets NewAE's Husky testbench run on
+/// the netlist Reticle maps it to, which is how a flip-flop powering up at
+/// the wrong value was found. The testbench's header says what it would
+/// and would not catch.
+#[cfg(feature = "sim")]
+#[test]
+fn the_xilinx_cell_models_pass_their_testbench() {
+    let (code, stdout, stderr) = run(&[
+        "sim",
+        "--quiet",
+        "examples/husky/sim/xilinx_cells_tb.v",
+        "examples/husky/sim/xilinx_cells.v",
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    assert!(!stdout.contains("FAIL"), "{stdout}");
+}
+
 #[test]
 fn sim_honours_the_time_limit() {
     let (code, stdout, stderr) = run(&["sim", "--until", "50", "testdata/sim/counter.rtl"]);
