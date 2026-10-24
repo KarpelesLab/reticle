@@ -651,6 +651,10 @@ fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
     let en = cell.input("en");
     let rst = cell.input("rst");
     let width = module.nets.get(q).and_then(|n| n.ty.width()).unwrap_or(1);
+    let init = match module.nets.get(q).and_then(|n| n.attrs.get("init")) {
+        Some(AttrValue::Const(c)) => Some(c.clone()),
+        _ => None,
+    };
 
     // Every bit must be mappable before anything is rewritten, so that a
     // register with one impossible bit is reported whole rather than left
@@ -708,6 +712,7 @@ fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
         cell.inputs = inputs;
         cell.outputs = vec![(out, q)];
         set_params(cell, bel);
+        set_init(cell, bel, init.as_ref(), 0);
         ctx.report.bump(&bel.name, 1);
         return false;
     }
@@ -733,6 +738,7 @@ fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
             span,
         );
         set_params(&mut module.cells[new], bel);
+        set_init(&mut module.cells[new], bel, init.as_ref(), bit);
         ctx.report.bump(&bel.name, 1);
         bits.push(net_expr(module, net, span));
     }
@@ -777,6 +783,35 @@ fn connect_control(
         if let Some(value) = value {
             inputs.push((Name::new(port), value));
         }
+    }
+}
+
+/// Gives a flip-flop primitive the power-up value its register declares,
+/// bit `bit` of the `init` its output net carries, in the one-bit `INIT`
+/// parameter the device declares for it; a primitive with no such
+/// parameter, or a bit the register leaves unknown, keeps the device's
+/// default.
+///
+/// The defaults are the primitives' own — on the 7 series `FDRE` and
+/// `FDCE` power up at 0, `FDSE` and `FDPE` at 1 — and until this every
+/// flip-flop took them, so a register's declared initial value was lost
+/// whenever it disagreed. NewAE's Husky declares `reg presamp_running =
+/// 1'b0;` and sets it synchronously, which maps to an `FDSE`: it came up
+/// at 1, which with no presamples it is never cleared from, and that shut
+/// the gate every ADC sample leaves the fast FIFO through, so no capture
+/// ever finished on the part.
+fn set_init(cell: &mut Cell, bel: &BelKind, init: Option<&Const>, bit: u32) {
+    let Some(init) = init else { return };
+    let value = match init.bit(bit) {
+        Bit::One => Const::ones(1),
+        Bit::Zero => Const::zero(1),
+        _ => return,
+    };
+    let declared = bel.params.iter().any(|(key, value)| {
+        key == "INIT" && matches!(value, AttrValue::Const(c) if c.width() == 1)
+    });
+    if declared {
+        cell.params.set(Name::new("INIT"), AttrValue::Const(value));
     }
 }
 
@@ -1449,6 +1484,50 @@ mod tests {
             None,
             "the data input is still the constant it was"
         );
+    }
+
+    /// A register's declared power-up value reaches its primitive's `INIT`.
+    /// Two bits of a synchronously *set* register, so each becomes an
+    /// `FDSE`, whose own default is 1: bit 0 is declared 0 and must say
+    /// so, bit 1 is declared 1. The flip-flop mapper used to copy only the
+    /// device's defaults, and NewAE's Husky came up with a register its
+    /// source starts at 0 holding 1, which stopped every capture. Would
+    /// catch the `init` ignored again or taken from the wrong bit; would
+    /// not catch a bitstream writer that dropped the parameter, which
+    /// `fpga_xray` pins.
+    #[test]
+    fn a_registers_initial_value_becomes_its_flip_flops_init() {
+        let (mut design, top, _map) = design_with(
+            CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: Some(crate::ir::Reset {
+                    asynchronous: false,
+                    active_high: true,
+                    value: Const::ones(2),
+                }),
+            },
+            2,
+        );
+        let q = design.module(top).net_by_name("q").unwrap();
+        design.modules[top].nets[q]
+            .attrs
+            .set("init", AttrValue::Const(Const::from_u64(0b10, 2)));
+        let mut diags = Diagnostics::new();
+        let device = target("xc7a35t-cpg236").unwrap();
+        map_cells(&mut design, top, device, &mut diags);
+        let init = |name: &str| {
+            let (_, cell) = design
+                .module(top)
+                .cells
+                .iter()
+                .find(|(_, c)| c.name.as_str() == name)
+                .unwrap();
+            assert!(matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == "FDSE"));
+            cell.params.get("INIT").cloned()
+        };
+        assert_eq!(init("r$ff0"), Some(AttrValue::Const(Const::zero(1))));
+        assert_eq!(init("r$ff1"), Some(AttrValue::Const(Const::ones(1))));
     }
 
     #[test]
