@@ -226,6 +226,11 @@ Options:
                      quicker; docs/fpga-trellis.md has what the
                      wirelength does at each. For iterating on hardware,
                      not for the bitstream you keep.
+  --timing-endpoints <f>
+                     With --timing-driven and --bitstream, write every
+                     endpoint the routed estimate puts late to this file,
+                     latest first, each with the path to it: every pin, its
+                     arrival and its tile.
   --place-schedule   Print the annealing schedule as it ran, one line per
                      temperature: the move window, the moves tried and
                      accepted, and the wirelength at the end of the step.
@@ -740,6 +745,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
+                "timing-endpoints",
             ],
             flags: &[
                 "sv",
@@ -3855,6 +3861,40 @@ fn write_xc7_bitstream(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        // Every late endpoint's path, latest first, when asked for: the
+        // summary above says where, and this says through what.
+        if let Some(file) = args.option("timing-endpoints") {
+            let mut text = String::new();
+            for (domain, name) in domains.iter().enumerate() {
+                let late =
+                    reticle::fpga::place::late_paths(&netlist, paths, &wire, domain, usize::MAX);
+                for path in late {
+                    let Some(end) = path.last() else { continue };
+                    let required = paths.periods.get(domain).copied().unwrap_or(0.0);
+                    text.push_str(&format!(
+                        "{name} {:.2} ns (of {required:.2}) at {}.{}\n",
+                        end.arrival,
+                        netlist.instances[end.instance].name,
+                        netlist.pins[end.pin].role
+                    ));
+                    for step in &path {
+                        let pin = &netlist.pins[step.pin];
+                        let tile = placement
+                            .site_of(step.instance)
+                            .map(|site| graph.sites[site].tile)
+                            .map_or(String::new(), |(x, y)| format!(" @{x},{y}"));
+                        text.push_str(&format!(
+                            "    {:7.2} ns {}{}.{}{tile}\n",
+                            step.arrival,
+                            if pin.output { "" } else { "  <- " },
+                            netlist.instances[step.instance].name,
+                            pin.role
+                        ));
+                    }
+                }
+            }
+            std::fs::write(file, text).map_err(|e| format!("cannot write `{file}`: {e}"))?;
+        }
         // Each pad's own paths, which a bus needs every one of in time.
         let pads = reticle::fpga::place::pad_paths(&netlist, paths, &wire);
         let mut late: Vec<&reticle::fpga::place::PadPath> =

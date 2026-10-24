@@ -7061,9 +7061,48 @@ pub fn worst_path(
             }
         }
     }
-    let Some((mut pin, at)) = end else {
+    let Some((pin, at)) = end else {
         return Vec::new();
     };
+    trace_back(netlist, timing, wire, &arrival, pin, at)
+}
+
+/// The paths to every endpoint of `domain` later than it is allowed, the
+/// latest first, at most `limit` of them, each as [`worst_path`] traces
+/// one: back from the endpoint through the latest input at each cell.
+pub fn late_paths(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+    domain: usize,
+    limit: usize,
+) -> Vec<Vec<PathStep>> {
+    let order = timing_order(netlist, timing);
+    let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+    let mut late: Vec<(usize, f64, f64)> = endpoint_arrivals(netlist, timing, wire)
+        .into_iter()
+        .filter(|(_, d, at, required)| *d == domain && at > required)
+        .map(|(pin, _, at, required)| (pin, at, at - required))
+        .collect();
+    late.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+    late.truncate(limit);
+    late.into_iter()
+        .map(|(pin, at, _)| trace_back(netlist, timing, wire, &arrival, pin, at))
+        .collect()
+}
+
+/// The path back from endpoint `pin`, which the signal reaches at `at`,
+/// through the latest input of each cell; see [`worst_path`].
+fn trace_back(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+    arrival: &[f64],
+    mut pin: usize,
+    at: f64,
+) -> Vec<PathStep> {
+    let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
+    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
     let mut steps = vec![PathStep {
         instance: netlist.pins[pin].instance,
         pin,
@@ -7098,8 +7137,8 @@ pub fn worst_path(
             .filter(|p| !netlist.pins[*p].output && class(*p) == PinTiming::Through)
             .filter(|p| reaches_output(timing, *p, j))
             .max_by(|a, b| {
-                input_arrival(netlist, &arrival, &wire_of, *a)
-                    .total_cmp(&input_arrival(netlist, &arrival, &wire_of, *b))
+                input_arrival(netlist, arrival, &wire_of, *a)
+                    .total_cmp(&input_arrival(netlist, arrival, &wire_of, *b))
             })
         else {
             break;
@@ -7107,7 +7146,7 @@ pub fn worst_path(
         steps.push(PathStep {
             instance,
             pin: input,
-            arrival: input_arrival(netlist, &arrival, &wire_of, input),
+            arrival: input_arrival(netlist, arrival, &wire_of, input),
             wire: wire_of(input),
         });
         pin = input;
@@ -7623,6 +7662,34 @@ mod tests {
             );
         }
         assert!(worst_path(&netlist, &timing, &wire, 1).is_empty());
+    }
+
+    /// **Late paths are the late endpoints' own.** The chain of 5 ns, in
+    /// time at 1.0, 0.5 and 2.0 ns of connection (4.05 ns) and late at
+    /// 3.0 each (9.55 ns): in time it has none, late it has its one
+    /// endpoint's, the same path [`worst_path`] traces. Would catch an
+    /// endpoint in time listed or a late one left out, or the path traced
+    /// differently from the worst one; would not catch the order of
+    /// several late endpoints, which one endpoint cannot show.
+    #[test]
+    fn late_paths_are_the_late_endpoints_own() {
+        let (_, netlist, _, timing) = timed_chain();
+        let mut wire = vec![0.0; netlist.pins.len()];
+        for (signal, delay) in netlist.signals.iter().zip([1.0, 0.5, 2.0]) {
+            wire[signal.sinks[0]] = delay;
+        }
+        assert!(late_paths(&netlist, &timing, &wire, 0, usize::MAX).is_empty());
+        for signal in &netlist.signals {
+            wire[signal.sinks[0]] = 3.0;
+        }
+        let late = late_paths(&netlist, &timing, &wire, 0, usize::MAX);
+        assert_eq!(late.len(), 1);
+        assert_eq!(late[0], worst_path(&netlist, &timing, &wire, 0));
+        assert!(
+            (late[0].last().unwrap().arrival - 9.55).abs() < 1e-9,
+            "{late:?}"
+        );
+        assert!(late_paths(&netlist, &timing, &wire, 0, 0).is_empty());
     }
 
     /// **A path is critical against the latest path of its own group.**
