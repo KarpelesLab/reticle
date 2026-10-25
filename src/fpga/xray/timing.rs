@@ -532,16 +532,22 @@ pub fn place_timing(
                 for pin in &inst.pins {
                     let role = netlist.pins[*pin].role.as_str();
                     pins[*pin] = match role {
-                        "daddr" | "di" | "den" | "dwe" => PinTiming::End,
-                        "do" | "drdy" => PinTiming::Start,
+                        "daddr" | "di" | "den" | "dwe" | "psen" | "psincdec" => PinTiming::End,
+                        "do" | "drdy" | "psdone" => PinTiming::Start,
                         _ => PinTiming::Ignored,
                     };
                 }
-                let dclk = inst
-                    .pins
-                    .iter()
-                    .find(|p| netlist.pins[**p].role == "dclk")
-                    .and_then(|p| netlist.pins[*p].signal);
+                // The fine phase shift is the same kind of port on `PSCLK`,
+                // and the glitch generator's MMCMs on the Husky Plus have
+                // it on `clk_usb` with the register port. One domain an
+                // instance: `DCLK`'s, or `PSCLK`'s when it has no `DCLK`.
+                let clock_of_role = |role: &str| {
+                    inst.pins
+                        .iter()
+                        .find(|p| netlist.pins[**p].role == role)
+                        .and_then(|p| netlist.pins[*p].signal)
+                };
+                let dclk = clock_of_role("dclk").or_else(|| clock_of_role("psclk"));
                 if let Some(c) = dclk {
                     domain[index] = domain_of(clock_of(c));
                 }
@@ -774,7 +780,8 @@ mod tests {
     /// whose `CLKIN2` and `CLKINSEL` are tied off, reference clock `ref`,
     /// register clock `bus`, written by a flip-flop on `bus` and read back
     /// by another. The MMCM is in `bus`'s domain, its address an endpoint
-    /// and its data out a launch at the block RAM's figure, and its clock
+    /// and its data out a launch at the block RAM's figure, its fine phase
+    /// shift's enable an endpoint and its done a launch, and its clock
     /// output no path at all. Its clock used to be the first pin named for
     /// one, `CLKIN2`, which carries nothing, so the whole port was
     /// untimed. Would catch the domain taken from another pin again, or a
@@ -811,6 +818,8 @@ mod tests {
             pin(2, "daddr", false, Some(2)),
             pin(2, "do", true, Some(3)),
             pin(2, "out0", true, Some(4)),
+            pin(2, "psen", false, Some(2)),
+            pin(2, "psdone", true, Some(5)),
             pin(3, "clk", false, Some(1)),
             pin(3, "q", true, Some(2)),
             pin(4, "clk", false, Some(1)),
@@ -825,16 +834,17 @@ mod tests {
             instances: vec![
                 instance(0, "ref$io0", "io", vec![0]),
                 instance(1, "bus$io0", "io", vec![1]),
-                instance(2, "mmcm", "mmcm", vec![2, 3, 4, 5, 6, 7, 8]),
-                instance(3, "addr", "ff", vec![9, 10]),
-                instance(4, "back", "ff", vec![11, 12]),
+                instance(2, "mmcm", "mmcm", vec![2, 3, 4, 5, 6, 7, 8, 9, 10]),
+                instance(3, "addr", "ff", vec![11, 12]),
+                instance(4, "back", "ff", vec![13, 14]),
             ],
             signals: vec![
                 signal("ref", 0, vec![4]),
-                signal("bus", 1, vec![5, 9, 11]),
-                signal("addr", 10, vec![6]),
-                signal("do", 7, vec![12]),
+                signal("bus", 1, vec![5, 11, 13]),
+                signal("addr", 12, vec![6, 9]),
+                signal("do", 7, vec![14]),
                 signal("out0", 8, vec![]),
+                signal("psdone", 10, vec![]),
             ],
             pins,
             off_fabric: Vec::new(),
@@ -862,6 +872,8 @@ mod tests {
         assert_eq!(timing.pins[6], PinTiming::End, "the address");
         assert_eq!(timing.pins[7], PinTiming::Start, "the data out");
         assert_eq!(timing.pins[8], PinTiming::Ignored, "the clock out");
+        assert_eq!(timing.pins[9], PinTiming::End, "the phase shift's enable");
+        assert_eq!(timing.pins[10], PinTiming::Start, "the phase shift's done");
         assert_eq!(timing.pins[4], PinTiming::Ignored, "the reference clock");
         assert!((timing.launch[2] - BRAM_LAUNCH).abs() < 1e-9);
         assert!((timing.capture[2] - BRAM_SETUP).abs() < 1e-9);
