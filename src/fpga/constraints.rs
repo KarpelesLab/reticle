@@ -31,6 +31,7 @@
 //!    set_false_path -from rst -to *
 //!    set_multicycle_path 2 -setup -from mul_a -to mul_q
 //!    set_input_delay -clock sys 12.4 bus_rd bus_addr*
+//!    set_max_delay 15 -from bus_addr_q*
 //!    ```
 //!
 //! 2. Attributes on the IR, read by [`Constraints::merge_attrs`]: `(* PIN
@@ -318,6 +319,20 @@ pub struct MulticyclePath {
     pub path: PathSpec,
 }
 
+/// Paths allowed a delay of their own instead of their clock's period:
+/// SDC's `set_max_delay`. Written with one end, `-from` or `-to`; the
+/// timing-driven 7-series flow applies it to the paths from or to the
+/// instances that end names, and keeps one with both ends without
+/// applying it, as it does a multicycle path's (see
+/// `xray::timing::place_timing`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaxDelay {
+    /// The delay the paths may take, ns.
+    pub delay_ns: f64,
+    /// Which paths.
+    pub path: PathSpec,
+}
+
 /// When an input port's data arrives, after an edge of the clock that
 /// launched it: SDC's `set_input_delay -max`.
 ///
@@ -367,6 +382,8 @@ pub struct Constraints {
     pub false_paths: Vec<PathSpec>,
     /// Paths given more than one period.
     pub multicycle_paths: Vec<MulticyclePath>,
+    /// Paths given a delay of their own.
+    pub max_delays: Vec<MaxDelay>,
     /// When input ports' data arrives, against their clocks.
     pub input_delays: Vec<InputDelay>,
     /// Declared clock domains.
@@ -389,6 +406,7 @@ impl Constraints {
             && self.clocks.is_empty()
             && self.false_paths.is_empty()
             && self.multicycle_paths.is_empty()
+            && self.max_delays.is_empty()
             && self.clock_domains.is_empty()
     }
 
@@ -506,6 +524,7 @@ impl Constraints {
         }
         self.false_paths.extend(other.false_paths);
         self.multicycle_paths.extend(other.multicycle_paths);
+        self.max_delays.extend(other.max_delays);
         for domain in other.clock_domains {
             if !self.clock_domains.iter().any(|d| d.name == domain.name) {
                 self.clock_domains.push(domain);
@@ -1093,6 +1112,23 @@ impl Constraints {
             }
             check_path(&path.path, &names, diags);
         }
+        for delay in &self.max_delays {
+            if delay.delay_ns.is_nan() || delay.delay_ns <= 0.0 {
+                diags.push(
+                    Diagnostic::error("a maximum delay must be a positive number of ns")
+                        .with_code(BAD_CLOCK)
+                        .with_span(delay.path.span),
+                );
+            }
+            if delay.path.from.is_none() && delay.path.to.is_none() {
+                diags.push(
+                    Diagnostic::error("`set_max_delay` needs `-from` or `-to`")
+                        .with_code(BAD_CLOCK)
+                        .with_span(delay.path.span),
+                );
+            }
+            check_path(&delay.path, &names, diags);
+        }
         let inputs: Vec<String> = module
             .ports
             .iter()
@@ -1353,6 +1389,14 @@ impl Constraints {
                 self.path_options(&path.path)
             );
         }
+        for delay in &self.max_delays {
+            let _ = writeln!(
+                out,
+                "set_max_delay {:.3}{}",
+                delay.delay_ns,
+                self.path_options(&delay.path)
+            );
+        }
         for delay in &self.input_delays {
             let _ = writeln!(
                 out,
@@ -1401,7 +1445,7 @@ impl Constraints {
                 self.keep_hierarchy.len()
             ));
         }
-        let paths = self.false_paths.len() + self.multicycle_paths.len();
+        let paths = self.false_paths.len() + self.multicycle_paths.len() + self.max_delays.len();
         if paths > 0 {
             dropped.push(format!("{paths} path exception(s)"));
         }
@@ -1919,6 +1963,7 @@ impl<'a> LineParser<'a> {
                 }
             }
             "set_multicycle_path" => self.set_multicycle_path(out),
+            "set_max_delay" => self.set_max_delay(out),
             "set_input_delay" => self.set_input_delay(out),
             "clock_domain" => self.clock_domain(out),
             other => {
@@ -2106,6 +2151,21 @@ impl<'a> LineParser<'a> {
         out.multicycle_paths.push(MulticyclePath {
             cycles,
             hold,
+            path: path_spec(&options, span),
+        });
+    }
+
+    fn set_max_delay(&mut self, out: &mut Constraints) {
+        let (options, words) = self.split(&["from", "to"], &[]);
+        if !self.expect_count(&words, 1, "`set_max_delay <ns> -from <glob> | -to <glob>`") {
+            return;
+        }
+        let Some(delay_ns) = self.float(&words[0]) else {
+            return;
+        };
+        let span = self.line.span;
+        out.max_delays.push(MaxDelay {
+            delay_ns,
             path: path_spec(&options, span),
         });
     }
@@ -2605,6 +2665,26 @@ frobnicate
         let text = diags.render(&map);
         assert!(text.contains("overriding pin 21"), "{text}");
         assert_eq!(diags.error_count(), 0);
+    }
+
+    /// **`set_max_delay` takes a delay and one end.** Both forms parse to
+    /// the delay and the glob, a line with neither end is an error, and
+    /// the SDC written carries it. Would catch the command unknown (as it
+    /// was), the delay or the end lost, or a constraint with no end
+    /// accepted; would not catch it misapplied, which `xray::timing`'s
+    /// input-delay test checks.
+    #[test]
+    fn set_max_delay_takes_a_delay_and_one_end() {
+        let (c, diags, _) = parse("set_max_delay 15 -from d\nset_max_delay 12.5 -to q\n");
+        assert_eq!(diags.error_count(), 0);
+        assert_eq!(c.max_delays.len(), 2);
+        assert!((c.max_delays[0].delay_ns - 15.0).abs() < 1e-12);
+        assert_eq!(c.max_delays[0].path.from.as_deref(), Some("d"));
+        assert_eq!(c.max_delays[1].path.to.as_deref(), Some("q"));
+        let sdc = c.write_sdc(target("xc7a35t-cpg236").unwrap());
+        assert!(sdc.contains("set_max_delay 15.000 -from"), "{sdc}");
+        let text = check("set_max_delay 15\n", "generic");
+        assert!(text.contains("needs `-from` or `-to`"), "{text}");
     }
 
     #[test]

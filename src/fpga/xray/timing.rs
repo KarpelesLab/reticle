@@ -592,6 +592,34 @@ pub fn place_timing(
             }
         }
     }
+    // A maximum delay with one end gives the paths from or to the
+    // instances it names that delay instead of their clock's period: their
+    // launch is that much earlier, or their capture that much later, which
+    // in a block-based analysis is exact for one end. NewAE give the Husky
+    // Plus's bus 15 ns where `clk_usb` is 10.4, through the registers its
+    // address and FIFO count are held in and the data pads' tristates.
+    // A pad's or anything else's not in one clock's domain is left alone.
+    for delay in &constraints.max_delays {
+        let (glob, from) = match (&delay.path.from, &delay.path.to) {
+            (Some(g), None) => (g, true),
+            (None, Some(g)) => (g, false),
+            _ => continue,
+        };
+        for i in 0..n {
+            let PathDomain::Clock(d) = domain[i] else {
+                continue;
+            };
+            if !answers(glob, i) {
+                continue;
+            }
+            let relief = delay.delay_ns - periods[d];
+            if from {
+                launch[i] -= relief;
+            } else {
+                capture[i] -= relief;
+            }
+        }
+    }
     (
         PlaceTiming {
             pins,
@@ -696,7 +724,9 @@ mod tests {
     /// clock's own pad in the clock's domain. Would catch the delay ignored,
     /// applied to the wrong pad, applied without the clock's arrival taken
     /// off, or left in every domain, or a clock's pad launching in every
-    /// domain (as it did); would not
+    /// domain (as it did), or a maximum delay not moving the launch of the
+    /// pad it is from or the capture of the register it is to by its
+    /// difference from the period, or moving another's; would not
     /// catch [`CLOCK_INSERTION`] being the wrong number for a part, which
     /// only a part says.
     #[test]
@@ -774,6 +804,23 @@ mod tests {
         // The clock's own pad launches what it carries in its clock's
         // domain alone.
         assert_eq!(timing.domain[0], PathDomain::Clock(0));
+
+        // A maximum delay of 15 ns from `rd` launches it five earlier than
+        // its 10 ns clock would; one to `q` captures there five later.
+        let relaxed = Constraints::parse(
+            "create_clock -name bus -period 10 clk\nset_input_delay -clock bus 12 rd\n\
+             set_max_delay 15 -from rd\nset_max_delay 15 -to q\n",
+            file,
+            &mut diags,
+        );
+        assert!(!diags.has_errors());
+        let (eased, _) = place_timing(&design, top, &netlist, &relaxed);
+        assert!((timing.launch[2] - eased.launch[2] - 5.0).abs() < 1e-9);
+        assert!((timing.capture[4] - eased.capture[4] - 5.0).abs() < 1e-9);
+        assert!(
+            (timing.launch[3] - eased.launch[3]).abs() < 1e-9,
+            "`data` is untouched"
+        );
     }
 
     /// **A clock manager's register port is timed on its `DCLK`.** An MMCM
