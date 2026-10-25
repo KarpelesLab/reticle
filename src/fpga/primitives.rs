@@ -163,6 +163,16 @@ pub struct MapOptions {
     pub map_carry: bool,
     /// The narrowest adder worth a carry chain.
     pub min_carry_width: u32,
+    /// The narrowest subtraction worth a carry chain, on a family whose
+    /// chain is a wide element (`subtract_on_the_chain`). Not
+    /// `min_carry_width`: on the ChipWhisperer-Husky Plus with every
+    /// subtraction of four bits and more on the chain — 256 twelve-bit
+    /// differences in its SAD engine among them — the route was still 859
+    /// nodes overused after 24 passes and 98 minutes, searching two
+    /// billion nodes a pass, and was stopped; at sixteen, which takes the
+    /// logic analyser's 32-bit compare, it converged in 19 minutes, and the
+    /// analyser's clock domain went from 9.2 to 6.3 ns (2026-10-25).
+    pub min_subtract_carry_width: u32,
 }
 
 impl Default for MapOptions {
@@ -178,6 +188,7 @@ impl Default for MapOptions {
             global_buffer_threshold: 8,
             map_carry: true,
             min_carry_width: 4,
+            min_subtract_carry_width: 16,
         }
     }
 }
@@ -3065,8 +3076,10 @@ impl Mapper<'_> {
     /// captured nothing at the 384 MHz NewAE's software runs it at. A
     /// 32-bit `b - 1` alone was 38 tables seven deep.
     ///
-    /// Only for a wide carry element, as the sharing, and only where both
-    /// operands are as wide as the result; anything else stays as it is.
+    /// Only for a wide carry element, as the sharing, only at
+    /// [`MapOptions::min_subtract_carry_width`] bits and more, and only
+    /// where both operands are as wide as the result; anything else stays
+    /// as it is.
     fn subtract_on_the_chain(&mut self, module: &mut Module) {
         let subs: Vec<CellId> = module
             .cells
@@ -3082,7 +3095,12 @@ impl Mapper<'_> {
                 continue;
             };
             let width = net_width(module, y);
-            if width < self.options.min_carry_width {
+            if width
+                < self
+                    .options
+                    .min_carry_width
+                    .max(self.options.min_subtract_carry_width)
+            {
                 continue;
             }
             let wide = |e: ExprId| module.exprs.get(e).and_then(|e| e.ty.width()) == Some(width);

@@ -880,17 +880,32 @@ fn a_chosen_sum_shares_a_chain_and_is_still_right() {
 /// right.** It used to stay in lookup tables on every family, which this
 /// test pinned; a 32-bit decrement was then 38 tables seven deep, and on
 /// the ChipWhisperer-Husky Plus a compare against one sixteen tables in a
-/// row. Now `a - b` is the adder `{a, 1} + {~b, 1}` without its low bit:
-/// one `CARRY4` per four bits of the one-wider sum. Simulated on every
-/// input here and proved at 16 and 32 bits in `mod proofs`. Would catch
-/// the complement or the carry in lost (every difference off by one or
-/// more), or the low lane kept; would not catch an ECP5 subtraction,
+/// row. Now `a - b` of `min_subtract_carry_width` bits or more (sixteen)
+/// is the adder `{a, 1} + {~b, 1}` without its low bit: one `CARRY4` per
+/// four bits of the one-wider sum. Narrower, it stays in tables, and is
+/// right there too. With the threshold lowered, the chain itself is
+/// simulated on every input at 4 and 8 bits here, and `mod proofs`
+/// proves it at the default 16 and at 32. Would catch the complement or
+/// the carry in lost (every difference off by one or more), the low lane
+/// kept, or the threshold ignored; would not catch an ECP5 subtraction,
 /// which still goes through lookup tables (`the_ecp5_chain_...`).
 #[test]
 fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
+    let low = MapOptions {
+        min_subtract_carry_width: 1,
+        ..MapOptions::default()
+    };
     for width in [4, 8] {
         check_exhaustively(Shape::Subtract, width, MapOptions::default());
         let (_, _, report) = mapped(Shape::Subtract, width, XC7, MapOptions::default());
+        assert_eq!(
+            report.count("CARRY4"),
+            0,
+            "{width} bits is below the threshold"
+        );
+
+        check_exhaustively(Shape::Subtract, width, low.clone());
+        let (_, _, report) = mapped(Shape::Subtract, width, XC7, low.clone());
         assert_eq!(
             report.count("CARRY4"),
             usize::try_from((width + 1).div_ceil(4)).unwrap(),
@@ -898,6 +913,8 @@ fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
             width + 1
         );
     }
+    let (_, _, report) = mapped(Shape::Subtract, 16, XC7, MapOptions::default());
+    assert_eq!(report.count("CARRY4"), 5, "sixteen bits is on the chain");
 }
 
 // ---------------------------------------------------------------------------

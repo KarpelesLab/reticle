@@ -2225,10 +2225,11 @@ fn the_console_maps_onto_the_artix7_for_the_basys3() {
     // 100 RAMB18E1, which `the_artix7_matches_its_datasheet_figures` in
     // tests/fpga_flow.rs holds to the datasheet.
     //
-    // The last measured footprint was 3876 LUT6, 170 CARRY4, 1082
-    // flip-flops and 39 RAMB18E1, depth 23, with subtractions on the
-    // chain too (2026-10-25); with adders alone it was 3786 LUT6 and 80
-    // CARRY4, the figures the comparison below is in. The same console behind
+    // The last measured footprint was 3920 LUT6, 90 CARRY4, 1082
+    // flip-flops and 39 RAMB18E1, with the subtractions of sixteen bits
+    // and more on the chain too (2026-10-25); with adders alone it was
+    // 3786 LUT6 and 80 CARRY4, depth 23, the figures the comparison below
+    // is in. The same console behind
     // `dvi_tx` on the same part is 4184 LUT6, 137 CARRY4, 1154
     // flip-flops and the same 39 RAMB18E1, depth 24 — a part it cannot
     // actually be built for, but a fair measure of what the three TMDS
@@ -2247,7 +2248,7 @@ fn the_console_maps_onto_the_artix7_for_the_basys3() {
         .map(|kind| flow.count(kind))
         .sum();
     assert!(
-        (120..=220).contains(&carries),
+        (55..=110).contains(&carries),
         "{carries} CARRY4 is not the carry chain this console has"
     );
     assert!(luts > 2500, "{luts} LUT6 is too few for a console");

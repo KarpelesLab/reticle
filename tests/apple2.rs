@@ -1322,15 +1322,15 @@ fn the_machine_maps_onto_the_artix7_for_the_basys3() {
     let brams = flow.count("RAMB18E1");
     // The adders are on the part's own carry chain, four bits to a
     // CARRY4, which is what `tests/fpga_carry.rs` checks the wiring of.
-    // The last measured footprint was 1879 LUT6 and 122 CARRY4, the
-    // subtractions on the chain too (2026-10-25); with adders alone it was
-    // 1877 LUT6 and 85 CARRY4 over 33 adders, and before the carry chain
-    // was mapped 1980 LUT6. The bounds are loose enough to survive an
+    // The last measured footprint was 1869 LUT6 and 86 CARRY4, with the
+    // subtractions of sixteen bits and more on the chain too (2026-10-25);
+    // with adders alone it was 1877 LUT6 and 85 CARRY4 over 33 adders, and
+    // before the carry chain was mapped 1980 LUT6. The bounds are loose enough to survive an
     // unrelated change and tight enough that the chain silently going
     // away fails here.
     let carries = flow.count("CARRY4");
     assert!(
-        (90..=160).contains(&carries),
+        (60..=120).contains(&carries),
         "{carries} CARRY4 is not the carry chain this machine has"
     );
     assert!(luts < 1980, "{luts} LUT6 is no better than no carry chain");
