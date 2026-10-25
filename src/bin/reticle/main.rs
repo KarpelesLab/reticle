@@ -218,6 +218,10 @@ Options:
                      does not reach: primitive inference and LUT covering
                      both happen after generic synthesis is over.
   --report           Print the mapping report to stderr
+  --place-seed <n>   The seed of the placer's random choices. Placements of
+                     one design under different seeds differ, and on a large
+                     design so does what they make of its timing: a way to
+                     try several and keep the best.
   --place-effort <n> How hard the annealer works: it tries n * cells^(4/3)
                      moves per temperature. The default is 10, which is
                      the high-quality setting of the schedule this uses
@@ -751,6 +755,7 @@ fn spec_for(usage: &str) -> Spec {
                 "borrow-clock",
                 "east",
                 "place-effort",
+                "place-seed",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -2692,6 +2697,11 @@ fn place_options(args: &Args) -> Result<reticle::fpga::place::PlaceOptions, Stri
         place_options.move_effort = text
             .parse::<usize>()
             .map_err(|_| format!("`--place-effort` wants a whole number, not `{text}`"))?;
+    }
+    if let Some(text) = args.option("place-seed") {
+        place_options.seed = text
+            .parse::<u64>()
+            .map_err(|_| format!("`--place-seed` wants a whole number, not `{text}`"))?;
     }
     if let Some(text) = args.option("place-fixed-cooling") {
         let factor = text

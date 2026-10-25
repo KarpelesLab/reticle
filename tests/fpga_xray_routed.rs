@@ -111,3 +111,55 @@ fn a_routed_netlist_computes_what_its_rtl_does() {
     assert!(run.status.success(), "{stderr}");
     assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
 }
+
+/// **`--place-seed` chooses the placement, and the same seed the same
+/// one.** `dut.v` built twice under one seed gives one bitstream, and under
+/// another a different one. Would catch the option ignored (every seed the
+/// same bitstream) or the placement depending on anything but the seed
+/// (two runs of one seed differing); would not catch a seed whose
+/// placement is worse, which is what the option is for finding out.
+#[test]
+fn a_placement_seed_chooses_the_placement() {
+    let Some(root) = chipdb() else { return };
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = here.join("testdata/fpga/routed");
+    if !dir.join("dut.v").is_file() {
+        eprintln!("skipped: `testdata/` is not in the published crate");
+        return;
+    }
+    let build = |seed: &str, run: &str| -> Vec<u8> {
+        let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("place-seed-{seed}-{run}"));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let bit = out.join("dut.bit");
+        let done = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args([
+                "fpga",
+                "--device",
+                "xc7a35t-cpg236",
+                "--chipdb",
+                &root,
+                "--top",
+                "dut",
+            ])
+            .args(["--place-seed", seed])
+            .arg("--constraints")
+            .arg(dir.join("dut.rcf"))
+            .arg("--output-dir")
+            .arg(&out)
+            .arg("--bitstream")
+            .arg(&bit)
+            .arg(dir.join("dut.v"))
+            .output()
+            .expect("the reticle binary runs");
+        assert!(
+            done.status.success(),
+            "{}",
+            String::from_utf8_lossy(&done.stderr)
+        );
+        std::fs::read(&bit).unwrap()
+    };
+    let (one, again, other) = (build("1", "a"), build("1", "b"), build("7", "a"));
+    assert!(one == again, "one seed, two bitstreams");
+    assert!(one != other, "two seeds, one bitstream");
+}
