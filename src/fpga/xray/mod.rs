@@ -2768,6 +2768,16 @@ pub const CLOCK_PREFERENCE: f32 = 0.05;
 /// costs a tile, so that the estimate stays under most journeys.
 pub const ROUTE_TILE_DELAY_PS: u32 = 25;
 
+/// The most a timing-driven route charges a critical connection for
+/// congestion, as a present factor (`route::Timing::present_cap`). On the
+/// ChipWhisperer-Husky Plus on 2026-10-25, one placement: uncapped, the
+/// latest `clk_usb` path was 17.14 ns, a single connection of 16.7 ns, in
+/// 35 passes and 1,629 s; capped at 300 the same, in 1,700 s; at 30,
+/// 16.63 ns with that connection off the list (its block's latest 15.0
+/// ns), in 70 passes and 1,423 s. A setting tried twice, not a measured
+/// optimum.
+pub const CRITICAL_PRESENT_CAP: f64 = 30.0;
+
 /// What [`XrayDatabase::node_delays`] charges a programmable pip prjxray
 /// gives no delay for, in picoseconds: the median of those it does, over
 /// every tile type of `artix7/` at 0a0adde (0.175 ns).

@@ -432,6 +432,23 @@ pub struct Timing {
     ///
     /// [`place::path_criticality`]: crate::fpga::place::path_criticality
     pub paths: Option<crate::fpga::place::PlaceTiming>,
+    /// The most a critical connection's search is charged for congestion:
+    /// the present factor it weighs another signal's wire at is the
+    /// pass's, or this, whichever is less. Infinite charges every search
+    /// alike.
+    ///
+    /// The charge grows every pass, and by the last ones a wire another
+    /// signal holds costs a critical connection, for all that it weighs
+    /// congestion at a hundredth, more than a long way round on wires
+    /// nobody holds. So a critical connection rerouted late winds through
+    /// what is left: on the ChipWhisperer-Husky Plus the latest `clk_usb`
+    /// path was one connection of 82 tiles over 100 wires and 16.7 ns,
+    /// going east and north on its way west and south, where a search for
+    /// delay alone found 2.7 ns. Capped, it takes the wire, the signal
+    /// that held it is the one rerouted, and negotiation goes on as it
+    /// does for any overuse — the cap is what VPR's `max_pres_fac` does
+    /// for every connection.
+    pub present_cap: f64,
 }
 
 impl Timing {
@@ -454,6 +471,7 @@ impl Timing {
             passes: 4,
             reroute_above: 0.9,
             paths: None,
+            present_cap: f64::INFINITY,
         }
     }
 }
@@ -953,6 +971,9 @@ pub fn route(
     if let Some(timing) = options.timing.as_ref().filter(|t| t.tile_delay > 0) {
         scratch.tile_delay = f64::from(timing.tile_delay)
             * delay_scale(graph.nodes.len(), &options.node_base, &timing.node_delay);
+    }
+    if let Some(timing) = options.timing.as_ref() {
+        scratch.present_cap = timing.present_cap;
     }
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
@@ -1936,6 +1957,8 @@ struct Scratch {
     queued: u64,
     /// [`Timing::tile_delay`] in units of cost, or zero.
     tile_delay: f64,
+    /// [`Timing::present_cap`], or infinity.
+    present_cap: f64,
 }
 
 impl Scratch {
@@ -1949,6 +1972,7 @@ impl Scratch {
             visited: 0,
             queued: 0,
             tile_delay: 0.0,
+            present_cap: f64::INFINITY,
         }
     }
 
@@ -2386,7 +2410,8 @@ fn maze(
                 continue;
             }
             let step = if critical > 0.0 {
-                slack * state.node_cost(*next, at.base, present) + critical * f64::from(at.delay)
+                slack * state.node_cost(*next, at.base, present.min(scratch.present_cap))
+                    + critical * f64::from(at.delay)
             } else {
                 state.node_cost(*next, at.base, present)
             };
@@ -3555,6 +3580,104 @@ mod tests {
         let (cleaned, report) = run(1);
         assert!(!on_second_row(&cleaned), "{}", report.to_text());
         assert_eq!(report.iterations.len(), 2, "{}", report.to_text());
+    }
+
+    /// **[`Timing::present_cap`]: a critical connection takes a held wire
+    /// when congestion is dear, and the holder moves.** One tile: `n0`
+    /// (routed first) has a fast wire `f1` and a dearer `g1`; `n1` has
+    /// `f1` too, or a slow way of three wires. With a present factor as
+    /// high as the last passes of a big design's, the first pass leaves
+    /// `n1` the slow way, and uncapped every later one does too, a held
+    /// wire costing it more than the long way round; capped, its second
+    /// pass takes `f1`, the next moves `n0` to `g1`, and the longest path
+    /// shortens. Would catch the cap not reaching the cost (`n1` stays
+    /// slow). Would not catch the cap reaching an uncritical search too:
+    /// `n0`'s `g1` is still cheaper than a held `f1` at a cap of 30
+    /// (checked by capping every search). Nor a cap that stops a
+    /// congested design converging, which two signals cannot show.
+    #[test]
+    fn a_capped_critical_connection_takes_a_held_wire_and_the_holder_moves() {
+        let mut arch = Arch::new("cap", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["out0", "out1", "in0", "in1", "f1", "g1", "s1", "s2", "s3"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "lut");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+            let mut dst = BelDecl::new(format!("dst{n}"), "ff");
+            dst.pins
+                .push(("d".to_owned(), WireRef::local(format!("in{n}"))));
+            tile.bels.push(dst);
+        }
+        let arcs = [
+            ("out0", "f1"),
+            ("f1", "in0"),
+            ("out0", "g1"),
+            ("g1", "in0"),
+            ("out1", "f1"),
+            ("f1", "in1"),
+            ("out1", "s1"),
+            ("s1", "s2"),
+            ("s2", "s3"),
+            ("s3", "in1"),
+        ];
+        for (k, (from, to)) in arcs.into_iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["src0", "dst0", "src1", "dst1"].iter().enumerate() {
+            let site = graph.site_index(&format!("X0Y0/{site}")).expect("site");
+            placement.place(index, site);
+        }
+        let wire = |name: &str| {
+            (0..graph.nodes.len())
+                .map(|i| NodeId::try_from(i).unwrap_or(0))
+                .find(|n| graph.wire(*n).full_name() == format!("X0Y0/{name}"))
+                .expect("the wire")
+        };
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        base[wire("g1") as usize] = 1.5;
+        let run = |cap: f64| {
+            let mut timing = Timing::for_netlist(&netlist, vec![1; graph.nodes.len()], 1);
+            timing.present_cap = cap;
+            let options = RouteOptions {
+                node_base: base.clone(),
+                present_factor: 1e6,
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+            assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+            assert_eq!(report.iterations.last().map(|i| i.overused_nodes), Some(0));
+            let on = |signal: usize, name: &str| {
+                routing.route(signal).unwrap().nodes.contains(&wire(name))
+            };
+            (
+                on(0, "f1"),
+                on(1, "f1"),
+                report.iterations.last().and_then(|i| i.critical),
+            )
+        };
+        // Uncapped: n0 on the fast wire, n1 the slow way, five long (the
+        // table and four wires).
+        assert_eq!(run(f64::INFINITY), (true, false, Some(5)));
+        // Capped: n1 on the fast wire, three long, and n0 moved off it.
+        assert_eq!(run(30.0), (false, true, Some(3)));
     }
 
     /// **A critical sink of a net of many sinks may start at the

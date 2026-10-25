@@ -3676,6 +3676,7 @@ fn write_xc7_bitstream(
                     passes: 4,
                     reroute_above: 0.9,
                     paths: Some(paths),
+                    present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
                 })
         }),
         ..RouteOptions::default()
