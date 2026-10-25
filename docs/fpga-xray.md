@@ -3913,6 +3913,71 @@ clock regions some 4 ns behind the near ones; 7-series clock trees are
 built for far less skew than that, and the hold check `--timing-endpoints`
 prints is no better than this.
 
+### A critical connection that wound through what was left (2026-10-25)
+
+The latest `clk_usb` path of the build above was a single connection,
+the FIFO stand-in's write pointer in `U_hw_bb_trig` to a distributed
+RAM's write address: **16.7 ns over 82 tiles and 100 wires**, its route
+going east and north on its way west and south. Two causes, found in
+that order.
+
+**The router's analysis timed a swapped input at the wrong node.** A
+lookup-table input may end on any pin of its table (`xray::lutswap`),
+and `Route::moved` says where. The analysis of each pass read the delay
+at the sink's own node, which a moved sink's tree does not reach, and so
+saw no delay at all; the finished route's report, which honours `moved`,
+then found it late. Fixed (`route::sink_delays`). Checked on the Husky
+Plus: 17.49 to 17.14 ns, and the route 1,952 to 1,461 s. That
+connection stayed.
+
+**Congestion had become dearer than delay.** A search for delay alone
+from the same source, on the routing as it ended, found **2.66 ns**.
+But the present factor grows every pass, and by the last a wire another
+signal holds costs even a critical connection, which weighs congestion
+at a hundredth, more than a long way round on wires nobody holds.
+`Timing::present_cap` bounds the factor a critical connection's search
+uses, as VPR's `max_pres_fac` bounds it for all: it takes the wire, and
+the holder is rerouted. Checked, one placement: uncapped 17.14 ns; cap
+300 the same; cap 30, 16.63 ns, with that connection off the list. On
+the build with the Plus's FIFO depths the cap made the route oscillate,
+two critical connections taking one wire from each other for a hundred
+passes, so it is lifted when ten passes in a row fail to lower the
+overuse; that build then converged in 87 passes at **16.51 ns**, where
+the same depths had made 21.5 ns before either fix.
+
+**Tried and shelved**: a repair after convergence, routing each critical
+signal again for delay and displacing the signals in its way. It found
+the 2.66 ns route; it never made room for it. Displaced signals rerouted
+onto free wires failed at their pins, which in a dense tile are fed by a
+few wires all held; renegotiated, they cascaded (18,317 signals for one
+attempt from the first pass's charge, and an unsettled dozen from the
+last). The cap does the same thing inside the negotiation, which is
+built to make room.
+
+**On the part**: the default depths' build (16.63 ns) captures as before,
+exact to 131,070 samples at 8 bits and to 30,000 at 12; NewAE's suite
+passed 9 of 47 tests against 11 for the previous build, the two lost
+being segmented 12-bit ramps at 20 MHz, which pass or fail by placement.
+With the Plus's depths, 12-bit captures of 131,070 samples were exact two
+times in three, and of 30,000 once. What is late there, and the likely
+cause, is the write data of the slow FIFO stand-in's 64 block RAMs, half
+of the die's: one register drives every one of them. Registering the
+memory's write a cycle later (tried, `p1_din` still 16.8 ns) cannot
+help, because the delay is the broadcast itself; a stand-in in banks,
+each with its own copy of the registers, could.
+
+**Not carried over, and why the latest path is not the one to fix
+next.** It is now `USB_WRn` to the `T` of every `USB_Data` buffer,
+pad to pad through one table, which `husky.rcf`'s 13.4 ns input delay
+(measured for the bus's input registers) makes 6 ns late against
+`clk_usb`. NewAE give it `set_max_delay 15 -through` the buffers' `T`,
+and Reticle's constraints have no `set_max_delay`. Nor generated clocks:
+NewAE declare the ADC clock at 4 ns and its two `BUFGCE` halves as
+divided by two. Declared at 4 ns here, in place of the false paths
+`husky.rcf` has from those ports, the ADC domain's latest path was 21.2
+ns, the ADC data's broadcast to the SAD engine's counters over half the
+die, and `clk_usb` went to 19.9 ns.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
