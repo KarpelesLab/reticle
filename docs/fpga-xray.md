@@ -3978,6 +3978,66 @@ divided by two. Declared at 4 ns here, in place of the false paths
 ns, the ADC data's broadcast to the SAD engine's counters over half the
 die, and `clk_usb` went to 19.9 ns.
 
+### Banks, derived clocks, and a subtraction the part disagrees with (2026-10-25, 26)
+
+**The slow FIFO in banks.** The stand-in for the Plus's 72 x 32768 FIFO
+fed 64 block RAMs from one write pointer and one `din`. Registering the
+write once in front of the memory left `p1_din` at 16.8 ns and the part
+worse, because the delay is the broadcast itself. Split into banks of
+8192 words, each with its own kept copy of the read pointer and its own
+write registers, the late `clk_usb` endpoints in `oadc` went from 1,787
+to 145, and test ramps at 8 and 12 bits were exact up to 131,070 samples
+six times in six, the first build to capture 12-bit 131,070 at all.
+Banks of 4096 crowded the block RAM columns and the route was stopped
+after 77 minutes. Checked on the part.
+
+**Clocks the managers make.** A clock manager's outputs were in no
+domain and untimed; each is now one, its period derived from its
+parameters as Vivado derives it, which times the logic analyser's
+observer clock (240 MHz by its parameters; NewAE's software runs it at
+384) and the glitch generator's. A pad carrying a declared clock now
+launches it, as data, in that clock's domain alone: the analyser samples
+`target_hs1` through the clock multiplexers, and that had been the
+observer's latest path, 20 ns of 4.17. A manager's fine phase shift is
+timed on its `PSCLK`. On the part, with these, the analyser captured at
+384 MHz where it had left its FIFO empty (NewAE's `scope.LA` with an
+oversampling factor of 4 on `clk_usb`, a manual trigger).
+NewAE's glitch tests still find its FIFO empty in their own settings.
+
+**A subtraction on the chain: proved, simulated, and wrong on the part.**
+Only adders went onto `CARRY4`, so the analyser's `capture_count ==
+capture_depth - 1` was sixteen tables in a row. Mapping `a - b` as
+`{a, 1} + {~b, 1}` without its low bit took the observer domain from 9.2
+to 6.3 ns, is proved equivalent at 16 and 32 bits, simulates on every
+input at 4 and 8 bits (legalised for a slice too), and a routed design
+of three such subtractions computes what its RTL does. On the Husky
+Plus, with subtractions of sixteen bits and more on the chain, the ramps
+were exact two, two and one times in three at 8-bit 131,070, 12-bit
+30,000 and 12-bit 131,070, the same counts in five builds from three
+placements; with none on the chain, twelve in twelve. Keeping groups of
+`fifo_top_husky`'s subtractions off the chain found the one:
+`last_sample <= sample_counter == samples_to_collect-1`. Off alone,
+twelve in twelve; the others off and it on, the same failures. It
+subtracts a constant one, which gives nearly every lane a constant
+generate of **one** beside a propagate that is a real function; a
+counter's constant generates are zeros and work. **Not known**: what the
+part does differently there. `MapOptions::min_subtract_carry_width` is
+`u32::MAX` by default since 5543ba7; the shelved rewrite of `x == p - q`
+as `x + q == p` was built once, into a placement too poor to judge it
+(`clk_usb` 20.4 ns, register reads failing).
+
+**`set_max_delay`**, added for NewAE's 15 ns bus exceptions, is right
+and not used for the Husky: with those four in `husky.rcf` the placer
+spread the bus logic, the route took 3.2 hours, and `clk_usb` was
+19.3 ns with late endpoints in every block.
+
+**What decides the part now is placement.** Builds of the same sources
+differ by up to 4 ns in `clk_usb` and by up to half the suite, and the
+late paths are wire: one register reaching every block of the die (the
+register bus's address and data, the FIFO's read enable), 4 to 6 ns a
+connection. NewAE's test_husky_dev passed 9 to 18 of 47 across the
+builds of these two days, against 42 for NewAE's own bitstream.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
