@@ -448,6 +448,14 @@ pub struct Timing {
     /// that held it is the one rerouted, and negotiation goes on as it
     /// does for any overuse — the cap is what VPR's `max_pres_fac` does
     /// for every connection.
+    ///
+    /// Two critical connections that want one wire would each take it
+    /// from the other for ever, the history charge growing too slowly
+    /// against a gap in delay of nanoseconds: the Husky Plus with its
+    /// deeper FIFOs ended a hundred passes with one node overused. So the
+    /// cap is lifted once ten passes in a row have left nodes
+    /// overused and not brought the overuse below its least so far, and the
+    /// passes after are as they were without it.
     pub present_cap: f64,
 }
 
@@ -997,6 +1005,9 @@ pub fn route(
     // nothing is overused, and whether this pass is one.
     let mut cleanups_left = options.timing.as_ref().map_or(0, |t| t.cleanups);
     let mut cleaning = false;
+    // `Timing::present_cap`: the least overuse so far, and how many passes
+    // since it fell.
+    let (mut least, mut stalled) = (usize::MAX, 0);
     for index in 1..=options.max_iterations {
         let visited_before = scratch.visited;
         let mut rerouted = 0;
@@ -1066,6 +1077,14 @@ pub fn route(
             routing.routes[terminals.signal] = Some(route);
         }
         let (overused_nodes, total_overuse) = state.overuse();
+        if overused_nodes < least {
+            (least, stalled) = (overused_nodes, 0);
+        } else if overused_nodes > 0 {
+            stalled += 1;
+            if stalled >= STALL {
+                scratch.present_cap = f64::INFINITY;
+            }
+        }
         if options.bounding_margin.is_some() {
             for terminals in &terminals {
                 let congested = routing.routes[terminals.signal].as_ref().is_some_and(|r| {
@@ -1104,6 +1123,8 @@ pub fn route(
             }
             cleanups_left -= 1;
             cleaning = true;
+            // A clean-up opens the negotiation again.
+            (least, stalled) = (usize::MAX, 0);
         }
         for node in 0..graph.nodes.len() {
             if state.occupancy[node] > 1 {
@@ -1147,6 +1168,15 @@ pub fn route(
     report.nodes = state.occupancy.iter().filter(|c| **c > 0).count();
     Ok((routing, report))
 }
+
+/// How many passes in a row may leave the overuse above zero and no lower
+/// than its least since the route or its last clean-up began before
+/// [`Timing::present_cap`] is lifted. Over the Husky Plus's passes on
+/// 2026-10-25, ten would never have lifted it on the build that converged
+/// in 70 and would have at the 63rd of the one that ended a hundred with
+/// one node overused; five would have lifted it on both, the first when
+/// its overuse was still settling after a clean-up.
+const STALL: usize = 10;
 
 /// What one unit of [`Timing::node_delay`] costs, so that a critical
 /// connection weighs delay and an uncritical one congestion on the same
@@ -3678,6 +3708,96 @@ mod tests {
         assert_eq!(run(f64::INFINITY), (true, false, Some(5)));
         // Capped: n1 on the fast wire, three long, and n0 moved off it.
         assert_eq!(run(30.0), (false, true, Some(3)));
+    }
+
+    /// **[`Timing::present_cap`] is lifted when two critical connections
+    /// fight over one wire.** One tile: `n0` and `n1` both want the fast
+    /// wire `f`, and each has its own slow way of three wires of a thousand
+    /// units' delay. Both are the longest path and as critical as anything
+    /// can be, so capped, each takes `f` from the other every pass, history
+    /// growing far too slowly against a gap of 3,000 in delay, a hundred
+    /// wires' worth among the 200 spare wires of one unit that make the
+    /// fabric's mean (with no spares the gap was three wires' worth and
+    /// history settled them at the eighteenth pass of forty). Lifted after
+    /// [`STALL`] passes, one gives way and the route converges. Would catch
+    /// the cap never lifted (the route ends congested); would not catch it
+    /// lifted too early, which only costs the design the cap's gain.
+    #[test]
+    fn a_stalled_route_lifts_the_critical_cap() {
+        let mut arch = Arch::new("stall", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        let mut names = vec!["out0", "out1", "in0", "in1", "f"];
+        let slow = ["a1", "a2", "a3", "b1", "b2", "b3"];
+        names.extend(slow);
+        // Wires nothing reaches, of the fast wires' delay: the delay is
+        // charged against the mean, and on a real fabric most wires are
+        // fast, so that the slow way's gap is a hundred wires' worth.
+        let spare: Vec<String> = (0..200).map(|k| format!("spare{k}")).collect();
+        for name in names.into_iter().chain(spare.iter().map(String::as_str)) {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "lut");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+            let mut dst = BelDecl::new(format!("dst{n}"), "ff");
+            dst.pins
+                .push(("d".to_owned(), WireRef::local(format!("in{n}"))));
+            tile.bels.push(dst);
+        }
+        let arcs = [
+            ("out0", "f"),
+            ("f", "in0"),
+            ("out1", "f"),
+            ("f", "in1"),
+            ("out0", "a1"),
+            ("a1", "a2"),
+            ("a2", "a3"),
+            ("a3", "in0"),
+            ("out1", "b1"),
+            ("b1", "b2"),
+            ("b2", "b3"),
+            ("b3", "in1"),
+        ];
+        for (k, (from, to)) in arcs.into_iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["src0", "dst0", "src1", "dst1"].iter().enumerate() {
+            let site = graph.site_index(&format!("X0Y0/{site}")).expect("site");
+            placement.place(index, site);
+        }
+        let mut delay = vec![1u32; graph.nodes.len()];
+        for (index, slot) in delay.iter_mut().enumerate() {
+            let name = graph.wire(NodeId::try_from(index).unwrap_or(0)).full_name();
+            if slow.iter().any(|w| name == format!("X0Y0/{w}")) {
+                *slot = 1000;
+            }
+        }
+        let mut timing = Timing::for_netlist(&netlist, delay, 1);
+        timing.present_cap = 30.0;
+        let options = RouteOptions {
+            timing: Some(timing),
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options)
+            .unwrap_or_else(|e| panic!("the route should converge: {e}"));
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        assert_eq!(report.iterations.last().map(|i| i.overused_nodes), Some(0));
+        assert!(report.iterations.len() > STALL, "{}", report.to_text());
     }
 
     /// **A critical sink of a net of many sinks may start at the
