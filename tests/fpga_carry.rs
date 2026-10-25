@@ -876,17 +876,26 @@ fn a_chosen_sum_shares_a_chain_and_is_still_right() {
     }
 }
 
-/// Subtraction does not go through the carry path on any family, and
-/// still comes out right.
+/// **A subtraction goes onto the 7-series carry chain and comes out
+/// right.** It used to stay in lookup tables on every family, which this
+/// test pinned; a 32-bit decrement was then 38 tables seven deep, and on
+/// the ChipWhisperer-Husky Plus a compare against one sixteen tables in a
+/// row. Now `a - b` is the adder `{a, 1} + {~b, 1}` without its low bit:
+/// one `CARRY4` per four bits of the one-wider sum. Simulated on every
+/// input here and proved at 16 and 32 bits in `mod proofs`. Would catch
+/// the complement or the carry in lost (every difference off by one or
+/// more), or the low lane kept; would not catch an ECP5 subtraction,
+/// which still goes through lookup tables (`the_ecp5_chain_...`).
 #[test]
-fn subtraction_stays_in_luts_and_is_still_right() {
+fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
     for width in [4, 8] {
         check_exhaustively(Shape::Subtract, width, MapOptions::default());
         let (_, _, report) = mapped(Shape::Subtract, width, XC7, MapOptions::default());
         assert_eq!(
             report.count("CARRY4"),
-            0,
-            "a `sub` reached the carry chain, which nothing here has checked"
+            usize::try_from((width + 1).div_ceil(4)).unwrap(),
+            "a `sub` of {width} bits is a chain of {} bits",
+            width + 1
         );
     }
 }
@@ -1339,6 +1348,16 @@ mod proofs {
         for width in [16, 32] {
             prove(Shape::Plain, width);
         }
+    }
+
+    /// A subtraction on the chain, and one feeding a second adder's carry
+    /// in, at the widths simulation cannot reach.
+    #[test]
+    fn wide_subtractions_are_proved_equivalent() {
+        for width in [16, 32] {
+            prove(Shape::Subtract, width);
+        }
+        prove(Shape::SubtractThenCarryIn, 13);
     }
 
     /// The same proof over the awkward shapes, at a width that is not a

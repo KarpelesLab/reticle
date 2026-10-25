@@ -2851,6 +2851,7 @@ impl Mapper<'_> {
         }
         if bel.operand_carry().is_none() && bel.wide_carry().is_some() {
             self.share_muxed_adders(module);
+            self.subtract_on_the_chain(module);
         }
         let adders: Vec<CellId> = module
             .cells
@@ -2910,8 +2911,10 @@ impl Mapper<'_> {
     /// bit; one chain with the multiplexers in front is a propagate table
     /// and a generate table a bit. The ChipWhisperer-Husky's `esad`
     /// computes `decision ? x - r : y + r` in each of its 256 counters,
-    /// and a subtraction is not mapped onto the chain at all, so there it
-    /// was a 14-table ripple next to an 8-table chain.
+    /// and a subtraction was not mapped onto the chain at all then, so
+    /// there it was a 14-table ripple next to an 8-table chain. One is now
+    /// ([`Self::subtract_on_the_chain`]), but two chains and a multiplexer
+    /// are still dearer than one.
     ///
     /// The carry in rides in an extra low bit: `{X, cin} + {Y, cin}` has
     /// `cin` as the carry out of bit 0 and zero as its sum, so the upper
@@ -3046,6 +3049,83 @@ impl Mapper<'_> {
             module.cells.retain(|id, _| !removed.contains(&id));
             self.note(format!(
                 "{shared} pair(s) of adders behind a multiplexer share one carry chain"
+            ));
+        }
+    }
+
+    /// Rewrites each subtraction `a - b` the multiplexer sharing left as
+    /// `({a, 1} + {~b, 1})` without its low bit, an adder, which the
+    /// carry chain maps: `~b + 1` is `-b`, and the one rides in an extra
+    /// low lane as it does in [`Self::share_muxed_adders`].
+    ///
+    /// Only an adder was ever mapped onto the chain, so every subtraction
+    /// was a ripple of lookup tables: on the ChipWhisperer-Husky Plus the
+    /// logic analyser's `capture_count == capture_depth - 1` was sixteen
+    /// tables in a row, 9.2 ns of a 4.17 ns clock, and the analyser
+    /// captured nothing at the 384 MHz NewAE's software runs it at. A
+    /// 32-bit `b - 1` alone was 38 tables seven deep.
+    ///
+    /// Only for a wide carry element, as the sharing, and only where both
+    /// operands are as wide as the result; anything else stays as it is.
+    fn subtract_on_the_chain(&mut self, module: &mut Module) {
+        let subs: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| c.kind == CellKind::Sub)
+            .map(|(id, _)| id)
+            .collect();
+        let mut removed: Vec<CellId> = Vec::new();
+        for sub in subs {
+            let cell = &module.cells[sub];
+            let (Some(a), Some(b), Some(y)) = (cell.input("a"), cell.input("b"), cell.output("y"))
+            else {
+                continue;
+            };
+            let width = net_width(module, y);
+            if width < self.options.min_carry_width {
+                continue;
+            }
+            let wide = |e: ExprId| module.exprs.get(e).and_then(|e| e.ty.width()) == Some(width);
+            if !wide(a) || !wide(b) {
+                continue;
+            }
+            let (span, name) = (cell.span, cell.name.as_str().to_owned());
+            let not_b = {
+                let label = format!("{name}$neg");
+                let net = add_net(module, &label, Type::bits(width), span);
+                add_cell(
+                    module,
+                    &label,
+                    CellKind::Not,
+                    vec![(Name::new("a"), b)],
+                    vec![(Name::new("y"), net)],
+                    span,
+                );
+                net_expr(module, net, span)
+            };
+            let one = const_expr(module, Const::ones(1), span);
+            let x = expr(module, ExprKind::Concat(vec![a, one]), span);
+            let z = expr(module, ExprKind::Concat(vec![not_b, one]), span);
+            let label = format!("{name}$add");
+            let sum_net = add_net(module, &label, Type::bits(width + 1), span);
+            add_cell(
+                module,
+                &label,
+                CellKind::Add,
+                vec![(Name::new("a"), x), (Name::new("b"), z)],
+                vec![(Name::new("y"), sum_net)],
+                span,
+            );
+            let sum = net_expr(module, sum_net, span);
+            let sum = slice_expr(module, sum, width, 1, span);
+            add_assign(module, y, sum, span);
+            removed.push(sub);
+        }
+        if !removed.is_empty() {
+            let count = removed.len();
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!(
+                "{count} subtraction(s) mapped onto the carry chain as additions"
             ));
         }
     }
