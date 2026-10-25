@@ -915,6 +915,11 @@ fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
     }
     let (_, _, report) = mapped(Shape::Subtract, 16, XC7, MapOptions::default());
     assert_eq!(report.count("CARRY4"), 5, "sixteen bits is on the chain");
+    // And legalised for a slice, as the flow builds it. (Paired too would
+    // pair nothing: its propagates have no generate tables to share with.)
+    for width in [4, 5, 8] {
+        check_full(Shape::Subtract, width, XC7, low.clone(), true, false);
+    }
 }
 
 // ---------------------------------------------------------------------------
