@@ -158,6 +158,99 @@ fn lut_reaches(netlist: &Netlist, instance: usize, init: &crate::ir::Const, out:
     }
 }
 
+/// A clock manager's reference clock: the signal on its `CLKIN1`.
+fn manager_input(netlist: &Netlist, instance: usize) -> Option<usize> {
+    netlist.instances[instance]
+        .pins
+        .iter()
+        .find(|p| netlist.pins[**p].role == "ref")
+        .and_then(|p| netlist.pins[*p].signal)
+}
+
+/// A real parameter of `instance`'s cell: an integer, or text such as
+/// `6.0`, which is how a black box keeps a real.
+fn real_param(
+    design: &Design,
+    top: ModuleId,
+    netlist: &Netlist,
+    instance: usize,
+    name: &str,
+) -> Option<f64> {
+    let cell = design.modules[top]
+        .cells
+        .get(netlist.instances[instance].cell)?;
+    let value = cell.params.get(name)?;
+    #[allow(clippy::cast_precision_loss, reason = "a divider or a period")]
+    let int = value.as_int().map(|i| i as f64);
+    int.or_else(|| value.as_str().and_then(|t| t.trim().parse::<f64>().ok()))
+}
+
+/// The period of the output `role` of the clock manager `instance` with a
+/// reference clock of `input` ns: `input × DIVCLK_DIVIDE × the output's
+/// divider ÷ the feedback's multiplier`, the clock Vivado derives for it
+/// from the same parameters. An MMCM's are `CLKFBOUT_MULT_F` and, for
+/// `CLKOUT0`, `CLKOUT0_DIVIDE_F`; a PLL's `CLKFBOUT_MULT` and
+/// `CLKOUTn_DIVIDE`. Each takes the primitive's default when the cell does
+/// not set it (UG472: a multiplier of 5, dividers of 1). The inverted
+/// outputs (`CLKOUTnB`) have their output's period; the feedback output a
+/// divider of one. `None` for a role that is no clock output, or a
+/// parameter that is no number.
+///
+/// What it says is the period the parameters give. NewAE's software
+/// writes the logic analyser's dividers through the DRP at run time, to
+/// 384 MHz where the parameters say 240: like Vivado, this times the
+/// domain at the parameters' figure, and what the part runs is faster.
+fn derived_period(
+    design: &Design,
+    top: ModuleId,
+    netlist: &Netlist,
+    instance: usize,
+    role: &str,
+    input: f64,
+) -> Option<f64> {
+    let mmcm = netlist.instances[instance].kind == "mmcm";
+    let param = |name: &str, default: f64| -> Option<f64> {
+        match real_param(design, top, netlist, instance, name) {
+            Some(v) => Some(v),
+            None => {
+                let cell = design.modules[top]
+                    .cells
+                    .get(netlist.instances[instance].cell);
+                // Set, but not to a number: no period.
+                if cell.is_some_and(|c| c.params.get(name).is_some()) {
+                    None
+                } else {
+                    Some(default)
+                }
+            }
+        }
+    };
+    let mult = param(
+        if mmcm {
+            "CLKFBOUT_MULT_F"
+        } else {
+            "CLKFBOUT_MULT"
+        },
+        5.0,
+    )?;
+    let divclk = param("DIVCLK_DIVIDE", 1.0)?;
+    let divide = if role == "fbout" || role == "fboutb" {
+        1.0
+    } else {
+        let n = role
+            .strip_prefix("out")
+            .map(|r| r.trim_end_matches('b'))
+            .and_then(|r| r.parse::<u32>().ok())?;
+        let name = if mmcm && n == 0 {
+            "CLKOUT0_DIVIDE_F".to_owned()
+        } else {
+            format!("CLKOUT{n}_DIVIDE")
+        };
+        param(&name, 1.0)?
+    };
+    (mult > 0.0).then(|| input * divclk * divide / mult)
+}
+
 /// The timing a placement of `netlist` is driven by, and the name of each
 /// of its domains (the clock's `create_clock` name), in
 /// [`PlaceTiming::periods`] order. `design`'s module `top` is what the
@@ -198,18 +291,66 @@ pub fn place_timing(
         }
         signal
     };
+    // A clock signal's name and period: a `create_clock` on its root, or,
+    // for an output of a clock manager, what the manager makes of its
+    // reference clock (`derived_period`). Untimed, as these were, the
+    // logic analyser's MMCM on the Husky Plus sampled at 192 MHz and not
+    // at 384: its capture's FIFO stayed empty, and with it every glitch
+    // test NewAE's suite has.
+    let clock_of = |signal: usize| -> Option<(String, f64)> {
+        let mut signal = signal;
+        // The chain of managers from the clock to its pad, outermost last.
+        let mut chain: Vec<(usize, &str)> = Vec::new();
+        for _ in 0..4 {
+            let at = root(signal);
+            let name = &netlist.signals[at].name;
+            if let Some(clock) = constraints.clocks.iter().find(|c| c.net == *name) {
+                return chain.iter().rev().try_fold(
+                    (clock.name.clone(), clock.period_ns),
+                    |(_, period), (instance, role)| {
+                        let period = derived_period(design, top, netlist, *instance, role, period)?;
+                        let inst = &netlist.instances[*instance];
+                        Some((format!("{}.{role}", inst.name), period))
+                    },
+                );
+            }
+            let driver = netlist.signals[at].driver?;
+            let instance = netlist.pins[driver].instance;
+            if !matches!(netlist.instances[instance].kind.as_str(), "mmcm" | "pll") {
+                break;
+            }
+            chain.push((instance, netlist.pins[driver].role.as_str()));
+            match manager_input(netlist, instance) {
+                Some(next) => signal = next,
+                None => break,
+            }
+        }
+        // No clock on the pad: the innermost manager's own `CLKIN1_PERIOD`.
+        let mut period = None;
+        let mut name = String::new();
+        for (instance, role) in chain.iter().rev() {
+            let input = match period {
+                Some(p) => p,
+                None => real_param(design, top, netlist, *instance, "CLKIN1_PERIOD")?,
+            };
+            period = Some(derived_period(
+                design, top, netlist, *instance, role, input,
+            )?);
+            name = format!("{}.{role}", netlist.instances[*instance].name);
+        }
+        period.map(|p| (name, p))
+    };
     let mut names: Vec<String> = Vec::new();
     let mut periods: Vec<f64> = Vec::new();
-    let mut domain_of = |signal: usize| -> PathDomain {
-        let name = &netlist.signals[root(signal)].name;
-        let Some(clock) = constraints.clocks.iter().find(|c| c.net == *name) else {
+    let mut domain_of = |clock: Option<(String, f64)>| -> PathDomain {
+        let Some((name, period)) = clock else {
             return PathDomain::Untimed;
         };
-        if let Some(index) = names.iter().position(|n| *n == clock.name) {
+        if let Some(index) = names.iter().position(|n| *n == name) {
             return PathDomain::Clock(index);
         }
-        names.push(clock.name.clone());
-        periods.push(clock.period_ns);
+        names.push(name);
+        periods.push(period);
         PathDomain::Clock(names.len() - 1)
     };
 
@@ -345,13 +486,29 @@ pub fn place_timing(
                     };
                 }
                 if let Some(c) = clock {
-                    domain[index] = domain_of(c);
+                    domain[index] = domain_of(clock_of(c));
                 }
             }
             "io" => {
                 launch[index] = INPUT_BUFFER;
                 capture[index] = OUTPUT_BUFFER;
-                domain[index] = PathDomain::Every;
+                // A pad carrying a clock launches what it carries as data
+                // in that clock's domain, as Vivado has it, and not in
+                // every one: on the Husky Plus the logic analyser samples
+                // `target_hs1` itself through the clock multiplexers, and
+                // timed in its own domain that was the analyser's latest
+                // path, 20 ns of 4.17.
+                // The pad answers to its port's name, which is what a
+                // clock names (its buffer's output is another net).
+                let carried = constraints
+                    .clocks
+                    .iter()
+                    .find(|c| answers(&c.net, index))
+                    .map(|c| (c.name.clone(), c.period_ns));
+                domain[index] = match carried {
+                    Some(clock) => domain_of(Some(clock)),
+                    None => PathDomain::Every,
+                };
                 for pin in &inst.pins {
                     pins[*pin] = if netlist.pins[*pin].output {
                         PinTiming::Start
@@ -386,7 +543,7 @@ pub fn place_timing(
                     .find(|p| netlist.pins[**p].role == "dclk")
                     .and_then(|p| netlist.pins[*p].signal);
                 if let Some(c) = dclk {
-                    domain[index] = domain_of(c);
+                    domain[index] = domain_of(clock_of(c));
                 }
             }
             _ => {
@@ -408,7 +565,7 @@ pub fn place_timing(
                     };
                 }
                 if let Some(c) = clock {
-                    domain[index] = domain_of(c);
+                    domain[index] = domain_of(clock_of(c));
                 }
             }
         }
@@ -529,9 +686,11 @@ mod tests {
     /// two other pads, `rd` and `data`; `rd` alone has an input delay of
     /// a period and two nanoseconds. It launches at that, plus its buffer,
     /// less the clock's arrival, and only in the clock's domain; `data`
-    /// launches at its buffer in every domain, as a pad always did. Would
-    /// catch the delay ignored, applied to the wrong pad, applied without
-    /// the clock's arrival taken off, or left in every domain; would not
+    /// launches at its buffer in every domain, as a pad always did, and the
+    /// clock's own pad in the clock's domain. Would catch the delay ignored,
+    /// applied to the wrong pad, applied without the clock's arrival taken
+    /// off, or left in every domain, or a clock's pad launching in every
+    /// domain (as it did); would not
     /// catch [`CLOCK_INSERTION`] being the wrong number for a part, which
     /// only a part says.
     #[test]
@@ -606,6 +765,9 @@ mod tests {
         assert_eq!(timing.domain[2], PathDomain::Clock(0));
         assert!((timing.launch[3] - INPUT_BUFFER).abs() < 1e-9);
         assert_eq!(timing.domain[3], PathDomain::Every);
+        // The clock's own pad launches what it carries in its clock's
+        // domain alone.
+        assert_eq!(timing.domain[0], PathDomain::Clock(0));
     }
 
     /// **A clock manager's register port is timed on its `DCLK`.** An MMCM
@@ -703,5 +865,119 @@ mod tests {
         assert_eq!(timing.pins[4], PinTiming::Ignored, "the reference clock");
         assert!((timing.launch[2] - BRAM_LAUNCH).abs() < 1e-9);
         assert!((timing.capture[2] - BRAM_SETUP).abs() < 1e-9);
+    }
+
+    /// **A clock manager's outputs are clocks of their own.** An MMCM
+    /// whose reference is the pad `ref`, multiplying by `6.0` (text, as a
+    /// black box keeps a real) and dividing `CLKOUT0` by `5.0` and
+    /// `CLKOUT1` by 12, clocks one flip-flop from each output, the first
+    /// through a global buffer. With `ref` at 10 ns the two are domains of
+    /// 10 × 5 ÷ 6 and 10 × 12 ÷ 6 ns, named for the manager's outputs; with
+    /// no clock on `ref`, its `CLKIN1_PERIOD` of 5 ns stands in. Would catch
+    /// an output left untimed (as every one was), the divider of one
+    /// output used for the other, `CLKOUT0`'s fractional divider not read,
+    /// the buffer not looked through, or a real given as text read as no
+    /// number; would not catch a manager's own clock out of its range,
+    /// which the bitstream writer refuses, nor a runtime divider write,
+    /// which no static analysis sees.
+    #[test]
+    fn a_clock_managers_outputs_are_clocks_of_their_own() {
+        use crate::ir::{Attrs, Cell, CellKind, Name};
+        let pin = |instance: usize, role: &str, output: bool, signal: usize| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        let mut params = Attrs::new();
+        params.set("CLKFBOUT_MULT_F", "6.0");
+        params.set("CLKOUT0_DIVIDE_F", "5.0");
+        params.set("CLKOUT1_DIVIDE", 12i64);
+        params.set("CLKIN1_PERIOD", "5.0");
+        let mut cells = Vec::new();
+        for (name, params) in [("pad", Attrs::new()), ("m", params)] {
+            cells.push(design.modules[top].cells.push(Cell {
+                name: Name::new(name),
+                kind: CellKind::Blackbox(Name::new("MMCME2_ADV")),
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params,
+                attrs: Attrs::new(),
+                span: crate::source::Span::new(file, 0, 0),
+            }));
+        }
+        let instance = |cell: CellId, name: &str, kind: &str, pins: Vec<usize>| Instance {
+            cell,
+            name: name.to_owned(),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        // Signals: 0 `ref`, 1 out0, 2 out0 buffered, 3 out1, 4 and 5 data.
+        let pins = vec![
+            pin(0, "din", true, 0),
+            pin(1, "ref", false, 0),
+            pin(1, "out0", true, 1),
+            pin(1, "out1", true, 3),
+            pin(2, "i", false, 1),
+            pin(2, "o", true, 2),
+            pin(3, "clk", false, 2),
+            pin(3, "q", true, 4),
+            pin(4, "clk", false, 3),
+            pin(4, "q", true, 5),
+        ];
+        let signal = |name: &str, driver: usize, sinks: Vec<usize>| Signal {
+            name: name.to_owned(),
+            driver: Some(driver),
+            sinks,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(cells[0], "ref$io0", "io", vec![0]),
+                instance(cells[1], "m", "mmcm", vec![1, 2, 3]),
+                instance(cells[0], "bufg", "gb", vec![4, 5]),
+                instance(cells[0], "fast", "ff", vec![6, 7]),
+                instance(cells[0], "slow", "ff", vec![8, 9]),
+            ],
+            signals: vec![
+                signal("ref", 0, vec![1]),
+                signal("m_out0", 2, vec![4]),
+                signal("clk0", 5, vec![6]),
+                signal("m_out1", 3, vec![8]),
+                signal("a", 7, vec![]),
+                signal("b", 9, vec![]),
+            ],
+            pins,
+            off_fabric: Vec::new(),
+        };
+        let period_of = |rcf: &str, instance: usize| -> (String, f64) {
+            let mut diags = crate::diag::Diagnostics::new();
+            let constraints = Constraints::parse(rcf, file, &mut diags);
+            assert!(!diags.has_errors());
+            let (timing, names) = place_timing(&design, top, &netlist, &constraints);
+            let PathDomain::Clock(d) = timing.domain[instance] else {
+                panic!("{instance} is untimed: {:?}", timing.domain[instance]);
+            };
+            (names[d].clone(), timing.periods[d])
+        };
+        let close = |(name, got): (String, f64), want_name: &str, want: f64| {
+            assert_eq!(name, want_name);
+            assert!((got - want).abs() < 1e-9, "{name}: {got} ns, want {want}");
+        };
+        let rcf = "create_clock -name ref -period 10 ref\n";
+        close(period_of(rcf, 3), "m.out0", 10.0 * 5.0 / 6.0);
+        close(period_of(rcf, 4), "m.out1", 10.0 * 12.0 / 6.0);
+        close(period_of("", 3), "m.out0", 5.0 * 5.0 / 6.0);
     }
 }
