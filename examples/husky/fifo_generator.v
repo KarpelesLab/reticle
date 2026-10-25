@@ -6,8 +6,9 @@
 // RAMs and builds the rest from logic.
 //
 // What each wrapper's parameters come from: the core's `.xci` in
-// chipwhisperer-husky-fpga 2dfe1bc, `fpga/vivado/cwhusky.srcs/sources_1/ip/`
-// — `Input_Data_Width`, `Input_Depth`, `Performance_Options`, the
+// chipwhisperer-husky-fpga 2dfe1bc, `fpga/vivado/cwhusky.srcs/sources_1/ip/`,
+// and with `PLUS` defined `cwhusky_plus.srcs`'s, which makes three of them
+// deeper — `Input_Data_Width`, `Input_Depth`, `Performance_Options`, the
 // `*_Threshold_Assert_Value` of each programmable flag, and which of
 // `overflow` and `underflow` exist. Those are quoted. The behaviour of
 // the flags is the FIFO Generator's as PG057 describes it, and is a
@@ -46,7 +47,9 @@ module husky_fifo #(
     parameter FWFT = 0,
     parameter ASYNC = 0,
     parameter PROG_FULL = 0,
-    parameter PROG_EMPTY = 0
+    parameter PROG_EMPTY = 0,
+    // Words per bank, as a power of two; at `AW`, one memory. See `banked`.
+    parameter BANK_AW = AW
 ) (
     input  wire             rst,
     input  wire             wr_clk,
@@ -77,7 +80,7 @@ module husky_fifo #(
   wire wrst = wrst_sync[1];
   wire rrst = rrst_sync[1];
 
-  (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:DEPTH-1];
+  localparam BANKED = BANK_AW < AW;
 
   // Pointers one bit wider than the address: equal is empty, equal but
   // for the top bit is full.
@@ -106,7 +109,6 @@ module husky_fifo #(
   assign full = !wrst && full_q;
   wire do_write = wr_en && !full && !wrst;
   assign wptr_next = wptr + do_write;
-  always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;
   always @(posedge wr_clk or posedge rst)
     if (rst) begin
       wptr <= 0;
@@ -143,7 +145,6 @@ module husky_fifo #(
   assign held_next = fetch || (held && !take);
   wire [AW:0] rused_next = (wptr_r_next - rptr_next) + (FWFT ? held_next : 1'b0);
   reg prog_empty_q;
-  always @(posedge rclk) if (fetch) q <= mem[rptr[AW-1:0]];
   always @(posedge rclk or posedge rst)
     if (rst) begin
       rptr <= 0;
@@ -158,8 +159,58 @@ module husky_fifo #(
       prog_empty_q <= rused_next <= PROG_EMPTY;
       underflow <= rd_en && empty;
     end
-  assign dout = q;
   assign prog_empty = rrst || prog_empty_q;
+
+  // --- memory ----------------------------------------------------------------
+  // The deepest FIFOs fill half the die's block RAMs, and one pointer and
+  // one `din` reaching every one of them were the Husky Plus's latest
+  // `clk_usb` paths: a write address at 15.8 ns of 10.4, the write data
+  // 16.8 ns when registered once in front of the memory. Banked, each bank
+  // has registers of its own, which the placer can seat beside it: a copy
+  // of the read pointer, kept equal to it, and the write a cycle after it
+  // is taken, so that the read side sees a write a cycle later (below).
+  //
+  // The slow FIFOs' banks are 8192 words. Checked on the Husky Plus on
+  // 2026-10-25: so banked, its late `clk_usb` endpoints in `oadc` went
+  // from 1,787 to 145, and test ramps at 8 and 12 bits were exact up to
+  // 131,070 samples six times in six, where unbanked 12-bit captures of
+  // 30,000 were exact one time in three. Banks of 4096, twice the
+  // registers, crowded the block RAM columns: the route was still 850
+  // nodes overused after 27 passes and 77 minutes, and was stopped.
+  if (BANKED) begin : banked
+    localparam NB = 1 << (AW - BANK_AW);
+    wire [NB*WIDTH-1:0] bank_q;
+    reg  [AW-BANK_AW-1:0] which_q;  // the bank `dout` is from
+    always @(posedge rclk) if (fetch) which_q <= rptr[AW-1:BANK_AW];
+    genvar b;
+    for (b = 0; b < NB; b = b + 1) begin : bank
+      (* keep = "true" *) reg [BANK_AW-1:0] waddr;
+      (* keep = "true" *) reg [WIDTH-1:0]   wdata;
+      (* keep = "true" *) reg               wen;
+      (* keep = "true" *) reg [BANK_AW-1:0] raddr;
+      always @(posedge wr_clk) begin
+        waddr <= wptr[BANK_AW-1:0];
+        wdata <= din;
+      end
+      always @(posedge wr_clk or posedge rst)
+        if (rst) wen <= 1'b0;
+        else wen <= do_write && wptr[AW-1:BANK_AW] == b;
+      always @(posedge rclk or posedge rst)
+        if (rst) raddr <= 0;
+        else raddr <= rptr_next[BANK_AW-1:0];
+      (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:(1 << BANK_AW)-1];
+      reg [WIDTH-1:0] q;
+      always @(posedge wr_clk) if (wen) mem[waddr] <= wdata;
+      always @(posedge rclk) if (fetch) q <= mem[raddr];
+      assign bank_q[b*WIDTH+:WIDTH] = q;
+    end
+    assign dout = bank_q[which_q*WIDTH+:WIDTH];
+  end else begin : single
+    (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:DEPTH-1];
+    always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;
+    always @(posedge rclk) if (fetch) q <= mem[rptr[AW-1:0]];
+    assign dout = q;
+  end
 
   // --- crossing ------------------------------------------------------------
   if (ASYNC) begin : crossing
@@ -204,6 +255,18 @@ module husky_fifo #(
     assign rptr_w = rbin_w;
     assign wptr_r_next = gray_to_binary(wgray_r2);
     assign rptr_w_next = gray_to_binary(rgray_w2);
+  end else if (BANKED) begin : common_banked
+    // The words in the memory: a banked memory is written a cycle after
+    // the write is taken, so the write pointer a cycle late. With two
+    // clocks the crossing is slower than that already.
+    reg [AW:0] wptr_q;
+    always @(posedge wr_clk or posedge rst)
+      if (rst) wptr_q <= 0;
+      else wptr_q <= wptr;
+    assign wptr_r = wptr_q;
+    assign rptr_w = rptr;
+    assign wptr_r_next = wptr;
+    assign rptr_w_next = rptr_next;
   end else begin : common
     assign wptr_r = wptr;
     assign rptr_w = rptr;
@@ -243,7 +306,8 @@ module adc_fast_fifo (
   );
 endmodule
 
-// 72 x 4096, independent clocks, fall-through, `prog_empty` at 6.
+// 72 x 4096, independent clocks, fall-through, `prog_empty` at 6; on the
+// Husky Plus 72 x 8192 (`cwhusky_plus.srcs`).
 // `fast_slower_fifo.xci`.
 module fast_slower_fifo (
     input  wire        rst,
@@ -261,7 +325,11 @@ module fast_slower_fifo (
 );
   husky_fifo #(
       .WIDTH(72),
+`ifdef PLUS
+      .AW(13),
+`else
       .AW(12),
+`endif
       .FWFT(1),
       .ASYNC(1),
       .PROG_EMPTY(6)
@@ -325,7 +393,8 @@ module trigger_fifo (
 endmodule
 
 // 72 x 2048, common clock, fall-through, `prog_full` at 2047 and
-// `prog_empty` at 4. `usb_slow_fifo1.xci`.
+// `prog_empty` at 4. `usb_slow_fifo1.xci`; on the Husky Plus 72 x 16384
+// and `prog_full` at 16390.
 module usb_slow_fifo1 (
     input  wire        clk,
     input  wire        rst,
@@ -342,10 +411,16 @@ module usb_slow_fifo1 (
 );
   husky_fifo #(
       .WIDTH(72),
+`ifdef PLUS
+      .AW(14),
+      .PROG_FULL(16390),
+`else
       .AW(11),
-      .FWFT(1),
       .PROG_FULL(2047),
-      .PROG_EMPTY(4)
+`endif
+      .FWFT(1),
+      .PROG_EMPTY(4),
+      .BANK_AW(13)
   ) u_fifo (
       .rst(rst), .wr_clk(clk), .rd_clk(clk), .din(din), .wr_en(wr_en), .rd_en(rd_en),
       .dout(dout), .full(full), .empty(empty), .prog_full(prog_full),
@@ -354,7 +429,8 @@ module usb_slow_fifo1 (
 endmodule
 
 // 72 x 16384, common clock, fall-through, `prog_full` at 16384.
-// `usb_slow_fifo2.xci`.
+// `usb_slow_fifo2.xci`; on the Husky Plus 72 x 32768 and `prog_full` at
+// 32782.
 module usb_slow_fifo2 (
     input  wire        clk,
     input  wire        rst,
@@ -370,9 +446,15 @@ module usb_slow_fifo2 (
 );
   husky_fifo #(
       .WIDTH(72),
+`ifdef PLUS
+      .AW(15),
+      .PROG_FULL(32782),
+`else
       .AW(14),
+      .PROG_FULL(16384),
+`endif
       .FWFT(1),
-      .PROG_FULL(16384)
+      .BANK_AW(13)
   ) u_fifo (
       .rst(rst), .wr_clk(clk), .rd_clk(clk), .din(din), .wr_en(wr_en), .rd_en(rd_en),
       .dout(dout), .full(full), .empty(empty), .prog_full(prog_full),
