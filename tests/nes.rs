@@ -2225,9 +2225,10 @@ fn the_console_maps_onto_the_artix7_for_the_basys3() {
     // 100 RAMB18E1, which `the_artix7_matches_its_datasheet_figures` in
     // tests/fpga_flow.rs holds to the datasheet.
     //
-    // The last measured footprint was 3920 LUT6, 90 CARRY4, 1082
-    // flip-flops and 39 RAMB18E1, with the subtractions of sixteen bits
-    // and more on the chain too (2026-10-25); with adders alone it was
+    // The last measured footprint was 3887 LUT6, 81 CARRY4, 1082
+    // flip-flops and 39 RAMB18E1, the subtractions in lookup tables
+    // (2026-10-26; 3920 and 90 with those of sixteen bits and more on the
+    // chain); with adders alone, before other changes, it was
     // 3786 LUT6 and 80 CARRY4, depth 23, the figures the comparison below
     // is in. The same console behind
     // `dvi_tx` on the same part is 4184 LUT6, 137 CARRY4, 1154

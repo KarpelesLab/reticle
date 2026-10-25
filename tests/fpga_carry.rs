@@ -880,12 +880,13 @@ fn a_chosen_sum_shares_a_chain_and_is_still_right() {
 /// right.** It used to stay in lookup tables on every family, which this
 /// test pinned; a 32-bit decrement was then 38 tables seven deep, and on
 /// the ChipWhisperer-Husky Plus a compare against one sixteen tables in a
-/// row. Now `a - b` of `min_subtract_carry_width` bits or more (sixteen)
-/// is the adder `{a, 1} + {~b, 1}` without its low bit: one `CARRY4` per
-/// four bits of the one-wider sum. Narrower, it stays in tables, and is
-/// right there too. With the threshold lowered, the chain itself is
-/// simulated on every input at 4 and 8 bits here, and `mod proofs`
-/// proves it at the default 16 and at 32. Would catch the complement or
+/// row. With `min_subtract_carry_width` at or below its width, `a - b` is
+/// the adder `{a, 1} + {~b, 1}` without its low bit: one `CARRY4` per four
+/// bits of the one-wider sum. By default the threshold is `u32::MAX` and a
+/// subtraction stays in tables — see the option for the part's reason —
+/// and is right there too. With the threshold lowered, the chain is
+/// simulated on every input at 4 and 8 bits here, and `mod proofs` proves
+/// it at 16 and 32. Would catch the complement or
 /// the carry in lost (every difference off by one or more), the low lane
 /// kept, or the threshold ignored; would not catch an ECP5 subtraction,
 /// which still goes through lookup tables (`the_ecp5_chain_...`).
@@ -914,7 +915,13 @@ fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
         );
     }
     let (_, _, report) = mapped(Shape::Subtract, 16, XC7, MapOptions::default());
-    assert_eq!(report.count("CARRY4"), 5, "sixteen bits is on the chain");
+    assert_eq!(report.count("CARRY4"), 0, "by default none is on the chain");
+    let (_, _, report) = mapped(Shape::Subtract, 16, XC7, low.clone());
+    assert_eq!(
+        report.count("CARRY4"),
+        5,
+        "sixteen bits on the chain is five"
+    );
     // And legalised for a slice, as the flow builds it. (Paired too would
     // pair nothing: its propagates have no generate tables to share with.)
     for width in [4, 5, 8] {
@@ -1376,9 +1383,16 @@ mod proofs {
     /// in, at the widths simulation cannot reach.
     #[test]
     fn wide_subtractions_are_proved_equivalent() {
+        // On the chain, at a lowered threshold, and in tables by default.
+        let low = MapOptions {
+            min_subtract_carry_width: 1,
+            ..MapOptions::default()
+        };
         for width in [16, 32] {
+            prove_on(Shape::Subtract, width, XC7, low.clone());
             prove(Shape::Subtract, width);
         }
+        prove_on(Shape::SubtractThenCarryIn, 13, XC7, low);
         prove(Shape::SubtractThenCarryIn, 13);
     }
 

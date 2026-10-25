@@ -163,15 +163,32 @@ pub struct MapOptions {
     pub map_carry: bool,
     /// The narrowest adder worth a carry chain.
     pub min_carry_width: u32,
-    /// The narrowest subtraction worth a carry chain, on a family whose
-    /// chain is a wide element (`subtract_on_the_chain`). Not
-    /// `min_carry_width`: on the ChipWhisperer-Husky Plus with every
-    /// subtraction of four bits and more on the chain — 256 twelve-bit
-    /// differences in its SAD engine among them — the route was still 859
-    /// nodes overused after 24 passes and 98 minutes, searching two
-    /// billion nodes a pass, and was stopped; at sixteen, which takes the
-    /// logic analyser's 32-bit compare, it converged in 19 minutes, and the
-    /// analyser's clock domain went from 9.2 to 6.3 ns (2026-10-25).
+    /// The narrowest subtraction put on the carry chain, on a family whose
+    /// chain is a wide element (`subtract_on_the_chain`); `u32::MAX`, the
+    /// default, puts none there.
+    ///
+    /// **Off because the part disagrees, for a reason not yet found.** On
+    /// the ChipWhisperer-Husky Plus, with subtractions of sixteen bits and
+    /// more on the chain, test ramps were exact two times in three at 8
+    /// bits and 131,070 samples, two in three at 12 bits and 30,000, and
+    /// one in three at 12 bits and 131,070, the same counts in five builds
+    /// from three placements; the same sources and flow with none on the
+    /// chain were exact twelve times in twelve (2026-10-25, 26). Keeping
+    /// the subtractions of `fifo_top_husky` off the chain a group at a time
+    /// found it: with the subtraction in `last_sample <= sample_counter ==
+    /// samples_to_collect-1` alone off it, twelve in twelve, and with the
+    /// others off and it on, the same failures. Subtracting a constant one gives nearly every
+    /// lane a constant generate of one beside a propagate that is a real
+    /// function, which nothing else this flow builds does (a counter's
+    /// constant generates are zeros, and work). The mapping is proved and
+    /// simulated, the netlist the bitstream is made from computes what its
+    /// RTL does in simulation (a design of three such subtractions), and
+    /// every bit decodes: what differs is something only the part shows,
+    /// and it has not been found. At four
+    /// bits the Husky's route also stopped converging (859 nodes overused
+    /// after 98 minutes), its SAD engine's 256 differences being twelve
+    /// bits. `tests/fpga_carry.rs` keeps the mapping exercised at a low
+    /// threshold.
     pub min_subtract_carry_width: u32,
 }
 
@@ -188,7 +205,7 @@ impl Default for MapOptions {
             global_buffer_threshold: 8,
             map_carry: true,
             min_carry_width: 4,
-            min_subtract_carry_width: 16,
+            min_subtract_carry_width: u32::MAX,
         }
     }
 }
