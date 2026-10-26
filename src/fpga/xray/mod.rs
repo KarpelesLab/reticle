@@ -2526,12 +2526,7 @@ impl XrayFabric {
     pub fn clock_pin_entries(&self, graph: &super::arch::RoutingGraph) -> Vec<bool> {
         let mut out = vec![false; graph.nodes.len()];
         for site in &graph.sites {
-            let roles: &[&str] = match site.kind.as_str() {
-                "ff" => &["clk"],
-                "lutram" => &["wclk"],
-                "bram" => &["p0_clk", "p1_clk"],
-                _ => continue,
-            };
+            let roles = clock_pin_roles(&site.kind);
             for role in roles {
                 let mut work: Vec<super::arch::NodeId> = site.pin_nodes(role).collect();
                 let mut seen = 0;
@@ -2599,12 +2594,10 @@ impl XrayFabric {
             std::collections::HashMap<super::arch::NodeId, super::arch::PipId>,
         > = std::collections::HashMap::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
-            let roles: &[&str] = match instance.kind.as_str() {
-                "ff" => &["clk"],
-                "lutram" => &["wclk"],
-                "bram" => &["p0_clk", "p1_clk"],
-                _ => continue,
-            };
+            let roles = clock_pin_roles(&instance.kind);
+            if roles.is_empty() {
+                continue;
+            }
             let Some(site) = placement.site_of(index) else {
                 continue;
             };
@@ -2843,6 +2836,34 @@ pub const ROUTE_PASSES: u32 = 100;
 /// whose signal an input buffer drives and not a global buffer — barring it
 /// would keep a pad's clock off the only road to its `BUFG`. These are the
 /// wires the clock of that design took on the network, read off its route.
+/// The pins of a cell of `kind` that a clock reaches the way a flip-flop's
+/// does, through the global network: [`XrayFabric::clock_pin_entries`],
+/// [`XrayFabric::clock_network_use`] and the router's strict pins ask the
+/// same question, and this is its one answer.
+///
+/// A clock manager's and the XADC's register port `DCLK` (and a clock
+/// manager's phase-shift `PSCLK`) were not in it. The router brought
+/// `clk_usb` to the Husky Plus's glitch MMCM's `DCLK` over general
+/// interconnect (`INT_L.CLK_L0.SR1END1`), so that clock arrived later
+/// than the one at the flip-flops writing the port, by an amount the
+/// placement chose. On one build the port's strobe was taken an edge
+/// before its address: every read answered the one before it (register
+/// `0x09` read back `0x08`'s value until read twice), NewAE's driver
+/// reported "Failed to update the MMCM secondary divider", and the
+/// glitch tests failed. Another build put the same MMCM on the same site,
+/// came in on `ER1END1`, and read back right.
+#[must_use]
+pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "ff" => &["clk"],
+        "lutram" => &["wclk"],
+        "bram" => &["p0_clk", "p1_clk"],
+        "mmcm" => &["dclk", "psclk"],
+        "pll" | "sysmon" => &["dclk"],
+        _ => &[],
+    }
+}
+
 fn is_clock_wire(name: &str) -> bool {
     if ["TEST", "REGCLK", "I2GCLK"]
         .iter()

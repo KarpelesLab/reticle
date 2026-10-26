@@ -4144,11 +4144,29 @@ form before (which captured exactly), printed "Failed to update the MMCM
 secondary divider" from the driver on almost every test, a read back
 over the clock manager's DRP that disagreed with the write. That had
 been seen once before (RS3, 26 October) and not on the two builds that
-passed 15 and 14. Its cause is not found. It is placement's luck again:
+passed 15 and 14. *Its cause is not found*, this paragraph said at first;
+it is found, under **The register port that answered the read before**
+below. The rest of the failure is placement's luck again:
 with 408 endpoints of `clk_usb` late by the router's estimate on seed 3,
 which ones the part gets wrong is down to the placement. Some of the
 latest are LUT-built subtractions (`wused_next` into `prog_full_q`,
 13.6 ns), which is the cost of keeping them off the carry chain.
+
+**Pairing fewer lookup tables, not adopted.** On the Plus a path of the
+ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
+and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`
+pairs two functions into one site before placement, and the half that
+needs to be near its flip-flops goes wherever its partner is placed. Its
+last resort pairs tables that share no input at all, to save sites. On a
+die twice the design's size that saves nothing needed. Two binaries were
+measured: P0 without that last resort (976 of 5,885 pairs fewer) and P2
+pairing only tables sharing two inputs or more (3,204 pairs). P0-2: route
+6.5 minutes against 14, the logic analyser's latest path 7.5 ns against
+9.4, `clk_usb`'s 19.9 against 16.5, 564 endpoints past 12 ns against 81,
+and 9 of NewAE's tests against 13. P0-3 did not converge (the clock
+network, below). P2-2's tests ran while another probe was using the board,
+so its count is not one. One seed each says nothing against the spread
+between seeds, and neither is on master.
 
 **A route that did not converge, and what it now says.** Seed 1 of
 the committed form cycled between two or three signals for sixty passes
@@ -4163,6 +4181,67 @@ names, for each of the three worst nodes it has no explanation for, every
 signal on the node and the cell pins each reaches through it
 (`occupants` in `src/fpga/route.rs`). The next build that does this will
 say which cells.
+
+The next one did, the same day, and it was a third kind (a build pairing
+fewer lookup tables, seed 3, below). Three nodes of the clock network
+stayed oversubscribed after 100 passes, `X78Y78/CLK_HROW_CK_MUX_OUT_L0`
+the worst, and the message named both signals on it:
+`reg_chipwhisperer.rearclk` to four lookup tables' inputs, and the
+user-IO PLL's `CLKOUT3` to one. Both are clocks read as data. A signal a
+global buffer drives reaches a lookup table only through the clock
+network: the horizontal row's mux, a leaf buffer, then `GFAN0` from
+`GCLK_L_B0` to `B5` or `GFAN1` from `B6` to `B11` (`segbits_int_l.db`).
+The row's mux takes any of the 32 spines onto any of its twelve outputs,
+so another track existed for one of them. Why the router did not move one
+there in 100 passes is not found: a guess is that the Plus's other clocks
+held the tracks a `GFAN0` input can use in that region. Placement that
+knows the clock regions is what would rule it out.
+
+**The register port that answered the read before.** The driver's error
+comes from `set_sec_div` reading back a divider it has just written. A
+probe of every clock manager's register port on the part, writing and
+reading dividers other than one: NewAE's bitstream, 0 wrong of 56 on each
+of the three. A build of ours (P0-2, below): the glitch generator's
+offset MMCM wrong 53 times in 56, the other two right. Its registers,
+dumped right after configuration and set beside the same dump of NewAE's,
+were NewAE's **shifted by one address**: our `0x09` held their `0x08`, our
+`0x05` their `0x04`. Reading one register twice settled it. The first read
+returned the previous register's value and the second the right one, every
+time. The port took each read's strobe a clock edge before its address,
+so it read the address left from the transaction before.
+
+The port's clock `DCLK` is `clk_usb`, and it is a site pin a clock reaches
+through an interconnect tile's `CLK_L0`, as a flip-flop's does. But
+`CLK_L0` can also be driven from general wires (`ER1END1`, `WR1END1`,
+`SR1END1`, `FAN_BOUNCE5` in `segbits_int_l.db`). The rule that a global
+clock comes off the network at a clock pin (`clock_pin_entries`, the
+router's strict pins, and the bitstream check `clock_network_use`)
+named flip-flop, distributed RAM and block RAM clocks only. Decoded from
+the bitstreams: on P0-2 the MMCM's `CLK_L0` came from `SR1END1`; on another
+build (P2-2), with the same MMCM on the same site, from `ER1END1`. Both
+came from general routing, so both had a `DCLK` later than the clock at the
+flip-flops writing the port, and on P0-2 later than the strobe's own
+path. P2-2 read back right.
+
+A clock manager's `DCLK` and `PSCLK` and the XADC's `DCLK` are clock pins
+now (`xray::clock_pin_roles`, one list for all three uses), so they are
+reached over the network or the bitstream is refused. On the four clock
+managers of `testdata/fpga/husky/clock_managers.v` that is 36 clock
+pins on the network where it was 32.
+
+**That alone changed nothing on the Husky Plus**, and the build said so: 29,878
+clock pins on the network, as before, and a new warning, "9 clock pin(s)
+driven by a clock no global buffer drives". The Husky's `clk_usb` has no
+`BUFG` of NewAE's: the flow inserts one (`Mapper::clock_buffers`), and the
+insertion moved flip-flop and memory clocks onto it and left every other
+reader on the pad's net. The nine register-port clocks were among them,
+a clock no buffer drives, which the network rule does not hold. The
+decoded bitstream still showed `CLK_L0` from `SR1END1`. The insertion now
+moves a clock manager's and the XADC's `DCLK` and `PSCLK` too, taken from
+each primitive's port map as the memories' clocks are. The next build
+reported 29,887 of 29,887, its glitch MMCM was on the same site as P0-2's,
+and its `CLK_L0` came off a clock leaf. On the part all three clock
+managers read back right 56 times in 56.
 
 ## What remains before an LED could light
 

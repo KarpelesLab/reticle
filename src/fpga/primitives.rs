@@ -4803,6 +4803,25 @@ impl Mapper<'_> {
                 })
             })
             .collect();
+        // A clock manager's and the XADC's register port is clocked too,
+        // `DCLK` (and a clock manager's phase shift, `PSCLK`), and they
+        // moved with nothing: the Husky Plus's `clk_usb` went onto its
+        // buffer for every flip-flop and stayed on the pad's own net for
+        // its three MMCMs' and the XADC's ports, which then reached their
+        // `DCLK` over general interconnect. One MMCM's port answered every
+        // read with the one before; see `xray::clock_pin_roles`. Taken
+        // from each primitive's own port map, as the RAMs' are.
+        let port_clocks: Vec<(String, String)> = self
+            .device
+            .bels
+            .iter()
+            .filter(|b| matches!(b.role, BelRole::Mmcm | BelRole::Pll | BelRole::Sysmon))
+            .flat_map(|b| {
+                ["dclk", "psclk"]
+                    .into_iter()
+                    .filter_map(|role| b.port(role).map(|p| (b.name.clone(), p.to_owned())))
+            })
+            .collect();
         // Which net each clock pin reads, how many pins that is, and which
         // cell port would move onto the buffer. A flip-flop cell is as many
         // clock pins as it is bits wide, since that is what it becomes
@@ -4831,6 +4850,7 @@ impl Mapper<'_> {
                     }
                     for (_, port) in bram_clocks
                         .iter()
+                        .chain(&port_clocks)
                         .filter(|(name, _)| name == primitive.as_str())
                     {
                         found.push((1, port.clone()));

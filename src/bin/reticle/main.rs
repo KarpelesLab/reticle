@@ -3579,13 +3579,9 @@ fn write_xc7_bitstream(
         .pins
         .iter()
         .map(|pin| {
-            let clock_pin = matches!(
-                (
-                    netlist.instances[pin.instance].kind.as_str(),
-                    pin.role.as_str()
-                ),
-                ("ff", "clk") | ("lutram", "wclk") | ("bram", "p0_clk" | "p1_clk")
-            );
+            let clock_pin =
+                reticle::fpga::xray::clock_pin_roles(&netlist.instances[pin.instance].kind)
+                    .contains(&pin.role.as_str());
             clock_pin
                 && pin
                     .signal

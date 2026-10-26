@@ -284,6 +284,17 @@ fn the_husky_clock_managers_are_the_ones_vivado_wrote() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(run.status.success(), "{stderr}");
     assert!(!stderr.contains("NOT FULLY ROUTED"), "{stderr}");
+    // The register ports' clocks are clock pins: the glitch MMCM's `DCLK`
+    // and `PSCLK`, the logic analyser's `PSCLK` and the PLL's `DCLK`, 4 of
+    // the 36, each reached over the global network like a flip-flop's.
+    // Over general interconnect a `DCLK` came late enough on the Husky
+    // Plus that its port answered every read with the one before. This
+    // would catch those pins left out of `clock_pin_roles` again (32 of
+    // 32); one routed off the network is refused before it gets here.
+    assert!(
+        stderr.contains("36 of 36 clock pin(s) a global buffer drives arrived on the global"),
+        "{stderr}"
+    );
 
     let db = XrayDatabase::open(&DiskFiles, &root, "xc7a35t-ftg256", &XrayOptions::new()).unwrap();
     let part = db.part(&DiskFiles).unwrap();
@@ -313,4 +324,62 @@ fn the_husky_clock_managers_are_the_ones_vivado_wrote() {
         };
         matched.push(tile);
     }
+}
+
+/// The same four clock managers with the design's own `BUFG` taken away,
+/// so that the flow inserts the clock's global buffer itself: every clock
+/// pin moves onto it, the register ports' `DCLK` and `PSCLK` with the
+/// flip-flops' clocks, 36 of 36 on the network and none left on the pad's
+/// net. The insertion used to move only flip-flop and memory clocks: on
+/// the Husky Plus `clk_usb` went onto its buffer and its three MMCMs' and
+/// the XADC's ports stayed behind, reached over general interconnect, and
+/// one of them answered every read with the one before. Would catch those
+/// ports left out of the insertion again (32 of 32 and four pins "driven
+/// by a clock no global buffer drives"); would not catch a port of a
+/// primitive this design does not instantiate.
+#[test]
+fn a_clock_the_flow_buffers_reaches_the_register_ports_too() {
+    let Some(root) = chipdb() else { return };
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/husky");
+    if !dir.join("clock_managers.v").is_file() {
+        eprintln!("skipped: `testdata/` is not in the published crate");
+        return;
+    }
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("husky-clock-managers-unbuffered");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let source = std::fs::read_to_string(dir.join("clock_managers.v")).unwrap();
+    let own_buffer = "BUFG u_bufg (.I(clk_usb), .O(clk));";
+    assert!(source.contains(own_buffer), "the design's own buffer moved");
+    let design = out.join("clock_managers.v");
+    std::fs::write(&design, source.replace(own_buffer, "assign clk = clk_usb;")).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "--device",
+            "xc7a35t-ftg256",
+            "--chipdb",
+            &root,
+            "--region",
+            "0,0,114,156",
+            "--constraints",
+        ])
+        .arg(dir.join("clock_managers.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join("clock_managers.bit"))
+        .arg(&design)
+        .output()
+        .expect("the reticle binary runs");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("36 of 36 clock pin(s) a global buffer drives arrived on the global"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("driven by a clock no global buffer drives"),
+        "{stderr}"
+    );
 }
