@@ -1166,7 +1166,14 @@ pub fn route(
             contention: worst
                 .iter()
                 .take(8)
-                .filter_map(|(_, node)| contention(netlist, graph, placement, &routing, *node))
+                .enumerate()
+                .filter_map(|(rank, (_, node))| {
+                    contention(netlist, graph, placement, &routing, *node).or_else(|| {
+                        (rank < OCCUPANTS_NAMED)
+                            .then(|| occupants(netlist, graph, placement, &routing, *node))
+                            .flatten()
+                    })
+                })
                 .collect(),
         });
     }
@@ -1712,6 +1719,83 @@ fn contention(
         tile.1,
         wanted.len(),
         wanted.join(" and "),
+    ))
+}
+
+/// How many of the worst nodes [`occupants`] names the signals of.
+const OCCUPANTS_NAMED: usize = 3;
+
+/// The signals on an oversubscribed node and the cell pins each reaches
+/// through it, for a node [`contention`] does not explain.
+///
+/// `worst at X12Y173/BYP_ALT7 (2 signals)` was a Husky Plus build that
+/// cycled between the same two or three signals for sixty passes and
+/// gave up: a wire with one way out, the bypass input of the slice beside
+/// it, and two signals that each needed it. `contention` looks for pins
+/// inside the node's own tile, and on the 7 series that pin is in the
+/// next one. This says which signals and which pins, so that the cells
+/// sharing the slice can be found. `None` when the node holds no route.
+fn occupants(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    routing: &Routing,
+    node: NodeId,
+) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for (signal, route) in routing.routes.iter().enumerate() {
+        let Some(route) = route.as_ref() else {
+            continue;
+        };
+        if route.nodes.binary_search(&node).is_err() {
+            continue;
+        }
+        // What the route reaches from the node, following its own pips.
+        let mut below = vec![node];
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for pip in &route.pips {
+                let pip = graph.pip(*pip);
+                if below.contains(&pip.from) && !below.contains(&pip.to) {
+                    below.push(pip.to);
+                    grew = true;
+                }
+            }
+        }
+        let mut sinks: Vec<String> = Vec::new();
+        for &pin in &netlist.signals[signal].sinks {
+            let ends = route
+                .moved
+                .iter()
+                .find(|(p, _)| *p == pin)
+                .map(|(_, n)| vec![*n]);
+            let ends = match ends {
+                Some(ends) => ends,
+                None => nodes_of(netlist, graph, placement, pin).unwrap_or_default(),
+            };
+            if ends.iter().any(|end| below.contains(end)) {
+                let at = &netlist.pins[pin];
+                sinks.push(format!(
+                    "`{}`'s `{}` pin",
+                    netlist.instances[at.instance].name, at.role
+                ));
+            }
+        }
+        let name = &netlist.signals[signal].name;
+        lines.push(if sinks.is_empty() {
+            format!("`{name}`, passing through")
+        } else {
+            format!("`{name}` to {}", sinks.join(", "))
+        });
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "  {} carries {}",
+        graph.wire(node).full_name(),
+        lines.join("; and ")
     ))
 }
 
@@ -4495,6 +4579,78 @@ mod tests {
         assert_eq!(iterations, 5);
         assert!(overused > 0);
         assert!(err.to_string().contains("did not converge"));
+    }
+
+    /// A wire with one way out, in a tile of its own: two signals need it
+    /// and no rerouting can share it. The report says which two and where
+    /// each was going, which a Husky Plus build that gave up at
+    /// `X12Y173/BYP_ALT7` did not, because the pin behind that wire is in
+    /// the next tile and [`contention`] only looks in the wire's own. Would
+    /// catch the signals or their sinks left out again; would not catch a
+    /// sink named that the route reaches some other way, which a route
+    /// through one wire cannot have.
+    #[test]
+    fn a_wire_nothing_can_share_names_its_signals_and_their_pins() {
+        let mut arch = Arch::new("narrows", "test", 3, 1);
+        let mut cells = TileType::new("c", "c_tile", 8, 8);
+        let mut bit = 0u32;
+        let mut next_bit = || {
+            let at = ConfigBit::new(bit / 8, bit % 8);
+            bit += 1;
+            at
+        };
+        for n in 0..2 {
+            for name in [format!("out{n}"), format!("in{n}")] {
+                cells.wires.push(WireDecl { name, dx: 0, dy: 0 });
+            }
+            let mut src = BelDecl::new(format!("src{n}"), "lut");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            cells.bels.push(src);
+            let mut dst = BelDecl::new(format!("dst{n}"), "ff");
+            dst.pins
+                .push(("d".to_owned(), WireRef::local(format!("in{n}"))));
+            cells.bels.push(dst);
+            cells.pips.push(PipDecl {
+                from: WireRef::at("mid", -1, 0),
+                to: WireRef::local(format!("in{n}")),
+                bits: vec![next_bit()],
+            });
+        }
+        let mut narrows = TileType::new("n", "n_tile", 8, 8);
+        narrows.wires.push(WireDecl {
+            name: "mid".to_owned(),
+            dx: 0,
+            dy: 0,
+        });
+        for n in 0..2 {
+            narrows.pips.push(PipDecl {
+                from: WireRef::at(format!("out{n}"), -1, 0),
+                to: WireRef::local("mid"),
+                bits: vec![next_bit()],
+            });
+        }
+        arch.tile_types.push(cells);
+        arch.tile_types.push(narrows);
+        arch.set_tile(0, 0, 0);
+        arch.set_tile(1, 0, 1);
+        arch.set_tile(2, 0, 0);
+        let graph = arch.build_graph();
+        let netlist = pairs(2);
+        let placement = place_in_order(&netlist, &graph, &[0, 2, 0, 2]);
+        let options = RouteOptions {
+            max_iterations: 5,
+            ..RouteOptions::default()
+        };
+        let err = route(&netlist, &graph, &placement, &options).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("worst at X1Y0/mid (2 signals)"), "{text}");
+        assert!(
+            text.contains(
+                "X1Y0/mid carries `n0` to `dst0`'s `d` pin; and `n1` to `dst1`'s `d` pin"
+            ),
+            "{text}"
+        );
     }
 
     #[test]
