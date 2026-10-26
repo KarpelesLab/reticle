@@ -4038,6 +4038,50 @@ register bus's address and data, the FIFO's read enable), 4 to 6 ns a
 connection. NewAE's test_husky_dev passed 9 to 18 of 47 across the
 builds of these two days, against 42 for NewAE's own bitstream.
 
+### Seeds, and four changes the part did not want (2026-10-26)
+
+With `--place-seed` the same sources can be placed several ways, which
+is what tells a change's effect from a placement's luck. Six builds of
+master's flow, three seeds each with and without one change, all had
+test ramps exact twelve times in twelve; that much is settled. The rest
+was measured that way, NewAE's test_husky_dev without the overclocked
+and fastest ramp tests (which hang after a failure in some builds):
+
+- **Copying a flip-flop read across the die** for each part that reads
+  it (56 flip-flops, 127 copies, 7,113 pins moved): 13, 10 and 12
+  passed against 15, 15 and 12 without, and routes of 36 to 124
+  minutes against 25 to 60. Dropped, and not on master.
+- **`x == p - q` compared as `x + q == p`**: a ramp missed once in
+  twelve on both seeds tried, where none had missed on six builds
+  without it; 9 and 13 passed. Dropped.
+- **A cap on the congestion charge** (VPR's `max_pres_fac`, 1000):
+  routes of 1,076, 1,609 and 3,921 s against 647, 2,295 and 3,461 s
+  uncapped at the same seeds. Dropped. *These route times were
+  measured with other builds, and once another program using 84 cores,
+  running beside them; they are not comparable to a second, and none of
+  these was a large effect.*
+- **A budget on a critical search** (pushed, aa12085): it gives up
+  after four million nodes and searches again as an uncritical
+  connection. It bounds a flood like the 5.7 billion nodes of one pass
+  seen before it, and changed nothing measurable on the seed tried.
+
+**The logic analyser at 400 MHz.** NewAE's glitch tests sample at 40
+times a 10 MHz clock. Probed directly on the part: the analyser
+captures at 40, 100 and 200 MHz and leaves its FIFO empty at 400, with
+either trigger source, on every build. Its domain is timed at the
+240 MHz its MMCM's parameters give, and its latest paths are 7 to 10
+ns: the capture counter's 32-bit compare against `capture_depth - 1`
+among them, a subtraction in lookup tables. That is the fourteen glitch
+tests.
+
+**Not reached, and why.** `test_fpga_version` compares the build date
+with NewAE's own release, which a build of theirs by anyone else does
+not have. `test_max_samples` asks for 346,246 twelve-bit samples, about
+57,700 words of 72 bits; the stand-in FIFOs hold about 21 words fewer
+than NewAE's, whose FIFO Generator cores are its built-in FIFOs
+(`C_IMPLEMENTATION_TYPE` 6) and hold a few words over their nominal
+depths, which the stand-ins do not model.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
