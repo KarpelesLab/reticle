@@ -147,7 +147,24 @@ Vivado builds these from the block RAM's own FIFO logic; here each is a
 memory with its pointers and flags in the fabric. What differs, said in
 the file's header too: the hardware FIFO's capacity in fall-through mode
 is a word or two more than its depth, and its flags move on different
-cycles after a write on the other clock. NewAE's logic around these
+cycles after a write on the other clock.
+
+The Husky Plus's `.xci` (`cwhusky_plus.srcs`) make three of them deeper:
+`fast_slower_fifo` 8192, `usb_slow_fifo1` 16384 with `prog_full` at
+16390, and `usb_slow_fifo2` 32768 with `prog_full` at 32782. Those two
+thresholds are past the depth, and NewAE's `slow_fifo_wrapper` moves
+words into `usb_slow_fifo2` until its `prog_full` rises, without looking
+at `full`. So on the Plus those two hold the threshold and two words more
+(16,392 and 32,784), through a queue in distributed RAM behind the word
+on `dout`. That is one word for each block RAM of the core's depth (it
+builds them from `2kx18` primitives, eight and sixteen deep), and the
+same count gives `fast_slower_fifo` 8,196: with only the depth plus one,
+a capture of NewAE's maximum fell three twelve-bit samples short, its
+fast FIFO overflowing. Holding only their depth, the second overflowed on the part:
+12-bit captures of 195,000 samples (32,500 words) were exact, and every
+one tried from 197,000 (32,834) up to NewAE's maximum of 346,246 failed
+with "slow FIFO overflow". That the core holds as much is read
+from the thresholds Vivado accepted, not measured. NewAE's logic around these
 cores counts samples itself and reads the flags as levels, which is the
 reading of their source that makes a stand-in reasonable — a reading,
 not a measurement.

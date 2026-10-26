@@ -1553,6 +1553,34 @@ fn the_husky_fifo_stand_ins_pass_their_testbench() {
     );
 }
 
+/// And with `PLUS` defined, the Husky Plus's depths, where three FIFOs
+/// hold more than their depth so that a `prog_full` set past it can rise:
+/// `usb_slow_fifo2`'s at 32782 never did, and on the part every capture of
+/// more than its 32,769 words overflowed it. Checks each of the three is
+/// `full` at exactly what it now holds and gives every word back in order
+/// through the queue that holds the extra words; with a queue one word
+/// shorter, or taking the memory's word ahead of a queued one, it fails.
+/// It would not catch a capacity that differs from the core's, which is
+/// read from its thresholds, not measured, nor the late paths that made
+/// one build's captures set bits on the part, which only the part shows.
+#[cfg(feature = "sim")]
+#[test]
+fn the_husky_plus_fifo_stand_ins_pass_their_testbench() {
+    let (code, out, err) = run(&[
+        "sim",
+        "--quiet",
+        "--define",
+        "PLUS",
+        "examples/husky/fifo_generator_tb.v",
+        "examples/husky/fifo_generator.v",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.lines().any(|line| line.starts_with("PASS:")),
+        "the Husky Plus FIFO testbench did not pass:\n{out}\n{err}"
+    );
+}
+
 /// **The two-clock stand-in's pointers cross from registers.** Reticle's
 /// own crossing check on `fast_slower_fifo`, the one stand-in with two
 /// clocks: no crossing it calls unsynchronised. The gray pointers used to

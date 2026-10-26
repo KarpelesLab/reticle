@@ -4092,6 +4092,78 @@ than NewAE's, whose FIFO Generator cores are its built-in FIFOs
 (`C_IMPLEMENTATION_TYPE` 6) and hold a few words over their nominal
 depths, which the stand-ins do not model.
 
+*Corrected the next day: twenty-one words short was the arithmetic, and
+it was not why. Every capture past 32,769 words failed, a sixth of the
+way to the maximum; see the next section.*
+
+### What the FIFOs hold, and faults only some placements have (2026-10-27)
+
+**The capacity.** Measured on the part with master's flow: twelve-bit
+captures of 195,000 samples (32,500 words) were exact, and every one tried
+from 197,000 (32,834 words) up to 346,246 timed out with "slow FIFO
+overflow". The boundary is `usb_slow_fifo2`'s 32,768 words and the one on
+`dout`. NewAE's `slow_fifo_wrapper` moves words into that FIFO while its
+`prog_full` is low, and doesn't look at `full`. On the Plus that
+threshold is 32,782 (`cwhusky_plus.srcs`'s `.xci`), past the depth, so it
+never rose and the words past 32,769 were dropped. `usb_slow_fifo1`'s is
+16,390, past its 16,384. Vivado accepted both thresholds, so the
+built-in FIFO holds at least that many. One word for each `2kx18`
+primitive of its depth fits both: 16,392 and 32,784. The stand-in now holds
+those, with a queue in distributed RAM between the memory and `dout`
+(`extra_words` in `examples/husky/fifo_generator.v`). The figures are
+read from the thresholds, not measured from the core.
+
+With that, the longest capture without an error was 346,243 twelve-bit
+samples and 518,338 eight-bit ones, 3 and 6 short of NewAE's maximum, the
+fast FIFO overflowing. The same count gives `fast_slower_fifo` 8,196
+words, and with it `test_internal_ramp[maxsamples12]` passes.
+`test_max_samples` then got to 162 MHz of its sweep from 150 to 250 MHz
+before the fast FIFO overflowed, on its second capture at that clock: so
+it still holds no more than NewAE's maximum needs, if that, at the higher
+ADC clocks.
+
+**The queue's first form failed on one placement in two.** It was
+written straight from the memory, through the multiplexer choosing a
+bank. On the first build every capture read back bits set that the ramp
+had clear, never one cleared: in every word at the same place at 1,000
+samples, and scattered at 131,070. The second build (same sources, seed
+2) was exact. The queue's inputs were that build's latest `clk_usb`
+paths, at 12.5 ns of 10.4. A register between the memory and the queue
+moved them, and is in the committed form; it moved the late paths onto
+that register's own input (12.6 ns on a third build).
+
+**Then a different failure, on one build in two again.** Of two builds
+of the committed form, seed 2 had test ramps exact twelve times in twelve
+and passed 13 of NewAE's tests before one hung
+(`test_triggered_glitch_counter[max]`, killed after 25 minutes),
+`maxsamples12` and `ADCslow` among them, and all four `test_pll` cases,
+which one earlier build (DC5) had also passed. Seed 3 returned
+no trace at all, from a freshly loaded part, where NewAE's bitstream
+on the same part captured exactly just before. Both, and seed 2 of the
+form before (which captured exactly), printed "Failed to update the MMCM
+secondary divider" from the driver on almost every test, a read back
+over the clock manager's DRP that disagreed with the write. That had
+been seen once before (RS3, 26 October) and not on the two builds that
+passed 15 and 14. Its cause is not found. It is placement's luck again:
+with 408 endpoints of `clk_usb` late by the router's estimate on seed 3,
+which ones the part gets wrong is down to the placement. Some of the
+latest are LUT-built subtractions (`wused_next` into `prog_full_q`,
+13.6 ns), which is the cost of keeping them off the carry chain.
+
+**A route that did not converge, and what it now says.** Seed 1 of
+the committed form cycled between two or three signals for sixty passes
+over one node and gave up after 100: `X12Y173/BYP_ALT7`, whose only way
+out is `CLBLM_L_DX`, the bypass input of the slice beside it. That pin
+serves the `D` flip-flop, the `D5` flip-flop and the carry chain's fourth
+generate, so two cells placed in that slice both needed it. The placer
+should have refused that, and the warning could not say which cells they
+were: the explanation it gives for a shared wire looks only in the
+wire's own tile, and on the 7 series the pin is in the next one. It now
+names, for each of the three worst nodes it has no explanation for, every
+signal on the node and the cell pins each reaches through it
+(`occupants` in `src/fpga/route.rs`). The next build that does this will
+say which cells.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

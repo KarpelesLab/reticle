@@ -31,8 +31,12 @@
 //
 // What is deliberately not the same: in fall-through mode this holds the
 // depth plus the one word waiting on `dout`, and the built-in FIFO's own
-// figure is not reproduced; the cycle on which a flag moves after a write
-// on the other clock is not the hardware's either. NewAE's logic
+// figure is not reproduced, except where NewAE's logic needs more: the
+// Husky Plus's two slow FIFOs set `prog_full` past their depth, and hold
+// two words past that threshold here (`extra_words`), which is a reading
+// of the thresholds and not a measurement of the core. The cycle on which
+// a flag moves after a write on the other clock is not the hardware's
+// either. NewAE's logic
 // around these cores counts samples itself and reads the flags as levels,
 // which is what makes a stand-in reasonable — that is a reading of their
 // source, not a measurement.
@@ -49,7 +53,10 @@ module husky_fifo #(
     parameter PROG_FULL = 0,
     parameter PROG_EMPTY = 0,
     // Words per bank, as a power of two; at `AW`, one memory. See `banked`.
-    parameter BANK_AW = AW
+    parameter BANK_AW = AW,
+    // Fall-through only: words held beyond the depth and the word on
+    // `dout`, at most 31. See `extra_words`.
+    parameter EXTRA = 0
 ) (
     input  wire             rst,
     input  wire             wr_clk,
@@ -102,6 +109,10 @@ module husky_fifo #(
   wire [AW:0] wptr_next;
   wire [AW:0] rptr_next;
   wire        held_next;
+  // Words read out of the memory and not yet taken, after this edge: the
+  // word on `dout`, and in `extra_words` those queued behind it.
+  wire [5:0]  out_next;
+  wire [WIDTH-1:0] mem_q;  // the memory's read register
 
   // --- write side ----------------------------------------------------------
   wire [AW:0] wused_next = wptr_next - rptr_w_next;
@@ -123,7 +134,7 @@ module husky_fifo #(
     end
   // With one clock the word waiting on `dout` in fall-through mode is
   // still in the FIFO, and counts; with two the write side cannot see it.
-  wire [AW+1:0] wcount_next = wused_next + ((FWFT && !ASYNC) ? held_next : 1'b0);
+  wire [AW+1:0] wcount_next = wused_next + ((FWFT && !ASYNC) ? out_next : 6'd0);
   reg prog_full_q;
   assign prog_full = !wrst && prog_full_q;
 
@@ -132,18 +143,76 @@ module husky_fifo #(
   reg              stored;  // words still in the memory
   wire             take;  // a read the user asked for and gets
   wire             fetch;  // the memory read this cycle
-  if (FWFT) begin : fall_through
+  if (FWFT && EXTRA == 0) begin : fall_through
     assign empty = !held;
     assign take  = rd_en && held;
     assign fetch = stored && (!held || take) && !rrst;
+    assign held_next = fetch || (held && !take);
+    assign out_next = {5'd0, held_next};
+    assign dout = mem_q;
+  end else if (FWFT) begin : extra_words
+    // The FIFO Generator's built-in FIFO holds more than its depth: the
+    // Husky Plus's `usb_slow_fifo2` is 32,768 deep with `prog_full` at
+    // 32,782, and NewAE's `slow_fifo_wrapper` moves words into it until
+    // that flag rises, without looking at `full`. Holding only the depth,
+    // it overflowed: on the part, 12-bit captures of 195,000 samples were
+    // exact and of 197,000 failed with "slow FIFO overflow", the boundary
+    // being its 32,769 words. Here the memory's words come out through a
+    // register, then a queue of `EXTRA` in distributed RAM, to a register
+    // on `dout`. The first register is for the part: written straight from
+    // the memory, through the multiplexer choosing a bank, the queue's
+    // inputs were `clk_usb`'s late paths, at 12.5 ns of 10.4, and captures
+    // read back bits set that the ramp had clear, some in every word.
+    reg  [5:0] outside;  // `held`, the queue, `staged` and `fetched`
+    reg        fetched;  // `mem_q` holds the word read last cycle
+    reg        staged;  // `stage` holds the word before it
+    reg  [WIDTH-1:0] stage;
+    reg  [5:0] queued;
+    reg  [4:0] qw, qr;
+    reg  [WIDTH-1:0] head;
+    (* ram_style = "distributed" *) reg [WIDTH-1:0] queue [0:31];
+    wire free = !held || take;  // `head` may be loaded
+    wire from_queue = free && queued != 0;
+    wire from_stage = free && queued == 0 && staged;
+    wire push = staged && !from_stage;
+    assign empty = !held;
+    assign take  = rd_en && held;
+    assign fetch = stored && !rrst && outside - take <= EXTRA;
+    assign held_next = from_queue || from_stage || (held && !take);
+    assign out_next = outside - take + fetch;
+    assign dout = head;
+    always @(posedge rclk) begin
+      if (fetched) stage <= mem_q;
+      if (push) queue[qw] <= stage;
+      if (from_queue) head <= queue[qr];
+      else if (from_stage) head <= stage;
+    end
+    always @(posedge rclk or posedge rst)
+      if (rst) begin
+        outside <= 0;
+        fetched <= 1'b0;
+        staged <= 1'b0;
+        queued <= 0;
+        qw <= 0;
+        qr <= 0;
+      end else begin
+        outside <= out_next;
+        fetched <= fetch;
+        staged <= fetched;
+        queued <= queued + push - from_queue;
+        qw <= qw + push;
+        qr <= qr + from_queue;
+      end
   end else begin : standard
     assign empty = !stored || rrst;
     assign take  = rd_en && !empty;
     assign fetch = take;
+    assign held_next = 1'b0;
+    assign out_next = 6'd0;
+    assign dout = mem_q;
   end
   assign rptr_next = rptr + fetch;
-  assign held_next = fetch || (held && !take);
-  wire [AW:0] rused_next = (wptr_r_next - rptr_next) + (FWFT ? held_next : 1'b0);
+  wire [AW:0] rused_next = (wptr_r_next - rptr_next) + out_next;
   reg prog_empty_q;
   always @(posedge rclk or posedge rst)
     if (rst) begin
@@ -204,12 +273,12 @@ module husky_fifo #(
       always @(posedge rclk) if (fetch) q <= mem[raddr];
       assign bank_q[b*WIDTH+:WIDTH] = q;
     end
-    assign dout = bank_q[which_q*WIDTH+:WIDTH];
+    assign mem_q = bank_q[which_q*WIDTH+:WIDTH];
   end else begin : single
     (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:DEPTH-1];
     always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;
     always @(posedge rclk) if (fetch) q <= mem[rptr[AW-1:0]];
-    assign dout = q;
+    assign mem_q = q;
   end
 
   // --- crossing ------------------------------------------------------------
@@ -307,7 +376,8 @@ module adc_fast_fifo (
 endmodule
 
 // 72 x 4096, independent clocks, fall-through, `prog_empty` at 6; on the
-// Husky Plus 72 x 8192 (`cwhusky_plus.srcs`).
+// Husky Plus 72 x 8192 (`cwhusky_plus.srcs`), holding 8,196 words here
+// (`extra_words`).
 // `fast_slower_fifo.xci`.
 module fast_slower_fifo (
     input  wire        rst,
@@ -327,6 +397,7 @@ module fast_slower_fifo (
       .WIDTH(72),
 `ifdef PLUS
       .AW(13),
+      .EXTRA(3),
 `else
       .AW(12),
 `endif
@@ -394,7 +465,8 @@ endmodule
 
 // 72 x 2048, common clock, fall-through, `prog_full` at 2047 and
 // `prog_empty` at 4. `usb_slow_fifo1.xci`; on the Husky Plus 72 x 16384
-// and `prog_full` at 16390.
+// and `prog_full` at 16390, which is past the depth, and holding 16,392
+// words here (`extra_words`).
 module usb_slow_fifo1 (
     input  wire        clk,
     input  wire        rst,
@@ -414,6 +486,7 @@ module usb_slow_fifo1 (
 `ifdef PLUS
       .AW(14),
       .PROG_FULL(16390),
+      .EXTRA(7),
 `else
       .AW(11),
       .PROG_FULL(2047),
@@ -430,7 +503,7 @@ endmodule
 
 // 72 x 16384, common clock, fall-through, `prog_full` at 16384.
 // `usb_slow_fifo2.xci`; on the Husky Plus 72 x 32768 and `prog_full` at
-// 32782.
+// 32782, holding 32,784 words here (`extra_words`).
 module usb_slow_fifo2 (
     input  wire        clk,
     input  wire        rst,
@@ -449,6 +522,7 @@ module usb_slow_fifo2 (
 `ifdef PLUS
       .AW(15),
       .PROG_FULL(32782),
+      .EXTRA(15),
 `else
       .AW(14),
       .PROG_FULL(16384),

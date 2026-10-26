@@ -5,17 +5,22 @@
 //     FIFO raises `underflow` the next cycle and changes nothing;
 //   * fall-through (`usb_slow_fifo1`): the oldest word is on `dout`
 //     whenever `empty` is low; `prog_empty` holds at four words and below
-//     and `prog_full` at 2047 and above (16390 with `PLUS` defined);
+//     and `prog_full` at 2047 and above (16390 with `PLUS` defined, past
+//     the depth); it is `full` at 2049 words (16392), and every word comes
+//     back in order;
 //   * full (`adc_fast_fifo`, 2048 words): `full` after the last word, and a
 //     write then raises `overflow` and is dropped;
 //   * independent clocks (`fast_slower_fifo`): words written on one clock
-//     come back in order on another, nine of every ten cycles apart;
+//     come back in order on another, nine of every ten cycles apart; it is
+//     `full` at 4097 words (8196 with `PLUS`) and not one before, and
+//     they all come back in order;
 //   * banked (`usb_slow_fifo2`, banks of 8192): a stream of 9000 words
 //     written every cycle and read two cycles in three comes back in order
 //     across the banks, the reads close behind the writes; then 16384
-//     words (32768 with `PLUS`) make it `prog_full` and one more `full`,
-//     the word on `dout` being out of the memory, and one more again
-//     overflows; and all of them come back.
+//     words (32783 with `PLUS`) make it `prog_full` and one more `full`,
+//     the word on `dout` being out of the memory (with `PLUS`, fifteen
+//     more queued behind it), and one more again overflows; and all of
+//     them come back.
 //
 // It prints `PASS:` and finishes, or `FAIL:` and what differed. What it
 // would not catch: the cycle a flag moves on after a write on the other
@@ -24,8 +29,12 @@
 module fifo_generator_tb;
 `ifdef PLUS
   localparam PROG_FULL = 16390;
+  localparam S_HOLDS = 16392;
+  localparam X_HOLDS = 8196;
 `else
   localparam PROG_FULL = 2047;
+  localparam S_HOLDS = 2049;
+  localparam X_HOLDS = 4097;
 `endif
   reg clk = 0, rclk = 0, rst = 1;
   always #5 clk = ~clk;
@@ -91,11 +100,12 @@ module fifo_generator_tb;
       .full(b_full), .empty(b_empty), .prog_full(b_pf), .overflow(b_over),
       .underflow(b_under)
   );
-  // Its depth: on the Husky Plus 32768, and `prog_full` past what it holds.
+  // What it holds: the depth and the word on `dout`, and on the Husky Plus
+  // fifteen more, so that its `prog_full` at 32782 can rise.
 `ifdef PLUS
-  localparam B_DEPTH = 32768;
+  localparam B_HOLDS = 32784;
 `else
-  localparam B_DEPTH = 16384;
+  localparam B_HOLDS = 16385;
 `endif
   reg b_go = 0;
   integer b_sent = 0, b_got = 0, b_cycle = 0, b_wrong = 0;
@@ -123,16 +133,19 @@ module fifo_generator_tb;
     end
 
   integer i;
+  integer failures_before;
+  integer x_wait;
   integer got = 0;
   integer sent = 0;
   reg go = 0;
   // The crossing's writer and reader, each on its own clock.
+  reg x_fill = 0;  // the fill below drives the write side instead
   always @(posedge clk)
     if (go && sent < 40) begin
       x_din <= 72'hcd_0000_0000_0000_0000 + sent;
       x_wr <= 1;
       sent <= sent + 1;
-    end else begin
+    end else if (!x_fill) begin
       x_wr <= 0;
     end
   // Sampled between edges, so `rd_en` spans the edge that pops.
@@ -205,24 +218,47 @@ module fifo_generator_tb;
     check("fall-through empty", s_empty, 1);
     // prog_full: 2047 words, or the Husky Plus's 16390.
     for (i = 0; i < PROG_FULL - 1; i = i + 1) begin
+      s_din <= 72'hac_0000_0000_0000_0000 + i;
       s_wr <= 1;
       @(posedge clk);
     end
     s_wr <= 0;
     @(posedge clk);
     check("prog_full below its threshold", s_pf, 0);
+    s_din <= 72'hac_0000_0000_0000_0000 + PROG_FULL - 1;
     s_wr <= 1;
     @(posedge clk);
     s_wr <= 0;
     @(posedge clk);
-`ifdef PLUS
-    // The Husky Plus's threshold, 16390, is past the 16385 words this
-    // holds, so the flag never rises; whether the core's does is not
-    // known here.
-    check("prog_full past the depth", s_pf, 0);
-`else
     check("prog_full at its threshold", s_pf, 1);
-`endif
+    // Then full at what it holds, and not a word before.
+    for (i = PROG_FULL; i < S_HOLDS - 1; i = i + 1) begin
+      s_din <= 72'hac_0000_0000_0000_0000 + i;
+      s_wr <= 1;
+      @(posedge clk);
+    end
+    s_wr <= 0;
+    repeat (4) @(posedge clk);
+    check("fall-through not full a word short", s_full, 0);
+    s_din <= 72'hac_0000_0000_0000_0000 + S_HOLDS - 1;
+    s_wr <= 1;
+    @(posedge clk);
+    s_wr <= 0;
+    repeat (4) @(posedge clk);
+    check("fall-through full at what it holds", s_full, 1);
+    check("fall-through overflow never", s_over, 0);
+    // And every word back, in order, through the queue of `extra_words`.
+    failures_before = failures;
+    for (i = 0; i < S_HOLDS; i = i + 1) begin
+      @(negedge clk);
+      if (s_dout !== 72'hac_0000_0000_0000_0000 + i && failures == failures_before)
+        check("fall-through fill read back", s_dout, 72'hac_0000_0000_0000_0000 + i);
+      s_rd = 1;
+    end
+    @(negedge clk);
+    s_rd = 0;
+    @(posedge clk);
+    check("fall-through empty after the fill", s_empty, 1);
 
     // Full and overflow: 2048 words, then one more is refused.
     for (i = 0; i < 2048; i = i + 1) begin
@@ -256,6 +292,43 @@ module fifo_generator_tb;
     check("crossed all forty", got, 40);
     check("crossed underflow never", x_under, 0);
     check("crossed overflow never", x_over, 0);
+    // Then full at what it holds, with the reader stopped, and every word
+    // back in order.
+    go = 0;
+    x_fill = 1;
+    for (i = 0; i < X_HOLDS - 1; i = i + 1) begin
+      x_din <= 72'hce_0000_0000_0000_0000 + i;
+      x_wr <= 1;
+      @(posedge clk);
+    end
+    x_wr <= 0;
+    repeat (20) @(posedge clk);
+    check("crossed not full a word short", x_full, 0);
+    x_din <= 72'hce_0000_0000_0000_0000 + X_HOLDS - 1;
+    x_wr <= 1;
+    @(posedge clk);
+    x_wr <= 0;
+    repeat (20) @(posedge clk);
+    check("crossed full at what it holds", x_full, 1);
+    check("crossed overflow never when filling", x_over, 0);
+    x_fill = 0;
+    failures_before = failures;
+    for (i = 0; i < X_HOLDS; i = i + 1) begin
+      @(negedge rclk);
+      x_wait = 0;
+      while (x_empty && x_wait < 20) begin
+        @(negedge rclk);
+        x_wait = x_wait + 1;
+      end
+      if (x_dout !== 72'hce_0000_0000_0000_0000 + i && failures == failures_before)
+        check("crossed fill read back", x_dout, 72'hce_0000_0000_0000_0000 + i);
+      x_rd = 1;
+      @(negedge rclk);
+      x_rd = 0;
+    end
+    repeat (20) @(posedge rclk);
+    check("crossed empty after the fill", x_empty, 1);
+    check("crossed underflow never when draining", x_under, 0);
 
     // Banked: the stream, then full.
     b_go = 1;
@@ -274,19 +347,16 @@ module fifo_generator_tb;
     check("banked words in order", b_wrong, 0);
     check("banked underflow never", b_under, 0);
     check("banked empty after", b_empty, 1);
-    for (i = 0; i < B_DEPTH; i = i + 1) begin
+    for (i = 0; i < B_HOLDS - 1; i = i + 1) begin
       b_din <= i;
       b_wr <= 1;
       @(posedge clk);
     end
     b_wr <= 0;
-    @(posedge clk);
-    // The word on `dout` is out of the memory, so it takes one more.
-`ifndef PLUS
-    check("banked prog_full at its depth", b_pf, 1);
-`endif
-    check("banked not full at its depth", b_full, 0);
-    b_din <= B_DEPTH;
+    repeat (4) @(posedge clk);
+    check("banked prog_full a word short", b_pf, 1);
+    check("banked not full a word short", b_full, 0);
+    b_din <= B_HOLDS - 1;
     b_wr <= 1;
     @(posedge clk);
     b_wr <= 0;
@@ -301,7 +371,7 @@ module fifo_generator_tb;
     // And every word comes back, so that no bank's write landed in another.
     // Sampled between edges, so `rd_en` spans the edge that pops.
     b_wrong = 0;
-    for (i = 0; i <= B_DEPTH; i = i + 1) begin
+    for (i = 0; i < B_HOLDS; i = i + 1) begin
       @(negedge clk);
       if (b_dout !== i) begin
         if (b_wrong == 0) $display("FAIL: banked word %0d of the fill: got %h", i, b_dout);
