@@ -4020,8 +4020,18 @@ placements; with none on the chain, twelve in twelve. Keeping groups of
 twelve in twelve; the others off and it on, the same failures. It
 subtracts a constant one, which gives nearly every lane a constant
 generate of **one** beside a propagate that is a real function; a
-counter's constant generates are zeros and work. **Not known**: what the
-part does differently there. `MapOptions::min_subtract_carry_width` is
+counter's constant generates are zeros and work. That was the suspect,
+and **it is wrong**: measured on the part on 2026-10-27, five
+subtractions of constants (1, 2, 3, 6 and `0x5A5A5`) from the sample
+count, on the chain, read back through the register `max_samples` is
+read from (a scratch copy of NewAE's sources), were right for every one
+of 2,098 sample counts. The chain computes; what the capture then does
+wrong is dynamic. **Not known**: what. A candidate, not checked: the
+comparison is a few tables after a static chain, where in tables it was
+sixteen in a row, and a short path between two clock regions can race
+the clock; the flow's rough hold check cannot say, since it reports
+hundreds of such races in every build, those that capture right
+included. `MapOptions::min_subtract_carry_width` is
 `u32::MAX` by default since 5543ba7; the shelved rewrite of `x == p - q`
 as `x + q == p` was built once, into a placement too poor to judge it
 (`clk_usb` 20.4 ns, register reads failing).

@@ -177,14 +177,17 @@ pub struct MapOptions {
     /// the subtractions of `fifo_top_husky` off the chain a group at a time
     /// found it: with the subtraction in `last_sample <= sample_counter ==
     /// samples_to_collect-1` alone off it, twelve in twelve, and with the
-    /// others off and it on, the same failures. Subtracting a constant one gives nearly every
-    /// lane a constant generate of one beside a propagate that is a real
-    /// function, which nothing else this flow builds does (a counter's
-    /// constant generates are zeros, and work). The mapping is proved and
-    /// simulated, the netlist the bitstream is made from computes what its
-    /// RTL does in simulation (a design of three such subtractions), and
-    /// every bit decodes: what differs is something only the part shows,
-    /// and it has not been found. At four
+    /// others off and it on, the same failures.
+    ///
+    /// **The chain's arithmetic is not what is wrong.** The suspect was
+    /// the constant generates of one that subtracting a constant gives
+    /// nearly every lane. Measured on the part (2026-10-27): five
+    /// subtractions of constants (1, 2, 3, 6, `0x5A5A5`) from the sample
+    /// count, on the chain, read back through the register `max_samples`
+    /// is read from, were right for 2,098 sample counts each. What the
+    /// capture then does wrong is dynamic and not found; one candidate is
+    /// a hold race on the comparison, which is a few tables long once the
+    /// subtraction is a chain and sixteen when it is not. At four
     /// bits the Husky's route also stopped converging (859 nodes overused
     /// after 98 minutes), its SAD engine's 256 differences being twelve
     /// bits. `tests/fpga_carry.rs` keeps the mapping exercised at a low
