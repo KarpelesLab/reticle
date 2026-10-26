@@ -3687,6 +3687,7 @@ fn write_xc7_bitstream(
                     reroute_above: 0.9,
                     paths: Some(paths),
                     present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
+                    search_budget: reticle::fpga::route::CRITICAL_SEARCH_BUDGET,
                 })
         }),
         ..RouteOptions::default()
@@ -3695,7 +3696,15 @@ fn write_xc7_bitstream(
     let routed_at = route(&netlist, &graph, &placement, &route_options);
     laps.lap("route");
     let (routing, routed) = match routed_at {
-        Ok((routing, report)) => (routing, report.signals),
+        Ok((routing, report)) => {
+            if report.gave_up > 0 {
+                eprintln!(
+                    "note: {} critical search(es) gave up at their budget and were routed for congestion alone",
+                    report.gave_up
+                );
+            }
+            (routing, report.signals)
+        }
         Err(e) => {
             failure = Some(e.to_string());
             (reticle::fpga::Routing::new(netlist.signals.len()), 0)

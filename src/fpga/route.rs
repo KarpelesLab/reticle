@@ -457,6 +457,10 @@ pub struct Timing {
     /// overused and not brought the overuse below its least so far, and the
     /// passes after are as they were without it.
     pub present_cap: f64,
+    /// The most nodes a critical connection's search takes before it gives
+    /// up and is made again as an uncritical one: see
+    /// [`CRITICAL_SEARCH_BUDGET`], the default.
+    pub search_budget: u64,
 }
 
 impl Timing {
@@ -480,6 +484,7 @@ impl Timing {
             reroute_above: 0.9,
             paths: None,
             present_cap: f64::INFINITY,
+            search_budget: CRITICAL_SEARCH_BUDGET,
         }
     }
 }
@@ -736,6 +741,9 @@ pub struct RoutingReport {
     pub visited: u64,
     /// How many nodes those expansions put on the queue.
     pub queued: u64,
+    /// How many critical connections' searches gave up at
+    /// [`Timing::search_budget`] and were made again as uncritical ones.
+    pub gave_up: u64,
 }
 
 impl RoutingReport {
@@ -982,6 +990,7 @@ pub fn route(
     }
     if let Some(timing) = options.timing.as_ref() {
         scratch.present_cap = timing.present_cap;
+        scratch.budget = timing.search_budget;
     }
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
@@ -1165,9 +1174,22 @@ pub fn route(
     report.pips = routing.pip_count();
     report.visited = scratch.visited;
     report.queued = scratch.queued;
+    report.gave_up = scratch.gave_ups;
     report.nodes = state.occupancy.iter().filter(|c| **c > 0).count();
     Ok((routing, report))
 }
+
+/// The most nodes a critical connection's search takes off its queue before
+/// it gives up and the connection is searched for again as an uncritical
+/// one, by default ([`Timing::search_budget`]). A critical search weighs delay, and its estimate of the rest of the
+/// way is in delay too; when congestion has grown dearer than any delay, as
+/// in the passes after [`Timing::present_cap`] is lifted, the estimate is
+/// far below what the way costs, and the search floods the die: on the
+/// ChipWhisperer-Husky Plus one such pass searched 5.7 billion nodes for
+/// 445 signals and took 2,055 s, a quarter of the route. An uncritical
+/// search's estimate is in the costs it pays. Four million is past the
+/// 1.7 million one 118-tile connection of that design took.
+pub const CRITICAL_SEARCH_BUDGET: u64 = 4_000_000;
 
 /// How many passes in a row may leave the overuse above zero and no lower
 /// than its least since the route or its last clean-up began before
@@ -1903,12 +1925,30 @@ fn route_one(
         let strict =
             (!barred && options.network_pins.get(sink.pin) == Some(&true)).then_some(source);
         let mut path = None;
-        if let Some(near) = &near {
-            let seeds = near.seeds(geometry, &tree, sink.node, source, critical);
-            path = maze(
-                graph, geometry, edges, state, scratch, &seeds, sink.node, critical, present,
+        // A critical search that gives up is made again as an uncritical
+        // one: see `CRITICAL_SEARCH_BUDGET`.
+        let search = |scratch: &mut Scratch,
+                      seeds: &BTreeMap<NodeId, f64>,
+                      bounds: Option<Bounds>|
+         -> Option<Vec<PipId>> {
+            scratch.gave_up = false;
+            let found = maze(
+                graph, geometry, edges, state, scratch, seeds, sink.node, critical, present,
                 options, barred, strict, bounds,
             );
+            if found.is_some() || !scratch.gave_up {
+                return found;
+            }
+            scratch.gave_up = false;
+            scratch.gave_ups += 1;
+            maze(
+                graph, geometry, edges, state, scratch, seeds, sink.node, 0.0, present, options,
+                barred, strict, bounds,
+            )
+        };
+        if let Some(near) = &near {
+            let seeds = near.seeds(geometry, &tree, sink.node, source, critical);
+            path = search(scratch, &seeds, bounds);
             // A search from part of the tree may cross a tree node it was
             // not started from, and taking that pip would give the node a
             // second driver. What joins the sink to the tree is the path
@@ -1922,18 +1962,12 @@ fn route_one(
             }
         }
         if path.is_none() {
-            path = maze(
-                graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
-                options, barred, strict, bounds,
-            );
+            path = search(scratch, &tree, bounds);
         }
         if path.is_none() && bounds.is_some() {
             escaped = true;
             bounds = None;
-            path = maze(
-                graph, geometry, edges, state, scratch, &tree, sink.node, critical, present,
-                options, barred, strict, None,
-            );
+            path = search(scratch, &tree, None);
         }
         let Some(path) = path else {
             return Err(RouteError::Unroutable {
@@ -1989,6 +2023,13 @@ struct Scratch {
     tile_delay: f64,
     /// [`Timing::present_cap`], or infinity.
     present_cap: f64,
+    /// [`Timing::search_budget`], or no limit.
+    budget: u64,
+    /// Whether the last search was a critical one that gave up at the
+    /// budget.
+    gave_up: bool,
+    /// How many critical searches gave up, for [`RoutingReport::gave_up`].
+    gave_ups: u64,
 }
 
 impl Scratch {
@@ -2003,6 +2044,9 @@ impl Scratch {
             queued: 0,
             tile_delay: 0.0,
             present_cap: f64::INFINITY,
+            budget: u64::MAX,
+            gave_up: false,
+            gave_ups: 0,
         }
     }
 
@@ -2402,8 +2446,13 @@ fn maze(
             && !tree.contains_key(&node)
     };
     let mut end = sink;
+    let first = scratch.visited;
     while let Some(std::cmp::Reverse((estimate, node))) = heap.pop() {
         scratch.visited += 1;
+        if critical > 0.0 && scratch.visited - first > scratch.budget {
+            scratch.gave_up = true;
+            return None;
+        }
         if estimate > score(scratch.estimate_of(node)) {
             continue;
         }
@@ -3445,6 +3494,55 @@ mod tests {
         assert_eq!(*critical.last().unwrap(), fast, "{critical:?}");
         assert_eq!(report.iterations.len(), 4, "{}", report.to_text());
         assert!(report.to_text().contains("longest path 10"));
+    }
+
+    /// **[`Timing::search_budget`]: a critical search that gives up is
+    /// made again as an uncritical one.** The fast-path test's design,
+    /// whose one connection is as critical as can be and so takes the fast
+    /// main row; with a budget of one node every critical search gives up,
+    /// the connection is routed for congestion alone, takes the cheap
+    /// second row, and the report counts the searches that gave up. Would
+    /// catch the budget ignored (the main row, no count), or a search that
+    /// gives up left unrouted (an error); would not catch a budget too
+    /// small for a real design, which is the default's to get right.
+    #[test]
+    fn a_critical_search_past_its_budget_is_made_uncritical() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let on_second_row = |routing: &Routing| {
+            routing
+                .routes()
+                .any(|r| r.nodes.iter().any(|n| graph.wire(*n).tile.1 == 1))
+        };
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if wire.tile.1 == 1 {
+                base[index] = 0.05;
+            }
+        }
+        let run = |budget: u64| {
+            let mut timing = Timing::for_netlist(&netlist, vec![1; graph.nodes.len()], 1);
+            timing.search_budget = budget;
+            let options = RouteOptions {
+                node_base: base.clone(),
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+            assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+            (on_second_row(&routing), report.gave_up)
+        };
+        assert_eq!(run(CRITICAL_SEARCH_BUDGET), (false, 0));
+        let (second, gave_up) = run(1);
+        assert!(second, "uncritical, the cheap row");
+        assert!(gave_up > 0);
     }
 
     /// **A signal rerouted for congestion keeps its clear branches.** One
