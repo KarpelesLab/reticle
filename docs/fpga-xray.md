@@ -4167,6 +4167,25 @@ first builds to, and one passed `ADCfastsegments`, the first fast ADC test
 to pass. Its suite passed 16 and 14 against 13 and 15 for the same seeds
 untimed; the other differences go both ways.
 
+**A clock row's skew was the model's.** The report's clock arrivals spread
+over several nanoseconds in one domain: `clk_usb` from 1.64 to 5.66 ns, the
+logic analyser's clock to 6.54, the trace's to 8.29. Its rough hold check
+counted 273 paths with the data before the hold, in builds that worked.
+The routes it printed were on the network the whole way, so the spread
+came from `node_delays`. prjxray times a clock row's multiplexer and its
+leaf drivers, but not the pips that carry a track from one tile to the
+next along a row or a spine, and an untimed pip was charged the median,
+0.175 ns. A row of thirty tiles came to five nanoseconds, where the
+silicon is a balanced, buffered tree. Those pips now cost nothing. Every
+clock then arrives at 0.94 ns, the hold check finds no race, and the worst
+setup estimates hardly move (`clk_usb` 16.50 ns, the ADC 10.58, the
+analyser 9.05, against 16.50, 10.54 and 9.x at the same seed), so the
+spread was in the report rather than in the paths. On the part, seeds 2
+and 3 passed 15 and 17 of NewAE's tests, against 14 and 16 without it.
+Seed 1 did not converge (below). That every clock reaches every flip-flop
+at the same moment is an idealisation too: it is nearer the part than
+five nanoseconds, and not measured.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`
@@ -4222,6 +4241,17 @@ when nothing can be routed onto a cell's own output. The third reserved
 `BYP_ALT7`: the same placement converged at the 36th pass, the enable
 leaving at the 9th and not coming back. Three seeds of master's netlist
 routed in 546, 493 and 740 s with it, against 529, 701 and 998 s without.
+
+**And when it is not enough, the next seed.** Seed 1 under the clock-delay
+change below did not converge either, five nodes after 100 passes, and the
+give-up message, which now says whose each worst node is, answered at once.
+`X75Y61/BYP_ALT3` and four more were each the only way into a flip-flop of
+`clockglitch_offset_reg`, reserved for its data. `U_usb_reg_main.reg_bytecnt[0]`
+used them anyway, paying the charge, to reach three lookup tables' `i2` in
+the same tiles. That is a tile asked for more than it has, and no price
+fixes a placement. So a 7-series build that does not converge is placed
+again with the next seed and routed again (`--route-attempts`, two tries by
+default), and says so. `--route-passes` sets the passes a route is given.
 
 The next non-convergence was a third kind (a build pairing
 fewer lookup tables, seed 3, below). Three nodes of the clock network

@@ -222,6 +222,13 @@ Options:
                      one design under different seeds differ, and on a large
                      design so does what they make of its timing: a way to
                      try several and keep the best.
+  --route-attempts <n>
+                     7 series: how many placements to try when a route does
+                     not converge, each with the next seed (default 2). A
+                     placement the router cannot finish costs a build its
+                     time rather than its bitstream.
+  --route-passes <n> 7 series: the most rip-up and reroute passes before a
+                     route is given up (default 100)
   --place-effort <n> How hard the annealer works: it tries n * cells^(4/3)
                      moves per temperature. The default is 10, which is
                      the high-quality setting of the schedule this uses
@@ -756,6 +763,8 @@ fn spec_for(usage: &str) -> Spec {
                 "east",
                 "place-effort",
                 "place-seed",
+                "route-attempts",
+                "route-passes",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -2691,6 +2700,32 @@ fn process_started() -> std::time::Instant {
 /// The placer's settings from `--place-*`, shared by every backend that
 /// places: a flag one writer reads and another ignores builds the same
 /// placement whatever it is given, and says nothing.
+/// `--route-passes`: the most passes a 7-series route makes.
+fn route_passes(args: &Args) -> Result<u32, String> {
+    match args.option("route-passes") {
+        None => Ok(reticle::fpga::xray::ROUTE_PASSES),
+        Some(text) => match text.parse::<u32>() {
+            Ok(n) if n > 0 => Ok(n),
+            _ => Err(format!(
+                "`--route-passes` wants a whole number of one or more, not `{text}`"
+            )),
+        },
+    }
+}
+
+/// `--route-attempts`: how many placements a 7-series build tries.
+fn route_attempts(args: &Args) -> Result<u32, String> {
+    match args.option("route-attempts") {
+        None => Ok(2),
+        Some(text) => match text.parse::<u32>() {
+            Ok(n) if n > 0 => Ok(n),
+            _ => Err(format!(
+                "`--route-attempts` wants a whole number of one or more, not `{text}`"
+            )),
+        },
+    }
+}
+
 fn place_options(args: &Args) -> Result<reticle::fpga::place::PlaceOptions, String> {
     let mut place_options = reticle::fpga::place::PlaceOptions::default();
     if let Some(text) = args.option("place-effort") {
@@ -3494,17 +3529,6 @@ fn write_xc7_bitstream(
     } else {
         Vec::new()
     };
-    let (placement, placement_report) =
-        place(&netlist, &fabric.arch, &graph, constraints, &options).map_err(|e| e.to_string())?;
-    laps.lap("place");
-    if !placement_report.outside_budget.is_empty() {
-        eprintln!(
-            "warning: {} register(s) held near their pads for an input's budget found no site \
-             there and were seated farther, so those inputs may be late: {}",
-            placement_report.outside_budget.len(),
-            placement_report.outside_budget.join(", ")
-        );
-    }
     // Each node's delay, for the routing and its estimate below; only a
     // timing-driven build reads the tile types' timing files.
     let node_delay = if options.timing.is_some() {
@@ -3515,36 +3539,6 @@ fn write_xc7_bitstream(
     } else {
         None
     };
-    for (round, estimate) in placement_report.timing.iter().enumerate() {
-        let paths: Vec<String> = domains
-            .iter()
-            .zip(&estimate.longest_ps)
-            .zip(options.timing.iter().flat_map(|t| t.periods.iter()))
-            .map(|((name, ps), period)| {
-                format!("{name} {:.2} ns of {period} ns", *ps as f64 / 1000.0)
-            })
-            .collect();
-        eprintln!(
-            "note: placement timing estimate, round {round}: {}; {} signal(s) over half critical, wirelength {}",
-            if paths.is_empty() {
-                "no clock is constrained".to_owned()
-            } else {
-                paths.join(", ")
-            },
-            estimate.critical,
-            estimate.hpwl
-        );
-    }
-    // As the ECP5 flow does: what legalisation moved and the wirelength
-    // the anneal reached, which is what a route's congestion is read
-    // against, and the schedule when it is asked for.
-    if args.flag("report") {
-        eprint!("{}", placement_report.to_text());
-    }
-    if args.flag("place-schedule") {
-        eprint!("{}", placement_report.schedule_text());
-    }
-
     // A route that fails says why. Writing the file anyway is the right
     // thing — a partly configured bitstream is still worth looking at —
     // but the reason goes in the report rather than into a shrug.
@@ -3589,108 +3583,173 @@ fn write_xc7_bitstream(
                     .is_some_and(|d| netlist.instances[netlist.pins[d].instance].kind == "gb")
         })
         .collect();
-    // The ground fans the block RAMs' zero ties will need are closed to
-    // every signal, the clocks included: a tie made after routing found
-    // them spent as hops. See `XrayFabric::block_ram_ground_fans`.
-    let mut node_base = fabric.node_costs(&graph, reticle::fpga::xray::CLOCK_PREFERENCE);
-    let mut network = fabric.clock_network_nodes(&graph);
-    let fans = fabric
-        .block_ram_ground_fans(design, top, &graph, &netlist, &placement)
-        .map_err(|e| e.to_string())?;
-    if !fans.is_empty() {
-        node_base.resize(graph.nodes.len(), 1.0);
-        network.resize(graph.nodes.len(), false);
-        for fan in &fans {
-            network[*fan as usize] = true;
-            node_base[*fan as usize] = 1.0e6;
-        }
-    }
-    let route_options = RouteOptions {
-        node_base,
-        network,
-        network_signals,
-        // And a clock comes off the network at the pin, not a hop before:
-        // see `RouteOptions::network_entry`.
-        network_entry: fabric.clock_pin_entries(&graph),
-        network_pins,
-        // A pad's clock reaches its global buffers before anything else
-        // it drives: see `RouteOptions::first`. Not its clock managers:
-        // the pad's road reaches only those of its own clock region, and
-        // on the Husky Plus the bus clock's other was a PLL across the
-        // die, which, routed first, laid a trunk of general routing past
-        // the buffer column that all four buffers then joined.
-        first: netlist
-            .pins
-            .iter()
-            .map(|pin| {
-                let from_a_pad = pin
-                    .signal
-                    .and_then(|signal| netlist.signals[signal].driver)
-                    .is_some_and(|driver| {
-                        netlist.instances[netlist.pins[driver].instance].kind == "io"
-                    });
-                from_a_pad
-                    && netlist.instances[pin.instance].kind == "gb"
-                    && (pin.role == "i" || pin.role == "i1")
-            })
-            .collect(),
-        on_iteration: laps.on.then_some(print_iteration as fn(&_)),
-        // See `xray::ASTAR_WEIGHT`. After the first pass only the signals
-        // that share a node are rerouted, as the UltraScale+ flow does: a
-        // pass over every net of a design the size of the
-        // ChipWhisperer-Husky is minutes, and most of them were never in
-        // contention. The first pass charges nothing for congestion and
-        // the later ones keep a data signal in its box, both as VPR does;
-        // `RouteOptions` has why each. The congestion charge grows by
-        // VPR's 1.3 a pass, not the default 1.8: on the
-        // ChipWhisperer-Husky the two reached the same overuse, 83,000
-        // nodes, at the twelfth pass and 2,049 s and at the ninth and
-        // 3,216 s — a charge that grows fast makes every wire through a
-        // congested tile dear before the estimate knows it, and the
-        // searches flood.
-        astar_weight: reticle::fpga::xray::ASTAR_WEIGHT,
-        reroute_congested_only: true,
-        // And a congested signal keeps its clear branches: see
-        // `RouteOptions::incremental`.
-        incremental: true,
-        first_pass_present: Some(0.0),
-        bounding_margin: Some(3),
-        present_growth: reticle::fpga::xray::PRESENT_GROWTH,
-        max_iterations: reticle::fpga::xray::ROUTE_PASSES,
-        // A lookup table's inputs are the router's to choose among, and
-        // the truth table follows them below. See `xray::lutswap`.
-        equivalent: reticle::fpga::xray::lut_input_classes(
-            design, top, &netlist, &graph, &placement,
-        ),
-        // `--timing-driven` routes for time as well: each pass is analysed
-        // as the placement was, per clock domain, from each connection's
-        // routed delay, and a critical connection weighs delay over
-        // congestion. See `route::Timing::paths`.
-        timing: node_delay.as_ref().and_then(|delays| {
-            options
-                .timing
-                .clone()
-                .map(|paths| reticle::fpga::route::Timing {
-                    node_delay: delays.clone(),
-                    cell_delay: 0,
-                    combinational: Vec::new(),
-                    clock_roles: Vec::new(),
-                    max_criticality: 0.99,
-                    cleanups: 2,
-                    tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
-                    exponent: 8,
-                    passes: 4,
-                    reroute_above: 0.9,
-                    paths: Some(paths),
-                    present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
-                    search_budget: reticle::fpga::route::CRITICAL_SEARCH_BUDGET,
-                })
-        }),
-        ..RouteOptions::default()
-    };
+    // `--route-attempts`: a route that does not converge is placed again
+    // with the next seed and routed again, so that a placement the router
+    // cannot finish costs a build its time and not its bitstream. On the
+    // ChipWhisperer-Husky Plus about one placement in six held a few
+    // nodes twice after 100 passes, each time a dense tile whose bypass
+    // inputs two signals needed (`docs/fpga-xray.md`); the next seed of the
+    // same sources routed.
+    let mut attempts_left = route_attempts(args)?.saturating_sub(1);
     let mut failure = None;
-    let routed_at = route(&netlist, &graph, &placement, &route_options);
-    laps.lap("route");
+    let (placement, placement_report, routed_at) = loop {
+        let (placement, placement_report) =
+            place(&netlist, &fabric.arch, &graph, constraints, &options)
+                .map_err(|e| e.to_string())?;
+        laps.lap("place");
+        if !placement_report.outside_budget.is_empty() {
+            eprintln!(
+                "warning: {} register(s) held near their pads for an input's budget found no site \
+                 there and were seated farther, so those inputs may be late: {}",
+                placement_report.outside_budget.len(),
+                placement_report.outside_budget.join(", ")
+            );
+        }
+        for (round, estimate) in placement_report.timing.iter().enumerate() {
+            let paths: Vec<String> = domains
+                .iter()
+                .zip(&estimate.longest_ps)
+                .zip(options.timing.iter().flat_map(|t| t.periods.iter()))
+                .map(|((name, ps), period)| {
+                    format!("{name} {:.2} ns of {period} ns", *ps as f64 / 1000.0)
+                })
+                .collect();
+            eprintln!(
+                "note: placement timing estimate, round {round}: {}; {} signal(s) over half critical, wirelength {}",
+                if paths.is_empty() {
+                    "no clock is constrained".to_owned()
+                } else {
+                    paths.join(", ")
+                },
+                estimate.critical,
+                estimate.hpwl
+            );
+        }
+        // As the ECP5 flow does: what legalisation moved and the wirelength
+        // the anneal reached, which is what a route's congestion is read
+        // against, and the schedule when it is asked for.
+        if args.flag("report") {
+            eprint!("{}", placement_report.to_text());
+        }
+        if args.flag("place-schedule") {
+            eprint!("{}", placement_report.schedule_text());
+        }
+
+        // The ground fans the block RAMs' zero ties will need are closed to
+        // every signal, the clocks included: a tie made after routing found
+        // them spent as hops. See `XrayFabric::block_ram_ground_fans`.
+        let mut node_base = fabric.node_costs(&graph, reticle::fpga::xray::CLOCK_PREFERENCE);
+        let mut network = fabric.clock_network_nodes(&graph);
+        let fans = fabric
+            .block_ram_ground_fans(design, top, &graph, &netlist, &placement)
+            .map_err(|e| e.to_string())?;
+        if !fans.is_empty() {
+            node_base.resize(graph.nodes.len(), 1.0);
+            network.resize(graph.nodes.len(), false);
+            for fan in &fans {
+                network[*fan as usize] = true;
+                node_base[*fan as usize] = 1.0e6;
+            }
+        }
+        let route_options = RouteOptions {
+            node_base,
+            network,
+            network_signals: network_signals.clone(),
+            // And a clock comes off the network at the pin, not a hop before:
+            // see `RouteOptions::network_entry`.
+            network_entry: fabric.clock_pin_entries(&graph),
+            network_pins: network_pins.clone(),
+            // A pad's clock reaches its global buffers before anything else
+            // it drives: see `RouteOptions::first`. Not its clock managers:
+            // the pad's road reaches only those of its own clock region, and
+            // on the Husky Plus the bus clock's other was a PLL across the
+            // die, which, routed first, laid a trunk of general routing past
+            // the buffer column that all four buffers then joined.
+            first: netlist
+                .pins
+                .iter()
+                .map(|pin| {
+                    let from_a_pad = pin
+                        .signal
+                        .and_then(|signal| netlist.signals[signal].driver)
+                        .is_some_and(|driver| {
+                            netlist.instances[netlist.pins[driver].instance].kind == "io"
+                        });
+                    from_a_pad
+                        && netlist.instances[pin.instance].kind == "gb"
+                        && (pin.role == "i" || pin.role == "i1")
+                })
+                .collect(),
+            on_iteration: laps.on.then_some(print_iteration as fn(&_)),
+            // See `xray::ASTAR_WEIGHT`. After the first pass only the signals
+            // that share a node are rerouted, as the UltraScale+ flow does: a
+            // pass over every net of a design the size of the
+            // ChipWhisperer-Husky is minutes, and most of them were never in
+            // contention. The first pass charges nothing for congestion and
+            // the later ones keep a data signal in its box, both as VPR does;
+            // `RouteOptions` has why each. The congestion charge grows by
+            // VPR's 1.3 a pass, not the default 1.8: on the
+            // ChipWhisperer-Husky the two reached the same overuse, 83,000
+            // nodes, at the twelfth pass and 2,049 s and at the ninth and
+            // 3,216 s — a charge that grows fast makes every wire through a
+            // congested tile dear before the estimate knows it, and the
+            // searches flood.
+            astar_weight: reticle::fpga::xray::ASTAR_WEIGHT,
+            reroute_congested_only: true,
+            // And a congested signal keeps its clear branches: see
+            // `RouteOptions::incremental`.
+            incremental: true,
+            first_pass_present: Some(0.0),
+            bounding_margin: Some(3),
+            present_growth: reticle::fpga::xray::PRESENT_GROWTH,
+            max_iterations: route_passes(args)?,
+            // A lookup table's inputs are the router's to choose among, and
+            // the truth table follows them below. See `xray::lutswap`.
+            equivalent: reticle::fpga::xray::lut_input_classes(
+                design, top, &netlist, &graph, &placement,
+            ),
+            // `--timing-driven` routes for time as well: each pass is analysed
+            // as the placement was, per clock domain, from each connection's
+            // routed delay, and a critical connection weighs delay over
+            // congestion. See `route::Timing::paths`.
+            timing: node_delay.as_ref().and_then(|delays| {
+                options
+                    .timing
+                    .clone()
+                    .map(|paths| reticle::fpga::route::Timing {
+                        node_delay: delays.clone(),
+                        cell_delay: 0,
+                        combinational: Vec::new(),
+                        clock_roles: Vec::new(),
+                        max_criticality: 0.99,
+                        cleanups: 2,
+                        tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
+                        exponent: 8,
+                        passes: 4,
+                        reroute_above: 0.9,
+                        paths: Some(paths),
+                        present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
+                        search_budget: reticle::fpga::route::CRITICAL_SEARCH_BUDGET,
+                    })
+            }),
+            ..RouteOptions::default()
+        };
+        let routed_at = route(&netlist, &graph, &placement, &route_options);
+        laps.lap("route");
+        if let Err(error @ reticle::fpga::route::RouteError::Congested { .. }) = &routed_at
+            && attempts_left > 0
+        {
+            attempts_left -= 1;
+            options.seed = options.seed.wrapping_add(1);
+            eprintln!(
+                "note: {error}\nnote: placing again with seed {} and routing again \
+                 (`--route-attempts`)",
+                options.seed
+            );
+            continue;
+        }
+        break (placement, placement_report, routed_at);
+    };
     let (routing, routed) = match routed_at {
         Ok((routing, report)) => {
             if report.gave_up > 0 {

@@ -163,3 +163,65 @@ fn a_placement_seed_chooses_the_placement() {
     assert!(one == again, "one seed, two bitstreams");
     assert!(one != other, "two seeds, one bitstream");
 }
+
+/// **A route that does not converge is placed again with the next seed.**
+/// Held to one pass, which ignores congestion, `dut.v` cannot converge;
+/// with three attempts from seed 5 the build places it at 5, 6 and 7,
+/// says so between attempts, and gives up after the third as before. On
+/// the ChipWhisperer-Husky Plus about one placement in six could not be
+/// routed in 100 passes, where the next seed's could. Would catch the
+/// retry not made, made with the same seed, or made more often than asked;
+/// would not catch a retry that routes worse than the first try, which
+/// one pass cannot show.
+#[test]
+fn a_route_that_does_not_converge_is_placed_again() {
+    let Some(root) = chipdb() else { return };
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = here.join("testdata/fpga/routed");
+    if !dir.join("dut.v").is_file() {
+        eprintln!("skipped: `testdata/` is not in the published crate");
+        return;
+    }
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("route-attempts");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let done = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "--device",
+            "xc7a35t-cpg236",
+            "--chipdb",
+            &root,
+            "--top",
+            "dut",
+        ])
+        .args([
+            "--place-seed",
+            "5",
+            "--route-passes",
+            "1",
+            "--route-attempts",
+            "3",
+        ])
+        .arg("--constraints")
+        .arg(dir.join("dut.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join("dut.bit"))
+        .arg(dir.join("dut.v"))
+        .output()
+        .expect("the reticle binary runs");
+    let stderr = String::from_utf8_lossy(&done.stderr);
+    assert!(done.status.success(), "{stderr}");
+    let again: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("placing again with seed"))
+        .collect();
+    assert_eq!(again.len(), 2, "{stderr}");
+    assert!(
+        again[0].contains("seed 6") && again[1].contains("seed 7"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("the router gave up"), "{stderr}");
+}
