@@ -4217,6 +4217,24 @@ sums, `presample_counter == presample_i - 2` and
 `segment_counter == num_segments - 1` among them, and which of them fails
 on the part, and why, is not known.
 
+**A chain read at its top sum lost the lanes below it.** An equality
+compared on the carry chain (`compare_on_the_chain`, written this day) is
+the carry out of `{0, L} + 1`, where each bit of `L` says three bit pairs
+are equal. Only the top lane's sum is read. Three builds with it on the
+Husky Plus never ended a capture, every capture timing out. The cause
+was in `xray::legalise_carries`, which leaves a lane nothing reads to
+whatever lookup table the placer seats at its position. It counted a lane
+as read when its own sum was, or a carry out at or above it, but not
+when a sum above it was. A sum is `S ^ CO` of the lane below, so the
+three lanes under the read one lost their propagates, and the compare
+read the tables placed there. `tests/fpga_carry.rs`'s new equality shape,
+simulated on every input at 9 and 10 bits after legalisation, gave
+`0 == 0` as false before the fix. With it, three builds' test ramps were
+exact twelve times in twelve, and the analyser's latest path was 6.5 to
+7.1 ns where it had been about 9. The rule is not specific to the compare:
+any chain whose upper sums are read and lower ones are not had the same
+hole, and which earlier failures it explains is not known.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`

@@ -34,6 +34,9 @@
 //!   says what the silicon does, and a simulator of it agrees.
 //!
 //! **A lane nothing reads is left alone**, and its two inputs become `x`.
+//! A lane is read when its sum is, when a carry out at or above it is,
+//! or when a sum above it is: the sum of lane `j` is `S ^ CO` of the lane
+//! below, so every lane under a read sum is read through its carry.
 //! Mapping pads the top `CARRY4` of a 26-bit adder with two lanes of
 //! zeros; their sums and carries go nowhere, so whatever lookup table the
 //! placer puts at their positions changes nothing anyone sees, and giving
@@ -266,8 +269,15 @@ pub fn legalise_carries(
 
             let mut plan = Vec::with_capacity(lanes);
             for lane in 0..lanes {
-                let live =
-                    is_read(sums.get(lane)) || (lane..lanes).any(|j| is_read(carries_out.get(j)));
+                // Read itself, or through its carry: a carry out at or above
+                // it, or a sum above it, which is `S ^ CO` of the lane
+                // below. That last was left out, and a chain read at its
+                // top sum alone (an equality compared on the chain, the
+                // carry out of `{0, L} + 1`) lost every propagate below
+                // that sum to whatever lookup table the placer seated there.
+                let live = is_read(sums.get(lane))
+                    || (lane..lanes).any(|j| is_read(carries_out.get(j)))
+                    || (lane + 1..lanes).any(|j| is_read(sums.get(j)));
                 if !live {
                     report.dead_lanes += 1;
                     plan.push(Lane {

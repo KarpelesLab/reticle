@@ -193,6 +193,19 @@ pub struct MapOptions {
     /// bits. `tests/fpga_carry.rs` keeps the mapping exercised at a low
     /// threshold.
     pub min_subtract_carry_width: u32,
+    /// The narrowest equality compared on the carry chain, on a family
+    /// whose chain is a wide element (`compare_on_the_chain`);
+    /// `u32::MAX`, the default, puts none there.
+    ///
+    /// **Off until it is measured to help.** On the Husky Plus at 16 bits
+    /// (2026-10-27) the logic analyser's latest path fell from about 9 ns
+    /// to 6.5 to 7.1, and test ramps were exact twelve times in twelve
+    /// once `xray::legalise_carries` kept the lanes below a read sum. The
+    /// ADC domain's latest path rose from about 10.5 ns to 18.6 to 20.2 and
+    /// `clk_usb`'s from 16.5 to 17.6 to 22.5, through paired lookup tables
+    /// placed across the die, and 220 MHz captures went wrong again; three
+    /// builds, one change in each, so not yet a verdict on this alone.
+    pub min_compare_carry_width: u32,
 }
 
 impl Default for MapOptions {
@@ -209,6 +222,7 @@ impl Default for MapOptions {
             map_carry: true,
             min_carry_width: 4,
             min_subtract_carry_width: u32::MAX,
+            min_compare_carry_width: u32::MAX,
         }
     }
 }
@@ -2883,6 +2897,7 @@ impl Mapper<'_> {
         if bel.operand_carry().is_none() && bel.wide_carry().is_some() {
             self.share_muxed_adders(module);
             self.subtract_on_the_chain(module);
+            self.compare_on_the_chain(module);
         }
         let adders: Vec<CellId> = module
             .cells
@@ -2930,6 +2945,104 @@ impl Mapper<'_> {
         }
         if !removed.is_empty() {
             module.cells.retain(|id, _| !removed.contains(&id));
+        }
+    }
+
+    /// Compares each wide `a == b` (or `!=`) on the carry chain, as the
+    /// carry out of `{0, L} + 1`, where bit `i` of `L` is the equality of
+    /// the operands' bits `3i` to `3i + 2`: the sum carries out of its top
+    /// lane exactly when every lane is one. A lane is one lookup table of
+    /// six inputs and the AND of them all is the chain, a counter's
+    /// increment in shape.
+    ///
+    /// Left to lookup tables, the AND is a tree, and when one operand is
+    /// itself deep the tree is balanced against that operand's depth: the
+    /// Husky Plus's logic analyser ends a capture at
+    /// `capture_count == capture_depth - 1`, and `capture_count` reached
+    /// the register through sixteen tables in a row, 9.2 ns of a clock it
+    /// runs at 2.5. On the chain, `capture_count` is one table and three
+    /// carry elements from it, whatever `capture_depth - 1` costs.
+    ///
+    /// For a wide carry element only, at
+    /// [`MapOptions::min_compare_carry_width`] bits and more, and only
+    /// where the operands are as wide as each other.
+    fn compare_on_the_chain(&mut self, module: &mut Module) {
+        let compares: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| matches!(c.kind, CellKind::Eq | CellKind::Ne))
+            .map(|(id, _)| id)
+            .collect();
+        let mut removed: Vec<CellId> = Vec::new();
+        for compare in compares {
+            let cell = &module.cells[compare];
+            let (Some(a), Some(b), Some(y)) = (cell.input("a"), cell.input("b"), cell.output("y"))
+            else {
+                continue;
+            };
+            let width = expr_width(module, a);
+            if width < self.options.min_compare_carry_width.max(4)
+                || expr_width(module, b) != width
+                || net_width(module, y) != 1
+            {
+                continue;
+            }
+            let equal = cell.kind == CellKind::Eq;
+            let (span, name) = (cell.span, cell.name.as_str().to_owned());
+            let lanes = width.div_ceil(3);
+            let mut parts: Vec<ExprId> = Vec::new();
+            for lane in 0..lanes {
+                let lo = lane * 3;
+                let hi = (lo + 2).min(width - 1);
+                let (pa, pb) = (
+                    slice_expr(module, a, hi, lo, span),
+                    slice_expr(module, b, hi, lo, span),
+                );
+                let label = format!("{name}$lane{lane}");
+                let bit = add_net(module, &label, Type::bit(), span);
+                add_cell(
+                    module,
+                    &label,
+                    CellKind::Eq,
+                    vec![(Name::new("a"), pa), (Name::new("b"), pb)],
+                    vec![(Name::new("y"), bit)],
+                    span,
+                );
+                parts.push(net_expr(module, bit, span));
+            }
+            // Most significant first: `{0, L[lanes-1], ..., L[0]}`.
+            parts.reverse();
+            parts.insert(0, const_expr(module, Const::from_u64(0, 1), span));
+            let lanes_expr = expr(module, ExprKind::Concat(parts), span);
+            let one = const_expr(module, Const::from_u64(1, lanes + 1), span);
+            let label = format!("{name}$chain");
+            let sum = add_net(module, &label, Type::bits(lanes + 1), span);
+            add_cell(
+                module,
+                &label,
+                CellKind::Add,
+                vec![(Name::new("a"), lanes_expr), (Name::new("b"), one)],
+                vec![(Name::new("y"), sum)],
+                span,
+            );
+            let sum = net_expr(module, sum, span);
+            let all = slice_expr(module, sum, lanes, lanes, span);
+            add_cell(
+                module,
+                &format!("{name}$all"),
+                if equal { CellKind::Buf } else { CellKind::Not },
+                vec![(Name::new("a"), all)],
+                vec![(Name::new("y"), y)],
+                span,
+            );
+            removed.push(compare);
+        }
+        if !removed.is_empty() {
+            let count = removed.len();
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!(
+                "{count} equality comparison(s) compared on the carry chain"
+            ));
         }
     }
 

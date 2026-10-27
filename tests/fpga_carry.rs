@@ -131,6 +131,10 @@ enum Shape {
     /// subtraction needs riding in an extra low lane. NewAE's `esad` is
     /// `decision ? x - r : y + r` in each of 256 counters.
     Chosen { low_sub: bool, high_sub: bool },
+    /// `y = a == b`, one bit, which `primitives` compares on the chain at
+    /// [`MapOptions::min_compare_carry_width`] bits and more: the carry
+    /// out of `{0, L} + 1`, read as the top lane's sum alone.
+    Equal,
 }
 
 impl Shape {
@@ -182,6 +186,13 @@ impl Shape {
                 let (za, zb) = (b.zext(ae, width + 1), b.zext(be, width + 1));
                 b.cell2("sum", CellKind::Add, za, zb, y);
             }
+            Shape::Equal => {
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let y = b.output("y", Type::bit());
+                let (ae, be) = (b.net(a), b.net(bn));
+                b.cell2("same", CellKind::Eq, ae, be, y);
+            }
             Shape::Constant(k) => {
                 let a = b.input("a", Type::bits(width));
                 let y = b.output("y", Type::bits(width));
@@ -231,6 +242,7 @@ impl Shape {
     fn result_width(self, width: u32) -> u32 {
         match self {
             Shape::Widened => width + 1,
+            Shape::Equal => 1,
             _ => width,
         }
     }
@@ -266,6 +278,7 @@ impl Shape {
             Shape::Constant(k) => a.wrapping_add(k) & mask(width),
             Shape::Subtract => a.wrapping_sub(b) & mask(width),
             Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
+            Shape::Equal => u64::from(a == b),
         }
     }
 
@@ -926,6 +939,32 @@ fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
     // pair nothing: its propagates have no generate tables to share with.)
     for width in [4, 5, 8] {
         check_full(Shape::Subtract, width, XC7, low.clone(), true, false);
+    }
+}
+
+/// **An equality compared on the chain is right once legalised for a
+/// slice.** `a == b` is the carry out of `{0, L} + 1`, read as the top
+/// lane's sum alone, so every lane below matters only through its carry.
+/// `legalise_carries` called a lane nothing read dead, and left its
+/// propagate to whatever lookup table the placer seated there, when the
+/// only thing read was a sum above it: on the Husky Plus three builds
+/// whose capture compares were on the chain never ended a capture. Every
+/// input at 9 bits, where the read sum is the fourth lane of the one
+/// `CARRY4` and the three below it are read through their carries alone,
+/// and at 10, where the chain continues into a second. Would catch a lane
+/// below a read sum left dead again; would not catch a wider chain's
+/// fault that only shows past twenty input bits, which cannot be
+/// enumerated here and is proved instead.
+#[test]
+fn an_equality_on_the_chain_is_right_once_legalised() {
+    let low = MapOptions {
+        min_compare_carry_width: 4,
+        ..MapOptions::default()
+    };
+    for width in [9, 10] {
+        let (_, _, report) = mapped(Shape::Equal, width, XC7, low.clone());
+        assert!(report.count("CARRY4") > 0, "{width} bits is on the chain");
+        check_full(Shape::Equal, width, XC7, low.clone(), true, false);
     }
 }
 

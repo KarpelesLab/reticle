@@ -468,6 +468,48 @@ impl<'m> Clocked<'m> {
                 let (_, out) = cell.outputs.first().expect("a LUT has an output");
                 values.insert(*out, Logic::from_bit(init.bit(index)));
             }
+            // CARRY4, from the equations in `cells_sim.v` that `xc7.dev`
+            // quotes, as `fpga_carry.rs` models it, for a design whose
+            // equality is compared on the chain (`compare_on_the_chain`).
+            "CARRY4" => {
+                let input = |port: &str| -> Logic {
+                    cell.inputs
+                        .iter()
+                        .find(|(name, _)| name.as_str() == port)
+                        .map_or_else(
+                            || Logic::zero(1),
+                            |(_, e)| eval_expr(self.module, *e, values),
+                        )
+                };
+                let (s, di) = (input("S"), input("DI"));
+                let mut carry =
+                    input("CI").bit(0) == Bit::One || input("CYINIT").bit(0) == Bit::One;
+                let (mut o, mut co) = (Logic::zero(4), Logic::zero(4));
+                for bit in 0..4 {
+                    let propagate = s.bit(bit) == Bit::One;
+                    o.set_bit(
+                        bit,
+                        if propagate != carry {
+                            Bit::One
+                        } else {
+                            Bit::Zero
+                        },
+                    );
+                    carry = if propagate {
+                        carry
+                    } else {
+                        di.bit(bit) == Bit::One
+                    };
+                    co.set_bit(bit, if carry { Bit::One } else { Bit::Zero });
+                }
+                for (port, value) in [("O", o), ("CO", co)] {
+                    if let Some((_, out)) =
+                        cell.outputs.iter().find(|(name, _)| name.as_str() == port)
+                    {
+                        values.insert(*out, value);
+                    }
+                }
+            }
             other => panic!("primitive `{other}` (cell `{}`) is not modelled", cell.name),
         }
     }
