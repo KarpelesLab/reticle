@@ -187,7 +187,7 @@ pub use cmt::{
     ClockManagerError, Counter, MmcmSettings, PllSettings, counter, mmcm_registers, pll_registers,
 };
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
-pub use lutpack::{LutPairing, pack_lut_pairs};
+pub use lutpack::{LutPairing, PairOptions, pack_lut_pairs};
 pub use lutswap::{apply_lut_moves, lut_input_classes};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 

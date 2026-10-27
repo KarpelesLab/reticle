@@ -23,6 +23,30 @@
 //! this is what puts the second one in the first one's site rather than
 //! one of its own and a trip through the bypass input.
 //!
+//! Beyond the lanes, pairing was first read as only for a design that
+//! would not fit otherwise, costing one that would: the two functions of
+//! a pair are placed in one site, and when they share little — the greedy
+//! pass below takes the narrowest table left for one that shares nothing
+//! — the placer puts the site between two neighbourhoods and both pay for
+//! the wire. On the ChipWhisperer-Husky Plus, 30 183 tables on an
+//! XC7A100T's 63 400 sites, one build's latest `clk_usb` path (17.8 ns of
+//! 10.4) ran through a pair whose `O6` was a three-input function of
+//! unrelated logic and whose `O5` read a FIFO pointer's adder, 32 columns
+//! and 42 rows from it: 2.8 ns of wire in and 2.8 ns out. Another had a
+//! pair more than 120 rows from everything its halves read and drove.
+//!
+//! Half of that reading was wrong. A pair's shared inputs are routed once,
+//! to one site, and pairing less costs the router: pairing only the lanes
+//! (`budget`), two of three placements of the Plus did not converge in a
+//! hundred passes, and the third read test ramps back wrong on the part.
+//! Pairing only tables that share two inputs or more (`min_shared`, 3,204
+//! pairs of the 5,885) kept most of what pairing saves the router and none
+//! of the pairs that shared nothing; on the part, seeds 1 to 3 passed 23,
+//! 21 and 27 of NewAE's tests, where pairing everything passed 17 and 18
+//! on seeds 2 and 3, with every test ramp exact on all three. It is the flow's default
+//! (`--pair-tables related`); [`PairOptions`]'s own default pairs all it
+//! can.
+//!
 //! Left alone otherwise: a lookup table using all six inputs, one that
 //! drives a carry chain's propagate or generate and could not be paired
 //! with its own lane (the chain needs the table at its own position, and
@@ -72,6 +96,18 @@ impl LutPairing {
     }
 }
 
+/// Which tables [`pack_lut_pairs`] pairs beyond a carry lane's own two.
+/// The default pairs every two it can.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PairOptions {
+    /// Pair only while more than this many tables remain.
+    pub budget: Option<usize>,
+    /// Pair a table only with one that shares at least this many of its
+    /// inputs, and never with one that shares none. Zero lets a table
+    /// that shares nothing with any other take the narrowest one left.
+    pub min_shared: usize,
+}
+
 /// One lookup table as the pass sees it.
 struct Table {
     cell: CellId,
@@ -89,6 +125,8 @@ struct Table {
 
 /// Packs pairs of lookup tables into `LUT6_2` cells; see the module docs.
 ///
+/// A carry lane's two tables are always paired; others as `options` says.
+///
 /// # Errors
 ///
 /// A message when the module cannot be read bit by bit.
@@ -96,6 +134,7 @@ pub fn pack_lut_pairs(
     design: &mut Design,
     module: ModuleId,
     device: &Device,
+    options: &PairOptions,
 ) -> Result<LutPairing, String> {
     let mut report = LutPairing::default();
     let (Some(dual), Some(lut)) = (
@@ -313,6 +352,12 @@ pub fn pack_lut_pairs(
         }
     }
     for &i in &order {
+        if options
+            .budget
+            .is_some_and(|b| report.luts - pairs.len() <= b)
+        {
+            break;
+        }
         if taken[i] {
             continue;
         }
@@ -334,13 +379,16 @@ pub fn pack_lut_pairs(
                 }
             }
         }
-        let partner = best.map(|(j, _)| j).or_else(|| {
-            narrow
+        let partner = match best {
+            Some((j, shared)) if shared >= options.min_shared => Some(j),
+            Some(_) => None,
+            None if options.min_shared > 0 => None,
+            None => narrow
                 .keys()
                 .take(8)
                 .map(|(_, j)| *j)
-                .find(|j| union(&tables[i], &tables[*j]) <= 5)
-        });
+                .find(|j| union(&tables[i], &tables[*j]) <= 5),
+        };
         if let Some(j) = partner {
             taken[j] = true;
             narrow.remove(&(tables[j].inputs.len(), j));
@@ -481,17 +529,9 @@ mod tests {
             .collect()
     }
 
-    /// Six tables over five inputs, with constants on some pins as mapping
-    /// leaves them, packed: every output agrees with the unpacked module on
-    /// all 32 assignments, and the tables did pair.
-    ///
-    /// Would catch a half written to the wrong end of `INIT`, an input
-    /// order that differs between the two halves, a constant folded the
-    /// wrong way, and `I5` not tied high. Would not catch `O5` reading
-    /// something other than the lower half on silicon, which is UG474's
-    /// statement, quoted.
-    #[test]
-    fn two_tables_in_one_answer_as_they_did_apart() {
+    /// Six lookup tables over five inputs, with constants on some pins as
+    /// mapping leaves them; the module and its inputs.
+    fn six_tables() -> (Design, ModuleId, Vec<NetId>) {
         let mut map = SourceMap::new();
         let file = map.add("t", "").unwrap();
         let mut b = ModuleBuilder::new("pairs", Span::new(file, 0, 0));
@@ -534,10 +574,25 @@ mod tests {
         let mut design = Design::new();
         let top = design.add_module(module);
         design.top = Some(top);
+        (design, top, ins)
+    }
+
+    /// Six tables over five inputs, with constants on some pins as mapping
+    /// leaves them, packed: every output agrees with the unpacked module on
+    /// all 32 assignments, and the tables did pair.
+    ///
+    /// Would catch a half written to the wrong end of `INIT`, an input
+    /// order that differs between the two halves, a constant folded the
+    /// wrong way, and `I5` not tied high. Would not catch `O5` reading
+    /// something other than the lower half on silicon, which is UG474's
+    /// statement, quoted.
+    #[test]
+    fn two_tables_in_one_answer_as_they_did_apart() {
+        let (mut design, top, ins) = six_tables();
         let before = design.module(top).clone();
 
         let device = target("xc7a35t-ftg256").unwrap();
-        let report = pack_lut_pairs(&mut design, top, device).unwrap();
+        let report = pack_lut_pairs(&mut design, top, device, &PairOptions::default()).unwrap();
         assert!(report.pairs >= 2, "{report:?}");
         let after = design.module(top);
         assert!(
@@ -564,5 +619,60 @@ mod tests {
                 "assignment {assignment:05b}"
             );
         }
+    }
+
+    /// With a budget, the six tables pair only until they number that
+    /// many: one pair for a budget of five, none for six or more; with no
+    /// budget they pair as far as they can. Would catch the budget being
+    /// ignored, or counted against the pairs instead of the tables left.
+    /// Would not catch a lane's own two tables being held back by it,
+    /// which `tests/fpga_carry.rs` would, its chains being paired with
+    /// no budget only.
+    #[test]
+    fn a_budget_stops_the_pairing_once_the_tables_fit() {
+        let device = target("xc7a35t-ftg256").unwrap();
+        let pairs = |budget| {
+            let (mut design, top, _) = six_tables();
+            let options = PairOptions {
+                budget,
+                ..PairOptions::default()
+            };
+            pack_lut_pairs(&mut design, top, device, &options)
+                .unwrap()
+                .pairs
+        };
+        let all = pairs(None);
+        assert!(all >= 2, "{all}");
+        assert_eq!(pairs(Some(5)), 1);
+        assert_eq!(pairs(Some(6)), 0);
+        assert_eq!(pairs(Some(100)), 0);
+        assert_eq!(pairs(Some(0)), all);
+    }
+
+    /// With `min_shared`, a table pairs only with one that shares that
+    /// many of its inputs. Of the six tables, two pairs share two inputs
+    /// or more; by default a third pairs `t1` (`x3`, `x4`) with a table it
+    /// shares at most one input with. Would catch `min_shared` ignored, the
+    /// fallback that pairs a table sharing nothing left on, a best partner
+    /// sharing fewer than the minimum taken anyway, and a pair sharing
+    /// exactly the minimum refused (one of the two shares two).
+    #[test]
+    fn related_pairing_leaves_a_table_that_shares_one_input() {
+        let device = target("xc7a35t-ftg256").unwrap();
+        let pairs = |min_shared| {
+            let (mut design, top, _) = six_tables();
+            let options = PairOptions {
+                min_shared,
+                ..PairOptions::default()
+            };
+            pack_lut_pairs(&mut design, top, device, &options)
+                .unwrap()
+                .pairs
+        };
+        assert_eq!(pairs(0), 3);
+        assert_eq!(pairs(2), 2);
+        // At three, `t0`'s best partner shares two and is refused; only
+        // the two five-input tables over the same five pair.
+        assert_eq!(pairs(3), 1);
     }
 }

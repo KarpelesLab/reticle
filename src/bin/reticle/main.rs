@@ -229,6 +229,15 @@ Options:
                      time rather than its bitstream.
   --route-passes <n> 7 series: the most rip-up and reroute passes before a
                      route is given up (default 100)
+  --pair-tables <related|all|needed>
+                     7 series: which lookup tables share a site as a
+                     `LUT6_2`, beyond a carry lane's own two. `related`
+                     (the default) pairs two that share two inputs or more;
+                     `all` every two that fit, which a design short of sites
+                     may need; `needed` only until the tables fill three
+                     quarters of the region's sites. A pair is one site for
+                     two functions, and one whose halves share little is
+                     placed between them.
   --place-effort <n> How hard the annealer works: it tries n * cells^(4/3)
                      moves per temperature. The default is 10, which is
                      the high-quality setting of the schedule this uses
@@ -765,6 +774,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-seed",
                 "route-attempts",
                 "route-passes",
+                "pair-tables",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -2713,6 +2723,26 @@ fn route_passes(args: &Args) -> Result<u32, String> {
     }
 }
 
+/// `--pair-tables`: which lookup tables a 7-series build pairs, given the
+/// lookup-table sites of the region it loaded.
+fn pair_options(args: &Args, lut_sites: usize) -> Result<reticle::fpga::xray::PairOptions, String> {
+    let all = reticle::fpga::xray::PairOptions::default();
+    match args.option("pair-tables") {
+        Some("all") => Ok(all),
+        None | Some("related") => Ok(reticle::fpga::xray::PairOptions {
+            min_shared: 2,
+            ..all
+        }),
+        Some("needed") => Ok(reticle::fpga::xray::PairOptions {
+            budget: Some(lut_sites / 4 * 3),
+            ..all
+        }),
+        Some(text) => Err(format!(
+            "`--pair-tables` is `related`, `all` or `needed`, not `{text}`"
+        )),
+    }
+}
+
 /// `--route-attempts`: how many placements a 7-series build tries.
 fn route_attempts(args: &Args) -> Result<u32, String> {
     match args.option("route-attempts") {
@@ -3501,9 +3531,22 @@ fn write_xc7_bitstream(
     let mut design = design.clone();
     let packing = reticle::fpga::xray::legalise_carries(&mut design, top, device)?;
     laps.lap("legalise the carries");
+    let graph = fabric.arch.build_graph();
+    laps.lap("build the graph");
     // Two functions of five inputs or fewer between them share a lookup
-    // table. See `xray::pack_lut_pairs`.
-    let pairing = reticle::fpga::xray::pack_lut_pairs(&mut design, top, device)?;
+    // table, as `--pair-tables` says: by default only two that share two
+    // inputs or more. See `xray::pack_lut_pairs`.
+    let lut_sites = graph
+        .site_counts()
+        .into_iter()
+        .find(|(kind, _)| kind == "lut")
+        .map_or(0, |(_, n)| n);
+    let pairing = reticle::fpga::xray::pack_lut_pairs(
+        &mut design,
+        top,
+        device,
+        &pair_options(args, lut_sites)?,
+    )?;
     laps.lap("pair the lookup tables");
     // Said now rather than with the rest: a design that then does not fit
     // stops in placement, and how many sites the pairing saved is what
@@ -3511,8 +3554,6 @@ fn write_xc7_bitstream(
     eprint!("{}", pairing.to_text());
     let design = &design;
 
-    let graph = fabric.arch.build_graph();
-    laps.lap("build the graph");
     let mut netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     laps.lap("build the netlist");
     check_driverless(&netlist)?;

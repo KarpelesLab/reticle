@@ -4461,6 +4461,41 @@ first placement, the route took 1,230 s and the ADC ramp read wrong
 samples at 220 MHz in two captures of three. Two placements each, not a
 measured optimum.
 
+### Pairing tables that share inputs, and only those (2026-10-28)
+
+**Pairing fewer lookup tables**, above, was not adopted on one seed each.
+With the late paths routed the short way it was measured again, three
+ways, on master's sources with the router at exponent 4:
+
+| `--pair-tables` | pairs | seeds | routed | NewAE's tests passed | test ramps exact |
+|---|---|---|---|---|---|
+| `all` (master's) | 5,885 | 2, 3 | 520 s, 830 s | 17, 18 | 36 of 36, both |
+| `needed`: lanes only, the die being twice the design | 2,061 | 1, 2, 3 | 1 and 2 did not converge in 100 passes; 3 in 484 s | —, —, 14 | 12-bit ramps wrong on 3 |
+| `related`: tables sharing two inputs or more | 3,204 | 1, 2, 3 | 1,054 s, 966 s, 2,461 s | 23, 21, 27 | 36 of 36, all three |
+
+So pairing is not only for a design short of sites, as the first reading
+had it: a pair's shared inputs are routed once, to one site, and taking
+the lanes' pairs alone left more than the router could settle. What
+costs is the pair whose halves share nothing (the greedy pass's last
+resort) or one input: on one build a pair sat more than 120 rows from
+everything its halves read and drove, 5 to 6 ns of wire each way, on
+the latest `clk_usb` path. `related` is the default now
+(`xray::PairOptions::min_shared`); `all` is still there for a design
+short of sites. With it `clk_usb`'s late endpoints were 69, 68 and 90
+against 202 and 225, and the logic analyser's latest path 8.0, 8.1 and
+7.7 ns against 9.2 and 8.9. What it costs is the route's time, up to
+three times longer.
+
+Against NewAE's own bitstream on the same 40 tests (`hw/ref_run1.txt`),
+seed 3 passes 27 to their 35. NewAE's fails five: all four
+`test_glitch_width` cases and `test_pll` at 15 MHz from the crystal, of
+which seed 3 passes `test_glitch_width[1600]`. The rest of the
+difference: `test_fpga_version`, which asks for the build time of
+NewAE's release bitstream and so fails for any other build;
+`test_adc_reset`; the two fastest ADC ramps; `test_glitch_offset` at
+1600; three of `test_glitch_output_sweep_width`; and `test_pll` with the
+crystal multiplied by three.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

@@ -1857,7 +1857,8 @@ fn a_block_ram_fifo_ties_its_resets_with_the_router_kept_off_the_ground_fans() {
 /// into four `LUT6_2`s, every signal routes through their `O5` and `O6`,
 /// and every set bit decodes. The packing is
 /// `xray::pack_lut_pairs`; its truth tables are checked exhaustively
-/// in its own unit test.
+/// in its own unit test. Asked for with `--pair-tables all`: by default
+/// only tables sharing two inputs or more pair, and these share one at most.
 ///
 /// Would catch the second output having no way out of the slice (the
 /// route fails) or its mux bit missing from the database (a bit left
@@ -1890,6 +1891,7 @@ fn small_functions_share_lookup_tables_and_still_route() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
         .args(["fpga", v.to_str().unwrap(), "--device", "xc7a35t-ftg256"])
+        .args(["--pair-tables", "all"])
         .arg("--constraints")
         .arg(&rcf)
         .arg("--output-dir")

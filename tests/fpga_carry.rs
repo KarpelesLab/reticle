@@ -737,8 +737,13 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
         let device = fpga::target(device).expect("a built-in device");
         fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
         if pack {
-            let pairing = fpga::xray::pack_lut_pairs(&mut design, top, device)
-                .expect("the lookup tables pair");
+            let pairing = fpga::xray::pack_lut_pairs(
+                &mut design,
+                top,
+                device,
+                &fpga::xray::PairOptions::default(),
+            )
+            .expect("the lookup tables pair");
             assert!(pairing.pairs > 0, "nothing paired: {pairing:?}");
             generates_come_off_their_own_o5(design.module(top));
         }
