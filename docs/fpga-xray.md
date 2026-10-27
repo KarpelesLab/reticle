@@ -4421,6 +4421,46 @@ reported 29,887 of 29,887, its glitch MMCM was on the same site as P0-2's,
 and its `CLK_L0` came off a clock leaf. On the part all three clock
 managers read back right 56 times in 56.
 
+### Late paths routed the long way (2026-10-28)
+
+Builds of the Husky Plus that differed only in their netlist kept
+breaking captures in ways that followed the placement: changing how
+lookup tables pair, or a FIFO stand-in's structure, took the test ramps
+from exact to wrong in builds of every seed, the wrong samples having
+bits set that the ramp had clear and differently in each capture. Read
+from the routed paths rather than the totals, the late paths of those
+builds held connections many nanoseconds slower than their length: in
+the `--timing-endpoints` listing of one, 179 connections on late paths
+were routed more than 5 ns over the placement's estimate from their tile
+distance, one of 29 tiles in 13.7 ns. Master's own seed-2 build had 44.
+That those connections are what broke the captures is a reading, not
+shown here: the table below changes the router only, under placements
+whose captures already worked.
+
+The router weighs each connection's delay by its criticality, `1 -
+slack / longest path`, raised to `route::Timing::exponent`, which was 8,
+VPR's default. Against a domain whose longest path is 14 ns, a path two
+nanoseconds past the 10.4 ns period weighs delay at about a third of its
+cost; with hundreds of paths past the period, congestion sent their
+connections round. At 4 (`xray::CRITICALITY_EXPONENT`), routed from the
+same two placements as master's seeds 2 and 3:
+
+| | exponent 8 | exponent 4 |
+|---|---|---|
+| connections on late paths more than 5 ns over the estimate | 44, 39 | 1, 0 |
+| `clk_usb` endpoints past the period | 299, 346 | 202, 225 |
+| route | 425 s, 662 s | 520 s, 830 s |
+| test ramps exact, 8 and 12 bits to 131,070 samples | 36 of 36, both | 36 of 36, both |
+| ADC ramp exact at 20, 160, 186 and 220 MHz | all, both | all, both |
+| NewAE's tests passed | 15, 17 | 17, 18 |
+
+Measured on the part with `hw/eval2.sh`. The worst figures do not move —
+`clk_usb`'s 16.5 ns is a pad's path, and the rest is the placement's —
+so what changed is how many paths sit near the worst. At 2, from the
+first placement, the route took 1,230 s and the ADC ramp read wrong
+samples at 220 MHz in two captures of three. Two placements each, not a
+measured optimum.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

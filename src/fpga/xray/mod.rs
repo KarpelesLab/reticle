@@ -2785,6 +2785,25 @@ pub const ROUTE_TILE_DELAY_PS: u32 = 25;
 /// optimum.
 pub const CRITICAL_PRESENT_CAP: f64 = 30.0;
 
+/// The power a timing-driven route raises each connection's criticality to
+/// on this fabric (`route::Timing::exponent`). VPR's default is 8; at 8,
+/// against a domain's longest path, a connection on a path two
+/// nanoseconds past a 10.4 ns period weighs delay at about a third of its
+/// cost and one just making the period at under a tenth, and on the
+/// ChipWhisperer-Husky Plus, where hundreds of `clk_usb` paths are past
+/// the period, congestion sent such connections the long way: the late
+/// paths of one build (K2) held 44 connections routed more than 5 ns over
+/// what their distance makes them, one of 29 tiles in 13.7 ns on a build
+/// with more of them (LP1, 179). Routed again at 4 from the same two
+/// placements: 1 and 0 such connections, `clk_usb`'s late endpoints 202
+/// and 225 against 299 and 346, the route 520 and 830 s against 425 and
+/// 662, and on the part every test ramp exact and the ADC exact to 220 MHz
+/// on both, as before, and 17 and 18 of NewAE's tests against 15 and 17.
+/// At 2, on the first placement, the route took 1,230 s and the ADC read
+/// wrong samples at 220 MHz in two captures of three. Two placements, not
+/// a measured optimum.
+pub const CRITICALITY_EXPONENT: i32 = 4;
+
 /// What [`XrayDatabase::node_delays`] charges a programmable pip prjxray
 /// gives no delay for, in picoseconds: the median of those it does, over
 /// every tile type of `artix7/` at 0a0adde (0.175 ns).

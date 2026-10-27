@@ -3724,7 +3724,7 @@ fn write_xc7_bitstream(
                         max_criticality: 0.99,
                         cleanups: 2,
                         tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
-                        exponent: 8,
+                        exponent: reticle::fpga::xray::CRITICALITY_EXPONENT,
                         passes: 4,
                         reroute_above: 0.9,
                         paths: Some(paths),
