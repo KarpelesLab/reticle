@@ -4152,6 +4152,21 @@ which ones the part gets wrong is down to the placement. Some of the
 latest are LUT-built subtractions (`wused_next` into `prog_full_q`,
 13.6 ns), which is the cost of keeping them off the carry chain.
 
+**The ADC's clock, timed.** `husky.rcf` declared no clock on the ADC's pad,
+so the ADC domain was untimed. On the part, test-ramp captures were exact
+at 160 and 186 MHz and at 220 MHz timed out with the fast FIFO overflowed,
+on every build. Declaring it at NewAE's 4 ns made it worse (25 October):
+the SAD trigger engine's 16,000 endpoints at 20 ns were most of the
+domain, and the route took 90 minutes. NewAE times that engine at half
+the rate, on generated clocks this flow cannot declare. With the SAD
+engine false-pathed instead (not NewAE's; `husky.rcf` says why), two
+builds routed in 8 and 9 minutes, `clk_usb` as before, and the domain at
+10.5 and 11.3 ns of 4. On the part, every capture at 220 MHz completed,
+some with wrong samples and one exact. Both passed `test_max_samples`, the
+first builds to, and one passed `ADCfastsegments`, the first fast ADC test
+to pass. Its suite passed 16 and 14 against 13 and 15 for the same seeds
+untimed; the other differences go both ways.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`

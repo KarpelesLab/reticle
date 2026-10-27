@@ -14,6 +14,14 @@
 create_clock -name clk_usb -period 10.4 clk_usb
 create_clock -name target_hs1 -period 20.0 target_hs1
 create_clock -name AUXIO -period 20.0 AUXIO
+# The ADC's clock, which `cwhusky_100.xdc` (the Plus's) declares at 4 ns on
+# the net `ADC_clk_fb` behind its `IBUFDS`, here on the pad; `cwhusky.xdc`
+# (the Husky's, which shares this file) at 5 ns. Untimed, the Husky
+# Plus captured exactly at 186 MHz and at 220 timed out with the fast FIFO
+# overflowed, on every build; timed (with the false paths at the end),
+# two builds captured to completion at 220 and passed `test_max_samples`
+# for the first time, and one `ADCfastsegments` (2026-10-27).
+create_clock -name ADC_clk_fb -period 4.0 ADC_clk_fbp
 set_io -io_standard LVCMOS33 -drive 8 LED_ADC C7
 set_io -io_standard LVCMOS33 -drive 8 LED_GLITCH C6
 set_io -io_standard LVCMOS33 -drive 8 LED_ARMED D3
@@ -215,3 +223,13 @@ set_false_path -to target_poweron
 # had bit 1 the latest too. Every bit that arrived ahead of the clock was
 # written right in every build.
 set_input_delay -clock clk_usb 13.4 USB_RDn USB_WRn USB_ALEn USB_Addr USB_Data
+
+# Not NewAE's: the SAD trigger engine. It runs on `ADC_slow_clk_even` and
+# `_odd`, the ADC clock through a `BUFGCE` enabled every other cycle, which
+# NewAE declares as generated clocks of half the rate in a clock group of
+# their own; this flow cannot declare either, and timed at the ADC's 4 ns
+# its 16,000 endpoints were most of the domain's late ones and the route
+# took 90 minutes. So it is not timed at all, and is as it was before the
+# ADC's clock was declared.
+set_false_path -from oadc.U_sad*
+set_false_path -to oadc.U_sad*
