@@ -233,3 +233,13 @@ set_input_delay -clock clk_usb 13.4 USB_RDn USB_WRn USB_ALEn USB_Addr USB_Data
 # ADC's clock was declared.
 set_false_path -from oadc.U_sad*
 set_false_path -to oadc.U_sad*
+
+# Not NewAE's either: the stand-in slow FIFOs' `stage` registers
+# (`fifo_generator.v`, `extra_words`). The FIFO reads its memory at most
+# every other cycle and `stage` takes the word on the second, so the paths
+# into it, from block RAMs spread over half the die through the banks'
+# multiplexers, have two periods. Held to one they were `clk_usb`'s late
+# paths build after build, and a build where one passed 12 ns read its
+# test ramps back wrong. `fifo_generator_tb.v` checks that every word
+# `stage` gives on was on the memory's output both cycles before.
+set_multicycle_path 2 -setup -to oadc.U_fifo.U_slow_fifo_wrapper.U_fifo*.u_fifo.extra_words.stage*

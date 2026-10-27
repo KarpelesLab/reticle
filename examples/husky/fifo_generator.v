@@ -113,6 +113,10 @@ module husky_fifo #(
   // word on `dout`, and in `extra_words` those queued behind it.
   wire [5:0]  out_next;
   wire [WIDTH-1:0] mem_q;  // the memory's read register
+  // In `extra_words`, `stage` and whether it holds a word, for the
+  // testbench to check the two cycles it is given; nothing reads them.
+  wire             staged_word;
+  wire [WIDTH-1:0] stage_word;
 
   // --- write side ----------------------------------------------------------
   wire [AW:0] wused_next = wptr_next - rptr_w_next;
@@ -148,6 +152,8 @@ module husky_fifo #(
     assign take  = rd_en && held;
     assign fetch = stored && (!held || take) && !rrst;
     assign held_next = fetch || (held && !take);
+    assign staged_word = 1'b0;
+    assign stage_word = {WIDTH{1'b0}};
     assign out_next = {5'd0, held_next};
     assign dout = mem_q;
   end else if (FWFT) begin : extra_words
@@ -163,8 +169,23 @@ module husky_fifo #(
     // the memory, through the multiplexer choosing a bank, the queue's
     // inputs were `clk_usb`'s late paths, at 12.5 ns of 10.4, and captures
     // read back bits set that the ramp had clear, some in every word.
-    reg  [5:0] outside;  // `held`, the queue, `staged` and `fetched`
+    //
+    // And that register's own input came back late, build after build:
+    // the multiplexer that chooses a bank, and the one Reticle's block RAM
+    // mapping puts behind every bank of eight blocks deep, gather a word
+    // from block RAMs spread over half the die, and on one build of four
+    // or so the path was past 12 ns of 10.4 and the ramps read back wrong
+    // again. Splitting the memory to need no multiplexer, or registering
+    // each block's word beside it, crowded the block RAM columns until
+    // the route did not settle. So the memory is read at most every other
+    // cycle, which leaves the word on `mem_q` for two, and `stage` takes
+    // it on the second: `husky.rcf` gives the paths into `stage` two
+    // periods. Every other cycle of `clk_usb` is 48 million words a
+    // second, past the 41.7 million a 250 MHz ADC writes and the few
+    // million USB reads.
+    reg  [5:0] outside;  // `held`, the queue, `stage` and the pipeline
     reg        fetched;  // `mem_q` holds the word read last cycle
+    reg        piped;  // and still holds it
     reg        staged;  // `stage` holds the word before it
     reg  [WIDTH-1:0] stage;
     reg  [5:0] queued;
@@ -177,12 +198,14 @@ module husky_fifo #(
     wire push = staged && !from_stage;
     assign empty = !held;
     assign take  = rd_en && held;
-    assign fetch = stored && !rrst && outside - take <= EXTRA;
+    assign fetch = stored && !rrst && outside - take <= EXTRA && !fetched;
     assign held_next = from_queue || from_stage || (held && !take);
     assign out_next = outside - take + fetch;
     assign dout = head;
+    assign staged_word = staged;
+    assign stage_word = stage;
     always @(posedge rclk) begin
-      if (fetched) stage <= mem_q;
+      stage <= mem_q;  // right only when `piped`; see above
       if (push) queue[qw] <= stage;
       if (from_queue) head <= queue[qr];
       else if (from_stage) head <= stage;
@@ -191,6 +214,7 @@ module husky_fifo #(
       if (rst) begin
         outside <= 0;
         fetched <= 1'b0;
+        piped <= 1'b0;
         staged <= 1'b0;
         queued <= 0;
         qw <= 0;
@@ -198,7 +222,8 @@ module husky_fifo #(
       end else begin
         outside <= out_next;
         fetched <= fetch;
-        staged <= fetched;
+        piped <= fetched;
+        staged <= piped;
         queued <= queued + push - from_queue;
         qw <= qw + push;
         qr <= qr + from_queue;
@@ -210,6 +235,8 @@ module husky_fifo #(
     assign held_next = 1'b0;
     assign out_next = 6'd0;
     assign dout = mem_q;
+    assign staged_word = 1'b0;
+    assign stage_word = {WIDTH{1'b0}};
   end
   assign rptr_next = rptr + fetch;
   wire [AW:0] rused_next = (wptr_r_next - rptr_next) + out_next;
@@ -246,17 +273,29 @@ module husky_fifo #(
   // 30,000 were exact one time in three. Banks of 4096, twice the
   // registers, crowded the block RAM columns: the route was still 850
   // nodes overused after 27 passes and 77 minutes, and was stopped.
+  //
+  // Each bank is segments of 1024 words, four block RAMs of 1024 by 18
+  // each, and the word read is the OR of every segment's output gated by
+  // a register of the segment's own that says the word is its: no
+  // multiplexer chooses a bank or a block. As one memory a bank was
+  // mapped eight blocks deep behind a multiplexer of the mapping's own,
+  // whose select register sat where the placer left it: on one build
+  // 13 ns of wire from the multiplexer it drove, at the far side of the
+  // die from it, past even the two periods `stage` has (see
+  // `extra_words`). Each segment's register is beside its block RAMs, set
+  // from its bank's copy of the read address.
   if (BANKED) begin : banked
     localparam NB = 1 << (AW - BANK_AW);
-    wire [NB*WIDTH-1:0] bank_q;
-    reg  [AW-BANK_AW-1:0] which_q;  // the bank `dout` is from
-    always @(posedge rclk) if (fetch) which_q <= rptr[AW-1:BANK_AW];
-    genvar b;
+    localparam SEG_AW = BANK_AW < 10 ? BANK_AW : 10;
+    localparam NS = 1 << (BANK_AW - SEG_AW);
+    wire [NB*NS*WIDTH-1:0] seg_q;  // each segment's word, zero if not its
+    genvar b, g;
     for (b = 0; b < NB; b = b + 1) begin : bank
       (* keep = "true" *) reg [BANK_AW-1:0] waddr;
       (* keep = "true" *) reg [WIDTH-1:0]   wdata;
       (* keep = "true" *) reg               wen;
       (* keep = "true" *) reg [BANK_AW-1:0] raddr;
+      (* keep = "true" *) reg               rbank;  // `raddr` is in this bank
       always @(posedge wr_clk) begin
         waddr <= wptr[BANK_AW-1:0];
         wdata <= din;
@@ -265,15 +304,34 @@ module husky_fifo #(
         if (rst) wen <= 1'b0;
         else wen <= do_write && wptr[AW-1:BANK_AW] == b;
       always @(posedge rclk or posedge rst)
-        if (rst) raddr <= 0;
-        else raddr <= rptr_next[BANK_AW-1:0];
-      (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:(1 << BANK_AW)-1];
-      reg [WIDTH-1:0] q;
-      always @(posedge wr_clk) if (wen) mem[waddr] <= wdata;
-      always @(posedge rclk) if (fetch) q <= mem[raddr];
-      assign bank_q[b*WIDTH+:WIDTH] = q;
+        if (rst) begin
+          raddr <= 0;
+          rbank <= b == 0;
+        end else begin
+          raddr <= rptr_next[BANK_AW-1:0];
+          rbank <= rptr_next[AW-1:BANK_AW] == b;
+        end
+      for (g = 0; g < NS; g = g + 1) begin : segment
+        (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:(1 << SEG_AW)-1];
+        reg [WIDTH-1:0] q;
+        reg             mine;  // `q` is the word read
+        always @(posedge wr_clk)
+          if (wen && waddr[BANK_AW-1:SEG_AW] == g) mem[waddr[SEG_AW-1:0]] <= wdata;
+        always @(posedge rclk)
+          if (fetch) begin
+            q <= mem[raddr[SEG_AW-1:0]];
+            mine <= rbank && raddr[BANK_AW-1:SEG_AW] == g;
+          end
+        assign seg_q[(b*NS+g)*WIDTH+:WIDTH] = q & {WIDTH{mine}};
+      end
     end
-    assign mem_q = bank_q[which_q*WIDTH+:WIDTH];
+    reg [WIDTH-1:0] any_segment;
+    integer k;
+    always @* begin
+      any_segment = {WIDTH{1'b0}};
+      for (k = 0; k < NB * NS; k = k + 1) any_segment = any_segment | seg_q[k*WIDTH+:WIDTH];
+    end
+    assign mem_q = any_segment;
   end else begin : single
     (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:DEPTH-1];
     always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;

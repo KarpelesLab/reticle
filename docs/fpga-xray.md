@@ -4496,6 +4496,62 @@ NewAE's release bitstream and so fails for any other build;
 1600; three of `test_glitch_output_sweep_width`; and `test_pll` with the
 crystal multiplied by three.
 
+### The slow FIFOs' read, given two cycles (2026-10-28)
+
+With the late paths routed short and the tables paired by what they
+share, what still broke captures from one placement to the next was one
+path: the stand-in slow FIFOs' memory to the register `stage` behind it
+(`fifo_generator.v`, `extra_words`). Their memory is 192 of the die's
+270 block RAMs of 18 kbit, so it spreads over the die, and the word read gathers from all of
+them in one cycle of `clk_usb`. The builds that read test ramps back
+wrong had that path late: 13.6 ns on one, 12.3 on another, the wrong
+samples having bits set that the ramp had clear and differently in each
+capture.
+
+Four structures were tried that kept one cycle, and none is here:
+
+| what | the latest path into `stage` | why not |
+|---|---|---|
+| the output multiplexer's word registered first (one build) | those registers late in turn, the mapping's multiplexer still in front | late endpoints 600 against 299 |
+| each bank as 36 memories two bits wide, no multiplexer (three builds) | — | 268 of the 270 block RAMs; a read address fanned out to 36 of them took up to 25 ns |
+| each 1024-word segment's word registered beside it (six builds) | — | the columns beside the block RAMs crowded; none had settled after 19 to 26 passes |
+| `prog_full` from a count of its own (three builds) | removed the latest `prog_full` path | all three placements it led to read some ramps wrong |
+
+What is here gives the path two cycles. The FIFO reads its memory at
+most every other cycle, so the word on `mem_q` stays two cycles, and
+`stage` takes it on the second; `husky.rcf` declares the paths into
+`stage` two periods. Every other cycle of `clk_usb` is 48 million words
+a second, more than the 41.7 million a 250 MHz ADC writes in 12-bit
+samples, six to a word, and USB 2.0's 60 MB/s is under 7 million words:
+arithmetic, not a measurement. The testbench checks that every
+word `stage` hands on was on `mem_q` through both cycles before.
+
+That alone (three builds) passed 20, 27 and 25 of NewAE's tests, routed
+in 450 to 520 s, and the first build read 12-bit ramps wrong: given two
+periods, its path into `stage` had grown to fill them, 21.1 ns of 20.8,
+13 ns of it from the select register of the mapping's own output
+multiplexer to the multiplexer, at the far side of the die. So the
+banks are segments of 1024 words now, each four block RAMs and no
+multiplexer, and each segment has one register of its own, beside it,
+that says the word read is its; the word is the OR of every segment's
+output gated by its register. 48 flip-flops in all, against the 3,456 of
+registering each segment's word.
+
+| seed | routed | late `clk_usb` endpoints | test ramps exact | ADC exact at 20 to 220 MHz | NewAE's tests passed |
+|---|---|---|---|---|---|
+| 1 | 696 s | 113 | 36 of 36 | 12 of 12 | 27 |
+| 2 | did not settle its clocks; placed again with seed 3 | — | — | — | — |
+| 3 | 521 s | 83 | 36 of 36 | 12 of 12 | 24 |
+
+Seed 2's route converged, with five clock pins a global buffer drives
+reached through general interconnect, and `--route-attempts` placed it
+again with seed 3, which gave seed 3's bitstream bit for bit. That
+bitstream was so measured twice: 24 both times, everything else alike,
+but not the same 24 — `test_glitch_output_sweep_width` at 100 MHz passed
+only the first time and `test_pll` at 15 MHz only the second (NewAE's
+own bitstream fails that one). A test or two of any count here is noise.
+Measured on the part with `hw/eval2.sh`.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

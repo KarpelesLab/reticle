@@ -132,7 +132,26 @@ module fifo_generator_tb;
       end
     end
 
+`ifdef PLUS
+  // The Husky Plus's slow FIFOs give the memory's word two cycles to
+  // reach `stage`: whenever `stage` is taken, it must be what `mem_q`
+  // held through both cycles before, in each of the two.
+  reg [71:0] s_m1, s_m2, b_m1, b_m2;
+  integer two_cycle_wrong = 0;
+  always @(negedge clk) begin
+    if (u_s.u_fifo.staged_word
+        && (u_s.u_fifo.stage_word !== s_m1 || s_m1 !== s_m2))
+      two_cycle_wrong = two_cycle_wrong + 1;
+    if (u_b.u_fifo.staged_word
+        && (u_b.u_fifo.stage_word !== b_m1 || b_m1 !== b_m2))
+      two_cycle_wrong = two_cycle_wrong + 1;
+    {s_m2, s_m1} <= {s_m1, u_s.u_fifo.mem_q};
+    {b_m2, b_m1} <= {b_m1, u_b.u_fifo.mem_q};
+  end
+`endif
+
   integer i;
+  integer s_wait;
   integer failures_before;
   integer x_wait;
   integer got = 0;
@@ -247,14 +266,25 @@ module fifo_generator_tb;
     repeat (4) @(posedge clk);
     check("fall-through full at what it holds", s_full, 1);
     check("fall-through overflow never", s_over, 0);
-    // And every word back, in order, through the queue of `extra_words`.
+    // And every word back, in order, through the queue of `extra_words`,
+    // each taken as soon as it is there: the Husky Plus's stand-in reads
+    // its memory every other cycle, so within two cycles a word.
     failures_before = failures;
-    for (i = 0; i < S_HOLDS; i = i + 1) begin
+    i = 0;
+    s_wait = 0;
+    while (i < S_HOLDS && s_wait < 2 * S_HOLDS + 16) begin
       @(negedge clk);
-      if (s_dout !== 72'hac_0000_0000_0000_0000 + i && failures == failures_before)
-        check("fall-through fill read back", s_dout, 72'hac_0000_0000_0000_0000 + i);
-      s_rd = 1;
+      s_wait = s_wait + 1;
+      if (!s_empty) begin
+        if (s_dout !== 72'hac_0000_0000_0000_0000 + i && failures == failures_before)
+          check("fall-through fill read back", s_dout, 72'hac_0000_0000_0000_0000 + i);
+        s_rd = 1;
+        i = i + 1;
+      end else begin
+        s_rd = 0;
+      end
     end
+    check("fall-through fill read back in time", i, S_HOLDS);
     @(negedge clk);
     s_rd = 0;
     @(posedge clk);
@@ -371,20 +401,35 @@ module fifo_generator_tb;
     // And every word comes back, so that no bank's write landed in another.
     // Sampled between edges, so `rd_en` spans the edge that pops.
     b_wrong = 0;
-    for (i = 0; i < B_HOLDS; i = i + 1) begin
+    i = 0;
+    s_wait = 0;
+    while (i < B_HOLDS && s_wait < 2 * B_HOLDS + 16) begin
       @(negedge clk);
-      if (b_dout !== i) begin
-        if (b_wrong == 0) $display("FAIL: banked word %0d of the fill: got %h", i, b_dout);
-        b_wrong = b_wrong + 1;
+      s_wait = s_wait + 1;
+      if (!b_empty) begin
+        if (b_dout !== i) begin
+          if (b_wrong == 0) $display("FAIL: banked word %0d of the fill: got %h", i, b_dout);
+          b_wrong = b_wrong + 1;
+        end
+        b_rd = 1;
+        i = i + 1;
+      end else begin
+        b_rd = 0;
       end
-      b_rd = 1;
     end
+    check("banked fill read back in time", i, B_HOLDS);
     @(negedge clk);
     b_rd = 0;
     @(posedge clk);
     check("banked fill read back", b_wrong, 0);
     check("banked empty after the fill", b_empty, 1);
 
+`ifdef PLUS
+    if (two_cycle_wrong != 0)
+      $display("FAIL: a word taken into `stage` less than two cycles after it was read, %0d times",
+               two_cycle_wrong);
+    failures = failures + (two_cycle_wrong != 0);
+`endif
     if (failures == 0) $display("PASS: the FIFO stand-ins");
     else $display("FAIL: %0d check(s)", failures);
     $finish;
