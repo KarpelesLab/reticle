@@ -4186,6 +4186,24 @@ Seed 1 did not converge (below). That every clock reaches every flip-flop
 at the same moment is an idealisation too: it is nearer the part than
 five nanoseconds, and not measured.
 
+**`x == p - q` compared as `x + q == p`, measured again and dropped
+again.** The logic analyser's latest path ends a capture at
+`capture_count == capture_depth - 1`, sixteen tables in a row. The rewrite
+(25 October, above) makes `capture_depth - 1` a sum on the carry chain.
+It had been dropped on one wrong ramp in twelve, when other faults were
+in every build, so it was measured again on today's master, three seeds.
+The analyser's path fell to 7.9 to 8.6 ns from 9.0 to 9.2, now a 32-bit
+carry chain and four tables. On the part all three builds' captures were
+wrong: test ramps exact 0 to 3 times of 3 at each length, wrong samples
+at every ADC clock from 20 MHz up (54 at 20 MHz on one, none captured at
+all on another), and 7 and 13 of NewAE's tests. The same rewrite turns
+`last_sample <= sample_counter == samples_to_collect - 1` into a carry
+chain. That is the comparison whose subtraction on the chain broke
+captures the same way (above). Twice, then: a carry chain in that compare
+is wrong on the part, at 20 MHz where no setup can fail, and a static
+readback of the same arithmetic is right. Not found; a probe of it
+alone, counting the cycles the compare is true, is the next step.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`
