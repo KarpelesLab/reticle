@@ -296,6 +296,9 @@ pub enum PlaceError {
         kind: String,
         /// How many cells are in the group.
         members: usize,
+        /// The others, up to eight, each as `name (kind)`: which is what
+        /// says what tied the anchor to them.
+        others: Vec<String>,
         /// How many sites of the anchor's kind the part has.
         available: usize,
     },
@@ -311,6 +314,7 @@ impl fmt::Display for PlaceError {
                 cell,
                 kind,
                 members,
+                others,
                 available,
             } => write!(
                 f,
@@ -318,7 +322,8 @@ impl fmt::Display for PlaceError {
                  holds in one rigid group, and no run of that shape is free; the part has \
                  {available} `{kind}` site(s), but such a group cannot be spread — the wires \
                  between its members have no mux on them, so each cell must sit on the one site \
-                 the cell before it reaches"
+                 the cell before it reaches. With it: {}",
+                others.join(", ")
             ),
             PlaceError::NoSuchModule => f.write_str("the module is not part of the design"),
             PlaceError::NotAPrimitive { cell, kind } => write!(
@@ -5417,9 +5422,20 @@ fn legalise_macro(
     // 12 144 of them.
     if m.exact.is_some() {
         let kind = netlist.instances[m.anchor].kind.clone();
+        let others = m
+            .members
+            .iter()
+            .filter(|(i, _, _)| *i != m.anchor)
+            .take(8)
+            .map(|(i, _, _)| {
+                let inst = &netlist.instances[*i];
+                format!("`{}` ({})", inst.name, inst.kind)
+            })
+            .collect();
         return Err(PlaceError::NoDedicatedRun {
             cell: netlist.instances[m.anchor].name.clone(),
             members: m.members.len(),
+            others,
             available: sites_by_kind.get(&kind).map_or(0, Vec::len),
             kind,
         });
@@ -8545,9 +8561,17 @@ mod tests {
         .expect_err("a seven-tall chain on a six-tall die");
         match &error {
             PlaceError::NoDedicatedRun {
-                members, available, ..
+                members,
+                others,
+                available,
+                ..
             } => {
                 assert_eq!(*members, 14, "seven carries and their seven tables");
+                assert_eq!(others.len(), 8, "the others, eight of them named");
+                assert!(
+                    others.iter().any(|o| o.ends_with("(carry)")),
+                    "the others name their kinds: {others:?}"
+                );
                 assert_eq!(*available, 24, "and the part is nowhere near full");
             }
             other => panic!("the rigid group reported `{other}` instead"),
