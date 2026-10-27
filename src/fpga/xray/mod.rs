@@ -843,6 +843,17 @@ impl XrayDatabase {
     /// capacitance the same files carry, which is what `timing::WIRE` was
     /// fitted to: a connection timed here and one estimated there agree.
     ///
+    /// **An untimed pip onto the global clock network costs nothing.**
+    /// prjxray times the network's stages, the row's multiplexer (0.44 ns)
+    /// and a leaf's driver (0.193 ns), and not the pips that carry a track
+    /// from one tile of a row or a spine to the next. Charged at the
+    /// median like any other untimed pip, a flip-flop at the far end of a
+    /// clock row was clocked 4 to 6 ns after one beside the row's centre
+    /// (`clk_usb` 1.64 to 5.49 ns, the logic analyser's clock 1.64 to 8.29,
+    /// on the Husky Plus). The row is a balanced, buffered tree, and that
+    /// skew was the model's, entering every path estimate between the two
+    /// ends, both ways.
+    ///
     /// # Errors
     ///
     /// [`XrayError::Malformed`] when a tile type's file is there but is
@@ -883,11 +894,14 @@ impl XrayDatabase {
         let mut out = vec![0u32; graph.nodes.len()];
         for (index, pip) in graph.pips.iter().enumerate() {
             let index = super::arch::PipId::try_from(index).unwrap_or(u32::MAX);
-            let untimed = if graph.pip_bits(index).is_empty() {
-                0
-            } else {
-                UNTIMED_PIP_PS
-            };
+            // The clock network's untimed pips are its segments, not its
+            // stages: see the last paragraph above.
+            let untimed =
+                if graph.pip_bits(index).is_empty() || is_clock_wire(&graph.wire(pip.to).name) {
+                    0
+                } else {
+                    UNTIMED_PIP_PS
+                };
             let table = arch
                 .tile_index_at(pip.tile.0, pip.tile.1)
                 .and_then(|t| tables.get(t));
