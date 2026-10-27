@@ -2910,6 +2910,15 @@ fn is_clock_wire(name: &str) -> bool {
         "HCLK_LEAF_CLK",
         "CK_MUX_OUT",
         "CK_HCLK_OUT",
+        // A clock row's track carried from one half of an `HCLK` tile pair
+        // to the other: `HCLK_CK_INOUT_R5` is `HCLK_CK_BUFHCLK5`'s always
+        // (`ppips_hclk_r.db`), and the left half sees it as
+        // `HCLK_CK_OUTIN_L5`, from which its leaves are driven. Nothing but
+        // a clock track drives either. Left out, a clock that crossed there
+        // was called off the network: five flip-flop clocks of one Husky
+        // Plus build, whose route was then thrown away and placed again.
+        "HCLK_CK_INOUT",
+        "HCLK_CK_OUTIN",
     ]
     .iter()
     .any(|part| name.contains(part))

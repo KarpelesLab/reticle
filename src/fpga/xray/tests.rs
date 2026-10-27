@@ -573,6 +573,11 @@ fn a_global_clock_with_no_buffer_driving_it_is_reported() {
 /// crosses a clock tile, every one of which an earlier "starts with
 /// `HCLK_`" rule barred, so that no signal of that design could route.
 ///
+/// `HCLK_CK_INOUT_R5` and `HCLK_CK_OUTIN_L5` are not from that design:
+/// they are the path of five flip-flop clocks on the Husky Plus, a clock
+/// row's track crossing between an `HCLK` tile pair's halves, which a check
+/// that did not know them called off the network.
+///
 /// What it would catch: a stem that misses part of the network (a clock
 /// steered off it at that hop) or catches ordinary routing (data refused a
 /// road it needs). What it would not catch: a clock wire whose name this
@@ -595,6 +600,8 @@ fn the_clock_network_is_told_from_the_routing_that_crosses_it() {
         "HCLK_VBRK_CK_BUFHCLK4",
         "HCLK_INT_INTERFACE_CK_BUFHCLK4",
         "HCLK_LEAF_CLK_B_TOP4",
+        "HCLK_CK_INOUT_R5",
+        "HCLK_CK_OUTIN_L5",
         "GCLK_B0",
         "GCLK_B0_EAST",
         "GCLK_L_B6_WEST",

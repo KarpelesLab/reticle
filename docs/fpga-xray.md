@@ -4545,7 +4545,14 @@ registering each segment's word.
 
 Seed 2's route converged, with five clock pins a global buffer drives
 reached through general interconnect, and `--route-attempts` placed it
-again with seed 3, which gave seed 3's bitstream bit for bit. That
+again with seed 3, which gave seed 3's bitstream bit for bit. Those five
+were not off the network: they came down a clock row's track as it
+crosses between the two halves of an `HCLK` tile pair, `HCLK_CK_INOUT_R5`
+on one side and `HCLK_CK_OUTIN_L5` on the other, which nothing but the
+row's tracks drives (`ppips_hclk_r.db`: `HCLK_CK_BUFHCLK5` to it,
+always). The check did not know those names; it does now, and seed 2
+built again wrote its bitstream, 29,923 of 29,923 clock pins on the
+network, every bit decoded. That
 bitstream was so measured twice: 24 both times, everything else alike,
 but not the same 24 — `test_glitch_output_sweep_width` at 100 MHz passed
 only the first time and `test_pll` at 15 MHz only the second (NewAE's
