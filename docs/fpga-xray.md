@@ -4263,6 +4263,21 @@ domain), the analyser's, and one in the trace UART. Why is not found.
 `compare_on_the_chain` is in the tree, narrowed to a compare against a
 sum or a difference, and off.
 
+What it is not, as far as the netlist can say. The read-out of S2's
+capture begins without the offset word NewAE's capture writes first, so
+the stream it reads is shifted. Two of S2's compares on the chain are 32
+bits only because Verilog widens `presample_i - 2` and
+`num_segments - 1`, their upper lanes comparing constant zeros; an
+equality of that shape (`EqualWidened` in `tests/fpga_carry.rs`) is right
+on every input once legalised. A small design with four such compares
+on the chain, built with the same binary, gave a routed netlist that
+computed what its RTL did for 2,000 cycles, with 175 tables taking their
+inputs on other pins than mapped (`--routed-netlist`, simulated with
+`examples/husky/sim`'s cell models). The mapping, the legalisation and
+the router's input moves are right for these compares, then. What is
+left is what the routed netlist does not describe, the bits that select
+`O5` for a generate and the halves of a table, and timing.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`

@@ -136,6 +136,11 @@ enum Shape {
     /// being a sum: the carry out of `{0, L} + 1`, read as the top lane's
     /// sum alone.
     Equal,
+    /// `y = {0, a} == {0, b} - 2` at three times the inputs' width: an
+    /// equality whose upper operand bits are constant, which is what
+    /// Verilog makes of `presample_counter == presample_i - 2` (the `2`
+    /// is 32 bits wide) in NewAE's capture.
+    EqualWidened,
 }
 
 impl Shape {
@@ -198,6 +203,19 @@ impl Shape {
                 let ne = b.net(next);
                 b.cell2("same", CellKind::Eq, ae, ne, y);
             }
+            Shape::EqualWidened => {
+                let wide = width * 3;
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let y = b.output("y", Type::bit());
+                let (ae, be) = (b.net(a), b.net(bn));
+                let (za, zb) = (b.zext(ae, wide), b.zext(be, wide));
+                let two = b.const_u64(wide, 2);
+                let less = b.add_net("less", Type::bits(wide));
+                b.cell2("less", CellKind::Sub, zb, two, less);
+                let le = b.net(less);
+                b.cell2("same", CellKind::Eq, za, le, y);
+            }
             Shape::Constant(k) => {
                 let a = b.input("a", Type::bits(width));
                 let y = b.output("y", Type::bits(width));
@@ -247,7 +265,7 @@ impl Shape {
     fn result_width(self, width: u32) -> u32 {
         match self {
             Shape::Widened => width + 1,
-            Shape::Equal => 1,
+            Shape::Equal | Shape::EqualWidened => 1,
             _ => width,
         }
     }
@@ -284,6 +302,7 @@ impl Shape {
             Shape::Subtract => a.wrapping_sub(b) & mask(width),
             Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
             Shape::Equal => u64::from(a == (b + 1) & mask(width)),
+            Shape::EqualWidened => u64::from(a == b.wrapping_sub(2) & mask(width * 3)),
         }
     }
 
@@ -970,6 +989,16 @@ fn an_equality_on_the_chain_is_right_once_legalised() {
         let (_, _, report) = mapped(Shape::Equal, width, XC7, low.clone());
         assert!(report.count("CARRY4") > 0, "{width} bits is on the chain");
         check_full(Shape::Equal, width, XC7, low.clone(), true, false);
+    }
+    // And one whose upper operand bits are constant, as NewAE's widened
+    // compares are: 15 bits compared, 5 of each operand live.
+    for width in [4, 5] {
+        let (_, _, report) = mapped(Shape::EqualWidened, width, XC7, low.clone());
+        assert!(
+            report.count("CARRY4") > 0,
+            "{width} bits widened is on the chain"
+        );
+        check_full(Shape::EqualWidened, width, XC7, low.clone(), true, false);
     }
 }
 
