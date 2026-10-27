@@ -867,7 +867,22 @@ struct State {
     history: Vec<f64>,
     /// Each graph node's physical node: see [`physical_nodes`].
     group: Vec<NodeId>,
+    /// Physical nodes that are the only way into a sink, one bit each:
+    /// see [`reserve_sink_entries`].
+    reserved: Vec<u64>,
+    /// And whose sink each is, by signal, or [`CONTESTED`] when two
+    /// signals' sinks have the same only way in.
+    owner: HashMap<NodeId, usize>,
 }
+
+/// An entry [`reserve_sink_entries`] found in front of two signals' sinks:
+/// a placement that asks one wire to carry two signals, which no price
+/// makes legal, so neither is favoured on it.
+const CONTESTED: usize = usize::MAX;
+
+/// What a signal pays for a node that is the only way into another
+/// signal's sink, on top of the node's cost: see [`reserve_sink_entries`].
+const RESERVED_PENALTY: f64 = 1.0e4;
 
 impl State {
     fn new(group: Vec<NodeId>) -> Self {
@@ -876,7 +891,22 @@ impl State {
             occupancy: vec![0; nodes],
             history: vec![0.0; nodes],
             group,
+            reserved: vec![0; nodes.div_ceil(64)],
+            owner: HashMap::new(),
         }
+    }
+
+    /// Whether `node` is the only way into a sink of a signal other than
+    /// `signal`.
+    fn reserved_against(&self, node: NodeId, signal: usize) -> bool {
+        let root = self.group[node as usize];
+        let (word, bit) = (root as usize / 64, root % 64);
+        if self.reserved[word] >> bit & 1 == 0 {
+            return false;
+        }
+        self.owner
+            .get(&root)
+            .is_some_and(|owner| *owner != signal && *owner != CONTESTED)
     }
 
     /// The cost of putting one more signal on a node whose base cost is
@@ -963,6 +993,7 @@ pub fn route(
     }
 
     let mut state = State::new(physical_nodes(graph));
+    reserve_sink_entries(graph, &terminals, &options.equivalent, &mut state);
     let geometry = Geometry::of(
         graph,
         &options.node_base,
@@ -1857,6 +1888,80 @@ fn rip_up(state: &mut State, routing: &mut Routing, signal: usize) {
     }
 }
 
+/// Marks, for each sink, the nodes in front of it that are its only way
+/// in, as that sink's signal's own: walking back from the sink node while a
+/// node has one incoming pip, and the first node with more, which is where
+/// every path to the sink has to pass.
+///
+/// PathFinder has no such notion, and on the Husky Plus it cost a route.
+/// A flip-flop's data needed a slice's bypass input, `CLBLM_L_DX`, whose
+/// only way in is `BYP_ALT7`; a clock enable of 2,267 sinks used the same
+/// `BYP_ALT7` to reach `BYP_BOUNCE7` and from there a slice's enable that
+/// two dozen wires reach. Each pass the enable was rerouted for congestion
+/// elsewhere and took `BYP_ALT7` again, because every other way in was
+/// dearer by then, and after 100 passes the route gave up with that one
+/// node held twice. VPR reserves an input pin's feed for its net for the
+/// same reason. Here it is a price ([`RESERVED_PENALTY`]) and not a bar:
+/// a node in front of two signals' sinks is [`CONTESTED`] and favours
+/// neither, so a placement that is wrong fails as it did. A sink whose
+/// lookup-table input is interchangeable (`equivalent`) has other ways in
+/// and reserves nothing.
+fn reserve_sink_entries(
+    graph: &RoutingGraph,
+    terminals: &[Terminals],
+    equivalent: &[u32],
+    state: &mut State,
+) {
+    for terminals in terminals {
+        for sink in &terminals.sinks {
+            if equivalent
+                .get(sink.node as usize)
+                .is_some_and(|class| *class != u32::MAX)
+            {
+                continue;
+            }
+            let mut node = sink.node;
+            for _ in 0..8 {
+                let root = state.group[node as usize];
+                state.reserved[root as usize / 64] |= 1 << (root % 64);
+                let owner = state.owner.entry(root).or_insert(terminals.signal);
+                if *owner != terminals.signal {
+                    *owner = CONTESTED;
+                }
+                // The ways onto this piece of metal from another, into any
+                // of its names: a join between two names of one wire is no
+                // way in, and the way in may reach the other name.
+                let mut names = vec![node];
+                let mut at = 0;
+                while at < names.len() && names.len() < 16 {
+                    for pip in graph.incoming(names[at]) {
+                        let from = graph.pip(*pip).from;
+                        if state.group[from as usize] == root && !names.contains(&from) {
+                            names.push(from);
+                        }
+                    }
+                    at += 1;
+                }
+                // Nor is a wire nothing can be routed onto, a cell's own
+                // output, unless it is this signal's: a flip-flop's data
+                // has its slice's lookup table as a second way in, and for
+                // a signal from anywhere else the bypass input is the only
+                // one.
+                let mut ways = names
+                    .iter()
+                    .flat_map(|name| graph.incoming(*name))
+                    .map(|pip| graph.pip(*pip).from)
+                    .filter(|from| state.group[*from as usize] != root)
+                    .filter(|from| *from == terminals.source || !graph.incoming(*from).is_empty());
+                match (ways.next(), ways.next()) {
+                    (Some(from), None) => node = from,
+                    _ => break,
+                }
+            }
+        }
+    }
+}
+
 /// Each graph node's **physical** node, as the smallest graph node id of
 /// the metal it is part of.
 ///
@@ -1958,6 +2063,7 @@ fn route_one(
     let source = terminals.source;
     let mut escaped = false;
     let signal = terminals.signal;
+    scratch.signal = signal;
     // Each tree node's delay from the source, in cost units, which is
     // where a critical sink joining the tree there starts.
     let (mut tree, mut pips, mut moved, connected) = match kept {
@@ -2114,6 +2220,8 @@ struct Scratch {
     gave_up: bool,
     /// How many critical searches gave up, for [`RoutingReport::gave_up`].
     gave_ups: u64,
+    /// The signal being routed, for [`State::reserved_against`].
+    signal: usize,
 }
 
 impl Scratch {
@@ -2131,6 +2239,7 @@ impl Scratch {
             budget: u64::MAX,
             gave_up: false,
             gave_ups: 0,
+            signal: 0,
         }
     }
 
@@ -2577,6 +2686,11 @@ fn maze(
                     + critical * f64::from(at.delay)
             } else {
                 state.node_cost(*next, at.base, present)
+            };
+            let step = if state.reserved_against(*next, scratch.signal) {
+                step * RESERVED_PENALTY
+            } else {
+                step
             };
             let candidate = here + step;
             if candidate < scratch.cost_of(*next) {
@@ -4579,6 +4693,108 @@ mod tests {
         assert_eq!(iterations, 5);
         assert!(overused > 0);
         assert!(err.to_string().contains("did not converge"));
+    }
+
+    /// **A wire that is the only way into one signal's sink is left to that
+    /// signal.** `E` is the only way into `B`'s pin and, through a fixed
+    /// buffer, the cheap way to `A`'s; `A` has a dear way of its own. Without
+    /// [`reserve_sink_entries`] both take `E` and PathFinder needs pass after
+    /// pass to price `A` off it (five here, measured with the charge off);
+    /// with it, `A` pays for `E` from the start and the route converges in
+    /// one. On the Husky Plus the same shape never converged. Would catch
+    /// the reservation not made or not charged, the walk back stopping at a
+    /// join between a wire's two names, and it counting a cell's own output
+    /// as a way in (five passes each, measured), which are where its first
+    /// two forms stopped on the Husky Plus; would not
+    /// catch an entry reserved that a sink has other ways into, which this
+    /// graph has none of.
+    #[test]
+    fn a_wire_that_is_the_only_way_into_a_sink_is_left_to_its_signal() {
+        let build = || {
+            let mut arch = Arch::new("entry", "test", 1, 1);
+            let mut tile = TileType::new("t", "t_tile", 8, 8);
+            for name in [
+                "out0", "out1", "e", "bounce", "alt", "in0", "in1", "byp", "byp_clb", "local",
+            ] {
+                tile.wires.push(WireDecl {
+                    name: name.to_owned(),
+                    dx: 0,
+                    dy: 0,
+                });
+            }
+            for n in 0..2 {
+                let mut src = BelDecl::new(format!("src{n}"), "lut");
+                src.pins
+                    .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+                tile.bels.push(src);
+                let mut dst = BelDecl::new(format!("dst{n}"), "ff");
+                dst.pins
+                    .push(("d".to_owned(), WireRef::local(format!("in{n}"))));
+                tile.bels.push(dst);
+            }
+            let mut bit = 0u32;
+            let mut pip = |from: &str, to: &str, programmable: bool| {
+                let bits = if programmable {
+                    bit += 1;
+                    vec![ConfigBit::new(bit / 8, bit % 8)]
+                } else {
+                    Vec::new()
+                };
+                PipDecl {
+                    from: WireRef::local(from),
+                    to: WireRef::local(to),
+                    bits,
+                }
+            };
+            // Both sources onto `e`; `e` alone into `in1`, and through a
+            // fixed buffer to `bounce`, which reaches `in0`; `out0`'s own
+            // dear way round is `alt`.
+            tile.pips.push(pip("out0", "e", true));
+            tile.pips.push(pip("out1", "e", true));
+            // `e` reaches `in1` over a wire with two names, `byp` and
+            // `byp_clb`, joined each way as the 7-series loader joins a
+            // wire's names between tiles: the way in is at one name and
+            // the pin at the other.
+            tile.pips.push(pip("e", "byp", false));
+            tile.pips.push(pip("byp", "byp_clb", false));
+            tile.pips.push(pip("byp_clb", "byp", false));
+            tile.pips.push(pip("byp_clb", "in1", false));
+            // And `in1` has a second way in, from a wire nothing drives but
+            // a cell of its own, as a flip-flop's data has from the lookup
+            // table beside it; for `B`, from elsewhere, it is no way in.
+            tile.pips.push(pip("local", "in1", true));
+            tile.pips.push(pip("e", "bounce", false));
+            tile.pips.push(pip("bounce", "in0", true));
+            tile.pips.push(pip("out0", "alt", true));
+            tile.pips.push(pip("alt", "in0", true));
+            arch.tile_types.push(tile);
+            arch.set_tile(0, 0, 0);
+            arch.build_graph()
+        };
+        let graph = build();
+        let netlist = pairs(2);
+        let placement = place_in_order(&netlist, &graph, &[0, 0, 0, 0]);
+        let base: Vec<f32> = graph
+            .nodes
+            .iter()
+            .map(|w| if w.name == "alt" { 20.0 } else { 1.0 })
+            .collect();
+        let options = RouteOptions {
+            node_base: base,
+            ..RouteOptions::default()
+        };
+        let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        assert_eq!(report.iterations.len(), 1, "{}", report.to_text());
+        let on = |signal: usize, name: &str| {
+            routing
+                .route(signal)
+                .unwrap()
+                .nodes
+                .iter()
+                .any(|n| graph.wire(*n).name == name)
+        };
+        assert!(on(1, "e") && !on(0, "e") && on(0, "alt"));
     }
 
     /// A wire with one way out, in a tile of its own: two signals need it

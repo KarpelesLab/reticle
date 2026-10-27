@@ -4182,7 +4182,33 @@ signal on the node and the cell pins each reaches through it
 (`occupants` in `src/fpga/route.rs`). The next build that does this will
 say which cells.
 
-The next one did, the same day, and it was a third kind (a build pairing
+It did, two builds later, with the same placement (seed 1 of the same
+netlist): `oadc.U_sad.refsamples$ff$and`, a clock enable of 2,267 sinks,
+to a flip-flop's `CE`, and `oadc.U_sad.refsamples[3007]` to a `D5`
+flip-flop's data. That flip-flop's only way in is `BYP_ALT7`, then `BYP7`,
+then `DX`. The enable reached `BYP_BOUNCE7` from `BYP_ALT7` through a fixed
+buffer, and from there `FAN_ALT6` in the tile below, whose 23 other inputs
+it could have used. A trace of every reroute touching the node, on a
+debug build of the same netlist and seed, showed the loop. Every third
+pass the enable was rerouted for congestion somewhere else and took
+`BYP_ALT7` again, with the data already on it, at a charge of 7 × 10⁵ in
+pass 46. The pass after, it left, and the conflict went round again.
+
+The router now leaves a wire that is the only way into a sink to that
+sink's signal (`reserve_sink_entries` in `src/fpga/route.rs`, VPR's
+reasoning for an input pin's feed). It walks back from each sink while the
+way in is single, and any other signal pays ten thousand times the wire's
+cost to use it. It is a price, not a bar: a wire two signals' sinks need
+alike favours neither, and an illegal placement fails as it did. Its first
+two forms reserved nothing on the Husky. One stopped at the join between
+`BYP7` and `CLBLM_BYP7`, two names of one wire. The next counted the
+flip-flop's other input, its slice's lookup table, as a second way in,
+when nothing can be routed onto a cell's own output. The third reserved
+`BYP_ALT7`: the same placement converged at the 36th pass, the enable
+leaving at the 9th and not coming back. Three seeds of master's netlist
+routed in 546, 493 and 740 s with it, against 529, 701 and 998 s without.
+
+The next non-convergence was a third kind (a build pairing
 fewer lookup tables, seed 3, below). Three nodes of the clock network
 stayed oversubscribed after 100 passes, `X78Y78/CLK_HROW_CK_MUX_OUT_L0`
 the worst, and the message named both signals on it:
