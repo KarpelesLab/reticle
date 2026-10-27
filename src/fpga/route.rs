@@ -1201,7 +1201,7 @@ pub fn route(
                 .filter_map(|(rank, (_, node))| {
                     contention(netlist, graph, placement, &routing, *node).or_else(|| {
                         (rank < OCCUPANTS_NAMED)
-                            .then(|| occupants(netlist, graph, placement, &routing, *node))
+                            .then(|| occupants(netlist, graph, placement, &routing, &state, *node))
                             .flatten()
                     })
                 })
@@ -1771,6 +1771,7 @@ fn occupants(
     graph: &RoutingGraph,
     placement: &Placement,
     routing: &Routing,
+    state: &State,
     node: NodeId,
 ) -> Option<String> {
     let mut lines: Vec<String> = Vec::new();
@@ -1823,8 +1824,20 @@ fn occupants(
     if lines.is_empty() {
         return None;
     }
+    // Whose it is, by `reserve_sink_entries`: the question a node like
+    // this raises first, and one a route that would not converge with it
+    // answered left unasked.
+    let root = state.group[node as usize];
+    let reserved = match state.owner.get(&root) {
+        Some(&CONTESTED) => "; it is the only way into sinks of two signals".to_owned(),
+        Some(owner) => format!(
+            "; it is the only way into a sink of `{}`",
+            netlist.signals[*owner].name
+        ),
+        None => "; it is no sink's only way in".to_owned(),
+    };
     Some(format!(
-        "  {} carries {}",
+        "  {} carries {}{reserved}",
         graph.wire(node).full_name(),
         lines.join("; and ")
     ))
@@ -4865,6 +4878,12 @@ mod tests {
             text.contains(
                 "X1Y0/mid carries `n0` to `dst0`'s `d` pin; and `n1` to `dst1`'s `d` pin"
             ),
+            "{text}"
+        );
+        // And whose it is: here the only way into both sinks, which no
+        // price can share.
+        assert!(
+            text.contains("; it is the only way into sinks of two signals"),
             "{text}"
         );
     }
