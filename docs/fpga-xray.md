@@ -4235,6 +4235,34 @@ exact twelve times in twelve, and the analyser's latest path was 6.5 to
 any chain whose upper sums are read and lower ones are not had the same
 hole, and which earlier failures it explains is not known.
 
+**And then measured, four ways, three seeds each, and still off.** With
+the fix in, NewAE's suite passed (master's own figures 15 and 17 on two
+seeds):
+
+| build | compares on the chain | pairing | tests passed | test ramps |
+|---|---|---|---|---|
+| O | every wide equality | as master | 14, 12, 9 | exact on one |
+| Q | every wide equality | carry lanes only | 18, 21, 20 | long ones wrong on all three |
+| S | against a sum or difference only | carry lanes only | 11, 17, 8 | wrong on all three |
+| T | against a sum or difference only | as master | 14, 16, (did not finish) | ADC wrong from 160 MHz |
+
+Q's 21 is the most any build has passed, and the glitch tests passed on
+all three: the logic analyser's latest path was 6.1 to 6.7 ns. But Q's
+`clk_usb` had 1,370 to 1,812 late endpoints against master's 279, and
+its long captures were wrong, so it is not a build to keep. Subtractions
+on the chain as well (R, 16 bits and up) passed 11, 12 and 16 with
+ramps wrong; the fix did not rescue them either.
+
+On S2, whose captures never finish, the capture's state machine
+(`FIFO_STATE`, register 110) was back in idle a tenth of a second after
+the trigger. The status read 22 and stayed there, and the driver timed
+out waiting for the FIFO to hold data. So the samples did not reach the
+slow FIFO, on the `clk_usb` side, though the compares on the chain were
+`last_sample`, `last_segment`, one feeding the capture's `state` (all ADC
+domain), the analyser's, and one in the trace UART. Why is not found.
+`compare_on_the_chain` is in the tree, narrowed to a compare against a
+sum or a difference, and off.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`

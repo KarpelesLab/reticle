@@ -131,9 +131,10 @@ enum Shape {
     /// subtraction needs riding in an extra low lane. NewAE's `esad` is
     /// `decision ? x - r : y + r` in each of 256 counters.
     Chosen { low_sub: bool, high_sub: bool },
-    /// `y = a == b`, one bit, which `primitives` compares on the chain at
-    /// [`MapOptions::min_compare_carry_width`] bits and more: the carry
-    /// out of `{0, L} + 1`, read as the top lane's sum alone.
+    /// `y = a == b + 1`, one bit, which `primitives` compares on the chain
+    /// at [`MapOptions::min_compare_carry_width`] bits and more, an operand
+    /// being a sum: the carry out of `{0, L} + 1`, read as the top lane's
+    /// sum alone.
     Equal,
 }
 
@@ -191,7 +192,11 @@ impl Shape {
                 let bn = b.input("b", Type::bits(width));
                 let y = b.output("y", Type::bit());
                 let (ae, be) = (b.net(a), b.net(bn));
-                b.cell2("same", CellKind::Eq, ae, be, y);
+                let one = b.const_u64(width, 1);
+                let next = b.add_net("next", Type::bits(width));
+                b.cell2("bump", CellKind::Add, be, one, next);
+                let ne = b.net(next);
+                b.cell2("same", CellKind::Eq, ae, ne, y);
             }
             Shape::Constant(k) => {
                 let a = b.input("a", Type::bits(width));
@@ -278,7 +283,7 @@ impl Shape {
             Shape::Constant(k) => a.wrapping_add(k) & mask(width),
             Shape::Subtract => a.wrapping_sub(b) & mask(width),
             Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
-            Shape::Equal => u64::from(a == b),
+            Shape::Equal => u64::from(a == (b + 1) & mask(width)),
         }
     }
 

@@ -2967,6 +2967,20 @@ impl Mapper<'_> {
     /// [`MapOptions::min_compare_carry_width`] bits and more, and only
     /// where the operands are as wide as each other.
     fn compare_on_the_chain(&mut self, module: &mut Module) {
+        // Only a compare against a sum or a difference: that operand is
+        // what makes the tree deep. Every other wide equality is a tree
+        // of three or four tables already, and on the chain it is a
+        // column of slices the placer has to keep: with all of them there
+        // the Husky Plus's `clk_usb` had 1,370 to 1,812 late endpoints
+        // where it had 279.
+        let mut arithmetic: HashSet<NetId> = HashSet::new();
+        for (_, cell) in module.cells.iter() {
+            if matches!(cell.kind, CellKind::Add | CellKind::Sub)
+                && let Some(y) = cell.output("y")
+            {
+                arithmetic.insert(y);
+            }
+        }
         let compares: Vec<CellId> = module
             .cells
             .iter()
@@ -2985,6 +2999,16 @@ impl Mapper<'_> {
                 || expr_width(module, b) != width
                 || net_width(module, y) != 1
             {
+                continue;
+            }
+            let summed = |e: ExprId| {
+                module
+                    .exprs
+                    .get(e)
+                    .and_then(Expr::as_net)
+                    .is_some_and(|net| arithmetic.contains(&net))
+            };
+            if !summed(a) && !summed(b) {
                 continue;
             }
             let equal = cell.kind == CellKind::Eq;
