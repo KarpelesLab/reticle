@@ -4204,6 +4204,19 @@ is wrong on the part, at 20 MHz where no setup can fail, and a static
 readback of the same arithmetic is right. Not found; a probe of it
 alone, counting the cycles the compare is true, is the next step.
 
+*The probe, the same day, says it is not that compare.* A build with the
+rewrite and three registers recording `last_sample` (read back through
+the presample limits' fields of `max_samples`) showed it high for one cycle
+per capture at the count NewAE's logic expects. That count was 107, 1,007
+and 30,005 for 100, 1,000 and 30,000 samples, three times each, the same as
+a build without the rewrite. That build's captures were exact, though:
+the probe moved its placement, and it is not one of the failing ones. With
+the rewrite, three builds of four failed; without it, none of six. The
+rewrite also makes the capture's other compares against a difference
+sums, `presample_counter == presample_i - 2` and
+`segment_counter == num_segments - 1` among them, and which of them fails
+on the part, and why, is not known.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`
