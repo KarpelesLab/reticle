@@ -1002,6 +1002,27 @@ fn an_equality_on_the_chain_is_right_once_legalised() {
     }
 }
 
+/// **An equality compared in kept lanes is right.** `compare_in_lanes`
+/// compares a wide equality against a sum as lanes of three bit pairs,
+/// each a kept net, and the AND of them: lookup tables only.
+/// Every input of both equality shapes, the widened one's upper lanes
+/// comparing constant zeros. Would catch a lane's slice or the AND's
+/// order wrong; would not catch the lanes dissolving into the operand's
+/// logic again, which changes depth and not the answer.
+#[test]
+fn an_equality_in_kept_lanes_is_right() {
+    let lanes = MapOptions {
+        min_compare_lane_width: 4,
+        ..MapOptions::default()
+    };
+    for width in [9, 10] {
+        check_exhaustively(Shape::Equal, width, lanes.clone());
+    }
+    for width in [4, 5] {
+        check_exhaustively(Shape::EqualWidened, width, lanes.clone());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // What the mapping costs
 // ---------------------------------------------------------------------------

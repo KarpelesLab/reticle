@@ -3748,6 +3748,28 @@ fn write_xc7_bitstream(
             );
             continue;
         }
+        // And one whose clocks came off the network somewhere, which is
+        // refused below: the next placement is as likely to keep them on
+        // it as this one was. On the Husky Plus one seed in a few dozen
+        // took ten clock pins of `reg_clockglitch` over general routing.
+        let off_network = match &routed_at {
+            Ok((routing, _)) => fabric
+                .clock_network_use(&netlist, &placement, &graph, routing)
+                .off_network
+                .len(),
+            Err(_) => 0,
+        };
+        if off_network > 0 && attempts_left > 0 {
+            attempts_left -= 1;
+            options.seed = options.seed.wrapping_add(1);
+            eprintln!(
+                "note: {off_network} clock pin(s) a global buffer drives were reached through \
+                 general interconnect\nnote: placing again with seed {} and routing again \
+                 (`--route-attempts`)",
+                options.seed
+            );
+            continue;
+        }
         break (placement, placement_report, routed_at);
     };
     let (routing, routed) = match routed_at {

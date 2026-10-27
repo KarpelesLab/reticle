@@ -206,6 +206,10 @@ pub struct MapOptions {
     /// placed across the die, and 220 MHz captures went wrong again; three
     /// builds, one change in each, so not yet a verdict on this alone.
     pub min_compare_carry_width: u32,
+    /// The narrowest equality against a sum or a difference compared in
+    /// kept three-bit-pair lanes and a tree of their AND
+    /// (`compare_in_lanes`); `u32::MAX` puts none there.
+    pub min_compare_lane_width: u32,
 }
 
 impl Default for MapOptions {
@@ -223,6 +227,7 @@ impl Default for MapOptions {
             min_carry_width: 4,
             min_subtract_carry_width: u32::MAX,
             min_compare_carry_width: u32::MAX,
+            min_compare_lane_width: u32::MAX,
         }
     }
 }
@@ -2898,6 +2903,7 @@ impl Mapper<'_> {
             self.share_muxed_adders(module);
             self.subtract_on_the_chain(module);
             self.compare_on_the_chain(module);
+            self.compare_in_lanes(module);
         }
         let adders: Vec<CellId> = module
             .cells
@@ -3066,6 +3072,109 @@ impl Mapper<'_> {
             module.cells.retain(|id, _| !removed.contains(&id));
             self.note(format!(
                 "{count} equality comparison(s) compared on the carry chain"
+            ));
+        }
+    }
+
+    /// Compares each wide `a == b` (or `!=`) whose operand is a sum or a
+    /// difference in lanes of three bit pairs, each lane's equality a net
+    /// marked `keep` so that it stays one lookup table, and the AND of the
+    /// lanes a tree of its own. Left to the optimiser, the lanes dissolve
+    /// into the operand's logic and the tree is balanced against its
+    /// depth: `capture_count == capture_depth - 1` in NewAE's logic
+    /// analyser was sixteen tables in a row from `capture_count`. Kept, it
+    /// is a lane and two levels of AND, whatever the difference costs; and
+    /// unlike [`Self::compare_on_the_chain`] it is lookup tables only.
+    fn compare_in_lanes(&mut self, module: &mut Module) {
+        let mut arithmetic: HashSet<NetId> = HashSet::new();
+        for (_, cell) in module.cells.iter() {
+            if matches!(cell.kind, CellKind::Add | CellKind::Sub)
+                && let Some(y) = cell.output("y")
+            {
+                arithmetic.insert(y);
+            }
+        }
+        let compares: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| matches!(c.kind, CellKind::Eq | CellKind::Ne))
+            .map(|(id, _)| id)
+            .collect();
+        let mut removed: Vec<CellId> = Vec::new();
+        for compare in compares {
+            let cell = &module.cells[compare];
+            let (Some(a), Some(b), Some(y)) = (cell.input("a"), cell.input("b"), cell.output("y"))
+            else {
+                continue;
+            };
+            let width = expr_width(module, a);
+            if width < self.options.min_compare_lane_width.max(4)
+                || expr_width(module, b) != width
+                || net_width(module, y) != 1
+            {
+                continue;
+            }
+            let summed = |e: ExprId| {
+                module
+                    .exprs
+                    .get(e)
+                    .and_then(Expr::as_net)
+                    .is_some_and(|net| arithmetic.contains(&net))
+            };
+            if !summed(a) && !summed(b) {
+                continue;
+            }
+            let equal = cell.kind == CellKind::Eq;
+            let (span, name) = (cell.span, cell.name.as_str().to_owned());
+            let lanes = width.div_ceil(3);
+            let mut parts: Vec<ExprId> = Vec::new();
+            for lane in 0..lanes {
+                let lo = lane * 3;
+                let hi = (lo + 2).min(width - 1);
+                let (pa, pb) = (
+                    slice_expr(module, a, hi, lo, span),
+                    slice_expr(module, b, hi, lo, span),
+                );
+                let label = format!("{name}$lane{lane}");
+                let bit = add_net(module, &label, Type::bit(), span);
+                module.nets[bit].attrs.set("keep", "true");
+                add_cell(
+                    module,
+                    &label,
+                    CellKind::Eq,
+                    vec![(Name::new("a"), pa), (Name::new("b"), pb)],
+                    vec![(Name::new("y"), bit)],
+                    span,
+                );
+                parts.push(net_expr(module, bit, span));
+            }
+            parts.reverse();
+            let lanes_expr = expr(module, ExprKind::Concat(parts), span);
+            let all = add_net(module, &format!("{name}$all"), Type::bit(), span);
+            add_cell(
+                module,
+                &format!("{name}$all"),
+                CellKind::ReduceAnd,
+                vec![(Name::new("a"), lanes_expr)],
+                vec![(Name::new("y"), all)],
+                span,
+            );
+            let all = net_expr(module, all, span);
+            add_cell(
+                module,
+                &format!("{name}$out"),
+                if equal { CellKind::Buf } else { CellKind::Not },
+                vec![(Name::new("a"), all)],
+                vec![(Name::new("y"), y)],
+                span,
+            );
+            removed.push(compare);
+        }
+        if !removed.is_empty() {
+            let count = removed.len();
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!(
+                "{count} equality comparison(s) compared in kept lanes"
             ));
         }
     }

@@ -4278,6 +4278,21 @@ the router's input moves are right for these compares, then. What is
 left is what the routed netlist does not describe, the bits that select
 `O5` for a generate and the halves of a table, and timing.
 
+**Not the chain at all.** The same five compares were then built with no
+carry chain (`compare_in_lanes`): each three-bit-pair lane is a net marked
+`keep`, so it stays one lookup table, and the AND of the lanes is a tree
+of its own. The logic analyser's latest path was 5.7 ns on three seeds,
+the shortest any build has had (master's is about 9). `fifo_top_husky`
+mapped with it alone proves equivalent to its source (`--verify`). On the
+part, two of the three builds' captures were wrong at every ADC clock,
+20 MHz included, and the third was refused for ten clock pins off the
+network. So any form of these compares that makes their paths short
+breaks the capture, chain or none. The logic is proved right and the
+routed netlist simulates right, so the fault is physical. A hold race
+fits: this router does not pad a short path, and a register's clock in
+one region can arrive after a short path's data from another. Not
+measured. Both rewrites stay in the tree and off.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`
