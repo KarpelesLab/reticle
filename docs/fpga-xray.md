@@ -4588,6 +4588,22 @@ every change above; every test ramp exact on all six builds, and the ADC
 ramp exact to 220 MHz on seed 1 with lanes. NewAE's own bitstream passes
 35 of the same 40.
 
+### The logic analyser's clock as the suite runs it (2026-10-28)
+
+The glitch tests sample with the logic analyser at up to 400 MHz (40
+times a 10 MHz clock) and twice at 500, through a clock manager that
+software reprograms; the build times its domain at what that manager's
+parameters make at power-up, 4.17 ns. A clock can now be declared on a
+net below the top module, as the flattened design names it
+(`create_clock -period 2.5 reg_la.observer_clk_prebuf`), which the check
+used to refuse. On the Husky Plus it changed nothing: seeds 2 and 3 gave
+the same bitstreams bit for bit. A connection's criticality is its slack
+against the period or the domain's longest path, whichever is longer,
+and the analyser's longest path (5.6 to 6.0 ns) was past both periods.
+So that constraint is not in `husky.rcf`; the analyser's paths at 2.5 ns
+are a question of how close the placer puts its capture registers to
+`capturing` (65 rows apart on one build), not of what it is told.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

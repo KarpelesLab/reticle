@@ -1045,6 +1045,10 @@ impl Constraints {
             })
         };
         let feeds_a_pll = self.clocks.iter().any(|clock| generated(&clock.net));
+        // Names inside instances, as the flattened design will have them:
+        // a clock may be a net of a submodule, `reg_la.observer_clk_prebuf`,
+        // which no net of the top is named.
+        let names = timing_point_names(design, module);
         let mut seen: Vec<&str> = Vec::new();
         for clock in &self.clocks {
             if seen.contains(&clock.name.as_str()) {
@@ -1065,7 +1069,10 @@ impl Constraints {
                     .with_span(clock.span),
                 );
             }
-            if module.net_by_name(&clock.net).is_none() {
+            let inside = module.net_by_name(&clock.net).is_none()
+                && clock.net.contains('.')
+                && names.iter().any(|n| *n == clock.net);
+            if module.net_by_name(&clock.net).is_none() && !inside {
                 diags.push(
                     Diagnostic::error(format!(
                         "no net named `{}` in module `{}`",
@@ -1074,7 +1081,8 @@ impl Constraints {
                     .with_code(BAD_CLOCK)
                     .with_span(clock.span),
                 );
-            } else if !clock_nets.iter().any(|n| n == &clock.net)
+            } else if !inside
+                && !clock_nets.iter().any(|n| n == &clock.net)
                 && !self
                     .pins
                     .iter()
@@ -1098,7 +1106,6 @@ impl Constraints {
                 );
             }
         }
-        let names = timing_point_names(design, module);
         for path in &self.false_paths {
             check_path(path, &names, diags);
         }
@@ -2358,6 +2365,45 @@ mod tests {
             assert_eq!(
                 rendered.contains("no object matches"),
                 warns,
+                "{text}: {rendered}"
+            );
+        }
+    }
+
+    /// **A clock may be a net below the top module.** `u_sub.count`, a net
+    /// of `child` instantiated as `u_sub`, is a clock the check accepts, as
+    /// the flattened design names it; `u_sub.nothing` and a bare `count`
+    /// are no net it knows. Would catch a clock inside an instance refused,
+    /// which kept the Husky Plus's logic analyser timed at its clock
+    /// manager's power-up rate (`reg_la.observer_clk_prebuf`); would not
+    /// catch the flattened design spelling the name otherwise, which is the
+    /// flattener's, nor say whether the net clocks anything, which the
+    /// check asks of the top module's own nets only.
+    #[test]
+    fn a_clock_may_be_a_net_below_the_top() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut child = ModuleBuilder::new("child", span);
+        let _ = child.add_net("count", Type::bits(4));
+        let mut design = Design::new();
+        let child = design.add_module(child.finish());
+        let mut top = ModuleBuilder::new("top", span);
+        top.instance("u_sub", ModuleRef::Resolved(child), Vec::new());
+        let top = design.add_module(top.finish());
+        design.top = Some(top);
+        let device = target("generic").unwrap();
+        for (text, refused) in [
+            ("create_clock -period 2.5 u_sub.count\n", false),
+            ("create_clock -period 2.5 u_sub.nothing\n", true),
+            ("create_clock -period 2.5 count\n", true),
+        ] {
+            let (constraints, mut diags, map) = parse(text);
+            constraints.check(&design, device, &mut diags);
+            let rendered = diags.render(&map);
+            assert_eq!(
+                rendered.contains("no net named"),
+                refused,
                 "{text}: {rendered}"
             );
         }
