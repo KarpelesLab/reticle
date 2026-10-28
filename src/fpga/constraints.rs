@@ -1071,7 +1071,7 @@ impl Constraints {
             }
             let inside = module.net_by_name(&clock.net).is_none()
                 && clock.net.contains('.')
-                && names.iter().any(|n| *n == clock.net);
+                && names.contains(&clock.net);
             if module.net_by_name(&clock.net).is_none() && !inside {
                 diags.push(
                     Diagnostic::error(format!(
