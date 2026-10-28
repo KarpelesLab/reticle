@@ -439,18 +439,20 @@ impl<'a> Board<'a> {
     }
 
     /// Each processor pin site with the tile its wire meets the fabric in,
-    /// for the placer: see [`implement`]'s use of it.
+    /// for the placer and router when [`ImplementOptions::pins_at_entry`]
+    /// is set.
     ///
     /// Every `PS8` pin is a bel of the one `PSS_ALTO` tile, so to the placer
     /// all 514 of an AXI port's pins, and every EMIO pin, are at that tile's
     /// position — row 309 of the grid — and it pulls the logic they connect
-    /// to there. The wires do not leave from there. `M_AXI_HPM0_LPD`'s
-    /// handshake pins enter the interconnect at row 167, so an `ARVALID` to
-    /// `ARREADY` path placed beside row 309 crossed 142 rows and back in one
-    /// clock, and a slave built that way hung the processor at 100 MHz
-    /// (`docs/fpga-uray.md`). A pin's position is where its wire first
-    /// reaches a tile of the fabric, a few pips from the processor in
-    /// either direction.
+    /// to there. The wires do not leave from there: `M_AXI_HPM0_LPD`'s
+    /// handshake pins enter the interconnect at row 167. A pin's position
+    /// here is where its wire first reaches a tile of the fabric, a few
+    /// pips from the processor in either direction.
+    ///
+    /// Using it is off by default: logic placed beside the pins this way
+    /// hung the board even at 25 MHz, most likely on hold time, while the
+    /// same design placed at `PSS_ALTO` works (`docs/fpga-uray.md`).
     pub fn processor_pin_tiles(&self) -> Vec<(usize, (u32, u32))> {
         let graph = &self.graph;
         let mut out = Vec::new();
@@ -1167,6 +1169,15 @@ pub struct ImplementOptions<'a> {
     /// Called with each routing pass as it finishes
     /// (`RouteOptions::on_iteration`), or `None`.
     pub on_iteration: Option<fn(&crate::fpga::route::Iteration)>,
+    /// Place and route each processor pin where its wire enters the
+    /// fabric ([`Board::processor_pin_tiles`]) rather than at the
+    /// processor's own tile. Builds far faster and shorter, **and is off
+    /// by default because what it builds hung the board**: the same
+    /// 16-neuron AXI slave that answers every image placed the old way
+    /// stopped the processor at 25 MHz placed this way, on 2026-10-28.
+    /// The likely cause is hold time at the processor's pins, which
+    /// nothing here models (`docs/fpga-uray.md`).
+    pub pins_at_entry: bool,
 }
 
 /// The whole flow for a design `synthesize_for` has mapped onto
@@ -1197,10 +1208,14 @@ pub fn implement(
         .replay(oracle, &clock_tile_types(&db.grid, false))
         .map_err(|e| format!("the base overlay's clock network: {e}"))?;
     let netlist = Netlist::build(design, top, device, &board.graph).map_err(|e| e.to_string())?;
-    // The placer sees each processor pin where its wire enters the fabric
-    // (`Board::processor_pin_tiles`), and every later step sees the pin's
-    // site where it is, in the processor's tile.
-    let entries = board.processor_pin_tiles();
+    // With `pins_at_entry`, the placer sees each processor pin where its
+    // wire enters the fabric (`Board::processor_pin_tiles`), and every
+    // later step sees the pin's site where it is, in the processor's tile.
+    let entries = if options.pins_at_entry {
+        board.processor_pin_tiles()
+    } else {
+        Vec::new()
+    };
     let moved: Vec<(usize, (u32, u32))> = entries
         .iter()
         .map(|&(site, tile)| {
@@ -1239,8 +1254,9 @@ pub fn implement(
         on_iteration: options.on_iteration,
         ..RouteOptions::default()
     };
-    // The router aims at a sink wire's own tile, so a pin's wire is put
-    // where it enters the fabric for routing too, and put back after.
+    // The router aims at a sink wire's own tile, so with `pins_at_entry`
+    // a pin's wire is put where it enters the fabric for routing too, and
+    // put back after.
     let mut aimed = Vec::new();
     for &(site, tile) in &entries {
         for &(_, node) in &board.graph.sites[site].pins {

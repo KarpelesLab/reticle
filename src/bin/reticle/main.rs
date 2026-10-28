@@ -358,6 +358,10 @@ Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
                      a few rounds after the wirelength placement, and
                      print what each round estimated. The delays are a
                      model, not a measurement, in both.
+  --pins-at-entry    UltraScale+: place and route logic the processor
+                     connects to beside where its wires enter the fabric,
+                     not at the processor's tile. Builds much faster, but
+                     its AXI slaves hung the board: docs/fpga-uray.md.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -793,6 +797,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-wide-moves",
                 "place-hot-start",
                 "timing-driven",
+                "pins-at-entry",
             ],
             repeated: &["param", "define", "include-dir"],
         }
@@ -3367,6 +3372,7 @@ fn write_uray_bitstream(
             east,
             timing: args.flag("timing-driven"),
             on_iteration: args.flag("timing").then_some(print_iteration as fn(&_)),
+            pins_at_entry: args.flag("pins-at-entry"),
         },
     )?;
     std::fs::write(path, &written.bit).map_err(|e| format!("cannot write `{path}`: {e}"))?;

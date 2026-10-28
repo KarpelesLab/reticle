@@ -606,21 +606,21 @@ fn the_axi_ports_pins_are_the_processors_in_their_direction() {
     assert_eq!(port.len(), 514);
 }
 
-/// The placer sees each processor pin where its wire enters the fabric
-/// (`Board::processor_pin_tiles`), not at the processor's own tile, where
-/// every `PS8` pin is a bel.
+/// Each processor pin's wire is found where it enters the fabric, not
+/// at the processor's own tile, where every `PS8` pin is a bel.
 ///
-/// Before this, a slave on `M_AXI_HPM0_LPD` had its handshake tables
-/// placed at row 309, the processor tile's, while the pins enter the
-/// interconnect at row 167; the `ARVALID` to `ARREADY` path crossed 142
-/// rows and back in a clock and hung the processor at 100 MHz. This
-/// checks that every pin site of the processor gets a position, that the
-/// position is an interconnect tile and never the processor's, that the
-/// pins spread over many rows rather than one, and that `ARVALID` is the
-/// tile measured. It would catch a search that found nothing (no
-/// positions), one that stayed inside the processor, or one that returned
-/// a single tile for everything. It does not show that the positions make
-/// a design faster: that was measured on the board.
+/// `Board::processor_pin_tiles` is what `ImplementOptions::pins_at_entry`
+/// places and routes with. Every processor pin is a bel of the one
+/// processor tile, at row 309, while `M_AXI_HPM0_LPD`'s handshake pins
+/// enter the interconnect at row 167. This checks that every pin site of
+/// the processor gets a position, that the position is an interconnect
+/// tile and never the processor's, that the pins spread over many rows
+/// rather than one, and that `ARVALID` is the tile measured. It would
+/// catch a search that found nothing (no positions), one that stayed
+/// inside the processor, or one that returned a single tile for
+/// everything. It says nothing about whether placing by these positions
+/// is safe: on the board it was not (`docs/fpga-uray.md`), which is why
+/// the option is off by default.
 #[test]
 fn a_processor_pin_is_placed_where_its_wire_enters_the_fabric() {
     use reticle::fpga::uray::zcu104::{Board, DEFAULT_EAST};

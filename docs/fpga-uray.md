@@ -1068,6 +1068,49 @@ same reason; that is likely, **not re-measured**. The rebuilt slave has
 **not yet been run on the board**: that waits for a power cycle, and it
 will be brought up at 25 MHz before 100.
 
+**Corrected, 2026-10-28: the fix was not one, and it is off by default
+now** (`ImplementOptions::pins_at_entry`, `reticle fpga
+--pins-at-entry`). The reading above — that the hang was a long path
+missing a 10 ns clock — did not survive the board:
+
+- The rebuilt 32-neuron slave hung the board **at 25 MHz**, a 40 ns
+  clock, during its first few reads. So speed was not the cause, or not
+  the whole of it.
+- A second slave written to be right on any port width and any burst
+  length, and checked in simulation (nine images by three different
+  masters, no protocol errors; six planted faults, each caught),
+  built the same way, answered every 32-bit read at 25 MHz — **with the
+  previous read's data**. Word *w* read back what word *w* − 1 holds,
+  consistently over three sweeps of all sixteen words; the values
+  themselves were right (a network answer, the diagnostic words).
+- **The deciding experiment.** The 16-neuron registered slave of
+  "Reaching the fabric over AXI", unchanged. Its original bitstream,
+  placed the old way, loaded the same day at 25 MHz: 500 / 500 images
+  bit-exact. The same Verilog rebuilt with the pins at their entry
+  tiles (2 min 14 s instead of 5 h 4 min, 499 486 pips instead of
+  1 145 442, every set bit decoded), loaded at 25 MHz: the board hung on
+  its first reads after the first one.
+
+Same source, same clock, same day; only the placement and routing
+differ, and the short one fails at a speed where no setup path can be
+long enough to matter. **The likely cause is hold time**, and it is an
+inference, not a measurement: the processor's port clock reaches it
+through a route into `INT_X27Y198` and the processor's own clock tree,
+so it can sample after the fabric's flip-flops have already changed.
+With the logic beside the pins, a response's `RVALID` reaches the
+processor in time and its data does not — exactly the off-by-one seen —
+and a ready bit that changes too early can break a handshake outright,
+which stalls the core. The long routes the old placement made by
+accident were delay enough. Nothing in Reticle models hold, so nothing
+warned.
+
+What this leaves: the old placement works and is the default again;
+`Board::processor_pin_tiles` and its test stay, because where the wires
+enter is a fact and a hold-aware flow will need it. Before the option
+can be on, the flow needs the skew between `PL_CLK0` at the fabric's
+flip-flops and at `PL_GP2_CLOCKIN`, measured, and a minimum delay on
+every path to a processor input.
+
 ## What remains, in order
 
 1. **More of the slice**: the carry chain, for adders that are not
