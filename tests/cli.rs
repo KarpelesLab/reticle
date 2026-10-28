@@ -1560,12 +1560,14 @@ fn the_husky_fifo_stand_ins_pass_their_testbench() {
 /// `full` at exactly what it now holds and gives every word back in order
 /// through the queue that holds the extra words; with a queue one word
 /// shorter, or taking the memory's word ahead of a queued one, it fails.
-/// And that each word `stage` hands on was on the memory's output for both
-/// cycles before, which is what `husky.rcf`'s two-period paths into
-/// `stage` rely on; with the word used a cycle sooner, or the memory read
-/// on consecutive cycles, it fails. It would not catch a capacity that
+/// And that they give a word every cycle, as NewAE's `slow_fifo_wrapper`
+/// takes them, while every word taken stood two cycles in its bank's
+/// register, which is what `husky.rcf`'s two-period paths into
+/// `bank_stage` rely on; with the memory read every other cycle, every
+/// bank loaded on each fetch, or `stage` taking a bank's word a cycle
+/// sooner, it fails. It would not catch a capacity that
 /// differs from the core's, which is read from its thresholds, not
-/// measured, nor a path into `stage` later than two periods, which only
+/// measured, nor a path into `bank_stage` later than two periods, which only
 /// the build's timing and the part show.
 #[cfg(feature = "sim")]
 #[test]

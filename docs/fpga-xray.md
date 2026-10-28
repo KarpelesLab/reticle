@@ -4658,6 +4658,62 @@ On the part, one build (seed 2): the alternating pattern exact in
 `ADCfastsegments`, `ADCfastsegmentspresamples` and `ADCreset`, all five
 of which had failed, passed.
 
+### A word every cycle again: interleaved banks (2026-10-28)
+
+*The two-cycle read above was wrong in kind, not only in degree.* NewAE's
+`slow_fifo_wrapper` moves words from `usb_slow_fifo1` to
+`usb_slow_fifo2` with `rd1` high every cycle while the first's count
+says there are words (`!empty_threshold1`), and writes whatever `dout1`
+shows into the second (`wr2 = rd1`): it takes a word every cycle, as the
+built-in FIFO gives them. A stand-in that gives one every other cycle,
+or every third, keeps up only while its queue lasts, and when it does
+not the capture is wrong in ways that depend on how full things were —
+which is what the builds showed: the ramps of some placements wrong, or
+a capture finishing (`CAPTURE_DONE`, the state machine idle) and no word
+of it ever reaching USB. Reading every third cycle made it worse:
+captures of 30,000 samples never came back at all.
+
+So the banks are interleaved now: a word's bank is the low bits of its
+address, consecutive words sit in consecutive banks, and the memory is
+read every cycle while no bank is read twice in a row. Each bank keeps a
+register of its own word (`bank_stage`), which therefore has two cycles
+to fill from block RAMs spread over half the die — `husky.rcf` gives
+those paths two periods — and `stage` takes the word from the register
+of the bank it came from, one cycle and a small multiplexer later. The
+testbench reads a word every cycle once the first is there and checks
+that every word taken stood its two cycles in its bank's register; a
+read every other cycle, banks all read on every fetch, or `stage` a
+cycle early each fail it.
+
+Measured on the board, one build per row, each read with
+`hw/eval2.sh`: the ADC's own alternating pattern (`0x555`/`0xaaa`,
+20,000 samples) at 20 and 250 MHz, and NewAE's 40 tests, which their
+own bitstream passes 35 of.
+
+| build | FIFO | pattern at 20 MHz | pattern at 250 MHz | tests passed |
+|---|---|---|---|---|
+| FX1 | every other cycle (`3c73641`) | exact | exact | 22 |
+| FX2 | every other cycle | 23 wrong | 23 wrong | 23 |
+| FX3 | every other cycle | 1 wrong | 512 wrong | 25 |
+| FX4 | every other cycle | 6 wrong | not reached | 17 |
+| FX5 | every other cycle | exact | exact | 29 |
+| IL1 | interleaved | not reached | not reached | 16 |
+| IL2 | interleaved | exact | 1,016 wrong | 23 |
+| IL3 | interleaved | exact | 13 wrong | 21 |
+| IL4 | interleaved | exact | exact | none: the suite stopped at its first test, the trigger I/O register read back as 6 |
+| IL5 | interleaved | exact | exact | 31 |
+
+IL5 failed nothing of the ADC's or the logic analyser's: its nine
+failures are `test_fpga_version` (this build is not NewAE's) and eight
+of the glitch tests, four of which NewAE's own bitstream fails as well.
+Seed for seed the two designs score alike — 22, 23, 25, 17 and 29
+tests against 16, 23, 21, none and 31 — so the case for interleaving is
+that it does what NewAE's design asks of the FIFO, not the counts. And
+IL5 is one build of five, and IL1 read 1,000-sample ramps wrong
+and never returned a 30,000-sample capture with nothing late in its
+routed estimate — a fault this flow's model does not see. What decides
+a build is still its placement, not its design.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

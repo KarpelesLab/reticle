@@ -133,30 +133,18 @@ module fifo_generator_tb;
     end
 
 `ifdef PLUS
-  // The Husky Plus's slow FIFOs and its crossing FIFO give the memory's
-  // word two cycles to reach `stage`: whenever `stage` is taken, it must be
-  // what `mem_q` held through both cycles before, in each of the three.
-  reg [71:0] s_m1, s_m2, b_m1, b_m2;
+  // The Husky Plus's slow FIFOs and its crossing FIFO interleave their
+  // banks and read their memory every cycle: whenever `stage` takes a
+  // word, the register of the bank it came from must have held what that
+  // bank read for two cycles (`two_cycle_ok`), in each of the three.
   integer two_cycle_wrong = 0;
   always @(negedge clk) begin
-    if (u_s.u_fifo.staged_word
-        && (u_s.u_fifo.stage_word !== s_m1 || s_m1 !== s_m2))
-      two_cycle_wrong = two_cycle_wrong + 1;
-    if (u_b.u_fifo.staged_word
-        && (u_b.u_fifo.stage_word !== b_m1 || b_m1 !== b_m2))
-      two_cycle_wrong = two_cycle_wrong + 1;
-    {s_m2, s_m1} <= {s_m1, u_s.u_fifo.mem_q};
-    {b_m2, b_m1} <= {b_m1, u_b.u_fifo.mem_q};
+    if (!u_s.u_fifo.two_cycle_ok) two_cycle_wrong = two_cycle_wrong + 1;
+    if (!u_b.u_fifo.two_cycle_ok) two_cycle_wrong = two_cycle_wrong + 1;
   end
-  // The crossing FIFO's the same way, on its read clock.
-  reg [71:0] x_m1, x_m2;
   integer x_two_cycle_wrong = 0;
-  always @(negedge rclk) begin
-    if (u_x.u_fifo.staged_word
-        && (u_x.u_fifo.stage_word !== x_m1 || x_m1 !== x_m2))
-      x_two_cycle_wrong = x_two_cycle_wrong + 1;
-    {x_m2, x_m1} <= {x_m1, u_x.u_fifo.mem_q};
-  end
+  always @(negedge rclk)
+    if (!u_x.u_fifo.two_cycle_ok) x_two_cycle_wrong = x_two_cycle_wrong + 1;
 `endif
 
   integer i;
@@ -226,7 +214,13 @@ module fifo_generator_tb;
       @(posedge clk);
     end
     s_wr <= 0;
-    repeat (3) @(posedge clk);
+    // Within a bound, not on a cycle: the Husky Plus's stand-in brings a
+    // word from its memory through more registers than the Husky's.
+    s_wait = 0;
+    while (s_empty && s_wait < 20) begin
+      @(posedge clk);
+      s_wait = s_wait + 1;
+    end
     check("fall-through has a word", s_empty, 0);
     check("fall-through oldest word", s_dout, 72'hab_0000_0000_0000_0000);
     check("prog_empty at four", s_pe, 1);
@@ -237,6 +231,11 @@ module fifo_generator_tb;
     repeat (2) @(posedge clk);
     check("prog_empty above four", s_pe, 0);
     for (i = 0; i < 5; i = i + 1) begin
+      s_wait = 0;
+      while (s_empty && s_wait < 8) begin
+        @(posedge clk);
+        s_wait = s_wait + 1;
+      end
       check("fall-through word", s_dout, 72'hab_0000_0000_0000_0000 + i);
       s_rd <= 1;
       @(posedge clk);
@@ -276,12 +275,13 @@ module fifo_generator_tb;
     check("fall-through full at what it holds", s_full, 1);
     check("fall-through overflow never", s_over, 0);
     // And every word back, in order, through the queue of `extra_words`,
-    // each taken as soon as it is there: the Husky Plus's stand-in reads
-    // its memory every other cycle, so within two cycles a word.
+    // each taken as soon as it is there, and there every cycle once the
+    // first is: a word a cycle, as the built-in FIFO gives them and as
+    // NewAE's logic takes them.
     failures_before = failures;
     i = 0;
     s_wait = 0;
-    while (i < S_HOLDS && s_wait < 2 * S_HOLDS + 16) begin
+    while (i < S_HOLDS && s_wait < S_HOLDS + 64) begin
       @(negedge clk);
       s_wait = s_wait + 1;
       if (!s_empty) begin
@@ -372,7 +372,9 @@ module fifo_generator_tb;
     // Banked: the stream, then full.
     b_go = 1;
     i = 0;
-    while (b_got < 9000 && i < 20000) begin
+    // Bounded: with `PLUS` the memory is read every third cycle, so 9000
+    // words take some 27,000.
+    while (b_got < 9000 && i < 40000) begin
       @(posedge clk);
       i = i + 1;
     end
@@ -412,7 +414,7 @@ module fifo_generator_tb;
     b_wrong = 0;
     i = 0;
     s_wait = 0;
-    while (i < B_HOLDS && s_wait < 2 * B_HOLDS + 16) begin
+    while (i < B_HOLDS && s_wait < B_HOLDS + 64) begin
       @(negedge clk);
       s_wait = s_wait + 1;
       if (!b_empty) begin

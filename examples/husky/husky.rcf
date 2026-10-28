@@ -234,14 +234,13 @@ set_input_delay -clock clk_usb 13.4 USB_RDn USB_WRn USB_ALEn USB_Addr USB_Data
 set_false_path -from oadc.U_sad*
 set_false_path -to oadc.U_sad*
 
-# Not NewAE's either: the stand-in slow FIFOs' `stage` registers
-# (`fifo_generator.v`, `extra_words`). The FIFO reads its memory at most
-# every other cycle and `stage` takes the word on the second, so the paths
-# into it, from block RAMs spread over half the die through the banks'
-# multiplexers, have two periods. Held to one they were `clk_usb`'s late
-# paths build after build, and a build where one passed 12 ns read its
-# test ramps back wrong. `fifo_generator_tb.v` checks that every word
-# `stage` gives on was on the memory's output both cycles before.
-set_multicycle_path 2 -setup -to oadc.U_fifo.U_slow_fifo_wrapper.U_fifo*.u_fifo.extra_words.stage*
-# And the fast path's slower FIFO, read in `clk_usb` the same way.
-set_multicycle_path 2 -setup -to oadc.U_fifo.U_fast_fifo_wrapper.U_slower_fifos.u_fifo.extra_words.stage*
+# Not NewAE's either: the stand-in FIFOs' bank registers (`fifo_generator.v`,
+# `bank_stage`). Their banks are interleaved, so no bank is read on two
+# cycles in a row and each bank's word stands two cycles for the register
+# beside it: the paths into those registers, from block RAMs spread over
+# half the die, have two periods. Held to one, the paths that gathered the
+# word were `clk_usb`'s late paths build after build, and a build where one
+# passed 12 ns read its test ramps back wrong. `fifo_generator_tb.v` checks
+# that every word taken stood its two cycles.
+set_multicycle_path 2 -setup -to oadc.U_fifo.U_slow_fifo_wrapper.U_fifo*.u_fifo.banked.bank*.bank_stage*
+set_multicycle_path 2 -setup -to oadc.U_fifo.U_fast_fifo_wrapper.U_slower_fifos.u_fifo.banked.bank*.bank_stage*
