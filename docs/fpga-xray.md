@@ -4783,6 +4783,57 @@ in the capture path, and not yet traced. The failure on one build in two
 of 2026-10-27 (bits set that the ramp had clear, never one cleared) has it
 too and was put down to timing; it was not traced either.
 
+**How often.** Counted from the bitstreams alone, independent of
+this flow's model: decode every switch set in the interconnect tiles,
+join the wires into nodes as `tileconn.json` does, and count the nodes more
+than one switch drives. Every build measured before the fix had some: the five
+interleaved builds 5, 3, 3, 2 and 6, the five of the design before them 4,
+3, 2, 4 and 3. The good ones too: IL5, the build that passed 31, had six.
+The five built with the fix have none, counted over the switches of
+every tile type, not only the interconnect. So this was in every build and not only
+the bad ones, and where each of those wires was decided what broke.
+
+With the fix, seeds 2 to 5 read the ramps exactly at every length and the
+ADC's own pattern exactly at 20 and 250 MHz. Before it, seeds 2 and 3 read the
+pattern wrong at 250 MHz in 1,016 and 13 samples. Their test counts were 23, 24,
+27 and 13. Seed 5's glitch generator failed most of its tests, which no
+other build did, and that is not traced.
+
+### At 250 MHz: a gearbox enabled late in one lane (2026-10-29)
+
+With the routing fixed, the build that does best (IL4 rebuilt) captures the
+FPGA's own counter exactly up to 230 MHz. At 250 MHz a 30,000-sample
+capture is exact one time in three, and in the others it goes wrong
+partway through (from sample 6,859 in one, 26,005 in another) and stays
+wrong: every 12 samples one is dropped and the next repeated
+(`298 29a 29b 29b`). That is NewAE's gearbox (`fast_fifo_wrapper`,
+`din_stage2`): a 72-bit shift register that takes a twelve-bit sample on
+each cycle `ren_stage1_r` is set and writes the crossing FIFO every six.
+The routed estimate has the enables of bits 64 to 71, one sample's lane,
+at 4.72 ns of 4: the lane shifts a cycle after the others whenever the
+enable changes, which it does only when the first FIFO runs empty, hence
+the random start. The register is spread over 44 columns (bit 6 at
+column 30, bit 64 at 74) and its enable comes from one table at column 33.
+Each of its bits is written into both banks of the crossing FIFO's
+stand-in, whose registers sit by their block RAMs far apart, so each bit is
+drawn toward them and away from the others.
+
+*Tried and not kept:* a register in the stand-in for the write, in front of
+the banks' (`WRITE_STAGE`), so that the gearbox writes one place. The
+gearbox's enables were no longer late in the estimate and the domain's
+late endpoints fell from 542 to 368, but on the part three builds did
+worse: seed 4 failed at 220 MHz where it had passed, read the ADC's
+pattern wrong at 250, and passed 20 tests where it had passed 27, and
+seed 3 read the pattern wrong even at 20 MHz. Nothing in the write stage
+could do that at 20 MHz. A change to the netlist moves the whole placement,
+and what moved broke something else, as every netlist change has done
+here. The one at 20 MHz was again a one where a zero belongs (`0x555`
+as `0xd55`), the signature that remains after the double drivers: seed 1
+rebuilt with the fix has it, in bit 2 of the bus during fast reads at 12
+bits. Its routed estimate has the read enables of the slow FIFO's second
+bank (`fetch` into each segment's `mine` and block RAMs) at 12.88 ns of
+10.4, where seed 4's has none. That is a candidate, not a finding.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
