@@ -205,7 +205,8 @@ nextpnr reads.
 Options:
   --device <name>    Target device; required (see --list-devices)
   --list-devices     List the built-in devices and exit
-  --constraints <f>  Read pin and placement constraints from an .rcf file
+  --constraints <f>  Read pin and placement constraints from an .rcf file;
+                     repeatable, an earlier file winning where two disagree
   --top <module>     Treat this module as the top
   --param <N=V>      Override a top-level parameter or generic; repeatable
   --define <N[=V]>   Define a Verilog macro in every file; repeatable
@@ -764,7 +765,6 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &[
                 "device",
-                "constraints",
                 "top",
                 "output-dir",
                 "netlist",
@@ -799,7 +799,7 @@ fn spec_for(usage: &str) -> Spec {
                 "timing-driven",
                 "pins-at-entry",
             ],
-            repeated: &["param", "define", "include-dir"],
+            repeated: &["param", "define", "include-dir", "constraints"],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
         Spec {
@@ -2153,15 +2153,18 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
 
     // Constraints come from the file first, then from attributes in the
     // source, so an attribute cannot silently override an explicit pin.
+    // Several files are read in the order given, each behind the ones
+    // before it as attributes are behind them all: a board's pins in one,
+    // and what one part of a family needs besides in another.
     let mut diags = Diagnostics::new();
     let mut constraints = Constraints::new();
-    if let Some(path) = args.option("constraints") {
+    for path in args.repeated("constraints") {
         let Some(id) = load(&mut map, path, &mut diags) else {
             report(&mut diags, &map);
             return Ok(Outcome::Failed);
         };
         let text = map.file(id).text().to_string();
-        constraints = Constraints::parse(&text, id, &mut diags);
+        constraints.merge(Constraints::parse(&text, id, &mut diags), &mut diags);
     }
     constraints.merge_attrs(&design, top, &mut diags);
     constraints.check(&design, device, &mut diags);

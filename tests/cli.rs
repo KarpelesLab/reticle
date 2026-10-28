@@ -677,6 +677,45 @@ fn fpga_runs_the_whole_flow() {
     assert!(pcf.contains("set_io clk"), "{pcf}");
 }
 
+/// **Several constraint files are read, the first winning where two
+/// disagree.** The iCEstick blinky's pins, and a second file that moves
+/// the LED to pin 98: given in that order the LED stays on 99 and a note
+/// says the second file's pin was overridden; given the other way round it
+/// is on 98. Would catch a second `--constraints` ignored (98 never used),
+/// only the last one read (99 never used), or the merge reversed; would
+/// not catch two files' clocks or regions merged wrongly, which
+/// `Constraints::merge`'s own tests are for.
+#[test]
+fn fpga_reads_several_constraint_files_the_first_winning() {
+    let dir = scratch("fpga_two_constraint_files");
+    std::fs::create_dir_all(&dir).unwrap();
+    let led = dir.join("led98.rcf");
+    std::fs::write(&led, "set_io -io_standard LVCMOS33 led 98\n").unwrap();
+    let build = |first: &str, second: &str| {
+        let (code, _, stderr) = run(&[
+            "fpga",
+            "--device",
+            "ice40-hx1k-tq144",
+            "--constraints",
+            first,
+            "--constraints",
+            second,
+            "--output-dir",
+            dir.to_str().unwrap(),
+            "testdata/fpga/blinky_ice40.rtl",
+        ]);
+        assert_eq!(code, 0, "{stderr}");
+        let pcf = std::fs::read_to_string(dir.join("blinky.pcf")).unwrap();
+        (pcf, stderr)
+    };
+    let (pcf, stderr) = build("testdata/fpga/blinky_ice40.rcf", led.to_str().unwrap());
+    assert!(pcf.contains("led 99\n"), "{pcf}");
+    assert!(stderr.contains("overriding pin 98"), "{stderr}");
+    let (pcf, _) = build(led.to_str().unwrap(), "testdata/fpga/blinky_ice40.rcf");
+    assert!(pcf.contains("led 98\n"), "{pcf}");
+    assert!(pcf.contains("set_io clk 21"), "{pcf}");
+}
+
 #[test]
 fn fpga_needs_a_known_device() {
     let (code, _, stderr) = run(&["fpga", "testdata/fpga/blinky_ice40.rtl"]);

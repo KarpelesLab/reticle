@@ -1,0 +1,23 @@
+# What the Husky Plus's build needs besides `husky.rcf`, read after it
+# (`build_plus.sh` passes both; the first file wins where they disagree).
+# Grid coordinates here are the XC7A100T's, which is why they are not in
+# `husky.rcf`, read for the Husky's XC7A35T as well.
+
+# Not NewAE's: the logic analyser's sampling logic kept together. The
+# analyser samples at 40 times a 10 MHz clock in the glitch tests, 400 MHz,
+# a 2.5 ns period its domain is not timed at (the clock manager's power-up
+# setting makes it 4.17 ns, and software reprograms it). Left to the
+# placer, the capture registers sat 59 rows from `downsample_wr_en`, whose
+# enable they shift on, and 75 from the capture counter: at 40 times every
+# glitch came back in two to seven pieces (`test_glitch_output_sweep_width`
+# failed on every build), where NewAE's bitstream shows one clean run.
+# Confined here, around where the capture sources sit, five seeds passed
+# 25, 33, 23, 24 and 28 of NewAE's 40 tests against 19, 23, 24, 27 and 13
+# without it (2026-10-29), the 33 passing every glitch width sweep. Two
+# seeds of the five still failed the analyser, so it is not the whole
+# answer; see docs/fpga-xray.md.
+region la_capture 40 90 64 125
+assign reg_la.capture* region la_capture
+assign reg_la.downsample* region la_capture
+assign reg_la.ticktock* region la_capture
+assign reg_la.capturing* region la_capture

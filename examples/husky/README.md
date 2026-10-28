@@ -24,6 +24,7 @@ anything into an instrument somebody depends on.
 examples/husky/
   build.sh            the command line: NewAE's file list, defines and top
   husky.rcf           every pin of `cwhusky_top`, from NewAE's cwhusky.xdc
+  husky_plus.rcf      what the Husky Plus's build adds, in the XC7A100T's grid
   fifo_generator.v    the six FIFO Generator cores, as one behavioural FIFO
   xadc_wiz_0.v        the XADC Wizard core: the XADC with the wizard's registers
   usr_accesse2.v      USR_ACCESSE2, which reads the build time: here, zero

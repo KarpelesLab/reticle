@@ -12,9 +12,10 @@
 # `cwhusky_100.xdc`, the Plus's constraints, places every port on the
 # ball `cwhusky.xdc` does (checked by diffing the two), and differs only in
 # declaring the ADC clocks at 250 MHz rather than 200, which are on
-# internal nets and not in husky.rcf. The region is the XC7A100T's whole
-# grid, 147 by 208 tiles, which declares 77 million pips, past the
-# loader's default limit of 48 million; hence `--max-pips`.
+# internal nets and not in husky.rcf. `husky_plus.rcf` adds what only the
+# Plus's build needs, in this part's grid coordinates. The region is the
+# XC7A100T's whole grid, 147 by 208 tiles, which declares 77 million pips,
+# past the loader's default limit of 48 million; hence `--max-pips`.
 #
 # `--timing` prints how long each stage took and every routing pass as it
 # finishes: the build takes most of an hour, and without it the log says
@@ -40,7 +41,7 @@ exec "$reticle" fpga \
     --top cwhusky_top \
     --define PLUS --define INTERVAL_MATCHING=1 --define ESAD \
     --include-dir "$fpga/tracewhisperer/hdl" --include-dir "$fpga/hdl" \
-    --constraints "$here/husky.rcf" \
+    --constraints "$here/husky.rcf" --constraints "$here/husky_plus.rcf" \
     --output-dir "$out" \
     --bitstream "$out/cwhusky_plus_top.bit" \
     --region 0,0,147,208 --max-pips 80000000 --timing-driven --timing \

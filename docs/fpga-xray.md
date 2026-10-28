@@ -4834,7 +4834,7 @@ bits. Its routed estimate has the read enables of the slow FIFO's second
 bank (`fetch` into each segment's `mine` and block RAMs) at 12.88 ns of
 10.4, where seed 4's has none. That is a candidate, not a finding.
 
-### Four more tries at the fast domains, none kept (2026-10-29)
+### Five more tries at the fast domains, none kept (2026-10-29)
 
 Each built at seeds 2, 3 and 4 with the router fixed, against the same
 seeds without it, which passed 23, 24 and 27 of the 40 tests and read the
@@ -4849,6 +4849,7 @@ so only a change much larger than that would show. None was.
 | a connection on a path past the period at least 0.8 critical | –, –, 16 | 7,798 of 20,000 wrong (seed 4); seeds 2 and 3 stopped |
 | a clock read by a lookup table routed for delay | 24, –, 28 | exact (seeds 2 and 4) |
 | the fast FIFO's word from a register (`husky_fifo_registered`) | 28, 25, 24 | exact, 1,667 wrong, 1,667 wrong |
+| a carry chain timed as `CLBLL_L.sdf` has it | 22, 22, 23 | 1,024 wrong, 2,048 wrong, exact |
 
 * *Unbanked:* the crossing FIFO as one memory, which the double drivers
   may have made look worse than it was. It is not better: seed 3 read
@@ -4874,12 +4875,74 @@ so only a change much larger than that would show. None was.
   (testbench checks: every word in order, one a cycle, `full` exact)
   made both paths one step each, and two of three builds then read one
   sample in six wrong at 250 MHz.
+* *Carry chains timed as the part has them:* each cell of a chain past
+  its first is 0.114 ns (`CIN` to `CO3`) where the model gave every input
+  0.3, and the pip that continues a chain from the slice below,
+  `PRECYINIT.CIN`, a pip of this flow's own that prjxray does not time,
+  costs nothing where it cost the untimed median, 0.175 ns. A 32-bit
+  counter came out 2.3 ns quicker, and the counters stopped being the
+  latest paths of the ADC's and the analyser's domains. Other paths
+  then were, and the placements that followed did worse on the part:
+  seeds 2 and 3 read internal ramps wrong at 220 MHz. A model nearer the
+  part's, and a worse result. The estimate is not what limits these
+  builds; where the placer puts things is.
 
 The patches are not in the tree. What these builds share is
 placement: the gearbox, the analyser's capture registers and the crossing
 FIFO's write each spread over tens of columns, and the part has four
 block RAM columns (19, 94, 108, 128) nearly all in use, so the memories
 cannot come closer. NewAE's design builds the same way under Vivado.
+
+### The logic analyser's sampling, kept together (2026-10-29)
+
+*The glitch width tests measure the analyser, not the glitch.* Swept as
+`test_glitch_output_sweep_width` sweeps it, the glitch's width counted by
+the analyser at 40 times a 10 MHz clock (400 MHz) came back from NewAE's
+bitstream as one run of samples growing by two a step, exactly what the
+test expects. From IL4 rebuilt (27 tests) each glitch came back in two to
+seven pieces with the wrong total. At 20 times it was one run off by one,
+and at 10 times exact. Captured with no glitch at all, the analyser's
+channels that carry plain clocks (the 10 MHz source and the glitch
+generator's two clock managers) show a working analyser as steady runs, 20
+samples high and 20 low at 40 times. A build whose analyser fails shows
+runs of two. Both probes take seconds.
+
+The analyser shifts each channel's sample into a two-bit register on
+`capturing && downsample_wr_en` and writes the pair every other cycle. On
+IL4 the capture registers sat at rows 113 to 116, `downsample_wr_en` at
+row 55 and the capture counter at rows 32 to 43: the enable crossed 59 rows
+(4.54 ns in the routed estimate) to registers that have 2.5. The domain is
+timed at what its clock manager's parameters make at power-up, 4.17 ns,
+and its latest path, the counter's compare, was past both, so nothing
+there looked worse than anything else.
+
+`husky_plus.rcf` now holds those registers in a region (columns 40 to 64,
+rows 90 to 125, around the capture sources), and `build_plus.sh` passes it
+after `husky.rcf`. That needed `--constraints` to be repeatable, which
+it now is, the first file winning where two disagree, as files win over
+attributes. On five seeds:
+
+| seed | without the region | with it |
+|---|---|---|
+| 1 | 19 | 25 |
+| 2 | 23 | 33 |
+| 3 | 24 | 23 |
+| 4 | 27 | 24 |
+| 5 | 13 | 28 |
+
+The mean went from 21.2 to 26.6. Seed 2's 33 passed every glitch width
+sweep, the 1600 offset, and every ADC test at 250 MHz. What it failed was
+`test_fpga_version`, three `test_glitch_width` cases (NewAE's own bitstream
+fails these too), two `test_glitch_offset` at 100 MHz with 5 times
+oversampling (500 MHz, where the capture never finished: "FIFO is
+empty"), and one PLL setting. NewAE's bitstream passes 35 of the same 40.
+
+It does not fix every seed. Seed 4 with the region showed runs of two at
+both 20 and 40 times: its analyser, not its glitch, was wrong. Its routed
+estimate against 2.5 ns (`create_clock -period 2.5` on the analyser's
+clock, which leaves the bitstream bit for bit as it was) has the same
+paths late as seed 2's, so the estimate does not see what separates them.
+Not traced yet.
 
 ## What remains before an LED could light
 
