@@ -4636,6 +4636,28 @@ read `0xfff`; with the bank's features too, still `0xfff`; with all
 three, on the part: the alternating pattern exactly, 20,000 samples of
 20,000, at 20 MHz and at 250.
 
+### The ADC at 250 MHz: the crossing FIFO's read too (2026-10-28)
+
+With the ADC's data finally arriving, its alternating pattern at 250 MHz
+came back wrong in about one sample in 27, and in a shape that said
+where: in each capture either the low six bits or the high six were
+wrong, never both, and the same six in every wrong sample of that
+capture. The fast path's crossing FIFO (`fast_slower_fifo`) holds words
+of six 12-bit samples, 72 bits as four 18-bit block RAM columns, so the
+samples astride a column boundary are six bits in one column and six in
+the next; one column now and then giving a word other than the one read
+is exactly that. The FIFO was one memory eight blocks deep behind the
+mapping's multiplexer — the structure that had broken the slow FIFOs —
+so it is banked and segmented as they are, and `husky.rcf` gives the
+paths into its `stage` the two periods its every-other-cycle read
+already allowed; the testbench checks that schedule on its read clock
+too.
+
+On the part, one build (seed 2): the alternating pattern exact in
+400,000 samples at 250 MHz, and NewAE's `fastest`, `ADCaltfast`,
+`ADCfastsegments`, `ADCfastsegmentspresamples` and `ADCreset`, all five
+of which had failed, passed.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

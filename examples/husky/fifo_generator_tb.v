@@ -133,9 +133,9 @@ module fifo_generator_tb;
     end
 
 `ifdef PLUS
-  // The Husky Plus's slow FIFOs give the memory's word two cycles to
-  // reach `stage`: whenever `stage` is taken, it must be what `mem_q`
-  // held through both cycles before, in each of the two.
+  // The Husky Plus's slow FIFOs and its crossing FIFO give the memory's
+  // word two cycles to reach `stage`: whenever `stage` is taken, it must be
+  // what `mem_q` held through both cycles before, in each of the three.
   reg [71:0] s_m1, s_m2, b_m1, b_m2;
   integer two_cycle_wrong = 0;
   always @(negedge clk) begin
@@ -147,6 +147,15 @@ module fifo_generator_tb;
       two_cycle_wrong = two_cycle_wrong + 1;
     {s_m2, s_m1} <= {s_m1, u_s.u_fifo.mem_q};
     {b_m2, b_m1} <= {b_m1, u_b.u_fifo.mem_q};
+  end
+  // The crossing FIFO's the same way, on its read clock.
+  reg [71:0] x_m1, x_m2;
+  integer x_two_cycle_wrong = 0;
+  always @(negedge rclk) begin
+    if (u_x.u_fifo.staged_word
+        && (u_x.u_fifo.stage_word !== x_m1 || x_m1 !== x_m2))
+      x_two_cycle_wrong = x_two_cycle_wrong + 1;
+    {x_m2, x_m1} <= {x_m1, u_x.u_fifo.mem_q};
   end
 `endif
 
@@ -425,10 +434,10 @@ module fifo_generator_tb;
     check("banked empty after the fill", b_empty, 1);
 
 `ifdef PLUS
-    if (two_cycle_wrong != 0)
+    if (two_cycle_wrong + x_two_cycle_wrong != 0)
       $display("FAIL: a word taken into `stage` less than two cycles after it was read, %0d times",
-               two_cycle_wrong);
-    failures = failures + (two_cycle_wrong != 0);
+               two_cycle_wrong + x_two_cycle_wrong);
+    failures = failures + (two_cycle_wrong + x_two_cycle_wrong != 0);
 `endif
     if (failures == 0) $display("PASS: the FIFO stand-ins");
     else $display("FAIL: %0d check(s)", failures);

@@ -243,3 +243,5 @@ set_false_path -to oadc.U_sad*
 # test ramps back wrong. `fifo_generator_tb.v` checks that every word
 # `stage` gives on was on the memory's output both cycles before.
 set_multicycle_path 2 -setup -to oadc.U_fifo.U_slow_fifo_wrapper.U_fifo*.u_fifo.extra_words.stage*
+# And the fast path's slower FIFO, read in `clk_usb` the same way.
+set_multicycle_path 2 -setup -to oadc.U_fifo.U_fast_fifo_wrapper.U_slower_fifos.u_fifo.extra_words.stage*

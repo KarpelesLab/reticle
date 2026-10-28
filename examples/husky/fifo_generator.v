@@ -456,6 +456,12 @@ module fast_slower_fifo (
 `ifdef PLUS
       .AW(13),
       .EXTRA(3),
+      // Banks, so segments, so no multiplexer of the mapping's own in front
+      // of `stage`: see `husky_fifo`'s `banked`. Mapped as one memory it was
+      // eight blocks deep, and on the part one of its four 18-bit columns
+      // now and then gave a word other than the one read, which came back
+      // as the halves of the two samples that straddle that column wrong.
+      .BANK_AW(12),
 `else
       .AW(12),
 `endif
