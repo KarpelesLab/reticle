@@ -471,6 +471,40 @@ pub fn tie_policy(role: &str) -> TiePolicy {
 /// role, and the pin's node.
 type Want = (TiePolicy, String, String, NodeId);
 
+/// An `IDDR`'s set or reset, which reads one unrouted — and an `ILOGIC`
+/// has no feature that ignores it, where an `OLOGIC`'s `SRUSED` does — is
+/// tied to zero here with the block RAMs' inputs, over the same ground
+/// fans. NewAE's image does it (`INT_L.CTRL_L1.GFAN0`, `INT_L.GFAN0.GND_WIRE`
+/// beside each of the Husky Plus's ADC inputs); left unrouted, every
+/// `IDDR` of this flow was held set, and the ADC read `0xfff` whatever it
+/// sent.
+fn io_logic_wants(
+    instance: &crate::fpga::place::Instance,
+    site: &crate::fpga::arch::ArchSite,
+    netlist: &Netlist,
+    is_routed: &dyn Fn(usize) -> bool,
+    wants: &mut Vec<Want>,
+) {
+    if instance.primitive != "IDDR" {
+        return;
+    }
+    let routed = instance.pins.iter().any(|p| {
+        let pin = &netlist.pins[*p];
+        pin.role == "sr" && pin.signal.is_some_and(is_routed)
+    });
+    if routed {
+        return;
+    }
+    if let Some(node) = site.pin("sr") {
+        wants.push((
+            TiePolicy::Zero,
+            instance.name.clone(),
+            "sr".to_owned(),
+            node,
+        ));
+    }
+}
+
 /// The inverting pins of a `RAMB18E1` half, each of which has a
 /// `ZINV_<pin>` feature: set means **not** inverted. nextpnr-xilinx sets it
 /// for every one of them unless the cell's `IS_<pin>_INVERTED` is 1.
@@ -967,6 +1001,9 @@ impl XrayFabric {
         let mut wants: Vec<Want> = Vec::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             if instance.primitive != PRIMITIVE {
+                if let Some(site) = placement.site_of(index) {
+                    io_logic_wants(instance, &graph.sites[site], netlist, &|_| true, &mut wants);
+                }
                 continue;
             }
             let Some(site) = placement.site_of(index) else {
@@ -1043,6 +1080,15 @@ impl XrayFabric {
 
         for (index, instance) in netlist.instances.iter().enumerate() {
             if instance.primitive != PRIMITIVE {
+                if let Some(site) = placement.site_of(index) {
+                    io_logic_wants(
+                        instance,
+                        &graph.sites[site],
+                        netlist,
+                        &|signal| routing.route(signal).is_some(),
+                        &mut wants,
+                    );
+                }
                 continue;
             }
             let fail = |message: String| BlockRamError {

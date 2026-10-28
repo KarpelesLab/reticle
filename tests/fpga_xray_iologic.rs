@@ -24,10 +24,12 @@
 //! would not exist), any feature missing or extra — an `INIT` the wrong way
 //! round, the zero on `D2` left without its inverter, `SRTYPE("ASYNC")`
 //! written as `SYNC`, a routed reset without `SRUSED` or with the set's
-//! value — and the `IDDR`'s clock reaching `CLK` without `CLKB`. It
-//! compares no routing beyond that: which leaf clock reaches the register
-//! is the router's choice, and Vivado's choice differs. Nothing here has run
-//! on a Husky.
+//! value — the `IDDR`'s clock reaching `CLK` without `CLKB`, or reaching
+//! them from anything but a leaf of the global clock network, and the LVDS
+//! input's bank without `LVDS_25_IN_USE` and `ONLY_DIFF_IN_USE`, and the
+//! `IDDR`'s set or reset left unrouted, which reads one. It compares
+//! no routing beyond that: which leaf clock reaches the register is the
+//! router's choice, and Vivado's choice differs.
 
 #![cfg(all(feature = "fpga", feature = "cli"))]
 
@@ -180,5 +182,58 @@ fn the_husky_io_registers_are_configured_as_vivado_configured_them() {
     assert_eq!(
         clocks,
         BTreeSet::from(["IOI_ILOGIC0_CLK", "IOI_ILOGIC0_CLKB"])
+    );
+    // And from a leaf of the global clock network, as Vivado's comes
+    // (`IOI_LEAF_GCLK5`): routed over general interconnect
+    // (`IOI_IMUX20_1`), the Husky Plus's ADC was sampled into one constant
+    // value by every build.
+    let sources: Vec<&str> = decoded
+        .features
+        .iter()
+        .filter(|(t, _)| t == "LIOI3_X0Y89")
+        .map(|(_, f)| f.as_str())
+        .filter(|f| f.starts_with("IOI_ILOGIC0_CLK"))
+        .collect();
+    assert!(
+        sources.iter().all(|f| f.contains("GCLK")),
+        "the `IDDR`'s clock off the network: {sources:?}"
+    );
+    // The `IDDR`'s set and reset tied to zero over a ground fan, as Vivado
+    // ties it (`INT_L.CTRL_L1.GFAN0`, `INT_L.GFAN0.GND_WIRE` beside the Husky
+    // Plus's ADC inputs): an `ILOGIC` reads an unrouted `SR` as one, and
+    // has no feature that ignores it.
+    let ints: Vec<&str> = decoded
+        .features
+        .iter()
+        .filter(|(t, _)| t == "INT_L_X0Y89" || t == "INT_L_X0Y90")
+        .map(|(_, f)| f.as_str())
+        .collect();
+    assert!(
+        ints.iter()
+            .any(|f| f.starts_with("CTRL_L") && f.contains(".GFAN"))
+            && ints
+                .iter()
+                .any(|f| f.starts_with("GFAN") && f.ends_with(".GND_WIRE")),
+        "the `IDDR`'s set or reset is not grounded: {ints:?}"
+    );
+    // The bank of an LVDS input has its clock-row tile's LVDS features, as
+    // the Husky Plus's bank 15 does in NewAE's image: without them its
+    // ADC's inputs read a constant on the part.
+    let bank: BTreeSet<&str> = decoded
+        .features
+        .iter()
+        .filter(|(t, _)| t.starts_with("HCLK_IOI"))
+        .map(|(_, f)| f.as_str())
+        .filter(|f| f.ends_with("_IN_USE") && !f.starts_with("BUFR"))
+        .collect();
+    assert_eq!(
+        bank,
+        BTreeSet::from(["LVDS_25_IN_USE", "ONLY_DIFF_IN_USE"]),
+        "{:?}",
+        decoded
+            .features
+            .iter()
+            .filter(|(t, _)| t.starts_with("HCLK_IOI"))
+            .collect::<Vec<_>>()
     );
 }

@@ -31,10 +31,24 @@
 //! | a pull-down | no `PULLTYPE` feature at all: `PULLDOWN` is the field with every bit clear | Vivado, 1 pad |
 //! | LVDS_25 input pair | both halves `IN_ONLY`, `LVDS_25_SSTL135_SSTL15.IN_DIFF`, `PULLTYPE.NONE`; the tile's `DIFF.ZIBUF_LOW_PWR` when `IBUF_LOW_PWR` is false | Vivado, 9 pairs |
 //! | LVDS_25 output pair | the master `LVDS_25.OUT`, `LVDS_25.DRIVE.I_FIXED`, `PULLTYPE.NONE`; the slave `IN_ONLY`, `PULLTYPE.NONE` | Vivado, 1 pair |
+//! | an LVDS_25 input in a bank | the bank's clock-row tile's `LVDS_25_IN_USE` and `ONLY_DIFF_IN_USE` | Vivado, 1 bank |
 //! | other drives (4, 16 mA) and a fast slew | the feature of that name | **the database's names only** |
 //!
 //! A standard this table has no line for is refused with its name: an IO
 //! standard is a voltage, and guessing one is how a board gets damaged.
+//!
+//! **The bank's own features were missing until 2026-10-28.** A bank with
+//! LVDS inputs has two features on its clock-row tile (`HCLK_IOI3`), not
+//! on any pad's: in NewAE's image the Husky Plus's bank 15, the ADC's
+//! twelve data bits in six pairs, its clock and the PLL's, sets
+//! `LVDS_25_IN_USE` and `ONLY_DIFF_IN_USE`, and no other bank sets either.
+//! Without them every one of those six inputs read a constant on the part
+//! — the ADC's own test patterns, ramp and alternating `0x555`/`0xaaa`
+//! alike, came back `0x0ff` or `0xfff` — while the clock pairs of the
+//! same bank still clocked. That bank also has eight LVCMOS25 pads, one
+//! of them an input, so `ONLY_DIFF_IN_USE` is not "only differential
+//! inputs"; what each feature means apart from the other is not read from
+//! that one bank, and both are set wherever an LVDS_25 input is.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -70,7 +84,13 @@ impl IoTables {
             default_standard: default_standard.to_owned(),
         };
         for (tile_type, set) in features {
-            if !set.features().iter().any(|f| f.name.starts_with("IOB_Y0.")) {
+            // The pads' tiles, and a bank's clock-row tile for its
+            // `LVDS_25_IN_USE`.
+            if !set
+                .features()
+                .iter()
+                .any(|f| f.name.starts_with("IOB_Y0.") || f.name == "LVDS_25_IN_USE")
+            {
                 continue;
             }
             let map: BTreeMap<String, Vec<ConfigBit>> = set
@@ -133,6 +153,8 @@ pub(super) struct IoRecipe {
     pub other: Vec<String>,
     /// Whole-tile names: `DIFF.ZIBUF_LOW_PWR`.
     pub tile: Vec<String>,
+    /// On the bank's clock-row tile: `LVDS_25_IN_USE`.
+    pub bank: Vec<String>,
 }
 
 const IN_ONLY: &str =
@@ -212,6 +234,8 @@ pub(super) fn recipe(request: &IoRequest) -> Result<IoRecipe, String> {
                     if !request.low_power {
                         out.tile.push("DIFF.ZIBUF_LOW_PWR".to_owned());
                     }
+                    out.bank.push("LVDS_25_IN_USE".to_owned());
+                    out.bank.push("ONLY_DIFF_IN_USE".to_owned());
                 }
                 Direction::Out => {
                     out.this.push("LVDS_25.OUT".to_owned());
@@ -350,6 +374,10 @@ impl XrayFabric {
             return Ok(0);
         };
         let mut count = 0usize;
+        // Each bank's clock-row features, set once whatever number of
+        // pads ask for them.
+        let mut banked: std::collections::BTreeSet<((u32, u32), String)> =
+            std::collections::BTreeSet::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             if instance.kind != "io" {
                 continue;
@@ -405,8 +433,59 @@ impl XrayFabric {
                     count += 1;
                 }
             }
+            if recipe.bank.is_empty() {
+                continue;
+            }
+            let Some(bank) = self.bank_tile(site.tile) else {
+                return Err(IoError::MissingFeature {
+                    tile_type: "HCLK_IOI".to_owned(),
+                    feature: recipe.bank.join(", "),
+                });
+            };
+            let bank_type = self
+                .arch
+                .tile_at(bank.0, bank.1)
+                .map_or("", |t| t.name.as_str());
+            for name in &recipe.bank {
+                if !banked.insert((bank, name.clone())) {
+                    continue;
+                }
+                let Some(ones) = self.io.features.get(bank_type).and_then(|t| t.get(name)) else {
+                    return Err(IoError::MissingFeature {
+                        tile_type: bank_type.to_owned(),
+                        feature: name.clone(),
+                    });
+                };
+                for bit in ones {
+                    bits.set(bank, *bit)?;
+                    count += 1;
+                }
+            }
         }
         Ok(count)
+    }
+
+    /// The clock-row tile of the bank a pad's tile is in: the `HCLK_IOI`
+    /// tile of its IO column nearest it. A bank is fifty rows with its
+    /// clock row in the middle (UG475, the bank and clock region layout;
+    /// quoted), so the nearest is its own.
+    fn bank_tile(&self, at: (u32, u32)) -> Option<(u32, u32)> {
+        let mut best: Option<((u32, u32), u32)> = None;
+        for x in at.0.saturating_sub(3)..=at.0 + 3 {
+            for y in 0..self.arch.height {
+                let Some(t) = self.arch.tile_at(x, y) else {
+                    continue;
+                };
+                if !t.name.starts_with("HCLK_IOI") {
+                    continue;
+                }
+                let dy = y.abs_diff(at.1);
+                if best.is_none_or(|(_, d)| dy < d) {
+                    best = Some(((x, y), dy));
+                }
+            }
+        }
+        best.map(|(tile, _)| tile)
     }
 }
 
@@ -481,6 +560,7 @@ mod tests {
         assert_eq!(pair.this, diff);
         assert_eq!(pair.other, diff);
         assert_eq!(pair.tile, ["DIFF.ZIBUF_LOW_PWR"]);
+        assert_eq!(pair.bank, ["LVDS_25_IN_USE", "ONLY_DIFF_IN_USE"]);
 
         let out = recipe(&ask("LVDS_25", Direction::Out)).unwrap();
         assert_eq!(

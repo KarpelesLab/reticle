@@ -4604,6 +4604,38 @@ So that constraint is not in `husky.rcf`; the analyser's paths at 2.5 ns
 are a question of how close the placer puts its capture registers to
 `capturing` (65 rows apart on one build), not of what it is told.
 
+### The ADC's own data, which no build had read (2026-10-28)
+
+*Every "ADC exact" in the sections above measured the wrong thing.* Their
+captures (`hw/fastadc.py`, `hw/ramps.sh`) used `scope.adc.test_mode`, a
+counter inside the FPGA put in the ADC's place, so they timed the
+capture path and never the ADC. Asked for the ADC's own test patterns
+(register `0x25` over its SPI port: zeros, ones, alternating
+`0x555`/`0xaaa`, a ramp), every build of this flow read one constant —
+`0x0ff`, later `0xfff` — where NewAE's image reads each pattern exactly.
+NewAE's own ADC ramp tests had passed on those builds all the same:
+their check (`check_ramp`, `ADCramp`) starts counting at the first
+change in the data, and data that never changes is never wrong.
+
+Three faults, each found by decoding a tile of both images and setting
+what differs beside it, and every other tile around the ADC's six data
+pairs identical:
+
+| | NewAE's image | this flow's | fixed in |
+|---|---|---|---|
+| the `IDDR`s' clock | `IOI_ILOGIC0_CLK.IOI_LEAF_GCLK5`, a leaf of the global network | `IOI_IMUX20_1`, general interconnect | `xray::clock_pin_roles` now names a DDR register's `clk` and `clkb`, and the flow's buffer insertion moves them |
+| the bank's LVDS features | `HCLK_IOI3.LVDS_25_IN_USE`, `HCLK_IOI3.ONLY_DIFF_IN_USE` on bank 15's clock-row tile | neither | `xray::io` sets both on the bank of every LVDS_25 input |
+| the `IDDR`s' set and reset | `INT_L.CTRL_L1.GFAN0`, `INT_L.GFAN0.GND_WIRE`: tied to zero | unrouted, which reads one | tied to zero with the block RAMs' inputs (`xray::bram`) |
+
+The third is the hazard this repository's notes name first for the ECP5:
+an unrouted input reads one. `xray::iologic` already left a data input
+tied to zero unrouted *with its inverter on* for that reason, but a set
+or reset has no inverter and an `ILOGIC` no `SRUSED`, so every `IDDR`
+sat held set — the `0xfff`. With the clock alone fixed the data still
+read `0xfff`; with the bank's features too, still `0xfff`; with all
+three, on the part: the alternating pattern exactly, 20,000 samples of
+20,000, at 20 MHz and at 250.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

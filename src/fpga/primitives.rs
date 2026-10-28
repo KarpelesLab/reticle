@@ -5066,15 +5066,26 @@ impl Mapper<'_> {
         // buffer for every flip-flop and stayed on the pad's own net for
         // its three MMCMs' and the XADC's ports, which then reached their
         // `DCLK` over general interconnect. One MMCM's port answered every
-        // read with the one before; see `xray::clock_pin_roles`. Taken
-        // from each primitive's own port map, as the RAMs' are.
+        // read with the one before; see `xray::clock_pin_roles`. A DDR
+        // register beside a pad is clocked the same way, and on the Husky
+        // Plus reached its clock over general interconnect. Taken from each
+        // primitive's own port map, as the RAMs' are.
         let port_clocks: Vec<(String, String)> = self
             .device
             .bels
             .iter()
-            .filter(|b| matches!(b.role, BelRole::Mmcm | BelRole::Pll | BelRole::Sysmon))
+            .filter(|b| {
+                matches!(
+                    b.role,
+                    BelRole::Mmcm
+                        | BelRole::Pll
+                        | BelRole::Sysmon
+                        | BelRole::DdrIn
+                        | BelRole::DdrOut
+                )
+            })
             .flat_map(|b| {
-                ["dclk", "psclk"]
+                ["dclk", "psclk", "clk"]
                     .into_iter()
                     .filter_map(|role| b.port(role).map(|p| (b.name.clone(), p.to_owned())))
             })

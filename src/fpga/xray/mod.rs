@@ -2893,6 +2893,14 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         "bram" => &["p0_clk", "p1_clk"],
         "mmcm" => &["dclk", "psclk"],
         "pll" | "sysmon" => &["dclk"],
+        // A DDR register in an IO tile's logic: the Husky Plus's ADC comes
+        // in through six `IDDR`s, which the router clocked over general
+        // interconnect (`IOI_ILOGIC0_CLK.IOI_IMUX20_1`, where NewAE's
+        // bitstream has `IOI_LEAF_GCLK5`). Every capture of the ADC's own
+        // data read one constant value, and the suite's ADC ramp tests
+        // passed on it, their check never finding a ramp to follow.
+        "ddr_in" => &["clk", "clkb"],
+        "ddr_out" => &["clk"],
         _ => &[],
     }
 }

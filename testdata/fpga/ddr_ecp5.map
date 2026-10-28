@@ -3,6 +3,8 @@ io:
   clk (1 bits) -> TRELLIS_IO at pin G2 as LVCMOS33
   rx (1 bits) -> TRELLIS_IO, double data rate on clk (IDDRX1F), delayed 20 step(s) (DELAYG)
   tx (2 bits) -> TRELLIS_IO, double data rate on clk (ODDRX1F)
+clocks:
+  clk (3 clock pins) -> local routing (below the threshold of 8)
 logic:
   0 LUTs, depth 0
 netlist:
