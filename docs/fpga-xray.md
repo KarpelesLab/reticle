@@ -4834,6 +4834,53 @@ bits. Its routed estimate has the read enables of the slow FIFO's second
 bank (`fetch` into each segment's `mine` and block RAMs) at 12.88 ns of
 10.4, where seed 4's has none. That is a candidate, not a finding.
 
+### Four more tries at the fast domains, none kept (2026-10-29)
+
+Each built at seeds 2, 3 and 4 with the router fixed, against the same
+seeds without it, which passed 23, 24 and 27 of the 40 tests and read the
+ADC's pattern exactly at 250 MHz all three times. One build per seed is
+not much, and between seeds the counts move by four or five on their own,
+so only a change much larger than that would show. None was.
+
+| change | tests passed (seeds 2, 3, 4) | ADC's pattern at 250 MHz |
+|---|---|---|
+| none (`d4a83b6`) | 23, 24, 27 | exact, exact, exact |
+| crossing FIFO unbanked again | 26, 25, 23 | 1 wrong, at least 25 wrong, exact |
+| a connection on a path past the period at least 0.8 critical | –, –, 16 | 7,798 of 20,000 wrong (seed 4); seeds 2 and 3 stopped |
+| a clock read by a lookup table routed for delay | 24, –, 28 | exact (seeds 2 and 4) |
+| the fast FIFO's word from a register (`husky_fifo_registered`) | 28, 25, 24 | exact, 1,667 wrong, 1,667 wrong |
+
+* *Unbanked:* the crossing FIFO as one memory, which the double drivers
+  may have made look worse than it was. It is not better: seed 3 read
+  internal ramps at 220 MHz wrong by about 1,200 samples in each capture.
+* *A floor under late connections:* the criticality of every connection
+  on a path that misses its period raised to at least 0.8, so that the
+  ADC domain's paths do not weigh a twentieth of `hw_bb_trig`'s 9.5 ns
+  (which no test uses). The routes congested (3.2 million pips where
+  the others take 2.8) and seed 4 read the counter wrong in thousands of
+  samples at 220 MHz.
+* *Clocks read as data:* NewAE's glitch is two phase-shifted clocks ANDed
+  in a lookup table, and on seed 1 the route of one clock to that table
+  wandered through some thirty bounce wires of the interconnect tiles
+  while the other came off the clock network in one hop. A rule that
+  made such connections fully critical left the glitch width tests
+  failing as before (`test_glitch_output_sweep_width`, all three at
+  10 MHz), so their widths are not this, or not only this. Not
+  checked: whether the rule shortened that route.
+* *The fast FIFO's word from a register:* NewAE's gearbox takes each
+  sample from the stand-in's memory, two blocks of 1024 and a
+  multiplexer, through a table of its own, at 4.64 ns of 4. A standard
+  FIFO built from the fall-through one with a register on `dout`
+  (testbench checks: every word in order, one a cycle, `full` exact)
+  made both paths one step each, and two of three builds then read one
+  sample in six wrong at 250 MHz.
+
+The patches are not in the tree. What these builds share is
+placement: the gearbox, the analyser's capture registers and the crossing
+FIFO's write each spread over tens of columns, and the part has four
+block RAM columns (19, 94, 108, 128) nearly all in use, so the memories
+cannot come closer. NewAE's design builds the same way under Vivado.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
