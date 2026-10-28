@@ -647,12 +647,38 @@ impl Routing {
         placement: &Placement,
     ) -> Vec<String> {
         let mut problems = Vec::new();
+        let group = physical_nodes(graph);
         for signal in netlist.routable() {
             let name = &netlist.signals[signal].name;
             let Some(route) = self.route(signal) else {
                 problems.push(format!("`{name}` has a driver and sinks but no route"));
                 continue;
             };
+            // One piece of metal, one driver. The checks below are per graph
+            // node, and a 7-series long line is a graph node in every tile
+            // it crosses: a route that drives it at both ends passes them,
+            // and on the part the two drivers fight. See `Scratch::holds`.
+            let mut entries: HashMap<NodeId, usize> =
+                HashMap::from([(group[route.source as usize], 1)]);
+            for pip in &route.pips {
+                let pip = graph.pip(*pip);
+                let root = group[pip.to as usize];
+                if group[pip.from as usize] != root {
+                    *entries.entry(root).or_default() += 1;
+                }
+            }
+            let mut twice: Vec<NodeId> = entries
+                .into_iter()
+                .filter(|(_, count)| *count > 1)
+                .map(|(root, _)| root)
+                .collect();
+            twice.sort_unstable();
+            for root in twice {
+                problems.push(format!(
+                    "`{name}` drives {} from more than one place",
+                    graph.wire(root).full_name()
+                ));
+            }
             // Where each node came from, for this signal only.
             let mut driven: Vec<(NodeId, NodeId)> = Vec::new();
             for pip in &route.pips {
@@ -2088,6 +2114,10 @@ fn route_one(
             Vec::new(),
         ),
     };
+    scratch.new_tree();
+    for node in tree.keys() {
+        scratch.hold(&state.group, *node);
+    }
     let barred = !options
         .network_signals
         .get(signal)
@@ -2127,50 +2157,71 @@ fn route_one(
         // see `RouteOptions::network_pins`.
         let strict =
             (!barred && options.network_pins.get(sink.pin) == Some(&true)).then_some(source);
-        let mut path = None;
-        // A critical search that gives up is made again as an uncritical
-        // one: see `CRITICAL_SEARCH_BUDGET`.
-        let search = |scratch: &mut Scratch,
-                      seeds: &BTreeMap<NodeId, f64>,
-                      bounds: Option<Bounds>|
-         -> Option<Vec<PipId>> {
-            scratch.gave_up = false;
-            let found = maze(
-                graph, geometry, edges, state, scratch, seeds, sink.node, critical, present,
-                options, barred, strict, bounds,
-            );
-            if found.is_some() || !scratch.gave_up {
-                return found;
+        // A path that drives one piece of metal twice on its own is made
+        // again without that piece: see `Scratch::holds`, which keeps it
+        // off what the tree already drives.
+        let mut kept_off: Vec<NodeId> = Vec::new();
+        let path = loop {
+            let mut path = None;
+            // A critical search that gives up is made again as an uncritical
+            // one: see `CRITICAL_SEARCH_BUDGET`.
+            let search = |scratch: &mut Scratch,
+                          seeds: &BTreeMap<NodeId, f64>,
+                          bounds: Option<Bounds>|
+             -> Option<Vec<PipId>> {
+                scratch.gave_up = false;
+                let found = maze(
+                    graph, geometry, edges, state, scratch, seeds, sink.node, critical, present,
+                    options, barred, strict, bounds,
+                );
+                if found.is_some() || !scratch.gave_up {
+                    return found;
+                }
+                scratch.gave_up = false;
+                scratch.gave_ups += 1;
+                maze(
+                    graph, geometry, edges, state, scratch, seeds, sink.node, 0.0, present,
+                    options, barred, strict, bounds,
+                )
+            };
+            if let Some(near) = &near {
+                let seeds = near.seeds(geometry, &tree, sink.node, source, critical);
+                path = search(scratch, &seeds, bounds);
+                // A search from part of the tree may cross a tree node it was
+                // not started from, and taking that pip would give the node a
+                // second driver. What joins the sink to the tree is the path
+                // after the last tree node it reaches.
+                if let Some(found) = &mut path
+                    && let Some(last) = found
+                        .iter()
+                        .rposition(|pip| tree.contains_key(&graph.pip(*pip).to))
+                {
+                    found.drain(..=last);
+                }
             }
-            scratch.gave_up = false;
-            scratch.gave_ups += 1;
-            maze(
-                graph, geometry, edges, state, scratch, seeds, sink.node, 0.0, present, options,
-                barred, strict, bounds,
-            )
+            if path.is_none() {
+                path = search(scratch, &tree, bounds);
+            }
+            if path.is_none() && bounds.is_some() {
+                escaped = true;
+                bounds = None;
+                path = search(scratch, &tree, None);
+            }
+            match path {
+                Some(found) if kept_off.len() < SECOND_ENTRY_RETRIES => {
+                    match second_entry(graph, &state.group, &found) {
+                        Some(root) => {
+                            scratch.held[root as usize] = scratch.tree_mark;
+                            kept_off.push(root);
+                        }
+                        None => break Some(found),
+                    }
+                }
+                other => break other,
+            }
         };
-        if let Some(near) = &near {
-            let seeds = near.seeds(geometry, &tree, sink.node, source, critical);
-            path = search(scratch, &seeds, bounds);
-            // A search from part of the tree may cross a tree node it was
-            // not started from, and taking that pip would give the node a
-            // second driver. What joins the sink to the tree is the path
-            // after the last tree node it reaches.
-            if let Some(found) = &mut path
-                && let Some(last) = found
-                    .iter()
-                    .rposition(|pip| tree.contains_key(&graph.pip(*pip).to))
-            {
-                found.drain(..=last);
-            }
-        }
-        if path.is_none() {
-            path = search(scratch, &tree, bounds);
-        }
-        if path.is_none() && bounds.is_some() {
-            escaped = true;
-            bounds = None;
-            path = search(scratch, &tree, None);
+        for root in kept_off {
+            scratch.held[root as usize] = 0;
         }
         let Some(path) = path else {
             return Err(RouteError::Unroutable {
@@ -2188,6 +2239,7 @@ fn route_one(
             let pip_ = graph.pip(pip);
             let delay = tree.get(&pip_.from).copied().unwrap_or(0.0)
                 + f64::from(geometry[pip_.to as usize].delay);
+            scratch.hold(&state.group, pip_.to);
             if tree.insert(pip_.to, delay).is_none()
                 && let Some(near) = &mut near
             {
@@ -2206,6 +2258,30 @@ fn route_one(
         },
         escaped,
     ))
+}
+
+/// How many times one sink's search is made again for a path that
+/// drives one piece of metal twice; see [`second_entry`]. After that the
+/// path stands and [`Routing::verify`] refuses it.
+const SECOND_ENTRY_RETRIES: usize = 4;
+
+/// The first piece of metal ([`physical_nodes`]) that `path` drives
+/// twice, if any: two of its pips entering one physical node from outside
+/// it. See [`Scratch::holds`].
+fn second_entry(graph: &RoutingGraph, group: &[NodeId], path: &[PipId]) -> Option<NodeId> {
+    let mut entered: Vec<NodeId> = Vec::new();
+    for pip in path {
+        let pip = graph.pip(*pip);
+        let root = group[pip.to as usize];
+        if group[pip.from as usize] == root {
+            continue;
+        }
+        if entered.contains(&root) {
+            return Some(root);
+        }
+        entered.push(root);
+    }
+    None
 }
 
 /// The per-expansion arrays, reused across the sinks of one signal.
@@ -2235,6 +2311,13 @@ struct Scratch {
     gave_ups: u64,
     /// The signal being routed, for [`State::reserved_against`].
     signal: usize,
+    /// Per physical node ([`physical_nodes`]), [`Scratch::tree_mark`] when
+    /// the tree being built drives it: see [`Scratch::holds`].
+    held: Vec<u32>,
+    /// Per graph node, [`Scratch::tree_mark`] when it is a node of that tree.
+    in_tree: Vec<u32>,
+    /// Which tree [`Scratch::held`] and [`Scratch::in_tree`] are about.
+    tree_mark: u32,
 }
 
 impl Scratch {
@@ -2253,7 +2336,47 @@ impl Scratch {
             gave_up: false,
             gave_ups: 0,
             signal: 0,
+            held: vec![0; nodes],
+            in_tree: vec![0; nodes],
+            tree_mark: 0,
         }
+    }
+
+    /// Starts a new tree: nothing is held.
+    fn new_tree(&mut self) {
+        self.tree_mark = self.tree_mark.wrapping_add(1);
+        if self.tree_mark == 0 {
+            self.held.fill(0);
+            self.in_tree.fill(0);
+            self.tree_mark = 1;
+        }
+    }
+
+    /// Files `node` as part of the tree, and its piece of metal as driven.
+    fn hold(&mut self, group: &[NodeId], node: NodeId) {
+        self.in_tree[node as usize] = self.tree_mark;
+        self.held[group[node as usize] as usize] = self.tree_mark;
+    }
+
+    /// Whether a pip from `from` into `to` would drive, a second time, a
+    /// piece of metal the tree already drives.
+    ///
+    /// A 7-series long line is one wire with a name in every tile it
+    /// crosses, and its two ends are both inputs: `LV0` at one end and
+    /// `LV18` eighteen rows away. A high-fanout search starts from part of
+    /// its tree ([`NearTree`]), and on the Husky Plus one such search for
+    /// the write data's bit 2 found `LV18` free while the tree already
+    /// drove the line at `LV0`, so it drove it again from a branch that
+    /// had itself come off that line: two drivers on one wire, one fed
+    /// from the other. Every register written through that line read the
+    /// bit as a one whatever was written. Entering a tree node itself is
+    /// not this: the path is cut there (see `route_one`), and the line's
+    /// own joins (`group[from] == group[to]`) drive nothing.
+    fn holds(&self, group: &[NodeId], from: NodeId, to: NodeId) -> bool {
+        let root = group[to as usize];
+        self.held[root as usize] == self.tree_mark
+            && group[from as usize] != root
+            && self.in_tree[to as usize] != self.tree_mark
     }
 
     fn start(&mut self) {
@@ -2688,6 +2811,9 @@ fn maze(
                 && !geometry[node as usize].reserved
                 && !graph.pip_bits(*pip).is_empty()
             {
+                continue;
+            }
+            if scratch.holds(&state.group, node, *next) {
                 continue;
             }
             let at = &geometry[*next as usize];
@@ -4973,6 +5099,217 @@ mod tests {
         routing.routes[0] = None;
         let problems = routing.verify(&netlist, &graph, &placement);
         assert!(problems[0].contains("no route"), "{problems:?}");
+    }
+
+    /// A row of tiles whose `long` wires are one piece of metal (joined
+    /// both ways with no bits, as the 7-series loader joins a long line)
+    /// and whose `hop` wires each reach the next tile through a switch.
+    /// A source drives either; `long` and `hop` switch onto each other in
+    /// every tile; a sink is reached from `long` alone. So a branch can
+    /// leave the line on `hop` and come back onto it further along, which
+    /// is the shape [`Scratch::holds`] is about.
+    fn looping_line(tiles: u32) -> RoutingGraph {
+        let mut arch = Arch::new("loop", "test", tiles, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["long", "hop", "out0", "in0"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut src = BelDecl::new("src0", "lut");
+        src.pins.push(("o".to_owned(), WireRef::local("out0")));
+        tile.bels.push(src);
+        let mut dst = BelDecl::new("dst0", "ff");
+        dst.pins.push(("d".to_owned(), WireRef::local("in0")));
+        tile.bels.push(dst);
+        let mut bit = 0u32;
+        let mut next = || {
+            let at = ConfigBit::new(bit / 8, bit % 8);
+            bit += 1;
+            vec![at]
+        };
+        for (from, to) in [
+            ("out0", "long"),
+            ("out0", "hop"),
+            ("long", "hop"),
+            ("hop", "long"),
+            ("long", "in0"),
+        ] {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: next(),
+            });
+        }
+        for dx in [-1, 1] {
+            tile.pips.push(PipDecl {
+                from: WireRef::at("long", dx, 0),
+                to: WireRef::local("long"),
+                bits: Vec::new(),
+            });
+            tile.pips.push(PipDecl {
+                from: WireRef::at("hop", dx, 0),
+                to: WireRef::local("hop"),
+                bits: next(),
+            });
+        }
+        arch.tile_types.push(tile);
+        for x in 0..tiles {
+            arch.set_tile(x, 0, 0);
+        }
+        arch.build_graph()
+    }
+
+    fn node_named(graph: &RoutingGraph, name: &str, x: u32) -> NodeId {
+        graph
+            .nodes
+            .iter()
+            .position(|w| w.name == name && w.tile == (x, 0))
+            .map(|n| NodeId::try_from(n).unwrap())
+            .unwrap()
+    }
+
+    fn pip_between(graph: &RoutingGraph, from: NodeId, to: NodeId) -> PipId {
+        *graph
+            .outgoing(from)
+            .iter()
+            .find(|p| graph.pip(**p).to == to)
+            .expect("a pip between them")
+    }
+
+    /// **A search does not drive again a wire its tree already drives.**
+    /// The tree drives the long line in tile 0 and has run `hop` out to
+    /// tile 3; a search for the sink in tile 3 started from that end of
+    /// `hop` alone, as a high-fanout search starts from the tree near its
+    /// sink, could switch `hop` back onto the line there, and the line
+    /// would have two drivers, one fed from the other. That is what put a
+    /// stuck one into every register a Husky Plus build wrote through one
+    /// long line. Seeded so, and from the whole tree, every switch onto the
+    /// line must land on a node of the tree, where `route_one` cuts the
+    /// path. Would catch the check in `maze` dropped (the seeded search
+    /// switches `hop` onto the line in tile 3) or a tree whose metal is not
+    /// marked; would not catch a path that drives one wire twice on its
+    /// own, which `second_entry` is for.
+    #[test]
+    fn a_search_does_not_drive_again_a_wire_its_tree_drives() {
+        let graph = looping_line(4);
+        let geometry = Geometry::of(&graph, &[], &[], None);
+        let state = State::new(physical_nodes(&graph));
+        let mut reach_start = Vec::new();
+        let mut reach = Vec::new();
+        for node in 0..graph.nodes.len() {
+            reach_start.push(u32::try_from(reach.len()).unwrap());
+            for pip in graph.outgoing(NodeId::try_from(node).unwrap()) {
+                reach.push(graph.pip(*pip).to);
+            }
+        }
+        reach_start.push(u32::try_from(reach.len()).unwrap());
+        let mut scratch = Scratch::new(graph.nodes.len());
+        let source = node_named(&graph, "out0", 0);
+        let mut tree: BTreeMap<NodeId, f64> = BTreeMap::new();
+        for node in [
+            source,
+            node_named(&graph, "long", 0),
+            node_named(&graph, "hop", 0),
+            node_named(&graph, "hop", 1),
+            node_named(&graph, "hop", 2),
+            node_named(&graph, "hop", 3),
+        ] {
+            tree.insert(node, 0.0);
+        }
+        scratch.new_tree();
+        for node in tree.keys() {
+            scratch.hold(&state.group, *node);
+        }
+        let sink = node_named(&graph, "in0", 3);
+        let options = RouteOptions::default();
+        let search = |scratch: &mut Scratch, seeds: &BTreeMap<NodeId, f64>| {
+            maze(
+                &graph,
+                &geometry,
+                (&reach_start, &reach),
+                &state,
+                scratch,
+                seeds,
+                sink,
+                0.0,
+                1.0,
+                &options,
+                true,
+                None,
+                None,
+            )
+        };
+        let long = state.group[node_named(&graph, "long", 0) as usize];
+        // Onto the line only where the tree already is: a tree node is
+        // where `route_one` cuts the path, so it adds no driver.
+        let enters_only_the_tree = |path: &[PipId]| {
+            for pip in path {
+                let pip = graph.pip(*pip);
+                if state.group[pip.to as usize] == long && state.group[pip.from as usize] != long {
+                    assert!(
+                        tree.contains_key(&pip.to),
+                        "{} drives the line again",
+                        graph.wire(pip.from).full_name()
+                    );
+                }
+            }
+            assert_eq!(graph.pip(*path.last().unwrap()).to, sink);
+        };
+        let near = BTreeMap::from([(node_named(&graph, "hop", 3), 0.0)]);
+        enters_only_the_tree(&search(&mut scratch, &near).expect("a path"));
+        let whole = search(&mut scratch, &tree).expect("a path along the line");
+        enters_only_the_tree(&whole);
+    }
+
+    /// **A route that drives one wire from two places is refused.** Off
+    /// the long line onto `hop`, along it a tile, and back onto the line:
+    /// every node of it has one driver and the sink is reached, so the
+    /// per-node checks pass, and on the part the line is driven twice.
+    /// `second_entry` finds it in the path and `verify` in the route.
+    /// Would catch either check counting graph nodes rather than physical
+    /// ones (each entry is into a different node of the line), or `verify`
+    /// not counting the source's own wire. Would not catch a router that
+    /// makes such a path and retries no more, since this route is built by
+    /// hand.
+    #[test]
+    fn one_wire_driven_from_two_places_is_refused() {
+        let graph = looping_line(3);
+        let netlist = pairs(1);
+        let placement = place_in_order(&netlist, &graph, &[0, 1]);
+        let (mut routing, _) =
+            route(&netlist, &graph, &placement, &RouteOptions::default()).unwrap();
+        assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+        let hops = [
+            ("out0", 0, "long", 0),
+            ("long", 0, "hop", 0),
+            ("hop", 0, "hop", 1),
+            ("hop", 1, "long", 1),
+            ("long", 1, "in0", 1),
+        ];
+        let pips: Vec<PipId> = hops
+            .iter()
+            .map(|(a, x, b, y)| {
+                pip_between(&graph, node_named(&graph, a, *x), node_named(&graph, b, *y))
+            })
+            .collect();
+        let group = physical_nodes(&graph);
+        let long = group[node_named(&graph, "long", 0) as usize];
+        assert_eq!(second_entry(&graph, &group, &pips), Some(long));
+        assert_eq!(second_entry(&graph, &group, &pips[..3]), None);
+        let route = routing.routes[0].as_mut().unwrap();
+        route.nodes = std::iter::once(route.source)
+            .chain(pips.iter().map(|p| graph.pip(*p).to))
+            .collect();
+        route.pips = pips;
+        let problems = routing.verify(&netlist, &graph, &placement);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("from more than one place"),
+            "{problems:?}"
+        );
     }
 
     #[test]

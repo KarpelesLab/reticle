@@ -29,6 +29,7 @@ examples/husky/
   usr_accesse2.v      USR_ACCESSE2, which reads the build time: here, zero
   build_plus.sh       the Husky Plus: cwhusky_plus.xpr's files and defines, an XC7A100T
   probe/              a small design on NewAE's USB bus, and the script that checks it on a part
+  regsweep.py         writes and reads back every bit of ten registers of whatever is loaded
   xpm_memory_sdpram.v Vivado's simple dual-port RAM macro, as NewAE's own FIFOs use it
   sim/                NewAE's own testbench in Reticle's simulator: models of the
                       Xilinx primitives and cells, and the scripts that run

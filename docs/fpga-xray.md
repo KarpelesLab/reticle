@@ -4700,7 +4700,7 @@ own bitstream passes 35 of.
 | IL1 | interleaved | not reached | not reached | 16 |
 | IL2 | interleaved | exact | 1,016 wrong | 23 |
 | IL3 | interleaved | exact | 13 wrong | 21 |
-| IL4 | interleaved | exact | exact | none: the suite stopped at its first test, the trigger I/O register read back as 6 |
+| IL4 | interleaved | exact | exact | none: the suite stopped at its first test, the trigger I/O register read back as 6 (a routing fault: "One wire, two drivers" below) |
 | IL5 | interleaved | exact | exact | 31 |
 
 IL5 failed nothing of the ADC's or the logic analyser's: its nine
@@ -4713,6 +4713,75 @@ IL5 is one build of five, and IL1 read 1,000-sample ramps wrong
 and never returned a 30,000-sample capture with nothing late in its
 routed estimate — a fault this flow's model does not see. What decides
 a build is still its placement, not its design.
+
+### One wire, two drivers: a long line driven from both ends (2026-10-28)
+
+The fourth interleaved build (IL4 above) could not start NewAE's suite:
+its first read of the trigger I/O modes returned 6, which is no mode.
+Writing patterns into the registers and reading them back
+(`examples/husky/regsweep.py`: every bit of ten plain read/write
+registers, in seconds rather than the suite's 25 minutes) found
+bit 2 of the bus wrong in five bytes of `ECHO` and one of `CW_IOROUTE`,
+and in only one direction: a written zero read back as a one, a written
+one as a one. It did not depend on the neighbouring bytes or on what
+was written, and `CW_IOROUTE`'s reset value read back right until it was
+written. So the registers were storing a one, not the read path showing one.
+
+Each of those registers' bit 2 takes the write data's bit 2
+(`usb_reg_main`'s `reg_datao[2]`) straight into `D` through the
+slice's bypass input. The slices were configured as they should be
+(set and reset kinds matching each byte's reset value, `<L>5FFMUX.IN_B`
+and so on), and an identical `A5FF` passed in one slice and failed in
+another. What separated them was the route: `reg_datao[2]` is one net
+of 9,901 pips, and every failing register, and no passing one, hung
+from one branch of it. That branch drove the long vertical line in
+column 27 at its bottom end (`INT_R_X27Y111`, `LV0` from `WR1END0`) and
+read it at its middle (`INT_R_X27Y120`, `LV9`). Fifty-nine wires further
+on, another branch came back to the line's top end (`INT_R_X27Y129`) and
+drove it again (`LV18` from `WR1END0`), only to step off it in the same
+tile. So one piece of metal had two drivers, one fed from the other
+through the line itself: a loop that holds a one once it has one. Every
+pip on both branches is a kind Vivado uses in NewAE's image, and the
+image decodes back to exactly the router's arcs, so nothing here was
+checked against was wrong. The model let the router drive one wire twice.
+
+The router keeps a long line as one physical node (`physical_nodes`)
+for pricing congestion and for `shorts`, which refuses two *signals*
+on one. Nothing refused one signal driving one physical node twice.
+`verify` checks drivers per graph node, and the line is a graph node in
+every tile. And a net of more than 64 sinks searches from the part of its
+tree near each sink (`NearTree`). So the search for a register near the
+line's top end started from tree nodes near there, did not include the
+line's `LV0`..`LV9` (driven, but far), and found `LV18` free.
+`route_one` already cut a path where it crossed a tree *node* it had not
+started from. It did not know that `LV18` was the same wire as the
+`LV0` the tree drove.
+
+Now (`route.rs`, `Scratch::holds`): the search never switches onto a
+piece of metal its tree already drives, except at a tree node itself,
+where the path is cut. Riding along the wire on its own joins drives
+nothing and is still allowed. A path that drives one wire twice by itself
+is searched again without that wire (`second_entry`, four times at
+most). And `verify` refuses any route that enters one physical node at
+two places, counting the source's own wire, so a build where this
+happens anyway stops rather than ships.
+
+Measured: the same sources at the same seed, rebuilt with the fix (and
+in 20 minutes), read every bit of the ten registers back as written, and
+passed 27 of NewAE's 40 tests where the build without it passed none.
+The ramps were exact at every length, the ADC clean from 20 to 220 MHz, and
+the ADC's own pattern exact at 20 and 250 MHz. What it failed is what the
+other builds fail: the ramps at the ADC's top rate, the ADC reset, the
+glitch widths and offsets, and one PLL setting.
+
+It is not the fault of every build that failed this way. Seed 1 (IL1
+above) rebuilt with the fix also reads its registers right, and still
+reads its captures wrong: the ADC's `0xaaa` came back as `0xeaa`, bit 10
+set, in 415 samples of 20,000 at 20 MHz and 730 at 250 MHz, and it passed
+19 tests. That is the same signature (a one where a zero was) somewhere
+in the capture path, and not yet traced. The failure on one build in two
+of 2026-10-27 (bits set that the ramp had clear, never one cleared) has it
+too and was put down to timing; it was not traced either.
 
 ## What remains before an LED could light
 
