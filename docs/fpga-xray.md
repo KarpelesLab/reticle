@@ -4293,6 +4293,15 @@ fits: this router does not pad a short path, and a register's clock in
 one region can arrive after a short path's data from another. Not
 measured. Both rewrites stay in the tree and off.
 
+*That reading was wrong* (2026-10-28, below): the captures of those
+builds broke where every build's broke then, in the stand-in slow FIFOs'
+read, whatever else the build changed, and no hold race was ever found.
+With that read given two cycles, `compare_in_lanes` at 16 bits read every
+test ramp back exact on three seeds and passed more of NewAE's tests than
+without it, and it is on by default. One of those builds also gave the
+logic analyser's capture-length probe (`hw/lalen.py`) exactly master's
+counts, where V1 had been one cycle long.
+
 **Pairing fewer lookup tables, not adopted.** On the Plus a path of the
 ADC domain went from a flip-flop at (52, 56) to a lookup table at (30, 97)
 and back, 10 ns. The table was half of a `LUT6_2`. `xray::pack_lut_pairs`
@@ -4541,6 +4550,7 @@ registering each segment's word.
 |---|---|---|---|---|---|
 | 1 | 696 s | 113 | 36 of 36 | 12 of 12 | 27 |
 | 2 | did not settle its clocks; placed again with seed 3 | — | — | — | — |
+| 2, built again with the clock check fixed (below) | 524 s | 55 | 36 of 36 | 10 of 12, two at 220 MHz wrong | 26 |
 | 3 | 521 s | 83 | 36 of 36 | 12 of 12 | 24 |
 
 Seed 2's route converged, with five clock pins a global buffer drives
@@ -4558,6 +4568,25 @@ but not the same 24 — `test_glitch_output_sweep_width` at 100 MHz passed
 only the first time and `test_pll` at 15 MHz only the second (NewAE's
 own bitstream fails that one). A test or two of any count here is noise.
 Measured on the part with `hw/eval2.sh`.
+
+### Equalities in lanes, measured again (2026-10-28)
+
+`MapOptions::min_compare_lane_width` is 16 now: an equality of sixteen
+bits or more against a sum or a difference is compared in kept lanes of
+three bit pairs and a tree of their AND. On the Husky Plus that is seven
+compares, among them the logic analyser's `capture_count == capture_depth
+- 1`, which mapped as it comes was sixteen lookup tables in a row.
+
+| seed | without | with lanes at 16 | latest logic-analyser path, without / with | routed, with |
+|---|---|---|---|---|
+| 1 | 27 | 29 | 8.6 / 6.0 ns | 1,422 s |
+| 2 | 26 | 28 | 8.1 / 5.6 ns | 493 s |
+| 3 | 24 | 26 | 7.6 / 5.8 ns | 743 s |
+
+NewAE's tests passed, of the 40 the harness runs, on master's sources with
+every change above; every test ramp exact on all six builds, and the ADC
+ramp exact to 220 MHz on seed 1 with lanes. NewAE's own bitstream passes
+35 of the same 40.
 
 ## What remains before an LED could light
 

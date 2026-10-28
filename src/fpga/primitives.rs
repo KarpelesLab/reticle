@@ -208,7 +208,18 @@ pub struct MapOptions {
     pub min_compare_carry_width: u32,
     /// The narrowest equality against a sum or a difference compared in
     /// kept three-bit-pair lanes and a tree of their AND
-    /// (`compare_in_lanes`); `u32::MAX` puts none there.
+    /// (`compare_in_lanes`); `u32::MAX` puts none there. Sixteen bits by
+    /// default.
+    ///
+    /// **Measured on the Husky Plus** (2026-10-28), at 16 bits against
+    /// none, master's sources and seeds 1 to 3 each way: the logic
+    /// analyser's latest path 5.6 to 6.0 ns against 7.6 to 8.6 (its
+    /// `capture_count == capture_depth - 1` was sixteen tables in a row),
+    /// every test ramp exact on all six, and 29, 28 and 26 of NewAE's
+    /// tests against 27, 26 and 24. It had been left off because builds
+    /// with it read ramps back wrong (2026-10-27), and so then did every
+    /// build whatever it changed: the stand-in slow FIFOs' read, since
+    /// given two cycles, was what those had in common.
     pub min_compare_lane_width: u32,
 }
 
@@ -227,7 +238,7 @@ impl Default for MapOptions {
             min_carry_width: 4,
             min_subtract_carry_width: u32::MAX,
             min_compare_carry_width: u32::MAX,
-            min_compare_lane_width: u32::MAX,
+            min_compare_lane_width: 16,
         }
     }
 }
