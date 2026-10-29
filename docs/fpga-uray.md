@@ -1111,6 +1111,42 @@ can be on, the flow needs the skew between `PL_CLK0` at the fabric's
 flip-flops and at `PL_GP2_CLOCKIN`, measured, and a minimum delay on
 every path to a processor input.
 
+### A safety net: the AXI timeout block
+
+Three hangs in a week, each needing someone to switch the board off and
+on, are what this is for. **Checked on the board, 2026-10-29:**
+
+- **The watchdog does not help as the image is set up.** Linux has
+  both of the processor's system watchdogs, and the device tree marks
+  the full-power-domain one (`0xFD4D_0000`) `reset-on-timeout`. Armed
+  and left to expire, its registers showed it had (`ZMR` `0x33`,
+  `STS` 1) and the board ran on for 90 s. Its reset goes to the
+  platform management unit's error logic, which by AMD's documentation
+  acts on it only if told to; the registers that tell it
+  (`PMU_GLOBAL` at `0xFFD8_0000`) raise a bus error when Linux reads
+  them, so that cannot be changed from here.
+- **The AXI timeout block does.** `LPD_SLCR` (`0xFF41_6000`) has one in
+  front of `M_AXI_HPM0_LPD`. Its registers read exactly the reset
+  values AMD's register reference gives: transactions already tracked,
+  `SLVERR` already the response type, the response itself off. Turning
+  the response on for bit 1 and the prescaler on (value 9; by the
+  documentation's formula, which this did not measure, about 13 ms at a
+  100 MHz bus clock), then loading a slave built to accept every
+  address and never answer: **a read from Linux came back as a bus
+  error, the program died, and the board did not.** The block's status
+  register recorded the timeout. Five in a row did the same, and the
+  base overlay's LEDs worked afterwards.
+
+What is quoted rather than checked: that bit 1 is this port (the
+register page names it `afifs2`; the experiment above agrees), the
+timeout's length, and AMD's advice to configure it at boot with the
+port idle and to treat a timeout as needing a restart, which five
+in a row here did not need. A write that times out is reported to the
+processor asynchronously and may be fatal to the kernel; only reads
+were tried. And it catches only a transaction that is never answered:
+a slave that answers with the wrong data, as the hold-time failures
+above did, gets past it.
+
 ## What remains, in order
 
 1. **More of the slice**: the carry chain, for adders that are not
