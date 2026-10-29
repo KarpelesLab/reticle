@@ -6,6 +6,8 @@
 # an FDRE with its clock, enable and reset driven from Linux, through
 # load, capture, hold and synchronous reset; and 32-stage ripple counters
 # of FDREs and inverters at 100 and 300 MHz on the processor's clocks.
+# On 2026-10-30, an FDRE_1 (the same flip-flop with its half-slice's
+# clock inverted), clocked by hand, loading on the falling edge only.
 # On 2026-10-15, an AXI slave on M_AXI_HPM0_LPD, read and written by
 # Linux at 0x8000_0000, at 100 MHz once every pin from the processor is registered
 # before logic reads it (docs/fpga-uray.md).
@@ -53,6 +55,10 @@ device xczu7ev-ffvc1156
   bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel IBUF io for in port pad=I din=O
   bel OBUF io for out port pad=O dout=I
   pin PL_CLK0 clock

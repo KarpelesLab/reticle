@@ -472,12 +472,14 @@ mod tests {
                 device.name
             );
             // The shapes every synthesised design produces. UltraScale+
-            // declares only the rising-edge, synchronous-reset `FDRE`
-            // that has run on a ZCU104 (`devices/uray.dev`): a design that
+            // declares only the synchronous-reset `FDRE` and `FDRE_1`
+            // that have run on a ZCU104 (`devices/uray.dev`): a design that
             // needs another is refused at mapping rather than placed on a
             // flip-flop whose bits no part has confirmed.
             if device.family == "uray" {
-                for has_enable in [false, true] {
+                for (clk_pos, has_enable) in
+                    [(true, false), (true, true), (false, false), (false, true)]
+                {
                     for reset in [
                         None,
                         Some(FfReset {
@@ -487,7 +489,7 @@ mod tests {
                         }),
                     ] {
                         let variant = FfVariant {
-                            clk_pos: true,
+                            clk_pos,
                             has_enable,
                             enable_active_high: true,
                             reset,

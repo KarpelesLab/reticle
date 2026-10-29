@@ -567,6 +567,40 @@ flip-flops (`AFF2`), the other letters, the lookup table path
 (`FFMUXA1.SP.D6.OUT1`) and which flip-flops share a clock enable are
 still readings of the database, not measurements.
 
+### On the falling edge
+
+**Run on the ZCU104 on 2026-10-30, and it loaded on the falling edge
+only.**
+
+The database has one clock inverter per half-slice:
+`CLK1.IS_C_INVERTED[0]` is bit `08_019` for `A`–`D` and `CLK2`'s is
+`08_029` for `E`–`H`. The same bit is also filed under `C_LEVEL=0` and
+`G_LEVEL=1`, the latch's names for it. `uray::slice` models an `FDRE_1`
+as the `FDRE`'s bits plus that one. Because the bit is shared, an
+`FDRE_1` cannot sit in a half-slice beside an `FDRE`. The placer's
+`slice_mode` already refuses that pairing, as it does for 7-series
+`CLKINV`.
+
+`one_falling_flip_flop` is `one_flip_flop` with that feature added. Its
+bitstream has exactly one more set bit (467,423 against 467,422).
+A script on the board drives `AX` and `CLK1` from Linux and reads `Q` after
+each edge separately. Both bitstreams were run, the rising one as the
+control:
+
+| step | `FDRE` Q | `FDRE_1` Q |
+|---|---|---|
+| after the load | 0 | 0 |
+| D=1, rising edge | 1 | 0 |
+| D=1, falling edge | 1 | 1 |
+| D=0, rising edge | 0 | 1 |
+| D=0, falling edge | 0 | 0 |
+| D=1, rising edge | 1 | 0 |
+| D=1, falling edge | 1 | 1 |
+
+`CLK2`'s bit and the inverter's effect on `AFF2` and the other letters
+are readings of the database, not measurements. Whether Vivado's own
+bitstreams use the bit has not been looked at.
+
 ## The processor's clocks, found by counting them
 
 ### What the databases do not say

@@ -194,7 +194,9 @@ pub struct SliceModel {
 /// did in the counters that ran on the part. Its clock is the slice's clock
 /// pin; its enable and reset are its group's wire. An `FDRE` sets the
 /// bypass select, the group's synchronous bit and its reset value of zero,
-/// and its `INIT` of zero sets `FFINIT=INIT0`.
+/// and its `INIT` of zero sets `FFINIT=INIT0`. An `FDRE_1` is the same
+/// with the clock pin's `IS_C_INVERTED` as well, which is one bit for all
+/// eight flip-flops of the half-slice.
 ///
 /// # Errors
 ///
@@ -324,9 +326,18 @@ pub fn slice_model(
                 let mut fdre = need(&format!("FFMUX{letter}{n}.SP.BYP.OUT{n}"))?;
                 fdre.extend(need(&format!("{name}.FFSR=SRLOW"))?);
                 fdre.extend(sync.iter().copied());
+                // The same flip-flop on the falling edge: the half-slice's
+                // clock inverter, which every flip-flop on that clock pin
+                // shares (the placer's `slice_mode` keeps an `FDRE` out).
+                let mut falling = fdre.clone();
+                falling.extend(need(&format!("{clock}.IS_C_INVERTED[0]"))?);
                 ff.config.push(ConfigEntry::Cell {
                     primitive: "FDRE".to_owned(),
                     bits: fdre,
+                });
+                ff.config.push(ConfigEntry::Cell {
+                    primitive: "FDRE_1".to_owned(),
+                    bits: falling,
                 });
                 for at in need(&format!("{name}.FFINIT=INIT0"))? {
                     ff.config.push(ConfigEntry::ParamZero {

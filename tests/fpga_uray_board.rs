@@ -82,6 +82,30 @@ fn emio_loopback() {
 #[test]
 #[ignore = "writes a bitstream for the board"]
 fn one_flip_flop() {
+    flip_flop("one_flip_flop", &[]);
+}
+
+/// [`one_flip_flop`] with `CLK1.IS_C_INVERTED` set as well: an `FDRE_1`,
+/// which `uray::slice` models as exactly that.
+///
+/// What this checks is the edge, and only on the part: with Linux driving
+/// EMIO 2 by hand, `AQ` must ignore every rising edge and take `AX` on the
+/// falling one (`docs/fpga-uray.md`, "On the falling edge"). A wrong bit would show as the rising-edge
+/// flip-flop, or as one that never loads. It does not check that the
+/// placer keeps an `FDRE` out of a half-slice whose clock is inverted;
+/// `slice_mode` in the placer does that, for every family alike.
+#[test]
+#[ignore = "writes a bitstream for the board"]
+fn one_falling_flip_flop() {
+    flip_flop(
+        "one_falling_flip_flop",
+        &["SLICE_X0Y0.CLK1.IS_C_INVERTED[0]"],
+    );
+}
+
+/// The flip-flop of [`one_flip_flop`], with `extra` features on its slice,
+/// written as `name`.
+fn flip_flop(name: &str, extra: &[&str]) {
     let (Some(bits), Some(wiring), Some(out)) = (uraydb(), wiringdb(), out_dir()) else {
         return;
     };
@@ -118,14 +142,13 @@ fn one_flip_flop() {
         "SLICE_X0Y0.AFF.SYNC_ATTR=SYNC",
         "SLICE_X0Y0.AFF.FFINIT=INIT0",
         "SLICE_X0Y0.AFF.FFSR=SRLOW",
-    ] {
+    ]
+    .iter()
+    .chain(extra)
+    {
         board.feature(slice, feature).unwrap();
     }
-    write(
-        &board.finish("one_flip_flop").unwrap(),
-        &out,
-        "one_flip_flop",
-    );
+    write(&board.finish(name).unwrap(), &out, name);
 }
 
 /// Which leaf sites of the `RCLK_INT_L` tile `tile` Vivado fed from
