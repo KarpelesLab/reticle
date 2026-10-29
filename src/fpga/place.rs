@@ -2512,7 +2512,10 @@ pub fn place(
         positions = global;
         spread
     };
-    let outside = legalise(
+    // Cells a region confines are seated among the rest, by target, and
+    // only if that leaves one of them no site are they seated first:
+    // see `legalise`.
+    let outside = match legalise(
         netlist,
         graph,
         &info,
@@ -2521,7 +2524,24 @@ pub fn place(
         &sites_by_kind,
         &shared,
         &mut placement,
-    )?;
+        false,
+    ) {
+        Err(PlaceError::RegionTooSmall { .. }) => {
+            placement = Placement::new(netlist.instances.len(), graph.sites.len());
+            legalise(
+                netlist,
+                graph,
+                &info,
+                &macros,
+                &positions,
+                &sites_by_kind,
+                &shared,
+                &mut placement,
+                true,
+            )?
+        }
+        other => other?,
+    };
     report.outside_budget = outside
         .iter()
         .map(|i| netlist.instances[*i].name.clone())
@@ -5094,6 +5114,7 @@ fn legalise(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     shared: &SiteRules,
     placement: &mut Placement,
+    regions_first: bool,
 ) -> Result<Vec<usize>, PlaceError> {
     // The cells seated outside the sites they were held to for time.
     let mut outside: Vec<usize> = Vec::new();
@@ -5108,11 +5129,15 @@ fn legalise(
     // after the cells confined to a few sites, fewest first, which a cell
     // free to go anywhere would otherwise take from them: the Husky Plus's
     // bus registers, kept by `confine_to_input_budget` to the sixteen
-    // flip-flop sites nearest their pads, found them all taken. And after
-    // those, the cells a region confines, for the same reason: the Husky
-    // Plus's shared FIFO, its 16 block RAMs given a region of 52 block RAM
-    // sites on a part whose block RAMs are nearly all in use, found every
-    // one of them taken by block RAMs free to go anywhere.
+    // flip-flop sites nearest their pads, found them all taken. With
+    // `regions_first`, the cells a region confines come next, for the same
+    // reason: the Husky Plus's shared FIFO, its 16 block RAMs given a region
+    // of 52 block RAM sites on a part whose block RAMs are nearly all in
+    // use, found every one of them taken by block RAMs free to go anywhere.
+    // Not always: seated first, the logic analyser's region on the same
+    // board, which had room to spare, placed worse on the part (24 tests
+    // of NewAE's 40 on average over five seeds, against 27.8), so `place`
+    // asks for it only when the usual order leaves a region's cell no site.
     let mut order: Vec<usize> = (0..netlist.instances.len())
         .filter(|i| info[*i].fixed.is_none() && info[*i].macro_index.is_none())
         .collect();
@@ -5120,7 +5145,7 @@ fn legalise(
         let (x, y) = positions[*i];
         (
             info[*i].allowed.as_ref().map_or(usize::MAX, Vec::len),
-            info[*i].region.is_none(),
+            regions_first && info[*i].region.is_none(),
             to_grid(y, graph.height),
             to_grid(x, graph.width),
             netlist.instances[*i].name.clone(),
@@ -8363,14 +8388,17 @@ mod tests {
         assert!(err.to_string().contains("region `corner` holds 4"));
     }
 
-    /// **A region's cells are seated before cells free to go anywhere.**
-    /// Every site of a 6 by 6 grid taken, and six of the cells held to a
-    /// corner of six sites: it places, the six in the corner. Seated by
-    /// target position alone, cells with no region took corner sites first
-    /// and the region's own found none, which stopped the Husky Plus's build
-    /// with its shared FIFO's block RAMs given a region three times their
-    /// number. Would catch that order back; would not catch a region of
-    /// one kind of site filled by another kind, which cannot happen.
+    /// **A region's cells are seated first when the usual order leaves them
+    /// no site.** Every site of a 6 by 6 grid taken, and six of the cells
+    /// held to a corner of six sites: it places, the six in the corner.
+    /// Seated by target position alone, cells with no region take corner
+    /// sites first and the region's own find none, which stopped the Husky
+    /// Plus's build with its shared FIFO's block RAMs given a region three
+    /// times their number; `place` then seats again with the region's cells
+    /// first. Would catch that second attempt dropped or made the same as
+    /// the first; would not catch the first attempt made region-first
+    /// always, which places this as well (and which placed the Husky Plus's
+    /// logic analyser worse, measured on the part, not here).
     #[test]
     fn a_regions_cells_are_seated_before_free_ones() {
         use crate::fpga::{Origin, Region, RegionAssignment};
@@ -10638,6 +10666,7 @@ mod tests {
             &sites_by_kind,
             &shared,
             &mut placement,
+            false,
         )
         .expect("two clocks fit two slices");
         let tile = |i: usize| graph.sites[placement.site_of(i).unwrap()].tile;
@@ -10694,6 +10723,7 @@ mod tests {
                 &sites_by_kind,
                 &shared,
                 &mut placement,
+                false,
             )
             .map(|outside| (outside, placement))
         };

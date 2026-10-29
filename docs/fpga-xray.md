@@ -4982,9 +4982,22 @@ and flags change at most every second edge.
 | and the `BUFGMUX` timed | – | 22 | – | 23 | 22 | |
 | and the FIFO's write side two periods | 27 | 30 | 24 | 31 | 27 | 27.8 |
 | and clocks read by tables routed for delay | – | 30 | – | 25 | 23 | |
+| and the shared FIFO in a region at block RAM column 94, beside the analyser's | – | 10 | – | 17 | 16 | |
 
-The last row is the clocks-as-data rule of the tries above, retried now
-that analysers measure: it did no better. The kept row is a little better
+The fourth row is the clocks-as-data rule of the tries above, retried now
+that analysers measure: it did no better. The last moved both the
+analyser's region and the shared FIFO's (16 block RAMs, the analyser
+writing all of them at 400 MHz) to column 94, so that the write would not
+cross the die; the routes congested and the results were the worst of
+any. That build needed the placer to seat a region's cells before free
+ones, which it did not (`place::legalise`): its block RAMs found every
+site of a region of 52 taken by block RAMs no region held. That is fixed,
+and the experiment is not kept. The fix seated every region's cells first
+at first (`d854b85`), and master so built passed 23, 25, 24, 24 and 24:
+the analyser's region, which has room to spare, placed worse seated ahead
+of everything. Now a region's cells go first only when the usual order
+leaves one of them no site, and seed 4 so built is bit for bit the build
+of the third row, which therefore stands for master. The kept row is a little better
 and steadier than the region alone, by less than seeds move on their own.
 The change is kept for what it fixes in the model, and the numbers are why
 it is not given more credit than that. Of the five, only seed 2's analyser
