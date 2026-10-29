@@ -1495,13 +1495,38 @@ impl Constraints {
     }
 }
 
-/// The names a placement constraint may match: instances and cells.
+/// The names a placement constraint may match: instances, cells, and the
+/// nets a process assigns.
+///
+/// The last are there because a register written in an `always` block is
+/// not a cell yet when constraints are checked; it becomes one, the
+/// flip-flop named after it (`capture_count$ff`), only when the design is
+/// mapped, and that name is what the placer matches. Without them the
+/// Husky Plus's `assign reg_la.capture* region la_capture` went on being
+/// reported as matching nothing, while every one of the analyser's
+/// registers was placed inside the region. A net a combinational process
+/// assigns is counted too, so a pattern naming only one is not warned
+/// about although nothing may take its name.
 fn placeable_names(module: &Module) -> Vec<String> {
+    let mut written = Vec::new();
+    module.for_each_stmt(|stmt| {
+        if let StmtKind::Assign { target, .. } = &stmt.kind {
+            written.extend(target.nets());
+        }
+    });
+    written.sort_unstable();
+    written.dedup();
     module
         .instances
         .iter()
         .map(|(_, i)| i.name.as_str().to_owned())
         .chain(module.cells.iter().map(|(_, c)| c.name.as_str().to_owned()))
+        .chain(
+            written
+                .into_iter()
+                .filter_map(|net| module.nets.get(net))
+                .map(|net| net.name.as_str().to_owned()),
+        )
         .collect()
 }
 
@@ -2457,6 +2482,49 @@ mod tests {
     /// nothing while it was applied. Would catch the check back on the top
     /// module's names; would not catch the placer and the check spelling a
     /// flattened name differently, which the flattener decides.
+    /// **A register below the top may be assigned a region.** `child`'s
+    /// `capture_count` is written by a process and so is a register, which
+    /// mapping turns into a flip-flop named after it; `idle` is a net
+    /// nothing assigns. `u_sub.capture*` draws no warning, `u_sub.idle*`
+    /// still does.
+    ///
+    /// Would catch the nets a process writes left out of the names, which
+    /// warned on every Husky Plus build about a region the placer was
+    /// applying. Would not catch the placer itself failing to match the
+    /// mapped flip-flop: what it places, the board builds show.
+    #[test]
+    fn a_region_may_be_assigned_a_register_below_the_top() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut design = Design::new();
+        let mut child = ModuleBuilder::new("child", span);
+        let d = child.input("d", Type::bits(4));
+        let count = child.add_net("capture_count", Type::bits(4));
+        let _ = child.add_net("idle", Type::bit());
+        let value = child.net(d);
+        let mut process = child.process(None, crate::ir::ProcessKind::Comb);
+        process.blocking(count, value);
+        child.end_process(process);
+        let child = design.add_module(child.finish());
+        let mut top = ModuleBuilder::new("top", span);
+        top.instance("u_sub", ModuleRef::Resolved(child), Vec::new());
+        let top = design.add_module(top.finish());
+        design.top = Some(top);
+        let device = target("ice40-hx1k-tq144").unwrap();
+        for (pattern, warned) in [("u_sub.capture*", false), ("u_sub.idle*", true)] {
+            let text = format!("region r 0 0 1 1\nassign {pattern} region r\n");
+            let (constraints, mut diags, map) = parse(&text);
+            constraints.check(&design, device, &mut diags);
+            let rendered = diags.render(&map);
+            assert_eq!(
+                rendered.contains("no instance matches"),
+                warned,
+                "{text}: {rendered}"
+            );
+        }
+    }
+
     #[test]
     fn a_region_may_be_assigned_what_lies_below_the_top() {
         let mut map = SourceMap::new();
