@@ -1145,6 +1145,61 @@ can be on, the flow needs the skew between `PL_CLK0` at the fabric's
 flip-flops and at `PL_GP2_CLOCKIN`, measured, and a minimum delay on
 every path to a processor input.
 
+**Corrected again, 2026-10-30: not hold time, and not the pins.** The
+reading above was wrong, and this is what showed it. A small read-only
+slave was built with the pins at their entry tiles. Every word it
+returns carries its own address and a count of the reads it has
+accepted, so a read answered with the previous read's data shows as the
+wrong address or the wrong count. It was built twice: once as usual, and
+once with every output it gives the processor taken from a falling-edge
+flip-flop (`FDRE_1`, "On the falling edge" above). Half a period of
+extra hold margin would have cured a hold fault. Neither needed it:
+**both answered every read** at 25 MHz, and the rising-edge one 4 000
+reads at 100 MHz, with the right address and count each time. Only its
+second 64-bit beat of a 128-bit read was wrong, and that is the slave's
+own fault, for the same reason in all three runs. The processor's port
+splits such a read into two 64-bit beats, and this slave does not step
+its address across them.
+
+What was wrong, then, is something about the big slave placed this way,
+and a day of experiments on 2026-10-30 has narrowed it without finding
+it. Each of these was run, and each came out clean:
+
+- **Path length.** `--timing-endpoints` now lists, for this part too,
+  the paths the router's model puts latest, each with every pin, its
+  arrival and its tile. In the burst-safe slave the read data's path
+  goes out and back: `raddr` and `rbeat` sit side by side on row 218,
+  and the multiplexer between them 64 rows south, 1 595 by the model.
+  That looked like a setup failure, and was **not one**. A slave whose
+  read count passes through a chain of tables, tapped every eight
+  stages up to 31 tables and 2 208 by the model, read every tap right
+  at every clock from 8.33 to 100 MHz. Placed in rows 300–314, far
+  from the processor, its handshake paths reach 2 880 and it still
+  read right at 100 MHz. Whatever the model's unit is, 2 880 of it is
+  under 10 ns, and nothing in the burst slave is long enough to fail
+  at 25 MHz.
+- **Tile type.** Every slave that worked sat in columns 162–175, CLEL_R
+  and CLEM. The burst slave reaches the region's one CLEL_L column,
+  194. Sixteen six-input tables of random contents, each also
+  registered, confined to that column and driven over EMIO through
+  all 64 inputs: 1 024 of 1 024 right, both ways, as in the CLEL_R
+  control.
+- **Clock region.** The flow takes track 14 to carry `PL_CLK0`
+  everywhere, which had been measured in one region. A counter
+  confined to each of the regions centred on rows 217, 279 and 341
+  counted at 100.009 MHz in each.
+- **Synthesis.** `--verify` proves the mapping equivalent, and the
+  mapped netlist (`--netlist`, which this part now writes too),
+  simulated with models of `FDRE` and `LUT6`, answers every read of
+  the board's sequence and a two-beat burst correctly.
+- **The same design, placed the old way**, loaded at 25 MHz and read
+  with 32-bit reads only: every answer right, `0x200` after the read of
+  word 3 included.
+
+So the fault needs both this design and `--pins-at-entry`, and the
+small slaves built with that option do not show it. Which property of
+this placement causes it is open.
+
 ### A safety net: the AXI timeout block
 
 Three hangs in a week, each needing someone to switch the board off and
@@ -1178,8 +1233,13 @@ port idle and to treat a timeout as needing a restart, which five
 in a row here did not need. A write that times out is reported to the
 processor asynchronously and may be fatal to the kernel; only reads
 were tried. And it catches only a transaction that is never answered:
-a slave that answers with the wrong data, as the hold-time failures
-above did, gets past it.
+a slave that answers with the wrong data, as the failures above did,
+gets past it. **That was checked the hard way on 2026-10-30.** The
+burst-safe slave that answers one read late was loaded with the block
+armed, at 25 MHz, and read only. Its single reads came back late as
+before, and the board hung on a 128-bit read, which needed a power
+cycle. The block is a guard against a slave that never answers, and
+only that.
 
 ## What remains, in order
 

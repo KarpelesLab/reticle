@@ -260,6 +260,9 @@ Options:
                      of every connection; then each clock's spread of
                      arrival, a rough hold check, and each clock's route to
                      the flip-flop it reaches last.
+                     UltraScale+: the 200 latest endpoints by the router's
+                     model, each with its path, pins, arrivals and tiles;
+                     no clocks, no hold, and the unit is the model's.
   --place-schedule   Print the annealing schedule as it ran, one line per
                      temperature: the move window, the moves tried and
                      accepted, and the wirelength at the end of the step.
@@ -362,7 +365,8 @@ Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
   --pins-at-entry    UltraScale+: place and route logic the processor
                      connects to beside where its wires enter the fabric,
                      not at the processor's tile. Builds much faster, but
-                     its AXI slaves hung the board: docs/fpga-uray.md.
+                     a large AXI slave built so hung the board:
+                     docs/fpga-uray.md.
 ";
 
 const SYNTH_USAGE: &str = "\
@@ -3305,6 +3309,12 @@ fn uray_fpga(
     device: &reticle::fpga::Device,
     constraints: &reticle::fpga::Constraints,
 ) -> Outcome {
+    if let Some(path) = args.option("netlist")
+        && let Err(message) = write_out(Some(path), &design.to_text())
+    {
+        eprintln!("error: {message}");
+        return Outcome::Failed;
+    }
     match write_uray_bitstream(args, design, top, device, constraints) {
         Ok(note) => {
             if !args.flag("quiet") {
@@ -3376,8 +3386,17 @@ fn write_uray_bitstream(
             timing: args.flag("timing-driven"),
             on_iteration: args.flag("timing").then_some(print_iteration as fn(&_)),
             pins_at_entry: args.flag("pins-at-entry"),
+            endpoints: if args.option("timing-endpoints").is_some() {
+                ENDPOINTS
+            } else {
+                0
+            },
         },
     )?;
+    if let Some(file) = args.option("timing-endpoints") {
+        std::fs::write(file, &written.endpoints)
+            .map_err(|e| format!("cannot write `{file}`: {e}"))?;
+    }
     std::fs::write(path, &written.bit).map_err(|e| format!("cannot write `{path}`: {e}"))?;
     let bin = std::path::Path::new(path).with_extension("bin");
     std::fs::write(&bin, &written.bin)
@@ -3392,6 +3411,10 @@ fn write_uray_bitstream(
     ));
     Ok(note)
 }
+
+/// How many endpoints `--timing-endpoints` lists on UltraScale+, where
+/// the model has no period to call one late.
+const ENDPOINTS: usize = 200;
 
 fn write_xc7_bitstream(
     args: &Args,

@@ -797,6 +797,37 @@ fn fpga_names_the_module_it_cannot_find() {
     );
 }
 
+/// `--netlist` on UltraScale+ writes the mapped design before place and
+/// route, as every other family does: it was silently ignored there. The
+/// netlist is written before the fabric database is needed, so this runs
+/// without one, and the run then stops for want of `--bitstream`.
+///
+/// It would catch the option being ignored again, or written after a
+/// step that fails without a database; it does not check that the
+/// netlist simulates like the design, which is the mapper's tests'
+/// business.
+#[test]
+fn fpga_writes_the_ultrascale_netlist() {
+    let dir = scratch("fpga_uray_netlist");
+    let netlist = dir.join("counter.rtl");
+    let (code, _, stderr) = run(&[
+        "fpga",
+        "--device",
+        "xczu7ev-ffvc1156",
+        "--constraints",
+        "examples/zcu104/counter.rcf",
+        "--output-dir",
+        dir.to_str().unwrap(),
+        "--netlist",
+        netlist.to_str().unwrap(),
+        "examples/zcu104/counter.v",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("pass --bitstream"), "{stderr}");
+    let text = std::fs::read_to_string(&netlist).expect("the netlist was written");
+    assert_eq!(text.matches(" FDRE ").count(), 32, "{text}");
+}
+
 #[test]
 fn sim_writes_an_fst_waveform() {
     let dir = scratch("sim_fst");

@@ -271,6 +271,9 @@ pub struct Written {
     pub bin: Vec<u8>,
     /// One line per fact worth reporting.
     pub report: Vec<String>,
+    /// With [`ImplementOptions::endpoints`], the latest endpoints by the
+    /// timing model and the path to each, as text; otherwise empty.
+    pub endpoints: String,
 }
 
 /// A design on the processor's side of the fabric: the `PS8` site, the
@@ -451,8 +454,9 @@ impl<'a> Board<'a> {
     /// pips from the processor in either direction.
     ///
     /// Using it is off by default: logic placed beside the pins this way
-    /// hung the board even at 25 MHz, most likely on hold time, while the
-    /// same design placed at `PSS_ALTO` works (`docs/fpga-uray.md`).
+    /// hung the board even at 25 MHz, while the same design placed at
+    /// `PSS_ALTO` works. A small slave placed this way works, so the pin
+    /// positions alone are not the fault (`docs/fpga-uray.md`).
     pub fn processor_pin_tiles(&self) -> Vec<(usize, (u32, u32))> {
         let graph = &self.graph;
         let mut out = Vec::new();
@@ -1150,7 +1154,12 @@ impl<'a> Board<'a> {
         let header = BitHeader::new(design_name, "xczu7ev-ffvc1156-2-e");
         let bit = super::write_bit(&header, super::IDCODE_XCZU7EV, &layout, &frames)?;
         let bin = super::bin_from_bit(&bit)?;
-        Ok(Written { bit, bin, report })
+        Ok(Written {
+            bit,
+            bin,
+            report,
+            endpoints: String::new(),
+        })
     }
 }
 
@@ -1175,9 +1184,14 @@ pub struct ImplementOptions<'a> {
     /// by default because what it builds hung the board**: the same
     /// 16-neuron AXI slave that answers every image placed the old way
     /// stopped the processor at 25 MHz placed this way, on 2026-10-28.
-    /// The likely cause is hold time at the processor's pins, which
-    /// nothing here models (`docs/fpga-uray.md`).
+    /// A small slave placed this way answered 4 000 reads at 100 MHz, and
+    /// the big one placed the old way answers right, so the fault needs
+    /// both; its cause is open (`docs/fpga-uray.md`).
     pub pins_at_entry: bool,
+    /// With `timing`, how many of the latest endpoints by the model to
+    /// list in [`Written::endpoints`], each with its path
+    /// ([`crate::fpga::route::latest_paths`]); zero lists none.
+    pub endpoints: usize,
 }
 
 /// The whole flow for a design `synthesize_for` has mapped onto
@@ -1243,6 +1257,8 @@ pub fn implement(
     board.reserve(&netlist, &placement);
     board.tie_processor().map_err(|e| e.to_string())?;
     let allowed = board.driven_inputs.clone();
+    let model = timing.then(|| Timing::for_netlist(&netlist, board.node_delays(), LUT_DELAY));
+    let endpoints = options.endpoints;
     let options = RouteOptions {
         network: board.closed_nodes(&allowed).map_err(|e| e.to_string())?,
         network_signals: vec![false; netlist.signals.len()],
@@ -1250,7 +1266,7 @@ pub fn implement(
         astar_weight: ASTAR_WEIGHT,
         reroute_congested_only: true,
         max_iterations: MAX_ITERATIONS,
-        timing: timing.then(|| Timing::for_netlist(&netlist, board.node_delays(), LUT_DELAY)),
+        timing: model.clone(),
         on_iteration: options.on_iteration,
         ..RouteOptions::default()
     };
@@ -1274,6 +1290,16 @@ pub fn implement(
     }
     let (routing, routed) = routed.map_err(|e| e.to_string())?;
     let longest = routed.iterations.last().and_then(|i| i.critical);
+    let paths = model.as_ref().map_or_else(Vec::new, |model| {
+        crate::fpga::route::latest_paths(
+            &netlist,
+            &board.graph,
+            &placement,
+            &routing,
+            model,
+            endpoints,
+        )
+    });
     let problems = routing.verify(&netlist, &board.graph, &placement);
     if !problems.is_empty() {
         return Err(format!(
@@ -1298,7 +1324,41 @@ pub fn implement(
         .modules
         .get(top)
         .map_or_else(|| "top".to_owned(), |m| m.name.as_str().to_owned());
+    let mut text = String::new();
+    // Each path latest end first, then its pins from where it starts,
+    // with the tile of each.
+    for path in &paths {
+        let step = |s: &crate::fpga::route::PathStep| {
+            let pin = &netlist.pins[s.pin];
+            let tile = placement
+                .site_of(pin.instance)
+                .map(|site| board.graph.sites[site].tile)
+                .map_or(String::new(), |(x, y)| format!(" @{x},{y}"));
+            format!(
+                "{}.{}{tile}",
+                netlist.instances[pin.instance].name, pin.role
+            )
+        };
+        let (Some(first), Some(end)) = (path.first(), path.last()) else {
+            continue;
+        };
+        text.push_str(&format!(
+            "{} at {} from {}\n",
+            end.arrival,
+            step(end),
+            step(first)
+        ));
+        for s in path {
+            let arrow = if netlist.pins[s.pin].output {
+                ""
+            } else {
+                "  <- "
+            };
+            text.push_str(&format!("    {:6} {arrow}{}\n", s.arrival, step(s)));
+        }
+    }
     let mut written = board.finish(&name).map_err(|e| e.to_string())?;
+    written.endpoints = text;
     written.report.insert(
         0,
         format!(

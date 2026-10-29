@@ -1587,6 +1587,185 @@ pub fn connection_delays(
     wire
 }
 
+/// One pin of a path through a finished route ([`latest_paths`]), and
+/// when the path reaches it, in [`Timing`]'s unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PathStep {
+    /// The pin, by index into [`Netlist::pins`].
+    pub pin: usize,
+    /// When the path reaches it: an output when its instance drives it,
+    /// an input when the connection to it ends.
+    pub arrival: u64,
+}
+
+/// The `count` latest endpoints of a finished route, latest first, each
+/// with the path that reaches it, from the pin that starts it.
+///
+/// It times the route as the router's own analysis does: a path starts
+/// at time zero at an output of an instance [`Timing::combinational`]
+/// does not mark, a connection costs the [`Timing::node_delay`] of the
+/// nodes along its branch of the tree, an instance it marks costs
+/// [`Timing::cell_delay`] from its latest input, and the path ends at an
+/// input of an instance it does not mark. Clock pins
+/// ([`Timing::clock_roles`]) neither start nor end one. A combinational
+/// loop is cut where it is met. **The delays are the caller's model**, so
+/// the paths are ranked by that model and say nothing about time on the
+/// part.
+#[must_use]
+pub fn latest_paths(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    routing: &Routing,
+    timing: &Timing,
+    count: usize,
+) -> Vec<Vec<PathStep>> {
+    let combinational =
+        |instance: usize| timing.combinational.get(instance).copied().unwrap_or(false);
+    let timed = |pin: usize| {
+        !timing
+            .clock_roles
+            .iter()
+            .any(|r| *r == netlist.pins[pin].role)
+    };
+    let mut wire = vec![0u64; netlist.pins.len()];
+    for route in routing.routes() {
+        let mut delay: HashMap<NodeId, u64> = HashMap::new();
+        delay.insert(route.source, 0);
+        for pip in &route.pips {
+            let pip = graph.pip(*pip);
+            let to = delay.get(&pip.from).copied().unwrap_or(0)
+                + u64::from(timing.node_delay.get(pip.to as usize).copied().unwrap_or(0));
+            delay.insert(pip.to, to);
+        }
+        for sink in &netlist.signals[route.signal].sinks {
+            let pin = &netlist.pins[*sink];
+            let node = route
+                .moved
+                .iter()
+                .find(|(moved, _)| moved == sink)
+                .map(|(_, node)| *node)
+                .or_else(|| {
+                    placement
+                        .site_of(pin.instance)
+                        .and_then(|site| graph.sites[site].pin(&pin.role))
+                });
+            if let Some(d) = node.and_then(|n| delay.get(&n)) {
+                wire[*sink] = *d;
+            }
+        }
+    }
+    let driver = |pin: usize| -> Option<usize> {
+        netlist.pins[pin]
+            .signal
+            .and_then(|s| netlist.signals[s].driver)
+    };
+    // Each output's arrival, and for a combinational instance's outputs
+    // the input it waited for. Worked out on demand, without recursion,
+    // because a path may pass through thousands of tables.
+    let mut arrival: Vec<Option<u64>> = vec![None; netlist.pins.len()];
+    let mut latest_input: Vec<Option<usize>> = vec![None; netlist.pins.len()];
+    let mut active = vec![false; netlist.instances.len()];
+    let mut resolve = |start: usize, arrival: &mut Vec<Option<u64>>| {
+        let mut stack = vec![start];
+        while let Some(&out) = stack.last() {
+            if arrival[out].is_some() {
+                stack.pop();
+                continue;
+            }
+            let instance = netlist.pins[out].instance;
+            if !combinational(instance) {
+                arrival[out] = Some(0);
+                stack.pop();
+                continue;
+            }
+            active[instance] = true;
+            let inputs = netlist.instances[instance]
+                .pins
+                .iter()
+                .copied()
+                .filter(|p| !netlist.pins[*p].output && timed(*p));
+            let mut pending = None;
+            let mut best: Option<(u64, usize)> = None;
+            for input in inputs {
+                let from = driver(input).map_or(Some(0), |d| {
+                    // A driver still being worked out is a loop: cut it.
+                    if arrival[d].is_none() && active[netlist.pins[d].instance] {
+                        Some(0)
+                    } else {
+                        arrival[d]
+                    }
+                });
+                match from {
+                    Some(at) => {
+                        let at = at + wire[input];
+                        if best.is_none_or(|(b, _)| at > b) {
+                            best = Some((at, input));
+                        }
+                    }
+                    None => pending = driver(input),
+                }
+            }
+            if let Some(d) = pending {
+                stack.push(d);
+                continue;
+            }
+            let at = best.map_or(0, |(at, _)| at) + u64::from(timing.cell_delay);
+            for pin in &netlist.instances[instance].pins {
+                if netlist.pins[*pin].output {
+                    arrival[*pin] = Some(at);
+                    latest_input[*pin] = best.map(|(_, input)| input);
+                }
+            }
+            active[instance] = false;
+            stack.pop();
+        }
+    };
+    let mut ends: Vec<(u64, usize)> = Vec::new();
+    for (index, pin) in netlist.pins.iter().enumerate() {
+        if pin.output || !timed(index) || combinational(pin.instance) {
+            continue;
+        }
+        let Some(d) = driver(index) else { continue };
+        resolve(d, &mut arrival);
+        ends.push((arrival[d].unwrap_or(0) + wire[index], index));
+    }
+    ends.sort_by_key(|(at, pin)| (std::cmp::Reverse(*at), *pin));
+    ends.into_iter()
+        .take(count)
+        .map(|(at, end)| {
+            let mut path = vec![PathStep {
+                pin: end,
+                arrival: at,
+            }];
+            let mut input = end;
+            while let Some(out) = driver(input) {
+                path.push(PathStep {
+                    pin: out,
+                    arrival: arrival[out].unwrap_or(0),
+                });
+                // Back round a loop, the path stops where the analysis
+                // cut it.
+                let looped =
+                    |next: usize| driver(next).is_some_and(|d| path.iter().any(|s| s.pin == d));
+                match latest_input[out] {
+                    Some(next) if !looped(next) => {
+                        let from = driver(next).and_then(|d| arrival[d]).unwrap_or(0);
+                        path.push(PathStep {
+                            pin: next,
+                            arrival: from + wire[next],
+                        });
+                        input = next;
+                    }
+                    _ => break,
+                }
+            }
+            path.reverse();
+            path
+        })
+        .collect()
+}
+
 /// What a signal rerouted for congestion alone keeps of its route
 /// ([`RouteOptions::incremental`]): the branches of the sinks whose way
 /// from the source crosses no overused node, as the tree a new search
@@ -4463,7 +4642,11 @@ mod tests {
     /// would catch arrival or required times summed
     /// the wrong way, a missing cell delay, or a criticality that does not
     /// fall with slack; it would not catch a wrong wire delay, which the
-    /// routed test above pins.
+    /// routed test above pins. [`latest_paths`] is held to the same
+    /// netlist, which catches a path missing a pin, an arrival summed
+    /// differently from the analysis, endpoints out of order, and a walk
+    /// back round a loop; it shares the wire delay's blind spot, since
+    /// nothing here is routed.
     #[test]
     fn the_analysis_finds_the_longest_path_and_who_is_on_it() {
         let mut netlist = Netlist {
@@ -4552,6 +4735,59 @@ mod tests {
         assert_eq!(criticality[3], vec![0.0, 0.9, 0.0, 0.0]);
         assert_eq!(criticality[4].len(), 1);
         assert_eq!(criticality[5].len(), 1);
+
+        // The same, as a finished route's paths: b by the two tables
+        // first, every pin of the way with its arrival, then c straight
+        // from a. Clock pins end nothing.
+        let placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        let step = |pin, arrival| PathStep { pin, arrival };
+        let paths = latest_paths(&netlist, &graph, &placement, &routing, &timing, 10);
+        assert_eq!(
+            paths,
+            vec![
+                vec![
+                    step(0, 0),
+                    step(2, 0),
+                    step(4, 10),
+                    step(5, 10),
+                    step(6, 20),
+                    step(7, 20)
+                ],
+                vec![step(0, 0), step(9, 0)],
+            ]
+        );
+        // A flip-flop reading the loop: the walk forward is cut where it
+        // meets the loop, and so is the walk back, which would otherwise go
+        // round it.
+        let pin = netlist.pins.len();
+        netlist.pins.push(NetPin {
+            instance: netlist.instances.len(),
+            port: "D".to_owned(),
+            bit: 0,
+            role: "d".to_owned(),
+            output: false,
+            signal: Some(4),
+            constant: None,
+        });
+        netlist.instances.push(Instance {
+            cell: CellId::from_index(netlist.instances.len()),
+            name: "d".to_owned(),
+            primitive: "FF".to_owned(),
+            kind: "ff".to_owned(),
+            pins: vec![pin],
+            pin: None,
+        });
+        netlist.signals[4].sinks.push(pin);
+        let mut timing = Timing::for_netlist(&netlist, Vec::new(), 10);
+        timing.max_criticality = 0.9;
+        let paths = latest_paths(&netlist, &graph, &placement, &routing, &timing, 3);
+        // b and d tie at twenty, and the lower pin comes first. l1.i0 is
+        // pin 12, l1.o 13, l2.o 15.
+        assert_eq!(paths.len(), 3);
+        assert_eq!(
+            paths[1],
+            vec![step(15, 10), step(12, 10), step(13, 20), step(pin, 20)]
+        );
     }
 
     /// [`RouteOptions::network`] closes the cheap class to a signal

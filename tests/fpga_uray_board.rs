@@ -412,6 +412,7 @@ fn verilog_counter() {
             timing: false,
             on_iteration: None,
             pins_at_entry: false,
+            endpoints: 0,
         },
     )
     .unwrap();
