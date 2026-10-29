@@ -3854,6 +3854,11 @@ fn write_xc7_bitstream(
                     report.gave_up
                 );
             }
+            if let Some(pass) = report.kept_legal {
+                eprintln!(
+                    "note: a clean-up of the critical signals did not converge, so the legal routing of pass {pass} was kept"
+                );
+            }
             (routing, report.signals)
         }
         Err(e) => {

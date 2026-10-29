@@ -770,6 +770,9 @@ pub struct RoutingReport {
     /// How many critical connections' searches gave up at
     /// [`Timing::search_budget`] and were made again as uncritical ones.
     pub gave_up: u64,
+    /// When a clean-up did not converge within twelve passes, the
+    /// pass whose routing, legal, was kept instead.
+    pub kept_legal: Option<u32>,
 }
 
 impl RoutingReport {
@@ -1071,6 +1074,10 @@ pub fn route(
     // nothing is overused, and whether this pass is one.
     let mut cleanups_left = options.timing.as_ref().map_or(0, |t| t.cleanups);
     let mut cleaning = false;
+    // The routing as it stood when a pass last ended with nothing
+    // overused, the pass, and the nodes it occupied: what a clean-up
+    // that does not converge falls back to. See `CLEANUP_PASSES`.
+    let mut legal: Option<(Routing, u32, usize)> = None;
     // `Timing::present_cap`: the least overuse so far, and how many passes
     // since it fell.
     let (mut least, mut stalled) = (usize::MAX, 0);
@@ -1187,6 +1194,8 @@ pub fn route(
             if cleanups_left == 0 {
                 break;
             }
+            let nodes = state.occupancy.iter().filter(|c| **c > 0).count();
+            legal = Some((routing.clone(), index, nodes));
             cleanups_left -= 1;
             cleaning = true;
             // A clean-up opens the negotiation again.
@@ -1200,9 +1209,28 @@ pub fn route(
         if index > 1 || options.first_pass_present.is_none() {
             present *= options.present_growth;
         }
+        if overused_nodes > 0
+            && legal
+                .as_ref()
+                .is_some_and(|(_, at, _)| index - at >= CLEANUP_PASSES)
+        {
+            break;
+        }
     }
 
     let (overused, _) = state.overuse();
+    if overused > 0
+        && let Some((kept, at, nodes)) = legal
+    {
+        report.kept_legal = Some(at);
+        report.signals = kept.routed();
+        report.pips = kept.pip_count();
+        report.visited = scratch.visited;
+        report.queued = scratch.queued;
+        report.gave_up = scratch.gave_ups;
+        report.nodes = nodes;
+        return Ok((kept, report));
+    }
     if overused > 0 {
         let mut worst: Vec<(u32, NodeId)> = state
             .occupancy
@@ -1263,6 +1291,23 @@ pub const CRITICAL_SEARCH_BUDGET: u64 = 4_000_000;
 /// one node overused; five would have lifted it on both, the first when
 /// its overuse was still settling after a clean-up.
 const STALL: usize = 10;
+
+/// How many passes a clean-up ([`Timing::cleanups`]) has to end with
+/// nothing overused again before the route stops and keeps the legal
+/// routing it had before the clean-up began.
+///
+/// A clean-up reroutes the critical signals of a legal routing and opens
+/// the negotiation again, and it used to have the route's whole budget to
+/// close it: when it did not, the legal routing was thrown away with the
+/// rest, the route reported as not converging, and the design placed and
+/// routed again. On the Husky Plus on 2026-10-29 a build was legal at its
+/// 57th pass, began its second clean-up, ended its hundredth with two
+/// nodes overused and was placed again — 2.8 hours where 1.4 would have
+/// done. Over 40 builds of that design a clean-up that converged at all
+/// did so within one pass in most and within 42 in the slowest; the ones
+/// that took more than a few were the hour-long builds. Twelve keeps the
+/// clean-ups that converge quickly and stops paying for the rest.
+const CLEANUP_PASSES: u32 = 12;
 
 /// What one unit of [`Timing::node_delay`] costs, so that a critical
 /// connection weighs delay and an uncritical one congestion on the same
@@ -4322,6 +4367,105 @@ mod tests {
         assert_eq!(run(f64::INFINITY), (true, false, Some(5)));
         // Capped: n1 on the fast wire, three long, and n0 moved off it.
         assert_eq!(run(30.0), (false, true, Some(3)));
+    }
+
+    /// **A clean-up that does not converge keeps the legal routing it
+    /// began from.** The capped-wire test's tile, with one pass of timing
+    /// and one clean-up: the first pass is legal (`n1` the slow way), and
+    /// the clean-up moves `n1` onto `n0`'s fast wire, overusing it, which
+    /// the pass after resolves. Stopped after the clean-up's first pass,
+    /// the route is the first pass's, legal, and says so; given the pass
+    /// after, the clean-up converges and is what is kept. Would catch the
+    /// legal routing thrown away (an error, as every such route was
+    /// before), or kept when the clean-up did converge. Would not catch
+    /// [`CLEANUP_PASSES`] itself, which needs a clean-up that goes on
+    /// failing for twelve passes; the stop is the same as the route's
+    /// budget running out.
+    #[test]
+    fn a_clean_up_that_does_not_converge_keeps_the_legal_routing() {
+        let mut arch = Arch::new("cleanup", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["out0", "out1", "in0", "in1", "f1", "g1", "s1", "s2", "s3"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "lut");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+            let mut dst = BelDecl::new(format!("dst{n}"), "ff");
+            dst.pins
+                .push(("d".to_owned(), WireRef::local(format!("in{n}"))));
+            tile.bels.push(dst);
+        }
+        let arcs = [
+            ("out0", "f1"),
+            ("f1", "in0"),
+            ("out0", "g1"),
+            ("g1", "in0"),
+            ("out1", "f1"),
+            ("f1", "in1"),
+            ("out1", "s1"),
+            ("s1", "s2"),
+            ("s2", "s3"),
+            ("s3", "in1"),
+        ];
+        for (k, (from, to)) in arcs.into_iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["src0", "dst0", "src1", "dst1"].iter().enumerate() {
+            let site = graph.site_index(&format!("X0Y0/{site}")).expect("site");
+            placement.place(index, site);
+        }
+        let f1 = (0..graph.nodes.len())
+            .map(|i| NodeId::try_from(i).unwrap_or(0))
+            .find(|n| graph.wire(*n).full_name() == "X0Y0/f1")
+            .expect("the wire");
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            if wire.full_name() == "X0Y0/g1" {
+                base[index] = 1.5;
+            }
+        }
+        let run = |max_iterations: u32| {
+            let mut timing = Timing::for_netlist(&netlist, vec![1; graph.nodes.len()], 1);
+            timing.present_cap = 30.0;
+            timing.passes = 1;
+            timing.cleanups = 1;
+            let options = RouteOptions {
+                node_base: base.clone(),
+                present_factor: 1e6,
+                max_iterations,
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+            assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+            assert!(
+                report.iterations.iter().any(|i| i.overused_nodes > 0),
+                "the clean-up never overused anything: {}",
+                report.to_text()
+            );
+            (
+                routing.route(1).unwrap().nodes.contains(&f1),
+                report.kept_legal,
+            )
+        };
+        assert_eq!(run(2), (false, Some(1)));
+        assert_eq!(run(40), (true, None));
     }
 
     /// **[`Timing::present_cap`] is lifted when two critical connections
