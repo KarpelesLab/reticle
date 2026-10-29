@@ -683,7 +683,7 @@ impl Constraints {
             return;
         };
         self.check_pins(module, device, diags);
-        self.check_placement(module, device, diags);
+        self.check_placement(design, module, device, diags);
         self.check_timing(design, module, diags);
     }
 
@@ -940,8 +940,16 @@ impl Constraints {
         }
     }
 
-    fn check_placement(&self, module: &Module, device: &Device, diags: &mut Diagnostics) {
-        let names = placeable_names(module);
+    fn check_placement(
+        &self,
+        design: &Design,
+        module: &Module,
+        device: &Device,
+        diags: &mut Diagnostics,
+    ) {
+        // Below the top as well, as the placer matches them: see
+        // `placement_names`.
+        let names = placement_names(design, module);
         for region in &self.regions {
             if region.x0 > region.x1 || region.y0 > region.y1 {
                 diags.push(
@@ -1490,24 +1498,39 @@ fn placeable_names(module: &Module) -> Vec<String> {
 /// alone, every such name was reported as matching nothing.
 fn timing_point_names(design: &Design, module: &Module) -> Vec<String> {
     let mut names = Vec::new();
-    hierarchical_names(design, module, "", &mut names, 0);
+    hierarchical_names(design, module, "", &mut names, 0, true);
+    names
+}
+
+/// The names a region assignment, an `rloc` or a `keep_hierarchy` may
+/// match: instances and cells, and those of every module instantiated
+/// below, under their flattened paths. The placer matches the flattened
+/// design's names; checked against the top module's own alone, the Husky
+/// Plus's `assign reg_la.capture* region la_capture` was reported as
+/// matching nothing while the placer applied it.
+fn placement_names(design: &Design, module: &Module) -> Vec<String> {
+    let mut names = Vec::new();
+    hierarchical_names(design, module, "", &mut names, 0, false);
     names
 }
 
 /// The names [`timing_point_names`] collects for `module`, each under
-/// `prefix`.
+/// `prefix`: with `nets`, its nets and ports as well as what it places
+/// ([`placement_names`] leaves them out).
 fn hierarchical_names(
     design: &Design,
     module: &Module,
     prefix: &str,
     out: &mut Vec<String>,
     depth: usize,
+    nets: bool,
 ) {
-    let local = placeable_names(module)
-        .into_iter()
-        .chain(module.nets.iter().map(|(_, n)| n.name.as_str().to_owned()))
-        .chain(module.ports.iter().map(|p| p.name.as_str().to_owned()));
-    out.extend(local.map(|name| format!("{prefix}{name}")));
+    let mut local = placeable_names(module);
+    if nets {
+        local.extend(module.nets.iter().map(|(_, n)| n.name.as_str().to_owned()));
+        local.extend(module.ports.iter().map(|p| p.name.as_str().to_owned()));
+    }
+    out.extend(local.into_iter().map(|name| format!("{prefix}{name}")));
     // A recursive instantiation is an elaboration error; the depth limit
     // only keeps a malformed design from running this forever.
     if depth >= 64 {
@@ -1518,7 +1541,7 @@ fn hierarchical_names(
             && let Some(child) = design.modules.get(id)
         {
             let prefix = format!("{prefix}{}.", instance.name.as_str());
-            hierarchical_names(design, child, &prefix, out, depth + 1);
+            hierarchical_names(design, child, &prefix, out, depth + 1, nets);
         }
     }
 }
@@ -2404,6 +2427,48 @@ mod tests {
             assert_eq!(
                 rendered.contains("no net named"),
                 refused,
+                "{text}: {rendered}"
+            );
+        }
+    }
+
+    /// **A region may be assigned what lies below the top module.**
+    /// `u_sub.capture0_reg`, an instance inside `child` instantiated as
+    /// `u_sub`, is matched by `u_sub.capture*` as the flattened design
+    /// names it; `u_sub.nothing*` and a bare `capture*` match nothing and
+    /// are warned about. The placer matches flattened names, and checked
+    /// against the top module's own the Husky Plus's
+    /// `assign reg_la.capture* region la_capture` was reported as matching
+    /// nothing while it was applied. Would catch the check back on the top
+    /// module's names; would not catch the placer and the check spelling a
+    /// flattened name differently, which the flattener decides.
+    #[test]
+    fn a_region_may_be_assigned_what_lies_below_the_top() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut design = Design::new();
+        let leaf = design.add_module(ModuleBuilder::new("leaf", span).finish());
+        let mut child = ModuleBuilder::new("child", span);
+        child.instance("capture0_reg", ModuleRef::Resolved(leaf), Vec::new());
+        let child = design.add_module(child.finish());
+        let mut top = ModuleBuilder::new("top", span);
+        top.instance("u_sub", ModuleRef::Resolved(child), Vec::new());
+        let top = design.add_module(top.finish());
+        design.top = Some(top);
+        let device = target("ice40-hx1k-tq144").unwrap();
+        for (pattern, warned) in [
+            ("u_sub.capture*", false),
+            ("u_sub.nothing*", true),
+            ("capture*", true),
+        ] {
+            let text = format!("region r 0 0 1 1\nassign {pattern} region r\n");
+            let (constraints, mut diags, map) = parse(&text);
+            constraints.check(&design, device, &mut diags);
+            let rendered = diags.render(&map);
+            assert_eq!(
+                rendered.contains("no instance matches"),
+                warned,
                 "{text}: {rendered}"
             );
         }

@@ -4930,6 +4930,13 @@ attributes. On five seeds:
 | 4 | 27 | 24 |
 | 5 | 13 | 28 |
 
+Every one of those builds warned that no instance matches
+`reg_la.capture*` and the other three patterns (`F0211`), and the
+region was applied all the same: the placer matches the flattened design's
+names, and the check matched the top module's own. Measured by moving the
+region: a build with one too small for what it was given stopped with that
+region's error. The check now matches names below the top too.
+
 The mean went from 21.2 to 26.6. Seed 2's 33 passed every glitch width
 sweep, the 1600 offset, and every ADC test at 250 MHz. What it failed was
 `test_fpga_version`, three `test_glitch_width` cases (NewAE's own bitstream
