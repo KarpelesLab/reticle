@@ -4944,6 +4944,45 @@ clock, which leaves the bitstream bit for bit as it was) has the same
 paths late as seed 2's, so the estimate does not see what separates them.
 Not traced yet.
 
+### A clock through a `BUFGMUX`, and the analyser's FIFO in no domain (2026-10-29)
+
+Why seed 4's analyser failed with the region and seed 2's did not came
+down to what the analyser writes. Its samples go into NewAE's shared
+`fifo` (the trace's too), clocked by `fifo_wr_clk`, a `BUFGMUX` choosing
+the trace clock or the analyser's. A clock's domain was found by walking
+back through global buffers by their input `I0`, and the analyser's clock
+is on `I1`, so the walk reached the trace clock: and the FIFO's write side,
+70 flip-flops at 400 MHz, and every path into it from the capture
+registers, were timed in no domain at all. On the part those paths are as
+synchronous as any, and whether a build's analyser worked depended on how
+the router had happened to lay them. A failing one stored words from far
+apart in time, two equal samples each, which is what a write pointer that
+cannot keep up does.
+
+Now (`timing::through_muxes`) a buffer choosing between two clocks is
+timed at the faster: Vivado times what it drives against each in turn,
+and this flow has one domain to give it. That made the stand-in FIFO's
+write side the analyser domain's latest paths: its `full` and `prog_full`
+flags, a subtraction and a compare where the built-in FIFO has hard logic,
+at 10 ns of the 4.17 the domain is timed at. On their own the placements
+that followed were worse, and `husky_plus.rcf` gives the write side two
+periods. The analyser writes every other cycle (`ticktock`), so its pointer
+and flags change at most every second edge.
+
+| configuration | seed 1 | 2 | 3 | 4 | 5 | mean |
+|---|---|---|---|---|---|---|
+| the analyser's region (`bee8f53`) | 25 | 33 | 23 | 24 | 28 | 26.6 |
+| and the `BUFGMUX` timed | – | 22 | – | 23 | 22 | |
+| and the FIFO's write side two periods | 27 | 30 | 24 | 31 | 27 | 27.8 |
+| and clocks read by tables routed for delay | – | 30 | – | 25 | 23 | |
+
+The last row is the clocks-as-data rule of the tries above, retried now
+that analysers measure: it did no better. The kept row is a little better
+and steadier than the region alone, by less than seeds move on their own.
+The change is kept for what it fixes in the model, and the numbers are why
+it is not given more credit than that. Of the five, only seed 2's analyser
+shows the clean runs of 20 at 40 times that NewAE's does.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

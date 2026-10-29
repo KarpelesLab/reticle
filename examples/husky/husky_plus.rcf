@@ -21,3 +21,18 @@ assign reg_la.capture* region la_capture
 assign reg_la.downsample* region la_capture
 assign reg_la.ticktock* region la_capture
 assign reg_la.capturing* region la_capture
+
+# Not NewAE's either: the shared FIFO's write side, given two periods. The
+# FIFO (`fifo`, NewAE's, with the stand-in `fifo_generator_semipro` inside)
+# is clocked by a `BUFGMUX` choosing the trace clock or the analyser's, and
+# is now timed at the faster of the two, the analyser's. The analyser writes
+# it every other cycle (`ticktock`), so its pointer and flags change at most
+# every second edge; the trace clock is slower than two of the analyser's.
+# Timed at one period, the stand-in's flags (a subtraction and a compare,
+# where NewAE's built-in FIFO has them in its hard block) were the
+# analyser domain's latest paths, at 10 ns of 4.17, and placements built
+# around them did worse: seeds 2, 4 and 5 passed 22, 23 and 22 tests. With
+# these, seeds 1 to 5 passed 27, 30, 24, 31 and 27 (2026-10-29).
+set_multicycle_path 2 -setup -to U_fifo.U_fifo.u_fifo.wptr*
+set_multicycle_path 2 -setup -to U_fifo.U_fifo.u_fifo.full_q*
+set_multicycle_path 2 -setup -to U_fifo.U_fifo.u_fifo.prog_full_q*

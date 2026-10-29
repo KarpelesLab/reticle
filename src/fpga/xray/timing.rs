@@ -251,6 +251,47 @@ fn derived_period(
     (mult > 0.0).then(|| input * divclk * divide / mult)
 }
 
+/// A clock signal's name and period through the global buffers that choose
+/// between two clocks: the faster of the two inputs' clocks, each found the
+/// same way, at most `depth` buffers deep; `base` for a signal no such
+/// buffer drives. See `place_timing`.
+fn through_muxes(
+    netlist: &Netlist,
+    signal: usize,
+    depth: u32,
+    base: &dyn Fn(usize) -> Option<(String, f64)>,
+) -> Option<(String, f64)> {
+    let mut signal = signal;
+    for _ in 0..depth {
+        let Some(driver) = netlist.signals[signal].driver else {
+            break;
+        };
+        let inst = &netlist.instances[netlist.pins[driver].instance];
+        if inst.kind != "gb" {
+            break;
+        }
+        let input = |role: &str| {
+            inst.pins
+                .iter()
+                .find(|p| !netlist.pins[**p].output && netlist.pins[**p].role == role)
+                .and_then(|p| netlist.pins[*p].signal)
+        };
+        match (input("i"), input("i1")) {
+            (Some(first), Some(second)) => {
+                let a = through_muxes(netlist, first, depth - 1, base);
+                let b = through_muxes(netlist, second, depth - 1, base);
+                return match (a, b) {
+                    (Some(a), Some(b)) => Some(if b.1 < a.1 { b } else { a }),
+                    (a, b) => a.or(b),
+                };
+            }
+            (Some(only), None) => signal = only,
+            _ => break,
+        }
+    }
+    base(signal)
+}
+
 /// The timing a placement of `netlist` is driven by, and the name of each
 /// of its domains (the clock's `create_clock` name), in
 /// [`PlaceTiming::periods`] order. `design`'s module `top` is what the
@@ -340,6 +381,15 @@ pub fn place_timing(
         }
         period.map(|p| (name, p))
     };
+    // And through a buffer that chooses between two clocks (`BUFGMUX`), the
+    // faster of the two: what it drives is timed against each in turn by
+    // Vivado, and in one domain here, so in the stricter one. Followed
+    // through its first input alone, as `root` follows a buffer, the Husky
+    // Plus's shared FIFO (`fifo_wr_clk`, the trace clock or the logic
+    // analyser's) was in no domain at all: the analyser's capture registers
+    // wrote it at 400 MHz over a path nothing timed, and whether its
+    // samples came back whole depended on the seed.
+    let clock_of = |signal: usize| through_muxes(netlist, signal, 8, &clock_of);
     let mut names: Vec<String> = Vec::new();
     let mut periods: Vec<f64> = Vec::new();
     let mut domain_of = |clock: Option<(String, f64)>| -> PathDomain {
@@ -821,6 +871,90 @@ mod tests {
             (timing.launch[3] - eased.launch[3]).abs() < 1e-9,
             "`data` is untouched"
         );
+    }
+
+    /// **What a buffer choosing between two clocks drives is timed at the
+    /// faster.** Two pads with clocks of 10 and 4 ns into a `BUFGMUX`'s
+    /// first and second inputs, and a flip-flop on its output: the
+    /// flip-flop is in the 4 ns clock's domain. Followed through the first
+    /// input alone it was in the 10 ns one; on the Husky Plus the logic
+    /// analyser's clock was the second input of the buffer clocking its
+    /// FIFO, and the FIFO's write was timed in no domain. Would catch the
+    /// second input ignored, or the slower clock taken; would not catch a
+    /// mux whose select is a constant (a `set_case_analysis`), which this
+    /// does not read and Vivado would.
+    #[test]
+    fn a_clock_multiplexers_output_is_timed_at_its_faster_clock() {
+        let pin = |instance: usize, role: &str, output: bool, signal: usize| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let instance = |i: usize, name: &str, kind: &str, pins: Vec<usize>| Instance {
+            cell: CellId::from_index(i),
+            name: name.to_owned(),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        // Signals: 0 `slow`, 1 `fast`, 2 the multiplexed clock, 3 `d`.
+        let pins = vec![
+            pin(0, "din", true, 0),
+            pin(1, "din", true, 1),
+            pin(2, "i", false, 0),
+            pin(2, "i1", false, 1),
+            pin(2, "o", true, 2),
+            pin(3, "din", true, 3),
+            pin(4, "clk", false, 2),
+            pin(4, "d", false, 3),
+        ];
+        let signal = |name: &str, driver: usize, sinks: Vec<usize>| Signal {
+            name: name.to_owned(),
+            driver: Some(driver),
+            sinks,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(0, "slow$io0", "io", vec![0]),
+                instance(1, "fast$io0", "io", vec![1]),
+                instance(2, "mux", "gb", vec![2, 3, 4]),
+                instance(3, "d$io0", "io", vec![5]),
+                instance(4, "q", "ff", vec![6, 7]),
+            ],
+            signals: vec![
+                signal("slow", 0, vec![2]),
+                signal("fast", 1, vec![3]),
+                signal("muxed", 4, vec![6]),
+                signal("d", 5, vec![7]),
+            ],
+            pins,
+            off_fabric: Vec::new(),
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut diags = crate::diag::Diagnostics::new();
+        let constraints = Constraints::parse(
+            "create_clock -name slow -period 10 slow\ncreate_clock -name fast -period 4 fast\n",
+            file,
+            &mut diags,
+        );
+        assert!(!diags.has_errors());
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        let (timing, names) = place_timing(&design, top, &netlist, &constraints);
+        let PathDomain::Clock(d) = timing.domain[4] else {
+            panic!("the flip-flop is in no domain: {:?}", timing.domain[4]);
+        };
+        assert_eq!(names[d], "fast");
+        assert!((timing.periods[d] - 4.0).abs() < 1e-9);
     }
 
     /// **A clock manager's register port is timed on its `DCLK`.** An MMCM
