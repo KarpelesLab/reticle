@@ -1188,8 +1188,9 @@ pub struct ImplementOptions<'a> {
     /// the big one placed the old way answers right, so the fault needs
     /// both; its cause is open (`docs/fpga-uray.md`).
     pub pins_at_entry: bool,
-    /// With `timing`, how many of the latest endpoints by the model to
-    /// list in [`Written::endpoints`], each with its path
+    /// How many of the latest endpoints by the timing model to list in
+    /// [`Written::endpoints`], each with its path, whether or not `timing`
+    /// routed by the model
     /// ([`crate::fpga::route::latest_paths`]); zero lists none.
     pub endpoints: usize,
 }
@@ -1290,16 +1291,22 @@ pub fn implement(
     }
     let (routing, routed) = routed.map_err(|e| e.to_string())?;
     let longest = routed.iterations.last().and_then(|i| i.critical);
-    let paths = model.as_ref().map_or_else(Vec::new, |model| {
+    // The model times any finished route, so the report does not need the
+    // route to have been timing-driven.
+    let paths = if endpoints == 0 {
+        Vec::new()
+    } else {
+        let model =
+            model.unwrap_or_else(|| Timing::for_netlist(&netlist, board.node_delays(), LUT_DELAY));
         crate::fpga::route::latest_paths(
             &netlist,
             &board.graph,
             &placement,
             &routing,
-            model,
+            &model,
             endpoints,
         )
-    });
+    };
     let problems = routing.verify(&netlist, &board.graph, &placement);
     if !problems.is_empty() {
         return Err(format!(

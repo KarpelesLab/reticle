@@ -1197,8 +1197,31 @@ it. Each of these was run, and each came out clean:
   word 3 included.
 
 So the fault needs both this design and `--pins-at-entry`, and the
-small slaves built with that option do not show it. Which property of
-this placement causes it is open.
+small slaves built with that option do not show it.
+
+**What arrives late is the previous response, whole.** The burst slave
+was rebuilt with two more words: a count of read addresses accepted
+(word 13), and of read beats handed over (word 12). Ten 32-bit reads at
+25 MHz returned 0, 1, 2, 2, 3, `0x200`, 0, 7, 7, 9. The correct answers
+are 1, 2, 2, 3, `0x200`, 0, 7, 7, 9, 10, so each read returned exactly
+what the read before it should have, as of that read. A stale address
+would have given read 2 the count as of read 2, which is 2, not 1.
+Every read was accepted once, and every response the slave computed
+was right. The processor took the previous response's `RDATA` with the
+current `RVALID`.
+
+The report for that exact bitstream (rebuilt byte for byte) puts
+`RVALID`'s flip-flop on row 281 and the data's on rows 187–218, in
+different clock regions. By the model, the data bits that came back
+stale reach the port *before* `RVALID` does, 181–285 against 295.
+That rules out a port clock that is merely late, which would have
+left the early bits new. The model has no clock skew between regions,
+and this is the next thing to measure. A slave built to measure a late
+port clock (the read count's low bit through delay taps, `RVALID`
+beside the pins) read every tap new at 25 and 100 MHz, so it found no
+early sampling to measure. The clock leaf tiles have no inversion
+feature, so a region clocked on the other edge is not the cause either.
+Which property of this placement causes it is open.
 
 ### A safety net: the AXI timeout block
 

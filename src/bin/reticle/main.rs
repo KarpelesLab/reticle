@@ -260,9 +260,10 @@ Options:
                      of every connection; then each clock's spread of
                      arrival, a rough hold check, and each clock's route to
                      the flip-flop it reaches last.
-                     UltraScale+: the 200 latest endpoints by the router's
-                     model, each with its path, pins, arrivals and tiles;
-                     no clocks, no hold, and the unit is the model's.
+                     UltraScale+ (with --bitstream, timing-driven or not):
+                     the 200 latest endpoints by the router's model, each
+                     with its path, pins, arrivals and tiles; no clocks, no
+                     hold, and the unit is the model's.
   --place-schedule   Print the annealing schedule as it ran, one line per
                      temperature: the move window, the moves tried and
                      accepted, and the wirelength at the end of the step.
