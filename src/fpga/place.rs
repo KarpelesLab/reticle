@@ -6863,8 +6863,28 @@ fn analyse_paths(
         // reach its register is critical against its own group's latest
         // path; against the whole domain's, a register path twice the
         // period long made it look half slack, and the router's exponent
-        // made that nothing.
-        for (from_pad, to_pad) in [(false, false), (true, false), (false, true), (true, true)] {
+        // made that nothing. And a path given several periods is weighed
+        // against the latest of those, not of the paths given one: in a
+        // domain whose single-period paths ran to 15 ns, a two-period path
+        // was allowed 30, and the Husky Plus's slow-FIFO bank read was
+        // placed and routed to 22.9 ns of its 20.8 as if it had nothing to
+        // lose.
+        let cycles_of =
+            |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
+        let groups = [false, true].into_iter().flat_map(|multi| {
+            [(false, false), (true, false), (false, true), (true, true)]
+                .map(|(from_pad, to_pad)| (from_pad, to_pad, multi))
+        });
+        for (from_pad, to_pad, multi) in groups {
+            let ends = |index: usize| {
+                here(index)
+                    && !flag(&timing.untimed_to, index)
+                    && pad(index) == to_pad
+                    && (cycles_of(index) > 1.0) == multi
+            };
+            if !(0..netlist.instances.len()).any(ends) {
+                continue;
+            }
             // Forwards: every output pin's arrival.
             let arrival = domain_arrival(netlist, timing, order, wires, domain, &|instance| {
                 pad(instance) == from_pad
@@ -6874,11 +6894,6 @@ fn analyse_paths(
             };
             // The longest path, a path allowed several periods measured in
             // one: what it is late by, in the period's terms.
-            let ends = |index: usize| {
-                here(index) && !flag(&timing.untimed_to, index) && pad(index) == to_pad
-            };
-            let cycles_of =
-                |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
             let mut longest = 0.0f64;
             for (index, inst) in netlist.instances.iter().enumerate() {
                 if !ends(index) {
@@ -8043,6 +8058,55 @@ mod tests {
             "{:?}",
             critical.pins
         );
+    }
+
+    /// **A multicycle path is weighed against its own group's latest.**
+    /// The chain split as above, period 0.5: the first path 1.25 ns in
+    /// one period, the second 1.05 ns in the two its end is given, so
+    /// 0.05 ns late. Against the domain's latest, 1.25 ns, it had 2.5 ns
+    /// to arrive in and came out with no criticality at all; on the Husky
+    /// Plus that let a slow FIFO's two-period bank read, in a domain whose
+    /// single-period paths ran to 15 ns, wander to 22.9 ns of its 20.8
+    /// and lose every capture. Against the latest of the paths given
+    /// several periods, it is 1, and the single-period path is still 1.
+    /// Would catch multicycle ends timed against the single-period paths
+    /// again; would not catch two multicycle paths of different counts
+    /// sharing a group, which this does not separate.
+    #[test]
+    fn a_multicycle_path_is_weighed_against_its_own_groups_latest() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            if pin.instance == 2 {
+                timing.pins[index] = if pin.output {
+                    PinTiming::Start
+                } else {
+                    PinTiming::End
+                };
+            }
+        }
+        timing.domain[2] = PathDomain::Clock(0);
+        timing.launch[2] = 0.3;
+        timing.capture[2] = 0.05;
+        timing.periods = vec![0.5];
+        timing.cycles = vec![1, 1, 1, 2];
+        let order = timing_order(&netlist, &timing);
+        let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![1250]);
+        let into = |instance: usize| {
+            netlist.instances[instance]
+                .pins
+                .iter()
+                .copied()
+                .find(|p| !netlist.pins[*p].output)
+                .unwrap()
+        };
+        for instance in [1, 2, 3] {
+            assert!(
+                (critical.pins[into(instance)] - 1.0).abs() < 1e-9,
+                "{instance}: {:?}",
+                critical.pins
+            );
+        }
     }
 
     /// **An input reaches only the outputs its mask names.** The same
