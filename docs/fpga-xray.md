@@ -5003,6 +5003,60 @@ The change is kept for what it fixes in the model, and the numbers are why
 it is not given more credit than that. Of the five, only seed 2's analyser
 shows the clean runs of 20 at 40 times that NewAE's does.
 
+### The input delays lost, and a multicycle path weighed as slack (2026-10-29)
+
+**The bus's input delays were lost for a day.** Once `--constraints` could
+be given twice (`bee8f53`), every file went through `Constraints::merge`,
+and `merge` copied every kind of constraint but `set_input_delay`. Nothing
+had noticed while the only merge was a source's attributes, where none can
+be written. The Husky Plus's bus pads lost their 13.4 ns and were timed
+from their buffers alone in every domain; every count in the two sections
+above was measured so, and is comparable with the others there but not with
+what follows. Fixed in `f846ea9`, with a test that merges a file of every
+directive into nothing and wants it back unchanged.
+
+With the delays back, five seeds of master passed 30, 14, 32, 23 and 25.
+Seed 2's captures came back empty or wrong in every ramp test. **The first
+reading, not right:** its slow FIFO's bank read was estimated at 22.9 ns of
+the 20.8 its two periods give it, so that was the fault. Seed 3 passed 32
+with the same path at 23.3 ns. What did follow the counts was how many
+`clk_usb` endpoints in `oadc`, the slow FIFO's, were late: 27 and 39 for the
+seeds passing 30 and 32, 113 for 23, 160 for 14.
+
+**Why so many.** A connection's criticality is its slack against the period
+or its group's latest path, whichever is longer, and the groups (pad or
+register, at each end) did not separate a path given several periods from
+those given one. `clk_usb`'s single-period paths ran to about 15 ns, so a
+two-period path was allowed 30 and came out with no weight at all, in the
+placer and the router both: a bank's 16 segments, block RAMs wherever the
+four columns had room, were joined by an OR across the die, routed around
+congestion. Paths ending where a multicycle constraint applies now form
+groups of their own (`place::analyse_paths`, `69299ab`; the test is
+`a_multicycle_path_is_weighed_against_its_own_groups_latest`).
+
+| configuration | seed 1 | 2 | 3 | 4 | 5 | mean |
+|---|---|---|---|---|---|---|
+| master, input delays restored (`f846ea9`) | 30 | 14 | 32 | 23 | 25 | 24.8 |
+| and a registered write in the shared FIFO | 24 | 32 | 22 | 22 | 23 | 24.6 |
+| and multicycle paths in their own groups (`69299ab`) | **35** | 32 | 26 | 25* | 24 | 28.4 |
+
+\* Seed 4 did not converge and was placed again at seed 5, as
+`--route-attempts` does, so it is seed 5's bitstream, byte for byte: two
+runs of one bitstream, one test apart, which is the suite's own noise.
+
+Seed 1 fails what NewAE's bitstream fails, the four `test_glitch_width`
+cases, and `test_fpga_version`, which checks NewAE's build time; it passes
+the PLL test NewAE's fails. Every build of the last row captures every ramp
+exactly and reads the ADC chip exactly at 250 MHz; no bank read is late.
+What still varies by seed is the analyser at 400 MHz (`laclk.py` shows clean
+runs of 20 on seeds 1 and 2 and pieces on 3 and 5), the fastest ADC ramps
+and `adc_reset`, and `test_pll`'s third multiple. The routes took longer:
+1,100 to 3,700 s, and seed 4's first did not converge.
+
+The registered write (the second row) staged the shared FIFO's write a cycle
+so its pointer and flags had a whole period; it gained nothing and is not
+kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
