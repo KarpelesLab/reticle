@@ -5108,7 +5108,11 @@ fn legalise(
     // after the cells confined to a few sites, fewest first, which a cell
     // free to go anywhere would otherwise take from them: the Husky Plus's
     // bus registers, kept by `confine_to_input_budget` to the sixteen
-    // flip-flop sites nearest their pads, found them all taken.
+    // flip-flop sites nearest their pads, found them all taken. And after
+    // those, the cells a region confines, for the same reason: the Husky
+    // Plus's shared FIFO, its 16 block RAMs given a region of 52 block RAM
+    // sites on a part whose block RAMs are nearly all in use, found every
+    // one of them taken by block RAMs free to go anywhere.
     let mut order: Vec<usize> = (0..netlist.instances.len())
         .filter(|i| info[*i].fixed.is_none() && info[*i].macro_index.is_none())
         .collect();
@@ -5116,6 +5120,7 @@ fn legalise(
         let (x, y) = positions[*i];
         (
             info[*i].allowed.as_ref().map_or(usize::MAX, Vec::len),
+            info[*i].region.is_none(),
             to_grid(y, graph.height),
             to_grid(x, graph.width),
             netlist.instances[*i].name.clone(),
@@ -8356,6 +8361,59 @@ mod tests {
             }
         );
         assert!(err.to_string().contains("region `corner` holds 4"));
+    }
+
+    /// **A region's cells are seated before cells free to go anywhere.**
+    /// Every site of a 6 by 6 grid taken, and six of the cells held to a
+    /// corner of six sites: it places, the six in the corner. Seated by
+    /// target position alone, cells with no region took corner sites first
+    /// and the region's own found none, which stopped the Husky Plus's build
+    /// with its shared FIFO's block RAMs given a region three times their
+    /// number. Would catch that order back; would not catch a region of
+    /// one kind of site filled by another kind, which cannot happen.
+    #[test]
+    fn a_regions_cells_are_seated_before_free_ones() {
+        use crate::fpga::{Origin, Region, RegionAssignment};
+        use crate::source::{SourceMap, Span};
+
+        let (arch, graph) = grid(6, 6);
+        let netlist = chain(36);
+        let mut sources = SourceMap::new();
+        let file = sources.add("c.rcf", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut constraints = Constraints::new();
+        constraints.regions.push(Region {
+            name: "corner".to_owned(),
+            x0: 4,
+            y0: 3,
+            x1: 5,
+            y1: 5,
+            span,
+        });
+        // `lut0`'s neighbours in the chain, which sit far from the corner.
+        for name in ["lut0", "lut1", "lut2", "lut3", "lut4", "lut5"] {
+            constraints.region_assignments.push(RegionAssignment {
+                pattern: name.to_owned(),
+                region: "corner".to_owned(),
+                span,
+                origin: Origin::File,
+            });
+        }
+        let (placement, _) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &constraints,
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        for i in 0..6 {
+            let (x, y) = graph.sites[placement.site_of(i).unwrap()].tile;
+            assert!(
+                (4..=5).contains(&x) && (3..=5).contains(&y),
+                "lut{i} at ({x}, {y})"
+            );
+        }
     }
 
     #[test]
