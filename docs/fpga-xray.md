@@ -5057,6 +5057,29 @@ The registered write (the second row) staged the shared FIFO's write a cycle
 so its pointer and flags had a whole period; it gained nothing and is not
 kept.
 
+**What a broken analyser stores.** On seed 5 of the last row, captured at 40
+times, every second word the shared FIFO gives back is zero, and it gives 256
+words for 512 samples; its overflow flag stays clear (`scope.LA.errors`). At
+20 times the same bitstream is clean. That is the write side losing step
+with the writes, not a full flag raised wrongly. The stand-in FIFO's logic
+sat at column 107 on every seed, the analyser's region at 40 to 64, and
+`fifo_wr` (not in the region) as far out as column 33. Note too that
+`husky_plus.rcf` gives the write pointer two periods, and the write enable
+it adds changes on every edge, so that path has one; the exception is kept
+for now only because removing it has not been measured on its own.
+
+Two tries at closing that distance, neither kept:
+
+| configuration | seed 1 | 2 | 3 | 4 | 5 | mean |
+|---|---|---|---|---|---|---|
+| the analyser's region beside the FIFO (columns 92 to 106), with `fifo_wr`, and the pointer at one period | 22 | 20 | 24 | 22 | 19 | 21.4 |
+| the FIFO's write two registers late, for the placer to put between | 23 | 19 | 25 | 31 | 26 | 24.8 |
+
+The first left the analyser's trigger logic where it was, now about 40
+columns behind its capture registers: on all five seeds the analyser
+stored nothing at all above 200 MHz ("FIFO is empty"), and was clean at
+200. The second was no better than without it.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
