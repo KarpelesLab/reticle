@@ -525,6 +525,21 @@ impl Constraints {
         self.false_paths.extend(other.false_paths);
         self.multicycle_paths.extend(other.multicycle_paths);
         self.max_delays.extend(other.max_delays);
+        // Missing here until 2026-10-29, which nothing noticed while the
+        // only constraints merged were a source's attributes, where no
+        // input delay can be written. Once several files were merged
+        // (`--constraints` given twice), the Husky Plus's bus lost its
+        // 13.4 ns input delays and every bus pad was timed in every domain
+        // from its buffer alone.
+        for delay in other.input_delays {
+            if !self
+                .input_delays
+                .iter()
+                .any(|d| d.clock == delay.clock && d.ports == delay.ports)
+            {
+                self.input_delays.push(delay);
+            }
+        }
         for domain in other.clock_domains {
             if !self.clock_domains.iter().any(|d| d.name == domain.name) {
                 self.clock_domains.push(domain);
@@ -2472,6 +2487,40 @@ mod tests {
                 "{text}: {rendered}"
             );
         }
+    }
+
+    /// **Merging a file into nothing keeps all of it.** Every kind of
+    /// constraint, parsed and merged into an empty set, gives back what
+    /// was parsed. `merge` once left the input delays behind, which nothing
+    /// saw until `--constraints` could be given twice and every file went
+    /// through it: the Husky Plus's bus lost its 13.4 ns. Would catch any
+    /// kind of constraint `merge` drops, including one added later and
+    /// forgotten there; would not catch precedence between two files that
+    /// disagree, which `fpga_reads_several_constraint_files_the_first_winning`
+    /// (in `tests/cli.rs`) is for.
+    #[test]
+    fn merging_a_file_into_nothing_keeps_all_of_it() {
+        let (parsed, diags, map) = parse(
+            "\
+set_io -io_standard LVCMOS33 -drive 8 clk 21
+region core 0 0 7 7
+assign ff region core
+rloc ff 1 -2 group adder
+keep_hierarchy ff
+create_clock -name sys -period 83.3 clk
+clock_domain sys clk
+set_false_path -from d
+set_multicycle_path 2 -setup -to q
+set_max_delay 15 -from d
+set_input_delay -clock sys 12.4 d
+",
+        );
+        assert_eq!(diags.render(&map), "");
+        let mut merged = Constraints::new();
+        let mut diags = Diagnostics::new();
+        merged.merge(parsed.clone(), &mut diags);
+        assert_eq!(merged, parsed);
+        assert_eq!(merged.input_delays.len(), 1);
     }
 
     #[test]
