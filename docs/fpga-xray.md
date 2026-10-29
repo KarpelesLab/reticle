@@ -5080,6 +5080,44 @@ columns behind its capture registers: on all five seeds the analyser
 stored nothing at all above 200 MHz ("FIFO is empty"), and was clean at
 200. The second was no better than without it.
 
+The pointer's exception has since been measured on its own: without it,
+seeds 1 to 5 passed 26, 27, 27, 25 and 35 (mean 28.0, against 28.4 with
+it). That is noise either way, so the line stays, though it remains wrong
+in principle.
+
+**The fast ADC captures: a block RAM far from its pointers.** The tests
+that fail most after the analyser are the 250 MHz captures (`fastest`,
+`ADCaltfast`, the fast segment ramps and `adc_reset`). A capture repeated
+outside the suite (the `fastest` settings, the FPGA's own counter, every
+sample of 346,246 compared) separates the builds cleanly. NewAE's bitstream
+and the 35-pass seed are exact at 250 MHz. Seed 2 without the pointer
+exception is wrong from 200 MHz, where every second sample is a counter
+value from an earlier cycle; that is a write port catching an address or
+enable late, not a value bit late. In that build the fast FIFO's block RAM
+is at column 19, row 135, and its pointers are at (46, 37). Its
+write-enable and address paths are estimated at 6.5 to 6.7 ns of 4, against
+4.5 on the clean seed, which put the same RAM at row 72. The trigger FIFO's
+RAM is also at column 19 on every seed.
+
+The reading was that a block RAM cannot leave the column legalisation gave
+it. The anneal's move window is counted in tiles and a timing round starts
+it at eight, while the XC7A100T's block RAM columns are tens of tiles
+apart. A change that let the window always reach the next column and row of
+a cell's own kind (VPR counts its window in the kind's own columns for this
+reason) was built at five seeds:
+
+| configuration | seed 1 | 2 | 3 | 4 | 5 | mean |
+|---|---|---|---|---|---|---|
+| the window reaching the next column of its kind | (seed 2's) | 16 | 33 | 23 | 26 | 24.5 |
+
+Seed 1 did not route and retried at seed 2, so it is the same bitstream.
+It is worse than without the change, and three of the four builds lost the
+20 MHz ramps that every seed had passed. Moving block RAMs freely disturbs
+the slow FIFO's banks, which were made to pass by constraining where they
+go. It is not kept. That the window holds block RAMs is read from the code, not
+measured; that this is the fast captures' cause is a reading the one build
+supports and the change did not confirm.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
