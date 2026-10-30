@@ -119,6 +119,11 @@ enum Shape {
     /// `y = a - b`, which no family lowers through the carry path; it is
     /// here to prove that it still comes out right.
     Subtract,
+    /// `y = {0, a} - {0, b}` at three times the inputs' width: a
+    /// difference whose upper operand bits are constant, which is what
+    /// Verilog makes of `outside - take <= EXTRA` (the `EXTRA` is 32 bits
+    /// wide) in the Husky Plus's slow FIFO.
+    SubtractWidened,
     /// `y = (a - b) + cin`: a carry-in added to a difference that stays
     /// in lookup tables, so every lane `cin` does not reach has its
     /// generate equal to its propagate, a lookup table's output. That is
@@ -203,6 +208,15 @@ impl Shape {
                 let ne = b.net(next);
                 b.cell2("same", CellKind::Eq, ae, ne, y);
             }
+            Shape::SubtractWidened => {
+                let wide = width * 3;
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let y = b.output("y", Type::bits(wide));
+                let (ae, be) = (b.net(a), b.net(bn));
+                let (za, zb) = (b.zext(ae, wide), b.zext(be, wide));
+                b.cell2("difference", CellKind::Sub, za, zb, y);
+            }
             Shape::EqualWidened => {
                 let wide = width * 3;
                 let a = b.input("a", Type::bits(width));
@@ -265,6 +279,7 @@ impl Shape {
     fn result_width(self, width: u32) -> u32 {
         match self {
             Shape::Widened => width + 1,
+            Shape::SubtractWidened => width * 3,
             Shape::Equal | Shape::EqualWidened => 1,
             _ => width,
         }
@@ -300,6 +315,7 @@ impl Shape {
             Shape::Widened => (a + b) & mask(width + 1),
             Shape::Constant(k) => a.wrapping_add(k) & mask(width),
             Shape::Subtract => a.wrapping_sub(b) & mask(width),
+            Shape::SubtractWidened => a.wrapping_sub(b) & mask(width * 3),
             Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
             Shape::Equal => u64::from(a == (b + 1) & mask(width)),
             Shape::EqualWidened => u64::from(a == b.wrapping_sub(2) & mask(width * 3)),
@@ -968,6 +984,51 @@ fn a_subtraction_goes_onto_the_chain_and_is_still_right() {
     // pair nothing: its propagates have no generate tables to share with.)
     for width in [4, 5, 8] {
         check_full(Shape::Subtract, width, XC7, low.clone(), true, false);
+    }
+}
+
+/// **A subtraction of narrower operands is a chain of their width.**
+/// `{0, a} - {0, b}` at three times the width: the operands differ by
+/// less than `2^width`, so the chain is `width + 1` bits of difference
+/// (one `CARRY4` per four bits of the one-wider sum) and the bits above
+/// copy its top one. At the full width the Husky Plus's
+/// `outside - take <= EXTRA` was nine `CARRY4`s in a row for six bits
+/// and one. And the threshold is against that narrower width: a
+/// subtraction whose operands are below it stays in tables however wide
+/// its result. Every input at 4 and 5 bits, legalised as the flow builds
+/// it. Would catch the upper bits filled with zeros rather than the sign
+/// (every negative difference wrong), the chain left at the full width,
+/// or the threshold read off the result; would not catch a signed
+/// operand narrowed, which is left at the full width by the code and not
+/// exercised here.
+#[test]
+fn a_subtraction_of_narrower_operands_is_a_chain_of_their_width() {
+    let low = MapOptions {
+        min_subtract_carry_width: 1,
+        ..MapOptions::default()
+    };
+    for width in [4, 5] {
+        check_full(Shape::SubtractWidened, width, XC7, low.clone(), true, false);
+        let (_, _, report) = mapped(Shape::SubtractWidened, width, XC7, low.clone());
+        assert_eq!(
+            report.count("CARRY4"),
+            usize::try_from((width + 2).div_ceil(4)).unwrap(),
+            "{width} bits of operand"
+        );
+        let above = MapOptions {
+            min_subtract_carry_width: width + 2,
+            ..MapOptions::default()
+        };
+        check_full(
+            Shape::SubtractWidened,
+            width,
+            XC7,
+            above.clone(),
+            true,
+            false,
+        );
+        let (_, _, report) = mapped(Shape::SubtractWidened, width, XC7, above);
+        assert_eq!(report.count("CARRY4"), 0, "below the threshold");
     }
 }
 

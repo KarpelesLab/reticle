@@ -3371,8 +3371,26 @@ impl Mapper<'_> {
             else {
                 continue;
             };
-            let width = net_width(module, y);
-            if width
+            let full = net_width(module, y);
+            let wide = |e: ExprId| module.exprs.get(e).and_then(|e| e.ty.width()) == Some(full);
+            if !wide(a) || !wide(b) {
+                continue;
+            }
+            // Operands widened with zeros from at most `k` bits differ by
+            // less than `2^k`, so the difference is `k + 1` bits and its
+            // sign above them: the chain is that long and its top bit
+            // copied up. `outside - take <= EXTRA` in the Husky Plus's
+            // slow FIFO is six bits and one at the width of a 32-bit
+            // parameter, and at its full width it was nine `CARRY4`s and
+            // 5.2 ns in a row (2026-10-30).
+            let (sa, ka, signed_a) = significant_operand(module, a);
+            let (sb, kb, signed_b) = significant_operand(module, b);
+            let narrow = if signed_a || signed_b {
+                full
+            } else {
+                (ka.max(kb) + 1).min(full)
+            };
+            if narrow
                 < self
                     .options
                     .min_carry_width
@@ -3380,11 +3398,23 @@ impl Mapper<'_> {
             {
                 continue;
             }
-            let wide = |e: ExprId| module.exprs.get(e).and_then(|e| e.ty.width()) == Some(width);
-            if !wide(a) || !wide(b) {
-                continue;
-            }
             let (span, name) = (cell.span, cell.name.as_str().to_owned());
+            let (a, b, width) = if narrow < full {
+                let resize = |module: &mut Module, e: ExprId| {
+                    expr(
+                        module,
+                        ExprKind::Resize {
+                            expr: e,
+                            width: narrow,
+                            signed: false,
+                        },
+                        span,
+                    )
+                };
+                (resize(module, sa), resize(module, sb), narrow)
+            } else {
+                (a, b, full)
+            };
             let not_b = {
                 let label = format!("{name}$neg");
                 let net = add_net(module, &label, Type::bits(width), span);
@@ -3412,7 +3442,19 @@ impl Mapper<'_> {
                 span,
             );
             let sum = net_expr(module, sum_net, span);
-            let sum = slice_expr(module, sum, width, 1, span);
+            let mut sum = slice_expr(module, sum, width, 1, span);
+            if width < full {
+                let sign = slice_expr(module, sum, width - 1, width - 1, span);
+                let upper = expr(
+                    module,
+                    ExprKind::Replicate {
+                        count: full - width,
+                        expr: sign,
+                    },
+                    span,
+                );
+                sum = expr(module, ExprKind::Concat(vec![upper, sum]), span);
+            }
             add_assign(module, y, sum, span);
             removed.push(sub);
         }
