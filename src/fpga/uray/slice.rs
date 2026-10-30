@@ -154,8 +154,10 @@ mod tests {
 /// `A`–`D`, to the first of `E`–`H` and to the second of `E`–`H`, and
 /// [`slice_model`] refuses a database where they do not. Which *pin* each
 /// group listens to is not in the database. `AFF` on `CLK1`, `CKEN1` and
-/// `SRST1` is **measured** (`one_flip_flop` in `tests/fpga_uray_board.rs`);
-/// the rest of this table is the reading that follows from it and has not
+/// `SRST1` is **measured** (`one_flip_flop` in `tests/fpga_uray_board.rs`),
+/// and so are all four enables, each reaching its own group and no other,
+/// and `CLK2` clocking `EFF` and `EFF2` (`four_clock_enables`). The
+/// resets of the other groups are the reading that follows, and have not
 /// been run.
 pub fn control_pins(letter: char, second: bool) -> (&'static str, &'static str, &'static str) {
     let upper = matches!(letter, 'E' | 'F' | 'G' | 'H');

@@ -565,7 +565,9 @@ Nothing else happened: no interrupt, no over-current. That is one
 flip-flop of sixteen, with its data from the bypass. The second
 flip-flops (`AFF2`), the other letters, the lookup table path
 (`FFMUXA1.SP.D6.OUT1`) and which flip-flops share a clock enable are
-still readings of the database, not measurements.
+still readings of the database, not measurements. (The enables, `CLK2` and the
+`D6` path of `AFF2` and `EFF2` were measured later; see "Which enable
+serves which flip-flops".)
 
 ### On the falling edge
 
@@ -600,6 +602,41 @@ control:
 `CLK2`'s bit and the inverter's effect on `AFF2` and the other letters
 are readings of the database, not measurements. Whether Vivado's own
 bitstreams use the bit has not been looked at.
+
+### Which enable serves which flip-flops
+
+**Run on the ZCU104 on 2026-10-30: the table `uray::slice::control_pins`
+gives is right for all four enables.** Until then only `CKEN1` had been
+measured, and the other three rows were what follows from the
+database's shared "used" bits. It was tested because a wrong row would
+make a register load on another register's enable, which was one
+explanation for the AXI slaves below answering one transaction late.
+
+`four_clock_enables` puts one flip-flop in each group of the slice
+beside `INT_X27Y206`: `AFF` (`CKEN1`), `AFF2` (`CKEN2`), `EFF`
+(`CKEN3`) and `EFF2` (`CKEN4`). Each group's enable is routed from its
+own EMIO line to the pin the table names. The second flip-flops take
+their data through their lookup table (`D6`, the table passing `A1`),
+because the router finds no route from EMIO to the bypass pins `A_I`
+and `E_I`; that is a question about the database or the router, still
+open. An EMIO line has one way out of the processor, so the four data
+pins and two clocks each have a line of their own.
+
+| enable on | `AQ` `AQ2` `EQ` `EQ2` after an edge with data 1 |
+|---|---|
+| none | 0 0 0 0 |
+| `ABCD1` | 1 0 0 0 |
+| `ABCD2` | 0 1 0 0 |
+| `EFGH1` | 0 0 1 0 |
+| `EFGH2` | 0 0 0 1 |
+| all four | 1 1 1 1 |
+
+Each row was followed by an edge with data 0 and every enable on, which
+cleared all four. So each enable reaches its own group and no other,
+and that explanation is ruled out. The same run clocked `EFF` and `EFF2` from
+`CLK2`, so that pin is measured too. The resets of the second groups, and
+whether a reset acts while its group's enable is off, are still
+readings.
 
 ## The processor's clocks, found by counting them
 
@@ -1268,7 +1305,8 @@ only that.
 
 1. **More of the slice**: the carry chain, for adders that are not
    lookup-table ripples; the lookup table's direct path to its
-   flip-flop; and the enable and reset pins of every group, measured.
+   flip-flop; and the reset pins of every group but the first, measured
+   (the enables are, in "Which enable serves which flip-flops").
 2. **A clock of Reticle's own.** `PL_CLK0` now reaches slices through
    Vivado's clock network, replayed (above). Building that network rather
    than borrowing it needs the processor's clock buffers on this die,

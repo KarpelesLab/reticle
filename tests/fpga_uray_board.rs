@@ -151,6 +151,100 @@ fn flip_flop(name: &str, extra: &[&str]) {
     write(&board.finish(name).unwrap(), &out, name);
 }
 
+/// One flip-flop in each of a slice's four clock-enable groups, each
+/// group's enable on its own EMIO output, to test which `CKEN` pin serves
+/// which group.
+///
+/// `uray::slice::control_pins` says `CKEN1` serves `AFF`–`DFF`, `CKEN2`
+/// `AFF2`–`DFF2`, `CKEN3` `EFF`–`HFF` and `CKEN4` `EFF2`–`HFF2`; only the
+/// first was measured (`one_flip_flop`). Here `AFF`, `AFF2`, `EFF` and
+/// `EFF2` of the slice beside `INT_X27Y206` share their data and clock,
+/// and each group's enable is routed, as the flow routes it, to the pin
+/// that table names:
+///
+/// | EMIO out | pin | | EMIO in | from |
+/// |---|---|---|---|---|
+/// | 0, 10, 11, 12 | data, to `AX`, `A1`, `EX`, `E1` | | 1 | `AQ` |
+/// | 2, 13 | `CLK1`, `CLK2` | | 7 | `AQ2` |
+/// | 3 | the `ABCD1` group's enable | | 8 | `EQ` |
+/// | 4 | `ABCD2`'s | | 9 | `EQ2` |
+/// | 5 | `EFGH1`'s | | | |
+/// | 6 | `EFGH2`'s | | | |
+///
+/// An EMIO output has one way out of the processor, so each pin has its
+/// own line, and Linux writes the lines of a group together, in one store
+/// to the bank's data register.
+///
+/// With one enable on and a clock edge, exactly the flip-flop of that
+/// group must take the data. A wrong row of the table shows as a different
+/// flip-flop taking it, or none. No reset is routed, so every group's
+/// reset is off. The second flip-flops take their data from their lookup
+/// table (`D6`), which passes `A1` (or `E1`) through, because the router
+/// finds no route from EMIO to their bypass pins `A_I` and `E_I`.
+#[test]
+#[ignore = "writes a bitstream for the board"]
+fn four_clock_enables() {
+    let (Some(bits), Some(wiring), Some(out)) = (uraydb(), wiringdb(), out_dir()) else {
+        return;
+    };
+    let inputs = inputs(&bits, &wiring);
+    let mut board = Board::new(&inputs, None).unwrap();
+    let slice = "CLEL_R_X27Y206";
+    let connect = |board: &mut Board<'_>, from: u32, to: u32, what: &str| {
+        let route = board.connect(from, to).unwrap();
+        eprintln!("{what}: {route:?}");
+    };
+    for (emio, pin) in [
+        (0, "AX"),
+        (10, "A1"),
+        (11, "EX"),
+        (12, "E1"),
+        (2, "CLK1"),
+        (13, "CLK2"),
+    ] {
+        let (from, to) = (
+            board.emio_out(emio).unwrap(),
+            board.slice_pin(slice, pin).unwrap(),
+        );
+        connect(&mut board, from, to, pin);
+    }
+    for (emio, group) in [(3, "ABCD1"), (4, "ABCD2"), (5, "EFGH1"), (6, "EFGH2")] {
+        let from = board.emio_out(emio).unwrap();
+        let to = board
+            .wire(slice, &format!("RETICLE_SLICE_CE_{group}"))
+            .unwrap();
+        connect(&mut board, from, to, group);
+    }
+    for (pin, emio) in [("AQ", 1), ("AQ2", 7), ("EQ", 8), ("EQ2", 9)] {
+        let from = board.slice_pin(slice, pin).unwrap();
+        let to = board.emio_in(emio).unwrap();
+        connect(&mut board, from, to, pin);
+    }
+    for letter in ['A', 'E'] {
+        board.lut(slice, letter, 0xaaaa_aaaa_aaaa_aaaa).unwrap();
+    }
+    for (letter, ff, n, from) in [
+        ('A', "AFF", 1, "BYP"),
+        ('A', "AFF2", 2, "D6"),
+        ('E', "EFF", 1, "BYP"),
+        ('E', "EFF2", 2, "D6"),
+    ] {
+        for feature in [
+            format!("SLICE_X0Y0.FFMUX{letter}{n}.SP.{from}.OUT{n}"),
+            format!("SLICE_X0Y0.{ff}.SYNC_ATTR=SYNC"),
+            format!("SLICE_X0Y0.{ff}.FFINIT=INIT0"),
+            format!("SLICE_X0Y0.{ff}.FFSR=SRLOW"),
+        ] {
+            board.feature(slice, &feature).unwrap();
+        }
+    }
+    write(
+        &board.finish("four_clock_enables").unwrap(),
+        &out,
+        "four_clock_enables",
+    );
+}
+
 /// Which leaf sites of the `RCLK_INT_L` tile `tile` Vivado fed from
 /// horizontal distribution track `track` and switched on without a clock
 /// enable, read from Vivado's bitstream.
