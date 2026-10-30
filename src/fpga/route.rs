@@ -925,10 +925,9 @@ impl State {
         }
     }
 
-    /// Whether `node` is the only way into a sink of a signal other than
-    /// `signal`.
-    fn reserved_against(&self, node: NodeId, signal: usize) -> bool {
-        let root = self.group[node as usize];
+    /// Whether the physical node `root` (see [`State::group`]) is the only
+    /// way into a sink of a signal other than `signal`.
+    fn reserved_against(&self, root: NodeId, signal: usize) -> bool {
         let (word, bit) = (root as usize / 64, root % 64);
         if self.reserved[word] >> bit & 1 == 0 {
             return false;
@@ -939,9 +938,9 @@ impl State {
     }
 
     /// The cost of putting one more signal on a node whose base cost is
-    /// `base`.
-    fn node_cost(&self, node: NodeId, base: f32, present: f64) -> f64 {
-        let index = self.group[node as usize] as usize;
+    /// `base` and whose physical node is `root`.
+    fn node_cost(&self, root: NodeId, base: f32, present: f64) -> f64 {
+        let index = root as usize;
         // Capacity is one signal per wire; the excess is what the present
         // factor multiplies.
         let overuse = f64::from(self.occupancy[index]);
@@ -2510,13 +2509,8 @@ fn second_entry(graph: &RoutingGraph, group: &[NodeId], path: &[PipId]) -> Optio
 
 /// The per-expansion arrays, reused across the sinks of one signal.
 struct Scratch {
-    cost: Vec<f64>,
-    /// The cost plus the distance estimate, so that a stale queue entry is
-    /// recognised by one comparison rather than by estimating the distance
-    /// again. The expansion pops half a billion nodes for one design here.
-    estimate: Vec<f64>,
-    from: Vec<PipId>,
-    stamp: Vec<u32>,
+    /// Per graph node, what the search knows of it: see [`Reached`].
+    reached: Vec<Reached>,
     generation: u32,
     /// Nodes taken off the queue, for [`RoutingReport::visited`].
     visited: u64,
@@ -2547,10 +2541,7 @@ struct Scratch {
 impl Scratch {
     fn new(nodes: usize) -> Self {
         Scratch {
-            cost: vec![0.0; nodes],
-            estimate: vec![0.0; nodes],
-            from: vec![0; nodes],
-            stamp: vec![0; nodes],
+            reached: vec![Reached::default(); nodes],
             generation: 0,
             visited: 0,
             queued: 0,
@@ -2596,8 +2587,8 @@ impl Scratch {
     /// bit as a one whatever was written. Entering a tree node itself is
     /// not this: the path is cut there (see `route_one`), and the line's
     /// own joins (`group[from] == group[to]`) drive nothing.
-    fn holds(&self, group: &[NodeId], from: NodeId, to: NodeId) -> bool {
-        let root = group[to as usize];
+    /// `root` is `to`'s physical node, which the caller has already read.
+    fn holds(&self, group: &[NodeId], from: NodeId, to: NodeId, root: NodeId) -> bool {
         self.held[root as usize] == self.tree_mark
             && group[from as usize] != root
             && self.in_tree[to as usize] != self.tree_mark
@@ -2607,13 +2598,10 @@ impl Scratch {
         self.generation += 1;
     }
 
-    fn seen(&self, node: NodeId) -> bool {
-        self.stamp[node as usize] == self.generation
-    }
-
     fn cost_of(&self, node: NodeId) -> f64 {
-        if self.seen(node) {
-            self.cost[node as usize]
+        let reached = &self.reached[node as usize];
+        if reached.stamp == self.generation {
+            reached.cost
         } else {
             f64::INFINITY
         }
@@ -2621,20 +2609,46 @@ impl Scratch {
 
     /// The estimate this node was last queued under, or infinity.
     fn estimate_of(&self, node: NodeId) -> f64 {
-        if self.seen(node) {
-            self.estimate[node as usize]
+        let reached = &self.reached[node as usize];
+        if reached.stamp == self.generation {
+            reached.estimate
         } else {
             f64::INFINITY
         }
     }
 
-    fn set(&mut self, node: NodeId, cost: f64, estimate: f64, from: PipId) {
-        let index = node as usize;
-        self.cost[index] = cost;
-        self.estimate[index] = estimate;
-        self.from[index] = from;
-        self.stamp[index] = self.generation;
+    /// The pip the search last reached this node by.
+    fn from(&self, node: NodeId) -> PipId {
+        self.reached[node as usize].from
     }
+
+    fn set(&mut self, node: NodeId, cost: f64, estimate: f64, from: PipId) {
+        self.reached[node as usize] = Reached {
+            cost,
+            estimate,
+            from,
+            stamp: self.generation,
+        };
+    }
+}
+
+/// What a search knows of one node, together so that reading it is one
+/// cache line rather than four: the search relaxes billions of pips on a
+/// large die, and each relaxation reads its node's. Measured on one
+/// ChipWhisperer-Husky Plus placement it saved little: 1,732 s against
+/// 1,765 s for the same 4.44 billion visits (2026-10-30), which is within
+/// what the machine's load moves a route by.
+#[derive(Clone, Copy, Debug, Default)]
+struct Reached {
+    cost: f64,
+    /// The cost plus the distance estimate, so that a stale queue entry is
+    /// recognised by one comparison rather than by estimating the distance
+    /// again. The expansion pops half a billion nodes for one design here.
+    estimate: f64,
+    from: PipId,
+    /// [`Scratch::generation`] when this was written; anything else is a
+    /// node the current search has not reached.
+    stamp: u32,
 }
 
 /// The most sinks a net may have and still start every search from its
@@ -3037,20 +3051,22 @@ fn maze(
             {
                 continue;
             }
-            if scratch.holds(&state.group, node, *next) {
-                continue;
-            }
             let at = &geometry[*next as usize];
             if bounds.is_some_and(|b| !b.touches(at)) {
                 continue;
             }
+            // Its physical node, which the checks below all read.
+            let root = state.group[*next as usize];
+            if scratch.holds(&state.group, node, *next, root) {
+                continue;
+            }
             let step = if critical > 0.0 {
-                slack * state.node_cost(*next, at.base, present.min(scratch.present_cap))
+                slack * state.node_cost(root, at.base, present.min(scratch.present_cap))
                     + critical * f64::from(at.delay)
             } else {
-                state.node_cost(*next, at.base, present)
+                state.node_cost(root, at.base, present)
             };
-            let step = if state.reserved_against(*next, scratch.signal) {
+            let step = if state.reserved_against(root, scratch.signal) {
                 step * RESERVED_PENALTY
             } else {
                 step
@@ -3070,7 +3086,7 @@ fn maze(
     let mut path = Vec::new();
     let mut node = end;
     while !tree.contains_key(&node) {
-        let pip = scratch.from[node as usize];
+        let pip = scratch.from(node);
         if pip == PipId::MAX {
             return None;
         }
