@@ -257,9 +257,10 @@ Options:
                      endpoint the routed estimate puts late to this file,
                      latest first, each with the path to it: every pin, its
                      arrival and its tile, and for the five latest the wires
-                     of every connection; then each clock's spread of
-                     arrival, a rough hold check, and each clock's route to
-                     the flip-flop it reaches last.
+                     of every connection; then every connection out of an
+                     IO tile's register with its tiles and delay, each
+                     clock's spread of arrival, a rough hold check, and
+                     each clock's route to the flip-flop it reaches last.
                      UltraScale+ (with --bitstream, timing-driven or not):
                      the 200 latest endpoints by the router's model, each
                      with its path, pins, arrivals and tiles; no clocks, no
@@ -4113,6 +4114,9 @@ fn write_xc7_bitstream(
                     }
                 }
             }
+            text.push_str(&io_register_connections(
+                &netlist, &graph, &placement, &wire,
+            ));
             text.push_str(&hold_report(&netlist, &wire));
             text.push_str(&clock_paths(
                 &netlist, &graph, &placement, &routing, delays, &wire,
@@ -5114,6 +5118,55 @@ fn clock_paths(
                 node_delay.get(node as usize).copied().unwrap_or(0),
                 graph.wire(node).full_name()
             ));
+        }
+    }
+    text
+}
+
+/// Every connection out of a register in an IO tile's logic (`ddr_in`),
+/// for `--timing-endpoints`: where it goes and what its wire takes,
+/// late or not. The Husky Plus's ADC at 250 MHz read words whose upper
+/// six bits were one sample and lower six the next on about half the
+/// builds, with no path from an `IDDR` late by the model; these are the
+/// connections to compare between a build that reads it right and one
+/// that does not.
+fn io_register_connections(
+    netlist: &reticle::fpga::Netlist,
+    graph: &reticle::fpga::arch::RoutingGraph,
+    placement: &reticle::fpga::place::Placement,
+    wire: &[f64],
+) -> String {
+    let tile = |instance: usize| {
+        placement
+            .site_of(instance)
+            .map_or(String::from("?"), |site| {
+                let (x, y) = graph.sites[site].tile;
+                format!("{x},{y}")
+            })
+    };
+    let mut text = String::new();
+    for (index, inst) in netlist.instances.iter().enumerate() {
+        if inst.kind != "ddr_in" {
+            continue;
+        }
+        for pin in &inst.pins {
+            let out = &netlist.pins[*pin];
+            let Some(signal) = out.signal.filter(|_| out.output) else {
+                continue;
+            };
+            for sink in &netlist.signals[signal].sinks {
+                let to = &netlist.pins[*sink];
+                text.push_str(&format!(
+                    "io register {}.{} @{} -> {}.{} @{}: {:.2} ns\n",
+                    inst.name,
+                    out.role,
+                    tile(index),
+                    netlist.instances[to.instance].name,
+                    to.role,
+                    tile(to.instance),
+                    wire.get(*sink).copied().unwrap_or(0.0)
+                ));
+            }
         }
     }
     text

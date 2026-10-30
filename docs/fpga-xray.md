@@ -5299,6 +5299,17 @@ the clock's insertion through whichever global buffer and clock regions
 the placement chose. That is the next thing to measure; it is a reading,
 not yet a finding.
 
+**Not the connections out of the `IDDR`s.** `--timing-endpoints` now lists
+every connection out of an IO tile's register with its tiles and routed
+delay. Five more seeds of master (2026-10-31) read the pattern wrong on
+two (`0xa95` 643 times, `0x56a` 1,027) and right on two, and in all four
+the twelve `IDDR` outputs reach tables 9 to 17 tiles away in 0.46 to 1.49
+ns, with nothing to tell the good from the bad. The slip happens at the
+`IDDR`s' own sampling or after the first tables: the slow FIFO stores the
+twelve bits over several memories, and the correlation above tied some of
+the capture tests to its banks' enables. The part passed 25, 28, 27, 34
+and 26.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
