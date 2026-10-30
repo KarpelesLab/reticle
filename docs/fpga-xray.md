@@ -5118,6 +5118,78 @@ go. It is not kept. That the window holds block RAMs is read from the code, not
 measured; that this is the fast captures' cause is a reading the one build
 supports and the change did not confirm.
 
+### Faster routing from the literature, measured on the part and not kept (2026-10-30)
+
+A Husky Plus build took 34 to 140 minutes over five seeds, most of it the
+router's last passes: from the 30th or so a few hundred signals are left
+overused, and each one's search visits one to two and a half million
+nodes before the overuse moves somewhere else rather than going away. The
+overused nodes of a late pass have almost no history (the overuse is
+fresh each time, not one hot spot that never clears). Four things from
+the literature were built against that and measured on one placement
+(seed 1 of the multicycle-group build, routed alone from a saved
+placement, which reproduces the route pass for pass):
+
+| change | route | visits | legal at |
+|---|---|---|---|
+| as it is | 1,765 s | 4.44 G | pass 63 |
+| each node expanded once (weighted A\* without re-expansions, as ARA\* does; Likhachev, Gordon and Thrun, NIPS 2003, quoted) | 1,254 s | 3.15 G | |
+| the *hybrid updating strategy*: present growth 1.1 and history 2 a pass once 2,000 nodes or fewer are overused (Zang, Lin, Lin, Liu and Young, GLSVLSI 2024, quoted) | 924 s | 2.55 G | pass 59 |
+| both | 1,202 s | 2.71 G | |
+| the hybrid strategy with a box margin capped at 8 | 904 s | 2.32 G | |
+| present growth held at 1.0 after the switch, not 1.1 | not converged at 80 passes | | |
+
+Seconds are wall time on a machine whose load moved a route by a fifth, so
+the visits are the figure to trust. Also measured and not kept:
+negotiating signals in parallel batches whose boxes do not overlap (the
+routing it gave depended on the thread count, which this crate does not
+accept); packing the search's per-node record into one structure (kept,
+since it is no worse, but 1,732 s against 1,765 s is within the noise);
+growing a congested signal's box only on the side its overuse is (1,445 s
+and 1,242 s from two placements); doubling the box growth, or removing the
+box at the fifth pass, from two others (2,122 s and 2,853 s, and one went
+back up to 735 nodes overused); and capping the present factor at 1,000
+(1,852 s).
+
+**What the part said.** Each change was taken apart and tried at five
+placements with the router before and after, all ten bitstreams on the
+board (passes of NewAE's 40):
+
+| placements | router | seeds 1 to 5 | mean | visits, all five |
+|---|---|---|---|---|
+| the anneal stopped early (below) | as it was | 26, 31, 30, 29, 25 | 28.2 | 28.3 G |
+| the same | the hybrid strategy | 25, 32, 25, 25, 25 | 26.4 | 23.3 G |
+| the same | the hybrid strategy, each node expanded once | 23, 27, 25, 25, 24 | 24.8 | 22.4 G |
+| master's anneal | as it was | 35, 32, 26, 25, 24 | 28.4 | |
+| master's anneal | the hybrid strategy, each node expanded once | 29, 27, 25, 18, 32 | 26.2 | |
+
+On the same placements the hybrid strategy took a sixth off the work and
+cost a test or two on three seeds of five; expanding each node once took a
+little more work off and cost more tests. On master's placements the two
+together cost two tests on average too, though one seed at a time moved
+by as much as eight either way (seed 5 gained eight, seed 4 lost seven),
+which says how far one bitstream is from a measurement of a router. The routed timing estimates
+hardly differ (`clk_usb`'s latest path 16.5 to 16.9 ns in all of them), so
+what the board lost is something the estimate does not see. Neither is
+kept: this design is short of NewAE's 35 for timing, and a faster route
+that passes fewer tests is not progress. The hybrid strategy's late passes
+also did not always save anything: on seeds 2 and 4 it needed 91 and 83
+passes against 73 and 64.
+
+**What is kept: the anneal stops when it has stopped improving.** Most of
+the wirelength anneal's late steps on this die take less than half a
+percent off: many moves change nothing, so the acceptance rate stays near
+43 %, and neither the stall limit nor VPR's temperature criterion fires.
+`PlaceOptions::flat_steps` stops it once ten steps have taken less than
+0.2 % off the best cost *and* the last step ended within that of the best.
+The first version had only the first half, and Basys 3 `blink`, whose
+anneal starts from a good placement and walks uphill before it cools,
+stopped at its eleventh step with four times the wirelength the full
+schedule reaches; the command-line test that builds `blink` at two efforts
+caught it. Placement went from about 950 s to about 715 s at five seeds,
+and the board counts above (28.2 against 28.4 with the router unchanged)
+say it costs nothing there.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
