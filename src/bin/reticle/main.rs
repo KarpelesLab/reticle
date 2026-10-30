@@ -5184,14 +5184,19 @@ fn hold_report(netlist: &reticle::fpga::Netlist, wire: &[f64]) -> String {
     const CLOCK_TO_OUT: f64 = 0.3;
     const TABLE: f64 = 0.05;
     const HOLD: f64 = 0.1;
+    // A block RAM's input hold, larger than a slice flip-flop's: of the
+    // order of DS181's, not read off it.
+    const BRAM_HOLD: f64 = 0.35;
     let is_clock = |role: &str| role == "c" || role.contains("clk");
     let at = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
-    // Each flip-flop's clock signal and arrival.
+    // Each flip-flop's and block RAM's clock signal and arrival. A block
+    // RAM is only ever the capturing end below: its clock to out is two
+    // nanoseconds, nothing a hold check of short paths needs.
     let clock: Vec<Option<(usize, f64)>> = netlist
         .instances
         .iter()
         .map(|inst| {
-            if inst.kind != "ff" {
+            if inst.kind != "ff" && inst.kind != "bram" {
                 return None;
             }
             inst.pins
@@ -5219,7 +5224,7 @@ fn hold_report(netlist: &reticle::fpga::Netlist, wire: &[f64]) -> String {
     let mut paths: Vec<(f64, String)> = Vec::new();
     let data_sinks = |signal: usize| netlist.signals[signal].sinks.iter().copied();
     for (launch, inst) in netlist.instances.iter().enumerate() {
-        let Some((clk, arrive)) = clock[launch] else {
+        let Some((clk, arrive)) = clock[launch].filter(|_| inst.kind == "ff") else {
             continue;
         };
         for q in inst.pins.iter().filter(|p| netlist.pins[**p].output) {
@@ -5261,7 +5266,12 @@ fn hold_report(netlist: &reticle::fpga::Netlist, wire: &[f64]) -> String {
                     }
                 }
                 for (data, capture, end, role) in ends {
-                    let slack = data - (capture + HOLD);
+                    let hold = if netlist.instances[end].kind == "bram" {
+                        BRAM_HOLD
+                    } else {
+                        HOLD
+                    };
+                    let slack = data - (capture + hold);
                     paths.push((
                         slack,
                         format!(

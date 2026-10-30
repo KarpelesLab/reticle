@@ -5310,6 +5310,17 @@ twelve bits over several memories, and the correlation above tied some of
 the capture tests to its banks' enables. The part passed 25, 28, 27, 34
 and 26.
 
+**Nor a hold race the model can see.** The words' halves meet where the
+second FIFO stage's 72-bit word (six samples) is cut into 18-bit block
+RAM columns, which is what a column written or read a word apart from
+its neighbour would give. The hold check now ends paths at block RAM
+inputs too, with a hold of 0.35 ns: on the same four builds, rebuilt to
+the same bitstreams, no path into those RAMs is within 0.5 ns, good or
+bad. The model gives every clock pin the same arrival, so a race through
+clock skew would still not show. That stage is this flow's own banked
+FIFO (`examples/husky/fifo_generator.v`, 32 `RAMB18`s over banks and
+segments), so its read selects are the next place to look.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
