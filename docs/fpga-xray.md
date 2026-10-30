@@ -5190,6 +5190,54 @@ caught it. Placement went from about 950 s to about 715 s at five seeds,
 and the board counts above (28.2 against 28.4 with the router unchanged)
 say it costs nothing there.
 
+### Critical connections pulled together before the anneal (2026-10-30)
+
+After routing, 381 to 509 endpoints of the 4 ns ADC domain were late on
+every seed, all of which Vivado meets with no exception in NewAE's
+constraints. The latest ones were paths of four or five tables that
+crossed the die between them: `U_hw_bb_trig.running` at (80, 93), then
+(56, 66), (61, 62), (98, 46) and a reset at (74, 46), 7.5 ns. The anneal's
+timing rounds move a cell a few tiles at a time, so whatever the global
+placement scattered stays scattered; and the global placement
+(`place::global_place`, SimPL) weighed wire alone.
+
+**Net weighting in the global placement.** From its tenth round, and
+every fifth after, the paths are analysed with each cell where that
+round spread it, and each connection gets a spring of its own between
+driver and sink of `4 × criticality³` against a two-pin net's one (the
+net weighting of timing-driven analytical placement; Kong, ICCAD 2002,
+quoted). Every seed's estimate after the timing rounds improved, and so
+did the routed one:
+
+| build | placement estimate, `clk_usb` / `ADC_clk_fb` | routed `ADC_clk_fb` | route passes, visits (five seeds) | on the part, seeds 1 to 5 | mean |
+|---|---|---|---|---|---|
+| master (MC) | 25.5 to 27.1 / 16.6 to 17.4 ns | 10.0 to 10.3 ns | 484, 49.2 G (seed 4 retried) | 35, 32, 26, 25, 24 | 28.4 |
+| distributed RAMs may evict (EV, below) | 26.1 to 27.4 / 15.5 to 19.4 ns | 9.6 to 12.2 ns | 335, 33.9 G | 28, 27, 26, 25, 33 | 27.8 |
+| and net weighting at 4 (GT, kept) | 23.3 to 24.2 / 13.0 to 14.4 ns | 7.5 to 8.4 ns | 312, 25.5 G | 24, 28, 26, 33, 26 | 27.4 |
+| net weighting at 16 (GW) | 20.2 to 23.4 / 12.4 to 14.5 ns | 7.0 to 7.9 ns | 389, 48.6 G | 32, 28, 22, 29, 34 | 29.0 |
+
+The part does not follow the estimate yet: a domain of 4 ns at 7.8 is
+still late, and the fast-capture tests (`fastest`, `ADCaltfast`,
+`adc_reset`) fail on most seeds of every row, their FIFO paths at 4.8 to
+5.7 ns. The means differ by less than one seed's spread (seeds of one
+row run from 22 to 34). The weight of 4 is kept for what it does to the
+route: every seed routed at its first placement, in half the visits of
+master and of the weight of 16, which pulls tighter and congests. That a
+tighter pull helps the part is not shown.
+
+**A distributed RAM that could not move.** On every seed the same
+`U_hw_bb_trig` FIFO's distributed RAMs sat between x 17 and 33, rows 100
+to 145, whatever their readers did; its pointer at (84, 40) read one at
+(30, 131) and handed the word to (74, 114). A `SLICEM`'s RAM blocks the
+slice's `D` and `C` tables, and on a die this full nearly every slice has
+tables there, so nearly every move of a RAM was illegal. A move that
+finds the way blocked now takes the tables in the way to the like sites
+of the slice the RAM leaves (`place::evict_blockers`). It changed little
+by itself: the RAMs of seeds 1, 3 and 5 still sat at x 23 to 33, the
+first at (33, 118), and the board's mean is within noise of master's.
+Kept, as the move a full die needs for its RAMs to move at all; not
+shown to matter here.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
