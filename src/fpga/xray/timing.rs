@@ -309,6 +309,7 @@ pub fn place_timing(
     let mut launch = vec![0.0; n];
     let mut capture = vec![0.0; n];
     let mut domain = vec![PathDomain::Untimed; n];
+    let mut pin_domain: Vec<Option<PathDomain>> = vec![None; netlist.pins.len()];
 
     // The root of a clock pin's signal, through the global buffers.
     let root = |mut signal: usize| -> usize {
@@ -623,6 +624,27 @@ pub fn place_timing(
                 if let Some(c) = clock {
                     domain[index] = domain_of(clock_of(c));
                 }
+                // A block RAM's two ports may be on two clocks, each port's
+                // pins in its own: see `PlaceTiming::pin_domain`.
+                if kind == "bram" {
+                    for port in ["p0_", "p1_"] {
+                        let clk = format!("{port}clk");
+                        let Some(c) = inst
+                            .pins
+                            .iter()
+                            .find(|p| netlist.pins[**p].role == clk)
+                            .and_then(|p| netlist.pins[*p].signal)
+                        else {
+                            continue;
+                        };
+                        let port_domain = domain_of(clock_of(c));
+                        for pin in &inst.pins {
+                            if netlist.pins[*pin].role.starts_with(port) {
+                                pin_domain[*pin] = Some(port_domain);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -687,6 +709,7 @@ pub fn place_timing(
             untimed_from,
             untimed_to,
             frozen,
+            pin_domain,
         },
         names,
     )

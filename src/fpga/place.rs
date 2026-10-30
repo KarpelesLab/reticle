@@ -6879,6 +6879,48 @@ pub struct PlaceTiming {
     /// ways to be made at all, which moving can leave with none: see
     /// `xray::place_timing`.
     pub frozen: Vec<bool>,
+    /// Per netlist pin, a domain of its own in place of its instance's,
+    /// or `None` for its instance's; empty for none anywhere. A block RAM
+    /// whose ports are on two clocks: the Husky Plus's second ADC FIFO
+    /// stage writes at 250 MHz and is read at 96, and with one domain an
+    /// instance its write port was timed against the read clock's 10.4
+    /// ns, whichever port's clock came first.
+    pub pin_domain: Vec<Option<PathDomain>>,
+}
+
+impl PlaceTiming {
+    /// The domain `pin` of `instance` launches or captures in.
+    fn domain_of_pin(&self, instance: usize, pin: usize) -> Option<PathDomain> {
+        self.pin_domain
+            .get(pin)
+            .copied()
+            .flatten()
+            .or_else(|| self.domain.get(instance).copied())
+    }
+
+    /// Whether `pin` of `instance` launches or captures in `domain`.
+    fn pin_in(&self, instance: usize, pin: usize, domain: usize) -> bool {
+        match self.domain_of_pin(instance, pin) {
+            Some(PathDomain::Clock(d)) => d == domain,
+            Some(PathDomain::Every) => true,
+            _ => false,
+        }
+    }
+
+    /// Whether any pin of `instance` launches or captures in `domain`.
+    fn touches(&self, netlist: &Netlist, instance: usize, domain: usize) -> bool {
+        if self.pin_domain.is_empty() {
+            return match self.domain.get(instance) {
+                Some(PathDomain::Clock(d)) => *d == domain,
+                Some(PathDomain::Every) => true,
+                _ => false,
+            };
+        }
+        netlist.instances[instance]
+            .pins
+            .iter()
+            .any(|p| self.pin_in(instance, *p, domain))
+    }
 }
 
 /// The fanout above which [`PlaceTiming::wire`]'s third term applies.
@@ -7056,11 +7098,7 @@ fn analyse_paths(
     let mut longest_ps = Vec::with_capacity(timing.periods.len());
     let pad = |instance: usize| netlist.instances[instance].kind == "io";
     for (domain, period) in timing.periods.iter().enumerate() {
-        let here = |instance: usize| match timing.domain.get(instance) {
-            Some(PathDomain::Clock(d)) => *d == domain,
-            Some(PathDomain::Every) => true,
-            _ => false,
-        };
+        let here = |instance: usize| timing.touches(netlist, instance, domain);
         let flag = |flags: &[bool], instance: usize| flags.get(instance).copied().unwrap_or(false);
         let mut domain_longest = 0.0f64;
         // Each path group on its own: from a pad or a register, to a pad
@@ -7105,7 +7143,10 @@ fn analyse_paths(
                     continue;
                 }
                 for pin in &inst.pins {
-                    if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
+                    if !netlist.pins[*pin].output
+                        && class(*pin) == PinTiming::End
+                        && timing.pin_in(index, *pin, domain)
+                    {
                         let at = input_arrival(*pin, &arrival) + timing.capture[index];
                         if at.is_finite() {
                             longest = longest.max(at / cycles_of(index));
@@ -7127,7 +7168,10 @@ fn analyse_paths(
                     continue;
                 }
                 for pin in &inst.pins {
-                    if !netlist.pins[*pin].output && class(*pin) == PinTiming::End {
+                    if !netlist.pins[*pin].output
+                        && class(*pin) == PinTiming::End
+                        && timing.pin_in(index, *pin, domain)
+                    {
                         required[*pin] = cycles_of(index) * span - timing.capture[index];
                     }
                 }
@@ -7210,11 +7254,7 @@ fn domain_arrival(
 ) -> Vec<f64> {
     let wire = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
     let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
-    let here = |instance: usize| match timing.domain.get(instance) {
-        Some(PathDomain::Clock(d)) => *d == domain,
-        Some(PathDomain::Every) => true,
-        _ => false,
-    };
+    let here = |instance: usize| timing.touches(netlist, instance, domain);
     let untimed_from =
         |instance: usize| timing.untimed_from.get(instance).copied().unwrap_or(false);
     let mut arrival = vec![f64::NEG_INFINITY; netlist.pins.len()];
@@ -7223,7 +7263,10 @@ fn domain_arrival(
             continue;
         }
         for pin in &inst.pins {
-            if netlist.pins[*pin].output && class(*pin) == PinTiming::Start {
+            if netlist.pins[*pin].output
+                && class(*pin) == PinTiming::Start
+                && timing.pin_in(index, *pin, domain)
+            {
                 arrival[*pin] = timing.launch[index];
             }
         }
@@ -7307,18 +7350,17 @@ pub fn worst_path(
     let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
     let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
     let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
-    let here = |instance: usize| match timing.domain.get(instance) {
-        Some(PathDomain::Clock(d)) => *d == domain,
-        Some(PathDomain::Every) => true,
-        _ => false,
-    };
+    let here = |instance: usize| timing.touches(netlist, instance, domain);
     let mut end: Option<(usize, f64)> = None;
     for (index, inst) in netlist.instances.iter().enumerate() {
         if !here(index) || timing.untimed_to.get(index).copied().unwrap_or(false) {
             continue;
         }
         for pin in &inst.pins {
-            if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+            if netlist.pins[*pin].output
+                || class(*pin) != PinTiming::End
+                || !timing.pin_in(index, *pin, domain)
+            {
                 continue;
             }
             let at = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
@@ -7437,18 +7479,17 @@ pub fn endpoint_arrivals(
     let cycles_of = |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
     let mut out = Vec::new();
     for (domain, period) in timing.periods.iter().enumerate() {
-        let here = |instance: usize| match timing.domain.get(instance) {
-            Some(PathDomain::Clock(d)) => *d == domain,
-            Some(PathDomain::Every) => true,
-            _ => false,
-        };
+        let here = |instance: usize| timing.touches(netlist, instance, domain);
         let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
         for (index, inst) in netlist.instances.iter().enumerate() {
             if !here(index) || timing.untimed_to.get(index).copied().unwrap_or(false) {
                 continue;
             }
             for pin in &inst.pins {
-                if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                if netlist.pins[*pin].output
+                    || class(*pin) != PinTiming::End
+                    || !timing.pin_in(index, *pin, domain)
+                {
                     continue;
                 }
                 let at = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
@@ -7498,11 +7539,7 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
     let cycles_of = |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
     let mut out = Vec::new();
     for (domain, period) in timing.periods.iter().enumerate() {
-        let here = |instance: usize| match timing.domain.get(instance) {
-            Some(PathDomain::Clock(d)) => *d == domain,
-            Some(PathDomain::Every) => true,
-            _ => false,
-        };
+        let here = |instance: usize| timing.touches(netlist, instance, domain);
         let ends = |index: usize| here(index) && !flag(&timing.untimed_to, index);
         let pads: Vec<usize> = (0..netlist.instances.len())
             .filter(|i| netlist.instances[*i].kind == "io" && here(*i))
@@ -7523,7 +7560,10 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                     continue;
                 }
                 for pin in &inst.pins {
-                    if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                    if netlist.pins[*pin].output
+                        || class(*pin) != PinTiming::End
+                        || !timing.pin_in(index, *pin, domain)
+                    {
                         continue;
                     }
                     let at =
@@ -7551,7 +7591,10 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                 continue;
             }
             for pin in &netlist.instances[pad].pins {
-                if netlist.pins[*pin].output || class(*pin) != PinTiming::End {
+                if netlist.pins[*pin].output
+                    || class(*pin) != PinTiming::End
+                    || !timing.pin_in(pad, *pin, domain)
+                {
                     continue;
                 }
                 let latest = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[pad];
@@ -7828,6 +7871,7 @@ mod tests {
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
             frozen: vec![false; 4],
+            pin_domain: Vec::new(),
         };
         (graph, netlist, placement, timing)
     }
@@ -7871,6 +7915,59 @@ mod tests {
             assert!(close(entry(j, i), -w), "{:?}", springs.rows);
         }
         assert!(close(entry(0, 2), 0.0) && close(entry(0, 3), 0.0));
+    }
+
+    /// **A pin of its own domain is timed in it** ([`PlaceTiming::pin_domain`]).
+    /// A launch in a 4 ns domain reaching a pin of an instance in a 10 ns
+    /// one: without the pin's own domain, neither domain has the path
+    /// (launch and capture disagree) and its 6 ns go unseen; with it, the
+    /// 4 ns domain's latest path is that one and its connection critical.
+    /// Would catch the override ignored where an endpoint is chosen, or
+    /// where a launch is; would not catch `xray::timing` giving a block
+    /// RAM's port pins the wrong clock, which the Husky Plus's late list
+    /// is the evidence for.
+    #[test]
+    fn a_pin_of_its_own_domain_is_timed_in_it() {
+        // A register in a fast domain writing a block RAM whose instance
+        // is in a slow one, as the RAM's read port is: the write pin
+        // belongs to the fast domain.
+        let netlist = chain(2);
+        let start = netlist.signals[0].driver.unwrap();
+        let end = netlist.signals[0].sinks[0];
+        let mut pins = vec![PinTiming::Ignored; netlist.pins.len()];
+        pins[start] = PinTiming::Start;
+        pins[end] = PinTiming::End;
+        let timing = |pin_domain: Vec<Option<PathDomain>>| PlaceTiming {
+            pins: pins.clone(),
+            cell: vec![0.0, 0.0],
+            launch: vec![0.3, 0.0],
+            capture: vec![0.0, 0.1],
+            domain: vec![PathDomain::Clock(1), PathDomain::Clock(0)],
+            periods: vec![10.0, 4.0],
+            wire: (0.2, 0.1, 0.0),
+            rounds: 1,
+            weight: 8.0,
+            exponent: 3,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 2],
+            pin_domain,
+        };
+        let mut wire = vec![0.0; netlist.pins.len()];
+        wire[end] = 5.6;
+        let (_, longest) = path_criticality(&netlist, &timing(Vec::new()), &wire);
+        assert_eq!(longest, vec![0, 0], "the write is in neither domain");
+        let mut own = vec![None; netlist.pins.len()];
+        own[end] = Some(PathDomain::Clock(1));
+        let (critical, longest) = path_criticality(&netlist, &timing(own), &wire);
+        assert_eq!(
+            longest,
+            vec![0, 6000],
+            "0.3 + 5.6 + 0.1 ns, in the fast domain"
+        );
+        assert!(critical[end] > 0.9, "{critical:?}");
     }
 
     /// **A path's estimate is its cells and its wires, summed.** The
@@ -8102,6 +8199,7 @@ mod tests {
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
             frozen: vec![false; 6],
+            pin_domain: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -8212,6 +8310,7 @@ mod tests {
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
             frozen: vec![false; 4],
+            pin_domain: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -10541,6 +10640,7 @@ mod tests {
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
             frozen: vec![false; 7],
+            pin_domain: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {

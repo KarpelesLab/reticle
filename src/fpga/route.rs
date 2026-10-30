@@ -4771,6 +4771,7 @@ mod tests {
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
             frozen: vec![false; 7],
+            pin_domain: Vec::new(),
         };
         let (_, graph) = line(1, 1);
         let terminals: Vec<Terminals> = (0..5)
