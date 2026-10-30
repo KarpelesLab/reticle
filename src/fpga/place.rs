@@ -2540,7 +2540,14 @@ pub fn place(
     report.spread = if dense.is_empty() {
         dense
     } else {
-        let (global, spread) = global_place(netlist, graph, &info, &macros, &sites_by_kind);
+        let (global, spread) = global_place(
+            netlist,
+            graph,
+            &info,
+            &macros,
+            &sites_by_kind,
+            options.timing.as_ref(),
+        );
         positions = global;
         spread
     };
@@ -4522,6 +4529,17 @@ impl Sparse {
         self.rows[j].push((i, value));
     }
 
+    /// Adds every entry of `other`, a matrix of the same order, to this
+    /// one, off-diagonal entries as new ones.
+    fn absorb(&mut self, other: &Sparse) {
+        for (i, value) in other.diagonal.iter().enumerate() {
+            self.diagonal[i] += value;
+        }
+        for (i, row) in other.rows.iter().enumerate() {
+            self.rows[i].extend_from_slice(row);
+        }
+    }
+
     /// Grows the matrix by `extra` rows and columns of zeros.
     fn grow(&mut self, extra: usize) {
         let n = self.diagonal.len() + extra;
@@ -4833,6 +4851,7 @@ fn global_place(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    timing: Option<&PlaceTiming>,
 ) -> GlobalPlacement {
     let n = netlist.instances.len();
     let mut follower = vec![false; n];
@@ -4895,10 +4914,20 @@ fn global_place(
     solve_from(&nets, &bx, &mut x, 4 * GLOBAL_ITERATIONS);
     solve_from(&nets, &by, &mut y, 4 * GLOBAL_ITERATIONS);
     let mut positions: Vec<(f64, f64)> = x.iter().zip(&y).take(n).map(|(a, b)| (*a, *b)).collect();
+    // The critical connections' own springs, from the last analysis: see
+    // `GLOBAL_TIMING_WEIGHT`.
+    let mut critical = Sparse::new(nets.len());
     for round in 1..=GLOBAL_ROUNDS {
         let upper = spread_all(&positions);
+        if let Some(timing) = timing
+            && round >= GLOBAL_TIMING_FROM
+            && (round - GLOBAL_TIMING_FROM).is_multiple_of(GLOBAL_TIMING_EVERY)
+        {
+            critical = critical_springs(netlist, timing, &upper, nets.len());
+        }
         let pull = GLOBAL_PULL * f64::from(round);
         let mut a = nets.clone();
+        a.absorb(&critical);
         let (mut bx, mut by) = (bx.clone(), by.clone());
         for i in 0..n {
             if info[i].fixed.is_some() {
@@ -4920,6 +4949,79 @@ fn global_place(
         .map(|(kind, cells, _)| (kind.clone(), cells.len()))
         .collect();
     (spread_all(&positions), spread)
+}
+
+/// The round of [`global_place`] from which its solves weigh timing,
+/// and every how many rounds after that the paths are analysed again.
+const GLOBAL_TIMING_FROM: u32 = 10;
+
+/// See [`GLOBAL_TIMING_FROM`].
+const GLOBAL_TIMING_EVERY: u32 = 5;
+
+/// What a connection of criticality one adds to the pull between its
+/// driver and its sink in [`global_place`]'s solves, against a two-pin
+/// net's pull of one; a connection of criticality `c` adds this times
+/// `c` raised to [`PlaceTiming::exponent`].
+///
+/// The anneal's timing rounds move a cell a few tiles at a time, so a
+/// path the global placement scattered stays scattered: on the
+/// ChipWhisperer-Husky Plus a path of the 4 ns ADC domain went (80, 93),
+/// (56, 66), (61, 62), (98, 46), (74, 46), 7.5 ns, and 509 of the
+/// domain's endpoints were late after routing on every seed. Weighting
+/// critical connections in the quadratic system is the net weighting of
+/// timing-driven analytical placement (Kong, *A novel net weighting
+/// algorithm for timing-driven placement*, ICCAD 2002; quoted, not
+/// checked here), applied to SimPL's rounds. At five seeds of the Husky
+/// Plus (2026-10-30) it took the routed latest ADC path from 10.0–10.3 ns
+/// to 7.5–8.4 and the route's visits from 49 to 26 billion; the part
+/// passed as many of NewAE's tests (27.4 against 28.4, within one seed's
+/// spread). Sixteen pulled tighter, to 7.0–7.9 ns, and routed in twice
+/// the visits, for 29.0.
+const GLOBAL_TIMING_WEIGHT: f64 = 4.0;
+
+/// The springs [`GLOBAL_TIMING_WEIGHT`] adds, by an analysis of the
+/// paths with each cell at `positions` (rounded to tiles as the anneal's
+/// estimate rounds them), in a matrix of order `order`.
+fn critical_springs(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    positions: &[(f64, f64)],
+    order: usize,
+) -> Sparse {
+    let mut wire = vec![0.0f64; netlist.pins.len()];
+    for signal in &netlist.signals {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let (fx, fy) = positions[netlist.pins[driver].instance];
+        let wide = signal.sinks.len() > WIDE_FANOUT;
+        for sink in &signal.sinks {
+            let (tx, ty) = positions[netlist.pins[*sink].instance];
+            let tiles = (fx - tx).abs().round() + (fy - ty).abs().round();
+            let (a, b, c) = timing.wire;
+            wire[*sink] = a + b * tiles + if wide { c * tiles } else { 0.0 };
+        }
+    }
+    let (criticality, _) = path_criticality(netlist, timing, &wire);
+    let mut springs = Sparse::new(order);
+    for signal in &netlist.signals {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let from = netlist.pins[driver].instance;
+        for sink in &signal.sinks {
+            let to = netlist.pins[*sink].instance;
+            let c = criticality.get(*sink).copied().unwrap_or(0.0);
+            if to == from || c <= 0.0 {
+                continue;
+            }
+            let weight = GLOBAL_TIMING_WEIGHT * c.powi(timing.exponent);
+            springs.add(from, from, weight);
+            springs.add(to, to, weight);
+            springs.add_new_pair(from, to, -weight);
+        }
+    }
+    springs
 }
 
 /// The most pins a net may have and still be modelled as a clique by the
@@ -6503,7 +6605,66 @@ fn propose(
             vec![(instance, target), (other, here)]
         }
     };
-    shared.allows(placement, &candidate).then_some(candidate)
+    if shared.allows(placement, &candidate) {
+        return Some(candidate);
+    }
+    evict_blockers(graph, info, shared, placement, candidate)
+}
+
+/// The move `candidate` again, with the cells on the sites its first
+/// cell's new site blocks moved onto the like sites of the one it leaves,
+/// or `None` when that is not legal either.
+///
+/// A cell whose site blocks others — a 7-series `SLICEM`'s distributed
+/// RAM is its slice's `D` and `C` lookup tables — can otherwise only move
+/// to a slice whose blocked sites are empty, and on a full die there are
+/// almost none: on the ChipWhisperer-Husky Plus every seed left the same
+/// distributed RAMs in the same corner, x 17 to 33, whatever their
+/// readers did, and a FIFO's pointer at (84, 40) read a RAM at (30, 131)
+/// and handed the word to (74, 114), 10 ns of a 4 ns period (2026-10-30).
+/// The sites the cell leaves are free as it leaves them, so the lookup
+/// tables in its way go there, each to the site of the same bel.
+fn evict_blockers(
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    shared: &SiteRules,
+    placement: &Placement,
+    mut candidate: Vec<(usize, usize)>,
+) -> Option<Vec<(usize, usize)>> {
+    let (instance, target) = *candidate.first()?;
+    let here = placement.site_of(instance)?;
+    let blocked = &graph.sites[target].blocks;
+    if blocked.is_empty() {
+        return None;
+    }
+    for site in blocked {
+        let Some(other) = placement.instance_at(*site) else {
+            continue;
+        };
+        if other == instance || candidate.iter().any(|(i, _)| *i == other) {
+            return None;
+        }
+        if info[other].fixed.is_some() || info[other].macro_index.is_some() {
+            return None;
+        }
+        let bel = &graph.sites[*site].bel;
+        let to = graph.sites[here]
+            .blocks
+            .iter()
+            .copied()
+            .find(|s| graph.sites[*s].bel == *bel)?;
+        let (tx, ty) = graph.sites[to].tile;
+        if info[other]
+            .region
+            .as_ref()
+            .is_some_and(|(rect, _)| !rect.holds(tx, ty))
+            || !info[other].may_take(to)
+        {
+            return None;
+        }
+        candidate.push((other, to));
+    }
+    (candidate.len() > 1 && shared.allows(placement, &candidate)).then_some(candidate)
 }
 
 /// Applies a move, returning the change in wirelength.
@@ -7669,6 +7830,47 @@ mod tests {
             frozen: vec![false; 4],
         };
         (graph, netlist, placement, timing)
+    }
+
+    /// **[`critical_springs`]: each timed connection pulls its driver and
+    /// sink together by its criticality.** The chain of [`timed_chain`]
+    /// at its columns: every connection is on the one path, of
+    /// criticality `1 - 2.95 / 5` (see the test after this one), so each
+    /// gets a spring of [`GLOBAL_TIMING_WEIGHT`] times that cubed —
+    /// on both ends' diagonal and, negated, between them — and a middle
+    /// cell, on two connections, twice that on its diagonal.
+    ///
+    /// Would catch the springs left out, weighed without the exponent,
+    /// put on the wrong pair, or not symmetric. Would not catch
+    /// [`global_place`] ignoring them, which is what the Husky Plus's
+    /// routed estimates (`GLOBAL_TIMING_WEIGHT`'s documentation) are the
+    /// evidence for.
+    #[test]
+    fn a_critical_connection_pulls_its_ends_together() {
+        let (_, netlist, _, timing) = timed_chain();
+        let positions = [(0.0, 0.0), (3.0, 0.0), (4.0, 0.0), (9.0, 0.0)];
+        let springs = critical_springs(&netlist, &timing, &positions, 4);
+        let w = GLOBAL_TIMING_WEIGHT * (1.0 - 2.95 / 5.0f64).powi(3);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        for (index, expected) in [w, 2.0 * w, 2.0 * w, w].iter().enumerate() {
+            assert!(
+                close(springs.diagonal[index], *expected),
+                "{index}: {:?}",
+                springs.diagonal
+            );
+        }
+        let entry = |i: usize, j: usize| -> f64 {
+            springs.rows[i]
+                .iter()
+                .filter(|(c, _)| *c == j)
+                .map(|(_, v)| v)
+                .sum()
+        };
+        for (i, j) in [(0, 1), (1, 2), (2, 3)] {
+            assert!(close(entry(i, j), -w), "{:?}", springs.rows);
+            assert!(close(entry(j, i), -w), "{:?}", springs.rows);
+        }
+        assert!(close(entry(0, 2), 0.0) && close(entry(0, 3), 0.0));
     }
 
     /// **A path's estimate is its cells and its wires, summed.** The
@@ -9729,6 +9931,98 @@ mod tests {
         assert!(!fits(&crowded), "two signals on one bypass wire");
     }
 
+    /// **A distributed RAM moves into a slice whose tables are taken, and
+    /// the tables go where it was.** Two tiles of a RAM bel blocking two
+    /// lookup-table bels: the RAM in the first, tables on both blocked
+    /// sites of the second. Moving the RAM alone is illegal;
+    /// [`evict_blockers`] moves each table onto its own bel in the first
+    /// tile, and that is legal. A fixed table in the way, or a blocked bel
+    /// with no like site in the tile being left, gives nothing.
+    ///
+    /// Would catch the eviction leaving a table on a site the RAM blocks,
+    /// sending a table to the wrong bel, or moving a cell it must not.
+    /// Would not catch the anneal never proposing it, which only the
+    /// Husky Plus's placements say anything about.
+    #[test]
+    fn a_ram_moves_into_a_slice_and_its_tables_move_out() {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("logic", "logic_tile", 8, 8);
+        let mut ram = BelDecl::new("ram", "lutram");
+        ram.blocks = vec!["lutd".to_owned(), "lutc".to_owned()];
+        tile.bels.push(ram);
+        for name in ["lutd", "lutc", "luta"] {
+            tile.bels.push(BelDecl::new(name, "lut"));
+        }
+        arch.tile_types.push(tile);
+        for x in 0..2 {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        let site = |bel: &str, x: u32| {
+            (0..graph.sites.len())
+                .find(|s| graph.sites[*s].bel == bel && graph.sites[*s].tile == (x, 0))
+                .unwrap_or_else(|| panic!("no `{bel}` site at {x}"))
+        };
+        let instance = |index: usize, kind: &str| Instance {
+            cell: CellId::from_index(index),
+            name: format!("i{index}"),
+            primitive: kind.to_uppercase(),
+            kind: kind.to_owned(),
+            pins: Vec::new(),
+            pin: None,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(0, "lutram"),
+                instance(1, "lut"),
+                instance(2, "lut"),
+            ],
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let rules = SiteRules::find(&netlist, &graph);
+        let mut placement = Placement::new(3, graph.sites.len());
+        placement.place(0, site("ram", 0));
+        placement.place(1, site("lutd", 1));
+        placement.place(2, site("lutc", 1));
+        let mut info: Vec<Placeable> = (0..3)
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+                soft: false,
+            })
+            .collect();
+        let alone = vec![(0, site("ram", 1))];
+        assert!(
+            !rules.allows(&placement, &alone),
+            "the tables block the RAM"
+        );
+        assert_eq!(
+            evict_blockers(&graph, &info, &rules, &placement, alone.clone()),
+            Some(vec![
+                (0, site("ram", 1)),
+                (1, site("lutd", 0)),
+                (2, site("lutc", 0)),
+            ])
+        );
+        info[2].fixed = Some(site("lutc", 1));
+        assert_eq!(
+            evict_blockers(&graph, &info, &rules, &placement, alone.clone()),
+            None,
+            "a fixed table stays, and so does the RAM"
+        );
+        info[2].fixed = None;
+        // Leaving from a site that blocks nothing, there is nowhere like.
+        let mut free = Placement::new(3, graph.sites.len());
+        free.place(0, site("luta", 0));
+        free.place(1, site("lutd", 1));
+        free.place(2, site("lutc", 1));
+        assert_eq!(evict_blockers(&graph, &info, &rules, &free, alone), None);
+    }
+
     /// **A cell that leaves a tile can break it.** A lookup table whose
     /// `O6` the flip-flop beside it reads, and a carry whose generate
     /// comes in on the bypass: legal, the flip-flop off `O6` and the carry
@@ -10745,7 +11039,7 @@ mod tests {
                 .or_default()
                 .push(index);
         }
-        let (positions, spread) = global_place(&netlist, &graph, &info, &[], &sites_by_kind);
+        let (positions, spread) = global_place(&netlist, &graph, &info, &[], &sites_by_kind, None);
         assert_eq!(spread, vec![("lut".to_owned(), n)]);
         let links: f64 = netlist
             .signals
