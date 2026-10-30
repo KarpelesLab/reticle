@@ -5238,6 +5238,67 @@ first at (33, 118), and the board's mean is within noise of master's.
 Kept, as the move a full die needs for its RAMs to move at all; not
 shown to matter here.
 
+### Subtractions on the chain again, and what the part's failures follow (2026-10-31)
+
+**Logic depth, not distance, on the fast FIFOs' paths.** With the global
+timing pull in, the fast FIFOs' late paths were short in tiles and long in
+tables: `full_q <= wused_next[AW]` in this flow's own FIFO stand-in
+(`examples/husky/fifo_generator.v`) was a carry and then seven tables in a
+row, because a subtraction is still mapped to tables
+(`MapOptions::min_subtract_carry_width` is off; see it for the 2026-10-25
+reason). A 13-bit `a - b` alone maps to 23 tables six deep; `a < b`, to
+seven tables six deep, as neither has a chain.
+
+Put back on the chain at eight bits and more, **every seed failed to
+route**, two signals ending on one `CLBLM_L_AMUX`. The router's message
+now names them (`out_next$sub[0]` and `out_next[0]` in the slow FIFO):
+`outside - take` was both the generate of the adder `outside - take +
+fetch` and read by `outside - take <= EXTRA`, and the lane pairing had put
+it on its lane's `O5`, which leaves the slice by the same mux as the lane's
+sum. A generate read anywhere but its chain now keeps its own table
+(`lutpack::pairs_with_its_lane`).
+
+Then routed (SD), the test ramps that failed on 10-25 were exact on all
+five seeds, the ADC domain's routed estimate fell to 6.5 to 7.6 ns, and
+the part passed 24, 18, 14, 32 and 17: `clk_usb` rose to 19 to 22 ns,
+through `outside - take <= EXTRA` at the 32 bits of `EXTRA`, nine `CARRY4`s
+in a row for six bits and one. A subtraction of zero-extended operands is
+now a chain of their width plus one, its top bit copied up, and the
+threshold is against that width (SE): 29, 29, 24, 22, 30 (seed 1 retried
+at seed 2, so the first two are one bitstream), mean 26.8, `clk_usb` back
+to 16.5 and the ADC domain 7.3 to 8.0 ns. Within noise of the 27.4 without
+it, so the threshold stays off; the narrowing and the pairing rule are
+kept for when it is on.
+
+**What the part's failures follow.** 195 builds have both a list of late
+endpoints and the suite's results. For each test, the endpoint whose
+lateness best separates its passes from its failures:
+
+- The glitch tests (`glitch_offset`, `glitch_output_sweep_width`,
+  `glitch_width[1600]`) follow the logic analyser's domain
+  (`reg_la.U_mmcm2_observer.out0`): `capturing`'s enable and
+  `downsample_ctr` predict them at 0.81 to 0.85 against 0.66 to 0.73 for
+  guessing the commoner outcome.
+- `fastest`, `ADCaltfast` and `adc_reset` pass on 12 to 19 builds of 152
+  to 195, and **no endpoint predicts them** better than guessing. The
+  builds that pass them are mostly the best ones (35 on MC1, 33 on GT4
+  and EV5, 32 on NF5 and HU2), so these three are most of the spread
+  between seeds, and what decides them is not a path this model calls
+  late.
+
+**The ADC's own pattern says where.** The suite's `adcalt.py` capture at
+250 MHz reads the ADC's alternating test pattern, `0x555` and `0xaaa`. On
+about half the builds some words come back as `0xa95` or `0x56a`: the upper
+six bits of one sample with the lower six of the next. Bits 0 to 5 are the
+`IDDR`s of pairs 0 to 2, both edges, so whole pairs are captured a sample
+apart from the others. The model has no late path from an `IDDR` on any of
+them and its hold check finds nothing. What it does not model is where
+the clock arrives at the IO tiles against the data at the pads: the
+pairs' sampling point at 250 MHz double data rate, 2 ns a bit, depends on
+the clock's insertion through whichever global buffer and clock regions
+the placement chose. That is the next thing to measure; it is a reading,
+not yet a finding.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
