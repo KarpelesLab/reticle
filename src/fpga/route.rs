@@ -1245,7 +1245,21 @@ pub fn route(
             worst: worst
                 .iter()
                 .take(8)
-                .map(|(count, node)| format!("{} ({count} signals)", graph.wire(*node).full_name()))
+                .map(|(count, node)| {
+                    // Which signals, by name: a slice's output multiplexer
+                    // two of them want is a placement no wire can mend,
+                    // and the names say which cells to look at.
+                    let holders: Vec<&str> = routing
+                        .routes()
+                        .filter(|r| r.nodes.iter().any(|n| state.group[*n as usize] == *node))
+                        .map(|r| netlist.signals[r.signal].name.as_str())
+                        .collect();
+                    format!(
+                        "{} ({count} signals: {})",
+                        graph.wire(*node).full_name(),
+                        holders.join(", ")
+                    )
+                })
                 .collect(),
             contention: worst
                 .iter()
@@ -5395,7 +5409,10 @@ mod tests {
         };
         let err = route(&netlist, &graph, &placement, &options).unwrap_err();
         let text = err.to_string();
-        assert!(text.contains("worst at X1Y0/mid (2 signals)"), "{text}");
+        assert!(
+            text.contains("worst at X1Y0/mid (2 signals: n0, n1)"),
+            "{text}"
+        );
         assert!(
             text.contains(
                 "X1Y0/mid carries `n0` to `dst0`'s `d` pin; and `n1` to `dst1`'s `d` pin"
