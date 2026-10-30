@@ -5321,6 +5321,37 @@ clock skew would still not show. That stage is this flow's own banked
 FIFO (`examples/husky/fifo_generator.v`, 32 `RAMB18`s over banks and
 segments), so its read selects are the next place to look.
 
+### A block RAM on two clocks, timed on one (2026-10-31)
+
+**The finding.** The second stage of the ADC's fast FIFO
+(`fast_slower_fifo`) is written on `ADC_clk_fb` at 250 MHz and read on
+`clk_usb`. The timing model gave each instance one domain, from its first
+clock pin, and a block RAM's first is its read port's: every pin of
+those 32 `RAMB18`s, write enables and data included, was timed against
+`clk_usb`'s 10.4 ns. No write into them was ever late, by the model; on
+the part, words came back as halves of two samples, the halves meeting at
+the 18-bit columns of that stage's 72-bit word (see the section before).
+`PlaceTiming::pin_domain` now gives a pin a domain of its own, and a block
+RAM's `p0_` and `p1_` pins their own port's clock's. With it, 133 to 212
+of those writes were late on five seeds, at up to 5.8 to 7.2 ns, from
+write registers to RAMs in block RAM columns 19 and 94, 75 tiles apart;
+the part passed 26, 29, 24, 31 and 34 (mean 28.8, against 28.0 for the
+same seeds without it), and kept.
+
+**Keeping the stage together.** With the two FIFO stages confined to
+columns 8 to 45, rows 0 to 110 (a region in `husky_plus.rcf`, not kept),
+the ADC's test pattern came back exact at 250 MHz on every seed that read
+it, for the first time on five seeds running; the stage's write enables
+were still late at up to 6.6 ns, one register reaching four segments of
+four RAMs each, and the suite passed 29, 32, 26, 27 and 27 (mean 28.2):
+`fastest`, `ADCaltfast` and `adc_reset` still failed on four of five.
+Registering the write again in each segment (`husky_fifo`'s banked
+memory; its testbench passed, and caught a segment that never wrote) made
+four seeds of five fail to build: 28 clock pins on general interconnect
+on one, a clock row's `BUFHCLK` wanted by two clocks on two. The placer
+does not budget a clock region's clock lines, and a few hundred more
+registers in the wrong places is enough to find that out. Not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
