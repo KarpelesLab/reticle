@@ -58,7 +58,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::fpga::device::{BelRole, Device};
 use crate::fpga::primitives::{add_cell, const_expr};
 use crate::ir::emit::{BitView, SigBit};
-use crate::ir::{AttrValue, Bit, CellId, CellKind, Const, Design, ExprId, ModuleId, NetId};
+use crate::ir::{
+    AttrValue, Bit, CellId, CellKind, Const, Design, ExprId, ModuleId, NetId, PortDir,
+};
 
 /// The primitive this pass emits; a device file without it is left alone.
 pub(super) const DUAL: &str = "LUT6_2";
@@ -94,6 +96,20 @@ impl LutPairing {
             self.lanes
         )
     }
+}
+
+/// Whether a lane's generate `d` may go on its propagate's `O5`: only
+/// when nothing but the chain reads it.
+///
+/// `O5` leaves the slice by the lane's output mux (`<L>MUX`), and so does
+/// the lane's sum. With subtractions on the chain the ChipWhisperer-Husky
+/// Plus's slow FIFO had `outside - take` as the generate of the adder
+/// `outside - take + fetch`, also read by `outside - take <= EXTRA`; on
+/// every seed the route ended with it and that adder's lowest sum on one
+/// `CLBLM_L_AMUX` (2026-10-30). Left alone, the generate is a table of
+/// its own and reaches `DI` by the bypass input.
+fn pairs_with_its_lane(d: SigBit, read_elsewhere: &HashSet<SigBit>) -> bool {
+    !read_elsewhere.contains(&d)
 }
 
 /// Which tables [`pack_lut_pairs`] pairs beyond a carry lane's own two.
@@ -179,12 +195,29 @@ pub fn pack_lut_pairs(
         // How many carry pins each bit feeds, and every lane as its
         // `(propagate, generate)` bits.
         let mut chain_uses: HashMap<SigBit, usize> = HashMap::new();
+        // Every bit something other than a carry chain reads: a cell's
+        // input or an output port. A lane's generate on `O5` that is also
+        // read there leaves the slice through the lane's output mux, which
+        // the lane's sum needs too: see `pairs_with_its_lane`.
+        let mut read_elsewhere: HashSet<SigBit> = HashSet::new();
+        for port in &m.ports {
+            if port.dir != PortDir::In
+                && let Ok(bits) = view.net_bits(port.net, port.span)
+            {
+                read_elsewhere.extend(bits.iter().map(|b| view.canonical(*b)));
+            }
+        }
         let shape = device.bel(BelRole::Carry).and_then(|c| c.wide_carry());
         for (_, cell) in m.cells.iter() {
             if !matches!(&cell.kind, CellKind::Blackbox(n) if device
                 .bel(BelRole::Carry)
                 .is_some_and(|c| c.name == n.as_str()))
             {
+                for (_, e) in &cell.inputs {
+                    if let Ok(bits) = view.expr_bits(*e) {
+                        read_elsewhere.extend(bits.iter().map(|b| view.canonical(*b)));
+                    }
+                }
                 continue;
             }
             for (_, e) in &cell.inputs {
@@ -204,6 +237,7 @@ pub fn pack_lut_pairs(
                 }
             }
         }
+        lanes.retain(|(_, d)| pairs_with_its_lane(*d, &read_elsewhere));
         for (id, cell) in m.cells.iter() {
             if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == lut.name) {
                 continue;
@@ -619,6 +653,84 @@ mod tests {
                 "assignment {assignment:05b}"
             );
         }
+    }
+
+    /// **A lane's generate pairs onto its propagate's `O5` only when the
+    /// chain alone reads it.** One `CARRY4` lane: a propagate table and a
+    /// generate table over three inputs. Read by the chain alone they pair;
+    /// with the generate also driving an output port, `O5` and the lane's
+    /// sum would both want the lane's output mux, and they do not.
+    ///
+    /// Would catch [`pairs_with_its_lane`] left out or a port's readers
+    /// missed. Would not catch a cell's readers missed, which the Husky
+    /// Plus's route (the function's documentation) is the evidence for.
+    #[test]
+    fn a_generate_read_elsewhere_keeps_its_own_table() {
+        let device = target("xc7a35t-ftg256").unwrap();
+        let lanes = |read_elsewhere: bool| {
+            let mut map = SourceMap::new();
+            let file = map.add("t", "").unwrap();
+            let mut b = ModuleBuilder::new("lane", Span::new(file, 0, 0));
+            let ins: Vec<NetId> = (0..3)
+                .map(|i| b.input(format!("x{i}"), Type::bit()))
+                .collect();
+            let p = b.add_net("p", Type::bit());
+            let d = if read_elsewhere {
+                b.output("d", Type::bit())
+            } else {
+                b.add_net("d", Type::bit())
+            };
+            for (name, net, pins) in [("tp", p, [0, 1]), ("td", d, [0, 2])] {
+                let mut inputs = Vec::new();
+                for (k, port) in ["I0", "I1", "I2", "I3", "I4", "I5"].iter().enumerate() {
+                    let e = match pins.get(k) {
+                        Some(i) => b.net(ins[*i]),
+                        None => b.const_bit(false),
+                    };
+                    inputs.push((Name::new(*port), e));
+                }
+                b.cell(
+                    name,
+                    CellKind::Blackbox(Name::new("LUT6")),
+                    inputs,
+                    vec![(Name::new("O"), net)],
+                );
+            }
+            let o = b.output("o", Type::bits(4));
+            let co = b.add_net("co", Type::bits(4));
+            let zero = b.const_bit(false);
+            let (pe, de) = (b.net(p), b.net(d));
+            let s = b.concat(vec![zero, zero, zero, pe]);
+            let di = b.concat(vec![zero, zero, zero, de]);
+            b.cell(
+                "c",
+                CellKind::Blackbox(Name::new("CARRY4")),
+                vec![
+                    (Name::new("S"), s),
+                    (Name::new("DI"), di),
+                    (Name::new("CI"), zero),
+                    (Name::new("CYINIT"), zero),
+                ],
+                vec![(Name::new("O"), o), (Name::new("CO"), co)],
+            );
+            let mut module = b.finish();
+            for (_, cell) in module.cells.iter_mut() {
+                if cell.name.as_str() != "c" {
+                    cell.params.set(
+                        "INIT",
+                        AttrValue::Const(Const::from_u64(0x6666_6666_6666_6666, 64)),
+                    );
+                }
+            }
+            let mut design = Design::new();
+            let top = design.add_module(module);
+            design.top = Some(top);
+            pack_lut_pairs(&mut design, top, device, &PairOptions::default())
+                .unwrap()
+                .lanes
+        };
+        assert_eq!(lanes(false), 1, "the chain alone reads the generate");
+        assert_eq!(lanes(true), 0, "the generate also leaves the slice");
     }
 
     /// With a budget, the six tables pair only until they number that
