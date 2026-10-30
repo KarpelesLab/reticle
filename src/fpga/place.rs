@@ -1081,6 +1081,32 @@ pub struct PlaceOptions {
     /// catches a walk that has converged while the temperature is still
     /// nominally warm.
     pub stall_limit: u32,
+    /// Stop once the best cost has fallen by less than
+    /// [`PlaceOptions::flat_fraction`] of itself over this many steps, and
+    /// the step ended within that fraction of the best. Zero never stops
+    /// for this reason.
+    ///
+    /// The second half is what keeps a hot anneal going. It walks uphill
+    /// from a good start, and its best does not move until it has cooled
+    /// past where it began: on the best alone, Basys 3 `blink` stopped at
+    /// its eleventh step with a wirelength of 1,136, where the whole
+    /// schedule reaches 276 (2026-10-30), and
+    /// `place_effort_changes_a_seven_series_placement` found every effort
+    /// building one bitstream. Nor is the step's own cost enough by
+    /// itself: hot, it rose from 1,216 to 1,388 over ten steps, which is
+    /// no fall at all. A walk that ends its steps on its best has stopped
+    /// wandering.
+    ///
+    /// The acceptance rate says nothing about this on a die where many
+    /// moves change nothing: on the Husky Plus most accepted moves in the
+    /// wirelength anneal's last ninety steps were such, the rate held at
+    /// 43 %, neither [`PlaceOptions::stall_limit`] nor VPR's temperature
+    /// criterion fired, and the anneal ran to
+    /// [`PlaceOptions::max_temperatures`] — a third of the placement's
+    /// moves for 0.5 % of its wirelength.
+    pub flat_steps: u32,
+    /// See [`PlaceOptions::flat_steps`].
+    pub flat_fraction: f64,
     /// Upper bound on temperature steps, so a pathological design stops.
     pub max_temperatures: u32,
     /// Moves tried per temperature, or `None` for
@@ -1123,6 +1149,8 @@ impl Default for PlaceOptions {
             target_acceptance: 0.44,
             range_limit: true,
             stall_limit: 4,
+            flat_steps: 0,
+            flat_fraction: 0.0,
             max_temperatures: 120,
             moves_per_temperature: None,
             move_effort: 10,
@@ -1168,6 +1196,9 @@ pub enum AnnealStop {
     /// [`PlaceOptions::max_temperatures`] steps ran. This is the
     /// backstop, not an outcome to be pleased about.
     Exhausted,
+    /// The best cost fell by less than [`PlaceOptions::flat_fraction`] over
+    /// [`PlaceOptions::flat_steps`] steps, and the walk was at it.
+    Flat,
 }
 
 impl AnnealStop {
@@ -1178,6 +1209,7 @@ impl AnnealStop {
             AnnealStop::Cold => "the temperature fell below 0.005 of the cost per net",
             AnnealStop::Stalled => "the best placement stopped improving",
             AnnealStop::Exhausted => "it ran out of temperature steps",
+            AnnealStop::Flat => "the best placement had stopped improving by much",
         }
     }
 }
@@ -6128,6 +6160,8 @@ fn anneal(
     let mut best = placement.clone();
     let mut best_cost = current;
     let mut stalled = 0u32;
+    // The best cost after each step, for `PlaceOptions::flat_steps`.
+    let mut bests: Vec<f64> = Vec::new();
     let signals = netlist.signals.len().max(1) as f64;
     report.stop = AnnealStop::Exhausted;
     // Counted here, not in the report, which a timing-driven placement
@@ -6213,6 +6247,16 @@ fn anneal(
         report.temperatures += 1;
         if options.stall_limit > 0 && stalled >= options.stall_limit {
             report.stop = AnnealStop::Stalled;
+            break;
+        }
+        bests.push(best_cost as f64);
+        let span = options.flat_steps as usize;
+        if span > 0
+            && let Some(then) = bests.len().checked_sub(span + 1).map(|i| bests[i])
+            && then - best_cost as f64 <= options.flat_fraction * then
+            && current.saturating_sub(best_cost) as f64 <= options.flat_fraction * best_cost as f64
+        {
+            report.stop = AnnealStop::Flat;
             break;
         }
         temperature *= options.cooling.unwrap_or_else(|| cooling_factor(rate));
@@ -9104,6 +9148,63 @@ mod tests {
             limited.hpwl_after,
             old.hpwl_after
         );
+    }
+
+    /// **An anneal that has stopped improving by much stops**
+    /// ([`PlaceOptions::flat_steps`]). The chain on the 12-by-12 grid with
+    /// the other exits off: asked to stop when three steps have taken
+    /// less than half the cost off, it stops for that reason after its
+    /// fourth step or later, and the schedule then shows three steps that
+    /// took less than that off the best, and a last step that ended within
+    /// half of it. With the rule off it runs on past where it
+    /// stopped.
+    ///
+    /// Would catch the rule never firing, firing before it has the steps
+    /// it needs to look back over, or comparing against the wrong step.
+    /// Would not catch the rule dropping its second half, the step ending
+    /// near the best, which on this chain is always so; Basys 3 `blink` is
+    /// where it is not, and `place_effort_changes_a_seven_series_placement`
+    /// is what catches that.
+    /// Would not catch a threshold that is a poor trade on a real design,
+    /// which only the Husky Plus's numbers in `xray::PLACE_FLAT_STEPS`
+    /// say anything about.
+    #[test]
+    fn an_anneal_that_has_stopped_improving_stops() {
+        let (arch, graph) = grid(12, 12);
+        let netlist = chain(96);
+        let base = PlaceOptions {
+            move_effort: 1,
+            stall_limit: 0,
+            max_temperatures: 400,
+            ..PlaceOptions::default()
+        };
+        let flat = PlaceOptions {
+            flat_steps: 3,
+            flat_fraction: 0.5,
+            ..base.clone()
+        };
+        let (_, report) =
+            place(&netlist, &arch, &graph, &Constraints::new(), &flat).expect("it fits");
+        assert_eq!(report.stop, AnnealStop::Flat, "{}", report.schedule_text());
+        let steps = report.schedule.len();
+        assert!(steps >= 4, "{}", report.schedule_text());
+        let best_by = |n: usize| {
+            report.schedule[..n]
+                .iter()
+                .map(|s| s.cost)
+                .min()
+                .unwrap_or(u64::MAX) as f64
+        };
+        let (then, now) = (best_by(steps - 3), best_by(steps));
+        let last = report.schedule[steps - 1].cost as f64;
+        assert!(
+            then - now <= 0.5 * then && last - now <= 0.5 * now,
+            "{then} to {now}\n{}",
+            report.schedule_text()
+        );
+        let (_, off) = place(&netlist, &arch, &graph, &Constraints::new(), &base).expect("it fits");
+        assert_ne!(off.stop, AnnealStop::Flat);
+        assert!(off.schedule.len() > steps, "{}", off.schedule_text());
     }
 
     /// A placement that has converged stops, rather than spending the

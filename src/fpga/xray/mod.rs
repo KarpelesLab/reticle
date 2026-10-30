@@ -2834,6 +2834,22 @@ pub const ASTAR_WEIGHT: f64 = 2.0;
 /// pll_blink, bram_rom and lutram route as well either way.
 pub const PRESENT_GROWTH: f64 = 1.3;
 
+/// When this fabric's anneal stops for lack of progress
+/// ([`PlaceOptions::flat_steps`](crate::fpga::place::PlaceOptions) and
+/// `flat_fraction`): when ten steps have taken less than 0.2 % off the
+/// best cost and the last ended within that of it. On the Husky Plus's
+/// schedule of 2026-10-30, stopping on the best cost alone ended the
+/// wirelength anneal at its 38th step of 120, 0.43 % above where the
+/// 120th left it, and none of the timing rounds, each of which was still
+/// taking more than that off when it ended. Placement took about 715 s
+/// at five seeds against about 950 s, and the bitstreams passed as many
+/// of NewAE's tests on the part (a mean of 28.2 against 28.4, the router
+/// unchanged; see `docs/fpga-xray.md`).
+pub const PLACE_FLAT_STEPS: u32 = 10;
+
+/// See [`PLACE_FLAT_STEPS`].
+pub const PLACE_FLAT_FRACTION: f64 = 0.002;
+
 /// How many passes the router may make on this fabric
 /// ([`RouteOptions::max_iterations`](crate::fpga::route::RouteOptions)),
 /// against the default forty: with the growth above a congested design

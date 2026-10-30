@@ -3591,6 +3591,10 @@ fn write_xc7_bitstream(
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
     let mut options = place_options(args)?;
+    // An anneal that has stopped improving stops: see
+    // `xray::PLACE_FLAT_STEPS`.
+    options.flat_steps = reticle::fpga::xray::PLACE_FLAT_STEPS;
+    options.flat_fraction = reticle::fpga::xray::PLACE_FLAT_FRACTION;
     // A pad's global buffer goes where the pad's own road reaches: see
     // `PlaceOptions::clock_roads`.
     options.clock_roads = fabric.clock_roads(&graph);
