@@ -1907,7 +1907,9 @@ impl XrayDatabase {
             // interconnect wires. Only `always` is metal; see
             // [`parse::PpipKind`] for why the other two are not.
             for ppip in ppips.iter().filter(|p| p.kind == parse::PpipKind::Always) {
-                if overridden.contains(&(ppip.to.as_str(), ppip.from.as_str())) {
+                if overridden.contains(&(ppip.to.as_str(), ppip.from.as_str()))
+                    || is_regional_buffer(&ppip.to, &ppip.from)
+                {
                     continue;
                 }
                 let bits = enable_bits(&ppip.to, &ppip.from);
@@ -2919,6 +2921,27 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         "ddr_out" => &["clk"],
         _ => &[],
     }
+}
+
+/// Whether a fixed connection is the way through a regional clock buffer,
+/// `HCLK_IOI_RCLK_BEFORE_DIV<n>` to `HCLK_IOI_RCLK_OUT<n>`, which
+/// `ppips_hclk_ioi3.db` lists as `always` but is a `BUFR` site, lit only by
+/// its `HCLK_IOI3.BUFR_Y<n>` feature. This flow puts every `BUFR` on a
+/// global buffer (`bufg`) and never sets that feature, so the hop carries
+/// nothing on the part, and with it in the graph the router had a road
+/// onto the regional clock lines (`CK_BUFRCLK<n>`) that only it enters.
+///
+/// It took it. On a ChipWhisperer-Husky Plus build the `BUFGMUX`
+/// `rearclk`, which the analyser samples as data, left the clock network
+/// at `X4Y157`, bounced down the column into the I/O tile at `X1Y132`,
+/// through this hop at `X1Y130` and along `CK_BUFRCLK0` into row 130's
+/// leaves to its tables; the analyser read all ones on both of the
+/// `BUFGMUX`'s inputs, where a build that reached them over row 130's own
+/// `BUFHCLK1` read the clock (2026-11-01). A cost on the regional lines
+/// was tried first and did not hold: a critical connection's search
+/// weighs delay over cost, and the hop's delay is small.
+fn is_regional_buffer(to: &str, from: &str) -> bool {
+    to.starts_with("HCLK_IOI_RCLK_OUT") && from.starts_with("HCLK_IOI_RCLK_BEFORE_DIV")
 }
 
 fn is_clock_wire(name: &str) -> bool {

@@ -1948,6 +1948,51 @@ fn one_build(root: &str, theirs: &Decoded, companion: &str, margin: u32) {
 ///
 /// What this would not catch: a ball dropped for being outside the
 /// loaded region, which is a different silence and is still silent.
+/// **No route passes through a regional clock buffer this flow never
+/// lights.** `ppips_hclk_ioi3.db` lists the way through each `BUFR`,
+/// `HCLK_IOI_RCLK_BEFORE_DIV<n>` to `HCLK_IOI_RCLK_OUT<n>`, as `always`;
+/// built as metal, it let a ChipWhisperer-Husky Plus build carry its
+/// `rearclk` through an unconfigured `BUFR` onto a regional clock line,
+/// and the analyser read that clock as a constant. The region holds the
+/// `HCLK_IOI3` at grid (1, 130). Checks the hop is gone and the fixed
+/// wiring on either side of it is not; would catch the hop coming back
+/// under another spelling of the same pair, would not catch some other
+/// site the database records as `always` and the flow does not light.
+#[test]
+fn a_regional_buffer_this_flow_never_lights_is_no_road() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let mut options = XrayOptions::new();
+    options.region = Some(GridRegion::new(0, 126, 4, 134));
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    let hclk = fabric
+        .arch
+        .tile_types
+        .iter()
+        .find(|t| t.name == "HCLK_IOI3")
+        .expect("the region holds an HCLK_IOI3");
+    let has = |to: &str, from: &str| {
+        hclk.pips
+            .iter()
+            .any(|p| p.to.name == to && p.from.name == from)
+    };
+    for n in 0..4 {
+        let (out, before) = (
+            format!("HCLK_IOI_RCLK_OUT{n}"),
+            format!("HCLK_IOI_RCLK_BEFORE_DIV{n}"),
+        );
+        assert!(
+            !has(&out, &before),
+            "{before} -> {out} is a BUFR, not a wire"
+        );
+        assert!(
+            has(&format!("HCLK_IOI_RCLK2RCLK{n}"), &out),
+            "RCLK_OUT{n}'s own wiring"
+        );
+    }
+    assert!(has("HCLK_IOI_IOCLK0", "HCLK_IOI_BUFIO_O0"));
+}
+
 #[test]
 fn a_ball_with_no_io_buffer_is_refused_by_name_and_by_tile() {
     let Some(root) = chipdb() else { return };

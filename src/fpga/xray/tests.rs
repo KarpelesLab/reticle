@@ -566,6 +566,30 @@ fn a_global_clock_with_no_buffer_driving_it_is_reported() {
     );
 }
 
+/// The way through a `BUFR` is told from the fixed wiring around it
+/// (`is_regional_buffer`), by the pairs `ppips_hclk_ioi3.db` lists. Would
+/// catch the rule missing the hop or taking its neighbours; that the
+/// loader leaves the hop out is `tests/fpga_xray.rs`'s, on the database.
+#[test]
+fn the_way_through_a_regional_buffer_is_not_wiring() {
+    assert!(super::is_regional_buffer(
+        "HCLK_IOI_RCLK_OUT0",
+        "HCLK_IOI_RCLK_BEFORE_DIV0"
+    ));
+    assert!(super::is_regional_buffer(
+        "HCLK_IOI_RCLK_OUT3",
+        "HCLK_IOI_RCLK_BEFORE_DIV3"
+    ));
+    for (to, from) in [
+        ("HCLK_IOI_RCLK2RCLK0", "HCLK_IOI_RCLK_OUT0"),
+        ("HCLK_IOI_CK_BUFRCLK0", "HCLK_IOI_RCLK2RCLK0"),
+        ("HCLK_IOI_IOCLK0", "HCLK_IOI_BUFIO_O0"),
+        ("HCLK_IOI_BUFR0_CE", "HCLK_RCLK_DIV_CE0"),
+    ] {
+        assert!(!super::is_regional_buffer(to, from), "{from} -> {to}");
+    }
+}
+
 /// The global clock network's wires, by name, as `is_clock_wire` must sort
 /// them. Each name on either side came out of one build of
 /// `examples/basys3/ssd1306_console.v`: the first list is the path its
