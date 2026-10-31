@@ -5407,7 +5407,26 @@ clock fan-out wire (`GFAN`) or a bounce. Listed for both builds, the
 route to the pad, its enable's and every such clock-to-data connection
 enter their tiles the same ways; nothing in the routes says which build
 the part will read as all ones. Master's seeds fail a `pll` case on three
-of ten, so this is not the banked FIFO's alone. Not traced further. The stand-ins' testbench now checks that FIFO too (a stream
+of ten, so this is not the banked FIFO's alone. Not traced further.
+
+**It is not the FIFO's bits.** The analyser's group 7 (not in NewAE's
+driver; written to `LA_CAPTURE_GROUP` directly) feeds each channel a
+fixed toggling pattern. On the banked build channel 5 toggled there as
+on master's; so the FIFO stores bit 5 and bit 14 as it should, and what
+the PLL capture sees as all ones is `rearclk` itself, sampled as data.
+
+**What the glitch sweeps follow.** The ten seeds of master built again
+with the analyser's clock declared at the 400 MHz the tests run it at
+(`create_clock -name la_obs -period 2.5 reg_la.observer_clk_prebuf`, a
+measurement only: all ten bitstreams came out bit for bit as before) put
+about 670 of its endpoints past 2.5 ns on every seed. Of them one
+separates the five seeds whose `glitch_output_sweep_width` failed (1, 5,
+8, 9, 10) from the five whose passed: the write address of the
+analyser's FIFO's block RAMs, `single.mem$ram_w0_d2.p1_addr`, at 3.57 to
+3.81 ns on every failing seed and 3.06 to 3.47 on every passing one. That
+is the shape the ADC's FIFO had, one write address for all its RAMs, and
+banking it (above) made the sweeps pass on five seeds of five; what
+banking also did to `rearclk` is the open question. The stand-ins' testbench now checks that FIFO too (a stream
 across its clocks in order, and 16,385 words held and given back in
 order), which the original passes, banked or not.
 
