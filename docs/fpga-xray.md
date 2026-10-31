@@ -5372,6 +5372,27 @@ Five seeds of master with it, on the part:
 |---|---|---|---|---|---|---|
 | passed of NewAE's 40 | 32 | 36 | 38 | 39 | 37 | 36.4 |
 
+And seeds 6 to 10 of the same: 38, 38, 34, 34 and 30. Over the ten, a
+mean of 35.6, seven at NewAE's 35 or above; all ten routed at their first
+placement, all ten read the ADC's test pattern exactly at 250 MHz, and
+`fastest`, `ADCaltfast` and `adc_reset` passed on all ten. What is left
+to vary with the seed is the logic analyser:
+`glitch_output_sweep_width` failed on five of the ten, `glitch_width` on
+five (NewAE's own bitstream fails it), and `fpga_version` on all, which
+checks for NewAE's own build time.
+
+**Not the clock regions' twelve lines.** The four builds of five that
+failed with every segment's write data copied were read first as a
+placement putting more than twelve clocks in one clock region. Counted,
+the most any region of the failing build (or of a good one) held was
+eight or nine: the route put `reg_la.frequency_int`'s clock, at
+`X55Y54`, onto a regional line (`HCLK_CMT_CK_BUFRCLK1`) and general
+interconnect, though the region's own `HCLK` row reaches it; another
+build (not counted) ended with two clocks on one horizontal clock line.
+The reading now is the router's assignment of a clock region's lines,
+in some placements, not the placer's; it was not seen on any of the ten
+builds above.
+
 NewAE's own bitstream passes 35. `fastest`, `ADCaltfast` and `adc_reset`,
 which had failed on about nine builds in ten, passed on all five. What
 failed: `test_fpga_version` on every seed (it wants NewAE's build time,
