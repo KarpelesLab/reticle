@@ -5378,8 +5378,9 @@ failed: `test_fpga_version` on every seed (it wants NewAE's build time,
 which no other build has), `glitch_width` and `glitch_output_sweep_width`
 cases on some (the first fails on NewAE's bitstream too), and a `pll`
 case on two. With the two FIFO stages also confined to one block RAM
-column (`ex_RG2`'s region, not in `husky_plus.rcf`) the first seeds
-passed 36 and 32: no better, and not kept.
+column (`ex_RG2`'s region, not in `husky_plus.rcf`) the five passed 36,
+32, 30, 34 and 37 (mean 33.8): worse, and not kept. Every seed of both
+that read the ADC's test pattern read it exactly at 250 MHz.
 
 ## What remains before an LED could light
 
