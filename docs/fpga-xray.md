@@ -5393,7 +5393,21 @@ analyser's capture of the reference clock had no rising edge in it. In
 those tests the analyser samples at about 12 MHz, slower than the 96 MHz
 read side, which the testbench had not tried; with its write clock at
 that ratio both the banked and the original FIFO pass in simulation, so
-what the part does differently is physical and not yet traced. The stand-ins' testbench now checks that FIFO too (a stream
+what the part does differently is physical and not yet traced.
+
+On the part, set up as `test_pll[15e6-1-True-16]` sets it up (the 20-pin
+group, 100 samples, sampled at 240 MHz), a banked build (seed 5) captured
+the ADC's clock on channel 8 as a clean square wave and channel 5, `hs2`,
+as all ones; seed 4 of master captured both. So the capture works and
+what it samples on channel 5 does not move. Channel 5 is not the pin:
+`reg_la`'s `hs2` is `target_hs2`, a tristated top-level output, and the
+mapping reads `rearclk` (the `BUFGMUX` of the PLL and glitch clocks)
+itself, which leaves the clock network for a table input through a
+clock fan-out wire (`GFAN`) or a bounce. Listed for both builds, the
+route to the pad, its enable's and every such clock-to-data connection
+enter their tiles the same ways; nothing in the routes says which build
+the part will read as all ones. Master's seeds fail a `pll` case on three
+of ten, so this is not the banked FIFO's alone. Not traced further. The stand-ins' testbench now checks that FIFO too (a stream
 across its clocks in order, and 16,385 words held and given back in
 order), which the original passes, banked or not.
 
