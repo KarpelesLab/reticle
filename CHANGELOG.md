@@ -7,6 +7,203 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/KarpelesLab/reticle/compare/v0.0.7...v0.0.8) - 2026-10-31
+
+### Added
+
+- *(husky)* the Plus's build script places with the seed measured best
+- *(fpga)* the hold check ends paths at block RAM inputs too
+- *(fpga)* --timing-endpoints lists every connection out of an IO tile's register
+- *(fpga)* a subtraction of narrower operands is a chain of their width
+- *(fpga)* a route that does not converge names the signals on its worst nodes
+- *(fpga)* critical connections pull together in the global placement
+- *(fpga)* an anneal that has stopped improving stops
+- *(uray)* the path report times any finished route
+- *(uray)* list the latest paths by the router's model
+- *(uray)* a falling-edge flip-flop, run on the ZCU104
+- *(fpga)* read several constraint files; the Husky Plus keeps its analyser together
+- *(fpga)* a clock constraint may name a net below the top module
+- *(fpga)* compare equalities of sixteen bits or more in lanes by default
+- *(xray)* pair lookup tables only when they share two inputs or more
+- *(fpga)* a route whose clocks leave the network is placed again too
+- *(fpga)* a 7-series route that does not converge is placed again
+- *(fpga)* a route that gives up says whose its worst nodes are
+- *(fpga)* a route that does not converge names what holds its worst wires
+- *(fpga)* --place-seed chooses the placer's seed
+- *(fpga)* set_max_delay gives paths from or to an instance a delay of their own
+- *(xray)* a clock manager's fine phase shift is timed on its clock
+- *(fpga)* a subtraction goes onto the 7-series carry chain
+- *(xray)* a clock manager's outputs and a clock's own pad are timed
+- *(husky)* the deep FIFO stand-ins are banked, at the Plus's depths
+- *(fpga)* a critical connection's congestion charge is capped
+- *(fpga)* --timing-endpoints lists the wires of the latest paths
+- *(fpga)* --routed-netlist writes the design the bitstream is made from
+- *(cli)* verify inlines a module with instances
+- *(fpga)* --timing-endpoints writes every late endpoint's path
+- *(husky)* run NewAE's testbench on Reticle's own mapped netlist
+- *(verilog)* hierarchical references and force/release in testbenches
+- *(verilog)* simulate reals, and read .v files as SystemVerilog with --sv
+- *(place)* time each of an output pad's pins on its own
+- *(xray)* report the route's detours and where the late endpoints are
+- *(route)* keep a congested signal's clear branches, and clean up the critical ones
+- *(place)* report each pad's own latest path, and the flow prints the late ones
+- *(xray)* `--timing-driven` routes for time, with the pips' own delays
+- *(route)* time each pass with the placer's model, and keep the search cheap
+- *(place)* path groups, and the analysis given routed delays
+- *(examples)* nes: the console's picture as a JPEG file
+- *(place)* global buffers that feed one another sit a cascade apart
+- *(place)* an input delay, and registers held where it can be met
+- *(xray)* the timing model reads the tables and the constraints
+- *(place)* time connections, not boxes, and against the longest path
+- *(xray)* `--timing-driven` places a 7-series design for its clocks' periods
+- *(place)* a timing-driven placement weights each signal by its criticality
+- *(cli)* `--max-pips` raises the 7-series loader's limit
+- *(xc7)* the XC7A100T in the FTG256 package, NewAE's Husky Plus
+- *(route)* a lookup table's inputs are the router's, a congested box grows, and a clock enters its pin off the network
+- *(place)* place a dense design globally, and pack each lookup table with its flip-flops
+- *(uray)* --timing prints each routing pass, and 32 neurons route
+- *(cli)* `--report` prints the 7-series placement too
+- *(route)* each pass reports the signals it rerouted and the nodes it visited
+- *(ip)* mjpeg_enc: pixels in, a whole JPEG out
+- *(ip)* mjpeg_enc: the entropy coder, checked byte for byte
+- *(ip)* mjpeg_enc: quantisation and the zig-zag of Figure A.6
+- *(ip)* mjpeg_enc, the forward DCT of T.81, with no multiplier
+- *(ip)* adpcm_ima, IMA ADPCM both ways, checked against ffmpeg
+- *(ip)* pattern_gen, the pixel source the video outputs had no occupant for
+- *(cli)* --timing times the 7-series flow, and each routing pass as it ends
+- *(place)* the legaliser joins a slice before it opens one
+
+### Fixed
+
+- *(husky)* the second ADC FIFO stage's write address and enable are registered by each segment
+- *(fpga)* a block RAM's ports are timed in their own clocks' domains
+- *(fpga)* a carry lane's generate read elsewhere keeps its own table
+- *(fpga)* a clean-up that does not converge keeps the legal routing
+- *(fpga)* a region may name a register below the top without a warning
+- *(fpga)* weigh a multicycle path against the latest of its own kind
+- *(fpga)* merging constraints keeps the input delays
+- *(fpga)* seat a region's cells first only when the usual order fails
+- *(fpga)* seat a region's cells before cells free to go anywhere
+- *(fpga)* a region assignment below the top is not reported as matching nothing
+- *(xray)* a clock through a BUFGMUX is timed at the faster of its two
+- *(fpga)* one wire, one driver: a route may not drive a long line twice
+- *(xray)* read the ADC: clock IDDRs on the network, set the bank's LVDS bits, ground their reset
+- *(uray)* processor pins are placed at the processor's tile again
+- *(fpga)* use contains for the clock name below the top
+- *(fpga)* a rigid group that fits nowhere names the cells it holds
+- *(xray)* a clock row's track between an HCLK pair's halves is the network
+- *(xray)* route late paths at criticality exponent 4, not 8
+- *(xray)* a carry lane under a read sum is read through its carry
+- *(xray)* a clock row's segments cost nothing, so its skew is not invented
+- *(fpga)* a wire that is the only way into a sink is left to its signal
+- *(xray)* a clock manager's register port is clocked over the global network
+- *(husky)* the Plus's FIFO stand-ins hold what NewAE's thresholds need
+- *(fpga)* no subtraction goes onto the carry chain by default
+- *(fpga)* only a subtraction of sixteen bits or more goes onto the chain
+- *(fpga)* the critical congestion cap is lifted when the route stalls
+- *(fpga)* the router times a swapped-input sink where it ended
+- *(fpga)* a buffered clock reaches its clock pins over the network alone
+- *(husky)* register the FIFO stand-in's gray pointers before they cross
+- *(fpga)* time a clock manager's register port on its DCLK
+- *(fpga)* a flip-flop powers up at the value its register declares
+- *(fpga)* write a bidirectional pad's pins as bits of its port
+- *(sim)* an inout port joined to part of a net resolves both ways
+- *(verilog)* an explicit port, .a(a_pad), binds the net it names
+- *(verilog)* real arguments, $realtobits and $realtime, and --top under --param
+- *(verilog)* an inout and an assign on one wire are a bus, not two drivers
+- *(place)* seat a register held for time farther rather than fail
+- *(verilog)* drive an element of a net array from an instance output
+- *(synth)* absorb a combinational cycle that is none bit by bit
+- *(route)* draw a signal's box two programmable hops from its pins
+- *(xray)* charge a fixed buffer's delay to the node it drives
+- *(xray)* a global buffer's cascade to its neighbour has a bit of its own
+- *(uray)* place and route processor pins where their wires enter the fabric
+- *(xray)* a clock pad on the die's left half reaches its buffers by road
+- *(xray)* a clock pad reaches its buffer on its own road
+- *(constraints)* a timing exception may name what lies below the top
+- *(place)* place globally from a fifth full, not a third
+- *(primitives)* the limit on a memory built of logic counts what is built
+- *(cli)* `--top` finds the module after `--param` specialises it
+- *(synth)* a wire array's elements keep the values assigned to them
+- *(fpga)* no backend places a hard multiplier, so no bitstream maps one
+- *(techcells)* a reset that is one bit of a vector is inverted once
+
+### Other
+
+- *(fpga)* what the analyser's glitch sweeps follow, measured over ten seeds
+- *(fpga)* the PLL tests' channel is rearclk read as data, measured on the part
+- *(husky)* the analyser's FIFO is checked written slower than it is read
+- *(husky)* the stand-in testbench checks the analyser's FIFO too
+- *(fpga)* ten seeds at parity, and what the failed builds were not
+- *(fpga)* the region experiment's five seeds, measured
+- *(fpga)* a block RAM on two clocks, timed on one
+- *(fpga)* subtractions on the chain again, and what the part's failures follow
+- *(uray)* all four clock enables of a slice, run on the ZCU104
+- *(fpga)* critical connections pulled together before the anneal, measured on the part
+- *(fpga)* faster routing from the literature, measured on the part and not kept
+- *(fpga)* a search's record of a node is one structure, its physical node read once
+- *(fpga)* the pointer exception and a wider move window, measured and not kept
+- *(fpga)* the analyser's broken writes, and two tries not kept
+- *(uray)* the AXI timeout block turns an unanswered read into a bus error
+- *(fpga)* the input delays lost, and multicycle paths weighed as slack
+- *(xray)* four more tries at the fast domains, none kept
+- *(xray)* how often one wire had two drivers, and the gearbox at 250 MHz
+- *(husky)* interleave the stand-in FIFOs' banks and read a word every cycle
+- *(husky)* bank the crossing FIFO and give its read two cycles
+- *(husky)* give the slow FIFOs' read two cycles, and no select to cross the die
+- *(fpga)* an equality with constant upper bits on the chain is right
+- *(xray)* compares on the carry chain measured four ways, still off
+- *(xray)* last_sample on the carry chain is right on the part
+- *(xray)* the compare rewrite measured again, and wrong on the part again
+- *(husky)* time the ADC's clock, with the SAD engine false-pathed
+- *(fpga)* the carry chain's subtraction computes right on the part
+- *(xray)* seeds, and four changes the part did not want
+- *(fpga)* a critical search past its budget is made again as an uncritical one
+- *(xray)* banks, derived clocks, and a subtraction the part disagrees with
+- *(fpga)* a subtraction on the chain is right legalised for a slice too
+- *(xray)* a critical connection that wound through what was left
+- *(husky)* the clock that left the network, and what the part does now
+- *(ip)* the footprints after combinational cycles are absorbed
+- *(xray)* the Plus's register bus works; a capture does not yet
+- *(xray)* the bus lane that read zero, and the buffer the delays left out
+- *(xray)* what the Plus said of path groups, and where its bits really go
+- *(xray)* routing for time, and why the bus got worse before it got better
+- *(xray)* the cascade's own bit, and what NewAE's image sets that no feature names
+- *(xray)* buffers that feed buffers, and what the Plus still lacks
+- *(xray)* the Husky Plus's bus clock and its inputs, measured on the part
+- *(xray)* the ChipWhisperer-Husky routes, and what it took (2026-10-20)
+- *(xray)* what a Husky build costs on 2026-10-19
+- *(place)* a dedicated connection's sites are an array, not a hash map
+- *(xray)* legalising a carry chain asks the view it planned with
+- *(xray)* the five-input flip-flops, offered and measured, and why they are not kept
+- *(xray)* what the route's late passes do, what was tried, and the flip-flops left on the table
+- *(arch)* a tile's wire is its tile's first node plus its offset in its type
+- *(sim)* a value of two words or fewer is not on the heap, and is not copied to be read
+- the exhaustive carry checks and the IP library's variants run on every core
+- *(place)* a kind a third full is spread before it is legalised
+- *(xray)* the Husky's lookup tables, the triggers that were constants, and the route now
+- *(synth)* a select at an odd stride is a multiplexer, not a shifter
+- *(synth)* a counter that restarts at its increment takes a reset for its top bits
+- *(synth)* a register written a byte at a time takes an enable per byte
+- *(xray)* a carry's flip-flops in its macro, and the lane packing that is not done
+- the dev and test profiles optimise at level one
+- *(place)* a flip-flop that registers a carry's sum joins the carry's macro
+- *(xray)* the Husky's route converges now, too slowly to finish
+- *(xray)* the congestion charge grows by VPR's 1.3 a pass
+- *(fpga)* the trellis tripwires move with the placer again
+- *(place)* a kind that fills most of its sites is spread before it is legalised
+- *(place)* the anneal starts as wide as legalisation moved a cell
+- *(xray)* a wire costs the router one, not one per tile it crosses
+- *(xray)* the Husky's second routing pass is most of an hour, not ten minutes
+- *(xray)* the Husky places, and why a build took hours
+- *(route)* a free first pass, a box from the second, and a charge of two a tile
+- *(fpga)* the trellis tripwires move with the new placer, not the synthesiser
+- *(xray)* route at a distance charge of one node a tile, rerouting only the contested
+- *(route)* a high-fanout data net's search starts from the tree near it
+- Revert "perf(route): a high-fanout sink's search starts from the tree near it"
+- *(route)* a high-fanout sink's search starts from the tree near it
+- *(place)* a large net is a star, and a move checks the pools it touches
+
 ## [0.0.7](https://github.com/KarpelesLab/reticle/compare/v0.0.6...v0.0.7) - 2026-10-16
 
 ### Added
