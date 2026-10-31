@@ -27,6 +27,14 @@
 # that read path 15 ns (`set_max_delay 15` in cwhusky_100.xdc). Weighted
 # by estimated criticality in `clk_usb`'s domain, it reads back what it
 # was written. See README.md.
+#
+# `--place-seed 4` because the flow is deterministic and that placement is
+# the one measured best: on the part it passed 39, 39 and 38 of NewAE's 40
+# tests in three runs (2026-10-31; NewAE's own bitstream passes 35), where
+# seeds 1 to 10 passed 30 to 39 (docs/fpga-xray.md). What varies is the
+# placement a seed gives, not the part: seed 3's passed 38, 37 and 38.
+# A change to the sources or to the flow makes a different placement of
+# any seed, and the choice has to be measured again.
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -45,6 +53,7 @@ exec "$reticle" fpga \
     --output-dir "$out" \
     --bitstream "$out/cwhusky_plus_top.bit" \
     --region 0,0,147,208 --max-pips 80000000 --timing-driven --timing \
+    --place-seed 4 \
     "$fpga/hdl/includes.v" "$fpga/hdl/setup.v" "$fpga/hdl/registers.v" \
     "$fpga/hdl/clock_managment_advanced.v" "$fpga/hdl/fifo_top_husky.v" \
     "$fpga/hdl/openadc_interface.v" "$fpga/hdl/reg_chipwhisperer.v" \

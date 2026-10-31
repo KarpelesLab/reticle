@@ -5411,6 +5411,16 @@ of ten, so this is not the banked FIFO's alone. Not traced further. The stand-in
 across its clocks in order, and 16,385 words held and given back in
 order), which the original passes, banked or not.
 
+**One bitstream, three times.** What varies is the placement a seed
+gives, not the part: seed 4's bitstream passed 39, 39 and 38 in three
+runs of the suite, seed 3's 38, 37 and 38, the differences being glitch
+cases that move by one either way. The flow is deterministic, so
+`examples/husky/build_plus.sh` now passes `--place-seed 4`; built through
+that script on 2026-10-31 it wrote seed 4's bitstream bit for bit, in 41
+minutes. (Its default before was the placer's own seed, never measured
+on the part.) Any change to the sources or the flow gives every seed a
+new placement, and the choice has to be measured again.
+
 **Not the clock regions' twelve lines.** The four builds of five that
 failed with every segment's write data copied were read first as a
 placement putting more than twelve clocks in one clock region. Counted,
