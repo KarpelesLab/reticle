@@ -14,6 +14,9 @@
 //     come back in order on another, nine of every ten cycles apart; it is
 //     `full` at 4097 words (8196 with `PLUS`) and not one before, and
 //     they all come back in order;
+//   * the analyser's (`fifo_generator_semipro`, two clocks): a stream
+//     written every other cycle comes back in order on the other clock,
+//     and it holds 16385 words, every one back in order;
 //   * banked (`usb_slow_fifo2`, banks of 8192): a stream of 9000 words
 //     written every cycle and read two cycles in three comes back in order
 //     across the banks, the reads close behind the writes; then 16384
@@ -146,6 +149,43 @@ module fifo_generator_tb;
   always @(negedge rclk)
     if (!u_x.u_fifo.two_cycle_ok) x_two_cycle_wrong = x_two_cycle_wrong + 1;
 `endif
+
+  // --- the analyser's (`fifo_generator_semipro`) ----------------------
+  // Written every other cycle of one clock, as the analyser writes it,
+  // and read on the other whenever it has a word.
+  reg [17:0] p_din = 0;
+  reg p_wr = 0, p_rd = 0, p_go = 0, p_fill = 0;
+  wire [17:0] p_dout;
+  wire p_full, p_empty, p_pf, p_pe, p_under;
+  fifo_generator_semipro u_p (
+      .rst(rst), .wr_clk(clk), .rd_clk(rclk), .din(p_din), .wr_en(p_wr), .rd_en(p_rd),
+      .dout(p_dout), .full(p_full), .empty(p_empty), .prog_full(p_pf), .prog_empty(p_pe),
+      .underflow(p_under)
+  );
+  integer p_sent = 0, p_got = 0, p_wrong = 0;
+  reg p_tick = 0;
+  always @(posedge clk)
+    if (p_go && p_sent < 3000) begin
+      p_tick <= ~p_tick;
+      p_wr <= p_tick;
+      if (p_tick) begin
+        p_din <= 18'h20000 ^ p_sent[17:0];
+        p_sent <= p_sent + 1;
+      end
+    end else if (!p_fill) begin
+      p_wr <= 0;
+    end
+  always @(negedge rclk)
+    if (p_go && !p_empty && p_got < 3000) begin
+      if (p_dout !== (18'h20000 ^ p_got[17:0])) begin
+        if (p_wrong == 0) $display("FAIL: analyser word %0d: got %h", p_got, p_dout);
+        p_wrong = p_wrong + 1;
+      end
+      p_rd = 1;
+      p_got = p_got + 1;
+    end else begin
+      p_rd = 0;
+    end
 
   integer i;
   integer s_wait;
@@ -434,6 +474,52 @@ module fifo_generator_tb;
     @(posedge clk);
     check("banked fill read back", b_wrong, 0);
     check("banked empty after the fill", b_empty, 1);
+
+    // The analyser's: a stream across the clocks in order, then full with
+    // the reader stopped, and every word back in order.
+    p_go = 1;
+    i = 0;
+    while (p_got < 3000 && i < 20000) begin
+      @(posedge clk);
+      i = i + 1;
+    end
+    check("analyser stream all back", p_got, 3000);
+    check("analyser stream in order", p_wrong, 0);
+    check("analyser underflow never", p_under, 0);
+    p_go = 0;
+    p_fill = 1;
+    i = 0;
+    while (!p_full && i < 20000) begin
+      p_din <= 18'h10000 ^ i[17:0];
+      p_wr <= 1;
+      @(posedge clk);
+      i = i + 1;
+    end
+    p_wr <= 0;
+    p_fill = 0;
+    // `p_full` is read in the edge's own instant, before the edge's
+    // update: the last write counted above is the one `full` refused.
+    p_wrong = 0;
+    i = 0;
+    while ((!p_empty || i == 0) && i < 40000) begin
+      @(negedge rclk);
+      if (!p_empty) begin
+        if (p_dout !== (18'h10000 ^ i[17:0])) begin
+          if (p_wrong == 0) $display("FAIL: analyser fill word %0d: got %h", i, p_dout);
+          p_wrong = p_wrong + 1;
+        end
+        p_rd = 1;
+        i = i + 1;
+      end else begin
+        p_rd = 0;
+      end
+    end
+    @(negedge rclk);
+    p_rd = 0;
+    // What a fall-through FIFO Generator core of 16384 words holds: the
+    // depth and the word waiting on `dout`.
+    check("analyser holds its depth and one", i, 16385);
+    check("analyser fill in order", p_wrong, 0);
 
 `ifdef PLUS
     if (two_cycle_wrong + x_two_cycle_wrong != 0)

@@ -5381,6 +5381,18 @@ to vary with the seed is the logic analyser:
 five (NewAE's own bitstream fails it), and `fpga_version` on all, which
 checks for NewAE's own build time.
 
+**The analyser's FIFO banked: its sweeps pass, the rest does not.** The
+analyser writes its samples at 400 MHz into `fifo_generator_semipro`, one
+16K-word memory over sixteen block RAMs with one write address and
+enable: the shape the ADC's FIFO had. Made two banks (`BANK_AW` 13), so
+each segment registers its own write, `glitch_output_sweep_width` passed
+on all five seeds, but the suite passed 24, 31, 30, 21 and 33 (mean
+27.8): every `pll` case failed on every seed, and the ADC captures on
+two. Not kept, and why the PLL tests follow the analyser's FIFO is not
+traced. The stand-ins' testbench now checks that FIFO too (a stream
+across its clocks in order, and 16,385 words held and given back in
+order), which the original passes, banked or not.
+
 **Not the clock regions' twelve lines.** The four builds of five that
 failed with every segment's write data copied were read first as a
 placement putting more than twelve clocks in one clock region. Counted,
