@@ -14,8 +14,9 @@
 //     come back in order on another, nine of every ten cycles apart; it is
 //     `full` at 4097 words (8196 with `PLUS`) and not one before, and
 //     they all come back in order;
-//   * the analyser's (`fifo_generator_semipro`, two clocks): a stream
-//     written every other cycle comes back in order on the other clock,
+//   * the analyser's (`fifo_generator_semipro`, two clocks, the write one
+//     slower, as in NewAE's PLL tests): a stream written every other
+//     cycle comes back in order on the other clock,
 //     and it holds 16385 words, every one back in order;
 //   * banked (`usb_slow_fifo2`, banks of 8192): a stream of 9000 words
 //     written every cycle and read two cycles in three comes back in order
@@ -42,6 +43,10 @@ module fifo_generator_tb;
   reg clk = 0, rclk = 0, rst = 1;
   always #5 clk = ~clk;
   always #9 rclk = ~rclk;
+  // The analyser's clock in NewAE's PLL tests, 12 MHz: slower than the
+  // read side's.
+  reg sclk = 0;
+  always #41 sclk = ~sclk;
 
   integer failures = 0;
   task check(input [255:0] what, input [71:0] got, input [71:0] want);
@@ -158,13 +163,13 @@ module fifo_generator_tb;
   wire [17:0] p_dout;
   wire p_full, p_empty, p_pf, p_pe, p_under;
   fifo_generator_semipro u_p (
-      .rst(rst), .wr_clk(clk), .rd_clk(rclk), .din(p_din), .wr_en(p_wr), .rd_en(p_rd),
+      .rst(rst), .wr_clk(sclk), .rd_clk(rclk), .din(p_din), .wr_en(p_wr), .rd_en(p_rd),
       .dout(p_dout), .full(p_full), .empty(p_empty), .prog_full(p_pf), .prog_empty(p_pe),
       .underflow(p_under)
   );
   integer p_sent = 0, p_got = 0, p_wrong = 0;
   reg p_tick = 0;
-  always @(posedge clk)
+  always @(posedge sclk)
     if (p_go && p_sent < 3000) begin
       p_tick <= ~p_tick;
       p_wr <= p_tick;
@@ -480,7 +485,7 @@ module fifo_generator_tb;
     p_go = 1;
     i = 0;
     while (p_got < 3000 && i < 20000) begin
-      @(posedge clk);
+      @(posedge sclk);
       i = i + 1;
     end
     check("analyser stream all back", p_got, 3000);
@@ -492,7 +497,7 @@ module fifo_generator_tb;
     while (!p_full && i < 20000) begin
       p_din <= 18'h10000 ^ i[17:0];
       p_wr <= 1;
-      @(posedge clk);
+      @(posedge sclk);
       i = i + 1;
     end
     p_wr <= 0;

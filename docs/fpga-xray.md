@@ -5388,8 +5388,12 @@ enable: the shape the ADC's FIFO had. Made two banks (`BANK_AW` 13), so
 each segment registers its own write, `glitch_output_sweep_width` passed
 on all five seeds, but the suite passed 24, 31, 30, 21 and 33 (mean
 27.8): every `pll` case failed on every seed, and the ADC captures on
-two. Not kept, and why the PLL tests follow the analyser's FIFO is not
-traced. The stand-ins' testbench now checks that FIFO too (a stream
+two. Not kept. The PLL tests failed in `find0to1trans(refclock)[0]`: the
+analyser's capture of the reference clock had no rising edge in it. In
+those tests the analyser samples at about 12 MHz, slower than the 96 MHz
+read side, which the testbench had not tried; with its write clock at
+that ratio both the banked and the original FIFO pass in simulation, so
+what the part does differently is physical and not yet traced. The stand-ins' testbench now checks that FIFO too (a stream
 across its clocks in order, and 16,385 words held and given back in
 order), which the original passes, banked or not.
 
