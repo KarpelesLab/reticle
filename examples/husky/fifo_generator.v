@@ -316,18 +316,10 @@ module husky_fifo #(
     assign fetch_bank = rptr[NBB-1:0];
     genvar b, g;
     for (b = 0; b < NB; b = b + 1) begin : bank
-      (* keep = "true" *) reg [BANK_AW-1:0] waddr;
       (* keep = "true" *) reg [WIDTH-1:0]   wdata;
-      (* keep = "true" *) reg               wen;
       (* keep = "true" *) reg [BANK_AW-1:0] raddr;
       (* keep = "true" *) reg               rbank;  // `raddr` is in this bank
-      always @(posedge wr_clk) begin
-        waddr <= wptr[AW-1:NBB];
-        wdata <= din;
-      end
-      always @(posedge wr_clk or posedge rst)
-        if (rst) wen <= 1'b0;
-        else wen <= do_write && wptr[NBB-1:0] == b;
+      always @(posedge wr_clk) wdata <= din;
       always @(posedge rclk or posedge rst)
         if (rst) begin
           raddr <= 0;
@@ -340,8 +332,23 @@ module husky_fifo #(
         (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:(1 << SEG_AW)-1];
         reg [WIDTH-1:0] q;
         reg             mine;  // `q` is the word this bank read last
+        // The write's address and enable, registered for this segment
+        // alone so that they sit by its memories. One `wen` and `waddr` a
+        // bank, reaching four segments of four block RAMs each, was 5.8
+        // to 7.2 ns of a 4 ns write clock on the Husky Plus (2026-10-31),
+        // and a column written a word apart from its neighbours came back
+        // as halves of two samples. The data was never late, and stays
+        // the bank's: a copy a segment was 576 more registers, and with
+        // them four builds of five did not route.
+        (* keep = "true" *) reg [SEG_AW-1:0] swaddr;
+        (* keep = "true" *) reg              swen;
+        always @(posedge wr_clk) swaddr <= wptr[NBB+SEG_AW-1:NBB];
+        always @(posedge wr_clk or posedge rst)
+          if (rst) swen <= 1'b0;
+          else swen <= do_write && wptr[NBB-1:0] == b
+                       && wptr[AW-1:NBB+SEG_AW] == g;
         always @(posedge wr_clk)
-          if (wen && waddr[BANK_AW-1:SEG_AW] == g) mem[waddr[SEG_AW-1:0]] <= wdata;
+          if (swen) mem[swaddr] <= wdata;
         always @(posedge rclk)
           if (fetch && rbank) begin
             q <= mem[raddr[SEG_AW-1:0]];

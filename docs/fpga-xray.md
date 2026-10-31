@@ -5352,6 +5352,35 @@ on one, a clock row's `BUFHCLK` wanted by two clocks on two. The placer
 does not budget a clock region's clock lines, and a few hundred more
 registers in the wrong places is enough to find that out. Not kept.
 
+### The second FIFO stage's writes registered by each segment: past NewAE's count (2026-10-31)
+
+With block RAMs timed in their own ports' domains (the section before),
+what was late in the ADC's second FIFO stage was the write's **address
+and enable**, never its data: one `wen` and `waddr` a bank reached four
+segments of four `RAMB18`s each, 40 rows of block RAM. `husky_fifo`'s
+banked memory now registers the address and the enable again in each
+segment, from the same sources and in the same cycle as before, so that
+the registers can sit by that segment's memories: eleven registers a
+segment, 88 in all. The data stays one register a bank (a copy a segment
+was 576 more registers, and with them four builds of five did not
+route). The stand-ins' testbench passes with and without `PLUS`, and
+fails with a segment that never writes.
+
+Five seeds of master with it, on the part:
+
+| seed | 1 | 2 | 3 | 4 | 5 | mean |
+|---|---|---|---|---|---|---|
+| passed of NewAE's 40 | 32 | 36 | 38 | 39 | 37 | 36.4 |
+
+NewAE's own bitstream passes 35. `fastest`, `ADCaltfast` and `adc_reset`,
+which had failed on about nine builds in ten, passed on all five. What
+failed: `test_fpga_version` on every seed (it wants NewAE's build time,
+which no other build has), `glitch_width` and `glitch_output_sweep_width`
+cases on some (the first fails on NewAE's bitstream too), and a `pll`
+case on two. With the two FIFO stages also confined to one block RAM
+column (`ex_RG2`'s region, not in `husky_plus.rcf`) the first seeds
+passed 36 and 32: no better, and not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
