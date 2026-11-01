@@ -3599,6 +3599,10 @@ fn write_xc7_bitstream(
     // A pad's global buffer goes where the pad's own road reaches: see
     // `PlaceOptions::clock_roads`.
     options.clock_roads = fabric.clock_roads(&graph);
+    // Each clock region carries twelve clocks: see
+    // `PlaceOptions::clock_region_lines`.
+    options.clock_regions = fabric.clock_regions();
+    options.clock_region_lines = reticle::fpga::xray::CLOCK_REGION_LINES;
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let domains = if args.flag("timing-driven") {
@@ -3703,6 +3707,21 @@ fn write_xc7_bitstream(
                 estimate.critical,
                 estimate.hpwl
             );
+        }
+        if let Some((most, over)) = placement_report.clock_regions {
+            eprintln!(
+                "note: clock regions: at most {most} clock(s) asked of one, {over} region(s) past their {} lines",
+                options.clock_region_lines
+            );
+            if placement_report.clock_moves > 0 {
+                eprintln!(
+                    "note: {} cell(s) moved after the anneal to take a clock out of a full clock region",
+                    placement_report.clock_moves
+                );
+            }
+            for (clock, readers) in &placement_report.busiest_region {
+                eprintln!("  the busiest's {clock}: {readers} cell(s)");
+            }
         }
         // As the ECP5 flow does: what legalisation moved and the wirelength
         // the anneal reached, which is what a route's congestion is read

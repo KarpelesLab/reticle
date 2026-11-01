@@ -2513,6 +2513,51 @@ impl XrayFabric {
         out
     }
 
+    /// The clock region of each tile, for
+    /// [`PlaceOptions::clock_regions`](super::place::PlaceOptions), indexed
+    /// `y * width + x`: a region is the rows nearer one `HCLK_L`/`HCLK_R`
+    /// row than any other (`region_with_clock_rows` reads the same rows),
+    /// either side of the `CLK_HROW` column, whose own tiles are in none.
+    /// Empty when the loaded grid has no clock rows or no spine.
+    #[must_use]
+    pub fn clock_regions(&self) -> Vec<u16> {
+        let (width, height) = (self.arch.width, self.arch.height);
+        let type_at = |x: u32, y: u32| {
+            self.arch.tiles[(y * width + x) as usize].map(|t| self.arch.tile_types[t].name.as_str())
+        };
+        let mut rows: Vec<u32> = Vec::new();
+        let mut spine = None;
+        for y in 0..height {
+            for x in 0..width {
+                match type_at(x, y) {
+                    Some("HCLK_L" | "HCLK_R") if !rows.contains(&y) => rows.push(y),
+                    Some(name) if name.starts_with("CLK_HROW") => spine = Some(x),
+                    _ => {}
+                }
+            }
+        }
+        let Some(spine) = spine.filter(|_| !rows.is_empty()) else {
+            return Vec::new();
+        };
+        rows.sort_unstable();
+        let mut out = Vec::with_capacity((width * height) as usize);
+        for y in 0..height {
+            let band = rows
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, row)| row.abs_diff(y))
+                .map_or(0, |(index, _)| index);
+            for x in 0..width {
+                out.push(match x.cmp(&spine) {
+                    std::cmp::Ordering::Equal => super::place::NO_CLOCK_REGION,
+                    side => u16::try_from(band * 2 + usize::from(side.is_gt()))
+                        .unwrap_or(super::place::NO_CLOCK_REGION),
+                });
+            }
+        }
+        out
+    }
+
     /// The roads into a global buffer, by node id, for
     /// [`PlaceOptions::clock_roads`](super::place::PlaceOptions): every
     /// wire [`XrayFabric::clock_node_costs`] makes cheap for them
@@ -2848,6 +2893,20 @@ pub const PRESENT_GROWTH: f64 = 1.3;
 /// of NewAE's tests on the part (a mean of 28.2 against 28.4, the router
 /// unchanged; see `docs/fpga-xray.md`).
 pub const PLACE_FLAT_STEPS: u32 = 10;
+
+/// How many clocks a 7-series clock region's horizontal lines carry
+/// (`HCLK_CK_BUFHCLK0` to `11`), for
+/// [`PlaceOptions::clock_region_lines`](super::place::PlaceOptions).
+///
+/// Placed without it, four of five builds of the ChipWhisperer-Husky
+/// Plus with its analyser's FIFO in two banks did not route, each left
+/// with clocks sharing a line of the region around row 130, left of the
+/// spine (`CFG_CENTER_CK_BUFHCLK1` to `4`): the user I/O samples `rearclk`
+/// and its PLL's outputs as data there, beside the FIFOs' write clocks
+/// (2026-11-01). Before the way through a
+/// `BUFR` was taken out of the graph (`is_regional_buffer`) those builds
+/// routed, by putting a clock on a regional line nothing drives.
+pub const CLOCK_REGION_LINES: u32 = 12;
 
 /// See [`PLACE_FLAT_STEPS`].
 pub const PLACE_FLAT_FRACTION: f64 = 0.002;

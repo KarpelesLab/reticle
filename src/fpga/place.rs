@@ -1135,7 +1135,29 @@ pub struct PlaceOptions {
     /// package pin's buffer drives is confined to the buffer sites that
     /// pad reaches over these alone. See `confine_to_roads`.
     pub clock_roads: Vec<bool>,
+    /// The clock region of each tile, indexed `y * width + x` of the
+    /// routing graph, or empty for a fabric with no budget of clock lines;
+    /// a tile no region's lines reach is [`NO_CLOCK_REGION`]. See
+    /// [`PlaceOptions::clock_region_lines`].
+    pub clock_regions: Vec<u16>,
+    /// How many clocks one clock region's lines carry. Every signal a
+    /// global buffer or a clock manager drives that a cell in a region
+    /// reads — on a clock pin, or as data through the leaves — takes one
+    /// of them, and the anneal
+    /// charges [`CLOCK_LINE_COST`] for each a region is asked for past
+    /// this. A 7-series region has twelve (`HCLK_CK_BUFHCLK0` to `11`).
+    pub clock_region_lines: u32,
 }
+
+/// [`PlaceOptions::clock_regions`] for a tile in none.
+pub const NO_CLOCK_REGION: u16 = u16::MAX;
+
+/// What the anneal charges for each clock a region is asked to carry past
+/// [`PlaceOptions::clock_region_lines`]: more than any wirelength a move
+/// can save, so that no placement keeps one it can move away. The router
+/// cannot finish a region asked for more clocks than it has lines, and it
+/// spends its hundred passes finding that out.
+pub const CLOCK_LINE_COST: u64 = 1 << 24;
 
 impl Default for PlaceOptions {
     fn default() -> Self {
@@ -1156,6 +1178,8 @@ impl Default for PlaceOptions {
             move_effort: 10,
             timing: None,
             clock_roads: Vec::new(),
+            clock_regions: Vec::new(),
+            clock_region_lines: 0,
         }
     }
 }
@@ -1275,6 +1299,17 @@ pub struct PlacementReport {
     /// wirelength placement's first: empty when [`PlaceOptions::timing`] is
     /// `None`.
     pub timing: Vec<TimingRound>,
+    /// The placement's clock regions, when [`PlaceOptions::clock_regions`]
+    /// gives them: the most clocks one region is asked to carry, and how
+    /// many regions are asked for more than they have lines.
+    pub clock_regions: Option<(u32, usize)>,
+    /// The clocks of the region asked for the most, when that is past its
+    /// lines: each clock's name and how many of the region's cells read
+    /// it, fewest first.
+    pub busiest_region: Vec<(String, u32)>,
+    /// Cells the pass after the anneal moved to take a clock out of a
+    /// region asked for more than its lines.
+    pub clock_moves: usize,
 }
 
 /// One round of [`PlaceOptions::timing`]: the estimate the placement it
@@ -1321,6 +1356,12 @@ impl PlacementReport {
             "  legalisation moved a cell {:.1} tile(s) on average",
             self.mean_displacement()
         );
+        if let Some((most, over)) = self.clock_regions {
+            let _ = writeln!(
+                out,
+                "  clock regions: at most {most} clock(s) asked of one, {over} region(s) past their lines"
+            );
+        }
         if self.fixed > 0 || self.confined > 0 || self.macros.0 > 0 {
             let _ = writeln!(
                 out,
@@ -2657,9 +2698,166 @@ pub fn place(
         });
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
+    if !options.clock_regions.is_empty() {
+        report.clock_moves = relieve_clock_regions(
+            netlist,
+            graph,
+            &info,
+            &sites_by_kind,
+            &shared,
+            options,
+            &mut placement,
+        );
+    }
     seat_buffer_chains(netlist, graph, &sites_by_kind, &info, &mut placement);
+    if !options.clock_regions.is_empty() {
+        let load = ClockLoad::new(
+            netlist,
+            graph,
+            &placement,
+            &options.clock_regions,
+            options.clock_region_lines,
+        );
+        let most = load.clocks.iter().copied().max().unwrap_or(0);
+        let over = load
+            .clocks
+            .iter()
+            .filter(|c| **c > options.clock_region_lines)
+            .count();
+        report.clock_regions = Some((most, over));
+        if most > options.clock_region_lines
+            && let Some(region) = load.clocks.iter().position(|c| *c == most)
+        {
+            let mut clocks: Vec<(String, u32)> = load
+                .readers
+                .iter()
+                .filter(|((r, _), _)| usize::from(*r) == region)
+                .map(|((_, signal), n)| (netlist.signals[*signal].name.clone(), *n))
+                .collect();
+            clocks.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            report.busiest_region = clocks;
+        }
+    }
     report.work = WORK.with(Cell::get);
     Ok((placement, report))
+}
+
+/// Takes clocks out of the clock regions asked for more than their lines
+/// ([`PlaceOptions::clock_regions`]), returning how many cells it moved.
+///
+/// The anneal charges for such a region but cannot always leave one: by
+/// its last temperatures it moves a cell a tile or two, and a clock read
+/// by one table beside a pad — on the ChipWhisperer-Husky Plus each of the
+/// user I/O PLL's four outputs drives one table in front of its pin — is
+/// taken out of a region only by moving that table into the next one,
+/// tens of rows away. So here, for each region past its lines, the clock
+/// of the fewest readers there goes: each reader to the nearest free site
+/// it may take in a region with lines to spare for every clock it reads.
+/// A clock some reader of which cannot move stays, and the next is tried.
+/// Deterministic: regions, clocks and sites are visited in a fixed order.
+fn relieve_clock_regions(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    shared: &SiteRules,
+    options: &PlaceOptions,
+    placement: &mut Placement,
+) -> usize {
+    let mut load = ClockLoad::new(
+        netlist,
+        graph,
+        placement,
+        &options.clock_regions,
+        options.clock_region_lines,
+    );
+    let lines = options.clock_region_lines;
+    let mut moved = 0;
+    for region in 0..load.clocks.len() {
+        let region = u16::try_from(region).unwrap_or(NO_CLOCK_REGION);
+        let mut refused: HashSet<usize> = HashSet::new();
+        while load.clocks[usize::from(region)] > lines {
+            // The clock of the fewest readers here not yet refused.
+            let mut here: Vec<(u32, usize)> = load
+                .readers
+                .iter()
+                .filter(|((r, signal), _)| *r == region && !refused.contains(signal))
+                .map(|((_, signal), n)| (*n, *signal))
+                .collect();
+            here.sort_unstable();
+            let Some((_, clock)) = here.first().copied() else {
+                break;
+            };
+            let readers: Vec<usize> = (0..netlist.instances.len())
+                .filter(|i| load.globals[*i].contains(&clock))
+                .filter(|i| {
+                    placement.site_of(*i).is_some_and(|site| {
+                        let (x, y) = graph.sites[site].tile;
+                        load.region_at(x, y) == Some(region)
+                    })
+                })
+                .collect();
+            // Every reader's move, worked out before any is made.
+            let mut plan: Vec<(usize, usize)> = Vec::new();
+            let mut taken: HashSet<usize> = HashSet::new();
+            let possible = readers.iter().all(|reader| {
+                let place = &info[*reader];
+                if place.fixed.is_some() || place.macro_index.is_some() {
+                    return false;
+                }
+                let Some(from) = placement.site_of(*reader) else {
+                    return false;
+                };
+                let origin = graph.sites[from].tile;
+                let kind = &netlist.instances[*reader].kind;
+                let best = sites_by_kind.get(kind).and_then(|sites| {
+                    sites
+                        .iter()
+                        .copied()
+                        .filter(|site| {
+                            placement.instance_at(*site).is_none() && !taken.contains(site)
+                        })
+                        .filter(|site| place.may_take(*site))
+                        .filter(|site| {
+                            let (x, y) = graph.sites[*site].tile;
+                            place
+                                .region
+                                .as_ref()
+                                .is_none_or(|(rect, _)| rect.holds(x, y))
+                                && load.region_at(x, y).is_some_and(|to| {
+                                    to != region && load.has_room(to, &load.globals[*reader])
+                                })
+                        })
+                        .filter(|site| shared.allows(placement, &[(*reader, *site)]))
+                        .min_by_key(|site| (manhattan(origin, graph.sites[*site].tile), *site))
+                });
+                match best {
+                    Some(site) => {
+                        taken.insert(site);
+                        plan.push((*reader, site));
+                        true
+                    }
+                    None => false,
+                }
+            });
+            if !possible || plan.is_empty() {
+                refused.insert(clock);
+                continue;
+            }
+            for (reader, site) in plan {
+                if let Some(from) = placement.site_of(reader) {
+                    let (x, y) = graph.sites[from].tile;
+                    load.leave(reader, x, y);
+                }
+                placement.unplace(reader);
+                placement.place(reader, site);
+                let (x, y) = graph.sites[site].tile;
+                load.arrive(reader, x, y);
+                moved += 1;
+            }
+        }
+    }
+    moved
 }
 
 /// Moves global buffers that feed one another to sites the first's output
@@ -5856,6 +6054,173 @@ struct Churn {
     /// The critical connections' pull, for a timing-driven placement:
     /// empty for a wirelength one.
     pull: Pull,
+    /// The clock regions' lines; see [`ClockLoad`].
+    clocks: ClockLoad,
+}
+
+/// How many clocks each clock region is asked to carry, kept as cells
+/// move ([`PlaceOptions::clock_regions`]).
+///
+/// A region's count is of distinct signals, each held by however many of
+/// the region's cells read it, so a move changes it only when the last
+/// reader of a clock leaves a region or the first arrives.
+#[derive(Default)]
+struct ClockLoad {
+    /// Per tile, its region; empty when there is no budget.
+    region: Vec<u16>,
+    /// The routing graph's width, to index `region`.
+    width: u32,
+    /// [`PlaceOptions::clock_region_lines`].
+    lines: u32,
+    /// Per instance, the distinct clocks its inputs read: the outputs of
+    /// global buffers and of clock managers.
+    globals: Vec<Vec<usize>>,
+    /// Per (region, signal), how many of the region's cells read it.
+    readers: HashMap<(u16, usize), u32>,
+    /// Per region, how many distinct clocks it is asked for.
+    clocks: Vec<u32>,
+    /// The clocks asked for past `lines`, over every region.
+    over: u64,
+}
+
+impl ClockLoad {
+    /// The load of `placement`, or an empty one when `region` is.
+    fn new(
+        netlist: &Netlist,
+        graph: &RoutingGraph,
+        placement: &Placement,
+        region: &[u16],
+        lines: u32,
+    ) -> ClockLoad {
+        if region.is_empty() {
+            return ClockLoad::default();
+        }
+        let buffer = BelRole::GlobalBuffer.keyword();
+        let manager =
+            |kind: &str| kind == BelRole::Pll.keyword() || kind == BelRole::Mmcm.keyword();
+        let globals = netlist
+            .instances
+            .iter()
+            .map(|inst| {
+                if inst.kind == buffer {
+                    return Vec::new();
+                }
+                let mut out: Vec<usize> = inst
+                    .pins
+                    .iter()
+                    .map(|pin| &netlist.pins[*pin])
+                    .filter(|pin| !pin.output)
+                    .filter_map(|pin| pin.signal)
+                    .filter(|signal| {
+                        // A global buffer's output, or a clock manager's
+                        // clock (`out*`, `fbout*`; not its `lock` or its
+                        // `do` bus) read by anything but a buffer or
+                        // another manager, whose feedback and cascades are
+                        // dedicated: both reach a cell over the region's
+                        // lines.
+                        netlist.signals[*signal].driver.is_some_and(|d| {
+                            let pin = &netlist.pins[d];
+                            let driver = &netlist.instances[pin.instance].kind;
+                            let clock =
+                                pin.role.starts_with("out") || pin.role.starts_with("fbout");
+                            driver == buffer || (manager(driver) && clock && !manager(&inst.kind))
+                        })
+                    })
+                    .collect();
+                out.sort_unstable();
+                out.dedup();
+                out
+            })
+            .collect();
+        let regions = region
+            .iter()
+            .filter(|r| **r != NO_CLOCK_REGION)
+            .map(|r| usize::from(*r) + 1)
+            .max()
+            .unwrap_or(0);
+        let mut load = ClockLoad {
+            region: region.to_vec(),
+            width: graph.width,
+            lines,
+            globals,
+            readers: HashMap::new(),
+            clocks: vec![0; regions],
+            over: 0,
+        };
+        for instance in 0..netlist.instances.len() {
+            if let Some(site) = placement.site_of(instance) {
+                let (x, y) = graph.sites[site].tile;
+                load.arrive(instance, x, y);
+            }
+        }
+        load
+    }
+
+    /// The region of tile `(x, y)`, if it is in one.
+    fn region_at(&self, x: u32, y: u32) -> Option<u16> {
+        let index = usize::try_from(y * self.width + x).ok()?;
+        self.region
+            .get(index)
+            .copied()
+            .filter(|r| *r != NO_CLOCK_REGION)
+    }
+
+    /// `instance` arrives at tile `(x, y)`.
+    fn arrive(&mut self, instance: usize, x: u32, y: u32) {
+        let Some(region) = self.region_at(x, y) else {
+            return;
+        };
+        for index in 0..self.globals[instance].len() {
+            let signal = self.globals[instance][index];
+            let readers = self.readers.entry((region, signal)).or_insert(0);
+            *readers += 1;
+            if *readers == 1 {
+                let clocks = &mut self.clocks[usize::from(region)];
+                *clocks += 1;
+                if *clocks > self.lines {
+                    self.over += 1;
+                }
+            }
+        }
+    }
+
+    /// `instance` leaves tile `(x, y)`.
+    fn leave(&mut self, instance: usize, x: u32, y: u32) {
+        let Some(region) = self.region_at(x, y) else {
+            return;
+        };
+        for index in 0..self.globals[instance].len() {
+            let signal = self.globals[instance][index];
+            let Some(readers) = self.readers.get_mut(&(region, signal)) else {
+                continue;
+            };
+            *readers -= 1;
+            if *readers == 0 {
+                self.readers.remove(&(region, signal));
+                let clocks = &mut self.clocks[usize::from(region)];
+                if *clocks > self.lines {
+                    self.over -= 1;
+                }
+                *clocks -= 1;
+            }
+        }
+    }
+
+    /// Whether region `region` has lines for every clock of `clocks` it
+    /// does not already carry.
+    fn has_room(&self, region: u16, clocks: &[usize]) -> bool {
+        let new = clocks
+            .iter()
+            .filter(|c| !self.readers.contains_key(&(region, **c)))
+            .count();
+        let carried = self.clocks.get(usize::from(region)).copied().unwrap_or(0);
+        carried as usize + new <= self.lines as usize
+    }
+
+    /// What the load costs the anneal.
+    fn cost(&self) -> u64 {
+        self.over * CLOCK_LINE_COST
+    }
 }
 
 /// What a timing-driven anneal charges on top of the wirelength
@@ -5963,12 +6328,13 @@ impl Churn {
             touched: Vec::new(),
             previous: Vec::new(),
             pull: Pull::default(),
+            clocks: ClockLoad::default(),
         }
     }
 
     /// The anneal's cost: the boxes, and the critical connections' pull.
     fn total(&self, netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u64 {
-        self.spans.total() + self.pull.total(netlist, graph, placement)
+        self.spans.total() + self.pull.total(netlist, graph, placement) + self.clocks.cost()
     }
 }
 
@@ -6238,6 +6604,13 @@ fn anneal(
     let mut churn = Churn::new(netlist, graph, placement);
     churn.spans.weight.clone_from(&weights.nets);
     churn.pull = Pull::new(netlist, &weights.pins);
+    churn.clocks = ClockLoad::new(
+        netlist,
+        graph,
+        placement,
+        &options.clock_regions,
+        options.clock_region_lines,
+    );
     for _ in 0..movable.len().clamp(20, 100_000) {
         if let Some(candidate) = propose(
             netlist,
@@ -6744,10 +7117,12 @@ fn retile(
         }
     }
     let before: u64 = churn.touched.iter().map(|s| churn.spans.cost_of(*s)).sum();
+    let clocks_before = churn.clocks.cost();
     let mut pins = 0u64;
     for (instance, _) in plan.clone() {
         if let Some(site) = placement.site_of(instance) {
             let (x, y) = graph.sites[site].tile;
+            churn.clocks.leave(instance, x, y);
             for index in 0..churn.carried[instance].len() {
                 let signal = churn.carried[instance][index].0;
                 churn.spans.remove(signal, x, y);
@@ -6760,6 +7135,7 @@ fn retile(
         let Some(site) = site else { continue };
         placement.place(instance, site);
         let (x, y) = graph.sites[site].tile;
+        churn.clocks.arrive(instance, x, y);
         for index in 0..churn.carried[instance].len() {
             let signal = churn.carried[instance][index].0;
             churn.spans.add(signal, x, y);
@@ -6778,7 +7154,8 @@ fn retile(
         .iter()
         .map(|pin| churn.pull.cost_of(netlist, graph, placement, *pin))
         .sum();
-    (after + pulled_after) as f64 - (before + pulled_before) as f64
+    (after + pulled_after + churn.clocks.cost()) as f64
+        - (before + pulled_before + clocks_before) as f64
 }
 
 // ---------------------------------------------------------------------------
@@ -8643,6 +9020,194 @@ mod tests {
         }
         assert_eq!(spans.total(), hpwl(&netlist, &graph, &placement));
         assert_eq!(report.hpwl_after, spans.total());
+    }
+
+    /// Two global buffers and four tables reading them, on a row of
+    /// `width` tiles: `gb0` at 0 and `gb1` at 1 drive `c0` and `c1`, and
+    /// `lut2` to `lut5`, at 2 to 5, read what `reads` gives them.
+    fn clocked_row(width: u32, reads: [&[usize]; 4]) -> (RoutingGraph, Netlist, Placement) {
+        let (_, graph) = grid(width, 1);
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+        };
+        let none: &[usize] = &[];
+        let reads = [none, none, reads[0], reads[1], reads[2], reads[3]];
+        for (i, read) in reads.iter().enumerate() {
+            let mut pins = Vec::new();
+            if i < 2 {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance: i,
+                    port: "O".to_owned(),
+                    bit: 0,
+                    role: "o".to_owned(),
+                    output: true,
+                    signal: Some(i),
+                    constant: None,
+                });
+                netlist.signals.push(Signal {
+                    name: format!("c{i}"),
+                    driver: Some(pin),
+                    sinks: Vec::new(),
+                });
+                pins.push(pin);
+            }
+            for (n, signal) in read.iter().enumerate() {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance: i,
+                    port: format!("I{n}"),
+                    bit: 0,
+                    role: format!("i{n}"),
+                    output: false,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+                netlist.signals[*signal].sinks.push(pin);
+                pins.push(pin);
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(i),
+                name: if i < 2 {
+                    format!("gb{i}")
+                } else {
+                    format!("lut{i}")
+                },
+                primitive: "L".to_owned(),
+                kind: if i < 2 { "gb" } else { "lut" }.to_owned(),
+                pins,
+                pin: None,
+            });
+        }
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for i in 0..6u32 {
+            let site = graph.sites.iter().position(|s| s.tile == (i, 0)).unwrap();
+            placement.place(i as usize, site);
+        }
+        (graph, netlist, placement)
+    }
+
+    /// **A clock region is charged for each clock past its lines, a clock
+    /// once however many of its cells read it, and a move's change is
+    /// what a recount gives.** [`clocked_row`] in two regions, tiles 0-2
+    /// and 3-5, of one line each: the first is asked for `c0`, the second
+    /// for `c1` and `c0`, one past (`lut2` reads `c0`, `lut3` `c1`, `lut4`
+    /// both, `lut5` `c0`). A swap that leaves that, one that
+    /// puts the first region past too, and a move that takes a clock out
+    /// of the second, each priced against a fresh count and undone. The global buffers read nothing and are
+    /// not counted. Would catch a clock counted per reader rather than
+    /// once, a region's last reader leaving without the clock leaving
+    /// with it, and an undo that leaves the count behind; would not catch
+    /// a fabric's regions drawn wrongly (`tests/fpga_xray.rs` reads the
+    /// real ones), nor show that the anneal moves cells out of a region
+    /// that is over, which the part showed.
+    #[test]
+    fn a_clock_region_is_charged_for_each_clock_past_its_lines() {
+        let (graph, netlist, mut placement) = clocked_row(6, [&[0], &[1], &[0, 1], &[0]]);
+        let regions = vec![0, 0, 0, 1, 1, 1];
+        let mut churn = Churn::new(&netlist, &graph, &placement);
+        churn.clocks = ClockLoad::new(&netlist, &graph, &placement, &regions, 1);
+        assert_eq!(churn.clocks.clocks, vec![1, 2]);
+        assert_eq!(churn.clocks.over, 1);
+        let start = churn.total(&netlist, &graph, &placement);
+        let site = |x: u32| graph.sites.iter().position(|s| s.tile == (x, 0)).unwrap();
+        // (move, regions' clocks after it)
+        let moves: Vec<(Move, Vec<u32>)> = vec![
+            // `lut2` and `lut3` trade: `c1` comes to the first, `c0` stays
+            // in the second through `lut5`.
+            (vec![(2, site(3)), (3, site(2))], vec![1, 2]),
+            // `lut2` and `lut4`: the first now has both, and so does the
+            // second, through `lut3` and `lut5`.
+            (vec![(2, site(4)), (4, site(2))], vec![2, 2]),
+            // `lut3` and `lut4` trade with the buffers: `c1` leaves the
+            // second region, whose last readers of it they were, and a
+            // buffer arriving adds nothing.
+            (
+                vec![(3, site(0)), (0, site(3)), (4, site(1)), (1, site(4))],
+                vec![2, 1],
+            ),
+        ];
+        for (m, clocks) in &moves {
+            let before = churn.total(&netlist, &graph, &placement);
+            let delta = apply(&netlist, &graph, &mut churn, &mut placement, m);
+            let after = churn.total(&netlist, &graph, &placement);
+            assert_eq!(delta, after as f64 - before as f64, "{m:?}");
+            let fresh = ClockLoad::new(&netlist, &graph, &placement, &regions, 1);
+            assert_eq!(churn.clocks.clocks, fresh.clocks, "{m:?}");
+            assert_eq!(churn.clocks.over, fresh.over, "{m:?}");
+            assert_eq!(&fresh.clocks, clocks, "{m:?}");
+            undo(&netlist, &graph, &mut churn, &mut placement);
+            assert_eq!(
+                churn.total(&netlist, &graph, &placement),
+                start,
+                "{m:?} undone"
+            );
+            assert_eq!(churn.clocks.clocks, vec![1, 2], "{m:?} undone");
+        }
+        // With no regions there is no charge.
+        let none = ClockLoad::new(&netlist, &graph, &placement, &[], 1);
+        assert_eq!(none.cost(), 0);
+    }
+
+    /// **A clock is taken out of a full region by moving its readers to
+    /// one with room** (`relieve_clock_regions`). [`clocked_row`] on eight
+    /// tiles in three regions of one line, 0-2, 3-5 and 6-7, the last
+    /// empty: the second is asked for `c1` (`lut3`, `lut5`) and `c0`
+    /// (`lut4`). `c0` has the fewer readers there, and `lut4` cannot go to
+    /// the first region, which carries `c0` but is full, so it goes to the
+    /// nearest site of the third, 6. Then a fourth table reading both
+    /// clocks, which no region with one line can take, stays where it is.
+    /// Would catch the pass moving the clock of more readers, sending a
+    /// reader to a region without room, or moving one whose clocks fit
+    /// nowhere; would not catch a move that is legal here and illegal on a
+    /// fabric's real sites, which `SiteRules` is for.
+    #[test]
+    fn a_full_regions_clock_moves_out_with_its_readers() {
+        let free = |netlist: &Netlist| -> Vec<Placeable> {
+            (0..netlist.instances.len())
+                .map(|_| Placeable {
+                    fixed: None,
+                    region: None,
+                    macro_index: None,
+                    allowed: None,
+                    soft: false,
+                })
+                .collect()
+        };
+        let options = PlaceOptions {
+            clock_regions: vec![0, 0, 0, 1, 1, 1, 2, 2],
+            clock_region_lines: 1,
+            ..PlaceOptions::default()
+        };
+        for (reads, moved, at) in [
+            ([&[0][..], &[1], &[0], &[1]], 1, Some(6)),
+            ([&[0][..], &[1], &[0, 1], &[1]], 0, None),
+        ] {
+            let (graph, netlist, mut placement) = clocked_row(8, reads);
+            let info = free(&netlist);
+            let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            for (site, s) in graph.sites.iter().enumerate() {
+                sites_by_kind.entry(s.kind.clone()).or_default().push(site);
+            }
+            let shared = SiteRules::find(&netlist, &graph);
+            let n = relieve_clock_regions(
+                &netlist,
+                &graph,
+                &info,
+                &sites_by_kind,
+                &shared,
+                &options,
+                &mut placement,
+            );
+            assert_eq!(n, moved, "{reads:?}");
+            let lut4 = placement.site_of(4).map(|s| graph.sites[s].tile.0);
+            assert_eq!(lut4, Some(at.unwrap_or(4)), "{reads:?}");
+            let load = ClockLoad::new(&netlist, &graph, &placement, &options.clock_regions, 1);
+            assert_eq!(load.over, u64::from(moved == 0), "{reads:?}");
+        }
     }
 
     /// **A move's cost change is what the cost changed by, pull

@@ -1948,6 +1948,38 @@ fn one_build(root: &str, theirs: &Decoded, companion: &str, margin: u32) {
 ///
 /// What this would not catch: a ball dropped for being outside the
 /// loaded region, which is a different silence and is still silent.
+/// **The clock regions are the bands around the `HCLK` rows, either
+/// side of the spine** (`XrayFabric::clock_regions`). On this part the
+/// rows are 26, 78 and 130 and the `CLK_HROW` column is 60, so row 104 is the last of row 78's band and 105 the
+/// first of row 130's, the spine is in none, and the two sides of one
+/// band are two regions. Would catch a band boundary off by one or a
+/// side read the wrong way round; would not catch a region with fewer
+/// lines than twelve, which this does not ask.
+#[test]
+fn the_clock_regions_are_the_bands_either_side_of_the_spine() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let mut options = XrayOptions::new();
+    options.region = Some(GridRegion::new(52, 70, 68, 140));
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    let regions = fabric.clock_regions();
+    let width = fabric.arch.width;
+    let at = |x: u32, y: u32| regions[(y * width + x) as usize];
+    let spine = (0..width)
+        .find(|x| {
+            fabric.arch.tiles[(130 * width + x) as usize]
+                .is_some_and(|t| fabric.arch.tile_types[t].name.starts_with("CLK_HROW"))
+        })
+        .expect("a CLK_HROW in row 130");
+    let (left, right) = (spine - 2, spine + 2);
+    assert_eq!(at(spine, 130), reticle::fpga::place::NO_CLOCK_REGION);
+    assert_eq!(at(left, 105), at(left, 140));
+    assert_eq!(at(left, 78), at(left, 104));
+    assert_ne!(at(left, 104), at(left, 105));
+    assert_ne!(at(left, 130), at(right, 130));
+    assert_eq!(at(right, 105), at(right, 130));
+}
+
 /// **No route passes through a regional clock buffer this flow never
 /// lights.** `ppips_hclk_ioi3.db` lists the way through each `BUFR`,
 /// `HCLK_IOI_RCLK_BEFORE_DIV<n>` to `HCLK_IOI_RCLK_OUT<n>`, as `always`;
