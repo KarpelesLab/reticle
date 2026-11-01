@@ -30,7 +30,7 @@
 #
 # `--place-seed 3` because the flow is deterministic and that build is
 # the one measured best: on the part it passed 38, 38 and 39 of NewAE's 40
-# tests in three runs (2026-11-01; NewAE's own bitstream passes 35), where
+# tests in three runs (2026-11-01; NewAE's own bitstream passes 36), where
 # seeds 1 to 5 passed 30 to 38 (docs/fpga-xray.md). Built through this
 # script it is that bitstream byte for byte, in 39 minutes. Seed 4 was
 # chosen before, at 39, 39 and 38; the way through a BUFR leaving the

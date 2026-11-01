@@ -5568,6 +5568,18 @@ a test is within one seed's swing, and two seeds in five took a second
 placement against none for MF. Banking the analyser's FIFO stays out of
 `examples/husky/fifo_generator.v`.
 
+**NewAE's bitstream measured on the same forty: 36, not 35.** The 35
+quoted throughout came from one run of a wider selection (47 tests,
+`hw/ref_run1.txt`), counted down to the forty. On 2026-11-01, NewAE's
+bitstream ran through exactly the suite every build above runs. Run
+twice, it passed 36 both times. It failed the four `test_glitch_width`
+cases each time, and on neither run any `pll` case. So the `pll` failures
+above are Reticle's: on master's seeds a phase between the reference and
+the ADC clock 2 to 3 analyser samples off its first reading, where the
+test allows 1. Where a count above is compared with 35, read 36. The
+pinned seed 3 passed 38, 38 and 39, and failed `test_pll[5000000.0-4-True-40-1-1-xtal_ref_mul4]`
+on two of the three runs. Of MF's five seeds, two reach 36 (38 and 37).
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
