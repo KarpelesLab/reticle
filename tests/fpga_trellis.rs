@@ -1880,7 +1880,7 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        74,
+        80,
         "logic tiles the design occupies. **This was 65 before the ECP5 inferred a carry chain**, \
          and the eight it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
          and an XOR per bit and is three `CCU2C` plus a share of two constant lookup tables now, \
@@ -1917,7 +1917,15 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
          is recorded, not defended — nothing here has measured whether the wirelength and the \
          pip count paid for them, and until something does this is a number that moved and not a \
          number that improved. **18 October 2026:** the placer and the router moved it again, to 74, on `perf(place): the anneal starts as wide as legalisation moved a cell`, `perf(route): a free first pass, a box from the second, and a charge of two a tile` and `perf(xray): a wire costs the router one, not one per tile it crosses`. Attributed by running these three tests on `origin/master` alone in a worktree, where they fail with the same numbers. Eleven tiles wider \
-         again, and the same caveat stands: nothing here has measured what it bought"
+         again, and the same caveat stands: nothing here has measured what it bought. \
+         **1 November 2026:** 80, six wider again, and this one was found by a gate rather \
+         than by the change that caused it -- it was already failing on `d3ac709` before \
+         anything in this round was written, and CI had not seen it because CI has no \
+         prjtrellis database and the test skips. Attributed to the placer and router work \
+         between `589cbe0` and `d3ac709` by running this test in a worktree at `d3ac709`, \
+         where it fails with the same 80 against the same 74. Not attributed to any one of \
+         those commits, and not defended: the caveat above has not moved either, and nothing \
+         here has measured what any of the six bought"
     );
 
     // ---- every bit decodes, and nothing is unexplained ----
