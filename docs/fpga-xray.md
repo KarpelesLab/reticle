@@ -5615,6 +5615,89 @@ in with the clock chip's reset. Something in the design responds to it
 differently. It is not the static delay of these paths, and the report
 was not kept.
 
+*Corrected the same day: it is not the reset either, and not a phase.
+Forty readings were too few. Three hundred, 150 recalibrations and 150
+resets, on seed 3 gave −1 296 times, and 1 and 3 twice each. NewAE's
+bitstream gave −1 299 times and 0 once. In each of seed 3's four
+outliers the analyser's capture is broken at one instant on both
+channels: an ADC clock pulse 7 or 9 samples high where every other is 5,
+or a stray pulse in the reference. Across the 300, the analyser logged
+"FIFO overflow" fourteen times. NewAE's bitstream logged it never. The
+captures were 100 samples deep, against a FIFO of 16,384 words. The
+reset only happened to come before the capture that lost a word.*
+
+**The analyser's FIFO refusing a write it had room for.** The analyser
+writes NewAE's shared `fifo` on its observer clock, and inside that is
+the stand-in `fifo_generator_semipro` (`examples/husky/fifo_generator.v`).
+The overflow flag is `fifo_overflow_blocked`, set by a write while
+`prog_full` is high. `prog_full`'s threshold is 14,376 words, so the
+flag cannot be set honestly by a 100-sample capture. In the endpoint
+report of seeds 1 to 5 (ME, the same bitstreams as MF), on every seed, `full_q` was at 8.41 to 9.02 ns and `prog_full_q`
+at 8.85 to 9.64 ns, against the domain's 4.17 ns. `test_pll` runs that
+clock at 200 MHz, 5 ns. Each path ran from `reg_la.fifo_wr` through
+`do_write`, the pointer's increment, the subtraction of the synchronised
+read pointer and the comparison: the stand-in computed both flags as
+the one-clock FIFO does. A `full` captured before it settles refuses the
+next write. The word refused holds two samples, which is the two-sample
+jump `test_pll` reports.
+
+The routed summary showed none of this, giving the domain 5.67 ns,
+because `husky_plus.rcf` set those registers to two periods (2026-10-29).
+Its reading was that the analyser writes only every other cycle
+(`ticktock`), so the pointer and flags change at most on every second
+edge. That was wrong. `wr_en` is a register, and it falls on the edge
+after each write. So what `full` takes on that next edge was launched one
+period before it. Those lines are gone. In its place the stand-in's
+two-clock write side has every path from `wr_en` go through one choice
+at its end:
+
+- the pointer takes `wptr_inc`, a register one ahead;
+- `full` is the pointer, or that one ahead, equal to the synchronised read
+  pointer a lap on, against the read pointer's own register;
+- `prog_full` is the count a cycle late.
+
+On the next build (FG) those paths were 6 to 7 ns. What remained was one
+lookup table, `do_write`, placed 60 columns from `fifo_wr` and the flags,
+because it also drove the write enable of every block RAM. With two
+clocks the memory now takes each write a cycle late from registers of
+its own. The read side cannot see the word sooner, because the pointer
+showing it is registered as gray code on that same edge and then crosses
+two flip-flops. The testbench checks both changes and fails each of these
+mutations:
+
+- `full` a word early;
+- `full` without the write's choice, which overwrote a word;
+- `wptr_inc` reset to 0;
+- the pointer always taking `wptr_inc`;
+- the memory written at the live pointer.
+
+Nothing in it checks a two-clock `prog_full` cycle by cycle.
+
+Measured, 2026-11-01. FG4, with the flags from registers but the memory
+still written from `do_write`, gave a phase of 0 on all 300 readings
+with no overflow logged. A constant of 0 rather than −1 is a different
+placement's fixed offset, and the test only checks that the phase stays
+the same. FH, with both changes, places the analyser clock's latest
+endpoint at 5.57 to 5.93 ns on seeds 1 to 5, now the capture counter and
+the memory's enables. Timed honestly, that is better than the 7.89 to
+8.55 ns the flags had given FG. NewAE's forty tests passed:
+
+| seed | MF (master) | FH |
+|---|---|---|
+| 1 | 30 | 37 |
+| 2 | 35 | 39 |
+| 3 | 38 | 34 |
+| 4 | 32 | 39 |
+| 5 | 37 | 35 |
+
+That is a mean of 36.8 against 34.4. Against NewAE's own 36, three
+seeds are above and two below. No `pll` case failed on any seed. Seeds
+2 and 4 failed only `fpga_version`, which reads a build date and which
+every build of ours fails. Seed 1 failed one `glitch_width` case, and
+seeds 3 and 5 three each, from the four that NewAE's bitstream fails.
+Seeds 1, 3 and 5 each failed one `glitch_offset`, and seed 3 one
+`glitch_output_sweep_width`. Each seed ran once.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

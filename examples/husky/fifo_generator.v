@@ -128,7 +128,7 @@ module husky_fifo #(
   reg full_q;
   assign full = !wrst && full_q;
   wire do_write = wr_en && !full && !wrst;
-  assign wptr_next = wptr + do_write;
+  wire full_d, prog_full_d;  // what `full_q` and `prog_full_q` take; below
   always @(posedge wr_clk or posedge rst)
     if (rst) begin
       wptr <= 0;
@@ -137,10 +137,43 @@ module husky_fifo #(
       overflow <= 1'b0;
     end else begin
       wptr <= wptr_next;
-      full_q <= wused_next[AW];
-      prog_full_q <= wcount_next >= PROG_FULL;
+      full_q <= full_d;
+      prog_full_q <= prog_full_d;
       overflow <= wr_en && full;
     end
+  if (ASYNC) begin : async_write_flags
+    // With two clocks the write clock is the fastest in the design: the
+    // Husky Plus's analyser writes `fifo_generator_semipro` on its
+    // observer clock, at 200 MHz in `test_pll` and 400 in the glitch
+    // tests. Computed as with one clock, from `wr_en` through the
+    // increment, the subtraction and the threshold's comparison, `full`
+    // and `prog_full` were that clock's latest paths on every seed, 8.4 to
+    // 9.6 ns of 4.17, and on the part a capture of 100 samples raised the
+    // analyser's overflow flag, which only `prog_full` sets, and lost a
+    // word, two samples, about once in a hundred captures. Here `wr_en`
+    // reaches each register through one choice at its end: the pointer
+    // takes `wptr_inc`, a register of its own one ahead; `full` is the
+    // pointer, or that one ahead, equal to the read pointer a lap on; and
+    // `prog_full` is the count a cycle late. The read pointer is its own
+    // register (`rptr_w`), a cycle older than `rptr_w_next`, which only
+    // makes `full` more cautious; `prog_full` lags already.
+    reg [AW:0] wptr_inc;
+    always @(posedge wr_clk or posedge rst)
+      if (rst) wptr_inc <= 1;
+      else if (do_write) wptr_inc <= wptr_inc + 1'b1;
+    assign wptr_next = do_write ? wptr_inc : wptr;
+    wire [AW:0] rptr_lap = rptr_w ^ (1 << AW);
+    assign full_d = do_write ? wptr_inc == rptr_lap : wptr == rptr_lap;
+    reg [AW:0] wused_q;
+    always @(posedge wr_clk or posedge rst)
+      if (rst) wused_q <= 0;
+      else wused_q <= wptr - rptr_w;
+    assign prog_full_d = wused_q >= PROG_FULL;
+  end else begin : write_flags
+    assign wptr_next = wptr + do_write;
+    assign full_d = wused_next[AW];
+    assign prog_full_d = wcount_next >= PROG_FULL;
+  end
   // With one clock the word waiting on `dout` in fall-through mode is
   // still in the FIFO, and counts; with two the write side cannot see it.
   wire [AW+1:0] wcount_next = wused_next + ((FWFT && !ASYNC) ? out_next : 6'd0);
@@ -375,7 +408,28 @@ module husky_fifo #(
     assign mem_q = or_q[which_q*WIDTH+:WIDTH];
   end else begin : single
     (* ram_style = "block" *) reg [WIDTH-1:0] mem [0:DEPTH-1];
-    always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;
+    if (ASYNC) begin : registered_write
+      // With two clocks the memory takes each write a cycle late, from
+      // registers of its own. Written from `do_write` itself, that one
+      // signal reached the write enable of every block RAM as well as the
+      // flags of `async_write_flags`, and the placer put its lookup table
+      // among the block RAMs, 60 columns from the flags it also feeds:
+      // 7 to 8 ns on the Husky Plus's analyser clock, of 4.17. The read
+      // side cannot fetch the word sooner: the pointer that shows it is
+      // registered as gray code on the same edge as this write, then
+      // crosses two of the read clock's flip-flops.
+      reg             mem_we;
+      reg [AW-1:0]    mem_addr;
+      reg [WIDTH-1:0] mem_din;
+      always @(posedge wr_clk) begin
+        mem_we <= do_write;
+        mem_addr <= wptr[AW-1:0];
+        mem_din <= din;
+      end
+      always @(posedge wr_clk) if (mem_we) mem[mem_addr] <= mem_din;
+    end else begin : direct_write
+      always @(posedge wr_clk) if (do_write) mem[wptr[AW-1:0]] <= din;
+    end
     always @(posedge rclk) if (fetch) q <= mem[rptr[AW-1:0]];
     assign mem_q = q;
     assign fetch_bank = 0;

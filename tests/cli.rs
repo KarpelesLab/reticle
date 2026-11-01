@@ -1635,7 +1635,12 @@ fn the_husky_fifo_stand_ins_pass_their_testbench() {
 /// register, which is what `husky.rcf`'s two-period paths into
 /// `bank_stage` rely on; with the memory read every other cycle, every
 /// bank loaded on each fetch, or `stage` taking a bank's word a cycle
-/// sooner, it fails. It would not catch a capacity that
+/// sooner, it fails. The analyser's two-clock FIFO computes `full` from
+/// registers and writes its memory a cycle late; with `full` a word early,
+/// without the write's own choice of pointer, or the memory written at the
+/// live pointer, it fails. It would not catch those paths being late,
+/// which lost a word on the part, nor a two-clock `prog_full` a cycle off.
+/// It would not catch a capacity that
 /// differs from the core's, which is read from its thresholds, not
 /// measured, nor a path into `bank_stage` later than two periods, which only
 /// the build's timing and the part show.
