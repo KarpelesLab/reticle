@@ -5702,6 +5702,36 @@ Seed 4 passed 39 again in two more runs, failing only `fpga_version`
 each time. `build_plus.sh` now places with seed 4. Built through it, the
 result is FH4 byte for byte, in 43 minutes beside a board job.
 
+Seeds 3 and 5 ran again and failed exactly the same tests as before:
+34 and 35. Every failure beyond `fpga_version` is a case at 40 times a
+10 MHz clock, where the analyser samples at 400 MHz, 2.5 ns. The
+analyser's domain is timed at 4.17 ns. On every seed of FH, the 76 to 94
+endpoints of that clock later than 2.5 ns are all later than 3.5 ns as
+well. The main ones are the FIFO memory's write enables, at up to
+4.87 ns, from the one address register 76 columns from a block RAM's
+decoder, and NewAE's 32-bit `capture_count`, at 5.66 ns along its carry
+chain. So at 400 MHz a seed passes or fails by where its late paths
+happen to fall on the part, not by a margin the estimate shows.
+
+**The hybrid strategy measured again, with the FIFO fixed.** The
+board-side reason it was set aside above was measured while the FIFO
+was losing words at a rate that differed by seed. It was ported onto
+master (FH's sources) and routed at FH's five placements, all ten
+builds side by side:
+
+| seed | FH passes, visits | hybrid passes, visits |
+|---|---|---|
+| 1 | 76, 12.50 G | 91, 12.32 G |
+| 2 | 76, 13.18 G | 89, 16.16 G |
+| 3 | 84, 12.93 G | 77, 17.17 G |
+| 4 | 72, 6.83 G | 85, 5.97 G |
+| 5 | 73, 10.31 G | 77, 7.36 G |
+
+In all, 59.0 G against 55.8 G: on these placements it saves no work.
+(The 4.44 G above was one placement of an earlier build; these routes
+visit between 1.3 and 3.9 times as much.) It was not taken to the board, and
+is not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
