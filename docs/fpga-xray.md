@@ -5551,8 +5551,18 @@ seed 3 at 76, and seed 5 was still going past 85. Seed 1 gave up after
 the 16 nodes still overused, the eight it named (`WW4END1`, a block RAM
 address's bypass, and others) include no clock line. At pass 30, seeds
 1 and 5 still had about 700 nodes overused, where master's seeds had 55
-to 176. Banking the FIFO costs routing. It stays out of
-`examples/husky/fifo_generator.v` until the part says it pays for that.
+to 176. Seed 5 too gave up on general interconnect (`NW6END0`,
+`SS6BEG3` and others, no clock line) and was placed again.
+
+On the part they passed 38, 38, 38, 26 and 34 (mean 34.8, against MF's
+34.4), and every seed read the ADC's test pattern exactly at 250 MHz.
+`pll` cases still failed on three of five: one on seed 3, three on seed
+5 and four on seed 4. So the BUFR hop was not all of what the `pll`
+tests follow, as master's seeds had already shown. Seed 4 also failed
+nine glitch cases. The sweeps passed on seeds 1, 3 and 5. Four tenths of
+a test is within one seed's swing, and two seeds in five took a second
+placement against none for MF. Banking the analyser's FIFO stays out of
+`examples/husky/fifo_generator.v`.
 
 ## What remains before an LED could light
 
