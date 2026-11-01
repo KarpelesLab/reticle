@@ -5743,6 +5743,20 @@ estimate went from 6.27–7.37 ns to 8.35–10.16 ns. The 400 MHz cases it
 was for passed on four seeds of five, but what it took from the ADC's
 fast FIFO costs more. Not kept.
 
+**Nor segmented writes alone.** A gentler version left the ADC's FIFOs
+alone and the analyser's memory as one. Each of its sixteen 1024-word
+segments wrote from its own registered enable and address, and on the
+read side only the segment choice the single memory already makes (SG,
+the same five seeds, 2026-11-02). It passed 36, 36, 39, 27 and 35, a mean
+of 34.6 against FH's 36.8:
+- seed 3 went from 34 to 39;
+- seed 4 went from 39 to 27, failing every 40× glitch case, a 100 MHz
+  sweep and two `pll` cases;
+- seed 1 lost `ADCaltfast` and an `ADCfastsegments` case.
+
+Not kept. Across FH, HB and SG, the 400 MHz analyser cases pass or fail
+by seed whatever is done to this FIFO's write side.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
