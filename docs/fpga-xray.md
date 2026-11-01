@@ -5698,6 +5698,10 @@ seeds 3 and 5 three each, from the four that NewAE's bitstream fails.
 Seeds 1, 3 and 5 each failed one `glitch_offset`, and seed 3 one
 `glitch_output_sweep_width`. Each seed ran once.
 
+Seed 4 passed 39 again in two more runs, failing only `fpga_version`
+each time. `build_plus.sh` now places with seed 4. Built through it, the
+result is FH4 byte for byte, in 43 minutes beside a board job.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

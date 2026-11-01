@@ -28,13 +28,14 @@
 # by estimated criticality in `clk_usb`'s domain, it reads back what it
 # was written. See README.md.
 #
-# `--place-seed 3` because the flow is deterministic and that build is
-# the one measured best: on the part it passed 38, 38 and 39 of NewAE's 40
-# tests in three runs (2026-11-01; NewAE's own bitstream passes 36), where
-# seeds 1 to 5 passed 30 to 38 (docs/fpga-xray.md). Built through this
-# script it is that bitstream byte for byte, in 39 minutes. Seed 4 was
-# chosen before, at 39, 39 and 38; the way through a BUFR leaving the
-# routing graph changed every seed's routes, and seed 4's now passes 32.
+# `--place-seed 4` because the flow is deterministic and that build is
+# the one measured best: on the part it passed 39 of NewAE's 40 tests in
+# each of three runs, failing only `test_fpga_version`, which compares the
+# build time (2026-11-01; NewAE's own bitstream passes 36). Seeds 1 to 5
+# passed 37, 39, 34, 39 and 35 (docs/fpga-xray.md). Built through this
+# script it is that bitstream byte for byte, in 43 minutes beside other
+# work. Seed 3 was chosen before, at 38, 38 and 39, while the analyser
+# FIFO stand-in's flags missed timing; with them fixed it passes 34.
 # A change to the sources or to the flow makes a different build of any
 # seed, and the choice has to be measured again.
 set -eu
@@ -55,7 +56,7 @@ exec "$reticle" fpga \
     --output-dir "$out" \
     --bitstream "$out/cwhusky_plus_top.bit" \
     --region 0,0,147,208 --max-pips 80000000 --timing-driven --timing \
-    --place-seed 3 \
+    --place-seed 4 \
     "$fpga/hdl/includes.v" "$fpga/hdl/setup.v" "$fpga/hdl/registers.v" \
     "$fpga/hdl/clock_managment_advanced.v" "$fpga/hdl/fifo_top_husky.v" \
     "$fpga/hdl/openadc_interface.v" "$fpga/hdl/reg_chipwhisperer.v" \
