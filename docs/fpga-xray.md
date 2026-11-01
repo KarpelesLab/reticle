@@ -5408,6 +5408,11 @@ route to the pad, its enable's and every such clock-to-data connection
 enter their tiles the same ways; nothing in the routes says which build
 the part will read as all ones. Master's seeds fail a `pll` case on three
 of ten, so this is not the banked FIFO's alone. Not traced further.
+*(That reading is wrong, and kept because it is where the search went
+astray: the listing compared each connection's first and last tiles and
+not the way between them. Listed whole, the banked build's `rearclk`
+went through a regional clock buffer that is never lit. See "A regional
+buffer taken for wiring", below.)*
 
 **It is not the FIFO's bits.** The analyser's group 7 (not in NewAE's
 driver; written to `LA_CAPTURE_GROUP` directly) feeds each channel a
@@ -5450,7 +5455,12 @@ interconnect, though the region's own `HCLK` row reaches it; another
 build (not counted) ended with two clocks on one horizontal clock line.
 The reading now is the router's assignment of a clock region's lines,
 in some placements, not the placer's; it was not seen on any of the ten
-builds above.
+builds above. *(Qualified on 2026-11-01: that count took only the global
+buffers' outputs as clocks. The PLL's outputs are clocks too, and so is
+a clock read as data by a table, and both take a region's line. Counted
+that way, banked builds were asked for up to fifteen clocks in one region.
+The count above was not repeated for those builds, so whether it holds
+for them is not known. See below.)*
 
 NewAE's own bitstream passes 35. `fastest`, `ADCaltfast` and `adc_reset`,
 which had failed on about nine builds in ten, passed on all five. What
@@ -5461,6 +5471,88 @@ case on two. With the two FIFO stages also confined to one block RAM
 column (`ex_RG2`'s region, not in `husky_plus.rcf`) the five passed 36,
 32, 30, 34 and 37 (mean 33.8): worse, and not kept. Every seed of both
 that read the ADC's test pattern read it exactly at 250 MHz.
+
+### A regional buffer taken for wiring, and a clock region's twelve lines (2026-11-01)
+
+**The PLL failures came from a route through a buffer this flow never lights.**
+Listed hop by hop, the route that the banked build's (seed 5) `rearclk`
+took to the analyser's tables left the clock network at `X4Y157`. It went
+down the column to the I/O tile at `X1Y132`, then through
+`HCLK_IOI_RCLK_BEFORE_DIV0 → HCLK_IOI_RCLK_OUT0` at `X1Y130`, then along
+the regional line `CK_BUFRCLK0` into row 130's leaves. Project X-Ray's
+`ppips_hclk_ioi3.db` lists that hop as `always`. It is in fact the `BUFR`
+site, which only its `HCLK_IOI3.BUFR_Y0` feature lights. This flow puts
+every `BUFR` on a global buffer and never sets that feature, so the hop
+carries nothing, and the analyser read all ones. Master's seed 4 reached
+the same tables over row 130's own `HCLK_CK_BUFHCLK1` and read the clock.
+Checked by building the route as listed, not by a diff: the earlier
+listing (above) compared only each connection's first and last tiles,
+and those were the same in both builds.
+
+**A cost did not keep the router off it; taking the hop out did.** The
+first fix put a node cost of a million on the regional lines. The same
+build took the hop again, because a critical connection's search weighs
+`slack × cost + criticality × delay`, and the hop's delay is small. The
+hop is now never built (`is_regional_buffer` in `xray/mod.rs`). Two tests
+cover this: a name-level one, and `a_regional_buffer_this_flow_never_lights_is_no_road`,
+which loads `HCLK_IOI3` tiles from the database. The second fails with
+the skip disabled. Neither would catch another `always` pseudo-pip that
+is really a site.
+
+**Master's sources with the hop gone (MF, seeds 1 to 5)** passed 30, 35,
+38, 32 and 37 tests (mean 34.4). Before the change, master's same seeds
+passed 32, 36, 38, 39 and 37. All five MF builds routed on the first
+try, and all five read the ADC's test pattern exactly at 250 MHz. The
+spread is in the glitch sweeps, as before. A `pll` case failed on seeds
+1, 2 and 3, one case each, so this is not all of what the `pll` tests
+follow.
+
+**With the hop gone, the banked builds stopped routing.** Of the banked
+builds (BF, seeds 1 to 5), only seed 1 routed (27 passed: the ramps,
+`adc_reset` and glitch cases failed). The other four gave up after 100
+passes, and placing again once did not help. Each ended with two clocks
+on one horizontal line of the region left of the spine around row 130
+(`X46Y124/CFG_CENTER_CK_BUFHCLK1` to `4`): `rearclk`, the user I/O PLL's
+outputs and `ADC_clk_fb`. The hop had been the overflow: a thirteenth
+clock with no line had gone onto a regional line instead.
+
+**A clock region has twelve lines, and the placer now counts them.** A
+7-series clock region carries twelve clocks on its horizontal lines
+(`HCLK_CK_BUFHCLK0` to `11`) on each side of the `CLK_HROW` spine. The
+regions are banded by the `HCLK` rows. A region spends a line on a clock
+when any of its cells reads that clock, as a clock or as data. The clocks
+counted are the global buffers' outputs and the PLL's and MMCM's clock
+outputs (`CLKOUT*` and `CLKFBOUT`), not their `DO` or `LOCKED`. Counting
+those as well put 86 clocks in one region, a count no route could match.
+Read this way, seed 2's busiest region was asked for 15 clocks. Six of
+them had one reader each: the user I/O PLL's four outputs, each muxed
+onto a `USERIO_D` pin by a table beside its pad; the glitch trigger's
+clock; and `reg_la.source_clk`.
+
+The anneal is now charged `CLOCK_LINE_COST` for each clock a region is
+asked for past its lines. That alone left the region at 15: a lone reader
+pinned beside its pad cannot leave its region in one move of the
+anneal's window. So a pass after the anneal (`relieve_clock_regions`)
+takes each overfull region's least-read clock. It moves every reader of
+that clock to the nearest free site the cell may take, inside its
+constraint region, in a region with a line to spare. If a reader cannot
+move, it tries the next clock. Two tests cover this. One checks that the
+charge equals a fresh count after every move and its undo. The other
+checks that a full region's clock leaves with its readers. Each was
+mutation-checked twice and failed both times. On master's sources no
+region asks for more than 11, the pass moves nothing, and all five seeds' bitstreams came out byte for byte the same
+as the MF builds' (checked with `cmp`).
+
+The banked builds with the budget (CR, seeds 1 to 5) all placed with at
+most twelve clocks in any region, moving two or three cells. They are
+slow to route all the same. Seeds 2 and 4 converged at about pass 60,
+seed 3 at 76, and seed 5 was still going past 85. Seed 1 gave up after
+100 passes and was placed again. It gave up on general interconnect: of
+the 16 nodes still overused, the eight it named (`WW4END1`, a block RAM
+address's bypass, and others) include no clock line. At pass 30, seeds
+1 and 5 still had about 700 nodes overused, where master's seeds had 55
+to 176. Banking the FIFO costs routing. It stays out of
+`examples/husky/fifo_generator.v` until the part says it pays for that.
 
 ## What remains before an LED could light
 
