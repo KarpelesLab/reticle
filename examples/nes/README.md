@@ -360,7 +360,13 @@ And a host would see a byte stream, not a camera. There is no USB video
 class in `ip/usb/` — it is CDC-ACM, a full-speed device, a ULPI device,
 a host, a hub and a proxy — so the near thing is `usb_cdc_acm` and a
 program on the other end that cuts the stream at `FF D8` and writes
-files. A device a video-conferencing application opens by itself is a
+files. **That near thing now exists and runs on a part**:
+`testdata/fpga/cynthion/usb_mjpeg.v` is this encoder behind
+`ip/video/pattern_gen` and in front of the CDC endpoint, streaming whole
+JPEG files out of `/dev/ttyACM*` for ffmpeg to play. What it does not
+have is this console in front of it, for the reason this section is
+about — its picture is a function of `x` and `y` and needs no frame
+buffer, and the frame buffer is the 39 block RAMs that do not fit. A device a video-conferencing application opens by itself is a
 different and much larger piece of work, and so is H.264: baseline AVC
 is intra prediction, motion estimation, CAVLC and a deblocking filter,
 each of them comparable to this whole encoder, and the motion

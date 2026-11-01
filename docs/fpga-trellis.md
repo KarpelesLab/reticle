@@ -5683,6 +5683,7 @@ have — CHECKED, by running `reticle fpga --report` over each:
 | `usb_crypto_console` | **11 955** | **98.4 %** | 2999 | 18 |
 | `crypto_console_ulpi` | **11 888** | **97.9 %** | 2956 | 18 |
 | `crypto_console` | 10 679 | 87.9 % | 2477 | 0 |
+| `usb_mjpeg` | 4771 | 39.3 % | 1498 | 18 |
 | `usb_proxy_target` | 3449 | 28.4 % | 1137 | 10 |
 | `usb_host_target` | 3181 | 26.2 % | 1109 | 28 |
 | `usb_hub_target` | 2531 | 20.8 % | 979 | 2 |
@@ -5694,6 +5695,16 @@ have — CHECKED, by running `reticle fpga --report` over each:
 
 `examples/mos6502_monitor` is 6183, 50.9 %, which its README already
 states against 12 144.
+
+**`usb_mjpeg` is the one in this table whose binding constraint is not
+lookup tables.** It is a JPEG encoder streaming video out of the CDC
+endpoint, and at 39.3 % of the logic it is comfortable there; what decides
+whether it fits is the **7 `DP16KD` against the 32** an `LFE5U-12` is
+specified to have. `examples/nes`'s `nes_jpeg` is the same encoder behind a
+frame buffer and is 46, which is why that one does not fit this part and
+this one does. `tests/usb_mjpeg.rs` asserts both numbers against the
+specified figures rather than against what the fabric database enumerates,
+for the reason the section above gives.
 
 **Nothing here is over the line, and two designs are within two per cent
 of it.** That is the result worth having: `usb_crypto_console` at 11 955

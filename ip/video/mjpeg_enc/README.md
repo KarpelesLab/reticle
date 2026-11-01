@@ -29,6 +29,19 @@ is the easy case for the pixel order below, and that example says what
 it cost — 7 block RAMs on top of the console's, and a `DP16KD` count
 that no longer fits a Cynthion.
 
+There is a second, and it is the hard case made easy:
+[`testdata/fpga/cynthion/usb_mjpeg.v`](../../../testdata/fpga/cynthion/usb_mjpeg.v)
+puts `ip/video/pattern_gen` in front of this encoder and the CDC endpoint
+of `ip/usb/usb_cdc_acm` behind it, so a Cynthion is a camera with no lens
+and `/dev/ttyACM*` carries a Motion JPEG stream ffmpeg plays. It has **no
+frame buffer at all** — `pattern_gen`'s picture is a function of `x` and
+`y`, so it can be asked for its pixels block at a time as readily as in
+raster order — and that is what makes the whole design 7 `DP16KD` and fits
+it on the part the other one overflows. It is also where the tables stop
+being a testbench's: this package deliberately contains no Annex K, so a
+design on a part has to carry them, and that one carries them as a ROM it
+walks into `cfg_*` out of reset.
+
 ## Why the DCT is not checked the way `adpcm_ima` is
 
 `ip/audio/adpcm_ima` is checked sample for sample against ffmpeg,
