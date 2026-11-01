@@ -5732,6 +5732,17 @@ In all, 59.0 G against 55.8 G: on these placements it saves no work.
 visit between 1.3 and 3.9 times as much.) It was not taken to the board, and
 is not kept.
 
+**The analyser's FIFO banked again, with the flags fixed.** Banking
+(`BANK_AW` 13, above) had been set aside for `pll` failures. Both faults
+behind those have since been fixed: the regional buffer used as wiring,
+and the late flags. So it was measured once more, on master at 6c6f38d,
+seeds 1 to 5 (HB, 2026-11-02). The suite passed 34, 34, 32, 24 and 24.
+Every seed failed `fastest`, `ADCaltfast`, both `ADCfastsegments` cases
+and `adc_reset`, which every FH seed passed. The ADC clock's routed
+estimate went from 6.27–7.37 ns to 8.35–10.16 ns. The 400 MHz cases it
+was for passed on four seeds of five, but what it took from the ADC's
+fast FIFO costs more. Not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
