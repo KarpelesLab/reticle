@@ -245,7 +245,7 @@ device ecp5-25f-CABGA381
   bram DP16KD
     ports 2
     count 56
-    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 neighbours 1
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 sterilises 2,0
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
     mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
     mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
@@ -390,7 +390,7 @@ device ecp5-12f-CABGA256
   bram DP16KD
     ports 2
     count 32
-    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 neighbours 1
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 sterilises 2,0
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
     mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
     mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16
@@ -476,7 +476,7 @@ device ecp5-45f-CABGA381
   bram DP16KD
     ports 2
     count 108
-    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 neighbours 1
+    mode 18 1024 param DATA_WIDTH_A=18 DATA_WIDTH_B=18 addr 4 pad 4'b0011 init low 0-17 sterilises 2,0
     mode 9 2048 param DATA_WIDTH_A=9 DATA_WIDTH_B=9 addr 3 init low 0-8 9-17
     mode 4 4096 param DATA_WIDTH_A=4 DATA_WIDTH_B=4 addr 2 init low 0-3 4-7 9-12 13-16
     mode 2 8192 param DATA_WIDTH_A=2 DATA_WIDTH_B=2 addr 1 init low 0,1 2,3 4,5 6,7 9,10 11,12 13,14 15,16

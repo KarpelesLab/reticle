@@ -16,7 +16,7 @@
 // in **1-bit** mode -- one of the three the device file marks MEDIUM
 // confidence. (That rule is gone: the ECP5's reason for wanting narrow is
 // that its 18-bit mode sterilises a neighbour, and the device file says
-// so with `neighbours 1` now, which decides the case without a
+// so with `sterilises 2,0` now, which decides the case without a
 // preference that reached other families.) In that mode a block's data port is one bit wide, and a
 // one-bit port's pin role had its bit index dropped: right for a
 // flip-flop's `d`, wrong for `DOB`, whose pin is `p0_dout0`. So the role

@@ -1414,9 +1414,9 @@ impl Mapper<'_> {
     /// then the widest.
     ///
     /// **Cost, not count.** A mode can cost more than the blocks it
-    /// occupies: `blocks * (1 + neighbours)`, where
-    /// [`neighbours`](crate::fpga::device::BramModeLayout::neighbours) is
-    /// how many other blocks each one sterilises. An ECP5 `DP16KD` in
+    /// occupies: `blocks * (1 + sterilises)`, where
+    /// [`sterilises`](crate::fpga::device::BramModeLayout::sterilises)
+    /// names the other blocks each one makes unusable. An ECP5 `DP16KD` in
     /// 18-bit mode takes two data bits off the next block's interconnect
     /// column, so it costs two. A 9-bit memory 288 deep needs one block in
     /// either mode, and the tie used to hand it the 18-bit one and
@@ -1480,12 +1480,13 @@ impl Mapper<'_> {
                 // `mode_layouts` runs in step with `width_modes`; a mode
                 // the device file gave no layout at all costs only its own
                 // blocks, because then there is nothing to sterilise.
-                let neighbours = u64::from(
+                let neighbours = u64::try_from(
                     shape
                         .mode_layouts
                         .get(mode)
-                        .map_or(0, |layout| layout.neighbours),
-                );
+                        .map_or(0, |layout| layout.sterilises.len()),
+                )
+                .unwrap_or(0);
                 // The blocks the mode really costs, then fewest blocks per
                 // word, then the widest. See the doc comment.
                 let cost = blocks * (1 + neighbours);

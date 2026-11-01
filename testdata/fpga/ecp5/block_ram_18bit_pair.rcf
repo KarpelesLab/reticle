@@ -1,0 +1,33 @@
+# Every port of `testdata/fpga/ecp5/block_ram_18bit_pair.v` on a top-edge
+# ball of an LFE5U-12F in caBGA-256, the same balls in the same order
+# `block_ram_2048.rcf` uses and for the same reason: no board has this
+# design on it, and the only thing that matters about the assignment is
+# that it is fixed, so the placement the test measures is the same on
+# every run.
+#
+# `clk` is first on purpose: it reaches `CLKA` and `CLKB` of both block
+# RAMs and the thirty-six pipeline registers, so it is the one signal that
+# has to leave its pad through a clock buffer and travel the global
+# network.
+
+set_io -io_standard LVCMOS33 clk A2
+set_io -io_standard LVCMOS33 we B3
+set_io -io_standard LVCMOS33 addr[0] A3
+set_io -io_standard LVCMOS33 addr[1] A4
+set_io -io_standard LVCMOS33 addr[2] E4
+set_io -io_standard LVCMOS33 addr[3] D4
+set_io -io_standard LVCMOS33 addr[4] C4
+set_io -io_standard LVCMOS33 addr[5] B4
+set_io -io_standard LVCMOS33 addr[6] E5
+set_io -io_standard LVCMOS33 addr[7] D5
+set_io -io_standard LVCMOS33 addr[8] C5
+set_io -io_standard LVCMOS33 addr[9] B5
+set_io -io_standard LVCMOS33 wdata[0] A6
+set_io -io_standard LVCMOS33 wdata[1] E6
+set_io -io_standard LVCMOS33 wdata[2] D6
+set_io -io_standard LVCMOS33 wdata[3] C6
+set_io -io_standard LVCMOS33 wdata[4] B6
+set_io -io_standard LVCMOS33 wdata[5] E7
+set_io -io_standard LVCMOS33 wdata[6] D7
+set_io -io_standard LVCMOS33 wdata[7] C7
+set_io -io_standard LVCMOS33 rdata B7

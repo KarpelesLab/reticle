@@ -1478,6 +1478,112 @@ fn the_narrowest_memory_takes_one_block_in_the_narrowest_mode() {
     );
 }
 
+/// **Two 18-bit blocks are not placed two columns apart**, which is the
+/// one arrangement `configure_bram` refuses.
+///
+/// An 18-bit `DP16KD` takes the two top data bits of each port off the
+/// interconnect column two east, which is the next block's own column, so
+/// the two cannot both be used. That refusal has existed for as long as
+/// the mode has, and `docs/fpga-trellis.md` said plainly that it had
+/// never been shown refusing: "no test builds an 18-bit block beside
+/// another, because nothing this flow maps chooses the 18-bit mode at a
+/// depth where two blocks land two columns apart".
+///
+/// Something did. `testdata/fpga/cynthion/usb_mjpeg.v` has two of
+/// `ip/video/mjpeg_enc`'s memories in the 18-bit mode — a 64x13 and a
+/// 64x12 — and at the default seed it placed, routed, and then wrote no
+/// bitstream: *"X15Y25 is 18 bits wide and X17Y25 is in use"*, after
+/// twenty-eight minutes. The mapper priced the mode and the writer
+/// refused the result, and **nothing told the placer**, so the offset
+/// lived as a literal `at.0 + 2` in `src/fpga/trellis` while the count
+/// lived in `src/fpga/devices/ecp5.dev`: the same fact written twice,
+/// with the one part of the flow that could act on it told neither half.
+/// It is `sterilises 2,0` in the device file now, and `fpga::place`
+/// leaves those tiles empty.
+///
+/// What this checks, in the order that matters:
+///
+///   * both memories really took the 18-bit mode, which the netlist says
+///     by carrying the offset the mode sterilises. Without this the rest
+///     would pass vacuously the moment the mapper's tie-break moved;
+///   * the two blocks are not two columns apart on one row;
+///   * and `configure_bram` agrees, which is the check that was already
+///     there and that this design is the first to be able to fail.
+///
+/// What it would not catch: whether the overlap is real. The reading says
+/// an 18-bit block sterilises its eastern neighbour, the vendor's one
+/// 18-bit block is consistent with it and their two 36-bit blocks are
+/// not; `docs/fpga-trellis.md` records that as unresolved and names the
+/// experiment. This test pins the flow against the reading, not the
+/// reading against the part.
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn two_eighteen_bit_blocks_are_not_placed_two_columns_apart() {
+    let Some(fabric) = open() else { return };
+    let (_bits, _stream, pads, _report, _io, routed) = compile(
+        &fabric,
+        "testdata/fpga/ecp5/block_ram_18bit_pair.v",
+        "testdata/fpga/ecp5/block_ram_18bit_pair.rcf",
+    );
+    assert_eq!(pads, 21, "every port of the design is on a ball");
+
+    let brams: Vec<usize> = routed
+        .netlist
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.kind == "bram")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        brams.len(),
+        2,
+        "1024 words of 18 bits is one block each in the 18-bit mode"
+    );
+
+    // The design is only a test of anything while it reaches that mode.
+    for index in &brams {
+        assert_eq!(
+            routed.netlist.sterilises[*index],
+            vec![(2, 0)],
+            "`{}` is not in the 18-bit mode any more, so this design has \
+             stopped testing the rule it was written for",
+            routed.netlist.instances[*index].name
+        );
+    }
+
+    let tiles: Vec<(u32, u32)> = brams
+        .iter()
+        .map(|index| {
+            let site = routed
+                .placement
+                .site_of(*index)
+                .expect("every cell is placed");
+            routed.graph.sites[site].tile
+        })
+        .collect();
+    println!("the two 18-bit blocks are at {tiles:?}");
+    for a in &tiles {
+        for b in &tiles {
+            assert!(
+                !(b.1 == a.1 && b.0 == a.0 + 2),
+                "X{}Y{} is 18 bits wide and X{}Y{} is in use: the placer put \
+                 them where the bitstream cannot have them",
+                a.0,
+                a.1,
+                b.0,
+                b.1
+            );
+        }
+    }
+
+    assert!(
+        routed.overlaps.is_empty(),
+        "block RAMs that cannot both be used: {:?}",
+        routed.overlaps
+    );
+}
+
 /// `ip/memory/fifo_sync` on a part, at three depths, which is the thing a
 /// distributed RAM was needed for.
 ///

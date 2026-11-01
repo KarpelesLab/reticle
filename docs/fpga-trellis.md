@@ -384,8 +384,9 @@ its widest mode is the one to want, which `a_small_memory_fits_one_block`
 said out loud as soon as the gate ran.
 
 The rule states the ECP5's reason now instead of a preference. A mode line
-may carry `neighbours N`, the 18-bit line carries `neighbours 1`, and
-`choose_bram` costs a mode at `blocks * (1 + neighbours)`. A 288 x 9
+may carry `sterilises <dx>,<dy>`, the 18-bit line carries
+`sterilises 2,0`, and `choose_bram` costs a mode at
+`blocks * (1 + sterilises)`. A 288 x 9
 memory is one block in the 9-bit mode and one block plus a sterilised
 neighbour in the 18-bit one, so it is not a tie at all any more, and the
 widest mode still wins a genuine tie as it always did. The whole key is
@@ -1227,13 +1228,54 @@ on something this model does not express. This flow builds no `PDPW16KD`,
 refusing is the conservative direction, and the experiment that would
 settle it is named below.
 
-**That refusal has not been shown failing**, which by this file's own
-standard makes it weaker than the checks around it: no test builds an
-18-bit block beside another, because nothing this flow maps chooses the
-18-bit mode at a depth where two blocks land two columns apart. A green run
-of designs that do not collide proves nothing about whether anything is
-looking, and the experiment below is also what would let the check be
-exercised.
+**That refusal was shown failing on 1 November 2026, by a design that
+was not written to find it.** It had never been exercised before — no
+test built an 18-bit block beside another, because nothing this flow
+mapped chose the 18-bit mode at a depth where two blocks land two columns
+apart — and this file said so, and said that a green run of designs that
+do not collide proves nothing about whether anything is looking.
+
+`testdata/fpga/cynthion/usb_mjpeg.v` collides. Two of
+`ip/video/mjpeg_enc`'s memories are shallow and wide — a 64x13 and a
+64x12 — which is exactly the genuine tie the 18-bit mode wins, and at the
+default seed the design placed, routed, and then wrote nothing:
+
+    error: 1 pair(s) of block RAMs cannot both be used, so nothing was
+    written: X15Y25 is 18 bits wide and X17Y25 is in use.
+
+after twenty-eight minutes. Seeds 1 and 2 both built it, so the design
+was never the problem.
+
+**What was wrong is where the fact lived.** The *count* was in
+`src/fpga/devices/ecp5.dev` as `neighbours 1`, which is all
+`choose_bram` needs to price the mode. The *offset* was a literal
+`at.0 + 2` in `configure_bram`, which is all the writer needs to refuse
+one. The one pass that could have avoided it — the placer — was told
+neither, and had no way to be: it is handed a `Netlist` and a graph, and
+a block RAM's mode is a cell parameter it never sees.
+
+The device file carries `sterilises 2,0` now, one statement of one fact.
+`Netlist::build` takes the `device`, so it records per instance which
+offsets that cell's mode sterilises; `SiteRules` turns those into
+forward and reverse site lists and `fpga::place` refuses a placement that
+uses both, in legalisation and in every annealing move, beside the
+exclusion rule that was already there. `usb_mjpeg` builds at the default
+seed.
+
+Two tests, and they check different halves.
+`fpga::place::tests::a_block_that_sterilises_its_neighbour_is_not_placed_beside_one`
+is the rule itself on a five-column row of block RAMs, both directions
+round, and that a netlist with nothing wide in it pays nothing.
+`tests/fpga_trellis.rs::two_eighteen_bit_blocks_are_not_placed_two_columns_apart`
+is the end-to-end half on `testdata/fpga/ecp5/block_ram_18bit_pair.v`,
+two 1024x18 memories on the part — and it asserts **first** that both of
+them really took the 18-bit mode, because the moment the mapper's
+tie-break moves, a test of where two blocks landed would pass without
+testing anything.
+
+What none of that settles is whether the overlap is real; the experiment
+below is still the one that would, and this flow is still pinned against
+the reading rather than against the part.
 
 The clock is the other control wire, and it needed a fix at each end.
 `configure_bram`'s companion check is `clock_network_use`, which now asks

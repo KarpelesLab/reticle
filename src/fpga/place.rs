@@ -88,7 +88,7 @@
 //! [`Constraints::keeps_hierarchy`]: super::Constraints::keeps_hierarchy
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::rc::Rc;
@@ -442,6 +442,44 @@ impl Error for PlaceError {}
 // The netlist the placer and the router share
 // ---------------------------------------------------------------------------
 
+/// The tile offsets a cell makes unusable, from the device's block-RAM
+/// mode layouts, or empty when it makes none.
+///
+/// A block RAM's mode is not written on the cell as a mode: it is written
+/// as the parameters that select one (`DATA_WIDTH_A=18` on an ECP5), the
+/// same ones [`BramShape::mode_params`] holds. So the mode is the one
+/// whose every parameter the cell agrees with, and a cell that matches
+/// none — a primitive the device has no shape for, or a mode nothing
+/// selected — sterilises nothing.
+///
+/// `src/fpga/trellis` refuses a bitstream in which an 18-bit block RAM
+/// and the block two columns east of it are both used, and until this
+/// existed nothing stopped the placer making exactly that: it is how
+/// `testdata/fpga/cynthion/usb_mjpeg.v` reached place-and-route and then
+/// wrote no bitstream at the default seed, with two memories in the
+/// 18-bit mode landing two columns apart.
+fn sterilised_by(device: &Device, primitive: &str, cell: &crate::ir::Cell) -> Vec<(i32, i32)> {
+    let Some(shape) = device.block_rams.iter().find(|b| b.name == primitive) else {
+        return Vec::new();
+    };
+    for (mode, params) in shape.mode_params.iter().enumerate() {
+        if params.is_empty() {
+            continue;
+        }
+        if params
+            .iter()
+            .all(|(name, want)| cell.params.get(name) == Some(want))
+        {
+            return shape
+                .mode_layouts
+                .get(mode)
+                .map(|layout| layout.sterilises.clone())
+                .unwrap_or_default();
+        }
+    }
+    Vec::new()
+}
+
 /// One cell to place.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instance {
@@ -526,6 +564,16 @@ pub struct Netlist {
     /// `instance.port[bit]`. A package pad is the usual one: it reaches
     /// the outside world, not the fabric.
     pub off_fabric: Vec<String>,
+    /// Per instance, the tile offsets a cell of its kind and
+    /// configuration makes unusable, from
+    /// [`BramModeLayout::sterilises`](crate::fpga::device::BramModeLayout::sterilises).
+    /// Empty for every instance of every family that has no such rule,
+    /// and empty for a block RAM in a mode that sterilises nothing.
+    ///
+    /// It is here and not read off the cell because the placer never sees
+    /// the module: [`Netlist::build`] takes the `device`, which is what
+    /// says a mode sterilises anything, and the placer takes a `Netlist`.
+    pub sterilises: Vec<Vec<(i32, i32)>>,
 }
 
 impl Netlist {
@@ -556,6 +604,7 @@ impl Netlist {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         if let Some((_, instance)) = m.instances.iter().next() {
             return Err(PlaceError::Instance {
@@ -685,6 +734,7 @@ impl Netlist {
                     }
                 }
             }
+            out.sterilises.push(sterilised_by(device, &primitive, cell));
             out.instances.push(Instance {
                 cell: id,
                 name: cell.name.as_str().to_owned(),
@@ -1604,6 +1654,21 @@ struct SiteRules {
     /// Per instance, the slice-wide mode its primitive needs, or zero for
     /// none; see [`slice_mode`].
     mode: Vec<u8>,
+    /// Per instance, the tile offsets a cell of it makes unusable; see
+    /// [`Netlist::sterilises`]. Empty when nothing in the netlist
+    /// sterilises anything, which is every design of every family but an
+    /// ECP5 with a block RAM in its 18-bit mode.
+    sterilises: Vec<Vec<(i32, i32)>>,
+    /// Per site, the sites one of those offsets reaches from it, as
+    /// `(the other site, the offset that reaches it)`. Only sites of the
+    /// same kind are paired: the rule is about one block RAM and another,
+    /// and a logic tile two columns east of an EBR is not a block.
+    sterilise_to: Vec<Vec<(usize, (i32, i32))>>,
+    /// The same pairs the other way round: per site, the sites that
+    /// would sterilise *it*. Both directions are recorded for the same
+    /// reason [`SiteRules::excludes`] records both — a move is judged
+    /// from the site it arrives at.
+    sterilise_from: Vec<Vec<(usize, (i32, i32))>>,
     /// Per signal, whether every reader is in its driver's rigid group
     /// and so never leaves the tile, by signal index; empty for none. Set
     /// once the groups are known: see [`SiteRules::exit_shared`].
@@ -1801,6 +1866,9 @@ impl SiteRules {
                 .iter()
                 .map(|i| slice_mode(&i.primitive))
                 .collect(),
+            sterilises: Vec::new(),
+            sterilise_to: Vec::new(),
+            sterilise_from: Vec::new(),
             roles: BTreeMap::new(),
             captive: vec![Vec::new(); graph.sites.len()],
             exits: vec![Vec::new(); graph.sites.len()],
@@ -1808,6 +1876,50 @@ impl SiteRules {
             site_group: vec![u32::MAX; graph.sites.len()],
             groups: Vec::new(),
         };
+        // The blocks a cell makes unusable two tiles away, which is a
+        // rule between *tiles* and not inside one: an ECP5 `DP16KD` in
+        // 18-bit mode takes its top two data bits off the interconnect
+        // column that is the next block's own, so that block must stay
+        // empty. Nothing is built for a netlist in which no cell
+        // sterilises anything, which is every design of every other
+        // family, and `trivial` keeps the cost at one `is_empty`.
+        let offsets: BTreeSet<(i32, i32)> = netlist
+            .sterilises
+            .iter()
+            .flat_map(|list| list.iter().copied())
+            .collect();
+        if !offsets.is_empty() {
+            out.sterilises = (0..netlist.instances.len())
+                .map(|i| netlist.sterilises.get(i).cloned().unwrap_or_default())
+                .collect();
+            let mut site_at: BTreeMap<((u32, u32), &str), usize> = BTreeMap::new();
+            for (index, site) in graph.sites.iter().enumerate() {
+                site_at.insert((site.tile, site.kind.as_str()), index);
+            }
+            out.sterilise_to = vec![Vec::new(); graph.sites.len()];
+            out.sterilise_from = vec![Vec::new(); graph.sites.len()];
+            for (index, site) in graph.sites.iter().enumerate() {
+                for offset in &offsets {
+                    let Some(x) = i64::from(site.tile.0).checked_add(i64::from(offset.0)) else {
+                        continue;
+                    };
+                    let Some(y) = i64::from(site.tile.1).checked_add(i64::from(offset.1)) else {
+                        continue;
+                    };
+                    let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
+                        continue;
+                    };
+                    let Some(other) = site_at.get(&((x, y), site.kind.as_str())) else {
+                        continue;
+                    };
+                    if *other == index {
+                        continue;
+                    }
+                    out.sterilise_to[index].push((*other, *offset));
+                    out.sterilise_from[*other].push((index, *offset));
+                }
+            }
+        }
         let mut exclusions = 0usize;
         for (index, site) in graph.sites.iter().enumerate() {
             for other in &site.blocks {
@@ -2028,7 +2140,9 @@ impl SiteRules {
             }
             out.groups.push(group);
         }
-        if out.roles.is_empty() && exclusions == 0 {
+        // Nothing shares a pin and nothing excludes a site, so the only
+        // reason to keep any of this is the sterilisation rule.
+        if out.roles.is_empty() && exclusions == 0 && out.sterilise_to.is_empty() {
             return SiteRules::default();
         }
         for pin in &netlist.pins {
@@ -2041,11 +2155,41 @@ impl SiteRules {
         out
     }
 
-    /// Nothing in this architecture shares a pin or excludes a site, so
-    /// nothing has to be checked. Every family but the ECP5 is in this
-    /// case today, and the checks below then cost one `is_empty`.
+    /// Nothing in this architecture shares a pin, excludes a site or
+    /// sterilises a neighbouring tile, so nothing has to be checked.
+    /// Every family but the ECP5 is in this case today, and the checks
+    /// below then cost one `is_empty`.
     fn trivial(&self) -> bool {
-        self.per_site.is_empty()
+        self.per_site.is_empty() && self.sterilise_to.is_empty()
+    }
+
+    /// Whether `instance` may sit on `site` as far as the sterilisation
+    /// rule goes: nothing it would sterilise is occupied, and nothing
+    /// that would sterilise it is.
+    ///
+    /// `after` answers what is on a site once the move being judged has
+    /// happened, which is how a swap is judged against where both halves
+    /// land rather than against where they came from.
+    fn sterile(
+        &self,
+        instance: usize,
+        site: usize,
+        after: &impl Fn(usize) -> Option<usize>,
+    ) -> bool {
+        if self.sterilise_to.is_empty() {
+            return true;
+        }
+        let mine = &self.sterilises[instance];
+        if !mine.is_empty()
+            && self.sterilise_to[site]
+                .iter()
+                .any(|(other, offset)| mine.contains(offset) && after(*other).is_some())
+        {
+            return false;
+        }
+        !self.sterilise_from[site].iter().any(|(other, offset)| {
+            after(*other).is_some_and(|j| self.sterilises[j].contains(offset))
+        })
     }
 
     /// The signal an instance wants on the wire its `role` pin reaches.
@@ -2144,6 +2288,7 @@ impl SiteRules {
             self.excludes[*site]
                 .iter()
                 .all(|other| after(*other).is_none())
+                && self.sterile(*instance, *site, &after)
                 && self.per_site[*site].iter().all(|(other, start, len)| {
                     after(*other).is_none_or(|neighbour| {
                         let run = *start as usize..(*start + *len) as usize;
@@ -2249,6 +2394,9 @@ impl SiteRules {
             .any(|other| after(*other).is_some())
         {
             return Some("a site it excludes is taken".to_owned());
+        }
+        if !self.sterile(instance, site, &after) {
+            return Some("it or a block two tiles away would sterilise the other".to_owned());
         }
         for (other, start, len) in &self.per_site[site] {
             let Some(neighbour) = after(*other) else {
@@ -8049,6 +8197,124 @@ mod tests {
         (arch, graph)
     }
 
+    /// A row of block-RAM tiles, one bel each, so a sterilised
+    /// neighbour is `(2, 0)` away exactly as it is on an ECP5.
+    fn bram_row(width: u32) -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", width, 1);
+        let mut tile = TileType::new("ebr", "ebr_tile", 4, 4);
+        for name in ["i", "o"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        let mut bel = BelDecl::new("bram", "bram");
+        bel.pins.push(("i0".to_owned(), WireRef::local("i")));
+        bel.pins.push(("o".to_owned(), WireRef::local("o")));
+        tile.bels.push(bel);
+        arch.tile_types.push(tile);
+        for x in 0..width {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// **A block that sterilises a neighbour keeps it empty, both ways
+    /// round.**
+    ///
+    /// An ECP5 `DP16KD` in 18-bit mode takes its top two data bits off
+    /// the interconnect column two east, which is the next block's own,
+    /// so the two cannot both be used. `src/fpga/trellis` has refused
+    /// that bitstream for as long as the mode has existed; until this
+    /// rule, nothing stopped the placer building one, and
+    /// `testdata/fpga/cynthion/usb_mjpeg.v` is the design that walked
+    /// into it — placed and routed for twenty-eight minutes at the
+    /// default seed and then wrote no bitstream, with
+    /// `u_enc.u_fdct.blk` and `u_enc.u_quant.blk` two columns apart.
+    ///
+    /// Both directions are checked because a move is judged from the
+    /// site it arrives at: the wide block refuses to land west of
+    /// something, and anything refuses to land east of a wide block.
+    ///
+    /// What this would not catch: the offset being wrong. It is `(2, 0)`
+    /// here because this test says so and `src/fpga/devices/ecp5.dev`
+    /// says so; what makes those the same number is that the device file
+    /// is now the only place it is written, and
+    /// `the_eighteen_bit_mode_declares_the_block_it_sterilises` reads it
+    /// back from there.
+    #[test]
+    fn a_block_that_sterilises_its_neighbour_is_not_placed_beside_one() {
+        let (_, graph) = bram_row(5);
+        let instance = |name: &str| Instance {
+            cell: CellId::from_index(0),
+            name: name.to_owned(),
+            primitive: "DP16KD".to_owned(),
+            kind: "bram".to_owned(),
+            pins: Vec::new(),
+            pin: None,
+        };
+        let netlist = Netlist {
+            instances: vec![instance("wide"), instance("narrow")],
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+            // Only the first one is in the 18-bit mode.
+            sterilises: vec![vec![(2, 0)], Vec::new()],
+        };
+        let rules = SiteRules::find(&netlist, &graph);
+        assert!(!rules.trivial(), "the rule has to be looked at");
+
+        let at = |x: u32| {
+            graph
+                .sites
+                .iter()
+                .position(|s| s.tile == (x, 0))
+                .expect("a site per column")
+        };
+
+        // The wide block on column 0 sterilises column 2 and nothing else.
+        let mut placement = Placement::new(2, graph.sites.len());
+        placement.place(0, at(0));
+        assert_eq!(
+            rules.refusal(&placement, 1, at(2)),
+            Some("it or a block two tiles away would sterilise the other".to_owned()),
+            "two columns east of a wide block is not free"
+        );
+        for x in [1, 3, 4] {
+            assert_eq!(
+                rules.refusal(&placement, 1, at(x)),
+                None,
+                "column {x} is not two east of column 0"
+            );
+        }
+
+        // And the other way round: the narrow block first, the wide one
+        // arriving two columns west of it.
+        let mut placement = Placement::new(2, graph.sites.len());
+        placement.place(1, at(4));
+        assert_eq!(
+            rules.refusal(&placement, 0, at(2)),
+            Some("it or a block two tiles away would sterilise the other".to_owned()),
+            "a wide block may not land two columns west of a block in use"
+        );
+        assert_eq!(rules.refusal(&placement, 0, at(3)), None);
+
+        // A netlist where nothing sterilises anything pays nothing.
+        let narrow = Netlist {
+            instances: vec![instance("a"), instance("b")],
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+            sterilises: vec![Vec::new(), Vec::new()],
+        };
+        assert!(
+            SiteRules::find(&narrow, &graph).trivial(),
+            "no cell sterilises anything, so there is nothing to check"
+        );
+    }
+
     /// `driverless` names the signals something reads and nothing drives,
     /// and stays quiet about the two shapes that are fine: a signal with
     /// both ends, and a signal with a driver that nothing reads.
@@ -8111,6 +8377,7 @@ mod tests {
                 },
             ],
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let found = netlist.driverless();
         assert_eq!(
@@ -8160,6 +8427,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for i in 0..n {
             let instance = netlist.instances.len();
@@ -8492,6 +8760,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut chain = |kinds: &[&str]| {
             let first_signal = netlist.signals.len();
@@ -8614,6 +8883,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut connect = |driver_kind: &str, sink_kind: &str| {
             let signal = netlist.signals.len();
@@ -8906,6 +9176,7 @@ mod tests {
                 sinks: Vec::new(),
             }],
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for i in 0..=n {
             let instance = netlist.instances.len();
@@ -9032,6 +9303,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let none: &[usize] = &[];
         let reads = [none, none, reads[0], reads[1], reads[2], reads[3]];
@@ -9509,6 +9781,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let pin = |netlist: &mut Netlist, instance, role: &str, output, signal: usize| {
             let index = netlist.pins.len();
@@ -9798,6 +10071,7 @@ mod tests {
                 },
             ],
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for (name, kind) in [("cy", "carry"), ("ff", "ff")] {
             lone.instances.push(Instance {
@@ -10184,6 +10458,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for g in 0..groups {
             netlist.signals.push(Signal {
@@ -10493,6 +10768,7 @@ mod tests {
                 })
                 .collect(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for (instance, (kind, pins)) in ["lut", "ff", "carry"].iter().zip(pins).enumerate() {
             let mut own = Vec::new();
@@ -10644,6 +10920,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let rules = SiteRules::find(&netlist, &graph);
         let mut placement = Placement::new(3, graph.sites.len());
@@ -10797,6 +11074,7 @@ mod tests {
             pins: Vec::new(),
             signals: Vec::new(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for g in 0..groups {
             netlist.signals.push(Signal {
@@ -11034,6 +11312,7 @@ mod tests {
                 sinks: vec![1],
             }],
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {
@@ -11157,6 +11436,7 @@ mod tests {
                 })
                 .collect(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut pins = vec![PinTiming::Ignored; roles.len()];
         for (index, (instance, role, output, signal)) in roles.into_iter().enumerate() {
@@ -11365,6 +11645,7 @@ mod tests {
                 },
             ],
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let info: Vec<Placeable> = (0..4)
             .map(|_| Placeable {
@@ -11450,6 +11731,7 @@ mod tests {
                 })
                 .collect(),
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         for (instance, clock) in clocks.iter().enumerate() {
             let pin = netlist.pins.len();

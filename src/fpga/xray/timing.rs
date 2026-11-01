@@ -781,6 +781,7 @@ mod tests {
                 .collect(),
             pins,
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut reaches = vec![u8::MAX; netlist.pins.len()];
         lut_reaches(&netlist, 0, &init, &mut reaches);
@@ -853,6 +854,7 @@ mod tests {
             ],
             pins,
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut map = crate::source::SourceMap::new();
         let file = map.add("t.rcf", "").unwrap();
@@ -957,6 +959,7 @@ mod tests {
             ],
             pins,
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut map = crate::source::SourceMap::new();
         let file = map.add("t.rcf", "").unwrap();
@@ -1052,6 +1055,7 @@ mod tests {
             ],
             pins,
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let mut map = crate::source::SourceMap::new();
         let file = map.add("t.rcf", "").unwrap();
@@ -1176,6 +1180,7 @@ mod tests {
             ],
             pins,
             off_fabric: Vec::new(),
+            sterilises: Vec::new(),
         };
         let period_of = |rcf: &str, instance: usize| -> (String, f64) {
             let mut diags = crate::diag::Diagnostics::new();

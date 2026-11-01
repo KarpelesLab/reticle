@@ -53,9 +53,10 @@
 // by preferring the *widest* mode, so a shallower memory would have taken
 // the 18-bit mode — the one this backend refuses to place next to another
 // block. It now counts what a mode really costs: `src/fpga/devices/ecp5.dev`
-// says `neighbours 1` on the 18-bit line, so that mode costs two blocks
-// for every one it occupies and loses to the 9-bit mode outright at any
-// depth this block can hold. The widest mode still wins a genuine tie.
+// says `sterilises 2,0` on the 18-bit line, so that mode costs two
+// blocks for every one it occupies and loses to the 9-bit mode outright
+// at any depth this block can hold. The widest mode still wins a genuine
+// tie, and `block_ram_18bit_pair.v` is the design that takes one.
 //
 // The pins are on top-edge balls of an LFE5U-12F in caBGA-256, in the
 // order `iodb.json` lists them across the die. No board has this design on

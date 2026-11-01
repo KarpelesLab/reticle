@@ -3017,6 +3017,12 @@ pub struct BramConfig {
     pub overlaps: Vec<String>,
 }
 
+/// A placed block RAM, as `TrellisFabric::configure_bram` weighs them
+/// against each other: the tile it sits on, and the tile offsets its own
+/// mode makes unusable (`sterilises` on the device file's `mode` line,
+/// carried per instance by [`super::place::Netlist::sterilises`]).
+type PlacedBram<'a> = ((u32, u32), &'a [(i32, i32)]);
+
 /// One block RAM's initialisation stream, from the `INITVAL_<nn>`
 /// parameters the technology mapper put on its cell.
 ///
@@ -4714,34 +4720,42 @@ impl TrellisFabric {
         // neighbour cannot both be used. Nothing in the vendor's three
         // bitstreams exercises 18-bit mode, so there is no artefact to
         // check a model of it against, and refusing is the honest answer.
-        let placed: Vec<((u32, u32), bool)> = netlist
+        //
+        // **Which blocks and which offset are the device file's**, not
+        // this function's. `src/fpga/devices/ecp5.dev` says
+        // `sterilises 2,0` on the 18-bit `mode` line and
+        // `Netlist::build` turns that into the offsets each cell's own
+        // mode makes unusable, so `fpga::place` leaves those tiles empty
+        // and this check asks the same question of the same answer.
+        // Until `usb_mjpeg` this read the width off the cell and added
+        // two to the column itself, which is the same fact written in
+        // two places with the placer told neither: it produced a
+        // placement this then refused, and `docs/fpga-trellis.md` has
+        // the round.
+        let placed: Vec<PlacedBram<'_>> = netlist
             .instances
             .iter()
             .enumerate()
             .filter(|(_, inst)| inst.kind == "bram")
-            .filter_map(|(index, inst)| {
+            .filter_map(|(index, _)| {
                 let site = placement.site_of(index)?;
-                let wide = BRAM_WIDTH.iter().any(|field| {
-                    let name = field.rsplit('.').next().unwrap_or(field);
-                    m.cells
-                        .get(inst.cell)
-                        .and_then(|cell| cell.params.get(name))
-                        .and_then(crate::ir::AttrValue::as_int)
-                        == Some(i64::from(BRAM_DATA_PINS))
-                });
-                Some((graph.sites[site].tile, wide))
+                let offsets = netlist.sterilises.get(index).map_or(&[][..], Vec::as_slice);
+                Some((graph.sites[site].tile, offsets))
             })
             .collect();
-        for (at, wide) in &placed {
-            if !wide {
-                continue;
-            }
-            let east = (at.0 + 2, at.1);
-            if placed.iter().any(|(other, _)| *other == east) {
-                out.overlaps.push(format!(
-                    "X{}Y{} is 18 bits wide and X{}Y{} is in use",
-                    at.0, at.1, east.0, east.1
-                ));
+        for (at, offsets) in &placed {
+            for (dx, dy) in *offsets {
+                let (Some(x), Some(y)) =
+                    (at.0.checked_add_signed(*dx), at.1.checked_add_signed(*dy))
+                else {
+                    continue;
+                };
+                if placed.iter().any(|(other, _)| *other == (x, y)) {
+                    out.overlaps.push(format!(
+                        "X{}Y{} is 18 bits wide and X{x}Y{y} is in use",
+                        at.0, at.1
+                    ));
+                }
             }
         }
         Ok(out)

@@ -997,7 +997,7 @@ fn a_design_over_the_part_numbers_specification_is_warned_about() {
     // still produced, because the sites are real.
     //
     // 34 and not 33, which is what this said until the 18-bit mode started
-    // carrying `neighbours 1`. 33792 words of 18 bits is 33 blocks in the
+    // declaring the block it sterilises (`sterilises 2,0`). 33792 words of 18 bits is 33 blocks in the
     // 18-bit mode against 34 in the 9-bit mode, two wide and seventeen
     // deep, and the mapper takes the 34: each 18-bit block sterilises the
     // one two columns east, so the cheaper-looking arrangement needs up to

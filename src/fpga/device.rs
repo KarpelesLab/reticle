@@ -1085,7 +1085,9 @@ pub struct BramModeLayout {
     /// when the database does not say, in which case a memory with
     /// initial contents cannot be put in this mode with them.
     pub init: Option<BramInitLayout>,
-    /// How many *other* blocks each block in this mode makes unusable.
+    /// Which *other* blocks a block in this mode makes unusable, as
+    /// `(dx, dy)` tile offsets from its own tile. Written
+    /// `sterilises <dx>,<dy>` on the `mode` line, once per offset.
     ///
     /// A mode can cost more than the block it is in. An ECP5 `DP16KD` in
     /// 18-bit mode takes its top two data bits off the interconnect
@@ -1094,12 +1096,22 @@ pub struct BramModeLayout {
     /// used; `TrellisFabric::configure_bram` refuses that arrangement and
     /// `docs/fpga-trellis.md` has the wires.
     ///
-    /// [`Mapper::choose_bram`](crate::fpga) counts `blocks * (1 +
-    /// neighbours)`, so a mode that sterilises one costs double and a
-    /// memory that fits either way takes the mode that does not. This is
-    /// the ECP5's reason stated where it belongs: a general preference for
-    /// narrow modes would have changed the iCE40, which has no such
-    /// conflict and whose widest mode is the one to want.
+    /// **It is offsets and not a count because three parts of the flow
+    /// need it and they need different halves.**
+    /// [`Mapper::choose_bram`](crate::fpga) needs only how many, and
+    /// counts `blocks * (1 + sterilises.len())` so that a mode which
+    /// sterilises one costs double and a memory that fits either way
+    /// takes the mode that does not. [`mod@crate::fpga::place`] needs
+    /// *where*, so that it can leave those tiles empty — without that it
+    /// produces placements `configure_bram` then refuses, which is how
+    /// `testdata/fpga/cynthion/usb_mjpeg.v` failed to build at the
+    /// default seed. The offset used to live in `configure_bram` as a
+    /// literal `at.0 + 2` while the count lived here, which is the same
+    /// fact written twice; it is written once now.
+    ///
+    /// This is the ECP5's reason stated where it belongs: a general
+    /// preference for narrow modes would have changed the iCE40, which
+    /// has no such conflict and whose widest mode is the one to want.
     ///
     /// This is the only thing that makes a mode cost more than a block.
     /// There was briefly an `unverified` flag beside it, ordering a mode
@@ -1107,7 +1119,7 @@ pub struct BramModeLayout {
     /// once all three of the ECP5's narrow modes were read back and found
     /// correct. `docs/fpga-trellis.md` has that measurement and the
     /// confounded comparison that asked for the flag.
-    pub neighbours: u32,
+    pub sterilises: Vec<(i32, i32)>,
     /// How many of the mode's top data bits travel on the parity pins
     /// (`dinp` and `doutp` on each port) rather than the data pins: a
     /// 7-series `RAMB18E1` stores 18 bits as `DI[15:0]` and `DIP[1:0]`,
@@ -2461,8 +2473,11 @@ fn write_mode_layout(line: &mut String, layout: &BramModeLayout) {
     // non-numeric token, so a number before them would be read as another
     // word. The parser accepts them in any order; the writer has to pick
     // one, and this is the one that round-trips.
-    if layout.neighbours > 0 {
-        line.push_str(&format!(" neighbours {}", layout.neighbours));
+    if !layout.sterilises.is_empty() {
+        line.push_str(" sterilises");
+        for (dx, dy) in &layout.sterilises {
+            line.push_str(&format!(" {dx},{dy}"));
+        }
     }
     if layout.parity > 0 {
         line.push_str(&format!(" parity {}", layout.parity));
@@ -3300,11 +3315,27 @@ impl<'a> Parser<'a> {
                         layout.init = Some(BramInitLayout { select, words });
                     }
                 }
-                "neighbours" => {
-                    if let Some(value) = self.number_at(line, index, "a number of blocks") {
-                        layout.neighbours = value;
+                "sterilises" => {
+                    // One `<dx>,<dy>` token per block this mode makes
+                    // unusable. Several are allowed; the only family with
+                    // any has one.
+                    let before = layout.sterilises.len();
+                    while let Some(token) = line.get(index) {
+                        let Some((dx, dy)) = token.as_str().split_once(',') else {
+                            break;
+                        };
+                        let (Ok(dx), Ok(dy)) = (dx.parse::<i32>(), dy.parse::<i32>()) else {
+                            break;
+                        };
+                        layout.sterilises.push((dx, dy));
+                        index += 1;
                     }
-                    index += 1;
+                    if layout.sterilises.len() == before {
+                        self.error(
+                            line.span,
+                            "expected one or more `<dx>,<dy>` tile offsets after `sterilises`",
+                        );
+                    }
                 }
                 "parity" => {
                     if let Some(value) = self.number_at(line, index, "a number of parity bits") {
