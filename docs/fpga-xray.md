@@ -5444,6 +5444,10 @@ that script on 2026-10-31 it wrote seed 4's bitstream bit for bit, in 41
 minutes. (Its default before was the placer's own seed, never measured
 on the part.) Any change to the sources or the flow gives every seed a
 new placement, and the choice has to be measured again.
+*(Measured again on 2026-11-01, after the BUFR hop left the graph; see
+below. Seed 4's build now passes 32, and the script passes
+`--place-seed 3`, whose bitstream passed 38, 38 and 39 in three runs and
+which the script reproduces byte for byte in 39 minutes.)*
 
 **Not the clock regions' twelve lines.** The four builds of five that
 failed with every segment's write data copied were read first as a
