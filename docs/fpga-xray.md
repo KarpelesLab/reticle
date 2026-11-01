@@ -5580,6 +5580,41 @@ test allows 1. Where a count above is compared with 35, read 36. The
 pinned seed 3 passed 38, 38 and 39, and failed `test_pll[5000000.0-4-True-40-1-1-xtal_ref_mul4]`
 on two of the three runs. Of MF's five seeds, two reach 36 (38 and 37).
 
+**Not the wiring into the analyser's capture flip-flops.** `test_pll`
+measures the phase by sampling two clocks as data. The analyser
+registers hs2 (`reg_chipwhisperer.rearclk`, a BUFGMUX that clocks no
+flip-flop) into `reg_la.capture5_source`, and the ADC clock
+(`ADC_clk_fb`) into `capture8_source`. A seed whose route made one of
+those paths longer than the other would shift the reading. To check,
+a throwaway report was added to `--timing-endpoints`. It walked from
+each clock through at most four LUTs to the first sequential pin and
+printed the router's wire delay per hop. Rebuilding the five seeds with
+it produced bitstreams byte-identical to MF's. Wire delay summed along
+each path, LUT delays excluded:
+
+| seed | `pll` on the board, MF's run | hs2 → `capture5` | ADC → `capture8` | difference |
+|---|---|---|---|---|
+| 1 | fails 5 MHz ×4 | 3.30 ns | 2.85 ns | 0.45 ns |
+| 2 | fails 15 MHz ×3 | 3.64 ns | 2.71 ns | 0.93 ns |
+| 3 | fails 5 MHz ×4 | 3.11 ns | 2.16 ns | 0.95 ns |
+| 4 | passes | 3.68 ns | 2.54 ns | 1.14 ns |
+| 5 | passes | 3.01 ns | 2.57 ns | 0.44 ns |
+
+Neither the paths nor their difference sort the failing seeds from the
+passing ones: seeds 1 and 5 differ by 0.01 ns. ("Passes" is one run
+each, and seed 3 alone fails only one run in five, so it is weak
+evidence in that direction too.) Nor could they. A
+failure is a jump of exactly two analyser samples, 10 ns at the 200 MS/s
+of the 5 MHz ×40 case, and these paths differ by under a nanosecond.
+On the board, the failing case run alone on seed 3 failed one run in
+five, "delta -3 with reset on iteration 4", always just after
+`reset_adc` reset the CDCI6214. A 40-reading histogram of the same
+measurement without the reset (`hw/pllphase.py`) gave −1 on all forty,
+for seeds 3 and 4 and for NewAE's bitstream alike. So the shift comes
+in with the clock chip's reset. Something in the design responds to it
+differently. It is not the static delay of these paths, and the report
+was not kept.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
