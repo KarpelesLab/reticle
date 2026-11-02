@@ -3592,6 +3592,11 @@ fn write_xc7_bitstream(
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
     let mut options = place_options(args)?;
+    // This fabric's anneal effort, unless the command line names one:
+    // see `xray::PLACE_EFFORT`.
+    if args.option("place-effort").is_none() {
+        options.move_effort = reticle::fpga::xray::PLACE_EFFORT;
+    }
     // An anneal that has stopped improving stops: see
     // `xray::PLACE_FLAT_STEPS`.
     options.flat_steps = reticle::fpga::xray::PLACE_FLAT_STEPS;

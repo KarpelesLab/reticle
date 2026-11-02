@@ -2894,6 +2894,20 @@ pub const PRESENT_GROWTH: f64 = 1.3;
 /// unchanged; see `docs/fpga-xray.md`).
 pub const PLACE_FLAT_STEPS: u32 = 10;
 
+/// How hard this fabric's anneal works when `--place-effort` is not given
+/// ([`PlaceOptions::move_effort`](crate::fpga::place::PlaceOptions)): it
+/// tries this times cells^(4/3) moves at each temperature, up to a million.
+///
+/// Measured on 2026-11-03, two seeds each, routed estimates in ns: the
+/// Apple II for the Basys 3 (1,663 lookup tables) 18.95 and 18.17 at 3,
+/// 19.04 and 17.94 at 4, 18.73 and 18.40 at 10; the NES for the Basys 3
+/// 18.63 at 3, 19.76 at 4, 19.56 at 10. Vivado 2026.1 placed and routed
+/// the Apple II's netlist to 18.29. Its placement took about a third of
+/// the time at 3 that it did at 10. The ChipWhisperer-Husky Plus is past
+/// the million at any effort, so its placements are what they were. The
+/// default of the other fabrics, 10, is unchanged.
+pub const PLACE_EFFORT: usize = 3;
+
 /// How many clocks a 7-series clock region's horizontal lines carry
 /// (`HCLK_CK_BUFHCLK0` to `11`), for
 /// [`PlaceOptions::clock_region_lines`](super::place::PlaceOptions).
