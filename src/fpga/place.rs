@@ -2825,6 +2825,7 @@ pub fn place(
                 pins: connection_weights(&critical.pins, timing),
             };
             if options.anneal {
+                let before = placement.clone();
                 anneal(
                     netlist,
                     graph,
@@ -2837,6 +2838,16 @@ pub fn place(
                     &mut placement,
                     &mut report,
                 );
+                // A round that leaves every cell where it was found nothing
+                // the next would start from anywhere else: the same
+                // placement, so the same weights. On an Apple II for the
+                // Basys 3 the second and third rounds each did exactly
+                // that, a third of the placement's time apiece; on the
+                // ChipWhisperer-Husky Plus every round moves something,
+                // and all three run as before.
+                if placement == before {
+                    break;
+                }
             }
         }
         let (_, round) = estimate_timing(netlist, graph, &placement, timing, &order);
@@ -9231,6 +9242,34 @@ mod tests {
     /// bug and not a particular number. What it would **not** catch: a
     /// bounding box that is updated cheaply and *wrongly* — that is
     /// `the_annealers_boxes_agree_with_a_full_recount`'s job.
+    /// **A timing round that moves nothing ends the rounds.** The chain of
+    /// [`timed_chain`] placed with three timing rounds and every cell
+    /// frozen, so no round can move one: the first round's anneal leaves
+    /// the placement as it found it, and the next would start from the
+    /// same placement with the same weights. Two estimates are reported,
+    /// the round's and the last, where all three rounds made four. On an
+    /// Apple II for the Basys 3 the second and third rounds did exactly
+    /// this and were 40 % of the placement's time. Would catch the rounds
+    /// run regardless again; would not catch a round that changes the
+    /// placement being taken for one that does not, since no cell here
+    /// can move.
+    #[test]
+    fn a_timing_round_that_moves_nothing_ends_the_rounds() {
+        let (arch, graph) = grid(10, 1);
+        let (_, netlist, _, mut timing) = timed_chain();
+        timing.rounds = 3;
+        timing.frozen = vec![true; 4];
+        let options = PlaceOptions {
+            moves_per_temperature: Some(200),
+            max_temperatures: 4,
+            timing: Some(timing),
+            ..PlaceOptions::default()
+        };
+        let (_, report) =
+            place(&netlist, &arch, &graph, &Constraints::default(), &options).expect("it fits");
+        assert_eq!(report.timing.len(), 2, "{:?}", report.timing);
+    }
+
     #[test]
     fn a_move_costs_the_cells_it_moves_and_not_the_fan_out_of_their_nets() {
         let (arch, graph) = grid(16, 16);
