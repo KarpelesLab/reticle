@@ -5757,6 +5757,99 @@ of 34.6 against FH's 36.8:
 Not kept. Across FH, HB and SG, the 400 MHz analyser cases pass or fail
 by seed whatever is done to this FIFO's write side.
 
+### Vivado on the same sources, and small designs against it (2026-11-02)
+
+**Where the 400 MHz failures are.** On seed 3 of FH, `test_glitch_width`
+read ratios about half of what it expects (0.48 for 0.95, 0.25 for 0.52).
+Captured whole on the part (`hw/gwprobe.py`), every other word of the
+analyser's capture read back as zero, on every channel. A second capture
+after it (`hw/staleprobe.py`) began with the first capture's words: so
+the zeros were USB reads that got nothing and popped nothing, leaving
+half the capture in the FIFO. FH4 read both captures whole. The read
+side's `stored` in the analyser's stand-in, `fifo_generator_semipro`,
+was at 12.2 to 14.8 ns of `clk_usb`'s 10.4 on every seed, and
+`prog_empty_q` at 13.5 to 16.5. Computed from registers instead,
+mirroring the write side, the five seeds (RF) passed 24, 27, 26, 29 and
+29. The change also applied to the ADC's two-clock FIFO, and the ADC's
+captures above 160 MHz came back empty; the 40x cases were still wrong.
+Not kept. Which half of that was the ADC's and which the analyser's is not
+separated.
+
+**Vivado's build of NewAE's own project.** NewAE's documentation says
+they build with Vivado 2022.1. It says the errors about missing IP when
+opening the project are development ILAs and harmless. It also says a
+build whose register reads and writes fail (`test_reg_rw`) happens, and
+that the cure is another strategy. At 2dfe1bc the Plus's project also
+expects these, none of them in the repository:
+- `fifo_generator_semipro` and `trigger_fifo`, from a sibling
+  `plus_optimization` checkout;
+- `async_resetFFstyle2.v` from the same sibling;
+- `trigger_cdc.v`, which `develop` added to its sources but not to the
+  project (c98eb2f).
+
+Branch `main` carries the semipro FIFO as a `.xcix`. It is 32,768 words
+deep with `prog_full` at 32,776, and NewAE's driver allows the Plus 65,535
+samples a channel, two to a word. *So the stand-in's 16,384, quoted from
+`fifo_generator_semipro_sim_netlist.v` in tracewhisperer's `sim/`, is half
+the real depth. That simulation netlist is stale. No test of the forty
+captures enough to notice.* Our checkout's tracewhisperer submodule is at
+542b1cc (`origin/pro`), not the 79cd9a2 that 2dfe1bc records. Every
+Reticle build above used 542b1cc, and so did the Vivado build here.
+
+With those supplied, Vivado 2026.1 built the project in 8 min 41 s. Its
+`clk_usb` had 461 setup and 6,858 hold violations, worst −4.7 and
+−6.8 ns, through NewAE's USB read path with 7.6 ns of clock skew. On the
+part it passed 3 of the 40, failing `test_reg_rw`, twice. That is the
+failure the documentation describes. Vivado 2024.1 did not synthesise the
+project's FIFO cores, and was not pursued.
+
+**Speed, on the same sources.** Run non-project with our stand-ins and
+NewAE's `cwhusky_100.xdc` alone, Vivado 2026.1 took 8 min 18 s. Of that:
+- synthesis 5 min 11 s;
+- optimisation, placement and physical optimisation 1 min 48 s;
+- routing 47 s;
+- bitstream 26 s.
+
+Five Reticle builds were running beside it. Reticle's own build of the
+same sources takes about 41 minutes, 31 of them routing. Vivado's
+non-project bitstream, constrained by `cwhusky_100.xdc` alone and so
+without what `husky.rcf` adds, passed 3 of 40 on the part, failing
+register reads too.
+
+**Small designs against Vivado.** `testdata/fpga/vivado/` holds designs
+the shape of something this flow got wrong in the Plus. Each comes with:
+- Vivado's constraints;
+- Reticle's constraints;
+- the script that ran Vivado;
+- an excerpt of Vivado's own timing report.
+
+`tests/fpga_xray_vivado.rs` builds each with Reticle and compares the
+estimate with the excerpt, without needing Vivado.
+
+| design | path | Vivado 2026.1 | Reticle |
+|---|---|---|---|
+| `carry_counter` (`reg_la.capture_count`) | into the top bit | 1.972 ns | 4.60 ns |
+| `analyser_fifo` (the stand-in alone) | write count `wused_q[14]` | 1.929 ns | 3.74 ns |
+| | `stored` | 4.147 ns | 6.37 ns |
+| | the word read, `dout` | 4.251 ns | 6.94 ns |
+
+The counter's gap is the timing model's. It charges 0.3 ns per `CARRY4`
+where Vivado gives 0.089 along the chain. It also charges the untimed
+pip's 0.175 ns on the hop into each `CARRY4`, which is this flow's own
+pip, where Vivado's net is 0.000. Corrected (0.114 along, 0.42 to enter,
+nothing on the hop), the estimate was 2.40 ns. Five Husky Plus builds
+with that model (TM) passed 32, 20, 37 and 33 on seeds 1, 2, 3 and 5,
+against FH's 37, 39, 34 and 35. Seed 4 did not route, and the ADC
+clock's estimate rose from 6.3–7.4 ns to 7.6–8.2. So the pessimism is
+standing in for something else the model gets wrong, and it stays until
+that is found.
+
+The FIFO's first gap is the mapper's. Vivado puts `wptr - rptr_w` on the
+carry chain, as a `LUT2` and four `CARRY4`s. This flow keeps
+subtractions off the chain, for the October board failure recorded at
+`PrimitiveOptions::min_subtract_carry_width`. Both tests are ignored
+targets, which `cargo test -- --ignored` runs, so a fix shows as a pass.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

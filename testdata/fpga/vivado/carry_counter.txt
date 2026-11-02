@@ -1,0 +1,65 @@
+# Vivado 2026.1's routed timing of carry_counter.v on xc7a100tftg256-3,
+# made by carry_counter.tcl on 2026-11-02: the data path of each report,
+# from the launching register's clock pin to the capturing one's D.
+# Excerpts of Vivado's own output, unedited but for the cut.
+
+## count31.rpt
+  Data Path Delay:        1.972ns  (logic 1.618ns (82.058%)  route 0.354ns (17.942%))
+  Logic Levels:           8  (CARRY4=8)
+    SLICE_X86Y142        FDRE (Prop_fdre_C_Q)         0.341     4.588 r  count_reg[1]/Q
+                         net (fo=2, routed)           0.354     4.942    count_reg[1]
+    SLICE_X86Y142                                                     r  count_reg[0]_i_1/S[1]
+    SLICE_X86Y142        CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.509     5.451 r  count_reg[0]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.451    count_reg[0]_i_1_n_0
+    SLICE_X86Y143                                                     r  count_reg[4]_i_1/CI
+    SLICE_X86Y143        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.540 r  count_reg[4]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.540    count_reg[4]_i_1_n_0
+    SLICE_X86Y144                                                     r  count_reg[8]_i_1/CI
+    SLICE_X86Y144        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.629 r  count_reg[8]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.629    count_reg[8]_i_1_n_0
+    SLICE_X86Y145                                                     r  count_reg[12]_i_1/CI
+    SLICE_X86Y145        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.718 r  count_reg[12]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.718    count_reg[12]_i_1_n_0
+    SLICE_X86Y146                                                     r  count_reg[16]_i_1/CI
+    SLICE_X86Y146        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.807 r  count_reg[16]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.807    count_reg[16]_i_1_n_0
+    SLICE_X86Y147                                                     r  count_reg[20]_i_1/CI
+    SLICE_X86Y147        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.896 r  count_reg[20]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.896    count_reg[20]_i_1_n_0
+    SLICE_X86Y148                                                     r  count_reg[24]_i_1/CI
+    SLICE_X86Y148        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.985 r  count_reg[24]_i_1/CO[3]
+                         net (fo=1, routed)           0.000     5.985    count_reg[24]_i_1_n_0
+    SLICE_X86Y149                                                     r  count_reg[28]_i_1/CI
+    SLICE_X86Y149        CARRY4 (Prop_carry4_CI_O[3])
+                                                      0.234     6.219 r  count_reg[28]_i_1/O[3]
+                         net (fo=1, routed)           0.000     6.219    count_reg[28]_i_1_n_4
+    SLICE_X86Y149        FDRE                                         r  count_reg[31]/D
+
+## done.rpt
+  Data Path Delay:        1.830ns  (logic 1.112ns (60.758%)  route 0.718ns (39.242%))
+  Logic Levels:           4  (CARRY4=3 LUT6=1)
+    SLICE_X86Y142        FDRE (Prop_fdre_C_Q)         0.341     4.588 r  count_reg[3]/Q
+                         net (fo=2, routed)           0.718     5.306    count_reg[3]
+    SLICE_X87Y146                                                     r  done_i_13/I0
+    SLICE_X87Y146        LUT6 (Prop_lut6_I0_O)        0.097     5.403 r  done_i_13/O
+                         net (fo=1, routed)           0.000     5.403    done_i_13_n_0
+    SLICE_X87Y146                                                     r  done_reg_i_6/S[1]
+    SLICE_X87Y146        CARRY4 (Prop_carry4_S[1]_CO[3])
+                                                      0.412     5.815 r  done_reg_i_6/CO[3]
+                         net (fo=1, routed)           0.000     5.815    done_reg_i_6_n_0
+    SLICE_X87Y147                                                     r  done_reg_i_2/CI
+    SLICE_X87Y147        CARRY4 (Prop_carry4_CI_CO[3])
+                                                      0.089     5.904 r  done_reg_i_2/CO[3]
+                         net (fo=1, routed)           0.000     5.904    done_reg_i_2_n_0
+    SLICE_X87Y148                                                     r  done_reg_i_1/CI
+    SLICE_X87Y148        CARRY4 (Prop_carry4_CI_CO[2])
+                                                      0.173     6.077 r  done_reg_i_1/CO[2]
+                         net (fo=1, routed)           0.000     6.077    p_0_in
+    SLICE_X87Y148        FDRE                                         r  done_reg/D

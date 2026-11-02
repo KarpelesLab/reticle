@@ -1,0 +1,13 @@
+# Reticle's constraints for carry_counter.v. The period is 1 ns, not the
+# 2.5 of carry_counter.xdc, so that `--timing-endpoints` lists every
+# register's path: it lists only late ones. The pads are false paths
+# because Vivado times no unconstrained pad, and its report is what the
+# test compares with.
+create_clock -name clk -period 1.0 clk
+set_io -io_standard LVCMOS33 clk D4
+set_io -io_standard LVCMOS33 go B7
+set_io -io_standard LVCMOS33 din A7
+set_io -io_standard LVCMOS33 done E2
+set_false_path -from go
+set_false_path -from din
+set_false_path -to done

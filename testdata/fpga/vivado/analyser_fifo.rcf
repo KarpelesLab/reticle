@@ -1,0 +1,21 @@
+# Reticle's constraints for analyser_fifo.v, the pins of analyser_fifo.xdc.
+# The periods are 1 ns, not 2.5 and 10.4, so that `--timing-endpoints`
+# lists every register's path: it lists only late ones. The pads are false
+# paths because Vivado times no unconstrained pad, and its report is what
+# the test compares with.
+create_clock -name wr_clk -period 1.0 wr_clk
+create_clock -name rd_clk -period 1.0 rd_clk
+set_io -io_standard LVCMOS33 wr_clk D4
+set_io -io_standard LVCMOS33 rd_clk E3
+set_io -io_standard LVCMOS33 din B7
+set_io -io_standard LVCMOS33 wr_en A7
+set_io -io_standard LVCMOS33 rd_en E2
+set_io -io_standard LVCMOS33 dout C1
+set_io -io_standard LVCMOS33 full B6
+set_io -io_standard LVCMOS33 empty A5
+set_false_path -from din
+set_false_path -from wr_en
+set_false_path -from rd_en
+set_false_path -to dout
+set_false_path -to full
+set_false_path -to empty
