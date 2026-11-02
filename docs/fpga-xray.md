@@ -5850,6 +5850,71 @@ subtractions off the chain, for the October board failure recorded at
 `PrimitiveOptions::min_subtract_carry_width`. Both tests are ignored
 targets, which `cargo test -- --ignored` runs, so a fix shows as a pass.
 
+### Where the build's time goes, against Vivado (2026-11-03)
+
+**A benchmark Vivado can run too.** The Apple II for the Basys 3
+(`examples/apple2`, top `apple2_basys3`) maps to 1,663 lookup tables, 320
+flip-flops and 13.5 block RAMs. Reticle exports that mapped netlist with
+a Vivado script, so both tools place and route the same cells.
+
+| | Vivado 2026.1 | Reticle (effort 10) |
+|---|---|---|
+| placement | 16 s | 138 s |
+| routing | 25 s | 20 s |
+| worst path | 18.29 ns (WNS −8.29 at 10 ns) | 18.16 ns, estimated |
+
+On a design this size Reticle's result is as good as Vivado's and its
+routing as fast, and the placement is the gap. Kept from it:
+
+- **A timing round that moves nothing ends the rounds** (7f008d6). Rounds
+  2 and 3 left the Apple II exactly as round 1 did. Placement fell from
+  138 s to 96 s, with the same route. On the Husky Plus every round moves
+  something, and all three still run.
+- **The move generator reads a column's rows from a table** (d14b0a7),
+  not two binary searches per move: the same picks, about 7 % faster.
+- **Effort 3 by default on this fabric** (b2af71d). The Apple II gave
+  18.95 and 18.17 ns at 3 against 18.73 and 18.40 at 10. The NES gave
+  18.63 against 19.56. Placement took a third of the time.
+
+**Not kept: fewer moves on the Husky Plus.** The Plus asks for more than
+the per-temperature cap of a million moves at any effort, so effort 5 and
+10 built the same five seeds bit for bit. Capped at 300,000 instead, it
+placed in 332 to 455 s against 639 to 760 run beside it. But wirelength
+rose 13 to 33 %, and the ADC clock's placement estimate from 10.0–11.1 ns
+to 14.7–17.8. A design this dense uses its million.
+
+**The Husky Plus's route, and three remedies that did not help.**
+Routing seed 4's placement, cached so that the router runs alone, takes
+2,109 s, 72 passes and 6.83 G node visits. Passes 15 to 26 are most of
+it, at 200 to 400 M visits each. About a third of that is the eight bits
+of `U_usb_reg_main.reg_datao`, 535 sinks each. Single searches in those
+passes visit up to 9.4 M nodes.
+
+Probed, the reason is the cost and not the estimate. In a late pass an
+uncritical search's estimate starts at 0 to 80. The path it finds costs
+100 to 165, and its dearest step, 80 to 107, is one wire another signal
+holds: occupancy 1 times a present factor near 20 and the history. The
+search must cross one such wire, and first it visits every node cheaper
+than that. A signal's box grows a tile on each side for every congested
+pass, so by pass 20 that is thousands of tiles. What was tried:
+
+| change | route | passes | visits |
+|---|---|---|---|
+| as it is | 2,109 s | 72 | 6.83 G |
+| an uncritical search past 200,000 visits made again with the estimate weighed 4x | 2,946 s | 80 | 9.59 G |
+| the same past 50,000 | not legal after 4,650 s | | |
+| the box's margin capped at 8 | 2,529 s | 69 | 7.21 G |
+| capped at 5 | 2,902 s | 82 | 7.82 G |
+
+Weighting the estimate made paths worse, and the negotiation took longer
+to settle. Bounding the box made bounded searches fail and the signals
+unboxed. Two changes to the inner loop gave the same bitstream and no
+measurable time:
+- a signal's box kept between passes;
+- its physical node read from the same record as its geometry.
+
+The visits are the cost, not what one visit costs.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
