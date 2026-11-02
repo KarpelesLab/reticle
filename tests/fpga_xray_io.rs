@@ -257,3 +257,46 @@ fn every_husky_pad_is_configured_as_vivado_configured_it() {
     }
     assert!(pair("LIOB33_X0Y53").is_empty());
 }
+
+/// **A pad in the top tile of an IO column is configured.** Ball D17 of
+/// the Basys 3's XC7A35T is `LIOB33_SING_X0Y49`, a tile with one IO buffer
+/// at the top of its column, which keeps the upper half of the two-buffer
+/// tile's bits (`start_offset` 0) and so has `IOB_Y1` features and no
+/// `IOB_Y0` ones. The IO tables were gathered only from tile types with an
+/// `IOB_Y0`, so that tile type had none, and the Apple II for the Basys 3,
+/// whose UART uses D17, placed and routed and then wrote no bitstream
+/// (2026-11-03). Builds one output on D17 and checks the bitstream is
+/// written and decodes with nothing unexplained. Would catch the tables
+/// missing that tile type again; would not catch its features being the
+/// wrong ones, which no Vivado bitstream here configures to compare with.
+#[test]
+fn a_pad_in_the_top_tile_of_an_io_column_is_configured() {
+    let Some(root) = chipdb() else { return };
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sing-y1-pad");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(
+        out.join("pad.v"),
+        "module pad (input wire a, output wire y);\n  assign y = ~a;\nendmodule\n",
+    )
+    .unwrap();
+    std::fs::write(
+        out.join("pad.rcf"),
+        "set_io -io_standard LVCMOS33 a V17\nset_io -io_standard LVCMOS33 y D17\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", "--device", "xc7a35t-cpg236", "--chipdb", &root])
+        .arg("--constraints")
+        .arg(out.join("pad.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join("pad.bit"))
+        .arg(out.join("pad.v"))
+        .output()
+        .expect("failed to run the reticle binary");
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{err}");
+    assert!(err.contains(" 0 bit(s) unexplained"), "{err}");
+}

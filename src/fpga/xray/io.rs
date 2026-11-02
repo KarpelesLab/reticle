@@ -74,7 +74,12 @@ pub struct IoTables {
 }
 
 impl IoTables {
-    /// Gathers the tables from every tile type that has an `IOB_Y0`.
+    /// Gathers the tables from every tile type that has an IO buffer:
+    /// an `IOB_Y0`, or an `IOB_Y1` alone. A `_SING` tile keeps one half of
+    /// the two-IOB tile's bits (`TileAlias`), and the top one of a column,
+    /// `start_offset` 0, keeps `IOB_Y1`'s: taken only for `IOB_Y0`, its
+    /// table was missing, and the Apple II for the Basys 3, with a pad in
+    /// `LIOB33_SING_X0Y99`, placed and routed and then wrote no bitstream.
     pub(super) fn new(
         features: &HashMap<String, super::FeatureSet>,
         default_standard: &str,
@@ -86,11 +91,11 @@ impl IoTables {
         for (tile_type, set) in features {
             // The pads' tiles, and a bank's clock-row tile for its
             // `LVDS_25_IN_USE`.
-            if !set
-                .features()
-                .iter()
-                .any(|f| f.name.starts_with("IOB_Y0.") || f.name == "LVDS_25_IN_USE")
-            {
+            if !set.features().iter().any(|f| {
+                f.name.starts_with("IOB_Y0.")
+                    || f.name.starts_with("IOB_Y1.")
+                    || f.name == "LVDS_25_IN_USE"
+            }) {
                 continue;
             }
             let map: BTreeMap<String, Vec<ConfigBit>> = set
