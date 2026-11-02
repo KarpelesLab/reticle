@@ -6561,6 +6561,12 @@ struct KindSites {
     /// Parallel to [`KindSites::columns`]: that column's sites as
     /// `(tile y, site index)`, ascending by `y`.
     rows: Vec<Vec<(u32, usize)>>,
+    /// Parallel to [`KindSites::columns`]: for each row `y` from 0 to one
+    /// past the column's last, how many of its sites lie below `y`. What
+    /// [`KindSites::pick`] searched `rows` for on every move, a third of
+    /// the Husky Plus's placement in two binary searches whose every step
+    /// missed the cache; here it is two reads.
+    below: Vec<Vec<u32>>,
 }
 
 impl KindSites {
@@ -6573,12 +6579,27 @@ impl KindSites {
         }
         let mut columns = Vec::with_capacity(by_column.len());
         let mut rows = Vec::with_capacity(by_column.len());
+        let mut below = Vec::with_capacity(by_column.len());
         for (x, mut column) in by_column {
             column.sort_unstable();
+            let top = column.last().map_or(0, |(y, _)| *y as usize + 1);
+            let mut counts = Vec::with_capacity(top + 1);
+            let mut at = 0usize;
+            for y in 0..=top {
+                while at < column.len() && (column[at].0 as usize) < y {
+                    at += 1;
+                }
+                counts.push(u32::try_from(at).unwrap_or(u32::MAX));
+            }
             columns.push(x);
             rows.push(column);
+            below.push(counts);
         }
-        KindSites { columns, rows }
+        KindSites {
+            columns,
+            rows,
+            below,
+        }
     }
 
     /// A site of this kind inside the tile rectangle, or `None` when the
@@ -6596,10 +6617,15 @@ impl KindSites {
         if first == last {
             return None;
         }
-        let column = &self.rows[first + rng.below(last - first)];
-        let low = column.partition_point(|(y, _)| *y < rect.y0);
-        let high = column.partition_point(|(y, _)| *y <= rect.y1);
-        if low == high {
+        let which = first + rng.below(last - first);
+        let column = &self.rows[which];
+        let below = &self.below[which];
+        // Sites below row `y`: past the column's last row, all of them.
+        let under =
+            |y: u32| -> usize { below.get(y as usize).map_or(column.len(), |n| *n as usize) };
+        let low = under(rect.y0);
+        let high = under(rect.y1.saturating_add(1));
+        if low >= high {
             return None;
         }
         Some(column[low + rng.below(high - low)].1)
@@ -10256,6 +10282,28 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// **The move generator's row index is the search it replaced.** For
+    /// every column and every window, including windows past the column's
+    /// top, how many of its sites lie below a row is what a binary search
+    /// of the column says. Columns made uneven by dropping every third
+    /// site. Would catch an off-by-one at either end of a window, or past
+    /// the top; the picks themselves, and so every placement golden, are
+    /// what would show it otherwise.
+    #[test]
+    fn the_move_generators_row_index_is_the_search_it_replaced() {
+        let (_, graph) = grid(12, 20);
+        let sites: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].kind == "lut" && s % 3 != 0)
+            .collect();
+        let index = KindSites::build(&graph, &sites);
+        for (column, below) in index.rows.iter().zip(&index.below) {
+            let under = |y: u32| below.get(y as usize).map_or(column.len(), |n| *n as usize);
+            for y in 0..40u32 {
+                assert_eq!(under(y), column.partition_point(|(r, _)| *r < y), "row {y}");
+            }
+        }
     }
 
     /// **The annealer improves on what legalisation hands it, at the
