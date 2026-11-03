@@ -232,8 +232,11 @@ module ssd1306_decode_tb;
             $display("FAIL: the status line was %0d characters", line_len);
             $finish;
         end
-        // Three whole frames and two pixels. No frame is counted, because
-        // `ssd1306_slave` reports none in page mode.
+        // Three whole frames and two pixels.
+        if ({byte_at(0), byte_at(1)} !== 16'd3) begin
+            $display("FAIL: %0d frames, drew 3", {byte_at(0), byte_at(1)});
+            $finish;
+        end
         if ({byte_at(2), byte_at(3)} !== 3 * WORDS + 2) begin
             $display("FAIL: %0d data bytes, drew %0d",
                      {byte_at(2), byte_at(3)}, 3 * WORDS + 2);

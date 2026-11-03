@@ -4128,6 +4128,41 @@ fn spi_display_rx_receives_a_plausible_display_session() {
     assert_eq!(got.bit_errors, 0);
 }
 
+/// The device's own wires at its own timing, from a logic analyser at 200 MHz
+/// against a 100 MHz clock: 5 ns a sample is one half period here. The excerpt
+/// is the noise of its power-up, down to one-sample pulses on the select, and
+/// then its first 48 bytes, which have to arrive with the tags the wire gave
+/// them whatever the noise did. It would catch this block being sensitive to
+/// anything in that real timing, such as 85 ns of `sclk` high or 85 ns from the
+/// last edge to the select rising. It catches nothing past this block.
+#[test]
+fn spi_display_rx_receives_the_device_on_its_own_wires() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/ssd1306_nanox_wire.txt");
+    let text = fs::read_to_string(&path).expect("the capture excerpt is committed");
+    let mut far = FarSide::starting_idle(SPI_PERIOD);
+    let mut now = 1000 * HALF + 1;
+    let mut was = [false, false, false, true];
+    for line in text.lines().filter(|line| !line.starts_with('#')) {
+        let (dt, levels) = line.split_once(' ').expect("two fields");
+        now += dt.parse::<u64>().expect("a time") * HALF;
+        for (pin, level) in [PIN_SCLK, PIN_MOSI, PIN_DC, PIN_CS]
+            .into_iter()
+            .zip(levels.bytes())
+        {
+            let level = level == b'1';
+            if was[pin] != level {
+                far.events.push((now, pin, level));
+                was[pin] = level;
+            }
+        }
+    }
+    let got = spi_display_session(&[], &far);
+    let (_, boot) = nanox_boot();
+    assert_eq!(got.bytes, boot[..48], "every byte, with the wire's tag");
+    assert_eq!(got.dc_changes, 0, "the device holds `dc` across a byte");
+    assert_ne!(got.bit_errors, 0, "the noise was counted, not delivered");
+}
+
 #[test]
 fn spi_display_rx_counts_exactly_the_frames_it_was_driven() {
     // **The accounting test, and the gap it fills is that there was
@@ -5561,6 +5596,129 @@ fn ssd1306_dc_decode_follows_the_device_and_a_prefix_that_varies() {
     let got = decode_session(&[], 0, &script);
     assert_eq!(got.bytes, expected, "with no silence at all");
     assert_eq!(got.page_draws, total);
+}
+
+/// `testdata/ip/ssd1306_nanox_boot.txt`, as a script for [`decode_session`]
+/// and what the `dc` wire said, in order.
+fn nanox_boot() -> (Vec<Option<u8>>, Vec<Tagged>) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip/ssd1306_nanox_boot.txt");
+    let text = fs::read_to_string(&path).expect("the capture excerpt is committed");
+    let mut script = vec![None];
+    let mut tagged = Vec::new();
+    for line in text.lines().filter(|line| !line.starts_with('#')) {
+        let mut words = line.split_whitespace();
+        let kind = words.next().expect("no blank lines");
+        if kind == "s" {
+            script.push(None);
+        }
+        for word in words {
+            let (byte, count) = word.split_once('*').unwrap_or((word, "1"));
+            let byte = u8::from_str_radix(byte, 16).expect("a byte");
+            for _ in 0..count.parse::<usize>().expect("a count") {
+                script.push(Some(byte));
+                tagged.push((byte, kind == "d"));
+            }
+        }
+    }
+    (script, tagged)
+}
+
+/// The device booting, from a capture of it with its `dc` wire connected: every
+/// tag has to come out as the wire had it. Its setup sends a page command and a
+/// window with no pixels after either, so this catches them being read as draws,
+/// which took the setup for pixels and, with the silence cutting the draw short,
+/// left every later frame shifted by 25 columns. It would not catch a device that
+/// sets up with no 0xAE, which this rule cannot see.
+#[test]
+fn ssd1306_dc_decode_reads_the_device_booting() {
+    let (script, tagged) = nanox_boot();
+    let got = decode_session(&[("IDLE_CLOCKS", "100")], 16, &script);
+    assert_eq!(got.bytes, tagged);
+    assert_eq!(got.page_draws, 16, "two frames of eight pages");
+    assert_eq!(got.window_draws, 0, "the setup's window draws nothing");
+    assert_eq!(got.short_draws, 0);
+    assert_eq!(got.dropped, 0);
+
+    // With no silence the first frame comes while still setting up, so its
+    // blank pixels are read as commands, and the 0xAF after it is what ends
+    // that. What matters is that the second frame is right.
+    let script: Vec<Option<u8>> = tagged.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[], 0, &script);
+    assert_eq!(got.bytes.len(), tagged.len());
+    let setup = tagged.iter().position(|b| b.1).expect("some data");
+    assert_eq!(got.bytes[..setup], tagged[..setup], "the setup is commands");
+    let on = tagged.iter().position(|b| b.0 == 0xAF).expect("turned on");
+    assert_eq!(
+        got.bytes[on..],
+        tagged[on..],
+        "from 0xAF on, the wire's tags"
+    );
+    assert_eq!(got.page_draws, 8);
+}
+
+/// 0xAE only sets up as a command of its own. As an argument it is a contrast
+/// and as a pixel a pixel, and either read as a command would turn a frame's
+/// pixels into commands. It would catch the test moved up out of the branch that
+/// reads a new command. 0xAF is checked the same way by the same frame: as a
+/// contrast it must not end a setup.
+#[test]
+fn ssd1306_dc_decode_sets_up_only_on_the_command() {
+    let mut frame = vec![(0x81, false), (0xAE, false)];
+    frame.extend(device_frame(128, 8, 0));
+    let script: Vec<Option<u8>> = frame.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[], 0, &script);
+    assert_eq!(got.bytes, frame, "0xAE as an argument");
+    assert_eq!(got.page_draws, 8);
+
+    let setup = [
+        (0xAE, false),
+        (0x81, false),
+        (0xAF, false),
+        (0xB0, false),
+        (0x81, false),
+    ];
+    let script: Vec<Option<u8>> = setup.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[], 0, &script);
+    assert_eq!(got.bytes, setup, "0xAF as an argument");
+    assert_eq!(got.page_draws, 0);
+
+    // A window with either half on the far side of 0xAE draws nothing, and the
+    // half set during setup is not there afterwards for the next one to finish.
+    for script in [
+        vec![0x21, 0x00, 0x7F, 0xAE, 0x22, 0x00, 0x07, 0x81],
+        vec![0x22, 0x00, 0x07, 0xAE, 0x21, 0x00, 0x7F, 0x81],
+        vec![0xAE, 0x21, 0x00, 0x7F, 0xAF, 0x22, 0x00, 0x07, 0x81],
+        vec![0xAE, 0x22, 0x00, 0x07, 0xAF, 0x21, 0x00, 0x7F, 0x81],
+    ] {
+        let script: Vec<Option<u8>> = script.into_iter().map(Some).collect();
+        let got = decode_session(&[], 0, &script);
+        assert_eq!(got.window_draws, 0, "{script:?}");
+        assert!(got.bytes.iter().all(|b| !b.1), "{script:?}");
+    }
+}
+
+/// `ssd1306_slave_tb.v`, which nothing ran until a frame count that read zero
+/// in page mode showed that its fifteen sections had never had to pass. It
+/// catches what its header lists, and now page mode's frames in any order, not
+/// one page drawn twice. It says nothing about a link: it is given bytes.
+#[test]
+fn ssd1306_slave_passes_its_testbench() {
+    let design = testbench_design(
+        "ssd1306_slave",
+        "rtl/ssd1306_slave_tb.v",
+        "ssd1306_slave_tb",
+    );
+    let mut sim = simulate(&design, "ssd1306_slave_tb");
+    sim.run();
+    let printed = sim.output().to_owned();
+    let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();
+    assert!(
+        messages.is_empty(),
+        "the simulator complained:\n  {}\noutput:\n{printed}",
+        messages.join("\n  ")
+    );
+    assert!(sim.finished(), "it did not reach $finish:\n{printed}");
+    assert!(printed.starts_with("PASS:"), "it did not pass:\n{printed}");
 }
 
 /// A window opens a draw of its own size, in either order, and is cut to the

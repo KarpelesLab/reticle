@@ -8,11 +8,12 @@
 #
 # What a command cannot say on this part is that a draw has been cut short, or
 # that a window set once still applies, so a silence on the link returns the
-# block to reading commands. The rtl header has the limits. **No part has run
-# this.** The traffic it is tested on is the shape the user reported from their
-# device, and the command table is quoted from the datasheet.
+# block to reading commands. After 0xAE a page command or window only sets the
+# pointer, until the next silence or 0xAF. The rtl header has the limits. **No
+# part has run this.** It is tested on a capture of the user's device booting,
+# and the command table is quoted from the datasheet.
 name ssd1306_dc_decode
-version 1.0.0
+version 1.1.0
 license MIT
 description "Recovers an SSD1306 link's command/data tag with no D/C wire, by decoding the command stream: page and window commands open a draw of known length, and a silence on the link recovers a lost place"
 

@@ -72,7 +72,11 @@ module iso_display_pad #(
     parameter PAGES           = 8,
     parameter PRESS_BITS      = 23,
     parameter integer PRESS_COUNT = 11_200_000,   // 100 ms at 112 MHz
-    parameter BLOCK_RAM       = 1
+    parameter BLOCK_RAM       = 1,
+    // A device with no `dc` wire: `ip/video/ssd1306_dc_decode`, whose source a
+    // build must then name. 100 us at 112 MHz, measured on the device.
+    parameter DC_DECODE       = 0,
+    parameter DECODE_IDLE_CLOCKS = 11_200
 ) (
     input  wire        clk,
 
@@ -121,7 +125,8 @@ module iso_display_pad #(
         .HOST_DIV(HOST_DIV), .TICK_BIT(TICK_BIT),
         .COLUMNS(COLUMNS), .PAGES(PAGES), .PRESS_BITS(PRESS_BITS),
         .PRESS_COUNT(PRESS_COUNT),
-        .BLOCK_RAM(BLOCK_RAM)
+        .BLOCK_RAM(BLOCK_RAM),
+        .DC_DECODE(DC_DECODE), .DECODE_IDLE_CLOCKS(DECODE_IDLE_CLOCKS)
     ) core (
         .clk(clk_pll), .locked(locked),
         .clk_card(clk_card), .rst_card(rst_card), .vcc_en(vcc_en),

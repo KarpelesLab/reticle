@@ -10,11 +10,26 @@
 //                    the column is 0
 //   0x21 and 0x22    both complete, in either order: a draw of the window
 //   anything else    a command, and the byte after it is a command too
+//   0xAE             setting up: neither of the first two opens a draw, until
+//                    the next silence or 0xAF
 //
 // **The traffic that decided this is the user's device**: a 9-byte prefix
 // (0xDB, 0xD5 and 0x81 with an argument each, then 0xA6, 0xC0, 0xA1) before
 // every frame, then eight times one page command and 128 data bytes. That
 // prefix "can vary on the device", so nothing here counts it.
+//
+// **Setting up.** A capture of the same device booting (4 November 2026) opens
+//
+//   AE 20 02 00 10 B0 81 40 C0 A1 ... 21 00 7F 22 00 07 40  [252 us]
+//
+// and that `B0` has no pixels after it, nor does the window: the driver is
+// putting the pointer at the origin. Reading them as draws took the rest of the
+// setup for pixels, and with a silence short enough to cut that draw off, the
+// column was left 25 along in `ssd1306_slave` and every frame after it was
+// shifted for good, because this driver never sets the column again. It draws
+// its first frame with the display still off and turns it on afterwards, so
+// 0xAF alone would be too late, and needing the silence is why the rule has two
+// ways out.
 //
 // THE COMMAND TABLE IS QUOTED from the SSD1306 datasheet rev 1.1, section 10,
 // and matches `ssd1306_slave`, plus the scroll commands 0x26, 0x27, 0x29,
@@ -51,8 +66,11 @@
 //     PAGE_COLUMN_CMDS says how many there are. Before a page command they are
 //     simply read. 0 is the device above; a wrong value moves every tag in the
 //     page by that many bytes.
-//   - 0x21 and 0x22 both sent during initialisation with more commands after
-//     them: those commands are read as pixels, for one window's worth of bytes.
+//   - 0x21 and 0x22, or a page command, sent during initialisation with no
+//     0xAE before them: the commands after them are read as pixels.
+//   - a frame drawn after 0xAE with no silence or 0xAF first: the pixels are
+//     read as commands. With IDLE_CLOCKS = 0 that is this device's first frame,
+//     which is blank and comes before its 0xAF, and the next one is right.
 //   - a command this table does not have is taken to have no arguments.
 //
 // Not a transport: it takes bytes and gives bytes, one clock later. A silence
@@ -61,9 +79,11 @@
 //
 // Tested in `tests/ip_library.rs` and `examples/basys3/ssd1306_decode_tb.v`.
 // Twenty hand mutations of this logic were run on 4 November 2026 against the
-// former and all were caught. **Nothing here has run on a part**, and the
-// real device's silence, which IDLE_CLOCKS must be set from, has not been
-// measured.
+// former and all were caught. **Nothing here has run on a part.**
+//
+// **IDLE_CLOCKS for this device, MEASURED from that capture:** the longest time
+// without an `sclk` edge inside a run is 9.8 us and the shortest between runs is
+// 252.6 us, so 100 us: 10000 clocks at 100 MHz, 11200 at 112.
 module ssd1306_dc_decode #(
     parameter COLUMNS          = 128,
     parameter PAGES            = 8,
@@ -118,6 +138,8 @@ module ssd1306_dc_decode #(
     reg [IDLE_W-1:0]    idle_cnt;
     // In a draw, with this many more bytes in this page and pages after it.
     reg                 draw_q;
+    // After 0xAE, when a page command or a window only sets the pointer.
+    reg                 setup_q;
     reg [8:0]           cols_left;
     reg [4:0]           pages_left;
     reg [8:0]           cols_reload;
@@ -149,8 +171,8 @@ module ssd1306_dc_decode #(
 
     wire ends_cols  = (args_left == 3'd1) && (opcode == 8'h21);
     wire ends_pages = (args_left == 3'd1) && (opcode == 8'h22);
-    wire opens_window = !draw_q && ((ends_cols && have_pages)
-                                 || (ends_pages && have_cols));
+    wire opens_window = !draw_q && !setup_q && ((ends_cols && have_pages)
+                                             || (ends_pages && have_cols));
 
     // A column command moves this. So a page command, or the last column
     // command after one, sees where the draw starts in the same clock.
@@ -164,8 +186,9 @@ module ssd1306_dc_decode #(
     wire [8:0] column9 = {1'b0, column_now};
     wire [8:0] page_rest = (column9 <= COL_TOP) ? (COL_TOP - column9) : 9'd0;
 
-    wire opens_page = fresh && ((after_page == 2'd0) ? (is_page && AFTER_PAGE == 2'd0)
-                                                     : (after_page == 2'd1));
+    wire opens_page = fresh && !setup_q
+                   && ((after_page == 2'd0) ? (is_page && AFTER_PAGE == 2'd0)
+                                            : (after_page == 2'd1));
 
     // The tag is the state before this byte: a page command is a command.
     wire is_data = draw_q;
@@ -183,6 +206,7 @@ module ssd1306_dc_decode #(
             synced_q       <= (IDLE_CLOCKS == 0);
             idle_cnt       <= {IDLE_W{1'b0}};
             draw_q         <= 1'b0;
+            setup_q        <= 1'b0;
             cols_left      <= 9'd0;
             pages_left     <= 5'd0;
             cols_reload    <= 9'd0;
@@ -237,11 +261,11 @@ module ssd1306_dc_decode #(
                     end
                     if (ends_cols) begin
                         win_cols  <= cols_now;
-                        have_cols <= 1'b1;
+                        have_cols <= !setup_q;
                     end
                     if (ends_pages) begin
                         win_pages  <= pages_now;
-                        have_pages <= 1'b1;
+                        have_pages <= !setup_q;
                     end
                     if (opens_window) begin
                         draw_q      <= 1'b1;
@@ -260,6 +284,8 @@ module ssd1306_dc_decode #(
                     if (after_page != 2'd0) begin
                         after_page <= after_page - 2'd1;
                     end else begin
+                        if (in_byte == 8'hAE) setup_q <= 1'b1;
+                        if (in_byte == 8'hAF) setup_q <= 1'b0;
                         casez (in_byte)
                             8'h20, 8'h81, 8'h8D, 8'hA8, 8'hD3, 8'hD5, 8'hD9,
                             8'hDA, 8'hDB:
@@ -291,6 +317,7 @@ module ssd1306_dc_decode #(
             // a byte that closes in this very clock has already been tagged.
             if (new_run) begin
                 draw_q     <= 1'b0;
+                setup_q    <= 1'b0;
                 args_left  <= 3'd0;
                 after_page <= 2'd0;
                 column     <= 8'd0;

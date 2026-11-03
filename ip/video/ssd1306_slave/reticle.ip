@@ -11,8 +11,9 @@
 # What it is for: developing and watching a display driver without the
 # panel, and capturing the pixels a driver would have drawn.
 # `frame_done` strobes when a whole frame has landed — the pointer wrapping
-# to the start of both windows, which needs no idle timer and no guess
-# about rate — so a host can take a copy after each redraw.
+# to the start of both windows, or in page mode every page having wrapped,
+# which needs no idle timer and no guess about rate — so a host can take a
+# copy after each redraw.
 #
 # The memory is an SSD1306's, which is **pages and not scanlines**: each
 # byte is eight vertically stacked pixels, bit 0 the topmost, so pixel
@@ -50,7 +51,7 @@
 # space — so a driver using something unmodelled is a number somebody can
 # read rather than a silent misbehaviour.
 name ssd1306_slave
-version 1.0.0
+version 1.1.0
 license MIT
 description "An SSD1306-compatible mono display as a slave: the command set, the page-organised display memory, a readable frame buffer and a strobe when a frame is complete"
 

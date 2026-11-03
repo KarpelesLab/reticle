@@ -85,9 +85,14 @@
 // It is not a guess about timing and it needs no idle detector: a driver
 // that writes 1024 bytes in horizontal mode produces exactly one strobe,
 // whatever rate it writes at and however the bytes are split across
-// transfers. In page mode a driver that fills all eight pages also
-// produces one, on the last wrap. A driver that writes part of the screen
-// produces none, which is correct — nothing was redrawn.
+// transfers. In page mode it fires when **every page has wrapped** since the
+// last one, in whatever order the driver walked them. A driver that writes
+// part of the screen produces none, which is correct — nothing was redrawn.
+//
+// That page-mode sentence used to be here with code that reported nothing in
+// page mode at all. The device on the card bench draws only in page mode, so
+// `o` never sent it a frame and the frame count read zero (found replaying a
+// capture of it, 4 November 2026).
 //
 // `frame_count` counts the strobes.
 //
@@ -274,6 +279,9 @@ module ssd1306_slave #(
     reg [7:0]           arg0_q;
 
     reg                 frame_q;
+    // Pages whose last column has been written since the last frame, for
+    // page mode, which has no window to wrap.
+    reg [PAGES-1:0]     pages_full_q;
 
     reg [COUNT_WIDTH-1:0] cmds_q, datas_q, frames_q, unknown_q;
 
@@ -285,6 +293,8 @@ module ssd1306_slave #(
     // window: the datasheet is explicit that the column window applies to
     // the horizontal and vertical modes.
     wire page_mode_wrap = (col_q == (COLUMNS - 1));
+    localparam [PAGES-1:0] PAGE_ONE = 1;
+    wire [PAGES-1:0] pages_full_now = pages_full_q | (PAGE_ONE << page_q);
 
     reg [COL_BITS-1:0]  next_col;
     reg [PAGE_BITS-1:0] next_page;
@@ -322,11 +332,11 @@ module ssd1306_slave #(
                 end
             end
             default: begin
-                // Page mode: the column wraps and the page stays. A wrap
-                // here is not a frame — only the eighth page's wrap would
-                // be, and nothing says the driver walked the pages in
-                // order, so this reports none.
+                // Page mode: the column wraps and the page stays. Nothing
+                // says the driver walked the pages in order, so a frame is
+                // the wrap that completes the set.
                 next_col = page_mode_wrap ? {COL_BITS{1'b0}} : (col_q + 1'b1);
+                next_wraps = page_mode_wrap && (&pages_full_now);
             end
         endcase
     end
@@ -368,6 +378,7 @@ module ssd1306_slave #(
             opcode_q     <= 8'd0;
             arg0_q       <= 8'd0;
             frame_q      <= 1'b0;
+            pages_full_q <= {PAGES{1'b0}};
             wr_en        <= 1'b0;
             wr_addr      <= {ADDR_BITS{1'b0}};
             wr_data      <= 8'd0;
@@ -386,6 +397,9 @@ module ssd1306_slave #(
                 wr_data <= in_byte;
                 col_q   <= next_col;
                 page_q  <= next_page;
+                if (mode_q == MODE_PAGE && page_mode_wrap) begin
+                    pages_full_q <= next_wraps ? {PAGES{1'b0}} : pages_full_now;
+                end
                 if (next_wraps) begin
                     frame_q <= 1'b1;
                     if (frames_q != CNT_MAX) frames_q <= frames_q + CNT_ONE;

@@ -1,0 +1,47 @@
+# The first two runs of a Ledger Nano X's SSD1306 link: the boot, and the frame
+# after it. Cut from a logic analyser capture of the user's device with its `dc`
+# wire connected, so the tags are what the wire said (4 November 2026).
+#   c ..   command bytes, in hexadecimal
+#   d ..   data bytes, in hexadecimal; `xx*n` is n of them
+#   s      a silence: 252 us, 7.7 ms and 2 s on the wire, in that order
+c ae 20 02 00 10 b0 81 40 c0 a1 a6 a8 3f d3 00 d9 1f da 10 db 40 8d 14 a4 21 00 7f 22 00 07 40
+s
+c db 40 d5 60 81 43 a6 c0 a1 b0
+d 00*128
+c b1
+d 00*128
+c b2
+d 00*128
+c b3
+d 00*128
+c b4
+d 00*128
+c b5
+d 00*128
+c b6
+d 00*128
+c b7
+d 00*128
+c af
+s
+c db 40 d5 20 81 42 a6 c0 a1 b0
+d 00*128
+c b1
+d 00*12 80*15 00*74 80*15 00*12
+c b2
+d 00*12 ff*3 03*12 00*74 03*12 ff*3 00*12
+c b3
+d 00*12 01*3 00*13 fe*2 00*10 fe*2 06*7 00*3 fe*2 06*5 0c fc f0 80 00*2
+d f0 f8 0c 06*4 0e 3c 38 00*3 fe*2 06*7 00*4 fe*2 06*4 04 8c fc 70 00*12
+d 01*3 00*12
+c b4
+d 00*28 ff*2 c0*7 00*3 ff*2 c3*6 c0*2 00*2 ff*2 c0*5 60 7f 3f 07 00*2 1f
+d 7f 60 c0*2 c3*2 63 7f ff 00*3 ff*2 c3*6 c0*2 00*3 ff*2 03*5 ff fd f8
+d 00*27
+c b5
+d 00*12 ff*3 80*12 00*74 80*12 ff*3 00*12
+c b6
+d 00*12 03*15 00*74 03*15 00*12
+c b7
+d 00*128
+s

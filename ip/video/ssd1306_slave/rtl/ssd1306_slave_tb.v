@@ -70,6 +70,7 @@ module ssd1306_slave_tb;
     // taken from the block, so the block's own counter can be checked
     // against an independent tally.
     integer strobes = 0;
+    integer page_frame_base = 0;
     always @(posedge clk) if (rst_n && frame_done) strobes = strobes + 1;
 
     integer sent_cmds = 0;
@@ -272,6 +273,55 @@ module ssd1306_slave_tb;
             $display("FAIL: page mode moved the page to %0d", page_ptr); $finish;
         end
 
+        // ---- Page mode: a frame is every page wrapped, in any order. ----
+        page_frame_base = strobes;
+        cmd(8'h00); cmd(8'h10);
+        for (p = PAGES - 1; p >= 0; p = p - 1) begin
+            if (strobes !== page_frame_base) begin
+                $display("FAIL: a frame before page %0d was drawn", p); $finish;
+            end
+            cmd(8'hB0 | p);
+            for (i = 0; i < COLUMNS; i = i + 1) dat(8'h3C);
+        end
+        expect_counts(`__LINE__);
+        if (strobes !== page_frame_base + 1) begin
+            $display("FAIL: all %0d pages drawn gave %0d frames", PAGES,
+                     strobes - page_frame_base);
+            $finish;
+        end
+        // One page twice and the rest not at all is not a frame.
+        page_frame_base = strobes;
+        for (p = 0; p < 2; p = p + 1) begin
+            cmd(8'hB2);
+            for (i = 0; i < COLUMNS; i = i + 1) dat(8'hC3);
+        end
+        if (strobes !== page_frame_base) begin
+            $display("FAIL: one page drawn twice was a frame"); $finish;
+        end
+        // Back to a clean set for whatever follows.
+        for (p = 0; p < PAGES; p = p + 1) begin
+            if (p != 2) begin
+                cmd(8'hB0 | p);
+                for (i = 0; i < COLUMNS; i = i + 1) dat(8'hC3);
+            end
+        end
+        expect_counts(`__LINE__);
+        // A page touched and not filled is not a page drawn.
+        page_frame_base = strobes;
+        for (p = 0; p < PAGES - 1; p = p + 1) begin
+            cmd(8'hB0 | p);
+            cmd(8'h00); cmd(8'h10);
+            dat(8'h81);
+        end
+        cmd(8'hB0 | (PAGES - 1));
+        cmd(8'h00); cmd(8'h10);
+        for (i = 0; i < COLUMNS; i = i + 1) dat(8'h18);
+        if (strobes !== page_frame_base) begin
+            $display("FAIL: one page filled and the rest touched was a frame");
+            $finish;
+        end
+        expect_counts(`__LINE__);
+
         // ---- A command this block does not implement is counted. ----
         cmd(8'h2E);                       // deactivate scroll: not modelled
         expect_counts(`__LINE__);
@@ -279,7 +329,7 @@ module ssd1306_slave_tb;
             $display("FAIL: unknown_cmds is %0d, wanted 1", unknown_cmds); $finish;
         end
 
-        $display("PASS: power-on state, a real initialisation sequence, a full frame with every one of %0d bytes at an independently computed address, exactly one strobe per frame and none for a partial one, a window that does not write past its end, page addressing with the split column commands, and every counter equal to what was driven at six checkpoints",
+        $display("PASS: power-on state, a real initialisation sequence, a full frame with every one of %0d bytes at an independently computed address, exactly one strobe per frame and none for a partial one, a window that does not write past its end, page addressing with the split column commands and its frames, and every counter equal to what was driven at six checkpoints",
                  WORDS);
         $finish;
     end

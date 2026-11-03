@@ -271,6 +271,15 @@ boot; the bench's 2.5.1 has done so only after an onboarding restart).
   before the rate was changed instead, and all three were reverted; see
   `iso7816_burst_tb.v`, which reproduces the loss, and `partsel.v`, which
   clears the construct that was suspected.
+- **`bit errors` is not zero after this device powers up, and that is the
+  device.** A capture of it (`~/projects/visgrok`, 4 November 2026, with `dc`
+  connected) shows noise on `sclk` and `cs_n` for about 300 us while it powers
+  up, down to one-sample pulses at 200 MHz. Replayed through this design that
+  counted 227 bit errors and 164 overruns at 100 MHz, 288 and 289 at 112, and
+  delivered no byte. After that all 12524 bytes came through with no error, the
+  12 frames landed in memory exactly as an independent decoder of the capture
+  has them, and `?` counts 12 frames. So LD11 being lit says little unless it
+  lights after boot. This was a simulation of the captured wires, not a board.
 - **A loose SPI wire reads as `unknown` climbing while `data` climbs too.**
   An undriven `mosi` floats high, so every byte is `FF`: not a valid command,
   and the frame buffer fills with ones. Check `?` before trusting a display
