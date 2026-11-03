@@ -5418,6 +5418,321 @@ fn spi_display_rx_reports_a_run_that_is_not_the_declared_shape() {
     assert_eq!(got.resyncs, 2);
 }
 
+// ---------------------------------------------------------------------------
+// ssd1306_dc_decode: the tag read from the commands
+// ---------------------------------------------------------------------------
+
+/// One byte into the decoder, with what the `dc` wire would have said.
+type Tagged = (u8, bool);
+
+/// The frame the user reported from their device: a nine-byte prefix, then for
+/// each page one command and `columns` pixels. The pixels and the prefix's
+/// arguments deliberately include every byte that means something as a
+/// command, so a decoder reading the wrong thing would act on one.
+fn device_frame(columns: usize, pages: u8, seed: u8) -> Vec<Tagged> {
+    let mut bytes = vec![
+        (0xDB, false),
+        (0xB0, false),
+        (0xD5, false),
+        (0x21, false),
+        (0x81, false),
+        (0xB7, false),
+        (0xA6, false),
+        (0xC0, false),
+        (0xA1, false),
+    ];
+    let tricky = [0xB0u8, 0x21, 0x22, 0xAE, 0x00, 0x10, 0x81];
+    for page in 0..pages {
+        bytes.push((0xB0 + page, false));
+        for x in 0..columns {
+            let byte = tricky[(x + usize::from(page) + usize::from(seed)) % tricky.len()];
+            bytes.push((byte, true));
+        }
+    }
+    bytes
+}
+
+struct DecodedTags {
+    bytes: Vec<Tagged>,
+    page_draws: u64,
+    window_draws: u64,
+    short_draws: u64,
+    dropped: u64,
+    synced: bool,
+}
+
+/// `Some(n)` is `n` clocks with nothing on the link. Every byte is preceded by
+/// `gap` clocks and one clock of link activity, as its own `sclk` edges are.
+fn decode_session(params: &[(&str, &str)], gap: u64, script: &[Option<u8>]) -> DecodedTags {
+    let design = design_of("ssd1306_dc_decode", "ssd1306_dc_decode", params);
+    let mut sim = simulate(&design, "ssd1306_dc_decode");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let in_byte = top_net(&sim, "in_byte");
+    let in_valid = top_net(&sim, "in_valid");
+    let active = top_net(&sim, "link_active");
+    let out_byte = top_net(&sim, "out_byte");
+    let out_is_data = top_net(&sim, "out_is_data");
+    let out_valid = top_net(&sim, "out_valid");
+    sim.set(in_byte, word(8, 0));
+    sim.set(in_valid, bit(false));
+    sim.set(active, bit(false));
+    reset(&mut sim, clk, rst_n);
+
+    let mut bytes = Vec::new();
+    let mut tick = |sim: &mut Simulator<'_>| {
+        cycle(sim, clk, HALF);
+        if high(sim, out_valid) {
+            bytes.push((octet(get_u64(sim, out_byte)), high(sim, out_is_data)));
+        }
+    };
+    for step in script {
+        match step {
+            Some(byte) => {
+                for _ in 0..gap {
+                    tick(&mut sim);
+                }
+                sim.set(active, bit(true));
+                tick(&mut sim);
+                sim.set(active, bit(false));
+                sim.set(in_byte, word(8, u64::from(*byte)));
+                sim.set(in_valid, bit(true));
+                tick(&mut sim);
+                sim.set(in_valid, bit(false));
+            }
+            None => {
+                for _ in 0..200 {
+                    tick(&mut sim);
+                }
+            }
+        }
+    }
+    tick(&mut sim);
+    tick(&mut sim);
+    DecodedTags {
+        page_draws: get_u64(&sim, top_net(&sim, "page_draws")),
+        window_draws: get_u64(&sim, top_net(&sim, "window_draws")),
+        short_draws: get_u64(&sim, top_net(&sim, "short_draws")),
+        dropped: get_u64(&sim, top_net(&sim, "dropped_bytes")),
+        synced: high(&sim, top_net(&sim, "synced")),
+        bytes,
+    }
+}
+
+/// The script for some tagged bytes, opening on a silence and with one between
+/// frames: `None` is 200 clocks, past the threshold these tests use.
+fn with_silences(frames: &[Vec<Tagged>]) -> (Vec<Option<u8>>, Vec<Tagged>) {
+    let mut script = vec![None];
+    let mut expected = Vec::new();
+    for frame in frames {
+        script.extend(frame.iter().map(|b| Some(b.0)));
+        script.push(None);
+        expected.extend_from_slice(frame);
+    }
+    (script, expected)
+}
+
+/// The device's own traffic at the real geometry, then with its prefix changed,
+/// which is the case a fixed prefix cannot do. No silences are needed by the
+/// count, so this also runs with the rule off and frames back to back. It would
+/// catch an argument read as a command (the prefix's are page commands and a
+/// window command), a pixel read as one, and a page a byte long or short. It
+/// says nothing about the device, whose traffic this only copies.
+#[test]
+fn ssd1306_dc_decode_follows_the_device_and_a_prefix_that_varies() {
+    let mut varied = vec![(0xAF, false), (0xD9, false), (0xB3, false)];
+    varied.extend(device_frame(128, 8, 3).split_off(9));
+    let mut longer = device_frame(128, 8, 5);
+    longer.splice(
+        0..0,
+        [(0x8D, false), (0x14, false), (0xA8, false), (0x3F, false)],
+    );
+    let frames = [device_frame(128, 8, 0), varied, longer];
+    let total: u64 = 3 * 8;
+
+    let (script, expected) = with_silences(&frames);
+    let got = decode_session(&[("IDLE_CLOCKS", "100")], 16, &script);
+    assert_eq!(got.bytes, expected, "with the silence rule");
+    assert_eq!(got.page_draws, total);
+    assert_eq!(got.short_draws, 0);
+    assert_eq!(got.dropped, 0, "the line was idle from reset");
+
+    let script: Vec<Option<u8>> = expected.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[], 0, &script);
+    assert_eq!(got.bytes, expected, "with no silence at all");
+    assert_eq!(got.page_draws, total);
+}
+
+/// A window opens a draw of its own size, in either order, and is cut to the
+/// geometry as `ssd1306_slave` cuts it: 0x22 00 FF means the last page, and not
+/// 256 of them. It would catch a width or height one out, or the 0xFF taken
+/// literally, which would swallow the commands of the next frame.
+#[test]
+fn ssd1306_dc_decode_counts_a_window() {
+    let window = |first: [u8; 3], second: [u8; 3], bytes: usize| {
+        let mut frame: Vec<Tagged> = first.iter().chain(&second).map(|b| (*b, false)).collect();
+        frame
+            .extend((0..bytes).map(|i| (0x20 + octet(u64::try_from(i % 3).expect("small")), true)));
+        frame
+    };
+    let frames = [
+        window([0x21, 0x00, 0x7F], [0x22, 0x00, 0x07], 1024),
+        window([0x22, 0x00, 0xFF], [0x21, 0x00, 0x7F], 1024),
+        window([0x21, 0x10, 0x12], [0x22, 0x02, 0x03], 6),
+    ];
+    let mut bytes: Vec<Tagged> = Vec::new();
+    for frame in &frames {
+        bytes.extend_from_slice(frame);
+        bytes.push((0xAF, false));
+    }
+    let script: Vec<Option<u8>> = bytes.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[], 0, &script);
+    assert_eq!(got.bytes, bytes);
+    assert_eq!(got.window_draws, 3);
+}
+
+/// A column command before a page command starts the draw part way along, and
+/// after one is the case only a parameter can separate from a pixel. It would
+/// catch the column being ignored, either nibble wrong, or a column counted as
+/// a pixel. A page draw with its column unset afterwards starts from 0 again.
+#[test]
+fn ssd1306_dc_decode_starts_a_page_draw_from_its_column() {
+    let page = |prefix: &[u8], suffix: &[u8], n: usize| {
+        let mut frame: Vec<Tagged> = prefix.iter().chain(suffix).map(|b| (*b, false)).collect();
+        frame.extend(std::iter::repeat_n((0xAE, true), n));
+        frame
+    };
+    // Column 0x12: low 2, high 1. So 128 - 18 bytes.
+    let mut before = page(&[0x02, 0x11, 0xB1], &[], 110);
+    before.extend(page(&[0xB2], &[], 128));
+    let script: Vec<Option<u8>> = before.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[], 0, &script);
+    assert_eq!(got.bytes, before, "before the page command");
+
+    let mut after = page(&[0xB1], &[0x02, 0x11], 110);
+    after.extend(page(&[0xB2], &[0x00, 0x10], 128));
+    let script: Vec<Option<u8>> = after.iter().map(|b| Some(b.0)).collect();
+    let got = decode_session(&[("PAGE_COLUMN_CMDS", "2")], 0, &script);
+    assert_eq!(got.bytes, after, "after the page command");
+    assert_eq!(got.page_draws, 2);
+}
+
+/// Silence ends a draw short, reports it, and recovers, and only silence does.
+/// A part that comes up mid-frame delivers nothing until it sees one, so no
+/// pixel reaches the display as a command. It would catch the rule being off by
+/// a run, a short draw unreported, a whole one reported, and a mid-frame start
+/// delivering a byte. The silence's threshold is pinned by the next test.
+#[test]
+fn ssd1306_dc_decode_recovers_from_a_silence_and_not_before_one() {
+    // A draw cut short: the commands after it would be pixels without the
+    // silence, as the second half measures.
+    let mut short = device_frame(16, 1, 0);
+    short.truncate(short.len() - 5);
+    let whole = device_frame(16, 1, 1);
+    let params = [("COLUMNS", "16"), ("PAGES", "1"), ("IDLE_CLOCKS", "100")];
+    let (script, expected) = with_silences(&[short.clone(), whole.clone()]);
+    let got = decode_session(&params, 4, &script);
+    assert_eq!(got.bytes, expected);
+    assert_eq!(got.short_draws, 1, "the short one, and not the whole one");
+
+    let no_rule = [("COLUMNS", "16"), ("PAGES", "1")];
+    let got = decode_session(&no_rule, 4, &script);
+    assert_ne!(got.bytes, expected, "with no silence there is no recovery");
+
+    // Mid-frame at reset: bytes with no silence before them are dropped.
+    let tail = [0xAEu8, 0xB0, 0x21];
+    let mut script: Vec<Option<u8>> = tail.iter().map(|b| Some(*b)).collect();
+    script.push(None);
+    script.extend(whole.iter().map(|b| Some(b.0)));
+    let got = decode_session(&params, 4, &script);
+    assert_eq!(got.bytes, whole, "nothing of the tail reaches the display");
+    assert_eq!(got.dropped, 3);
+    assert!(got.synced);
+}
+
+/// The threshold is exact, and a silence reaches the next activity and not a
+/// byte closing before it. Bytes `gap` clocks apart are `gap + 1` clocks of no
+/// activity counted from the clock after the last. It would catch the rule being
+/// a clock out either way. It would not say what a real driver's number is.
+#[test]
+fn ssd1306_dc_decode_silence_is_a_number_of_clocks() {
+    let frame = device_frame(16, 1, 0);
+    let script: Vec<Option<u8>> = std::iter::once(None)
+        .chain(frame.iter().map(|b| Some(b.0)))
+        .collect();
+    // Activity then the byte, so two clocks at gap 0 between activities.
+    let run = |idle: &str| {
+        decode_session(
+            &[("COLUMNS", "16"), ("PAGES", "1"), ("IDLE_CLOCKS", idle)],
+            10,
+            &script,
+        )
+    };
+    let got = run("12");
+    assert_eq!(got.bytes, frame, "11 clocks between activities is not 12");
+    assert_eq!(got.short_draws, 0);
+
+    let got = run("11");
+    assert_eq!(got.bytes.len(), frame.len(), "too short loses no byte");
+    assert!(
+        got.bytes.iter().all(|b| !b.1),
+        "a run restarts at each byte, so no byte is ever a pixel"
+    );
+}
+
+/// A master holding its select through the delay: the last byte closes after
+/// the threshold, with the activity that preceded it long gone. That byte is
+/// still in the draw, and the next frame still starts clean. Measuring silence
+/// from `in_valid` could not do this, which is why `link_active` is a port.
+#[test]
+fn ssd1306_dc_decode_keeps_a_byte_that_closes_after_the_threshold() {
+    let design = design_of(
+        "ssd1306_dc_decode",
+        "ssd1306_dc_decode",
+        &[("COLUMNS", "2"), ("PAGES", "1"), ("IDLE_CLOCKS", "10")],
+    );
+    let mut sim = simulate(&design, "ssd1306_dc_decode");
+    let clk = top_net(&sim, "clk");
+    let rst_n = top_net(&sim, "rst_n");
+    let in_byte = top_net(&sim, "in_byte");
+    let in_valid = top_net(&sim, "in_valid");
+    let active = top_net(&sim, "link_active");
+    let out_is_data = top_net(&sim, "out_is_data");
+    let out_valid = top_net(&sim, "out_valid");
+    sim.set(in_byte, word(8, 0));
+    sim.set(in_valid, bit(false));
+    sim.set(active, bit(false));
+    reset(&mut sim, clk, rst_n);
+    for _ in 0..20 {
+        cycle(&mut sim, clk, HALF);
+    }
+    let send = |sim: &mut Simulator<'_>, byte: u64, hold: u64| {
+        sim.set(active, bit(true));
+        cycle(sim, clk, HALF);
+        sim.set(active, bit(false));
+        for _ in 0..hold {
+            cycle(sim, clk, HALF);
+        }
+        sim.set(in_byte, word(8, byte));
+        sim.set(in_valid, bit(true));
+        cycle(sim, clk, HALF);
+        sim.set(in_valid, bit(false));
+        assert!(high(sim, out_valid), "byte {byte:#x} delivered");
+        let tag = high(sim, out_is_data);
+        cycle(sim, clk, HALF);
+        tag
+    };
+    assert!(!send(&mut sim, 0xB0, 0), "the page command");
+    assert!(send(&mut sim, 0x55, 0), "the first pixel");
+    assert!(
+        send(&mut sim, 0x56, 30),
+        "the second, closing after the silence"
+    );
+    // The draw ended by its count, so the silence has nothing short to report.
+    assert!(!send(&mut sim, 0xAF, 0), "and the next byte is a command");
+    assert_eq!(get_u64(&sim, top_net(&sim, "short_draws")), 0);
+}
+
 #[test]
 fn spi_display_rx_is_one_clock_domain() {
     // The whole argument for oversampling rather than clocking on
@@ -28139,6 +28454,9 @@ fn a_streams_ready_is_a_function_of_registers() {
              which puts an asynchronous pin into a consumer's logic"
         );
     }
+    // A silence is measured from this, so it is a function of registers too.
+    let inputs = combinational_inputs_of("spi_display_rx", "spi_display_rx", &[], "sclk_active");
+    assert!(inputs.is_empty(), "`sclk_active` depends on {inputs:?}");
     // And the tag with no `dc` behind it, which is a different path to the
     // same output.
     for port in ["rx_is_data", "infer_resync_count"] {

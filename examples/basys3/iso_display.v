@@ -253,6 +253,9 @@ module iso_display #(
     parameter integer PRESS_COUNT = 1 << PRESS_BITS,
     // A driver wired with no `dc`: `ip/bus/spi_display_rx` README.md §3b.
     // DC_INFER = 1 ignores the pin, and the numbers are the driver's.
+    parameter DC_DECODE         = 0,
+    parameter DECODE_IDLE_CLOCKS = 0,
+    parameter PAGE_COLUMN_CMDS  = 0,
     parameter DC_INFER          = 0,
     parameter INFER_CMD_BYTES   = 0,
     parameter INFER_DATA_BYTES  = 0,
@@ -389,6 +392,8 @@ module iso_display #(
     ssd1306_console #(
         .TICK_BIT(TICK_BIT), .COLUMNS(COLUMNS), .PAGES(PAGES),
         .PRESS_BITS(PRESS_BITS), .PRESS_COUNT(PRESS_COUNT), .BLOCK_RAM(BLOCK_RAM),
+        .DC_DECODE(DC_DECODE), .DECODE_IDLE_CLOCKS(DECODE_IDLE_CLOCKS),
+        .PAGE_COLUMN_CMDS(PAGE_COLUMN_CMDS),
         .DC_INFER(DC_INFER), .INFER_CMD_BYTES(INFER_CMD_BYTES),
         .INFER_DATA_BYTES(INFER_DATA_BYTES),
         .INFER_IDLE_CLOCKS(INFER_IDLE_CLOCKS),

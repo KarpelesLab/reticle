@@ -1,0 +1,45 @@
+# ssd1306_dc_decode: works out the command/data tag an SSD1306 link's missing
+# `dc` wire would have carried, by reading the commands themselves.
+#
+# A page command (0xB0..0xB7) says a draw is about to start, and how much: the
+# rest of the page. A complete 0x21 and 0x22 window says the same. Everything
+# else is a command with a known number of arguments, so an initialisation
+# prefix may change from frame to frame and nothing here needs telling.
+#
+# What a command cannot say on this part is that a draw has been cut short, or
+# that a window set once still applies, so a silence on the link returns the
+# block to reading commands. The rtl header has the limits. **No part has run
+# this.** The traffic it is tested on is the shape the user reported from their
+# device, and the command table is quoted from the datasheet.
+name ssd1306_dc_decode
+version 1.0.0
+license MIT
+description "Recovers an SSD1306 link's command/data tag with no D/C wire, by decoding the command stream: page and window commands open a draw of known length, and a silence on the link recovers a lost place"
+
+top ssd1306_dc_decode
+target ice40
+target ecp5
+target xc7
+
+source rtl/ssd1306_dc_decode.v
+
+param COLUMNS int 128 1..512
+param PAGES int 8 1..32
+param IDLE_CLOCKS int 0 0..16777215
+param PAGE_COLUMN_CMDS int 0 0..2
+param COUNT_WIDTH int 16 1..32
+
+port clk in
+port rst_n in
+port in_byte in 8
+port in_valid in
+port link_active in
+port out_byte out 8
+port out_is_data out
+port out_valid out
+port synced out
+port drawing out
+port page_draws out COUNT_WIDTH
+port window_draws out COUNT_WIDTH
+port short_draws out COUNT_WIDTH
+port dropped_bytes out COUNT_WIDTH

@@ -1405,6 +1405,26 @@ fn the_ssd1306_console_works_with_no_dc_wire() {
     );
 }
 
+/// The device's own traffic, pins to frame buffer, with `dc` undriven and the
+/// tag read from the commands. The prefix changes between frames, and pixels
+/// and arguments include bytes that mean something as commands, so a misread
+/// moves the dump or the counts. It would not catch a device whose traffic
+/// differs from what the user reported.
+#[cfg(feature = "sim")]
+#[test]
+fn the_ssd1306_console_decodes_the_device_with_no_dc_wire() {
+    basys3_testbench(
+        "examples/basys3/ssd1306_decode_tb.v",
+        &[
+            "examples/basys3/ssd1306_console.v",
+            "ip/bus/spi_display_rx/rtl/spi_display_rx.v",
+            "ip/util/cdc_sync/rtl/cdc_sync.v",
+            "ip/video/ssd1306_dc_decode/rtl/ssd1306_dc_decode.v",
+            "ip/video/ssd1306_slave/rtl/ssd1306_slave.v",
+        ],
+    );
+}
+
 /// The card terminal answers `k`, `s`, `k` sent back to back, in order,
 /// and `W` sends a whole SESSION_START and a ticker after the card's status.
 /// Before the request queue only the first came back, because both request

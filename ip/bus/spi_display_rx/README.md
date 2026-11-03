@@ -323,6 +323,14 @@ The direct statement of the goal is
 traffic through the block with `dc` read, then the same traffic with `dc`
 dropped, and every byte and tag must be equal.
 
+**For an SSD1306, use `ip/video/ssd1306_dc_decode` instead of the numbers in
+the table.** Fixed positions were built first, and they were the wrong model
+for that part: the user asked whether a command does not say what comes next,
+and it does. A device that sends a varying prefix, reported on 4 November 2026
+as 9 bytes before 8 × (1 command + 128 data), breaks a fixed prefix the moment
+it varies and needs nothing declared by a decoder. This section's parameters
+remain for a link whose commands this library cannot read.
+
 So a full-screen 128x64 driver that sends the two address-window commands
 and a frame is `INFER_CMD_BYTES = 6`, `INFER_DATA_BYTES = 1024`, plus the
 idle rule at some time between the longest wait inside a run and the delay

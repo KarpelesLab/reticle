@@ -76,6 +76,7 @@ port bit_error_count out COUNT_WIDTH
 port dc_change_count out COUNT_WIDTH
 port overrun_count out COUNT_WIDTH
 port infer_resync_count out COUNT_WIDTH
+port sclk_active out
 port bit_count out 4
 port last_bit_count out 4
 port framed out

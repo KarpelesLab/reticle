@@ -148,6 +148,18 @@ module ssd1306_console #(
     parameter TICK_BIT = 25,
     parameter COLUMNS  = 128,
     parameter PAGES    = 8,
+    // A driver wired with no `dc`: `ip/bus/spi_display_rx` README.md §3b.
+    // DC_INFER = 1 ignores the pin, and the numbers are the driver's. For an
+    // SSD1306 DC_DECODE = 1 is better and needs no numbers but a silence:
+    // `ip/video/ssd1306_dc_decode`, whose source a build must then name.
+    parameter DC_DECODE         = 0,
+    parameter DECODE_IDLE_CLOCKS = 0,
+    parameter PAGE_COLUMN_CMDS  = 0,
+    parameter DC_INFER          = 0,
+    parameter INFER_CMD_BYTES   = 0,
+    parameter INFER_DATA_BYTES  = 0,
+    parameter INFER_IDLE_CLOCKS = 0,
+    parameter INFER_INIT_BYTES  = 0,
     // How long a button is held, as a power of two system clocks. 23 is
     // 75 ms at 112 MHz and 84 ms at 100 — comfortably longer than any
     // debounce a device is likely to apply, and short enough not to look
@@ -161,13 +173,6 @@ module ssd1306_console #(
     // buffer in a block RAM, which is right, and 0 puts it in lookup
     // tables. It is a parameter here only so a build can be tried both
     // ways from the top; see that module's comment on the memory.
-    // A driver wired with no `dc`: `ip/bus/spi_display_rx` README.md §3b.
-    // DC_INFER = 1 ignores the pin, and the numbers are the driver's.
-    parameter DC_INFER          = 0,
-    parameter INFER_CMD_BYTES   = 0,
-    parameter INFER_DATA_BYTES  = 0,
-    parameter INFER_IDLE_CLOCKS = 0,
-    parameter INFER_INIT_BYTES  = 0,
     parameter BLOCK_RAM = 1
 ) (
     input  wire        clk,
@@ -236,12 +241,12 @@ module ssd1306_console #(
     // The wire, and the display
     // =================================================================
 
-    wire [7:0]  rx_byte;
-    wire        rx_is_data, rx_valid;
+    wire [7:0]  link_byte;
+    wire        link_is_data, link_valid, link_active;
     wire [15:0] spi_bit_errors;
 
     spi_display_rx #(
-        .COUNT_WIDTH(16), .DC_INFER(DC_INFER),
+        .COUNT_WIDTH(16), .DC_INFER((DC_DECODE != 0) ? 1 : DC_INFER),
         .INFER_CMD_BYTES(INFER_CMD_BYTES),
         .INFER_DATA_BYTES(INFER_DATA_BYTES),
         .INFER_IDLE_CLOCKS(INFER_IDLE_CLOCKS),
@@ -249,12 +254,37 @@ module ssd1306_console #(
     ) wire_rx (
         .clk(clk), .rst_n(sub_rst_n),
         .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),
-        .rx_byte(rx_byte), .rx_is_data(rx_is_data), .rx_valid(rx_valid),
+        .rx_byte(link_byte), .rx_is_data(link_is_data), .rx_valid(link_valid),
         .cmd_byte_count(), .data_byte_count(), .frame_count(),
         .bit_error_count(spi_bit_errors), .dc_change_count(),
-        .overrun_count(), .infer_resync_count(), .bit_count(),
+        .overrun_count(), .infer_resync_count(),
+        .sclk_active(link_active), .bit_count(),
         .last_bit_count(),
         .framed(), .framing_error(), .dc_error(), .overrun());
+
+    wire [7:0]  rx_byte;
+    wire        rx_is_data, rx_valid;
+
+    generate
+        if (DC_DECODE != 0) begin : decode
+            ssd1306_dc_decode #(
+                .COLUMNS(COLUMNS), .PAGES(PAGES),
+                .IDLE_CLOCKS(DECODE_IDLE_CLOCKS),
+                .PAGE_COLUMN_CMDS(PAGE_COLUMN_CMDS)
+            ) tags (
+                .clk(clk), .rst_n(sub_rst_n),
+                .in_byte(link_byte), .in_valid(link_valid),
+                .link_active(link_active),
+                .out_byte(rx_byte), .out_is_data(rx_is_data),
+                .out_valid(rx_valid),
+                .synced(), .drawing(), .page_draws(), .window_draws(),
+                .short_draws(), .dropped_bytes());
+        end else begin : wire_tag
+            assign rx_byte    = link_byte;
+            assign rx_is_data = link_is_data;
+            assign rx_valid   = link_valid;
+        end
+    endgenerate
 
     reg  [15:0] rd_addr = 16'd0;
     wire [7:0]  rd_data;

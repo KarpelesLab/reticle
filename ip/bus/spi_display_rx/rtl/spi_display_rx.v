@@ -369,6 +369,9 @@ module spi_display_rx #(
     output wire [COUNT_WIDTH-1:0] dc_change_count,
     output wire [COUNT_WIDTH-1:0] overrun_count,
     output wire [COUNT_WIDTH-1:0] infer_resync_count,
+    // An `sclk` edge this clock, for whatever is measuring silence on the
+    // link: `ip/video/ssd1306_dc_decode`.
+    output wire                   sclk_active,
     output wire [3:0]             bit_count,
     output wire [3:0]             last_bit_count,
     output wire                   framed,
@@ -808,6 +811,7 @@ module spi_display_rx #(
     assign dc_change_count = dc_changes_q;
     assign overrun_count   = overruns_q;
     assign infer_resync_count = resyncs_q;
+    assign sclk_active     = sclk_edge;
     assign bit_count       = bit_cnt;
     assign last_bit_count  = last_cnt;
     assign framed          = framed_q;
