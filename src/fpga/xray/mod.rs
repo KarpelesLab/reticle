@@ -2881,6 +2881,25 @@ pub const ASTAR_WEIGHT: f64 = 2.0;
 /// pll_blink, bram_rom and lutram route as well either way.
 pub const PRESENT_GROWTH: f64 = 1.3;
 
+/// The most an uncritical search pays for a held node on this fabric, as a
+/// present factor, until fewer than [`UNCRITICAL_CAP_UNTIL`] nodes are
+/// overused ([`RouteOptions::uncritical_present_cap`](crate::fpga::route::RouteOptions)).
+///
+/// Measured on the ChipWhisperer-Husky Plus, 2026-11-03, seeds 1 to 6 built
+/// beside the uncapped router: every route converged, in 72 to 85 passes
+/// against 72 to 87. Node visits fell by 16 to 40 %, 50.0 G in all against
+/// 70.8 G, and pips by 1.6 to 3.4 %. `clk_usb`'s and the ADC's routed
+/// estimates were the same or lower on every seed. The clock-glitch
+/// MMCM's, whose period is 100 ns, rose by 0.7 to 2.4 ns. Lifted below 100
+/// overused nodes instead, seed 1 ended a hundred passes with two nodes
+/// overused and was placed again; never lifted, three seeds of five did.
+/// Not yet checked on the board. A setting tried at 10, not a measured
+/// optimum.
+pub const UNCRITICAL_PRESENT_CAP: f64 = 10.0;
+
+/// The overuse below which [`UNCRITICAL_PRESENT_CAP`] is lifted.
+pub const UNCRITICAL_CAP_UNTIL: usize = 1000;
+
 /// When this fabric's anneal stops for lack of progress
 /// ([`PlaceOptions::flat_steps`](crate::fpga::place::PlaceOptions) and
 /// `flat_fraction`): when ten steps have taken less than 0.2 % off the

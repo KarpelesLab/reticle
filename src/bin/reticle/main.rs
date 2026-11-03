@@ -3805,6 +3805,10 @@ fn write_xc7_bitstream(
             first_pass_present: Some(0.0),
             bounding_margin: Some(3),
             present_growth: reticle::fpga::xray::PRESENT_GROWTH,
+            // An uncritical search crosses a held wire sooner while the
+            // route is far from legal: see `xray::UNCRITICAL_PRESENT_CAP`.
+            uncritical_present_cap: reticle::fpga::xray::UNCRITICAL_PRESENT_CAP,
+            uncritical_cap_until: reticle::fpga::xray::UNCRITICAL_CAP_UNTIL,
             max_iterations: route_passes(args)?,
             // A lookup table's inputs are the router's to choose among, and
             // the truth table follows them below. See `xray::lutswap`.

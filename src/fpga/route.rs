@@ -323,6 +323,28 @@ pub struct RouteOptions {
     /// What makes the router timing-driven, or `None` for a router that
     /// minimises wire alone; see [`Timing`].
     pub timing: Option<Timing>,
+    /// The most a search that is not critical pays for a node another
+    /// signal holds, as a present factor, while the route is still far
+    /// from legal: until a pass ends with fewer than
+    /// [`RouteOptions::uncritical_cap_until`] nodes overused, or with the
+    /// overuse stalled as [`Timing::present_cap`] is lifted. Infinity, the
+    /// default, is no cap.
+    ///
+    /// In the middle passes of a congested design, a held wire costs an
+    /// uncritical search more than every free node near it, so it visits
+    /// all of those before taking the one it has to cross. On the
+    /// ChipWhisperer-Husky Plus a pass's single searches visited up to 9.4
+    /// million nodes, and passes 15 to 26 were most of the route. Capped,
+    /// those searches cross sooner and the negotiation still settles.
+    ///
+    /// The cap has to go before the end. Kept to the last pass, it left
+    /// three placements of five with two or three nodes overused after a
+    /// hundred passes, the last signals having too little reason to leave
+    /// a shared wire. `docs/fpga-xray.md` has the measurements.
+    pub uncritical_present_cap: f64,
+    /// The overuse below which [`RouteOptions::uncritical_present_cap`] is
+    /// lifted for the rest of the route; zero leaves it to the stall alone.
+    pub uncritical_cap_until: usize,
     /// Called with each iteration as it finishes, or `None`. The router
     /// writes nothing itself; this is how a caller that does — the
     /// command line's `--timing` — shows a route of many minutes moving
@@ -509,6 +531,8 @@ impl Default for RouteOptions {
             incremental: false,
             equivalent: Vec::new(),
             timing: None,
+            uncritical_present_cap: f64::INFINITY,
+            uncritical_cap_until: 0,
             on_iteration: None,
         }
     }
@@ -1051,6 +1075,7 @@ pub fn route(
         scratch.present_cap = timing.present_cap;
         scratch.budget = timing.search_budget;
     }
+    scratch.uncritical_cap = options.uncritical_present_cap;
     let mut routing = Routing::new(netlist.signals.len());
     let mut report = RoutingReport::default();
     let mut present = options.present_factor;
@@ -1149,12 +1174,16 @@ pub fn route(
             routing.routes[terminals.signal] = Some(route);
         }
         let (overused_nodes, total_overuse) = state.overuse();
+        if overused_nodes < options.uncritical_cap_until {
+            scratch.uncritical_cap = f64::INFINITY;
+        }
         if overused_nodes < least {
             (least, stalled) = (overused_nodes, 0);
         } else if overused_nodes > 0 {
             stalled += 1;
             if stalled >= STALL {
                 scratch.present_cap = f64::INFINITY;
+                scratch.uncritical_cap = f64::INFINITY;
             }
         }
         if options.bounding_margin.is_some() {
@@ -2534,6 +2563,9 @@ struct Scratch {
     tile_delay: f64,
     /// [`Timing::present_cap`], or infinity.
     present_cap: f64,
+    /// [`RouteOptions::uncritical_present_cap`] until it is lifted, then
+    /// infinity.
+    uncritical_cap: f64,
     /// [`Timing::search_budget`], or no limit.
     budget: u64,
     /// Whether the last search was a critical one that gave up at the
@@ -2561,6 +2593,7 @@ impl Scratch {
             queued: 0,
             tile_delay: 0.0,
             present_cap: f64::INFINITY,
+            uncritical_cap: f64::INFINITY,
             budget: u64::MAX,
             gave_up: false,
             gave_ups: 0,
@@ -3078,7 +3111,7 @@ fn maze(
                 slack * state.node_cost(root, at.base, present.min(scratch.present_cap))
                     + critical * f64::from(at.delay)
             } else {
-                state.node_cost(root, at.base, present)
+                state.node_cost(root, at.base, present.min(scratch.uncritical_cap))
             };
             let step = if state.reserved_against(root, scratch.signal) {
                 step * RESERVED_PENALTY
@@ -4398,6 +4431,106 @@ mod tests {
         assert_eq!(run(f64::INFINITY), (true, false, Some(5)));
         // Capped: n1 on the fast wire, three long, and n0 moved off it.
         assert_eq!(run(30.0), (false, true, Some(3)));
+    }
+
+    /// **[`RouteOptions::uncritical_present_cap`] reaches an uncritical
+    /// search, and is lifted once the overuse falls below
+    /// [`RouteOptions::uncritical_cap_until`].** One tile: `n0` (routed
+    /// first) has the wire `f` or a way of six wires, and `n1` has `f` or
+    /// `g`, which costs five. The first pass is free, so both take `f`.
+    /// Uncapped, the second pass's charge sends `n0` the long way and the
+    /// route ends there. Capped at 1 and never lifted, a held `f` is
+    /// cheaper than the long way, `n0` keeps it, and `n1` moves to `g` a
+    /// pass later. Capped, but lifted below two overused nodes, the first
+    /// pass's one lifts it and the route is the uncapped one. Would catch
+    /// the cap not reaching an uncritical search (the capped route is the
+    /// uncapped one), or never being lifted (the lifted one is the capped
+    /// one). Would not catch it reaching critical searches too, with no
+    /// timing here, nor the stall lifting it.
+    #[test]
+    fn an_uncritical_search_pays_the_capped_charge_until_it_is_lifted() {
+        let mut arch = Arch::new("loose", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        let long = ["s1", "s2", "s3", "s4", "s5", "s6"];
+        for name in ["out0", "out1", "in0", "in1", "f", "g"].iter().chain(&long) {
+            tile.wires.push(WireDecl {
+                name: (*name).to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "lut");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+            let mut dst = BelDecl::new(format!("dst{n}"), "ff");
+            dst.pins
+                .push(("d".to_owned(), WireRef::local(format!("in{n}"))));
+            tile.bels.push(dst);
+        }
+        let mut arcs = vec![
+            ("out0", "f"),
+            ("f", "in0"),
+            ("out1", "f"),
+            ("f", "in1"),
+            ("out1", "g"),
+            ("g", "in1"),
+        ];
+        let way: Vec<&str> = ["out0"]
+            .iter()
+            .chain(&long)
+            .chain(&["in0"])
+            .copied()
+            .collect();
+        arcs.extend(way.windows(2).map(|w| (w[0], w[1])));
+        for (k, (from, to)) in arcs.into_iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+        let netlist = pairs(2);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["src0", "dst0", "src1", "dst1"].iter().enumerate() {
+            let site = graph.site_index(&format!("X0Y0/{site}")).expect("site");
+            placement.place(index, site);
+        }
+        let g = (0..graph.nodes.len())
+            .find(|n| graph.wire(NodeId::try_from(*n).unwrap_or(0)).full_name() == "X0Y0/g")
+            .expect("the wire");
+        let mut base = vec![1.0f32; graph.nodes.len()];
+        base[g] = 5.0;
+        let run = |cap: f64, until: usize| {
+            let options = RouteOptions {
+                node_base: base.clone(),
+                present_factor: 1e6,
+                first_pass_present: Some(0.0),
+                uncritical_present_cap: cap,
+                uncritical_cap_until: until,
+                ..RouteOptions::default()
+            };
+            let (routing, report) = route(&netlist, &graph, &placement, &options).unwrap();
+            assert!(routing.verify(&netlist, &graph, &placement).is_empty());
+            assert_eq!(report.iterations.last().map(|i| i.overused_nodes), Some(0));
+            let on_f = routing
+                .route(0)
+                .unwrap()
+                .nodes
+                .iter()
+                .any(|n| graph.wire(*n).full_name() == "X0Y0/f");
+            (report.iterations.len(), on_f)
+        };
+        // Uncapped: `n0` the long way at the second pass.
+        assert_eq!(run(f64::INFINITY, 0), (2, false));
+        // Capped: `n0` keeps `f` and `n1` moves to `g`, a pass later.
+        assert_eq!(run(1.0, 0), (3, true));
+        // Lifted after the first pass: the uncapped route.
+        assert_eq!(run(1.0, 2), (2, false));
     }
 
     /// **A clean-up that does not converge keeps the legal routing it

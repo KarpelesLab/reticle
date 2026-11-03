@@ -5915,7 +5915,7 @@ measurable time:
 
 The visits are the cost, not what one visit costs.
 
-**Not kept: a cap on what an uncritical search pays for congestion.**
+**A cap on what an uncritical search pays for congestion, lifted before the end.**
 The probe above suggested capping, for uncritical searches only, the
 present factor at 10, so that crossing a held wire stays cheap enough not
 to flood. On seed 4's cached placement it routed in 1,581 s, 89 passes
@@ -5943,6 +5943,26 @@ kept. It shows where the time is: the middle passes, with thousands of
 nodes overused, cost up to half again what they need to. The last few
 nodes need the full charge. A remedy has to cut the first without
 weakening the second.
+
+Lifted below 1,000 overused nodes instead, which is still the middle of
+the route, it is kept (`xray::UNCRITICAL_PRESENT_CAP` and
+`UNCRITICAL_CAP_UNTIL`). Six seeds, each built beside the uncapped router:
+
+| seed | uncapped | lifted below 1,000 | pips | `clk_usb`, ADC |
+|---|---|---|---|---|
+| 1 | 76 passes, 12.50 G | 80, 10.47 G | −2.5 % | same |
+| 2 | 76, 13.18 G | 74, 9.34 G | −3.4 % | same |
+| 3 | 84, 12.93 G | 83, 8.54 G | −3.1 % | same |
+| 4 | 72, 6.83 G | 75, 5.58 G | −1.6 % | same |
+| 5 | 73, 10.31 G | 72, 6.95 G | −2.1 % | 16.62 ns against 16.81, ADC same |
+| 6 | 87, 15.05 G | 85, 9.07 G | −2.9 % | 6.41 ns against 6.55, `clk_usb` same |
+
+Every route converged. Visits fell from 70.8 G to 50.0 G, 29 %. The
+clock-glitch MMCM's estimate rose by 0.7 to 2.4 ns, against a 100 ns
+period. Lifted below 100, seeds 2 to 6 visited less still (4.4 to 7.0 G),
+but seed 1 did not converge. This is checked in software only: the
+Husky Plus was in use by another project, and how the new routes do in
+NewAE's tests has not been measured.
 
 ## What remains before an LED could light
 
