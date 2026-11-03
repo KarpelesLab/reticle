@@ -1224,7 +1224,9 @@ it. Each of these was run, and each came out clean:
 - **Clock region.** The flow takes track 14 to carry `PL_CLK0`
   everywhere, which had been measured in one region. A counter
   confined to each of the regions centred on rows 217, 279 and 341
-  counted at 100.009 MHz in each.
+  counted at 100.009 MHz in each. *(A counter cannot tell the clock from its
+  inverse; region 279's turned out to be inverted, "Which edge the flow
+  gives a flip-flop there".)*
 - **Synthesis.** `--verify` proves the mapping equivalent, and the
   mapped netlist (`--netlist`, which this part now writes too),
   simulated with models of `FDRE` and `LUT6`, answers every read of
@@ -1336,7 +1338,73 @@ What it explains, and what not yet:
   track 14 there does is not known.
 
 What a design should do meanwhile: keep its clocked logic out of rows
-249–309, or wholly inside them.
+249–309, or wholly inside them. *(Superseded the next day: the flow now
+corrects for the region, below, so a design may span it.)*
+
+### Which edge the flow gives a flip-flop there
+
+**Measured on the board, 2026-11-04,** with
+`examples/zcu104/clock_edges.v`: one toggle, sampled by a flip-flop in
+each region and compared in the toggle's own region, read over EMIO with
+no AXI slave on the bus. Its file says how to read the flags.
+
+| Sampler | Region | Before | Vivado's `CMT_L` tiles also copied | With the correction |
+|---|---|---|---|---|
+| rising edge, beside the toggle | 155 | same edge | same edge | same edge |
+| falling edge, beside the toggle | 155 | other edge | other edge | other edge |
+| rising edge | 217 | same edge | same edge | same edge |
+| rising edge, X28 rows 270–292 | 279 | **other edge** | **other edge** | same edge |
+| falling edge, same place | 279 | **same edge** | **same edge** | other edge |
+| rising edge, rows 250–266 | 279 | **other edge** | **other edge** | same edge |
+| rising edge, rows 296–308 | 279 | **other edge** | **other edge** | same edge |
+| rising edge, X33 | 279 | **other edge** | **other edge** | same edge |
+| rising edge | 341 | same edge | same edge | same edge |
+
+So every leaf column and both halves of region 279 are inverted alike,
+and the AXI port had nothing to do with it.
+
+**The correction.** A flip-flop the flow places in rows 249–309 is
+configured for the other edge: an `FDRE` gets its half-slice's
+`IS_C_INVERTED`, the documented bit an `FDRE_1` uses, and an `FDRE_1`
+loses it (`zcu104::INVERTED_CLOCK_ROWS` and `edge_for_row`). Every
+flip-flop of a half-slice is swapped together, so the placer's rule that
+keeps the two kinds apart still holds. The build reports how many it
+corrected. That is the last column above: the whole fabric beside the
+processor loads on `PL_CLK0`'s rising edge, as the Verilog says.
+
+What was ruled out on the way:
+
+- **Copying more of Vivado's clock network.** In region 279 the clock
+  reaches the processor's columns on horizontal route 9 from the east,
+  where the clock-management tiles are, and in region 155 on route 14
+  from the processor's side. The flow had never copied the `CMT_L`
+  tiles. They have frames of their own (column 125, shared with no
+  I/O tile), and Vivado set 242 bits in region 279's. Copied verbatim,
+  they changed nothing (the third column). Their database names the
+  same bit as the input inversion of two different global buffers, and
+  others entangled with the clock manager's settings, so it cannot say
+  which buffer, if any, feeds track 14 there.
+- **The leaves.** Almost every leaf Vivado turns on carries one to three
+  bits the database does not name, beside the two it does, and Reticle's
+  leaves carry none. They differ between leaves on the same track in the
+  same region (for leaf 10 in region 279: `12_084` alone, `12_090`
+  alone, or `12_090` with `28_072`), which reads like a delay setting
+  rather than a polarity, though that is not checked. Reticle's leaves
+  in regions 217 and 341 lack them too and load on the right edge.
+- **Vivado's own flip-flops.** Of the slice tiles in grid columns
+  150–200, none in region 279 has a clock inversion set (two in region
+  155 do). So Vivado's design loads its flip-flops there on whatever
+  track 14 carries in it. Most likely, then, in the base overlay the
+  track in region 279 is not `PL_CLK0` itself but a net of its own
+  carrying its inverse, for logic of the overlay's that runs on the
+  falling edge. That is a reading and not checked; the correction does
+  not depend on it.
+
+**A wrong reading, kept.** The measurement that made track 14 `PL_CLK0`
+(above, "What it counted") was a counter in `RCLK_INT_L_X29Y89`, which
+is in region 279, and so were the per-region counters of "Clock
+region" in the burst slave's list. A counter runs at the clock's rate
+whichever edge it uses, so none of them could have seen this.
 
 ### A safety net: the AXI timeout block
 
@@ -1385,10 +1453,10 @@ only that.
    lookup-table ripples; the lookup table's direct path to its
    flip-flop; and the reset pins of every group but the first, measured
    (the enables are, in "Which enable serves which flip-flops").
-2. **Why the clock region of row 279 runs on the other edge**
-   ("One clock region of the four runs on the other edge"), and until
-   that is known, a placement that keeps a design's flip-flops on one
-   side of it.
+2. **What inverts track 14 in the clock region of row 279.** The flow
+   corrects for it ("Which edge the flow gives a flip-flop there"), but
+   the correction is a measured fact about the borrowed network, and a
+   block RAM or DSP clocked there would need the same treatment.
 3. **A clock of Reticle's own.** `PL_CLK0` now reaches slices through
    Vivado's clock network, replayed (above). Building that network rather
    than borrowing it needs the processor's clock buffers on this die,

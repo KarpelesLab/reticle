@@ -1,0 +1,67 @@
+# clock_edges.v: the toggle and the comparisons in the region of rows
+# 165-180 (centred on 155), one sampler in each other region: d rows
+# 210-220 (217), e, el, eh and ee in four places of rows 249-309 (279),
+# g rows 335-345 (341). A region is its grid columns and rows.
+set_io clk PL_CLK0
+set_io f[0] EMIO_I0
+set_io f[1] EMIO_I1
+set_io f[2] EMIO_I2
+set_io f[3] EMIO_I3
+set_io f[4] EMIO_I4
+set_io f[5] EMIO_I5
+set_io f[6] EMIO_I6
+set_io f[7] EMIO_I7
+set_io f[8] EMIO_I8
+set_io f[9] EMIO_I9
+set_io f[10] EMIO_I10
+set_io f[11] EMIO_I11
+set_io f[12] EMIO_I12
+set_io f[13] EMIO_I13
+set_io f[14] EMIO_I14
+set_io f[15] EMIO_I15
+set_io f[16] EMIO_I16
+set_io f[17] EMIO_I17
+region c 162 165 175 180
+region d 162 210 175 220
+region e 162 270 175 292
+region el 162 250 175 266
+region eh 162 296 175 308
+region ee 185 270 198 292
+region g 162 335 175 345
+assign t* region c
+assign x_c0* region c
+assign q_c0* region c
+assign eq_c0* region c
+assign ne_c0* region c
+assign x_c1n* region c
+assign q_c1n* region c
+assign eq_c1n* region c
+assign ne_c1n* region c
+assign x_d0* region d
+assign q_d0* region c
+assign eq_d0* region c
+assign ne_d0* region c
+assign x_e0* region e
+assign q_e0* region c
+assign eq_e0* region c
+assign ne_e0* region c
+assign x_e1n* region e
+assign q_e1n* region c
+assign eq_e1n* region c
+assign ne_e1n* region c
+assign x_e2l* region el
+assign q_e2l* region c
+assign eq_e2l* region c
+assign ne_e2l* region c
+assign x_e3h* region eh
+assign q_e3h* region c
+assign eq_e3h* region c
+assign ne_e3h* region c
+assign x_e4e* region ee
+assign q_e4e* region c
+assign eq_e4e* region c
+assign ne_e4e* region c
+assign x_g0* region g
+assign q_g0* region c
+assign eq_g0* region c
+assign ne_g0* region c

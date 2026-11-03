@@ -499,6 +499,11 @@ pub struct FabricInputs<'a> {
 /// every `RCLK_INT_*` tile carries the leaf's two documented features —
 /// the track onto the leaf's input, and the leaf's buffer on — so the
 /// router turns on exactly the leaves a design uses.
+///
+/// The track carries the clock at every row, but not with the same
+/// polarity: in one clock region it arrives inverted, and the flow
+/// configures the flip-flops placed there for the other edge
+/// (`zcu104::INVERTED_CLOCK_ROWS`).
 pub const PL_CLK0: &str = "PL_CLK0";
 
 /// How many EMIO GPIO lines the processor has in each direction.

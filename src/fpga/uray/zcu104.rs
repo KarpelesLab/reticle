@@ -71,6 +71,36 @@ const PIN_SEARCH_DEPTH: usize = 4;
 /// 100.001 MHz (`docs/fpga-uray.md`).
 pub const PL_CLK0_TRACK: u32 = 14;
 
+/// The grid rows of the one clock region where that track carries
+/// `PL_CLK0` inverted: the region centred on row 279.
+///
+/// Measured on the ZCU104 on 2026-11-03 and 2026-11-04, by sampling one
+/// toggle from flip-flops in all four regions beside the processor: there
+/// a rising-edge flip-flop takes the clock's falling edge and a
+/// falling-edge one its rising edge, in four leaf columns and both halves
+/// of the region, at 25 to 125 MHz. Copying Vivado's clock-management
+/// tiles (`CMT_L`) as well did not change it, and Vivado's own flip-flops
+/// there set no clock inversion, so the track is most likely a different
+/// net there in the base overlay — its own inverted copy of the clock.
+/// What drives it is not known (`docs/fpga-uray.md`).
+pub const INVERTED_CLOCK_ROWS: std::ops::RangeInclusive<u32> = 249..=309;
+
+/// The primitive whose bits make a flip-flop written as `primitive` take
+/// the edge of `PL_CLK0` it was written for, placed in grid row `row`:
+/// in [`INVERTED_CLOCK_ROWS`] the half-slice's clock inverter undoes the
+/// track's, so an `FDRE` is configured as an `FDRE_1` and the reverse.
+/// Any other primitive, or row, is itself.
+pub fn edge_for_row(primitive: &str, row: u32) -> &str {
+    if !INVERTED_CLOCK_ROWS.contains(&row) {
+        return primitive;
+    }
+    match primitive {
+        "FDRE" => "FDRE_1",
+        "FDRE_1" => "FDRE",
+        other => other,
+    }
+}
+
 fn err(message: impl Into<String>) -> UrayError {
     UrayError::Malformed {
         path: "zcu104".to_owned(),
@@ -1251,6 +1281,21 @@ pub fn implement(
         board.graph.sites[site].tile = tile;
     }
     let (placement, _) = placed.map_err(|e| e.to_string())?;
+    // Each flip-flop the clock reaches inverted takes the other edge's
+    // bits, so that it loads on the edge the design says.
+    let mut netlist = netlist;
+    let mut flipped = 0usize;
+    for (i, instance) in netlist.instances.iter_mut().enumerate() {
+        let Some(site) = placement.site_of(i) else {
+            continue;
+        };
+        let row = board.graph.sites[site].tile.1;
+        let edge = edge_for_row(&instance.primitive, row);
+        if edge != instance.primitive {
+            instance.primitive = edge.to_owned();
+            flipped += 1;
+        }
+    }
     // The processor inputs the design is bound to may be driven; every
     // other one, and every node Vivado's clock network drives, is closed.
     // The processor's tie-offs first, while the tables and wires they need
@@ -1376,6 +1421,15 @@ pub fn implement(
             routed.pips
         ),
     );
+    written.report.insert(
+        1,
+        format!(
+            "{flipped} flip-flops in grid rows {}-{}, where the clock track arrives \
+             inverted, configured for the other edge to undo it",
+            INVERTED_CLOCK_ROWS.start(),
+            INVERTED_CLOCK_ROWS.end()
+        ),
+    );
     if let Some(longest) = longest {
         written.report.insert(
             1,
@@ -1389,4 +1443,25 @@ pub fn implement(
         );
     }
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Would catch the correction applied outside the inverted region, at
+    /// its edges, to the wrong primitive, or one way only. It cannot catch
+    /// a wrong region: that is the board's to say.
+    #[test]
+    fn a_flip_flop_in_the_inverted_region_takes_the_other_edge() {
+        for row in [248, 310, 155, 341] {
+            assert_eq!(edge_for_row("FDRE", row), "FDRE");
+            assert_eq!(edge_for_row("FDRE_1", row), "FDRE_1");
+        }
+        for row in [249, 279, 309] {
+            assert_eq!(edge_for_row("FDRE", row), "FDRE_1");
+            assert_eq!(edge_for_row("FDRE_1", row), "FDRE");
+            assert_eq!(edge_for_row("LUT6", row), "LUT6");
+        }
+    }
 }
