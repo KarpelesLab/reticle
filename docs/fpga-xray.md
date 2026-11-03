@@ -6075,6 +6075,18 @@ those designs take the moves they took before.
 This is a modest gain against the build's real cost: placement is about 700 s of
 some 3000 s here, and routing, single-threaded, is the rest.
 
+**Not changed: clean-ups that run out.** Once a route is legal, a clean-up
+reroutes the critical signals, and after 12 passes still overused it falls back
+on the legal routing (`CLEANUP_PASSES`). Those 12 passes are spent for nothing.
+Of the twelve seeds above four ran out (1, 4, 7 and 12), at 1.73 G visits of
+63.3 G, 2.7 %, and at most 356 s, on seed 4. Could the route tell sooner? Over
+all the Husky logs kept on this machine, from many versions of the router, so
+only a rough guide, 333 clean-ups stayed legal, 289 opened and recovered and 62
+ran out. The first pass's overuse does not separate the last two: at 100 nodes or
+more, 28 recovered and 55 did not, and one that opened at 597 recovered. Stopping
+sooner was not built. It would save under 3 %, and it changes the bitstream of
+any seed whose clean-up recovers late, with no board to say what that costs.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
