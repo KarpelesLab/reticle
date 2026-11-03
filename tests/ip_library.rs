@@ -3707,6 +3707,10 @@ struct FarSide {
     /// byte's tag: the mislabelled-analyser-channel hypothesis, which
     /// `dc_change_count` exists to settle.
     dc_follows_data: bool,
+    /// True if this master has no `dc` wire at all, so the pin never moves
+    /// and a frame's `is_data` is only what the test expects inference to
+    /// conclude.
+    dc_absent: bool,
     /// How long after the non-sampling edge `mosi` changes.
     mosi_skew: u64,
     /// How long after the frame opens the held `dc` is driven. A master
@@ -3749,6 +3753,7 @@ impl FarSide {
             cs_asserted: true,
             pins_rest_high: false,
             dc_follows_data: false,
+            dc_absent: false,
             mosi_skew: 2,
             dc_skew: 2,
             frames: 0,
@@ -3840,7 +3845,7 @@ impl FarSide {
         // frame and holds it — which is what the user confirmed, and
         // which is why no sampling edge inside the frame can disagree
         // about the tag.
-        if !self.dc_follows_data {
+        if !self.dc_follows_data && !self.dc_absent {
             let (dc_at, level) = (t0 + self.dc_skew, f.is_data);
             self.at(dc_at, PIN_DC, level);
         }
@@ -3881,6 +3886,13 @@ impl FarSide {
         }
     }
 
+    /// Silence on every wire: the delay between one run and the next, or
+    /// a stall. Closes the frame in progress first, as a master would.
+    fn pause(&mut self, clocks: u64) {
+        self.close();
+        self.now += clocks * 2 * HALF;
+    }
+
     /// Every frame of a session, and the deassertion that closes the
     /// last of them — without which the last byte is never framed.
     fn session(&mut self, frames: &[SpiFrame]) {
@@ -3902,6 +3914,7 @@ struct Received {
     bit_errors: u64,
     dc_changes: u64,
     overruns: u64,
+    resyncs: u64,
     /// Bits in the frame in progress at the end of the session. Zero on
     /// a line that was never framed, which is what says that no bit was
     /// shifted in from a synchroniser's reset value.
@@ -3994,6 +4007,7 @@ fn spi_display_session(params: &[(&str, &str)], far: &FarSide) -> Received {
         bit_errors: get_u64(&sim, top_net(&sim, "bit_error_count")),
         dc_changes: get_u64(&sim, top_net(&sim, "dc_change_count")),
         overruns: get_u64(&sim, top_net(&sim, "overrun_count")),
+        resyncs: get_u64(&sim, top_net(&sim, "infer_resync_count")),
         bit_count: get_u64(&sim, top_net(&sim, "bit_count")),
         last_bit_count: get_u64(&sim, top_net(&sim, "last_bit_count")),
         framed: high(&sim, top_net(&sim, "framed")),
@@ -4970,6 +4984,438 @@ fn spi_display_rx_takes_a_boundary_pulse_instead_of_a_level() {
         "read as a level, a pulse loses nothing"
     );
     assert_eq!(got.bit_errors, 0);
+}
+
+// ---------------------------------------------------------------------------
+// spi_display_rx with no `dc` wire: README.md §3b
+// ---------------------------------------------------------------------------
+
+/// A run this master sends: `prefix` commands, then `data` pixels, with
+/// bytes that differ from run to run.
+fn run_of(seed: u8, prefix: usize, data: usize) -> Vec<SpiFrame> {
+    let mut frames = Vec::new();
+    for i in 0..prefix + data {
+        let byte = seed.wrapping_add(octet(u64::try_from(i).expect("small")).wrapping_mul(7));
+        frames.push(if i < prefix {
+            command(byte)
+        } else {
+            pixel(byte)
+        });
+    }
+    frames
+}
+
+/// A master with no `dc` wire and an idle line at reset.
+fn no_dc_master() -> FarSide {
+    let mut far = FarSide::starting_idle(SPI_PERIOD);
+    far.dc_absent = true;
+    far
+}
+
+/// Sends `runs` with `silence` clocks between them, returning the bytes and
+/// tags the block should deliver.
+fn send_runs(far: &mut FarSide, runs: &[Vec<SpiFrame>], silence: u64) -> Vec<(u8, bool)> {
+    let mut expected = Vec::new();
+    for run in runs {
+        for f in run {
+            far.send(f);
+        }
+        if silence != 0 {
+            far.pause(silence);
+        }
+        expected.extend(expected_bytes(run));
+    }
+    far.session(&[]);
+    expected
+}
+
+/// Each rule alone, and both, in every framing mode. It would catch a tag
+/// taken from the pin, a prefix one byte out, a run length one byte out and a
+/// run that is not ended by what says it is. `dc` never moves here, so with the
+/// pin read every byte would be a command. It would not catch a threshold of
+/// the wrong size: that is the next test.
+#[test]
+fn spi_display_rx_infers_the_tag_from_the_place_in_a_run() {
+    for mode in ["0", "1", "2"] {
+        // Frame completion alone: runs back to back with no silence at all,
+        // which only the declared length can separate.
+        let mut far = no_dc_master();
+        let runs = [run_of(0x11, 3, 5), run_of(0x63, 3, 5), run_of(0xA5, 3, 5)];
+        let expected = send_runs(&mut far, &runs, 0);
+        let got = spi_display_session(
+            &[
+                ("FRAME_MODE", mode),
+                ("DC_INFER", "1"),
+                ("INFER_CMD_BYTES", "3"),
+                ("INFER_DATA_BYTES", "5"),
+            ],
+            &far,
+        );
+        assert_eq!(got.bytes, expected, "by count, FRAME_MODE {mode}");
+        assert_eq!(got.cmd_bytes, 9, "by count, FRAME_MODE {mode}");
+        assert_eq!(got.data_bytes, 15, "by count, FRAME_MODE {mode}");
+        assert_eq!(got.resyncs, 0, "no idle rule, nothing to report");
+
+        // The delay alone: runs whose lengths differ, which no count could
+        // follow.
+        let mut far = no_dc_master();
+        let runs = [run_of(0x11, 3, 2), run_of(0x63, 3, 9), run_of(0xA5, 3, 1)];
+        let expected = send_runs(&mut far, &runs, 200);
+        let got = spi_display_session(
+            &[
+                ("FRAME_MODE", mode),
+                ("DC_INFER", "1"),
+                ("INFER_CMD_BYTES", "3"),
+                ("INFER_IDLE_CLOCKS", "100"),
+            ],
+            &far,
+        );
+        assert_eq!(got.bytes, expected, "by delay, FRAME_MODE {mode}");
+        assert_eq!(got.resyncs, 0, "every run had data, which is its shape");
+
+        // Both, with a delay after a run the count already ended: the delay
+        // must not then eat into the next one or be reported.
+        let mut far = no_dc_master();
+        let runs = [run_of(0x11, 3, 5), run_of(0x63, 3, 5)];
+        let expected = send_runs(&mut far, &runs, 200);
+        let got = spi_display_session(
+            &[
+                ("FRAME_MODE", mode),
+                ("DC_INFER", "1"),
+                ("INFER_CMD_BYTES", "3"),
+                ("INFER_DATA_BYTES", "5"),
+                ("INFER_IDLE_CLOCKS", "100"),
+            ],
+            &far,
+        );
+        assert_eq!(got.bytes, expected, "by both, FRAME_MODE {mode}");
+        assert_eq!(got.resyncs, 0, "whole runs are not a resync");
+    }
+}
+
+/// The goal, stated directly: a link with no `dc` is a normal link with the
+/// wire dropped, so the same traffic must come out the same with it read and
+/// with it gone. This would catch inference disagreeing with the wire on any
+/// byte of this traffic, in any framing mode. It would not catch a driver whose
+/// runs are not this shape, which is what `infer_resync_count` is for.
+#[test]
+fn spi_display_rx_with_no_dc_delivers_what_the_wire_would_have() {
+    let runs = [
+        run_of(0x11, 6, 32),
+        run_of(0x63, 6, 32),
+        run_of(0xA5, 6, 32),
+    ];
+    for mode in ["0", "1", "2"] {
+        let mut normal = FarSide::starting_idle(SPI_PERIOD);
+        let sent = send_runs(&mut normal, &runs, 200);
+        let with_wire = spi_display_session(&[("FRAME_MODE", mode)], &normal);
+        assert_eq!(with_wire.bytes, sent, "the wire read, FRAME_MODE {mode}");
+
+        let mut dropped = no_dc_master();
+        send_runs(&mut dropped, &runs, 200);
+        let without = spi_display_session(
+            &[
+                ("FRAME_MODE", mode),
+                ("DC_INFER", "1"),
+                ("INFER_CMD_BYTES", "6"),
+                ("INFER_DATA_BYTES", "32"),
+                ("INFER_IDLE_CLOCKS", "100"),
+            ],
+            &dropped,
+        );
+        assert_eq!(without.bytes, with_wire.bytes, "FRAME_MODE {mode}");
+        assert_eq!(without.cmd_bytes, with_wire.cmd_bytes);
+        assert_eq!(without.data_bytes, with_wire.data_bytes);
+        assert_eq!(without.resyncs, 0);
+    }
+}
+
+/// The threshold's exact meaning, from `sclk` edge to `sclk` edge. Bytes here
+/// are 17 clocks apart at that distance: a gap of 8 clocks, half a period each
+/// side of it and the half period the first edge is late. So a threshold of 17
+/// must not fire and 16 must, and firing turns every byte into a prefix's first.
+/// It would catch the rule being a clock out either way. It says nothing about
+/// the right threshold for a real master, which is the far side's number.
+#[test]
+fn spi_display_rx_idle_rule_is_a_number_of_clocks_without_an_sclk_edge() {
+    let session = |idle: &str| {
+        let mut far = no_dc_master();
+        let run = run_of(0x31, 1, 4);
+        let expected = send_runs(&mut far, std::slice::from_ref(&run), 0);
+        let got = spi_display_session(
+            &[
+                ("DC_INFER", "1"),
+                ("INFER_CMD_BYTES", "1"),
+                ("INFER_IDLE_CLOCKS", idle),
+            ],
+            &far,
+        );
+        (got, expected)
+    };
+
+    let (got, expected) = session("17");
+    assert_eq!(
+        got.bytes, expected,
+        "17 clocks between edges is not 17 idle"
+    );
+    assert_eq!(got.resyncs, 0);
+
+    let (got, expected) = session("16");
+    let bytes: Vec<u8> = expected.iter().map(|b| b.0).collect();
+    assert_eq!(
+        got.bytes.iter().map(|b| b.0).collect::<Vec<u8>>(),
+        bytes,
+        "a threshold too short changes tags and must not lose a byte"
+    );
+    assert!(
+        got.bytes.iter().all(|b| !b.1),
+        "every byte opened a new run, so every byte was a command: {:?}",
+        got.bytes
+    );
+    // Five bytes, so four edges that ended a silence. The last silence has
+    // no edge after it, and a run is reported as the next one starts.
+    assert_eq!(got.resyncs, 4, "one report for each silence that ended");
+}
+
+/// A master that holds the select through the delay. The last byte of a run
+/// closes only after the threshold has passed, and is still part of that run.
+/// When the silence took effect at the threshold, this byte was tagged a
+/// command and the next run's every tag moved by one, which is what this
+/// catches. Only mode 0 can see it: the other modes do not wait for the close.
+#[test]
+fn spi_display_rx_with_no_dc_ends_a_run_after_a_late_close() {
+    let runs = [run_of(0x11, 2, 3), run_of(0x63, 2, 3)];
+    let mut far = no_dc_master();
+    for run in &runs {
+        for f in run {
+            far.send(f);
+        }
+        // Held asserted: `now` moves and nothing closes the frame until the
+        // next `send`.
+        far.now += 200 * 2 * HALF;
+    }
+    far.session(&[]);
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "2"),
+            ("INFER_IDLE_CLOCKS", "100"),
+        ],
+        &far,
+    );
+    let mut expected = expected_bytes(&runs[0]);
+    expected.extend(expected_bytes(&runs[1]));
+    assert_eq!(got.bytes, expected);
+    assert_eq!(got.resyncs, 0);
+}
+
+/// The pin is not read at all. `dc_follows_data` makes `dc` move inside every
+/// byte, which at the default `DC_SAMPLE` drops every byte and counts it, so
+/// this catches any path left from the wire to the delivery, the tag or
+/// `dc_change_count`. An undriven pin is the same claim at `z`, and
+/// `examples/basys3/ssd1306_nodc_tb.v` is what drives that.
+#[test]
+fn spi_display_rx_with_no_dc_ignores_whatever_the_pin_does() {
+    let run = run_of(0x37, 2, 6);
+    assert!(
+        run.iter().all(|f| byte_moves(f.byte)),
+        "every byte must move the wire, or this test proves less than it says"
+    );
+    let mut far = FarSide::starting_idle(SPI_PERIOD);
+    far.dc_follows_data = true;
+    far.session(&run);
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "2"),
+            ("INFER_DATA_BYTES", "6"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bytes, expected_bytes(&run));
+    assert_eq!(got.dc_changes, 0);
+
+    // The same waveform with the pin read, which is what says the waveform
+    // is able to catch it.
+    let got = spi_display_session(&[], &far);
+    assert!(got.bytes.is_empty(), "read, this `dc` withholds every byte");
+    assert_ne!(got.dc_changes, 0);
+}
+
+/// Initialisation comes before the first run and is longer than a prefix, so
+/// it must not be read as a prefix and pixels. Silence inside it must not
+/// restart it either, because drivers wait between init commands. It would
+/// catch the count being applied late, being shortened by a silence, or the
+/// first run starting from anywhere but its first byte. It has nothing to say
+/// about a part that is reset after the driver has initialised: README.md §3b.
+#[test]
+fn spi_display_rx_with_no_dc_reads_the_initialisation_as_commands() {
+    let mut far = no_dc_master();
+    let init = run_of(0xC1, 9, 0);
+    for (i, f) in init.iter().enumerate() {
+        far.send(f);
+        if i == 3 {
+            far.pause(200);
+        }
+    }
+    let mut expected = expected_bytes(&init);
+    let run = run_of(0x13, 2, 4);
+    expected.extend(send_runs(&mut far, &[run], 200));
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_INIT_BYTES", "9"),
+            ("INFER_CMD_BYTES", "2"),
+            ("INFER_IDLE_CLOCKS", "100"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bytes, expected);
+    assert_eq!(got.resyncs, 0, "a silence inside initialisation is not odd");
+
+    // With no prefix at all, every run's byte is data, so here the
+    // initialisation count is the only thing that says "command".
+    let mut far = no_dc_master();
+    let init = run_of(0xC1, 3, 0);
+    let run = run_of(0x13, 0, 4);
+    let expected = send_runs(&mut far, &[init, run], 0);
+    let got = spi_display_session(&[("DC_INFER", "1"), ("INFER_INIT_BYTES", "3")], &far);
+    assert_eq!(got.bytes, expected);
+}
+
+/// **Only the delay can recover**, and this measures both halves. The master
+/// is mid-run at reset: the tail of a run, a delay, then whole runs. With the
+/// idle rule the whole runs are all tagged correctly and the odd start is
+/// reported; with the count alone the phase is wrong for good. The second half
+/// pins that limit, so a reader cannot take the count for a safe configuration,
+/// and would need rewriting if something ever gave it a way to recover.
+#[test]
+fn spi_display_rx_recovers_a_lost_place_only_from_a_delay() {
+    let tail = run_of(0x51, 0, 3);
+    let runs = [run_of(0x11, 2, 4), run_of(0x63, 2, 4)];
+
+    let mut far = no_dc_master();
+    for f in &tail {
+        far.send(f);
+    }
+    far.pause(200);
+    let whole = send_runs(&mut far, &runs, 200);
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "2"),
+            ("INFER_DATA_BYTES", "4"),
+            ("INFER_IDLE_CLOCKS", "100"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bytes.len(), tail.len() + whole.len());
+    assert_eq!(
+        &got.bytes[tail.len()..],
+        &whole[..],
+        "recovered by the delay"
+    );
+    assert_eq!(got.resyncs, 1, "and the tail is what is reported");
+
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "2"),
+            ("INFER_DATA_BYTES", "4"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bytes.len(), tail.len() + whole.len());
+    assert_ne!(
+        &got.bytes[tail.len()..],
+        &whole[..],
+        "the count alone cannot know it started in the wrong place"
+    );
+    assert_eq!(
+        got.bytes[tail.len()..]
+            .iter()
+            .map(|b| b.0)
+            .collect::<Vec<u8>>(),
+        whole.iter().map(|b| b.0).collect::<Vec<u8>>(),
+        "and the bytes themselves are still right"
+    );
+}
+
+/// A frame of the wrong length under `cs_n`'s authority is dropped but was a
+/// byte the master sent, so it holds its slot. If only delivered bytes counted,
+/// one bad frame would turn the last command into nothing and the first pixel
+/// into a command, for every byte until the next delay. It would not catch the
+/// same fault in modes 1 and 2, where there is no such thing as a slot without
+/// eight bits, and there a lost bit does shift the tags.
+#[test]
+fn spi_display_rx_with_no_dc_keeps_its_place_across_a_bad_frame() {
+    let run = run_of(0x21, 2, 4);
+    let mut far = no_dc_master();
+    far.send(&SpiFrame {
+        byte: run[0].byte,
+        is_data: false,
+        bits: 7,
+    });
+    for f in &run[1..] {
+        far.send(f);
+    }
+    let next = run_of(0x91, 2, 4);
+    for f in &next {
+        far.send(f);
+    }
+    far.session(&[]);
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "2"),
+            ("INFER_DATA_BYTES", "4"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bit_errors, 1, "the frame of seven is reported");
+    let mut expected = expected_bytes(&run[1..]);
+    expected.extend(expected_bytes(&next));
+    assert_eq!(got.bytes, expected, "and nothing after it moved");
+}
+
+/// The instrument, on runs that do not have the declared shape. A run the delay
+/// ended early is reported as the next one starts if it came before its declared
+/// end, or with no declared length if no data had arrived. It would catch the
+/// counter reporting a clean run, or missing the prefix cut short. It would not
+/// catch a last run being short, which has no next run to report it.
+#[test]
+fn spi_display_rx_reports_a_run_that_is_not_the_declared_shape() {
+    // A run with two data bytes where five were declared, then a whole one.
+    let mut far = no_dc_master();
+    let runs = [run_of(0x11, 3, 2), run_of(0x63, 3, 5)];
+    let expected = send_runs(&mut far, &runs, 200);
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "3"),
+            ("INFER_DATA_BYTES", "5"),
+            ("INFER_IDLE_CLOCKS", "100"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bytes, expected, "the delay still recovers it");
+    assert_eq!(got.resyncs, 1, "and exactly the short run is reported");
+
+    // With no declared length: a prefix with no data, a short prefix, then a
+    // run with data, which is the only clean one of the three.
+    let mut far = no_dc_master();
+    let runs = [run_of(0x11, 3, 0), run_of(0x63, 1, 0), run_of(0xA5, 3, 2)];
+    let expected = send_runs(&mut far, &runs, 200);
+    let got = spi_display_session(
+        &[
+            ("DC_INFER", "1"),
+            ("INFER_CMD_BYTES", "3"),
+            ("INFER_IDLE_CLOCKS", "100"),
+        ],
+        &far,
+    );
+    assert_eq!(got.bytes, expected);
+    assert_eq!(got.resyncs, 2);
 }
 
 #[test]
@@ -27691,6 +28137,26 @@ fn a_streams_ready_is_a_function_of_registers() {
             inputs.is_empty(),
             "spi_display_rx: `{port}` depends combinationally on {inputs:?}, \
              which puts an asynchronous pin into a consumer's logic"
+        );
+    }
+    // And the tag with no `dc` behind it, which is a different path to the
+    // same output.
+    for port in ["rx_is_data", "infer_resync_count"] {
+        let inputs = combinational_inputs_of(
+            "spi_display_rx",
+            "spi_display_rx",
+            &[
+                ("DC_INFER", "1"),
+                ("INFER_CMD_BYTES", "6"),
+                ("INFER_DATA_BYTES", "1024"),
+                ("INFER_IDLE_CLOCKS", "1000"),
+                ("INFER_INIT_BYTES", "30"),
+            ],
+            port,
+        );
+        assert!(
+            inputs.is_empty(),
+            "spi_display_rx: inferred `{port}` depends combinationally on {inputs:?}"
         );
     }
     // `ip/bus/iso7816_uart` has both handshakes and an asynchronous pin,

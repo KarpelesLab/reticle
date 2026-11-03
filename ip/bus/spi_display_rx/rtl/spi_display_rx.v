@@ -109,6 +109,39 @@
 //     DC_DATA_LEVEL  the `dc` level that means a data byte: 1 by the
 //                    display convention, which nothing here has
 //                    checked.
+//     DC_INFER       1 for a link with **no `dc` wire**: the pin is ignored
+//                    and the tag comes from where the byte falls in a run
+//                    of the shape below. Nothing is ever dropped over `dc`
+//                    and `dc_change_count` stays zero, so a floating pin
+//                    cannot do anything. 0 reads the wire. README.md §3b.
+//
+// Telling commands from data with no `dc`
+//   With DC_INFER = 1 the master is taken to send **runs**: a command
+//   prefix of a fixed length, then data. The link is otherwise the one
+//   described above, and the numbers are the driver's, so they can be read
+//   from a run with `dc` still connected:
+//
+//     INFER_CMD_BYTES    the prefix: this many bytes of a run are commands
+//                        and every byte after them is data.
+//     INFER_DATA_BYTES   data bytes in a whole run, after which the next
+//                        byte opens a new run with no gap needed. 0 if the
+//                        length varies, leaving the idle rule to end it.
+//     INFER_IDLE_CLOCKS  `clk` periods with no `sclk` edge after which the
+//                        next edge opens a new run, whatever the last one's
+//                        length. 0 turns the rule off. Must be longer than
+//                        anything inside a run, including the wait between
+//                        the prefix and the data, and shorter than the
+//                        delay between runs.
+//     INFER_INIT_BYTES   bytes after reset that are all commands and are
+//                        no part of any run: the initialisation sequence,
+//                        which is rarely the prefix's length.
+//
+//   **Only the idle rule can recover.** A part that comes up in the middle
+//   of a run counts from the wrong place, and with INFER_IDLE_CLOCKS = 0
+//   it stays wrong for good: nothing else on the wires says where a run
+//   began. A byte's position is counted on the frame close when `cs_n` is
+//   in charge, so a frame of the wrong length is one slot and cannot shift
+//   the tags after it.
 //
 // The instrumentation, and which numbers should be zero
 //   This block exists as much to measure the link as to receive it, so
@@ -155,6 +188,12 @@
 //                      gone, so the next one may be missed entirely.
 //                      **Also expected to be zero**; see the rate limit
 //                      below.
+//     infer_resync_count  runs the idle rule ended in a shape that was not
+//                      the declared one: shorter than INFER_CMD_BYTES +
+//                      INFER_DATA_BYTES, or with INFER_DATA_BYTES = 0 no
+//                      data at all. Counted when the next run starts.
+//                      **Also exactly zero** if the numbers are right.
+//                      Always zero with DC_INFER = 0.
 //     bit_count        bits in the frame in progress, live.
 //     last_bit_count   the bit count at the most recent frame close,
 //                      which turns one `bit_error_count` into "it was
@@ -288,6 +327,17 @@ module spi_display_rx #(
     parameter DC_SAMPLE     = 0,
     // The `dc` level that means a data byte rather than a command.
     parameter DC_DATA_LEVEL = 1,
+    // 1 ignores the `dc` pin and takes the tag from the byte's place in a
+    // run: INFER_CMD_BYTES commands, then data.
+    parameter DC_INFER      = 0,
+    // The command prefix of every run.
+    parameter INFER_CMD_BYTES   = 0,
+    // Data bytes that complete a run; 0 if only the idle rule ends one.
+    parameter INFER_DATA_BYTES  = 0,
+    // `clk` periods with no `sclk` edge that end a run; 0 for never.
+    parameter INFER_IDLE_CLOCKS = 0,
+    // Commands after reset that come before the first run.
+    parameter INFER_INIT_BYTES  = 0,
     // How many `clk` periods a sampled level must be seen for before
     // its next transition is considered safe. Also the minimum `cs_n`
     // deassertion, in `clk` periods, and half the minimum `sclk` period.
@@ -318,6 +368,7 @@ module spi_display_rx #(
     output wire [COUNT_WIDTH-1:0] bit_error_count,
     output wire [COUNT_WIDTH-1:0] dc_change_count,
     output wire [COUNT_WIDTH-1:0] overrun_count,
+    output wire [COUNT_WIDTH-1:0] infer_resync_count,
     output wire [3:0]             bit_count,
     output wire [3:0]             last_bit_count,
     output wire                   framed,
@@ -482,6 +533,10 @@ module spi_display_rx #(
     reg       dc_hold;
     reg       dc_moved;
 
+    // A link with no `dc` has a pin that may be tied, floating or anything
+    // else, so nothing below is allowed to read it.
+    wire dc_in = (DC_INFER != 0) ? 1'b0 : dc_s;
+
     // A bit is taken this cycle.
     wire take = sample && framed_q;
 
@@ -495,10 +550,10 @@ module spi_display_rx #(
 
     // `dc` at the first bit, `dc` at the latest bit, and whether it has
     // moved inside this frame.
-    wire dc_first_now = (take && bit_cnt == 4'd0) ? dc_s : dc_first;
-    wire dc_last_now  = take ? dc_s : dc_hold;
+    wire dc_first_now = (take && bit_cnt == 4'd0) ? dc_in : dc_first;
+    wire dc_last_now  = take ? dc_in : dc_hold;
     wire dc_moved_now = dc_moved
-                     || (take && (bit_cnt != 4'd0) && (dc_s != dc_hold));
+                     || (take && (bit_cnt != 4'd0) && (dc_in != dc_hold));
 
     // The byte is complete: at the frame close when `cs_n` is the
     // authority, on the eighth bit otherwise.
@@ -531,7 +586,96 @@ module spi_display_rx #(
                            data_now[4], data_now[5], data_now[6], data_now[7]};
     // The tag, at the pin level the parameter calls data.
     wire dc_tag  = DC_LAST ? dc_last_now : dc_first_now;
-    wire is_data = (DC_DATA_LEVEL != 0) ? dc_tag : !dc_tag;
+    wire pin_is_data = (DC_DATA_LEVEL != 0) ? dc_tag : !dc_tag;
+
+    // -------------------------------------------------------------------
+    // The tag where there is no `dc`: the byte's place in a run
+    // -------------------------------------------------------------------
+    wire inferred_is_data;
+    wire resync;
+
+    generate
+        if (DC_INFER != 0) begin : infer
+            // Wide enough for every count below, and never zero bits.
+            localparam RUN_TOP  = INFER_CMD_BYTES + INFER_DATA_BYTES + 1;
+            localparam RUN_W    = $clog2(RUN_TOP + 1);
+            localparam IDLE_W   = $clog2(INFER_IDLE_CLOCKS + 2);
+            localparam INIT_W   = $clog2(INFER_INIT_BYTES + 2);
+
+            localparam [RUN_W-1:0]  RUN_ONE    = 1;
+            localparam [RUN_W-1:0]  CMD_END    = INFER_CMD_BYTES;
+            // The place of a run's last byte when its length is declared.
+            // When it is not, the place one past the prefix, which is
+            // where "some data has been seen" sits and the count stops.
+            localparam [RUN_W-1:0]  RUN_LAST   = (INFER_DATA_BYTES != 0)
+                ? INFER_CMD_BYTES + INFER_DATA_BYTES - 1
+                : INFER_CMD_BYTES + 1;
+            localparam [IDLE_W-1:0] IDLE_ONE   = 1;
+            localparam [IDLE_W-1:0] IDLE_FULL  = INFER_IDLE_CLOCKS;
+            localparam [INIT_W-1:0] INIT_ONE   = 1;
+            localparam [INIT_W-1:0] INIT_BYTES = INFER_INIT_BYTES;
+
+            // Bytes of this run so far.
+            reg [RUN_W-1:0]  run_pos;
+            // Clocks since the last `sclk` edge, stopping at the threshold.
+            reg [IDLE_W-1:0] idle_cnt;
+            // Initialisation bytes still to come.
+            reg [INIT_W-1:0] init_left;
+
+            wire in_init = init_left != {INIT_W{1'b0}};
+            // A frame close is one slot under `cs_n`'s authority whatever
+            // it carried, because a frame of seven bits was still a byte
+            // the master sent. Counting for ourselves, a slot is a byte.
+            wire slot = AUTHORITY ? (frame_close && framed_q) : complete;
+            // The silence takes effect at the edge that ends it and not
+            // when it reaches the threshold, because a master may hold the
+            // select through it: the last byte of a run then closes after
+            // the threshold and must still be tagged as part of that run.
+            wire new_run = (INFER_IDLE_CLOCKS != 0) && sclk_edge
+                        && (idle_cnt == IDLE_FULL);
+
+            assign inferred_is_data = !in_init && (run_pos >= CMD_END);
+            // With a declared length a whole run has already wrapped to
+            // zero; without one, any data at all made it a whole run.
+            assign resync = new_run && (run_pos != {RUN_W{1'b0}})
+                         && ((INFER_DATA_BYTES != 0) || (run_pos <= CMD_END));
+
+            always @(posedge clk or negedge rst_n) begin
+                if (!rst_n) begin
+                    run_pos   <= {RUN_W{1'b0}};
+                    idle_cnt  <= {IDLE_W{1'b0}};
+                    init_left <= INIT_BYTES;
+                end else begin
+                    if (sclk_edge) begin
+                        idle_cnt <= {IDLE_W{1'b0}};
+                    end else if (idle_cnt != IDLE_FULL) begin
+                        idle_cnt <= idle_cnt + IDLE_ONE;
+                    end
+
+                    if (slot && in_init) begin
+                        init_left <= init_left - INIT_ONE;
+                    end
+
+                    // Nothing moves `run_pos` during initialisation, so a
+                    // silence there has nothing to restart.
+                    if (new_run) begin
+                        run_pos <= {RUN_W{1'b0}};
+                    end else if (slot && !in_init) begin
+                        if (run_pos != RUN_LAST) begin
+                            run_pos <= run_pos + RUN_ONE;
+                        end else if (INFER_DATA_BYTES != 0) begin
+                            run_pos <= {RUN_W{1'b0}};
+                        end
+                    end
+                end
+            end
+        end else begin : read_the_pin
+            assign inferred_is_data = 1'b0;
+            assign resync           = 1'b0;
+        end
+    endgenerate
+
+    wire is_data = (DC_INFER != 0) ? inferred_is_data : pin_is_data;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -618,6 +762,7 @@ module spi_display_rx #(
     reg [COUNT_WIDTH-1:0] bit_errors_q;
     reg [COUNT_WIDTH-1:0] dc_changes_q;
     reg [COUNT_WIDTH-1:0] overruns_q;
+    reg [COUNT_WIDTH-1:0] resyncs_q;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -627,6 +772,7 @@ module spi_display_rx #(
             bit_errors_q <= CNT_ZERO;
             dc_changes_q <= CNT_ZERO;
             overruns_q   <= CNT_ZERO;
+            resyncs_q    <= CNT_ZERO;
         end else begin
             if (deliver && !is_data && cmd_bytes_q != CNT_MAX) begin
                 cmd_bytes_q <= cmd_bytes_q + CNT_ONE;
@@ -649,6 +795,9 @@ module spi_display_rx #(
             if (margin_lost && overruns_q != CNT_MAX) begin
                 overruns_q <= overruns_q + CNT_ONE;
             end
+            if (resync && resyncs_q != CNT_MAX) begin
+                resyncs_q <= resyncs_q + CNT_ONE;
+            end
         end
     end
 
@@ -658,6 +807,7 @@ module spi_display_rx #(
     assign bit_error_count = bit_errors_q;
     assign dc_change_count = dc_changes_q;
     assign overrun_count   = overruns_q;
+    assign infer_resync_count = resyncs_q;
     assign bit_count       = bit_cnt;
     assign last_bit_count  = last_cnt;
     assign framed          = framed_q;

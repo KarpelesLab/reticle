@@ -28,7 +28,7 @@ learned by getting it wrong.
 | JXADC2 | `L3` | card clock, 8.000 MHz (CHECKED: 125.0 ns, 50 % duty) |
 | JXADC3 | `M2` | card reset, active low |
 | JXADC4 | `N2` | `vcc_en`, the relay |
-| JA1–JA4 | `J1 L2 J2 G2` | `sclk`, `mosi`, `dc`, `cs_n` from the device's display bus |
+| JA1–JA4 | `J1 L2 J2 G2` | `sclk`, `mosi`, `dc`, `cs_n` from the device's display bus. A bus with no `dc`: `ip/bus/spi_display_rx/README.md` §3b |
 | JC2 | `M18` | the device's LEFT button line: idles low, a press drives it high (CHECKED) |
 | JC1 | `K17` | the device's RIGHT button line: idles high, a press drives it low (CHECKED) |
 

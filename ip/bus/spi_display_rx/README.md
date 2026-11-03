@@ -297,6 +297,94 @@ different jobs, and a counter is only tested against a **total driven since
 reset**, including zero. `frame_count` is now an absolute and not only a
 difference.
 
+## 3b. A link with no `dc` wire
+
+**This is §1's link with `dc` dropped**, and nothing else about it changes:
+`sclk`, `mosi` and `cs_n` are what was OBSERVED, and the tag each byte would
+have carried is what has to be worked out. The first draft of this section
+said nobody had seen such a link on an analyser and treated it as a new
+unknown. The user corrected that on 4 November 2026, and it matters for more
+than wording: **the shape of a run belongs to the driver, so it can be read
+from a normal link with `dc` still connected**, as the command and data bytes
+between delays, and then the wire removed.
+
+STATED by the user, and what the block relies on: the command before the data
+is of a known length and always comes first. `DC_INFER = 1` builds that:
+
+| Parameter | What it says about the master |
+|-----------|-------------------------------|
+| `INFER_CMD_BYTES` | Every run opens with this many command bytes, and every byte after them is data. |
+| `INFER_DATA_BYTES` | A whole run has this many data bytes, and the next byte opens a new run with no delay needed. 0 if the length varies. |
+| `INFER_IDLE_CLOCKS` | `clk` periods without an `sclk` edge after which the next edge opens a new run, whatever the last run's length. 0 for never. |
+| `INFER_INIT_BYTES` | Bytes after reset that are all commands and in no run. |
+
+The direct statement of the goal is
+`spi_display_rx_with_no_dc_delivers_what_the_wire_would_have`: one master's
+traffic through the block with `dc` read, then the same traffic with `dc`
+dropped, and every byte and tag must be equal.
+
+So a full-screen 128x64 driver that sends the two address-window commands
+and a frame is `INFER_CMD_BYTES = 6`, `INFER_DATA_BYTES = 1024`, plus the
+idle rule at some time between the longest wait inside a run and the delay
+between frames. **That example is arithmetic from the SSD1306's command
+table, not a capture.** One that writes a page at a time is 3 and 128. The
+one number on record, in `docs/card-bench.md`, is 3072 bytes through 83
+commands, which is a total and does not settle a prefix.
+
+The pin is not read at all. It may be tied, floating or moving: nothing is
+dropped over it and `dc_change_count` stays zero, so that counter stops
+being an instrument here. MEASURED by
+`spi_display_rx_with_no_dc_ignores_whatever_the_pin_does` with `dc` moving
+inside every byte, and by `examples/basys3/ssd1306_nodc_tb.v` with it at
+`z`, all the way to a frame buffer read back. `ssd1306_console.v` and
+`iso_display.v` take the same five parameters.
+
+**What it gives up**, none of which the wires can give back:
+
+- **A master that departs from the shape is misread, and only sometimes
+  reported.** A pixel read as a command can do anything a command can,
+  including turning the display off. `infer_resync_count` is the instrument,
+  expected **zero**: it counts runs that a delay ended short of their
+  declared length or, with no declared length, before any data. It cannot
+  see a run of the right length with the wrong contents, nor a last run,
+  which has no next run to report it.
+- **Only the delay recovers a lost place.** A part that comes up inside a
+  run counts from the wrong place, and with `INFER_IDLE_CLOCKS = 0` it stays
+  wrong for good. `spi_display_rx_recovers_a_lost_place_only_from_a_delay`
+  measures both halves. Set the idle rule unless the master never pauses.
+- **A threshold too short is a stream of commands.** A stall inside a run
+  longer than the threshold restarts it, so the pixels after it are read as a
+  prefix; that includes a pause between the prefix and its data, and one
+  inside a byte. Too long merely merges runs a declared length would still
+  separate. `spi_display_rx_idle_rule_is_a_number_of_clocks_without_an_sclk_edge`
+  pins what the number means to the clock.
+- **Initialisation is counted from reset, once.** If the block is reset after
+  the driver has already initialised, which is what the console's `z` does,
+  the first `INFER_INIT_BYTES` of what follows are read as commands. A driver
+  that initialises again mid-session is misread the same way.
+
+**The first version of the idle rule was wrong, and a read of it found this,
+not a test.** It ended the run as the silence reached the threshold. A master
+holding the select through the delay closes its last byte only after that, so
+the byte was tagged by the next run and every tag after it moved by one. The
+silence now takes effect at the edge that ends it, and
+`spi_display_rx_with_no_dc_ends_a_run_after_a_late_close` fails on the old
+rule.
+
+Under `cs_n`'s authority a byte's place advances on every frame close, so a
+frame of the wrong length, which is dropped, still holds its slot;
+`spi_display_rx_with_no_dc_keeps_its_place_across_a_bad_frame`. In modes 1
+and 2 the place advances per eight bits, and a lost bit shifts the tags until
+the next delay: this is **not tested**, only read from the code.
+
+Mutation-checked, 4 November 2026: sixteen hand mutations of this logic were
+run against these tests. Fourteen were caught; the two survivors were a guard
+that could not matter, now removed, and the initialisation count with no prefix,
+now tested. The default build has none of this logic, because it sits behind a
+`generate`: MEASURED by `footprints_match_the_documentation`, the flip-flop and
+lookup table counts did not move. The pad count in that table did, by the new
+output's `COUNT_WIDTH` bits, because the block is measured as a top level there.
+
 ## 4. The numbers, and how to read them
 
 **This is the bring-up procedure.** Whoever connects the screen gets six
@@ -316,6 +404,7 @@ in that category because of the second and third observations in §1.
 | `bit_error_count` | `COUNT_WIDTH` | **0** | A frame did not carry eight bits. The bursts were OBSERVED to be exactly eight, so this is a fault and not a tolerance. `last_bit_count` says *which* count it arrived at — seven and nine are identical in this counter and completely different in the diagnosis. |
 | `dc_change_count` | `COUNT_WIDTH` | **0** | `dc` moved inside a byte. Per-byte holding was OBSERVED, so a wire that disagrees with itself is either not `dc` — a mislabelled analyser channel, which is what the first pass in §1 actually was — or a display that qualifies per bit. At the default `DC_SAMPLE = 0` those bytes are **withheld**, because a wrongly tagged command byte is worse than a missing one. |
 | `overrun_count` | `COUNT_WIDTH` | **0** | A sampled input held its level for fewer than `PHASE_MARGIN` system clocks, so its next transition could have been missed. This is the *early* warning: it rises before any bit is lost. See §7. |
+| `infer_resync_count` | `COUNT_WIDTH` | **0** | With `DC_INFER = 1`, a run a delay ended in a shape other than the declared one, counted as the next run starts. §3b. |
 | `last_bit_count` | 4 | **8** | The bit count at the most recent frame close. **A live value, not a log**: a good frame after a bad one overwrites it, so `bit_error_count` is the record and this is the detail. Saturates at fifteen, so sixteen bits cannot read as eight and look correct. |
 | `bit_count` | 4 | — | Bits in the frame in progress, live. Useful on a probe, not in a log. |
 | `framed` | 1 | **1** | The block has seen a frame close and then a frame open, so it is accumulating bits. **Read this first when nothing comes out at all.** |
@@ -641,6 +730,8 @@ all. That is the one item this list gained by being wrong about it.
   loses nothing, while the pulse setting spends the first byte arming.
   The parameter is tested and **not vindicated**; it is there for a
   strobe whose release cannot be trusted or does not exist.
+
+Nine more cover §3b, which says what they do and do not catch.
 
 ## 10. Nothing here has been near a part
 

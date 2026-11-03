@@ -111,7 +111,7 @@ It is distributed as part of the repository instead.
 | `uart` | `uart_line_coding` | a USB host's `bCharFormat`, `bParityType` and `bDataBits` turned into those format ports, with an `ok` for the values it cannot give exactly | — |
 | `spi_master` | `spi_master` | byte-level SPI master, any CPOL / CPHA | — |
 | `i2c_master` | `i2c_master` | byte-level I²C master, 7-bit addressing, clock stretching tolerated | — |
-| `spi_display_rx` | `spi_display_rx` | the **receiving** end of a display's four-wire SPI: one data wire oversampled against an external clock, bytes framed by the chip select and tagged by D/C, with every uncertainty a parameter, a rate limit stated as a ratio of clocks, and six counters that are the only way the link will ever be characterised | `cdc_sync` |
+| `spi_display_rx` | `spi_display_rx` | the **receiving** end of a display's four-wire SPI: one data wire oversampled against an external clock, bytes framed by the chip select and tagged by D/C (or, with no D/C wire, by their place in a run of known shape), with every uncertainty a parameter, a rate limit stated as a ratio of clocks, and six counters that are the only way the link will ever be characterised | `cdc_sync` |
 | `iso7816_uart` | `iso7816_uart` | the character layer of an ISO/IEC 7816-3 smart card terminal: one **open-drain** contact, half duplex, 8E2, with the etu divisor, the guard time, the waiting time and the **convention** all run-time inputs, T=0 parity error signalling with repeats in both directions, an `active` input that holds the block inert so an activation sequencer can own the line, and five saturating counters | — |
 | `seph_mcu` | `seph_mcu` | the **MCU** end of Ledger's SEPROXYHAL link to a secure element, as bytes: SESSION_START, then one event per turn after each SE status -- an HCI command complete for a BLE command, a STATUS_EVENT for a status request, a USB bus reset and IN completions while `usb_plugged`, a host's own transfer injected whole, a BUTTON_PUSH_EVENT on a button change, a TICKER_EVENT at the SE's interval | — |
 | `pwm` | `pwm` | counter-comparator PWM, duty latched once per period | — |
@@ -1855,7 +1855,7 @@ is the part that matters:
   `mosi` on the rising edge and presents `miso` on the falling one, so
   the bits are checked where a real slave would look at them; `cs_n` is
   checked to fall before the first edge and rise after the last.
-- **`spi_display_rx`** — sixteen testbenches against a model of the
+- **`spi_display_rx`** — twenty-five testbenches against a model of the
   display's own master, driven in **absolute simulation time** with every
   far-side event on an odd tick, so no pin ever changes in the same
   instant as the system clock edge that samples it. A plausible session
@@ -2768,12 +2768,12 @@ exactly what this table is for.
 | `i2c_master` | `i2c_master` | CLK_DIV=30 | ECP5 45F | 12 x CCU2C, 1 x DCCA, 85 x LUT4, 41 x TRELLIS_FF, 30 x TRELLIS_IO | 4 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT4 | 30 x dff, 209 x lut | 5 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | LUT6 | 30 x dff, 181 x lut | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 198 x SB_LUT4 | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 101 x LUT4, 144 x TRELLIS_FF, 124 x TRELLIS_IO | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | iCE40 HX1K | 93 x SB_CARRY, 113 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 140 x SB_IO, 198 x SB_LUT4 | 4 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=0 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 101 x LUT4, 144 x TRELLIS_FF, 140 x TRELLIS_IO | 4 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT4 | 28 x dff, 200 x lut | 5 |
 | `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | LUT6 | 28 x dff, 175 x lut | 4 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 124 x SB_IO, 196 x SB_LUT4 | 5 |
-| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 99 x LUT4, 142 x TRELLIS_FF, 124 x TRELLIS_IO | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | iCE40 HX1K | 93 x SB_CARRY, 111 x SB_DFFER, 2 x SB_DFFES, 28 x SB_DFFR, 1 x SB_DFFS, 1 x SB_GB, 140 x SB_IO, 196 x SB_LUT4 | 5 |
+| `spi_display_rx` | `spi_display_rx` | FRAME_MODE=2 | ECP5 45F | 57 x CCU2C, 1 x DCCA, 99 x LUT4, 142 x TRELLIS_FF, 140 x TRELLIS_IO | 5 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | LUT4 | 39 x dff, 596 x lut | 8 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | LUT6 | 39 x dff, 498 x lut | 6 |
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=1 | iCE40 HX1K | 140 x SB_CARRY, 207 x SB_DFFER, 34 x SB_DFFES, 27 x SB_DFFR, 4 x SB_DFFS, 1 x SB_GB, 159 x SB_IO, 567 x SB_LUT4 | 8 |

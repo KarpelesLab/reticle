@@ -1387,6 +1387,24 @@ fn the_ssd1306_console_testbench_passes() {
     basys3_testbench("examples/basys3/ssd1306_console_tb.v", &sources);
 }
 
+/// A driver wired with no `dc`, all the way to the frame buffer: the pin is
+/// left at `z`, and a command read as data or data read as a command would
+/// change the pixels, the frame count or the unknown-command count. It says
+/// nothing about whether a real driver's runs have the shape it declares.
+#[cfg(feature = "sim")]
+#[test]
+fn the_ssd1306_console_works_with_no_dc_wire() {
+    basys3_testbench(
+        "examples/basys3/ssd1306_nodc_tb.v",
+        &[
+            "examples/basys3/ssd1306_console.v",
+            "ip/bus/spi_display_rx/rtl/spi_display_rx.v",
+            "ip/util/cdc_sync/rtl/cdc_sync.v",
+            "ip/video/ssd1306_slave/rtl/ssd1306_slave.v",
+        ],
+    );
+}
+
 /// The card terminal answers `k`, `s`, `k` sent back to back, in order,
 /// and `W` sends a whole SESSION_START and a ticker after the card's status.
 /// Before the request queue only the first came back, because both request

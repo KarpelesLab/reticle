@@ -32,7 +32,7 @@
 # contained, and `bit_error_count` and `dc_change_count` are numbers that
 # should read **zero** against this link.
 name spi_display_rx
-version 1.0.0
+version 1.1.0
 license MIT
 description "Receiver for a display's four-wire SPI link: one data wire sampled against an oversampled external clock, bytes framed by the chip select and tagged by D/C, with counters for command and data bytes, frames, bit-count mismatches, D/C disagreements and sampling overruns"
 
@@ -51,6 +51,11 @@ param CS_ACTIVE_LOW int 1 0..1
 param CS_PULSE int 0 0..1
 param DC_SAMPLE int 0 0..2
 param DC_DATA_LEVEL int 1 0..1
+param DC_INFER int 0 0..1
+param INFER_CMD_BYTES int 0 0..65535
+param INFER_DATA_BYTES int 0 0..65535
+param INFER_IDLE_CLOCKS int 0 0..16777215
+param INFER_INIT_BYTES int 0 0..65535
 param PHASE_MARGIN int 2 1..8
 param SYNC_STAGES int 2 2..4
 param COUNT_WIDTH int 16 1..32
@@ -70,6 +75,7 @@ port frame_count out COUNT_WIDTH
 port bit_error_count out COUNT_WIDTH
 port dc_change_count out COUNT_WIDTH
 port overrun_count out COUNT_WIDTH
+port infer_resync_count out COUNT_WIDTH
 port bit_count out 4
 port last_bit_count out 4
 port framed out

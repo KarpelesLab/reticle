@@ -161,6 +161,13 @@ module ssd1306_console #(
     // buffer in a block RAM, which is right, and 0 puts it in lookup
     // tables. It is a parameter here only so a build can be tried both
     // ways from the top; see that module's comment on the memory.
+    // A driver wired with no `dc`: `ip/bus/spi_display_rx` README.md §3b.
+    // DC_INFER = 1 ignores the pin, and the numbers are the driver's.
+    parameter DC_INFER          = 0,
+    parameter INFER_CMD_BYTES   = 0,
+    parameter INFER_DATA_BYTES  = 0,
+    parameter INFER_IDLE_CLOCKS = 0,
+    parameter INFER_INIT_BYTES  = 0,
     parameter BLOCK_RAM = 1
 ) (
     input  wire        clk,
@@ -233,13 +240,20 @@ module ssd1306_console #(
     wire        rx_is_data, rx_valid;
     wire [15:0] spi_bit_errors;
 
-    spi_display_rx #(.COUNT_WIDTH(16)) wire_rx (
+    spi_display_rx #(
+        .COUNT_WIDTH(16), .DC_INFER(DC_INFER),
+        .INFER_CMD_BYTES(INFER_CMD_BYTES),
+        .INFER_DATA_BYTES(INFER_DATA_BYTES),
+        .INFER_IDLE_CLOCKS(INFER_IDLE_CLOCKS),
+        .INFER_INIT_BYTES(INFER_INIT_BYTES)
+    ) wire_rx (
         .clk(clk), .rst_n(sub_rst_n),
         .sclk(sclk), .mosi(mosi), .dc(dc), .cs_n(cs_n),
         .rx_byte(rx_byte), .rx_is_data(rx_is_data), .rx_valid(rx_valid),
         .cmd_byte_count(), .data_byte_count(), .frame_count(),
         .bit_error_count(spi_bit_errors), .dc_change_count(),
-        .overrun_count(), .bit_count(), .last_bit_count(),
+        .overrun_count(), .infer_resync_count(), .bit_count(),
+        .last_bit_count(),
         .framed(), .framing_error(), .dc_error(), .overrun());
 
     reg  [15:0] rd_addr = 16'd0;
