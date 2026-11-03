@@ -6029,6 +6029,18 @@ Twelve seeds converging says this fails rarely, not that it cannot.
 Checked in software only, as above: NewAE's tests on these routes wait
 for the board.
 
+**Not kept: a table for a macro's sites.** A profile of the whole Husky
+Plus placement (870 s, 49 samples a second) put 17 % in
+`SiteRules::allows`, 14 % in its check of each control pool, 14 % in
+`propose`, 13 % in `macro_sites` and 10 % in `apply`. `macro_sites` scanned
+every site of a kind for each member's tile, which looked like most of
+its 13 %, and the estimate was a saving of up to 10 %. Reading them from
+`KindSites` instead, built beside the old binary on seed 4, placed in
+904 s against 911 s. That is under 1 %, within the noise, so the scan
+was not what the profile was showing, and what it was showing is
+probably `allows` inlined. The legality checks are the placer's cost, and
+they do real work on every move.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
