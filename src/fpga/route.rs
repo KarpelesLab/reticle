@@ -326,9 +326,10 @@ pub struct RouteOptions {
     /// The most a search that is not critical pays for a node another
     /// signal holds, as a present factor, while the route is still far
     /// from legal: until a pass ends with fewer than
-    /// [`RouteOptions::uncritical_cap_until`] nodes overused, or with the
-    /// overuse stalled as [`Timing::present_cap`] is lifted. Infinity, the
-    /// default, is no cap.
+    /// [`RouteOptions::uncritical_cap_until`] nodes overused. From then on
+    /// it grows by [`RouteOptions::present_growth`] a pass, as the charge
+    /// itself does. A stalled overuse lifts it outright, as it lifts
+    /// [`Timing::present_cap`]. Infinity, the default, is no cap.
     ///
     /// In the middle passes of a congested design, a held wire costs an
     /// uncritical search more than every free node near it, so it visits
@@ -340,10 +341,13 @@ pub struct RouteOptions {
     /// The cap has to go before the end. Kept to the last pass, it left
     /// three placements of five with two or three nodes overused after a
     /// hundred passes, the last signals having too little reason to leave
-    /// a shared wire. `docs/fpga-xray.md` has the measurements.
+    /// a shared wire. And it has to go gradually: lifted at once, it took
+    /// the charge from 10 to about 120 in one step, and the next pass's
+    /// searches visited five times the nodes. `docs/fpga-xray.md` has the
+    /// measurements.
     pub uncritical_present_cap: f64,
-    /// The overuse below which [`RouteOptions::uncritical_present_cap`] is
-    /// lifted for the rest of the route; zero leaves it to the stall alone.
+    /// The overuse below which [`RouteOptions::uncritical_present_cap`]
+    /// starts to grow; zero leaves it to the stall alone.
     pub uncritical_cap_until: usize,
     /// Called with each iteration as it finishes, or `None`. The router
     /// writes nothing itself; this is how a caller that does — the
@@ -479,6 +483,17 @@ pub struct Timing {
     /// overused and not brought the overuse below its least so far, and the
     /// passes after are as they were without it.
     pub present_cap: f64,
+    /// How many passes in a row a node may end overused before a critical
+    /// connection pays the uncapped charge for it, whatever
+    /// [`Timing::present_cap`] says of every other node.
+    ///
+    /// The stall that lifts the cap watches the overuse as a whole, so
+    /// anything else still settling keeps it away. On the ChipWhisperer-Husky
+    /// Plus, the overuse fell by one node every few passes to the hundredth,
+    /// each low resetting the count, while two bits of a counter held one
+    /// `FAN_ALT5` for 84 passes, each taking it from the other, against a
+    /// way round that cost 1.4 % more.
+    pub present_cap_run: u32,
     /// The most nodes a critical connection's search takes before it gives
     /// up and is made again as an uncritical one: see
     /// [`CRITICAL_SEARCH_BUDGET`], the default.
@@ -506,6 +521,7 @@ impl Timing {
             reroute_above: 0.9,
             paths: None,
             present_cap: f64::INFINITY,
+            present_cap_run: u32::MAX,
             search_budget: CRITICAL_SEARCH_BUDGET,
         }
     }
@@ -918,6 +934,9 @@ struct State {
     occupancy: Vec<u32>,
     /// The accumulated congestion history, by root likewise.
     history: Vec<f64>,
+    /// How many passes in a row each root has ended overused: see
+    /// [`Timing::present_cap_run`].
+    overused_for: Vec<u32>,
     /// Each graph node's physical node: see [`physical_nodes`].
     group: Vec<NodeId>,
     /// Physical nodes that are the only way into a sink, one bit each:
@@ -943,6 +962,7 @@ impl State {
         State {
             occupancy: vec![0; nodes],
             history: vec![0.0; nodes],
+            overused_for: vec![0; nodes],
             group,
             reserved: vec![0; nodes.div_ceil(64)],
             owner: HashMap::new(),
@@ -1073,6 +1093,7 @@ pub fn route(
     }
     if let Some(timing) = options.timing.as_ref() {
         scratch.present_cap = timing.present_cap;
+        scratch.present_cap_run = timing.present_cap_run;
         scratch.budget = timing.search_budget;
     }
     scratch.uncritical_cap = options.uncritical_present_cap;
@@ -1105,6 +1126,7 @@ pub fn route(
     // `Timing::present_cap`: the least overuse so far, and how many passes
     // since it fell.
     let (mut least, mut stalled) = (usize::MAX, 0);
+    let mut uncritical_cap_grows = false;
     for index in 1..=options.max_iterations {
         let visited_before = scratch.visited;
         let mut rerouted = 0;
@@ -1174,9 +1196,7 @@ pub fn route(
             routing.routes[terminals.signal] = Some(route);
         }
         let (overused_nodes, total_overuse) = state.overuse();
-        if overused_nodes < options.uncritical_cap_until {
-            scratch.uncritical_cap = f64::INFINITY;
-        }
+        uncritical_cap_grows |= overused_nodes < options.uncritical_cap_until;
         if overused_nodes < least {
             (least, stalled) = (overused_nodes, 0);
         } else if overused_nodes > 0 {
@@ -1232,7 +1252,13 @@ pub fn route(
         for node in 0..graph.nodes.len() {
             if state.occupancy[node] > 1 {
                 state.history[node] += options.history_factor;
+                state.overused_for[node] += 1;
+            } else {
+                state.overused_for[node] = 0;
             }
+        }
+        if uncritical_cap_grows {
+            scratch.uncritical_cap *= options.present_growth;
         }
         if index > 1 || options.first_pass_present.is_none() {
             present *= options.present_growth;
@@ -2563,8 +2589,9 @@ struct Scratch {
     tile_delay: f64,
     /// [`Timing::present_cap`], or infinity.
     present_cap: f64,
-    /// [`RouteOptions::uncritical_present_cap`] until it is lifted, then
-    /// infinity.
+    /// [`Timing::present_cap_run`], or never.
+    present_cap_run: u32,
+    /// [`RouteOptions::uncritical_present_cap`], grown or lifted as it says.
     uncritical_cap: f64,
     /// [`Timing::search_budget`], or no limit.
     budget: u64,
@@ -2593,6 +2620,7 @@ impl Scratch {
             queued: 0,
             tile_delay: 0.0,
             present_cap: f64::INFINITY,
+            present_cap_run: u32::MAX,
             uncritical_cap: f64::INFINITY,
             budget: u64::MAX,
             gave_up: false,
@@ -3108,7 +3136,12 @@ fn maze(
                 continue;
             }
             let step = if critical > 0.0 {
-                slack * state.node_cost(root, at.base, present.min(scratch.present_cap))
+                let cap = if state.overused_for[root as usize] >= scratch.present_cap_run {
+                    f64::INFINITY
+                } else {
+                    scratch.present_cap
+                };
+                slack * state.node_cost(root, at.base, present.min(cap))
                     + critical * f64::from(at.delay)
             } else {
                 state.node_cost(root, at.base, present.min(scratch.uncritical_cap))
@@ -4434,21 +4467,20 @@ mod tests {
     }
 
     /// **[`RouteOptions::uncritical_present_cap`] reaches an uncritical
-    /// search, and is lifted once the overuse falls below
+    /// search, and grows once the overuse falls below
     /// [`RouteOptions::uncritical_cap_until`].** One tile: `n0` (routed
     /// first) has the wire `f` or a way of six wires, and `n1` has `f` or
-    /// `g`, which costs five. The first pass is free, so both take `f`.
-    /// Uncapped, the second pass's charge sends `n0` the long way and the
-    /// route ends there. Capped at 1 and never lifted, a held `f` is
-    /// cheaper than the long way, `n0` keeps it, and `n1` moves to `g` a
-    /// pass later. Capped, but lifted below two overused nodes, the first
-    /// pass's one lifts it and the route is the uncapped one. Would catch
-    /// the cap not reaching an uncritical search (the capped route is the
-    /// uncapped one), or never being lifted (the lifted one is the capped
+    /// `g`, which costs fifty, so `n0` is the one to move. The first pass
+    /// is free, so both take `f`. Uncapped, the second pass's charge moves
+    /// `n0` at once. Capped at 1 and never grown, only the history moves
+    /// it, at the fourth. Capped, and growing below two overused nodes, the
+    /// third. Would catch the cap not reaching an uncritical search (the
+    /// capped route is the uncapped one), never growing (the grown one is
+    /// the capped one), or lifted at once (the grown one is the uncapped
     /// one). Would not catch it reaching critical searches too, with no
     /// timing here, nor the stall lifting it.
     #[test]
-    fn an_uncritical_search_pays_the_capped_charge_until_it_is_lifted() {
+    fn an_uncritical_search_pays_the_capped_charge_until_it_grows() {
         let mut arch = Arch::new("loose", "test", 1, 1);
         let mut tile = TileType::new("t", "t_tile", 8, 8);
         let long = ["s1", "s2", "s3", "s4", "s5", "s6"];
@@ -4504,7 +4536,7 @@ mod tests {
             .find(|n| graph.wire(NodeId::try_from(*n).unwrap_or(0)).full_name() == "X0Y0/g")
             .expect("the wire");
         let mut base = vec![1.0f32; graph.nodes.len()];
-        base[g] = 5.0;
+        base[g] = 50.0;
         let run = |cap: f64, until: usize| {
             let options = RouteOptions {
                 node_base: base.clone(),
@@ -4523,14 +4555,12 @@ mod tests {
                 .nodes
                 .iter()
                 .any(|n| graph.wire(*n).full_name() == "X0Y0/f");
-            (report.iterations.len(), on_f)
+            assert!(!on_f, "{}", report.to_text());
+            report.iterations.len()
         };
-        // Uncapped: `n0` the long way at the second pass.
-        assert_eq!(run(f64::INFINITY, 0), (2, false));
-        // Capped: `n0` keeps `f` and `n1` moves to `g`, a pass later.
-        assert_eq!(run(1.0, 0), (3, true));
-        // Lifted after the first pass: the uncapped route.
-        assert_eq!(run(1.0, 2), (2, false));
+        assert_eq!(run(f64::INFINITY, 0), 2);
+        assert_eq!(run(1.0, 0), 4);
+        assert_eq!(run(1.0, 2), 3);
     }
 
     /// **A clean-up that does not converge keeps the legal routing it
@@ -4646,6 +4676,29 @@ mod tests {
     /// lifted too early, which only costs the design the cap's gain.
     #[test]
     fn a_stalled_route_lifts_the_critical_cap() {
+        let (iterations, report) = two_critical_connections_on_one_wire(u32::MAX);
+        assert!(iterations > STALL, "{report}");
+    }
+
+    /// **[`Timing::present_cap_run`]: a node overused too long is charged
+    /// in full, before the overuse as a whole has stalled.** The same tile
+    /// as [`a_stalled_route_lifts_the_critical_cap`], where the route is
+    /// held until the stall lifts the cap; with a run of three, one
+    /// connection gives way well before that. Would catch the run not
+    /// reaching the cost, or being reset by a pass the node stays overused.
+    /// Would not catch the run lifting the cap for nodes that have not
+    /// reached it, nor show the case that found it, an overuse that goes on
+    /// falling elsewhere, which needs more nodes in dispute than this.
+    #[test]
+    fn a_node_overused_too_long_is_charged_in_full() {
+        let (iterations, report) = two_critical_connections_on_one_wire(3);
+        assert!(iterations < STALL, "{report}");
+    }
+
+    /// Routes `n0` and `n1`, both wanting one fast wire, each with its own
+    /// slow way, under a [`Timing::present_cap`] of 30 and the given
+    /// [`Timing::present_cap_run`]: how many passes it took, and the report.
+    fn two_critical_connections_on_one_wire(run: u32) -> (usize, String) {
         let mut arch = Arch::new("stall", "test", 1, 1);
         let mut tile = TileType::new("t", "t_tile", 8, 8);
         let mut names = vec!["out0", "out1", "in0", "in1", "f"];
@@ -4711,7 +4764,10 @@ mod tests {
         }
         let mut timing = Timing::for_netlist(&netlist, delay, 1);
         timing.present_cap = 30.0;
+        timing.present_cap_run = run;
         let options = RouteOptions {
+            // Past the cap from the first pass, or the run has nothing to lift.
+            present_factor: 40.0,
             timing: Some(timing),
             ..RouteOptions::default()
         };
@@ -4719,7 +4775,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("the route should converge: {e}"));
         assert!(routing.verify(&netlist, &graph, &placement).is_empty());
         assert_eq!(report.iterations.last().map(|i| i.overused_nodes), Some(0));
-        assert!(report.iterations.len() > STALL, "{}", report.to_text());
+        (report.iterations.len(), report.to_text())
     }
 
     /// **A critical sink of a net of many sinks may start at the

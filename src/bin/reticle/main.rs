@@ -3836,6 +3836,7 @@ fn write_xc7_bitstream(
                         reroute_above: 0.9,
                         paths: Some(paths),
                         present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
+                        present_cap_run: reticle::fpga::xray::CRITICAL_CAP_RUN,
                         search_budget: reticle::fpga::route::CRITICAL_SEARCH_BUDGET,
                     })
             }),

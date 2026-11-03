@@ -2886,19 +2886,28 @@ pub const PRESENT_GROWTH: f64 = 1.3;
 /// overused ([`RouteOptions::uncritical_present_cap`](crate::fpga::route::RouteOptions)).
 ///
 /// Measured on the ChipWhisperer-Husky Plus, 2026-11-03, seeds 1 to 6 built
-/// beside the uncapped router: every route converged, in 72 to 85 passes
-/// against 72 to 87. Node visits fell by 16 to 40 %, 50.0 G in all against
-/// 70.8 G, and pips by 1.6 to 3.4 %. `clk_usb`'s and the ADC's routed
-/// estimates were the same or lower on every seed. The clock-glitch
-/// MMCM's, whose period is 100 ns, rose by 0.7 to 2.4 ns. Lifted below 100
-/// overused nodes instead, seed 1 ended a hundred passes with two nodes
-/// overused and was placed again; never lifted, three seeds of five did.
-/// Not yet checked on the board. A setting tried at 10, not a measured
-/// optimum.
+/// beside the uncapped router: lifted at once below [`UNCRITICAL_CAP_UNTIL`],
+/// node visits fell from 70.8 G to 50.0 G, and grown from there, with
+/// [`CRITICAL_CAP_RUN`], to 38.9 G. Seeds 1 to 12 converged on the first
+/// placement. `clk_usb`'s and the ADC's routed estimates on seeds 1 to 6
+/// were the same as lifted at once, and those were the same or lower than
+/// uncapped. The clock-glitch MMCM's, whose period is 100 ns, rose by up to
+/// 3.0 ns on some seeds and fell on others. Lifted at once below 100
+/// overused nodes, seed 1 ended a hundred passes with two nodes overused
+/// and was placed again; never lifted, three seeds of five did. Not yet
+/// checked on the board. A setting tried at 10, not a measured optimum.
 pub const UNCRITICAL_PRESENT_CAP: f64 = 10.0;
 
-/// The overuse below which [`UNCRITICAL_PRESENT_CAP`] is lifted.
+/// The overuse below which [`UNCRITICAL_PRESENT_CAP`] starts to grow.
 pub const UNCRITICAL_CAP_UNTIL: usize = 1000;
+
+/// How many passes in a row a node may end overused before a critical
+/// connection pays the uncapped charge for it (`route::Timing::present_cap_run`).
+/// Growing the uncritical cap left seed 1 of the Husky Plus with three nodes
+/// overused after a hundred passes, on two pairs of critical connections;
+/// with this, seeds 1 to 6 converged. A setting tried at 20, not a measured
+/// optimum, and not yet checked on the board.
+pub const CRITICAL_CAP_RUN: u32 = 20;
 
 /// When this fabric's anneal stops for lack of progress
 /// ([`PlaceOptions::flat_steps`](crate::fpga::place::PlaceOptions) and

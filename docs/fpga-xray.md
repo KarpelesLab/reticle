@@ -5964,7 +5964,7 @@ but seed 1 did not converge. This is checked in software only: the
 Husky Plus was in use by another project, and how the new routes do in
 NewAE's tests has not been measured.
 
-**Not kept: lifting the cap gradually.** Lifted, the cap jumps from 10
+**Lifting the cap gradually: at first not kept, and then kept.** Lifted, the cap jumps from 10
 to the full charge, near 120 by then, and on seed 4 the next pass
 visited 665 M nodes against 123 M. Passes 23 to 28 took 870 s of the
 1,959 s route. Growing the cap by the charge's own 1.3 a pass instead,
@@ -5985,6 +5985,49 @@ It ended on two signals of `U_usb_reg_main.reg_address` sharing
 `FAN_ALT5` into one carry. Those are pairs taking a wire from each other
 every pass, so a cheaper middle is only safe once that end is
 understood.
+
+That reading blamed the wrong thing. "Weakens the late charge" was a
+guess, and a trace of seed 1's last passes showed the pairs were not
+uncritical searches at all. All four connections have criticality 0.90 to
+0.99, so they pay [`Timing::present_cap`]'s capped charge, weighed at
+1 − criticality, and the ways round cost little more: 1,985 against 1,958
+for one of `capture_count`'s, 3,207 against 2,945 for one of
+`reg_address`'s. The search was not boxed in: over 128 traced searches,
+the way round cost the same with the box and without it. The rule meant for this is the stall
+that lifts that cap, and it never fired, because the overuse went on
+falling by one node at a time (8, 7, 6, 5, 4, 3) and every new low reset
+its count. `FAN_ALT5` had by then been overused for 84 passes.
+
+So a critical connection now pays the uncapped charge on a node overused
+for 20 passes in a row (`xray::CRITICAL_CAP_RUN`). The cap stays
+everywhere else. Against the same six placements, with the two together:
+
+| seed | lifted at once | grown | run alone | grown, with the run |
+|---|---|---|---|---|
+| 1 | 80 passes, 10.47 G | did not converge | 81, 12.14 G | 74, 7.98 G |
+| 2 | 74, 9.34 G | 71, 7.92 G | 81, 10.69 G | 69, 8.17 G |
+| 3 | 83, 8.54 G | 67, 5.64 G | 80, 8.49 G | 76, 6.24 G |
+| 4 | 75, 5.58 G | 75, 4.80 G | 69, 6.54 G | 62, 4.42 G |
+| 5 | 72, 6.95 G | 73, 5.52 G | 67, 8.18 G | 73, 5.41 G |
+| 6 | 85, 9.07 G | 63, 5.99 G | 92, 8.96 G | 56, 6.66 G |
+
+The last column is kept: 38.9 G against 50.0 G lifted at once and 70.8 G
+with no cap, 45 % less than where this began. `clk_usb`'s and the ADC's
+estimates equal the lifted-at-once route's on all six. Seed 6's 7.11 ns
+in the grown column is 6.41 with the run. The observer's are unchanged,
+and the clock-glitch MMCM's moved from 13.04–17.19 to 13.86–18.01 ns,
+better on two seeds and worse on four, against its 100 ns period. The
+run alone is slower than the route without it, so it is what makes the
+growth safe, and not a saving of its own.
+
+Seeds 7 to 12, which took no part in choosing any of this, also converged
+on the first placement: 58 to 84 passes, 4.19 to 7.75 G. Their `clk_usb`
+is 16.50 to 16.62 ns. Their ADC is 6.91 to 7.47 ns and 9.09 on seed 11,
+the worst of the twelve. Those six have no uncapped build beside them, so
+whether seed 11's figure is the placement's or the router's is not known.
+Twelve seeds converging says this fails rarely, not that it cannot.
+Checked in software only, as above: NewAE's tests on these routes wait
+for the board.
 
 ## What remains before an LED could light
 
