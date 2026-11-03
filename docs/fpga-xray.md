@@ -5915,6 +5915,35 @@ measurable time:
 
 The visits are the cost, not what one visit costs.
 
+**Not kept: a cap on what an uncritical search pays for congestion.**
+The probe above suggested capping, for uncritical searches only, the
+present factor at 10, so that crossing a held wire stays cheap enough not
+to flood. On seed 4's cached placement it routed in 1,581 s, 89 passes
+and 4.55 G visits, against 2,109 s, 72 and 6.83 G. The clock estimates
+were the same. Built from scratch on five seeds beside the uncapped
+binary, measured in visits because contention differed between builds:
+
+| seed | uncapped | capped at 10 | capped, lifted below 100 overused |
+|---|---|---|---|
+| 1 | 76 passes, 12.50 G | did not converge | did not converge |
+| 2 | 76, 13.18 G | did not converge | 91, 7.02 G |
+| 3 | 84, 12.93 G | 82, 5.87 G | not built |
+| 4 | 72, 6.83 G | 89, 4.55 G | 78, 4.37 G |
+| 5 | 73, 10.31 G | did not converge | 96, 5.21 G |
+
+"Did not converge" means a hundred passes ending with two or three nodes
+overused and two signals rerouted each pass, then the flow's re-placement,
+an extra 40 to 70 minutes. A capped charge leaves the last few signals no
+reason to leave a shared wire. Lifting the cap once fewer than 100 nodes
+are overused, or on the existing stall rule, fixed seeds 2 and 5 and
+roughly halved their visits. Seed 1 still ended its hundred passes on two
+nodes. One seed in four that falls back to re-placing costs more than the
+other three save, and the build must route every seed, so this was not
+kept. It shows where the time is: the middle passes, with thousands of
+nodes overused, cost up to half again what they need to. The last few
+nodes need the full charge. A remedy has to cut the first without
+weakening the second.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
