@@ -555,9 +555,10 @@ now a test, and the placer refuses it before the router ever sees it.
   wirelength; VPR's timing-driven mode weights a net by its criticality.
   There is a static timing engine in this crate (`timing::sta`) and
   nothing connects it to the placer.
-- **A move is still proposed before it is judged legal.** On the ECP5 the
-  shared-pin check (`SiteRules`) rejects a fraction of the window's
-  offers, and so now does the reachability set of a clock buffer — five of
-  the fourteen offers a window around `X3Y25` makes for one. A generator
+- **A move is still proposed before it is judged legal.** The shared-pin
+  check (`SiteRules`) is asked only of moves that passed the cost test, since
+  2026-11-04 (`docs/fpga-xray.md`), but it still rejects them after the fact,
+  and the window also offers sites the reachability set of a clock buffer
+  refuses — five of the fourteen offers a window around `X3Y25` makes for one. A generator
   that knew which sites of the window the cell could take would not have
   to make them.

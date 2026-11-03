@@ -6041,6 +6041,40 @@ was not what the profile was showing, and what it was showing is
 probably `allows` inlined. The legality checks are the placer's cost, and
 they do real work on every move.
 
+**Asking legality after cost: kept (2026-11-04).** Most moves are refused on
+cost, so the anneal now applies a move, tests it, and only asks `SiteRules` of
+the moves that passed. Measured on the Husky Plus, twelve seeds, all built at
+nice 19 alongside each other:
+
+| | before | after |
+|---|---|---|
+| place, seed 4, side by side, twice | 799 s, 833 s | 698 s, 717 s |
+| route visits, seeds 1-12 | 70.9 G | 63.3 G |
+| seeds routed on their first placement | 12 of 12 | 12 of 12 |
+| worst final `ADC_clk_fb` path, of a 4.0 ns period | 9.09 ns | 7.18 ns |
+| worst final `clk_usb` path | 24.67 ns | 20.24 ns |
+
+Seconds of routing are not in the table, because the two sets ran under
+different loads; visits are the comparison. By seed visits fell on nine and
+rose on three, seeds 4, 5 and 10, so 11% of the total is a measurement over seeds
+and not a promise for one. The timing rows are from the static timer,
+not from a board: the Husky was off limits, and **none of these routes has been
+loaded**.
+
+The first version was wrong, and the way it was wrong is worth keeping. It
+counted the acceptance rate over moves that were both cheap and legal, as the old
+order had in effect done over legal moves only. About half of what passes the
+cost test turns out illegal on this die (22.7 M moves on seed 4), so the rate read
+low, the window shrank and the walk cooled fast. That placed in 729 s, and the
+first routing pass came out 8.7% longer, 2703670 pips against 2487839. Reading
+the rate from what passed the cost test gave 2459082. A move's legality says
+nothing about how hot the walk is. Only on a design where legality refuses
+anything does this differ at all: with no shared pins `allows` always says yes, so
+those designs take the moves they took before.
+
+This is a modest gain against the build's real cost: placement is about 700 s of
+some 3000 s here, and routing, single-threaded, is the rest.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.

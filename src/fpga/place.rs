@@ -1244,14 +1244,29 @@ pub struct TemperatureStep {
     /// Moves proposed at this temperature. A proposal whose window held
     /// no site of the right kind is not one.
     pub tried: u64,
-    /// How many of those were accepted. `accepted / tried` is the
-    /// `R_accept` the range limiter and the cooling factor both read.
+    /// How many of those the cost test passed, legal or not. `passed /
+    /// tried` is the `R_accept` the range limiter and the cooling factor
+    /// both read. It is not `accepted / tried`, which reads a full die as a
+    /// walk gone cold: `docs/fpga-xray.md` measures that.
+    pub passed: u64,
+    /// How many moves were made.
     pub accepted: u64,
     /// The half-side of the move window, in tiles, during this step.
     pub range_limit: u32,
     /// The whole placement's half-perimeter wirelength when the step
     /// ended, recounted rather than accumulated.
     pub cost: u64,
+}
+
+impl TemperatureStep {
+    /// `R_accept`: what share of the moves tried passed the cost test.
+    fn rate(&self) -> f64 {
+        if self.tried == 0 {
+            0.0
+        } else {
+            self.passed as f64 / self.tried as f64
+        }
+    }
 }
 
 /// Why the annealer stopped.
@@ -1435,8 +1450,8 @@ impl PlacementReport {
             let _ = writeln!(
                 out,
                 "  schedule: acceptance {} then {}, window {} then {} tile(s), stopped because {}",
-                percent(first.accepted, first.tried),
-                percent(last.accepted, last.tried),
+                percent(first.passed, first.tried),
+                percent(last.passed, last.tried),
                 first.range_limit,
                 last.range_limit,
                 self.stop.clause(),
@@ -1497,7 +1512,7 @@ impl PlacementReport {
                 s.range_limit,
                 s.tried,
                 s.accepted,
-                percent(s.accepted, s.tried),
+                percent(s.passed, s.tried),
                 s.cost,
             );
         }
@@ -6719,6 +6734,12 @@ fn cooling_factor(accepted: f64) -> f64 {
 ///    `1 ..= max(width, height)`, which is what holds the acceptance
 ///    rate near 0.44 instead of letting it collapse.
 ///
+/// A move's legality is asked after its cost, and the rate in 3 and 4 is
+/// the share that passed the cost test whether or not they turned out
+/// legal. Counting only the legal ones reads a full die as a walk that has
+/// gone cold, and the Husky Plus came out 8.7% longer on its first routing
+/// pass for it: see `docs/fpga-xray.md`.
+///
 /// Plus one thing the paper does not have: a stall exit, so a placement
 /// that has converged stops rather than spending the rest of
 /// [`PlaceOptions::max_temperatures`] proving it.
@@ -6839,7 +6860,7 @@ fn anneal(
             ..TemperatureStep::default()
         };
         for _ in 0..inner {
-            let Some(candidate) = propose(
+            let Some(candidate) = draw_move(
                 netlist,
                 graph,
                 info,
@@ -6875,11 +6896,33 @@ fn anneal(
             }
             step.tried += 1;
             let delta = apply(netlist, graph, &mut churn, placement, &candidate);
-            if delta <= 0.0 || rng.unit() * (temperature + delta) < temperature {
-                step.accepted += 1;
-            } else {
+            if !passes(delta, temperature, &mut rng) {
                 undo(netlist, graph, &mut churn, placement);
+                continue;
             }
+            step.passed += 1;
+            // Legality is asked only now, because `SiteRules::allows` was
+            // the largest single cost of the Husky Plus's anneal and most
+            // moves never get this far. It reads the placement the move
+            // starts from, hence the undo. `draw_move` already found a
+            // macro's sites legal.
+            if info[candidate[0].0].macro_index.is_none() {
+                undo(netlist, graph, &mut churn, placement);
+                if shared.allows(placement, &candidate) {
+                    apply(netlist, graph, &mut churn, placement, &candidate);
+                } else {
+                    let Some(evicted) = evict_blockers(graph, info, shared, placement, candidate)
+                    else {
+                        continue;
+                    };
+                    let delta = apply(netlist, graph, &mut churn, placement, &evicted);
+                    if !passes(delta, temperature, &mut rng) {
+                        undo(netlist, graph, &mut churn, placement);
+                        continue;
+                    }
+                }
+            }
+            step.accepted += 1;
         }
         // Recounted, not accumulated: a few million `+= delta` on an f64
         // drift, and both the exit criterion and the best-so-far compare
@@ -6887,11 +6930,7 @@ fn anneal(
         // per temperature, which is nothing beside the moves.
         current = churn.total(netlist, graph, placement);
         step.cost = current;
-        let rate = if step.tried == 0 {
-            0.0
-        } else {
-            step.accepted as f64 / step.tried as f64
-        };
+        let rate = step.rate();
         let improved = current < best_cost;
         if improved {
             best_cost = current;
@@ -7064,7 +7103,7 @@ fn window_of(
 /// means the whole die, which is what the start-temperature probe uses
 /// and what [`PlaceOptions::range_limit`] turns off to.
 #[allow(clippy::too_many_arguments, reason = "the annealer's whole state")]
-fn propose(
+fn draw_move(
     netlist: &Netlist,
     graph: &RoutingGraph,
     info: &[Placeable],
@@ -7141,12 +7180,7 @@ fn propose(
     if !info[instance].may_take(target) {
         return None;
     }
-    // A move is only proposed if it is legal, which for a swap means legal
-    // after both halves have happened: see `SiteRules`. The annealer
-    // therefore never has to undo an illegal placement, and a design whose
-    // cells share no pin — every family but the ECP5, today — takes exactly
-    // the moves it took before this check existed.
-    let candidate = match placement.instance_at(target) {
+    Some(match placement.instance_at(target) {
         None => vec![(instance, target)],
         Some(other) => {
             if info[other].fixed.is_some() || info[other].macro_index.is_some() {
@@ -7162,11 +7196,49 @@ fn propose(
             }
             vec![(instance, target), (other, here)]
         }
-    };
-    if shared.allows(placement, &candidate) {
+    })
+}
+
+/// A move from [`draw_move`] that is legal, for the start-temperature probe,
+/// whose samples have to be moves the anneal could make. Legal for a swap
+/// means legal after both halves have happened: see `SiteRules`.
+#[allow(clippy::too_many_arguments, reason = "the annealer's whole state")]
+fn propose(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    info: &[Placeable],
+    macros: &[Macro],
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    windows: &BTreeMap<String, KindSites>,
+    shared: &SiteRules,
+    movable: &[usize],
+    rng: &mut Rng,
+    placement: &mut Placement,
+    reach: u32,
+) -> Option<Move> {
+    let candidate = draw_move(
+        netlist,
+        graph,
+        info,
+        macros,
+        sites_by_kind,
+        windows,
+        shared,
+        movable,
+        rng,
+        placement,
+        reach,
+    )?;
+    if info[candidate[0].0].macro_index.is_some() || shared.allows(placement, &candidate) {
         return Some(candidate);
     }
     evict_blockers(graph, info, shared, placement, candidate)
+}
+
+/// Metropolis's test: downhill always, uphill with a chance that falls as
+/// the climb grows against the temperature.
+fn passes(delta: f64, temperature: f64, rng: &mut Rng) -> bool {
+    delta <= 0.0 || rng.unit() * (temperature + delta) < temperature
 }
 
 /// The move `candidate` again, with the cells on the sites its first
@@ -10501,6 +10573,124 @@ mod tests {
         assert_eq!(best.min(report.hpwl_before), report.hpwl_after);
         assert_eq!(hpwl(&netlist, &graph, &placement), report.hpwl_after);
         assert!(report.to_text().contains("schedule: acceptance"));
+    }
+
+    /// Legality is asked after the cost test now, so what these catch is a
+    /// move the test passed being made without being asked, which a tile
+    /// holding two enables shows, and the rate reading legal moves only,
+    /// which a schedule whose moves all cost nothing shows: every move
+    /// passes, a good many cannot be made, and the rate must still be 1.
+    ///
+    /// Would not catch `anneal` itself reading `accepted` rather than
+    /// [`TemperatureStep::rate`]: a design with no wirelength to find starts
+    /// at temperature zero and stops at once whichever it reads. The next
+    /// test is the one for that.
+    #[test]
+    fn an_illegal_move_passes_the_cost_test_and_is_not_made() {
+        let (arch, graph) = pairs(4, 4);
+        let netlist = enabled(16, 16);
+        let (placement, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("sixteen enables and sixteen tiles");
+        let mut tiles: Vec<(u32, u32)> = (0..16)
+            .map(|i| graph.sites[placement.site_of(i).unwrap()].tile)
+            .collect();
+        tiles.sort_unstable();
+        tiles.dedup();
+        assert_eq!(tiles.len(), 16, "two enables share a tile's one wire");
+        let (passed, accepted) = report
+            .schedule
+            .iter()
+            .fold((0, 0), |(p, a), s| (p + s.passed, a + s.accepted));
+        assert!(
+            accepted < passed,
+            "half of these moves are to a tile already holding another enable: {}",
+            report.schedule_text()
+        );
+        for step in &report.schedule {
+            assert!(step.tried > 0);
+            assert_eq!(step.passed, step.tried, "no move here costs anything");
+            assert_eq!(step.rate(), 1.0);
+        }
+    }
+
+    /// The move window follows the moves that passed the cost test and not
+    /// the moves that were legal as well, which is the mistake that made
+    /// the Husky Plus 8.7% longer. Every flip-flop here has its own enable,
+    /// so half the die is illegal to it, and a chain so that a move costs
+    /// something and the walk has a temperature.
+    #[test]
+    fn the_move_window_reads_the_moves_that_passed_the_cost_test() {
+        let (arch, graph) = pairs(24, 24);
+        let mut netlist = enabled(576, 576);
+        for i in 0..575 {
+            let (from, to) = (netlist.pins.len(), netlist.pins.len() + 1);
+            netlist.pins.push(NetPin {
+                instance: i,
+                port: "Q".to_owned(),
+                bit: 0,
+                role: "q".to_owned(),
+                output: true,
+                signal: Some(netlist.signals.len()),
+                constant: None,
+            });
+            netlist.pins.push(NetPin {
+                instance: i + 1,
+                port: "D".to_owned(),
+                bit: 0,
+                role: "d".to_owned(),
+                output: false,
+                signal: Some(netlist.signals.len()),
+                constant: None,
+            });
+            netlist.signals.push(Signal {
+                name: format!("q{i}"),
+                driver: Some(from),
+                sinks: vec![to],
+            });
+            netlist.instances[i].pins.push(from);
+            netlist.instances[i + 1].pins.push(to);
+        }
+        let (_, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .expect("one flip-flop a tile");
+        let target = PlaceOptions::default().target_acceptance;
+        let mut told_apart = 0;
+        for pair in report.schedule.windows(2) {
+            let (was, next) = (&pair[0], &pair[1]);
+            // Whole tiles are reported, so the window is known to half a
+            // tile, and only a window with room to move says anything.
+            if next.range_limit <= 1 || next.range_limit >= 24 || was.range_limit >= 24 {
+                continue;
+            }
+            let window = f64::from(was.range_limit);
+            let read = next_window(window, was.rate(), target, 24.0);
+            let legal = next_window(window, was.accepted as f64 / was.tried as f64, target, 24.0);
+            assert!(
+                (read - f64::from(next.range_limit)).abs() <= 1.5,
+                "from {window}: {read} expected, {} taken\n{}",
+                next.range_limit,
+                report.schedule_text()
+            );
+            if (read - legal).abs() > 3.0 {
+                told_apart += 1;
+            }
+        }
+        assert!(
+            told_apart > 0,
+            "no step where the two readings differ, so this checked nothing\n{}",
+            report.schedule_text()
+        );
     }
 
     /// A grid of tiles holding **two** flip-flops each, whose enable pin is
