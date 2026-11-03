@@ -1260,6 +1260,84 @@ early sampling to measure. The clock leaf tiles have no inversion
 feature, so a region clocked on the other edge is not the cause either.
 Which property of this placement causes it is open.
 
+(The last two sentences but one are **wrong**, and are left as they were
+written: the next section measured one region of the four running on
+the other edge. A leaf with no inversion feature does not mean nothing
+upstream of it inverts.)
+
+### One clock region of the four runs on the other edge
+
+**Measured on the board, 2026-11-03.** The clock region centred on
+row 279 (rows 249–309) clocks its flip-flops half a period away from
+the regions centred on rows 155, 217 and 341, and from the processor's
+port.
+
+How it was found. The working reading after 2 November was a race at
+the clock edge on the processor's outputs: that short routes from the
+pins let the fabric catch a value the processor launched on the same
+edge. Read back from the bitstreams (every route from each port pin to
+the flip-flops it reaches, by configurable hops), that did not hold up.
+The port clock's route was identical in every build, and the small
+slaves that worked had *shorter* pin routes, 4–17 hops, than echo,
+which did not, 21–37. What did line up was where the logic sat:
+
+| Design | Port-facing logic in the regions of rows | On the board |
+|---|---|---|
+| rkp, rkd, rdh (`--pins-at-entry`) | 155 | right |
+| r16; rkp, default placement | 279 and 341 | right |
+| wbd; r16 with `--pins-at-entry` | 217 and 279, a little 155 or 341 | wrong |
+| echo | 279 and 341 | wrong, but only on boots already disturbed |
+
+So a slave was built to look, with reads only: `rdh`'s read front end,
+unchanged but for one clock more before `RVALID`, and around every
+accepted read the samples of `ARVALID` and of an address bit (byte
+address bit 3), taken by flip-flops kept apart and placed by region,
+each kept over four rising edges. Every read was counted once in every
+run; 8 000 reads at each clock.
+
+| Sampling flip-flop | `ARVALID` seen, around acceptance (after, at, 1 before, 2 before) |
+|---|---|
+| rising edge, beside the read logic (rows 165–180) | `0100` |
+| rising edge, region 217 | `0100` (address bit agrees) |
+| rising edge, region 341 | `0100` |
+| rising edge, region 279 | **`0010`**, one edge early |
+| falling edge, rows 165–180 | `0010` |
+| falling edge, region 279 | **`0100`** |
+
+A rising-edge flip-flop in region 279 sees exactly what a falling-edge
+one sees elsewhere, and a falling-edge one there sees what a rising-edge
+one sees elsewhere, at 25, 50, 100 and 125 MHz, with no exceptions.
+Delay in front of a region-279 flip-flop says which kind of offset it
+is: at 25 MHz, `ARVALID` through 120 chain stages (2 576 by the model)
+is still one edge early; at 100 and 125 MHz the 96- and 120-stage taps
+are on time and the 48-stage one (1 313) is still early. A fixed lag
+would cross over at the same delay at every clock; this crosses over at
+a delay that grows with the period, which is half a period. It also
+calibrates the model, roughly: 1 313 units take under 4 ns and 2 576
+over 5 ns.
+
+What it explains, and what not yet:
+
+- A design wholly inside one group, 155/217/341 or 279 alone, is
+  consistent with itself, and the processor's port is content with
+  either: every slave that worked is one of those, or nearly.
+- A design that spans region 279 and a neighbour has paths of half a
+  period that the timing model does not know about, and capture edges
+  a whole cycle apart for the same signal. wbd and the `--pins-at-entry`
+  build of r16 span it; so does the burst slave above, with `RVALID` on
+  row 281 and its data on rows 187–218. That its symptom (the previous
+  response's data with the current `RVALID`) follows from this is
+  likely and not worked out.
+- **What inverts it is open.** The replayed clock tiles of the four
+  regions were compared by feature; the features that feed track 14
+  there come out of the database as pairs it could not separate, and
+  nothing was found that says "invert" in region 279 alone. Whether the
+  borrowed network itself delivers it that way or Reticle's use of
+  track 14 there does is not known.
+
+What a design should do meanwhile: keep its clocked logic out of rows
+249–309, or wholly inside them.
+
 ### A safety net: the AXI timeout block
 
 Three hangs in a week, each needing someone to switch the board off and
@@ -1307,15 +1385,19 @@ only that.
    lookup-table ripples; the lookup table's direct path to its
    flip-flop; and the reset pins of every group but the first, measured
    (the enables are, in "Which enable serves which flip-flops").
-2. **A clock of Reticle's own.** `PL_CLK0` now reaches slices through
+2. **Why the clock region of row 279 runs on the other edge**
+   ("One clock region of the four runs on the other edge"), and until
+   that is known, a placement that keeps a design's flip-flops on one
+   side of it.
+3. **A clock of Reticle's own.** `PL_CLK0` now reaches slices through
    Vivado's clock network, replayed (above). Building that network rather
    than borrowing it needs the processor's clock buffers on this die,
    which no database describes.
-3. **The rest of the processor interface.** `M_AXI_HPM0_LPD` works
+4. **The rest of the processor interface.** `M_AXI_HPM0_LPD` works
    (above). The other masters, the slave ports a design would use to
    reach DDR, and interrupts are not yet exposed; each needs the
    processor configured for it, which the PYNQ image may not have done.
-4. **Instantiated primitives.** A `LUT6` written as an instance in Verilog
+5. **Instantiated primitives.** A `LUT6` written as an instance in Verilog
    stays an instance: the frontend does not know the device's primitives,
    and the flow does not turn such an instance into a cell with the
    device's port directions. Until 2026-10-10 the place-and-route netlist
