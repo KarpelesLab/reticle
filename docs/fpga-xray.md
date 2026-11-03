@@ -5964,6 +5964,28 @@ but seed 1 did not converge. This is checked in software only: the
 Husky Plus was in use by another project, and how the new routes do in
 NewAE's tests has not been measured.
 
+**Not kept: lifting the cap gradually.** Lifted, the cap jumps from 10
+to the full charge, near 120 by then, and on seed 4 the next pass
+visited 665 M nodes against 123 M. Passes 23 to 28 took 870 s of the
+1,959 s route. Growing the cap by the charge's own 1.3 a pass instead,
+on the same six placements:
+
+| seed | lifted at once | grown |
+|---|---|---|
+| 1 | 80 passes, 10.47 G | did not converge (3 nodes) |
+| 2 | 74, 9.34 G | 71, 7.92 G |
+| 3 | 83, 8.54 G | 67, 5.64 G |
+| 4 | 75, 5.58 G | 75, 4.80 G |
+| 5 | 72, 6.95 G | 73, 5.52 G |
+| 6 | 85, 9.07 G | 63, 5.99 G, ADC 7.11 ns against 6.41 |
+
+Seed 1 is the one that fails every variant that weakens the late charge.
+It ended on two signals of `U_usb_reg_main.reg_address` sharing
+`X136Y92/SS2BEG0`, and two bits of `reg_la.capture_count` sharing a
+`FAN_ALT5` into one carry. Those are pairs taking a wire from each other
+every pass, so a cheaper middle is only safe once that end is
+understood.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
