@@ -474,6 +474,12 @@ pub enum BelRole {
     /// `LDPE`). It has a flip-flop's five pins, with the gate on `clk`, and
     /// mapping never chooses it for a `$dff`.
     Latch,
+    /// A shift register of up to 32 bits on a `SLICEM`'s lookup table
+    /// (`SRLC32E`).
+    Srl32,
+    /// A shift register of up to 16 bits, on the same table with other bits and
+    /// another data wire (`SRL16E`, `SRLC16E`).
+    Srl16,
     /// A block RAM; its shape is in [`BramShape`].
     Bram,
     /// A DSP block; its shape is in [`DspShape`].
@@ -516,7 +522,7 @@ pub enum BelRole {
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 18] = [
+    pub const ALL: [BelRole; 20] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
@@ -524,6 +530,8 @@ impl BelRole {
         BelRole::GlobalBuffer,
         BelRole::LutRam,
         BelRole::Latch,
+        BelRole::Srl32,
+        BelRole::Srl16,
         BelRole::Bram,
         BelRole::Dsp,
         BelRole::Pll,
@@ -547,6 +555,8 @@ impl BelRole {
             BelRole::GlobalBuffer => "gb",
             BelRole::LutRam => "lutram",
             BelRole::Latch => "latch",
+            BelRole::Srl32 => "srl32",
+            BelRole::Srl16 => "srl16",
             BelRole::Bram => "bram",
             BelRole::Dsp => "dsp",
             BelRole::Pll => "pll",

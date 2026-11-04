@@ -295,7 +295,12 @@ fn build(root: &str, verilog: &str, rcf: &str, half: Option<&str>) -> Built {
         .map(|r| GridRegion::new(r.x0, r.y0.saturating_sub(6), r.x1 + 2, r.y1 + 6))
         .unwrap();
     let fabric = db
-        .load(&DiskFiles, &XrayOptions::new().with_region(region))
+        .load(
+            &DiskFiles,
+            &XrayOptions::new()
+                .with_region(region)
+                .for_design(&design, top, device),
+        )
         .unwrap();
     let graph = fabric.arch.build_graph();
     let netlist = Netlist::build(&design, top, device, &graph).unwrap();

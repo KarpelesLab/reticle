@@ -184,6 +184,7 @@ pub mod place;
 pub mod pll;
 pub mod primitives;
 pub mod route;
+pub mod srl;
 pub mod techcells;
 mod text;
 pub mod trellis;
@@ -293,9 +294,11 @@ pub fn cell_source(family: &str, names: &[String]) -> Option<String> {
 ///
 /// This is what Vivado's synthesis does with them, read off its netlist for
 /// every name here (`testdata/fpga/vivado/slice_cells/`): twelve latches go in
-/// and `LDCE` and `LDPE` come out. A design that names one of these therefore
-/// skips the cell library's behavioural model and gets the slice's own latch,
-/// where the model would have put a lookup table on its gate.
+/// and `LDCE` and `LDPE` come out, and ten shift registers go in and `SRL16E`,
+/// `SRLC16E` and `SRLC32E` come out. A design that names one of these therefore
+/// skips the cell library's behavioural model and gets the slice's own, where
+/// the model would have put a lookup table on a latch's gate and thirty-two
+/// flip-flops in a shift register.
 #[must_use]
 pub fn retarget(family: &str, primitive: &str) -> Option<Retarget> {
     if family != "xc7" {
@@ -308,6 +311,9 @@ pub fn retarget(family: &str, primitive: &str) -> Option<Retarget> {
     let to = match name {
         "LDCE" | "LD" | "LDC" | "LDE" => "LDCE",
         "LDPE" | "LDP" => "LDPE",
+        "SRL16E" | "SRL16" => "SRL16E",
+        "SRLC16E" | "SRLC16" => "SRLC16E",
+        "SRLC32E" | "SRL32E" => "SRLC32E",
         _ => return None,
     };
     Some(Retarget {
@@ -321,7 +327,7 @@ pub fn retarget(family: &str, primitive: &str) -> Option<Retarget> {
 pub struct Retarget {
     /// The primitive the device declares.
     pub to: &'static str,
-    /// The primitive's name said to invert the gate (`LD_1`).
+    /// The primitive's name said to invert its gate or its clock (`LD_1`).
     pub gate_inverted: bool,
 }
 

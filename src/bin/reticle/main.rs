@@ -261,6 +261,10 @@ Options:
                      fixes every cell, <f>.v is the netlist, <f>.xdc the
                      constraints and <f>.routes.tcl every route.
                      tools/vivado-parity/run_placed.tcl runs them.
+  --srl-min <n>      How many flip-flops in a chain make a shift register on a
+                     family with one: 3 by default, as Vivado has it. 0 leaves
+                     every flip-flop, copies included, as mapped: the netlist a
+                     7-series design got before shift registers
   --routed-netlist <f>
                      With --bitstream on the 7 series, write the design the
                      bitstream is made from as structural Verilog: lookup
@@ -827,6 +831,7 @@ fn spec_for(usage: &str) -> Spec {
                 "timing-endpoints",
                 "routed-netlist",
                 "vivado-placement",
+                "srl-min",
             ],
             flags: &[
                 "sv",
@@ -2464,6 +2469,16 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         wide_muxes,
         ..FpgaOptions::default()
     };
+    if let Some(text) = args.option("srl-min") {
+        match text.parse::<u32>() {
+            Ok(n) => options.srl_min_length = n,
+            Err(_) => {
+                return Ok(Outcome::Usage(format!(
+                    "`--srl-min {text}` is not a number of flip-flops"
+                )));
+            }
+        }
+    }
     // **The 7-series places a hard multiplier; no other backend here
     // does**, so for their bitstreams a multiply stays in lookup tables,
     // which are slower and correct. `fpga::trellis::dsp` says why for the
@@ -3733,7 +3748,8 @@ fn write_xc7_bitstream(
     let root = root.to_string_lossy().into_owned();
 
     let files = DiskFiles::for_sources(&[]);
-    let mut options = XrayOptions::new();
+    // A shift register's sites and wires, for a design that has one.
+    let mut options = XrayOptions::new().for_design(design, top, device);
     if let Some(text) = args.option("region") {
         let numbers: Result<Vec<u32>, _> = text.split(',').map(str::parse::<u32>).collect();
         match numbers {

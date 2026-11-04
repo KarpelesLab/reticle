@@ -23,6 +23,7 @@ module pllshift
   net %sr$q5 u1 wire
   net %sr$q6 u1 wire
   net %sr$q7 u1 wire
+  net %sr$ff1$srl0 u1 wire
   port clk in %clk$pad
   port d in %d$pad
   port q out %q$pad
@@ -47,11 +48,6 @@ module pllshift
   cell sys$pll blackbox PLLE2_BASE #(STARTUP_WAIT="FALSE", BANDWIDTH="OPTIMIZED", DIVCLK_DIVIDE=1, CLKFBOUT_MULT=8, CLKOUT0_DIVIDE=16) (CLKIN1=%clk, CLKFBIN=%sys$fb, RST=1'd0, PWRDWN=1'd0) -> (CLKOUT0=%sys, CLKFBOUT=%sys$fb)
   cell sys$gbuf blackbox BUFG (I=%sys) -> (O=%sys$gb)
   cell sr$ff0 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[0:0], CE=1'd1, R=1'd0) -> (Q=%sr$q0)
-  cell sr$ff1 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[1:1], CE=1'd1, R=1'd0) -> (Q=%sr$q1)
-  cell sr$ff2 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[2:2], CE=1'd1, R=1'd0) -> (Q=%sr$q2)
-  cell sr$ff3 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[3:3], CE=1'd1, R=1'd0) -> (Q=%sr$q3)
-  cell sr$ff4 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[4:4], CE=1'd1, R=1'd0) -> (Q=%sr$q4)
-  cell sr$ff5 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[5:5], CE=1'd1, R=1'd0) -> (Q=%sr$q5)
-  cell sr$ff6 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[6:6], CE=1'd1, R=1'd0) -> (Q=%sr$q6)
-  cell sr$ff7 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%next[7:7], CE=1'd1, R=1'd0) -> (Q=%sr$q7)
+  cell sr$ff7 blackbox FDRE #(INIT=1'd0) (C=%sys$gb, D=%sr$ff1$srl0, CE=1'd1, R=1'd0) -> (Q=%sr$q7)
+  cell sr$ff1$srl0$1 blackbox SRL16E #(INIT=16'd0) (D=%next[1:1], CLK=%sys$gb, CE=1'd1, A0=1'd1, A1=1'd0, A2=1'd1, A3=1'd0) -> (Q=%sr$ff1$srl0)
 end

@@ -485,6 +485,28 @@ fn io_logic_wants(
     is_routed: &dyn Fn(usize) -> bool,
     wants: &mut Vec<Want>,
 ) {
+    if matches!(
+        instance.primitive.as_str(),
+        "SRLC32E" | "SRL16E" | "SRLC16E"
+    ) {
+        // A shift register's address at a fixed value, and its enable tied
+        // high: see `super::srl`. A one is left to read what it reads
+        // undriven, with the wire claimed so that nothing else drives it, and a
+        // zero comes over a ground fan, both as Vivado has them.
+        for p in &instance.pins {
+            let pin = &netlist.pins[*p];
+            let want = match pin.constant {
+                _ if pin.output || pin.signal.is_some() => continue,
+                Some(Bit::One) => TiePolicy::One,
+                Some(Bit::Zero) => TiePolicy::Zero,
+                _ => continue,
+            };
+            if let Some(node) = site.pin(&pin.role) {
+                wants.push((want, instance.name.clone(), pin.role.clone(), node));
+            }
+        }
+        return;
+    }
     if instance.primitive != "IDDR" {
         return;
     }
@@ -1091,7 +1113,14 @@ impl XrayFabric {
             )?;
         }
         let mut fans: Vec<NodeId> = Vec::new();
-        for (want, _, _, node) in &wants {
+        for (want, _, role, node) in &wants {
+            // A shift register's enable reads one because nothing drives its
+            // wire, and that wire leads to a bounce the router likes: closed
+            // to every signal, as a ground fan is.
+            if *want == TiePolicy::One && role == super::srl::CONSTANT_ENABLE {
+                fans.extend(fixed_chain(graph, *node));
+                continue;
+            }
             if *want != TiePolicy::Zero {
                 continue;
             }

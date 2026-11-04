@@ -11,7 +11,8 @@ module chain8_arst (
   reg q;
   always @(posedge clk) q <= ^out;
   always @(posedge clk) so <= q ^ sr[0];
+  wire r = sr[2];
   reg [7:0] c;
-  always @(posedge clk or posedge sr[2]) if (sr[2]) c <= 8'd0; else c <= {c[6:0], sr[1]};
+  always @(posedge clk or posedge r) if (r) c <= 8'd0; else c <= {c[6:0], sr[1]};
   assign out[0] = c[7];
 endmodule

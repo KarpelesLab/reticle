@@ -24,6 +24,7 @@ module pllshift (.clk(clk$pad), .d(d$pad), .q(q$pad));
   wire sr$q5;
   wire sr$q6;
   wire sr$q7;
+  wire sr$ff1$srl0;
   assign clk = clk$in0;
   assign q = sr[7];
   assign next = {sr[6], sr[5], sr[4], sr[3], sr[2], sr[1], sr[0], d$in0};
@@ -64,53 +65,21 @@ module pllshift (.clk(clk$pad), .d(d$pad), .q(q$pad));
     .R(1'b0),
     .Q(sr$q0)
   );
-  FDRE #(.INIT(1'b0)) sr$ff1 (
-    .C(sys$gb),
-    .D(next[1]),
-    .CE(1'b1),
-    .R(1'b0),
-    .Q(sr$q1)
-  );
-  FDRE #(.INIT(1'b0)) sr$ff2 (
-    .C(sys$gb),
-    .D(next[2]),
-    .CE(1'b1),
-    .R(1'b0),
-    .Q(sr$q2)
-  );
-  FDRE #(.INIT(1'b0)) sr$ff3 (
-    .C(sys$gb),
-    .D(next[3]),
-    .CE(1'b1),
-    .R(1'b0),
-    .Q(sr$q3)
-  );
-  FDRE #(.INIT(1'b0)) sr$ff4 (
-    .C(sys$gb),
-    .D(next[4]),
-    .CE(1'b1),
-    .R(1'b0),
-    .Q(sr$q4)
-  );
-  FDRE #(.INIT(1'b0)) sr$ff5 (
-    .C(sys$gb),
-    .D(next[5]),
-    .CE(1'b1),
-    .R(1'b0),
-    .Q(sr$q5)
-  );
-  FDRE #(.INIT(1'b0)) sr$ff6 (
-    .C(sys$gb),
-    .D(next[6]),
-    .CE(1'b1),
-    .R(1'b0),
-    .Q(sr$q6)
-  );
   FDRE #(.INIT(1'b0)) sr$ff7 (
     .C(sys$gb),
-    .D(next[7]),
+    .D(sr$ff1$srl0),
     .CE(1'b1),
     .R(1'b0),
     .Q(sr$q7)
+  );
+  SRL16E #(.INIT(16'h0000)) sr$ff1$srl0$1 (
+    .D(next[1]),
+    .CLK(sys$gb),
+    .CE(1'b1),
+    .A0(1'b1),
+    .A1(1'b0),
+    .A2(1'b1),
+    .A3(1'b0),
+    .Q(sr$ff1$srl0)
   );
 endmodule

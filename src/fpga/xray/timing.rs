@@ -110,6 +110,14 @@ pub(crate) const DSP_SETUP_P: f64 = 3.722;
 pub(crate) const DSP_CASCADE: f64 = 1.713;
 /// Setup of `PCIN` at a `P` register, ns.
 pub(crate) const DSP_SETUP_CASCADE: f64 = 1.4;
+/// A shift register's clock to `Q`, ns: Vivado 2026.1's `Prop_srl16e_CLK_Q` and
+/// `Prop_srlc32e_CLK_Q` for this part at speed grade 1, which are the same.
+pub(crate) const SRL_LAUNCH: f64 = 1.628;
+/// A shift register's address to `Q`, ns: `Prop_srl16e_A0_Q`.
+pub(crate) const SRL_READ: f64 = 0.299;
+/// A shift register's setup, ns: `Setup_srl16e_CLK_D`, 0.222, and the larger
+/// `Setup_srl16e_CLK_CE`, 0.517, which is what a chain with an enable has to meet.
+pub(crate) const SRL_SETUP: f64 = 0.517;
 /// A block RAM's clock to output without its output register, ns.
 pub(crate) const BRAM_LAUNCH: f64 = 2.45;
 /// A block RAM's input setup, ns.
@@ -615,6 +623,41 @@ pub fn place_timing(
                     if !is_clock(&netlist.pins[*pin].role) || kind == "gb" {
                         pins[*pin] = PinTiming::Through;
                     }
+                }
+            }
+            "srl32" | "srl16" => {
+                // Clocked at a fixed address, which is a chain's: its `Q` starts
+                // a path, `SRL_LAUNCH` after the clock and five times a flip-
+                // flop's. At an address that moves the read is combinational,
+                // as a RAM's, and what is lost is the clock's path to `Q`.
+                let moves = inst.pins.iter().any(|p| {
+                    let pin = &netlist.pins[*p];
+                    pin.role.starts_with('a') && pin.signal.is_some()
+                });
+                capture[index] = SRL_SETUP;
+                if moves {
+                    cell[index] = SRL_READ;
+                } else {
+                    launch[index] = SRL_LAUNCH;
+                }
+                for pin in &inst.pins {
+                    let role = netlist.pins[*pin].role.as_str();
+                    pins[*pin] = if is_clock(role) {
+                        PinTiming::Ignored
+                    } else if netlist.pins[*pin].output {
+                        if moves && role == "q" {
+                            PinTiming::Through
+                        } else {
+                            PinTiming::Start
+                        }
+                    } else if role.starts_with('a') {
+                        PinTiming::Through
+                    } else {
+                        PinTiming::End
+                    };
+                }
+                if let Some(c) = clock {
+                    domain[index] = domain_of(clock_of(c));
                 }
             }
             "lutram" => {

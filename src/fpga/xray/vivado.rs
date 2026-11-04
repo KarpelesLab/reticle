@@ -113,8 +113,17 @@ fn site_and_bel(
     if let Some(rest) = bel.strip_prefix("SLICEL_").or(bel.strip_prefix("SLICEM_")) {
         let (index, sub) = rest.split_once('_')?;
         let site = site_named(&bel[..bel.len() - rest.len() + index.len()])?;
+        // A latch is on the flip-flop's element, and a shift register on the
+        // six-input table, as `xray::srl` says.
         let name = if let Some(letter) = sub.strip_suffix("LUT") {
             format!("{letter}{}LUT", if lower { 5 } else { 6 })
+        } else if let Some(letter) = sub.strip_suffix("LATCH") {
+            format!("{letter}FF")
+        } else if let Some(letter) = sub
+            .strip_suffix("SRL32")
+            .or_else(|| sub.strip_suffix("SRL16"))
+        {
+            format!("{letter}6LUT")
         } else {
             sub.to_owned()
         };
@@ -808,6 +817,18 @@ mod tests {
         assert_eq!(
             spell("SLICEL_X1_CARRY4", false),
             ("SLICE_X11Y3".to_owned(), "CARRY4".to_owned())
+        );
+        assert_eq!(
+            spell("SLICEL_X1_CLATCH", false),
+            ("SLICE_X11Y3".to_owned(), "CFF".to_owned())
+        );
+        assert_eq!(
+            spell("SLICEM_X0_BSRL32", false),
+            ("SLICE_X10Y3".to_owned(), "B6LUT".to_owned())
+        );
+        assert_eq!(
+            spell("SLICEM_X0_DSRL16", false),
+            ("SLICE_X10Y3".to_owned(), "D6LUT".to_owned())
         );
     }
 }

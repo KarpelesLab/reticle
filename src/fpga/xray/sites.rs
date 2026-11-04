@@ -398,6 +398,14 @@ pub(super) fn latch_lanes(prefix: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The wire a slice's clock enable arrives on, ahead of its `CEUSEDMUX`: what a
+/// shift register reads (`super::srl`) and what a flip-flop's enable passes
+/// through.
+pub(super) fn slice_enable_source(tile_type: &str, index: u32) -> String {
+    let shared = clb_shared_prefix(tile_type).unwrap_or("");
+    shared_control_sources(shared, index).1
+}
+
 /// One pin of a bel: the role the device database knows it by, and the
 /// tile wire it reaches.
 pub(super) struct BelPin {

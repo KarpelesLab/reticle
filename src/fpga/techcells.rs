@@ -1393,7 +1393,10 @@ fn absorbs_constant(bel: &BelKind, port: &str) -> bool {
     }
     match bel.role {
         BelRole::Lut | BelRole::GlobalBuffer => true,
-        BelRole::Ff | BelRole::Latch => port != "d",
+        // A shift register's address and enable are tied by the backend, as a
+        // block RAM's are: a one is what the wire reads undriven and a zero
+        // comes from `GND_WIRE` (`xray::srl`).
+        BelRole::Ff | BelRole::Latch | BelRole::Srl32 | BelRole::Srl16 => port != "d",
         BelRole::Carry => matches!(port, "ci" | "cyinit" | "p" | "di") || port.ends_with("clk"),
         _ => matches!(port, "oe" | "oen" | "pad") || port.ends_with("clk"),
     }

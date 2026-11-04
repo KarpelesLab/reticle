@@ -351,6 +351,10 @@ pub struct FpgaOptions {
     /// that leaves fewer tables. A design that saves none maps exactly as it
     /// does with this off. See `synth::techmap`.
     pub wide_muxes: bool,
+    /// How many flip-flops in a chain make a shift register
+    /// ([`super::srl::extract`]); 0 for none, and for the netlist from before
+    /// that existed. Only a device that declares one does anything with it.
+    pub srl_min_length: u32,
 }
 
 #[cfg(feature = "synth")]
@@ -365,6 +369,7 @@ impl Default for FpgaOptions {
             flatten: true,
             verify_mapping: None,
             wide_muxes: true,
+            srl_min_length: super::srl::DEFAULT_MIN_LENGTH,
         }
     }
 }
@@ -396,6 +401,8 @@ pub struct FlowReport {
     /// The verdict of the mapping equivalence check, when
     /// [`FpgaOptions::verify_mapping`] asked for one.
     pub mapping: Option<crate::synth::techmap::MapEquivalence>,
+    /// What [`super::srl::extract`] made of the flip-flops.
+    pub shift_registers: super::srl::SrlReport,
 }
 
 impl FlowReport {
@@ -438,6 +445,15 @@ impl FlowReport {
             for (name, count) in &self.netlist {
                 let _ = writeln!(out, "  {count} x {name}");
             }
+        }
+        let shift = &self.shift_registers;
+        if shift.unread > 0 || shift.merged > 0 || shift.chains > 0 {
+            let _ = writeln!(
+                out,
+                "shift registers:\n  {} from {} flip-flop(s) in {} chain(s), {} flip-flop(s) \
+                 nothing read and {} that were copies gone",
+                shift.shift_registers, shift.flip_flops, shift.chains, shift.unread, shift.merged
+            );
         }
         if !self.device_cells.inverted.is_empty() {
             out.push_str("inverted:\n");
@@ -594,6 +610,13 @@ pub fn synthesize_for(
     // 5. The family's own cell names and parameters.
     if options.device_cells {
         report.device_cells = super::techcells::map_cells(design, module, device, diags);
+        // And a chain of them, while they are all primitives.
+        report.shift_registers =
+            super::srl::extract(design, module, device, constraints, options.srl_min_length)
+                .map_err(|e| {
+                    diags.push(Diagnostic::error(e));
+                    FlowError::Synthesis
+                })?;
     }
 
     report.netlist = cell_types(design, module);
@@ -637,19 +660,20 @@ fn unresolved_names(design: &Design) -> Vec<&str> {
     out
 }
 
-/// A latch a design names, as what Vivado makes of it ([`super::retarget`]):
-/// the primitive, its open pins tied, and its gate's inversion and its power-up
-/// value as parameters.
+/// A latch or a shift register a design names, as what Vivado makes of it
+/// ([`super::retarget`]): the primitive, its open pins tied, and its gate's or
+/// clock's inversion and its power-up value as parameters.
 ///
 /// A slice has no inverter on a latch's clear (`IS_CLR_INVERTED`) and one
 /// bit for a whole slice on its gate, so the clear costs a lookup table and
 /// is left to the design: it is refused here rather than ignored. So is a
-/// latch whose enable is tied low or whose clear is tied high, which holds a
-/// value forever: nothing in a slice's bits says that, and nothing here would
-/// build it. An unused `GE` reads one and an unused `CLR` zero, which are the
-/// only constants that cost nothing.
+/// latch whose enable is tied low or whose clear is tied high, or a shift
+/// register whose enable is tied low, which holds a value forever: nothing in a
+/// slice's bits says that, and nothing here would build it. An unused `GE` or
+/// `CE` reads one and an unused `CLR` zero, which are the only constants that
+/// cost nothing.
 #[cfg(feature = "synth")]
-fn retarget_latch(
+fn retarget_cell(
     m: &mut crate::ir::Module,
     inst: &mut crate::ir::Instance,
     device: &Device,
@@ -685,8 +709,13 @@ fn retarget_latch(
         );
         return false;
     }
-    let gate_inverted = flag(&inst.params, "IS_G_INVERTED") != to.gate_inverted;
-    for (key, value) in [("GE", 1u64), ("CLR", 0), ("PRE", 0)] {
+    let inverted_by = if to.to.starts_with("LD") {
+        "IS_G_INVERTED"
+    } else {
+        "IS_CLK_INVERTED"
+    };
+    let gate_inverted = flag(&inst.params, inverted_by) != to.gate_inverted;
+    for (key, value) in [("GE", 1u64), ("CE", 1), ("CLR", 0), ("PRE", 0)] {
         let held = inst
             .connection(key)
             .and_then(|e| m.expr(e).as_const())
@@ -694,7 +723,7 @@ fn retarget_latch(
         if held.is_some_and(|held| held != value) {
             diags.push(
                 Diagnostic::error(format!(
-                    "`{}`: a latch with `{key}` tied to {} never changes, and this flow has no \
+                    "`{}`: a cell with `{key}` tied to {} never changes, and this flow has no \
                      bits for one",
                     inst.name,
                     1 - value
@@ -705,11 +734,11 @@ fn retarget_latch(
         }
     }
     inst.module = ModuleRef::Unresolved(Name::new(to.to));
-    inst.params.remove("IS_G_INVERTED");
+    inst.params.remove(inverted_by);
     inst.params.remove("IS_CLR_INVERTED");
     inst.params.remove("IS_PRE_INVERTED");
     if gate_inverted {
-        inst.params.set(Name::new("IS_G_INVERTED"), 1i64);
+        inst.params.set(Name::new(inverted_by), 1i64);
     }
     if let Some(bel) = device.bels.iter().find(|b| b.name == to.to) {
         for (key, value) in &bel.params {
@@ -722,6 +751,7 @@ fn retarget_latch(
         // what the part does, and simulating it finds nothing undriven.
         for (role, value) in [
             ("en", crate::ir::Const::ones(1)),
+            ("ce", crate::ir::Const::ones(1)),
             ("rst", crate::ir::Const::zero(1)),
         ] {
             let Some(port) = bel.port(role) else { continue };
@@ -847,7 +877,7 @@ fn primitive_instances(
     let mut done: Vec<InstanceId> = Vec::new();
     for id in ids {
         let mut inst = m.instances[id].clone();
-        if !retarget_latch(m, &mut inst, device, diags) {
+        if !retarget_cell(m, &mut inst, device, diags) {
             refused += 1;
             continue;
         }

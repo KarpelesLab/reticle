@@ -179,14 +179,15 @@ impl XrayDatabase {
             let Some(tile) = by_position.get(&site.tile) else {
                 continue;
             };
-            if instance.kind == "ff" {
+            if matches!(instance.kind.as_str(), "ff" | "latch") {
                 let Some((prefix, bel)) = site.bel.rsplit_once('_') else {
                     continue;
                 };
                 let Some((name, _)) = super::sites::site_of_prefix(tile, prefix) else {
                     continue;
                 };
-                let Some((at, latch)) = flip_flop_location_in(part, tile, name, bel) else {
+                let bel = bel.replace("LATCH", "FF");
+                let Some((at, latch)) = flip_flop_location_in(part, tile, name, &bel) else {
                     continue;
                 };
                 let net = instance

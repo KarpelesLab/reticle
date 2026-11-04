@@ -21,7 +21,7 @@ for path in sorted(glob.glob(f"{out}/*/*.result")):
     result = open(path).read()
     print(f"design {name}")
     for line in result.splitlines():
-        if line.startswith(("placed ", "pin ")) and "/" in line:
+        if line.startswith(("cell ", "placed ")) or (line.startswith("pin ") and "/" in line):
             print(f"  {line}")
     bit = path[:-7] + ".bit"
     if not os.path.exists(bit):

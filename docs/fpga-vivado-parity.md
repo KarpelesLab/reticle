@@ -32,10 +32,9 @@ they do not have. An `FD_1` that seemed wrong was the testbench: a first value
 counts as an edge from unknown to some simulators and not to others, so a cell
 that acts on a falling edge now starts with its clock high.
 
-**Not checked:** these become logic, so an `SRLC32E` is 32 flip-flops today, not
-the one lookup table Vivado makes it. The table below says what that costs.
-`MUXF7`, `MUXF8` and their `_L` and `_D` forms are the exception: a build keeps
-them as the slice's own, below.
+**Not checked:** most of these become logic, and what that costs is in the table
+below. `MUXF7`, `MUXF8` and their `_L` and `_D` forms, the latches and the shift
+registers do not; each has a section of its own.
 
 ## Which primitives build
 
@@ -127,11 +126,109 @@ Not checked and not done: a path through an open latch is not timed. A latch is
 timed as a flip-flop on `G`, so a design relying on time borrowing is timed as if it
 could not, which is on the safe side for setup and says nothing of hold.
 
+## A shift register, against what Vivado wrote for it
+
+`SRLC32E`, `SRL16E`, `SRLC16E` and what Vivado makes of the others are a `SLICEM`'s
+own, and `fpga::srl` makes a chain of flip-flops into them as Vivado's synthesis
+does. Same method, same fixtures: 58 designs in `slice_cells/` are about them, by
+name or inferred, and `xray::srl` is the account of each bit.
+
+**Checked:** `every_shift_register_is_what_vivado_wrote` builds 55 of them. Fifteen
+agree in full: bits, contents, the address pins driven, and which of `<L>I`, `<L>X`
+and the next lane each reads, the cascades inside a slice among them. The other 40 are
+the five-input half and chains, and
+agree in what they hold, what drives their addresses, how many shift registers and
+how many flip-flops there are. All 55's routed netlists simulate as their sources do,
+and each of the rest is said below. Nineteen are in the gate. **None of it has been on
+a board.**
+
+**Checked differently:** Vivado was also given Reticle's own placement and routes of
+twenty of these, latches and shift registers, and of `qor/srl_delay` and
+`gray_cdc` (`run_placed.sh`, stage `routes`), which is a second opinion on every one of
+these bits: it took them all, and its bitstream of each is Reticle's feature for feature
+but for the clock tiles this document already has, and one thing below. Vivado's timer
+has `srl_delay` at 3.243 ns on Reticle's implementation, against its own 2.739 and this
+tool's estimate of 4.90. `regfile_alu` it would not finish, 33 pins, in the distributed
+RAM's routes and not the one shift register's. Those runs are not committed.
+
+**What that found, and what is left:** a frame whose shift register holds a nonzero
+`INIT` has ECC `0x0000` in Vivado's bitstream, and `xc7::frame_ecc` says `0x0003`
+and Reticle writes that: `srlc32e` has four such frames, `srlc16e` four,
+`srlc32e_cascade4` two. So the ECC of a frame leaves that table's contents out, which
+reads as Vivado not counting bits the design changes as it runs. Reticle's frames in
+those cases have an ECC Vivado's do not. Nothing reads it unless a design asks
+(`FRAME_ECCE2`, readback), this flow does not build that primitive, and it is **not
+fixed**: which bits are masked needs asking of Vivado across a distributed RAM too.
+
+The tests' own limit is worth saying. Of 34 mutations of the two features, 28 were
+caught at once and six were not, and each of the six showed something: the contents of
+a sixteen-bit form moved to the lower half passed, because the comparison took whichever
+half held them, and it would have built one reading zeros through an `A6` that reads
+one; a chain that did not cascade, and a run of five, passed because no test had a chain
+that long or asked; a `Q31` allowed off the `A` lane passed because the placer starts at
+`A`; a latch beside a flip-flop passed because no build happened to try; and a constant
+enable not counting as a signal passed against its test's first version, which had the
+two pins on one wire where a slice has them on two. All six are now caught.
+
+What asking found:
+
+- **The address is `A[i]` on `<L>(i + 2)`, and every stored bit is written twice**:
+  `32'hF00FA5C3` is `INIT = FF0000FFCC33F00F`. A sixteen-bit form on the six-input
+  table has `SMALL`, the upper half, and its data on **`<L>X`**, not `<L>I`.
+  `lutram.rs`, the precedent the work started from, has its address from `<L>1` and
+  its enable on `WE`: neither holds here.
+- **The enable is on `CE`, with `WEMUX.CE` set and `CEUSEDMUX` clear**, ahead of the
+  mux a flip-flop's goes through, so a flip-flop with no enable may sit beside it.
+  Tied high it is unrouted and reads one, which is a claim on that wire: the placer
+  counts it as a signal of its own (`a_shift_register_with_its_enable_tied_keeps_the_wire_to_itself`)
+  and the router is kept off it.
+- **Inside a slice `Q31` runs `D` to `C` to `B` to `A`**, into the next lane's `DI1` with
+  `DI1MUX` clear and no bit of its own, and a run is cut into fours from its end:
+  `srlc32e_cascade5` is one in a slice of its own and four in the next.
+  `place::srl_cascades` holds those to their lanes as a macro.
+- **`Q31` leaves a slice from the `A` lane only, on `DMUX`**, and **the database's
+  `DOUTMUX.MC31` is wrong**: it says `30_10 !30_51 30_52 !30_56 30_57`, and `30_10` is
+  `A5FFMUX.IN_B`. Vivado sets the other two and not that one, in all six bitstreams
+  that use it, and those were the only slice bits in 85 designs the database could
+  not name. `xray::srl::correct_features` takes it out.
+- **What a chain is.** One clock, one enable, no set or reset, and every stage but
+  the last read by nothing else. The last stage stays a flip-flop, unless what reads
+  it is a flip-flop of another enable or edge, which then registers the shift
+  register. A stage reading a pad stays too, so `pure3` is three flip-flops and `pure4`
+  one, a two-bit `SRL16E` and one. Vivado honours `ASYNC_REG`, `shreg_extract`,
+  `keep` and `dont_touch`. A flip-flop a placement constraint names stays one here too,
+  which was not asked of Vivado: a pblock over `sr_reg[*]` means those flip-flops.
+- **A shift register reads `CLKINV` the way a flip-flop does, and a latch does not.**
+
+What the tools do differently, each pinned by `where_a_shift_register_differs_from_vivado`:
+
+- A chain's rest of up to 16 bits behind a cascade: Vivado's is an `SRL16E` on `A5LUT`,
+  whose `DI1` reads `MC31`, and this one's is an `SRLC32E`, since the six-input
+  sixteen-bit form reads `<L>X`.
+- Vivado's sixteen-bit form it can register goes on `A5LUT`, with `A5FF` beside it,
+  and it can hold two to a table. Here it is always the six-input one, which is also one
+  of Vivado's own answers.
+- `SRLC32E` read at a fixed address under 16 stays one; Vivado narrows it.
+- `srl_style = "register"` is honoured here. Vivado 2026.1 made `chain8_srl_reg` a
+  shift register all the same.
+- `mem_shift` and `mem_shift16`, a chain read at an address that moves: flip-flops and
+  a multiplexer here, an `SRLC32E` with its `A` wired in Vivado's.
+
+**What it does to a design that has none.** Nothing: the sites and the wires are not
+declared unless the netlist holds one, and eight of the thirteen in `qor/` are the same
+bitstream byte for byte as before this. **What it does to one that has some is a
+different placement.** NewAE's Husky Plus has 16 chains, 4080 flip-flops that would be
+128 `SRLC32E`, 37 flip-flops nothing reads and 3 copies. Whether that is better on the
+part cannot be said from here, and the board is in use, so `examples/husky/build.sh` and
+`build_plus.sh` pass `--srl-min 0`, which is the netlist from before; with it all
+thirteen of `qor/` are byte for byte what they were. Taking it away is a new build to
+measure. **Neither has been built end to end since this.**
+
 ## What each makes of the same design
 
 `testdata/fpga/vivado/qor/` has thirteen small designs, each with a clock at
 200 MHz and two pins, chosen to need one feature each. Vivado's numbers are its
-routed report, in `vivado.txt`. Run on 2026-11-04.
+routed report, in `vivado.txt`. Run on 2026-11-04, with shift registers.
 
 | design | tool | LUT | FF | CARRY | SRL | MUXF | LUTRAM | BRAM18 | DSP | ns | s |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -147,20 +244,20 @@ routed report, in `vivado.txt`. Run on 2026-11-04.
 | | Reticle | 162 | 65 | 0 | 0 | 0 | 0 | 0 | 0 | 5.23 | 9 |
 | fir8 | Vivado | 7 | 23 | 0 | 0 | 0 | 0 | 0 | 8 | 10.988 | 49 |
 | | Reticle, then | 1495 | 436 | 63 | 0 | 0 | 0 | 0 | 0 | 22.88 | 66 |
-| | Reticle | 9 | 113 | 0 | 0 | 0 | 0 | 0 | 8 | 12.64 | 10 |
+| | Reticle | 9 | 23 | 0 | 0 | 0 | 0 | 0 | 8 | 12.64 | 10 |
 | fsm | Vivado | 33 | 30 | 0 | 0 | 1 | 0 | 0 | 0 | 3.217 | 48 |
 | | Reticle | 62 | 30 | 0 | 0 | 0 | 0 | 0 | 0 | 5.23 | 8 |
 | gray_cdc | Vivado | 15 | 37 | 3 | 12 | 0 | 0 | 0 | 0 | 2.255 | 46 |
-| | Reticle | 26 | 61 | 3 | 0 | 0 | 0 | 0 | 0 | 2.85 | 8 |
+| | Reticle | 26 | 37 | 3 | 12 | 0 | 0 | 0 | 0 | 2.68 | 9 |
 | lutram32 | Vivado | 7 | 70 | 0 | 0 | 0 | 51 | 0 | 0 | 2.967 | 47 |
 | | Reticle | 9 | 38 | 0 | 0 | 0 | 0 | 2 | 0 | 5.07 | 9 |
 | mul18 | Vivado | 7 | 36 | 0 | 0 | 0 | 0 | 0 | 1 | 2.833 | 47 |
 | | Reticle, then | 746 | 145 | 0 | 0 | 0 | 0 | 0 | 0 | 29.74 | 17 |
-| | Reticle | 9 | 37 | 0 | 0 | 0 | 0 | 0 | 1 | 5.35 | 10 |
+| | Reticle | 9 | 36 | 0 | 0 | 0 | 0 | 0 | 1 | 5.24 | 10 |
 | regfile_alu | Vivado | 351 | 20 | 20 | 1 | 5 | 102 | 0 | 0 | 7.859 | 64 |
-| | Reticle | 373 | 22 | 8 | 0 | 0 | 64 | 0 | 0 | 10.79 | 12 |
+| | Reticle | 373 | 20 | 8 | 1 | 0 | 64 | 0 | 0 | 10.23 | 14 |
 | srl_delay | Vivado | 7 | 34 | 0 | 2 | 0 | 0 | 0 | 0 | 2.739 | 46 |
-| | Reticle | 9 | 2081 | 0 | 0 | 0 | 0 | 0 | 0 | 6.75 | 38 |
+| | Reticle | 9 | 34 | 0 | 2 | 0 | 0 | 0 | 0 | 4.90 | 9 |
 | widemux | Vivado | 275 | 1049 | 0 | 0 | 192 | 0 | 0 | 0 | 4.131 | 49 |
 | | Reticle | 276 | 1047 | 0 | 0 | 192 | 0 | 0 | 0 | 5.41 | 37 |
 
@@ -175,26 +272,34 @@ it. Reticle's LUT column is sites, with paired tables as two, and Vivado's is
 cells, which leaves out the route-through a carry's propagate may use: so
 `counter64`'s 98 against 23 overstates that gap.
 
+Before shift registers, from the commit before them on the same day, where it differs:
+`gray_cdc` 61 flip-flops and no `SRL`, 2.85 ns; `srl_delay` 2081 flip-flops and none,
+6.75 ns, 43 s; `regfile_alu` 22 and none, 10.79 ns; `fir8` 436 flip-flops, 22.88 ns;
+`mul18` 145 flip-flops, 29.74 ns. The other eight are the same bitstream, byte for byte.
+`srl_delay`, `gray_cdc` and `regfile_alu` now have Vivado's flip-flops and Vivado's
+shift registers, exactly. `fir8` and `mul18` are slower by a little on this tool's own
+estimate with fewer flip-flops to place; a different placement, not a measured effect of
+anything. The table under "Vivado's timer on Reticle's implementation" was measured
+before all of this and is left as it was.
+
 What the table says, largest first:
 
 1. ~~**No hard multiplier.** `mul18` is 746 lookup tables against one `DSP48E1`.
    `docs/fpga-xray.md` has why the flow keeps them out, and it was written with
    no Vivado to ask.~~ Closed on 2026-11-04: *The hard multiply*, below. The rows
    marked "then" are what this item was written from.
-2. **No shift register.** `srl_delay` is 2081 flip-flops against 34 and two
-   `SRL`s.
-3. **No wide multiplexer**, as this table first read: `widemux` was 596 lookup
+2. **No wide multiplexer**, as this table first read: `widemux` was 596 lookup
    tables and no `MUXF` against 275 and 192, at 5.04 ns. It is 276 and 192 now,
    for the section below, and 5.41 ns. That is the estimate going the wrong way
    by 0.37 ns on the design this is for: its latest path spends 3.29 ns on one
    connection of a select read by 257 pins, in a placement with different
    neighbours, and the two runs are one placement each, so it says little either
    way. Vivado has that design's data path at 4.131 ns.
-4. **A small memory goes to block RAM.** `lutram32` uses two `RAMB18E1` where
+3. **A small memory goes to block RAM.** `lutram32` uses two `RAMB18E1` where
    Vivado uses 51 distributed RAM cells.
-5. **`fsm`** is 62 against 33, and why has not been looked at: the Vivado runs are
+4. **`fsm`** is 62 against 33, and why has not been looked at: the Vivado runs are
    `-quiet`, so nothing here says whether it re-encoded the machine.
-6. **Reticle takes as long as Vivado on carries and long chains.** `counter64`
+5. **Reticle takes as long as Vivado on carries and long chains.** `counter64`
    spends 33 of its 38 s in the placer on 98 lookup tables, where `barrel`, with
    about as many, spends 3 s.
    Part of that was a test that scanned a move for every site it asked about,
@@ -974,7 +1079,10 @@ Each is the same function at a cost, or registers somewhere else. Each is named 
 `NOT_THE_SAME` in `tests/fpga_dsp_vivado.rs`, so closing one has to say so.
 
 - **`fir8`'s shift register stays in the fabric.** Vivado passes it down the column
-  through `ACOUT`/`BCOUT` and is left with 23 flip-flops against 113.
+  through `ACOUT`/`BCOUT` and is left with 23 flip-flops against 113. With shift
+  registers inferred (*Latches and shift registers*) Reticle also has 23, from the
+  same table, but the taps are still fabric wires to each block's `A` and not its
+  cascade.
 - **An operand one bit past a port** (`s_26x18`, `s_25x19`, `u_18x18`) is one block
   there, with the odd bit's partial product on `C` under a dynamic `OPMODE`, and two
   here.

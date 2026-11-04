@@ -11,7 +11,10 @@ logic:
   0 LUTs, depth 0
 netlist:
   1 x BUFG
-  8 x FDRE
+  2 x FDRE
   2 x IBUF
   1 x OBUF
   1 x PLLE2_BASE
+  1 x SRL16E
+shift registers:
+  1 from 6 flip-flop(s) in 1 chain(s), 0 flip-flop(s) nothing read and 0 that were copies gone

@@ -5716,6 +5716,8 @@ impl Mapper<'_> {
                         | BelRole::Sysmon
                         | BelRole::DdrIn
                         | BelRole::DdrOut
+                        | BelRole::Srl32
+                        | BelRole::Srl16
                 )
             })
             .flat_map(|b| {

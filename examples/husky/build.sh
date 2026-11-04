@@ -21,6 +21,11 @@
 # `--wide-muxes off` because a build of this design that uses `MUXF7` and
 # `MUXF8` has not been on a board: docs/fpga-vivado-parity.md says what it
 # saves, and the choice has to be measured there before it is made here.
+#
+# `--srl-min 0` keeps the flip-flops of a chain flip-flops and the copies of one
+# copies, as they were when every number here was measured. Without it the design
+# has shift registers as Vivado's has, about which nothing has been measured on a
+# part; see docs/fpga-vivado-parity.md. Taking it away is a new build to measure.
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -32,6 +37,7 @@ reticle=${RETICLE:-reticle}
 mkdir -p "$out"
 exec "$reticle" fpga \
     --wide-muxes off \
+    --srl-min 0 \
     --device xc7a35t-ftg256 \
     --top cwhusky_top \
     --define INTERVAL_MATCHING=1 --define ESAD --define BB_LIMIT \

@@ -143,6 +143,10 @@ def cascade(n):
 add("srlc32e_cascade2", "Two SRLC32Es in a cascade.", cascade(2))
 add("srlc32e_cascade4", "Four SRLC32Es in a cascade: a whole SLICEM.", cascade(4))
 add("srlc32e_cascade5", "Five SRLC32Es in a cascade, which is more than one SLICEM.", cascade(5))
+add("srlc32e_two_q31", "Two SRLC32Es that share everything but their data, with their last bits read.",
+    "  SRLC32E #(.INIT(32'h12345678)) a (.Q31(out[0]), .A(sr[4:0]), .CE(sr[5]), .CLK(clk), .D(sr[6]));\n"
+    "  SRLC32E #(.INIT(32'h9ABCDEF0)) b (.Q31(out[1]), .A(sr[4:0]), .CE(sr[5]), .CLK(clk), .D(sr[7]));\n",
+    outputs=2)
 add("srl16e_two", "Two SRL16Es with one control set.",
     "  SRL16E #(.INIT(16'h1234)) a (.Q(out[0]), .A0(sr[0]), .A1(sr[1]), .A2(sr[2]), .A3(sr[3]), .CE(sr[4]), .CLK(clk), .D(sr[5]));\n"
     "  SRL16E #(.INIT(16'h5678)) b (.Q(out[1]), .A0(sr[0]), .A1(sr[1]), .A2(sr[2]), .A3(sr[3]), .CE(sr[4]), .CLK(clk), .D(sr[6]));\n",
@@ -156,14 +160,14 @@ def chain(n, decl="", head="always @(posedge clk)", stmt=None, init="", tail="")
             f"  assign out[0] = c[{n - 1}];\n{tail}")
 
 
-for n in (2, 3, 4, 5, 8, 16, 17, 18, 32, 33, 34, 35, 64, 66, 100):
+for n in (2, 3, 4, 5, 8, 16, 17, 18, 32, 33, 34, 35, 64, 66, 100, 300):
     add(f"chain{n}", f"A chain of {n} flip-flops with no reset.", chain(n))
 add("chain8_en", "A chain of eight with one enable.",
     chain(8, head="always @(posedge clk) if (sr[2])", stmt="c <= {c[6:0], sr[1]};"))
 add("chain8_rst", "A chain of eight with a synchronous reset.",
     chain(8, stmt="if (sr[2]) c <= 8'd0; else c <= {c[6:0], sr[1]};"))
 add("chain8_arst", "A chain of eight with an asynchronous reset.",
-    chain(8, head="always @(posedge clk or posedge sr[2])", stmt="if (sr[2]) c <= 8'd0; else c <= {c[6:0], sr[1]};"))
+    "  wire r = sr[2];\n" + chain(8, head="always @(posedge clk or posedge r)", stmt="if (r) c <= 8'd0; else c <= {c[6:0], sr[1]};"))
 add("chain8_set", "A chain of eight with a synchronous set.",
     chain(8, stmt="if (sr[2]) c <= 8'hff; else c <= {c[6:0], sr[1]};"))
 add("chain8_init", "A chain of eight with initial values.", chain(8, init=" = 8'hA5"))
@@ -185,6 +189,18 @@ add("mem_shift", "A variable tap: a chain and an address that reads it.",
     "  reg [31:0] c;\n  always @(posedge clk) if (sr[5]) c <= {c[30:0], sr[6]};\n  assign out[0] = c[sr[4:0]];\n")
 add("mem_shift16", "A variable tap into sixteen stages.",
     "  reg [15:0] c;\n  always @(posedge clk) if (sr[5]) c <= {c[14:0], sr[6]};\n  assign out[0] = c[sr[3:0]];\n")
+
+# Copies of a flip-flop, and flip-flops that only look like one: another enable,
+# another reset, another first value, another edge.
+add("copies", "Which flip-flops are the same flip-flop.",
+    "  reg a, b, c, d, f, g;\n  initial begin d = 1'b1; end\n"
+    "  always @(posedge clk) begin\n    a <= sr[1];\n    b <= sr[1];\n"
+    "    if (sr[2]) c <= sr[1];\n    d <= sr[1];\n    if (sr[3]) f <= 1'b0; else f <= sr[1];\n  end\n"
+    "  always @(negedge clk) g <= sr[1];\n"
+    "  assign out = {a, b, c, d, f, g};\n", outputs=6)
+
+# Nothing for a shift register to do: two stages, each read by something else.
+add("no_chain", "No chain in sight.", "  assign out[0] = sr[1] ^ sr[0];\n", inputs=2)
 
 # A chain between two pads with nothing beside it, to say how short one Vivado takes.
 for n in (2, 3, 4):

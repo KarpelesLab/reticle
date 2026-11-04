@@ -176,6 +176,7 @@ mod lutram;
 mod lutswap;
 mod parse;
 mod sites;
+mod srl;
 mod timing;
 mod vivado;
 mod xadc;
@@ -366,6 +367,11 @@ pub struct XrayOptions {
     /// an IO standard is a voltage, and quietly substituting a different
     /// one is how a board is damaged.
     pub io_standard: String,
+    /// Declare a `SLICEM`'s shift registers: their bels and the hops that reach
+    /// them (`srl`). Off unless the design has one, because the hops are
+    /// wires the router can see, and a design with none routed differently for
+    /// nothing with them there: eight of the thirteen in `qor/` did.
+    pub shift_registers: bool,
 }
 
 impl Default for XrayOptions {
@@ -382,6 +388,7 @@ impl Default for XrayOptions {
             // numbers rather than with a dead machine.
             max_pips: 48_000_000,
             io_standard: "LVCMOS33".to_owned(),
+            shift_registers: false,
         }
     }
 }
@@ -395,6 +402,29 @@ impl XrayOptions {
     /// The same options restricted to a region.
     pub fn with_region(mut self, region: GridRegion) -> XrayOptions {
         self.region = Some(region);
+        self
+    }
+
+    /// The same options declaring shift registers if `module` of `design` has
+    /// one, which is what a design that was mapped wants before it is loaded for.
+    #[must_use]
+    pub fn for_design(
+        mut self,
+        design: &crate::ir::Design,
+        module: crate::ir::ModuleId,
+        device: &crate::fpga::Device,
+    ) -> XrayOptions {
+        self.shift_registers = design.modules.get(module).is_some_and(|m| {
+            m.cells.iter().any(|(_, cell)| {
+                matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if device.bels.iter().any(|b| {
+                    b.name == name.as_str()
+                        && matches!(
+                            b.role,
+                            crate::fpga::BelRole::Srl32 | crate::fpga::BelRole::Srl16
+                        )
+                }))
+            })
+        });
         self
     }
 
@@ -1065,7 +1095,16 @@ impl XrayDatabase {
             });
         }
 
-        let mut arch = self.build_arch(&tiles, &features, &fixed, &conn, region, &part, &mut stats);
+        let mut arch = self.build_arch(
+            &tiles,
+            &features,
+            &fixed,
+            &conn,
+            region,
+            &part,
+            options.shift_registers,
+            &mut stats,
+        );
         let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
         arch.pinmap = pinmap;
         arch.unplaceable_pins = refused;
@@ -1408,7 +1447,7 @@ impl XrayDatabase {
             // flow derived: the XADC's. See `xadc`.
             return Ok(xadc::derived_features(tile_type).map(FeatureSet::new));
         };
-        let mut set = parse::segbits(&text, &path)?;
+        let mut set = srl::correct_features(tile_type, parse::segbits(&text, &path)?);
         // A bit the database does not name, which this flow measured:
         // see `bufg::cascade_enables`.
         let mut measured = bufg::cascade_enables(tile_type);
@@ -1876,6 +1915,7 @@ impl XrayDatabase {
         conn: &[parse::TileConn],
         region: GridRegion,
         part: &Part,
+        shift_registers: bool,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -1956,7 +1996,10 @@ impl XrayDatabase {
             // `sites::pass_throughs`. Where the two describe the same
             // pair, this one wins, or the router would find a copy of
             // the hop with no bits on it and turn nothing on.
-            let passes = sites::pass_throughs(name);
+            let mut passes = sites::pass_throughs(name);
+            if shift_registers {
+                passes.extend(srl::tile_pass_throughs(name));
+            }
             let overridden: HashSet<(&str, &str)> = passes
                 .iter()
                 .map(|p| (p.to.as_str(), p.from.as_str()))
@@ -2163,7 +2206,10 @@ impl XrayDatabase {
                 .iter()
                 .map(|w| w.name.as_str())
                 .collect();
-            let bels = parse::bels_of(tile, set, &declared, &mut stats.coverage);
+            let mut bels = parse::bels_of(tile, set, &declared, &mut stats.coverage);
+            if shift_registers {
+                bels.extend(srl::bels(&tile.tile_type, "SLICEM_X0", set, &declared));
+            }
             arch.tile_types[*index].bels = bels;
         }
 
@@ -3169,7 +3215,7 @@ pub const ROUTE_PASSES: u32 = 100;
 #[must_use]
 pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
     match kind {
-        "ff" | "latch" => &["clk"],
+        "ff" | "latch" | "srl32" | "srl16" => &["clk"],
         "lutram" => &["wclk"],
         "bram" => &["p0_clk", "p1_clk"],
         "mmcm" => &["dclk", "psclk"],

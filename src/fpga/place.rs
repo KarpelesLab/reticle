@@ -741,15 +741,15 @@ impl Netlist {
                 }
             }
             out.sterilises.push(sterilised_by(device, &primitive, cell));
-            out.gate_inverted
-                .push(
-                    cell.params
-                        .get("IS_G_INVERTED")
-                        .is_some_and(|value| match value {
-                            crate::ir::AttrValue::Const(c) => c.bit(0) == crate::logic::Bit::One,
-                            other => other.as_int().is_some_and(|v| v & 1 == 1),
-                        }),
-                );
+            out.gate_inverted.push(
+                ["IS_G_INVERTED", "IS_CLK_INVERTED"]
+                    .iter()
+                    .filter_map(|key| cell.params.get(key))
+                    .any(|value| match value {
+                        crate::ir::AttrValue::Const(c) => c.bit(0) == crate::logic::Bit::One,
+                        other => other.as_int().is_some_and(|v| v & 1 == 1),
+                    }),
+            );
             out.instances.push(Instance {
                 cell: id,
                 name: cell.name.as_str().to_owned(),
@@ -1795,10 +1795,17 @@ const MAX_POOL: usize = 8;
 /// A latch sets the slice's `LATCH` for all eight elements too, and its gate
 /// is `CLKINV`, so it shares a slice only with a latch of the same polarity.
 /// Its polarity is a parameter, `gate_inverted`, as Vivado has it.
+///
+/// A shift register reads the slice's `CLKINV` and no other mode, so one on a
+/// rising edge may sit beside either kind of flip-flop on a rising edge: see
+/// [`SiteRules::same_mode`]. Vivado puts one beside an `FDRE`, and a `FFSYNC`
+/// means nothing to it.
 fn slice_mode(primitive: &str, gate_inverted: bool) -> u8 {
     match (primitive, gate_inverted) {
         ("LDCE" | "LDPE", false) => return 5,
         ("LDCE" | "LDPE", true) => return 6,
+        ("SRLC32E" | "SRL16E" | "SRLC16E", false) => return 7,
+        ("SRLC32E" | "SRL16E" | "SRLC16E", true) => return 8,
         _ => {}
     }
     let (base, inverted) = match primitive.strip_suffix("_1") {
@@ -1812,6 +1819,42 @@ fn slice_mode(primitive: &str, gate_inverted: bool) -> u8 {
         ("FDCE" | "FDPE", true) => 4,
         _ => 0,
     }
+}
+
+/// Whether two [`slice_mode`]s may share a slice: either needs none, both are
+/// the same, or one is a shift register beside a flip-flop on its clock edge.
+fn modes_agree(a: u8, b: u8) -> bool {
+    a == 0
+        || b == 0
+        || a == b
+        || matches!((a, b), (7, 1 | 3) | (1 | 3, 7) | (8, 2 | 4) | (2 | 4, 8))
+}
+
+/// Whether a flip-flop may be packed with the shift register that drives it,
+/// `AFFMUX.O6` as Vivado has it: they share a slice's clock and its `CLKINV`,
+/// and the flip-flop's enable, if it has one, is the wire the shift register's is
+/// on. A macro of the two that broke one of these could never be placed.
+fn shares_a_slice_with_shift_register(netlist: &Netlist, srl: usize, ff: usize) -> bool {
+    let inverted = |i: usize| netlist.gate_inverted.get(i).copied().unwrap_or(false);
+    if !modes_agree(
+        slice_mode(&netlist.instances[srl].primitive, inverted(srl)),
+        slice_mode(&netlist.instances[ff].primitive, inverted(ff)),
+    ) {
+        return false;
+    }
+    let pin = |instance: usize, role: &str| {
+        netlist.instances[instance]
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|pin| pin.role == role)
+    };
+    let signal = |instance: usize, role: &str| pin(instance, role).and_then(|p| p.signal);
+    signal(srl, "clk") == signal(ff, "clk")
+        && match signal(ff, "en") {
+            None => true,
+            enable => enable == signal(srl, "ce"),
+        }
 }
 
 /// The wires of `tile` that a signal arriving at `pin` must pass through,
@@ -2227,6 +2270,23 @@ impl SiteRules {
                 out.per_instance[pin.instance].push((*role, signal, pin.output));
             }
         }
+        // A shift register whose enable is tied high is relying on its wire
+        // reading one, undriven, and a flip-flop's enable in the same slice
+        // would put a signal on that wire. So the constant counts as a signal
+        // of its own, one all such pins share: `xray::srl` has why.
+        for pin in &netlist.pins {
+            if pin.role == "ce"
+                && pin.signal.is_none()
+                && pin.constant == Some(crate::logic::Bit::One)
+                && matches!(
+                    netlist.instances[pin.instance].kind.as_str(),
+                    "srl32" | "srl16"
+                )
+                && let Some(role) = out.roles.get(pin.role.as_str())
+            {
+                out.per_instance[pin.instance].push((*role, usize::MAX, false));
+            }
+        }
         out
     }
 
@@ -2294,8 +2354,7 @@ impl SiteRules {
     /// Whether two instances on sites that share a pin agree on the mode
     /// their sites share: either needs none, or both the same.
     fn same_mode(&self, a: usize, b: usize) -> bool {
-        let (a, b) = (self.mode[a], self.mode[b]);
-        a == 0 || b == 0 || a == b
+        modes_agree(self.mode[a], self.mode[b])
     }
 
     /// Marks each signal whose readers are all in its driver's rigid
@@ -2721,6 +2780,109 @@ impl Placeable {
     }
 }
 
+/// The stages of a chain of `SRLC32E`s that may cascade inside a slice: each
+/// one's `Q31` read by the next one's `D` and nothing else, on one clock and one
+/// enable. A lane's cell takes it from the lane above, `D` to `C` to `B` to `A`, and
+/// a slice has four, so a chain is cut into runs of up to four **from its end**, as
+/// Vivado's `srlc32e_cascade5` has it: the last four share a slice.
+fn srl_cascades(netlist: &Netlist) -> Vec<Vec<usize>> {
+    let pin = |instance: usize, role: &str| {
+        netlist.instances[instance]
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|pin| pin.role == role)
+    };
+    let same = |a: usize, b: usize, role: &str| match (pin(a, role), pin(b, role)) {
+        (Some(x), Some(y)) => x.signal == y.signal && x.constant == y.constant,
+        (None, None) => true,
+        _ => false,
+    };
+    let mut next: Vec<Option<usize>> = vec![None; netlist.instances.len()];
+    let mut previous: Vec<Option<usize>> = vec![None; netlist.instances.len()];
+    for (index, instance) in netlist.instances.iter().enumerate() {
+        if instance.kind != "srl32" {
+            continue;
+        }
+        let Some(signal) = pin(index, "q31").and_then(|p| p.signal) else {
+            continue;
+        };
+        let [sink] = netlist.signals[signal].sinks.as_slice() else {
+            continue;
+        };
+        let reader = &netlist.pins[*sink];
+        let following = reader.instance;
+        if reader.role == "d"
+            && following != index
+            && netlist.instances[following].kind == "srl32"
+            && same(index, following, "clk")
+            && same(index, following, "ce")
+            && netlist.gate_inverted.get(index) == netlist.gate_inverted.get(following)
+        {
+            next[index] = Some(following);
+            previous[following] = Some(index);
+        }
+    }
+    let mut out = Vec::new();
+    for start in 0..netlist.instances.len() {
+        if previous[start].is_some() || next[start].is_none() {
+            continue;
+        }
+        let mut chain = vec![start];
+        let mut at = start;
+        while let Some(following) = next[at] {
+            chain.push(following);
+            at = following;
+        }
+        let first = chain.len() % 4;
+        if first > 0 {
+            out.push(chain[..first].to_vec());
+        }
+        out.extend(chain[first..].chunks(4).map(<[usize]>::to_vec));
+    }
+    out
+}
+
+/// Holds a shift register whose last bit leaves its slice to the sites it can
+/// leave from.
+///
+/// A slice lets that bit out of its `A` lane only (`xray::srl`), so a cell whose
+/// `Q31` is read by anything but the next cell of its run ([`srl_cascades`]) sits
+/// there. This is the one kind whose lanes differ, and every other cell pays one
+/// comparison of a kind's name.
+fn confine_to_pins(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+) {
+    let mut inside: HashSet<usize> = HashSet::new();
+    for run in srl_cascades(netlist) {
+        inside.extend(run.iter().take(run.len() - 1).copied());
+    }
+    for (index, instance) in netlist.instances.iter().enumerate() {
+        if !matches!(instance.kind.as_str(), "srl32" | "srl16") || inside.contains(&index) {
+            continue;
+        }
+        let wanted = instance.pins.iter().any(|p| {
+            let pin = &netlist.pins[*p];
+            pin.role == "q31" && pin.signal.is_some()
+        });
+        if wanted && let Some(sites) = sites_by_kind.get(&instance.kind) {
+            info[index].allowed = Some(
+                sites
+                    .iter()
+                    .copied()
+                    .filter(|site| {
+                        let bel = &graph.sites[*site].bel;
+                        bel.ends_with("ASRL32") || bel.ends_with("ASRL16")
+                    })
+                    .collect(),
+            );
+        }
+    }
+}
+
 /// Places `netlist` on `graph`.
 ///
 /// The steps are the ones in the module docs: analytic solve, legalise,
@@ -2772,6 +2934,7 @@ pub fn place(
             soft: false,
         })
         .collect();
+    confine_to_pins(netlist, graph, &sites_by_kind, &mut info);
     fix_pins(netlist, arch, graph, &mut info, &mut report)?;
     report.fixed += follow_fixed_ends(netlist, graph, &sites_by_kind, &mut info);
     apply_regions(netlist, graph, constraints, &mut info);
@@ -3915,7 +4078,10 @@ fn registered_tables(
         };
         let dpin = &netlist.pins[driver];
         let x = dpin.instance;
-        if netlist.instances[x].kind != lut
+        if !matches!(
+            netlist.instances[x].kind.as_str(),
+            "lut" | "srl32" | "srl16"
+        ) || (netlist.instances[x].kind != lut && dpin.role != "q")
             || !free(x)
             || (dpin.role == "o5" && signal.sinks.len() != 1)
         {
@@ -3932,21 +4098,29 @@ fn registered_tables(
             {
                 continue;
             }
+            if netlist.instances[x].kind != lut
+                && !shares_a_slice_with_shift_register(netlist, x, y)
+            {
+                continue;
+            }
             if let Some(other) = partner.get(&x)
                 && (control_set(netlist, *other) != control_set(netlist, y)
                     || netlist.instances[*other].primitive != netlist.instances[y].primitive)
             {
                 continue;
             }
+            let driver_kind = netlist.instances[x].kind.as_str();
             let key = (
                 ff.to_owned(),
                 spin.role.clone(),
-                lut.to_owned(),
+                driver_kind.to_owned(),
                 format!("local:{}", dpin.role),
             );
             let relation = relations
                 .entry(key)
-                .or_insert_with(|| local_relation(graph, sites_by_kind, ff, "d", lut, &dpin.role))
+                .or_insert_with(|| {
+                    local_relation(graph, sites_by_kind, ff, "d", driver_kind, &dpin.role)
+                })
                 .clone();
             if let Some(relation) = relation {
                 taken.insert(y);
@@ -4187,6 +4361,31 @@ fn build_clusters(
         &mut relations,
         &mut links,
     );
+    // A chain of shift registers inside a slice. Not found above because a lane's
+    // data has another way in, from the interconnect; on this path the cell is
+    // held there because the slice's own wire is what was asked for.
+    for run in srl_cascades(netlist) {
+        for pair in run.windows(2) {
+            let (x, y) = (pair[0], pair[1]);
+            if !free(x, info) || !free(y, info) {
+                continue;
+            }
+            let relation = relations
+                .entry((
+                    "srl32".to_owned(),
+                    "d".to_owned(),
+                    "srl32".to_owned(),
+                    "local:q31".to_owned(),
+                ))
+                .or_insert_with(|| {
+                    local_relation(graph, sites_by_kind, "srl32", "d", "srl32", "q31")
+                })
+                .clone();
+            if let Some(relation) = relation {
+                links.push((x, y, relation));
+            }
+        }
+    }
     if links.is_empty() {
         return Vec::new();
     }
@@ -12231,6 +12430,134 @@ mod tests {
                 shared.allows(&placement, &[(1, 1)]),
                 allowed,
                 "an LDCE beside an {other}, gate inverted {inverted}"
+            );
+        }
+    }
+
+    /// **A shift register's enable tied high reads its wire undriven, so nothing
+    /// that drives that wire may share its slice.** As a slice has it: the shift
+    /// register's pin is the wire `fan`, and a flip-flop's enable is `en` behind a
+    /// mux on that wire, so they are two pins on one wire of a pool, and only the
+    /// constant's counting as a signal keeps them apart. A flip-flop with no enable
+    /// may sit beside it, and one with an enable beside a shift register on the same
+    /// signal, both of which Vivado does. Would catch the constant not counting,
+    /// which writes the flip-flop's enable into the shift register with every bit
+    /// decoding; would not catch the wire itself being wrong, which `xray::srl`
+    /// holds against Vivado.
+    #[test]
+    fn a_shift_register_with_its_enable_tied_keeps_the_wire_to_itself() {
+        let mut arch = Arch::new("t", "test", 1, 1);
+        let mut tile = TileType::new("slice", "logic_tile", 8, 8);
+        for name in ["fan", "en"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        tile.pips.push(PipDecl {
+            from: WireRef::local("fan"),
+            to: WireRef::local("en"),
+            bits: Vec::new(),
+        });
+        let mut srl = BelDecl::new("srl", "srl32");
+        srl.pins.push(("ce".to_owned(), WireRef::local("fan")));
+        tile.bels.push(srl);
+        let mut ff = BelDecl::new("ff", "ff");
+        ff.pins.push(("en".to_owned(), WireRef::local("en")));
+        tile.bels.push(ff);
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+        let site = |kind: &str| graph.sites.iter().position(|s| s.kind == kind).unwrap();
+        let netlist = |enable: Option<usize>, flip_flop: Option<usize>| {
+            let pin = |instance: usize, role: &str, signal: Option<usize>| NetPin {
+                instance,
+                port: role.to_uppercase(),
+                bit: 0,
+                role: role.to_owned(),
+                output: false,
+                signal,
+                constant: signal.is_none().then_some(crate::logic::Bit::One),
+            };
+            let instance = |i: usize, kind: &str, primitive: &str| Instance {
+                cell: CellId::from_index(i),
+                name: format!("c{i}"),
+                primitive: primitive.to_owned(),
+                kind: kind.to_owned(),
+                pins: vec![i],
+                pin: None,
+            };
+            let signals = (0..2)
+                .map(|n| Signal {
+                    name: format!("s{n}"),
+                    driver: None,
+                    sinks: [enable, flip_flop]
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, signal)| **signal == Some(n))
+                        .map(|(pin, _)| pin)
+                        .collect(),
+                })
+                .collect();
+            Netlist {
+                instances: vec![instance(0, "srl32", "SRLC32E"), instance(1, "ff", "FDRE")],
+                pins: vec![pin(0, "ce", enable), pin(1, "en", flip_flop)],
+                signals,
+                off_fabric: Vec::new(),
+                sterilises: Vec::new(),
+                gate_inverted: Vec::new(),
+            }
+        };
+        for (enable, flip_flop, allowed) in [
+            (None, None, true),
+            (None, Some(0), false),
+            (Some(0), None, true),
+            (Some(0), Some(0), true),
+            (Some(0), Some(1), false),
+        ] {
+            let netlist = netlist(enable, flip_flop);
+            let shared = SiteRules::find(&netlist, &graph);
+            let mut placement = Placement::new(2, graph.sites.len());
+            placement.place(0, site("srl32"));
+            assert_eq!(
+                shared.allows(&placement, &[(1, site("ff"))]),
+                allowed,
+                "a shift register's enable {enable:?} beside a flip-flop's {flip_flop:?}"
+            );
+        }
+    }
+
+    /// **A shift register shares a slice with a flip-flop on its clock edge, of
+    /// either reset kind**, since `FFSYNC` means nothing to it, and with nothing on
+    /// the other edge or a latch. Vivado puts one beside an `FDRE`. Would catch a
+    /// shift register given a flip-flop's mode, which keeps it from an `FDCE`
+    /// for no reason, or given none, which inverts one's clock with every bit
+    /// decoding.
+    #[test]
+    fn a_shift_register_shares_a_slice_by_its_clock_edge() {
+        let (_, graph) = clocked(1);
+        for (other, inverted, allowed) in [
+            ("FDRE", false, true),
+            ("FDCE", false, true),
+            ("SRL16E", false, true),
+            ("FDRE_1", false, false),
+            ("FDCE_1", false, false),
+            ("SRLC32E", true, false),
+            ("LDCE", false, false),
+            ("LDCE", true, false),
+        ] {
+            let mut netlist = clocked_by(&[0, 0]);
+            netlist.instances[0].primitive = "SRLC32E".to_owned();
+            netlist.instances[1].primitive = other.to_owned();
+            netlist.gate_inverted = vec![false, inverted];
+            let shared = SiteRules::find(&netlist, &graph);
+            let mut placement = Placement::new(2, graph.sites.len());
+            placement.place(0, 0);
+            assert_eq!(
+                shared.allows(&placement, &[(1, 1)]),
+                allowed,
+                "an SRLC32E beside an {other}, inverted {inverted}"
             );
         }
     }
