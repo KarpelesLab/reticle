@@ -1,5 +1,5 @@
-//! The register beside a pad: an `IDDR` on an `ILOGICE3`, an `ODDR` on an
-//! `OLOGICE3`, instantiated by name.
+//! The register beside a pad: an `IDDR` or `IDDR_2CLK` on an `ILOGICE3`, an
+//! `ODDR` on an `OLOGICE3`, instantiated by name.
 //!
 //! # Where they sit, and how they are reached
 //!
@@ -14,11 +14,35 @@
 //! only from the pad (`LIOI_ILOGIC0_D ← LIOI_I0 ← LIOI_IBUF0`), and an
 //! `ODDR`'s `Q` is `<side>_OLOGIC<n>_OQ`, which reaches only the pad. So the
 //! placer puts each beside the buffer the constraints fix
-//! (`place::follow_fixed_ends`). The clock reaches `CLK` — and, for an
-//! `IDDR`, `CLKB` as well, which is what Vivado routes — from the IO
-//! column's leaf clocks; the controls arrive from interconnect.
+//! (`place::follow_fixed_ends`). The clock reaches `CLK` and `CLKB` — both,
+//! for an `IDDR` and an `ODDR` alike, which is what Vivado routes — from the IO
+//! column's leaf clocks; the controls arrive from interconnect. An
+//! `IDDR_2CLK`'s `CB` is `CLKB`, which inverts what it is given: so `~C` there
+//! is `C` on the pin (`flow::primitive_instances`).
 //!
 //! # The bits, and where each came from
+//!
+//! **Vivado 2026.1, every setting separately**, since 2026-11-04:
+//! `tools/vivado-parity/gen_iologic.py` puts one setting beside each pad of a
+//! bank, and `tests/fpga_xray_ioreg.rs` holds every `ILOGIC` and `OLOGIC`
+//! feature of all 58 to `testdata/fpga/vivado/iologic/vivado.txt`. What that
+//! added to the table below, which it agreed with line by line:
+//!
+//! | Setting | Features |
+//! |---|---|
+//! | `IDDR` `SAME_EDGE` | `IFF.DDR_CLK_EDGE.SAME_EDGE`, and `ZINIT_Q3`/`ZINIT_Q4` following `INIT_Q1`/`INIT_Q2`, and `ZSRVAL_Q3`/`Q4` with a reset |
+//! | `IDDR` `SAME_EDGE_PIPELINED` | the same, with no edge feature |
+//! | `IDDR` `R` in use | `IFF.ZSRVAL_Q1`, `ZSRVAL_Q2`; `S` sets nothing |
+//! | `IS_C_INVERTED`, `IS_D_INVERTED` | `IFF.ZINV_C`, `ZINV_D` clear |
+//! | `ODDR` `IS_C_INVERTED` | `ZINV_CLK` clear, **and the edge feature turned round**: `SAME_EDGE` is set at `OPPOSITE_EDGE`, and clear at `SAME_EDGE` |
+//! | a set or reset tied high | as routed, with the pin left unrouted, which reads a one |
+//! | a clock enable tied low | the same site bits as tied high: the pin is grounded, by `bram::io_logic_wants` |
+//! | `IDDR_2CLK` | `IDDR`'s; `CB` of `~C`, or `C` with one of `IS_C_INVERTED` and `IS_CB_INVERTED`, is `C` on `CLKB`, and a second clock is routed there |
+//!
+//! Refused, as Vivado refuses them: a set and a reset both in use (`REQP-77`,
+//! `REQP-129`), and `C` on `CB` with one inversion (`REQP-76`). Not measured,
+//! and refused: `IS_CB_INVERTED` on a second clock. The table below was the
+//! first account:
 //!
 //! **Vivado**, from NewAE's shipped Husky image decoded through this
 //! database, where each of the Husky's `IDDR`s and `ODDR`s sits beside the
@@ -42,11 +66,11 @@
 //! The control inputs follow the rule the rest of this backend follows: a
 //! pin left unrouted reads one, so a data input tied to zero is left
 //! unrouted with its inverter on — which is what `IS_D2_INVERTED` is, and
-//! unlike `ZINV_*`, the database names that one the right way round. What
-//! the image cannot say, because no Husky instance does it, and this
-//! refuses rather than guesses: a clock edge other than those two, a set or
-//! reset tied to one, an enable tied to zero, an inverted clock or data
-//! input, and an `IDDR` whose set or reset is routed.
+//! unlike `ZINV_*`, the database names that one the right way round. This
+//! refused, from the image alone, a clock edge other than those two, a set or
+//! reset tied to one, an enable tied to zero, an inverted clock or data input,
+//! and an `IDDR` whose set or reset is routed; Vivado's answers for each are
+//! the table above, and now they are built.
 
 use super::XrayFabric;
 use super::sites::{BelPin, ExtraBel};
@@ -58,7 +82,7 @@ use crate::logic::Bit;
 
 /// The `ILOGIC` features [`XrayFabric::configure_io_logic`] may set, tagged
 /// with a leading `=` as `super::bufg` tags its own.
-const ILOGIC_FEATURES: [&str; 11] = [
+const ILOGIC_FEATURES: [&str; 15] = [
     "=IDDR.IN_USE",
     "=IDDR_OR_ISERDES.IN_USE",
     "=IFF.DDR_CLK_EDGE.OPPOSITE_EDGE",
@@ -66,8 +90,12 @@ const ILOGIC_FEATURES: [&str; 11] = [
     "=IFF.SRTYPE.SYNC",
     "=IFF.ZINIT_Q1",
     "=IFF.ZINIT_Q2",
+    "=IFF.ZINIT_Q3",
+    "=IFF.ZINIT_Q4",
     "=IFF.ZSRVAL_Q1",
     "=IFF.ZSRVAL_Q2",
+    "=IFF.ZSRVAL_Q3",
+    "=IFF.ZSRVAL_Q4",
     "=IFF.ZINV_C",
     "=ZINV_D",
 ];
@@ -132,6 +160,8 @@ pub(super) fn io_logic_bels(tile_type: &str) -> Vec<ExtraBel> {
                 pin("d1", format!("IOI_OLOGIC{w}_D1")),
                 pin("d2", format!("IOI_OLOGIC{w}_D2")),
                 pin("clk", format!("IOI_OLOGIC{w}_CLK")),
+                // Vivado routes the clock here too (`oddr_sweep`, every one).
+                pin("clkb", format!("IOI_OLOGIC{w}_CLKB")),
                 pin("ce", format!("IOI_OLOGIC{w}_OCE")),
                 pin("sr", format!("IOI_OLOGIC{w}_SR")),
                 pin("q", format!("{side}_OLOGIC{w}_OQ")),
@@ -195,23 +225,37 @@ impl From<BitstreamError> for IoLogicError {
     }
 }
 
-/// The features an `IDDR` needs, from its parameters and its pins.
+/// The features an `IDDR` or `IDDR_2CLK` needs, from its parameters and its
+/// pins. `reset` says which of `R` and `S` is in use, if either is: routed, or
+/// tied high and left unrouted, which reads a one. **Every line is Vivado's**,
+/// `testdata/fpga/vivado/iologic/`: the same-edge modes keep the second pair of
+/// registers, `Q3` and `Q4`, with `INIT_Q1` and `INIT_Q2` and the reset's value;
+/// `SAME_EDGE_PIPELINED` has no edge feature of its own; and an inversion clears
+/// its `ZINV`.
 fn iddr_features(
     text: &dyn Fn(&str, &str) -> String,
     int: &dyn Fn(&str, i64) -> i64,
-    pin: &dyn Fn(&str) -> Pin,
+    reset: Option<bool>,
 ) -> Result<Vec<&'static str>, String> {
-    let mut out = vec![
-        "IDDR.IN_USE",
-        "IDDR_OR_ISERDES.IN_USE",
-        "IFF.ZINV_C",
-        "ZINV_D",
-    ];
-    match text("DDR_CLK_EDGE", "OPPOSITE_EDGE").as_str() {
-        "OPPOSITE_EDGE" => out.push("IFF.DDR_CLK_EDGE.OPPOSITE_EDGE"),
-        "SAME_EDGE" => out.push("IFF.DDR_CLK_EDGE.SAME_EDGE"),
-        other => return Err(format!("`DDR_CLK_EDGE(\"{other}\")`")),
+    let mut out = vec!["IDDR.IN_USE", "IDDR_OR_ISERDES.IN_USE"];
+    if int("IS_C_INVERTED", 0) == 0 {
+        out.push("IFF.ZINV_C");
     }
+    if int("IS_D_INVERTED", 0) == 0 {
+        out.push("ZINV_D");
+    }
+    let pipelined = match text("DDR_CLK_EDGE", "OPPOSITE_EDGE").as_str() {
+        "OPPOSITE_EDGE" => {
+            out.push("IFF.DDR_CLK_EDGE.OPPOSITE_EDGE");
+            false
+        }
+        "SAME_EDGE" => {
+            out.push("IFF.DDR_CLK_EDGE.SAME_EDGE");
+            true
+        }
+        "SAME_EDGE_PIPELINED" => true,
+        other => return Err(format!("`DDR_CLK_EDGE(\"{other}\")`")),
+    };
     match text("SRTYPE", "SYNC").as_str() {
         "SYNC" => out.push("IFF.SRTYPE.SYNC"),
         "ASYNC" => {}
@@ -219,21 +263,23 @@ fn iddr_features(
     }
     if int("INIT_Q1", 0) == 0 {
         out.push("IFF.ZINIT_Q1");
+        if pipelined {
+            out.push("IFF.ZINIT_Q3");
+        }
     }
     if int("INIT_Q2", 0) == 0 {
         out.push("IFF.ZINIT_Q2");
+        if pipelined {
+            out.push("IFF.ZINIT_Q4");
+        }
     }
-    if int("IS_C_INVERTED", 0) != 0 || int("IS_D_INVERTED", 0) != 0 {
-        return Err("an inverted clock or data input".to_owned());
-    }
-    match pin("ce") {
-        Pin::Fixed(false) => return Err("a clock enable tied to zero".to_owned()),
-        Pin::Routed | Pin::Fixed(true) | Pin::Absent => {}
-    }
-    match pin("sr") {
-        Pin::Routed => return Err("a routed set or reset".to_owned()),
-        Pin::Fixed(true) => return Err("a set or reset tied to one".to_owned()),
-        Pin::Fixed(false) | Pin::Absent => {}
+    // `R`: the value it sets is zero, which the `Z` spelling says; `S` is the
+    // field clear.
+    if reset == Some(true) {
+        out.extend(["IFF.ZSRVAL_Q1", "IFF.ZSRVAL_Q2"]);
+        if pipelined {
+            out.extend(["IFF.ZSRVAL_Q3", "IFF.ZSRVAL_Q4"]);
+        }
     }
     Ok(out)
 }
@@ -251,12 +297,21 @@ fn oddr_features(
         "OQUSED",
         "OSERDES.DATA_RATE_OQ.DDR",
         "OSERDES.DATA_RATE_TQ.BUF",
-        "ZINV_CLK",
     ];
-    match text("DDR_CLK_EDGE", "OPPOSITE_EDGE").as_str() {
-        "OPPOSITE_EDGE" => {}
-        "SAME_EDGE" => out.push("ODDR.DDR_CLK_EDGE.SAME_EDGE"),
+    // An inverted clock clears `ZINV_CLK` and turns the edge feature round:
+    // `oddr_sweep` has `SAME_EDGE` set for an inverted clock at
+    // `OPPOSITE_EDGE`, and clear at `SAME_EDGE`. Measured; why is not known.
+    let inverted = int("IS_C_INVERTED", 0) != 0;
+    if !inverted {
+        out.push("ZINV_CLK");
+    }
+    let same = match text("DDR_CLK_EDGE", "OPPOSITE_EDGE").as_str() {
+        "OPPOSITE_EDGE" => false,
+        "SAME_EDGE" => true,
         other => return Err(format!("`DDR_CLK_EDGE(\"{other}\")`")),
+    };
+    if same != inverted {
+        out.push("ODDR.DDR_CLK_EDGE.SAME_EDGE");
     }
     match text("SRTYPE", "SYNC").as_str() {
         "SYNC" => out.push("OSERDES.SRTYPE.SYNC"),
@@ -265,9 +320,6 @@ fn oddr_features(
     }
     if int("INIT", 0) == 0 {
         out.push("ZINIT_OQ");
-    }
-    if int("IS_C_INVERTED", 0) != 0 {
-        return Err("an inverted clock".to_owned());
     }
     for (role, inverted) in [("d1", "IS_D1_INVERTED"), ("d2", "IS_D2_INVERTED")] {
         let param = int(inverted, 0) != 0;
@@ -280,10 +332,6 @@ fn oddr_features(
         if on {
             out.push(inverted);
         }
-    }
-    match pin("ce") {
-        Pin::Fixed(false) => return Err("a clock enable tied to zero".to_owned()),
-        Pin::Routed | Pin::Fixed(true) | Pin::Absent => {}
     }
     match reset {
         // `R` routed: the reset value is zero, which the `Z` spelling sets.
@@ -321,7 +369,7 @@ impl XrayFabric {
         let mut count = 0usize;
         for (index, instance) in netlist.instances.iter().enumerate() {
             let input = match instance.primitive.as_str() {
-                "IDDR" => true,
+                "IDDR" | "IDDR_2CLK" => true,
                 "ODDR" => false,
                 _ => continue,
             };
@@ -363,25 +411,32 @@ impl XrayFabric {
                 }
                 found
             };
+            // Which of the two ports on the one `SR` pin is in use: routed,
+            // or tied high, which is left unrouted and reads a one.
+            let active = |port: &str| {
+                pins.iter().any(|p| {
+                    p.role == "sr"
+                        && p.port == port
+                        && (p.signal.is_some() || p.constant == Some(Bit::One))
+                })
+            };
+            let reset = match (active("R"), active("S")) {
+                (true, false) => Some(true),
+                (false, true) => Some(false),
+                (false, false) => None,
+                (true, true) => {
+                    return Err(IoLogicError::Unsupported {
+                        instance: instance.name.clone(),
+                        message: format!(
+                            "both a set and a reset in use, which Vivado refuses too ({})",
+                            if input { "REQP-77" } else { "REQP-129" }
+                        ),
+                    });
+                }
+            };
             let names = if input {
-                iddr_features(&text, &int, &state)
+                iddr_features(&text, &int, reset)
             } else {
-                // Which of the two ports on the one `SR` pin is routed.
-                let routed = |port: &str| {
-                    pins.iter()
-                        .any(|p| p.role == "sr" && p.port == port && p.signal.is_some())
-                };
-                let reset = match (routed("R"), routed("S")) {
-                    (true, false) => Some(true),
-                    (false, true) => Some(false),
-                    (false, false) => None,
-                    (true, true) => {
-                        return Err(IoLogicError::Unsupported {
-                            instance: instance.name.clone(),
-                            message: "both a set and a reset routed".to_owned(),
-                        });
-                    }
-                };
                 oddr_features(&text, &int, &state, reset)
             }
             .map_err(|message| IoLogicError::Unsupported {
@@ -432,7 +487,7 @@ mod tests {
             "ce" => Pin::Fixed(true),
             _ => Pin::Fixed(false),
         };
-        let mut iddr = iddr_features(&text, &int, &tied).unwrap();
+        let mut iddr = iddr_features(&text, &int, None).unwrap();
         iddr.sort_unstable();
         assert_eq!(
             iddr,
@@ -483,14 +538,13 @@ mod tests {
                 "ZSRVAL_OQ"
             ]
         );
-        // And what is refused.
-        let routed_reset = |role: &str| {
-            if role == "sr" {
-                Pin::Routed
-            } else {
-                tied(role)
-            }
+        // A reset, once refused, and an unknown edge, still refused.
+        let reset = iddr_features(&text, &int, Some(true)).unwrap();
+        assert!(reset.contains(&"IFF.ZSRVAL_Q1") && reset.contains(&"IFF.ZSRVAL_Q2"));
+        let odd = |name: &str, default: &str| match name {
+            "DDR_CLK_EDGE" => "BOTH".to_owned(),
+            _ => default.to_owned(),
         };
-        assert!(iddr_features(&text, &int, &routed_reset).is_err());
+        assert!(iddr_features(&odd, &int, None).is_err());
     }
 }

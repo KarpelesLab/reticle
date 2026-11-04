@@ -1235,18 +1235,13 @@ fn primitive_instances(
                     attrs: Attrs::new(),
                     span: inst.span,
                 });
-                // Kept, so that a `T` tied high reaches the buffer as the
-                // released pad it is, and is not folded into a constant `z`
-                // that a plain output then drives.
-                let mut keep = Attrs::new();
-                keep.set("keep", 1i64);
                 m.cells.push(Cell {
                     name: inst.name.clone(),
                     kind: CellKind::Tristate,
                     inputs: vec![(Name::new("a"), value), (Name::new("en"), enable)],
                     outputs: vec![(Name::new("y"), out)],
                     params: Attrs::new(),
-                    attrs: keep,
+                    attrs: Attrs::new(),
                     span: inst.span,
                 });
                 let driven = m.add_expr(crate::ir::Expr::new(ExprKind::Net(out), width, inst.span));
@@ -1355,7 +1350,88 @@ fn primitive_instances(
             );
             continue;
         }
-        if !cell_from_instance(m, &inst, primitive, &bel.outputs, &mut refused, diags) {
+        // An `IDDR_2CLK`'s `CB`: its pin inverts what it is given, so `~C`
+        // is `C` on the pin, and `C` itself is refused unless one of the two
+        // parameters inverts it (`REQP-76`). Vivado wrote exactly those three
+        // (`iddr_2clk_sweep`); a second clock on `CB` is routed as it is, and
+        // one inverted by its parameter was not measured.
+        // A set and a reset both in use, which Vivado refuses before placing
+        // anything (`REQP-77`, `REQP-129`), as this does.
+        if let rule @ ("REQP-77" | "REQP-129") = match primitive.as_str() {
+            "IDDR" | "IDDR_2CLK" => "REQP-77",
+            "ODDR" => "REQP-129",
+            _ => "",
+        } {
+            let active = |port: &str| {
+                inst.connection(port).is_some_and(|e| {
+                    m.expr(e)
+                        .as_const()
+                        .is_none_or(|c| c.truth() != crate::logic::Bit::Zero)
+                })
+            };
+            if active("R") && active("S") {
+                refused += 1;
+                diags.push(
+                    Diagnostic::error(format!(
+                        "`{}`: both a set and a reset in use, which Vivado refuses too ({rule})",
+                        inst.name
+                    ))
+                    .with_span(inst.span),
+                );
+                continue;
+            }
+        }
+        let mut connections = inst.connections.clone();
+        if primitive.as_str() == "IDDR_2CLK"
+            && let (Some(c), Some(cb)) = (inst.connection("C"), inst.connection("CB"))
+        {
+            let flag = |name: &str| {
+                inst.params
+                    .get(name)
+                    .and_then(crate::ir::AttrValue::as_int)
+                    .is_some_and(|v| v != 0)
+            };
+            let c_net = m.expr(c).as_net();
+            let not_c = match &m.expr(cb).kind {
+                ExprKind::Unary {
+                    op: crate::ir::UnaryOp::Not,
+                    expr,
+                } => m.expr(*expr).as_net().is_some() && m.expr(*expr).as_net() == c_net,
+                _ => false,
+            };
+            let same = c_net.is_some() && m.expr(cb).as_net() == c_net;
+            // `~C`, uninverted otherwise, or `C` with one of the two inverting it.
+            let fine = (not_c && flag("IS_CB_INVERTED") == flag("IS_C_INVERTED"))
+                || (same && flag("IS_CB_INVERTED") != flag("IS_C_INVERTED"));
+            let refusal = if fine {
+                None
+            } else if not_c || same {
+                Some(
+                    "`C` and `CB` are one clock with one inversion, which Vivado refuses (REQP-76)",
+                )
+            } else if flag("IS_CB_INVERTED") {
+                Some("`IS_CB_INVERTED` on a second clock, which was not measured")
+            } else {
+                None
+            };
+            if let Some(why) = refusal {
+                refused += 1;
+                diags.push(
+                    Diagnostic::error(format!("`{}`: {why}", inst.name)).with_span(inst.span),
+                );
+                continue;
+            }
+            if not_c || same {
+                for (port, expr) in &mut connections {
+                    if port.as_str() == "CB" {
+                        *expr = c;
+                    }
+                }
+            }
+        }
+        let mut changed = inst.clone();
+        changed.connections = connections;
+        if !cell_from_instance(m, &changed, primitive, &bel.outputs, &mut refused, diags) {
             continue;
         }
         done.push(id);

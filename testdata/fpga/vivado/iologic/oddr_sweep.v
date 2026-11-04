@@ -1,0 +1,27 @@
+module oddr_sweep(input clk, input c0, input c1, input c2, input c3, output reg r, output p0, output p1, output p2, output p3, output p4, output p5, output p6, output p7, output p8, output p9, output p10, output p11, output p12, output p13, output p14, output p15, output p16, output p17, output p18, output p19, output p20, output p21, output p22);
+  wire gclk; BUFG bg(.I(clk), .O(gclk));
+  ODDR u0(.Q(p0), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.DDR_CLK_EDGE("SAME_EDGE")) u1(.Q(p1), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.SRTYPE("ASYNC")) u2(.Q(p2), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.INIT(1'b1)) u3(.Q(p3), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.IS_C_INVERTED(1'b1)) u4(.Q(p4), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.IS_D1_INVERTED(1'b1)) u5(.Q(p5), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.IS_D2_INVERTED(1'b1)) u6(.Q(p6), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR u7(.Q(p7), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(c1), .S(1'b0));
+  ODDR u8(.Q(p8), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(c1));
+  ODDR #(.SRTYPE("ASYNC")) u9(.Q(p9), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(c1), .S(1'b0));
+  ODDR #(.SRTYPE("ASYNC")) u10(.Q(p10), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(c1));
+  ODDR #(.INIT(1'b1)) u11(.Q(p11), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(c1));
+  ODDR u12(.Q(p12), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b1), .S(1'b0));
+  ODDR u13(.Q(p13), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b1));
+  ODDR u14(.Q(p14), .C(gclk), .CE(1'b0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR u15(.Q(p15), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR u16(.Q(p16), .C(gclk), .CE(c0), .D1(1'b0), .D2(1'b1), .R(1'b0), .S(1'b0));
+  ODDR u17(.Q(p17), .C(gclk), .CE(c0), .D1(1'b1), .D2(1'b0), .R(1'b0), .S(1'b0));
+  ODDR u18(.Q(p18), .C(gclk), .CE(c0), .D1(1'b0), .D2(1'b0), .R(1'b0), .S(1'b0));
+  ODDR u19(.Q(p19), .C(gclk), .CE(c0), .D1(1'b1), .D2(1'b1), .R(1'b0), .S(1'b0));
+  ODDR #(.DDR_CLK_EDGE("SAME_EDGE"),.IS_C_INVERTED(1'b1)) u20(.Q(p20), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  ODDR #(.IS_C_INVERTED(1'b1)) u21(.Q(p21), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(c1), .S(1'b0));
+  ODDR #(.IS_C_INVERTED(1'b1),.INIT(1'b1)) u22(.Q(p22), .C(gclk), .CE(c0), .D1(c2), .D2(c3), .R(1'b0), .S(1'b0));
+  always @(posedge gclk) r <= 1'b0;
+endmodule

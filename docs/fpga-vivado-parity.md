@@ -44,7 +44,8 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 106 of the 141**, 94 before the section on pads. `index.txt` says which;
+**Reticle builds 108 of the 141**, 94 before the section on pads and 106 before the
+one on IO registers. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
 to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
 
@@ -55,7 +56,7 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 35 that do not build, by what stops them:
+The 33 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
@@ -63,7 +64,7 @@ The 35 that do not build, by what stops them:
 | clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
 | clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
 | pad buffers | the six `DIFF_OUT` forms |
-| IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `IDDR_2CLK`, `DCIRESET`, and `IDDR` with a routed reset |
+| IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
 
 Building is the least that can be asked: a probe that builds has not been
@@ -470,9 +471,11 @@ and by hand.
 
 **An instantiated `OBUFT`'s `T` was dropped until this**, and the pad drove whatever `T`
 said: `primitive_instances` took it for a wire, as it takes an `OBUF`. The ledger called it
-`ok` because it built. It is the tristate it describes now, kept, so a `T` tied high reaches
-the buffer as a released pad, `ZINV_T1` with `T1` unrouted (`buf_obuft_t1`); and so is the cell
-library's `IOBUF`, which a `T` tied high had folded into a driven pad the same way. **Tied low**,
+`ok` because it built. It is the tristate it describes now, so a `T` tied high reaches the buffer as a
+released pad, `ZINV_T1` with `T1` unrouted (`buf_obuft_t1`); and so does the cell library's
+`IOBUF`, which a `T` tied high had made a driven pad the same way. (A `keep` on both was taken out
+again when a mutation showed nothing needs it: what removes a tied-high `T` was the missing
+`ZINV_T1`, not folding.) **Tied low**,
 Vivado routes a ground to `T1` and sets `ZINV_T1`; Reticle leaves `T1` unrouted with its inverter
 on, as a plain output has, and the two drive alike: the one known difference, `KNOWN` in the test.
 
@@ -486,6 +489,12 @@ refused them (`V0006`).
 else in the design is `Place 30-389` there, and the same beside a clocked design (`pullup_probe`)
 is an output: Reticle builds both as the latter.
 
+**Mutations.** Ten were made to this, and each failed `every_design_builds_to_vivados_bits` or
+`reticle_refuses_what_vivado_refuses`: an `OBUFT` a wire again, a released pad without `ZINV_T1`,
+`IBUFDISABLE.I` never set, a disable on one half of a pair, a disable tied low in use, `REQP-1964`
+not asked, a pull cell on an unread input kept, a `KEEPER` on an `inout` an output, and a lone
+pull driving its data. The eleventh, the tristate's `keep`, survived, and is gone.
+
 **Not done: the `DIFF_OUT` forms.** Vivado reads `OB` through the `_N` half's own `ILOGIC`
 (`ZINV_D` on `ILOGIC_Y1`), so it needs a second buffer placed on that ball, which this flow does not
 place; a ball named only by its `_P` in an XDC does not even say where. They are refused as a module
@@ -494,6 +503,40 @@ nothing declares.
 **Not done.** Vivado's `CFGBVS`-style checks of bank 14 against the configuration voltage, which are warnings. The
 XC7A35T, or any other part: the tables were measured on one, and the same table is given to the
 others. A wrong drive or standard here would not be seen by anything but a scope.
+
+## IO registers
+
+`testdata/fpga/vivado/iologic/` has three designs from `tools/vivado-parity/gen_iologic.py`, an
+`IDDR`, `IDDR_2CLK` or `ODDR` beside each pad of bank 35, one setting a pad: every value of
+`DDR_CLK_EDGE`, `SRTYPE`, `INIT*`, each `IS_*_INVERTED`, `R` and `S` routed and tied, `CE`
+routed and tied, `D1`/`D2` tied, `CB` from `~C`, from `C` and from a second clock; and three
+Vivado refuses. **All 58 registers' `ILOGIC` and `OLOGIC` features are Vivado's**,
+`tests/fpga_xray_ioreg.rs`, and so are those of the `IDDR`, `IDDR_2CLK` and `ODDR` probes. The
+table of what each setting sets is `xray::iologic`'s documentation.
+
+**Checked and found:** an inverted `ODDR` clock turns `DDR_CLK_EDGE`'s bit round, which a
+reading from its name would not have; the same-edge modes of an `IDDR` keep a second pair of
+registers' `INIT` and `SRVAL`; a `CE` tied low is not a refusal, as it was, but a ground Vivado
+routes and so does this, by the block RAMs' ties.
+
+**Mutations.** Ten, and nine failed `tests/fpga_xray_ioreg.rs`: the second registers left out
+of the same-edge modes, `ZINIT_Q3` off the wrong `INIT`, a set given the reset's value, an inverted
+clock keeping `ZINV_C`, the `ODDR` edge not turned round, a tied set unused, a `CE` tied low left
+untied, `CB` of `~C` left as logic, and `REQP-76` let through. The tenth, the `REQP-77`/`REQP-129`
+check before placing taken out, survived: the one after routing refuses the same design by the same
+name, and is why the early one is only there for time. The two between a `CE` and its ground
+and between `CB` and its clock passed the first version of the test, which compared site features
+alone: it compares the ground ties and where each clock pin's clock comes from now.
+
+**This changes existing bitstreams:** an `ODDR`'s `CLKB` is routed now, as Vivado routes it on
+every `ODDR` here. NewAE's Husky has five, and its build differs by those routes; nothing about
+that has been on a board. Vivado takes `IOI_OCLKM` to `CLKB` and this flow takes `IOI_OCLK`, both
+of which the database offers for that pin; only the ends are compared.
+
+**Not done:** `ISERDESE2`, `OSERDESE2`, `IDELAYE2` and `IDELAYCTRL`. The database has their
+features (`ISERDES.*`, `OSERDES.DATA_WIDTH.*`, `IDELAY_Y*`), and Vivado's probes of each decode with
+nothing unnamed, but none has a bel here, a sweep, or a test. A `CE` tied low on an `IDDR` routes a
+ground the way a block RAM's tie does, which has not been on a part either.
 
 ## Reading its constraints
 

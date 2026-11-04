@@ -1,0 +1,23 @@
+module iddr_2clk_sweep(input clk, input clk2, input c0, input c1, input c2, input c3, output reg r, input p0, input p1, input p2, input p3, input p4, input p5, input p6, input p7, input p8);
+  wire gclk; BUFG bg(.I(clk), .O(gclk));
+  wire gclk2; BUFG bg2(.I(clk2), .O(gclk2));
+  wire q1_0, q2_0;
+  IDDR_2CLK u0(.Q1(q1_0), .Q2(q2_0), .C(gclk), .CE(c0), .D(p0), .R(1'b0), .S(1'b0), .CB(~gclk));
+  wire q1_1, q2_1;
+  IDDR_2CLK u1(.Q1(q1_1), .Q2(q2_1), .C(gclk), .CE(c0), .D(p1), .R(1'b0), .S(1'b0), .CB(~gclk));
+  wire q1_2, q2_2;
+  IDDR_2CLK u2(.Q1(q1_2), .Q2(q2_2), .C(gclk), .CE(c0), .D(p2), .R(1'b0), .S(1'b0), .CB(gclk2));
+  wire q1_3, q2_3;
+  IDDR_2CLK #(.DDR_CLK_EDGE("SAME_EDGE")) u3(.Q1(q1_3), .Q2(q2_3), .C(gclk), .CE(c0), .D(p3), .R(1'b0), .S(1'b0), .CB(~gclk));
+  wire q1_4, q2_4;
+  IDDR_2CLK #(.DDR_CLK_EDGE("SAME_EDGE_PIPELINED")) u4(.Q1(q1_4), .Q2(q2_4), .C(gclk), .CE(c0), .D(p4), .R(1'b0), .S(1'b0), .CB(~gclk));
+  wire q1_5, q2_5;
+  IDDR_2CLK #(.IS_CB_INVERTED(1'b1)) u5(.Q1(q1_5), .Q2(q2_5), .C(gclk), .CE(c0), .D(p5), .R(1'b0), .S(1'b0), .CB(gclk));
+  wire q1_6, q2_6;
+  IDDR_2CLK #(.IS_C_INVERTED(1'b1)) u6(.Q1(q1_6), .Q2(q2_6), .C(gclk), .CE(c0), .D(p6), .R(1'b0), .S(1'b0), .CB(gclk));
+  wire q1_7, q2_7;
+  IDDR_2CLK u7(.Q1(q1_7), .Q2(q2_7), .C(gclk), .CE(c0), .D(p7), .R(c1), .S(1'b0), .CB(~gclk));
+  wire q1_8, q2_8;
+  IDDR_2CLK u8(.Q1(q1_8), .Q2(q2_8), .C(gclk), .CE(c0), .D(p8), .R(1'b0), .S(c1), .CB(~gclk));
+  always @(posedge gclk) r <= q1_0 ^ q2_0 ^ q1_1 ^ q2_1 ^ q1_2 ^ q2_2 ^ q1_3 ^ q2_3 ^ q1_4 ^ q2_4 ^ q1_5 ^ q2_5 ^ q1_6 ^ q2_6 ^ q1_7 ^ q2_7 ^ q1_8 ^ q2_8;
+endmodule

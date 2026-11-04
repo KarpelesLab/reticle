@@ -507,23 +507,53 @@ fn io_logic_wants(
         }
         return;
     }
-    if instance.primitive != "IDDR" {
+    let input = matches!(instance.primitive.as_str(), "IDDR" | "IDDR_2CLK");
+    if !input && instance.primitive != "ODDR" {
         return;
     }
-    let routed = instance.pins.iter().any(|p| {
-        let pin = &netlist.pins[*p];
-        pin.role == "sr" && pin.signal.is_some_and(is_routed)
-    });
-    if routed {
-        return;
+    let pins = |role: &str| {
+        instance
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .filter(move |pin| pin.role == role)
+            .collect::<Vec<_>>()
+    };
+    let routed = |role: &str| {
+        pins(role)
+            .iter()
+            .any(|pin| pin.signal.is_some_and(is_routed))
+    };
+    let tied_one = |role: &str| {
+        pins(role)
+            .iter()
+            .any(|pin| pin.signal.is_none() && pin.constant == Some(Bit::One))
+    };
+    let tied_zero = |role: &str| {
+        let here = pins(role);
+        !here.is_empty()
+            && here
+                .iter()
+                .all(|pin| pin.signal.is_none() && pin.constant != Some(Bit::One))
+    };
+    let mut tie = |role: &str| {
+        if let Some(node) = site.pin(role) {
+            wants.push((
+                TiePolicy::Zero,
+                instance.name.clone(),
+                role.to_owned(),
+                node,
+            ));
+        }
+    };
+    // A set or reset tied high is left unrouted, which reads a one.
+    if input && !routed("sr") && !tied_one("sr") {
+        tie("sr");
     }
-    if let Some(node) = site.pin("sr") {
-        wants.push((
-            TiePolicy::Zero,
-            instance.name.clone(),
-            "sr".to_owned(),
-            node,
-        ));
+    // A clock enable tied low, which Vivado grounds the same way
+    // (`iddr_sweep`, `oddr_sweep`: the same site bits as one tied high).
+    if tied_zero("ce") {
+        tie("ce");
     }
 }
 

@@ -705,6 +705,12 @@ fn what_reticle_writes_is_what_vivado_wrote() {
         "vref_ball_free",
         "unread_sstl",
         "bank14_stepdown",
+        // A tristate tied high, released: what a folded `z` would drive.
+        "buf_obuft_t1",
+        "buf_iobuf_t1",
+        "buf_obuftds_t1",
+        "buf_ibufds_intermdisable_lvds_25",
+        "buf_keeper_inout",
     ];
     let wrong = in_parallel(&names, 8, |name| compare(name, &answers[*name], &root));
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

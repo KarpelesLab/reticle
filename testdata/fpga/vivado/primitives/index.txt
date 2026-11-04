@@ -128,8 +128,8 @@ io IOBUFDS_DIFF_OUT_DCIEN refused
 io PULLUP ok
 io PULLDOWN ok
 io KEEPER ok
-iologic IDDR gap
-iologic IDDR_2CLK gap
+iologic IDDR ok
+iologic IDDR_2CLK ok
 iologic ODDR ok
 iologic ISERDESE2 gap
 iologic OSERDESE2 gap

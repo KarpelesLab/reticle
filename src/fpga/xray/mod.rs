@@ -3241,7 +3241,7 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         // data read one constant value, and the suite's ADC ramp tests
         // passed on it, their check never finding a ramp to follow.
         "ddr_in" => &["clk", "clkb"],
-        "ddr_out" => &["clk"],
+        "ddr_out" => &["clk", "clkb"],
         // A `DSP48E1`'s registers, the same way as a block RAM's.
         "dsp" => &["clk"],
         _ => &[],

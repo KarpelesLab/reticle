@@ -1114,7 +1114,7 @@ module ROM256X1 #(parameter [255:0] INIT = 256'h0) (output O, input A0, input A1
 endmodule
 
 module IOBUF (output O, inout IO, input I, input T);
-  (* keep *) assign IO = T ? 1'bz : I;
+  assign IO = T ? 1'bz : I;
   assign O = IO;
 endmodule
 module BUFGP (output O, input I);

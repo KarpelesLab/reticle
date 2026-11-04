@@ -319,13 +319,14 @@
 #     NOTHING HAS PUT A DSP48E1 ON A PART through this flow's own
 #     placer, router and bitstream, though since 2026-11-04 they build one and
 #     its bits are compared with Vivado's: `fpga::xray::dsp` has the account.
-#   * IDDR and ODDR BY NAME ONLY, and NO IDELAYE2. A design may
+#   * IDDR, IDDR_2CLK and ODDR BY NAME ONLY, and NO IDELAYE2. A design may
 #     instantiate `IDDR` and `ODDR` (NewAE's ChipWhisperer-Husky does,
 #     fifteen times); their roles are named after their own pins (`q1`,
 #     `q2`, `d1`, `d2`), not the `q0`/`d0` a `ddr` constraint maps onto,
 #     so a double-data-rate *port* is still reported as unbuildable on
 #     this family and buffered as an ordinary one. Their bits are
-#     `xray::iologic`'s, checked against Vivado's in NewAE's image. An IO
+#     `xray::iologic`'s, checked against Vivado's in NewAE's image and
+#     then against Vivado 2026.1 setting by setting. An IO
 #     delay is refused likewise: IDELAYE2 needs an IDELAYCTRL with a
 #     200 MHz reference clock, which is a board-level obligation Reticle
 #     cannot state.
@@ -449,7 +450,8 @@ device xc7a35t-cpg236
   bel BUFMRCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFR gb absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
   bel IDDR ddr_in absorbs ce,sr port d=D clk=C clkb=C ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
-  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C ce=CE sr=R sr=S q=Q outputs Q
+  bel IDDR_2CLK ddr_in absorbs ce,sr port d=D clk=C clkb=CB ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
+  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C clkb=C ce=CE sr=R sr=S q=Q outputs Q
   bel PLLE2_ADV pll absorbs rst,pwrdwn,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out=CLKOUT0 out1=CLKOUT1 out2=CLKOUT2 out3=CLKOUT3 out4=CLKOUT4 out5=CLKOUT5 fbout=CLKFBOUT lock=LOCKED rst=RST pwrdwn=PWRDWN dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT1,CLKOUT2,CLKOUT3,CLKOUT4,CLKOUT5,CLKFBOUT,LOCKED,DRDY,DO
   bel XADC sysmon absorbs vp,vn,vauxp,vauxn port vp=VP vn=VN vauxp=VAUXP vauxn=VAUXN dclk=DCLK den=DEN dwe=DWE reset=RESET convst=CONVST convstclk=CONVSTCLK daddr=DADDR di=DI do=DO drdy=DRDY ot=OT busy=BUSY eoc=EOC eos=EOS alm=ALM channel=CHANNEL muxaddr=MUXADDR jtagbusy=JTAGBUSY jtaglocked=JTAGLOCKED jtagmodified=JTAGMODIFIED outputs DO,DRDY,OT,BUSY,EOC,EOS,ALM,CHANNEL,MUXADDR,JTAGBUSY,JTAGLOCKED,JTAGMODIFIED
   bel MMCME2_ADV mmcm absorbs rst,pwrdwn,psen,psincdec,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out0=CLKOUT0 out0b=CLKOUT0B out1=CLKOUT1 out1b=CLKOUT1B out2=CLKOUT2 out2b=CLKOUT2B out3=CLKOUT3 out3b=CLKOUT3B out4=CLKOUT4 out5=CLKOUT5 out6=CLKOUT6 fbout=CLKFBOUT fboutb=CLKFBOUTB lock=LOCKED clkinstopped=CLKINSTOPPED clkfbstopped=CLKFBSTOPPED rst=RST pwrdwn=PWRDWN psclk=PSCLK psen=PSEN psincdec=PSINCDEC psdone=PSDONE dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT0B,CLKOUT1,CLKOUT1B,CLKOUT2,CLKOUT2B,CLKOUT3,CLKOUT3B,CLKOUT4,CLKOUT5,CLKOUT6,CLKFBOUT,CLKFBOUTB,LOCKED,CLKINSTOPPED,CLKFBSTOPPED,PSDONE,DRDY,DO
@@ -673,7 +675,8 @@ device xc7a35t-ftg256
   bel BUFMRCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFR gb absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
   bel IDDR ddr_in absorbs ce,sr port d=D clk=C clkb=C ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
-  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C ce=CE sr=R sr=S q=Q outputs Q
+  bel IDDR_2CLK ddr_in absorbs ce,sr port d=D clk=C clkb=CB ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
+  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C clkb=C ce=CE sr=R sr=S q=Q outputs Q
   bel PLLE2_ADV pll absorbs rst,pwrdwn,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out=CLKOUT0 out1=CLKOUT1 out2=CLKOUT2 out3=CLKOUT3 out4=CLKOUT4 out5=CLKOUT5 fbout=CLKFBOUT lock=LOCKED rst=RST pwrdwn=PWRDWN dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT1,CLKOUT2,CLKOUT3,CLKOUT4,CLKOUT5,CLKFBOUT,LOCKED,DRDY,DO
   bel XADC sysmon absorbs vp,vn,vauxp,vauxn port vp=VP vn=VN vauxp=VAUXP vauxn=VAUXN dclk=DCLK den=DEN dwe=DWE reset=RESET convst=CONVST convstclk=CONVSTCLK daddr=DADDR di=DI do=DO drdy=DRDY ot=OT busy=BUSY eoc=EOC eos=EOS alm=ALM channel=CHANNEL muxaddr=MUXADDR jtagbusy=JTAGBUSY jtaglocked=JTAGLOCKED jtagmodified=JTAGMODIFIED outputs DO,DRDY,OT,BUSY,EOC,EOS,ALM,CHANNEL,MUXADDR,JTAGBUSY,JTAGLOCKED,JTAGMODIFIED
   bel MMCME2_ADV mmcm absorbs rst,pwrdwn,psen,psincdec,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out0=CLKOUT0 out0b=CLKOUT0B out1=CLKOUT1 out1b=CLKOUT1B out2=CLKOUT2 out2b=CLKOUT2B out3=CLKOUT3 out3b=CLKOUT3B out4=CLKOUT4 out5=CLKOUT5 out6=CLKOUT6 fbout=CLKFBOUT fboutb=CLKFBOUTB lock=LOCKED clkinstopped=CLKINSTOPPED clkfbstopped=CLKFBSTOPPED rst=RST pwrdwn=PWRDWN psclk=PSCLK psen=PSEN psincdec=PSINCDEC psdone=PSDONE dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT0B,CLKOUT1,CLKOUT1B,CLKOUT2,CLKOUT2B,CLKOUT3,CLKOUT3B,CLKOUT4,CLKOUT5,CLKOUT6,CLKFBOUT,CLKFBOUTB,LOCKED,CLKINSTOPPED,CLKFBSTOPPED,PSDONE,DRDY,DO
@@ -993,7 +996,8 @@ device xc7a100t-ftg256
   bel BUFMRCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFR gb absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
   bel IDDR ddr_in absorbs ce,sr port d=D clk=C clkb=C ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
-  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C ce=CE sr=R sr=S q=Q outputs Q
+  bel IDDR_2CLK ddr_in absorbs ce,sr port d=D clk=C clkb=CB ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
+  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C clkb=C ce=CE sr=R sr=S q=Q outputs Q
   bel PLLE2_ADV pll absorbs rst,pwrdwn,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out=CLKOUT0 out1=CLKOUT1 out2=CLKOUT2 out3=CLKOUT3 out4=CLKOUT4 out5=CLKOUT5 fbout=CLKFBOUT lock=LOCKED rst=RST pwrdwn=PWRDWN dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT1,CLKOUT2,CLKOUT3,CLKOUT4,CLKOUT5,CLKFBOUT,LOCKED,DRDY,DO
   bel XADC sysmon absorbs vp,vn,vauxp,vauxn port vp=VP vn=VN vauxp=VAUXP vauxn=VAUXN dclk=DCLK den=DEN dwe=DWE reset=RESET convst=CONVST convstclk=CONVSTCLK daddr=DADDR di=DI do=DO drdy=DRDY ot=OT busy=BUSY eoc=EOC eos=EOS alm=ALM channel=CHANNEL muxaddr=MUXADDR jtagbusy=JTAGBUSY jtaglocked=JTAGLOCKED jtagmodified=JTAGMODIFIED outputs DO,DRDY,OT,BUSY,EOC,EOS,ALM,CHANNEL,MUXADDR,JTAGBUSY,JTAGLOCKED,JTAGMODIFIED
   bel MMCME2_ADV mmcm absorbs rst,pwrdwn,psen,psincdec,clkinsel,clkin2 port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out0=CLKOUT0 out0b=CLKOUT0B out1=CLKOUT1 out1b=CLKOUT1B out2=CLKOUT2 out2b=CLKOUT2B out3=CLKOUT3 out3b=CLKOUT3B out4=CLKOUT4 out5=CLKOUT5 out6=CLKOUT6 fbout=CLKFBOUT fboutb=CLKFBOUTB lock=LOCKED clkinstopped=CLKINSTOPPED clkfbstopped=CLKFBSTOPPED rst=RST pwrdwn=PWRDWN psclk=PSCLK psen=PSEN psincdec=PSINCDEC psdone=PSDONE dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT0B,CLKOUT1,CLKOUT1B,CLKOUT2,CLKOUT2B,CLKOUT3,CLKOUT3B,CLKOUT4,CLKOUT5,CLKOUT6,CLKFBOUT,CLKFBOUTB,LOCKED,CLKINSTOPPED,CLKFBSTOPPED,PSDONE,DRDY,DO

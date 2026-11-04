@@ -4197,6 +4197,7 @@ end
                     ("BUFMRCE", vec!["ce"]),
                     ("BUFR", vec!["ce", "clr"]),
                     ("IDDR", vec!["ce", "sr"]),
+                    ("IDDR_2CLK", vec!["ce", "sr"]),
                     ("ODDR", vec!["d1", "d2", "ce", "sr"]),
                     ("PLLE2_ADV", vec!["rst", "pwrdwn", "clkinsel", "clkin2"]),
                     ("XADC", vec!["vp", "vn", "vauxp", "vauxn"]),
