@@ -40,6 +40,9 @@ models or IP.
   `io_pairs.v` and `io_pairs.py` asks Vivado's design rule check about every pair of
   (standard, direction) in one bank, for `pairs.txt` there. `tests/fpga_xray_pads.rs`
   decodes `run_all.sh`'s bitstreams into `vivado.txt`.
+- `gen_clocks.py` writes `testdata/fpga/vivado/clocks/`, `clocks.sh` with
+  `clocks_probe.tcl` asks Vivado about each of those designs, and `clocks_fixture.py`
+  keeps its answer, read back by `--decode`, in `vivado.txt` there.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

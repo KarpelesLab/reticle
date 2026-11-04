@@ -14,6 +14,7 @@
 //! | `BUFG` | `I` | — | 1 | 0 | 1 | 0 | 0 | 1 |
 //! | `BUFGCE` | `I` | — | `CE` | 0 | 1 | 0 | 0 | 1 |
 //! | `BUFGMUX` | `I0` | `I1` | `!S` | `S` | 1 | 1 | `ASYNC` | `ASYNC` |
+//! | `BUFGMUX_CTRL` | `I0` | `I1` | 1 | 1 | `!S` | `S` | 0 | 0 |
 //! | `BUFMRCE` | `I` | — | `CE` | 0 | 1 | 0 | 0 | 1 |
 //! | `BUFR`, not dividing | `I` | — | 1 | 0 | 1 | 0 | 0 | 1 |
 //!
@@ -67,7 +68,10 @@
 //! the image's bits require of it.
 //!
 //! `INIT_OUT`, `PRESELECT_I1` and `ZPRESELECT_I0` are clear in every one
-//! of Vivado's thirteen, and are left clear here.
+//! of Vivado's thirteen, and are left clear here for those primitives. A
+//! `BUFGCTRL` by name is not one of them: its `PRESELECT_I0` defaults the other
+//! way, so that Vivado writes `ZPRESELECT_I0` on every one, and
+//! [`bufgctrl_features`] has what the sweep of its parameters showed.
 //!
 //! # The cascade, and the bit the database does not have
 //!
@@ -118,7 +122,7 @@ use crate::logic::Bit;
 /// leading `=` so that no primitive is ever named after one: a
 /// [`ConfigEntry::Cell`] fires for the primitive of its name, and these
 /// must fire only when [`XrayFabric::configure_global_buffers`] says so.
-pub(super) const FEATURES: [&str; 7] = [
+pub(super) const FEATURES: [&str; 10] = [
     "=IN_USE",
     "=ZINV_CE0",
     "=ZINV_CE1",
@@ -126,12 +130,15 @@ pub(super) const FEATURES: [&str; 7] = [
     "=ZINV_S1",
     "=IS_IGNORE0_INVERTED",
     "=IS_IGNORE1_INVERTED",
+    "=ZPRESELECT_I0",
+    "=PRESELECT_I1",
+    "=INIT_OUT",
 ];
 
 /// The primitives configured here. A `BUFG` keeps the four fixed
 /// features its bel declares for it, which every path through this flow
 /// writes, so a design with only `BUFG`s is unchanged by this pass.
-const CONFIGURED: [&str; 4] = ["BUFGCE", "BUFGMUX", "BUFMRCE", "BUFR"];
+const CONFIGURED: [&str; 5] = ["BUFGCE", "BUFGCTRL", "BUFGMUX", "BUFMRCE", "BUFR"];
 
 /// What one control pin of a placed buffer is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -270,6 +277,12 @@ impl XrayFabric {
                 None => Control::Fixed(absent),
             };
             let fixed = |value: bool| (Control::Fixed(value), false);
+            if instance.primitive == "BUFGCTRL" {
+                let params = m.cells.get(instance.cell).map(|cell| &cell.params);
+                let names = bufgctrl_features(params, instance, netlist)?;
+                count += self.set_buffer_features(bel, site.tile, &names, bits)?;
+                continue;
+            }
             let controls = if instance.primitive == "BUFGMUX" {
                 let params = m.cells.get(instance.cell).map(|cell| &cell.params);
                 let select = params
@@ -349,25 +362,139 @@ impl XrayFabric {
                     fixed(true),
                 ]
             };
-            for name in features(controls) {
-                let tag = format!("={name}");
-                let entry = bel.config.iter().find_map(|entry| match entry {
-                    ConfigEntry::Cell { primitive, bits } if *primitive == tag => Some(bits),
-                    _ => None,
+            count += self.set_buffer_features(bel, site.tile, &features(controls), bits)?;
+        }
+        Ok(count)
+    }
+
+    /// Sets each of `names`, as [`FEATURES`] names them without the tag, and
+    /// says how many bits that was.
+    fn set_buffer_features(
+        &self,
+        bel: &crate::fpga::arch::BelDecl,
+        tile: (u32, u32),
+        names: &[&str],
+        bits: &mut Bitstream,
+    ) -> Result<usize, GlobalBufferError> {
+        let mut count = 0usize;
+        for name in names {
+            let tag = format!("={name}");
+            let entry = bel.config.iter().find_map(|entry| match entry {
+                ConfigEntry::Cell { primitive, bits } if *primitive == tag => Some(bits),
+                _ => None,
+            });
+            let Some(ones) = entry else {
+                return Err(GlobalBufferError::MissingFeature {
+                    feature: (*name).to_owned(),
                 });
-                let Some(ones) = entry else {
-                    return Err(GlobalBufferError::MissingFeature {
-                        feature: name.to_owned(),
-                    });
-                };
-                for bit in ones {
-                    bits.set(site.tile, *bit)?;
-                    count += 1;
-                }
+            };
+            for bit in ones {
+                bits.set(tile, *bit)?;
+                count += 1;
             }
         }
         Ok(count)
     }
+}
+
+/// A `BUFGCTRL` asked for by name: what Vivado 2026.1 wrote for it, as
+/// `testdata/fpga/vivado/clocks/vivado.txt` holds.
+///
+/// | what | bit |
+/// |---|---|
+/// | `CE0`, `CE1`, `S0`, `S1`, `IGNORE0`, `IGNORE1` a signal | set, or clear under `IS_<pin>_INVERTED` |
+/// | one of them tied, or left out, which is tied low | set when what the buffer sees is one, whichever inverter says so |
+/// | `PRESELECT_I0 = "FALSE"`, this primitive's default | `ZPRESELECT_I0` set; `TRUE` clears it, which is why a `BUFG` never had it |
+/// | `PRESELECT_I1 = "TRUE"` | `PRESELECT_I1` |
+/// | `INIT_OUT = 1` | `INIT_OUT` |
+///
+/// Vivado refuses `IS_I0_INVERTED` and `IS_I1_INVERTED` on this site
+/// (`PDRC-159`) and both enables or both selects tied low (`PDCN-1567`,
+/// `PDCN-1568`), so these do too.
+fn bufgctrl_features(
+    params: Option<&crate::ir::Attrs>,
+    instance: &crate::fpga::place::Instance,
+    netlist: &Netlist,
+) -> Result<Vec<&'static str>, GlobalBufferError> {
+    let bad = |name: &str, value: String| GlobalBufferError::BadParameter {
+        instance: instance.name.clone(),
+        name: name.to_owned(),
+        value,
+    };
+    let int = |name: &str| {
+        params
+            .and_then(|p| p.get(name))
+            .and_then(AttrValue::as_int)
+            .unwrap_or(0)
+    };
+    let flag = |name: &str, default: bool| -> Result<bool, GlobalBufferError> {
+        match params.and_then(|p| p.get(name)) {
+            None => Ok(default),
+            Some(value) => match value.as_str().map(str::to_ascii_uppercase).as_deref() {
+                Some("TRUE") => Ok(true),
+                Some("FALSE") => Ok(false),
+                _ => match value.as_int() {
+                    Some(n) => Ok(n != 0),
+                    None => Err(bad(name, format!("{value:?}"))),
+                },
+            },
+        }
+    };
+    for name in ["IS_I0_INVERTED", "IS_I1_INVERTED"] {
+        if int(name) != 0 {
+            return Err(bad(
+                name,
+                "1, which this site cannot do (PDRC-159)".to_owned(),
+            ));
+        }
+    }
+    let seen = |role: &str, inverter: &str| {
+        let pin = instance
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|p| p.role == role);
+        let invert = int(inverter) != 0;
+        match pin {
+            Some(p) if p.signal.is_some() => (Control::Routed, invert),
+            Some(p) => (
+                Control::Fixed((p.constant == Some(Bit::One)) != invert),
+                false,
+            ),
+            None => (Control::Fixed(invert), false),
+        }
+    };
+    let controls = [
+        seen("ce", "IS_CE0_INVERTED"),
+        seen("ce1", "IS_CE1_INVERTED"),
+        seen("s0", "IS_S0_INVERTED"),
+        seen("s1", "IS_S1_INVERTED"),
+        seen("ignore0", "IS_IGNORE0_INVERTED"),
+        seen("ignore1", "IS_IGNORE1_INVERTED"),
+    ];
+    if controls[0].0 == Control::Fixed(false) && controls[1].0 == Control::Fixed(false) {
+        return Err(bad(
+            "CE0",
+            "low, and so is CE1, which selects neither clock (PDCN-1567)".to_owned(),
+        ));
+    }
+    if controls[2].0 == Control::Fixed(false) && controls[3].0 == Control::Fixed(false) {
+        return Err(bad(
+            "S0",
+            "low, and so is S1, which selects neither clock (PDCN-1568)".to_owned(),
+        ));
+    }
+    let mut out = features(controls);
+    if !flag("PRESELECT_I0", false)? {
+        out.push("ZPRESELECT_I0");
+    }
+    if flag("PRESELECT_I1", false)? {
+        out.push("PRESELECT_I1");
+    }
+    if int("INIT_OUT") != 0 {
+        out.push("INIT_OUT");
+    }
+    Ok(out)
 }
 
 /// The bit that puts `BUFGCTRL<n>`'s output on its cascade to the

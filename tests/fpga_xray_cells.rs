@@ -77,7 +77,16 @@ fn every_cell_in_the_library_has_vectors() {
             continue;
         };
         let name = rest.split([' ', '(']).next().unwrap_or("");
-        if ["BUFGP", "BUFGCE_1", "BUFGMUX_1", "IOBUF"].contains(&name) {
+        if [
+            "BUFGP",
+            "BUFGCE_1",
+            "BUFGMUX_1",
+            "BUFGMUX_CTRL",
+            "IBUFGDS",
+            "IOBUF",
+        ]
+        .contains(&name)
+        {
             continue;
         }
         if !have.iter().any(|h| h == &name.to_ascii_lowercase()) {

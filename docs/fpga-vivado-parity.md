@@ -44,8 +44,8 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 108 of the 141**, 94 before the section on pads and 106 before the
-one on IO registers. `index.txt` says which;
+**Reticle builds 110 of the 141**, 94 before the section on pads, 106 before the
+one on IO registers and 108 before `BUFGCTRL` by name. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
 to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
 
@@ -56,12 +56,12 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 33 that do not build, by what stops them:
+The 31 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
-| clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
+| clock buffers | `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
 | clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
 | pad buffers | the six `DIFF_OUT` forms |
 | IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
@@ -1396,3 +1396,38 @@ not catch.
 | clock: a block off the network | `the_blocks_of_a_few_designs_are_vivados` |
 | xray: a kept register | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
 | device: smallest moved | `small_multiplies_stay_in_logic_as_vivado_leaves_them` |
+
+## Clock buffers
+
+`testdata/fpga/vivado/clocks/` has 197 small designs, each asking one parameter of a
+clock buffer or a clock manager, or one wiring of it. `tools/vivado-parity/clocks.sh`
+runs them, and `vivado.txt` there has each clock site Vivado's bitstream set, as
+`--decode` reads it, or the rule it refused by. `tests/fpga_xray_clocks.rs` holds
+this flow to it. **Nothing here has been on a board.**
+
+### `BUFGCTRL`, and what is one
+
+| what | what Vivado wrote |
+|---|---|
+| `CE0`, `CE1`, `S0`, `S1`, `IGNORE0`, `IGNORE1` a signal | `ZINV_<pin>` or `IS_IGNORE<n>_INVERTED` set, or clear under `IS_<pin>_INVERTED` |
+| one of them tied | set when what the buffer sees is one, by the tie and its inverter together: tied high and inverted is clear, tied low and inverted is set |
+| `PRESELECT_I0` | **`ZPRESELECT_I0` set on `FALSE`**, this primitive's default, and clear on `TRUE` |
+| `PRESELECT_I1 = "TRUE"`, `INIT_OUT = 1` | a bit each |
+| `BUFGMUX_CTRL` | `CE0` and `CE1` high, `S0 = !S`, `S1 = S`, `IGNORE`s low, `PRESELECT_I0` true: `IN_USE ZINV_CE0 ZINV_CE1 ZINV_S1` |
+| `IBUFGDS` | the same as `IBUFDS`, to the feature |
+
+`xray::bufg` said `ZPRESELECT_I0` was clear in all of Vivado's thirteen on NewAE's image,
+and left it so. It is, for the primitives that image has, whose `PRESELECT_I0` is true.
+A `BUFGCTRL` by name is the first primitive here with it the other way, so a reading
+of those thirteen alone would have written every one of them with the wrong preselect.
+
+**Refused, as Vivado does:** both enables or both selects held low (`PDCN-1567`,
+`PDCN-1568`, and a pin left out counts), and `IS_I0_INVERTED` or `IS_I1_INVERTED`
+(`PDRC-159`, and then its router gives up, `Route 35-19`).
+
+**Checked:** 34 designs, each `BUFGCTRL` parameter and each pin tied either way: the
+site lines are Vivado's on all 31 it builds, and the 3 it refuses are refused. Those
+that the gate does not build are in the `#[ignore]`d
+`every_design_of_a_built_family`. **Unchanged:** the thirteen designs of `qor/` and
+eleven probes of the older buffers, pads and PLL are the same bitstream, byte for byte,
+as the commit before this.

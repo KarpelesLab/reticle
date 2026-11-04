@@ -4194,6 +4194,10 @@ end
                 vec![
                     ("BUFGCE", vec!["ce"]),
                     ("BUFGMUX", vec!["ce", "ce1"]),
+                    (
+                        "BUFGCTRL",
+                        vec!["ce", "ce1", "s0", "s1", "ignore0", "ignore1"]
+                    ),
                     ("BUFMRCE", vec!["ce"]),
                     ("BUFR", vec!["ce", "clr"]),
                     ("IDDR", vec!["ce", "sr"]),

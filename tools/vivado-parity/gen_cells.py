@@ -306,5 +306,15 @@ module BUFGCE_1 (output O, input CE, input I);
 endmodule
 module BUFGMUX_1 (output O, input I0, input I1, input S);
   BUFGMUX u_buf (.O(O), .I0(I0), .I1(I1), .S(S));
+endmodule
+module BUFGMUX_CTRL (output O, input I0, input I1, input S);
+  BUFGCTRL #(.PRESELECT_I0("TRUE"), .IS_S0_INVERTED(1'b1)) u_buf (.O(O), .I0(I0), .I1(I1),
+    .CE0(1'b1), .CE1(1'b1), .S0(S), .S1(S), .IGNORE0(1'b0), .IGNORE1(1'b0));
+endmodule
+module IBUFGDS #(parameter DIFF_TERM = "FALSE", parameter IBUF_LOW_PWR = "TRUE",
+    parameter IOSTANDARD = "DEFAULT", parameter CAPACITANCE = "DONT_CARE",
+    parameter IBUF_DELAY_VALUE = "0") (output O, input I, input IB);
+  IBUFDS #(.DIFF_TERM(DIFF_TERM), .IBUF_LOW_PWR(IBUF_LOW_PWR), .IOSTANDARD(IOSTANDARD))
+    u_pad (.O(O), .I(I), .IB(IB));
 endmodule""")
 open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../src/fpga/devices/xc7_cells.v'),'w').write('\n'.join(out))
