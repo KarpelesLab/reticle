@@ -1118,7 +1118,49 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
     options.params = param_overrides(args)?;
     let refs: Vec<&reticle::verilog::ast::SourceFile> = files.iter().collect();
     let mut diags = Diagnostics::new();
-    let design = reticle::verilog::elaborate(&refs, &options, &mut diags);
+    let mut design = reticle::verilog::elaborate(&refs, &options, &mut diags);
+    // A cell of the target's the design names and does not declare, and
+    // that the target's cell library has: that module joins the sources.
+    // One round may name another, so this repeats until nothing is added.
+    let family = args
+        .option("device")
+        .and_then(reticle::fpga::target)
+        .map(|device| device.family.clone());
+    while let (Some(family), Some(found), false) = (&family, &design, diags.has_errors()) {
+        let Some(top) = found.top else { break };
+        let names: Vec<String> = found
+            .undefined_instances(top, &[])
+            .into_iter()
+            .filter_map(|(module, instance)| {
+                match &found.modules[module].instances[instance].module {
+                    reticle::ir::ModuleRef::Unresolved(name) => Some(name.as_str().to_owned()),
+                    _ => None,
+                }
+            })
+            .collect();
+        let Some(source) = reticle::fpga::cell_source(family, &names) else {
+            break;
+        };
+        let id = match map.add(format!("{family}_cells.v"), source) {
+            Ok(id) => id,
+            Err(err) => {
+                diags.push(Diagnostic::error(format!(
+                    "cannot load the {family} cell library: {err}"
+                )));
+                break;
+            }
+        };
+        files.push(reticle::verilog::parse_source_in(
+            &mut map,
+            id,
+            reticle::verilog::Dialect::Verilog2005,
+            &mut pre,
+            &mut IncludesFrom(String::new(), include_dirs),
+            &mut diags,
+        ));
+        let refs: Vec<&reticle::verilog::ast::SourceFile> = files.iter().collect();
+        design = reticle::verilog::elaborate(&refs, &options, &mut diags);
+    }
     let failed = report(&mut diags, &map);
     match design {
         Some(design) if !failed => Ok(Ok((design, map))),

@@ -247,6 +247,43 @@ pub const BUILTIN_FILES: [(&str, &str); 6] = [
     ("generic.dev", include_str!("devices/generic.dev")),
 ];
 
+/// The source of the cells named in `names` that `family`'s cell library
+/// defines, or `None` if it defines none of them.
+///
+/// The library is what a design may instantiate by name beyond what the
+/// device file declares, written as ordinary Verilog so that the rest of
+/// the flow sees ordinary logic. Only the modules asked for come back, so
+/// that a design's own module of another name is never disturbed.
+///
+/// ```
+/// let source = reticle::fpga::cell_source("xc7", &["FDRE".to_owned()]).unwrap();
+/// assert!(source.starts_with("module FDRE "));
+/// assert!(reticle::fpga::cell_source("xc7", &["my_module".to_owned()]).is_none());
+/// assert!(reticle::fpga::cell_source("ecp5", &["FDRE".to_owned()]).is_none());
+/// ```
+pub fn cell_source(family: &str, names: &[String]) -> Option<String> {
+    let library = match family {
+        "xc7" => include_str!("devices/xc7_cells.v"),
+        _ => return None,
+    };
+    let mut out = String::new();
+    for block in library.split_inclusive("endmodule\n") {
+        // At the start of a line: the file's header says the word too.
+        let Some(at) = block
+            .match_indices("module ")
+            .find_map(|(at, _)| (at == 0 || block.as_bytes()[at - 1] == b'\n').then_some(at))
+        else {
+            continue;
+        };
+        let rest = &block[at + "module ".len()..];
+        let name = rest.split([' ', '(']).next().unwrap_or("");
+        if names.iter().any(|n| n == name) {
+            out.push_str(&block[at..]);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 static BUILTINS: OnceLock<DeviceDb> = OnceLock::new();
 
 /// The database of devices compiled into the crate.

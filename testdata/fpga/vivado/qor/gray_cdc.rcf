@@ -1,0 +1,6 @@
+create_clock -name clk -period 5 clk
+set_io -io_standard LVCMOS33 clk N11
+set_io -io_standard LVCMOS33 si L4
+set_io -io_standard LVCMOS33 so L5
+create_clock -name clk2 -period 7 clk2
+set_io -io_standard LVCMOS33 clk2 N14
