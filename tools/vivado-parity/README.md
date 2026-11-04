@@ -15,5 +15,10 @@ models or IP.
   file in `testdata/fpga/vivado/xdc/`, and keep the answer beside it.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
+- `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation
+  (`reticle fpga --vivado-placement`) to place, route and time, or to time as it
+  is. `decode_placed.sh` and `compare_bits.py` compare the bitstreams, feature by
+  feature, `frame_ecc.py` checks what those leave over, and `placed_table.py` and
+  `bits_table.py` write `testdata/fpga/vivado/placed/`.
 
 `docs/fpga-vivado-parity.md` has what the answers say.

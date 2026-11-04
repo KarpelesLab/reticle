@@ -927,18 +927,23 @@ fn the_io_path_is_the_one_vivado_built() {
 
     // ---- And the size of what this comparison does not cover. ----
     //
-    // Every bit Reticle sets has a name. Most of Vivado's do not: its
-    // bitstream configures a whole design plus whatever a real
-    // configuration needs that nothing in the database names. That
-    // difference is the honest measure of how far this is from a
-    // working bitstream, and it belongs in the output of the test that
-    // otherwise reads like a success.
+    // Every bit Reticle sets has a name, and so, it turned out, has every bit
+    // of Vivado's that is a tile's at all. This used to read "most of Vivado's
+    // do not", and to assert that some were unexplained, as the honest measure
+    // of how far this is from a working bitstream. All 1302 of them were the
+    // frames' own Hamming codes (`tools/vivado-parity/frame_ecc.py`), so that
+    // measure was measuring nothing. What it does not cover is what Vivado's
+    // design has and this one does not, and that is still printed here.
+    //
+    // Would catch the code's range being too narrow, or a feature of Vivado's
+    // that the database has lost a name for.
     eprintln!("reticle: {}", ours.to_text());
     eprintln!("vivado:  {}", theirs.to_text());
     assert_eq!(ours.unexplained, 0);
+    assert_eq!(theirs.unexplained, 0, "{:?}", theirs.leftovers);
     assert!(
-        theirs.unexplained > 0,
-        "vivado's bitstream is fully explained by the database, which would be a surprise"
+        theirs.frame_ecc > 0,
+        "vivado's bitstream has no frame codes, which would be a surprise"
     );
 }
 

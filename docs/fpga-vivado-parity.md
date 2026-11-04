@@ -114,8 +114,9 @@ routed report, in `vivado.txt`. Run on 2026-11-04.
 Read `ns` with care: **the two columns are not the same measurement.** Vivado's
 is the data path of its worst routed path in its own timer. Reticle's is its own
 routed estimate, which is a model, and it is known to overstate a carry chain
-(`a_carry_chain_is_timed_as_vivado_times_it`). Neither has been checked against
-the other's implementation yet. `s` is the whole run for each, from one machine
+(`a_carry_chain_is_timed_as_vivado_times_it`). This said "neither has been checked
+against the other's implementation yet", which [the next section](#vivados-timer-on-reticles-implementation)
+has since done. `s` is the whole run for each, from one machine
 under other load, including Vivado's start-up; it is a record, and no test asserts
 it. Reticle's LUT column is sites, with paired tables as two, and Vivado's is
 cells, which leaves out the route-through a carry's propagate may use: so
@@ -275,3 +276,182 @@ that line is refused. It gives 38 warnings for `set_output_delay` alone.
 `-rise_from`-style exception is dropped with a warning, as are the rest of the
 edge-specific forms. `reticle timing --constraints` refuses an XDC with a message,
 since its queries read the source and that command has synthesised it by then.
+
+## Vivado's timer on Reticle's implementation
+
+`reticle fpga --bitstream <f> --vivado-placement <x>.tcl` writes what Vivado needs
+to load an implementation with no synthesis: a structural netlist, every cell's
+site and bel and every lookup table's `LOCK_PINS`, and every route.
+`tools/vivado-parity/run_placed.tcl` runs them, `decode_placed.sh` compares the
+bits, and the answers are in `testdata/fpga/vivado/placed/`. Run on 2026-11-04 on
+the thirteen designs of `qor/`. **Nothing here has been on a board.**
+
+The netlist is not `--routed-netlist`'s, which `link_design` refuses;
+`src/fpga/xray/vivado.rs` says how it differs, and why. Lookup tables are the
+same cells: that their bits come out the same is checked below.
+
+### What it says about placement and routes
+
+Data path of the worst routed path of `clk` in ns, in Vivado's timer, at grade 1
+as the table above. All but the last two columns of figures are Vivado's.
+
+| design | Vivado's own flow | Reticle's netlist, Vivado places and routes | Reticle's placement, Vivado routes | Reticle's placement and routes | Reticle's estimate of that last endpoint | Reticle's own worst | that implementation at grade 3 |
+|---|---|---|---|---|---|---|---|
+| adders | 3.395 | 7.048 | 11.585 | 11.494 | 7.281 | 7.36 | 8.255 |
+| barrel | 3.979 | 3.760 | 4.122 | 4.302 | 2.954 | 5.12 | 3.139 |
+| bram_fifo | 4.612 | 4.699 | 5.829 | 5.947* | 4.053 | 5.07 | 4.331* |
+| counter64 | 3.975 | 4.158 | 5.515 | 6.367 | 5.067 | 8.40 | 4.688 |
+| crc32 | 3.581 | 5.544 | 7.783 | 9.114 | 4.736 | 5.23 | 6.590 |
+| fir8 | 10.988 | 26.088 | 39.749 | 41.081 | 22.805 | 22.88 | 29.537 |
+| fsm | 3.217 | 3.816 | 4.765 | 5.234 | 3.460 | 5.23 | 3.731 |
+| gray_cdc | 2.255 | 2.262 | 2.150 | 2.107 | 2.314 | 2.85 | 1.582 |
+| lutram32 | 2.967 | 4.588 | 5.408 | 5.408* | 4.530 | 5.07 | 3.985* |
+| mul18 | 2.833 | 36.218 | 50.851 | 50.350 | 29.739 | 29.74 | 36.625 |
+| regfile_alu | 7.859 | 10.052 | 16.512 | 16.803* | 10.790 | 10.79 | 12.260* |
+| srl_delay | 2.739 | 3.409 | 3.898 | 4.491 | 2.989 | 6.75 | 3.211 |
+| widemux | 4.131 | 4.780 | 6.254 | 7.346 | 4.655 | 5.04 | 5.437 |
+
+\* Vivado could not finish these with Reticle's routes fixed; see below. Its timer
+reports what was routed, so a path through what was not is not a measurement.
+
+The columns differ by one thing at a time, so what each step costs can be read off
+(medians over the thirteen):
+
+- **The netlist:** Vivado's flow against Vivado on Reticle's netlist, 1.25 times.
+  Mostly what the first table already said, up to 12.8 for `mul18`, which is
+  746 lookup tables and no `DSP48E1`. Note that this column has no `opt_design`,
+  and Vivado's own flow does.
+- **The placement:** Vivado's placement against Reticle's on the same netlist, with
+  Vivado routing both, **1.31 times** slower, from 0.95 on `gray_cdc` to 1.64 on
+  `adders` and `regfile_alu`. This is the first answer this project has had to "is
+  our placement any good?". Vivado's placer also chose its lookup tables' pins
+  here, where Reticle's are locked to what its router chose.
+- **The routes:** Vivado's routes against Reticle's on the same placement, **1.03
+  times**, from 0.98 to 1.17. On these designs the router is the smallest of the
+  three, and it is not where to look first.
+
+### How far Reticle's estimate is
+
+The estimate's `0.34 ns` out of a flip-flop is grade 3's; grade 1's is `0.518`,
+which Vivado's report above says. **So the fair comparison is grade 3,** which is
+what `xc7.dev` declares for this part, and which this document's opening sentence
+and the first table are not at. On the same placement and the same routes, at grade
+3, as estimate / Vivado:
+
+| | median over the designs | lowest design | highest design |
+|---|---|---|---|
+| the endpoint Vivado says is worst | 0.93 | 0.72 (`crc32`) | 1.43 (`gray_cdc`) |
+| every endpoint both time, each design's median | 1.47 | 1.13 (`crc32`) | 1.81 (`lutram32`) |
+| every connection both time, each design's median | 0.93 | 0.77 (`crc32`) | 2.14 (`srl_delay`) |
+
+**The estimate is right about the critical path largely because two errors cancel.**
+A typical endpoint is overstated by half. A connection on its own ranges from 0.04 to
+7.8 times Vivado's across these designs, and short fan-out-of-one wires are the ones
+overstated, `srl_delay`'s by 2.1. Then a long path, which is mostly wire, comes out
+near or under what Vivado says, and `crc32`'s worst is 4.74 against 6.59.
+
+This matters more than the figure: **the placer steers by this model,** and its worst
+path is not Vivado's worst path. On `fsm` its own worst, 5.23 ns, is a path to a pad
+with no constraint on it, which Vivado does not time at all, and Vivado's worst is one
+it puts at 3.46. `a_typical_connection_is_estimated_within_a_stated_band_of_vivados_timer`
+pins the state of it, and `the_estimate_of_the_worst_endpoint_is_near_vivados` is the
+target, ignored, that fails on `crc32` and `gray_cdc` at 1.35 either way.
+
+Why the figures are what they are has not been looked at beyond this. That `0.3 ns` a
+cell against grade 3's lookup table is part of it is a reading of one report, not a
+measurement over them.
+
+### Vivado's routing graph took every route
+
+**Every route Reticle made, in all thirteen designs, is accepted as a `FIXED_ROUTE`:
+8,966 nets and none refused.** Another 1,240 stay inside a site and have no route to
+give. The database's wire names are Vivado's verbatim, and a wire's node is Vivado's
+to say, so the script asks it (`get_nodes`). `_MUX_` and `_CARRY_` wires are Reticle's
+own, inside a slice, and are left out. `route_design -preserve` then routes what
+Reticle does not think of as a net, the constants, and finishes ten designs of the
+thirteen with no net unrouted.
+
+The first attempt had 4 of 99 refused on `fsm`, and it was the writer: Vivado reads a
+branch that opens with another branch as having left the wrong node.
+
+Vivado could not finish three, for two reasons:
+
+- **`bram_fifo` and `lutram32`: Reticle's signal is on `WEBWE[7:4]`.** Vivado grounds
+  those pins of a `RAMB18E1`, in `TDP` where the library says they are not read, and
+  says of Reticle's fixed route `conflicts with pin GNDTerm of net GNDNet`. On
+  `lutram32` that is `INT_R_X51Y97 FAN_ALT1`, carrying `in[36]` as a hop, which
+  reaches `BRAM_RAMB18_WEBWE4` by a wire with no switch on it. So on the part, that
+  pin reads that signal. `bram::tie_policy` already says this happens and accepts it,
+  on the library's word and nextpnr's, **quoted**: this confirms that it occurs and
+  that Vivado would not do it, and does not measure what it does. Of `bram_fifo`'s two,
+  one is `BRAM_FIFO18_WEBWE7` likewise, and the other, `INT_L_X52Y94 BYP_ALT7`, was
+  not followed further. A first try left a block RAM's unread inputs undriven in the
+  netlist, and changed nothing, since these pins are not in the netlist at all.
+- **`regfile_alu`: a `RAM64X1D`'s write enable.** Reticle brings it to the slice on
+  `CLBLM_M_WE`, with `WEMUX.CE` clear. Vivado connects the same pin through `CE`, with
+  `WEMUX.CE` set, on all 64 of them, and will not use the other: asked to with
+  `SITE_PIPS {WEMUX:WE}`, it says `Element WEMUX is not routable`. So the net is left
+  partly routed, and with `FAN7` taken by Reticle's other signals, Vivado has no way
+  through either. The database offers both, and neither reading has been measured on a
+  part: a RAM of Reticle's still rests on `xray::lutram`'s quoted account.
+
+Vivado will not write a bitstream for those three ("`RTSTAT-2` may not change
+severity"), and that is left as its answer.
+
+### The same placement and routes, the same bits
+
+For the ten that finished, Vivado's `write_bitstream` and Reticle's, both read by
+`reticle fpga --decode`. Together they name **184,663 features of Reticle's, and
+184,645 of them are in Vivado's**: every lookup table's `INIT`, every slice mode and
+every routing pip, on every design. The 18 that are not are all class 1 below.
+**No bit of Reticle's was found wrong.** In `bits.txt`, by class:
+
+| | class | count | designs | what it is | answered? |
+|---|---|---|---|---|---|
+| 1 | Reticle only: `CLK_BUFG_REBUF GCLK<n>_ENABLE_*` on rebuffers with no live segment | 18 | 10 | Deliberate and documented at `XrayFabric::enable_global_clocks`: Reticle sets both enables in each rebuffer of a used column, nextpnr's rule, and Vivado only the ends of each live segment | Quoted, harmless on nextpnr's word |
+| 2 | Vivado only: `CLK_BUFG_REBUF_X78Y142 GCLK0_ENABLE_ABOVE` | 4 | `fir8`, `fsm`, `mul18`, `srl_delay` | **The likeliest wrong bit here.** The far end of the segment the clock row at `Y130` hangs from. Reticle would set it too, but the rule stops at the loaded region and this tile is outside it | **Open.** Nothing measured says the far end is needed, and it was not changed, since loading more of the column changes placement |
+| 3 | Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 23 | 10 | Set in a clock-management tile a horizontal clock row passes through, with no clock manager in use. Reticle has no such rule | **Open** |
+| 4 | Vivado only: `LIOB33_X0Y93 IOB_Y0` as an input with a pull-up | 30 | 10, and all 13 with `cells.txt` | That site is `IOB_X0Y94`, `IO_L3P_T0_DQS_PUDC_B_14` (`package_pins.csv`): Vivado's treatment of the `PUDC_B` pad, whichever design it is. Nothing here connects it | Named, and whether it matters is open |
+| 5 | Vivado only: `<n>.GND_WIRE`, `BYP_ALT<n>.GFAN1` | 13 | `fir8` | A ground to a `CARRY4`'s `DX`, on seven carries. **Checked:** on all seven, bit 3's `S` and `DI` are constants and its `O` and `CO` have no reader, so nothing sees it. Vivado obeys the netlist and Reticle saves the wire | Harmless |
+| | Vivado only, not features: the low 13 bits of word 50 of each frame | 861 to 8,552 a design | all | **Checked:** on all 23 of Vivado's bitstreams, in all 9464 frames, that is the Hamming code of the frame (`frame_ecc.py`). Reticle's are zero. `--decode` counts them apart now, as `frame_ecc`, which also leaves nothing unnamed in the database's own Basys 3 harness bitstream, a thing `tests/fpga_xray.rs` had taken for what a real configuration needs. Whether a part ever reads them under a plain load is not measured, and Reticle's own bitstreams have loaded with them clear (`docs/fpga-xray.md`) | Named |
+
+A pin tied high, like a fractured table's `A6`, shows no
+difference at all, since an unset `IMUX` already says `VCC_WIRE`. That is a limit of
+this comparison and not a third agreement: Vivado and Reticle cannot differ there
+in a way this can see.
+
+`cells.txt` asks a weaker question of all thirteen, including the three above:
+Reticle's bitstream against Vivado's on Reticle's placement with Vivado's routes,
+leaving out routing. Of 140,546 cell features on Reticle's side, 140,522 are in Vivado's. What differs:
+
+| class | count | what it is | answered? |
+|---|---|---|---|
+| Reticle only: `ZINV_RST*`, `ZINV_REGCLK*` on a block RAM | 24 | Reticle holds each reset at zero with a ground and the inverter off; Vivado connects `VCC`, which **`lutram32.pips` shows**, and leaves the inverter on. The same value if `ZINV` means what its name says, which is quoted | Harmless on that reading |
+| Vivado only: `ZALMOST_EMPTY_OFFSET`, `ZALMOST_FULL_OFFSET` | 52 | Its default for a FIFO's flags, on a block RAM that is no FIFO | Harmless on UG473's word |
+| Vivado only: `WEMUX.CE` | 64 | `regfile_alu`, as above | **Open** until a RAM is on a part |
+| Vivado only: `<L>OUTMUX.O6` | 213 | A way for its route to leave a slice. It is in none of `bits.txt`, so it belongs to Vivado's routes and not to the cells | Not a difference in the cells |
+| Vivado only: `CASCOUT_ARD_ACTIVE` | 1 | Likewise, on another block RAM's tile in `bram_fifo` | Not looked at further |
+| Vivado only: the `PUDC_B` pad | 39 | Class 4 | As above |
+
+**What this does not check.** That Vivado's bitstream of the same implementation holds
+the same bits says nothing about whether it does what the design says; that is
+`every_block_maps_to_the_logic_it_was_mapped_from`. It says the physical facts Reticle
+had only quoted agree with Vivado's for the cells here: `LUT6_2`s, a `CARRY4`'s modes,
+`FDRE`s, `IBUF`, `OBUF`, `BUFG`, the routes and a `RAMB18E1`'s `INIT` and modes. A
+`RAM64X1D` and that `RAMB18E1` have had that only from `cells.txt`. Any primitive these
+designs do not use has had nothing from it.
+
+**Checked by breaking it.** A lookup table's written table wrong in one entry shows
+as 169 differing `INIT` features on `fsm`, so the comparison can see a wrong bit. The
+pins locked wrongly, Vivado refuses (`Cannot use A6 pin`). Six mutations of the writer
+and of `--decode`'s range each failed a test in `tests/fpga_xray_vivado.rs` or
+`xray::vivado`.
+
+**Not done.** The Vivado numbers are of one placement each, Reticle's first seed. The
+fixtures quote a run: nothing fails when the placement moves on, and only
+`run_placed.sh` asks again. No design here has a clock manager, a pad register, a
+latch or a `DSP48E1` of Reticle's, so those have not been through this. Whether this
+gives the same bits on another part has not been asked. `SITE_PIPS` was tried for one
+slice's `WEMUX` and not pursued. And the Vivado `.bit`s that were decoded here have
+never been loaded, and must not be: all ran with `NSTD-1` and `UCIO-1` lowered to
+warnings, for that purpose alone.

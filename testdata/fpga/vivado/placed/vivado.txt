@@ -1,0 +1,274 @@
+# Vivado 2026.1's timer on Reticle's implementations; tools/vivado-parity/placed_table.py.
+design adders
+  vivado_own 3.395
+  netlist 7.048 -2.091
+  netlist_nets_not_routed 0
+  placement 11.585 -6.626
+  placement_nets_not_routed 0
+  routes 11.494 -6.534
+  routes_set 583
+  routes_inside_a_site 385
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 6205
+  second 8.255 -3.292
+  second_nets_not_routed 0
+  estimate 7.36
+  endpoints 1 480 1.123 0.606 1.764
+  same_endpoint 1 7.281 vivado 11.494 at a_5_ff_ff30.d
+  connections 1 737 0.660 0.115 3.168 fanout1+:0.660
+  endpoints 3 480 1.595 0.839 2.473
+  same_endpoint 3 7.281 vivado 8.255 at a_5_ff_ff30.d
+  connections 3 737 0.934 0.156 4.918 fanout1+:0.934
+design barrel
+  vivado_own 3.979
+  netlist 3.760 1.191
+  netlist_nets_not_routed 0
+  placement 4.122 0.832
+  placement_nets_not_routed 0
+  routes 4.302 0.665
+  routes_set 145
+  routes_inside_a_site 33
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 2043
+  second 3.139 1.835
+  second_nets_not_routed 0
+  estimate 5.12
+  endpoints 1 69 1.019 0.655 1.560
+  same_endpoint 1 2.954 vivado 4.328 at q_ff_ff8.d
+  connections 1 483 0.632 0.110 2.365 fanout1+:0.573 fanout5+:0.653 fanout17+:0.809
+  endpoints 3 69 1.408 0.894 2.171
+  same_endpoint 3 3.024 vivado 3.152 at q_ff_ff10.d
+  connections 3 483 0.889 0.154 3.574 fanout1+:0.822 fanout5+:0.908 fanout17+:1.121
+design bram_fifo
+  vivado_own 4.612
+  netlist 4.699 0.217
+  netlist_nets_not_routed 0
+  placement 5.829 -0.913
+  placement_nets_not_routed 0
+  routes 5.947 -0.977
+  routes_set 141
+  routes_inside_a_site 63
+  routes_refused 0
+  routes_nets_not_routed 3
+  routes_routed_pips 1918
+  second 4.331 0.588
+  second_nets_not_routed 3
+  estimate 5.07
+  endpoints 1 87 0.959 0.640 1.617
+  same_endpoint 1 4.053 vivado 5.947 at used_ff_ff7.d
+  connections 1 173 0.698 0.141 2.280 fanout1+:0.700 fanout5+:0.635 fanout17+:0.876
+  endpoints 3 87 1.286 0.879 2.271
+  same_endpoint 3 4.599 vivado 4.331 at so_ff.d
+  connections 3 173 0.987 0.190 3.395 fanout1+:0.984 fanout5+:0.888 fanout17+:1.154
+design counter64
+  vivado_own 3.975
+  netlist 4.158 0.272
+  netlist_nets_not_routed 0
+  placement 5.515 -1.028
+  placement_nets_not_routed 0
+  routes 6.367 -2.046
+  routes_set 181
+  routes_inside_a_site 128
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 1758
+  second 4.688 -0.217
+  second_nets_not_routed 0
+  estimate 8.40
+  endpoints 1 192 1.099 0.678 2.324
+  same_endpoint 1 5.067 vivado 6.367 at count_ff_ff56.rst
+  connections 1 259 0.996 0.110 3.970 fanout1+:0.715 fanout17+:1.051
+  endpoints 3 192 1.539 0.906 3.055
+  same_endpoint 3 5.067 vivado 4.688 at count_ff_ff56.rst
+  connections 3 259 1.365 0.156 5.680 fanout1+:1.019 fanout17+:1.496
+design crc32
+  vivado_own 3.581
+  netlist 5.544 -0.575
+  netlist_nets_not_routed 0
+  placement 7.783 -2.814
+  placement_nets_not_routed 0
+  routes 9.114 -4.140
+  routes_set 239
+  routes_inside_a_site 33
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 3515
+  second 6.590 -1.617
+  second_nets_not_routed 0
+  estimate 5.23
+  endpoints 1 63 0.823 0.507 1.471
+  same_endpoint 1 4.736 vivado 9.114 at crc_ff_ff17.d
+  connections 1 689 0.555 0.101 3.343 fanout1+:0.666 fanout5+:0.543 fanout17+:0.464
+  endpoints 3 63 1.126 0.701 2.104
+  same_endpoint 3 4.736 vivado 6.590 at crc_ff_ff17.d
+  connections 3 689 0.766 0.140 5.130 fanout1+:0.954 fanout5+:0.747 fanout17+:0.641
+design fir8
+  vivado_own 10.988
+  netlist 26.088 -21.311
+  netlist_nets_not_routed 0
+  placement 39.749 -34.805
+  placement_nets_not_routed 0
+  routes 41.081 -36.136
+  routes_set 2216
+  routes_inside_a_site 481
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 33190
+  second 29.537 -24.592
+  second_nets_not_routed 0
+  estimate 22.88
+  endpoints 1 435 0.910 0.085 1.344
+  same_endpoint 1 22.805 vivado 41.081 at m_6_ff_ff31.d
+  connections 1 6141 0.615 0.059 4.092 fanout1+:0.610 fanout5+:0.635 fanout17+:0.611
+  endpoints 3 435 1.241 0.119 1.853
+  same_endpoint 3 22.805 vivado 29.537 at m_6_ff_ff31.d
+  connections 3 6141 0.856 0.080 5.859 fanout1+:0.867 fanout5+:0.885 fanout17+:0.838
+design fsm
+  vivado_own 3.217
+  netlist 3.816 1.138
+  netlist_nets_not_routed 0
+  placement 4.765 0.229
+  placement_nets_not_routed 0
+  routes 5.234 -0.260
+  routes_set 99
+  routes_inside_a_site 6
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 1430
+  second 3.731 1.244
+  second_nets_not_routed 0
+  estimate 5.23
+  endpoints 1 29 1.037 0.599 1.424
+  same_endpoint 1 3.460 vivado 5.234 at s_ff_ff1.d
+  connections 1 310 0.555 0.145 2.543 fanout1+:0.569 fanout5+:0.572 fanout17+:0.538
+  endpoints 3 29 1.473 0.821 1.976
+  same_endpoint 3 3.460 vivado 3.731 at s_ff_ff1.d
+  connections 3 310 0.769 0.197 3.948 fanout1+:0.828 fanout5+:0.785 fanout17+:0.753
+design gray_cdc
+  vivado_own 2.255
+  netlist 2.262 2.633
+  netlist_nets_not_routed 0
+  placement 2.150 2.899
+  placement_nets_not_routed 0
+  routes 2.107 2.836
+  routes_set 70
+  routes_inside_a_site 36
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 614
+  second 1.582 3.361
+  second_nets_not_routed 0
+  estimate 2.85
+  endpoints 1 24 0.824 0.660 1.131
+  same_endpoint 1 2.314 vivado 2.150 at wp_ff_ff9.d
+  connections 1 69 1.061 0.159 1.976 fanout1+:1.177 fanout5+:1.015
+  endpoints 3 24 1.128 0.877 1.500
+  same_endpoint 3 2.314 vivado 1.623 at wp_ff_ff11.d
+  connections 3 69 1.569 0.221 3.014 fanout1+:1.747 fanout5+:1.463
+design lutram32
+  vivado_own 2.967
+  netlist 4.588 0.380
+  netlist_nets_not_routed 0
+  placement 5.408 -0.493
+  placement_nets_not_routed 0
+  routes 5.408 -0.493
+  routes_set 81
+  routes_inside_a_site 1
+  routes_refused 0
+  routes_nets_not_routed 2
+  routes_routed_pips 1287
+  second 3.985 0.935
+  second_nets_not_routed 2
+  estimate 5.07
+  endpoints 1 37 1.262 0.838 1.618
+  same_endpoint 1 4.530 vivado 5.408 at so_ff.d
+  connections 1 67 1.166 0.213 2.543 fanout1+:1.166
+  endpoints 3 37 1.813 1.137 2.271
+  same_endpoint 3 4.530 vivado 3.985 at so_ff.d
+  connections 3 67 1.696 0.310 3.948 fanout1+:1.696
+design mul18
+  vivado_own 2.833
+  netlist 36.218 -31.315
+  netlist_nets_not_routed 0
+  placement 50.851 -45.981
+  placement_nets_not_routed 0
+  routes 50.350 -45.480
+  routes_set 959
+  routes_inside_a_site 37
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 16649
+  second 36.625 -31.739
+  second_nets_not_routed 0
+  estimate 29.74
+  endpoints 1 144 1.079 0.584 1.443
+  same_endpoint 1 29.739 vivado 50.350 at p_ff_ff35.d
+  connections 1 3850 0.645 0.029 5.806 fanout1+:0.613 fanout5+:0.472 fanout17+:0.671
+  endpoints 3 144 1.511 0.804 2.083
+  same_endpoint 3 29.739 vivado 36.625 at p_ff_ff35.d
+  connections 3 3850 0.909 0.039 7.788 fanout1+:0.892 fanout5+:0.696 fanout17+:0.925
+design regfile_alu
+  vivado_own 7.859
+  netlist 10.052 -5.030
+  netlist_nets_not_routed 0
+  placement 16.512 -11.640
+  placement_nets_not_routed 0
+  routes 16.803 -11.932
+  routes_set 531
+  routes_inside_a_site 19
+  routes_refused 0
+  routes_nets_not_routed 65
+  routes_routed_pips 12080
+  second 12.260 -7.369
+  second_nets_not_routed 65
+  estimate 10.79
+  endpoints 1 21 1.054 0.642 1.289
+  same_endpoint 1 10.790 vivado 16.803 at so_ff.d
+  connections 1 1526 0.598 0.079 3.804 fanout1+:0.596 fanout5+:0.539 fanout17+:0.683
+  endpoints 3 21 1.462 0.880 1.835
+  same_endpoint 3 10.790 vivado 12.260 at so_ff.d
+  connections 3 1526 0.831 0.110 5.679 fanout1+:0.832 fanout5+:0.742 fanout17+:0.951
+design srl_delay
+  vivado_own 2.739
+  netlist 3.409 1.585
+  netlist_nets_not_routed 0
+  placement 3.898 0.964
+  placement_nets_not_routed 0
+  routes 4.491 0.371
+  routes_set 2092
+  routes_inside_a_site 1
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 17978
+  second 3.211 1.663
+  second_nets_not_routed 0
+  estimate 6.75
+  endpoints 1 2080 1.187 0.666 1.810
+  same_endpoint 1 2.989 vivado 4.491 at so_ff.d
+  connections 1 2112 1.418 0.113 3.432 fanout1+:1.418
+  endpoints 3 2080 1.681 0.931 2.541
+  same_endpoint 3 2.989 vivado 3.211 at so_ff.d
+  connections 3 2112 2.144 0.163 5.402 fanout1+:2.144
+design widemux
+  vivado_own 4.131
+  netlist 4.780 0.109
+  netlist_nets_not_routed 0
+  placement 6.254 -1.303
+  placement_nets_not_routed 0
+  routes 7.346 -2.394
+  routes_set 1629
+  routes_inside_a_site 17
+  routes_refused 0
+  routes_nets_not_routed 0
+  routes_routed_pips 19568
+  second 5.437 -0.487
+  second_nets_not_routed 0
+  estimate 5.04
+  endpoints 1 1046 1.136 0.634 1.759
+  same_endpoint 1 4.655 vivado 7.346 at q_ff_ff13.d
+  connections 1 3603 0.721 0.055 4.733 fanout1+:0.776 fanout17+:0.692
+  endpoints 3 1046 1.602 0.856 2.462
+  same_endpoint 3 4.655 vivado 5.437 at q_ff_ff13.d
+  connections 3 3603 1.002 0.075 6.707 fanout1+:1.105 fanout17+:0.945

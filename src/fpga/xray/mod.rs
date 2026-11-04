@@ -176,6 +176,7 @@ mod lutswap;
 mod parse;
 mod sites;
 mod timing;
+mod vivado;
 mod xadc;
 
 pub use bram::{
@@ -207,6 +208,7 @@ pub use io::{IoError, IoTables, io_standards};
 pub use iologic::IoLogicError;
 pub use sites::SiteCoverage;
 pub use timing::place_timing;
+pub use vivado::{VivadoExportError, VivadoImplementation, vivado_implementation};
 pub use xadc::xadc_init_bit;
 
 /// Why a Project X-Ray database could not be read.
@@ -1304,6 +1306,12 @@ impl XrayDatabase {
         }
         out.sort();
         out.dedup();
+        // A frame's own Hamming code is not a feature of any tile. Reticle
+        // leaves it at zero and Vivado fills it in; a named bit there has been
+        // struck off above, so what goes here is only what nothing names.
+        let before = unexplained.len();
+        unexplained.retain(|(_, word, bit)| !(*word == FRAME_ECC_WORD && *bit < FRAME_ECC_BITS));
+        let frame_ecc = before - unexplained.len();
         // Where the unexplained bits are, in the coordinates a `segbits` line
         // uses: what a feature the database does not name would be made of.
         let mut leftovers = Vec::new();
@@ -1337,6 +1345,7 @@ impl XrayDatabase {
         Ok(Decoded {
             features: out,
             bits: total,
+            frame_ecc,
             unexplained: unexplained.len(),
             leftovers,
             tiles: tiles_touched,
@@ -2110,6 +2119,11 @@ fn block_ram_rows(tiles: &[XrayTile]) -> HashMap<&str, u32> {
 /// at the other end, the grid delta to it, and the wire pairs.
 type Join<'a> = (&'a str, i32, i32, &'a [(String, String)]);
 
+/// The word of a 7-series frame that holds its Hamming code.
+pub const FRAME_ECC_WORD: u32 = 50;
+/// How many bits of [`FRAME_ECC_WORD`] are that code, from the lowest.
+pub const FRAME_ECC_BITS: u32 = 13;
+
 /// What [`XrayDatabase::decode`] made of a bitstream.
 ///
 /// The three counts after [`Decoded::features`] are what keeps the
@@ -2123,6 +2137,13 @@ pub struct Decoded {
     pub features: Vec<(String, String)>,
     /// How many bits the image sets in all.
     pub bits: usize,
+    /// How many of those are a frame's own Hamming code, the low
+    /// [`FRAME_ECC_BITS`] bits of word [`FRAME_ECC_WORD`], which name nothing
+    /// and are not in [`Decoded::unexplained`]. **Checked:** on 23 of Vivado's
+    /// bitstreams, those bits of all 9464 frames are the code of the
+    /// rest of the frame (`tools/vivado-parity/frame_ecc.py`). Reticle's
+    /// bitstreams leave them zero.
+    pub frame_ecc: usize,
     /// How many of those no named feature accounts for. A bit is
     /// accounted for when it is one of the `one` bits of a feature that
     /// matched.
@@ -2159,6 +2180,13 @@ impl Decoded {
             self.unexplained,
             self.tiles_without_a_segbits_file
         );
+        if self.frame_ecc > 0 {
+            let _ = writeln!(
+                out,
+                "  {} of those bit(s) are the frames' own Hamming codes, which name nothing",
+                self.frame_ecc
+            );
+        }
         // Name them. A count cannot be judged; a name can be looked up.
         for which in &self.tiles_with_no_segbits_file {
             let _ = writeln!(
@@ -2389,7 +2417,11 @@ impl XrayFabric {
     ///
     /// # What this sets, and whose rule it is
     ///
-    /// Both enables of the track, in **every** rebuffer of the column.
+    /// Both enables of the track, in **every** rebuffer of the column that was
+    /// loaded. That limit is not nextpnr's and not chosen: a rebuffer outside
+    /// the region gets nothing, and on `fsm` that is `CLK_BUFG_REBUF_X78Y142`,
+    /// the far end of the segment its clock row at `Y130` hangs from, whose
+    /// `GCLK0_ENABLE_ABOVE` Vivado sets (`docs/fpga-vivado-parity.md`).
     /// That is nextpnr-xilinx's rule — `write_clocking` emits
     /// `GCLK<n>_ENABLE_ABOVE` and `GCLK<n>_ENABLE_BELOW` in every
     /// `CLK_BUFG_REBUF` tile for every track the design uses — and it is

@@ -486,6 +486,7 @@ fn a_global_clock_with_no_buffer_driving_it_is_reported() {
                 .map(|(t, f)| ((*t).to_owned(), (*f).to_owned()))
                 .collect(),
             bits: 0,
+            frame_ecc: 0,
             unexplained: 0,
             leftovers: Vec::new(),
             tiles: 0,

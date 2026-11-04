@@ -218,3 +218,285 @@ fn the_analyser_fifo_is_as_fast_as_vivado_makes_it() {
     }
     assert!(late.is_empty(), "{}", late.join("\n"));
 }
+
+/// `testdata/fpga/vivado/placed/vivado.txt`, quoted: what Vivado's timer said of
+/// Reticle's implementation of each design, by design and then by line.
+fn placed() -> Option<Vec<(String, Vec<String>)>> {
+    let dir = fixtures()?;
+    let text = std::fs::read_to_string(dir.join("placed/vivado.txt")).unwrap();
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for line in text.lines() {
+        if let Some(name) = line.strip_prefix("design ") {
+            out.push((name.to_owned(), Vec::new()));
+        } else if let (Some((_, lines)), true) = (out.last_mut(), line.starts_with("  ")) {
+            lines.push(line.trim().to_owned());
+        }
+    }
+    Some(out)
+}
+
+/// The words after `key` on the line that starts with it.
+fn field<'a>(lines: &'a [String], key: &str) -> Option<Vec<&'a str>> {
+    lines
+        .iter()
+        .find_map(|l| l.strip_prefix(&format!("{key} ")))
+        .map(|rest| rest.split_whitespace().collect())
+}
+
+/// **Vivado took every route.** In all thirteen designs, every net Reticle
+/// routed was accepted as Vivado's `FIXED_ROUTE`, in its own routing graph, and
+/// the only designs it could not then finish are the ones named, each for a
+/// reason `docs/fpga-vivado-parity.md` gives. Reads the quoted file and runs
+/// nothing, so it catches a regeneration that lost something and not a routing
+/// that changed since: `tools/vivado-parity/run_placed.sh` is what asks again.
+#[test]
+fn vivado_took_every_route_reticle_gave_it() {
+    let Some(designs) = placed() else { return };
+    assert_eq!(designs.len(), 13);
+    let mut unfinished = Vec::new();
+    for (name, lines) in &designs {
+        let count = |key: &str| field(lines, key).map(|w| w[0].parse::<usize>().unwrap());
+        assert_eq!(count("routes_refused"), Some(0), "{name}");
+        assert!(count("routes_set").unwrap() > 0, "{name}");
+        if count("routes_nets_not_routed") != Some(0) {
+            unfinished.push(name.as_str());
+        }
+    }
+    assert_eq!(unfinished, ["bram_fifo", "lutram32", "regfile_alu"]);
+}
+
+/// Every class of difference in a file `compare_bits.py` wrote that is not in
+/// `known`, and how many differences of each side the file counts.
+fn unknown_classes(file: &str, known: &[&str]) -> Option<(Vec<String>, usize, usize)> {
+    let dir = fixtures()?;
+    let text = std::fs::read_to_string(dir.join("placed").join(file)).unwrap();
+    let (mut ours, mut theirs) = (0usize, 0usize);
+    let mut new = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("only reticle") {
+            ours += line.rsplit(' ').next().unwrap().parse::<usize>().unwrap();
+        } else if line.starts_with("only vivado") {
+            theirs += line.rsplit(' ').next().unwrap().parse::<usize>().unwrap();
+        } else if let Some((count, class)) = line.trim_start().split_once(' ')
+            && line.starts_with(' ')
+            && count.parse::<usize>().is_ok()
+            && !known.iter().any(|k| class.starts_with(k))
+        {
+            new.push(line.to_owned());
+        }
+    }
+    Some((new, ours, theirs))
+}
+
+/// **What Reticle's bitstream and Vivado's disagree on, with the same placement
+/// and routes, is a short list of known classes.** A class not named here is a
+/// finding nobody has looked at, and so fails. Each named one is answered, or
+/// said to be open, in `docs/fpga-vivado-parity.md`. Reads the quoted file: it
+/// would catch a regeneration that found something new, and not a Reticle bit
+/// that went wrong since the file was written.
+#[test]
+fn only_known_classes_of_bit_differ_from_vivado() {
+    let known = [
+        "clock tile: CLK_BUFG_REBUF",
+        "clock tile: HCLK_CMT",
+        "pad: ",
+        "interconnect: a pip",
+        "interconnect: a tie to GND_WIRE",
+    ];
+    let Some((new, ours, theirs)) = unknown_classes("bits.txt", &known) else {
+        return;
+    };
+    assert!(new.is_empty(), "{}", new.join("\n"));
+    assert_eq!((ours, theirs), (18, 70), "the file's totals changed");
+}
+
+/// **And with only the placement in common, the cells agree too:** the same
+/// question with routing left out, which reaches the three designs Vivado would
+/// write no bitstream for on Reticle's own routes. As the test above, it reads
+/// the quoted file. `#OUTMUX.O6` belongs to Vivado's routes, not to a cell.
+#[test]
+fn only_known_classes_of_cell_differ_from_vivado() {
+    let known = [
+        "block RAM: CASCOUT_ARD_ACTIVE",
+        "block RAM: ZALMOST_",
+        "block RAM: ZINV_",
+        "pad: ",
+        "slice: #OUTMUX.O6",
+        "slice: WEMUX.CE",
+    ];
+    let Some((new, ours, theirs)) = unknown_classes("cells.txt", &known) else {
+        return;
+    };
+    assert!(new.is_empty(), "{}", new.join("\n"));
+    assert_eq!((ours, theirs), (24, 369), "the file's totals changed");
+}
+
+/// Reticle's estimate of each connection against Vivado's timer of that same
+/// connection, on Reticle's own routes at speed grade 3: the median of all of
+/// them, per design. Pins the state of the model as measured, within a stated
+/// band and on the quoted file. It would catch a regeneration in which the
+/// model's typical wire had moved by a third; it would not catch a wrong path,
+/// which is `the_estimate_of_the_worst_endpoint_is_near_vivados`.
+#[test]
+fn a_typical_connection_is_estimated_within_a_stated_band_of_vivados_timer() {
+    let Some(designs) = placed() else { return };
+    let mut wrong = Vec::new();
+    for (name, lines) in &designs {
+        let Some(words) = field(lines, "connections 3") else {
+            continue;
+        };
+        let median: f64 = words[1].parse().unwrap();
+        if !(CONNECTION_BAND.0..=CONNECTION_BAND.1).contains(&median) {
+            wrong.push(format!("{name}: {median}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join(", "));
+}
+
+/// What [`a_typical_connection_is_estimated_within_a_stated_band_of_vivados_timer`]
+/// allows: the ratio of Reticle's estimate to Vivado's slow corner.
+const CONNECTION_BAND: (f64, f64) = (0.7, 2.2);
+
+/// **Target, not met: the estimate of the path Vivado says is worst is near
+/// Vivado's figure for it,** at grade 3 on Reticle's routes, within 1.35 either
+/// way as this file's other targets ask. Reads the quoted file. It passes once
+/// the file is regenerated from a model that has closed the gap.
+#[test]
+#[ignore = "target: at grade 3 on Reticle's own routes, the estimate of Vivado's worst endpoint is out by more than 1.35 on crc32 and gray_cdc; see docs/fpga-vivado-parity.md"]
+fn the_estimate_of_the_worst_endpoint_is_near_vivados() {
+    let Some(designs) = placed() else { return };
+    let mut wrong = Vec::new();
+    for (name, lines) in &designs {
+        let Some(words) = field(lines, "same_endpoint 3") else {
+            continue;
+        };
+        let (ours, theirs): (f64, f64) = (words[0].parse().unwrap(), words[2].parse().unwrap());
+        if !(1.0 / 1.35..=1.35).contains(&(ours / theirs)) {
+            wrong.push(format!("{name}: {ours} ns against {theirs}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join(", "));
+}
+
+/// **`--vivado-placement` writes something `link_design` could read,** on a
+/// design with a carry chain, two clocks and paired lookup tables. Every cell
+/// has a place to go, with its bel as Vivado spells it; nothing is left of the
+/// constructs `link_design` refuses; every route is on a declared net and names
+/// no wire Reticle invented inside a slice. Vivado is not run: this catches the
+/// writer losing a cell or a net, and not a spelling Vivado would refuse, which
+/// is what `run_placed.sh` asks and `placed/vivado.txt` quotes.
+#[test]
+fn the_vivado_placement_covers_every_cell_and_net() {
+    let Some(root) = chipdb() else { return };
+    let Some(dir) = fixtures() else { return };
+    let qor = dir.join("qor");
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("vivado-placement");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", "--device", "xc7a100t-ftg256", "--chipdb", &root])
+        .args(["--top", "gray_cdc", "--constraints"])
+        .arg(qor.join("gray_cdc.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join("gray_cdc.bit"))
+        .arg("--vivado-placement")
+        .arg(out.join("x.tcl"))
+        .arg(qor.join("gray_cdc.v"))
+        .output()
+        .expect("failed to run the reticle binary");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let read = |name: &str| std::fs::read_to_string(out.join(name)).unwrap();
+    let (verilog, placed, routes) = (read("x.v"), read("x.tcl"), read("x.routes.tcl"));
+    assert!(
+        !verilog.contains("function") && !verilog.contains("assign"),
+        "{verilog}"
+    );
+    assert!(!verilog.contains('$'), "{verilog}");
+    let mut cells = 0;
+    let mut kinds = std::collections::BTreeSet::new();
+    for line in verilog.lines() {
+        let mut words = line.split_whitespace();
+        let Some(kind) = words.next() else { continue };
+        if !kind.starts_with(|c: char| c.is_ascii_uppercase()) {
+            continue;
+        }
+        kinds.insert(kind.to_owned());
+        let name = line
+            .split(" (")
+            .next()
+            .and_then(|head| head.rsplit(' ').next())
+            .unwrap();
+        cells += 1;
+        assert!(
+            placed.contains(&format!("\n  {name} ")),
+            "`{name}` has no place to go:\n{placed}"
+        );
+    }
+    assert!(cells > 40, "{cells} cells in\n{verilog}");
+    for kind in ["CARRY4", "FDRE", "BUFG", "IBUF", "OBUF"] {
+        assert!(kinds.contains(kind), "no {kind} in {kinds:?}");
+    }
+    // A pair is two bels of one site, and the upper is the six-input one.
+    for bel in ["A6LUT", "CARRY4", "BUFG", "INBUF_EN", "OUTBUF"] {
+        assert!(
+            placed.contains(&format!("/{bel}\n")),
+            "no {bel} in\n{placed}"
+        );
+    }
+    let mut nets = 0;
+    for line in routes.lines().filter(|l| l.starts_with("reticle_route")) {
+        let net = line.split(['{', '}']).nth(1).unwrap();
+        assert!(
+            verilog.contains(&format!("wire {net};")) || net.contains('['),
+            "the route's net `{net}` is not in the netlist"
+        );
+        assert!(
+            !line.contains("_MUX_") && !line.contains("_CARRY_"),
+            "a wire Vivado has no name for: {line}"
+        );
+        nets += 1;
+    }
+    assert!(nets > 40, "{nets} routes in\n{routes}");
+}
+
+/// **A frame's Hamming code names nothing, and is counted apart.** Would catch
+/// the range being wrong at either end: bit 12 of word 50 is the code, and bit
+/// 13 is not. That the range is what Vivado fills in is
+/// `tools/vivado-parity/frame_ecc.py`'s check, which needs a Vivado bitstream.
+#[test]
+fn a_frames_own_code_is_not_an_unexplained_bit() {
+    use reticle::fpga::xc7::FrameData;
+    use reticle::fpga::xray::{XrayDatabase, XrayOptions};
+    use reticle::ir::memfile::FileProvider;
+    struct DiskFiles;
+    impl FileProvider for DiskFiles {
+        fn read_file(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(path).ok()
+        }
+    }
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, "xc7a100t-ftg256", &XrayOptions::new()).unwrap();
+    let part = db.part(&DiskFiles).unwrap();
+    let address = part
+        .layout
+        .order()
+        .iter()
+        .find_map(|a| *a)
+        .expect("a frame");
+    let image = |bit: u32| {
+        let mut frames =
+            FrameData::from_stream(part.layout.clone(), vec![0; part.layout.words()]).unwrap();
+        frames.set(address, 50, bit).unwrap();
+        db.decode(&DiskFiles, &frames).unwrap()
+    };
+    let code = image(12);
+    assert_eq!((code.frame_ecc, code.unexplained), (1, 0));
+    let other = image(13);
+    assert_eq!((other.frame_ecc, other.unexplained), (0, 1));
+}

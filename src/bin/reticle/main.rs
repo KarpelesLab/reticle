@@ -250,6 +250,12 @@ Options:
                      quicker; docs/fpga-trellis.md has what the
                      wirelength does at each. For iterating on hardware,
                      not for the bitstream you keep.
+  --vivado-placement <f.tcl>
+                     With --bitstream on the 7 series, write this implementation
+                     for Vivado to load with no synthesis: <f>.tcl places and
+                     fixes every cell, <f>.v is the netlist, <f>.xdc the
+                     constraints and <f>.routes.tcl every route.
+                     tools/vivado-parity/run_placed.tcl runs them.
   --routed-netlist <f>
                      With --bitstream on the 7 series, write the design the
                      bitstream is made from as structural Verilog: lookup
@@ -798,6 +804,7 @@ fn spec_for(usage: &str) -> Spec {
                 "place-start-window",
                 "timing-endpoints",
                 "routed-netlist",
+                "vivado-placement",
             ],
             flags: &[
                 "sv",
@@ -4304,6 +4311,34 @@ fn write_xc7_bitstream(
                     }
                 }
             }
+            // Every endpoint, on time or late, for what Vivado says of the same
+            // ones: `tools/vivado-parity/placed_table.py`.
+            for (pin, domain, at, required) in
+                reticle::fpga::place::endpoint_arrivals(&netlist, paths, &wire)
+            {
+                let cell = &netlist.instances[netlist.pins[pin].instance].name;
+                text.push_str(&format!(
+                    "endpoint {} {at:.3} {required:.3} {cell}.{}\n",
+                    domains.get(domain).map_or("?", String::as_str),
+                    netlist.pins[pin].role
+                ));
+            }
+            // And each connection's own estimate, for the same comparison a
+            // wire at a time.
+            for signal in &netlist.signals {
+                for sink in &signal.sinks {
+                    let pin = &netlist.pins[*sink];
+                    if wire[*sink] > 0.0 {
+                        text.push_str(&format!(
+                            "connection {:.3} {} {}.{}\n",
+                            wire[*sink],
+                            signal.sinks.len(),
+                            netlist.instances[pin.instance].name,
+                            pin.role
+                        ));
+                    }
+                }
+            }
             text.push_str(&io_register_connections(
                 &netlist, &graph, &placement, &wire,
             ));
@@ -4458,6 +4493,35 @@ fn write_xc7_bitstream(
                 String::new()
             }
         ));
+    }
+
+    // What Vivado needs to time this implementation with its own timer. See
+    // `xray::vivado`.
+    if let (Some(path), None) = (args.option("vivado-placement"), &failure) {
+        let written = reticle::fpga::xray::vivado_implementation(
+            design,
+            top,
+            &db.tiles(&files).map_err(|e| e.to_string())?,
+            &netlist,
+            &graph,
+            &placement,
+            &routing,
+        )
+        .map_err(|e| e.to_string())?;
+        let stem = std::path::Path::new(path);
+        let write = |file: std::path::PathBuf, text: &str| {
+            std::fs::write(&file, text)
+                .map_err(|e| format!("cannot write `{}`: {e}", file.display()))
+        };
+        write(stem.to_path_buf(), &written.placement)?;
+        write(stem.with_extension("v"), &written.verilog)?;
+        write(stem.with_extension("xdc"), &constraints.write_xdc(device))?;
+        write(stem.with_extension("routes.tcl"), &written.routes)?;
+        eprintln!(
+            "note: wrote {path}, its netlist, its constraints and its routes: {} cell(s), {} \
+             route(s)",
+            written.cells, written.nets
+        );
     }
 
     let mut tiles = bitstream::generate(
