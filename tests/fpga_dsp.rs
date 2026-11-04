@@ -1184,7 +1184,12 @@ mod fabric {
         let Some(root) = chipdb() else { return };
         for side in ["L", "R"] {
             let path = format!("{root}/artix7/tile_type_DSP_{side}.json");
-            let text = std::fs::read_to_string(&path).expect("the tile type is fetched");
+            // A copy fetched before the tile types were in the manifest
+            // (2026-10-23) lacks them; `reticle fetch prjxray-db` adds them.
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                eprintln!("skipped: no `{path}`; `reticle fetch prjxray-db` fetches it");
+                return;
+            };
             let json = reticle::json::Json::parse(&text).expect("the file is JSON");
             let pips = json.get("pips").and_then(|p| p.as_object()).expect("pips");
             let mut mux: std::collections::BTreeMap<String, Vec<String>> = Default::default();
