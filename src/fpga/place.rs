@@ -1543,6 +1543,38 @@ impl Rect {
     }
 }
 
+/// The most cells of a move [`SiteRules::allows`] scans rather than sorts.
+const SHORT_MOVE: usize = 8;
+
+/// Who holds `site` once `moving` has happened. `by_site` and `by_instance`
+/// are the move sorted, by `(site, instance)` and by instance, or empty for a
+/// short move, which is scanned instead.
+fn occupant_after(
+    placement: &Placement,
+    moving: &[(usize, usize)],
+    by_site: &[(usize, usize)],
+    by_instance: &[usize],
+    site: usize,
+) -> Option<usize> {
+    if by_site.is_empty() {
+        if let Some((instance, _)) = moving.iter().find(|(_, s)| *s == site) {
+            return Some(*instance);
+        }
+        return placement
+            .instance_at(site)
+            .filter(|i| !moving.iter().any(|(j, _)| j == i));
+    }
+    // A move names a site once, so which of two equals it would find does
+    // not arise.
+    let at = by_site.partition_point(|(s, _)| *s < site);
+    if let Some((_, instance)) = by_site.get(at).filter(|(s, _)| *s == site) {
+        return Some(*instance);
+    }
+    placement
+        .instance_at(site)
+        .filter(|i| by_instance.binary_search(i).is_err())
+}
+
 /// The two ways two sites of one tile are not independent, and what each
 /// of them means for a placement.
 ///
@@ -2291,14 +2323,19 @@ impl SiteRules {
                 })
                 .sum(),
         );
-        let after = |site: usize| -> Option<usize> {
-            if let Some((instance, _)) = moving.iter().find(|(_, s)| *s == site) {
-                return Some(*instance);
-            }
-            placement
-                .instance_at(site)
-                .filter(|i| !moving.iter().any(|(j, _)| j == i))
-        };
+        // A carry chain's whole macro moves at once, and every rule below
+        // asks this of many sites for every member: scanning the move each
+        // time made a 64-bit counter's placement cost ten times another
+        // design's of its size. Only a long move pays for the sorting.
+        let mut by_site: Vec<(usize, usize)> = Vec::new();
+        let mut by_instance: Vec<usize> = Vec::new();
+        if moving.len() > SHORT_MOVE {
+            by_site.extend(moving.iter().map(|(instance, site)| (*site, *instance)));
+            by_site.sort_unstable();
+            by_instance.extend(moving.iter().map(|(instance, _)| *instance));
+            by_instance.sort_unstable();
+        }
+        let after = |site: usize| occupant_after(placement, moving, &by_site, &by_instance, site);
         let pinned = moving.iter().all(|(instance, site)| {
             self.excludes[*site]
                 .iter()
@@ -9825,6 +9862,38 @@ mod tests {
                 "lut{i} at ({x}, {y})"
             );
         }
+    }
+
+    /// A long move answers as a scan of it would. The cells it moves leave
+    /// sites that others may arrive at, a site it passes over keeps its
+    /// occupant, and a cell it moves no longer holds the site it left. Would
+    /// catch the sorted lookup getting any of those wrong, which the place and
+    /// route tests do not: they passed with its last line inverted.
+    #[test]
+    fn a_long_move_is_read_as_a_scan_of_it_would_read_it() {
+        let mut placement = Placement::new(40, 60);
+        for instance in 0..40 {
+            placement.place(instance, instance);
+        }
+        // Instances 0..12 each move on by one: 11 and below still end up
+        // somewhere another of them left, 12 is left by nobody.
+        let moving: Vec<(usize, usize)> = (0..12).rev().map(|i| (i, i + 1)).collect();
+        assert!(moving.len() > SHORT_MOVE);
+        let mut by_site: Vec<(usize, usize)> = moving.iter().map(|(i, s)| (*s, *i)).collect();
+        by_site.sort_unstable();
+        let mut by_instance: Vec<usize> = moving.iter().map(|(i, _)| *i).collect();
+        by_instance.sort_unstable();
+        for site in 0..60 {
+            assert_eq!(
+                occupant_after(&placement, &moving, &by_site, &by_instance, site),
+                occupant_after(&placement, &moving, &[], &[], site),
+                "site {site}"
+            );
+        }
+        assert_eq!(occupant_after(&placement, &moving, &[], &[], 0), None);
+        assert_eq!(occupant_after(&placement, &moving, &[], &[], 1), Some(0));
+        assert_eq!(occupant_after(&placement, &moving, &[], &[], 30), Some(30));
+        assert_eq!(occupant_after(&placement, &moving, &[], &[], 50), None);
     }
 
     #[test]

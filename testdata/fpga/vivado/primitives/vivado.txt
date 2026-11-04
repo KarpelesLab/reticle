@@ -1,0 +1,3371 @@
+# What Vivado 2026.1 made of each design here; tools/vivado-parity/collect.py.
+design and2_probe
+  part xc7a100tftg256-1
+  seconds read 2.399
+  seconds synth 19.794
+  seconds opt 6.096
+  seconds place 1.090
+  seconds route 14.646
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.441
+design and2b1l_probe
+  part xc7a100tftg256-1
+  seconds read 2.386
+  seconds synth 20.229
+  seconds opt 5.914
+  seconds place 1.155
+  seconds route 13.792
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell AND2B1L 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.361 delay 2.556 levels 1
+  wns 7.361
+  routed_pips 63
+  seconds bitstream 13.484
+design bscane2_probe
+  part xc7a100tftg256-1
+  seconds read 1.857
+  seconds synth 20.569
+  seconds opt 5.950
+  seconds place 1.097
+  seconds route 14.413
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BSCANE2 1
+  cell LUT5 1
+  cell LUT6 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BSCAN 1
+  site SLICEL 1
+  clock clk period 10.000 slack 8.914 delay 1.082 levels 1
+  wns 8.914
+  routed_pips 142
+  seconds bitstream 13.543
+design buf_probe
+  part xc7a100tftg256-1
+  seconds read 2.390
+  seconds synth 20.585
+  seconds opt 6.070
+  seconds place 1.135
+  seconds route 14.331
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.728 delay 1.314 levels 1
+  wns 8.728
+  routed_pips 45
+  seconds bitstream 13.450
+design bufg_probe
+  part xc7a100tftg256-1
+  seconds read 2.332
+  seconds synth 19.919
+  seconds opt 5.712
+  seconds place 1.135
+  seconds route 14.028
+  cell GND 1
+  cell VCC 1
+  cell BUFG 2
+  cell IBUF 2
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 2
+  clock clk period 10.000 slack 4.343 delay 2.158 levels 2
+  wns 4.343
+  routed_pips 51
+  seconds bitstream 13.442
+design bufgce_1_probe
+  part xc7a100tftg256-1
+  seconds read 2.132
+  seconds synth 20.794
+  seconds opt 6.222
+  seconds place 1.130
+  seconds route 14.600
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFGCTRL 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFGCTRL 1
+  site SLICEL 2
+  clock clk period 10.000 slack 1.962 delay 1.020 levels 0
+  wns 1.962
+  routed_pips 72
+  seconds bitstream 13.679
+design bufgce_probe
+  part xc7a100tftg256-1
+  seconds read 2.488
+  seconds synth 20.040
+  seconds opt 6.023
+  seconds place 1.185
+  seconds route 14.666
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFGCTRL 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFGCTRL 1
+  site SLICEL 2
+  clock clk period 10.000 slack 4.369 delay 2.118 levels 2
+  wns 4.369
+  routed_pips 72
+  seconds bitstream 13.471
+design bufgctrl_probe
+  part xc7a100tftg256-1
+  seconds read 2.112
+  seconds synth 19.680
+  seconds opt 5.745
+  seconds place 1.140
+  seconds route 14.994
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFGCTRL 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEL 3
+  site BUFG 1
+  site BUFGCTRL 1
+  clock clk period 10.000 slack 1.922 delay 1.060 levels 0
+  wns 1.922
+  routed_pips 127
+  seconds bitstream 13.501
+design bufgmux_1_probe
+  part xc7a100tftg256-1
+  seconds read 2.145
+  seconds synth 20.405
+  seconds opt 5.867
+  seconds place 1.161
+  seconds route 14.816
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFGCTRL 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFGCTRL 1
+  site SLICEL 2
+  clock clk period 10.000 slack 1.936 delay 1.046 levels 0
+  wns 1.936
+  routed_pips 78
+  seconds bitstream 13.646
+design bufgmux_ctrl_probe
+  part xc7a100tftg256-1
+  seconds read 2.219
+  seconds synth 20.554
+  seconds opt 6.145
+  seconds place 1.121
+  seconds route 14.984
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFGCTRL 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFGCTRL 1
+  site SLICEL 2
+  clock clk period 10.000 slack 1.936 delay 1.046 levels 0
+  wns 1.936
+  routed_pips 78
+  seconds bitstream 13.377
+design bufgmux_probe
+  part xc7a100tftg256-1
+  seconds read 2.126
+  seconds synth 20.020
+  seconds opt 6.014
+  seconds place 1.219
+  seconds route 14.515
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFGCTRL 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFGCTRL 1
+  site SLICEL 2
+  clock clk period 10.000 slack 4.369 delay 2.118 levels 2
+  wns 4.369
+  routed_pips 78
+  seconds bitstream 13.477
+design bufgp_probe
+  part xc7a100tftg256-1
+  seconds read 2.435
+  seconds synth 20.432
+  seconds opt 5.746
+  seconds place 0.463
+  seconds route 14.528
+  cell GND 1
+  cell VCC 1
+  cell BUFG 2
+  cell IBUF 3
+  cell BUFGP 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 4
+  clock clk period 10.000 slack 8.621 delay 1.243 levels 1
+  wns 8.621
+  routed_pips 0
+  seconds bitstream 0.169
+design bufh_probe
+  part xc7a100tftg256-1
+  seconds read 2.328
+  seconds synth 20.586
+  seconds opt 6.356
+  seconds place 1.077
+  seconds route 15.088
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFH 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  site BUFHCE 1
+  clock clk period 10.000 slack 4.787 delay 1.672 levels 2
+  wns 4.787
+  routed_pips 61
+  seconds bitstream 13.607
+design bufhce_probe
+  part xc7a100tftg256-1
+  seconds read 2.504
+  seconds synth 20.100
+  seconds opt 5.983
+  seconds place 1.186
+  seconds route 14.704
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFHCE 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFHCE 1
+  site SLICEL 2
+  clock clk period 10.000 slack 4.811 delay 1.655 levels 2
+  wns 4.811
+  routed_pips 81
+  seconds bitstream 13.500
+design bufio_probe
+  part xc7a100tftg256-1
+  seconds read 2.086
+  seconds synth 20.538
+  seconds opt 6.261
+  seconds place 1.160
+  seconds route 14.553
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFIO 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site BUFIO 1
+  site SLICEL 2
+  clock clk period 10.000 slack 5.222 delay 1.284 levels 2
+  wns 5.222
+  routed_pips 20
+  seconds bitstream 0.533
+design bufmr_probe
+  part xc7a100tftg256-1
+  seconds read 2.308
+  seconds synth 20.482
+  seconds opt 6.343
+  seconds place 0.318
+  seconds route 14.345
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFMR 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack 3.983 delay 3.702 levels 3
+  wns 3.983
+  routed_pips 0
+  seconds bitstream 0.167
+design bufmrce_probe
+  part xc7a100tftg256-1
+  seconds read 2.319
+  seconds synth 20.467
+  seconds opt 5.741
+  seconds place 0.327
+  seconds route 14.666
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFMRCE 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack 3.983 delay 3.702 levels 3
+  wns 3.983
+  routed_pips 0
+  seconds bitstream 0.150
+design bufr_probe
+  part xc7a100tftg256-1
+  seconds read 2.365
+  seconds synth 19.873
+  seconds opt 6.182
+  seconds place 1.142
+  seconds route 14.518
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell BUFR 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEL 3
+  site BUFR 1
+  clock clk period 10.000 slack 5.103 delay 1.412 levels 2
+  wns 5.103
+  routed_pips 105
+  seconds bitstream 13.594
+design capturee2_probe
+  part xc7a100tftg256-1
+  seconds read 2.255
+  seconds synth 20.793
+  seconds opt 6.104
+  seconds place 1.073
+  seconds route 13.776
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell CAPTUREE2 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site CAPTURE 1
+  site SLICEL 1
+  clock clk period 10.000 slack 4.736 delay 0.960 levels 0
+  wns 4.736
+  routed_pips 76
+  seconds bitstream 13.499
+design carry4_probe
+  part xc7a100tftg256-1
+  seconds read 2.236
+  seconds synth 20.638
+  seconds opt 6.192
+  seconds place 1.144
+  seconds route 15.019
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell CARRY4 1
+  cell LUT5 1
+  cell LUT4 1
+  cell FDRE 12
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 2
+  site SLICEL 2
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 6.522 delay 3.472 levels 3
+  wns 6.522
+  routed_pips 158
+  seconds bitstream 13.319
+design cfglut5_probe
+  part xc7a100tftg256-1
+  seconds read 2.322
+  seconds synth 20.487
+  seconds opt 6.123
+  seconds place 1.139
+  seconds route 14.030
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell CFGLUT5 1
+  cell LUT3 1
+  cell FDRE 9
+  cell OBUF 1
+  cell LUT2 1
+  cell SRLC32E 1
+  cell SRL16E 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 2
+  site BUFG 1
+  clock clk period 10.000 slack 7.329 delay 2.665 levels 2
+  wns 7.329
+  routed_pips 213
+  seconds bitstream 13.425
+design dcireset_probe
+  part xc7a100tftg256-1
+  seconds read 2.399
+  seconds synth 20.244
+  seconds opt 6.074
+  seconds place 1.106
+  seconds route 14.608
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell DCIRESET 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site DCIRESET 1
+  site SLICEL 1
+  clock clk period 10.000 slack 8.744 delay 1.250 levels 1
+  wns 8.744
+  routed_pips 72
+  seconds bitstream 13.658
+design dna_port_probe
+  part xc7a100tftg256-1
+  seconds read 2.375
+  seconds synth 20.032
+  seconds opt 5.755
+  seconds place 1.117
+  seconds route 15.206
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell DNA_PORT 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  site SLICEL 1
+  site DNA_PORT 1
+  clock clk period 10.000 slack 3.827 delay 0.795 levels 0
+  wns 3.827
+  routed_pips 98
+  seconds bitstream 13.471
+design dsp48e1_probe
+  part xc7a100tftg256-1
+  seconds read 2.240
+  seconds synth 22.101
+  seconds opt 6.122
+  seconds place 0.376
+  seconds route 14.243
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell DSP48E1 1
+  cell LUT5 2
+  cell LUT6 29
+  cell FDRE 264
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack 6.129 delay 3.735 levels 3
+  wns 6.129
+  routed_pips 0
+  seconds bitstream 0.159
+design efuse_usr_probe
+  part xc7a100tftg256-1
+  seconds read 2.379
+  seconds synth 20.389
+  seconds opt 6.061
+  seconds place 1.071
+  seconds route 14.533
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell EFUSE_USR 1
+  cell LUT6 6
+  cell LUT2 2
+  cell FDRE 3
+  cell OBUF 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEL 3
+  site EFUSE_USR 1
+  clock clk period 10.000 slack 8.754 delay 1.215 levels 1
+  wns 8.754
+  routed_pips 310
+  seconds bitstream 13.465
+design fd_probe
+  part xc7a100tftg256-1
+  seconds read 2.203
+  seconds synth 20.107
+  seconds opt 5.829
+  seconds place 1.106
+  seconds route 14.072
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 53
+  seconds bitstream 13.369
+design fdc_probe
+  part xc7a100tftg256-1
+  seconds read 2.422
+  seconds synth 20.539
+  seconds opt 6.089
+  seconds place 1.133
+  seconds route 14.132
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FDCE 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.744 delay 1.250 levels 1
+  wns 8.479
+  routed_pips 62
+  seconds bitstream 13.501
+design fdce_1_probe
+  part xc7a100tftg256-1
+  seconds read 2.339
+  seconds synth 19.531
+  seconds opt 5.597
+  seconds place 1.042
+  seconds route 15.029
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDCE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.642 delay 1.137 levels 0
+  wns 3.356
+  routed_pips 73
+  seconds bitstream 13.502
+design fdce_probe
+  part xc7a100tftg256-1
+  seconds read 2.335
+  seconds synth 20.652
+  seconds opt 6.055
+  seconds place 1.078
+  seconds route 13.890
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDCE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.637 delay 1.137 levels 0
+  wns 8.351
+  routed_pips 73
+  seconds bitstream 13.526
+design fde_probe
+  part xc7a100tftg256-1
+  seconds read 2.101
+  seconds synth 20.181
+  seconds opt 6.076
+  seconds place 1.198
+  seconds route 14.628
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.637 delay 1.137 levels 0
+  wns 8.637
+  routed_pips 63
+  seconds bitstream 13.361
+design fdp_probe
+  part xc7a100tftg256-1
+  seconds read 2.474
+  seconds synth 20.680
+  seconds opt 6.144
+  seconds place 1.066
+  seconds route 14.401
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FDPE 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.747 delay 1.247 levels 1
+  wns 8.549
+  routed_pips 65
+  seconds bitstream 13.457
+design fdpe_1_probe
+  part xc7a100tftg256-1
+  seconds read 2.363
+  seconds synth 20.842
+  seconds opt 6.159
+  seconds place 1.051
+  seconds route 13.785
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDPE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.642 delay 1.137 levels 0
+  wns 3.601
+  routed_pips 74
+  seconds bitstream 13.422
+design fdpe_probe
+  part xc7a100tftg256-1
+  seconds read 1.226
+  seconds synth 16.460
+  seconds opt 4.594
+  seconds place 0.811
+  seconds route 12.217
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDPE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.420 delay 1.487 levels 0
+  wns 8.420
+  routed_pips 74
+  seconds bitstream 13.394
+design fdr_probe
+  part xc7a100tftg256-1
+  seconds read 1.076
+  seconds synth 16.628
+  seconds opt 4.628
+  seconds place 0.832
+  seconds route 12.106
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.386 delay 1.033 levels 0
+  wns 8.386
+  routed_pips 65
+  seconds bitstream 13.485
+design fdre_1_probe
+  part xc7a100tftg256-1
+  seconds read 1.135
+  seconds synth 16.827
+  seconds opt 4.554
+  seconds place 0.806
+  seconds route 11.876
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.438 delay 0.985 levels 0
+  wns 3.438
+  routed_pips 74
+  seconds bitstream 13.479
+design fdre_probe
+  part xc7a100tftg256-1
+  seconds read 1.046
+  seconds synth 16.463
+  seconds opt 4.514
+  seconds place 0.786
+  seconds route 11.814
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.420 delay 1.487 levels 0
+  wns 8.420
+  routed_pips 74
+  seconds bitstream 13.313
+design fds_probe
+  part xc7a100tftg256-1
+  seconds read 1.032
+  seconds synth 16.854
+  seconds opt 4.587
+  seconds place 0.786
+  seconds route 11.892
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FDSE 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.386 delay 1.033 levels 0
+  wns 8.386
+  routed_pips 65
+  seconds bitstream 13.231
+design fdse_1_probe
+  part xc7a100tftg256-1
+  seconds read 1.200
+  seconds synth 17.321
+  seconds opt 4.605
+  seconds place 0.822
+  seconds route 12.237
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDSE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.438 delay 0.985 levels 0
+  wns 3.438
+  routed_pips 74
+  seconds bitstream 13.483
+design fdse_probe
+  part xc7a100tftg256-1
+  seconds read 1.146
+  seconds synth 17.323
+  seconds opt 4.603
+  seconds place 0.829
+  seconds route 12.132
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDSE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.420 delay 1.487 levels 0
+  wns 8.420
+  routed_pips 74
+  seconds bitstream 13.438
+design fifo18e1_probe
+  part xc7a100tftg256-1
+  seconds read 1.455
+  seconds synth 16.931
+  seconds opt 4.667
+  seconds place 1.168
+  seconds route 12.216
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FIFO18E1 1
+  cell LUT6 13
+  cell FDRE 43
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEL 10
+  site BUFG 1
+  site SLICEM 2
+  site FIFO18E1 1
+  clock clk period 10.000 slack 6.084 delay 3.832 levels 3
+  wns 6.084
+  routed_pips 869
+  seconds bitstream 13.545
+design fifo36e1_probe
+  part xc7a100tftg256-1
+  seconds read 1.404
+  seconds synth 17.145
+  seconds opt 4.528
+  seconds place 1.181
+  seconds route 11.981
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FIFO36E1 1
+  cell LUT4 1
+  cell LUT6 22
+  cell FDRE 81
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEL 15
+  site SLICEM 3
+  site FIFO36E1 1
+  clock clk period 10.000 slack 5.704 delay 4.211 levels 3
+  wns 5.704
+  routed_pips 1564
+  seconds bitstream 13.579
+design frame_ecce2_probe
+  part xc7a100tftg256-1
+  seconds read 1.522
+  seconds synth 16.794
+  seconds opt 4.714
+  seconds place 0.846
+  seconds route 12.158
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FRAME_ECCE2 1
+  cell LUT5 1
+  cell LUT6 10
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEL 3
+  site FRAME_ECC 1
+  clock clk period 10.000 slack 8.914 delay 1.082 levels 1
+  wns 8.914
+  routed_pips 493
+  seconds bitstream 13.540
+design gnd_probe
+  part xc7a100tftg256-1
+  seconds read 1.504
+  seconds synth 16.653
+  seconds opt 4.610
+  seconds place 0.823
+  seconds route 11.951
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUF 1
+  cell FDRE 2
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.569 delay 1.364 levels 0
+  wns 8.569
+  routed_pips 40
+  seconds bitstream 13.346
+design ibuf_ibufdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.448
+  seconds synth 16.990
+  seconds opt 4.734
+  seconds place 0.250
+  seconds route 11.624
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUF_IBUFDISABLE 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 4
+  clock clk period 10.000 slack 4.932 delay 4.855 levels 1
+  wns 4.932
+  routed_pips 0
+  seconds bitstream 0.139
+design ibuf_intermdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.533
+  seconds synth 17.054
+  seconds opt 4.568
+  seconds place 0.230
+  seconds route 11.765
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUF_INTERMDISABLE 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 4
+  clock clk period 10.000 slack 4.932 delay 4.855 levels 1
+  wns 4.932
+  routed_pips 0
+  seconds bitstream 0.139
+design ibuf_probe
+  part xc7a100tftg256-1
+  seconds read 1.330
+  seconds synth 17.033
+  seconds opt 4.607
+  seconds place 0.803
+  seconds route 11.947
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 3
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 4
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 48
+  seconds bitstream 13.474
+design ibufds_diff_out_ibufdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.524
+  seconds synth 17.121
+  seconds opt 4.643
+  seconds place 0.866
+  seconds route 12.095
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS_DIFF_OUT_IBUFDISABLE 1
+  cell LUT2 2
+  cell FDRE 3
+  cell OBUF 1
+  cell IBUFDS_IBUFDISABLE_INT 2
+  site SLICEL 1
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 5.164 delay 4.830 levels 2
+  wns 5.164
+  routed_pips 107
+  seconds bitstream 13.648
+design ibufds_diff_out_intermdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.446
+  seconds synth 17.192
+  seconds opt 4.733
+  seconds place 0.869
+  seconds route 12.090
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS_DIFF_OUT_INTERMDISABLE 1
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  cell IBUFDS_INTERMDISABLE_INT 2
+  site SLICEL 1
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 5.150 delay 4.844 levels 2
+  wns 5.150
+  routed_pips 131
+  seconds bitstream 13.591
+design ibufds_diff_out_probe
+  part xc7a100tftg256-1
+  seconds read 1.326
+  seconds synth 16.958
+  seconds opt 4.722
+  seconds place 0.829
+  seconds route 12.030
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS_DIFF_OUT 1
+  cell LUT2 2
+  cell FDRE 3
+  cell OBUF 1
+  cell IBUFDS 2
+  site SLICEL 2
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.168 delay 1.772 levels 1
+  wns 8.168
+  routed_pips 92
+  seconds bitstream 13.487
+design ibufds_ibufdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.658
+  seconds synth 17.133
+  seconds opt 4.622
+  seconds place 0.863
+  seconds route 11.635
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS_IBUFDISABLE 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  cell IBUFDS_IBUFDISABLE_INT 2
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 5.163 delay 4.748 levels 1
+  wns 5.163
+  routed_pips 96
+  seconds bitstream 13.504
+design ibufds_intermdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.510
+  seconds synth 16.924
+  seconds opt 4.483
+  seconds place 0.863
+  seconds route 12.186
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS_INTERMDISABLE 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  cell IBUFDS_INTERMDISABLE_INT 2
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 5.283 delay 4.627 levels 1
+  wns 5.283
+  routed_pips 126
+  seconds bitstream 13.628
+design ibufds_probe
+  part xc7a100tftg256-1
+  seconds read 1.526
+  seconds synth 16.943
+  seconds opt 4.609
+  seconds place 0.831
+  seconds route 11.775
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33M 1
+  site SLICEM 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 57
+  seconds bitstream 13.483
+design ibufg_probe
+  part xc7a100tftg256-1
+  seconds read 1.422
+  seconds synth 17.196
+  seconds opt 4.692
+  seconds place 0.845
+  seconds route 12.048
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 3
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 4
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 48
+  seconds bitstream 13.449
+design ibufgds_diff_out_probe
+  part xc7a100tftg256-1
+  seconds read 1.433
+  seconds synth 16.912
+  seconds opt 4.717
+  seconds place 0.864
+  seconds route 12.117
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS_DIFF_OUT 1
+  cell LUT2 2
+  cell FDRE 3
+  cell OBUF 1
+  cell IBUFDS 2
+  site SLICEL 2
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.168 delay 1.772 levels 1
+  wns 8.168
+  routed_pips 92
+  seconds bitstream 13.597
+design ibufgds_probe
+  part xc7a100tftg256-1
+  seconds read 1.400
+  seconds synth 17.094
+  seconds opt 4.657
+  seconds place 0.828
+  seconds route 11.939
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IBUFDS 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33M 1
+  site SLICEM 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 57
+  seconds bitstream 13.520
+design icape2_probe
+  part xc7a100tftg256-1
+  seconds read 1.409
+  seconds synth 16.677
+  seconds opt 4.725
+  seconds place 1.428
+  seconds route 12.127
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell ICAPE2 1
+  cell LUT6 6
+  cell LUT2 2
+  cell FDRE 36
+  cell OBUF 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEM 1
+  site SLICEL 6
+  site ICAP 1
+  clock clk period 10.000 slack 2.229 delay 7.690 levels 2
+  wns 2.229
+  routed_pips 673
+  seconds bitstream 13.662
+design iddr_2clk_probe
+  part xc7a100tftg256-1
+  seconds read 1.353
+  seconds synth 16.878
+  seconds opt 4.632
+  seconds place 0.852
+  seconds route 18.292
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IDDR_2CLK 1
+  cell LUT2 2
+  cell FDRE 7
+  cell OBUF 1
+  site ILOGICE2 1
+  site SLICEL 3
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.463 delay 1.145 levels 0
+  wns 7.463
+  routed_pips 26
+  seconds bitstream 0.515
+design iddr_probe
+  part xc7a100tftg256-1
+  seconds read 1.384
+  seconds synth 16.904
+  seconds opt 4.634
+  seconds place 0.861
+  seconds route 18.322
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IDDR 1
+  cell LUT2 2
+  cell FDRE 6
+  cell OBUF 1
+  site ILOGICE2 1
+  site SLICEL 2
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 2.713 delay 1.067 levels 0
+  wns 2.713
+  routed_pips 24
+  seconds bitstream 0.530
+design idelayctrl_probe
+  part xc7a100tftg256-1
+  seconds read 1.272
+  seconds synth 16.723
+  seconds opt 4.678
+  seconds place 0.841
+  seconds route 11.817
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 38
+  seconds bitstream 13.636
+design idelaye2_probe
+  part xc7a100tftg256-1
+  seconds read 1.211
+  seconds synth 16.949
+  seconds opt 4.613
+  seconds place 0.256
+  seconds route 11.900
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IDELAYE2 1
+  cell LUT6 1
+  cell FDRE 15
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack 6.666 delay 3.198 levels 2
+  wns 6.666
+  routed_pips 0
+  seconds bitstream 0.152
+design inv_probe
+  part xc7a100tftg256-1
+  seconds read 1.134
+  seconds synth 16.447
+  seconds opt 4.627
+  seconds place 0.814
+  seconds route 11.723
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT1 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.885 delay 1.161 levels 1
+  wns 8.885
+  routed_pips 40
+  seconds bitstream 13.671
+design iobuf_dcien_probe
+  part xc7a100tftg256-1
+  seconds read 1.139
+  seconds synth 16.658
+  seconds opt 4.683
+  seconds place 0.363
+  seconds route 12.076
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUF_DCIEN 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack 8.603 delay 1.261 levels 1
+  wns 8.603
+  routed_pips 0
+  seconds bitstream 0.145
+design iobuf_intermdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.231
+  seconds synth 16.773
+  seconds opt 4.656
+  seconds place 0.786
+  seconds route 11.948
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUF_INTERMDISABLE 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  cell IBUF_INTERMDISABLE 1
+  cell OBUFT 1
+  site IOB33 4
+  site SLICEL 2
+  site BUFG 1
+  site SLICEM 1
+  clock clk period 10.000 slack 5.443 delay 4.468 levels 1
+  wns 5.443
+  routed_pips 142
+  seconds bitstream 13.386
+design iobuf_probe
+  part xc7a100tftg256-1
+  seconds read 1.165
+  seconds synth 16.521
+  seconds opt 4.702
+  seconds place 0.802
+  seconds route 12.147
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 3
+  cell IOBUF 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  cell OBUFT 1
+  site IOB33 4
+  site SLICEL 2
+  site BUFG 1
+  clock clk period 10.000 slack 8.745 delay 1.248 levels 1
+  wns 8.745
+  routed_pips 102
+  seconds bitstream 13.465
+design iobufds_dcien_probe
+  part xc7a100tftg256-1
+  seconds read 1.203
+  seconds synth 17.258
+  seconds opt 4.563
+  seconds place 0.357
+  seconds route 11.972
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUFDS_DCIEN 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  cell IBUFDS_IBUFDISABLE 1
+  cell OBUFTDS_DCIEN 1
+  cell IBUFDS_IBUFDISABLE_INT 2
+  site IOB33 3
+  clock clk period 10.000 slack 4.944 delay 4.842 levels 1
+  wns 4.944
+  routed_pips 0
+  seconds bitstream 0.139
+design iobufds_diff_out_dcien_probe
+  part xc7a100tftg256-1
+  seconds read 1.242
+  seconds synth 17.349
+  seconds opt 4.527
+  seconds place 0.346
+  seconds route 11.902
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUFDS_DIFF_OUT_DCIEN 1
+  cell LUT2 2
+  cell FDRE 7
+  cell OBUF 1
+  cell IBUFDS_IBUFDISABLE_INT 2
+  cell OBUFTDS_DCIEN 1
+  site IOB33 3
+  clock clk period 10.000 slack 4.897 delay 4.967 levels 2
+  wns 4.897
+  routed_pips 0
+  seconds bitstream 0.144
+design iobufds_diff_out_intermdisable_probe
+  part xc7a100tftg256-1
+  seconds read 1.212
+  seconds synth 17.325
+  seconds opt 4.581
+  seconds place 0.786
+  seconds route 11.819
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUFDS_DIFF_OUT_INTERMDISABLE 1
+  cell LUT2 2
+  cell FDRE 7
+  cell OBUF 1
+  cell IBUFDS_INTERMDISABLE_INT 2
+  cell OBUFTDS 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.334 delay 6.659 levels 3
+  wns 3.334
+  routed_pips 197
+  seconds bitstream 13.333
+design iobufds_diff_out_probe
+  part xc7a100tftg256-1
+  seconds read 1.128
+  seconds synth 17.320
+  seconds opt 4.802
+  seconds place 0.815
+  seconds route 12.130
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUFDS_DIFF_OUT 1
+  cell LUT2 2
+  cell FDRE 5
+  cell OBUF 1
+  cell IBUFDS 2
+  cell OBUFTDS 1
+  site SLICEL 3
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.594 delay 6.375 levels 3
+  wns 3.594
+  routed_pips 146
+  seconds bitstream 13.367
+design iobufds_intermdisable_probe
+  part xc7a100tftg256-1
+  seconds read 0.976
+  seconds synth 17.153
+  seconds opt 4.723
+  seconds place 0.841
+  seconds route 11.891
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUFDS_INTERMDISABLE 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  cell IBUFDS_INTERMDISABLE 1
+  cell OBUFTDS 1
+  cell IBUFDS_INTERMDISABLE_INT 2
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33S 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.618 delay 6.308 levels 2
+  wns 3.618
+  routed_pips 213
+  seconds bitstream 13.600
+design iobufds_probe
+  part xc7a100tftg256-1
+  seconds read 1.099
+  seconds synth 17.309
+  seconds opt 4.574
+  seconds place 0.811
+  seconds route 12.019
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell IOBUFDS 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  cell IBUFDS 1
+  cell OBUFTDS 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33M 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 3.769 delay 6.141 levels 2
+  wns 3.769
+  routed_pips 114
+  seconds bitstream 13.394
+design iserdese2_probe
+  part xc7a100tftg256-1
+  seconds read 1.105
+  seconds synth 17.284
+  seconds opt 4.637
+  seconds place 0.789
+  seconds route 19.875
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell ISERDESE2 1
+  cell LUT6 2
+  cell FDRE 13
+  cell OBUF 1
+  cell LUT2 1
+  site ISERDESE2 1
+  site SLICEL 3
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 6.655 delay 3.339 levels 2
+  wns 6.655
+  routed_pips 35
+  seconds bitstream 0.501
+design keeper_probe
+  part xc7a100tftg256-1
+  seconds read 1.078
+  seconds synth 17.017
+  seconds opt 4.536
+  seconds place 0.787
+  seconds route 11.807
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.728 delay 1.314 levels 1
+  wns 8.728
+  routed_pips 45
+  seconds bitstream 13.351
+design ld_probe
+  part xc7a100tftg256-1
+  seconds read 0.955
+  seconds synth 17.065
+  seconds opt 4.646
+  seconds place 0.786
+  seconds route 12.007
+  cell GND 2
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell LDCE 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.650 delay 1.253 levels 0
+  wns 8.650
+  routed_pips 63
+  seconds bitstream 13.197
+design ldc_probe
+  part xc7a100tftg256-1
+  seconds read 0.921
+  seconds synth 16.994
+  seconds opt 4.441
+  seconds place 0.805
+  seconds route 11.931
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell LDCE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.650 delay 1.253 levels 0
+  wns 8.650
+  routed_pips 75
+  seconds bitstream 13.347
+design ldce_1_probe
+  part xc7a100tftg256-1
+  seconds read 1.046
+  seconds synth 16.886
+  seconds opt 4.458
+  seconds place 0.784
+  seconds route 12.047
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LDCE 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.650 delay 1.253 levels 0
+  wns 8.650
+  routed_pips 81
+  seconds bitstream 15.123
+design ldce_probe
+  part xc7a100tftg256-1
+  seconds read 1.158
+  seconds synth 17.025
+  seconds opt 4.422
+  seconds place 0.789
+  seconds route 11.885
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LDCE 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.586 delay 1.321 levels 0
+  wns 8.586
+  routed_pips 81
+  seconds bitstream 14.177
+design ldp_probe
+  part xc7a100tftg256-1
+  seconds read 1.251
+  seconds synth 16.835
+  seconds opt 4.476
+  seconds place 0.825
+  seconds route 11.954
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell LDPE 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.586 delay 1.321 levels 0
+  wns 8.586
+  routed_pips 75
+  seconds bitstream 14.047
+design ldpe_1_probe
+  part xc7a100tftg256-1
+  seconds read 1.255
+  seconds synth 16.844
+  seconds opt 4.531
+  seconds place 0.815
+  seconds route 11.917
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LDPE 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.650 delay 1.253 levels 0
+  wns 8.650
+  routed_pips 81
+  seconds bitstream 13.303
+design ldpe_probe
+  part xc7a100tftg256-1
+  seconds read 1.284
+  seconds synth 17.317
+  seconds opt 4.620
+  seconds place 0.811
+  seconds route 11.846
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LDPE 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.525 delay 1.381 levels 0
+  wns 8.525
+  routed_pips 81
+  seconds bitstream 14.434
+design lut1_l_probe
+  part xc7a100tftg256-1
+  seconds read 1.202
+  seconds synth 16.950
+  seconds opt 4.578
+  seconds place 0.823
+  seconds route 11.936
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.728 delay 1.314 levels 1
+  wns 8.728
+  routed_pips 45
+  seconds bitstream 13.829
+design lut1_probe
+  part xc7a100tftg256-1
+  seconds read 1.223
+  seconds synth 16.822
+  seconds opt 4.520
+  seconds place 0.789
+  seconds route 11.947
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.728 delay 1.314 levels 1
+  wns 8.728
+  routed_pips 45
+  seconds bitstream 13.683
+design lut2_probe
+  part xc7a100tftg256-1
+  seconds read 1.349
+  seconds synth 17.102
+  seconds opt 4.615
+  seconds place 0.807
+  seconds route 12.225
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.374
+design lut3_probe
+  part xc7a100tftg256-1
+  seconds read 1.224
+  seconds synth 16.748
+  seconds opt 4.611
+  seconds place 0.813
+  seconds route 12.061
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT3 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 59
+  seconds bitstream 13.313
+design lut4_probe
+  part xc7a100tftg256-1
+  seconds read 1.268
+  seconds synth 16.806
+  seconds opt 4.566
+  seconds place 0.791
+  seconds route 11.827
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT4 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 67
+  seconds bitstream 13.351
+design lut5_probe
+  part xc7a100tftg256-1
+  seconds read 1.293
+  seconds synth 17.051
+  seconds opt 4.633
+  seconds place 0.832
+  seconds route 12.147
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT5 1
+  cell FDRE 7
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.437 delay 1.583 levels 1
+  wns 8.437
+  routed_pips 75
+  seconds bitstream 13.437
+design lut6_2_probe
+  part xc7a100tftg256-1
+  seconds read 1.320
+  seconds synth 16.707
+  seconds opt 4.650
+  seconds place 0.866
+  seconds route 11.870
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT6_2 1
+  cell LUT2 2
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT5 1
+  cell LUT6 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.598 delay 2.425 levels 2
+  wns 7.598
+  routed_pips 168
+  seconds bitstream 13.363
+design lut6_d_probe
+  part xc7a100tftg256-1
+  seconds read 1.157
+  seconds synth 16.855
+  seconds opt 4.668
+  seconds place 0.828
+  seconds route 12.125
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUF 1
+  cell FDRE 2
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.569 delay 1.364 levels 0
+  wns 8.569
+  routed_pips 40
+  seconds bitstream 13.550
+design lut6_l_probe
+  part xc7a100tftg256-1
+  seconds read 1.293
+  seconds synth 16.552
+  seconds opt 4.624
+  seconds place 0.846
+  seconds route 12.063
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT6 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.566 delay 1.454 levels 1
+  wns 8.566
+  routed_pips 83
+  seconds bitstream 13.923
+design lut6_probe
+  part xc7a100tftg256-1
+  seconds read 1.212
+  seconds synth 17.012
+  seconds opt 4.711
+  seconds place 0.906
+  seconds route 11.903
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT6 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.566 delay 1.454 levels 1
+  wns 8.566
+  routed_pips 83
+  seconds bitstream 13.447
+design mmcme2_adv_probe
+  part xc7a100tftg256-1
+  seconds read 1.164
+  seconds synth 17.003
+  seconds opt 4.722
+  seconds place 1.108
+  seconds route 11.992
+  cell GND 1
+  cell VCC 1
+  cell BUFG 12
+  cell IBUF 2
+  cell MMCME2_ADV 1
+  cell LUT6 6
+  cell LUT4 1
+  cell FDRE 33
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack -1.531 delay 2.463 levels 3
+  wns -1.531
+  routed_pips 0
+  seconds bitstream 0.152
+design mmcme2_base_probe
+  part xc7a100tftg256-1
+  seconds read 1.228
+  seconds synth 16.698
+  seconds opt 4.537
+  seconds place 1.069
+  seconds route 11.876
+  cell GND 2
+  cell VCC 2
+  cell BUFG 12
+  cell IBUF 2
+  cell MMCME2_ADV 1
+  cell LUT6 2
+  cell LUT4 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack -1.248 delay 2.180 levels 3
+  wns -1.248
+  routed_pips 0
+  seconds bitstream 0.149
+design muxcy_probe
+  part xc7a100tftg256-1
+  seconds read 1.224
+  seconds synth 16.937
+  seconds opt 4.672
+  seconds place 0.877
+  seconds route 11.905
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell CARRY4 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.204 delay 1.832 levels 1
+  wns 8.204
+  routed_pips 64
+  seconds bitstream 13.336
+design muxf7_l_probe
+  part xc7a100tftg256-1
+  seconds read 1.233
+  seconds synth 16.399
+  seconds opt 4.753
+  seconds place 0.869
+  seconds route 11.819
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT3 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 59
+  seconds bitstream 14.460
+design muxf7_probe
+  part xc7a100tftg256-1
+  seconds read 1.142
+  seconds synth 16.481
+  seconds opt 4.537
+  seconds place 0.864
+  seconds route 12.035
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT3 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 59
+  seconds bitstream 13.372
+design muxf8_l_probe
+  part xc7a100tftg256-1
+  seconds read 0.984
+  seconds synth 16.888
+  seconds opt 4.568
+  seconds place 0.793
+  seconds route 12.203
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell MUXF8 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.188 delay 1.889 levels 1
+  wns 8.188
+  routed_pips 60
+  seconds bitstream 13.253
+design muxf8_probe
+  part xc7a100tftg256-1
+  seconds read 1.119
+  seconds synth 16.391
+  seconds opt 4.598
+  seconds place 0.830
+  seconds route 11.952
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell MUXF8 1
+  cell FDRE 5
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.188 delay 1.889 levels 1
+  wns 8.188
+  routed_pips 60
+  seconds bitstream 13.341
+design nand2_probe
+  part xc7a100tftg256-1
+  seconds read 1.117
+  seconds synth 16.511
+  seconds opt 4.444
+  seconds place 0.783
+  seconds route 12.788
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.283
+design nor2_probe
+  part xc7a100tftg256-1
+  seconds read 1.140
+  seconds synth 16.556
+  seconds opt 4.492
+  seconds place 0.783
+  seconds route 12.427
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.183
+design obuf_probe
+  part xc7a100tftg256-1
+  seconds read 1.070
+  seconds synth 16.786
+  seconds opt 4.964
+  seconds place 0.769
+  seconds route 11.894
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUF 2
+  cell FDRE 3
+  cell LUT2 1
+  site IOB33 4
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.927 delay 1.000 levels 0
+  wns 8.927
+  routed_pips 54
+  seconds bitstream 13.155
+design obufds_probe
+  part xc7a100tftg256-1
+  seconds read 1.115
+  seconds synth 17.098
+  seconds opt 4.569
+  seconds place 0.823
+  seconds route 11.793
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUFDS 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33M 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.925 delay 1.002 levels 0
+  wns 8.925
+  routed_pips 66
+  seconds bitstream 13.257
+design obuft_dcien_probe
+  part xc7a100tftg256-1
+  seconds read 0.952
+  seconds synth 16.979
+  seconds opt 0.256
+  seconds place 2.961
+  seconds route 11.844
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUF 1
+  cell LUT2 1
+  cell FDRE 4
+  site IOB33 3
+  clock clk period 10.000 slack 8.603 delay 1.261 levels 1
+  wns 8.603
+  routed_pips 0
+  seconds bitstream 0.150
+design obuft_probe
+  part xc7a100tftg256-1
+  seconds read 1.137
+  seconds synth 17.167
+  seconds opt 4.635
+  seconds place 0.810
+  seconds route 11.833
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUFT 1
+  cell OBUF 1
+  cell LUT2 1
+  cell FDRE 4
+  site IOB33 4
+  site BUFG 1
+  site SLICEM 1
+  site SLICEL 1
+  clock clk period 10.000 slack 8.873 delay 1.011 levels 0
+  wns 8.873
+  routed_pips 64
+  seconds bitstream 13.345
+design obuftds_probe
+  part xc7a100tftg256-1
+  seconds read 1.161
+  seconds synth 16.623
+  seconds opt 4.617
+  seconds place 0.800
+  seconds route 12.076
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUFTDS 1
+  cell OBUF 1
+  cell LUT2 1
+  cell FDRE 4
+  site SLICEL 2
+  site IOB33M 1
+  site SLICEM 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.825 delay 1.101 levels 0
+  wns 8.825
+  routed_pips 80
+  seconds bitstream 13.452
+design oddr_probe
+  part xc7a100tftg256-1
+  seconds read 1.133
+  seconds synth 16.912
+  seconds opt 4.443
+  seconds place 0.233
+  seconds route 11.822
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell ODDR 1
+  cell FDRE 7
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack 2.530 delay 1.281 levels 0
+  wns 2.530
+  routed_pips 0
+  seconds bitstream 0.137
+design or2_probe
+  part xc7a100tftg256-1
+  seconds read 0.906
+  seconds synth 16.836
+  seconds opt 4.581
+  seconds place 0.779
+  seconds route 12.095
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.301
+design or2l_probe
+  part xc7a100tftg256-1
+  seconds read 0.967
+  seconds synth 17.069
+  seconds opt 4.589
+  seconds place 0.785
+  seconds route 12.051
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OR2L 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.361 delay 2.556 levels 1
+  wns 7.361
+  routed_pips 63
+  seconds bitstream 13.365
+design oserdese2_probe
+  part xc7a100tftg256-1
+  seconds read 1.050
+  seconds synth 17.211
+  seconds opt 4.696
+  seconds place 0.791
+  seconds route 18.914
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OSERDESE2 1
+  cell LUT4 2
+  cell FDRE 20
+  cell OBUF 1
+  cell LUT2 1
+  site OSERDESE2 1
+  site SLICEL 5
+  site SLICEM 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.891 delay 0.986 levels 0
+  wns 7.891
+  routed_pips 36
+  seconds bitstream 0.497
+design plle2_adv_probe
+  part xc7a100tftg256-1
+  seconds read 0.996
+  seconds synth 16.963
+  seconds opt 4.437
+  seconds place 0.684
+  seconds route 12.152
+  cell GND 1
+  cell VCC 1
+  cell BUFG 7
+  cell IBUF 2
+  cell PLLE2_ADV 1
+  cell LUT5 1
+  cell LUT6 4
+  cell FDRE 30
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack -1.631 delay 2.463 levels 3
+  wns -1.631
+  routed_pips 0
+  seconds bitstream 0.149
+design plle2_base_probe
+  part xc7a100tftg256-1
+  seconds read 1.105
+  seconds synth 16.974
+  seconds opt 4.503
+  seconds place 0.676
+  seconds route 12.193
+  cell GND 2
+  cell VCC 2
+  cell BUFG 7
+  cell IBUF 2
+  cell PLLE2_ADV 1
+  cell LUT5 1
+  cell LUT4 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  clock clk period 10.000 slack -1.348 delay 2.180 levels 3
+  wns -1.348
+  routed_pips 0
+  seconds bitstream 0.138
+design pulldown_probe
+  part xc7a100tftg256-1
+  seconds read 1.228
+  seconds synth 16.999
+  seconds opt 4.496
+  seconds place 0.830
+  seconds route 12.122
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell PULLDOWN 1
+  cell OBUF 2
+  cell FDRE 3
+  cell LUT2 1
+  site IOB33 4
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.728 delay 1.314 levels 1
+  wns 8.728
+  routed_pips 45
+  seconds bitstream 13.223
+design pullup_probe
+  part xc7a100tftg256-1
+  seconds read 1.235
+  seconds synth 16.622
+  seconds opt 4.546
+  seconds place 0.821
+  seconds route 12.369
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell PULLUP 1
+  cell OBUF 2
+  cell FDRE 3
+  cell LUT2 1
+  site IOB33 4
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.728 delay 1.314 levels 1
+  wns 8.728
+  routed_pips 45
+  seconds bitstream 13.514
+design ram128x1d_probe
+  part xc7a100tftg256-1
+  seconds read 1.360
+  seconds synth 16.968
+  seconds opt 4.565
+  seconds place 0.850
+  seconds route 12.525
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM128X1D 1
+  cell LUT2 2
+  cell FDRE 18
+  cell OBUF 1
+  cell RAMD64E 4
+  cell MUXF7 2
+  site SLICEL 5
+  site SLICEM 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 6.409 delay 3.452 levels 3
+  wns 6.409
+  routed_pips 481
+  seconds bitstream 13.463
+design ram128x1s_probe
+  part xc7a100tftg256-1
+  seconds read 1.257
+  seconds synth 17.170
+  seconds opt 4.524
+  seconds place 0.820
+  seconds route 11.848
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM128X1S 1
+  cell FDRE 11
+  cell OBUF 1
+  cell LUT2 1
+  cell MUXF7 1
+  cell RAMS64E 2
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 2
+  site BUFG 1
+  clock clk period 10.000 slack 8.068 delay 1.987 levels 2
+  wns 8.068
+  routed_pips 231
+  seconds bitstream 13.343
+design ram16x1d_probe
+  part xc7a100tftg256-1
+  seconds read 1.214
+  seconds synth 16.748
+  seconds opt 4.616
+  seconds place 0.833
+  seconds route 11.971
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM32X1D 1
+  cell LUT2 2
+  cell FDRE 12
+  cell OBUF 1
+  cell RAMD32 2
+  site SLICEL 3
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.594 delay 2.400 levels 2
+  wns 7.594
+  routed_pips 274
+  seconds bitstream 13.273
+design ram16x1s_probe
+  part xc7a100tftg256-1
+  seconds read 1.211
+  seconds synth 16.907
+  seconds opt 4.502
+  seconds place 0.799
+  seconds route 12.069
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM32X1S 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  cell RAMS32 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.294 delay 0.943 levels 0
+  wns 8.294
+  routed_pips 155
+  seconds bitstream 13.261
+design ram256x1s_probe
+  part xc7a100tftg256-1
+  seconds read 1.300
+  seconds synth 16.914
+  seconds opt 4.528
+  seconds place 0.866
+  seconds route 12.103
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM256X1S 1
+  cell FDRE 12
+  cell OBUF 1
+  cell LUT2 1
+  cell MUXF7 2
+  cell MUXF8 1
+  cell RAMS64E 4
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 2
+  site BUFG 1
+  clock clk period 10.000 slack 7.845 delay 2.211 levels 3
+  wns 7.845
+  routed_pips 335
+  seconds bitstream 13.404
+design ram32m_probe
+  part xc7a100tftg256-1
+  seconds read 1.332
+  seconds synth 16.915
+  seconds opt 4.527
+  seconds place 0.954
+  seconds route 12.079
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM32M 1
+  cell LUT5 1
+  cell LUT4 1
+  cell FDRE 31
+  cell OBUF 1
+  cell LUT2 1
+  cell RAMD32 6
+  cell RAMS32 2
+  site SLICEM 3
+  site SLICEL 4
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 6.111 delay 3.883 levels 3
+  wns 6.111
+  routed_pips 756
+  seconds bitstream 13.341
+design ram32x1d_probe
+  part xc7a100tftg256-1
+  seconds read 1.338
+  seconds synth 16.924
+  seconds opt 4.612
+  seconds place 0.876
+  seconds route 12.112
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM32X1D 1
+  cell LUT2 2
+  cell FDRE 14
+  cell OBUF 1
+  cell RAMD32 2
+  site SLICEL 3
+  site IOB33 3
+  site SLICEM 2
+  site BUFG 1
+  clock clk period 10.000 slack 7.674 delay 2.295 levels 2
+  wns 7.674
+  routed_pips 316
+  seconds bitstream 13.814
+design ram32x1s_probe
+  part xc7a100tftg256-1
+  seconds read 1.207
+  seconds synth 16.797
+  seconds opt 4.655
+  seconds place 0.895
+  seconds route 11.980
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM32X1S 1
+  cell FDRE 9
+  cell OBUF 1
+  cell LUT2 1
+  cell RAMS32 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.233 delay 1.419 levels 0
+  wns 8.233
+  routed_pips 177
+  seconds bitstream 13.333
+design ram32x2s_probe
+  part xc7a100tftg256-1
+  seconds read 1.216
+  seconds synth 16.999
+  seconds opt 4.659
+  seconds place 0.930
+  seconds route 12.160
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM32X2S 1
+  cell LUT2 2
+  cell FDRE 10
+  cell OBUF 1
+  cell RAM32X1S 2
+  cell RAMS32 2
+  site SLICEL 3
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.233 delay 2.760 levels 2
+  wns 7.233
+  routed_pips 447
+  seconds bitstream 13.447
+design ram64m_probe
+  part xc7a100tftg256-1
+  seconds read 1.291
+  seconds synth 16.715
+  seconds opt 4.709
+  seconds place 1.110
+  seconds route 12.174
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM64M 1
+  cell LUT4 1
+  cell FDRE 31
+  cell OBUF 1
+  cell LUT2 1
+  cell RAMD64E 4
+  site SLICEM 3
+  site SLICEL 5
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.230 delay 2.739 levels 2
+  wns 7.230
+  routed_pips 701
+  seconds bitstream 13.358
+design ram64x1d_probe
+  part xc7a100tftg256-1
+  seconds read 1.225
+  seconds synth 16.758
+  seconds opt 4.614
+  seconds place 0.914
+  seconds route 12.245
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM64X1D 1
+  cell LUT2 2
+  cell FDRE 16
+  cell OBUF 1
+  cell RAMD64E 2
+  site SLICEM 2
+  site SLICEL 2
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.698 delay 2.344 levels 2
+  wns 7.698
+  routed_pips 347
+  seconds bitstream 13.481
+design ram64x1s_probe
+  part xc7a100tftg256-1
+  seconds read 1.321
+  seconds synth 16.968
+  seconds opt 4.537
+  seconds place 0.910
+  seconds route 12.071
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM64X1S 1
+  cell FDRE 10
+  cell OBUF 1
+  cell LUT2 1
+  cell RAMS64E 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 2
+  site BUFG 1
+  clock clk period 10.000 slack 8.433 delay 0.801 levels 0
+  wns 8.433
+  routed_pips 187
+  seconds bitstream 13.180
+design ram64x2s_probe
+  part xc7a100tftg256-1
+  seconds read 1.170
+  seconds synth 16.850
+  seconds opt 4.525
+  seconds place 0.895
+  seconds route 11.816
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAM64X2S 1
+  cell LUT2 2
+  cell FDRE 11
+  cell OBUF 1
+  cell RAM64X1S 2
+  cell RAMS64E 2
+  site SLICEL 3
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.323 delay 2.670 levels 2
+  wns 7.323
+  routed_pips 494
+  seconds bitstream 13.527
+design ramb18e1_probe
+  part xc7a100tftg256-1
+  seconds read 1.264
+  seconds synth 16.620
+  seconds opt 4.722
+  seconds place 1.235
+  seconds route 11.875
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAMB18E1 1
+  cell LUT6 7
+  cell FDRE 77
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEL 10
+  site SLICEM 2
+  site BUFG 1
+  site RAMB18E1 1
+  clock clk period 10.000 slack 4.541 delay 5.375 levels 2
+  wns 4.541
+  routed_pips 1185
+  seconds bitstream 13.401
+design ramb36e1_probe
+  part xc7a100tftg256-1
+  seconds read 1.186
+  seconds synth 16.729
+  seconds opt 4.766
+  seconds place 1.256
+  seconds route 19.389
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell RAMB36E1 1
+  cell LUT5 1
+  cell LUT6 17
+  cell LUT4 1
+  cell FDRE 123
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEL 23
+  site IOB33 3
+  site SLICEM 5
+  site BUFG 1
+  site RAMB36E1 1
+  clock clk period 10.000 slack 4.164 delay 5.752 levels 3
+  wns 4.164
+  routed_pips 95
+  seconds bitstream 0.507
+design rom128x1_probe
+  part xc7a100tftg256-1
+  seconds read 1.129
+  seconds synth 16.484
+  seconds opt 4.622
+  seconds place 0.865
+  seconds route 12.139
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell ROM128X1 1
+  cell FDRE 9
+  cell OBUF 1
+  cell LUT2 1
+  cell MUXF7 1
+  cell LUT6 2
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 7.670 delay 2.004 levels 2
+  wns 7.670
+  routed_pips 189
+  seconds bitstream 13.454
+design rom16x1_probe
+  part xc7a100tftg256-1
+  seconds read 1.276
+  seconds synth 16.274
+  seconds opt 4.728
+  seconds place 0.867
+  seconds route 12.033
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT4 1
+  cell FDRE 6
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 67
+  seconds bitstream 13.430
+design rom256x1_probe
+  part xc7a100tftg256-1
+  seconds read 1.170
+  seconds synth 16.858
+  seconds opt 4.607
+  seconds place 0.790
+  seconds route 11.767
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell ROM256X1 1
+  cell FDRE 10
+  cell OBUF 1
+  cell LUT2 1
+  cell LUT6 4
+  cell MUXF7 2
+  cell MUXF8 1
+  site SLICEM 1
+  site SLICEL 2
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 6.967 delay 2.755 levels 3
+  wns 6.967
+  routed_pips 265
+  seconds bitstream 13.192
+design rom32x1_probe
+  part xc7a100tftg256-1
+  seconds read 1.151
+  seconds synth 16.571
+  seconds opt 4.550
+  seconds place 0.800
+  seconds route 12.220
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT5 1
+  cell FDRE 7
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.566 delay 1.454 levels 1
+  wns 8.566
+  routed_pips 75
+  seconds bitstream 13.039
+design rom64x1_probe
+  part xc7a100tftg256-1
+  seconds read 1.018
+  seconds synth 16.602
+  seconds opt 4.512
+  seconds place 0.815
+  seconds route 11.920
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT6 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.566 delay 1.454 levels 1
+  wns 8.566
+  routed_pips 83
+  seconds bitstream 13.188
+design srl16_probe
+  part xc7a100tftg256-1
+  seconds read 1.044
+  seconds synth 16.806
+  seconds opt 4.513
+  seconds place 0.831
+  seconds route 12.105
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell SRL16E 1
+  cell FDRE 7
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.989 delay 2.071 levels 1
+  wns 7.989
+  routed_pips 92
+  seconds bitstream 13.109
+design srl16e_1_probe
+  part xc7a100tftg256-1
+  seconds read 1.262
+  seconds synth 16.813
+  seconds opt 4.464
+  seconds place 0.799
+  seconds route 11.935
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell SRL16E 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 3.071 delay 1.824 levels 0
+  wns 3.071
+  routed_pips 98
+  seconds bitstream 13.116
+design srl16e_probe
+  part xc7a100tftg256-1
+  seconds read 1.142
+  seconds synth 16.648
+  seconds opt 4.583
+  seconds place 0.809
+  seconds route 11.780
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell SRL16E 1
+  cell FDRE 8
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.158 delay 1.903 levels 1
+  wns 8.158
+  routed_pips 95
+  seconds bitstream 13.190
+design srlc16_probe
+  part xc7a100tftg256-1
+  seconds read 1.215
+  seconds synth 16.730
+  seconds opt 4.550
+  seconds place 0.822
+  seconds route 11.859
+  cell GND 1
+  cell VCC 2
+  cell BUFG 1
+  cell IBUF 2
+  cell SRLC16E 1
+  cell LUT2 2
+  cell FDRE 7
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.693 delay 2.300 levels 2
+  wns 7.693
+  routed_pips 90
+  seconds bitstream 13.333
+design srlc16e_1_probe
+  part xc7a100tftg256-1
+  seconds read 1.136
+  seconds synth 16.785
+  seconds opt 4.533
+  seconds place 0.786
+  seconds route 11.994
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell SRLC16E 1
+  cell LUT2 2
+  cell FDRE 8
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 2.739 delay 2.232 levels 1
+  wns 2.739
+  routed_pips 104
+  seconds bitstream 13.124
+design srlc16e_probe
+  part xc7a100tftg256-1
+  seconds read 1.054
+  seconds synth 16.605
+  seconds opt 4.550
+  seconds place 0.793
+  seconds route 11.874
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell SRLC16E 1
+  cell LUT2 2
+  cell FDRE 8
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site SLICEL 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.693 delay 2.300 levels 2
+  wns 7.693
+  routed_pips 103
+  seconds bitstream 13.226
+design srlc32e_probe
+  part xc7a100tftg256-1
+  seconds read 1.240
+  seconds synth 16.538
+  seconds opt 4.639
+  seconds place 0.824
+  seconds route 12.009
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell SRLC32E 1
+  cell LUT2 2
+  cell FDRE 9
+  cell OBUF 1
+  site SLICEL 2
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 7.693 delay 2.300 levels 2
+  wns 7.693
+  routed_pips 116
+  seconds bitstream 13.159
+design startupe2_probe
+  part xc7a100tftg256-1
+  seconds read 1.133
+  seconds synth 16.465
+  seconds opt 4.509
+  seconds place 0.809
+  seconds route 11.812
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell STARTUPE2 1
+  cell LUT4 1
+  cell FDRE 10
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEL 3
+  site STARTUP 1
+  clock clk period 10.000 slack 8.661 delay 1.242 levels 0
+  wns 8.661
+  routed_pips 170
+  seconds bitstream 12.998
+design usr_accesse2_probe
+  part xc7a100tftg256-1
+  seconds read 0.946
+  seconds synth 16.519
+  seconds opt 4.414
+  seconds place 0.787
+  seconds route 11.744
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell USR_ACCESSE2 1
+  cell LUT6 6
+  cell LUT4 1
+  cell FDRE 3
+  cell OBUF 1
+  cell LUT2 1
+  site IOB33 3
+  site BUFG 1
+  site SLICEL 3
+  site USR_ACCESS 1
+  clock clk period 10.000 slack 8.757 delay 1.215 levels 1
+  wns 8.757
+  routed_pips 366
+  seconds bitstream 13.158
+design vcc_probe
+  part xc7a100tftg256-1
+  seconds read 1.090
+  seconds synth 16.343
+  seconds opt 4.532
+  seconds place 0.756
+  seconds route 11.862
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell OBUF 1
+  cell LUT1 1
+  cell FDRE 2
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 9.100 delay 0.941 levels 1
+  wns 9.100
+  routed_pips 35
+  seconds bitstream 13.046
+design xadc_probe
+  part xc7a100tftg256-1
+  seconds read 1.137
+  seconds synth 16.572
+  seconds opt 4.401
+  seconds place 0.952
+  seconds route 84.053
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell XADC 1
+  cell LUT2 2
+  cell LUT6 8
+  cell FDRE 64
+  cell OBUF 1
+  site SLICEL 10
+  site SLICEM 2
+  site XADC 1
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 5.838 delay 4.136 levels 3
+  wns 5.838
+  routed_pips 48
+  seconds bitstream 0.454
+design xnor2_probe
+  part xc7a100tftg256-1
+  seconds read 1.207
+  seconds synth 16.350
+  seconds opt 4.465
+  seconds place 0.800
+  seconds route 11.356
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.060
+design xor2_probe
+  part xc7a100tftg256-1
+  seconds read 1.037
+  seconds synth 16.446
+  seconds opt 4.450
+  seconds place 0.807
+  seconds route 11.188
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell LUT2 2
+  cell FDRE 4
+  cell OBUF 1
+  site IOB33 3
+  site SLICEM 1
+  site BUFG 1
+  clock clk period 10.000 slack 8.579 delay 1.463 levels 1
+  wns 8.579
+  routed_pips 48
+  seconds bitstream 13.131
+design xorcy_probe
+  part xc7a100tftg256-1
+  seconds read 1.092
+  seconds synth 16.477
+  seconds opt 4.471
+  seconds place 0.810
+  seconds route 11.162
+  cell GND 2
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell CARRY4 1
+  cell FDRE 4
+  cell OBUF 1
+  cell LUT2 1
+  site SLICEM 1
+  site SLICEL 2
+  site IOB33 3
+  site BUFG 1
+  clock clk period 10.000 slack 8.742 delay 1.307 levels 1
+  wns 8.742
+  routed_pips 51
+  seconds bitstream 13.102
+design zhold_delay_probe
+  part xc7a100tftg256-1
+  seconds read 1.145
+  seconds synth 16.086
+  seconds opt 4.426
+  seconds place 0.357
+  seconds route 11.410
+  cell GND 1
+  cell VCC 1
+  cell BUFG 1
+  cell IBUF 2
+  cell ZHOLD_DELAY 1
+  cell LUT2 2
+  cell FDRE 3
+  cell OBUF 1
+  site IOB33 3
+  clock clk period 10.000 slack 2.219 delay 7.645 levels 2
+  wns 2.219
+  routed_pips 0
+  seconds bitstream 0.141

@@ -120,5 +120,10 @@ What the table says, largest first:
 6. **Reticle takes as long as Vivado on carries and long chains.** `counter64`
    spends 33 of its 38 s in the placer on 98 lookup tables, where `barrel`, with
    about as many, spends 3 s.
+   Part of that was a test that scanned a move for every site it asked about,
+   for every cell of a chain's move: sorting a long move took it from 32 s to
+   24 s with the same bitstream, byte for byte. Most of the rest is that nearly
+   every move there is the whole chain, and the anneal's number of moves does
+   not know that.
 
 Where Reticle is ahead, it is on time alone: 8 or 9 s against 48 on most of these.
