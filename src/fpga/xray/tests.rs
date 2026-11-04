@@ -240,7 +240,13 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
     .unwrap();
     let wires: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut coverage = super::SiteCoverage::default();
-    let bels = parse::bels_of(&tiles[0], &features, &wires, &mut coverage);
+    let bels = parse::bels_of(
+        &tiles[0],
+        &features,
+        &wires,
+        LutRamModel::Vivado,
+        &mut coverage,
+    );
     let names: Vec<&str> = bels.iter().map(|b| b.name.as_str()).collect();
     assert!(names.contains(&"SLICEL_X0_ALUT"), "{names:?}");
     assert!(names.contains(&"SLICEL_X0_AFF"), "{names:?}");

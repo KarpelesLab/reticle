@@ -54,6 +54,7 @@
 use std::collections::BTreeMap;
 
 use super::XrayTile;
+use super::lutram::LutRamModel;
 
 // ---------------------------------------------------------------------------
 // Which site of a tile a feature prefix names
@@ -304,8 +305,21 @@ fn ff_data_wire(wires: &str, letter: char) -> String {
 /// The wire a lookup table's `O5` sits on, invented like
 /// [`ff_data_wire`]: the database gives `O5` no tile wire, only the muxes
 /// that select it (`<L>OUTMUX.O5`, `<L>FFMUX.O5`).
-fn lut5_wire(wires: &str, letter: impl std::fmt::Display) -> String {
+pub(super) fn lut5_wire(wires: &str, letter: impl std::fmt::Display) -> String {
     format!("{wires}_MUX_{letter}O5")
+}
+
+/// Whether the slice whose wires are prefixed `wires` gives its `CE` pin to a
+/// distributed RAM before its flip-flops, which a `SLICEM` does in
+/// [`LutRamModel::Vivado`]; see [`slice_pass_throughs_in`].
+fn ram_takes_ce(wires: &str, model: LutRamModel) -> bool {
+    model == LutRamModel::Vivado && wires == "CLBLM_M"
+}
+
+/// The clock enable a `SLICEM`'s flip-flops read, after `CEUSEDMUX`, invented
+/// like [`ff_data_wire`]: the database has only the pin, `CLBLM_M_CE`.
+pub(super) fn ff_enable_wire(wires: &str) -> String {
+    format!("{wires}_MUX_CE")
 }
 
 /// The slice position a flip-flop sub-element names, and whether it is
@@ -425,7 +439,21 @@ pub(super) struct BelPin {
 /// `IDELAYE2` is not in the milestone's path. A bel with no pins is
 /// placeable and unroutable, which is what the loader did for every bel
 /// before this module existed.
+#[cfg(test)]
 pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> {
+    bel_pins_in(tile_type, prefix, sub, LutRamModel::default())
+}
+
+/// [`bel_pins`] for a fabric whose `SLICEM`s offer `model`'s distributed
+/// RAM: in [`LutRamModel::Vivado`] a `SLICEM`'s flip-flops read their clock
+/// enable after `CEUSEDMUX`, on [`ff_enable_wire`], so that a RAM can have
+/// the `CE` pin before it; see [`slice_pass_throughs_in`].
+pub(super) fn bel_pins_in(
+    tile_type: &str,
+    prefix: &str,
+    sub: &str,
+    model: LutRamModel,
+) -> Vec<BelPin> {
     let Some((base, _, index)) = split_prefix(prefix) else {
         return Vec::new();
     };
@@ -481,6 +509,11 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
             } else {
                 (ff_data_wire(wires, letter), format!("{wires}_{letter}Q"))
             };
+            let en = if ram_takes_ce(wires, model) {
+                ff_enable_wire(wires)
+            } else {
+                format!("{wires}_CE")
+            };
             return vec![
                 BelPin {
                     role: "clk",
@@ -490,7 +523,7 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str, sub: &str) -> Vec<BelPin> 
                 BelPin { role: "q", wire: q },
                 BelPin {
                     role: "en",
-                    wire: format!("{wires}_CE"),
+                    wire: en,
                 },
                 BelPin {
                     role: "rst",
@@ -600,9 +633,16 @@ pub(super) struct PassThrough {
 /// The features are the ones Vivado's own bitstream for this board sets
 /// on exactly those two paths and nothing else — see [`super::io`]
 /// for how that was read.
+#[cfg(test)]
 pub(super) fn pass_throughs(tile_type: &str) -> Vec<PassThrough> {
+    pass_throughs_in(tile_type, LutRamModel::default())
+}
+
+/// [`pass_throughs`] for a fabric whose `SLICEM`s offer `model`'s
+/// distributed RAM; see [`slice_pass_throughs_in`].
+pub(super) fn pass_throughs_in(tile_type: &str, model: LutRamModel) -> Vec<PassThrough> {
     if clb_shared_prefix(tile_type).is_some() {
-        return slice_pass_throughs(tile_type);
+        return slice_pass_throughs_in(tile_type, model);
     }
     if matches!(tile_type, "CLK_HROW_BOT_R" | "CLK_HROW_TOP_R") {
         return horizontal_clock_buffers();
@@ -740,7 +780,19 @@ fn tristate_through(side: &str, wire: u32, n: u32) -> PassThrough {
 /// 2026-10-20, when the placer began refusing two flip-flops of different
 /// reset kinds or clock edges on sites that share pins
 /// (`place::slice_mode`).
-fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
+///
+/// **A `SLICEM`'s `CE` is a RAM's write enable too**, in Vivado's model: every
+/// RAM it writes takes `WEMUX.CE` (`super::lutram`), so `CE` reaches the RAM
+/// with no bit of its own and the flip-flops through `CEUSEDMUX`. The hop
+/// `CEUSEDMUX` costs is therefore from the pin to the flip-flops' side
+/// ([`ff_enable_wire`]), and the pin itself is fed from `FAN7` by the plain
+/// `ppips` line it has. Were it left on the hop in, a RAM's write enable
+/// would set `CEUSEDMUX`, and a flip-flop beside it with no enable of its own
+/// would load only when the RAM wrote. Both pins are behind the one wire, so
+/// the placer's pools give them one signal or one of them none
+/// (`place::ControlGroup`). [`LutRamModel::Legacy`] keeps the hop in, as it
+/// was, and every `SLICEL` is as it was.
+fn slice_pass_throughs_in(tile_type: &str, model: LutRamModel) -> Vec<PassThrough> {
     let Some(shared) = clb_shared_prefix(tile_type) else {
         return Vec::new();
     };
@@ -753,11 +805,19 @@ fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
             continue;
         };
         let (_, fan, ctrl) = shared_control_sources(shared, index);
-        out.push(PassThrough {
-            to: format!("{wires}_CE"),
-            from: fan,
-            features: vec![format!("{prefix}.CEUSEDMUX")],
-        });
+        if ram_takes_ce(wires, model) {
+            out.push(PassThrough {
+                to: ff_enable_wire(wires),
+                from: format!("{wires}_CE"),
+                features: vec![format!("{prefix}.CEUSEDMUX")],
+            });
+        } else {
+            out.push(PassThrough {
+                to: format!("{wires}_CE"),
+                from: fan,
+                features: vec![format!("{prefix}.CEUSEDMUX")],
+            });
+        }
         out.push(PassThrough {
             to: format!("{wires}_SR"),
             from: ctrl,
@@ -832,7 +892,7 @@ fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
 /// The wire a slice's `F7AMUX`, `F7BMUX` or `F8MUX` output sits on, invented
 /// like [`ff_data_wire`]: the database gives it no tile wire, only the muxes
 /// that select it (`<L>FFMUX.F7`, `<L>OUTMUX.F7`).
-fn wide_mux_wire(wires: &str, mux: &str) -> String {
+pub(super) fn wide_mux_wire(wires: &str, mux: &str) -> String {
     format!("{wires}_MUX_{mux}")
 }
 

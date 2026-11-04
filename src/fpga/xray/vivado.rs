@@ -681,14 +681,75 @@ pub fn vivado_implementation(
                     writer.lut(&format!("{name}__O5"), &half, *o5, &s, &b)?;
                 }
             }
-            "RAM64X1D" => {
-                // Its two lookup tables by name: see `lutram`, and Vivado's
-                // macro keeps the write port as `SP`, the read port as `DP`.
+            primitive if primitive.starts_with("RAM") && !primitive.starts_with("RAMB") => {
+                // A distributed RAM is a macro of Vivado's, placed by its
+                // leaves, which `testdata/fpga/vivado/lutram/vivado.txt` names
+                // as Vivado names them. A `_1` is the cell with its clock
+                // inverted, as Vivado has it.
                 let (s, _) = spell(false)?;
-                writer.plain(&name, cell, &view, "RAM64X1D")?;
-                writer.placed.push(format!("  {name}/SP {s}/D6LUT"));
-                writer.placed.push(format!("  {name}/DP {s}/C6LUT"));
-                writer.cells += 2;
+                let lower = site.bel.ends_with("_LO");
+                let (base, inverted) = match primitive.strip_suffix("_1") {
+                    Some(base) => (base, true),
+                    None => (primitive, false),
+                };
+                let leaves: Vec<(String, String)> = match base {
+                    "RAM64X1D" | "RAM32X1D" => {
+                        let n = if lower { 5 } else { 6 };
+                        vec![
+                            ("SP".to_owned(), format!("D{n}LUT")),
+                            ("DP".to_owned(), format!("C{n}LUT")),
+                        ]
+                    }
+                    "RAM64X1S" | "RAM32X1S" => vec![("SP".to_owned(), "D6LUT".to_owned())],
+                    "RAM64X2S" | "RAM32X2S" => {
+                        let one = base.replace("X2S", "X1S");
+                        vec![
+                            (format!("{one}0/SP"), "D6LUT".to_owned()),
+                            (format!("{one}1/SP"), "C6LUT".to_owned()),
+                        ]
+                    }
+                    "RAM64M" => ['A', 'B', 'C', 'D']
+                        .iter()
+                        .map(|l| (format!("RAM{l}"), format!("{l}6LUT")))
+                        .collect(),
+                    "RAM32M" => ['A', 'B', 'C', 'D']
+                        .iter()
+                        .flat_map(|l| {
+                            [
+                                (format!("RAM{l}"), format!("{l}5LUT")),
+                                (format!("RAM{l}_D1"), format!("{l}6LUT")),
+                            ]
+                        })
+                        .collect(),
+                    // Their wide multiplexers are leaves too, and how Vivado
+                    // names those has not been asked.
+                    _ => {
+                        return fail(format!(
+                            "`{}` is a `{primitive}`, which is not written for Vivado yet",
+                            instance.name
+                        ));
+                    }
+                };
+                let mut written = cell.clone();
+                if inverted {
+                    written
+                        .params
+                        .set("IS_WCLK_INVERTED", AttrValue::Const(Const::from_u64(1, 1)));
+                }
+                writer.plain(&name, &written, &view, base)?;
+                // Vivado places a `RAM32M`, a `RAM64M` or a `RAM64X2S` by its
+                // site alone, and expands it by its own shape, which is this
+                // fabric's: placed leaf by leaf, it says `Cannot expand macro
+                // instance` (12-1409) on any site, alone in the design.
+                if matches!(base, "RAM32M" | "RAM64M" | "RAM64X2S") {
+                    writer.placed.push(format!("  {name} {s}"));
+                    writer.cells += leaves.len();
+                } else {
+                    for (leaf, bel) in leaves {
+                        writer.placed.push(format!("  {name}/{leaf} {s}/{bel}"));
+                        writer.cells += 1;
+                    }
+                }
             }
             primitive => {
                 let (s, b) = spell(false)?;

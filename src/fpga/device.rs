@@ -186,6 +186,17 @@
 //! a time drives all of them alike, and leaving the upper bits
 //! unconnected would write one byte and drop the rest.
 //!
+//! # Primitives of one role on different sites
+//!
+//! A primitive goes on sites of its role's kind, unless its line names
+//! another with `site`: every 7-series distributed RAM is a `lutram`, and
+//! they take different lookup tables of a `SLICEM`, so each has a kind of
+//! site of its own.
+//!
+//! ```text
+//! bel RAM32M lutram site lutram_m32 outputs DOA,DOB,DOC,DOD port ...
+//! ```
+//!
 //! # What a `count` is, and what it is not
 //!
 //! `bel … count N` and `bram … count N` say **how many the part number is
@@ -683,9 +694,28 @@ pub struct BelKind {
     /// outputs apart from its inputs. Empty means the primitive is only
     /// ever made by mapping, which knows.
     pub outputs: Vec<String>,
+    /// The kind of site the placer puts an instance of it on, written
+    /// `site <kind>`, when that is not the role's keyword; `None` for the
+    /// role's own.
+    ///
+    /// A role says what a primitive is for, and every primitive of a role
+    /// went on the same sites until a family had primitives of one role
+    /// that fill different parts of a site: a 7-series `RAM64X1D` is two of
+    /// a `SLICEM`'s lookup tables and a `RAM32M` all four, and a placer that
+    /// put one on the other's site would leave pins with no wire. So each
+    /// names its own (`site lutram_m32`), and the fabric declares sites of
+    /// those kinds. See [`BelKind::site_kind`].
+    pub site: Option<String>,
 }
 
 impl BelKind {
+    /// The kind of site an instance goes on: [`BelKind::site`], or the
+    /// role's keyword.
+    #[must_use]
+    pub fn site_kind(&self) -> &str {
+        self.site.as_deref().unwrap_or(self.role.keyword())
+    }
+
     /// A primitive with a name and a role and nothing else.
     pub fn new(name: impl Into<String>, role: BelRole) -> Self {
         BelKind {
@@ -700,6 +730,7 @@ impl BelKind {
             io_dirs: Vec::new(),
             absorbs: Vec::new(),
             outputs: Vec::new(),
+            site: None,
         }
     }
 
@@ -2435,6 +2466,9 @@ fn write_bel(bel: &BelKind) -> String {
     if !bel.outputs.is_empty() {
         line.push_str(&format!(" outputs {}", join(&bel.outputs)));
     }
+    if let Some(site) = &bel.site {
+        line.push_str(&format!(" site {}", quote(site)));
+    }
     line.push_str(&write_pairs("port", &bel.ports));
     write_params(&mut line, "param", &bel.params);
     for (condition, params) in &bel.cond_params {
@@ -3123,6 +3157,14 @@ impl<'a> Parser<'a> {
                     for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
                         bel.outputs.push(word.to_owned());
                     }
+                }
+                "site" => {
+                    let Some(token) = line.get(index) else {
+                        self.error(line.span, "expected a site kind after `site`");
+                        break;
+                    };
+                    index += 1;
+                    bel.site = Some(token.as_str().to_owned());
                 }
                 "port" => bel.ports.extend(self.pairs(line, &mut index)),
                 keyword if keyword == "param" || keyword.starts_with("param_") => {
@@ -4155,6 +4197,25 @@ end
         let again = again.unwrap();
         assert_eq!(device, again);
         assert_eq!(text, again.to_text());
+    }
+
+    /// A `bel` line's `site` clause names the kind of site its instances
+    /// go on, reads back as written, and leaves a line without one on its
+    /// role's own. Would catch the clause dropped by `to_text`, which would
+    /// put a `RAM32M` on a `RAM64X1D`'s site the next time the file was read.
+    #[test]
+    fn a_bel_line_may_name_its_own_kind_of_site() {
+        let text = "device d\n  family demo\n  \
+                    bel R32 lutram site lutram_m32 outputs O port wclk=C o=O\n  \
+                    bel R64 lutram port wclk=C dout=O\nend\n";
+        let (device, diags) = parse(text);
+        assert_eq!(diags, "");
+        let device = device.unwrap();
+        assert_eq!(device.bels[0].site_kind(), "lutram_m32");
+        assert_eq!(device.bels[1].site_kind(), "lutram");
+        let again = parse(&device.to_text()).0.unwrap();
+        assert_eq!(device, again);
+        assert!(device.to_text().contains(" site lutram_m32 "));
     }
 
     /// A `bel` line's `absorbs` clause reads back as written, and the

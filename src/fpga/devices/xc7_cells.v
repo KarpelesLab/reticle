@@ -805,29 +805,19 @@ module CFGLUT5 #(parameter [31:0] INIT = 32'h0, parameter [0:0] IS_CLK_INVERTED 
 endmodule
 
 module RAM16X1S #(parameter [15:0] INIT = 16'h0) (output O, input A0, input A1, input A2, input A3, input D, input WCLK, input WE);
-  reg [15:0] mem = INIT;
-  assign O = mem[{A3, A2, A1, A0}];
-  always @(posedge WCLK) if (WE) mem[{A3, A2, A1, A0}] <= D;
-endmodule
-
-module RAM16X1S_1 #(parameter [15:0] INIT = 16'h0) (output O, input A0, input A1, input A2, input A3, input D, input WCLK, input WE);
-  reg [15:0] mem = INIT;
-  assign O = mem[{A3, A2, A1, A0}];
-  always @(negedge WCLK) if (WE) mem[{A3, A2, A1, A0}] <= D;
+  RAM32X1S #(.INIT({16'h0, INIT})) r (.O(O), .A0(A0), .A1(A1), .A2(A2), .A3(A3), .A4(1'b0), .D(D), .WCLK(WCLK), .WE(WE));
 endmodule
 
 module RAM16X1D #(parameter [15:0] INIT = 16'h0) (output DPO, output SPO, input A0, input A1, input A2, input A3, input DPRA0, input DPRA1, input DPRA2, input DPRA3, input D, input WCLK, input WE);
-  reg [15:0] mem = INIT;
-  assign SPO = mem[{A3, A2, A1, A0}];
-  assign DPO = mem[{DPRA3, DPRA2, DPRA1, DPRA0}];
-  always @(posedge WCLK) if (WE) mem[{A3, A2, A1, A0}] <= D;
+  RAM32X1D #(.INIT({16'h0, INIT})) r (.DPO(DPO), .SPO(SPO), .A0(A0), .A1(A1), .A2(A2), .A3(A3), .A4(1'b0), .DPRA0(DPRA0), .DPRA1(DPRA1), .DPRA2(DPRA2), .DPRA3(DPRA3), .DPRA4(1'b0), .D(D), .WCLK(WCLK), .WE(WE));
+endmodule
+
+module RAM16X1S_1 #(parameter [15:0] INIT = 16'h0) (output O, input A0, input A1, input A2, input A3, input D, input WCLK, input WE);
+  RAM32X1S_1 #(.INIT({16'h0, INIT})) r (.O(O), .A0(A0), .A1(A1), .A2(A2), .A3(A3), .A4(1'b0), .D(D), .WCLK(WCLK), .WE(WE));
 endmodule
 
 module RAM16X1D_1 #(parameter [15:0] INIT = 16'h0) (output DPO, output SPO, input A0, input A1, input A2, input A3, input DPRA0, input DPRA1, input DPRA2, input DPRA3, input D, input WCLK, input WE);
-  reg [15:0] mem = INIT;
-  assign SPO = mem[{A3, A2, A1, A0}];
-  assign DPO = mem[{DPRA3, DPRA2, DPRA1, DPRA0}];
-  always @(negedge WCLK) if (WE) mem[{A3, A2, A1, A0}] <= D;
+  RAM32X1D_1 #(.INIT({16'h0, INIT})) r (.DPO(DPO), .SPO(SPO), .A0(A0), .A1(A1), .A2(A2), .A3(A3), .A4(1'b0), .DPRA0(DPRA0), .DPRA1(DPRA1), .DPRA2(DPRA2), .DPRA3(DPRA3), .DPRA4(1'b0), .D(D), .WCLK(WCLK), .WE(WE));
 endmodule
 
 module RAM32X1S #(parameter [31:0] INIT = 32'h0, parameter [0:0] IS_WCLK_INVERTED = 1'b0) (output O, input A0, input A1, input A2, input A3, input A4, input D, input WCLK, input WE);
@@ -1091,6 +1081,27 @@ module RAM64M #(parameter [63:0] INIT_A = 64'h0, parameter [63:0] INIT_B = 64'h0
     c[ADDRD] <= DIC;
     d[ADDRD] <= DID;
   end
+endmodule
+
+module RAM32M_1 #(parameter [63:0] INIT_A = 64'h0, parameter [63:0] INIT_B = 64'h0, parameter [63:0] INIT_C = 64'h0,
+  parameter [63:0] INIT_D = 64'h0)
+  (output [1:0] DOA, output [1:0] DOB, output [1:0] DOC, output [1:0] DOD, input [4:0] ADDRA, input [4:0] ADDRB,
+   input [4:0] ADDRC, input [4:0] ADDRD, input [1:0] DIA, input [1:0] DIB, input [1:0] DIC, input [1:0] DID,
+   input WCLK, input WE);
+  RAM32M #(.INIT_A(INIT_A), .INIT_B(INIT_B), .INIT_C(INIT_C), .INIT_D(INIT_D), .IS_WCLK_INVERTED(1'b1)) r (
+    .DOA(DOA), .DOB(DOB), .DOC(DOC), .DOD(DOD), .ADDRA(ADDRA), .ADDRB(ADDRB), .ADDRC(ADDRC), .ADDRD(ADDRD),
+    .DIA(DIA), .DIB(DIB), .DIC(DIC), .DID(DID), .WCLK(WCLK), .WE(WE));
+endmodule
+module RAM64M_1 #(parameter [63:0] INIT_A = 64'h0, parameter [63:0] INIT_B = 64'h0, parameter [63:0] INIT_C = 64'h0,
+  parameter [63:0] INIT_D = 64'h0)
+  (output DOA, output DOB, output DOC, output DOD, input [5:0] ADDRA, input [5:0] ADDRB, input [5:0] ADDRC,
+   input [5:0] ADDRD, input DIA, input DIB, input DIC, input DID, input WCLK, input WE);
+  RAM64M #(.INIT_A(INIT_A), .INIT_B(INIT_B), .INIT_C(INIT_C), .INIT_D(INIT_D), .IS_WCLK_INVERTED(1'b1)) r (
+    .DOA(DOA), .DOB(DOB), .DOC(DOC), .DOD(DOD), .ADDRA(ADDRA), .ADDRB(ADDRB), .ADDRC(ADDRC), .ADDRD(ADDRD),
+    .DIA(DIA), .DIB(DIB), .DIC(DIC), .DID(DID), .WCLK(WCLK), .WE(WE));
+endmodule
+module RAM128X1D_1 #(parameter [127:0] INIT = 128'h0) (output DPO, output SPO, input [6:0] A, input [6:0] DPRA, input D, input WCLK, input WE);
+  RAM128X1D #(.INIT(INIT), .IS_WCLK_INVERTED(1'b1)) r (.DPO(DPO), .SPO(SPO), .A(A), .DPRA(DPRA), .D(D), .WCLK(WCLK), .WE(WE));
 endmodule
 
 module ROM16X1 #(parameter [15:0] INIT = 16'h0) (output O, input A0, input A1, input A2, input A3);

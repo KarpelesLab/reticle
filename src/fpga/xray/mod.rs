@@ -173,6 +173,7 @@ mod io;
 mod iologic;
 mod lutpack;
 mod lutram;
+pub use lutram::LutRamModel;
 mod lutswap;
 mod parse;
 mod regional;
@@ -382,6 +383,10 @@ pub struct XrayOptions {
     /// reason [`XrayOptions::shift_registers`] is: the ChipWhisperer-Husky Plus,
     /// which has none of its own, routed differently with them there.
     pub regional_clocks: bool,
+    /// Which distributed RAM a `SLICEM` offers: every shape Vivado uses, by
+    /// default, or the one `RAM64X1D` on `WE` this flow had before, which a
+    /// build measured on a board keeps. See `lutram`.
+    pub lutram: LutRamModel,
 }
 
 impl Default for XrayOptions {
@@ -400,6 +405,7 @@ impl Default for XrayOptions {
             io_standard: "LVCMOS33".to_owned(),
             shift_registers: false,
             regional_clocks: false,
+            lutram: LutRamModel::default(),
         }
     }
 }
@@ -1133,6 +1139,7 @@ impl XrayDatabase {
             &part,
             options.shift_registers,
             options.regional_clocks,
+            options.lutram,
             &mut stats,
         );
         let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
@@ -1347,6 +1354,8 @@ impl XrayDatabase {
         let mut out = Vec::new();
         let mut tiles_touched = 0usize;
         let mut tiles_unnamed: Vec<String> = Vec::new();
+        let mut dynamic = super::xc7::DynamicBits::new();
+        let mut dynamic_tables: Vec<String> = Vec::new();
         for tile in &tiles {
             // The tile's own bits, in the tile-local coordinates a
             // `segbits` line uses, remembering where each came from so
@@ -1417,8 +1426,32 @@ impl XrayDatabase {
                             unexplained.remove(where_it_is);
                         }
                     }
+                    if let Some(table) = feature
+                        .name
+                        .strip_suffix(".RAM")
+                        .or_else(|| feature.name.strip_suffix(".SRL"))
+                        .filter(|t| t.ends_with("LUT"))
+                    {
+                        dynamic_tables.push(format!("{table}.INIT["));
+                    }
                 }
             }
+            // A distributed RAM's or a shift register's contents, which its
+            // frame's ECC leaves out: see `xc7::wanted_ecc_without`.
+            for feature in known.features() {
+                if !dynamic_tables
+                    .iter()
+                    .any(|t| feature.name.starts_with(t.as_str()))
+                {
+                    continue;
+                }
+                for bit in &feature.ones {
+                    if let Some(where_it_is) = ones.get(bit) {
+                        dynamic.insert(*where_it_is);
+                    }
+                }
+            }
+            dynamic_tables.clear();
         }
         out.sort();
         out.dedup();
@@ -1456,7 +1489,7 @@ impl XrayDatabase {
             features: out,
             bits: total + ecc_bits,
             ecc_bits,
-            ecc_faults: data.ecc_faults(),
+            ecc_faults: data.ecc_faults_without(&dynamic),
             unexplained: unexplained.len(),
             leftovers,
             tiles: tiles_touched,
@@ -1998,6 +2031,7 @@ impl XrayDatabase {
         part: &Part,
         shift_registers: bool,
         regional_clocks: bool,
+        lutram: LutRamModel,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -2078,7 +2112,7 @@ impl XrayDatabase {
             // `sites::pass_throughs`. Where the two describe the same
             // pair, this one wins, or the router would find a copy of
             // the hop with no bits on it and turn nothing on.
-            let mut passes = sites::pass_throughs(name);
+            let mut passes = sites::pass_throughs_in(name, lutram);
             if shift_registers {
                 passes.extend(srl::tile_pass_throughs(name));
             }
@@ -2312,7 +2346,7 @@ impl XrayDatabase {
                 .iter()
                 .map(|w| w.name.as_str())
                 .collect();
-            let mut bels = parse::bels_of(tile, set, &declared, &mut stats.coverage);
+            let mut bels = parse::bels_of(tile, set, &declared, lutram, &mut stats.coverage);
             if shift_registers {
                 bels.extend(srl::bels(&tile.tile_type, "SLICEM_X0", set, &declared));
             }
@@ -2676,6 +2710,45 @@ impl XrayFabric {
             });
         }
         Ok(())
+    }
+
+    /// The set bits of `bits` that are a distributed RAM's contents, which a
+    /// frame's ECC leaves out as Vivado's does: see
+    /// [`super::xc7::wanted_ecc_without`]. They are every bit a `lutram` bel's
+    /// parameters can set, of every RAM placed, where it is set.
+    pub fn dynamic_table_bits(
+        &self,
+        graph: &super::arch::RoutingGraph,
+        netlist: &super::place::Netlist,
+        placement: &super::place::Placement,
+        bits: &super::bitstream::Bitstream,
+    ) -> super::xc7::DynamicBits {
+        let mut out = super::xc7::DynamicBits::new();
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "lutram" && !instance.kind.starts_with("lutram_") {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let Some(bel) = self.arch.tile_types[site.tile_type].bel(&site.bel) else {
+                continue;
+            };
+            for entry in &bel.config {
+                let super::arch::ConfigEntry::Param { at, .. } = entry else {
+                    continue;
+                };
+                if bits.get(site.tile, *at) != Some(true) {
+                    continue;
+                }
+                if let Some((address, word, bit)) = self.frames.locate(site.tile, *at) {
+                    let word = u32::try_from(word).unwrap_or(u32::MAX);
+                    out.insert((address.to_u32(), word, bit));
+                }
+            }
+        }
+        out
     }
 
     /// Switches on the rebuffer enables of every global clock track the
@@ -3358,7 +3431,9 @@ pub const ROUTE_PASSES: u32 = 100;
 pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
     match kind {
         "ff" | "latch" | "srl32" | "srl16" => &["clk"],
-        "lutram" => &["wclk"],
+        // Every shape of distributed RAM: `lutram`, and `lutram_m32` and the
+        // others of `super::lutram`.
+        kind if kind == "lutram" || kind.starts_with("lutram_") => &["wclk"],
         "bram" => &["p0_clk", "p1_clk"],
         "mmcm" => &["dclk", "psclk"],
         "pll" | "sysmon" => &["dclk"],

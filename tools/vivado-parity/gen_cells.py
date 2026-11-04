@@ -205,7 +205,17 @@ def write(ck,neg,body,invp):
     if invp:
         return f"  generate\n    if (IS_WCLK_INVERTED) begin\n      always @(negedge {ck}) {body}\n    end else begin\n      always @(posedge {ck}) {body}\n    end\n  endgenerate"
     return f"  always @({'negedge' if neg else 'posedge'} {ck}) {body}"
+# Sixteen words are what Vivado builds as thirty-two with the top address bit
+# low (testdata/fpga/vivado/lutram/), and a build keeps a named 32-word cell as
+# the device's, so these are written through those.
+for neg in ('', '_1'):
+    a=', '.join(f'.A{k}(A{k})' for k in range(4))
+    d=', '.join(f'.DPRA{k}(DPRA{k})' for k in range(4))
+    m(f"module RAM16X1S{neg} #(parameter [15:0] INIT = 16'h0) (output O, {inp('A',4)}, input D, input WCLK, input WE);\n  RAM32X1S{neg} #(.INIT({{16'h0, INIT}})) r (.O(O), {a}, .A4(1'b0), .D(D), .WCLK(WCLK), .WE(WE));\nendmodule")
+    m(f"module RAM16X1D{neg} #(parameter [15:0] INIT = 16'h0) (output DPO, output SPO, {inp('A',4)}, {inp('DPRA',4)}, input D, input WCLK, input WE);\n  RAM32X1D{neg} #(.INIT({{16'h0, INIT}})) r (.DPO(DPO), .SPO(SPO), {a}, .A4(1'b0), {d}, .DPRA4(1'b0), .D(D), .WCLK(WCLK), .WE(WE));\nendmodule")
 for words,n,invp in ((16,4,False),(32,5,True),(64,6,True),(128,7,True),(256,8,False),(512,9,False)):
+    if words==16:
+        continue
     i=f"parameter [{words-1}:0] INIT = {words}'h0"+(", parameter [0:0] IS_WCLK_INVERTED = 1'b0" if invp else '')
     if words<=256:
       addrp=(f'input [{n-1}:0] A' if words>=256 else inp('A',n)); a=('A' if words>=256 else '{'+adr('A',n)+'}')
@@ -284,6 +294,29 @@ module RAM64M #(parameter [63:0] INIT_A = 64'h0, parameter [63:0] INIT_B = 64'h0
     c[ADDRD] <= DIC;
     d[ADDRD] <= DID;
   end
+endmodule""")
+# The falling edge of the cells the vendor gives no `_1` of: the flow names a
+# cell whose IS_WCLK_INVERTED is one so (fpga::flow), since the slice's clock
+# inverter is its flip-flops' too, and these are what a simulator reads.
+m("""module RAM32M_1 #(parameter [63:0] INIT_A = 64'h0, parameter [63:0] INIT_B = 64'h0, parameter [63:0] INIT_C = 64'h0,
+  parameter [63:0] INIT_D = 64'h0)
+  (output [1:0] DOA, output [1:0] DOB, output [1:0] DOC, output [1:0] DOD, input [4:0] ADDRA, input [4:0] ADDRB,
+   input [4:0] ADDRC, input [4:0] ADDRD, input [1:0] DIA, input [1:0] DIB, input [1:0] DIC, input [1:0] DID,
+   input WCLK, input WE);
+  RAM32M #(.INIT_A(INIT_A), .INIT_B(INIT_B), .INIT_C(INIT_C), .INIT_D(INIT_D), .IS_WCLK_INVERTED(1'b1)) r (
+    .DOA(DOA), .DOB(DOB), .DOC(DOC), .DOD(DOD), .ADDRA(ADDRA), .ADDRB(ADDRB), .ADDRC(ADDRC), .ADDRD(ADDRD),
+    .DIA(DIA), .DIB(DIB), .DIC(DIC), .DID(DID), .WCLK(WCLK), .WE(WE));
+endmodule
+module RAM64M_1 #(parameter [63:0] INIT_A = 64'h0, parameter [63:0] INIT_B = 64'h0, parameter [63:0] INIT_C = 64'h0,
+  parameter [63:0] INIT_D = 64'h0)
+  (output DOA, output DOB, output DOC, output DOD, input [5:0] ADDRA, input [5:0] ADDRB, input [5:0] ADDRC,
+   input [5:0] ADDRD, input DIA, input DIB, input DIC, input DID, input WCLK, input WE);
+  RAM64M #(.INIT_A(INIT_A), .INIT_B(INIT_B), .INIT_C(INIT_C), .INIT_D(INIT_D), .IS_WCLK_INVERTED(1'b1)) r (
+    .DOA(DOA), .DOB(DOB), .DOC(DOC), .DOD(DOD), .ADDRA(ADDRA), .ADDRB(ADDRB), .ADDRC(ADDRC), .ADDRD(ADDRD),
+    .DIA(DIA), .DIB(DIB), .DIC(DIC), .DID(DID), .WCLK(WCLK), .WE(WE));
+endmodule
+module RAM128X1D_1 #(parameter [127:0] INIT = 128'h0) (output DPO, output SPO, input [6:0] A, input [6:0] DPRA, input D, input WCLK, input WE);
+  RAM128X1D #(.INIT(INIT), .IS_WCLK_INVERTED(1'b1)) r (.DPO(DPO), .SPO(SPO), .A(A), .DPRA(DPRA), .D(D), .WCLK(WCLK), .WE(WE));
 endmodule""")
 for words,n in ((16,4),(32,5),(64,6),(128,7),(256,8)):
     p=f"parameter [{words-1}:0] INIT = {words}'h0"

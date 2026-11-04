@@ -865,7 +865,7 @@ fn describe(device: &Device, primitive: &str) -> Option<(String, Vec<(String, St
     let mut bases: Vec<(String, String)> = Vec::new();
     let mut kind: Option<String> = None;
     for bel in device.bels.iter().filter(|b| b.name == primitive) {
-        kind = Some(bel.role.keyword().to_owned());
+        kind = Some(bel.site_kind().to_owned());
         for (role, names) in &bel.ports {
             let role = if role == "oen" { "oe" } else { role.as_str() };
             let names: Vec<&str> = names.split(',').collect();
@@ -1805,6 +1805,11 @@ const MAX_POOL: usize = 8;
 /// rising edge may sit beside either kind of flip-flop on a rising edge: see
 /// [`SiteRules::same_mode`]. Vivado puts one beside an `FDRE`, and a `FFSYNC`
 /// means nothing to it.
+///
+/// A `SLICEM`'s distributed RAM is the same: it writes on the slice's `CLK`
+/// through the same `CLKINV` and has no reset. Vivado sets `CLKINV` for a RAM
+/// whose `IS_WCLK_INVERTED` is one (`testdata/fpga/vivado/lutram/`), which the
+/// flow names `<RAM>_1`, so a RAM is a shift register's mode on its edge.
 fn slice_mode(primitive: &str, gate_inverted: bool) -> u8 {
     match (primitive, gate_inverted) {
         ("LDCE" | "LDPE", false) => return 5,
@@ -1822,6 +1827,16 @@ fn slice_mode(primitive: &str, gate_inverted: bool) -> u8 {
         ("FDRE" | "FDSE", true) => 2,
         ("FDCE" | "FDPE", false) => 3,
         ("FDCE" | "FDPE", true) => 4,
+        (
+            "RAM32X1S" | "RAM64X1S" | "RAM32X2S" | "RAM64X2S" | "RAM32X1D" | "RAM64X1D"
+            | "RAM128X1S" | "RAM128X1D" | "RAM256X1S" | "RAM32M" | "RAM64M",
+            false,
+        ) => 7,
+        (
+            "RAM32X1S" | "RAM64X1S" | "RAM32X2S" | "RAM64X2S" | "RAM32X1D" | "RAM64X1D"
+            | "RAM128X1S" | "RAM128X1D" | "RAM256X1S" | "RAM32M" | "RAM64M",
+            true,
+        ) => 8,
         _ => 0,
     }
 }
@@ -2357,7 +2372,8 @@ impl SiteRules {
     }
 
     /// Whether two instances on sites that share a pin agree on the mode
-    /// their sites share: either needs none, or both the same.
+    /// their sites share: in each field of [`slice_mode`], either needs
+    /// none, or both the same.
     fn same_mode(&self, a: usize, b: usize) -> bool {
         modes_agree(self.mode[a], self.mode[b])
     }
@@ -2548,7 +2564,8 @@ impl SiteRules {
             };
             if !self.same_mode(instance, neighbour) {
                 return Some(
-                    "a flip-flop of another reset kind or clock edge shares its pins".to_owned(),
+                    "a flip-flop or RAM of another reset kind or clock edge shares its pins"
+                        .to_owned(),
                 );
             }
             let run = *start as usize..(*start + *len) as usize;
@@ -12603,10 +12620,12 @@ mod tests {
     /// clock edge.** Two flip-flops on one clock in one two-site slice:
     /// an `FDRE` beside an `FDSE` is allowed, since both are synchronous
     /// and `ZRST` is each one's own; beside an `FDCE`, an `FDPE` or an
-    /// `FDRE_1` it is refused, and the refusal says why. Would catch the mode ignored, which is a
-    /// bitstream whose asynchronous resets are synchronous with nothing
-    /// to say so; would not catch a primitive missing from `slice_mode`,
-    /// which places as it always did.
+    /// `FDRE_1` it is refused, and the refusal says why. A distributed RAM
+    /// beside it is allowed on the same edge and refused on the other. Would
+    /// catch the mode ignored, which is a bitstream whose asynchronous resets
+    /// are synchronous with nothing to say so, and a RAM given a reset kind,
+    /// which would keep it from an `FDCE`'s slice for nothing; would not catch
+    /// a primitive missing from `slice_mode`, which places as it always did.
     #[test]
     fn flip_flops_sharing_a_slice_agree_on_reset_kind_and_clock_edge() {
         let (_, graph) = clocked(1);
@@ -12616,6 +12635,11 @@ mod tests {
             ("FDCE", false),
             ("FDPE", false),
             ("FDRE_1", false),
+            // A distributed RAM has a clock edge and no reset kind.
+            ("RAM64X1D", true),
+            ("RAM32M", true),
+            ("RAM64X1D_1", false),
+            ("RAM32M_1", false),
         ] {
             let mut netlist = clocked_by(&[0, 0]);
             netlist.instances[0].primitive = "FDRE".to_owned();

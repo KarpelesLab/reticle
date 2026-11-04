@@ -243,6 +243,14 @@ Options:
                      own, as Vivado gives them. `auto` (the default) leaves one
                      that does not divide and is always enabled on a global
                      buffer, as it has always been built, and `on` gives all a site.
+  --memories <vivado|legacy>
+                     7 series: map memories as Vivado 2026.1 does (the
+                     default): block RAM from 1024 bits, by its rule, and
+                     below that every distributed RAM shape it uses, with
+                     each named cell kept as that cell. `legacy` is the
+                     mapping before, one `RAM64X1D` shape on the slice's
+                     `WE` pin and block RAM from 256 bits, which a build
+                     measured on a board keeps.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`
@@ -832,6 +840,7 @@ fn spec_for(usage: &str) -> Spec {
                 "pair-tables",
                 "wide-muxes",
                 "regional-clocks",
+                "memories",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -1056,6 +1065,20 @@ fn named_top(design: &Design, name: &str) -> Option<reticle::ir::ModuleId> {
         .strip_prefix(name)
         .is_some_and(|rest| rest.starts_with('$'))
         .then_some(top)
+}
+
+/// Whether `--memories legacy` asked for the memory mapping from before
+/// Vivado's was measured; see the usage text.
+fn memories_legacy(args: &Args) -> Result<bool, ArgError> {
+    match args.option("memories") {
+        None | Some("vivado") => Ok(false),
+        Some("legacy") => Ok(true),
+        Some(other) => Err(ArgError::BadValue {
+            option: "memories".to_owned(),
+            value: other.to_owned(),
+            expected: "`vivado` or `legacy`",
+        }),
+    }
 }
 
 fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
@@ -2408,12 +2431,16 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             });
         }
     };
+    // A distributed RAM named in a design is the device's cell too, unless
+    // the build asked for the mapping before, which made it logic.
+    let vivado_memories = !memories_legacy(args)?;
     let kept: Vec<String> = device
         .bels
         .iter()
         .filter(|b| {
-            use reticle::fpga::BelRole::{Mux7, Mux8};
-            wide_muxes && matches!(b.role, Mux7 | Mux8)
+            use reticle::fpga::BelRole::{LutRam, Mux7, Mux8};
+            (wide_muxes && matches!(b.role, Mux7 | Mux8))
+                || (vivado_memories && device.family == "xc7" && b.role == LutRam)
         })
         .map(|b| b.name.clone())
         .collect();
@@ -2486,6 +2513,7 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             }
         }
     }
+    options.map.vivado_memories = vivado_memories && device.family == "xc7";
     // **The 7-series places a hard multiplier; no other backend here
     // does**, so for their bitstreams a multiply stays in lookup tables,
     // which are slower and correct. `fpga::trellis::dsp` says why for the
@@ -3805,6 +3833,9 @@ fn write_xc7_bitstream(
     // A shift register's sites and wires, and a regional clock buffer's, for a
     // design that has one.
     let mut options = XrayOptions::new().for_design(design, top, device);
+    if memories_legacy(args).map_err(|e| e.to_string())? {
+        options.lutram = reticle::fpga::xray::LutRamModel::Legacy;
+    }
     if let Some(text) = args.option("region") {
         let numbers: Result<Vec<u32>, _> = text.split(',').map(str::parse::<u32>).collect();
         match numbers {
@@ -4883,7 +4914,10 @@ fn write_xc7_bitstream(
     .map_err(|e| e.to_string())?;
     db.finish_frames(&files, &mut frames, &bit_options)
         .map_err(|e| e.to_string())?;
-    let frames = frames.with_ecc();
+    // A distributed RAM's contents are left out of its frame's ECC, as
+    // Vivado leaves them out: see `xc7::wanted_ecc_without`.
+    let dynamic = fabric.dynamic_table_bits(&graph, &netlist, &placement, &tiles);
+    let frames = frames.with_ecc_without(&dynamic);
     // Every set bit read back through the database, as the ECP5 flow
     // does: a bit nothing names is a bit nobody can account for. And the
     // arcs those bits select must be the ones the router chose and the

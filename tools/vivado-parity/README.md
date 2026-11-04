@@ -45,6 +45,14 @@ models or IP.
   keeps its answer, read back by `--decode`, in `vivado.txt` there. `cmt_sweep.sh`,
   `cmt_sweep.tcl` and `cmt_sweep.py` change one parameter at a time of a clock manager
   `clocks.sh` routed, and keep the registers of each in `registers.txt` there.
+- `gen_lutram.py` writes `testdata/fpga/vivado/lutram/`, and `lutram.sh` with
+  `lutram_probe.tcl` asks Vivado what it makes of those designs: each memory
+  cell's leaves, bels and site pins, a bitstream, and its routed netlist on its
+  own simulation models, which `gen_lutram_vectors.py` runs under `xsim` into
+  `xsim.txt` there. `gen_lutram.py --sweep` and `lutram_sweep.tcl` ask its
+  synthesis which memories go to block RAM, into `sweep.txt`;
+  `tests/fpga_xray_lutram_vivado.rs` decodes the bitstreams into `vivado.txt`
+  and holds Reticle to all of it.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

@@ -34,7 +34,9 @@ that acts on a falling edge now starts with its clock high.
 
 **Not checked:** most of these become logic, and what that costs is in the table
 below. `MUXF7`, `MUXF8` and their `_L` and `_D` forms, the latches and the shift
-registers do not; each has a section of its own.
+registers do not; each has a section of its own. Nor do the distributed RAMs Vivado
+puts on a `SLICEM` ([Distributed RAM](#distributed-ram)), with `--memories legacy`
+the exception to that.
 
 ## Which primitives build
 
@@ -249,12 +251,12 @@ routed report, in `vivado.txt`. Run on 2026-11-04, with shift registers.
 | gray_cdc | Vivado | 15 | 37 | 3 | 12 | 0 | 0 | 0 | 0 | 2.255 | 46 |
 | | Reticle | 26 | 37 | 3 | 12 | 0 | 0 | 0 | 0 | 2.68 | 9 |
 | lutram32 | Vivado | 7 | 70 | 0 | 0 | 0 | 51 | 0 | 0 | 2.967 | 47 |
-| | Reticle | 9 | 38 | 0 | 0 | 0 | 0 | 2 | 0 | 5.07 | 9 |
+| | Reticle | 10 | 70 | 0 | 0 | 0 | 51 | 0 | 0 | 4.95 | 11 |
 | mul18 | Vivado | 7 | 36 | 0 | 0 | 0 | 0 | 0 | 1 | 2.833 | 47 |
 | | Reticle, then | 746 | 145 | 0 | 0 | 0 | 0 | 0 | 0 | 29.74 | 17 |
 | | Reticle | 9 | 36 | 0 | 0 | 0 | 0 | 0 | 1 | 5.24 | 10 |
 | regfile_alu | Vivado | 351 | 20 | 20 | 1 | 5 | 102 | 0 | 0 | 7.859 | 64 |
-| | Reticle | 373 | 20 | 8 | 1 | 0 | 64 | 0 | 0 | 10.23 | 14 |
+| | Reticle | 373 | 20 | 8 | 1 | 0 | 102 | 0 | 0 | 10.38 | 16 |
 | srl_delay | Vivado | 7 | 34 | 0 | 2 | 0 | 0 | 0 | 0 | 2.739 | 46 |
 | | Reticle | 9 | 34 | 0 | 2 | 0 | 0 | 0 | 0 | 4.90 | 9 |
 | widemux | Vivado | 275 | 1049 | 0 | 0 | 192 | 0 | 0 | 0 | 4.131 | 49 |
@@ -294,8 +296,11 @@ What the table says, largest first:
    connection of a select read by 257 pins, in a placement with different
    neighbours, and the two runs are one placement each, so it says little either
    way. Vivado has that design's data path at 4.131 ns.
-3. **A small memory goes to block RAM.** `lutram32` uses two `RAMB18E1` where
-   Vivado uses 51 distributed RAM cells.
+3. **A small memory went to block RAM.** `lutram32` used two `RAMB18E1` where
+   Vivado uses 51 distributed RAM cells, and `regfile_alu` 64 `RAM64X1D` where
+   Vivado's are 102. Both are Vivado's cells now
+   ([Distributed RAM](#distributed-ram)); the rows above say so, and the LUTRAM
+   column counts as Vivado's report does, a macro and its tables both.
 4. **`fsm`** is 62 against 33, and why has not been looked at: the Vivado runs are
    `-quiet`, so nothing here says whether it re-encoded the machine.
 5. **Reticle takes as long as Vivado on carries and long chains.** `counter64`
@@ -782,13 +787,16 @@ Vivado could not finish three, for two reasons:
   one is `BRAM_FIFO18_WEBWE7` likewise, and the other, `INT_L_X52Y94 BYP_ALT7`, was
   not followed further. A first try left a block RAM's unread inputs undriven in the
   netlist, and changed nothing, since these pins are not in the netlist at all.
-- **`regfile_alu`: a `RAM64X1D`'s write enable.** Reticle brings it to the slice on
+- **`regfile_alu`: a `RAM64X1D`'s write enable.** Reticle brought it to the slice on
   `CLBLM_M_WE`, with `WEMUX.CE` clear. Vivado connects the same pin through `CE`, with
   `WEMUX.CE` set, on all 64 of them, and will not use the other: asked to with
   `SITE_PIPS {WEMUX:WE}`, it says `Element WEMUX is not routable`. So the net is left
   partly routed, and with `FAN7` taken by Reticle's other signals, Vivado has no way
   through either. The database offers both, and neither reading has been measured on a
-  part: a RAM of Reticle's still rests on `xray::lutram`'s quoted account.
+  part. **Since resolved as Vivado has it** ([Distributed RAM](#distributed-ram)): every
+  RAM of Vivado's has its write enable on `CE` with `WEMUX.CE`, Reticle's now do, and
+  Vivado finishes `regfile_alu` with Reticle's routes fixed. That is Vivado's answer and
+  not a part's; `--memories legacy` keeps the `WE` pin.
 
 Vivado will not write a bitstream for those three ("`RTSTAT-2` may not change
 severity"), and that is left as its answer.
@@ -823,7 +831,7 @@ leaving out routing. Of 140,546 cell features on Reticle's side, 140,522 are in 
 |---|---|---|---|
 | Reticle only: `ZINV_RST*`, `ZINV_REGCLK*` on a block RAM | 24 | Reticle holds each reset at zero with a ground and the inverter off; Vivado connects `VCC`, which **`lutram32.pips` shows**, and leaves the inverter on. The same value if `ZINV` means what its name says, which is quoted | Harmless on that reading |
 | Vivado only: `ZALMOST_EMPTY_OFFSET`, `ZALMOST_FULL_OFFSET` | 52 | Its default for a FIFO's flags, on a block RAM that is no FIFO | Harmless on UG473's word |
-| Vivado only: `WEMUX.CE` | 64 | `regfile_alu`, as above | **Open** until a RAM is on a part |
+| Vivado only: `WEMUX.CE` | 64 | `regfile_alu`, as above | Reticle sets it now, as Vivado does; a RAM on a part is still to come |
 | Vivado only: `<L>OUTMUX.O6` | 213 | A way for its route to leave a slice. It is in none of `bits.txt`, so it belongs to Vivado's routes and not to the cells | Not a difference in the cells |
 | Vivado only: `CASCOUT_ARD_ACTIVE` | 1 | Likewise, on another block RAM's tile in `bram_fifo` | Not looked at further |
 | Vivado only: the `PUDC_B` pad | 39 | Class 4 | As above |
@@ -994,6 +1002,194 @@ data table never shares its site. `regfile_alu` and `fsm`, where Vivado uses 5 a
 1, gain nothing here: this flow's tables do not have the tree shape, and why was
 not looked at.
 
+## Distributed RAM
+
+A `SLICEM`'s lookup tables are RAM too. Until this section Reticle had one shape
+of it, a `RAM64X1D` on the `D` and `C` tables, and a design naming any other was
+logic; `lutram32` went to two `RAMB18E1` where Vivado uses 5 `RAM32M` and 2
+`RAM32X1D`, and `regfile_alu` was 64 `RAM64X1D` where Vivado uses 10 `RAM32M` and
+4 `RAM32X1D`.
+
+**What was asked of Vivado.** `testdata/fpga/vivado/lutram/` has 50 small designs
+written here, from `tools/vivado-parity/gen_lutram.py`: 22 that name a cell, with
+random contents and every input from a flip-flop of its own, four of them with the
+write clock inverted, and 28 memories to infer, of one read port to four, five of
+them with random initial contents.
+`tools/vivado-parity/lutram.sh` runs them (`lutram_probe.tcl`), and `vivado.txt`
+keeps Vivado's own report of each memory cell's leaves, the bel and site pin of each
+of their pins, and each slice holding a RAM as `reticle fpga --decode` reads its
+bitstream. `gen_lutram_vectors.py` asks `xsim` what each does as Vivado built it,
+on Vivado's own simulation models of Vivado's own routed netlist, into `xsim.txt`.
+Only answers are kept.
+
+**What Vivado wrote**, every line read off those, and each held by
+`tests/fpga_xray_lutram_vivado.rs`:
+
+- **The write enable is on the slice's `CE` pin, with `WEMUX.CE` set**, in every
+  RAM of every design, inferred or named. This flow had it on `WE`, with the bit
+  clear, which Vivado's router had refused (below).
+- **The write address is the `D` table's inputs**, `A<i>` is input `<i + 1>` of each
+  table, and a 64-word table's `INIT[n]` is the cell's `INIT[n]`. That had been
+  quoted from nextpnr-xilinx and Project X-Ray's fuzzer; Vivado agrees.
+- **A 32-word table is half of a `SMALL` one.** Its upper half, `O6`, is written from
+  the slice's `<L>X` and holds the cell's `INIT` in bits 63:32; its lower, `O5`,
+  from `<L>I` and bits 31:0. The sixth input is left unrouted, which reads one. A
+  `RAM32M` port's bit 0 is the lower half and bit 1 the upper, and `INIT_A[2k]` and
+  `INIT_A[2k + 1]` are word `k` of the two.
+- **`<L>LUT.DI1MUX.<L>I`** gives a table its own data input; clear, it takes the next
+  table up's, so a shape whose tables all hold one bit sets none (`RAM128X1D`,
+  `RAM256X1S`), and `RAM32M` and `RAM64M` set `A`, `B` and `C`'s.
+- **The wide shapes** take their seventh address bit on `CX` with `WA7USED` and their
+  eighth on `BX` with `WA8USED`, the same wires as the multiplexers' selects, and
+  leave by them: `RAM128X1S` is `D` below `C` through `F7BMUX`, `RAM128X1D`'s read
+  port `B` below `A` through `F7AMUX`, `RAM256X1S` `D`, `C`, `B`, `A` through
+  `F8MUX`.
+- **An inverted write clock is `CLKINV`**, the slice's flip-flops' too.
+- **Vivado rewrites some cells**: `RAM16X1S` and `RAM16X1D` are the 32-word ones with
+  the top address bit low, `RAM32X2S` and `RAM64X2S` are two single-port cells on
+  `D` and `C` of one slice, and a `RAM64X1D` with `DPO` unread is a `RAM64X1S`.
+
+**What Reticle does now.** `src/fpga/xray/lutram.rs` declares every shape above on
+each `SLICEM`, each on a kind of site of its own (`bel RAM32M lutram site lutram_m32`
+in `xc7.dev`), each blocking the tables it takes and every other shape, with its
+pins, modes and contents as Vivado's. A named cell is that cell, its `_1` or
+`IS_WCLK_INVERTED` the falling-edge one, which `place::slice_mode` keeps from a slice
+whose flip-flops are on the other edge. And mapping uses them as Vivado does, read
+off its own netlists of the inferred designs and of the sweep below
+(`primitives::vivado_lutram_plan`): up to 32 words, `RAM32M`s of six bits and one
+more for three left over, `RAM32X1D`s for one or two; up to 64, `RAM64M`s of three
+and a `RAM64X1D` for one left over; deeper, banks of 64 words with a multiplexer,
+except one or two bits, which are `RAM128X1D`s; a copy per read port.
+
+| | slices the same as Vivado's | cells the same as Vivado's |
+|---|---|---|
+| 22 designs naming a cell | 22 | 22 |
+| 28 designs inferring one | 21 | 26 |
+
+The seven slices that differ are Vivado packing more than one cell into a slice: two
+read ports' `RAM32X1D` into one slice's four tables, two `RAM64X1D` likewise, and a
+`RAM64M` whose unread `C` port shares `D`'s data input. Reticle places one cell a
+slice, but for the two halves of a pair of `RAM32X1D`. The two whose cells differ are
+`mem32x32` and `mem32x32r2`, which Vivado puts in one `RAMB18E1` each port where
+Reticle uses two, its 36-bit mode, which the next section is for.
+
+**Checked, on all 50:** every set bit decodes, none unexplained; the arcs selected
+are the arcs the router chose; the mapping is proved; every frame's ECC is what
+Vivado's rule makes it; and **the routed netlist answers as Vivado's build does**,
+2,000 cycles from power-up under one stimulus, Reticle's simulator on Reticle's
+netlist against Vivado's simulator on Vivado's, bit for bit. The pins each shape
+declares are, role by role, the site pins Vivado's report has for the same cell, 
+in `vivados_pins_are_the_fabrics`.
+
+**Checked by Vivado, on Reticle's implementation** (`run_placed.sh`, Reticle's cells
+where Reticle put them and every route fixed): `qor/lutram32` and `qor/regfile_alu`,
+and 14 designs here of every shape the script writes. **Vivado took every route of
+every one**, 1,090 nets and none refused, and finished 15 of the 16 with no net left
+unrouted; `regfile_alu` is one, which it could not finish before for its write
+enables (above). Their bitstreams decoded beside Reticle's (`decode_placed.sh`) differ
+in no bit of any slice: what differs is the clock tiles' classes 1 to 3 above, `mem32x32`'s block RAM classes, and a
+ground Vivado gives a lookup table's unused input, which Reticle leaves at one. The
+16th, `mem64x8`, Vivado routed but for four nets: a `RAM64M` with two unread ports
+tied to one ground, which Vivado's own placement wires by chaining `C`'s data input
+from `D`'s (`DI1MUX.CI` clear), so Reticle's route to `CI` goes nowhere. Reticle's bel
+does not chain; it gives the two ports different nets instead, below.
+
+### Block or distributed
+
+`tools/vivado-parity/lutram_sweep.tcl` asked Vivado's synthesis about 300 memories of
+one write port and one read whose address is a register, depth 2 to 16,384 by width 1
+to 72, the read registered once more or not, and 26 more written to lie near the line
+or to have no register to absorb (`sweep.txt`). **Every one went to block RAM exactly
+when its depth rounded up to a power of two, by the width written, is 1,024 bits or
+more.** 31 words of 32 bits is block RAM and 32 of 31 is not; and `lutram32` declares
+32 bits and writes 31, which is why Vivado gave it distributed RAM at all: the same
+memory written 32 bits wide is a `RAMB18E1`. Reticle used 256 bits of the declared
+size. `primitives::VIVADO_MIN_BRAM_BITS` is Vivado's rule now, a constant data bit
+left out as Vivado leaves it.
+
+**Not the same:** Vivado's block RAM takes the address register of a read nothing
+else registers (`s_async_` in `sweep.txt`), and Reticle's does not, so such a memory
+is distributed RAM here however large, up to the flow's limit for building one from
+logic. A read with no register at all is distributed RAM in both (`c_`), but for
+Vivado taking the output register a one-bit read leaves (`c_4096x1`).
+
+### The ECC of a frame holding one
+
+**Vivado leaves a distributed RAM's and a shift register's contents out of its frame's
+ECC**, and nothing else of the frame. The 22 named cells' bitstreams had 71 frames
+whose ECC was not the frame's code, all of them RAM tables'; probes placed with `LOC`
+said what it is. A `RAM64X1S` or an `SRLC32E` with contents, a logic table in other
+rows of the same frames, has the code of the frame with the RAM's table zeroed; with
+the logic table on the next table of the same slice, in the same word of the frame,
+of the frame with the RAM's sixteen bits alone zeroed; and a RAM with no contents
+changes nothing. `xc7::wanted_ecc_without` is that rule, `--decode` applies it, and
+every frame of every Vivado bitstream decoded here agrees with it; Reticle writes it.
+This changes every Reticle bitstream with a RAM's contents in it, in those frames'
+ECC bits and nowhere else. That the contents change at run time is the likely reason
+and a guess, as it was for block RAM.
+
+### What it changes
+
+| design | | LUT | FF | LUTRAM | BRAM18 | Reticle's estimate |
+|---|---|---|---|---|---|---|
+| lutram32 | Vivado | 7 | 70 | 51 | 0 | |
+| | Reticle before | 9 | 38 | 0 | 2 | 5.07 |
+| | Reticle | 10 | 70 | 51 | 0 | 4.95 |
+| regfile_alu | Vivado | 351 | 20 | 102 | 0 | |
+| | Reticle before | 373 | 20 | 64 | 0 | 10.23 |
+| | Reticle | 373 | 20 | 102 | 0 | 10.38 |
+
+LUTRAM counts as Vivado's report does, the macros and their tables both: 5 `RAM32M`
+and 2 `RAM32X1D` are 51. The other eleven designs of `qor/` have no distributed
+memory and are the same bitstream, byte for byte, as the commit before; so are all
+thirteen with `--memories legacy`. Measured on the commit with shift registers, where
+`regfile_alu`'s one `SRL16E` is Vivado's too; on the one before them its estimate
+went from 10.79 ns to 10.09, and here from 10.23 to 10.38. Both are one placement
+each, so neither says the RAMs made it faster or slower.
+
+**The Husky Plus.** `examples/husky/build.sh` and `build_plus.sh` pass
+`--memories legacy`, as they pass `--wide-muxes off`, and with it the Plus's
+bitstream is byte for byte master's (`ea7c5f49`, the legal routing of pass 46 kept;
+it was `3a8a0b4d` on the master this was first measured on, and the same there too).
+Built with the default instead, its 328 `RAM64X1D` become 38 `RAM32M`, 32 `RAM64M`
+and 4 `RAM32X1D`, and its 244 `RAMB18E1` stay; 2,475,262 bits are set where there
+were 2,542,154, and every one decodes, the arcs the router's. The router kept pass
+62 where master kept 46, and the estimate moved both ways: `clk_usb` 16.51 ns
+against 16.55, `ADC_clk_fb` 7.36 against 6.74, the glitch MMCM's output 13.93
+against 17.42. The whole build took 1,670 s against master's 2,838, most of it the
+route, the two run at once on a shared machine. That is the reason
+the scripts keep the legacy mapping: the ADC's clock is the one the board is
+measured on, and it got slower. Nothing of either has been on a board.
+
+**Mutations.** Each change below was made to the code by hand, and
+`cargo test --no-fail-fast` of the library and `fpga_xray_lutram_vivado` run against
+it; every one failed something, but the one noted.
+
+| mutation | what failed |
+|---|---|
+| a `RAM32M` port's two bits swapped in the contents | the unit test of the layout; the slices |
+| `WEMUX.CE` not set | the slices, and the packing test |
+| a `RAM32X1D` upper half's data on `DI` | the unit test of the wiring only: no design here puts a lone upper half anywhere the slices or the simulation see it |
+| three bits left over made a `RAM32X1D`, not a `RAM32M` | the cells; the slices |
+| the threshold at 512 bits | the threshold test; the cells; the slices |
+| a writer's frame ECC over the RAM's bits | every bit decodes (the frames' ECC) |
+| a `RAM128X1D`'s seventh write address on `AX` | the unit test of the wiring |
+| a RAM given no clock edge in the placer's rule | the unit test of a slice's rule |
+| `CEUSEDMUX` on the pin, the RAM's enable enabling the flip-flops | that test |
+| a dual-port cell with `DPO` unread kept dual | the cells; the slices |
+| `--decode` checking the ECC over the RAM's bits | every bit decodes |
+| a `RAM256X1S`'s quarters out of order | the slices |
+| `IS_WCLK_INVERTED` not made the `_1` | the slices |
+| an inferred RAM's initial contents dropped | **nothing**, at first: no inferred design had contents. The five `mem*init` designs were added for it, and with them the slices and the simulation fail |
+| a `RAM32X2S`'s `C` bit also on `CX` | the unit test of the exclusions |
+
+**Not done.** Vivado's packing of several cells into one slice, above. `RAM128X1S`,
+`RAM128X1D` and `RAM256X1S` are not written for `run_placed.sh`, since their
+multiplexers are leaves whose names were not asked. A named cell with an input left
+unconnected reads what the interconnect reads, a one; what Vivado does with one was
+not asked, and nothing here ties it. Shift registers (`SRL16E`, `SRLC32E`) are still flip-flops,
+though their frames' ECC is now right should they be written.
+
 ## The container around the frames, and `write_bitstream`'s options
 
 **What was asked of Vivado:** one small design, `testdata/fpga/vivado/bitstream/options_probe.v`,
@@ -1052,6 +1248,10 @@ is a guess. So `xc7::wanted_ecc` is by frame address.
 frame whose ECC is wrong is a `!` line and a number in the summary: a `.bit` from this flow before today has one of those for nearly every used frame. On Vivado's own
 frames for `options_probe`: **2,418 bits, 606 of them ECC, none unexplained, no ECC
 wrong**, and 2,244, 437, none and none on the XC7A35T.
+
+**The third thing wrong was a frame holding a distributed RAM's contents**, which
+Vivado leaves out of the code: see [The ECC of a frame holding one](#the-ecc-of-a-frame-holding-one).
+The eight `.bit`s above had none.
 
 `FRAME_ECCE2` and `POST_CRC` could now mean something; neither is done, and neither
 has been tried. `FRAME_ECCE2` is still in the list of primitives above that do not

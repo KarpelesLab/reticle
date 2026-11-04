@@ -26,6 +26,9 @@
 # copies, as they were when every number here was measured. Without it the design
 # has shift registers as Vivado's has, about which nothing has been measured on a
 # part; see docs/fpga-vivado-parity.md. Taking it away is a new build to measure.
+# `--memories legacy` for the same reason: the default maps memories as
+# Vivado does, which changes this design's netlist and placement, and that
+# build has not been on a board either (docs/fpga-vivado-parity.md).
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -36,7 +39,7 @@ reticle=${RETICLE:-reticle}
 
 mkdir -p "$out"
 exec "$reticle" fpga \
-    --wide-muxes off \
+    --wide-muxes off --memories legacy \
     --srl-min 0 \
     --device xc7a35t-ftg256 \
     --top cwhusky_top \

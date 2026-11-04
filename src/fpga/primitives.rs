@@ -149,6 +149,15 @@ pub struct MapOptions {
     /// two lookup tables, so the count is of what would be built, not of
     /// what is stored.
     pub max_logic_bits: u64,
+    /// Map memories as Vivado 2026.1 maps them on a 7-series part: to block
+    /// RAM from [`VIVADO_MIN_BRAM_BITS`] by its count
+    /// (`Mapper::vivado_bram_bits`), and below that to the distributed RAM
+    /// shapes it uses (`Mapper::emit_vivado_lutram`), in place of
+    /// `min_bram_bits` and the device's first `lutram` shape. Off by default,
+    /// and only meaningful for a device that declares those shapes; the
+    /// `reticle fpga` command turns it on for the 7 series unless
+    /// `--memories legacy` asks for the mapping before.
+    pub vivado_memories: bool,
     /// Map multipliers onto DSP blocks.
     pub infer_dsp: bool,
     /// Take the flip-flops around a multiply into its block's registers, on
@@ -244,6 +253,7 @@ impl Default for MapOptions {
             infer_block_ram: true,
             min_bram_bits: 256,
             max_logic_bits: 4096,
+            vivado_memories: false,
             infer_dsp: true,
             dsp_registers: true,
             dsp_smallest: true,
@@ -1356,7 +1366,19 @@ impl Mapper<'_> {
             return give_up(self, "it is empty".to_owned(), false);
         }
         let bits = u64::from(width) * depth;
-        if !forced && bits < self.options.min_bram_bits {
+        if self.options.vivado_memories && !forced {
+            let counted = self.vivado_bram_bits(module, mem, width, depth);
+            if counted < VIVADO_MIN_BRAM_BITS {
+                return give_up(
+                    self,
+                    format!(
+                        "{counted} bits as Vivado counts them is below its {VIVADO_MIN_BRAM_BITS} \
+                         bit threshold"
+                    ),
+                    false,
+                );
+            }
+        } else if !forced && bits < self.options.min_bram_bits {
             return give_up(
                 self,
                 format!(
@@ -2255,9 +2277,14 @@ impl Mapper<'_> {
         // The limit is on what would be built: a flip-flop per bit, or a
         // distributed RAM block per block's worth of words and bits for
         // each read port, which holds as many bits as it has.
-        let shape = self.lutram_shape().filter(|_| writes.len() == 1);
+        let vivado = self.options.vivado_memories && writes.len() == 1 && self.has_vivado_lutram();
+        let shape = self.lutram_shape().filter(|_| writes.len() == 1 && !vivado);
         let bits = u64::from(width) * depth;
         let cells = match &shape {
+            _ if vivado => {
+                let (words, pieces) = vivado_lutram_plan(width, depth);
+                pieces.len() as u64 * depth.div_ceil(words) * reads.len() as u64
+            }
             Some(shape) => {
                 let words = 1u64 << shape.addr_bits;
                 let blocks = depth.div_ceil(words) * u64::from(width.div_ceil(shape.width));
@@ -2310,7 +2337,7 @@ impl Mapper<'_> {
             }
             write_clk = Some(clk);
         }
-        if has_init && !writes.is_empty() {
+        if has_init && !writes.is_empty() && !vivado {
             self.decline_lowering(
                 &name,
                 "it has initial contents, which flip-flops built from logic cannot be loaded \
@@ -2327,6 +2354,14 @@ impl Mapper<'_> {
             rows_wanted,
             init,
         };
+        if vivado {
+            let cells = self.emit_vivado_lutram(module, &plan, &reads, &writes, write_clk);
+            let names = vivado_lutram_names(width, depth);
+            self.record_fallback(&name, "distributed LUT RAM", Some(names), cells);
+            let mut replaced = reads;
+            replaced.extend(writes);
+            return Some(replaced);
+        }
         let cells = match &shape {
             Some(shape) => self.emit_lutram(module, &plan, shape, &reads, &writes, write_clk),
             None => self.emit_registers(module, &plan, &reads, &writes, write_clk),
@@ -2719,6 +2754,293 @@ impl Mapper<'_> {
             self.finish_read(module, plan, port, index, value);
         }
         built
+    }
+
+    /// Whether the device declares every shape [`Mapper::emit_vivado_lutram`]
+    /// builds with.
+    fn has_vivado_lutram(&self) -> bool {
+        ["RAM32M", "RAM32X1D", "RAM64M", "RAM64X1D", "RAM128X1D"]
+            .iter()
+            .all(|name| {
+                self.device
+                    .bels
+                    .iter()
+                    .any(|b| b.role == BelRole::LutRam && b.name == *name)
+            })
+    }
+
+    /// The bits of memory `mem` as Vivado counts them against
+    /// [`VIVADO_MIN_BRAM_BITS`]: its depth rounded up to a power of two, by
+    /// its width less every bit each write port writes as a constant zero,
+    /// for a memory with no initial contents.
+    fn vivado_bram_bits(&self, module: &Module, mem: MemoryId, width: u32, depth: u64) -> u64 {
+        let has_init = module.memories[mem]
+            .init
+            .as_ref()
+            .is_some_and(|v| !v.is_empty());
+        let mut zero = vec![!has_init; width as usize];
+        let view = crate::ir::emit::BitView::new(module).ok();
+        let mut writes = 0;
+        for (_, cell) in module.cells.iter() {
+            let CellKind::MemWrPort { mem: m, .. } = &cell.kind else {
+                continue;
+            };
+            if *m != mem {
+                continue;
+            }
+            writes += 1;
+            let bits = match (&view, cell.input("data")) {
+                (Some(view), Some(data)) => view.expr_bits(data).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            for (at, flag) in zero.iter_mut().enumerate() {
+                let constant = bits.get(at).is_some_and(|bit| {
+                    matches!(bit, crate::ir::emit::SigBit::Const(crate::logic::Bit::Zero))
+                });
+                *flag &= constant;
+            }
+        }
+        let trimmed = if writes == 0 {
+            0
+        } else {
+            u64::try_from(zero.iter().filter(|z| **z).count()).unwrap_or(0)
+        };
+        depth.next_power_of_two() * (u64::from(width) - trimmed)
+    }
+
+    /// One copy per read port of a memory, built of the distributed RAM
+    /// shapes Vivado uses for it ([`vivado_lutram_plan`]), the write port's
+    /// address on the shapes' write address and each read port's on their
+    /// read ports. Initial contents go into each shape's `INIT`, where Vivado
+    /// puts them (`xray::lutram`).
+    fn emit_vivado_lutram(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        reads: &[CellId],
+        writes: &[CellId],
+        write_clk: Option<ExprId>,
+    ) -> u32 {
+        let span = plan.span;
+        let width = plan.width;
+        let depth = plan.rows_wanted as u64;
+        let write = self.logic_port(module, writes[0]);
+        let read_ports: Vec<LogicPort> = reads
+            .iter()
+            .map(|id| self.logic_port(module, *id))
+            .collect();
+        let (words, pieces) = vivado_lutram_plan(width, depth);
+        let total = addr_bits(depth);
+        let low = addr_bits(words).min(total);
+        let high = total - low;
+        let rows = 1usize << high;
+        let clk = write_clk.unwrap_or_else(|| const_expr(module, Const::zero(1), span));
+        let data_width = write.data.map_or(0, |d| expr_width(module, d));
+        let data: Vec<ExprId> = (0..width)
+            .map(|bit| match write.data {
+                Some(d) if bit < data_width => slice_expr(module, d, bit, bit, span),
+                _ => const_expr(module, Const::zero(1), span),
+            })
+            .collect();
+        let zero = const_expr(module, Const::zero(1), span);
+        let init_bit = |word: u64, bit: u32| -> bool {
+            usize::try_from(word)
+                .ok()
+                .and_then(|w| plan.init.get(w))
+                .and_then(|c| c.get(bit))
+                .is_some_and(|b| b == crate::logic::Bit::One)
+        };
+
+        let mut built = 0u32;
+        for (index, port) in read_ports.iter().enumerate() {
+            let mut row_values: Vec<ExprId> = Vec::with_capacity(rows);
+            for row in 0..rows {
+                let we = self.row_hit_high(module, &write, row as u64, high, low, span);
+                let mut out: Vec<Option<ExprId>> = vec![None; width as usize];
+                for (piece_index, (piece, first)) in pieces.iter().enumerate() {
+                    let n = piece.addr_bits();
+                    let waddr = self.addr_vec(module, write.addr, n.min(low), n, span);
+                    let raddr = self.addr_vec(module, port.addr, n.min(low), n, span);
+                    let bit_of = |at: u32| data.get(at as usize).copied().unwrap_or(zero);
+                    let mut inputs: Vec<(Name, ExprId)> =
+                        vec![(Name::new("WCLK"), clk), (Name::new("WE"), we)];
+                    let mut outputs: Vec<(Name, NetId)> = Vec::new();
+                    let mut params: Vec<(String, Const)> = Vec::new();
+                    let tag = format!("{}$lr{index}_r{row}_p{piece_index}", plan.name);
+                    // Word `k` of this bank, which is word `row * words + k`.
+                    let word = |k: u64| row as u64 * words + k;
+                    match piece {
+                        LutRamPiece::M32 | LutRamPiece::M64 => {
+                            let per = if *piece == LutRamPiece::M32 { 2 } else { 1 };
+                            for port_name in ["A", "B", "C"] {
+                                inputs.push((Name::new(format!("ADDR{port_name}")), raddr));
+                            }
+                            inputs.push((Name::new("ADDRD"), waddr));
+                            for (p, port_name) in ["A", "B", "C", "D"].iter().enumerate() {
+                                let p = u32::try_from(p).unwrap_or(0);
+                                let bits: Vec<u32> =
+                                    (0..per).map(|k| first + p * per + k).collect();
+                                let used = |b: u32| p < 3 && b < width;
+                                // A port nothing reads is written zero, as
+                                // Vivado writes it, but for `D`'s first bit when
+                                // `C`'s is zero too: Vivado then takes `C`'s data
+                                // from `D`'s, which this flow's bel does not, and
+                                // leaves its route to `CI` going nowhere. So that
+                                // one is the piece's first bit, routed already.
+                                let c_low_unused = first + 2 * per >= width;
+                                let spare = |k: usize| {
+                                    if p == 3 && k == 0 && c_low_unused {
+                                        bit_of(*first)
+                                    } else {
+                                        zero
+                                    }
+                                };
+                                let value = if per == 1 {
+                                    if used(bits[0]) {
+                                        bit_of(bits[0])
+                                    } else {
+                                        spare(0)
+                                    }
+                                } else {
+                                    let parts: Vec<ExprId> = bits
+                                        .iter()
+                                        .enumerate()
+                                        .rev()
+                                        .map(|(k, b)| if used(*b) { bit_of(*b) } else { spare(k) })
+                                        .collect();
+                                    expr(module, ExprKind::Concat(parts), span)
+                                };
+                                inputs.push((Name::new(format!("DI{port_name}")), value));
+                                let net = add_net(
+                                    module,
+                                    &format!("{tag}_do{port_name}"),
+                                    if per == 1 {
+                                        Type::bit()
+                                    } else {
+                                        Type::bits(per)
+                                    },
+                                    span,
+                                );
+                                outputs.push((Name::new(format!("DO{port_name}")), net));
+                                let whole = net_expr(module, net, span);
+                                for (k, b) in bits.iter().enumerate() {
+                                    if !used(*b) {
+                                        continue;
+                                    }
+                                    let k = u32::try_from(k).unwrap_or(0);
+                                    out[*b as usize] = Some(if per == 1 {
+                                        whole
+                                    } else {
+                                        slice_expr(module, whole, k, k, span)
+                                    });
+                                }
+                                if p < 3 {
+                                    let mut init = Vec::new();
+                                    for w in 0..(1u64 << n) {
+                                        for b in &bits {
+                                            init.push(if used(*b) && init_bit(word(w), *b) {
+                                                crate::logic::Bit::One
+                                            } else {
+                                                crate::logic::Bit::Zero
+                                            });
+                                        }
+                                    }
+                                    params.push((
+                                        format!("INIT_{port_name}"),
+                                        Const::from_bits(&init),
+                                    ));
+                                }
+                            }
+                        }
+                        LutRamPiece::D32 | LutRamPiece::D64 | LutRamPiece::D128 => {
+                            if *piece == LutRamPiece::D128 {
+                                inputs.push((Name::new("A"), waddr));
+                                inputs.push((Name::new("DPRA"), raddr));
+                            } else {
+                                for i in 0..n {
+                                    let w = self.addr_bit_within(module, write.addr, i, low, span);
+                                    let r = self.addr_bit_within(module, port.addr, i, low, span);
+                                    inputs.push((Name::new(format!("A{i}")), w));
+                                    inputs.push((Name::new(format!("DPRA{i}")), r));
+                                }
+                            }
+                            inputs.push((Name::new("D"), bit_of(*first)));
+                            let net = add_net(module, &format!("{tag}_dpo"), Type::bit(), span);
+                            outputs.push((Name::new("DPO"), net));
+                            out[*first as usize] = Some(net_expr(module, net, span));
+                            let init: Vec<crate::logic::Bit> = (0..(1u64 << n))
+                                .map(|w| {
+                                    if init_bit(word(w), *first) {
+                                        crate::logic::Bit::One
+                                    } else {
+                                        crate::logic::Bit::Zero
+                                    }
+                                })
+                                .collect();
+                            params.push(("INIT".to_owned(), Const::from_bits(&init)));
+                        }
+                    }
+                    let cell = add_cell(
+                        module,
+                        &tag,
+                        CellKind::Blackbox(Name::new(piece.primitive())),
+                        inputs,
+                        outputs,
+                        span,
+                    );
+                    if !plan.init.is_empty() {
+                        for (key, value) in params {
+                            module.cells[cell].params.set(key, AttrValue::Const(value));
+                        }
+                    }
+                    module.cells[cell].attrs.set("memory", plan.name.clone());
+                    built += 1;
+                }
+                let mut bits: Vec<ExprId> = out.into_iter().map(|b| b.unwrap_or(zero)).collect();
+                bits.reverse();
+                let value = if bits.len() == 1 {
+                    bits[0]
+                } else {
+                    expr(module, ExprKind::Concat(bits), span)
+                };
+                row_values.push(value);
+            }
+            let value = self.mux_high(module, plan, port, index, &row_values, (low, high));
+            self.finish_read(module, plan, port, index, value);
+        }
+        built
+    }
+
+    /// Bit `bit` of the low `low` bits of an address, or a zero above them
+    /// and for a port with none.
+    fn addr_bit_within(
+        &mut self,
+        module: &mut Module,
+        addr: Option<ExprId>,
+        bit: u32,
+        low: u32,
+        span: Span,
+    ) -> ExprId {
+        if bit >= low {
+            return const_expr(module, Const::zero(1), span);
+        }
+        self.addr_bit(module, addr, bit as usize, span)
+    }
+
+    /// The low `low` bits of an address as an `n`-bit vector, zero above.
+    fn addr_vec(
+        &mut self,
+        module: &mut Module,
+        addr: Option<ExprId>,
+        low: u32,
+        n: u32,
+        span: Span,
+    ) -> ExprId {
+        let parts: Vec<ExprId> = (0..n)
+            .rev()
+            .map(|bit| self.addr_bit_within(module, addr, bit, low, span))
+            .collect();
+        expr(module, ExprKind::Concat(parts), span)
     }
 
     /// Bit `bit` of an address that may be narrower than the pin list,
@@ -5375,7 +5697,7 @@ impl Mapper<'_> {
             && reg.has_ports(beside_ports)
         {
             return Some(DdrPlan::Beside {
-                bel: reg.clone(),
+                bel: Box::new(reg.clone()),
                 clk,
             });
         }
@@ -5803,10 +6125,15 @@ impl Mapper<'_> {
         // model for, and Lattice's own packer puts a write clock on the
         // network in all 111 distributed RAMs of this board's reference
         // bitstreams; see `docs/fpga-trellis.md`.
-        let lutram_clock: Option<(String, String)> = self
+        // Every shape of one, since a 7-series `SLICEM` has nine of them and a
+        // `RAM32M` is clocked just as a `RAM64X1D` is.
+        let lutram_clocks: Vec<(String, String)> = self
             .device
-            .bel(BelRole::LutRam)
-            .and_then(|ram| ram.port("wclk").map(|p| (ram.name.clone(), p.to_owned())));
+            .bels
+            .iter()
+            .filter(|b| b.role == BelRole::LutRam)
+            .filter_map(|ram| ram.port("wclk").map(|p| (ram.name.clone(), p.to_owned())))
+            .collect();
         // A **block** RAM is the same case one size up, and it has a clock
         // per physical port rather than one: a `DP16KD` is `CLKA` and
         // `CLKB`, usually the same net, and both of them have to reach the
@@ -5919,14 +6246,9 @@ impl Mapper<'_> {
                 }
                 CellKind::Blackbox(primitive) => {
                     let mut found = Vec::new();
-                    if let Some((_, port)) = lutram_clock
-                        .as_ref()
-                        .filter(|(name, _)| name == primitive.as_str())
-                    {
-                        found.push((1, port.clone()));
-                    }
-                    for (_, port) in bram_clocks
+                    for (_, port) in lutram_clocks
                         .iter()
+                        .chain(&bram_clocks)
                         .chain(&port_clocks)
                         .filter(|(name, _)| name == primitive.as_str())
                     {
@@ -6372,8 +6694,9 @@ enum DdrPlan {
     },
     /// A register beside the buffer does (ECP5 `IDDRX1F` / `ODDRX1F`).
     Beside {
-        /// The register primitive.
-        bel: BelKind,
+        /// The register primitive, boxed since a `BelKind` is many times the
+        /// other variant.
+        bel: Box<BelKind>,
         /// The clock net.
         clk: NetId,
     },
@@ -6405,6 +6728,140 @@ struct IoSite<'a> {
     conditions: &'a str,
     /// The span the new objects carry.
     span: Span,
+}
+
+/// The smallest memory Vivado 2026.1 puts in a block RAM, counted as
+/// `Mapper::vivado_bram_bits` counts it, when its read is registered.
+///
+/// **Measured**, with `tools/vivado-parity/lutram_sweep.tcl` over 300 memories
+/// of one write port and one read whose address is a register, depth 2 to
+/// 16,384 by width 1 to 72, with the read registered again or not
+/// (`testdata/fpga/vivado/lutram/sweep.txt`): every one of 1,024 bits or more
+/// went to block RAM and every one below to distributed RAM, and so did the
+/// 19 written to lie near the line. The count rounds the depth up to a power
+/// of two (31 words of 32 bits is 1,024 and block RAM; 32 words of 31 is 992
+/// and not) and leaves out a data bit every write sets to zero:
+/// `testdata/fpga/vivado/qor/lutram32.v` declares 32 bits and writes 31, and
+/// Vivado gave it 5 `RAM32M` and 2 `RAM32X1D`, all 32 bits wide, where the
+/// same memory written 32 bits wide is a `RAMB18E1`.
+///
+/// **Not the same as Vivado:** its block RAM takes the address register of a
+/// read that is not otherwise registered, and this flow's does not, so such a
+/// memory is distributed RAM here at any size (`sweep.txt`'s `s_async_`).
+pub const VIVADO_MIN_BRAM_BITS: u64 = 1024;
+
+/// Whether Vivado 2026.1 takes a memory of `depth` words, `width` of them
+/// written, to block RAM when its read is registered: see
+/// [`VIVADO_MIN_BRAM_BITS`].
+///
+/// ```
+/// use reticle::fpga::primitives::vivado_prefers_block_ram;
+/// assert!(vivado_prefers_block_ram(31, 32));
+/// assert!(!vivado_prefers_block_ram(32, 31));
+/// ```
+#[must_use]
+pub fn vivado_prefers_block_ram(depth: u64, width: u32) -> bool {
+    depth.next_power_of_two() * u64::from(width) >= VIVADO_MIN_BRAM_BITS
+}
+
+/// One distributed RAM of a word, as Vivado builds a memory of one write and
+/// one read port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LutRamPiece {
+    /// A `RAM32M`'s three read ports, six bits of 32 words.
+    M32,
+    /// A `RAM32X1D`, one bit of 32 words.
+    D32,
+    /// A `RAM64M`'s three read ports, three bits of 64 words.
+    M64,
+    /// A `RAM64X1D`, one bit of 64 words.
+    D64,
+    /// A `RAM128X1D`, one bit of 128 words.
+    D128,
+}
+
+impl LutRamPiece {
+    fn primitive(self) -> &'static str {
+        match self {
+            LutRamPiece::M32 => "RAM32M",
+            LutRamPiece::D32 => "RAM32X1D",
+            LutRamPiece::M64 => "RAM64M",
+            LutRamPiece::D64 => "RAM64X1D",
+            LutRamPiece::D128 => "RAM128X1D",
+        }
+    }
+
+    /// The address bits it takes.
+    fn addr_bits(self) -> u32 {
+        match self {
+            LutRamPiece::M32 | LutRamPiece::D32 => 5,
+            LutRamPiece::M64 | LutRamPiece::D64 => 6,
+            LutRamPiece::D128 => 7,
+        }
+    }
+}
+
+/// How Vivado builds one read port's copy of a memory of `width` bits and
+/// `depth` words: the words one bank holds, and the pieces of a word with the
+/// first bit each holds. Deeper memories are banks of that many words with a
+/// multiplexer after them.
+///
+/// **Vivado's rule, read off its own netlists** of
+/// `testdata/fpga/vivado/lutram/` and the sweep (`sweep.txt`): up to 32 words,
+/// `RAM32M`s of six bits and the rest in one more when three or more are left,
+/// in `RAM32X1D`s when one or two are (32 by 8 is a `RAM32M` and two
+/// `RAM32X1D`, 32 by 7 one of each); up to 64, `RAM64M`s of three bits and a
+/// `RAM64X1D` for one left over (64 by 8 is three `RAM64M`); deeper, banks of 64
+/// words the same way, except a memory one or two bits wide, which is
+/// `RAM128X1D`s (128 by 2 is two of them, 256 by 1 two and a table). Every
+/// read port gets a copy of its own, as Vivado's three-port 32 by 8 has three
+/// `RAM32M`s and six `RAM32X1D`s. Which of those Vivado would pick for a
+/// shape not in the sweep is this rule's guess.
+fn vivado_lutram_plan(width: u32, depth: u64) -> (u64, Vec<(LutRamPiece, u32)>) {
+    let mut pieces = Vec::new();
+    let mut at = 0u32;
+    if depth <= 32 {
+        while width - at >= 6 {
+            pieces.push((LutRamPiece::M32, at));
+            at += 6;
+        }
+        if width - at >= 3 {
+            pieces.push((LutRamPiece::M32, at));
+        } else {
+            for bit in at..width {
+                pieces.push((LutRamPiece::D32, bit));
+            }
+        }
+        return (32, pieces);
+    }
+    if depth > 64 && width <= 2 {
+        for bit in 0..width {
+            pieces.push((LutRamPiece::D128, bit));
+        }
+        return (128, pieces);
+    }
+    while width - at >= 3 {
+        pieces.push((LutRamPiece::M64, at));
+        at += 3;
+    }
+    match width - at {
+        2 => pieces.push((LutRamPiece::M64, at)),
+        1 => pieces.push((LutRamPiece::D64, at)),
+        _ => {}
+    }
+    (64, pieces)
+}
+
+/// The primitives [`vivado_lutram_plan`] uses, for the report: `RAM32M+RAM32X1D`.
+fn vivado_lutram_names(width: u32, depth: u64) -> String {
+    let (_, pieces) = vivado_lutram_plan(width, depth);
+    let mut names: Vec<&str> = Vec::new();
+    for (piece, _) in pieces {
+        if !names.contains(&piece.primitive()) {
+            names.push(piece.primitive());
+        }
+    }
+    names.join("+")
 }
 
 /// What the database says the device's distributed RAM primitive is.

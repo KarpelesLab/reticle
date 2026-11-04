@@ -664,15 +664,22 @@ pub fn place_timing(
                     domain[index] = domain_of(clock_of(c));
                 }
             }
-            "lutram" => {
-                // The read is combinational, the write is clocked.
+            kind if kind == "lutram" || kind.starts_with("lutram_") => {
+                // The read is combinational, the write is clocked. A read
+                // address is any address of a shape that reads at it: every
+                // shape but a `RAM64X1D` with only `DPO` read reads at its
+                // write address too (`SPO`, `DOD`).
                 cell[index] = LUT;
                 capture[index] = FF_SETUP;
                 for pin in &inst.pins {
                     let role = netlist.pins[*pin].role.as_str();
                     pins[*pin] = if is_clock(role) {
                         PinTiming::Ignored
-                    } else if netlist.pins[*pin].output || role.starts_with("raddr") {
+                    } else if netlist.pins[*pin].output
+                        || role.starts_with("raddr")
+                        || role.starts_with("addr")
+                        || (role.starts_with("waddr") && kind != "lutram")
+                    {
                         PinTiming::Through
                     } else {
                         PinTiming::End

@@ -670,6 +670,7 @@ pub(super) fn bels_of(
     tile: &XrayTile,
     features: &FeatureSet,
     wires: &HashSet<&str>,
+    model: super::lutram::LutRamModel,
     coverage: &mut sites::SiteCoverage,
 ) -> Vec<BelDecl> {
     let mut prefixes = site_prefixes(features);
@@ -711,7 +712,7 @@ pub(super) fn bels_of(
                       prefix: &str,
                       sub: &str| {
         let mut bel = BelDecl::new(name.clone(), kind);
-        for pin in sites::bel_pins(&tile.tile_type, prefix, sub) {
+        for pin in sites::bel_pins_in(&tile.tile_type, prefix, sub, model) {
             if wires.contains(pin.wire.as_str()) {
                 bel.pins
                     .push((pin.role.to_owned(), WireRef::local(pin.wire)));
@@ -821,15 +822,22 @@ pub(super) fn bels_of(
             continue;
         }
         let mut resolved = super::lutram::Resolved::default();
-        let ram = super::lutram::bel(&tile.tile_type, prefix, features, wires, &mut resolved);
+        let rams = super::lutram::bels(
+            &tile.tile_type,
+            prefix,
+            features,
+            wires,
+            model,
+            &mut resolved,
+        );
         coverage.pins += resolved.pins;
         coverage.pins_unresolved += resolved.pins_missing;
-        match ram {
-            Some(ram) => {
-                coverage.modes += 1;
-                bels.insert(ram.name.clone(), ram);
-            }
-            None => coverage.modes_unresolved += 1,
+        if rams.is_empty() {
+            coverage.modes_unresolved += 1;
+        }
+        for ram in rams {
+            coverage.modes += 1;
+            bels.insert(ram.name.clone(), ram);
         }
     }
 

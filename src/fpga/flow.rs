@@ -1434,6 +1434,13 @@ fn primitive_instances(
         if !cell_from_instance(m, &changed, primitive, &bel.outputs, &mut refused, diags) {
             continue;
         }
+        // A write clock inverted by a parameter is the cell's `_1` where the
+        // device has one, and a dual-port distributed RAM nothing reads the
+        // second port of is the single-port one: see `distributed_ram_cell`.
+        let last = m.cells.iter().map(|(id, _)| id).next_back();
+        if let Some(id) = last {
+            distributed_ram_cell(&mut m.cells[id], device);
+        }
         done.push(id);
     }
     for (net, port) in &pair_ports {
@@ -1494,6 +1501,58 @@ fn primitive_instances(
 /// The modules that are not black boxes and that `module` does not reach
 /// through its instances, in id order.
 #[cfg(feature = "synth")]
+/// A distributed RAM cell as the device has it, rewritten in place: a write
+/// clock inverted by a parameter is the cell's `_1` where the device has one
+/// (the slice's `CLKINV` is shared with its flip-flops, and the placer reads
+/// an edge off the name, `place::slice_mode`), and a dual-port one whose
+/// second port nothing reads is the single-port one, as Vivado builds it
+/// (`testdata/fpga/vivado/lutram/`'s `ram64x1d_spo` is a `RAM64X1S`): one
+/// table, not two.
+fn distributed_ram_cell(cell: &mut crate::ir::Cell, device: &Device) {
+    use crate::ir::Name;
+    let CellKind::Blackbox(primitive) = &cell.kind else {
+        return;
+    };
+    let mut primitive = primitive.clone();
+    let inverted = cell
+        .params
+        .get("IS_WCLK_INVERTED")
+        .is_some_and(|v| super::bitstream::param_bit(Some(v), 0));
+    let falling = format!("{primitive}_1");
+    if inverted && device.bels.iter().any(|b| b.name == falling) {
+        cell.params.remove("IS_WCLK_INVERTED");
+        primitive = Name::new(falling);
+    }
+    if let Some(single) = single_port_of(primitive.as_str())
+        && !cell.outputs.iter().any(|(port, _)| port.as_str() == "DPO")
+        && device.bels.iter().any(|b| b.name == single)
+    {
+        cell.inputs
+            .retain(|(port, _)| !port.as_str().starts_with("DPRA"));
+        for (port, _) in &mut cell.outputs {
+            if port.as_str() == "SPO" {
+                *port = Name::new("O");
+            }
+        }
+        primitive = Name::new(single);
+    }
+    cell.kind = CellKind::Blackbox(primitive);
+}
+
+/// The single-port distributed RAM a dual-port one is with `DPO` unread.
+fn single_port_of(primitive: &str) -> Option<String> {
+    let (base, edge) = match primitive.strip_suffix("_1") {
+        Some(base) => (base, "_1"),
+        None => (primitive, ""),
+    };
+    let single = match base {
+        "RAM32X1D" => "RAM32X1S",
+        "RAM64X1D" => "RAM64X1S",
+        _ => return None,
+    };
+    Some(format!("{single}{edge}"))
+}
+
 fn unreachable_modules(design: &Design, module: ModuleId) -> Vec<ModuleId> {
     let mut reached = vec![false; design.modules.len()];
     let mut stack = vec![module];

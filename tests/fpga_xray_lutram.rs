@@ -466,13 +466,18 @@ fn a_distributed_ram_reaches_a_bit_file_and_every_bit_decodes() {
     assert!(!built.routed_pips.is_empty());
 
     // And the RAM's own configuration, in the database's vocabulary: the
-    // two lookup tables in RAM mode, and nothing that would make it a
-    // 32-word, shifting, cascaded or CE-enabled one.
+    // two lookup tables in RAM mode with the write enable on `CE`, as Vivado
+    // writes one (`tests/fpga_xray_lutram_vivado.rs`), and nothing that would
+    // make it a 32-word, shifting or cascaded one.
     assert_eq!(built.rams.len(), 4, "four bits wide, one RAM64X1D a bit");
     for ram in &built.rams {
         let here = built.decoded.at(&ram.tile);
         eprintln!("{} {}: {here:?}", ram.tile, ram.bel);
-        for wanted in ["SLICEM_X0.DLUT.RAM", "SLICEM_X0.CLUT.RAM"] {
+        for wanted in [
+            "SLICEM_X0.DLUT.RAM",
+            "SLICEM_X0.CLUT.RAM",
+            "SLICEM_X0.WEMUX.CE",
+        ] {
             assert!(here.contains(&wanted), "{}: no {wanted}", ram.tile);
         }
         for unwanted in [
@@ -484,7 +489,6 @@ fn a_distributed_ram_reaches_a_bit_file_and_every_bit_decodes() {
             "SLICEM_X0.CLUT.SRL",
             "SLICEM_X0.WA7USED",
             "SLICEM_X0.WA8USED",
-            "SLICEM_X0.WEMUX.CE",
             "SLICEM_X0.CLKINV",
             "SLICEM_X0.CLUT.DI1MUX.CI",
         ] {
@@ -499,7 +503,8 @@ fn a_distributed_ram_reaches_a_bit_file_and_every_bit_decodes() {
 /// Every `lutram` site of the loaded region is on a `CLBLM` tile type and
 /// named after its `SLICEM`; no `CLBLL` offers one; the region offers one
 /// per `CLBLM` tile, not zero (the original failure) and not two. The
-/// RAM's blocks are its own slice's `DLUT` and `CLUT` and nothing else, so
+/// RAM's blocks are its own slice's `DLUT` and `CLUT`, and the slice's other
+/// shapes of RAM, which all write through `D`'s inputs (`xray::lutram`), so
 /// the `A` and `B` lookup tables, all eight flip-flops and the whole
 /// `SLICEL` of the same tile stay usable; and no lookup table this
 /// placement put down sits on a blocked bel of a RAM's tile.
@@ -522,7 +527,10 @@ fn a_ram_takes_two_lookup_tables_of_a_slicem_and_nothing_else() {
         assert!(ram.tile.starts_with("CLBLM_"), "{ram:?}");
         assert_eq!(ram.bel, "SLICEM_X0_RAM64X1D");
     }
-    assert_eq!(built.blocks, vec!["SLICEM_X0_DLUT", "SLICEM_X0_CLUT"]);
+    assert_eq!(built.blocks[..2], ["SLICEM_X0_DLUT", "SLICEM_X0_CLUT"]);
+    for other in &built.blocks[2..] {
+        assert!(other.starts_with("SLICEM_X0_RAM"), "{other}");
+    }
     let ram_tiles: HashSet<&str> = built.rams.iter().map(|r| r.tile.as_str()).collect();
     for (tile, bel) in &built.others {
         if ram_tiles.contains(tile.as_str()) {
@@ -545,18 +553,18 @@ fn a_ram_takes_two_lookup_tables_of_a_slicem_and_nothing_else() {
 }
 
 /// **The write port's three control wires.** `we`, `din` and `wclk` reach
-/// `CLBLM_M_WE`, `CLBLM_M_DI` and `CLBLM_M_CLK` — the wires
-/// `ppips_clblm_*.db` feeds from `FAN4`, `FAN3` and `CLK1` — driven by the
+/// `CLBLM_M_CE`, `CLBLM_M_DI` and `CLBLM_M_CLK` — the wires
+/// `ppips_clblm_*.db` feeds from `FAN7`, `FAN3` and `CLK1` — driven by the
 /// button's synchroniser, a switch's input buffer and the global clock
 /// buffer; and the clock arrives on a global clock wire, never through
 /// data routing.
 ///
 /// It would catch a pin table naming the wrong wire (`CI` instead of `DI`,
-/// `CE` instead of `WE`), a clock reaching a RAM off general routing (the
+/// `WE` instead of `CE`), a clock reaching a RAM off general routing (the
 /// fault the ECP5's distributed RAM had), and the mapper wiring a control
-/// pin to the wrong net. It would not catch the slice reading `WE` from
-/// the `CE` pin instead: that is `WEMUX.CE`, which the first test holds
-/// clear, and whose meaning is the fuzzer's.
+/// pin to the wrong net. The write enable was on `WE` with `WEMUX.CE` clear
+/// until Vivado's router refused that and every RAM of Vivado's was found on
+/// `CE` (`docs/fpga-vivado-parity.md`); `--memories legacy` keeps it there.
 #[test]
 fn the_write_enable_data_and_clock_arrive_where_the_database_says() {
     let Some(built) = built() else { return };
@@ -571,7 +579,7 @@ fn the_write_enable_data_and_clock_arrive_where_the_database_says() {
             vec![
                 ("din", "CLBLM_M_DI", "IBUF"),
                 ("wclk", "CLBLM_M_CLK", "BUFG"),
-                ("we", "CLBLM_M_WE", "FDRE"),
+                ("we", "CLBLM_M_CE", "FDRE"),
             ],
             "{ram:?}"
         );

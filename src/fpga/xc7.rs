@@ -59,7 +59,7 @@
 //! [`ConfigBit`] the architecture hands out — is frame `baseaddr + row`,
 //! word `offset + col / 32`, bit `col % 32`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
@@ -146,8 +146,45 @@ pub fn frame_ecc(frame: &[u32]) -> u32 {
 /// mean nothing. That is a reason offered, not a measurement; that they are zero
 /// is the measurement.
 pub fn wanted_ecc(address: Option<FrameAddress>, frame: &[u32]) -> u32 {
+    wanted_ecc_without(address, frame, &DynamicBits::new())
+}
+
+/// The bits of a configuration whose values a running design changes, by
+/// frame address, word and bit: the contents of a lookup table that is a
+/// distributed RAM or a shift register.
+pub type DynamicBits = HashSet<(u32, u32, u32)>;
+
+/// [`wanted_ecc`], for a configuration in which `dynamic` change at run time.
+///
+/// **Vivado leaves a distributed RAM's and a shift register's contents out of
+/// its frame's ECC**, and nothing else of the frame. Measured on Vivado
+/// 2026.1's bitstreams of designs written for it (`docs/fpga-vivado-parity.md`):
+/// a `RAM64X1S` or an `SRLC32E` with contents, with a lookup table of logic in
+/// the same frames, has the ECC of the frame with the RAM's table zeroed, and
+/// with a logic table on the next table of the same slice, in the same word,
+/// of the frame with that table's sixteen bits alone zeroed. A table in RAM
+/// mode with no contents changes nothing. The same reason as a block RAM's is
+/// the likely one, and it is a guess.
+pub fn wanted_ecc_without(
+    address: Option<FrameAddress>,
+    frame: &[u32],
+    dynamic: &DynamicBits,
+) -> u32 {
     match address {
         Some(address) if address.block != 0 => 0,
+        Some(address) if !dynamic.is_empty() => {
+            let at = address.to_u32();
+            let mut copy = frame.to_vec();
+            for (word, value) in copy.iter_mut().enumerate() {
+                let word = u32::try_from(word).unwrap_or(u32::MAX);
+                for bit in 0..32 {
+                    if dynamic.contains(&(at, word, bit)) {
+                        *value &= !(1 << bit);
+                    }
+                }
+            }
+            frame_ecc(&copy)
+        }
         _ => frame_ecc(frame),
     }
 }
@@ -518,13 +555,21 @@ impl FrameMap {
 pub struct FrameData {
     layout: FrameLayout,
     words: Vec<u32>,
+    /// The bits a running design changes, which the ECC leaves out: set by
+    /// [`FrameData::with_ecc_without`], and kept so that a writer filling in
+    /// the ECC again ([`FrameData::with_ecc`]) leaves them out as well.
+    dynamic: DynamicBits,
 }
 
 impl FrameData {
     /// An all-zero image in the given layout.
     pub fn empty(layout: FrameLayout) -> FrameData {
         let words = vec![0u32; layout.words()];
-        FrameData { layout, words }
+        FrameData {
+            layout,
+            words,
+            dynamic: DynamicBits::new(),
+        }
     }
 
     /// An image taken from a stream of words in the order
@@ -547,7 +592,11 @@ impl FrameData {
                 layout.words()
             )));
         }
-        Ok(FrameData { layout, words })
+        Ok(FrameData {
+            layout,
+            words,
+            dynamic: DynamicBits::new(),
+        })
     }
 
     /// The layout it was built in.
@@ -608,13 +657,27 @@ impl FrameData {
         self.words[start..start + WORDS_PER_FRAME].copy_from_slice(frame);
     }
 
-    /// A copy with every frame's ECC bits filled in by [`wanted_ecc`].
+    /// A copy with every frame's ECC bits filled in by [`wanted_ecc`], leaving
+    /// out what an earlier [`FrameData::with_ecc_without`] was told changes.
     pub fn with_ecc(&self) -> FrameData {
+        self.with_ecc_without(&self.dynamic)
+    }
+
+    /// A copy with every frame's ECC bits filled in by
+    /// [`wanted_ecc_without`], leaving `dynamic` out of them.
+    pub fn with_ecc_without(&self, dynamic: &DynamicBits) -> FrameData {
+        let dynamic_frames: HashSet<u32> = dynamic.iter().map(|(a, _, _)| *a).collect();
+        let none = DynamicBits::new();
         let mut out = self.clone();
+        out.dynamic = dynamic.clone();
         for (position, address) in self.layout.order.iter().enumerate() {
             let start = position * WORDS_PER_FRAME;
             let range = start..start + WORDS_PER_FRAME;
-            let ecc = wanted_ecc(*address, &self.words[range]);
+            let here = match address {
+                Some(a) if dynamic_frames.contains(&a.to_u32()) => dynamic,
+                _ => &none,
+            };
+            let ecc = wanted_ecc_without(*address, &self.words[range], here);
             let word = &mut out.words[start + ECC_WORD];
             *word = (*word & !ECC_MASK) | ecc;
         }
@@ -624,11 +687,28 @@ impl FrameData {
     /// Every frame whose ECC bits are wrong, in stream order. A pad frame has
     /// no address to report and holds nothing, so it is not looked at.
     pub fn ecc_faults(&self) -> Vec<EccFault> {
+        self.ecc_faults_without(&DynamicBits::new())
+    }
+
+    /// [`FrameData::ecc_faults`], for a configuration in which `dynamic`
+    /// change at run time: see [`wanted_ecc_without`].
+    pub fn ecc_faults_without(&self, dynamic: &DynamicBits) -> Vec<EccFault> {
+        let dynamic_frames: HashSet<u32> = dynamic.iter().map(|(a, _, _)| *a).collect();
+        let none = DynamicBits::new();
         let mut out = Vec::new();
         for (position, address) in self.layout.order.iter().enumerate() {
             let Some(address) = address else { continue };
             let start = position * WORDS_PER_FRAME;
-            let wanted = wanted_ecc(Some(*address), &self.words[start..start + WORDS_PER_FRAME]);
+            let here = if dynamic_frames.contains(&address.to_u32()) {
+                dynamic
+            } else {
+                &none
+            };
+            let wanted = wanted_ecc_without(
+                Some(*address),
+                &self.words[start..start + WORDS_PER_FRAME],
+                here,
+            );
             let found = self.words[start + ECC_WORD] & ECC_MASK;
             if found != wanted {
                 out.push(EccFault {

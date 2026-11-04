@@ -88,6 +88,9 @@ fn every_cell_in_the_library_has_vectors() {
             "MMCME2_BASE",
             "IBUFGDS",
             "IOBUF",
+            "RAM32M_1",
+            "RAM64M_1",
+            "RAM128X1D_1",
         ]
         .contains(&name)
         {
