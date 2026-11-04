@@ -320,7 +320,7 @@ impl XrayDatabase {
                     )));
                 };
                 for bit in &f.ones {
-                    set_bit(frames, tile, *bit).map_err(&malformed)?;
+                    set_bit(frames, tile, *bit).map_err(malformed)?;
                 }
             }
             report.config_pads += 1;
@@ -350,7 +350,7 @@ impl XrayDatabase {
                         continue;
                     }
                     for bit in &f.ones {
-                        set_bit(frames, tile, *bit).map_err(&malformed)?;
+                        set_bit(frames, tile, *bit).map_err(malformed)?;
                     }
                     report.unused_pads += 1;
                 }
