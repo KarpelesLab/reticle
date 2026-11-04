@@ -402,6 +402,18 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         };
         let net = self.b.add_net_kind(name, ty, kind);
         debug_assert_eq!(net.index(), self.nets.len());
+        // The IR numbers a vector from zero. Vivado's XDC names a bit by the
+        // index it was declared with, so a range that says otherwise is kept.
+        if let LayoutKind::Array(array) = &layout.kind
+            && array.elem.width == 1
+            && array.len > 0
+        {
+            let right = array.index_at(array.len - 1);
+            if array.left >= 0 && right >= 0 && (right != 0 || array.left == 0) {
+                self.b
+                    .net_attr(net, "declared_range", format!("{}:{right}", array.left));
+            }
+        }
         if let Some((tyname, literals)) = layout.enum_attrs(self.a()) {
             self.b.net_attr(net, "enum_type", tyname);
             self.b.net_attr(net, "enum_literals", literals);

@@ -8,7 +8,7 @@
 //! sources with a defined precedence, and *checked against the device
 //! database* before anything downstream uses them.
 //!
-//! # Two front doors
+//! # Three front doors
 //!
 //! 1. A native `.rcf` file, parsed by [`Constraints::parse`]:
 //!
@@ -43,6 +43,9 @@
 //!    instance, a cell or a module. Attribute names are matched
 //!    case-insensitively, so `(* PIN *)` and `(* pin *)` are the same
 //!    constraint.
+//!
+//! 3. Vivado's XDC, read by `Constraints::parse_xdc` in [`super::xdc`], which
+//!    needs the design to resolve its queries against.
 //!
 //! **Precedence: the file wins.** A constraints file is written against a
 //! specific board and is the later, more specific statement; an attribute
@@ -238,6 +241,25 @@ pub struct Region {
     pub span: Span,
 }
 
+/// A placement region stated in `SLICE_X..Y..` coordinates, as a Vivado pblock
+/// is, which only a device's fabric database can turn into tiles: see
+/// [`Constraints::resolve_site_regions`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteRegion {
+    /// The region's name, referred to by a [`RegionAssignment`].
+    pub name: String,
+    /// The lowest slice column.
+    pub x0: u32,
+    /// The lowest slice row.
+    pub y0: u32,
+    /// The highest slice column.
+    pub x1: u32,
+    /// The highest slice row.
+    pub y1: u32,
+    /// Where the constraint was written.
+    pub span: Span,
+}
+
 /// Instances matching a pattern, confined to a [`Region`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegionAssignment {
@@ -370,6 +392,8 @@ pub struct Constraints {
     pub pins: Vec<PinAssignment>,
     /// Declared placement regions.
     pub regions: Vec<Region>,
+    /// Placement regions in slice coordinates, not yet in tiles.
+    pub site_regions: Vec<SiteRegion>,
     /// Instances confined to a region.
     pub region_assignments: Vec<RegionAssignment>,
     /// Relative placement macros.
@@ -400,6 +424,7 @@ impl Constraints {
     pub fn is_empty(&self) -> bool {
         self.pins.is_empty()
             && self.regions.is_empty()
+            && self.site_regions.is_empty()
             && self.region_assignments.is_empty()
             && self.rlocs.is_empty()
             && self.keep_hierarchy.is_empty()
@@ -428,6 +453,48 @@ impl Constraints {
         self.keep_hierarchy
             .iter()
             .any(|(pattern, _, _)| matches_glob(pattern, name))
+    }
+
+    /// Turns each [`SiteRegion`] into a [`Region`] of the tiles its corner
+    /// sites are in, `tile_of` being the fabric database's answer for a site.
+    /// A Reticle region is a rectangle of tiles, so one that names half of a
+    /// tile's two slices gets the whole tile, which is also what Vivado does
+    /// to such a range (`Place 30-8517`), and any column between that holds no
+    /// slice is inside it too. A corner no tile has is reported, and the region
+    /// and what was assigned to it dropped: Vivado reports it too (`Place
+    /// 30-8519`) and carries on without it.
+    pub fn resolve_site_regions(
+        &mut self,
+        tile_of: impl Fn(&str) -> Option<(u32, u32)>,
+        diags: &mut Diagnostics,
+    ) {
+        for site in std::mem::take(&mut self.site_regions) {
+            let corners: Vec<(u32, u32)> = [(site.x0, site.y0), (site.x1, site.y1)]
+                .iter()
+                .filter_map(|(x, y)| tile_of(&format!("SLICE_X{x}Y{y}")))
+                .collect();
+            let &[a, b] = corners.as_slice() else {
+                diags.push(
+                    Diagnostic::warning(format!(
+                        "pblock `{}` reaches SLICE_X{}Y{}:SLICE_X{}Y{}, outside this device: it \
+                         confines nothing",
+                        site.name, site.x0, site.y0, site.x1, site.y1
+                    ))
+                    .with_code(super::xdc::XDC_NOT_HONOURED)
+                    .with_span(site.span),
+                );
+                self.region_assignments.retain(|r| r.region != site.name);
+                continue;
+            };
+            self.regions.push(Region {
+                name: site.name,
+                x0: a.0.min(b.0),
+                y0: a.1.min(b.1),
+                x1: a.0.max(b.0),
+                y1: a.1.max(b.1),
+                span: site.span,
+            });
+        }
     }
 
     /// Parses a `.rcf` file.
@@ -496,6 +563,11 @@ impl Constraints {
         for region in other.regions {
             if !self.regions.iter().any(|r| r.name == region.name) {
                 self.regions.push(region);
+            }
+        }
+        for region in other.site_regions {
+            if !self.site_regions.iter().any(|r| r.name == region.name) {
+                self.site_regions.push(region);
             }
         }
         for assignment in other.region_assignments {
@@ -1017,7 +1089,12 @@ impl Constraints {
             seen.push(&region.name);
         }
         for assignment in &self.region_assignments {
-            if !self.regions.iter().any(|r| r.name == assignment.region) {
+            if !self.regions.iter().any(|r| r.name == assignment.region)
+                && !self
+                    .site_regions
+                    .iter()
+                    .any(|r| r.name == assignment.region)
+            {
                 diags.push(
                     Diagnostic::error(format!("no region named `{}`", assignment.region))
                         .with_code(NO_SUCH_REGION)
@@ -1159,12 +1236,15 @@ impl Constraints {
             }
             check_path(&delay.path, &names, diags);
         }
-        let inputs: Vec<String> = module
-            .ports
-            .iter()
-            .filter(|p| p.dir != PortDir::Out)
-            .map(|p| p.name.as_str().to_owned())
-            .collect();
+        let mut inputs: Vec<String> = Vec::new();
+        for port in module.ports.iter().filter(|p| p.dir != PortDir::Out) {
+            inputs.push(port.name.as_str().to_owned());
+            // One bit of a bus goes by its pad's buffer.
+            let width = module.nets.get(port.net).and_then(|n| n.ty.width());
+            for bit in 0..width.unwrap_or(1) {
+                inputs.push(format!("{}$io{bit}", port.name));
+            }
+        }
         for delay in &self.input_delays {
             if !self.clocks.iter().any(|c| c.name == delay.clock) {
                 diags.push(
@@ -1342,6 +1422,14 @@ impl Constraints {
                 region.name, region.x0, region.y0, region.x1, region.y1
             );
         }
+        for region in &self.site_regions {
+            let _ = writeln!(out, "create_pblock {}", region.name);
+            let _ = writeln!(
+                out,
+                "resize_pblock [get_pblocks {}] -add {{SLICE_X{}Y{}:SLICE_X{}Y{}}}",
+                region.name, region.x0, region.y0, region.x1, region.y1
+            );
+        }
         for assignment in &self.region_assignments {
             let _ = writeln!(
                 out,
@@ -1463,8 +1551,9 @@ impl Constraints {
     /// Appends a comment listing the constraints this format cannot say.
     fn write_dropped(&self, out: &mut String, comment: &str, extra: &[&str]) {
         let mut dropped: Vec<String> = Vec::new();
-        if !self.regions.is_empty() {
-            dropped.push(format!("{} placement region(s)", self.regions.len()));
+        let regions = self.regions.len() + self.site_regions.len();
+        if regions > 0 {
+            dropped.push(format!("{regions} placement region(s)"));
         }
         if !self.rlocs.is_empty() {
             dropped.push(format!("{} relative placement(s)", self.rlocs.len()));
@@ -1507,6 +1596,10 @@ impl Constraints {
 /// registers was placed inside the region. A net a combinational process
 /// assigns is counted too, so a pattern naming only one is not warned
 /// about although nothing may take its name.
+///
+/// A register's own names are here as well, as mapping will spell them
+/// (`r$ff`, `r$ff$ff3`), which is what an XDC cell turns into: see
+/// [`super::xdc`].
 fn placeable_names(module: &Module) -> Vec<String> {
     let mut written = Vec::new();
     module.for_each_stmt(|stmt| {
@@ -1516,6 +1609,13 @@ fn placeable_names(module: &Module) -> Vec<String> {
     });
     written.sort_unstable();
     written.dedup();
+    let mut registers = Vec::new();
+    for net in written.iter().filter_map(|net| module.nets.get(*net)) {
+        registers.push(format!("{}$ff", net.name));
+        for bit in 0..net.ty.width().unwrap_or(1) {
+            registers.push(format!("{}$ff$ff{bit}", net.name));
+        }
+    }
     module
         .instances
         .iter()
@@ -1527,6 +1627,7 @@ fn placeable_names(module: &Module) -> Vec<String> {
                 .filter_map(|net| module.nets.get(net))
                 .map(|net| net.name.as_str().to_owned()),
         )
+        .chain(registers)
         .collect()
 }
 
@@ -1569,6 +1670,13 @@ fn hierarchical_names(
     if nets {
         local.extend(module.nets.iter().map(|(_, n)| n.name.as_str().to_owned()));
         local.extend(module.ports.iter().map(|p| p.name.as_str().to_owned()));
+        // And a pad's buffer, which is what names one bit of a bus.
+        for port in &module.ports {
+            let width = module.nets.get(port.net).and_then(|n| n.ty.width());
+            for bit in 0..width.unwrap_or(1) {
+                local.push(format!("{}$io{bit}", port.name));
+            }
+        }
     }
     out.extend(local.into_iter().map(|name| format!("{prefix}{name}")));
     // A recursive instantiation is an elaboration error; the depth limit
@@ -1619,7 +1727,7 @@ pub(crate) fn driven_nets(module: &Module) -> Vec<bool> {
 /// writes, which is how `docs/fpga.md` says a design asks for a PLL —
 /// apart from a clock a block produces. A black box keeps the
 /// conservative answer, since nothing here knows which way its ports go.
-fn written_nets(design: &Design, module: &Module) -> Vec<bool> {
+pub(super) fn written_nets(design: &Design, module: &Module) -> Vec<bool> {
     let mut driven = driven_without_instances(module);
     let mut touched = Vec::new();
     for (_, instance) in module.instances.iter() {

@@ -3,6 +3,7 @@ top dynamic_index
 module dynamic_index
   timescale 1 fs / 1 fs
   net %d u8 wire
+  attr declared_range = "0:7"
   net %u u8 wire
   net %sel s32 wire
   net %bit_d u1 wire

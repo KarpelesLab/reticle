@@ -11,6 +11,8 @@ models or IP.
   `testdata/fpga/vivado/cells/`.
 - `gen_primitives.py` writes one design per 7-series primitive into
   `testdata/fpga/vivado/primitives/`.
+- `gen_xdc.py` and `xdc_answers.tcl` ask what Vivado makes of each constraints
+  file in `testdata/fpga/vivado/xdc/`, and keep the answer beside it.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 

@@ -205,8 +205,11 @@ nextpnr reads.
 Options:
   --device <name>    Target device; required (see --list-devices)
   --list-devices     List the built-in devices and exit
-  --constraints <f>  Read pin and placement constraints from an .rcf file;
-                     repeatable, an earlier file winning where two disagree
+  --constraints <f>  Read pin and placement constraints from an .rcf file, or
+                     from a Vivado .xdc: what the flow cannot honour of one is
+                     a warning that names it, or an error where going on could
+                     make a wrong bitstream (docs/fpga.md); repeatable, an
+                     earlier file winning where two disagree
   --top <module>     Treat this module as the top
   --param <N=V>      Override a top-level parameter or generic; repeatable
   --define <N[=V]>   Define a Verilog macro in every file; repeatable
@@ -2272,10 +2275,30 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             return Ok(Outcome::Failed);
         };
         let text = map.file(id).text().to_string();
-        constraints.merge(Constraints::parse(&text, id, &mut diags), &mut diags);
+        let read = if extension(path).as_deref() == Some("xdc") {
+            Constraints::parse_xdc(&text, id, &design, top, &mut diags)
+        } else {
+            Constraints::parse(&text, id, &mut diags)
+        };
+        constraints.merge(read, &mut diags);
     }
     constraints.merge_attrs(&design, top, &mut diags);
     constraints.check(&design, device, &mut diags);
+    // A pblock's slices become tiles from the fabric database, which only the
+    // 7-series' does here; no other family has its slices named this way.
+    if device.family != "xc7"
+        && let Some(region) = constraints.site_regions.first()
+    {
+        diags.push(
+            reticle::diag::Diagnostic::warning(format!(
+                "pblock `{}` is not honoured: slices name sites only on a 7-series device, and \
+                 `{}` is not one",
+                region.name, device.name
+            ))
+            .with_code(reticle::fpga::xdc::XDC_NOT_HONOURED)
+            .with_span(region.span),
+        );
+    }
     if report(&mut diags, &map) {
         return Ok(Outcome::Failed);
     }
@@ -3567,6 +3590,31 @@ fn write_xc7_bitstream(
         XrayDatabase::open(&files, &root, &device.name, &options).map_err(|e| e.to_string())?;
     laps.lap("open the database");
 
+    // A pblock says where in slices; what is confined here is tiles, and only
+    // the database knows which a slice is in.
+    let resolved_regions;
+    let constraints = if constraints.site_regions.is_empty() {
+        constraints
+    } else {
+        let tiles = db.tiles(&files).map_err(|e| e.to_string())?;
+        let mut owned = constraints.clone();
+        let mut said = Diagnostics::new();
+        owned.resolve_site_regions(
+            |site| {
+                tiles
+                    .iter()
+                    .find(|t| t.sites.iter().any(|(name, _)| name == site))
+                    .map(|t| (t.grid_x, t.grid_y))
+            },
+            &mut said,
+        );
+        for diag in said.iter() {
+            eprintln!("warning: {}", diag.message);
+        }
+        resolved_regions = owned;
+        &resolved_regions
+    };
+
     // Without an explicit region, load the fabric around the pins the
     // constraints name. The whole die does not fit; the loader would
     // refuse it with the numbers, which is not a useful default.
@@ -3581,6 +3629,17 @@ fn write_xc7_bitstream(
                  load the fabric around; pass --region x0,y0,x1,y1"
                     .to_owned(),
             );
+        }
+        // A region asked for by a pblock is no use if its fabric is not loaded.
+        for region in &constraints.regions {
+            if let Some(loaded) = options.region {
+                options.region = Some(GridRegion::new(
+                    loaded.x0.min(region.x0),
+                    loaded.y0.min(region.y0),
+                    loaded.x1.max(region.x1),
+                    loaded.y1.max(region.y1),
+                ));
+            }
         }
         // A design with a global clock buffer needs the column that
         // holds one, which is nowhere near a pad. Grow the region to
@@ -4853,6 +4912,13 @@ fn timing(args: &Args) -> Result<Outcome, ArgError> {
     let mut diags = Diagnostics::new();
     let mut constraints = Constraints::new();
     if let Some(path) = args.option("constraints") {
+        // An XDC's queries answer from the source, and by this point it has
+        // been synthesised away.
+        if extension(path).as_deref() == Some("xdc") {
+            return Ok(Outcome::Usage(format!(
+                "`reticle timing` reads an .rcf; `{path}` is an XDC, which `reticle fpga` reads"
+            )));
+        }
         let Some(id) = load(&mut map, path, &mut diags) else {
             report(&mut diags, &map);
             return Ok(Outcome::Failed);

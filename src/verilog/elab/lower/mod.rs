@@ -573,6 +573,21 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let kind = if is_var { NetKind::Reg } else { NetKind::Wire };
         let net = self.b.add_net_kind(name, irt, kind);
         debug_assert_eq!(net.index(), self.nets.len());
+        // The IR numbers a vector from zero. Vivado's XDC names a bit by the
+        // index it was declared with, so a range that says otherwise is kept.
+        if let VType::Packed(packed) = &ty
+            && let [range] = packed.dims.as_slice()
+            && range.left >= 0
+            && (range.right != 0 || range.left == 0)
+            && packed.fields.is_none()
+            && packed.enumeration.is_none()
+        {
+            self.b.net_attr(
+                net,
+                "declared_range",
+                format!("{}:{}", range.left, range.right),
+            );
+        }
         self.nets.push(NetInfo { ty, is_var, span });
         self.drivers.push(Vec::new());
         Some(net)

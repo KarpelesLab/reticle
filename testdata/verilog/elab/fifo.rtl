@@ -18,6 +18,7 @@ module sync_fifo
   net %wr_ptr u5 reg
   net %rd_ptr u5 reg
   net %rd_word u8 reg
+  attr declared_range = "0:0"
   net %parity u1 reg
   port clk in %clk
   port rst in %rst

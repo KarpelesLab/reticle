@@ -1,0 +1,234 @@
+== clocks
+3: warning F0113 clock `c2` has waveform {0 3}, and Reticle's timing holds only a period: half-cycle paths are timed as if it were even
+3: warning F0212 net `clk2` does not clock anything in `design_top`
+4: warning F0113 clock `virt` is virtual, which Reticle's timing has no way to hold: each delay against it is dropped, with a warning of its own
+5: warning F0113 clock `c2add`: `clk2` already has a clock, and Reticle's timing holds one a net, so this `-add` is dropped
+8: warning F0113 clock `g_scale` is on `div_reg[1]/Q`, one bit of a register, and Reticle's clocks are on whole nets: it is dropped, and what it clocks is untimed
+9: warning F0212 net `m` does not clock anything in `design_top`
+10: warning F0113 clock `q_reg[0]/Q` has waveform {10 20}, and Reticle's timing holds only a period: half-cycle paths are timed as if it were even
+10: warning F0113 clock `q_reg[0]/Q` is on `q_reg[0]/Q`, one bit of a register, and Reticle's clocks are on whole nets: it is dropped, and what it clocks is untimed
+12: note F0114 generated clock `g_mmcm` needs nothing done here: Reticle's timing works out `u_mmcm/CLKOUT0` from `MMCME2_BASE`'s parameters, as Vivado would without being asked
+15: warning F0113 clock `twice` overrides clock `twice`, which is gone, as it is in Vivado
+15: warning F0212 net `rst` does not clock anything in `design_top`
+18: warning F0113 clock `both` is on `a[1]`, one bit of a bus, and Reticle's clocks are on whole nets: it is dropped, and what it clocks is untimed
+19: warning F0113 clock `part` is on `a[0]`, one bit of a bus, and Reticle's clocks are on whole nets: it is dropped, and what it clocks is untimed
+21: warning F0113 clock `taker` overrides clock `gone`, which is gone, as it is in Vivado
+21: warning F0212 net `single` does not clock anything in `design_top`
+clock clk on clk period 10.000
+clock c2 on clk2 period 7.500
+clock g_div on clk_div period 20.000
+clock g_edges on m period 20.000
+clock twice on rst period 31.000
+clock taker on single period 43.000
+== config
+2: note F0114 `CFGBVS` has no effect here: Vivado checks it against the banks' voltage and writes the same bitstream, byte for byte
+3: note F0114 `CONFIG_VOLTAGE` has no effect here: Vivado checks it against the banks' voltage and writes the same bitstream, byte for byte
+4: warning F0113 `CONFIG_MODE` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
+5: warning F0113 `BITSTREAM.GENERAL.COMPRESS` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
+6: warning F0113 `BITSTREAM.CONFIG.CONFIGRATE` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
+7: warning F0113 `BITSTREAM.CONFIG.SPI_BUSWIDTH` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
+8: error F0112 `BITSTREAM.CONFIG.UNUSEDPIN` is not honoured by Reticle's bitstream, and it changes what the part does, so going on without it could be wrong
+9: error F0112 `BITSTREAM.STARTUP.STARTUPCLK` is not honoured by Reticle's bitstream, and it changes what the part does, so going on without it could be wrong
+== delays
+3: warning F0212 net `clk2` does not clock anything in `design_top`
+4: warning F0113 clock `virt` is virtual, which Reticle's timing has no way to hold: each delay against it is dropped, with a warning of its own
+7: note F0114 `set_input_delay -min` needs nothing done here: Reticle's placement has no hold analysis
+8: warning F0113 `set_input_delay -clock virt` is not honoured: that clock has no net here, so this pad is timed in every domain from its buffer alone
+9: warning F0113 `set_input_delay -clock_fall` is not honoured: Reticle's holds a delay after a rising edge of a clock, so this one is dropped
+11: warning F0113 `set_input_delay -add_delay` against a second clock is not honoured: Reticle's holds a pad in one domain, so this one is dropped
+15: warning F0113 `set_output_delay` is not honoured: Reticle's timing has no output delays, so this pad is timed from its buffer alone
+16: warning F0113 `set_output_delay` is not honoured: Reticle's timing has no output delays, so this pad is timed from its buffer alone
+17: warning F0113 `set_output_delay` is not honoured: Reticle's timing has no output delays, so this pad is timed from its buffer alone
+clock clk on clk period 10.000
+clock c2 on clk2 period 7.000
+input_delay clk 2.000 ["rst"]
+input_delay clk 2.000 ["single"]
+input_delay clk 1.000 ["a$io2"]
+input_delay clk 1.000 ["a$io3"]
+input_delay clk 1.000 ["be$io3"]
+input_delay clk 2.500 ["hi"]
+== exceptions
+3: warning F0212 net `clk2` does not clock anything in `design_top`
+6: warning F0113 `set_false_path` with both `-from` and `-to` is kept and not applied by the timing-driven placement, which cannot tell the paths between two ends apart
+8: note F0114 `set_false_path` between clocks needs nothing done here: Reticle's placement times no path between two clocks at all
+9: warning F0113 `set_false_path -through` is not honoured: Reticle names a path by its two ends alone, so those paths are timed as ordinary paths
+10: warning F0113 `set_false_path -through` is not honoured: Reticle names a path by its two ends alone, so those paths are timed as ordinary paths
+11: warning F0113 `set_false_path` with both `-from` and `-to` is kept and not applied by the timing-driven placement, which cannot tell the paths between two ends apart
+17: warning F0113 `set_false_path` on a clock's paths is not honoured: Reticle's exceptions name cells, not clocks, so those paths are timed as ordinary paths
+19: note F0114 `set_false_path -hold` needs nothing done here: Reticle's placement has no hold analysis
+20: warning F0113 `set_multicycle_path` with both `-from` and `-to` is kept and not applied by the timing-driven placement, which cannot tell the paths between two ends apart
+22: note F0114 `set_multicycle_path -hold` is kept and needs nothing done by the placement, which has no hold analysis
+23: warning F0113 `set_multicycle_path -from` alone is kept and not applied by the timing-driven placement, which applies a multicycle path by where it ends
+24: warning F0113 `set_multicycle_path` between clocks is not honoured: Reticle's placement times no path between two clocks at all, so nothing asks these paths for this
+25: warning F0113 `set_multicycle_path` between clocks is not honoured: Reticle's placement times no path between two clocks at all, so nothing asks these paths for this
+28: warning F0113 `set_max_delay` with both `-from` and `-to` is kept and not applied by the timing-driven placement, which cannot tell the paths between two ends apart
+30: warning F0113 `set_max_delay` between clocks is not honoured: Reticle's placement times no path between two clocks at all, so nothing asks these paths for this
+31: warning F0113 `set_max_delay -through` is not honoured: Reticle names a path by its two ends alone, so that delay is not asked of those paths
+32: warning F0113 `set_min_delay` is not honoured: Reticle's placement has no hold analysis, so this is dropped
+33: note F0114 `set_clock_groups` needs nothing done here: Reticle's placement times no path between two clocks at all, grouped or not
+34: note F0114 `set_clock_groups` needs nothing done here: Reticle's placement times no path between two clocks at all, grouped or not
+35: note F0114 `set_clock_groups` needs nothing done here: Reticle's placement times no path between two clocks at all, grouped or not
+36: note F0114 `set_clock_groups` needs nothing done here: Reticle's placement times no path between two clocks at all, grouped or not
+clock clk on clk period 10.000
+clock c2 on clk2 period 7.000
+false_path Some("rst") None
+false_path None Some("so")
+false_path Some("a$io0") Some("m$ff")
+false_path Some("a$io1") Some("m$ff")
+false_path Some("t$ff$ff0") None
+false_path Some("t$ff$ff1") None
+false_path Some("t$ff$ff2") None
+false_path Some("t$ff$ff3") None
+false_path Some("r$ff$ff0") Some("r$ff$ff1")
+false_path Some("u_sub.s1$ff") None
+false_path Some("single") None
+false_path None Some("div$ff$ff0")
+false_path Some("clk2") None
+false_path Some("a$io2") None
+multicycle 2 hold=false Some("r$ff$ff2") Some("r$ff$ff3")
+multicycle 3 hold=false None Some("t$ff$ff0")
+multicycle 2 hold=true None Some("t$ff$ff0")
+multicycle 4 hold=false Some("div$ff$ff1") None
+max_delay 3.000 Some("q$ff$ff0") None
+max_delay 3.000 None Some("q$ff$ff1")
+max_delay 4.000 Some("q$ff$ff2") Some("q$ff$ff3")
+max_delay 6.000 Some("u_sub.q$ff") None
+== placement
+9: warning F0113 pblock `pb_mixed`'s RAMB18_X0Y0:RAMB18_X0Y3, DSP48_X0Y0:DSP48_X0Y1 is not honoured: a Reticle region is a rectangle of tiles, from its `SLICE_` ranges
+12: warning F0113 pblock `pb_two` has 2 `SLICE_` ranges and a Reticle region is one rectangle: its cells may go anywhere in the box around them
+16: warning F0113 pblock `pb_clockregion` has no `SLICE_` range (it has CLOCKREGION_X0Y0:CLOCKREGION_X0Y0), which is all a Reticle region is made from: it confines nothing
+19: warning F0113 `LOC SLICE_X50Y50` is not honoured: Reticle's placer cannot fix a cell to a site, so `clk_div_reg` goes where it places it
+20: warning F0113 `BEL AFF` is not honoured: Reticle's placer cannot fix a cell to a site, so `clk_div_reg` goes where it places it
+21: warning F0113 `LOC SLICE_X51Y51` is not honoured: Reticle's placer cannot fix a cell to a site, so `u_sub/q_reg` goes where it places it
+22: warning F0113 `BEL SLICEL.BFF` is not honoured: Reticle's placer cannot fix a cell to a site, so `u_sub/q_reg` goes where it places it
+23: warning F0113 `ASYNC_REG TRUE` is not honoured: it steers Vivado's tools, and the logic comes out the same without it
+site_region pb_sub 0 0 9 9
+site_region pb_regs 20 20 25 29
+site_region pb_mixed 30 30 39 39
+site_region pb_two 40 40 45 45
+assign u_sub.* pb_sub
+assign r$ff$ff0 pb_regs
+assign r$ff$ff1 pb_regs
+assign r$ff$ff2 pb_regs
+assign r$ff$ff3 pb_regs
+assign m$ff pb_regs
+assign t$ff$ff0 pb_mixed
+assign t$ff$ff1 pb_mixed
+assign t$ff$ff2 pb_mixed
+assign t$ff$ff3 pb_mixed
+assign q$ff$ff0 pb_two
+assign q$ff$ff1 pb_two
+assign q$ff$ff2 pb_two
+assign q$ff$ff3 pb_two
+keep_hierarchy u_sub
+== ports
+10: error F0206 bank b35 would need 2.5 V for `LVCMOS25` and 3.3 V for `LVCMOS33`
+11: error F0206 bank b35 would need 2.5 V for `LVCMOS25` and 3.3 V for `LVCMOS33`
+16: error F0206 bank b34 would need 2.5 V for `LVCMOS25` and 3.3 V for `LVCMOS33`
+24: error F0206 bank b14 would need 1.8 V for `LVCMOS18` and 3.3 V for `LVCMOS33`
+25: error F0206 bank b14 would need 1.8 V for `LVCMOS18` and 3.3 V for `LVCMOS33`
+26: error F0206 bank b14 would need 1.8 V for `LVCMOS18` and 3.3 V for `LVCMOS33`
+55: warning F0113 `DRIVE` on `clk`, an input, is ignored, as Vivado ignores it
+56: warning F0113 `SLEW` on `clk2`, an input, is ignored, as Vivado ignores it
+pin a[0] "L4" Some("LVCMOS33") None None (Some(false), Some(true))
+pin a[1] "L5" Some("LVCMOS33") None None (Some(true), None)
+pin a[2] "K5" Some("LVCMOS33") None None (Some(false), None)
+pin a[3] "K3" Some("LVCMOS33") None None (Some(false), Some(true))
+pin be[0] "H5" Some("LVCMOS33") None None (None, None)
+pin be[1] "" Some("LVCMOS33") None None (None, None)
+pin be[2] "" Some("LVCMOS33") None None (None, None)
+pin be[3] "H4" Some("LVCMOS33") None None (None, None)
+pin clk "N11" Some("LVCMOS33") None None (None, None)
+pin clk2 "N14" Some("LVCMOS33") None None (None, None)
+pin hi[0] "J4" Some("LVCMOS25") None None (Some(true), Some(false))
+pin hi[1] "" Some("LVCMOS25") None None (Some(false), Some(true))
+pin hi[2] "" Some("LVCMOS25") None None (Some(true), Some(false))
+pin hi[3] "J5" Some("LVCMOS25") None None (None, None)
+pin io1 "T3" Some("LVCMOS33") Some(16) None (None, None)
+pin q[0] "" Some("LVCMOS33") Some(16) None (None, None)
+pin q[1] "" Some("LVCMOS33") Some(16) None (None, None)
+pin q[2] "" Some("LVCMOS33") Some(16) None (None, None)
+pin q[3] "" Some("LVCMOS33") Some(16) None (None, None)
+pin rst "T2" Some("LVCMOS25") None None (None, None)
+pin single "G2" Some("LVCMOS33") None None (None, Some(true))
+pin so "R5" Some("LVCMOS18") Some(16) Some("fast") (None, None)
+pin y0 "R6" Some("LVCMOS18") Some(16) None (None, None)
+pin y1 "R7" Some("LVCMOS18") Some(16) Some("slow") (None, None)
+pin y2 "" Some("LVCMOS33") Some(16) None (None, None)
+pin y3 "" Some("LVCMOS33") Some(16) None (None, None)
+== refused
+7: error F0202 `xc7a100t-ftg256` has no pin named ZZ9
+8: error F0112 `set_property PACKAGE_PIN` applies to no object, so it is not set
+9: error F0112 `PACKAGE_PIN N11` is applied to 2 ports, and one pin is one port's
+10: error F0112 `PACKAGE_PIN N11` is applied to 4 ports, and one pin is one port's
+11: error F0112 `set_property PACKAGE_PIN` applies to no object, so it is not set
+12: error F0112 `set_property PACKAGE_PIN` applies to no object, so it is not set
+13: error F0112 `set_property PACKAGE_PIN` applies to no object, so it is not set
+14: error F0112 `set_property PACKAGE_PIN` needs objects, and `be` is a word; `[get_ports be]` would be one
+15: error F0112 `set_property PACKAGE_PIN` applies to no object, so it is not set
+16: error F0205 `xc7a100t-ftg256` does not offer the IO standard `NONSENSE`
+17: error F0112 `NONSENSE` on a port is not something Reticle's pads have: leaving it out would configure the pad otherwise than asked
+18: error F0112 `BEL` on a port is not something Reticle's pads have: leaving it out would configure the pad otherwise than asked
+19: error F0112 `set_property PACKAGE_PIN` needs objects, and `#` is a word; `[get_ports #]` would be one
+20: warning F0113 `current_design nothing` names a design this is not (the top is `design_top`), and has no effect here
+21: error F0112 `foreach` is not a command of Vivado's XDC, and whatever it would have done here is not done
+22: error F0112 `if` is not a command of Vivado's XDC, and whatever it would have done here is not done
+23: error F0112 `proc` is not a command of Vivado's XDC, and whatever it would have done here is not done
+24: error F0112 `pin` is not a command of Vivado's XDC, and whatever it would have done here is not done
+25: error F0112 `source` is not a command of Vivado's XDC, and whatever it would have done here is not done
+26: error F0112 `puts` is not a command of Vivado's XDC, and whatever it would have done here is not done
+27: error F0112 `return` is not a command of Vivado's XDC, and whatever it would have done here is not done
+28: error F0112 `nonsense_command` is not a command of Vivado's XDC, and whatever it would have done here is not done
+29: error F0112 `lindex` is not a command of Vivado's XDC, and whatever it would have done here is not done
+30: error F0112 `string` is not a command of Vivado's XDC, and whatever it would have done here is not done
+31: warning F0113 `create_clock` needs `-period`, so this clock is not read
+32: warning F0113 `create_clock -period abc` is not a positive number of ns, so this clock is not read
+33: warning F0113 `create_clock -period -1` is not a positive number of ns, so this clock is not read
+34: warning F0113 `create_clock` names nothing that exists, so there is no such clock
+35: warning F0113 `create_clock` names nothing that exists, so there is no such clock
+36: warning F0113 `set_false_path` needs `-from`, `-through` or `-to`, as Vivado says
+37: warning F0113 `set_false_path -from` names nothing that exists here, so it is not read
+38: warning F0113 `set_false_path -from` names nothing that exists here, so it is not read
+39: warning F0113 `set_false_path`: nothing named is a valid start or end of a path, which Vivado refuses too, so it is not read
+40: warning F0113 `set_false_path`: nothing named is a valid start or end of a path, which Vivado refuses too, so it is not read
+41: warning F0113 `set_false_path -from` names nothing that exists here, so it is not read
+42: warning F0113 `set_false_path -from` names nothing that exists here, so it is not read
+43: warning F0113 `set_false_path -from` names nothing that exists here, so it is not read
+44: warning F0113 `set_false_path`: nothing named is a valid start or end of a path, which Vivado refuses too, so it is not read
+45: warning F0113 `set_false_path`: nothing named is a valid start or end of a path, which Vivado refuses too, so it is not read
+46: warning F0113 `set_false_path`: nothing named is a valid start or end of a path, which Vivado refuses too, so it is not read
+47: warning F0113 `set_multicycle_path 2.5`: Vivado refuses this number, so it is not read
+48: warning F0113 `set_max_delay` needs `-from`, `-through` or `-to`, as Vivado says
+49: warning F0113 `set_max_delay -datapath_only` needs `-from`, as Vivado says, so it is not read
+50: warning F0113 `set_input_delay -clock`: no clock of that name is known here, so it is not read (`nothing`)
+51: warning F0113 `set_input_delay` names no input port, which Vivado refuses too, so it is not read
+52: warning F0113 `set_output_delay` names no output port, which Vivado refuses too, so it is not read
+53: warning F0113 `set_clock_groups` needs one of `-asynchronous`, `-logically_exclusive` and `-physically_exclusive`, as Vivado says, so it is not read
+54: warning F0113 `set_clock_groups`: a group names no clock known here and fewer than two remain, so it is not read
+56: warning F0113 pblock `dup` already exists, which Vivado refuses too; this is ignored
+57: warning F0113 `add_cells_to_pblock`: no such pblock, so it is not read
+59: error F0112 `LOC NOPE` is not a site's name
+60: warning F0113 `LOC` on a hierarchical cell: Vivado refuses it too
+61: error F0112 `BITSTREAM.CONFIG.NONSENSE` is not a property of a design that Vivado has either
+62: error F0112 `CFGBVS NOPE` is neither VCCO nor GND
+63: error F0112 `CONFIG_VOLTAGE 9` is not 1.5, 1.8, 2.5 or 3.3
+pin be[3] "ZZ9" None None None (None, None)
+pin clk "" Some("NONSENSE") None None (None, None)
+clock clk on clk period 10.000
+site_region dup 500 0 501 0
+== tcl
+19: error F0112 `lindex` is not a command of Vivado's XDC, and whatever it would have done here is not done
+pin a[0] "K3" None None None (None, None)
+pin a[1] "J5" None None None (None, None)
+pin a[2] "H4" None None None (None, None)
+pin a[3] "H5" None None None (None, None)
+pin be[2] "" Some("LVCMOS33") None None (None, None)
+pin be[3] "" Some("LVCMOS33") None None (None, None)
+pin clk "N11" None None None (None, None)
+pin clk2 "N14" None None None (None, None)
+pin hi[1] "T3" None None None (None, None)
+pin hi[2] "R5" None None None (None, None)
+pin hi[3] "" Some("LVCMOS18") None None (None, None)
+pin rst "L4" None None None (None, None)
+pin single "L5" None None None (None, None)
+clock sys on clk period 5.000

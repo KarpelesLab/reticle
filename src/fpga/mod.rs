@@ -186,6 +186,7 @@ mod text;
 pub mod trellis;
 pub mod uray;
 pub mod xc7;
+pub mod xdc;
 pub mod xray;
 
 use std::sync::OnceLock;
@@ -197,7 +198,7 @@ pub use arch::{
 pub use bitstream::{Bitstream, BitstreamError, BitstreamFormat, TileFormat};
 pub use constraints::{
     ClockDef, ClockDomain, Constraints, IoAttrs, MulticyclePath, Origin, PathSpec, PinAssignment,
-    Region, RegionAssignment, Rloc, matches_glob,
+    Region, RegionAssignment, Rloc, SiteRegion, matches_glob,
 };
 pub use device::{
     BelKind, BelRole, BramPort, BramPortRole, BramShape, ClockRegion, ClockResources, Device,

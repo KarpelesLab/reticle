@@ -1,0 +1,43 @@
+port a[0] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[1] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[2] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[3] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[0] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[1] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[2] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[3] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port clk IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port clk2 IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[4] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[5] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[6] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[7] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port io1 INOUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[0] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[1] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[2] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[3] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port rst IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port single IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port so OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y0 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y1 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y2 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y3 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+pblock pb_clockregion ranges=CLOCKREGION_X0Y0:CLOCKREGION_X0Y0 cells=div_reg[0],div_reg[1]
+pblock pb_mixed ranges=SLICE_X30Y30:SLICE_X39Y39,RAMB18_X0Y0:RAMB18_X0Y3,DSP48_X0Y0:DSP48_X0Y1 cells=t_reg[4],t_reg[5],t_reg[6],t_reg[7]
+pblock pb_regs ranges=SLICE_X20Y20:SLICE_X25Y29 cells=m_reg,r_reg[0],r_reg[1],r_reg[2],r_reg[3]
+pblock pb_sub ranges=SLICE_X0Y0:SLICE_X9Y9 cells=u_sub
+pblock pb_two ranges=SLICE_X40Y40:SLICE_X41Y41,SLICE_X44Y44:SLICE_X45Y45 cells=q_reg[0],q_reg[1],q_reg[2],q_reg[3]
+tile SLICE_X30Y30 CLBLM_L_X20Y30
+tile SLICE_X39Y39 CLBLM_L_X24Y39
+tile SLICE_X20Y20 CLBLL_L_X14Y20
+tile SLICE_X25Y29 CLBLL_L_X16Y29
+tile SLICE_X0Y0 CLBLL_L_X2Y0
+tile SLICE_X9Y9 CLBLM_R_X7Y9
+tile SLICE_X40Y40 CLBLL_R_X25Y40
+tile SLICE_X41Y41 CLBLL_R_X25Y41
+tile SLICE_X44Y44 CLBLL_R_X27Y44
+tile SLICE_X45Y45 CLBLL_R_X27Y45
+place clk_div_reg loc=SLICE_X50Y50 bel=SLICEM.AFF
+place u_sub/q_reg loc=SLICE_X51Y51 bel=SLICEL.BFF

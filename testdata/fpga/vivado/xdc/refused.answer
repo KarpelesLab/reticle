@@ -1,0 +1,91 @@
+port a[0] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[1] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[2] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[3] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[0] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[1] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[2] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[3] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port clk IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port clk2 IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[4] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[5] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[6] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[7] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port io1 INOUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[0] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[1] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[2] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[3] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port rst IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port single IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port so OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y0 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y1 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y2 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y3 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+clock clk period=10.000 waveform=0.000,5.000 generated=0 user=0 virtual=0 sources=clk
+clock clk_mmcm period=5.000 waveform=0.000,2.500 generated=1 user=0 virtual=0 sources=u_mmcm/CLKOUT0
+clock feedback period=10.000 waveform=0.000,5.000 generated=1 user=0 virtual=0 sources=u_mmcm/CLKFBOUT
+pblock dup ranges= cells=
+refused 7 Common 17-69
+refused 8 Common 17-55
+refused 9 Common 17-69
+refused 10 Common 17-69
+refused 11 Common 17-55
+refused 12 Common 17-55
+refused 13 Common 17-55
+refused 14 Common 17-161
+refused 15 Common 17-55
+refused 16 Common 17-69
+refused 17 Netlist 29-177
+refused 18 Netlist 29-69
+refused 19 Common 17-161
+refused 20 Common 17-162
+refused 21 Designutils 20-1307
+refused 22 Designutils 20-1307
+refused 23 Designutils 20-1307
+refused 24 Designutils 20-1307
+refused 25 Designutils 20-1307
+refused 26 Designutils 20-1307
+refused 27 Designutils 20-1307
+refused 28 Designutils 20-1307
+refused 29 Designutils 20-1307
+refused 30 Designutils 20-1307
+refused 31 Common 17-163
+refused 32 Common 17-161
+refused 33 Constraints 18-384
+refused 34 Vivado 12-4739
+refused 35 Vivado 12-4739
+refused 36 Constraints 18-358
+refused 37 Vivado 12-4739
+refused 38 Vivado 12-4739
+refused 39 Constraints 18-513
+refused 40 Constraints 18-513
+refused 41 Vivado 12-4739
+refused 42 Vivado 12-4739
+refused 43 Vivado 12-4739
+refused 44 Constraints 18-512
+refused 45 Constraints 18-513
+refused 46 Constraints 18-512
+refused 47 Common 17-161
+refused 48 Constraints 18-358
+refused 49 Constraints 18-540
+refused 50 Vivado 12-4739
+refused 51 Constraints 18-472
+refused 51 Constraints 18-602
+refused 52 Constraints 18-472
+refused 52 Constraints 18-602
+refused 53 Vivado 12-683
+refused 54 Vivado 12-4739
+refused 54 Vivado 12-4739
+refused 54 Vivado 12-5201
+refused 56 Vivado 12-795
+refused 57 Vivado 12-1041
+refused 58 Place 30-8516
+refused 58 Place 30-8519
+refused 59 Common 17-69
+refused 60 Vivado 12-2285
+refused 61 Netlist 29-177
+refused 62 Netlist 29-154
+refused 63 Netlist 29-154

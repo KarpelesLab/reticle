@@ -144,3 +144,134 @@ What the table says, largest first:
    not know that.
 
 Where Reticle is ahead, it is on time alone: 8 or 9 s against 48 on most of these.
+
+## Reading its constraints
+
+`reticle fpga --constraints board.xdc` reads an XDC, chosen by the file's name.
+`src/fpga/xdc.rs` does it in two steps with two different judges: a *reading*,
+which says what the file says in Vivado's terms, is held to Vivado; a
+*translation* into `Constraints`, which says what the flow does about it, has no
+judge but the diagnostics it has to give.
+
+**Checked against Vivado 2026.1:** each `.xdc` in `testdata/fpga/vivado/xdc/` was
+read by `read_xdc` after `synth_design`, and `tools/vivado-parity/gen_xdc.py`
+kept what Vivado then held (`get_property` of each port, clock, pblock and cell,
+and its own `write_xdc` with each object resolved) as a `.answer` beside it.
+`tests/fpga_xdc.rs` holds Reticle's reading to every line of those. It is the
+reading alone, so a line agreeing there says the flow was told the same thing
+Vivado was, and nothing about what either did next.
+
+**Checked, what the answers changed.** These were my readings first, and Vivado
+said otherwise:
+
+- `get_ports a` is every bit of `a`, and so is a glob on the bus's own name
+  (`h?`). `get_ports {a[1:0]}` is nothing at all, not two bits.
+- `a[0]` is fine as a bare word, where Tcl would call a command named `0`.
+  `{a\[0\]}` in braces matches nothing, and `a\[0\]` bare does.
+- A comment's trailing backslash takes the next line with it, pin and all.
+- `foreach`, `if`, `proc`, `source`, `puts`, `lindex`, `string`, `concat`,
+  `format`, `incr`, `append` and `unset` are refused in a constraints file
+  (`Designutils 20-1307`), and Vivado carries on. `set`, `list`, `expr`, `split`,
+  `join`, `llength`, `filter` and `get_property` work. I had expected `lindex`.
+- `PULLDOWN true` then `PULLUP false` still leaves a pull-down; `PULLUP true` after
+  it clears it. There is one pull and two flags on it.
+- `DRIVE` and `SLEW` on an input are ignored with a warning, not refused.
+- A bare word after `-from` is searched for as a clock, then a cell, then a port,
+  then a pin, so `-from clk` is the clock and not the port of that name.
+- A `-from` on a register's `Q` or a hierarchical cell is refused as no valid
+  startpoint, and `set_max_delay -datapath_only` needs a `-from`.
+- `create_clock` on a source already holding a clock takes it away from the older
+  clock without `-add`, whose other sources stay. A clock left with none is gone,
+  and both tools warn of it.
+
+**What is read, and what becomes of it:**
+
+| XDC | Reticle |
+|---|---|
+| `PACKAGE_PIN`, `LOC` with a ball, `IOSTANDARD`, `DRIVE`, `SLEW`, `PULLUP`, `PULLDOWN`, `PULLTYPE PULLUP/PULLDOWN`, each also in `-dict` | applied |
+| `get_ports` with lists, globs, `-filter`, `all_inputs`, `all_outputs`; a bit by the index it was declared with | applied: `hi[4]` of `[7:4]` is bit 0, `be[0]` of `[0:3]` is bit 3 |
+| `create_clock` on a port or a net | applied; a net nothing drives is **refused**, since in a `.rcf` that asks for a PLL |
+| `create_generated_clock` on a scalar register's `Q` | a clock at the divided period on that net: `-divide_by`, `-multiply_by`, `-edges`, `-invert` are worked out as Vivado worked them out |
+| `create_generated_clock` on a clock manager's output | a note: the flow derives it from the instance's parameters, as Vivado derives it unasked, and the period written is not compared with that |
+| `set_false_path`, `set_max_delay [-datapath_only]`, `set_multicycle_path -to` with one end | applied by the timing-driven placement, on a whole cell (a pin stands for its cell only when it is `C` or `D`) |
+| the same with both ends, or `set_multicycle_path -from` alone | kept in `Constraints`, with a warning: the placement cannot tell the paths between two ends apart |
+| `set_input_delay -clock` on an input, against a rising edge | applied |
+| `set_clock_groups`, `set_false_path` between clocks, anything only `-hold` | a note: the placement times no path between two clocks, and has no hold analysis, so it holds already |
+| pblocks of `SLICE_` ranges | a region of the tiles at its corners, from the fabric database, and its fabric is loaded; a pblock's cells by register or by instance. Several ranges become their bounding box, with a warning |
+| `KEEP_HIERARCHY` | applied |
+
+**Warned, because only timing or placement can differ:** `-through`, `set_min_delay`,
+`set_output_delay`, an exception naming a clock other than across two, a virtual clock
+and any delay against it, `-clock_fall`, `-add_delay` for a second clock, a
+non-even `-waveform`, `-add`, a clock on a bit of a bus or of a register,
+`set_case_analysis` and the other commands that only inform analysis, `LOC` on a
+`SLICE`, `BEL`, `ASYNC_REG`, `DONT_TOUCH`, `CLOCK_DEDICATED_ROUTE`, `MAX_FANOUT`,
+debug cores, `RAMB` and `DSP` and `CLOCKREGION` ranges of a pblock.
+
+**Refused, as an error, because going on could be a wrong bitstream:** a pin or a
+pad property that cannot be read or applies to nothing, a pin given to two ports,
+any command that is not XDC (above), `DIFF_TERM`, `IN_TERM`, `IBUF_LOW_PWR`,
+`PULLTYPE KEEPER` and a bank's `INTERNAL_VREF` (what this flow has no way to set), `LOC` on any
+site but a slice, any other property of a pin or a cell not known to be harmless,
+and the configuration options below. This is stricter than Vivado, which reports
+each of these as a critical warning and carries on: a pin that failed to set in
+Vivado stops at `write_bitstream`, and here there may be no such later stop.
+
+**The configuration options were measured**, one at a time on a routed design
+against its bitstream without, from the first sync word on:
+
+| option | bytes that differ |
+|---|---|
+| `CFGBVS`, `CONFIG_VOLTAGE` | 0 (note: nothing to do) |
+| `BITSTREAM.CONFIG.CONFIGRATE 33` | 5 |
+| `BITSTREAM.GENERAL.CRC DISABLE` | 10 |
+| `BITSTREAM.CONFIG.EXTMASTERCCLK_EN DIV-1` | 16 |
+| `BITSTREAM.CONFIG.SPI_FALL_EDGE YES` | 390 |
+| `BITSTREAM.CONFIG.SPI_BUSWIDTH 4`, `CONFIG_MODE SPIx4` | 474 |
+| `BITSTREAM.GENERAL.COMPRESS TRUE` | the file is 346 588 bytes, not 3 825 788 |
+
+Those are warned of: **that they only change how the part loads is my reading of
+what they are, not something the measurement shows**, which says how many bytes
+and not which. Everything else named `BITSTREAM.*` is refused, whether or not
+the byte count looks small (`STARTUPCLK`, 5; `USERID`, 12; `READBACK.SECURITY`,
+12; `USR_ACCESS`, 414; `UNUSEDPIN`, 324 or 620): a design reads some of those, and a
+board depends on others. Refused, too, is a `BITSTREAM.*` Vivado does not have.
+
+**Checked on real files.** Every design under `testdata/fpga/vivado/` with both
+binds the same pins from its `.xdc` as from its `.rcf`, 161 designs, with no
+warning, and one refusal: the two probes that set a bank's `INTERNAL_VREF`, which
+this flow cannot and which is an error, so those two files do not build from their
+`.xdc` as they stand. Two others (`fsm`, `ibufds_probe`) were built to a bitstream from each, and the
+two are identical from the first sync word on, in an `#[ignore]`d test. `ibufds_probe` matters because of a
+difference between the languages: an XDC names a differential pair's `P` ball
+alone, its `.rcf` names both, and the flow gets the pair from the `P`.
+A pblock was placed on the real fabric and held every flip-flop it named, inside
+the tiles Vivado says its corners are in. NewAE's `cwhusky_100.xdc`, which is not
+committed, was read once by hand against a stub of the Husky's ports: its 94 pins
+are `examples/husky/husky.rcf`'s 94, with its `USR_ACCESS` line taken out, since
+that line is refused. It gives 38 warnings for `set_output_delay` alone.
+
+**Not checked:**
+
+- Whether a design built from an XDC meets what the XDC asks. Nothing here has
+  compared Vivado's slack with Reticle's under a translated exception.
+- VHDL against Vivado. A range is recorded the same way, and
+  `a_vhdl_range_is_kept` holds it against Reticle's own reading of Verilog's
+  convention, not against an answer of Vivado's.
+- A multi-dimensional packed port (`[1:0][3:0]`). It is not read as bits, so its
+  constraints are refused as naming nothing.
+- `get_cells` on a name Vivado's synthesis invents, such as `a_IBUF[0]_inst` or
+  `mem_reg_0_15_0_0`: only registers, instances and nets of the source are known,
+  and memories are not among them. The exception is `<port>_IBUF` and
+  `<port>_IBUF_BUFG` of a scalar input, for `get_nets`. What names another is
+  reported as naming nothing.
+- `get_ports -regexp`, and so on for each query. There are no regular expressions
+  here, so a query using one is unreadable: an error for a pin, a warning for
+  timing.
+
+**Not the same as Vivado, on purpose or not yet:** an unstated `IOSTANDARD` is
+`LVCMOS18` in Vivado, which then refuses to write a bitstream without a stated one
+(`NSTD-1`, quoted, not measured here), and `LVCMOS33` in the 7-series flow. A
+`-rise_from`-style exception is dropped with a warning, as are the rest of the
+edge-specific forms. `reticle timing --constraints` refuses an XDC with a message,
+since its queries read the source and that command has synthesised it by then.

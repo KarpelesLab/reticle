@@ -41,6 +41,28 @@ does not fail quietly: `fpga::export_nextpnr` returns
 `FlowError::VendorOnly`, which names the family, the device and the tool
 that does read its export.
 
+## Vivado's own constraints
+
+`--constraints` also takes a `.xdc`, chosen by the file's name, so a design with
+Vivado's constraints builds from them without a second file. It reads the Tcl
+that `read_xdc` reads, against the design, as Vivado reads it: lists, globs, bus
+indices, `-dict`, `create_clock`, `create_generated_clock`, path exceptions and
+input delays, pblocks, and configuration properties. What the flow cannot honour
+is said at the command: an error (`F0112`) where going on could be a wrong
+bitstream, such as a pin it cannot read or a `foreach`, a warning (`F0113`) where
+only timing or placement could differ, and a note (`F0114`) where the statement
+is already true here.
+
+The table of what is read, warned of and refused, and what was checked against
+Vivado to say so, is in `docs/fpga-vivado-parity.md`. The difference most likely
+to matter: `reticle fpga` times no path between two clocks in any case, so a
+missing `set_clock_groups` costs nothing here and an `-asynchronous` one is a note,
+and exceptions apply to whole cells, by one end.
+
+Given several files, an earlier one wins where two disagree, whichever language
+they are in. That is the opposite of Vivado, where a later `read_xdc` wins; within
+one XDC the later statement wins, as it does there.
+
 ## Generated clocks: PLLs
 
 A design asks for a clock frequency the board does not have by

@@ -1,0 +1,34 @@
+port a[0] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[1] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[2] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port a[3] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[0] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[1] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[2] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port be[3] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port clk IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port clk2 IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[4] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[5] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[6] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port hi[7] IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port io1 INOUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[0] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[1] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[2] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port q[3] OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port rst IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port single IN pin= iostandard=LVCMOS18 drive= slew= pulltype=
+port so OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y0 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y1 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y2 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+port y3 OUT pin= iostandard=LVCMOS18 drive=12 slew=SLOW pulltype=
+config BITSTREAM.CONFIG.CONFIGRATE=33
+config BITSTREAM.CONFIG.SPI_BUSWIDTH=4
+config BITSTREAM.CONFIG.UNUSEDPIN=PULLNONE
+config BITSTREAM.GENERAL.COMPRESS=TRUE
+config BITSTREAM.STARTUP.STARTUPCLK=JTAGCLK
+config CFGBVS=VCCO
+config CONFIG_MODE=SPIx4
+config CONFIG_VOLTAGE=3.3
