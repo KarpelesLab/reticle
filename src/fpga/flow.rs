@@ -788,6 +788,11 @@ fn xc7_pad_rules(
     let Some(m) = design.modules.get(module) else {
         return 0;
     };
+    // A device file with one synthetic bank (`xc7a35t-cpg236`'s `io`) says
+    // nothing of which pads share one, so there is nothing to ask.
+    if device.io_banks.len() < 2 {
+        return 0;
+    }
     let mut pads = Vec::new();
     let mut mixed = 0usize;
     for (_, cell) in m.cells.iter() {
@@ -812,10 +817,13 @@ fn xc7_pad_rules(
                 .with_span(cell.span),
             );
         }
+        if cell.attrs.get("pin").is_none() && cell.attrs.get("port").is_none() {
+            continue;
+        }
         let way = match primitive.as_str() {
-            "IBUF" | "IBUFG" | "IBUFDS" => Way::In,
-            "IOBUF" => Way::InOut,
-            "OBUF" | "OBUFT" | "OBUFDS" => Way::Out,
+            p if p.starts_with("IBUF") => Way::In,
+            p if p.starts_with("IOBUF") => Way::InOut,
+            p if p.starts_with("OBUF") => Way::Out,
             _ => continue,
         };
         let text = |key: &str| {
@@ -851,6 +859,15 @@ fn xc7_pad_rules(
                 .map(|t| t.to_ascii_uppercase())
                 .filter(|t| t != "NONE"),
             diff_term: flag("diff_term"),
+            ibufdisable: (way == Way::In
+                && cell.inputs.iter().any(|(port, e)| {
+                    port.as_str() == "IBUFDISABLE" && m.expr(*e).as_const().is_none()
+                }))
+            .then_some(if primitive.as_str().contains("INTERMDISABLE") {
+                "REQP-1965"
+            } else {
+                "REQP-1964"
+            }),
             span: cell.span,
         });
     }
@@ -961,7 +978,7 @@ fn primitive_instances(
     device: &Device,
     diags: &mut Diagnostics,
 ) -> usize {
-    use crate::ir::{Assign, Attrs, ExprKind, InstanceId, ModuleRef};
+    use crate::ir::{Assign, Attrs, Cell, ExprKind, InstanceId, ModuleRef, Name, Net, NetKind};
     let Some(m) = design.modules.get_mut(module) else {
         return 0;
     };
@@ -1000,8 +1017,12 @@ fn primitive_instances(
         let Some(bel) = device.bels.iter().find(|b| b.name == primitive.as_str()) else {
             continue;
         };
+        // A bidirectional pair by name (`IOBUFDS`) as well: the plain `IOBUF`
+        // is a module of the cell library, and its tristate is mapping's.
+        let bidirectional = bel.io_dirs.as_slice() == ["inout"]
+            && (bel.port("pad_n").is_some() || bel.port("ibufdisable").is_some());
         let pass_through = bel.role == super::device::BelRole::Io
-            && matches!(bel.io_dirs.as_slice(), [d] if d == "in" || d == "out");
+            && (matches!(bel.io_dirs.as_slice(), [d] if d == "in" || d == "out") || bidirectional);
         if pass_through {
             let input = bel.io_dirs[0] == "in";
             let (from, to) = match (bel.port("pad"), bel.port("din"), bel.port("dout")) {
@@ -1113,10 +1134,155 @@ fn primitive_instances(
                     }
                 }
             }
+            // A receiver's disables are pins of the pad's own buffer, which
+            // mapping builds: each rides to it on a kept net the port names,
+            // and the buffer is this one rather than the plain `IBUF`.
+            let mut carried = 0usize;
+            for (role, key) in [
+                ("ibufdisable", "io_ibufdisable"),
+                ("intermdisable", "io_intermdisable"),
+            ] {
+                let (Some(port), Some(pad)) = (bel.port(role), bel.port("pad")) else {
+                    continue;
+                };
+                let Some(value) = inst.connection(port) else {
+                    continue;
+                };
+                let Some(pad_net) = inst
+                    .connection(pad)
+                    .and_then(|e| crate::ir::hier::expr_to_lvalue(m, e))
+                    .and_then(|lv| lv.nets().first().copied())
+                    .filter(|net| m.ports.iter().any(|p| p.net == *net))
+                else {
+                    continue;
+                };
+                // Tied: low is not in use, and high is a pin left unrouted,
+                // which reads a one, with its feature set (`buf_ibufdisable_tied*`).
+                if let Some(c) = m.expr(value).as_const() {
+                    if c.truth() == crate::logic::Bit::One {
+                        m.nets[pad_net].attrs.set(format!("{key}_one"), 1i64);
+                    }
+                    m.nets[pad_net]
+                        .attrs
+                        .set("io_buffer", primitive.as_str().to_owned());
+                    continue;
+                }
+                let ty = m.expr(value).ty.clone();
+                let mut keep = Attrs::new();
+                keep.set("keep", 1i64);
+                let name = format!("{}${role}", inst.name);
+                let net = m.nets.push(Net {
+                    name: Name::new(name.clone()),
+                    ty,
+                    kind: NetKind::Wire,
+                    attrs: keep,
+                    span: inst.span,
+                });
+                m.assigns.push(Assign {
+                    target: crate::ir::Lvalue::Net(net),
+                    value,
+                    delay: None,
+                    attrs: Attrs::new(),
+                    span: inst.span,
+                });
+                m.nets[pad_net].attrs.set(key, name);
+                m.nets[pad_net]
+                    .attrs
+                    .set("io_buffer", primitive.as_str().to_owned());
+                carried += 1;
+            }
+            let _ = carried;
             let (Some(value), Some(target)) = (inst.connection(from), inst.connection(to)) else {
                 done.push(id);
                 continue;
             };
+            // A buffer with a tristate (`OBUFT`, `OBUFTDS`, `IOBUFDS`) is the
+            // tristate it describes, which mapping takes over as it takes
+            // `assign pad = t ? 1'bz : d`: so its `T` is honoured. It was
+            // dropped until this, and an `OBUFT` drove its pad whatever `T` said.
+            if let Some((enable_port, active_low)) = bel.enable_port()
+                && let Some(enable) = inst.connection(enable_port)
+            {
+                let Some(pad_lvalue) = crate::ir::hier::expr_to_lvalue(m, target) else {
+                    refused += 1;
+                    diags.push(
+                        Diagnostic::error(format!(
+                            "`{}`: the `{to}` of a `{primitive}` must be wired to a port",
+                            inst.name
+                        ))
+                        .with_span(inst.span),
+                    );
+                    continue;
+                };
+                let width = m.expr(target).ty.clone();
+                let enable = if active_low {
+                    let ty = m.expr(enable).ty.clone();
+                    m.add_expr(crate::ir::Expr::new(
+                        ExprKind::Unary {
+                            op: crate::ir::UnaryOp::Not,
+                            expr: enable,
+                        },
+                        ty,
+                        inst.span,
+                    ))
+                } else {
+                    enable
+                };
+                let out = m.nets.push(Net {
+                    name: Name::new(format!("{}$tri", inst.name)),
+                    ty: width.clone(),
+                    kind: NetKind::Wire,
+                    attrs: Attrs::new(),
+                    span: inst.span,
+                });
+                // Kept, so that a `T` tied high reaches the buffer as the
+                // released pad it is, and is not folded into a constant `z`
+                // that a plain output then drives.
+                let mut keep = Attrs::new();
+                keep.set("keep", 1i64);
+                m.cells.push(Cell {
+                    name: inst.name.clone(),
+                    kind: CellKind::Tristate,
+                    inputs: vec![(Name::new("a"), value), (Name::new("en"), enable)],
+                    outputs: vec![(Name::new("y"), out)],
+                    params: Attrs::new(),
+                    attrs: keep,
+                    span: inst.span,
+                });
+                let driven = m.add_expr(crate::ir::Expr::new(ExprKind::Net(out), width, inst.span));
+                m.assigns.push(Assign {
+                    target: pad_lvalue,
+                    value: driven,
+                    delay: None,
+                    attrs: Attrs::new(),
+                    span: inst.span,
+                });
+                // What a bidirectional one reads back is what is on the pad.
+                if let Some(read) = bel.port("din").and_then(|p| inst.connection(p))
+                    && bidirectional
+                {
+                    let Some(read) = crate::ir::hier::expr_to_lvalue(m, read) else {
+                        refused += 1;
+                        diags.push(
+                            Diagnostic::error(format!(
+                                "`{}`: the `O` of a `{primitive}` must be wired to a net",
+                                inst.name
+                            ))
+                            .with_span(inst.span),
+                        );
+                        continue;
+                    };
+                    m.assigns.push(Assign {
+                        target: read,
+                        value: target,
+                        delay: None,
+                        attrs: Attrs::new(),
+                        span: inst.span,
+                    });
+                }
+                done.push(id);
+                continue;
+            }
             let Some(target) = crate::ir::hier::expr_to_lvalue(m, target) else {
                 refused += 1;
                 diags.push(
@@ -1142,19 +1308,22 @@ fn primitive_instances(
         // the pad's buffer takes it, as it takes `set_io -pullup yes`. The
         // whole port is pulled, since a buffer is configured per port.
         if bel.role == super::device::BelRole::Other
-            && let pull @ ("PULLUP" | "PULLDOWN") = primitive.as_str()
+            && let pull @ ("PULLUP" | "PULLDOWN" | "KEEPER") = primitive.as_str()
         {
             let port = inst.connection("O").and_then(|e| {
                 crate::ir::hier::expr_to_lvalue(m, e).and_then(|lv| lv.nets().first().copied())
             });
             match port.filter(|net| m.ports.iter().any(|p| p.net == *net)) {
                 Some(net) => {
-                    let key = if pull == "PULLUP" {
-                        "pullup"
-                    } else {
-                        "pulldown"
+                    let key = match pull {
+                        "PULLUP" => "pullup",
+                        "PULLDOWN" => "pulldown",
+                        _ => "keeper",
                     };
                     m.nets[net].attrs.set(key, 1i64);
+                    // A cell, not a constraint: Vivado treats the two apart
+                    // on a pad nothing else uses. See `primitives::io_buffer`.
+                    m.nets[net].attrs.set("pull_cell", 1i64);
                     done.push(id);
                 }
                 None => {

@@ -44,7 +44,7 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 94 of the 141.** `index.txt` says which;
+**Reticle builds 106 of the 141**, 94 before the section on pads. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
 to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
 
@@ -55,15 +55,14 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 47 that do not build, by what stops them:
+The 35 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
 | clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
 | clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
-| pad buffers | 15 of them, chiefly the disable forms; `IOBUFDS` and `OBUFTDS` are the ones used most. |
-| pulls on a pad with nothing else on it | `PULLUP`, `PULLDOWN`, `KEEPER` |
+| pad buffers | the six `DIFF_OUT` forms |
 | IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `IDDR_2CLK`, `DCIRESET`, and `IDDR` with a routed reset |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
 
@@ -452,6 +451,45 @@ is in the gate.
 `-diff_term`, `-ibuf_low_pwr`, and a bank's `set_internal_vref 35 0.75`;
 `set_io_says_what_set_property_says` holds the two files of `rcf_sstl15` and `rcf_lvds` to
 one answer.
+
+### Buffers by name
+
+`buf_*` in `testdata/fpga/vivado/io/` is a buffer instantiated by name on `G2`/`G1`, 111 of
+them, in standards it takes, its controls routed, tied low and tied high; and the
+probes of `primitives/`. **All that build agree with Vivado's site features**: the 57 `buf_*` that
+build here, and 19 probes built from their own `.xdc`, in `every_design_builds_to_vivados_bits`
+and by hand.
+
+| buffer | what Vivado wrote, and so Reticle |
+|---|---|
+| `IBUFGDS` | `IBUFDS`'s |
+| `OBUFTDS` | `OBUFDS`'s, and the `_P` half's `OLOGIC` with `ZINV_T1`: `T` is routed to it |
+| `IOBUFDS` | the pair's driver and both receivers, `ILOGIC` `ZINV_D` and `OLOGIC` `ZINV_T1` on the `_P` half |
+| `*_IBUFDISABLE`, `*_INTERMDISABLE` | `IBUFDISABLE.I` and `INTERMDISABLE.I`, on both halves of a pair, when the pin is routed or tied high; nothing tied low. `USE_IBUFDISABLE FALSE` writes the same bits. The pins reach the pad from `IOI_IMUX9` and `IOI_IMUX6` |
+| `PULLUP`, `PULLDOWN`, `KEEPER` alone | On an `input` with no reader: `IN_ONLY`, and the `KEEPER`, but **not** a `PULLUP` or `PULLDOWN` cell, which Vivado drops (a `PULLTYPE` constraint it keeps). On an `output`, or a pull on an `inout`: the driver and the pull, and no data at all, which Reticle builds by leaving the buffer's data unconnected. `KEEPER` on an `inout`: an input |
+
+**An instantiated `OBUFT`'s `T` was dropped until this**, and the pad drove whatever `T`
+said: `primitive_instances` took it for a wire, as it takes an `OBUF`. The ledger called it
+`ok` because it built. It is the tristate it describes now, kept, so a `T` tied high reaches
+the buffer as a released pad, `ZINV_T1` with `T1` unrouted (`buf_obuft_t1`); and so is the cell
+library's `IOBUF`, which a `T` tied high had folded into a driven pad the same way. **Tied low**,
+Vivado routes a ground to `T1` and sets `ZINV_T1`; Reticle leaves `T1` unrouted with its inverter
+on, as a plain output has, and the two drive alike: the one known difference, `KNOWN` in the test.
+
+`REQP-1964` and `REQP-1965`, `IBUFDISABLE` routed on an input-only buffer in `LVCMOS*`, `LVTTL`,
+`PCI33_3` or `MOBILE_DDR`, are refused as Vivado refuses them; tied either way, or on an
+`IOBUF_INTERMDISABLE`, they are not. A buffer's own `IOSTANDARD`, `DRIVE`, `SLEW` and
+`IBUF_LOW_PWR` count, below a constraint; the cell library's `IOBUF` takes no parameters and is
+refused them (`V0006`).
+
+**Looser than Vivado, on purpose:** a lone `PULLUP` or `PULLDOWN` on an `inout` with nothing
+else in the design is `Place 30-389` there, and the same beside a clocked design (`pullup_probe`)
+is an output: Reticle builds both as the latter.
+
+**Not done: the `DIFF_OUT` forms.** Vivado reads `OB` through the `_N` half's own `ILOGIC`
+(`ZINV_D` on `ILOGIC_Y1`), so it needs a second buffer placed on that ball, which this flow does not
+place; a ball named only by its `_P` in an XDC does not even say where. They are refused as a module
+nothing declares.
 
 **Not done.** Vivado's `CFGBVS`-style checks of bank 14 against the configuration voltage, which are warnings. The
 XC7A35T, or any other part: the tables were measured on one, and the same table is given to the

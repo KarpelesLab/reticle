@@ -246,6 +246,10 @@ pub struct Pad {
     pub in_term: Option<String>,
     /// `DIFF_TERM` is stated.
     pub diff_term: bool,
+    /// An input-only buffer's `IBUFDISABLE` is a signal, and the rule that
+    /// says so: `REQP-1964` of an `IBUF_IBUFDISABLE`, `REQP-1965` of an
+    /// `IBUF_INTERMDISABLE`.
+    pub ibufdisable: Option<&'static str>,
     /// Where it was asked for.
     pub span: Span,
 }
@@ -299,6 +303,32 @@ pub fn check_pads(pads: &[Pad], internal_vref: &[(String, u32, Span)]) -> Vec<Re
                 rule,
                 message: format!(
                     "port `{}` is {is} but has the IO standard `{}`, which can only be {needs}",
+                    pad.port, pad.standard
+                ),
+                span: pad.span,
+            });
+        }
+        // `REQP-1964`: measured on an `IBUF_IBUFDISABLE` and an
+        // `IBUF_INTERMDISABLE`; an `IOBUF_INTERMDISABLE` is allowed, and so is
+        // the pin tied either way.
+        if let Some(rule) = pad.ibufdisable
+            && matches!(
+                std.name,
+                "LVCMOS12"
+                    | "LVCMOS15"
+                    | "LVCMOS18"
+                    | "LVCMOS25"
+                    | "LVCMOS33"
+                    | "MOBILE_DDR"
+                    | "DIFF_MOBILE_DDR"
+                    | "PCI33_3"
+                    | "LVTTL"
+            )
+        {
+            out.push(Refusal {
+                rule,
+                message: format!(
+                    "`{}` uses the input pin `IBUFDISABLE`, which `{}` does not support",
                     pad.port, pad.standard
                 ),
                 span: pad.span,
@@ -477,6 +507,7 @@ mod tests {
             pair: self::standard(standard).is_some_and(|s| s.differential),
             in_term: None,
             diff_term: false,
+            ibufdisable: None,
             span: span(),
         }
     }

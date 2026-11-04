@@ -92,10 +92,12 @@ impl IoTables {
         for (tile_type, set) in features {
             // The pads' tiles, and a bank's clock-row tile for its
             // `LVDS_25_IN_USE`.
+            // And the IO logic beside a pad, for a tristate tied off.
             if !set.features().iter().any(|f| {
                 f.name.starts_with("IOB_Y0.")
                     || f.name.starts_with("IOB_Y1.")
                     || f.name == "LVDS_25_IN_USE"
+                    || f.name.ends_with(".ZINV_T1")
             }) {
                 continue;
             }
@@ -421,6 +423,10 @@ pub(super) struct IoRequest {
     /// An input nothing reads: Vivado removes the buffer and keeps the pad's
     /// direction and pull, whatever else it was given (`unread_*`).
     pub unread: bool,
+    /// `IBUFDISABLE` routed, or tied high. Tied low it is not in use.
+    pub ibufdisable: bool,
+    /// `INTERMDISABLE` the same.
+    pub intermdisable: bool,
 }
 
 /// The features a pad needs: on its own half, on the other half of its
@@ -604,6 +610,7 @@ pub(super) fn recipe(request: &IoRequest) -> Result<IoRecipe, String> {
             out.this.extend(term);
         }
         out.this.push(pull.to_owned());
+        out.this.extend(disables(request));
         return Ok(out);
     }
     let receiver = if standard.name == "TMDS_33" {
@@ -661,7 +668,23 @@ pub(super) fn recipe(request: &IoRequest) -> Result<IoRecipe, String> {
     }
     out.this.push(pull.to_owned());
     out.other.push(pull.to_owned());
+    // On both halves of a pair: `buf_ibufds_intermdisable_*`.
+    for half in [&mut out.this, &mut out.other] {
+        half.extend(disables(request));
+    }
     Ok(out)
+}
+
+/// A receiver's disables in use, as features of its half.
+fn disables(request: &IoRequest) -> Vec<String> {
+    let mut out = Vec::new();
+    if request.ibufdisable {
+        out.push("IBUFDISABLE.I".to_owned());
+    }
+    if request.intermdisable {
+        out.push("INTERMDISABLE.I".to_owned());
+    }
+    out
 }
 
 /// What a bank wants of its clock-row tile and of every pad in it, for
@@ -822,7 +845,13 @@ impl From<BitstreamError> for IoError {
 }
 
 /// The request a placed buffer makes, from its primitive and attributes.
-fn request(primitive: &str, attrs: &crate::ir::Attrs, default: &str, unread: bool) -> IoRequest {
+fn request(
+    primitive: &str,
+    attrs: &crate::ir::Attrs,
+    default: &str,
+    unread: bool,
+    used: &dyn Fn(&str) -> bool,
+) -> IoRequest {
     let text = |key: &str| {
         attrs
             .get(key)
@@ -830,14 +859,21 @@ fn request(primitive: &str, attrs: &crate::ir::Attrs, default: &str, unread: boo
             .map(str::to_owned)
     };
     let flag = |key: &str| attrs.get(key).and_then(AttrValue::as_int).map(|v| v != 0);
-    let direction = match primitive {
-        "IBUF" => Direction::In,
-        "IOBUF" => Direction::InOut,
-        _ => Direction::Out,
+    // By name: `IBUF*` receives, `IOBUF*` both, and the rest drive.
+    let direction = if primitive.starts_with("IBUF") {
+        Direction::In
+    } else if primitive.starts_with("IOBUF") {
+        Direction::InOut
+    } else {
+        Direction::Out
     };
-    let pull = if flag("pullup") == Some(true) {
+    // A `PULLUP` or `PULLDOWN` cell on an input nothing reads is gone, as
+    // Vivado has it (`buf_pullup_input`); a `KEEPER` stays, and a constraint
+    // does (`unread_pull`).
+    let by_cell = unread && flag("pull_cell") == Some(true);
+    let pull = if flag("pullup") == Some(true) && !by_cell {
         Pull::Up
-    } else if flag("pulldown") == Some(true) {
+    } else if flag("pulldown") == Some(true) && !by_cell {
         Pull::Down
     } else if flag("keeper") == Some(true) {
         Pull::Keeper
@@ -861,6 +897,8 @@ fn request(primitive: &str, attrs: &crate::ir::Attrs, default: &str, unread: boo
             .filter(|t| t != "NONE"),
         diff_term: flag("diff_term") == Some(true),
         unread,
+        ibufdisable: used("ibufdisable") || flag("io_ibufdisable_one") == Some(true),
+        intermdisable: used("intermdisable") || flag("io_intermdisable_one") == Some(true),
     }
 }
 
@@ -938,6 +976,8 @@ pub fn pad_features(request: &PadRequest) -> Result<PadFeatures, String> {
         in_term: request.in_term.clone(),
         diff_term: request.diff_term,
         unread: false,
+        ibufdisable: false,
+        intermdisable: false,
     })?;
     Ok((out.this, out.other.clone(), !out.other.is_empty(), out.tile))
 }
@@ -951,6 +991,8 @@ struct PlacedPad {
     tile_type: String,
     /// The second ball a constraint gave the pair.
     pair_ball: Option<String>,
+    /// Its tristate is tied high: the pad is released, always.
+    released: bool,
 }
 
 impl XrayFabric {
@@ -988,7 +1030,7 @@ impl XrayFabric {
                     &instance.primitive,
                     &cell.attrs,
                     &self.io.default_standard,
-                    instance.primitive == "IBUF"
+                    instance.primitive.starts_with("IBUF")
                         && !instance.pins.iter().any(|p| {
                             let pin = &netlist.pins[*p];
                             pin.role == "din"
@@ -996,6 +1038,14 @@ impl XrayFabric {
                                     .signal
                                     .is_some_and(|s| !netlist.signals[s].sinks.is_empty())
                         }),
+                    &|role| {
+                        instance.pins.iter().any(|p| {
+                            let pin = &netlist.pins[*p];
+                            pin.role == role
+                                && (pin.signal.is_some()
+                                    || pin.constant == Some(crate::logic::Bit::One))
+                        })
+                    },
                 ),
                 half: site.bel.clone(),
                 tile: site.tile,
@@ -1005,6 +1055,12 @@ impl XrayFabric {
                     .get("io_pair_ball")
                     .and_then(AttrValue::as_str)
                     .map(str::to_owned),
+                released: instance.pins.iter().any(|p| {
+                    let pin = &netlist.pins[*p];
+                    pin.role == "oe"
+                        && pin.signal.is_none()
+                        && pin.constant == Some(crate::logic::Bit::One)
+                }),
             });
         }
         for pads in banks.values_mut() {
@@ -1094,6 +1150,33 @@ impl XrayFabric {
                 for name in names {
                     set(&pad.tile_type, pad.tile, &name)?;
                 }
+                // A tristate tied high is a `T` left unrouted, which reads a
+                // one, and not inverted: `buf_obuft_t1`, as Vivado wrote it. Tied
+                // low it is the inverter that makes the unrouted one a zero, as
+                // a plain output has; Vivado routes a ground there instead
+                // (`buf_obuft_t0`), which the same pad does.
+                if pad.released {
+                    let half = &pad.half[pad.half.len() - 1..];
+                    let feature = format!("OLOGIC_Y{half}.ZINV_T1");
+                    let logic = [pad.tile.0.wrapping_sub(1), pad.tile.0 + 1]
+                        .into_iter()
+                        .filter_map(|x| {
+                            let t = self.arch.tile_at(x, pad.tile.1)?;
+                            self.io
+                                .features
+                                .get(&t.name)
+                                .filter(|f| f.contains_key(&feature))
+                                .map(|_| ((x, pad.tile.1), t.name.clone()))
+                        })
+                        .next();
+                    let Some((at, tile_type)) = logic else {
+                        return Err(IoError::MissingFeature {
+                            tile_type: "IOI3".to_owned(),
+                            feature,
+                        });
+                    };
+                    set(&tile_type, at, &feature)?;
+                }
             }
             let requests: Vec<&IoRequest> = pads.iter().map(|p| &p.request).collect();
             if let (_, _, Some(second), _) = bank_use(&requests) {
@@ -1153,6 +1236,8 @@ mod tests {
             in_term: None,
             diff_term: false,
             unread: false,
+            ibufdisable: false,
+            intermdisable: false,
         }
     }
 

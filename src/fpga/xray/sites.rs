@@ -551,6 +551,16 @@ fn iob_pins(index: u32) -> Vec<BelPin> {
             role: "oe",
             wire: format!("IOB_T{index}"),
         },
+        // A receiver's disables, which `tileconn.json` joins to the IO logic
+        // tile's `IOI_IMUX9` and `IOI_IMUX6` by `always` pips.
+        BelPin {
+            role: "ibufdisable",
+            wire: format!("IOB_IBUF_DISABLE{index}"),
+        },
+        BelPin {
+            role: "intermdisable",
+            wire: format!("LIOB_IN_TERM{index}"),
+        },
     ]
 }
 
@@ -1776,7 +1786,13 @@ mod tests {
         let names: Vec<(&str, &str)> = pins.iter().map(|p| (p.role, p.wire.as_str())).collect();
         assert_eq!(
             names,
-            vec![("din", "IOB_IBUF1"), ("dout", "IOB_O1"), ("oe", "IOB_T1")]
+            vec![
+                ("din", "IOB_IBUF1"),
+                ("dout", "IOB_O1"),
+                ("oe", "IOB_T1"),
+                ("ibufdisable", "IOB_IBUF_DISABLE1"),
+                ("intermdisable", "LIOB_IN_TERM1")
+            ]
         );
         assert!(!pins.iter().any(|p| p.role == "pad"));
     }
@@ -1810,7 +1826,13 @@ mod tests {
             let names: Vec<(&str, &str)> = pins.iter().map(|p| (p.role, p.wire.as_str())).collect();
             assert_eq!(
                 names,
-                vec![("din", "IOB_IBUF0"), ("dout", "IOB_O0"), ("oe", "IOB_T0")],
+                vec![
+                    ("din", "IOB_IBUF0"),
+                    ("dout", "IOB_O0"),
+                    ("oe", "IOB_T0"),
+                    ("ibufdisable", "IOB_IBUF_DISABLE0"),
+                    ("intermdisable", "LIOB_IN_TERM0")
+                ],
                 "{tile_type} {prefix}"
             );
         }

@@ -360,8 +360,124 @@ def cases():
     case("pair_backwards", [df("G1", "G2", "LVDS_25", "in")])
 
 
+def buffer_case(name, primitive, std, pads, connections, params=None, ports=(), pull=None):
+    """One buffer by name, on the ball pair G2/G1 of bank 35. `pads` is its pad
+    ports with their direction; `connections` the others, from the helper signals
+    `s0` `s1` `s2`, or read into the output `r`."""
+    par = ",".join(f".{k}({v})" for k, v in (params or {}).items())
+    par = f" #({par})" if par else ""
+    decl, xdc = [], []
+    balls = ("G2", "G1")
+    conns = []
+    for (port, direction), ball in zip(pads, balls):
+        decl.append(f"{direction} {port.lower()}_pad")
+        conns.append(f".{port}({port.lower()}_pad)")
+        xdc.append(f"set_property -dict {props(ball, std, {})} [get_ports {port.lower()}_pad]")
+    reads = []
+    for port, value in connections.items():
+        if value == "read":
+            reads.append(f"x_{port.lower()}")
+            conns.append(f".{port}(x_{port.lower()})")
+        else:
+            conns.append(f".{port}({value})")
+    body = [f"wire {', '.join('x_' + p.lower() for p, v in connections.items() if v == 'read')};"] if reads else []
+    body.append(f"{primitive}{par} dut({', '.join(conns)});")
+    if pull:
+        body.append(f"{pull} p(.O({pads[0][0].lower()}_pad));")
+    expr = " ^ ".join(reads) or "1'b0"
+    text = (f"module {name}(input s0, input s1, input s2, output r{''.join(', ' + d for d in decl)});\n"
+            + "".join(f"  {b}\n" for b in body) + f"  assign r = {expr};\nendmodule\n")
+    open(f"{OUT}/{name}.v", "w").write(text)
+    for port, ball in zip(("s0", "s1", "s2", "r"), ("L4", "L5", "M5", "M4")):
+        xdc.append(f"set_property -dict {{PACKAGE_PIN {ball} IOSTANDARD LVCMOS33}} [get_ports {port}]")
+    open(f"{OUT}/{name}.xdc", "w").write("\n".join(xdc) + "\n")
+
+
+def pad_buffers():
+    i = [("I", "input")]
+    pair_in = [("I", "input"), ("IB", "input")]
+    io = [("IO", "inout")]
+    pair_io = [("IO", "inout"), ("IOB", "inout")]
+    routed = {"IBUFDISABLE": "s0", "O": "read"}
+    both = {"IBUFDISABLE": "s0", "INTERMDISABLE": "s1", "O": "read"}
+    for std in ("LVCMOS33", "SSTL15"):
+        low = std.lower()
+        buffer_case(f"buf_ibufdisable_{low}", "IBUF_IBUFDISABLE", std, i, routed)
+        buffer_case(f"buf_ibufdisable_off_{low}", "IBUF_IBUFDISABLE", std, i, routed,
+                    {"USE_IBUFDISABLE": '"FALSE"'})
+        buffer_case(f"buf_ibufdisable_tied0_{low}", "IBUF_IBUFDISABLE", std, i, {"IBUFDISABLE": "1'b0", "O": "read"})
+        buffer_case(f"buf_ibufdisable_tied1_{low}", "IBUF_IBUFDISABLE", std, i, {"IBUFDISABLE": "1'b1", "O": "read"})
+        buffer_case(f"buf_intermdisable_{low}", "IBUF_INTERMDISABLE", std, i, both)
+        buffer_case(f"buf_intermdisable_off_{low}", "IBUF_INTERMDISABLE", std, i, both,
+                    {"USE_IBUFDISABLE": '"FALSE"'})
+        buffer_case(f"buf_intermdisable_tied_{low}", "IBUF_INTERMDISABLE", std, i,
+                    {"IBUFDISABLE": "s0", "INTERMDISABLE": "1'b0", "O": "read"})
+    for std in ("LVCMOS33", "SSTL15", "LVCMOS18"):
+        low = std.lower()
+        full = {"I": "s0", "T": "s1", "IBUFDISABLE": "s2", "INTERMDISABLE": "s2", "O": "read"}
+        buffer_case(f"buf_iobuf_intermdisable_{low}", "IOBUF_INTERMDISABLE", std, io, full)
+        buffer_case(f"buf_iobuf_intermdisable_off_{low}", "IOBUF_INTERMDISABLE", std, io, full,
+                    {"USE_IBUFDISABLE": '"FALSE"'})
+    for std in ("LVDS_25", "DIFF_SSTL15", "BLVDS_25", "TMDS_33", "RSDS_25"):
+        low = std.lower()
+        buffer_case(f"buf_ibufds_ibufdisable_{low}", "IBUFDS_IBUFDISABLE", std, pair_in, routed)
+        buffer_case(f"buf_ibufds_intermdisable_{low}", "IBUFDS_INTERMDISABLE", std, pair_in, both)
+        buffer_case(f"buf_ibufgds_{low}", "IBUFGDS", std, pair_in, {"O": "read"})
+        for prim in ("IBUFDS_DIFF_OUT", "IBUFGDS_DIFF_OUT"):
+            buffer_case(f"buf_{prim.lower()}_{low}", prim, std, pair_in, {"O": "read", "OB": "read"})
+        buffer_case(f"buf_ibufds_diff_out_o_{low}", "IBUFDS_DIFF_OUT", std, pair_in, {"O": "read"})
+        buffer_case(f"buf_ibufds_diff_out_ob_{low}", "IBUFDS_DIFF_OUT", std, pair_in, {"OB": "read"})
+        buffer_case(f"buf_ibufds_diff_out_ibufdisable_{low}", "IBUFDS_DIFF_OUT_IBUFDISABLE", std, pair_in,
+                    {"IBUFDISABLE": "s0", "O": "read", "OB": "read"})
+        buffer_case(f"buf_ibufds_diff_out_intermdisable_{low}", "IBUFDS_DIFF_OUT_INTERMDISABLE", std, pair_in,
+                    {"IBUFDISABLE": "s0", "INTERMDISABLE": "s1", "O": "read", "OB": "read"})
+    for std in ("LVDS_25", "DIFF_SSTL15", "BLVDS_25", "MINI_LVDS_25"):
+        low = std.lower()
+        full = {"I": "s0", "T": "s1", "IBUFDISABLE": "s2", "INTERMDISABLE": "s2", "O": "read"}
+        buffer_case(f"buf_iobufds_intermdisable_{low}", "IOBUFDS_INTERMDISABLE", std, pair_io, full)
+        buffer_case(f"buf_iobufds_diff_out_{low}", "IOBUFDS_DIFF_OUT", std, pair_io,
+                    {"I": "s0", "TM": "s1", "TS": "s2", "O": "read", "OB": "read"})
+        buffer_case(f"buf_iobufds_diff_out_same_{low}", "IOBUFDS_DIFF_OUT", std, pair_io,
+                    {"I": "s0", "TM": "s1", "TS": "s1", "O": "read", "OB": "read"})
+        buffer_case(f"buf_iobufds_diff_out_intermdisable_{low}", "IOBUFDS_DIFF_OUT_INTERMDISABLE", std, pair_io,
+                    {"I": "s0", "TM": "s1", "TS": "s1", "IBUFDISABLE": "s2", "INTERMDISABLE": "s2", "O": "read",
+                     "OB": "read"})
+    # A tristate's enable tied, which is not an enable at all.
+    for t in ("1'b0", "1'b1"):
+        n = t[-1]
+        buffer_case(f"buf_obuft_t{n}", "OBUFT", "LVCMOS33", [("O", "output")], {"I": "s0", "T": t})
+        buffer_case(f"buf_iobuf_t{n}", "IOBUF", "LVCMOS33", io, {"I": "s0", "T": t, "O": "read"})
+        buffer_case(f"buf_obuftds_t{n}", "OBUFTDS", "LVDS_25", [("O", "output"), ("OB", "output")],
+                    {"I": "s0", "T": t})
+        buffer_case(f"buf_iobufds_t{n}", "IOBUFDS", "LVDS_25", pair_io, {"I": "s0", "T": t, "O": "read"})
+    # A parameter of a buffer that is not its pair.
+    buffer_case("buf_ibuf_params", "IBUF", None, i, {"O": "read"}, {"IOSTANDARD": '"SSTL15"', "IBUF_LOW_PWR": '"FALSE"'})
+    buffer_case("buf_obuf_params", "OBUF", None, [("O", "output")], {"I": "s0"},
+                {"IOSTANDARD": '"LVCMOS33"', "DRIVE": "8", "SLEW": '"FAST"'})
+    buffer_case("buf_iobuf_params", "IOBUF", None, io, {"I": "s0", "T": "s1", "O": "read"},
+                {"IOSTANDARD": '"LVCMOS18"', "DRIVE": "4", "SLEW": '"FAST"'})
+    buffer_case("buf_obuft_params", "OBUFT", None, [("O", "output")], {"I": "s0", "T": "s1"},
+                {"IOSTANDARD": '"LVCMOS25"', "DRIVE": "16"})
+    # A pull on a pad with nothing else on it, in each direction.
+    for prim in ("PULLUP", "PULLDOWN", "KEEPER"):
+        low = prim.lower()
+        for direction in ("input", "output", "inout"):
+            name = f"buf_{low}_{direction}"
+            text = (f"module {name}(input s0, input s1, input s2, output r, {direction} o_pad);\n"
+                    f"  {prim} p(.O(o_pad));\n  assign r = 1'b0;\nendmodule\n")
+            open(f"{OUT}/{name}.v", "w").write(text)
+            xdc = [f"set_property -dict {{PACKAGE_PIN G2 IOSTANDARD LVCMOS33}} [get_ports o_pad]"]
+            for port, ball in zip(("s0", "s1", "s2", "r"), ("L4", "L5", "M5", "M4")):
+                xdc.append(f"set_property -dict {{PACKAGE_PIN {ball} IOSTANDARD LVCMOS33}} [get_ports {port}]")
+            open(f"{OUT}/{name}.xdc", "w").write("\n".join(xdc) + "\n")
+        buffer_case(f"buf_{low}_ibuf", "IBUF", "LVCMOS33", i, {"O": "read"}, pull=prim)
+        buffer_case(f"buf_{low}_obuf", "OBUF", "LVCMOS33", [("O", "output")], {"I": "s0"}, pull=prim)
+        buffer_case(f"buf_{low}_iobuf", "IOBUF", "LVCMOS33", io, {"I": "s0", "T": "s1", "O": "read"}, pull=prim)
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    pad_buffers()
     for std in SE:
         low = std.lower()
         sweep(f"o_{low}", std, "out", out_settings(std))

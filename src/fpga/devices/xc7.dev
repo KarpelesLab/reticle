@@ -224,7 +224,14 @@
 #     first carried to a part, and `docs/fpga-trellis.md` has it.
 #     IOSTANDARD, DRIVE and SLEW are parameters of these primitives in
 #     the library, but Vivado takes them from the XDC, which is where
-#     Reticle puts them, so no `param_*` clause sets them here.
+#     Reticle puts them, so no `param_*` clause sets them here. A buffer
+#     the design names passes its own to the port, below a constraint.
+#     OBUFTDS, IOBUFDS and the `_IBUFDISABLE` and `_INTERMDISABLE` forms
+#     come AFTER the ones mapping chooses for a direction, and are only
+#     ever the design's: `docs/fpga-vivado-parity.md`, "Buffers by name",
+#     has their bits, every one of them Vivado's.
+#     The XC7A100T's 37 standards are `xc7::pads`'s, measured there;
+#     `input_free` says an input asks nothing of the bank's supply.
 #   * IO standards: LVCMOS33 is the only one the Basys 3 uses and the
 #     only one the board's banks are wired for. LVCMOS25/18/15/12 are
 #     listed because the part has them. The drive strengths are the
@@ -420,12 +427,22 @@ device xc7a35t-cpg236
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel IBUFGDS io for in port pad=I pad_n=IB din=O
   bel PULLUP other port o=O
   bel PULLDOWN other port o=O
+  bel KEEPER other port o=O
   bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
   bel OBUFT io for out port pad=O dout=I oen=T
+  bel OBUFTDS io for out port pad=O pad_n=OB dout=I oen=T
+  bel IOBUFDS io for inout port pad=IO pad_n=IOB din=O dout=I oen=T
+  bel IBUF_IBUFDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE
+  bel IBUF_INTERMDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_IBUFDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE
+  bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
@@ -452,43 +469,11 @@ device xc7a35t-cpg236
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP
   end
-  io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
-  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16,24 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
-  io_standard HSUL_12 vccio 1.2 slew slow,fast input_free
-  io_standard HSTL_I vccio 1.5 slew slow,fast input_free
-  io_standard HSTL_II vccio 1.5 slew slow,fast input_free
-  io_standard HSTL_I_18 vccio 1.8 slew slow,fast input_free
-  io_standard HSTL_II_18 vccio 1.8 slew slow,fast input_free
-  io_standard SSTL18_I vccio 1.8 slew slow,fast input_free
-  io_standard SSTL18_II vccio 1.8 slew slow,fast input_free
-  io_standard SSTL15 vccio 1.5 slew slow,fast input_free
-  io_standard SSTL15_R vccio 1.5 slew slow,fast input_free
-  io_standard SSTL135 vccio 1.35 slew slow,fast input_free
-  io_standard SSTL135_R vccio 1.35 slew slow,fast input_free
-  io_standard DIFF_HSTL_I vccio 1.5 slew slow,fast differential input_free
-  io_standard DIFF_HSTL_II vccio 1.5 slew slow,fast differential input_free
-  io_standard DIFF_HSTL_I_18 vccio 1.8 slew slow,fast differential input_free
-  io_standard DIFF_HSTL_II_18 vccio 1.8 slew slow,fast differential input_free
-  io_standard DIFF_SSTL18_I vccio 1.8 slew slow,fast differential input_free
-  io_standard DIFF_SSTL18_II vccio 1.8 slew slow,fast differential input_free
-  io_standard DIFF_SSTL15 vccio 1.5 slew slow,fast differential input_free
-  io_standard DIFF_SSTL15_R vccio 1.5 slew slow,fast differential input_free
-  io_standard DIFF_SSTL135 vccio 1.35 slew slow,fast differential input_free
-  io_standard DIFF_SSTL135_R vccio 1.35 slew slow,fast differential input_free
-  io_standard DIFF_HSUL_12 vccio 1.2 slew slow,fast differential input_free
-  io_standard PCI33_3 vccio 3.3
-  io_standard MOBILE_DDR vccio 1.8 slew slow,fast
-  io_standard DIFF_MOBILE_DDR vccio 1.8 slew slow,fast differential
-  io_standard BLVDS_25 vccio 2.5 differential input_free
-  io_standard LVDS_25 vccio 2.5 differential input_free
-  io_standard RSDS_25 vccio 2.5 differential input_free
-  io_standard TMDS_33 vccio 3.3 differential input_free
-  io_standard MINI_LVDS_25 vccio 2.5 differential input_free
-  io_standard PPDS_25 vccio 2.5 differential input_free
   bank io vccio 3.3
   pins partial
   pin W5 clock bank io
@@ -666,12 +651,22 @@ device xc7a35t-ftg256
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel IBUFGDS io for in port pad=I pad_n=IB din=O
   bel PULLUP other port o=O
   bel PULLDOWN other port o=O
+  bel KEEPER other port o=O
   bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
   bel OBUFT io for out port pad=O dout=I oen=T
+  bel OBUFTDS io for out port pad=O pad_n=OB dout=I oen=T
+  bel IOBUFDS io for inout port pad=IO pad_n=IOB din=O dout=I oen=T
+  bel IBUF_IBUFDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE
+  bel IBUF_INTERMDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_IBUFDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE
+  bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
@@ -976,12 +971,22 @@ device xc7a100t-ftg256
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel IBUFGDS io for in port pad=I pad_n=IB din=O
   bel PULLUP other port o=O
   bel PULLDOWN other port o=O
+  bel KEEPER other port o=O
   bel OBUFDS io for out port pad=O pad_n=OB dout=I
   bel OBUF io for out port pad=O dout=I
   bel IOBUF io for inout port pad=IO din=O dout=I oen=T
   bel OBUFT io for out port pad=O dout=I oen=T
+  bel OBUFTDS io for out port pad=O pad_n=OB dout=I oen=T
+  bel IOBUFDS io for inout port pad=IO pad_n=IOB din=O dout=I oen=T
+  bel IBUF_IBUFDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE
+  bel IBUF_INTERMDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_IBUFDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE
+  bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O

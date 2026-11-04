@@ -4399,7 +4399,29 @@ impl Mapper<'_> {
     fn io_buffer(&mut self, module: &mut Module, index: usize, absorbed: &mut Vec<CellId>) {
         let port = &module.ports[index];
         let name = port.name.as_str().to_owned();
-        let dir = port.dir;
+        let mut dir = port.dir;
+        // A pull cell on a port nothing drives, as Vivado builds it
+        // (`buf_keeper_inout`, `keeper_probe`, `pullup_probe`): a `KEEPER` on an
+        // `inout` is an input, and a `PULLUP` or `PULLDOWN` on one is an output
+        // whose data is not connected at all; so is either on an `output`.
+        let net = port.net;
+        let lone_pull = module.nets[net].attrs.get("pull_cell").is_some()
+            && dir != PortDir::In
+            && !module
+                .cells
+                .iter()
+                .any(|(_, c)| c.outputs.iter().any(|(_, out)| *out == net))
+            && !module
+                .assigns
+                .iter()
+                .any(|a| a.target.nets().contains(&net));
+        if lone_pull {
+            dir = if dir == PortDir::InOut && module.nets[net].attrs.get("keeper").is_some() {
+                PortDir::In
+            } else {
+                PortDir::Out
+            };
+        }
         // The second ball of a differential pair the design instantiated:
         // the buffer on the first configures it, and a buffer of its own
         // would drive or read it on its own. See `flow::primitive_instances`.
@@ -4419,7 +4441,16 @@ impl Mapper<'_> {
             PortDir::Out => "out",
             PortDir::InOut => "inout",
         };
-        let Some(bel) = self.device.io_bel(direction).cloned() else {
+        // A buffer the design named for its pins (`IBUF_INTERMDISABLE`), which
+        // `flow::primitive_instances` left on the port.
+        let named = module.nets[net]
+            .attrs
+            .get("io_buffer")
+            .and_then(AttrValue::as_str)
+            .and_then(|b| self.device.bel_named(b))
+            .filter(|b| b.io_dirs.iter().any(|d| d == direction))
+            .cloned();
+        let Some(bel) = named.or_else(|| self.device.io_bel(direction).cloned()) else {
             self.note(format!(
                 "`{}` describes no IO buffer for an `{direction}` port, so `{name}` is left bare",
                 self.device.name
@@ -4700,7 +4731,7 @@ impl Mapper<'_> {
                         value = self.emit_delay(module, plan, value, &name, bit, span);
                     }
                     let mut inputs = Vec::new();
-                    if let Some(port_name) = bel.port("dout") {
+                    if let Some(port_name) = bel.port("dout").filter(|_| !lone_pull) {
                         inputs.push((Name::new(port_name), value));
                     }
                     if (dir == PortDir::InOut || tristate.is_some())
@@ -5110,9 +5141,32 @@ impl Mapper<'_> {
         bel: &BelKind,
         site: &IoSite<'_>,
         bit: u32,
-        inputs: Vec<(Name, ExprId)>,
+        mut inputs: Vec<(Name, ExprId)>,
         outputs: Vec<(Name, NetId)>,
     ) -> CellId {
+        // A receiver's disables, on the nets `flow::primitive_instances` kept.
+        for (role, key) in [
+            ("ibufdisable", "io_ibufdisable"),
+            ("intermdisable", "io_intermdisable"),
+        ] {
+            let Some(port) = bel.port(role) else { continue };
+            let Some(net) = module.nets[site.net]
+                .attrs
+                .get(key)
+                .and_then(AttrValue::as_str)
+                .and_then(|name| module.net_by_name(name))
+            else {
+                continue;
+            };
+            let width = module.nets[net].ty.width().unwrap_or(1);
+            let value = net_expr(module, net, site.span);
+            let value = if width > 1 {
+                slice_expr(module, value, bit, bit, site.span)
+            } else {
+                value
+            };
+            inputs.push((Name::new(port), value));
+        }
         let cell = add_cell(
             module,
             &format!("{}$io{bit}", site.port),
@@ -5229,6 +5283,9 @@ impl Mapper<'_> {
             "pullup",
             "pulldown",
             "keeper",
+            "pull_cell",
+            "io_ibufdisable_one",
+            "io_intermdisable_one",
             "io_standard",
             "in_term",
             "diff_term",

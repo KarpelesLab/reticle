@@ -1,0 +1,6 @@
+set_property -dict {PACKAGE_PIN G2 IOSTANDARD MINI_LVDS_25} [get_ports io_pad]
+set_property -dict {PACKAGE_PIN G1 IOSTANDARD MINI_LVDS_25} [get_ports iob_pad]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports s0]
+set_property -dict {PACKAGE_PIN L5 IOSTANDARD LVCMOS33} [get_ports s1]
+set_property -dict {PACKAGE_PIN M5 IOSTANDARD LVCMOS33} [get_ports s2]
+set_property -dict {PACKAGE_PIN M4 IOSTANDARD LVCMOS33} [get_ports r]
