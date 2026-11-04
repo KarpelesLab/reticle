@@ -54,10 +54,16 @@ endmodule
 module OR2L #(parameter [0:0] IS_SRI_INVERTED = 1'b0) (output O, input DI, input SRI);
   assign O = DI | (SRI ^ IS_SRI_INVERTED);
 endmodule""")
-for mux in ('MUXF5','MUXF6','MUXF7','MUXF8'):
+for mux in ('MUXF5','MUXF6'):
     m(f"module {mux} (output O, input I0, input I1, input S);\n  assign O = S ? I1 : I0;\nendmodule")
     m(f"module {mux}_L (output LO, input I0, input I1, input S);\n  assign LO = S ? I1 : I0;\nendmodule")
     m(f"module {mux}_D (output O, output LO, input I0, input I1, input S);\n  assign O = S ? I1 : I0;\n  assign LO = O;\nendmodule")
+# These two are the slice's own, and a build keeps a named one as the device's
+# cell, so the others of their families are written through them.
+for mux in ('MUXF7','MUXF8'):
+    m(f"module {mux} (output O, input I0, input I1, input S);\n  assign O = S ? I1 : I0;\nendmodule")
+    m(f"module {mux}_L (output LO, input I0, input I1, input S);\n  {mux} m (.O(LO), .I0(I0), .I1(I1), .S(S));\nendmodule")
+    m(f"module {mux}_D (output O, output LO, input I0, input I1, input S);\n  {mux} m (.O(O), .I0(I0), .I1(I1), .S(S));\n  assign LO = O;\nendmodule")
 m("""module CARRY4 (output [3:0] CO, output [3:0] O, input CI, input CYINIT, input [3:0] DI, input [3:0] S);
   wire c0 = CI | CYINIT;
   assign CO[0] = S[0] ? c0 : DI[0];

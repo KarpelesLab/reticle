@@ -50,8 +50,9 @@
 //! Left alone otherwise: a lookup table using all six inputs, one that
 //! drives a carry chain's propagate or generate and could not be paired
 //! with its own lane (the chain needs the table at its own position, and
-//! `xray::carry`'s generate tables already use `O5`), and one marked
-//! `keep`.
+//! `xray::carry`'s generate tables already use `O5`), one read by a wide
+//! multiplexer, whose lane's output mux is that multiplexer's one way out and
+//! would be `O5`'s too, and one marked `keep`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -208,6 +209,18 @@ pub fn pack_lut_pairs(
             }
         }
         let shape = device.bel(BelRole::Carry).and_then(|c| c.wide_carry());
+        // What a wide multiplexer reads as data, which stays on its own.
+        let mut wide_data: HashSet<SigBit> = HashSet::new();
+        if let Some(mux) = device.bel(BelRole::Mux7) {
+            let data: Vec<&str> = ["i0", "i1"].iter().filter_map(|r| mux.port(r)).collect();
+            for (_, cell) in m.cells.iter() {
+                if matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == mux.name) {
+                    for e in data.iter().filter_map(|port| cell.input(port)) {
+                        wide_data.extend(bit(e));
+                    }
+                }
+            }
+        }
         for (_, cell) in m.cells.iter() {
             if !matches!(&cell.kind, CellKind::Blackbox(n) if device
                 .bel(BelRole::Carry)
@@ -256,6 +269,9 @@ pub fn pack_lut_pairs(
                 continue;
             };
             let out_bit = view.canonical(*out_bit);
+            if wide_data.contains(&out_bit) {
+                continue;
+            }
             // A table on a carry pin is a candidate only for its own lane,
             // and only when it feeds that one pin.
             if chained.contains(&out_bit) {

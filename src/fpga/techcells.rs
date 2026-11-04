@@ -150,6 +150,9 @@ pub const NO_LUT_PRIMITIVE: &str = "F0311";
 /// What [`map_cells`] did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CellMapReport {
+    /// The `MUXF7`s and `MUXF8`s a slice could not hold, made lookup tables:
+    /// see `legalise_wide_muxes`.
+    pub wide_tables: u32,
     /// How many of each device primitive the rewrite produced, sorted by
     /// primitive name.
     pub primitives: Vec<(String, u32)>,
@@ -260,7 +263,157 @@ pub fn map_cells(
     map_luts(module, device, &mut report, diags);
     map_flip_flops(module, device, &mut report, diags);
     drive_constant_data(module, device, &mut report, diags);
+    report.wide_tables = legalise_wide_muxes(module, device);
     report
+}
+
+/// Makes a lookup table of every `MUXF7` and `MUXF8` a slice could not hold,
+/// and says how many.
+///
+/// A `MUXF7` reads two tables over wires that are those tables' outputs and a
+/// `MUXF8` two `MUXF7`s likewise, so a cell is held only when each of its data
+/// inputs is such a cell's output, read by no other multiplexer. The mapper's
+/// own keep to that; one a design names need not, and one of each can claim
+/// the same table. So can a carry chain, whose propagate is also that wire
+/// and a rule of its own in the placer.
+///
+/// **What Vivado does differs and costs the same or more.** It makes a `LUT3`
+/// of a named `MUXF7` with two flip-flops for data (`f7_from_ff`), and with one
+/// it keeps the cell and passes the flip-flop through the free table beside it
+/// (`f7_half`), which is one table either way. A `MUXF8` on flip-flops it keeps
+/// and passes them through four tables and both `MUXF7`s, select wires tied
+/// to ground (`f8_from_ff`), where this spends one. It copies a table two read
+/// (`f7_shared`), which comes to the same count as this makes. All of it
+/// is in `testdata/fpga/vivado/muxf/vivado.txt`.
+fn legalise_wide_muxes(module: &mut Module, device: &Device) -> u32 {
+    let (Some(mux7), Some(mux8), Some(lut)) = (
+        device.bel(BelRole::Mux7).cloned(),
+        device.bel(BelRole::Mux8).cloned(),
+        device.bel(BelRole::Lut).cloned(),
+    ) else {
+        return 0;
+    };
+    let is = |cell: &Cell, bel: &BelKind| matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == bel.name);
+    if !module
+        .cells
+        .iter()
+        .any(|(_, c)| is(c, &mux7) || is(c, &mux8))
+    {
+        return 0;
+    }
+    let Ok(view) = BitView::new(module) else {
+        return 0;
+    };
+    let bit = |e: ExprId| -> Option<SigBit> {
+        match view.expr_bits(e).ok()?.as_slice() {
+            [b] => Some(view.canonical(*b)),
+            _ => None,
+        }
+    };
+    let mut driver: BTreeMap<usize, CellId> = BTreeMap::new();
+    for (id, cell) in module.cells.iter() {
+        for (_, net) in &cell.outputs {
+            for b in view.net_bits(*net, cell.span).into_iter().flatten() {
+                if let SigBit::Slot(s) = view.canonical(b) {
+                    driver.insert(s, id);
+                }
+            }
+        }
+    }
+    // What a carry chain has for a propagate: that wire is taken.
+    let mut propagate: Vec<usize> = Vec::new();
+    if let Some((carry, shape)) = device
+        .bel(BelRole::Carry)
+        .and_then(|c| c.wide_carry().map(|s| (c, s)))
+    {
+        for (_, cell) in module.cells.iter().filter(|(_, c)| is(c, carry)) {
+            let bits = cell.input(shape.propagate).map(|e| view.expr_bits(e));
+            for b in bits.into_iter().flatten().flatten() {
+                if let SigBit::Slot(s) = view.canonical(b) {
+                    propagate.push(s);
+                }
+            }
+        }
+    }
+    let mut claimed: Vec<CellId> = Vec::new();
+    let mut undone: Vec<CellId> = Vec::new();
+    for (level, wanted) in [(&mux7, &lut), (&mux8, &mux7)] {
+        for (id, cell) in module.cells.iter().filter(|(_, c)| is(c, level)) {
+            let pin = |role: &str| level.port(role).and_then(|p| cell.input(p)).and_then(bit);
+            let holds = match (pin("i0"), pin("i1"), pin("s")) {
+                (Some(SigBit::Slot(a)), Some(SigBit::Slot(b)), Some(SigBit::Slot(_))) if a != b => {
+                    match (driver.get(&a), driver.get(&b)) {
+                        (Some(x), Some(y)) => {
+                            let usable = |slot: usize, cell: CellId| {
+                                is(&module.cells[cell], wanted)
+                                    && !claimed.contains(&cell)
+                                    && !undone.contains(&cell)
+                                    && !propagate.contains(&slot)
+                            };
+                            let fine = usable(a, *x) && usable(b, *y);
+                            if fine {
+                                claimed.push(*x);
+                                claimed.push(*y);
+                            }
+                            fine
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            };
+            if !holds {
+                undone.push(id);
+            }
+        }
+    }
+    drop(view);
+    let Some((init_name, _)) = lut.params.first().cloned() else {
+        return 0;
+    };
+    let pins: Vec<Name> = lut.port_names("i").into_iter().map(Name::new).collect();
+    let out = Name::new(lut.port("o").unwrap_or("O"));
+    if pins.len() != 6 {
+        return 0;
+    }
+    let count = undone.len();
+    for id in undone {
+        let cell = &module.cells[id];
+        let span = cell.span;
+        let bel = if is(cell, &mux7) { &mux7 } else { &mux8 };
+        // A pin the instance left open reads low, and an output it left open
+        // still has to go somewhere for the table to be a cell.
+        let (i0, i1, s) = (
+            bel.port("i0").and_then(|p| cell.input(p)),
+            bel.port("i1").and_then(|p| cell.input(p)),
+            bel.port("s").and_then(|p| cell.input(p)),
+        );
+        let output = cell.outputs.first().map(|(_, net)| *net);
+        let name = cell.name.as_str().to_owned();
+        let zero = const_expr(module, Const::zero(1), span);
+        let (i0, i1, s) = (i0.unwrap_or(zero), i1.unwrap_or(zero), s.unwrap_or(zero));
+        let y = match output {
+            Some(net) => net,
+            None => add_net(module, &format!("{name}$unread"), Type::bit(), span),
+        };
+        let inputs = pins
+            .iter()
+            .enumerate()
+            .map(|(k, pin)| (pin.clone(), [i0, i1, s].get(k).copied().unwrap_or(zero)))
+            .collect();
+        let cell = &mut module.cells[id];
+        cell.kind = CellKind::Blackbox(Name::new(lut.name.clone()));
+        cell.inputs = inputs;
+        cell.outputs = vec![(out.clone(), y)];
+        cell.params.set(
+            init_name.clone(),
+            AttrValue::Const(Const::from_u64(
+                crate::synth::techmap::WIDE_MUX_INIT * 0x0101_0101_0101_0101,
+                64,
+            )),
+        );
+    }
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 // --- lookup tables ----------------------------------------------------------
@@ -320,6 +473,56 @@ fn map_luts(
     }
 }
 
+/// Makes the device's `MUXF7` or `MUXF8` of a cell the technology mapper
+/// tagged as one, and says whether it did.
+///
+/// The tag only names the hardware; the truth table must still be the
+/// multiplexer's, because that table is what the mapping proof read. A cell
+/// that is anything else stays a lookup table, which is right whatever it is.
+fn map_wide_mux(
+    module: &mut Module,
+    device: &Device,
+    id: CellId,
+    report: &mut CellMapReport,
+) -> bool {
+    use crate::synth::techmap::{WIDE_MUX_ATTR, WIDE_MUX_INIT, WideMux};
+    let cell = &module.cells[id];
+    let role = match cell.attrs.get(WIDE_MUX_ATTR).and_then(AttrValue::as_str) {
+        Some(tag) if tag == WideMux::F7.attr() => BelRole::Mux7,
+        Some(tag) if tag == WideMux::F8.attr() => BelRole::Mux8,
+        _ => return false,
+    };
+    let CellKind::Lut { k: 3, init } = &cell.kind else {
+        return false;
+    };
+    if init.to_u64() != Some(WIDE_MUX_INIT) {
+        return false;
+    }
+    let (Some(bel), Some(a), Some(y)) =
+        (device.bel(role).cloned(), cell.input("a"), cell.output("y"))
+    else {
+        return false;
+    };
+    let (Some(i0), Some(i1), Some(s), Some(o)) =
+        (bel.port("i0"), bel.port("i1"), bel.port("s"), bel.port("o"))
+    else {
+        return false;
+    };
+    let span = cell.span;
+    let inputs = vec![
+        (Name::new(i0), slice_expr(module, a, 0, 0, span)),
+        (Name::new(i1), slice_expr(module, a, 1, 1, span)),
+        (Name::new(s), slice_expr(module, a, 2, 2, span)),
+    ];
+    let cell = &mut module.cells[id];
+    cell.kind = CellKind::Blackbox(Name::new(bel.name.clone()));
+    cell.inputs = inputs;
+    cell.outputs = vec![(Name::new(o), y)];
+    cell.attrs.remove(WIDE_MUX_ATTR);
+    report.bump(&bel.name, 1);
+    true
+}
+
 fn map_lut(
     module: &mut Module,
     device: &Device,
@@ -328,6 +531,9 @@ fn map_lut(
     report: &mut CellMapReport,
     diags: &mut Diagnostics,
 ) {
+    if map_wide_mux(module, device, id, report) {
+        return;
+    }
     let cell = &module.cells[id];
     let CellKind::Lut { k, init } = cell.kind.clone() else {
         return;
@@ -1237,6 +1443,54 @@ mod tests {
         let file = map.add("top.v", "").unwrap();
         let span = Span::new(file, 0, 0);
         (map, span)
+    }
+
+    /// **A tag names hardware and the truth table has the last word.** What the
+    /// mapping proof read is the table; a cell tagged as a `MUXF7` over any
+    /// other function must stay the table it is. Would catch the tag being
+    /// taken on trust, which nothing else would, since the mapper's own never
+    /// disagree.
+    #[test]
+    fn a_tagged_table_with_another_function_stays_a_table() {
+        use crate::synth::techmap::{WIDE_MUX_ATTR, WIDE_MUX_INIT};
+        for (init, want) in [(WIDE_MUX_INIT, "MUXF7"), (0xCB, "LUT6")] {
+            let (_map, span) = span();
+            let mut b = ModuleBuilder::new("top", span);
+            let a = b.input("a", Type::bits(3));
+            let y = b.add_net("y", Type::bit());
+            let a_e = b.net(a);
+            let id = b.cell(
+                "l",
+                CellKind::Lut {
+                    k: 3,
+                    init: Const::from_u64(init, 8),
+                },
+                vec![(Name::new("a"), a_e)],
+                vec![(Name::new("y"), y)],
+            );
+            let mut design = Design::new();
+            let top = design.add_module(b.finish());
+            design.modules[top].cells[id]
+                .attrs
+                .set(WIDE_MUX_ATTR, AttrValue::String("F7".to_owned()));
+            let device = target("xc7a35t-cpg236").expect("the device");
+            let mut diags = Diagnostics::new();
+            let report = map_luts_only(&mut design, top, device, &mut diags);
+            assert_eq!(report.count(want), 1, "init {init:#x}: {report:?}");
+            assert!(!diags.has_errors());
+        }
+    }
+
+    /// Only the lookup table half of [`map_cells`], with nothing else to read.
+    fn map_luts_only(
+        design: &mut Design,
+        top: ModuleId,
+        device: &Device,
+        diags: &mut Diagnostics,
+    ) -> CellMapReport {
+        let mut report = CellMapReport::default();
+        map_luts(&mut design.modules[top], device, &mut report, diags);
+        report
     }
 
     /// A module with one LUT and one flip-flop of the given shape.

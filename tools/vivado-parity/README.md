@@ -13,6 +13,10 @@ models or IP.
   `testdata/fpga/vivado/primitives/`.
 - `gen_xdc.py` and `xdc_answers.tcl` ask what Vivado makes of each constraints
   file in `testdata/fpga/vivado/xdc/`, and keep the answer beside it.
+- `gen_muxf.py` writes `testdata/fpga/vivado/muxf/`, and `muxf.sh` with
+  `muxf_probe.tcl` asks Vivado what it makes of those designs, in its own report
+  and in a bitstream; `tests/fpga_xray_muxf.rs` decodes the bitstreams into
+  `vivado.txt` there and holds Reticle to it.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

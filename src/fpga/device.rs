@@ -498,13 +498,21 @@ pub enum BelRole {
     /// `o`, and the parameter carrying the delay declared under the
     /// condition `value` with its largest setting (ECP5 `DELAYG`).
     IoDelay,
+    /// A wide multiplexer between two lookup tables' outputs, `i0`, `i1`
+    /// and `s` to `o`, over wires of the slice's own: the 7 series' `MUXF7`.
+    /// `fpga::techcells` writes one from a mapped table tagged for it, and
+    /// a family with no such line keeps the table.
+    Mux7,
+    /// A wide multiplexer between two [`BelRole::Mux7`]s: the 7 series'
+    /// `MUXF8`.
+    Mux8,
     /// Anything else the family wants recorded.
     Other,
 }
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 15] = [
+    pub const ALL: [BelRole; 17] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
@@ -519,6 +527,8 @@ impl BelRole {
         BelRole::DdrIn,
         BelRole::DdrOut,
         BelRole::IoDelay,
+        BelRole::Mux7,
+        BelRole::Mux8,
         BelRole::Other,
     ];
 
@@ -539,6 +549,8 @@ impl BelRole {
             BelRole::DdrIn => "ddr_in",
             BelRole::DdrOut => "ddr_out",
             BelRole::IoDelay => "iodelay",
+            BelRole::Mux7 => "mux7",
+            BelRole::Mux8 => "mux8",
             BelRole::Other => "other",
         }
     }

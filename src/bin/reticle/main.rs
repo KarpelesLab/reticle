@@ -233,6 +233,11 @@ Options:
                      time rather than its bitstream.
   --route-passes <n> 7 series: the most rip-up and reroute passes before a
                      route is given up (default 100)
+  --wide-muxes <on|off>
+                     7 series: map a choice between two lookup tables onto
+                     the slice's `MUXF7` and `MUXF8` (the default, `on`), when
+                     that leaves fewer tables than mapping without them; one
+                     that saves nothing maps exactly as with `off`.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`
@@ -799,6 +804,7 @@ fn spec_for(usage: &str) -> Spec {
                 "route-attempts",
                 "route-passes",
                 "pair-tables",
+                "wide-muxes",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -1016,6 +1022,16 @@ fn named_top(design: &Design, name: &str) -> Option<reticle::ir::ModuleId> {
 }
 
 fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
+    load_design_keeping(args, &[])
+}
+
+/// [`load_design`], leaving out of the device's cell library the modules
+/// `kept` names: the ones a build wants as the device's own cell and not as
+/// the logic the library has for a simulator.
+fn load_design_keeping(
+    args: &Args,
+    kept: &[String],
+) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
     let paths = args.positionals();
     if paths.is_empty() {
         return Ok(Err(Outcome::Usage("no input file given".into())));
@@ -1152,6 +1168,7 @@ fn load_design(args: &Args) -> Result<Result<(Design, SourceMap), Outcome>, ArgE
                     _ => None,
                 }
             })
+            .filter(|name| !kept.contains(name))
             .collect();
         let Some(source) = reticle::fpga::cell_source(family, &names) else {
             break;
@@ -2259,7 +2276,31 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         });
     }
 
-    let (mut design, mut map) = match load_design(args)? {
+    // A named `MUXF7` is that cell here, as long as wide multiplexers are on:
+    // `fpga::techcells::legalise_wide_muxes` says what becomes of one a slice
+    // cannot hold. With them off it is the logic the cell library has, as it
+    // was before they could be placed.
+    let wide_muxes = match args.option("wide-muxes") {
+        None | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            return Err(ArgError::BadValue {
+                option: "wide-muxes".to_owned(),
+                value: other.to_owned(),
+                expected: "`on` or `off`",
+            });
+        }
+    };
+    let kept: Vec<String> = device
+        .bels
+        .iter()
+        .filter(|b| {
+            use reticle::fpga::BelRole::{Mux7, Mux8};
+            wide_muxes && matches!(b.role, Mux7 | Mux8)
+        })
+        .map(|b| b.name.clone())
+        .collect();
+    let (mut design, mut map) = match load_design_keeping(args, &kept)? {
         Ok(pair) => pair,
         Err(outcome) => return Ok(outcome),
     };
@@ -2315,6 +2356,7 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         verify_mapping: args
             .flag("verify")
             .then(reticle::synth::techmap::MapVerifyOptions::default),
+        wide_muxes,
         ..FpgaOptions::default()
     };
     // **No backend here can place a hard multiplier**, so for any

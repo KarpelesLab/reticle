@@ -1292,13 +1292,24 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
     let mut unproved: Vec<String> = Vec::new();
     let mut wrong: Vec<String> = Vec::new();
     let mut checked = 0usize;
-    let jobs: Vec<(&Variant, u32)> = VARIANTS
+    // Each width twice: `wide` is `MapOptions::wide_muxes`, which maps the
+    // choices between tables onto a slice's `MUXF7` and `MUXF8` where that
+    // saves tables, from a graph its own pass put together, and is proved
+    // against the graph from before that pass.
+    let jobs: Vec<(&Variant, u32, bool)> = VARIANTS
         .iter()
-        .flat_map(|variant| [(variant, 4u32), (variant, 6)])
+        .flat_map(|variant| {
+            [
+                (variant, 4u32, false),
+                (variant, 6, false),
+                (variant, 4, true),
+                (variant, 6, true),
+            ]
+        })
         .collect();
     // Every mapping proved as before, on every core at once; the verdicts
     // come back in the order the loop took them one at a time.
-    let verdicts = par_map(&jobs, |(variant, k)| {
+    let verdicts = par_map(&jobs, |(variant, k, wide)| {
         let (mut design, id) = flattened(variant.package, variant.top, variant.params);
         let mut diags = Diagnostics::new();
         synth_run(&mut design, &SynthOptions::default(), &mut diags);
@@ -1308,15 +1319,27 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
             variant.package,
             variant.top
         );
-        let (stats, equivalence) = map_module_checked(
-            &mut design.modules[id],
-            &MapOptions::lut(*k),
-            Some(&options),
-        );
+        let mut map = MapOptions::lut(*k);
+        map.wide_muxes = *wide;
+        let (stats, equivalence) =
+            map_module_checked(&mut design.modules[id], &map, Some(&options));
         let equivalence = equivalence.expect("the check was asked for");
-        let what = format!("{}.{} at LUT{k}", variant.package, variant.top);
+        let what = format!(
+            "{}.{} at LUT{k}{}",
+            variant.package,
+            variant.top,
+            if *wide { " with wide multiplexers" } else { "" }
+        );
         (what, stats, equivalence)
     });
+    // The half of this that is about wide multiplexers is worth nothing if
+    // no block here chose one.
+    let (mut muxf, mut saved) = ([0usize; 2], [0usize; 2]);
+    for (what, stats, _) in &verdicts {
+        let at = usize::from(what.contains("LUT6"));
+        muxf[at] += stats.muxf7 + stats.muxf8;
+        saved[at] += stats.wide_saved;
+    }
     for (what, stats, equivalence) in verdicts {
         if report {
             println!(
@@ -1349,7 +1372,13 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
         unproved.len(),
         unproved.join("\n  ")
     );
-    assert!(checked >= 2 * VARIANTS.len(), "only {checked} mappings");
+    assert!(checked >= 4 * VARIANTS.len(), "only {checked} mappings");
+    for (at, width) in [(0, "LUT4"), (1, "LUT6")] {
+        assert!(
+            muxf[at] > 0 && saved[at] > 0,
+            "no block chose a wide multiplexer at {width}, so nothing here proved one"
+        );
+    }
 }
 
 /// Where the generated table lives in the document.

@@ -54,6 +54,7 @@ pub mod emit;
 pub mod fraig;
 pub mod ihash;
 pub mod mffc;
+pub(crate) mod muxtree;
 pub mod refactor;
 pub mod rewrite;
 pub mod truth;

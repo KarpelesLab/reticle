@@ -346,6 +346,11 @@ pub struct FpgaOptions {
     /// over. A mapper that covered one cone wrongly reached a board through
     /// that gap.
     pub verify_mapping: Option<crate::synth::techmap::MapVerifyOptions>,
+    /// Map two-to-one choices between lookup tables onto the wide
+    /// multiplexers the device declares ([`super::BelRole::Mux7`]), where
+    /// that leaves fewer tables. A design that saves none maps exactly as it
+    /// does with this off. See `synth::techmap`.
+    pub wide_muxes: bool,
 }
 
 #[cfg(feature = "synth")]
@@ -359,6 +364,7 @@ impl Default for FpgaOptions {
             device_cells: true,
             flatten: true,
             verify_mapping: None,
+            wide_muxes: true,
         }
     }
 }
@@ -380,6 +386,9 @@ pub struct FlowReport {
     pub luts: usize,
     /// The depth of the mapped logic, in LUTs.
     pub lut_depth: u32,
+    /// The `MUXF7`s and `MUXF8`s the mapper chose, and the tables they
+    /// saved over the same logic mapped without them.
+    pub wide_muxes: (usize, usize, usize),
     /// Every cell type in the finished module with how many there are,
     /// sorted by type. A type starting with `$` is a generic cell the
     /// flow could not map, which is what [`check_nextpnr_json`] reports.
@@ -417,6 +426,13 @@ impl FlowReport {
             "logic:\n  {} LUTs, depth {}",
             self.luts, self.lut_depth
         );
+        let (f7, f8, saved) = self.wide_muxes;
+        if f7 + f8 > 0 {
+            let _ = writeln!(
+                out,
+                "  {f7} MUXF7 and {f8} MUXF8 saved {saved} LUT(s), wide multiplexers"
+            );
+        }
         if !self.netlist.is_empty() {
             out.push_str("netlist:\n");
             for (name, count) in &self.netlist {
@@ -548,6 +564,10 @@ pub fn synthesize_for(
     let k = options.lut_size.unwrap_or(device.lut_size).clamp(2, 8);
     let mut techmap = TechMapOptions::lut(k);
     techmap.area_passes = options.area_passes;
+    techmap.wide_muxes = options.wide_muxes
+        && options.device_cells
+        && device.bel(super::device::BelRole::Mux7).is_some()
+        && device.bel(super::device::BelRole::Mux8).is_some();
     let (stats, equivalence) = crate::synth::techmap::map_module_checked(
         &mut design.modules[module],
         &techmap,
@@ -555,6 +575,7 @@ pub fn synthesize_for(
     );
     report.luts = stats.cells;
     report.lut_depth = stats.depth;
+    report.wide_muxes = (stats.muxf7, stats.muxf8, stats.wide_saved);
     report.mapping = equivalence;
 
     // 4. Clean-up: the logic the mapper absorbed leaves dead cells and

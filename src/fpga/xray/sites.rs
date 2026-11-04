@@ -765,6 +765,106 @@ fn slice_pass_throughs(tile_type: &str) -> Vec<PassThrough> {
             });
         }
         out.extend(carry_pass_throughs(wires, prefix));
+        out.extend(wide_mux_pass_throughs(wires, prefix));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// The wide multiplexers
+// ---------------------------------------------------------------------------
+
+/// The wire a slice's `F7AMUX`, `F7BMUX` or `F8MUX` output sits on, invented
+/// like [`ff_data_wire`]: the database gives it no tile wire, only the muxes
+/// that select it (`<L>FFMUX.F7`, `<L>OUTMUX.F7`).
+fn wide_mux_wire(wires: &str, mux: &str) -> String {
+    format!("{wires}_MUX_{mux}")
+}
+
+/// Which of a slice's lanes each wide multiplexer's output leaves by, and the
+/// value of `<L>FFMUX` and `<L>OUTMUX` that selects it.
+///
+/// **Checked against Vivado.** Decoding what it wrote for the designs of
+/// `testdata/fpga/vivado/muxf/` gives exactly these: a registered `F7AMUX` is
+/// `AFFMUX.F7` on the flip-flop of its slice, one read elsewhere `AOUTMUX.F7`;
+/// `F7BMUX` is the same on `C`, and `F8MUX` is `BFFMUX.F8` and `BOUTMUX.F8`. They
+/// are the only features a wide multiplexer has: neither of them has an enable.
+const WIDE_MUX_EXITS: [(&str, char, &str); 3] =
+    [("F7A", 'A', "F7"), ("F7B", 'C', "F7"), ("F8", 'B', "F8")];
+
+/// The paths out of a slice's wide multiplexers: see [`WIDE_MUX_EXITS`].
+fn wide_mux_pass_throughs(wires: &str, prefix: &str) -> Vec<PassThrough> {
+    let mut out = Vec::new();
+    for (mux, letter, value) in WIDE_MUX_EXITS {
+        out.push(PassThrough {
+            to: format!("{wires}_{letter}MUX"),
+            from: wide_mux_wire(wires, mux),
+            features: vec![format!("{prefix}.{letter}OUTMUX.{value}")],
+        });
+        out.push(PassThrough {
+            to: ff_data_wire(wires, letter),
+            from: wide_mux_wire(wires, mux),
+            features: vec![format!("{prefix}.{letter}FFMUX.{value}")],
+        });
+    }
+    out
+}
+
+/// A CLB tile's wide multiplexers, each a bel of its own, since they have no
+/// feature for the prefix machinery to find one by.
+///
+/// **Which input is which is Vivado's answer and is not the obvious one**, so
+/// it is worth saying: in every design of `testdata/fpga/vivado/muxf/`, a
+/// `MUXF7` on `F7AMUX` has its `I0` from `B6LUT` and `I1` from `A6LUT`, on
+/// `F7BMUX` `I0` from `D6LUT` and `I1` from `C6LUT`, and a `MUXF8` has `I0`
+/// from `F7BMUX` and `I1` from `F7AMUX`: the higher letter is `I0` every time.
+/// `S` is the slice's bypass input `AX`, `CX` and `BX`, the same metal as a
+/// flip-flop's bypass and a carry's generate, so the placer's pools refuse a
+/// third signal on it (`place::ControlGroup`).
+///
+/// Each data input is the same node as the output it reads, as a carry's
+/// propagate is ([`carry_pins`]): no wire reaches it from elsewhere, so what
+/// reads the placer as dedicated wiring keeps each mux with its tables.
+fn wide_mux_bels(tile_type: &str) -> Vec<ExtraBel> {
+    let mut out = Vec::new();
+    for index in 0..2u32 {
+        let (Some(wires), Some(prefix)) = (
+            slice_wire_prefix(tile_type, index),
+            slice_feature_prefix(tile_type, index),
+        ) else {
+            continue;
+        };
+        let lut = |letter: char| format!("{wires}_{letter}");
+        let f7 = |mux: &str| wide_mux_wire(wires, mux);
+        for (mux, kind, i0, i1, select) in [
+            ("F7A", "mux7", lut('B'), lut('A'), 'A'),
+            ("F7B", "mux7", lut('D'), lut('C'), 'C'),
+            ("F8", "mux8", f7("F7B"), f7("F7A"), 'B'),
+        ] {
+            out.push(ExtraBel {
+                name: format!("{prefix}_{mux}MUX"),
+                kind,
+                pins: vec![
+                    BelPin {
+                        role: "i0",
+                        wire: i0,
+                    },
+                    BelPin {
+                        role: "i1",
+                        wire: i1,
+                    },
+                    BelPin {
+                        role: "s",
+                        wire: format!("{wires}_{select}X"),
+                    },
+                    BelPin {
+                        role: "o",
+                        wire: wide_mux_wire(wires, mux),
+                    },
+                ],
+                cells: Vec::new(),
+            });
+        }
     }
     out
 }
@@ -1126,6 +1226,10 @@ pub(super) struct ExtraBel {
 /// kind and the pins, and the reader keeps the features it already filed
 /// under that name.
 pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
+    let wide = wide_mux_bels(tile_type);
+    if !wide.is_empty() {
+        return wide;
+    }
     let managers = super::cmt::clock_manager_bels(tile_type);
     if !managers.is_empty() {
         return managers;
@@ -1781,8 +1885,37 @@ mod tests {
         // bypass input and `O5`) and one way out (the output mux); and a
         // carry chain with two ways in, and per bit two ways into the
         // generate and the sum and the carry each out to the output mux
-        // and to the flip-flop.
-        assert_eq!(p.len(), 2 * (2 + 4 * 2 + 4 + 4 * 3 + 2 + 4 * 2 + 4 * 2 * 2));
+        // and to the flip-flop; and three wide multiplexers, each out to one
+        // lane's output mux and flip-flop.
+        assert_eq!(
+            p.len(),
+            2 * (2 + 4 * 2 + 4 + 4 * 3 + 2 + 4 * 2 + 4 * 2 * 2 + 3 * 2)
+        );
+        // Which lane each is, as Vivado wrote them. Would catch `F7B` and
+        // `F8` exchanged: `COUTMUX.F8` is in no database, the loader drops a
+        // hop whose feature is missing, and only a failed route would say.
+        for (from, to, feature) in [
+            ("CLBLL_L_MUX_F7A", "CLBLL_L_AMUX", "SLICEL_X1.AOUTMUX.F7"),
+            (
+                "CLBLL_L_MUX_F7A",
+                "CLBLL_L_MUX_AFF_D",
+                "SLICEL_X1.AFFMUX.F7",
+            ),
+            ("CLBLL_L_MUX_F7B", "CLBLL_L_CMUX", "SLICEL_X1.COUTMUX.F7"),
+            (
+                "CLBLL_L_MUX_F7B",
+                "CLBLL_L_MUX_CFF_D",
+                "SLICEL_X1.CFFMUX.F7",
+            ),
+            ("CLBLL_L_MUX_F8", "CLBLL_L_BMUX", "SLICEL_X1.BOUTMUX.F8"),
+            ("CLBLL_L_MUX_F8", "CLBLL_L_MUX_BFF_D", "SLICEL_X1.BFFMUX.F8"),
+        ] {
+            assert!(
+                p.iter()
+                    .any(|h| h.from == from && h.to == to && h.features == [feature.to_owned()]),
+                "no hop {from} to {to} on {feature}"
+            );
+        }
         // The five-input flip-flops read the bypass input with `IN_B` and
         // their lane's `O5` with `IN_A`, and nothing else. Would catch the
         // two the other way round, which is UG474's order and not what
@@ -1861,6 +1994,49 @@ mod tests {
     /// bypass input), or the two slices' pins crossed. Would not catch: the letters being in the wrong order —
     /// that is UG474's drawing, and `tests/fpga_xray_carry.rs` reads it
     /// back out of a routed bitstream.
+    /// **A slice's wide multiplexers are where Vivado has them**: each data
+    /// input on the table its report names and each select on the bypass
+    /// input `tests/fpga_xray_muxf.rs` finds reached with nothing else to read
+    /// it. Would catch a select on another lane's bypass input, which the
+    /// comparison of slices there does not always see, since a flip-flop may
+    /// share the one it should have reached; would not catch the table here
+    /// and that fixture both being wrong, which only a part could.
+    #[test]
+    fn a_slices_wide_multiplexers_are_where_vivado_has_them() {
+        let bels = wide_mux_bels("CLBLM_R");
+        let pin = |bel: &str, role: &str| -> String {
+            let bel = bels.iter().find(|b| b.name == bel).expect("the bel");
+            let pin = bel.pins.iter().find(|p| p.role == role).expect("the pin");
+            pin.wire.clone()
+        };
+        for (bel, i0, i1, s, o) in [
+            ("SLICEM_X0_F7AMUX", "M_B", "M_A", "M_AX", "M_MUX_F7A"),
+            ("SLICEM_X0_F7BMUX", "M_D", "M_C", "M_CX", "M_MUX_F7B"),
+            (
+                "SLICEM_X0_F8MUX",
+                "M_MUX_F7B",
+                "M_MUX_F7A",
+                "M_BX",
+                "M_MUX_F8",
+            ),
+            ("SLICEL_X1_F7AMUX", "L_B", "L_A", "L_AX", "L_MUX_F7A"),
+            ("SLICEL_X1_F7BMUX", "L_D", "L_C", "L_CX", "L_MUX_F7B"),
+            (
+                "SLICEL_X1_F8MUX",
+                "L_MUX_F7B",
+                "L_MUX_F7A",
+                "L_BX",
+                "L_MUX_F8",
+            ),
+        ] {
+            for (role, wire) in [("i0", i0), ("i1", i1), ("s", s), ("o", o)] {
+                assert_eq!(pin(bel, role), format!("CLBLM_{wire}"), "{bel}.{role}");
+            }
+        }
+        assert_eq!(bels.len(), 6);
+        assert!(wide_mux_bels("LIOB33").is_empty());
+    }
+
     #[test]
     fn a_carry4_takes_its_propagate_from_the_lookup_tables_beside_it() {
         let pins = bel_pins("CLBLL_L", "SLICEL_X1", "CARRY4");

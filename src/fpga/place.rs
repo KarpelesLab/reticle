@@ -3699,8 +3699,13 @@ struct Exact {
 /// wandered into a tile's interconnect.
 const LOCAL_WIRES: usize = 48;
 
-/// Adds to `links` each flip-flop that registers a carry chain's output
-/// from the site beside it, so that it joins the chain's macro.
+/// Adds to `links` each flip-flop that registers a carry chain's output or
+/// a wide multiplexer's from the site beside it, so that it joins the macro.
+///
+/// A multiplexer is here for what Vivado does: each design of
+/// `testdata/fpga/vivado/muxf/` whose `MUXF7` or `MUXF8` is read by one flip-flop
+/// and nothing else has that flip-flop in its slice, through `AFFMUX.F7` or
+/// `BFFMUX.F8`.
 ///
 /// A carry's sum reaches the flip-flop of its own lane through the slice's
 /// data mux and reaches anything else through the interconnect, so the
@@ -3726,6 +3731,7 @@ fn registered_outputs(
     links: &mut Vec<(usize, usize, Rc<Relation>)>,
 ) {
     let carry = BelRole::Carry.keyword();
+    let (mux7, mux8) = (BelRole::Mux7.keyword(), BelRole::Mux8.keyword());
     let free = |i: usize| info[i].fixed.is_none() && info[i].macro_index.is_none();
     // Only a chain that is a macro already: a carry with no dedicated link
     // is placed on its own, and so is what it drives.
@@ -3737,7 +3743,14 @@ fn registered_outputs(
         };
         let dpin = &netlist.pins[driver];
         let x = dpin.instance;
-        if netlist.instances[x].kind != carry || !in_macro.contains(&x) {
+        let kind = netlist.instances[x].kind.as_str();
+        if !(kind == carry || kind == mux7 || kind == mux8) || !in_macro.contains(&x) {
+            continue;
+        }
+        // Its one reader, for a multiplexer: read elsewhere as well, Vivado
+        // sends it out by the output mux and the flip-flop stays apart
+        // (`f7_d`, `f8_out`).
+        if kind != carry && signal.sinks.len() != 1 {
             continue;
         }
         for sink in &signal.sinks {
@@ -3760,7 +3773,7 @@ fn registered_outputs(
                         sites_by_kind,
                         &netlist.instances[y].kind,
                         &spin.role,
-                        carry,
+                        kind,
                         &dpin.role,
                     )
                 })

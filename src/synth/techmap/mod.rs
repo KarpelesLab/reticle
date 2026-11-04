@@ -30,6 +30,35 @@
 //! from the outputs: it never lengthens a path, but it also declines some
 //! area recovery that slack on a non-critical path would allow.
 //!
+//! # Wide multiplexers
+//!
+//! A 7-series slice has two more multiplexers behind its lookup tables, with
+//! no bits of their own and no routing: `MUXF7` picks between two tables and
+//! `MUXF8` between two `MUXF7`s. So a two-to-one choice between tables can
+//! cost no table at all, which a cut cannot say: a cut is one cell over its
+//! leaves, and this one's area is nothing. [`MapOptions::wide_muxes`] offers
+//! it as one more way to implement a node, alongside its cuts and priced as
+//! they are, so area flow takes it where it saves something and leaves it
+//! where one six-input table covers the whole choice.
+//!
+//! What may be chosen depends on what the data inputs were: two tables make a
+//! `MUXF7`, two `MUXF7`s a `MUXF8`, and anything else neither, so that is read
+//! off each pass's choice for the fanins, which come first. Only the finished
+//! cover knows whether a table's one dedicated wire is asked for twice
+//! ([`Lut::wide`]'s rule), so that is settled afterwards, by making the
+//! second reader an ordinary three-input table.
+//!
+//! **Such a cell is a [`Lut`]**: three inputs, `init` the multiplexer's truth
+//! table, and a tag. Everything that reads a network, the proof of
+//! [`verify`] first of all, reads a correct lookup table without knowing, so
+//! the proof covers this mapping with no new case in it. The tag says only
+//! which hardware `fpga::techcells` writes, and it rewrites a tagged cell
+//! only when its `init` is that truth table.
+//!
+//! Vivado's own covers were the check on what to aim at, and the fixtures in
+//! `testdata/fpga/vivado/muxf/` hold them: its 8-, 16- and 64-to-1 come to 2, 4
+//! and 17 tables with 1, 2 and 8 `MUXF7` and 0, 1 and 4 `MUXF8`.
+//!
 //! # Entry points
 //!
 //! | Function | Result |
@@ -51,10 +80,11 @@
 use std::collections::HashMap;
 
 use super::aig::emit::{NetNode, Netlist, Signal, write_back};
+use super::aig::muxtree::{MuxShape, optimize_around_trees};
 use super::aig::truth::TruthTable;
-use super::aig::{Aig, AigOptions, AigStats};
+use super::aig::{Aig, AigOptions, AigStats, Edge};
 use super::cells::{Gate, GateLibrary};
-use crate::ir::attr::Attrs;
+use crate::ir::attr::{AttrValue, Attrs};
 use crate::ir::design::Module;
 use crate::ir::types::Const;
 use crate::ir::{CellKind, Name};
@@ -64,7 +94,10 @@ mod cuts;
 pub mod verify;
 
 pub use cuts::{Cut, CutOptions, PriorityCuts};
-pub use verify::{MapEquivalence, MapVerifyOptions, check_gate_mapping, check_lut_mapping};
+pub use verify::{
+    MapEquivalence, MapVerifyOptions, check_gate_mapping, check_lut_mapping,
+    check_lut_mapping_through,
+};
 
 /// What to map onto.
 pub enum Target<'a> {
@@ -84,6 +117,11 @@ pub struct MapOptions<'a> {
     pub area_passes: u32,
     /// Cut enumeration limits.
     pub cuts: CutOptions,
+    /// Offer a slice's `MUXF7` and `MUXF8` as well, for [`Target::Lut`]. The
+    /// network is mapped both ways and this one kept only when it has fewer
+    /// tables, so a design with nothing to gain maps exactly as it does
+    /// without this. See the module docs.
+    pub wide_muxes: bool,
 }
 
 impl Default for MapOptions<'_> {
@@ -93,6 +131,7 @@ impl Default for MapOptions<'_> {
             aig_opt: AigOptions::default(),
             area_passes: 2,
             cuts: CutOptions::default(),
+            wide_muxes: false,
         }
     }
 }
@@ -128,6 +167,14 @@ pub struct MapStats {
     pub depth: u32,
     /// Total area, for a gate mapping; the cell count for a LUT mapping.
     pub area: f64,
+    /// Of a LUT mapping with [`MapOptions::wide_muxes`], the `MUXF7`s in it;
+    /// they are not in [`MapStats::cells`].
+    pub muxf7: usize,
+    /// The `MUXF8`s, likewise.
+    pub muxf8: usize,
+    /// How many tables the network without them would have had over this
+    /// one, or zero when it was the one kept.
+    pub wide_saved: usize,
 }
 
 /// One mapped LUT.
@@ -137,7 +184,54 @@ pub struct Lut {
     pub inputs: Vec<Signal>,
     /// The function, `2^inputs.len()` bits, bit `i` for pattern `i`.
     pub init: Const,
+    /// When this is a slice's wide multiplexer rather than a table: then its
+    /// inputs are `[I0, I1, S]` and `init` is [`WIDE_MUX_INIT`], so that it is
+    /// still a correct lookup table to anything that reads it as one.
+    ///
+    /// The data inputs are the rule: each is a cell's own dedicated wire, so
+    /// a `MUXF7`'s are two different tables and a `MUXF8`'s two different
+    /// `MUXF7`s, and none of those is the data of a second multiplexer. Any
+    /// of them may be read by logic elsewhere too, as Vivado's `f8_out` is.
+    pub wide: Option<WideMux>,
 }
+
+/// Which of a slice's wide multiplexers a [`Lut`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WideMux {
+    /// Between two lookup tables.
+    F7,
+    /// Between two [`WideMux::F7`]s.
+    F8,
+}
+
+impl WideMux {
+    /// What it adds to a path, in lookup table levels: read off Vivado 2026.1's
+    /// routed reports of `testdata/fpga/vivado/muxf/`, where a `MUXF7` is 0.21 to
+    /// 0.25 ns and a `MUXF8` 0.10 ns, against a table and the wire to it near
+    /// 1 ns. It only has to be right about being much less than a level.
+    fn delay(self) -> f64 {
+        match self {
+            WideMux::F7 => 0.25,
+            WideMux::F8 => 0.1,
+        }
+    }
+
+    /// The value of [`WIDE_MUX_ATTR`] for it.
+    #[must_use]
+    pub fn attr(self) -> &'static str {
+        match self {
+            WideMux::F7 => "F7",
+            WideMux::F8 => "F8",
+        }
+    }
+}
+
+/// The truth table of `S ? I1 : I0` over inputs `[I0, I1, S]`.
+pub const WIDE_MUX_INIT: u64 = 0xCA;
+
+/// The attribute that marks a mapped three-input `lut` cell as a wide
+/// multiplexer, with [`WideMux::attr`]'s value.
+pub const WIDE_MUX_ATTR: &str = "wide_mux";
 
 /// A network of LUTs over the AIG's inputs.
 #[derive(Clone, Debug, Default)]
@@ -151,9 +245,19 @@ pub struct LutNetwork {
 }
 
 impl LutNetwork {
-    /// Number of LUTs.
+    /// Number of LUTs, with the wide multiplexers among them.
     pub fn len(&self) -> usize {
         self.luts.len()
+    }
+
+    /// How many of them are real lookup tables.
+    pub fn tables(&self) -> usize {
+        self.luts.iter().filter(|l| l.wide.is_none()).count()
+    }
+
+    /// How many of them are this wide multiplexer.
+    pub fn wide(&self, level: WideMux) -> usize {
+        self.luts.iter().filter(|l| l.wide == Some(level)).count()
     }
 
     /// True when nothing was mapped.
@@ -184,8 +288,14 @@ impl LutNetwork {
                     },
                     ports: vec![Name::new("a")],
                     fanins: lut.inputs.clone(),
-                    attrs: Attrs::new(),
-                    prefix: "lut",
+                    attrs: {
+                        let mut attrs = Attrs::new();
+                        if let Some(level) = lut.wide {
+                            attrs.set(WIDE_MUX_ATTR, AttrValue::String(level.attr().to_owned()));
+                        }
+                        attrs
+                    },
+                    prefix: if lut.wide.is_some() { "muxf" } else { "lut" },
                 })
                 .collect(),
             outputs: self.outputs.clone(),
@@ -316,13 +426,65 @@ pub fn lut_map_with(aig: &Aig, k: u32, options: &CutOptions, area_passes: u32) -
     assert!((2..=8).contains(&k), "LUT size {k} is outside 2..=8");
     let size = usize::try_from(k).expect("LUT size");
     let cost = LutCost;
-    let mapping = run(aig, size, options, area_passes, &cost);
+    let mapping = run(aig, size, options, area_passes, &cost, false);
     let mut emitter = LutEmitter { luts: Vec::new() };
     let outputs = mapping.emit(aig, &mut emitter);
     LutNetwork {
         luts: emitter.luts,
         outputs,
         depth: mapping.depth,
+    }
+}
+
+/// [`lut_map_with`] with a slice's `MUXF7` and `MUXF8` on offer: see the
+/// module docs.
+pub fn lut_map_wide(aig: &Aig, k: u32, options: &CutOptions, area_passes: u32) -> LutNetwork {
+    assert!((2..=8).contains(&k), "LUT size {k} is outside 2..=8");
+    let size = usize::try_from(k).expect("LUT size");
+    let cost = LutCost;
+    let mapping = run(aig, size, options, area_passes, &cost, true);
+    let mut emitter = LutEmitter { luts: Vec::new() };
+    let outputs = mapping.emit(aig, &mut emitter);
+    let mut luts = emitter.luts;
+    settle_wide(&mut luts);
+    LutNetwork {
+        luts,
+        outputs,
+        depth: mapping.depth,
+    }
+}
+
+/// Makes an ordinary table of each wide multiplexer that breaks [`Lut::wide`]'s
+/// rule: a second reader of one table's dedicated wire, or a `MUXF8` whose data
+/// is no longer two `MUXF7`s. It is the same function either way, so nothing
+/// else changes; it is one table more. The cells are in topological order, so
+/// a `MUXF7` undone here is seen by the `MUXF8` above it.
+fn settle_wide(luts: &mut [Lut]) {
+    let mut claimed = vec![false; luts.len()];
+    for index in 0..luts.len() {
+        let Some(level) = luts[index].wide else {
+            continue;
+        };
+        let data = match luts[index].inputs.as_slice() {
+            [Signal::Node(a), Signal::Node(b), _] if a != b => Some((*a as usize, *b as usize)),
+            _ => None,
+        };
+        let wanted = match level {
+            WideMux::F7 => None,
+            WideMux::F8 => Some(WideMux::F7),
+        };
+        match data {
+            Some((a, b))
+                if !claimed[a]
+                    && !claimed[b]
+                    && luts[a].wide == wanted
+                    && luts[b].wide == wanted =>
+            {
+                claimed[a] = true;
+                claimed[b] = true;
+            }
+            _ => luts[index].wide = None,
+        }
     }
 }
 
@@ -344,6 +506,7 @@ impl Emitter for LutEmitter {
         Some(self.push(Lut {
             inputs: inputs.to_vec(),
             init: truth_to_const(function, inputs.len()),
+            wide: None,
         }))
     }
 
@@ -352,6 +515,15 @@ impl Emitter for LutEmitter {
         self.push(Lut {
             inputs: vec![input],
             init: Const::from_u64(0b01, 2),
+            wide: None,
+        })
+    }
+
+    fn wide(&mut self, level: WideMux, i0: Signal, i1: Signal, s: Signal) -> u32 {
+        self.push(Lut {
+            inputs: vec![i0, i1, s],
+            init: Const::from_u64(WIDE_MUX_INIT, 8),
+            wide: Some(level),
         })
     }
 }
@@ -375,7 +547,7 @@ pub fn gate_map_with(
     );
     let size = library.max_arity().clamp(1, 4);
     let cost = GateCost { library };
-    let mapping = run(aig, size, options, area_passes, &cost);
+    let mapping = run(aig, size, options, area_passes, &cost, false);
     let mut emitter = GateEmitter {
         library,
         gates: Vec::new(),
@@ -466,6 +638,13 @@ trait Emitter {
 
     /// Creates a cell computing the complement of `input`.
     fn inverter(&mut self, input: Signal) -> u32;
+
+    /// Creates a wide multiplexer: only a target that offers them is ever
+    /// asked, which is [`LutEmitter`].
+    fn wide(&mut self, level: WideMux, i0: Signal, i1: Signal, s: Signal) -> u32 {
+        let _ = (level, i0, i1, s);
+        unreachable!("this target offers no wide multiplexer")
+    }
 }
 
 /// How a target prices a cut.
@@ -541,8 +720,42 @@ struct Mapping {
     area_flow: Vec<f64>,
     /// How many chosen cuts use each node, plus the outputs.
     refs: Vec<u32>,
-    /// Depth of the mapped network, in cells.
+    /// Depth of the mapped network, in cells. A wide multiplexer is not a
+    /// level of it.
     depth: u32,
+    /// Per node, the wide multiplexer that implements it, in which case its
+    /// [`Mapping::best`] holds that multiplexer's three leaves and cost no
+    /// table; empty unless they are on offer.
+    wide: Vec<Option<(WideMux, MuxShape)>>,
+}
+
+/// The cut a wide multiplexer reads, the same three nodes [`Mapping::best`]
+/// holds, with its function over them.
+fn shape_cut(shape: MuxShape) -> Cut {
+    let mut leaves = vec![shape.select, shape.when0.node(), shape.when1.node()];
+    leaves.sort_unstable();
+    let at = |node: u32| leaves.iter().position(|l| *l == node).unwrap_or(0);
+    let (s, d0, d1) = (
+        at(shape.select),
+        at(shape.when0.node()),
+        at(shape.when1.node()),
+    );
+    let mut word = 0u64;
+    for pattern in 0..8u64 {
+        let bit = |v: usize| (pattern >> v) & 1 == 1;
+        let value = if bit(s) {
+            bit(d1) != shape.when1.is_complement()
+        } else {
+            bit(d0) != shape.when0.is_complement()
+        };
+        if value {
+            word |= 1 << pattern;
+        }
+    }
+    Cut {
+        leaves,
+        function: TruthTable::from_u64(3, word),
+    }
 }
 
 impl Mapping {
@@ -562,20 +775,35 @@ impl Mapping {
         // The covered nodes, fanins before fanouts.
         let order = self.cover_order(aig);
 
-        // Which polarity of each node is actually used.
+        // Which polarity of each node is actually used. Fanouts first,
+        // because a wide multiplexer has no table to absorb its data's
+        // polarity in and asks for what its own reader wants: its complement
+        // is the multiplexer of its data's complements.
         let mut needs_plain = vec![false; aig.len()];
         let mut needs_comp = vec![false; aig.len()];
-        for &id in &order {
-            // A cut's leaves are always read in plain polarity.
-            for &leaf in &self.best[id as usize].as_ref().expect("covered").leaves {
-                needs_plain[leaf as usize] = true;
-            }
-        }
         for &e in aig.outputs() {
             if e.is_complement() {
                 needs_comp[e.index()] = true;
             } else {
                 needs_plain[e.index()] = true;
+            }
+        }
+        for &id in order.iter().rev() {
+            if let Some((_, shape)) = self.wide_at(id) {
+                let flip = !needs_plain[id as usize];
+                needs_plain[shape.select as usize] = true;
+                for data in [shape.when0.xor(flip), shape.when1.xor(flip)] {
+                    if data.is_complement() {
+                        needs_comp[data.index()] = true;
+                    } else {
+                        needs_plain[data.index()] = true;
+                    }
+                }
+                continue;
+            }
+            // A cut's leaves are always read in plain polarity.
+            for &leaf in &self.best[id as usize].as_ref().expect("covered").leaves {
+                needs_plain[leaf as usize] = true;
             }
         }
 
@@ -588,6 +816,33 @@ impl Mapping {
         }
 
         for &id in &order {
+            if let Some((level, shape)) = self.wide_at(id) {
+                let read = |edge: Edge| {
+                    let slot = if edge.is_complement() {
+                        &complemented
+                    } else {
+                        &plain
+                    };
+                    slot[edge.index()].expect("data emitted in the polarity asked for")
+                };
+                let flip = !needs_plain[id as usize];
+                let index = emitter.wide(
+                    level,
+                    read(shape.when0.xor(flip)),
+                    read(shape.when1.xor(flip)),
+                    plain[shape.select as usize].expect("select emitted"),
+                );
+                if flip {
+                    complemented[id as usize] = Some(Signal::Node(index));
+                } else {
+                    plain[id as usize] = Some(Signal::Node(index));
+                    if needs_comp[id as usize] {
+                        let inverse = emitter.inverter(Signal::Node(index));
+                        complemented[id as usize] = Some(Signal::Node(inverse));
+                    }
+                }
+                continue;
+            }
             let cut = self.best[id as usize].as_ref().expect("covered");
             let inputs: Vec<Signal> = cut
                 .leaves
@@ -645,6 +900,11 @@ impl Mapping {
             .collect()
     }
 
+    /// The wide multiplexer that implements `id`, if one does.
+    fn wide_at(&self, id: u32) -> Option<(WideMux, MuxShape)> {
+        self.wide.get(id as usize).copied().flatten()
+    }
+
     /// The covered AND nodes, fanins before fanouts.
     fn cover_order(&self, aig: &Aig) -> Vec<u32> {
         let mut order = Vec::new();
@@ -680,19 +940,44 @@ impl Mapping {
 }
 
 /// Runs the mapping passes and returns the chosen cover.
-fn run(aig: &Aig, size: usize, options: &CutOptions, area_passes: u32, cost: &dyn Cost) -> Mapping {
+fn run(
+    aig: &Aig,
+    size: usize,
+    options: &CutOptions,
+    area_passes: u32,
+    cost: &dyn Cost,
+    wide: bool,
+) -> Mapping {
     let n = aig.len();
+    let shapes: Vec<Option<MuxShape>> = if wide {
+        (0..u32::try_from(n).expect("node count"))
+            .map(|id| {
+                if !aig.is_and(id) {
+                    return None;
+                }
+                // Each data input must be some cell's output to be a
+                // dedicated wire: what an AIG input reaches, a flip-flop's
+                // say, would take a table as a route-through, and that is
+                // no saving over the three-input table this replaces.
+                MuxShape::of(aig, id)
+                    .filter(|m| aig.is_and(m.when0.node()) && aig.is_and(m.when1.node()))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut m = Mapping {
         best: vec![None; n],
         arrival: vec![0.0; n],
         area_flow: vec![0.0; n],
         refs: vec![0; n],
         depth: 0,
+        wide: if wide { vec![None; n] } else { Vec::new() },
     };
     let cuts = PriorityCuts::compute(aig, size, options);
 
     // Pass 1: depth, tie-broken on area flow.
-    assign(aig, &cuts, &mut m, cost, Objective::Depth, None);
+    assign(aig, &cuts, &mut m, cost, Objective::Depth, None, &shapes);
     // Every node must keep the arrival time the depth pass gave it.
     let required = m.arrival.clone();
 
@@ -704,7 +989,15 @@ fn run(aig: &Aig, size: usize, options: &CutOptions, area_passes: u32, cost: &dy
             Objective::ExactArea
         };
         reference(aig, &mut m);
-        assign(aig, &cuts, &mut m, cost, objective, Some(&required));
+        assign(
+            aig,
+            &cuts,
+            &mut m,
+            cost,
+            objective,
+            Some(&required),
+            &shapes,
+        );
     }
     reference(aig, &mut m);
     m.depth = depth_of(aig, &m);
@@ -730,6 +1023,7 @@ fn assign(
     cost: &dyn Cost,
     objective: Objective,
     required: Option<&[f64]>,
+    shapes: &[Option<MuxShape>],
 ) {
     for id in 0..u32::try_from(aig.len()).expect("node count") {
         if !aig.is_and(id) {
@@ -738,6 +1032,7 @@ fn assign(
             continue;
         }
         let mut best: Option<(f64, f64, Cut)> = None;
+        let mut wide_best: Option<(WideMux, MuxShape)> = None;
         for cut in cuts.cuts(id) {
             // The trivial cut exists only so parents can use this node as
             // a leaf; implementing a node by itself is circular.
@@ -769,7 +1064,7 @@ fn assign(
                     })
                     .sum::<f64>();
             let measured = match objective {
-                Objective::ExactArea => exact_area(aig, m, cost, cut),
+                Objective::ExactArea => exact_area(aig, m, cost, cut, false),
                 _ => flow,
             };
             let key = match objective {
@@ -787,14 +1082,67 @@ fn assign(
                 best = Some((key.0, key.1, cut.clone()));
             }
         }
+        // The wide multiplexer this node could be, given what its data
+        // inputs were just made in this pass: it costs no table, so its area
+        // flow is its leaves' alone.
+        if let Some(shape) = shapes.get(id as usize).copied().flatten() {
+            let level = match (
+                m.wide[shape.when0.index()].map(|(l, _)| l),
+                m.wide[shape.when1.index()].map(|(l, _)| l),
+            ) {
+                (None, None) => Some(WideMux::F7),
+                (Some(WideMux::F7), Some(WideMux::F7)) => Some(WideMux::F8),
+                _ => None,
+            };
+            if let Some(level) = level {
+                let cut = shape_cut(shape);
+                let arrival = cut
+                    .leaves
+                    .iter()
+                    .map(|&l| m.arrival[l as usize])
+                    .fold(0.0, f64::max)
+                    + level.delay();
+                let in_time = required.is_none_or(|req| arrival <= req[id as usize] + 1e-9);
+                if in_time {
+                    let flow: f64 = cut
+                        .leaves
+                        .iter()
+                        .map(|&l| m.area_flow[l as usize] / f64::from(m.refs[l as usize].max(1)))
+                        .sum();
+                    let key = match objective {
+                        Objective::Depth => (arrival, flow),
+                        Objective::AreaFlow => (flow, arrival),
+                        Objective::ExactArea => (exact_area(aig, m, cost, &cut, true), arrival),
+                    };
+                    let better = match &best {
+                        None => true,
+                        Some((ba, bb, bc)) => {
+                            (key.0, key.1, cut.leaves.len()) < (*ba, *bb, bc.leaves.len())
+                        }
+                    };
+                    if better {
+                        best = Some((key.0, key.1, cut));
+                        wide_best = Some((level, shape));
+                    }
+                }
+            }
+        }
         // Every AND node can at worst be implemented by its own two
         // fanins, which is a single AND that any target provides.
         let cut = match best {
             Some((_, _, cut)) => cut,
             None => cuts::fanin_cut(aig, id),
         };
-        let area = cost.area(&cut.function, cut.leaves.len()).unwrap_or(1.0);
-        let delay = cost.delay(&cut.function, cut.leaves.len());
+        let (area, delay) = match wide_best {
+            Some((level, _)) => (0.0, level.delay()),
+            None => (
+                cost.area(&cut.function, cut.leaves.len()).unwrap_or(1.0),
+                cost.delay(&cut.function, cut.leaves.len()),
+            ),
+        };
+        if let Some(slot) = m.wide.get_mut(id as usize) {
+            *slot = wide_best;
+        }
         m.arrival[id as usize] = cut
             .leaves
             .iter()
@@ -818,14 +1166,20 @@ fn assign(
 /// This is a cheap stand-in for ABC's dereference-and-reference
 /// measurement, which walks the current cover with reference counts; here
 /// the counts from the last [`reference`] pass are read directly.
-fn exact_area(aig: &Aig, m: &Mapping, cost: &dyn Cost, cut: &Cut) -> f64 {
-    let mut area = cost.area(&cut.function, cut.leaves.len()).unwrap_or(1.0);
+///
+/// `wide` says the cut is a wide multiplexer, which is no cell of area.
+fn exact_area(aig: &Aig, m: &Mapping, cost: &dyn Cost, cut: &Cut, wide: bool) -> f64 {
+    let mut area = if wide {
+        0.0
+    } else {
+        cost.area(&cut.function, cut.leaves.len()).unwrap_or(1.0)
+    };
     for &leaf in &cut.leaves {
         if !aig.is_and(leaf) || m.refs[leaf as usize] > 1 {
             continue;
         }
         if let Some(inner) = &m.best[leaf as usize] {
-            area += exact_area(aig, m, cost, inner);
+            area += exact_area(aig, m, cost, inner, m.wide_at(leaf).is_some());
         }
     }
     area
@@ -861,13 +1215,14 @@ fn depth_of(aig: &Aig, m: &Mapping) -> u32 {
         if let Some(cut) = &m.best[id as usize]
             && m.refs[id as usize] > 0
         {
+            let own = u32::from(m.wide_at(id).is_none());
             level[id as usize] = cut
                 .leaves
                 .iter()
                 .map(|&l| level[l as usize])
                 .max()
                 .unwrap_or(0)
-                + 1;
+                + own;
         }
     }
     aig.outputs()
@@ -875,6 +1230,22 @@ fn depth_of(aig: &Aig, m: &Mapping) -> u32 {
         .map(|e| level[e.index()])
         .max()
         .unwrap_or(0)
+}
+
+/// The network with wide multiplexers and the graph it came from, if it has
+/// fewer tables than `plain`, which is what makes a design with nothing to gain
+/// the same as if none were on offer. `None` for the graph is `optimized`.
+fn wide_network(
+    unoptimized: &Aig,
+    optimized: &Aig,
+    k: u32,
+    options: &MapOptions<'_>,
+    plain: &LutNetwork,
+) -> Option<(LutNetwork, Option<Aig>)> {
+    let trees = optimize_around_trees(unoptimized, &options.aig_opt);
+    let from = trees.as_ref().unwrap_or(optimized);
+    let wide = lut_map_wide(from, k, &options.cuts, options.area_passes);
+    (wide.tables() < plain.tables()).then_some((wide, trees))
 }
 
 /// Extracts the combinational logic of `module`, optimises it, maps it and
@@ -902,6 +1273,12 @@ pub fn map_module_checked(
 ) -> (MapStats, Option<MapEquivalence>) {
     let (mut aig, mapping) = super::aig::from_module(module);
     let before = aig.stats();
+    // What the wide network is mapped from has its multiplexer trees as they
+    // were written, and is proved against this.
+    let unoptimized = match options.target {
+        Target::Lut(_) if options.wide_muxes => Some(aig.clone()),
+        _ => None,
+    };
     super::aig::optimize(&mut aig, &options.aig_opt);
     let after = aig.stats();
     let mut stats = MapStats {
@@ -912,11 +1289,28 @@ pub fn map_module_checked(
     let equivalence;
     match options.target {
         Target::Lut(k) => {
-            let network = lut_map_with(&aig, k, &options.cuts, options.area_passes);
-            stats.cells = network.len();
+            let mut network = lut_map_with(&aig, k, &options.cuts, options.area_passes);
+            let mut kept_trees = None;
+            if let Some(unoptimized) = &unoptimized
+                && let Some((wide, trees)) = wide_network(unoptimized, &aig, k, options, &network)
+            {
+                stats.wide_saved = network.tables() - wide.tables();
+                network = wide;
+                kept_trees = Some(trees);
+            }
+            stats.cells = network.tables();
+            stats.muxf7 = network.wide(WideMux::F7);
+            stats.muxf8 = network.wide(WideMux::F8);
             stats.depth = network.depth;
             stats.area = network.len() as f64;
-            equivalence = verify.map(|v| check_lut_mapping(&aig, &network, v));
+            equivalence = verify.map(|v| match (&unoptimized, &kept_trees) {
+                // What took the trees out and put them back is proved as
+                // well as the mapping, against the graph from before it.
+                (Some(unoptimized), Some(Some(trees))) => {
+                    check_lut_mapping_through(unoptimized, trees, &network, v)
+                }
+                _ => check_lut_mapping(&aig, &network, v),
+            });
             network.to_module(&mapping, module);
         }
         Target::Gates(library) => {
@@ -932,8 +1326,245 @@ pub fn map_module_checked(
 }
 
 #[cfg(test)]
+mod wide_tests {
+    use super::*;
+
+    /// A full multiplexer tree, `levels` selects deep, over fresh inputs.
+    fn tree(levels: usize) -> Aig {
+        let mut aig = Aig::new();
+        let select: Vec<Edge> = (0..levels).map(|_| aig.add_input()).collect();
+        let mut layer: Vec<Edge> = (0..1usize << levels).map(|_| aig.add_input()).collect();
+        for s in &select {
+            layer = layer
+                .chunks(2)
+                .map(|pair| aig.mux(*s, pair[1], pair[0]))
+                .collect();
+        }
+        aig.add_output(layer[0]);
+        aig
+    }
+
+    /// **The cover of a tree is Vivado's**: the tables and multiplexers its
+    /// reports have for `mux8`, `mux16` and `mux64` in
+    /// `testdata/fpga/vivado/muxf/vivado.txt`. And at both widths each is proved
+    /// the tree it came from. Would catch a level of `MUXF7` missed, a `MUXF8`
+    /// over anything but `MUXF7`s, or a polarity read wrong on the way into one;
+    /// would not catch which pin of a slice any of it reaches, which is
+    /// `tests/fpga_xray_muxf.rs`'s.
+    #[test]
+    fn a_tree_is_covered_as_vivado_covers_it() {
+        for (levels, tables, f7, f8) in [(3, 2, 1, 0), (4, 4, 2, 1), (6, 17, 8, 4)] {
+            let aig = tree(levels);
+            let net = lut_map_wide(&aig, 6, &CutOptions::default(), 2);
+            assert_eq!(
+                (net.tables(), net.wide(WideMux::F7), net.wide(WideMux::F8)),
+                (tables, f7, f8),
+                "{levels} levels"
+            );
+            for k in [4, 6] {
+                let net = lut_map_wide(&aig, k, &CutOptions::default(), 2);
+                assert!(net.wide(WideMux::F7) > 0, "{levels} levels at LUT{k}");
+                let verdict = check_lut_mapping(&aig, &net, &MapVerifyOptions::default());
+                assert!(
+                    verdict.proved(),
+                    "{levels} levels at LUT{k}: {}",
+                    verdict.render()
+                );
+            }
+        }
+    }
+
+    /// The proof reads a wide multiplexer as the lookup table it also is, so
+    /// a wrong one is a wrong table: this flips each bit of `init` in turn and
+    /// each must be refused. Would catch the proof having learned to take a
+    /// tag on trust.
+    #[test]
+    fn a_wrong_wide_multiplexer_is_refused_by_the_proof() {
+        let aig = tree(3);
+        let net = lut_map_wide(&aig, 6, &CutOptions::default(), 2);
+        let at = net
+            .luts
+            .iter()
+            .position(|l| l.wide == Some(WideMux::F7))
+            .expect("a `MUXF7`");
+        for bit in 0..8u32 {
+            let mut wrong = net.clone();
+            let flipped = if net.luts[at].init.bit(bit) == Bit::One {
+                Bit::Zero
+            } else {
+                Bit::One
+            };
+            wrong.luts[at].init.set_bit(bit, flipped);
+            let verdict = check_lut_mapping(&aig, &wrong, &MapVerifyOptions::default());
+            assert!(verdict.wrong(), "bit {bit} flipped: {}", verdict.render());
+        }
+    }
+
+    fn table(inputs: Vec<Signal>) -> Lut {
+        Lut {
+            init: Const::zero(1 << inputs.len()),
+            inputs,
+            wide: None,
+        }
+    }
+
+    fn mux(level: WideMux, a: u32, b: u32) -> Lut {
+        Lut {
+            inputs: vec![Signal::Node(a), Signal::Node(b), Signal::Input(9)],
+            init: Const::from_u64(WIDE_MUX_INIT, 8),
+            wide: Some(level),
+        }
+    }
+
+    /// **A table is one multiplexer's**, and a `MUXF8` wants two `MUXF7`s still
+    /// standing. Would catch a table's one dedicated wire asked for twice, which
+    /// the placer would refuse for the whole design, and a `MUXF8` left over a
+    /// three-input table, which no slice has.
+    #[test]
+    fn a_second_reader_of_a_table_is_a_table_itself() {
+        let input = |n| Signal::Input(n);
+        let mut luts = vec![
+            table(vec![input(0)]),
+            table(vec![input(1)]),
+            table(vec![input(2)]),
+            table(vec![input(3)]),
+            mux(WideMux::F7, 0, 1), // 4: keeps 0 and 1
+            mux(WideMux::F7, 1, 2), // 5: 1 is 4's
+            mux(WideMux::F7, 2, 3), // 6: keeps 2 and 3
+            mux(WideMux::F8, 4, 5), // 7: 5 is no longer a `MUXF7`
+            mux(WideMux::F8, 4, 6), // 8: 4 is free of 7, and both are `MUXF7`s
+            mux(WideMux::F8, 4, 6), // 9: 8 has them
+            mux(WideMux::F7, 4, 6), // 10: `MUXF7`s are no data for a `MUXF7`
+        ];
+        settle_wide(&mut luts);
+        let tags: Vec<Option<WideMux>> = luts[4..].iter().map(|l| l.wide).collect();
+        assert_eq!(
+            tags,
+            vec![
+                Some(WideMux::F7),
+                None,
+                Some(WideMux::F7),
+                None,
+                Some(WideMux::F8),
+                None,
+                None,
+            ]
+        );
+    }
+
+    /// **What the mapper hands over keeps that rule by itself.** Two 8-to-1s that
+    /// share a table: a `MUXF7` over it for one and the other's data are all
+    /// on offer to the cover, and only one may have it. Would catch the
+    /// rule's pass not being run on what the cover chose, which the test above
+    /// cannot, since it calls that pass itself.
+    #[test]
+    fn a_table_two_trees_share_is_one_multiplexers() {
+        let mut aig = Aig::new();
+        let select: Vec<Edge> = (0..3).map(|_| aig.add_input()).collect();
+        let a: Vec<Edge> = (0..8).map(|_| aig.add_input()).collect();
+        let b: Vec<Edge> = (0..4).map(|_| aig.add_input()).collect();
+        let build = |aig: &mut Aig, leaves: &[Edge]| {
+            let mut layer = leaves.to_vec();
+            for s in &select {
+                layer = layer
+                    .chunks(2)
+                    .map(|pair| aig.mux(*s, pair[1], pair[0]))
+                    .collect();
+            }
+            layer[0]
+        };
+        let one = build(&mut aig, &a);
+        let two = [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]];
+        let two = build(&mut aig, &two);
+        aig.add_output(one);
+        aig.add_output(two);
+        let net = lut_map_wide(&aig, 6, &CutOptions::default(), 2);
+        assert!(net.wide(WideMux::F7) > 0, "{net:?}");
+        let mut seen = std::collections::HashSet::new();
+        for lut in net.luts.iter().filter(|l| l.wide.is_some()) {
+            for input in &lut.inputs[..2] {
+                assert!(matches!(input, Signal::Node(_)), "{lut:?}");
+                assert!(seen.insert(*input), "{input:?} read twice:\n{net:?}");
+            }
+        }
+        let verdict = check_lut_mapping(&aig, &net, &MapVerifyOptions::default());
+        assert!(verdict.proved(), "{}", verdict.render());
+    }
+
+    /// **The proof of a wide network sees the graph it came from as well.**
+    /// Would catch a pass that takes trees out and puts one back wrong, whose
+    /// network is a correct mapping of the wrong graph, and would not catch
+    /// anything in the network that `check_lut_mapping` does not already.
+    #[test]
+    fn the_proof_through_a_graph_refuses_a_wrong_graph() {
+        let aig = tree(4);
+        let net = lut_map_wide(&aig, 6, &CutOptions::default(), 2);
+        let options = MapVerifyOptions::default();
+        assert!(check_lut_mapping_through(&aig, &aig, &net, &options).proved());
+        // The same tree over its inputs in another order is a correct graph
+        // of another function, and this network is a correct mapping of it.
+        let mut other = Aig::new();
+        let inputs: Vec<Edge> = (0..aig.inputs().len()).map(|_| other.add_input()).collect();
+        let swapped: Vec<Edge> = inputs.iter().rev().copied().collect();
+        let mut layer: Vec<Edge> = swapped[4..].to_vec();
+        for s in &swapped[..4] {
+            layer = layer
+                .chunks(2)
+                .map(|pair| other.mux(*s, pair[1], pair[0]))
+                .collect();
+        }
+        other.add_output(layer[0]);
+        let net = lut_map_wide(&other, 6, &CutOptions::default(), 2);
+        let verdict = check_lut_mapping_through(&aig, &other, &net, &options);
+        assert!(verdict.wrong(), "{}", verdict.render());
+    }
+
+    /// **A wide network with no fewer tables is not kept.** A tree whose every
+    /// level reads one select looks like a tree and is a two-to-one choice, one
+    /// table however it is mapped, so the two networks tie. Would catch the
+    /// comparison gone, the wrong way round, or a tie going to the wide network.
+    #[test]
+    fn a_wide_network_with_no_fewer_tables_is_not_kept() {
+        let mut aig = Aig::new();
+        let s = aig.add_input();
+        let mut layer: Vec<Edge> = (0..8).map(|_| aig.add_input()).collect();
+        while layer.len() > 1 {
+            layer = layer
+                .chunks(2)
+                .map(|pair| aig.mux(s, pair[1], pair[0]))
+                .collect();
+        }
+        aig.add_output(layer[0]);
+        let options = MapOptions::lut(6);
+        let mut optimized = aig.clone();
+        crate::synth::aig::optimize(&mut optimized, &options.aig_opt);
+        let plain = lut_map_with(&optimized, 6, &options.cuts, options.area_passes);
+        assert_eq!(plain.tables(), 1);
+        assert!(wide_network(&aig, &optimized, 6, &options, &plain).is_none());
+        // And a real one is, against a plain network that has more.
+        let real = tree(4);
+        let mut optimized = real.clone();
+        crate::synth::aig::optimize(&mut optimized, &options.aig_opt);
+        let plain = lut_map_with(&optimized, 6, &options.cuts, options.area_passes);
+        let (wide, trees) =
+            wide_network(&real, &optimized, 6, &options, &plain).expect("it saves tables");
+        assert!(trees.is_some());
+        assert_eq!(wide.tables(), 4);
+    }
+
+    /// **Keeping a design that saves nothing as it was**: a function a single
+    /// table holds has no wide multiplexer in it, and `map_module`'s comparison
+    /// keeps the network without. Together with `a_design_that_saves_nothing_is_not_moved`
+    /// in `tests/fpga_xray_muxf.rs` this is what a board-measured build rests on.
+    #[test]
+    fn a_four_to_one_stays_one_table() {
+        let net = lut_map_wide(&tree(2), 6, &CutOptions::default(), 2);
+        assert_eq!((net.tables(), net.wide(WideMux::F7)), (1, 0));
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::super::aig::Edge;
     use super::*;
     use crate::ir::Type;
     use crate::ir::builder::ModuleBuilder;

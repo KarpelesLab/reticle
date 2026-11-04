@@ -38,6 +38,9 @@
 # FIFO stand-in's flags missed timing; with them fixed it passes 34.
 # A change to the sources or to the flow makes a different build of any
 # seed, and the choice has to be measured again.
+# `--wide-muxes off` because a build of this design that uses `MUXF7` and
+# `MUXF8` has not been on a board: docs/fpga-vivado-parity.md says what it
+# saves, and the choice has to be measured there before it is made here.
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -48,6 +51,7 @@ reticle=${RETICLE:-reticle}
 
 mkdir -p "$out"
 exec "$reticle" fpga \
+    --wide-muxes off \
     --device xc7a100t-ftg256 \
     --top cwhusky_top \
     --define PLUS --define INTERVAL_MATCHING=1 --define ESAD \

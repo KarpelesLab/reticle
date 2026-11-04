@@ -34,6 +34,8 @@ that acts on a falling edge now starts with its clock high.
 
 **Not checked:** these become logic, so an `SRLC32E` is 32 flip-flops today, not
 the one lookup table Vivado makes it. The table below says what that costs.
+`MUXF7`, `MUXF8` and their `_L` and `_D` forms are the exception: a build keeps
+them as the slice's own, below.
 
 ## Which primitives build
 
@@ -109,7 +111,7 @@ routed report, in `vivado.txt`. Run on 2026-11-04.
 | srl_delay | Vivado | 7 | 34 | 0 | 2 | 0 | 0 | 0 | 0 | 2.739 | 46 |
 | | Reticle | 9 | 2081 | 0 | 0 | 0 | 0 | 0 | 0 | 6.75 | 38 |
 | widemux | Vivado | 275 | 1049 | 0 | 0 | 192 | 0 | 0 | 0 | 4.131 | 49 |
-| | Reticle | 596 | 1047 | 0 | 0 | 0 | 0 | 0 | 0 | 5.04 | 30 |
+| | Reticle | 276 | 1047 | 0 | 0 | 192 | 0 | 0 | 0 | 5.41 | 37 |
 
 Read `ns` with care: **the two columns are not the same measurement.** Vivado's
 is the data path of its worst routed path in its own timer. Reticle's is its own
@@ -129,8 +131,13 @@ What the table says, largest first:
    no Vivado to ask.
 2. **No shift register.** `srl_delay` is 2081 flip-flops against 34 and two
    `SRL`s.
-3. **No wide multiplexer.** `widemux` is 596 lookup tables against 275 and 192
-   `MUXF`s.
+3. **No wide multiplexer**, as this table first read: `widemux` was 596 lookup
+   tables and no `MUXF` against 275 and 192, at 5.04 ns. It is 276 and 192 now,
+   for the section below, and 5.41 ns. That is the estimate going the wrong way
+   by 0.37 ns on the design this is for: its latest path spends 3.29 ns on one
+   connection of a select read by 257 pins, in a placement with different
+   neighbours, and the two runs are one placement each, so it says little either
+   way. Vivado has that design's data path at 4.131 ns.
 4. **A small memory goes to block RAM.** `lutram32` uses two `RAMB18E1` where
    Vivado uses 51 distributed RAM cells.
 5. **`fsm`** is 62 against 33, and why has not been looked at: the Vivado runs are
@@ -455,3 +462,146 @@ gives the same bits on another part has not been asked. `SITE_PIPS` was tried fo
 slice's `WEMUX` and not pursued. And the Vivado `.bit`s that were decoded here have
 never been loaded, and must not be: all ran with `NSTD-1` and `UCIO-1` lowered to
 warnings, for that purpose alone.
+
+## Wide multiplexers
+
+A slice has a `MUXF7` over each two of its lookup tables and a `MUXF8` over the
+two `MUXF7`s. Reticle mapped nothing to them until this section, so a 64-to-1
+was 37 tables where Vivado has 17.
+
+`testdata/fpga/vivado/muxf/` has nineteen small designs, each asking one thing.
+`tools/vivado-parity/muxf.sh` runs them through Vivado, and `vivado.txt` there
+keeps its own report of where each cell went and its bitstream as decoded by
+`XrayDatabase::decode`.
+
+**What Vivado wrote, and a reading that would have been wrong.** All of this is
+from those decodes and reports, and each is checked against the build by
+`tests/fpga_xray_muxf.rs`:
+
+- `F7AMUX` has `I0` from `B6LUT` and `I1` from `A6LUT`; `F7BMUX` has `I0` from
+  `D6LUT` and `I1` from `C6LUT`; `F8MUX` has `I0` from `F7BMUX` and `I1` from
+  `F7AMUX`. **The higher letter is `I0`.** Guessing from the lanes' order gives
+  the other, and that bitstream would decode perfectly and choose the wrong input
+  every time.
+- The selects are `AX`, `CX` and `BX`, and nothing else is set for them.
+- Neither multiplexer has a bit of its own. Only its way out does:
+  `AFFMUX.F7` or `AOUTMUX.F7`, `CFFMUX.F7` or `COUTMUX.F7`, and `BFFMUX.F8` or
+  `BOUTMUX.F8`.
+- A `MUXF7` or `MUXF8` read by one flip-flop has it in the same slice. Read by
+  anything else as well (`f7_d`), the flip-flop was elsewhere and the output
+  went out by the output mux.
+- A table read by two `MUXF7`s is copied (`f7_shared`), so that wire is one
+  multiplexer's.
+
+| design | Vivado | Reticle | same slices? |
+|---|---|---|---|
+| `f7_ff`, `f7_out`, `f7_two`, `f7_d`, `f8_ff`, `f8_out` | 2 to 6 tables, the cells named | the same count, the cells named | **yes, exactly** |
+| `mux8` | 2 tables, 1 `MUXF7` | the same | **yes** |
+| `mux16` | 4, 2, 1 `MUXF8` | the same | **yes** |
+| `mux64` | 17, 8, 4 `MUXF8` | the same | **yes** |
+| `f7_fanout` | 4 tables, 1 `MUXF7` | 5, 1 | **yes**; the fifth is an inverter the mapper already wrote for a table read in both polarities, and was not looked into |
+| `mux32` | 9 tables, 4 `MUXF7` | 9, 4, 2 `MUXF8` | no: both cover it, this one a level differently |
+| `f7_from_ff` | a `LUT3` | one table | no cell to compare |
+| `f7_pair` | 6 tables, 1 `MUXF7` | the same | not comparable: Vivado leaves other contents in a `LUT3`'s unread half, and these are compared by a truth table's ones |
+| `tie` | 4 tables, no `MUXF7`, written as logic | the same | no multiplexer to compare: Vivado did not take one where it saves nothing either |
+| `f7_half` | 1 table, `MUXF7`, the flip-flop through a route-through table | 2 tables | no; two table sites either way |
+| `f7_shared` | the table copied, 5 tables, 2 `MUXF7` | 5 tables, 1 `MUXF7` | no; the same count |
+| `f7_carry` | 12 tables, a `MUXF7` on a carry's propagate table | 12, no `MUXF7` | no; the same count |
+| `f8_from_ff` | `MUXF8`, four route-through tables, selects grounded | one table | no; fewer sites |
+| `f8_half` | 2 tables, `MUXF7`, `MUXF8`, route-throughs | 3 tables, `MUXF7` | no |
+
+"Same slices" is a line for each multiplexer: the ones of the truth table on each
+data input, which says which table has which input however its pins are
+permuted, whether the output is registered or leaves, and whether the select's
+bypass input is reached. Which of a slice's two `MUXF7`s holds a lone one is left
+out, since Vivado uses either. Interconnect is compared by those ends and no
+further; the routes are the router's.
+
+**How it gets there.** Mapping offers a two-to-one choice between two tables as
+a `MUXF7` that costs no table, and between two `MUXF7`s as a `MUXF8`, beside each
+node's cuts (`synth::techmap`'s docs). Offered over the optimised graph that
+found nearly nothing: rewriting takes a multiplexer tree apart, and `mux8` came
+to 4 tables three levels deep. So a tree of at least three full levels is lifted
+out before optimising and put back after (`synth::aig::muxtree`), and with that
+the covers above come out as Vivado's without anything aiming at them.
+
+A named `MUXF7` is kept as that cell, not made logic, unless a slice could not
+hold it (`techcells::legalise_wide_muxes`): one whose data is not two tables of
+its own becomes a table, which costs what Vivado's route-through does or less.
+
+The placer has no rule for any of this. Each data pin is the same wire as the
+output it reads, as a carry's propagate is, so the macros come out of what it
+already reads off the routing graph (`place::build_clusters`), and the select
+competes for its bypass input in the pools that wire was already in.
+
+**Timing.** Vivado's reports at grade 1 have a `MUXF7` at 0.212 to 0.247 ns from
+data and 0.296 from `S`, and a `MUXF8` at 0.098 to 0.104. `xray::timing` takes
+0.247 and 0.104, for every input alike, so a path from a `MUXF7`'s select is
+0.05 ns short. Into either from its data is a connection of no delay.
+`a_wide_multiplexer_is_timed_with_vivados_figures` holds those; the rest of a
+path's estimate is no closer to Vivado's for this.
+
+**Checked, on each of those nineteen designs, by the flow and by the test:** every
+set bit decodes, none unexplained; the arcs selected are the arcs the router
+chose; the mapping is proved; and a simulation of the routed netlist answers as
+the RTL does over 3,000 cycles. **Nothing here has been on a board**, and a
+slice configured this way rests on Vivado's having written the same bits.
+
+`every_block_maps_to_the_logic_it_was_mapped_from` now proves each block at each
+width both with and without wide multiplexers, and fails if none is chosen at
+either width. A wide network is proved against the graph it was mapped from and
+that graph against the one from before it was optimised: one miter of the two
+ends left 11,904 AND nodes on the Husky Plus, and the two separately finish.
+
+**What a design with nothing to gain gets.** The network is mapped both ways and
+the wide one kept only when it has fewer tables, so such a design is the same
+to the bit: `a_design_that_saves_nothing_is_not_moved`. And the sites and wires
+this adds to every slice do not move a placement either. Measured against the
+commit before, on the thirteen designs of the table above: twelve are the same
+bitstream, byte for byte past the header, and the thirteenth is `widemux`.
+
+**The Husky Plus does save something, and is not given it.** Mapped with them,
+its 26,684 tables are 25,220, with 843 `MUXF7` and 226 `MUXF8`: 1,464 tables
+fewer, 5.5 %, at the same depth of 18, proved. That is a different netlist and so
+a different placement, and what a placement of this design does can only be told
+on a board, which is in use elsewhere. So `examples/husky/build.sh` and
+`build_plus.sh` pass `--wide-muxes off`, which is the build measured at 39 of 40.
+
+Measured on the Plus's whole flow at seed 4, from one checkout of NewAE's sources
+(not checked to be the commit that board run used):
+
+| | commit before | `--wide-muxes off` | on |
+|---|---|---|---|
+| bitstream, past the header | | **the same, byte for byte** | another |
+| set bits; unexplained | 2,498,313; 0 | the same | 2,561,298; 0 |
+| arcs selected are the router's | yes | yes | yes |
+| route passes to converge | 58 | 58 | 78 |
+| pips | 2,988,562 | the same | 3,339,068 |
+| `clk_usb` estimate of 10.4 ns | 16.55 | the same | 16.55 |
+| `ADC_clk_fb` estimate of 4 ns | 6.74 | the same | 7.92 |
+| whole run, beside other work | 50 min | 50 min | 61 min |
+
+So on this one placement, fewer tables cost more wire and a slower ADC clock, by
+the estimate. One seed is not a comparison of the two, and the estimate is not the
+part, whose seeds 1 to 5 ranged from 34 to 39 tests. It is a reason to want a
+board before taking the flag out, and no more than that.
+
+**Mutations.** 24 were made to this work and every one failed a test: each pin of
+each multiplexer, each way out, the tag, the polarity on the way in, a tree put
+back wrong, a table claimed twice, a flip-flop joined wrongly, the timing
+figures, and the choice between networks. Three got past the tests first written.
+A select on another lane's bypass input hid behind a flip-flop reading the one it
+should have reached; `a_slices_wide_multiplexers_are_where_vivado_has_them` is
+why that fails now. `lutpack`'s refusal to pair a data table survived a design
+where nothing had to leave by `O5`, which `f7_pair` now does. And a tie going to the
+wide network survived until `a_wide_network_with_no_fewer_tables_is_not_kept`.
+
+**Not done.** Only the `.dev` file's own sites hold them: a family with no such
+line maps as it did. `MUXF7` over a flip-flop's output by route-through, as
+Vivado does for one named, is not offered. Which multiplexers to use is decided
+by the whole design's table count, so a design where keeping trees loses more
+elsewhere than the multiplexers save gets none; a design was not found that does.
+A wide multiplexer in a `LUT6_2`'s lane is refused, not considered, so that a
+data table never shares its site. `regfile_alu` and `fsm`, where Vivado uses 5 and
+1, gain nothing here: this flow's tables do not have the tree shape, and why was
+not looked at.

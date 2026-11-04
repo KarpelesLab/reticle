@@ -75,6 +75,12 @@ pub(crate) const LUT: f64 = 0.124;
 /// A carry chain cell's input to output, ns: between `CIN` to `CO3`
 /// (0.114) and `CYINIT` to an output (up to 0.642).
 pub(crate) const CARRY: f64 = 0.3;
+/// A `MUXF7`'s data input to output, ns: Vivado 2026.1's routed reports of
+/// `testdata/fpga/vivado/muxf/`, grade 1, say 0.212 to 0.247, and 0.296 from `S`.
+/// This takes the larger of the data inputs', since that is the usual path.
+pub(crate) const MUXF7: f64 = 0.247;
+/// A `MUXF8`'s data input to output, ns: the same reports say 0.098 to 0.104.
+pub(crate) const MUXF8: f64 = 0.104;
 /// A slice flip-flop's clock to `Q`, ns.
 pub(crate) const FF_LAUNCH: f64 = 0.34;
 /// A slice flip-flop's setup, ns.
@@ -510,10 +516,12 @@ pub fn place_timing(
             .filter(|p| !netlist.pins[**p].output && is_clock(&netlist.pins[**p].role))
             .find_map(|p| netlist.pins[*p].signal);
         match kind {
-            "lut" | "carry" | "gb" => {
+            "lut" | "carry" | "gb" | "mux7" | "mux8" => {
                 cell[index] = match kind {
                     "lut" => LUT,
                     "carry" => CARRY,
+                    "mux7" => MUXF7,
+                    "mux8" => MUXF8,
                     _ => 0.0,
                 };
                 for pin in &inst.pins {

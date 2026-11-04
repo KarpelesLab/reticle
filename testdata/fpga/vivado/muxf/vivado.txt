@@ -1,0 +1,291 @@
+# What Vivado 2026.1 made of each design here, on xc7a100tftg256-1, from
+# tools/vivado-parity/muxf.sh. `cell` lines are its own report (BEL and pin
+# drivers, from muxf_probe.tcl), with the sites taken off; `slice` lines are
+# its bitstream decoded through this repository's database, one line per
+# wide multiplexer: tests/fpga_xray_muxf.rs says how to read one. `delay`
+# lines are from its report of the worst path.
+design f7_carry
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT2/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT6/I5@C6LUT
+  cell counts BUFG 1 CARRY4 2 FDRE 30 GND 1 IBUF 2 LUT2 9 LUT4 1 LUT6 2 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=out select=reached:alone
+  delay Prop_muxf7_I1_O 0.214
+design f7_d
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to FDRE/D@A5FF LUT3/I1@A6LUT
+  cell counts BUFG 1 FDRE 16 GND 1 IBUF 2 LUT3 1 LUT6 2 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=out select=reached:alone
+  delay Prop_muxf7_I0_O 0.209
+design f7_fanout
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT2/I0@B6LUT
+  cell counts BUFG 1 FDRE 16 GND 1 IBUF 2 LUT2 2 LUT6 2 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=out select=reached:alone
+  delay Prop_muxf7_I0_O 0.209
+design f7_ff
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to FDRE/D@AFF
+  cell counts BUFG 1 FDRE 14 GND 1 IBUF 2 LUT6 2 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=ff select=reached:alone
+  delay Prop_muxf7_I1_O 0.217
+design f7_from_ff
+  cell counts BUFG 1 FDRE 4 GND 1 IBUF 2 LUT3 1 OBUF 1 VCC 1
+design f7_half
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from FDRE/Q@BFF
+  cell S from a flip-flop
+  cell O to FDRE/D@AFF
+  cell counts BUFG 1 FDRE 9 GND 1 IBUF 2 LUT6 1 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=32 out=ff select=reached:alone
+  delay Prop_muxf7_I0_O 0.212
+design f7_out
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT3/I1@B6LUT
+  cell counts BUFG 1 FDRE 15 GND 1 IBUF 2 LUT2 1 LUT3 1 LUT6 2 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=out select=reached:alone
+  delay Prop_muxf7_I1_O 0.214
+design f7_pair
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT3/O@B6LUT
+  cell I1 from LUT3/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT4/I2@B6LUT
+  cell counts BUFG 1 FDRE 16 GND 1 IBUF 2 LUT3 2 LUT4 4 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=20 I1=44 out=out select=reached:alone
+  delay Prop_muxf7_I1_O 0.214
+design f7_shared
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to FDRE/D@AFF
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT2/I0@A6LUT
+  cell counts BUFG 1 FDRE 22 GND 1 IBUF 2 LUT2 1 LUT6 4 MUXF7 2 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=ff select=reached:alone
+  slice f7 I0=32 I1=7 out=out select=reached:alone
+  delay Prop_muxf7_I0_O 0.212
+design f7_two
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to FDRE/D@AFF
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT2/I0@A6LUT
+  cell counts BUFG 1 FDRE 28 GND 1 IBUF 2 LUT2 1 LUT6 4 MUXF7 2 OBUF 1 VCC 1
+  slice f7 I0=32 I1=31 out=ff select=reached:alone
+  slice f7 I0=7 I1=31 out=out select=reached:alone
+  delay Prop_muxf7_I1_O 0.217
+design f8_ff
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to FDRE/D@BFF
+  cell counts BUFG 1 FDRE 27 GND 1 IBUF 2 LUT6 4 MUXF7 2 MUXF8 1 OBUF 1 VCC 1
+  slice f8 I0.I0=32 I0.I1=31 I1.I0=7 I1.I1=31 out=ff f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  delay Prop_muxf7_I1_O 0.247
+  delay Prop_muxf8_I0_O 0.098
+design f8_from_ff
+  cell MUXF8 bel F8MUX
+  cell I0 from FDRE/Q@AFF
+  cell I1 from FDRE/Q@B5FF
+  cell S from a flip-flop
+  cell O to FDRE/D@BFF
+  cell counts BUFG 1 FDRE 4 GND 1 IBUF 2 MUXF8 1 OBUF 1 VCC 1
+  slice f8 I0.I0=32 I0.I1=32 I1.I0=32 I1.I1=32 out=ff f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  delay Prop_muxf8_I1_O 0.602
+design f8_half
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from FDRE/Q@B5FF
+  cell S from a flip-flop
+  cell O to FDRE/D@BFF
+  cell counts BUFG 1 FDRE 16 GND 1 IBUF 2 LUT6 2 MUXF7 1 MUXF8 1 OBUF 1 VCC 1
+  slice f8 I0.I0=32 I0.I1=31 I1.I0=32 I1.I1=32 out=ff f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  delay Prop_muxf7_I1_O 0.247
+  delay Prop_muxf8_I0_O 0.098
+design f8_out
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to LUT2/I0@A6LUT MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to LUT3/I1@B6LUT
+  cell counts BUFG 1 FDRE 29 GND 1 IBUF 2 LUT2 1 LUT3 1 LUT6 4 MUXF7 2 MUXF8 1 OBUF 1 VCC 1
+  slice f8 I0.I0=32 I0.I1=31 I1.I0=7 I1.I1=31 out=out f7b=out f7a=none selects=reached:alone,reached:alone,reached:alone
+  delay Prop_muxf7_I0_O 0.241
+  delay Prop_muxf8_I0_O 0.098
+design mux16
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to FDRE/D@BFF
+  cell counts BUFG 1 FDRE 21 GND 1 IBUF 2 LUT6 4 MUXF7 2 MUXF8 1 OBUF 1 VCC 1
+  slice f8 I0.I0=32 I0.I1=32 I1.I0=32 I1.I1=32 out=ff f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  delay Prop_muxf7_S_O 0.296
+  delay Prop_muxf8_I0_O 0.104
+design mux32
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT6/I0@A6LUT
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT6/I1@A6LUT
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT6/I3@A6LUT
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to LUT6/I5@A6LUT
+  cell counts BUFG 1 FDRE 38 GND 1 IBUF 2 LUT6 9 MUXF7 4 OBUF 1 VCC 1
+  slice f7 I0=32 I1=32 out=out select=reached:alone
+  slice f7 I0=32 I1=32 out=out select=reached:alone
+  slice f7 I0=32 I1=32 out=out select=reached:alone
+  slice f7 I0=32 I1=32 out=out select=reached:alone
+  delay Prop_muxf7_I1_O 0.217
+design mux64
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF7 bel F7BMUX
+  cell I0 from LUT6/O@D6LUT
+  cell I1 from LUT6/O@C6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I0@F8MUX
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to MUXF8/I1@F8MUX
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to LUT6/I0@A6LUT
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to LUT6/I1@A6LUT
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to LUT6/I3@A6LUT
+  cell MUXF8 bel F8MUX
+  cell I0 from MUXF7/O@F7BMUX
+  cell I1 from MUXF7/O@F7AMUX
+  cell S from a flip-flop
+  cell O to LUT6/I5@A6LUT
+  cell counts BUFG 1 FDRE 71 GND 1 IBUF 2 LUT6 17 MUXF7 8 MUXF8 4 OBUF 1 VCC 1
+  slice f8 I0.I0=32 I0.I1=32 I1.I0=32 I1.I1=32 out=out f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  slice f8 I0.I0=32 I0.I1=32 I1.I0=32 I1.I1=32 out=out f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  slice f8 I0.I0=32 I0.I1=32 I1.I0=32 I1.I1=32 out=out f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  slice f8 I0.I0=32 I0.I1=32 I1.I0=32 I1.I1=32 out=out f7b=none f7a=none selects=reached:alone,reached:alone,reached:alone
+  delay Prop_muxf7_I1_O 0.245
+  delay Prop_muxf8_I0_O 0.104
+design mux8
+  cell MUXF7 bel F7AMUX
+  cell I0 from LUT6/O@B6LUT
+  cell I1 from LUT6/O@A6LUT
+  cell S from a flip-flop
+  cell O to FDRE/D@AFF
+  cell counts BUFG 1 FDRE 12 GND 1 IBUF 2 LUT6 2 MUXF7 1 OBUF 1 VCC 1
+  slice f7 I0=32 I1=32 out=ff select=reached:alone
+  delay Prop_muxf7_I0_O 0.212
+design tie
+  cell counts BUFG 1 FDRE 15 GND 1 IBUF 2 LUT2 1 LUT5 1 LUT6 2 OBUF 1 VCC 1

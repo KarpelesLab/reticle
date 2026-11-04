@@ -62,6 +62,12 @@
 #     which is exactly one CARRY4) stays in LUT6s, as does a `sub`: the
 #     IR's `sub` cell is not lowered through the carry path on any
 #     family.
+#   * MUXF7 and MUXF8 are the slice's wide multiplexers: O = S ? I1 : I0
+#     over the two lookup tables or the two MUXF7s of a slice. What the
+#     fabric makes of them is Vivado 2026.1's answer, decoded from its
+#     bitstreams (`testdata/fpga/vivado/muxf/`), and mapping infers them
+#     (`synth::techmap`). `xc7_cells.v` has the same cells as logic, for a
+#     simulator and for `--wide-muxes off`.
 #   * Flip-flops: FDRE (synchronous reset R), FDSE (synchronous set S),
 #     FDCE (asynchronous clear CLR), FDPE (asynchronous preset PRE),
 #     each with D, CE, C and Q, each with a one-bit INIT, and each with
@@ -369,6 +375,8 @@ device xc7a35t-cpg236
   bel LUT6_2 lut port i=I0,I1,I2,I3,I4,I5 o=O6 o5=O5 param INIT=64'h0000000000000000
   bel LUT1 lut port i=I0 o=O param INIT=2'h0
   bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
+  bel MUXF7 mux7 port i0=I0 i1=I1 s=S o=O outputs O
+  bel MUXF8 mux8 port i0=I0 i1=I1 s=S o=O outputs O
   bel FDRE ff count 41600 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
@@ -576,6 +584,8 @@ device xc7a35t-ftg256
   bel LUT6_2 lut port i=I0,I1,I2,I3,I4,I5 o=O6 o5=O5 param INIT=64'h0000000000000000
   bel LUT1 lut port i=I0 o=O param INIT=2'h0
   bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
+  bel MUXF7 mux7 port i0=I0 i1=I1 s=S o=O outputs O
+  bel MUXF8 mux8 port i0=I0 i1=I1 s=S o=O outputs O
   bel FDRE ff count 41600 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
@@ -848,6 +858,8 @@ device xc7a100t-ftg256
   bel LUT6_2 lut port i=I0,I1,I2,I3,I4,I5 o=O6 o5=O5 param INIT=64'h0000000000000000
   bel LUT1 lut port i=I0 o=O param INIT=2'h0
   bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
+  bel MUXF7 mux7 port i0=I0 i1=I1 s=S o=O outputs O
+  bel MUXF8 mux8 port i0=I0 i1=I1 s=S o=O outputs O
   bel FDRE ff count 126800 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
   bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0

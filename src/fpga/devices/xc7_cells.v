@@ -463,11 +463,11 @@ module MUXF7 (output O, input I0, input I1, input S);
 endmodule
 
 module MUXF7_L (output LO, input I0, input I1, input S);
-  assign LO = S ? I1 : I0;
+  MUXF7 m (.O(LO), .I0(I0), .I1(I1), .S(S));
 endmodule
 
 module MUXF7_D (output O, output LO, input I0, input I1, input S);
-  assign O = S ? I1 : I0;
+  MUXF7 m (.O(O), .I0(I0), .I1(I1), .S(S));
   assign LO = O;
 endmodule
 
@@ -476,11 +476,11 @@ module MUXF8 (output O, input I0, input I1, input S);
 endmodule
 
 module MUXF8_L (output LO, input I0, input I1, input S);
-  assign LO = S ? I1 : I0;
+  MUXF8 m (.O(LO), .I0(I0), .I1(I1), .S(S));
 endmodule
 
 module MUXF8_D (output O, output LO, input I0, input I1, input S);
-  assign O = S ? I1 : I0;
+  MUXF8 m (.O(O), .I0(I0), .I1(I1), .S(S));
   assign LO = O;
 endmodule
 

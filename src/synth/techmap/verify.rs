@@ -147,6 +147,62 @@ pub fn check_lut_mapping(
     decide(aig, lut_miter(aig, net), options)
 }
 
+/// Checks a LUT network against `aig` and, with it, the graph `optimized` it
+/// was mapped from against `aig`: `optimized` keeps `aig`'s inputs and outputs.
+///
+/// One miter of the network against `aig` would say the same and is out of
+/// reach on a large design, whose optimisation the check has no other reason
+/// to prove: on the ChipWhisperer-Husky Plus it left 11,904 AND nodes. So the
+/// two are separate, and either finding a difference decides it.
+pub fn check_lut_mapping_through(
+    aig: &Aig,
+    optimized: &Aig,
+    net: &LutNetwork,
+    options: &MapVerifyOptions,
+) -> MapEquivalence {
+    let mapping = check_lut_mapping(optimized, net, options);
+    if mapping.wrong() {
+        return mapping;
+    }
+    let graph = decide(aig, graph_miter(aig, optimized), options);
+    match (mapping, graph) {
+        (_, wrong @ MapEquivalence::Different { .. }) => wrong,
+        (MapEquivalence::Equivalent, other) => other,
+        (undecided, _) => undecided,
+    }
+}
+
+/// The miter of `aig` against another graph with the same inputs and outputs.
+fn graph_miter(aig: &Aig, other: &Aig) -> Aig {
+    let (mut m, inputs, copy) = original(aig);
+    let mut there: Vec<Edge> = vec![Edge::constant(false); other.len()];
+    for (pos, &pi) in other.inputs().iter().enumerate() {
+        there[pi as usize] = inputs[pos];
+    }
+    for id in 1..u32::try_from(other.len()).expect("node count") {
+        if !other.is_and(id) {
+            continue;
+        }
+        let (a, b) = other.fanins(id);
+        there[id as usize] = m.and(
+            there[a.index()].xor(a.is_complement()),
+            there[b.index()].xor(b.is_complement()),
+        );
+    }
+    let mut differs: Vec<Edge> = Vec::with_capacity(aig.outputs().len());
+    for (&left, &right) in aig.outputs().iter().zip(other.outputs()) {
+        let want = copy[left.index()].xor(left.is_complement());
+        let got = there[right.index()].xor(right.is_complement());
+        differs.push(m.xor(want, got));
+    }
+    for &d in &differs {
+        m.add_output(d);
+    }
+    let any = m.or_n(&differs);
+    m.add_output(any);
+    m
+}
+
 /// Checks a standard-cell network against the AIG it was mapped from.
 ///
 /// `library` must be the one the network was mapped onto. A cell it does not
