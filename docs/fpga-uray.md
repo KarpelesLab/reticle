@@ -1142,7 +1142,10 @@ will be brought up at 25 MHz before 100.
 **Corrected, 2026-10-28: the fix was not one, and it is off by default
 now** (`ImplementOptions::pins_at_entry`, `reticle fpga
 --pins-at-entry`). The reading above — that the hang was a long path
-missing a 10 ns clock — did not survive the board:
+missing a 10 ns clock — did not survive the board. *(The cause, found
+2026-11-03 and corrected the next day, was neither: the clock region of
+rows 249–309 loads on the other edge. See "Which edge the flow gives a
+flip-flop there".)*
 
 - The rebuilt 32-neuron slave hung the board **at 25 MHz**, a 40 ns
   clock, during its first few reads. So speed was not the cause, or not
@@ -1371,6 +1374,16 @@ flip-flop of a half-slice is swapped together, so the placer's rule that
 keeps the two kinds apart still holds. The build reports how many it
 corrected. That is the last column above: the whole fabric beside the
 processor loads on `PL_CLK0`'s rising edge, as the Verilog says.
+
+**And on the bus, 2026-11-05.** r16 rebuilt with `--pins-at-entry` by
+the corrected flow (179 flip-flops in rows 249–309 given the other
+edge), the build whose earlier twin hung the board at 25 MHz on
+2026-10-28, brought up as every new slave is: the known-good r16 first
+(500 of 500 at 25 MHz), then reads only, then writes. All seven reads
+were right; then 500 images of 500 at 25 MHz and **10 000 of 10 000 at
+100 MHz, bit for bit with the model, 1.26 µs an image**, the same as
+the default placement. So the fault the `--pins-at-entry` build had was
+this one.
 
 What was ruled out on the way:
 

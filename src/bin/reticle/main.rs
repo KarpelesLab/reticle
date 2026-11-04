@@ -409,9 +409,10 @@ Writing a bitstream for the ZCU104 (xczu7ev-ffvc1156):
                      model, not a measurement, in both.
   --pins-at-entry    UltraScale+: place and route logic the processor
                      connects to beside where its wires enter the fabric,
-                     not at the processor's tile. Builds much faster, but
-                     a large AXI slave built so hung the board:
-                     docs/fpga-uray.md.
+                     not at the processor's tile. Builds much faster. A
+                     large AXI slave built so once hung the board; the
+                     cause was the clock region of rows 249-309, which
+                     the flow now corrects for: docs/fpga-uray.md.
 ";
 
 const SYNTH_USAGE: &str = "\

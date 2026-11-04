@@ -1210,13 +1210,14 @@ pub struct ImplementOptions<'a> {
     pub on_iteration: Option<fn(&crate::fpga::route::Iteration)>,
     /// Place and route each processor pin where its wire enters the
     /// fabric ([`Board::processor_pin_tiles`]) rather than at the
-    /// processor's own tile. Builds far faster and shorter, **and is off
-    /// by default because what it builds hung the board**: the same
-    /// 16-neuron AXI slave that answers every image placed the old way
-    /// stopped the processor at 25 MHz placed this way, on 2026-10-28.
-    /// A small slave placed this way answered 4 000 reads at 100 MHz, and
-    /// the big one placed the old way answers right, so the fault needs
-    /// both; its cause is open (`docs/fpga-uray.md`).
+    /// processor's own tile. Builds far faster and shorter. It is off by
+    /// default because what it built hung the board: the same 16-neuron
+    /// AXI slave that answers every image placed the old way stopped the
+    /// processor at 25 MHz placed this way, on 2026-10-28. The cause was
+    /// the clock region of rows 249–309, which loads on the other edge
+    /// ([`INVERTED_CLOCK_ROWS`]); rebuilt with that corrected, the same
+    /// slave answered 10 000 images of 10 000 at 100 MHz on 2026-11-05
+    /// (`docs/fpga-uray.md`).
     pub pins_at_entry: bool,
     /// How many of the latest endpoints by the timing model to list in
     /// [`Written::endpoints`], each with its path, whether or not `timing`
