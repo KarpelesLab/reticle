@@ -1385,6 +1385,18 @@ were right; then 500 images of 500 at 25 MHz and **10 000 of 10 000 at
 the default placement. So the fault the `--pins-at-entry` build had was
 this one.
 
+**wbd, rebuilt the same day, is not fixed by it.** The corrected flow put
+217 of its flip-flops on the other edge, and its bitstream was read back:
+all 51 slice halves with a flip-flop in rows 249–309 have the clock
+inverted, and none of the 265 elsewhere does. Its first program, reads
+only at 25 MHz, read word 15 (`ARSIZE` and `ARLEN` of the read before)
+as `0` where the build before the correction read `0x200`, as every
+slave with that word has. Every other word it read is zero by design, so
+those reads say nothing either way. The bring-up stopped there, under the
+rule that a wrong value is the end of a slave, and the board stayed up.
+What wbd still has wrong is open; it is not the clock edge, as far as the
+bits can say.
+
 What was ruled out on the way:
 
 - **Copying more of Vivado's clock network.** In region 279 the clock
