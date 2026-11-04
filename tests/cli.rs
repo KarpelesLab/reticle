@@ -1835,7 +1835,8 @@ fn a_carry_in_added_to_a_difference_places_and_routes() {
 /// which reads as a routing fault on a family whose unrouted inputs read
 /// as a one, and is nothing of the kind: the multiplier was never built.
 /// The guard is about the backend now and not about the family, because
-/// no backend here places a hard multiplier.
+/// no backend here placed a hard multiplier. The 7-series now does, so the guard is
+/// "every family but that one", which still has the ECP5 in it.
 ///
 /// What this would catch: that guard narrowing back to one family, and
 /// the ECP5 flow growing a DSP site without the placer to go with it.

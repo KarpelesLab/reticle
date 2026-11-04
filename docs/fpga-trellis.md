@@ -204,7 +204,7 @@ is asked for a bitstream, and a refusal that names a hand-instantiated
 if args.option("bitstream").is_some() && device.family == "xc7" {
 ```
 
-and **no backend here places a hard multiplier**, so the family test was
+and **no backend here placed a hard multiplier** (the 7-series has since 2026-11-04), so the family test was
 the bug. It is gone, `fpga::trellis::dsp` is the ECP5's account and its
 refusal, and
 `a_multiply_becomes_an_ecp5_bitstream_in_lookup_tables` is the

@@ -188,7 +188,7 @@ pub use carry::{CarryPacking, legalise_carries};
 pub use cmt::{
     ClockManagerError, Counter, MmcmSettings, PllSettings, counter, mmcm_registers, pll_registers,
 };
-pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
+pub use dsp::{DSP_PRIMITIVE, dsp_local_muxes, dsp_pin_wires};
 pub use finish::{FinishedFrames, LogicLocation};
 pub use lutpack::{LutPairing, PairOptions, pack_lut_pairs};
 pub use lutswap::{apply_lut_moves, lut_input_classes};
@@ -1411,10 +1411,12 @@ impl XrayDatabase {
         let mut set = parse::segbits(&text, &path)?;
         // A bit the database does not name, which this flow measured:
         // see `bufg::cascade_enables`.
-        let cascade = bufg::cascade_enables(tile_type);
-        if !cascade.is_empty() {
+        let mut measured = bufg::cascade_enables(tile_type);
+        // Likewise a `DSP48E1`'s: see `dsp::derived_features`.
+        measured.extend(dsp::derived_features(tile_type));
+        if !measured.is_empty() {
             let mut all = set.into_features();
-            all.extend(cascade);
+            all.extend(measured);
             set = FeatureSet::new(all);
         }
         let Some(row) = block_ram_row else {
@@ -1593,6 +1595,83 @@ impl XrayDatabase {
             x1: region.x1.max(x),
             y1: region.y1.max(y),
         }))
+    }
+
+    /// The same region, grown to hold at least `count` sites of `site_type`, in
+    /// one column if one column has them.
+    ///
+    /// One column because the blocks a cascade joins have to be in a line:
+    /// grown by distance alone, thirty blocks came out as a few rows of every
+    /// column near the pins, 84 sites and no run of thirty, and the placer said so.
+    /// The tiles taken from a column are the nearest to the region, so they run
+    /// without a gap.
+    ///
+    /// # Errors
+    ///
+    /// When the tile grid cannot be read.
+    pub fn region_with_sites(
+        &self,
+        files: &dyn FileProvider,
+        region: GridRegion,
+        site_type: &str,
+        count: usize,
+    ) -> Result<Option<GridRegion>, XrayError> {
+        let tiles = self.tiles(files)?;
+        let mut columns: std::collections::BTreeMap<u32, Vec<(u64, u32, usize)>> =
+            std::collections::BTreeMap::new();
+        for tile in &tiles {
+            let here = tile.sites.iter().filter(|(_, k)| k == site_type).count();
+            if here == 0 {
+                continue;
+            }
+            let dx = u64::from(
+                region
+                    .x0
+                    .saturating_sub(tile.grid_x)
+                    .max(tile.grid_x.saturating_sub(region.x1)),
+            );
+            let dy = u64::from(
+                region
+                    .y0
+                    .saturating_sub(tile.grid_y)
+                    .max(tile.grid_y.saturating_sub(region.y1)),
+            );
+            columns
+                .entry(tile.grid_x)
+                .or_default()
+                .push((dx + dy, tile.grid_y, here));
+        }
+        if columns.is_empty() {
+            return Ok(None);
+        }
+        // Nearest column first, by its nearest tile.
+        let mut order: Vec<(u64, u32)> = columns
+            .iter()
+            .map(|(x, tiles)| (tiles.iter().map(|t| t.0).min().unwrap_or(0), *x))
+            .collect();
+        order.sort_unstable();
+        let mut out = region;
+        let mut have = 0;
+        for (_, x) in order {
+            if have >= count {
+                break;
+            }
+            let mut here = columns[&x].clone();
+            here.sort_unstable();
+            for (_, y, sites) in here {
+                if have >= count {
+                    break;
+                }
+                have += sites;
+                out = GridRegion {
+                    x0: out.x0.min(x),
+                    y0: out.y0.min(y),
+                    x1: out.x1.max(x),
+                    y1: out.y1.max(y),
+                };
+            }
+        }
+        Ok(Some(out))
     }
 
     /// The same region, grown so that every clock region it overlaps has
@@ -1979,6 +2058,15 @@ impl XrayDatabase {
                     bits,
                 });
                 stats.fixed += 1;
+            }
+            // An input of a `DSP48E1` with a mux of its own reaches the
+            // interconnect with no bit set. See `dsp::LOCAL_MUX`.
+            for (to, from) in dsp::local_mux_pips(name) {
+                tile_type.pips.push(PipDecl {
+                    from: WireRef::local(from),
+                    to: WireRef::local(to),
+                    bits: Vec::new(),
+                });
             }
             for pass in &passes {
                 let mut bits = Vec::new();
@@ -3094,6 +3182,8 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         // passed on it, their check never finding a ramp to follow.
         "ddr_in" => &["clk", "clkb"],
         "ddr_out" => &["clk"],
+        // A `DSP48E1`'s registers, the same way as a block RAM's.
+        "dsp" => &["clk"],
         _ => &[],
     }
 }

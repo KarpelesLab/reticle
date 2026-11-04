@@ -17,6 +17,19 @@ models or IP.
   `muxf_probe.tcl` asks Vivado what it makes of those designs, in its own report
   and in a bitstream; `tests/fpga_xray_muxf.rs` decodes the bitstreams into
   `vivado.txt` there and holds Reticle to it.
+- `gen_dsp_sweep.py` writes one `DSP48E1` per parameter setting and
+  `dsp_sweep_report.py` writes what each did to its tile, as
+  `testdata/fpga/vivado/dsp/sweep.txt`.
+- `gen_dsp_inference.py` writes one multiply per question of what Vivado puts on
+  a block, `dsp_facts.tcl` runs one through it and writes down what became of
+  each block, and `dsp_inference_report.py` writes
+  `testdata/fpga/vivado/dsp/inference.txt`.
+- `dsp_answers.py` keeps what Vivado wrote for each of those blocks, feature by
+  feature, with its source, under `answers/` and `designs/` there.
+- `gen_dsp_vectors.py` asks `xsim` what the vendor's `DSP48E1` does, a setting at a
+  time, and writes `vectors/` there.
+- `xsim_routed.py` runs a netlist Reticle routed under `xsim` and the vendor's
+  models of every cell, against its source. Nothing of that is committed.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

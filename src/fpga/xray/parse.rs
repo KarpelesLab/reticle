@@ -672,7 +672,12 @@ pub(super) fn bels_of(
     wires: &HashSet<&str>,
     coverage: &mut sites::SiteCoverage,
 ) -> Vec<BelDecl> {
-    let prefixes = site_prefixes(features);
+    let mut prefixes = site_prefixes(features);
+    // Every feature of a `DSP_L` or `DSP_R` is `DSP48.DSP_<k>.*`, so the head
+    // names no site: the two blocks are declared below, from `super::dsp`.
+    if super::dsp::is_dsp_tile(&tile.tile_type) {
+        prefixes.retain(|p| *p != "DSP48");
+    }
 
     // Which site of this tile each feature prefix means, and therefore
     // what kind of thing can be placed on it.
@@ -870,6 +875,22 @@ pub(super) fn bels_of(
         .iter()
         .filter(|prefix| kinds.get(*prefix).copied() == Some("io"))
         .count();
+
+    // A tile's two multiplier blocks, each with its pins. The features stay
+    // out of the bel: `XrayFabric::configure_dsp` reads them by name, since
+    // what they mean depends on what the pins are tied to.
+    for (name, pins) in super::dsp::bels(&tile.tile_type) {
+        let mut bel = BelDecl::new(name.clone(), "dsp");
+        for (role, wire) in pins {
+            if wires.contains(wire.as_str()) {
+                bel.pins.push((role, WireRef::local(wire)));
+                coverage.pins += 1;
+            } else {
+                coverage.pins_unresolved += 1;
+            }
+        }
+        bels.insert(name, bel);
+    }
 
     // And the bels the prefix machinery cannot find at all, which today
     // is the sixteen global clock buffers of a `CLK_BUFG_*` tile: they

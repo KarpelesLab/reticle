@@ -45,7 +45,7 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 86 of the 141.** `index.txt` says which;
+**Reticle builds 87 of the 141.** `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
 to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
 
@@ -56,12 +56,12 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 55 that do not build, by what stops them:
+The 54 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | no latch on the fabric yet | `LDCE`, `LDPE`, `LD`, `LDC`, `LDP`, `LDCE_1`, `LDPE_1` |
-| block RAM and DSP by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1`, `DSP48E1` |
+| block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
 | clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
 | clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
 | pad buffers | 15 of them, chiefly the disable forms; `IOBUFDS` and `OBUFTDS` are the ones used most. `SSTL18_I` is not offered either. |
@@ -97,7 +97,8 @@ routed report, in `vivado.txt`. Run on 2026-11-04.
 | crc32 | Vivado | 129 | 65 | 0 | 0 | 0 | 0 | 0 | 0 | 3.581 | 54 |
 | | Reticle | 162 | 65 | 0 | 0 | 0 | 0 | 0 | 0 | 5.23 | 9 |
 | fir8 | Vivado | 7 | 23 | 0 | 0 | 0 | 0 | 0 | 8 | 10.988 | 49 |
-| | Reticle | 1495 | 436 | 63 | 0 | 0 | 0 | 0 | 0 | 22.88 | 66 |
+| | Reticle, then | 1495 | 436 | 63 | 0 | 0 | 0 | 0 | 0 | 22.88 | 66 |
+| | Reticle | 9 | 113 | 0 | 0 | 0 | 0 | 0 | 8 | 12.64 | 10 |
 | fsm | Vivado | 33 | 30 | 0 | 0 | 1 | 0 | 0 | 0 | 3.217 | 48 |
 | | Reticle | 62 | 30 | 0 | 0 | 0 | 0 | 0 | 0 | 5.23 | 8 |
 | gray_cdc | Vivado | 15 | 37 | 3 | 12 | 0 | 0 | 0 | 0 | 2.255 | 46 |
@@ -105,7 +106,8 @@ routed report, in `vivado.txt`. Run on 2026-11-04.
 | lutram32 | Vivado | 7 | 70 | 0 | 0 | 0 | 51 | 0 | 0 | 2.967 | 47 |
 | | Reticle | 9 | 38 | 0 | 0 | 0 | 0 | 2 | 0 | 5.07 | 9 |
 | mul18 | Vivado | 7 | 36 | 0 | 0 | 0 | 0 | 0 | 1 | 2.833 | 47 |
-| | Reticle | 746 | 145 | 0 | 0 | 0 | 0 | 0 | 0 | 29.74 | 17 |
+| | Reticle, then | 746 | 145 | 0 | 0 | 0 | 0 | 0 | 0 | 29.74 | 17 |
+| | Reticle | 9 | 37 | 0 | 0 | 0 | 0 | 0 | 1 | 5.35 | 10 |
 | regfile_alu | Vivado | 351 | 20 | 20 | 1 | 5 | 102 | 0 | 0 | 7.859 | 64 |
 | | Reticle | 373 | 22 | 8 | 0 | 0 | 64 | 0 | 0 | 10.79 | 12 |
 | srl_delay | Vivado | 7 | 34 | 0 | 2 | 0 | 0 | 0 | 0 | 2.739 | 46 |
@@ -126,9 +128,10 @@ cells, which leaves out the route-through a carry's propagate may use: so
 
 What the table says, largest first:
 
-1. **No hard multiplier.** `mul18` is 746 lookup tables against one `DSP48E1`.
+1. ~~**No hard multiplier.** `mul18` is 746 lookup tables against one `DSP48E1`.
    `docs/fpga-xray.md` has why the flow keeps them out, and it was written with
-   no Vivado to ask.
+   no Vivado to ask.~~ Closed on 2026-11-04: *The hard multiply*, below. The rows
+   marked "then" are what this item was written from.
 2. **No shift register.** `srl_delay` is 2081 flip-flops against 34 and two
    `SRL`s.
 3. **No wide multiplexer**, as this table first read: `widemux` was 596 lookup
@@ -812,3 +815,193 @@ net names are this flow's own.
   is the next step, and it has not been done.
 - `-readback_file` (`.rba`, `.rbb`, `.rbd`, `.msd`), `-reference_bitfile`, `-cell`:
   not looked at beyond seeing that the first writes those four files.
+## The hard multiply
+
+Everything below is on Vivado's word and Reticle's own decode. **Nothing here has
+been on a board**, on any part, and that a bit means what Vivado writes it for is
+the most it can say.
+
+### What was asked
+
+`testdata/fpga/vivado/dsp/` holds Vivado's answers to four questions, each from a
+script in `tools/vivado-parity/`:
+
+| file | question | script |
+|---|---|---|
+| `sweep.txt` | what each parameter sets in the tile | `gen_dsp_sweep.py`, `dsp_sweep_report.py` |
+| `inference.txt` | what it makes of each multiply | `gen_dsp_inference.py`, `dsp_facts.tcl`, `dsp_inference_report.py` |
+| `answers/`, with the sources in `designs/` | what it wrote for each block, feature by feature and each input by what it is on | `dsp_answers.py` |
+| `vectors/` | what the vendor's model answers, in 52 settings | `gen_dsp_vectors.py` |
+
+The database's `USE_MULT` gap was the old reason for the refusal. **It was the
+wrong reading**, and `src/fpga/xray/dsp.rs` keeps it: `MULTIPLY` and `DYNAMIC` set no
+bit, and `NONE` sets one the database has no name for. Reticle names that one and
+three others in the same position (`SEL_PATTERN_C`, `A1_UNUSED`, `B1_UNUSED`), each
+measured on both blocks and both tile types, so a block in a Vivado `.bit` now
+decodes with nothing unnamed in its tile.
+
+A constant on an input takes one of three shapes (`src/fpga/xray/dsp.rs` has the
+table): a mux of the pin's own for 39 of them, the pin's inverter for `ALUMODE[1:0]`,
+`OPMODE[5:0]` and `CARRYIN`, and a route for the rest. **A zero on `OPMODE[1]` is not
+a route at all**, which nothing in the database says.
+
+### What was compared, and how it came out
+
+- **Every block against Vivado's.** 170 designs, 69 naming the block and 101 inferring
+  it, each built by Reticle and compared with what Vivado wrote for the same source:
+  every site feature, and each input by whether it is a zero, a one or a signal.
+  (Interconnect by its ends: which wires a signal takes is the router's own.) **153
+  are the same**, and the other 17 are named below with why, and checked still to
+  differ. `the_blocks_of_every_design_are_vivados` runs them, ignored for its 10
+  minutes; six are in the gate.
+- **Every bit decodes.** All 170 decode with 0 bits unexplained, and the arcs they
+  select are exactly the router's and the ties', `reticle fpga` refusing otherwise.
+- **Vivado's bitstream of Reticle's implementation.** `--vivado-placement` hands
+  `mul18` and `fir8` to Vivado as placed and routed, which accepts them with 0 errors
+  and 0 critical warnings from `link_design` to `write_bitstream`. Decoded,
+  **no feature of any `DSP_L` tile differs.** `mul18` has 1073 of its 1075 features in
+  common, the rest clock tiles and a pad, as in every design of the section above;
+  `fir8` 3311 of 3314, with two `CTRL` wires taking their ground from `GFAN0` here and
+  `GFAN1` there.
+- **Vivado's timer on those routes.** `fir8`'s worst path through Reticle's placement
+  is 10.988 ns, the same five blocks' cascade and the same figure as Vivado's own
+  implementation, since none of it is routing. Reticle's estimate says 12.64: it adds
+  the launch and setup Vivado's data path does not. `mul18` is 3.762 ns against
+  Vivado's own 2.833, with Reticle's estimate 5.35 on another endpoint, its output
+  pad.
+
+### What the block does
+
+`dsp48e1_model.v` is written here from UG479's diagrams and holds none of the
+vendor's model. `tests/fpga_dsp_vivado.rs` holds it to the 52 settings of `vectors/`;
+its header lists what it does not cover. The first run agreed in 51, and the other
+was the model's carry out, which it cannot state when `X` and `Y` are both non-zero;
+that setting no longer asks about carries. With it, every multiply is checked
+against its own source as a mapped netlist, cycle by cycle: 194 register settings
+with the result on ports, 78 sums of products, 21 designs with a register a block
+cannot hold, and about 40 of Vivado's designs by their parity pin.
+
+**Those found real faults.** Three stages after a product with an enable took the
+wrong two. The block's clock stayed off the global network, with every bit of the
+block still matching Vivado's, because that comparison did not look at the clock's
+route; it does now. And they found that `reticle sim` reads a signed memory's
+element as unsigned (`reg signed [15:0] t [0:1]`, `t[0] * 5` with `t[0] = -3` gives
+327665), so `fir8`'s source simulates to other answers than `xsim` gives. That is
+not fixed here. `fir8` is held to `xsim`'s answer, `answers/fir8.xsim`.
+
+`xsim_routed.py` runs what `--routed-netlist` wrote under `xsim` with the vendor's
+own models of every cell, against the source. 98 designs and 599 cycles each, all the same: that is
+the vendor's `DSP48E1`, `FDRE`, `LUT6` and `CARRY4` running what the bitstream was
+made from.
+
+### The delays
+
+Read from `report_timing` at speed grade 1, a design for each register setting; in
+`src/fpga/xray/timing.rs`.
+
+| from | to | registers on | ns |
+|---|---|---|---|
+| `A` | `P` | none | 3.841 |
+| `B` | `P` | none | 3.656 |
+| `CLK` | `P` | `A2`/`B2` only | 4.009 |
+| `CLK` | `P` | `M` | 2.215 to 2.305 |
+| `CLK` | `P` | `P` | 0.434 |
+| `CLK` | `PCOUT` | `M` | 2.411 |
+| `PCIN` | `PCOUT` | none | 1.713 |
+| `A` | setup at `A2` | | 0.362 |
+| `B` | setup at `B2` | | 0.450 |
+| `A` | setup at `M` | | 1.928 |
+| `B` | setup at `M` | | 1.743 |
+| `A` | setup at `P` | | 3.722 |
+| `B` | setup at `P` | | 3.536 |
+| `PCIN` | setup at `P` | | 1.400 |
+
+A quoted figure and not a check: nothing has compared what Reticle's estimate says
+of a routed path through a block with what Vivado's timer does.
+
+### Where it is not what Vivado does
+
+Each is the same function at a cost, or registers somewhere else. Each is named by
+`NOT_THE_SAME` in `tests/fpga_dsp_vivado.rs`, so closing one has to say so.
+
+- **`fir8`'s shift register stays in the fabric.** Vivado passes it down the column
+  through `ACOUT`/`BCOUT` and is left with 23 flip-flops against 113.
+- **An operand one bit past a port** (`s_26x18`, `s_25x19`, `u_18x18`) is one block
+  there, with the odd bit's partial product on `C` under a dynamic `OPMODE`, and two
+  here.
+- **A split multiply's registers.** Vivado takes each block's `P`; this takes `M`,
+  and only the one stage after the product.
+- **The pre-adder is not inferred.** `(a + d) * b` is one block there (`f_preadd`),
+  and three and a carry chain here.
+- **A product read twice** is two blocks there, joined by `PCOUT`, and one and a
+  carry chain here (`f_two`).
+- **A subtraction** stays in the fabric here; `ALUMODE` could do it.
+- **An asynchronous reset stays out of the block.** Vivado takes `P` with its reset
+  at zero and drops the register between, in a way this has not understood (`c_arst`).
+- **A square** is `AREG` 1, `M` and `P` there, `AREG` 2 and `P` here: one latency.
+
+`mul18` is 37 flip-flops against 36: its shift register's top bit, read only by the
+register now in the block, is left. That is the flow's clean-up working a word at a
+time and not this block's. Nine lookup tables against seven is the parity tree's.
+
+### Inference is on, and what that did to the Husky
+
+`--bitstream` on the 7 series now infers. **The Husky Plus and the plain Husky use no
+`DSP48E1`**, measured: their one multiply is a `16x2` that stays in logic, and their
+netlists through the `--bitstream` path are byte for byte what they were
+(`--netlist`, against the binary of the commit before), so the default needs no
+option to protect them. The fabric itself did change, by 9,360 pips nothing routes through unless a block
+asks: **the whole Husky Plus build, seed 4, was the same bitstream byte for byte**,
+3,825,897 bytes built by this work and by the commit it began from, `98081d3`, before
+any later change to master. Neither has been loaded into anything, and frame ECC, on
+master since, changes every bitstream this flow writes.
+
+**The registers that absorb** copy Vivado's choices for the designs asked about.
+That these are its rules in general is a reading of those designs, not a statement
+of its.
+
+### Mutations
+
+A test that passes against a broken implementation is worse than none, so each of
+these was applied and a test had to fail:
+
+All 33 were caught. Three survived the first run, a block's kept register, the
+operand order and the second block's unnamed bits; each now has a test, and the table
+is after them. `tests/fpga_dsp_vivado.rs` and `tests/fpga_dsp.rs` say what each would
+not catch.
+
+| mutation | caught by |
+|---|---|
+| model: PCIN shifted logically | `the_model_answers_as_the_vendors_does` |
+| model: A1 read in place of A2 | `the_model_answers_as_the_vendors_does` |
+| split: top piece zero-extended | `what_one_block_cannot_take_goes_over_several` |
+| split: no shift on the cascade | `what_one_block_cannot_take_goes_over_several` |
+| split: a column at the wrong place | `what_one_block_cannot_take_goes_over_several` |
+| absorb: A1 and A2 enables swapped | `every_register_setting_computes_the_source` |
+| absorb: main path enables swapped | `every_register_setting_computes_the_source` |
+| absorb: reset polarity ignored | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| absorb: async reset taken in | `every_register_setting_computes_the_source` |
+| absorb: reset to one taken in | `every_register_setting_computes_the_source` |
+| absorb: falling edge taken in | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| absorb: resets on A not required alike | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| absorb: clock not compared | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| absorb: read-elsewhere product taken | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| absorb: third stage with controls moved back | `every_register_setting_computes_the_source` |
+| fold: narrow product extended regardless | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| fold: a term read elsewhere taken | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| fold: two clocks in a sum | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| fold: C upper half | `every_sum_of_products_computes_the_source` |
+| fold: wrong Z on a chain | `every_sum_of_products_computes_the_source` |
+| map: constant low bits wrong sign | `every_mapped_design_computes_the_source` |
+| xray: inverter sense flipped | `each_parameter_sets_what_the_sweep_measured` |
+| xray: zero on an inverting pin routed | `a_constant_takes_the_shape_its_pin_has` |
+| xray: USE_MULT_NONE at the wrong bit | `the_blocks_of_a_few_designs_are_vivados` |
+| xray: a mux wire wrong | `the_pin_table_is_the_databases` |
+| xray: ground and power swapped | `the_blocks_of_a_few_designs_are_vivados` |
+| timing: launch of M | `a_blocks_paths_are_the_ones_its_registers_make` |
+| map: wider operand on b | `the_wider_operand_goes_on_the_wider_port` |
+| xray: DSP_1 stride wrong | `the_unnamed_bits_are_where_the_sweep_found_them` |
+| timing: cascade not followed | `a_chain_of_sums_is_one_long_path` |
+| clock: a block off the network | `the_blocks_of_a_few_designs_are_vivados` |
+| xray: a kept register | `what_a_block_cannot_hold_stays_out_and_is_still_right` |
+| device: smallest moved | `small_multiplies_stay_in_logic_as_vivado_leaves_them` |

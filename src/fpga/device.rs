@@ -1372,6 +1372,18 @@ pub struct DspShape {
     /// generic convention the older shapes rely on and a parameter a
     /// `DSP48E1` does not have.
     pub params: Vec<(String, AttrValue)>,
+    /// Which ports are outputs, when the line says so. A design may
+    /// instantiate the block by name only when it does: a black box's ports
+    /// have no direction of their own (`outputs`).
+    pub outputs: Vec<String>,
+    /// The operands' significant widths, smaller and larger, below which a
+    /// multiply is not worth a block and stays in logic (`smallest 6 11`,
+    /// which is what Vivado does). Zero for no such limit.
+    pub smallest: (u32, u32),
+    /// How many the part has, when the line says (`count`). Past that a multiply
+    /// stays in logic rather than failing in the placer, as Vivado's does. Zero
+    /// for not said.
+    pub count: usize,
 }
 
 impl DspShape {
@@ -2556,6 +2568,15 @@ fn write_dsp(dsp: &DspShape) -> String {
     if dsp.signed {
         line.push_str(" signed");
     }
+    if dsp.smallest != (0, 0) {
+        line.push_str(&format!(" smallest {} {}", dsp.smallest.0, dsp.smallest.1));
+    }
+    if dsp.count > 0 {
+        line.push_str(&format!(" count {}", dsp.count));
+    }
+    if !dsp.outputs.is_empty() {
+        line.push_str(&format!(" outputs {}", join(&dsp.outputs)));
+    }
     line.push_str(&write_pairs("port", &dsp.ports));
     if !dsp.pin_widths.is_empty() {
         line.push_str(" widths");
@@ -3422,11 +3443,38 @@ impl<'a> Parser<'a> {
             pin_widths: Vec::new(),
             ties: Vec::new(),
             params: Vec::new(),
+            outputs: Vec::new(),
+            smallest: (0, 0),
+            count: 0,
         };
         let mut index = 2;
         while let Some(token) = line.get(index) {
             index += 1;
             match token.as_str() {
+                "outputs" => {
+                    let Some(list) = line.get(index) else {
+                        break;
+                    };
+                    index += 1;
+                    dsp.outputs = list.as_str().split(',').map(str::to_owned).collect();
+                }
+                "count" => {
+                    let Some(value) = self.number_at(line, index, "a count") else {
+                        break;
+                    };
+                    index += 1;
+                    dsp.count = value as usize;
+                }
+                "smallest" => {
+                    let Some(low) = self.number_at(line, index, "a width") else {
+                        break;
+                    };
+                    let Some(high) = self.number_at(line, index + 1, "a width") else {
+                        break;
+                    };
+                    index += 2;
+                    dsp.smallest = (low, high);
+                }
                 "a" | "b" | "p" | "stages" => {
                     let key = token.as_str().to_owned();
                     let Some(value) = self.number_at(line, index, "a width") else {

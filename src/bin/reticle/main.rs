@@ -2458,15 +2458,16 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         wide_muxes,
         ..FpgaOptions::default()
     };
-    // **No backend here can place a hard multiplier**, so for any
-    // bitstream a multiply stays in lookup tables, which are slower and
-    // correct. `fpga::xray::dsp` and `fpga::trellis::dsp` each say why
-    // for their family: the 7-series has no `USE_MULT` bits in
-    // prjxray-db and no constant route for `CARRYINSEL`, and the ECP5
-    // has no DSP site at all. The netlists this run also writes follow
-    // the same mapping, so a design handed to Vivado or to nextpnr gets
-    // lookup tables too; dropping `--bitstream` is what asks for the
-    // hard block.
+    // **The 7-series places a hard multiplier; no other backend here
+    // does**, so for their bitstreams a multiply stays in lookup tables,
+    // which are slower and correct. `fpga::trellis::dsp` says why for the
+    // ECP5: it has no DSP site at all. The netlists this run also writes
+    // follow the same mapping, so a design handed to nextpnr gets lookup
+    // tables too; dropping `--bitstream` is what asks for the hard block.
+    //
+    // Until 2026-11-04 the 7-series was in the same sentence: no `USE_MULT`
+    // bits in prjxray-db and no constant route for `CARRYINSEL`. Vivado
+    // answered both; `fpga::xray::dsp` has the account.
     //
     // **This used to be `device.family == "xc7"`**, which left the ECP5
     // out, and the ECP5 is the family with no site: a multiply that
@@ -2474,12 +2475,12 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     // `MULT18X18D`, was ignored by the placer, and stopped the flow at
     // the driverless check blaming the router. `fpga::trellis::dsp` has
     // that account.
-    if args.option("bitstream").is_some() {
+    if args.option("bitstream").is_some() && device.family != "xc7" {
         options.map.infer_dsp = false;
         if !args.flag("quiet") && !device.dsps.is_empty() {
             eprintln!(
-                "note: `--bitstream` keeps multiplies in lookup tables; no backend here \
-                 places a hard multiplier, and without `--bitstream` the exported netlist \
+                "note: `--bitstream` keeps multiplies in lookup tables; this family's backend \
+                 places no hard multiplier, and without `--bitstream` the exported netlist \
                  uses one"
             );
         }
@@ -3518,6 +3519,19 @@ fn needs_block_ram(
     })
 }
 
+/// How many `DSP48E1`s the design holds.
+fn count_dsps(design: &reticle::ir::Design, top: reticle::ir::ModuleId) -> usize {
+    use reticle::ir::CellKind;
+    design.modules[top]
+        .cells
+        .iter()
+        .filter(|(_, cell)| {
+            matches!(&cell.kind, CellKind::Blackbox(name)
+                if name.as_str() == reticle::fpga::xray::DSP_PRIMITIVE)
+        })
+        .count()
+}
+
 /// True when the design holds one of the device's clock generators,
 /// which on a 7-series part sit in a clock management tile that the
 /// region around the pins need not reach.
@@ -3707,12 +3721,6 @@ fn write_xc7_bitstream(
 
     let bit_options = xc7_bitstream_options(args)?;
 
-    // A DSP48E1 instantiated in the source reaches here even with
-    // inference off; refuse it by name before loading anything.
-    if let Some(message) = reticle::fpga::xray::dsp_refusal(design, top) {
-        return Err(message);
-    }
-
     let root = datadir::PRJXRAY
         .locate(args.option("chipdb"), args.flag("offline"))
         .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
@@ -3846,6 +3854,28 @@ fn write_xc7_bitstream(
                 .region_with_site_type(&files, region, "RAMB18E1")
                 .map_err(|e| e.to_string())?
                 .map(|r| GridRegion::new(r.x0, r.y0.saturating_sub(6), r.x1 + 2, r.y1 + 6))
+                .or(Some(region));
+        }
+        // And a design with `DSP48E1`s needs enough of a DSP column for them.
+        // A tile holds two blocks and is five rows tall, with its own grid
+        // position its lowest row; its interconnect is two columns to one
+        // side, the left of a `DSP_R` and the right of a `DSP_L`.
+        let dsps = count_dsps(design, top);
+        if dsps > 0
+            && let Some(region) = options.region
+        {
+            options.region = db
+                // A few over: a cascade needs its blocks in one line.
+                .region_with_sites(&files, region, reticle::fpga::xray::DSP_PRIMITIVE, dsps + 4)
+                .map_err(|e| e.to_string())?
+                .map(|r| {
+                    GridRegion::new(
+                        r.x0.saturating_sub(2),
+                        r.y0.saturating_sub(6),
+                        r.x1 + 2,
+                        r.y1 + 6,
+                    )
+                })
                 .or(Some(region));
         }
         // Last, because every growth above can move the rectangle into

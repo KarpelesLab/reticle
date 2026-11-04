@@ -20,6 +20,7 @@
 //! Y      = OPMODE[3:2] == 11 ? C : 0
 //! Z      = OPMODE[6:4] == 011 ? C : 0
 //! P      = Z + X + Y + CARRYIN              (ALUMODE = 0000, CARRYINSEL = 000)
+//! Z      = OPMODE[6:4] == 101 ? PCIN >>> 17 : Z   (a split multiply's cascade)
 //! ```
 //!
 //! Neither model hard-codes the multiply: each reads `OPMODE`, `ALUMODE`,
@@ -42,9 +43,9 @@
 //!   exhaustive simulation stage decides — which is a decision, not a
 //!   sample.
 //!
-//! And what does **not** go on a block is checked to stay off it, with
-//! the note saying why: a multiply wider than one block is left to the
-//! LUT mapper, not split.
+//! And what does **not** go on a block is checked to stay off it, with the
+//! note saying why, and what is wider than one block is checked over several.
+//! `tests/fpga_dsp_vivado.rs` has registers, and what Vivado says of all of it.
 
 #![cfg(all(feature = "fpga", feature = "synth"))]
 
@@ -145,6 +146,17 @@ fn mask(width: u32) -> u64 {
     }
 }
 
+/// The flow's options with every multiply that fits on a block, however
+/// small. A block's result can only be proved or walked exhaustively while
+/// its operands are narrow, and narrow is what the flow now leaves in logic,
+/// so the checks below ask for the block regardless; `small_multiplies_stay_
+/// in_logic_as_vivado_leaves_them` pins what it does when not asked.
+fn every_size() -> FpgaOptions {
+    let mut options = FpgaOptions::default();
+    options.map.dsp_smallest = false;
+    options
+}
+
 /// Runs the whole FPGA flow over one multiply.
 fn mapped(case: Mul) -> (Design, ModuleId, fpga::FlowReport) {
     let mut design = Design::new();
@@ -157,7 +169,7 @@ fn mapped(case: Mul) -> (Design, ModuleId, fpga::FlowReport) {
         top,
         device,
         &Constraints::default(),
-        &FpgaOptions::default(),
+        &every_size(),
         &mut diags,
     )
     .expect("the flow finished");
@@ -180,8 +192,10 @@ fn mapped(case: Mul) -> (Design, ModuleId, fpga::FlowReport) {
 // ---------------------------------------------------------------------------
 
 /// The registers every `DSP48E1` instance must have switched off for the
-/// block to be combinational. The library default of each is 1.
-const REGISTERS: [&str; 14] = [
+/// block to be combinational. The library default of each is 1. `CREG` is not
+/// here: the multiply does not read `C`, and Vivado leaves it on when no other
+/// register is, for no effect (`testdata/fpga/vivado/dsp/inference.txt`).
+const REGISTERS: [&str; 13] = [
     "ACASCREG",
     "ADREG",
     "ALUMODEREG",
@@ -190,7 +204,6 @@ const REGISTERS: [&str; 14] = [
     "BREG",
     "CARRYINREG",
     "CARRYINSELREG",
-    "CREG",
     "DREG",
     "INMODEREG",
     "MREG",
@@ -268,7 +281,7 @@ impl Controls {
             self.opmode
         );
         assert!(
-            matches!(z, 0 | 3),
+            matches!(z, 0 | 3 | 5),
             "`{name}`: OPMODE {:07b} has a Z selection the model does not cover",
             self.opmode
         );
@@ -375,6 +388,21 @@ impl<'m> Netlist<'m> {
     }
 
     fn eval_cell(&self, cell: &Cell, values: &mut BTreeMap<NetId, Logic>) {
+        // The adder a split multiply's columns are summed in, while it is still
+        // one; the carry chain it becomes is `fpga::primitives`' own question.
+        if cell.kind == CellKind::Add {
+            let read = |port: &str| -> u64 {
+                let e = cell.input(port).expect("an adder's operand");
+                eval_expr(self.module, e, values)
+                    .to_u64()
+                    .expect("no unknown bits")
+            };
+            let out = cell.output("y").expect("an adder drives y");
+            let width = self.module.nets[out].ty.width().unwrap();
+            let sum = read("a").wrapping_add(read("b")) & mask(width);
+            values.insert(out, Logic::from_u64(sum, width));
+            return;
+        }
         let CellKind::Blackbox(name) = &cell.kind else {
             panic!("cell `{}` ({:?}) is not a primitive", cell.name, cell.kind);
         };
@@ -405,11 +433,18 @@ impl<'m> Netlist<'m> {
                 let x = if c.opmode & 3 == 1 { m } else { 0 };
                 let cin = pin("C", 48);
                 let y = if (c.opmode >> 2) & 3 == 3 { cin } else { 0 };
-                let z = if c.opmode >> 4 == 3 { cin } else { 0 };
+                let z = match c.opmode >> 4 {
+                    3 => cin,
+                    5 => pin("PCIN", 48) >> 17,
+                    _ => 0,
+                };
                 let p = low_bits(z + x + y + i128::from(c.carryin & 1), 48);
                 let out = cell.output("P").expect("a DSP48E1 drives P");
                 assert_eq!(self.module.nets[out].ty.width(), Some(48));
                 values.insert(out, Logic::from_u64(p, 48));
+                if let Some(cascade) = cell.output("PCOUT") {
+                    values.insert(cascade, Logic::from_u64(p, 48));
+                }
             }
             other => panic!("primitive `{other}` (cell `{}`) is not modelled", cell.name),
         }
@@ -486,6 +521,64 @@ fn check(case: Mul, random: usize) {
         }
     }
     let mut rng = Rng::new(0xD5B4_8E10 ^ u64::from(case.a * 64 + case.b));
+    for _ in 0..random {
+        run(rng.next_u64(), rng.next_u64());
+    }
+}
+
+/// The primitive-mapping step over `case`, asserting it went on exactly `blocks`
+/// blocks, and the mapped netlist against the arithmetic on every corner pair and
+/// `random` seeded random pairs.
+fn check_split(case: Mul, blocks: usize, random: usize) {
+    let mut design = Design::new();
+    let top = design.add_module(case.module("top"));
+    design.top = Some(top);
+    let mut diags = Diagnostics::new();
+    let options = fpga::MapOptions {
+        map_carry: false,
+        dsp_smallest: false,
+        ..fpga::MapOptions::default()
+    };
+    let report = fpga::map(
+        &mut design,
+        top,
+        fpga::target(XC7).unwrap(),
+        &Constraints::default(),
+        &options,
+        &mut diags,
+    );
+    assert!(!diags.has_errors(), "{case:?}");
+    let module = design.module(top);
+    let found = module
+        .cells
+        .iter()
+        .filter(|(_, c)| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == "DSP48E1"))
+        .count();
+    assert_eq!(found, blocks, "{case:?}: {:?}", report.notes);
+    let netlist = Netlist::new(module);
+    let (a_net, b_net, y_net) = (
+        port_net(module, "a"),
+        port_net(module, "b"),
+        port_net(module, "y"),
+    );
+    let run = |a: u64, b: u64| {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(a_net, Logic::from_u64(a & mask(case.a), case.a));
+        inputs.insert(b_net, Logic::from_u64(b & mask(case.b), case.b));
+        let got = netlist.eval(&inputs)[&y_net].to_u64();
+        let want = case.expected(a, b);
+        assert_eq!(
+            got,
+            Some(want),
+            "{case:?}: a={a:#x} b={b:#x} gave {got:?}, wanted {want:#x}"
+        );
+    };
+    for a in corners(case.a) {
+        for b in corners(case.b) {
+            run(a, b);
+        }
+    }
+    let mut rng = Rng::new(0xD5B4_8E11 ^ u64::from(case.a * 64 + case.b));
     for _ in 0..random {
         run(rng.next_u64(), rng.next_u64());
     }
@@ -584,23 +677,167 @@ fn a_result_wider_than_p_is_sign_extended() {
     check(mul(16, 16, 64, false), 2000);
 }
 
-/// What one block cannot take stays off it, with a note: an unsigned 18
-/// bits needs a 19-bit signed port, 26 signed bits exceed the 25-bit
-/// one, and two operands past 18 bits have nowhere to put the second.
-/// The LUT mapper gets them; this flow does not split a multiply over
-/// several blocks.
+/// **What Vivado leaves in logic stays in logic**, by the table in
+/// `testdata/fpga/vivado/dsp/inference.txt`'s `t_` lines, and what it puts on
+/// a block goes on one. Would catch the limit moved or read against the wrong
+/// operand, or an unsigned operand counted without the bit its sign takes:
+/// `u9x9` is left and `u10x10` is not. Says nothing of whether either is right
+/// to do, only that it is what the vendor's tool does.
 #[test]
-fn what_does_not_fit_one_block_is_refused() {
-    check_refused(mul(18, 18, 36, false));
-    check_refused(mul(25, 17, 42, false));
+fn the_wider_operand_goes_on_the_wider_port() {
+    let widths = |a: u32, b: u32| {
+        let mut design = Design::new();
+        let top = design.add_module(mul(a, b, a + b, true).module("top"));
+        design.top = Some(top);
+        let mut diags = Diagnostics::new();
+        let report = fpga::map(
+            &mut design,
+            top,
+            fpga::target(XC7).unwrap(),
+            &Constraints::default(),
+            &fpga::MapOptions::default(),
+            &mut diags,
+        );
+        (report.dsps[0].a_width, report.dsps[0].b_width)
+    };
+    // `t_s6x12` in `testdata/fpga/vivado/dsp/inference.txt`, and its mirror.
+    assert_eq!(widths(6, 12), (12, 6));
+    assert_eq!(widths(12, 6), (12, 6));
+    assert_eq!(widths(16, 16), (16, 16));
+}
+
+#[test]
+fn small_multiplies_stay_in_logic_as_vivado_leaves_them() {
+    let blocks = |case: Mul| -> usize {
+        let mut design = Design::new();
+        let top = design.add_module(case.module("top"));
+        design.top = Some(top);
+        let mut diags = Diagnostics::new();
+        let report = fpga::map(
+            &mut design,
+            top,
+            fpga::target(XC7).unwrap(),
+            &Constraints::default(),
+            &fpga::MapOptions::default(),
+            &mut diags,
+        );
+        report.dsps.len()
+    };
+    for (a, b, signed, vivado) in [
+        (9, 9, true, 0),
+        (10, 10, true, 0),
+        (11, 11, true, 1),
+        (5, 18, true, 0),
+        (6, 18, true, 1),
+        (6, 10, true, 0),
+        (6, 12, true, 1),
+        (8, 10, true, 0),
+        (8, 12, true, 1),
+        (4, 18, true, 0),
+        (3, 25, true, 0),
+        (9, 9, false, 0),
+        (10, 10, false, 1),
+        (8, 8, false, 0),
+        (4, 17, false, 0),
+        (6, 16, false, 1),
+        (8, 12, false, 1),
+    ] {
+        let case = mul(a, b, a + b, signed);
+        assert_eq!(blocks(case), vivado, "{case:?}");
+    }
+}
+
+/// **What one block cannot take goes over several**, as Vivado's does
+/// (`testdata/fpga/vivado/dsp/inference.txt`), right to the last bit on every
+/// corner and a run of random pairs. This test pinned the opposite until
+/// 2026-11-04, that a multiply too wide for one block stays in logic, which was a
+/// choice and not a fact: "splitting is its own correctness problem", it said, and
+/// this is that problem being checked. Would catch a piece read with the wrong
+/// sign, `PCIN` shifted logically, a column put at the wrong place in the sum and a
+/// product left out that the result needs; a corner is what finds most of those,
+/// since each goes wrong only where a piece has its top bit set.
+#[test]
+fn what_one_block_cannot_take_goes_over_several() {
+    for (case, blocks) in [
+        (mul(18, 18, 36, false), 2),
+        (mul(25, 17, 42, false), 2),
+        (mul(26, 4, 30, true), 2),
+        (mul(19, 19, 38, true), 2),
+        (mul(20, 20, 20, false), 2),
+        (mul(26, 18, 44, true), 2),
+        (mul(26, 26, 52, true), 4),
+        (mul(32, 32, 64, false), 4),
+        (mul(32, 32, 64, true), 4),
+        (mul(32, 32, 32, true), 3),
+        (mul(32, 32, 32, false), 3),
+        (mul(35, 35, 64, true), 4),
+        (mul(48, 48, 64, true), 8),
+        (mul(48, 48, 64, false), 8),
+        (mul(48, 16, 64, true), 3),
+        (mul(16, 48, 64, false), 3),
+        // A result too short to read past the first block's piece.
+        (mul(32, 32, 17, true), 1),
+    ] {
+        check_split(case, blocks, 3000);
+    }
+}
+
+/// **A part with no block left keeps the rest in logic**, and says so, rather than
+/// stopping in the placer with a design that fitted before there was a block to run
+/// out of. Would catch `count` read for the wrong device or not counted at all, and
+/// a split or a sum taking more than are left.
+#[test]
+fn a_part_out_of_blocks_keeps_the_rest_in_logic() {
+    let mut b = ModuleBuilder::new("top", span());
+    let a = b.input("a", Type::sbits(18));
+    let x = b.input("b", Type::sbits(18));
+    let (a_e, x_e) = (b.net(a), b.net(x));
+    let a_r = b.resize(a_e, 36, true);
+    let x_r = b.resize(x_e, 36, true);
+    for index in 0..95 {
+        let y = b.output(format!("y{index}"), Type::sbits(36));
+        b.cell2(format!("mul{index}"), CellKind::Mul, a_r, x_r, y);
+    }
+    let mut design = Design::new();
+    let top = design.add_module(b.finish());
+    design.top = Some(top);
+    let mut diags = Diagnostics::new();
+    let report = fpga::map(
+        &mut design,
+        top,
+        fpga::target(XC7).unwrap(),
+        &Constraints::default(),
+        &fpga::MapOptions::default(),
+        &mut diags,
+    );
+    assert_eq!(report.dsps.len(), 90, "the part's count");
+    let left: Vec<_> = report
+        .notes
+        .iter()
+        .filter(|n| n.contains("stays in logic"))
+        .collect();
+    assert_eq!(left.len(), 5, "{left:?}");
+    let still = design
+        .module(top)
+        .cells
+        .iter()
+        .filter(|(_, c)| c.kind == CellKind::Mul)
+        .count();
+    assert_eq!(still, 5);
+}
+
+/// A multiply with a narrow side is not worth a cascade, however wide the other:
+/// Vivado keeps `5x25` in logic (`t_s5x25`) and this keeps `26x4`.
+#[test]
+fn a_narrow_side_stays_in_logic_however_wide_the_other() {
     check_refused(mul(26, 4, 30, true));
-    check_refused(mul(19, 19, 38, true));
-    check_refused(mul(20, 20, 20, false));
-    check_refused(mul(32, 32, 64, false));
+    check_refused(mul(40, 5, 45, true));
 }
 
 /// The instance the flow writes is the one Yosys' `xc7_dsp_map.v` writes,
-/// pin for pin: this is what Vivado reads.
+/// pin for pin, except that `C` is all ones where Yosys writes zeros: this is
+/// what Vivado reads. `C` is what Vivado itself ties, and on this fabric the
+/// zero would cost 48 routes for an input nothing selects.
 #[test]
 fn the_instance_carries_the_plain_multiply_configuration() {
     let (design, top, _) = mapped(mul(8, 8, 16, true));
@@ -623,13 +860,13 @@ fn the_instance_carries_the_plain_multiply_configuration() {
     };
     assert_eq!(width("A"), Some(30), "A is connected at its full width");
     assert_eq!(width("B"), Some(18));
-    for (pin, bits) in [
-        ("C", 48),
-        ("D", 25),
-        ("ACIN", 30),
-        ("BCIN", 18),
-        ("PCIN", 48),
-    ] {
+    let c_pin = cell.input("C").expect("C");
+    assert_eq!(
+        eval_expr(module, c_pin, &BTreeMap::new()).to_u64(),
+        Some((1u64 << 48) - 1),
+        "C is tied to ones"
+    );
+    for (pin, bits) in [("D", 25), ("ACIN", 30), ("BCIN", 18), ("PCIN", 48)] {
         assert_eq!(width(pin), Some(bits), "{pin}");
         let e = cell.input(pin).unwrap();
         assert!(
@@ -643,20 +880,22 @@ fn the_instance_carries_the_plain_multiply_configuration() {
     );
 }
 
-/// A multiply feeding an adder still gets its block: the 7-series line
-/// declares no accumulator, and failing to fold the adder in used to
-/// leave the multiply in logic as well.
+/// A multiply feeding an adder goes on a block with the adder in it. This test
+/// pinned the adder staying outside until 2026-11-04, when the line had no way to
+/// say otherwise, and Vivado's own block takes it (`f_add`, `fpga::dsp_fold`). What
+/// it was written to catch, that failing to fold the adder in left the multiply in
+/// logic as well, is still what the block count catches.
 #[test]
-fn a_multiply_feeding_an_adder_still_gets_a_block() {
+fn a_multiply_feeding_an_adder_goes_on_a_block_with_it() {
     let mut b = ModuleBuilder::new("top", span());
-    let a = b.input("a", Type::bits(8));
-    let x = b.input("b", Type::bits(8));
-    let c = b.input("c", Type::bits(16));
-    let y = b.output("y", Type::bits(16));
-    let p = b.add_net("p", Type::bits(16));
+    let a = b.input("a", Type::bits(12));
+    let x = b.input("b", Type::bits(12));
+    let c = b.input("c", Type::bits(24));
+    let y = b.output("y", Type::bits(24));
+    let p = b.add_net("p", Type::bits(24));
     let (a_e, x_e) = (b.net(a), b.net(x));
-    let a_r = b.zext(a_e, 16);
-    let x_r = b.zext(x_e, 16);
+    let a_r = b.zext(a_e, 24);
+    let x_r = b.zext(x_e, 24);
     b.cell2("mul", CellKind::Mul, a_r, x_r, p);
     let (p_e, c_e) = (b.net(p), b.net(c));
     b.cell2("add", CellKind::Add, p_e, c_e, y);
@@ -676,7 +915,7 @@ fn a_multiply_feeding_an_adder_still_gets_a_block() {
     assert!(!diags.has_errors());
     assert_eq!(report.count("DSP48E1"), 1, "{:?}", report.primitives.notes);
     let item = &report.primitives.dsps[0];
-    assert!(!item.multiply_add, "the adder stays outside the block");
+    assert!(item.multiply_add, "the adder is the block's");
 }
 
 /// The other families are untouched: their `dsp` lines carry no `signed`,
@@ -874,13 +1113,24 @@ mod fabric {
         }
     }
 
-    /// What the loader makes of a `DSP_R` tile today, measured, and what
-    /// the database holds for one. This pins the reasons
-    /// `fpga::xray::dsp_refusal` gives: if a later change teaches the
-    /// loader a `dsp` site, or a newer database documents `USE_MULT`,
-    /// this fails and the refusal is worth revisiting.
+    /// **What the loader makes of a `DSP_R` tile, and what the database still
+    /// does not hold for one.**
+    ///
+    /// This test used to pin the opposite: one site called `DSP48`, of kind
+    /// `other`, with no pins, and it was named
+    /// `the_fabric_has_no_dsp_site_and_the_database_no_use_mult`, the reasons
+    /// `fpga::xray::dsp_refusal` gave for refusing the block. The loader's half
+    /// of that was a thing to fix and is fixed, and the database's half is still
+    /// true, and is now understood: `USE_MULT` is missing from it because the
+    /// mode that multiplies sets no bit (`fpga::xray::dsp`). So it pins both:
+    /// two sites with every pin, and no `USE_MULT` feature in the file, whose
+    /// arrival would mean the derived `USE_MULT_NONE` has a rival to agree with.
+    ///
+    /// Would catch a block's pins lost to a renamed wire, or the two blocks
+    /// merged again. Whether each pin is the right wire is
+    /// `the_pin_table_is_the_databases`.
     #[test]
-    fn the_fabric_has_no_dsp_site_and_the_database_no_use_mult() {
+    fn the_fabric_has_two_dsp_sites_and_the_database_no_use_mult() {
         let Some(root) = chipdb() else { return };
         let db = XrayDatabase::open(&DiskFiles, &root, "xc7a35t-cpg236", &XrayOptions::new())
             .expect("the database opens");
@@ -890,18 +1140,22 @@ mod fabric {
         options.region = Some(GridRegion::new(24, 0, 32, 12));
         let fabric = db.load(&DiskFiles, &options).expect("the region loads");
         let graph = fabric.arch.build_graph();
-        assert_eq!(
-            graph.sites.iter().filter(|s| s.kind == "dsp").count(),
-            0,
-            "the loader now makes a `dsp` site; the refusal in fpga::xray::dsp is stale"
-        );
-        let dsp_tiles: Vec<_> = graph.sites.iter().filter(|s| s.tile.0 == 28).collect();
-        assert!(!dsp_tiles.is_empty(), "the region holds the DSP column");
-        for site in &dsp_tiles {
-            assert_eq!(site.bel, "DSP48", "{}", site.name);
-            assert_eq!(site.kind, "other", "{}", site.name);
-            assert!(site.pins.is_empty(), "{} has pins now", site.name);
+        let blocks: Vec<_> = graph.sites.iter().filter(|s| s.kind == "dsp").collect();
+        assert!(!blocks.is_empty(), "the region holds the DSP column");
+        assert_eq!(blocks.len() % 2, 0, "two blocks a tile");
+        for site in &blocks {
+            assert!(
+                site.bel == "DSP_0" || site.bel == "DSP_1",
+                "{}: `{}`",
+                site.name,
+                site.bel
+            );
+            // 263 inputs and 154 outputs, which is the 417 the site's own list
+            // in `tile_type_DSP_R.json` has.
+            assert_eq!(site.pins.len(), 417, "{}", site.name);
         }
+        let merged = graph.sites.iter().filter(|s| s.bel == "DSP48").count();
+        assert_eq!(merged, 0, "no tile has the one merged site any more");
         for side in ["l", "r"] {
             let path = format!("{root}/artix7/segbits_dsp_{side}.db");
             let text = std::fs::read_to_string(&path).expect("the DSP segbits are fetched");
@@ -911,11 +1165,64 @@ mod fabric {
             );
             assert!(
                 !text.contains("USE_MULT"),
-                "{path} documents USE_MULT now; the refusal in fpga::xray::dsp is stale"
+                "{path} documents USE_MULT now; compare it with `dsp::derived_features`"
             );
             let ppips = format!("{root}/artix7/ppips_dsp_{side}.db");
             let text = std::fs::read_to_string(&ppips).expect("the DSP ppips are fetched");
             assert!(text.contains(".DSP_0_A0.DSP_IMUX23_0 always"), "{ppips}");
+        }
+    }
+
+    /// **The wires this flow's tables name are the database's.** Every pin of
+    /// both blocks is a wire the tile type's own site list gives it, and the
+    /// three-way muxes `fpga::xray::dsp` lists are the ones the tile type's pip
+    /// list has, with the interconnect wire it says. Would catch a typing error
+    /// in either table; it reads the same file the tables were taken from, so
+    /// it would not catch a mistake the file makes.
+    #[test]
+    fn the_pin_table_is_the_databases() {
+        let Some(root) = chipdb() else { return };
+        for side in ["L", "R"] {
+            let path = format!("{root}/artix7/tile_type_DSP_{side}.json");
+            let text = std::fs::read_to_string(&path).expect("the tile type is fetched");
+            let json = reticle::json::Json::parse(&text).expect("the file is JSON");
+            let pips = json.get("pips").and_then(|p| p.as_object()).expect("pips");
+            let mut mux: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            for (_, pip) in pips {
+                let to = pip.get("dst_wire").and_then(|w| w.as_str()).unwrap();
+                let from = pip.get("src_wire").and_then(|w| w.as_str()).unwrap();
+                mux.entry(to.to_owned()).or_default().push(from.to_owned());
+            }
+            let tables = reticle::fpga::xray::dsp_local_muxes();
+            let mut seen = 0;
+            for (to, from) in &tables {
+                let inputs = mux.get(to).unwrap_or_else(|| panic!("no `{to}` in {path}"));
+                assert!(inputs.contains(from), "`{from}` -> `{to}`: {inputs:?}");
+                assert_eq!(inputs.len(), 3, "`{to}`: {inputs:?}");
+                seen += 1;
+            }
+            let in_file = mux.values().filter(|v| v.len() == 3).count();
+            assert_eq!(seen, in_file, "a mux the table has not got");
+            let sites = json.get("sites").and_then(|s| s.as_array()).expect("sites");
+            let blocks: Vec<_> = sites
+                .iter()
+                .filter(|s| s.get("type").and_then(|t| t.as_str()) == Some("DSP48E1"))
+                .collect();
+            assert_eq!(blocks.len(), 2);
+            for (block, site) in blocks.iter().enumerate() {
+                let pins = site
+                    .get("site_pins")
+                    .and_then(|p| p.as_object())
+                    .expect("site_pins");
+                let mut wires: Vec<String> = pins
+                    .iter()
+                    .map(|(_, pin)| pin.get("wire").and_then(|w| w.as_str()).unwrap().to_owned())
+                    .collect();
+                wires.sort();
+                let mut ours = reticle::fpga::xray::dsp_pin_wires(u32::try_from(block).unwrap());
+                ours.sort();
+                assert_eq!(ours, wires, "{path}, block {block}");
+            }
         }
     }
 }

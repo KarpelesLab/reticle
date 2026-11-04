@@ -637,13 +637,82 @@ pub fn synthesize_for(
 /// [`super::map`] already, with the standard its constraint gives, and
 /// a second buffer would sit in the fabric with no pad to reach.
 #[cfg(feature = "synth")]
+/// Turns an instance of `primitive` into a cell, reading a connection to one of
+/// `output_ports` as an output and every other as an input. False, with a
+/// diagnostic and `refused` counted, when an output is wired to something that
+/// cannot be driven.
+fn cell_from_instance(
+    m: &mut crate::ir::Module,
+    inst: &crate::ir::Instance,
+    primitive: &crate::ir::Name,
+    output_ports: &[String],
+    refused: &mut usize,
+    diags: &mut Diagnostics,
+) -> bool {
+    use crate::ir::{Assign, Attrs, Cell, ExprKind, Name, Net, NetKind};
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for (port, expr) in &inst.connections {
+        if !output_ports.iter().any(|o| o == port.as_str()) {
+            inputs.push((port.clone(), *expr));
+            continue;
+        }
+        if let ExprKind::Net(net) = m.expr(*expr).kind {
+            outputs.push((port.clone(), net));
+            continue;
+        }
+        let Some(target) = crate::ir::hier::expr_to_lvalue(m, *expr) else {
+            *refused += 1;
+            diags.push(
+                Diagnostic::error(format!(
+                    "`{}`: output `{port}` of a `{primitive}` must be wired to a net",
+                    inst.name
+                ))
+                .with_span(inst.span),
+            );
+            return false;
+        };
+        let ty = m.expr(*expr).ty.clone();
+        let net = m.nets.push(Net {
+            name: Name::new(format!("{}${port}", inst.name)),
+            ty,
+            kind: NetKind::Wire,
+            attrs: Attrs::new(),
+            span: inst.span,
+        });
+        let value = m.add_expr(crate::ir::Expr::new(
+            ExprKind::Net(net),
+            m.nets[net].ty.clone(),
+            inst.span,
+        ));
+        m.assigns.push(Assign {
+            target,
+            value,
+            delay: None,
+            attrs: Attrs::new(),
+            span: inst.span,
+        });
+        outputs.push((port.clone(), net));
+    }
+    m.cells.push(Cell {
+        name: inst.name.clone(),
+        kind: CellKind::Blackbox(primitive.clone()),
+        inputs,
+        outputs,
+        params: inst.params.clone(),
+        attrs: inst.attrs.clone(),
+        span: inst.span,
+    });
+    true
+}
+
 fn primitive_instances(
     design: &mut Design,
     module: ModuleId,
     device: &Device,
     diags: &mut Diagnostics,
 ) -> usize {
-    use crate::ir::{Assign, Attrs, Cell, ExprKind, InstanceId, ModuleRef, Name, Net, NetKind};
+    use crate::ir::{Assign, Attrs, ExprKind, InstanceId, ModuleRef};
     let Some(m) = design.modules.get_mut(module) else {
         return 0;
     };
@@ -663,6 +732,18 @@ fn primitive_instances(
         let ModuleRef::Unresolved(primitive) = &inst.module else {
             continue;
         };
+        // A block with a `dsp` line says which of its ports are outputs there.
+        if let Some(shape) = device
+            .dsps
+            .iter()
+            .find(|d| d.name == primitive.as_str() && !d.outputs.is_empty())
+        {
+            if !cell_from_instance(m, &inst, primitive, &shape.outputs, &mut refused, diags) {
+                continue;
+            }
+            done.push(id);
+            continue;
+        }
         let Some(bel) = device.bels.iter().find(|b| b.name == primitive.as_str()) else {
             continue;
         };
@@ -821,59 +902,9 @@ fn primitive_instances(
             );
             continue;
         }
-        let mut inputs = Vec::new();
-        let mut outputs = Vec::new();
-        for (port, expr) in &inst.connections {
-            if !bel.outputs.iter().any(|o| o == port.as_str()) {
-                inputs.push((port.clone(), *expr));
-                continue;
-            }
-            if let ExprKind::Net(net) = m.expr(*expr).kind {
-                outputs.push((port.clone(), net));
-                continue;
-            }
-            let Some(target) = crate::ir::hier::expr_to_lvalue(m, *expr) else {
-                refused += 1;
-                diags.push(
-                    Diagnostic::error(format!(
-                        "`{}`: output `{port}` of a `{primitive}` must be wired to a net",
-                        inst.name
-                    ))
-                    .with_span(inst.span),
-                );
-                continue;
-            };
-            let ty = m.expr(*expr).ty.clone();
-            let net = m.nets.push(Net {
-                name: Name::new(format!("{}${port}", inst.name)),
-                ty,
-                kind: NetKind::Wire,
-                attrs: Attrs::new(),
-                span: inst.span,
-            });
-            let value = m.add_expr(crate::ir::Expr::new(
-                ExprKind::Net(net),
-                m.nets[net].ty.clone(),
-                inst.span,
-            ));
-            m.assigns.push(Assign {
-                target,
-                value,
-                delay: None,
-                attrs: Attrs::new(),
-                span: inst.span,
-            });
-            outputs.push((port.clone(), net));
+        if !cell_from_instance(m, &inst, primitive, &bel.outputs, &mut refused, diags) {
+            continue;
         }
-        m.cells.push(Cell {
-            name: inst.name.clone(),
-            kind: CellKind::Blackbox(primitive.clone()),
-            inputs,
-            outputs,
-            params: inst.params.clone(),
-            attrs: inst.attrs.clone(),
-            span: inst.span,
-        });
         done.push(id);
     }
     for (net, port) in &pair_ports {

@@ -1,0 +1,1 @@
+# What Vivado 2026.1 wrote for t_s4x18; tools/vivado-parity/dsp_answers.py.

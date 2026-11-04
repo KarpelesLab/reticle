@@ -469,7 +469,7 @@ pub fn tie_policy(role: &str) -> TiePolicy {
 
 /// One input to make read something: the policy, the instance, the pin's
 /// role, and the pin's node.
-type Want = (TiePolicy, String, String, NodeId);
+pub(super) type Want = (TiePolicy, String, String, NodeId);
 
 /// An `IDDR`'s set or reset, which reads one unrouted — and an `ILOGIC`
 /// has no feature that ignores it, where an `OLOGIC`'s `SRUSED` does — is
@@ -633,7 +633,9 @@ impl BlockRamTables {
     ) -> BlockRamTables {
         let mut out = BlockRamTables::default();
         for (tile_type, set) in features {
-            if wire_prefix(tile_type, "RAMB18_Y0").is_none() {
+            // A `DSP48E1`'s features are looked up the same way.
+            if wire_prefix(tile_type, "RAMB18_Y0").is_none() && !super::dsp::is_dsp_tile(tile_type)
+            {
                 continue;
             }
             let mut map = BTreeMap::new();
@@ -678,6 +680,11 @@ pub struct BlockRamReport {
     /// The pips the zero ties switched on, which a decoding of the
     /// bitstream finds beside the router's.
     pub tie_pips: Vec<PipId>,
+    /// `DSP48E1` instances configured, whose constants go through the same
+    /// ties; see `super::dsp`.
+    pub dsps: usize,
+    /// Features turned on over all of those.
+    pub dsp_features: usize,
 }
 
 impl BlockRamReport {
@@ -724,7 +731,7 @@ pub(super) fn is_cascade_input(tile_type: &str, from: &str) -> bool {
         && (from.starts_with("BRAM_CASCINBOT_") || from.starts_with("BRAM_CASCINTOP_"))
 }
 
-/// Why a block RAM could not be configured.
+/// Why a block RAM or a `DSP48E1` could not be configured.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockRamError {
     /// The instance.
@@ -735,7 +742,7 @@ pub struct BlockRamError {
 
 impl fmt::Display for BlockRamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "block RAM `{}`: {}", self.instance, self.message)
+        write!(f, "cell `{}`: {}", self.instance, self.message)
     }
 }
 
@@ -801,6 +808,22 @@ fn tie(
     pin: NodeId,
     value: Bit,
 ) -> Result<(), String> {
+    // A `DSP48E1`'s pin with a mux of its own takes either constant right at
+    // the pin, with nothing behind it involved. See `super::dsp`.
+    let local = if value == Bit::One {
+        "DSP_VCC_"
+    } else {
+        "DSP_GND_"
+    };
+    if let Some(pip) = graph
+        .incoming(pin)
+        .iter()
+        .copied()
+        .find(|p| graph.wire(graph.pip(*p).from).name.starts_with(local))
+    {
+        ties.pips.push(pip);
+        return Ok(());
+    }
     let chain = fixed_chain(graph, pin);
     let name = |node: NodeId| graph.wire(node).full_name();
     for node in &chain {
@@ -829,6 +852,35 @@ fn tie(
                 .is_some_and(|wires| wires.contains(&graph.wire(*node).name))
         });
         if !default {
+            // A `CTRL` wire has no default of its own, and Vivado gives one
+            // a hop from a bounce wire that does (`CTRL_L0.BYP_BOUNCE4`, in
+            // `dsp::sweep.txt`'s `tie_one`).
+            for node in &chain {
+                for pip in graph.incoming(*node) {
+                    if graph.pip_bits(*pip).is_empty() {
+                        continue;
+                    }
+                    let from = graph.pip(*pip).from;
+                    if !graph.wire(from).name.contains("_BOUNCE") {
+                        continue;
+                    }
+                    let behind = fixed_chain(graph, from);
+                    let reads_one = behind.iter().any(|n| {
+                        vcc_defaults
+                            .get(tile_type_of(arch, graph, *n))
+                            .is_some_and(|wires| wires.contains(&graph.wire(*n).name))
+                    });
+                    let free = behind
+                        .iter()
+                        .all(|n| !used.contains(n) && !ties.zero.contains(n));
+                    if reads_one && free {
+                        ties.pips.push(*pip);
+                        ties.one.extend(chain.iter().copied());
+                        ties.one.extend(behind);
+                        return Ok(());
+                    }
+                }
+            }
             return Err(format!(
                 "nothing behind `{}` defaults to VCC_WIRE, and a one has no other source here",
                 name(pin)
@@ -1000,6 +1052,25 @@ impl XrayFabric {
         };
         let mut wants: Vec<Want> = Vec::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.primitive == super::dsp::DSP_PRIMITIVE {
+                if let Some(site) = placement.site_of(index) {
+                    let cell = m.cells.get(instance.cell);
+                    let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+                    super::dsp::wants(
+                        &params,
+                        instance,
+                        &graph.sites[site],
+                        netlist,
+                        &|_| true,
+                        &mut wants,
+                    )
+                    .map_err(|message| BlockRamError {
+                        instance: instance.name.clone(),
+                        message,
+                    })?;
+                }
+                continue;
+            }
             if instance.primitive != PRIMITIVE {
                 if let Some(site) = placement.site_of(index) {
                     io_logic_wants(instance, &graph.sites[site], netlist, &|_| true, &mut wants);
@@ -1079,6 +1150,25 @@ impl XrayFabric {
         let mut wants: Vec<Want> = Vec::new();
 
         for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.primitive == super::dsp::DSP_PRIMITIVE {
+                let fail = |message: String| BlockRamError {
+                    instance: instance.name.clone(),
+                    message,
+                };
+                let Some(site) = placement.site_of(index) else {
+                    return Err(fail("it was not placed".to_owned()));
+                };
+                let site = &graph.sites[site];
+                let cell = m.cells.get(instance.cell);
+                let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+                let routed = |signal: usize| routing.route(signal).is_some();
+                report.dsp_features +=
+                    self.configure_dsp(&params, instance, site, netlist, &routed, bits)?;
+                report.dsps += 1;
+                super::dsp::wants(&params, instance, site, netlist, &routed, &mut wants)
+                    .map_err(fail)?;
+                continue;
+            }
             if instance.primitive != PRIMITIVE {
                 if let Some(site) = placement.site_of(index) {
                     io_logic_wants(

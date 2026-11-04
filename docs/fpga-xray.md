@@ -6310,10 +6310,11 @@ In rough order of how much stands behind each.
    mapper left the `$tristate` cell behind and the netlist check refused
    it as "a generic cell, not a primitive". `xc7.dev` had declared
    `OBUFT` as `other`, so nothing could have placed one on a pad anyway.
-7. **A `DSP48E1`.** Mapped for Vivado since 2026-10-08, refused here by
-   name; the section *A DSP48E1: mapped, not placed* below has exactly
-   what is missing, measured. With `--bitstream` the command line keeps
-   multiplies in lookup tables instead.
+7. **A `DSP48E1`.** Done on 2026-11-04, by name and inferred, with its bits
+   compared with Vivado's and nothing yet on a board. It was mapped for Vivado
+   from 2026-10-08 and refused here by name, with multiplies kept in lookup tables;
+   the section *A DSP48E1: mapped, not placed* below has why that was thought
+   necessary and why it was not.
 8. **Six million `String`s.** The routing graph holds the whole die in
    1386 MiB, most of it wire names. Interning those is what makes
    whole-die routing comfortable rather than merely possible.
@@ -6333,6 +6334,17 @@ bitstream whose every feature on the clock path matches a working one and
 whose effect on silicon nobody has seen.
 
 ## A DSP48E1: mapped, not placed
+
+**Since 2026-11-04 it is placed.** Everything in this section down to the next
+heading was written with no Vivado on the machine, and is kept because the path
+to the answer is the useful part: each fact it lists about the database is still
+true, and **the conclusion it drew from them was wrong**. Item 2 reads a `USE_MULT`
+missing from the database as a thing a guess would get silently wrong; a sweep of
+one block through Vivado shows it is missing because the multiplying mode sets no
+bit at all. Item 4 reads a zero on `CARRYINSEL` as a route this router cannot make;
+it is the same `GFAN` route block RAM's inputs take, and most other zeros on the
+block cost no route at all. `src/fpga/xray/dsp.rs` has what was measured, and
+`docs/fpga-vivado-parity.md` what Reticle now does against Vivado.
 
 `xc7.dev` declares `DSP48E1` and `fpga::primitives` puts a multiply on
 it (`docs/fpga.md`, *The DSP48E1*, and `tests/fpga_dsp.rs`, which proves
@@ -6534,7 +6546,7 @@ will have.
 | `tests/fpga_xray.rs` | everything above, against the real database, skipping without it |
 | `tests/fpga_xray_lutram.rs` | the distributed RAM, built from `examples/basys3/lutram.v` and decoded |
 | `examples/basys3/` | the two designs that have reached a part, the tristate, distributed-RAM, PLL and carry-chain demos that have not yet, and their constraints |
-| `src/fpga/xray/dsp.rs` | the refusal of a `DSP48E1`, and the measured reasons for it |
+| `src/fpga/xray/dsp.rs` | a `DSP48E1`'s sites, pins and features, and the account of why it used to be refused |
 | `tests/fpga_xray_carry.rs` | the carry chain: placed up one column, propagate from the lookup table beside it, `CIN` and a constant carry in, every bit decoded and every arc the router's |
 | `src/fpga/xray/bram.rs` | block RAM: the `RAMB18E1` bel's pins, its mode features, and `XrayFabric::configure_block_rams`, which also ties every input the design leaves alone |
 | `tests/fpga_xray_bram.rs` | block RAM: both halves, the frame-window stacking, `examples/basys3/bram_rom.v` and a four-block design, every bit decoded, every arc the router's or a tie's, the contents bit for bit |

@@ -412,6 +412,14 @@ is one whole `CARRY4`) stays in LUTs, and so does a `sub`: the IR's
 
 ### The DSP48E1
 
+**This section is the block on its own, as the Vivado route first took it.** On
+the XC7A100T and its family the flow has since learned what Vivado does around
+one: a multiply below `6x11` stays in logic (`smallest` on the `dsp` line), the
+registers around it go in (`fpga::dsp_absorb`), an adder after it goes in
+(`fpga::dsp_fold`), a wider one goes over several (`fpga::dsp_split`), and `C` is
+tied to all ones and not to zero. `docs/fpga-vivado-parity.md` has what each is
+measured against. What follows is still what a block with no register around it is.
+
 A multiply goes onto one `DSP48E1`, configured as a combinational 25x18
 two's-complement multiplier: `OPMODE = 7'b0000101`, `ALUMODE = 0`,
 `INMODE = 0`, `CARRYINSEL = 0`, `CARRYIN = 0`, `C`, `D`, `ACIN`, `BCIN`

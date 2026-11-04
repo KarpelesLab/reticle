@@ -45,11 +45,12 @@
 //! exact operands is exact. The line's `tie` pins and `param`s go on every
 //! instance; they are what make a `DSP48E1` multiply at all.
 //!
-//! A multiply that does not fit one block is **left in logic with a
-//! note**, never split. Splitting is a cascade of partial products
-//! through `PCIN` with a 17-bit shift, its own correctness problem, and
-//! the LUT mapper already gets the arithmetic right; a wrong wide
-//! multiplier would cost more than a large one.
+//! A multiply that does not fit one block used to be left in logic with a
+//! note, never split, on the reasoning that splitting is a cascade of partial
+//! products through `PCIN` with a 17-bit shift, its own correctness problem,
+//! and that a wrong wide multiplier would cost more than a large one. That is
+//! still the risk and it is now checked rather than avoided: `dsp_split` cuts
+//! one as Vivado does, and `tests/fpga_dsp.rs` holds it to the arithmetic.
 //!
 //! # The memory fallback
 //!
@@ -150,6 +151,20 @@ pub struct MapOptions {
     pub max_logic_bits: u64,
     /// Map multipliers onto DSP blocks.
     pub infer_dsp: bool,
+    /// Take the flip-flops around a multiply into its block's registers, on
+    /// a block with a clock to give them. `dsp_absorb` says which and why.
+    pub dsp_registers: bool,
+    /// Keep a multiply smaller than the shape's `smallest` in logic, as
+    /// Vivado does. Off, every multiply that fits takes a block, which is what
+    /// the tests that prove a narrow block's result exhaustively ask for.
+    pub dsp_smallest: bool,
+    /// Cut a multiply too wide for one block over several, joined by their
+    /// cascade, as Vivado does; off, it stays in logic. `dsp_split` has the
+    /// account.
+    pub dsp_split: bool,
+    /// Take an adder after a multiply into the block's own, as Vivado does.
+    /// `dsp_fold` has the account.
+    pub dsp_fold: bool,
     /// Insert an IO buffer at every top-level port.
     pub insert_io_buffers: bool,
     /// Instantiate a PLL for a clock constraint on a net nothing drives,
@@ -230,6 +245,10 @@ impl Default for MapOptions {
             min_bram_bits: 256,
             max_logic_bits: 4096,
             infer_dsp: true,
+            dsp_registers: true,
+            dsp_smallest: true,
+            dsp_split: true,
+            dsp_fold: true,
             insert_io_buffers: true,
             infer_pll: true,
             insert_clock_buffers: true,
@@ -652,6 +671,7 @@ pub fn map(
         options,
         report: &mut report,
         diags,
+        dsp_blocks: 0,
     };
     if options.infer_block_ram {
         mapper.block_rams(module);
@@ -674,6 +694,32 @@ pub fn map(
     report
 }
 
+/// What one block of a sum of products does beyond multiplying, and what building
+/// it gives back. See `dsp_fold`.
+#[derive(Clone, Debug, Default)]
+struct FoldRole {
+    /// Its `OPMODE`.
+    opmode: Option<u64>,
+    /// The block below's `PCOUT`.
+    pcin: Option<NetId>,
+    /// Make a `PCOUT` for the block above, and say which: `pcout`.
+    want_pcout: bool,
+    /// What goes on `C`.
+    c: Option<ExprId>,
+    /// A flip-flop after the product is `M`, not `P`.
+    stage_on_m: bool,
+    /// The block is one: what it drives is `fold_dsps`' to connect.
+    part_of_sum: bool,
+    /// The clock its registers have to share with the rest of the sum.
+    clock: Option<ExprId>,
+    /// The flip-flop after the sum, on the top block.
+    sum_register: Option<super::dsp_absorb::SumRegister>,
+    /// Its `PCOUT`.
+    pcout: Option<NetId>,
+    /// Its `P`.
+    product: Option<NetId>,
+}
+
 /// The state one [`map`] call carries between steps.
 struct Mapper<'a> {
     device: &'a Device,
@@ -681,6 +727,8 @@ struct Mapper<'a> {
     options: &'a MapOptions,
     report: &'a mut MapReport,
     diags: &'a mut Diagnostics,
+    /// The blocks the multiplies have taken so far.
+    dsp_blocks: usize,
 }
 
 // --- small IR helpers -------------------------------------------------------
@@ -854,18 +902,56 @@ struct SignedOperand {
     /// For an inexact operand, the power of two its value is right
     /// modulo; unused when `exact`.
     modulus: u32,
+    /// The value, when the operand is a constant: a `32'sd113` is eight bits
+    /// on the port, not thirty-two.
+    constant: Option<i128>,
 }
 
 impl SignedOperand {
     /// `source` widened to a pin of `pin` bits.
     fn widen(&self, module: &mut Module, pin: u32, span: Span) -> ExprId {
+        if let Some(value) = self.constant {
+            let mask = if pin >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << pin) - 1
+            };
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "the low bits of a two's-complement number are what is meant"
+            )]
+            let bits = (value as u64) & mask;
+            return const_expr(module, Const::from_u64(bits, pin), span);
+        }
         if expr_width(module, self.source) == pin {
             return self.source;
         }
+        // A resize copies the sign only of an operand typed signed, and one
+        // taken back through a register need not be.
+        let source = if self.sign_extend
+            && !module
+                .exprs
+                .get(self.source)
+                .is_some_and(|e| e.ty.is_signed())
+        {
+            let width = expr_width(module, self.source);
+            expr(
+                module,
+                ExprKind::Resize {
+                    expr: self.source,
+                    width,
+                    signed: true,
+                },
+                span,
+            )
+        } else {
+            self.source
+        };
         expr(
             module,
             ExprKind::Resize {
-                expr: self.source,
+                expr: source,
                 width: pin,
                 signed: self.sign_extend,
             },
@@ -926,6 +1012,19 @@ fn significant_operand(module: &Module, e: ExprId) -> (ExprId, u32, bool) {
 /// `Mul` whose result is that wide asks for.
 fn signed_operand(module: &Module, e: ExprId, port: u32) -> Option<SignedOperand> {
     let width = expr_width(module, e);
+    if let Some(value) = const_operand(module, e) {
+        let bits = const_width(value);
+        if bits <= port {
+            return Some(SignedOperand {
+                source: e,
+                bits,
+                sign_extend: true,
+                exact: true,
+                modulus: 0,
+                constant: Some(value),
+            });
+        }
+    }
     let (source, bits, sign_extend) = significant_operand(module, e);
     if (sign_extend && bits <= port) || (!sign_extend && bits < port) {
         return Some(SignedOperand {
@@ -934,6 +1033,7 @@ fn signed_operand(module: &Module, e: ExprId, port: u32) -> Option<SignedOperand
             sign_extend,
             exact: true,
             modulus: 0,
+            constant: None,
         });
     }
     (width <= port).then_some(SignedOperand {
@@ -942,7 +1042,14 @@ fn signed_operand(module: &Module, e: ExprId, port: u32) -> Option<SignedOperand
         sign_extend: false,
         exact: false,
         modulus: width,
+        constant: None,
     })
+}
+
+/// The fewest bits that hold `value` with its sign.
+fn const_width(value: i128) -> u32 {
+    let magnitude = if value < 0 { !value } else { value };
+    128 - magnitude.leading_zeros() + 1
 }
 
 /// Whether a `result`-bit product of `a` and `b` can come out of `shape`,
@@ -976,7 +1083,65 @@ fn signed_plan(
         }
         (result <= limit).then_some(SignedPlan { a, b })
     };
+    // A constant goes on `b`, and otherwise the wider operand on `a`, the wider
+    // port, which is what Vivado does (`k_const` and `t_s6x12` in
+    // `testdata/fpga/vivado/dsp/inference.txt`): `b` is only for two that
+    // tie, and the design's `a` then stays on `a`.
+    let swap = match (const_operand(module, a), const_operand(module, b)) {
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        _ => {
+            let bits = |e: ExprId| signed_operand(module, e, u32::MAX).map_or(0, |op| op.bits);
+            bits(b) > bits(a)
+        }
+    };
+    if swap {
+        return fits(b, a).or_else(|| fits(a, b));
+    }
     fits(a, b).or_else(|| fits(b, a))
+}
+
+/// The value of an operand that is a constant, through a resize.
+fn const_operand(module: &Module, e: ExprId) -> Option<i128> {
+    let expr = module.exprs.get(e)?;
+    match &expr.kind {
+        ExprKind::Const(value) => {
+            let width = value.width();
+            let raw = i128::from(value.to_u64()?);
+            let signed = expr.ty.is_signed();
+            Some(if signed && width > 0 && raw >> (width - 1) & 1 == 1 {
+                raw - (1i128 << width)
+            } else {
+                raw
+            })
+        }
+        _ => None,
+    }
+}
+
+/// True when a multiply is large enough to be worth a block, by the widths its
+/// operands take on two's-complement ports: both at least the shape's smaller
+/// `smallest`, and one at least its larger.
+///
+/// **Measured** (`testdata/fpga/vivado/dsp/inference.txt`, `t_` lines): Vivado
+/// takes `6x12`, `6x18`, `8x12`, `11x11` and leaves `6x10`, `8x10`, `9x9`,
+/// `10x10`, `5x18`. Unsigned operands count one wider, for the sign that stays
+/// zero, which is what its own `u10x10` taking a block and `u9x9` not says.
+/// By a power of two it uses no block, that being wires.
+fn worth_a_block(plan: &SignedPlan, shape: &DspShape) -> bool {
+    let bits = |op: &SignedOperand| -> Option<u32> {
+        if let Some(value) = op.constant {
+            if value.unsigned_abs().is_power_of_two() || value == 0 {
+                return None;
+            }
+            return Some(const_width(value));
+        }
+        Some(op.bits + u32::from(op.exact && !op.sign_extend))
+    };
+    let (Some(a), Some(b)) = (bits(&plan.a), bits(&plan.b)) else {
+        return false;
+    };
+    a.min(b) >= shape.smallest.0 && a.max(b) >= shape.smallest.1
 }
 
 /// The width of an expression, or 1 when it is not a bit vector.
@@ -2677,8 +2842,24 @@ impl Mapper<'_> {
         // Who reads what, counted once and again only after a multiplier
         // became a block, which is when a count can have changed.
         let mut uses = net_use_counts(module);
+        let mut flops = super::dsp_absorb::Index::new(module);
+        let mut done: Vec<CellId> = Vec::new();
+        if self.options.dsp_fold && self.options.dsp_registers {
+            let folds = self.dsp_folds(module, &uses);
+            for fold in folds {
+                if !self.dsp_blocks_left(fold.terms.len()) {
+                    continue;
+                }
+                let (used, mapped) = self.fold_dsps(module, &fold, &mut uses, &mut flops);
+                removed.extend(used);
+                done.extend(mapped);
+            }
+        }
         for mul in muls {
-            if let Some(used) = self.dsp(module, mul, &uses) {
+            if done.contains(&mul) {
+                continue;
+            }
+            if let Some(used) = self.dsp(module, mul, &uses, &mut flops, &mut FoldRole::default()) {
                 removed.extend(used);
                 uses = net_use_counts(module);
             }
@@ -2688,7 +2869,146 @@ impl Mapper<'_> {
         }
     }
 
-    fn dsp(&mut self, module: &mut Module, mul: CellId, uses: &[usize]) -> Option<Vec<CellId>> {
+    /// True when the part has `blocks` more blocks than the multiplies have taken.
+    fn dsp_blocks_left(&self, blocks: usize) -> bool {
+        let count = self.device.dsps.iter().map(|d| d.count).max().unwrap_or(0);
+        count == 0 || self.dsp_blocks + blocks <= count
+    }
+
+    /// The sums of products the device's block can take. See `dsp_fold`.
+    fn dsp_folds(&self, module: &Module, uses: &[usize]) -> Vec<super::dsp_fold::Fold> {
+        let Some(shape) = self
+            .device
+            .dsps
+            .iter()
+            .find(|shape| shape.signed && shape.port("pcin").is_some())
+        else {
+            return Vec::new();
+        };
+        let smallest = self.options.dsp_smallest;
+        let product_is = |module: &Module, mul: CellId| -> Option<(u32, bool)> {
+            let cell = module.cells.get(mul)?;
+            let (a, b, y) = (cell.input("a")?, cell.input("b")?, cell.output("y")?);
+            let plan = signed_plan(module, a, b, net_width(module, y), shape)?;
+            if smallest && !worth_a_block(&plan, shape) {
+                return None;
+            }
+            // `exact` for one read unsigned means its sign stays zero.
+            let width = |op: &SignedOperand| op.bits + u32::from(op.exact && !op.sign_extend);
+            let negative = |op: &SignedOperand| {
+                if let Some(value) = op.constant {
+                    value < 0
+                } else {
+                    op.sign_extend || !op.exact
+                }
+            };
+            Some((
+                width(&plan.a) + width(&plan.b),
+                negative(&plan.a) || negative(&plan.b),
+            ))
+        };
+        super::dsp_fold::find(module, uses, &product_is)
+    }
+
+    /// Builds one sum's chain of blocks, and gives the cells to remove and the
+    /// multiplies done.
+    fn fold_dsps(
+        &mut self,
+        module: &mut Module,
+        fold: &super::dsp_fold::Fold,
+        uses: &mut Vec<usize>,
+        flops: &mut super::dsp_absorb::Index,
+    ) -> (Vec<CellId>, Vec<CellId>) {
+        use super::dsp_fold::Addend;
+        let mut removed: Vec<CellId> = fold.adds.clone();
+        let mut mapped = Vec::new();
+        let span = module.cells[fold.adds[0]].span;
+        // The flip-flop after the sum, if that is all it feeds: the top block's
+        // `P`. An accumulator's has to be, since `P` is what it adds.
+        let after = super::dsp_absorb::output_after(module, flops, fold.clock, fold.root, uses);
+        if matches!(fold.addend, Addend::Own) && after.is_none() {
+            return (Vec::new(), Vec::new());
+        }
+        let clock = fold
+            .clock
+            .or_else(|| after.as_ref().map(super::dsp_absorb::SumRegister::clock));
+        let count = fold.terms.len();
+        let mut cascade: Option<NetId> = None;
+        let mut product: Option<NetId> = None;
+        let (mut ok, mut last_clock) = (true, clock);
+        for (index, term) in fold.terms.iter().enumerate() {
+            let first = index == 0;
+            let last = index + 1 == count;
+            let mut role = FoldRole {
+                opmode: Some(match (first, fold.addend) {
+                    (true, Addend::None) => 0b000_0101,
+                    (true, Addend::Value(_)) => 0b011_0101,
+                    (true, Addend::Own) => 0b010_0101,
+                    (false, _) => 0b001_0101,
+                }),
+                pcin: cascade,
+                want_pcout: !last,
+                c: match (first, fold.addend) {
+                    (true, Addend::Value(e)) => Some(e),
+                    _ => None,
+                },
+                // A term's flip-flop is `M`, except on the lowest block of a
+                // chain, which has `P` free: as Vivado has it (`fir8`).
+                stage_on_m: last || !first,
+                part_of_sum: true,
+                clock: last_clock,
+                sum_register: if last { after.clone() } else { None },
+                pcout: None,
+                product: None,
+            };
+            let Some(used) = self.dsp(module, term.mul, uses, flops, &mut role) else {
+                ok = false;
+                break;
+            };
+            removed.extend(used);
+            mapped.push(term.mul);
+            cascade = role.pcout;
+            product = role.product;
+            last_clock = role.clock;
+            *uses = net_use_counts(module);
+        }
+        if !ok {
+            // A multiply that a check above found fit no longer does: nothing
+            // this function has built can stand, and the module would be left
+            // holding half a chain. It cannot happen while `dsp_folds` and `dsp`
+            // ask the same question.
+            self.note(format!(
+                "a sum of products ending at `{}` could not be taken into its blocks",
+                module.nets[fold.root].name
+            ));
+        }
+        let Some(product) = product else {
+            return (removed, mapped);
+        };
+        let value = net_expr(module, product, span);
+        let value = slice_expr(module, value, fold.width - 1, 0, span);
+        let (target, value) = match &after {
+            Some(stage) => match stage.connect(module, fold.root, value, span) {
+                Some(found) => found,
+                None => (fold.root, value),
+            },
+            None => (fold.root, value),
+        };
+        if let Some(stage) = &after {
+            removed.push(stage.cell());
+        }
+        add_assign(module, target, value, span);
+        (removed, mapped)
+    }
+
+    fn dsp(
+        &mut self,
+        module: &mut Module,
+        mul: CellId,
+        uses: &[usize],
+        flops: &mut super::dsp_absorb::Index,
+        role: &mut FoldRole,
+    ) -> Option<Vec<CellId>> {
         let cell = module.cells.get(mul)?;
         let name = cell.name.as_str().to_owned();
         let span = cell.span;
@@ -2751,7 +3071,33 @@ impl Mapper<'_> {
                     }
             });
         }
+        // Small enough to stay in logic, as Vivado leaves it: see
+        // `testdata/fpga/vivado/dsp/inference.txt`'s `t_` lines.
+        if let Some(shape) = shape
+            && shape.signed
+            && self.options.dsp_smallest
+            && let Some(plan) = signed_plan(module, a, b, result_width, shape)
+            && !worth_a_block(&plan, shape)
+        {
+            self.note(format!(
+                "cell `{name}` ({}x{}) is small enough to stay in logic",
+                plan.a.bits, plan.b.bits
+            ));
+            return None;
+        }
+        if shape.is_some() && !self.dsp_blocks_left(1) {
+            self.note(format!(
+                "cell `{name}` stays in logic: the part's {} DSP block(s) are taken",
+                self.dsp_blocks
+            ));
+            return None;
+        }
         let Some(shape) = shape.cloned() else {
+            if self.options.dsp_split
+                && let Some(removed) = self.split_dsp(module, mul, uses, flops)
+            {
+                return Some(removed);
+            }
             self.note(format!(
                 "cell `{name}` ({a_width}x{b_width} -> {result_width}) fits no DSP block of `{}`",
                 self.device.name
@@ -2765,10 +3111,37 @@ impl Mapper<'_> {
         let p_name = shape.port("p").unwrap_or("p").to_owned();
         let mut inputs = Vec::new();
         let (report_a, report_b);
+        let mut absorbed = None;
         if shape.signed {
-            let plan = signed_plan(module, a, b, result_width, &shape)?;
+            let mut plan = signed_plan(module, a, b, result_width, &shape)?;
             report_a = plan.a.bits;
             report_b = plan.b.bits;
+            // Only a block whose line gives it a clock has registers to offer.
+            if self.options.dsp_registers && shape.port("clk").is_some() {
+                let mut found = super::dsp_absorb::plan(
+                    module,
+                    flops,
+                    plan.a.source,
+                    plan.b.source,
+                    y,
+                    uses,
+                    role.clock,
+                    span,
+                );
+                if role.stage_on_m {
+                    found.stage_on_m();
+                }
+                if role.clock.is_none() {
+                    role.clock = found.clk;
+                }
+                if let Some(source) = found.a {
+                    plan.a.source = source;
+                }
+                if let Some(source) = found.b {
+                    plan.b.source = source;
+                }
+                absorbed = Some(found);
+            }
             let a_pin = shape.pin_width(a_port.as_str()).unwrap_or(shape.a_width);
             let b_pin = shape.pin_width(b_port.as_str()).unwrap_or(shape.b_width);
             let a_value = plan.a.widen(module, a_pin, span);
@@ -2798,12 +3171,19 @@ impl Mapper<'_> {
             Type::bits(p_bits)
         };
         let product = add_net(module, &format!("{name}$p"), p_type, span);
+        let mut outputs = vec![(Name::new(p_name), product)];
+        if role.want_pcout {
+            let net = add_net(module, &format!("{name}$pc"), Type::bits(p_bits), span);
+            outputs.push((Name::new(shape.port("pcout").unwrap_or("PCOUT")), net));
+            role.pcout = Some(net);
+        }
+        role.product = Some(product);
         let cell = add_cell(
             module,
             &format!("{name}$dsp"),
             CellKind::Blackbox(Name::new(shape.name.clone())),
             inputs,
-            vec![(Name::new(p_name), product)],
+            outputs,
             span,
         );
         if shape.params.is_empty() {
@@ -2813,6 +3193,38 @@ impl Mapper<'_> {
             for (key, value) in &shape.params {
                 module.cells[cell].params.set(key.as_str(), value.clone());
             }
+        }
+        if let Some(found) = absorbed.as_ref().filter(|found| found.any()) {
+            let cell = &mut module.cells[cell];
+            let mut set = |port: &str, value: ExprId| {
+                if let Some(input) = cell.inputs.iter_mut().find(|(p, _)| p.as_str() == port) {
+                    input.1 = value;
+                }
+            };
+            if let Some(clk) = found.clk {
+                set(shape.port("clk").unwrap_or("CLK"), clk);
+            }
+            for (pin, value) in &found.pins {
+                set(pin, *value);
+            }
+            let params = &mut cell.params;
+            for (name, value) in [
+                ("AREG", found.areg),
+                ("ACASCREG", found.areg),
+                ("BREG", found.breg),
+                ("BCASCREG", found.breg),
+                ("MREG", found.mreg),
+                ("PREG", found.preg),
+                // Reads nothing here; what Vivado writes, for the same bits.
+                ("CREG", u32::from(found.mreg == 1 || found.preg == 0)),
+            ] {
+                params.set(name, i64::from(value));
+            }
+        } else if absorbed.is_some() {
+            module.cells[cell].params.set("CREG", 1i64);
+        }
+        if role.part_of_sum {
+            self.apply_fold_role(module, cell, &shape, role, flops, span);
         }
         let value = net_expr(module, product, span);
         let result = if result_width <= shape.p_width {
@@ -2839,19 +3251,189 @@ impl Mapper<'_> {
             }
             value
         };
-        add_assign(module, result_net, result, span);
+        let mut taken = Vec::new();
+        if role.part_of_sum {
+            // What the multiply drove was read only by the sum, which is the
+            // block's now: `fold_dsps` drives what the sum drove.
+            if let Some(found) = &absorbed {
+                taken = found.removed();
+            }
+        } else {
+            match absorbed.as_ref().and_then(|found| {
+                let (q, value) = found.connect(module, y, result, span)?;
+                taken = found.removed();
+                Some((q, value))
+            }) {
+                Some((q, value)) => add_assign(module, q, value, span),
+                None => add_assign(module, result_net, result, span),
+            }
+        }
 
+        self.dsp_blocks += 1;
         self.report.dsps.push(DspMapping {
             cell: name,
             primitive: shape.name.clone(),
             a_width: report_a,
             b_width: report_b,
             p_width: result_width,
-            multiply_add: fused.is_some(),
-            accumulate,
+            multiply_add: fused.is_some() || role.part_of_sum,
+            accumulate: accumulate || role.opmode == Some(0b010_0101),
         });
         let mut removed = vec![mul];
         removed.extend(fused);
+        removed.extend(taken);
+        Some(removed)
+    }
+
+    /// What being part of a sum changes on a block just built: its `OPMODE`, its
+    /// cascade in, its `C` and its `P`.
+    fn apply_fold_role(
+        &mut self,
+        module: &mut Module,
+        cell: CellId,
+        shape: &DspShape,
+        role: &FoldRole,
+        flops: &mut super::dsp_absorb::Index,
+        span: Span,
+    ) {
+        let opmode = role
+            .opmode
+            .map(|code| const_expr(module, Const::from_u64(code, 7), span));
+        let pcin = role.pcin.map(|net| net_expr(module, net, span));
+        let mut changes: Vec<(String, ExprId)> = Vec::new();
+        if let Some(opmode) = opmode {
+            changes.push(("OPMODE".to_owned(), opmode));
+        }
+        if let Some(pcin) = pcin {
+            changes.push(("PCIN".to_owned(), pcin));
+        }
+        let mut c_register = false;
+        if let Some(addend) = role.c {
+            // The addend, or what it was a flip-flop before, as wide as `C`.
+            let c_width = shape.pin_width("C").unwrap_or(shape.p_width);
+            let stage = super::dsp_absorb::one_stage(module, flops, addend, role.clock, span);
+            let source = match stage {
+                Some((before, en, rst)) => {
+                    c_register = true;
+                    let value =
+                        en.unwrap_or_else(|| const_expr(module, Const::from_u64(1, 1), span));
+                    changes.push(("CEC".to_owned(), value));
+                    if let Some(rst) = rst {
+                        changes.push(("RSTC".to_owned(), rst));
+                    }
+                    before
+                }
+                None => addend,
+            };
+            // Only the sum's low bits are read, so what fills the rest does not
+            // matter: its top bit, as Vivado has it (`f_add`).
+            let have = expr_width(module, source);
+            let fill = slice_expr(module, source, have - 1, have - 1, span);
+            let wide = if have < c_width {
+                let mut parts = vec![fill; (c_width - have) as usize];
+                parts.push(source);
+                expr(module, ExprKind::Concat(parts), span)
+            } else {
+                slice_expr(module, source, c_width - 1, 0, span)
+            };
+            changes.push(("C".to_owned(), wide));
+        }
+        let mut preg = None;
+        if let Some(register) = &role.sum_register {
+            let (enable, reset) = register.pins(module, span);
+            changes.push(("CEP".to_owned(), enable));
+            if let Some(reset) = reset {
+                changes.push(("RSTP".to_owned(), reset));
+            }
+            changes.push((
+                shape.port("clk").unwrap_or("CLK").to_owned(),
+                register.clock(),
+            ));
+            preg = Some(1i64);
+        }
+        let creg = i64::from(c_register);
+        let cell = &mut module.cells[cell];
+        for (port, value) in changes {
+            if let Some(input) = cell.inputs.iter_mut().find(|(p, _)| p.as_str() == port) {
+                input.1 = value;
+            }
+        }
+        if let Some(preg) = preg {
+            cell.params.set("PREG", preg);
+        }
+        if role.c.is_some() {
+            cell.params.set("CREG", creg);
+        }
+    }
+
+    /// A multiply over several blocks, when the device's block has the cascade
+    /// for it and the multiply is not one Vivado would keep in logic. See
+    /// `dsp_split`.
+    fn split_dsp(
+        &mut self,
+        module: &mut Module,
+        mul: CellId,
+        uses: &[usize],
+        flops: &mut super::dsp_absorb::Index,
+    ) -> Option<Vec<CellId>> {
+        /// Past this a multiply is more blocks than it is worth: 48x48 is 9.
+        const MOST_BLOCKS: usize = 16;
+        let left = {
+            let count = self.device.dsps.iter().map(|d| d.count).max().unwrap_or(0);
+            if count == 0 {
+                MOST_BLOCKS
+            } else {
+                MOST_BLOCKS.min(count.saturating_sub(self.dsp_blocks))
+            }
+        };
+        let shape = self
+            .device
+            .dsps
+            .iter()
+            .find(|shape| shape.signed && shape.port("pcin").is_some())?
+            .clone();
+        let cell = module.cells.get(mul)?;
+        let name = cell.name.as_str().to_owned();
+        let span = cell.span;
+        let (a, b) = (cell.input("a")?, cell.input("b")?);
+        let y = cell.output("y")?;
+        let wide = |module: &Module, e: ExprId| -> super::dsp_split::Wide {
+            if let Some(value) = const_operand(module, e) {
+                return super::dsp_split::Wide {
+                    source: e,
+                    bits: const_width(value).min(expr_width(module, e)),
+                    sign_extend: true,
+                };
+            }
+            let (source, bits, sign_extend) = significant_operand(module, e);
+            super::dsp_split::Wide {
+                source,
+                bits,
+                sign_extend,
+            }
+        };
+        let (wide_a, wide_b) = (wide(module, a), wide(module, b));
+        let signed_width = |w: &super::dsp_split::Wide| w.bits + u32::from(!w.sign_extend);
+        if self.options.dsp_smallest
+            && signed_width(&wide_a).min(signed_width(&wide_b)) < shape.smallest.0
+        {
+            return None;
+        }
+        let done = super::dsp_split::split(
+            module, &shape, flops, &wide_a, &wide_b, y, uses, left, &name, span,
+        )?;
+        self.dsp_blocks += done.blocks;
+        self.report.dsps.push(DspMapping {
+            cell: name,
+            primitive: shape.name.clone(),
+            a_width: wide_a.bits,
+            b_width: wide_b.bits,
+            p_width: net_width(module, y),
+            multiply_add: false,
+            accumulate: false,
+        });
+        let mut removed = vec![mul];
+        removed.extend(done.taken);
         Some(removed)
     }
 
@@ -5102,6 +5684,15 @@ impl Mapper<'_> {
                         .map(|name| (shape.name.clone(), name.to_owned()))
                 })
             })
+            // A `DSP48E1`'s, which until it had a site nothing needed to reach.
+            // Left out, a block's registers were clocked over data wires while
+            // the flip-flops around it were on the network, and every bit of
+            // the block still matched Vivado's: only its clock's route differed.
+            .chain(self.device.dsps.iter().filter_map(|shape| {
+                shape
+                    .port("clk")
+                    .map(|name| (shape.name.clone(), name.to_owned()))
+            }))
             .collect();
         // A clock manager's and the XADC's register port is clocked too,
         // `DCLK` (and a clock manager's phase shift, `PSCLK`), and they

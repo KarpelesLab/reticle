@@ -18,6 +18,12 @@
 //! - a carry chain: 0.114 ns `CIN` to `CO3`, up to 0.64 ns from `CYINIT`
 //!   to an output (`CLBLL_L.sdf`, `CARRY4`); [`CARRY`] is between.
 //!
+//! **From Vivado 2026.1's `report_timing`**, at speed grade 1 on a block on the
+//! XC7A100T, each from a design with that one register setting: [`DSP_COMB`],
+//! [`DSP_LAUNCH_A`], [`DSP_LAUNCH_M`], [`DSP_LAUNCH_P`], and [`DSP_SETUP_REG`],
+//! [`DSP_SETUP_M`], [`DSP_SETUP_P`]. `Prop_dsp48e1_*` and `Setup_dsp48e1_*`,
+//! in `docs/fpga-vivado-parity.md`'s table.
+//!
 //! **Not from it**, and said so: the block RAM's clock to output, the
 //! input and output buffers, and the clock managers, whose register port
 //! (`DRP`) is timed with the block RAM's figures standing in. `LIOB33.sdf` times
@@ -85,6 +91,25 @@ pub(crate) const MUXF8: f64 = 0.104;
 pub(crate) const FF_LAUNCH: f64 = 0.34;
 /// A slice flip-flop's setup, ns.
 pub(crate) const FF_SETUP: f64 = 0.109;
+/// A `DSP48E1` with no register at all, `A` to `P`, ns: `B` is 3.656.
+pub(crate) const DSP_COMB: f64 = 3.841;
+/// `A2` or `B2` to `P` through the multiplier, with no `M` or `P` register, ns.
+pub(crate) const DSP_LAUNCH_A: f64 = 4.009;
+/// `M` to `P`, with no `P` register, ns; 2.215 to 2.305 by the part of the die,
+/// and to `PCOUT` 2.411.
+pub(crate) const DSP_LAUNCH_M: f64 = 2.305;
+/// The `P` register to `P`, ns.
+pub(crate) const DSP_LAUNCH_P: f64 = 0.434;
+/// Setup of `A` or `B` at their own register, ns: `A` is 0.362, `B` 0.450.
+pub(crate) const DSP_SETUP_REG: f64 = 0.45;
+/// Setup of `A` at `M` with no register before it, ns: `B` is 1.743.
+pub(crate) const DSP_SETUP_M: f64 = 1.928;
+/// Setup of `A` at `P` with no register before it, ns: `B` is 3.536.
+pub(crate) const DSP_SETUP_P: f64 = 3.722;
+/// `PCIN` to `PCOUT` through a block's adder, with no `P` register, ns.
+pub(crate) const DSP_CASCADE: f64 = 1.713;
+/// Setup of `PCIN` at a `P` register, ns.
+pub(crate) const DSP_SETUP_CASCADE: f64 = 1.4;
 /// A block RAM's clock to output without its output register, ns.
 pub(crate) const BRAM_LAUNCH: f64 = 2.45;
 /// A block RAM's input setup, ns.
@@ -105,6 +130,68 @@ pub(crate) const OUTPUT_BUFFER: f64 = 3.0;
 /// A connection's delay: intercept, per tile, and per tile more on a wide
 /// signal; see the module documentation.
 pub(crate) const WIRE: (f64, f64, f64) = (0.31, 0.048, 0.025);
+
+/// What a `DSP48E1`'s registers make of its pins.
+struct DspTiming {
+    /// Its outputs start paths this long after the clock, or follow from its
+    /// inputs when `None`.
+    launch: Option<f64>,
+    /// Its inputs end paths this long before the clock, or reach its outputs
+    /// when `None`.
+    capture: Option<f64>,
+    /// Inputs to outputs, when both are so.
+    through: f64,
+}
+
+/// A block with `input` registers on the operand with fewer, and `m` and `p`
+/// its multiplier's and output's. The table is `report_timing`'s, per
+/// setting. The enables and resets are read at the same figure as the data,
+/// which is too dear for them, and the two operands at the worse of theirs.
+fn dsp_timing(input: i64, m: i64, p: i64) -> DspTiming {
+    let launch = if p > 0 {
+        Some(DSP_LAUNCH_P)
+    } else if m > 0 {
+        Some(DSP_LAUNCH_M)
+    } else if input > 0 {
+        Some(DSP_LAUNCH_A)
+    } else {
+        None
+    };
+    let capture = if input > 0 {
+        Some(DSP_SETUP_REG)
+    } else if m > 0 {
+        Some(DSP_SETUP_M)
+    } else if p > 0 {
+        Some(DSP_SETUP_P)
+    } else {
+        None
+    };
+    DspTiming {
+        launch,
+        capture,
+        through: DSP_COMB,
+    }
+}
+
+/// What a path does at one pin of a block: `chained` when `PCIN` reaches its outputs
+/// through its adder.
+fn dsp_pin(role: &str, output: bool, shape: &DspTiming, chained: bool) -> PinTiming {
+    if is_clock(role) {
+        PinTiming::Ignored
+    } else if chained && role.starts_with("pcin") {
+        PinTiming::Through
+    } else if output {
+        if shape.launch.is_some() && !chained {
+            PinTiming::Start
+        } else {
+            PinTiming::Through
+        }
+    } else if shape.capture.is_some() {
+        PinTiming::End
+    } else {
+        PinTiming::Through
+    }
+}
 
 /// Whether `role` is a clock pin, which no path ends at.
 fn is_clock(role: &str) -> bool {
@@ -576,6 +663,50 @@ pub fn place_timing(
                     };
                 }
             }
+            "dsp" => {
+                // What a block's pins do depends on which registers it has:
+                // see `dsp_timing`. Anything that has one is in that clock's
+                // domain, and a block with none is a lookup table of 3.8 ns.
+                let cell_of = design.modules[top].cells.get(inst.cell);
+                let param = |name: &str| {
+                    cell_of
+                        .and_then(|c| c.params.get(name))
+                        .and_then(AttrValue::as_int)
+                        .unwrap_or(1)
+                };
+                let mut shape = dsp_timing(
+                    param("AREG").min(param("BREG")),
+                    param("MREG"),
+                    param("PREG"),
+                );
+                // A chain of sums: what comes in on `PCIN` goes through this
+                // block's adder to the next, `DSP_CASCADE` a block, and is what
+                // `fir8`'s 10.988 ns is made of. Without a `P` register that is
+                // the block's outputs followed from its cascade in alone: a
+                // chain's first block launches, and each after it adds to that,
+                // which is what the worst path through one is. With `P`, the
+                // chain ends at the setup Vivado gives it.
+                let cascade = inst.pins.iter().any(|p| {
+                    netlist.pins[*p].role.starts_with("pcin") && netlist.pins[*p].signal.is_some()
+                });
+                let chained = cascade && param("PREG") == 0;
+                if cascade && param("PREG") > 0 {
+                    shape.capture = shape.capture.map(|c| c.max(DSP_SETUP_CASCADE));
+                }
+                if chained {
+                    shape.through = DSP_CASCADE;
+                }
+                launch[index] = shape.launch.unwrap_or(0.0);
+                capture[index] = shape.capture.unwrap_or(0.0);
+                cell[index] = shape.through;
+                for pin in &inst.pins {
+                    let role = netlist.pins[*pin].role.as_str();
+                    pins[*pin] = dsp_pin(role, netlist.pins[*pin].output, &shape, chained);
+                }
+                if let Some(c) = clock {
+                    domain[index] = domain_of(clock_of(c));
+                }
+            }
             "mmcm" | "pll" | "sysmon" => {
                 // A clock manager's or the XADC's register port is a
                 // synchronous interface on its `DCLK`: the address, data
@@ -737,6 +868,42 @@ mod tests {
     /// `O6` too), and a mask that ignores the truth table; would not catch a
     /// table whose model differs from the silicon's, which the mapped
     /// netlist's own checks are for.
+    /// Each register setting against `report_timing`'s figure for it. Would
+    /// catch a register read for another or a setup taken from the wrong one.
+    /// Whether the figures hold of a placed path is a different question,
+    /// which only a comparison with Vivado's own routed report asks.
+    #[test]
+    fn a_blocks_paths_are_the_ones_its_registers_make() {
+        let none = dsp_timing(0, 0, 0);
+        assert_eq!((none.launch, none.capture), (None, None));
+        assert!((none.through - 3.841).abs() < 1e-9);
+        assert_eq!(dsp_timing(0, 0, 1).launch, Some(0.434));
+        assert_eq!(dsp_timing(0, 0, 1).capture, Some(3.722));
+        assert_eq!(dsp_timing(0, 1, 0).launch, Some(2.305));
+        assert_eq!(dsp_timing(0, 1, 0).capture, Some(1.928));
+        assert_eq!(dsp_timing(1, 0, 0).launch, Some(4.009));
+        assert_eq!(dsp_timing(2, 1, 1).capture, Some(0.45));
+        assert_eq!(dsp_timing(2, 1, 1).launch, Some(0.434));
+    }
+
+    /// **A chain of sums is one long path**, as Vivado's timer has `fir8`'s: `PCIN`
+    /// goes on to `PCOUT` through a block with no `P`, and ends at a block with one.
+    /// Would catch each block's cascade ending there, which is what made `fir8` look
+    /// like 4.9 ns beside Vivado's 10.988; would not catch a figure wrong, or say
+    /// that the estimate of a routed chain agrees with Vivado's, which nothing has.
+    #[test]
+    fn a_chain_of_sums_is_one_long_path() {
+        let mut middle = dsp_timing(2, 1, 0);
+        middle.through = DSP_CASCADE;
+        assert_eq!(dsp_pin("pcin7", false, &middle, true), PinTiming::Through);
+        assert_eq!(dsp_pin("pcout7", true, &middle, true), PinTiming::Through);
+        assert_eq!(dsp_pin("a3", false, &middle, true), PinTiming::End);
+        assert_eq!(dsp_pin("clk", false, &middle, true), PinTiming::Ignored);
+        let last = dsp_timing(2, 1, 1);
+        assert_eq!(dsp_pin("pcin7", false, &last, false), PinTiming::End);
+        assert_eq!(dsp_pin("p3", true, &last, false), PinTiming::Start);
+    }
+
     #[test]
     fn a_paired_tables_inputs_reach_the_half_that_reads_them() {
         let mut init = Const::zero(64);

@@ -1,0 +1,1 @@
+# What Vivado 2026.1 wrote for k_small; tools/vivado-parity/dsp_answers.py.

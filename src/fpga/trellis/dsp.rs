@@ -35,7 +35,7 @@
 //! away — is not what anyone writes on purpose.
 //!
 //! The command line turns DSP inference off whenever a bitstream is
-//! asked for, whatever the family, because no backend here can place
+//! asked for, on every family but the 7-series, because no other backend here can place
 //! one; this refusal is for a `MULT18X18D` that reaches the backend
 //! anyway, instantiated by hand in the source.
 

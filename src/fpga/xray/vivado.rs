@@ -123,6 +123,21 @@ fn site_and_bel(
     if bel.starts_with("RAMB18_") {
         return Some((site_named(bel)?, "RAMB18E1".to_owned()));
     }
+    if let Some(block) = bel.strip_prefix("DSP_") {
+        // A tile's two blocks, `DSP_0` the lower: see `dsp::bel_name`.
+        let block: usize = block.parse().ok()?;
+        let mut sites: Vec<&String> = tile
+            .sites
+            .iter()
+            .filter(|(_, kind)| kind == "DSP48E1")
+            .map(|(name, _)| name)
+            .collect();
+        sites.sort_by_key(|name| {
+            name.rsplit_once('Y')
+                .and_then(|(_, y)| y.parse::<u32>().ok())
+        });
+        return Some(((*sites.get(block)?).clone(), "DSP48E1".to_owned()));
+    }
     if bel.starts_with("IOB_") {
         let name = match primitive {
             "IBUF" => "INBUF_EN",
@@ -757,6 +772,23 @@ mod tests {
 
     /// A slice's bels are spelled as `get_bels` spells them; the file's other
     /// checks of these spellings are Vivado's refusal when one is wrong.
+    #[test]
+    fn a_blocks_bel_is_the_site_of_its_rank_up_the_tile() {
+        let dsp = tile(&[
+            ("DSP48_X2Y39", "DSP48E1"),
+            ("DSP48_X2Y38", "DSP48E1"),
+            ("TIEOFF_X50Y95", "TIEOFF"),
+        ]);
+        assert_eq!(
+            site_and_bel(&dsp, "DSP_0", "DSP48E1", false),
+            Some(("DSP48_X2Y38".to_owned(), "DSP48E1".to_owned()))
+        );
+        assert_eq!(
+            site_and_bel(&dsp, "DSP_1", "DSP48E1", false),
+            Some(("DSP48_X2Y39".to_owned(), "DSP48E1".to_owned()))
+        );
+    }
+
     #[test]
     fn a_slice_bel_is_spelled_as_vivado_spells_it() {
         let t = tile(&[("SLICE_X10Y3", "SLICEM"), ("SLICE_X11Y3", "SLICEL")]);

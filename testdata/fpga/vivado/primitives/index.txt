@@ -80,7 +80,7 @@ block RAMB18E1 gap
 block RAMB36E1 gap
 block FIFO18E1 gap
 block FIFO36E1 gap
-block DSP48E1 gap
+block DSP48E1 ok
 clock BUFG ok
 clock BUFGCE ok
 clock BUFGCE_1 ok
