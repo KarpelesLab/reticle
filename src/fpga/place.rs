@@ -5016,7 +5016,7 @@ fn confine_regional_clocks(
                     let (x, y) = graph.sites[**site].tile;
                     x.abs_diff(centre.0) + y.abs_diff(centre.1)
                 })
-                .and_then(&served)
+                .and_then(served)
         });
         let Some(region) = region else {
             continue;

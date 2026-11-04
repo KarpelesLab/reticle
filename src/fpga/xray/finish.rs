@@ -521,7 +521,7 @@ impl XrayDatabase {
                         )));
                     };
                     for bit in &f.ones {
-                        set_bit(frames, tile, *bit).map_err(&malformed)?;
+                        set_bit(frames, tile, *bit).map_err(malformed)?;
                         count += 1;
                     }
                     Ok(())
