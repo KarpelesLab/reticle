@@ -745,8 +745,13 @@ pub fn place_timing(
             _ => {
                 // A flip-flop, a block RAM, and anything else clocked
                 // starts paths at its outputs and ends them at its inputs.
+                // A latch is timed as a flip-flop on `G`, which is the edge
+                // that closes it: what it holds starts a path and what it
+                // takes ends one. A path *through* an open latch, which is
+                // what time borrowing is, is not followed, so a design that
+                // relies on one is timed as if it could not.
                 (launch[index], capture[index]) = match kind {
-                    "ff" => (FF_LAUNCH, FF_SETUP),
+                    "ff" | "latch" => (FF_LAUNCH, FF_SETUP),
                     "bram" => (BRAM_LAUNCH, BRAM_SETUP),
                     _ => (FF_LAUNCH, FF_SETUP),
                 };
@@ -957,6 +962,7 @@ mod tests {
             pins,
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut reaches = vec![u8::MAX; netlist.pins.len()];
         lut_reaches(&netlist, 0, &init, &mut reaches);
@@ -1030,6 +1036,7 @@ mod tests {
             pins,
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut map = crate::source::SourceMap::new();
         let file = map.add("t.rcf", "").unwrap();
@@ -1135,6 +1142,7 @@ mod tests {
             pins,
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut map = crate::source::SourceMap::new();
         let file = map.add("t.rcf", "").unwrap();
@@ -1231,6 +1239,7 @@ mod tests {
             pins,
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut map = crate::source::SourceMap::new();
         let file = map.add("t.rcf", "").unwrap();
@@ -1356,6 +1365,7 @@ mod tests {
             pins,
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let period_of = |rcf: &str, instance: usize| -> (String, f64) {
             let mut diags = crate::diag::Diagnostics::new();

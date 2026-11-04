@@ -508,7 +508,13 @@ pub fn synthesize_for(
     // reader of them would be reported further down, by the hundred, and
     // not one of those reports would name the cause. Refuse here, at the
     // instantiation, before anything is mapped.
-    let primitives = device.primitive_names();
+    let mut primitives = device.primitive_names();
+    primitives.extend(
+        unresolved_names(design)
+            .into_iter()
+            .filter(|name| super::retarget(&device.family, name).is_some()),
+    );
+    let primitives: Vec<&str> = primitives;
     let supplier = format!("the device `{}`", device.name);
     if design.check_instance_targets(module, &primitives, &supplier, diags) > 0 {
         return Err(FlowError::UndefinedModule);
@@ -557,6 +563,7 @@ pub fn synthesize_for(
 
     // 2. What the device does in hard logic, while the shapes that say so
     // are still recognisable.
+    super::techcells::shape_latches(&mut design.modules[module], device);
     report.primitives =
         super::primitives::map(design, module, device, constraints, &options.map, diags);
 
@@ -614,6 +621,117 @@ pub fn synthesize_for(
         );
     }
     Ok(report)
+}
+
+/// Every module name an instance of the design leaves unresolved.
+#[cfg(feature = "synth")]
+fn unresolved_names(design: &Design) -> Vec<&str> {
+    let mut out = Vec::new();
+    for (_, module) in design.modules.iter() {
+        for (_, inst) in module.instances.iter() {
+            if let crate::ir::ModuleRef::Unresolved(name) = &inst.module {
+                out.push(name.as_str());
+            }
+        }
+    }
+    out
+}
+
+/// A latch a design names, as what Vivado makes of it ([`super::retarget`]):
+/// the primitive, its open pins tied, and its gate's inversion and its power-up
+/// value as parameters.
+///
+/// A slice has no inverter on a latch's clear (`IS_CLR_INVERTED`) and one
+/// bit for a whole slice on its gate, so the clear costs a lookup table and
+/// is left to the design: it is refused here rather than ignored. So is a
+/// latch whose enable is tied low or whose clear is tied high, which holds a
+/// value forever: nothing in a slice's bits says that, and nothing here would
+/// build it. An unused `GE` reads one and an unused `CLR` zero, which are the
+/// only constants that cost nothing.
+#[cfg(feature = "synth")]
+fn retarget_latch(
+    m: &mut crate::ir::Module,
+    inst: &mut crate::ir::Instance,
+    device: &Device,
+    diags: &mut Diagnostics,
+) -> bool {
+    use crate::ir::{AttrValue, ModuleRef, Name};
+    let ModuleRef::Unresolved(primitive) = &inst.module else {
+        return true;
+    };
+    let primitive = primitive.as_str().to_owned();
+    let Some(to) = super::retarget(&device.family, &primitive) else {
+        return true;
+    };
+    let span = inst.span;
+    let flag = |params: &crate::ir::Attrs, key: &str| {
+        params
+            .get(key)
+            .and_then(AttrValue::as_int)
+            .is_some_and(|v| v & 1 == 1)
+    };
+    let inverted_set_reset = ["IS_CLR_INVERTED", "IS_PRE_INVERTED"]
+        .into_iter()
+        .find(|key| flag(&inst.params, key));
+    if let Some(key) = inverted_set_reset {
+        diags.push(
+            Diagnostic::error(format!(
+                "`{}`: a slice has no inverter on a latch's set or reset, so `{key}` cannot be \
+                 built",
+                inst.name
+            ))
+            .with_span(span)
+            .with_note("invert the signal in the design: it costs a lookup table either way"),
+        );
+        return false;
+    }
+    let gate_inverted = flag(&inst.params, "IS_G_INVERTED") != to.gate_inverted;
+    for (key, value) in [("GE", 1u64), ("CLR", 0), ("PRE", 0)] {
+        let held = inst
+            .connection(key)
+            .and_then(|e| m.expr(e).as_const())
+            .and_then(|c| c.to_u64());
+        if held.is_some_and(|held| held != value) {
+            diags.push(
+                Diagnostic::error(format!(
+                    "`{}`: a latch with `{key}` tied to {} never changes, and this flow has no \
+                     bits for one",
+                    inst.name,
+                    1 - value
+                ))
+                .with_span(span),
+            );
+            return false;
+        }
+    }
+    inst.module = ModuleRef::Unresolved(Name::new(to.to));
+    inst.params.remove("IS_G_INVERTED");
+    inst.params.remove("IS_CLR_INVERTED");
+    inst.params.remove("IS_PRE_INVERTED");
+    if gate_inverted {
+        inst.params.set(Name::new("IS_G_INVERTED"), 1i64);
+    }
+    if let Some(bel) = device.bels.iter().find(|b| b.name == to.to) {
+        for (key, value) in &bel.params {
+            if inst.params.get(key).is_none() {
+                inst.params.set(Name::new(key.clone()), value.clone());
+            }
+        }
+        // The pins the source primitive has not got, or left open, at the
+        // level a slice reads with both use bits clear: the netlist then says
+        // what the part does, and simulating it finds nothing undriven.
+        for (role, value) in [
+            ("en", crate::ir::Const::ones(1)),
+            ("rst", crate::ir::Const::zero(1)),
+        ] {
+            let Some(port) = bel.port(role) else { continue };
+            if inst.connection(port).is_none() {
+                let e = super::primitives::const_expr(m, value, span);
+                inst.connections.push((Name::new(port), e));
+            }
+        }
+    }
+    true
 }
 
 /// Turns every instance of a device primitive left in `module` into a
@@ -728,7 +846,11 @@ fn primitive_instances(
     let ids: Vec<InstanceId> = m.instances.iter().map(|(id, _)| id).collect();
     let mut done: Vec<InstanceId> = Vec::new();
     for id in ids {
-        let inst = m.instances[id].clone();
+        let mut inst = m.instances[id].clone();
+        if !retarget_latch(m, &mut inst, device, diags) {
+            refused += 1;
+            continue;
+        }
         let ModuleRef::Unresolved(primitive) = &inst.module else {
             continue;
         };

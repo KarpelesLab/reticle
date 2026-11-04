@@ -45,7 +45,7 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 87 of the 141.** `index.txt` says which;
+**Reticle builds 94 of the 141.** `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
 to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
 
@@ -56,11 +56,10 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 54 that do not build, by what stops them:
+The 47 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
-| no latch on the fabric yet | `LDCE`, `LDPE`, `LD`, `LDC`, `LDP`, `LDCE_1`, `LDPE_1` |
 | block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
 | clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
 | clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
@@ -77,6 +76,56 @@ does not: the first run's refusals are design rules (`REQP-1884`, `REQP-1939`,
 `reticle fpga --device <part> --decode <file.bit>` prints what any 7-series `.bit`
 sets, each set bit the database has no name for, and each frame whose ECC is wrong. It is how to ask what Vivado
 wrote.
+
+## A latch, against what Vivado wrote for it
+
+`$dlatch` and the twelve latch primitives become the slice's own latch, on a
+bel of their own beside each of the four main flip-flops. This was done by asking:
+`testdata/fpga/vivado/slice_cells/` holds a design per form, 26 of them with a
+latch, `tools/vivado-parity/gen_slice_cells.py` wrote them, and `vivado.features`
+is what each of Vivado's bitstreams decodes to through `reticle fpga --decode`.
+
+**Checked: all 26 agree** (`every_latch_is_what_vivado_wrote`, ignored because it
+builds them all; four in the gate): the slice-wide bits (`LATCH`, `CLKINV`,
+`FFSYNC`, `CEUSEDMUX`, `SRUSEDMUX`), each element's (`ZINI`, `ZRST`, its data mux),
+and which of `CLK` and `SR` the interconnect drives, with the lane written `L`
+because the tools place differently. Each design but one is also simulated
+beside its netlist after routing, over 800 known outputs: all agree, 0 bits
+unexplained in every image, and the arcs chosen are the arcs decoded. The one is
+`infer_latch_en`, whose gate is a lookup table in both tools' results and closes a
+step after its data moves in a simulation with no delays. **None of it has been on a
+board.**
+
+What asking found, none of which the database says and one of which the reading
+got wrong:
+
+- **`CLKINV` is the other way round from a flip-flop.** A latch open while `G` is
+  high sets it; `LD_1` and `IS_G_INVERTED` clear it. The reading from
+  `sites::bel_config`'s table, that the bit means "the `_1` primitives", would have
+  built every latch with its gate inverted, and it would have placed, routed and
+  decoded with nothing to say so. The first thing written here was that table
+  extended; the comparison is what stopped it.
+- **Vivado has two latches, not twelve.** `LD`, `LDC`, `LDE` and every `_1` come back
+  from its synthesis as `LDCE` with pins tied or `IS_G_INVERTED` set, and `LDP` as
+  `LDPE`. `fpga::retarget` does the same, so the behavioural models in
+  `xc7_cells.v`, which would put a lookup table on a gate, are for simulation.
+- **An inferred latch has a clear if its source does.** `if (r) l = 0; else if (g)
+  l = d;` is `LDCE` with `CLR = r`, not a table on the gate; `if (!g)` is
+  `IS_G_INVERTED`, not an inverter. `techcells::shape_latches` reads those while the
+  cells are there. `if (a && b)` is a table in Vivado's too.
+- **`IS_CLR_INVERTED = 1` does not build**: Vivado's placer says "could not place
+  all instances". There is no such inverter in a slice. Reticle refuses it by name.
+- **The 5FF slots.** Vivado refuses a latch on `A5FF` by name ("bel type (FF_INIT) do
+  not match the cell type (LDCE)") and refuses a flip-flop in a slice with one
+  ("Cannot set LOC property"), so there are four latch bels a slice and
+  `place::slice_mode` keeps the two apart. `infer_latch_wide`'s ten latches take
+  three slices in both.
+- A latch's gate goes on the global network only when the net is a clock of
+  something else (`ldce_gclk`, `CLK0.GCLK_B11`): a gate does not ask for a buffer.
+
+Not checked and not done: a path through an open latch is not timed. A latch is
+timed as a flip-flop on `G`, so a design relying on time borrowing is timed as if it
+could not, which is on the safe side for setup and says nothing of hold.
 
 ## What each makes of the same design
 

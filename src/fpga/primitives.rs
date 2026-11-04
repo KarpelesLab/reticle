@@ -5729,6 +5729,40 @@ impl Mapper<'_> {
         // clock pins as it is bits wide, since that is what it becomes
         // once it is mapped; a memory port is one.
         let mut fanout: BTreeMap<String, ClockFanout> = BTreeMap::new();
+        // A latch's gate goes with a clock that has a buffer anyway and does
+        // not ask for one: Vivado leaves a gate on general interconnect
+        // unless the net is a clock of something else
+        // (`testdata/fpga/vivado/slice_cells/ldce_gclk`, `ld`).
+        let latch_gate = self
+            .device
+            .bels
+            .iter()
+            .filter(|b| b.role == BelRole::Latch)
+            .find_map(|b| b.port("clk").map(|port| (b.name.clone(), port.to_owned())));
+        let mut gates: Vec<(NetId, CellId, String)> = Vec::new();
+        for (id, cell) in module.cells.iter() {
+            let gate = match &cell.kind {
+                CellKind::Dlatch => Some("en".to_owned()),
+                CellKind::Blackbox(primitive) => latch_gate
+                    .as_ref()
+                    .filter(|_| {
+                        self.device
+                            .bels
+                            .iter()
+                            .any(|b| b.role == BelRole::Latch && b.name == primitive.as_str())
+                    })
+                    .map(|(_, port)| port.clone()),
+                _ => None,
+            };
+            if let Some(port) = gate
+                && let Some(net) = cell
+                    .input(&port)
+                    .and_then(|e| module.exprs.get(e))
+                    .and_then(Expr::as_net)
+            {
+                gates.push((net, id, port));
+            }
+        }
         for (id, cell) in module.cells.iter() {
             let ports: Vec<(usize, String)> = match &cell.kind {
                 CellKind::Dff { .. } => vec![(
@@ -5872,7 +5906,11 @@ impl Mapper<'_> {
                 span,
             );
             let replacement = net_expr(module, buffered, span);
-            for (id, port) in cells {
+            let followers = gates
+                .iter()
+                .filter(|(on, _, _)| *on == net)
+                .map(|(_, id, port)| (*id, port.clone()));
+            for (id, port) in cells.into_iter().chain(followers) {
                 if let Some(slot) = module.cells[id]
                     .inputs
                     .iter_mut()

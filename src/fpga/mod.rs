@@ -288,6 +288,43 @@ pub fn cell_source(family: &str, names: &[String]) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
+/// What a primitive of `family` that the device does not declare becomes,
+/// for a primitive that is the same silicon as one it does.
+///
+/// This is what Vivado's synthesis does with them, read off its netlist for
+/// every name here (`testdata/fpga/vivado/slice_cells/`): twelve latches go in
+/// and `LDCE` and `LDPE` come out. A design that names one of these therefore
+/// skips the cell library's behavioural model and gets the slice's own latch,
+/// where the model would have put a lookup table on its gate.
+#[must_use]
+pub fn retarget(family: &str, primitive: &str) -> Option<Retarget> {
+    if family != "xc7" {
+        return None;
+    }
+    let (name, inverted) = match primitive.strip_suffix("_1") {
+        Some(name) => (name, true),
+        None => (primitive, false),
+    };
+    let to = match name {
+        "LDCE" | "LD" | "LDC" | "LDE" => "LDCE",
+        "LDPE" | "LDP" => "LDPE",
+        _ => return None,
+    };
+    Some(Retarget {
+        to,
+        gate_inverted: inverted,
+    })
+}
+
+/// One answer of [`retarget`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retarget {
+    /// The primitive the device declares.
+    pub to: &'static str,
+    /// The primitive's name said to invert the gate (`LD_1`).
+    pub gate_inverted: bool,
+}
+
 static BUILTINS: OnceLock<DeviceDb> = OnceLock::new();
 
 /// The database of devices compiled into the crate.

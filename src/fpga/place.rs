@@ -574,6 +574,11 @@ pub struct Netlist {
     /// the module: [`Netlist::build`] takes the `device`, which is what
     /// says a mode sterilises anything, and the placer takes a `Netlist`.
     pub sterilises: Vec<Vec<(i32, i32)>>,
+    /// Per instance, whether a parameter inverts its clock or gate, which a
+    /// slice has one bit for and the placer has to know (`slice_mode`). May
+    /// be shorter than [`Netlist::instances`]: an instance past its end has no
+    /// such parameter.
+    pub gate_inverted: Vec<bool>,
 }
 
 impl Netlist {
@@ -605,6 +610,7 @@ impl Netlist {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         if let Some((_, instance)) = m.instances.iter().next() {
             return Err(PlaceError::Instance {
@@ -735,6 +741,15 @@ impl Netlist {
                 }
             }
             out.sterilises.push(sterilised_by(device, &primitive, cell));
+            out.gate_inverted
+                .push(
+                    cell.params
+                        .get("IS_G_INVERTED")
+                        .is_some_and(|value| match value {
+                            crate::ir::AttrValue::Const(c) => c.bit(0) == crate::logic::Bit::One,
+                            other => other.as_int().is_some_and(|v| v & 1 == 1),
+                        }),
+                );
             out.instances.push(Instance {
                 cell: id,
                 name: cell.name.as_str().to_owned(),
@@ -1776,7 +1791,16 @@ const MAX_POOL: usize = 8;
 /// primitives are named here because the device file does not say which
 /// share a field; any other family's flip-flops get zero, and are placed
 /// as before.
-fn slice_mode(primitive: &str) -> u8 {
+///
+/// A latch sets the slice's `LATCH` for all eight elements too, and its gate
+/// is `CLKINV`, so it shares a slice only with a latch of the same polarity.
+/// Its polarity is a parameter, `gate_inverted`, as Vivado has it.
+fn slice_mode(primitive: &str, gate_inverted: bool) -> u8 {
+    match (primitive, gate_inverted) {
+        ("LDCE" | "LDPE", false) => return 5,
+        ("LDCE" | "LDPE", true) => return 6,
+        _ => {}
+    }
     let (base, inverted) = match primitive.strip_suffix("_1") {
         Some(base) => (base, true),
         None => (primitive, false),
@@ -1911,7 +1935,11 @@ impl SiteRules {
             mode: netlist
                 .instances
                 .iter()
-                .map(|i| slice_mode(&i.primitive))
+                .enumerate()
+                .map(|(i, instance)| {
+                    let inverted = netlist.gate_inverted.get(i).copied().unwrap_or(false);
+                    slice_mode(&instance.primitive, inverted)
+                })
                 .collect(),
             sterilises: Vec::new(),
             sterilise_to: Vec::new(),
@@ -8421,6 +8449,7 @@ mod tests {
             off_fabric: Vec::new(),
             // Only the first one is in the 18-bit mode.
             sterilises: vec![vec![(2, 0)], Vec::new()],
+            gate_inverted: Vec::new(),
         };
         let rules = SiteRules::find(&netlist, &graph);
         assert!(!rules.trivial(), "the rule has to be looked at");
@@ -8467,6 +8496,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: vec![Vec::new(), Vec::new()],
+            gate_inverted: Vec::new(),
         };
         assert!(
             SiteRules::find(&narrow, &graph).trivial(),
@@ -8537,6 +8567,7 @@ mod tests {
             ],
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let found = netlist.driverless();
         assert_eq!(
@@ -8587,6 +8618,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for i in 0..n {
             let instance = netlist.instances.len();
@@ -8920,6 +8952,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut chain = |kinds: &[&str]| {
             let first_signal = netlist.signals.len();
@@ -9043,6 +9076,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut connect = |driver_kind: &str, sink_kind: &str| {
             let signal = netlist.signals.len();
@@ -9336,6 +9370,7 @@ mod tests {
             }],
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for i in 0..=n {
             let instance = netlist.instances.len();
@@ -9491,6 +9526,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let none: &[usize] = &[];
         let reads = [none, none, reads[0], reads[1], reads[2], reads[3]];
@@ -10001,6 +10037,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let pin = |netlist: &mut Netlist, instance, role: &str, output, signal: usize| {
             let index = netlist.pins.len();
@@ -10291,6 +10328,7 @@ mod tests {
             ],
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for (name, kind) in [("cy", "carry"), ("ff", "ff")] {
             lone.instances.push(Instance {
@@ -10818,6 +10856,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for g in 0..groups {
             netlist.signals.push(Signal {
@@ -11128,6 +11167,7 @@ mod tests {
                 .collect(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for (instance, (kind, pins)) in ["lut", "ff", "carry"].iter().zip(pins).enumerate() {
             let mut own = Vec::new();
@@ -11280,6 +11320,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let rules = SiteRules::find(&netlist, &graph);
         let mut placement = Placement::new(3, graph.sites.len());
@@ -11434,6 +11475,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for g in 0..groups {
             netlist.signals.push(Signal {
@@ -11672,6 +11714,7 @@ mod tests {
             }],
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {
@@ -11796,6 +11839,7 @@ mod tests {
                 .collect(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut pins = vec![PinTiming::Ignored; roles.len()];
         for (index, (instance, role, output, signal)) in roles.into_iter().enumerate() {
@@ -12005,6 +12049,7 @@ mod tests {
             ],
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let info: Vec<Placeable> = (0..4)
             .map(|_| Placeable {
@@ -12091,6 +12136,7 @@ mod tests {
                 .collect(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for (instance, clock) in clocks.iter().enumerate() {
             let pin = netlist.pins.len();
@@ -12149,6 +12195,42 @@ mod tests {
                 shared.refusal(&placement, 1, 1).is_none(),
                 allowed,
                 "{other}"
+            );
+        }
+    }
+
+    /// **A latch shares a slice only with a latch of its own polarity**, because
+    /// `LATCH` is one bit for the slice and its gate is the slice's `CLKINV`. An
+    /// `LDCE` beside an `LDPE` is allowed, as Vivado's `ldce_two` has it, and
+    /// beside a flip-flop of any kind or a latch with the other gate it is
+    /// refused. Would catch the mode lost for a latch, which no build in
+    /// `tests/fpga_xray_slice_cells.rs` does, since its placements never happen
+    /// to try it: a slice with `LATCH` set and a flip-flop in it decodes cleanly
+    /// and the flip-flop is a latch. Vivado refuses the same pair by name.
+    #[test]
+    fn a_latch_shares_a_slice_only_with_a_latch_of_its_own_polarity() {
+        let (_, graph) = clocked(1);
+        for (other, inverted, allowed) in [
+            ("LDPE", false, true),
+            ("LDCE", false, true),
+            ("LDPE", true, false),
+            ("LDCE", true, false),
+            ("FDRE", false, false),
+            ("FDCE", false, false),
+            ("FDRE_1", false, false),
+            ("FDCE_1", false, false),
+        ] {
+            let mut netlist = clocked_by(&[0, 0]);
+            netlist.instances[0].primitive = "LDCE".to_owned();
+            netlist.instances[1].primitive = other.to_owned();
+            netlist.gate_inverted = vec![false, inverted];
+            let shared = SiteRules::find(&netlist, &graph);
+            let mut placement = Placement::new(2, graph.sites.len());
+            placement.place(0, 0);
+            assert_eq!(
+                shared.allows(&placement, &[(1, 1)]),
+                allowed,
+                "an LDCE beside an {other}, gate inverted {inverted}"
             );
         }
     }

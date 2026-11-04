@@ -470,6 +470,10 @@ pub enum BelRole {
     GlobalBuffer,
     /// A LUT used as a small distributed RAM.
     LutRam,
+    /// A level-sensitive latch in a slice's storage element (`LDCE`,
+    /// `LDPE`). It has a flip-flop's five pins, with the gate on `clk`, and
+    /// mapping never chooses it for a `$dff`.
+    Latch,
     /// A block RAM; its shape is in [`BramShape`].
     Bram,
     /// A DSP block; its shape is in [`DspShape`].
@@ -512,13 +516,14 @@ pub enum BelRole {
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 17] = [
+    pub const ALL: [BelRole; 18] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
         BelRole::Io,
         BelRole::GlobalBuffer,
         BelRole::LutRam,
+        BelRole::Latch,
         BelRole::Bram,
         BelRole::Dsp,
         BelRole::Pll,
@@ -541,6 +546,7 @@ impl BelRole {
             BelRole::Io => "io",
             BelRole::GlobalBuffer => "gb",
             BelRole::LutRam => "lutram",
+            BelRole::Latch => "latch",
             BelRole::Bram => "bram",
             BelRole::Dsp => "dsp",
             BelRole::Pll => "pll",

@@ -3169,7 +3169,7 @@ pub const ROUTE_PASSES: u32 = 100;
 #[must_use]
 pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
     match kind {
-        "ff" => &["clk"],
+        "ff" | "latch" => &["clk"],
         "lutram" => &["wclk"],
         "bram" => &["p0_clk", "p1_clk"],
         "mmcm" => &["dclk", "psclk"],

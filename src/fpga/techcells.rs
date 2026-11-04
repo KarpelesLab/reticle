@@ -262,6 +262,7 @@ pub fn map_cells(
     };
     map_luts(module, device, &mut report, diags);
     map_flip_flops(module, device, &mut report, diags);
+    map_latches(module, device, &mut report);
     drive_constant_data(module, device, &mut report, diags);
     report.wide_tables = legalise_wide_muxes(module, device);
     report
@@ -1028,6 +1029,312 @@ fn set_params(cell: &mut Cell, bel: &BelKind) {
     }
 }
 
+// --- latches ------------------------------------------------------------------
+
+/// The device's latch primitive that a reset drives to `one`: `LDPE` or `LDCE`
+/// on the 7 series, told apart by what their `INIT` defaults to.
+fn latch_bel(device: &Device, one: bool) -> Option<BelKind> {
+    let wanted = if one { Bit::One } else { Bit::Zero };
+    device
+        .bels
+        .iter()
+        .find(|b| {
+            b.role == BelRole::Latch
+                && b.params.iter().any(|(key, value)| {
+                    key == "INIT" && matches!(value, AttrValue::Const(c) if c.bit(0) == wanted)
+                })
+        })
+        .cloned()
+}
+
+/// What one `$dlatch` is, once its enable and its data have been read.
+struct LatchShape {
+    /// The primitive: [`latch_bel`] of what `rst` drives it to.
+    bel: BelKind,
+    /// The gate.
+    gate: ExprId,
+    /// The gate's sense is low, which is a slice's `CLKINV`.
+    gate_inverted: bool,
+    /// The data.
+    data: ExprId,
+    /// The set or reset, if it has one.
+    rst: Option<ExprId>,
+}
+
+/// Replaces the `$dlatch` cell `id` with one primitive per bit.
+fn emit_latch(
+    module: &mut Module,
+    id: CellId,
+    shape: &LatchShape,
+    report: Option<&mut CellMapReport>,
+) {
+    let cell = &module.cells[id];
+    let name = cell.name.as_str().to_owned();
+    let span = cell.span;
+    let Some(q) = cell.output("q") else { return };
+    let width = module.nets.get(q).and_then(|n| n.ty.width()).unwrap_or(1);
+    let init = match module.nets.get(q).and_then(|n| n.attrs.get("init")) {
+        Some(AttrValue::Const(c)) => Some(c.clone()),
+        _ => None,
+    };
+    let bel = &shape.bel;
+    let mut bits = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
+    for bit in 0..width {
+        let d_bit = if width == 1 {
+            shape.data
+        } else {
+            slice_expr(module, shape.data, bit, bit, span)
+        };
+        let net = if width == 1 {
+            q
+        } else {
+            add_net(module, &format!("{name}$q{bit}"), Type::bit(), span)
+        };
+        let mut inputs = vec![
+            (Name::new(bel.port("clk").unwrap_or("G")), shape.gate),
+            (Name::new(bel.port("d").unwrap_or("D")), d_bit),
+        ];
+        // Not `connect_control`: a latch has no `FfVariant` to say which of
+        // the two it uses. An unused enable is high and an unused reset low,
+        // which a slice reads with both of its use bits clear.
+        if let Some(port) = bel.port("en") {
+            let high = const_expr(module, Const::ones(1), span);
+            inputs.push((Name::new(port), high));
+        }
+        if let Some(port) = bel.port("rst") {
+            let reset = shape
+                .rst
+                .unwrap_or_else(|| const_expr(module, Const::zero(1), span));
+            inputs.push((Name::new(port), reset));
+        }
+        let new = add_cell(
+            module,
+            &format!("{name}$l{bit}"),
+            CellKind::Blackbox(Name::new(bel.name.clone())),
+            inputs,
+            vec![(Name::new(bel.port("q").unwrap_or("Q")), net)],
+            span,
+        );
+        set_params(&mut module.cells[new], bel);
+        set_init(&mut module.cells[new], bel, init.as_ref(), bit);
+        if shape.gate_inverted {
+            module.cells[new]
+                .params
+                .set(Name::new("IS_G_INVERTED"), 1i64);
+        }
+        bits.push(net_expr(module, net, span));
+    }
+    if let Some(report) = report {
+        report.bump(&bel.name, width);
+    }
+    if width > 1 {
+        bits.reverse();
+        let value = expr(module, ExprKind::Concat(bits), span);
+        add_assign(module, q, value, span);
+    }
+}
+
+/// The `$dlatch` cells whose enable and data say a slice's latch has a pin or
+/// a polarity for them, as those primitives, while the cells that say so are
+/// still there to read. The lookup table mapper would otherwise fold them
+/// into a table on the gate.
+///
+/// Three shapes, each what Vivado's synthesis makes of the same source
+/// (`testdata/fpga/vivado/slice_cells/infer_latch_*`):
+///
+/// | source | cells | becomes |
+/// |---|---|---|
+/// | `if (!g) l = d;` | `en = !g` | `LDCE`, `G = g`, `IS_G_INVERTED` |
+/// | `if (r) l = 0; else if (g) l = d;` | `en = r \\| g`, `d = !r & d` (or a `mux` when wide) | `LDCE`, `CLR = r` |
+/// | `if (r) l = 1; else if (g) l = d;` | `en = r \\| g`, `d = r \\| d` (or a `mux`) | `LDPE`, `PRE = r` |
+///
+/// The second and third are not only smaller. With a lookup table on the gate
+/// the latch is opened by a function of two signals, which may glitch; on the
+/// pins the clear is the slice's own. Anything else stays a `$dlatch` for
+/// [`map_cells`], with its enable a lookup table, as Vivado leaves an
+/// `if (a && b)` (`infer_latch_en`).
+pub fn shape_latches(module: &mut Module, device: &Device) {
+    let (Some(ldce), Some(ldpe)) = (latch_bel(device, false), latch_bel(device, true)) else {
+        return;
+    };
+    // Which cell drives each net with what, for the kinds a shape is built of.
+    let mut drivers: BTreeMap<NetId, CellId> = BTreeMap::new();
+    for (id, cell) in module.cells.iter() {
+        if matches!(
+            cell.kind,
+            CellKind::Not | CellKind::And | CellKind::Or | CellKind::Mux
+        ) && let Some(out) = cell.output("y")
+        {
+            drivers.insert(out, id);
+        }
+    }
+    let net_of = |module: &Module, e: ExprId| module.exprs.get(e).and_then(|e| e.as_net());
+    let of_kind = |module: &Module, e: ExprId, kind: fn(&CellKind) -> bool| {
+        let net = net_of(module, e)?;
+        let id = *drivers.get(&net)?;
+        kind(&module.cells[id].kind).then_some(id)
+    };
+    // The bits an expression reads, for an expression that is a net or part
+    // of one: `sr[2]` written twice is two expressions and one wire.
+    let wire_of = |module: &Module, e: ExprId| -> Option<(NetId, Option<(u32, u32)>)> {
+        let expr = module.exprs.get(e)?;
+        match &expr.kind {
+            ExprKind::Net(net) => Some((*net, None)),
+            ExprKind::Slice { base, hi, lo } => {
+                Some((module.expr(*base).as_net()?, Some((*hi, *lo))))
+            }
+            ExprKind::Index { base, index } => {
+                let bit = u32::try_from(module.expr(*index).as_const()?.to_u64()?).ok()?;
+                Some((module.expr(*base).as_net()?, Some((bit, bit))))
+            }
+            _ => None,
+        }
+    };
+    let same = |module: &Module, a: ExprId, b: ExprId| {
+        a == b || matches!((wire_of(module, a), wire_of(module, b)), (Some(x), Some(y)) if x == y)
+    };
+    let inverse_of = |module: &Module, e: ExprId| {
+        let id = of_kind(module, e, |k| matches!(k, CellKind::Not))?;
+        module.cells[id].input("a")
+    };
+    let latches: Vec<CellId> = module
+        .cells
+        .iter()
+        .filter(|(_, c)| matches!(c.kind, CellKind::Dlatch))
+        .map(|(id, _)| id)
+        .collect();
+    let mut replaced = Vec::new();
+    for id in latches {
+        let cell = &module.cells[id];
+        let (Some(en), Some(d)) = (cell.input("en"), cell.input("d")) else {
+            continue;
+        };
+        // The data with `reset` taken out, and what `reset` drives it to.
+        let unset = |module: &Module, reset: ExprId| -> Option<(ExprId, bool)> {
+            if let Some(mux) = of_kind(module, d, |k| matches!(k, CellKind::Mux)) {
+                let mux = &module.cells[mux];
+                let (data, held, s) = (mux.input("a")?, mux.input("b")?, mux.input("s")?);
+                if !same(module, s, reset) {
+                    return None;
+                }
+                let value = module.expr(held).as_const()?;
+                let width = value.width();
+                if (0..width).all(|bit| value.bit(bit) == Bit::Zero) {
+                    return Some((data, false));
+                }
+                if (0..width).all(|bit| value.bit(bit) == Bit::One) {
+                    return Some((data, true));
+                }
+                return None;
+            }
+            if let Some(and) = of_kind(module, d, |k| matches!(k, CellKind::And)) {
+                let and = &module.cells[and];
+                let (a, b) = (and.input("a")?, and.input("b")?);
+                let complement = |x: ExprId| {
+                    inverse_of(module, x).is_some_and(|i| same(module, i, reset))
+                        || inverse_of(module, reset).is_some_and(|i| same(module, i, x))
+                };
+                if complement(a) {
+                    return Some((b, false));
+                }
+                if complement(b) {
+                    return Some((a, false));
+                }
+                return None;
+            }
+            let or = of_kind(module, d, |k| matches!(k, CellKind::Or))?;
+            let or = &module.cells[or];
+            let (a, b) = (or.input("a")?, or.input("b")?);
+            if same(module, a, reset) {
+                return Some((b, true));
+            }
+            if same(module, b, reset) {
+                return Some((a, true));
+            }
+            None
+        };
+        let mut gate = en;
+        let mut data = d;
+        let mut rst = None;
+        let mut one = false;
+        if let Some(or) = of_kind(module, en, |k| matches!(k, CellKind::Or)) {
+            let or = &module.cells[or];
+            if let (Some(a), Some(b)) = (or.input("a"), or.input("b")) {
+                for (reset, g) in [(a, b), (b, a)] {
+                    if let Some((plain, sets)) = unset(module, reset) {
+                        gate = g;
+                        data = plain;
+                        rst = Some(reset);
+                        one = sets;
+                        break;
+                    }
+                }
+            }
+        }
+        let inverted = inverse_of(module, gate);
+        let shape = LatchShape {
+            bel: if one { ldpe.clone() } else { ldce.clone() },
+            gate: inverted.unwrap_or(gate),
+            gate_inverted: inverted.is_some(),
+            data,
+            rst,
+        };
+        if shape.rst.is_some() || shape.gate_inverted {
+            emit_latch(module, id, &shape, None);
+            replaced.push(id);
+        }
+    }
+    if !replaced.is_empty() {
+        module.cells.retain(|id, _| !replaced.contains(&id));
+    }
+}
+
+/// Every `$dlatch` left becomes the device's [`BelRole::Latch`] primitive that
+/// resets to zero, one per bit: the enable on its gate, its own enable tied
+/// high and its reset tied low, which is what Vivado makes of the same source
+/// (`testdata/fpga/vivado/slice_cells/infer_latch`).
+///
+/// A device with no such primitive leaves the cell generic, and a later step
+/// says so: every family but the 7 series, today.
+fn map_latches(module: &mut Module, device: &Device, report: &mut CellMapReport) {
+    let Some(bel) = latch_bel(device, false) else {
+        return;
+    };
+    let latches: Vec<CellId> = module
+        .cells
+        .iter()
+        .filter(|(_, c)| matches!(c.kind, CellKind::Dlatch))
+        .map(|(id, _)| id)
+        .collect();
+    let mut replaced = Vec::new();
+    for id in latches {
+        let cell = &module.cells[id];
+        let (Some(en), Some(d), true) = (
+            cell.input("en"),
+            cell.input("d"),
+            cell.output("q").is_some(),
+        ) else {
+            let name = cell.name.as_str().to_owned();
+            report
+                .declined
+                .push((name, "the cell is not wired".to_owned()));
+            continue;
+        };
+        let shape = LatchShape {
+            bel: bel.clone(),
+            gate: en,
+            gate_inverted: false,
+            data: d,
+            rst: None,
+        };
+        emit_latch(module, id, &shape, Some(report));
+        replaced.push(id);
+    }
+    if !replaced.is_empty() {
+        module.cells.retain(|id, _| !replaced.contains(&id));
+    }
+}
+
 // --- a constant on a primitive's input pin ----------------------------------
 
 /// Whether a family *designs* this pin to take a constant, so leaving one
@@ -1086,7 +1393,7 @@ fn absorbs_constant(bel: &BelKind, port: &str) -> bool {
     }
     match bel.role {
         BelRole::Lut | BelRole::GlobalBuffer => true,
-        BelRole::Ff => port != "d",
+        BelRole::Ff | BelRole::Latch => port != "d",
         BelRole::Carry => matches!(port, "ci" | "cyinit" | "p" | "di") || port.ends_with("clk"),
         _ => matches!(port, "oe" | "oen" | "pad") || port.ends_with("clk"),
     }

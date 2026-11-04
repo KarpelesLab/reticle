@@ -319,7 +319,10 @@ fn lut5_wire(wires: &str, letter: impl std::fmt::Display) -> String {
 /// [`slice_pass_throughs`] describes and `place`'s exit rule keeps
 /// apart.
 fn slice_ff(sub: &str) -> Option<(char, bool)> {
-    let rest = sub.strip_suffix("FF")?;
+    // A latch is the same element on the same pins; see [`latch_lanes`].
+    let rest = sub
+        .strip_suffix("FF")
+        .or_else(|| sub.strip_suffix("LATCH"))?;
     let (letter, five) = match rest.strip_suffix('5') {
         Some(letter) => (letter, true),
         None => (rest, false),
@@ -359,6 +362,40 @@ fn shared_control_sources(shared: &str, index: u32) -> (String, String, String) 
         format!("{shared}_FAN{fan}"),
         format!("{shared}_CTRL{ctrl}"),
     )
+}
+
+/// The bels a slice's latches sit on, `<prefix>_ALATCH` to `DLATCH`, each with
+/// the flip-flop bel it shares its element with.
+///
+/// # What Vivado wrote, and what was wrong before it was asked
+///
+/// **Checked**, by decoding what Vivado 2026.1 wrote for every latch primitive
+/// (`testdata/fpga/vivado/slice_cells/`, `tools/vivado-parity/`):
+///
+/// - a latch sets the slice's `LATCH` and clears `FFSYNC`; an `LDCE` sets its
+///   element's `ZRST`, an `LDPE` does not, and `ZINI` is set when `INIT` is 0,
+///   all as for a flip-flop with an asynchronous reset to that value;
+/// - **`CLKINV` is set for a latch open while `G` is high, and clear for one
+///   open while it is low.** That is the opposite of what the same bit means
+///   to a flip-flop, where it is set for a falling edge. A reading from the
+///   flip-flop's table would have given every latch an inverted gate, placed,
+///   routed, every bit decoding, and each one holding when it should follow:
+///   this is the line the comparison exists for;
+/// - `G` reaches the slice's `CLK`, `GE` its `CE` with `CEUSEDMUX`, `CLR` or
+///   `PRE` its `SR` with `SRUSEDMUX`. Tied high and low they are unrouted with
+///   both bits clear, which is what an `LD` is;
+/// - a latch on `A5FF` is **refused** by Vivado by name: "the bel type
+///   (FF_INIT) do not match the cell type (LDCE)". That is why these bels are
+///   four, not eight. A flip-flop beside a latch in a slice is refused on the
+///   slice-wide `LATCH` bit, by the placer's mode rule
+///   ([`place::slice_mode`](crate::fpga::place)).
+///
+/// **Not checked**: anything about the part. Nothing here has been on a board.
+pub(super) fn latch_lanes(prefix: &str) -> Vec<(String, String)> {
+    SLICE_LETTERS
+        .iter()
+        .map(|letter| (format!("{letter}LATCH"), format!("{prefix}_{letter}FF")))
+        .collect()
 }
 
 /// One pin of a bel: the role the device database knows it by, and the
@@ -1338,8 +1375,8 @@ pub(super) struct BelConfig {
 /// [`ConfigEntry::ParamZero`](crate::fpga::ConfigEntry) over `INIT`
 /// rather than a plain `Param`.
 ///
-/// `LATCH` stays clear: this flow never places a latch, and the `.dev`
-/// file declares none.
+/// `LATCH` is set for a latch's own primitives, which have bels of their own:
+/// see [`latch_lanes`].
 ///
 /// These four are what prjxray's own `011-clb-ffconfig` fuzzer tags, and
 /// what nextpnr-xilinx writes for the same primitives. **None of them is
@@ -1357,9 +1394,21 @@ pub(super) fn bel_config(tile_type: &str, prefix: &str, sub: &str) -> BelConfig 
         out.tied = carry_tied(prefix);
         return out;
     }
-    let (Some(_), Some(_)) = (slice_feature_prefix(tile_type, index), slice_ff(sub)) else {
+    let (Some(_), Some((letter, _))) = (slice_feature_prefix(tile_type, index), slice_ff(sub))
+    else {
         return out;
     };
+    if sub.ends_with("LATCH") {
+        let ff = format!("{prefix}.{letter}FF");
+        let latch = format!("{prefix}.LATCH");
+        out.cells
+            .push(("LDCE", vec![latch.clone(), format!("{ff}.ZRST")]));
+        out.cells.push(("LDPE", vec![latch]));
+        out.inverted.push(("INIT", 0, format!("{ff}.ZINI")));
+        out.inverted
+            .push(("IS_G_INVERTED", 0, format!("{prefix}.CLKINV")));
+        return out;
+    }
     // The prefix the caller already knows; the features below are named
     // relative to it, exactly as `segbits_<type>.db` spells them, and a
     // five-input flip-flop's own two (`A5FF.ZINI`, `A5FF.ZRST`) by its

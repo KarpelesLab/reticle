@@ -1178,10 +1178,14 @@ fn load_design_keeping(
     // A cell of the target's the design names and does not declare, and
     // that the target's cell library has: that module joins the sources.
     // One round may name another, so this repeats until nothing is added.
-    let family = args
-        .option("device")
-        .and_then(reticle::fpga::target)
-        .map(|device| device.family.clone());
+    let device = args.option("device").and_then(reticle::fpga::target);
+    let family = device.map(|device| device.family.clone());
+    // What the slice has itself stays a primitive, so that mapping sees it.
+    let in_silicon = |name: &str| {
+        family
+            .as_deref()
+            .is_some_and(|f| reticle::fpga::retarget(f, name).is_some())
+    };
     while let (Some(family), Some(found), false) = (&family, &design, diags.has_errors()) {
         let Some(top) = found.top else { break };
         let names: Vec<String> = found
@@ -1189,7 +1193,9 @@ fn load_design_keeping(
             .into_iter()
             .filter_map(|(module, instance)| {
                 match &found.modules[module].instances[instance].module {
-                    reticle::ir::ModuleRef::Unresolved(name) => Some(name.as_str().to_owned()),
+                    reticle::ir::ModuleRef::Unresolved(name) if !in_silicon(name.as_str()) => {
+                        Some(name.as_str().to_owned())
+                    }
                     _ => None,
                 }
             })

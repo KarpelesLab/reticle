@@ -30,6 +30,10 @@ models or IP.
   time, and writes `vectors/` there.
 - `xsim_routed.py` runs a netlist Reticle routed under `xsim` and the vendor's
   models of every cell, against its source. Nothing of that is committed.
+- `gen_slice_cells.py` writes small designs around one latch or shift register
+  into `testdata/fpga/vivado/slice_cells/`, and `collect_slice_cells.py` keeps
+  what Vivado's bitstream for each decodes to (`reticle fpga --decode`), in
+  `vivado.features` there.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

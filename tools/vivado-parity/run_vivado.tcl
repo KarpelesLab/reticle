@@ -43,6 +43,14 @@ foreach {site n} [apply {{} {
   foreach s [get_sites -quiet -of_objects [get_cells -quiet -hier -filter {IS_PRIMITIVE && REF_NAME !~ GND && REF_NAME !~ VCC}]] { dict incr counts [get_property SITE_TYPE $s] }
   return $counts
 }}] { say site $site $n }
+# Where each latch and shift register landed, and which pin of the site each of
+# its pins is: the part of the answer no bitstream says by name.
+foreach c [get_cells -quiet -hier -filter {IS_PRIMITIVE && (REF_NAME =~ LD* || REF_NAME =~ SRL*)}] {
+  say placed [get_property REF_NAME $c] [get_property LOC $c] [get_property BEL $c] INIT=[get_property -quiet INIT $c]
+  foreach p [get_pins -quiet -of_objects $c] {
+    say pin [get_property REF_PIN_NAME $p] [get_bel_pins -quiet -of_objects $p]
+  }
+}
 foreach clock [get_clocks -quiet] {
   set path [get_timing_paths -group $clock -max_paths 1 -quiet]
   if {[llength $path]} {

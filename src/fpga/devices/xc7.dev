@@ -98,6 +98,13 @@
 #     shared tile controls. HIGH confidence (7-series CLB, UG474).
 #     `init` is deliberately absent from the `ff` line: each flop has
 #     its own INIT and none is forced to a fixed power-up value.
+#   * Latches: LDCE and LDPE, and only those two, because they are all
+#     Vivado makes of the twelve latch primitives: an `LD` comes back from
+#     its synthesis as an `LDCE` with `GE` and `CLR` tied, an `LDP` as an
+#     `LDPE`, and an `LDCE_1` as an `LDCE` with `IS_G_INVERTED` set, each of
+#     them read off its netlist. `fpga::flow`'s `retarget` does the same to
+#     a design that names the others. CHECKED against what Vivado 2026.1
+#     wrote, in `testdata/fpga/vivado/slice_cells/`.
 #   * Block RAM: RAMB18E1 only, and that is a choice with a reason.
 #     RAMB36E1 is described in UG473 and exists in the library, but in
 #     non-cascaded use its ADDRARDADDR[15] and ADDRBWRADDR[15] must be
@@ -401,6 +408,8 @@ device xc7a35t-cpg236
   bel FDCE_1 ff mode negedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
   bel FDPE_1 ff mode negedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
   bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel LDCE latch port clk=G d=D q=Q en=GE rst=CLR param INIT=1'b0 outputs Q
+  bel LDPE latch port clk=G d=D q=Q en=GE rst=PRE param INIT=1'b1 outputs Q
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
@@ -610,6 +619,8 @@ device xc7a35t-ftg256
   bel FDCE_1 ff mode negedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
   bel FDPE_1 ff mode negedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
   bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel LDCE latch port clk=G d=D q=Q en=GE rst=CLR param INIT=1'b0 outputs Q
+  bel LDPE latch port clk=G d=D q=Q en=GE rst=PRE param INIT=1'b1 outputs Q
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O
@@ -884,6 +895,8 @@ device xc7a100t-ftg256
   bel FDCE_1 ff mode negedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
   bel FDPE_1 ff mode negedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
   bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel LDCE latch port clk=G d=D q=Q en=GE rst=CLR param INIT=1'b0 outputs Q
+  bel LDPE latch port clk=G d=D q=Q en=GE rst=PRE param INIT=1'b1 outputs Q
   bel IBUF io for in port pad=I din=O
   bel IBUFG io for in port pad=I din=O
   bel IBUFDS io for in port pad=I pad_n=IB din=O

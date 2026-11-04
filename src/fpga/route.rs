@@ -3516,6 +3516,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         for i in 0..n {
             let source = netlist.instances.len();
@@ -4881,6 +4882,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut add = |name: &str, kind: &str, pins: &[(&str, bool, usize)]| {
             let instance = netlist.instances.len();
@@ -5021,6 +5023,7 @@ mod tests {
             signals: Vec::new(),
             off_fabric: Vec::new(),
             sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
         };
         let mut add = |name: &str, kind: &str, pins: &[(&str, bool, usize)]| {
             let instance = netlist.instances.len();

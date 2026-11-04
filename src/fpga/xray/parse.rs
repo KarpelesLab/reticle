@@ -797,6 +797,15 @@ pub(super) fn bels_of(
                 }
             }
         }
+        if kind == "slice" {
+            for (sub, flip_flop) in sites::latch_lanes(prefix) {
+                let name = format!("{prefix}_{sub}");
+                attach(&mut bels, name.clone(), "latch", prefix, &sub);
+                if let Some(bel) = bels.get_mut(&name) {
+                    bel.blocks.push(flip_flop);
+                }
+            }
+        }
         let site_kind = if kind == "slice" { "site" } else { kind };
         attach(&mut bels, (*prefix).to_owned(), site_kind, prefix, "");
     }
