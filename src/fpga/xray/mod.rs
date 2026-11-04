@@ -175,6 +175,7 @@ mod lutpack;
 mod lutram;
 mod lutswap;
 mod parse;
+mod regional;
 mod sites;
 mod srl;
 mod timing;
@@ -187,7 +188,8 @@ pub use bram::{
 pub use bufg::GlobalBufferError;
 pub use carry::{CarryPacking, legalise_carries};
 pub use cmt::{
-    ClockManagerError, Counter, MmcmSettings, PllSettings, counter, mmcm_registers, pll_registers,
+    ClockManagerError, Compensation, Counter, CounterShape, ManagerShapes, MmcmSettings,
+    PllSettings, check_manager, counter, mmcm_registers, pll_registers, shaped_counter,
 };
 pub use dsp::{DSP_PRIMITIVE, dsp_local_muxes, dsp_pin_wires};
 pub use finish::{FinishedFrames, LogicLocation};
@@ -209,6 +211,9 @@ pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
 }
 pub use io::{IoBankUse, IoError, IoTables, PadFeatures, PadRequest, io_standards, pad_features};
 pub use iologic::IoLogicError;
+pub use regional::{
+    RegionalClocks, RegionalError, check_regional_wiring, is_regional_kind, regional_buffers,
+};
 pub use sites::SiteCoverage;
 pub use timing::place_timing;
 pub use vivado::{VivadoExportError, VivadoImplementation, vivado_implementation};
@@ -372,6 +377,11 @@ pub struct XrayOptions {
     /// wires the router can see, and a design with none routed differently for
     /// nothing with them there: eight of the thirteen in `qor/` did.
     pub shift_registers: bool,
+    /// Declare the regional clock buffers' sites, and the wires and bits that
+    /// only they use (`regional`). Off unless the design has one, for the
+    /// reason [`XrayOptions::shift_registers`] is: the ChipWhisperer-Husky Plus,
+    /// which has none of its own, routed differently with them there.
+    pub regional_clocks: bool,
 }
 
 impl Default for XrayOptions {
@@ -389,6 +399,7 @@ impl Default for XrayOptions {
             max_pips: 48_000_000,
             io_standard: "LVCMOS33".to_owned(),
             shift_registers: false,
+            regional_clocks: false,
         }
     }
 }
@@ -414,6 +425,20 @@ impl XrayOptions {
         module: crate::ir::ModuleId,
         device: &crate::fpga::Device,
     ) -> XrayOptions {
+        self.regional_clocks = design.modules.get(module).is_some_and(|m| {
+            m.cells.iter().any(|(_, cell)| {
+                matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if device.bels.iter().any(|b| {
+                    b.name == name.as_str()
+                        && matches!(
+                            b.role,
+                            crate::fpga::BelRole::HorizontalBuffer
+                                | crate::fpga::BelRole::RegionalBuffer
+                                | crate::fpga::BelRole::IoClockBuffer
+                                | crate::fpga::BelRole::MultiRegionBuffer
+                        )
+                }))
+            })
+        });
         self.shift_registers = design.modules.get(module).is_some_and(|m| {
             m.cells.iter().any(|(_, cell)| {
                 matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if device.bels.iter().any(|b| {
@@ -1012,7 +1037,11 @@ impl XrayDatabase {
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
         for (key, tile) in &representative {
             let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
-            if let Some(set) = self.features_for(files, tile, row)? {
+            // What only a regional clock buffer uses, for a design that has
+            // one: see `XrayOptions::regional_clocks`. Not read at all
+            // otherwise, rather than taken out after: a set made again is not
+            // in the order the file has, and the order is the graph's.
+            if let Some(set) = self.features_with(files, tile, row, options.regional_clocks)? {
                 features.insert(key.clone(), set);
             }
         }
@@ -1103,6 +1132,7 @@ impl XrayDatabase {
             region,
             &part,
             options.shift_registers,
+            options.regional_clocks,
             &mut stats,
         );
         let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
@@ -1115,6 +1145,8 @@ impl XrayDatabase {
             arch,
             frames,
             clocks: clock_column(&features),
+            regional: options.regional_clocks,
+            wire_enables: wire_enable_table(&features),
             block_ram: BlockRamTables::new(&features, &fixed),
             io: {
                 let mut io = IoTables::new(&features, &options.io_standard);
@@ -1211,6 +1243,18 @@ impl XrayDatabase {
             };
             if arcs_of(xtile)?.is_some_and(|arcs| arcs.contains(feature)) {
                 selected.insert((tile.clone(), feature.clone()));
+            }
+        }
+        // A `ZHOLD` feedback's code selects its arc as the pip's own does.
+        for (tile, feature) in &decoded.features {
+            if feature != cmt::ZHOLD_MMCM && feature != cmt::ZHOLD_PLL {
+                continue;
+            }
+            if let Some(arc) = by_name
+                .get(tile.as_str())
+                .and_then(|t| cmt::zhold_arc(&t.tile_type))
+            {
+                selected.insert((tile.clone(), arc.to_owned()));
             }
         }
         let show = |(tile, feature): &(String, String)| format!("{tile} {feature}");
@@ -1445,6 +1489,7 @@ impl XrayDatabase {
         files: &dyn FileProvider,
         tile_type: &str,
         block_ram_row: Option<u32>,
+        regional_clocks: bool,
     ) -> Result<Option<FeatureSet>, XrayError> {
         let base = format!(
             "{}/{}/segbits_{}",
@@ -1467,6 +1512,12 @@ impl XrayDatabase {
         // And those of an IO standard the database never fuzzed: see
         // `io::measured_features`.
         measured.extend(io::measured_features(tile_type));
+        // And those of the regional buffers: see `regional::derived_features`.
+        if regional_clocks {
+            measured.extend(regional::derived_features(tile_type));
+        }
+        // And a `ZHOLD` feedback's code: see `cmt::zhold_features`.
+        measured.extend(cmt::zhold_features(tile_type));
         if !measured.is_empty() {
             let mut all = set.into_features();
             all.extend(measured);
@@ -1513,13 +1564,29 @@ impl XrayDatabase {
         tile: &XrayTile,
         block_ram_row: Option<u32>,
     ) -> Result<Option<FeatureSet>, XrayError> {
-        if let Some(set) = self.features_of(files, &tile.tile_type, block_ram_row)? {
+        self.features_with(files, tile, block_ram_row, true)
+    }
+
+    /// [`XrayDatabase::features_for`], with the regional clock buffers' features
+    /// or without them (`XrayOptions::regional_clocks`).
+    fn features_with(
+        &self,
+        files: &dyn FileProvider,
+        tile: &XrayTile,
+        block_ram_row: Option<u32>,
+        regional_clocks: bool,
+    ) -> Result<Option<FeatureSet>, XrayError> {
+        if let Some(set) =
+            self.features_of(files, &tile.tile_type, block_ram_row, regional_clocks)?
+        {
             return Ok(Some(set));
         }
         let Some(alias) = &tile.bits_alias else {
             return Ok(None);
         };
-        let Some(set) = self.features_of(files, &alias.tile_type, block_ram_row)? else {
+        let Some(set) =
+            self.features_of(files, &alias.tile_type, block_ram_row, regional_clocks)?
+        else {
             return Ok(None);
         };
         let shift = alias.start_offset * 32;
@@ -1930,6 +1997,7 @@ impl XrayDatabase {
         region: GridRegion,
         part: &Part,
         shift_registers: bool,
+        regional_clocks: bool,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -2019,7 +2087,16 @@ impl XrayDatabase {
                 .map(|p| (p.to.as_str(), p.from.as_str()))
                 .collect();
 
+            let defaults = if regional_clocks {
+                regional::default_pips(name)
+            } else {
+                Vec::new()
+            };
             let mut wires: BTreeSet<&str> = BTreeSet::new();
+            for (to, from) in &defaults {
+                wires.insert(to.as_str());
+                wires.insert(from.as_str());
+            }
             for (to, from, _) in set.pips() {
                 wires.insert(to);
                 wires.insert(from);
@@ -2085,11 +2162,19 @@ impl XrayDatabase {
                     continue;
                 }
                 let mut bits = feature.ones.clone();
-                let extra = enable_bits(to, from);
+                let mut extra = enable_bits(to, from);
+                // A pad's road into a `BUFMRCE` is `ACTIVE` and not `USED`, which
+                // is the global network's: see `regional`.
+                if to.starts_with("HCLK_CMT_BUFMR_INP")
+                    && let Some(used) = set.feature(&format!("{from}_USED"))
+                {
+                    extra.retain(|bit| !used.ones.contains(bit));
+                }
                 if !extra.is_empty() {
                     stats.coverage.wire_enables += 1;
                     bits.extend(extra);
                 }
+                bits.extend(regional::leaf_enable_bits(set, to, from));
                 tile_type.pips.push(PipDecl {
                     from: WireRef::local(from),
                     to: WireRef::local(to),
@@ -2122,6 +2207,13 @@ impl XrayDatabase {
                 tile_type.pips.push(PipDecl {
                     from: WireRef::local(from),
                     to: WireRef::local(to),
+                    bits: Vec::new(),
+                });
+            }
+            for (to, from) in &defaults {
+                tile_type.pips.push(PipDecl {
+                    from: WireRef::local(from.clone()),
+                    to: WireRef::local(to.clone()),
                     bits: Vec::new(),
                 });
             }
@@ -2223,6 +2315,9 @@ impl XrayDatabase {
             let mut bels = parse::bels_of(tile, set, &declared, &mut stats.coverage);
             if shift_registers {
                 bels.extend(srl::bels(&tile.tile_type, "SLICEM_X0", set, &declared));
+            }
+            if !regional_clocks {
+                bels.retain(|bel| !regional::is_regional_kind(&bel.kind));
             }
             arch.tile_types[*index].bels = bels;
         }
@@ -2516,6 +2611,34 @@ pub struct XrayFabric {
     pub io: IoTables,
     /// What the load covered and cost.
     pub stats: XrayStats,
+    /// See `wire_enable_table`.
+    wire_enables: BTreeMap<(String, String), Vec<ConfigBit>>,
+    /// See [`XrayOptions::regional_clocks`].
+    regional: bool,
+}
+
+/// Each one-component feature of a clock tile a pass sets by name, with its bits,
+/// by tile type and name: `regional::XrayFabric::configure_regional_buffers`'s.
+fn wire_enable_table(
+    features: &HashMap<String, FeatureSet>,
+) -> BTreeMap<(String, String), Vec<ConfigBit>> {
+    let mut out = BTreeMap::new();
+    for tile_type in ["HCLK_CMT", "HCLK_CMT_L", "CLK_HROW_BOT_R", "CLK_HROW_TOP_R"] {
+        let Some(set) = features.get(tile_type) else {
+            continue;
+        };
+        for feature in set.features() {
+            if !feature.name.contains('.')
+                && (feature.name.ends_with("_USED") || feature.name.ends_with("_ACTIVE"))
+            {
+                out.insert(
+                    (tile_type.to_owned(), feature.name.clone()),
+                    feature.ones.clone(),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// The `CLK_BUFG_REBUF` buffer enables, by global clock track.
@@ -2689,7 +2812,7 @@ impl XrayFabric {
     pub fn clock_node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
         let mut out = vec![1.0f32; graph.nodes.len()];
         for (index, wire) in graph.nodes.iter().enumerate() {
-            if is_clock_wire(&wire.name) || is_clock_input_wire(&wire.name) {
+            if self.on_clock_network(&wire.name) || is_clock_input_wire(&wire.name) {
                 out[index] = preference;
             }
         }
@@ -2794,6 +2917,7 @@ impl XrayFabric {
             .map(|wire| {
                 is_clock_input_wire(&wire.name)
                     || (wire.name.contains("ILOGIC") && wire.name.ends_with("_O"))
+                    || (self.regional && is_regional_road(&wire.name))
             })
             .collect()
     }
@@ -2839,7 +2963,7 @@ impl XrayFabric {
         graph
             .nodes
             .iter()
-            .map(|wire| is_clock_wire(&wire.name))
+            .map(|wire| self.on_clock_network(&wire.name))
             .collect()
     }
 
@@ -2898,7 +3022,7 @@ impl XrayFabric {
                 let (Some(pin), Some(route)) = (site.pin(role), routing.route(signal)) else {
                     continue;
                 };
-                if !is_clock_wire(&graph.wire(route.source).name) {
+                if !self.on_clock_network(&graph.wire(route.source).name) {
                     out.unbuffered += 1;
                     continue;
                 }
@@ -2923,8 +3047,8 @@ impl XrayFabric {
                     };
                     let pip = graph.pip(*id);
                     if !graph.pip_bits(*id).is_empty() {
-                        let from_network =
-                            pip.from == route.source || is_clock_wire(&graph.wire(pip.from).name);
+                        let from_network = pip.from == route.source
+                            || self.on_clock_network(&graph.wire(pip.from).name);
                         if programmable == 0 {
                             on_network = from_network;
                             entered = Some(pip.from);
@@ -3030,8 +3154,12 @@ pub struct XrayClockUse {
 ///   are read as pips), and which `XrayFabric::configure_io` sets;
 /// - `ENABLE_BUFFER`: a clock row's buffer enable for a track, whose bits
 ///   a routed pip of that track switches on with its own, so that a
-///   decoding finds both.
-const NOT_ARCS: [&str; 3] = ["DIFF", "ENABLE_BUFFER", "VREF"];
+///   decoding finds both;
+/// - `VREF`: a bank's internal reference voltage, `VREF.V_<n>_MV`, which
+///   `XrayFabric::configure_io` sets;
+/// - [`regional::LEAF_ENABLE`]: a horizontal clock tile's regional-line
+///   enable, charged to the pip its line leaves by.
+const NOT_ARCS: [&str; 4] = ["DIFF", "ENABLE_BUFFER", "VREF", regional::LEAF_ENABLE];
 
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
 /// twentieth of an ordinary wire the ECP5 flow uses.
@@ -3295,6 +3423,47 @@ fn is_clock_wire(name: &str) -> bool {
     .iter()
     .any(|part| name.contains(part))
         || (name.starts_with("CLK_BUFG_BUFGCTRL") && name.ends_with("_O"))
+}
+
+/// The regional clock network's wires, for a fabric with regional buffers
+/// (`XrayOptions::regional_clocks`): a `BUFR`'s output and the regional lines
+/// from it, which nothing else enters since the way through its site is out of
+/// the graph (`is_regional_buffer`), and a `BUFIO`'s, down the bank's IO logic.
+fn is_regional_clock_wire(name: &str) -> bool {
+    [
+        "HCLK_IOI_RCLK_OUT",
+        "HCLK_IOI_RCLK2RCLK",
+        "BUFRCLK",
+        "HCLK_IOI_BUFIO_O",
+    ]
+    .iter()
+    .any(|part| name.contains(part))
+        || name
+            .rsplit_once("_IOCLK")
+            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+impl XrayFabric {
+    /// Whether a wire is on a clock network of this fabric: the global one, and
+    /// the regional one when it has one.
+    fn on_clock_network(&self, name: &str) -> bool {
+        is_clock_wire(name) || (self.regional && is_regional_clock_wire(name))
+    }
+}
+
+/// Whether a wire is on the road from a clock-capable pad to a regional buffer's
+/// input, in a bank's clock tile (`HCLK_IOI_I2IOCLK_TOP0` to
+/// `HCLK_IOI_IO_PLL_CLK0_DMUX`, and from there to a `BUFIO`'s input and to
+/// `HCLK_IOI_RCLK0` and each `BUFR`'s). Not a road to anything global, so
+/// [`XrayFabric::clock_roads`] is told of these and nothing else is.
+fn is_regional_road(name: &str) -> bool {
+    name.starts_with("HCLK_IOI_IO_PLL_CLK")
+        || name.starts_with("HCLK_CMT_BUFMR_INP")
+        || name.starts_with("HCLK_IOI_RCLK_BEFORE_DIV")
+        || name
+            .strip_prefix("HCLK_IOI_RCLK")
+            .is_some_and(|n| n.len() == 1)
+        || name.starts_with("CLK_HROW_CK_MUX_OUT")
 }
 
 /// Whether a wire is on a dedicated road into a global buffer or a clock

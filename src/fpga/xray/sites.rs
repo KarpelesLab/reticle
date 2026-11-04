@@ -1289,6 +1289,10 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
     if !managers.is_empty() {
         return managers;
     }
+    let regional = super::regional::regional_bels(tile_type);
+    if !regional.is_empty() {
+        return regional;
+    }
     let io_logic = super::iologic::io_logic_bels(tile_type);
     if !io_logic.is_empty() {
         return io_logic;

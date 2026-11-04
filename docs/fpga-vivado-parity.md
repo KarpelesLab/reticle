@@ -44,8 +44,9 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 110 of the 141**, 94 before the section on pads, 106 before the
-one on IO registers and 108 before `BUFGCTRL` by name. `index.txt` says which;
+**Reticle builds 118 of the 141**, 94 before the sections on pads and clock
+buffers, 106 before the one on IO registers, 110 before regional clock buffers
+and clock managers. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
 to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
 
@@ -56,13 +57,11 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 31 that do not build, by what stops them:
+The 23 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
-| clock buffers | `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
-| clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
 | pad buffers | the six `DIFF_OUT` forms |
 | IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
@@ -805,8 +804,8 @@ every routing pip, on every design. The 18 that are not are all class 1 below.
 | | class | count | designs | what it is | answered? |
 |---|---|---|---|---|---|
 | 1 | Reticle only: `CLK_BUFG_REBUF GCLK<n>_ENABLE_*` on rebuffers with no live segment | 18 | 10 | Deliberate and documented at `XrayFabric::enable_global_clocks`: Reticle sets both enables in each rebuffer of a used column, nextpnr's rule, and Vivado only the ends of each live segment | Quoted, harmless on nextpnr's word |
-| 2 | Vivado only: `CLK_BUFG_REBUF_X78Y142 GCLK0_ENABLE_ABOVE` | 4 | `fir8`, `fsm`, `mul18`, `srl_delay` | **The likeliest wrong bit here.** The far end of the segment the clock row at `Y130` hangs from. Reticle would set it too, but the rule stops at the loaded region and this tile is outside it | **Open.** Nothing measured says the far end is needed, and it was not changed, since loading more of the column changes placement |
-| 3 | Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 23 | 10 | Set in a clock-management tile a horizontal clock row passes through, with no clock manager in use. Reticle has no such rule | **Open** |
+| 2 | Vivado only: `CLK_BUFG_REBUF_X78Y142 GCLK0_ENABLE_ABOVE` | 4 | `fir8`, `fsm`, `mul18`, `srl_delay` | **The likeliest wrong bit here.** The far end of the segment the clock row at `Y130` hangs from. Reticle would set it too, but the rule stops at the loaded region and this tile is outside it | **Open**, and the rule now known: Vivado sets both ends of every live segment, on 230 of 231 designs of `clocks/` (below). Nothing measured says the far end is needed, and it was not changed, since loading more of the column changes placement |
+| 3 | Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 23 | 10 | Set in a clock-management tile a horizontal clock row passes through, with no clock manager in use. Reticle has no such rule | **Open**, and the rule now known: one for every `BUFHCE` in use on that side of the row, on all 231 designs of `clocks/` (below). Not applied, since it changes every design's bits |
 | 4 | Vivado only: `LIOB33_X0Y93 IOB_Y0` as an input with a pull-up | 30 | 10, and all 13 with `cells.txt` | That site is `IOB_X0Y94`, `IO_L3P_T0_DQS_PUDC_B_14` (`package_pins.csv`): Vivado's treatment of the `PUDC_B` pad, whichever design it is. Nothing here connects it | Named, and whether it matters is open |
 | 5 | Vivado only: `<n>.GND_WIRE`, `BYP_ALT<n>.GFAN1` | 13 | `fir8` | A ground to a `CARRY4`'s `DX`, on seven carries. **Checked:** on all seven, bit 3's `S` and `DI` are constants and its `O` and `CO` have no reader, so nothing sees it. Vivado obeys the netlist and Reticle saves the wire | Harmless |
 | | Vivado only, not features: the low 13 bits of word 50 of each frame | 861 to 8,552 a design | all | **Checked:** on all 23 of Vivado's bitstreams, in all 9464 frames, that is the Hamming code of the frame (`frame_ecc.py`). Reticle's are zero. `--decode` counts them apart now, as `frame_ecc`, which also leaves nothing unnamed in the database's own Basys 3 harness bitstream, a thing `tests/fpga_xray.rs` had taken for what a real configuration needs. Whether a part ever reads them under a plain load is not measured, and Reticle's own bitstreams have loaded with them clear (`docs/fpga-xray.md`) | Named |
@@ -1399,7 +1398,7 @@ not catch.
 
 ## Clock buffers
 
-`testdata/fpga/vivado/clocks/` has 197 small designs, each asking one parameter of a
+`testdata/fpga/vivado/clocks/` has 256 small designs, each asking one parameter of a
 clock buffer or a clock manager, or one wiring of it. `tools/vivado-parity/clocks.sh`
 runs them, and `vivado.txt` there has each clock site Vivado's bitstream set, as
 `--decode` reads it, or the rule it refused by. `tests/fpga_xray_clocks.rs` holds
@@ -1431,3 +1430,110 @@ that the gate does not build are in the `#[ignore]`d
 `every_design_of_a_built_family`. **Unchanged:** the thirteen designs of `qor/` and
 eleven probes of the older buffers, pads and PLL are the same bitstream, byte for byte,
 as the commit before this.
+
+### Regional clock buffers
+
+`BUFHCE` and `BUFH` in a clock row, `BUFR` and `BUFIO` beside a bank and `BUFMRCE`
+and `BUFMR` in a clock management tile now have sites of their own, configured as
+Vivado configured them. `xray::regional` has every bit and how it was found; what
+this database did not name, measured here by a `LOC` on each site:
+
+- a `BUFIO`'s two bits, and a `BUFMRCE`'s four, and its input and output muxes, in
+  frames 26 to 29 of `HCLK_CMT`;
+- the enable of a regional line in a horizontal clock tile, `ENABLE_REGIONAL`, in the
+  tile it leaves by;
+- a `ZHOLD` feedback's way into an MMCM or a PLL, a code of the input mux no fuzzer saw.
+
+`BUFR`'s sites are not numbered as their wires are: `BUFR_Y0` is wire 2.
+
+**Not by default.** A `BUFR` that does not divide and a `BUFMRCE` in front of it were
+built on global buffers, and the Husky Plus's logic analyser is one; what a placement
+of that design does can only be told on a board. So `--regional-clocks auto`, the
+default, gives a real site only to a `BUFR` that divides, is enabled or cleared, is
+on a `BUFMR` or is read by a `BUFIO`, and `--regional-clocks on` to every one, as
+Vivado does. A `BUFG` whose one load is a real `BUFR` is taken out, as Vivado does.
+
+And the sites, the wires only they use and the bits on them are declared only for a
+design that has one (`XrayOptions::regional_clocks`), as a shift register's are. The
+first version declared them always, and the Husky Plus, with no regional buffer of its
+own, placed the same and routed differently from the first pass on: the router had
+more of a pad's road to look down, 35 nodes more in its first pass, and every pass
+after it differed. The second version declared them and took them out again, and the
+Husky Plus routed the same first pass and a different second: a tile type's features
+made again were not in the order its `segbits` file has, which is the order of its
+pips, and the router's ties went the other way. Found by turning each addition off in
+turn, three route passes of the Husky Plus each, against the commit before (which
+routes the same twice). Now they are not read at all for such a design.
+
+**What this commit does to the Husky Plus**, built by `build_plus.sh` at seed 4 from
+the commit before and from this one: the same placement and the same routes, pass for
+pass, and two configuration bits fewer, the user IO PLL's `CLKOUT4` and `CLKOUT5`
+output enables. Those two outputs have nets and no reader; Vivado's own bitstream of
+NewAE's design has the two enables clear on that PLL, and an output with no reader is
+not in use here now. No board has run either.
+
+**Refused, as Vivado does,** with a diagnostic: a `BUFIO` clocking anything but IO
+logic, or on anything but a clock-capable pad or a `BUFMR` (`Route 35-4445`), or
+reaching IO logic of another bank (`Place 30-126`); a `BUFMR` driving anything but a
+`BUFR` or a `BUFIO` (`REQP-1936`).
+
+### Clock managers
+
+`MMCME2_BASE` and `PLLE2_BASE` are library cells over the `_ADV` sites. Each
+parameter of both was swept one at a time on a routed cell
+(`tools/vivado-parity/cmt_sweep.py`, 1,482 runs, in `registers.txt`), and Reticle's
+arithmetic is held to every register field of the 1,388 Vivado builds and this flow takes:
+`every_register_is_what_vivado_wrote`. That held the quoted tables (`LKTABLE` and
+both filter tables, at every multiplier under each `BANDWIDTH`) and found what was
+new:
+
+- phases, to an eighth of a VCO cycle, and duty cycles, to a half, on every output;
+- fractional `CLKOUT0_DIVIDE_F` and `CLKFBOUT_MULT_F`, **whose other half is in
+  `CLKOUT5`'s and `CLKOUT6`'s registers**, as is a phase of `CLKOUT0` or `CLKFBOUT`;
+- `POWER_REG`'s `0x9800` for a fractional counter or a phase of an odd eighth or
+  quarter: f4pga's `0x9900` for a fine phase shift was this bit and another;
+- `CLKOUT4_CASCADE`, and the inverters `IS_*_INVERTED`;
+- `COMPENSATION` as Vivado reads it, which is the feedback's wiring more than the
+  parameter: direct feedback is `INTERNAL` whatever is asked, through a `BUFG` with
+  `ZHOLD` is `ZHOLD`'s bits, and `BUF_IN`, `EXTERNAL` and their misuses are what
+  Vivado refuses (`REQP-1575`, `REQP-1684`, `Timing 38-290`).
+
+**Refused, as Vivado does:** an input, or a VCO, outside its range (`PDRC-29`, `-34`,
+`-38`, `-43`; each VCO window's edges measured at 1 % either side, DS181's 600 to 1200
+and 800 to 1600 MHz at grade 1), **when a `create_clock` on the pad reaching the input says what it is**:
+Vivado checks the clock it times the input by over `CLKIN1_PERIOD`
+(`mmcm_period_clocked` built, `pll_period_clocked` refused with the clock's period in
+its message). With no clock it checks the attribute, and this flow does not, since
+NewAE's glitch MMCM has an attribute that fails it and builds in Vivado, behind a
+multiplexer whose clocks this flow does not follow; a phase not a multiple of 45 over its division (`AVAL-139`, `-167`);
+`CLKINSEL` a signal with no reset (`REQP-164`), or between two kinds of source on an
+MMCM (`REQP-119`). **Not done, and refused:** spread spectrum, and a fine phase shift
+that starts off a whole VCO cycle, both of which set bits this database has no name for.
+
+### Vivado's bits beside a clock, answered
+
+The two classes "Vivado's timer on Reticle's implementation" left open, read over the
+231 bitstreams of `clocks/`:
+
+- **`HCLK_CMT*_CK_BUFHCLK<n>_USED`**: Vivado sets it in the clock management tile of a
+  row's side for **every** `BUFHCE` in use there, `BUFHCE_X<side>Y<n>`, on all 231.
+  Reticle sets it only where a route crosses the tile.
+- **`GCLK<n>_ENABLE_ABOVE` at `Y142`**: Vivado sets both ends of each live segment of a
+  global track, from its buffer to the farthest clock row it is used in, on 230 of
+  231; the far end of the segment row 130 hangs from is `Y142`'s, on 24 of them.
+
+Both are now rules, and **neither is applied**. Whether either is needed on a part has
+not been measured. Setting the first adds bits to every design with a clock; the second
+needs a tile the region does not load, which moves placements. Both change the Husky
+Plus's bitstream, and a build of that has only a board to judge it.
+
+**Checked by Vivado's router**, `run_placed.sh` on 38 of these designs with Reticle's
+placement and routes as `FIXED_ROUTE`s: every route of the regional buffers, `BUFMR`,
+`BUFIO` and `ZHOLD` feedbacks was taken, and the bits of Vivado's bitstream of the same
+implementation are Reticle's but for those two classes. Three things were found and
+not done: a pad's clock into an MMCM's `CLKIN1` routed through the PLL tile's
+`FREQ_BB` lines, which Vivado's node graph refuses (`Constraints 18-11693`) and its own
+router never takes; an `ODDR`'s `OCLKM`, which Vivado drives with `OCLK` and Reticle
+does not, on a global clock as on a `BUFIO`; and a clock manager's unused DRP and
+`DCLK` inputs, which Vivado ties to ground over `GFAN` and Reticle leaves reading one.
+**Nothing here has been on a board.**

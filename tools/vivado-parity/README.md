@@ -42,7 +42,9 @@ models or IP.
   decodes `run_all.sh`'s bitstreams into `vivado.txt`.
 - `gen_clocks.py` writes `testdata/fpga/vivado/clocks/`, `clocks.sh` with
   `clocks_probe.tcl` asks Vivado about each of those designs, and `clocks_fixture.py`
-  keeps its answer, read back by `--decode`, in `vivado.txt` there.
+  keeps its answer, read back by `--decode`, in `vivado.txt` there. `cmt_sweep.sh`,
+  `cmt_sweep.tcl` and `cmt_sweep.py` change one parameter at a time of a clock manager
+  `clocks.sh` routed, and keep the registers of each in `registers.txt` there.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

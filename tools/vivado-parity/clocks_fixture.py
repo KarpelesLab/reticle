@@ -4,11 +4,9 @@
 
 Every `.bit` is read by `reticle fpga --decode`. A `site` line is one clock site
 of the design, with the features set on it: which of several sites is which is
-the placer's. A `road` line is one feature of a clock tile between two wires,
-with its numbers taken off, since the numbers are the placer's and the router's
-too: those say which roads the clock took, and so where each end of them was. A
-`bit` line is a set bit the database has no name for. A `refused` line is
-Vivado's refusal, with its rule, and there is nothing else for that design.
+the placer's. A `bit` line is a set bit the database has no name for. A `refused`
+line is Vivado's refusal, with its rule, and there is nothing else for that
+design.
 """
 import concurrent.futures as cf
 import os
@@ -17,14 +15,8 @@ import subprocess
 import sys
 
 SITE = re.compile(
-    r"^(BUFGCTRL\.BUFGCTRL_X0Y\d+|BUFHCE\.BUFHCE_X\d+Y\d+|BUFR_Y\d|BUFIO_Y\d|BUFMRCE_Y\d|MMCME2_ADV|PLLE2_ADV)\.(.*)$"
+    r"^(BUFGCTRL\.BUFGCTRL_X0Y\d+|BUFHCE\.BUFHCE_X\d+Y\d+|BUFR_Y\d|BUFIO\.BUFIO_Y\d|BUFMRCE\.BUFMRCE_Y\d|MMCME2_ADV|PLLE2_ADV)\.(.*)$"
 )
-ROAD_TILE = re.compile(r"^(CLK_BUFG|CLK_HROW|HCLK_|CMT_TOP)")
-
-
-def clean(wire):
-    """A feature's wires without the numbers a placement or a route chose."""
-    return re.sub(r"[LR]?\d+", "N", wire)
 
 
 def read(reticle, bit):
@@ -35,7 +27,6 @@ def read(reticle, bit):
         check=True,
     )
     sites = {}
-    roads = set()
     bits = []
     for line in run.stdout.splitlines():
         if line.startswith("? "):
@@ -49,13 +40,11 @@ def read(reticle, bit):
         m = SITE.match(feature)
         if m:
             sites.setdefault((tile, m.group(1)), []).append(m.group(2))
-        elif ROAD_TILE.match(tile) and "." in feature and not feature.startswith(("MMCM", "PLL")):
-            roads.add(clean(feature))
     site_lines = []
     for (_, name), features in sites.items():
         kind = re.sub(r"_X\d+Y\d+|_Y\d", "", name).split(".")[0]
         site_lines.append(f"{kind}: {' '.join(sorted(features))}")
-    return sorted(site_lines), sorted(roads), sorted(bits)
+    return sorted(site_lines), sorted(bits)
 
 
 def one(args):
@@ -79,9 +68,8 @@ def one(args):
                 continue
             kind = re.sub(r"_X\d+Y\d+$", "", w[7])
             text += f"  cell {w[1]} {w[3]} {kind}\n"
-    sites, roads, bits = read(reticle, bit)
+    sites, bits = read(reticle, bit)
     text += "".join(f"  site {s}\n" for s in sites)
-    text += "".join(f"  road {r}\n" for r in roads)
     text += "".join(f"  bit {b}\n" for b in bits)
     return text
 

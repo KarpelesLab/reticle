@@ -507,6 +507,32 @@ fn io_logic_wants(
         }
         return;
     }
+    if instance.primitive == super::regional::REGIONAL_BUFR {
+        // Its `CLR` and `CE` have no inverter either, and an unrouted one reads
+        // one: left so, every `BUFR` would be held clear. Vivado grounds a `CLR` it
+        // leaves low and a `CE` tied low (`INT_L.BYP_ALT4.GFAN0`, `GFAN0.GND_WIRE`),
+        // and leaves a tie high alone.
+        for role in ["clr", "ce"] {
+            let pin = instance
+                .pins
+                .iter()
+                .map(|p| &netlist.pins[*p])
+                .find(|p| p.role == role);
+            let low = match pin {
+                Some(p) => p.signal.is_none() && p.constant == Some(Bit::Zero),
+                None => role == "clr",
+            };
+            if low && let Some(node) = site.pin(role) {
+                wants.push((
+                    TiePolicy::Zero,
+                    instance.name.clone(),
+                    role.to_owned(),
+                    node,
+                ));
+            }
+        }
+        return;
+    }
     let input = matches!(instance.primitive.as_str(), "IDDR" | "IDDR_2CLK");
     if !input && instance.primitive != "ODDR" {
         return;

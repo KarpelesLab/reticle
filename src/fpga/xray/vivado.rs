@@ -155,6 +155,17 @@ fn site_and_bel(
         };
         return Some((site_named(bel)?, name.to_owned()));
     }
+    // A clock manager is the one site of its type in its tile.
+    if matches!(bel, "MMCME2_ADV" | "PLLE2_ADV") {
+        let (site, _) = tile.sites.iter().find(|(_, kind)| kind == bel)?;
+        return Some((site.clone(), bel.to_owned()));
+    }
+    if bel.starts_with("OLOGIC_") {
+        return Some((site_named(bel)?, "OUTFF".to_owned()));
+    }
+    if bel.starts_with("ILOGIC_") {
+        return Some((site_named(bel)?, "IFF".to_owned()));
+    }
     if let Some(number) = bel.strip_prefix("BUFGCTRL_X0Y") {
         // Tile-local: the sixteen sites of the tile counted upward. See
         // `sites::extra_bels`.
@@ -164,7 +175,56 @@ fn site_and_bel(
             name.rsplit_once('Y')
                 .and_then(|(_, y)| y.parse::<u32>().ok())
         });
-        return Some(((*sites.get(number)?).clone(), "BUFG".to_owned()));
+        let name = if primitive == "BUFGCTRL" {
+            "BUFGCTRL"
+        } else {
+            "BUFG"
+        };
+        return Some(((*sites.get(number)?).clone(), name.to_owned()));
+    }
+    // A tile's several sites of a regional clock buffer, by rank up the tile.
+    let ranked = |family: &str, column: Option<u32>, number: usize| -> Option<String> {
+        let numbers = |name: &str| -> Option<(u32, u32)> {
+            let (x, y) = name
+                .rsplit_once('_')?
+                .1
+                .strip_prefix('X')?
+                .split_once('Y')?;
+            Some((x.parse().ok()?, y.parse().ok()?))
+        };
+        let mut sites: Vec<(u32, u32, &String)> = tile
+            .sites
+            .iter()
+            .filter(|(_, kind)| kind == family)
+            .filter_map(|(name, _)| numbers(name).map(|(x, y)| (x, y, name)))
+            .collect();
+        sites.sort();
+        // A column names the side: its numbers on the die are not its numbers
+        // in the tile, which the feature names and `bel` use.
+        let first = sites.first()?.0;
+        sites
+            .iter()
+            .filter(|(x, ..)| column.is_none_or(|c| *x == first + c))
+            .nth(number)
+            .map(|(.., name)| (*name).clone())
+    };
+    if let Some(rest) = bel.strip_prefix("BUFHCE_X") {
+        let (x, y) = rest.split_once('Y')?;
+        return Some((
+            ranked("BUFHCE", Some(x.parse().ok()?), y.parse().ok()?)?,
+            "BUFHCE".to_owned(),
+        ));
+    }
+    if let Some(k) = bel.strip_prefix("BUFMRCE_Y") {
+        return Some((
+            ranked("BUFMRCE", None, k.parse().ok()?)?,
+            "BUFMRCE".to_owned(),
+        ));
+    }
+    for family in ["BUFR", "BUFIO"] {
+        if let Some(k) = bel.strip_prefix(family).and_then(|k| k.strip_prefix("_Y")) {
+            return Some((ranked(family, None, k.parse().ok()?)?, family.to_owned()));
+        }
     }
     None
 }
@@ -632,6 +692,12 @@ pub fn vivado_implementation(
             }
             primitive => {
                 let (s, b) = spell(false)?;
+                // Vivado knows one `BUFR`; see `regional`.
+                let primitive = match primitive {
+                    super::regional::REGIONAL_BUFR => "BUFR",
+                    super::regional::REGIONAL_BUFMRCE => "BUFMRCE",
+                    other => other,
+                };
                 writer.plain(&name, cell, &view, primitive)?;
                 writer.placed.push(format!("  {name} {s}/{b}"));
                 writer.cells += 1;

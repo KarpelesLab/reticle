@@ -223,6 +223,33 @@ impl Bitstream {
         Ok(())
     }
 
+    /// Clears one bit of one tile: what a clock manager's `ZHOLD` feedback does to
+    /// the bit its input's pip set (`xray::cmt::zhold_features`).
+    ///
+    /// # Errors
+    ///
+    /// Those of [`Bitstream::set`].
+    pub fn clear(&mut self, tile: (u32, u32), bit: ConfigBit) -> Result<(), BitstreamError> {
+        let index = self
+            .format
+            .index_of(tile.0, tile.1)
+            .ok_or(BitstreamError::NoTile {
+                x: tile.0,
+                y: tile.1,
+            })?;
+        let format = &self.format.tiles[index];
+        if bit.row >= format.rows || bit.col >= format.cols {
+            return Err(BitstreamError::OutOfRange {
+                tile,
+                bit,
+                size: (format.rows, format.cols),
+            });
+        }
+        let offset = bit.row as usize * format.cols as usize + bit.col as usize;
+        self.bits[index][offset] = false;
+        Ok(())
+    }
+
     /// Whether one bit of one tile is set; `None` when there is no such
     /// tile or bit.
     pub fn get(&self, tile: (u32, u32), bit: ConfigBit) -> Option<bool> {

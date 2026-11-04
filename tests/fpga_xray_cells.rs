@@ -82,6 +82,10 @@ fn every_cell_in_the_library_has_vectors() {
             "BUFGCE_1",
             "BUFGMUX_1",
             "BUFGMUX_CTRL",
+            "BUFH",
+            "BUFMR",
+            "PLLE2_BASE",
+            "MMCME2_BASE",
             "IBUFGDS",
             "IOBUF",
         ]

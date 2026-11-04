@@ -30,9 +30,9 @@
 //!
 //! | | Where it comes from |
 //! |---|---|
-//! | high time, low time, edge, no-count of every counter | **computed** here, from XAPP888's divider arithmetic for a 50 % duty cycle and no phase shift |
-//! | `LKTABLE`, the lock detector's settings | **quoted**: XAPP888's table, as transcribed into f4pga-arch-defs' `xilinx/xc7/techmap/cells_map.v` (`pll_lktable_lookup`), extracted from that file by a script rather than retyped |
-//! | `TABLE`, the loop filter's settings | **quoted** the same way (`pll_table_lookup`); f4pga's `OPTIMIZED` table is identical to its `HIGH` one, and so is this |
+//! | high time, low time, edge, no-count of every counter | **computed** here, from XAPP888's divider arithmetic; **checked** on Vivado's sweep, below |
+//! | `LKTABLE`, the lock detector's settings | **quoted**: XAPP888's table, as transcribed into f4pga-arch-defs' `xilinx/xc7/techmap/cells_map.v` (`pll_lktable_lookup`), extracted from that file by a script rather than retyped; **checked** below |
+//! | `TABLE`, the loop filter's settings | **quoted** the same way (`pll_table_lookup`); f4pga's `OPTIMIZED` table is identical to its `HIGH` one, and so is this, and so is Vivado's; **checked** below |
 //! | `FILTREG1_RESERVED = 0x008`, `LOCKREG3_RESERVED = 1`, every other reserved field and `POWER_REG` zero | **quoted**: f4pga-arch-defs and nextpnr-xilinx both write exactly these, and neither says why |
 //! | `IN_USE`, `COMPENSATION.Z_ZHOLD_OR_CLKIN_BUF` | **quoted**: the two features f4pga's `plle2_adv.pb_type.xml` writes for every PLL and nextpnr-xilinx for `COMPENSATION = INTERNAL` |
 //! | `ZINV_RST` / `ZINV_PWRDWN` set for a pin tied low | **derived** below, from three sources that agree once the database's naming is read correctly |
@@ -52,9 +52,33 @@
 //!
 //! An `MMCME2_ADV` sits on the `LOWER_B` quarter and has the same register
 //! layout, with its own filter table and a power register;
-//! [`mmcm_registers`] says where each difference came from. Only integer
-//! dividers, zero static phase and a 50 % duty cycle are configured, and
-//! `COMPENSATION = INTERNAL`; anything else is refused by name.
+//! [`mmcm_registers`] says where each difference came from. What is refused by
+//! name is spread spectrum, a cascade with another output's phase, and whatever
+//! Vivado refuses ([`check_manager`]).
+//!
+//! # What Vivado wrote for each parameter
+//!
+//! **Measured**, and the fixture says each run: `testdata/fpga/vivado/clocks/`,
+//! `registers.txt`, from `tools/vivado-parity/cmt_sweep.py`, one parameter at a
+//! time on a routed `MMCME2_ADV` and a routed `PLLE2_ADV`. What the table above
+//! calls quoted has since been held to it: `LOCK_TABLE`, `FILTER_LOW`, `FILTER_HIGH`
+//! and the MMCM's two are right at every multiplier under each `BANDWIDTH`, and
+//! the rule of [`counter`], of the phases and of the fractional counters
+//! ([`shaped_counter`], [`fractional_counter`]) on every run there.
+//!
+//! - A duty cycle is rounded to half a VCO cycle, up on a tie, and an odd half sets
+//!   `EDGE`. A high time of 0 becomes 1 and one of the whole division one less.
+//! - A phase is rounded to an eighth of a VCO cycle: its fraction is `PHASE_MUX`
+//!   and its cycles `DELAY_TIME`, and a negative one is that plus 360.
+//! - **A fractional counter's second half is in another output's registers**: the
+//!   falling edge of `CLKOUT0_DIVIDE_F` in `CLKOUT5`'s `FRACTIONAL` fields, and of
+//!   `CLKFBOUT_MULT_F` in `CLKOUT6`'s. So a `PHASE_MUX` on `CLKOUT0` or `CLKFBOUT`
+//!   is there too, fractional or not.
+//! - A table is indexed by the multiplier's whole part.
+//! - `POWER_REG` is `0x0100`, with `0x9800` for a fractional counter or a phase
+//!   that is an odd number of eighths or of quarters of a VCO cycle (a half needs
+//!   nothing), `0x0001` for a fine phase shift, and `0x0099` if `PSCLK` is a signal.
+//! - `CLKOUT4_CASCADE` is `CLKOUT4`'s `MX` of 2.
 //!
 //! # The reset that reads as one
 //!
@@ -85,7 +109,7 @@ use std::fmt;
 
 use super::XrayFabric;
 use super::sites::{BelPin, ExtraBel};
-use crate::fpga::arch::{ConfigEntry, RoutingGraph};
+use crate::fpga::arch::{ConfigBit, ConfigEntry, RoutingGraph};
 use crate::fpga::bitstream::{Bitstream, BitstreamError};
 use crate::fpga::place::{Netlist, Placement};
 use crate::ir::{AttrValue, Design, ModuleId};
@@ -383,6 +407,103 @@ const FILTER_HIGH: [u16; 64] = [
     0x130, 0x130, 0x130, 0x130, 0x090, 0x090, 0x090, 0x090, // 57..64
 ];
 
+/// A counter beyond its division: its phase and its duty cycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CounterShape {
+    /// `<name>_DUTY_CYCLE`, in millionths.
+    pub duty: u64,
+    /// `<name>_PHASE`, in thousandths of a degree.
+    pub phase: i64,
+}
+
+impl Default for CounterShape {
+    fn default() -> Self {
+        CounterShape {
+            duty: 500_000,
+            phase: 0,
+        }
+    }
+}
+
+/// A division of eighths of a cycle rounded to half of one: what a duty cycle or
+/// a phase is held at, a half up. `scale` is the unit of `value`.
+fn round_to(value: u128, scale: u128, steps: u128) -> u64 {
+    u64::try_from((2 * value * steps + scale) / (2 * scale)).unwrap_or(0)
+}
+
+/// What [`counter`] gives for a duty cycle other than a half.
+///
+/// **Computed**, from XAPP888's `mmcm_pll_divider`, and held to Vivado's sweep.
+pub fn shaped_counter(divide: u64, duty_millionths: u64) -> Counter {
+    if divide <= 1 {
+        return counter(divide);
+    }
+    let halves = round_to(u128::from(divide * duty_millionths), 1_000_000, 2);
+    let (mut high, mut edge) = (halves / 2, halves % 2 == 1);
+    if high == 0 {
+        high = 1;
+        edge = false;
+    }
+    if high >= divide {
+        high = divide - 1;
+        edge = true;
+    }
+    Counter {
+        high: high & 0x3f,
+        low: (divide - high) & 0x3f,
+        edge,
+        no_count: false,
+    }
+}
+
+/// A phase as `(cycles, eighths)` of a counter of `eighths_per_cycle` eighths of
+/// a VCO cycle, which is `8 * divide`: `DELAY_TIME` and `PHASE_MUX`.
+fn phase_of(eighths_per_cycle: u64, phase: i64) -> (u64, u64) {
+    let phase = u128::try_from(phase.rem_euclid(360_000)).unwrap_or(0);
+    let eighths = round_to(phase * u128::from(eighths_per_cycle), 360_000, 1);
+    (eighths / 8, eighths % 8)
+}
+
+/// A real number to the nearest integer, or `None` when it is not one an `i64`
+/// holds: the one float-to-integer conversion of this module, with its argument
+/// checked.
+#[allow(clippy::cast_possible_truncation)]
+fn to_units(value: f64) -> Option<i64> {
+    let rounded = value.round();
+    (rounded.is_finite() && rounded.abs() < 9.0e15).then_some(rounded as i64)
+}
+
+/// How a clock manager's feedback is compensated, once what Vivado makes of its
+/// `COMPENSATION` and its wiring is known: see [`check_manager`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Compensation {
+    /// `INTERNAL`, `BUF_IN` or `EXTERNAL`, all one to these registers.
+    #[default]
+    NotZhold,
+    /// `ZHOLD`, which sets its own bits and takes the feedback's way in by
+    /// another code.
+    Zhold,
+}
+
+/// What an `MMCME2_ADV` or a `PLLE2_ADV` is asked beyond a plain division.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ManagerShapes {
+    /// `CLKFBOUT`'s.
+    pub feedback: CounterShape,
+    /// `CLKOUT<n>`'s.
+    pub outputs: [CounterShape; 7],
+    /// `CLKFBOUT_MULT_F`'s fraction, in eighths; an `MMCME2_ADV`'s alone.
+    pub feedback_eighths: u64,
+    /// `CLKOUT0_DIVIDE_F`'s fraction, in eighths.
+    pub clkout0_eighths: u64,
+    /// `CLKOUT4_CASCADE`.
+    pub cascade: bool,
+    /// Whether `PSCLK` is a signal: `PSEN` or `PSINCDEC` alone change nothing here.
+    pub phase_shift_routed: bool,
+    /// See [`Compensation`].
+    pub compensation: Compensation,
+}
+
 /// What a `PLLE2_BASE` is asked to do, in its own parameter names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PllSettings {
@@ -412,11 +533,13 @@ pub struct PllSettings {
     /// Whether `CLKINSEL` must be inverted: tied low and left unrouted, it
     /// would read the one that selects `CLKIN1`.
     pub invert_clkinsel: bool,
+    /// Phases, duty cycles and compensation.
+    pub shapes: ManagerShapes,
 }
 
-/// What an `MMCME2_ADV` is asked to do, in its own parameter names. Only
-/// integer dividers are taken: a fractional `CLKFBOUT_MULT_F` or
-/// `CLKOUT0_DIVIDE_F` is refused by [`XrayFabric::configure_clock_managers`].
+/// What an `MMCME2_ADV` is asked to do, in its own parameter names. A fractional
+/// `CLKFBOUT_MULT_F` or `CLKOUT0_DIVIDE_F` is its whole part here and its eighths
+/// in [`ManagerShapes`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MmcmSettings {
     /// `DIVCLK_DIVIDE`, 1..=106.
@@ -439,6 +562,8 @@ pub struct MmcmSettings {
     pub invert: [bool; 4],
     /// Whether `CLKINSEL` must be inverted.
     pub invert_clkinsel: bool,
+    /// Phases, duty cycles, fractions and compensation.
+    pub shapes: ManagerShapes,
 }
 
 /// Why a PLL could not be configured.
@@ -523,10 +648,22 @@ pub fn pll_registers(settings: &PllSettings) -> BTreeMap<String, u64> {
     put("IN_USE".to_owned(), 1);
     // Feedback through the tile's own `CLKFBOUT2IN` path, with no global
     // buffer on it: compensation `INTERNAL`, which is this one bit and
-    // the input mux the router sets.
-    put("COMPENSATION.Z_ZHOLD_OR_CLKIN_BUF".to_owned(), 1);
-    put("COMPENSATION.ZHOLD_NO_CLKIN_BUF".to_owned(), 0);
-    put("COMPENSATION.ZHOLD_NO_CLKIN_BUF_NO_TOP".to_owned(), 0);
+    // the input mux the router sets. Vivado writes the same for `BUF_IN` and
+    // `EXTERNAL`, and these three in its place for `ZHOLD`.
+    let zhold = settings.shapes.compensation == Compensation::Zhold;
+    put("ZHOLD_CLKFBIN".to_owned(), u64::from(zhold));
+    put(
+        "COMPENSATION.Z_ZHOLD_OR_CLKIN_BUF".to_owned(),
+        u64::from(!zhold),
+    );
+    put(
+        "COMPENSATION.ZHOLD_NO_CLKIN_BUF".to_owned(),
+        u64::from(zhold),
+    );
+    put(
+        "COMPENSATION.ZHOLD_NO_CLKIN_BUF_NO_TOP".to_owned(),
+        u64::from(zhold),
+    );
     put("COMP.ZHOLD_NO_CLKIN_BUF_TOP".to_owned(), 0);
     put("STARTUP_WAIT".to_owned(), u64::from(settings.startup_wait));
     put("ZINV_RST".to_owned(), u64::from(settings.invert_rst));
@@ -550,16 +687,27 @@ pub fn pll_registers(settings: &PllSettings) -> BTreeMap<String, u64> {
     // the library default of a division by one, as f4pga writes it, and
     // its output enable stays off.
     let more = settings.more_outputs;
-    for (name, divide, used) in [
-        ("CLKFBOUT", settings.clkfbout_mult, settings.clkfbout_used),
-        ("CLKOUT0", settings.clkout0_divide, settings.clkout0_used),
-        ("CLKOUT1", more[0].0, more[0].1),
-        ("CLKOUT2", more[1].0, more[1].1),
-        ("CLKOUT3", more[2].0, more[2].1),
-        ("CLKOUT4", more[3].0, more[3].1),
-        ("CLKOUT5", more[4].0, more[4].1),
+    let shapes = &settings.shapes;
+    for (name, divide, used, shape) in [
+        (
+            "CLKFBOUT",
+            settings.clkfbout_mult,
+            settings.clkfbout_used,
+            shapes.feedback,
+        ),
+        (
+            "CLKOUT0",
+            settings.clkout0_divide,
+            settings.clkout0_used,
+            shapes.outputs[0],
+        ),
+        ("CLKOUT1", more[0].0, more[0].1, shapes.outputs[1]),
+        ("CLKOUT2", more[1].0, more[1].1, shapes.outputs[2]),
+        ("CLKOUT3", more[2].0, more[2].1, shapes.outputs[3]),
+        ("CLKOUT4", more[3].0, more[3].1, shapes.outputs[4]),
+        ("CLKOUT5", more[4].0, more[4].1, shapes.outputs[5]),
     ] {
-        divider_fields(&mut put, name, divide, used, 0, false);
+        divider_fields(&mut put, name, divide, used, 0, false, shape);
     }
 
     let index = usize::try_from(settings.clkfbout_mult.clamp(1, 64) - 1).unwrap_or(0);
@@ -595,14 +743,19 @@ fn divider_fields(
     used: bool,
     mx: u64,
     fractional: bool,
+    shape: CounterShape,
 ) {
-    let c = counter(divide);
+    let c = shaped_counter(divide, shape.duty);
+    let (delay, mux) = phase_of(8 * divide, shape.phase);
     put(format!("{name}_CLKOUT1_HIGH_TIME"), c.high);
     put(format!("{name}_CLKOUT1_LOW_TIME"), c.low);
     put(format!("{name}_CLKOUT1_OUTPUT_ENABLE"), u64::from(used));
-    put(format!("{name}_CLKOUT1_PHASE_MUX"), 0);
+    put(format!("{name}_CLKOUT1_PHASE_MUX"), mux);
     if fractional {
-        put(format!("{name}_CLKOUT2_FRACTIONAL_DELAY_TIME"), 0);
+        put(
+            format!("{name}_CLKOUT2_FRACTIONAL_DELAY_TIME"),
+            delay & 0x3f,
+        );
         put(format!("{name}_CLKOUT2_FRACTIONAL_EDGE"), u64::from(c.edge));
         put(
             format!("{name}_CLKOUT2_FRACTIONAL_NO_COUNT"),
@@ -613,7 +766,7 @@ fn divider_fields(
         put(format!("{name}_CLKOUT2_FRACTIONAL_PHASE_MUX_F"), 0);
         put(format!("{name}_CLKOUT2_FRACTIONAL_RESERVED"), 0);
     } else {
-        put(format!("{name}_CLKOUT2_DELAY_TIME"), 0);
+        put(format!("{name}_CLKOUT2_DELAY_TIME"), delay & 0x3f);
         put(format!("{name}_CLKOUT2_EDGE"), u64::from(c.edge));
         put(format!("{name}_CLKOUT2_NO_COUNT"), u64::from(c.no_count));
         put(format!("{name}_CLKOUT2_MX"), mx);
@@ -622,6 +775,47 @@ fn divider_fields(
         put(format!("{name}_CLKOUT2_FRAC_WF_R"), 0);
         put(format!("{name}_CLKOUT2_RESERVED"), 0);
     }
+}
+
+/// The fields of a fractional counter of `whole` and `eighths` eighths, as
+/// XAPP888's `mmcm_frac_count_calc` works them out and Vivado's sweep holds them:
+/// `name`'s own, and in `fall`'s `FRACTIONAL` fields its falling edge. `CLKOUT0`'s
+/// falling edge is in `CLKOUT5`, and `CLKFBOUT`'s in `CLKOUT6`.
+fn fractional_counter(
+    put: &mut dyn FnMut(String, u64),
+    name: &str,
+    fall: &str,
+    whole: u64,
+    eighths: u64,
+    used: bool,
+    phase: i64,
+) {
+    let even = whole / 2;
+    let odd = whole - 2 * even;
+    let odd_and_frac = 8 * odd + eighths;
+    let low = even - u64::from(odd_and_frac <= 9);
+    let high = even - u64::from(odd_and_frac <= 8);
+    let rise = (1..=8).contains(&odd_and_frac);
+    let falling = (2..=9).contains(&odd_and_frac) || (eighths == 1 && whole == 2);
+    let (delay, mux) = phase_of(8 * whole + eighths, phase);
+    put(format!("{name}_CLKOUT1_HIGH_TIME"), high & 0x3f);
+    put(format!("{name}_CLKOUT1_LOW_TIME"), low & 0x3f);
+    put(format!("{name}_CLKOUT1_OUTPUT_ENABLE"), u64::from(used));
+    put(format!("{name}_CLKOUT1_PHASE_MUX"), mux);
+    put(format!("{name}_CLKOUT2_DELAY_TIME"), delay & 0x3f);
+    put(format!("{name}_CLKOUT2_EDGE"), odd);
+    put(format!("{name}_CLKOUT2_NO_COUNT"), 0);
+    put(format!("{name}_CLKOUT2_FRAC"), eighths);
+    put(format!("{name}_CLKOUT2_FRAC_EN"), 1);
+    put(format!("{name}_CLKOUT2_FRAC_WF_R"), u64::from(rise));
+    put(
+        format!("{fall}_CLKOUT2_FRACTIONAL_PHASE_MUX_F"),
+        (odd * 4 + eighths / 2 + mux) % 8,
+    );
+    put(
+        format!("{fall}_CLKOUT2_FRACTIONAL_FRAC_WF_F"),
+        u64::from(falling),
+    );
 }
 
 /// An MMCM's loop filter `{CP, RES, LFHF}` for `BANDWIDTH = "LOW"`, by
@@ -664,18 +858,21 @@ const MMCM_FILTER_HIGH: [u16; 64] = [
 /// |---|---|---|
 /// | `TABLE` | `MMCM_FILTER_LOW` / `MMCM_FILTER_HIGH` in this module | quoted from f4pga, two entries checked against Vivado |
 /// | `LKTABLE` | the PLL's table | f4pga's `mmcm_lktable_lookup` *is* `pll_lktable_lookup`; Vivado's 6 and 32 match |
-/// | `POWER_REG` | `0x0199` when an output uses fine phase shift, else `0x0100` | **Vivado**, four MMCMs in NewAE's image. f4pga writes `0x9900` and `0x0100`: the same pattern in other bits, which no Husky disagrees with only because none uses it |
+/// | `POWER_REG` | see the module docs | **Vivado**, four MMCMs in NewAE's image, and the sweep. f4pga writes `0x9900` for a fine phase shift and `0x0100`: `0x9800` is a different bit of Vivado's, for a fractional counter or an odd phase, which no Husky disagrees with only because none uses one |
 /// | `<out>_CLKOUT2_MX` | 1 on an output with `USE_FINE_PS`, else 0 | **Vivado**, the same four |
-/// | `COMP.Z_ZHOLD` | set, for `COMPENSATION = INTERNAL` | **Vivado**, the same four |
+/// | `COMP.Z_ZHOLD` | set, for anything but `ZHOLD`; `COMP.ZHOLD` for that | **Vivado**, the same four, and the sweep |
 /// | `ZINV_RST`, `ZINV_PWRDWN`, `ZINV_PSEN`, `ZINV_PSINCDEC` | set when the pin is tied low and left unrouted | the PLL's reading of `ZINV_RST`; **Vivado** set `ZINV_PSEN`/`ZINV_PSINCDEC` on the one MMCM whose phase-shift pins are unconnected and on none of the three that route them |
 pub fn mmcm_registers(settings: &MmcmSettings) -> BTreeMap<String, u64> {
     let mut out: BTreeMap<String, u64> = BTreeMap::new();
     let mut put = |name: String, value: u64| {
         out.insert(name, value);
     };
+    let shapes = &settings.shapes;
+    let zhold = shapes.compensation == Compensation::Zhold;
     put("IN_USE".to_owned(), 1);
-    put("COMP.Z_ZHOLD".to_owned(), 1);
-    put("COMP.ZHOLD".to_owned(), 0);
+    put("ZHOLD_CLKFBIN".to_owned(), u64::from(zhold));
+    put("COMP.Z_ZHOLD".to_owned(), u64::from(!zhold));
+    put("COMP.ZHOLD".to_owned(), u64::from(zhold));
     put("STARTUP_WAIT".to_owned(), u64::from(settings.startup_wait));
     put("SS_EN".to_owned(), 0);
     for (name, invert) in ["ZINV_RST", "ZINV_PWRDWN", "ZINV_PSEN", "ZINV_PSINCDEC"]
@@ -706,15 +903,55 @@ pub fn mmcm_registers(settings: &MmcmSettings) -> BTreeMap<String, u64> {
         settings.clkfbout_used,
         u64::from(settings.clkfbout_fine_ps),
         false,
+        shapes.feedback,
     );
     for (index, (divide, used, fine)) in settings.outputs.iter().enumerate() {
+        let mx = if index == 4 && shapes.cascade {
+            2
+        } else {
+            u64::from(*fine)
+        };
         divider_fields(
             &mut put,
             &format!("CLKOUT{index}"),
             *divide,
             *used,
-            u64::from(*fine),
+            mx,
             index >= 5,
+            shapes.outputs[index],
+        );
+    }
+    // The other half of a counter on two registers, once the counters each
+    // has written are there to be written over: see the module docs.
+    let eighth_of = |divide: u64, shape: CounterShape| phase_of(8 * divide, shape.phase).1;
+    put(
+        "CLKOUT5_CLKOUT2_FRACTIONAL_PHASE_MUX_F".to_owned(),
+        eighth_of(settings.outputs[0].0, shapes.outputs[0]),
+    );
+    put(
+        "CLKOUT6_CLKOUT2_FRACTIONAL_PHASE_MUX_F".to_owned(),
+        eighth_of(settings.clkfbout_mult, shapes.feedback),
+    );
+    if shapes.clkout0_eighths != 0 {
+        fractional_counter(
+            &mut put,
+            "CLKOUT0",
+            "CLKOUT5",
+            settings.outputs[0].0,
+            shapes.clkout0_eighths,
+            settings.outputs[0].1,
+            shapes.outputs[0].phase,
+        );
+    }
+    if shapes.feedback_eighths != 0 {
+        fractional_counter(
+            &mut put,
+            "CLKFBOUT",
+            "CLKOUT6",
+            settings.clkfbout_mult,
+            shapes.feedback_eighths,
+            settings.clkfbout_used,
+            shapes.feedback.phase,
         );
     }
 
@@ -732,11 +969,101 @@ pub fn mmcm_registers(settings: &MmcmSettings) -> BTreeMap<String, u64> {
     put("LOCKREG2_RESERVED".to_owned(), 0);
     put("LOCKREG3_RESERVED".to_owned(), 1);
     let fine = settings.clkfbout_fine_ps || settings.outputs.iter().any(|o| o.2);
+    let quarter =
+        |divide: u64, shape: CounterShape| !phase_of(8 * divide, shape.phase).1.is_multiple_of(4);
+    let split = shapes.clkout0_eighths != 0
+        || shapes.feedback_eighths != 0
+        || quarter(settings.clkfbout_mult, shapes.feedback)
+        || settings
+            .outputs
+            .iter()
+            .zip(&shapes.outputs)
+            .any(|(o, shape)| quarter(o.0, *shape));
+    let fine_bits = match (fine, shapes.phase_shift_routed) {
+        (false, _) => 0,
+        (true, false) => 0x0001,
+        (true, true) => 0x0099,
+    };
     put(
         "POWER_REG_POWER_REG_POWER_REG".to_owned(),
-        if fine { 0x0199 } else { 0x0100 },
+        0x0100 | if split { 0x9800 } else { 0 } | fine_bits,
     );
     out
+}
+
+/// What Vivado refuses of a clock manager's frequencies and phases, by the rules
+/// its own DRC gave on `registers.txt`, as `(parameter, message)`.
+///
+/// `period` is `CLKIN1_PERIOD` in thousandths of a nanosecond, zero when none is
+/// given, which is when nothing here can be worked out of the frequencies. The
+/// windows are `.dev`'s, DS181's at grade 1, **quoted**, and what the run confirms
+/// is that a value outside them is refused and each inside taken.
+///
+/// # Errors
+///
+/// The parameter at fault and what is wrong with it.
+pub fn check_manager(
+    mmcm: bool,
+    period: u64,
+    divclk: u64,
+    mult_eighths: u64,
+    phases: &[(&str, u64, i64, bool)],
+) -> Result<(), (String, String)> {
+    let (input, vco) = if mmcm {
+        ((10.0, 800.0), (600.0, 1200.0))
+    } else {
+        ((19.0, 800.0), (800.0, 1600.0))
+    };
+    let (check, phase_check, kind) = if mmcm {
+        ("PDRC-29, PDRC-34", "AVAL-139", "an MMCM")
+    } else {
+        ("PDRC-38, PDRC-43", "AVAL-167", "a PLL")
+    };
+    if period != 0 {
+        let megahertz = 1.0e6 / f64::from(u32::try_from(period).unwrap_or(u32::MAX));
+        let within =
+            |value: f64, (lo, hi): (f64, f64)| value >= lo - 0.0005 && value <= hi + 0.0005;
+        let scale = f64::from(u32::try_from(mult_eighths).unwrap_or(u32::MAX)) / 8.0;
+        let divided = megahertz / f64::from(u32::try_from(divclk).unwrap_or(1));
+        // No rule of its says anything of the phase detector, in the runs here:
+        // 600 MHz of it went through, and the window is DS181's and not its.
+        if !within(megahertz, input) {
+            return Err((
+                "CLKIN1_PERIOD".to_owned(),
+                format!("makes {megahertz:.3} MHz, outside {kind}'s input range ({check})"),
+            ));
+        }
+        if !within(divided * scale, vco) {
+            return Err((
+                "CLKFBOUT_MULT".to_owned(),
+                format!(
+                    "makes {:.3} MHz at the VCO, outside {kind}'s range ({check})",
+                    divided * scale
+                ),
+            ));
+        }
+    }
+    for (name, divide_eighths, phase, fine) in phases {
+        if *fine || *phase == 0 {
+            continue;
+        }
+        // A phase is a multiple of 45 / divide, to what Vivado prints of it.
+        let steps = i128::from(phase.rem_euclid(360_000)) * i128::from(*divide_eighths);
+        let unit = 45_000i128 * 8;
+        let off = (steps + unit / 2).rem_euclid(unit) - unit / 2;
+        // Three decimal places of a degree, over a step of up to 128 divisions.
+        let allowed = i128::from(*divide_eighths) * 8;
+        if off.abs() > allowed {
+            return Err((
+                format!("{name}_PHASE"),
+                format!(
+                    "is {:.3}, not a multiple of 45 divided by its counter's division ({phase_check})",
+                    *phase as f64 / 1000.0
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Sets the bits `registers` asks for on a bel whose configuration the
@@ -796,6 +1123,62 @@ pub(super) fn apply_registers(
     Ok(count)
 }
 
+/// The pin of a role on an instance.
+fn pins_of_role<'a>(
+    instance: &crate::fpga::place::Instance,
+    netlist: &'a Netlist,
+    role: &str,
+) -> Option<&'a crate::fpga::place::NetPin> {
+    instance
+        .pins
+        .iter()
+        .map(|p| &netlist.pins[*p])
+        .find(|p| p.role == role)
+}
+
+/// The bits a `ZHOLD` feedback takes its way in by, in place of the pip's, and
+/// the feature that names them, by the tile type: **measured**, on `mmcm_fb_bufg`
+/// and `pll_fb_bufg` and on the right of the die. This feedback's mux has one
+/// code for `CLK_IN3_HCLK` that Project X-Ray's fuzzers never saw, since they never
+/// routed a `ZHOLD`: on the MMCM `28_1012 28_1017`, where every other code on that
+/// input has `29_979`; on the PLL `29_43`, where they have `28_76`.
+pub(super) fn zhold_features(tile_type: &str) -> Vec<super::Feature> {
+    let feature = |name: &str, ones: Vec<ConfigBit>, zeros: Vec<ConfigBit>| super::Feature {
+        name: name.to_owned(),
+        ones,
+        zeros,
+    };
+    match tile_type {
+        "CMT_TOP_L_LOWER_B" | "CMT_TOP_R_LOWER_B" => vec![feature(
+            ZHOLD_MMCM,
+            vec![ConfigBit::new(28, 1012), ConfigBit::new(28, 1017)],
+            vec![ConfigBit::new(29, 979)],
+        )],
+        "CMT_TOP_L_UPPER_T" | "CMT_TOP_R_UPPER_T" => vec![feature(
+            ZHOLD_PLL,
+            vec![ConfigBit::new(29, 43)],
+            vec![ConfigBit::new(28, 76)],
+        )],
+        _ => Vec::new(),
+    }
+}
+
+/// See [`zhold_features`].
+pub(super) const ZHOLD_MMCM: &str = "MMCME2_ADV.ZHOLD_CLKFBIN";
+/// See [`zhold_features`].
+pub(super) const ZHOLD_PLL: &str = "PLLE2_ADV.ZHOLD_CLKFBIN";
+
+/// The arc a `ZHOLD` feedback's code selects: see [`zhold_features`].
+pub(super) fn zhold_arc(tile_type: &str) -> Option<&'static str> {
+    match tile_type {
+        "CMT_TOP_L_LOWER_B" => Some("CMT_LR_LOWER_B_MMCM_CLKFBIN.CMT_L_LOWER_B_CLK_IN3_HCLK"),
+        "CMT_TOP_R_LOWER_B" => Some("CMT_LR_LOWER_B_MMCM_CLKFBIN.CMT_R_LOWER_B_CLK_IN3_HCLK"),
+        "CMT_TOP_L_UPPER_T" => Some("CMT_TOP_R_UPPER_T_PLLE2_CLKFBIN.CMT_TOP_L_UPPER_T_CLKFBIN"),
+        "CMT_TOP_R_UPPER_T" => Some("CMT_TOP_R_UPPER_T_PLLE2_CLKFBIN.CMT_TOP_R_UPPER_T_CLKFBIN"),
+        _ => None,
+    }
+}
+
 impl XrayFabric {
     /// Configures every PLL the placement put on a clock management tile,
     /// and says how many bits that set.
@@ -814,6 +1197,12 @@ impl XrayFabric {
     ///
     /// [`ClockManagerError`]: a primitive other than `PLLE2_BASE` on a PLL
     /// site, a divider out of its range, or a database missing a field.
+    ///
+    /// `clock_periods` is each `create_clock` by its net, in nanoseconds: Vivado
+    /// checks a manager's frequencies against the clock it times its input by,
+    /// over its `CLKIN1_PERIOD` (`mmcm_period_clocked`, `pll_period_clocked`), and
+    /// this checks them only for an input a pad's clock reaches through buffers.
+    #[allow(clippy::too_many_arguments)]
     pub fn configure_clock_managers(
         &self,
         design: &Design,
@@ -821,6 +1210,7 @@ impl XrayFabric {
         graph: &RoutingGraph,
         netlist: &Netlist,
         placement: &Placement,
+        clock_periods: &BTreeMap<String, f64>,
         bits: &mut Bitstream,
     ) -> Result<usize, ClockManagerError> {
         let Some(m) = design.modules.get(module) else {
@@ -892,43 +1282,111 @@ impl XrayFabric {
                     .unwrap_or(default)
                     .to_ascii_uppercase()
             };
-            // A phase other than zero or a duty cycle other than one half
-            // needs arithmetic this module does not do.
-            let real = |name: &str| -> Option<f64> {
+            // A real parameter in units of `1 / scale`, to the nearest.
+            let real = |name: &str, scale: f64| -> Option<i64> {
                 params.and_then(|p| p.get(name)).and_then(|v| {
-                    v.as_int()
+                    let value = v
+                        .as_int()
                         .map(|i| i as f64)
-                        .or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok()))
+                        .or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok()))?;
+                    to_units(value * scale)
                 })
             };
-            for n in [
-                "CLKFBOUT", "CLKOUT0", "CLKOUT1", "CLKOUT2", "CLKOUT3", "CLKOUT4", "CLKOUT5",
-                "CLKOUT6",
-            ] {
-                let phase = format!("{n}_PHASE");
-                if real(&phase).is_some_and(|p| p != 0.0) {
+            // A divider in eighths, whole or fractional: `CLKOUT0_DIVIDE_F` and
+            // `CLKFBOUT_MULT_F`, which Vivado takes in steps of an eighth.
+            let eighths = |name: &str, default: u64, lo: u64, hi: u64| {
+                let Some(raw) = real(name, 8_000.0) else {
+                    return Ok(default * 8);
+                };
+                let value = u64::try_from(raw)
+                    .map_err(|_| bad(name, format!("is {}, below {lo}", raw as f64 / 8_000.0)))?;
+                if value % 1_000 != 0 {
                     return Err(bad(
-                        &phase,
-                        "is not 0, which is the only phase configured here".to_owned(),
+                        name,
+                        format!(
+                            "is {}, which is not in eighths, the steps Vivado takes",
+                            raw as f64 / 8_000.0
+                        ),
                     ));
                 }
-                let duty = format!("{n}_DUTY_CYCLE");
-                if real(&duty).is_some_and(|d| (d - 0.5).abs() > 1e-9) {
+                let value = value / 1_000;
+                if value < lo * 8 || value > hi * 8 {
                     return Err(bad(
-                        &duty,
-                        "is not 0.5, the only duty cycle configured here".to_owned(),
+                        name,
+                        format!("is {}, outside {lo}..={hi}", value as f64 / 8.0),
                     ));
                 }
-            }
-            let compensation = text("COMPENSATION", "ZHOLD");
-            if mmcm && compensation != "INTERNAL" {
+                Ok(value)
+            };
+            let shape_of = |n: &str| -> Result<CounterShape, ClockManagerError> {
+                let duty = real(&format!("{n}_DUTY_CYCLE"), 1_000_000.0).unwrap_or(500_000);
+                Ok(CounterShape {
+                    duty: u64::try_from(duty).map_err(|_| {
+                        bad(&format!("{n}_DUTY_CYCLE"), "is not a duty cycle".to_owned())
+                    })?,
+                    phase: real(&format!("{n}_PHASE"), 1_000.0).unwrap_or(0),
+                })
+            };
+            if text("SS_EN", "FALSE") == "TRUE" {
                 return Err(bad(
-                    "COMPENSATION",
-                    format!(
-                        "is `{compensation}`; only INTERNAL, the feedback inside the tile, is configured"
-                    ),
+                    "SS_EN",
+                    "is TRUE: spread spectrum is built by Vivado and not by this flow yet"
+                        .to_owned(),
                 ));
             }
+            // What the feedback goes through says more than `COMPENSATION` does:
+            // Vivado takes a direct feedback as `INTERNAL`, whichever is asked
+            // for. These are its answers, on `registers.txt`'s designs.
+            let fb_driver = pins_of_role(instance, netlist, "fb")
+                .and_then(|p| p.signal)
+                .and_then(|s| netlist.signals[s].driver)
+                .map(|d| &netlist.pins[d]);
+            let direct = fb_driver.is_none_or(|d| {
+                d.instance == index && matches!(d.role.as_str(), "fbout" | "fboutb")
+            });
+            let through_a_pad =
+                fb_driver.is_some_and(|d| netlist.instances[d.instance].kind == "io");
+            let asked = text("COMPENSATION", "ZHOLD");
+            let compensation = match (asked.as_str(), direct, through_a_pad) {
+                ("ZHOLD" | "INTERNAL", true, _) => Compensation::NotZhold,
+                ("BUF_IN", true, _) => {
+                    return Err(bad(
+                        "COMPENSATION",
+                        "is BUF_IN, with the feedback direct: Vivado wants it through a BUFG, \
+                         BUFH or BUFR (REQP-1575, REQP-1684)"
+                            .to_owned(),
+                    ));
+                }
+                ("EXTERNAL", true, _) => {
+                    return Err(bad(
+                        "COMPENSATION",
+                        "is EXTERNAL, with the feedback direct: Vivado wants it off the part and \
+                         back through a pad (REQP-1575, REQP-1684)"
+                            .to_owned(),
+                    ));
+                }
+                ("INTERNAL", false, _) => {
+                    return Err(bad(
+                        "COMPENSATION",
+                        "is INTERNAL, with the feedback not direct (REQP-1575, REQP-1684)"
+                            .to_owned(),
+                    ));
+                }
+                ("EXTERNAL", false, false) => {
+                    return Err(bad(
+                        "COMPENSATION",
+                        "is EXTERNAL, with the feedback inside the part (Timing 38-290)".to_owned(),
+                    ));
+                }
+                ("ZHOLD", false, false) => Compensation::Zhold,
+                ("BUF_IN" | "EXTERNAL" | "ZHOLD", false, _) => Compensation::NotZhold,
+                _ => {
+                    return Err(bad(
+                        "COMPENSATION",
+                        format!("is `{asked}`, not ZHOLD, BUF_IN, EXTERNAL or INTERNAL"),
+                    ));
+                }
+            };
             let bandwidth = text("BANDWIDTH", "OPTIMIZED");
             if !matches!(bandwidth.as_str(), "LOW" | "HIGH" | "OPTIMIZED") {
                 return Err(bad(
@@ -945,52 +1403,176 @@ impl XrayFabric {
                     .filter(|p| p.role == role)
                     .collect()
             };
-            let used = |role: &str| pins_of(role).iter().any(|p| p.signal.is_some());
+            // An output in use has a reader: `PLLE2_BASE`'s are wires in the
+            // library cell whether a design reads them or not.
+            let used = |role: &str| {
+                pins_of(role).iter().any(|p| {
+                    p.signal
+                        .is_some_and(|s| !p.output || !netlist.signals[s].sinks.is_empty())
+                })
+            };
+            let inverted = |name: &str| {
+                params
+                    .and_then(|p| p.get(name))
+                    .and_then(AttrValue::as_int)
+                    .unwrap_or(0)
+                    != 0
+            };
             // A control pin with no signal is left unrouted and reads one;
             // it has to be inverted to mean a zero. One tied *high* reads
-            // what it asks for.
-            let invert = |role: &str| match pins_of(role).first() {
-                Some(p) if p.signal.is_some() => false,
-                Some(p) => p.constant != Some(Bit::One),
-                None => true,
+            // what it asks for. `IS_<pin>_INVERTED` turns either round.
+            let invert = |role: &str, name: &str| {
+                inverted(name)
+                    != match pins_of(role).first() {
+                        Some(p) if p.signal.is_some() => false,
+                        Some(p) => p.constant != Some(Bit::One),
+                        None => true,
+                    }
             };
             // `CLKINSEL` is the other way round: left out, it is high and
             // selects `CLKIN1`, which is what a primitive without the pin
             // means.
-            let invert_clkinsel = pins_of("clkinsel")
-                .first()
-                .is_some_and(|p| p.signal.is_none() && p.constant != Some(Bit::One));
+            let invert_clkinsel = inverted("IS_CLKINSEL_INVERTED")
+                != pins_of("clkinsel")
+                    .first()
+                    .is_some_and(|p| p.signal.is_none() && p.constant != Some(Bit::One));
             let startup_wait = text("STARTUP_WAIT", "FALSE") == "TRUE";
+            // The two choices of input: what Vivado refuses of one that is a
+            // signal.
+            if used("clkinsel") && !used("rst") {
+                return Err(bad(
+                    "CLKINSEL",
+                    "is a signal, with no signal on RST: Vivado wants one (REQP-164)".to_owned(),
+                ));
+            }
+            // On an MMCM, the two inputs are the same kind of thing. A pad that
+            // also clocks the design is on its buffer, where Vivado's is, since
+            // that is what it reads: a pad and a buffer are two kinds.
+            if mmcm && used("clkin2") {
+                let source = |role: &str| {
+                    let signal = pins_of_role(instance, netlist, role).and_then(|p| p.signal)?;
+                    let buffered = netlist.signals[signal].sinks.iter().any(|sink| {
+                        let pin = &netlist.pins[*sink];
+                        netlist.instances[pin.instance].kind == "gb" && pin.role == "i"
+                    });
+                    let driver = netlist.signals[signal].driver?;
+                    Some(if buffered {
+                        "gb"
+                    } else {
+                        netlist.instances[netlist.pins[driver].instance]
+                            .kind
+                            .as_str()
+                    })
+                };
+                if source("ref") != source("clkin2") {
+                    return Err(bad(
+                        "CLKIN2",
+                        "comes from a different kind of source from CLKIN1: one compensation \
+                         cannot suit both (REQP-119)"
+                            .to_owned(),
+                    ));
+                }
+            }
+            // The input's clock, when a `create_clock` names it: see above. With
+            // none, Vivado checks the attribute and this does not, since a
+            // manager behind another manager or a multiplexer has a period only
+            // Vivado's timer knows, and refusing on the attribute alone refused
+            // the ChipWhisperer-Husky's glitch MMCM, which Vivado builds.
+            let mut input = pins_of_role(instance, netlist, "ref").and_then(|p| p.signal);
+            let mut period = 0u64;
+            for _ in 0..4 {
+                let Some(signal) = input else { break };
+                if let Some(ns) = clock_periods.get(&netlist.signals[signal].name) {
+                    period = u64::try_from(to_units(ns * 1_000.0).unwrap_or(0)).unwrap_or(0);
+                    break;
+                }
+                input = netlist.signals[signal]
+                    .driver
+                    .map(|d| netlist.pins[d].instance)
+                    .filter(|d| netlist.instances[*d].kind == "gb")
+                    .and_then(|d| pins_of_role(&netlist.instances[d], netlist, "i"))
+                    .and_then(|p| p.signal);
+            }
+            let mut shapes = ManagerShapes {
+                compensation,
+                ..ManagerShapes::default()
+            };
+            shapes.feedback = shape_of("CLKFBOUT")?;
+            for (n, shape) in shapes.outputs.iter_mut().enumerate() {
+                *shape = shape_of(&format!("CLKOUT{n}"))?;
+            }
 
             if mmcm {
                 let fine = |name: &str| text(&format!("{name}_USE_FINE_PS"), "FALSE") == "TRUE";
+                shapes.cascade = text("CLKOUT4_CASCADE", "FALSE") == "TRUE";
+                shapes.phase_shift_routed = used("psclk");
+                let clkout0 = eighths("CLKOUT0_DIVIDE_F", 1, 1, 128)?;
+                let feedback = eighths("CLKFBOUT_MULT_F", 5, 2, 64)?;
+                shapes.clkout0_eighths = clkout0 % 8;
+                shapes.feedback_eighths = feedback % 8;
                 let mut outputs = [(1u64, false, false); 7];
+                let mut phases = vec![(
+                    "CLKFBOUT".to_owned(),
+                    feedback,
+                    shapes.feedback.phase,
+                    fine("CLKFBOUT"),
+                )];
                 for (n, out) in outputs.iter_mut().enumerate() {
                     let divide = if n == 0 {
-                        integer("CLKOUT0_DIVIDE_F", 1, 1, 128)?
+                        clkout0 / 8
                     } else {
                         integer(&format!("CLKOUT{n}_DIVIDE"), 1, 1, 128)?
                     };
-                    let on = used(OUT[n]) || OUTB.get(n).is_some_and(|b| used(b));
-                    *out = (divide, on, fine(&format!("CLKOUT{n}")));
+                    // A cascade runs `CLKOUT6`'s counter for `CLKOUT4`.
+                    let on = used(OUT[n])
+                        || OUTB.get(n).is_some_and(|b| used(b))
+                        || (n == 6 && shapes.cascade);
+                    let name = format!("CLKOUT{n}");
+                    *out = (divide, on, fine(&name));
+                    let eighths = if n == 0 { clkout0 } else { divide * 8 };
+                    phases.push((name.clone(), eighths, shapes.outputs[n].phase, fine(&name)));
                 }
+                // A fine phase shift starting off a whole VCO cycle: Vivado writes
+                // bits for it that this database has no name for (`28_91` to
+                // `29_93`, in `registers.txt`), so it has nothing to write here.
+                for (name, eighths, phase, is_fine) in &phases {
+                    if *is_fine && phase_of(*eighths, *phase).1 != 0 {
+                        return Err(bad(
+                            &format!("{name}_PHASE"),
+                            "is not a whole number of VCO cycles, with a fine phase shift: \
+                             this flow does not configure that yet"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                let divclk_divide = integer("DIVCLK_DIVIDE", 1, 1, 106)?;
+                let listed: Vec<(&str, u64, i64, bool)> = phases
+                    .iter()
+                    .map(|(n, e, p, f)| (n.as_str(), *e, *p, *f))
+                    .collect();
+                check_manager(true, period, divclk_divide, feedback, &listed)
+                    .map_err(|(name, message)| bad(&name, message))?;
                 let settings = MmcmSettings {
-                    divclk_divide: integer("DIVCLK_DIVIDE", 1, 1, 106)?,
-                    clkfbout_mult: integer("CLKFBOUT_MULT_F", 5, 2, 64)?,
+                    divclk_divide,
+                    clkfbout_mult: feedback / 8,
                     clkfbout_fine_ps: fine("CLKFBOUT"),
                     clkfbout_used: used("fbout") || used("fboutb"),
                     outputs,
                     bandwidth,
                     startup_wait,
                     invert: [
-                        invert("rst"),
-                        invert("pwrdwn"),
-                        invert("psen"),
-                        invert("psincdec"),
+                        invert("rst", "IS_RST_INVERTED"),
+                        invert("pwrdwn", "IS_PWRDWN_INVERTED"),
+                        invert("psen", "IS_PSEN_INVERTED"),
+                        invert("psincdec", "IS_PSINCDEC_INVERTED"),
                     ],
                     invert_clkinsel,
+                    shapes,
                 };
                 count += self.write_mmcm(site.tile, &settings, bits)?;
+                if compensation == Compensation::Zhold {
+                    bits.clear(site.tile, ConfigBit::new(29, 979))?;
+                }
                 continue;
             }
             let mut more_outputs = [(1u64, false); 5];
@@ -1000,20 +1582,47 @@ impl XrayFabric {
                     used(OUT[n + 1]),
                 );
             }
+            let divclk_divide = integer("DIVCLK_DIVIDE", 1, 1, 56)?;
+            let clkfbout_mult = integer("CLKFBOUT_MULT", 5, 2, 64)?;
+            let clkout0_divide = integer("CLKOUT0_DIVIDE", 1, 1, 128)?;
+            let names = ["CLKOUT1", "CLKOUT2", "CLKOUT3", "CLKOUT4", "CLKOUT5"];
+            let mut listed = vec![
+                ("CLKFBOUT", clkfbout_mult * 8, shapes.feedback.phase, false),
+                (
+                    "CLKOUT0",
+                    clkout0_divide * 8,
+                    shapes.outputs[0].phase,
+                    false,
+                ),
+            ];
+            for (n, name) in names.iter().enumerate() {
+                listed.push((
+                    *name,
+                    more_outputs[n].0 * 8,
+                    shapes.outputs[n + 1].phase,
+                    false,
+                ));
+            }
+            check_manager(false, period, divclk_divide, clkfbout_mult * 8, &listed)
+                .map_err(|(name, message)| bad(&name, message))?;
             let settings = PllSettings {
-                divclk_divide: integer("DIVCLK_DIVIDE", 1, 1, 56)?,
-                clkfbout_mult: integer("CLKFBOUT_MULT", 5, 2, 64)?,
-                clkout0_divide: integer("CLKOUT0_DIVIDE", 1, 1, 128)?,
+                divclk_divide,
+                clkfbout_mult,
+                clkout0_divide,
                 bandwidth,
                 startup_wait,
                 clkout0_used: used("out"),
                 clkfbout_used: used("fbout"),
-                invert_rst: invert("rst"),
-                invert_pwrdwn: invert("pwrdwn"),
+                invert_rst: invert("rst", "IS_RST_INVERTED"),
+                invert_pwrdwn: invert("pwrdwn", "IS_PWRDWN_INVERTED"),
                 more_outputs,
                 invert_clkinsel,
+                shapes,
             };
             count += self.write_pll(site.tile, &settings, bits)?;
+            if compensation == Compensation::Zhold {
+                bits.clear(site.tile, ConfigBit::new(28, 76))?;
+            }
         }
         Ok(count)
     }
@@ -1118,6 +1727,7 @@ mod tests {
             invert_pwrdwn: true,
             more_outputs: [(1, false); 5],
             invert_clkinsel: false,
+            shapes: ManagerShapes::default(),
         };
         let r = pll_registers(&settings);
         assert_eq!(r["LKTABLE"], 0xB5_BE8F_A401);

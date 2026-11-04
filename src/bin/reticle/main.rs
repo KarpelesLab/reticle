@@ -238,6 +238,11 @@ Options:
                      the slice's `MUXF7` and `MUXF8` (the default, `on`), when
                      that leaves fewer tables than mapping without them; one
                      that saves nothing maps exactly as with `off`.
+  --regional-clocks <auto|on>
+                     7 series: which `BUFR`s and `BUFMRCE`s get a site of their
+                     own, as Vivado gives them. `auto` (the default) leaves one
+                     that does not divide and is always enabled on a global
+                     buffer, as it has always been built, and `on` gives all a site.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`
@@ -825,6 +830,7 @@ fn spec_for(usage: &str) -> Spec {
                 "route-passes",
                 "pair-tables",
                 "wide-muxes",
+                "regional-clocks",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -3518,11 +3524,43 @@ fn needs_global_buffer(
     let buffers: Vec<&str> = device
         .bels
         .iter()
-        .filter(|b| b.role == BelRole::GlobalBuffer)
+        .filter(|b| {
+            matches!(
+                b.role,
+                BelRole::GlobalBuffer | BelRole::HorizontalBuffer | BelRole::RegionalBuffer
+            )
+        })
         .map(|b| b.name.as_str())
         .collect();
-    design.modules[top].cells.iter().any(|(_, cell)| {
+    let module = &design.modules[top];
+    if module.cells.iter().any(|(_, cell)| {
         matches!(&cell.kind, CellKind::Blackbox(name) if buffers.contains(&name.as_str()))
+    }) {
+        return true;
+    }
+    // An MMCM on its own, clocking something directly: its output's way to the
+    // clock pin is the clock row's, so that has to be there too. A design with no
+    // buffer and an MMCM's output on a flip-flop's clock did not route at all.
+    let managers: Vec<reticle::ir::NetId> = module
+        .cells
+        .iter()
+        .filter(|(_, cell)| {
+            matches!(&cell.kind, CellKind::Blackbox(name)
+                if device.bel_named(name.as_str()).is_some_and(|b| b.role == BelRole::Mmcm))
+        })
+        .flat_map(|(_, cell)| cell.outputs.iter().map(|(_, net)| *net))
+        .collect();
+    module.cells.iter().any(|(_, cell)| {
+        let is_flop = matches!(&cell.kind, CellKind::Dff { .. })
+            || matches!(&cell.kind, CellKind::Blackbox(name)
+                if device.bel_named(name.as_str()).is_some_and(|b| b.role == BelRole::Ff));
+        is_flop
+            && ["clk", "C"].iter().any(|port| {
+                cell.input(port)
+                    .and_then(|e| module.exprs.get(e))
+                    .and_then(reticle::ir::Expr::as_net)
+                    .is_some_and(|net| managers.contains(&net))
+            })
     })
 }
 
@@ -3748,7 +3786,23 @@ fn write_xc7_bitstream(
     let root = root.to_string_lossy().into_owned();
 
     let files = DiskFiles::for_sources(&[]);
-    // A shift register's sites and wires, for a design that has one.
+    // A `BUFR` the global network cannot stand in for gets its own site: see
+    // `xray::regional`. Named before the fabric is loaded, which reads the name
+    // to know whether to declare those sites.
+    let regional_mode = match args.option("regional-clocks") {
+        None | Some("auto") => reticle::fpga::xray::RegionalClocks::Auto,
+        Some("on") => reticle::fpga::xray::RegionalClocks::On,
+        Some(other) => {
+            return Err(format!(
+                "`--regional-clocks` takes `auto` or `on`, not `{other}`"
+            ));
+        }
+    };
+    let mut renamed = design.clone();
+    reticle::fpga::xray::regional_buffers(&mut renamed, top, regional_mode);
+    let design = &renamed;
+    // A shift register's sites and wires, and a regional clock buffer's, for a
+    // design that has one.
     let mut options = XrayOptions::new().for_design(design, top, device);
     if let Some(text) = args.option("region") {
         let numbers: Result<Vec<u32>, _> = text.split(',').map(str::parse::<u32>).collect();
@@ -3851,10 +3905,15 @@ fn write_xc7_bitstream(
                 .map_err(|e| e.to_string())?
                 .or(Some(region));
         }
-        // And an MMCM, in the same tiles' lower quarter.
+        // And an MMCM, in the same tiles' lower quarter, and a regional clock
+        // buffer, in a clock row or beside a bank.
         for (role, site_type) in [
             (reticle::fpga::BelRole::Mmcm, "MMCME2_ADV"),
             (reticle::fpga::BelRole::Sysmon, "XADC"),
+            (reticle::fpga::BelRole::HorizontalBuffer, "BUFHCE"),
+            (reticle::fpga::BelRole::RegionalBuffer, "BUFR"),
+            (reticle::fpga::BelRole::IoClockBuffer, "BUFIO"),
+            (reticle::fpga::BelRole::MultiRegionBuffer, "BUFMRCE"),
         ] {
             if let Some(region) = options.region
                 && needs_role(design, top, device, role)
@@ -3862,6 +3921,15 @@ fn write_xc7_bitstream(
                 options.region = db
                     .region_with_site_type(&files, region, site_type)
                     .map_err(|e| e.to_string())?
+                    // A `BUFMRCE` goes on through its row's `PHASER_IN`, which
+                    // is rows away from its own tile, and a bank's clock tile.
+                    .map(|r| {
+                        if role == reticle::fpga::BelRole::MultiRegionBuffer {
+                            GridRegion::new(r.x0, r.y0.saturating_sub(9), r.x1, r.y1 + 6)
+                        } else {
+                            r
+                        }
+                    })
                     .or(Some(region));
             }
         }
@@ -3954,6 +4022,7 @@ fn write_xc7_bitstream(
     let mut netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
+    reticle::fpga::xray::check_regional_wiring(&netlist)?;
     let mut options = place_options(args)?;
     // This fabric's anneal effort, unless the command line names one:
     // see `xray::PLACE_EFFORT`.
@@ -3971,6 +4040,9 @@ fn write_xc7_bitstream(
     // `PlaceOptions::clock_region_lines`.
     options.clock_regions = fabric.clock_regions();
     options.clock_region_lines = reticle::fpga::xray::CLOCK_REGION_LINES;
+    // A regional clock's buffer and loads stay in its region: see
+    // `PlaceOptions::regional_sites`.
+    options.regional_sites = fabric.regional_sites(&graph);
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let domains = if args.flag("timing-driven") {
@@ -4010,10 +4082,15 @@ fn write_xc7_bitstream(
             signal.driver.is_some_and(|pin| {
                 let pin = &netlist.pins[pin];
                 match netlist.instances[pin.instance].kind.as_str() {
-                    "gb" => true,
+                    "gb" | "bufh" | "bufr" | "bufio" => true,
                     "pll" | "mmcm" => pin.role.starts_with("out") || pin.role.starts_with("fbout"),
                     _ => false,
                 }
+            }) || signal.sinks.iter().any(|sink| {
+                // A `BUFH` reads the clock row's multiplexer, which is on the
+                // network, whatever is on its input.
+                let pin = &netlist.pins[*sink];
+                pin.role == "i" && netlist.instances[pin.instance].kind == "bufh"
             })
         })
         .collect();
@@ -4031,7 +4108,12 @@ fn write_xc7_bitstream(
                 && pin
                     .signal
                     .and_then(|s| netlist.signals[s].driver)
-                    .is_some_and(|d| netlist.instances[netlist.pins[d].instance].kind == "gb")
+                    .is_some_and(|d| {
+                        matches!(
+                            netlist.instances[netlist.pins[d].instance].kind.as_str(),
+                            "gb" | "bufh" | "bufr" | "bufio"
+                        )
+                    })
         })
         .collect();
     // `--route-attempts`: a route that does not converge is placed again
@@ -4142,7 +4224,10 @@ fn write_xc7_bitstream(
                             netlist.instances[netlist.pins[driver].instance].kind == "io"
                         });
                     from_a_pad
-                        && netlist.instances[pin.instance].kind == "gb"
+                        && matches!(
+                            netlist.instances[pin.instance].kind.as_str(),
+                            "gb" | "bufh" | "bufr" | "bufio"
+                        )
                         && (pin.role == "i" || pin.role == "i1")
                 })
                 .collect(),
@@ -4744,12 +4829,30 @@ fn write_xc7_bitstream(
     // A PLL's registers are computed from its parameters and from whether
     // its reset was routed. See `XrayFabric::configure_clock_managers`.
     let pll_bits = fabric
-        .configure_clock_managers(design, top, &graph, &netlist, &placement, &mut tiles)
+        .configure_clock_managers(
+            design,
+            top,
+            &graph,
+            &netlist,
+            &placement,
+            &constraints
+                .clocks
+                .iter()
+                .map(|c| (c.net.clone(), c.period_ns))
+                .collect(),
+            &mut tiles,
+        )
         .map_err(|e| e.to_string())?;
     // A `BUFGCE` or `BUFGMUX` is a `BUFGCTRL` whose control inverters
     // depend on what was routed to it. See `xray::bufg`.
     fabric
         .configure_global_buffers(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
+    // And one in a clock row or beside a bank. See `xray::regional`.
+    fabric
+        .configure_regional_buffers(
+            design, top, &graph, &netlist, &placement, &routing, &mut tiles,
+        )
         .map_err(|e| e.to_string())?;
     // An `IDDR` or `ODDR` beside its pad, the same way. See `xray::iologic`.
     fabric

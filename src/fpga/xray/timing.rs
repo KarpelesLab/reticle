@@ -368,7 +368,7 @@ fn through_muxes(
             break;
         };
         let inst = &netlist.instances[netlist.pins[driver].instance];
-        if inst.kind != "gb" {
+        if inst.kind != "gb" && !super::is_regional_kind(&inst.kind) {
             break;
         }
         let input = |role: &str| {
@@ -419,7 +419,7 @@ pub fn place_timing(
                 break;
             };
             let inst = &netlist.instances[netlist.pins[driver].instance];
-            if inst.kind != "gb" {
+            if inst.kind != "gb" && !super::is_regional_kind(&inst.kind) {
                 break;
             }
             let input = inst
@@ -519,7 +519,7 @@ pub fn place_timing(
             .is_some_and(|d| {
                 matches!(
                     netlist.instances[netlist.pins[d].instance].kind.as_str(),
-                    "gb" | "pll" | "mmcm"
+                    "gb" | "bufh" | "bufr" | "bufio" | "pll" | "mmcm"
                 )
             })
     };
@@ -528,6 +528,7 @@ pub fn place_timing(
         .iter()
         .map(|inst| {
             inst.kind != "gb"
+                && !super::is_regional_kind(&inst.kind)
                 && inst.pins.iter().any(|p| {
                     !netlist.pins[*p].output
                         && !is_clock(&netlist.pins[*p].role)
@@ -611,7 +612,7 @@ pub fn place_timing(
             .filter(|p| !netlist.pins[**p].output && is_clock(&netlist.pins[**p].role))
             .find_map(|p| netlist.pins[*p].signal);
         match kind {
-            "lut" | "carry" | "gb" | "mux7" | "mux8" => {
+            "lut" | "carry" | "gb" | "bufh" | "bufr" | "bufio" | "bufmr" | "mux7" | "mux8" => {
                 cell[index] = match kind {
                     "lut" => LUT,
                     "carry" => CARRY,
@@ -620,7 +621,10 @@ pub fn place_timing(
                     _ => 0.0,
                 };
                 for pin in &inst.pins {
-                    if !is_clock(&netlist.pins[*pin].role) || kind == "gb" {
+                    if !is_clock(&netlist.pins[*pin].role)
+                        || kind == "gb"
+                        || super::is_regional_kind(kind)
+                    {
                         pins[*pin] = PinTiming::Through;
                     }
                 }

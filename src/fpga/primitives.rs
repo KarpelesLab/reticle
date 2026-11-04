@@ -5961,10 +5961,17 @@ impl Mapper<'_> {
         // a second buffer behind the first would only take a site and a
         // track. Each one also counts against the device's supply.
         let global = |primitive: &str| {
-            self.device
-                .bels
-                .iter()
-                .any(|b| b.role == BelRole::GlobalBuffer && b.name == primitive)
+            self.device.bels.iter().any(|b| {
+                b.name == primitive
+                    && matches!(
+                        b.role,
+                        BelRole::GlobalBuffer
+                            | BelRole::HorizontalBuffer
+                            | BelRole::RegionalBuffer
+                            | BelRole::IoClockBuffer
+                            | BelRole::MultiRegionBuffer
+                    )
+            })
         };
         let mut buffered_already: Vec<NetId> = Vec::new();
         for (_, cell) in module.cells.iter() {

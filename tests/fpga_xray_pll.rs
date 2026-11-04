@@ -245,7 +245,15 @@ fn build(root: &str) -> Option<Built> {
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .unwrap();
     let pll_bits = fabric
-        .configure_clock_managers(&design, top, &graph, &netlist, &placement, &mut tiles)
+        .configure_clock_managers(
+            &design,
+            top,
+            &graph,
+            &netlist,
+            &placement,
+            &std::collections::BTreeMap::new(),
+            &mut tiles,
+        )
         .unwrap();
     let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
 
@@ -524,6 +532,7 @@ fn case_a() -> Case {
             invert_pwrdwn: true,
             more_outputs: [(1, false); 5],
             invert_clkinsel: false,
+            shapes: Default::default(),
         },
         expected,
     }
@@ -593,6 +602,7 @@ fn case_b() -> Case {
             invert_pwrdwn: true,
             more_outputs: [(1, false); 5],
             invert_clkinsel: false,
+            shapes: Default::default(),
         },
         expected,
     }

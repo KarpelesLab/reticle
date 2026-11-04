@@ -468,6 +468,16 @@ pub enum BelRole {
     Io,
     /// A global (low-skew) clock buffer.
     GlobalBuffer,
+    /// A clock buffer of one half of a clock row: the 7 series' `BUFHCE`.
+    HorizontalBuffer,
+    /// A regional clock buffer beside a bank: the 7 series' `BUFR` on its own
+    /// site, not on a global buffer.
+    RegionalBuffer,
+    /// A clock buffer of one bank's IO logic: the 7 series' `BUFIO`.
+    IoClockBuffer,
+    /// A clock buffer into a bank's and its neighbours' regional buffers: the 7
+    /// series' `BUFMRCE` on its own site.
+    MultiRegionBuffer,
     /// A LUT used as a small distributed RAM.
     LutRam,
     /// A level-sensitive latch in a slice's storage element (`LDCE`,
@@ -522,12 +532,16 @@ pub enum BelRole {
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 20] = [
+    pub const ALL: [BelRole; 24] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
         BelRole::Io,
         BelRole::GlobalBuffer,
+        BelRole::HorizontalBuffer,
+        BelRole::RegionalBuffer,
+        BelRole::IoClockBuffer,
+        BelRole::MultiRegionBuffer,
         BelRole::LutRam,
         BelRole::Latch,
         BelRole::Srl32,
@@ -553,6 +567,10 @@ impl BelRole {
             BelRole::Carry => "carry",
             BelRole::Io => "io",
             BelRole::GlobalBuffer => "gb",
+            BelRole::HorizontalBuffer => "bufh",
+            BelRole::RegionalBuffer => "bufr",
+            BelRole::IoClockBuffer => "bufio",
+            BelRole::MultiRegionBuffer => "bufmr",
             BelRole::LutRam => "lutram",
             BelRole::Latch => "latch",
             BelRole::Srl32 => "srl32",
@@ -4200,6 +4218,9 @@ end
                     ),
                     ("BUFMRCE", vec!["ce"]),
                     ("BUFR", vec!["ce", "clr"]),
+                    ("BUFHCE", vec!["ce"]),
+                    ("BUFR_REGION", vec!["ce", "clr"]),
+                    ("BUFMRCE_REGION", vec!["ce"]),
                     ("IDDR", vec!["ce", "sr"]),
                     ("IDDR_2CLK", vec!["ce", "sr"]),
                     ("ODDR", vec!["d1", "d2", "ce", "sr"]),

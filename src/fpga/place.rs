@@ -1212,6 +1212,10 @@ pub struct PlaceOptions {
     /// charges [`CLOCK_LINE_COST`] for each a region is asked for past
     /// this. A 7-series region has twelve (`HCLK_CK_BUFHCLK0` to `11`).
     pub clock_region_lines: u32,
+    /// Each regional clock buffer's site, by the clock region it serves
+    /// ([`clock_regions`](PlaceOptions::clock_regions)' numbers): empty for a
+    /// family without them. See `confine_regional_clocks`.
+    pub regional_sites: BTreeMap<usize, u16>,
 }
 
 /// [`PlaceOptions::clock_regions`] for a tile in none.
@@ -1245,6 +1249,7 @@ impl Default for PlaceOptions {
             clock_roads: Vec::new(),
             clock_regions: Vec::new(),
             clock_region_lines: 0,
+            regional_sites: BTreeMap::new(),
         }
     }
 }
@@ -2950,6 +2955,7 @@ pub fn place(
         &mut info,
         &options.clock_roads,
     );
+    confine_regional_clocks(netlist, graph, &sites_by_kind, &mut info, options)?;
     if let Some(timing) = &options.timing {
         confine_to_input_budget(netlist, graph, &sites_by_kind, &mut info, timing);
     }
@@ -4764,13 +4770,17 @@ fn confine_to_roads(
     if roads.is_empty() {
         return;
     }
-    let Some(candidates) = sites_by_kind.get("gb") else {
-        return;
-    };
     for index in 0..netlist.instances.len() {
-        if netlist.instances[index].kind != "gb" || info[index].fixed.is_some() {
+        if !matches!(
+            netlist.instances[index].kind.as_str(),
+            "gb" | "bufh" | "bufr" | "bufio" | "bufmr"
+        ) || info[index].fixed.is_some()
+        {
             continue;
         }
+        let Some(candidates) = sites_by_kind.get(&netlist.instances[index].kind) else {
+            continue;
+        };
         let mut allowed: Vec<usize> = info[index]
             .allowed
             .clone()
@@ -4821,6 +4831,234 @@ fn confine_to_roads(
             info[index].soft = true;
         }
     }
+}
+
+/// Holds a regional clock buffer and the clock pins it drives to one clock region,
+/// which is as far as its lines go: `BUFH` and `BUFR` drive their region's clock
+/// row and no other, and a load outside it could not be routed at all.
+///
+/// The region is the one its input's pad reaches, when a pad fixes it (Vivado
+/// refuses any other for a `BUFR`, `Place 30-7`), then the one a fixed load is in,
+/// and otherwise the first of the buffer's sites nearest the design's pads, so
+/// that the logic stays where the placer would have had it. Every site of a kind
+/// serves one region, from [`PlaceOptions::regional_sites`]. A `BUFIO`, which
+/// reaches a bank's IO logic and has fixed loads, is held to the sites that reach
+/// each: there being none is Vivado's `Place 30-126`, a load in another bank.
+fn confine_regional_clocks(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    info: &mut [Placeable],
+    options: &PlaceOptions,
+) -> Result<(), PlaceError> {
+    if options.regional_sites.is_empty() {
+        return Ok(());
+    }
+    let width = graph.width;
+    let region_of = |site: usize| -> u16 {
+        let (x, y) = graph.sites[site].tile;
+        options
+            .clock_regions
+            .get((y * width + x) as usize)
+            .copied()
+            .unwrap_or(NO_CLOCK_REGION)
+    };
+    // The middle of what a package pin holds, for a buffer nothing else places.
+    let pads: Vec<(u32, u32)> = info
+        .iter()
+        .filter_map(|p| p.fixed)
+        .map(|site| graph.sites[site].tile)
+        .collect();
+    let centre = if pads.is_empty() {
+        (0, 0)
+    } else {
+        let n = u32::try_from(pads.len()).unwrap_or(1);
+        (
+            pads.iter().map(|p| p.0).sum::<u32>() / n,
+            pads.iter().map(|p| p.1).sum::<u32>() / n,
+        )
+    };
+    // A `BUFMR` first: a `BUFR` on one goes in its region.
+    let mut order: Vec<usize> = (0..netlist.instances.len()).collect();
+    order.sort_by_key(|i| netlist.instances[*i].kind != "bufmr");
+    for index in order {
+        let kind = netlist.instances[index].kind.clone();
+        if !matches!(kind.as_str(), "bufh" | "bufr" | "bufio" | "bufmr") {
+            continue;
+        }
+        let Some(all) = sites_by_kind.get(&kind) else {
+            continue;
+        };
+        let candidates: Vec<usize> = info[index].allowed.clone().unwrap_or_else(|| all.clone());
+        let output = netlist.instances[index]
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|p| p.output)
+            .and_then(|p| p.signal);
+        let sinks: Vec<&NetPin> = output
+            .into_iter()
+            .flat_map(|s| netlist.signals[s].sinks.iter())
+            .map(|p| &netlist.pins[*p])
+            .collect();
+        if kind == "bufio" {
+            // A pad with no road to any is not clock-capable, or not of its
+            // bank: `confine_to_roads` would have narrowed them otherwise.
+            let on_a_pad = netlist.instances[index]
+                .pins
+                .iter()
+                .map(|p| &netlist.pins[*p])
+                .find(|p| p.role == "i")
+                .and_then(|p| p.signal)
+                .and_then(|s| netlist.signals[s].driver)
+                .map(|d| netlist.pins[d].instance)
+                .filter(|d| netlist.instances[*d].kind == "io");
+            if let Some(pad) = on_a_pad
+                && info[index].allowed.is_none()
+            {
+                return Err(PlaceError::NoReachableSite {
+                    pin: format!("{}.i", netlist.instances[index].name),
+                    kind: kind.clone(),
+                    available: candidates.len(),
+                    other: format!(
+                        "{}.din (a `BUFIO` takes a clock-capable pad of its own bank)",
+                        netlist.instances[pad].name
+                    ),
+                    inbound: true,
+                });
+            }
+            let mut allowed = candidates.clone();
+            for sink in &sinks {
+                let Some(site) = info[sink.instance].fixed else {
+                    continue;
+                };
+                let Some(start) = graph.sites[site].pin(&sink.role) else {
+                    continue;
+                };
+                // Back from the load, over what has no choice and each pip
+                // that does: a bank's clock lines are few.
+                let mut seen = vec![start];
+                let mut next = 0;
+                while next < seen.len() && seen.len() < 512 {
+                    let node = seen[next];
+                    next += 1;
+                    for pip in graph.incoming(node) {
+                        let from = graph.pip(*pip).from;
+                        let name = &graph.wire(from).name;
+                        if !seen.contains(&from)
+                            && (name.contains("IOCLK") || name.contains("OCLK"))
+                        {
+                            seen.push(from);
+                        }
+                    }
+                }
+                allowed.retain(|s| {
+                    graph.sites[*s].pin("o").is_some_and(|o| {
+                        seen.contains(&o)
+                            || graph
+                                .outgoing(o)
+                                .iter()
+                                .any(|pip| seen.contains(&graph.pip(*pip).to))
+                    })
+                });
+                if allowed.is_empty() {
+                    return Err(PlaceError::NoReachableSite {
+                        pin: format!("{}.o", netlist.instances[index].name),
+                        kind: kind.clone(),
+                        available: candidates.len(),
+                        other: format!(
+                            "{}.{} (a `BUFIO` reaches its own bank's IO logic and no other: \
+                             Vivado's Place 30-126)",
+                            netlist.instances[sink.instance].name, sink.role
+                        ),
+                        inbound: false,
+                    });
+                }
+            }
+            allowed.sort_unstable();
+            info[index].allowed = Some(allowed);
+            info[index].soft = false;
+            continue;
+        }
+        // Which region: a fixed load's, or else the nearest of what is left.
+        let fixed_load = sinks
+            .iter()
+            .filter_map(|s| info[s.instance].fixed)
+            .map(region_of)
+            .find(|r| *r != NO_CLOCK_REGION);
+        // A pad that drives a `BUFMR` or a `BUFH` keeps it in the pad's own
+        // region: the sites of its row are the ones the pad's road reaches.
+        let at_pad = netlist.instances[index]
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|p| p.role == "i")
+            .and_then(|p| p.signal)
+            .and_then(|s| netlist.signals[s].driver)
+            .and_then(|d| info[netlist.pins[d].instance].fixed)
+            .map(region_of)
+            .filter(|r| *r != NO_CLOCK_REGION && kind != "bufr");
+        let served = |site: &usize| options.regional_sites.get(site).copied();
+        let on_a_bufmr = netlist.instances[index]
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|p| p.role == "i")
+            .and_then(|p| p.signal)
+            .and_then(|s| netlist.signals[s].driver)
+            .map(|d| netlist.pins[d].instance)
+            .filter(|d| netlist.instances[*d].kind == "bufmr")
+            .and_then(|d| info[d].allowed.as_ref()?.first().and_then(served));
+        let region = at_pad.or(fixed_load).or(on_a_bufmr).or_else(|| {
+            candidates
+                .iter()
+                .min_by_key(|site| {
+                    let (x, y) = graph.sites[**site].tile;
+                    x.abs_diff(centre.0) + y.abs_diff(centre.1)
+                })
+                .and_then(&served)
+        });
+        let Some(region) = region else {
+            continue;
+        };
+        let mut allowed: Vec<usize> = candidates
+            .iter()
+            .copied()
+            .filter(|site| served(site) == Some(region))
+            .collect();
+        allowed.sort_unstable();
+        if allowed.is_empty() {
+            return Err(PlaceError::NoReachableSite {
+                pin: format!("{}.o", netlist.instances[index].name),
+                kind: kind.clone(),
+                available: candidates.len(),
+                other: format!("clock region {region}"),
+                inbound: false,
+            });
+        }
+        info[index].allowed = Some(allowed);
+        info[index].soft = false;
+        // Its clock pins, on the same region's sites of their own kinds. A
+        // `BUFMR`'s are buffers, which go where their own loads say.
+        for sink in &sinks {
+            let load = &netlist.instances[sink.instance];
+            if info[sink.instance].fixed.is_some() || kind == "bufmr" {
+                continue;
+            }
+            let Some(sites) = sites_by_kind.get(&load.kind) else {
+                continue;
+            };
+            let mut here: Vec<usize> = info[sink.instance]
+                .allowed
+                .clone()
+                .unwrap_or_else(|| sites.clone());
+            here.retain(|site| region_of(*site) == region);
+            here.sort_unstable();
+            info[sink.instance].allowed = Some(here);
+            info[sink.instance].soft = false;
+        }
+    }
+    Ok(())
 }
 
 /// The fewest sites [`confine_to_input_budget`] leaves a cell, for each

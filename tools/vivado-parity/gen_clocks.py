@@ -72,6 +72,8 @@ DESIGNS = {}
 # Lines a design's `.xdc` has beyond its pins: a site, to see which bits that
 # site's are. Only Vivado reads them; the `.rcf` has no such line.
 LOCS = {}
+# And lines its `.rcf` has: a clock both tools are told of.
+RCF = {}
 
 
 def add(name, comment, top, body, ports=()):
@@ -300,14 +302,6 @@ for n in range(4):
         [("input", "clk2"), ("output", "q_pad")],
     )
     LOCS[f"bufio_loc{n}"] = f"set_property LOC BUFIO_X0Y{4 + n} [get_cells dut]\n"
-    add(
-        f"bufmr_loc{n}",
-        f"BUFMR on site {n} of its column, on the pad that reaches it, driving a BUFR.",
-        1,
-        "  wire mr, o;\n  BUFMR dut (.O(mr), .I(clk2));\n" + BUFR_ON_MR,
-        [("input", "clk2")],
-    )
-    LOCS[f"bufmr_loc{n}"] = f"set_property LOC BUFMRCE_X0Y{n + 2} [get_cells dut]\n"
 add(
     "no_bufio_ff",
     "BUFIO clocking a slice's flip-flop, which it cannot reach.",
@@ -578,6 +572,131 @@ for name, comment, params, outs, conn in [
 ]:
     manager(name, f"MMCME2_ADV, {comment}", "MMCME2_ADV", params, outs, conn=conn, top=2)
 
+# Every way a BUFMR reaches a BUFR or a BUFIO: each of its two sites in a row,
+# against each buffer of its own row and the rows either side.
+for mr in (2, 3):
+    for r in range(12):
+        name = f"bufmr_x{mr}_r{r}"
+        add(
+            name,
+            f"BUFMRCE_X0Y{mr} driving BUFR_X0Y{r}.",
+            1,
+            "  wire mr, o;\n  BUFMR dut (.O(mr), .I(clk2));\n" + BUFR_ON_MR,
+            [("input", "clk2")],
+        )
+        LOCS[name] = (
+            f"set_property LOC BUFMRCE_X0Y{mr} [get_cells dut]\n"
+            f"set_property LOC BUFR_X0Y{r} [get_cells u_r]\n"
+        )
+    for r in range(4, 8):
+        name = f"bufmr_x{mr}_io{r}"
+        add(
+            name,
+            f"BUFMRCE_X0Y{mr} driving BUFIO_X0Y{r}.",
+            1,
+            "  wire mr, o, q;\n  BUFMR dut (.O(mr), .I(clk2));\n  BUFIO u_i (.O(o), .I(mr));\n"
+            "  ODDR u_load (.C(o), .CE(1'b1), .D1(sr[0]), .D2(sr[1]), .S(1'b0), .R(1'b0), .Q(q));\n"
+            "  OBUF u_q (.O(q_pad), .I(q));\n  assign y = sr[1];\n",
+            [("input", "clk2"), ("output", "q_pad")],
+        )
+        LOCS[name] = (
+            f"set_property LOC BUFMRCE_X0Y{mr} [get_cells dut]\n"
+            f"set_property LOC BUFIO_X0Y{r} [get_cells u_i]\n"
+        )
+for r in range(8, 12):
+    name = f"bufmr_right_r{r}"
+    add(
+        name,
+        f"A BUFMR on the right of the die driving BUFR_X1Y{r}.",
+        1,
+        "  wire mr, o;\n  BUFMR dut (.O(mr), .I(rpad));\n" + BUFR_ON_MR,
+        [("input", "rpad")],
+    )
+    LOCS[name] = f"set_property LOC BUFR_X1Y{r} [get_cells u_r]\n"
+
+# Each parameter of the other of a row's two BUFMRCEs.
+for name, comment, params, ce in [
+    ("bufmrce_s0_ce", "with an enable", None, "sr[1]"),
+    ("bufmrce_s0_ce1", "enable tied high", None, "1'b1"),
+    ("bufmrce_s0_ce0", "enable tied low", None, "1'b0"),
+    ("bufmrce_s0_async", "CE_TYPE ASYNC", {"CE_TYPE": '"ASYNC"'}, "sr[1]"),
+    ("bufmrce_s0_init1", "INIT_OUT 1", {"INIT_OUT": "1"}, "sr[1]"),
+    ("bufmrce_s0_inv", "enable inverted", {"IS_CE_INVERTED": "1'b1"}, "sr[1]"),
+]:
+    add(
+        name,
+        f"BUFMRCE on the first site of its row, {comment}.",
+        1,
+        f"  wire mr, o;\n  BUFMRCE {named(params)}dut (.O(mr), .CE({ce}), .I(clk2));\n" + BUFR_ON_MR,
+        [("input", "clk2")],
+    )
+    LOCS[name] = "set_property LOC BUFMRCE_X0Y2 [get_cells dut]\n"
+add(
+    "bufmr_s0_fabric",
+    "BUFMR on the first site of its row, on a flip-flop's output.",
+    1,
+    "  wire mr, o;\n  reg d;\n  always @(posedge clk) d <= sr[1];\n  BUFMR dut (.O(mr), .I(d));\n" + BUFR_ON_MR,
+)
+LOCS["bufmr_s0_fabric"] = "set_property LOC BUFMRCE_X0Y2 [get_cells dut]\n"
+add(
+    "bufmr_ccio3",
+    "BUFMR on the second site of its row, on the pad of CCIO3.",
+    1,
+    "  wire mr, o;\n  BUFMR dut (.O(mr), .I(clk));\n" + BUFR_ON_MR,
+)
+LOCS["bufmr_ccio3"] = "set_property LOC BUFMRCE_X0Y3 [get_cells dut]\n"
+# A clock manager on the right of the die, whose tiles are the other type.
+for short, cell in [("mmcm", "MMCME2_ADV"), ("pll", "PLLE2_ADV")]:
+    def on_right(name, comment, **more):
+        manager(name, comment, cell, more.get("params"), feedback=more.get("feedback", "local"))
+        text, ports = DESIGNS[name]
+        DESIGNS[name] = (text.replace("clk2", "rpad"), [p.replace("clk2", "rpad") for p in ports])
+    on_right(f"{short}_right", f"{cell} on the right of the die.")
+    on_right(f"{short}_right_zhold", f"{cell} on the right, feedback through a BUFG.", feedback="bufg")
+    for comp, fb in [("ZHOLD", "pad"), ("BUF_IN", "pad"), ("INTERNAL", "pad"), ("EXTERNAL", "local")]:
+        manager(
+            f"{short}_comp_{comp.lower()}_{fb}",
+            f"{cell}, COMPENSATION {comp}, feedback {fb}.",
+            cell,
+            {"COMPENSATION": f'"{comp}"'},
+            feedback=fb,
+        )
+    manager(
+        f"{short}_clkin2_pads",
+        f"{cell} choosing between two clock pads with a signal, with a reset.",
+        cell,
+        {"CLKIN2_PERIOD": "10.0"},
+        conn=".CLKIN2(srcc), .CLKINSEL(sr[0]), .RST(sr[1])",
+        ports=(("input", "srcc"),),
+    )
+# Whether a clock on the input pad stands for CLKIN1_PERIOD in Vivado's rules:
+# the attribute alone says 10 MHz, which puts the VCO at 60, and the clock says
+# 100 MHz, which puts it at 600. NewAE's glitch MMCM is the first.
+for short, cell, mult in [("mmcm", "MMCME2_ADV", "CLKFBOUT_MULT_F"), ("pll", "PLLE2_ADV", "CLKFBOUT_MULT")]:
+    for tag, clocked in [("period_clocked", True), ("period_alone", False)]:
+        name = f"{short}_{tag}"
+        manager(name, f"{cell}, CLKIN1_PERIOD 100 with a VCO of 60 MHz by it.", cell,
+                {"CLKIN1_PERIOD": "100.0", mult: "6.0" if short == "mmcm" else "6", ("CLKOUT0_DIVIDE_F" if short == "mmcm" else "CLKOUT0_DIVIDE"): "6.0" if short == "mmcm" else "6"})
+        if clocked:
+            LOCS[name] = "create_clock -period 10 -name clk2 [get_ports clk2]\n"
+            RCF[name] = "create_clock -name clk2 -period 10 clk2\n"
+for name, comment, params, conn in [
+    ("mmcm_fine_psen", "fine phase shift, PSEN alone a signal.", {"CLKOUT0_USE_FINE_PS": '"TRUE"'}, ".PSEN(sr[0])"),
+    ("mmcm_fine_psclk", "fine phase shift, PSCLK alone a signal.", {"CLKOUT0_USE_FINE_PS": '"TRUE"'}, ".PSCLK(clk)"),
+    ("mmcm_fine_psincdec", "fine phase shift, PSINCDEC alone a signal.", {"CLKOUT0_USE_FINE_PS": '"TRUE"'}, ".PSINCDEC(sr[0])"),
+    ("mmcm_ps_signal", "phase-shift pins that are signals, with no output using them.", None, ".PSCLK(clk), .PSEN(sr[0]), .PSINCDEC(sr[1])"),
+]:
+    manager(name, f"MMCME2_ADV, {comment}", "MMCME2_ADV", params, conn=conn, top=2)
+add(
+    "oddr_bufg",
+    "An ODDR on a global clock, for what is set for it beside a BUFIO's.",
+    1,
+    "  wire q;\n"
+    "  ODDR u_load (.C(clk), .CE(1'b1), .D1(sr[0]), .D2(sr[1]), .S(1'b0), .R(1'b0), .Q(q));\n"
+    "  OBUF u_q (.O(q_pad), .I(q));\n  assign y = sr[1];\n",
+    [("output", "q_pad")],
+)
+
 
 def write(out):
     os.makedirs(out, exist_ok=True)
@@ -597,6 +716,7 @@ def write(out):
         xdc += LOCS.get(name, "")
         with open(os.path.join(out, f"{name}.xdc"), "w") as f:
             f.write(xdc)
+        rcf += RCF.get(name, "")
         with open(os.path.join(out, f"{name}.rcf"), "w") as f:
             f.write(rcf)
 
