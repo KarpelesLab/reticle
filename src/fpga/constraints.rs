@@ -159,6 +159,14 @@ pub struct IoAttrs {
     /// A delay between the pin and the fabric, in the device's own delay
     /// steps, on a family that has a programmable one.
     pub delay: Option<u32>,
+    /// `Some(true)` holds the pad's last value (`PULLTYPE KEEPER`).
+    pub keeper: Option<bool>,
+    /// `IN_TERM`, upper case: `UNTUNED_SPLIT_50`.
+    pub in_term: Option<String>,
+    /// `DIFF_TERM`.
+    pub diff_term: Option<bool>,
+    /// `IBUF_LOW_PWR`. `Some(false)` is a receiver's higher performance.
+    pub ibuf_low_pwr: Option<bool>,
 }
 
 impl IoAttrs {
@@ -192,6 +200,18 @@ impl IoAttrs {
         }
         if self.delay.is_none() {
             self.delay = other.delay;
+        }
+        if self.keeper.is_none() {
+            self.keeper = other.keeper;
+        }
+        if self.in_term.is_none() {
+            self.in_term = other.in_term.clone();
+        }
+        if self.diff_term.is_none() {
+            self.diff_term = other.diff_term;
+        }
+        if self.ibuf_low_pwr.is_none() {
+            self.ibuf_low_pwr = other.ibuf_low_pwr;
         }
     }
 }
@@ -390,6 +410,9 @@ pub struct ClockDomain {
 pub struct Constraints {
     /// Pin assignments, in the order they were stated.
     pub pins: Vec<PinAssignment>,
+    /// A bank's `INTERNAL_VREF`: its number as a word, the value in
+    /// millivolts, and where it was said.
+    pub internal_vref: Vec<(String, u32, Span)>,
     /// Declared placement regions.
     pub regions: Vec<Region>,
     /// Placement regions in slice coordinates, not yet in tiles.
@@ -428,6 +451,7 @@ impl Constraints {
             && self.region_assignments.is_empty()
             && self.rlocs.is_empty()
             && self.keep_hierarchy.is_empty()
+            && self.internal_vref.is_empty()
             && self.clocks.is_empty()
             && self.false_paths.is_empty()
             && self.multicycle_paths.is_empty()
@@ -582,6 +606,15 @@ impl Constraints {
         for rloc in other.rlocs {
             if !self.rlocs.iter().any(|r| r.pattern == rloc.pattern) {
                 self.rlocs.push(rloc);
+            }
+        }
+        for vref in other.internal_vref {
+            if !self
+                .internal_vref
+                .iter()
+                .any(|(bank, _, _)| *bank == vref.0)
+            {
+                self.internal_vref.push(vref);
             }
         }
         for keep in other.keep_hierarchy {
@@ -907,7 +940,13 @@ impl Constraints {
                 }
             };
 
-            self.check_io_attrs(assignment, pin, device, &mut bank_vccio, diags);
+            // A port's direction, for a receiver that needs no bank supply.
+            let input = module
+                .ports
+                .iter()
+                .find(|p| module.nets[p.net].name.as_str() == assignment.port)
+                .is_some_and(|p| p.dir == crate::ir::PortDir::In);
+            self.check_io_attrs(assignment, pin, input, device, &mut bank_vccio, diags);
         }
     }
 
@@ -915,6 +954,7 @@ impl Constraints {
         &self,
         assignment: &PinAssignment,
         pin: Option<&super::device::Pin>,
+        input: bool,
         device: &Device,
         bank_vccio: &mut BTreeMap<String, (String, String, Span)>,
         diags: &mut Diagnostics,
@@ -978,8 +1018,39 @@ impl Constraints {
                 .with_note(format!("available: {}", standard.slew_rates.join(", "))),
             );
         }
+        // A drive or slew on a standard with no choice of them, which Vivado
+        // warns of and ignores (`Vivado 12-4708`, `12-4709`).
+        if assignment.io.drive.is_some() && standard.drive_strengths.is_empty() {
+            diags.push(
+                Diagnostic::warning(format!(
+                    "`{}` has no choice of drive, so the one asked for has no effect",
+                    standard.name
+                ))
+                .with_code(BAD_IO_OPTION)
+                .with_span(assignment.span),
+            );
+        }
+        if assignment.io.slew.is_some() && standard.slew_rates.is_empty() {
+            diags.push(
+                Diagnostic::warning(format!(
+                    "`{}` has no choice of slew rate, so the one asked for has no effect",
+                    standard.name
+                ))
+                .with_code(BAD_IO_OPTION)
+                .with_span(assignment.span),
+            );
+        }
         // Bank rules: the standard's supply must be one the bank offers,
-        // and one bank cannot run at two voltages at once.
+        // and one bank cannot run at two voltages at once. A receiver that
+        // compares with a reference or its other ball asks nothing of the
+        // supply, unless it is terminated; `xc7::pads` has what was measured.
+        if input
+            && standard.input_free
+            && assignment.io.in_term.as_deref().is_none_or(|t| t == "NONE")
+            && assignment.io.diff_term != Some(true)
+        {
+            return;
+        }
         let (Some(pin), Some(vccio)) = (pin, standard.vccio.as_ref()) else {
             return;
         };
@@ -1413,6 +1484,28 @@ impl Constraints {
                 let value = if pulldown { "TRUE" } else { "FALSE" };
                 let _ = writeln!(out, "set_property PULLDOWN {value} {ports}");
             }
+            if let Some(keeper) = pin.io.keeper {
+                let value = if keeper { "TRUE" } else { "FALSE" };
+                let _ = writeln!(out, "set_property KEEPER {value} {ports}");
+            }
+            if let Some(term) = &pin.io.in_term {
+                let _ = writeln!(out, "set_property IN_TERM {term} {ports}");
+            }
+            if let Some(term) = pin.io.diff_term {
+                let value = if term { "TRUE" } else { "FALSE" };
+                let _ = writeln!(out, "set_property DIFF_TERM {value} {ports}");
+            }
+            if let Some(low) = pin.io.ibuf_low_pwr {
+                let value = if low { "TRUE" } else { "FALSE" };
+                let _ = writeln!(out, "set_property IBUF_LOW_PWR {value} {ports}");
+            }
+        }
+        for (bank, millivolts, _) in &self.internal_vref {
+            let _ = writeln!(
+                out,
+                "set_property INTERNAL_VREF {:.3} [get_iobanks {bank}]",
+                f64::from(*millivolts) / 1000.0
+            );
         }
         for region in &self.regions {
             let _ = writeln!(out, "create_pblock {}", region.name);
@@ -1991,6 +2084,19 @@ fn attr_bool(attrs: &Attrs, keys: &[&str]) -> Option<bool> {
     }
 }
 
+/// A number of volts as millivolts, to the millivolt: `0.675`.
+pub(super) fn millivolts(text: &str) -> Option<u32> {
+    // By digits, so that `0.675` is 675 and nothing is rounded.
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let whole: u32 = whole.parse().ok()?;
+    let fraction: u32 = format!("{fraction:0<3}").parse().ok()?;
+    let value = whole.checked_mul(1000)?.checked_add(fraction)?;
+    (value > 0).then_some(value)
+}
+
 /// The IO options written as attributes on a port's net.
 fn io_attrs_of(attrs: &Attrs) -> IoAttrs {
     IoAttrs {
@@ -2001,6 +2107,10 @@ fn io_attrs_of(attrs: &Attrs) -> IoAttrs {
         pulldown: attr_bool(attrs, &["pulldown"]),
         ddr: attr_str(attrs, &["ddr", "ddr_clock"]),
         delay: attr_u32(attrs, &["io_delay", "delay_value"]),
+        keeper: attr_bool(attrs, &["keeper"]),
+        in_term: attr_str(attrs, &["in_term"]).map(|s| s.to_ascii_uppercase()),
+        diff_term: attr_bool(attrs, &["diff_term"]),
+        ibuf_low_pwr: attr_bool(attrs, &["ibuf_low_pwr"]),
     }
 }
 
@@ -2128,6 +2238,7 @@ impl<'a> LineParser<'a> {
     fn directive(&mut self, out: &mut Constraints) {
         match self.line.keyword() {
             "set_io" => self.set_io(out),
+            "set_internal_vref" => self.set_internal_vref(out),
             "region" => self.region(out),
             "assign" => self.assign(out),
             "rloc" => self.rloc(out),
@@ -2159,6 +2270,10 @@ impl<'a> LineParser<'a> {
                 "slew",
                 "pullup",
                 "pulldown",
+                "keeper",
+                "in_term",
+                "diff_term",
+                "ibuf_low_pwr",
                 "ddr",
                 "delay",
             ],
@@ -2175,7 +2290,8 @@ impl<'a> LineParser<'a> {
                 "slew" => io.slew = Some(value.as_str().to_ascii_lowercase()),
                 "ddr" => io.ddr = Some(value.as_str().to_owned()),
                 "delay" => io.delay = self.number(value),
-                "pullup" | "pulldown" => {
+                "in_term" => io.in_term = Some(value.as_str().to_ascii_uppercase()),
+                "pullup" | "pulldown" | "keeper" | "diff_term" | "ibuf_low_pwr" => {
                     let wanted = match value.as_str() {
                         "yes" | "true" | "1" => Some(true),
                         "no" | "false" | "0" => Some(false),
@@ -2185,10 +2301,12 @@ impl<'a> LineParser<'a> {
                             None
                         }
                     };
-                    if name == "pullup" {
-                        io.pullup = wanted;
-                    } else {
-                        io.pulldown = wanted;
+                    match name.as_str() {
+                        "pullup" => io.pullup = wanted,
+                        "pulldown" => io.pulldown = wanted,
+                        "keeper" => io.keeper = wanted,
+                        "diff_term" => io.diff_term = wanted,
+                        _ => io.ibuf_low_pwr = wanted,
                     }
                 }
                 _ => {}
@@ -2203,6 +2321,26 @@ impl<'a> LineParser<'a> {
             span: self.line.span,
             origin: Origin::File,
         });
+    }
+
+    /// `set_internal_vref <bank> <volts>`: a bank's `INTERNAL_VREF`.
+    fn set_internal_vref(&mut self, out: &mut Constraints) {
+        let (_, words) = self.split(&[], &[]);
+        if !self.expect_count(
+            &words,
+            2,
+            "a bank and a voltage: `set_internal_vref 35 0.75`",
+        ) {
+            return;
+        }
+        let Some(millivolts) = millivolts(words[1].as_str()) else {
+            let span = words[1].span;
+            let text = words[1].as_str().to_owned();
+            self.error(span, format!("expected a voltage, found `{text}`"));
+            return;
+        };
+        out.internal_vref
+            .push((words[0].as_str().to_owned(), millivolts, self.line.span));
     }
 
     fn region(&mut self, out: &mut Constraints) {
@@ -3130,6 +3268,7 @@ set_multicycle_path 2 -from d -to q
             pulldown: None,
             ddr: Some("clk".into()),
             delay: Some(12),
+            ..IoAttrs::default()
         });
         assert_eq!(io.ddr.as_deref(), Some("clk"));
         assert_eq!(io.delay, Some(12));

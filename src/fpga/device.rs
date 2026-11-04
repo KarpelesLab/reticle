@@ -1442,6 +1442,9 @@ pub struct IoStandard {
     /// The bank supply voltage the standard needs, as written on the
     /// datasheet (`3.3`), or `None` when it does not constrain it.
     pub vccio: Option<String>,
+    /// An input asks nothing of [`IoStandard::vccio`]: its receiver compares
+    /// with a reference or with its other ball.
+    pub input_free: bool,
 }
 
 impl IoStandard {
@@ -1453,6 +1456,7 @@ impl IoStandard {
             slew_rates: Vec::new(),
             differential: false,
             vccio: None,
+            input_free: false,
         }
     }
 }
@@ -1534,6 +1538,9 @@ pub struct Pin {
     pub bank: Option<String>,
     /// What the pin is for.
     pub kind: PinKind,
+    /// It can be its bank's `VREF` pin, which a bank using a reference voltage
+    /// and no `INTERNAL_VREF` keeps for that.
+    pub vref: bool,
 }
 
 /// The shape of one PLL or clock generator.
@@ -2254,6 +2261,9 @@ impl Device {
             if let Some(site) = &pin.site {
                 line.push_str(&format!(" site {}", quote(site)));
             }
+            if pin.vref {
+                line.push_str(" vref");
+            }
             out.push_str(&line);
             out.push('\n');
         }
@@ -2637,6 +2647,9 @@ fn write_io_standard(std: &IoStandard) -> String {
     }
     if std.differential {
         line.push_str(" differential");
+    }
+    if std.input_free {
+        line.push_str(" input_free");
     }
     line
 }
@@ -3585,6 +3598,7 @@ impl<'a> Parser<'a> {
                         .extend(list.split(',').map(str::to_ascii_lowercase));
                 }
                 "differential" => std.differential = true,
+                "input_free" => std.input_free = true,
                 other => {
                     let span = token.span;
                     self.unknown(span, format!("unknown `io_standard` option `{other}`"));
@@ -3637,6 +3651,7 @@ impl<'a> Parser<'a> {
             site: None,
             bank: None,
             kind,
+            vref: false,
         };
         let mut index = 3;
         while let Some(token) = line.get(index) {
@@ -3652,6 +3667,7 @@ impl<'a> Parser<'a> {
                     index += 1;
                     pin.site = Some(value);
                 }
+                "vref" => pin.vref = true,
                 other => {
                     let span = token.span;
                     self.unknown(span, format!("unknown `pin` option `{other}`"));

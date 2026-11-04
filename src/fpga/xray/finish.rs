@@ -4,10 +4,14 @@
 //! The rest of this crate paints what a design needs. Vivado also sets bits for
 //! every design, or for an option, and these are they:
 //!
-//! - **The `PUDC_B` pad, always**: an input with a pull-up, in every `.bit`
-//!   measured here on the XC7A100T and XC7A35T, whether or not the design goes
-//!   near it. `reticle fpga --decode` on a Vivado `.bit` showed it, in a pad no
-//!   design had named.
+//! - **The `PUDC_B` pad, when its bank has another**: an input with a pull-up,
+//!   whether or not the design goes near that ball. `reticle fpga --decode` on a
+//!   Vivado `.bit` showed it, in a pad no design had named. **This said "always",
+//!   "in every `.bit` measured here"**, and every `.bit` measured had a pin in
+//!   bank 14, the one that ball is in: the designs of
+//!   `testdata/fpga/vivado/io/` with none have no such pad (`bank35_*`,
+//!   `lvds_in_alone` and the others), and those with one do (`bank34_lvds`,
+//!   whose helper pins are in bank 14).
 //! - **The `EMCCLK` pad**, the same, under `EXTMASTERCCLK_EN`.
 //! - **`UNUSEDPIN`**: `PULLTYPE.<value>` on every other pad of the die, bonded
 //!   or not, which is why this reads the database's tile list and not the loaded
@@ -22,6 +26,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use super::io::{IoBankUse, STEPDOWN, bank_of_name};
 use super::{FeatureSet, Part, XrayDatabase, XrayError, XrayTile, block_ram_rows};
 use crate::fpga::arch::{ConfigBit, RoutingGraph};
 use crate::fpga::place::{Netlist, Placement};
@@ -312,7 +317,37 @@ impl XrayDatabase {
             if bits.iter().any(|b| is_set(frames, tile, *b)) {
                 continue;
             }
+            // `PUDC_B` only beside another pad of its bank; `EMCCLK` as asked.
+            if function.contains("PUDC_B") {
+                let bank = bank_of_name(&tile.name);
+                let mut used = false;
+                for other in tiles.iter().filter(|t| {
+                    (t.tile_type.starts_with("LIOB") || t.tile_type.starts_with("RIOB"))
+                        && bank_of_name(&t.name) == bank
+                }) {
+                    let set = self.feature_set(files, other, &mut sets)?;
+                    used |= ["IOB_Y0", "IOB_Y1"].iter().any(|half| {
+                        half_bits(&set, half)
+                            .iter()
+                            .any(|b| is_set(frames, other, *b))
+                    });
+                }
+                if !used {
+                    continue;
+                }
+            }
+            // A bank at a low supply has its low receiver: `bank14_stepdown`.
+            let low = set
+                .features()
+                .iter()
+                .find(|f| f.name == format!("{half}.{STEPDOWN}"))
+                .is_some_and(|f| f.ones.iter().all(|b| is_set(frames, tile, *b)));
             for feature in CONFIG_PAD {
+                let feature = if low && feature == "LVCMOS25_LVCMOS33_LVTTL.IN" {
+                    "LVCMOS12_LVCMOS15_LVCMOS18.IN"
+                } else {
+                    feature
+                };
                 let name = format!("{half}.{feature}");
                 let Some(f) = set.features().iter().find(|f| f.name == name) else {
                     return Err(malformed(format!(
@@ -367,6 +402,164 @@ impl XrayDatabase {
             report.config_tile_bits += 1;
         }
         Ok(report)
+    }
+
+    /// Where the bits [`XrayDatabase::finish_frames`] sets for the `PUDC_B` pad
+    /// land: its frame, its word and its bit.
+    ///
+    /// # Errors
+    ///
+    /// [`XrayError`] when the database cannot be read.
+    pub fn pudc_pad_bits(
+        &self,
+        files: &dyn FileProvider,
+    ) -> Result<Vec<(FrameAddress, usize, u32)>, XrayError> {
+        let tiles = self.tiles(files)?;
+        let mut sets: HashMap<String, FeatureSet> = HashMap::new();
+        let path = format!(
+            "{}/{}/{}/package_pins.csv",
+            self.root, self.family, self.part_dir
+        );
+        let pins = self.read(files, &path, "the part's package pins")?;
+        let mut out = Vec::new();
+        for line in pins.lines() {
+            let fields: Vec<&str> = line.split(',').collect();
+            let [_, _, site, tile_name, function, ..] = fields.as_slice() else {
+                continue;
+            };
+            if !function.contains("PUDC_B") {
+                continue;
+            }
+            let Some(tile) = tiles.iter().find(|t| t.name == *tile_name) else {
+                continue;
+            };
+            let set = self.feature_set(files, tile, &mut sets)?;
+            let half = half_of_site(tile, site, &set);
+            for feature in CONFIG_PAD {
+                let name = format!("{half}.{feature}");
+                let ones = set
+                    .features()
+                    .iter()
+                    .filter(|f| f.name == name)
+                    .flat_map(|f| f.ones.iter());
+                out.extend(ones.filter_map(|bit| locate(tile, *bit)));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Sets what each bank wants beyond its pads: its clock-row tile's features
+    /// and, at 1.8 V or lower, `STEPDOWN` on **all fifty of its pads**, bonded or
+    /// not. **Measured** on banks 14, 15, 34 and 35, and it is why this reads the
+    /// database's tile list: `--region` loads part of a die, and a bank may be
+    /// outside it. Says how many bits that set.
+    ///
+    /// # Errors
+    ///
+    /// [`XrayError`] when the database cannot be read, or a feature this names
+    /// is not in it.
+    pub fn finish_io_banks(
+        &self,
+        files: &dyn FileProvider,
+        frames: &mut FrameData,
+        banks: &[IoBankUse],
+    ) -> Result<usize, XrayError> {
+        let tiles = self.tiles(files)?;
+        let mut sets: HashMap<String, FeatureSet> = HashMap::new();
+        let mut count = 0usize;
+        let malformed = |message: String| XrayError::Malformed {
+            path: format!("{}/{}", self.root, self.family),
+            message,
+        };
+        let path = format!(
+            "{}/{}/{}/package_pins.csv",
+            self.root, self.family, self.part_dir
+        );
+        let package = self.read(files, &path, "the part's package pins")?;
+        for bank in banks {
+            let Some(here) = tiles
+                .iter()
+                .find(|t| (t.grid_x, t.grid_y) == bank.pad)
+                .and_then(|t| bank_of_name(&t.name))
+            else {
+                continue;
+            };
+            let pads: Vec<&XrayTile> = tiles
+                .iter()
+                .filter(|t| t.tile_type.starts_with("LIOB") || t.tile_type.starts_with("RIOB"))
+                .filter(|t| bank_of_name(&t.name) == Some(here))
+                .collect();
+            let (Some(lowest), Some(highest)) = (
+                pads.iter().map(|t| t.grid_y).min(),
+                pads.iter().map(|t| t.grid_y).max(),
+            ) else {
+                continue;
+            };
+            let column = pads[0].grid_x;
+            let Some(row) = tiles.iter().find(|t| {
+                t.tile_type.starts_with("HCLK_IOI")
+                    && t.grid_x.abs_diff(column) <= 3
+                    && t.grid_y > lowest
+                    && t.grid_y < highest
+            }) else {
+                return Err(malformed(format!(
+                    "no clock-row tile for the bank of the pad at grid {:?}",
+                    bank.pad
+                )));
+            };
+            // `optional`, since a `_SING` tile keeps one of the two halves.
+            let mut paint =
+                |tile: &XrayTile, name: &str, optional: bool| -> Result<(), XrayError> {
+                    let set = self.feature_set(files, tile, &mut sets)?;
+                    let Some(f) = set.features().iter().find(|f| f.name == name) else {
+                        if optional {
+                            return Ok(());
+                        }
+                        return Err(malformed(format!(
+                            "`{}` has no feature `{name}`",
+                            tile.name
+                        )));
+                    };
+                    for bit in &f.ones {
+                        set_bit(frames, tile, *bit).map_err(&malformed)?;
+                        count += 1;
+                    }
+                    Ok(())
+                };
+            for name in &bank.clock_row {
+                paint(row, name, false)?;
+            }
+            if bank.vref_balls {
+                for line in package.lines() {
+                    let fields: Vec<&str> = line.split(',').collect();
+                    let [_, _, _, tile_name, function, ..] = fields.as_slice() else {
+                        continue;
+                    };
+                    if !function.contains("VREF") {
+                        continue;
+                    }
+                    let Some(tile) = pads.iter().find(|t| t.name == *tile_name) else {
+                        continue;
+                    };
+                    for feature in [
+                        "IOB_Y1.LVCMOS12_LVCMOS15_LVCMOS18_LVCMOS25_LVCMOS33_LVDS_25_LVTTL_SSTL135_SSTL15_TMDS_33.IN_ONLY",
+                        "IOB_Y1.PULLTYPE.NONE",
+                        "IOB_Y1.VREF_BALL",
+                    ] {
+                        paint(tile, feature, false)?;
+                    }
+                }
+            }
+            if bank.stepdown {
+                paint(row, "STEPDOWN", false)?;
+                for tile in &pads {
+                    for half in ["IOB_Y0", "IOB_Y1"] {
+                        paint(tile, &format!("{half}.{STEPDOWN}"), true)?;
+                    }
+                }
+            }
+        }
+        Ok(count)
     }
 
     /// One tile's feature set, kept by its feature type.
@@ -501,7 +694,7 @@ fn half_bits(set: &FeatureSet, half: &str) -> Vec<ConfigBit> {
     let prefix = format!("{half}.");
     set.features()
         .iter()
-        .filter(|f| f.name.starts_with(&prefix))
+        .filter(|f| f.name.starts_with(&prefix) && !f.name.ends_with(STEPDOWN))
         .flat_map(|f| f.ones.iter().copied())
         .collect()
 }

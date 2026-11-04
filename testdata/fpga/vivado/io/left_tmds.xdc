@@ -1,0 +1,7 @@
+set_property -dict {PACKAGE_PIN A8 IOSTANDARD TMDS_33} [get_ports a0p]
+set_property -dict {PACKAGE_PIN A9 IOSTANDARD TMDS_33} [get_ports a0n]
+set_property -dict {PACKAGE_PIN B9 IOSTANDARD TMDS_33} [get_ports a1p]
+set_property -dict {PACKAGE_PIN A10 IOSTANDARD TMDS_33} [get_ports a1n]
+set_property -dict {PACKAGE_PIN P5 IOSTANDARD LVCMOS33} [get_ports dn]
+set_property -dict {PACKAGE_PIN P4 IOSTANDARD LVCMOS33} [get_ports en]
+set_property -dict {PACKAGE_PIN P3 IOSTANDARD LVCMOS33} [get_ports r]

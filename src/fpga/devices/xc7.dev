@@ -452,15 +452,47 @@ device xc7a35t-cpg236
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP
   end
+  io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
-  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
+  io_standard HSUL_12 vccio 1.2 slew slow,fast input_free
+  io_standard HSTL_I vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_II vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_I_18 vccio 1.8 slew slow,fast input_free
+  io_standard HSTL_II_18 vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_I vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_II vccio 1.8 slew slow,fast input_free
+  io_standard SSTL15 vccio 1.5 slew slow,fast input_free
+  io_standard SSTL15_R vccio 1.5 slew slow,fast input_free
+  io_standard SSTL135 vccio 1.35 slew slow,fast input_free
+  io_standard SSTL135_R vccio 1.35 slew slow,fast input_free
+  io_standard DIFF_HSTL_I vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_I_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_I vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_II vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15 vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15_R vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135 vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135_R vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_HSUL_12 vccio 1.2 slew slow,fast differential input_free
+  io_standard PCI33_3 vccio 3.3
+  io_standard MOBILE_DDR vccio 1.8 slew slow,fast
+  io_standard DIFF_MOBILE_DDR vccio 1.8 slew slow,fast differential
+  io_standard BLVDS_25 vccio 2.5 differential input_free
+  io_standard LVDS_25 vccio 2.5 differential input_free
+  io_standard RSDS_25 vccio 2.5 differential input_free
+  io_standard TMDS_33 vccio 3.3 differential input_free
+  io_standard MINI_LVDS_25 vccio 2.5 differential input_free
+  io_standard PPDS_25 vccio 2.5 differential input_free
   bank io vccio 3.3
   pins partial
   pin W5 clock bank io
-  pin V17 io bank io
+  pin V17 io bank io vref
   pin V16 io bank io
   pin W16 io bank io
   pin W17 io bank io
@@ -486,12 +518,12 @@ device xc7a35t-cpg236
   pin V14 io bank io
   pin V13 io bank io
   pin V3 io bank io
-  pin W3 io bank io
+  pin W3 io bank io vref
   pin U3 io bank io
   pin P3 io bank io
   pin N3 io bank io
-  pin P1 io bank io
-  pin L1 io bank io
+  pin P1 io bank io vref
+  pin L1 io bank io vref
   pin W7 io bank io
   pin W6 io bank io
   pin U8 io bank io
@@ -499,7 +531,7 @@ device xc7a35t-cpg236
   pin U5 io bank io
   pin V5 io bank io
   pin U7 io bank io
-  pin V7 io bank io
+  pin V7 io bank io vref
   pin U2 io bank io
   pin U4 io bank io
   pin V4 io bank io
@@ -521,7 +553,7 @@ device xc7a35t-cpg236
   pin A16 io bank io
   pin B15 io bank io
   pin B16 io bank io
-  pin A15 io bank io
+  pin A15 io bank io vref
   pin A17 io bank io
   pin C15 io bank io
   pin C16 io bank io
@@ -543,7 +575,7 @@ device xc7a35t-cpg236
   pin N1 io bank io
   pin G19 io bank io
   pin H19 io bank io
-  pin J19 io bank io
+  pin J19 io bank io vref
   pin N19 io bank io
   pin N18 io bank io
   pin L18 io bank io
@@ -556,7 +588,7 @@ device xc7a35t-cpg236
   pin P19 io bank io
   pin R19 io bank io
   pin B18 io bank io
-  pin A18 io bank io
+  pin A18 io bank io vref
   pin C17 io bank io
   pin B17 io bank io
   pin D18 io bank io
@@ -666,16 +698,47 @@ device xc7a35t-ftg256
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP
   end
+  io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
-  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
-  io_standard LVDS_25 vccio 2.5 differential
-  bank b14 vccio 3.3,2.5,1.8,1.5,1.2
-  bank b15 vccio 3.3,2.5,1.8,1.5,1.2
-  bank b34 vccio 3.3,2.5,1.8,1.5,1.2
-  bank b35 vccio 3.3,2.5,1.8,1.5,1.2
+  io_standard HSUL_12 vccio 1.2 slew slow,fast input_free
+  io_standard HSTL_I vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_II vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_I_18 vccio 1.8 slew slow,fast input_free
+  io_standard HSTL_II_18 vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_I vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_II vccio 1.8 slew slow,fast input_free
+  io_standard SSTL15 vccio 1.5 slew slow,fast input_free
+  io_standard SSTL15_R vccio 1.5 slew slow,fast input_free
+  io_standard SSTL135 vccio 1.35 slew slow,fast input_free
+  io_standard SSTL135_R vccio 1.35 slew slow,fast input_free
+  io_standard DIFF_HSTL_I vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_I_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_I vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_II vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15 vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15_R vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135 vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135_R vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_HSUL_12 vccio 1.2 slew slow,fast differential input_free
+  io_standard PCI33_3 vccio 3.3
+  io_standard MOBILE_DDR vccio 1.8 slew slow,fast
+  io_standard DIFF_MOBILE_DDR vccio 1.8 slew slow,fast differential
+  io_standard BLVDS_25 vccio 2.5 differential input_free
+  io_standard LVDS_25 vccio 2.5 differential input_free
+  io_standard RSDS_25 vccio 2.5 differential input_free
+  io_standard TMDS_33 vccio 3.3 differential input_free
+  io_standard MINI_LVDS_25 vccio 2.5 differential input_free
+  io_standard PPDS_25 vccio 2.5 differential input_free
+  bank b14 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b15 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b34 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b35 vccio 3.3,2.5,1.8,1.5,1.35,1.2
   pin A2 io bank b35
   pin A3 io bank b35
   pin A4 io bank b35
@@ -717,10 +780,10 @@ device xc7a35t-ftg256
   pin D1 io bank b35
   pin D3 clock bank b35
   pin D4 clock bank b35
-  pin D5 io bank b35
+  pin D5 io bank b35 vref
   pin D6 io bank b35
   pin D8 io bank b15
-  pin D9 io bank b15
+  pin D9 io bank b15 vref
   pin D10 io bank b15
   pin D11 clock bank b15
   pin D13 clock bank b15
@@ -750,7 +813,7 @@ device xc7a35t-ftg256
   pin G4 io bank b35
   pin G5 io bank b35
   pin G11 io bank b15
-  pin G12 io bank b15
+  pin G12 io bank b15 vref
   pin G14 io bank b15
   pin G15 io bank b15
   pin G16 io bank b15
@@ -766,7 +829,7 @@ device xc7a35t-ftg256
   pin H16 io bank b15
   pin J1 io bank b35
   pin J3 io bank b35
-  pin J4 io bank b35
+  pin J4 io bank b35 vref
   pin J5 io bank b35
   pin J13 io bank b14
   pin J14 io bank b14
@@ -793,15 +856,15 @@ device xc7a35t-ftg256
   pin M4 io bank b34
   pin M5 io bank b34
   pin M6 io bank b14
-  pin M12 io bank b14
+  pin M12 io bank b14 vref
   pin M14 io bank b14
   pin M15 io bank b14
   pin M16 io bank b14
   pin N1 io bank b34
   pin N2 io bank b34
   pin N3 io bank b34
-  pin N4 io bank b34
-  pin N6 io bank b14
+  pin N4 io bank b34 vref
+  pin N6 io bank b14 vref
   pin N9 io bank b14
   pin N11 clock bank b14
   pin N12 clock bank b14
@@ -945,16 +1008,47 @@ device xc7a100t-ftg256
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP
   end
+  io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
-  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
-  io_standard LVDS_25 vccio 2.5 differential
-  bank b14 vccio 3.3,2.5,1.8,1.5,1.2
-  bank b15 vccio 3.3,2.5,1.8,1.5,1.2
-  bank b34 vccio 3.3,2.5,1.8,1.5,1.2
-  bank b35 vccio 3.3,2.5,1.8,1.5,1.2
+  io_standard HSUL_12 vccio 1.2 slew slow,fast input_free
+  io_standard HSTL_I vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_II vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_I_18 vccio 1.8 slew slow,fast input_free
+  io_standard HSTL_II_18 vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_I vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_II vccio 1.8 slew slow,fast input_free
+  io_standard SSTL15 vccio 1.5 slew slow,fast input_free
+  io_standard SSTL15_R vccio 1.5 slew slow,fast input_free
+  io_standard SSTL135 vccio 1.35 slew slow,fast input_free
+  io_standard SSTL135_R vccio 1.35 slew slow,fast input_free
+  io_standard DIFF_HSTL_I vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_I_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_I vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_II vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15 vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15_R vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135 vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135_R vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_HSUL_12 vccio 1.2 slew slow,fast differential input_free
+  io_standard PCI33_3 vccio 3.3
+  io_standard MOBILE_DDR vccio 1.8 slew slow,fast
+  io_standard DIFF_MOBILE_DDR vccio 1.8 slew slow,fast differential
+  io_standard BLVDS_25 vccio 2.5 differential input_free
+  io_standard LVDS_25 vccio 2.5 differential input_free
+  io_standard RSDS_25 vccio 2.5 differential input_free
+  io_standard TMDS_33 vccio 3.3 differential input_free
+  io_standard MINI_LVDS_25 vccio 2.5 differential input_free
+  io_standard PPDS_25 vccio 2.5 differential input_free
+  bank b14 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b15 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b34 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b35 vccio 3.3,2.5,1.8,1.5,1.35,1.2
   pin A2 io bank b35
   pin A3 io bank b35
   pin A4 io bank b35
@@ -996,10 +1090,10 @@ device xc7a100t-ftg256
   pin D1 io bank b35
   pin D3 clock bank b35
   pin D4 clock bank b35
-  pin D5 io bank b35
+  pin D5 io bank b35 vref
   pin D6 io bank b35
   pin D8 io bank b15
-  pin D9 io bank b15
+  pin D9 io bank b15 vref
   pin D10 io bank b15
   pin D11 clock bank b15
   pin D13 clock bank b15
@@ -1029,7 +1123,7 @@ device xc7a100t-ftg256
   pin G4 io bank b35
   pin G5 io bank b35
   pin G11 io bank b15
-  pin G12 io bank b15
+  pin G12 io bank b15 vref
   pin G14 io bank b15
   pin G15 io bank b15
   pin G16 io bank b15
@@ -1045,7 +1139,7 @@ device xc7a100t-ftg256
   pin H16 io bank b15
   pin J1 io bank b35
   pin J3 io bank b35
-  pin J4 io bank b35
+  pin J4 io bank b35 vref
   pin J5 io bank b35
   pin J13 io bank b14
   pin J14 io bank b14
@@ -1072,15 +1166,15 @@ device xc7a100t-ftg256
   pin M4 io bank b34
   pin M5 io bank b34
   pin M6 io bank b14
-  pin M12 io bank b14
+  pin M12 io bank b14 vref
   pin M14 io bank b14
   pin M15 io bank b14
   pin M16 io bank b14
   pin N1 io bank b34
   pin N2 io bank b34
   pin N3 io bank b34
-  pin N4 io bank b34
-  pin N6 io bank b14
+  pin N4 io bank b34 vref
+  pin N6 io bank b14 vref
   pin N9 io bank b14
   pin N11 clock bank b14
   pin N12 clock bank b14

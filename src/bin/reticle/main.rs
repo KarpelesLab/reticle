@@ -4771,6 +4771,12 @@ fn write_xc7_bitstream(
         .map_err(|e| e.to_string())?;
     // What `write_bitstream` adds that no netlist asks for: pads, configuration
     // tile bits, then each frame's ECC.
+    db.finish_io_banks(
+        &files,
+        &mut frames,
+        &fabric.io_banks(design, top, &graph, &netlist, &placement),
+    )
+    .map_err(|e| e.to_string())?;
     db.finish_frames(&files, &mut frames, &bit_options)
         .map_err(|e| e.to_string())?;
     let frames = frames.with_ecc();

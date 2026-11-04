@@ -1,0 +1,5 @@
+set_property -dict {PACKAGE_PIN E6 IOSTANDARD LVCMOS18 PULLTYPE KEEPER} [get_ports a0]
+set_property -dict {PACKAGE_PIN K5 IOSTANDARD LVCMOS18} [get_ports a1]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports dn]
+set_property -dict {PACKAGE_PIN L5 IOSTANDARD LVCMOS33} [get_ports en]
+set_property -dict {PACKAGE_PIN M5 IOSTANDARD LVCMOS33} [get_ports r]

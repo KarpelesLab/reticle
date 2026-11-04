@@ -67,6 +67,7 @@ use super::arch::ConfigBit;
 use super::bitstream::Bitstream;
 
 pub mod options;
+pub mod pads;
 
 /// 32-bit words in one 7-series configuration frame (UG470, table 1-1).
 pub const WORDS_PER_FRAME: usize = 101;

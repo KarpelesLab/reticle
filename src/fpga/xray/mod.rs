@@ -207,7 +207,7 @@ pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
     parse::segbits(text, path)
 }
-pub use io::{IoError, IoTables, io_standards};
+pub use io::{IoBankUse, IoError, IoTables, PadFeatures, PadRequest, io_standards, pad_features};
 pub use iologic::IoLogicError;
 pub use sites::SiteCoverage;
 pub use timing::place_timing;
@@ -1116,7 +1116,18 @@ impl XrayDatabase {
             frames,
             clocks: clock_column(&features),
             block_ram: BlockRamTables::new(&features, &fixed),
-            io: IoTables::new(&features, &options.io_standard),
+            io: {
+                let mut io = IoTables::new(&features, &options.io_standard);
+                for tile in tiles
+                    .iter()
+                    .filter(|t| t.tile_type.starts_with("LIOB") || t.tile_type.starts_with("RIOB"))
+                {
+                    if let Some(bank) = io::bank_of_name(&tile.name) {
+                        io.banks.insert((tile.grid_x, tile.grid_y), bank);
+                    }
+                }
+                io
+            },
             stats,
         })
     }
@@ -1453,6 +1464,9 @@ impl XrayDatabase {
         let mut measured = bufg::cascade_enables(tile_type);
         // Likewise a `DSP48E1`'s: see `dsp::derived_features`.
         measured.extend(dsp::derived_features(tile_type));
+        // And those of an IO standard the database never fuzzed: see
+        // `io::measured_features`.
+        measured.extend(io::measured_features(tile_type));
         if !measured.is_empty() {
             let mut all = set.into_features();
             all.extend(measured);
@@ -3017,7 +3031,7 @@ pub struct XrayClockUse {
 /// - `ENABLE_BUFFER`: a clock row's buffer enable for a track, whose bits
 ///   a routed pip of that track switches on with its own, so that a
 ///   decoding finds both.
-const NOT_ARCS: [&str; 2] = ["DIFF", "ENABLE_BUFFER"];
+const NOT_ARCS: [&str; 3] = ["DIFF", "ENABLE_BUFFER", "VREF"];
 
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
 /// twentieth of an ordinary wire the ECP5 flow uses.

@@ -1,0 +1,5 @@
+set_property -dict {PACKAGE_PIN E6 IOSTANDARD HSTL_II SLEW FAST} [get_ports a0]
+set_property -dict {PACKAGE_PIN K5 IOSTANDARD HSTL_II IN_TERM UNTUNED_SPLIT_50 IBUF_LOW_PWR FALSE} [get_ports a1]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports dn]
+set_property -dict {PACKAGE_PIN L5 IOSTANDARD LVCMOS33} [get_ports en]
+set_property -dict {PACKAGE_PIN M5 IOSTANDARD LVCMOS33} [get_ports r]

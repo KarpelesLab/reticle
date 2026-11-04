@@ -34,6 +34,10 @@ models or IP.
   into `testdata/fpga/vivado/slice_cells/`, and `collect_slice_cells.py` keeps
   what Vivado's bitstream for each decodes to (`reticle fpga --decode`), in
   `vivado.features` there.
+- `gen_io.py` writes `testdata/fpga/vivado/io/`, and `io_pairs.sh` with `io_pairs.tcl`,
+  `io_pairs.v` and `io_pairs.py` asks Vivado's design rule check about every pair of
+  (standard, direction) in one bank, for `pairs.txt` there. `tests/fpga_xray_pads.rs`
+  decodes `run_all.sh`'s bitstreams into `vivado.txt`.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

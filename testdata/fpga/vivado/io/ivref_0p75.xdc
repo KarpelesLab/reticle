@@ -1,0 +1,6 @@
+set_property -dict {PACKAGE_PIN G2 IOSTANDARD SSTL15} [get_ports a0]
+set_property -dict {PACKAGE_PIN J4 IOSTANDARD LVCMOS15} [get_ports a1]
+set_property INTERNAL_VREF 0.75 [get_iobanks 35]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports dn]
+set_property -dict {PACKAGE_PIN L5 IOSTANDARD LVCMOS33} [get_ports en]
+set_property -dict {PACKAGE_PIN M5 IOSTANDARD LVCMOS33} [get_ports r]

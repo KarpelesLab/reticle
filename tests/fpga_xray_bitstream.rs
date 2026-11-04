@@ -461,26 +461,39 @@ fn the_pads_no_design_asked_for_are_vivados() {
         let db = XrayDatabase::open(&DiskFiles, &root, device, &XrayOptions::new()).unwrap();
         assert_eq!(db.config_tiles(&DiskFiles).unwrap(), fixture.tiles);
 
-        // `PUDC_B` on nothing at all, from frames with it taken out.
-        let mut words = fixture.frames.words().to_vec();
+        // `PUDC_B` is not on nothing at all: this asserted that it was, and
+        // every design measured then had a pin in its bank. See `xray::finish`.
         let mut empty = FrameData::empty(fixture.part.layout.clone());
         let done = db
             .finish_frames(&DiskFiles, &mut empty, &BitstreamOptions::default())
             .unwrap();
-        assert_eq!(done.config_pads, 1, "{device}");
-        assert_eq!(empty.ones(), 9, "{device}: the input and its pull-up");
-        for (word, value) in empty.words().iter().enumerate() {
-            assert_eq!(
-                words[word] & value,
-                *value,
-                "{device}: Vivado's frames hold these"
+        assert_eq!(done.config_pads, 0, "{device}");
+        assert_eq!(empty.ones(), 0, "{device}");
+
+        // Beside another pad of its bank, from frames with it taken out.
+        let pin = db.pudc_pad_bits(&DiskFiles).unwrap();
+        let mut words = fixture.frames.words().to_vec();
+        for (address, word, bit) in &pin {
+            let index = fixture
+                .part
+                .layout
+                .position(*address)
+                .expect("a frame of the part");
+            let at = index * reticle::fpga::xc7::WORDS_PER_FRAME + *word;
+            assert_ne!(
+                words[at] & (1 << bit),
+                0,
+                "{device}: Vivado's frames hold it"
             );
-            words[word] &= !value;
+            words[at] &= !(1 << bit);
         }
+        assert_eq!(pin.len(), 9, "{device}: the input and its pull-up");
         let without = FrameData::from_stream(fixture.part.layout.clone(), words).unwrap();
         let mut back = without.clone();
-        db.finish_frames(&DiskFiles, &mut back, &BitstreamOptions::default())
+        let done = db
+            .finish_frames(&DiskFiles, &mut back, &BitstreamOptions::default())
             .unwrap();
+        assert_eq!(done.config_pads, 1, "{device}");
         assert_eq!(back.with_ecc().words(), fixture.frames.words(), "{device}");
 
         let mut checked = 0;

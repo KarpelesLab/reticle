@@ -1,0 +1,7 @@
+set_io -io_standard SSTL15 -in_term UNTUNED_SPLIT_50 -ibuf_low_pwr no -keeper yes a0 G2
+set_io -io_standard SSTL15 -slew fast a1 H2
+set_io -io_standard SSTL15 a2 J4
+set_internal_vref 35 0.75
+set_io -io_standard LVCMOS33 dn L4
+set_io -io_standard LVCMOS33 en L5
+set_io -io_standard LVCMOS33 r M5

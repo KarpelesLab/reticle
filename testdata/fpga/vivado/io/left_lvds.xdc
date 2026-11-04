@@ -1,0 +1,8 @@
+set_property -dict {PACKAGE_PIN A8 IOSTANDARD LVDS_25 DIFF_TERM TRUE} [get_ports a0p]
+set_property -dict {PACKAGE_PIN A9 IOSTANDARD LVDS_25 DIFF_TERM TRUE} [get_ports a0n]
+set_property -dict {PACKAGE_PIN B9 IOSTANDARD LVDS_25} [get_ports a1p]
+set_property -dict {PACKAGE_PIN A10 IOSTANDARD LVDS_25} [get_ports a1n]
+set_property -dict {PACKAGE_PIN B10 IOSTANDARD LVCMOS25} [get_ports a2]
+set_property -dict {PACKAGE_PIN P5 IOSTANDARD LVCMOS33} [get_ports dn]
+set_property -dict {PACKAGE_PIN P4 IOSTANDARD LVCMOS33} [get_ports en]
+set_property -dict {PACKAGE_PIN P3 IOSTANDARD LVCMOS33} [get_ports r]

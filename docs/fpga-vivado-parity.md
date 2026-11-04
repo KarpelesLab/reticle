@@ -62,7 +62,7 @@ The 47 that do not build, by what stops them:
 | block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
 | clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
 | clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
-| pad buffers | 15 of them, chiefly the disable forms; `IOBUFDS` and `OBUFTDS` are the ones used most. `SSTL18_I` is not offered either. |
+| pad buffers | 15 of them, chiefly the disable forms; `IOBUFDS` and `OBUFTDS` are the ones used most. |
 | pulls on a pad with nothing else on it | `PULLUP`, `PULLDOWN`, `KEEPER` |
 | IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `IDDR_2CLK`, `DCIRESET`, and `IDDR` with a routed reset |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
@@ -310,6 +310,153 @@ What the table says, largest first:
 
 Where Reticle is ahead, it is on time alone: 8 or 9 s against 48 on most of these.
 
+## Pads: IO standards and what they take
+
+`testdata/fpga/vivado/io/` has 282 designs from `tools/vivado-parity/gen_io.py`. Asked
+of Vivado 2026.1 on the XC7A100T in FTG256, whose banks 14, 15, 34 and 35 are all
+high-range. **Nothing here has been on a board**: a standard's bits are held to
+Vivado's, and whether a pad then meets that standard's levels has not been measured
+by anything.
+
+**What Vivado offers.** `list_property_value IOSTANDARD` gives 37 for a port: `LVTTL`,
+`LVCMOS33`/`25`/`18`/`15`/`12`, `PCI33_3`, `MOBILE_DDR`, `HSUL_12`, `HSTL_I`, `HSTL_II`,
+`HSTL_I_18`, `HSTL_II_18`, `SSTL18_I`, `SSTL18_II`, `SSTL15`, `SSTL15_R`, `SSTL135`,
+`SSTL135_R`, a `DIFF_` form of each of the last eleven and of `MOBILE_DDR`, and
+`BLVDS_25`, `LVDS_25`, `RSDS_25`, `MINI_LVDS_25`, `PPDS_25`, `TMDS_33`. `xc7::pads` has
+them; it is all of them and no other.
+
+**Checked on 243 designs, 2,306 pads of the sweep and what the cases add:** every
+standard in every direction Vivado allows, with `DRIVE`, `SLEW`, `PULLTYPE`, `IN_TERM`,
+`DIFF_TERM` and `IBUF_LOW_PWR`, on both balls of a pair. Each was built by Vivado, its
+`.bit` decoded (`vivado.txt`, 715 different pads), and `every_recipe_is_what_vivado_wrote` holds
+`xray::io`'s recipe to every line with no database. `every_design_builds_to_vivados_bits`
+(ignored, half a minute at 32 at a time) builds each from its `.xdc` and compares the
+site features of every pad, its IO logic, and its bank, whole-design. **All agree.**
+Interconnect is not compared: the placements differ.
+
+### The bits
+
+Project X-Ray fuzzed six kinds of standard, and `--decode` lists what Vivado sets for
+the others as `?`. A pad is its features' bits, so what was missing was named
+(`io::measured_features`), one group of bits that came and went together. **The names
+are mine.**
+
+| | what Vivado wrote |
+|---|---|
+| drive | The database's fields: `LVCMOS15.DRIVE.I8` is what `HSTL_I` and `SSTL15_R` write, `LVCMOS18.DRIVE.I16` `HSTL_I_18`'s, `LVCMOS25.DRIVE.I16` `SSTL18_II`'s and `BLVDS_25`'s. A standard with no choice writes one thing whatever `DRIVE` says. New bits: `HSTL_II`, `HSTL_II_18`, `PCI33_3`, `RSDS_25` and `PPDS_25` (the same), `MINI_LVDS_25` |
+| `LVTTL` at 12 mA | `DRIVE.I12_I8`, which is `LVCMOS33` at 8. `LVTTL` at 16 is `LVCMOS33` at 12 |
+| `SLEW FAST` | The clear field on `LVCMOS*`, `LVTTL`, `MOBILE_DDR`; the database's `SSTL135_SSTL15.SLEW.FAST` on those and `HSUL_12`; on `HSTL_I`, `HSTL_II`, `HSTL_I_18` three new bits, and on `HSTL_II_18`, `SSTL18_*` four |
+| receiver | `LVCMOS25_LVCMOS33_LVTTL.IN` for those and `PCI33_3` (a new bit too); `LVCMOS12_LVCMOS15_LVCMOS18.IN` for those and `MOBILE_DDR`; `SSTL135_SSTL15.IN` for every referenced one, `HSUL_12` and `HSTL_*` too |
+| `IBUF_LOW_PWR FALSE` | `ZIBUF_LOW_PWR` on a referenced input, `DIFF.ZIBUF_LOW_PWR` on any pair, and **nothing at all** on `LVCMOS*`, `LVTTL`, `PCI33_3`, `MOBILE_DDR` |
+| `IN_TERM` | The field's own bits, on both halves of a pair |
+| `DIFF_TERM TRUE` | Six new bits on the `_P` half, in place of `IN_ONLY`, on `LVDS_25`, `RSDS_25`, `MINI_LVDS_25`, `PPDS_25` as inputs. **Nothing** on anything else, `TMDS_33`, `BLVDS_25`, `DIFF_SSTL15` or an `IOBUFDS`, and no word about it |
+| a pair | True differential: the driver on the `_P` half alone, `IN_ONLY` on the other. Otherwise: the same driver on both and `OUT_DIFF` on the tile. Neither has a second `OLOGIC` |
+| `TMDS_33` input | `TMDS_33.IN_DIFF` on the `_P` half and a bit on the `_N` half the database does not name |
+| an input nothing reads | `IN_ONLY` and its pull, **whatever else it asked for**: the receiver, termination and low-power all gone (`unread_*`). And it still counts for the bank's supply. A referenced one also configures the bank's `VREF` balls, which one with a reader does not |
+
+A pad on its way out on the other half has the same bits mirrored: frames 38 and 39 swap and
+bit `c` becomes `127 - c`, on every group. The sides of the die are the same (`left_*`), and a
+`_SING` tile keeps its half (`sing_*`).
+
+### The bank
+
+**`STEPDOWN` is set on all fifty pads of a bank, bonded or not, and its clock-row tile,
+when anything in the bank asks for a supply of 1.8 V or lower**, on banks 14, 15, 34 and
+35. An `SSTL15` input alone does not ask, and has no `STEPDOWN`, and with an
+`IN_TERM` it does, and has. So it is read off what the design rule check below reads.
+
+**`VREF.V_*_MV` is set from the standard, with or without `INTERNAL_VREF`.** That property
+**changes no bit**: `0.6`, `0.675`, `0.75` and `0.9` on an `SSTL15` input all give
+`VREF.V_750_MV`, whose reference is 0.75 V. What it changes is what is refused. The
+database's name suggested otherwise, and nothing here says where the part takes its
+reference from under either.
+
+**`LVDS_25_IN_USE` and `ONLY_DIFF_IN_USE` are about outputs.** `xray::io` said they went
+with an LVDS input, read off the Husky Plus's bank 15, where without them "every one of those
+six inputs read a constant" on the part. Vivado sets neither on a bank of LVDS inputs alone,
+and both on one LVDS output, and that bank has one, `ADC_CLKP`. **So the Husky's bits do not
+change, and any other design with LVDS inputs and no LVDS output in the bank loses both.** Why
+the inputs read a constant is not explained by this: the board said they did, and what was
+measured here is only what Vivado writes.
+
+**Two true differential output standards in a bank take two biases.** `DIFFSTDLIMIT-1`
+refuses a third. Of the two: the first is the database's `LVDS_25_IN_USE` and
+`ONLY_DIFF_IN_USE` for `LVDS_25`, `RSDS_25` or `MINI_LVDS_25`, and fifteen other bits for
+`PPDS_25`; the second is thirteen bits, or ten for `PPDS_25`; and the pairs on the second
+get two more. `TMDS_33` has `TMDS_33_IN_USE` and its 3.3 V keeps it apart. **Which is
+which is a fit**: over the fourteen designs that ask, the last port's standard takes the
+first, in name order, and it is not the site order or the instance. `BLVDS_25` counts for nothing.
+
+### What Vivado refuses, and so does Reticle
+
+`xc7::pads::check_pads` runs after mapping and before placement, as Vivado's checks do,
+by Vivado's rule name:
+
+| rule | what |
+|---|---|
+| `BIVC-1` | Two pads of a bank asking for different supplies. `LVCMOS*`, `LVTTL`, `PCI33_3`, `MOBILE_DDR` and their pairs ask always; everything else asks as an output, or with a termination. So `LVDS_25` in beside `LVCMOS33` out is allowed, and with `DIFF_TERM` it is not |
+| `BIVR-1` | Two referenced inputs at different voltages. A differential one has no reference |
+| `BIVRU-1` | A pad on a `VREF` ball while the bank has a referenced input and no `INTERNAL_VREF`. An output needs no reference, so that is allowed |
+| `IVREF-2` | `INTERNAL_VREF` other than 0.6, 0.675, 0.75, 0.9 |
+| `IOSTDTYPE-1`, `Place 30-64` | A differential standard on one ball, or the reverse |
+| `Place 30-49` | Bidirectional on `HSTL_I`, `HSTL_I_18`, `SSTL18_I`, their pairs, `RSDS_25`, `PPDS_25`, `TMDS_33` |
+| `InOutTerm-9`, `-7`, `-3` | `IN_TERM` on a standard without it, on an output, or at 25 or 75 ohms |
+| `DIFFSTDLIMIT-1` | Above |
+
+**`BIVC-1` and `BIVR-1` are a fit, and how good it is is the point:** `tools/vivado-parity/io_pairs.tcl`
+asked Vivado's own check of every ordered pair of (standard, direction) in one bank, 11,236 of
+them, and `the_bank_rules_are_vivados_on_every_pair` agrees on all of them. **The first reading
+was wrong once:** the pairs were asked with no termination, and said a referenced input asks
+nothing of the supply. `sstl15_term_lvcmos33_out` is refused.
+
+**`reticle_refuses_what_vivado_refuses`** builds each of the 41 Vivado refused, up to the
+refusal, and looks for the rule's name. It would not catch a rule that says the right name about
+the wrong pad.
+
+**Stricter than Vivado, on purpose**, each in `STRICTER` there:
+
+| | Vivado | Reticle |
+|---|---|---|
+| `DRIVE 24` on `LVCMOS33` | critical warning, and 12 mA | error |
+| `IN_TERM TUNED_SPLIT`, which it lists | critical warning, and none | error |
+| `IBUF_LOW_PWR` on an output | critical warning | error |
+| `SLEW MEDIUM`, which it lists | warning, and slow | error |
+| a pair's second ball on another pair's `_N` | moves the first ball there and says nothing | error |
+| two standards on the balls of a pair | takes the first's and says nothing | error |
+| a pair written backwards | critical warning for each, then `UCIO-1` | error |
+
+**Less strict, as before:** a port with no `IOSTANDARD` is `LVCMOS33`, where Vivado has
+`NSTD-1`, and a port with no ball is placed, where it has `UCIO-1`.
+
+Warned of and ignored, as Vivado does: `DRIVE` or `SLEW` on a standard with no choice, on
+an input. **A parameter on a buffer** counts the same (`inst_*`), and a constraint outranks it.
+
+**This changes existing bitstreams, in four ways, all stated above.** A bank of LVDS inputs and no LVDS output loses `LVDS_25_IN_USE`
+and `ONLY_DIFF_IN_USE`. A design with no pin in `PUDC_B`'s bank loses that pad. An input port nothing
+reads loses its receiver bits. And a bank with `LVCMOS18`, `LVCMOS15` or `LVCMOS12` in it gains `STEPDOWN` on fifty pads and its
+clock row, which this flow had never set: those three were offered, and their bits were the database's names alone. One thing else is new: `IOBUF u(.IO(pad), .O(x)); assign r = x;` is no longer
+taken for a tristate on `r`, which drove `r` and left the pad undriven, in a design Vivado
+built as written.
+
+**Mutations.** 18 were made, and each failed a test of `tests/fpga_xray_pads.rs`: a measured
+driver's bit, the mirror between halves, a fast slew of the wrong family, low power on an
+`LVCMOS` input, `DIFF_TERM` on the `_N` half, `STEPDOWN` at 2.5 V or on one half of a tile, a
+reference of the wrong level, the bias by the first port, the bank features for an LVDS input,
+an unread input keeping its receiver, a referenced input needing its supply, a termination not
+needing it, a third differential output standard, `BLVDS_25` as true differential, an
+`INTERNAL_VREF` that frees nothing, and `PUDC_B` always, or at its high receiver in a low bank.
+Five were caught only by building (`what_reticle_writes_is_what_vivado_wrote`), which is why it
+is in the gate.
+
+`set_io` has each of these as `-keeper`, `-in_term`,
+`-diff_term`, `-ibuf_low_pwr`, and a bank's `set_internal_vref 35 0.75`;
+`set_io_says_what_set_property_says` holds the two files of `rcf_sstl15` and `rcf_lvds` to
+one answer.
+
+**Not done.** Vivado's `CFGBVS`-style checks of bank 14 against the configuration voltage, which are warnings. The
+XC7A35T, or any other part: the tables were measured on one, and the same table is given to the
+others. A wrong drive or standard here would not be seen by anything but a scope.
+
 ## Reading its constraints
 
 `reticle fpga --constraints board.xdc` reads an XDC, chosen by the file's name.
@@ -353,7 +500,7 @@ said otherwise:
 
 | XDC | Reticle |
 |---|---|
-| `PACKAGE_PIN`, `LOC` with a ball, `IOSTANDARD`, `DRIVE`, `SLEW`, `PULLUP`, `PULLDOWN`, `PULLTYPE PULLUP/PULLDOWN`, each also in `-dict` | applied |
+| `PACKAGE_PIN`, `LOC` with a ball, `IOSTANDARD`, `DRIVE`, `SLEW`, `PULLUP`, `PULLDOWN`, `KEEPER`, `PULLTYPE`, `IN_TERM`, `DIFF_TERM`, `IBUF_LOW_PWR`, each also in `-dict`; a bank's `INTERNAL_VREF` | applied |
 | `get_ports` with lists, globs, `-filter`, `all_inputs`, `all_outputs`; a bit by the index it was declared with | applied: `hi[4]` of `[7:4]` is bit 0, `be[0]` of `[0:3]` is bit 3 |
 | `create_clock` on a port or a net | applied; a net nothing drives is **refused**, since in a `.rcf` that asks for a PLL |
 | `create_generated_clock` on a scalar register's `Q` | a clock at the divided period on that net: `-divide_by`, `-multiply_by`, `-edges`, `-invert` are worked out as Vivado worked them out |
@@ -375,8 +522,7 @@ debug cores, `RAMB` and `DSP` and `CLOCKREGION` ranges of a pblock.
 
 **Refused, as an error, because going on could be a wrong bitstream:** a pin or a
 pad property that cannot be read or applies to nothing, a pin given to two ports,
-any command that is not XDC (above), `DIFF_TERM`, `IN_TERM`, `IBUF_LOW_PWR`,
-`PULLTYPE KEEPER` and a bank's `INTERNAL_VREF` (what this flow has no way to set), `LOC` on any
+any command that is not XDC (above), an `IN_TERM` value Vivado says is not one, `IBUF_LOW_PWR` on an output, any other property of a bank, `LOC` on any
 site but a slice, any other property of a pin or a cell not known to be harmless,
 and the configuration options below. This is stricter than Vivado, which reports
 each of these as a critical warning and carries on: a pin that failed to set in
@@ -404,9 +550,8 @@ board depends on others. Refused, too, is a `BITSTREAM.*` Vivado does not have.
 
 **Checked on real files.** Every design under `testdata/fpga/vivado/` with both
 binds the same pins from its `.xdc` as from its `.rcf`, 161 designs, with no
-warning, and one refusal: the two probes that set a bank's `INTERNAL_VREF`, which
-this flow cannot and which is an error, so those two files do not build from their
-`.xdc` as they stand. Two others (`fsm`, `ibufds_probe`) were built to a bitstream from each, and the
+warning. (This had one refusal until the section on pads: the two probes that set a
+bank's `INTERNAL_VREF`, which this flow could not.) Two others (`fsm`, `ibufds_probe`) were built to a bitstream from each, and the
 two are identical from the first sync word on, in an `#[ignore]`d test. `ibufds_probe` matters because of a
 difference between the languages: an XDC names a differential pair's `P` ball
 alone, its `.rcf` names both, and the flow gets the pair from the `P`.
@@ -869,6 +1014,14 @@ And one difference that **is** in the frames, on every design: **Vivado configur
 `--decode` naming a pad nothing had asked for. `XrayDatabase::finish_frames` now does
 the same, unless the design has used that pad. So this too changes every Reticle
 bitstream. Its effect on a part has not been measured.
+
+**"On every design" was wrong**, and the section on pads is what showed it: it is on
+every design with a pad in that ball's bank, and every design measured here had one,
+since `N11` is the clock of each. A design with its pins elsewhere has no such pad
+(`lvds_in_alone`), one with a pin in bank 14 has it (`bank34_lvds`), and in a bank at
+1.8 V or lower its receiver is `LVCMOS12_LVCMOS15_LVCMOS18.IN` (`bank14_stepdown`).
+`finish_frames` does that now, and a design with no pin in bank 14 has nine bits fewer
+than it did.
 
 **The rule of the tail.** Vivado keeps a file's length: anything an option adds before
 the frames comes out of the 400 no-operations at the end, 5 for a `BSPI`, 2 for an

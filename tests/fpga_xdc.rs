@@ -465,7 +465,7 @@ fn configuration_goes_by_what_it_changes() {
 /// `testdata/fpga/vivado/` (the two at its top, `qor/` and the 146 of
 /// `primitives/`) has both, written apart: each port and bit gets the
 /// same pin and the same standard from either, and nothing comes of reading one
-/// but a refusal of a bank's `INTERNAL_VREF` on the two probes that set it.
+/// and the two probes that set a bank's `INTERNAL_VREF` have it read.
 /// Would catch a glob such as `[get_ports *]` missing a port, or a port
 /// getting a pin its `.rcf` does not give it. The `.rcf`s of `analyser_fifo` and
 /// `carry_counter` differ on purpose in their periods and false paths, for
@@ -528,18 +528,16 @@ fn a_real_file_binds_what_its_rcf_binds() {
         let mut diags = Diagnostics::new();
         let from_xdc = Constraints::parse_xdc(&xdc_text, xdc_file, &design, top, &mut diags);
         let from_rcf = Constraints::parse(&rcf_text, rcf_file, &mut diags);
-        // The two SSTL probes set a bank's `INTERNAL_VREF`, which this flow has
-        // no way to, and that is refused; their pins are read all the same.
+        // The two SSTL probes set a bank's `INTERNAL_VREF`, which this refused
+        // until a pad's bank rules were measured. `.rcf`s do not say it, in
+        // these, so it is not compared.
         let other: Vec<&str> = diags
             .iter()
-            .filter(|d| d.severity != Severity::Note && !d.message.contains("INTERNAL_VREF"))
+            .filter(|d| d.severity != Severity::Note)
             .map(|d| d.message.as_str())
             .collect();
         assert!(other.is_empty(), "{}: {other:?}", stem.display());
-        vref += diags
-            .iter()
-            .filter(|d| d.message.contains("INTERNAL_VREF"))
-            .count();
+        vref += from_xdc.internal_vref.len();
         let pins = |c: &Constraints| {
             let mut out: Vec<(String, Option<u32>, String, Option<String>)> = c
                 .pins
@@ -583,7 +581,7 @@ fn a_real_file_binds_what_its_rcf_binds() {
         assert_eq!(a, b, "{}", stem.display());
     }
     assert!(seen > 2, "the designs were not found");
-    assert_eq!(vref, 2, "the SSTL probes' `INTERNAL_VREF` is refused");
+    assert_eq!(vref, 2, "the SSTL probes' `INTERNAL_VREF` is read");
 }
 
 fn run_fpga(constraints: &Path, source: &Path, top: &str, out: &Path, bitstream: bool) {

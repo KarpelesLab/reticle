@@ -621,6 +621,12 @@ pub fn synthesize_for(
 
     report.netlist = cell_types(design, module);
 
+    // 5b. What the part's own rules refuse of its pads, before any time goes on
+    // placing them, as Vivado's checks come before its placer.
+    if device.family == "xc7" && xc7_pad_rules(design, module, device, constraints, diags) > 0 {
+        return Err(FlowError::Instantiation);
+    }
+
     // 6. Does it fit the *part number*? The fabric a backend loads later
     // describes a die, and a die may serve several part numbers with the
     // vendor covering less of it than is there — the LFE5U-12F is half an
@@ -762,6 +768,101 @@ fn retarget_cell(
         }
     }
     true
+}
+
+/// Vivado's rules for the pads of a 7-series bank (`xc7::pads`), over the IO
+/// buffers mapping has made, and how many it refuses.
+///
+/// A pad with no ball is not asked about: nothing says which bank it is in, and
+/// Vivado refuses it for that at the last step (`UCIO-1`), which is where this
+/// flow differs, on purpose, by placing it.
+#[cfg(feature = "synth")]
+fn xc7_pad_rules(
+    design: &Design,
+    module: ModuleId,
+    device: &Device,
+    constraints: &Constraints,
+    diags: &mut Diagnostics,
+) -> usize {
+    use super::xc7::pads::{Pad, Way, check_pads};
+    let Some(m) = design.modules.get(module) else {
+        return 0;
+    };
+    let mut pads = Vec::new();
+    let mut mixed = 0usize;
+    for (_, cell) in m.cells.iter() {
+        let CellKind::Blackbox(primitive) = &cell.kind else {
+            continue;
+        };
+        // Vivado takes the first ball's and says nothing of the second's. A
+        // constraint it ignores is one to say something about.
+        if let Some(second) = cell
+            .attrs
+            .get("io_pair_standard")
+            .and_then(crate::ir::AttrValue::as_str)
+        {
+            mixed += 1;
+            diags.push(
+                Diagnostic::error(format!(
+                    "`{}`: the balls of a differential pair have two IO standards, the second \
+                     `{second}`",
+                    cell.name
+                ))
+                .with_code(super::constraints::BANK_CONFLICT)
+                .with_span(cell.span),
+            );
+        }
+        let way = match primitive.as_str() {
+            "IBUF" | "IBUFG" | "IBUFDS" => Way::In,
+            "IOBUF" => Way::InOut,
+            "OBUF" | "OBUFT" | "OBUFDS" => Way::Out,
+            _ => continue,
+        };
+        let text = |key: &str| {
+            cell.attrs
+                .get(key)
+                .and_then(crate::ir::AttrValue::as_str)
+                .map(str::to_owned)
+        };
+        let flag = |key: &str| {
+            cell.attrs
+                .get(key)
+                .and_then(crate::ir::AttrValue::as_int)
+                .is_some_and(|v| v != 0)
+        };
+        let Some(ball) = text("pin") else { continue };
+        let Some(pin) = device.pin(&ball) else {
+            continue;
+        };
+        let Some(bank) = pin.bank.clone() else {
+            continue;
+        };
+        pads.push(Pad {
+            port: text("port").unwrap_or_else(|| cell.name.as_str().to_owned()),
+            ball,
+            bank: bank.trim_start_matches('b').to_owned(),
+            vref_ball: pin.vref,
+            standard: text("io_standard")
+                .unwrap_or_else(|| "LVCMOS33".to_owned())
+                .to_ascii_uppercase(),
+            way,
+            pair: flag("io_pair"),
+            in_term: text("in_term")
+                .map(|t| t.to_ascii_uppercase())
+                .filter(|t| t != "NONE"),
+            diff_term: flag("diff_term"),
+            span: cell.span,
+        });
+    }
+    let refusals = check_pads(&pads, &constraints.internal_vref);
+    for refusal in &refusals {
+        diags.push(
+            Diagnostic::error(format!("[{}] {}", refusal.rule, refusal.message))
+                .with_code(super::constraints::BANK_CONFLICT)
+                .with_span(refusal.span),
+        );
+    }
+    refusals.len() + mixed
 }
 
 /// Turns every instance of a device primitive left in `module` into a
@@ -953,17 +1054,6 @@ fn primitive_instances(
                         .and_then(crate::ir::AttrValue::as_str)
                         .map(str::to_ascii_uppercase)
                 };
-                if text("DIFF_TERM").as_deref() == Some("TRUE") {
-                    refused += 1;
-                    diags.push(
-                        Diagnostic::error(format!(
-                            "`{}`: `DIFF_TERM(\"TRUE\")` is not one this flow knows the bits of",
-                            inst.name
-                        ))
-                        .with_span(inst.span),
-                    );
-                    continue;
-                }
                 // A buffer is configured per port, so what is said of one
                 // bit is said of the whole vector: every pair on it must
                 // say the same, and every bit of the second port must be
@@ -979,7 +1069,49 @@ fn primitive_instances(
                 if !low_power {
                     m.nets[p].attrs.set("ibuf_low_pwr", 0i64);
                 }
+                if input && text("DIFF_TERM").as_deref() == Some("TRUE") {
+                    m.nets[p].attrs.set("diff_term", 1i64);
+                }
                 m.nets[n].attrs.set("io_differential_n", 1i64);
+                let n_name = m.nets[n].name.as_str().to_owned();
+                m.nets[p].attrs.set("io_pair_n", n_name);
+            }
+            // What an instance says of its pad, which a constraint outranks.
+            let pad_net = inst
+                .connection(bel.port("pad").unwrap_or(""))
+                .and_then(|e| match &m.expr(e).kind {
+                    ExprKind::Net(net) => Some(*net),
+                    ExprKind::Slice { base, .. } | ExprKind::Index { base, .. } => {
+                        m.expr(*base).as_net()
+                    }
+                    _ => None,
+                })
+                .filter(|net| m.ports.iter().any(|p| p.net == *net));
+            if let Some(net) = pad_net {
+                let text = |key: &str| {
+                    inst.params
+                        .get(key)
+                        .and_then(crate::ir::AttrValue::as_str)
+                        .map(str::to_ascii_uppercase)
+                };
+                if let Some(standard) = text("IOSTANDARD").filter(|s| s != "DEFAULT") {
+                    m.nets[net].attrs.set("io_standard", standard);
+                }
+                if input && text("IBUF_LOW_PWR").as_deref() == Some("FALSE") {
+                    m.nets[net].attrs.set("ibuf_low_pwr", 0i64);
+                }
+                if !input {
+                    if let Some(drive) = inst
+                        .params
+                        .get("DRIVE")
+                        .and_then(crate::ir::AttrValue::as_int)
+                    {
+                        m.nets[net].attrs.set("drive", drive);
+                    }
+                    if let Some(slew) = text("SLEW") {
+                        m.nets[net].attrs.set("slew", slew);
+                    }
+                }
             }
             let (Some(value), Some(target)) = (inst.connection(from), inst.connection(to)) else {
                 done.push(id);

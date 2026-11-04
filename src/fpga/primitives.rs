@@ -4888,6 +4888,21 @@ impl Mapper<'_> {
         }
         let (index, inner) = via?;
         let id = only(module, inner)??;
+        // A tri-state on a net an `inout` port is also assigned is that pad's,
+        // and an output assigned the net reads what is on the pin: taking it
+        // for the output's own enable drove the output and left the pad
+        // undriven, on `IOBUF u(.IO(pad), .O(x)); assign r = x;`.
+        let direction = |n: NetId| module.ports.iter().find(|p| p.net == n).map(|p| p.dir);
+        if direction(net) != Some(PortDir::InOut)
+            && (direction(inner) == Some(PortDir::InOut)
+                || module.assigns.iter().any(|a| {
+                    matches!(a.target, Lvalue::Net(other)
+                    if other != net && direction(other) == Some(PortDir::InOut))
+                        && module.expr(a.value).as_net() == Some(inner)
+                }))
+        {
+            return None;
+        }
         if module
             .assigns
             .iter()
@@ -5149,10 +5164,77 @@ impl Mapper<'_> {
         if let Some(pulldown) = io.pulldown {
             attrs.set("pulldown", i64::from(pulldown));
         }
-        // What an instantiated `IBUFDS` said of its receiver, and a
-        // `PULLUP` or `PULLDOWN` cell on the pad, carried on the port's net
-        // by `flow::primitive_instances`.
-        for key in ["ibuf_low_pwr", "pullup", "pulldown"] {
+        if let Some(keeper) = io.keeper {
+            attrs.set("keeper", i64::from(keeper));
+        }
+        if let Some(term) = &io.in_term {
+            attrs.set("in_term", term.clone());
+        }
+        if let Some(term) = io.diff_term {
+            attrs.set("diff_term", i64::from(term));
+        }
+        if let Some(low) = io.ibuf_low_pwr {
+            attrs.set("ibuf_low_pwr", i64::from(low));
+        }
+        // What was stated of the pair's `_N` ball, which has no cell: Vivado
+        // takes either ball's word for the pair (`nonly_term`, `nonly_pull`).
+        // Only what the first does not say, and by the same bit: a pair
+        // crossing bits of two vectors keeps its first ball's options alone.
+        let partner = module.nets[site.net]
+            .attrs
+            .get("io_pair_n")
+            .and_then(AttrValue::as_str)
+            .map(str::to_owned);
+        if let Some(n) = &partner
+            && let Some(other) = constraints.pin_of(n, Some(bit)).map(|a| &a.io)
+        {
+            let ball = constraints.pin_of(n, Some(bit)).map(|a| a.pin.clone());
+            let attrs = &mut module.cells[cell].attrs;
+            if let Some(ball) = ball.filter(|b| !b.is_empty()) {
+                attrs.set("io_pair_ball", ball);
+            }
+            if let (Some(p), Some(q)) = (&io.io_standard, &other.io_standard)
+                && !p.eq_ignore_ascii_case(q)
+            {
+                attrs.set("io_pair_standard", q.clone());
+            }
+            if io.pullup.is_none() && other.pullup == Some(true) {
+                attrs.set("pullup", 1i64);
+            }
+            if io.pulldown.is_none() && other.pulldown == Some(true) {
+                attrs.set("pulldown", 1i64);
+            }
+            if io.keeper.is_none() && other.keeper == Some(true) {
+                attrs.set("keeper", 1i64);
+            }
+            if let (None, Some(term)) = (&io.in_term, &other.in_term) {
+                attrs.set("in_term", term.clone());
+            }
+            if let (None, Some(term)) = (io.diff_term, other.diff_term) {
+                attrs.set("diff_term", i64::from(term));
+            }
+            if let (None, Some(low)) = (io.ibuf_low_pwr, other.ibuf_low_pwr) {
+                attrs.set("ibuf_low_pwr", i64::from(low));
+            }
+        }
+        if partner.is_some() {
+            module.cells[cell].attrs.set("io_pair", 1i64);
+        }
+        // What an instantiated buffer said of its pad, and a `PULLUP` or
+        // `PULLDOWN` cell on the pad, carried on the port's net by
+        // `flow::primitive_instances`. A constraint outranks it, as in Vivado
+        // (`inst_std_conflict`).
+        for key in [
+            "ibuf_low_pwr",
+            "pullup",
+            "pulldown",
+            "keeper",
+            "io_standard",
+            "in_term",
+            "diff_term",
+            "drive",
+            "slew",
+        ] {
             if module.cells[cell].attrs.get(key).is_none()
                 && let Some(value) = module.nets[site.net].attrs.get(key).cloned()
             {

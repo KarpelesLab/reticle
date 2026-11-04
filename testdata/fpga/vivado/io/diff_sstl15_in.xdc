@@ -1,0 +1,5 @@
+set_property -dict {PACKAGE_PIN G2 IOSTANDARD DIFF_SSTL15} [get_ports a0p]
+set_property -dict {PACKAGE_PIN G1 IOSTANDARD DIFF_SSTL15} [get_ports a0n]
+set_property -dict {PACKAGE_PIN L4 IOSTANDARD LVCMOS33} [get_ports dn]
+set_property -dict {PACKAGE_PIN L5 IOSTANDARD LVCMOS33} [get_ports en]
+set_property -dict {PACKAGE_PIN M5 IOSTANDARD LVCMOS33} [get_ports r]

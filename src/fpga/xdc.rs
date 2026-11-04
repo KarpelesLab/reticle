@@ -474,6 +474,14 @@ pub struct PortRead {
     pub pullup: Option<bool>,
     /// `PULLDOWN` as last stated.
     pub pulldown: Option<bool>,
+    /// `KEEPER` as last stated.
+    pub keeper: Option<bool>,
+    /// `IN_TERM`, upper case.
+    pub in_term: Option<String>,
+    /// `DIFF_TERM`.
+    pub diff_term: Option<bool>,
+    /// `IBUF_LOW_PWR`.
+    pub ibuf_low_pwr: Option<bool>,
 }
 
 /// One clock as Vivado would hold it.
@@ -564,6 +572,8 @@ pub struct XdcReading {
     pub config: BTreeMap<String, String>,
     /// `KEEP_HIERARCHY` on a cell: its name and where it was said.
     pub keep_hierarchy: Vec<(String, Span)>,
+    /// A bank's `INTERNAL_VREF`, in millivolts, by the bank's number.
+    pub internal_vref: BTreeMap<String, (u32, Span)>,
 }
 
 impl XdcReading {
@@ -587,6 +597,8 @@ impl XdcReading {
                     "PULLUP"
                 } else if read.pulldown == Some(true) {
                     "PULLDOWN"
+                } else if read.keeper == Some(true) {
+                    "KEEPER"
                 } else {
                     ""
                 };
@@ -918,7 +930,11 @@ const PORT_PROPERTIES: &[&str] = &[
     "SLEW",
     "PULLUP",
     "PULLDOWN",
+    "KEEPER",
     "PULLTYPE",
+    "IN_TERM",
+    "DIFF_TERM",
+    "IBUF_LOW_PWR",
 ];
 
 /// Cell, net and pblock properties that steer tools and leave the logic alone.
@@ -2165,6 +2181,9 @@ impl Reader<'_> {
                          is the same without one"
                     ),
                 ),
+                ObjectClass::Bank if name.as_str() == "INTERNAL_VREF" => {
+                    self.internal_vref(value, &objects, span);
+                }
                 ObjectClass::Pin | ObjectClass::Bank | ObjectClass::Site => {
                     self.refuse(
                         span,
@@ -2178,6 +2197,25 @@ impl Reader<'_> {
             }
         }
         Value::empty()
+    }
+
+    /// `INTERNAL_VREF` on a bank. `none` is taken as clearing it, as Vivado
+    /// takes it (`ivref_none` is refused for its `VREF` ball, as with no such
+    /// line).
+    fn internal_vref(&mut self, value: &str, objects: &[Object], span: Span) {
+        for object in objects {
+            if value.eq_ignore_ascii_case("none") {
+                self.reading.internal_vref.remove(&object.name);
+                continue;
+            }
+            let Some(millivolts) = super::constraints::millivolts(value) else {
+                self.refuse(span, format!("`INTERNAL_VREF {value}` is not a voltage"));
+                return;
+            };
+            self.reading
+                .internal_vref
+                .insert(object.name.clone(), (millivolts, span));
+        }
     }
 
     fn port_property(&mut self, name: &str, value: &str, objects: &[Object], span: Span) {
@@ -2213,6 +2251,17 @@ impl Reader<'_> {
                 continue;
             };
             let output = port.dir != PortDir::In;
+            // Measured: a critical warning (`Vivado 12-3180`), and the pad as it was.
+            if output && port.dir == PortDir::Out && name == "IBUF_LOW_PWR" {
+                self.refuse(
+                    span,
+                    format!(
+                        "`IBUF_LOW_PWR` is not a valid property for `{}`, an output",
+                        object.name
+                    ),
+                );
+                return;
+            }
             if !output && matches!(name, "DRIVE" | "SLEW") {
                 // Measured: Vivado warns and ignores it (12-4702).
                 self.not_honoured(
@@ -2239,14 +2288,38 @@ impl Reader<'_> {
             } else {
                 None
             };
-            if matches!(name, "PULLUP" | "PULLDOWN") && parsed_bool.is_none() {
+            if matches!(
+                name,
+                "PULLUP" | "PULLDOWN" | "KEEPER" | "DIFF_TERM" | "IBUF_LOW_PWR"
+            ) && parsed_bool.is_none()
+            {
                 self.refuse(span, format!("`{name} {value}` is neither true nor false"));
+                return;
+            }
+            // Vivado has these on its list and then says of the first that it
+            // is "not a valid value for input termination type": a critical
+            // warning, and the pad is left as it was.
+            if name == "IN_TERM"
+                && !matches!(
+                    value.to_ascii_uppercase().as_str(),
+                    "NONE"
+                        | "UNTUNED_SPLIT_25"
+                        | "UNTUNED_SPLIT_40"
+                        | "UNTUNED_SPLIT_50"
+                        | "UNTUNED_SPLIT_60"
+                        | "UNTUNED_SPLIT_75"
+                )
+            {
+                self.refuse(
+                    span,
+                    format!("`{value}` is not a valid value for input termination type"),
+                );
                 return;
             }
             if name == "PULLTYPE"
                 && !matches!(
                     value.to_ascii_uppercase().as_str(),
-                    "" | "PULLUP" | "PULLDOWN" | "NONE"
+                    "" | "PULLUP" | "PULLDOWN" | "KEEPER" | "NONE"
                 )
             {
                 self.refuse(
@@ -2274,30 +2347,34 @@ impl Reader<'_> {
                 // one clears the other, and clearing one leaves the other.
                 "PULLUP" => {
                     read.pullup = parsed_bool;
-                    if parsed_bool == Some(true) && read.pulldown == Some(true) {
-                        read.pulldown = Some(false);
+                    if parsed_bool == Some(true) {
+                        read.pulldown = read.pulldown.map(|_| false);
+                        read.keeper = read.keeper.map(|_| false);
                     }
                 }
                 "PULLDOWN" => {
                     read.pulldown = parsed_bool;
-                    if parsed_bool == Some(true) && read.pullup == Some(true) {
-                        read.pullup = Some(false);
+                    if parsed_bool == Some(true) {
+                        read.pullup = read.pullup.map(|_| false);
+                        read.keeper = read.keeper.map(|_| false);
                     }
                 }
-                "PULLTYPE" => match value.to_ascii_uppercase().as_str() {
-                    "PULLUP" => {
-                        read.pullup = Some(true);
-                        read.pulldown = Some(false);
+                "KEEPER" => {
+                    read.keeper = parsed_bool;
+                    if parsed_bool == Some(true) {
+                        read.pullup = read.pullup.map(|_| false);
+                        read.pulldown = read.pulldown.map(|_| false);
                     }
-                    "PULLDOWN" => {
-                        read.pulldown = Some(true);
-                        read.pullup = Some(false);
-                    }
-                    _ => {
-                        read.pullup = Some(false);
-                        read.pulldown = Some(false);
-                    }
-                },
+                }
+                "PULLTYPE" => {
+                    let pull = value.to_ascii_uppercase();
+                    read.pullup = Some(pull == "PULLUP");
+                    read.pulldown = Some(pull == "PULLDOWN");
+                    read.keeper = Some(pull == "KEEPER");
+                }
+                "IN_TERM" => read.in_term = Some(value.to_ascii_uppercase()),
+                "DIFF_TERM" => read.diff_term = parsed_bool,
+                "IBUF_LOW_PWR" => read.ibuf_low_pwr = parsed_bool,
                 _ => {}
             }
         }
@@ -3739,6 +3816,10 @@ impl Translate<'_> {
                     pulldown: read.pulldown,
                     ddr: None,
                     delay: None,
+                    keeper: read.keeper,
+                    in_term: read.in_term.clone(),
+                    diff_term: read.diff_term,
+                    ibuf_low_pwr: read.ibuf_low_pwr,
                 },
                 span: *span,
                 origin: Origin::File,
@@ -3747,6 +3828,11 @@ impl Translate<'_> {
     }
 
     fn clocks(&mut self) {
+        for (bank, (millivolts, span)) in &self.reading.internal_vref {
+            self.out
+                .internal_vref
+                .push((bank.clone(), *millivolts, *span));
+        }
         for clock in &self.reading.clocks {
             let name = clock.name.clone();
             if clock.sources.is_empty() {
