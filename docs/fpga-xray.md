@@ -3697,6 +3697,12 @@ counted once:
 
 The `ODDR`s are the ADC's forwarded clock and the two crowbar outputs.
 
+**Corrected, 2026-11-04: the first row of that table is out of date, and its
+reading was right.** The 13 low bits of word 50 are the frame's ECC, and this flow
+writes it now: `docs/fpga-vivado-parity.md` has the code and what it was checked on.
+One thing the row could not have said: a block RAM frame's ECC bits are zero, so "of
+every frame" holds only for the configuration bus.
+
 ### Routing for time (2026-10-23)
 
 With the clocks and the cascades right, what the Plus still got wrong

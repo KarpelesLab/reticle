@@ -21,13 +21,13 @@
 //! | — | the part's IDCODE (from `part.json`) |
 //! | — | which frame and bit a tile's configuration bits land in ([`TileBits`], from `tilegrid.json`) |
 //!
-//! Two things are neither: the **two zero pad frames after each row** of
-//! each configuration bus, and the exact command sequence and
-//! register values [`write_bit`] emits. Those were *measured* against the
-//! reference bitstream Project X-Ray ships in `artix7/harness/`, which
-//! Vivado produced for this very part;
-//! `the_container_matches_the_vivado_harness` in `tests/fpga_xray.rs` is
-//! that comparison written down. UG470
+//! Three things are neither: the **two zero pad frames after each row** of
+//! each configuration bus, the **frame ECC** ([`frame_ecc`]), and the exact
+//! command sequence and register values [`write_bit`] emits. Those were
+//! *measured* against Vivado: the reference bitstream Project X-Ray ships in
+//! `artix7/harness/` (`the_container_matches_the_vivado_harness` in
+//! `tests/fpga_xray.rs`), and since then Vivado 2026.1's own streams, in
+//! [`options`] and `tests/fpga_xray_bitstream.rs`. UG470
 //! describes each register and each command, but not the order a
 //! particular tool writes them in, and a configuration engine is picky
 //! about the order.
@@ -66,6 +66,8 @@ use std::fmt;
 use super::arch::ConfigBit;
 use super::bitstream::Bitstream;
 
+pub mod options;
+
 /// 32-bit words in one 7-series configuration frame (UG470, table 1-1).
 pub const WORDS_PER_FRAME: usize = 101;
 
@@ -89,6 +91,76 @@ const CRC32C_REVERSED: u32 = 0x82F6_3B78;
 /// all-zero frames at the end of each of the six (bus, half, row)
 /// groups.
 pub const PAD_FRAMES_PER_ROW: usize = 2;
+
+/// The word of a frame that holds its ECC.
+pub const ECC_WORD: usize = 50;
+
+/// Which bits of [`ECC_WORD`] are the ECC. The rest of that word is ordinary
+/// configuration: the horizontal clock tiles live there.
+pub const ECC_MASK: u32 = 0x1FFF;
+
+/// A frame's ECC, as Vivado writes it into bits 12:0 of word 50, from the
+/// frame's other bits. It reads none of those 13 bits themselves.
+///
+/// **Checked, not quoted**: UG470 says a frame has an ECC and gives no formula
+/// for it. `the_frame_ecc_is_exact_on_vivados_frames` in
+/// `tests/fpga_xray_bitstream.rs` holds this to every frame of a committed
+/// sample, and `docs/fpga-vivado-parity.md` says how many frames of how many
+/// `.bit`s it was exact on.
+///
+/// It is a Hamming code. A set bit contributes its own position, `word * 32 +
+/// bit`, plus a constant that keeps every position away from the powers of two,
+/// which are the check bits' own; the check is the XOR of those. Bit 12 makes
+/// the distance four: the parity of the data bits and of the twelve check bits.
+pub fn frame_ecc(frame: &[u32]) -> u32 {
+    let mut check = 0u32;
+    let mut parity = 0u32;
+    for (word, value) in frame.iter().enumerate() {
+        let mut value = *value;
+        if word == ECC_WORD {
+            value &= !ECC_MASK;
+        }
+        let word = u32::try_from(word).unwrap_or(0);
+        // The steps are where a position would otherwise reach 0x400 and 0x800.
+        let skip = match word {
+            0..=6 => 0x320,
+            7..=37 => 0x340,
+            _ => 0x360,
+        };
+        let base = word * 32 + skip;
+        parity ^= value.count_ones() & 1;
+        while value != 0 {
+            check ^= base + value.trailing_zeros();
+            value &= value - 1;
+        }
+    }
+    let check = check & 0xFFF;
+    check | ((parity ^ (check.count_ones() & 1)) << 12)
+}
+
+/// What Vivado writes in a frame's ECC bits at this address.
+///
+/// **A block RAM frame has none**: Vivado leaves its 13 bits zero, whatever the
+/// frame holds. Contents change while a design runs, so an ECC over them would
+/// mean nothing. That is a reason offered, not a measurement; that they are zero
+/// is the measurement.
+pub fn wanted_ecc(address: Option<FrameAddress>, frame: &[u32]) -> u32 {
+    match address {
+        Some(address) if address.block != 0 => 0,
+        _ => frame_ecc(frame),
+    }
+}
+
+/// One frame whose ECC bits are not what [`wanted_ecc`] makes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EccFault {
+    /// The frame.
+    pub address: FrameAddress,
+    /// What it carries.
+    pub found: u32,
+    /// What its other bits imply.
+    pub wanted: u32,
+}
 
 /// Why a 7-series bitstream could not be built or read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -529,6 +601,45 @@ impl FrameData {
             .sum()
     }
 
+    /// Replaces one frame, by position in stream order.
+    fn put_frame(&mut self, position: usize, frame: &[u32]) {
+        let start = position * WORDS_PER_FRAME;
+        self.words[start..start + WORDS_PER_FRAME].copy_from_slice(frame);
+    }
+
+    /// A copy with every frame's ECC bits filled in by [`wanted_ecc`].
+    pub fn with_ecc(&self) -> FrameData {
+        let mut out = self.clone();
+        for (position, address) in self.layout.order.iter().enumerate() {
+            let start = position * WORDS_PER_FRAME;
+            let range = start..start + WORDS_PER_FRAME;
+            let ecc = wanted_ecc(*address, &self.words[range]);
+            let word = &mut out.words[start + ECC_WORD];
+            *word = (*word & !ECC_MASK) | ecc;
+        }
+        out
+    }
+
+    /// Every frame whose ECC bits are wrong, in stream order. A pad frame has
+    /// no address to report and holds nothing, so it is not looked at.
+    pub fn ecc_faults(&self) -> Vec<EccFault> {
+        let mut out = Vec::new();
+        for (position, address) in self.layout.order.iter().enumerate() {
+            let Some(address) = address else { continue };
+            let start = position * WORDS_PER_FRAME;
+            let wanted = wanted_ecc(Some(*address), &self.words[start..start + WORDS_PER_FRAME]);
+            let found = self.words[start + ECC_WORD] & ECC_MASK;
+            if found != wanted {
+                out.push(EccFault {
+                    address: *address,
+                    found,
+                    wanted,
+                });
+            }
+        }
+        out
+    }
+
     /// The frames that hold at least one set bit, in stream order.
     pub fn used_frames(&self) -> Vec<FrameAddress> {
         let mut out = Vec::new();
@@ -621,6 +732,8 @@ pub enum Register {
     Bootsts = 22,
     /// Control 1.
     Ctl1 = 24,
+    /// Flash read setup: the `BSPI_READ` command acts on it.
+    Bspi = 31,
 }
 
 impl Register {
@@ -647,6 +760,7 @@ impl Register {
             17 => Register::Timer,
             22 => Register::Bootsts,
             24 => Register::Ctl1,
+            31 => Register::Bspi,
             _ => return None,
         })
     }
@@ -687,6 +801,10 @@ pub enum Command {
     Desync = 13,
     /// Internal reconfiguration.
     Iprog = 15,
+    /// Read the flash as the `BSPI` register says.
+    BspiRead = 18,
+    /// Clock the flash's data in on the falling edge.
+    FallEdge = 19,
 }
 
 impl Command {
@@ -707,6 +825,8 @@ impl Command {
             11 => Command::Shutdown,
             13 => Command::Desync,
             15 => Command::Iprog,
+            18 => Command::BspiRead,
+            19 => Command::FallEdge,
             _ => return None,
         })
     }
@@ -733,6 +853,9 @@ pub enum Packet {
         /// How many words were asked for.
         count: usize,
     },
+    /// A bare zero word, with no packet around it: `DEBUGBITSTREAM` writes a
+    /// pad frame this way, and Vivado counts them in its CRC as `FDRI` words.
+    Zero,
 }
 
 /// Splits a word stream into packets.
@@ -768,6 +891,10 @@ pub fn packets(words: &[u32]) -> Result<Vec<Packet>, Xc7Error> {
                 last_register,
                 usize::try_from(header & 0x07FF_FFFF).unwrap_or(0),
             ),
+            0 if header == 0 => {
+                out.push(Packet::Zero);
+                continue;
+            }
             other => {
                 return Err(Xc7Error::Malformed(format!(
                     "word {i} is a type {other} packet header ({header:#010x}), which UG470 does not define"
@@ -856,17 +983,6 @@ const LEADING_DUMMY_WORDS: usize = 8;
 /// Dummy words between the bus-width pattern and the sync word.
 const PRE_SYNC_DUMMY_WORDS: usize = 2;
 
-/// The configuration option register values Vivado writes for this
-/// family.
-///
-/// UG470 gives each field of `COR0`, `CTL0` and `MASK`; it does not say
-/// what a tool puts there. These are the words the reference bitstream
-/// in Project X-Ray's `artix7/harness/` carries, kept verbatim so that a
-/// stream from here differs from one from Vivado only in its frames.
-const COR0: u32 = 0x0200_3FE5;
-const CTL0: u32 = 0x0000_0501;
-const CTL0_MASK: u32 = 0x0000_0401;
-const STARTUP_MASK: u32 = 0x0000_0501;
 /// Register 19 is reserved in UG470; Vivado writes zero to it here.
 const RESERVED_REGISTER_19: u32 = 19;
 
@@ -941,6 +1057,44 @@ impl Stream {
         self.crc = crc_update(self.crc, register, value);
     }
 
+    /// A write Vivado leaves out of its CRC: `LOUT` is the one.
+    pub(crate) fn write_uncounted(&mut self, register: Register, value: u32) {
+        self.words.push(type1(2, register.address(), 1));
+        self.words.push(value);
+    }
+
+    /// A write of several words to one register.
+    pub(crate) fn write_block(&mut self, register: Register, values: &[u32]) {
+        self.words.push(type1(2, register.address(), values.len()));
+        for value in values {
+            self.words.push(*value);
+            self.crc = crc_update(self.crc, register.address(), *value);
+        }
+    }
+
+    /// A short run of frames: a type 1 packet while the count fits in one,
+    /// which is what a stream that writes frame by frame uses.
+    pub(crate) fn frames_short(&mut self, data: &[u32]) {
+        if data.len() > 0x7FF {
+            self.frames(data);
+            return;
+        }
+        self.words
+            .push(type1(2, Register::Fdri.address(), data.len()));
+        self.words.extend_from_slice(data);
+        for word in data {
+            self.crc = crc_update(self.crc, Register::Fdri.address(), *word);
+        }
+    }
+
+    /// A frame of bare words, counted as `FDRI` though no packet says so.
+    pub(crate) fn bare_frame(&mut self, data: &[u32]) {
+        self.words.extend_from_slice(data);
+        for word in data {
+            self.crc = crc_update(self.crc, Register::Fdri.address(), *word);
+        }
+    }
+
     /// The frame stream: an empty type 1 `FDRI` write followed by a type
     /// 2 packet carrying every word.
     pub(crate) fn frames(&mut self, data: &[u32]) {
@@ -970,6 +1124,9 @@ impl Stream {
 /// and command in it is UG470's; the *order* is Vivado's, because UG470
 /// documents the pieces and not the recipe.
 ///
+/// The frames' ECC is filled in here, so what `data` holds in those 13 bits
+/// does not matter and [`FrameData::with_ecc`] says what comes out.
+///
 /// The output is deterministic: no clock is read, so two runs of one
 /// design produce identical bytes.
 ///
@@ -979,51 +1136,25 @@ impl Stream {
 /// `part` — the check that stops a bitstream built against one
 /// database being labelled with another part's IDCODE.
 pub fn write_bit(header: &BitHeader, part: &Part, data: &FrameData) -> Result<Vec<u8>, Xc7Error> {
-    if data.layout() != &part.layout {
-        return Err(Xc7Error::Malformed(
-            "the frame data was built in a different layout from the part's".to_owned(),
-        ));
-    }
-    let mut stream = Stream::new();
-    stream.nops(1);
-    stream.write(Register::Timer, 0);
-    stream.write(Register::Wbstar, 0);
-    stream.command(Command::Null);
-    stream.nops(1);
-    stream.command(Command::Rcrc);
-    stream.nops(2);
-    stream.write_raw(RESERVED_REGISTER_19, 0);
-    stream.write(Register::Cor0, COR0);
-    stream.write(Register::Cor1, 0);
-    stream.write(Register::Idcode, part.idcode);
-    stream.command(Command::Switch);
-    stream.nops(1);
-    stream.write(Register::Mask, CTL0_MASK);
-    stream.write(Register::Ctl0, CTL0);
-    stream.write(Register::Mask, 0);
-    stream.write(Register::Ctl1, 0);
-    stream.nops(8);
-    stream.write(Register::Far, 0);
-    stream.command(Command::Wcfg);
-    stream.nops(1);
-    stream.frames(data.words());
-    stream.checkpoint();
-    stream.nops(2);
-    stream.command(Command::Grestore);
-    stream.nops(1);
-    stream.command(Command::Lfrm);
-    stream.nops(100);
-    stream.command(Command::Start);
-    stream.nops(1);
-    stream.write(Register::Far, PARKED_FAR);
-    stream.write(Register::Mask, STARTUP_MASK);
-    stream.write(Register::Ctl0, CTL0);
-    stream.checkpoint();
-    stream.nops(2);
-    stream.command(Command::Desync);
-    stream.nops(400);
+    write_bit_with(header, part, data, &options::BitstreamOptions::default())
+}
 
-    Ok(wrap(header, LEADING_DUMMY_WORDS, &stream.words))
+/// [`write_bit`] with `write_bitstream`'s options: [`options`] is what they
+/// do. The bits these options set in frames
+/// ([`options::BitstreamOptions::config_tile_bits`]) are the caller's to have
+/// painted, as the frames are its to have painted.
+///
+/// # Errors
+///
+/// As [`write_bit`].
+pub fn write_bit_with(
+    header: &BitHeader,
+    part: &Part,
+    data: &FrameData,
+    options: &options::BitstreamOptions,
+) -> Result<Vec<u8>, Xc7Error> {
+    let words = options::stream_words(part, data, options)?;
+    Ok(wrap(header, options.leading_words(), &words))
 }
 
 /// A `.bit` file around a packet stream: the header, `leading` dummy
@@ -1092,6 +1223,112 @@ impl Bit {
     /// How many frames the stream carries.
     pub fn frame_count(&self) -> usize {
         self.frames.len() / WORDS_PER_FRAME
+    }
+
+    /// The configuration memory this stream leaves, in `layout`.
+    ///
+    /// A stream that writes every frame in order is simply its `FDRI` words.
+    /// One that does not is replayed, register by register, as the engine reads
+    /// it: a compressed stream's `FAR` and `MFWR`, whose frames are found
+    /// nowhere else, and a per-frame stream, whose frames are one too many. A
+    /// frame is committed by the one behind it, so the last of an `FDRI` packet
+    /// stays out of memory unless an `MFWR` takes it there.
+    ///
+    /// # Errors
+    ///
+    /// [`Xc7Error::Malformed`] when a write falls outside the layout or a frame
+    /// is torn, or a frame is left unwritten.
+    pub fn image(&self, layout: FrameLayout) -> Result<FrameData, Xc7Error> {
+        // Asked of the packets and not of a word count, which a compressed
+        // stream can match by chance.
+        let per_frame = self.packets.iter().any(|packet| {
+            matches!(packet, Packet::Write { register, words }
+                if *register == Register::Ctl1.address()
+                    && words.first().is_some_and(|w| w & 0x0020_0000 != 0))
+        });
+        let multiple = self.packets.iter().any(|packet| {
+            matches!(packet, Packet::Write { register, .. }
+                if *register == Register::Mfwr.address())
+        });
+        if !per_frame && !multiple {
+            return FrameData::from_stream(layout, self.frames.clone());
+        }
+        let mut image = FrameData::empty(layout.clone());
+        let mut written = vec![false; layout.frames()];
+        let mut far = 0u32;
+        let mut held: Option<Vec<u32>> = None;
+        for packet in &self.packets {
+            let Packet::Write { register, words } = packet else {
+                continue;
+            };
+            match Register::from_u32(*register) {
+                Some(Register::Far) => {
+                    far = words.first().copied().unwrap_or(0);
+                    // A per-frame stream names each frame's address after the
+                    // frame, and the row's extra frame after that repeats the
+                    // last: that one is the pad, and is not committed.
+                    let position = layout.position(FrameAddress::from_u32(far));
+                    if let (true, Some(frame), Some(position)) = (per_frame, &held, position) {
+                        if !written[position] {
+                            image.put_frame(position, frame);
+                            written[position] = true;
+                        }
+                        held = None;
+                    }
+                }
+                Some(Register::Fdri) if !words.is_empty() => {
+                    if words.len() % WORDS_PER_FRAME != 0 {
+                        return Err(Xc7Error::Malformed(format!(
+                            "an FDRI packet of {} word(s) is not a whole number of frames",
+                            words.len()
+                        )));
+                    }
+                    if per_frame {
+                        held = Some(words.clone());
+                        continue;
+                    }
+                    let mut position =
+                        layout
+                            .position(FrameAddress::from_u32(far))
+                            .ok_or_else(|| {
+                                Xc7Error::Malformed(format!(
+                                    "FAR {far:#010x} is no frame of this part"
+                                ))
+                            })?;
+                    let (body, last) = words.split_at(words.len() - WORDS_PER_FRAME);
+                    for frame in body.chunks(WORDS_PER_FRAME) {
+                        image.put_frame(position, frame);
+                        written[position] = true;
+                        position += 1;
+                    }
+                    held = Some(last.to_vec());
+                    far = layout.order()[position].map_or(far, FrameAddress::to_u32);
+                }
+                Some(Register::Mfwr) => {
+                    let (Some(frame), Some(position)) =
+                        (&held, layout.position(FrameAddress::from_u32(far)))
+                    else {
+                        return Err(Xc7Error::Malformed(format!(
+                            "an MFWR to FAR {far:#010x} with no frame to write there"
+                        )));
+                    };
+                    image.put_frame(position, frame);
+                    written[position] = true;
+                }
+                _ => {}
+            }
+        }
+        let hole = layout
+            .order()
+            .iter()
+            .zip(&written)
+            .find(|(address, written)| address.is_some() && !**written);
+        if let Some((Some(address), _)) = hole {
+            return Err(Xc7Error::Malformed(format!(
+                "the stream leaves frame {address} unwritten"
+            )));
+        }
+        Ok(image)
     }
 }
 
@@ -1185,9 +1422,18 @@ pub fn read_bit(bytes: &[u8]) -> Result<Bit, Xc7Error> {
     let mut crc = 0u32;
     let mut seen_far = false;
     for packet in &packets {
+        if matches!(packet, Packet::Zero) {
+            crc = crc_update(crc, Register::Fdri.address(), 0);
+            frames.push(0);
+            continue;
+        }
         let Packet::Write { register, words } = packet else {
             continue;
         };
+        // `DEBUGBITSTREAM`'s frame addresses: Vivado's CRC leaves them out.
+        if *register == Register::Lout.address() {
+            continue;
+        }
         if *register == Register::Crc.address() {
             let expected = words.first().copied().unwrap_or(0);
             crc_checks.push((expected, crc));
@@ -1261,6 +1507,15 @@ pub(crate) fn payload_start(bytes: &[u8]) -> Result<usize, Xc7Error> {
         let length = usize::from(reader.u16()?);
         reader.take(length)?;
     }
+}
+
+/// A `.bit`'s configuration stream: what a `.bin` holds, byte for byte.
+///
+/// # Errors
+///
+/// [`Xc7Error::Malformed`] for a file that is not a `.bit`.
+pub fn bit_payload(bytes: &[u8]) -> Result<&[u8], Xc7Error> {
+    Ok(&bytes[payload_start(bytes)?..])
 }
 
 /// A bounds-checked cursor over a `.bit` file.
@@ -1498,7 +1753,9 @@ mod tests {
         assert_eq!(back.header, header);
         assert_eq!(back.idcode, Some(part.idcode));
         assert_eq!(back.start_address, Some(FrameAddress::default()));
-        assert_eq!(back.frames, data.words());
+        // What was given, with each frame's ECC filled in.
+        assert_eq!(back.frames, data.with_ecc().words());
+        assert_ne!(back.frames, data.words());
         assert_eq!(back.frame_count(), part.layout.frames());
         assert_eq!(back.crc_checks.len(), 2);
         for (expected, computed) in &back.crc_checks {

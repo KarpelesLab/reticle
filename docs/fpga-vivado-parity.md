@@ -75,7 +75,7 @@ does not: the first run's refusals are design rules (`REQP-1884`, `REQP-1939`,
 `PDCN-135` and so on), and Reticle has checks of its own but not these.
 
 `reticle fpga --device <part> --decode <file.bit>` prints what any 7-series `.bit`
-sets, and each set bit the database has no name for. It is how to ask what Vivado
+sets, each set bit the database has no name for, and each frame whose ECC is wrong. It is how to ask what Vivado
 wrote.
 
 ## What each makes of the same design
@@ -285,6 +285,12 @@ edge-specific forms. `reticle timing --constraints` refuses an XDC with a messag
 since its queries read the source and that command has synthesised it by then.
 
 ## Vivado's timer on Reticle's implementation
+
+**Two of the classes below have since been closed, and the figures are older than
+that.** `testdata/fpga/vivado/placed/` was measured when Reticle left a frame's ECC
+at zero and left the `PUDC_B` pad alone. Reticle now writes both, as "The container
+around the frames" below says, so those two "Vivado only" classes describe that run
+and not the flow today. The run has not been repeated since.
 
 `reticle fpga --bitstream <f> --vivado-placement <x>.tcl` writes what Vivado needs
 to load an implementation with no synthesis: a structural netlist, every cell's
@@ -605,3 +611,204 @@ A wide multiplexer in a `LUT6_2`'s lane is refused, not considered, so that a
 data table never shares its site. `regfile_alu` and `fsm`, where Vivado uses 5 and
 1, gain nothing here: this flow's tables do not have the tree shape, and why was
 not looked at.
+
+## The container around the frames, and `write_bitstream`'s options
+
+**What was asked of Vivado:** one small design, `testdata/fpga/vivado/bitstream/options_probe.v`,
+routed once, then `write_bitstream` from that checkpoint for every value of every
+`BITSTREAM.*` property `list_property` names: 277 runs on the XC7A100T and, for the
+ones that set frame bits and the three stream forms, 55 on the XC7A35T.
+`bitstream_base.tcl`, `bitstream_options.tcl` and `bitstream_fixtures.py` under
+`tools/vivado-parity/` made it. **What is held:** the whole stream after the sync
+word, every word of it, frames, ECC and CRCs included, by length and hash, in
+`tests/fpga_xray_bitstream.rs`. Reticle writes the same stream, from Vivado's
+frames, for 245 runs on the XC7A100T and 50 on the XC7A35T, and 11 more with a
+pad in them when the database is there to say which bits a pad's are.
+
+**Nothing here has been on a board.** A stream Vivado would write has not thereby
+been loaded by a part: not one option below has configured anything, and the Husky
+is in use elsewhere. Before any of this Reticle's stream already differed from Vivado's default only in its
+frames, and on 2026-09-24 one had configured a Basys 3.
+
+### Frame ECC
+
+**Word 50 of each frame holds a 13-bit ECC, and Reticle now writes it.** This
+changes every 7-series bitstream Reticle writes, in every frame that holds anything:
+102 to 273 frames on the small designs below. `xc7::frame_ecc` is the code:
+
+- It is a Hamming code over the frame's other 3219 bits. A set bit contributes
+  `word * 32 + bit + k`, where `k` is `0x320` for words 0 to 6, `0x340` for 7 to 37
+  and `0x360` from 38, which steps over `0x400` and `0x800`: the check bits' own
+  positions. The XOR of those, low 12 bits, is bits 11:0.
+- Bit 12 is the parity of the data bits and of those twelve.
+- The high 19 bits of word 50 are ordinary data, and count. They are the horizontal
+  clock tiles' (`HCLK_*`, `CLK_HROW_*`, `HCLK_CMT`, `HCLK_IOI3`), which is why the
+  earlier survey in `docs/fpga-xray.md` found ECC bits in those tiles. No `segbits`
+  line of any tile names one of the 13, checked across every tile with a window on
+  word 50.
+
+**Checked:** equal on all 59,536 frames of eight `.bit`s, of which 7,775 hold anything
+and 3.4 million bits are set, on two parts: this run's small designs, two generated
+ones with random lookup tables and block RAMs full of random data
+(`gen_ecc_design.py`), and two of Project X-Ray's reference bitstreams, which an
+older Vivado wrote. Whole frames of the two generated ones are committed in
+`ecc_frames.txt`, and `the_frame_ecc_is_exact_on_vivados_frames` holds them to it. The
+count of eight was by a script and is not in a test; the committed sample is.
+
+**The first formula was wrong, and came from memory:** I started from my recollection
+of Project X-Ray's `ecc.cc`, which matched bits 11:0 and missed bit 12 on half the
+frames. The fold of the parity was misremembered. So the code here is what Vivado's
+frames say, and the recollection is why I knew to look for this shape.
+
+**The second thing wrong was assuming it covers every frame.** A block RAM frame's
+13 bits are **zero**, whatever it holds: 1,858 frames with data, and not one with an
+ECC. `bram_fifo`, with empty memories, passed either way; it took a design with
+contents to show it. That contents change at run time is the likely reason, and it
+is a guess. So `xc7::wanted_ecc` is by frame address.
+
+`reticle fpga --decode` no longer lists these bits as `?`. It counts them, and each
+frame whose ECC is wrong is a `!` line and a number in the summary: a `.bit` from this flow before today has one of those for nearly every used frame. On Vivado's own
+frames for `options_probe`: **2,418 bits, 606 of them ECC, none unexplained, no ECC
+wrong**, and 2,244, 437, none and none on the XC7A35T.
+
+`FRAME_ECCE2` and `POST_CRC` could now mean something; neither is done, and neither
+has been tried. `FRAME_ECCE2` is still in the list of primitives above that do not
+build.
+
+**What else this changed, checked.** Four designs built by the code before this and
+after it, same placement and route (`options_probe`, `crc32`, `bram_fifo`, `fsm`): the
+packet lines differ only in the `FDRI` hash and the first CRC, and the frames only in
+those 13 bits, on 102 to 273 frames, and the nine bits of the `PUDC_B` pad below. By a
+script, and not in a test: the old build is not to hand in one.
+
+The random designs say something too: **1.76 million set bits on the XC7A100T and 1.61
+million on the XC7A35T decode with none unexplained**, in each of the plain, compressed
+and per-frame forms, to the same list of features. Their CRCs all read back. That is Project X-Ray's database against what a random design uses, not against every
+  feature of the part.
+
+### The stream
+
+`bit_packets.py` dumps one. `<tag>.options.txt` starts with Vivado's for the base
+design, and every run after it says what differs.
+
+**On default options there is no difference in the stream at all**: every register
+Project X-Ray's reference bitstream had shown, and they are still what Vivado 2026.1
+writes. `the_default_stream_is_vivados_word_for_word` holds it, CRCs included, so the
+order of `TIMER`, `WBSTAR`, `CMD`, reserved register 19, `COR0`, `COR1`, `IDCODE`,
+`CTL0`, `CTL1`, `FAR` and the end sequence has been measured against this Vivado and
+not only an older one.
+
+Three differences remain in the file, and none is in the stream a part reads:
+
+| what | Vivado | Reticle | why |
+|---|---|---|---|
+| `.bit` field `a` | `<top>;UserID=0XFFFFFFFF;Version=2026.1;SW_CRC=...;SW_HDR_SHA256=...` | `<top>;UserID=0XFFFFFFFF;Version=reticle` | Not the same tool. The last two differ per file written, are not a CRC-32 or SHA-256 of the stream, the header, or any part of them I tried, and are not in the stream. Not derived |
+| `.bit` fields `c`, `d` | the clock | `0000/00/00`, `00:00:00` | Two runs of a design give the same bytes here |
+| `.rbt` header | `Created by Bitstream 2026.1 SW Build ...` and the clock | `Created by Reticle`, the same fixed date | The same two reasons. The body is the same bits |
+
+And one difference that **is** in the frames, on every design: **Vivado configures the
+`PUDC_B` pad whether the design uses it or not**, as an input with a pull-up
+(`IN_ONLY`, `LVCMOS25_LVCMOS33_LVTTL.IN`, `PULLTYPE.PULLUP`, nine bits). It came out of
+`--decode` naming a pad nothing had asked for. `XrayDatabase::finish_frames` now does
+the same, unless the design has used that pad. So this too changes every Reticle
+bitstream. Its effect on a part has not been measured.
+
+**The rule of the tail.** Vivado keeps a file's length: anything an option adds before
+the frames comes out of the 400 no-operations at the end, 5 for a `BSPI`, 2 for an
+`AXSS`, 2 for `SPI_FALL_EDGE` and 64 for `SPI_32BIT_ADDR`'s longer lead-in.
+
+**Forms of the frames**, read from the streams and exact on each:
+
+- `COMPRESS`: `CTL1`'s bit 12, and a run of frames by `FDRI` up to the first with a
+  duplicate in its row, which then goes to itself and each duplicate by `MFWR`. Only
+  frames of one row are duplicates of each other, though a run can cross rows, over
+  the two pad frames. A run that stops at a written frame has a zero frame after it,
+  which is never committed. Eight no-operations follow each `MFWR` on the block RAM
+  bus, none on the other. **Checked** exact on five streams, of which two are committed
+  and three, `bram_fifo` and the two random designs, were checked with a script: a row
+  full of random block RAM is what showed the row crossing, and it is hundreds of
+  kilobytes of frames. `a_compressed_run_crosses_a_row_over_its_pads` pins that by hand
+  from the rule, so it would not catch the rule being wrong in a way those three did
+  not reach. My first reading did not cross rows, and matched exactly on every stream
+  until the first random one.
+- `PERFRAMECRC`: `CTL1`'s bit 21, and each frame followed by `FAR` of itself and a CRC;
+  a row ends with a zero frame and its own. No CRC before the end sequence, and `CTL1`
+  cleared before `GRESTORE`.
+- `DEBUGBITSTREAM`: a type 1 `FDRI` per frame, each followed by `LOUT` of its address,
+  and pad frames as **bare zero words with no packet**. Vivado's CRC counts those as
+  `FDRI` writes and leaves `LOUT` out. `read_bit` reads it so: both are odd enough that
+  no engine's behaviour should be inferred from them.
+
+`Bit::image` replays any of these into the memory it leaves, so `--decode` reads them,
+and a compressed stream from here is checked by replay as well as by hash. It first
+chose a form by comparing the `FDRI` word count with the layout's, which is wrong: a
+small compressed stream can match by chance, and the row-crossing test's did.
+
+### Options
+
+Given as `reticle fpga --bitstream-option NAME=VALUE`, with Vivado's names.
+`xc7::options::option_table()` is the list and `BitstreamOptions::set(name, value)` is
+the one call: that is what reading `set_property BITSTREAM.*` from an XDC comes to.
+
+**Done, and exact against Vivado's stream for every value tried:**
+
+| where it lands | options |
+|---|---|
+| `COR0` | `STARTUP.GWE_CYCLE`, `GTS_CYCLE`, `LCK_CYCLE`, `MATCH_CYCLE`, `DONE_CYCLE`, `DONEPIPE`, `STARTUPCLK` (`CCLK`, `JTAGCLK`), `CONFIG.CONFIGRATE` |
+| `COR1` | `BPI_PAGE_SIZE`, `BPI_1ST_READ_CYCLE`, `READBACK.XADCPARTIALRECONFIG` |
+| `CTL0` | `INITSIGNALSERROR`, `OVERTEMPPOWERDOWN`, `SELECTMAPABORT`, `CONFIGFALLBACK`, `READBACK.SECURITY`, `ENCRYPTION.ENCRYPTKEYSELECT` |
+| `WBSTAR`, `CMD` | `NEXT_CONFIG_ADDR`, `NEXT_CONFIG_REBOOT`, `REVISIONSELECT`, `REVISIONSELECT_TRISTATE`. An address alone writes `IPROG` and enables the fallback |
+| `TIMER` | `TIMER_CFG`, `TIMER_USR`. One count: with two, Vivado writes `TIMER_CFG`'s and says nothing |
+| `AXSS` | `USR_ACCESS`. `TIMESTAMP` is Vivado's packed form, and UTC here where Vivado's is local: the standard library has no zone. It is the one thing here that reads a clock |
+| `BSPI`, `CMD` | `SPI_BUSWIDTH`, `SPI_32BIT_ADDR`, `SPI_FALL_EDGE`, `BPI_SYNC_MODE`, `CONFIG_MODE` |
+| stream | `GENERAL.COMPRESS`, `PERFRAMECRC`, `DEBUGBITSTREAM`, `CRC` |
+| `CFG_CENTER_MID` frames 26, 27 | `USERID` (bits taking turns between the frames, inverted, so the default all-ones is no bits), `M0PIN`, `M1PIN`, `M2PIN`, `TCKPIN`, `TDIPIN`, `TDOPIN`, `TMSPIN`, `CCLKPIN`, `DONEPIN`, `INITPIN`, `PROGPIN`, `DISABLE_JTAG` |
+| `MONITOR_BOT` frames 26 to 29 | `JTAG_XADC`, `XADCENHANCEDLINEARITY`, `XADCPOWERDOWN` |
+| pads | `UNUSEDPIN`, on every pad of the die, bonded or not, 300 on the XC7A100T and 250 on the XC7A35T. `EXTMASTERCCLK_EN` also takes `CONFIGRATE`'s field, and configures the `EMCCLK` pad as `PUDC_B`'s |
+
+The frame bits are stated by tile, and the same bits come out on both parts, which is
+what says they are the tile's. `--decode` names them, as `USERID[7]=0` and
+`M0PIN.PULLNONE`, since no `segbits` file does.
+
+**Accepted, and no effect on what was measured**: `CCLK_TRISTATE`, `DCIUPDATEMODE`,
+`READBACK.ACTIVERECONFIG`, `CFGBVS`, `CONFIG_VOLTAGE`. A part with DCI might see
+`DCIUPDATEMODE`; this one has none.
+
+**Refused here, with why:**
+
+| option | why |
+|---|---|
+| `ENCRYPTION.ENCRYPT`, `KEY0`, `HKEY`, `KEYFILE`, `STARTCBC` | No AES-256 or HMAC, and a stream that claimed to be encrypted and was not would be worse than a refusal |
+| `CONFIG.PERSIST=YES` | Vivado refuses it without `CONFIG_MODE` (`PRST-1`), and with one configures every pin of that interface. 21 to 239 words on what was measured. No table of those pins here |
+| `READBACK.ICAP_SELECT=TOP`, `BOTTOM` | Vivado refuses it without an `ICAPE2` there, and Reticle places none |
+| `STARTUP.STARTUPCLK=USERCLK` | Vivado refuses it without a `STARTUPE2` clock, and Reticle places none |
+
+**Vivado's own refusals, which `BitstreamOptions::check` makes too**: `COMPRESS` with
+`PERFRAMECRC` (`Designutils 20-2046`) or `DEBUGBITSTREAM` (`20-1859`), `CRC=DISABLE` with
+`PERFRAMECRC` (`20-2047`), `SPI_BUSWIDTH=NONE` with `SPI_32BIT_ADDR=YES` (`20-1850`), an
+SPI `CONFIG_MODE` against a different `SPI_BUSWIDTH` (`20-1856`), and `CONFIG_VOLTAGE`
+without `CFGBVS` (`CFGBVS-2`) or 1.5 and 1.8 without `GND` (`CFGBVS-4`).
+
+**Names that do not exist.** `STARTUP.DRIVEDONE`, `CONFIG.DONEPROG` and
+`CONFIG.OVERTEMPSHUTDOWN` were on my list, from older tools: Vivado 2026.1 says
+`Cannot set property ... because the property does not exist`, on this family. The
+last is `OVERTEMPPOWERDOWN` now. Reticle refuses them the same way, and so a
+constraint file that carries them has something to say about it.
+
+**Side files.** `--bin-file`: the stream as it stands, the same bytes as Vivado's
+`.bin` holds of Vivado's `.bit`. `--raw-bitfile`: the same as ones and zeros under a
+header. `--logic-location-file`: where each slice flip-flop and each `RAMB18E1` bit
+reads back, with positions held to Vivado's own for all 32 flip-flop bels of four
+slices (frame 31 of the tile) and a sample of 864 block RAM bits, numbered as half of
+the `RAMB36` a `RAMB18` is in. It is not all of Vivado's file: an IO register and a
+lookup table used as memory have lines there and none here, none of them measured, and
+net names are this flow's own.
+
+**Not done:**
+
+- **`-mask_file`.** The `.msk` is the same packets around a mask of each frame's words
+  in place of its data, a 1 for a bit readback should not compare. It depends on the design (2,639,948 ones for `bram_fifo` and 2,621,276 for
+  `options_probe`) and has a shape by tile and frame I have not broken down: reading it
+  is the next step, and it has not been done.
+- `-readback_file` (`.rba`, `.rbb`, `.rbd`, `.msd`), `-reference_bitfile`, `-cell`:
+  not looked at beyond seeing that the first writes those four files.

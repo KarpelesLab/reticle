@@ -536,7 +536,7 @@ fn a_design_reaches_a_real_bitstream() {
     let bytes = xc7::write_bit(&header, &fabric.part, &data).unwrap();
     let back = xc7::read_bit(&bytes).unwrap();
     assert_eq!(back.idcode, Some(IDCODE));
-    assert_eq!(back.frames, data.words());
+    assert_eq!(back.frames, data.with_ecc().words());
     assert_eq!(back.frame_count(), STREAM_FRAMES);
     for (expected, computed) in &back.crc_checks {
         assert_eq!(expected, computed);
@@ -783,7 +783,7 @@ fn milestone(root: &str) -> Option<Decoded> {
     let back = xc7::read_bit(&bytes).unwrap();
     assert_eq!(back.idcode, Some(IDCODE));
     assert_eq!(back.frame_count(), STREAM_FRAMES);
-    assert_eq!(back.frames, frames.words());
+    assert_eq!(back.frames, frames.with_ecc().words());
     assert_eq!(back.start_address, Some(FrameAddress::default()));
     for (expected, computed) in &back.crc_checks {
         assert_eq!(expected, computed);
@@ -927,24 +927,18 @@ fn the_io_path_is_the_one_vivado_built() {
 
     // ---- And the size of what this comparison does not cover. ----
     //
-    // Every bit Reticle sets has a name, and so, it turned out, has every bit
-    // of Vivado's that is a tile's at all. This used to read "most of Vivado's
-    // do not", and to assert that some were unexplained, as the honest measure
-    // of how far this is from a working bitstream. All 1302 of them were the
-    // frames' own Hamming codes (`tools/vivado-parity/frame_ecc.py`), so that
-    // measure was measuring nothing. What it does not cover is what Vivado's
-    // design has and this one does not, and that is still printed here.
-    //
-    // Would catch the code's range being too narrow, or a feature of Vivado's
-    // that the database has lost a name for.
+    // Every bit Reticle sets has a name, and now so does every one of Vivado's.
+    // This used to assert that Vivado's had unexplained bits, "which would be a
+    // surprise" otherwise, and read them as what a real configuration needs
+    // that the database does not name. **They were all the frames' ECC**: 1,302
+    // bits here. Reticle's image has no ECC yet at this point, as `write_bit`
+    // fills it in, so each of its used frames is a finding.
     eprintln!("reticle: {}", ours.to_text());
     eprintln!("vivado:  {}", theirs.to_text());
     assert_eq!(ours.unexplained, 0);
-    assert_eq!(theirs.unexplained, 0, "{:?}", theirs.leftovers);
-    assert!(
-        theirs.frame_ecc > 0,
-        "vivado's bitstream has no frame codes, which would be a surprise"
-    );
+    assert_eq!(theirs.unexplained, 0, "{}", theirs.to_text());
+    assert_eq!(theirs.ecc_faults, vec![], "{}", theirs.to_text());
+    assert!(theirs.ecc_bits > 1000, "{}", theirs.to_text());
 }
 
 /// The two orientations this loader had to measure rather than assume,

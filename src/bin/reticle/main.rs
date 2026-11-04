@@ -344,7 +344,23 @@ GW2A and Lattice ECP5):
   --decode <file>    7 series: read a .bit from any tool, and print each
                      feature it sets as `<tile> <feature>` and each bit the
                      database has no name for as `? <tile> <frame>_<bit>`.
-                     Takes no design.
+                     A frame's ECC is not one of those: its bits are counted,
+                     and a frame whose ECC is wrong is a line of its own, as
+                     `! <frame> ecc <found> wants <wanted>`. Takes no design.
+  --bitstream-option <NAME=VALUE>
+                     7 series, with --bitstream: a property of Vivado's
+                     write_bitstream, by its own name, such as
+                     BITSTREAM.GENERAL.COMPRESS=TRUE or
+                     BITSTREAM.CONFIG.CONFIGRATE=33. May be repeated.
+                     docs/fpga-vivado-parity.md lists which are done, and an
+                     option that is not done is refused rather than ignored.
+  --bin-file         7 series, with --bitstream: also write <stem>.bin, the
+                     stream without the .bit's header.
+  --raw-bitfile      7 series, with --bitstream: also write <stem>.rbt, the
+                     stream as a line of ones and zeros per word.
+  --logic-location-file
+                     7 series, with --bitstream: also write <stem>.ll, where
+                     each slice flip-flop and RAMB18E1 bit reads back.
   --region <box>     7 series: which tiles of the fabric to load, as
                      x0,y0,x1,y1 in the database's grid coordinates. The
                      default is a box around the constrained pins.
@@ -825,8 +841,17 @@ fn spec_for(usage: &str) -> Spec {
                 "place-hot-start",
                 "timing-driven",
                 "pins-at-entry",
+                "bin-file",
+                "raw-bitfile",
+                "logic-location-file",
             ],
-            repeated: &["param", "define", "include-dir", "constraints"],
+            repeated: &[
+                "param",
+                "define",
+                "include-dir",
+                "constraints",
+                "bitstream-option",
+            ],
         }
     } else if std::ptr::eq(usage, LSP_USAGE) {
         Spec {
@@ -2188,6 +2213,72 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
 }
 
 /// `reticle fpga`: the whole target flow, ending in nextpnr's inputs.
+/// The `--bitstream-option`s, understood and checked against each other.
+fn xc7_bitstream_options(
+    args: &Args,
+) -> Result<reticle::fpga::xc7::options::BitstreamOptions, String> {
+    let mut options = reticle::fpga::xc7::options::BitstreamOptions::default();
+    for text in args.repeated("bitstream-option") {
+        let Some((name, value)) = text.split_once('=') else {
+            return Err(format!("`--bitstream-option {text}` is not `NAME=VALUE`"));
+        };
+        options.set(name, value).map_err(|e| e.to_string())?;
+    }
+    options.check().map_err(|e| e.to_string())?;
+    let (year, month, day, time) = utc_now();
+    options.resolve_timestamp(year, month, day, time);
+    Ok(options)
+}
+
+/// The date and time now, in UTC, which is all the standard library knows:
+/// `USR_ACCESS=TIMESTAMP` is the one thing that asks, and Vivado writes the
+/// local time there, so the two differ by the zone.
+fn utc_now() -> (u32, u32, u32, (u32, u32, u32)) {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let days = i64::try_from(seconds / 86_400).unwrap_or(0);
+    let of_day = u32::try_from(seconds % 86_400).unwrap_or(0);
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+    let year = u32::try_from(yoe + era * 400 + i64::from(month <= 2)).unwrap_or(2000);
+    (
+        year,
+        month,
+        day,
+        (of_day / 3600, of_day / 60 % 60, of_day % 60),
+    )
+}
+
+/// `--bin-file` and `--raw-bitfile`: the same stream as `bytes`, beside it.
+fn write_xc7_side_files(
+    args: &Args,
+    header: &reticle::fpga::xc7::BitHeader,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    use reticle::fpga::xc7;
+    let payload = xc7::bit_payload(bytes).map_err(|e| e.to_string())?;
+    let stem = path.strip_suffix(".bit").unwrap_or(path);
+    if args.flag("bin-file") {
+        let bin = format!("{stem}.bin");
+        std::fs::write(&bin, payload).map_err(|e| format!("cannot write `{bin}`: {e}"))?;
+    }
+    if args.flag("raw-bitfile") {
+        let rbt = format!("{stem}.rbt");
+        let text = xc7::options::raw_bitfile(header, "artix7", payload);
+        std::fs::write(&rbt, text).map_err(|e| format!("cannot write `{rbt}`: {e}"))?;
+    }
+    Ok(())
+}
+
 /// `reticle fpga --decode`: what a 7-series `.bit`, from any tool, holds.
 /// One line for each feature the database names, as `<tile> <feature>`, then
 /// one for each set bit it does not, as `? <tile> <frame>_<bit>`, in the
@@ -2216,8 +2307,7 @@ fn decode_xc7_bit(
     let part = db.part(&files).map_err(|e| e.to_string())?;
     let bytes = std::fs::read(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
     let read = xc7::read_bit(&bytes).map_err(|e| e.to_string())?;
-    let frames =
-        xc7::FrameData::from_stream(part.layout.clone(), read.frames).map_err(|e| e.to_string())?;
+    let frames = read.image(part.layout.clone()).map_err(|e| e.to_string())?;
     let decoded = db.decode(&files, &frames).map_err(|e| e.to_string())?;
     let mut out = String::new();
     for (tile, feature) in &decoded.features {
@@ -2225,6 +2315,15 @@ fn decode_xc7_bit(
     }
     for (tile, bit) in &decoded.leftovers {
         let _ = writeln!(out, "? {tile} {:02}_{:02}", bit.row, bit.col);
+    }
+    for fault in &decoded.ecc_faults {
+        let _ = writeln!(
+            out,
+            "! {:#010x} ecc {:#06x} wants {:#06x}",
+            fault.address.to_u32(),
+            fault.found,
+            fault.wanted
+        );
     }
     eprint!("{}", decoded.to_text());
     Ok(out)
@@ -3606,6 +3705,8 @@ fn write_xc7_bitstream(
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
     use reticle::fpga::{Netlist, bitstream};
 
+    let bit_options = xc7_bitstream_options(args)?;
+
     // A DSP48E1 instantiated in the source reaches here even with
     // inference off; refuse it by name before loading anything.
     if let Some(message) = reticle::fpga::xray::dsp_refusal(design, top) {
@@ -4614,8 +4715,13 @@ fn write_xc7_bitstream(
     } else {
         Default::default()
     };
-    let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
+    let mut frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
+    // What `write_bitstream` adds that no netlist asks for: pads, configuration
+    // tile bits, then each frame's ECC.
+    db.finish_frames(&files, &mut frames, &bit_options)
+        .map_err(|e| e.to_string())?;
+    let frames = frames.with_ecc();
     // Every set bit read back through the database, as the ECP5 flow
     // does: a bit nothing names is a bit nobody can account for. And the
     // arcs those bits select must be the ones the router chose and the
@@ -4658,15 +4764,24 @@ fn write_xc7_bitstream(
 
     let name = design.modules[top].name.as_str();
     let header = BitHeader::new(
-        format!("{name};UserID=0XFFFFFFFF;Version=reticle"),
+        bit_options.design_field(name),
         fabric
             .part
             .name
             .trim_start_matches("xc")
             .trim_end_matches("-1"),
     );
-    let bytes = xc7::write_bit(&header, &fabric.part, &frames).map_err(|e| e.to_string())?;
+    let bytes = xc7::write_bit_with(&header, &fabric.part, &frames, &bit_options)
+        .map_err(|e| e.to_string())?;
     std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    write_xc7_side_files(args, &header, path, &bytes)?;
+    if args.flag("logic-location-file") {
+        let text = db
+            .logic_location_text(&files, &fabric.part, &graph, &netlist, &placement)
+            .map_err(|e| e.to_string())?;
+        let ll = format!("{}.ll", path.strip_suffix(".bit").unwrap_or(path));
+        std::fs::write(&ll, text).map_err(|e| format!("cannot write `{ll}`: {e}"))?;
+    }
     laps.lap("configure and write");
 
     let mut note = String::new();

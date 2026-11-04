@@ -168,6 +168,7 @@ mod bufg;
 mod carry;
 mod cmt;
 mod dsp;
+mod finish;
 mod io;
 mod iologic;
 mod lutpack;
@@ -188,6 +189,7 @@ pub use cmt::{
     ClockManagerError, Counter, MmcmSettings, PllSettings, counter, mmcm_registers, pll_registers,
 };
 pub use dsp::{DSP_PRIMITIVE, dsp_refusal};
+pub use finish::{FinishedFrames, LogicLocation};
 pub use lutpack::{LutPairing, PairOptions, pack_lut_pairs};
 pub use lutswap::{apply_lut_moves, lut_input_classes};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
@@ -1205,6 +1207,7 @@ impl XrayDatabase {
         // Where the set bits are, by frame address, so a tile only has
         // to look at frames that hold something.
         let mut set: HashMap<u32, Vec<(u32, u32)>> = HashMap::new();
+        let mut ecc_bits = 0usize;
         for (position, address) in data.layout().order().iter().enumerate() {
             let Some(address) = address else { continue };
             let Some(frame) = data.frame(position) else {
@@ -1212,11 +1215,19 @@ impl XrayDatabase {
             };
             let mut here = Vec::new();
             for (word, value) in frame.iter().enumerate() {
-                if *value == 0 {
+                let mut value = *value;
+                // A frame's ECC is explained by the frame, not by a feature,
+                // so whether those bits are right is asked apart from this.
+                if word == super::xc7::ECC_WORD {
+                    let ecc = value & super::xc7::ECC_MASK;
+                    ecc_bits += usize::try_from(ecc.count_ones()).unwrap_or(0);
+                    value &= !super::xc7::ECC_MASK;
+                }
+                if value == 0 {
                     continue;
                 }
                 for bit in 0..32u32 {
-                    if (*value >> bit) & 1 == 1 {
+                    if (value >> bit) & 1 == 1 {
                         here.push((u32::try_from(word).unwrap_or(0), bit));
                     }
                 }
@@ -1275,6 +1286,17 @@ impl XrayDatabase {
             }
             tiles_touched += 1;
 
+            // What `write_bitstream`'s options set in the configuration tiles,
+            // which no `segbits` file names.
+            for (bit, where_it_is) in &ones {
+                if let Some(name) =
+                    super::xc7::options::config_tile_bit_name(&tile.tile_type, bit.row, bit.col)
+                {
+                    out.push((tile.name.clone(), name));
+                    unexplained.remove(where_it_is);
+                }
+            }
+
             let key = tile.feature_type();
             if !features.contains_key(&key) {
                 let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
@@ -1306,12 +1328,6 @@ impl XrayDatabase {
         }
         out.sort();
         out.dedup();
-        // A frame's own Hamming code is not a feature of any tile. Reticle
-        // leaves it at zero and Vivado fills it in; a named bit there has been
-        // struck off above, so what goes here is only what nothing names.
-        let before = unexplained.len();
-        unexplained.retain(|(_, word, bit)| !(*word == FRAME_ECC_WORD && *bit < FRAME_ECC_BITS));
-        let frame_ecc = before - unexplained.len();
         // Where the unexplained bits are, in the coordinates a `segbits` line
         // uses: what a feature the database does not name would be made of.
         let mut leftovers = Vec::new();
@@ -1344,8 +1360,9 @@ impl XrayDatabase {
         leftovers.sort_by(|a, b| (&a.0, a.1.row, a.1.col).cmp(&(&b.0, b.1.row, b.1.col)));
         Ok(Decoded {
             features: out,
-            bits: total,
-            frame_ecc,
+            bits: total + ecc_bits,
+            ecc_bits,
+            ecc_faults: data.ecc_faults(),
             unexplained: unexplained.len(),
             leftovers,
             tiles: tiles_touched,
@@ -2119,11 +2136,6 @@ fn block_ram_rows(tiles: &[XrayTile]) -> HashMap<&str, u32> {
 /// at the other end, the grid delta to it, and the wire pairs.
 type Join<'a> = (&'a str, i32, i32, &'a [(String, String)]);
 
-/// The word of a 7-series frame that holds its Hamming code.
-pub const FRAME_ECC_WORD: u32 = 50;
-/// How many bits of [`FRAME_ECC_WORD`] are that code, from the lowest.
-pub const FRAME_ECC_BITS: u32 = 13;
-
 /// What [`XrayDatabase::decode`] made of a bitstream.
 ///
 /// The three counts after [`Decoded::features`] are what keeps the
@@ -2137,14 +2149,14 @@ pub struct Decoded {
     pub features: Vec<(String, String)>,
     /// How many bits the image sets in all.
     pub bits: usize,
-    /// How many of those are a frame's own Hamming code, the low
-    /// [`FRAME_ECC_BITS`] bits of word [`FRAME_ECC_WORD`], which name nothing
-    /// and are not in [`Decoded::unexplained`]. **Checked:** on 23 of Vivado's
-    /// bitstreams, those bits of all 9464 frames are the code of the
-    /// rest of the frame (`tools/vivado-parity/frame_ecc.py`). Reticle's
-    /// bitstreams leave them zero.
-    pub frame_ecc: usize,
-    /// How many of those no named feature accounts for. A bit is
+    /// How many of those are frame ECC, which the rest of the frame explains
+    /// and no feature does.
+    pub ecc_bits: usize,
+    /// The frames whose ECC is not what the frame implies. `FrameData` as the
+    /// painter leaves it, before `xc7::write_bit`, has every one of a used
+    /// frame's here: it has no ECC yet.
+    pub ecc_faults: Vec<super::xc7::EccFault>,
+    /// How many of those no named feature accounts for, ECC aside. A bit is
     /// accounted for when it is one of the `one` bits of a feature that
     /// matched.
     pub unexplained: usize,
@@ -2173,20 +2185,16 @@ impl Decoded {
         let _ = writeln!(
             out,
             "decoded: {} bit(s) over {} tile(s) into {} feature(s); \
+             {} bit(s) of frame ECC, {} frame(s) with a wrong ECC; \
              {} bit(s) unexplained, {} tile(s) with no segbits file",
             self.bits,
             self.tiles,
             self.features.len(),
+            self.ecc_bits,
+            self.ecc_faults.len(),
             self.unexplained,
             self.tiles_without_a_segbits_file
         );
-        if self.frame_ecc > 0 {
-            let _ = writeln!(
-                out,
-                "  {} of those bit(s) are the frames' own Hamming codes, which name nothing",
-                self.frame_ecc
-            );
-        }
         // Name them. A count cannot be judged; a name can be looked up.
         for which in &self.tiles_with_no_segbits_file {
             let _ = writeln!(

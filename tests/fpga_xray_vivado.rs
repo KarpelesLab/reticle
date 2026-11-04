@@ -467,8 +467,10 @@ fn the_vivado_placement_covers_every_cell_and_net() {
 
 /// **A frame's Hamming code names nothing, and is counted apart.** Would catch
 /// the range being wrong at either end: bit 12 of word 50 is the code, and bit
-/// 13 is not. That the range is what Vivado fills in is
-/// `tools/vivado-parity/frame_ecc.py`'s check, which needs a Vivado bitstream.
+/// 13 is not. A lone bit of code on an empty frame is the wrong code, so it is
+/// also a fault: being counted apart does not excuse a code from being right.
+/// That the code is what Vivado fills in is
+/// `the_frame_ecc_is_exact_on_vivados_frames`.
 #[test]
 fn a_frames_own_code_is_not_an_unexplained_bit() {
     use reticle::fpga::xc7::FrameData;
@@ -496,7 +498,8 @@ fn a_frames_own_code_is_not_an_unexplained_bit() {
         db.decode(&DiskFiles, &frames).unwrap()
     };
     let code = image(12);
-    assert_eq!((code.frame_ecc, code.unexplained), (1, 0));
+    assert_eq!((code.ecc_bits, code.unexplained), (1, 0));
+    assert_eq!(code.ecc_faults.len(), 1);
     let other = image(13);
-    assert_eq!((other.frame_ecc, other.unexplained), (0, 1));
+    assert_eq!((other.ecc_bits, other.unexplained), (0, 1));
 }

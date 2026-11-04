@@ -356,7 +356,7 @@ fn build(root: &str, verilog: &str, rcf: &str, half: Option<&str>) -> Built {
     let header = BitHeader::new("bram;UserID=0XFFFFFFFF;Version=reticle", "7a35tcpg236");
     let bytes = xc7::write_bit(&header, &fabric.part, &frames).unwrap();
     let back = xc7::read_bit(&bytes).unwrap();
-    assert_eq!(back.frames, frames.words());
+    assert_eq!(back.frames, frames.with_ecc().words());
     for (expected, computed) in &back.crc_checks {
         assert_eq!(expected, computed);
     }

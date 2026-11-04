@@ -24,5 +24,11 @@ models or IP.
   is. `decode_placed.sh` and `compare_bits.py` compare the bitstreams, feature by
   feature, `frame_ecc.py` checks what those leave over, and `placed_table.py` and
   `bits_table.py` write `testdata/fpga/vivado/placed/`.
+- `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
+  `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
+  `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's
+  packets, and `bitstream_fixtures.py` turns all of it into that directory's answers.
+- `gen_ecc_design.py` and `bitstream_ecc.tcl` make a design with many bits set, for the
+  frames of `ecc_frames.txt`. `bitstream_ll.tcl` makes `ll_probe`'s logic location file.
 
 `docs/fpga-vivado-parity.md` has what the answers say.
