@@ -1,11 +1,11 @@
 # What Vivado 2026.1 made of each design here; tools/vivado-parity/collect.py.
 design and2_probe
   part xc7a100tftg256-1
-  seconds read 2.399
-  seconds synth 19.794
-  seconds opt 6.096
-  seconds place 1.090
-  seconds route 14.646
+  seconds read 1.755
+  seconds synth 16.429
+  seconds opt 4.555
+  seconds place 0.795
+  seconds route 12.227
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -19,14 +19,14 @@ design and2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.441
+  seconds bitstream 13.238
 design and2b1l_probe
   part xc7a100tftg256-1
-  seconds read 2.386
-  seconds synth 20.229
-  seconds opt 5.914
-  seconds place 1.155
-  seconds route 13.792
+  seconds read 1.769
+  seconds synth 16.305
+  seconds opt 4.698
+  seconds place 0.851
+  seconds route 12.040
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -42,14 +42,14 @@ design and2b1l_probe
   clock clk period 10.000 slack 7.361 delay 2.556 levels 1
   wns 7.361
   routed_pips 63
-  seconds bitstream 13.484
+  seconds bitstream 13.356
 design bscane2_probe
   part xc7a100tftg256-1
-  seconds read 1.857
-  seconds synth 20.569
-  seconds opt 5.950
-  seconds place 1.097
-  seconds route 14.413
+  seconds read 1.676
+  seconds synth 16.542
+  seconds opt 4.851
+  seconds place 0.864
+  seconds route 11.984
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -67,14 +67,14 @@ design bscane2_probe
   clock clk period 10.000 slack 8.914 delay 1.082 levels 1
   wns 8.914
   routed_pips 142
-  seconds bitstream 13.543
+  seconds bitstream 13.321
 design buf_probe
   part xc7a100tftg256-1
-  seconds read 2.390
-  seconds synth 20.585
-  seconds opt 6.070
-  seconds place 1.135
-  seconds route 14.331
+  seconds read 1.773
+  seconds synth 16.434
+  seconds opt 4.760
+  seconds place 0.817
+  seconds route 11.986
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -88,14 +88,14 @@ design buf_probe
   clock clk period 10.000 slack 8.728 delay 1.314 levels 1
   wns 8.728
   routed_pips 45
-  seconds bitstream 13.450
+  seconds bitstream 13.178
 design bufg_probe
   part xc7a100tftg256-1
-  seconds read 2.332
-  seconds synth 19.919
-  seconds opt 5.712
-  seconds place 1.135
-  seconds route 14.028
+  seconds read 1.781
+  seconds synth 16.364
+  seconds opt 4.571
+  seconds place 0.887
+  seconds route 11.977
   cell GND 1
   cell VCC 1
   cell BUFG 2
@@ -109,14 +109,14 @@ design bufg_probe
   clock clk period 10.000 slack 4.343 delay 2.158 levels 2
   wns 4.343
   routed_pips 51
-  seconds bitstream 13.442
+  seconds bitstream 13.765
 design bufgce_1_probe
   part xc7a100tftg256-1
-  seconds read 2.132
-  seconds synth 20.794
-  seconds opt 6.222
-  seconds place 1.130
-  seconds route 14.600
+  seconds read 1.776
+  seconds synth 16.956
+  seconds opt 4.836
+  seconds place 0.858
+  seconds route 12.277
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -132,14 +132,14 @@ design bufgce_1_probe
   clock clk period 10.000 slack 1.962 delay 1.020 levels 0
   wns 1.962
   routed_pips 72
-  seconds bitstream 13.679
+  seconds bitstream 13.453
 design bufgce_probe
   part xc7a100tftg256-1
-  seconds read 2.488
-  seconds synth 20.040
-  seconds opt 6.023
-  seconds place 1.185
-  seconds route 14.666
+  seconds read 1.785
+  seconds synth 16.391
+  seconds opt 4.608
+  seconds place 0.875
+  seconds route 12.524
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -155,14 +155,14 @@ design bufgce_probe
   clock clk period 10.000 slack 4.369 delay 2.118 levels 2
   wns 4.369
   routed_pips 72
-  seconds bitstream 13.471
+  seconds bitstream 13.133
 design bufgctrl_probe
   part xc7a100tftg256-1
-  seconds read 2.112
-  seconds synth 19.680
-  seconds opt 5.745
-  seconds place 1.140
-  seconds route 14.994
+  seconds read 1.647
+  seconds synth 16.982
+  seconds opt 4.676
+  seconds place 0.886
+  seconds route 12.188
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -178,14 +178,14 @@ design bufgctrl_probe
   clock clk period 10.000 slack 1.922 delay 1.060 levels 0
   wns 1.922
   routed_pips 127
-  seconds bitstream 13.501
+  seconds bitstream 13.490
 design bufgmux_1_probe
   part xc7a100tftg256-1
-  seconds read 2.145
-  seconds synth 20.405
-  seconds opt 5.867
-  seconds place 1.161
-  seconds route 14.816
+  seconds read 1.778
+  seconds synth 16.232
+  seconds opt 4.557
+  seconds place 0.873
+  seconds route 11.948
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -201,14 +201,14 @@ design bufgmux_1_probe
   clock clk period 10.000 slack 1.936 delay 1.046 levels 0
   wns 1.936
   routed_pips 78
-  seconds bitstream 13.646
+  seconds bitstream 13.683
 design bufgmux_ctrl_probe
   part xc7a100tftg256-1
-  seconds read 2.219
-  seconds synth 20.554
-  seconds opt 6.145
-  seconds place 1.121
-  seconds route 14.984
+  seconds read 1.804
+  seconds synth 16.239
+  seconds opt 4.455
+  seconds place 0.849
+  seconds route 12.074
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -224,14 +224,14 @@ design bufgmux_ctrl_probe
   clock clk period 10.000 slack 1.936 delay 1.046 levels 0
   wns 1.936
   routed_pips 78
-  seconds bitstream 13.377
+  seconds bitstream 13.408
 design bufgmux_probe
   part xc7a100tftg256-1
-  seconds read 2.126
-  seconds synth 20.020
-  seconds opt 6.014
-  seconds place 1.219
-  seconds route 14.515
+  seconds read 1.724
+  seconds synth 16.986
+  seconds opt 4.585
+  seconds place 0.869
+  seconds route 12.168
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -247,14 +247,14 @@ design bufgmux_probe
   clock clk period 10.000 slack 4.369 delay 2.118 levels 2
   wns 4.369
   routed_pips 78
-  seconds bitstream 13.477
+  seconds bitstream 13.231
 design bufgp_probe
   part xc7a100tftg256-1
-  seconds read 2.435
-  seconds synth 20.432
-  seconds opt 5.746
-  seconds place 0.463
-  seconds route 14.528
+  seconds read 1.575
+  seconds synth 16.919
+  seconds opt 4.721
+  seconds place 0.820
+  seconds route 11.797
   cell GND 1
   cell VCC 1
   cell BUFG 2
@@ -264,17 +264,19 @@ design bufgp_probe
   cell OBUF 1
   cell LUT2 1
   site IOB33 4
-  clock clk period 10.000 slack 8.621 delay 1.243 levels 1
-  wns 8.621
-  routed_pips 0
-  seconds bitstream 0.169
+  site SLICEM 1
+  site BUFG 2
+  clock clk period 10.000 slack 8.739 delay 1.303 levels 1
+  wns 8.739
+  routed_pips 56
+  seconds bitstream 13.207
 design bufh_probe
   part xc7a100tftg256-1
-  seconds read 2.328
-  seconds synth 20.586
-  seconds opt 6.356
-  seconds place 1.077
-  seconds route 15.088
+  seconds read 1.744
+  seconds synth 16.715
+  seconds opt 4.586
+  seconds place 0.851
+  seconds route 12.092
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -290,14 +292,14 @@ design bufh_probe
   clock clk period 10.000 slack 4.787 delay 1.672 levels 2
   wns 4.787
   routed_pips 61
-  seconds bitstream 13.607
+  seconds bitstream 13.469
 design bufhce_probe
   part xc7a100tftg256-1
-  seconds read 2.504
-  seconds synth 20.100
-  seconds opt 5.983
-  seconds place 1.186
-  seconds route 14.704
+  seconds read 1.771
+  seconds synth 16.825
+  seconds opt 4.625
+  seconds place 0.836
+  seconds route 11.997
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -313,37 +315,39 @@ design bufhce_probe
   clock clk period 10.000 slack 4.811 delay 1.655 levels 2
   wns 4.811
   routed_pips 81
-  seconds bitstream 13.500
+  seconds bitstream 13.322
 design bufio_probe
   part xc7a100tftg256-1
-  seconds read 2.086
-  seconds synth 20.538
-  seconds opt 6.261
-  seconds place 1.160
-  seconds route 14.553
+  seconds read 1.070
+  seconds synth 16.098
+  seconds opt 4.531
+  seconds place 0.789
+  seconds route 11.774
   cell GND 1
   cell VCC 1
   cell BUFG 1
-  cell IBUF 2
+  cell IBUF 4
   cell BUFIO 1
   cell FDRE 3
   cell OBUF 1
   cell LUT2 1
-  site IOB33 3
+  cell IDDR 1
+  site IOB33 5
   site BUFG 1
   site BUFIO 1
-  site SLICEL 2
-  clock clk period 10.000 slack 5.222 delay 1.284 levels 2
-  wns 5.222
-  routed_pips 20
-  seconds bitstream 0.533
+  site ILOGICE2 1
+  site SLICEL 1
+  clock clk period 10.000 slack 8.744 delay 1.250 levels 1
+  wns 8.744
+  routed_pips 90
+  seconds bitstream 13.077
 design bufmr_probe
   part xc7a100tftg256-1
-  seconds read 2.308
-  seconds synth 20.482
-  seconds opt 6.343
-  seconds place 0.318
-  seconds route 14.345
+  seconds read 1.584
+  seconds synth 16.988
+  seconds opt 4.746
+  seconds place 0.868
+  seconds route 11.948
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -352,18 +356,23 @@ design bufmr_probe
   cell FDRE 3
   cell OBUF 1
   cell LUT2 1
+  cell BUFR 1
   site IOB33 3
-  clock clk period 10.000 slack 3.983 delay 3.702 levels 3
-  wns 3.983
-  routed_pips 0
-  seconds bitstream 0.167
+  site SLICEM 1
+  site BUFG 1
+  site BUFR 1
+  site BUFMRCE 1
+  clock clk period 10.000 slack 0.792 delay 9.130 levels 4
+  wns 0.792
+  routed_pips 80
+  seconds bitstream 13.039
 design bufmrce_probe
   part xc7a100tftg256-1
-  seconds read 2.319
-  seconds synth 20.467
-  seconds opt 5.741
-  seconds place 0.327
-  seconds route 14.666
+  seconds read 1.616
+  seconds synth 16.986
+  seconds opt 4.697
+  seconds place 0.849
+  seconds route 11.688
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -372,18 +381,23 @@ design bufmrce_probe
   cell FDRE 3
   cell OBUF 1
   cell LUT2 1
+  cell BUFR 1
   site IOB33 3
-  clock clk period 10.000 slack 3.983 delay 3.702 levels 3
-  wns 3.983
-  routed_pips 0
-  seconds bitstream 0.150
+  site BUFG 1
+  site BUFR 1
+  site SLICEL 1
+  site BUFMRCE 1
+  clock clk period 10.000 slack 0.936 delay 9.049 levels 4
+  wns 0.936
+  routed_pips 112
+  seconds bitstream 13.312
 design bufr_probe
   part xc7a100tftg256-1
-  seconds read 2.365
-  seconds synth 19.873
-  seconds opt 6.182
-  seconds place 1.142
-  seconds route 14.518
+  seconds read 1.689
+  seconds synth 17.008
+  seconds opt 4.327
+  seconds place 0.851
+  seconds route 12.169
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -399,14 +413,14 @@ design bufr_probe
   clock clk period 10.000 slack 5.103 delay 1.412 levels 2
   wns 5.103
   routed_pips 105
-  seconds bitstream 13.594
+  seconds bitstream 13.550
 design capturee2_probe
   part xc7a100tftg256-1
-  seconds read 2.255
-  seconds synth 20.793
-  seconds opt 6.104
-  seconds place 1.073
-  seconds route 13.776
+  seconds read 1.751
+  seconds synth 16.620
+  seconds opt 4.816
+  seconds place 0.846
+  seconds route 11.935
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -422,14 +436,14 @@ design capturee2_probe
   clock clk period 10.000 slack 4.736 delay 0.960 levels 0
   wns 4.736
   routed_pips 76
-  seconds bitstream 13.499
+  seconds bitstream 13.221
 design carry4_probe
   part xc7a100tftg256-1
-  seconds read 2.236
-  seconds synth 20.638
-  seconds opt 6.192
-  seconds place 1.144
-  seconds route 15.019
+  seconds read 1.777
+  seconds synth 16.650
+  seconds opt 4.899
+  seconds place 0.863
+  seconds route 12.295
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -447,14 +461,14 @@ design carry4_probe
   clock clk period 10.000 slack 6.522 delay 3.472 levels 3
   wns 6.522
   routed_pips 158
-  seconds bitstream 13.319
+  seconds bitstream 13.332
 design cfglut5_probe
   part xc7a100tftg256-1
-  seconds read 2.322
-  seconds synth 20.487
-  seconds opt 6.123
-  seconds place 1.139
-  seconds route 14.030
+  seconds read 1.769
+  seconds synth 16.472
+  seconds opt 4.695
+  seconds place 0.824
+  seconds route 12.021
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -472,15 +486,15 @@ design cfglut5_probe
   site BUFG 1
   clock clk period 10.000 slack 7.329 delay 2.665 levels 2
   wns 7.329
-  routed_pips 213
-  seconds bitstream 13.425
+  routed_pips 120
+  seconds bitstream 13.170
 design dcireset_probe
   part xc7a100tftg256-1
-  seconds read 2.399
-  seconds synth 20.244
-  seconds opt 6.074
-  seconds place 1.106
-  seconds route 14.608
+  seconds read 1.791
+  seconds synth 16.806
+  seconds opt 4.794
+  seconds place 0.802
+  seconds route 11.899
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -496,14 +510,14 @@ design dcireset_probe
   clock clk period 10.000 slack 8.744 delay 1.250 levels 1
   wns 8.744
   routed_pips 72
-  seconds bitstream 13.658
+  seconds bitstream 13.262
 design dna_port_probe
   part xc7a100tftg256-1
-  seconds read 2.375
-  seconds synth 20.032
-  seconds opt 5.755
-  seconds place 1.117
-  seconds route 15.206
+  seconds read 1.785
+  seconds synth 16.713
+  seconds opt 4.877
+  seconds place 0.820
+  seconds route 11.755
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -520,36 +534,40 @@ design dna_port_probe
   clock clk period 10.000 slack 3.827 delay 0.795 levels 0
   wns 3.827
   routed_pips 98
-  seconds bitstream 13.471
+  seconds bitstream 13.217
 design dsp48e1_probe
   part xc7a100tftg256-1
-  seconds read 2.240
-  seconds synth 22.101
-  seconds opt 6.122
-  seconds place 0.376
-  seconds route 14.243
+  seconds read 1.111
+  seconds synth 17.595
+  seconds opt 4.446
+  seconds place 1.239
+  seconds route 11.598
   cell GND 1
   cell VCC 1
   cell BUFG 1
   cell IBUF 2
   cell DSP48E1 1
-  cell LUT5 2
-  cell LUT6 29
-  cell FDRE 264
+  cell LUT4 1
+  cell LUT6 10
+  cell FDRE 166
   cell OBUF 1
   cell LUT2 1
+  site SLICEM 11
+  site SLICEL 15
   site IOB33 3
-  clock clk period 10.000 slack 6.129 delay 3.735 levels 3
-  wns 6.129
-  routed_pips 0
-  seconds bitstream 0.159
+  site BUFG 1
+  site DSP48E1 1
+  clock clk period 10.000 slack 6.752 delay 3.176 levels 3
+  wns 6.752
+  routed_pips 2213
+  seconds bitstream 14.719
 design efuse_usr_probe
   part xc7a100tftg256-1
-  seconds read 2.379
-  seconds synth 20.389
-  seconds opt 6.061
-  seconds place 1.071
-  seconds route 14.533
+  seconds read 1.202
+  seconds synth 15.788
+  seconds opt 4.538
+  seconds place 0.832
+  seconds route 12.537
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -566,14 +584,14 @@ design efuse_usr_probe
   clock clk period 10.000 slack 8.754 delay 1.215 levels 1
   wns 8.754
   routed_pips 310
-  seconds bitstream 13.465
+  seconds bitstream 13.227
 design fd_probe
   part xc7a100tftg256-1
-  seconds read 2.203
-  seconds synth 20.107
-  seconds opt 5.829
-  seconds place 1.106
-  seconds route 14.072
+  seconds read 1.287
+  seconds synth 16.017
+  seconds opt 4.457
+  seconds place 0.762
+  seconds route 12.473
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -588,14 +606,14 @@ design fd_probe
   clock clk period 10.000 slack 8.739 delay 1.303 levels 1
   wns 8.739
   routed_pips 53
-  seconds bitstream 13.369
+  seconds bitstream 13.112
 design fdc_probe
   part xc7a100tftg256-1
-  seconds read 2.422
-  seconds synth 20.539
-  seconds opt 6.089
-  seconds place 1.133
-  seconds route 14.132
+  seconds read 1.276
+  seconds synth 16.281
+  seconds opt 4.490
+  seconds place 0.778
+  seconds route 12.539
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -611,14 +629,14 @@ design fdc_probe
   clock clk period 10.000 slack 8.744 delay 1.250 levels 1
   wns 8.479
   routed_pips 62
-  seconds bitstream 13.501
+  seconds bitstream 12.979
 design fdce_1_probe
   part xc7a100tftg256-1
-  seconds read 2.339
-  seconds synth 19.531
-  seconds opt 5.597
-  seconds place 1.042
-  seconds route 15.029
+  seconds read 1.072
+  seconds synth 15.934
+  seconds opt 4.516
+  seconds place 0.767
+  seconds route 12.502
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -634,14 +652,14 @@ design fdce_1_probe
   clock clk period 10.000 slack 3.642 delay 1.137 levels 0
   wns 3.356
   routed_pips 73
-  seconds bitstream 13.502
+  seconds bitstream 13.210
 design fdce_probe
   part xc7a100tftg256-1
-  seconds read 2.335
-  seconds synth 20.652
-  seconds opt 6.055
-  seconds place 1.078
-  seconds route 13.890
+  seconds read 1.027
+  seconds synth 16.547
+  seconds opt 4.442
+  seconds place 0.776
+  seconds route 11.615
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -657,14 +675,14 @@ design fdce_probe
   clock clk period 10.000 slack 8.637 delay 1.137 levels 0
   wns 8.351
   routed_pips 73
-  seconds bitstream 13.526
+  seconds bitstream 13.178
 design fde_probe
   part xc7a100tftg256-1
-  seconds read 2.101
-  seconds synth 20.181
-  seconds opt 6.076
-  seconds place 1.198
-  seconds route 14.628
+  seconds read 1.480
+  seconds synth 16.779
+  seconds opt 4.437
+  seconds place 0.801
+  seconds route 12.315
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -679,14 +697,14 @@ design fde_probe
   clock clk period 10.000 slack 8.637 delay 1.137 levels 0
   wns 8.637
   routed_pips 63
-  seconds bitstream 13.361
+  seconds bitstream 13.065
 design fdp_probe
   part xc7a100tftg256-1
-  seconds read 2.474
-  seconds synth 20.680
-  seconds opt 6.144
-  seconds place 1.066
-  seconds route 14.401
+  seconds read 1.421
+  seconds synth 16.582
+  seconds opt 4.596
+  seconds place 0.817
+  seconds route 12.186
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -702,14 +720,14 @@ design fdp_probe
   clock clk period 10.000 slack 8.747 delay 1.247 levels 1
   wns 8.549
   routed_pips 65
-  seconds bitstream 13.457
+  seconds bitstream 13.644
 design fdpe_1_probe
   part xc7a100tftg256-1
-  seconds read 2.363
-  seconds synth 20.842
-  seconds opt 6.159
-  seconds place 1.051
-  seconds route 13.785
+  seconds read 1.473
+  seconds synth 16.832
+  seconds opt 4.551
+  seconds place 0.794
+  seconds route 12.009
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -725,14 +743,14 @@ design fdpe_1_probe
   clock clk period 10.000 slack 3.642 delay 1.137 levels 0
   wns 3.601
   routed_pips 74
-  seconds bitstream 13.422
+  seconds bitstream 13.258
 design fdpe_probe
   part xc7a100tftg256-1
-  seconds read 1.226
-  seconds synth 16.460
-  seconds opt 4.594
-  seconds place 0.811
-  seconds route 12.217
+  seconds read 1.578
+  seconds synth 16.849
+  seconds opt 4.811
+  seconds place 0.782
+  seconds route 11.993
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -748,14 +766,14 @@ design fdpe_probe
   clock clk period 10.000 slack 8.420 delay 1.487 levels 0
   wns 8.420
   routed_pips 74
-  seconds bitstream 13.394
+  seconds bitstream 13.248
 design fdr_probe
   part xc7a100tftg256-1
-  seconds read 1.076
-  seconds synth 16.628
-  seconds opt 4.628
-  seconds place 0.832
-  seconds route 12.106
+  seconds read 1.470
+  seconds synth 16.858
+  seconds opt 4.819
+  seconds place 0.768
+  seconds route 11.952
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -770,14 +788,14 @@ design fdr_probe
   clock clk period 10.000 slack 8.386 delay 1.033 levels 0
   wns 8.386
   routed_pips 65
-  seconds bitstream 13.485
+  seconds bitstream 13.190
 design fdre_1_probe
   part xc7a100tftg256-1
-  seconds read 1.135
-  seconds synth 16.827
-  seconds opt 4.554
-  seconds place 0.806
-  seconds route 11.876
+  seconds read 1.497
+  seconds synth 16.949
+  seconds opt 4.739
+  seconds place 0.794
+  seconds route 12.102
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -792,14 +810,14 @@ design fdre_1_probe
   clock clk period 10.000 slack 3.438 delay 0.985 levels 0
   wns 3.438
   routed_pips 74
-  seconds bitstream 13.479
+  seconds bitstream 13.200
 design fdre_probe
   part xc7a100tftg256-1
-  seconds read 1.046
-  seconds synth 16.463
-  seconds opt 4.514
-  seconds place 0.786
-  seconds route 11.814
+  seconds read 1.433
+  seconds synth 15.954
+  seconds opt 4.410
+  seconds place 0.807
+  seconds route 12.243
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -814,14 +832,14 @@ design fdre_probe
   clock clk period 10.000 slack 8.420 delay 1.487 levels 0
   wns 8.420
   routed_pips 74
-  seconds bitstream 13.313
+  seconds bitstream 13.316
 design fds_probe
   part xc7a100tftg256-1
-  seconds read 1.032
-  seconds synth 16.854
-  seconds opt 4.587
-  seconds place 0.786
-  seconds route 11.892
+  seconds read 1.481
+  seconds synth 16.780
+  seconds opt 4.430
+  seconds place 0.798
+  seconds route 11.852
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -837,14 +855,14 @@ design fds_probe
   clock clk period 10.000 slack 8.386 delay 1.033 levels 0
   wns 8.386
   routed_pips 65
-  seconds bitstream 13.231
+  seconds bitstream 13.281
 design fdse_1_probe
   part xc7a100tftg256-1
-  seconds read 1.200
-  seconds synth 17.321
-  seconds opt 4.605
-  seconds place 0.822
-  seconds route 12.237
+  seconds read 1.433
+  seconds synth 16.588
+  seconds opt 4.597
+  seconds place 0.825
+  seconds route 11.927
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -860,14 +878,14 @@ design fdse_1_probe
   clock clk period 10.000 slack 3.438 delay 0.985 levels 0
   wns 3.438
   routed_pips 74
-  seconds bitstream 13.483
+  seconds bitstream 13.309
 design fdse_probe
   part xc7a100tftg256-1
-  seconds read 1.146
-  seconds synth 17.323
-  seconds opt 4.603
-  seconds place 0.829
-  seconds route 12.132
+  seconds read 1.457
+  seconds synth 16.719
+  seconds opt 4.726
+  seconds place 0.804
+  seconds route 12.152
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -883,14 +901,14 @@ design fdse_probe
   clock clk period 10.000 slack 8.420 delay 1.487 levels 0
   wns 8.420
   routed_pips 74
-  seconds bitstream 13.438
+  seconds bitstream 13.045
 design fifo18e1_probe
   part xc7a100tftg256-1
-  seconds read 1.455
-  seconds synth 16.931
-  seconds opt 4.667
-  seconds place 1.168
-  seconds route 12.216
+  seconds read 1.552
+  seconds synth 16.019
+  seconds opt 4.424
+  seconds place 1.101
+  seconds route 12.014
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -908,14 +926,14 @@ design fifo18e1_probe
   clock clk period 10.000 slack 6.084 delay 3.832 levels 3
   wns 6.084
   routed_pips 869
-  seconds bitstream 13.545
+  seconds bitstream 13.256
 design fifo36e1_probe
   part xc7a100tftg256-1
-  seconds read 1.404
-  seconds synth 17.145
-  seconds opt 4.528
-  seconds place 1.181
-  seconds route 11.981
+  seconds read 1.386
+  seconds synth 16.658
+  seconds opt 4.720
+  seconds place 1.127
+  seconds route 12.046
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -934,14 +952,14 @@ design fifo36e1_probe
   clock clk period 10.000 slack 5.704 delay 4.211 levels 3
   wns 5.704
   routed_pips 1564
-  seconds bitstream 13.579
+  seconds bitstream 13.232
 design frame_ecce2_probe
   part xc7a100tftg256-1
-  seconds read 1.522
-  seconds synth 16.794
-  seconds opt 4.714
-  seconds place 0.846
-  seconds route 12.158
+  seconds read 1.377
+  seconds synth 16.780
+  seconds opt 4.535
+  seconds place 0.845
+  seconds route 12.433
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -959,14 +977,14 @@ design frame_ecce2_probe
   clock clk period 10.000 slack 8.914 delay 1.082 levels 1
   wns 8.914
   routed_pips 493
-  seconds bitstream 13.540
+  seconds bitstream 13.062
 design gnd_probe
   part xc7a100tftg256-1
-  seconds read 1.504
-  seconds synth 16.653
-  seconds opt 4.610
-  seconds place 0.823
-  seconds route 11.951
+  seconds read 1.341
+  seconds synth 16.097
+  seconds opt 4.569
+  seconds place 0.792
+  seconds route 11.873
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -979,14 +997,14 @@ design gnd_probe
   clock clk period 10.000 slack 8.569 delay 1.364 levels 0
   wns 8.569
   routed_pips 40
-  seconds bitstream 13.346
+  seconds bitstream 13.275
 design ibuf_ibufdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.448
-  seconds synth 16.990
-  seconds opt 4.734
-  seconds place 0.250
-  seconds route 11.624
+  seconds read 1.612
+  seconds synth 16.905
+  seconds opt 4.717
+  seconds place 0.829
+  seconds route 11.902
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -995,18 +1013,21 @@ design ibuf_ibufdisable_probe
   cell FDRE 3
   cell OBUF 1
   cell LUT2 1
+  site SLICEM 1
+  site SLICEL 1
   site IOB33 4
-  clock clk period 10.000 slack 4.932 delay 4.855 levels 1
-  wns 4.932
-  routed_pips 0
-  seconds bitstream 0.139
+  site BUFG 1
+  clock clk period 10.000 slack 5.443 delay 4.469 levels 1
+  wns 5.443
+  routed_pips 66
+  seconds bitstream 13.240
 design ibuf_intermdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.533
-  seconds synth 17.054
-  seconds opt 4.568
-  seconds place 0.230
-  seconds route 11.765
+  seconds read 1.609
+  seconds synth 16.756
+  seconds opt 4.815
+  seconds place 0.826
+  seconds route 11.853
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1015,18 +1036,20 @@ design ibuf_intermdisable_probe
   cell FDRE 4
   cell OBUF 1
   cell LUT2 1
+  site SLICEL 1
   site IOB33 4
-  clock clk period 10.000 slack 4.932 delay 4.855 levels 1
-  wns 4.932
-  routed_pips 0
-  seconds bitstream 0.139
+  site BUFG 1
+  clock clk period 10.000 slack 5.436 delay 4.481 levels 1
+  wns 5.436
+  routed_pips 77
+  seconds bitstream 13.148
 design ibuf_probe
   part xc7a100tftg256-1
-  seconds read 1.330
-  seconds synth 17.033
-  seconds opt 4.607
-  seconds place 0.803
-  seconds route 11.947
+  seconds read 1.281
+  seconds synth 16.738
+  seconds opt 4.683
+  seconds place 0.771
+  seconds route 12.019
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1040,14 +1063,14 @@ design ibuf_probe
   clock clk period 10.000 slack 8.739 delay 1.303 levels 1
   wns 8.739
   routed_pips 48
-  seconds bitstream 13.474
+  seconds bitstream 13.132
 design ibufds_diff_out_ibufdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.524
-  seconds synth 17.121
-  seconds opt 4.643
-  seconds place 0.866
-  seconds route 12.095
+  seconds read 1.012
+  seconds synth 16.445
+  seconds opt 4.577
+  seconds place 0.790
+  seconds route 12.235
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1064,15 +1087,15 @@ design ibufds_diff_out_ibufdisable_probe
   site BUFG 1
   clock clk period 10.000 slack 5.164 delay 4.830 levels 2
   wns 5.164
-  routed_pips 107
-  seconds bitstream 13.648
+  routed_pips 78
+  seconds bitstream 13.304
 design ibufds_diff_out_intermdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.446
-  seconds synth 17.192
-  seconds opt 4.733
-  seconds place 0.869
-  seconds route 12.090
+  seconds read 1.042
+  seconds synth 16.581
+  seconds opt 4.712
+  seconds place 0.795
+  seconds route 12.431
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1089,15 +1112,15 @@ design ibufds_diff_out_intermdisable_probe
   site BUFG 1
   clock clk period 10.000 slack 5.150 delay 4.844 levels 2
   wns 5.150
-  routed_pips 131
-  seconds bitstream 13.591
+  routed_pips 90
+  seconds bitstream 13.299
 design ibufds_diff_out_probe
   part xc7a100tftg256-1
-  seconds read 1.326
-  seconds synth 16.958
-  seconds opt 4.722
-  seconds place 0.829
-  seconds route 12.030
+  seconds read 1.171
+  seconds synth 16.472
+  seconds opt 4.619
+  seconds place 0.813
+  seconds route 13.114
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1114,15 +1137,15 @@ design ibufds_diff_out_probe
   site BUFG 1
   clock clk period 10.000 slack 8.168 delay 1.772 levels 1
   wns 8.168
-  routed_pips 92
-  seconds bitstream 13.487
+  routed_pips 73
+  seconds bitstream 13.296
 design ibufds_ibufdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.658
-  seconds synth 17.133
-  seconds opt 4.622
-  seconds place 0.863
-  seconds route 11.635
+  seconds read 1.195
+  seconds synth 16.351
+  seconds opt 4.473
+  seconds place 0.822
+  seconds route 12.765
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1140,15 +1163,15 @@ design ibufds_ibufdisable_probe
   site BUFG 1
   clock clk period 10.000 slack 5.163 delay 4.748 levels 1
   wns 5.163
-  routed_pips 96
-  seconds bitstream 13.504
+  routed_pips 74
+  seconds bitstream 13.507
 design ibufds_intermdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.510
-  seconds synth 16.924
-  seconds opt 4.483
-  seconds place 0.863
-  seconds route 12.186
+  seconds read 1.137
+  seconds synth 16.290
+  seconds opt 4.517
+  seconds place 0.811
+  seconds route 12.614
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1166,15 +1189,15 @@ design ibufds_intermdisable_probe
   site BUFG 1
   clock clk period 10.000 slack 5.283 delay 4.627 levels 1
   wns 5.283
-  routed_pips 126
-  seconds bitstream 13.628
+  routed_pips 89
+  seconds bitstream 13.303
 design ibufds_probe
   part xc7a100tftg256-1
-  seconds read 1.526
-  seconds synth 16.943
-  seconds opt 4.609
-  seconds place 0.831
-  seconds route 11.775
+  seconds read 1.191
+  seconds synth 16.221
+  seconds opt 4.478
+  seconds place 0.799
+  seconds route 12.650
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1190,14 +1213,14 @@ design ibufds_probe
   clock clk period 10.000 slack 8.739 delay 1.303 levels 1
   wns 8.739
   routed_pips 57
-  seconds bitstream 13.483
+  seconds bitstream 13.321
 design ibufg_probe
   part xc7a100tftg256-1
-  seconds read 1.422
-  seconds synth 17.196
-  seconds opt 4.692
-  seconds place 0.845
-  seconds route 12.048
+  seconds read 1.064
+  seconds synth 15.820
+  seconds opt 4.451
+  seconds place 0.795
+  seconds route 12.873
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1211,14 +1234,14 @@ design ibufg_probe
   clock clk period 10.000 slack 8.739 delay 1.303 levels 1
   wns 8.739
   routed_pips 48
-  seconds bitstream 13.449
+  seconds bitstream 13.374
 design ibufgds_diff_out_probe
   part xc7a100tftg256-1
-  seconds read 1.433
-  seconds synth 16.912
-  seconds opt 4.717
-  seconds place 0.864
-  seconds route 12.117
+  seconds read 0.963
+  seconds synth 16.387
+  seconds opt 4.610
+  seconds place 0.795
+  seconds route 12.809
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1235,15 +1258,15 @@ design ibufgds_diff_out_probe
   site BUFG 1
   clock clk period 10.000 slack 8.168 delay 1.772 levels 1
   wns 8.168
-  routed_pips 92
-  seconds bitstream 13.597
+  routed_pips 73
+  seconds bitstream 13.293
 design ibufgds_probe
   part xc7a100tftg256-1
-  seconds read 1.400
-  seconds synth 17.094
-  seconds opt 4.657
-  seconds place 0.828
-  seconds route 11.939
+  seconds read 1.169
+  seconds synth 17.134
+  seconds opt 4.497
+  seconds place 0.798
+  seconds route 12.389
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1259,14 +1282,14 @@ design ibufgds_probe
   clock clk period 10.000 slack 8.739 delay 1.303 levels 1
   wns 8.739
   routed_pips 57
-  seconds bitstream 13.520
+  seconds bitstream 14.082
 design icape2_probe
   part xc7a100tftg256-1
-  seconds read 1.409
-  seconds synth 16.677
-  seconds opt 4.725
-  seconds place 1.428
-  seconds route 12.127
+  seconds read 1.254
+  seconds synth 17.232
+  seconds opt 5.506
+  seconds place 1.564
+  seconds route 12.746
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1284,60 +1307,60 @@ design icape2_probe
   clock clk period 10.000 slack 2.229 delay 7.690 levels 2
   wns 2.229
   routed_pips 673
-  seconds bitstream 13.662
+  seconds bitstream 13.329
 design iddr_2clk_probe
   part xc7a100tftg256-1
-  seconds read 1.353
-  seconds synth 16.878
-  seconds opt 4.632
-  seconds place 0.852
-  seconds route 18.292
+  seconds read 1.181
+  seconds synth 17.483
+  seconds opt 4.614
+  seconds place 1.341
+  seconds route 11.266
   cell GND 1
   cell VCC 1
   cell BUFG 1
-  cell IBUF 2
+  cell IBUF 3
   cell IDDR_2CLK 1
   cell LUT2 2
-  cell FDRE 7
+  cell FDRE 5
   cell OBUF 1
-  site ILOGICE2 1
+  site IOB33 4
   site SLICEL 3
-  site IOB33 3
   site BUFG 1
-  clock clk period 10.000 slack 7.463 delay 1.145 levels 0
-  wns 7.463
-  routed_pips 26
-  seconds bitstream 0.515
+  site ILOGICE2 1
+  clock clk period 10.000 slack 7.204 delay 1.577 levels 0
+  wns 7.204
+  routed_pips 90
+  seconds bitstream 14.583
 design iddr_probe
   part xc7a100tftg256-1
-  seconds read 1.384
-  seconds synth 16.904
-  seconds opt 4.634
-  seconds place 0.861
-  seconds route 18.322
+  seconds read 1.206
+  seconds synth 17.244
+  seconds opt 4.661
+  seconds place 0.818
+  seconds route 11.163
   cell GND 1
   cell VCC 1
   cell BUFG 1
-  cell IBUF 2
+  cell IBUF 3
   cell IDDR 1
   cell LUT2 2
-  cell FDRE 6
+  cell FDRE 4
   cell OBUF 1
-  site ILOGICE2 1
-  site SLICEL 2
-  site IOB33 3
+  site IOB33 4
   site BUFG 1
-  clock clk period 10.000 slack 2.713 delay 1.067 levels 0
-  wns 2.713
-  routed_pips 24
-  seconds bitstream 0.530
+  site SLICEL 2
+  site ILOGICE2 1
+  clock clk period 10.000 slack 2.180 delay 1.426 levels 0
+  wns 2.180
+  routed_pips 78
+  seconds bitstream 13.356
 design idelayctrl_probe
   part xc7a100tftg256-1
-  seconds read 1.272
-  seconds synth 16.723
-  seconds opt 4.678
-  seconds place 0.841
-  seconds route 11.817
+  seconds read 1.361
+  seconds synth 16.925
+  seconds opt 5.739
+  seconds place 0.930
+  seconds route 12.642
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -1351,35 +1374,41 @@ design idelayctrl_probe
   clock clk period 10.000 slack 8.739 delay 1.303 levels 1
   wns 8.739
   routed_pips 38
-  seconds bitstream 13.636
+  seconds bitstream 13.188
 design idelaye2_probe
   part xc7a100tftg256-1
-  seconds read 1.211
-  seconds synth 16.949
-  seconds opt 4.613
-  seconds place 0.256
-  seconds route 11.900
+  seconds read 1.228
+  seconds synth 17.039
+  seconds opt 4.748
+  seconds place 1.501
+  seconds route 11.542
   cell GND 1
   cell VCC 1
   cell BUFG 1
-  cell IBUF 2
+  cell IBUF 3
   cell IDELAYE2 1
   cell LUT6 1
-  cell FDRE 15
+  cell FDRE 14
   cell OBUF 1
   cell LUT2 1
-  site IOB33 3
-  clock clk period 10.000 slack 6.666 delay 3.198 levels 2
-  wns 6.666
-  routed_pips 0
-  seconds bitstream 0.152
+  cell IDELAYCTRL 1
+  site IOB33 4
+  site BUFG 1
+  site SLICEM 1
+  site SLICEL 1
+  site IDELAYE2 1
+  site IDELAYCTRL 1
+  clock clk period 10.000 slack 8.527 delay 1.346 levels 0
+  wns 8.527
+  routed_pips 212
+  seconds bitstream 14.444
 design inv_probe
   part xc7a100tftg256-1
-  seconds read 1.134
-  seconds synth 16.447
-  seconds opt 4.627
-  seconds place 0.814
-  seconds route 11.723
+  seconds read 1.341
+  seconds synth 17.058
+  seconds opt 5.658
+  seconds place 0.875
+  seconds route 12.683
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1394,34 +1423,19 @@ design inv_probe
   clock clk period 10.000 slack 8.885 delay 1.161 levels 1
   wns 8.885
   routed_pips 40
-  seconds bitstream 13.671
+  seconds bitstream 13.276
 design iobuf_dcien_probe
   part xc7a100tftg256-1
-  seconds read 1.139
-  seconds synth 16.658
-  seconds opt 4.683
-  seconds place 0.363
-  seconds route 12.076
-  cell GND 1
-  cell VCC 1
-  cell BUFG 1
-  cell IBUF 2
-  cell IOBUF_DCIEN 1
-  cell FDRE 6
-  cell OBUF 1
-  cell LUT2 1
-  site IOB33 3
-  clock clk period 10.000 slack 8.603 delay 1.261 levels 1
-  wns 8.603
-  routed_pips 0
-  seconds bitstream 0.145
+  seconds read 1.299
+  failed synth
+  message ERROR: [Common 17-39] 'synth_design' failed due to earlier errors. 
 design iobuf_intermdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.231
-  seconds synth 16.773
-  seconds opt 4.656
-  seconds place 0.786
-  seconds route 11.948
+  seconds read 1.504
+  seconds synth 17.103
+  seconds opt 5.591
+  seconds place 0.875
+  seconds route 12.832
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1438,15 +1452,15 @@ design iobuf_intermdisable_probe
   site SLICEM 1
   clock clk period 10.000 slack 5.443 delay 4.468 levels 1
   wns 5.443
-  routed_pips 142
-  seconds bitstream 13.386
+  routed_pips 92
+  seconds bitstream 13.362
 design iobuf_probe
   part xc7a100tftg256-1
-  seconds read 1.165
-  seconds synth 16.521
-  seconds opt 4.702
-  seconds place 0.802
-  seconds route 12.147
+  seconds read 1.081
+  seconds synth 16.984
+  seconds opt 5.572
+  seconds place 0.876
+  seconds route 12.689
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1461,60 +1475,29 @@ design iobuf_probe
   site BUFG 1
   clock clk period 10.000 slack 8.745 delay 1.248 levels 1
   wns 8.745
-  routed_pips 102
-  seconds bitstream 13.465
+  routed_pips 71
+  seconds bitstream 13.239
 design iobufds_dcien_probe
   part xc7a100tftg256-1
-  seconds read 1.203
-  seconds synth 17.258
-  seconds opt 4.563
-  seconds place 0.357
-  seconds route 11.972
-  cell GND 1
-  cell VCC 1
-  cell BUFG 1
-  cell IBUF 2
-  cell IOBUFDS_DCIEN 1
-  cell FDRE 6
-  cell OBUF 1
-  cell LUT2 1
-  cell IBUFDS_IBUFDISABLE 1
-  cell OBUFTDS_DCIEN 1
-  cell IBUFDS_IBUFDISABLE_INT 2
-  site IOB33 3
-  clock clk period 10.000 slack 4.944 delay 4.842 levels 1
-  wns 4.944
-  routed_pips 0
-  seconds bitstream 0.139
+  seconds read 1.120
+  seconds synth 17.167
+  seconds opt 5.710
+  failed place
+  message ERROR: [Common 17-69] Command failed: Placer could not place all instances 
 design iobufds_diff_out_dcien_probe
   part xc7a100tftg256-1
-  seconds read 1.242
-  seconds synth 17.349
-  seconds opt 4.527
-  seconds place 0.346
-  seconds route 11.902
-  cell GND 1
-  cell VCC 1
-  cell BUFG 1
-  cell IBUF 2
-  cell IOBUFDS_DIFF_OUT_DCIEN 1
-  cell LUT2 2
-  cell FDRE 7
-  cell OBUF 1
-  cell IBUFDS_IBUFDISABLE_INT 2
-  cell OBUFTDS_DCIEN 1
-  site IOB33 3
-  clock clk period 10.000 slack 4.897 delay 4.967 levels 2
-  wns 4.897
-  routed_pips 0
-  seconds bitstream 0.144
+  seconds read 1.261
+  seconds synth 17.167
+  seconds opt 5.626
+  failed place
+  message ERROR: [Common 17-69] Command failed: Placer could not place all instances 
 design iobufds_diff_out_intermdisable_probe
   part xc7a100tftg256-1
-  seconds read 1.212
-  seconds synth 17.325
-  seconds opt 4.581
-  seconds place 0.786
-  seconds route 11.819
+  seconds read 1.289
+  seconds synth 16.849
+  seconds opt 5.686
+  seconds place 0.893
+  seconds route 12.699
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1533,15 +1516,15 @@ design iobufds_diff_out_intermdisable_probe
   site BUFG 1
   clock clk period 10.000 slack 3.334 delay 6.659 levels 3
   wns 3.334
-  routed_pips 197
-  seconds bitstream 13.333
+  routed_pips 123
+  seconds bitstream 13.295
 design iobufds_diff_out_probe
   part xc7a100tftg256-1
-  seconds read 1.128
-  seconds synth 17.320
-  seconds opt 4.802
-  seconds place 0.815
-  seconds route 12.130
+  seconds read 1.212
+  seconds synth 16.680
+  seconds opt 5.601
+  seconds place 0.868
+  seconds route 12.628
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1559,15 +1542,15 @@ design iobufds_diff_out_probe
   site BUFG 1
   clock clk period 10.000 slack 3.594 delay 6.375 levels 3
   wns 3.594
-  routed_pips 146
-  seconds bitstream 13.367
+  routed_pips 100
+  seconds bitstream 13.359
 design iobufds_intermdisable_probe
   part xc7a100tftg256-1
-  seconds read 0.976
-  seconds synth 17.153
-  seconds opt 4.723
-  seconds place 0.841
-  seconds route 11.891
+  seconds read 1.119
+  seconds synth 16.898
+  seconds opt 5.626
+  seconds place 0.868
+  seconds route 12.730
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1587,15 +1570,15 @@ design iobufds_intermdisable_probe
   site BUFG 1
   clock clk period 10.000 slack 3.618 delay 6.308 levels 2
   wns 3.618
-  routed_pips 213
-  seconds bitstream 13.600
+  routed_pips 113
+  seconds bitstream 13.488
 design iobufds_probe
   part xc7a100tftg256-1
-  seconds read 1.099
-  seconds synth 17.309
-  seconds opt 4.574
-  seconds place 0.811
-  seconds route 12.019
+  seconds read 1.207
+  seconds synth 16.936
+  seconds opt 5.590
+  seconds place 0.825
+  seconds route 12.555
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1613,39 +1596,41 @@ design iobufds_probe
   site BUFG 1
   clock clk period 10.000 slack 3.769 delay 6.141 levels 2
   wns 3.769
-  routed_pips 114
-  seconds bitstream 13.394
+  routed_pips 82
+  seconds bitstream 13.360
 design iserdese2_probe
   part xc7a100tftg256-1
-  seconds read 1.105
-  seconds synth 17.284
-  seconds opt 4.637
-  seconds place 0.789
-  seconds route 19.875
+  seconds read 1.268
+  seconds synth 17.225
+  seconds opt 4.744
+  seconds place 0.950
+  seconds route 11.658
   cell GND 1
   cell VCC 1
   cell BUFG 1
-  cell IBUF 2
+  cell IBUF 3
   cell ISERDESE2 1
-  cell LUT6 2
-  cell FDRE 13
+  cell LUT5 1
+  cell LUT4 1
+  cell FDRE 8
   cell OBUF 1
   cell LUT2 1
-  site ISERDESE2 1
+  site IOB33 4
   site SLICEL 3
-  site IOB33 3
   site BUFG 1
-  clock clk period 10.000 slack 6.655 delay 3.339 levels 2
-  wns 6.655
-  routed_pips 35
-  seconds bitstream 0.501
+  site SLICEM 1
+  site ISERDESE2 1
+  clock clk period 10.000 slack 7.540 delay 2.413 levels 2
+  wns 7.540
+  routed_pips 164
+  seconds bitstream 14.475
 design keeper_probe
   part xc7a100tftg256-1
-  seconds read 1.078
-  seconds synth 17.017
-  seconds opt 4.536
-  seconds place 0.787
-  seconds route 11.807
+  seconds read 1.187
+  seconds synth 16.693
+  seconds opt 5.524
+  seconds place 0.827
+  seconds route 12.586
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1659,14 +1644,14 @@ design keeper_probe
   clock clk period 10.000 slack 8.728 delay 1.314 levels 1
   wns 8.728
   routed_pips 45
-  seconds bitstream 13.351
+  seconds bitstream 13.307
 design ld_probe
   part xc7a100tftg256-1
-  seconds read 0.955
-  seconds synth 17.065
-  seconds opt 4.646
-  seconds place 0.786
-  seconds route 12.007
+  seconds read 1.177
+  seconds synth 18.078
+  seconds opt 4.787
+  seconds place 0.807
+  seconds route 12.184
   cell GND 2
   cell VCC 2
   cell BUFG 1
@@ -1682,14 +1667,14 @@ design ld_probe
   clock clk period 10.000 slack 8.650 delay 1.253 levels 0
   wns 8.650
   routed_pips 63
-  seconds bitstream 13.197
+  seconds bitstream 13.322
 design ldc_probe
   part xc7a100tftg256-1
-  seconds read 0.921
-  seconds synth 16.994
-  seconds opt 4.441
-  seconds place 0.805
-  seconds route 11.931
+  seconds read 1.145
+  seconds synth 16.988
+  seconds opt 4.594
+  seconds place 0.794
+  seconds route 12.050
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -1705,14 +1690,14 @@ design ldc_probe
   clock clk period 10.000 slack 8.650 delay 1.253 levels 0
   wns 8.650
   routed_pips 75
-  seconds bitstream 13.347
+  seconds bitstream 13.230
 design ldce_1_probe
   part xc7a100tftg256-1
-  seconds read 1.046
-  seconds synth 16.886
-  seconds opt 4.458
-  seconds place 0.784
-  seconds route 12.047
+  seconds read 1.244
+  seconds synth 17.198
+  seconds opt 4.624
+  seconds place 0.797
+  seconds route 12.269
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1728,14 +1713,14 @@ design ldce_1_probe
   clock clk period 10.000 slack 8.650 delay 1.253 levels 0
   wns 8.650
   routed_pips 81
-  seconds bitstream 15.123
+  seconds bitstream 13.141
 design ldce_probe
   part xc7a100tftg256-1
-  seconds read 1.158
-  seconds synth 17.025
-  seconds opt 4.422
-  seconds place 0.789
-  seconds route 11.885
+  seconds read 1.204
+  seconds synth 17.097
+  seconds opt 4.602
+  seconds place 0.788
+  seconds route 11.988
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1751,14 +1736,14 @@ design ldce_probe
   clock clk period 10.000 slack 8.586 delay 1.321 levels 0
   wns 8.586
   routed_pips 81
-  seconds bitstream 14.177
+  seconds bitstream 13.159
 design ldp_probe
   part xc7a100tftg256-1
-  seconds read 1.251
-  seconds synth 16.835
-  seconds opt 4.476
-  seconds place 0.825
-  seconds route 11.954
+  seconds read 1.069
+  seconds synth 17.369
+  seconds opt 4.709
+  seconds place 0.787
+  seconds route 12.086
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -1774,14 +1759,14 @@ design ldp_probe
   clock clk period 10.000 slack 8.586 delay 1.321 levels 0
   wns 8.586
   routed_pips 75
-  seconds bitstream 14.047
+  seconds bitstream 13.264
 design ldpe_1_probe
   part xc7a100tftg256-1
-  seconds read 1.255
-  seconds synth 16.844
-  seconds opt 4.531
-  seconds place 0.815
-  seconds route 11.917
+  seconds read 1.247
+  seconds synth 17.355
+  seconds opt 4.703
+  seconds place 0.778
+  seconds route 12.310
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1797,14 +1782,14 @@ design ldpe_1_probe
   clock clk period 10.000 slack 8.650 delay 1.253 levels 0
   wns 8.650
   routed_pips 81
-  seconds bitstream 13.303
+  seconds bitstream 14.233
 design ldpe_probe
   part xc7a100tftg256-1
-  seconds read 1.284
-  seconds synth 17.317
-  seconds opt 4.620
-  seconds place 0.811
-  seconds route 11.846
+  seconds read 1.252
+  seconds synth 17.086
+  seconds opt 4.581
+  seconds place 0.792
+  seconds route 12.336
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1820,14 +1805,14 @@ design ldpe_probe
   clock clk period 10.000 slack 8.525 delay 1.381 levels 0
   wns 8.525
   routed_pips 81
-  seconds bitstream 14.434
+  seconds bitstream 13.189
 design lut1_l_probe
   part xc7a100tftg256-1
-  seconds read 1.202
-  seconds synth 16.950
-  seconds opt 4.578
-  seconds place 0.823
-  seconds route 11.936
+  seconds read 1.271
+  seconds synth 16.910
+  seconds opt 4.576
+  seconds place 0.785
+  seconds route 12.139
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1841,14 +1826,14 @@ design lut1_l_probe
   clock clk period 10.000 slack 8.728 delay 1.314 levels 1
   wns 8.728
   routed_pips 45
-  seconds bitstream 13.829
+  seconds bitstream 13.934
 design lut1_probe
   part xc7a100tftg256-1
-  seconds read 1.223
-  seconds synth 16.822
-  seconds opt 4.520
-  seconds place 0.789
-  seconds route 11.947
+  seconds read 1.249
+  seconds synth 16.776
+  seconds opt 4.472
+  seconds place 0.793
+  seconds route 12.076
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1862,14 +1847,14 @@ design lut1_probe
   clock clk period 10.000 slack 8.728 delay 1.314 levels 1
   wns 8.728
   routed_pips 45
-  seconds bitstream 13.683
+  seconds bitstream 13.491
 design lut2_probe
   part xc7a100tftg256-1
-  seconds read 1.349
-  seconds synth 17.102
-  seconds opt 4.615
-  seconds place 0.807
-  seconds route 12.225
+  seconds read 1.323
+  seconds synth 16.675
+  seconds opt 4.455
+  seconds place 0.789
+  seconds route 12.333
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1883,14 +1868,14 @@ design lut2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.374
+  seconds bitstream 13.222
 design lut3_probe
   part xc7a100tftg256-1
-  seconds read 1.224
-  seconds synth 16.748
-  seconds opt 4.611
-  seconds place 0.813
-  seconds route 12.061
+  seconds read 0.956
+  seconds synth 17.001
+  seconds opt 4.540
+  seconds place 0.790
+  seconds route 12.053
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1906,14 +1891,14 @@ design lut3_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 59
-  seconds bitstream 13.313
+  seconds bitstream 13.302
 design lut4_probe
   part xc7a100tftg256-1
-  seconds read 1.268
-  seconds synth 16.806
-  seconds opt 4.566
-  seconds place 0.791
-  seconds route 11.827
+  seconds read 1.085
+  seconds synth 16.529
+  seconds opt 4.422
+  seconds place 0.782
+  seconds route 12.228
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1929,14 +1914,14 @@ design lut4_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 67
-  seconds bitstream 13.351
+  seconds bitstream 13.061
 design lut5_probe
   part xc7a100tftg256-1
-  seconds read 1.293
-  seconds synth 17.051
-  seconds opt 4.633
-  seconds place 0.832
-  seconds route 12.147
+  seconds read 1.121
+  seconds synth 16.340
+  seconds opt 4.489
+  seconds place 0.794
+  seconds route 12.135
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1952,14 +1937,14 @@ design lut5_probe
   clock clk period 10.000 slack 8.437 delay 1.583 levels 1
   wns 8.437
   routed_pips 75
-  seconds bitstream 13.437
+  seconds bitstream 13.177
 design lut6_2_probe
   part xc7a100tftg256-1
-  seconds read 1.320
-  seconds synth 16.707
-  seconds opt 4.650
-  seconds place 0.866
-  seconds route 11.870
+  seconds read 1.031
+  seconds synth 16.616
+  seconds opt 4.538
+  seconds place 0.834
+  seconds route 11.986
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1976,15 +1961,15 @@ design lut6_2_probe
   site BUFG 1
   clock clk period 10.000 slack 7.598 delay 2.425 levels 2
   wns 7.598
-  routed_pips 168
-  seconds bitstream 13.363
+  routed_pips 104
+  seconds bitstream 13.210
 design lut6_d_probe
   part xc7a100tftg256-1
-  seconds read 1.157
-  seconds synth 16.855
-  seconds opt 4.668
-  seconds place 0.828
-  seconds route 12.125
+  seconds read 1.220
+  seconds synth 16.443
+  seconds opt 4.492
+  seconds place 0.756
+  seconds route 12.451
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -1997,14 +1982,14 @@ design lut6_d_probe
   clock clk period 10.000 slack 8.569 delay 1.364 levels 0
   wns 8.569
   routed_pips 40
-  seconds bitstream 13.550
+  seconds bitstream 13.258
 design lut6_l_probe
   part xc7a100tftg256-1
-  seconds read 1.293
-  seconds synth 16.552
-  seconds opt 4.624
-  seconds place 0.846
-  seconds route 12.063
+  seconds read 1.249
+  seconds synth 16.187
+  seconds opt 4.445
+  seconds place 0.784
+  seconds route 12.071
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2020,14 +2005,14 @@ design lut6_l_probe
   clock clk period 10.000 slack 8.566 delay 1.454 levels 1
   wns 8.566
   routed_pips 83
-  seconds bitstream 13.923
+  seconds bitstream 13.215
 design lut6_probe
   part xc7a100tftg256-1
-  seconds read 1.212
-  seconds synth 17.012
-  seconds opt 4.711
-  seconds place 0.906
-  seconds route 11.903
+  seconds read 1.233
+  seconds synth 16.427
+  seconds opt 4.535
+  seconds place 0.808
+  seconds route 12.277
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2043,58 +2028,61 @@ design lut6_probe
   clock clk period 10.000 slack 8.566 delay 1.454 levels 1
   wns 8.566
   routed_pips 83
-  seconds bitstream 13.447
+  seconds bitstream 13.198
 design mmcme2_adv_probe
   part xc7a100tftg256-1
-  seconds read 1.164
-  seconds synth 17.003
-  seconds opt 4.722
-  seconds place 1.108
-  seconds route 11.992
+  seconds read 1.116
+  seconds synth 15.927
+  seconds opt 4.545
+  seconds place 2.079
+  seconds route 11.398
   cell GND 1
   cell VCC 1
-  cell BUFG 12
+  cell BUFG 2
   cell IBUF 2
   cell MMCME2_ADV 1
-  cell LUT6 6
-  cell LUT4 1
   cell FDRE 33
   cell OBUF 1
   cell LUT2 1
   site IOB33 3
-  clock clk period 10.000 slack -1.531 delay 2.463 levels 3
-  wns -1.531
-  routed_pips 0
-  seconds bitstream 0.152
+  site BUFG 2
+  site MMCME2_ADV 1
+  site SLICEL 6
+  site SLICEM 1
+  clock clk period 10.000 slack 4.707 delay 0.945 levels 0
+  wns 4.707
+  routed_pips 401
+  seconds bitstream 13.198
 design mmcme2_base_probe
   part xc7a100tftg256-1
-  seconds read 1.228
-  seconds synth 16.698
-  seconds opt 4.537
-  seconds place 1.069
-  seconds route 11.876
+  seconds read 1.100
+  seconds synth 16.323
+  seconds opt 4.608
+  seconds place 0.989
+  seconds route 11.797
   cell GND 2
   cell VCC 2
-  cell BUFG 12
+  cell BUFG 2
   cell IBUF 2
   cell MMCME2_ADV 1
-  cell LUT6 2
-  cell LUT4 1
-  cell FDRE 4
+  cell FDRE 5
   cell OBUF 1
   cell LUT2 1
   site IOB33 3
-  clock clk period 10.000 slack -1.248 delay 2.180 levels 3
-  wns -1.248
-  routed_pips 0
-  seconds bitstream 0.149
+  site BUFG 2
+  site MMCME2_ADV 1
+  site SLICEL 2
+  clock clk period 10.000 slack 4.823 delay 0.797 levels 0
+  wns 4.823
+  routed_pips 132
+  seconds bitstream 13.069
 design muxcy_probe
   part xc7a100tftg256-1
-  seconds read 1.224
-  seconds synth 16.937
-  seconds opt 4.672
-  seconds place 0.877
-  seconds route 11.905
+  seconds read 1.060
+  seconds synth 16.357
+  seconds opt 4.598
+  seconds place 0.803
+  seconds route 12.221
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -2110,14 +2098,14 @@ design muxcy_probe
   clock clk period 10.000 slack 8.204 delay 1.832 levels 1
   wns 8.204
   routed_pips 64
-  seconds bitstream 13.336
+  seconds bitstream 13.115
 design muxf7_l_probe
   part xc7a100tftg256-1
-  seconds read 1.233
-  seconds synth 16.399
-  seconds opt 4.753
-  seconds place 0.869
-  seconds route 11.819
+  seconds read 1.170
+  seconds synth 16.459
+  seconds opt 4.501
+  seconds place 0.770
+  seconds route 12.137
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2133,14 +2121,14 @@ design muxf7_l_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 59
-  seconds bitstream 14.460
+  seconds bitstream 13.208
 design muxf7_probe
   part xc7a100tftg256-1
-  seconds read 1.142
-  seconds synth 16.481
-  seconds opt 4.537
-  seconds place 0.864
-  seconds route 12.035
+  seconds read 1.176
+  seconds synth 16.470
+  seconds opt 4.622
+  seconds place 0.759
+  seconds route 12.069
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2156,14 +2144,14 @@ design muxf7_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 59
-  seconds bitstream 13.372
+  seconds bitstream 13.349
 design muxf8_l_probe
   part xc7a100tftg256-1
-  seconds read 0.984
-  seconds synth 16.888
-  seconds opt 4.568
-  seconds place 0.793
-  seconds route 12.203
+  seconds read 1.059
+  seconds synth 16.301
+  seconds opt 4.593
+  seconds place 0.760
+  seconds route 12.020
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2179,14 +2167,14 @@ design muxf8_l_probe
   clock clk period 10.000 slack 8.188 delay 1.889 levels 1
   wns 8.188
   routed_pips 60
-  seconds bitstream 13.253
+  seconds bitstream 13.185
 design muxf8_probe
   part xc7a100tftg256-1
-  seconds read 1.119
-  seconds synth 16.391
-  seconds opt 4.598
-  seconds place 0.830
-  seconds route 11.952
+  seconds read 1.089
+  seconds synth 16.482
+  seconds opt 4.593
+  seconds place 0.792
+  seconds route 12.058
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2202,14 +2190,14 @@ design muxf8_probe
   clock clk period 10.000 slack 8.188 delay 1.889 levels 1
   wns 8.188
   routed_pips 60
-  seconds bitstream 13.341
+  seconds bitstream 13.219
 design nand2_probe
   part xc7a100tftg256-1
-  seconds read 1.117
-  seconds synth 16.511
-  seconds opt 4.444
-  seconds place 0.783
-  seconds route 12.788
+  seconds read 1.184
+  seconds synth 16.682
+  seconds opt 4.529
+  seconds place 0.776
+  seconds route 13.225
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2223,14 +2211,14 @@ design nand2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.283
+  seconds bitstream 13.114
 design nor2_probe
   part xc7a100tftg256-1
-  seconds read 1.140
-  seconds synth 16.556
-  seconds opt 4.492
-  seconds place 0.783
-  seconds route 12.427
+  seconds read 0.896
+  seconds synth 16.658
+  seconds opt 4.409
+  seconds place 0.768
+  seconds route 13.432
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2244,14 +2232,14 @@ design nor2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.183
+  seconds bitstream 13.723
 design obuf_probe
   part xc7a100tftg256-1
-  seconds read 1.070
-  seconds synth 16.786
-  seconds opt 4.964
-  seconds place 0.769
-  seconds route 11.894
+  seconds read 1.123
+  seconds synth 16.683
+  seconds opt 4.496
+  seconds place 0.764
+  seconds route 13.199
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2266,14 +2254,14 @@ design obuf_probe
   clock clk period 10.000 slack 8.927 delay 1.000 levels 0
   wns 8.927
   routed_pips 54
-  seconds bitstream 13.155
+  seconds bitstream 13.710
 design obufds_probe
   part xc7a100tftg256-1
-  seconds read 1.115
-  seconds synth 17.098
-  seconds opt 4.569
-  seconds place 0.823
-  seconds route 11.793
+  seconds read 1.108
+  seconds synth 16.689
+  seconds opt 4.378
+  seconds place 0.771
+  seconds route 13.363
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2290,33 +2278,20 @@ design obufds_probe
   clock clk period 10.000 slack 8.925 delay 1.002 levels 0
   wns 8.925
   routed_pips 66
-  seconds bitstream 13.257
+  seconds bitstream 13.731
 design obuft_dcien_probe
   part xc7a100tftg256-1
-  seconds read 0.952
-  seconds synth 16.979
-  seconds opt 0.256
-  seconds place 2.961
-  seconds route 11.844
-  cell GND 1
-  cell VCC 1
-  cell BUFG 1
-  cell IBUF 2
-  cell OBUF 1
-  cell LUT2 1
-  cell FDRE 4
-  site IOB33 3
-  clock clk period 10.000 slack 8.603 delay 1.261 levels 1
-  wns 8.603
-  routed_pips 0
-  seconds bitstream 0.150
+  seconds read 1.163
+  seconds synth 16.366
+  failed opt
+  message ERROR: [Common 17-39] 'opt_design' failed due to earlier errors. 
 design obuft_probe
   part xc7a100tftg256-1
-  seconds read 1.137
-  seconds synth 17.167
-  seconds opt 4.635
-  seconds place 0.810
-  seconds route 11.833
+  seconds read 0.999
+  seconds synth 16.420
+  seconds opt 4.486
+  seconds place 0.836
+  seconds route 13.404
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2332,14 +2307,14 @@ design obuft_probe
   clock clk period 10.000 slack 8.873 delay 1.011 levels 0
   wns 8.873
   routed_pips 64
-  seconds bitstream 13.345
+  seconds bitstream 13.599
 design obuftds_probe
   part xc7a100tftg256-1
-  seconds read 1.161
-  seconds synth 16.623
-  seconds opt 4.617
-  seconds place 0.800
-  seconds route 12.076
+  seconds read 1.152
+  seconds synth 16.956
+  seconds opt 5.219
+  seconds place 1.031
+  seconds route 12.216
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2356,34 +2331,37 @@ design obuftds_probe
   clock clk period 10.000 slack 8.825 delay 1.101 levels 0
   wns 8.825
   routed_pips 80
-  seconds bitstream 13.452
+  seconds bitstream 13.618
 design oddr_probe
   part xc7a100tftg256-1
-  seconds read 1.133
-  seconds synth 16.912
-  seconds opt 4.443
-  seconds place 0.233
-  seconds route 11.822
+  seconds read 1.150
+  seconds synth 17.010
+  seconds opt 4.466
+  seconds place 0.813
+  seconds route 11.217
   cell GND 1
   cell VCC 1
   cell BUFG 1
   cell IBUF 2
   cell ODDR 1
-  cell FDRE 7
-  cell OBUF 1
+  cell OBUF 2
   cell LUT2 1
-  site IOB33 3
-  clock clk period 10.000 slack 2.530 delay 1.281 levels 0
-  wns 2.530
-  routed_pips 0
-  seconds bitstream 0.137
+  cell FDRE 5
+  site IOB33 4
+  site BUFG 1
+  site SLICEL 2
+  site OLOGICE2 1
+  clock clk period 10.000 slack 2.119 delay 1.985 levels 0
+  wns 2.119
+  routed_pips 91
+  seconds bitstream 13.181
 design or2_probe
   part xc7a100tftg256-1
-  seconds read 0.906
-  seconds synth 16.836
-  seconds opt 4.581
-  seconds place 0.779
-  seconds route 12.095
+  seconds read 1.162
+  seconds synth 16.783
+  seconds opt 4.988
+  seconds place 1.171
+  seconds route 12.583
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2397,14 +2375,14 @@ design or2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.301
+  seconds bitstream 13.553
 design or2l_probe
   part xc7a100tftg256-1
-  seconds read 0.967
-  seconds synth 17.069
-  seconds opt 4.589
-  seconds place 0.785
-  seconds route 12.051
+  seconds read 1.247
+  seconds synth 16.569
+  seconds opt 5.246
+  seconds place 1.021
+  seconds route 12.251
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2420,83 +2398,85 @@ design or2l_probe
   clock clk period 10.000 slack 7.361 delay 2.556 levels 1
   wns 7.361
   routed_pips 63
-  seconds bitstream 13.365
+  seconds bitstream 13.838
 design oserdese2_probe
   part xc7a100tftg256-1
-  seconds read 1.050
-  seconds synth 17.211
-  seconds opt 4.696
-  seconds place 0.791
-  seconds route 18.914
-  cell GND 1
-  cell VCC 1
+  seconds read 1.186
+  seconds synth 17.105
+  seconds opt 4.677
+  seconds place 0.943
+  seconds route 11.577
+  cell GND 2
+  cell VCC 2
   cell BUFG 1
   cell IBUF 2
   cell OSERDESE2 1
-  cell LUT4 2
-  cell FDRE 20
-  cell OBUF 1
+  cell OBUF 2
   cell LUT2 1
-  site OSERDESE2 1
-  site SLICEL 5
-  site SLICEM 1
-  site IOB33 3
+  cell FDRE 11
+  site IOB33 4
+  site SLICEL 2
   site BUFG 1
-  clock clk period 10.000 slack 7.891 delay 0.986 levels 0
-  wns 7.891
-  routed_pips 36
-  seconds bitstream 0.497
+  site SLICEM 1
+  site OSERDESE2 1
+  clock clk period 10.000 slack 6.820 delay 2.061 levels 0
+  wns 6.820
+  routed_pips 154
+  seconds bitstream 19.184
 design plle2_adv_probe
   part xc7a100tftg256-1
-  seconds read 0.996
-  seconds synth 16.963
-  seconds opt 4.437
-  seconds place 0.684
-  seconds route 12.152
+  seconds read 1.163
+  seconds synth 16.332
+  seconds opt 4.595
+  seconds place 1.578
+  seconds route 11.691
   cell GND 1
   cell VCC 1
-  cell BUFG 7
+  cell BUFG 2
   cell IBUF 2
   cell PLLE2_ADV 1
-  cell LUT5 1
-  cell LUT6 4
   cell FDRE 30
   cell OBUF 1
   cell LUT2 1
   site IOB33 3
-  clock clk period 10.000 slack -1.631 delay 2.463 levels 3
-  wns -1.631
-  routed_pips 0
-  seconds bitstream 0.149
+  site BUFG 2
+  site SLICEM 2
+  site SLICEL 5
+  site PLLE2_ADV 1
+  clock clk period 10.000 slack 4.690 delay 0.945 levels 0
+  wns 4.690
+  routed_pips 392
+  seconds bitstream 13.156
 design plle2_base_probe
   part xc7a100tftg256-1
-  seconds read 1.105
-  seconds synth 16.974
-  seconds opt 4.503
-  seconds place 0.676
-  seconds route 12.193
+  seconds read 1.145
+  seconds synth 16.102
+  seconds opt 4.583
+  seconds place 1.779
+  seconds route 11.378
   cell GND 2
   cell VCC 2
-  cell BUFG 7
+  cell BUFG 2
   cell IBUF 2
   cell PLLE2_ADV 1
-  cell LUT5 1
-  cell LUT4 1
-  cell FDRE 4
+  cell FDRE 5
   cell OBUF 1
   cell LUT2 1
   site IOB33 3
-  clock clk period 10.000 slack -1.348 delay 2.180 levels 3
-  wns -1.348
-  routed_pips 0
-  seconds bitstream 0.138
+  site BUFG 2
+  site SLICEL 3
+  site PLLE2_ADV 1
+  clock clk period 10.000 slack 4.601 delay 0.982 levels 0
+  wns 4.601
+  routed_pips 139
+  seconds bitstream 13.428
 design pulldown_probe
   part xc7a100tftg256-1
-  seconds read 1.228
-  seconds synth 16.999
-  seconds opt 4.496
-  seconds place 0.830
-  seconds route 12.122
+  seconds read 1.189
+  seconds synth 17.397
+  seconds opt 5.075
+  seconds place 0.868
+  seconds route 15.236
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2511,14 +2491,14 @@ design pulldown_probe
   clock clk period 10.000 slack 8.728 delay 1.314 levels 1
   wns 8.728
   routed_pips 45
-  seconds bitstream 13.223
+  seconds bitstream 13.860
 design pullup_probe
   part xc7a100tftg256-1
-  seconds read 1.235
-  seconds synth 16.622
-  seconds opt 4.546
-  seconds place 0.821
-  seconds route 12.369
+  seconds read 1.115
+  seconds synth 17.598
+  seconds opt 5.197
+  seconds place 0.847
+  seconds route 16.156
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2533,14 +2513,14 @@ design pullup_probe
   clock clk period 10.000 slack 8.728 delay 1.314 levels 1
   wns 8.728
   routed_pips 45
-  seconds bitstream 13.514
+  seconds bitstream 13.894
 design ram128x1d_probe
   part xc7a100tftg256-1
-  seconds read 1.360
-  seconds synth 16.968
-  seconds opt 4.565
-  seconds place 0.850
-  seconds route 12.525
+  seconds read 1.123
+  seconds synth 18.050
+  seconds opt 4.633
+  seconds place 0.895
+  seconds route 15.673
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2557,15 +2537,15 @@ design ram128x1d_probe
   site BUFG 1
   clock clk period 10.000 slack 6.409 delay 3.452 levels 3
   wns 6.409
-  routed_pips 481
-  seconds bitstream 13.463
+  routed_pips 255
+  seconds bitstream 13.843
 design ram128x1s_probe
   part xc7a100tftg256-1
-  seconds read 1.257
-  seconds synth 17.170
-  seconds opt 4.524
-  seconds place 0.820
-  seconds route 11.848
+  seconds read 1.116
+  seconds synth 18.013
+  seconds opt 4.619
+  seconds place 0.816
+  seconds route 16.282
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2582,15 +2562,15 @@ design ram128x1s_probe
   site BUFG 1
   clock clk period 10.000 slack 8.068 delay 1.987 levels 2
   wns 8.068
-  routed_pips 231
-  seconds bitstream 13.343
+  routed_pips 129
+  seconds bitstream 13.758
 design ram16x1d_probe
   part xc7a100tftg256-1
-  seconds read 1.214
-  seconds synth 16.748
-  seconds opt 4.616
-  seconds place 0.833
-  seconds route 11.971
+  seconds read 1.167
+  seconds synth 17.142
+  seconds opt 5.018
+  seconds place 3.260
+  seconds route 15.286
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -2606,15 +2586,15 @@ design ram16x1d_probe
   site BUFG 1
   clock clk period 10.000 slack 7.594 delay 2.400 levels 2
   wns 7.594
-  routed_pips 274
-  seconds bitstream 13.273
+  routed_pips 151
+  seconds bitstream 13.865
 design ram16x1s_probe
   part xc7a100tftg256-1
-  seconds read 1.211
-  seconds synth 16.907
-  seconds opt 4.502
-  seconds place 0.799
-  seconds route 12.069
+  seconds read 1.297
+  seconds synth 17.521
+  seconds opt 5.144
+  seconds place 2.431
+  seconds route 15.191
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -2630,15 +2610,15 @@ design ram16x1s_probe
   site BUFG 1
   clock clk period 10.000 slack 8.294 delay 0.943 levels 0
   wns 8.294
-  routed_pips 155
-  seconds bitstream 13.261
+  routed_pips 91
+  seconds bitstream 13.893
 design ram256x1s_probe
   part xc7a100tftg256-1
-  seconds read 1.300
-  seconds synth 16.914
-  seconds opt 4.528
-  seconds place 0.866
-  seconds route 12.103
+  seconds read 1.294
+  seconds synth 16.994
+  seconds opt 4.976
+  seconds place 3.080
+  seconds route 15.510
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2656,15 +2636,15 @@ design ram256x1s_probe
   site BUFG 1
   clock clk period 10.000 slack 7.845 delay 2.211 levels 3
   wns 7.845
-  routed_pips 335
-  seconds bitstream 13.404
+  routed_pips 181
+  seconds bitstream 13.887
 design ram32m_probe
   part xc7a100tftg256-1
-  seconds read 1.332
-  seconds synth 16.915
-  seconds opt 4.527
-  seconds place 0.954
-  seconds route 12.079
+  seconds read 1.270
+  seconds synth 17.228
+  seconds opt 5.226
+  seconds place 2.638
+  seconds route 15.038
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2683,15 +2663,15 @@ design ram32m_probe
   site BUFG 1
   clock clk period 10.000 slack 6.111 delay 3.883 levels 3
   wns 6.111
-  routed_pips 756
-  seconds bitstream 13.341
+  routed_pips 394
+  seconds bitstream 14.160
 design ram32x1d_probe
   part xc7a100tftg256-1
-  seconds read 1.338
-  seconds synth 16.924
-  seconds opt 4.612
-  seconds place 0.876
-  seconds route 12.112
+  seconds read 1.219
+  seconds synth 17.566
+  seconds opt 5.204
+  seconds place 2.190
+  seconds route 15.031
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2707,15 +2687,15 @@ design ram32x1d_probe
   site BUFG 1
   clock clk period 10.000 slack 7.674 delay 2.295 levels 2
   wns 7.674
-  routed_pips 316
-  seconds bitstream 13.814
+  routed_pips 172
+  seconds bitstream 13.973
 design ram32x1s_probe
   part xc7a100tftg256-1
-  seconds read 1.207
-  seconds synth 16.797
-  seconds opt 4.655
-  seconds place 0.895
-  seconds route 11.980
+  seconds read 1.304
+  seconds synth 17.514
+  seconds opt 5.785
+  seconds place 1.626
+  seconds route 14.752
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2731,15 +2711,15 @@ design ram32x1s_probe
   site BUFG 1
   clock clk period 10.000 slack 8.233 delay 1.419 levels 0
   wns 8.233
-  routed_pips 177
-  seconds bitstream 13.333
+  routed_pips 102
+  seconds bitstream 13.873
 design ram32x2s_probe
   part xc7a100tftg256-1
-  seconds read 1.216
-  seconds synth 16.999
-  seconds opt 4.659
-  seconds place 0.930
-  seconds route 12.160
+  seconds read 1.123
+  seconds synth 17.662
+  seconds opt 5.926
+  seconds place 1.506
+  seconds route 14.895
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2756,15 +2736,15 @@ design ram32x2s_probe
   site BUFG 1
   clock clk period 10.000 slack 7.233 delay 2.760 levels 2
   wns 7.233
-  routed_pips 447
-  seconds bitstream 13.447
+  routed_pips 140
+  seconds bitstream 14.176
 design ram64m_probe
   part xc7a100tftg256-1
-  seconds read 1.291
-  seconds synth 16.715
-  seconds opt 4.709
-  seconds place 1.110
-  seconds route 12.174
+  seconds read 1.306
+  seconds synth 17.544
+  seconds opt 5.834
+  seconds place 1.621
+  seconds route 14.799
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2781,15 +2761,15 @@ design ram64m_probe
   site BUFG 1
   clock clk period 10.000 slack 7.230 delay 2.739 levels 2
   wns 7.230
-  routed_pips 701
-  seconds bitstream 13.358
+  routed_pips 365
+  seconds bitstream 13.894
 design ram64x1d_probe
   part xc7a100tftg256-1
-  seconds read 1.225
-  seconds synth 16.758
-  seconds opt 4.614
-  seconds place 0.914
-  seconds route 12.245
+  seconds read 1.249
+  seconds synth 16.894
+  seconds opt 5.106
+  seconds place 2.623
+  seconds route 14.994
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2805,15 +2785,15 @@ design ram64x1d_probe
   site BUFG 1
   clock clk period 10.000 slack 7.698 delay 2.344 levels 2
   wns 7.698
-  routed_pips 347
-  seconds bitstream 13.481
+  routed_pips 187
+  seconds bitstream 14.045
 design ram64x1s_probe
   part xc7a100tftg256-1
-  seconds read 1.321
-  seconds synth 16.968
-  seconds opt 4.537
-  seconds place 0.910
-  seconds route 12.071
+  seconds read 1.140
+  seconds synth 17.154
+  seconds opt 5.565
+  seconds place 1.870
+  seconds route 15.667
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2829,15 +2809,15 @@ design ram64x1s_probe
   site BUFG 1
   clock clk period 10.000 slack 8.433 delay 0.801 levels 0
   wns 8.433
-  routed_pips 187
-  seconds bitstream 13.180
+  routed_pips 107
+  seconds bitstream 13.925
 design ram64x2s_probe
   part xc7a100tftg256-1
-  seconds read 1.170
-  seconds synth 16.850
-  seconds opt 4.525
-  seconds place 0.895
-  seconds route 11.816
+  seconds read 1.477
+  seconds synth 20.555
+  seconds opt 5.420
+  seconds place 0.952
+  seconds route 14.805
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2854,15 +2834,15 @@ design ram64x2s_probe
   site BUFG 1
   clock clk period 10.000 slack 7.323 delay 2.670 levels 2
   wns 7.323
-  routed_pips 494
-  seconds bitstream 13.527
+  routed_pips 152
+  seconds bitstream 14.161
 design ramb18e1_probe
   part xc7a100tftg256-1
-  seconds read 1.264
-  seconds synth 16.620
-  seconds opt 4.722
-  seconds place 1.235
-  seconds route 11.875
+  seconds read 1.222
+  seconds synth 21.626
+  seconds opt 5.586
+  seconds place 1.313
+  seconds route 15.105
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -2880,41 +2860,39 @@ design ramb18e1_probe
   clock clk period 10.000 slack 4.541 delay 5.375 levels 2
   wns 4.541
   routed_pips 1185
-  seconds bitstream 13.401
+  seconds bitstream 13.856
 design ramb36e1_probe
   part xc7a100tftg256-1
-  seconds read 1.186
-  seconds synth 16.729
-  seconds opt 4.766
+  seconds read 1.193
+  seconds synth 17.212
+  seconds opt 4.631
   seconds place 1.256
-  seconds route 19.389
+  seconds route 11.519
   cell GND 2
   cell VCC 1
   cell BUFG 1
   cell IBUF 2
   cell RAMB36E1 1
-  cell LUT5 1
-  cell LUT6 17
-  cell LUT4 1
-  cell FDRE 123
+  cell LUT6 18
+  cell FDRE 89
   cell OBUF 1
   cell LUT2 1
-  site SLICEL 23
+  site SLICEL 14
   site IOB33 3
-  site SLICEM 5
+  site SLICEM 3
   site BUFG 1
   site RAMB36E1 1
-  clock clk period 10.000 slack 4.164 delay 5.752 levels 3
-  wns 4.164
-  routed_pips 95
-  seconds bitstream 0.507
+  clock clk period 10.000 slack 4.188 delay 5.728 levels 3
+  wns 4.188
+  routed_pips 2055
+  seconds bitstream 13.333
 design rom128x1_probe
   part xc7a100tftg256-1
-  seconds read 1.129
-  seconds synth 16.484
-  seconds opt 4.622
-  seconds place 0.865
-  seconds route 12.139
+  seconds read 1.241
+  seconds synth 20.456
+  seconds opt 5.385
+  seconds place 1.003
+  seconds route 15.188
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2931,15 +2909,15 @@ design rom128x1_probe
   site BUFG 1
   clock clk period 10.000 slack 7.670 delay 2.004 levels 2
   wns 7.670
-  routed_pips 189
-  seconds bitstream 13.454
+  routed_pips 114
+  seconds bitstream 14.332
 design rom16x1_probe
   part xc7a100tftg256-1
-  seconds read 1.276
-  seconds synth 16.274
-  seconds opt 4.728
-  seconds place 0.867
-  seconds route 12.033
+  seconds read 1.351
+  seconds synth 20.439
+  seconds opt 5.455
+  seconds place 0.976
+  seconds route 14.791
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2955,14 +2933,14 @@ design rom16x1_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 67
-  seconds bitstream 13.430
+  seconds bitstream 13.890
 design rom256x1_probe
   part xc7a100tftg256-1
-  seconds read 1.170
-  seconds synth 16.858
-  seconds opt 4.607
-  seconds place 0.790
-  seconds route 11.767
+  seconds read 1.226
+  seconds synth 20.442
+  seconds opt 5.534
+  seconds place 0.958
+  seconds route 14.758
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -2980,15 +2958,15 @@ design rom256x1_probe
   site BUFG 1
   clock clk period 10.000 slack 6.967 delay 2.755 levels 3
   wns 6.967
-  routed_pips 265
-  seconds bitstream 13.192
+  routed_pips 153
+  seconds bitstream 13.804
 design rom32x1_probe
   part xc7a100tftg256-1
-  seconds read 1.151
-  seconds synth 16.571
-  seconds opt 4.550
-  seconds place 0.800
-  seconds route 12.220
+  seconds read 1.298
+  seconds synth 20.190
+  seconds opt 5.490
+  seconds place 0.942
+  seconds route 15.704
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3004,14 +2982,14 @@ design rom32x1_probe
   clock clk period 10.000 slack 8.566 delay 1.454 levels 1
   wns 8.566
   routed_pips 75
-  seconds bitstream 13.039
+  seconds bitstream 13.647
 design rom64x1_probe
   part xc7a100tftg256-1
-  seconds read 1.018
-  seconds synth 16.602
-  seconds opt 4.512
-  seconds place 0.815
-  seconds route 11.920
+  seconds read 1.476
+  seconds synth 20.136
+  seconds opt 5.525
+  seconds place 1.047
+  seconds route 15.696
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3027,14 +3005,14 @@ design rom64x1_probe
   clock clk period 10.000 slack 8.566 delay 1.454 levels 1
   wns 8.566
   routed_pips 83
-  seconds bitstream 13.188
+  seconds bitstream 14.395
 design srl16_probe
   part xc7a100tftg256-1
-  seconds read 1.044
-  seconds synth 16.806
-  seconds opt 4.513
-  seconds place 0.831
-  seconds route 12.105
+  seconds read 1.505
+  seconds synth 19.906
+  seconds opt 5.378
+  seconds place 0.987
+  seconds route 15.087
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -3050,14 +3028,14 @@ design srl16_probe
   clock clk period 10.000 slack 7.989 delay 2.071 levels 1
   wns 7.989
   routed_pips 92
-  seconds bitstream 13.109
+  seconds bitstream 13.936
 design srl16e_1_probe
   part xc7a100tftg256-1
-  seconds read 1.262
-  seconds synth 16.813
-  seconds opt 4.464
-  seconds place 0.799
-  seconds route 11.935
+  seconds read 1.567
+  seconds synth 20.197
+  seconds opt 5.507
+  seconds place 1.169
+  seconds route 15.278
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3073,14 +3051,14 @@ design srl16e_1_probe
   clock clk period 10.000 slack 3.071 delay 1.824 levels 0
   wns 3.071
   routed_pips 98
-  seconds bitstream 13.116
+  seconds bitstream 13.341
 design srl16e_probe
   part xc7a100tftg256-1
-  seconds read 1.142
-  seconds synth 16.648
-  seconds opt 4.583
-  seconds place 0.809
-  seconds route 11.780
+  seconds read 1.234
+  seconds synth 20.920
+  seconds opt 4.941
+  seconds place 0.767
+  seconds route 13.561
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3096,14 +3074,14 @@ design srl16e_probe
   clock clk period 10.000 slack 8.158 delay 1.903 levels 1
   wns 8.158
   routed_pips 95
-  seconds bitstream 13.190
+  seconds bitstream 14.711
 design srlc16_probe
   part xc7a100tftg256-1
-  seconds read 1.215
-  seconds synth 16.730
-  seconds opt 4.550
-  seconds place 0.822
-  seconds route 11.859
+  seconds read 1.248
+  seconds synth 20.852
+  seconds opt 4.421
+  seconds place 0.793
+  seconds route 13.872
   cell GND 1
   cell VCC 2
   cell BUFG 1
@@ -3119,14 +3097,14 @@ design srlc16_probe
   clock clk period 10.000 slack 7.693 delay 2.300 levels 2
   wns 7.693
   routed_pips 90
-  seconds bitstream 13.333
+  seconds bitstream 16.554
 design srlc16e_1_probe
   part xc7a100tftg256-1
-  seconds read 1.136
-  seconds synth 16.785
-  seconds opt 4.533
-  seconds place 0.786
-  seconds route 11.994
+  seconds read 1.305
+  seconds synth 20.063
+  seconds opt 4.659
+  seconds place 0.804
+  seconds route 13.485
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3142,14 +3120,14 @@ design srlc16e_1_probe
   clock clk period 10.000 slack 2.739 delay 2.232 levels 1
   wns 2.739
   routed_pips 104
-  seconds bitstream 13.124
+  seconds bitstream 13.725
 design srlc16e_probe
   part xc7a100tftg256-1
-  seconds read 1.054
-  seconds synth 16.605
-  seconds opt 4.550
-  seconds place 0.793
-  seconds route 11.874
+  seconds read 1.275
+  seconds synth 20.141
+  seconds opt 4.434
+  seconds place 0.789
+  seconds route 14.128
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3165,14 +3143,14 @@ design srlc16e_probe
   clock clk period 10.000 slack 7.693 delay 2.300 levels 2
   wns 7.693
   routed_pips 103
-  seconds bitstream 13.226
+  seconds bitstream 13.407
 design srlc32e_probe
   part xc7a100tftg256-1
-  seconds read 1.240
-  seconds synth 16.538
-  seconds opt 4.639
-  seconds place 0.824
-  seconds route 12.009
+  seconds read 1.511
+  seconds synth 18.355
+  seconds opt 4.669
+  seconds place 0.886
+  seconds route 14.525
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3188,14 +3166,14 @@ design srlc32e_probe
   clock clk period 10.000 slack 7.693 delay 2.300 levels 2
   wns 7.693
   routed_pips 116
-  seconds bitstream 13.159
+  seconds bitstream 13.517
 design startupe2_probe
   part xc7a100tftg256-1
-  seconds read 1.133
-  seconds synth 16.465
-  seconds opt 4.509
-  seconds place 0.809
-  seconds route 11.812
+  seconds read 1.501
+  seconds synth 18.139
+  seconds opt 4.533
+  seconds place 0.882
+  seconds route 14.333
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3212,14 +3190,14 @@ design startupe2_probe
   clock clk period 10.000 slack 8.661 delay 1.242 levels 0
   wns 8.661
   routed_pips 170
-  seconds bitstream 12.998
+  seconds bitstream 13.536
 design usr_accesse2_probe
   part xc7a100tftg256-1
-  seconds read 0.946
-  seconds synth 16.519
-  seconds opt 4.414
-  seconds place 0.787
-  seconds route 11.744
+  seconds read 1.484
+  seconds synth 18.293
+  seconds opt 4.620
+  seconds place 0.880
+  seconds route 14.127
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3237,14 +3215,14 @@ design usr_accesse2_probe
   clock clk period 10.000 slack 8.757 delay 1.215 levels 1
   wns 8.757
   routed_pips 366
-  seconds bitstream 13.158
+  seconds bitstream 13.625
 design vcc_probe
   part xc7a100tftg256-1
-  seconds read 1.090
-  seconds synth 16.343
-  seconds opt 4.532
-  seconds place 0.756
-  seconds route 11.862
+  seconds read 1.457
+  seconds synth 18.174
+  seconds opt 4.587
+  seconds place 0.822
+  seconds route 14.573
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3258,14 +3236,14 @@ design vcc_probe
   clock clk period 10.000 slack 9.100 delay 0.941 levels 1
   wns 9.100
   routed_pips 35
-  seconds bitstream 13.046
+  seconds bitstream 13.624
 design xadc_probe
   part xc7a100tftg256-1
-  seconds read 1.137
-  seconds synth 16.572
-  seconds opt 4.401
-  seconds place 0.952
-  seconds route 84.053
+  seconds read 1.473
+  seconds synth 17.166
+  seconds opt 4.697
+  seconds place 0.867
+  seconds route 11.901
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3273,24 +3251,24 @@ design xadc_probe
   cell XADC 1
   cell LUT2 2
   cell LUT6 8
-  cell FDRE 64
+  cell FDRE 30
   cell OBUF 1
-  site SLICEL 10
+  site SLICEL 6
   site SLICEM 2
   site XADC 1
   site IOB33 3
   site BUFG 1
-  clock clk period 10.000 slack 5.838 delay 4.136 levels 3
-  wns 5.838
-  routed_pips 48
-  seconds bitstream 0.454
+  clock clk period 10.000 slack 5.547 delay 4.427 levels 3
+  wns 5.547
+  routed_pips 641
+  seconds bitstream 13.223
 design xnor2_probe
   part xc7a100tftg256-1
-  seconds read 1.207
-  seconds synth 16.350
-  seconds opt 4.465
-  seconds place 0.800
-  seconds route 11.356
+  seconds read 1.483
+  seconds synth 18.428
+  seconds opt 4.617
+  seconds place 0.846
+  seconds route 14.610
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3304,14 +3282,14 @@ design xnor2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.060
+  seconds bitstream 13.498
 design xor2_probe
   part xc7a100tftg256-1
-  seconds read 1.037
-  seconds synth 16.446
-  seconds opt 4.450
-  seconds place 0.807
-  seconds route 11.188
+  seconds read 1.471
+  seconds synth 18.025
+  seconds opt 4.584
+  seconds place 0.827
+  seconds route 14.401
   cell GND 1
   cell VCC 1
   cell BUFG 1
@@ -3325,14 +3303,14 @@ design xor2_probe
   clock clk period 10.000 slack 8.579 delay 1.463 levels 1
   wns 8.579
   routed_pips 48
-  seconds bitstream 13.131
+  seconds bitstream 13.431
 design xorcy_probe
   part xc7a100tftg256-1
-  seconds read 1.092
-  seconds synth 16.477
-  seconds opt 4.471
-  seconds place 0.810
-  seconds route 11.162
+  seconds read 1.279
+  seconds synth 18.032
+  seconds opt 4.618
+  seconds place 0.909
+  seconds route 14.414
   cell GND 2
   cell VCC 1
   cell BUFG 1
@@ -3348,24 +3326,11 @@ design xorcy_probe
   clock clk period 10.000 slack 8.742 delay 1.307 levels 1
   wns 8.742
   routed_pips 51
-  seconds bitstream 13.102
+  seconds bitstream 13.493
 design zhold_delay_probe
   part xc7a100tftg256-1
-  seconds read 1.145
-  seconds synth 16.086
-  seconds opt 4.426
-  seconds place 0.357
-  seconds route 11.410
-  cell GND 1
-  cell VCC 1
-  cell BUFG 1
-  cell IBUF 2
-  cell ZHOLD_DELAY 1
-  cell LUT2 2
-  cell FDRE 3
-  cell OBUF 1
-  site IOB33 3
-  clock clk period 10.000 slack 2.219 delay 7.645 levels 2
-  wns 2.219
-  routed_pips 0
-  seconds bitstream 0.141
+  seconds read 1.139
+  seconds synth 16.725
+  seconds opt 4.484
+  failed place
+  message ERROR: [Common 17-69] Command failed: Placer could not place all instances 

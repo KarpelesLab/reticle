@@ -1,5 +1,5 @@
-# group primitive status, where status is whether `reticle fpga --bitstream` builds its probe: `ok`, or `gap`
-# for one Vivado builds and Reticle does not yet. docs/fpga-vivado-parity.md has the reasons.
+# group primitive status. `ok`: Vivado and `reticle fpga --bitstream` both build its probe. `gap`: Vivado does and
+# Reticle does not yet. `refused`: Vivado refuses it on this part; docs/fpga-vivado-parity.md has the reasons.
 logic LUT1 ok
 logic LUT2 ok
 logic LUT3 ok
@@ -107,8 +107,8 @@ io IOBUF ok
 io IBUF_IBUFDISABLE gap
 io IBUF_INTERMDISABLE gap
 io IOBUF_INTERMDISABLE gap
-io IOBUF_DCIEN gap
-io OBUFT_DCIEN gap
+io IOBUF_DCIEN refused
+io OBUFT_DCIEN refused
 io IBUFDS ok
 io IBUFGDS gap
 io OBUFDS ok
@@ -121,22 +121,22 @@ io IBUFDS_INTERMDISABLE gap
 io IBUFDS_DIFF_OUT_IBUFDISABLE gap
 io IBUFDS_DIFF_OUT_INTERMDISABLE gap
 io IOBUFDS_INTERMDISABLE gap
-io IOBUFDS_DCIEN gap
+io IOBUFDS_DCIEN refused
 io IOBUFDS_DIFF_OUT gap
 io IOBUFDS_DIFF_OUT_INTERMDISABLE gap
-io IOBUFDS_DIFF_OUT_DCIEN gap
+io IOBUFDS_DIFF_OUT_DCIEN refused
 io PULLUP gap
 io PULLDOWN gap
 io KEEPER gap
 iologic IDDR gap
 iologic IDDR_2CLK gap
-iologic ODDR gap
+iologic ODDR ok
 iologic ISERDESE2 gap
 iologic OSERDESE2 gap
 iologic IDELAYE2 gap
 iologic IDELAYCTRL gap
 iologic DCIRESET gap
-iologic ZHOLD_DELAY gap
+iologic ZHOLD_DELAY refused
 config BSCANE2 gap
 config CAPTUREE2 gap
 config DNA_PORT gap

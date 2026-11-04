@@ -24,15 +24,15 @@ step read {
   read_verilog $dir/$top.v
   if {[file exists $dir/$top.xdc]} { read_xdc $dir/$top.xdc }
 }
-step synth { synth_design -top $top -part $part -quiet }
+step synth { synth_design -top $top -part $part }
 foreach {ref n} [apply {{} {
   set counts [dict create]
   foreach c [get_cells -hier -filter {IS_PRIMITIVE}] { dict incr counts [get_property REF_NAME $c] }
   return $counts
 }}] { say synth_cell $ref $n }
-step opt { opt_design -quiet }
-step place { place_design -quiet }
-step route { route_design -quiet }
+step opt { opt_design }
+step place { place_design }
+step route { route_design }
 foreach {ref n} [apply {{} {
   set counts [dict create]
   foreach c [get_cells -hier -filter {IS_PRIMITIVE}] { dict incr counts [get_property REF_NAME $c] }
@@ -50,6 +50,14 @@ foreach clock [get_clocks -quiet] {
   }
 }
 catch { say wns [get_property SLACK [get_timing_paths -max_paths 1 -quiet]] }
-say routed_pips [llength [get_pips -quiet -of_objects [get_nets -quiet -hier -filter {TYPE != POWER && TYPE != GROUND}]]]
-step bitstream { write_bitstream -force -quiet $top.bit }
+set pips 0
+foreach net [get_nets -quiet -hier -top_net_of_hierarchical_group -filter {TYPE != POWER && TYPE != GROUND}] {
+  incr pips [llength [get_pips -quiet -of_objects $net]]
+}
+say routed_pips $pips
+# `-quiet` would hide a refusal here, and a table with no `.bit` behind it.
+step bitstream {
+  write_bitstream -force $top.bit
+  if {![file exists $top.bit]} { error "write_bitstream wrote no file" }
+}
 say end

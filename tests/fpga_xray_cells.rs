@@ -165,3 +165,61 @@ fn the_ledger_says_what_builds() {
         .collect();
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// **`--decode` reads what `--bitstream` wrote**: a global buffer's feature
+/// among the named lines and nothing unnamed. Would catch the option losing
+/// the database's names, or a frame read in the wrong order. Whether it reads
+/// Vivado's `.bit` as well is `xc7::read_bit`'s question, which
+/// `tests/fpga_xray.rs` asks of one; the unnamed lines are not reached here.
+#[test]
+fn decode_reads_a_bitstream_back() {
+    let Some(_) = ledger() else { return };
+    let dir = manifest().join("testdata/fpga/vivado/primitives");
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("probe-decode");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let bit = out.join("bufg.bit");
+    let built = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "--device",
+            "xc7a100t-ftg256",
+            "--quiet",
+            "--offline",
+        ])
+        .args(["--top", "bufg_probe", "--constraints"])
+        .arg(dir.join("bufg_probe.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(&bit)
+        .arg(dir.join("bufg_probe.v"))
+        .output()
+        .expect("failed to run the reticle binary");
+    if !bit.is_file() {
+        eprintln!(
+            "skipped: no bitstream, probably no database: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        return;
+    }
+    let decoded = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "--device",
+            "xc7a100t-ftg256",
+            "--offline",
+            "--decode",
+        ])
+        .arg(&bit)
+        .output()
+        .expect("failed to run the reticle binary");
+    assert!(decoded.status.success());
+    let text = String::from_utf8_lossy(&decoded.stdout);
+    assert!(
+        text.lines()
+            .any(|l| l.contains("BUFGCTRL") && l.ends_with(".IN_USE")),
+        "{text}"
+    );
+    assert!(!text.lines().any(|l| l.starts_with("? ")), "{text}");
+}

@@ -327,6 +327,10 @@ GW2A and Lattice ECP5):
                      docs/fpga-gowin.md and docs/fpga-trellis.md. For
                      Gowin this is the only output: there is no nextpnr
                      export.
+  --decode <file>    7 series: read a .bit from any tool, and print each
+                     feature it sets as `<tile> <feature>` and each bit the
+                     database has no name for as `? <tile> <frame>_<bit>`.
+                     Takes no design.
   --region <box>     7 series: which tiles of the fabric to load, as
                      x0,y0,x1,y1 in the database's grid coordinates. The
                      default is a box around the constrained pins.
@@ -776,6 +780,7 @@ fn spec_for(usage: &str) -> Spec {
                 "netlist",
                 "chipdb",
                 "bitstream",
+                "decode",
                 "region",
                 "max-pips",
                 "borrow-clock",
@@ -2156,6 +2161,48 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
 }
 
 /// `reticle fpga`: the whole target flow, ending in nextpnr's inputs.
+/// `reticle fpga --decode`: what a 7-series `.bit`, from any tool, holds.
+/// One line for each feature the database names, as `<tile> <feature>`, then
+/// one for each set bit it does not, as `? <tile> <frame>_<bit>`, in the
+/// spelling of a `segbits` file.
+fn decode_xc7_bit(
+    args: &Args,
+    device: &reticle::fpga::Device,
+    path: &str,
+) -> Result<String, String> {
+    use reticle::fpga::xc7;
+    use reticle::fpga::xray::{XrayDatabase, XrayOptions};
+    use std::fmt::Write as _;
+    if device.family != "xc7" {
+        return Err(format!(
+            "`--decode` reads a 7-series bitstream, and `{}` is not one",
+            device.name
+        ));
+    }
+    let root = datadir::PRJXRAY
+        .locate(args.option("chipdb"), args.flag("offline"))
+        .map_err(|err| format!("`--decode` needs a chip database: {err}"))?;
+    let root = root.to_string_lossy().into_owned();
+    let files = DiskFiles::for_sources(&[]);
+    let db = XrayDatabase::open(&files, &root, &device.name, &XrayOptions::new())
+        .map_err(|e| e.to_string())?;
+    let part = db.part(&files).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read `{path}`: {e}"))?;
+    let read = xc7::read_bit(&bytes).map_err(|e| e.to_string())?;
+    let frames =
+        xc7::FrameData::from_stream(part.layout.clone(), read.frames).map_err(|e| e.to_string())?;
+    let decoded = db.decode(&files, &frames).map_err(|e| e.to_string())?;
+    let mut out = String::new();
+    for (tile, feature) in &decoded.features {
+        let _ = writeln!(out, "{tile} {feature}");
+    }
+    for (tile, bit) in &decoded.leftovers {
+        let _ = writeln!(out, "? {tile} {:02}_{:02}", bit.row, bit.col);
+    }
+    eprint!("{}", decoded.to_text());
+    Ok(out)
+}
+
 fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     use reticle::fpga::{
         Constraints, FpgaOptions, PnrRoute, builtin_devices, check_nextpnr_json, export_nextpnr,
@@ -2188,6 +2235,19 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             known.join(", ")
         )));
     };
+
+    if let Some(path) = args.option("decode") {
+        return Ok(match decode_xc7_bit(args, device, path) {
+            Ok(text) => {
+                print!("{text}");
+                Outcome::Ok
+            }
+            Err(message) => {
+                eprintln!("error: {message}");
+                Outcome::Failed
+            }
+        });
+    }
 
     let (mut design, mut map) = match load_design(args)? {
         Ok(pair) => pair,

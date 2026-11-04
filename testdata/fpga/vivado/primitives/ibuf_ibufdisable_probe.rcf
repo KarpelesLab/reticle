@@ -2,4 +2,4 @@ create_clock -name clk -period 10 clk
 set_io -io_standard LVCMOS33 clk N11
 set_io -io_standard LVCMOS33 si L4
 set_io -io_standard LVCMOS33 so L5
-set_io -io_standard LVCMOS33 i_pad M1
+set_io -io_standard SSTL18_I i_pad A5

@@ -1304,10 +1304,41 @@ impl XrayDatabase {
         }
         out.sort();
         out.dedup();
+        // Where the unexplained bits are, in the coordinates a `segbits` line
+        // uses: what a feature the database does not name would be made of.
+        let mut leftovers = Vec::new();
+        for tile in &tiles {
+            let mut first_row = 0u32;
+            for (_, window) in &tile.bits {
+                let base_row = first_row;
+                first_row += window.frames;
+                for row in 0..window.frames {
+                    let Some(address) = window.baseaddr.checked_add(row) else {
+                        continue;
+                    };
+                    let Some(here) = set.get(&address) else {
+                        continue;
+                    };
+                    for (word, bit) in here {
+                        if *word >= window.offset
+                            && *word < window.offset + window.words
+                            && unexplained.contains(&(address, *word, *bit))
+                        {
+                            leftovers.push((
+                                tile.name.clone(),
+                                ConfigBit::new(base_row + row, (*word - window.offset) * 32 + *bit),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        leftovers.sort_by(|a, b| (&a.0, a.1.row, a.1.col).cmp(&(&b.0, b.1.row, b.1.col)));
         Ok(Decoded {
             features: out,
             bits: total,
             unexplained: unexplained.len(),
+            leftovers,
             tiles: tiles_touched,
             tiles_without_a_segbits_file: tiles_unnamed.len(),
             tiles_with_no_segbits_file: {
@@ -2096,6 +2127,9 @@ pub struct Decoded {
     /// accounted for when it is one of the `one` bits of a feature that
     /// matched.
     pub unexplained: usize,
+    /// Those bits, by tile and tile-local position, sorted. One outside
+    /// every tile is in [`Decoded::unexplained`] and not here.
+    pub leftovers: Vec<(String, ConfigBit)>,
     /// How many tiles hold at least one set bit.
     pub tiles: usize,
     /// Of those, how many have no `segbits` file at all, so nothing

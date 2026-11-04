@@ -51,6 +51,8 @@ PADS = {
     "IOBUFDS_INTERMDISABLE": {"IO", "IOB"}, "IOBUFDS_DCIEN": {"IO", "IOB"}, "IOBUFDS_DIFF_OUT": {"IO", "IOB"},
     "IOBUFDS_DIFF_OUT_INTERMDISABLE": {"IO", "IOB"}, "IOBUFDS_DIFF_OUT_DCIEN": {"IO", "IOB"},
     "PULLUP": {"O"}, "PULLDOWN": {"O"}, "KEEPER": {"O"},
+    "IDDR": {"D"}, "IDDR_2CLK": {"D"}, "ISERDESE2": {"D"}, "ODDR": {"Q"}, "OSERDESE2": {"OQ"}, "IDELAYE2": {"IDATAIN"},
+    "BUFIO": {"I"},
 }
 DIFFERENTIAL = {"IB", "OB", "IOB"}
 # Clock inputs, which the probe's clock drives, by name.
@@ -112,6 +114,54 @@ def is_clock(prim, port):
     return bool(CLOCK.match(port))
 
 
+# Ports a probe leaves open, because Vivado's rules allow only one thing on
+# them: a cascade to the next block, or an analogue pad.
+OPEN = {
+    "DSP48E1": "ACOUT BCOUT CARRYCASCOUT MULTSIGNOUT PCOUT ACIN BCIN CARRYCASCIN MULTSIGNIN PCIN OVERFLOW UNDERFLOW",
+    "RAMB36E1": "CASCADEOUTA CASCADEOUTB CASCADEINA CASCADEINB",
+    "FIFO36E1": "",
+    "ISERDESE2": "SHIFTOUT1 SHIFTOUT2 SHIFTIN1 SHIFTIN2 OFB DDLY O",
+    "OSERDESE2": "SHIFTOUT1 SHIFTOUT2 SHIFTIN1 SHIFTIN2 OFB TFB TBYTEOUT TBYTEIN TQ T1 T2 T3 T4 TCE",
+    "XADC": "VP VN VAUXP VAUXN",
+    "PLLE2_BASE": "CLKOUT1 CLKOUT2 CLKOUT3 CLKOUT4 CLKOUT5 CLKFBOUTB",
+    "PLLE2_ADV": "CLKOUT1 CLKOUT2 CLKOUT3 CLKOUT4 CLKOUT5 CLKFBOUTB DO DRDY",
+    "MMCME2_BASE": "CLKOUT0B CLKOUT1 CLKOUT1B CLKOUT2 CLKOUT2B CLKOUT3 CLKOUT3B CLKOUT4 CLKOUT5 CLKOUT6 CLKFBOUTB",
+    "MMCME2_ADV": "CLKOUT0B CLKOUT1 CLKOUT1B CLKOUT2 CLKOUT2B CLKOUT3 CLKOUT3B CLKOUT4 CLKOUT5 CLKOUT6 CLKFBOUTB "
+                  "DO DRDY PSDONE CLKINSTOPPED CLKFBSTOPPED",
+}
+# What Vivado's rules say a probe of these must be: parameters, ports wired to
+# something named here, and whatever else the design needs to be legal.
+# A manager's clocks go to a clock pin: Vivado will not place several of them
+# into one lookup table.
+FEEDBACK = {"CLKIN1": "clk", "CLKFBIN": "fb", "CLKFBOUT": "fb", "CLKIN2": "1'b0", "CLKINSEL": "1'b1",
+            "CLKOUT0": "c0", "LOCKED": "locked"}
+TOGGLE = "  reg t;\n  always @(posedge c0) t <= locked;\n  assign out[0] = t;"
+OVERRIDE = {
+    "PLLE2_BASE": dict(params='#(.CLKFBOUT_MULT(8), .CLKIN1_PERIOD(10.0), .CLKOUT0_DIVIDE(8)) ', conn=FEEDBACK, wires="fb, c0, locked", extra=TOGGLE),
+    "PLLE2_ADV": dict(params='#(.CLKFBOUT_MULT(8), .CLKIN1_PERIOD(10.0), .CLKOUT0_DIVIDE(8)) ', conn=FEEDBACK, wires="fb, c0, locked", extra=TOGGLE),
+    "MMCME2_BASE": dict(params='#(.CLKFBOUT_MULT_F(8.0), .CLKIN1_PERIOD(10.0), .CLKOUT0_DIVIDE_F(8.0)) ', conn=FEEDBACK, wires="fb, c0, locked", extra=TOGGLE),
+    "MMCME2_ADV": dict(params='#(.CLKFBOUT_MULT_F(8.0), .CLKIN1_PERIOD(10.0), .CLKOUT0_DIVIDE_F(8.0)) ', conn=FEEDBACK, wires="fb, c0, locked", extra=TOGGLE),
+    "BUFIO": dict(conn={"O": "ioclk"}, wires="ioclk", ports=["input wire d_pad"],
+                  extra="  IDDR u_load (.C(ioclk), .CE(1'b1), .D(d_pad), .S(1'b0), .R(sr[0]), .Q1(out[0]));"),
+    "IDDR": dict(conn={"S": "1'b0"}),
+    "IDDR_2CLK": dict(conn={"S": "1'b0"}),
+    "ODDR": dict(conn={"S": "1'b0"}),
+    "ISERDESE2": dict(conn={"CLKB": "~clk"}),
+    "RAMB36E1": dict(conn={"ADDRARDADDR": "{1'b1, sr[14:0]}", "ADDRBWRADDR": "{1'b1, sr[15:1]}"}),
+    "BUFMR": dict(conn={"O": "mr", "I": "clk"}, wires="mr",
+                  extra="  BUFR u_load (.I(mr), .CE(1'b1), .CLR(1'b0), .O(out[0]));"),
+    "BUFMRCE": dict(conn={"O": "mr", "I": "clk"}, wires="mr",
+                    extra="  BUFR u_load (.I(mr), .CE(1'b1), .CLR(1'b0), .O(out[0]));"),
+    "IDELAYE2": dict(extra="  IDELAYCTRL u_ctrl (.REFCLK(clk), .RST(sr[0]), .RDY());"),
+}
+# Vivado refuses these whatever the probe. The part has high-range banks only,
+# so no DCI; `ZHOLD_DELAY` by itself, from a pad or from logic, is not placeable.
+NOT_ON_THIS_PART = {"IOBUF_DCIEN", "OBUFT_DCIEN", "IOBUFDS_DCIEN", "IOBUFDS_DIFF_OUT_DCIEN", "ZHOLD_DELAY"}
+# Pins a probe takes to a differential standard, because Vivado refuses their
+# single-ended form: the `IBUFDISABLE` of these needs one.
+DIFF_STANDARD = {"IBUF_IBUFDISABLE", "IBUF_INTERMDISABLE"}
+
+
 def parameters(prim):
     """What a probe sets so that the cell computes something: a lookup table
     or ROM left at its default of all zeros is a constant, and swept."""
@@ -132,13 +182,20 @@ def parameters(prim):
 
 def probe(prim, ports):
     pads = PADS.get(prim, set())
+    extra = OVERRIDE.get(prim, {})
+    opened = set(OPEN.get(prim, "").split())
+    named = extra.get("conn", {})
     inputs = 0
-    outputs = 0
+    outputs = extra.get("extra_out", 0)
     conns = []
     top = []
     for direction, port, width in ports:
-        if port in pads:
-            top.append(f"{direction if direction != 'output' else 'output'} wire {('[%d:0] ' % (width-1)) if width > 1 else ''}{port.lower()}_pad")
+        if port in opened:
+            conns.append(f".{port}()")
+        elif port in named:
+            conns.append(f".{port}({named[port]})")
+        elif port in pads:
+            top.append(f"{direction} wire {('[%d:0] ' % (width-1)) if width > 1 else ''}{port.lower()}_pad")
             conns.append(f".{port}({port.lower()}_pad)")
         elif direction == "input" and is_clock(prim, port) and width == 1:
             conns.append(f".{port}(clk)")
@@ -150,15 +207,19 @@ def probe(prim, ports):
             outputs += width
         else:
             conns.append(f".{port}()")
-    lines = [f"// {prim} by name, with default parameters. Generated by tools/vivado-parity/gen_primitives.py.",
-             f"module {prim.lower()}_probe (", "    input  wire clk,", "    input  wire si,", "    output reg  so"]
-    lines[-1] += ","
+    if "extra" in extra and outputs == 0:
+        outputs = 1
+    lines = [f"// {prim} by name. Generated by tools/vivado-parity/gen_primitives.py.",
+             f"module {prim.lower()}_probe (", "    input  wire clk,", "    input  wire si,", "    output reg  so,"]
+    top += extra.get("ports", [])
     for t in top:
         lines.append(f"    {t},")
     lines[-1] = lines[-1].rstrip(",")
     lines.append(");")
     lines.append(f"  reg [{max(inputs, 1) - 1}:0] sr;")
     lines.append(f"  wire [{max(outputs, 1) - 1}:0] out;")
+    if "wires" in extra:
+        lines.append(f"  wire {extra['wires']};")
     if inputs > 1:
         lines.append(f"  always @(posedge clk) sr <= {{sr[{inputs - 2}:0], si}};")
     else:
@@ -169,7 +230,9 @@ def probe(prim, ports):
     lines.append("  reg q;")
     lines.append("  always @(posedge clk) q <= ^out;")
     lines.append("  always @(posedge clk) so <= q ^ sr[0];")
-    lines.append(f"  {prim} {parameters(prim)}dut ({', '.join(conns)});")
+    lines.append(f"  {prim} {extra.get('params', '') or parameters(prim)}dut ({', '.join(conns)});")
+    if "extra" in extra:
+        lines.append(extra["extra"])
     lines.append("endmodule")
     return "\n".join(lines) + "\n", top
 
@@ -188,10 +251,20 @@ def constraints(prim, top):
     xdc.append("set_property IOSTANDARD LVCMOS33 [get_ports {clk si so}]")
     diff = any(n[:-4].upper() in DIFFERENTIAL for n in names)
     for n in names:
-        p = n[:-4].upper()
         if diff:
             continue
-        pin = single.pop(0)
+        # A clock has to arrive on a pin that can reach a global buffer.
+        if prim in ("BUFGP", "BUFIO") and n == "i_pad":
+            pin = "N14"
+        elif prim == "BUFIO":
+            pin = "N12"
+        elif prim in DIFF_STANDARD:
+            xdc += [f"set_property PACKAGE_PIN A5 [get_ports {n}]", f"set_property IOSTANDARD SSTL18_I [get_ports {n}]",
+                    "set_property INTERNAL_VREF 0.9 [get_iobanks 35]"]
+            rcf.append(f"set_io -io_standard SSTL18_I {n} A5")
+            continue
+        else:
+            pin = single.pop(0)
         xdc += [f"set_property PACKAGE_PIN {pin} [get_ports {n}]", f"set_property IOSTANDARD LVCMOS33 [get_ports {n}]"]
         rcf.append(f"set_io -io_standard LVCMOS33 {n} {pin}")
     if diff:
@@ -225,7 +298,8 @@ def main():
     with open(f"{OUT}/index.txt", "w") as f:
         f.writelines(head)
         for group, prim in table:
-            f.write(f"{group} {prim} {known.get(prim, 'gap')}\n")
+            status = "refused" if prim in NOT_ON_THIS_PART else known.get(prim, "gap")
+            f.write(f"{group} {prim} {status}\n")
     print(len(table), "probes")
 
 

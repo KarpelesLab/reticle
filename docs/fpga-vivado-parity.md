@@ -38,26 +38,43 @@ the one lookup table Vivado makes it. The table below says what that costs.
 ## Which primitives build
 
 `testdata/fpga/vivado/primitives/` has one design per 7-series primitive, 146 of
-them, each with default parameters. Vivado builds all 146 to a bitstream.
-**Reticle builds 85.** `index.txt` says which; `the_ledger_says_what_builds`
-holds it exact (ignored, since it takes every probe to a bitstream), and
-`the_primitives_the_ledger_calls_ok_map` runs in the gate.
+them. Vivado writes a bitstream for **141**, and refuses five on this part:
+`IOBUF_DCIEN`, `OBUFT_DCIEN`, `IOBUFDS_DCIEN` and `IOBUFDS_DIFF_OUT_DCIEN`, since
+the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
+would not place alone from a pad or from logic.
 
-The 61 that do not, by what stops them:
+**Reticle builds 86 of the 141.** `index.txt` says which;
+`the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
+to a bitstream), and `the_primitives_the_ledger_calls_ok_map` runs in the gate.
+
+**The first version of this section was wrong**, and said Vivado built all 146.
+The runner passed `-quiet` to `write_bitstream`, which hid the refusals: 24 probes
+had no `.bit` at all and the table called them built. Decoding one is what showed
+it. The runner now fails a step with no file behind it, and of those 24, 19 were
+illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
+flip-flop, which now obey Vivado's rules.
+
+The 55 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | no latch on the fabric yet | `LDCE`, `LDPE`, `LD`, `LDC`, `LDP`, `LDCE_1`, `LDPE_1` |
 | block RAM and DSP by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1`, `DSP48E1` |
 | clock buffers | `BUFGCTRL`, `BUFGMUX_CTRL`, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFR` with a driven `CE` |
-| clock managers at their defaults | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
-| pad buffers, mostly the disable and `DCIEN` forms | 20 of them; `IOBUFDS` and `OBUFTDS` are the ones used most |
+| clock managers | `MMCME2_BASE`, `PLLE2_BASE`, `MMCME2_ADV` (`COMPENSATION=ZHOLD`) |
+| pad buffers | 15 of them, chiefly the disable forms; `IOBUFDS` and `OBUFTDS` are the ones used most. `SSTL18_I` is not offered either. |
 | pulls on a pad with nothing else on it | `PULLUP`, `PULLDOWN`, `KEEPER` |
-| IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `IDDR_2CLK`, `DCIRESET`, `ZHOLD_DELAY`, and `IDDR`/`ODDR` with a routed set or reset |
+| IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `IDDR_2CLK`, `DCIRESET`, and `IDDR` with a routed reset |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
 
 Building is the least that can be asked: a probe that builds has not been
-compared with what Vivado wrote for it.
+compared with what Vivado wrote for it. Vivado's rules also say something Reticle
+does not: the first run's refusals are design rules (`REQP-1884`, `REQP-1939`,
+`PDCN-135` and so on), and Reticle has checks of its own but not these.
+
+`reticle fpga --device <part> --decode <file.bit>` prints what any 7-series `.bit`
+sets, and each set bit the database has no name for. It is how to ask what Vivado
+wrote.
 
 ## What each makes of the same design
 
