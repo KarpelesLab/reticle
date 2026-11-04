@@ -1454,7 +1454,11 @@ impl Mapper<'_> {
         // the blocks cannot do between them. A ROM (no writer at all) is
         // the easy case: every copy holds the same initial contents and
         // nothing ever changes them.
-        let groups = match allocate_ports(shape, reads.len(), writes.len()) {
+        // Vivado writes a block on port A and reads it on port B
+        // (`testdata/fpga/vivado/bram/ib_1024x18`: `ENARDEN` is the write
+        // enable, `WEBWE` is zero).
+        let writes_first = self.options.vivado_memories;
+        let groups = match allocate_ports(shape, reads.len(), writes.len(), writes_first) {
             Some((read_slots, write_slots)) => vec![BramCopy {
                 reads: reads.clone(),
                 read_slots,
@@ -1462,7 +1466,7 @@ impl Mapper<'_> {
                 index: 0,
             }],
             None if writes.len() <= 1 && reads.len() > 1 => {
-                match allocate_ports(shape, 1, writes.len()) {
+                match allocate_ports(shape, 1, writes.len(), writes_first) {
                     Some((read_slots, write_slots)) => reads
                         .iter()
                         .enumerate()
@@ -1647,8 +1651,29 @@ impl Mapper<'_> {
         has_init: bool,
     ) -> Option<(usize, (u32, u32), u32, u32)> {
         let mut best: Option<(usize, (u32, u32), u32, u32)> = None;
-        let mut best_key: Option<(u64, u32, bool, u32)> = None;
+        let mut best_key: Option<(u64, u64, u32, u32, bool, u32)> = None;
+        let vivado = self.options.vivado_memories;
+        // A block of twice the bits costs twice: a 7-series `RAMB36E1` is
+        // both halves of the tile a `RAMB18E1` is one of. Counted only for
+        // Vivado's mapping, which is the only one that offers a device's
+        // second shape at all.
+        let smallest = self
+            .device
+            .block_rams
+            .iter()
+            .map(BramShape::bits)
+            .filter(|bits| *bits > 0)
+            .min()
+            .unwrap_or(1);
         for (index, shape) in self.device.block_rams.iter().enumerate() {
+            if index > 0 && !vivado {
+                continue;
+            }
+            let size = if vivado {
+                shape.bits().div_ceil(smallest).max(1)
+            } else {
+                1
+            };
             for (mode, &(mode_width, mode_depth)) in shape.width_modes.iter().enumerate() {
                 if mode_width == 0 || mode_depth == 0 {
                     continue;
@@ -1676,8 +1701,17 @@ impl Mapper<'_> {
                 .unwrap_or(0);
                 // The blocks the mode really costs, then fewest blocks per
                 // word, then the widest. See the doc comment.
-                let cost = blocks * (1 + neighbours);
-                let key = (cost, wide, parity, u32::MAX - mode_width);
+                let cost = blocks * size * (1 + neighbours);
+                // Then the fewest blocks, for Vivado's mapping: a 4096x9
+                // memory is one `RAMB36E1` to Vivado and not two
+                // `RAMB18E1`s, which cost the same tile.
+                let fewest = if vivado { blocks } else { 0 };
+                // And a word in blocks side by side before blocks one above
+                // another, which want a multiplexer: a 2048x36 memory is two
+                // `RAMB36E1`s of 2048x18 to Vivado
+                // (`testdata/fpga/vivado/bram/ib_2048x36`).
+                let stacked = if vivado { deep } else { 0 };
+                let key = (cost, fewest, stacked, wide, parity, u32::MAX - mode_width);
                 if best_key.is_none_or(|b| key < b) {
                     best_key = Some(key);
                     best = Some((index, (mode_width, mode_depth), wide, deep));
@@ -1717,7 +1751,19 @@ impl Mapper<'_> {
             .iter()
             .map(|(k, v)| (Name::new(k.clone()), v.clone()))
             .collect();
-        let layout = &plan.layout;
+        // The address bits below a word, which the block does not read:
+        // ones, as Vivado's netlist has them (`ib_1024x18`'s
+        // `ADDRARDADDR[3:0]` are on `<const1>`), which is also what an input
+        // nothing drives reads, so that neither needs a ground.
+        let mut owned = plan.layout.clone();
+        if self.options.vivado_memories
+            && shape.name.starts_with("RAMB")
+            && owned.addr_pad.is_none()
+            && owned.addr_low > 0
+        {
+            owned.addr_pad = Some(Const::ones(owned.addr_low));
+        }
+        let layout = &owned;
         // The contents, when they go into the blocks: `bram_contents`
         // checked that the database describes where.
         let contents = match (&memory.init, &shape.init_params, &layout.init) {
@@ -1891,6 +1937,27 @@ impl Mapper<'_> {
                         }
                     }
                 }
+                // Every control input the memory leaves alone, tied low in
+                // the netlist as Vivado's netlist ties it: a read port's
+                // write enable, the resets, the output register's clock
+                // enable and reset. The fabric ties a pin nothing drives
+                // anyway, and these say so to anything that reads the
+                // netlist, a simulation first (`tools/vivado-parity/`: on
+                // Xilinx's models a pin left open floats and writes).
+                if self.options.vivado_memories && shape.name.starts_with("RAMB") {
+                    for map in &shape.port_map {
+                        for role in ["we", "rst", "regce", "rstreg"] {
+                            let Some(name) = map.signal(role) else {
+                                continue;
+                            };
+                            if inputs.iter().any(|(n, _)| n.as_str() == name) {
+                                continue;
+                            }
+                            let zero = const_expr(module, Const::zero(map.width(role)), span);
+                            inputs.push((Name::new(name), zero));
+                        }
+                    }
+                }
                 let cell = add_cell(
                     module,
                     &format!("{base}$ram_w{w}_d{d}"),
@@ -1901,6 +1968,19 @@ impl Mapper<'_> {
                 );
                 for (key, value) in &mode_params {
                     module.cells[cell].params.set(key.clone(), value.clone());
+                }
+                // Vivado reads first on a port it writes, whatever reads
+                // it: a read on the other port of the word being written
+                // then has the old word, which is what the description
+                // says, where in `WRITE_FIRST` UG473 calls it invalid.
+                if self.options.vivado_memories && shape.name.starts_with("RAMB") {
+                    for slot in &plan.write_slots {
+                        let letter = if *slot == 0 { 'A' } else { 'B' };
+                        module.cells[cell].params.set(
+                            Name::new(format!("WRITE_MODE_{letter}")),
+                            AttrValue::String("READ_FIRST".to_owned()),
+                        );
+                    }
                 }
                 if let Some((init, params, words)) = &contents {
                     // Every copy holds the whole contents; this block
@@ -6654,6 +6734,7 @@ fn allocate_ports(
     shape: &BramShape,
     reads: usize,
     writes: usize,
+    writes_first: bool,
 ) -> Option<(Vec<usize>, Vec<usize>)> {
     let mut taken = vec![false; shape.port_map.len()];
     let pick = |wants_read: bool, taken: &mut Vec<bool>| {
@@ -6674,12 +6755,19 @@ fn allocate_ports(
         Some(found)
     };
     let mut read_slots = Vec::with_capacity(reads);
+    let mut write_slots = Vec::with_capacity(writes);
+    if writes_first {
+        for _ in 0..writes {
+            write_slots.push(pick(false, &mut taken)?);
+        }
+    }
     for _ in 0..reads {
         read_slots.push(pick(true, &mut taken)?);
     }
-    let mut write_slots = Vec::with_capacity(writes);
-    for _ in 0..writes {
-        write_slots.push(pick(false, &mut taken)?);
+    if !writes_first {
+        for _ in 0..writes {
+            write_slots.push(pick(false, &mut taken)?);
+        }
     }
     Some((read_slots, write_slots))
 }

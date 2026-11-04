@@ -76,8 +76,8 @@ lutram ROM32X1 ok
 lutram ROM64X1 ok
 lutram ROM128X1 ok
 lutram ROM256X1 ok
-block RAMB18E1 gap
-block RAMB36E1 gap
+block RAMB18E1 ok
+block RAMB36E1 ok
 block FIFO18E1 gap
 block FIFO36E1 gap
 block DSP48E1 ok

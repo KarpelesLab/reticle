@@ -1014,6 +1014,67 @@ fn primitive_instances(
             done.push(id);
             continue;
         }
+        // A block RAM a design names is a cell too, when the device says which
+        // of its ports are outputs: a `bram` line's `outputs`. A port the
+        // device does not describe -- a cascade's -- may be tied low and is
+        // then nothing; anything else on it would be dropped, so it is
+        // refused, and so is a cascade or error correction asked for by name.
+        if let Some(bram) = device
+            .block_rams
+            .iter()
+            .find(|b| b.name == primitive.as_str() && !b.outputs.is_empty())
+        {
+            if let Some(why) = named_block_ram_refusal(primitive.as_str(), &inst.params) {
+                refused += 1;
+                diags.push(
+                    Diagnostic::error(format!("`{}`: {why}", inst.name))
+                        .with_span(inst.span)
+                        .with_note(
+                            "this flow builds one block RAM at a time, without its error \
+                             correction",
+                        ),
+                );
+                continue;
+            }
+            let known: Vec<&str> = bram
+                .port_map
+                .iter()
+                .flat_map(|port| port.signals.iter().map(|(_, name)| name.as_str()))
+                .chain(bram.outputs.iter().map(String::as_str))
+                .collect();
+            let mut changed = inst.clone();
+            changed.connections.clear();
+            let mut unbuilt = false;
+            for (port, expr) in &inst.connections {
+                if known.contains(&port.as_str()) {
+                    changed.connections.push((port.clone(), *expr));
+                    continue;
+                }
+                if m.expr(*expr)
+                    .as_const()
+                    .is_some_and(|c| c.to_u64() == Some(0))
+                {
+                    continue;
+                }
+                unbuilt = true;
+                refused += 1;
+                diags.push(
+                    Diagnostic::error(format!(
+                        "`{}`: `{port}` of a `{primitive}` is not built here, and may only be \
+                         tied low",
+                        inst.name
+                    ))
+                    .with_span(inst.span),
+                );
+            }
+            if unbuilt
+                || !cell_from_instance(m, &changed, primitive, &bram.outputs, &mut refused, diags)
+            {
+                continue;
+            }
+            done.push(id);
+            continue;
+        }
         let Some(bel) = device.bels.iter().find(|b| b.name == primitive.as_str()) else {
             continue;
         };
@@ -1537,6 +1598,35 @@ fn distributed_ram_cell(cell: &mut crate::ir::Cell, device: &Device) {
         primitive = Name::new(single);
     }
     cell.kind = CellKind::Blackbox(primitive);
+}
+
+/// Why a block RAM named with these parameters is not built here, or `None`:
+/// a cascade (`RAM_EXTENSION_A` or `_B` other than `NONE`) and error
+/// correction (`EN_ECC_READ` or `EN_ECC_WRITE`) are not.
+fn named_block_ram_refusal(primitive: &str, params: &crate::ir::Attrs) -> Option<String> {
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(crate::ir::AttrValue::as_str)
+            .map(str::to_ascii_uppercase)
+    };
+    for key in ["RAM_EXTENSION_A", "RAM_EXTENSION_B"] {
+        if let Some(value) = text(key)
+            && value != "NONE"
+        {
+            return Some(format!(
+                "`{key}(\"{value}\")`: a cascade of `{primitive}`s is not built here"
+            ));
+        }
+    }
+    for key in ["EN_ECC_READ", "EN_ECC_WRITE"] {
+        if text(key).as_deref() == Some("TRUE") {
+            return Some(format!(
+                "`{key}(\"TRUE\")`: a `{primitive}`'s error correction is not built here"
+            ));
+        }
+    }
+    None
 }
 
 /// The single-port distributed RAM a dual-port one is with `DPO` unread.

@@ -118,9 +118,12 @@ fn block_ram_halves_become_bels_with_pins() {
     for name in ["RAMB18_Y0", "RAMB18_Y1"] {
         let bel = ty.bel(name).unwrap_or_else(|| panic!("no bel {name}"));
         assert_eq!(bel.kind, "bram");
-        // 126 since the parity outputs became pins of their own; 122
-        // when the parity inputs were tie-only and the outputs absent.
-        assert_eq!(bel.pins.len(), 126, "{name}");
+        // 128 in the Vivado model, whose output registers' clocks are pins
+        // (`p0_regclk`, `p1_regclk`) and whose twelve write-enable pins are
+        // lanes of their own; 126 in the legacy model, since the parity
+        // outputs became pins of their own; 122 when the parity inputs were
+        // tie-only and the outputs absent.
+        assert_eq!(bel.pins.len(), 128, "{name}");
         for role in &wanted {
             assert!(
                 bel.pins.iter().any(|(r, _)| r == role),
@@ -585,13 +588,19 @@ fn the_rom_demo_decodes_bit_for_bit() {
         "WRITE_WIDTH_A_18",
         "WRITE_WIDTH_B_18",
         "ZINV_CLKARDCLK",
-        "ZINV_ENBWREN",
-        "ZINV_RSTRAMARSTRAM",
         "ZINIT_A[0]",
         "ZSRVAL_B[17]",
     ] {
         let full = format!("{bel}.{mode}");
         assert!(modes.contains(&full.as_str()), "{full} not decoded");
+    }
+    // The unused port's enable and the reset nothing drives are held low
+    // through their inverters, as Vivado holds them: a one on the pin and
+    // `ZINV` clear (`bram::held_by_inversion`). Nextpnr's rule, which this
+    // asserted before, set both.
+    for mode in ["ZINV_ENBWREN", "ZINV_RSTRAMARSTRAM"] {
+        let full = format!("{bel}.{mode}");
+        assert!(!modes.contains(&full.as_str()), "{full} decoded");
     }
     assert!(!modes.iter().any(|f| f.ends_with("DOA_REG")));
     assert!(!modes.iter().any(|f| f.contains("WRITE_MODE")));

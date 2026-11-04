@@ -147,6 +147,15 @@ fn site_and_bel(
         });
         return Some(((*sites.get(block)?).clone(), "DSP48E1".to_owned()));
     }
+    // Both halves as one block: the tile's one `RAMB36_X<x>Y<y>` site, which
+    // the grid types `RAMBFIFO36E1`.
+    if bel == super::bram::RAMB36_BEL {
+        let (site, _) = tile
+            .sites
+            .iter()
+            .find(|(name, _)| name.starts_with("RAMB36_"))?;
+        return Some((site.clone(), "RAMB36E1".to_owned()));
+    }
     if bel.starts_with("IOB_") {
         let name = match primitive {
             "IBUF" => "INBUF_EN",

@@ -42,7 +42,9 @@
 //! It reads the routed netlist with this repository's models of the cells
 //! (`xc7_cells.v`, checked against Vivado's by `tests/fpga_xray_cells.rs`), so
 //! a cell whose bits are wrong but whose netlist is right gets past it; the
-//! slice comparison is what holds the bits.
+//! slice comparison is what holds the bits. The two designs whose memory is a
+//! `RAMB36E1` are left to `tests/fpga_xray_bram_vivado.rs`, which simulates
+//! such a block on Vivado's own model, since this repository has none.
 //!
 //! None of it has been near a part. A slice so configured rests on Vivado's
 //! having written the same bits.
@@ -455,8 +457,10 @@ fn memory_cells(counts: &BTreeMap<String, u32>) -> BTreeMap<String, u32> {
 /// kept as that cell, a dual-port one with its second port unread made the
 /// single-port one. Would catch a rule of `vivado_lutram_plan` changed, a
 /// memory under Vivado's threshold sent to block RAM, and a named cell made
-/// logic. The two that differ wait for the block RAM's 36-bit mode: Vivado puts
-/// 32 words of 32 bits in one `RAMB18E1`.
+/// logic. The two that differ wait for inference of the block RAM's simple
+/// dual port: Vivado puts 32 words of 32 bits in one `RAMB18E1` read 36 bits
+/// wide, and Reticle in one `RAMB36E1` in true dual port, the same tile. It was
+/// two `RAMB18E1` before `RAMB36E1` was inferred, which is the same tile too.
 #[test]
 fn each_design_gets_the_cells_vivado_gave_it() {
     let Some(built) = built() else { return };
@@ -474,8 +478,8 @@ fn each_design_gets_the_cells_vivado_gave_it() {
         }
         let (ours, theirs) = (memory_cells(&ours), memory_cells(&answer.routed));
         let expected = match name.as_str() {
-            "mem32x32" => BTreeMap::from([("RAMB18E1".to_owned(), 2)]),
-            "mem32x32r2" => BTreeMap::from([("RAMB18E1".to_owned(), 4)]),
+            "mem32x32" => BTreeMap::from([("RAMB36E1".to_owned(), 1)]),
+            "mem32x32r2" => BTreeMap::from([("RAMB36E1".to_owned(), 2)]),
             _ => theirs.clone(),
         };
         if ours != expected {
@@ -738,9 +742,24 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
         .collect();
     let cells = manifest().join("src/fpga/devices/xc7_cells.v");
     let sim = manifest().join("examples/husky/sim");
+    // A design whose memory went to a `RAMB36E1` (`mem32x32`, `mem32x32r2`):
+    // this repository's simulator has no model of one, and
+    // `tests/fpga_xray_bram_vivado.rs` simulates that cell on Vivado's.
+    let whole: Vec<&String> = built
+        .iter()
+        .filter(|(_, one)| {
+            std::fs::read_to_string(&one.routed).is_ok_and(|t| t.contains("RAMB36E1 "))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    for name in &whole {
+        eprintln!("not simulated here: `{name}` is a RAMB36E1");
+    }
+    assert!(whole.len() <= 2, "{whole:?}");
     let results: Vec<(String, Option<String>, String)> = std::thread::scope(|scope| {
         let handles: Vec<_> = built
             .iter()
+            .filter(|(name, _)| !whole.contains(name))
             .map(|(name, one)| {
                 let (cells, sim) = (&cells, &sim);
                 scope.spawn(move || {
@@ -800,7 +819,7 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert_eq!(results.len(), expected.len());
+    assert_eq!(results.len() + whole.len(), expected.len());
 }
 
 /// The stimulus of `tools/vivado-parity/gen_lutram_vectors.py`, on the routed

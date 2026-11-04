@@ -184,7 +184,8 @@ mod vivado;
 mod xadc;
 
 pub use bram::{
-    BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, mode_features, tie_policy,
+    BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, mode_features, mode_features_in,
+    ramb36_features, ramb36_input_roles, tie_policy, write_enable_lanes,
 };
 pub use bufg::GlobalBufferError;
 pub use carry::{CarryPacking, legalise_carries};
@@ -1154,7 +1155,10 @@ impl XrayDatabase {
             clocks: clock_column(&features),
             regional: options.regional_clocks,
             wire_enables: wire_enable_table(&features),
-            block_ram: BlockRamTables::new(&features, &fixed),
+            block_ram: BlockRamTables {
+                model: options.lutram,
+                ..BlockRamTables::new(&features, &fixed)
+            },
             io: {
                 let mut io = IoTables::new(&features, &options.io_standard);
                 for tile in tiles
@@ -3231,8 +3235,17 @@ pub struct XrayClockUse {
 /// - `VREF`: a bank's internal reference voltage, `VREF.V_<n>_MV`, which
 ///   `XrayFabric::configure_io` sets;
 /// - [`regional::LEAF_ENABLE`]: a horizontal clock tile's regional-line
-///   enable, charged to the pip its line leaves by.
-const NOT_ARCS: [&str; 4] = ["DIFF", "ENABLE_BUFFER", "VREF", regional::LEAF_ENABLE];
+///   enable, charged to the pip its line leaves by;
+/// - `RAMB36`: a block RAM tile's seven features of the 36 kbit block as
+///   one (`RAMB36.BRAM36_READ_WIDTH_A_1`), which `bram::ramb36_features`
+///   sets for a `RAMB36E1`.
+const NOT_ARCS: [&str; 5] = [
+    "DIFF",
+    "ENABLE_BUFFER",
+    "VREF",
+    regional::LEAF_ENABLE,
+    "RAMB36",
+];
 
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
 /// twentieth of an ordinary wire the ECP5 flow uses.
@@ -3434,7 +3447,9 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         // Every shape of distributed RAM: `lutram`, and `lutram_m32` and the
         // others of `super::lutram`.
         kind if kind == "lutram" || kind.starts_with("lutram_") => &["wclk"],
-        "bram" => &["p0_clk", "p1_clk"],
+        // And the output registers' clocks, which only the Vivado model
+        // routes: see `XrayFabric::spread_block_ram_pins`.
+        "bram" | "bram36" => &["p0_clk", "p1_clk", "p0_regclk", "p1_regclk"],
         "mmcm" => &["dclk", "psclk"],
         "pll" | "sysmon" => &["dclk"],
         // A DDR register in an IO tile's logic: the Husky Plus's ADC comes

@@ -770,10 +770,15 @@ fn the_artix7_matches_its_datasheet_figures() {
     // 100 RAMB18E1 of 18 kbit. Reticle used to use only the 16 kbit of
     // data and leave the parity bits; since the 18- and 9-bit modes carry
     // data on the parity pins, the block is the datasheet's 18 kbit.
-    assert_eq!(device.block_rams.len(), 1);
+    // And 50 RAMB36E1 of 36 kbit, each both halves of a tile two RAMB18E1
+    // share, on a site of its own; the legacy mapping uses only the first.
+    assert_eq!(device.block_rams.len(), 2);
     assert_eq!(device.block_rams[0].name, "RAMB18E1");
     assert_eq!(device.block_rams[0].bits(), 18_432);
     assert!(device.block_rams[0].has_byte_enable);
+    assert_eq!(device.block_rams[1].name, "RAMB36E1");
+    assert_eq!(device.block_rams[1].bits(), 36_864);
+    assert_eq!(device.block_rams[1].site_kind(), "bram36");
     // One clock generator of each kind in each of the five tiles.
     let plls: Vec<&str> = device
         .clock_resources

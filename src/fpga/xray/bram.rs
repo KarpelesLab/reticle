@@ -1,16 +1,16 @@
 //! Block RAM on a 7-series fabric: a `RAMB18E1` placed on one half of a
-//! `BRAM_L` or `BRAM_R` tile, configured, and given a value on every input
-//! the design leaves alone.
+//! `BRAM_L` or `BRAM_R` tile, or a `RAMB36E1` on both, configured, and given
+//! a value on every input the design leaves alone.
 //!
 //! # What reaches the frames, and from where
 //!
 //! | Piece | Where it comes from | Checked or quoted |
 //! |---|---|---|
-//! | which bit is `INIT_xx[n]` | `segbits_bram_l.block_ram.db`, prjxray fuzzer `026-bram-data` | quoted: the fuzzer gave Vivado random 256-bit `INIT_xx` values (`val & (1 << bit)`) and solved for the bits. The generic `ConfigEntry::Param` path carries it; no code here touches it |
+//! | which bit is `INIT_xx[n]` | `segbits_bram_l.block_ram.db`, prjxray fuzzer `026-bram-data` | quoted: the fuzzer gave Vivado random 256-bit `INIT_xx` values (`val & (1 << bit)`) and solved for the bits. The generic `ConfigEntry::Param` path carries it; no code here touches it. **Checked** since against Vivado's bitstreams of random contents, every bit, in `tests/fpga_xray_bram_vivado.rs`, and a `RAMB36E1`'s ([`ramb36_param_of`]) too |
 //! | which half is `RAMB18_Y0` | prjxray `segmaker.py`'s `name_bram18` (even site `Y`) | quoted, and consistent with the contents bits' word positions; see `sites::block_ram_half` |
-//! | the mode features ([`mode_features`]) | nextpnr-xilinx `fasm.cc`, `write_bram_half` | quoted: the feature *names* are the database's, *which ones* a `RAMB18E1` turns on is nextpnr's choice, read from its source |
-//! | which tile wire is which site pin ([`bel_pins`]) | the wire names of `ppips_bram_l.db` (`BRAM_FIFO18_ADDRARDADDR0`), and nextpnr-xilinx `pack.cc` for which cell port reaches which site pin (`WEA[0]` to `WEA0` and `WEA1`) | quoted |
-//! | what an input nobody drives reads ([`TiePolicy`]) | `ppips_int_l.db`'s `default` lines: every `IMUX`, `BYP_ALT` and `FAN_ALT` reads `VCC_WIRE` unless a pip drives it | the database's statement; how it behaves on silicon is unverified |
+//! | the mode features ([`mode_features_in`], [`ramb36_features`]) | the legacy model: nextpnr-xilinx `fasm.cc`, `write_bram_half`, quoted. The Vivado model: Vivado's bitstreams of a cell named with each parameter | **checked**, `testdata/fpga/vivado/bram/`; nextpnr's order of `ZINIT` was not Vivado's, nor its `ZINV_REGCLK` |
+//! | which tile wire is which site pin ([`bel_pins_in`], [`ramb36_pins`], [`write_enable_lanes`]) | the wire names of `ppips_bram_l.db` (`BRAM_FIFO18_ADDRARDADDR0`); for the legacy model nextpnr-xilinx `pack.cc`, quoted, and for the Vivado model Vivado's own report of the site pins each cell pin reaches | **checked** for the Vivado model, net by net |
+//! | what an input nobody drives reads ([`TiePolicy`]) | `ppips_int_l.db`'s `default` lines: every `IMUX`, `BYP_ALT` and `FAN_ALT` reads `VCC_WIRE` unless a pip drives it | the database's statement; how it behaves on silicon is unverified. Vivado relies on it: an input it gives `<const1>` has no pip |
 //!
 //! Nothing here has run on a part.
 //!
@@ -86,6 +86,7 @@ use std::error::Error;
 use std::fmt;
 
 use super::XrayFabric;
+use super::lutram::LutRamModel;
 use super::parse::{Ppip, PpipKind};
 use crate::fpga::arch::{Arch, ConfigBit, NodeId, PipId, RoutingGraph};
 use crate::fpga::bitstream::{Bitstream, param_bit};
@@ -94,8 +95,12 @@ use crate::fpga::route::Routing;
 use crate::ir::{AttrValue, Design, ModuleId};
 use crate::logic::Bit;
 
-/// The primitive this module configures.
-const PRIMITIVE: &str = "RAMB18E1";
+/// Whether this module configures a cell of `primitive`: a `RAMB18E1` on
+/// one half of a tile, or a `RAMB36E1` on both, which only
+/// [`LutRamModel::Vivado`] has a bel for ([`ramb36_pins`]).
+fn is_block_ram(primitive: &str) -> bool {
+    matches!(primitive, "RAMB18E1" | "RAMB36E1")
+}
 
 /// The wire prefix of one half of a block RAM tile: `RAMB18_Y0` is the
 /// lower, `FIFO18E1`-typed site and its wires are `BRAM_FIFO18_*`;
@@ -127,8 +132,11 @@ fn wire_prefix(tile_type: &str, prefix: &str) -> Option<&'static str> {
 /// looser rule would misread interconnect wires.
 ///
 /// `RAMB36` is the same shape and is deliberately not here: its seven
-/// features configure the two halves as one 36 kbit block, and nothing
-/// places a `RAMB36E1`.
+/// features configure the two halves as one 36 kbit block and are read by
+/// name ([`ramb36_features`]), and the Vivado model's `RAMB36E1` bel is built
+/// apart (`parse::bels_of`). Making it a site would change every legacy
+/// fabric's graph, which a legacy build must not see; its features are left
+/// out of the arcs instead (`NOT_ARCS`).
 ///
 /// The XADC is here too, though not a block RAM: its features are this
 /// flow's own (`xadc::derived_features`, `XADC.INIT_41[13]`), named in the
@@ -210,9 +218,33 @@ const TIE_ONLY: &str = "tie_";
 /// block's address bits, of which the half's bit 0 is the block's bit 1.
 /// That is `ppips_bram_l.db`'s statement and nothing here depends on it:
 /// the pin is named, the wiring behind it is the database's.
+#[cfg(test)]
 pub(super) fn bel_pins(tile_type: &str, prefix: &str) -> Vec<(String, String)> {
+    bel_pins_in(tile_type, prefix, LutRamModel::Legacy)
+}
+
+/// [`bel_pins`] for a fabric whose block RAMs are `model`'s.
+///
+/// [`LutRamModel::Vivado`] names every write-enable site pin on its own,
+/// `p0_we0` to `p0_we3` for `WEA0` to `WEA3` and `p1_we0` to `p1_we7` for
+/// `WEBWE0` to `WEBWE7`, because which cell bit reaches which of them
+/// depends on the cell's widths: [`write_enable_lanes`] says how, as Vivado
+/// wired them, and [`XrayFabric::spread_block_ram_pins`] makes the
+/// netlist say the same. It also names the output register's clock enable
+/// and reset as the cell's own pins, `p0_regce` and `p0_rstreg`, which a
+/// cell named with `DOA_REG` drives; the legacy names are tie-only.
+pub(super) fn bel_pins_in(
+    tile_type: &str,
+    prefix: &str,
+    model: LutRamModel,
+) -> Vec<(String, String)> {
     let Some(wires) = wire_prefix(tile_type, prefix) else {
         return Vec::new();
+    };
+    let own = if model == LutRamModel::Vivado {
+        ""
+    } else {
+        TIE_ONLY
     };
     let mut out = Vec::new();
     let mut pin = |role: String, site_pin: String| out.push((role, format!("{wires}_{site_pin}")));
@@ -236,8 +268,23 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str) -> Vec<(String, String)> {
                 format!("{}{i}", side.addr_tie),
             );
         }
-        pin(format!("{TIE_ONLY}{p}regce"), side.regce.to_owned());
-        pin(format!("{TIE_ONLY}{p}rstreg"), side.rstreg.to_owned());
+        pin(format!("{own}{p}regce"), side.regce.to_owned());
+        pin(format!("{own}{p}rstreg"), side.rstreg.to_owned());
+    }
+    if model == LutRamModel::Vivado {
+        // The output registers' clocks, which a cell has no port for:
+        // Vivado routes the port's clock to them with `DO<x>_REG` and a one
+        // without (`b18_doreg`'s `CLKARDCLK` reaches `RDCLK` and `RDRCLK`).
+        // See [`XrayFabric::spread_block_ram_pins`].
+        pin("p0_regclk".to_owned(), "REGCLKARDRCLK".to_owned());
+        pin("p1_regclk".to_owned(), "REGCLKB".to_owned());
+        for i in 0..4 {
+            pin(format!("p0_we{i}"), format!("WEA{i}"));
+        }
+        for i in 0..8 {
+            pin(format!("p1_we{i}"), format!("WEBWE{i}"));
+        }
+        return out;
     }
     pin("p0_we0".to_owned(), "WEA0".to_owned());
     pin("p0_we0".to_owned(), "WEA1".to_owned());
@@ -256,6 +303,202 @@ pub(super) fn bel_pins(tile_type: &str, prefix: &str) -> Vec<(String, String)> {
 /// The output roles: everything else a block RAM bel has is an input.
 fn is_output(role: &str) -> bool {
     role.contains("_dout")
+        || role.ends_with("_dbiterr")
+        || role.ends_with("_sbiterr")
+        || role.contains("_eccparity")
+        || role.contains("_rdaddrecc")
+}
+
+/// The pins of the `RAMB36E1` bel of a `BRAM_L` or `BRAM_R` tile, as
+/// `(role, tile wire)`, or `None` for another tile type.
+///
+/// **Vivado's**, read off its own cells (`testdata/fpga/vivado/bram/`'s
+/// `b36_*`, `get_site_pins -of` each cell pin) and the site pins' wires off
+/// the tile type's site description, which names each `BRAM_FIFO36_<pin>`:
+///
+/// - A word's even bits are the lower half's and its odd bits the upper's:
+///   `DIADI[2k]` is `DIADIL<k>` and `DIADI[2k+1]` is `DIADIU<k>`, and so are
+///   `DOADO`, the parity bits (`DIPADIP[2k]` is `DIPADIPL<k>`) and port B's.
+/// - An address bit reaches both halves, `ADDRARDADDR[i]` on
+///   `ADDRARDADDRL<i>` and `ADDRARDADDRU<i>`, except bit 15, which only the
+///   lower half has and which only a cascade reads: Vivado ties it high.
+/// - A clock, an enable, a reset and a clock enable reach both halves
+///   (`CLKARDCLKL`, `CLKARDCLKU`), and so does each output register's
+///   clock (`REGCLKARDRCLKL`, `REGCLKARDRCLKU`), which the cell has no port
+///   for: [`XrayFabric::spread_block_ram_pins`].
+/// - Each half has its own write enables, `p0_we0` to `p0_we3` the lower
+///   half's `WEAL0` to `WEAL3` and `p0_we4` to `p0_we7` the upper's, and
+///   `p1_we0` to `p1_we15` likewise over `WEBWEL0` to `WEBWEU7`;
+///   [`write_enable_lanes`] says which cell bit each carries.
+///
+/// The tile wires behind them are the halves' own: `BRAM_FIFO36_DIADIL0`
+/// and `BRAM_FIFO18_DIADI0` both hang off `BRAM_IMUX16_1`, in the
+/// database's `tile_type_BRAM_L.json`. The cascade and the error-correction
+/// pins are not here: nothing here builds either.
+pub(super) fn ramb36_pins(tile_type: &str) -> Option<Vec<(String, String)>> {
+    if tile_type != "BRAM_L" && tile_type != "BRAM_R" {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut pin = |role: String, site_pin: String| {
+        out.push((role, format!("BRAM_FIFO36_{site_pin}")));
+    };
+    let both = |name: &str| [format!("{name}L"), format!("{name}U")];
+    for (port, side) in SIDES.iter().enumerate() {
+        let p = format!("p{port}_");
+        for (role, name) in [
+            ("clk", side.clk),
+            ("en", side.en),
+            ("regce", side.regce),
+            ("rstreg", side.rstreg),
+        ] {
+            for site_pin in both(name) {
+                pin(format!("{p}{role}"), site_pin);
+            }
+        }
+        // `RSTRAMARSTRAM`'s lower pin is spelled `...LRST`.
+        let (low, high) = match port {
+            0 => ("RSTRAMARSTRAMLRST", "RSTRAMARSTRAMU"),
+            _ => ("RSTRAMBL", "RSTRAMBU"),
+        };
+        let regclk = if port == 0 {
+            "REGCLKARDRCLK"
+        } else {
+            "REGCLKB"
+        };
+        for site_pin in both(regclk) {
+            pin(format!("{p}regclk"), site_pin);
+        }
+        pin(format!("{p}rst"), low.to_owned());
+        pin(format!("{p}rst"), high.to_owned());
+        for i in 0..16 {
+            pin(format!("{p}addr{i}"), format!("{}L{i}", side.addr));
+            if i < 15 {
+                pin(format!("{p}addr{i}"), format!("{}U{i}", side.addr));
+            }
+        }
+        for j in 0..32 {
+            let half = if j % 2 == 0 { 'L' } else { 'U' };
+            pin(format!("{p}din{j}"), format!("{}{half}{}", side.din, j / 2));
+            pin(
+                format!("{p}dout{j}"),
+                format!("{}{half}{}", side.dout, j / 2),
+            );
+        }
+        for j in 0..4 {
+            let half = if j % 2 == 0 { 'L' } else { 'U' };
+            pin(
+                format!("{p}dinp{j}"),
+                format!("{}{half}{}", side.dinp, j / 2),
+            );
+            pin(
+                format!("{p}doutp{j}"),
+                format!("{}{half}{}", side.doutp, j / 2),
+            );
+        }
+    }
+    for i in 0..8 {
+        let half = if i < 4 { 'L' } else { 'U' };
+        pin(format!("p0_we{i}"), format!("WEA{half}{}", i % 4));
+    }
+    for i in 0..16 {
+        let half = if i < 8 { 'L' } else { 'U' };
+        pin(format!("p1_we{i}"), format!("WEBWE{half}{}", i % 8));
+    }
+    // The error correction's pins, on the site's own (Vivado's
+    // `ramb36e1_probe`: `RDADDRECC[i]` on `RDCOUNT<i>`). Nothing here turns
+    // the correction on, and these are pins a design may connect anyway.
+    for name in ["DBITERR", "SBITERR", "INJECTDBITERR", "INJECTSBITERR"] {
+        pin(format!("p0_{}", name.to_lowercase()), name.to_owned());
+    }
+    for i in 0..8 {
+        pin(format!("p0_eccparity{i}"), format!("ECCPARITY{i}"));
+    }
+    for i in 0..9 {
+        pin(format!("p0_rdaddrecc{i}"), format!("RDCOUNT{i}"));
+    }
+    Some(out)
+}
+
+/// Which bit of a block RAM cell's write enable each of its site's write
+/// enable pins carries, in the order of the Vivado model's roles
+/// (`p0_we0`, `p0_we1`, ...): `Some(k)` for the cell's bit `k`, `None` for
+/// a pin held low. `port` is 0 for `WEA` and 1 for `WEBWE`.
+///
+/// **Vivado's**, read off its cells in `testdata/fpga/vivado/bram/`
+/// (`get_site_pins -of` each `WEA[k]`), for every width it was given:
+///
+/// | cell, port | width written | the site's pins |
+/// |---|---|---|
+/// | `RAMB18E1`, either, `TDP` | 18 | `WE*0`, `WE*1` bit 0; `WE*2`, `WE*3` bit 1 |
+/// | `RAMB18E1`, either, `TDP` | 9 or less | all four bit 0 |
+/// | `RAMB18E1`, B | any but `SDP` 36 | `WEBWE4` to `WEBWE7` low |
+/// | `RAMB18E1`, B, `SDP` | 36 | `WEBWE<2k>`, `WEBWE<2k+1>` bit `k` |
+/// | `RAMB18E1`, A, `SDP` | — | all low |
+/// | `RAMB36E1`, either | 36 | `WE*L<k>`, `WE*U<k>` bit `k` |
+/// | `RAMB36E1`, either | 18 | `L0`, `L2`, `U0`, `U2` bit 0; the odd ones bit 1 |
+/// | `RAMB36E1`, either | 9 or less | all eight bit 0 |
+/// | `RAMB36E1`, B | any but `SDP` 72 | `WEBWEL4` to `L7`, `U4` to `U7` low |
+/// | `RAMB36E1`, B, `SDP` | 72 | `WEBWEL<k>`, `WEBWEU<k>` bit `k` |
+///
+/// The pins held low are the ones `docs/fpga-vivado-parity.md` found
+/// Vivado grounding (`GNDTerm`) where Reticle had routed a signal through
+/// them: in `TDP` nothing reads `WEBWE[7:4]`, on UG473's word, **quoted**,
+/// and Vivado grounds them anyway.
+pub fn write_enable_lanes(
+    primitive: &str,
+    port: usize,
+    params: &dyn Fn(&str) -> Option<AttrValue>,
+) -> Vec<Option<u32>> {
+    let sdp = matches!(params("RAM_MODE"), Some(AttrValue::String(m)) if m == "SDP");
+    let suffix = if port == 0 { 'A' } else { 'B' };
+    let width = params(&format!("WRITE_WIDTH_{suffix}"))
+        .and_then(|v| v.as_int())
+        .unwrap_or(0);
+    let wide36 = primitive == "RAMB36E1";
+    let pins = match (wide36, port) {
+        (false, 0) => 4,
+        (false, _) => 8,
+        (true, 0) => 8,
+        (true, _) => 16,
+    };
+    if sdp && port == 0 {
+        return vec![None; pins];
+    }
+    let mut out = vec![None; pins];
+    if wide36 {
+        // The lower half's lanes, then the upper's alike.
+        let half = pins / 2;
+        let (lower, upper) = out.split_at_mut(half);
+        let bytes = match width {
+            36 => 4,
+            18 => 2,
+            _ => 1,
+        };
+        let used = if sdp && width == 72 { half } else { 4 };
+        for (i, (low, high)) in lower
+            .iter_mut()
+            .zip(upper.iter_mut())
+            .take(used)
+            .enumerate()
+        {
+            let bit = if sdp && width == 72 { i } else { i % bytes };
+            *low = Some(u32::try_from(bit).unwrap_or(0));
+            *high = *low;
+        }
+        return out;
+    }
+    if sdp && width == 36 {
+        for (i, lane) in out.iter_mut().enumerate() {
+            *lane = Some(u32::try_from(i / 2).unwrap_or(0));
+        }
+        return out;
+    }
+    let bytes = if width == 18 { 2 } else { 1 };
+    for (i, lane) in out.iter_mut().take(4).enumerate() {
+        *lane = Some(u32::try_from(i * bytes / 4).unwrap_or(0));
+    }
+    out
 }
 
 /// What an input the netlist leaves unconnected is made to read.
@@ -438,9 +681,19 @@ fn address_low_bit(width: i64) -> u32 {
 pub fn tie_policy(role: &str) -> TiePolicy {
     let bare = role.strip_prefix(TIE_ONLY).unwrap_or(role);
     let kind = bare.split_once('_').map_or(bare, |(_, k)| k);
-    if kind.starts_with("addrtie") {
+    if kind.starts_with("addrtie") || kind == "addr15" || kind == "regclk" {
+        // `ADDRARDADDR[15]` exists only on a `RAMB36E1` and only a cascade
+        // reads it; Vivado ties it high, and refuses a block whose bit 15
+        // is low outside a cascade. An output register's clock pin, which
+        // only the Vivado model has, is a one when nothing clocks it, as
+        // Vivado makes it: see `XrayFabric::spread_block_ram_pins`, which
+        // gives a netlist the pin, and which a flow that skips it does
+        // without.
         TiePolicy::One
-    } else if kind == "clk" || kind == "regce" {
+    } else if kind == "clk" || kind == "regce" || kind.starts_with("inject") {
+        // A `RAMB36E1`'s error injection, which only the correction reads:
+        // Vivado leaves both pins unconnected on a block it infers
+        // (`ib_1024x36`), and grounds them only when a design ties them.
         TiePolicy::Leave
     } else if kind.starts_with("din") {
         TiePolicy::Idle
@@ -461,6 +714,14 @@ pub fn tie_policy(role: &str) -> TiePolicy {
         // the Xilinx library's statement (UG473: in TDP, `WEBWE[3:0]` is
         // used and `WEBWE[7:4]` is not) and nextpnr's own, **quoted**: no
         // instrument here has measured what a one on one of them does.
+        //
+        // That is the legacy model. The Vivado model has no tie-only write
+        // enable: `WEBWE4` to `WEBWE7` are lanes of their own
+        // ([`write_enable_lanes`]), held low in `TDP` as Vivado holds them,
+        // with their wires closed to the router
+        // ([`XrayFabric::block_ram_ground_fans`]), since a signal walked
+        // through one is a signal on the pin, which Vivado's router refused
+        // in Reticle's routes of `bram_fifo` and `lutram32`.
         TiePolicy::Idle
     } else {
         TiePolicy::Zero
@@ -599,66 +860,170 @@ const INVERTIBLE: [&str; 10] = [
     "RSTREGB",
 ];
 
+/// The pins of a block RAM's site with an inverter that the Vivado model
+/// holds low through it, and the roles of the netlist that reach them:
+/// `p0_rst` is `RSTRAMARSTRAM`, `p1_en` is `ENBWREN`.
+const INVERTED_LOW: [(&str, &str); 8] = [
+    ("p0_rst", "RSTRAMARSTRAM"),
+    ("p1_rst", "RSTRAMB"),
+    ("p0_rstreg", "RSTREGARSTREG"),
+    ("p1_rstreg", "RSTREGB"),
+    ("p0_en", "ENARDEN"),
+    ("p1_en", "ENBWREN"),
+    ("p0_clk", "CLKARDCLK"),
+    ("p1_clk", "CLKBWRCLK"),
+];
+
+/// The resets, enables and clocks of one block RAM that the Vivado model
+/// holds low through their inverter, by site pin name: each one the netlist
+/// leaves unconnected or ties to zero, unless the cell inverts it already.
+/// None in the legacy model, which grounds them.
+///
+/// **Vivado's**: on every inferred block of `testdata/fpga/vivado/bram/`
+/// the four resets are on its `<const0>` net, and its bitstream has them on
+/// `CTRL0`, from `BYP_BOUNCE4`, which nothing drives and which reads
+/// `VCC_WIRE`, with all four `ZINV_RST*` clear: a one, inverted. So does
+/// this ([`tie`] makes a one through a pip when nothing behind the pin
+/// defaults to one), which spends no ground fan on a reset. A port nothing
+/// clocks or enables is the same to Vivado: given Reticle's netlist of
+/// `ib_1024x32_bytes`, whose port B neither, it clears `ZINV_CLKBWRCLK` and
+/// `ZINV_ENBWREN` and gives both pins a one (`CLK0.FAN_BOUNCE5`). What an
+/// inverted one on a part reads is UG473's word and `ZINV`'s name, quoted.
+fn held_by_inversion(
+    model: LutRamModel,
+    params: &dyn Fn(&str) -> Option<AttrValue>,
+    instance: &crate::fpga::place::Instance,
+    netlist: &Netlist,
+) -> Vec<&'static str> {
+    if model != LutRamModel::Vivado {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (role, pin) in INVERTED_LOW {
+        let driven = instance.pins.iter().map(|p| &netlist.pins[*p]).any(|p| {
+            p.role == role && (p.signal.is_some() || p.constant.is_some_and(|b| b != Bit::Zero))
+        });
+        let inverted = params(&format!("IS_{pin}_INVERTED"))
+            .and_then(|v| v.as_int())
+            .unwrap_or(0)
+            == 1;
+        if !driven && !inverted {
+            out.push(pin);
+        }
+    }
+    out
+}
+
 /// The mode features a `RAMB18E1` with these parameters turns on, without
-/// the site prefix, in the order nextpnr-xilinx's `write_bram_half`
-/// writes them.
+/// the site prefix, as the legacy model writes them: [`mode_features_in`]
+/// with [`LutRamModel::Legacy`].
+///
+/// # Errors
+///
+/// As [`mode_features_in`].
+pub fn mode_features(params: &dyn Fn(&str) -> Option<AttrValue>) -> Result<Vec<String>, String> {
+    mode_features_in(params, LutRamModel::Legacy, &[])
+}
+
+/// The mode features a `RAMB18E1` with these parameters turns on, without
+/// the site prefix.
 ///
 /// | Feature | When |
 /// |---|---|
 /// | `IN_USE` | always |
 /// | `READ_WIDTH_A_<w>` and the three like it | the parameter is not 0; `w` is 1, 2, 4, 9 or 18 |
+/// | `SDP_READ_WIDTH_36`, `SDP_WRITE_WIDTH_36` | `RAM_MODE` is `SDP` and the width 36: with `READ_WIDTH_B_18` for a read, `WRITE_WIDTH_A_18` and `WRITE_WIDTH_B_18` for a write |
 /// | `DOA_REG`, `DOB_REG` | the parameter is 1 |
-/// | `ZINV_<pin>` | `IS_<pin>_INVERTED` is not 1 |
-/// | `WRITE_MODE_A_READ_FIRST` / `_NO_CHANGE` | that mode; `WRITE_FIRST` is no bit |
-/// | `ZINIT_A[i]`, `ZINIT_B[i]`, `ZSRVAL_A[i]`, `ZSRVAL_B[i]` | bit `i` of `INIT_A` (...) is **0**; nextpnr writes all eighteen of each, because it never sets those parameters |
+/// | `ZINV_<pin>` | `IS_<pin>_INVERTED` is not 1 and `held` does not name the pin; `REGCLK<x>` only beside its output register |
+/// | `WRITE_MODE_A_READ_FIRST` / `_NO_CHANGE` | that mode; `WRITE_FIRST` is no bit, but in `SDP` is `NO_CHANGE` |
+/// | `RSTREG_PRIORITY_<x>_REGCE` | that priority |
+/// | `RDADDR_COLLISION_HWCONFIG_PERFORMANCE` | that |
+/// | `ZINIT_A[17 - i]`, `ZINIT_B`, `ZSRVAL_A`, `ZSRVAL_B` | bit `i` of `INIT_A` (...) is **0** |
+///
+/// **Vivado's answers** (`testdata/fpga/vivado/bram/`, decoded from its
+/// bitstreams of a cell named with each parameter): this was nextpnr-xilinx's
+/// `write_bram_half`, quoted, and three things of it were not what Vivado
+/// writes. `ZINIT_A[j]` is bit `17 - j` of `INIT_A`, the register's top bit
+/// first, not bit `j`: invisible until a value is not all zeros, which no
+/// inferred memory has. `ZINV_REGCLK<x>` is set only with its port's output
+/// register. And `SDP` exists. The legacy model keeps nextpnr's `REGCLK` rule,
+/// since it changes bits of every block RAM; the other two never did.
+///
+/// `held` names the resets the Vivado model holds low **through their
+/// inverter**: a `VCC` on the pin and `ZINV` clear, as Vivado does for a
+/// reset the design ties low. See `held_by_inversion`.
 ///
 /// The contents are not here: they are ordinary indexed features and the
 /// generic path carries them.
 ///
 /// # Errors
 ///
-/// A message for a mode this does not describe: `RAM_MODE` other than
-/// `TDP` (the 36-bit simple-dual-port mode needs `SDP_*` features this
-/// has not been given), a width that is not 0, 1, 2, 4, 9 or 18, or a
+/// A message for a mode this does not describe: `RAM_MODE` other than `TDP`
+/// or `SDP`, a width that is not 0, 1, 2, 4, 9, 18 or (in `SDP`) 36, or a
 /// write mode that is not one of the three.
-pub fn mode_features(params: &dyn Fn(&str) -> Option<AttrValue>) -> Result<Vec<String>, String> {
+pub fn mode_features_in(
+    params: &dyn Fn(&str) -> Option<AttrValue>,
+    model: LutRamModel,
+    held: &[&str],
+) -> Result<Vec<String>, String> {
     let mut out = vec!["IN_USE".to_owned()];
-    if let Some(mode) = params("RAM_MODE") {
-        let AttrValue::String(mode) = &mode else {
-            return Err("`RAM_MODE` is not a string".to_owned());
-        };
-        if mode != "TDP" {
+    let sdp = match params("RAM_MODE") {
+        None => false,
+        Some(AttrValue::String(mode)) if mode == "TDP" => false,
+        Some(AttrValue::String(mode)) if mode == "SDP" => true,
+        Some(AttrValue::String(mode)) => {
             return Err(format!(
-                "`RAM_MODE` is \"{mode}\"; only \"TDP\" is described for this fabric"
+                "`RAM_MODE` is \"{mode}\"; \"TDP\" and \"SDP\" are described for this fabric"
             ));
         }
-    }
+        Some(_) => return Err("`RAM_MODE` is not a string".to_owned()),
+    };
+    let width = |name: &str| params(name).and_then(|v| v.as_int()).unwrap_or(0);
     for name in [
         "READ_WIDTH_A",
         "READ_WIDTH_B",
         "WRITE_WIDTH_A",
         "WRITE_WIDTH_B",
     ] {
-        let width = params(name).and_then(|v| v.as_int()).unwrap_or(0);
-        match width {
+        match width(name) {
             0 => {}
-            1 | 2 | 4 | 9 | 18 => out.push(format!("{name}_{width}")),
+            1 | 2 | 4 | 9 | 18 => out.push(format!("{name}_{}", width(name))),
+            36 if sdp && name == "READ_WIDTH_A" => {
+                out.push("SDP_READ_WIDTH_36".to_owned());
+                out.push("READ_WIDTH_B_18".to_owned());
+            }
+            36 if sdp && name == "WRITE_WIDTH_B" => {
+                out.push("SDP_WRITE_WIDTH_36".to_owned());
+                out.push("WRITE_WIDTH_A_18".to_owned());
+                out.push("WRITE_WIDTH_B_18".to_owned());
+            }
             other => {
                 return Err(format!(
-                    "`{name}` is {other}; the widths described are 1, 2, 4, 9 and 18"
+                    "`{name}` is {other}; the widths described are 1, 2, 4, 9, 18 and, read on \
+                     port A or written on port B in SDP, 36"
                 ));
             }
         }
     }
-    for name in ["DOA_REG", "DOB_REG"] {
+    let mut registered = [false; 2];
+    for (at, name) in ["DOA_REG", "DOB_REG"].into_iter().enumerate() {
         if params(name).and_then(|v| v.as_int()).unwrap_or(0) == 1 {
             out.push(name.to_owned());
+            registered[at] = true;
         }
     }
     for pin in INVERTIBLE {
         let inverted = params(&format!("IS_{pin}_INVERTED"))
             .and_then(|v| v.as_int())
             .unwrap_or(0);
+        let register = match pin {
+            "REGCLKARDRCLK" => Some(registered[0]),
+            "REGCLKB" => Some(registered[1]),
+            _ => None,
+        };
+        if (model == LutRamModel::Vivado && register == Some(false)) || held.contains(&pin) {
+            continue;
+        }
         if inverted != 1 {
             out.push(format!("ZINV_{pin}"));
         }
@@ -670,10 +1035,30 @@ pub fn mode_features(params: &dyn Fn(&str) -> Option<AttrValue>) -> Result<Vec<S
             Some(_) => return Err(format!("`{name}` is not a string")),
         };
         match mode.as_str() {
+            "WRITE_FIRST" if sdp => out.push(format!("{name}_NO_CHANGE")),
             "WRITE_FIRST" => {}
             "READ_FIRST" | "NO_CHANGE" => out.push(format!("{name}_{mode}")),
             other => return Err(format!("`{name}` is \"{other}\"")),
         }
+    }
+    for (name, feature) in [
+        ("RSTREG_PRIORITY_A", "RSTREG_PRIORITY_A_REGCE"),
+        ("RSTREG_PRIORITY_B", "RSTREG_PRIORITY_B_REGCE"),
+    ] {
+        match params(name) {
+            Some(AttrValue::String(s)) if s == "REGCE" => out.push(feature.to_owned()),
+            Some(AttrValue::String(s)) if s == "RSTREG" => {}
+            None => {}
+            Some(other) => return Err(format!("`{name}` is {other:?}")),
+        }
+    }
+    match params("RDADDR_COLLISION_HWCONFIG") {
+        Some(AttrValue::String(s)) if s == "PERFORMANCE" => {
+            out.push("RDADDR_COLLISION_HWCONFIG_PERFORMANCE".to_owned());
+        }
+        Some(AttrValue::String(s)) if s == "DELAYED_WRITE" => {}
+        None => {}
+        Some(other) => return Err(format!("`RDADDR_COLLISION_HWCONFIG` is {other:?}")),
     }
     for (feature, param) in [
         ("ZINIT_A", "INIT_A"),
@@ -684,11 +1069,139 @@ pub fn mode_features(params: &dyn Fn(&str) -> Option<AttrValue>) -> Result<Vec<S
         let value = params(param);
         for i in 0..18u32 {
             if !param_bit(value.as_ref(), i) {
-                out.push(format!("{feature}[{i}]"));
+                out.push(format!("{feature}[{}]", 17 - i));
             }
         }
     }
     Ok(out)
+}
+
+/// The features a `RAMB36E1` with these parameters turns on, each with its
+/// prefix: `RAMB18_Y0.` and `RAMB18_Y1.` for the two halves it is, and
+/// `RAMB36.` for its own.
+///
+/// **Vivado's answers**, decoded from its bitstreams of a cell named with
+/// each parameter (`testdata/fpga/vivado/bram/`):
+///
+/// - Each half is a `RAMB18E1` half as wide: a port 36 wide is 18 on each, 18
+///   is 9, 9 is 4, 4 is 2, and 2 and 1 are 1. A port 9 or 1 wide also sets
+///   `RAMB36.BRAM36_<width>_1`.
+/// - In `SDP`, 72 wide, each half is 36 wide in `SDP` with all four of its
+///   widths 18.
+/// - The rest is each half's, set alike on both: registers, inversions, write
+///   modes, priorities.
+/// - A word's even bits are the lower half's and its odd bits the upper's:
+///   bit `2k` of `INIT_A` (36 bits, parity on top) is bit `k` of the lower
+///   half's (18 bits), and bit `2k + 1` the upper half's. The contents are
+///   the same: bit `2k` of the flat contents, `INIT_00` bit 0 first, is the
+///   lower half's bit `k` (`ramb36_param_of`). Checked on `b36_srval`'s
+///   four values and on `b36_w36`'s random contents, every bit.
+///
+/// `held` is as [`mode_features_in`]'s, for both halves.
+///
+/// # Errors
+///
+/// As [`mode_features_in`], and for a width a `RAMB36E1` does not have.
+pub fn ramb36_features(
+    params: &dyn Fn(&str) -> Option<AttrValue>,
+    model: LutRamModel,
+    held: &[&str],
+) -> Result<Vec<String>, String> {
+    let sdp = matches!(params("RAM_MODE"), Some(AttrValue::String(m)) if m == "SDP");
+    let mut own = Vec::new();
+    let mut half: BTreeMap<String, AttrValue> = BTreeMap::new();
+    for name in [
+        "READ_WIDTH_A",
+        "READ_WIDTH_B",
+        "WRITE_WIDTH_A",
+        "WRITE_WIDTH_B",
+    ] {
+        let width = params(name).and_then(|v| v.as_int()).unwrap_or(0);
+        let narrow = match width {
+            0 => 0,
+            72 if sdp && (name == "READ_WIDTH_A" || name == "WRITE_WIDTH_B") => 36,
+            36 => 18,
+            18 => 9,
+            9 => 4,
+            4 => 2,
+            2 | 1 => 1,
+            other => return Err(format!("`{name}` is {other} for a RAMB36E1")),
+        };
+        if matches!(width, 9 | 1) {
+            own.push(format!("RAMB36.BRAM36_{name}_1"));
+        }
+        if narrow != 0 {
+            half.insert(name.to_owned(), AttrValue::Int(narrow));
+        }
+    }
+    // A word's bits alternate between the halves.
+    let split = |name: &str, lower: bool| -> Option<AttrValue> {
+        let value = params(name)?;
+        let mut bits = Vec::with_capacity(18);
+        for k in 0..18u32 {
+            let at = if lower { 2 * k } else { 2 * k + 1 };
+            bits.push(if param_bit(Some(&value), at) {
+                crate::logic::Bit::One
+            } else {
+                crate::logic::Bit::Zero
+            });
+        }
+        Some(AttrValue::Const(crate::ir::Const::from_bits(&bits)))
+    };
+    let mut out = own;
+    for (prefix, lower) in [("RAMB18_Y0", true), ("RAMB18_Y1", false)] {
+        let one = |name: &str| -> Option<AttrValue> {
+            if let Some(v) = half.get(name) {
+                return Some(v.clone());
+            }
+            if matches!(name, "INIT_A" | "INIT_B" | "SRVAL_A" | "SRVAL_B") {
+                return split(name, lower);
+            }
+            if name.starts_with("READ_WIDTH") || name.starts_with("WRITE_WIDTH") {
+                return None;
+            }
+            params(name)
+        };
+        for feature in mode_features_in(&one, model, held)? {
+            out.push(format!("{prefix}.{feature}"));
+        }
+        // Read 72 wide, each half is read 36 wide in `SDP`, and Vivado sets
+        // its port A's 18 beside it, which a `RAMB18E1` read 36 wide does
+        // not have (`b36_sdp72` against `b18_sdp36`).
+        if sdp && params("READ_WIDTH_A").and_then(|v| v.as_int()) == Some(72) {
+            out.push(format!("{prefix}.READ_WIDTH_A_18"));
+        }
+    }
+    Ok(out)
+}
+
+/// The bel name of a tile's `RAMB36E1`, and the kind of site it is.
+pub(super) const RAMB36_BEL: &str = "RAMB36";
+/// See [`RAMB36_BEL`]: not `bram`, so that a `RAMB18E1` is never put on it.
+pub(super) const RAMB36_KIND: &str = "bram36";
+
+/// The `RAMB36E1` parameter bit a half's contents bit is: bit `k` of a
+/// half's flat contents is bit `2k` of the whole's for the lower half and
+/// `2k + 1` for the upper (see [`ramb36_features`]). `half` is the feature prefix (`RAMB18_Y1`), `name`
+/// and `index` the half's parameter bit (`INIT_3F`, 255). `None` for
+/// anything that is not contents.
+pub(super) fn ramb36_param_of(half: &str, name: &str, index: u32) -> Option<(String, u32)> {
+    let odd = match half {
+        "RAMB18_Y0" => 0,
+        "RAMB18_Y1" => 1,
+        _ => return None,
+    };
+    let (kind, row) = if let Some(row) = name.strip_prefix("INITP_") {
+        ("INITP_", row)
+    } else {
+        ("INIT_", name.strip_prefix("INIT_")?)
+    };
+    if row.len() != 2 {
+        return None;
+    }
+    let row = u32::from_str_radix(row, 16).ok()?;
+    let flat = 2 * (row * 256 + index) + odd;
+    Some((format!("{kind}{:02X}", flat / 256), flat % 256))
 }
 
 /// What [`XrayFabric::configure_block_rams`] needs from the database,
@@ -701,6 +1214,9 @@ pub struct BlockRamTables {
     /// Tile type to the wires its `ppips` file says read `VCC_WIRE` when
     /// nothing drives them.
     pub vcc_defaults: BTreeMap<String, BTreeSet<String>>,
+    /// Whose block RAMs: Vivado's features and ties, or the legacy ones.
+    /// See [`mode_features_in`] and [`XrayFabric::configure_block_rams`].
+    pub model: LutRamModel,
 }
 
 impl BlockRamTables {
@@ -868,6 +1384,59 @@ fn fixed_chain(graph: &RoutingGraph, pin: NodeId) -> Vec<NodeId> {
     order
 }
 
+/// Whether `node` is a wire its tile type's `ppips` file says defaults to
+/// `VCC_WIRE`.
+fn reads_vcc(
+    arch: &Arch,
+    graph: &RoutingGraph,
+    vcc_defaults: &BTreeMap<String, BTreeSet<String>>,
+    node: NodeId,
+) -> bool {
+    vcc_defaults
+        .get(tile_type_of(arch, graph, node))
+        .is_some_and(|wires| wires.contains(&graph.wire(node).name))
+}
+
+/// A one for a pin whose own wires default to nothing, as Vivado makes one
+/// for a block RAM's reset: the first programmable pip into `chain` from a
+/// bounce wire whose [`fixed_chain`] reaches a wire that defaults to
+/// `VCC_WIRE` and carries nothing (`CTRL0.BYP_BOUNCE4`, `BYP_BOUNCE4` being
+/// `BYP_ALT4`'s with no switch between). The pip and that chain, or `None`.
+fn vcc_source(
+    arch: &Arch,
+    graph: &RoutingGraph,
+    vcc_defaults: &BTreeMap<String, BTreeSet<String>>,
+    used: &HashSet<NodeId>,
+    ties: &Ties,
+    chain: &[NodeId],
+) -> Option<(PipId, Vec<NodeId>)> {
+    for node in chain {
+        for pip in graph.incoming(*node) {
+            if graph.pip_bits(*pip).is_empty() {
+                continue;
+            }
+            let from = graph.pip(*pip).from;
+            if !graph.wire(from).name.contains("_BOUNCE") {
+                continue;
+            }
+            let behind = fixed_chain(graph, from);
+            if behind
+                .iter()
+                .any(|n| used.contains(n) || ties.zero.contains(n))
+            {
+                continue;
+            }
+            if behind
+                .iter()
+                .any(|n| reads_vcc(arch, graph, vcc_defaults, *n))
+            {
+                return Some((*pip, behind));
+            }
+        }
+    }
+    None
+}
+
 /// Ties one input pin's node to `value`.
 ///
 /// A zero: the first node of the pin's [`fixed_chain`] that a programmable
@@ -876,7 +1445,8 @@ fn fixed_chain(graph: &RoutingGraph, pin: NodeId) -> Vec<NodeId> {
 /// whose source is not carrying a routed signal or a one. Both pips are
 /// switched on (the `GND_WIRE` hop once per tile). A one: some node of the
 /// chain must be a wire its tile type's `ppips` file says defaults to
-/// `VCC_WIRE`, and no node of the chain may be driven by anything.
+/// `VCC_WIRE`, and no node of the chain may be driven by anything; or,
+/// when none is, one pip from such a wire ([`vcc_source`]).
 fn tie(
     arch: &Arch,
     graph: &RoutingGraph,
@@ -924,47 +1494,28 @@ fn tie(
         }
     }
     if value == Bit::One {
-        let default = chain.iter().any(|node| {
-            vcc_defaults
-                .get(tile_type_of(arch, graph, *node))
-                .is_some_and(|wires| wires.contains(&graph.wire(*node).name))
-        });
-        if !default {
-            // A `CTRL` wire has no default of its own, and Vivado gives one
-            // a hop from a bounce wire that does (`CTRL_L0.BYP_BOUNCE4`, in
-            // `dsp::sweep.txt`'s `tie_one`).
-            for node in &chain {
-                for pip in graph.incoming(*node) {
-                    if graph.pip_bits(*pip).is_empty() {
-                        continue;
-                    }
-                    let from = graph.pip(*pip).from;
-                    if !graph.wire(from).name.contains("_BOUNCE") {
-                        continue;
-                    }
-                    let behind = fixed_chain(graph, from);
-                    let reads_one = behind.iter().any(|n| {
-                        vcc_defaults
-                            .get(tile_type_of(arch, graph, *n))
-                            .is_some_and(|wires| wires.contains(&graph.wire(*n).name))
-                    });
-                    let free = behind
-                        .iter()
-                        .all(|n| !used.contains(n) && !ties.zero.contains(n));
-                    if reads_one && free {
-                        ties.pips.push(*pip);
-                        ties.one.extend(chain.iter().copied());
-                        ties.one.extend(behind);
-                        return Ok(());
-                    }
-                }
-            }
+        let default = chain
+            .iter()
+            .any(|node| reads_vcc(arch, graph, vcc_defaults, *node));
+        if default {
+            ties.one.extend(chain);
+            return Ok(());
+        }
+        // A `CTRL` wire has no default of its own, and Vivado gives one a hop
+        // from a bounce wire that does (`CTRL_L0.BYP_BOUNCE4`, in
+        // `dsp::sweep.txt`'s `tie_one`, and every block RAM's reset held
+        // through its inverter); a block RAM's register clock likewise
+        // (`CLK0.FAN_BOUNCE5`). See [`vcc_source`].
+        let Some((pip, behind)) = vcc_source(arch, graph, vcc_defaults, used, ties, &chain) else {
             return Err(format!(
-                "nothing behind `{}` defaults to VCC_WIRE, and a one has no other source here",
+                "nothing behind `{}` defaults to VCC_WIRE, and no pip reaches it from a wire \
+                 that does and that nothing drives",
                 name(pin)
             ));
-        }
+        };
+        ties.pips.push(pip);
         ties.one.extend(chain);
+        ties.one.extend(behind);
         return Ok(());
     }
     if chain.iter().any(|node| ties.zero.contains(node)) {
@@ -1007,7 +1558,253 @@ fn tie(
     ))
 }
 
+/// A `RAMB36E1` port written narrower than 18 bits, its data inputs as
+/// Vivado wires them (`b36_w1`, `b36_w9`, `b36_w4`): written one bit wide,
+/// `DI[0]` reaches both halves' first data pin and `DI[1]` nothing; nine
+/// wide, `DIP[0]` both halves' first parity pin and `DIP[1]` nothing; four,
+/// two or one wide, neither `DIP[0]` nor `DIP[1]` anything (`DIP[3:2]` stay
+/// on their pins, which those modes do not read either). A half holds every other word
+/// there, so the bit must reach the half the address picks, which is either.
+/// [`ramb36_pins`] alone would have put a one-bit port's upper half on
+/// `DI[1]`, which the cell does not read in that mode, and none of this
+/// flow's checks could see it: every bit decodes, and the netlist's
+/// simulation never sees pins.
+fn narrow_ramb36_inputs(netlist: &mut Netlist, index: usize, port: usize, width: i64) {
+    let p = format!("p{port}_");
+    let pins: Vec<usize> = netlist.instances[index]
+        .pins
+        .iter()
+        .copied()
+        .filter(|pin| {
+            let role = &netlist.pins[*pin].role;
+            role.starts_with(&format!("{p}din"))
+        })
+        .collect();
+    for pin in pins {
+        let role = netlist.pins[pin].role.clone();
+        let reaches = ramb36_input_roles(width, &role);
+        if reaches.len() == 1 && reaches[0] == role {
+            continue;
+        }
+        let source = netlist.pins[pin].clone();
+        if let Some(signal) = netlist.pins[pin].signal.take() {
+            netlist.signals[signal].sinks.retain(|p| *p != pin);
+        }
+        netlist.pins[pin].constant = None;
+        netlist.pins[pin].role = format!("cell_{role}");
+        for to in reaches {
+            let mut copy = source.clone();
+            copy.role = to;
+            netlist.pins.push(copy);
+            let at = netlist.pins.len() - 1;
+            netlist.instances[index].pins.push(at);
+            if let Some(signal) = netlist.pins[at].signal {
+                netlist.signals[signal].sinks.push(at);
+            }
+        }
+    }
+}
+
+/// The site roles a `RAMB36E1`'s data input role reaches when its port is
+/// written `width` bits wide: see `narrow_ramb36_inputs`. `p0_din0` of a
+/// one-bit port is `["p0_din0", "p0_din1"]`, its `p0_din1` is `[]`, and any
+/// role this does not change is itself alone.
+#[must_use]
+pub fn ramb36_input_roles(width: i64, role: &str) -> Vec<String> {
+    let Some((port, rest)) = role.split_once('_') else {
+        return vec![role.to_owned()];
+    };
+    let (parity, bit) = match rest.strip_prefix("dinp") {
+        Some(bit) => (true, bit),
+        None => match rest.strip_prefix("din") {
+            Some(bit) => (false, bit),
+            None => return vec![role.to_owned()],
+        },
+    };
+    let Ok(bit) = bit.parse::<u32>() else {
+        return vec![role.to_owned()];
+    };
+    let both = |kind: &str| vec![format!("{port}_{kind}0"), format!("{port}_{kind}1")];
+    match (width, parity, bit) {
+        (1, false, 0) => both("din"),
+        (1, false, 1) => Vec::new(),
+        (9, true, 0) => both("dinp"),
+        (9, true, 1) => Vec::new(),
+        (1 | 2 | 4, true, 0 | 1) => Vec::new(),
+        _ => vec![role.to_owned()],
+    }
+}
+
 impl XrayFabric {
+    /// Gives every block RAM's write-enable site pins the cell bits Vivado
+    /// gives them, and its output registers' clocks theirs, in the Vivado
+    /// model; nothing in the legacy one. Returns the number of cells it
+    /// rewired.
+    ///
+    /// **The register clocks.** A site has a clock pin for each port's
+    /// output register, `REGCLKARDRCLK` and `REGCLKB`, and the cell has no
+    /// port for them. Vivado routes the port's own clock to it when
+    /// `DO<x>_REG` is 1 (`b18_doreg`: `CLKARDCLK` reaches the site's
+    /// `RDCLK` and `RDRCLK`), and otherwise a one with `ZINV_REGCLK<x>`
+    /// clear. So each port gets a pin `p<port>_regclk`: on the clock's
+    /// signal, or the constant one. Before this, a registered output in a
+    /// bitstream of this flow had every feature Vivado's has and no clock:
+    /// a fault every bit decoding, every arc matching and the netlist's
+    /// simulation all pass, which Vivado's router found, asked to finish
+    /// Reticle's routes (`VCCNet ... REGCLKB` unroutable).
+    ///
+    /// A cell's `WEA[k]` is one netlist pin, `p0_we<k>`, but the site has
+    /// more write-enable pins than the cell has bits, and which bit each
+    /// one carries depends on the widths: [`write_enable_lanes`] has
+    /// Vivado's answer. So the cell's pins become the site's, one per pin
+    /// `p0_we<i>` of `bel_pins_in` and `ramb36_pins`, each carrying
+    /// what the cell's bit for that lane carried, and a lane Vivado holds
+    /// low the constant zero, which the tie pass grounds. A cell bit no
+    /// lane carries (`WEA[1]` of a 9-bit port, which Vivado leaves
+    /// unconnected) keeps its pin with no signal and a role no site has.
+    ///
+    /// Run on the netlist before placement, so that the routes, the ties
+    /// and [`XrayFabric::block_ram_ground_fans`] all see the site's pins.
+    pub fn spread_block_ram_pins(
+        &self,
+        design: &Design,
+        module: ModuleId,
+        netlist: &mut Netlist,
+    ) -> usize {
+        if self.block_ram.model != LutRamModel::Vivado {
+            return 0;
+        }
+        let Some(m) = design.modules.get(module) else {
+            return 0;
+        };
+        let mut rewired = 0;
+        for index in 0..netlist.instances.len() {
+            let primitive = netlist.instances[index].primitive.clone();
+            if !is_block_ram(&primitive) {
+                continue;
+            }
+            let cell = m.cells.get(netlist.instances[index].cell);
+            let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            for port in 0..2usize {
+                let registered = params(["DOA_REG", "DOB_REG"][port])
+                    .and_then(|v| v.as_int())
+                    .unwrap_or(0)
+                    == 1;
+                let clock = netlist.instances[index]
+                    .pins
+                    .iter()
+                    .map(|p| &netlist.pins[*p])
+                    .find(|p| p.role == format!("p{port}_clk"))
+                    .and_then(|p| p.signal);
+                let (signal, constant) = match clock {
+                    Some(signal) if registered => (Some(signal), None),
+                    _ => (None, Some(Bit::One)),
+                };
+                netlist.pins.push(crate::fpga::place::NetPin {
+                    instance: index,
+                    port: format!("REGCLK{}", if port == 0 { "ARDRCLK" } else { "B" }),
+                    bit: 0,
+                    role: format!("p{port}_regclk"),
+                    output: false,
+                    signal,
+                    constant,
+                });
+                let pin = netlist.pins.len() - 1;
+                netlist.instances[index].pins.push(pin);
+                if let Some(signal) = signal {
+                    netlist.signals[signal].sinks.push(pin);
+                }
+                let prefix = format!("p{port}_we");
+                let old: Vec<usize> = netlist.instances[index]
+                    .pins
+                    .iter()
+                    .copied()
+                    .filter(|pin| {
+                        netlist.pins[*pin]
+                            .role
+                            .strip_prefix(&prefix)
+                            .is_some_and(|k| k.parse::<u32>().is_ok())
+                    })
+                    .collect();
+                let bit_of = |pin: usize| -> u32 {
+                    netlist.pins[pin].role[prefix.len()..]
+                        .parse()
+                        .unwrap_or(u32::MAX)
+                };
+                let sources: BTreeMap<u32, (Option<usize>, Option<Bit>, String)> = old
+                    .iter()
+                    .map(|pin| {
+                        let p = &netlist.pins[*pin];
+                        (bit_of(*pin), (p.signal, p.constant, p.port.clone()))
+                    })
+                    .collect();
+                let port_name = sources.values().next().map_or_else(
+                    || if port == 0 { "WEA" } else { "WEBWE" }.to_owned(),
+                    |s| s.2.clone(),
+                );
+                // Off the signals they were on: each pin is given its
+                // lane's source below, or nothing.
+                for pin in &old {
+                    if let Some(signal) = netlist.pins[*pin].signal.take() {
+                        netlist.signals[signal].sinks.retain(|p| p != pin);
+                    }
+                    netlist.pins[*pin].constant = None;
+                    let bit = netlist.pins[*pin].bit;
+                    netlist.pins[*pin].role = format!("cell_{prefix}{bit}");
+                }
+                let mut spare = old.into_iter();
+                for (lane, bit) in write_enable_lanes(&primitive, port, &params)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let (signal, constant) = match bit {
+                        Some(bit) => match sources.get(&bit) {
+                            Some((signal, constant, _)) => (*signal, *constant),
+                            // The cell does not connect that bit: the lane
+                            // has no pin, and the tie pass decides.
+                            None => continue,
+                        },
+                        None => (None, Some(Bit::Zero)),
+                    };
+                    let pin = match spare.next() {
+                        Some(pin) => pin,
+                        None => {
+                            netlist.pins.push(crate::fpga::place::NetPin {
+                                instance: index,
+                                port: port_name.clone(),
+                                bit: u32::try_from(lane).unwrap_or(0),
+                                role: String::new(),
+                                output: false,
+                                signal: None,
+                                constant: None,
+                            });
+                            let pin = netlist.pins.len() - 1;
+                            netlist.instances[index].pins.push(pin);
+                            pin
+                        }
+                    };
+                    let p = &mut netlist.pins[pin];
+                    p.role = format!("{prefix}{lane}");
+                    p.port.clone_from(&port_name);
+                    p.bit = bit.unwrap_or(u32::try_from(lane).unwrap_or(0));
+                    p.signal = signal;
+                    p.constant = constant;
+                    if let Some(signal) = signal {
+                        netlist.signals[signal].sinks.push(pin);
+                    }
+                }
+                if primitive == "RAMB36E1" {
+                    let width = params(["WRITE_WIDTH_A", "WRITE_WIDTH_B"][port])
+                        .and_then(|v| v.as_int())
+                        .unwrap_or(0);
+                    narrow_ramb36_inputs(netlist, index, port, width);
+                }
+            }
+            rewired += 1;
+        }
+        rewired
+    }
+
     /// What every input pin of one placed `RAMB18E1` is to be made to
     /// read, appended to `wants`: the pins a signal reaches are left
     /// alone, every other one gets a [`TiePolicy`]. `is_routed` says which
@@ -1015,6 +1812,7 @@ impl XrayFabric {
     /// is what [`XrayFabric::block_ram_ground_fans`] asks.
     #[allow(clippy::too_many_arguments, reason = "one instance's whole context")]
     fn instance_wants(
+        model: LutRamModel,
         params: &dyn Fn(&str) -> Option<AttrValue>,
         instance: &crate::fpga::place::Instance,
         site: &crate::fpga::arch::ArchSite,
@@ -1065,8 +1863,16 @@ impl XrayFabric {
                 None | Some(Some(Bit::Zero))
             )
         };
+        let held = held_by_inversion(model, params, instance, netlist);
         for (role, node) in &site.pins {
             if is_output(role) {
+                continue;
+            }
+            if INVERTED_LOW
+                .iter()
+                .any(|(r, pin)| r == role && held.contains(pin))
+            {
+                wants.push((TiePolicy::One, instance.name.clone(), role.clone(), *node));
                 continue;
             }
             // An address bit below the width mode's own range, or a data
@@ -1075,6 +1881,16 @@ impl XrayFabric {
             // so it must not be able to fail a build: see
             // [`unused_address_bit`] and [`unused_data_bit`].
             let idle = unused_address_bit(role, &params) || unused_data_bit(role, &params, &read);
+            // Vivado ties such a bit to its `VCC`, which is the
+            // interconnect's own default: no pip, and no ground fan spent
+            // (`testdata/fpga/vivado/bram/ib_1024x18`: `ADDRARDADDR[3:0]`
+            // and the read port's `DIBDI` are on `<const1>`).
+            if idle
+                && model == LutRamModel::Vivado
+                && !matches!(given.get(role.as_str()), Some(None))
+            {
+                continue;
+            }
             let want = match given.get(role.as_str()) {
                 Some(None) => continue,
                 Some(Some(Bit::Zero)) if idle => TiePolicy::Idle,
@@ -1088,9 +1904,20 @@ impl XrayFabric {
                     // A port whose enable is tied low reads and writes
                     // nothing, so its address is as idle as data.
                     TiePolicy::Zero if !role.ends_with("_en") && !enabled(role) => TiePolicy::Idle,
+                    // Vivado grounds an output register's clock enable that
+                    // nothing drives (`ib_1024x18`: `REGCEAREGCE` and
+                    // `REGCEB` on its `<const0>`).
+                    TiePolicy::Leave
+                        if model == LutRamModel::Vivado && role.ends_with("_regce") =>
+                    {
+                        TiePolicy::Zero
+                    }
                     other => other,
                 },
             };
+            if want == TiePolicy::Idle && model == LutRamModel::Vivado {
+                continue;
+            }
             if want != TiePolicy::Leave {
                 wants.push((want, instance.name.clone(), role.clone(), *node));
             }
@@ -1149,7 +1976,7 @@ impl XrayFabric {
                 }
                 continue;
             }
-            if instance.primitive != PRIMITIVE {
+            if !is_block_ram(&instance.primitive) {
                 if let Some(site) = placement.site_of(index) {
                     io_logic_wants(instance, &graph.sites[site], netlist, &|_| true, &mut wants);
                 }
@@ -1161,15 +1988,33 @@ impl XrayFabric {
             let site = &graph.sites[site];
             let cell = m.cells.get(instance.cell);
             let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
-            Self::instance_wants(&params, instance, site, netlist, &|_| true, &mut wants).map_err(
-                |message| BlockRamError {
-                    instance: instance.name.clone(),
-                    message,
-                },
-            )?;
+            let model = self.block_ram.model;
+            Self::instance_wants(
+                model,
+                &params,
+                instance,
+                site,
+                netlist,
+                &|_| true,
+                &mut wants,
+            )
+            .map_err(|message| BlockRamError {
+                instance: instance.name.clone(),
+                message,
+            })?;
         }
         let mut fans: Vec<NodeId> = Vec::new();
-        for (want, _, role, node) in &wants {
+        // The Vivado model closes a block RAM's tied wires to the router; a
+        // DSP's and an IO register's are as they were.
+        let ours: HashSet<&str> = netlist
+            .instances
+            .iter()
+            .filter(|i| is_block_ram(&i.primitive))
+            .map(|i| i.name.as_str())
+            .collect();
+        for (want, instance, role, node) in &wants {
+            let vivado =
+                self.block_ram.model == LutRamModel::Vivado && ours.contains(instance.as_str());
             // A shift register's enable reads one because nothing drives its
             // wire, and that wire leads to a bounce the router likes: closed
             // to every signal, as a ground fan is.
@@ -1177,8 +2022,49 @@ impl XrayFabric {
                 fans.extend(fixed_chain(graph, *node));
                 continue;
             }
+            // A one's wires, and the pip's source a one through a pip will
+            // take, closed to the router as a zero's are: a signal through
+            // either would be on the pin.
+            if *want == TiePolicy::One && vivado {
+                let chain = fixed_chain(graph, *node);
+                let vcc = &self.block_ram.vcc_defaults;
+                let own = chain.iter().any(|n| reads_vcc(&self.arch, graph, vcc, *n));
+                let behind = if own {
+                    Vec::new()
+                } else {
+                    vcc_source(
+                        &self.arch,
+                        graph,
+                        vcc,
+                        &HashSet::new(),
+                        &Ties::default(),
+                        &chain,
+                    )
+                    .map(|(_, behind)| behind)
+                    .unwrap_or_default()
+                };
+                for n in chain.into_iter().chain(behind) {
+                    if !fans.contains(&n) {
+                        fans.push(n);
+                    }
+                }
+                continue;
+            }
             if *want != TiePolicy::Zero {
                 continue;
+            }
+            // The wires a tie will hold, closed to the router too in the
+            // Vivado model: a signal the router walked through one of
+            // them reaches the pin with no switch in its way, which is how
+            // Reticle's signals reached `WEBWE[7:4]` where Vivado grounds
+            // them (`docs/fpga-vivado-parity.md`). The legacy model keeps
+            // its routes.
+            if vivado {
+                for behind in fixed_chain(graph, *node) {
+                    if !fans.contains(&behind) {
+                        fans.push(behind);
+                    }
+                }
             }
             for behind in fixed_chain(graph, *node) {
                 for pip in graph.incoming(behind) {
@@ -1254,7 +2140,7 @@ impl XrayFabric {
                     .map_err(fail)?;
                 continue;
             }
-            if instance.primitive != PRIMITIVE {
+            if !is_block_ram(&instance.primitive) {
                 if let Some(site) = placement.site_of(index) {
                     io_logic_wants(
                         instance,
@@ -1283,8 +2169,40 @@ impl XrayFabric {
 
             let cell = m.cells.get(instance.cell);
             let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
-            for feature in mode_features(&params).map_err(fail)? {
-                let full = format!("{}.{feature}", site.bel);
+            let model = self.block_ram.model;
+            let held = held_by_inversion(model, &params, instance, netlist);
+            let mut features = if instance.primitive == "RAMB36E1" {
+                ramb36_features(&params, model, &held).map_err(fail)?
+            } else {
+                mode_features_in(&params, model, &held)
+                    .map_err(fail)?
+                    .into_iter()
+                    .map(|feature| format!("{}.{feature}", site.bel))
+                    .collect()
+            };
+            // The tile's FIFO flag offsets, which Vivado writes as zero (all
+            // thirteen `Z` bits set) beside every block RAM it builds on the
+            // lower half, the one a `FIFO18E1` would take, or on both
+            // (`testdata/fpga/vivado/bram/`, every design), and not beside
+            // one on the upper half alone (`ib_1024x18` on Reticle's
+            // placement, `docs/fpga-vivado-parity.md`). None of them is a
+            // FIFO and UG473 gives a RAM no use for the offsets, so this is
+            // Vivado's habit followed, and harmless on that word.
+            // Read 36 wide in `SDP` on the upper half, Vivado sets port A's
+            // 18 beside it, which it does not on the lower (`b18_sdp36` on
+            // its own placement, `RAMB18_Y0`, and on Reticle's, `RAMB18_Y1`),
+            // and does on both halves of a `RAMB36E1` read 72 wide.
+            let sdp = matches!(params("RAM_MODE"), Some(AttrValue::String(m)) if m == "SDP");
+            let read36 = params("READ_WIDTH_A").and_then(|v| v.as_int()) == Some(36);
+            if model == LutRamModel::Vivado && sdp && read36 && site.bel == "RAMB18_Y1" {
+                features.push("RAMB18_Y1.READ_WIDTH_A_18".to_owned());
+            }
+            if model == LutRamModel::Vivado && site.bel != "RAMB18_Y1" {
+                for name in ["ZALMOST_EMPTY_OFFSET", "ZALMOST_FULL_OFFSET"] {
+                    features.extend((0..13).map(|i| format!("{name}[{i}]")));
+                }
+            }
+            for full in features {
                 let Some(ones) = table.get(&full) else {
                     return Err(fail(format!("the database has no feature `{full}`")));
                 };
@@ -1295,6 +2213,7 @@ impl XrayFabric {
             }
 
             Self::instance_wants(
+                self.block_ram.model,
                 &params,
                 instance,
                 site,
@@ -1535,10 +2454,12 @@ mod tests {
 
     /// The 16-bit read-only shape the mapper writes. Would catch a width
     /// written for the wrong port, `ZINIT` written the right way up (it is
-    /// inverted), or a `ZINV` missing; would not catch nextpnr itself being
-    /// wrong about which features Vivado sets.
+    /// inverted) or in nextpnr's order (it is reversed), or a `ZINV`
+    /// missing; would not catch a feature Vivado sets that nothing here
+    /// knows of, which `tests/fpga_xray_bram_vivado.rs` holds against its
+    /// bitstreams.
     #[test]
-    fn a_sixteen_bit_block_turns_on_what_nextpnr_writes() {
+    fn a_sixteen_bit_block_turns_on_what_vivado_writes() {
         let list = [
             ("READ_WIDTH_A", AttrValue::Int(18)),
             ("WRITE_WIDTH_A", AttrValue::Int(18)),
@@ -1564,6 +2485,8 @@ mod tests {
         assert!(!features.iter().any(|f| f.starts_with("WRITE_MODE")));
         assert_eq!(features.len(), 1 + 4 + 10 + 4 * 18);
 
+        // `INIT_A` bit 0 is `ZINIT_A[17]`: the register's top bit first, as
+        // Vivado wrote `b18_srval`'s values.
         let inverted = [
             ("IS_CLKARDCLK_INVERTED", AttrValue::Int(1)),
             ("INIT_A", AttrValue::Int(1)),
@@ -1571,15 +2494,161 @@ mod tests {
         ];
         let features = mode_features(&params(&inverted)).unwrap();
         assert!(!features.iter().any(|f| f == "ZINV_CLKARDCLK"));
-        assert!(!features.iter().any(|f| f == "ZINIT_A[0]"));
-        assert!(features.iter().any(|f| f == "ZINIT_A[1]"));
+        assert!(!features.iter().any(|f| f == "ZINIT_A[17]"));
+        assert!(features.iter().any(|f| f == "ZINIT_A[0]"));
+        assert!(features.iter().any(|f| f == "ZINIT_A[16]"));
         assert!(features.iter().any(|f| f == "WRITE_MODE_A_READ_FIRST"));
         assert!(!features.iter().any(|f| f.starts_with("READ_WIDTH")));
 
-        let sdp = [("RAM_MODE", AttrValue::String("SDP".to_owned()))];
-        assert!(mode_features(&params(&sdp)).unwrap_err().contains("TDP"));
+        // The Vivado model: an output register's clock inverter only beside
+        // the register, which the legacy model sets always.
+        let vivado = mode_features_in(&params(&list), LutRamModel::Vivado, &[]).unwrap();
+        assert!(!vivado.iter().any(|f| f.starts_with("ZINV_REGCLK")));
+        assert_eq!(vivado.len(), 1 + 4 + 8 + 4 * 18);
+        let registered = [("DOB_REG", AttrValue::Int(1))];
+        let vivado = mode_features_in(&params(&registered), LutRamModel::Vivado, &[]).unwrap();
+        assert!(vivado.iter().any(|f| f == "ZINV_REGCLKB"));
+        assert!(!vivado.iter().any(|f| f == "ZINV_REGCLKARDRCLK"));
+        // A reset held through its inverter has no `ZINV`.
+        let held = mode_features_in(&params(&list), LutRamModel::Vivado, &["RSTRAMB"]).unwrap();
+        assert!(!held.iter().any(|f| f == "ZINV_RSTRAMB"));
+        assert!(held.iter().any(|f| f == "ZINV_RSTRAMARSTRAM"));
+
+        // `SDP` 36 wide, as Vivado wrote `b18_sdp36`, with `WRITE_FIRST`
+        // its `NO_CHANGE`.
+        let sdp = [
+            ("RAM_MODE", AttrValue::String("SDP".to_owned())),
+            ("READ_WIDTH_A", AttrValue::Int(36)),
+            ("WRITE_WIDTH_B", AttrValue::Int(36)),
+        ];
+        let features = mode_features(&params(&sdp)).unwrap();
+        for name in [
+            "SDP_READ_WIDTH_36",
+            "SDP_WRITE_WIDTH_36",
+            "READ_WIDTH_B_18",
+            "WRITE_WIDTH_A_18",
+            "WRITE_WIDTH_B_18",
+            "WRITE_MODE_A_NO_CHANGE",
+            "WRITE_MODE_B_NO_CHANGE",
+        ] {
+            assert!(features.iter().any(|f| f == name), "{name} missing");
+        }
+        assert!(!features.iter().any(|f| f == "READ_WIDTH_A_18"));
+        let ecc = [("RAM_MODE", AttrValue::String("ECC".to_owned()))];
+        assert!(mode_features(&params(&ecc)).unwrap_err().contains("SDP"));
         let wide = [("READ_WIDTH_A", AttrValue::Int(36))];
         assert!(mode_features(&params(&wide)).is_err());
+    }
+
+    /// A `RAMB36E1`'s features are its halves', each half as wide, a word's
+    /// even bits the lower's: what Vivado wrote for `b36_w9` and
+    /// `b36_srval`. Would catch a width halved wrongly, `BRAM36_*_1`
+    /// missing, an initial value split by halves rather than by bits; the
+    /// bitstreams themselves are `tests/fpga_xray_bram_vivado.rs`'s.
+    #[test]
+    fn a_36_kbit_block_is_its_halves() {
+        let nine = [
+            ("READ_WIDTH_A", AttrValue::Int(9)),
+            ("WRITE_WIDTH_A", AttrValue::Int(9)),
+            ("READ_WIDTH_B", AttrValue::Int(36)),
+            ("WRITE_WIDTH_B", AttrValue::Int(36)),
+            // Bit 0 to the lower half's bit 0, bit 1 to the upper's.
+            ("INIT_A", AttrValue::Int(0b10)),
+        ];
+        let features = ramb36_features(&params(&nine), LutRamModel::Vivado, &[]).unwrap();
+        for name in [
+            "RAMB36.BRAM36_READ_WIDTH_A_1",
+            "RAMB36.BRAM36_WRITE_WIDTH_A_1",
+            "RAMB18_Y0.READ_WIDTH_A_4",
+            "RAMB18_Y1.WRITE_WIDTH_A_4",
+            "RAMB18_Y0.READ_WIDTH_B_18",
+            "RAMB18_Y0.ZINIT_A[17]",
+        ] {
+            assert!(features.iter().any(|f| f == name), "{name} missing");
+        }
+        assert!(!features.iter().any(|f| f == "RAMB36.BRAM36_READ_WIDTH_B_1"));
+        assert!(!features.iter().any(|f| f == "RAMB18_Y1.ZINIT_A[17]"));
+        let sdp = [
+            ("RAM_MODE", AttrValue::String("SDP".to_owned())),
+            ("READ_WIDTH_A", AttrValue::Int(72)),
+            ("WRITE_WIDTH_B", AttrValue::Int(72)),
+        ];
+        let features = ramb36_features(&params(&sdp), LutRamModel::Vivado, &[]).unwrap();
+        for half in ["RAMB18_Y0", "RAMB18_Y1"] {
+            for name in ["SDP_READ_WIDTH_36", "SDP_WRITE_WIDTH_36", "READ_WIDTH_A_18"] {
+                let name = format!("{half}.{name}");
+                assert!(features.contains(&name), "{name} missing");
+            }
+        }
+        // The contents: bit `k` of a half is bit `2k` or `2k + 1` of the
+        // whole.
+        let at = |half: &str, name: &str, index: u32| ramb36_param_of(half, name, index);
+        assert_eq!(
+            at("RAMB18_Y0", "INIT_00", 0),
+            Some(("INIT_00".to_owned(), 0))
+        );
+        assert_eq!(
+            at("RAMB18_Y1", "INIT_00", 0),
+            Some(("INIT_00".to_owned(), 1))
+        );
+        assert_eq!(
+            at("RAMB18_Y0", "INIT_00", 128),
+            Some(("INIT_01".to_owned(), 0))
+        );
+        assert_eq!(
+            at("RAMB18_Y1", "INIT_3F", 255),
+            Some(("INIT_7F".to_owned(), 255))
+        );
+        assert_eq!(
+            at("RAMB18_Y1", "INITP_07", 255),
+            Some(("INITP_0F".to_owned(), 255))
+        );
+        assert_eq!(at("RAMB18_Y0", "INIT_A", 0), None);
+    }
+
+    /// Which cell bit each write-enable pin carries, as Vivado wired them.
+    /// Would catch a lane order changed or a held-low lane driven; would not
+    /// catch Vivado's report being wrong about its own sites.
+    #[test]
+    fn a_write_enable_reaches_the_pins_vivado_gave_it() {
+        let widths = |a: i64, b: i64, mode: &str| {
+            vec![
+                ("WRITE_WIDTH_A", AttrValue::Int(a)),
+                ("WRITE_WIDTH_B", AttrValue::Int(b)),
+                ("RAM_MODE", AttrValue::String(mode.to_owned())),
+            ]
+        };
+        let lanes = |primitive: &str, port: usize, list: &[(&str, AttrValue)]| {
+            write_enable_lanes(primitive, port, &params(list))
+        };
+        let (s, n) = (Some, None::<u32>);
+        let tdp18 = widths(18, 18, "TDP");
+        assert_eq!(lanes("RAMB18E1", 0, &tdp18), [s(0), s(0), s(1), s(1)]);
+        assert_eq!(
+            lanes("RAMB18E1", 1, &tdp18),
+            [s(0), s(0), s(1), s(1), n, n, n, n]
+        );
+        let tdp9 = widths(9, 9, "TDP");
+        assert_eq!(lanes("RAMB18E1", 0, &tdp9), [s(0); 4]);
+        let sdp = widths(0, 36, "SDP");
+        assert_eq!(lanes("RAMB18E1", 0, &sdp), [n; 4]);
+        assert_eq!(
+            lanes("RAMB18E1", 1, &sdp),
+            [s(0), s(0), s(1), s(1), s(2), s(2), s(3), s(3)]
+        );
+        let b36 = widths(18, 36, "TDP");
+        assert_eq!(
+            lanes("RAMB36E1", 0, &b36),
+            [s(0), s(1), s(0), s(1), s(0), s(1), s(0), s(1)]
+        );
+        let b = lanes("RAMB36E1", 1, &b36);
+        assert_eq!(b[..4], [s(0), s(1), s(2), s(3)]);
+        assert_eq!(b[4..8], [n; 4]);
+        assert_eq!(b[8..12], [s(0), s(1), s(2), s(3)]);
+        let sdp72 = widths(0, 72, "SDP");
+        let b = lanes("RAMB36E1", 1, &sdp72);
+        assert_eq!(b[7], s(7));
+        assert_eq!(b[15], s(7));
     }
 
     /// One tile shaped like an interconnect tile beside a block RAM pin:

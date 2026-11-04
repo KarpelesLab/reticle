@@ -46,7 +46,7 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 118 of the 141**, 94 before the sections on pads and clock
+**Reticle builds 120 of the 141**, 118 before the section on block RAM, 94 before the sections on pads and clock
 buffers, 106 before the one on IO registers, 110 before regional clock buffers
 and clock managers. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
@@ -59,11 +59,11 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 23 that do not build, by what stops them:
+The 21 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
-| block RAM by name | `RAMB18E1`, `RAMB36E1`, `FIFO18E1`, `FIFO36E1` |
+| a FIFO by name | `FIFO18E1`, `FIFO36E1` |
 | pad buffers | the six `DIFF_OUT` forms |
 | IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
@@ -238,7 +238,7 @@ routed report, in `vivado.txt`. Run on 2026-11-04, with shift registers.
 | barrel | Vivado | 103 | 70 | 0 | 0 | 0 | 0 | 0 | 0 | 3.979 | 48 |
 | | Reticle | 89 | 70 | 0 | 0 | 0 | 0 | 0 | 0 | 5.12 | 9 |
 | bram_fifo | Vivado | 49 | 68 | 3 | 0 | 0 | 0 | 2 | 0 | 4.612 | 50 |
-| | Reticle | 57 | 68 | 9 | 0 | 0 | 0 | 2 | 0 | 5.07 | 9 |
+| | Reticle | 57 | 68 | 9 | 0 | 0 | 0 | 2 | 0 | 5.06 | 12 |
 | counter64 | Vivado | 23 | 129 | 22 | 0 | 0 | 0 | 0 | 0 | 3.975 | 48 |
 | | Reticle | 98 | 129 | 16 | 0 | 0 | 0 | 0 | 0 | 8.40 | 38 |
 | crc32 | Vivado | 129 | 65 | 0 | 0 | 0 | 0 | 0 | 0 | 3.581 | 54 |
@@ -776,7 +776,10 @@ branch that opens with another branch as having left the wrong node.
 
 Vivado could not finish three, for two reasons:
 
-- **`bram_fifo` and `lutram32`: Reticle's signal is on `WEBWE[7:4]`.** Vivado grounds
+- **`bram_fifo` and `lutram32`: Reticle's signal is on `WEBWE[7:4]`.** **Since
+  resolved as Vivado has it** ([Block RAM](#block-ram)): Reticle grounds those pins
+  in `TDP` and keeps the router off their wires, and Vivado finishes both on
+  Reticle's routes. What follows is the finding as it was. Vivado grounds
   those pins of a `RAMB18E1`, in `TDP` where the library says they are not read, and
   says of Reticle's fixed route `conflicts with pin GNDTerm of net GNDNet`. On
   `lutram32` that is `INT_R_X51Y97 FAN_ALT1`, carrying `in[36]` as a hop, which
@@ -829,11 +832,11 @@ leaving out routing. Of 140,546 cell features on Reticle's side, 140,522 are in 
 
 | class | count | what it is | answered? |
 |---|---|---|---|
-| Reticle only: `ZINV_RST*`, `ZINV_REGCLK*` on a block RAM | 24 | Reticle holds each reset at zero with a ground and the inverter off; Vivado connects `VCC`, which **`lutram32.pips` shows**, and leaves the inverter on. The same value if `ZINV` means what its name says, which is quoted | Harmless on that reading |
-| Vivado only: `ZALMOST_EMPTY_OFFSET`, `ZALMOST_FULL_OFFSET` | 52 | Its default for a FIFO's flags, on a block RAM that is no FIFO | Harmless on UG473's word |
+| Reticle only: `ZINV_RST*`, `ZINV_REGCLK*` on a block RAM | 24 | Reticle holds each reset at zero with a ground and the inverter off; Vivado connects `VCC`, which **`lutram32.pips` shows**, and leaves the inverter on. The same value if `ZINV` means what its name says, which is quoted | Harmless on that reading. **Reticle does as Vivado does now** ([Block RAM](#block-ram)), and `ZINV_REGCLK*` only beside a register |
+| Vivado only: `ZALMOST_EMPTY_OFFSET`, `ZALMOST_FULL_OFFSET` | 52 | Its default for a FIFO's flags, on a block RAM that is no FIFO | Harmless on UG473's word. Reticle writes them as Vivado does now, on the lower half |
 | Vivado only: `WEMUX.CE` | 64 | `regfile_alu`, as above | Reticle sets it now, as Vivado does; a RAM on a part is still to come |
 | Vivado only: `<L>OUTMUX.O6` | 213 | A way for its route to leave a slice. It is in none of `bits.txt`, so it belongs to Vivado's routes and not to the cells | Not a difference in the cells |
-| Vivado only: `CASCOUT_ARD_ACTIVE` | 1 | Likewise, on another block RAM's tile in `bram_fifo` | Not looked at further |
+| Vivado only: `CASCOUT_ARD_ACTIVE` | 1 | Likewise, on another block RAM's tile in `bram_fifo` | Vivado's route of an address bit through the cascade from the block below, which it takes often ([Block RAM](#block-ram)) and which Reticle does not route (`bram::is_cascade_input`) |
 | Vivado only: the `PUDC_B` pad | 39 | Class 4 | As above |
 
 **What this does not check.** That Vivado's bitstream of the same implementation holds
@@ -1071,7 +1074,9 @@ read ports' `RAM32X1D` into one slice's four tables, two `RAM64X1D` likewise, an
 `RAM64M` whose unread `C` port shares `D`'s data input. Reticle places one cell a
 slice, but for the two halves of a pair of `RAM32X1D`. The two whose cells differ are
 `mem32x32` and `mem32x32r2`, which Vivado puts in one `RAMB18E1` each port where
-Reticle uses two, its 36-bit mode, which the next section is for.
+Reticle used two, its 36-bit mode, which the next section is for. Reticle uses one
+`RAMB36E1` now, the same tile, in true dual port: inferring the simple dual port is
+not done.
 
 **Checked, on all 50:** every set bit decodes, none unexplained; the arcs selected
 are the arcs the router chose; the mapping is proved; every frame's ECC is what
@@ -1189,6 +1194,210 @@ multiplexers are leaves whose names were not asked. A named cell with an input l
 unconnected reads what the interconnect reads, a one; what Vivado does with one was
 not asked, and nothing here ties it. Shift registers (`SRL16E`, `SRLC32E`) are still flip-flops,
 though their frames' ECC is now right should they be written.
+
+## Block RAM
+
+Before this section a block RAM was a `RAMB18E1` the mapper inferred, in the
+modes nextpnr-xilinx's `fasm.cc` writes, **quoted**; a design naming a `RAMB18E1`
+or a `RAMB36E1` did not build; `bram_fifo` was two `RAMB18E1` where Vivado uses one
+`RAMB36E1`; and Vivado could not finish `bram_fifo` or `lutram32` on Reticle's
+routes, for a signal Reticle's router had walked through `WEBWE[7:4]` (above).
+
+**What was asked of Vivado.** `testdata/fpga/vivado/bram/` has 40 designs from
+`tools/vivado-parity/gen_bram.py`: 27 that name a `RAMB18E1` or a `RAMB36E1`, every
+input from a flip-flop of its own, in each width, two widths at once, simple dual
+port 36 and 72 bits wide, the output registers, every inverter, each write mode, a
+reset's priority, the collision mode, initial and reset values and a cascade; and
+13 memories to infer, 512 by 36 to 32,768 by 1, with byte writes, with both ports
+reading and writing, and with a second register on the read. `FIXTURE=bram
+tools/vivado-parity/lutram.sh` runs them, and `vivado.txt` keeps the cells Vivado
+left, the site pins each net of a named block reaches, and each block RAM tile of
+its bitstream as `reticle fpga --decode` reads it; `xsim.txt` what each does as
+Vivado built it.
+
+**What Vivado wrote**, each held by `tests/fpga_xray_bram_vivado.rs`:
+
+- **`ZINIT_A[j]` is bit `17 - j` of `INIT_A`**, and `ZINIT_B`, `ZSRVAL_A` and
+  `ZSRVAL_B` likewise: the register's top bit first. Reticle wrote nextpnr's order,
+  bit `j` on `ZINIT_A[j]`, which no build could show while every value was zero.
+- **`ZINV_REGCLK<x>` is set only beside its port's output register**, and the
+  register has a clock pin of its own on the site, which the cell has no port for.
+  With `DO<x>_REG` Vivado routes the port's clock to it (`b18_doreg`: `CLKARDCLK`
+  reaches the site's `RDCLK` and `RDRCLK`); without, a one. Reticle routed nothing
+  to it, so **a registered output from this flow had no clock**: every bit
+  decoded, every arc was the router's, and the netlist's simulation was right,
+  since it has no pins. What found it was Vivado's router, asked to finish
+  Reticle's routes, finding no way to its `VCCNet` at `REGCLKB`.
+- **Simple dual port** is `SDP_READ_WIDTH_36` with `READ_WIDTH_B_18`, and
+  `SDP_WRITE_WIDTH_36` with both write widths 18; port A also reads 18 on the upper
+  half and on a `RAMB36E1`, not on the lower half alone. `WRITE_FIRST`, the default,
+  is `NO_CHANGE` on both ports there.
+- `RSTREG_PRIORITY_<x>_REGCE` and `RDADDR_COLLISION_HWCONFIG_PERFORMANCE` are their
+  parameters, by name.
+- **A `RAMB36E1` is its two halves**, each half as wide: 36 is 18, 18 is 9, 9 is 4
+  and sets `RAMB36.BRAM36_*_1`, 4 is 2, and 2 and 1 are 1, the one with
+  `BRAM36_*_1`. A word's even bits are the lower half's and its odd bits the
+  upper's, data, parity, initial values and contents alike, checked bit for bit on
+  random contents. Its pins are the site's `BRAM_FIFO36_*`, each address bit on both
+  halves, bit 15 only on the lower and tied high. Written one bit wide, `DI[0]`
+  reaches both halves and `DI[1]` nothing; nine wide, `DIP[0]` both and `DIP[1]`
+  nothing; narrower than nine, `DIP[1:0]` nothing. Vivado's router found the second:
+  `DIPADIP[1]`'s signal was on the pin it wanted for `DIPADIP[0]`.
+- **The write enables are lanes.** A `RAMB18E1`'s site has four `WEA` and eight
+  `WEBWE` pins, and which cell bit each carries is the width's: 18 wide, `WE[0]` on
+  the first two and `WE[1]` on the next two; nine or narrower, `WE[0]` on all four;
+  36 wide in `SDP`, `WEBWE[k]` on `2k` and `2k + 1`. **In `TDP`, `WEBWE4` to
+  `WEBWE7` are grounded**, which is the open finding above resolved: Reticle grounds
+  them too, and keeps the router off their wires. A `RAMB36E1`'s are the same on
+  each half, interleaved: 18 wide, `WE[0]` on lanes 0 and 2 of each.
+- **What a design leaves alone.** A reset, an enable or a clock tied low or
+  unconnected is a one with its inverter on: `CTRL0.BYP_BOUNCE4` for a reset and
+  `CLK0.FAN_BOUNCE5` for a clock, from wires that read one and that nothing drives,
+  and `ZINV` clear. So is an output register's clock without a register. An address
+  bit a width does not read, and a read-only port's data, are on Vivado's `<const1>`,
+  which is what an input nothing drives reads; `REGCE` is grounded. None of it
+  spends a ground fan but `REGCE` and the write enables.
+- The tile's FIFO offsets, `ZALMOST_EMPTY_OFFSET` and `ZALMOST_FULL_OFFSET`, are
+  written as zero beside a block on the lower half and not beside one on the upper
+  alone, though neither is a FIFO.
+- **Inference.** Vivado writes on port A and reads on port B, with `READ_FIRST` on
+  the port it writes, which makes a read on the other port of the word being
+  written return the old word, as the description says; and it takes a `RAMB36E1`
+  where that is one block where two `RAMB18E1` would be two, and blocks side by side
+  before blocks one above the other: 2048 by 36 is two `RAMB36E1` of 2048 by 18.
+
+**What Reticle does now**, with the default `--memories vivado` (`--memories
+legacy` keeps the block RAMs of before, bit for bit): `RAMB18E1` and `RAMB36E1` by
+name, every width, `SDP` and `TDP`, the registers, inverters, write modes,
+priorities, collision mode and initial and reset values, and a `RAMB36E1` inferred
+where Vivado infers one (`src/fpga/xray/bram.rs`; `xc7.dev`'s `bram RAMB36E1`,
+on a site of its own that blocks both halves, `site bram36`). Each of the points
+above is Vivado's, read off these designs.
+
+| 40 designs | the same as Vivado's |
+|---|---|
+| block RAM tiles, every site feature and contents bit | 34 |
+| cells, by kind and count | 35 of the 37 it has an answer for |
+| nets of a named block, by the site pins they reach | all 3,949 of the 27 designs' |
+| answer under `xsim`, 2,000 cycles | all 38 Reticle builds |
+
+The six that are not Vivado's are not built as Vivado builds them: a cascade
+(`RAM_EXTENSION_*`), which is refused; a memory both of whose ports read and
+write, which the mapper does not pair and refuses; a second read register Vivado
+takes into the block (`DOB_REG`) and Reticle leaves in a slice; 512 words of 36 and
+of 72, which Vivado puts in one block in simple dual port and Reticle in a
+`RAMB36E1` and two, in true dual port; and byte writes, which Vivado's synthesis
+stopped on. Ten of the named designs read an `x` from the first cycle under `xsim`,
+the unused outputs of a narrow port or a collision of the two, and for those the
+simulation says only that Reticle's netlist reads `x` where Vivado's does.
+
+**Checked, on all 38 it builds:** every set bit decodes, none unexplained; the arcs
+are the router's and the ties'; the mapping is proved; and the routed netlist,
+under `xsim` on Vivado's models, answers as Vivado's build does.
+
+**Checked by Vivado, on Reticle's implementation** (`run_placed.sh`): the 38, and
+`qor/bram_fifo`, `lutram32` and `regfile_alu`. **Vivado took every route of every
+one, 6,284 nets and none refused, and finished all 41**, `bram_fifo` and `lutram32`
+among them, which it could not before. Their bitstreams decoded beside Reticle's
+name 448,126 features of Reticle's, 448,048 of them Vivado's. What differs is the
+clock tiles' classes 1 to 3 above; a ground Vivado gives a lookup table's unused
+input in `lutram32` and `regfile_alu`, as before; eight bits of grounds Vivado adds
+in `bram_fifo`, not followed further; and two grounds on every `RAMB36E1` Reticle
+inferred, its error injection, which Vivado leaves unconnected on a block it infers
+(`ib_1024x36`'s `INJECTDBITERR` is on no net). Reticle leaves them so now, which was
+measured on its own bits and not again by Vivado. A run before that found
+`ib_1024x32_bytes`'s unused port B, whose clock and enable Vivado gave a one through
+their inverters where Reticle had left the clock alone and grounded the enable, and
+Reticle does as Vivado does there too. Of Reticle's 406,866 cell features under
+Vivado's own routes, every one is Vivado's.
+
+**What it changes.** `bram_fifo` is one `RAMB36E1` where it was two `RAMB18E1`,
+with the same 57 lookup tables and 68 flip-flops, at 5.06 ns where it was 5.07; the
+mapper's other twelve designs of `qor/` are the bitstream they were. With `--memories
+legacy` all thirteen are the bitstream before, byte for byte.
+
+**The Husky Plus.** With `--memories legacy`, which both scripts pass, the Plus
+is master's bitstream byte for byte (`ea7c5f49`, 2,542,154 bits, every one decoding).
+**Built with the default instead, it does not route.** Its 244 `RAMB18E1` become 122
+`RAMB36E1`, two halves of each FIFO bank's pair in one block, and the placement that
+follows is far more crowded than the one before: at the router's 30th pass 2,998
+nodes were oversubscribed where the build of the commit before had 19, and after
+the 100th, 67 still were, so the router gave up and the bitstream it wrote
+configures none of the design's signals (an earlier build of this commit, stopped
+at pass 43, was going the same way). The nodes it named are ordinary interconnect,
+each shared by two of the design's own signals, and none a tie's; the placement
+estimate before the route had `ADC_clk_fb` at 15.84 ns where the commit before had
+12.04. Why the larger blocks crowd the fabric so much more has not been found: a
+`RAMB36E1` holds its two halves' pins in one tile pair, so the logic around two
+FIFO banks that each had a block of their own now meets at one, but that is a
+reading and not a measurement. Until it is found the default mapping is not one for
+this design, and the scripts' `--memories legacy` stays for that reason as much as
+for the board's.
+
+**Mutations.** Each change below was made to the code by hand, and the library's
+block RAM tests and `fpga_xray_bram_vivado` run against it with `--no-fail-fast`.
+
+| mutation | what failed |
+|---|---|
+| `ZINIT` in nextpnr's order | two unit tests; the tiles |
+| `ZINV_REGCLK` always, nextpnr's rule | a unit test; the tiles; what is not built |
+| the write enables' lanes interleaved | the unit test of the lanes; the pins |
+| a `RAMB36E1`'s data on the other half | the pins |
+| a `RAMB36E1`'s contents on the other half | the unit test of the halves; the tiles |
+| a register's clock pin given a one | **nothing**, at first: every bit decoded, the arcs matched and the simulation answered. The count of a block's clock pips was added for it, and fails |
+| a one-bit port's input on one half only | the pins |
+| no cost by capacity | the tiles; the cells |
+| stacked before side by side | the tiles |
+| the resets grounded, not held | the tiles; what is not built |
+| no FIFO offsets | the tiles; the halves; what is not built |
+| `ADDR[15]` grounded | **nothing**. Bit 15 only matters to a cascade, on UG473's word; no check here sees an interconnect tie but a block's clocks and controls |
+| `TDP`'s `WEBWE[7:4]` given the enable | the unit test of the lanes; the pins |
+| the mapper's control ties left out of the netlist | the simulation |
+| no `READ_WIDTH_A_18` on an upper half in `SDP` | the halves |
+| the address below a word zeros, not ones | **nothing**: Reticle's own bits are the same, since it ties neither; only Vivado, given Reticle's netlist, grounds them (`run_placed.sh`) |
+| port A's write enables driven in `SDP` | the unit test of the lanes |
+| `WRITE_FIRST` kept on the port inference writes | the tiles; what is not built; the simulation |
+
+### `FIFO18E1` and `FIFO36E1`: asked, and not built
+
+`tools/vivado-parity/gen_fifo.py` writes 17 designs, a `FIFO18E1` 4, 9, 18 and 36
+bits wide and a `FIFO36E1` 4 to 72, each with its clocks apart, and on one clock,
+falling through, with flag offsets of its own and with initial and reset values,
+under a reset at power-up that the vendor's model accepts. Vivado built all 17. What
+its bitstreams say, read through `--decode`, **checked on these designs and nothing
+more**, for the work that builds them:
+
+- A FIFO is the block RAM features of its half or halves with `FIFO_MODE` set, read on
+  port A and written on port B at its width (`READ_WIDTH_A_18`, `WRITE_WIDTH_B_18`;
+  36 wide, `SDP_*_WIDTH_36` with all four widths 18), both write modes `NO_CHANGE`,
+  both output registers with `DO_REG`, and a `FIFO36E1` is both halves each half as
+  wide, `BRAM36_*_1` as a `RAMB36E1` of that width has them.
+- `EN_SYN` and `FIRST_WORD_FALL_THROUGH` are the tile's own, set when `TRUE`.
+- **The flag offsets are not the parameters**: the tile's `ZALMOST_EMPTY_OFFSET` is
+  `ALMOST_EMPTY_OFFSET`, less one when the first word falls through, and
+  `ZALMOST_FULL_OFFSET` is `ALMOST_FULL_OFFSET`, more one when the clocks are apart
+  (`EN_SYN` false), each inverted bit for bit as the `Z` says: 0x0b6 and 0x3c5 asked
+  were written 0x0b6 and 0x3c6.
+- **Three bits the database does not name**, frame 27 bits 172 to 174 of the tile,
+  are the width: a `FIFO18E1` 4, 9, 18 and 36 wide sets 1, 2, 3 and 4 there, a
+  `FIFO36E1` 4 to 72 wide 0 to 4. `reticle fpga --decode` reports them unexplained in
+  every one of Vivado's FIFO bitstreams but the `FIFO36E1` 4 wide, which is the one
+  whose value is 0. They were measured on `BRAM_R` tiles only; every other feature
+  of `BRAM_L` sits on the same bits.
+- The pins are the block RAM's: `RDCLK`, `RDEN` and `RST` on port A's clock, enable
+  and reset, `WRCLK` and `WREN` on port B's, the register's clock beside them with
+  `DO_REG`, `DI` and `DO` on port A's data, the flags and counts on pins of their
+  own (`EMPTY`, `RDCOUNT0`); a `FIFO36E1`'s enables and reset on the lower half
+  alone (`ENARDENL`, `RSTRAMARSTRAMLRST`), and the upper half's held through their
+  inverters.
+
+None of this is in Reticle yet: a design naming either still does not build.
+
+**Not done.** `FIFO18E1` and `FIFO36E1` by name, which still do not build. A
+cascade, error correction, inference of simple dual port, of a register into the
+block, and of a port that both reads and writes. A block's output register named
+with `DO<x>_REG` is clocked as Vivado clocks it, but nothing here has run one on a
+part, nor any block RAM of this section.
 
 ## The container around the frames, and `write_bitstream`'s options
 

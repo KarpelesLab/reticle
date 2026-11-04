@@ -886,7 +886,7 @@ fn describe(device: &Device, primitive: &str) -> Option<(String, Vec<(String, St
         }
     }
     for bram in device.block_rams.iter().filter(|b| b.name == primitive) {
-        kind = Some(BelRole::Bram.keyword().to_owned());
+        kind = Some(bram.site_kind().to_owned());
         for (index, port) in bram.port_map.iter().enumerate() {
             for (role, name) in &port.signals {
                 if !bases.iter().any(|(p, _)| p == name) {

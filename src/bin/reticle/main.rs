@@ -245,11 +245,13 @@ Options:
                      buffer, as it has always been built, and `on` gives all a site.
   --memories <vivado|legacy>
                      7 series: map memories as Vivado 2026.1 does (the
-                     default): block RAM from 1024 bits, by its rule, and
-                     below that every distributed RAM shape it uses, with
-                     each named cell kept as that cell. `legacy` is the
-                     mapping before, one `RAM64X1D` shape on the slice's
-                     `WE` pin and block RAM from 256 bits, which a build
+                     default): block RAM from 1024 bits, by its rule, a
+                     `RAMB36E1` where it takes one, each block's pins, ties
+                     and mode bits as it writes them, and below that every
+                     distributed RAM shape it uses, with each named cell
+                     kept as that cell. `legacy` is the mapping before, one
+                     `RAM64X1D` shape on the slice's `WE` pin, `RAMB18E1`
+                     alone and block RAM from 256 bits, which a build
                      measured on a board keeps.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
@@ -4052,6 +4054,9 @@ fn write_xc7_bitstream(
     let design = &design;
 
     let mut netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
+    // A block RAM's write enables and register clocks reach the site's pins
+    // as Vivado wires them: see `XrayFabric::spread_block_ram_pins`.
+    fabric.spread_block_ram_pins(design, top, &mut netlist);
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
     reticle::fpga::xray::check_regional_wiring(&netlist)?;
@@ -5810,7 +5815,7 @@ fn hold_report(netlist: &reticle::fpga::Netlist, wire: &[f64]) -> String {
         .instances
         .iter()
         .map(|inst| {
-            if inst.kind != "ff" && inst.kind != "bram" {
+            if inst.kind != "ff" && inst.kind != "bram" && inst.kind != "bram36" {
                 return None;
             }
             inst.pins
@@ -5880,7 +5885,8 @@ fn hold_report(netlist: &reticle::fpga::Netlist, wire: &[f64]) -> String {
                     }
                 }
                 for (data, capture, end, role) in ends {
-                    let hold = if netlist.instances[end].kind == "bram" {
+                    let hold = if matches!(netlist.instances[end].kind.as_str(), "bram" | "bram36")
+                    {
                         BRAM_HOLD
                     } else {
                         HOLD

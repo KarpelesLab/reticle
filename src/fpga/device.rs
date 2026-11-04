@@ -1134,6 +1134,13 @@ pub struct BramShape {
     pub init_params: Option<BramInitParams>,
     /// The physical ports and their pin names, in file order.
     pub port_map: Vec<BramPort>,
+    /// The kind of site the placer puts one on, written `site <kind>`, when
+    /// it is not `bram`: a 7-series `RAMB36E1` is both halves of a block RAM
+    /// tile, a `RAMB18E1` one of them. See [`BelKind::site`].
+    pub site: Option<String>,
+    /// The port names that are outputs, written `outputs DOADO,DOBDO`: what
+    /// a design naming the block needs, as [`BelKind::outputs`] is.
+    pub outputs: Vec<String>,
 }
 
 /// How one width mode of a block RAM places a word: on the data and
@@ -1319,6 +1326,12 @@ impl BramInitParams {
 }
 
 impl BramShape {
+    /// The kind of site one goes on: [`BramShape::site`], or `bram`.
+    #[must_use]
+    pub fn site_kind(&self) -> &str {
+        self.site.as_deref().unwrap_or(BelRole::Bram.keyword())
+    }
+
     /// The largest number of bits the block holds, over its width modes.
     pub fn bits(&self) -> u64 {
         self.width_modes
@@ -2502,6 +2515,12 @@ fn write_bram(out: &mut String, bram: &BramShape) {
     if let Some(count) = bram.count {
         out.push_str(&format!("    count {count}\n"));
     }
+    if let Some(site) = &bram.site {
+        out.push_str(&format!("    site {}\n", quote(site)));
+    }
+    if !bram.outputs.is_empty() {
+        out.push_str(&format!("    outputs {}\n", join(&bram.outputs)));
+    }
     for (index, (width, depth)) in bram.width_modes.iter().enumerate() {
         let mut line = format!("    mode {width} {depth}");
         if let Some(params) = bram.mode_params.get(index)
@@ -3202,6 +3221,8 @@ impl<'a> Parser<'a> {
             mode_layouts: Vec::new(),
             init_params: None,
             port_map: Vec::new(),
+            site: None,
+            outputs: Vec::new(),
         };
         loop {
             let Some(line) = self.peek() else {
@@ -3266,6 +3287,20 @@ impl<'a> Parser<'a> {
                 "init_params" => {
                     bram.init_params = self.init_params(line);
                 }
+                "site" => match line.get(1) {
+                    Some(kind) => bram.site = Some(kind.as_str().to_owned()),
+                    None => self.error(line.span, "expected a site kind after `site`"),
+                },
+                "outputs" => match line.get(1) {
+                    Some(names) => bram.outputs.extend(
+                        names
+                            .as_str()
+                            .split(',')
+                            .filter(|w| !w.is_empty())
+                            .map(str::to_owned),
+                    ),
+                    None => self.error(line.span, "expected port names after `outputs`"),
+                },
                 "port" => {
                     let Some(kind) = line.get(1) else {
                         self.error(line.span, "expected `read`, `write` or `rw`");
@@ -4466,6 +4501,8 @@ end
             mode_layouts: Vec::new(),
             init_params: None,
             port_map: Vec::new(),
+            site: None,
+            outputs: Vec::new(),
         };
         assert_eq!(bram.bits(), 0);
         assert_eq!(bram.layout_for_mode((8, 8)), BramModeLayout::default());

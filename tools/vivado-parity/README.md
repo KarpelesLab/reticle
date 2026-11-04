@@ -53,6 +53,13 @@ models or IP.
   synthesis which memories go to block RAM, into `sweep.txt`;
   `tests/fpga_xray_lutram_vivado.rs` decodes the bitstreams into `vivado.txt`
   and holds Reticle to all of it.
+- `gen_bram.py` writes `testdata/fpga/vivado/bram/`, block RAMs by name in each
+  mode and memories to infer as one, and `FIXTURE=bram lutram.sh` asks Vivado the
+  same of them; `gen_lutram_vectors.py` simulates them too, and
+  `tests/fpga_xray_bram_vivado.rs` decodes the bitstreams into `vivado.txt` there.
+- `gen_fifo.py` writes a `FIFO18E1` or `FIFO36E1` by name per setting, for
+  `lutram_probe.tcl`; `docs/fpga-vivado-parity.md` has what Vivado wrote of them,
+  and nothing here builds one yet.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

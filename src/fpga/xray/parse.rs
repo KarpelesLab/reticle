@@ -724,7 +724,7 @@ pub(super) fn bels_of(
         // A block RAM's pins are numbered (`p0_addr13`), so they are built
         // rather than listed; see `bram::bel_pins`.
         if sub.is_empty() {
-            for (role, wire) in super::bram::bel_pins(&tile.tile_type, prefix) {
+            for (role, wire) in super::bram::bel_pins_in(&tile.tile_type, prefix, model) {
                 if wires.contains(wire.as_str()) {
                     bel.pins.push((role, WireRef::local(wire)));
                     coverage.pins += 1;
@@ -841,7 +841,34 @@ pub(super) fn bels_of(
         }
     }
 
+    // A `RAMB36E1`: both halves of a block RAM tile as one block, in the
+    // Vivado model. It has no feature prefix of its own to be found by (its
+    // seven `RAMB36.*` features are read by name, by
+    // `bram::ramb36_features`), so it is built here, and its contents are
+    // the halves' contents bits, given to it below as they are given to the
+    // halves.
+    let ramb36 = model == super::lutram::LutRamModel::Vivado
+        && match super::bram::ramb36_pins(&tile.tile_type) {
+            Some(pins) => {
+                let mut bel =
+                    BelDecl::new(super::bram::RAMB36_BEL.to_owned(), super::bram::RAMB36_KIND);
+                for (role, wire) in pins {
+                    if wires.contains(wire.as_str()) {
+                        bel.pins.push((role, WireRef::local(wire)));
+                        coverage.pins += 1;
+                    } else {
+                        coverage.pins_unresolved += 1;
+                    }
+                }
+                bel.blocks = vec!["RAMB18_Y0".to_owned(), "RAMB18_Y1".to_owned()];
+                bels.insert(bel.name.clone(), bel);
+                true
+            }
+            None => false,
+        };
+
     // Now attach every feature to the bel it names.
+    let mut whole_contents: Vec<ConfigEntry> = Vec::new();
     for feature in features.features() {
         let mut parts = feature.name.split('.');
         let (Some(head), Some(second)) = (parts.next(), parts.next()) else {
@@ -876,12 +903,27 @@ pub(super) fn bels_of(
                         at: *bit,
                     });
                 }
+                if ramb36
+                    && let Some((name, index)) = super::bram::ramb36_param_of(head, &name, index)
+                {
+                    for bit in &feature.ones {
+                        whole_contents.push(ConfigEntry::Param {
+                            name: name.clone(),
+                            index,
+                            at: *bit,
+                        });
+                    }
+                }
             }
             None => bel.config.push(ConfigEntry::Cell {
                 primitive: tail,
                 bits: feature.ones.clone(),
             }),
         }
+    }
+
+    if let Some(whole) = bels.get_mut(super::bram::RAMB36_BEL) {
+        whole.config.extend(whole_contents);
     }
 
     // An IO buffer's pad is configured per buffer, by

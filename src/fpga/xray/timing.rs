@@ -806,7 +806,7 @@ pub fn place_timing(
                 // relies on one is timed as if it could not.
                 (launch[index], capture[index]) = match kind {
                     "ff" | "latch" => (FF_LAUNCH, FF_SETUP),
-                    "bram" => (BRAM_LAUNCH, BRAM_SETUP),
+                    "bram" | "bram36" => (BRAM_LAUNCH, BRAM_SETUP),
                     _ => (FF_LAUNCH, FF_SETUP),
                 };
                 for pin in &inst.pins {
@@ -824,7 +824,7 @@ pub fn place_timing(
                 }
                 // A block RAM's two ports may be on two clocks, each port's
                 // pins in its own: see `PlaceTiming::pin_domain`.
-                if kind == "bram" {
+                if kind == "bram" || kind == "bram36" {
                     for port in ["p0_", "p1_"] {
                         let clk = format!("{port}clk");
                         let Some(c) = inst

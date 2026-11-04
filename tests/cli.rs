@@ -1726,41 +1726,49 @@ fn the_husky_fifo_stand_ins_pointers_cross_from_registers() {
 }
 
 /// The largest of them, 72 x 16384, is 64 `RAMB18E1` in the 18-bit mode
-/// whose top two bits are parity: the Husky's FIFOs fit the part only that
-/// way. It is two banks of 8192, each with its own registers (see
-/// `husky_fifo`'s `banked`), and each bank eight segments of 1024 words,
-/// four blocks wide and one deep, so that no multiplexer of the mapping's
-/// own chooses between blocks. Would catch the parity modes lost, a
-/// tie-break that put a segment in a data-only mode, or the segments
-/// merged back into one memory deeper than a block; would not catch a
-/// segment's select register merged with another's, which the mapped
-/// netlist's names show.
+/// whose top two bits are parity, with `--memories legacy`, which the Husky's
+/// build passes: its FIFOs fit the part only that way. It is two banks of
+/// 8192, each with its own registers (see `husky_fifo`'s `banked`), and each
+/// bank eight segments of 1024 words, four blocks wide and one deep, so that
+/// no multiplexer of the mapping's own chooses between blocks. Mapped as
+/// Vivado maps, the default, each segment is two `RAMB36E1` in the 36-bit
+/// mode instead, the same tiles. Would catch the parity modes lost, a
+/// tie-break that put a segment in a data-only mode, the segments merged
+/// back into one memory deeper than a block, or either mapping taking the
+/// other's blocks; would not catch a segment's select register merged with
+/// another's, which the mapped netlist's names show.
 #[cfg(feature = "fpga")]
 #[test]
 fn the_husky_fifo_stand_in_fills_block_ram_through_the_parity_bits() {
-    let dir = scratch("husky_fifo_bram");
-    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
-        .args([
-            "fpga",
-            "examples/husky/fifo_generator.v",
-            "--top",
-            "usb_slow_fifo2",
-            "--device",
-            "xc7a35t-ftg256",
-            "--report",
-            "--output-dir",
-        ])
-        .arg(&dir)
-        .output()
-        .expect("failed to run the reticle binary");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    for bank in 0..2 {
-        for segment in 0..8 {
-            let line = format!(
-                "u_fifo.banked.bank[{bank}].segment[{segment}].mem (1024x72) -> 4 x RAMB18E1 in \
-                 18x1024 mode (4 wide, 1 deep)"
-            );
-            assert!(stderr.contains(&line), "{stderr}");
+    for (memories, blocks) in [
+        ("legacy", "4 x RAMB18E1 in 18x1024 mode (4 wide, 1 deep)"),
+        ("vivado", "2 x RAMB36E1 in 36x1024 mode (2 wide, 1 deep)"),
+    ] {
+        let dir = scratch(&format!("husky_fifo_bram_{memories}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args([
+                "fpga",
+                "examples/husky/fifo_generator.v",
+                "--top",
+                "usb_slow_fifo2",
+                "--device",
+                "xc7a35t-ftg256",
+                "--memories",
+                memories,
+                "--report",
+                "--output-dir",
+            ])
+            .arg(&dir)
+            .output()
+            .expect("failed to run the reticle binary");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        for bank in 0..2 {
+            for segment in 0..8 {
+                let line = format!(
+                    "u_fifo.banked.bank[{bank}].segment[{segment}].mem (1024x72) -> {blocks}"
+                );
+                assert!(stderr.contains(&line), "{memories}: {stderr}");
+            }
         }
     }
 }
