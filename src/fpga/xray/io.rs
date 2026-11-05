@@ -1030,10 +1030,14 @@ impl XrayFabric {
                     &instance.primitive,
                     &cell.attrs,
                     &self.io.default_standard,
+                    // Read through either half of a `DIFF_OUT` pair, or by
+                    // a pin Vivado leaves unrouted (an `IOBUFDS_DIFF_OUT`'s
+                    // `TS`), it is read.
                     instance.primitive.starts_with("IBUF")
+                        && cell.attrs.get("io_read").is_none()
                         && !instance.pins.iter().any(|p| {
                             let pin = &netlist.pins[*p];
-                            pin.role == "din"
+                            (pin.role == "din" || pin.role == "din_n")
                                 && pin
                                     .signal
                                     .is_some_and(|s| !netlist.signals[s].sinks.is_empty())

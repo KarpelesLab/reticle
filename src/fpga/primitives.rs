@@ -5544,8 +5544,19 @@ impl Mapper<'_> {
         site: &IoSite<'_>,
         bit: u32,
         mut inputs: Vec<(Name, ExprId)>,
-        outputs: Vec<(Name, NetId)>,
+        mut outputs: Vec<(Name, NetId)>,
     ) -> CellId {
+        // A `DIFF_OUT` buffer's complement, on the net `flow::primitive_instances`
+        // kept for this bit.
+        if let Some(port) = bel.port("din_n")
+            && let Some(net) = module.nets[site.net]
+                .attrs
+                .get(&format!("io_diff_out{bit}"))
+                .and_then(AttrValue::as_str)
+                .and_then(|name| module.net_by_name(name))
+        {
+            outputs.push((Name::new(port), net));
+        }
         // A receiver's disables, on the nets `flow::primitive_instances` kept.
         for (role, key) in [
             ("ibufdisable", "io_ibufdisable"),
@@ -5688,6 +5699,7 @@ impl Mapper<'_> {
             "pull_cell",
             "io_ibufdisable_one",
             "io_intermdisable_one",
+            "io_read",
             "io_standard",
             "in_term",
             "diff_term",

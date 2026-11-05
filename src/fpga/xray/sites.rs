@@ -559,7 +559,18 @@ pub(super) fn bel_pins_in(
     // while the *wire* is still `IOB_IBUF0`, and the index is not taken
     // from the prefix here.
     if base == "IOB" && matches!(tile_type, "LIOB33" | "RIOB33") {
-        return iob_pins(index);
+        let mut pins = iob_pins(index);
+        // A `DIFF_OUT` buffer's `OB`: the pair's `_N` half's own receiver,
+        // which Vivado reads through that half's `ILOGIC` (`ZINV_D` on
+        // `ILOGIC_Y1`, `buf_ibufds_diff_out_*`). Only the `_P` half, which
+        // prjxray calls `IOB_Y0`, leads a pair.
+        if index == 0 {
+            pins.push(BelPin {
+                role: "din_n",
+                wire: "IOB_IBUF1".to_owned(),
+            });
+        }
+        return pins;
     }
     if base == "IOB" && matches!(tile_type, "LIOB33_SING" | "RIOB33_SING") {
         return iob_pins(0);

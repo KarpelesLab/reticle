@@ -711,6 +711,11 @@ fn what_reticle_writes_is_what_vivado_wrote() {
         "buf_obuftds_t1",
         "buf_ibufds_intermdisable_lvds_25",
         "buf_keeper_inout",
+        // The second half's own receiver read, alone and beside the first,
+        // and a pair both ways whose `TS` Vivado leaves unrouted.
+        "buf_ibufds_diff_out_ob_lvds_25",
+        "buf_ibufds_diff_out_tmds_33",
+        "buf_iobufds_diff_out_diff_sstl15",
     ];
     let wrong = in_parallel(&names, 8, |name| compare(name, &answers[*name], &root));
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
@@ -775,17 +780,15 @@ fn every_design_builds_to_vivados_bits() {
 
 /// What needs a buffer this flow does not build yet.
 /// `t_`, `dt_`, `db_`: sweeps of a tristate whose enable is a port, compared
-/// apart in `buf_*`. The `DIFF_OUT` forms are not built. `buf_iobuf_params`:
-/// the cell library's `IOBUF` takes no parameters, and is refused them.
-const PENDING: [&str; 9] = [
+/// apart in `buf_*`. `buf_iobuf_params`: the cell library's `IOBUF` takes no
+/// parameters, and is refused them. The `DIFF_OUT` forms were here until they
+/// were built, and all 44 agree.
+const PENDING: [&str; 6] = [
     "t_",
     "dt_",
     "db_",
     "bad_bidir_pair",
     "bias_lvds_io",
-    "buf_ibufds_diff_out",
-    "buf_ibufgds_diff_out",
-    "buf_iobufds_diff_out",
     "buf_iobuf_params",
 ];
 

@@ -1255,7 +1255,7 @@ fn primitive_instances(
                     };
                     m.ports.iter().any(|p| p.net == net).then_some((net, bit))
                 };
-                let (Some((p, _)), Some((n, n_bit))) = (
+                let (Some((p, p_bit)), Some((n, n_bit))) = (
                     port_net(m, bel.port("pad").unwrap_or("")),
                     port_net(m, pad_n),
                 ) else {
@@ -1299,6 +1299,65 @@ fn primitive_instances(
                 m.nets[n].attrs.set("io_differential_n", 1i64);
                 let n_name = m.nets[n].name.as_str().to_owned();
                 m.nets[p].attrs.set("io_pair_n", n_name);
+                // A `DIFF_OUT` buffer's `OB`, which Vivado reads off the
+                // pair's `_N` half through that half's own `ILOGIC`
+                // (`buf_ibufds_diff_out_*`): a second output of the buffer
+                // mapping builds on the first port, carried there on a kept
+                // net the port names, bit by bit.
+                if bel.port("din_n").is_some() {
+                    m.nets[p]
+                        .attrs
+                        .set("io_buffer", primitive.as_str().to_owned());
+                }
+                if let Some(ob) = bel.port("din_n").and_then(|port| inst.connection(port)) {
+                    let Some(target) = crate::ir::hier::expr_to_lvalue(m, ob) else {
+                        refused += 1;
+                        diags.push(
+                            Diagnostic::error(format!(
+                                "`{}`: the `OB` of a `{primitive}` must be wired to a net",
+                                inst.name
+                            ))
+                            .with_span(inst.span),
+                        );
+                        continue;
+                    };
+                    let ty = m.expr(ob).ty.clone();
+                    let mut keep = Attrs::new();
+                    keep.set("keep", 1i64);
+                    let name = format!("{}$ob", inst.name);
+                    let net = m.nets.push(Net {
+                        name: Name::new(name.clone()),
+                        ty,
+                        kind: NetKind::Wire,
+                        attrs: keep,
+                        span: inst.span,
+                    });
+                    let value = m.add_expr(crate::ir::Expr::new(
+                        ExprKind::Net(net),
+                        m.nets[net].ty.clone(),
+                        inst.span,
+                    ));
+                    m.assigns.push(Assign {
+                        target,
+                        value,
+                        delay: None,
+                        attrs: Attrs::new(),
+                        span: inst.span,
+                    });
+                    m.nets[p]
+                        .attrs
+                        .set(format!("io_diff_out{}", p_bit.unwrap_or(0)), name);
+                }
+                // An `IOBUFDS_DIFF_OUT`'s `TS` reaches nothing: Vivado drives
+                // both halves from `TM` and leaves `TS` unrouted, but a pad it
+                // comes from still counts as read (`buf_iobufds_diff_out_*`).
+                if bel.port("din_n").is_some()
+                    && let Some(ts) = inst.connection("TS")
+                    && let Some(net) = m.expr(ts).as_net()
+                    && m.ports.iter().any(|port| port.net == net)
+                {
+                    m.nets[net].attrs.set("io_read", 1i64);
+                }
             }
             // What an instance says of its pad, which a constraint outranks.
             let pad_net = inst

@@ -240,7 +240,10 @@
 #     OBUFTDS, IOBUFDS and the `_IBUFDISABLE` and `_INTERMDISABLE` forms
 #     come AFTER the ones mapping chooses for a direction, and are only
 #     ever the design's: `docs/fpga-vivado-parity.md`, "Buffers by name",
-#     has their bits, every one of them Vivado's.
+#     has their bits, every one of them Vivado's. So do the six `DIFF_OUT`
+#     forms, whose `din_n` is `OB`, read off the pair's `_N` half; an
+#     `IOBUFDS_DIFF_OUT`'s `TS` is not a port here because Vivado leaves it
+#     unrouted and drives both halves from `TM` (`buf_iobufds_diff_out_*`).
 #     The XC7A100T's 37 standards are `xc7::pads`'s, measured there;
 #     `input_free` says an input asks nothing of the bank's supply.
 #   * IO standards: LVCMOS33 is the only one the Basys 3 uses and the
@@ -458,6 +461,12 @@ device xc7a35t-cpg236
   bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFGDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFDS_DIFF_OUT_IBUFDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE
+  bel IBUFDS_DIFF_OUT_INTERMDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_DIFF_OUT io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM
+  bel IOBUFDS_DIFF_OUT_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
@@ -747,6 +756,12 @@ device xc7a35t-ftg256
   bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFGDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFDS_DIFF_OUT_IBUFDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE
+  bel IBUFDS_DIFF_OUT_INTERMDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_DIFF_OUT io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM
+  bel IOBUFDS_DIFF_OUT_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
@@ -1132,6 +1147,12 @@ device xc7a100t-ftg256
   bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFGDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFDS_DIFF_OUT_IBUFDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE
+  bel IBUFDS_DIFF_OUT_INTERMDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_DIFF_OUT io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM
+  bel IOBUFDS_DIFF_OUT_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
   bel BUFG gb count 32 port i=I o=O outputs O
   bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
   bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
