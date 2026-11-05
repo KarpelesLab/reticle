@@ -169,6 +169,9 @@ say routed_pips $pips
 # one for a design with an unfinished net: RTSTAT-2, -5 and -9 "may not change
 # severity", and that is left as its answer. Those designs still have the
 # placement stage's bitstream, whose cells are Reticle's and whose routes are not.
+# A checkpoint all the same of routes Vivado could not finish, for
+# timing_dump.tcl: the nets that are routed are still Reticle's, and timed.
+if {!$finished && $stage eq "routes"} { write_checkpoint -force $top.dcp }
 if {$finished || $stage eq "placement"} {
   step bitstream {
     # A design placed by place_cell is "not implemented" to write_bitstream;

@@ -49,6 +49,11 @@
 # `--memories legacy` for the same reason: the default maps memories as
 # Vivado does, which changes this design's netlist and placement, and that
 # build has not been on a board either (docs/fpga-vivado-parity.md).
+# `--delay-model legacy` for the same reason again: the default model is
+# fitted to Vivado's timer, and a timing-driven build steers by it, so it
+# places and routes this design differently. Every build of it measured on
+# a board was made with the legacy model, and this one is that build byte for
+# byte; see docs/fpga-vivado-parity.md.
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -59,7 +64,7 @@ reticle=${RETICLE:-reticle}
 
 mkdir -p "$out"
 exec "$reticle" fpga \
-    --wide-muxes off --memories legacy \
+    --wide-muxes off --memories legacy --delay-model legacy \
     --srl-min 0 \
     --device xc7a100t-ftg256 \
     --top cwhusky_top \

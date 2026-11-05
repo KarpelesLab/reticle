@@ -82,7 +82,7 @@ def reticle_connections(design):
     if not os.path.exists(path):
         return found
     for line in open(path):
-        m = re.match(r"connection (\S+) (\d+) (.*)\.(\w+)$", line)
+        m = re.match(r"connection (\S+) (\d+) (\S+)\.(\w+)(?: \S+)?$", line)
         if m:
             found[(safe(m[3]), m[4])] = (float(m[1]), int(m[2]))
     return found

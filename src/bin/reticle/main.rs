@@ -253,6 +253,13 @@ Options:
                      `RAM64X1D` shape on the slice's `WE` pin, `RAMB18E1`
                      alone and block RAM from 256 bits, which a build
                      measured on a board keeps.
+  --delay-model <vivado|legacy>
+                     7 series: the delays a timing-driven build places, routes
+                     and reports with. `vivado` (the default) is fitted to
+                     Vivado 2026.1's timer at speed grade 3, wire class by wire
+                     class and cell arc by cell arc; `legacy` is prjxray's pip
+                     delays and the cell figures from before, which every build
+                     measured on a board was made with.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`
@@ -843,6 +850,7 @@ fn spec_for(usage: &str) -> Spec {
                 "wide-muxes",
                 "regional-clocks",
                 "memories",
+                "delay-model",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -1080,6 +1088,20 @@ fn memories_legacy(args: &Args) -> Result<bool, ArgError> {
             value: other.to_owned(),
             expected: "`vivado` or `legacy`",
         }),
+    }
+}
+
+/// The delay model `--delay-model` names; see the usage text.
+fn delay_model(args: &Args) -> Result<reticle::fpga::xray::DelayModel, ArgError> {
+    match args.option("delay-model") {
+        None => Ok(reticle::fpga::xray::DelayModel::default()),
+        Some(name) => {
+            reticle::fpga::xray::DelayModel::from_name(name).ok_or_else(|| ArgError::BadValue {
+                option: "delay-model".to_owned(),
+                value: name.to_owned(),
+                expected: "`vivado` or `legacy`",
+            })
+        }
     }
 }
 
@@ -4155,8 +4177,10 @@ fn write_xc7_bitstream(
     options.regional_sites = fabric.regional_sites(&graph);
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
+    let delay_model = delay_model(args).map_err(|e| e.to_string())?;
     let domains = if args.flag("timing-driven") {
-        let (timing, names) = reticle::fpga::xray::place_timing(design, top, &netlist, constraints);
+        let (timing, names) =
+            reticle::fpga::xray::place_timing(design, top, &netlist, constraints, delay_model);
         options.timing = Some(timing);
         names
     } else {
@@ -4166,7 +4190,7 @@ fn write_xc7_bitstream(
     // timing-driven build reads the tile types' timing files.
     let node_delay = if options.timing.is_some() {
         Some(
-            db.node_delays(&files, &fabric.arch, &graph)
+            db.node_delays(&files, &fabric.arch, &graph, delay_model)
                 .map_err(|e| e.to_string())?,
         )
     } else {
@@ -4235,10 +4259,25 @@ fn write_xc7_bitstream(
     // same sources routed.
     let mut attempts_left = route_attempts(args)?.saturating_sub(1);
     let mut failure = None;
+    // What the timing was before a placement said where each cell is, for the
+    // next attempt to start from.
+    let unplaced_timing = options.timing.clone();
     let (placement, placement_report, routed_at) = loop {
+        options.timing.clone_from(&unplaced_timing);
         let (mut placement, placement_report) =
             place(&netlist, &fabric.arch, &graph, constraints, &options)
                 .map_err(|e| e.to_string())?;
+        // The cells' own figures where the placement says them, for the
+        // route and its estimate: see `xray::place_timing_on_sites`.
+        if let Some(timing) = options.timing.as_mut() {
+            reticle::fpga::xray::place_timing_on_sites(
+                timing,
+                delay_model,
+                &netlist,
+                &graph,
+                &placement,
+            );
+        }
         // Each delay's controller in the clock row of its region.
         fabric.place_io_delay_controllers(&delays, &netlist, &graph, &mut placement)?;
         laps.lap("place");
@@ -4460,8 +4499,16 @@ fn write_xc7_bitstream(
     // What the route made of each domain's paths, by the same model the
     // placement estimate used: the routed counterpart of the line above.
     if let (Some(delays), Some(paths), None) = (&node_delay, &options.timing, &failure) {
-        let wire =
-            reticle::fpga::route::connection_delays(&netlist, &graph, &placement, &routing, delays);
+        // And each branch more than one on a connection's way, which the
+        // fitted model charges and the router's own analysis does not: see
+        // `xray::delay`.
+        let branch_ps = match delay_model {
+            reticle::fpga::xray::DelayModel::Vivado => reticle::fpga::xray::delay::BRANCH_PS,
+            reticle::fpga::xray::DelayModel::Legacy => 0,
+        };
+        let wire = reticle::fpga::route::connection_delays(
+            &netlist, &graph, &placement, &routing, delays, branch_ps,
+        );
         let (_, longest) = reticle::fpga::place::path_criticality(&netlist, paths, &wire);
         let domains_text: Vec<String> = domains
             .iter()
@@ -4713,17 +4760,29 @@ fn write_xc7_bitstream(
                 ));
             }
             // And each connection's own estimate, for the same comparison a
-            // wire at a time.
-            for signal in &netlist.signals {
+            // wire at a time, with the wire the route reached it on: a lookup
+            // table's pin is whichever of its inputs the router chose, and
+            // the wire says which, where the role does not.
+            for (index, signal) in netlist.signals.iter().enumerate() {
+                let route = routing.route(index);
                 for sink in &signal.sinks {
                     let pin = &netlist.pins[*sink];
                     if wire[*sink] > 0.0 {
+                        let node = route
+                            .and_then(|r| r.moved.iter().find(|(m, _)| m == sink))
+                            .map(|(_, node)| *node)
+                            .or_else(|| {
+                                placement
+                                    .site_of(pin.instance)
+                                    .and_then(|site| graph.sites[site].pin(&pin.role))
+                            });
                         text.push_str(&format!(
-                            "connection {:.3} {} {}.{}\n",
+                            "connection {:.3} {} {}.{} {}\n",
                             wire[*sink],
                             signal.sinks.len(),
                             netlist.instances[pin.instance].name,
-                            pin.role
+                            pin.role,
+                            node.map_or_else(|| "-".to_owned(), |n| graph.wire(n).full_name())
                         ));
                     }
                 }

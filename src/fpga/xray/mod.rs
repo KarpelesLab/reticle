@@ -169,6 +169,7 @@ mod carry;
 mod cmt;
 mod config;
 mod dcireset;
+pub mod delay;
 mod dsp;
 mod fifo;
 mod finish;
@@ -198,6 +199,7 @@ pub use cmt::{
     PllSettings, check_manager, counter, mmcm_registers, pll_registers, shaped_counter,
 };
 pub use dcireset::unread_dci_resets;
+pub use delay::DelayModel;
 pub use dsp::{DSP_PRIMITIVE, dsp_local_muxes, dsp_pin_wires};
 pub use fifo::{
     Shape as FifoShape, check as fifo_check, features as fifo_features,
@@ -229,7 +231,7 @@ pub use regional::{
     RegionalClocks, RegionalError, check_regional_wiring, is_regional_kind, regional_buffers,
 };
 pub use sites::SiteCoverage;
-pub use timing::place_timing;
+pub use timing::{place_timing, place_timing_on_sites};
 pub use vivado::{VivadoExportError, VivadoImplementation, vivado_implementation};
 pub use xadc::xadc_init_bit;
 
@@ -1003,6 +1005,11 @@ impl XrayDatabase {
     /// skew was the model's, entering every path estimate between the two
     /// ends, both ways.
     ///
+    /// **That is [`DelayModel::Legacy`].** With [`DelayModel::Vivado`] a node
+    /// a pip in its own tile enters costs what [`delay::wire_ps`] fitted to
+    /// Vivado's timer says of its class, and one a join enters nothing: see
+    /// [`delay`].
+    ///
     /// # Errors
     ///
     /// [`XrayError::Malformed`] when a tile type's file is there but is
@@ -1013,6 +1020,7 @@ impl XrayDatabase {
         files: &dyn FileProvider,
         arch: &Arch,
         graph: &super::arch::RoutingGraph,
+        model: DelayModel,
     ) -> Result<Vec<u32>, XrayError> {
         type Delays = HashMap<(String, String), u32>;
         let mut tables: Vec<Delays> = Vec::with_capacity(arch.tile_types.len());
@@ -1041,6 +1049,8 @@ impl XrayDatabase {
             tables.push(table);
         }
         let mut out = vec![0u32; graph.nodes.len()];
+        // Each wire's class's cost, by tile type and wire name, looked up once.
+        let mut classes: HashMap<(usize, &str), Option<u32>> = HashMap::new();
         for (index, pip) in graph.pips.iter().enumerate() {
             let index = super::arch::PipId::try_from(index).unwrap_or(u32::MAX);
             // The clock network's untimed pips are its segments, not its
@@ -1054,15 +1064,39 @@ impl XrayDatabase {
             let table = arch
                 .tile_index_at(pip.tile.0, pip.tile.1)
                 .and_then(|t| tables.get(t));
-            let ps = table
+            let timed = table
                 .and_then(|t| {
                     t.get(&(
                         graph.wire(pip.from).name.clone(),
                         graph.wire(pip.to).name.clone(),
                     ))
                 })
-                .copied()
-                .unwrap_or(untimed);
+                .copied();
+            let ps = timed.unwrap_or(untimed);
+            let ps = match model {
+                DelayModel::Legacy => ps,
+                DelayModel::Vivado => {
+                    let (from, to) = (graph.wire(pip.from), graph.wire(pip.to));
+                    let tile_type = arch.tile_index_at(pip.tile.0, pip.tile.1);
+                    match tile_type {
+                        Some(t) if !from.global && !to.global && from.tile == to.tile => {
+                            let class =
+                                *classes.entry((t, to.name.as_str())).or_insert_with(|| {
+                                    delay::class_ps(&delay::wire_class(
+                                        &arch.tile_types[t].name,
+                                        &to.name,
+                                    ))
+                                });
+                            class.unwrap_or_else(|| {
+                                timed.map_or(0, |ps| ps * delay::OTHER_PER_MILLE / 1000)
+                            })
+                        }
+                        // A join between a wire's pieces, which was paid for
+                        // where it was entered.
+                        _ => 0,
+                    }
+                }
+            };
             let node = &mut out[pip.to as usize];
             *node = (*node).max(ps);
         }

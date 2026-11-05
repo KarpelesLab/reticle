@@ -1696,21 +1696,35 @@ fn analyse_paths(
 /// none. What a caller gives
 /// [`place::path_criticality`](crate::fpga::place::path_criticality) to
 /// time a finished route, as the router does each pass.
+///
+/// `branch_ps` is what each branch more than one leaving a node on the
+/// sink's way adds to it: the load of the others, which a timer that sees
+/// the whole tree charges (`xray::delay::BRANCH_PS`). The router's own
+/// analysis does not, and zero is that.
 pub fn connection_delays(
     netlist: &Netlist,
     graph: &RoutingGraph,
     placement: &Placement,
     routing: &Routing,
     node_delay: &[u32],
+    branch_ps: u32,
 ) -> Vec<f64> {
     let mut wire = vec![0.0f64; netlist.pins.len()];
     for route in routing.routes() {
+        let mut branches: HashMap<NodeId, u64> = HashMap::new();
+        if branch_ps > 0 {
+            for pip in &route.pips {
+                *branches.entry(graph.pip(*pip).from).or_default() += 1;
+            }
+        }
         let mut delay: HashMap<NodeId, u64> = HashMap::new();
         delay.insert(route.source, 0);
         for pip in &route.pips {
             let pip = graph.pip(*pip);
+            let more = branches.get(&pip.from).map_or(0, |n| n.saturating_sub(1));
             let to = delay.get(&pip.from).copied().unwrap_or(0)
-                + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0));
+                + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0))
+                + more * u64::from(branch_ps);
             delay.insert(pip.to, to);
         }
         for sink in &netlist.signals[route.signal].sinks {
@@ -5004,6 +5018,7 @@ mod tests {
             untimed_to: Vec::new(),
             frozen: vec![false; 7],
             pin_domain: Vec::new(),
+            pin_delays: crate::fpga::place::PinDelays::default(),
         };
         let (_, graph) = line(1, 1);
         let terminals: Vec<Terminals> = (0..5)

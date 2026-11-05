@@ -534,7 +534,13 @@ fn where_the_cover_differs_it_differs_as_written() {
 /// the two figures exchanged, and a connection into one timed as a wire when
 /// it has none. It would not catch the rest of that path's estimate being
 /// wrong: a table's figure and a wire's are what the module docs of
-/// `xray::timing` say they are, and they are not Vivado's.
+/// `xray::timing` say they are.
+///
+/// Each delay model against its own grade's figures: `--delay-model legacy`
+/// against the grade-1 reports of `vivado.txt`, which is what this test held
+/// before the fitted model was the default, and the default against the grade-3
+/// arcs of `testdata/fpga/vivado/timing/arcs.txt` from a data input, which it
+/// was fitted to.
 #[test]
 fn a_wide_multiplexer_is_timed_with_vivados_figures() {
     let Some(root) = chipdb() else { return };
@@ -555,76 +561,98 @@ fn a_wide_multiplexer_is_timed_with_vivados_figures() {
         let high = figures.iter().copied().fold(0.0, f64::max);
         (low, high)
     };
-    let (f7, f8) = (range("Prop_muxf7"), range("Prop_muxf8"));
-    let dir = fixtures();
-    let mut crossed = BTreeSet::new();
-    // Which of them a latest path crosses depends on whether a select or a
-    // table starts it, so more than one design is asked.
-    for name in ["mux64", "mux16", "f8_ff", "f7_ff"] {
-        let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("muxf-timed")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&out);
-        std::fs::create_dir_all(&out).unwrap();
-        // A latest path is only reported late, so it is made late, and the
-        // pads, which would be the latest, are taken out of it.
-        let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf")))
-            .unwrap()
-            .replace("-period 10", "-period 1")
-            + "set_false_path -to so\nset_false_path -from si\n";
-        let constraints = out.join("late.rcf");
-        std::fs::write(&constraints, rcf).unwrap();
-        let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
-            .args(["fpga", "--device", DEVICE, "--chipdb", &root, "--top", name])
-            .args(["--timing", "--timing-driven"])
-            .arg("--constraints")
-            .arg(&constraints)
-            .arg("--output-dir")
-            .arg(&out)
-            .arg("--bitstream")
-            .arg(out.join(format!("{name}.bit")))
-            .arg(dir.join(format!("{name}.v")))
-            .output()
-            .expect("the reticle binary runs");
-        let log = String::from_utf8_lossy(&run.stderr);
-        assert!(run.status.success(), "{log}");
-        let path: Vec<(f64, &str)> = log
-            .lines()
-            .skip_while(|l| !l.contains("latest path"))
-            .skip(1)
-            .take_while(|l| l.starts_with("  "))
-            .filter_map(|l| {
-                let (ns, rest) = l.trim().split_once(" ns  ")?;
-                Some((ns.parse().ok()?, rest))
-            })
-            .collect();
-        let netlist = std::fs::read_to_string(out.join(format!("{name}.v"))).unwrap();
-        for pair in path.windows(2) {
-            let ((before, _), (after, what)) = (pair[0], pair[1]);
-            let step = after - before;
-            let cell = what.split('.').next().unwrap_or(what);
-            let kind = ["MUXF7", "MUXF8"].into_iter().find(|kind| {
-                netlist.contains(&format!("{kind} {cell}"))
-                    || netlist.contains(&format!("{kind} \\{cell} "))
-            });
-            let Some(kind) = kind else { continue };
-            if what.ends_with(".o") {
-                let (low, high) = if kind == "MUXF7" { f7 } else { f8 };
-                assert!(
-                    step > low - 0.011 && step < high + 0.011,
-                    "{cell} takes {step:.3} ns, and Vivado's are {low} to {high}:\n{log}"
-                );
-                crossed.insert(kind);
-            } else if !what.contains(".s ") {
-                assert!(step.abs() < 0.005, "{what} is {step:.3} ns of wire:\n{log}");
+    // The grade-3 arcs, from a data input: `<cell> <where> <from> <to> <type>
+    // <mean> <median> <lowest> <highest> <count>`.
+    let arcs = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/timing/arcs.txt"),
+    )
+    .unwrap();
+    let grade3 = |cell: &str| -> (f64, f64) {
+        let (mut low, mut high) = (f64::MAX, 0.0f64);
+        for line in arcs.lines() {
+            let w: Vec<&str> = line.split_whitespace().collect();
+            if w.len() == 10 && w[0] == cell && (w[2] == "I0" || w[2] == "I1") {
+                low = low.min(w[7].parse().unwrap());
+                high = high.max(w[8].parse().unwrap());
             }
         }
+        assert!(high > 0.0, "no {cell} in arcs.txt");
+        (low, high)
+    };
+    let dir = fixtures();
+    for (model, f7, f8) in [
+        ("legacy", range("Prop_muxf7"), range("Prop_muxf8")),
+        ("vivado", grade3("MUXF7"), grade3("MUXF8")),
+    ] {
+        let mut crossed = BTreeSet::new();
+        // Which of them a latest path crosses depends on whether a select or a
+        // table starts it, so more than one design is asked.
+        for name in ["mux64", "mux16", "f8_ff", "f7_ff"] {
+            let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
+                .join("muxf-timed")
+                .join(name);
+            let _ = std::fs::remove_dir_all(&out);
+            std::fs::create_dir_all(&out).unwrap();
+            // A latest path is only reported late, so it is made late, and the
+            // pads, which would be the latest, are taken out of it.
+            let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf")))
+                .unwrap()
+                .replace("-period 10", "-period 1")
+                + "set_false_path -to so\nset_false_path -from si\n";
+            let constraints = out.join("late.rcf");
+            std::fs::write(&constraints, rcf).unwrap();
+            let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+                .args(["fpga", "--device", DEVICE, "--chipdb", &root, "--top", name])
+                .args(["--timing", "--timing-driven", "--delay-model", model])
+                .arg("--constraints")
+                .arg(&constraints)
+                .arg("--output-dir")
+                .arg(&out)
+                .arg("--bitstream")
+                .arg(out.join(format!("{name}.bit")))
+                .arg(dir.join(format!("{name}.v")))
+                .output()
+                .expect("the reticle binary runs");
+            let log = String::from_utf8_lossy(&run.stderr);
+            assert!(run.status.success(), "{log}");
+            let path: Vec<(f64, &str)> = log
+                .lines()
+                .skip_while(|l| !l.contains("latest path"))
+                .skip(1)
+                .take_while(|l| l.starts_with("  "))
+                .filter_map(|l| {
+                    let (ns, rest) = l.trim().split_once(" ns  ")?;
+                    Some((ns.parse().ok()?, rest))
+                })
+                .collect();
+            let netlist = std::fs::read_to_string(out.join(format!("{name}.v"))).unwrap();
+            for pair in path.windows(2) {
+                let ((before, _), (after, what)) = (pair[0], pair[1]);
+                let step = after - before;
+                let cell = what.split('.').next().unwrap_or(what);
+                let kind = ["MUXF7", "MUXF8"].into_iter().find(|kind| {
+                    netlist.contains(&format!("{kind} {cell}"))
+                        || netlist.contains(&format!("{kind} \\{cell} "))
+                });
+                let Some(kind) = kind else { continue };
+                if what.ends_with(".o") {
+                    let (low, high) = if kind == "MUXF7" { f7 } else { f8 };
+                    assert!(
+                        step > low - 0.011 && step < high + 0.011,
+                        "{model}: {cell} takes {step:.3} ns, and Vivado's are {low} to {high}:\n{log}"
+                    );
+                    crossed.insert(kind);
+                } else if !what.contains(".s ") {
+                    assert!(step.abs() < 0.005, "{what} is {step:.3} ns of wire:\n{log}");
+                }
+            }
+        }
+        assert_eq!(
+            crossed.len(),
+            2,
+            "{model}: both kinds were not on a path: {crossed:?}"
+        );
     }
-    assert_eq!(
-        crossed.len(),
-        2,
-        "both kinds were not on a path: {crossed:?}"
-    );
 }
 
 /// **Every bit decodes, and the arcs are the router's.** `reticle fpga` checks

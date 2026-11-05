@@ -78,7 +78,10 @@ models or IP.
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation
   (`reticle fpga --vivado-placement`) to place, route and time, or to time as it
-  is. `decode_placed.sh` and `compare_bits.py` compare the bitstreams, feature by
+  is; with `TIMING=1`, `timing_dump.tcl` asks Vivado's timer of the routes, element
+  by element, and `timing_table.py` fits Reticle's delay model to it (`fit`) and says
+  how far each model is from it (`compare`), for `testdata/fpga/vivado/timing/`.
+  `decode_placed.sh` and `compare_bits.py` compare the bitstreams, feature by
   feature, `frame_ecc.py` checks what those leave over, and `placed_table.py` and
   `bits_table.py` write `testdata/fpga/vivado/placed/`.
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;

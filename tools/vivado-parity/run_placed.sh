@@ -7,7 +7,10 @@
 # bitstream on Reticle's routes. STAGES names fewer of those, and a design that
 # already has its Reticle run keeps it.
 # With SECOND_PART set, <out>/<design>/second/ is Reticle's routes again on that
-# part: the same bits, timed at another speed grade. All at the lowest priority.
+# part: the same bits, timed at another speed grade. With TIMING set,
+# <out>/<design>/routes/<design>.timing is timing_dump.tcl's account of the
+# routes stage, element by element, for timing_table.py. All at the lowest
+# priority.
 dir=$(cd "$1" && pwd); device=$2; part=$3; mkdir -p "$4"; out=$(cd "$4" && pwd); shift 4
 here=$(cd "$(dirname "$0")" && pwd)
 bin=${RETICLE:-target/release/reticle}
@@ -27,4 +30,7 @@ echo $designs | tr ' ' '\n' | xargs -P "${JOBS:-6}" -I{} sh -c "
   done
   [ -z \"${SECOND_PART}\" ] || nice -n 19 ionice -c3 timeout 1800 vivado -mode batch -nojournal -nolog -notrace -tempDir $out/{}/second.tmp \
       -source $here/run_placed.tcl -tclargs $out/{}/x {} ${SECOND_PART} $out/{}/second routes > second.log 2>&1
-  rm -rf second.tmp"
+  rm -rf second.tmp
+  [ -z \"${TIMING}\" ] || [ ! -f routes/{}.dcp ] || nice -n 19 ionice -c3 timeout 1800 vivado -mode batch -nojournal -nolog -notrace -tempDir $out/{}/timing.tmp \
+      -source $here/timing_dump.tcl -tclargs $out/{}/routes/{}.dcp $out/{}/routes/{}.timing > timing.log 2>&1
+  rm -rf timing.tmp"

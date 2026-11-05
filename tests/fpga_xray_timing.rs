@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use reticle::fpga::xray::{GridRegion, UNTIMED_PIP_PS, XrayDatabase, XrayOptions};
+use reticle::fpga::xray::{DelayModel, GridRegion, UNTIMED_PIP_PS, XrayDatabase, XrayOptions};
 use reticle::ir::memfile::FileProvider;
 
 /// The part the region is cut from, as `tests/fpga_xray_joins.rs` has it.
@@ -83,7 +83,9 @@ fn a_node_costs_the_delay_of_the_pip_into_it() {
     options.region = Some(GridRegion::new(0, 120, 24, 160));
     let fabric = db.load(&DiskFiles, &options).unwrap();
     let graph = fabric.arch.build_graph();
-    let delays = db.node_delays(&DiskFiles, &fabric.arch, &graph).unwrap();
+    let delays = db
+        .node_delays(&DiskFiles, &fabric.arch, &graph, DelayModel::Legacy)
+        .unwrap();
     assert_eq!(delays.len(), graph.nodes.len());
 
     let text = std::fs::read_to_string(format!("{root}/artix7/tile_type_INT_L.json")).unwrap();
@@ -165,4 +167,77 @@ fn a_node_costs_the_delay_of_the_pip_into_it() {
         buffers > 40 && joins > 40,
         "{buffers} buffered and {joins} joined nodes checked"
     );
+}
+
+/// **With the model fitted to Vivado, a wire costs its class's figure where a
+/// pip in its own tile enters it, and nothing where a join does.** Over the
+/// same corner: every node of an interconnect tile's `IMUX`, `SL1BEG` or
+/// `NN6BEG` wires, on either side, costs what `xray::delay` says of `INT:IMUX`,
+/// `INT:SL1BEG` and `INT:NN6BEG`; every node of a slice tile's lookup table
+/// input `CLBLL_LL_A3` or `CLBLL_L_A6` costs its own pin's figure, which is not
+/// the same for the two; and an interconnect node only joins enter costs
+/// nothing.
+///
+/// Would catch the class looked up with the wrong tile type, a side's wires not
+/// matched (`IMUX_L10` against `IMUX10`), a join charged the class of the wire
+/// it continues, or the legacy delays returned for this model; would not catch
+/// a figure in the table that is wrong, which `tests/fpga_xray_delay.rs` holds
+/// against Vivado's.
+#[test]
+fn a_node_costs_its_class_under_the_vivado_model() {
+    use reticle::fpga::xray::delay;
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let mut options = XrayOptions::new();
+    options.region = Some(GridRegion::new(0, 120, 24, 160));
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    let graph = fabric.arch.build_graph();
+    let delays = db
+        .node_delays(&DiskFiles, &fabric.arch, &graph, DelayModel::Vivado)
+        .unwrap();
+    let class = |name: &str| delay::class_ps(name).unwrap();
+    assert_ne!(class("CLBLL:LL_A3"), class("CLBLL:L_A6"));
+    let mut seen = std::collections::BTreeMap::new();
+    let mut joins = 0;
+    for (index, wire) in graph.nodes.iter().enumerate() {
+        let Some(t) = fabric.arch.tile_index_at(wire.tile.0, wire.tile.1) else {
+            continue;
+        };
+        let tile_type = fabric.arch.tile_types[t].name.as_str();
+        let id = u32::try_from(index).unwrap();
+        let into = graph.incoming(id);
+        let from_here = into
+            .iter()
+            .any(|p| graph.wire(graph.pip(*p).from).tile == wire.tile);
+        if !into.is_empty() && !from_here && tile_type.starts_with("INT_") {
+            assert_eq!(
+                delays[index], 0,
+                "{tile_type} {:?} {}",
+                wire.tile, wire.name
+            );
+            joins += 1;
+            continue;
+        }
+        if !from_here {
+            continue;
+        }
+        let stem = wire.name.trim_end_matches(|c: char| c.is_ascii_digit());
+        let want = match (tile_type, stem) {
+            ("INT_L", "IMUX_L") | ("INT_R", "IMUX") => class("INT:IMUX"),
+            ("INT_L" | "INT_R", "SL1BEG") => class("INT:SL1BEG"),
+            ("INT_L" | "INT_R", "NN6BEG") => class("INT:NN6BEG"),
+            ("CLBLL_L" | "CLBLL_R", _) if wire.name == "CLBLL_LL_A3" => class("CLBLL:LL_A3"),
+            ("CLBLL_L" | "CLBLL_R", _) if wire.name == "CLBLL_L_A6" => class("CLBLL:L_A6"),
+            _ => continue,
+        };
+        assert_eq!(
+            delays[index], want,
+            "{tile_type} {:?} {}",
+            wire.tile, wire.name
+        );
+        *seen.entry(format!("{tile_type} {stem}")).or_insert(0) += 1;
+    }
+    assert!(seen.len() >= 8, "{seen:?}");
+    assert!(seen.values().all(|n| *n > 5), "{seen:?}");
+    assert!(joins > 100, "{joins} joined nodes");
 }

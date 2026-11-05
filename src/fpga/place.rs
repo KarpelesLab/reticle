@@ -5236,11 +5236,11 @@ fn confine_to_input_budget(
             continue;
         };
         let at = graph.sites[site].tile;
-        let budget = period - timing.launch[pad] - timing.wire.0;
         for out in &netlist.instances[pad].pins {
             if pin(*out) != PinTiming::Start {
                 continue;
             }
+            let budget = period - timing.launch_at(pad, *out) - timing.wire.0;
             let Some(signal) = netlist.pins[*out].signal else {
                 continue;
             };
@@ -5248,7 +5248,11 @@ fn confine_to_input_budget(
                 let cell = netlist.pins[*sink].instance;
                 match pin(*sink) {
                     PinTiming::End => {
-                        targets.push((cell, at, (budget - timing.capture[cell]) / timing.wire.1));
+                        targets.push((
+                            cell,
+                            at,
+                            (budget - timing.capture_at(cell, *sink)) / timing.wire.1,
+                        ));
                     }
                     PinTiming::Through => {
                         for next in &netlist.instances[cell].pins {
@@ -5266,7 +5270,7 @@ fn confine_to_input_budget(
                                 let tiles = (budget
                                     - timing.cell[cell]
                                     - timing.wire.0
-                                    - timing.capture[register])
+                                    - timing.capture_at(register, *end))
                                     / timing.wire.1;
                                 targets.push((cell, at, tiles / 3.0));
                                 targets.push((register, at, tiles / 3.0));
@@ -8165,9 +8169,84 @@ pub struct PlaceTiming {
     /// instance its write port was timed against the read clock's 10.4
     /// ns, whichever port's clock came first.
     pub pin_domain: Vec<Option<PathDomain>>,
+    /// Single pins' delays in place of their instance's, for a model that
+    /// knows them; empty for none anywhere.
+    pub pin_delays: PinDelays,
 }
 
+/// What [`PlaceTiming::pin_delays`] holds: delays of single pins in place of
+/// their instance's [`PlaceTiming::launch`], [`PlaceTiming::capture`] and
+/// [`PlaceTiming::cell`]. Each list is by netlist pin, and empty, or a pin
+/// past its end or `None`, takes the instance's.
+///
+/// A flip-flop's clock enable and reset have setups of their own, longer than
+/// its data input's, and a carry chain's carry in reaches its carry out in a
+/// fifth of the time a select input reaches it: one figure an instance is wrong
+/// for most of its pins.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PinDelays {
+    /// A `Start` output's own launch.
+    pub launch: Vec<Option<f64>>,
+    /// An `End` input's own capture.
+    pub capture: Vec<Option<f64>>,
+    /// A `Through` input's delay to each of its instance's `Through`
+    /// outputs, the `j`th for the `j`th in the instance's pin order.
+    pub through: Vec<Option<[f64; 8]>>,
+    /// Whether the analysis orders each `Through` output on its own rather
+    /// than each instance: an output waits only for the inputs that reach it
+    /// ([`PlaceTiming::reaches`]).
+    ///
+    /// A `LUT6_2` is two functions in one instance, and one's output can read
+    /// the other's through a third table: `A.o5` to `B`, and `B` back to
+    /// `A.i0`, which only `A.o6` reads. By instance that is a loop, and the
+    /// analysis cut it where it met it, which cut the path. On `qor/crc32.v`
+    /// a path Vivado times at 6.31 ns came out at 4.09, because `$lut332`
+    /// was timed before the table that drives it; every connection on the
+    /// path was within 5 % of Vivado's.
+    pub per_output: bool,
+}
+
+/// One step of the analysis's order: an instance, and which of its `Through`
+/// outputs, or all of them ([`PinDelays::per_output`]).
+type Step = (usize, Option<usize>);
+
 impl PlaceTiming {
+    /// When `pin`, a `Start` output of `instance`, launches.
+    #[must_use]
+    pub fn launch_at(&self, instance: usize, pin: usize) -> f64 {
+        self.pin_delays
+            .launch
+            .get(pin)
+            .copied()
+            .flatten()
+            .unwrap_or(self.launch[instance])
+    }
+
+    /// How long before the clock `pin`, an `End` input of `instance`, must
+    /// settle.
+    #[must_use]
+    pub fn capture_at(&self, instance: usize, pin: usize) -> f64 {
+        self.pin_delays
+            .capture
+            .get(pin)
+            .copied()
+            .flatten()
+            .unwrap_or(self.capture[instance])
+    }
+
+    /// The delay from `pin`, a `Through` input of `instance`, to its `j`th
+    /// `Through` output.
+    #[must_use]
+    pub fn through_at(&self, instance: usize, pin: usize, j: usize) -> f64 {
+        self.pin_delays
+            .through
+            .get(pin)
+            .copied()
+            .flatten()
+            .and_then(|arcs| arcs.get(j).copied())
+            .unwrap_or(self.cell[instance])
+    }
+
     /// The domain `pin` of `instance` launches or captures in.
     fn domain_of_pin(&self, instance: usize, pin: usize) -> Option<PathDomain> {
         self.pin_domain
@@ -8215,7 +8294,19 @@ const TIMING_ACCEPTANCE: f64 = 0.2;
 /// The instances with `Through` outputs, each after every instance one of
 /// its `Through` inputs is driven through; an instance on a loop comes
 /// after the instances it can, and the loop is cut there.
-fn timing_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<usize> {
+fn timing_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<Step> {
+    if timing.pin_delays.per_output {
+        output_order(netlist, timing)
+    } else {
+        instance_order(netlist, timing)
+            .into_iter()
+            .map(|i| (i, None))
+            .collect()
+    }
+}
+
+/// The order by instance: see [`timing_order`].
+fn instance_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<usize> {
     let through = |pin: usize| timing.pins.get(pin) == Some(&PinTiming::Through);
     let n = netlist.instances.len();
     let mut is_comb = vec![false; n];
@@ -8256,7 +8347,9 @@ fn timing_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<usize> {
             next += 1;
             done[i] = true;
             for r in &readers[i] {
-                waiting[*r] -= 1;
+                // A loop cut below already left this one waiting for none, and
+                // it wraps past zero rather than coming due a second time.
+                waiting[*r] = waiting[*r].wrapping_sub(1);
                 if waiting[*r] == 0 {
                     order.push(*r);
                 }
@@ -8273,6 +8366,68 @@ fn timing_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<usize> {
     order
 }
 
+/// The order by `Through` output, each waiting for the outputs that drive the
+/// inputs reaching it: see [`PinDelays::per_output`]. A loop is cut as
+/// [`instance_order`] cuts one, at the first output still waiting.
+fn output_order(netlist: &Netlist, timing: &PlaceTiming) -> Vec<Step> {
+    let through = |pin: usize| timing.pins.get(pin) == Some(&PinTiming::Through);
+    // Each `Through` output's step, and each step's place in `steps`.
+    let mut steps: Vec<Step> = Vec::new();
+    let mut step_of = vec![usize::MAX; netlist.pins.len()];
+    for (i, inst) in netlist.instances.iter().enumerate() {
+        let outputs = inst
+            .pins
+            .iter()
+            .copied()
+            .filter(|p| netlist.pins[*p].output && through(*p));
+        for (j, out) in outputs.enumerate() {
+            step_of[out] = steps.len();
+            steps.push((i, Some(j)));
+        }
+    }
+    let mut waiting = vec![0usize; steps.len()];
+    let mut readers: Vec<Vec<usize>> = vec![Vec::new(); steps.len()];
+    for (step, &(i, j)) in steps.iter().enumerate() {
+        let j = j.unwrap_or(0);
+        for pin in &netlist.instances[i].pins {
+            let p = &netlist.pins[*pin];
+            if p.output || !through(*pin) || !reaches_output(timing, *pin, j) {
+                continue;
+            }
+            let Some(driver) = p.signal.and_then(|s| netlist.signals[s].driver) else {
+                continue;
+            };
+            let from = step_of[driver];
+            if from != usize::MAX && from != step {
+                waiting[step] += 1;
+                readers[from].push(step);
+            }
+        }
+    }
+    let mut order: Vec<usize> = (0..steps.len()).filter(|s| waiting[*s] == 0).collect();
+    let mut done = vec![false; steps.len()];
+    let mut next = 0;
+    loop {
+        while next < order.len() {
+            let s = order[next];
+            next += 1;
+            done[s] = true;
+            for r in &readers[s] {
+                waiting[*r] = waiting[*r].wrapping_sub(1);
+                if waiting[*r] == 0 {
+                    order.push(*r);
+                }
+            }
+        }
+        let Some(stuck) = (0..steps.len()).find(|s| !done[*s] && waiting[*s] > 0) else {
+            break;
+        };
+        waiting[stuck] = 0;
+        order.push(stuck);
+    }
+    order.into_iter().map(|s| steps[s]).collect()
+}
+
 /// Per signal, the criticality of its most critical connection over every
 /// domain; and the round's longest path per domain. Each connection is
 /// estimated from the distance between its ends ([`PlaceTiming::wire`]);
@@ -8282,7 +8437,7 @@ fn estimate_timing(
     graph: &RoutingGraph,
     placement: &Placement,
     timing: &PlaceTiming,
-    order: &[usize],
+    order: &[Step],
 ) -> (Criticality, TimingRound) {
     let wire = estimated_wire(netlist, graph, placement, timing);
     analyse_paths(netlist, timing, order, &wire)
@@ -8346,7 +8501,7 @@ pub fn path_criticality(
 fn analyse_paths(
     netlist: &Netlist,
     timing: &PlaceTiming,
-    order: &[usize],
+    order: &[Step],
     wire: &[f64],
 ) -> (Criticality, TimingRound) {
     let pins = netlist.pins.len();
@@ -8426,7 +8581,7 @@ fn analyse_paths(
                         && class(*pin) == PinTiming::End
                         && timing.pin_in(index, *pin, domain)
                     {
-                        let at = input_arrival(*pin, &arrival) + timing.capture[index];
+                        let at = input_arrival(*pin, &arrival) + timing.capture_at(index, *pin);
                         if at.is_finite() {
                             longest = longest.max(at / cycles_of(index));
                         }
@@ -8451,7 +8606,7 @@ fn analyse_paths(
                         && class(*pin) == PinTiming::End
                         && timing.pin_in(index, *pin, domain)
                     {
-                        required[*pin] = cycles_of(index) * span - timing.capture[index];
+                        required[*pin] = cycles_of(index) * span - timing.capture_at(index, *pin);
                     }
                 }
             }
@@ -8465,7 +8620,7 @@ fn analyse_paths(
                     .map(|s| required[*s] - wire(*s))
                     .fold(f64::INFINITY, f64::min)
             };
-            for &index in order.iter().rev() {
+            for &(index, only) in order.iter().rev() {
                 let inst = &netlist.instances[index];
                 let outputs: Vec<f64> = through_outputs(inst)
                     .map(|p| output_required(p, &required))
@@ -8477,11 +8632,11 @@ fn analyse_paths(
                     let earliest = outputs
                         .iter()
                         .enumerate()
-                        .filter(|(j, _)| reaches(*pin, *j))
-                        .map(|(_, r)| *r)
+                        .filter(|(j, _)| only.is_none_or(|k| k == *j) && reaches(*pin, *j))
+                        .map(|(j, r)| *r - timing.through_at(index, *pin, j))
                         .fold(f64::INFINITY, f64::min);
                     if earliest < f64::INFINITY {
-                        required[*pin] = required[*pin].min(earliest - timing.cell[index]);
+                        required[*pin] = required[*pin].min(earliest);
                     }
                 }
             }
@@ -8526,7 +8681,7 @@ fn analyse_paths(
 fn domain_arrival(
     netlist: &Netlist,
     timing: &PlaceTiming,
-    order: &[usize],
+    order: &[Step],
     wire: &[f64],
     domain: usize,
     starts: &dyn Fn(usize) -> bool,
@@ -8546,11 +8701,11 @@ fn domain_arrival(
                 && class(*pin) == PinTiming::Start
                 && timing.pin_in(index, *pin, domain)
             {
-                arrival[*pin] = timing.launch[index];
+                arrival[*pin] = timing.launch_at(index, *pin);
             }
         }
     }
-    for &index in order {
+    for &(index, only) in order {
         let inst = &netlist.instances[index];
         let outputs: Vec<usize> = inst
             .pins
@@ -8559,16 +8714,21 @@ fn domain_arrival(
             .filter(|p| netlist.pins[*p].output && class(*p) == PinTiming::Through)
             .collect();
         for (j, out) in outputs.into_iter().enumerate() {
+            if only.is_some_and(|k| k != j) {
+                continue;
+            }
             let latest = inst
                 .pins
                 .iter()
                 .copied()
                 .filter(|p| !netlist.pins[*p].output && class(*p) == PinTiming::Through)
                 .filter(|p| reaches_output(timing, *p, j))
-                .map(|p| input_arrival(netlist, &arrival, &wire, p))
+                .map(|p| {
+                    input_arrival(netlist, &arrival, &wire, p) + timing.through_at(index, p, j)
+                })
                 .fold(f64::NEG_INFINITY, f64::max);
             if latest > f64::NEG_INFINITY {
-                arrival[out] = arrival[out].max(latest + timing.cell[index]);
+                arrival[out] = arrival[out].max(latest);
             }
         }
     }
@@ -8642,7 +8802,8 @@ pub fn worst_path(
             {
                 continue;
             }
-            let at = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
+            let at =
+                input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture_at(index, *pin);
             if at.is_finite() && end.is_none_or(|(_, latest)| at > latest) {
                 end = Some((*pin, at));
             }
@@ -8724,8 +8885,11 @@ fn trace_back(
             .filter(|p| !netlist.pins[*p].output && class(*p) == PinTiming::Through)
             .filter(|p| reaches_output(timing, *p, j))
             .max_by(|a, b| {
-                input_arrival(netlist, arrival, &wire_of, *a)
-                    .total_cmp(&input_arrival(netlist, arrival, &wire_of, *b))
+                (input_arrival(netlist, arrival, &wire_of, *a) + timing.through_at(instance, *a, j))
+                    .total_cmp(
+                        &(input_arrival(netlist, arrival, &wire_of, *b)
+                            + timing.through_at(instance, *b, j)),
+                    )
             })
         else {
             break;
@@ -8771,7 +8935,8 @@ pub fn endpoint_arrivals(
                 {
                     continue;
                 }
-                let at = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
+                let at = input_arrival(netlist, &arrival, &wire_of, *pin)
+                    + timing.capture_at(index, *pin);
                 if at.is_finite() {
                     out.push((*pin, domain, at, cycles_of(index) * period));
                 }
@@ -8845,8 +9010,8 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                     {
                         continue;
                     }
-                    let at =
-                        input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[index];
+                    let at = input_arrival(netlist, &arrival, &wire_of, *pin)
+                        + timing.capture_at(index, *pin);
                     if at.is_finite() && latest.is_none_or(|(l, _)| at > l) {
                         latest = Some((at, cycles_of(index) * period));
                     }
@@ -8876,7 +9041,8 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                 {
                     continue;
                 }
-                let latest = input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture[pad];
+                let latest =
+                    input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture_at(pad, *pin);
                 if latest.is_finite() {
                     out.push(PadPath {
                         instance: pad,
@@ -9275,6 +9441,7 @@ mod tests {
             untimed_to: Vec::new(),
             frozen: vec![false; 4],
             pin_domain: Vec::new(),
+            pin_delays: PinDelays::default(),
         };
         (graph, netlist, placement, timing)
     }
@@ -9357,6 +9524,7 @@ mod tests {
             untimed_to: Vec::new(),
             frozen: vec![false; 2],
             pin_domain,
+            pin_delays: PinDelays::default(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[end] = 5.6;
@@ -9373,6 +9541,187 @@ mod tests {
         assert!(critical[end] > 0.9, "{critical:?}");
     }
 
+    /// **A paired table's two halves are timed apart, so a path through both
+    /// is not cut.** A flip-flop `s` drives `a.i1`, which only `a.o5` reads;
+    /// `a.o5` drives table `b`, which drives `a.i0`, which only `a.o6` reads;
+    /// and `a.o6` ends at flip-flop `e`. By instance `a` and `b` wait for each
+    /// other, and the order cuts the loop, and with it the one path,
+    /// 0.3 + 0.1 + 0.1 + 0.1 + 0.05 = 0.65 ns. By output there is no loop, and
+    /// the path is whole. Would catch the outputs ordered by instance again
+    /// under [`PinDelays::per_output`], or a reach ignored; would not catch a
+    /// real loop timed wrongly, which is cut either way.
+    #[test]
+    fn a_paired_tables_halves_are_timed_apart() {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        // Instances: 0 `s`, 1 `a`, 2 `b`, 3 `e`; signals: 0 s.q, 1 a.o6,
+        // 2 a.o5, 3 b.o.
+        let roles: [(usize, &str, bool, usize); 9] = [
+            (0, "q", true, 0),
+            (1, "i0", false, 3),
+            (1, "i1", false, 0),
+            (1, "o", true, 1),
+            (1, "o5", true, 2),
+            (2, "i0", false, 2),
+            (2, "o", true, 3),
+            (3, "d", false, 1),
+            (3, "clk", false, usize::MAX),
+        ];
+        for (i, kind) in ["ff", "lut", "lut", "ff"].iter().enumerate() {
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(i),
+                name: format!("c{i}"),
+                primitive: String::new(),
+                kind: (*kind).to_owned(),
+                pins: Vec::new(),
+                pin: None,
+            });
+        }
+        for s in 0..4 {
+            netlist.signals.push(Signal {
+                name: format!("n{s}"),
+                driver: None,
+                sinks: Vec::new(),
+            });
+        }
+        for (instance, role, output, signal) in roles {
+            let pin = netlist.pins.len();
+            let signal = (signal != usize::MAX).then_some(signal);
+            netlist.pins.push(NetPin {
+                instance,
+                port: role.to_uppercase(),
+                bit: 0,
+                role: role.to_owned(),
+                output,
+                signal,
+                constant: None,
+            });
+            netlist.instances[instance].pins.push(pin);
+            if let Some(s) = signal {
+                if output {
+                    netlist.signals[s].driver = Some(pin);
+                } else {
+                    netlist.signals[s].sinks.push(pin);
+                }
+            }
+        }
+        let pins: Vec<PinTiming> = netlist
+            .pins
+            .iter()
+            .map(|p| match (p.instance, p.output, p.role.as_str()) {
+                (_, _, "clk") => PinTiming::Ignored,
+                (0, _, _) => PinTiming::Start,
+                (3, _, _) => PinTiming::End,
+                _ => PinTiming::Through,
+            })
+            .collect();
+        // `a.i0` reaches `o` (bit 0) alone, and `a.i1` `o5` (bit 1) alone.
+        let mut reaches = vec![u8::MAX; netlist.pins.len()];
+        reaches[1] = 0b01;
+        reaches[2] = 0b10;
+        let mut timing = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.1, 0.1, 0.0],
+            launch: vec![0.3, 0.0, 0.0, 0.0],
+            capture: vec![0.0, 0.0, 0.0, 0.05],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+            ],
+            periods: vec![5.0],
+            wire: (0.0, 0.0, 0.0),
+            rounds: 1,
+            weight: 8.0,
+            exponent: 3,
+            reaches,
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 4],
+            pin_domain: Vec::new(),
+            pin_delays: PinDelays::default(),
+        };
+        let wire = vec![0.0; netlist.pins.len()];
+        let (_, cut) = path_criticality(&netlist, &timing, &wire);
+        assert!(cut[0] < 650, "{cut:?}");
+        timing.pin_delays.per_output = true;
+        let (_, whole) = path_criticality(&netlist, &timing, &wire);
+        assert_eq!(whole, vec![650]);
+        let path = worst_path(&netlist, &timing, &wire, 0);
+        let roles: Vec<&str> = path
+            .iter()
+            .map(|s| netlist.pins[s.pin].role.as_str())
+            .collect();
+        assert_eq!(
+            roles,
+            ["q", "i1", "o5", "i0", "o", "i0", "o", "d"],
+            "{path:?}"
+        );
+    }
+
+    /// **A pin's own delay takes the place of its instance's.** The chain of
+    /// [`a_paths_estimate_is_its_cells_and_wires_summed`], 2.05 ns, with the
+    /// first cell's output launching at 0.5 ns rather than 0.3, the second
+    /// cell's input reaching its output in 0.4 ns rather than 0.1, and the
+    /// last cell's input needing 0.25 ns rather than 0.05: 2.05 + 0.2 + 0.3 +
+    /// 0.2 = 2.75 ns, forwards, and its slack the same backwards, so every
+    /// connection on the one path is `1 - 2.25 / 5` critical; traced with no
+    /// wire at all, the path arrives at 0.5 + 0.4 + 0.1 + 0.25. An arc of no path
+    /// (`NEG_INFINITY`) takes the cell out of the path, as a carry chain's input
+    /// that does not reach an output must. Would catch any of the three left
+    /// unread, forwards or backwards; would not catch a figure that is wrong,
+    /// which is the caller's.
+    #[test]
+    fn a_pins_own_delay_takes_the_place_of_its_instances() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        let pins = netlist.pins.len();
+        let output_of = |i: usize| {
+            netlist.instances[i]
+                .pins
+                .iter()
+                .copied()
+                .find(|p| netlist.pins[*p].output)
+                .unwrap()
+        };
+        let input_of = |i: usize| {
+            netlist.instances[i]
+                .pins
+                .iter()
+                .copied()
+                .find(|p| !netlist.pins[*p].output)
+                .unwrap()
+        };
+        timing.pin_delays.launch = vec![None; pins];
+        timing.pin_delays.launch[output_of(0)] = Some(0.5);
+        timing.pin_delays.through = vec![None; pins];
+        timing.pin_delays.through[input_of(1)] = Some([0.4; 8]);
+        timing.pin_delays.capture = vec![None; pins];
+        timing.pin_delays.capture[input_of(3)] = Some(0.25);
+        let order = timing_order(&netlist, &timing);
+        let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![2750]);
+        for signal in &netlist.signals {
+            let c = critical.pins[signal.sinks[0]];
+            assert!((c - (1.0 - 2.25 / 5.0)).abs() < 1e-9, "{:?}", critical.pins);
+        }
+        let path = worst_path(&netlist, &timing, &vec![0.0; pins], 0);
+        assert!(
+            (path.last().unwrap().arrival - 1.25).abs() < 1e-9,
+            "{path:?}"
+        );
+        timing.pin_delays.through[input_of(1)] = Some([f64::NEG_INFINITY; 8]);
+        let (_, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
+        assert_eq!(round.longest_ps, vec![0]);
+    }
+
     /// **A path's estimate is its cells and its wires, summed.** The
     /// chain's first cell launches at 0.3 ns; its three connections cross
     /// 3, 1 and 5 tiles at 0.2 ns and 0.1 ns a tile; the two cells between
@@ -9387,7 +9736,7 @@ mod tests {
     fn a_paths_estimate_is_its_cells_and_wires_summed() {
         let (graph, netlist, placement, timing) = timed_chain();
         let order = timing_order(&netlist, &timing);
-        assert_eq!(order, vec![1, 2]);
+        assert_eq!(order, vec![(1, None), (2, None)]);
         let (critical, round) = estimate_timing(&netlist, &graph, &placement, &timing, &order);
         assert_eq!(round.longest_ps, vec![2050]);
         for signal in &netlist.signals {
@@ -9605,6 +9954,7 @@ mod tests {
             untimed_to: Vec::new(),
             frozen: vec![false; 6],
             pin_domain: Vec::new(),
+            pin_delays: PinDelays::default(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -9718,6 +10068,7 @@ mod tests {
             untimed_to: Vec::new(),
             frozen: vec![false; 4],
             pin_domain: Vec::new(),
+            pin_delays: PinDelays::default(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -12456,6 +12807,7 @@ mod tests {
             untimed_to: Vec::new(),
             frozen: vec![false; 7],
             pin_domain: Vec::new(),
+            pin_delays: PinDelays::default(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {

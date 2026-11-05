@@ -362,7 +362,7 @@ const CONNECTION_BAND: (f64, f64) = (0.7, 2.2);
 /// way as this file's other targets ask. Reads the quoted file. It passes once
 /// the file is regenerated from a model that has closed the gap.
 #[test]
-#[ignore = "target: at grade 3 on Reticle's own routes, the estimate of Vivado's worst endpoint is out by more than 1.35 on crc32 and gray_cdc; see docs/fpga-vivado-parity.md"]
+#[ignore = "target, on the legacy model's quoted run: at grade 3 the estimate of Vivado's worst endpoint is out by more than 1.35 on crc32 and gray_cdc; the fitted model meets it, tests/fpga_xray_delay.rs; see docs/fpga-vivado-parity.md"]
 fn the_estimate_of_the_worst_endpoint_is_near_vivados() {
     let Some(designs) = placed() else { return };
     let mut wrong = Vec::new();
