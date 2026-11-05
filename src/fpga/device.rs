@@ -4320,6 +4320,17 @@ end
                     ("IDDR", vec!["ce", "sr"]),
                     ("IDDR_2CLK", vec!["ce", "sr"]),
                     ("ODDR", vec!["d1", "d2", "ce", "sr"]),
+                    (
+                        "ISERDESE2",
+                        vec!["ce", "ce2", "sr", "bitslip", "dynclksel", "dynclkdivsel"]
+                    ),
+                    (
+                        "OSERDESE2",
+                        vec![
+                            "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "t1", "t2", "t3", "t4",
+                            "ce", "tce", "sr", "tbytein"
+                        ]
+                    ),
                     ("PLLE2_ADV", vec!["rst", "pwrdwn", "clkinsel", "clkin2"]),
                     ("XADC", vec!["vp", "vn", "vauxp", "vauxn"]),
                     (

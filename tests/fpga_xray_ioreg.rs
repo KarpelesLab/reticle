@@ -22,6 +22,16 @@
 //! [`what_vivado_refuses_is_refused`] would catch `REQP-76`, `REQP-77` or
 //! `REQP-129` let through.
 //!
+//! The serialisers since 2026-11-05: 192 `ISERDESE2` and `OSERDESE2` in 16
+//! designs, compared the same way, with the grounds and ties high of every
+//! control a serialiser has, the clock sources of `CLKDIV` (an `ILOGIC`'s from
+//! the interconnect's `CLK0`) and `OCLK`, and every bit of a register's tile
+//! that no feature names (`?`), of which there are none now: a bit a setting
+//! sets and this does not name is caught as a line on one side. Twelve
+//! designs Vivado refuses (`AVAL-69`, `AVAL-74`, `PDRC-26`, `PDRC-37`,
+//! `INBB-3`, `THRU-2`, `Route 35-7`). Not caught: anything of a serialiser's
+//! timing, or what it does on a part.
+//!
 //! Skips without the Project X-Ray database, as every `fpga_xray` test does.
 
 #![cfg(all(feature = "fpga", feature = "cli"))]
@@ -129,17 +139,56 @@ fn logic_of(root: &str, bit: &Path) -> Vec<String> {
             format!("{place} {f}")
         })
         .collect();
+    // And a bit of an IO logic tile beside a register that no feature names,
+    // which a serialiser's settings set (`xray::iologic::measured_features`
+    // names the ones measured, so a line here is one that was not).
+    for (tile, bit) in &decoded.leftovers {
+        let place = tile.rsplit_once('_').map_or(tile.as_str(), |(_, at)| at);
+        if tile.contains("IOI3") && keep.iter().any(|(p, _)| p == place) {
+            out.push(format!("{place} ? {:02}_{:02}", bit.row, bit.col));
+        }
+    }
     // And which of a register's controls is grounded, which no site feature
     // says: a clock enable tied low reads a one unrouted. The IO logic tile's
     // `IOI_IMUX5_<n>` (`ILOGIC` `CE1`), `IOI_IMUX29_<n>` (`OLOGIC` `OCE`),
     // `IOI_CTRL1_<n>` and `IOI_CTRL0_<n>` (`SR`) are the interconnect's `IMUX5`
     // and so on at its row for `_0`, the row above for `_1`, and half 0 takes
     // `_1` (`ppips_rioi3.db`).
+    //
+    // A ground fan carries a ground only when it is fed from `GND_WIRE`: Vivado
+    // routes a signal through one too (`oserdes_tristate`'s `T4`,
+    // `IMUX21.GFAN1` with `GFAN1.NR1END1`), which the first version of this
+    // called a ground.
+    let fans: std::collections::BTreeSet<(&str, &str)> = decoded
+        .features
+        .iter()
+        .filter(|(tile, f)| tile.starts_with("INT_") && f.ends_with(".GND_WIRE"))
+        .map(|(tile, f)| (tile.as_str(), f.split('.').next().unwrap_or("")))
+        .collect();
     let grounded: std::collections::BTreeSet<(&str, &str)> = decoded
         .features
         .iter()
         .filter(|(tile, f)| tile.starts_with("INT_") && f.contains(".GFAN"))
+        .filter(|(tile, f)| {
+            f.split_once('.')
+                .is_some_and(|(_, fan)| fans.contains(&(tile.as_str(), fan)))
+        })
         .map(|(tile, f)| (tile.as_str(), f.split('.').next().unwrap_or("")))
+        .collect();
+    // A serialiser's other controls, the same way, a pin tied high over
+    // `VCC_WIRE`, and `CLKDIV`'s clock, which reaches an `ILOGIC` from the
+    // interconnect's own `CLK0` at that row (`IOI_CLK0_<n>`).
+    let tied_high: std::collections::BTreeSet<(&str, &str)> = decoded
+        .features
+        .iter()
+        .filter(|(tile, f)| tile.starts_with("INT_") && f.ends_with(".VCC_WIRE"))
+        .map(|(tile, f)| (tile.as_str(), f.split('.').next().unwrap_or("")))
+        .collect();
+    let clock_in: BTreeMap<&str, &str> = decoded
+        .features
+        .iter()
+        .filter(|(tile, f)| tile.starts_with("INT_") && f.starts_with("CLK0."))
+        .map(|(tile, f)| (tile.as_str(), &f[5..]))
         .collect();
     for (place, half) in &keep {
         let Some((x, y)) = place
@@ -150,17 +199,36 @@ fn logic_of(root: &str, bit: &Path) -> Vec<String> {
             continue;
         };
         let row = if *half == '0' { y + 1 } else { y };
-        for (wire, pin) in [
-            ("IMUX5", "CE1"),
-            ("IMUX29", "OCE"),
-            ("CTRL1", "ISR"),
-            ("CTRL0", "OSR"),
-        ] {
+        for (wire, pin) in FIRST_CONTROLS {
             let at = |side: &str| format!("INT_{side}_X{x}Y{row}");
             if grounded.contains(&(at("R").as_str(), wire))
                 || grounded.contains(&(at("L").as_str(), wire))
             {
                 out.push(format!("{place} ground {half} {pin}"));
+            }
+        }
+        let at = |side: &str| format!("INT_{side}_X{x}Y{row}");
+        let either = |set: &std::collections::BTreeSet<(&str, &str)>, wire: &str| {
+            set.contains(&(at("R").as_str(), wire)) || set.contains(&(at("L").as_str(), wire))
+        };
+        for (wire, pin) in SERDES_CONTROLS {
+            if either(&grounded, wire) {
+                out.push(format!("{place} ground {half} {pin}"));
+            }
+        }
+        for (wire, pin) in SERDES_CONTROLS.iter().chain(&FIRST_CONTROLS) {
+            if either(&tied_high, wire) {
+                out.push(format!("{place} high {half} {pin}"));
+            }
+        }
+        for side in ["R", "L"] {
+            if let Some(from) = clock_in.get(at(side).as_str()) {
+                let kind = if from.starts_with("GCLK") {
+                    "leaf"
+                } else {
+                    "fabric"
+                };
+                out.push(format!("{place} clock {half} ICLKDIV {kind}"));
             }
         }
     }
@@ -184,6 +252,8 @@ fn logic_of(root: &str, bit: &Path) -> Vec<String> {
             "IOI_ILOGIC1_CLKB" => ("1", "ICLKB"),
             "IOI_OCLK_0" => ("0", "OCLK"),
             "IOI_OCLK_1" => ("1", "OCLK"),
+            "IOI_OLOGIC0_CLKDIV" => ("0", "OCLKDIV"),
+            "IOI_OLOGIC1_CLKDIV" => ("1", "OCLKDIV"),
             _ => continue,
         };
         if !keep
@@ -202,6 +272,38 @@ fn logic_of(root: &str, bit: &Path) -> Vec<String> {
     out.sort();
     out
 }
+
+/// The controls whose ground the first account compared, as `(interconnect
+/// wire, pin)`: an `IDDR`'s `CE` and `SR`, an `ODDR`'s.
+const FIRST_CONTROLS: [(&str, &str); 4] = [
+    ("IMUX5", "CE1"),
+    ("IMUX29", "OCE"),
+    ("CTRL1", "ISR"),
+    ("CTRL0", "OSR"),
+];
+
+/// A serialiser's other controls, from `ppips_rioi3.db`: `IOI_IMUX14_<n>` is
+/// the interconnect's `IMUX14` as `CE1`'s `IMUX5` is.
+const SERDES_CONTROLS: [(&str, &str); 18] = [
+    ("IMUX14", "CE2"),
+    ("IMUX0", "BITSLIP"),
+    ("IMUX37", "DYNCLKSEL"),
+    ("IMUX4", "DYNCLKDIVSEL"),
+    ("IMUX10", "DYNCLKDIVPSEL"),
+    ("IMUX1", "TCE"),
+    ("IMUX34", "D1"),
+    ("IMUX40", "D2"),
+    ("IMUX44", "D3"),
+    ("IMUX42", "D4"),
+    ("IMUX43", "D5"),
+    ("IMUX45", "D6"),
+    ("IMUX46", "D7"),
+    ("IMUX47", "D8"),
+    ("IMUX15", "T1"),
+    ("IMUX7", "T2"),
+    ("IMUX13", "T3"),
+    ("IMUX21", "T4"),
+];
 
 /// `vivado.txt`: per design, `refused <rule>` or its lines.
 fn answers() -> Option<BTreeMap<String, Result<Vec<String>, String>>> {
@@ -265,10 +367,19 @@ fn regenerate_when_asked() {
         let bit = out.join(&name).join(format!("{name}.bit"));
         if !bit.is_file() {
             let log = std::fs::read_to_string(out.join(format!("{name}.log"))).unwrap_or_default();
+            // A design rule's name, or else the first error that is not the
+            // step's own "failed due to earlier errors": `Route 35-7`, a
+            // `CLKDIVP` that cannot be routed.
             let rule = log
                 .lines()
                 .filter_map(|l| l.strip_prefix("ERROR: [DRC "))
                 .find_map(|l| l.split(']').next())
+                .or_else(|| {
+                    log.lines()
+                        .filter_map(|l| l.strip_prefix("ERROR: ["))
+                        .filter_map(|l| l.split(']').next())
+                        .find(|id| !id.starts_with("Common ") && !id.starts_with("Vivado"))
+                })
                 .unwrap_or("?");
             text.push_str(&format!("design {name} refused {rule}\n"));
             continue;

@@ -1,0 +1,23 @@
+module oserdes_wide(input clk, input clkd, input c0, input c1, input c2, input c3, output reg r, output p0, output p1, output p2, output p3, output p4);
+  wire gclk; BUFG bg(.I(clk), .O(gclk));
+  wire gdiv; BUFG bd(.I(clkd), .O(gdiv));
+  reg [15:0] sh; always @(posedge gdiv) sh <= {sh[14:0], c3};
+  wire so1_0, so2_0;
+  OSERDESE2 #(.DATA_WIDTH(10), .TRISTATE_WIDTH(1), .SERDES_MODE("SLAVE")) s0(.SHIFTOUT1(so1_0), .SHIFTOUT2(so2_0), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D3(sh[8]), .D4(sh[9]));
+  OSERDESE2 #(.DATA_WIDTH(10), .TRISTATE_WIDTH(1)) u0(.OQ(p0), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .SHIFTIN1(so1_0), .SHIFTIN2(so2_0));
+  wire so1_1, so2_1;
+  OSERDESE2 #(.DATA_WIDTH(14), .TRISTATE_WIDTH(1), .SERDES_MODE("SLAVE")) s1(.SHIFTOUT1(so1_1), .SHIFTOUT2(so2_1), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D3(sh[8]), .D4(sh[9]), .D5(sh[10]), .D6(sh[11]), .D7(sh[12]), .D8(sh[13]));
+  OSERDESE2 #(.DATA_WIDTH(14), .TRISTATE_WIDTH(1)) u1(.OQ(p1), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .SHIFTIN1(so1_1), .SHIFTIN2(so2_1));
+  wire so1_2, so2_2;
+  OSERDESE2 #(.DATA_WIDTH(10), .TRISTATE_WIDTH(1), .IS_D3_INVERTED(1'b1), .SERDES_MODE("SLAVE")) s2(.SHIFTOUT1(so1_2), .SHIFTOUT2(so2_2), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D3(sh[8]), .D4(sh[9]));
+  OSERDESE2 #(.DATA_WIDTH(10), .TRISTATE_WIDTH(1)) u2(.OQ(p2), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .SHIFTIN1(so1_2), .SHIFTIN2(so2_2));
+  wire so1_3, so2_3;
+  OSERDESE2 #(.DATA_WIDTH(14), .TRISTATE_WIDTH(1), .SERDES_MODE("SLAVE")) s3(.SHIFTOUT1(so1_3), .SHIFTOUT2(so2_3), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D3(sh[8]), .D4(sh[9]), .D5(sh[10]), .D6(sh[11]), .D7(sh[12]), .D8(sh[13]));
+  OSERDESE2 #(.DATA_WIDTH(14), .TRISTATE_WIDTH(1), .INIT_OQ(1'b1), .SRVAL_OQ(1'b1)) u3(.OQ(p3), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .SHIFTIN1(so1_3), .SHIFTIN2(so2_3));
+  wire oq_4, tq_4;
+  OBUFT t4(.I(oq_4), .T(tq_4), .O(p4));
+  wire so1_4, so2_4;
+  OSERDESE2 #(.DATA_WIDTH(10), .TRISTATE_WIDTH(1), .DATA_RATE_TQ("BUF"), .SERDES_MODE("SLAVE")) s4(.SHIFTOUT1(so1_4), .SHIFTOUT2(so2_4), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D3(sh[8]), .D4(sh[9]));
+  OSERDESE2 #(.DATA_WIDTH(10), .TRISTATE_WIDTH(1), .DATA_RATE_TQ("BUF")) u4(.OQ(oq_4), .TQ(tq_4), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .T1(sh[8]), .T2(sh[9]), .T3(sh[10]), .T4(sh[11]), .TCE(c0), .SHIFTIN1(so1_4), .SHIFTIN2(so2_4));
+  always @(posedge gdiv) r <= sh[15];
+endmodule

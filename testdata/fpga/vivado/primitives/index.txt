@@ -131,8 +131,8 @@ io KEEPER ok
 iologic IDDR ok
 iologic IDDR_2CLK ok
 iologic ODDR ok
-iologic ISERDESE2 gap
-iologic OSERDESE2 gap
+iologic ISERDESE2 ok
+iologic OSERDESE2 ok
 iologic IDELAYE2 gap
 iologic IDELAYCTRL gap
 iologic DCIRESET gap

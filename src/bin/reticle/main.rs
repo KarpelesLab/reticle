@@ -4060,6 +4060,7 @@ fn write_xc7_bitstream(
     laps.lap("build the netlist");
     check_driverless(&netlist)?;
     reticle::fpga::xray::check_regional_wiring(&netlist)?;
+    reticle::fpga::xray::check_serdes_wiring(&netlist)?;
     let mut options = place_options(args)?;
     // This fabric's anneal effort, unless the command line names one:
     // see `xray::PLACE_EFFORT`.

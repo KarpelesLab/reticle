@@ -1,0 +1,26 @@
+module iserdes_wide(input clk, input clkd, input c0, input c1, input c2, input c3, output reg r, input p0, input p1, input p2, input p3, input p4);
+  wire gclk; BUFG bg(.I(clk), .O(gclk));
+  wire gdiv; BUFG bd(.I(clkd), .O(gdiv));
+  reg [15:0] sh; always @(posedge gdiv) sh <= {sh[14:0], c3};
+  wire q1_0, q2_0, q3_0, q4_0, q5_0, q6_0, q7_0, q8_0, so1_0, so2_0;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(10)) u0(.Q1(q1_0), .Q2(q2_0), .Q3(q3_0), .Q4(q4_0), .Q5(q5_0), .Q6(q6_0), .Q7(q7_0), .Q8(q8_0), .SHIFTOUT1(so1_0), .SHIFTOUT2(so2_0), .D(p0), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0));
+  wire s3_0, s4_0, s5_0, s6_0, s7_0, s8_0;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(10), .SERDES_MODE("SLAVE")) s0(.Q3(s3_0), .Q4(s4_0), .Q5(s5_0), .Q6(s6_0), .Q7(s7_0), .Q8(s8_0), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0), .SHIFTIN1(so1_0), .SHIFTIN2(so2_0));
+  wire q1_1, q2_1, q3_1, q4_1, q5_1, q6_1, q7_1, q8_1, so1_1, so2_1;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(14)) u1(.Q1(q1_1), .Q2(q2_1), .Q3(q3_1), .Q4(q4_1), .Q5(q5_1), .Q6(q6_1), .Q7(q7_1), .Q8(q8_1), .SHIFTOUT1(so1_1), .SHIFTOUT2(so2_1), .D(p1), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0));
+  wire s3_1, s4_1, s5_1, s6_1, s7_1, s8_1;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(14), .SERDES_MODE("SLAVE")) s1(.Q3(s3_1), .Q4(s4_1), .Q5(s5_1), .Q6(s6_1), .Q7(s7_1), .Q8(s8_1), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0), .SHIFTIN1(so1_1), .SHIFTIN2(so2_1));
+  wire q1_2, q2_2, q3_2, q4_2, q5_2, q6_2, q7_2, q8_2, so1_2, so2_2;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(10), .INIT_Q1(1'b1), .SRVAL_Q3(1'b1)) u2(.Q1(q1_2), .Q2(q2_2), .Q3(q3_2), .Q4(q4_2), .Q5(q5_2), .Q6(q6_2), .Q7(q7_2), .Q8(q8_2), .SHIFTOUT1(so1_2), .SHIFTOUT2(so2_2), .D(p2), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0));
+  wire s3_2, s4_2, s5_2, s6_2, s7_2, s8_2;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(10), .INIT_Q1(1'b1), .SRVAL_Q3(1'b1), .SERDES_MODE("SLAVE")) s2(.Q3(s3_2), .Q4(s4_2), .Q5(s5_2), .Q6(s6_2), .Q7(s7_2), .Q8(s8_2), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0), .SHIFTIN1(so1_2), .SHIFTIN2(so2_2));
+  wire q1_3, q2_3, q3_3, q4_3, q5_3, q6_3, q7_3, q8_3, so1_3, so2_3;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(14), .IS_D_INVERTED(1'b1)) u3(.Q1(q1_3), .Q2(q2_3), .Q3(q3_3), .Q4(q4_3), .Q5(q5_3), .Q6(q6_3), .Q7(q7_3), .Q8(q8_3), .SHIFTOUT1(so1_3), .SHIFTOUT2(so2_3), .D(p3), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0));
+  wire s3_3, s4_3, s5_3, s6_3, s7_3, s8_3;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(14), .IS_D_INVERTED(1'b1), .SERDES_MODE("SLAVE")) s3(.Q3(s3_3), .Q4(s4_3), .Q5(s5_3), .Q6(s6_3), .Q7(s7_3), .Q8(s8_3), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0), .SHIFTIN1(so1_3), .SHIFTIN2(so2_3));
+  wire q1_4, q2_4, q3_4, q4_4, q5_4, q6_4, q7_4, q8_4, so1_4, so2_4;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(10), .IS_CLK_INVERTED(1'b1)) u4(.Q1(q1_4), .Q2(q2_4), .Q3(q3_4), .Q4(q4_4), .Q5(q5_4), .Q6(q6_4), .Q7(q7_4), .Q8(q8_4), .SHIFTOUT1(so1_4), .SHIFTOUT2(so2_4), .D(p4), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0));
+  wire s3_4, s4_4, s5_4, s6_4, s7_4, s8_4;
+  ISERDESE2 #(.INTERFACE_TYPE("NETWORKING"), .DATA_RATE("DDR"), .DATA_WIDTH(10), .IS_CLK_INVERTED(1'b1), .SERDES_MODE("SLAVE")) s4(.Q3(s3_4), .Q4(s4_4), .Q5(s5_4), .Q6(s6_4), .Q7(s7_4), .Q8(s8_4), .CLK(gclk), .CLKB(~gclk), .CLKDIV(gdiv), .CLKDIVP(1'b0), .OCLK(), .OCLKB(), .CE1(c0), .CE2(c1), .RST(c2), .BITSLIP(c3), .DYNCLKSEL(1'b0), .DYNCLKDIVSEL(1'b0), .SHIFTIN1(so1_4), .SHIFTIN2(so2_4));
+  always @(posedge gdiv) r <= q1_0 ^ q2_0 ^ q3_0 ^ q4_0 ^ q5_0 ^ q6_0 ^ q7_0 ^ q8_0 ^ s3_0 ^ s4_0 ^ s5_0 ^ s6_0 ^ s7_0 ^ s8_0 ^ q1_1 ^ q2_1 ^ q3_1 ^ q4_1 ^ q5_1 ^ q6_1 ^ q7_1 ^ q8_1 ^ s3_1 ^ s4_1 ^ s5_1 ^ s6_1 ^ s7_1 ^ s8_1 ^ q1_2 ^ q2_2 ^ q3_2 ^ q4_2 ^ q5_2 ^ q6_2 ^ q7_2 ^ q8_2 ^ s3_2 ^ s4_2 ^ s5_2 ^ s6_2 ^ s7_2 ^ s8_2 ^ q1_3 ^ q2_3 ^ q3_3 ^ q4_3 ^ q5_3 ^ q6_3 ^ q7_3 ^ q8_3 ^ s3_3 ^ s4_3 ^ s5_3 ^ s6_3 ^ s7_3 ^ s8_3 ^ q1_4 ^ q2_4 ^ q3_4 ^ q4_4 ^ q5_4 ^ q6_4 ^ q7_4 ^ q8_4 ^ s3_4 ^ s4_4 ^ s5_4 ^ s6_4 ^ s7_4 ^ s8_4;
+endmodule

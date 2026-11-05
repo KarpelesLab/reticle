@@ -3608,6 +3608,13 @@ fn follow_fixed_ends(
                 let mut found: Option<usize> = None;
                 let mut dedicated = true;
                 for &site in candidates {
+                    // A site of the kind with no wire for the pin cannot take
+                    // the instance at all: half 0 of an IO logic tile has no
+                    // `ISERDESE2` cascade in, and half 0's `OSERDESE2`
+                    // cascade out reaches nothing, so neither is a slave's.
+                    if graph.sites[site].pin_nodes(free_role).next().is_none() {
+                        continue;
+                    }
                     match closure(site, free_role, forward) {
                         None => {
                             dedicated = false;

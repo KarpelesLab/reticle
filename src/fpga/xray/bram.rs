@@ -794,8 +794,12 @@ fn io_logic_wants(
         }
         return;
     }
-    let input = matches!(instance.primitive.as_str(), "IDDR" | "IDDR_2CLK");
-    if !input && instance.primitive != "ODDR" {
+    let input = matches!(
+        instance.primitive.as_str(),
+        "IDDR" | "IDDR_2CLK" | "ISERDESE2"
+    );
+    let serialiser = matches!(instance.primitive.as_str(), "ISERDESE2" | "OSERDESE2");
+    if !input && !serialiser && instance.primitive != "ODDR" {
         return;
     }
     let pins = |role: &str| {
@@ -834,13 +838,30 @@ fn io_logic_wants(
         }
     };
     // A set or reset tied high is left unrouted, which reads a one.
-    if input && !routed("sr") && !tied_one("sr") {
+    if (input || serialiser) && !routed("sr") && !tied_one("sr") {
         tie("sr");
     }
     // A clock enable tied low, which Vivado grounds the same way
     // (`iddr_sweep`, `oddr_sweep`: the same site bits as one tied high).
     if tied_zero("ce") {
         tie("ce");
+    }
+    if !serialiser {
+        return;
+    }
+    // A serialiser's other controls, as Vivado has them (`iserdes_pins`,
+    // `oserdes_pins`, `oserdes_tristate`): each tied low is grounded, and each
+    // unconnected is left to read a one, but for `BITSLIP` and an
+    // `OSERDESE2`'s `RST` (above, with an `ISERDESE2`'s), which are grounded
+    // unconnected too. A data or tristate input is its pin's inverter instead
+    // (`iologic::oserdes_features`).
+    for role in ["ce2", "dynclksel", "dynclkdivsel", "tce"] {
+        if tied_zero(role) {
+            tie(role);
+        }
+    }
+    if input && !routed("bitslip") && !tied_one("bitslip") {
+        tie("bitslip");
     }
 }
 

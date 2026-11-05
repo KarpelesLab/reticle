@@ -212,7 +212,7 @@ pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
     parse::segbits(text, path)
 }
 pub use io::{IoBankUse, IoError, IoTables, PadFeatures, PadRequest, io_standards, pad_features};
-pub use iologic::IoLogicError;
+pub use iologic::{IoLogicError, check_serdes_wiring};
 pub use regional::{
     RegionalClocks, RegionalError, check_regional_wiring, is_regional_kind, regional_buffers,
 };
@@ -1549,6 +1549,8 @@ impl XrayDatabase {
         // And those of an IO standard the database never fuzzed: see
         // `io::measured_features`.
         measured.extend(io::measured_features(tile_type));
+        // And a serialiser's: see `iologic::measured_features`.
+        measured.extend(iologic::measured_features(tile_type));
         // And those of the regional buffers: see `regional::derived_features`.
         if regional_clocks {
             measured.extend(regional::derived_features(tile_type));
@@ -3458,8 +3460,10 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         // bitstream has `IOI_LEAF_GCLK5`). Every capture of the ADC's own
         // data read one constant value, and the suite's ADC ramp tests
         // passed on it, their check never finding a ramp to follow.
-        "ddr_in" => &["clk", "clkb"],
-        "ddr_out" => &["clk", "clkb"],
+        // An `ISERDESE2`'s `CLKDIV` and `OCLK`, and an `OSERDESE2`'s `CLKDIV`, the
+        // same: Vivado brings each from the global network (`iserdes_*`).
+        "ddr_in" => &["clk", "clkb", "clkdiv", "oclk"],
+        "ddr_out" => &["clk", "clkb", "clkdiv"],
         // A `DSP48E1`'s registers, the same way as a block RAM's.
         "dsp" => &["clk"],
         _ => &[],

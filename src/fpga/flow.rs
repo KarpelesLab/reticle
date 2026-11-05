@@ -972,6 +972,139 @@ fn cell_from_instance(
     true
 }
 
+/// A serialiser's connections, and the attributes [`serdes_connections`]
+/// leaves on its cell.
+type SerdesConnections = (
+    Vec<(crate::ir::Name, crate::ir::ExprId)>,
+    Vec<(&'static str, &'static str)>,
+);
+
+/// An `ISERDESE2`'s or `OSERDESE2`'s connections as the fabric takes them,
+/// and what the bitstream needs to know of the ones taken away (`CLKB`'s
+/// source, `CLKDIVP` in use), as attributes for the cell; or why Vivado, or
+/// this flow, refuses it. See `xc7::serdes` for the rules.
+///
+/// `CLKB` of `~CLK` or `CLK`, or unconnected at a single data rate, is `CLK`'s
+/// net on the pin: the site has no `CLKB` inverter, and Vivado routes the same
+/// clock to both in every one of those (`iserdes_clocks`). `OCLKB` and
+/// `CLKDIVP` are dropped: what Vivado writes depends on neither, and nothing in
+/// the database reaches them. A cascade, feedback or delay pin takes a net
+/// from the block it is wired to and nothing else.
+fn serdes_connections(
+    m: &crate::ir::Module,
+    inst: &crate::ir::Instance,
+    primitive: &str,
+) -> Result<SerdesConnections, String> {
+    use super::xc7::serdes::{self, Clkb};
+    use crate::ir::{ExprKind, UnaryOp};
+    let net = |port: &str| inst.connection(port).and_then(|e| m.expr(e).as_net());
+    let constant = |port: &str| {
+        inst.connection(port)
+            .and_then(|e| m.expr(e).as_const())
+            .map(|c| c.truth() == crate::logic::Bit::One)
+    };
+    let connected = |port: &str| inst.connection(port).is_some();
+    let mut out = inst.connections.clone();
+    let remove = |out: &mut Vec<(crate::ir::Name, crate::ir::ExprId)>, port: &str| {
+        out.retain(|(p, _)| p.as_str() != port);
+    };
+    let no_constants = |ports: &[&str]| -> Result<(), String> {
+        for port in ports {
+            if constant(port).is_some() {
+                return Err(format!(
+                    "a constant on `{port}`, which takes its signal from the block it is wired                      to and nothing else"
+                ));
+            }
+        }
+        Ok(())
+    };
+    if primitive == "OSERDESE2" {
+        let s = serdes::oserdes(&inst.params)?;
+        no_constants(&["SHIFTIN1", "SHIFTIN2"])?;
+        if connected("TBYTEOUT") || net("TBYTEIN").is_some() {
+            return Err("`TBYTEIN` or `TBYTEOUT` in use, which was not measured".to_owned());
+        }
+        remove(&mut out, "TBYTEIN");
+        // `PDRC-37`: what `T1` reads, if it is not routed, with no `TQ`.
+        let t1 = match (connected("T1"), constant("T1")) {
+            (false, _) => Some(false),
+            (true, Some(value)) => Some(value),
+            (true, None) => None,
+        };
+        if t1.map(|v| v != s.t_inverted[0]) == Some(true) && !connected("TQ") {
+            return Err(
+                "`T1` reads one with nothing on `TQ`, which holds the pad released; Vivado \
+                 refuses it (PDRC-37)"
+                    .to_owned(),
+            );
+        }
+        return Ok((out, Vec::new()));
+    }
+    let s = serdes::iserdes(&inst.params)?;
+    no_constants(&["D", "OFB", "SHIFTIN1", "SHIFTIN2"])?;
+    if connected("DDLY") {
+        return Err(
+            "`DDLY` comes from an `IDELAYE2`, which this flow does not build beside a serialiser"
+                .to_owned(),
+        );
+    }
+    // `CLKDIVP` reaches the pin on `CLKDIV`'s wire (`IOI_CLK0_<n>`): `CLKDIV`'s
+    // own clock is built and writes nothing (`iserdes_clkdivp`), and another
+    // is unroutable to Vivado (`iserdes_clkdivp_clk`).
+    if connected("CLKDIVP") && constant("CLKDIVP").is_none() && net("CLKDIVP") != net("CLKDIV") {
+        return Err(
+            "`CLKDIVP` on another clock than `CLKDIV`, whose wire it shares; Vivado cannot \
+             route it (Route 35-7)"
+                .to_owned(),
+        );
+    }
+    let mut marks = Vec::new();
+    if net("CLKDIVP").is_some() {
+        marks.push((serdes::CLKDIVP_ATTR, "1"));
+    }
+    remove(&mut out, "CLKDIVP");
+    let Some(clk) = net("CLK") else {
+        return Err("`CLK` must be a clock's net".to_owned());
+    };
+    // `OCLKB`: `OCLK`, `~OCLK` or nothing, which Vivado writes alike.
+    if let Some(e) = inst.connection("OCLKB") {
+        let oclk = net("OCLK");
+        let fine = match &m.expr(e).kind {
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr,
+            } => oclk.is_some() && m.expr(*expr).as_net() == oclk,
+            _ => oclk.is_some() && m.expr(e).as_net() == oclk,
+        };
+        if !fine {
+            return Err("`OCLKB` other than `OCLK` or `~OCLK`, which was not measured".to_owned());
+        }
+    }
+    remove(&mut out, "OCLKB");
+    let clkb = match inst.connection("CLKB") {
+        None => Clkb::Open,
+        Some(e) => match &m.expr(e).kind {
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                expr,
+            } if m.expr(*expr).as_net() == Some(clk) => Clkb::Inverted,
+            _ if m.expr(e).as_net() == Some(clk) => Clkb::Same,
+            _ if m.expr(e).as_net().is_some() => Clkb::Other,
+            _ => return Err("`CLKB` must be a clock's net, or `~CLK`".to_owned()),
+        },
+    };
+    s.clock_inverter(clkb)?;
+    if clkb != Clkb::Other {
+        let Some(clk_expr) = inst.connection("CLK") else {
+            return Err("`CLK` must be a clock's net".to_owned());
+        };
+        remove(&mut out, "CLKB");
+        out.push((crate::ir::Name::new("CLKB"), clk_expr));
+    }
+    marks.push((serdes::CLKB_ATTR, clkb.name()));
+    Ok((out, marks))
+}
+
 fn primitive_instances(
     design: &mut Design,
     module: ModuleId,
@@ -1491,6 +1624,23 @@ fn primitive_instances(
             }
         }
         let mut changed = inst.clone();
+        if matches!(primitive.as_str(), "ISERDESE2" | "OSERDESE2") {
+            match serdes_connections(m, &inst, primitive.as_str()) {
+                Ok((rewritten, marks)) => {
+                    connections = rewritten;
+                    for (key, value) in marks {
+                        changed.attrs.set(key, value.to_owned());
+                    }
+                }
+                Err(why) => {
+                    refused += 1;
+                    diags.push(
+                        Diagnostic::error(format!("`{}`: {why}", inst.name)).with_span(inst.span),
+                    );
+                    continue;
+                }
+            }
+        }
         changed.connections = connections;
         if !cell_from_instance(m, &changed, primitive, &bel.outputs, &mut refused, diags) {
             continue;

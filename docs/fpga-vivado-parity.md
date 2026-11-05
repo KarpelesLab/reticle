@@ -46,7 +46,8 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 120 of the 141**, 118 before the section on block RAM, 94 before the sections on pads and clock
+**Reticle builds 122 of the 141**, 120 before the section on serialisers, 118 before the section on
+block RAM, 94 before the sections on pads and clock
 buffers, 106 before the one on IO registers, 110 before regional clock buffers
 and clock managers. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
@@ -59,13 +60,13 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 21 that do not build, by what stops them:
+The 19 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | a FIFO by name | `FIFO18E1`, `FIFO36E1` |
 | pad buffers | the six `DIFF_OUT` forms |
-| IO logic | `ISERDESE2`, `OSERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
+| IO logic | `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
 | configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
 
 Building is the least that can be asked: a probe that builds has not been
@@ -539,8 +540,106 @@ of which the database offers for that pin; only the ends are compared.
 
 **Not done:** `ISERDESE2`, `OSERDESE2`, `IDELAYE2` and `IDELAYCTRL`. The database has their
 features (`ISERDES.*`, `OSERDES.DATA_WIDTH.*`, `IDELAY_Y*`), and Vivado's probes of each decode with
-nothing unnamed, but none has a bel here, a sweep, or a test. A `CE` tied low on an `IDDR` routes a
+nothing unnamed, but none has a bel here, a sweep, or a test. **The serialisers are done since**
+(the next section), and the claim that their probes decode with nothing unnamed was right of the
+probes and wrong of the blocks: five settings set bits the database does not name. A `CE` tied low on an `IDDR` routes a
 ground the way a block RAM's tie does, which has not been on a part either.
+
+## Serialisers
+
+`testdata/fpga/vivado/iologic/` has, beside the IO registers, what `gen_iologic.py`
+writes for an `ISERDESE2` or `OSERDESE2` on each pad of bank 35, one setting a pad: every
+interface type, rate and width the database names, `NUM_CE`, `INIT_*`, `SRVAL_*`, each
+`IS_*_INVERTED`, `DYN_CLK_INV_EN` and `DYN_CLKDIV_INV_EN`, `OFB_USED`, `IOBDELAY`, every
+control tied low, tied high and unconnected, `CLKB` from `~CLK`, `CLK`, nothing and a second
+clock with each inversion, `OCLK` and `OCLKB` likewise, `CLKDIV` on `CLK`'s clock,
+`CLKDIVP` on `CLKDIV`'s; on the other side `DATA_RATE_OQ` and `DATA_RATE_TQ`, every width,
+`TRISTATE_WIDTH`, the four `INIT`s and `SRVAL`s, `TBYTE_CTL`, a tristate into an `OBUFT`,
+and `TFB` read through a flip-flop; masters and slaves of widths ten and fourteen; and an
+`OSERDESE2` read back through `OFB`. **192 serialisers in 16 designs, and every one's
+`ILOGIC` and `OLOGIC` features, grounds, ties high and clock sources are Vivado's**
+(`tests/fpga_xray_ioreg.rs`, 4,159 lines of `vivado.txt`), and so are the ledger's two
+probes, built from their own `.xdc` and compared by hand: 24 and 22 features, the same.
+So the ledger has both `ok`.
+
+Before those, 84 designs of one `ISERDESE2` each asked what every combination of `CLKB`,
+`IS_CLK_INVERTED` and `IS_CLKB_INVERTED` does in five interface types, and of `OCLKB` with
+its two inversions; they are not kept, and what they said is `iserdes_clocks` and the
+refused designs beside it. The tables of what each setting sets are
+`xray::iologic`'s documentation, and the rules `xc7::serdes`'s.
+
+**What was found, that no reading of the names would give:**
+
+| | what Vivado wrote |
+|---|---|
+| `IS_CLK_INVERTED`, `IS_CLKB_INVERTED` at a double data rate | **no bit at all**, in every interface; at a single rate `IFF.ZINV_C` is cleared only with `IS_CLK_INVERTED` and `CLKB` unconnected or carrying an inversion against `CLK`'s net |
+| `IS_OCLKB_INVERTED`, `IS_CLKDIVP_INVERTED` with nothing on it, what `OCLKB` is wired to | nothing |
+| `CLKB` of `~CLK`, of `CLK`, or unconnected at a single rate | `CLK`'s clock routed to both pins: the site has no `CLKB` inverter |
+| `INTERFACE_TYPE` other than `MEMORY` | `IDDR.IN_USE` beside `ISERDES.IN_USE`; `MEMORY`, the default, has none |
+| `OCLK` in use, in any interface | `IFF.ZINV_OCLK`, or `IFF.INV_OCLK` inverted, and the `OLOGIC`'s `ODDR_TDDR.IN_USE` on the same half |
+| `INIT_Q*`, `SRVAL_Q*` | the `IDDR`'s `IFF.ZINIT_Q*`, `IFF.ZSRVAL_Q*`, all four, whatever the reset |
+| an `OSERDESE2`, always | `ODDR.SRUSED`, and `TDDR.SRUSED` unless `DATA_RATE_TQ` is `BUF`, whatever `RST` is; a slave `OQUSED` with nothing on `OQ` |
+| `T1` to `T4` unconnected | each one's inverter on (`ZINV_T*` clear), a zero, as an `ODDR`'s unconnected `D2` |
+| unconnected `RST`, `BITSLIP` | grounded, as tied low; unconnected `CE1`, `CE2`, `OCE`, `TCE`, `DYNCLKSEL`, `DYNCLKDIVSEL` are left, reading one, where tied low they are grounded |
+| `IOBDELAY` with nothing on `DDLY` | built: `IBUF` sets `IDELMUXE3.P0`, `IFD` `IFFDELMUXE3.P0`, `BOTH` both |
+
+**The bits the database does not name**, five settings' (`iologic::measured_features`, the
+names mine): `DATA_WIDTH` 10 and 14 of an `OSERDESE2` (four bits a half, three of them the
+database's own `DATA_WIDTH` field), `TBYTE_CTL`, an `ISERDESE2`'s `IS_CLKDIV_INVERTED`, and
+`CLKDIVP` on `CLKDIV`'s clock with its inversion. Each is on both halves, mirrored as the
+database's features are, and was seen on both but `IS_CLKDIVP_INVERTED`, whose half 1 is the
+mirror alone. **Every bit of all 16 designs decodes now**; before, six had `?` lines. These
+are given to the `LIOI3` side as well on the database's word: its 178 `ILOGIC` and `OLOGIC`
+features have the `RIOI3` side's bits, every one.
+
+### What Vivado refuses, and so does Reticle
+
+Twelve designs, each refused by Vivado and here by the same name
+(`what_vivado_refuses_is_refused`):
+
+| rule | what |
+|---|---|
+| `AVAL-69` | an `OSERDESE2` wider than four with `TRISTATE_WIDTH` 4, the default |
+| `AVAL-74` | `DATA_RATE_TQ` `SDR` or `BUF` with `TRISTATE_WIDTH` 4 |
+| `PDRC-26` | `CLK` and `CLKB` one net with inversions that leave them one edge: at a double data rate with neither inverted against the other, at a single rate with the two inversions equal. **A fit over the 70 combinations asked**, in `xc7::serdes`, and it agrees with every one |
+| `PDRC-37` | `T1` reading one with nothing on `TQ`, the pad held released: tied high, or unconnected and inverted |
+| `INBB-3` | no `CLKB` at a double data rate, which Vivado's synthesis leaves a black box |
+| `THRU-2` | `OFB` read by the fabric, or `TFB` straight into a flip-flop on a pad. Through a second flip-flop `TFB` is built |
+| `Route 35-7` | `CLKDIVP` on another clock than `CLKDIV`, whose wire it shares |
+
+Refused here and not asked of Vivado, as not measured: a width or interface the database
+does not name (an `OVERSAMPLE` of eight, a `MEMORY` at a single rate), `TBYTE_SRC`,
+`TBYTEIN` or `TBYTEOUT` in use, `OCLKB` on another clock, and `DDLY` connected, which needs
+an `IDELAYE2` this flow does not build beside a serialiser.
+
+**Mutations.** 17, one at a time, and 16 failed a test: `ZINV_C` never cleared at a single
+rate, `IDDR.IN_USE` in `MEMORY`, `OCLK` without the `OLOGIC`'s bit, half 1's measured bits
+mirrored a column off, an unconnected `T` without its inverter, an unconnected `D` read as a
+one, `TDDR.SRUSED` at `BUF`, an unconnected `BITSLIP` left ungrounded, an unconnected
+`DYNCLKSEL` grounded, a slave placed on any site of its kind, `PDRC-26` let through at a double
+data rate, `AVAL-69` let through, `THRU-2` never asked, `CLKDIVP`'s bit never set, `CLKB` of
+`~CLK` left to a lookup table, and `PDRC-37` taken out of the bitstream pass (caught by the unit
+test alone: the flow refuses the same designs before placing, by the same name). The
+seventeenth, `CLKDIV` taken out of the pins a clock must reach from the global network,
+survived: the router brought every one of these from a global line anyway, the shorter road from
+a `BUFG`. It is kept for the reason the `IDDR`'s `CLK` is, the Husky's, and no design here would
+show it.
+
+**Existing bitstreams do not change.** Eighteen designs built by the commit before this and by
+this one decode to the same lines, every bit and every route: the Husky's `io_registers`,
+`clock_buffers` and `io_standards`, the `IDDR`, `IDDR_2CLK` and `ODDR` sweeps, and the probes of
+`IDDR`, `IDDR_2CLK`, `ODDR`, `IOBUF`, `OBUFT`, `BUFIO`, `BUFR`, `IBUFDS`, `OBUFDS`, `IOBUFDS` and
+`BUFG`. The placer's one change, a site with no wire for a pin no longer stopping it from following
+a fixed end, could move an instance only where a site of the kind lacks the pin, which no
+`IDDR` or `ODDR` site does. The Husky Plus was not rebuilt.
+
+**Not done.** `DDLY` from an `IDELAYE2`: what Vivado writes for the pair is not asked, and
+the delay is not built. **No simulation model**: `src/fpga/devices/xc7_cells.v` is what
+elaboration takes for a cell nothing declares, so a model there would replace the hard block
+in every build, as it would an `IDDR`'s, which has none either; a model for simulation alone
+would need a library elaboration does not read, which this flow has not got. A `PHASER`'s
+clocks into `CLKDIVP` and `OCLK`, the `MEMORY_DDR3` and `MEMORY_QDR` interfaces' purpose,
+which this part's flow does not build. Nothing here has been on a part.
 
 ## Reading its constraints
 

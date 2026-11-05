@@ -1,0 +1,26 @@
+module oserdes_pins(input clk, input clkd, input c0, input c1, input c2, input c3, output reg r, output p0, output p1, output p2, output p3, output p4, output p5, output p6, output p7, output p8, output p9, output p10, output p11, output p12, output p13, output p14, output p15, output p16, output p17, output p18, output p19);
+  wire gclk; BUFG bg(.I(clk), .O(gclk));
+  wire gdiv; BUFG bd(.I(clkd), .O(gdiv));
+  reg [15:0] sh; always @(posedge gdiv) sh <= {sh[14:0], c3};
+  OSERDESE2 u0(.OQ(p0), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(1'b0), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u1(.OQ(p1), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(1'b1), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u2(.OQ(p2), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(1'b0));
+  OSERDESE2 u3(.OQ(p3), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(1'b1), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u4(.OQ(p4), .CLK(gclk), .CLKDIV(gdiv), .OCE(1'b1), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u5(.OQ(p5), .CLK(gclk), .CLKDIV(gdiv), .OCE(1'b0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u6(.OQ(p6), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(1'b0), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u7(.OQ(p7), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(1'b1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u8(.OQ(p8), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .T1(1'b0));
+  OSERDESE2 u9(.OQ(p9), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .TCE(1'b1));
+  OSERDESE2 u10(.OQ(p10), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]), .TCE(c0));
+  OSERDESE2 u11(.OQ(p11), .CLK(gclk), .CLKDIV(gclk), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 #(.DATA_RATE_OQ("SDR"), .DATA_RATE_TQ("BUF"), .DATA_WIDTH(4), .TRISTATE_WIDTH(1)) u12(.OQ(p12), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 #(.DATA_RATE_OQ("SDR"), .DATA_RATE_TQ("SDR"), .DATA_WIDTH(8), .TRISTATE_WIDTH(1), .IS_CLK_INVERTED(1'b1)) u13(.OQ(p13), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 #(.DATA_WIDTH(8), .TRISTATE_WIDTH(1), .IS_D3_INVERTED(1'b1)) u14(.OQ(p14), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(1'b0), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 #(.INIT_OQ(1'b1), .SRVAL_OQ(1'b1), .INIT_TQ(1'b1), .SRVAL_TQ(1'b1)) u15(.OQ(p15), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u16(.OQ(p16), .CLK(gclk), .CLKDIV(gdiv), .OCE(), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 #(.IS_CLKDIV_INVERTED(1'b1)) u17(.OQ(p17), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u18(.OQ(p18), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(), .D1(sh[0]), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  OSERDESE2 u19(.OQ(p19), .CLK(gclk), .CLKDIV(gdiv), .OCE(c0), .RST(c1), .D1(), .D2(sh[1]), .D3(sh[2]), .D4(sh[3]), .D5(sh[4]), .D6(sh[5]), .D7(sh[6]), .D8(sh[7]));
+  always @(posedge gdiv) r <= sh[15];
+endmodule
