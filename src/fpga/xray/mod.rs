@@ -188,8 +188,8 @@ mod vivado;
 mod xadc;
 
 pub use bram::{
-    BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, mode_features, mode_features_in,
-    ramb36_features, ramb36_input_roles, tie_policy, write_enable_lanes,
+    BlockRamError, BlockRamReport, BlockRamTables, TiePolicy, TieWires, mode_features,
+    mode_features_in, ramb36_features, ramb36_input_roles, tie_policy, write_enable_lanes,
 };
 pub use bufg::GlobalBufferError;
 pub use carry::{CarryPacking, legalise_carries};

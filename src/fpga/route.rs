@@ -235,6 +235,22 @@ pub struct RouteOptions {
     /// flip-flop's output rode 1322 pips of global clock wire, and took the
     /// ground fans a block RAM's write enable needed.
     pub network: Vec<bool>,
+    /// Nodes no signal may enter at all, the network's included, by node
+    /// id, or empty for none.
+    ///
+    /// These are the wires a constant will hold after routing: on a 7-series
+    /// part, every wire behind a block RAM input that Vivado ties, which a
+    /// signal walked through would reach the pin with no switch in its way.
+    /// They were closed before as [`RouteOptions::network`] nodes with a
+    /// [`RouteOptions::node_base`] of a million, and **that base is what cost
+    /// the ChipWhisperer-Husky Plus its route, not the wires**: the base is
+    /// also what the router averages (`delay_scale`) to turn a delay into a
+    /// cost, and 9,914 timed nodes at a million made every delay 5,000 times
+    /// dearer against congestion than the fabric's own wires say, so the
+    /// router negotiated for time alone. A node closed here is left out of
+    /// that average and costs nothing to keep shut.
+    /// `docs/fpga-vivado-parity.md` has the measurements.
+    pub closed: Vec<bool>,
     /// The signals allowed onto [`RouteOptions::network`], by signal index,
     /// or empty for "every signal".
     pub network_signals: Vec<bool>,
@@ -539,6 +555,7 @@ impl Default for RouteOptions {
             astar_weight: 0.3,
             node_base: Vec::new(),
             network: Vec::new(),
+            closed: Vec::new(),
             network_signals: Vec::new(),
             network_entry: Vec::new(),
             network_pins: Vec::new(),
@@ -883,6 +900,8 @@ struct Geometry {
     global: bool,
     /// True when it is one of [`RouteOptions::network`]'s nodes.
     reserved: bool,
+    /// True when it is one of [`RouteOptions::closed`]'s.
+    closed: bool,
     /// Its [`Timing::node_delay`] in units of cost: see [`delay_scale`].
     delay: f32,
 }
@@ -893,10 +912,11 @@ impl Geometry {
         graph: &RoutingGraph,
         base: &[f32],
         reserved: &[bool],
+        closed: &[bool],
         timing: Option<&Timing>,
     ) -> Vec<Geometry> {
         let delays = timing.map_or(&[][..], |t| &t.node_delay[..]);
-        let scale = delay_scale(graph.nodes.len(), base, delays);
+        let scale = delay_scale(graph.nodes.len(), base, closed, delays);
         graph
             .nodes
             .iter()
@@ -907,6 +927,7 @@ impl Geometry {
                 base: base.get(index).copied().unwrap_or(1.0),
                 global: wire.global,
                 reserved: reserved.get(index).copied().unwrap_or(false),
+                closed: closed.get(index).copied().unwrap_or(false),
                 #[allow(clippy::cast_possible_truncation, reason = "a delay in cost units")]
                 delay: (f64::from(delays.get(index).copied().unwrap_or(0)) * scale) as f32,
             })
@@ -1070,6 +1091,7 @@ pub fn route(
         graph,
         &options.node_base,
         &options.network,
+        &options.closed,
         options.timing.as_ref(),
     );
     // The node every outgoing pip reaches, in the order
@@ -1089,7 +1111,12 @@ pub fn route(
     let mut scratch = Scratch::new(graph.nodes.len());
     if let Some(timing) = options.timing.as_ref().filter(|t| t.tile_delay > 0) {
         scratch.tile_delay = f64::from(timing.tile_delay)
-            * delay_scale(graph.nodes.len(), &options.node_base, &timing.node_delay);
+            * delay_scale(
+                graph.nodes.len(),
+                &options.node_base,
+                &options.closed,
+                &timing.node_delay,
+            );
     }
     if let Some(timing) = options.timing.as_ref() {
         scratch.present_cap = timing.present_cap;
@@ -1382,11 +1409,19 @@ const CLEANUP_PASSES: u32 = 12;
 /// scale: the mean base cost of the nodes that have a delay, over their
 /// mean delay. A wire of average delay then costs what a wire of average
 /// base cost does.
-fn delay_scale(nodes: usize, base: &[f32], delays: &[u32]) -> f64 {
+///
+/// A node of [`RouteOptions::closed`] is no wire anybody pays for, and is
+/// left out. A node closed through [`RouteOptions::network`] with a base
+/// of a million is still counted, as it always was: the 7-series flow's
+/// ground fans are, and a few hundred of them already make a delay about
+/// a hundred times dearer on the ChipWhisperer-Husky Plus than its own
+/// wires would. That is what every build of it on a part was measured
+/// with, so it is kept until a build without it has been.
+fn delay_scale(nodes: usize, base: &[f32], closed: &[bool], delays: &[u32]) -> f64 {
     let (mut cost, mut delay) = (0.0, 0.0);
     for node in 0..nodes {
         let d = delays.get(node).copied().unwrap_or(0);
-        if d > 0 {
+        if d > 0 && !closed.get(node).copied().unwrap_or(false) {
             cost += f64::from(base.get(node).copied().unwrap_or(1.0));
             delay += f64::from(d);
         }
@@ -3109,6 +3144,9 @@ fn maze(
             if barred && geometry[*next as usize].reserved {
                 continue;
             }
+            if geometry[*next as usize].closed {
+                continue;
+            }
             if !barred
                 && options.network_entry.get(*next as usize) == Some(&true)
                 && !geometry[node as usize].reserved
@@ -3903,6 +3941,7 @@ mod tests {
             base: 1.0,
             global,
             reserved: false,
+            closed: false,
             delay: 0.0,
         };
         let b = Bounds {
@@ -4245,7 +4284,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let geometry = Geometry::of(&graph, &[], &[], None);
+        let geometry = Geometry::of(&graph, &[], &[], &[], None);
         let mut state = State::new(physical_nodes(&graph));
         for root in state.roots(&route.nodes) {
             state.occupancy[root as usize] += 1;
@@ -4791,7 +4830,7 @@ mod tests {
     #[test]
     fn a_critical_sink_of_a_wide_net_may_start_at_the_source() {
         let (_, graph) = line(40, 1);
-        let geometry = Geometry::of(&graph, &[], &[], None);
+        let geometry = Geometry::of(&graph, &[], &[], &[], None);
         let track = |x: u32| {
             graph
                 .nodes
@@ -5224,6 +5263,107 @@ mod tests {
             "a barred signal went onto the network however cheap it was"
         );
         assert!(kept_off.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// **A node of [`RouteOptions::closed`] is entered by no signal**, one
+    /// the network allows included, however cheap it is. The detour's upper
+    /// row is made both the network and twenty times cheaper than the
+    /// lower, which an allowed signal takes while it is open (as in the test
+    /// above); closed as well, the same signal stays on the lower row.
+    ///
+    /// What it would catch: `closed` ignored by the search, or honoured only
+    /// for a signal the network bars, which is how a clock could reach a pin
+    /// a block RAM's tie holds. What it would not catch: the 7-series flow
+    /// closing the wrong wires, which the block RAM ties' own tests and a
+    /// build's decode are for.
+    #[test]
+    fn a_closed_node_is_entered_by_no_signal_an_allowed_one_included() {
+        let (_, graph) = detour(8);
+        let netlist = pairs(1);
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, (bel, tile)) in [("src0", 0), ("dst0", 7)].into_iter().enumerate() {
+            let site = graph
+                .site_index(&format!("X{tile}Y0/{bel}"))
+                .expect("the bel exists");
+            placement.place(index, site);
+        }
+        let upper: Vec<bool> = graph.nodes.iter().map(|wire| wire.tile.1 == 1).collect();
+        let base: Vec<f32> = upper
+            .iter()
+            .map(|on| if *on { 0.05 } else { 1.0 })
+            .collect();
+        let on_upper_row = |routing: &Routing| {
+            routing
+                .routes()
+                .any(|r| r.nodes.iter().any(|n| upper[*n as usize]))
+        };
+        let options = RouteOptions {
+            node_base: base,
+            network: upper.clone(),
+            network_signals: vec![true; netlist.signals.len()],
+            ..RouteOptions::default()
+        };
+        let (open, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(
+            on_upper_row(&open),
+            "the cheap row should be taken while open"
+        );
+        let options = RouteOptions {
+            closed: upper.clone(),
+            ..options
+        };
+        let (shut, _) = route(&netlist, &graph, &placement, &options).unwrap();
+        assert!(
+            !on_upper_row(&shut),
+            "a signal the network allows went onto a closed node"
+        );
+        assert!(shut.verify(&netlist, &graph, &placement).is_empty());
+    }
+
+    /// **A closed node does not weigh in what a delay costs.**
+    /// [`delay_scale`] is the mean base cost of the timed nodes over their
+    /// mean delay; a node closed by a base of a million, as the 7-series
+    /// ground fans are, counts at a million, and one of
+    /// [`RouteOptions::closed`] not at all. The Husky Plus's 9,914 timed
+    /// tied wires at a million made the scale 25.6 where its wires alone
+    /// make it 0.005, and the router negotiated for time alone and did not
+    /// converge.
+    ///
+    /// What it would catch: the closed nodes counted, by the scale or by
+    /// the per-node delay [`Geometry::of`] derives from it. What it would
+    /// not catch: the flow putting a tied wire in the base instead of in
+    /// `closed`, which is the caller's (`block_ram_ground_fans`' `held`).
+    #[test]
+    fn a_closed_node_is_left_out_of_what_a_delay_costs() {
+        let base = [1.0, 1.0, 1.0e6];
+        let delays = [10, 10, 10];
+        let open = delay_scale(3, &base, &[], &delays);
+        assert!(
+            open > 1.0e4,
+            "a base of a million counts when it is not closed: {open}"
+        );
+        let shut = delay_scale(3, &base, &[false, false, true], &delays);
+        assert!(
+            (shut - 0.1).abs() < 1e-12,
+            "two nodes of base 1 over 20 ps: {shut}"
+        );
+
+        let (_, graph) = detour(4);
+        let nodes = graph.nodes.len();
+        let mut base = vec![1.0; nodes];
+        base[nodes - 1] = 1.0e6;
+        let mut closed = vec![false; nodes];
+        closed[nodes - 1] = true;
+        let timing = Timing::for_netlist(&pairs(1), vec![10; nodes], 1);
+        let plain = Geometry::of(&graph, &vec![1.0; nodes], &[], &[], Some(&timing));
+        let held = Geometry::of(&graph, &base, &[], &closed, Some(&timing));
+        assert!(held[nodes - 1].closed && !held[0].closed);
+        for node in 0..nodes - 1 {
+            assert!(
+                (held[node].delay - plain[node].delay).abs() < 1e-6,
+                "node {node}: a closed node changed what a delay costs"
+            );
+        }
     }
 
     /// **A clock pin named in [`RouteOptions::network_pins`] is reached
@@ -5804,7 +5944,7 @@ mod tests {
     #[test]
     fn a_search_does_not_drive_again_a_wire_its_tree_drives() {
         let graph = looping_line(4);
-        let geometry = Geometry::of(&graph, &[], &[], None);
+        let geometry = Geometry::of(&graph, &[], &[], &[], None);
         let state = State::new(physical_nodes(&graph));
         let mut reach_start = Vec::new();
         let mut reach = Vec::new();

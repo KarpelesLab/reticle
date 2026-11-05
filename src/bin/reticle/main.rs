@@ -4297,23 +4297,20 @@ fn write_xc7_bitstream(
 
         // The ground fans the block RAMs' zero ties will need are closed to
         // every signal, the clocks included: a tie made after routing found
-        // them spent as hops. See `XrayFabric::block_ram_ground_fans`.
+        // them spent as hops. See `XrayFabric::block_ram_ground_fans`. The
+        // Vivado model's tied wires are shut outright, and not by a base cost
+        // that would weigh in what a delay costs: see `RouteOptions::closed`.
         let mut node_base = fabric.node_costs(&graph, reticle::fpga::xray::CLOCK_PREFERENCE);
         let mut network = fabric.clock_network_nodes(&graph);
-        let fans = fabric
+        let ties = fabric
             .block_ram_ground_fans(design, top, &graph, &netlist, &placement)
             .map_err(|e| e.to_string())?;
-        if !fans.is_empty() {
-            node_base.resize(graph.nodes.len(), 1.0);
-            network.resize(graph.nodes.len(), false);
-            for fan in &fans {
-                network[*fan as usize] = true;
-                node_base[*fan as usize] = 1.0e6;
-            }
-        }
+        let mut closed = Vec::new();
+        ties.close(graph.nodes.len(), &mut node_base, &mut network, &mut closed);
         let route_options = RouteOptions {
             node_base,
             network,
+            closed,
             network_signals: network_signals.clone(),
             // And a clock comes off the network at the pin, not a hop before:
             // see `RouteOptions::network_entry`.

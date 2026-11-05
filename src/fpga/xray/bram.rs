@@ -1315,6 +1315,54 @@ impl BlockRamTables {
     }
 }
 
+/// The wires [`XrayFabric::block_ram_ground_fans`] closes to the router
+/// for the ties made after it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TieWires {
+    /// Ground fans and a shift register's constant enable: closed to every
+    /// signal but a clock, which pays a base cost of a million for one, as
+    /// every 7-series build has had them.
+    pub fans: Vec<NodeId>,
+    /// The Vivado model's tied wires: closed to every signal, a clock's
+    /// too, and left out of what a delay costs. Empty with
+    /// `--memories legacy`.
+    pub held: Vec<NodeId>,
+}
+
+impl TieWires {
+    /// Closes these wires in a route's options over `nodes` nodes: each
+    /// fan a [`RouteOptions::network`](crate::fpga::route::RouteOptions::network)
+    /// node of base cost a million, and each held wire
+    /// [`RouteOptions::closed`](crate::fpga::route::RouteOptions::closed),
+    /// with its base left alone. A vector is grown to `nodes` only when
+    /// something is put in it, so that a design with neither routes with
+    /// the options it had before. A wire that is both is held.
+    pub fn close(
+        &self,
+        nodes: usize,
+        node_base: &mut Vec<f32>,
+        network: &mut Vec<bool>,
+        closed: &mut Vec<bool>,
+    ) {
+        if !self.held.is_empty() {
+            closed.resize(nodes, false);
+            for wire in &self.held {
+                closed[*wire as usize] = true;
+            }
+        }
+        if !self.fans.is_empty() {
+            node_base.resize(nodes, 1.0);
+            network.resize(nodes, false);
+            for fan in &self.fans {
+                if closed.get(*fan as usize) != Some(&true) {
+                    network[*fan as usize] = true;
+                    node_base[*fan as usize] = 1.0e6;
+                }
+            }
+        }
+    }
+}
+
 /// What configuring the block RAMs did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BlockRamReport {
@@ -2138,6 +2186,14 @@ impl XrayFabric {
     /// A fan serves any number of zero ties at once, so reserving it costs
     /// the tie nothing.
     ///
+    /// The Vivado model closes more: every wire behind a pin it ties, and
+    /// what a one through a pip takes. Those are [`TieWires::held`], for
+    /// [`RouteOptions::closed`](crate::fpga::route::RouteOptions::closed),
+    /// and the fans and a shift register's enable are [`TieWires::fans`],
+    /// closed as they always were. The two are kept apart because how a
+    /// wire is closed changes the route: see
+    /// [`RouteOptions::closed`](crate::fpga::route::RouteOptions::closed).
+    ///
     /// # Errors
     ///
     /// As [`XrayFabric::configure_block_rams`], for an instance it would
@@ -2149,9 +2205,9 @@ impl XrayFabric {
         graph: &RoutingGraph,
         netlist: &Netlist,
         placement: &Placement,
-    ) -> Result<Vec<NodeId>, BlockRamError> {
+    ) -> Result<TieWires, BlockRamError> {
         let Some(m) = design.modules.get(module) else {
-            return Ok(Vec::new());
+            return Ok(TieWires::default());
         };
         let mut wants: Vec<Want> = Vec::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
@@ -2204,6 +2260,8 @@ impl XrayFabric {
             })?;
         }
         let mut fans: Vec<NodeId> = Vec::new();
+        let mut held: Vec<NodeId> = Vec::new();
+        let mut seen: HashSet<NodeId> = HashSet::new();
         // The Vivado model closes a block RAM's tied wires to the router; a
         // DSP's and an IO register's are as they were.
         let ours: HashSet<&str> = netlist
@@ -2244,8 +2302,8 @@ impl XrayFabric {
                     .unwrap_or_default()
                 };
                 for n in chain.into_iter().chain(behind) {
-                    if !fans.contains(&n) {
-                        fans.push(n);
+                    if seen.insert(n) {
+                        held.push(n);
                     }
                 }
                 continue;
@@ -2261,8 +2319,8 @@ impl XrayFabric {
             // its routes.
             if vivado {
                 for behind in fixed_chain(graph, *node) {
-                    if !fans.contains(&behind) {
-                        fans.push(behind);
+                    if seen.insert(behind) {
+                        held.push(behind);
                     }
                 }
             }
@@ -2282,7 +2340,7 @@ impl XrayFabric {
                 }
             }
         }
-        Ok(fans)
+        Ok(TieWires { fans, held })
     }
 
     /// Configures every placed `RAMB18E1`: its mode features and a value
@@ -2480,6 +2538,48 @@ impl XrayFabric {
 mod tests {
     use super::*;
     use crate::fpga::arch::{PipDecl, TileType, WireDecl, WireRef};
+
+    /// **A held wire is closed outright and keeps its base; a fan is closed
+    /// by a million, as before; and nothing is grown that has nothing to
+    /// hold.** The Vivado model's 32,630 tied wires on the Husky Plus, put
+    /// through the fans' million, made a delay 5,000 times dearer than the
+    /// fabric's wires say and the route did not converge
+    /// (`docs/fpga-vivado-parity.md`).
+    ///
+    /// What it would catch: the held wires given the million again (which no
+    /// fixture's build notices: they route either way), a held wire left
+    /// open, a fan closed by `closed` instead (which would change every
+    /// legacy build), and a design with no tie handed options of the graph's
+    /// length. What it would not catch: the wrong wires named, which the
+    /// block RAM and FIFO fixtures' builds are for.
+    #[test]
+    fn held_wires_are_closed_outright_and_fans_by_a_million() {
+        let ties = TieWires {
+            fans: vec![1, 3],
+            held: vec![2, 3],
+        };
+        let (mut base, mut network, mut closed) = (Vec::new(), Vec::new(), Vec::new());
+        ties.close(5, &mut base, &mut network, &mut closed);
+        assert_eq!(closed, [false, false, true, true, false]);
+        assert_eq!(network, [false, true, false, false, false]);
+        assert_eq!(base, [1.0, 1.0e6, 1.0, 1.0, 1.0]);
+
+        let fans = TieWires {
+            fans: vec![1],
+            held: Vec::new(),
+        };
+        let (mut base, mut network, mut closed) = (Vec::new(), Vec::new(), Vec::new());
+        fans.close(3, &mut base, &mut network, &mut closed);
+        assert!(
+            closed.is_empty(),
+            "a legacy build's options grew a closed list"
+        );
+        assert_eq!(base, [1.0, 1.0e6, 1.0]);
+
+        let (mut base, mut network, mut closed) = (Vec::new(), Vec::new(), Vec::new());
+        TieWires::default().close(3, &mut base, &mut network, &mut closed);
+        assert!(base.is_empty() && network.is_empty() && closed.is_empty());
+    }
 
     #[test]
     fn the_lower_half_is_the_fifo18_wires_and_the_ports_follow_nextpnr() {
