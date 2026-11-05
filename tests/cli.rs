@@ -1922,8 +1922,9 @@ fn a_multiply_becomes_an_ecp5_bitstream_in_lookup_tables() {
 /// three before.
 ///
 /// Ignored because it places and routes sixteen block RAMs and their
-/// FIFO: about 70 s from a release build. Run it with `cargo test --release
-/// --all-features --test cli -- --include-ignored a_block_ram_fifo`.
+/// FIFO, and then eight: about ten seconds each from a release build. Run
+/// it with `cargo test --release --all-features --test cli --
+/// --include-ignored a_block_ram_fifo`.
 #[cfg(feature = "fpga")]
 #[test]
 #[ignore = "places and routes sixteen block RAMs; run with --release --include-ignored"]
@@ -1962,27 +1963,43 @@ fn a_block_ram_fifo_ties_its_resets_with_the_router_kept_off_the_ground_fans() {
         .map(|(port, pin)| format!("set_io -io_standard LVCMOS33 {port} {pin}\n"))
         .collect();
     std::fs::write(&rcf, text).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
-        .args(["fpga"])
-        .arg(&v)
-        .arg("examples/husky/fifo_generator.v")
-        .args(["--top", "w", "--device", "xc7a35t-ftg256", "--constraints"])
-        .arg(&rcf)
-        .arg("--output-dir")
-        .arg(&dir)
-        .arg("--bitstream")
-        .arg(dir.join("w.bit"))
-        .env("RETICLE_OFFLINE", "1")
-        .output()
-        .expect("failed to run the reticle binary");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("needs a chip database") || stderr.contains("not in the cache") {
-        eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
-        return;
+    // With `--memories legacy` the FIFO is the sixteen `RAMB18E1` this was
+    // written for; with the default, which maps memories as Vivado does,
+    // eight `RAMB36E1`, whose ties close more wires (`TieWires::held`). This
+    // asked for sixteen alone until the default changed, and then failed
+    // for the count while the build was sound.
+    for (mode, flags, blocks) in [
+        ("legacy", &["--memories", "legacy"][..], 16),
+        ("default", &[][..], 8),
+    ] {
+        let out_dir = dir.join(mode);
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args(["fpga"])
+            .arg(&v)
+            .arg("examples/husky/fifo_generator.v")
+            .args(["--top", "w", "--device", "xc7a35t-ftg256", "--constraints"])
+            .arg(&rcf)
+            .args(flags)
+            .arg("--output-dir")
+            .arg(&out_dir)
+            .arg("--bitstream")
+            .arg(out_dir.join("w.bit"))
+            .env("RETICLE_OFFLINE", "1")
+            .output()
+            .expect("failed to run the reticle binary");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("needs a chip database") || stderr.contains("not in the cache") {
+            eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+            return;
+        }
+        assert_eq!(out.status.code(), Some(0), "{mode}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{blocks} block RAM(s) configured")),
+            "{mode}: {stderr}"
+        );
+        assert!(stderr.contains(" 0 bit(s) unexplained"), "{mode}: {stderr}");
     }
-    assert_eq!(out.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains("16 block RAM(s) configured"), "{stderr}");
-    assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
 }
 
 /// Small functions of shared inputs share lookup tables in a 7-series
