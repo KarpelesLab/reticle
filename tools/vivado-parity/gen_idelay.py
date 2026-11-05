@@ -265,6 +265,141 @@ def dci_reset():
             HELPER_XDC)
 
 
+# An `ISERDESE2` reading a delay on `DDLY`, a setting a pad: `IOBDELAY`, what
+# is on `D`, what is read, the interface, and the delay's own settings.
+# `ser:` keys are the serialiser's parameters, `pin:` its pins (`open` for
+# none), `del:` the delay's parameters and `dpin:` its pins; `D` is the pad
+# unless a setting says otherwise, and every `Q` is read.
+SERDES_PINS = {"CLK": "gclk", "CLKB": "~gclk", "CLKDIV": "gdiv", "CLKDIVP": "1'b0", "OCLK": "gclk",
+               "OCLKB": "~gclk", "CE1": "c0", "CE2": "c1", "RST": "c2", "BITSLIP": "c3",
+               "DYNCLKSEL": "1'b0", "DYNCLKDIVSEL": "1'b0"}
+SER_NET = {"ser:INTERFACE_TYPE": '"NETWORKING"', "pin:OCLK": "open", "pin:OCLKB": "open"}
+IFD = {"ser:IOBDELAY": '"IFD"'}
+DDLY_SWEEP = [
+    dict(IFD, **{"pin:D": "open"}),
+    dict(IFD),
+    {"ser:IOBDELAY": '"IBUF"', "read": "O,Q"},
+    {"ser:IOBDELAY": '"BOTH"', "pin:D": "open", "read": "O,Q"},
+    {"ser:IOBDELAY": '"BOTH"', "read": "O,Q"},
+    dict(IFD, **SER_NET, **{"pin:D": "open", "ser:DATA_RATE": '"SDR"'}),
+    dict(IFD, **SER_NET, **{"pin:D": "open", "ser:DATA_WIDTH": "8"}),
+    dict(IFD, **{"pin:D": "open", "ser:INTERFACE_TYPE": '"OVERSAMPLE"', "pin:OCLK": "open",
+                 "pin:OCLKB": "open"}),
+    dict(IFD, **{"pin:D": "open", "ser:INTERFACE_TYPE": '"MEMORY_DDR3"'}),
+    dict(IFD, **{"pin:D": "open", "ser:INTERFACE_TYPE": '"MEMORY_QDR"'}),
+    dict(IFD, **{"pin:D": "open", "del:IDELAY_VALUE": "13"}),
+    dict(IFD, **{"pin:D": "open", "del:IDELAY_TYPE": '"VARIABLE"', "dpin:C": "gdiv", "dpin:CE": "c0",
+                 "dpin:INC": "c1"}),
+    dict(IFD, **{"pin:D": "open", "del:IDELAY_TYPE": '"VAR_LOAD"', "dpin:C": "gdiv", "dpin:CE": "c0",
+                 "dpin:INC": "c1", "dpin:LD": "c2", "dpin:CNTVALUEIN": "{c3, c2, c1, c0, c3}"}),
+    dict(IFD, **{"pin:D": "open", "ser:IS_D_INVERTED": "1'b1"}),
+    dict(IFD, **{"pin:D": "open", "del:IS_IDATAIN_INVERTED": "1'b1"}),
+    dict(IFD, **{"pin:D": "open", "del:HIGH_PERFORMANCE_MODE": '"TRUE"'}),
+    dict(IFD, **{"ser:IS_D_INVERTED": "1'b1"}),
+]
+# Each alone, since Vivado may refuse it.
+DDLY_ALONE = {
+    # `IOBDELAY` `NONE` with a delay on `DDLY`, with and without the pad on `D`.
+    "ddly_none": {},
+    "ddly_none_open": {"pin:D": "open"},
+    # `IBUF` with the pad on neither: the registers read nothing.
+    "ddly_ibuf_open": {"ser:IOBDELAY": '"IBUF"', "pin:D": "open"},
+    # The delay read by the fabric as well as by the serialiser.
+    "ddly_and_fabric": dict(IFD, **{"pin:D": "open", "read": "Q,DATAOUT"}),
+    "ddly_both_and_fabric": {"ser:IOBDELAY": '"BOTH"', "pin:D": "open", "read": "Q,DATAOUT"},
+    "ddly_ibuf_and_fabric": {"ser:IOBDELAY": '"IBUF"', "pin:D": "open", "read": "Q,DATAOUT"},
+    "ddly_none_and_fabric": {"pin:D": "open", "read": "Q,DATAOUT"},
+    # A delay of the fabric on `DDLY`, and a signal of the fabric with no delay.
+    "ddly_datain": dict(IFD, **{"pin:D": "open", "src": "fabric"}),
+    "ddly_no_delay": dict(IFD, **{"pin:D": "open", "src": "none"}),
+    # A master and slave of width ten, the delay on the master's.
+    "ddly_wide": dict(IFD, **SER_NET, **{"pin:D": "open", "ser:DATA_WIDTH": "10", "slave": True}),
+}
+
+
+def ddly_design(name, settings, pads=PADS):
+    ports, body, reads, xdc, index = [], [], [], [], []
+    for k, setting in enumerate(settings):
+        pad = pads[k]
+        p = f"p{k}"
+        sp = {a[4:]: v for a, v in setting.items() if a.startswith("ser:")}
+        dp = {a[4:]: v for a, v in setting.items() if a.startswith("del:")}
+        dpins = {a[5:]: v for a, v in setting.items() if a.startswith("dpin:")}
+        conn = dict(SERDES_PINS, D=p, DDLY=f"d{k}")
+        conn.update({a[4:]: v for a, v in setting.items() if a.startswith("pin:")})
+        src = setting.get("src", "pad")
+        body.append(f"wire d{k};")
+        dconn = None
+        if src == "pad":
+            ports.append(f"input {p}")
+            xdc.append(f"set_property -dict {{PACKAGE_PIN {pad} IOSTANDARD LVCMOS33}} [get_ports {p}]")
+            dconn = dict({"IDATAIN": p, "DATAOUT": f"d{k}"}, **dpins)
+        else:
+            body.append(f"reg s{k}; always @(posedge gclk) s{k} <= c0 ^ c2;")
+            if src == "fabric":
+                dp["DELAY_SRC"] = '"DATAIN"'
+                dconn = dict({"DATAIN": f"s{k}", "DATAOUT": f"d{k}"}, **dpins)
+            else:
+                conn["DDLY"] = f"s{k}"
+        if dconn is not None:
+            par = ",".join(f".{a}({b})" for a, b in dp.items())
+            par = f" #({par})" if par else ""
+            body.append(f"IDELAYE2{par} u{k}({', '.join(f'.{a}({b})' for a, b in dconn.items())});")
+        read = setting.get("read", "Q").split(",")
+        outs = {}
+        if "Q" in read:
+            outs.update({f"Q{j}": f"q{j}_{k}" for j in range(1, 9)})
+        if "O" in read:
+            outs["O"] = f"o_{k}"
+        if setting.get("slave"):
+            outs.update({"SHIFTOUT1": f"so1_{k}", "SHIFTOUT2": f"so2_{k}"})
+        body.append(f"wire {', '.join(outs.values())};")
+        reads += [v for a, v in outs.items() if not a.startswith("SHIFT")]
+        if "DATAOUT" in read:
+            reads.append(f"d{k}")
+        par = ", ".join(f".{a}({v})" for a, v in sp.items())
+        par = f" #({par})" if par else ""
+        pins = ", ".join(f".{a}({'' if v == 'open' else v})" for a, v in {**outs, **conn}.items())
+        body.append(f"ISERDESE2{par} v{k}({pins});")
+        if setting.get("slave"):
+            sconn = {a: v for a, v in conn.items() if a not in ("D", "DDLY")}
+            sconn.update({"SHIFTIN1": f"so1_{k}", "SHIFTIN2": f"so2_{k}"})
+            souts = {f"Q{j}": f"t{j}_{k}" for j in range(3, 9)}
+            body.append(f"wire {', '.join(souts.values())};")
+            reads += list(souts.values())
+            spar = ", ".join(f".{a}({v})" for a, v in dict(sp, SERDES_MODE='"SLAVE"').items())
+            spins = ", ".join(f".{a}({'' if v == 'open' else v})" for a, v in {**souts, **sconn}.items())
+            body.append(f"ISERDESE2 #({spar}) w{k}({spins});")
+        index.append(f"{name} {p} {pad} IDELAYE2 {tag(setting)}")
+    # No controller with no delay: Vivado would take it away and then call its
+    # `RDY` driverless (`Route 35-13`), before the refusal this is about.
+    if any(s.get("src", "pad") != "none" for s in settings):
+        body.append("wire rdy; IDELAYCTRL ctl(.REFCLK(gclk), .RST(c3), .RDY(rdy));")
+        reads.append("rdy")
+    text = (f"module {name}(input clk, input clkd, input c0, input c1, input c2, input c3, output reg r"
+            f"{''.join(', ' + x for x in ports)});\n"
+            "  wire gclk; BUFG bg(.I(clk), .O(gclk));\n"
+            "  wire gdiv; BUFG bd(.I(clkd), .O(gdiv));\n"
+            + "".join(f"  {b}\n" for b in body)
+            + f"  always @(posedge gdiv) r <= {' ^ '.join(reads)};\nendmodule\n")
+    open(f"{OUT}/{name}.v", "w").write(text)
+    for port, ball in HELPERS.items():
+        xdc.append(f"set_property -dict {{PACKAGE_PIN {ball} IOSTANDARD LVCMOS33}} [get_ports {port}]")
+    xdc.append("set_property -dict {PACKAGE_PIN F5 IOSTANDARD LVCMOS33} [get_ports clkd]")
+    xdc.append("create_clock -period 5 [get_ports clk]")
+    xdc.append("create_clock -period 20 [get_ports clkd]")
+    open(f"{OUT}/{name}.xdc", "w").write("\n".join(xdc) + "\n")
+    return index
+
+
+def serdes():
+    """Delays into an `ISERDESE2`'s `DDLY`."""
+    index = ddly_design("ddly_sweep", DDLY_SWEEP)
+    for name, setting in DDLY_ALONE.items():
+        index += ddly_design(name, [setting])
+    return index
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     index = []
@@ -275,6 +410,7 @@ def main():
     fabric_source()
     controllers()
     dci_reset()
+    index += serdes()
     open(f"{OUT}/index.txt", "w").write("# design port ball primitive setting\n" + "\n".join(index) + "\n")
 
 

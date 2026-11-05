@@ -2270,9 +2270,20 @@ impl XrayFabric {
             .filter(|i| is_block_ram(&i.primitive))
             .map(|i| i.name.as_str())
             .collect();
+        // And an input delay's zeros are closed whatever the model: beside a
+        // serialiser the router took `BYP_ALT6`, behind a delay's `CINVCTRL`,
+        // as a hop to the serialiser's pins, and the tie Vivado makes there
+        // (`ddly_sweep`) could not be made.
+        let delays: HashSet<&str> = netlist
+            .instances
+            .iter()
+            .filter(|i| i.primitive == super::idelay::DELAY)
+            .map(|i| i.name.as_str())
+            .collect();
         for (want, instance, role, node) in &wants {
-            let vivado =
-                self.block_ram.model == LutRamModel::Vivado && ours.contains(instance.as_str());
+            let vivado = (self.block_ram.model == LutRamModel::Vivado
+                && ours.contains(instance.as_str()))
+                || (*want == TiePolicy::Zero && delays.contains(instance.as_str()));
             // A shift register's enable reads one because nothing drives its
             // wire, and that wire leads to a bounce the router likes: closed
             // to every signal, as a ground fan is.

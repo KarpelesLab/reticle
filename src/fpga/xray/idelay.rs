@@ -50,9 +50,23 @@
 //! `CNTVALUEIN` or `C` left open, nothing is routed, and the pin reads one.
 //!
 //! Refused, as Vivado refuses them: a delay with no controller (`PLIDC-10`),
-//! two controllers with no group between them (`PLIDC-7`), and a source
-//! unconnected (`REQP-83`, `REQP-84`). Stricter than Vivado: an
-//! `IDELAY_VALUE` past 31, which it warns of and takes as 0.
+//! two controllers with no group between them (`PLIDC-7`), a source
+//! unconnected (`REQP-83`, `REQP-84`), and a delay into an `ISERDESE2`'s
+//! `DDLY` that the fabric reads as well, unless the serialiser's `IOBDELAY` is
+//! `BOTH` (`PDIL-1`; `NONE`, `IBUF` and `IFD` each asked). Stricter than
+//! Vivado: an `IDELAY_VALUE` past 31, which it warns of and takes as 0.
+//!
+//! # Into a serialiser
+//!
+//! A delay of a pad on an `ISERDESE2`'s `DDLY` (`ddly_*`, since 2026-11-06)
+//! writes nothing the two do not write alone: the delay's features, and the
+//! serialiser's, `IOBDELAY`'s muxes among them, in every interface, rate and
+//! width asked, a master's with its slave, with the pad on `D` or not, and
+//! with `IOBDELAY("NONE")`, which Vivado builds although the registers then
+//! read the pad. The delay's grounded controls are closed to the router
+//! before it routes, as a block RAM's ties are: beside a serialiser it took
+//! `BYP_ALT6`, behind `CINVCTRL`, as a hop, and the tie Vivado makes there
+//! could not be made.
 //!
 //! # The controller, and how many
 //!
@@ -821,6 +835,36 @@ pub fn io_delay_controllers(
                 .find(|p| p.role == role)
                 .and_then(|p| p.signal)
         };
+        // A delay into a serialiser's `DDLY` and to the fabric as well: the
+        // second goes through the `ILOGIC` as a route-thru that Vivado allows
+        // only with `IOBDELAY("BOTH")` (`ddly_and_fabric`, and `IBUF` and
+        // `NONE` the same).
+        if let Some(out) = pin_signal("dataout")
+            && to_fabric(out, me)
+        {
+            for sink in &netlist.signals[out].sinks {
+                let pin = &netlist.pins[*sink];
+                let serdes = &netlist.instances[pin.instance];
+                if pin.role != "ddly" || serdes.primitive != "ISERDESE2" {
+                    continue;
+                }
+                let iobdelay = m
+                    .cells
+                    .get(serdes.cell)
+                    .and_then(|c| c.params.get("IOBDELAY"))
+                    .and_then(AttrValue::as_str)
+                    .unwrap_or("NONE")
+                    .to_ascii_uppercase();
+                if iobdelay != "BOTH" {
+                    return Err(format!(
+                        "`{}`: its delay `{}` goes to the fabric as well as to its `DDLY`, \
+                         which takes `IOBDELAY(\"BOTH\")` and not `{iobdelay}`; Vivado refuses \
+                         it too (PDIL-1)",
+                        serdes.name, instance.name
+                    ));
+                }
+            }
+        }
         if let (Some(pad), Some(out)) = (pin_signal("idatain"), pin_signal("dataout"))
             && to_fabric(out, me)
             && to_fabric(pad, me)

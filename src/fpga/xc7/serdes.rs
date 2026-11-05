@@ -18,6 +18,14 @@
 //! | `PDRC-37` | `T1` high and `TQ` unconnected: the pad held released |
 //! | `INBB-3` | no `CLKB` at a double data rate, which synthesis leaves a black box |
 //! | `THRU-2` | `OFB`, or `TFB` straight into a flip-flop on a pad, read by the fabric (`xray::iologic`) |
+//! | `Route 35-7` | `DDLY` from anything but an `IDELAYE2`'s `DATAOUT` (`fpga::flow`) |
+//! | `PDIL-1` | a delay into `DDLY` that the fabric reads too, with `IOBDELAY` other than `BOTH` (`xray::idelay`) |
+//!
+//! A delay on `DDLY` is otherwise built in every `IOBDELAY`, `NONE` included,
+//! and writes the delay's features and the serialiser's as each writes them
+//! alone (`testdata/fpga/vivado/idelay/`, `ddly_*`). A delay of the fabric on
+//! `DDLY` Vivado builds and this flow refuses: nothing places the two in one
+//! tile.
 //!
 //! **`PDRC-26` is a fit, and here is what it fits.** Of the 70 combinations
 //! of `CLKB` (`~CLK`, `CLK`, unconnected, a second clock), `IS_CLK_INVERTED`,

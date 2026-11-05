@@ -1051,11 +1051,51 @@ fn serdes_connections(
     }
     let s = serdes::iserdes(&inst.params)?;
     no_constants(&["D", "OFB", "SHIFTIN1", "SHIFTIN2"])?;
-    if connected("DDLY") {
-        return Err(
-            "`DDLY` comes from an `IDELAYE2`, which this flow does not build beside a serialiser"
-                .to_owned(),
-        );
+    // `DDLY` is reached from the delay beside the pad and from nothing else:
+    // a signal of the fabric there is unroutable to Vivado (`ddly_no_delay`).
+    // The delay may still be an instance here or a cell already.
+    if let Some(ddly) = net("DDLY") {
+        let is_delay = |module: &crate::ir::ModuleRef| matches!(module, crate::ir::ModuleRef::Unresolved(n) if n.as_str() == "IDELAYE2");
+        let delay = m
+            .instances
+            .iter()
+            .find(|(_, i)| {
+                is_delay(&i.module)
+                    && i.connection("DATAOUT").and_then(|e| m.expr(e).as_net()) == Some(ddly)
+            })
+            .map(|(_, i)| &i.params)
+            .or_else(|| {
+                m.cells
+                    .iter()
+                    .find(|(_, c)| {
+                        matches!(&c.kind, crate::ir::CellKind::Blackbox(n) if n.as_str() == "IDELAYE2")
+                            && c.output("DATAOUT") == Some(ddly)
+                    })
+                    .map(|(_, c)| &c.params)
+            });
+        let Some(delay) = delay else {
+            return Err(
+                "`DDLY` from anything but an `IDELAYE2`'s `DATAOUT`, which is the one road to \
+                 it; Vivado cannot route it either (Route 35-7)"
+                    .to_owned(),
+            );
+        };
+        // A delay of the fabric has no pad to put it and the serialiser
+        // beside, and this flow's placer puts the two apart; Vivado builds it
+        // (`ddly_datain`).
+        if delay
+            .get("DELAY_SRC")
+            .and_then(crate::ir::AttrValue::as_str)
+            .is_some_and(|s| s.eq_ignore_ascii_case("DATAIN"))
+        {
+            return Err(
+                "`DDLY` from a delay of the fabric (`DELAY_SRC(\"DATAIN\")`), which Vivado \
+                 builds and this flow does not: nothing places the two in one tile"
+                    .to_owned(),
+            );
+        }
+    } else if connected("DDLY") {
+        return Err("a constant on `DDLY`, which takes its signal from a delay".to_owned());
     }
     // `CLKDIVP` reaches the pin on `CLKDIV`'s wire (`IOI_CLK0_<n>`): `CLKDIV`'s
     // own clock is built and writes nothing (`iserdes_clkdivp`), and another

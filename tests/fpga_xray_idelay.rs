@@ -28,7 +28,13 @@
 //! would not catch which leaf clock a controller's reference takes, or the route
 //! of a signal, which are not compared, nor what a delay does on a part, which no
 //! test here can. [`what_vivado_refuses_is_refused`] would catch `PLIDC-10`,
-//! `PLIDC-7`, `REQP-83`, `REQP-84` or `Route 35-7` let through.
+//! `PLIDC-7`, `REQP-83`, `REQP-84`, `PDIL-1` or `Route 35-7` let through.
+//!
+//! The `ddly_*` designs put a delay on an `ISERDESE2`'s `DDLY`, and the
+//! `ILOGIC` features compared are then the serialiser's: a mux of `IOBDELAY`
+//! missing, or a tie the router took (`CINVCTRL`'s, beside a serialiser),
+//! fails. Which of the serialiser's pins are tied is
+//! `tests/fpga_xray_ioreg.rs`'s question, not asked again here.
 //!
 //! Skips without the Project X-Ray database, as every `fpga_xray` test does.
 
@@ -435,9 +441,15 @@ fn build(name: &str, root: &str) -> Result<Vec<String>, String> {
 /// delay already has a controller in. `(design, Vivado's line, this flow's)`.
 const KNOWN: [(&str, &str, &str); 1] = [("datain_with_pad", "controllers 2", "controllers 1")];
 
-/// What Vivado takes and this flow refuses, on purpose: an `IDELAY_VALUE` past
-/// 31, of which Vivado warns, critically, and which it takes as 0.
-const STRICTER: [(&str, &str); 1] = [("value_32", "is not 0 to 31")];
+/// What Vivado takes and this flow refuses, by the message it refuses with:
+/// an `IDELAY_VALUE` past 31, of which Vivado warns, critically, and which it
+/// takes as 0, on purpose; and a delay of the fabric into a serialiser's
+/// `DDLY`, which this flow's placer would put in another tile than the
+/// serialiser, and which is refused rather than built unrouted.
+const STRICTER: [(&str, &str); 2] = [
+    ("value_32", "is not 0 to 31"),
+    ("ddly_datain", "nothing places the two in one tile"),
+];
 
 /// One design against Vivado's answer.
 fn compare(name: &str, theirs: &[String], root: &str) -> Result<usize, String> {
@@ -470,7 +482,8 @@ fn compare(name: &str, theirs: &[String], root: &str) -> Result<usize, String> {
 
 /// A few designs in the gate: the sweep of settings, a delay into an `IDDR`,
 /// a `_SING` tile's delay and the bit the database does not name, two regions'
-/// controllers, and a delay of the fabric.
+/// controllers, a delay of the fabric, and delays into an `ISERDESE2`'s
+/// `DDLY`: a setting a pad, a master and slave, and `IOBDELAY("NONE")`.
 #[test]
 fn what_reticle_writes_is_what_vivado_wrote() {
     let (Some(root), Some(answers)) = (chipdb(), answers()) else {
@@ -484,6 +497,9 @@ fn what_reticle_writes_is_what_vivado_wrote() {
         "c_inverted",
         "ctrl_two_banks",
         "datain_variable",
+        "ddly_sweep",
+        "ddly_wide",
+        "ddly_none",
     ] {
         let Some(Ok(theirs)) = answers.get(name) else {
             wrong.push(format!("{name}: no answer"));

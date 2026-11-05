@@ -622,7 +622,8 @@ Twelve designs, each refused by Vivado and here by the same name
 Refused here and not asked of Vivado, as not measured: a width or interface the database
 does not name (an `OVERSAMPLE` of eight, a `MEMORY` at a single rate), `TBYTE_SRC`,
 `TBYTEIN` or `TBYTEOUT` in use, `OCLKB` on another clock, and `DDLY` connected, which needs
-an `IDELAYE2` this flow does not build beside a serialiser.
+an `IDELAYE2` this flow does not build beside a serialiser. **The last is built since**: see
+[A delay into a serialiser](#a-delay-into-a-serialiser).
 
 **Mutations.** 17, one at a time, and 16 failed a test: `ZINV_C` never cleared at a single
 rate, `IDDR.IN_USE` in `MEMORY`, `OCLK` without the `OLOGIC`'s bit, half 1's measured bits
@@ -748,8 +749,47 @@ of its sources on this machine is another project's working copy, which does not
 **Not done.** A delay's timing (`xray::timing` has none for these sites, so a delay estimates as a
 wire); an `ODELAYE2`, which a high-range bank does not have; a delay into an `ISERDESE2`'s `DDLY`,
 which the section on serialisers refuses as not measured and which these two sections between them
-have not asked of Vivado; `--vivado-placement` of a design with a delay; and the cell library has no model of any of these, since each is a primitive the device file
+have not asked of Vivado (**asked and built since**, below); `--vivado-placement` of a design with a delay; and the cell library has no model of any of these, since each is a primitive the device file
 declares and a model of the same name would take its place.
+
+### A delay into a serialiser
+
+`gen_idelay.py` writes eleven more designs since 2026-11-06, `ddly_*`: an `IDELAYE2` of a pad
+on an `ISERDESE2`'s `DDLY`. `ddly_sweep` has seventeen, one a pad: `IOBDELAY` `IFD` with the pad
+on `D` and without, `IBUF` and `BOTH` with `O` read, `NETWORKING` at a single and a double rate,
+`OVERSAMPLE`, `MEMORY_DDR3`, `MEMORY_QDR`, an `IDELAY_VALUE`, a variable and a loaded delay,
+`IS_D_INVERTED` with and without the pad, `IS_IDATAIN_INVERTED` and `HIGH_PERFORMANCE_MODE`; and
+alone, `IOBDELAY("NONE")` with and without the pad, `IBUF` with nothing on `D`, a master and slave
+of width ten, the delay read by the fabric too under each `IOBDELAY`, a delay of the fabric on
+`DDLY`, and a signal of the fabric on it with no delay. `vivado.txt` and `tests/fpga_xray_idelay.rs`
+take them as they take the rest: every `IDELAY` and `ILOGIC` feature of the pad's half, the
+delay's controls and its raw bits.
+
+**Checked: the six Vivado builds that this flow takes agree, 853 lines more, 2,309 in all over 33
+designs; the four Vivado refuses are refused by its rule.** What was found:
+
+- **Nothing is written that the two do not write alone.** The delay's features, and the
+  serialiser's with `IOBDELAY`'s muxes as `xray::iologic` already had them with nothing on
+  `DDLY`, `ZINV_D` only with the pad routed to `D`.
+- **`IOBDELAY("NONE")` with a delay on `DDLY` builds**, delay and all, though the registers then
+  read `D`; with nothing on `D` too.
+- **Read by the fabric as well, only `BOTH` builds.** `IFD`, `IBUF` and `NONE` are each `PDIL-1`,
+  "Site pin to site pin route-thru requires ... 'IOBDELAY' ... a value of 'BOTH'". `IBUF` was the
+  guess that would build, and does not.
+- **A signal of the fabric on `DDLY`** is `Route 35-7`: the delay's `DATAOUT` is the one road to
+  it. Refused here before placing, by that name.
+- **A delay of the fabric on `DDLY`** Vivado builds (`ddly_datain`), delay and serialiser in one
+  tile. This flow put them in two and could not route between them; it is refused, in the test's
+  `STRICTER`. Not built is better than a delay going nowhere.
+- **The ties.** Beside a serialiser, the router took `BYP_ALT6`, which is behind a delay's
+  `CINVCTRL`, as a hop to the serialiser's pins, and the ground Vivado gives `CINVCTRL` could not
+  then be made. A delay's grounded controls are closed to the router now, as the Vivado model of
+  a block RAM's are. **That can move a route in any design with a delay**; it changes no feature
+  any of the 33 compares.
+
+**Mutations.** Four, and all four failed the tests: the `PDIL-1` check taking `IBUF` as well, the
+delay's ties left open to the router, `DDLY` from a signal of the fabric let through (to a route
+that does not exist), and the delay of the fabric let through. Nothing here has been on a part.
 
 ## Reading its constraints
 
