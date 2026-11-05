@@ -725,13 +725,13 @@ and `LOCKED` out to its fabric; one whose `LOCKED` nothing reads is taken away. 
 interconnect wires are declared from `tile_type_CFG_CENTER_MID.json`, as the XADC's are, since the
 database has no `ppips` file for it. What it does on a part with no DCI to reset is not known.
 
-**Mutations.** Twenty were made, and nineteen failed `tests/fpga_xray_idelay.rs`: `VAR_LOAD_PIPE` not
+**Mutations.** Twenty-one were made, and twenty failed `tests/fpga_xray_idelay.rs`: `VAR_LOAD_PIPE` not
 known, a loaded delay keeping its value, the value's bits the wrong way round, `IS_IDATAIN_INVERTED` set
 on a delay of the fabric, `IS_DATAIN_INVERTED` on one of a pad not, `IS_C_INVERTED` dropped, `CE` not
 grounded, an open `CNTVALUEIN` grounded, the register's input through `D`, no `IDELMUXE3` on the way to the
 fabric, no replicas, controllers left where the placer put them, a delay nothing reads kept, a controller
 with no delay kept, `PLIDC-7` and `Route 35-7` not asked, no fall back to the ungrouped controller, a
-`DCIRESET`'s reset tied low not grounded, and one nothing reads kept. **The twentieth survived:**
+`DCIRESET`'s reset tied low not grounded, one nothing reads kept, and one not given the configuration tile its bel is in. **One survived:**
 `IS_C_INVERTED` moved to another bit, which decodes to the name this flow gave it whatever the bit is.
 The answer has the raw bits of each pad's delay since, frames 32 to 35 of its tile, and that mutation
 fails it now.
@@ -746,8 +746,9 @@ of its sources on this machine is another project's working copy, which does not
 `main` is not the file list `examples/husky/build_plus.sh` names; so `build_plus.sh` was not run.
 
 **Not done.** A delay's timing (`xray::timing` has none for these sites, so a delay estimates as a
-wire); an `ODELAYE2`, which a high-range bank does not have; `--vivado-placement` of a design with a
-delay; and the cell library has no model of any of these, since each is a primitive the device file
+wire); an `ODELAYE2`, which a high-range bank does not have; a delay into an `ISERDESE2`'s `DDLY`,
+which the section on serialisers refuses as not measured and which these two sections between them
+have not asked of Vivado; `--vivado-placement` of a design with a delay; and the cell library has no model of any of these, since each is a primitive the device file
 declares and a model of the same name would take its place.
 
 ## Reading its constraints
