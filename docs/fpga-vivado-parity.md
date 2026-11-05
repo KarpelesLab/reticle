@@ -1436,6 +1436,59 @@ reading and not a measurement. Until it is found the default mapping is not one 
 this design, and the scripts' `--memories legacy` stays for that reason as much as
 for the board's.
 
+**Why the default does not route: found, and not by the larger blocks.** *The
+reading above, that the `RAMB36E1`s crowd the logic around them, was wrong*; it is
+kept because the measurements that showed it are the useful part. Each was a build
+of the Plus with this flow's own congestion counts (overused nodes after a pass,
+`--timing`), all on seed 4, with a copy of the flow instrumented for it (nothing of
+the instrument is committed):
+
+| build | pass 10 | pass 20 | pass 40 | end |
+|---|---|---|---|---|
+| the default: 122 `RAMB36E1` | 21,260 | 5,488 | 2,763 | 14 left at pass 100, then 67 on seed 5: not routed |
+| the same netlist's blocks as 244 `RAMB18E1` | 19,634 | 4,348 | 1,585 | routed, after about 80 passes |
+| 122 `RAMB36E1`, the tied pins' wires not closed to the router | 11,063 | 1,507 | 28 | 0 overused at pass 71; the ties then fail |
+| 244 `RAMB18E1`, likewise | 10,856 | 1,139 | 6 | the same |
+| 122 `RAMB36E1`, the placement round that grew (below) undone | 20,682 | 4,936 | 1,902 | 107 left at pass 100 |
+
+- **The router's own counts say the cause is the wires this commit's block RAM
+  model closes to the router before routing** (`XrayFabric::block_ram_ground_fans`):
+  every wire behind a pin it will tie, and each held reset's bounce wire, 32,630
+  nodes on the Plus where the commit before closed 266 ground fans. Closing only the
+  ground fans halves the overuse at pass 10 and routes both netlists by pass 40-70;
+  then the ties fail (`tying p1_regclk to One: nothing behind ...`), because a signal
+  took the wire a tie needed, which is why the wires were closed. So the closure is
+  necessary as it stands and is what costs the route. Which of its wires matter was
+  narrowed and not ended: reopening only the bounce wires (2,928 nodes) changed
+  nothing; reopening the `BYP` and `FAN` wires (2,440) nothing; closing only the
+  block RAM tile's and interface's own wires and the ground fans (24,266) took pass 10
+  from 21,260 to 16,708; closing only the interconnect tiles' (8,630) did not help.
+- **The `RAMB36E1`s are the last straw and not the load.** With the closure, 244
+  `RAMB18E1` route, slowly, and 122 `RAMB36E1` do not quite (14 nodes); without it
+  both route as fast. Vivado agrees with the mapping: its synthesis of the same sources
+  (Reticle's stand-ins for NewAE's IP, `cwhusky_100.xdc`) makes **123** `RAMB36E1` and no
+  `RAMB18E1`, places them at 91 % of the part's 135, and routes its general
+  interconnect with no congested region; the only overlaps it reports are three
+  clock-row nodes between two of the glitch generator's clocks, which the stand-ins and
+  constraints explain and the block RAMs do not.
+- **The placement did something on seed 4 too, and it is not the cause.** The third
+  timing-driven round grew the wirelength from 753,702 to 833,472, nearly all of it on
+  nets that touch no block RAM, and the first pass wanted 2.63 million pips where the
+  `RAMB18E1` netlist wanted 2.43 million. Undoing that round (the last row) routes
+  worse, and seed 5, whose third round moved nothing, fails as well.
+- Congestion is not at the block RAMs' pins: at every pass measured, fewer than ten of
+  the overused nodes were in the rows of an interconnect tile beside a used block RAM;
+  about a third were two or three columns from a block RAM column, and the rest far
+  from any.
+
+**Not fixed.** A remedy has to keep the ties and give back the wires: closing a tie's
+wires only once the router has been shown to want them, or choosing each tie's wires
+after routing among those still free, are the two shapes it could take, and neither
+was built here. Until one is, the default mapping is not one for this design, and the
+scripts' `--memories legacy` stays for that reason as much as for the board's. With
+`--memories legacy` the Plus is the bitstream before byte for byte, checked again on
+this commit (`sha256` `e57fca47...`).
+
 **Mutations.** Each change below was made to the code by hand, and the library's
 block RAM tests and `fpga_xray_bram_vivado` run against it with `--no-fail-fast`.
 
