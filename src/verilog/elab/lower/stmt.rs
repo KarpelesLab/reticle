@@ -28,7 +28,7 @@ use super::super::codes;
 use super::super::constant::Evaluator;
 use super::super::decls;
 use super::super::scope::Symbol;
-use super::super::types::{self, Packed, bits_needed};
+use super::super::types::{self, Packed, VType, bits_needed};
 use super::super::width::{self, Info};
 use super::{Ctx, Lowerer, Sink};
 
@@ -1039,13 +1039,51 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         Some(ast::Edge::Negedge) => Polarity::Neg,
                         _ => Polarity::Any,
                     };
-                    for net in self.event_nets(&item.expr) {
+                    let nets = if polarity == Polarity::Any {
+                        self.event_nets(&item.expr)
+                    } else {
+                        self.edge_net(&item.expr).into_iter().collect()
+                    };
+                    for net in nets {
                         edges.push(Edge { net, polarity });
                     }
                 }
             }
         }
         edges
+    }
+
+    /// The one-bit net whose edge `posedge e` or `negedge e` waits for.
+    ///
+    /// A one-bit net is itself. Anything else, a bit-select `x[i]`, a
+    /// part-select or a whole vector, is an edge of the expression's least
+    /// significant bit (IEEE 1364-2005 §9.7.2), so it gets a net of its own,
+    /// driven by a continuous assignment of that bit, and the edge is that
+    /// net's. Watching the whole vector, as an edge on `x[1]` did, was an
+    /// edge on a net of two bits, which the IR refuses (`V0024`); and an edge
+    /// of `x` would have been one of any of its bits.
+    fn edge_net(&mut self, e: &'ast Expr) -> Option<NetId> {
+        if let Some(Symbol::Net { net, .. }) = self.env.probe(|env| env.resolve_path(e))
+            && self.net_width(net) == 1
+        {
+            return Some(net);
+        }
+        let value = self.expr_cont(e, None);
+        let width = self.b.module().expr(value).ty.width()?;
+        if width == 0 {
+            return None;
+        }
+        self.b.span = e.span;
+        let bit = if width == 1 {
+            value
+        } else {
+            self.b.slice(value, 0, 0)
+        };
+        let name = format!("edge${}", self.b.module().nets.len());
+        let net = self.new_net(name, VType::bit(), false, e.span)?;
+        self.b.span = e.span;
+        self.b.assign(net, bit);
+        Some(net)
     }
 
     /// The nets an event expression watches.

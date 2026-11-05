@@ -1054,6 +1054,23 @@ fn a_signed_memorys_element_is_signed() {
     assert!(!stdout.contains("FAIL"), "{stdout}");
 }
 
+/// **An edge of a bit-select is an edge of that bit** (IEEE 1364-2005
+/// §9.7.2). `always @(posedge x[i])` was an internal error (`V0024`): the
+/// edge was put on the whole vector. The testbench counts the edges of `x[1]`,
+/// `x[0]`, of a vector (its least significant bit) and of a part-select, and
+/// waits on one in an `initial`; xsim 2026.1 counts the same. Would catch the
+/// internal error back, an edge on any bit of the vector rather than the one
+/// named, or a select's edge taken from its top bit; would not catch an
+/// `@(x[1])` with no edge, which still waits on any change of `x`.
+#[cfg(feature = "sim")]
+#[test]
+fn an_edge_of_a_bit_select_is_an_edge_of_that_bit() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/edge_bit_select_tb.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stderr.contains("V0024"), "{stderr}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+}
+
 /// **`force` and `release` follow IEEE 1364-2005 9.3.2.** A forced variable
 /// ignores an assignment and, released, keeps the forced value until it is
 /// next assigned; a released wire returns to its driver; and the same
