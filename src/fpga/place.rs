@@ -1850,6 +1850,12 @@ struct SiteRules {
     site_group: Vec<u32>,
     /// One per tile that has a contended pool at all.
     groups: Vec<ControlGroup>,
+    /// Per site, its tile: `graph.sites[site].tile`, eight bytes a site
+    /// where an [`ArchSite`](super::arch::ArchSite) is a hundred and
+    /// more with three strings in it. The legaliser's search for the
+    /// nearest free site reads every site of a kind for every cell, and
+    /// reading them out of the sites themselves was most of what it cost.
+    tiles: Vec<(u32, u32)>,
 }
 
 /// The contended control wires of one tile, and the sites that draw on
@@ -2097,6 +2103,7 @@ impl SiteRules {
     /// every interconnect wire, so it costs one look at most pins.
     fn find(netlist: &Netlist, graph: &RoutingGraph) -> SiteRules {
         let mut out = SiteRules {
+            tiles: graph.sites.iter().map(|site| site.tile).collect(),
             per_site: vec![Vec::new(); graph.sites.len()],
             pairs: Vec::new(),
             excludes: vec![Vec::new(); graph.sites.len()],
@@ -2387,7 +2394,10 @@ impl SiteRules {
         // Nothing shares a pin and nothing excludes a site, so the only
         // reason to keep any of this is the sterilisation rule.
         if out.roles.is_empty() && exclusions == 0 && out.sterilise_to.is_empty() {
-            return SiteRules::default();
+            return SiteRules {
+                tiles: std::mem::take(&mut out.tiles),
+                ..SiteRules::default()
+            };
         }
         for pin in &netlist.pins {
             if let Some(signal) = pin.signal
@@ -4084,8 +4094,77 @@ struct Exact {
     /// an index into `links` and whether the member it resolves is the
     /// link's driver (else its sink).
     order: Vec<(usize, bool)>,
-    /// Every site of the anchor's kind, by tile.
-    anchor_sites: HashMap<(u32, u32), Vec<usize>>,
+    /// Every site of the anchor's kind, by tile; one table per kind,
+    /// shared by every group anchored on that kind.
+    anchor_sites: Rc<TileSites>,
+    /// Parallel to `links`: where each link's driver and sink are in the
+    /// macro's members, which are in ascending order.
+    positions: Vec<(usize, usize)>,
+    /// Where the anchor is in the macro's members.
+    anchor_at: usize,
+}
+
+/// The sites of one kind by tile, in the order they come in the kind's
+/// list: the ones of tile `(x, y)` are `sites[start[t]..start[t + 1]]`,
+/// with `t = y * width + x`.
+///
+/// What an exact group's anchor is drawn from on every move proposed for
+/// it. It was a hash map of every site of the kind, built afresh for each
+/// group — thousands of them, each a copy of the same map, on the
+/// ChipWhisperer-Husky Plus — and hashed into for each proposal.
+#[derive(Debug, Default)]
+struct TileSites {
+    width: usize,
+    height: usize,
+    start: Vec<u32>,
+    sites: Vec<usize>,
+}
+
+impl TileSites {
+    /// Indexes `sites`, keeping their order within each tile. A site off
+    /// the `width` by `height` grid is in no tile.
+    fn new(graph: &RoutingGraph, sites: &[usize]) -> TileSites {
+        let (width, height) = (graph.width as usize, graph.height as usize);
+        let slot = |site: usize| {
+            let (x, y) = graph.sites[site].tile;
+            let (x, y) = (x as usize, y as usize);
+            (x < width && y < height).then_some(y * width + x)
+        };
+        let mut count = vec![0u32; width * height + 1];
+        for site in sites {
+            if let Some(t) = slot(*site) {
+                count[t + 1] += 1;
+            }
+        }
+        for t in 0..width * height {
+            count[t + 1] += count[t];
+        }
+        let mut fill = count.clone();
+        let mut out = vec![0usize; count[width * height] as usize];
+        for site in sites {
+            if let Some(t) = slot(*site) {
+                out[fill[t] as usize] = *site;
+                fill[t] += 1;
+            }
+        }
+        TileSites {
+            width,
+            height,
+            start: count,
+            sites: out,
+        }
+    }
+
+    /// The sites of tile `(x, y)`, or `None` when it has none.
+    fn at(&self, x: u32, y: u32) -> Option<&[usize]> {
+        let (x, y) = (x as usize, y as usize);
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let t = y * self.width + x;
+        let run = self.start[t] as usize..self.start[t + 1] as usize;
+        (!run.is_empty()).then(|| &self.sites[run])
+    }
 }
 
 /// How many wires of its own tile the walk from a carry's output visits
@@ -4622,6 +4701,7 @@ fn build_clusters(
     }
 
     let mut out = Vec::new();
+    let mut tile_sites: BTreeMap<String, Rc<TileSites>> = BTreeMap::new();
     for (_, members) in groups {
         // The anchor is the member whose kind has the fewest sites, so the
         // macro move draws from the scarcest resource; ties go to the
@@ -4656,17 +4736,22 @@ fn build_clusters(
                 break;
             }
         }
-        let mut anchor_sites: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
-        for site in sites_by_kind
-            .get(&netlist.instances[anchor].kind)
-            .into_iter()
-            .flatten()
-        {
-            anchor_sites
-                .entry(graph.sites[*site].tile)
-                .or_default()
-                .push(*site);
-        }
+        let kind = &netlist.instances[anchor].kind;
+        let anchor_sites = Rc::clone(tile_sites.entry(kind.clone()).or_insert_with(|| {
+            Rc::new(TileSites::new(
+                graph,
+                sites_by_kind.get(kind).map_or(&[][..], Vec::as_slice),
+            ))
+        }));
+        // `members` is ascending, as the groups were filled from an
+        // ordered map's keys.
+        let at = |member: &usize| {
+            members
+                .binary_search(member)
+                .expect("a link joins members of its own group")
+        };
+        let positions = mine.iter().map(|(x, y, _)| (at(x), at(y))).collect();
+        let anchor_at = at(&anchor);
         let index = first_index + out.len();
         for member in &members {
             info[*member].macro_index = Some(index);
@@ -4678,6 +4763,8 @@ fn build_clusters(
                 links: mine,
                 order,
                 anchor_sites,
+                positions,
+                anchor_at,
             }),
         });
     }
@@ -4720,7 +4807,6 @@ fn find_relation(
 /// site of the tile `(ax, ay)`, or `None` when no site of that tile works.
 #[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn exact_sites(
-    graph: &RoutingGraph,
     info: &[Placeable],
     m: &Macro,
     exact: &Exact,
@@ -4729,44 +4815,52 @@ fn exact_sites(
     ax: u32,
     ay: u32,
 ) -> Option<Vec<(usize, usize)>> {
-    let candidates = exact.anchor_sites.get(&(ax, ay))?;
+    let candidates = exact.anchor_sites.at(ax, ay)?;
+    // Each member's site, by its place in `m.members`, which is ascending:
+    // what was an ordered map from member to site, in the same order.
+    let mut at: Vec<Option<usize>> = vec![None; m.members.len()];
     'anchor: for start in candidates {
-        let mut at: BTreeMap<usize, usize> = BTreeMap::new();
-        at.insert(m.anchor, *start);
+        at.fill(None);
+        at[exact.anchor_at] = Some(*start);
         for (link, driver_side) in &exact.order {
-            let (x, y, relation) = &exact.links[*link];
+            let relation = &exact.links[*link].2;
+            let (x, y) = exact.positions[*link];
             let site = if *driver_side {
-                relation.driver_of.get(*at.get(y)?)
+                relation.driver_of.get(at[y]?)
             } else {
-                relation.sink_of.get(*at.get(x)?)
+                relation.sink_of.get(at[x]?)
             };
             let Some(site) = site else { continue 'anchor };
-            at.insert(if *driver_side { *x } else { *y }, site);
+            at[if *driver_side { x } else { y }] = Some(site);
         }
         // Every link, including the ones the walk did not use, must hold.
-        for (x, y, relation) in &exact.links {
-            let (Some(sx), Some(sy)) = (at.get(x), at.get(y)) else {
+        for ((_, _, relation), (x, y)) in exact.links.iter().zip(&exact.positions) {
+            let (Some(sx), Some(sy)) = (at[*x], at[*y]) else {
                 continue 'anchor;
             };
-            if relation.driver_of.get(*sy) != Some(*sx) {
+            if relation.driver_of.get(sy) != Some(sx) {
                 continue 'anchor;
             }
         }
         let mut out: Vec<(usize, usize)> = Vec::with_capacity(at.len());
         let mut taken: Vec<usize> = Vec::with_capacity(at.len());
-        for (member, site) in &at {
-            let (x, y) = graph.sites[*site].tile;
-            if placement.instance_at(*site).is_some()
-                || !info[*member].may_take(*site)
-                || info[*member]
+        let placed = at
+            .iter()
+            .enumerate()
+            .filter_map(|(index, site)| site.map(|site| (m.members[index].0, site)));
+        for (member, site) in placed {
+            let (x, y) = shared.tiles[site];
+            if placement.instance_at(site).is_some()
+                || !info[member].may_take(site)
+                || info[member]
                     .region
                     .as_ref()
                     .is_some_and(|(rect, _)| !rect.holds(x, y))
             {
                 continue 'anchor;
             }
-            taken.push(*site);
-            out.push((*member, *site));
+            taken.push(site);
+            out.push((member, site));
         }
         // No two members on one site: sorted rather than scanned for each,
         // since a carry chain's macro is a hundred and fifty members.
@@ -6398,7 +6492,6 @@ fn legalise(
         let target = (to_grid(x, graph.width), to_grid(y, graph.height));
         let region = info[index].region.as_ref().map(|(rect, _)| rect);
         let site = nearest_free(
-            graph,
             sites_by_kind,
             kind,
             region,
@@ -6416,7 +6509,6 @@ fn legalise(
             let fallback = (info[index].soft && info[index].allowed.is_some())
                 .then(|| {
                     nearest_free(
-                        graph,
                         sites_by_kind,
                         kind,
                         region,
@@ -6574,7 +6666,6 @@ const OPENING: u64 = 16;
 /// `None` for every site of the kind.
 #[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn nearest_free(
-    graph: &RoutingGraph,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     kind: &str,
     region: Option<&Rect>,
@@ -6593,7 +6684,7 @@ fn nearest_free(
         if allowed.is_some_and(|ok| ok.binary_search(site).is_err()) {
             continue;
         }
-        let (x, y) = graph.sites[*site].tile;
+        let (x, y) = shared.tiles[*site];
         if let Some(rect) = region
             && !rect.holds(x, y)
         {
@@ -6724,7 +6815,7 @@ fn macro_sites(
     ay: u32,
 ) -> Option<Vec<(usize, usize)>> {
     if let Some(exact) = &m.exact {
-        return exact_sites(graph, info, m, exact, shared, placement, ax, ay);
+        return exact_sites(info, m, exact, shared, placement, ax, ay);
     }
     let mut taken: Vec<usize> = Vec::new();
     let mut out = Vec::new();
@@ -6742,7 +6833,7 @@ fn macro_sites(
         let kind = &netlist.instances[*member].kind;
         let sites = sites_by_kind.get(kind)?;
         let site = sites.iter().find(|s| {
-            graph.sites[**s].tile == (x, y)
+            shared.tiles[**s] == (x, y)
                 && placement.instance_at(**s).is_none()
                 && !taken.contains(*s)
                 && info[*member].may_take(**s)
@@ -6954,6 +7045,8 @@ struct Churn {
     pull: Pull,
     /// The clock regions' lines; see [`ClockLoad`].
     clocks: ClockLoad,
+    /// Per site, its tile; see [`SiteRules::tiles`].
+    tiles: Vec<(u32, u32)>,
 }
 
 /// How many clocks each clock region is asked to carry, kept as cells
@@ -7138,6 +7231,11 @@ struct Pull {
     touched: Vec<usize>,
     /// Which connections are in `touched` already.
     seen: Marks,
+    /// Per netlist pin, parallel to `weight`: the instances of its
+    /// connection's driver and sink, or `u32::MAX` twice for a pin of no
+    /// weight or no driver. Read off the netlist once, where each pricing
+    /// used to walk from the pin to its signal to the driver's pin.
+    ends: Vec<(u32, u32)>,
 }
 
 /// A set of small integers that empties in constant time: each member is
@@ -7203,47 +7301,59 @@ impl Pull {
                 }
             }
         }
+        let none = (u32::MAX, u32::MAX);
+        let ends = weight
+            .iter()
+            .enumerate()
+            .map(|(sink, w)| {
+                if *w == 0 {
+                    return none;
+                }
+                let Some(driver) = netlist
+                    .pins
+                    .get(sink)
+                    .and_then(|pin| pin.signal)
+                    .and_then(|s| netlist.signals[s].driver)
+                else {
+                    return none;
+                };
+                let instance = |pin: usize| u32::try_from(netlist.pins[pin].instance).ok();
+                match (instance(driver), instance(sink)) {
+                    (Some(a), Some(b)) if a != u32::MAX && b != u32::MAX => (a, b),
+                    _ => none,
+                }
+            })
+            .collect();
         Pull {
             weight: weight.to_vec(),
             touches,
             touched: Vec::new(),
             seen: Marks::default(),
+            ends,
         }
     }
 
-    /// What one connection costs where its two ends are now.
-    fn cost_of(
-        &self,
-        netlist: &Netlist,
-        graph: &RoutingGraph,
-        placement: &Placement,
-        sink: usize,
-    ) -> u64 {
+    /// What one connection costs where its two ends are now, with `tiles`
+    /// each site's tile.
+    fn cost_of(&self, tiles: &[(u32, u32)], placement: &Placement, sink: usize) -> u64 {
         let weight = self.weight.get(sink).copied().unwrap_or(0);
         if weight == 0 {
             return 0;
         }
-        let Some(driver) = netlist.pins[sink]
-            .signal
-            .and_then(|s| netlist.signals[s].driver)
-        else {
+        let Some((driver, sink)) = self.ends.get(sink).filter(|(d, _)| *d != u32::MAX) else {
             return 0;
         };
-        let tile = |pin: usize| {
-            placement
-                .site_of(netlist.pins[pin].instance)
-                .map(|s| graph.sites[s].tile)
-        };
-        match (tile(driver), tile(sink)) {
+        let tile = |instance: u32| placement.site_of(instance as usize).map(|s| tiles[s]);
+        match (tile(*driver), tile(*sink)) {
             (Some(a), Some(b)) => u64::from(weight) * manhattan(a, b),
             _ => 0,
         }
     }
 
     /// Every weighted connection's cost, summed.
-    fn total(&self, netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u64 {
+    fn total(&self, tiles: &[(u32, u32)], placement: &Placement) -> u64 {
         (0..self.weight.len())
-            .map(|pin| self.cost_of(netlist, graph, placement, pin))
+            .map(|pin| self.cost_of(tiles, placement, pin))
             .sum()
     }
 }
@@ -7268,12 +7378,13 @@ impl Churn {
             previous: Vec::new(),
             pull: Pull::default(),
             clocks: ClockLoad::default(),
+            tiles: graph.sites.iter().map(|site| site.tile).collect(),
         }
     }
 
     /// The anneal's cost: the boxes, and the critical connections' pull.
-    fn total(&self, netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u64 {
-        self.spans.total() + self.pull.total(netlist, graph, placement) + self.clocks.cost()
+    fn total(&self, placement: &Placement) -> u64 {
+        self.spans.total() + self.pull.total(&self.tiles, placement) + self.clocks.cost()
     }
 }
 
@@ -7596,13 +7707,13 @@ fn anneal(
             placement,
             probe_reach,
         ) {
-            samples.push(apply(netlist, graph, &mut churn, placement, &candidate));
-            undo(netlist, graph, &mut churn, placement);
+            samples.push(apply(&mut churn, placement, &candidate));
+            undo(&mut churn, placement);
         }
     }
     let mut temperature = start_temperature(&samples, options.start_acceptance);
 
-    let mut current = churn.total(netlist, graph, placement);
+    let mut current = churn.total(placement);
     let mut best = placement.clone();
     let mut best_cost = current;
     let mut stalled = 0u32;
@@ -7655,14 +7766,14 @@ fn anneal(
                 netlist.instances[*instance].kind == BelRole::GlobalBuffer.keyword()
                     && placement
                         .site_of(*instance)
-                        .is_some_and(|was| graph.sites[was].tile == graph.sites[*site].tile)
+                        .is_some_and(|was| shared.tiles[was] == shared.tiles[*site])
             }) {
                 continue;
             }
             step.tried += 1;
-            let delta = apply(netlist, graph, &mut churn, placement, &candidate);
+            let delta = apply(&mut churn, placement, &candidate);
             if !passes(delta, temperature, &mut rng) {
-                undo(netlist, graph, &mut churn, placement);
+                undo(&mut churn, placement);
                 continue;
             }
             step.passed += 1;
@@ -7676,14 +7787,14 @@ fn anneal(
             if info[candidate[0].0].macro_index.is_none() {
                 let left = churn.previous.iter().filter_map(|(_, was)| *was);
                 if !shared.allows_made(placement, &candidate, left) {
-                    undo(netlist, graph, &mut churn, placement);
+                    undo(&mut churn, placement);
                     let Some(evicted) = evict_blockers(graph, info, shared, placement, candidate)
                     else {
                         continue;
                     };
-                    let delta = apply(netlist, graph, &mut churn, placement, &evicted);
+                    let delta = apply(&mut churn, placement, &evicted);
                     if !passes(delta, temperature, &mut rng) {
-                        undo(netlist, graph, &mut churn, placement);
+                        undo(&mut churn, placement);
                         continue;
                     }
                 }
@@ -7694,7 +7805,7 @@ fn anneal(
         // drift, and both the exit criterion and the best-so-far compare
         // against this number. The recount is one pass over the signals
         // per temperature, which is nothing beside the moves.
-        current = churn.total(netlist, graph, placement);
+        current = churn.total(placement);
         step.cost = current;
         let rate = step.rate();
         let improved = current < best_cost;
@@ -7884,13 +7995,13 @@ fn draw_move(
 ) -> Option<Move> {
     let instance = movable[rng.below(movable.len())];
     let here = placement.site_of(instance)?;
-    let (hx, hy) = graph.sites[here].tile;
+    let (hx, hy) = shared.tiles[here];
     if let Some(index) = info[instance].macro_index {
         let m = &macros[index];
         // A macro moves as a whole, so the window is around its anchor
         // and not around whichever member was drawn.
         let (ax0, ay0) = match placement.site_of(m.anchor) {
-            Some(site) => graph.sites[site].tile,
+            Some(site) => shared.tiles[site],
             None => (hx, hy),
         };
         let rect = window_of(graph, None, ax0, ay0, reach)?;
@@ -8049,7 +8160,7 @@ fn evict_blockers(
             .iter()
             .copied()
             .find(|s| graph.sites[*s].bel == *bel)?;
-        let (tx, ty) = graph.sites[to].tile;
+        let (tx, ty) = shared.tiles[to];
         if info[other]
             .region
             .as_ref()
@@ -8068,33 +8179,21 @@ fn evict_blockers(
 /// Where each instance came from is recorded in [`Churn::previous`], which
 /// is what [`undo`] puts back; the wirelength comes out of [`Spans`] and
 /// not out of a rescan of the nets.
-fn apply(
-    netlist: &Netlist,
-    graph: &RoutingGraph,
-    churn: &mut Churn,
-    placement: &mut Placement,
-    m: &Move,
-) -> f64 {
+fn apply(churn: &mut Churn, placement: &mut Placement, m: &Move) -> f64 {
     churn.previous.clear();
     for (instance, _) in m {
         let was = placement.site_of(*instance);
         churn.previous.push((*instance, was));
     }
-    retile(
-        netlist,
-        graph,
-        churn,
-        placement,
-        m.iter().map(|(i, s)| (*i, Some(*s))),
-    )
+    retile(churn, placement, m.iter().map(|(i, s)| (*i, Some(*s))))
 }
 
 /// Puts back what [`apply`] moved.
-fn undo(netlist: &Netlist, graph: &RoutingGraph, churn: &mut Churn, placement: &mut Placement) {
+fn undo(churn: &mut Churn, placement: &mut Placement) {
     // `previous` is borrowed from the same value `retile` writes into, so
     // the plan is taken out and put back rather than aliased.
     let back = std::mem::take(&mut churn.previous);
-    let _ = retile(netlist, graph, churn, placement, back.iter().copied());
+    let _ = retile(churn, placement, back.iter().copied());
     churn.previous = back;
 }
 
@@ -8107,8 +8206,6 @@ fn undo(netlist: &Netlist, graph: &RoutingGraph, churn: &mut Churn, placement: &
 /// may be swapping places and a box told of the arrival first would
 /// believe a column still holds a pin it has lost.
 fn retile(
-    netlist: &Netlist,
-    graph: &RoutingGraph,
     churn: &mut Churn,
     placement: &mut Placement,
     plan: impl Iterator<Item = (usize, Option<usize>)> + Clone,
@@ -8130,7 +8227,7 @@ fn retile(
         .pull
         .touched
         .iter()
-        .map(|pin| churn.pull.cost_of(netlist, graph, placement, *pin))
+        .map(|pin| churn.pull.cost_of(&churn.tiles, placement, *pin))
         .sum();
     churn.touched.clear();
     churn.seen.start();
@@ -8146,7 +8243,7 @@ fn retile(
     let mut pins = 0u64;
     for (instance, _) in plan.clone() {
         if let Some(site) = placement.site_of(instance) {
-            let (x, y) = graph.sites[site].tile;
+            let (x, y) = churn.tiles[site];
             churn.clocks.leave(instance, x, y);
             for index in 0..churn.carried[instance].len() {
                 let signal = churn.carried[instance][index].0;
@@ -8159,7 +8256,7 @@ fn retile(
     for (instance, site) in plan {
         let Some(site) = site else { continue };
         placement.place(instance, site);
-        let (x, y) = graph.sites[site].tile;
+        let (x, y) = churn.tiles[site];
         churn.clocks.arrive(instance, x, y);
         for index in 0..churn.carried[instance].len() {
             let signal = churn.carried[instance][index].0;
@@ -8177,7 +8274,7 @@ fn retile(
         .pull
         .touched
         .iter()
-        .map(|pin| churn.pull.cost_of(netlist, graph, placement, *pin))
+        .map(|pin| churn.pull.cost_of(&churn.tiles, placement, *pin))
         .sum();
     (after + pulled_after + churn.clocks.cost()) as f64
         - (before + pulled_before + clocks_before) as f64
@@ -10644,7 +10741,7 @@ mod tests {
         churn.clocks = ClockLoad::new(&netlist, &graph, &placement, &regions, 1);
         assert_eq!(churn.clocks.clocks, vec![1, 2]);
         assert_eq!(churn.clocks.over, 1);
-        let start = churn.total(&netlist, &graph, &placement);
+        let start = churn.total(&placement);
         let site = |x: u32| graph.sites.iter().position(|s| s.tile == (x, 0)).unwrap();
         // (move, regions' clocks after it)
         let moves: Vec<(Move, Vec<u32>)> = vec![
@@ -10663,20 +10760,16 @@ mod tests {
             ),
         ];
         for (m, clocks) in &moves {
-            let before = churn.total(&netlist, &graph, &placement);
-            let delta = apply(&netlist, &graph, &mut churn, &mut placement, m);
-            let after = churn.total(&netlist, &graph, &placement);
+            let before = churn.total(&placement);
+            let delta = apply(&mut churn, &mut placement, m);
+            let after = churn.total(&placement);
             assert_eq!(delta, after as f64 - before as f64, "{m:?}");
             let fresh = ClockLoad::new(&netlist, &graph, &placement, &regions, 1);
             assert_eq!(churn.clocks.clocks, fresh.clocks, "{m:?}");
             assert_eq!(churn.clocks.over, fresh.over, "{m:?}");
             assert_eq!(&fresh.clocks, clocks, "{m:?}");
-            undo(&netlist, &graph, &mut churn, &mut placement);
-            assert_eq!(
-                churn.total(&netlist, &graph, &placement),
-                start,
-                "{m:?} undone"
-            );
+            undo(&mut churn, &mut placement);
+            assert_eq!(churn.total(&placement), start, "{m:?} undone");
             assert_eq!(churn.clocks.clocks, vec![1, 2], "{m:?} undone");
         }
         // With no regions there is no charge.
@@ -10764,7 +10857,7 @@ mod tests {
             }
         }
         churn.pull = Pull::new(&netlist, &weight);
-        let start = churn.total(&netlist, &graph, &placement);
+        let start = churn.total(&placement);
         let site = |x: u32| graph.sites.iter().position(|s| s.tile == (x, 0)).unwrap();
         let moves: Vec<Move> = vec![
             vec![(1, site(8))],
@@ -10773,16 +10866,12 @@ mod tests {
             vec![(1, site(1)), (2, site(2))],
         ];
         for m in &moves {
-            let before = churn.total(&netlist, &graph, &placement);
-            let delta = apply(&netlist, &graph, &mut churn, &mut placement, m);
-            let after = churn.total(&netlist, &graph, &placement);
+            let before = churn.total(&placement);
+            let delta = apply(&mut churn, &mut placement, m);
+            let after = churn.total(&placement);
             assert_eq!(delta, after as f64 - before as f64, "{m:?}");
-            undo(&netlist, &graph, &mut churn, &mut placement);
-            assert_eq!(
-                churn.total(&netlist, &graph, &placement),
-                start,
-                "{m:?} undone"
-            );
+            undo(&mut churn, &mut placement);
+            assert_eq!(churn.total(&placement), start, "{m:?} undone");
         }
     }
 
@@ -12757,6 +12846,41 @@ mod tests {
         let netlist = lane_netlist([&[("o", 0, true)], &[("d", 0, false)], &[("di", 2, false)]]);
         let (legal, illegal) = judge_three_ways(&netlist, &graph, 2);
         assert!(legal > 20 && illegal > 20, "{legal} legal, {illegal} not");
+    }
+
+    /// [`TileSites`] answers as the hash map it replaced: for every tile,
+    /// the sites of the list on it in the list's order, `None` for a tile
+    /// with none and for one off the grid — over a kind with several sites
+    /// a tile and over a list with gaps in it.
+    ///
+    /// Would catch a site filed under the wrong tile, a tile's sites out
+    /// of order, which changes which anchor an exact group tries first and
+    /// so the placement, or a run that reads into the next tile. Would not
+    /// catch the index being slower than the map.
+    #[test]
+    fn the_sites_by_tile_are_the_maps_own() {
+        let (_, graph) = budget(3, 2, true);
+        let every: Vec<usize> = (0..graph.sites.len())
+            .filter(|s| graph.sites[*s].kind == "ff")
+            .collect();
+        let gaps: Vec<usize> = every.iter().copied().step_by(3).collect();
+        for list in [&every, &gaps] {
+            let mut map: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+            for site in list {
+                map.entry(graph.sites[*site].tile).or_default().push(*site);
+            }
+            let index = TileSites::new(&graph, list);
+            for y in 0..graph.height + 2 {
+                for x in 0..graph.width + 2 {
+                    assert_eq!(
+                        index.at(x, y),
+                        map.get(&(x, y)).map(Vec::as_slice),
+                        "tile ({x}, {y})"
+                    );
+                }
+            }
+        }
+        assert!(every.len() > 2 * 6, "several sites a tile");
     }
 
     /// A [`Marks`] set: empty after `start`, a member new once per
