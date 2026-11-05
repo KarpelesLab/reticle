@@ -159,6 +159,10 @@ reads as Vivado not counting bits the design changes as it runs. Reticle's frame
 those cases have an ECC Vivado's do not. Nothing reads it unless a design asks
 (`FRAME_ECCE2`, readback), this flow does not build that primitive, and it is **not
 fixed**: which bits are masked needs asking of Vivado across a distributed RAM too.
+**Fixed since** (2026-11-06): the rule was found for the distributed RAM ("The ECC of
+a frame holding one", below) and `--decode` read it for both, but the writer left the
+shift registers out of what it leaves out, which no test compared. It leaves both out
+now, and `tests/fpga_xray_config.rs` compares every frame's ECC.
 
 The tests' own limit is worth saying. Of 34 mutations of the two features, 28 were
 caught at once and six were not, and each of the six showed something: the contents of
@@ -2280,6 +2284,9 @@ build.
 beside a shift register or a lookup table used as memory: Vivado writes those
 frames' ECC as zero (`ecc_srl`, four frames), this flow writes the code, and the
 primitive is what would read the difference. `POST_CRC` is still not looked at.
+**That reading was wrong**, and it builds beside both since: Vivado's zero was the
+rule above, the code of the frame with the shift register's contents left out, in
+frames that held nothing else. See "The configuration primitives".
 
 **What else this changed, checked.** Four designs built by the code before this and
 after it, same placement and route (`options_probe`, `crc32`, `bram_fifo`, `fsm`): the
@@ -2833,6 +2840,8 @@ for word, every set bit named and every route the router's; the 109th is refused
 (below). The 11 Vivado refuses, Reticle refuses, with the rule:
 `tests/fpga_xray_config.rs`, 28 in the gate and every one in the ignored
 `every_design_here`. The eight probes of `primitives/` build, and `index.txt` says so.
+**128 since 2026-11-06**, the eight below on frame ECC among them: Reticle builds all
+117 Vivado builds, the frame ECC compared too, and refuses the same 11.
 
 | refused | rule |
 |---|---|
@@ -2848,6 +2857,29 @@ register's contents in it as zero, four frames of `ecc_srl`, where `xc7::frame_e
 `0x0f80` and `0x0f8f`; "A shift register" above found the same and left it. That frame
 is exactly what a `FRAME_ECCE2` reads, so the pair is refused until the rule is known.
 For a lookup table used as memory it was not asked.
+
+**Built since, and the reading above was wrong** (2026-11-06). Eight more designs
+asked it: a `SRLC32E`, an `SRL16E` and a `RAM64X1S` with contents, and a `RAM64X1S` of
+zeros, each with three lookup tables of logic placed in its frames (on another table of
+its slice, ten rows up its column, in the other slice of its tile), with a `FRAME_ECCE2`
+and without (`ecc_*_logic`, `noecc_*_logic`). **Every frame of all eight, and of the 109
+other bitstreams of this fixture, has the ECC `xc7::wanted_ecc_without` gives it: the code
+of the frame with a distributed RAM's or a shift register's contents left out, and
+nothing else** (`ecc 0 wrong` in `vivado.txt`, `--decode`'s count). So a `FRAME_ECCE2`
+changes nothing in the frames: `ecc_srl`'s zero was that code, in frames with nothing
+else in them, and the frames with logic beside have ECCs that are not zero. What was
+wrong was this flow's: `--decode` had the rule for both, and the writer left a shift
+register's contents in the code (`XrayFabric::dynamic_table_bits` took the RAMs alone),
+so every frame of a shift register with contents had the whole frame's ECC, with or
+without a `FRAME_ECCE2` — four frames of a plain `SRLC32E`, built and decoded. The
+writer leaves them out now, and the pair builds: all eight and `ecc_srl` agree, the ECC
+of every frame compared (`ecc` against Vivado's), which the comparison did not take
+before.
+
+**This changes existing bitstreams** with a shift register whose contents are not all
+zero: the ECC bits of the frames holding them, and nothing else. The Husky Plus's build
+(`build_plus.sh`, whose `--srl-min 0` makes no shift register) is the same bitstream, byte
+for byte.
 
 The first pass at this had two things wrong that the comparison of tiles and streams
 alone did not see, and both are kept here:

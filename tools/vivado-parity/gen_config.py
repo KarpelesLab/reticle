@@ -322,6 +322,31 @@ add("usr_unread", "USR_ACCESSE2 with nothing read.", "USR_ACCESSE2", {})
 add("ecc_unread", "FRAME_ECCE2 with nothing read.", "FRAME_ECCE2", {})
 add("ecc_far_unread", "FRAME_ECCE2, FARSRC FAR, with nothing read.", "FRAME_ECCE2", {}, {"FARSRC": '"FAR"'})
 
+# --- Frame ECC beside contents that change ---------------------------------------
+# A shift register or a distributed RAM with contents, and lookup tables of logic
+# in the same frames: one on another table of its slice, one ten rows up in the
+# same column, one in the other slice of its tile. With a `FRAME_ECCE2` and
+# without, for which frames' ECC leaves what out. `LOC` attributes, which both
+# tools read; the tables are `DONT_TOUCH` so that neither folds them away.
+SLICE = "SLICE_X12Y110"
+LOGIC = (
+    "  wire l0, l1, l2;\n"
+    f"  (* LOC = \"{SLICE}\", DONT_TOUCH = \"TRUE\" *) LUT6 #(.INIT(64'h9a3c5e7f1b2d4c68)) lut0 (.O(l0), .I0(sr[0]), .I1(sr[1]), .I2(sr[2]), .I3(sr[3]), .I4(sr[4]), .I5(sr[6]));\n"
+    "  (* LOC = \"SLICE_X12Y120\", DONT_TOUCH = \"TRUE\" *) LUT6 #(.INIT(64'h0123456789abcdef)) lut1 (.O(l1), .I0(sr[0]), .I1(sr[1]), .I2(sr[2]), .I3(sr[3]), .I4(sr[4]), .I5(sr[6]));\n"
+    "  (* LOC = \"SLICE_X13Y110\", DONT_TOUCH = \"TRUE\" *) LUT6 #(.INIT(64'hf0e1d2c3b4a59687)) lut2 (.O(l2), .I0(sr[0]), .I1(sr[1]), .I2(sr[2]), .I3(sr[3]), .I4(sr[4]), .I5(sr[6]));\n"
+)
+MEMORIES = {
+    "srl": f"  wire m;\n  (* LOC = \"{SLICE}\" *) SRLC32E #(.INIT(32'h8000_0001)) mem (.Q(m), .Q31(), .A(sr[4:0]), .CE(1'b1), .CLK(clk), .D(sr[5]));\n",
+    "srl16": f"  wire m;\n  (* LOC = \"{SLICE}\" *) SRL16E #(.INIT(16'h8421)) mem (.Q(m), .A0(sr[0]), .A1(sr[1]), .A2(sr[2]), .A3(sr[3]), .CE(1'b1), .CLK(clk), .D(sr[5]));\n",
+    "ram": f"  wire m;\n  (* LOC = \"{SLICE}\" *) RAM64X1S #(.INIT(64'hfedcba9876543210)) mem (.O(m), .A0(sr[0]), .A1(sr[1]), .A2(sr[2]), .A3(sr[3]), .A4(sr[4]), .A5(sr[5]), .D(sr[6]), .WCLK(clk), .WE(sr[7]));\n",
+    "ram_zero": f"  wire m;\n  (* LOC = \"{SLICE}\" *) RAM64X1S #(.INIT(64'h0)) mem (.O(m), .A0(sr[0]), .A1(sr[1]), .A2(sr[2]), .A3(sr[3]), .A4(sr[4]), .A5(sr[5]), .D(sr[6]), .WCLK(clk), .WE(sr[7]));\n",
+}
+for kind, text in MEMORIES.items():
+    add(f"ecc_{kind}_logic", f"FRAME_ECCE2 beside a {kind} with contents and logic in its frames.",
+        "FRAME_ECCE2", {}, None, [("CRCERROR", 1)], extra=text + LOGIC, reads=["m", "l0", "l1", "l2"])
+    add(f"noecc_{kind}_logic", f"The same {kind} and logic with no FRAME_ECCE2.",
+        "LUT1", {"I0": sr(1)}, {"INIT": "2'b01"}, [("O", 1)], extra=text + LOGIC, reads=["m", "l0", "l1", "l2"])
+
 # --- Together -------------------------------------------------------------------
 add(
     "all_eight",

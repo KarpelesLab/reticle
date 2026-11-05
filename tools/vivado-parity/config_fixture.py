@@ -15,6 +15,10 @@ Every `.bit` is read by `reticle fpga --decode`. For each design:
 - `stream base`, or `stream <packets>`: the stream's packets other than the
   frames and the CRCs, in `bit_packets.py`'s words joined by ` | `, when they
   are not the `base` design's.
+- `ecc <n> wrong`: how many frames' ECC `--decode` finds other than the rule
+  it reads them by (`xc7::wanted_ecc_without`: the code, with a distributed
+  RAM's or a shift register's contents left out), which on Vivado's own
+  frames says whether that rule is Vivado's.
 - `refused <rules>` in place of all of that, when Vivado wrote no bitstream.
 """
 import concurrent.futures as cf
@@ -64,7 +68,8 @@ def decode(reticle, bit):
         elif tile.startswith("INT_L_X18Y"):
             ground.append((tile, feature))
     lines = [f"{kind}: {' '.join(sorted(f))}" for kind, f in sorted(sites.items())]
-    return lines, sorted(bits), grounded(ground)
+    wrong = re.search(r"(\d+) frame\(s\) with a wrong ECC", run.stdout + run.stderr)
+    return lines, sorted(bits), grounded(ground), wrong.group(1) if wrong else "?"
 
 
 def grounded(features):
@@ -110,10 +115,11 @@ def one(args):
         if line.startswith("cell "):
             w = line.split()
             text += f"  cell {w[3]} {w[5]}\n"
-    sites, bits, ground = decode(reticle, bit)
+    sites, bits, ground, wrong = decode(reticle, bit)
     text += "".join(f"  site {s}\n" for s in sites)
     text += "".join(f"  bit {b}\n" for b in bits)
     text += "".join(f"  ground {g}\n" for g in ground)
+    text += f"  ecc {wrong} wrong\n"
     packets = stream(bit)
     text += "  stream base\n" if packets == base else f"  stream {' | '.join(packets)}\n"
     return text

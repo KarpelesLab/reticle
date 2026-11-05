@@ -799,22 +799,12 @@ impl XrayFabric {
                 }
                 "CAPTUREE2" => out.capture_oneshot |= truth("ONESHOT", "TRUE")?,
                 "FRAME_ECCE2" => {
-                    // What a frame's ECC is when a shift register or a lookup
-                    // table used as memory is in it, Vivado leaves out of the
-                    // code (`docs/fpga-vivado-parity.md`, "A shift register"),
-                    // and how much of it is not known here. Those frames would
-                    // be written with an ECC Vivado's are not, and this is the
-                    // primitive that reads it.
-                    if let Some(memory) = netlist.instances.iter().find(|i| {
-                        matches!(i.kind.as_str(), "srl32" | "srl16") || i.kind.starts_with("lutram")
-                    }) {
-                        return Err(format!(
-                            "`{}`: a `FRAME_ECCE2` checks every frame's ECC, and `{}` is a \
-                             lookup table used as memory, whose frames' ECC this flow does \
-                             not write as Vivado does; not built",
-                            instance.name, memory.name
-                        ));
-                    }
+                    // Beside a shift register or a lookup table used as
+                    // memory it builds: Vivado writes those frames' ECC by the
+                    // rule it writes them by without one, the code with the
+                    // contents left out (`xc7::wanted_ecc_without`), which this
+                    // flow writes too. Refused until 2026-11-06, when that rule
+                    // was not yet this flow's for a shift register.
                     out.frame_ecc = Some(match text("FARSRC", "EFAR").as_str() {
                         "EFAR" => false,
                         "FAR" => true,

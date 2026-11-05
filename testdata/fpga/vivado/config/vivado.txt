@@ -19,46 +19,57 @@ design all_eight
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 0280bfe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
 design base
+  ecc 0 wrong
   stream base
 design bscan_chain0
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
+  ecc 0 wrong
   stream base
 design bscan_chain1
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
+  ecc 0 wrong
   stream base
 design bscan_chain2
   cell BSCANE2 BSCAN_X0Y1
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_2
+  ecc 0 wrong
   stream base
 design bscan_chain2_loc0
   refused PDRC-2
 design bscan_chain3
   cell BSCANE2 BSCAN_X0Y2
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_3
+  ecc 0 wrong
   stream base
 design bscan_chain4
   cell BSCANE2 BSCAN_X0Y3
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_4
+  ecc 0 wrong
   stream base
 design bscan_chain5
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
+  ecc 0 wrong
   stream base
 design bscan_disable
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1 DISABLE_JTAG
+  ecc 0 wrong
   stream base
 design bscan_disable_chain3
   cell BSCANE2 BSCAN_X0Y2
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_3 DISABLE_JTAG
+  ecc 0 wrong
   stream base
 design bscan_drck
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
+  ecc 0 wrong
   stream base
 design bscan_four
   cell BSCANE2 BSCAN_X0Y0
@@ -66,6 +77,7 @@ design bscan_four
   cell BSCANE2 BSCAN_X0Y2
   cell BSCANE2 BSCAN_X0Y3
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1 BSCAN.JTAG_CHAIN_2 BSCAN.JTAG_CHAIN_3 BSCAN.JTAG_CHAIN_4
+  ecc 0 wrong
   stream base
 design bscan_loc1
   refused PDRC-2
@@ -74,149 +86,206 @@ design bscan_open
 design bscan_tdo
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
+  ecc 0 wrong
   stream base
 design bscan_tdo_one
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
+  ecc 0 wrong
   stream base
 design bscan_tdo_tied
   cell BSCANE2 BSCAN_X0Y0
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1
   ground INT_L_X18Y73 GFAN0.GND_WIRE
   ground INT_L_X18Y73 IMUX_L33.GFAN0
+  ecc 0 wrong
   stream base
 design bscan_two
   cell BSCANE2 BSCAN_X0Y0
   cell BSCANE2 BSCAN_X0Y1
   site CFG_CENTER_MID: BSCAN.JTAG_CHAIN_1 BSCAN.JTAG_CHAIN_2
+  ecc 0 wrong
   stream base
 design capture_cap_tied
   cell CAPTUREE2 CAPTURE_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02803fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design capture_no_clk
   cell CAPTUREE2 CAPTURE_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02803fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design capture_oneshot_false
   cell CAPTUREE2 CAPTURE_X0Y0
+  ecc 0 wrong
   stream base
 design capture_oneshot_true
   cell CAPTUREE2 CAPTURE_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02803fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design capture_open
   cell CAPTUREE2 CAPTURE_X0Y0
   ground INT_L_X18Y78 GFAN1.GND_WIRE
   ground INT_L_X18Y78 IMUX_L37.GFAN1
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02803fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design capture_plain
   cell CAPTUREE2 CAPTURE_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02803fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design dna_din_tied
   cell DNA_PORT DNA_PORT_X0Y0
   site CFG_CENTER_MID: DNA_PORT.IN_USE
   ground INT_L_X18Y95 GFAN0.GND_WIRE
   ground INT_L_X18Y95 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design dna_dout_open
+  ecc 0 wrong
   stream base
 design dna_ones
   cell DNA_PORT DNA_PORT_X0Y0
   site CFG_CENTER_MID: DNA_PORT.IN_USE
+  ecc 0 wrong
   stream base
 design dna_open
   cell DNA_PORT DNA_PORT_X0Y0
   site CFG_CENTER_MID: DNA_PORT.IN_USE
+  ecc 0 wrong
   stream base
 design dna_plain
   cell DNA_PORT DNA_PORT_X0Y0
   site CFG_CENTER_MID: DNA_PORT.IN_USE
+  ecc 0 wrong
   stream base
 design dna_sim
   cell DNA_PORT DNA_PORT_X0Y0
   site CFG_CENTER_MID: DNA_PORT.IN_USE
+  ecc 0 wrong
   stream base
 design ecc_crc
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_efar
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_far
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000481 | CTL0 00000481 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000581 | CTL0 00000481 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_far_crc
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000481 | CTL0 00000481 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000581 | CTL0 00000481 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_far_unread
+  ecc 0 wrong
   stream base
 design ecc_plain
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
+  stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
+design ecc_ram_logic
+  cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
+  stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
+design ecc_ram_zero_logic
+  cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_rbt
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_srl
   cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
+  stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
+design ecc_srl16_logic
+  cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
+  stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
+design ecc_srl_logic
+  cell FRAME_ECCE2 FRAME_ECC_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000401 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000401 | nop 2 | CMD 0000000d DESYNC | nop 400
 design ecc_unread
+  ecc 0 wrong
   stream base
 design efuse_bit5
   cell EFUSE_USR EFUSE_USR_X0Y0
+  ecc 0 wrong
   stream base
 design efuse_plain
   cell EFUSE_USR EFUSE_USR_X0Y0
+  ecc 0 wrong
   stream base
 design efuse_sim
   cell EFUSE_USR EFUSE_USR_X0Y0
+  ecc 0 wrong
   stream base
 design efuse_unread
+  ecc 0 wrong
   stream base
 design icap_clk_only
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_device_id
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_loc0
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP_X0Y0.IN_USE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 40000401 | CTL0 40000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 40000501 | CTL0 40000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design icap_loc0_x16
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X16 ICAP_X0Y0.IN_USE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 40000401 | CTL0 40000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 40000501 | CTL0 40000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design icap_loc0_x8
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X8 ICAP_X0Y0.IN_USE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 40000401 | CTL0 40000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 40000501 | CTL0 40000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design icap_loc1
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_loc1_x16
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X16 ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_loc1_x8
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X8 ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_open
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_plain
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_select_bottom_loc0
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP_X0Y0.IN_USE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 40000401 | CTL0 40000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 40000501 | CTL0 40000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design icap_select_top_loc1
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_tied
   cell ICAPE2 ICAP_X0Y1
@@ -224,57 +293,69 @@ design icap_tied
   ground INT_L_X18Y81 GFAN0.GND_WIRE
   ground INT_L_X18Y81 IMUX_L42.GFAN0
   ground INT_L_X18Y81 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design icap_two
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_two_select_bottom
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 40000401 | CTL0 40000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 40000501 | CTL0 40000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design icap_two_select_top
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_two_x16_x8
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X16 ICAP.ICAP_WIDTH_X8 ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_two_x32_x16
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X16 ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_two_x8
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X8 ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_two_x8_x32
   cell ICAPE2 ICAP_X0Y1
   cell ICAPE2 ICAP_X0Y0
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X8 ICAP_X0Y0.IN_USE ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_write
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_x16
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X16 ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_x32
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design icap_x8
   cell ICAPE2 ICAP_X0Y1
   site CFG_CENTER_MID: ICAP.ICAP_WIDTH_X8 ICAP_X0Y1.IN_USE
+  ecc 0 wrong
   stream base
 design no_bscan_same
   refused Place 30-433 Place 30-99
@@ -292,9 +373,22 @@ design no_startup_userclk_alone
   refused Designutils 12-1517
 design no_usr_two
   refused UTLZ-1
+design noecc_ram_logic
+  ecc 0 wrong
+  stream base
+design noecc_ram_zero_logic
+  ecc 0 wrong
+  stream base
+design noecc_srl16_logic
+  ecc 0 wrong
+  stream base
+design noecc_srl_logic
+  ecc 0 wrong
+  stream base
 design startup_all
   cell STARTUPE2 STARTUP_X0Y0
   site CFG_CENTER_MID: STARTUP.GSR_OR_GTS STARTUP.USRCCLKO_OR_USRDONE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 0200bfe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design startup_clk
   cell STARTUPE2 STARTUP_X0Y0
@@ -307,6 +401,7 @@ design startup_clk
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 0200bfe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design startup_clk_cclk
   cell STARTUPE2 STARTUP_X0Y0
@@ -319,6 +414,7 @@ design startup_clk_cclk
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_clk_jtagclk
   cell STARTUPE2 STARTUP_X0Y0
@@ -331,6 +427,7 @@ design startup_clk_jtagclk
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 02013fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design startup_clk_tied
   cell STARTUPE2 STARTUP_X0Y0
@@ -346,6 +443,7 @@ design startup_clk_tied
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_clk_userclk
   cell STARTUPE2 STARTUP_X0Y0
@@ -358,6 +456,7 @@ design startup_clk_userclk
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 0200bfe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design startup_flash
   cell STARTUPE2 STARTUP_X0Y0
@@ -371,6 +470,7 @@ design startup_flash
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_gsr
   cell STARTUPE2 STARTUP_X0Y0
@@ -386,6 +486,7 @@ design startup_gsr
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_gsr_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -401,6 +502,7 @@ design startup_gsr_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_gsr_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -415,6 +517,7 @@ design startup_gsr_1
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_gts
   cell STARTUPE2 STARTUP_X0Y0
@@ -429,6 +532,7 @@ design startup_gts
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_gts_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -444,6 +548,7 @@ design startup_gts_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_gts_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -457,6 +562,7 @@ design startup_gts_1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_keyclearb
   cell STARTUPE2 STARTUP_X0Y0
@@ -472,6 +578,7 @@ design startup_keyclearb
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_keyclearb_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -488,6 +595,7 @@ design startup_keyclearb_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_keyclearb_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -503,6 +611,7 @@ design startup_keyclearb_1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_out_cfgclk
   cell STARTUPE2 STARTUP_X0Y0
@@ -518,6 +627,7 @@ design startup_out_cfgclk
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_out_cfgmclk
   cell STARTUPE2 STARTUP_X0Y0
@@ -533,6 +643,7 @@ design startup_out_cfgmclk
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_out_eos
   cell STARTUPE2 STARTUP_X0Y0
@@ -548,6 +659,7 @@ design startup_out_eos
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_out_preq
   cell STARTUPE2 STARTUP_X0Y0
@@ -563,6 +675,7 @@ design startup_out_preq
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_outputs
   cell STARTUPE2 STARTUP_X0Y0
@@ -578,6 +691,7 @@ design startup_outputs
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_pack
   cell STARTUPE2 STARTUP_X0Y0
@@ -592,6 +706,7 @@ design startup_pack
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
+  ecc 0 wrong
   stream base
 design startup_pack_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -607,6 +722,7 @@ design startup_pack_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_pack_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -621,14 +737,17 @@ design startup_pack_1
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
+  ecc 0 wrong
   stream base
 design startup_prog_usr
   cell STARTUPE2 STARTUP_X0Y0
   site CFG_CENTER_MID: STARTUP.GSR_OR_GTS STARTUP.PROG_USR STARTUP.USRCCLKO_OR_USRDONE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 0200bfe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design startup_sim_cclk
   cell STARTUPE2 STARTUP_X0Y0
   site CFG_CENTER_MID: STARTUP.GSR_OR_GTS STARTUP.USRCCLKO_OR_USRDONE
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | RSVD19 00000000 | COR0 0200bfe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 400
 design startup_usrcclko
   cell STARTUPE2 STARTUP_X0Y0
@@ -642,6 +761,7 @@ design startup_usrcclko
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrcclko_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -657,6 +777,7 @@ design startup_usrcclko_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrcclko_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -669,6 +790,7 @@ design startup_usrcclko_1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrcclkts
   cell STARTUPE2 STARTUP_X0Y0
@@ -684,6 +806,7 @@ design startup_usrcclkts
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrcclkts_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -700,6 +823,7 @@ design startup_usrcclkts_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrcclkts_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -715,6 +839,7 @@ design startup_usrcclkts_1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrdoneo
   cell STARTUPE2 STARTUP_X0Y0
@@ -730,6 +855,7 @@ design startup_usrdoneo
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrdoneo_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -745,6 +871,7 @@ design startup_usrdoneo_0
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrdoneo_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -759,6 +886,7 @@ design startup_usrdoneo_1
   ground INT_L_X18Y78 IMUX_L39.GFAN1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrdonets
   cell STARTUPE2 STARTUP_X0Y0
@@ -775,6 +903,7 @@ design startup_usrdonets
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrdonets_0
   cell STARTUPE2 STARTUP_X0Y0
@@ -791,6 +920,7 @@ design startup_usrdonets_0
   ground INT_L_X18Y78 IMUX_L41.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design startup_usrdonets_1
   cell STARTUPE2 STARTUP_X0Y0
@@ -806,20 +936,27 @@ design startup_usrdonets_1
   ground INT_L_X18Y78 IMUX_L40.GFAN0
   ground INT_L_X18Y78 IMUX_L42.GFAN0
   ground INT_L_X18Y78 IMUX_L43.GFAN0
+  ecc 0 wrong
   stream base
 design usr_alone_value
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | AXSS 12345678 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 398
 design usr_cfgclk
   cell USR_ACCESSE2 USR_ACCESS_X0Y0
+  ecc 0 wrong
   stream base
 design usr_data
   cell USR_ACCESSE2 USR_ACCESS_X0Y0
+  ecc 0 wrong
   stream base
 design usr_plain
   cell USR_ACCESSE2 USR_ACCESS_X0Y0
+  ecc 0 wrong
   stream base
 design usr_unread
+  ecc 0 wrong
   stream base
 design usr_value
   cell USR_ACCESSE2 USR_ACCESS_X0Y0
+  ecc 0 wrong
   stream leading ffffffff*8 / 000000bb / 11220044 / ffffffff*2 / aa995566 | nop 1 | TIMER 00000000 | WBSTAR 00000000 | CMD 00000000 NULL | nop 1 | CMD 00000007 RCRC | nop 2 | AXSS 12345678 | RSVD19 00000000 | COR0 02003fe5 | COR1 00000000 | IDCODE 03631093 | CMD 00000009 SWITCH | nop 1 | MASK 00000401 | CTL0 00000501 | MASK 00000000 | CTL1 00000000 | nop 8 | FAR 00000000 | CMD 00000001 WCFG | nop 1 | nop 2 | CMD 0000000a GRESTORE | nop 1 | CMD 00000003 LFRM | nop 100 | CMD 00000005 START | nop 1 | FAR 03be0000 | MASK 00000501 | CTL0 00000501 | nop 2 | CMD 0000000d DESYNC | nop 398

@@ -88,6 +88,9 @@ struct Answer {
     sites: Vec<String>,
     ground: Vec<String>,
     stream: Vec<String>,
+    /// How many frames' ECC `--decode` finds other than its rule, on Vivado's
+    /// frames: `None` for a design refused.
+    ecc: Option<String>,
     refused: Option<String>,
 }
 
@@ -110,6 +113,8 @@ fn answers() -> Option<BTreeMap<String, Answer>> {
             out.get_mut(&at).unwrap().sites.push(site.to_owned());
         } else if let Some(tie) = line.strip_prefix("  ground ") {
             out.get_mut(&at).unwrap().ground.push(tie.to_owned());
+        } else if let Some(ecc) = line.strip_prefix("  ecc ") {
+            out.get_mut(&at).unwrap().ecc = Some(ecc.to_owned());
         } else if let Some(rule) = line.strip_prefix("  refused ") {
             out.get_mut(&at).unwrap().refused = Some(rule.to_owned());
         } else if let Some(stream) = line.strip_prefix("  stream ") {
@@ -284,6 +289,17 @@ fn grounded(features: &[(String, String)]) -> Vec<String> {
     out.into_iter().map(|(t, n)| format!("{t} {n}")).collect()
 }
 
+/// How many frames' ECC `--decode`'s summary calls wrong, or `?`.
+fn ecc_wrong(decoded: &str) -> String {
+    decoded
+        .lines()
+        .filter_map(|l| l.split_once(" frame(s) with a wrong ECC"))
+        .filter_map(|(head, _)| head.rsplit(' ').next())
+        .next()
+        .unwrap_or("?")
+        .to_owned()
+}
+
 /// One design through the flow.
 struct Built {
     ok: bool,
@@ -293,6 +309,8 @@ struct Built {
     stream: Vec<String>,
     /// Set bits the database has no name for.
     unnamed: Vec<String>,
+    /// `ecc <n> wrong`, as `vivado.txt` has it of Vivado's.
+    ecc: String,
 }
 
 fn build(root: &str, name: &str) -> Built {
@@ -327,6 +345,7 @@ fn build(root: &str, name: &str) -> Built {
             ground: Vec::new(),
             stream: Vec::new(),
             unnamed: Vec::new(),
+            ecc: String::new(),
         };
     }
     let decoded = Command::new(env!("CARGO_BIN_EXE_reticle"))
@@ -370,6 +389,10 @@ fn build(root: &str, name: &str) -> Built {
         ground: grounded(&column),
         stream: packets(&std::fs::read(&bit).unwrap()),
         unnamed,
+        ecc: format!(
+            "{} wrong",
+            ecc_wrong(&String::from_utf8_lossy(&decoded.stderr))
+        ),
     }
 }
 
@@ -421,18 +444,7 @@ fn compare(built: &[(String, Built)], answers: &BTreeMap<String, Answer>) {
                     ));
                 }
             }
-            (None, false) if NOT_YET.contains(&name.as_str()) => {
-                if !one.log.contains("FRAME_ECCE2") {
-                    wrong.push(format!(
-                        "{name}: refused, but not for its frames' ECC:\n{}",
-                        one.log
-                    ));
-                }
-            }
             (None, false) => wrong.push(format!("{name}: Vivado built it, and:\n{}", one.log)),
-            (None, true) if NOT_YET.contains(&name.as_str()) => wrong.push(format!(
-                "{name}: built, and this flow does not write its frames' ECC as Vivado does"
-            )),
             (None, true) => {
                 if one.sites != theirs.sites {
                     wrong.push(format!(
@@ -458,6 +470,16 @@ fn compare(built: &[(String, Built)], answers: &BTreeMap<String, Answer>) {
                         "{name}: the stream differs, {} packets against {}: {differ:?}",
                         one.stream.len(),
                         theirs.stream.len()
+                    ));
+                }
+                // Vivado's frames all have the ECC `--decode`'s rule gives
+                // them, a shift register's or a RAM's contents left out; and
+                // so must this flow's, which a frame with contents written
+                // with the whole frame's code is not.
+                if theirs.ecc.as_deref() != Some(one.ecc.as_str()) {
+                    wrong.push(format!(
+                        "{name}: frame ECC {} where Vivado's is {:?}",
+                        one.ecc, theirs.ecc
                     ));
                 }
                 if !one.unnamed.is_empty() {
@@ -491,6 +513,9 @@ const IN_THE_GATE: &[&str] = &[
     "efuse_plain",
     "ecc_far",
     "ecc_srl",
+    "ecc_srl_logic",
+    "ecc_ram_logic",
+    "noecc_srl16_logic",
     "icap_x8",
     "icap_loc0_x16",
     "icap_two_select_bottom",
@@ -509,12 +534,12 @@ const IN_THE_GATE: &[&str] = &[
     "no_startup_two",
 ];
 
-/// What Vivado builds and this refuses, and why: a `FRAME_ECCE2` beside a shift
-/// register, whose frames Vivado writes with an ECC of zero (`ecc_srl`: four
-/// frames, where `xc7::frame_ecc` says `0x0f80` and `0x0f8f`), and a lookup
-/// table used as memory, which was not asked. A part would read this flow's
-/// ECC there as an error, so the pair is refused.
-const NOT_YET: &[&str] = &["ecc_srl"];
+// `NOT_YET` was here: `ecc_srl`, a `FRAME_ECCE2` beside a shift register, which
+// this refused, reading Vivado's ECC of zero on four frames as what a
+// `FRAME_ECCE2` does. It is what Vivado writes with or without one, the code
+// with the shift register's contents left out, and nothing else was in those
+// frames; this flow wrote the whole frame's code, with or without one. It
+// builds now, and every design's ECC is compared.
 
 /// The gate's designs, built once for what asks about them.
 fn gate() -> Option<&'static Vec<(String, Built)>> {
@@ -538,7 +563,7 @@ fn each_design_is_vivados() {
     compare(built, &answers().unwrap());
 }
 
-/// **The same on every design here**, 120 of them. Takes a bitstream per
+/// **The same on every design here**, 128 of them. Takes a bitstream per
 /// design, which is why it is not in the gate.
 #[test]
 #[ignore = "builds every design here to a bitstream, and needs the Project X-Ray database"]
@@ -591,6 +616,6 @@ fn every_design_has_an_answer() {
     designs.sort();
     let answered: Vec<String> = answers.keys().cloned().collect();
     assert_eq!(designs, answered);
-    assert_eq!(answered.len(), 120);
+    assert_eq!(answered.len(), 128);
     assert_eq!(answers.values().filter(|a| a.refused.is_some()).count(), 11);
 }

@@ -165,7 +165,10 @@ pub type DynamicBits = HashSet<(u32, u32, u32)>;
 /// with a logic table on the next table of the same slice, in the same word,
 /// of the frame with that table's sixteen bits alone zeroed. A table in RAM
 /// mode with no contents changes nothing. The same reason as a block RAM's is
-/// the likely one, and it is a guess.
+/// the likely one, and it is a guess. **A `FRAME_ECCE2` changes none of it**:
+/// the same rule holds of every frame of eight designs with one and without,
+/// a shift register's or a RAM's contents with logic in their frames
+/// (`testdata/fpga/vivado/config/`, `ecc_*_logic`, `noecc_*_logic`).
 pub fn wanted_ecc_without(
     address: Option<FrameAddress>,
     frame: &[u32],

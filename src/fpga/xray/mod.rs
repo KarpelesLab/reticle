@@ -2879,10 +2879,19 @@ impl XrayFabric {
         Ok(())
     }
 
-    /// The set bits of `bits` that are a distributed RAM's contents, which a
-    /// frame's ECC leaves out as Vivado's does: see
-    /// [`super::xc7::wanted_ecc_without`]. They are every bit a `lutram` bel's
-    /// parameters can set, of every RAM placed, where it is set.
+    /// The set bits of `bits` that are a distributed RAM's or a shift
+    /// register's contents, which a frame's ECC leaves out as Vivado's does:
+    /// see [`super::xc7::wanted_ecc_without`]. They are every bit a `lutram`
+    /// bel's parameters can set, and every bit of a shift register's `INIT`
+    /// (not its clock's inverter, which does not change), of every one placed,
+    /// where it is set.
+    ///
+    /// **The shift registers were left out until 2026-11-06**, and every
+    /// frame holding a shift register's contents had the code of the whole
+    /// frame where Vivado writes the code without them: four frames of a
+    /// `SRLC32E` of `INIT` `32'h8000_0001`, whose ECC Vivado writes as zero
+    /// because nothing else is in them (`ecc_srl`, which this was read as "a
+    /// `FRAME_ECCE2` zeroes the ECC" from). `--decode` had the rule right.
     pub fn dynamic_table_bits(
         &self,
         graph: &super::arch::RoutingGraph,
@@ -2892,7 +2901,8 @@ impl XrayFabric {
     ) -> super::xc7::DynamicBits {
         let mut out = super::xc7::DynamicBits::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
-            if instance.kind != "lutram" && !instance.kind.starts_with("lutram_") {
+            let shift = matches!(instance.kind.as_str(), "srl32" | "srl16");
+            if !shift && instance.kind != "lutram" && !instance.kind.starts_with("lutram_") {
                 continue;
             }
             let Some(site) = placement.site_of(index) else {
@@ -2903,9 +2913,12 @@ impl XrayFabric {
                 continue;
             };
             for entry in &bel.config {
-                let super::arch::ConfigEntry::Param { at, .. } = entry else {
+                let super::arch::ConfigEntry::Param { at, name, .. } = entry else {
                     continue;
                 };
+                if shift && name != "INIT" {
+                    continue;
+                }
                 if bits.get(site.tile, *at) != Some(true) {
                     continue;
                 }
