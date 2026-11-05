@@ -2,7 +2,8 @@
 # Runs testdata/fpga/vivado/lutram/ through Vivado, at the lowest priority:
 # `lutram.sh <out>`. Each design leaves <out>/<top>/<top>.bit and .cells (where
 # its memories went, in Vivado's words). `FIXTURE=bram lutram.sh <out>` does the
-# same for testdata/fpga/vivado/bram/, without writing the designs first.
+# same for testdata/fpga/vivado/bram/, without writing the designs first, and
+# `FIXTURE=fifo` for testdata/fpga/vivado/fifo/.
 here=$(cd "$(dirname "$0")" && pwd)
 dir=$here/../../testdata/fpga/vivado/${FIXTURE:-lutram}
 [ -n "$FIXTURE" ] || python3 "$here/gen_lutram.py" "$dir"

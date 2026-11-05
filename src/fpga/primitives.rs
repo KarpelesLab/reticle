@@ -6269,11 +6269,12 @@ impl Mapper<'_> {
                         | BelRole::DdrIn
                         | BelRole::DdrOut
                         | BelRole::Srl32
-                        | BelRole::Srl16
-                )
+                        | BelRole::Srl16 // A 7-series FIFO by name, read and written on a clock
+                                         // each, as a block RAM's two ports are.
+                ) || b.port("p0_clk").is_some()
             })
             .flat_map(|b| {
-                ["dclk", "psclk", "clk"]
+                ["dclk", "psclk", "clk", "p0_clk", "p1_clk"]
                     .into_iter()
                     .filter_map(|role| b.port(role).map(|p| (b.name.clone(), p.to_owned())))
             })

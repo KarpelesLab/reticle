@@ -542,6 +542,13 @@ device xc7a35t-cpg236
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*4 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP regce=REGCEAREGCE rstreg=RSTREGARSTREG dbiterr=DBITERR sbiterr=SBITERR eccparity=ECCPARITY rdaddrecc=RDADDRECC injectdbiterr=INJECTDBITERR injectsbiterr=INJECTSBITERR cascadein=CASCADEINA cascadeout=CASCADEOUTA
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*8 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP regce=REGCEB rstreg=RSTREGB cascadein=CASCADEINB cascadeout=CASCADEOUTB
   end
+  # A FIFO by name, which only the Vivado model of block RAM has a bel for:
+  # a `FIFO18E1` on a tile's lower half and a `FIFO36E1` on both. Its pins
+  # are the block RAM site's, under the roles `src/fpga/xray/fifo.rs` gives
+  # them, read off Vivado's own builds (`testdata/fpga/vivado/fifo/`); every
+  # input takes a constant, which the backend ties as it ties a block RAM's.
+  bel FIFO18E1 other site fifo18 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR
+  bel FIFO36E1 other site fifo36 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip,p0_injectdbiterr,p0_injectsbiterr port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_injectdbiterr=INJECTDBITERR p0_injectsbiterr=INJECTSBITERR p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR p0_dbiterr=DBITERR p0_sbiterr=SBITERR p0_eccparity=ECCPARITY outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR,DBITERR,SBITERR,ECCPARITY
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
@@ -824,6 +831,13 @@ device xc7a35t-ftg256
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*4 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP regce=REGCEAREGCE rstreg=RSTREGARSTREG dbiterr=DBITERR sbiterr=SBITERR eccparity=ECCPARITY rdaddrecc=RDADDRECC injectdbiterr=INJECTDBITERR injectsbiterr=INJECTSBITERR cascadein=CASCADEINA cascadeout=CASCADEOUTA
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*8 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP regce=REGCEB rstreg=RSTREGB cascadein=CASCADEINB cascadeout=CASCADEOUTB
   end
+  # A FIFO by name, which only the Vivado model of block RAM has a bel for:
+  # a `FIFO18E1` on a tile's lower half and a `FIFO36E1` on both. Its pins
+  # are the block RAM site's, under the roles `src/fpga/xray/fifo.rs` gives
+  # them, read off Vivado's own builds (`testdata/fpga/vivado/fifo/`); every
+  # input takes a constant, which the backend ties as it ties a block RAM's.
+  bel FIFO18E1 other site fifo18 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR
+  bel FIFO36E1 other site fifo36 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip,p0_injectdbiterr,p0_injectsbiterr port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_injectdbiterr=INJECTDBITERR p0_injectsbiterr=INJECTSBITERR p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR p0_dbiterr=DBITERR p0_sbiterr=SBITERR p0_eccparity=ECCPARITY outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR,DBITERR,SBITERR,ECCPARITY
   io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
@@ -1202,6 +1216,13 @@ device xc7a100t-ftg256
     port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*4 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP regce=REGCEAREGCE rstreg=RSTREGARSTREG dbiterr=DBITERR sbiterr=SBITERR eccparity=ECCPARITY rdaddrecc=RDADDRECC injectdbiterr=INJECTDBITERR injectsbiterr=INJECTSBITERR cascadein=CASCADEINA cascadeout=CASCADEOUTA
     port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*8 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP regce=REGCEB rstreg=RSTREGB cascadein=CASCADEINB cascadeout=CASCADEOUTB
   end
+  # A FIFO by name, which only the Vivado model of block RAM has a bel for:
+  # a `FIFO18E1` on a tile's lower half and a `FIFO36E1` on both. Its pins
+  # are the block RAM site's, under the roles `src/fpga/xray/fifo.rs` gives
+  # them, read off Vivado's own builds (`testdata/fpga/vivado/fifo/`); every
+  # input takes a constant, which the backend ties as it ties a block RAM's.
+  bel FIFO18E1 other site fifo18 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR
+  bel FIFO36E1 other site fifo36 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip,p0_injectdbiterr,p0_injectsbiterr port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_injectdbiterr=INJECTDBITERR p0_injectsbiterr=INJECTSBITERR p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR p0_dbiterr=DBITERR p0_sbiterr=SBITERR p0_eccparity=ECCPARITY outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR,DBITERR,SBITERR,ECCPARITY
   io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast

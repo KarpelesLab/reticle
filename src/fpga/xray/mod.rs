@@ -169,6 +169,7 @@ mod carry;
 mod cmt;
 mod config;
 mod dsp;
+mod fifo;
 mod finish;
 mod io;
 mod iologic;
@@ -195,6 +196,11 @@ pub use cmt::{
     PllSettings, check_manager, counter, mmcm_registers, pll_registers, shaped_counter,
 };
 pub use dsp::{DSP_PRIMITIVE, dsp_local_muxes, dsp_pin_wires};
+pub use fifo::{
+    Shape as FifoShape, check as fifo_check, features as fifo_features,
+    input_roles as fifo_input_roles, offset_ranges as fifo_offset_ranges,
+    register_bit as fifo_register_bit,
+};
 pub use finish::{FinishedFrames, LogicLocation};
 pub use lutpack::{LutPairing, PairOptions, pack_lut_pairs};
 pub use lutswap::{apply_lut_moves, lut_input_classes};
@@ -1592,6 +1598,8 @@ impl XrayDatabase {
         let mut measured = bufg::cascade_enables(tile_type);
         // Likewise a `DSP48E1`'s: see `dsp::derived_features`.
         measured.extend(dsp::derived_features(tile_type));
+        // And a FIFO's width: see `fifo::derived_features`.
+        measured.extend(fifo::derived_features(tile_type));
         // And those of an IO standard the database never fuzzed: see
         // `io::measured_features`.
         measured.extend(io::measured_features(tile_type));
@@ -3518,6 +3526,8 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         // And the output registers' clocks, which only the Vivado model
         // routes: see `XrayFabric::spread_block_ram_pins`.
         "bram" | "bram36" => &["p0_clk", "p1_clk", "p0_regclk", "p1_regclk"],
+        // A FIFO has one output register, on its read clock: `fifo::fifo18_pins`.
+        "fifo18" | "fifo36" => &["p0_clk", "p1_clk", "p0_regclk"],
         "mmcm" => &["dclk", "psclk"],
         "pll" | "sysmon" => &["dclk"],
         // A configuration primitive's clock is on a `CLK_L` wire of the

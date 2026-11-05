@@ -132,6 +132,20 @@ fn site_and_bel(
     if bel.starts_with("RAMB18_") {
         return Some((site_named(bel)?, "RAMB18E1".to_owned()));
     }
+    // A FIFO is the lower half's site, or both halves', under a bel of the
+    // FIFO's own name (`lutram_probe.tcl`'s report of Vivado's builds:
+    // `FIFO18E1.FIFO18E1` on `RAMB18_X3Y38`, `FIFO36E1.FIFO36E1` on
+    // `RAMB36_X3Y19`).
+    if bel == super::fifo::FIFO18_BEL {
+        return Some((site_named("RAMB18_Y0")?, "FIFO18E1".to_owned()));
+    }
+    if bel == super::fifo::FIFO36_BEL {
+        let (site, _) = tile
+            .sites
+            .iter()
+            .find(|(name, _)| name.starts_with("RAMB36_"))?;
+        return Some((site.clone(), "FIFO36E1".to_owned()));
+    }
     if let Some(block) = bel.strip_prefix("DSP_") {
         // A tile's two blocks, `DSP_0` the lower: see `dsp::bel_name`.
         let block: usize = block.parse().ok()?;

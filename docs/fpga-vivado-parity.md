@@ -46,9 +46,9 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 130 of the 141**, 122 before the section on the configuration
-primitives, 120 before the section on serialisers, 118 before the section on
-block RAM, 94 before the sections on pads and clock
+**Reticle builds 132 of the 141**, 130 before the section on FIFOs, 122 before the
+section on the configuration primitives, 120 before the section on serialisers, 118
+before the section on block RAM, 94 before the sections on pads and clock
 buffers, 106 before the one on IO registers, 110 before regional clock buffers
 and clock managers. `index.txt` says which;
 `the_ledger_says_what_builds` holds it exact (ignored, since it takes every probe
@@ -61,17 +61,16 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 11 that do not build, by what stops them:
+The 9 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
-| a FIFO by name | `FIFO18E1`, `FIFO36E1` |
 | pad buffers | the six `DIFF_OUT` forms |
 | IO logic | `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
 
 The eight configuration primitives were a fourth row until the section of their
-own at the end of this document, and the two serialisers were in the IO logic row
-until theirs.
+own at the end of this document, the two serialisers were in the IO logic row
+until theirs, and the two FIFOs were a row of their own until theirs.
 
 Building is the least that can be asked: a probe that builds has not been
 compared with what Vivado wrote for it. Vivado's rules also say something Reticle
@@ -1461,46 +1460,169 @@ block RAM tests and `fpga_xray_bram_vivado` run against it with `--no-fail-fast`
 | port A's write enables driven in `SDP` | the unit test of the lanes |
 | `WRITE_FIRST` kept on the port inference writes | the tiles; what is not built; the simulation |
 
-### `FIFO18E1` and `FIFO36E1`: asked, and not built
-
-`tools/vivado-parity/gen_fifo.py` writes 17 designs, a `FIFO18E1` 4, 9, 18 and 36
-bits wide and a `FIFO36E1` 4 to 72, each with its clocks apart, and on one clock,
-falling through, with flag offsets of its own and with initial and reset values,
-under a reset at power-up that the vendor's model accepts. Vivado built all 17. What
-its bitstreams say, read through `--decode`, **checked on these designs and nothing
-more**, for the work that builds them:
-
-- A FIFO is the block RAM features of its half or halves with `FIFO_MODE` set, read on
-  port A and written on port B at its width (`READ_WIDTH_A_18`, `WRITE_WIDTH_B_18`;
-  36 wide, `SDP_*_WIDTH_36` with all four widths 18), both write modes `NO_CHANGE`,
-  both output registers with `DO_REG`, and a `FIFO36E1` is both halves each half as
-  wide, `BRAM36_*_1` as a `RAMB36E1` of that width has them.
-- `EN_SYN` and `FIRST_WORD_FALL_THROUGH` are the tile's own, set when `TRUE`.
-- **The flag offsets are not the parameters**: the tile's `ZALMOST_EMPTY_OFFSET` is
-  `ALMOST_EMPTY_OFFSET`, less one when the first word falls through, and
-  `ZALMOST_FULL_OFFSET` is `ALMOST_FULL_OFFSET`, more one when the clocks are apart
-  (`EN_SYN` false), each inverted bit for bit as the `Z` says: 0x0b6 and 0x3c5 asked
-  were written 0x0b6 and 0x3c6.
-- **Three bits the database does not name**, frame 27 bits 172 to 174 of the tile,
-  are the width: a `FIFO18E1` 4, 9, 18 and 36 wide sets 1, 2, 3 and 4 there, a
-  `FIFO36E1` 4 to 72 wide 0 to 4. `reticle fpga --decode` reports them unexplained in
-  every one of Vivado's FIFO bitstreams but the `FIFO36E1` 4 wide, which is the one
-  whose value is 0. They were measured on `BRAM_R` tiles only; every other feature
-  of `BRAM_L` sits on the same bits.
-- The pins are the block RAM's: `RDCLK`, `RDEN` and `RST` on port A's clock, enable
-  and reset, `WRCLK` and `WREN` on port B's, the register's clock beside them with
-  `DO_REG`, `DI` and `DO` on port A's data, the flags and counts on pins of their
-  own (`EMPTY`, `RDCOUNT0`); a `FIFO36E1`'s enables and reset on the lower half
-  alone (`ENARDENL`, `RSTRAMARSTRAMLRST`), and the upper half's held through their
-  inverters.
-
-None of this is in Reticle yet: a design naming either still does not build.
-
-**Not done.** `FIFO18E1` and `FIFO36E1` by name, which still do not build. A
-cascade, error correction, inference of simple dual port, of a register into the
+**Not done.** A cascade, error correction, inference of simple dual port, of a register into the
 block, and of a port that both reads and writes. A block's output register named
 with `DO<x>_REG` is clocked as Vivado clocks it, but nothing here has run one on a
 part, nor any block RAM of this section.
+
+### `FIFO18E1` and `FIFO36E1`, as Vivado writes them
+
+**What was asked of Vivado.** `testdata/fpga/vivado/fifo/` has 46 designs from
+`tools/vivado-parity/gen_fifo.py`, each a `FIFO18E1` or `FIFO36E1` by name with its
+data from a shift register, its writes and reads enabled at random after a reset at
+power-up that the vendor's model accepts, and every output its width drives folded
+into one pin: every width in each mode, on one clock and on two, falling through,
+flag offsets of its own, initial and reset values at every width, every inverter it
+has (all at once, and two alone), its output register's reset and enable from logic, the three settings of error
+correction, three on a `BRAM_L` tile, and seven (`fx_*`) that ask what Vivado
+refuses. `FIXTURE=fifo tools/vivado-parity/lutram.sh` ran them; `vivado.txt` keeps the
+cells, the site pins each of the cell's nets reached, each block RAM tile as `--decode`
+reads it, what brings a clock or a constant to the tile's clock and control pins, and
+each design rule Vivado refused a bitstream by. `xsim.txt` is what each does as
+Vivado built it. Two sweeps that are not fixtures asked the rest: `gen_fifo.py
+--ranges`, both flag offsets past any depth at every width of both cells in each of
+three modes, whose refusals `fifo_ranges.py` keeps in `ranges.txt`; and `gen_fifo.py
+--values`, ten builds of random initial and reset values per width, from which
+`fifo_values.py` solved which bit of `INIT` each register bit of the tile is, in
+`values.txt` (twenty samples a bit, `INIT` and `SRVAL` together, none ambiguous).
+
+**What Vivado wrote**, each held by `tests/fpga_xray_fifo_vivado.rs` or
+`src/fpga/xray/fifo.rs`'s own tests:
+
+- A FIFO is the block RAM features of its half or halves with `FIFO_MODE` set, read on
+  port A and written on port B at its width (`READ_WIDTH_A_18`, `WRITE_WIDTH_B_18`;
+  36 wide, `SDP_*_WIDTH_36` with all four widths 18 **and** `READ_WIDTH_A_18`, which a
+  `RAMB18E1` in `SDP` on the lower half has not), both write modes `NO_CHANGE`,
+  both output registers with `DO_REG`, and a `FIFO36E1` is both halves each half as
+  wide; 9 wide it sets all four `RAMB36.BRAM36_*_1`, where a `RAMB36E1` sets those of
+  its ports 9 wide.
+- `EN_SYN` and `FIRST_WORD_FALL_THROUGH` are the tile's own, `EN_ECC_READ` and
+  `EN_ECC_WRITE` the `RAMB36` site's, each set when `TRUE`.
+- **The flag offsets are not the parameters**: the tile's `ZALMOST_EMPTY_OFFSET` is
+  `ALMOST_EMPTY_OFFSET`, less one when the first word falls through, and
+  `ZALMOST_FULL_OFFSET` is `ALMOST_FULL_OFFSET`, more one when the clocks are apart,
+  each inverted bit for bit as the `Z` says: 0x0b6 and 0x3c5 asked were written 0x0b6
+  and 0x3c6.
+- **Three bits the database does not name**, frame 27 bits 172 to 174 of the tile, are
+  the width of a half: 2, 4, 9, 18 and 36 bits are 0 to 4, so a `FIFO18E1` 4 to 36
+  wide is 1 to 4 and a `FIFO36E1` 4 to 72 wide 0 to 4. Reticle names them
+  `FIFO_WIDTH[0]` to `[2]` (`fifo::derived_features`), and every one of Vivado's 41
+  FIFO bitstreams here now decodes with no bit unexplained. *The first reading said
+  they were measured on `BRAM_R` tiles only and assumed `BRAM_L` alike*; `f18_left`,
+  `f18_left_w36` and `f36_left`, held on a `BRAM_L` tile, **checked** it: the same
+  bits.
+- **The initial and reset values** (`values.txt`): 36 wide, a half's 36 bits are port
+  A's 18 and then port B's, `INIT[17:0]` and `INIT[35:18]`; 72 wide the same of each
+  half's 36, the even bits of `INIT` the lower half's and the odd the upper's.
+  Narrower, port B holds `INIT[0]` and nothing else, on both halves; a `FIFO18E1`'s
+  port A is `INIT[17:0]` but 9 wide with its bits 8 and 16 swapped, the word's parity
+  bit on the register's parity bit; a narrower `FIFO36E1`'s halves take the word's
+  data bits by evenness, its parity bits on their parity places, and fill what is
+  left of each half with the bits of `INIT` past the word in order, the even ones the
+  lower half's. Not one of these is the obvious reading, and only the last differs
+  from what a `RAMB36E1`'s values are.
+- **The pins** are the block RAM's: `RDCLK`, `RDEN`, `RST`, `RSTREG` and `REGCE` on port
+  A's pins, `WRCLK` and `WREN` on port B's, the register's clock beside `RDCLK` with
+  `DO_REG` and a one without, `DO` on `DOADO` then `DOBDO`, the flags and counts on
+  pins of their own (`EMPTY`, `RDCOUNT0`). The data inputs move with the width: 18 or
+  narrower, `DI[15:0]` on port B and `DI[31:16]` on nothing; 36 wide, `DI[15:0]` on
+  port A and `DI[31:16]` on port B; a `FIFO36E1` 9 wide puts `DIP[0]` on both halves'
+  first parity pin and `DIP[1]` on nothing. A `FIFO36E1`'s clocks, `RSTREG` and
+  `REGCE` reach both halves, and its `RDEN`, `WREN` and `RST` the lower half alone.
+  *The first reading said the upper half's enables and reset were held through their
+  inverters.* Its enables are (`ZINV` clear, and the pins, which read one undriven,
+  left alone); **its reset is not held at all**: `ZINV_RSTRAMARSTRAM` is clear on the
+  upper half but no pip of Vivado's reaches the pin, and the two
+  ones beside every `FIFO36E1` with `RSTREG` tied low are `RSTREG`'s, on both halves,
+  as `f36_ctrl`, whose `RSTREG` is a signal and which has none, shows.
+- **What Vivado refuses**, at `write_bitstream`, by design rules it names (the `AVAL-n`
+  number counts the errors of one run, so the name is the rule): two clocks with no
+  output register (`enum_EN_SYN_enum_DO_REG_1`), a first word falling through on one
+  clock (`en_syn_and_fwft`), error correction narrower than 72
+  (`enum_EN_ECC_READ_TRUE_enum_DATA_WIDTH_72` and its `WRITE` twin), and a flag offset
+  out of range (`FIFO_AlmostRange_empty`, `FIFO_AlmostRange_full`). The ranges
+  (`ranges.txt`): with the depth of a width taken as 8192 words of 4 down to 512 of
+  72, on one clock both offsets 1 to depth less 2; on two, empty 5 to depth less 6 and
+  full 4 to depth less 7, and falling through empty 6 to depth less 5. **A
+  `FIFO18E1` is held to the depth of a `FIFO36E1` of its width**, twice its own:
+  Vivado accepts an almost-full offset of 2041 on a `FIFO18E1` 18 wide, which has
+  1024 words on UG473's word.
+- **What Vivado builds without a word and should not**: a `DATA_WIDTH` its
+  `FIFO_MODE` has not got. `fx_f18_w36_mode` (36 in `FIFO18`) is read and written 18
+  wide with the width bits of 36; `fx_f18_w72` (72 for a `FIFO18E1`) 4 wide; and
+  `fx_f36_w72_mode` (72 in `FIFO36`) has `SDP_*_WIDTH_36` without the widths that go
+  with them everywhere else. Each decodes to a tile that is neither mode.
+
+**What Reticle does now** (`src/fpga/xray/fifo.rs`, in the default `--memories
+vivado`; `--memories legacy` has no bel for either and refuses a FIFO as before): a
+`FIFO18E1` on a tile's lower half, a `FIFO36E1` on both, each a bel of its own over the
+block RAM site's pins, with every point above; Vivado's refusals by its rules, and the
+three shapes Vivado builds as neither mode refused with that reason. A FIFO's two
+clocks go on the global network: the first build of one did not, since the global
+buffers knew a block RAM's clock pins and not a FIFO's, and its three clock pins came
+in over general interconnect.
+
+| 46 designs | the same as Vivado's |
+|---|---|
+| refused, by the rule Vivado gives | all 4 Vivado refuses; and 3 more, which Vivado builds as neither mode |
+| block RAM tiles, every site feature, the tile's own and contents | all 39 both build |
+| clocks, and the ones and zeros held on the tile's pins | 38 of 39; `f36_w72_sync`'s register clocks, which have no register, Vivado holds at one from its `VCC` net through a slice and Reticle from a bounce wire |
+| nets of the cell, by the site pins they reach | all 4,645 of the 39 designs' |
+| answer under `xsim`, 2,000 cycles | all 38 Vivado's model will simulate; `f36_ecc_read` stops it ("Corrupted DIP": parity read by the correction that no encoder wrote) |
+| initial and reset values, bit by bit (`values.txt`) | all 504 bits of every width |
+| flag offset ranges (`ranges.txt`) | all 27 widths and modes |
+
+**Checked, on all 39 it builds:** every set bit decodes, none unexplained; the arcs
+are the router's and the ties'; the mapping is proved; and the routed netlist, under
+`xsim` on Vivado's models, answers as Vivado's build does. `FIFO18E1` and `FIFO36E1`
+are `ok` in `testdata/fpga/vivado/primitives/index.txt`: both probes build to a
+bitstream. **Not checked:** Vivado has not been given Reticle's implementation of
+these (`run_placed.sh`), and nothing here has run on a part. No simulation model was
+added to `src/fpga/devices/xc7_cells.v`: a `RAMB18E1` has none either, and a FIFO's
+flags on two clocks are the vendor model's synchronisers, which a model written here
+would have to match cycle for cycle to be worth a vector; Vivado's own models are what
+the simulation above runs on.
+
+**Bitstreams of other designs.** The FIFO bels are new sites in the Vivado model's
+fabric; the block RAM fixtures and `qor/` were built with this and with the commit
+before, in both memory models, and compared byte for byte. With `--memories legacy`
+every one is the bitstream it was (26 of `bram/`, the others refused as before, and
+all 13 of `qor/`). With the default, all 13 of `qor/` and 23 of `bram/` are too; the
+15 `b18_*` designs, each a lone `RAMB18E1`, now put it on the upper half of the same
+tile where it was on the lower. Why was not followed: the only change to the fabric
+they see is the two FIFO sites over the halves, which shifts the sites' order. Their tiles, pins, clocks and simulation are still Vivado's
+(`fpga_xray_bram_vivado` holds a block on either half), so this is a placement and
+not a fault; it is a changed bitstream all the same.
+
+**Mutations.** Each made by hand to the code, and `fifo`'s unit tests and
+`fpga_xray_fifo_vivado` (without the simulation) run against it:
+
+| mutation | what failed |
+|---|---|
+| the width code of a half 2 wide made 1 | a unit test; the tiles |
+| no one added to the full offset on two clocks | a unit test; the tiles |
+| no one taken from the empty offset falling through | a unit test; the tiles |
+| a `FIFO18E1` 9 wide without its parity bits swapped | the values |
+| a narrow `FIFO36E1`'s values interleaved straight | the values; the tiles |
+| port B's one bit of value dropped | the values; the tiles |
+| 36 and 72 wide, the ports' data the other way round | a unit test; the pins |
+| a `FIFO36E1` 9 wide's parity on one half | a unit test; the pins |
+| the register's clock given a one with `DO_REG` | the clocks and held pins |
+| the upper half's enables not held | the clocks and held pins |
+| port B's `ZINV` left in | the tiles |
+| no `READ_WIDTH_A_18` 36 wide | the tiles |
+| no `BRAM36_*_1` 9 wide | the tiles |
+| a `FIFO18E1`'s offsets at its own depth | the ranges |
+| two clocks without the register let through | a unit test; the refusals; every built test, since the refused design then builds |
+| a FIFO's clocks not known to the global buffers | the clocks and held pins |
+| `RST`'s inverter read from `IS_RSTREG_INVERTED` | **nothing**, at first: every design inverted both or neither. `f18_inv_some`, two inverted alone, was added for it, and the tiles fail |
+| the upper half's reset not held through its inverter | the tiles |
+| the width bits not in the database | every build test, which refuses the feature |
+| the register clock's inverter not `IS_RDCLK_INVERTED` | the tiles |
+
+**Not done.** A FIFO inferred from a design's own logic; a FIFO on
+Reticle's placement given to Vivado; a simulation model of Reticle's own; error
+correction's behaviour, which only the vendor's model has run.
 
 ## The container around the frames, and `write_bitstream`'s options
 

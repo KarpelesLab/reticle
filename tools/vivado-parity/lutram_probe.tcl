@@ -50,6 +50,17 @@ foreach c [get_cells -hier -filter {IS_PRIMITIVE && (REF_NAME =~ RAM* || REF_NAM
 foreach s [lsort -unique $sites] {
   puts $f "sitepips $s [lsort [get_property SITE_PIPS [get_sites $s]]]"
 }
+# A FIFO's site in full: every site pin and the net on it, a pin no net
+# reaches written `-`, so that what Vivado leaves alone is an answer too.
+foreach c [lsort [get_cells -hier -filter {IS_PRIMITIVE && REF_NAME =~ FIFO*}]] {
+  set s [get_property LOC $c]
+  if {$s eq ""} { continue }
+  foreach sp [lsort [get_site_pins -of_objects [get_sites $s]]] {
+    set net [get_nets -quiet -of_objects $sp]
+    if {$net eq ""} { set net "-" }
+    puts $f "allsitepin $c [lindex [split $sp /] end] $net"
+  }
+}
 close $f
 # Vivado's own netlist of what it built, on its simulation models, for
 # gen_lutram_vectors.py to ask xsim about.

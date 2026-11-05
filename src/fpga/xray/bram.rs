@@ -97,9 +97,29 @@ use crate::logic::Bit;
 
 /// Whether this module configures a cell of `primitive`: a `RAMB18E1` on
 /// one half of a tile, or a `RAMB36E1` on both, which only
-/// [`LutRamModel::Vivado`] has a bel for ([`ramb36_pins`]).
+/// [`LutRamModel::Vivado`] has a bel for ([`ramb36_pins`]), and a `FIFO18E1`
+/// or `FIFO36E1`, whose features [`super::fifo`] says.
 fn is_block_ram(primitive: &str) -> bool {
-    matches!(primitive, "RAMB18E1" | "RAMB36E1")
+    matches!(primitive, "RAMB18E1" | "RAMB36E1") || super::fifo::is_fifo(primitive)
+}
+
+/// A cell's parameters as its block RAM site's pins name them: for a FIFO,
+/// `IS_<pin>_INVERTED` of a pin of the site is the FIFO's inverter of that pin
+/// (`IS_RSTRAMARSTRAM_INVERTED` is `IS_RST_INVERTED`) and anything else the
+/// cell's own; a block RAM's are its own.
+fn site_params<'a>(
+    primitive: &'a str,
+    params: &'a dyn Fn(&str) -> Option<AttrValue>,
+) -> impl Fn(&str) -> Option<AttrValue> + 'a {
+    move |name: &str| {
+        if !super::fifo::is_fifo(primitive) || !name.starts_with("IS_") {
+            return params(name);
+        }
+        match super::fifo::check(primitive, params) {
+            Ok(shape) => super::fifo::half_params(params, shape, false, name),
+            Err(_) => params(name),
+        }
+    }
 }
 
 /// The wire prefix of one half of a block RAM tile: `RAMB18_Y0` is the
@@ -302,7 +322,8 @@ pub(super) fn bel_pins_in(
 
 /// The output roles: everything else a block RAM bel has is an input.
 fn is_output(role: &str) -> bool {
-    role.contains("_dout")
+    super::fifo::is_not_an_input(role)
+        || role.contains("_dout")
         || role.ends_with("_dbiterr")
         || role.ends_with("_sbiterr")
         || role.contains("_eccparity")
@@ -1693,6 +1714,68 @@ fn narrow_ramb36_inputs(netlist: &mut Netlist, index: usize, port: usize, width:
     }
 }
 
+/// A FIFO's pins as Vivado wires them, on the netlist before placement: the
+/// output register's clock (`p0_regclk`) on `RDCLK`'s signal when `DO_REG` is
+/// 1 and the constant one otherwise, as a block RAM's
+/// ([`XrayFabric::spread_block_ram_pins`]); and each data input of the cell
+/// (`fifo_di<i>`, `fifo_dip<i>`) moved onto the site pins its width puts it
+/// on ([`super::fifo::input_roles`]), or onto none, where it keeps its signal
+/// off the netlist's routes under a role no site has (`cell_fifo_di20`).
+/// Without it a `FIFO18E1` 36 wide would take its low half-word on port B,
+/// which is where 18 wide puts it and where Vivado's 36 wide does not.
+fn spread_fifo_pins(netlist: &mut Netlist, index: usize, shape: super::fifo::Shape) {
+    let clock = netlist.instances[index]
+        .pins
+        .iter()
+        .map(|p| &netlist.pins[*p])
+        .find(|p| p.role == "p0_clk")
+        .and_then(|p| p.signal);
+    let (signal, constant) = match clock {
+        Some(signal) if shape.registered => (Some(signal), None),
+        _ => (None, Some(Bit::One)),
+    };
+    netlist.pins.push(crate::fpga::place::NetPin {
+        instance: index,
+        port: "RDRCLK".to_owned(),
+        bit: 0,
+        role: "p0_regclk".to_owned(),
+        output: false,
+        signal,
+        constant,
+    });
+    let pin = netlist.pins.len() - 1;
+    netlist.instances[index].pins.push(pin);
+    if let Some(signal) = signal {
+        netlist.signals[signal].sinks.push(pin);
+    }
+    let pins: Vec<usize> = netlist.instances[index]
+        .pins
+        .iter()
+        .copied()
+        .filter(|pin| netlist.pins[*pin].role.starts_with(super::fifo::CELL_ONLY))
+        .collect();
+    for pin in pins {
+        let role = netlist.pins[pin].role.clone();
+        let reaches = super::fifo::input_roles(shape, &role);
+        let source = netlist.pins[pin].clone();
+        if let Some(signal) = netlist.pins[pin].signal.take() {
+            netlist.signals[signal].sinks.retain(|p| *p != pin);
+        }
+        netlist.pins[pin].constant = None;
+        netlist.pins[pin].role = format!("cell_{role}");
+        for to in reaches {
+            let mut copy = source.clone();
+            copy.role = to;
+            netlist.pins.push(copy);
+            let at = netlist.pins.len() - 1;
+            netlist.instances[index].pins.push(at);
+            if let Some(signal) = netlist.pins[at].signal {
+                netlist.signals[signal].sinks.push(at);
+            }
+        }
+    }
+}
+
 /// The site roles a `RAMB36E1`'s data input role reaches when its port is
 /// written `width` bits wide: see `narrow_ramb36_inputs`. `p0_din0` of a
 /// one-bit port is `["p0_din0", "p0_din1"]`, its `p0_din1` is `[]`, and any
@@ -1773,6 +1856,15 @@ impl XrayFabric {
             }
             let cell = m.cells.get(netlist.instances[index].cell);
             let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            if super::fifo::is_fifo(&primitive) {
+                // A FIFO refused for its parameters is refused with the reason
+                // when it is configured, before anything is written.
+                if let Ok(shape) = super::fifo::check(&primitive, &params) {
+                    spread_fifo_pins(netlist, index, shape);
+                }
+                rewired += 1;
+                continue;
+            }
             for port in 0..2usize {
                 let registered = params(["DOA_REG", "DOB_REG"][port])
                     .and_then(|v| v.as_int())
@@ -1956,6 +2048,13 @@ impl XrayFabric {
             if is_output(role) {
                 continue;
             }
+            // A `FIFO36E1`'s upper half's enables, which Vivado holds low
+            // through their inverters whatever the cell's are: see
+            // `super::fifo::fifo36_pins`.
+            if role.ends_with("_enu") {
+                wants.push((TiePolicy::One, instance.name.clone(), role.clone(), *node));
+                continue;
+            }
             if INVERTED_LOW
                 .iter()
                 .any(|(r, pin)| r == role && held.contains(pin))
@@ -2076,7 +2175,8 @@ impl XrayFabric {
             };
             let site = &graph.sites[site];
             let cell = m.cells.get(instance.cell);
-            let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            let own = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            let params = site_params(&instance.primitive, &own);
             let model = self.block_ram.model;
             Self::instance_wants(
                 model,
@@ -2260,10 +2360,13 @@ impl XrayFabric {
             };
 
             let cell = m.cells.get(instance.cell);
-            let params = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            let own = |name: &str| cell.and_then(|c| c.params.get(name)).cloned();
+            let params = site_params(&instance.primitive, &own);
             let model = self.block_ram.model;
             let held = held_by_inversion(model, &params, instance, netlist);
-            let mut features = if instance.primitive == "RAMB36E1" {
+            let mut features = if super::fifo::is_fifo(&instance.primitive) {
+                super::fifo::features(&instance.primitive, &own, &held).map_err(fail)?
+            } else if instance.primitive == "RAMB36E1" {
                 ramb36_features(&params, model, &held).map_err(fail)?
             } else {
                 mode_features_in(&params, model, &held)
@@ -2289,7 +2392,9 @@ impl XrayFabric {
             if model == LutRamModel::Vivado && sdp && read36 && site.bel == "RAMB18_Y1" {
                 features.push("RAMB18_Y1.READ_WIDTH_A_18".to_owned());
             }
-            if model == LutRamModel::Vivado && site.bel != "RAMB18_Y1" {
+            // A FIFO writes its own offsets: see `super::fifo::features`.
+            let fifo = super::fifo::is_fifo(&instance.primitive);
+            if model == LutRamModel::Vivado && site.bel != "RAMB18_Y1" && !fifo {
                 for name in ["ZALMOST_EMPTY_OFFSET", "ZALMOST_FULL_OFFSET"] {
                     features.extend((0..13).map(|i| format!("{name}[{i}]")));
                 }

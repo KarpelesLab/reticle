@@ -58,9 +58,15 @@ models or IP.
   mode and memories to infer as one, and `FIXTURE=bram lutram.sh` asks Vivado the
   same of them; `gen_lutram_vectors.py` simulates them too, and
   `tests/fpga_xray_bram_vivado.rs` decodes the bitstreams into `vivado.txt` there.
-- `gen_fifo.py` writes a `FIFO18E1` or `FIFO36E1` by name per setting, for
-  `lutram_probe.tcl`; `docs/fpga-vivado-parity.md` has what Vivado wrote of them,
-  and nothing here builds one yet.
+- `gen_fifo.py` writes `testdata/fpga/vivado/fifo/`, a `FIFO18E1` or `FIFO36E1` by
+  name per setting, and `FIXTURE=fifo lutram.sh` asks Vivado the same of them
+  (`lutram_probe.tcl` also lists every pin of a FIFO's site and its net);
+  `gen_lutram_vectors.py` simulates them, and `tests/fpga_xray_fifo_vivado.rs`
+  decodes the bitstreams into `vivado.txt` there. `gen_fifo.py --ranges` writes
+  designs whose flag offsets Vivado refuses, and `fifo_ranges.py` keeps the range
+  each refusal names, as `ranges.txt`; `gen_fifo.py --values` writes designs of
+  random initial values, and `fifo_values.py` solves which bit of `INIT` each of the
+  tile's register bits is, as `values.txt`.
 - `gen_config.py` writes `testdata/fpga/vivado/config/`, one configuration primitive
   a design, `config.sh` with `config_probe.tcl` asks Vivado about each, and
   `config_fixture.py` keeps its answer, read back by `--decode`, with the stream's

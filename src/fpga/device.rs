@@ -4323,9 +4323,10 @@ end
         assert_eq!(io.name, "TRELLIS_IO");
         assert!(io.absorbs_constant("dout"), "{:?}", io.absorbs);
         // The 7 series' clause is on its clock buffers' and IO registers'
-        // control pins, and on nothing else: each one's backend pass
-        // (`xray::bufg`, `xray::iologic`, `xray::cmt`) gives a constant
-        // there by the pin's inverter instead of a lookup table.
+        // control pins and a FIFO's inputs, and on nothing else: each one's
+        // backend pass (`xray::bufg`, `xray::iologic`, `xray::cmt`,
+        // `xray::bram`) gives a constant there by the pin's inverter or a
+        // tie instead of a lookup table.
         for name in ["xc7a35t-cpg236", "xc7a35t-ftg256", "xc7a100t-ftg256"] {
             let device = super::super::target(name).unwrap();
             let absorbing: Vec<(&str, Vec<&str>)> = device
@@ -4393,6 +4394,34 @@ end
                     (
                         "MMCME2_ADV",
                         vec!["rst", "pwrdwn", "psen", "psincdec", "clkinsel", "clkin2"]
+                    ),
+                    // A FIFO's inputs, which `xray::bram`'s ties hold as a
+                    // block RAM's are held.
+                    (
+                        "FIFO18E1",
+                        vec![
+                            "p0_en",
+                            "p1_en",
+                            "p0_rst",
+                            "p0_rstreg",
+                            "p0_regce",
+                            "fifo_di",
+                            "fifo_dip"
+                        ]
+                    ),
+                    (
+                        "FIFO36E1",
+                        vec![
+                            "p0_en",
+                            "p1_en",
+                            "p0_rst",
+                            "p0_rstreg",
+                            "p0_regce",
+                            "fifo_di",
+                            "fifo_dip",
+                            "p0_injectdbiterr",
+                            "p0_injectsbiterr"
+                        ]
                     ),
                 ],
                 "{name}"

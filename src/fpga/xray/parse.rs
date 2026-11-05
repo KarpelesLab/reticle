@@ -868,6 +868,46 @@ pub(super) fn bels_of(
             None => false,
         };
 
+    // A `FIFO18E1` on the lower half and a `FIFO36E1` on both, in the Vivado
+    // model: the same sites' pins under the FIFO's roles, blocking the block
+    // RAMs they are. Their features are the halves' and the tile's, written
+    // by name (`fifo::features`), so nothing is attached to them below.
+    if ramb36 {
+        let fifos = [
+            (
+                super::fifo::FIFO18_BEL,
+                super::fifo::FIFO18_KIND,
+                super::fifo::fifo18_pins(&tile.tile_type),
+                vec!["RAMB18_Y0", super::bram::RAMB36_BEL],
+            ),
+            (
+                super::fifo::FIFO36_BEL,
+                super::fifo::FIFO36_KIND,
+                super::fifo::fifo36_pins(&tile.tile_type),
+                vec![
+                    "RAMB18_Y0",
+                    "RAMB18_Y1",
+                    super::bram::RAMB36_BEL,
+                    super::fifo::FIFO18_BEL,
+                ],
+            ),
+        ];
+        for (name, kind, pins, blocks) in fifos {
+            let Some(pins) = pins else { continue };
+            let mut bel = BelDecl::new(name.to_owned(), kind);
+            for (role, wire) in pins {
+                if wires.contains(wire.as_str()) {
+                    bel.pins.push((role, WireRef::local(wire)));
+                    coverage.pins += 1;
+                } else {
+                    coverage.pins_unresolved += 1;
+                }
+            }
+            bel.blocks = blocks.into_iter().map(str::to_owned).collect();
+            bels.insert(bel.name.clone(), bel);
+        }
+    }
+
     // Now attach every feature to the bel it names.
     let mut whole_contents: Vec<ConfigEntry> = Vec::new();
     for feature in features.features() {
