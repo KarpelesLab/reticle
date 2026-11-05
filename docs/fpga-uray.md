@@ -1397,6 +1397,24 @@ rule that a wrong value is the end of a slave, and the board stayed up.
 What wbd still has wrong is open; it is not the clock edge, as far as the
 bits can say.
 
+**The same design built again does answer.** wbd with one word more
+(word 13: a constant above a count of reads accepted, so a read path
+that only returned zeros could not pass), built the same way, simulated
+first and brought up the same way, at 25 MHz unless stated:
+
+| Program | Read back | Right? |
+|---|---|---|
+| reads only: 13, 15, 13, 15, 13, 15 | `c0fe0001 200 c0fe0003 200 c0fe0005 200` | yes, as simulated |
+| one 32-bit write at a time, the write side's registers after each | every write one address and one beat, in its word | yes (wbd on 2026-11-02 took the first as two beats) |
+| 500 images | 500 of 500 bit for bit with the 32-neuron model, 72.80 % | yes |
+| 10 000 images, 100 MHz | **10 000 of 10 000, 73.84 %, 1.26 µs an image** | yes |
+
+So the 32-neuron network, the one whose first slave hung the board on
+2026-10-22, now runs on the part. That one build of it read a wrong word
+and another did not leaves something that depends on where the flow put
+things, and it is not found; one wrong word in one build is all there is
+to go on, and that bitstream is not loaded again.
+
 What was ruled out on the way:
 
 - **Copying more of Vivado's clock network.** In region 279 the clock
