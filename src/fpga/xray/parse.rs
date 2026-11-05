@@ -671,6 +671,7 @@ pub(super) fn bels_of(
     features: &FeatureSet,
     wires: &HashSet<&str>,
     model: super::lutram::LutRamModel,
+    config_sites: bool,
     coverage: &mut sites::SiteCoverage,
 ) -> Vec<BelDecl> {
     let mut prefixes = site_prefixes(features);
@@ -955,7 +956,14 @@ pub(super) fn bels_of(
     // is the sixteen global clock buffers of a `CLK_BUFG_*` tile: they
     // share one feature prefix and are told apart by its second
     // component. See [`sites::extra_bels`].
-    for extra in sites::extra_bels(&tile.tile_type) {
+    // The configuration tile's own, only for a design that has one: see
+    // `XrayOptions::config_sites`.
+    let extras = if config_sites || !super::config::is_config_tile(&tile.tile_type) {
+        sites::extra_bels(&tile.tile_type)
+    } else {
+        Vec::new()
+    };
+    for extra in extras {
         let mut bel = BelDecl::new(extra.name.clone(), extra.kind);
         for pin in extra.pins {
             if wires.contains(pin.wire.as_str()) {
@@ -992,6 +1000,19 @@ pub(super) fn bels_of(
             bel.config.extend(found.config);
         }
         bels.insert(extra.name, bel);
+    }
+    // A pin of a bel on a tile with no bits, on that tile's wire: a
+    // `DNA_PORT`'s, whose bits are the tile below's. See `super::config`.
+    let far = if config_sites {
+        super::config::far_pins(&tile.tile_type)
+    } else {
+        Vec::new()
+    };
+    for (name, role, wire) in far {
+        if let Some(bel) = bels.get_mut(name) {
+            bel.pins.push((role, wire));
+            coverage.pins += 1;
+        }
     }
 
     bels.into_values().collect()

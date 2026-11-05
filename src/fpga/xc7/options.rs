@@ -75,10 +75,6 @@ const PERSIST_WHY: &str = "Vivado also configures every pin of the CONFIG_MODE's
                            for it, and Reticle has no table of those pins";
 const ENCRYPT_WHY: &str = "Reticle has no AES-256 and no HMAC, and a stream that claimed to be encrypted and was not \
      would be worse than a refusal";
-const ICAP_WHY: &str = "Vivado refuses this with no ICAPE2 in that site, and Reticle does not \
-                        place an ICAPE2 yet";
-const STARTUP_USERCLK_WHY: &str = "Vivado refuses USERCLK with no STARTUPE2 clock, and Reticle \
-                                   does not place a STARTUPE2 yet";
 
 /// Every property [`BitstreamOptions::set`] knows: the output
 /// of `list_property [current_design] BITSTREAM.*` on an XC7A100T under
@@ -277,7 +273,7 @@ pub fn option_table() -> &'static [OptionSpec] {
             "BITSTREAM.READBACK.ICAP_SELECT",
             "AUTO TOP BOTTOM",
             "AUTO",
-            Refused(ICAP_WHY),
+            Done,
         ),
         spec(
             "BITSTREAM.READBACK.SECURITY",
@@ -404,6 +400,42 @@ pub enum UnusedPull {
     None,
 }
 
+/// What the design's configuration primitives ask of the stream, which no
+/// `write_bitstream` option says: `xray::XrayFabric::configure_config` finds
+/// it, and [`BitstreamOptions::set_design`] takes it.
+///
+/// **Measured**, `testdata/fpga/vivado/config/`, each against Vivado's stream.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct ConfigUse {
+    /// A `CAPTUREE2` with `ONESHOT = "TRUE"`, its default: `COR0` bit 23.
+    pub capture_oneshot: bool,
+    /// A `STARTUPE2` whose `CLK` is a signal: `STARTUPCLK` is `USERCLK` unless
+    /// an option said otherwise, and an option of `USERCLK` needs it.
+    pub startup_clock: bool,
+    /// A `FRAME_ECCE2`, and whether its `FARSRC` is `FAR`: `CTL0` bit 8
+    /// (`GLUTMASK_B`) clear, and bit 7 for `FAR`.
+    pub frame_ecc: Option<bool>,
+    /// An `ICAPE2` on `ICAP_X0Y1`, the top one.
+    pub icap_top: bool,
+    /// An `ICAPE2` on `ICAP_X0Y0`, the bottom one: alone, it is `CTL0` bit 30.
+    pub icap_bottom: bool,
+    /// A `BSCANE2` with `DISABLE_JTAG = "TRUE"`: the same bits as the option.
+    pub disable_jtag: bool,
+}
+
+/// `READBACK.ICAP_SELECT`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IcapSelect {
+    /// The default: the bottom one when it is the only one in use.
+    #[default]
+    Auto,
+    /// `ICAP_X0Y1`.
+    Top,
+    /// `ICAP_X0Y0`.
+    Bottom,
+}
+
 /// What `USR_ACCESS` writes to the `AXSS` register.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UsrAccess {
@@ -450,6 +482,15 @@ pub struct BitstreamOptions {
     pub match_cycle: u32,
     /// `STARTUP.STARTUPCLK` is `JTAGCLK`, rather than `CCLK`.
     pub startup_jtag_clock: bool,
+    /// `STARTUP.STARTUPCLK` is `USERCLK`.
+    pub startup_user_clock: bool,
+    /// `STARTUP.STARTUPCLK` was given at all: with a `STARTUPE2` clock and no
+    /// option, Vivado writes `USERCLK`.
+    pub startup_clock_set: bool,
+    /// `READBACK.ICAP_SELECT`.
+    pub icap_select: IcapSelect,
+    /// What the design's configuration primitives ask of the stream.
+    pub design: ConfigUse,
     /// `STARTUP.DONEPIPE`.
     pub done_pipe: bool,
     /// `BPI_PAGE_SIZE`, 1, 4 or 8.
@@ -535,6 +576,10 @@ impl Default for BitstreamOptions {
             lck_cycle: 7,
             match_cycle: 7,
             startup_jtag_clock: false,
+            startup_user_clock: false,
+            startup_clock_set: false,
+            icap_select: IcapSelect::Auto,
+            design: ConfigUse::default(),
             done_pipe: true,
             bpi_page_size: 1,
             bpi_first_read_cycle: 1,
@@ -813,17 +858,23 @@ impl BitstreamOptions {
                 self.lck_cycle = wait()?;
             }
             "MATCH_CYCLE" => self.match_cycle = wait()?,
-            "STARTUPCLK" => match upper.as_str() {
-                "CCLK" => self.startup_jtag_clock = false,
-                "JTAGCLK" => self.startup_jtag_clock = true,
-                "USERCLK" => {
-                    return Err(OptionError::NotImplemented {
-                        name,
-                        why: STARTUP_USERCLK_WHY.to_owned(),
-                    });
-                }
-                _ => return Err(bad()),
-            },
+            "STARTUPCLK" => {
+                (self.startup_jtag_clock, self.startup_user_clock) = match upper.as_str() {
+                    "CCLK" => (false, false),
+                    "JTAGCLK" => (true, false),
+                    "USERCLK" => (false, true),
+                    _ => return Err(bad()),
+                };
+                self.startup_clock_set = true;
+            }
+            "ICAP_SELECT" => {
+                self.icap_select = match upper.as_str() {
+                    "AUTO" => IcapSelect::Auto,
+                    "TOP" => IcapSelect::Top,
+                    "BOTTOM" => IcapSelect::Bottom,
+                    _ => return Err(bad()),
+                };
+            }
             "CONFIG_MODE" => {
                 if !one_of(&SPI_MODES.to_ascii_uppercase()) {
                     return Err(bad());
@@ -852,14 +903,53 @@ impl BitstreamOptions {
         Ok(())
     }
 
-    /// The refusals Vivado makes of values together, in Vivado's terms: its
+    /// What the design's configuration primitives ask of the stream, as
+    /// `xray::XrayFabric::configure_config` found it. A `BSCANE2`'s
+    /// `DISABLE_JTAG` is the option's own bits, so it sets the option.
+    pub fn set_design(&mut self, design: ConfigUse) {
+        self.design = design;
+        self.disable_jtag |= design.disable_jtag;
+    }
+
+    /// The refusals Vivado makes of values together, and of a value the
+    /// design's configuration primitives do not allow, in Vivado's terms: its
     /// message numbers are in `docs/fpga-vivado-parity.md`. Call it when every
-    /// property has been set.
+    /// property has been set and [`BitstreamOptions::set_design`] has been
+    /// called; with no design, what is checked is a design with none of those
+    /// primitives, which is what `write_bitstream` from a checkpoint of one is.
     ///
     /// # Errors
     ///
     /// [`OptionError::Conflict`] with what is wrong.
     pub fn check(&self) -> Result<(), OptionError> {
+        self.check_options()?;
+        let conflict = |text: &str| Err(OptionError::Conflict(text.to_owned()));
+        if self.startup_user_clock && !self.design.startup_clock {
+            return conflict(
+                "STARTUPCLK is USERCLK and no STARTUPE2 has a signal on its CLK: Vivado refuses \
+                 that (Designutils 12-1517)",
+            );
+        }
+        match self.icap_select {
+            IcapSelect::Top if !self.design.icap_top => conflict(
+                "ICAP_SELECT is TOP and no ICAPE2 is on ICAP_X0Y1: Vivado refuses that \
+                 (Designutils 12-1536)",
+            ),
+            IcapSelect::Bottom if !self.design.icap_bottom => conflict(
+                "ICAP_SELECT is BOTTOM and no ICAPE2 is on ICAP_X0Y0: Vivado refuses that \
+                 (Designutils 12-1536)",
+            ),
+            _ => Ok(()),
+        }
+    }
+
+    /// The refusals of [`BitstreamOptions::check`] that are of the options
+    /// alone, for a caller that has not got the design yet.
+    ///
+    /// # Errors
+    ///
+    /// [`OptionError::Conflict`] with what is wrong.
+    pub fn check_options(&self) -> Result<(), OptionError> {
         let conflict = |text: &str| Err(OptionError::Conflict(text.to_owned()));
         if self.compress && self.per_frame_crc {
             return conflict("Vivado does not compress a bitstream that uses per-frame CRC");
@@ -955,10 +1045,26 @@ impl BitstreamOptions {
             | (self.lck_cycle << 6)
             | (self.match_cycle << 9)
             | ((self.done_cycle - 1) << 12)
+            | (u32::from(self.startup_user_clock()) << 15)
             | (u32::from(self.startup_jtag_clock) << 16)
             | (oscillator << 17)
+            | (u32::from(self.design.capture_oneshot) << 23)
             | (u32::from(self.done_pipe) << 25)
             | (u32::from(self.ext_master_cclk.is_some()) << 26)
+    }
+
+    /// Whether the start-up sequence runs on the `STARTUPE2`'s `CLK`.
+    fn startup_user_clock(&self) -> bool {
+        self.startup_user_clock || (!self.startup_clock_set && self.design.startup_clock)
+    }
+
+    /// Whether `CTL0` selects the bottom `ICAPE2`.
+    fn icap_bottom(&self) -> bool {
+        match self.icap_select {
+            IcapSelect::Top => false,
+            IcapSelect::Bottom => true,
+            IcapSelect::Auto => self.design.icap_bottom && !self.design.icap_top,
+        }
     }
 
     /// The `COR1` word.
@@ -978,11 +1084,13 @@ impl BitstreamOptions {
             .config_fallback
             .unwrap_or(self.next_config_addr.is_some());
         1 | (self.security << 4)
-            | (1 << 8)
+            | (u32::from(self.design.frame_ecc == Some(true)) << 7)
+            | (u32::from(self.design.frame_ecc.is_none()) << 8)
             | (u32::from(!self.select_map_abort) << 9)
             | (u32::from(!fallback) << 10)
             | (u32::from(self.over_temp_power_down) << 12)
             | (u32::from(!self.init_signals_error) << 13)
+            | (u32::from(self.icap_bottom()) << 30)
             | (u32::from(self.key_in_efuse) << 31)
     }
 
@@ -1552,7 +1660,10 @@ pub fn stream_words(
     stream.command(Command::Start);
     stream.nops(1);
     stream.write(Register::Far, PARKED_FAR);
-    stream.write(Register::Mask, ctl0);
+    // `GLUTMASK_B` (bit 8) is in this mask whether it is set or not, and out
+    // of the first: a `FRAME_ECCE2` clears it, and Vivado's masks are then
+    // 0x401 and 0x501 around a `CTL0` of 0x401 (`testdata/fpga/vivado/config/`).
+    stream.write(Register::Mask, ctl0 | 0x100);
     stream.write(Register::Ctl0, ctl0);
     check(&mut stream, options);
     stream.nops(2);
@@ -1648,6 +1759,113 @@ mod tests {
                 _ => assert!(result.is_ok(), "{}={value}: {result:?}", spec.name),
             }
         }
+    }
+
+    /// The words a design's configuration primitives make, each against what
+    /// Vivado wrote for the design in `testdata/fpga/vivado/config/` named
+    /// beside it. Would catch a bit moved or dropped, and the two rules that the
+    /// integration test's gate does not build a design for: two `ICAPE2`s with
+    /// no `ICAP_SELECT` select neither (`icap_two`), and an option of `CCLK`
+    /// wins over a `STARTUPE2`'s clock (`startup_clk_cclk`).
+    #[test]
+    fn a_designs_configuration_primitives_write_vivados_words() {
+        let with = |design: ConfigUse, sets: &[(&str, &str)]| {
+            let mut o = BitstreamOptions::default();
+            for (name, value) in sets {
+                o.set(name, value).unwrap();
+            }
+            o.set_design(design);
+            o.check().unwrap();
+            (o.cor0(), o.ctl0())
+        };
+        let none = ConfigUse::default();
+        assert_eq!(with(none, &[]), (0x0200_3FE5, 0x0000_0501), "base");
+        let capture = ConfigUse {
+            capture_oneshot: true,
+            ..none
+        };
+        assert_eq!(with(capture, &[]).0, 0x0280_3FE5, "capture_plain");
+        let clock = ConfigUse {
+            startup_clock: true,
+            ..none
+        };
+        assert_eq!(with(clock, &[]).0, 0x0200_BFE5, "startup_clk");
+        let cclk = [("BITSTREAM.STARTUP.STARTUPCLK", "CCLK")];
+        assert_eq!(with(clock, &cclk).0, 0x0200_3FE5, "startup_clk_cclk");
+        let jtag = [("BITSTREAM.STARTUP.STARTUPCLK", "JTAGCLK")];
+        assert_eq!(with(clock, &jtag).0, 0x0201_3FE5, "startup_clk_jtagclk");
+        let efar = ConfigUse {
+            frame_ecc: Some(false),
+            ..none
+        };
+        assert_eq!(with(efar, &[]).1, 0x0000_0401, "ecc_plain");
+        let far = ConfigUse {
+            frame_ecc: Some(true),
+            ..none
+        };
+        assert_eq!(with(far, &[]).1, 0x0000_0481, "ecc_far");
+        let bottom = ConfigUse {
+            icap_bottom: true,
+            ..none
+        };
+        assert_eq!(with(bottom, &[]).1, 0x4000_0501, "icap_loc0");
+        let two = ConfigUse {
+            icap_bottom: true,
+            icap_top: true,
+            ..none
+        };
+        assert_eq!(with(two, &[]).1, 0x0000_0501, "icap_two");
+        let pick = [("BITSTREAM.READBACK.ICAP_SELECT", "BOTTOM")];
+        assert_eq!(with(two, &pick).1, 0x4000_0501, "icap_two_select_bottom");
+        let jtag_off = ConfigUse {
+            disable_jtag: true,
+            ..none
+        };
+        let mut o = BitstreamOptions::default();
+        o.set_design(jtag_off);
+        assert!(o.disable_jtag, "bscan_disable");
+    }
+
+    /// What Vivado refuses of an option the design's primitives do not allow,
+    /// with its rule in the message. Would catch either check dropped or made of
+    /// the wrong site: each builds a stream Vivado would not write.
+    #[test]
+    fn an_option_the_design_does_not_allow_is_refused() {
+        let refused = |design: ConfigUse, name: &str, value: &str| {
+            let mut o = BitstreamOptions::default();
+            o.set(name, value).unwrap();
+            o.check_options().unwrap();
+            o.set_design(design);
+            o.check().map_err(|e| e.to_string())
+        };
+        let none = ConfigUse::default();
+        let top = ConfigUse {
+            icap_top: true,
+            ..none
+        };
+        let select = "BITSTREAM.READBACK.ICAP_SELECT";
+        assert!(
+            refused(none, select, "TOP")
+                .unwrap_err()
+                .contains("12-1536")
+        );
+        assert!(
+            refused(top, select, "BOTTOM")
+                .unwrap_err()
+                .contains("12-1536")
+        );
+        assert!(refused(top, select, "TOP").is_ok());
+        let clock = "BITSTREAM.STARTUP.STARTUPCLK";
+        assert!(
+            refused(none, clock, "USERCLK")
+                .unwrap_err()
+                .contains("12-1517")
+        );
+        let started = ConfigUse {
+            startup_clock: true,
+            ..none
+        };
+        assert!(refused(started, clock, "USERCLK").is_ok());
     }
 
     #[test]

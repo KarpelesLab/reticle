@@ -255,6 +255,10 @@ fn the_default_stream_is_vivados_word_for_word() {
 /// Every run of the fixture but those a pad is in, which the test after this
 /// one has. A run Vivado refused has to be refused here, and one Reticle does
 /// not do has to be in the list here, so one cannot quietly join them.
+/// `ICAP_SELECT=TOP`, `BOTTOM` and `STARTUPCLK=USERCLK` left the list when
+/// Reticle placed an `ICAPE2` and a `STARTUPE2`: on this design, which has
+/// neither, they are refused as Vivado refused them (`Designutils 12-1536`,
+/// `12-1517`), and `tests/fpga_xray_config.rs` has them where they build.
 #[test]
 fn every_option_writes_the_stream_vivado_wrote() {
     let (matched, not_done) = check_all_options(&a100t());
@@ -270,9 +274,6 @@ fn every_option_writes_the_stream_vivado_wrote() {
             "PERSIST+SMAP32",
             "PERSIST+SMAP8",
             "PERSIST+SPI4",
-            "READBACK.ICAP_SELECT=BOTTOM",
-            "READBACK.ICAP_SELECT=TOP",
-            "STARTUP.STARTUPCLK=USERCLK",
         ]
     );
     let (matched, _) = check_all_options(&a35t());

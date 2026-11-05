@@ -653,6 +653,12 @@ pub(super) fn pass_throughs_in(tile_type: &str, model: LutRamModel) -> Vec<PassT
     if tile_type == "MONITOR_BOT" {
         return super::xadc::xadc_pass_throughs(tile_type);
     }
+    if matches!(
+        tile_type,
+        "CFG_CENTER_MID" | "CFG_CENTER_TOP" | "CFG_CENTER_BOT"
+    ) {
+        return super::config::config_pass_throughs(tile_type);
+    }
     let (side, single) = match tile_type {
         "LIOI3" | "LIOI3_TBYTESRC" | "LIOI3_TBYTETERM" => ("LIOI", false),
         "RIOI3" | "RIOI3_TBYTESRC" | "RIOI3_TBYTETERM" => ("RIOI", false),
@@ -1360,6 +1366,10 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
     let xadc = super::xadc::xadc_bels(tile_type);
     if !xadc.is_empty() {
         return xadc;
+    }
+    let config = super::config::config_bels(tile_type);
+    if !config.is_empty() {
+        return config;
     }
     if !matches!(tile_type, "CLK_BUFG_BOT_R" | "CLK_BUFG_TOP_R") {
         return Vec::new();

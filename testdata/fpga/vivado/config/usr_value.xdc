@@ -1,0 +1,8 @@
+create_clock -period 10 -name clk [get_ports clk]
+set_property PACKAGE_PIN N11 [get_ports clk]
+set_property IOSTANDARD LVCMOS33 [get_ports clk]
+set_property PACKAGE_PIN L4 [get_ports si]
+set_property IOSTANDARD LVCMOS33 [get_ports si]
+set_property PACKAGE_PIN L5 [get_ports so]
+set_property IOSTANDARD LVCMOS33 [get_ports so]
+set_property BITSTREAM.CONFIG.USR_ACCESS 0x12345678 [current_design]

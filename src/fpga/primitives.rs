@@ -6260,6 +6260,12 @@ impl Mapper<'_> {
                     BelRole::Mmcm
                         | BelRole::Pll
                         | BelRole::Sysmon
+                        // A configuration primitive's `CLK`, which Vivado
+                        // takes off the global network.
+                        | BelRole::Icap
+                        | BelRole::Capture
+                        | BelRole::Dna
+                        | BelRole::Startup
                         | BelRole::DdrIn
                         | BelRole::DdrOut
                         | BelRole::Srl32

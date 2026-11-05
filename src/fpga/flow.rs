@@ -610,6 +610,15 @@ pub fn synthesize_for(
     // 5. The family's own cell names and parameters.
     if options.device_cells {
         report.device_cells = super::techcells::map_cells(design, module, device, diags);
+        // A configuration primitive nothing reads and that does nothing else,
+        // which Vivado removes: before the flip-flops nothing reads go, so that
+        // those it read go too. See `xray::sweep_unread_config`.
+        if device.family == "xc7" {
+            super::xray::sweep_unread_config(&mut design.modules[module]).map_err(|e| {
+                diags.push(Diagnostic::error(e));
+                FlowError::Synthesis
+            })?;
+        }
         // And a chain of them, while they are all primitives.
         report.shift_registers =
             super::srl::extract(design, module, device, constraints, options.srl_min_length)
@@ -1529,7 +1538,9 @@ fn primitive_instances(
             }
             continue;
         }
-        if bel.outputs.is_empty() {
+        // A `CAPTUREE2` is the one primitive with no output at all, and is
+        // instantiated by name all the same.
+        if bel.outputs.is_empty() && bel.role != super::device::BelRole::Capture {
             refused += 1;
             diags.push(
                 Diagnostic::error(format!(

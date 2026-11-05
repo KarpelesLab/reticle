@@ -245,7 +245,7 @@ fn stages(
 
 /// How many things read each bit: every cell's inputs, an output port, and an
 /// instance's connections.
-fn read_counts(module: &Module, view: &BitView<'_>) -> HashMap<SigBit, usize> {
+pub(crate) fn read_counts(module: &Module, view: &BitView<'_>) -> HashMap<SigBit, usize> {
     let mut reads: HashMap<SigBit, usize> = HashMap::new();
     let mut count = |expr: ExprId| {
         if let Ok(bits) = view.expr_bits(expr) {

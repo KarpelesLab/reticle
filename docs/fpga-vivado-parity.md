@@ -46,7 +46,8 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 122 of the 141**, 120 before the section on serialisers, 118 before the section on
+**Reticle builds 130 of the 141**, 122 before the section on the configuration
+primitives, 120 before the section on serialisers, 118 before the section on
 block RAM, 94 before the sections on pads and clock
 buffers, 106 before the one on IO registers, 110 before regional clock buffers
 and clock managers. `index.txt` says which;
@@ -60,14 +61,17 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 19 that do not build, by what stops them:
+The 11 that do not build, by what stops them:
 
 | what | primitives |
 |---|---|
 | a FIFO by name | `FIFO18E1`, `FIFO36E1` |
 | pad buffers | the six `DIFF_OUT` forms |
 | IO logic | `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
-| configuration | `BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`, `USR_ACCESSE2` |
+
+The eight configuration primitives were a fourth row until the section of their
+own at the end of this document, and the two serialisers were in the IO logic row
+until theirs.
 
 Building is the least that can be asked: a probe that builds has not been
 compared with what Vivado wrote for it. Vivado's rules also say something Reticle
@@ -1565,6 +1569,11 @@ The eight `.bit`s above had none.
 has been tried. `FRAME_ECCE2` is still in the list of primitives above that do not
 build.
 
+**Later:** `FRAME_ECCE2` builds now (see "The configuration primitives"), except
+beside a shift register or a lookup table used as memory: Vivado writes those
+frames' ECC as zero (`ecc_srl`, four frames), this flow writes the code, and the
+primitive is what would read the difference. `POST_CRC` is still not looked at.
+
 **What else this changed, checked.** Four designs built by the code before this and
 after it, same placement and route (`options_probe`, `crc32`, `bram_fifo`, `fsm`): the
 packet lines differ only in the `FDRI` hash and the first CRC, and the frames only in
@@ -1678,8 +1687,14 @@ what says they are the tile's. `--decode` names them, as `USERID[7]=0` and
 |---|---|
 | `ENCRYPTION.ENCRYPT`, `KEY0`, `HKEY`, `KEYFILE`, `STARTCBC` | No AES-256 or HMAC, and a stream that claimed to be encrypted and was not would be worse than a refusal |
 | `CONFIG.PERSIST=YES` | Vivado refuses it without `CONFIG_MODE` (`PRST-1`), and with one configures every pin of that interface. 21 to 239 words on what was measured. No table of those pins here |
-| `READBACK.ICAP_SELECT=TOP`, `BOTTOM` | Vivado refuses it without an `ICAPE2` there, and Reticle places none |
-| `STARTUP.STARTUPCLK=USERCLK` | Vivado refuses it without a `STARTUPE2` clock, and Reticle places none |
+| ~~`READBACK.ICAP_SELECT=TOP`, `BOTTOM`~~ | ~~Vivado refuses it without an `ICAPE2` there, and Reticle places none~~ |
+| ~~`STARTUP.STARTUPCLK=USERCLK`~~ | ~~Vivado refuses it without a `STARTUPE2` clock, and Reticle places none~~ |
+
+The last two rows were true until Reticle placed an `ICAPE2` and a `STARTUPE2`. Both
+options are done now and refused only where Vivado refuses them, with its rule:
+`ICAP_SELECT` naming a site no `ICAPE2` is on (`Designutils 12-1536`), and `USERCLK`
+with no `STARTUPE2` whose `CLK` is a signal (`Designutils 12-1517`). See "The
+configuration primitives".
 
 **Vivado's own refusals, which `BitstreamOptions::check` makes too**: `COMPRESS` with
 `PERFRAMECRC` (`Designutils 20-2046`) or `DEBUGBITSTREAM` (`20-1859`), `CRC=DISABLE` with
@@ -2045,3 +2060,151 @@ router never takes; an `ODDR`'s `OCLKM`, which Vivado drives with `OCLK` and Ret
 does not, on a global clock as on a `BUFIO`; and a clock manager's unused DRP and
 `DCLK` inputs, which Vivado ties to ground over `GFAN` and Reticle leaves reading one.
 **Nothing here has been on a board.**
+
+## The configuration primitives
+
+`BSCANE2`, `CAPTUREE2`, `DNA_PORT`, `EFUSE_USR`, `FRAME_ECCE2`, `ICAPE2`, `STARTUPE2`
+and `USR_ACCESSE2`, on the sites of the `CFG_CENTER_MID` tile and the two beside it.
+`xray::config` has every bit and how it was found. **Nothing here has been on a
+board, and nothing here is to be loaded into one from this work**: what is said is
+that the bits and the stream are Vivado's.
+
+### What was asked
+
+`testdata/fpga/vivado/config/` has 120 small designs, written here by
+`tools/vivado-parity/gen_config.py`: one parameter of a primitive away from a plain
+design, one wiring of its pins (each `STARTUPE2` input alone as a signal and tied
+either way, each output alone), one `write_bitstream` option beside one
+(`<name>.opts`, which Reticle takes as `--bitstream-option`), two of a kind, and one
+of each together. A site asked for is a `(* LOC *)` attribute, which both tools read.
+`config.sh` ran them through Vivado 2026.1, and `vivado.txt` has, for each: the
+configuration tiles' features as `--decode` reads them, the ties to zero in the
+interconnect column the tile's pins enter from, and the stream's packets other than
+the frames and the CRCs, word for word; or the rule it refused by.
+
+### What Vivado wrote
+
+| primitive | in the tiles | in the stream |
+|---|---|---|
+| `BSCANE2` | `BSCAN.JTAG_CHAIN_<n>`, on `BSCAN_X0Y<n-1>` and no other site. `DISABLE_JTAG` is the option's own three bits | nothing |
+| `CAPTUREE2` | nothing | `ONESHOT`, which is its default: `COR0` bit 23 |
+| `DNA_PORT` | three bits no `segbits` line names: `DNA_PORT.IN_USE` here | nothing |
+| `EFUSE_USR` | nothing | nothing |
+| `FRAME_ECCE2` | nothing | `CTL0` bit 8 (`GLUTMASK_B`) clear, and bit 7 set for `FARSRC = "FAR"`. The first `MASK` leaves bit 8 out and the last has it, set or not |
+| `ICAPE2` | three unnamed bits a site, `ICAP_X0Y0.IN_USE` and `ICAP_X0Y1.IN_USE` here; `ICAP.ICAP_WIDTH_X8` or `_X16`, which the two sites share: two of them set both widths' bits | on `ICAP_X0Y0` alone, `CTL0` bit 30, and so with `ICAP_SELECT=BOTTOM` |
+| `STARTUPE2` | `STARTUP.PROG_USR`; three unnamed bits when `GSR` or `GTS` is a signal, `STARTUP.GSR_OR_GTS` here, and three when `USRCCLKO`, `USRDONEO` or `USRDONETS` is one, `STARTUP.USRCCLKO_OR_USRDONE`. A tied pin sets neither, and `USRCCLKTS`, `KEYCLEARB` and `PACK` as signals set nothing | a `CLK` that is a signal makes `STARTUPCLK` `USERCLK` (`COR0` bit 15) unless the option is given |
+| `USR_ACCESSE2` | nothing | `BITSTREAM.CONFIG.USR_ACCESS`'s value, in `AXSS`, as before |
+
+And what is not bits:
+
+- **Where they go.** One `ICAPE2` goes on `ICAP_X0Y1`, a second on `ICAP_X0Y0`. A
+  `JTAG_CHAIN` outside 1 to 4 is built as 1, with no error (`bscan_chain0`,
+  `bscan_chain5`; synthesis ran `-quiet`, so a warning would not have been seen).
+- **What is removed.** A `DNA_PORT`, `EFUSE_USR`, `USR_ACCESSE2` or `FRAME_ECCE2` none of
+  whose outputs is read is gone, with its bits and a `FRAME_ECCE2`'s `CTL0`. A
+  `BSCANE2`, `STARTUPE2`, `CAPTUREE2` or `ICAPE2` stays.
+- **What an open input reads.** Vivado ties every input of a `STARTUPE2` the design
+  leaves open, `KEYCLEARB`, `USRCCLKTS` and `USRDONETS` to one and the rest to zero, and
+  a `CAPTUREE2`'s `CAP` to zero, over the interconnect's ground fans; a clock pin's zero
+  comes over a bounce (`GFAN1`, `FAN_ALT5`, `FAN_BOUNCE5`, `CLK_L1`). It leaves a
+  `DNA_PORT`'s and an `ICAPE2`'s open inputs, and a `CAPTUREE2`'s `CLK`, unrouted.
+- **Where the pins are.** Every pin is on a wire of the tile joined by one fixed
+  connection to the interconnect side; the database has no `ppips` file for these
+  tiles, so the 319 pins and 15 further hops were transcribed from
+  `tile_type_CFG_CENTER_*.json`. Thirteen of `USR_ACCESSE2`'s `DATA` leave through
+  `CFG_CENTER_BOT`, 21 rows down.
+
+### What was compared, and how it came out
+
+**All 120 agree.** Of the 109 Vivado builds, Reticle builds 108 with the same
+configuration tiles feature for feature, the same ties to zero, the same stream word
+for word, every set bit named and every route the router's; the 109th is refused
+(below). The 11 Vivado refuses, Reticle refuses, with the rule:
+`tests/fpga_xray_config.rs`, 28 in the gate and every one in the ignored
+`every_design_here`. The eight probes of `primitives/` build, and `index.txt` says so.
+
+| refused | rule |
+|---|---|
+| a `BSCANE2` with a `LOC` not its chain's site | `PDRC-2` |
+| a `BSCANE2` whose `TDO` is not connected | `PDCN-2` |
+| two `BSCANE2`s on one chain, two `STARTUPE2`s, two `USR_ACCESSE2`s | Vivado's `Place 30-433` and `UTLZ-1`; Reticle's placer says the part has one site |
+| `ICAP_SELECT` naming a site with no `ICAPE2` | `Designutils 12-1536` |
+| `STARTUPCLK=USERCLK` with no `STARTUPE2` clock | `Designutils 12-1517` |
+
+**Refused here and built by Vivado:** a `FRAME_ECCE2` beside a shift register or a
+lookup table used as memory (`ecc_srl`). Vivado writes the ECC of a frame with a shift
+register's contents in it as zero, four frames of `ecc_srl`, where `xc7::frame_ecc` says
+`0x0f80` and `0x0f8f`; "A shift register" above found the same and left it. That frame
+is exactly what a `FRAME_ECCE2` reads, so the pair is refused until the rule is known.
+For a lookup table used as memory it was not asked.
+
+The first pass at this had two things wrong that the comparison of tiles and streams
+alone did not see, and both are kept here:
+
+- **A `USR_ACCESSE2` routed nothing from `DATA[14:2]`.** Those pins leave `CFG_CENTER_MID`
+  for `CFG_CENTER_BOT`, which the transcription had not reached, and the build said
+  `the router gave up` and wrote a stream and a tile that were Vivado's. The test now
+  counts a design that is not fully routed as wrong.
+- **A `CAPTUREE2`'s open `CLK` was tied to zero** as a `STARTUPE2`'s is. Vivado leaves it,
+  and it took the ties being compared to see it.
+
+The features of two components (`STARTUP.GSR_OR_GTS`, and the database's own
+`STARTUP.PROG_USR`, `BSCAN.JTAG_CHAIN_1`, `ICAP.ICAP_WIDTH_X8`) are read as pips by the
+rule `parse::is_pip_feature` applies, so the flow's check that the arcs selected are
+the router's called the first `STARTUPE2` a selected arc nothing chose. They are named
+as not arcs (`NOT_ARCS`).
+
+### Mutations
+
+Eighteen mutations of the new code, each built and run against the gate's tests:
+**all eighteen fail them**, and three did only after the tests were made to. A
+derived feature moved by one bit passed, because the fixture holds the names this
+flow gives Vivado's bits, so the bits are now held to the unnamed lines `--decode`
+listed before there were names (`the_names_are_on_the_bits_vivado_set`). A
+`FRAME_ECCE2` beside a shift register built passed, because the comparison takes no
+frame's ECC; a design on the refused list that builds is now wrong. And a
+`CAPTUREE2`'s `CAP` left open passed, because no design of the gate left it open;
+`capture_open` is in the gate. The other fifteen: a chain on the next site, `GTS`
+setting no bits, `SINGLE`, `FARSRC` and `ICAP_SELECT` on the wrong bit, two `ICAPE2`s
+selecting the bottom one, `KEYCLEARB` tied low, the last `MASK` as `CTL0`, an unread
+`DNA_PORT` kept, one `ICAPE2` on the bottom site, an open `TDO` built, no user clock by
+default, clock pins left open, no `CFG_CENTER_BOT` hops, `ICAP_SELECT=TOP` unchecked
+and the two widths swapped.
+
+### Not the same as before
+
+A design with none of these primitives loads, places, routes and writes as it did:
+the sites, their wires and the bits only they use are declared only for a design with
+one (`XrayOptions::config_sites`), as the regional buffers' are. **Checked**: the
+thirteen designs of `qor/` and seven probes of other primitives are the same
+bitstream, byte for byte, built by the commit before this and by this one, and so is
+the Husky Plus by `build_plus.sh` (whose `USR_ACCESSE2` is NewAE's stand-in module, so
+not this primitive).
+
+`CTL0`'s `GLUTMASK_B` was a constant one in `BitstreamOptions::ctl0`, and the last
+`MASK` was `CTL0` itself; both are what they were for any design without a
+`FRAME_ECCE2`, and `tests/fpga_xray_bitstream.rs` still holds 245 streams to Vivado's.
+
+### Cells by name
+
+`DNA_PORT`, `EFUSE_USR`, `USR_ACCESSE2` and `CAPTUREE2` are in `xc7_cells.v` for a
+simulator, and `reticle fpga` keeps all eight as the device's own cells. **Checked**
+against xsim's answers in `testdata/fpga/vivado/cells/`: a `DNA_PORT` read and shifted
+with a random `SIM_DNA_VALUE`, an `EFUSE_USR` with a random `SIM_EFUSE_VALUE`, and the
+fixed word the vendor's `USR_ACCESSE2` gives a simulation, which is not what the part
+reads (`AXSS`). A `CAPTUREE2` has no output, so nothing is checked of it. `BSCANE2`,
+`STARTUPE2`, `ICAPE2` and `FRAME_ECCE2` have no model: with nothing driving the JTAG
+port xsim answers `x` for every output of the first, and the rest are an oscillator,
+the configuration engine and a readback, which there is nothing here to hold a model
+to.
+
+### Not done
+
+- **The bits of a site on another part.** All of this is the XC7A100T's. The XC7A35T's
+  configuration tiles are the same types, and the device file declares the primitives
+  on both; what the bits are there has not been asked.
+- **`ICAPE2`'s `DEVICE_ID` and `SIM_CFG_FILE_NAME`, `FRAME_ECCE2`'s
+  `FRAME_RBT_IN_FILENAME`, `STARTUPE2`'s `SIM_CCLK_FREQ`** set nothing, as measured,
+  and are read nowhere here.
+- **`POST_CRC`**, and what a readback through `ICAPE2` reads.
+- **Timing.** These pins are timed as any other cell's: no delay of Vivado's for them.

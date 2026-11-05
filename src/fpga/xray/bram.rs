@@ -528,6 +528,12 @@ pub enum TiePolicy {
     /// Not tied at all: a clock nothing drives, and `REGCE`, which does
     /// nothing while `DOA_REG` and `DOB_REG` are 0.
     Leave,
+    /// A clock pin tied to zero as Vivado ties a configuration primitive's
+    /// (`super::config`): a `CLK_L` wire has no ground fan two hops back, so
+    /// over a bounce, `GND_WIRE`, `GFAN<n>`, `FAN_ALT<k>`, `FAN_BOUNCE<k>`,
+    /// when [`TiePolicy::Zero`]'s search finds nothing, and left as
+    /// [`TiePolicy::Idle`] leaves an input when neither does.
+    ClockZero,
 }
 
 /// Whether `role` is an address bit the block's **width mode does not
@@ -1458,6 +1464,67 @@ fn vcc_source(
     None
 }
 
+/// Ties a clock pin's node to zero over a bounce: the first node of its
+/// [`fixed_chain`] that a programmable pip reaches from a `*_BOUNCE*` wire, whose
+/// own fixed chain a programmable pip reaches from a ground fan. Three pips and
+/// the fan's `GND_WIRE` hop, which is the road Vivado takes to a `STARTUPE2`'s
+/// clock (`INT_L.CLK_L1.FAN_BOUNCE5`, `FAN_ALT5.GFAN1`, `GFAN1.GND_WIRE`, in
+/// `testdata/fpga/vivado/config/`).
+fn tie_over_bounce(
+    graph: &RoutingGraph,
+    used: &HashSet<NodeId>,
+    ties: &mut Ties,
+    pin: NodeId,
+) -> Result<(), String> {
+    let chain = fixed_chain(graph, pin);
+    let free = |ties: &Ties, node: &NodeId| !used.contains(node) && !ties.one.contains(node);
+    if !chain.iter().all(|n| free(ties, n)) {
+        return Err("the pin's wire is in use".to_owned());
+    }
+    for node in &chain {
+        for into in graph.incoming(*node) {
+            if graph.pip_bits(*into).is_empty() {
+                continue;
+            }
+            let bounce = graph.pip(*into).from;
+            if !graph.wire(bounce).name.contains("_BOUNCE") {
+                continue;
+            }
+            let behind = fixed_chain(graph, bounce);
+            if !behind.iter().all(|n| free(ties, n)) {
+                continue;
+            }
+            for alt in &behind {
+                for from_fan in graph.incoming(*alt) {
+                    if graph.pip_bits(*from_fan).is_empty() {
+                        continue;
+                    }
+                    let fan = graph.pip(*from_fan).from;
+                    if !free(ties, &fan) {
+                        continue;
+                    }
+                    let ground = graph.incoming(fan).iter().copied().find(|p| {
+                        !graph.pip_bits(*p).is_empty()
+                            && graph.wire(graph.pip(*p).from).name == "GND_WIRE"
+                    });
+                    let Some(ground) = ground else { continue };
+                    if !ties.zero.contains(&fan) {
+                        ties.pips.push(ground);
+                        ties.zero.insert(fan);
+                        ties.zero.insert(graph.pip(ground).from);
+                    }
+                    ties.pips.push(*from_fan);
+                    ties.pips.push(*into);
+                    ties.zero.extend(behind);
+                    ties.zero.extend(chain);
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err("no bounce reaches a free ground fan".to_owned())
+}
+
 /// Ties one input pin's node to `value`.
 ///
 /// A zero: the first node of the pin's [`fixed_chain`] that a programmable
@@ -2000,6 +2067,7 @@ impl XrayFabric {
             if !is_block_ram(&instance.primitive) {
                 if let Some(site) = placement.site_of(index) {
                     io_logic_wants(instance, &graph.sites[site], netlist, &|_| true, &mut wants);
+                    super::config::wants(instance, &graph.sites[site], netlist, &mut wants);
                 }
                 continue;
             }
@@ -2170,6 +2238,9 @@ impl XrayFabric {
                         &|signal| routing.route(signal).is_some(),
                         &mut wants,
                     );
+                    // A configuration primitive's open and tied inputs, as
+                    // Vivado ties them: see `super::config`.
+                    super::config::wants(instance, &graph.sites[site], netlist, &mut wants);
                 }
                 continue;
             }
@@ -2249,7 +2320,7 @@ impl XrayFabric {
         // The ties that matter first, so that a fan wire the router left
         // free goes to a write enable before it goes to a data bit nobody
         // writes.
-        wants.sort_by_key(|(want, ..)| *want == TiePolicy::Idle);
+        wants.sort_by_key(|(want, ..)| matches!(want, TiePolicy::Idle | TiePolicy::ClockZero));
         for (want, instance, role, node) in wants {
             let fail = |message: String| BlockRamError {
                 instance: instance.clone(),
@@ -2261,11 +2332,14 @@ impl XrayFabric {
             } else {
                 Bit::Zero
             };
-            let tied = tie(&self.arch, graph, vcc, &used, &mut ties, node, value);
+            let mut tied = tie(&self.arch, graph, vcc, &used, &mut ties, node, value);
+            if want == TiePolicy::ClockZero && tied.is_err() {
+                tied = tie_over_bounce(graph, &used, &mut ties, node);
+            }
             match (tied, want) {
                 (Ok(()), TiePolicy::One) => report.ones += 1,
                 (Ok(()), _) => report.zeros += 1,
-                (Err(_), TiePolicy::Idle) => report.idle_left += 1,
+                (Err(_), TiePolicy::Idle | TiePolicy::ClockZero) => report.idle_left += 1,
                 (Err(message), _) => {
                     return Err(fail(format!("tying `{role}` to {value:?}: {message}")));
                 }

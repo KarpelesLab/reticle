@@ -56,6 +56,10 @@ def variants(params, rng):
         out.append(("_init", {n: f"{w}'h{rng.getrandbits(w):x}" for n, w in inits}))
     for name in inverted:
         out.append((f"_{name.lower()}", {name: "1'b1"}))
+    # A simulation-only value: a `DNA_PORT`'s serial number, an `EFUSE_USR`'s bits.
+    sims = [(n, w) for n, w in params if n.startswith("SIM_")]
+    if sims:
+        out.append(("_sim", {n: f"{w}'h{rng.getrandbits(w):x}" for n, w in sims}))
     return out
 
 

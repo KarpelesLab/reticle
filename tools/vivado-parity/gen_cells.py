@@ -412,4 +412,38 @@ module IBUFGDS #(parameter DIFF_TERM = "FALSE", parameter IBUF_LOW_PWR = "TRUE",
   IBUFDS #(.DIFF_TERM(DIFF_TERM), .IBUF_LOW_PWR(IBUF_LOW_PWR), .IOSTANDARD(IOSTANDARD))
     u_pad (.O(O), .I(I), .IB(IB));
 endmodule""")
+# The configuration primitives xsim says something about, as its models answer.
+# A build keeps each as the device's own cell (`reticle fpga`'s `kept`), so these
+# are what a simulation sees and nothing else: `USR_ACCESSE2`'s word is the
+# vendor's model's fixed one, where the part reads `BITSTREAM.CONFIG.USR_ACCESS`.
+# A `CAPTUREE2` has no output, so its vectors check nothing and it is here so that
+# a simulation of a design with one elaborates. `BSCANE2`, `STARTUPE2`, `ICAPE2`
+# and `FRAME_ECCE2` are not: with nothing driving the JTAG port and no
+# configuration engine, xsim answers `x` for every output of the first and a
+# running oscillator or a readback for the others, and there is nothing to hold a
+# model to.
+m("""module DNA_PORT #(parameter [56:0] SIM_DNA_VALUE = 57'h0) (output DOUT, input CLK, input DIN,
+    input READ, input SHIFT);
+  reg [56:0] dna = SIM_DNA_VALUE;
+  reg out;
+  assign DOUT = out;
+  always @(posedge CLK)
+    if (READ) begin
+      dna <= SIM_DNA_VALUE;
+      out <= SIM_DNA_VALUE[56];
+    end else if (SHIFT) begin
+      dna <= {dna[55:0], DIN};
+      out <= dna[55];
+    end
+endmodule
+module EFUSE_USR #(parameter [31:0] SIM_EFUSE_VALUE = 32'h0) (output [31:0] EFUSEUSR);
+  assign EFUSEUSR = SIM_EFUSE_VALUE;
+endmodule
+module USR_ACCESSE2 (output CFGCLK, output [31:0] DATA, output DATAVALID);
+  assign CFGCLK = 1'b0;
+  assign DATA = 32'h12345678;
+  assign DATAVALID = 1'b1;
+endmodule
+module CAPTUREE2 #(parameter ONESHOT = "TRUE") (input CAP, input CLK);
+endmodule""")
 open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../src/fpga/devices/xc7_cells.v'),'w').write('\n'.join(out))

@@ -245,6 +245,7 @@ fn a_slice_becomes_luts_flip_flops_and_a_carry() {
         &features,
         &wires,
         LutRamModel::Vivado,
+        true,
         &mut coverage,
     );
     let names: Vec<&str> = bels.iter().map(|b| b.name.as_str()).collect();

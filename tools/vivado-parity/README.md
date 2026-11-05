@@ -61,6 +61,10 @@ models or IP.
 - `gen_fifo.py` writes a `FIFO18E1` or `FIFO36E1` by name per setting, for
   `lutram_probe.tcl`; `docs/fpga-vivado-parity.md` has what Vivado wrote of them,
   and nothing here builds one yet.
+- `gen_config.py` writes `testdata/fpga/vivado/config/`, one configuration primitive
+  a design, `config.sh` with `config_probe.tcl` asks Vivado about each, and
+  `config_fixture.py` keeps its answer, read back by `--decode`, with the stream's
+  packets by `bit_packets.py`, in `vivado.txt` there.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation

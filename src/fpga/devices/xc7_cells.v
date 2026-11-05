@@ -1212,3 +1212,28 @@ module IBUFGDS #(parameter DIFF_TERM = "FALSE", parameter IBUF_LOW_PWR = "TRUE",
   IBUFDS #(.DIFF_TERM(DIFF_TERM), .IBUF_LOW_PWR(IBUF_LOW_PWR), .IOSTANDARD(IOSTANDARD))
     u_pad (.O(O), .I(I), .IB(IB));
 endmodule
+
+module DNA_PORT #(parameter [56:0] SIM_DNA_VALUE = 57'h0) (output DOUT, input CLK, input DIN,
+    input READ, input SHIFT);
+  reg [56:0] dna = SIM_DNA_VALUE;
+  reg out;
+  assign DOUT = out;
+  always @(posedge CLK)
+    if (READ) begin
+      dna <= SIM_DNA_VALUE;
+      out <= SIM_DNA_VALUE[56];
+    end else if (SHIFT) begin
+      dna <= {dna[55:0], DIN};
+      out <= dna[55];
+    end
+endmodule
+module EFUSE_USR #(parameter [31:0] SIM_EFUSE_VALUE = 32'h0) (output [31:0] EFUSEUSR);
+  assign EFUSEUSR = SIM_EFUSE_VALUE;
+endmodule
+module USR_ACCESSE2 (output CFGCLK, output [31:0] DATA, output DATAVALID);
+  assign CFGCLK = 1'b0;
+  assign DATA = 32'h12345678;
+  assign DATAVALID = 1'b1;
+endmodule
+module CAPTUREE2 #(parameter ONESHOT = "TRUE") (input CAP, input CLK);
+endmodule

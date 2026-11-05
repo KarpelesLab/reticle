@@ -305,6 +305,14 @@ pub enum PlaceError {
     /// The netlist could not be read bit by bit, from the emitter's
     /// bit-level view.
     Netlist(String),
+    /// A cell asks for a site its own parameters rule out, or for one another
+    /// cell has: a `BSCANE2` whose `LOC` is not its `JTAG_CHAIN`'s site.
+    Site {
+        /// The cell.
+        cell: String,
+        /// What is wrong, with the rule Vivado refuses it by.
+        message: String,
+    },
 }
 
 impl fmt::Display for PlaceError {
@@ -432,6 +440,7 @@ impl fmt::Display for PlaceError {
                 )
             }
             PlaceError::Netlist(message) => write!(f, "the netlist cannot be read: {message}"),
+            PlaceError::Site { cell, message } => write!(f, "`{cell}`: {message}"),
         }
     }
 }
@@ -626,6 +635,7 @@ impl Netlist {
         }
         let mut by_slot: BTreeMap<usize, usize> = BTreeMap::new();
         let roles = pin_roles(graph);
+        let site_kinds = config_site_kinds(device, m)?;
 
         for (id, cell) in m.cells.iter() {
             let CellKind::Blackbox(primitive) = &cell.kind else {
@@ -641,6 +651,7 @@ impl Netlist {
                     primitive,
                 });
             };
+            let kind = site_kinds.get(&id).cloned().unwrap_or(kind);
             let instance = out.instances.len();
             let mut pins = Vec::new();
             let mut connections: Vec<(String, bool, Vec<SigBit>)> = Vec::new();
@@ -833,6 +844,101 @@ impl Netlist {
         }
         out
     }
+}
+
+/// The site kind of each cell whose role has sites that are not alike: a
+/// `BSCANE2` goes on the site of its `JTAG_CHAIN` and nowhere else, and an
+/// `ICAPE2` on the top or the bottom one, which the stream says (`CTL0`'s
+/// `ICAP_SELECT`).
+///
+/// **Measured**, `testdata/fpga/vivado/config/`: chain `n` is always on
+/// `BSCAN_X0Y<n-1>`, and a `LOC` elsewhere is refused (`PDRC-2`); a
+/// `JTAG_CHAIN` outside 1 to 4 is built as 1, with no error (`bscan_chain0`,
+/// `bscan_chain5`); one `ICAPE2` with no `LOC` goes on `ICAP_X0Y1`, and a second
+/// on `ICAP_X0Y0`. So the kinds are `bscan1` to `bscan4`, `icap0` and `icap1`,
+/// and an architecture names its sites so.
+fn config_site_kinds(
+    device: &Device,
+    m: &crate::ir::Module,
+) -> Result<BTreeMap<CellId, String>, PlaceError> {
+    let role_of = |primitive: &str| {
+        device
+            .bels
+            .iter()
+            .find(|b| b.name == primitive)
+            .map(|b| b.role)
+    };
+    let loc = |cell: &crate::ir::Cell| {
+        cell.attrs
+            .get("LOC")
+            .and_then(|v| v.as_str().map(str::to_ascii_uppercase))
+    };
+    let mut out = BTreeMap::new();
+    let mut icaps: Vec<(CellId, Option<String>)> = Vec::new();
+    for (id, cell) in m.cells.iter() {
+        let CellKind::Blackbox(primitive) = &cell.kind else {
+            continue;
+        };
+        match role_of(primitive.as_str()) {
+            Some(BelRole::Bscan) => {
+                let chain = cell
+                    .params
+                    .get("JTAG_CHAIN")
+                    .and_then(crate::ir::AttrValue::as_int)
+                    .filter(|c| (1..=4).contains(c))
+                    .unwrap_or(1);
+                let site = format!("BSCAN_X0Y{}", chain - 1);
+                if let Some(asked) = loc(cell)
+                    && asked != site
+                {
+                    return Err(PlaceError::Site {
+                        cell: cell.name.as_str().to_owned(),
+                        message: format!(
+                            "a `BSCANE2` with JTAG_CHAIN {chain} goes on `{site}` and nowhere \
+                             else, and this one asks for `{asked}`; Vivado refuses that (PDRC-2)"
+                        ),
+                    });
+                }
+                out.insert(id, format!("bscan{chain}"));
+            }
+            Some(BelRole::Icap) => icaps.push((id, loc(cell))),
+            _ => {}
+        }
+    }
+    let mut taken = [false; 2];
+    for (id, asked) in &icaps {
+        let Some(asked) = asked else { continue };
+        let Some(y) = asked
+            .strip_prefix("ICAP_X0Y")
+            .and_then(|y| y.parse::<usize>().ok())
+            .filter(|y| *y < 2)
+        else {
+            return Err(PlaceError::Site {
+                cell: m.cells[*id].name.as_str().to_owned(),
+                message: format!(
+                    "`{asked}` is not an `ICAPE2` site; they are ICAP_X0Y0 and ICAP_X0Y1"
+                ),
+            });
+        };
+        if taken[y] {
+            return Err(PlaceError::Site {
+                cell: m.cells[*id].name.as_str().to_owned(),
+                message: format!("another `ICAPE2` asks for `{asked}` too"),
+            });
+        }
+        taken[y] = true;
+        out.insert(*id, format!("icap{y}"));
+    }
+    for (id, asked) in &icaps {
+        if asked.is_some() {
+            continue;
+        }
+        // The top one first, as Vivado's placer chooses.
+        let y = usize::from(!taken[1]);
+        taken[y] = true;
+        out.insert(*id, format!("icap{y}"));
+    }
+    Ok(out)
 }
 
 /// Every `(site kind, pin role)` the architecture offers a wire for.

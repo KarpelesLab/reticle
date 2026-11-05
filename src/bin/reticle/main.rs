@@ -2267,7 +2267,9 @@ fn xc7_bitstream_options(
         };
         options.set(name, value).map_err(|e| e.to_string())?;
     }
-    options.check().map_err(|e| e.to_string())?;
+    // What the design's configuration primitives allow is checked once they
+    // are placed: see `BitstreamOptions::check`.
+    options.check_options().map_err(|e| e.to_string())?;
     let (year, month, day, time) = utc_now();
     options.resolve_timestamp(year, month, day, time);
     Ok(options)
@@ -2440,9 +2442,17 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         .bels
         .iter()
         .filter(|b| {
-            use reticle::fpga::BelRole::{LutRam, Mux7, Mux8};
+            use reticle::fpga::BelRole::{
+                Bscan, Capture, Dna, Efuse, FrameEcc, Icap, LutRam, Mux7, Mux8, Startup, UsrAccess,
+            };
             (wide_muxes && matches!(b.role, Mux7 | Mux8))
                 || (vivado_memories && device.family == "xc7" && b.role == LutRam)
+                // A configuration primitive the cell library models for a
+                // simulator is the configuration tile's site to a build.
+                || matches!(
+                    b.role,
+                    Bscan | Capture | Dna | Efuse | FrameEcc | Icap | Startup | UsrAccess
+                )
         })
         .map(|b| b.name.clone())
         .collect();
@@ -3660,6 +3670,21 @@ fn needs_role(
     })
 }
 
+/// Whether the design has a configuration primitive (`BSCANE2`, `ICAPE2`,
+/// `STARTUPE2` and the rest), which are all in one tile of the die.
+fn needs_config_site(
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+) -> bool {
+    use reticle::fpga::BelRole::{Bscan, Capture, Dna, Efuse, FrameEcc, Icap, Startup, UsrAccess};
+    [
+        Bscan, Capture, Dna, Efuse, FrameEcc, Icap, Startup, UsrAccess,
+    ]
+    .into_iter()
+    .any(|role| needs_role(design, top, device, role))
+}
+
 /// Writes a Xilinx 7-series `.bit` from a real chip database.
 ///
 /// # Two designs written here have been loaded into a part
@@ -3809,7 +3834,7 @@ fn write_xc7_bitstream(
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
     use reticle::fpga::{Netlist, bitstream};
 
-    let bit_options = xc7_bitstream_options(args)?;
+    let mut bit_options = xc7_bitstream_options(args)?;
 
     let root = datadir::PRJXRAY
         .locate(args.option("chipdb"), args.flag("offline"))
@@ -3937,6 +3962,19 @@ fn write_xc7_bitstream(
             options.region = db
                 .region_with_site_type(&files, region, "PLLE2_ADV")
                 .map_err(|e| e.to_string())?
+                .or(Some(region));
+        }
+        // The configuration tile, and the interconnect its pins reach: its
+        // `VFRAME` joins run from nine rows above it to eleven below and one
+        // column right, its upper part, with `DNA_PORT`, is ten rows up, and
+        // its lower, with thirteen of `USR_ACCESSE2`'s outputs, 21 down.
+        if let Some(region) = options.region
+            && needs_config_site(design, top, device)
+        {
+            options.region = db
+                .region_with_site_type(&files, region, "BSCAN")
+                .map_err(|e| e.to_string())?
+                .map(|r| GridRegion::new(r.x0, r.y0.saturating_sub(21), r.x1 + 4, r.y1 + 34))
                 .or(Some(region));
         }
         // And an MMCM, in the same tiles' lower quarter, and a regional clock
@@ -4896,6 +4934,13 @@ fn write_xc7_bitstream(
     fabric
         .configure_io_logic(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // A configuration primitive's parameters, and what it asks of the stream,
+    // which is then held to what the options ask. See `xray::config`.
+    let config_use = fabric
+        .configure_config(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
+    bit_options.set_design(config_use);
+    bit_options.check().map_err(|e| e.to_string())?;
     // A block RAM's modes, and a value on every input the design leaves
     // alone: an undriven interconnect input reads one on this family. See
     // `xray::bram`.

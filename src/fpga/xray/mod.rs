@@ -167,6 +167,7 @@ mod bram;
 mod bufg;
 mod carry;
 mod cmt;
+mod config;
 mod dsp;
 mod finish;
 mod io;
@@ -211,6 +212,7 @@ pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
     parse::segbits(text, path)
 }
+pub use config::sweep_unread_config;
 pub use io::{IoBankUse, IoError, IoTables, PadFeatures, PadRequest, io_standards, pad_features};
 pub use iologic::{IoLogicError, check_serdes_wiring};
 pub use regional::{
@@ -388,6 +390,30 @@ pub struct XrayOptions {
     /// default, or the one `RAM64X1D` on `WE` this flow had before, which a
     /// build measured on a board keeps. See `lutram`.
     pub lutram: LutRamModel,
+    /// Declare the configuration primitives' sites, their pins' wires and the
+    /// bits only they use (`config`). Off unless the design has one, for the
+    /// same reason: a design with none is the fabric it was before them.
+    pub config_sites: bool,
+}
+
+/// What a tile type's features are read with beyond the database's: the
+/// regional clock buffers' and the configuration primitives', which a design
+/// with none of either does not have declared ([`XrayOptions::regional_clocks`],
+/// [`XrayOptions::config_sites`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Extras {
+    /// `regional::derived_features`.
+    regional_clocks: bool,
+    /// `config::derived_features`.
+    config_sites: bool,
+}
+
+impl Extras {
+    /// Everything, as a decoding wants: a bit is named whatever made it.
+    const ALL: Extras = Extras {
+        regional_clocks: true,
+        config_sites: true,
+    };
 }
 
 impl Default for XrayOptions {
@@ -407,6 +433,7 @@ impl Default for XrayOptions {
             shift_registers: false,
             regional_clocks: false,
             lutram: LutRamModel::default(),
+            config_sites: false,
         }
     }
 }
@@ -442,6 +469,20 @@ impl XrayOptions {
                                 | crate::fpga::BelRole::RegionalBuffer
                                 | crate::fpga::BelRole::IoClockBuffer
                                 | crate::fpga::BelRole::MultiRegionBuffer
+                        )
+                }))
+            })
+        });
+        self.config_sites = design.modules.get(module).is_some_and(|m| {
+            m.cells.iter().any(|(_, cell)| {
+                matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if device.bels.iter().any(|b| {
+                    use crate::fpga::BelRole::{
+                        Bscan, Capture, Dna, Efuse, FrameEcc, Icap, Startup, UsrAccess,
+                    };
+                    b.name == name.as_str()
+                        && matches!(
+                            b.role,
+                            Bscan | Capture | Dna | Efuse | FrameEcc | Icap | Startup | UsrAccess
                         )
                 }))
             })
@@ -1048,7 +1089,11 @@ impl XrayDatabase {
             // one: see `XrayOptions::regional_clocks`. Not read at all
             // otherwise, rather than taken out after: a set made again is not
             // in the order the file has, and the order is the graph's.
-            if let Some(set) = self.features_with(files, tile, row, options.regional_clocks)? {
+            let extras = Extras {
+                regional_clocks: options.regional_clocks,
+                config_sites: options.config_sites,
+            };
+            if let Some(set) = self.features_with(files, tile, row, extras)? {
                 features.insert(key.clone(), set);
             }
         }
@@ -1141,6 +1186,7 @@ impl XrayDatabase {
             options.shift_registers,
             options.regional_clocks,
             options.lutram,
+            options.config_sites,
             &mut stats,
         );
         let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
@@ -1526,7 +1572,7 @@ impl XrayDatabase {
         files: &dyn FileProvider,
         tile_type: &str,
         block_ram_row: Option<u32>,
-        regional_clocks: bool,
+        extras: Extras,
     ) -> Result<Option<FeatureSet>, XrayError> {
         let base = format!(
             "{}/{}/segbits_{}",
@@ -1552,11 +1598,15 @@ impl XrayDatabase {
         // And a serialiser's: see `iologic::measured_features`.
         measured.extend(iologic::measured_features(tile_type));
         // And those of the regional buffers: see `regional::derived_features`.
-        if regional_clocks {
+        if extras.regional_clocks {
             measured.extend(regional::derived_features(tile_type));
         }
         // And a `ZHOLD` feedback's code: see `cmt::zhold_features`.
         measured.extend(cmt::zhold_features(tile_type));
+        // And the configuration primitives': see `config::derived_features`.
+        if extras.config_sites {
+            measured.extend(config::derived_features(tile_type));
+        }
         if !measured.is_empty() {
             let mut all = set.into_features();
             all.extend(measured);
@@ -1603,29 +1653,26 @@ impl XrayDatabase {
         tile: &XrayTile,
         block_ram_row: Option<u32>,
     ) -> Result<Option<FeatureSet>, XrayError> {
-        self.features_with(files, tile, block_ram_row, true)
+        self.features_with(files, tile, block_ram_row, Extras::ALL)
     }
 
     /// [`XrayDatabase::features_for`], with the regional clock buffers' features
-    /// or without them (`XrayOptions::regional_clocks`).
+    /// or without them (`XrayOptions::regional_clocks`), and the configuration
+    /// primitives' (`XrayOptions::config_sites`).
     fn features_with(
         &self,
         files: &dyn FileProvider,
         tile: &XrayTile,
         block_ram_row: Option<u32>,
-        regional_clocks: bool,
+        extras: Extras,
     ) -> Result<Option<FeatureSet>, XrayError> {
-        if let Some(set) =
-            self.features_of(files, &tile.tile_type, block_ram_row, regional_clocks)?
-        {
+        if let Some(set) = self.features_of(files, &tile.tile_type, block_ram_row, extras)? {
             return Ok(Some(set));
         }
         let Some(alias) = &tile.bits_alias else {
             return Ok(None);
         };
-        let Some(set) =
-            self.features_of(files, &alias.tile_type, block_ram_row, regional_clocks)?
-        else {
+        let Some(set) = self.features_of(files, &alias.tile_type, block_ram_row, extras)? else {
             return Ok(None);
         };
         let shift = alias.start_offset * 32;
@@ -2038,6 +2085,7 @@ impl XrayDatabase {
         shift_registers: bool,
         regional_clocks: bool,
         lutram: LutRamModel,
+        config_sites: bool,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -2119,6 +2167,9 @@ impl XrayDatabase {
             // pair, this one wins, or the router would find a copy of
             // the hop with no bits on it and turn nothing on.
             let mut passes = sites::pass_throughs_in(name, lutram);
+            if !config_sites && config::is_config_tile(name) {
+                passes.clear();
+            }
             if shift_registers {
                 passes.extend(srl::tile_pass_throughs(name));
             }
@@ -2352,7 +2403,14 @@ impl XrayDatabase {
                 .iter()
                 .map(|w| w.name.as_str())
                 .collect();
-            let mut bels = parse::bels_of(tile, set, &declared, lutram, &mut stats.coverage);
+            let mut bels = parse::bels_of(
+                tile,
+                set,
+                &declared,
+                lutram,
+                config_sites,
+                &mut stats.coverage,
+            );
             if shift_registers {
                 bels.extend(srl::bels(&tile.tile_type, "SLICEM_X0", set, &declared));
             }
@@ -3241,12 +3299,20 @@ pub struct XrayClockUse {
 /// - `RAMB36`: a block RAM tile's seven features of the 36 kbit block as
 ///   one (`RAMB36.BRAM36_READ_WIDTH_A_1`), which `bram::ramb36_features`
 ///   sets for a `RAMB36E1`.
-const NOT_ARCS: [&str; 5] = [
+const NOT_ARCS: [&str; 11] = [
     "DIFF",
     "ENABLE_BUFFER",
     "VREF",
     regional::LEAF_ENABLE,
     "RAMB36",
+    // A configuration site's feature of two components, which the pip rule
+    // takes for a pip: see `config`.
+    "BSCAN",
+    "ICAP",
+    "ICAP_X0Y0",
+    "ICAP_X0Y1",
+    "STARTUP",
+    "DNA_PORT",
 ];
 
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
@@ -3454,6 +3520,10 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         "bram" | "bram36" => &["p0_clk", "p1_clk", "p0_regclk", "p1_regclk"],
         "mmcm" => &["dclk", "psclk"],
         "pll" | "sysmon" => &["dclk"],
+        // A configuration primitive's clock is on a `CLK_L` wire of the
+        // interconnect, which Vivado reaches from the global network
+        // (`testdata/fpga/vivado/config/`, `startup_clk`).
+        "icap0" | "icap1" | "capture" | "dna" | "startup" => &["clk"],
         // A DDR register in an IO tile's logic: the Husky Plus's ADC comes
         // in through six `IDDR`s, which the router clocked over general
         // interconnect (`IOI_ILOGIC0_CLK.IOI_IMUX20_1`, where NewAE's

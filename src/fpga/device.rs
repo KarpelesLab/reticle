@@ -515,6 +515,26 @@ pub enum BelRole {
     /// A system monitor: the 7 series' `XADC`, one hard block on the die,
     /// instantiated by name.
     Sysmon,
+    /// A user chain of the JTAG port: the 7 series' `BSCANE2`, one of four
+    /// sites in the configuration tile. Which one is its `JTAG_CHAIN`, so the
+    /// placer is given the chain as the site kind (`bscan1` to `bscan4`); see
+    /// `place::Netlist::build`.
+    Bscan,
+    /// What triggers a readback capture of the registers: `CAPTUREE2`.
+    Capture,
+    /// The die's serial number: `DNA_PORT`.
+    Dna,
+    /// The user's 32 bits of eFUSE: `EFUSE_USR`.
+    Efuse,
+    /// The readback CRC and frame ECC checker: `FRAME_ECCE2`.
+    FrameEcc,
+    /// The configuration port from the fabric: `ICAPE2`, on one of two sites
+    /// (`icap0`, `icap1`); see `place::Netlist::build`.
+    Icap,
+    /// The start-up sequence's interface to the fabric: `STARTUPE2`.
+    Startup,
+    /// The `AXSS` register's 32 bits: `USR_ACCESSE2`.
+    UsrAccess,
     /// A double-data-rate input register beside the IO buffer: `d` from
     /// the pad side, `clk`, and `q0` / `q1` for the bits captured on the
     /// rising and the falling edge (ECP5 `IDDRX1F`). A family whose IO
@@ -543,7 +563,7 @@ pub enum BelRole {
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 24] = [
+    pub const ALL: [BelRole; 32] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
@@ -562,6 +582,14 @@ impl BelRole {
         BelRole::Pll,
         BelRole::Mmcm,
         BelRole::Sysmon,
+        BelRole::Bscan,
+        BelRole::Capture,
+        BelRole::Dna,
+        BelRole::Efuse,
+        BelRole::FrameEcc,
+        BelRole::Icap,
+        BelRole::Startup,
+        BelRole::UsrAccess,
         BelRole::DdrIn,
         BelRole::DdrOut,
         BelRole::IoDelay,
@@ -591,6 +619,14 @@ impl BelRole {
             BelRole::Pll => "pll",
             BelRole::Mmcm => "mmcm",
             BelRole::Sysmon => "sysmon",
+            BelRole::Bscan => "bscan",
+            BelRole::Capture => "capture",
+            BelRole::Dna => "dna",
+            BelRole::Efuse => "efuse",
+            BelRole::FrameEcc => "frame_ecc",
+            BelRole::Icap => "icap",
+            BelRole::Startup => "startup",
+            BelRole::UsrAccess => "usr_access",
             BelRole::DdrIn => "ddr_in",
             BelRole::DdrOut => "ddr_out",
             BelRole::IoDelay => "iodelay",
@@ -4333,6 +4369,27 @@ end
                     ),
                     ("PLLE2_ADV", vec!["rst", "pwrdwn", "clkinsel", "clkin2"]),
                     ("XADC", vec!["vp", "vn", "vauxp", "vauxn"]),
+                    // The configuration primitives' inputs, which
+                    // `xray::config` ties as Vivado ties them, over a ground
+                    // fan or the interconnect's default, never by a table.
+                    ("BSCANE2", vec!["tdo"]),
+                    ("CAPTUREE2", vec!["cap", "clk"]),
+                    ("DNA_PORT", vec!["clk", "din", "read", "shift"]),
+                    ("ICAPE2", vec!["clk", "csib", "rdwrb", "i"]),
+                    (
+                        "STARTUPE2",
+                        vec![
+                            "clk",
+                            "gsr",
+                            "gts",
+                            "keyclearb",
+                            "pack",
+                            "usrcclko",
+                            "usrcclkts",
+                            "usrdoneo",
+                            "usrdonets"
+                        ]
+                    ),
                     (
                         "MMCME2_ADV",
                         vec!["rst", "pwrdwn", "psen", "psincdec", "clkinsel", "clkin2"]
