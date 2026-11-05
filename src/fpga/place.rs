@@ -2526,17 +2526,6 @@ impl SiteRules {
         if self.trivial() {
             return true;
         }
-        count(|work| &mut work.legality_tests, 1);
-        count(
-            |work| &mut work.legality_steps,
-            moving
-                .iter()
-                .map(|(_, site)| {
-                    u64::try_from(self.excludes[*site].len() + self.per_site[*site].len())
-                        .unwrap_or(0)
-                })
-                .sum(),
-        );
         // A carry chain's whole macro moves at once, and every rule below
         // asks this of many sites for every member: scanning the move each
         // time made a 64-bit counter's placement cost ten times another
@@ -2550,11 +2539,84 @@ impl SiteRules {
             by_instance.sort_unstable();
         }
         let after = |site: usize| occupant_after(placement, moving, &by_site, &by_instance, site);
+        let left = moving.iter().filter_map(|(i, _)| placement.site_of(*i));
+        self.judge(moving, &after, left)
+    }
+
+    /// [`SiteRules::allows`] for a move `placement` already holds, with
+    /// `left` the sites its cells were on before it, in any order.
+    ///
+    /// The answer is the one `allows` gives on the placement before the
+    /// move, since who holds a site once the move has happened is then the
+    /// placement's own answer. It is the cheaper question to ask: the
+    /// annealer prices a move by making it, and asking `allows` meant
+    /// undoing the move to ask and making it again to keep it, and a
+    /// sorted search of the move for every site a long one reads.
+    fn allows_made(
+        &self,
+        placement: &Placement,
+        moving: &[(usize, usize)],
+        left: impl Iterator<Item = usize>,
+    ) -> bool {
+        if self.trivial() {
+            return true;
+        }
+        self.judge(moving, &|site: usize| placement.instance_at(site), left)
+    }
+
+    /// [`SiteRules::allows`] for a group none of whose cells is placed,
+    /// such as a macro's members while their new sites are looked for:
+    /// the group is put on `placement`, judged by
+    /// [`SiteRules::allows_made`], and taken off again, which leaves
+    /// `placement` as it was.
+    ///
+    /// When a cell of the group is placed already, or a site is taken or
+    /// named twice, it asks `allows` instead, so the answer is `allows`'s
+    /// in every case.
+    fn allows_lifted(&self, placement: &mut Placement, group: &[(usize, usize)]) -> bool {
+        if self.trivial() {
+            return true;
+        }
+        let mut put = 0;
+        for (instance, site) in group {
+            if placement.site_of(*instance).is_some() || placement.instance_at(*site).is_some() {
+                break;
+            }
+            placement.place(*instance, *site);
+            put += 1;
+        }
+        let made =
+            (put == group.len()).then(|| self.allows_made(placement, group, std::iter::empty()));
+        for (instance, _) in &group[..put] {
+            placement.unplace(*instance);
+        }
+        made.unwrap_or_else(|| self.allows(placement, group))
+    }
+
+    /// [`SiteRules::allows`]'s rules, with `after` saying who holds a site
+    /// once `moving` has happened and `left` the sites its cells leave.
+    fn judge(
+        &self,
+        moving: &[(usize, usize)],
+        after: &impl Fn(usize) -> Option<usize>,
+        left: impl Iterator<Item = usize>,
+    ) -> bool {
+        count(|work| &mut work.legality_tests, 1);
+        count(
+            |work| &mut work.legality_steps,
+            moving
+                .iter()
+                .map(|(_, site)| {
+                    u64::try_from(self.excludes[*site].len() + self.per_site[*site].len())
+                        .unwrap_or(0)
+                })
+                .sum(),
+        );
         let pinned = moving.iter().all(|(instance, site)| {
             self.excludes[*site]
                 .iter()
                 .all(|other| after(*other).is_none())
-                && self.sterile(*instance, *site, &after)
+                && self.sterile(*instance, *site, after)
                 && self.per_site[*site].iter().all(|(other, start, len)| {
                     after(*other).is_none_or(|neighbour| {
                         let run = *start as usize..(*start + *len) as usize;
@@ -2583,15 +2645,14 @@ impl SiteRules {
         let mut touched: [(u32, u32); 16] = [(0, 0); 16];
         let mut many: Vec<(u32, u32)> = Vec::new();
         let mut count_touched = 0usize;
-        let origins = moving.iter().filter_map(|(i, _)| placement.site_of(*i));
-        for site in moving.iter().map(|(_, s)| *s).chain(origins) {
+        for site in moving.iter().map(|(_, s)| *s).chain(left) {
             let group = self.site_group[site];
             if group == u32::MAX {
                 continue;
             }
             for (_, pool, _) in &self.captive[site] {
                 let key = (group, *pool);
-                if touched[..count_touched].contains(&key) || many.contains(&key) {
+                if touched[..count_touched].contains(&key) {
                     continue;
                 }
                 if count_touched < touched.len() {
@@ -2602,10 +2663,17 @@ impl SiteRules {
                 }
             }
         }
+        // Past the first sixteen the pools are deduplicated by sorting, not
+        // by scanning: a macro of a hundred and fifty cells touches hundreds
+        // of pools, and a scan of the list for each was most of what judging
+        // it cost. Which order the pools are asked in changes nothing but
+        // which refusal is found first.
+        many.sort_unstable();
+        many.dedup();
         touched[..count_touched]
             .iter()
             .chain(&many)
-            .all(|(group, pool)| self.pool_fits(&self.groups[*group as usize], *pool, &after))
+            .all(|(group, pool)| self.pool_fits(&self.groups[*group as usize], *pool, after))
     }
 
     /// Whether `instance` on `site` would put a signal on a pin shared
@@ -4657,7 +4725,7 @@ fn exact_sites(
     m: &Macro,
     exact: &Exact,
     shared: &SiteRules,
-    placement: &Placement,
+    placement: &mut Placement,
     ax: u32,
     ay: u32,
 ) -> Option<Vec<(usize, usize)>> {
@@ -4689,7 +4757,6 @@ fn exact_sites(
         for (member, site) in &at {
             let (x, y) = graph.sites[*site].tile;
             if placement.instance_at(*site).is_some()
-                || taken.contains(site)
                 || !info[*member].may_take(*site)
                 || info[*member]
                     .region
@@ -4701,7 +4768,13 @@ fn exact_sites(
             taken.push(*site);
             out.push((*member, *site));
         }
-        if shared.allows(placement, &out) {
+        // No two members on one site: sorted rather than scanned for each,
+        // since a carry chain's macro is a hundred and fifty members.
+        taken.sort_unstable();
+        if taken.windows(2).any(|pair| pair[0] == pair[1]) {
+            continue 'anchor;
+        }
+        if shared.allows_lifted(placement, &out) {
             return Some(out);
         }
     }
@@ -6646,7 +6719,7 @@ fn macro_sites(
     m: &Macro,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     shared: &SiteRules,
-    placement: &Placement,
+    placement: &mut Placement,
     ax: u32,
     ay: u32,
 ) -> Option<Vec<(usize, usize)>> {
@@ -6681,7 +6754,7 @@ fn macro_sites(
     // A macro's members can share a pin with each other as well as with
     // whatever is placed already, and `placement` does not hold them yet,
     // so the group is judged once more as a whole.
-    if !shared.allows(placement, &out) {
+    if !shared.allows_lifted(placement, &out) {
         return None;
     }
     Some(out)
@@ -6872,6 +6945,8 @@ struct Churn {
     carried: Vec<Vec<(usize, usize)>>,
     /// The signals the move in hand touches, without repeats.
     touched: Vec<usize>,
+    /// Which signals are in `touched` already.
+    seen: Marks,
     /// Where each instance of the move in hand came from, for [`undo`].
     previous: Vec<(usize, Option<usize>)>,
     /// The critical connections' pull, for a timing-driven placement:
@@ -7061,6 +7136,45 @@ struct Pull {
     touches: Vec<Vec<usize>>,
     /// The connections the move in hand touches, without repeats.
     touched: Vec<usize>,
+    /// Which connections are in `touched` already.
+    seen: Marks,
+}
+
+/// A set of small integers that empties in constant time: each member is
+/// stamped with the generation it was added in, and [`Marks::start`]
+/// begins a new one.
+///
+/// What a move's signals and connections are deduplicated with. They were
+/// kept unique by scanning the list for each new one, which is nothing for
+/// a move of two cells and quadratic for a carry chain's macro of a
+/// hundred and fifty, which touches hundreds of signals on every draw.
+#[derive(Default)]
+struct Marks {
+    /// Per member, the generation it was last added in.
+    stamp: Vec<u32>,
+    /// The current generation; zero is never one, so a fresh stamp is out.
+    now: u32,
+}
+
+impl Marks {
+    /// Empties the set.
+    fn start(&mut self) {
+        self.now = self.now.wrapping_add(1);
+        if self.now == 0 {
+            self.stamp.fill(0);
+            self.now = 1;
+        }
+    }
+
+    /// Adds `member`, returning whether it was not in the set already.
+    fn first(&mut self, member: usize) -> bool {
+        if member >= self.stamp.len() {
+            self.stamp.resize(member + 1, 0);
+        }
+        let fresh = self.stamp[member] != self.now;
+        self.stamp[member] = self.now;
+        fresh
+    }
 }
 
 /// The weights an anneal runs with: per signal for its box (empty for one
@@ -7093,6 +7207,7 @@ impl Pull {
             weight: weight.to_vec(),
             touches,
             touched: Vec::new(),
+            seen: Marks::default(),
         }
     }
 
@@ -7149,6 +7264,7 @@ impl Churn {
                 })
                 .collect(),
             touched: Vec::new(),
+            seen: Marks::default(),
             previous: Vec::new(),
             pull: Pull::default(),
             clocks: ClockLoad::default(),
@@ -7552,14 +7668,15 @@ fn anneal(
             step.passed += 1;
             // Legality is asked only now, because `SiteRules::allows` was
             // the largest single cost of the Husky Plus's anneal and most
-            // moves never get this far. It reads the placement the move
-            // starts from, hence the undo. `draw_move` already found a
-            // macro's sites legal.
+            // moves never get this far. It is asked of the placement the
+            // move has made, which answers as `allows` does of the one it
+            // starts from: undoing the move to ask and making it again to
+            // keep it was a fifth of a 64-bit counter's placement.
+            // `draw_move` already found a macro's sites legal.
             if info[candidate[0].0].macro_index.is_none() {
-                undo(netlist, graph, &mut churn, placement);
-                if shared.allows(placement, &candidate) {
-                    apply(netlist, graph, &mut churn, placement, &candidate);
-                } else {
+                let left = churn.previous.iter().filter_map(|(_, was)| *was);
+                if !shared.allows_made(placement, &candidate, left) {
+                    undo(netlist, graph, &mut churn, placement);
                     let Some(evicted) = evict_blockers(graph, info, shared, placement, candidate)
                     else {
                         continue;
@@ -7999,10 +8116,11 @@ fn retile(
     // The critical connections the move changes, priced before it.
     churn.pull.touched.clear();
     if !churn.pull.weight.is_empty() {
+        churn.pull.seen.start();
         for (instance, _) in plan.clone() {
             for index in 0..churn.pull.touches[instance].len() {
                 let pin = churn.pull.touches[instance][index];
-                if !churn.pull.touched.contains(&pin) {
+                if churn.pull.seen.first(pin) {
                     churn.pull.touched.push(pin);
                 }
             }
@@ -8015,9 +8133,10 @@ fn retile(
         .map(|pin| churn.pull.cost_of(netlist, graph, placement, *pin))
         .sum();
     churn.touched.clear();
+    churn.seen.start();
     for (instance, _) in plan.clone() {
         for (signal, _) in &churn.carried[instance] {
-            if !churn.touched.contains(signal) {
+            if churn.seen.first(*signal) {
                 churn.touched.push(*signal);
             }
         }
@@ -12529,6 +12648,138 @@ mod tests {
             SiteRules::find(&chain(2), &plain).groups.is_empty(),
             "a one-bel tile shares nothing, so there is no budget to keep"
         );
+    }
+
+    /// Random moves on `graph` of `netlist`'s cells, each judged three
+    /// ways: by `allows` on the placement it starts from, by `allows_made`
+    /// on the placement it makes, and — with its cells lifted off — by
+    /// `allows_lifted` against `allows`. Returns how many were legal and
+    /// how many were not, so a caller can see both answers were asked.
+    fn judge_three_ways(netlist: &Netlist, graph: &RoutingGraph, seed: u64) -> (usize, usize) {
+        let rules = SiteRules::find(netlist, graph);
+        assert!(!rules.trivial());
+        let mut rng = Rng::new(seed);
+        let n = netlist.instances.len();
+        let of_kind = |kind: &str| -> Vec<usize> {
+            (0..graph.sites.len())
+                .filter(|s| graph.sites[*s].kind == kind)
+                .collect()
+        };
+        let (mut legal, mut illegal) = (0, 0);
+        for _ in 0..400 {
+            // A placement of a random subset of the cells.
+            let mut pre = Placement::new(n, graph.sites.len());
+            for instance in 0..n {
+                let sites = of_kind(&netlist.instances[instance].kind);
+                let site = sites[rng.below(sites.len())];
+                if rng.below(4) != 0 && pre.instance_at(site).is_none() {
+                    pre.place(instance, site);
+                }
+            }
+            // A move of up to twelve cells, so that both the scan and the
+            // sorted search of `occupant_after` are compared: each to a
+            // distinct site of its kind that is free or that a cell of the
+            // move leaves.
+            let size = 1 + rng.below(12.min(n));
+            let mut cells: Vec<usize> = (0..n).collect();
+            for i in 0..size {
+                let j = i + rng.below(n - i);
+                cells.swap(i, j);
+            }
+            cells.truncate(size);
+            let mut moving: Vec<(usize, usize)> = Vec::new();
+            for instance in &cells {
+                let sites: Vec<usize> = of_kind(&netlist.instances[*instance].kind)
+                    .into_iter()
+                    .filter(|s| {
+                        pre.instance_at(*s)
+                            .is_none_or(|holder| cells.contains(&holder))
+                            && !moving.iter().any(|(_, t)| t == s)
+                    })
+                    .collect();
+                if !sites.is_empty() {
+                    moving.push((*instance, sites[rng.below(sites.len())]));
+                }
+            }
+            if moving.is_empty() {
+                continue;
+            }
+            let before = rules.allows(&pre, &moving);
+            let mut made = pre.clone();
+            for (instance, _) in &moving {
+                made.unplace(*instance);
+            }
+            let mut lifted = made.clone();
+            for (instance, site) in &moving {
+                made.place(*instance, *site);
+            }
+            let left = moving.iter().filter_map(|(i, _)| pre.site_of(*i));
+            assert_eq!(
+                rules.allows_made(&made, &moving, left),
+                before,
+                "a made move is judged as the move is: {moving:?}"
+            );
+            let unmoved = lifted.clone();
+            assert_eq!(
+                rules.allows_lifted(&mut lifted, &moving),
+                rules.allows(&unmoved, &moving),
+                "a lifted group is judged as `allows` judges it: {moving:?}"
+            );
+            assert_eq!(lifted, unmoved, "and the placement is left as it was");
+            if before {
+                legal += 1;
+            } else {
+                illegal += 1;
+            }
+        }
+        (legal, illegal)
+    }
+
+    /// **Asked of the placement a move has made, legality is what it was
+    /// of the placement the move started from**, and a lifted group is
+    /// judged as `allows` judges it — on a tile with a control budget and
+    /// on a lane whose exits and bypass are shared, over random moves of
+    /// one to twelve cells.
+    ///
+    /// Would catch the annealer's cheaper question giving another answer
+    /// than the one it replaced: an `after` that missed a cell leaving a
+    /// site, or the pools of the sites left not being asked about. That
+    /// would change placements, which the bitstream hashes of the designs
+    /// placed before and after the change would also show, but only for
+    /// the designs that happened to exercise it. Would not catch both
+    /// being wrong in the same way.
+    #[test]
+    fn a_made_move_is_judged_as_the_move_was() {
+        let (_, graph) = budget(3, 2, true);
+        let (legal, illegal) = judge_three_ways(&reset_by(14, 3), &graph, 1);
+        assert!(legal > 20 && illegal > 20, "{legal} legal, {illegal} not");
+        let (_, graph) = lane();
+        let netlist = lane_netlist([&[("o", 0, true)], &[("d", 0, false)], &[("di", 2, false)]]);
+        let (legal, illegal) = judge_three_ways(&netlist, &graph, 2);
+        assert!(legal > 20 && illegal > 20, "{legal} legal, {illegal} not");
+    }
+
+    /// A [`Marks`] set: empty after `start`, a member new once per
+    /// generation, and the stamps cleared when the generation wraps.
+    ///
+    /// Would catch a wrapped generation leaving old stamps that read as
+    /// members — a signal left out of a move's cost — or `first` saying
+    /// new twice. Not caught: nothing here exercises the annealer.
+    #[test]
+    fn a_marked_set_empties_at_each_start() {
+        let mut marks = Marks::default();
+        marks.start();
+        assert!(marks.first(3));
+        assert!(!marks.first(3));
+        assert!(marks.first(10), "a member past the end grows the set");
+        marks.start();
+        assert!(marks.first(3), "a new generation is empty");
+        marks.now = u32::MAX;
+        marks.stamp[5] = 1;
+        marks.start();
+        assert_eq!(marks.now, 1);
+        assert!(marks.first(5), "a wrapped generation clears the old stamps");
+        assert!(!marks.first(5));
     }
 
     /// A row of three tiles, each with a pad and a global buffer, joined
