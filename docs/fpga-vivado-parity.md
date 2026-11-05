@@ -2465,6 +2465,10 @@ route; it does now. And they found that `reticle sim` reads a signed memory's
 element as unsigned (`reg signed [15:0] t [0:1]`, `t[0] * 5` with `t[0] = -3` gives
 327665), so `fir8`'s source simulates to other answers than `xsim` gives. That is
 not fixed here. `fir8` is held to `xsim`'s answer, `answers/fir8.xsim`.
+**Fixed since** (the event simulator kept a stored element's own unsigned flag, not
+the memory's): `fir8`'s source now simulates to `answers/fir8.xsim` line for line,
+and the test holds it to that rather than taking `xsim`'s answer in its place
+(`testdata/sim/signed_memory_tb.v` is the small case, checked against `xsim`).
 
 `xsim_routed.py` runs what `--routed-netlist` wrote under `xsim` with the vendor's
 own models of every cell, against the source. 98 designs and 599 cycles each, all the same: that is

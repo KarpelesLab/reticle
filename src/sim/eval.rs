@@ -174,7 +174,13 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
                 Some(a) => env.read_mem(*mem, a),
                 None => None,
             };
-            Value::Bits(elem.unwrap_or_else(|| Logic::x(width)))
+            // An element is stored as its bits; the signedness is the
+            // memory's, as a net's is its declaration's (IEEE 1364-2005
+            // §4.5.1: `m[i]` of a `reg signed` memory is signed).
+            Value::Bits(
+                elem.unwrap_or_else(|| Logic::x(width))
+                    .with_signed(node.ty.is_signed()),
+            )
         }
         ExprKind::Call { name, args } => {
             let vals: Vec<Value> = args.iter().map(|a| eval(env, *a)).collect();

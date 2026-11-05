@@ -1037,6 +1037,23 @@ fn a_testbench_reaches_into_the_design_by_hierarchical_name() {
     assert!(stderr.contains("S0044"), "{stderr}");
 }
 
+/// **A `reg signed` memory's element is signed.** Read into an `integer`,
+/// compared with zero, shifted by `>>>`, multiplied and printed with `%d`,
+/// `m[0]` of `-5` was 251 to the event simulator, which kept the stored bits'
+/// own unsigned flag and not the memory's. The testbench checks each result
+/// itself, and xsim 2026.1 prints the same line and `PASS`. Would catch the
+/// flag lost again, or an unsigned memory read as signed; would not catch it
+/// lost in the compiled engine, which takes the flag from the type already.
+#[cfg(feature = "sim")]
+#[test]
+fn a_signed_memorys_element_is_signed() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/signed_memory_tb.v"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("  -5   -2   -5"), "{stdout}");
+    assert!(stdout.contains("PASS:"), "{stdout}\n{stderr}");
+    assert!(!stdout.contains("FAIL"), "{stdout}");
+}
+
 /// **`force` and `release` follow IEEE 1364-2005 9.3.2.** A forced variable
 /// ignores an assignment and, released, keeps the forced value until it is
 /// next assigned; a released wire returns to its driver; and the same

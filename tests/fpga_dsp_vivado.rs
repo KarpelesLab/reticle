@@ -182,13 +182,26 @@ fn libraries(dir: &Path) -> Vec<PathBuf> {
 fn netlist_computes_the_source(dir: &Path, source: &Path, top: &str, out: &Path, netlist: &Path) {
     let tb = out.join("tb.v");
     std::fs::write(&tb, SHIFT_TB.replace("TOP", top)).unwrap();
-    // `reticle sim` reads a signed memory's element as unsigned (found here, and
-    // not in this file's way to fix), so that a filter's source simulates to
-    // other answers than `xsim` gives. Where that is so, the answer is `xsim`'s.
-    let want = match std::fs::read_to_string(dir.join("answers").join(format!("{top}.xsim"))) {
-        Ok(text) => text.lines().map(str::to_owned).collect(),
-        Err(_) => simulate(&[source.to_owned(), tb.clone()]),
-    };
+    // `reticle sim` read a signed memory's element as unsigned (found here), so
+    // that a filter's source simulated to other answers than `xsim` gives, and
+    // the answer was `xsim`'s. Since that is fixed, the source's simulation is
+    // held to `xsim`'s answer where there is one, and is the answer.
+    let want = simulate(&[source.to_owned(), tb.clone()]);
+    if let Ok(text) = std::fs::read_to_string(dir.join("answers").join(format!("{top}.xsim"))) {
+        let xsim: Vec<String> = text.lines().map(str::to_owned).collect();
+        if let Some(at) = xsim.iter().zip(&want).position(|(a, b)| a != b) {
+            panic!(
+                "{top}: the source simulates to other answers than xsim's, at line {at}: \
+                 xsim {} here {}",
+                xsim[at], want[at]
+            );
+        }
+        assert_eq!(
+            xsim.len(),
+            want.len(),
+            "{top}: xsim's answer is another length"
+        );
+    }
     let mut files = libraries(dir);
     files.push(netlist.to_owned());
     files.push(tb);
