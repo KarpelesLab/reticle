@@ -886,6 +886,27 @@ the byte count looks small (`STARTUPCLK`, 5; `USERID`, 12; `READBACK.SECURITY`,
 12; `USR_ACCESS`, 414; `UNUSEDPIN`, 324 or 620): a design reads some of those, and a
 board depends on others. Refused, too, is a `BITSTREAM.*` Vivado does not have.
 
+**Since 2026-11-06 those options are the bitstream's.** The two paragraphs above were
+written before `xc7::options` did each option as Vivado does ("The container around the
+frames" below), and were left so after: an XDC's `CONFIGRATE` was warned of as not
+followed, its `UNUSEDPIN` refused, while `--bitstream-option` wrote both exactly. Now an
+option the table knows is checked as `--bitstream-option` checks it, refused only when the
+table refuses it (`ENCRYPT`, `PERSIST`) or the value is not one, and goes into
+`Constraints::bitstream_options`; the 7-series bitstream sets them before the command
+line's, which override one of the same name, and an export's `.xdc` carries them for
+Vivado. **Checked:** two designs of `testdata/fpga/vivado/config/` set eighteen options in
+their `.xdc` alone (`xdc_spi`: `CONFIG_MODE`, `SPI_BUSWIDTH`, `CONFIGRATE`, `USR_ACCESS`,
+`UNUSEDPIN`, `CFGBVS`, `CONFIG_VOLTAGE`; `xdc_startup`: `USERID`, `DONE_CYCLE`,
+`GTS_CYCLE`, `SPI_FALL_EDGE`, `SPI_BUSWIDTH`, `SPI_32BIT_ADDR`, `CONFIGFALLBACK`,
+`NEXT_CONFIG_ADDR`, `TIMER_CFG`, `JTAG_XADC`, `M0PIN`), Vivado read the same file, and the
+stream's packets are its word for word, the configuration tiles feature for feature.
+**That found one thing wrong in the stream, not in the reading:** with `SPI_32BIT_ADDR`,
+Vivado writes `WBSTAR` eight bits down, the revision bits with it (`0x00004000` for
+`0x00400000`), and refuses an address with any of the low eight bits set
+(`Designutils 12-2356`). The options' sweep had set each of the two alone. Both are
+Reticle's now (`BitstreamOptions::wbstar`). `COMPRESS` and `PERFRAMECRC` were left out of
+the two designs: their packets follow the frames, which differ by placement.
+
 **Checked on real files.** Every design under `testdata/fpga/vivado/` with both
 binds the same pins from its `.xdc` as from its `.rcf`, 161 designs, with no
 warning. (This had one refusal until the section on pads: the two probes that set a
@@ -2840,8 +2861,9 @@ for word, every set bit named and every route the router's; the 109th is refused
 (below). The 11 Vivado refuses, Reticle refuses, with the rule:
 `tests/fpga_xray_config.rs`, 28 in the gate and every one in the ignored
 `every_design_here`. The eight probes of `primitives/` build, and `index.txt` says so.
-**128 since 2026-11-06**, the eight below on frame ECC among them: Reticle builds all
-117 Vivado builds, the frame ECC compared too, and refuses the same 11.
+**130 since 2026-11-06**, the ten below on frame ECC and options read from an XDC among
+them: Reticle builds all 119 Vivado builds, the frame ECC compared too, and refuses the
+same 11.
 
 | refused | rule |
 |---|---|
@@ -2862,7 +2884,7 @@ For a lookup table used as memory it was not asked.
 asked it: a `SRLC32E`, an `SRL16E` and a `RAM64X1S` with contents, and a `RAM64X1S` of
 zeros, each with three lookup tables of logic placed in its frames (on another table of
 its slice, ten rows up its column, in the other slice of its tile), with a `FRAME_ECCE2`
-and without (`ecc_*_logic`, `noecc_*_logic`). **Every frame of all eight, and of the 109
+and without (`ecc_*_logic`, `noecc_*_logic`). **Every frame of all eight, and of the 111
 other bitstreams of this fixture, has the ECC `xc7::wanted_ecc_without` gives it: the code
 of the frame with a distributed RAM's or a shift register's contents left out, and
 nothing else** (`ecc 0 wrong` in `vivado.txt`, `--decode`'s count). So a `FRAME_ECCE2`

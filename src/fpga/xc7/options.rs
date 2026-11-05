@@ -966,6 +966,16 @@ impl BitstreamOptions {
                  BITSTREAM.CONFIG.SPI_32BIT_ADDR YES",
             );
         }
+        if self.spi_32bit == Some(true)
+            && let Some(address) = self.next_config_addr
+            && address & 0xff != 0
+        {
+            return conflict(&format!(
+                "the lower 8 bits of BITSTREAM.CONFIG.NEXT_CONFIG_ADDR {address:#010x} are not \
+                 zero, and with BITSTREAM.CONFIG.SPI_32BIT_ADDR YES a MultiBoot address must be \
+                 on a 256-byte boundary; Vivado refuses it too (Designutils 12-2356)"
+            ));
+        }
         if let (Some(mode), Some(width)) = (self.config_mode_width(), self.spi_width)
             && mode != width
         {
@@ -1106,10 +1116,24 @@ impl BitstreamOptions {
     }
 
     /// The `WBSTAR` word.
+    ///
+    /// **With `SPI_32BIT_ADDR`, the whole word is shifted down eight bits**:
+    /// Vivado 2026.1 writes `0x00004000` for an address of `0x00400000`,
+    /// `0x001fc000` for `0x1fc00000`, and `0x00a04000` for `0x00400000` with
+    /// `REVISIONSELECT 10` and its tristate, whose bits move with it. Found
+    /// when an XDC set the two together (`xdc_startup` in
+    /// `testdata/fpga/vivado/config/`); every run of the options' sweep had set
+    /// one alone. [`BitstreamOptions::check_options`] refuses an address whose
+    /// low eight bits that would lose, as Vivado does.
     pub fn wbstar(&self) -> u32 {
-        (self.revision_select << 30)
+        let word = (self.revision_select << 30)
             | (u32::from(self.revision_tristate) << 29)
-            | self.next_config_addr.unwrap_or(0)
+            | self.next_config_addr.unwrap_or(0);
+        if self.spi_32bit == Some(true) {
+            word >> 8
+        } else {
+            word
+        }
     }
 
     /// The `TIMER` word. The register holds one count: with both set to
@@ -1700,6 +1724,40 @@ pub fn raw_bitfile(header: &super::BitHeader, architecture: &str, payload: &[u8]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`SPI_32BIT_ADDR` shifts `WBSTAR` down eight bits, revision bits and
+    /// all**, as Vivado 2026.1 wrote it for four streams, and an address it
+    /// would cut is refused as Vivado refuses it (`Designutils 12-2356`). Would
+    /// catch the shift lost, the address alone shifted, or the refusal let
+    /// through; the streams themselves are `tests/fpga_xray_config.rs`'s
+    /// (`xdc_startup`).
+    #[test]
+    fn a_32_bit_spi_address_is_written_a_byte_down() {
+        let with = |pairs: &[(&str, &str)]| {
+            let mut o = BitstreamOptions::default();
+            for (name, value) in pairs {
+                o.set(name, value).unwrap();
+            }
+            o
+        };
+        let next = ("BITSTREAM.CONFIG.NEXT_CONFIG_ADDR", "0x00400000");
+        let wide = ("BITSTREAM.CONFIG.SPI_32BIT_ADDR", "YES");
+        assert_eq!(with(&[next]).wbstar(), 0x0040_0000);
+        assert_eq!(with(&[next, wide]).wbstar(), 0x0000_4000);
+        let top = ("BITSTREAM.CONFIG.NEXT_CONFIG_ADDR", "0x1FC00000");
+        assert_eq!(with(&[top, wide]).wbstar(), 0x001f_c000);
+        let revision = [
+            next,
+            wide,
+            ("BITSTREAM.CONFIG.REVISIONSELECT", "10"),
+            ("BITSTREAM.CONFIG.REVISIONSELECT_TRISTATE", "ENABLE"),
+        ];
+        assert_eq!(with(&revision).wbstar(), 0x00a0_4000);
+        let odd = ("BITSTREAM.CONFIG.NEXT_CONFIG_ADDR", "0x00123456");
+        assert!(with(&[odd]).check_options().is_ok());
+        let refused = with(&[odd, wide]).check_options().unwrap_err().to_string();
+        assert!(refused.contains("Designutils 12-2356"), "{refused}");
+    }
 
     #[test]
     fn the_defaults_are_the_words_every_vivado_stream_carries() {

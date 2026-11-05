@@ -2278,11 +2278,19 @@ fn synth(args: &Args) -> Result<Outcome, ArgError> {
 }
 
 /// `reticle fpga`: the whole target flow, ending in nextpnr's inputs.
-/// The `--bitstream-option`s, understood and checked against each other.
+/// The `write_bitstream` options: an XDC's `set_property ... [current_design]`
+/// first, then the `--bitstream-option`s, which override one of the same name;
+/// understood and checked against each other.
 fn xc7_bitstream_options(
     args: &Args,
+    constraints: &reticle::fpga::Constraints,
 ) -> Result<reticle::fpga::xc7::options::BitstreamOptions, String> {
     let mut options = reticle::fpga::xc7::options::BitstreamOptions::default();
+    for (name, value, _) in &constraints.bitstream_options {
+        options
+            .set(name, value)
+            .map_err(|e| format!("the constraints' `{name} {value}`: {e}"))?;
+    }
     for text in args.repeated("bitstream-option") {
         let Some((name, value)) = text.split_once('=') else {
             return Err(format!("`--bitstream-option {text}` is not `NAME=VALUE`"));
@@ -3764,6 +3772,14 @@ fn write_uray_bitstream(
 ) -> Result<String, String> {
     use reticle::fpga::uray::zcu104::{ImplementOptions, ZcuDatabase, implement};
 
+    // The options are the 7-series stream's; this family's writer has none.
+    if let Some((name, _, _)) = constraints.bitstream_options.first() {
+        return Err(format!(
+            "the constraints set `{name}`, a 7-series `write_bitstream` option this family's \
+             bitstream does not take"
+        ));
+    }
+
     let Some(path) = args.option("bitstream") else {
         return Err(
             "xczu7ev-ffvc1156 has no outside place-and-route flow: pass --bitstream <file>"
@@ -3856,7 +3872,7 @@ fn write_xc7_bitstream(
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
     use reticle::fpga::{Netlist, bitstream};
 
-    let mut bit_options = xc7_bitstream_options(args)?;
+    let mut bit_options = xc7_bitstream_options(args, constraints)?;
 
     let root = datadir::PRJXRAY
         .locate(args.option("chipdb"), args.flag("offline"))

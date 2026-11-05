@@ -23,12 +23,14 @@ clock taker on single period 43.000
 == config
 2: note F0114 `CFGBVS` has no effect here: Vivado checks it against the banks' voltage and writes the same bitstream, byte for byte
 3: note F0114 `CONFIG_VOLTAGE` has no effect here: Vivado checks it against the banks' voltage and writes the same bitstream, byte for byte
-4: warning F0113 `CONFIG_MODE` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
-5: warning F0113 `BITSTREAM.GENERAL.COMPRESS` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
-6: warning F0113 `BITSTREAM.CONFIG.CONFIGRATE` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
-7: warning F0113 `BITSTREAM.CONFIG.SPI_BUSWIDTH` is not honoured: Reticle writes its own configuration packets, so the part loads as Reticle loads it, and the same design comes up
-8: error F0112 `BITSTREAM.CONFIG.UNUSEDPIN` is not honoured by Reticle's bitstream, and it changes what the part does, so going on without it could be wrong
-9: error F0112 `BITSTREAM.STARTUP.STARTUPCLK` is not honoured by Reticle's bitstream, and it changes what the part does, so going on without it could be wrong
+bitstream_option BITSTREAM.CONFIG.CONFIGRATE=33
+bitstream_option BITSTREAM.CONFIG.SPI_BUSWIDTH=4
+bitstream_option BITSTREAM.CONFIG.UNUSEDPIN=PULLNONE
+bitstream_option BITSTREAM.GENERAL.COMPRESS=TRUE
+bitstream_option BITSTREAM.STARTUP.STARTUPCLK=JTAGCLK
+bitstream_option CFGBVS=VCCO
+bitstream_option CONFIG_MODE=SPIx4
+bitstream_option CONFIG_VOLTAGE=3.3
 == delays
 3: warning F0212 net `clk2` does not clock anything in `design_top`
 4: warning F0113 clock `virt` is virtual, which Reticle's timing has no way to hold: each delay against it is dropped, with a warning of its own

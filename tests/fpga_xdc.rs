@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use reticle::diag::{Diagnostics, Severity};
-use reticle::fpga::xdc::{XDC_NO_EFFECT, XDC_NOT_HONOURED, XDC_REFUSED, XdcDesign, read_xdc};
+use reticle::fpga::xdc::{XDC_NO_EFFECT, XDC_REFUSED, XdcDesign, read_xdc};
 use reticle::fpga::{Constraints, target};
 use reticle::ir::{Design, ModuleId};
 use reticle::source::{SourceId, SourceMap};
@@ -348,6 +348,9 @@ fn translation(dir: &Path, name: &str) -> String {
     for (pattern, _, _) in &constraints.keep_hierarchy {
         out.push_str(&format!("keep_hierarchy {pattern}\n"));
     }
+    for (name, value, _) in &constraints.bitstream_options {
+        out.push_str(&format!("bitstream_option {name}={value}\n"));
+    }
     out
 }
 
@@ -426,12 +429,18 @@ fn nothing_is_dropped_in_silence() {
     }
 }
 
-/// **The levels are the ones the module documentation promises.** A
-/// configuration option that changes what the part does stops the build, one
-/// measured to change only how it loads is a warning, and one measured to change
-/// no byte is a note. Would catch `UNUSEDPIN` or `STARTUPCLK` passing as a
-/// warning, on a bitstream Vivado would make differently; would not catch the
-/// measurement going stale, which is `docs/fpga-vivado-parity.md`'s to say.
+/// **The levels are the ones the module documentation promises, and a
+/// `write_bitstream` option is the bitstream's.** One `xc7::options` knows is
+/// taken with no word and comes out in `Constraints::bitstream_options`, for
+/// the bitstream to write as `--bitstream-option` would; one it refuses
+/// (`ENCRYPT`) stops the build; one measured to change no byte is a note.
+/// Until 2026-11-06 `CONFIG_MODE`, `COMPRESS`, `CONFIGRATE` and `SPI_BUSWIDTH`
+/// were warnings that the stream did not follow them, and `UNUSEDPIN` and
+/// `STARTUPCLK` errors, though the bitstream had done each since the options
+/// were measured; this pins what replaced that. Would catch an option dropped
+/// on the way to the bitstream, or one taken that the table refuses; whether
+/// the stream is then Vivado's is `tests/fpga_xray_config.rs`'s (`xdc_spi`,
+/// `xdc_startup`).
 #[test]
 fn configuration_goes_by_what_it_changes() {
     let Some(dir) = fixtures() else { return };
@@ -455,10 +464,50 @@ fn configuration_goes_by_what_it_changes() {
     let of = |p: &str| levels.get(p).copied().flatten();
     assert_eq!(of("CFGBVS"), Some(XDC_NO_EFFECT));
     assert_eq!(of("CONFIG_VOLTAGE"), Some(XDC_NO_EFFECT));
-    assert_eq!(of("CONFIG_MODE"), Some(XDC_NOT_HONOURED));
-    assert_eq!(of("BITSTREAM.GENERAL.COMPRESS"), Some(XDC_NOT_HONOURED));
-    assert_eq!(of("BITSTREAM.CONFIG.UNUSEDPIN"), Some(XDC_REFUSED));
-    assert_eq!(of("BITSTREAM.STARTUP.STARTUPCLK"), Some(XDC_REFUSED));
+    for taken in [
+        "CONFIG_MODE",
+        "BITSTREAM.GENERAL.COMPRESS",
+        "BITSTREAM.CONFIG.CONFIGRATE",
+        "BITSTREAM.CONFIG.SPI_BUSWIDTH",
+        "BITSTREAM.CONFIG.UNUSEDPIN",
+        "BITSTREAM.STARTUP.STARTUPCLK",
+    ] {
+        assert_eq!(of(taken), None, "{taken}");
+    }
+    let mut diags = Diagnostics::new();
+    let constraints = Constraints::parse_xdc(&c.text, c.file, &c.design, c.top, &mut diags);
+    let options: Vec<String> = constraints
+        .bitstream_options
+        .iter()
+        .map(|(name, value, _)| format!("{name}={value}"))
+        .collect();
+    assert_eq!(
+        options,
+        [
+            "BITSTREAM.CONFIG.CONFIGRATE=33",
+            "BITSTREAM.CONFIG.SPI_BUSWIDTH=4",
+            "BITSTREAM.CONFIG.UNUSEDPIN=PULLNONE",
+            "BITSTREAM.GENERAL.COMPRESS=TRUE",
+            "BITSTREAM.STARTUP.STARTUPCLK=JTAGCLK",
+            "CFGBVS=VCCO",
+            "CONFIG_MODE=SPIx4",
+            "CONFIG_VOLTAGE=3.3",
+        ]
+    );
+    // And what the table refuses is refused, by its own words.
+    let text = format!(
+        "{}set_property BITSTREAM.ENCRYPTION.ENCRYPT YES [current_design]\n",
+        c.text
+    );
+    let mut diags = Diagnostics::new();
+    let _ = read_xdc(&text, c.file, &view, &mut diags);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == Some(XDC_REFUSED) && d.message.contains("ENCRYPT")),
+        "{:?}",
+        diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>()
+    );
 }
 
 /// **A real file binds what its `.rcf` binds.** Every design under

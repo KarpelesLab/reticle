@@ -435,6 +435,12 @@ pub struct Constraints {
     pub input_delays: Vec<InputDelay>,
     /// Declared clock domains.
     pub clock_domains: Vec<ClockDomain>,
+    /// `write_bitstream` options an XDC sets, `set_property <name> <value>
+    /// [current_design]` with a name `xc7::options::option_table` knows: the
+    /// name and value as written, and where. The 7-series bitstream takes
+    /// them before any `--bitstream-option`, which overrides one of the same
+    /// name.
+    pub bitstream_options: Vec<(String, String, Span)>,
 }
 
 impl Constraints {
@@ -582,6 +588,15 @@ impl Constraints {
                     existing.io.fill_from(&pin.io);
                 }
                 None => self.pins.push(pin),
+            }
+        }
+        for option in other.bitstream_options {
+            if !self
+                .bitstream_options
+                .iter()
+                .any(|(name, _, _)| name.eq_ignore_ascii_case(&option.0))
+            {
+                self.bitstream_options.push(option);
             }
         }
         for region in other.regions {
@@ -1549,6 +1564,11 @@ impl Constraints {
                 out,
                 "set_property KEEP_HIERARCHY TRUE [get_cells {{{pattern}}}]"
             );
+        }
+        // The `write_bitstream` options, so that Vivado's bitstream of the
+        // export is configured as Reticle's is.
+        for (name, value, _) in &self.bitstream_options {
+            let _ = writeln!(out, "set_property {name} {{{value}}} [current_design]");
         }
         out.push_str(&self.timing_sdc());
         out

@@ -347,6 +347,39 @@ for kind, text in MEMORIES.items():
     add(f"noecc_{kind}_logic", f"The same {kind} and logic with no FRAME_ECCE2.",
         "LUT1", {"I0": sr(1)}, {"INIT": "2'b01"}, [("O", 1)], extra=text + LOGIC, reads=["m", "l0", "l1", "l2"])
 
+# --- `write_bitstream` options from the constraints --------------------------------
+# The options as `set_property ... [current_design]` in the `.xdc` alone, with no
+# `.rcf` and no `.opts`: what Reticle makes of them read from the XDC. Nothing
+# that changes how the frames are written (`COMPRESS`, `PERFRAMECRC`), whose
+# packets would differ by placement.
+XDC_ONLY = {
+    "xdc_spi": {
+        "CONFIG_MODE": "SPIx4",
+        "BITSTREAM.CONFIG.SPI_BUSWIDTH": "4",
+        "BITSTREAM.CONFIG.CONFIGRATE": "33",
+        "BITSTREAM.CONFIG.USR_ACCESS": "0x12345678",
+        "BITSTREAM.CONFIG.UNUSEDPIN": "Pullnone",
+        "CFGBVS": "VCCO",
+        "CONFIG_VOLTAGE": "3.3",
+    },
+    "xdc_startup": {
+        "BITSTREAM.CONFIG.USERID": "0xDEADBEEF",
+        "BITSTREAM.STARTUP.DONE_CYCLE": "6",
+        "BITSTREAM.STARTUP.GTS_CYCLE": "4",
+        "BITSTREAM.CONFIG.SPI_FALL_EDGE": "YES",
+        "BITSTREAM.CONFIG.SPI_BUSWIDTH": "2",
+        "BITSTREAM.CONFIG.SPI_32BIT_ADDR": "YES",
+        "BITSTREAM.CONFIG.CONFIGFALLBACK": "ENABLE",
+        "BITSTREAM.CONFIG.NEXT_CONFIG_ADDR": "0x00400000",
+        "BITSTREAM.CONFIG.TIMER_CFG": "0x00001234",
+        "BITSTREAM.GENERAL.JTAG_XADC": "DISABLE",
+        "BITSTREAM.CONFIG.M0PIN": "PULLNONE",
+    },
+}
+for name, opts in XDC_ONLY.items():
+    add(name, "write_bitstream options set in the XDC alone.", "LUT1", {"I0": sr(1)}, {"INIT": "2'b01"},
+        [("O", 1)], opts=opts)
+
 # --- Together -------------------------------------------------------------------
 add(
     "all_eight",
@@ -386,6 +419,12 @@ def write(out):
             xdc += f"set_property {k} {val} [current_design]\n"
         with open(os.path.join(out, f"{name}.xdc"), "w") as f:
             f.write(xdc)
+        if name in XDC_ONLY:
+            # Read from the `.xdc` by both tools: no `.rcf`, no `.opts`.
+            for path in (f"{name}.rcf", f"{name}.opts"):
+                if os.path.exists(os.path.join(out, path)):
+                    os.remove(os.path.join(out, path))
+            continue
         with open(os.path.join(out, f"{name}.rcf"), "w") as f:
             f.write(rcf)
         path = os.path.join(out, f"{name}.opts")

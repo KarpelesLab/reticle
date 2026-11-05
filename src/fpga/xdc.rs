@@ -19,7 +19,10 @@
 //! - **[`XDC_REFUSED`], an error,** when going on could make a wrong
 //!   bitstream: a pin or an electrical property that could not be read, a
 //!   command that could hold one (`foreach`, `if`), a pad setting the flow
-//!   does not make, a configuration option that changes what the part does.
+//!   does not make, a `write_bitstream` option the 7-series bitstream refuses
+//!   or a value it does not take. One it takes (`xc7::options::option_table`)
+//!   is no diagnostic at all: it goes to [`Constraints::bitstream_options`],
+//!   and the bitstream writes it as `--bitstream-option` would.
 //! - **[`XDC_NOT_HONOURED`], a warning,** when the design comes out the same
 //!   logic and only its timing or placement may differ from what was asked.
 //! - **[`XDC_NO_EFFECT`], a note,** when the file's statement is true of this
@@ -47,6 +50,7 @@ use super::constraints::{
     ClockDef, Constraints, InputDelay, IoAttrs, MaxDelay, MulticyclePath, Origin, PathSpec,
     PinAssignment, RegionAssignment, SiteRegion, matches_glob, written_nets,
 };
+use super::xc7::options::{BitstreamOptions, option_table};
 use crate::diag::{Diagnostic, Diagnostics, Severity};
 use crate::ir::walk::walk_block;
 use crate::ir::{Design, Module, ModuleId, ModuleRef, PortDir, ProcessKind, StmtKind};
@@ -570,6 +574,8 @@ pub struct XdcReading {
     pub places: BTreeMap<String, PlaceRead>,
     /// `set_property ... [current_design]`, as written.
     pub config: BTreeMap<String, String>,
+    /// Where each of [`XdcReading::config`] was said, the last time.
+    pub config_spans: BTreeMap<String, Span>,
     /// `KEEP_HIERARCHY` on a cell: its name and where it was said.
     pub keep_hierarchy: Vec<(String, Span)>,
     /// A bank's `INTERNAL_VREF`, in millivolts, by the bank's number.
@@ -999,19 +1005,6 @@ const TIMING_ONLY_COMMANDS: &[&str] = &[
     "set_switching_activity",
     "set_system_jitter",
     "set_units",
-];
-
-/// Configuration options measured to change only how the part loads: Vivado's
-/// bitstream differs in the configuration packets, and the design that comes
-/// up is the same. See `docs/fpga-vivado-parity.md`.
-const LOAD_ONLY_CONFIG: &[&str] = &[
-    "CONFIG_MODE",
-    "BITSTREAM.CONFIG.CONFIGRATE",
-    "BITSTREAM.CONFIG.EXTMASTERCCLK_EN",
-    "BITSTREAM.CONFIG.SPI_BUSWIDTH",
-    "BITSTREAM.CONFIG.SPI_FALL_EDGE",
-    "BITSTREAM.GENERAL.COMPRESS",
-    "BITSTREAM.GENERAL.CRC",
 ];
 
 /// Every `BITSTREAM.*` option Vivado 2026.1 lists for a 7-series design, for
@@ -2407,15 +2400,14 @@ impl Reader<'_> {
                      voltage and writes the same bitstream, byte for byte",
                 );
             }
-            _ if LOAD_ONLY_CONFIG.contains(&name) => {
-                self.not_honoured(
-                    span,
-                    format!(
-                        "`{name}` is not honoured: Reticle writes its own configuration \
-                         packets, so the part loads as Reticle loads it, and the same design \
-                         comes up"
-                    ),
-                );
+            // A `write_bitstream` option the 7-series bitstream knows: checked
+            // here as `--bitstream-option` checks it, and taken by the
+            // translation (`Constraints::bitstream_options`).
+            _ if option_table().iter().any(|o| o.name == name) => {
+                if let Err(e) = BitstreamOptions::default().set(name, value) {
+                    self.refuse(span, e.to_string());
+                    return;
+                }
             }
             _ if BITSTREAM_OPTIONS.contains(&name) => {
                 self.refuse(
@@ -2437,6 +2429,7 @@ impl Reader<'_> {
         self.reading
             .config
             .insert(name.to_owned(), value.to_owned());
+        self.reading.config_spans.insert(name.to_owned(), span);
     }
 
     fn cell_property(&mut self, name: &str, value: &str, objects: &[Object], span: Span) {
@@ -3793,7 +3786,26 @@ impl Translate<'_> {
             }
         }
         self.placement();
+        self.bitstream_options();
         self.out
+    }
+
+    /// Every `write_bitstream` option of the reading, for the bitstream:
+    /// those `xc7::options::option_table` knows, which the reading has
+    /// checked already. Sorted by name, as the reading keeps them; the
+    /// last setting of a name is the one Vivado uses, and the one kept.
+    fn bitstream_options(&mut self) {
+        for (name, value) in &self.reading.config {
+            if !option_table().iter().any(|o| o.name == name.as_str()) {
+                continue;
+            }
+            let Some(span) = self.reading.config_spans.get(name).copied() else {
+                continue;
+            };
+            self.out
+                .bitstream_options
+                .push((name.clone(), value.clone(), span));
+        }
     }
 
     fn pins(&mut self) {

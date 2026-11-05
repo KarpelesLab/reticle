@@ -321,10 +321,18 @@ fn build(root: &str, name: &str) -> Built {
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).unwrap();
     let bit = out.join(format!("{name}.bit"));
+    // A design whose `write_bitstream` options are in its `.xdc` has no `.rcf`:
+    // the options are read from the XDC, as Vivado reads them.
+    let rcf = dir.join(format!("{name}.rcf"));
+    let constraints = if rcf.is_file() {
+        rcf
+    } else {
+        dir.join(format!("{name}.xdc"))
+    };
     let mut run = Command::new(env!("CARGO_BIN_EXE_reticle"));
     run.args(["fpga", "--device", DEVICE, "--chipdb", root, "--top", name])
         .arg("--constraints")
-        .arg(dir.join(format!("{name}.rcf")))
+        .arg(constraints)
         .arg("--output-dir")
         .arg(&out)
         .arg("--bitstream")
@@ -516,6 +524,8 @@ const IN_THE_GATE: &[&str] = &[
     "ecc_srl_logic",
     "ecc_ram_logic",
     "noecc_srl16_logic",
+    "xdc_spi",
+    "xdc_startup",
     "icap_x8",
     "icap_loc0_x16",
     "icap_two_select_bottom",
@@ -563,7 +573,7 @@ fn each_design_is_vivados() {
     compare(built, &answers().unwrap());
 }
 
-/// **The same on every design here**, 128 of them. Takes a bitstream per
+/// **The same on every design here**, 130 of them. Takes a bitstream per
 /// design, which is why it is not in the gate.
 #[test]
 #[ignore = "builds every design here to a bitstream, and needs the Project X-Ray database"]
@@ -616,6 +626,6 @@ fn every_design_has_an_answer() {
     designs.sort();
     let answered: Vec<String> = answers.keys().cloned().collect();
     assert_eq!(designs, answered);
-    assert_eq!(answered.len(), 128);
+    assert_eq!(answered.len(), 130);
     assert_eq!(answers.values().filter(|a| a.refused.is_some()).count(), 11);
 }
