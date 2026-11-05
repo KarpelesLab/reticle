@@ -13,6 +13,8 @@
 //! An answer has, for each pad of `index.txt`, every `IDELAY` and `ILOGIC`
 //! feature of its half, and what each control pin of its delay reads: a ground
 //! (`gnd`), a signal, a leaf clock, or nothing at all (`open`, which reads one).
+//! And the raw bits of each pad's delay, frames 32 to 35 of its tile, since a
+//! bit this flow named decodes to that name whatever the bit is.
 //! A delay of the fabric is the same without its place, since Vivado and this
 //! flow put it in different tiles, and so is a controller of a design that has
 //! one. A controller of a pad's delay is its clock row's tile.
@@ -254,6 +256,36 @@ fn answer_of(root: &str, design: &str, bit: &Path) -> Vec<String> {
         for (pin, wire) in PINS {
             out.push(format!("{name} pin {pin} {}", class(&int, x, row, wire)));
         }
+    }
+    // And the raw bits of each pad's delay, frames 32 to 35 of its IO logic
+    // tile, where the delays' features are: a name this flow gave a bit
+    // (`IS_C_INVERTED`) decodes to itself whatever the bit, so without these a
+    // wrong one would agree. Not for a delay of the fabric, whose tile differs.
+    let tiles = db.tiles(&DiskFiles).unwrap();
+    for (tile, at, half) in &delays {
+        if fabric(tile, *half) {
+            continue;
+        }
+        let Some((_, window)) = tiles
+            .iter()
+            .find(|t| t.name == *tile)
+            .and_then(|t| t.bits.first())
+        else {
+            continue;
+        };
+        let mut set = Vec::new();
+        for row in 32..36 {
+            for col in 0..window.words * 32 {
+                let bit = reticle::fpga::arch::ConfigBit::new(row, col);
+                let Some((address, word, index)) = window.locate(bit) else {
+                    continue;
+                };
+                if frames.get(address, word, index).unwrap_or(false) {
+                    set.push(format!("{row}_{col:02}"));
+                }
+            }
+        }
+        out.push(format!("{at}/{half} raw {}", set.join(" ")));
     }
     // A pad of the index with no delay in use: nothing, said.
     for (at, half) in &keep {

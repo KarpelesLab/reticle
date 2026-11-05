@@ -333,7 +333,7 @@
 #     NOTHING HAS PUT A DSP48E1 ON A PART through this flow's own
 #     placer, router and bitstream, though since 2026-11-04 they build one and
 #     its bits are compared with Vivado's: `fpga::xray::dsp` has the account.
-#   * IDDR, IDDR_2CLK and ODDR BY NAME ONLY, and NO IDELAYE2. A design may
+#   * IDDR, IDDR_2CLK and ODDR BY NAME ONLY. A design may
 #     instantiate `IDDR` and `ODDR` (NewAE's ChipWhisperer-Husky does,
 #     fifteen times); their roles are named after their own pins (`q1`,
 #     `q2`, `d1`, `d2`), not the `q0`/`d0` a `ddr` constraint maps onto,
@@ -344,9 +344,13 @@
 #     OSERDESE2 likewise, on the same sites (`ddr_in`, `ddr_out`), and
 #     held to Vivado 2026.1 the same way; `xc7::serdes` has what is
 #     refused. An IO
-#     delay is refused likewise: IDELAYE2 needs an IDELAYCTRL with a
+#     delay was refused likewise, "IDELAYE2 needs an IDELAYCTRL with a
 #     200 MHz reference clock, which is a board-level obligation Reticle
-#     cannot state.
+#     cannot state". It is the design's to state, by name: IDELAYE2,
+#     IDELAYCTRL and DCIRESET are declared now, with their bits Vivado's
+#     (`xray::idelay`, `xray::dcireset`). A `set_io -delay` still asks for
+#     an `iodelay` with `i`, `o` and a `value` parameter, which IDELAYE2 is
+#     not declared as, and is not applied on this family.
 #   * NO TILE GRID. Reticle cannot state the SLICE array of an XC7A35T,
 #     and a wrong bounding box would silently accept or reject placement
 #     regions, so none is recorded and a region constraint is reported

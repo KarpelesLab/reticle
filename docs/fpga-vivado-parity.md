@@ -461,7 +461,7 @@ one answer.
 `buf_*` in `testdata/fpga/vivado/io/` is a buffer instantiated by name on `G2`/`G1`, 111 of
 them, in standards it takes, its controls routed, tied low and tied high; and the
 probes of `primitives/`. **All that build agree with Vivado's site features**: the 57 `buf_*` that
-build here, and 19 probes built from their own `.xdc`, in `every_design_builds_to_vivados_bits`
+built here before the `DIFF_OUT` forms and the 44 of those since, and 25 probes built from their own `.xdc`, in `every_design_builds_to_vivados_bits`
 and by hand.
 
 | buffer | what Vivado wrote, and so Reticle |
@@ -667,7 +667,7 @@ pins reads (a ground, a signal, a leaf clock or nothing), the controllers' clock
 `DCIRESET`'s feature and reset. `tests/fpga_xray_idelay.rs` holds this flow to it. **Nothing here has
 been on a board**: that a delay delays by what its value says has not been measured by anything.
 
-**Checked: all 27 designs Vivado builds and this flow takes agree, 1,400 lines, and the five it refuses are refused by
+**Checked: all 27 designs Vivado builds and this flow takes agree, 1,456 lines, and the five it refuses are refused by
 the same rule.** So do the probes of `primitives/`. The table of what each setting sets is
 `xray::idelay`'s documentation; what was found on the way:
 
@@ -725,11 +725,25 @@ and `LOCKED` out to its fabric; one whose `LOCKED` nothing reads is taken away. 
 interconnect wires are declared from `tile_type_CFG_CENTER_MID.json`, as the XADC's are, since the
 database has no `ppips` file for it. What it does on a part with no DCI to reset is not known.
 
-**Mutations.** TODO
+**Mutations.** Twenty were made, and nineteen failed `tests/fpga_xray_idelay.rs`: `VAR_LOAD_PIPE` not
+known, a loaded delay keeping its value, the value's bits the wrong way round, `IS_IDATAIN_INVERTED` set
+on a delay of the fabric, `IS_DATAIN_INVERTED` on one of a pad not, `IS_C_INVERTED` dropped, `CE` not
+grounded, an open `CNTVALUEIN` grounded, the register's input through `D`, no `IDELMUXE3` on the way to the
+fabric, no replicas, controllers left where the placer put them, a delay nothing reads kept, a controller
+with no delay kept, `PLIDC-7` and `Route 35-7` not asked, no fall back to the ungrouped controller, a
+`DCIRESET`'s reset tied low not grounded, and one nothing reads kept. **The twentieth survived:**
+`IS_C_INVERTED` moved to another bit, which decodes to the name this flow gave it whatever the bit is.
+The answer has the raw bits of each pad's delay since, frames 32 to 35 of its tile, and that mutation
+fails it now.
 
-**This changes no existing bitstream.** The delays' sites, the `ILOGIC`'s new ways and the controller's
-site are declared only for a design with a delay (`XrayOptions::io_delays`), and `DCIRESET`'s only for a
-design with one, as the regional buffers' are; TODO.
+**This changes no existing bitstream, as far as was measured.** The delays' sites, the `ILOGIC`'s new
+ways and the controller's site are declared only for a design with a delay (`XrayOptions::io_delays`),
+and `DCIRESET`'s only for a design with one, as the regional buffers' are; a `DIFF_OUT` buffer's `din_n`
+is a pin of every pair's `_P` site, which adds no wire. **Checked:** 134 designs, the 13 of `qor/`, the
+three of `iologic/` and every probe of `primitives/` both build, built by the commit before these two
+and by the second: the same bitstream, byte for byte. **Not checked: the Husky Plus.** The one checkout
+of its sources on this machine is another project's working copy, which does not build, and NewAE's
+`main` is not the file list `examples/husky/build_plus.sh` names; so `build_plus.sh` was not run.
 
 **Not done.** A delay's timing (`xray::timing` has none for these sites, so a delay estimates as a
 wire); an `ODELAYE2`, which a high-range bank does not have; `--vivado-placement` of a design with a
