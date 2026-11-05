@@ -10,6 +10,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Line tables only, not full debug information: the tests are about a
+  # hundred binaries that each link the whole crate, and with full debug
+  # information they filled the Ubuntu runner's disk mid-link (aeb9f61f: "No
+  # space left on device", then `ld` killed by SIGBUS). A panic's backtrace
+  # still names its file and line.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   test:
