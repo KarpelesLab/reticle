@@ -970,6 +970,15 @@ Why the figures are what they are has not been looked at beyond this. That `0.3 
 cell against grade 3's lookup table is part of it is a reading of one report, not a
 measurement over them.
 
+**Since looked at, and the reading above partly wrong**
+([The delay model, fitted to Vivado's timer](#the-delay-model-fitted-to-vivados-timer)):
+the comparison a connection at a time matched many of a lookup table's sinks with
+another pin of the same table, so the 0.04 to 7.8 above is in part the comparison's;
+matched by the wire a route reached its sink on, the legacy model is 0.22 to 4.7. And
+the cell figures were part of it, as guessed, but so were a slice's pins, a branch's
+load, and paths the analysis cut through paired tables. The table above is left as it
+was measured, on the legacy model, which is still `--delay-model legacy`.
+
 ### Vivado's routing graph took every route
 
 **Every route Reticle made, in all thirteen designs, is accepted as a `FIXED_ROUTE`:
@@ -1070,6 +1079,285 @@ gives the same bits on another part has not been asked. `SITE_PIPS` was tried fo
 slice's `WEMUX` and not pursued. And the Vivado `.bit`s that were decoded here have
 never been loaded, and must not be: all ran with `NSTD-1` and `UCIO-1` lowered to
 warnings, for that purpose alone.
+
+## The delay model, fitted to Vivado's timer
+
+**Reticle's estimate of a 7-series design now agrees with Vivado's timer a
+connection at a time, not only on the worst path,** at speed grade 3, on Reticle's
+own routes. Before, a connection was 0.42 to 1.55 times Vivado's figure (5th to 95th
+percentile) and an endpoint 1.3 times at the median; with the fitted model a
+connection is 0.95 to 1.18 and every design's endpoints are within 3 % at the median.
+`--delay-model vivado` is the default; `--delay-model legacy` is the model before,
+and the Husky scripts keep it, so that their bitstreams are the ones measured on a
+board, byte for byte (checked below). Run on 2026-11-06. **Nothing here has been on
+a board**: it is all Vivado's timer, which is the oracle and not the part.
+
+### What was asked
+
+The corpus is the thirteen designs of `qor/`, `analyser_fifo.v` and
+`carry_counter.v` from this directory, and two pieces of the Husky Plus built
+whole, NewAE's `esad.v` and `sad.v` with what they instantiate (about 1,000 and
+1,450 lookup tables, two clocks each, their ports on pads). A third,
+`sad_x4_slowclock.v`, did not elaborate (`V0008`, a register driven from two
+places) and is not in it. The pieces are built from the Husky sources, which are not
+in this repository; only Vivado's numbers about them are.
+
+`run_placed.sh` with `TIMING=1` builds each with Reticle (`--timing-driven`), gives
+Vivado the placement and every route as `FIXED_ROUTE` at `xc7a100tftg256-3`, and
+`timing_dump.tcl` asks Vivado's timer, of that checkpoint: every net's pips and the
+node above and below each, every sink's interconnect delay (`get_net_delays
+-interconnect_only`, the slow corner's maximum), every cell's timing arcs
+(`get_timing_arcs`), and every endpoint's worst path with its setup and clock skew.
+Three designs, `analyser_fifo`, `esad` and `sad`, Vivado could not finish routing
+around Reticle's routes (a ground net, `GND CONFLICTS` or `PARTIAL`), so
+`run_placed.tcl` now keeps a checkpoint of an unfinished route too: the nets that are
+routed are Reticle's and are timed. That three of seventeen leave Vivado a ground it
+cannot finish is a finding of its own, **open**.
+
+`timing_table.py fit` fits the model to the run built with the legacy model, and
+`compare` sets Reticle's estimate beside Vivado's figures. Committed, in
+`testdata/fpga/vivado/timing/`: `classes.txt` (the fit), `arcs.txt` (every cell arc,
+by cell, slice and bel), `sample.txt` (one connection in 27 of the fit, with its pips)
+and `summary.txt` (both runs compared). Numbers only.
+
+**The comparison before matched the wrong connections.** `placed_table.py` paired a
+lookup table's sink with Reticle's by the pin `LOCK_PINS` says Vivado's logical pin is
+on, and Reticle's role by its index; but the router chooses a table's pins and the
+roles follow it, so on many tables the two named different connections. A sink Vivado
+puts at 3.1 ns was compared with Reticle's figure for another pin of the same table,
+0.1 ns. Reticle's `connection` lines now name the wire the route reached the sink on,
+and `compare` matches by that, which is the same connection by construction. **So the
+"0.04 to 7.8 times" of "How far Reticle's estimate is" above overstates the legacy
+model's spread**; matched by wire it is 0.22 to 4.7, and 0.42 to 1.55 from the 5th to
+the 95th percentile. That section is left as it was measured.
+
+### What the error was made of
+
+- **A slice's input pins are not alike, and the model had them alike.** Vivado puts a
+  lookup table's `A1` to `A6` differences in the wire to the pin, not in the table's
+  arc (which is 0.097 ns for any pin): `A6` costs nothing past its `IMUX`, `A1` and
+  `A2` about 0.2 to 0.39 ns. prjxray's pip delays give every `IMUX` to pin the same.
+  Fitting one figure to each class of wire with a pin keeping its number took the
+  fit's spread from 0.72 to 1.82 (5th to 95th) to 0.94 to 1.07, on the first three
+  designs alone.
+- **A branch is load.** Each branch more than one leaving a wire on a connection's
+  way adds 8 ps in Vivado's figures; without it a sink of a wide signal is overstated
+  and one of a narrow signal understated, 4 % each way at the extremes. With it, the
+  fit's 5th to 95th went from 0.90 to 1.11 to 0.94 to 1.05.
+- **A node took the largest delay of the pips into it,** prjxray's, whatever the
+  route's pip was, which is part of why the legacy model's median connection is 0.92
+  and its spread wide.
+- **Reticle's own wires inside a slice were charged as untimed pips.** `_MUX_` and
+  `_CARRY_` wires, and the slice's output multiplexers, cost 175 ps in the legacy model
+  where Vivado puts the delay in the cell's arc; scaled into the fitted model they made
+  a lookup table's output through `AMUX` 0.11 ns dear. Charged nothing now.
+- **The cells were grade 1's or prjxray's.** A flip-flop's clock to `Q` is 0.341 ns in
+  a `SLICEL` and 0.393 in a `SLICEM`, 0.313 and 0.361 on the `5FF` bels; a lookup
+  table 0.097 on most arcs and 0.21 to 0.25 on a quarter, by nothing this flow can
+  tell apart (not the pin, the half, the fanout nor the slice), 0.13 on average; the
+  data input's setup -0.05 from its own slice and 0.079 through a bypass pin, the
+  enable's 0.218, the reset's 0.33; a block RAM's clock to output 1.846; a carry
+  chain from `CI` to `CO3` 0.089 and from `S0` 0.395, where the legacy model has 0.3
+  for any arc; the input and output buffers 1.34 and 3.15. All **measured**, in
+  `arcs.txt`; the few the corpus does not exercise are derived, and
+  `xray::timing::VIVADO` says which.
+- **A paired table's halves cut paths.** The analysis ordered cells by instance, and
+  a `LUT6_2` is two functions: `A.o5` to `B` to `A.i0`, which only `A.o6` reads, is a
+  loop by instance and none by pin. The loop was cut where it was met, and with it the
+  path: `crc32`'s worst came out at 4.09 ns against Vivado's 6.31, with every
+  connection on it within 5 %. The fitted model orders by output
+  (`PinDelays::per_output`). The legacy model keeps the old order, since the Husky's
+  measured builds were placed with it; it is wrong there too.
+
+Not a cause, checked: the clock. Vivado's skew on these designs is -0.02 to -0.18 ns;
+the comparison below adds it to Vivado's side, and Reticle models none.
+
+### The fit
+
+`xray::delay::CLASSES`: 274 classes of the wire a pip enters, the tile type without
+its side and the wire without its track number, a slice's pins and outputs keeping
+theirs; a class crossed by fewer than ten connections has no entry and costs 0.631 of
+prjxray's delay for the pip. Least squares with no figure below zero, over 27,016
+connections of the legacy-built run. **On those, the model is 1.002 of Vivado's at the
+median, 0.952 at the 5th percentile and 1.045 at the 95th. Fitted on eight designs and
+tried on the other nine, 0.94 to 1.07 on six of the nine,** which is what says the
+table is not just the corpus's; to 1.18 and 1.20 at the 95th on `mul18` and
+`analyser_fifo`, which were not looked at further; and on `fir8` a
+`DSP48E1`'s cascade, a class the eight had never seen, charged prjxray's figure for it,
+sixty times Vivado's. That class is in the table now, fitted on all seventeen. A carry chain's own hop (`COUT` to `CIN`), which Vivado
+puts at 0 to 7 ps, is fitted and left out of the ratios, as is anything under 20 ps.
+
+The placement's straight line (`timing::WIRE`) was fitted to Vivado's figures against
+tile distance too: 0.414 ns, 0.0358 a tile and 0.0244 a tile more on a wide signal,
+against the legacy 0.31, 0.048 and 0.025. These designs' connections are short; how
+the line holds past forty tiles is not measured.
+
+### How it came out
+
+Reticle's estimate of each connection on its own routes over Vivado's, matched by the
+wire the sink was reached on, median / 5th / 95th percentile; and of each endpoint both
+time, Reticle's arrival with its capture over Vivado's data path, setup and skew:
+
+| design | connections, legacy | connections, fitted | endpoints, legacy | endpoints, fitted |
+|---|---|---|---|---|
+| adders | 0.768 / 0.415 / 1.438 | 1.003 / 0.912 / 1.113 | 1.479 / 0.925 / 2.048 | 0.991 / 0.787 / 1.099 |
+| analyser_fifo | 0.945 / 0.362 / 1.541 | 0.999 / 0.937 / 1.290 | 1.204 / 0.969 / 1.573 | 1.006 / 0.892 / 1.058 |
+| barrel | 0.869 / 0.429 / 1.411 | 1.002 / 0.952 / 1.253 | 1.320 / 0.963 / 1.619 | 1.004 / 0.878 / 1.084 |
+| bram_fifo | 0.985 / 0.371 / 1.707 | 1.000 / 0.954 / 1.306 | 1.290 / 0.986 / 1.530 | 1.003 / 0.884 / 1.058 |
+| carry_counter | 0.660 / 0.272 / 1.405 | 1.009 / 0.984 / 1.063 | 1.535 / 1.126 / 2.197 | 1.005 / 0.793 / 1.065 |
+| counter64 | 0.702 / 0.272 / 1.539 | 1.007 / 0.981 / 1.058 | 1.447 / 0.950 / 2.885 | 0.970 / 0.861 / 1.047 |
+| crc32 | 0.801 / 0.419 / 1.419 | 1.000 / 0.963 / 1.060 | 1.141 / 0.790 / 1.637 | 0.969 / 0.873 / 1.042 |
+| esad | 0.961 / 0.450 / 1.749 | 1.003 / 0.966 / 1.135 | 1.308 / 0.937 / 1.691 | 1.004 / 0.894 / 1.116 |
+| fir8 | 1.143 / 0.796 / 1.464 | 0.990 / 0.968 / 1.319 | 1.389 / 1.187 / 1.480 | 0.973 / 0.877 / 1.075 |
+| fsm | 0.767 / 0.414 / 1.457 | 0.992 / 0.958 / 1.053 | 1.379 / 0.921 / 1.528 | 0.997 / 0.897 / 1.037 |
+| gray_cdc | 0.826 / 0.287 / 1.404 | 1.003 / 0.929 / 1.058 | 1.315 / 0.976 / 1.706 | 1.008 / 0.953 / 1.035 |
+| lutram32 | 0.884 / 0.449 / 1.876 | 1.011 / 0.976 / 1.054 | 1.370 / 1.095 / 1.657 | 0.981 / 0.873 / 1.129 |
+| mul18 | 1.135 / 0.678 / 1.647 | 1.008 / 0.965 / 1.462 | 1.489 / 1.275 / 1.749 | 0.983 / 0.871 / 1.141 |
+| regfile_alu | 0.882 / 0.529 / 1.345 | 0.994 / 0.901 / 1.047 | 1.309 / 1.105 / 1.613 | 0.990 / 0.840 / 1.037 |
+| sad | 0.930 / 0.387 / 1.603 | 1.005 / 0.969 / 1.127 | 1.238 / 0.923 / 1.580 | 1.001 / 0.895 / 1.089 |
+| srl_delay | 0.816 / 0.283 / 1.657 | 1.007 / 0.981 / 1.460 | 1.498 / 1.378 / 1.849 | 0.997 / 0.815 / 1.143 |
+| widemux | 0.968 / 0.553 / 1.340 | 1.008 / 0.960 / 1.305 | 1.426 / 1.291 / 1.615 | 1.007 / 0.876 / 1.114 |
+
+Over every design: **17,887 connections under the legacy model, 0.924 at the median,
+0.424 at the 5th percentile, 1.545 at the 95th, 0.222 to 4.713; 18,166 under the
+fitted model, 1.003, 0.949, 1.179, 0.753 to 2.924.** The two are different builds, each
+timed on its own routes. The fitted table was fitted to the legacy build's routes, so
+the fitted build's are routes it had not seen.
+
+The endpoint each clock's worst is at, among the flip-flop endpoints both time, as
+Vivado's data path, setup and skew, and Reticle's estimate of that endpoint:
+
+| design | clock | Vivado, legacy build | estimate there | Vivado, fitted build | estimate there |
+|---|---|---|---|---|---|
+| adders | clk | 8.257 | 7.281 (0.88) | 8.197 | 8.448 (1.03) |
+| analyser_fifo | rd_clk | 9.244 | 8.355 (0.90) | 7.823 | 7.791 (1.00) |
+| analyser_fifo | wr_clk | 3.564 | 3.590 (1.01) | 3.834 | 4.043 (1.05) |
+| barrel | clk | 3.129 | 3.024 (0.97) | 3.605 | 3.555 (0.99) |
+| bram_fifo | clk | 4.470 | 4.642 (1.04) | 4.370 | 4.317 (0.99) |
+| carry_counter | clk | 2.917 | 2.988 (1.02) | 2.344 | 2.463 (1.05) |
+| counter64 | clk | 5.182 | 5.067 (0.98) | 5.133 | 4.954 (0.97) |
+| crc32 | clk | 6.581 | 4.736 (0.72) | 5.322 | 5.068 (0.95) |
+| esad | adc_sampleclk | 4.112 | 3.684 (0.90) | 4.555 | 4.555 (1.00) |
+| esad | clk_usb | 4.212 | 4.578 (1.09) | 3.505 | 3.422 (0.98) |
+| fir8 | clk | 4.968 | 5.682 (1.14) | 4.816 | 4.738 (0.98) |
+| fsm | clk | 3.721 | 3.460 (0.93) | 3.607 | 3.351 (0.93) |
+| gray_cdc | clk | 1.874 | 1.871 (1.00) | 2.037 | 1.861 (0.91) |
+| gray_cdc | clk2 | 2.014 | 2.112 (1.05) | 2.039 | 2.055 (1.01) |
+| lutram32 | clk | 2.573 | 2.890 (1.12) | 2.542 | 2.342 (0.92) |
+| mul18 | clk | 3.010 | 3.025 (1.00) | 2.831 | 2.842 (1.00) |
+| regfile_alu | clk | 13.179 | 10.390 (0.79) | 11.039 | 11.244 (1.02) |
+| sad | adc_sampleclk | 4.290 | 4.194 (0.98) | 4.644 | 4.500 (0.97) |
+| sad | clk_usb | 4.975 | 5.446 (1.09) | 4.083 | 4.051 (0.99) |
+| srl_delay | clk | 2.347 | 2.279 (0.97) | 2.237 | 2.230 (1.00) |
+| widemux | clk | 4.710 | 5.068 (1.08) | 4.865 | 4.616 (0.95) |
+
+From 0.72 to 1.14 under the legacy model to 0.91 to 1.05 under the fitted one, which
+is the target the ignored `the_estimate_of_the_worst_endpoint_is_near_vivados` set
+(1.35 either way), met with room on every clock.
+
+**What is left.** A short register-to-register endpoint is still up to 20 % under
+Vivado's: a flip-flop's setup through its bypass pin is 0.03 or 0.15 ns, half and half,
+by nothing this flow could see (not the enable, the reset or the bel), and the model
+charges the mean. A lookup table's arc is the mean of two figures likewise. What
+makes the last few percent of connections over Vivado's, the 95th percentile of
+1.18 where the fit's own is 1.05, has not been looked at.
+
+### What it does to placement
+
+Every timing-driven build steers by this model now, so every build of a 7-series
+design changes. Vivado's worst data path, by its own report on Reticle's routes, of
+each clock group, legacy build against fitted build (ns, and slack):
+
+| design | clock | period | legacy | slack | fitted | slack |
+|---|---|---|---|---|---|---|
+| adders | clk | 5 | 8.255 | -3.292 | 8.130 | -3.232 |
+| analyser_fifo | rd_clk | 1 | 9.228 | -8.279 | 7.812 | -6.859 |
+| analyser_fifo | wr_clk | 1 | 3.556 | -2.598 | 3.875 | -2.869 |
+| barrel | clk | 5 | 3.139 | 1.835 | 3.596 | 1.360 |
+| bram_fifo | clk | 5 | 4.425 | 0.494 | 4.281 | 0.596 |
+| carry_counter | clk | 1 | 2.920 | -1.951 | 2.348 | -1.379 |
+| counter64 | clk | 5 | 4.688 | -0.217 | 4.630 | -0.169 |
+| crc32 | clk | 5 | 6.590 | -1.617 | 5.346 | -0.358 |
+| esad | adc_sampleclk | 5 | 9.577 | -4.902 | 8.834 | -4.114 |
+| esad | clk_usb | 10 | 1.329 | 3.320 | 1.026 | 3.643 |
+| fir8 | clk | 5 | 8.067 | -4.161 | 8.067 | -4.161 |
+| fsm | clk | 5 | 3.731 | 1.244 | 3.592 | 1.357 |
+| gray_cdc | clk | 5 | 1.847 | 3.090 | 1.946 | 2.927 |
+| gray_cdc | clk2 | 7 | 1.611 | -0.992 | 1.343 | -0.716 |
+| lutram32 | clk | 5 | 2.342 | 2.392 | 2.305 | 2.423 |
+| mul18 | clk | 5 | 2.938 | 1.955 | 2.759 | 2.134 |
+| regfile_alu | clk | 5 | 13.186 | -8.214 | 11.027 | -6.074 |
+| sad | adc_sampleclk | 5 | 8.709 | -4.021 | 7.472 | -2.778 |
+| sad | clk_usb | 10 | 1.264 | 3.349 | 3.467 | 1.195 |
+| srl_delay | clk | 5 | 2.351 | 2.618 | 2.228 | 2.728 |
+| widemux | clk | 5 | 4.567 | 0.256 | 4.871 | 0.100 |
+
+**The fitted build's worst path is 0.96 of the legacy build's at the median, from 0.77
+to 2.74,** and every failing clock but `analyser_fifo`'s write clock is better:
+`crc32` by 1.24 ns, `regfile_alu` by 2.16, `sad` by 1.24, `analyser_fifo`'s read clock
+by 1.42, `carry_counter` by 0.57. Worse: `barrel`, `widemux`, `gray_cdc`'s `clk` and
+the write clock, by 0.1 to 0.46 ns, each with slack to spare but the last, and `sad`'s
+`clk_usb`, 1.26 to 3.47 ns of a 10 ns period. Both are one seed each, which is how much
+a placement moves; that is noise of the order of these smaller differences (two runs of
+the fitted model a day apart, which differed only in the setup of a bypass pin, moved
+`sad`'s `adc_sampleclk` from 6.57 to 7.47). The gap to Vivado's own flow, the first
+table of this document, is still mostly the placement and the netlist.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--delay-model legacy`, beside
+`--memories legacy`, with a comment why. Built with it from this tree: `build_plus.sh`
+writes `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`, the Husky
+Plus legacy seed 4, and `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd`, what the commit
+before this one writes. **Checked**, byte for byte. Everything the fitted model adds is
+behind the choice: the class table, the branch charge, the cells' figures and their
+own pins' delays, the order by output, and the placement's line. The legacy order's
+cut loop counted a waiting cell below zero, which a debug build stopped on and a
+release build wrapped past; it wraps on purpose now, in both, which is what every
+measured build did.
+
+### Tests
+
+`tests/fpga_xray_delay.rs`, in the gate and needing neither Vivado nor the database:
+that the source holds the table `classes.txt` has; that over `sample.txt` the table
+costs every connection within 3 % of Vivado's at the median and 0.9 to 1.1 from the 5th
+to the 95th, and prjxray's delays alone do not; that `summary.txt`'s fitted run is
+within 3 % of Vivado at every design's median, and the legacy run was not; and that
+each clock's worst endpoint is within 1.35 of Vivado's. The last two read the quoted
+run, and catch a regeneration that lost the agreement and not a change to the flow
+since, which only `run_placed.sh` asks. `tests/fpga_xray_timing.rs` holds the database
+side: under the fitted model a wire costs its class, the two sides alike, and a join
+costs nothing. Unit tests hold the carry chain's arcs, a flip-flop's own setups, a
+pin's own delay forwards and backwards, and a paired table's path through both halves.
+
+**Mutations.** Twelve, each made by a script and put back, with the library's tests of
+`place`, `xray::timing` and `xray::delay` and the two test files above run against
+it: a class keeping its side (`INT_L` apart from `INT_R`); a slice pin losing its
+number; the branch charge at zero; a join charged its class; one entry of the table
+off by 30 ps; the carry's outputs counted `CO` first; the enable's setup given to the
+data input; a pin's own launch, through or capture ignored, one at a time; and the
+analysis back on instance order under the fitted model. Eleven failed a test. **One
+survived:** a wire of no class and no prjxray figure charged 110 ps, as the legacy
+model's untimed pip once was, since too few of `sample.txt`'s connections cross one.
+`a_wire_of_no_class_costs_a_share_of_prjxrays_figure` fails on it now. The setup
+through a bypass pin is not held by anything in the gate: nothing there places a
+design and asks Vivado.
+
+### Not done
+
+- The Husky Plus itself is not in the corpus: built whole and given to Vivado it is
+  an hour each way, and the pieces stood in. Whether the line `VIVADO_WIRE` holds over
+  its long connections is the first thing that would say.
+- No design here has a clock manager, a pad register or an IO delay of Reticle's, so
+  their figures are the legacy model's.
+- Clock skew is not modelled; Vivado's is up to 0.18 ns on these designs.
+- The router's own analysis, each pass, does not charge the branches; only the
+  reported estimate and the next placement's do.
+- One placement each. The fixtures quote runs, and nothing fails when the flow moves
+  on but a regeneration.
+- What a build steered by the fitted model does on a part. Nothing here has been on
+  one, and no Husky build with it has been made for one.
 
 ## Wide multiplexers
 
