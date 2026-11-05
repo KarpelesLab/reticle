@@ -22,7 +22,8 @@
 //! XC7A100T, each from a design with that one register setting: [`DSP_COMB`],
 //! [`DSP_LAUNCH_A`], [`DSP_LAUNCH_M`], [`DSP_LAUNCH_P`], and [`DSP_SETUP_REG`],
 //! [`DSP_SETUP_M`], [`DSP_SETUP_P`]. `Prop_dsp48e1_*` and `Setup_dsp48e1_*`,
-//! in `docs/fpga-vivado-parity.md`'s table.
+//! in `docs/fpga-vivado-parity.md`'s table. And an `IDELAYE2`'s arc,
+//! [`idelay_arc`], fitted to the same timer's figures for 34 delays.
 //!
 //! **Not from it**, and said so: the block RAM's clock to output, the
 //! input and output buffers, and the clock managers, whose register port
@@ -361,6 +362,70 @@ pub(crate) fn figures(model: DelayModel) -> &'static Figures {
         DelayModel::Legacy => &LEGACY,
         DelayModel::Vivado => &VIVADO,
     }
+}
+
+/// An `IDELAYE2`'s count register, `C` to `CNTVALUEOUT`, ns: Vivado 2026.1's
+/// `Reg Clk to Q` arc of the delay (`idelay_sweep`).
+pub(crate) const IDELAY_COUNT_LAUNCH: f64 = 0.751;
+
+/// An `IDELAYE2`'s data input to `DATAOUT`, ns, at the delay its parameters
+/// give: Vivado 2026.1's timer, the slow corner's maximum on the XC7A100T,
+/// `Prop_idelaye2_IDATAIN_DATAOUT` or `_DATAIN_DATAOUT`, at speed grade 1 for
+/// [`DelayModel::Legacy`], whose other figures are grade 1's, and grade 3 for
+/// [`DelayModel::Vivado`], whose are grade 3's.
+///
+/// **Fitted to Vivado's figures, not read from a document.** The timer's arc
+/// on 34 delays at grade 1 (`testdata/fpga/vivado/idelay/`'s sweeps, and
+/// probes of `REFCLK_FREQUENCY` at 190, 210 and 300 MHz,
+/// `HIGH_PERFORMANCE_MODE` and `SIGNAL_PATTERN`, values 0 to 31), and on 22
+/// of the same at grade 3, is this within 1.2 ps of every one:
+///
+/// `0.815` from `IDATAIN` (`1.012` from `DATAIN`) at grade 1, `0.601`
+/// (`0.748`) at grade 3, `+ IDELAY_VALUE × tap`, the same tap at both,
+/// where `tap = a / (64 × REFCLK_FREQUENCY) + jitter`, `a` is 1.1132, or
+/// 1.094 in `HIGH_PERFORMANCE_MODE`, and `jitter` is 9 ps a tap for the
+/// `DATA` pattern, 5 ps in `HIGH_PERFORMANCE_MODE`, and none for `CLOCK`.
+/// `1 / (64 × f)` is a tap of a chain calibrated to half the reference
+/// clock's period over 32 taps, and `a` the timer's margin on it at this
+/// corner; that reading is mine, the figures are Vivado's.
+///
+/// The timer takes `IDELAY_VALUE` whatever `IDELAY_TYPE` is: a `VAR_LOAD`
+/// delay of 9 is nine taps to it (1.679 ns), though nothing of it loads 9. A
+/// variable delay moves at run time, which no timer sees.
+pub(crate) fn idelay_arc(params: &crate::ir::Attrs, model: DelayModel) -> f64 {
+    let text = |name: &str, default: &str| {
+        params
+            .get(name)
+            .and_then(AttrValue::as_str)
+            .map_or_else(|| default.to_owned(), str::to_ascii_uppercase)
+    };
+    let number = |name: &str, default: f64| {
+        params.get(name).map_or(default, |v| {
+            #[allow(clippy::cast_precision_loss, reason = "a tap count or a frequency")]
+            let int = v.as_int().map(|i| i as f64);
+            int.or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok()))
+                .unwrap_or(default)
+        })
+    };
+    let fabric = text("DELAY_SRC", "IDATAIN") == "DATAIN";
+    let fast = text("HIGH_PERFORMANCE_MODE", "FALSE") == "TRUE";
+    let clock = text("SIGNAL_PATTERN", "DATA") == "CLOCK";
+    let value = number("IDELAY_VALUE", 0.0).clamp(0.0, 31.0);
+    let frequency = number("REFCLK_FREQUENCY", 200.0).max(1.0);
+    let margin = if fast { 1.094 } else { 1.1132 };
+    let jitter = match (clock, fast) {
+        (true, _) => 0.0,
+        (false, true) => 0.005,
+        (false, false) => 0.009,
+    };
+    let tap = margin * 1000.0 / (64.0 * frequency) + jitter;
+    let intercept = match (model, fabric) {
+        (DelayModel::Legacy, false) => 0.815,
+        (DelayModel::Legacy, true) => 1.012,
+        (DelayModel::Vivado, false) => 0.601,
+        (DelayModel::Vivado, true) => 0.748,
+    };
+    intercept + value * tap
 }
 
 /// What a `DSP48E1`'s registers make of its pins.
@@ -983,6 +1048,29 @@ pub fn place_timing(
                 for pin in &inst.pins {
                     let role = netlist.pins[*pin].role.as_str();
                     pins[*pin] = dsp_pin(role, netlist.pins[*pin].output, &shape, chained);
+                }
+                if let Some(c) = clock {
+                    domain[index] = domain_of(clock_of(c));
+                }
+            }
+            "iodelay" => {
+                // Through from its data input to `DATAOUT`, by what its
+                // parameters make it (`idelay_arc`); a variable delay's
+                // controls end paths on `C`, at a flip-flop's setup, which
+                // was not measured, and its count starts them.
+                cell[index] = design.modules[top].cells.get(inst.cell).map_or_else(
+                    || idelay_arc(&crate::ir::Attrs::new(), model),
+                    |c| idelay_arc(&c.params, model),
+                );
+                (launch[index], capture[index]) = (IDELAY_COUNT_LAUNCH, f.ff_setup);
+                for pin in &inst.pins {
+                    let role = netlist.pins[*pin].role.as_str();
+                    pins[*pin] = match role {
+                        "idatain" | "datain" | "dataout" => PinTiming::Through,
+                        _ if is_clock(role) => PinTiming::Ignored,
+                        _ if netlist.pins[*pin].output => PinTiming::Start,
+                        _ => PinTiming::End,
+                    };
                 }
                 if let Some(c) = clock {
                     domain[index] = domain_of(clock_of(c));
@@ -1931,5 +2019,175 @@ mod tests {
         close(period_of(rcf, 3), "m.out0", 10.0 * 5.0 / 6.0);
         close(period_of(rcf, 4), "m.out1", 10.0 * 12.0 / 6.0);
         close(period_of("", 3), "m.out0", 5.0 * 5.0 / 6.0);
+    }
+
+    /// **An input delay's arc is Vivado's timer's**, within 1.5 ps, on every
+    /// delay asked: `Prop_idelaye2_IDATAIN_DATAOUT` and `_DATAIN_DATAOUT` of the
+    /// routed `idelay_sweep`, `idelay_iddr`, `idelay_lvds`, `datain_default`
+    /// and `datain_value`, and of probes at 190, 210 and 300 MHz, in
+    /// `HIGH_PERFORMANCE_MODE` and with the `CLOCK` pattern
+    /// (`(REFCLK_FREQUENCY, HIGH_PERFORMANCE_MODE, SIGNAL_PATTERN, IDELAY_TYPE,
+    /// IDELAY_VALUE, DELAY_SRC, ns)`), at grade 1 for the legacy model; and at
+    /// grade 3 for the Vivado model, which Vivado said is every one of those
+    /// 0.214 ns less (0.264 from `DATAIN`), checked on 22 of them, a few here.
+    /// Would catch the tap off by a picosecond, the reference clock or either
+    /// mode ignored, a loaded delay timed at no taps, `DATAIN`'s intercept for
+    /// `IDATAIN`'s, or one grade's for the other's; would not catch the arc at
+    /// another corner, which was not asked, or say that a routed path through
+    /// one is Vivado's, which nothing here compares.
+    #[test]
+    fn an_input_delays_arc_is_vivados_timers() {
+        let vivado: [(&str, &str, &str, &str, i64, &str, f64); 36] = [
+            ("200.0", "FALSE", "DATA", "FIXED", 0, "IDATAIN", 0.815),
+            ("200.0", "FALSE", "DATA", "FIXED", 1, "IDATAIN", 0.911),
+            ("200.0", "FALSE", "DATA", "FIXED", 2, "IDATAIN", 1.007),
+            ("200.0", "FALSE", "DATA", "FIXED", 3, "IDATAIN", 1.103),
+            ("200.0", "FALSE", "DATA", "FIXED", 4, "IDATAIN", 1.199),
+            ("200.0", "FALSE", "DATA", "FIXED", 6, "IDATAIN", 1.392),
+            ("200.0", "FALSE", "DATA", "FIXED", 8, "IDATAIN", 1.583),
+            ("200.0", "FALSE", "DATA", "FIXED", 13, "IDATAIN", 2.062),
+            ("200.0", "FALSE", "DATA", "FIXED", 16, "IDATAIN", 2.350),
+            ("200.0", "FALSE", "DATA", "FIXED", 31, "IDATAIN", 3.790),
+            ("200.0", "FALSE", "DATA", "VARIABLE", 0, "IDATAIN", 0.815),
+            ("200.0", "FALSE", "DATA", "VARIABLE", 5, "IDATAIN", 1.295),
+            ("200.0", "FALSE", "DATA", "VAR_LOAD", 9, "IDATAIN", 1.679),
+            (
+                "200.0",
+                "FALSE",
+                "DATA",
+                "VAR_LOAD_PIPE",
+                0,
+                "IDATAIN",
+                0.815,
+            ),
+            ("200.0", "FALSE", "CLOCK", "FIXED", 0, "IDATAIN", 0.815),
+            ("200.0", "FALSE", "CLOCK", "FIXED", 13, "IDATAIN", 1.945),
+            ("200.0", "TRUE", "DATA", "FIXED", 0, "IDATAIN", 0.815),
+            ("200.0", "TRUE", "DATA", "FIXED", 1, "IDATAIN", 0.905),
+            ("200.0", "TRUE", "DATA", "FIXED", 8, "IDATAIN", 1.539),
+            ("200.0", "TRUE", "DATA", "FIXED", 13, "IDATAIN", 1.991),
+            ("200.0", "TRUE", "DATA", "FIXED", 31, "IDATAIN", 3.620),
+            ("200.0", "TRUE", "CLOCK", "FIXED", 13, "IDATAIN", 1.926),
+            ("200.0", "TRUE", "CLOCK", "FIXED", 31, "IDATAIN", 3.465),
+            ("190.0", "FALSE", "DATA", "FIXED", 8, "IDATAIN", 1.619),
+            ("190.0", "FALSE", "DATA", "FIXED", 31, "IDATAIN", 3.931),
+            ("190.0", "TRUE", "DATA", "FIXED", 31, "IDATAIN", 3.759),
+            ("210.0", "FALSE", "DATA", "FIXED", 0, "IDATAIN", 0.815),
+            ("210.0", "FALSE", "DATA", "FIXED", 8, "IDATAIN", 1.549),
+            ("210.0", "FALSE", "DATA", "FIXED", 31, "IDATAIN", 3.661),
+            ("210.0", "TRUE", "DATA", "FIXED", 31, "IDATAIN", 3.493),
+            ("300.0", "FALSE", "DATA", "FIXED", 0, "IDATAIN", 0.815),
+            ("300.0", "FALSE", "DATA", "FIXED", 8, "IDATAIN", 1.351),
+            ("300.0", "FALSE", "DATA", "FIXED", 31, "IDATAIN", 2.891),
+            ("300.0", "TRUE", "DATA", "FIXED", 31, "IDATAIN", 2.736),
+            ("200.0", "FALSE", "DATA", "FIXED", 0, "DATAIN", 1.012),
+            ("200.0", "FALSE", "DATA", "FIXED", 21, "DATAIN", 3.027),
+        ];
+        for (reference, fast, pattern, kind, value, source, ns) in vivado {
+            let mut params = crate::ir::Attrs::new();
+            params.set("REFCLK_FREQUENCY", reference);
+            params.set("HIGH_PERFORMANCE_MODE", fast);
+            params.set("SIGNAL_PATTERN", pattern);
+            params.set("IDELAY_TYPE", kind);
+            params.set("IDELAY_VALUE", value);
+            params.set("DELAY_SRC", source);
+            let ours = idelay_arc(&params, DelayModel::Legacy);
+            assert!(
+                (ours - ns).abs() < 0.0015,
+                "{reference} {fast} {pattern} {kind} {value} {source}: {ours:.4} where Vivado \
+                 says {ns}"
+            );
+        }
+        // And with nothing said, the defaults: 200 MHz, `DATA`, `IDATAIN`, 0.
+        let none = crate::ir::Attrs::new();
+        assert!((idelay_arc(&none, DelayModel::Legacy) - 0.815).abs() < 1e-9);
+        // Grade 3, Vivado's figures for the Vivado model.
+        let grade3: [(&str, &str, &str, i64, &str, f64); 7] = [
+            ("200.0", "FALSE", "DATA", 0, "IDATAIN", 0.601),
+            ("200.0", "FALSE", "DATA", 31, "IDATAIN", 3.576),
+            ("200.0", "TRUE", "DATA", 13, "IDATAIN", 1.777),
+            ("200.0", "TRUE", "CLOCK", 31, "IDATAIN", 3.251),
+            ("300.0", "TRUE", "DATA", 31, "IDATAIN", 2.522),
+            ("190.0", "FALSE", "DATA", 8, "IDATAIN", 1.405),
+            ("200.0", "FALSE", "DATA", 21, "DATAIN", 2.763),
+        ];
+        for (reference, fast, pattern, value, source, ns) in grade3 {
+            let mut params = crate::ir::Attrs::new();
+            params.set("REFCLK_FREQUENCY", reference);
+            params.set("HIGH_PERFORMANCE_MODE", fast);
+            params.set("SIGNAL_PATTERN", pattern);
+            params.set("IDELAY_VALUE", value);
+            params.set("DELAY_SRC", source);
+            let ours = idelay_arc(&params, DelayModel::Vivado);
+            assert!(
+                (ours - ns).abs() < 0.0015,
+                "grade 3 {reference} {fast} {pattern} {value} {source}: {ours:.4} where \
+                 Vivado says {ns}"
+            );
+        }
+    }
+
+    /// **A pad's delay is on the path from its pad**, as Vivado's timer has it:
+    /// `IDATAIN` and `DATAOUT` go through it at its arc, a fixed delay of no
+    /// clock, so that a register behind it is reached from the pad through the
+    /// delay. It was a flip-flop to this analysis, so that the pad's path ended
+    /// at the delay and the register's started there, in no domain at all.
+    /// Would catch that back; the arc's figure is the test above's.
+    #[test]
+    fn a_pads_delay_is_on_the_path_from_its_pad() {
+        let pin = |instance: usize, role: &str, output: bool, signal: usize| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let instance = |i: usize, name: &str, kind: &str, pins: Vec<usize>| Instance {
+            cell: CellId::from_index(i),
+            name: name.to_owned(),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        // Signals: 0 the pad, 1 the delayed data.
+        let pins = vec![
+            pin(0, "din", true, 0),
+            pin(1, "idatain", false, 0),
+            pin(1, "dataout", true, 1),
+            pin(2, "d", false, 1),
+        ];
+        let signal = |name: &str, driver: usize, sinks: Vec<usize>| Signal {
+            name: name.to_owned(),
+            driver: Some(driver),
+            sinks,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(0, "p$io0", "io", vec![0]),
+                instance(1, "u0", "iodelay", vec![1, 2]),
+                instance(2, "q", "ff", vec![3]),
+            ],
+            signals: vec![signal("p", 0, vec![1]), signal("d", 2, vec![3])],
+            pins,
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        for (model, arc) in [(DelayModel::Legacy, 0.815), (DelayModel::Vivado, 0.601)] {
+            let (timing, _) = place_timing(&design, top, &netlist, &Constraints::new(), model);
+            assert_eq!(timing.pins[1], PinTiming::Through);
+            assert_eq!(timing.pins[2], PinTiming::Through);
+            assert!((timing.cell[1] - arc).abs() < 1e-9, "{}", timing.cell[1]);
+        }
     }
 }

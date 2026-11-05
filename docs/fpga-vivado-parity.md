@@ -751,10 +751,39 @@ of its sources on this machine is another project's working copy, which does not
 `main` is not the file list `examples/husky/build_plus.sh` names; so `build_plus.sh` was not run.
 
 **Not done.** A delay's timing (`xray::timing` has none for these sites, so a delay estimates as a
-wire); an `ODELAYE2`, which a high-range bank does not have; a delay into an `ISERDESE2`'s `DDLY`,
+wire; **done since**, "A delay's own arc" below); an `ODELAYE2`, which a high-range bank does not have; a delay into an `ISERDESE2`'s `DDLY`,
 which the section on serialisers refuses as not measured and which these two sections between them
 have not asked of Vivado (**asked and built since**, below); `--vivado-placement` of a design with a delay; and the cell library has no model of any of these, since each is a primitive the device file
 declares and a model of the same name would take its place.
+
+### A delay's own arc
+
+"Estimates as a wire" above was not so: `xray::timing` took a delay for a flip-flop on its
+`C`, so a fixed delay, with no clock, ended its pad's path and started its register's in no
+domain at all, and nothing through it was timed. It is a cell on the path now, at the arc
+Vivado's timer gives it (`xray::timing::idelay_arc`), and its count and controls are a register
+on `C`. **What was asked:** `report_timing` and the cell's arcs on Vivado's own routed
+`idelay_sweep`, `idelay_iddr`, `idelay_lvds`, `datain_default` and `datain_value`, and four
+probes of `REFCLK_FREQUENCY` (190, 210, 300 MHz), `HIGH_PERFORMANCE_MODE` and `SIGNAL_PATTERN`,
+34 delays: the slow corner's maximum, speed grade 1. **What it said**, fitted, and within
+1.2 ps of every one (`an_input_delays_arc_is_vivados_timers`):
+
+| | |
+|---|---|
+| intercept | 0.815 ns from `IDATAIN` (0.816 on two), 1.012 from `DATAIN` |
+| a tap | `a / (64 × REFCLK_FREQUENCY) + jitter`: `a` 1.1132, or 1.094 in `HIGH_PERFORMANCE_MODE`; `jitter` 9 ps for the `DATA` pattern, 5 in `HIGH_PERFORMANCE_MODE`, none for `CLOCK` |
+| taps | `IDELAY_VALUE`, **whatever `IDELAY_TYPE`**: a `VAR_LOAD` of 9 is nine taps to the timer though nothing loads 9 |
+| `C` to `CNTVALUEOUT` | 0.751 ns |
+| at speed grade 3 | the same taps; the intercepts 0.601 and 0.748 ns, checked on 22 of the delays. The legacy delay model takes grade 1's, as its other figures are, and the Vivado model grade 3's |
+
+The form is mine: `1 / (64 f)` reads as a tap of a chain calibrated to half the reference
+period over 32 taps, and the 9 and 5 ps as the data pattern's jitter a tap, which is how they
+fit and is not read from a document. The setup of a variable delay's controls was not asked,
+and is a flip-flop's here. **Not compared:** a routed path through a delay in Reticle's estimate
+against Vivado's report of the same placement, which `--vivado-placement` of a design with a
+delay, not done, would ask. **Mutations:** four, all caught by the two tests: the delay timed as
+a flip-flop again, `DATAIN`'s intercept for `IDATAIN`'s, the reference clock ignored, and the
+`CLOCK` pattern given the data's jitter.
 
 ### A delay into a serialiser
 
