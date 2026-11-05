@@ -185,13 +185,52 @@ pub struct Bitstream {
     pub format: BitstreamFormat,
     /// One bitmap per tile of `format`, row-major inside the tile.
     bits: Vec<Vec<bool>>,
+    /// `format`'s tiles by position, sorted, each with the index of the
+    /// first tile at that position: what finds a tile's bitmap.
+    /// [`BitstreamFormat::index_of`] scans every tile, and a 7-series part
+    /// has thirty thousand of them, for each of the millions of bits a
+    /// large design sets. Derived from `format`, which is why two equal
+    /// bitstreams have equal ones.
+    index: Vec<((u32, u32), usize)>,
 }
 
 impl Bitstream {
     /// An all-zero bitstream in the given layout.
     pub fn empty(format: BitstreamFormat) -> Bitstream {
         let bits = format.tiles.iter().map(|t| vec![false; t.bits()]).collect();
-        Bitstream { format, bits }
+        Bitstream::with(format, bits)
+    }
+
+    /// A bitstream of these bitmaps in this layout, indexed.
+    fn with(format: BitstreamFormat, bits: Vec<Vec<bool>>) -> Bitstream {
+        let mut index: Vec<((u32, u32), usize)> = format
+            .tiles
+            .iter()
+            .enumerate()
+            .map(|(at, t)| (t.tile, at))
+            .collect();
+        // Sorted by position and then by index, so the first of a position
+        // is the one kept, as `index_of`'s scan finds it.
+        index.sort_unstable();
+        index.dedup_by_key(|(tile, _)| *tile);
+        Bitstream {
+            format,
+            bits,
+            index,
+        }
+    }
+
+    /// [`BitstreamFormat::index_of`], by the index. `format` is public, so
+    /// the answer is checked against it, and a layout changed since the
+    /// index was made is scanned instead.
+    fn tile_index(&self, tile: (u32, u32)) -> Option<usize> {
+        let found = self
+            .index
+            .binary_search_by_key(&tile, |(t, _)| *t)
+            .ok()
+            .map(|at| self.index[at].1)
+            .filter(|at| self.format.tiles.get(*at).is_some_and(|t| t.tile == tile));
+        found.or_else(|| self.format.index_of(tile.0, tile.1))
     }
 
     /// Sets one bit of one tile.
@@ -203,13 +242,10 @@ impl Bitstream {
     /// Both mean the architecture and the routing disagree, which is a
     /// broken database rather than a broken design.
     pub fn set(&mut self, tile: (u32, u32), bit: ConfigBit) -> Result<(), BitstreamError> {
-        let index = self
-            .format
-            .index_of(tile.0, tile.1)
-            .ok_or(BitstreamError::NoTile {
-                x: tile.0,
-                y: tile.1,
-            })?;
+        let index = self.tile_index(tile).ok_or(BitstreamError::NoTile {
+            x: tile.0,
+            y: tile.1,
+        })?;
         let format = &self.format.tiles[index];
         if bit.row >= format.rows || bit.col >= format.cols {
             return Err(BitstreamError::OutOfRange {
@@ -230,13 +266,10 @@ impl Bitstream {
     ///
     /// Those of [`Bitstream::set`].
     pub fn clear(&mut self, tile: (u32, u32), bit: ConfigBit) -> Result<(), BitstreamError> {
-        let index = self
-            .format
-            .index_of(tile.0, tile.1)
-            .ok_or(BitstreamError::NoTile {
-                x: tile.0,
-                y: tile.1,
-            })?;
+        let index = self.tile_index(tile).ok_or(BitstreamError::NoTile {
+            x: tile.0,
+            y: tile.1,
+        })?;
         let format = &self.format.tiles[index];
         if bit.row >= format.rows || bit.col >= format.cols {
             return Err(BitstreamError::OutOfRange {
@@ -253,7 +286,7 @@ impl Bitstream {
     /// Whether one bit of one tile is set; `None` when there is no such
     /// tile or bit.
     pub fn get(&self, tile: (u32, u32), bit: ConfigBit) -> Option<bool> {
-        let index = self.format.index_of(tile.0, tile.1)?;
+        let index = self.tile_index(tile)?;
         let format = &self.format.tiles[index];
         if bit.row >= format.rows || bit.col >= format.cols {
             return None;
@@ -454,10 +487,7 @@ impl Bitstream {
             rows.push(row);
         }
         finish(&mut current, &mut rows, &mut tiles, &mut bits);
-        Ok(Bitstream {
-            format: BitstreamFormat { device, tiles },
-            bits,
-        })
+        Ok(Bitstream::with(BitstreamFormat { device, tiles }, bits))
     }
 
     /// Writes Reticle's own binary container.
@@ -559,10 +589,7 @@ impl Bitstream {
             });
             bits.push(tile);
         }
-        Ok(Bitstream {
-            format: BitstreamFormat { device, tiles },
-            bits,
-        })
+        Ok(Bitstream::with(BitstreamFormat { device, tiles }, bits))
     }
 }
 
@@ -745,6 +772,40 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// **A tile is found by the index as the scan found it**: in a layout
+    /// out of row-major order and with one position named twice, each
+    /// position resolves to the first tile of it, a position with no tile
+    /// to none, and a layout changed after the bitstream was made is still
+    /// answered from the layout.
+    ///
+    /// Would catch the index keeping the last of two tiles at one
+    /// position, or a search that misses a tile in an unsorted layout,
+    /// which would set a design's bits in another tile's bitmap. Would not
+    /// catch a slower lookup.
+    #[test]
+    fn a_tile_is_found_by_the_index_as_by_the_scan() {
+        let tile = |x: u32, y: u32, cols: u32| TileFormat {
+            tile: (x, y),
+            keyword: "logic_tile".to_owned(),
+            rows: 1,
+            cols,
+        };
+        let layout = BitstreamFormat {
+            device: "1k".to_owned(),
+            tiles: vec![tile(3, 1, 2), tile(0, 0, 3), tile(3, 1, 5), tile(1, 0, 4)],
+        };
+        let mut b = Bitstream::empty(layout.clone());
+        for y in 0..3 {
+            for x in 0..5 {
+                assert_eq!(b.tile_index((x, y)), layout.index_of(x, y), "({x}, {y})");
+            }
+        }
+        assert_eq!(b.tile_index((3, 1)), Some(0), "the first of the two");
+        b.format.tiles.swap(0, 3);
+        assert_eq!(b.tile_index((3, 1)), Some(2), "the layout as it is now");
+        assert_eq!(b.tile_index((1, 0)), Some(0));
     }
 
     #[test]

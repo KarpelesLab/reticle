@@ -1331,14 +1331,18 @@ impl XrayDatabase {
             tiles.iter().map(|t| ((t.grid_x, t.grid_y), t)).collect();
         let by_name: HashMap<&str, &XrayTile> =
             tiles.iter().map(|t| (t.name.as_str(), t)).collect();
-        // Per tile type of `arch`, the names of its arcs.
+        // Per tile type of `arch`, the names of its arcs. Asked whether it
+        // holds one name, not handed out: a copy of the set per routed pip
+        // was most of what writing the ChipWhisperer-Husky Plus's
+        // bitstream cost, three million copies of a set of thousands of
+        // strings.
         let mut arcs: HashMap<usize, HashSet<String>> = HashMap::new();
-        let mut arcs_of = |tile: &XrayTile| -> Result<Option<HashSet<String>>, XrayError> {
+        let mut is_arc = |tile: &XrayTile, name: &str| -> Result<bool, XrayError> {
             let Some(index) = arch.tile_index_at(tile.grid_x, tile.grid_y) else {
-                return Ok(None);
+                return Ok(false);
             };
             if let Some(known) = arcs.get(&index) {
-                return Ok(Some(known.clone()));
+                return Ok(known.contains(name));
             }
             let row = block_ram_rows.get(tile.tile_type.as_str()).copied();
             let set = self.features_for(files, tile, row)?.unwrap_or_default();
@@ -1355,8 +1359,9 @@ impl XrayDatabase {
                 .map(|p| format!("{}.{}", p.to.name, p.from.name))
                 .filter(|name| named.contains(name.as_str()))
                 .collect();
-            arcs.insert(index, names.clone());
-            Ok(Some(names))
+            let found = names.contains(name);
+            arcs.insert(index, names);
+            Ok(found)
         };
         let mut chosen: BTreeSet<(String, String)> = BTreeSet::new();
         for id in routing.routes().flat_map(|r| r.pips.iter()).chain(also) {
@@ -1368,7 +1373,7 @@ impl XrayDatabase {
                 continue;
             };
             let name = format!("{}.{}", graph.wire(pip.to).name, graph.wire(pip.from).name);
-            if arcs_of(tile)?.is_some_and(|arcs| arcs.contains(&name)) {
+            if is_arc(tile, &name)? {
                 chosen.insert((tile.name.clone(), name));
             }
         }
@@ -1377,7 +1382,7 @@ impl XrayDatabase {
             let Some(xtile) = by_name.get(tile.as_str()) else {
                 continue;
             };
-            if arcs_of(xtile)?.is_some_and(|arcs| arcs.contains(feature)) {
+            if is_arc(xtile, feature)? {
                 selected.insert((tile.clone(), feature.clone()));
             }
         }
