@@ -1415,6 +1415,29 @@ and another did not leaves something that depends on where the flow put
 things, and it is not found; one wrong word in one build is all there is
 to go on, and that bitstream is not loaded again.
 
+**What the port does with a wide access, measured 2026-11-06** on a build
+that answers (wb8 below), from the slave's own record of each request's
+`ARSIZE`/`ARLEN` and `AWSIZE`/`AWLEN`/beats: a 64-bit load from the
+Cortex-A53 arrives as one 8-byte beat; a 16-byte load (`ldr q0`) as
+**one burst of two 8-byte beats** (`ARSIZE` 3, `ARLEN` 1); a 16-byte store
+likewise (`AWSIZE` 3, `AWLEN` 1, two beats). The fabric side is 128 bits
+wide all the same: a 32-bit write to word *w* has its strobes on lane
+*w* mod 4. (The same reading for loads was made on 2026-10-30 on a build
+that answered wrongly; this confirms it.) So on this port an 8-byte beat
+at byte address *a* carries word `{a[3:2], k}` on lane *k*, exactly as a
+16-byte one does, and a slave that takes the two alike needs no other
+logic; wb8 is the 32-neuron slave with that one change (two conditions).
+
+| 32-neuron slave, 100 MHz, 10 000 images | Accesses per image | Per image |
+|---|---|---|
+| 32-bit (wbk) | 8 stores, 1 to 5 loads | 1.26 µs |
+| 16-byte (wb8, `axi128`) | 2 stores, 1 load (scores, class and count in one) | **0.543 µs** |
+
+Both bit for bit with the model on every image, 73.84 %. A single load
+takes about 200 ns at 100 MHz whatever its width (227 ns for 16 bytes),
+so what is left is round trips on the bus, not the network: its answer is
+five clocks, 50 ns, after the start.
+
 What was ruled out on the way:
 
 - **Copying more of Vivado's clock network.** In region 279 the clock
