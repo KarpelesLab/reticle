@@ -745,7 +745,7 @@ pub struct RoutingGraph {
 /// mixer, which is not a hash to defend a server with and is the right one
 /// for a table whose keys the program itself wrote.
 #[derive(Clone, Copy, Default)]
-struct FastHasher(u64);
+pub(crate) struct FastHasher(u64);
 
 /// The odd multiplier of [`FastHasher`], from the usual mixing constants.
 const FAST_MIX: u64 = 0x517c_c1b7_2722_0a95;
@@ -793,7 +793,7 @@ impl Hasher for FastHasher {
 }
 
 /// A [`HashMap`] over [`FastHasher`]; see it for why.
-type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
+pub(crate) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
 
 impl RoutingGraph {
     /// Expands `arch`; see [`Arch::build_graph`].

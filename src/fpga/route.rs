@@ -47,11 +47,11 @@
 //! pin order, and the priority queue breaks ties by node id, so the same
 //! placement always produces the same routing.
 
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
-use super::arch::{NodeId, PipId, RoutingGraph};
+use super::arch::{FastMap, NodeId, PipId, RoutingGraph};
 use super::place::{Netlist, Placement};
 
 /// Why a design could not be routed.
@@ -736,17 +736,24 @@ impl Routing {
                     graph.wire(root).full_name()
                 ));
             }
-            // Where each node came from, for this signal only.
-            let mut driven: Vec<(NodeId, NodeId)> = Vec::new();
+            // Where each node came from, for this signal only: the first
+            // pip into it. A map and not a list searched for each pip and
+            // each step back, which made checking a net of thousands of
+            // sinks quadratic in its pips.
+            let mut driven: HashMap<NodeId, NodeId> = HashMap::with_capacity(route.pips.len());
             for pip in &route.pips {
                 let pip = graph.pip(*pip);
-                if driven.iter().any(|(to, _)| *to == pip.to) {
-                    problems.push(format!(
-                        "`{name}` drives {} from two pips",
-                        graph.wire(pip.to).full_name()
-                    ));
+                match driven.entry(pip.to) {
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        problems.push(format!(
+                            "`{name}` drives {} from two pips",
+                            graph.wire(pip.to).full_name()
+                        ));
+                    }
+                    std::collections::hash_map::Entry::Vacant(slot) => {
+                        slot.insert(pip.from);
+                    }
                 }
-                driven.push((pip.to, pip.from));
             }
             for pin in &netlist.signals[signal].sinks {
                 let pin = &netlist.pins[*pin];
@@ -760,7 +767,7 @@ impl Routing {
                 for mut node in wires {
                     let mut steps = 0usize;
                     while node != route.source {
-                        let Some((_, from)) = driven.iter().find(|(to, _)| *to == node) else {
+                        let Some(from) = driven.get(&node) else {
                             problems.push(format!(
                                 "`{name}` does not reach {}.{}[{}]: {} is driven by nothing",
                                 netlist.instances[pin.instance].name,
@@ -888,7 +895,7 @@ fn score(cost: f64) -> u64 {
 /// one of them a cache miss into a vector of strings. This holds the four
 /// numbers the distance estimate uses and the node's base cost beside
 /// them, which is one sequential-ish read instead of two scattered ones.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Geometry {
     /// The tile the wire starts in.
     tile: (u32, u32),
@@ -904,6 +911,13 @@ struct Geometry {
     closed: bool,
     /// Its [`Timing::node_delay`] in units of cost: see [`delay_scale`].
     delay: f32,
+    /// Its physical node ([`physical_nodes`]): [`State::group`]'s entry,
+    /// kept here too because the expansion reads it for every pip it
+    /// relaxes, and beside the rest it is in a cache line already read.
+    root: NodeId,
+    /// True when it is one of [`RouteOptions::network_entry`]'s, read on
+    /// every pip likewise.
+    entry: bool,
 }
 
 impl Geometry {
@@ -930,8 +944,21 @@ impl Geometry {
                 closed: closed.get(index).copied().unwrap_or(false),
                 #[allow(clippy::cast_possible_truncation, reason = "a delay in cost units")]
                 delay: (f64::from(delays.get(index).copied().unwrap_or(0)) * scale) as f32,
+                root: NodeId::try_from(index).unwrap_or(NodeId::MAX),
+                entry: false,
             })
             .collect()
+    }
+
+    /// Files each node's physical node and whether it is a network entry,
+    /// which [`Geometry::of`] leaves as the node itself and not one.
+    fn join(table: &mut [Geometry], group: &[NodeId], entry: &[bool]) {
+        for (index, at) in table.iter_mut().enumerate() {
+            if let Some(root) = group.get(index) {
+                at.root = *root;
+            }
+            at.entry = entry.get(index).copied().unwrap_or(false);
+        }
     }
 
     /// The tile of this wire closest to `(x, y)`; see
@@ -950,14 +977,9 @@ impl Geometry {
 
 /// The router's per-node state.
 struct State {
-    /// How many signals are on each **physical** node, indexed by its
-    /// root in `group`; only roots are ever non-zero.
-    occupancy: Vec<u32>,
-    /// The accumulated congestion history, by root likewise.
-    history: Vec<f64>,
-    /// How many passes in a row each root has ended overused: see
-    /// [`Timing::present_cap_run`].
-    overused_for: Vec<u32>,
+    /// How each **physical** node is used, indexed by its root in
+    /// `group`; only roots are ever used.
+    usage: Vec<Usage>,
     /// Each graph node's physical node: see [`physical_nodes`].
     group: Vec<NodeId>,
     /// Physical nodes that are the only way into a sink, one bit each:
@@ -965,8 +987,37 @@ struct State {
     reserved: Vec<u64>,
     /// And whose sink each is, by signal, or [`CONTESTED`] when two
     /// signals' sinks have the same only way in.
-    owner: HashMap<NodeId, usize>,
+    owner: FastMap<NodeId, usize>,
 }
+
+/// What [`State`] keeps of one physical node, together because the
+/// expansion reads all of it for every pip it relaxes: as three arrays
+/// that was three cache misses where this is one.
+#[derive(Clone, Copy, Debug, Default)]
+struct Usage {
+    /// The accumulated congestion history.
+    history: f64,
+    /// How many signals are on it.
+    occupancy: u32,
+    /// How many passes in a row it has ended overused: see
+    /// [`Timing::present_cap_run`].
+    overused_for: u32,
+}
+
+impl Usage {
+    /// The cost of putting one more signal on the node, its base cost
+    /// being `base`.
+    fn cost(&self, base: f32, present: f64) -> f64 {
+        // Capacity is one signal per wire; the excess is what the present
+        // factor multiplies.
+        let overuse = f64::from(self.occupancy);
+        f64::from(base) * (1.0 + present * overuse) * (1.0 + self.history)
+    }
+}
+
+/// How many of a node's pips the expansion reads ahead of relaxing them;
+/// see [`maze`].
+const AHEAD: usize = 16;
 
 /// An entry [`reserve_sink_entries`] found in front of two signals' sinks:
 /// a placement that asks one wire to carry two signals, which no price
@@ -981,12 +1032,10 @@ impl State {
     fn new(group: Vec<NodeId>) -> Self {
         let nodes = group.len();
         State {
-            occupancy: vec![0; nodes],
-            history: vec![0.0; nodes],
-            overused_for: vec![0; nodes],
+            usage: vec![Usage::default(); nodes],
             group,
             reserved: vec![0; nodes.div_ceil(64)],
-            owner: HashMap::new(),
+            owner: FastMap::default(),
         }
     }
 
@@ -1002,16 +1051,6 @@ impl State {
             .is_some_and(|owner| *owner != signal && *owner != CONTESTED)
     }
 
-    /// The cost of putting one more signal on a node whose base cost is
-    /// `base` and whose physical node is `root`.
-    fn node_cost(&self, root: NodeId, base: f32, present: f64) -> f64 {
-        let index = root as usize;
-        // Capacity is one signal per wire; the excess is what the present
-        // factor multiplies.
-        let overuse = f64::from(self.occupancy[index]);
-        f64::from(base) * (1.0 + present * overuse) * (1.0 + self.history[index])
-    }
-
     /// The physical nodes a route occupies, each once.
     fn roots(&self, nodes: &[NodeId]) -> Vec<NodeId> {
         let mut out: Vec<NodeId> = nodes.iter().map(|n| self.group[*n as usize]).collect();
@@ -1024,10 +1063,10 @@ impl State {
     fn overuse(&self) -> (usize, usize) {
         let mut nodes = 0;
         let mut total = 0;
-        for count in &self.occupancy {
-            if *count > 1 {
+        for usage in &self.usage {
+            if usage.occupancy > 1 {
                 nodes += 1;
-                total += usize::try_from(*count - 1).unwrap_or(0);
+                total += usize::try_from(usage.occupancy - 1).unwrap_or(0);
             }
         }
         (nodes, total)
@@ -1087,24 +1126,27 @@ pub fn route(
 
     let mut state = State::new(physical_nodes(graph));
     reserve_sink_entries(graph, &terminals, &options.equivalent, &mut state);
-    let geometry = Geometry::of(
+    let mut geometry = Geometry::of(
         graph,
         &options.node_base,
         &options.network,
         &options.closed,
         options.timing.as_ref(),
     );
-    // The node every outgoing pip reaches, in the order
+    Geometry::join(&mut geometry, &state.group, &options.network_entry);
+    // Every outgoing pip with the node it reaches, in the order
     // [`RoutingGraph::outgoing`] hands the pips over, so the inner loop of
-    // the expansion walks two sequential arrays instead of chasing a
-    // twenty-byte `Pip` per edge. Four bytes an edge, against a cache miss
+    // the expansion walks one sequential array instead of chasing a
+    // twenty-byte `Pip` per edge. Eight bytes an edge, against a cache miss
     // per edge relaxed — 1.3 billion of them for one design on this die.
+    // The pip and the node were two arrays, read side by side, and so two
+    // cache misses where one will do.
     let mut reach_start: Vec<u32> = Vec::with_capacity(graph.nodes.len() + 1);
-    let mut reach: Vec<NodeId> = Vec::with_capacity(graph.pips.len());
+    let mut reach: Vec<(PipId, NodeId)> = Vec::with_capacity(graph.pips.len());
     for node in 0..graph.nodes.len() {
         reach_start.push(u32::try_from(reach.len()).unwrap_or(u32::MAX));
         for pip in graph.outgoing(NodeId::try_from(node).unwrap_or(0)) {
-            reach.push(graph.pip(*pip).to);
+            reach.push((*pip, graph.pip(*pip).to));
         }
     }
     reach_start.push(u32::try_from(reach.len()).unwrap_or(u32::MAX));
@@ -1131,6 +1173,9 @@ pub fn route(
     let mut unboxed = vec![false; netlist.signals.len()];
     // How many tiles each signal's box has grown by; see `BOX_GROWTH`.
     let mut widened = vec![0u32; netlist.signals.len()];
+    // Each signal's box before any margin, in `terminals` order, drawn the
+    // first time it is asked for: see `route_one`.
+    let mut reach_boxes: Vec<Option<Bounds>> = vec![None; terminals.len()];
     let present_at = |index: u32, present: f64| -> f64 {
         match options.first_pass_present {
             Some(first) if index == 1 => first,
@@ -1171,7 +1216,7 @@ pub fn route(
                     state
                         .roots(&r.nodes)
                         .iter()
-                        .all(|n| state.occupancy[*n as usize] <= 1)
+                        .all(|n| state.usage[*n as usize].occupancy <= 1)
                 })
             {
                 continue;
@@ -1212,13 +1257,13 @@ pub fn route(
                 present_at(index, present),
                 options,
                 netlist,
-                margin,
+                margin.map(|margin| (margin, &mut reach_boxes[which])),
             )?;
             if escaped {
                 unboxed[terminals.signal] = true;
             }
             for root in state.roots(&route.nodes) {
-                state.occupancy[root as usize] += 1;
+                state.usage[root as usize].occupancy += 1;
             }
             routing.routes[terminals.signal] = Some(route);
         }
@@ -1239,7 +1284,7 @@ pub fn route(
                     state
                         .roots(&r.nodes)
                         .iter()
-                        .any(|n| state.occupancy[*n as usize] > 1)
+                        .any(|n| state.usage[*n as usize].occupancy > 1)
                 });
                 if congested {
                     widened[terminals.signal] += BOX_GROWTH;
@@ -1269,7 +1314,7 @@ pub fn route(
             if cleanups_left == 0 {
                 break;
             }
-            let nodes = state.occupancy.iter().filter(|c| **c > 0).count();
+            let nodes = state.usage.iter().filter(|u| u.occupancy > 0).count();
             legal = Some((routing.clone(), index, nodes));
             cleanups_left -= 1;
             cleaning = true;
@@ -1277,11 +1322,12 @@ pub fn route(
             (least, stalled) = (usize::MAX, 0);
         }
         for node in 0..graph.nodes.len() {
-            if state.occupancy[node] > 1 {
-                state.history[node] += options.history_factor;
-                state.overused_for[node] += 1;
+            let usage = &mut state.usage[node];
+            if usage.occupancy > 1 {
+                usage.history += options.history_factor;
+                usage.overused_for += 1;
             } else {
-                state.overused_for[node] = 0;
+                usage.overused_for = 0;
             }
         }
         if uncritical_cap_grows {
@@ -1314,11 +1360,11 @@ pub fn route(
     }
     if overused > 0 {
         let mut worst: Vec<(u32, NodeId)> = state
-            .occupancy
+            .usage
             .iter()
             .enumerate()
-            .filter(|(_, count)| **count > 1)
-            .map(|(node, count)| (*count, NodeId::try_from(node).unwrap_or(0)))
+            .filter(|(_, usage)| usage.occupancy > 1)
+            .map(|(node, usage)| (usage.occupancy, NodeId::try_from(node).unwrap_or(0)))
             .collect();
         worst.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         return Err(RouteError::Congested {
@@ -1362,7 +1408,7 @@ pub fn route(
     report.visited = scratch.visited;
     report.queued = scratch.queued;
     report.gave_up = scratch.gave_ups;
-    report.nodes = state.occupancy.iter().filter(|c| **c > 0).count();
+    report.nodes = state.usage.iter().filter(|u| u.occupancy > 0).count();
     Ok((routing, report))
 }
 
@@ -1949,7 +1995,7 @@ fn kept_part(
     route: &Route,
     terminals: &Terminals,
 ) -> Kept {
-    let bad = |node: NodeId| state.occupancy[state.group[node as usize] as usize] > 1;
+    let bad = |node: NodeId| state.usage[state.group[node as usize] as usize].occupancy > 1;
     let mut parent: HashMap<NodeId, PipId> = HashMap::new();
     for pip in &route.pips {
         parent.insert(graph.pip(*pip).to, *pip);
@@ -2262,7 +2308,7 @@ fn nodes_of(
 fn rip_up(state: &mut State, routing: &mut Routing, signal: usize) {
     if let Some(route) = routing.routes[signal].take() {
         for root in state.roots(&route.nodes) {
-            let slot = &mut state.occupancy[root as usize];
+            let slot = &mut state.usage[root as usize].occupancy;
             *slot = slot.saturating_sub(1);
         }
     }
@@ -2429,7 +2475,7 @@ struct Sink {
 fn route_one(
     graph: &RoutingGraph,
     geometry: &[Geometry],
-    edges: (&[u32], &[NodeId]),
+    edges: (&[u32], &[(PipId, NodeId)]),
     state: &State,
     scratch: &mut Scratch,
     terminals: &Terminals,
@@ -2438,7 +2484,7 @@ fn route_one(
     present: f64,
     options: &RouteOptions,
     netlist: &Netlist,
-    margin: Option<u32>,
+    margin: Option<(u32, &mut Option<Bounds>)>,
 ) -> Result<(Route, bool), RouteError> {
     let source = terminals.source;
     let mut escaped = false;
@@ -2484,10 +2530,15 @@ fn route_one(
         }
     }
     // A data signal's searches stay in the box around its terminals; see
-    // `RouteOptions::bounding_margin`.
-    let mut bounds = margin
-        .filter(|_| barred)
-        .map(|margin| Bounds::around(geometry, terminal_reach(graph, terminals), margin));
+    // `RouteOptions::bounding_margin`. What the box is drawn round depends
+    // on the terminals alone, so it is walked once per route and kept, and
+    // only the margin is applied each pass: walking it again for every
+    // signal every pass was a twentieth of a route.
+    let mut bounds = margin.filter(|_| barred).map(|(margin, drawn)| {
+        drawn
+            .get_or_insert_with(|| Bounds::around(geometry, terminal_reach(graph, terminals), 0))
+            .widened(margin)
+    });
     for which in order {
         if connected.get(which).copied().unwrap_or(false) {
             continue;
@@ -2552,7 +2603,7 @@ fn route_one(
                 Some(found) if kept_off.len() < SECOND_ENTRY_RETRIES => {
                     match second_entry(graph, &state.group, &found) {
                         Some(root) => {
-                            scratch.held[root as usize] = scratch.tree_mark;
+                            scratch.drive(root);
                             kept_off.push(root);
                         }
                         None => break Some(found),
@@ -2562,7 +2613,7 @@ fn route_one(
             }
         };
         for root in kept_off {
-            scratch.held[root as usize] = 0;
+            scratch.release(root);
         }
         let Some(path) = path else {
             return Err(RouteError::Unroutable {
@@ -2651,13 +2702,106 @@ struct Scratch {
     gave_ups: u64,
     /// The signal being routed, for [`State::reserved_against`].
     signal: usize,
-    /// Per physical node ([`physical_nodes`]), [`Scratch::tree_mark`] when
-    /// the tree being built drives it: see [`Scratch::holds`].
-    held: Vec<u32>,
+    /// Per physical node ([`physical_nodes`]), one bit, set when the tree
+    /// being built drives it: see [`Scratch::holds`]. A bit and not a
+    /// generation stamp because the expansion reads it for every pip it
+    /// relaxes, and a bit a node is a table a thirty-second the size, which
+    /// stays in the cache where the stamps did not.
+    held: Vec<u64>,
+    /// The physical nodes whose bits in `held` the tree has set, to clear
+    /// when the next one starts.
+    held_list: Vec<NodeId>,
     /// Per graph node, [`Scratch::tree_mark`] when it is a node of that tree.
     in_tree: Vec<u32>,
-    /// Which tree [`Scratch::held`] and [`Scratch::in_tree`] are about.
+    /// Which tree [`Scratch::in_tree`] is about.
     tree_mark: u32,
+    /// The search's queue, kept between searches for its storage.
+    queue: Queue,
+}
+
+/// A min-queue of `(estimate, node)`, a heap of four children a node.
+///
+/// The expansion's queue: `std`'s `BinaryHeap` is binary, and on the
+/// ChipWhisperer-Husky Plus the sifting in it was a fifth of the whole
+/// build, half a billion pops of a queue millions long whose every level
+/// is a cache miss. Four children a node is half the levels, and the four
+/// are one cache line. What is popped is the least entry, as it was:
+/// entries are ordered as tuples, and two equal ones are the same entry,
+/// so the order things leave in does not depend on how the heap is laid
+/// out and the routing is the one the binary heap made.
+#[derive(Default)]
+struct Queue {
+    items: Vec<(u64, NodeId)>,
+}
+
+impl Queue {
+    /// Empties the queue, keeping its storage.
+    fn clear(&mut self) {
+        self.items.clear();
+    }
+
+    /// Adds an entry.
+    fn push(&mut self, item: (u64, NodeId)) {
+        let mut at = self.items.len();
+        self.items.push(item);
+        while at > 0 {
+            let parent = (at - 1) / 4;
+            if self.items[parent] <= item {
+                break;
+            }
+            self.items[at] = self.items[parent];
+            at = parent;
+        }
+        self.items[at] = item;
+    }
+
+    /// Takes the least entry out.
+    fn pop(&mut self) -> Option<(u64, NodeId)> {
+        let last = self.items.pop()?;
+        let Some(top) = self.items.first().copied() else {
+            return Some(last);
+        };
+        // The hole the top leaves goes down to the bottom by the least
+        // child, without asking at each level whether `last` would do
+        // there, and `last` then comes up from the bottom, which is
+        // seldom more than a level: it was a leaf. Fewer comparisons on
+        // the way down than sifting `last` itself, which is what `std`'s
+        // heap does too.
+        let len = self.items.len();
+        let mut at = 0;
+        loop {
+            let first = 4 * at + 1;
+            let least = if let Some(kids) = self.items.get(first..first + 4) {
+                // A pair of pairs, so the comparisons do not wait on
+                // one another.
+                let low = if kids[1] < kids[0] { 1 } else { 0 };
+                let high = if kids[3] < kids[2] { 3 } else { 2 };
+                first + if kids[high] < kids[low] { high } else { low }
+            } else if first < len {
+                let mut least = first;
+                for child in first + 1..len {
+                    if self.items[child] < self.items[least] {
+                        least = child;
+                    }
+                }
+                least
+            } else {
+                break;
+            };
+            self.items[at] = self.items[least];
+            at = least;
+        }
+        while at > 0 {
+            let parent = (at - 1) / 4;
+            if self.items[parent] <= last {
+                break;
+            }
+            self.items[at] = self.items[parent];
+            at = parent;
+        }
+        self.items[at] = last;
+        Some(top)
+    }
 }
 
 impl Scratch {
@@ -2675,17 +2819,21 @@ impl Scratch {
             gave_up: false,
             gave_ups: 0,
             signal: 0,
-            held: vec![0; nodes],
+            held: vec![0; nodes.div_ceil(64)],
+            held_list: Vec::new(),
             in_tree: vec![0; nodes],
             tree_mark: 0,
+            queue: Queue::default(),
         }
     }
 
     /// Starts a new tree: nothing is held.
     fn new_tree(&mut self) {
+        for root in self.held_list.drain(..) {
+            self.held[root as usize / 64] &= !(1 << (root % 64));
+        }
         self.tree_mark = self.tree_mark.wrapping_add(1);
         if self.tree_mark == 0 {
-            self.held.fill(0);
             self.in_tree.fill(0);
             self.tree_mark = 1;
         }
@@ -2694,7 +2842,23 @@ impl Scratch {
     /// Files `node` as part of the tree, and its piece of metal as driven.
     fn hold(&mut self, group: &[NodeId], node: NodeId) {
         self.in_tree[node as usize] = self.tree_mark;
-        self.held[group[node as usize] as usize] = self.tree_mark;
+        self.drive(group[node as usize]);
+    }
+
+    /// Marks the physical node `root` as driven by the tree.
+    fn drive(&mut self, root: NodeId) {
+        self.held[root as usize / 64] |= 1 << (root % 64);
+        self.held_list.push(root);
+    }
+
+    /// Marks the physical node `root` as not driven by the tree after all.
+    fn release(&mut self, root: NodeId) {
+        self.held[root as usize / 64] &= !(1 << (root % 64));
+    }
+
+    /// Whether the tree drives the physical node `root`.
+    fn drives(&self, root: NodeId) -> bool {
+        self.held[root as usize / 64] >> (root % 64) & 1 != 0
     }
 
     /// Whether a pip from `from` into `to` would drive, a second time, a
@@ -2711,11 +2875,10 @@ impl Scratch {
     /// bit as a one whatever was written. Entering a tree node itself is
     /// not this: the path is cut there (see `route_one`), and the line's
     /// own joins (`group[from] == group[to]`) drive nothing.
-    /// `root` is `to`'s physical node, which the caller has already read.
-    fn holds(&self, group: &[NodeId], from: NodeId, to: NodeId, root: NodeId) -> bool {
-        self.held[root as usize] == self.tree_mark
-            && group[from as usize] != root
-            && self.in_tree[to as usize] != self.tree_mark
+    /// `from_root` and `root` are `from`'s and `to`'s physical nodes, which
+    /// the caller has already read.
+    fn holds(&self, from_root: NodeId, to: NodeId, root: NodeId) -> bool {
+        self.drives(root) && from_root != root && self.in_tree[to as usize] != self.tree_mark
     }
 
     fn start(&mut self) {
@@ -2811,7 +2974,7 @@ const NEAR_BIN: u32 = 4;
 struct NearTree {
     /// Bin `(x / NEAR_BIN, y / NEAR_BIN)` to the nodes reaching it. A wire
     /// is filed under every bin it spans.
-    bins: HashMap<(u32, u32), Vec<NodeId>>,
+    bins: FastMap<(u32, u32), Vec<NodeId>>,
     /// Nodes that reach every tile, which are near everything.
     everywhere: Vec<NodeId>,
 }
@@ -3035,11 +3198,19 @@ impl Bounds {
             b.x1 = b.x1.max(x);
             b.y1 = b.y1.max(y);
         }
+        b.widened(margin)
+    }
+
+    /// The box widened by `margin` tiles each way, short of the edges of
+    /// the coordinates. Widening by `a` and then by `b` is widening by
+    /// `a + b`, short of those edges, so a box drawn with no margin and
+    /// widened later is the box drawn with the margin.
+    fn widened(self, margin: u32) -> Bounds {
         Bounds {
-            x0: b.x0.saturating_sub(margin),
-            y0: b.y0.saturating_sub(margin),
-            x1: b.x1.saturating_add(margin),
-            y1: b.y1.saturating_add(margin),
+            x0: self.x0.saturating_sub(margin),
+            y0: self.y0.saturating_sub(margin),
+            x1: self.x1.saturating_add(margin),
+            y1: self.y1.saturating_add(margin),
         }
     }
 
@@ -3074,7 +3245,7 @@ fn heuristic_base(base: f32) -> f32 {
 fn maze(
     graph: &RoutingGraph,
     geometry: &[Geometry],
-    edges: (&[u32], &[NodeId]),
+    edges: (&[u32], &[(PipId, NodeId)]),
     state: &State,
     scratch: &mut Scratch,
     tree: &BTreeMap<NodeId, f64>,
@@ -3113,12 +3284,15 @@ fn maze(
     };
 
     scratch.start();
-    let mut heap: BinaryHeap<std::cmp::Reverse<(u64, NodeId)>> = BinaryHeap::new();
+    // The queue's storage is the last search's, so that a search does not
+    // grow a new one from nothing: it is put back below.
+    let mut heap = std::mem::take(&mut scratch.queue);
+    heap.clear();
     for (node, delay) in tree {
         let start = critical * delay;
         let estimate = start + heuristic(*node);
         scratch.set(*node, start, estimate, PipId::MAX);
-        heap.push(std::cmp::Reverse((score(estimate), *node)));
+        heap.push((score(estimate), *node));
     }
     let (reach_start, reach) = edges;
     let mut reached = false;
@@ -3133,15 +3307,16 @@ fn maze(
     let interchangeable = |node: NodeId| {
         class != u32::MAX
             && options.equivalent.get(node as usize) == Some(&class)
-            && state.occupancy[state.group[node as usize] as usize] == 0
+            && state.usage[state.group[node as usize] as usize].occupancy == 0
             && !tree.contains_key(&node)
     };
     let mut end = sink;
     let first = scratch.visited;
-    while let Some(std::cmp::Reverse((estimate, node))) = heap.pop() {
+    while let Some((estimate, node)) = heap.pop() {
         scratch.visited += 1;
         if critical > 0.0 && scratch.visited - first > scratch.budget {
             scratch.gave_up = true;
+            scratch.queue = heap;
             return None;
         }
         if estimate > score(scratch.estimate_of(node)) {
@@ -3153,65 +3328,77 @@ fn maze(
             break;
         }
         let here = scratch.cost_of(node);
+        let from = &geometry[node as usize];
         let run = reach_start[node as usize] as usize..reach_start[node as usize + 1] as usize;
-        for (pip, next) in graph.outgoing(node).iter().zip(&reach[run]) {
-            if barred && geometry[*next as usize].reserved {
-                continue;
+        // What every pip reaches is read first, a few at a time, and then
+        // the pips are relaxed: the reads of one pip's node and of its
+        // physical node's usage do not depend on another pip's, but
+        // relaxing one is a run of branches the processor cannot see far
+        // past, so read as part of it they were a cache miss after
+        // another. Nothing the reads see changes during the expansion.
+        for chunk in reach[run].chunks(AHEAD) {
+            let mut ahead = [Geometry::default(); AHEAD];
+            for (slot, (_, next)) in ahead.iter_mut().zip(chunk) {
+                *slot = geometry[*next as usize];
             }
-            if geometry[*next as usize].closed {
-                continue;
+            let mut used = [Usage::default(); AHEAD];
+            for (slot, at) in used.iter_mut().zip(&ahead[..chunk.len()]) {
+                *slot = state.usage[at.root as usize];
             }
-            if !barred
-                && options.network_entry.get(*next as usize) == Some(&true)
-                && !geometry[node as usize].reserved
-                && !graph.pip_bits(*pip).is_empty()
-            {
-                continue;
-            }
-            // Off the network, a strict sink's path takes joins only: no
-            // programmable pip out of a wire that is not the network's but
-            // the source's own.
-            if let Some(source) = strict
-                && node != source
-                && !geometry[node as usize].reserved
-                && !graph.pip_bits(*pip).is_empty()
-            {
-                continue;
-            }
-            let at = &geometry[*next as usize];
-            if bounds.is_some_and(|b| !b.touches(at)) {
-                continue;
-            }
-            // Its physical node, which the checks below all read.
-            let root = state.group[*next as usize];
-            if scratch.holds(&state.group, node, *next, root) {
-                continue;
-            }
-            let step = if critical > 0.0 {
-                let cap = if state.overused_for[root as usize] >= scratch.present_cap_run {
-                    f64::INFINITY
+            for ((pip, next), (at, usage)) in chunk.iter().zip(ahead.iter().zip(&used)) {
+                if barred && at.reserved {
+                    continue;
+                }
+                if at.closed {
+                    continue;
+                }
+                if !barred && at.entry && !from.reserved && !graph.pip_bits(*pip).is_empty() {
+                    continue;
+                }
+                // Off the network, a strict sink's path takes joins only: no
+                // programmable pip out of a wire that is not the network's but
+                // the source's own.
+                if let Some(source) = strict
+                    && node != source
+                    && !from.reserved
+                    && !graph.pip_bits(*pip).is_empty()
+                {
+                    continue;
+                }
+                if bounds.is_some_and(|b| !b.touches(at)) {
+                    continue;
+                }
+                // Its physical node, which the checks below all read.
+                let root = at.root;
+                if scratch.holds(from.root, *next, root) {
+                    continue;
+                }
+                let step = if critical > 0.0 {
+                    let cap = if usage.overused_for >= scratch.present_cap_run {
+                        f64::INFINITY
+                    } else {
+                        scratch.present_cap
+                    };
+                    slack * usage.cost(at.base, present.min(cap)) + critical * f64::from(at.delay)
                 } else {
-                    scratch.present_cap
+                    usage.cost(at.base, present.min(scratch.uncritical_cap))
                 };
-                slack * state.node_cost(root, at.base, present.min(cap))
-                    + critical * f64::from(at.delay)
-            } else {
-                state.node_cost(root, at.base, present.min(scratch.uncritical_cap))
-            };
-            let step = if state.reserved_against(root, scratch.signal) {
-                step * RESERVED_PENALTY
-            } else {
-                step
-            };
-            let candidate = here + step;
-            if candidate < scratch.cost_of(*next) {
-                let estimate = candidate + heuristic(*next);
-                scratch.set(*next, candidate, estimate, *pip);
-                scratch.queued += 1;
-                heap.push(std::cmp::Reverse((score(estimate), *next)));
+                let step = if state.reserved_against(root, scratch.signal) {
+                    step * RESERVED_PENALTY
+                } else {
+                    step
+                };
+                let candidate = here + step;
+                if candidate < scratch.cost_of(*next) {
+                    let estimate = candidate + heuristic(*next);
+                    scratch.set(*next, candidate, estimate, *pip);
+                    scratch.queued += 1;
+                    heap.push((score(estimate), *next));
+                }
             }
         }
     }
+    scratch.queue = heap;
     if !reached {
         return None;
     }
@@ -3957,6 +4144,8 @@ mod tests {
             reserved: false,
             closed: false,
             delay: 0.0,
+            root: 0,
+            entry: false,
         };
         let b = Bounds {
             x0: 4,
@@ -4298,10 +4487,11 @@ mod tests {
                 })
                 .collect(),
         };
-        let geometry = Geometry::of(&graph, &[], &[], &[], None);
+        let mut geometry = Geometry::of(&graph, &[], &[], &[], None);
         let mut state = State::new(physical_nodes(&graph));
+        Geometry::join(&mut geometry, &state.group, &[]);
         for root in state.roots(&route.nodes) {
-            state.occupancy[root as usize] += 1;
+            state.usage[root as usize].occupancy += 1;
         }
         let track = |x: u32| {
             graph
@@ -4313,7 +4503,7 @@ mod tests {
         };
         // Past the near sink: the far one goes, the near one stays.
         let far = state.group[track(6) as usize] as usize;
-        state.occupancy[far] += 1;
+        state.usage[far].occupancy += 1;
         let kept = kept_part(&graph, &geometry, &state, &route, &terminals);
         assert_eq!(kept.connected, vec![true, false]);
         assert!(kept.tree.contains_key(&route.source));
@@ -4330,9 +4520,9 @@ mod tests {
             assert!(kept.tree.contains_key(&graph.pip(*pip).to));
         }
         // On the trunk both share: nothing is kept but the source.
-        state.occupancy[far] -= 1;
+        state.usage[far].occupancy -= 1;
         let trunk = state.group[track(1) as usize] as usize;
-        state.occupancy[trunk] += 1;
+        state.usage[trunk].occupancy += 1;
         let kept = kept_part(&graph, &geometry, &state, &route, &terminals);
         assert_eq!(kept.connected, vec![false, false]);
         assert!(kept.pips.is_empty());
@@ -5959,14 +6149,15 @@ mod tests {
     #[test]
     fn a_search_does_not_drive_again_a_wire_its_tree_drives() {
         let graph = looping_line(4);
-        let geometry = Geometry::of(&graph, &[], &[], &[], None);
+        let mut geometry = Geometry::of(&graph, &[], &[], &[], None);
         let state = State::new(physical_nodes(&graph));
+        Geometry::join(&mut geometry, &state.group, &[]);
         let mut reach_start = Vec::new();
         let mut reach = Vec::new();
         for node in 0..graph.nodes.len() {
             reach_start.push(u32::try_from(reach.len()).unwrap());
             for pip in graph.outgoing(NodeId::try_from(node).unwrap()) {
-                reach.push(graph.pip(*pip).to);
+                reach.push((*pip, graph.pip(*pip).to));
             }
         }
         reach_start.push(u32::try_from(reach.len()).unwrap());
@@ -6172,5 +6363,48 @@ mod tests {
         // One trunk to the far sink plus a tap, not two full paths.
         assert!(report.pips < 16, "{}", report.to_text());
         assert_eq!(report.signals, 1);
+    }
+
+    /// **The four-way queue pops what `std`'s binary heap pops**, in the
+    /// same order, over a long random run of pushes and pops with many
+    /// equal estimates and repeated entries — which is what makes swapping
+    /// one for the other leave every routing as it was.
+    ///
+    /// Would catch a sift that compares the wrong child, stops a level
+    /// early or loses an entry, any of which changes what a search expands
+    /// next. Would not catch a slower queue.
+    #[test]
+    fn the_four_way_queue_pops_what_the_binary_heap_pops() {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let mut rng = crate::fpga::place::Rng::new(7);
+        let mut ours = Queue::default();
+        let mut theirs: BinaryHeap<Reverse<(u64, NodeId)>> = BinaryHeap::new();
+        let mut popped = 0;
+        for round in 0..200_000 {
+            if rng.below(5) < 3 {
+                // Few distinct estimates, so ties on the estimate are
+                // common and the node decides; and some entries twice.
+                let item = (
+                    u64::try_from(rng.below(50)).unwrap(),
+                    NodeId::try_from(rng.below(400)).unwrap(),
+                );
+                ours.push(item);
+                theirs.push(Reverse(item));
+            } else {
+                let mine = ours.pop();
+                assert_eq!(mine, theirs.pop().map(|Reverse(item)| item), "pop {round}");
+                popped += usize::from(mine.is_some());
+            }
+            if round % 50_000 == 0 {
+                ours.clear();
+                theirs.clear();
+            }
+        }
+        while let Some(Reverse(item)) = theirs.pop() {
+            assert_eq!(ours.pop(), Some(item));
+        }
+        assert_eq!(ours.pop(), None);
+        assert!(popped > 50_000, "{popped} pops");
     }
 }
