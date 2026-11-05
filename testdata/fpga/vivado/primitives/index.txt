@@ -133,9 +133,9 @@ iologic IDDR_2CLK ok
 iologic ODDR ok
 iologic ISERDESE2 ok
 iologic OSERDESE2 ok
-iologic IDELAYE2 gap
-iologic IDELAYCTRL gap
-iologic DCIRESET gap
+iologic IDELAYE2 ok
+iologic IDELAYCTRL ok
+iologic DCIRESET ok
 iologic ZHOLD_DELAY refused
 config BSCANE2 ok
 config CAPTUREE2 ok

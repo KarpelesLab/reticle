@@ -821,6 +821,17 @@ fn io_logic_wants(
         }
         return;
     }
+    if matches!(
+        instance.primitive.as_str(),
+        super::idelay::DELAY | super::idelay::CONTROLLER
+    ) {
+        super::idelay::wants(instance, site, netlist, wants);
+        return;
+    }
+    if instance.primitive == super::dcireset::PRIMITIVE {
+        super::dcireset::wants(instance, site, netlist, wants);
+        return;
+    }
     let input = matches!(
         instance.primitive.as_str(),
         "IDDR" | "IDDR_2CLK" | "ISERDESE2"

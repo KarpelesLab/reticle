@@ -168,9 +168,11 @@ mod bufg;
 mod carry;
 mod cmt;
 mod config;
+mod dcireset;
 mod dsp;
 mod fifo;
 mod finish;
+mod idelay;
 mod io;
 mod iologic;
 mod lutpack;
@@ -195,6 +197,7 @@ pub use cmt::{
     ClockManagerError, Compensation, Counter, CounterShape, ManagerShapes, MmcmSettings,
     PllSettings, check_manager, counter, mmcm_registers, pll_registers, shaped_counter,
 };
+pub use dcireset::unread_dci_resets;
 pub use dsp::{DSP_PRIMITIVE, dsp_local_muxes, dsp_pin_wires};
 pub use fifo::{
     Shape as FifoShape, check as fifo_check, features as fifo_features,
@@ -219,6 +222,7 @@ pub fn parse_segbits(text: &str, path: &str) -> Result<FeatureSet, XrayError> {
     parse::segbits(text, path)
 }
 pub use config::sweep_unread_config;
+pub use idelay::{IoDelayError, IoDelayPlan, PlannedController, io_delay_controllers};
 pub use io::{IoBankUse, IoError, IoTables, PadFeatures, PadRequest, io_standards, pad_features};
 pub use iologic::{IoLogicError, check_serdes_wiring};
 pub use regional::{
@@ -400,18 +404,28 @@ pub struct XrayOptions {
     /// bits only they use (`config`). Off unless the design has one, for the
     /// same reason: a design with none is the fabric it was before them.
     pub config_sites: bool,
+    /// Declare the `ILOGIC`'s ways on from an input delay and the delays'
+    /// controllers (`idelay`). Off unless the design has a delay or a
+    /// controller, for the reason [`XrayOptions::shift_registers`] is.
+    pub io_delays: bool,
+    /// Declare the configuration tile's `DCIRESET` and its joins
+    /// (`dcireset`), for a design with one.
+    pub dci_reset: bool,
 }
 
 /// What a tile type's features are read with beyond the database's: the
-/// regional clock buffers' and the configuration primitives', which a design
-/// with none of either does not have declared ([`XrayOptions::regional_clocks`],
-/// [`XrayOptions::config_sites`]).
+/// regional clock buffers', the configuration primitives' and the input
+/// delays', which a design with none of them does not have declared
+/// ([`XrayOptions::regional_clocks`], [`XrayOptions::config_sites`],
+/// [`XrayOptions::io_delays`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Extras {
     /// `regional::derived_features`.
     regional_clocks: bool,
     /// `config::derived_features`.
     config_sites: bool,
+    /// `idelay::derived_features`.
+    delays: bool,
 }
 
 impl Extras {
@@ -419,6 +433,7 @@ impl Extras {
     const ALL: Extras = Extras {
         regional_clocks: true,
         config_sites: true,
+        delays: true,
     };
 }
 
@@ -440,6 +455,8 @@ impl Default for XrayOptions {
             regional_clocks: false,
             lutram: LutRamModel::default(),
             config_sites: false,
+            io_delays: false,
+            dci_reset: false,
         }
     }
 }
@@ -493,6 +510,25 @@ impl XrayOptions {
                 }))
             })
         });
+        self.io_delays = design.modules.get(module).is_some_and(|m| {
+            m.cells.iter().any(|(_, cell)| {
+                matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if device.bels.iter().any(|b| {
+                    b.name == name.as_str()
+                        && matches!(
+                            b.role,
+                            crate::fpga::BelRole::IoDelay | crate::fpga::BelRole::IoDelayControl
+                        )
+                }))
+            })
+        });
+        self.dci_reset = design.modules.get(module).is_some_and(|m| {
+            m.cells.iter().any(|(_, cell)| {
+                matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if name.as_str() == dcireset::PRIMITIVE)
+            })
+        });
+        // `DCIRESET` is in the configuration tile, whose own bels and joins are
+        // declared only with `config_sites`.
+        self.config_sites |= self.dci_reset;
         self.shift_registers = design.modules.get(module).is_some_and(|m| {
             m.cells.iter().any(|(_, cell)| {
                 matches!(&cell.kind, crate::ir::CellKind::Blackbox(name) if device.bels.iter().any(|b| {
@@ -1098,6 +1134,7 @@ impl XrayDatabase {
             let extras = Extras {
                 regional_clocks: options.regional_clocks,
                 config_sites: options.config_sites,
+                delays: options.io_delays,
             };
             if let Some(set) = self.features_with(files, tile, row, extras)? {
                 features.insert(key.clone(), set);
@@ -1193,6 +1230,8 @@ impl XrayDatabase {
             options.regional_clocks,
             options.lutram,
             options.config_sites,
+            options.io_delays,
+            options.dci_reset,
             &mut stats,
         );
         let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
@@ -1608,6 +1647,10 @@ impl XrayDatabase {
         // And those of the regional buffers: see `regional::derived_features`.
         if extras.regional_clocks {
             measured.extend(regional::derived_features(tile_type));
+        }
+        // And an input delay's: see `idelay::derived_features`.
+        if extras.delays {
+            measured.extend(idelay::derived_features(tile_type));
         }
         // And a `ZHOLD` feedback's code: see `cmt::zhold_features`.
         measured.extend(cmt::zhold_features(tile_type));
@@ -2094,6 +2137,8 @@ impl XrayDatabase {
         regional_clocks: bool,
         lutram: LutRamModel,
         config_sites: bool,
+        io_delays: bool,
+        dci_reset: bool,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -2180,6 +2225,12 @@ impl XrayDatabase {
             }
             if shift_registers {
                 passes.extend(srl::tile_pass_throughs(name));
+            }
+            if io_delays {
+                passes.extend(idelay::pass_throughs(name));
+            }
+            if dci_reset {
+                passes.extend(dcireset::pass_throughs(name));
             }
             let overridden: HashSet<(&str, &str)> = passes
                 .iter()
@@ -2424,6 +2475,16 @@ impl XrayDatabase {
             }
             if !regional_clocks {
                 bels.retain(|bel| !regional::is_regional_kind(&bel.kind));
+            }
+            if io_delays {
+                idelay::register_inputs(&mut bels);
+            } else {
+                bels.retain(|bel| {
+                    bel.kind != idelay::CONTROLLER_KIND && bel.kind != idelay::DELAY_KIND
+                });
+            }
+            if !dci_reset {
+                bels.retain(|bel| bel.kind != dcireset::KIND);
             }
             arch.tile_types[*index].bels = bels;
         }
@@ -3306,8 +3367,13 @@ pub struct XrayClockUse {
 ///   enable, charged to the pip its line leaves by;
 /// - `RAMB36`: a block RAM tile's seven features of the 36 kbit block as
 ///   one (`RAMB36.BRAM36_READ_WIDTH_A_1`), which `bram::ramb36_features`
-///   sets for a `RAMB36E1`.
-const NOT_ARCS: [&str; 11] = [
+///   sets for a `RAMB36E1`;
+/// - `IDELAY_Y0`, `IDELAY_Y1`: an input delay's features, every one of two
+///   parts (`IDELAY_Y0.IN_USE`) and so read as pips, which
+///   `XrayFabric::configure_io_delays` sets;
+/// - `DCIRESET`: its one feature, `DCIRESET.ENABLED`, read as a pip for the
+///   same reason, which the bel's own cell entry sets.
+const NOT_ARCS: [&str; 14] = [
     "DIFF",
     "ENABLE_BUFFER",
     "VREF",
@@ -3321,6 +3387,9 @@ const NOT_ARCS: [&str; 11] = [
     "ICAP_X0Y1",
     "STARTUP",
     "DNA_PORT",
+    "IDELAY_Y0",
+    "IDELAY_Y1",
+    "DCIRESET",
 ];
 
 /// The default [`XrayFabric::clock_node_costs`] preference: the same
@@ -3546,6 +3615,11 @@ pub fn clock_pin_roles(kind: &str) -> &'static [&'static str] {
         "ddr_out" => &["clk", "clkb", "clkdiv"],
         // A `DSP48E1`'s registers, the same way as a block RAM's.
         "dsp" => &["clk"],
+        // An input delay's control clock, over the interconnect's `CLK1` as
+        // Vivado has it, and a controller's reference clock, over the clock
+        // row's leaves (`idelay_sweep`).
+        "iodelay" => &["c"],
+        "idelayctrl" => &["refclk"],
         _ => &[],
     }
 }

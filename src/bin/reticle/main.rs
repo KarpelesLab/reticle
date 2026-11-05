@@ -3982,6 +3982,7 @@ fn write_xc7_bitstream(
         for (role, site_type) in [
             (reticle::fpga::BelRole::Mmcm, "MMCME2_ADV"),
             (reticle::fpga::BelRole::Sysmon, "XADC"),
+            (reticle::fpga::BelRole::DciReset, "DCIRESET"),
             (reticle::fpga::BelRole::HorizontalBuffer, "BUFHCE"),
             (reticle::fpga::BelRole::RegionalBuffer, "BUFR"),
             (reticle::fpga::BelRole::IoClockBuffer, "BUFIO"),
@@ -4052,6 +4053,24 @@ fn write_xc7_bitstream(
                     .map_err(|e| e.to_string())?,
             );
         }
+        // An input delay's controller is in the clock row, and its reset and
+        // ready come by way of the IO logic one row above it and two below
+        // (`tileconn.json`'s `HCLK_IOI3` joins), which the clock rows' own
+        // tiles do not reach.
+        if let Some(region) = options.region
+            && (needs_role(design, top, device, reticle::fpga::BelRole::IoDelay)
+                || needs_role(design, top, device, reticle::fpga::BelRole::IoDelayControl))
+        {
+            let rows = db
+                .region_with_clock_rows(&files, region)
+                .map_err(|e| e.to_string())?;
+            options.region = Some(GridRegion::new(
+                rows.x0,
+                rows.y0.saturating_sub(3),
+                rows.x1,
+                rows.y1 + 3,
+            ));
+        }
     }
 
     let fabric = db.load(&files, &options).map_err(|e| e.to_string())?;
@@ -4089,6 +4108,21 @@ fn write_xc7_bitstream(
     // stops in placement, and how many sites the pairing saved is what
     // that refusal should be read beside.
     eprint!("{}", pairing.to_text());
+    // An input delay's controller in every clock region its delays are in, as
+    // Vivado replicates it, and none where there are none. See `xray::idelay`.
+    let delays =
+        reticle::fpga::xray::io_delay_controllers(&mut design, top, device, &fabric, &graph)?;
+    // And a `DCIRESET` nothing reads, which Vivado takes away.
+    if reticle::fpga::xray::unread_dci_resets(&mut design.modules[top])? > 0 {
+        eprintln!("note: a `DCIRESET` whose `LOCKED` nothing reads was taken away");
+    }
+    if delays.replicated + delays.removed + delays.unread > 0 {
+        eprintln!(
+            "note: input delays: {} controller(s) replicated, {} taken away for want of a delay, \
+             {} delay(s) nothing reads taken away",
+            delays.replicated, delays.removed, delays.unread
+        );
+    }
     let design = &design;
 
     let mut netlist = Netlist::build(design, top, device, &graph).map_err(|e| e.to_string())?;
@@ -4202,9 +4236,11 @@ fn write_xc7_bitstream(
     let mut attempts_left = route_attempts(args)?.saturating_sub(1);
     let mut failure = None;
     let (placement, placement_report, routed_at) = loop {
-        let (placement, placement_report) =
+        let (mut placement, placement_report) =
             place(&netlist, &fabric.arch, &graph, constraints, &options)
                 .map_err(|e| e.to_string())?;
+        // Each delay's controller in the clock row of its region.
+        fabric.place_io_delay_controllers(&delays, &netlist, &graph, &mut placement)?;
         laps.lap("place");
         if !placement_report.outside_budget.is_empty() {
             eprintln!(
@@ -4941,6 +4977,10 @@ fn write_xc7_bitstream(
         .map_err(|e| e.to_string())?;
     bit_options.set_design(config_use);
     bit_options.check().map_err(|e| e.to_string())?;
+    // And an input delay beside its pad. See `xray::idelay`.
+    fabric
+        .configure_io_delays(design, top, &graph, &netlist, &placement, &mut tiles)
+        .map_err(|e| e.to_string())?;
     // A block RAM's modes, and a value on every input the design leaves
     // alone: an undriven interconnect input reads one on this family. See
     // `xray::bram`.

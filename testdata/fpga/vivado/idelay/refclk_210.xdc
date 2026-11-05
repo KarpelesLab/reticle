@@ -1,0 +1,8 @@
+set_property -dict {PACKAGE_PIN F4 IOSTANDARD LVCMOS33} [get_ports p0]
+set_property -dict {PACKAGE_PIN D4 IOSTANDARD LVCMOS33} [get_ports clk]
+set_property -dict {PACKAGE_PIN A7 IOSTANDARD LVCMOS33} [get_ports c0]
+set_property -dict {PACKAGE_PIN J3 IOSTANDARD LVCMOS33} [get_ports c1]
+set_property -dict {PACKAGE_PIN H3 IOSTANDARD LVCMOS33} [get_ports c2]
+set_property -dict {PACKAGE_PIN K1 IOSTANDARD LVCMOS33} [get_ports c3]
+set_property -dict {PACKAGE_PIN J1 IOSTANDARD LVCMOS33} [get_ports r]
+create_clock -period 4.762 [get_ports clk]

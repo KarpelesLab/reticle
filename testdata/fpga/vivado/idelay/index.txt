@@ -1,0 +1,45 @@
+# design port ball primitive setting
+idelay_sweep p0 F4 IDELAYE2 default
+idelay_sweep p1 F3 IDELAYE2 IDELAY_VALUE=1
+idelay_sweep p2 G5 IDELAYE2 IDELAY_VALUE=2
+idelay_sweep p3 G4 IDELAYE2 IDELAY_VALUE=4
+idelay_sweep p4 G2 IDELAYE2 IDELAY_VALUE=8
+idelay_sweep p5 G1 IDELAYE2 IDELAY_VALUE=16
+idelay_sweep p6 H2 IDELAYE2 IDELAY_VALUE=31
+idelay_sweep p7 H1 IDELAYE2 HIGH_PERFORMANCE_MODE=TRUE
+idelay_sweep p8 H5 IDELAYE2 SIGNAL_PATTERN=CLOCK
+idelay_sweep p9 H4 IDELAYE2 IS_IDATAIN_INVERTED=1
+idelay_sweep p10 F2 IDELAYE2 CINVCTRL_SEL=TRUE,pin:CINVCTRL=c1
+idelay_sweep p11 E1 IDELAYE2 IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=c0,pin:INC=c1
+idelay_sweep p12 E3 IDELAYE2 IDELAY_TYPE=VARIABLE,IDELAY_VALUE=5,pin:C=gclk,pin:CE=c0,pin:INC=c1
+idelay_sweep p13 E5 IDELAYE2 IDELAY_TYPE=VARIABLE,IS_C_INVERTED=1,pin:C=gclk,pin:CE=c0,pin:INC=c1
+idelay_sweep p14 C4 IDELAYE2 CINVCTRL_SEL=TRUE,IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=c0,pin:CINVCTRL=c2,pin:INC=c1
+idelay_sweep p15 D3 IDELAYE2 IDELAY_TYPE=VAR_LOAD,pin:C=gclk,pin:CE=c0,pin:CNTVALUEIN={c3, c2, c1, c0, c3},pin:INC=c1,pin:LD=c2
+idelay_sweep p16 E2 IDELAYE2 IDELAY_TYPE=VAR_LOAD,IDELAY_VALUE=9,pin:C=gclk,pin:CE=c0,pin:CNTVALUEIN={c3, c2, c1, c0, c3},pin:INC=c1,pin:LD=c2
+idelay_sweep p17 D1 IDELAYE2 IDELAY_TYPE=VAR_LOAD_PIPE,pin:C=gclk,pin:CE=c0,pin:CNTVALUEIN={c3, c2, c1, c0, c3},pin:INC=c1,pin:LD=c2,pin:LDPIPEEN=c3,pin:REGRST=c0
+idelay_sweep p18 C1 IDELAYE2 IDELAY_TYPE=VAR_LOAD_PIPE,PIPE_SEL=TRUE,pin:C=gclk,pin:CE=c0,pin:CNTVALUEIN={c3, c2, c1, c0, c3},pin:INC=c1,pin:LD=c2,pin:LDPIPEEN=c3,pin:REGRST=c0
+idelay_sweep p19 B1 IDELAYE2 IDELAY_TYPE=VAR_LOAD,PIPE_SEL=TRUE,pin:C=gclk,pin:CE=c0,pin:CNTVALUEIN={c3, c2, c1, c0, c3},pin:INC=c1,pin:LD=c2
+idelay_sweep p20 B2 IDELAYE2 IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=1,pin:INC=c1
+idelay_sweep p21 A2 IDELAYE2 IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=0,pin:INC=c1
+idelay_sweep p22 C3 IDELAYE2 IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=c0,pin:INC=1
+idelay_sweep p23 C2 IDELAYE2 IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=c0,pin:INC=c1,pin:LD=1
+idelay_sweep p24 C7 IDELAYE2 IDELAY_TYPE=VAR_LOAD,pin:C=gclk,pin:CE=c0,pin:CNTVALUEIN=5'd7,pin:INC=c1,pin:LD=c2
+idelay_sweep p25 C6 IDELAYE2 IDELAY_TYPE=VARIABLE,pin:C=gclk,pin:CE=c0,pin:INC=c1,read:CNTVALUEOUT=1
+idelay_sweep p26 B4 IDELAYE2 read:CNTVALUEOUT=1
+idelay_sweep p27 A3 IDELAYE2 pin:C=gclk,pin:CE=c0,pin:INC=c1,pin:LD=c2
+idelay_sweep p28 A5 IDELAYE2 HIGH_PERFORMANCE_MODE=TRUE,IDELAY_VALUE=13,SIGNAL_PATTERN=CLOCK
+idelay_iddr p0 F4 IDELAYE2 to=iddr
+idelay_iddr p1 F3 IDELAYE2 IDELAY_VALUE=3,to=iddr
+idelay_iddr p2 G5 IDELAYE2 to=both
+idelay_lvds p0 G2 IDELAYE2 default
+idelay_lvds p1 H2 IDELAYE2 IDELAY_VALUE=6
+idelay_more p0 E6 IDELAYE2 default
+idelay_more p1 K5 IDELAYE2 IDELAY_VALUE=7
+idelay_more p2 F4 IDELAYE2 IS_DATAIN_INVERTED=1
+idelay_more p3 G5 IDELAYE2 to=none
+pad_and_delay_fabric p0 F4 IDELAYE2 also=pad
+pad_and_delay_iddr p0 F4 IDELAYE2 also=pad,to=iddr
+c_inverted p0 F4 IDELAYE2 IDELAY_TYPE=VARIABLE,IS_C_INVERTED=1,pin:C=gclk,pin:CE=c0,pin:INC=c1
+c_inverted p1 F3 IDELAYE2 IDELAY_TYPE=VARIABLE,IS_C_INVERTED=1,pin:C=gclk,pin:CE=c0,pin:INC=c1
+c_inverted p2 E6 IDELAYE2 IDELAY_TYPE=VARIABLE,IS_C_INVERTED=1,pin:C=gclk,pin:CE=c0,pin:INC=c1
+c_inverted p3 K5 IDELAYE2 IDELAY_TYPE=VARIABLE,IS_C_INVERTED=1,pin:C=gclk,pin:CE=c0,pin:INC=c1

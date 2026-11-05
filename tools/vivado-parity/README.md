@@ -37,6 +37,9 @@ models or IP.
 - `gen_iologic.py` writes `testdata/fpga/vivado/iologic/`, an IO register or a serialiser
   per pad, and `tests/fpga_xray_ioreg.rs` decodes `run_all.sh`'s bitstreams of it into
   `vivado.txt`.
+- `gen_idelay.py` writes `testdata/fpga/vivado/idelay/`, an input delay per pad and the
+  designs about its controller and `DCIRESET`, and `tests/fpga_xray_idelay.rs` decodes
+  `run_all.sh`'s bitstreams of it into `vivado.txt`.
 - `gen_io.py` writes `testdata/fpga/vivado/io/`, and `io_pairs.sh` with `io_pairs.tcl`,
   `io_pairs.v` and `io_pairs.py` asks Vivado's design rule check about every pair of
   (standard, direction) in one bank, for `pairs.txt` there. `tests/fpga_xray_pads.rs`

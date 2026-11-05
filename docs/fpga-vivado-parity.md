@@ -46,8 +46,9 @@ them. Vivado writes a bitstream for **141**, and refuses five on this part:
 the part's banks are all high-range and have no DCI, and `ZHOLD_DELAY`, which it
 would not place alone from a pad or from logic.
 
-**Reticle builds 132 of the 141**, 130 before the section on FIFOs, 122 before the
-section on the configuration primitives, 120 before the section on serialisers, 118
+**Reticle builds all 141**, 132 before the `DIFF_OUT` buffers and the input delays,
+130 before the section on FIFOs, 122 before the section on the configuration
+primitives, 120 before the section on serialisers, 118
 before the section on block RAM, 94 before the sections on pads and clock
 buffers, 106 before the one on IO registers, 110 before regional clock buffers
 and clock managers. `index.txt` says which;
@@ -61,16 +62,10 @@ it. The runner now fails a step with no file behind it, and of those 24, 19 were
 illegal probes, a `DSP48E1`'s `PCOUT` taken to the fabric or an `ODDR` to a
 flip-flop, which now obey Vivado's rules.
 
-The 9 that do not build, by what stops them:
-
-| what | primitives |
-|---|---|
-| pad buffers | the six `DIFF_OUT` forms |
-| IO logic | `IDELAYE2`, `IDELAYCTRL`, `DCIRESET` |
-
-The eight configuration primitives were a fourth row until the section of their
-own at the end of this document, the two serialisers were in the IO logic row
-until theirs, and the two FIFOs were a row of their own until theirs.
+None is left that Vivado builds and Reticle does not. What stopped each, until
+its section: the eight configuration primitives, the two serialisers, the two
+FIFOs, and the six `DIFF_OUT` pad buffers with `IDELAYE2`, `IDELAYCTRL` and
+`DCIRESET` were each a row of a table here that listed what did not build.
 
 Building is the least that can be asked: a probe that builds has not been
 compared with what Vivado wrote for it. Vivado's rules also say something Reticle
@@ -503,10 +498,24 @@ is an output: Reticle builds both as the latter.
 not asked, a pull cell on an unread input kept, a `KEEPER` on an `inout` an output, and a lone
 pull driving its data. The eleventh, the tristate's `keep`, survived, and is gone.
 
-**Not done: the `DIFF_OUT` forms.** Vivado reads `OB` through the `_N` half's own `ILOGIC`
-(`ZINV_D` on `ILOGIC_Y1`), so it needs a second buffer placed on that ball, which this flow does not
-place; a ball named only by its `_P` in an XDC does not even say where. They are refused as a module
-nothing declares.
+**The `DIFF_OUT` forms, since 2026-11-05.** This said they were not done, and that they "need a
+second buffer placed on that ball, which this flow does not place; a ball named only by its `_P` in
+an XDC does not even say where". The first half was the reason and the second was wrong: the second
+ball is the pair's `_N`, which the first names, and no second buffer is placed. `OB` is a second
+output of the buffer on the `_P` ball (`din_n`), on the `_N` half's `IOB_IBUF1`, and the router
+takes it on through that half's `ILOGIC` as it takes any pad's input, which is the `ZINV_D` on
+`ILOGIC_Y1` Vivado sets. **Checked: all 44 `buf_*diff_out*` designs** of `io/`, whose answers were
+in `vivado.txt` before this, **and the six probes**, every pad, IO logic and clock row feature.
+
+| buffer | what Vivado wrote, and so Reticle |
+|---|---|
+| `IBUFDS_DIFF_OUT`, `IBUFGDS_DIFF_OUT` and their disable forms | the same buffer without `DIFF_OUT`, and `ZINV_D` on the `_N` half's `ILOGIC` when `OB` is read. A pair read through `OB` alone is read: its receiver stays (`buf_ibufds_diff_out_ob_*`) |
+| `IOBUFDS_DIFF_OUT`, `IOBUFDS_DIFF_OUT_INTERMDISABLE` | `IOBUFDS`'s, driven from `TM`; **`TS` is not routed at all**, on a true differential standard or a pseudo one, though the pad it comes from keeps its receiver (`buf_iobufds_diff_out_*`, where `TS` is its own pad) |
+
+**Mutations.** Eight, and all eight failed `what_reticle_writes_is_what_vivado_wrote`, which has three
+`DIFF_OUT` designs in the gate: no `din_n` pin, `din_n` on the wrong half, a pair read through `OB`
+alone called unread, `TS`'s pad called unread, that not carried to the buffer, the plain buffer
+mapped instead, `OB` not carried, and `OB` taken from the wrong bit.
 
 **Not done.** Vivado's `CFGBVS`-style checks of bank 14 against the configuration voltage, which are warnings. The
 XC7A35T, or any other part: the tables were measured on one, and the same table is given to the
@@ -643,6 +652,89 @@ in every build, as it would an `IDDR`'s, which has none either; a model for simu
 would need a library elaboration does not read, which this flow has not got. A `PHASER`'s
 clocks into `CLKDIVP` and `OCLK`, the `MEMORY_DDR3` and `MEMORY_QDR` interfaces' purpose,
 which this part's flow does not build. Nothing here has been on a part.
+
+## Input delays and their controllers
+
+`testdata/fpga/vivado/idelay/` has 33 designs from `tools/vivado-parity/gen_idelay.py`: an `IDELAYE2`
+beside each pad of bank 35, one setting or wiring a pad (every `IDELAY_TYPE`, each bit of
+`IDELAY_VALUE`, `HIGH_PERFORMANCE_MODE`, `SIGNAL_PATTERN`, `CINVCTRL_SEL`, `PIPE_SEL`, the three
+inverters, every control routed, tied either way and left open, `CNTVALUEOUT` read), delays into an
+`IDDR`, on an `LVDS_25` pair and on both `_SING` tiles, delays of the fabric, `REFCLK_FREQUENCY` at
+190, 210 and 300 MHz and mixed, controllers in one region, two and none, with and without
+`IODELAY_GROUP`, the four forms of `DCIRESET`, and the five Vivado refuses. `vivado.txt` is each
+bitstream decoded: every `IDELAY` and `ILOGIC` feature of each delay's half, what each of its control
+pins reads (a ground, a signal, a leaf clock or nothing), the controllers' clock rows, and the
+`DCIRESET`'s feature and reset. `tests/fpga_xray_idelay.rs` holds this flow to it. **Nothing here has
+been on a board**: that a delay delays by what its value says has not been measured by anything.
+
+**Checked: all 27 designs Vivado builds and this flow takes agree, 1,400 lines, and the five it refuses are refused by
+the same rule.** So do the probes of `primitives/`. The table of what each setting sets is
+`xray::idelay`'s documentation; what was found on the way:
+
+- **`VAR_LOAD` and `VAR_LOAD_PIPE` write the same bits**, and a loaded delay writes every
+  `ZIDELAY_VALUE` whatever its `IDELAY_VALUE` says; `FIXED` and `VARIABLE` write the value.
+- **`IS_C_INVERTED` is a bit the database does not name**: frame 34 bit 88 of `IDELAY_Y0` and its
+  mirror, frame 35 bit 39, of `IDELAY_Y1`, measured on both halves of a tile and of both `_SING`
+  tiles (`c_inverted`). It is `IDELAY_Y<n>.IS_C_INVERTED` here; **the name is mine**. Read from the
+  probe alone this would have been a primitive with nothing unnamed, which the probe's delay is,
+  with its clock uninverted.
+- **`IS_DATAIN_INVERTED` is set whatever the source, `IS_IDATAIN_INVERTED` only from the pad.** The
+  first reading was that each is set on its own source only; `idelay_more` sets `DATAIN`'s on a
+  delay of a pad.
+- **`SIGNAL_PATTERN` and `REFCLK_FREQUENCY` write nothing**, and 300 MHz on speed grade 1, which
+  DS181 does not offer, is taken with no word; so are two delays of one controller at 190 and 210.
+- To the fabric a delay goes through the `ILOGIC`'s `O` (`IDELMUXE3.P0`), and to an `IDDR` through its
+  register input (`IFFDELMUXE3.P0`). This flow declares the second as a wire of its own in front of
+  the register (`ILOGIC<n>_IFFD`): the first version took it through the pad's `D`, and the router
+  then carried a delay that went to both on from `D` to `O` as if it were the pad, with `ZINV_D` where
+  Vivado has `IDELMUXE3.P0` (`idelay_iddr`).
+- Open, `CE`, `INC`, `LD`, `LDPIPEEN`, `REGRST` and `CINVCTRL` are grounded, and so is any of them
+  tied low and a `CNTVALUEIN` bit tied low; tied high, or `C` and `CNTVALUEIN` open, nothing is routed.
+- **The controller has no bits.** What Vivado writes for one is its reference clock's pip in the clock
+  row, and the routes of its reset and ready, which reach it through the IO logic tiles above and
+  below. Alone it is taken away and its `RDY` is a one (`ctrl_alone`); a delay nothing reads is taken
+  away too (`idelay_more`).
+- **One controller is replicated into every clock region a delay of its group is in**, as
+  `ctl_REPLICATED_0` (`Place 30-1907`), with `RDY` the AND of all of theirs in a lookup table
+  (`ctl_TOP_AND`, `INIT` 8); `xray::io_delay_controllers` does the same, before placing, from the
+  pads' regions, and places each in its region's clock row after. A delay of a group no controller is
+  in is the ungrouped controller's (`group_mismatch`).
+
+**Refused, as Vivado refuses them:** a delay with no controller (`PLIDC-10`), two controllers with no
+group between them (`PLIDC-7`), `IDATAIN` or `DATAIN` unconnected for its `DELAY_SRC` (`REQP-83`,
+`REQP-84`), and a pad read by the fabric both through its delay and around it, which is two signals
+for the `ILOGIC`'s one way out and which Vivado's router gives up on (`Route 35-7`). Around it into an
+`IDDR` is not that, and builds (`pad_and_delay_iddr`). **Stricter than Vivado:** an `IDELAY_VALUE` of
+32, which Vivado warns of critically and takes as 0, is an error.
+
+**Where this is not Vivado.** A delay of the fabric: Vivado put each in the top left corner of the
+die (`IDELAY_X0Y199`), gave it a controller of its own there, and so had two controllers where a pad's
+delay was in another region (`datain_with_pad`). This flow puts it in a region one of its group's
+controllers already serves, on a delay whose `ILOGIC` and pad are free, so it has one; the delay's
+features are compared without its place, and the count of controllers is the one known difference,
+`KNOWN` in the test. And a controller's reference clock takes another of the clock row's twelve leaves
+than Vivado's, as clocks here do; which is not compared.
+
+### `DCIRESET`
+
+The XC7A100T has one in its configuration tile though its banks are all high-range, with no DCI.
+**Vivado builds it, and writes `CFG_CENTER_MID.DCIRESET.ENABLED`** and its pins' routes: `RST` from
+`IMUX35` of the interconnect beside the tile's `VFRAME`, grounded when tied low and left when open,
+and `LOCKED` out to its fabric; one whose `LOCKED` nothing reads is taken away. All four forms
+(`dcireset_*`) agree, the reset's ground with them; the joins between the tile's pins and its
+interconnect wires are declared from `tile_type_CFG_CENTER_MID.json`, as the XADC's are, since the
+database has no `ppips` file for it. What it does on a part with no DCI to reset is not known.
+
+**Mutations.** TODO
+
+**This changes no existing bitstream.** The delays' sites, the `ILOGIC`'s new ways and the controller's
+site are declared only for a design with a delay (`XrayOptions::io_delays`), and `DCIRESET`'s only for a
+design with one, as the regional buffers' are; TODO.
+
+**Not done.** A delay's timing (`xray::timing` has none for these sites, so a delay estimates as a
+wire); an `ODELAYE2`, which a high-range bank does not have; `--vivado-placement` of a design with a
+delay; and the cell library has no model of any of these, since each is a primitive the device file
+declares and a model of the same name would take its place.
 
 ## Reading its constraints
 

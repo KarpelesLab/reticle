@@ -1366,11 +1366,15 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
     if !managers.is_empty() {
         return managers;
     }
-    let regional = super::regional::regional_bels(tile_type);
+    let mut regional = super::regional::regional_bels(tile_type);
+    // A clock row's IO tile holds the delays' controller beside its regional
+    // buffers: see `super::idelay`.
+    regional.extend(super::idelay::controller_bels(tile_type));
     if !regional.is_empty() {
         return regional;
     }
-    let io_logic = super::iologic::io_logic_bels(tile_type);
+    let mut io_logic = super::iologic::io_logic_bels(tile_type);
+    io_logic.extend(super::idelay::delay_bels(tile_type));
     if !io_logic.is_empty() {
         return io_logic;
     }
@@ -1378,7 +1382,10 @@ pub(super) fn extra_bels(tile_type: &str) -> Vec<ExtraBel> {
     if !xadc.is_empty() {
         return xadc;
     }
-    let config = super::config::config_bels(tile_type);
+    let mut config = super::config::config_bels(tile_type);
+    // The configuration tile's `DCIRESET`, beside the primitives of
+    // `super::config`: see `super::dcireset`.
+    config.extend(super::dcireset::bels(tile_type));
     if !config.is_empty() {
         return config;
     }

@@ -1033,10 +1033,24 @@ pub(super) fn bels_of(
             });
             coverage.modes += 1;
         }
+        // A `_SING` tile's other half, whose features the tile does not have:
+        // its wires are the half it has, and a delay declared twice there is
+        // one the placer cannot tell from its twin.
+        if extra.kind == super::idelay::DELAY_KIND && bel.config.is_empty() {
+            continue;
+        }
         // A bel the prefix machinery did find, but without a kind or pins
         // (a clock management tile's `PLLE2_ADV`), keeps the features it
         // was given: the extra declaration adds to it, never erases it.
-        if let Some(found) = bels.remove(&extra.name) {
+        if let Some(mut found) = bels.remove(&extra.name) {
+            // An input delay's value is written by `super::idelay`, which
+            // knows when Vivado ignores it; the generic `IDELAY_VALUE[i]`
+            // would write it always.
+            if extra.kind == super::idelay::DELAY_KIND {
+                found
+                    .config
+                    .retain(|entry| matches!(entry, ConfigEntry::Cell { .. }));
+            }
             bel.config.extend(found.config);
         }
         bels.insert(extra.name, bel);

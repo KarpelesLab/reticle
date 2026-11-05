@@ -6281,12 +6281,16 @@ impl Mapper<'_> {
                         | BelRole::DdrIn
                         | BelRole::DdrOut
                         | BelRole::Srl32
-                        | BelRole::Srl16 // A 7-series FIFO by name, read and written on a clock
-                                         // each, as a block RAM's two ports are.
+                        | BelRole::Srl16
+                        | BelRole::IoDelay
+                        | BelRole::IoDelayControl // A 7-series FIFO by name, read and written on a clock each, as a
+                                                  // block RAM's two ports are.
                 ) || b.port("p0_clk").is_some()
             })
+            // An input delay's `C` and its controller's `REFCLK` too, which
+            // Vivado puts on a global buffer (`idelaye2_probe`).
             .flat_map(|b| {
-                ["dclk", "psclk", "clk", "p0_clk", "p1_clk"]
+                ["dclk", "psclk", "clk", "p0_clk", "p1_clk", "c", "refclk"]
                     .into_iter()
                     .filter_map(|role| b.port(role).map(|p| (b.name.clone(), p.to_owned())))
             })

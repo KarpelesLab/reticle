@@ -739,7 +739,17 @@ fn the_unsupported_corners_are_reported() {
     );
     assert_eq!(iddr.outputs, ["Q1", "Q2"]);
     assert_eq!(oddr.outputs, ["Q"]);
-    assert!(device.bel(BelRole::IoDelay).is_none());
+    // `IDELAYE2` is declared, for a design that instantiates it with its
+    // `IDELAYCTRL` (`xray::idelay`), and the same way: not as the delay a
+    // `set_io -delay` asks for, which has `i`, `o` and a `value` parameter,
+    // since a delay on this family needs a controller the constraint cannot
+    // state. This said no delay was declared at all until then.
+    let delay = device.bel(BelRole::IoDelay).expect("IDELAYE2 is declared");
+    assert_eq!(delay.name, "IDELAYE2");
+    assert!(
+        !delay.has_ports(&["i", "o"]) && delay.params_when("value").is_empty(),
+        "a `set_io -delay` would now infer an IDELAYE2 with no controller"
+    );
     // DSP48E1 used to be here, deliberately undeclared, because the `dsp`
     // line could not tie its mode pins and an untied block does not
     // multiply. It can now, so the block is declared — and declared only

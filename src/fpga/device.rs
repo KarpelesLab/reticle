@@ -549,6 +549,12 @@ pub enum BelRole {
     /// `o`, and the parameter carrying the delay declared under the
     /// condition `value` with its largest setting (ECP5 `DELAYG`).
     IoDelay,
+    /// What calibrates a bank's delays, one per clock region: the 7 series'
+    /// `IDELAYCTRL`, which `fpga::xray::idelay` places where its delays are.
+    IoDelayControl,
+    /// The reset of the digitally controlled impedance: the 7 series'
+    /// `DCIRESET`, one on the die.
+    DciReset,
     /// A wide multiplexer between two lookup tables' outputs, `i0`, `i1`
     /// and `s` to `o`, over wires of the slice's own: the 7 series' `MUXF7`.
     /// `fpga::techcells` writes one from a mapped table tagged for it, and
@@ -563,7 +569,7 @@ pub enum BelRole {
 
 impl BelRole {
     /// Every role, in a fixed order.
-    pub const ALL: [BelRole; 32] = [
+    pub const ALL: [BelRole; 34] = [
         BelRole::Lut,
         BelRole::Ff,
         BelRole::Carry,
@@ -593,6 +599,8 @@ impl BelRole {
         BelRole::DdrIn,
         BelRole::DdrOut,
         BelRole::IoDelay,
+        BelRole::IoDelayControl,
+        BelRole::DciReset,
         BelRole::Mux7,
         BelRole::Mux8,
         BelRole::Other,
@@ -630,6 +638,8 @@ impl BelRole {
             BelRole::DdrIn => "ddr_in",
             BelRole::DdrOut => "ddr_out",
             BelRole::IoDelay => "iodelay",
+            BelRole::IoDelayControl => "idelayctrl",
+            BelRole::DciReset => "dcireset",
             BelRole::Mux7 => "mux7",
             BelRole::Mux8 => "mux8",
             BelRole::Other => "other",
@@ -4368,6 +4378,25 @@ end
                             "ce", "tce", "sr", "tbytein"
                         ]
                     ),
+                    // An input delay's controls, its controller's reset and
+                    // `DCIRESET`'s, which `xray::idelay` and `xray::dcireset`
+                    // ground or leave as Vivado does.
+                    (
+                        "IDELAYE2",
+                        vec![
+                            "ce",
+                            "inc",
+                            "ld",
+                            "ldpipeen",
+                            "regrst",
+                            "cinvctrl",
+                            "cntvaluein",
+                            "datain",
+                            "c"
+                        ]
+                    ),
+                    ("IDELAYCTRL", vec!["rst"]),
+                    ("DCIRESET", vec!["rst"]),
                     ("PLLE2_ADV", vec!["rst", "pwrdwn", "clkinsel", "clkin2"]),
                     ("XADC", vec!["vp", "vn", "vauxp", "vauxn"]),
                     // The configuration primitives' inputs, which
