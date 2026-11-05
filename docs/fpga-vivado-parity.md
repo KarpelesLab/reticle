@@ -1570,6 +1570,8 @@ the instrument is committed):
   nothing; reopening the `BYP` and `FAN` wires (2,440) nothing; closing only the
   block RAM tile's and interface's own wires and the ground fans (24,266) took pass 10
   from 21,260 to 16,708; closing only the interconnect tiles' (8,630) did not help.
+  *Corrected below: no wire of it mattered. What cost the route was how the wires
+  were closed, a base cost of a million each, which also set what a delay costs.*
 - **The `RAMB36E1`s are the last straw and not the load.** With the closure, 244
   `RAMB18E1` route, slowly, and 122 `RAMB36E1` do not quite (14 nodes); without it
   both route as fast. Vivado agrees with the mapping: its synthesis of the same sources
@@ -1588,13 +1590,108 @@ the instrument is committed):
   about a third were two or three columns from a block RAM column, and the rest far
   from any.
 
-**Not fixed.** A remedy has to keep the ties and give back the wires: closing a tie's
+~~**Not fixed.** A remedy has to keep the ties and give back the wires: closing a tie's
 wires only once the router has been shown to want them, or choosing each tie's wires
 after routing among those still free, are the two shapes it could take, and neither
 was built here. Until one is, the default mapping is not one for this design, and the
-scripts' `--memories legacy` stays for that reason as much as for the board's. With
+scripts' `--memories legacy` stays for that reason as much as for the board's.~~
+*Neither was needed: the wires were never what cost the route (below).* With
 `--memories legacy` the Plus is the bitstream before byte for byte, checked again on
 this commit (`sha256` `e57fca47...`).
+
+**Fixed: the wires stay closed, and the price that closed them no longer sets what a
+delay costs.** The flow closed a wire by making it a clock network node
+(`RouteOptions::network`, which only a clock may enter) with a base cost of a million
+(`RouteOptions::node_base`). The base is also half of what the timing-driven router
+converts a delay into a cost with (`route::delay_scale`: the mean base of the nodes
+that have a delay over their mean delay), and nothing left the million out of that
+mean. Measured on the Plus at seed 4, with a copy of the flow that printed it:
+
+| build | closed by a million | of them timed | delay scale | the fabric's own |
+|---|---|---|---|---|
+| `--memories legacy` | 1,127 | 1,127 | 2.918 | 0.00504 |
+| the default, before | 32,630 | 9,914 | 25.63 | 0.00503 |
+| the default, now | 266 | 266 | 0.695 | 0.00504 |
+
+So the default made every picosecond about 5,000 times dearer, against congestion,
+than the fabric's wires say, and nine times dearer than the legacy build already did:
+a connection of any criticality negotiated for time alone, and the overuse stopped
+falling. Every subset in the measurements above that still closed thousands of timed
+nodes did not help, and closing the ground fans alone (266) routed: that is what the
+narrowing was seeing, and why it never ended at a set of wires.
+
+The block RAM model's tied wires are now closed outright, by `RouteOptions::closed`,
+which no signal enters, a clock included, and which `delay_scale` leaves out
+(`XrayFabric::block_ram_ground_fans` returns them as `TieWires::held`, apart from the
+ground fans and a shift register's enable, `TieWires::fans`, which are closed as they
+always were). Every wire that was closed is closed, so every tie Vivado makes is
+still made; no wire was given back, because none had to be. The default build of the
+Plus, the script with `--memories legacy` taken out and nothing else changed:
+
+| build | pass 10 | pass 20 | pass 40 | end |
+|---|---|---|---|---|
+| the default, before | 21,260 | 5,488 | 2,763 | 14 left at pass 100: not routed |
+| the default, now | 10,939 | 1,257 | 19 | 0 overused from pass 65, and through two clean-ups to 67; route 1,935 s, build 44 min |
+| `--memories legacy` (unchanged) | 11,612 | 1,087 | 8 | 0 at pass 46, kept when a clean-up did not converge |
+
+Checked on that build: 122 block RAMs configured, 2,450 inputs tied to zero over
+4,168 pips and 3,968 left at the interconnect's one; 2,610,894 bits set, every one
+decoding (0 unexplained), and the arcs they select exactly the router's and the ties'.
+The routed estimate against the legacy build's:
+
+| clock | default, now | legacy |
+|---|---|---|
+| `clk_usb` (10.4 ns) | 16.52 ns | 16.55 ns |
+| `ADC_clk_fb` (4 ns) | 10.18 ns | 6.74 ns |
+| the glitch MMCM's `out0` (100 ns) | 18.41 ns | 17.42 ns |
+| the logic analyser's `out0` (4.17 ns) | 5.68 ns | 5.65 ns |
+
+`ADC_clk_fb` is the one that differs, and it differed before the route: the placement's
+last estimate had it at 15.84 ns against legacy's 11.07, the round that grew the
+wirelength above. That is the placement of this netlist and not the router, and is
+not followed further here. **Nothing of this build has been on a part**, and the
+scripts keep `--memories legacy` for the board's reason, which stands.
+
+**What it changes elsewhere.** With `--memories legacy` nothing: `held` is empty, and the
+Plus is `e57fca47...` byte for byte, built with this commit. Of `qor/`, twelve are the
+bitstream before byte for byte; `bram_fifo`, the one with a block RAM, routes in 16 passes
+where it took 9, with 3,892 pips against 3,939 and the same 5.06 ns; its bits all
+decode and its arcs are the router's and the ties'. The block RAM and FIFO fixtures
+pass as before, the simulation under Vivado's models included.
+
+**What is left as it was, on purpose.** The ground fans are still closed by a million
+that `delay_scale` counts, in both models: on the legacy Plus that makes a delay 580
+times dearer than the fabric's own wires would, and on the default 138 times. Every
+build of the Plus that has been on a part was routed with it, so taking it out is a
+new build to measure and not part of this. It also means the weight a timing-driven
+route gives delay depends on how many ground fans a design's block RAMs need, which
+is not a thing anyone chose.
+
+**Mutations of this change.** Each made by hand, against the router's unit tests, the
+block RAM's, and (5 to 8) `fpga_xray_bram_vivado`, `fpga_xray_fifo_vivado`,
+`fpga_xray_bram` and `fpga_xray_slice_cells` with `--include-ignored` and Vivado's
+simulator. Ten of twelve failed a test; of the other two, one was the flow's own
+wiring, since moved where a test sees it, and one is the code it mutates.
+
+| mutation | what failed |
+|---|---|
+| the search ignores `closed` | `a_closed_node_is_entered_by_no_signal_an_allowed_one_included` |
+| `delay_scale` counts the closed nodes | `a_closed_node_is_left_out_of_what_a_delay_costs` |
+| the per-node delays scaled with the closed nodes counted | the same |
+| `Geometry::closed` always false | both |
+| the held wires not closed at all | 8 of `fpga_xray_bram_vivado`'s 9 and 6 of `fpga_xray_fifo_vivado`'s 9: the ties fail or a signal reaches a tied pin |
+| the held wires closed by the fans' million, as before (in the flow) | **nothing** of the fixtures, which route either way; this is what the Husky Plus measured. Moved into `TieWires::close` and given a unit test, `held_wires_are_closed_outright_and_fans_by_a_million`, which fails for it there |
+| the held wires given the million as well, in `TieWires::close` | `held_wires_are_closed_outright_and_fans_by_a_million` |
+| a held wire not set in `closed` | the same |
+| a fan closed by `closed` instead of the million | the same |
+| a wire both held and a fan given the million | the same |
+| a zero's chain not held, in `block_ram_ground_fans` | 8 of `fpga_xray_bram_vivado`'s 9 |
+| the held wires chained into the fans' loop in `TieWires::close` | **nothing**, and rightly: a held wire is skipped there, so the mutant is the code |
+
+`a_block_ram_fifo_ties_its_resets_with_the_router_kept_off_the_ground_fans`
+(`tests/cli.rs`, ignored) failed on master before this change: it asked for sixteen
+block RAMs, and the default has made the FIFO eight `RAMB36E1` since they were
+inferred. It builds both now, sixteen with `--memories legacy` and eight without.
 
 **Mutations.** Each change below was made to the code by hand, and the library's
 block RAM tests and `fpga_xray_bram_vivado` run against it with `--no-fail-fast`.
