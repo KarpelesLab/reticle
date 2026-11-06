@@ -137,6 +137,43 @@ fn a_build_does_not_read_the_simulation_library() {
     }
 }
 
+/// **A FIFO on two clocks is refused, by name.** Its model knows one clock
+/// (`EN_SYN TRUE`); given `EN_SYN FALSE`, the default, it must not hand out
+/// one clock's answers, and the refusal names why. Would catch the guard
+/// removed; it would not catch a two-clock model added, which should replace
+/// this with a testbench.
+#[test]
+fn a_fifo_on_two_clocks_is_refused() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sim_xc7_fifo_two_clocks");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("tb.v");
+    std::fs::write(
+        &file,
+        "module tb;\n\
+         \x20 reg c = 0;\n\
+         \x20 FIFO18E1 #(.DATA_WIDTH(18)) u (.DI(32'h0), .DIP(4'h0), .RDCLK(c), .WRCLK(c),\n\
+         \x20   .RDEN(1'b0), .WREN(1'b0), .REGCE(1'b1), .RST(1'b0), .RSTREG(1'b0));\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "sim",
+            "--quiet",
+            "--top",
+            "tb",
+            "--device",
+            "xc7a35t-cpg236",
+        ])
+        .arg(&file)
+        .output()
+        .expect("failed to run the reticle binary");
+    assert!(!run.status.success());
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("EN_SYN_FALSE_is_not_modelled"), "{err}");
+}
+
 /// **Without `--device` a hard block is an undeclared module, and the
 /// simulator says so** rather than running a black box.
 #[test]

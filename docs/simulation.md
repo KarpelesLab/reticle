@@ -154,8 +154,9 @@ part's cell library: first `src/fpga/devices/xc7_cells.v`, the slice cells
 a build also reads (lookup tables, flip-flops, latches, shift registers,
 distributed memories), and then `src/fpga/devices/xc7_sim.v`, models of the
 hard blocks that only a simulator reads — `IDDR`, `ODDR`, `OSERDESE2`,
-`ISERDESE2`, `RAMB18E1`, `RAMB36E1`, `DSP48E1`, the global and regional
-clock buffers, `PLLE2_*`, `MMCME2_*` and the IO buffers. A design's own
+`ISERDESE2`, `IDELAYE2`, `IDELAYCTRL`, `RAMB18E1`, `RAMB36E1`, the FIFOs on
+one clock, `DSP48E1`, the global and regional clock buffers, `PLLE2_*`,
+`MMCME2_*`, `STARTUPE2` and the IO buffers. A design's own
 module of the same name always wins. Without `--device` such an instance is
 refused, as above.
 
@@ -164,7 +165,7 @@ Each model was written from the user guides and then held to what
 for byte; `testdata/sim/xc7/` has those testbenches and answers, and
 `docs/fpga-vivado-parity.md` (*Simulating the hard blocks*) lists what each
 covers, what the comparison found, and what is not checked or not modelled
-(`IDELAYE2` and the FIFOs, among others). One behaviour every model
+(a FIFO on two clocks, among others). One behaviour every model
 shares, because `xsim` has it: for the first 100 ns, `glbl`'s global
 reset holds each block at its initial value and ignores its clocks, so a
 testbench that clocks a block from time zero sees nothing happen until

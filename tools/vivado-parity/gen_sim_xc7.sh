@@ -29,7 +29,9 @@ for name in "$@"; do
     mkdir -p "$work/$name"
     (
         cd "$work/$name"
-        nice -n 19 ionice -c3 xvlog -sv "$tb" "$glbl" >log 2>&1
+        # As Verilog, which is how `reticle sim` reads a .v file: with -sv, a
+        # declaration's initial value raises no event at time zero.
+        nice -n 19 ionice -c3 xvlog "$tb" "$glbl" >log 2>&1
         nice -n 19 ionice -c3 xelab -L unisims_ver -L secureip -debug off tb glbl -s s >>log 2>&1
         nice -n 19 ionice -c3 xsim s -R >out 2>&1
     ) || { cat "$work/$name/log" "$work/$name/out" 2>/dev/null; exit 1; }

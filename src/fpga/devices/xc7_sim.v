@@ -283,6 +283,154 @@ module ISERDESE2 #(parameter DATA_RATE = "DDR", parameter integer DATA_WIDTH = 4
   end
 endmodule
 
+// The input delay, as two stages: an ideal variable line of the tap value
+// times a tap, a tap being 1/64 of the reference clock's period in whole
+// picoseconds (78 ps at 200 MHz), and then a fixed 600 ps. The first stage is
+// ideal, as xsim's is: when the value changes, it shows at once the input as
+// it was the new delay ago, so a change while an edge is in flight can put a
+// short pulse out, 600 ps later. FIXED and VARIABLE start at IDELAY_VALUE and
+// the loading types at zero; on a rising edge of C, LD loads IDELAY_VALUE
+// (VARIABLE) or CNTVALUEIN, or else CE moves the value by one each way, round
+// from 31 to 0. Not modelled: VAR_LOAD_PIPE's pipeline register apart from
+// LD (it loads as VAR_LOAD does), REGRST, CINVCTRL, and the line's first
+// nanosecond, where xsim's output has transitions of its own from x.
+module IDELAYE2 #(parameter CINVCTRL_SEL = "FALSE", parameter DELAY_SRC = "IDATAIN",
+    parameter HIGH_PERFORMANCE_MODE = "FALSE", parameter IDELAY_TYPE = "FIXED",
+    parameter integer IDELAY_VALUE = 0, parameter PIPE_SEL = "FALSE",
+    parameter real REFCLK_FREQUENCY = 200.0, parameter SIGNAL_PATTERN = "DATA",
+    parameter [0:0] IS_C_INVERTED = 1'b0, parameter [0:0] IS_DATAIN_INVERTED = 1'b0,
+    parameter [0:0] IS_IDATAIN_INVERTED = 1'b0)
+  (output [4:0] CNTVALUEOUT, output DATAOUT, input C, input CE, input CINVCTRL,
+   input [4:0] CNTVALUEIN, input DATAIN, input IDATAIN, input INC, input LD, input LDPIPEEN,
+   input REGRST);
+  localparam integer TAP = $rtoi(1000000.0 / (64.0 * REFCLK_FREQUENCY));
+  localparam integer BASE = 600;
+  localparam LOADS = IDELAY_TYPE == "VAR_LOAD" || IDELAY_TYPE == "VAR_LOAD_PIPE";
+  wire in = DELAY_SRC == "DATAIN" ? DATAIN ^ IS_DATAIN_INVERTED : IDATAIN ^ IS_IDATAIN_INVERTED;
+  wire c = C ^ IS_C_INVERTED;
+  reg [4:0] value = LOADS ? 5'd0 : IDELAY_VALUE;
+  assign CNTVALUEOUT = value;
+  always @(posedge c)
+    if (IDELAY_TYPE != "FIXED") begin
+      if (LD) value <= LOADS ? CNTVALUEIN : IDELAY_VALUE;
+      else if (CE) value <= INC ? value + 5'd1 : value - 5'd1;
+    end
+
+  // The last changes of the input (`a_*`) and of the first stage (`b_*`),
+  // as (time, level) in rings.
+  localparam integer H = 32;
+  reg [63:0] a_at [0:H-1], b_at [0:H-1];
+  reg a_was [0:H-1], b_was [0:H-1];
+  integer a_new = 0, b_new = 0, k;
+  reg stage = 1'bx, out = 1'bx;
+  assign DATAOUT = out;
+  function level_a(input [63:0] t);
+    integer i;
+    begin
+      level_a = 1'bx;
+      for (i = H - 1; i >= 0; i = i - 1)
+        if (a_at[(a_new - i + H) % H] <= t) level_a = a_was[(a_new - i + H) % H];
+    end
+  endfunction
+  function level_b(input [63:0] t);
+    integer i;
+    begin
+      level_b = 1'bx;
+      for (i = H - 1; i >= 0; i = i - 1)
+        if (b_at[(b_new - i + H) % H] <= t) level_b = b_was[(b_new - i + H) % H];
+    end
+  endfunction
+
+  // A pool of timers. One of kind 0 puts the first stage right when it is
+  // due, unless the delay has changed since it was set; one of kind 1 puts
+  // the output right 600 ps after the first stage moved.
+  localparam integer N = 16;
+  reg [63:0] due [0:N-1];
+  reg [31:0] tag [0:N-1];
+  reg kind [0:N-1];
+  reg [N-1:0] go = 0, done = 0;
+  reg [31:0] epoch = 0;
+  integer next = 0;
+  genvar g;
+  for (g = 0; g < N; g = g + 1) begin : timers
+    always @(go[g]) begin
+      if (due[g] > $time) #(due[g] - $time);
+      done[g] = ~done[g];
+    end
+  end
+  task arm(input [63:0] t, input which);
+    begin
+      due[next] = t;
+      tag[next] = epoch;
+      kind[next] = which;
+      go[next] = ~go[next];
+      next = (next + 1) % N;
+    end
+  endtask
+  // The first stage takes level `v` now.
+  task stage_to(input v);
+    if (v !== stage) begin
+      stage = v;
+      b_new = (b_new + 1) % H;
+      b_at[b_new] = $time;
+      b_was[b_new] = v;
+      arm($time + BASE, 1'b1);
+    end
+  endtask
+  reg [4:0] used;
+  integer m;
+  initial begin
+    for (m = 0; m < H; m = m + 1) begin
+      a_at[m] = 0;
+      a_was[m] = 1'bx;
+      b_at[m] = 0;
+      b_was[m] = 1'bx;
+    end
+    used = value;
+  end
+  always @(in or value or done) begin
+    if (in !== a_was[a_new]) begin
+      a_new = (a_new + 1) % H;
+      a_at[a_new] = $time;
+      a_was[a_new] = in;
+      arm($time + value * TAP, 1'b0);
+    end
+    if (value !== used) begin
+      used = value;
+      epoch = epoch + 1;
+      for (k = 0; k < H; k = k + 1)
+        if (a_at[k] + value * TAP > $time) arm(a_at[k] + value * TAP, 1'b0);
+      if ($time >= value * TAP) stage_to(level_a($time - value * TAP));
+    end
+    for (k = 0; k < N; k = k + 1)
+      if (due[k] == $time && kind[k] == 1'b0 && tag[k] == epoch)
+        stage_to(level_a($time - value * TAP));
+    for (k = 0; k < N; k = k + 1)
+      if (due[k] == $time && kind[k] == 1'b1) out = level_b($time - BASE);
+  end
+endmodule
+
+// The delay controller's RDY, as xsim has it: after two rising edges of
+// REFCLK out of reset it rises 100 ps after the next falling one, and once
+// it has, a later reset drops it only while RST is high. Not modelled: RDY
+// falling when REFCLK stops.
+module IDELAYCTRL #(parameter SIM_DEVICE = "7SERIES") (output RDY, input REFCLK, input RST);
+  reg rdy = 1'b0;
+  assign RDY = rdy;
+  integer rises = 0;
+  reg calibrated = 1'b0, ref_was = 1'bx;
+  always @(REFCLK or RST) begin
+    if (RST) rdy <= 1'b0;
+    else if (calibrated) rdy <= 1'b1;
+    else if (REFCLK === 1'b1 && ref_was !== 1'b1) rises = rises + 1;
+    else if (REFCLK === 1'b0 && ref_was !== 1'b0 && rises >= 2) begin
+      calibrated = 1'b1;
+      rdy <= #100 1'b1;
+    end
+    ref_was = REFCLK;
+  end
+endmodule
+
 // ---------------------------------------------------------------- IO buffers
 
 // A buffer passes 0 and 1 and makes x of x and z. A differential input is 1
@@ -863,6 +1011,186 @@ module RAMB36E1 #(parameter [35:0] INIT_A = 36'h0, parameter [35:0] INIT_B = 36'
     .regceb(REGCEB), .addrb(ADDRBWRADDR[14:0]), .web(WIDE_W ? WEBWE : {4'b0, WEBWE[3:0]}),
     .dib(WIDE_W ? {DIBDI, DIADI} : {32'h0, DIBDI}),
     .dipb(WIDE_W ? {DIPBDIP, DIPADIP} : {4'h0, DIPBDIP}), .dob(dob), .dopb(dopb));
+endmodule
+
+// ---------------------------------------------------------------- FIFOs
+
+// What FIFO18E1 and FIFO36E1 share, on one clock (EN_SYN TRUE). On a rising
+// edge a write is taken unless the FIFO is full and a read unless it is
+// empty, and the other one is an error (WRERR, RDERR) for that cycle. FULL is
+// a full FIFO, EMPTY an empty one, ALMOSTFULL at most ALMOST_FULL_OFFSET
+// words short of full, ALMOSTEMPTY at most ALMOST_EMPTY_OFFSET words. A
+// count is its pointer with the bits above the pointer's width set, and zero
+// from a reset until the pointer first moves: xsim's answers.
+//
+// Two clocks (EN_SYN FALSE, the default) are not modelled: the flags cross
+// between them through xsim's synchronisers, cycle by cycle, which nothing
+// here has measured well enough to write down. A design asking for them is
+// refused at elaboration, by an instance of a module nothing declares that
+// names the reason, rather than given one clock's answers.
+module xc7_sim_fifo #(parameter integer ABITS = 10, parameter integer CBITS = 12,
+    parameter integer DW = 16, parameter integer PW = 2, parameter integer DO_REG = 0,
+    parameter integer AE = 1, parameter integer AF = 1,
+    parameter [63:0] INIT_D = 64'h0, parameter [7:0] INIT_P = 8'h0,
+    parameter [63:0] SR_D = 64'h0, parameter [7:0] SR_P = 8'h0)
+  (input clk, input rst, input wren, input rden, input regce, input rstreg,
+   input [63:0] di, input [7:0] dip, output [63:0] do_, output [7:0] dop,
+   output empty, output full, output almost_empty, output almost_full, output rderr,
+   output wrerr, output [CBITS-1:0] rdcount, output [CBITS-1:0] wrcount);
+  localparam integer DEPTH = 1 << ABITS;
+  localparam [CBITS-1:0] HIGH = ({CBITS{1'b1}} >> ABITS) << ABITS;
+  localparam [71:0] DMASK = (72'h1 << DW) - 1;
+  localparam [71:0] PMASK = (72'h1 << PW) - 1;
+  reg [71:0] mem [0:DEPTH-1];
+  reg [ABITS-1:0] rp = 0, wp = 0;
+  integer used = 0;
+  // Only the bits of the width are known.
+  function [63:0] known_d(input [63:0] v);
+    integer j;
+    begin
+      known_d = v;
+      for (j = 0; j < 64; j = j + 1) if (j >= DW) known_d[j] = 1'bx;
+    end
+  endfunction
+  function [7:0] known_p(input [7:0] v);
+    integer j;
+    begin
+      known_p = v;
+      for (j = 0; j < 8; j = j + 1) if (j >= PW) known_p[j] = 1'bx;
+    end
+  endfunction
+  reg [63:0] latch_d = known_d(INIT_D), reg_d = known_d(INIT_D);
+  reg [7:0] latch_p = known_p(INIT_P), reg_p = known_p(INIT_P);
+  assign do_ = DO_REG ? reg_d : latch_d;
+  assign dop = DO_REG ? reg_p : latch_p;
+  reg gsr = 1'b1;
+  initial #100000 gsr <= 1'b0;
+  reg em = 1'b1, fu = 1'b0, ae = 1'b1, af = 1'b0, re = 1'b0, we = 1'b0;
+  reg [CBITS-1:0] rc = 0, wc = 0;
+  assign {empty, full, almost_empty, almost_full, rderr, wrerr} = {em, fu, ae, af, re, we};
+  assign rdcount = rc;
+  assign wrcount = wc;
+  reg take_w, take_r;
+  always @(posedge clk or posedge gsr)
+    if (gsr || rst) begin
+      rp <= 0;
+      wp <= 0;
+      used = 0;
+      {em, fu, ae, af, re, we} <= 6'b101000;
+      rc <= 0;
+      wc <= 0;
+    end else begin
+      take_w = wren && !fu;
+      take_r = rden && !em;
+      we <= wren && fu;
+      re <= rden && em;
+      if (take_w) begin
+        mem[wp] = ((di & DMASK) << PW) | (dip & PMASK);
+        wp <= wp + 1'b1;
+        wc <= HIGH | (wp + 1'b1);
+      end
+      if (take_r) begin
+        {latch_d, latch_p} <= {known_d(mem[rp] >> PW), known_p(mem[rp])};
+        rp <= rp + 1'b1;
+        rc <= HIGH | (rp + 1'b1);
+      end
+      if (DO_REG && regce) {reg_d, reg_p} <= rstreg ? {known_d(SR_D), known_p(SR_P)} :
+        {latch_d, latch_p};
+      used = used + take_w - take_r;
+      em <= used == 0;
+      fu <= used == DEPTH;
+      ae <= used <= AE;
+      af <= used >= DEPTH - AF;
+    end
+endmodule
+
+module FIFO18E1 #(parameter [12:0] ALMOST_EMPTY_OFFSET = 13'h0080,
+    parameter [12:0] ALMOST_FULL_OFFSET = 13'h0080, parameter integer DATA_WIDTH = 4,
+    parameter integer DO_REG = 1, parameter EN_SYN = "FALSE", parameter FIFO_MODE = "FIFO18",
+    parameter FIRST_WORD_FALL_THROUGH = "FALSE", parameter [35:0] INIT = 36'h0,
+    parameter SIM_DEVICE = "7SERIES", parameter [35:0] SRVAL = 36'h0,
+    parameter [0:0] IS_RDCLK_INVERTED = 1'b0, parameter [0:0] IS_RDEN_INVERTED = 1'b0,
+    parameter [0:0] IS_RSTREG_INVERTED = 1'b0, parameter [0:0] IS_RST_INVERTED = 1'b0,
+    parameter [0:0] IS_WRCLK_INVERTED = 1'b0, parameter [0:0] IS_WREN_INVERTED = 1'b0)
+  (output ALMOSTEMPTY, output ALMOSTFULL, output [31:0] DO, output [3:0] DOP, output EMPTY,
+   output FULL, output [11:0] RDCOUNT, output RDERR, output [11:0] WRCOUNT, output WRERR,
+   input [31:0] DI, input [3:0] DIP, input RDCLK, input RDEN, input REGCE, input RST,
+   input RSTREG, input WRCLK, input WREN);
+  localparam integer W = DATA_WIDTH;
+  localparam integer DW = W == 4 ? 4 : W == 9 ? 8 : W == 18 ? 16 : 32;
+  localparam integer PW = W == 4 ? 0 : W == 9 ? 1 : W == 18 ? 2 : 4;
+  localparam integer ABITS = W == 4 ? 12 : W == 9 ? 11 : W == 18 ? 10 : 9;
+  if (EN_SYN != "TRUE") begin : two_clocks
+    xc7_sim_fifo_with_EN_SYN_FALSE_is_not_modelled refused ();
+  end
+  wire [63:0] do_;
+  wire [7:0] dop;
+  assign DO = do_[31:0];
+  assign DOP = dop[3:0];
+  xc7_sim_fifo #(.ABITS(ABITS), .CBITS(12), .DW(DW), .PW(PW), .DO_REG(DO_REG),
+    .AE(ALMOST_EMPTY_OFFSET), .AF(ALMOST_FULL_OFFSET),
+    .INIT_D(INIT[31:0] & ((64'h1 << DW) - 1)), .INIT_P(INIT >> DW),
+    .SR_D(SRVAL[31:0] & ((64'h1 << DW) - 1)), .SR_P(SRVAL >> DW))
+    core (.clk(WRCLK ^ IS_WRCLK_INVERTED), .rst(RST ^ IS_RST_INVERTED),
+    .wren(WREN ^ IS_WREN_INVERTED), .rden(RDEN ^ IS_RDEN_INVERTED), .regce(REGCE),
+    .rstreg(RSTREG ^ IS_RSTREG_INVERTED), .di({32'h0, DI}), .dip({4'h0, DIP}), .do_(do_),
+    .dop(dop), .empty(EMPTY), .full(FULL), .almost_empty(ALMOSTEMPTY),
+    .almost_full(ALMOSTFULL), .rderr(RDERR), .wrerr(WRERR), .rdcount(RDCOUNT),
+    .wrcount(WRCOUNT));
+endmodule
+
+module FIFO36E1 #(parameter [12:0] ALMOST_EMPTY_OFFSET = 13'h0080,
+    parameter [12:0] ALMOST_FULL_OFFSET = 13'h0080, parameter integer DATA_WIDTH = 4,
+    parameter integer DO_REG = 1, parameter EN_ECC_READ = "FALSE",
+    parameter EN_ECC_WRITE = "FALSE", parameter EN_SYN = "FALSE", parameter FIFO_MODE = "FIFO36",
+    parameter FIRST_WORD_FALL_THROUGH = "FALSE", parameter [71:0] INIT = 72'h0,
+    parameter SIM_DEVICE = "7SERIES", parameter [71:0] SRVAL = 72'h0,
+    parameter [0:0] IS_RDCLK_INVERTED = 1'b0, parameter [0:0] IS_RDEN_INVERTED = 1'b0,
+    parameter [0:0] IS_RSTREG_INVERTED = 1'b0, parameter [0:0] IS_RST_INVERTED = 1'b0,
+    parameter [0:0] IS_WRCLK_INVERTED = 1'b0, parameter [0:0] IS_WREN_INVERTED = 1'b0)
+  (output ALMOSTEMPTY, output ALMOSTFULL, output DBITERR, output [63:0] DO, output [7:0] DOP,
+   output [7:0] ECCPARITY, output EMPTY, output FULL, output [12:0] RDCOUNT, output RDERR,
+   output SBITERR, output [12:0] WRCOUNT, output WRERR, input [63:0] DI, input [7:0] DIP,
+   input INJECTDBITERR, input INJECTSBITERR, input RDCLK, input RDEN, input REGCE, input RST,
+   input RSTREG, input WRCLK, input WREN);
+  localparam integer W = DATA_WIDTH;
+  localparam integer DW = W == 4 ? 4 : W == 9 ? 8 : W == 18 ? 16 : W == 36 ? 32 : 64;
+  localparam integer PW = W == 4 ? 0 : W == 9 ? 1 : W == 18 ? 2 : W == 36 ? 4 : 8;
+  localparam integer ABITS = W == 4 ? 13 : W == 9 ? 12 : W == 18 ? 11 : W == 36 ? 10 : 9;
+  if (EN_SYN != "TRUE") begin : two_clocks
+    xc7_sim_fifo_with_EN_SYN_FALSE_is_not_modelled refused ();
+  end
+  assign {DBITERR, SBITERR} = 2'b00;
+  assign ECCPARITY = 8'h00;
+  xc7_sim_fifo #(.ABITS(ABITS), .CBITS(13), .DW(DW), .PW(PW), .DO_REG(DO_REG),
+    .AE(ALMOST_EMPTY_OFFSET), .AF(ALMOST_FULL_OFFSET),
+    .INIT_D(INIT[63:0] & ((65'h1 << DW) - 1)), .INIT_P(INIT >> DW),
+    .SR_D(SRVAL[63:0] & ((65'h1 << DW) - 1)), .SR_P(SRVAL >> DW))
+    core (.clk(WRCLK ^ IS_WRCLK_INVERTED), .rst(RST ^ IS_RST_INVERTED),
+    .wren(WREN ^ IS_WREN_INVERTED), .rden(RDEN ^ IS_RDEN_INVERTED), .regce(REGCE),
+    .rstreg(RSTREG ^ IS_RSTREG_INVERTED), .di(DI), .dip(DIP), .do_(DO), .dop(DOP),
+    .empty(EMPTY), .full(FULL), .almost_empty(ALMOSTEMPTY), .almost_full(ALMOSTFULL),
+    .rderr(RDERR), .wrerr(WRERR), .rdcount(RDCOUNT), .wrcount(WRCOUNT));
+endmodule
+
+// ---------------------------------------------------------------- configuration
+
+// STARTUPE2 as xsim has it: EOS rises as the global reset ends, CFGMCLK runs
+// at 65 MHz from time zero (low first), CFGCLK floats and PREQ is low. Not
+// modelled: its GSR and GTS inputs, which in the part reset and tristate the
+// whole device, and the user clock and DONE pins.
+module STARTUPE2 #(parameter PROG_USR = "FALSE", parameter real SIM_CCLK_FREQ = 0.0)
+  (output CFGCLK, output CFGMCLK, output EOS, output PREQ, input CLK, input GSR, input GTS,
+   input KEYCLEARB, input PACK, input USRCCLKO, input USRCCLKTS, input USRDONEO,
+   input USRDONETS);
+  reg gsr = 1'b1;
+  initial #100000 gsr <= 1'b0;
+  reg mclk = 1'b0;
+  always #7692 mclk = ~mclk;
+  assign CFGMCLK = mclk;
+  assign EOS = ~gsr;
+  assign CFGCLK = 1'bz;
+  assign PREQ = 1'b0;
 endmodule
 
 // ---------------------------------------------------------------- clocking

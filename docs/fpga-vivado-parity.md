@@ -55,6 +55,9 @@ byte (`tests/sim_xc7_primitives.rs`; `tools/vivado-parity/gen_sim_xc7.sh` asks `
 | `oddr`, `oddr_same_edge`, `oddr_same_edge_inverted` | `ODDR` likewise, and CE held low across whole cycles in `SAME_EDGE` |
 | `oserdese2`, `oserdese2_reset` | `OSERDESE2` at SDR 2 to 8 and DDR 4, 6, 8, OQ and TQ; eight moments of coming out of reset |
 | `iserdese2`, `iserdese2_reset` | `ISERDESE2` in `NETWORKING` at SDR 2 to 8 and DDR 4, 6, 8, all eight Q; eight moments of coming out of reset |
+| `idelaye2`, `idelayctrl` | `IDELAYE2` `FIXED` at several values and two reference frequencies, from `DATAIN`, inverted, `VARIABLE` and `VAR_LOAD` stepped and loaded while edges are in the line; `IDELAYCTRL`'s `RDY` |
+| `fifo_one_clock` | `FIFO18E1` at 18, 9 and 36 bits and `FIFO36E1` at 4, on one clock (`EN_SYN TRUE`): filled, emptied, every flag and count, `DO_REG` |
+| `startupe2` | `STARTUPE2`'s `EOS`, `CFGMCLK`, `CFGCLK` and `PREQ` |
 | `ramb18e1`, `ramb36e1` | `TDP` and `SDP`, every width, mixed widths on a port, each write mode, the output registers, both resets and their priority, byte enables, parity, `INIT_xx`/`INITP_xx`, inversions |
 | `bufg`, `bufg_switches`, `bufgctrl` | `BUFG`, `BUFGCE` (both `CE_TYPE`s), `BUFGCE_1`, `BUFGMUX`, `BUFGMUX_1`, `BUFGMUX_CTRL`, `BUFGP`; 80 switches and 140 `BUFGCTRL` experiments, one control at a time at each phase of two clocks |
 | `bufr` | `BUFR` at every divide with CE and CLR, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFMRCE` |
@@ -73,13 +76,23 @@ the first `CLKDIV` edge out of reset; a PLL's outputs run half a VCO period earl
 an MMCM's and a PLL's lock take `3*M*D + 15` and `+ 17` input cycles. The latencies of
 `OSERDESE2` are UG471's table, and xsim's; `ISERDESE2`'s Q1 is the newest sample, Q2 to
 Q8 older ones even beyond the width, a reset empties the samples, and its lag is 2, 2, 4,
-6, 8, 10, 12 half periods of `CLK` for SDR 2 to 8 and 3, 3, 5 for DDR 4, 6, 8.
+6, 8, 10, 12 half periods of `CLK` for SDR 2 to 8 and 3, 3, 5 for DDR 4, 6, 8. An
+`IDELAYE2` adds 600 ps to its taps, a tap is 1/64 of the reference period in whole
+picoseconds (78 at 200 MHz), and its line is ideal: a step while an edge is in it
+can put a short pulse out; `VAR_LOAD` starts at zero whatever `IDELAY_VALUE` says.
+`IDELAYCTRL`'s `RDY` rises 100 ps after the falling edge that follows two rising edges
+of `REFCLK`, and comes back at once from a later reset. A FIFO's count is its pointer
+with the bits above the pointer's width set (`c01` for one word of 18 bits), and zero
+until it first moves. `STARTUPE2`'s `EOS` rises with the end of the global reset and
+its `CFGMCLK` is 65 MHz from time zero.
 
-The simulator had four faults these found, each fixed with a test of its own:
-a fractional delay rounded to the unit and not the precision; `m[i][j]` read element
-`j` of `m` (and `mem[a][7:0] <= d` was dropped, which is how `ib_1024x32_bytes` came
-to be built wrongly: see [Block RAM](#block-ram)); an integer division inside a real
-expression was divided as reals; a function's `real` argument was one bit wide.
+The simulator had six faults these found, each fixed or refused with a test of its
+own: a fractional delay rounded to the unit and not the precision; `m[i][j]` read
+element `j` of `m` (and `mem[a][7:0] <= d` was dropped, which is how
+`ib_1024x32_bytes` came to be built wrongly: see [Block RAM](#block-ram)); an integer
+division inside a real expression was divided as reals; a function's `real` argument
+was one bit wide; `q <= #(d) v` with `d` a variable assigned at once; and an array of
+`real` failed validation or rounded what it held. The last two are refused now.
 
 **Not checked against xsim, or known to differ:** `BUFGCTRL` with its selects and
 enables changing faster than a switch completes; `OSERDESE2` with OCE or TCE moving in
@@ -87,12 +100,15 @@ the middle of a word, DATA_WIDTH 10 and 14, and SHIFTIN/SHIFTOUT; a clock manage
 fractional multiplier (xsim locks it much later), a VCO period that is not a whole
 picosecond, an MMCM with D above 1 and M odd, `CLKOUT4_CASCADE`'s phase, the DRP and
 the phase shift; `ISERDESE2`'s `BITSLIP`, its `MEMORY` and `OVERSAMPLE` modes and CE
-low; a block RAM's address collisions (xsim prints a warning and reads x),
+low; `IDELAYE2`'s `VAR_LOAD_PIPE` pipeline, `REGRST` and first nanosecond;
+`IDELAYCTRL`'s `RDY` when `REFCLK` stops; a FIFO's `RSTREG`, `FWFT` and ECC;
+`STARTUPE2`'s `GSR` and `GTS` inputs; a block RAM's address collisions (xsim prints a warning and reads x),
 cascades and ECC; a differential input at x or z on one side; `KEEPER`, and a pull on
-a net something else drives, which need strengths. **Not modelled at all:**
-`IDELAYE2`, `IDELAYCTRL`, `FIFO18E1`, `FIFO36E1`, and the configuration
-blocks (`BSCANE2`, `ICAPE2`, `STARTUPE2`, `FRAME_ECCE2`, `XADC`, `DCIRESET`); a design
-naming one is refused at elaboration as before.
+a net something else drives, which need strengths. **Not modelled at all:** a FIFO
+on two clocks (`EN_SYN FALSE`, the default), whose flags cross through xsim's
+synchronisers in a way not measured yet (the model refuses it at elaboration, naming
+why), and the other configuration blocks (`BSCANE2`, `ICAPE2`, `FRAME_ECCE2`, `XADC`,
+`DCIRESET`); a design naming one is refused at elaboration as before.
 
 ## Which primitives build
 
@@ -712,7 +728,7 @@ elaboration takes for a cell nothing declares, so a model there would replace th
 in every build, as it would an `IDDR`'s, which has none either; a model for simulation alone
 would need a library elaboration does not read, which this flow has not got. (Since
 2026-11-06 it has one: [Simulating the hard blocks](#simulating-the-hard-blocks). `IDDR`
-and `ODDR` are in it, checked against `xsim`; `IDELAYE2` is not yet.) A `PHASER`'s
+and `ODDR` are in it, checked against `xsim`, and so is `IDELAYE2`.) A `PHASER`'s
 clocks into `CLKDIVP` and `OCLK`, the `MEMORY_DDR3` and `MEMORY_QDR` interfaces' purpose,
 which this part's flow does not build. Nothing here has been on a part.
 
@@ -2293,7 +2309,7 @@ flags on two clocks are the vendor model's synchronisers, which a model written 
 would have to match cycle for cycle to be worth a vector; Vivado's own models are what
 the simulation above runs on. (A `RAMB18E1` and a `RAMB36E1` have one now, in the
 simulation library, [Simulating the hard blocks](#simulating-the-hard-blocks); the FIFOs
-still have none, for the reason given.)
+have one on one clock (`EN_SYN TRUE`) and none on two, for the reason given.)
 
 **Bitstreams of other designs.** The FIFO bels are new sites in the Vivado model's
 fabric; the block RAM fixtures and `qor/` were built with this and with the commit
