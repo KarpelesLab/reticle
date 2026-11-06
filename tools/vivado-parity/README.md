@@ -91,6 +91,11 @@ models or IP.
   `decode_placed.sh` and `compare_bits.py` compare the bitstreams, feature by
   feature, `frame_ecc.py` checks what those leave over, and `placed_table.py` and
   `bits_table.py` write `testdata/fpga/vivado/placed/`.
+- `achieved.sh`, `achieved.tcl` and `achieved.py` ask the clock period each design
+  achieves under Vivado's timer: Vivado's own flow at tightening periods, Reticle's
+  placement and routes at several seeds, and Vivado's placement and routes of
+  Reticle's netlist, or of its placement with the lookup tables' pins locked or free;
+  `achieved.py table --fixture` writes `testdata/fpga/vivado/qor/achieved.txt`.
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's

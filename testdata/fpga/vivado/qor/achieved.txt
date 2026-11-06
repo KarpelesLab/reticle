@@ -1,0 +1,265 @@
+# The clock period each design of the timing corpus achieves under Vivado
+# 2026.1's timer at xc7a100tftg256-3: each clock's period less the worst setup
+# slack from it to itself, in ns. tools/vivado-parity/achieved.sh and
+# `achieved.py table --fixture`; docs/fpga-vivado-parity.md, "Placement and
+# routing against Vivado's own flow". Run on 2026-11-06.
+#   vivado <design> <clock> <ns>    Vivado's own flow, synthesis to routes, the
+#                                   best of three runs at tightening periods
+#   netlist <design> <clock> <ns>   Vivado's placement and routes of the
+#                                   `before` build's netlist, seed 1
+#   reticle <build> <seed> <design> <clock> <ns>
+#                                   Reticle's placement and routes, timed by
+#                                   Vivado: `before` is 04b70219, `after` with
+#                                   the section's changes, both `--delay-model vivado`
+vivado adders clk 2.042
+netlist adders clk 4.924
+reticle before 1 adders clk 7.233
+reticle before 2 adders clk 8.245
+reticle before 3 adders clk 7.431
+reticle before 4 adders clk 8.243
+reticle before 5 adders clk 7.155
+reticle after 1 adders clk 6.295
+reticle after 2 adders clk 6.130
+reticle after 3 adders clk 6.528
+reticle after 4 adders clk 6.450
+reticle after 5 adders clk 6.721
+vivado analyser_fifo rd_clk 3.887
+netlist analyser_fifo rd_clk 5.589
+reticle before 1 analyser_fifo rd_clk 7.907
+reticle before 2 analyser_fifo rd_clk 7.606
+reticle before 3 analyser_fifo rd_clk 7.173
+reticle before 4 analyser_fifo rd_clk 7.352
+reticle before 5 analyser_fifo rd_clk 8.074
+reticle after 1 analyser_fifo rd_clk 6.365
+reticle after 2 analyser_fifo rd_clk 7.162
+reticle after 3 analyser_fifo rd_clk 6.903
+reticle after 4 analyser_fifo rd_clk 6.099
+reticle after 5 analyser_fifo rd_clk 6.037
+vivado analyser_fifo wr_clk 2.417
+netlist analyser_fifo wr_clk 2.740
+reticle before 1 analyser_fifo wr_clk 3.980
+reticle before 2 analyser_fifo wr_clk 3.668
+reticle before 3 analyser_fifo wr_clk 3.745
+reticle before 4 analyser_fifo wr_clk 3.857
+reticle before 5 analyser_fifo wr_clk 3.734
+reticle after 1 analyser_fifo wr_clk 3.782
+reticle after 2 analyser_fifo wr_clk 3.715
+reticle after 3 analyser_fifo wr_clk 3.865
+reticle after 4 analyser_fifo wr_clk 3.673
+reticle after 5 analyser_fifo wr_clk 3.919
+vivado barrel clk 2.376
+netlist barrel clk 2.431
+reticle before 1 barrel clk 2.960
+reticle before 2 barrel clk 3.245
+reticle before 3 barrel clk 2.877
+reticle before 4 barrel clk 2.894
+reticle before 5 barrel clk 2.878
+reticle after 1 barrel clk 2.866
+reticle after 2 barrel clk 3.013
+reticle after 3 barrel clk 3.126
+reticle after 4 barrel clk 2.762
+reticle after 5 barrel clk 3.348
+vivado bram_fifo clk 3.388
+netlist bram_fifo clk 3.530
+reticle before 1 bram_fifo clk 3.936
+reticle before 2 bram_fifo clk 4.206
+reticle before 3 bram_fifo clk 3.796
+reticle before 4 bram_fifo clk 4.284
+reticle before 5 bram_fifo clk 4.058
+reticle after 1 bram_fifo clk 4.038
+reticle after 2 bram_fifo clk 4.046
+reticle after 3 bram_fifo clk 3.901
+reticle after 4 bram_fifo clk 4.158
+reticle after 5 bram_fifo clk 3.900
+vivado carry_counter clk 1.855
+netlist carry_counter clk 1.944
+reticle before 1 carry_counter clk 2.354
+reticle before 2 carry_counter clk 2.257
+reticle before 3 carry_counter clk 2.549
+reticle before 4 carry_counter clk 2.685
+reticle before 5 carry_counter clk 2.455
+reticle after 1 carry_counter clk 2.404
+reticle after 2 carry_counter clk 2.490
+reticle after 3 carry_counter clk 2.477
+reticle after 4 carry_counter clk 2.425
+reticle after 5 carry_counter clk 2.466
+vivado counter64 clk 3.220
+netlist counter64 clk 3.401
+reticle before 1 counter64 clk 6.237
+reticle before 2 counter64 clk 6.491
+reticle before 3 counter64 clk 4.368
+reticle before 4 counter64 clk 5.896
+reticle before 5 counter64 clk 5.358
+reticle after 1 counter64 clk 4.102
+reticle after 2 counter64 clk 4.304
+reticle after 3 counter64 clk 4.048
+reticle after 4 counter64 clk 4.655
+reticle after 5 counter64 clk 4.266
+vivado crc32 clk 2.234
+netlist crc32 clk 3.807
+reticle before 1 crc32 clk 5.307
+reticle before 2 crc32 clk 5.405
+reticle before 3 crc32 clk 5.354
+reticle before 4 crc32 clk 5.563
+reticle before 5 crc32 clk 5.546
+reticle after 1 crc32 clk 4.586
+reticle after 2 crc32 clk 4.787
+reticle after 3 crc32 clk 4.877
+reticle after 4 crc32 clk 4.612
+reticle after 5 crc32 clk 4.521
+vivado esad adc_sampleclk 2.131
+netlist esad adc_sampleclk 3.788
+reticle before 1 esad adc_sampleclk 3.920
+reticle before 2 esad adc_sampleclk 4.151
+reticle before 3 esad adc_sampleclk 3.094
+reticle before 4 esad adc_sampleclk 3.145
+reticle before 5 esad adc_sampleclk 3.334
+reticle after 1 esad adc_sampleclk 3.575
+reticle after 2 esad adc_sampleclk 2.974
+reticle after 3 esad adc_sampleclk 2.822
+reticle after 4 esad adc_sampleclk 3.231
+reticle after 5 esad adc_sampleclk 2.912
+vivado esad clk_usb 1.727
+netlist esad clk_usb 2.523
+reticle before 1 esad clk_usb 2.968
+reticle before 2 esad clk_usb 3.246
+reticle before 3 esad clk_usb 2.790
+reticle before 4 esad clk_usb 2.972
+reticle before 5 esad clk_usb 3.000
+reticle after 1 esad clk_usb 2.489
+reticle after 2 esad clk_usb 3.144
+reticle after 3 esad clk_usb 2.691
+reticle after 4 esad clk_usb 2.358
+reticle after 5 esad clk_usb 2.499
+vivado fir8 clk 9.142
+netlist fir8 clk 9.164
+reticle before 1 fir8 clk 9.161
+reticle before 2 fir8 clk 9.161
+reticle before 3 fir8 clk 9.161
+reticle before 4 fir8 clk 9.161
+reticle before 5 fir8 clk 9.161
+reticle after 1 fir8 clk 9.161
+reticle after 2 fir8 clk 9.161
+reticle after 3 fir8 clk 9.161
+reticle after 4 fir8 clk 9.161
+reticle after 5 fir8 clk 9.161
+vivado fsm clk 1.903
+netlist fsm clk 2.392
+reticle before 1 fsm clk 3.031
+reticle before 2 fsm clk 2.985
+reticle before 3 fsm clk 3.277
+reticle before 4 fsm clk 3.018
+reticle before 5 fsm clk 3.075
+reticle after 1 fsm clk 2.752
+reticle after 2 fsm clk 2.961
+reticle after 3 fsm clk 2.947
+reticle after 4 fsm clk 2.851
+reticle after 5 fsm clk 3.229
+vivado gray_cdc clk 1.466
+netlist gray_cdc clk 1.438
+reticle before 1 gray_cdc clk 1.548
+reticle before 2 gray_cdc clk 1.547
+reticle before 3 gray_cdc clk 1.547
+reticle before 4 gray_cdc clk 1.496
+reticle before 5 gray_cdc clk 1.576
+reticle after 1 gray_cdc clk 1.412
+reticle after 2 gray_cdc clk 1.503
+reticle after 3 gray_cdc clk 1.503
+reticle after 4 gray_cdc clk 1.427
+reticle after 5 gray_cdc clk 1.503
+vivado gray_cdc clk2 1.267
+netlist gray_cdc clk2 1.513
+reticle before 1 gray_cdc clk2 1.670
+reticle before 2 gray_cdc clk2 2.044
+reticle before 3 gray_cdc clk2 1.611
+reticle before 4 gray_cdc clk2 1.726
+reticle before 5 gray_cdc clk2 1.588
+reticle after 1 gray_cdc clk2 1.540
+reticle after 2 gray_cdc clk2 1.736
+reticle after 3 gray_cdc clk2 1.736
+reticle after 4 gray_cdc clk2 1.602
+reticle after 5 gray_cdc clk2 1.736
+vivado lutram32 clk 1.894
+netlist lutram32 clk 1.807
+reticle before 1 lutram32 clk 2.385
+reticle before 2 lutram32 clk 2.224
+reticle before 3 lutram32 clk 2.341
+reticle before 4 lutram32 clk 2.261
+reticle before 5 lutram32 clk 2.261
+reticle after 1 lutram32 clk 2.313
+reticle after 2 lutram32 clk 2.160
+reticle after 3 lutram32 clk 2.350
+reticle after 4 lutram32 clk 2.255
+reticle after 5 lutram32 clk 2.267
+vivado mul18 clk 1.935
+netlist mul18 clk 1.969
+reticle before 1 mul18 clk 2.471
+reticle before 2 mul18 clk 2.266
+reticle before 3 mul18 clk 2.505
+reticle before 4 mul18 clk 2.421
+reticle before 5 mul18 clk 2.382
+reticle after 1 mul18 clk 2.484
+reticle after 2 mul18 clk 2.273
+reticle after 3 mul18 clk 2.508
+reticle after 4 mul18 clk 2.566
+reticle after 5 mul18 clk 2.472
+vivado regfile_alu clk 5.511
+netlist regfile_alu clk 7.223
+reticle before 1 regfile_alu clk 9.491
+reticle before 2 regfile_alu clk 9.704
+reticle before 3 regfile_alu clk 10.907
+reticle before 4 regfile_alu clk 10.476
+reticle before 5 regfile_alu clk 10.139
+reticle after 1 regfile_alu clk 8.930
+reticle after 2 regfile_alu clk 9.607
+reticle after 3 regfile_alu clk 9.142
+reticle after 4 regfile_alu clk 8.852
+reticle after 5 regfile_alu clk 9.609
+vivado sad adc_sampleclk 2.207
+netlist sad adc_sampleclk 4.240
+reticle before 1 sad adc_sampleclk 4.316
+reticle before 2 sad adc_sampleclk 4.255
+reticle before 3 sad adc_sampleclk 4.906
+reticle before 4 sad adc_sampleclk 4.314
+reticle before 5 sad adc_sampleclk 5.099
+reticle after 1 sad adc_sampleclk 3.549
+reticle after 2 sad adc_sampleclk 3.484
+reticle after 3 sad adc_sampleclk 3.378
+reticle after 4 sad adc_sampleclk 3.671
+reticle after 5 sad adc_sampleclk 3.807
+vivado sad clk_usb 1.726
+netlist sad clk_usb 2.649
+reticle before 1 sad clk_usb 3.098
+reticle before 2 sad clk_usb 2.830
+reticle before 3 sad clk_usb 4.392
+reticle before 4 sad clk_usb 3.809
+reticle before 5 sad clk_usb 3.872
+reticle after 1 sad clk_usb 2.522
+reticle after 2 sad clk_usb 2.751
+reticle after 3 sad clk_usb 2.588
+reticle after 4 sad clk_usb 2.620
+reticle after 5 sad clk_usb 2.572
+vivado srl_delay clk 1.645
+netlist srl_delay clk 1.846
+reticle before 1 srl_delay clk 2.089
+reticle before 2 srl_delay clk 2.009
+reticle before 3 srl_delay clk 2.009
+reticle before 4 srl_delay clk 2.051
+reticle before 5 srl_delay clk 2.039
+reticle after 1 srl_delay clk 1.871
+reticle after 2 srl_delay clk 1.971
+reticle after 3 srl_delay clk 2.034
+reticle after 4 srl_delay clk 1.815
+reticle after 5 srl_delay clk 1.871
+vivado widemux clk 2.438
+netlist widemux clk 2.745
+reticle before 1 widemux clk 4.150
+reticle before 2 widemux clk 4.123
+reticle before 3 widemux clk 4.216
+reticle before 4 widemux clk 4.093
+reticle before 5 widemux clk 3.899
+reticle after 1 widemux clk 3.402
+reticle after 2 widemux clk 4.409
+reticle after 3 widemux clk 3.588
+reticle after 4 widemux clk 3.449
+reticle after 5 widemux clk 3.839
