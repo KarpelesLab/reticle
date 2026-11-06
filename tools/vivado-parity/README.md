@@ -115,6 +115,12 @@ models or IP.
   build's `x.v`: its tables by size and the buffers in front of a chain (`count`),
   each table charged to the registers it reaches (`blame`), and what feeds a cell
   (`cone`).
+- `slices.tcl` and `slices.py` say what each slice holds: `slices.tcl own` runs
+  Vivado's own flow on a design and `slices.tcl placed` loads Reticle's placement of
+  it (`--vivado-placement`), each writing every site's cells and every net's pins;
+  `slices.py table` sets two such runs side by side (slices, flip-flops a slice,
+  registers fed inside their slice) and `slices.py connections` counts each kind of
+  connection inside a slice, inside a tile and how far.
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's

@@ -65,7 +65,7 @@ fn median(values: &[f64]) -> f64 {
 }
 
 /// **Every clock of the corpus has Vivado's figure and five seeds of each
-/// build**, `before`, `after`, `synthesis` and `area`. Would catch a design, a clock or a seed lost from a regeneration,
+/// build**, `before`, `after`, `synthesis`, `area` and `packing`. Would catch a design, a clock or a seed lost from a regeneration,
 /// which would make the table below a median of fewer placements than it says.
 #[test]
 fn every_clock_has_vivados_figure_and_five_seeds_of_each_build() {
@@ -77,7 +77,7 @@ fn every_clock_has_vivados_figure_and_five_seeds_of_each_build() {
     );
     for ((design, clock), (vivado, builds)) in &table {
         assert!(*vivado > 0.0, "{design} {clock}: no Vivado figure");
-        for build in ["before", "after", "synthesis", "area"] {
+        for build in ["before", "after", "synthesis", "area", "packing"] {
             let seeds = builds.get(build).map_or(0, Vec::len);
             assert_eq!(seeds, 5, "{design} {clock}: {seeds} seeds of `{build}`");
         }
@@ -177,5 +177,46 @@ fn the_area_synthesis_is_no_slower_than_the_one_before() {
     assert!(
         area <= synthesis,
         "geometric mean against Vivado's own flow: {area:.3}, before {synthesis:.3}"
+    );
+}
+
+/// **The packing of a RAM's registers, a carry in on `CYINIT` and a delay beside
+/// its serialiser costs the corpus no clock, and reaches only the designs it
+/// should.** `packing` is `area` with docs/fpga-vivado-parity.md, "Packing
+/// against Vivado's": the geometric mean against Vivado's own flow went from
+/// 1.249 to 1.248, `lutram32` 2.205 to 2.164 ns, `esad`'s and `sad`'s clocks each
+/// within its seeds' spread either way, and every design with neither a
+/// registered distributed RAM nor a carry in that is a signal built the same,
+/// seed for seed. This holds the mean no higher, no clock's median more than 5 %
+/// over its own `area` (the worst is `esad`'s `adc_sampleclk`, 3.033 to 3.084),
+/// and the other designs' figures the same. Would catch a regeneration that lost
+/// the change or mixed the builds, and a design the change should not reach that
+/// moved; would not catch the flow losing it since, which needs Vivado.
+#[test]
+fn the_packing_costs_no_clock_and_reaches_only_its_designs() {
+    let Some(table) = achieved() else { return };
+    // Those with a registered distributed RAM or a carry in that is a signal;
+    // `regfile_alu`'s RAMs are read by tables alone, and it built the same.
+    let reached = ["esad", "lutram32", "sad"];
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (area, packing) = (&builds["area"], &builds["packing"]);
+        if !reached.contains(&design.as_str()) {
+            assert_eq!(packing, area, "{design} {clock}: the packing reached it");
+        }
+        let (area, packing) = (median(area), median(packing));
+        assert!(
+            packing <= area * 1.05,
+            "{design} {clock}: {packing:.3} ns packed against {area:.3}"
+        );
+        logs[0] += (area / vivado).ln();
+        logs[1] += (packing / vivado).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let (area, packing) = ((logs[0] / n).exp(), (logs[1] / n).exp());
+    assert!(
+        packing <= area,
+        "geometric mean against Vivado's own flow: {packing:.3} packed, {area:.3} before"
     );
 }

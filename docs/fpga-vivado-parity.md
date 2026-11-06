@@ -894,7 +894,9 @@ designs; the four Vivado refuses are refused by its rule.** What was found:
   it. Refused here before placing, by that name.
 - **A delay of the fabric on `DDLY`** Vivado builds (`ddly_datain`), delay and serialiser in one
   tile. This flow put them in two and could not route between them; it is refused, in the test's
-  `STRICTER`. Not built is better than a delay going nowhere.
+  `STRICTER`. Not built is better than a delay going nowhere. *Built since 2026-11-07*, the two in
+  one tile and every feature Vivado's, and compared in the gate: what held them apart is in
+  "Packing against Vivado's", change 3.
 - **The ties.** Beside a serialiser, the router took `BYP_ALT6`, which is behind a delay's
   `CINVCTRL`, as a hop to the serialiser's pins, and the ground Vivado gives `CINVCTRL` could not
   then be made. A delay's grounded controls are closed to the router now, as the Vivado model of
@@ -1752,7 +1754,9 @@ the fixture's `before` and `after` fails `tests/fpga_xray_achieved.rs`.
 
 - **The placement.** It is most of what is left on `adders`, `regfile_alu` and
   `analyser_fifo` (1.1 to 1.5 ns), and nothing tried on the anneal's weighting moved
-  it beyond a seed. Vivado packs a ripple of tables four to a slice where Reticle
+  it beyond a seed. *Measured since, in "Packing against Vivado's": that ripple is the
+  legacy netlist's, and what is left is flip-flops, eight a slice in Vivado's and four
+  in Reticle's.* Vivado packs a ripple of tables four to a slice where Reticle
   puts two to a tile; what the placer would need to know of a slice's own wires for
   that is not looked at.
 - **`widemux`'s routes**, 0.3 ns from Vivado's on the same placement and pins: a
@@ -1869,7 +1873,8 @@ In the order they were made:
 4. **A chain's ends on the `CARRY4`'s own pins** (`MapOptions::carry_ends`): a
    constant carry in that both operands spelled as a low lane (`{a, 1} + {~b, 1}`)
    on `CYINIT`, and a top sum of `{0, x} + {0, y}` off `CO`. An eight-bit `a > b` was
-   two `CARRY4`s where Vivado has one. *A carry in that is a signal is not taken*:
+   two `CARRY4`s where Vivado has one. *A carry in that is a signal is not taken* (until
+   2026-11-07: "Packing against Vivado's", change 2, takes it):
    the shared adders' `s ? c - d : a + b` has one, and `xray::legalise_carries`
    refused it — bit 0's generate wants the same `AX` pin the signal would take.
    Vivado puts it there, its generate on `O5`; this flow would have to put it there
@@ -2007,7 +2012,8 @@ and an AND two levels over its inputs, not), and the duplicated complement.
 **Mutations**, fourteen, each made by a script and put back, each failing its test:
 `<` with its operands not swapped, `>=` started from zero, the sign bits not flipped
 on the chain, the carry out read off the wrong lane, a signal carry in put on
-`CYINIT` (`legalise_carries` refuses it), the lowest constant lane's `>` taken for
+`CYINIT` (`legalise_carries` refused it; since 2026-11-07 that is where it goes, the
+generate on `O5`), the lowest constant lane's `>` taken for
 `>=`, a rebuilt leaf's polarity dropped, Golumbic's first table taking a whole
 table's worth, the leaves' depths ignored, the depth priority ignored, complements
 not duplicated, an AND taken for a parity by the linear proof, the linear proof gone
@@ -2022,7 +2028,8 @@ cover unlike Vivado's (nine tables, four `MUXF7` and two `MUXF8` where Vivado ha
 none) and is now Vivado's slice for slice; `fpga_xray_lutram_vivado.rs`'s `mem32x8`
 was Vivado's slices line for line, its two `RAM32X1D` in one slice, and is now a
 slice each — nothing in the placer asks for the two in one, the anneal had put them
-there, and the read word's parity two tables deep moved it.
+there, and the read word's parity two tables deep moved it. (Vivado's slice for slice
+again since 2026-11-07, by the anneal again: "Packing against Vivado's".)
 
 ### Not done
 
@@ -2035,7 +2042,8 @@ there, and the read word's parity two tables deep moved it.
 - **`regfile_alu`'s and `sad`'s area**: 504 tables to 351, 1,847 to 1,414, and the
   chains' buffer tables above. `sad`'s 64 orderings of eight and nine bits went onto
   the chain as Vivado's do, and it is larger for it and no faster.
-- **A signal carry in on `CYINIT`**, for the shared adders: `legalise_carries` would
+- *Done since, in "Packing against Vivado's" (change 2): `esad` 77 `CARRY4`s, `sad` 142.*
+  **A signal carry in on `CYINIT`**, for the shared adders: `legalise_carries` would
   need the lane's generate on `O5` first. `esad`'s 256 counters are three `CARRY4`s
   each to Vivado's two.
 - **`a + 1` in tables to eleven bits**, as Vivado keeps it; the adder threshold is
@@ -2359,7 +2367,9 @@ depends on, and no design maps differently for it.
 ### Not done
 
 - **A signal carry in on `CYINIT`**, still: two tables of each of `sad`'s and
-  `esad`'s 48 shared adders, 96 tables, and Vivado's lane count.
+  `esad`'s 48 shared adders, 96 tables, and Vivado's lane count. *Taken since, in
+  "Packing against Vivado's" (change 2): the lanes, `esad` 93 `CARRY4`s to 77 and
+  `sad` 174 to 142.*
 - **A constant generate of one on the slice's bypass input**, so that an equality's
   lanes on the chain need no buffer: Vivado's chains compare `!=` with a generate of
   one, which a bypass input left unrouted reads. Here every constant generate takes
@@ -2375,6 +2385,238 @@ depends on, and no design maps differently for it.
 - `crc32`'s 191 tables two deep to Vivado's 129 three deep is the section before's
   choice, and stays.
 - `individual_trigger`'s shared term and `sad_counter`'s table a counter: not found.
+- None of it has been on a part.
+
+## Packing against Vivado's
+
+**Asked: what does each slice hold when Vivado places a design, what does it hold
+when Reticle does, and where Vivado's packing is the better one, what does making
+Reticle's the same do to the clock?** The open items the sections before left:
+a ripple of tables four to a slice where Reticle had two to a tile, a carry in that
+is a signal costing a lane, a delay of the fabric into a serialiser refused, two
+`RAM32X1D` a slice each where Vivado has one, and `srl_delay`'s wires. Run on
+2026-11-07 at `xc7a100tftg256-3` with Vivado 2026.1. **Everything here is Vivado's
+placement and Vivado's timer, or Vivado's decoded bitstream; nothing has been on a
+part.**
+
+`tools/vivado-parity/slices.tcl` writes what each site holds and every net's pins,
+of Vivado's own flow on a design (`own`, at the second set of periods of
+`achieved.sh`) or of Reticle's placement loaded into Vivado (`placed`, a
+`--vivado-placement` export, unrouted); `slices.py table` sets two side by side and
+`slices.py connections` counts each kind of connection inside a slice, inside a
+tile and how far.
+
+### What each slice holds
+
+Seed 1 of the `synthesis` build of "Synthesis against Vivado's" (b8bf631c, before
+"Area against Vivado's" reached `master`), against Vivado's own flow. Flip-flops a slice is over the slices holding any; "fed inside"
+is Vivado's own `report_utilization` line, *Register driven from within the Slice*,
+of each placement. **Measured**:
+
+| design | slices, Vivado | Reticle | flip-flops a slice, Vivado | Reticle | slices of more than four, Vivado | Reticle | fed inside the slice, Vivado | Reticle |
+|---|---|---|---|---|---|---|---|---|
+| adders | 83 | 165 | 5.8 | 3.0 | 52 | 7 | 293 of 481 | 226 of 481 |
+| analyser_fifo | 71 | 136 | 3.4 | 1.9 | 14 | 5 | 108 of 221 | 110 of 213 |
+| barrel | 36 | 29 | 2.2 | 2.9 | 0 | 5 | 33 of 70 | 40 of 70 |
+| bram_fifo | 21 | 36 | 4.0 | 2.3 | 7 | 1 | 34 of 68 | 33 of 68 |
+| carry_counter | 24 | 28 | 3.1 | 2.3 | 3 | 0 | 25 of 65 | 33 of 65 |
+| counter64 | 44 | 56 | 3.9 | 2.6 | 11 | 0 | 27 of 129 | 70 of 129 |
+| crc32 | 36 | 71 | 2.0 | 1.8 | 0 | 0 | 37 of 65 | 38 of 65 |
+| esad | 289 | 431 | 4.0 | 2.8 | 87 | 56 | 584 of 1084 | 540 of 1085 |
+| fir8 | 12 | 22 | 2.6 | 1.1 | 0 | 0 | 1 of 23 | 2 of 23 |
+| fsm | 11 | 33 | 3.0 | 1.7 | 2 | 0 | 6 of 30 | 7 of 30 |
+| gray_cdc | 9 | 16 | 4.1 | 2.5 | 2 | 0 | 36 of 37 | 36 of 37 |
+| lutram32 | 17 | 36 | 5.0 | 2.2 | 10 | 1 | 34 of 70 | 2 of 70 |
+| mul18 | 10 | 22 | 4.0 | 1.6 | 2 | 0 | 4 of 36 | 2 of 36 |
+| regfile_alu | 104 | 164 | 1.8 | 1.8 | 0 | 0 | 8 of 20 | 8 of 20 |
+| sad | 309 | 537 | 3.5 | 2.6 | 46 | 18 | 618 of 1019 | 784 of 1273 |
+| srl_delay | 9 | 13 | 3.8 | 2.6 | 4 | 1 | 3 of 34 | 4 of 34 |
+| widemux | 282 | 358 | 3.9 | 2.9 | 94 | 13 | 17 of 1049 | 19 of 1047 |
+
+What it says:
+
+- **Vivado fills slices: about half as many for the same logic.** A slice of eight
+  flip-flops is common in Vivado's (`adders`' shift register, 33 slices of eight) and
+  all but absent in Reticle's. Vivado's eight are four through the bypass inputs and
+  four through a table used as a wire, which no cell names and `report_utilization`
+  does not count. **Decoded** in `shared8`'s bits (below): a slice of eight
+  flip-flops and one table cell (a `LUT4` on `A6LUT`) has `BFFMUX.O6`, `CFFMUX.O6`
+  and `DFFMUX.O6` with the `B`, `C` and `D` tables holding an `INIT` and no cell,
+  `AFFMUX.O5` beside the `LUT4` on `O6`, and each five-input flip-flop on its bypass
+  input (`<L>5FFMUX.IN_B`). That `adders`' slices of eight are the same is read off
+  their cells, not decoded. Reticle has no route through a table, so a flip-flop fed
+  from the fabric takes the bypass input, four a slice.
+  Its tables are spread the same way: `regfile_alu`'s are in 153 slices to Vivado's
+  93, `crc32`'s in 71 to 35. **Not changed**; see "Not done".
+- **"Fed inside" is about the same in both but in `lutram32`**: 2 of 70 to Vivado's
+  34, its read word's registers a slice away from the `RAM32M`s they register.
+  Vivado has six of each slice's flip-flops reading the slice's own RAM. Changed.
+- **The earlier reading of `adders`, a ripple of tables four to a slice where Reticle
+  had two to a tile, is of the legacy netlist**, fifteen tables deep; with the default
+  synthesis it is Vivado's cell for cell, a table and eight `CARRY4`s deep, and its
+  tables are four to a slice in both (56 slices of four each). What is left there is
+  the flip-flops above.
+- **`srl_delay`** is Vivado's netlist (two `SRLC32E`, 32 flip-flops, seven tables two
+  deep), in 13 slices to Vivado's 9: its 32 flip-flops two or three a slice where
+  Vivado's are four to six beside the tables that read them, the same route through
+  a table. Its latest path is a flip-flop, a table and a table: 0.83 and 0.60 ns of
+  wire here (`SLICE_X86Y93` to `X87Y93` to `X85Y93`, the last table in another tile)
+  to Vivado's 0.61 and 0.49 (the two tables in one slice). Not changed.
+- **`esad`'s and `sad`'s counters**: 93 `CARRY4`s to Vivado's 68, 174 to 132, a
+  carry in that is a signal (`s ? c - d : a + b`) being a lane of its own. Changed.
+
+### What was changed
+
+1. **A distributed RAM's registered outputs go in its slice**
+   (`place::registered_tables`, `shares_a_slice_with_ram`). A RAM's output is taken
+   as a table's is: the flip-flop it alone feeds joins the RAM's group on the site
+   the output reaches inside the tile (`O6` to `<L>FF`, `O5` to `<L>5FF`), when it is
+   on the RAM's write clock and has the RAM's write enable or none, which a `SLICEM`'s
+   flip-flops share with it. `lutram32`'s registers fed inside go from 2 of 70 to 36
+   (Vivado 34), its slices from 36 to 28; its latest path was that connection, 0.51 ns
+   of route where Vivado's is none. Behind `PlaceOptions::memory_packing`, which is on
+   unless `--memories legacy`.
+2. **A carry in that is a signal goes on `CYINIT`, and bit 0's generate on the lane's
+   `O5`** (`primitives::shared_low_bit`, `xray::legalise_carries`' `SharedAx`).
+   `CYINIT` is reached from `AX` alone, and a generate from the fabric by the bypass
+   input, which on bit 0 is `AX` too; `legalise_carries` refused the two, so the
+   mapping kept such a carry in as a lane of its own. Vivado puts the generate on
+   `O5` — `shared8` (`s ? c - d : a + b`, eight bits, `testdata/fpga/vivado/carry_in/`)
+   is a `LUT3` on `A5LUT`, the propagate's `LUT5` on `A6LUT`, `PRECYINIT.AX` and
+   `CARRY4.ACY0`, two `CARRY4`s — and so does this flow now: bit 0's propagate and
+   generate become one `LUT6_2` (the generate's own table folded in when nothing else
+   reads it, passed through from an input otherwise). When the two read more than five
+   signals between them the carry in goes on a `CARRY4` of its own below the chain,
+   its top lane's carry out (propagate a constant zero, generate the signal on `DX`)
+   into the chain's `CI`, which costs what the lane did. `esad` 93 `CARRY4`s to 77
+   (Vivado 68) and `sad` 174 to 142 (132), sixteen and thirty-two chains on `O5`,
+   none below. Under `--synthesis vivado`; `--synthesis legacy` never writes one.
+   **Feature-compared** with Vivado's bits (`tests/fpga_xray_carry_in_vivado.rs`):
+   both slices of `shared8` the same `PRECYINIT` and `CARRY4` features, but the top
+   lane's `DCY0`, set here and not in Vivado's: a generate nothing reads (the lane's
+   sum is `S ^ CO` of the lane below, its carry out goes nowhere), taken from `O5`
+   because the lane's two tables are paired as every lane's are.
+3. **A delay of the fabric into a serialiser's `DDLY` is built** (`ddly_datain`), the
+   two in one tile, every feature of it Vivado's (`tests/fpga_xray_idelay.rs` compares
+   it in the gate now, and its `STRICTER` list no longer has it). Two things held the
+   two apart. The placer's dedicated relation `DDLY ← DATAOUT` was none: a `_SING` IO
+   tile is declared with both halves' `ILOGIC`s on its one half's wires
+   (`xray::iologic`), so two sinks reached one delay, which `find_relation` reads as a
+   connection fed from two places. Two sinks on one wire are one site seen twice now,
+   and left out of the relation (the tile cannot hold such a pair). And
+   `place_io_delay_controllers` then moved the delay off any site whose `ILOGIC` was
+   taken, which is the serialiser it feeds; that one is allowed now.
+
+**Tried and not kept: two `RAM32X1D` of one address in one slice**, as Vivado puts
+`mem32x8`'s (the `C` and `D` tables' upper halves and lower), written as a rule that
+made each such pair one group. Over ten seeds, the RAM designs with and without it
+(medians, ns):
+
+| design | clock | with the pairs | without |
+|---|---|---|---|
+| esad | adc_sampleclk | 3.029 | 3.066 |
+| esad | clk_usb | 2.455 | 2.425 |
+| lutram32 | clk | 2.323 | 2.140 |
+| regfile_alu | clk | 6.527 | 6.352 |
+| sad | adc_sampleclk | 3.401 | 3.422 |
+| sad | clk_usb | 2.641 | 2.532 |
+
+1.381 against 1.347 of Vivado's own figure over the six; `lutram32` and
+`regfile_alu` worse by more than their seeds' spread. Taken out. `mem32x8` is
+Vivado's slice for slice without it all the same, by the anneal, after change 1
+moved its placement, and `tests/fpga_xray_lutram_vivado.rs` compares it again; its
+note says a placement that moves may part the two, as one did on 2026-11-06.
+
+### Before and after
+
+Medians over five seeds, each seed's figure beside it (ns). `before` is the `area`
+build of "Area against Vivado's", the default before this section (f8625a1d), and
+`after` this section's on top of it; "Vivado's, Reticle's netlist" is Vivado's
+placement and routes of `after`'s seed-1 netlist. Only the clocks that moved: every
+other design built the same, seed for seed, as `achieved.txt`'s `area`, which says
+the `area` figures are this tree's too:
+
+| design | clock | Vivado | Vivado's, Reticle's netlist | before | after |
+|---|---|---|---|---|---|
+| esad | adc_sampleclk | 2.131 | 3.479 | 3.033 (3.16 3.12 2.87 2.96 3.03) | 3.084 (3.08 3.14 3.21 3.00 2.89) |
+| esad | clk_usb | 1.727 | 2.389 | 2.443 (2.43 2.51 2.54 2.44 2.31) | 2.426 (2.77 2.37 2.43 2.76 2.24) |
+| lutram32 | clk | 1.894 | 1.792 | 2.205 (2.29 2.18 2.37 2.15 2.21) | 2.164 (2.16 2.03 2.38 2.17 2.02) |
+| sad | adc_sampleclk | 2.207 | 4.545 | 3.150 (3.48 3.15 3.18 3.07 3.14) | 3.192 (3.14 3.09 3.38 3.19 3.32) |
+| sad | clk_usb | 1.726 | 2.413 | 2.563 (2.40 2.40 2.74 2.63 2.56) | 2.546 (2.48 2.66 2.48 2.55 2.56) |
+
+**Over the twenty-one clocks, Reticle's median is 1.248 times Vivado's own figure,
+against 1.249 before: the same.** `lutram32` is better by about a seed's spread;
+`esad`'s and `sad`'s clocks move both ways, each inside its spread. The packing is in
+`achieved.txt` as the build `packing`, and
+`the_packing_costs_no_clock_and_reaches_only_its_designs` holds it.
+
+*Measured first on the build before "Area against Vivado's"* (`synthesis`, b8bf631c),
+before that section reached `master`: the geometric mean went from 1.274 to 1.263,
+`sad`'s clocks 3.533 to 3.320 ns and 2.787 to 2.491, `esad`'s `adc_sampleclk` 3.033
+to 3.084. That reading, that the carry in on `CYINIT` made `sad` faster, does not
+hold on top of the area changes: `area` alone took `sad`'s `adc_sampleclk` to 3.150,
+and this section's changes leave it there. Kept visible because the first table is
+the one the commits were made on.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` are byte for byte as before: with this
+tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+Change 1 is off under `--memories legacy` and change 2 under `--synthesis legacy`,
+which both pass; change 3 is not behind either: the Husky's delays are of pads
+(`DELAY_SRC("IDATAIN")`), placed by their pads, and the builds being byte for byte
+the same says the twins it leaves out of a relation reached neither.
+
+### Tests
+
+`a_ram_takes_the_flip_flops_it_registers_when_memories_are_packed` and
+`two_sinks_on_one_wire_are_one_site_seen_twice` (`place`'s unit tests) hold changes 1
+and 3 on small fabrics; `a_signal_carry_in_takes_cyinit_and_puts_bit_0s_generate_on_o5`
+(`tests/fpga_carry.rs`) simulates change 2 on every input of the shared adders and of
+`ChosenXor`, whose two tables need six inputs (the `CARRY4` below), legalised, paired
+and not, and `carry_ins_have_ax_to_themselves` checks after every legalisation in that
+file that a carry in on `CYINIT` has `AX` to itself. `tests/fpga_xray_carry_in_vivado.rs`
+compares `shared8`'s carry features with Vivado's, `tests/fpga_xray_idelay.rs`
+`ddly_datain`'s, and `tests/fpga_xray_lutram_vivado.rs` `mem32x8`'s slices.
+
+**Mutations**, sixteen, each made by a script and put back, each failing a test: the RAM taken
+without the option, not taken with it, its clock unchecked; the twins kept in the
+relation, refusing it, and any two sinks of one driver taken for twins; the delay's
+site rule not allowing its serialiser (`ddly_datain` unrouted); the `LUT6_2`'s halves
+swapped; the `CARRY4` below with a propagate of one, its own `CYINIT` kept beside the
+`CI`, and its carry passed up from lane 0; always below, never below; the signal low
+bit not taken (three `CARRY4`s); and the shared `AX` not seen. **Three runs passed a
+test they were meant for, and the tests say so:** the twins refusing the relation
+passes `ddly_datain`, whose anneal puts the two together on this placement anyway
+(the unit test catches it); the shared `AX` not seen passes the Vivado comparison,
+because the lane pairing (`pack_lut_pairs`) makes the same `LUT6_2` when the generate
+is a table (the `AX` check catches it); and the `RAM32X1D` pairs taken out passed
+`mem32x8`, which is why that test does not stand for the pairing, and the pairing is
+not kept.
+
+### Not done
+
+- **Flip-flops through an empty table.** It is most of the difference in the table
+  above: Vivado packs eight flip-flops a slice where it can, four through the bypass
+  inputs and four through a table used as a wire, and Reticle four. The route through
+  a table would be the router's and the bitstream's (a table's `INIT` written for a
+  route, which the decoded arcs would have to account for), or the placer's (a buffer
+  table it may put in front of a flip-flop, as `legalise_carries` puts one in front of
+  a chain's propagate); neither is written, and what it would do to the clock is not
+  measured. `srl_delay`'s wires are this.
+- **Tables four to a slice.** Reticle's tables are spread over half again as many
+  slices as Vivado's (`regfile_alu` 153 to 93); nothing in the placer asks for a
+  full slice, and what it would cost or save is not measured.
+- **`a + b + c` and a counter that counts on a comparison** (`cin8`, `cnt8`, probes
+  of this section not committed) are four and three `CARRY4`s here to Vivado's two
+  and one: synthesis writes the first as two adders and the second's carry in as an
+  operand, so neither reaches the chain's carry in. That is synthesis's to do.
+- **A `_SING` IO tile's second `ILOGIC`**, declared on the first's wires, is left
+  out of a dedicated relation rather than taken out of the fabric: an `IDDR` or a
+  serialiser placed there by its pad is as before.
 - None of it has been on a part.
 
 ## Wide multiplexers
