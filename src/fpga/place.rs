@@ -8811,8 +8811,11 @@ fn estimate_timing(
 }
 
 /// Each sink pin's estimated connection delay from its driver, in
-/// nanoseconds, from where the two ends are placed.
-fn estimated_wire(
+/// nanoseconds, from where the two ends are placed: [`PlaceTiming::wire`]'s
+/// line in their tile distance, which is what a timing-driven placement
+/// weighs and what a router may start from before it has routed anything.
+#[must_use]
+pub fn estimated_wire(
     netlist: &Netlist,
     graph: &RoutingGraph,
     placement: &Placement,

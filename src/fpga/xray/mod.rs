@@ -3484,6 +3484,36 @@ pub const CRITICAL_PRESENT_CAP: f64 = 30.0;
 /// a measured optimum.
 pub const CRITICALITY_EXPONENT: i32 = 4;
 
+/// The criticality, after [`CRITICALITY_EXPONENT`], from which a connection's
+/// search may end on a lookup table's input another signal holds, under the
+/// fitted delay model ([`route::Timing::claim_inputs`](crate::fpga::route::Timing)).
+///
+/// The router lets a sink end on any free input of its table, and the first
+/// signal routed takes whichever it reaches first, whatever its slack; under
+/// Vivado's timer `A6` costs nothing past its `IMUX` and `A1` 0.39 ns. Given
+/// Reticle's placements of `qor/` with the pins free, Vivado's router took
+/// 1.5 ns off `regfile_alu`'s 10.4 and 0.3 to 0.7 off five others. With a
+/// claim from 0.3, `regfile_alu`'s median over five seeds went from 10.34 ns to
+/// 9.16 under Vivado's timer; from 0.1, to 9.36, with `carry_counter` and
+/// `widemux` worse at both. Measured on 2026-11-06, with a premium on the fast
+/// inputs that was not kept, since it changed nothing measurable.
+pub const CLAIM_INPUTS: f64 = 0.3;
+
+/// The distance charge a critical search weighs its estimate by under the
+/// fitted model, in place of [`ASTAR_WEIGHT`]
+/// ([`route::Timing::critical_astar`](crate::fpga::route::Timing)).
+///
+/// At [`ASTAR_WEIGHT`]'s 2.0 the estimate is half again what the rest of a
+/// critical connection's way costs, since [`ROUTE_TILE_DELAY_PS`] is already
+/// near a tile's real figure, and the search takes the first way that heads
+/// for the sink: on `qor/widemux.v` a connection of six tiles went east by five
+/// and back, 1.75 ns. At 1.0 the median of `widemux`'s achieved period under
+/// Vivado's timer went from 4.12 ns to 3.58 and of `sad`'s `adc_sampleclk` from
+/// 3.94 to 3.74, and the seventeen designs' geometric mean against Vivado's own
+/// flow from 1.532 to 1.496. Measured on 2026-11-06, one figure tried; three
+/// seeds before and five after, as `docs/fpga-vivado-parity.md` says.
+pub const CRITICAL_ASTAR_WEIGHT: f64 = 1.0;
+
 /// What [`XrayDatabase::node_delays`] charges a programmable pip prjxray
 /// gives no delay for, in picoseconds: the median of those it does, over
 /// every tile type of `artix7/` at 0a0adde (0.175 ns).

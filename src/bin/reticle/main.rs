@@ -4400,6 +4400,7 @@ fn write_xc7_bitstream(
         let ties = fabric
             .block_ram_ground_fans(design, top, &graph, &netlist, &placement)
             .map_err(|e| e.to_string())?;
+        let fitted = delay_model == reticle::fpga::xray::DelayModel::Vivado;
         let mut closed = Vec::new();
         ties.close(graph.nodes.len(), &mut node_base, &mut network, &mut closed);
         let route_options = RouteOptions {
@@ -4490,6 +4491,29 @@ fn write_xc7_bitstream(
                         present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
                         present_cap_run: reticle::fpga::xray::CRITICAL_CAP_RUN,
                         search_budget: reticle::fpga::route::CRITICAL_SEARCH_BUDGET,
+                        // Under the fitted model each pass is timed as its
+                        // report is, a branch's load included; a critical
+                        // connection may take a held fast input of its table;
+                        // a critical search's estimate is not inflated past
+                        // what the rest of its way costs; and the first pass
+                        // starts from the placement's estimate. See
+                        // `route::Timing` and `docs/fpga-vivado-parity.md`.
+                        branch_ps: if fitted {
+                            reticle::fpga::xray::delay::BRANCH_PS
+                        } else {
+                            0
+                        },
+                        claim_inputs: if fitted {
+                            reticle::fpga::xray::CLAIM_INPUTS
+                        } else {
+                            f64::INFINITY
+                        },
+                        critical_astar: if fitted {
+                            reticle::fpga::xray::CRITICAL_ASTAR_WEIGHT
+                        } else {
+                            0.0
+                        },
+                        seed_from_placement: fitted,
                     })
             }),
             ..RouteOptions::default()

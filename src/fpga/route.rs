@@ -514,6 +514,30 @@ pub struct Timing {
     /// up and is made again as an uncritical one: see
     /// [`CRITICAL_SEARCH_BUDGET`], the default.
     pub search_budget: u64,
+    /// What each branch more than one leaving a node on a connection's way
+    /// adds to its delay, in [`Timing::node_delay`]'s unit: the load of the
+    /// other branches, which Vivado's timer charges
+    /// (`xray::delay::BRANCH_PS`) and [`connection_delays`] with it. Zero
+    /// charges none, as every pass's analysis did before it had the choice
+    /// and as `--delay-model legacy` still does.
+    pub branch_ps: u32,
+    /// The criticality from which a search may end on an input of its
+    /// class ([`RouteOptions::equivalent`]) that another signal holds, so
+    /// that a critical connection takes a lookup table's fast input from a
+    /// slack one and the negotiation moves the other; above one, never, and
+    /// a search ends only on a free input or its own.
+    pub claim_inputs: f64,
+    /// The distance charge a search with any criticality weighs its estimate
+    /// by, in place of [`RouteOptions::astar_weight`]; zero takes that.
+    pub critical_astar: f64,
+    /// Whether the first pass starts from the placement's estimate of each
+    /// connection's criticality ([`place::estimated_wire`]) rather than from
+    /// none, and routes the signals most critical by it first, so that the
+    /// first signals routed are the ones a lookup table's fast inputs and the
+    /// short ways matter to. Only with [`Timing::paths`].
+    ///
+    /// [`place::estimated_wire`]: crate::fpga::place::estimated_wire
+    pub seed_from_placement: bool,
 }
 
 impl Timing {
@@ -539,6 +563,10 @@ impl Timing {
             present_cap: f64::INFINITY,
             present_cap_run: u32::MAX,
             search_budget: CRITICAL_SEARCH_BUDGET,
+            branch_ps: 0,
+            claim_inputs: f64::INFINITY,
+            critical_astar: 0.0,
+            seed_from_placement: false,
         }
     }
 }
@@ -1163,6 +1191,8 @@ pub fn route(
     if let Some(timing) = options.timing.as_ref() {
         scratch.present_cap = timing.present_cap;
         scratch.present_cap_run = timing.present_cap_run;
+        scratch.claim_inputs = timing.claim_inputs;
+        scratch.critical_astar = timing.critical_astar;
         scratch.budget = timing.search_budget;
     }
     scratch.uncritical_cap = options.uncritical_present_cap;
@@ -1187,6 +1217,27 @@ pub fn route(
     // until a pass has been analysed.
     let mut criticality: Vec<Vec<f64>> =
         terminals.iter().map(|t| vec![0.0; t.sinks.len()]).collect();
+    // Or, with `Timing::seed_from_placement`, the placement's estimate of each,
+    // and every pass in the order that estimate gives.
+    let mut order: Vec<usize> = (0..terminals.len()).collect();
+    if let Some(timing) = options.timing.as_ref().filter(|t| t.seed_from_placement)
+        && let Some(paths) = &timing.paths
+    {
+        let wire = crate::fpga::place::estimated_wire(netlist, graph, placement, paths);
+        let (pins, _) = crate::fpga::place::path_criticality(netlist, paths, &wire);
+        for (which, terminals) in terminals.iter().enumerate() {
+            for (k, sink) in terminals.sinks.iter().enumerate() {
+                criticality[which][k] = pins
+                    .get(sink.pin)
+                    .copied()
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0)
+                    .powi(timing.exponent)
+                    .min(timing.max_criticality);
+            }
+        }
+        order = most_critical_first(&criticality);
+    }
     // `Timing::cleanups`: passes left to reroute the critical signals once
     // nothing is overused, and whether this pass is one.
     let mut cleanups_left = options.timing.as_ref().map_or(0, |t| t.cleanups);
@@ -1202,7 +1253,8 @@ pub fn route(
     for index in 1..=options.max_iterations {
         let visited_before = scratch.visited;
         let mut rerouted = 0;
-        for (which, terminals) in terminals.iter().enumerate() {
+        for &which in &order {
+            let terminals = &terminals[which];
             let critical = options.timing.as_ref().is_some_and(|timing| {
                 (index <= timing.passes || cleaning)
                     && criticality[which]
@@ -1450,6 +1502,27 @@ const STALL: usize = 10;
 /// clean-ups that converge quickly and stops paying for the rest.
 const CLEANUP_PASSES: u32 = 12;
 
+/// The signals in the order their most critical sink says, the most critical
+/// first and a tie in netlist order: the order of every pass when
+/// [`Timing::seed_from_placement`] gives the criticality before the first.
+fn most_critical_first(criticality: &[Vec<f64>]) -> Vec<usize> {
+    let most = |which: usize| criticality[which].iter().copied().fold(0.0f64, f64::max);
+    let mut order: Vec<usize> = (0..criticality.len()).collect();
+    order.sort_by(|a, b| most(*b).total_cmp(&most(*a)).then(a.cmp(b)));
+    order
+}
+
+/// What a search's estimate of the rest of its way is weighed by: `critical`
+/// ([`Timing::critical_astar`]) for a search with any criticality, when it is
+/// set, and [`RouteOptions::astar_weight`] otherwise.
+fn estimate_weight(criticality: f64, critical: f64, otherwise: f64) -> f64 {
+    if criticality > 0.0 && critical > 0.0 {
+        critical
+    } else {
+        otherwise
+    }
+}
+
 /// What one unit of [`Timing::node_delay`] costs, so that a critical
 /// connection weighs delay and an uncritical one congestion on the same
 /// scale: the mean base cost of the nodes that have a delay, over their
@@ -1510,7 +1583,13 @@ fn analyse(
         let Some(route) = routing.routes[terminals.signal].as_ref() else {
             continue;
         };
-        let delays = sink_delays(graph, route, &terminals.sinks, &timing.node_delay);
+        let delays = sink_delays(
+            graph,
+            route,
+            &terminals.sinks,
+            &timing.node_delay,
+            timing.branch_ps,
+        );
         for (sink, d) in terminals.sinks.iter().zip(delays) {
             wire[sink.pin] = wire[sink.pin].max(d);
         }
@@ -1661,22 +1740,34 @@ fn analyse(
 /// arriving with no delay at all whenever its own node was not on the
 /// tree, so that the router's analysis saw slack on connections that the
 /// finished route's report then found late.
+///
+/// `branch_ps` is [`Timing::branch_ps`]: each branch more than one leaving a
+/// node on the sink's way adds that much, as [`connection_delays`] charges it.
 fn sink_delays(
     graph: &RoutingGraph,
     route: &Route,
     sinks: &[Sink],
     node_delay: &[u32],
+    branch_ps: u32,
 ) -> Vec<u64> {
     // Every signal's every pass, so hashed with `FastMap`; and the sinks
     // moved to another input of their class looked up in a map of their
     // own, the first entry for a pin as the scan found it, where a scan for
     // each sink was quadratic in a wide net's.
+    let mut branches: FastMap<NodeId, u64> = FastMap::default();
+    if branch_ps > 0 {
+        for pip in &route.pips {
+            *branches.entry(graph.pip(*pip).from).or_default() += 1;
+        }
+    }
     let mut delay: FastMap<NodeId, u64> = FastMap::default();
     delay.insert(route.source, 0);
     for pip in &route.pips {
         let pip = graph.pip(*pip);
+        let more = branches.get(&pip.from).map_or(0, |n| n.saturating_sub(1));
         let to = delay.get(&pip.from).copied().unwrap_or(0)
-            + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0));
+            + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0))
+            + more * u64::from(branch_ps);
         delay.insert(pip.to, to);
     }
     let mut moved: FastMap<usize, NodeId> = FastMap::default();
@@ -1711,7 +1802,13 @@ fn analyse_paths(
         let Some(route) = routing.routes[terminals.signal].as_ref() else {
             continue;
         };
-        let delays = sink_delays(graph, route, &terminals.sinks, &timing.node_delay);
+        let delays = sink_delays(
+            graph,
+            route,
+            &terminals.sinks,
+            &timing.node_delay,
+            timing.branch_ps,
+        );
         for (sink, ps) in terminals.sinks.iter().zip(delays) {
             #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
             let ns = ps as f64 / 1000.0;
@@ -2697,6 +2794,10 @@ struct Scratch {
     present_cap: f64,
     /// [`Timing::present_cap_run`], or never.
     present_cap_run: u32,
+    /// [`Timing::claim_inputs`], or never.
+    claim_inputs: f64,
+    /// [`Timing::critical_astar`], or zero.
+    critical_astar: f64,
     /// [`RouteOptions::uncritical_present_cap`], grown or lifted as it says.
     uncritical_cap: f64,
     /// [`Timing::search_budget`], or no limit.
@@ -2820,6 +2921,8 @@ impl Scratch {
             tile_delay: 0.0,
             present_cap: f64::INFINITY,
             present_cap_run: u32::MAX,
+            claim_inputs: f64::INFINITY,
+            critical_astar: 0.0,
             uncritical_cap: f64::INFINITY,
             budget: u64::MAX,
             gave_up: false,
@@ -3275,6 +3378,7 @@ fn maze(
     // is exactly what it did before this line. With a uniform base this is
     // what it always was.
     let tile_delay = scratch.tile_delay;
+    let astar_weight = estimate_weight(critical, scratch.critical_astar, options.astar_weight);
     let heuristic = |node: NodeId| -> f64 {
         let geometry = &geometry[node as usize];
         let (x, y) = geometry.nearest_tile(target.0, target.1);
@@ -3284,7 +3388,7 @@ fn maze(
         } else {
             f64::from(geometry.delay)
         };
-        options.astar_weight
+        astar_weight
             * distance as f64
             * (slack * f64::from(heuristic_base(geometry.base)) + critical * delay)
     };
@@ -3310,10 +3414,11 @@ fn maze(
         .get(sink as usize)
         .copied()
         .unwrap_or(u32::MAX);
+    let claims = critical >= scratch.claim_inputs;
     let interchangeable = |node: NodeId| {
         class != u32::MAX
             && options.equivalent.get(node as usize) == Some(&class)
-            && state.usage[state.group[node as usize] as usize].occupancy == 0
+            && (claims || state.usage[state.group[node as usize] as usize].occupancy == 0)
             && !tree.contains_key(&node)
     };
     let mut end = sink;
@@ -3503,6 +3608,179 @@ mod tests {
         (arch, graph)
     }
 
+    /// **Each pass's analysis charges a branch's load past it**
+    /// ([`Timing::branch_ps`]), as the finished route's report
+    /// ([`connection_delays`]) does. A source reaches a track that branches to
+    /// two sinks: with every node one unit, each sink is two; at eight a branch,
+    /// each is ten, the track having one branch more than one; a route that does
+    /// not branch is charged nothing. Would catch the charge left out of the
+    /// passes, given to every pip rather than to the branches past the first,
+    /// or counted from the pip's end rather than the node it leaves; would not
+    /// catch the charge itself being the wrong figure, which
+    /// `xray::delay::BRANCH_PS` is fitted to.
+    #[test]
+    fn a_pass_charges_a_branch_to_the_sinks_past_it() {
+        let (_, graph) = line(1, 1);
+        let node = |name: &str| -> NodeId {
+            let index = (0..graph.nodes.len())
+                .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
+                .unwrap_or_else(|| panic!("no node {name}"));
+            NodeId::try_from(index).unwrap_or(0)
+        };
+        let (out, track) = (node("X0Y0/out0"), node("X0Y0/track0"));
+        let (a, b) = (node("X0Y0/in0"), node("X0Y0/in1"));
+        let pip = |from: NodeId, to: NodeId| {
+            *graph
+                .outgoing(from)
+                .iter()
+                .find(|p| graph.pip(**p).to == to)
+                .expect("a pip")
+        };
+        let route = Route {
+            signal: 0,
+            source: out,
+            pips: vec![pip(out, track), pip(track, a), pip(track, b)],
+            nodes: vec![out, track, a, b],
+            moved: Vec::new(),
+        };
+        let sinks = [
+            Sink {
+                node: a,
+                name: String::new(),
+                pin: 1,
+            },
+            Sink {
+                node: b,
+                name: String::new(),
+                pin: 2,
+            },
+        ];
+        let ones = vec![1u32; graph.nodes.len()];
+        assert_eq!(sink_delays(&graph, &route, &sinks, &ones, 0), vec![2, 2]);
+        assert_eq!(sink_delays(&graph, &route, &sinks, &ones, 8), vec![10, 10]);
+        let single = Route {
+            pips: vec![pip(out, track), pip(track, a)],
+            nodes: vec![out, track, a],
+            ..route.clone()
+        };
+        assert_eq!(sink_delays(&graph, &single, &sinks[..1], &ones, 8), vec![2]);
+    }
+
+    /// **A critical connection takes its class's fast input from a slack
+    /// one** ([`Timing::claim_inputs`]). Two sources reach one cell's
+    /// interchangeable inputs `a`, which delays nothing, and `b`, which delays
+    /// ten; the second source's way to either is a wire of a hundred, so its
+    /// connection is the longest path and the first's has nearly all its time
+    /// to spare. The first is routed first and takes `a`, its own. Without the
+    /// claim the second ends on `b`, since `a` is held; with it the second ends
+    /// on `a` and the negotiation moves the first to `b`. Would catch a held
+    /// input never offered to a critical search, or offered to an uncritical
+    /// one (the first would take `b` from the second's own pin and the two
+    /// trade every pass); would not catch the threshold being the wrong figure,
+    /// which `xray::CLAIM_INPUTS` was measured for.
+    #[test]
+    fn a_critical_connection_claims_a_held_fast_input() {
+        let mut arch = Arch::new("claim", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["out0", "out1", "far", "a", "b"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "ff");
+            src.pins
+                .push(("o".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+        }
+        let mut dst = BelDecl::new("dst", "ff");
+        dst.pins.push(("i0".to_owned(), WireRef::local("a")));
+        dst.pins.push(("i1".to_owned(), WireRef::local("b")));
+        tile.bels.push(dst);
+        let ways = [
+            ("out0", "a"),
+            ("out0", "b"),
+            ("out1", "far"),
+            ("far", "a"),
+            ("far", "b"),
+        ];
+        for (k, (from, to)) in ways.iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(*from),
+                to: WireRef::local(*to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+
+        let mut netlist = pairs(2);
+        netlist.pins[3].instance = 1;
+        netlist.pins[1].role = "i0".to_owned();
+        netlist.pins[3].role = "i1".to_owned();
+        netlist.instances[1].pins = vec![1, 3];
+        netlist.instances[3].pins.clear();
+        for instance in &mut netlist.instances {
+            instance.kind = "ff".to_owned();
+        }
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["X0Y0/src0", "X0Y0/dst", "X0Y0/src1"].iter().enumerate() {
+            placement.place(index, graph.site_index(site).expect("site"));
+        }
+        let node = |name: &str| -> NodeId {
+            let index = (0..graph.nodes.len())
+                .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
+                .unwrap_or_else(|| panic!("no node {name}"));
+            NodeId::try_from(index).unwrap_or(0)
+        };
+        let (a, b, far) = (node("X0Y0/a"), node("X0Y0/b"), node("X0Y0/far"));
+        let mut equivalent = vec![u32::MAX; graph.nodes.len()];
+        equivalent[a as usize] = 7;
+        equivalent[b as usize] = 7;
+        let mut delays = vec![0u32; graph.nodes.len()];
+        delays[b as usize] = 10;
+        delays[far as usize] = 100;
+        let ends = |claim: f64| {
+            let mut timing = Timing::for_netlist(&netlist, delays.clone(), 0);
+            timing.claim_inputs = claim;
+            let options = RouteOptions {
+                equivalent: equivalent.clone(),
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            let (routing, _) = route(&netlist, &graph, &placement, &options).expect("it routes");
+            let end = |signal: usize| {
+                let route = routing.route(signal).expect("routed");
+                route.pips.last().map(|p| graph.pip(*p).to)
+            };
+            (end(0), end(1))
+        };
+        assert_eq!(ends(f64::INFINITY), (Some(a), Some(b)));
+        assert_eq!(ends(0.5), (Some(b), Some(a)));
+    }
+
+    /// **The signals most critical by the placement go first, and a critical
+    /// search weighs its estimate as it is told.** Three signals whose most
+    /// critical sinks are 0.2, 0.9 and 0.9 go in the order 1, 2, 0: the ties in
+    /// netlist order, a signal's most critical sink and not its first. A
+    /// critical search takes [`Timing::critical_astar`] when it is set and the
+    /// options' weight when it is not, and an uncritical one the options'
+    /// weight either way. Would catch the order reversed, a tie broken by
+    /// anything but the netlist, the weight given to every search or to none;
+    /// would not catch either making a route better, which only Vivado's timer
+    /// on the routes has said (`docs/fpga-vivado-parity.md`).
+    #[test]
+    fn critical_signals_go_first_and_weigh_their_estimate_as_told() {
+        let criticality = vec![vec![0.2, 0.1], vec![0.0, 0.9], vec![0.9]];
+        assert_eq!(most_critical_first(&criticality), vec![1, 2, 0]);
+        assert!((estimate_weight(0.5, 1.0, 2.0) - 1.0).abs() < 1e-12);
+        assert!((estimate_weight(0.5, 0.0, 2.0) - 2.0).abs() < 1e-12);
+        assert!((estimate_weight(0.0, 1.0, 2.0) - 2.0).abs() < 1e-12);
+    }
+
     /// Two tiles whose `long` wires are **one piece of metal**, joined the
     /// way the 7-series loader joins a long line -- a free pip each way --
     /// and each with a `short` wire of its own. Each tile has a source and
@@ -3663,7 +3941,7 @@ mod tests {
                 pin,
             };
             let route = routing.route(signal).unwrap();
-            assert_eq!(sink_delays(&graph, route, &[sink], &ones), vec![1]);
+            assert_eq!(sink_delays(&graph, route, &[sink], &ones, 0), vec![1]);
         }
     }
 
