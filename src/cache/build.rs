@@ -1146,6 +1146,11 @@ fn synth_key(elaboration: CacheKey, options: &crate::synth::SynthOptions) -> Cac
         .number("max-unroll", u64::from(options.max_unroll))
         .flag("verify-equivalence", options.verify_equivalence)
         .flag("files", options.files.is_some());
+    // Folded in only when on, so that every key made before it existed is
+    // the key it was.
+    if options.register_loads {
+        builder.flag("register-loads", true);
+    }
     builder.finish()
 }
 

@@ -22,7 +22,7 @@ mod wreduce;
 
 pub use const_fold::ConstFold;
 pub use dce::Dce;
-pub use ff_opt::FfOpt;
+pub use ff_opt::{FfOpt, RegisterLoads};
 pub use mem_scalarize::MemScalarize;
 pub use merge::Merge;
 pub use wreduce::WReduce;

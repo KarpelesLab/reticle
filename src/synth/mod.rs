@@ -181,6 +181,11 @@ pub struct SynthOptions {
     /// `S0018`, which names the file. The simulator reads through the same
     /// trait ([`crate::ir::memfile`]).
     pub files: Option<Rc<dyn FileProvider>>,
+    /// Lift a register's hold through the net it is behind, and read what a
+    /// register with an enable loads on a cycle its enable is low as a
+    /// don't-care ([`opt::RegisterLoads`]). Off by default; the FPGA flow turns
+    /// it on for the 7 series under `--synthesis vivado`.
+    pub register_loads: bool,
 }
 
 impl fmt::Debug for SynthOptions {
@@ -194,6 +199,7 @@ impl fmt::Debug for SynthOptions {
             .field("validate", &self.validate)
             .field("verify_equivalence", &self.verify_equivalence)
             .field("files", &self.files.is_some())
+            .field("register_loads", &self.register_loads)
             .finish()
     }
 }
@@ -209,6 +215,7 @@ impl Default for SynthOptions {
             validate: cfg!(debug_assertions),
             verify_equivalence: false,
             files: None,
+            register_loads: false,
         }
     }
 }
@@ -399,6 +406,9 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
     loop_passes.push(Box::new(opt::Merge));
     loop_passes.push(Box::new(opt::ConstFold));
     loop_passes.push(Box::new(opt::WReduce));
+    if options.register_loads {
+        loop_passes.push(Box::new(opt::RegisterLoads));
+    }
     loop_passes.push(Box::new(opt::FfOpt));
     loop_passes.push(Box::new(opt::Dce));
 

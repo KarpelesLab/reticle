@@ -122,7 +122,7 @@ fn figures(report: &FlowReport) -> Figures {
 /// `CARRY4`s of each design, under `--synthesis legacy` and under the default.
 const PINNED: [(&str, Figures, Figures); 15] = [
     ("adders", (289, 15, 40), (231, 2, 56)),
-    ("analyser_fifo", (194, 10, 12), (195, 3, 26)),
+    ("analyser_fifo", (194, 10, 12), (180, 3, 26)),
     ("barrel", (105, 3, 0), (87, 2, 0)),
     ("bram_fifo", (32, 4, 9), (27, 3, 12)),
     ("carry_counter", (18, 4, 8), (13, 1, 11)),

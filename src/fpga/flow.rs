@@ -361,9 +361,11 @@ pub struct FpgaOptions {
     /// bits, orderings between two signals from
     /// [`VIVADO_MIN_ORDERING_CARRY_WIDTH`] and equalities between two from
     /// [`VIVADO_MIN_EQUALITY_CARRY_WIDTH`], each chain's carry in and out
-    /// on the `CARRY4`'s own pins. Off by default, which is the
-    /// netlist every build before had; `reticle fpga` turns it on for the 7
-    /// series unless `--synthesis legacy` asks for that netlist.
+    /// on the `CARRY4`'s own pins; a register's hold lifted through the net
+    /// it is behind, and what it loads with its enable low read as a
+    /// don't-care (`synth::SynthOptions::register_loads`). Off by default,
+    /// which is the netlist every build before had; `reticle fpga` turns it
+    /// on for the 7 series unless `--synthesis legacy` asks for that netlist.
     pub vivado_synthesis: bool,
 }
 
@@ -598,7 +600,13 @@ pub fn synthesize_for(
         design.modules[*id].blackbox = true;
     }
     let mut synth_diags = Diagnostics::new();
-    let _ = synth_run(design, &options.synth, &mut synth_diags);
+    // Vivado's reading of what a register loads (`opt::RegisterLoads`) is part
+    // of synthesising as it does.
+    let mut synth_options = options.synth.clone();
+    if options.vivado_synthesis {
+        synth_options.register_loads = true;
+    }
+    let _ = synth_run(design, &synth_options, &mut synth_diags);
     for id in &skipped {
         design.modules[*id].blackbox = false;
     }

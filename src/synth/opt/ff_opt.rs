@@ -141,6 +141,450 @@ impl Pass for FfOpt {
     }
 }
 
+/// **What a register loads, as Vivado's synthesis reads it**: two rules
+/// [`FfOpt`] does not have, which see through the nets between a register
+/// and the logic that feeds it. Not part of [`FfOpt`], so a flow that does not
+/// ask for them builds what it did; the FPGA flow asks for them for the 7
+/// series under `--synthesis vivado` ([`super::super::SynthOptions::register_loads`]).
+///
+/// - **A hold behind a net is an enable.** `d` a net that is `c ? v : q`, a
+///   multiplexer cell or a whole-net assignment, with `q` the register's own
+///   output, is the enable `c` and `d = v`. [`FfOpt`] lifts a hold only when it
+///   is written into `d` itself, and a hold read by other logic too stays a
+///   net: `wptr_next = do_write ? wptr_inc : wptr`, which the analyser FIFO's
+///   flags read as well as its pointer, was a table on each of the pointer's
+///   fifteen bits where Vivado has the clock enable alone.
+/// - **What a register loads where its enable is low is a don't-care.** A
+///   register with an enable `en` loads `d` only on a cycle `en` is high, so a
+///   multiplexer in `d` whose select `en` high decides is that arm alone:
+///   `en = c & e2` with `d = c ? v : w` loads `v` whenever it loads at all.
+///   Process lowering leaves exactly this behind a `for` loop over part
+///   selects inside an `if`: the arm for the `if` failing is the register's
+///   own bits rearranged by the loop's partial updates, which is not the
+///   register's `q` and so not the hold [`FfOpt`] lifts, though the enable it
+///   lifted from the `if` around it already says the arm is never loaded. On
+///   the Husky's `sad` that arm was a lookup table on each of 256 bits of its
+///   reference samples, and kept the shift register from being one: every
+///   multiplexer of `d` — through concatenations, slices and other
+///   multiplexers — whose one-bit select a conjunct of `en` implies, or whose
+///   select's complement one does, becomes the arm that conjunct chooses.
+///
+/// Neither changes what the register holds on any cycle: its next value
+/// `en ? d : q` is the same function of every input and of `q` before and
+/// after, which is how the post-synthesis proof (`synth::verify`) reads a
+/// register with an enable, so that proof covers both.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RegisterLoads;
+
+impl Pass for RegisterLoads {
+    fn name(&self) -> &'static str {
+        "register_loads"
+    }
+
+    fn run(&self, m: &mut Module, _diags: &mut Diagnostics) -> PassStats {
+        let mut stats = PassStats::default();
+        let ids: Vec<CellId> = m
+            .cells
+            .iter()
+            .filter(|(_, c)| matches!(c.kind, CellKind::Dff { .. }) && !cell_is_kept(m, c))
+            .map(|(id, _)| id)
+            .collect();
+        if ids.is_empty() {
+            return stats;
+        }
+        let gates = Gates::of(m);
+        for id in ids {
+            let CellKind::Dff {
+                clk_pos,
+                has_enable,
+                reset,
+            } = m.cells[id].kind.clone()
+            else {
+                continue;
+            };
+            let (Some(q), Some(d)) = (m.cells[id].output("q"), m.cells[id].input("d")) else {
+                continue;
+            };
+            let span = m.cells[id].span;
+            // A hold behind a net.
+            if let ExprKind::Net(n) = m.expr(d).kind
+                && n != q
+                && let Some(&(c, t, f)) = gates.mux.get(&n)
+                && m.expr(c).ty.is_bit()
+            {
+                let own = |e: ExprId| m.expr(e).kind == ExprKind::Net(q);
+                let pick = if own(f) && !own(t) {
+                    Some((c, t))
+                } else if own(t) && !own(f) {
+                    Some((mk_not(m, c, span), f))
+                } else {
+                    None
+                };
+                if let Some((c, v)) = pick
+                    && m.expr(v).ty == m.nets[q].ty
+                {
+                    let en = match (has_enable, m.cells[id].input("en")) {
+                        (true, Some(e)) => mk_and(m, e, c, span),
+                        _ => c,
+                    };
+                    set_input(m, id, "d", Some(v));
+                    set_input(m, id, "en", Some(en));
+                    m.cells[id].kind = CellKind::Dff {
+                        clk_pos,
+                        has_enable: true,
+                        reset,
+                    };
+                    stats.bump("enables lifted through a net", 1);
+                    // The don't-cares wait for the next round, with the
+                    // enable this made.
+                    continue;
+                }
+            }
+            if !has_enable {
+                continue;
+            }
+            let (Some(d), Some(en)) = (m.cells[id].input("d"), m.cells[id].input("en")) else {
+                continue;
+            };
+            let mut facts = Vec::new();
+            gates.conjuncts(m, en, DONT_CARE_DEPTH, &mut facts);
+            let mut memo = HashMap::new();
+            let pruned = gates.prune(m, d, &facts, PRUNE_DEPTH, &mut memo);
+            if pruned != d && m.expr(pruned).ty == m.expr(d).ty {
+                set_input(m, id, "d", Some(pruned));
+                stats.bump("loads simplified under the enable", 1);
+            }
+        }
+        stats
+    }
+}
+
+/// How far [`RegisterLoads`] looks into an enable and a select.
+const DONT_CARE_DEPTH: u32 = 16;
+
+/// How far [`RegisterLoads`] follows `d` down: a `for` loop over part
+/// selects nests a multiplexer, a concatenation and a slice per iteration,
+/// and `sad`'s reference samples are 32 iterations of 8 bits. Each node is
+/// rewritten once whatever the depth.
+const PRUNE_DEPTH: u32 = 512;
+
+/// How deep [`Gates::same`] compares two conditions.
+const SAME_DEPTH: u32 = 6;
+
+/// The logic cells of a module seen as the expressions they compute, so that
+/// [`RegisterLoads`] reads `and`, `or`, `not` and `mux` cells as it reads
+/// the same operators in an expression tree: process lowering makes both.
+struct Gates {
+    /// A one-bit `and`/`or` cell's output: whether it is an `or`, and its two
+    /// operands.
+    binary: HashMap<NetId, (bool, ExprId, ExprId)>,
+    /// A one-bit `not` cell's output and its operand.
+    not: HashMap<NetId, ExprId>,
+    /// A multiplexer cell's output: its select, the arm the select high
+    /// picks and the other. Only one whose arms are the net's own width,
+    /// since anything else would change a parent's type.
+    mux: HashMap<NetId, (ExprId, ExprId, ExprId)>,
+}
+
+impl Gates {
+    fn of(m: &Module) -> Gates {
+        let mut gates = Gates {
+            binary: HashMap::new(),
+            not: HashMap::new(),
+            mux: HashMap::new(),
+        };
+        for (_, c) in m.cells.iter() {
+            let Some(y) = c.output("y") else {
+                continue;
+            };
+            let width = m.nets[y].ty.width();
+            let bit = |e: ExprId| m.expr(e).ty.is_bit();
+            match c.kind {
+                CellKind::And | CellKind::Or if width == Some(1) => {
+                    if let (Some(a), Some(b)) = (c.input("a"), c.input("b"))
+                        && bit(a)
+                        && bit(b)
+                    {
+                        gates.binary.insert(y, (c.kind == CellKind::Or, a, b));
+                    }
+                }
+                CellKind::Not if width == Some(1) => {
+                    if let Some(a) = c.input("a")
+                        && bit(a)
+                    {
+                        gates.not.insert(y, a);
+                    }
+                }
+                CellKind::Mux => {
+                    if let (Some(s), Some(a), Some(b)) = (c.input("s"), c.input("a"), c.input("b"))
+                        && m.expr(a).ty.width() == width
+                        && m.expr(b).ty.width() == width
+                    {
+                        gates.mux.insert(y, (s, b, a));
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A net one whole-net assignment drives is the expression assigned.
+        let mut assigned: HashMap<NetId, Option<ExprId>> = HashMap::new();
+        for a in &m.assigns {
+            for n in a.target.nets() {
+                let value = match a.target {
+                    Lvalue::Net(t) if t == n && a.delay.is_none() => Some(a.value),
+                    _ => None,
+                };
+                assigned.entry(n).and_modify(|v| *v = None).or_insert(value);
+            }
+        }
+        for (n, value) in assigned {
+            let Some(v) = value else {
+                continue;
+            };
+            if gates.binary.contains_key(&n)
+                || gates.not.contains_key(&n)
+                || gates.mux.contains_key(&n)
+            {
+                continue;
+            }
+            let width = m.nets[n].ty.width();
+            if m.expr(v).ty.width() != width {
+                continue;
+            }
+            let bit = |e: ExprId| m.expr(e).ty.is_bit();
+            match m.expr(v).kind {
+                ExprKind::Ternary { cond, then_, else_ }
+                    if m.expr(then_).ty.width() == width && m.expr(else_).ty.width() == width =>
+                {
+                    gates.mux.insert(n, (cond, then_, else_));
+                }
+                ExprKind::Binary { op, lhs, rhs } if width == Some(1) && bit(lhs) && bit(rhs) => {
+                    match op {
+                        BinaryOp::And | BinaryOp::LogicAnd => {
+                            gates.binary.insert(n, (false, lhs, rhs));
+                        }
+                        BinaryOp::Or | BinaryOp::LogicOr => {
+                            gates.binary.insert(n, (true, lhs, rhs));
+                        }
+                        _ => {}
+                    }
+                }
+                ExprKind::Unary {
+                    op: UnaryOp::Not | UnaryOp::LogicNot,
+                    expr,
+                } if width == Some(1) && bit(expr) => {
+                    gates.not.insert(n, expr);
+                }
+                _ => {}
+            }
+        }
+        gates
+    }
+
+    /// The operands of `e` when it is a one-bit `and` (`or` when `want_or`),
+    /// as an operator or as a cell.
+    fn binary(&self, m: &Module, e: ExprId, want_or: bool) -> Option<(ExprId, ExprId)> {
+        match m.expr(e).kind {
+            ExprKind::Binary { op, lhs, rhs }
+                if m.expr(lhs).ty.is_bit() && m.expr(rhs).ty.is_bit() =>
+            {
+                let is_or = matches!(op, BinaryOp::Or | BinaryOp::LogicOr);
+                let is_and = matches!(op, BinaryOp::And | BinaryOp::LogicAnd);
+                ((want_or && is_or) || (!want_or && is_and)).then_some((lhs, rhs))
+            }
+            ExprKind::Net(n) => match self.binary.get(&n) {
+                Some(&(is_or, a, b)) if is_or == want_or => Some((a, b)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The operand of `e` when it is a one-bit complement.
+    fn negated(&self, m: &Module, e: ExprId) -> Option<ExprId> {
+        match m.expr(e).kind {
+            ExprKind::Unary {
+                op: UnaryOp::Not | UnaryOp::LogicNot,
+                expr,
+            } if m.expr(expr).ty.is_bit() => Some(expr),
+            ExprKind::Net(n) => self.not.get(&n).copied(),
+            _ => None,
+        }
+    }
+
+    /// True when the one-bit `a` and `b` are one condition: one expression or
+    /// net, or the same `and`, `or` or `not` — as an operator or a cell, the
+    /// logical and bitwise forms alike — over operands that are, `depth`
+    /// levels down. The enable and a select it decides may be two copies of
+    /// one condition, one a cell and one an expression, until
+    /// [`super::Merge`] next runs. Commuted operands are not looked for.
+    fn same(&self, m: &Module, a: ExprId, b: ExprId, depth: u32) -> bool {
+        if a == b {
+            return true;
+        }
+        if let (ExprKind::Net(p), ExprKind::Net(q)) = (&m.expr(a).kind, &m.expr(b).kind)
+            && p == q
+        {
+            return true;
+        }
+        if depth == 0 {
+            return false;
+        }
+        for want_or in [false, true] {
+            match (self.binary(m, a, want_or), self.binary(m, b, want_or)) {
+                (Some((l1, r1)), Some((l2, r2))) => {
+                    return self.same(m, l1, l2, depth - 1) && self.same(m, r1, r2, depth - 1);
+                }
+                (None, None) => {}
+                _ => return false,
+            }
+        }
+        match (self.negated(m, a), self.negated(m, b)) {
+            (Some(x), Some(y)) => self.same(m, x, y, depth - 1),
+            _ => false,
+        }
+    }
+
+    /// The one-bit terms whose conjunction `e` is.
+    fn conjuncts(&self, m: &Module, e: ExprId, depth: u32, out: &mut Vec<ExprId>) {
+        if depth > 0
+            && let Some((a, b)) = self.binary(m, e, false)
+        {
+            self.conjuncts(m, a, depth - 1, out);
+            self.conjuncts(m, b, depth - 1, out);
+            return;
+        }
+        if m.expr(e).ty.is_bit() {
+            out.push(e);
+        }
+    }
+
+    /// True when `a` high makes `b` high, seen structurally: `b` is `a`, or
+    /// an `or` with a term `a` implies.
+    fn implies(&self, m: &Module, a: ExprId, b: ExprId, depth: u32) -> bool {
+        if self.same(m, a, b, SAME_DEPTH) {
+            return true;
+        }
+        match self.binary(m, b, true) {
+            Some((l, r)) if depth > 0 => {
+                self.implies(m, a, l, depth - 1) || self.implies(m, a, r, depth - 1)
+            }
+            _ => false,
+        }
+    }
+
+    /// What the terms `facts`, all high, say of the one-bit `c`: high, low,
+    /// or nothing.
+    fn decided(&self, m: &Module, c: ExprId, facts: &[ExprId]) -> Option<bool> {
+        if facts
+            .iter()
+            .any(|&f| self.implies(m, f, c, DONT_CARE_DEPTH))
+        {
+            return Some(true);
+        }
+        if let Some(inner) = self.negated(m, c)
+            && facts
+                .iter()
+                .any(|&f| self.implies(m, f, inner, DONT_CARE_DEPTH))
+        {
+            return Some(false);
+        }
+        if facts.iter().any(|&f| {
+            self.negated(m, f)
+                .is_some_and(|x| self.same(m, x, c, SAME_DEPTH))
+        }) {
+            return Some(false);
+        }
+        None
+    }
+
+    /// `e` with each multiplexer `facts` decide replaced by its chosen arm,
+    /// through concatenations, slices and the multiplexers they do not
+    /// decide; `e` itself when none is. See [`RegisterLoads`].
+    fn prune(
+        &self,
+        m: &mut Module,
+        e: ExprId,
+        facts: &[ExprId],
+        depth: u32,
+        memo: &mut HashMap<ExprId, ExprId>,
+    ) -> ExprId {
+        if depth == 0 {
+            return e;
+        }
+        if let Some(&done) = memo.get(&e) {
+            return done;
+        }
+        let span = m.expr(e).span;
+        let shape = match m.expr(e).kind.clone() {
+            ExprKind::Net(n) => match self.mux.get(&n) {
+                Some(&(cond, then_, else_)) => ExprKind::Ternary { cond, then_, else_ },
+                None => ExprKind::Net(n),
+            },
+            kind => kind,
+        };
+        let out = match shape {
+            ExprKind::Ternary { cond, then_, else_ } => {
+                let choice = if m.expr(cond).ty.is_bit() {
+                    self.decided(m, cond, facts)
+                } else {
+                    None
+                };
+                match choice {
+                    Some(true) => self.prune(m, then_, facts, depth - 1, memo),
+                    Some(false) => self.prune(m, else_, facts, depth - 1, memo),
+                    None => {
+                        let t = self.prune(m, then_, facts, depth - 1, memo);
+                        let f = self.prune(m, else_, facts, depth - 1, memo);
+                        if t == then_ && f == else_ {
+                            e
+                        } else {
+                            mk(
+                                m,
+                                ExprKind::Ternary {
+                                    cond,
+                                    then_: t,
+                                    else_: f,
+                                },
+                                span,
+                            )
+                        }
+                    }
+                }
+            }
+            ExprKind::Concat(parts) => {
+                let new: Vec<ExprId> = parts
+                    .iter()
+                    .map(|&p| self.prune(m, p, facts, depth - 1, memo))
+                    .collect();
+                if new == parts {
+                    e
+                } else {
+                    mk(m, ExprKind::Concat(new), span)
+                }
+            }
+            ExprKind::Slice { base, hi, lo } => {
+                let b = self.prune(m, base, facts, depth - 1, memo);
+                if b == base {
+                    e
+                } else {
+                    mk(m, ExprKind::Slice { base: b, hi, lo }, span)
+                }
+            }
+            _ => e,
+        };
+        // A rewritten node of another type than the one it replaces would
+        // change its parent's: keep the original then.
+        let out = if m.expr(out).ty == m.expr(e).ty {
+            out
+        } else {
+            e
+        };
+        memo.insert(e, out);
+        out
+    }
+}
+
 enum Step {
     Again,
     Done,
@@ -1504,5 +1948,148 @@ mod tests {
             ),
             "{t}"
         );
+    }
+
+    /// **A hold behind a net is an enable**, whether the net is a
+    /// multiplexer cell or an assignment of one, and the net stays for what
+    /// else reads it. `n = c ? v : q`, read by the register and by a port, is
+    /// the analyser FIFO's `wptr_next`. Would catch the arms the wrong way
+    /// round (the enable on `!c`, or `d = q`), a hold on the then arm not
+    /// read as `!c`, or the net's other reader losing it; would not catch a
+    /// hold two multiplexers down behind a net, which this does not look for.
+    #[test]
+    fn a_hold_behind_a_net_is_an_enable() {
+        for (as_cell, hold_on_then) in [(false, false), (true, false), (false, true)] {
+            let mut b = ModuleBuilder::new("m", span());
+            let clk = b.input("clk", Type::bit());
+            let c = b.input("c", Type::bit());
+            let v = b.input("v", Type::bits(4));
+            let q = b.output("q", Type::bits(4));
+            let n = b.output("n", Type::bits(4));
+            let (clkn, cn, vn, qn) = (b.net(clk), b.net(c), b.net(v), b.net(q));
+            let (then_, else_) = if hold_on_then { (qn, vn) } else { (vn, qn) };
+            if as_cell {
+                b.cell(
+                    "sel",
+                    CellKind::Mux,
+                    vec![
+                        (Name::new("a"), else_),
+                        (Name::new("b"), then_),
+                        (Name::new("s"), cn),
+                    ],
+                    vec![(Name::new("y"), n)],
+                );
+            } else {
+                let mux = b.mux(cn, then_, else_);
+                b.assign(n, mux);
+            }
+            let d = b.net(n);
+            dff(&mut b, "ff", clkn, d, q, None, None);
+            let mut m = b.finish();
+            let stats = run(&RegisterLoads, &mut m);
+            let what = format!("a cell: {as_cell}, the hold on the then arm: {hold_on_then}");
+            assert_eq!(stats.get("enables lifted through a net"), 1, "{what}");
+            let t = m.to_text();
+            let en = if hold_on_then { "not(%c)" } else { "%c" };
+            assert!(
+                t.contains(&format!(
+                    "cell ff dff pos en (clk=%clk, d=%v, en={en}) -> (q=%q)"
+                )),
+                "{what}\n{t}"
+            );
+            // The net is still there for the port.
+            assert!(t.contains("port n out %n"), "{what}\n{t}");
+        }
+    }
+
+    /// **What a register loads where its enable is low is a don't-care**: a
+    /// multiplexer whose select a conjunct of the enable decides is its arm,
+    /// through a concatenation, and one it does not decide stays. `en = c &
+    /// e`: `c ? v : w` is `v`; `en = !c & e`: it is `w`; `en = e`: nothing.
+    /// Would catch the arms swapped, a select taken as decided by a term of
+    /// the enable that is not a conjunct (the `or` it is in), or a part of a
+    /// concatenation dropped; that the register then loads the same on every
+    /// cycle is the post-synthesis proof's (`tests/synth_register_loads.rs`).
+    #[test]
+    fn a_load_the_enable_decides_is_its_arm() {
+        for case in 0..4 {
+            let mut b = ModuleBuilder::new("m", span());
+            let clk = b.input("clk", Type::bit());
+            let c = b.input("c", Type::bit());
+            let e = b.input("e", Type::bit());
+            let k = b.input("k", Type::bit());
+            let v = b.input("v", Type::bits(4));
+            let w = b.input("w", Type::bits(4));
+            let x = b.input("x", Type::bits(4));
+            let q = b.output("q", Type::bits(8));
+            let (clkn, cn, en_, kn, vn, wn, xn) = (
+                b.net(clk),
+                b.net(c),
+                b.net(e),
+                b.net(k),
+                b.net(v),
+                b.net(w),
+                b.net(x),
+            );
+            let en = match case {
+                0 => b.and(cn, en_),
+                1 => {
+                    let nc = b.not(cn);
+                    b.and(nc, en_)
+                }
+                2 => en_,
+                // `c | k` high says nothing of `c`.
+                _ => {
+                    let either = b.or(cn, kn);
+                    b.and(either, en_)
+                }
+            };
+            let decided = b.mux(cn, vn, wn);
+            let undecided = b.mux(kn, xn, wn);
+            let d = b.concat(vec![undecided, decided]);
+            dff(&mut b, "ff", clkn, d, q, Some(en), None);
+            let mut m = b.finish();
+            let stats = run(&RegisterLoads, &mut m);
+            let t = m.to_text();
+            let want = match case {
+                0 => Some("d={mux(%k, %x, %w), %v}"),
+                1 => Some("d={mux(%k, %x, %w), %w}"),
+                _ => None,
+            };
+            match want {
+                Some(want) => {
+                    assert_eq!(stats.get("loads simplified under the enable"), 1, "{case}");
+                    assert!(t.contains(want), "{case}: {want}\n{t}");
+                }
+                None => {
+                    assert_eq!(stats.get("loads simplified under the enable"), 0, "{case}");
+                    assert!(
+                        t.contains("d={mux(%k, %x, %w), mux(%c, %v, %w)}"),
+                        "{case}\n{t}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A kept register's loads are left as written: the pass is not one of
+    /// the canonical rules a kept register still takes.
+    #[test]
+    fn a_kept_register_loads_as_written() {
+        let mut b = ModuleBuilder::new("m", span());
+        let clk = b.input("clk", Type::bit());
+        let c = b.input("c", Type::bit());
+        let v = b.input("v", Type::bits(4));
+        let w = b.input("w", Type::bits(4));
+        let q = b.output("q", Type::bits(4));
+        let (clkn, cn, vn, wn) = (b.net(clk), b.net(c), b.net(v), b.net(w));
+        let d = b.mux(cn, vn, wn);
+        dff(&mut b, "ff", clkn, d, q, Some(cn), None);
+        b.net_attr(q, "keep", 1);
+        let mut m = b.finish();
+        let before = m.to_text();
+        let stats = run(&RegisterLoads, &mut m);
+        assert_eq!(stats.get("loads simplified under the enable"), 0);
+        assert_eq!(m.to_text(), before);
     }
 }
