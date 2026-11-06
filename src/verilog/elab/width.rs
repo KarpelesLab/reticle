@@ -344,6 +344,15 @@ impl Widths<'_, '_, '_> {
         {
             return Some(ty.clone());
         }
+        // A select is of its base's element: path resolution would answer
+        // the base's own type, so `m[i][j]` was as wide as a word of `m`.
+        if let ExprKind::Index { base, .. } = &e.kind {
+            return Some(match self.type_of(base)? {
+                VType::Unpacked { elem, .. } => *elem,
+                VType::Packed(p) => VType::Packed(p.element()),
+                other => other,
+            });
+        }
         if let Some(ty) = self.env.type_of_path(e) {
             return Some(ty);
         }

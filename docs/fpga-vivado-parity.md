@@ -1878,7 +1878,20 @@ write, which the mapper does not pair and refuses; a second read register Vivado
 takes into the block (`DOB_REG`) and Reticle leaves in a slice; 512 words of 36 and
 of 72, which Vivado puts in one block in simple dual port and Reticle in a
 `RAMB36E1` and two, in true dual port; and byte writes, which Vivado's synthesis
-stopped on. Ten of the named designs read an `x` from the first cycle under `xsim`,
+stopped on.
+
+**Correction, 2026-11-06: `ib_1024x32_bytes` is refused now, and what was built of
+it before was wrong.** Its byte writes, `mem[a][7:0] <= d`, assign a select of an
+array element, and the frontend's name resolution saw through `mem[a]` to `mem`:
+it found no net to assign and dropped all four writes without a word, so the block
+it built held a memory nothing wrote. Every check below passed on it, because none
+compares what that design computes with an answer Vivado built (Vivado built none)
+and its mapping was proved against a source already without its writes. The
+frontend refuses the assignment now (`tests/cli.rs` holds both shapes), so the
+counts of 38 below, measured while it was "built", are one too many. A target for
+part of an element is what it would take to build it.
+
+Ten of the named designs read an `x` from the first cycle under `xsim`,
 the unused outputs of a narrow port or a collision of the two, and for those the
 simulation says only that Reticle's netlist reads `x` where Vivado's does.
 

@@ -561,16 +561,34 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// Resolves the base of a select.
     fn place(&mut self, e: &'ast Expr, sink: &mut Sink<'_>) -> Place {
-        if let Some(sym) = self.env.probe(|env| env.resolve_path(e)) {
+        // A select is a value, not the thing it selects from: path
+        // resolution sees through `m[i]` to the array `m` (it is how a
+        // generate block's iteration is named), so `m[i][j]` used to read
+        // element `j` of the array instead of bit `j` of element `i`.
+        let selected = matches!(e.kind, ast::ExprKind::Index { .. });
+        if !selected && let Some(sym) = self.env.probe(|env| env.resolve_path(e)) {
             match sym {
                 Symbol::Net { net, ty } => return Place::Net(net, ty),
                 Symbol::Memory { mem, .. } => return Place::Mem(mem),
                 _ => {}
             }
         }
-        let ty = self.type_of(e);
+        let ty = self.select_type(e);
         let id = self.build(e, 0, sink);
         Place::Value(id, ty)
+    }
+
+    /// The type of `e`, taking a select's element for `base[i]`: what
+    /// [`Self::type_of`] answers there is the type of `base` itself.
+    fn select_type(&mut self, e: &'ast Expr) -> VType {
+        let ExprKind::Index { base, .. } = &e.kind else {
+            return self.type_of(e);
+        };
+        match self.select_type(base) {
+            VType::Unpacked { elem, .. } => *elem,
+            VType::Packed(p) => VType::Packed(p.element()),
+            other => other,
+        }
     }
 
     /// `base[index]`.
@@ -1559,6 +1577,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     }
                 }
             }
+            ExprKind::Index { base, .. } if self.refuse_nested_select(base, e.span) => None,
+            ExprKind::Range { base, .. } if self.refuse_nested_select(base, e.span) => None,
             ExprKind::Index { base, index } => match self.env.probe(|env| env.resolve_path(base)) {
                 Some(Symbol::Memory { mem, .. }) => {
                     // A write to a fixed element the array does not have
@@ -1688,6 +1708,22 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 None
             }
         }
+    }
+
+    /// Refuses `m[i][j] = ..` and `m[i][3:0] = ..`, a select of something
+    /// already selected, which the IR has no target for. Path resolution
+    /// sees through `m[i]` to `m`, so the select of the element used to
+    /// become a write of element `j`, or of nothing at all.
+    fn refuse_nested_select(&mut self, base: &'ast Expr, span: Span) -> bool {
+        if !matches!(base.kind, ExprKind::Index { .. }) {
+            return false;
+        }
+        self.env.unsupported(
+            span,
+            "an assignment to a select of an array element or of a bit-select; \
+             assign the whole element",
+        );
+        true
     }
 
     /// `net[base +: width] = ..` or `net[base -: width] = ..` with a base

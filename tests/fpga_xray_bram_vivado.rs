@@ -274,7 +274,15 @@ fn designs() -> Vec<String> {
 /// | `ib_1024x36_reg2` | the read's second register in the block, `DOB_REG` | the register in a slice |
 /// | `ib_512x36` | one `RAMB18E1` in `SDP`, 36 bits wide | one `RAMB36E1`, 36 bits wide in `TDP` |
 /// | `ib_512x72` | one `RAMB36E1` in `SDP`, 72 bits wide | two `RAMB36E1`s, 36 wide each |
-/// | `ib_1024x32_bytes` | none: Vivado's synthesis stopped on it | built |
+/// | `ib_1024x32_bytes` | none: Vivado's synthesis stopped on it | refused: its byte writes, `mem[a][7:0] <= d`, assign a select of an array element, which the frontend has no target for |
+///
+/// `ib_1024x32_bytes` used to be "built", and what was built was wrong: the
+/// frontend read `mem[a]` as `mem` and dropped every byte write without a
+/// word, so the block held a memory nothing wrote. Every check here passed on
+/// it, since nothing here compares what it computes with Vivado's (Vivado
+/// built nothing) and the mapping was proved against a source already
+/// without its writes. It is refused now, by name, until the frontend has a
+/// target for part of an element.
 const NOT_AS_VIVADO: &[&str] = &[
     "b36_cascade",
     "ib_1024x18_tdp",
@@ -284,10 +292,11 @@ const NOT_AS_VIVADO: &[&str] = &[
     "ib_1024x32_bytes",
 ];
 
-/// The two this flow refuses, and a word of each refusal.
+/// The three this flow refuses, and a word of each refusal.
 const REFUSED: &[(&str, &str)] = &[
     ("b36_cascade", "a cascade"),
     ("ib_1024x18_tdp", "it did not become block RAM or logic"),
+    ("ib_1024x32_bytes", "a select of an array element"),
 ];
 
 /// One design through the flow.

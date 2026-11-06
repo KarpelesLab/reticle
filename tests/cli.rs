@@ -860,6 +860,78 @@ fn sim_rounds_a_fractional_delay_to_the_precision() {
     assert_eq!(stdout, "a 0 3\nb 0\nc 1\nd 1\n", "{stderr}");
 }
 
+/// **`m[i][j]` is bit `j` of element `i`** (IEEE 1364-2005 §5.2.2), and a
+/// part-select of an element is that element's bits. The answers are
+/// `xsim`'s for the same loop. Name resolution sees through `m[i]` to `m`,
+/// so this used to read *element* `j`, one bit of it, with a width warning;
+/// and `m[i][j +: 2]` was refused as a part-select of a whole array. Would
+/// catch either back.
+#[test]
+fn sim_reads_a_bit_of_an_array_element() {
+    let dir = scratch("sim_array_element_bit");
+    let file = dir.join("bits.v");
+    std::fs::write(
+        &file,
+        "module tb;\n\
+         \x20 reg [3:0] m [0:3];\n\
+         \x20 reg r;\n\
+         \x20 reg [1:0] two;\n\
+         \x20 integer i, j;\n\
+         \x20 initial begin\n\
+         \x20   m[0] = 4'b0001; m[1] = 4'b0010; m[2] = 4'b0100; m[3] = 4'b1000;\n\
+         \x20   for (i = 0; i < 4; i = i + 1)\n\
+         \x20     for (j = 0; j < 4; j = j + 1) begin\n\
+         \x20       r = m[i][j];\n\
+         \x20       two = m[i][j +: 2];\n\
+         \x20       $display(\"%0d %0d %b %b %b\", i, j, r, m[i][j], two);\n\
+         \x20     end\n\
+         \x20 end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
+    let xsim = "0 0 1 1 01\n0 1 0 0 00\n0 2 0 0 00\n0 3 0 0 x0\n\
+                1 0 0 0 10\n1 1 1 1 01\n1 2 0 0 00\n1 3 0 0 x0\n\
+                2 0 0 0 00\n2 1 0 0 10\n2 2 1 1 01\n2 3 0 0 x0\n\
+                3 0 0 0 00\n3 1 0 0 00\n3 2 0 0 10\n3 3 1 1 x1\n";
+    assert_eq!(stdout, xsim);
+}
+
+/// **An assignment to a bit of an array element is refused, not
+/// misdirected.** The IR has no target for it, and it used to become a write
+/// of element `j` (`m[i][j] = ..`) or of nothing (`m[i][3:0] = ..`), both
+/// silently. Would catch either back; it would not catch a later change that
+/// supports the assignment, which should replace this test.
+#[test]
+fn sim_refuses_an_assignment_to_a_bit_of_an_array_element() {
+    let dir = scratch("sim_array_element_bit_write");
+    let file = dir.join("write.v");
+    std::fs::write(
+        &file,
+        "module tb;\n\
+         \x20 reg [3:0] m [0:3];\n\
+         \x20 integer i;\n\
+         \x20 initial begin\n\
+         \x20   i = 1;\n\
+         \x20   m[i][2] = 1'b1;\n\
+         \x20   m[i][3:2] = 2'b11;\n\
+         \x20 end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stderr}");
+    assert_eq!(
+        stderr
+            .matches("an assignment to a select of an array element")
+            .count(),
+        2,
+        "{stderr}"
+    );
+}
+
 #[test]
 fn sim_writes_an_fst_waveform() {
     let dir = scratch("sim_fst");
