@@ -93,7 +93,7 @@ use std::error::Error;
 use std::fmt;
 use std::rc::Rc;
 
-use super::arch::{Arch, NodeId, RoutingGraph};
+use super::arch::{Arch, FastMap, NodeId, RoutingGraph};
 use super::constraints::{Constraints, matches_glob};
 use super::device::{BelRole, Device};
 use crate::ir::emit::{BitView, SigBit};
@@ -4155,6 +4155,19 @@ impl TileSites {
         }
     }
 
+    /// The grid's width and height in tiles.
+    fn grid(&self) -> (u32, u32) {
+        (
+            u32::try_from(self.width).unwrap_or(u32::MAX),
+            u32::try_from(self.height).unwrap_or(u32::MAX),
+        )
+    }
+
+    /// How many sites it holds: all it was given that are on the grid.
+    fn len(&self) -> usize {
+        self.sites.len()
+    }
+
     /// The sites of tile `(x, y)`, or `None` when it has none.
     fn at(&self, x: u32, y: u32) -> Option<&[usize]> {
         let (x, y) = (x as usize, y as usize);
@@ -6486,6 +6499,11 @@ fn legalise(
             placement,
         )?;
     }
+    // Each kind's sites by tile, for `nearest_free`'s search outwards.
+    let by_tile: BTreeMap<&str, TileSites> = sites_by_kind
+        .iter()
+        .map(|(kind, sites)| (kind.as_str(), TileSites::new(graph, sites)))
+        .collect();
     for index in order {
         let (x, y) = positions[index];
         let kind = &netlist.instances[index].kind;
@@ -6493,6 +6511,7 @@ fn legalise(
         let region = info[index].region.as_ref().map(|(rect, _)| rect);
         let site = nearest_free(
             sites_by_kind,
+            &by_tile,
             kind,
             region,
             info[index].allowed.as_deref(),
@@ -6510,6 +6529,7 @@ fn legalise(
                 .then(|| {
                     nearest_free(
                         sites_by_kind,
+                        &by_tile,
                         kind,
                         region,
                         None,
@@ -6667,6 +6687,7 @@ const OPENING: u64 = 16;
 #[allow(clippy::too_many_arguments, reason = "the legaliser's whole state")]
 fn nearest_free(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    by_tile: &BTreeMap<&str, TileSites>,
     kind: &str,
     region: Option<&Rect>,
     allowed: Option<&[usize]>,
@@ -6676,32 +6697,64 @@ fn nearest_free(
     placement: &Placement,
 ) -> Option<usize> {
     let sites = sites_by_kind.get(kind)?;
+    // The answer is the legal site of least distance, counting an opening,
+    // and of those the first in the kind's order, which is the lowest
+    // index: a site replaces the best only when it is strictly nearer.
     let mut best: Option<(u64, usize)> = None;
-    for site in sites {
-        if placement.instance_at(*site).is_some() {
-            continue;
+    let consider = |site: usize, distance: u64, best: &mut Option<(u64, usize)>| {
+        if placement.instance_at(site).is_some() {
+            return;
         }
-        if allowed.is_some_and(|ok| ok.binary_search(site).is_err()) {
-            continue;
+        // The penalty only adds, so a site already no better than the
+        // best is not worth asking about.
+        if best.is_some_and(|b| (distance, site) >= b) {
+            return;
         }
-        let (x, y) = shared.tiles[*site];
-        if let Some(rect) = region
-            && !rect.holds(x, y)
-        {
-            continue;
+        let cost = if shared.opens(placement, instance, site) {
+            distance + OPENING
+        } else {
+            distance
+        };
+        if best.is_none_or(|b| (cost, site) < b) && shared.allows(placement, &[(instance, site)]) {
+            *best = Some((cost, site));
         }
-        let mut distance = manhattan(target, (x, y));
-        // The penalty only adds, so a site already no nearer than the best
-        // is not worth asking about.
-        if best.is_some_and(|(d, _)| distance >= d) {
-            continue;
+    };
+    let held = |site: usize| {
+        let (x, y) = shared.tiles[site];
+        region.is_none_or(|rect| rect.holds(x, y))
+    };
+    // An index that left a site out, being off the grid, is not used.
+    let index = by_tile.get(kind).filter(|index| index.len() == sites.len());
+    match (allowed, index) {
+        // A short list of its own, or no index: every site, in order.
+        (Some(_), _) | (None, None) => {
+            for site in sites {
+                if allowed.is_some_and(|ok| ok.binary_search(site).is_err()) || !held(*site) {
+                    continue;
+                }
+                consider(*site, manhattan(target, shared.tiles[*site]), &mut best);
+            }
         }
-        if shared.opens(placement, instance, *site) {
-            distance += OPENING;
-        }
-        if best.is_none_or(|(d, _)| distance < d) && shared.allows(placement, &[(instance, *site)])
-        {
-            best = Some((distance, *site));
+        // Outwards from the target, a diamond of tiles at a time. A site
+        // at distance `d` costs at least `d`, so once `d` is past the best
+        // cost nothing farther can be better or as good: what this finds
+        // is what the scan of every site found, without the scan, which
+        // read every site of a kind for every cell the legaliser seated.
+        (None, Some(index)) => {
+            let (width, height) = index.grid();
+            for (distance, x, y) in tiles_by_distance(target, width, height) {
+                if best.is_some_and(|(cost, _)| distance > cost) {
+                    break;
+                }
+                let Some(here) = index.at(x, y) else {
+                    continue;
+                };
+                for site in here {
+                    if held(*site) {
+                        consider(*site, distance, &mut best);
+                    }
+                }
+            }
         }
     }
     best.map(|(_, site)| site)
@@ -6722,13 +6775,7 @@ fn legalise_macro(
 ) -> Result<(), PlaceError> {
     let (tx, ty) = positions[m.anchor];
     let target = (to_grid(tx, graph.width), to_grid(ty, graph.height));
-    let mut candidates: Vec<(u64, u32, u32)> = Vec::new();
-    for y in 0..graph.height {
-        for x in 0..graph.width {
-            candidates.push((manhattan(target, (x, y)), x, y));
-        }
-    }
-    candidates.sort();
+    let candidates = tiles_by_distance(target, graph.width, graph.height);
     // The nearest tile that fits, counting one where a member would open a
     // slice [`OPENING`] tiles farther, as `nearest_free` does for a single
     // cell: a macro is a flip-flop too, and once [`registered_tables`] made
@@ -6856,6 +6903,37 @@ fn manhattan(a: (u32, u32), b: (u32, u32)) -> u64 {
     let dx = u64::from(a.0.abs_diff(b.0));
     let dy = u64::from(a.1.abs_diff(b.1));
     dx + dy
+}
+
+/// Every tile of a `width` by `height` grid as `(distance from target, x,
+/// y)`, in ascending order: the order sorting the whole grid gives, made
+/// a diamond at a time, so that a search that stops at the first few
+/// rings neither builds nor sorts the rest. The legaliser sorted thirty
+/// thousand tiles for each of the Husky Plus's thousands of macros.
+fn tiles_by_distance(
+    target: (u32, u32),
+    width: u32,
+    height: u32,
+) -> impl Iterator<Item = (u64, u32, u32)> {
+    let (tx, ty) = (i64::from(target.0), i64::from(target.1));
+    let (w, h) = (i64::from(width), i64::from(height));
+    let far = if w == 0 || h == 0 {
+        -1
+    } else {
+        tx.max(w - 1 - tx) + ty.max(h - 1 - ty)
+    };
+    (0..=far).flat_map(move |d| {
+        ((tx - d).max(0)..=(tx + d).min(w - 1)).flat_map(move |x| {
+            let dy = d - (x - tx).abs();
+            let low = (dy >= 0 && ty - dy >= 0 && ty - dy < h).then_some(ty - dy);
+            let high = (dy > 0 && ty + dy >= 0 && ty + dy < h).then_some(ty + dy);
+            // Inside the grid, so none of these conversions can fail.
+            let small = |v: i64| u32::try_from(v).unwrap_or(u32::MAX);
+            low.into_iter()
+                .chain(high)
+                .map(move |y| (u64::try_from(d).unwrap_or(0), small(x), small(y)))
+        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -7067,7 +7145,7 @@ struct ClockLoad {
     /// global buffers and of clock managers.
     globals: Vec<Vec<usize>>,
     /// Per (region, signal), how many of the region's cells read it.
-    readers: HashMap<(u16, usize), u32>,
+    readers: FastMap<(u16, usize), u32>,
     /// Per region, how many distinct clocks it is asked for.
     clocks: Vec<u32>,
     /// The clocks asked for past `lines`, over every region.
@@ -7134,7 +7212,7 @@ impl ClockLoad {
             width: graph.width,
             lines,
             globals,
-            readers: HashMap::new(),
+            readers: FastMap::default(),
             clocks: vec![0; regions],
             over: 0,
         };
@@ -7427,6 +7505,49 @@ pub fn hpwl(netlist: &Netlist, graph: &RoutingGraph, placement: &Placement) -> u
 /// One candidate move: which instances go where.
 type Move = Vec<(usize, usize)>;
 
+/// Every kind's [`KindSites`], and which one each instance draws from:
+/// looked up by index on every move, where it was an ordered map keyed by
+/// the kind's name.
+struct Windows {
+    /// One per kind of `sites_by_kind`, in its order.
+    kinds: Vec<KindSites>,
+    /// Per instance, its kind's index in `kinds`, or `u32::MAX` for a kind
+    /// with no sites.
+    of_instance: Vec<u32>,
+}
+
+impl Windows {
+    /// The windows of every kind, and every instance's.
+    fn build(
+        netlist: &Netlist,
+        graph: &RoutingGraph,
+        sites_by_kind: &BTreeMap<String, Vec<usize>>,
+    ) -> Windows {
+        let index: BTreeMap<&str, u32> = sites_by_kind
+            .keys()
+            .enumerate()
+            .map(|(at, kind)| (kind.as_str(), u32::try_from(at).unwrap_or(u32::MAX)))
+            .collect();
+        Windows {
+            kinds: sites_by_kind
+                .values()
+                .map(|sites| KindSites::build(graph, sites))
+                .collect(),
+            of_instance: netlist
+                .instances
+                .iter()
+                .map(|inst| index.get(inst.kind.as_str()).copied().unwrap_or(u32::MAX))
+                .collect(),
+        }
+    }
+
+    /// The sites `instance` may be drawn to, by its kind.
+    fn of(&self, instance: usize) -> Option<&KindSites> {
+        let at = *self.of_instance.get(instance)?;
+        self.kinds.get(at as usize)
+    }
+}
+
 /// Where the sites of one kind are, so that a move can be drawn from a
 /// window of tiles rather than from the whole die.
 ///
@@ -7646,10 +7767,7 @@ fn anneal(
     if movable.is_empty() {
         return;
     }
-    let windows: BTreeMap<String, KindSites> = sites_by_kind
-        .iter()
-        .map(|(kind, sites)| (kind.clone(), KindSites::build(graph, sites)))
-        .collect();
+    let windows = Windows::build(netlist, graph, sites_by_kind);
     let mut rng = Rng::new(options.seed);
     let inner = options
         .moves_per_temperature
@@ -7986,7 +8104,7 @@ fn draw_move(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    windows: &BTreeMap<String, KindSites>,
+    windows: &Windows,
     shared: &SiteRules,
     movable: &[usize],
     rng: &mut Rng,
@@ -8035,7 +8153,6 @@ fn draw_move(
         }
         return found;
     }
-    let kind = &netlist.instances[instance].kind;
     let rect = window_of(
         graph,
         info[instance].region.as_ref().map(|(rect, _)| rect),
@@ -8043,7 +8160,7 @@ fn draw_move(
         hy,
         reach,
     )?;
-    let target = windows.get(kind)?.pick(rng, rect)?;
+    let target = windows.of(instance)?.pick(rng, rect)?;
     if target == here {
         return None;
     }
@@ -8086,7 +8203,7 @@ fn propose(
     info: &[Placeable],
     macros: &[Macro],
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
-    windows: &BTreeMap<String, KindSites>,
+    windows: &Windows,
     shared: &SiteRules,
     movable: &[usize],
     rng: &mut Rng,
@@ -12846,6 +12963,119 @@ mod tests {
         let netlist = lane_netlist([&[("o", 0, true)], &[("d", 0, false)], &[("di", 2, false)]]);
         let (legal, illegal) = judge_three_ways(&netlist, &graph, 2);
         assert!(legal > 20 && illegal > 20, "{legal} legal, {illegal} not");
+    }
+
+    /// **The search outwards finds the site the scan of every site
+    /// found**: the same answer, or none, over random placements on tiles
+    /// with a control budget — so that the opening penalty and legality
+    /// both decide — for targets on and off the grid, with and without a
+    /// region, and with a list of allowed sites.
+    ///
+    /// Would catch the search stopping a ring early or late, a tie at one
+    /// distance going to another site than the lowest, or the penalty
+    /// taken for a nearness it does not have: each seats a cell elsewhere
+    /// and changes the placement. Would not catch the search being slow.
+    #[test]
+    fn the_nearest_free_site_is_the_scans_own() {
+        let (_, graph) = budget(6, 5, true);
+        let netlist = reset_by(118, 3);
+        let shared = SiteRules::find(&netlist, &graph);
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        let by_tile: BTreeMap<&str, TileSites> = sites_by_kind
+            .iter()
+            .map(|(kind, sites)| (kind.as_str(), TileSites::new(&graph, sites)))
+            .collect();
+        let none: BTreeMap<&str, TileSites> = BTreeMap::new();
+        let mut rng = Rng::new(11);
+        let n = netlist.instances.len();
+        let (mut found, mut lost) = (0, 0);
+        for _ in 0..600 {
+            // Each cell on a free site of its kind, most of them: a die
+            // from a third to nearly full.
+            let mut placement = Placement::new(n, graph.sites.len());
+            let crowd = 1 + rng.below(16);
+            for instance in 0..n {
+                let free: Vec<usize> = sites_by_kind[&netlist.instances[instance].kind]
+                    .iter()
+                    .copied()
+                    .filter(|s| placement.instance_at(*s).is_none())
+                    .collect();
+                if !free.is_empty() && rng.below(crowd + 1) != 0 {
+                    placement.place(instance, free[rng.below(free.len())]);
+                }
+            }
+            let instance = rng.below(n);
+            placement.unplace(instance);
+            let kind = netlist.instances[instance].kind.as_str();
+            let target = (
+                u32::try_from(rng.below(9)).unwrap(),
+                u32::try_from(rng.below(8)).unwrap(),
+            );
+            let region = (rng.below(3) == 0).then_some(Rect {
+                x0: 1,
+                y0: 0,
+                x1: 3,
+                y1: 2,
+            });
+            let allowed: Option<Vec<usize>> = (rng.below(4) == 0).then(|| {
+                sites_by_kind[kind]
+                    .iter()
+                    .copied()
+                    .filter(|_| rng.below(2) == 0)
+                    .collect()
+            });
+            let ask = |index: &BTreeMap<&str, TileSites>| {
+                nearest_free(
+                    &sites_by_kind,
+                    index,
+                    kind,
+                    region.as_ref(),
+                    allowed.as_deref(),
+                    target,
+                    &shared,
+                    instance,
+                    &placement,
+                )
+            };
+            let outwards = ask(&by_tile);
+            assert_eq!(outwards, ask(&none), "{kind} to {target:?} in {region:?}");
+            if outwards.is_some() {
+                found += 1;
+            } else {
+                lost += 1;
+            }
+        }
+        assert!(found > 100 && lost > 10, "{found} found, {lost} not");
+    }
+
+    /// The tiles by distance are the whole grid sorted, as the legaliser
+    /// sorted it: for targets inside the grid, on its edges and corners and
+    /// past them, and for grids of one row, one column and none.
+    ///
+    /// Would catch a tile left out or given twice, a ring visited out of
+    /// order or its tiles not by `x` and then `y` — each of which changes
+    /// where a macro is seated. Would not catch it being slow.
+    #[test]
+    fn the_tiles_by_distance_are_the_grid_sorted() {
+        for (width, height) in [(7, 5), (1, 6), (6, 1), (1, 1), (0, 4), (4, 0)] {
+            for target in [(0, 0), (3, 2), (6, 4), (0, 4), (9, 1), (2, 8), (20, 20)] {
+                let mut sorted: Vec<(u64, u32, u32)> = Vec::new();
+                for y in 0..height {
+                    for x in 0..width {
+                        sorted.push((manhattan(target, (x, y)), x, y));
+                    }
+                }
+                sorted.sort();
+                let made: Vec<(u64, u32, u32)> = tiles_by_distance(target, width, height).collect();
+                assert_eq!(made, sorted, "{width} by {height} around {target:?}");
+            }
+        }
     }
 
     /// [`TileSites`] answers as the hash map it replaced: for every tile,
