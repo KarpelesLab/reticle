@@ -1984,8 +1984,10 @@ scripts' bitstreams are byte for byte those before: with this tree's release bin
 
 ### Tests
 
-`tests/fpga_xray_synthesis.rs` maps the fifteen designs of the corpus in this
-repository both ways, proves every mapping, and pins each one's tables, their depth
+`every_block_maps_to_the_logic_it_was_mapped_from` (`tests/ip_library.rs`) proves
+every block of the IP library at LUT6 with the mapper's options as the 7 series sets
+them, beside the four ways it proved them before. `tests/fpga_xray_synthesis.rs` maps
+the fifteen designs of the corpus in this repository both ways, proves every mapping, and pins each one's tables, their depth
 and its `CARRY4`s (the legacy figures are the ones before this section, so a leak
 of the new mapping into the old fails it); it holds `adders`, `crc32`, `fsm` and
 `regfile_alu` no deeper in tables than Vivado's worst path's levels, and

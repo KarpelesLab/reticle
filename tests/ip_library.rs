@@ -1295,21 +1295,26 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
     // Each width twice: `wide` is `MapOptions::wide_muxes`, which maps the
     // choices between tables onto a slice's `MUXF7` and `MUXF8` where that
     // saves tables, from a graph its own pass put together, and is proved
-    // against the graph from before that pass.
-    let jobs: Vec<(&Variant, u32, bool)> = VARIANTS
+    // against the graph from before that pass. And at LUT6 once more as the
+    // 7 series' default synthesis maps (`vivado`): its cuts kept shallowest
+    // first, its XOR logic rebuilt for tables, complements duplicated and a
+    // hard block's outputs late, proved against the graph from before the
+    // rebuilding.
+    let jobs: Vec<(&Variant, u32, bool, bool)> = VARIANTS
         .iter()
         .flat_map(|variant| {
             [
-                (variant, 4u32, false),
-                (variant, 6, false),
-                (variant, 4, true),
-                (variant, 6, true),
+                (variant, 4u32, false, false),
+                (variant, 6, false, false),
+                (variant, 4, true, false),
+                (variant, 6, true, false),
+                (variant, 6, true, true),
             ]
         })
         .collect();
     // Every mapping proved as before, on every core at once; the verdicts
     // come back in the order the loop took them one at a time.
-    let verdicts = par_map(&jobs, |(variant, k, wide)| {
+    let verdicts = par_map(&jobs, |(variant, k, wide, vivado)| {
         let (mut design, id) = flattened(variant.package, variant.top, variant.params);
         let mut diags = Diagnostics::new();
         synth_run(&mut design, &SynthOptions::default(), &mut diags);
@@ -1321,14 +1326,21 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
         );
         let mut map = MapOptions::lut(*k);
         map.wide_muxes = *wide;
+        if *vivado {
+            map.cuts.depth_priority = true;
+            map.cuts.duplicate_complements = true;
+            map.xor_balance = true;
+            map.late_hard_outputs = true;
+        }
         let (stats, equivalence) =
             map_module_checked(&mut design.modules[id], &map, Some(&options));
         let equivalence = equivalence.expect("the check was asked for");
         let what = format!(
-            "{}.{} at LUT{k}{}",
+            "{}.{} at LUT{k}{}{}",
             variant.package,
             variant.top,
-            if *wide { " with wide multiplexers" } else { "" }
+            if *wide { " with wide multiplexers" } else { "" },
+            if *vivado { " as the 7 series maps" } else { "" }
         );
         (what, stats, equivalence)
     });
@@ -1372,7 +1384,7 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
         unproved.len(),
         unproved.join("\n  ")
     );
-    assert!(checked >= 4 * VARIANTS.len(), "only {checked} mappings");
+    assert!(checked >= 5 * VARIANTS.len(), "only {checked} mappings");
     for (at, width) in [(0, "LUT4"), (1, "LUT6")] {
         assert!(
             muxf[at] > 0 && saved[at] > 0,
