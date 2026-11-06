@@ -410,6 +410,20 @@ An adder narrower than four bits (`MapOptions::min_carry_width`, which
 is one whole `CARRY4`) stays in LUTs, and so does a `sub`: the IR's
 `sub` cell is not lowered through the carry path on any family.
 
+*That last sentence was true when it was written and is not now.* A
+subtraction is the adder `{a, 1} + {~b, 1}` on the chain from
+`MapOptions::min_subtract_carry_width` bits, which is off by default in the
+library for a reason a board gave (the option's docs have it). `reticle fpga`
+on the 7 series synthesises as Vivado 2026.1 does unless `--synthesis legacy`
+(`FpgaOptions::vivado_synthesis`): subtractions from six bits, orderings
+between two signals (`a < b`) from seven in lanes of two bits, equalities
+between two signals from nine in lanes of three, each chain's constant carry
+in on `CYINIT` and its carry out off `CO`, and orderings against a constant
+in kept lanes of six bits beside the chain rather than on it. Each threshold
+is what Vivado was measured to do; docs/fpga-vivado-parity.md, "Synthesis
+against Vivado's", has the measurements and what they did to the timing
+corpus.
+
 ### The DSP48E1
 
 **This section is the block on its own, as the Vivado route first took it.** On
