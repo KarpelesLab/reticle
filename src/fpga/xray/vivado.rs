@@ -171,12 +171,42 @@ fn site_and_bel(
         return Some((site.clone(), "RAMB36E1".to_owned()));
     }
     if bel.starts_with("IOB_") {
+        // Where Vivado 2026.1 put each of its own (`get_property BEL` of each
+        // leaf, after `place_design`): an input buffer on `INBUF_EN` and an
+        // output on `OUTBUF`, a differential one on the master's. A buffer of
+        // both directions, or of two outputs, is a macro of Vivado's that
+        // takes its site alone: an empty bel says so.
         let name = match primitive {
-            "IBUF" => "INBUF_EN",
-            "OBUF" | "OBUFT" => "OUTBUF",
+            "IBUF" | "IBUFG" | "IBUF_IBUFDISABLE" | "IBUF_INTERMDISABLE" | "IBUFDS" | "IBUFGDS" => {
+                "INBUF_EN"
+            }
+            "OBUF" | "OBUFT" | "OBUFDS" | "OBUFTDS" => "OUTBUF",
+            "IOBUF"
+            | "IOBUF_INTERMDISABLE"
+            | "IOBUFDS"
+            | "IOBUFDS_INTERMDISABLE"
+            | "IOBUFDS_DIFF_OUT"
+            | "IOBUFDS_DIFF_OUT_INTERMDISABLE"
+            | "IBUFDS_DIFF_OUT"
+            | "IBUFGDS_DIFF_OUT"
+            | "IBUFDS_IBUFDISABLE"
+            | "IBUFDS_INTERMDISABLE"
+            | "IBUFDS_DIFF_OUT_IBUFDISABLE"
+            | "IBUFDS_DIFF_OUT_INTERMDISABLE" => "",
             _ => return None,
         };
         return Some((site_named(bel)?, name.to_owned()));
+    }
+    // An input delay, and the serialisers, which are the IO logic sites'
+    // other bels.
+    if bel.starts_with("IDELAY_") {
+        return Some((site_named(bel)?, "IDELAYE2".to_owned()));
+    }
+    if bel.starts_with("OLOGIC_") && primitive == "OSERDESE2" {
+        return Some((site_named(bel)?, "OSERDESE2".to_owned()));
+    }
+    if bel.starts_with("ILOGIC_") && primitive == "ISERDESE2" {
+        return Some((site_named(bel)?, "ISERDESE2".to_owned()));
     }
     // A clock manager is the one site of its type in its tile.
     if matches!(bel, "MMCME2_ADV" | "PLLE2_ADV") {
@@ -198,10 +228,14 @@ fn site_and_bel(
             name.rsplit_once('Y')
                 .and_then(|(_, y)| y.parse::<u32>().ok())
         });
-        let name = if primitive == "BUFGCTRL" {
-            "BUFGCTRL"
-        } else {
+        // Every global buffer but a `BUFG` is a `BUFGCTRL` to Vivado once
+        // linked, and goes on that bel: `BUFGCE` on `BUFG` is refused
+        // (12-1409, "the bel type (BUFG_BUFG) do not match the cell type
+        // (BUFGCTRL)").
+        let name = if primitive == "BUFG" {
             "BUFG"
+        } else {
+            "BUFGCTRL"
         };
         return Some(((*sites.get(number)?).clone(), name.to_owned()));
     }
@@ -249,7 +283,56 @@ fn site_and_bel(
             return Some((ranked(family, None, k.parse().ok()?)?, family.to_owned()));
         }
     }
+    // A site the tile has one of, or names exactly: the configuration
+    // primitives, the controller of the input delays, the XADC. Vivado's bel
+    // is the site's type (`BSCAN_X0Y0` is `BSCAN.BSCAN`, `ICAP_X0Y1`
+    // `ICAP.ICAP`, `STARTUP_X0Y0` `STARTUP.STARTUP`).
+    if let Some((site, kind)) = tile.sites.iter().find(|(name, _)| name == bel) {
+        return Some((site.clone(), kind.clone()));
+    }
+    // `DNA_PORT` and `EFUSE_USR` are declared on the configuration tile with
+    // their pins ten rows up (`config::far_pins`), and their sites are that
+    // tile's, one of each on the die (Vivado's own placement of the probes).
+    if matches!(bel, "DNA_PORT" | "EFUSE_USR") && !tile.sites.iter().any(|(_, k)| k == bel) {
+        return Some((format!("{bel}_X0Y0"), bel.to_owned()));
+    }
+    if matches!(
+        bel,
+        "CAPTURE"
+            | "DCIRESET"
+            | "DNA_PORT"
+            | "EFUSE_USR"
+            | "FRAME_ECC"
+            | "STARTUP"
+            | "USR_ACCESS"
+            | "XADC"
+            | "IDELAYCTRL"
+    ) {
+        let mut of_kind = tile.sites.iter().filter(|(_, kind)| kind == bel);
+        if let (Some((site, kind)), None) = (of_kind.next(), of_kind.next()) {
+            return Some((site.clone(), kind.clone()));
+        }
+    }
     None
+}
+
+/// A buffer of a differential pair, as Vivado has it: the pad pin on the first
+/// ball, the pin on the second, and the primitive. `None` for one this does
+/// not know.
+fn differential_of(primitive: &str) -> Option<(&'static str, &'static str, &str)> {
+    Some(match primitive {
+        "IBUF" => ("I", "IB", "IBUFDS"),
+        "IBUF_IBUFDISABLE" => ("I", "IB", "IBUFDS_IBUFDISABLE"),
+        "IBUF_INTERMDISABLE" => ("I", "IB", "IBUFDS_INTERMDISABLE"),
+        "OBUF" => ("O", "OB", "OBUFDS"),
+        "OBUFT" => ("O", "OB", "OBUFTDS"),
+        "IOBUF" => ("IO", "IOB", "IOBUFDS"),
+        "IOBUF_INTERMDISABLE" => ("IO", "IOB", "IOBUFDS_INTERMDISABLE"),
+        other if other.starts_with("IOBUFDS") => ("IO", "IOB", other),
+        other if other.starts_with("OBUFDS") || other.starts_with("OBUFTDS") => ("O", "OB", other),
+        other if other.starts_with("IBUFDS") || other.starts_with("IBUFGDS") => ("I", "IB", other),
+        _ => return None,
+    })
 }
 
 /// One lookup table function as Vivado will see it: the pins it reads, with
@@ -275,9 +358,14 @@ fn reduce(table: &[bool], connections: &[SigBit]) -> LutHalf {
         .map(|(pin, bit)| (pin, *bit))
         .collect();
     // A table of no inputs is a constant. A `LUT1` needs one, so it keeps the
-    // first pin; it ignores it either way.
+    // first pin, which it ignores, tied high: the mapper ties it low and the
+    // router leaves it alone, so on the part it reads the one an input with
+    // no pip on it reads, and Vivado leaves a pin tied high just so. Tied
+    // low, Vivado routed a ground to it (`IMUX<n>.GFAN<k>` and
+    // `GFAN<k>.GND_WIRE`) that Reticle's bitstream does not have, on every
+    // probe with a constant in it (`gnd_probe`, `vcc_probe`, `ram16x1s_probe`).
     if pins.is_empty() {
-        pins.push((0, connections[0]));
+        pins.push((0, SigBit::Const(Bit::One)));
     }
     let mut reduced = vec![false; 1 << pins.len()];
     for (m, entry) in reduced.iter_mut().enumerate() {
@@ -463,6 +551,7 @@ impl Writer<'_> {
         cell: &Cell,
         view: &BitView<'_>,
         primitive: &str,
+        extra: &[String],
     ) -> Result<(), VivadoExportError> {
         let structural = |e: crate::ir::emit::EmitError| VivadoExportError(e.to_string());
         let mut items = Vec::new();
@@ -479,6 +568,7 @@ impl Writer<'_> {
             let bits = view.net_bits(*net, cell.span).map_err(structural)?;
             items.push(format!(".{port}({})", self.names.bits(&bits)));
         }
+        items.extend(extra.iter().cloned());
         let params: Vec<String> = cell
             .params
             .iter()
@@ -759,7 +849,7 @@ pub fn vivado_implementation(
                         .params
                         .set("IS_WCLK_INVERTED", AttrValue::Const(Const::from_u64(1, 1)));
                 }
-                writer.plain(&name, &written, &view, base)?;
+                writer.plain(&name, &written, &view, base, &[])?;
                 // Vivado places a `RAM32M`, a `RAM64M` or a `RAM64X2S` by its
                 // site alone, and expands it by its own shape, which is this
                 // fabric's: placed leaf by leaf, it says `Cannot expand macro
@@ -775,16 +865,150 @@ pub fn vivado_implementation(
                 }
             }
             primitive => {
-                let (s, b) = spell(false)?;
                 // Vivado knows one `BUFR`; see `regional`.
-                let primitive = match primitive {
+                let mut primitive = match primitive {
                     super::regional::REGIONAL_BUFR => "BUFR",
                     super::regional::REGIONAL_BUFMRCE => "BUFMRCE",
                     other => other,
                 };
-                writer.plain(&name, cell, &view, primitive)?;
-                writer.placed.push(format!("  {name} {s}/{b}"));
+                // A multi-region buffer this flow built on a global one
+                // (`--regional-clocks auto`) is that global buffer to Vivado,
+                // with the same pins: `BUFMRCE` on `BUFGCTRL` is refused
+                // (12-1409).
+                if site.bel.starts_with("BUFGCTRL_") {
+                    primitive = match primitive {
+                        "BUFMRCE" => "BUFGCE",
+                        "BUFMR" => "BUFG",
+                        other => other,
+                    };
+                }
+                // The second ball of a differential pair, which this flow
+                // configures from the buffer on the first and which has no
+                // cell of its own: Vivado's buffer is the differential one,
+                // with the pair's `_N` port on its second pad pin.
+                let mut extra: Vec<String> = Vec::new();
+                if cell
+                    .attrs
+                    .get("io_pair")
+                    .and_then(AttrValue::as_int)
+                    .is_some_and(|v| v != 0)
+                {
+                    let Some((_, second, differential)) = differential_of(primitive) else {
+                        return fail(format!(
+                            "`{}` is a `{primitive}` of a differential pair, which is not \
+                             written for Vivado yet",
+                            instance.name
+                        ));
+                    };
+                    // The pair's other port, which mapping names on the buffer
+                    // (`io_pair_port`), and the bit of it the buffer's own name
+                    // says (`<port>$io<bit>`, `primitives::io_buffer`).
+                    let bit = instance
+                        .name
+                        .rsplit_once("$io")
+                        .and_then(|(_, bit)| bit.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let partner = cell
+                        .attrs
+                        .get("io_pair_port")
+                        .and_then(AttrValue::as_str)
+                        .and_then(|n| {
+                            module.ports.iter().find(|p| {
+                                p.name.as_str() == n || module.nets[p.net].name.as_str() == n
+                            })
+                        })
+                        .and_then(|port| view.net_bits(port.net, port.span).ok())
+                        .and_then(|bits| bits.get(bit).copied());
+                    let Some(partner) = partner else {
+                        return fail(format!(
+                            "`{}` is half of a differential pair whose other port is not found",
+                            instance.name
+                        ));
+                    };
+                    extra.push(format!(".{second}({})", writer.names.bit(partner)));
+                    primitive = differential;
+                }
+                let (s, b) = site_and_bel(tile, &site.bel, primitive, false).ok_or_else(|| {
+                    VivadoExportError(format!(
+                        "no spelling for `{primitive}` on bel `{}` of `{}`",
+                        site.bel, tile.name
+                    ))
+                })?;
+                // A serialiser's `DATA_RATE`, which Vivado's design rules
+                // want stated (`ADEF-2`), at the library's default.
+                let mut written = cell.clone();
+                if primitive == "ISERDESE2" && written.params.get("DATA_RATE").is_none() {
+                    written
+                        .params
+                        .set("DATA_RATE", AttrValue::String("DDR".to_owned()));
+                }
+                // An `ISERDESE2`'s `CLKB` (and `OCLKB`) on the very net of its
+                // `CLK` (`OCLK`) is that clock's inverse to the site, which
+                // inverts it itself and has no bit for it: the netlist says
+                // so, or Vivado's rule that the two be opposite refuses it
+                // (`PDRC-26`).
+                if primitive == "ISERDESE2" {
+                    for (clock, inverse) in [("CLK", "CLKB"), ("OCLK", "OCLKB")] {
+                        let a = inputs_of(&view, cell, clock)?;
+                        let b = inputs_of(&view, cell, inverse)?;
+                        let key = format!("IS_{inverse}_INVERTED");
+                        if !a.is_empty() && a == b && written.params.get(&key).is_none() {
+                            written
+                                .params
+                                .set(key.as_str(), AttrValue::Const(Const::from_u64(1, 1)));
+                        }
+                    }
+                }
+                let cell = &written;
+                writer.plain(&name, cell, &view, primitive, &extra)?;
+                // A macro is placed by its site and expanded by Vivado.
+                if b.is_empty() {
+                    writer.placed.push(format!("  {name} {s}"));
+                } else {
+                    writer.placed.push(format!("  {name} {s}/{b}"));
+                }
                 writer.cells += 1;
+                // A pull the pad's buffer carries, which a `PULLUP`,
+                // `PULLDOWN` or `KEEPER` of the design's, or a constraint,
+                // put there: Vivado's own cell for it, on the pad's `PULL`
+                // bel, where its own flow puts one.
+                if site.bel.starts_with("IOB_") {
+                    let flag = |key: &str| {
+                        cell.attrs
+                            .get(key)
+                            .and_then(AttrValue::as_int)
+                            .is_some_and(|v| v != 0)
+                    };
+                    let pull = if flag("keeper") {
+                        Some("KEEPER")
+                    } else if flag("pullup") {
+                        Some("PULLUP")
+                    } else if flag("pulldown") {
+                        Some("PULLDOWN")
+                    } else {
+                        None
+                    };
+                    let pad = if primitive.starts_with("IBUF") {
+                        inputs_of(&view, cell, "I")?
+                    } else if primitive.starts_with("IOBUF") {
+                        let mut bits = inputs_of(&view, cell, "IO")?;
+                        if bits.is_empty() {
+                            bits = output_of(&view, cell, "IO")?;
+                        }
+                        bits
+                    } else {
+                        output_of(&view, cell, "O")?
+                    };
+                    if let (Some(pull), Some(bit)) = (pull, pad.first()) {
+                        let _ = writeln!(
+                            writer.verilog,
+                            "  {pull} {name}__pull (.O({}));",
+                            writer.names.bit(*bit)
+                        );
+                        writer.placed.push(format!("  {name}__pull {s}/PULL"));
+                        writer.cells += 1;
+                    }
+                }
             }
         }
     }
@@ -894,14 +1118,16 @@ mod tests {
         );
     }
 
+    /// Would catch the constant's one pin written tied low again, which
+    /// Vivado routes a ground to where Reticle's bitstream has no pip.
     #[test]
-    fn a_table_of_no_inputs_is_still_a_cell() {
+    fn a_table_of_no_inputs_is_still_a_cell_with_its_pin_tied_high() {
         let half = reduce(
             &[true; 4],
             &[SigBit::Const(Bit::Zero), SigBit::Const(Bit::Zero)],
         );
         assert_eq!(half.table, vec![true, true]);
-        assert_eq!(half.pins, vec![(0, SigBit::Const(Bit::Zero))]);
+        assert_eq!(half.pins, vec![(0, SigBit::Const(Bit::One))]);
     }
 
     #[test]
@@ -980,5 +1206,87 @@ mod tests {
             spell("SLICEM_X0_DSRL16", false),
             ("SLICE_X10Y3".to_owned(), "D6LUT".to_owned())
         );
+    }
+
+    /// The spellings added when every primitive probe went through Vivado
+    /// (2026-11-06), each as Vivado's own placement of the probe named it
+    /// (`get_property BEL` of each leaf after `place_design`). Would catch one
+    /// lost, a macro given a bel (which `place_cell` refuses: Vivado expands
+    /// it), or a global buffer that is not a `BUFG` put on `BUFG`'s bel, which
+    /// Vivado refused as `BUFG_BUFG` for a `BUFGCTRL`.
+    #[test]
+    fn every_probes_primitive_is_spelled_as_vivado_placed_it() {
+        let io = tile(&[("IOB_X1Y144", "IOB33M"), ("IOB_X1Y143", "IOB33S")]);
+        let on_pad = |primitive| site_and_bel(&io, "IOB_Y0", primitive, false).unwrap().1;
+        for primitive in [
+            "IBUF_IBUFDISABLE",
+            "IBUF_INTERMDISABLE",
+            "IBUFDS",
+            "IBUFGDS",
+        ] {
+            assert_eq!(on_pad(primitive), "INBUF_EN", "{primitive}");
+        }
+        for primitive in ["OBUFDS", "OBUFTDS"] {
+            assert_eq!(on_pad(primitive), "OUTBUF", "{primitive}");
+        }
+        for primitive in [
+            "IOBUF",
+            "IOBUFDS_DIFF_OUT",
+            "IBUFDS_IBUFDISABLE",
+            "IBUFDS_DIFF_OUT",
+        ] {
+            assert_eq!(on_pad(primitive), "", "{primitive} is a macro");
+        }
+        let config = tile(&[
+            ("BSCAN_X0Y0", "BSCAN"),
+            ("BSCAN_X0Y1", "BSCAN"),
+            ("ICAP_X0Y1", "ICAP"),
+            ("STARTUP_X0Y0", "STARTUP"),
+            ("FRAME_ECC_X0Y0", "FRAME_ECC"),
+        ]);
+        let spell = |bel, primitive| site_and_bel(&config, bel, primitive, false);
+        assert_eq!(
+            spell("BSCAN_X0Y1", "BSCANE2"),
+            Some(("BSCAN_X0Y1".to_owned(), "BSCAN".to_owned()))
+        );
+        assert_eq!(
+            spell("ICAP_X0Y1", "ICAPE2"),
+            Some(("ICAP_X0Y1".to_owned(), "ICAP".to_owned()))
+        );
+        assert_eq!(
+            spell("STARTUP", "STARTUPE2"),
+            Some(("STARTUP_X0Y0".to_owned(), "STARTUP".to_owned()))
+        );
+        assert_eq!(
+            spell("FRAME_ECC", "FRAME_ECCE2"),
+            Some(("FRAME_ECC_X0Y0".to_owned(), "FRAME_ECC".to_owned()))
+        );
+        let clocks = tile(&[("BUFGCTRL_X0Y0", "BUFGCTRL"), ("BUFGCTRL_X0Y1", "BUFGCTRL")]);
+        for (primitive, bel) in [
+            ("BUFG", "BUFG"),
+            ("BUFGCE", "BUFGCTRL"),
+            ("BUFGMUX", "BUFGCTRL"),
+        ] {
+            assert_eq!(
+                site_and_bel(&clocks, "BUFGCTRL_X0Y1", primitive, false),
+                Some(("BUFGCTRL_X0Y1".to_owned(), bel.to_owned())),
+                "{primitive}"
+            );
+        }
+    }
+
+    /// The pair's buffer for each single one this flow builds on the first
+    /// ball. Would catch an `OBUFT` of a pair written as an `OBUFDS`, which
+    /// has no `T`, or a pin of the second ball misnamed.
+    #[test]
+    fn a_pairs_buffer_is_the_differential_one() {
+        assert_eq!(differential_of("IBUF"), Some(("I", "IB", "IBUFDS")));
+        assert_eq!(differential_of("OBUFT"), Some(("O", "OB", "OBUFTDS")));
+        assert_eq!(differential_of("IOBUF"), Some(("IO", "IOB", "IOBUFDS")));
+        assert_eq!(
+            differential_of("IBUFDS_DIFF_OUT"),
+            Some(("I", "IB", "IBUFDS_DIFF_OUT"))
+        );
+        assert_eq!(differential_of("BUFG"), None);
     }
 }

@@ -5684,8 +5684,12 @@ impl Mapper<'_> {
                 attrs.set("ibuf_low_pwr", i64::from(low));
             }
         }
-        if partner.is_some() {
+        if let Some(n) = partner {
             module.cells[cell].attrs.set("io_pair", 1i64);
+            // And which port the second ball is, for what reads the mapped
+            // netlist alone (`xray::vivado`'s differential buffer, whose `IB`
+            // or `OB` is that port): the port's net keeps nothing of it.
+            module.cells[cell].attrs.set("io_pair_port", n);
         }
         // What an instantiated buffer said of its pad, and a `PULLUP` or
         // `PULLDOWN` cell on the pad, carried on the port's net by
