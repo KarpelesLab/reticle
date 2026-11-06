@@ -363,7 +363,9 @@ pub struct FpgaOptions {
     /// [`VIVADO_MIN_EQUALITY_CARRY_WIDTH`], each chain's carry in and out
     /// on the `CARRY4`'s own pins; a register's hold lifted through the net
     /// it is behind, and what it loads with its enable low read as a
-    /// don't-care (`synth::SynthOptions::register_loads`). Off by default,
+    /// don't-care (`synth::SynthOptions::register_loads`); a `case` as a tree
+    /// of multiplexers over what it compares
+    /// (`synth::techmap::MapOptions::case_trees`). Off by default,
     /// which is the netlist every build before had; `reticle fpga` turns it
     /// on for the 7 series unless `--synthesis legacy` asks for that netlist.
     pub vivado_synthesis: bool,
@@ -646,6 +648,7 @@ pub fn synthesize_for(
     techmap.cuts.duplicate_complements = options.vivado_synthesis;
     techmap.xor_balance = options.vivado_synthesis;
     techmap.late_hard_outputs = options.vivado_synthesis;
+    techmap.case_trees = options.vivado_synthesis;
     techmap.wide_muxes = options.wide_muxes
         && options.device_cells
         && device.bel(super::device::BelRole::Mux7).is_some()

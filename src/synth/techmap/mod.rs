@@ -57,6 +57,15 @@
 //! - [`CutOptions::duplicate_complements`]: a node read in both polarities is
 //!   two cells over its leaves rather than one and an inverter.
 //!
+//! And one for area, [`MapOptions::case_trees`]: a `pmux` that is a `case` is
+//! blasted as a tree of multiplexers over what it compares, as Vivado's
+//! synthesis builds one, rather than as each arm under its decoded select.
+//! The cuts over a decoder share nothing between arms; over the tree, each
+//! table is a subtree. `fsm` of the timing corpus, a 24-state machine, went
+//! from 72 tables to 38 (Vivado's 33), `regfile_alu` from 503 to 469 and a
+//! table shallower. The tree is proved against the `pmux` as blasted
+//! without it ([`super::aig::BlastOptions::case_trees`]).
+//!
 //! Tried and taken out again: area recovery against required times
 //! propagated back from the deepest output through the cover, instead of
 //! each node held to its own arrival from the depth pass, the conservative
@@ -168,6 +177,12 @@ pub struct MapOptions<'a> {
     /// readily as a flip-flop's output: the Husky Plus analyser's FIFO read
     /// clock lost 0.95 ns to that. Off by default.
     pub late_hard_outputs: bool,
+    /// Blast a `pmux` that is a `case` as a tree of multiplexers over what it
+    /// compares ([`super::aig::BlastOptions::case_trees`]), the way Vivado's
+    /// synthesis builds one. The tree is proved against the `pmux` as it was
+    /// blasted without, beside the mapping's own proof, whenever the mapping
+    /// is proved. Off by default.
+    pub case_trees: bool,
 }
 
 impl Default for MapOptions<'_> {
@@ -180,6 +195,7 @@ impl Default for MapOptions<'_> {
             wide_muxes: false,
             xor_balance: false,
             late_hard_outputs: false,
+            case_trees: false,
         }
     }
 }
@@ -1418,7 +1434,9 @@ pub fn map_module_checked(
     options: &MapOptions<'_>,
     verify: Option<&MapVerifyOptions>,
 ) -> (MapStats, Option<MapEquivalence>) {
-    let (mut aig, mapping) = super::aig::from_module(module);
+    let (mut aig, mapping, plain) = blast_for(module, options, verify.is_some());
+    // The case trees as blasted, which `plain` is proved against.
+    let blasted = plain.as_ref().map(|_| aig.clone());
     let late = options
         .late_hard_outputs
         .then(|| hard_block_arrivals(module, &mapping));
@@ -1510,7 +1528,133 @@ pub fn map_module_checked(
             network.to_module(&mapping, module);
         }
     }
+    // The case trees, proved against the `pmux` as it is blasted without.
+    let equivalence = match (equivalence, &plain, &blasted) {
+        (Some(verdict), Some(plain), Some(blasted)) if !verdict.wrong() => {
+            let v = verify.expect("a verdict means the mapping was proved");
+            Some(match verify::check_graphs(plain, blasted, v) {
+                wrong @ MapEquivalence::Different { .. } => wrong,
+                MapEquivalence::Equivalent => verdict,
+                undecided => {
+                    if verdict.proved() {
+                        undecided
+                    } else {
+                        verdict
+                    }
+                }
+            })
+        }
+        (verdict, _, _) => verdict,
+    };
     (stats, equivalence)
+}
+
+/// The graph [`map_module_checked`] maps, its mapping, and — when it was
+/// blasted with [`MapOptions::case_trees`] and `proving` — the graph blasted
+/// without, which it is proved against. Without case trees, or with nothing to
+/// make one of, it is [`super::aig::from_module`]'s graph and nothing else.
+fn blast_for(
+    module: &Module,
+    options: &MapOptions<'_>,
+    proving: bool,
+) -> (Aig, super::aig::Mapping, Option<Aig>) {
+    let plain = super::aig::from_module(module);
+    if !options.case_trees {
+        return (plain.0, plain.1, None);
+    }
+    let blast = super::aig::BlastOptions { case_trees: true };
+    let (trees, mapping) = super::aig::from_module_with(module, &blast);
+    // The same inputs and outputs, or the proof would not be of the same
+    // thing: the trees are only taken when that is so, which it always
+    // should be.
+    if mapping.inputs != plain.1.inputs || mapping.outputs != plain.1.outputs {
+        return (plain.0, plain.1, None);
+    }
+    (trees, mapping, proving.then_some(plain.0))
+}
+
+#[cfg(test)]
+mod case_tree_tests {
+    use super::*;
+    use crate::ir::builder::ModuleBuilder;
+    use crate::ir::{Name, Type};
+    use crate::source::{SourceMap, Span};
+
+    /// `y = case (x) 0..5: arm<i>; default: dflt`, as process lowering
+    /// leaves it: a `pmux` under `x == i`.
+    fn case_module() -> Module {
+        let mut map = SourceMap::new();
+        let id = map.add("t", "").unwrap();
+        let mut b = ModuleBuilder::new("m", Span::new(id, 0, 0));
+        let x = b.input("x", Type::bits(3));
+        let dflt = b.input("dflt", Type::bits(2));
+        let y = b.output("y", Type::bits(2));
+        let xn = b.net(x);
+        let mut arms = Vec::new();
+        let mut selects = Vec::new();
+        for i in 0..6u64 {
+            let arm = b.input(format!("arm{i}"), Type::bits(2));
+            arms.push(b.net(arm));
+            let e = b.add_net(format!("e{i}"), Type::bit());
+            let k = b.const_u64(3, i);
+            b.cell(
+                format!("eq{i}"),
+                CellKind::Eq,
+                vec![(Name::new("a"), xn), (Name::new("b"), k)],
+                vec![(Name::new("y"), e)],
+            );
+            selects.push(b.net(e));
+        }
+        arms.reverse();
+        selects.reverse();
+        let arms = b.concat(arms);
+        let selects = b.concat(selects);
+        let d = b.net(dflt);
+        b.cell(
+            "pm",
+            CellKind::Pmux,
+            vec![
+                (Name::new("a"), d),
+                (Name::new("b"), arms),
+                (Name::new("s"), selects),
+            ],
+            vec![(Name::new("y"), y)],
+        );
+        b.finish()
+    }
+
+    /// **A case tree is proved against the `pmux` as it was, whenever the
+    /// mapping is proved**: [`blast_for`] hands back the graph without trees
+    /// beside the one with, and they differ, so the proof
+    /// [`map_module_checked`] adds is of something; and that proof and the
+    /// mapping's together say equivalent. Would catch the second graph not
+    /// made, or made from the trees themselves (so that a wrong tree would be
+    /// proved against itself); the trees' being right is
+    /// `aig::blast`'s tests' and every design's proof in
+    /// `tests/fpga_xray_synthesis.rs`.
+    #[test]
+    fn a_case_tree_is_proved_against_the_pmux() {
+        let m = case_module();
+        let options = MapOptions {
+            case_trees: true,
+            ..MapOptions::lut(6)
+        };
+        let (trees, _, plain) = blast_for(&m, &options, true);
+        let plain = plain.expect("the graph without trees, to prove against");
+        assert_ne!(
+            trees.len(),
+            plain.len(),
+            "the trees and the plain graph are one"
+        );
+        assert!(
+            blast_for(&m, &options, false).2.is_none(),
+            "not asked to prove"
+        );
+        let mut mapped = m.clone();
+        let (_, verdict) =
+            map_module_checked(&mut mapped, &options, Some(&MapVerifyOptions::default()));
+        assert_eq!(verdict, Some(MapEquivalence::Equivalent));
+    }
 }
 
 #[cfg(test)]

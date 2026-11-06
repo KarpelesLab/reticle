@@ -1297,9 +1297,10 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
     // saves tables, from a graph its own pass put together, and is proved
     // against the graph from before that pass. And at LUT6 once more as the
     // 7 series' default synthesis maps (`vivado`): its cuts kept shallowest
-    // first, its XOR logic rebuilt for tables, complements duplicated and a
-    // hard block's outputs late, proved against the graph from before the
-    // rebuilding.
+    // first, its XOR logic rebuilt for tables, complements duplicated, a
+    // hard block's outputs late and each `case` a tree, proved against the
+    // graph from before the rebuilding and the `pmux` as it was; synthesised
+    // first with the register loads that synthesis reads as Vivado does.
     let jobs: Vec<(&Variant, u32, bool, bool)> = VARIANTS
         .iter()
         .flat_map(|variant| {
@@ -1317,7 +1318,11 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
     let verdicts = par_map(&jobs, |(variant, k, wide, vivado)| {
         let (mut design, id) = flattened(variant.package, variant.top, variant.params);
         let mut diags = Diagnostics::new();
-        synth_run(&mut design, &SynthOptions::default(), &mut diags);
+        let synth = SynthOptions {
+            register_loads: *vivado,
+            ..SynthOptions::default()
+        };
+        synth_run(&mut design, &synth, &mut diags);
         assert!(
             !diags.has_errors(),
             "{}.{} does not synthesise",
@@ -1331,6 +1336,7 @@ fn every_block_maps_to_the_logic_it_was_mapped_from() {
             map.cuts.duplicate_complements = true;
             map.xor_balance = true;
             map.late_hard_outputs = true;
+            map.case_trees = true;
         }
         let (stats, equivalence) =
             map_module_checked(&mut design.modules[id], &map, Some(&options));

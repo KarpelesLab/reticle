@@ -60,7 +60,7 @@ pub mod rewrite;
 pub mod truth;
 pub mod xor;
 
-pub use blast::{BitRef, Mapping, from_module};
+pub use blast::{BitRef, BlastOptions, Mapping, from_module, from_module_with};
 pub use emit::to_module;
 
 /// A reference to a node, with a complement bit.

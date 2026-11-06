@@ -78,6 +78,7 @@ enum Driver {
 
 struct Blaster<'m> {
     m: &'m Module,
+    options: BlastOptions,
     aig: Aig,
     /// True for nets the AIG must treat as inputs.
     boundary: Vec<bool>,
@@ -102,10 +103,35 @@ struct Blaster<'m> {
 /// of the cycle and there are up to the width plus one of them.
 const FIXPOINT_WIDTH: u32 = 256;
 
+/// How [`from_module_with`] blasts what has more than one form.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BlastOptions {
+    /// Blast a `pmux` that is a `case` — every select `x == K` for one `x` and
+    /// constants naming at least half of its codes — as a tree of multiplexers
+    /// over the bits of `x`, the way Vivado's synthesis builds one, rather
+    /// than as an OR of each arm under its decoded select. The inputs and
+    /// outputs are the same either way, and so is the function; the shape is
+    /// what a cut mapper can find. Off by default: `fsm`'s 24-state machine of
+    /// the timing corpus was 72 tables decoded and is 38 as a tree, Vivado's
+    /// 33 (docs/fpga-vivado-parity.md, "Area against Vivado's").
+    pub case_trees: bool,
+}
+
+/// The widest `x` a `case` is a tree over ([`BlastOptions::case_trees`]): a
+/// tree of 256 leaves.
+pub const CASE_TREE_WIDTH: u32 = 8;
+
 /// Extracts the combinational logic of `module` into an AIG.
 pub fn from_module(module: &Module) -> (Aig, Mapping) {
+    from_module_with(module, &BlastOptions::default())
+}
+
+/// [`from_module`], blasting as `options` asks. The graph's inputs and outputs
+/// are [`from_module`]'s whatever `options` are.
+pub fn from_module_with(module: &Module, options: &BlastOptions) -> (Aig, Mapping) {
     let mut b = Blaster {
         m: module,
+        options: *options,
         aig: Aig::new(),
         boundary: vec![false; module.nets.len()],
         drivers: vec![Vec::new(); module.nets.len()],
@@ -715,6 +741,7 @@ impl<'m> Blaster<'m> {
         let m = self.m;
         let mut scratch = Blaster {
             m,
+            options: self.options,
             aig: Aig::new(),
             boundary: self.boundary.clone(),
             drivers: self.drivers.clone(),
@@ -991,6 +1018,102 @@ impl<'m> Blaster<'m> {
         }
     }
 
+    /// A `pmux` that is a `case`, as a tree of multiplexers over the bits of
+    /// what it compares: see [`BlastOptions::case_trees`]. `None` when it is
+    /// not one, before anything is added to the graph.
+    ///
+    /// A `case` is a `pmux` each of whose selects is a net an absorbed `eq`
+    /// cell drives, all comparing one unsigned `x` of at most
+    /// [`CASE_TREE_WIDTH`] bits with distinct constants, which name at least
+    /// half of `x`'s codes. Each code's leaf is its arm, or the default where
+    /// no arm names it; then each bit of `x` from the lowest pairs the leaves,
+    /// two that are the same being one. With distinct constants at most one
+    /// select is high, which is when the `pmux` is its arm, and none high is
+    /// when it is the default: the tree is the same function. It is proved
+    /// so anyway, against the graph of the `pmux` as it was
+    /// (`techmap::map_module_checked`).
+    fn case_tree(&mut self, cid: CellId) -> Option<Vec<Edge>> {
+        let m = self.m;
+        let cell = &m.cells[cid];
+        let s = cell.input("s")?;
+        // `Concat` is most significant first; select `i` is bit `i`.
+        let parts: Vec<ExprId> = match &m.exprs[s].kind {
+            ExprKind::Concat(parts) => parts.iter().rev().copied().collect(),
+            _ => return None,
+        };
+        if parts.len() < 2 {
+            return None;
+        }
+        let mut subject: Option<ExprId> = None;
+        let mut codes: Vec<u64> = Vec::with_capacity(parts.len());
+        for part in &parts {
+            let ExprKind::Net(n) = m.exprs[*part].kind else {
+                return None;
+            };
+            if width_of(&m.nets[n].ty) != Some(1) || self.boundary[n.index()] {
+                return None;
+            }
+            let [Driver::Cell(eq)] = self.drivers[n.index()].as_slice() else {
+                return None;
+            };
+            let eq = &m.cells[*eq];
+            if eq.kind != CellKind::Eq {
+                return None;
+            }
+            let (a, b) = (eq.input("a")?, eq.input("b")?);
+            let (x, k) = match (m.exprs[a].as_const(), m.exprs[b].as_const()) {
+                (None, Some(k)) => (a, k),
+                (Some(k), None) => (b, k),
+                _ => return None,
+            };
+            let w = width_of(&m.exprs[x].ty)?;
+            if subject.is_some_and(|y| y != x)
+                || !k.is_fully_known()
+                || w > CASE_TREE_WIDTH
+                || k.width() > w
+                || m.exprs[x].ty.is_signed()
+                || m.exprs[if x == a { b } else { a }].ty.is_signed()
+            {
+                return None;
+            }
+            subject = Some(x);
+            let code = k.to_u64()?;
+            if codes.contains(&code) {
+                return None;
+            }
+            codes.push(code);
+        }
+        let x = subject?;
+        let w = width_of(&m.exprs[x].ty)?;
+        if (1usize << w) > 2 * codes.len() {
+            return None;
+        }
+        let default = self.expr(cell.input("a")?);
+        let arms = self.expr(cell.input("b")?);
+        let width = default.len();
+        let bits = self.expr(x);
+        let mut leaves: Vec<Vec<Edge>> = vec![default; 1 << bits.len()];
+        for (i, &code) in codes.iter().enumerate() {
+            let usize_code = usize::try_from(code).ok()?;
+            leaves[usize_code] = (0..width)
+                .map(|j| arms.get(i * width + j).copied().unwrap_or(Edge::FALSE))
+                .collect();
+        }
+        for &bit in &bits {
+            leaves = leaves
+                .chunks(2)
+                .map(|pair| {
+                    if pair[0] == pair[1] {
+                        pair[0].clone()
+                    } else {
+                        self.aig.mux_bits(bit, &pair[1], &pair[0])
+                    }
+                })
+                .collect();
+        }
+        leaves.pop()
+    }
+
     fn cell(&mut self, cid: CellId) -> Vec<Edge> {
         let cell = &self.m.cells[cid];
         let kind = cell.kind.clone();
@@ -1064,20 +1187,31 @@ impl<'m> Blaster<'m> {
                 self.aig.mux_bits(s, &b, &a)
             }
             CellKind::Pmux => {
-                let a = self.expr(input("a"));
-                let b = self.expr(input("b"));
-                let s = self.expr(input("s"));
-                let w = a.len();
-                let any = self.aig.reduce_or(&s);
-                let mut acc: Vec<Edge> = a.iter().map(|&x| self.aig.and(x, !any)).collect();
-                for (i, &si) in s.iter().enumerate() {
-                    let slice = &b[i * w..((i + 1) * w).min(b.len())];
-                    for (j, &bj) in slice.iter().enumerate() {
-                        let t = self.aig.and(bj, si);
-                        acc[j] = self.aig.or(acc[j], t);
+                // A `case` as a tree when asked (`if let` guards on a match arm
+                // are newer than the crate's `rust-version`).
+                let tree = if self.options.case_trees {
+                    self.case_tree(cid)
+                } else {
+                    None
+                };
+                if let Some(bits) = tree {
+                    bits
+                } else {
+                    let a = self.expr(input("a"));
+                    let b = self.expr(input("b"));
+                    let s = self.expr(input("s"));
+                    let w = a.len();
+                    let any = self.aig.reduce_or(&s);
+                    let mut acc: Vec<Edge> = a.iter().map(|&x| self.aig.and(x, !any)).collect();
+                    for (i, &si) in s.iter().enumerate() {
+                        let slice = &b[i * w..((i + 1) * w).min(b.len())];
+                        for (j, &bj) in slice.iter().enumerate() {
+                            let t = self.aig.and(bj, si);
+                            acc[j] = self.aig.or(acc[j], t);
+                        }
                     }
+                    acc
                 }
-                acc
             }
             CellKind::Lut { init, .. } => {
                 let a = self.expr(input("a"));
@@ -1355,5 +1489,106 @@ mod tests {
         // and the other is still mapped.
         assert_eq!(mapping.absorbed_assigns.len(), 1);
         assert!(!aig.outputs().is_empty());
+    }
+
+    /// A `case` as process lowering leaves one: `y` a `pmux` of one-bit arms
+    /// `arm<i>` under `x == codes[i]`, its default the input `dflt`.
+    fn case_module(width: u32, codes: &[u64], signed: bool) -> Module {
+        let mut b = ModuleBuilder::new("m", span());
+        let ty = if signed {
+            Type::bits(width).with_signed(true)
+        } else {
+            Type::bits(width)
+        };
+        let x = b.input("x", ty);
+        let dflt = b.input("dflt", Type::bit());
+        let y = b.output("y", Type::bit());
+        let xn = b.net(x);
+        let mut selects = Vec::new();
+        let mut arms = Vec::new();
+        for (i, &code) in codes.iter().enumerate() {
+            let arm = b.input(format!("arm{i}"), Type::bit());
+            arms.push(b.net(arm));
+            let e = b.add_net(format!("e{i}"), Type::bit());
+            let k = if signed {
+                b.constant(crate::ir::Const::from_u64(code, width).with_signed(true))
+            } else {
+                b.const_u64(width, code)
+            };
+            b.cell(
+                format!("eq{i}"),
+                CellKind::Eq,
+                vec![(Name::new("a"), xn), (Name::new("b"), k)],
+                vec![(Name::new("y"), e)],
+            );
+            selects.push(b.net(e));
+        }
+        // `Concat` is most significant first: arm and select 0 at the bottom.
+        arms.reverse();
+        selects.reverse();
+        let arms = b.concat(arms);
+        let selects = b.concat(selects);
+        let d = b.net(dflt);
+        b.cell(
+            "pm",
+            CellKind::Pmux,
+            vec![
+                (Name::new("a"), d),
+                (Name::new("b"), arms),
+                (Name::new("s"), selects),
+            ],
+            vec![(Name::new("y"), y)],
+        );
+        b.finish()
+    }
+
+    /// Every output of `a` and `b`, two graphs over the same inputs, for every
+    /// input pattern.
+    fn same_everywhere(a: &Aig, b: &Aig) -> bool {
+        let n = a.inputs().len();
+        assert_eq!(n, b.inputs().len());
+        (0..1u32 << n).all(|pattern| {
+            let bits: Vec<bool> = (0..n).map(|i| pattern >> i & 1 == 1).collect();
+            a.eval(&bits) == b.eval(&bits)
+        })
+    }
+
+    /// **A dense `case` becomes a tree of multiplexers over its subject, and
+    /// is the same function.** Six arms over a three-bit subject, two codes to
+    /// the default: the graph changes and every one of the 2^10 input
+    /// patterns gives the `pmux`'s value. Would catch a leaf in the wrong
+    /// place, the arms paired the wrong way round, or the default left out of
+    /// the codes no arm names; that the tree is the shape a mapper does well
+    /// with is the pinned figures' to say (`tests/fpga_xray_synthesis.rs`).
+    #[test]
+    fn a_dense_case_is_a_tree_of_the_same_function() {
+        let m = case_module(3, &[0, 1, 2, 3, 5, 6], false);
+        let (plain, plain_map) = from_module(&m);
+        let (tree, tree_map) = from_module_with(&m, &BlastOptions { case_trees: true });
+        assert_eq!(plain_map.inputs, tree_map.inputs);
+        assert_eq!(plain_map.outputs, tree_map.outputs);
+        assert_ne!(plain.len(), tree.len(), "the case was not made a tree");
+        assert!(same_everywhere(&plain, &tree));
+    }
+
+    /// **A `case` that names too few codes, compares a signed subject, or
+    /// names a code twice is blasted as before**, node for node: two arms of
+    /// eight codes would be a tree mostly of defaults, a signed comparison
+    /// and a constant of another width are not the codes they look like, and
+    /// two arms on one code are both taken by a `pmux`, which a tree cannot
+    /// say. Would catch the density bar, the signedness or the repeat check
+    /// dropped.
+    #[test]
+    fn a_sparse_signed_or_repeated_case_is_left_decoded() {
+        for (m, what) in [
+            (case_module(3, &[1, 6, 7], false), "sparse"),
+            (case_module(2, &[0, 1, 2], true), "signed"),
+            (case_module(2, &[0, 1, 1, 2], false), "repeated"),
+        ] {
+            let (plain, _) = from_module(&m);
+            let (tree, _) = from_module_with(&m, &BlastOptions { case_trees: true });
+            assert_eq!(plain.len(), tree.len(), "{what}");
+            assert_eq!(plain.outputs(), tree.outputs(), "{what}");
+        }
     }
 }
