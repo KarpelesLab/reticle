@@ -212,9 +212,9 @@ fn the_gaps_asked_about_are_closed() {
 }
 
 /// `testdata/fpga/vivado/qor/netlist.txt` has every design of the corpus, as
-/// Vivado's synthesis made it and as Reticle's builds before and after made
-/// it, each by Vivado's counting; and after, no clock's worst path has more
-/// tables than before. (Its levels can be more: a subtraction on the chain is
+/// Vivado's synthesis made it and as Reticle's builds before, after and with
+/// "Area against Vivado's" made it, each by Vivado's counting; and in each
+/// build, no clock's worst path has more tables than in the one before it. (Its levels can be more: a subtraction on the chain is
 /// a `CARRY4` a level where it was none, and `bram_fifo`'s most levels went
 /// from five to seven, Vivado's own count.) Catches a regeneration that lost
 /// a design or a build; not the flow moving on since, which only
@@ -244,7 +244,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
     let mut corpus: Vec<&str> = DESIGNS.to_vec();
     corpus.extend(["esad", "sad"]);
     for name in corpus {
-        for build in ["vivado", "before", "after"] {
+        for build in ["vivado", "before", "after", "area"] {
             assert!(
                 cells.contains(&(build.to_owned(), name.to_owned())),
                 "no `{build}` cells of {name}"
@@ -252,13 +252,15 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
         }
     }
     for ((build, name, clock), after) in &levels {
-        if build != "after" {
-            continue;
-        }
-        let before = levels[&("before".to_owned(), name.clone(), clock.clone())];
+        let earlier = match build.as_str() {
+            "after" => "before",
+            "area" => "after",
+            _ => continue,
+        };
+        let before = levels[&(earlier.to_owned(), name.clone(), clock.clone())];
         assert!(
             *after <= before,
-            "{name} {clock}: {after} tables on the worst path after, {before} before"
+            "{name} {clock}: {after} tables on the worst path in `{build}`, {before} in `{earlier}`"
         );
     }
 }

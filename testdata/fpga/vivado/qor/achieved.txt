@@ -15,6 +15,8 @@
 #                                   vivado` (docs/fpga-vivado-parity.md, "Synthesis
 #                                   against Vivado's"), `after` being what `--synthesis
 #                                   legacy` builds
+#                                   `area` is `synthesis` with "Area against
+#                                   Vivado's" (2026-11-07), the default now
 vivado adders clk 2.042
 netlist adders clk 4.924
 reticle before 1 adders clk 7.233
@@ -32,6 +34,11 @@ reticle synthesis 2 adders clk 2.334
 reticle synthesis 3 adders clk 2.450
 reticle synthesis 4 adders clk 2.315
 reticle synthesis 5 adders clk 2.529
+reticle area 1 adders clk 2.337
+reticle area 2 adders clk 2.334
+reticle area 3 adders clk 2.450
+reticle area 4 adders clk 2.315
+reticle area 5 adders clk 2.529
 vivado analyser_fifo rd_clk 3.887
 netlist analyser_fifo rd_clk 5.589
 reticle before 1 analyser_fifo rd_clk 7.907
@@ -49,6 +56,11 @@ reticle synthesis 2 analyser_fifo rd_clk 5.197
 reticle synthesis 3 analyser_fifo rd_clk 5.622
 reticle synthesis 4 analyser_fifo rd_clk 5.239
 reticle synthesis 5 analyser_fifo rd_clk 5.248
+reticle area 1 analyser_fifo rd_clk 5.669
+reticle area 2 analyser_fifo rd_clk 5.185
+reticle area 3 analyser_fifo rd_clk 5.352
+reticle area 4 analyser_fifo rd_clk 5.307
+reticle area 5 analyser_fifo rd_clk 5.424
 vivado analyser_fifo wr_clk 2.417
 netlist analyser_fifo wr_clk 2.740
 reticle before 1 analyser_fifo wr_clk 3.980
@@ -66,6 +78,11 @@ reticle synthesis 2 analyser_fifo wr_clk 2.970
 reticle synthesis 3 analyser_fifo wr_clk 3.036
 reticle synthesis 4 analyser_fifo wr_clk 2.953
 reticle synthesis 5 analyser_fifo wr_clk 3.256
+reticle area 1 analyser_fifo wr_clk 2.914
+reticle area 2 analyser_fifo wr_clk 3.169
+reticle area 3 analyser_fifo wr_clk 3.188
+reticle area 4 analyser_fifo wr_clk 2.914
+reticle area 5 analyser_fifo wr_clk 2.983
 vivado barrel clk 2.376
 netlist barrel clk 2.431
 reticle before 1 barrel clk 2.960
@@ -83,6 +100,11 @@ reticle synthesis 2 barrel clk 2.985
 reticle synthesis 3 barrel clk 2.749
 reticle synthesis 4 barrel clk 2.948
 reticle synthesis 5 barrel clk 2.845
+reticle area 1 barrel clk 2.962
+reticle area 2 barrel clk 2.985
+reticle area 3 barrel clk 2.749
+reticle area 4 barrel clk 2.948
+reticle area 5 barrel clk 2.845
 vivado bram_fifo clk 3.388
 netlist bram_fifo clk 3.530
 reticle before 1 bram_fifo clk 3.936
@@ -100,6 +122,11 @@ reticle synthesis 2 bram_fifo clk 3.931
 reticle synthesis 3 bram_fifo clk 4.016
 reticle synthesis 4 bram_fifo clk 3.909
 reticle synthesis 5 bram_fifo clk 3.945
+reticle area 1 bram_fifo clk 3.946
+reticle area 2 bram_fifo clk 3.931
+reticle area 3 bram_fifo clk 4.016
+reticle area 4 bram_fifo clk 3.909
+reticle area 5 bram_fifo clk 3.945
 vivado carry_counter clk 1.855
 netlist carry_counter clk 1.944
 reticle before 1 carry_counter clk 2.354
@@ -117,6 +144,11 @@ reticle synthesis 2 carry_counter clk 2.385
 reticle synthesis 3 carry_counter clk 2.320
 reticle synthesis 4 carry_counter clk 2.385
 reticle synthesis 5 carry_counter clk 2.441
+reticle area 1 carry_counter clk 2.383
+reticle area 2 carry_counter clk 2.385
+reticle area 3 carry_counter clk 2.320
+reticle area 4 carry_counter clk 2.385
+reticle area 5 carry_counter clk 2.441
 vivado counter64 clk 3.220
 netlist counter64 clk 3.401
 reticle before 1 counter64 clk 6.237
@@ -134,6 +166,11 @@ reticle synthesis 2 counter64 clk 4.138
 reticle synthesis 3 counter64 clk 4.040
 reticle synthesis 4 counter64 clk 3.832
 reticle synthesis 5 counter64 clk 4.061
+reticle area 1 counter64 clk 3.977
+reticle area 2 counter64 clk 4.138
+reticle area 3 counter64 clk 4.040
+reticle area 4 counter64 clk 3.832
+reticle area 5 counter64 clk 4.061
 vivado crc32 clk 2.234
 netlist crc32 clk 3.807
 reticle before 1 crc32 clk 5.307
@@ -151,6 +188,11 @@ reticle synthesis 2 crc32 clk 2.836
 reticle synthesis 3 crc32 clk 2.615
 reticle synthesis 4 crc32 clk 2.652
 reticle synthesis 5 crc32 clk 2.676
+reticle area 1 crc32 clk 2.754
+reticle area 2 crc32 clk 2.836
+reticle area 3 crc32 clk 2.615
+reticle area 4 crc32 clk 2.652
+reticle area 5 crc32 clk 2.676
 vivado esad adc_sampleclk 2.131
 netlist esad adc_sampleclk 3.788
 reticle before 1 esad adc_sampleclk 3.920
@@ -168,6 +210,11 @@ reticle synthesis 2 esad adc_sampleclk 3.123
 reticle synthesis 3 esad adc_sampleclk 2.873
 reticle synthesis 4 esad adc_sampleclk 2.965
 reticle synthesis 5 esad adc_sampleclk 3.033
+reticle area 1 esad adc_sampleclk 3.158
+reticle area 2 esad adc_sampleclk 3.123
+reticle area 3 esad adc_sampleclk 2.873
+reticle area 4 esad adc_sampleclk 2.965
+reticle area 5 esad adc_sampleclk 3.033
 vivado esad clk_usb 1.727
 netlist esad clk_usb 2.523
 reticle before 1 esad clk_usb 2.968
@@ -185,6 +232,11 @@ reticle synthesis 2 esad clk_usb 2.511
 reticle synthesis 3 esad clk_usb 2.540
 reticle synthesis 4 esad clk_usb 2.443
 reticle synthesis 5 esad clk_usb 2.314
+reticle area 1 esad clk_usb 2.431
+reticle area 2 esad clk_usb 2.511
+reticle area 3 esad clk_usb 2.540
+reticle area 4 esad clk_usb 2.443
+reticle area 5 esad clk_usb 2.314
 vivado fir8 clk 9.142
 netlist fir8 clk 9.164
 reticle before 1 fir8 clk 9.161
@@ -202,6 +254,11 @@ reticle synthesis 2 fir8 clk 9.161
 reticle synthesis 3 fir8 clk 9.251
 reticle synthesis 4 fir8 clk 9.247
 reticle synthesis 5 fir8 clk 9.161
+reticle area 1 fir8 clk 9.251
+reticle area 2 fir8 clk 9.161
+reticle area 3 fir8 clk 9.251
+reticle area 4 fir8 clk 9.247
+reticle area 5 fir8 clk 9.161
 vivado fsm clk 1.903
 netlist fsm clk 2.392
 reticle before 1 fsm clk 3.031
@@ -219,6 +276,11 @@ reticle synthesis 2 fsm clk 2.615
 reticle synthesis 3 fsm clk 2.800
 reticle synthesis 4 fsm clk 2.887
 reticle synthesis 5 fsm clk 2.949
+reticle area 1 fsm clk 2.371
+reticle area 2 fsm clk 2.340
+reticle area 3 fsm clk 2.323
+reticle area 4 fsm clk 2.355
+reticle area 5 fsm clk 2.304
 vivado gray_cdc clk 1.466
 netlist gray_cdc clk 1.438
 reticle before 1 gray_cdc clk 1.548
@@ -236,6 +298,11 @@ reticle synthesis 2 gray_cdc clk 1.509
 reticle synthesis 3 gray_cdc clk 1.503
 reticle synthesis 4 gray_cdc clk 1.503
 reticle synthesis 5 gray_cdc clk 1.508
+reticle area 1 gray_cdc clk 1.414
+reticle area 2 gray_cdc clk 1.509
+reticle area 3 gray_cdc clk 1.503
+reticle area 4 gray_cdc clk 1.503
+reticle area 5 gray_cdc clk 1.508
 vivado gray_cdc clk2 1.267
 netlist gray_cdc clk2 1.513
 reticle before 1 gray_cdc clk2 1.670
@@ -253,6 +320,11 @@ reticle synthesis 2 gray_cdc clk2 1.580
 reticle synthesis 3 gray_cdc clk2 1.850
 reticle synthesis 4 gray_cdc clk2 1.850
 reticle synthesis 5 gray_cdc clk2 1.517
+reticle area 1 gray_cdc clk2 1.615
+reticle area 2 gray_cdc clk2 1.580
+reticle area 3 gray_cdc clk2 1.850
+reticle area 4 gray_cdc clk2 1.850
+reticle area 5 gray_cdc clk2 1.517
 vivado lutram32 clk 1.894
 netlist lutram32 clk 1.807
 reticle before 1 lutram32 clk 2.385
@@ -270,6 +342,11 @@ reticle synthesis 2 lutram32 clk 2.181
 reticle synthesis 3 lutram32 clk 2.373
 reticle synthesis 4 lutram32 clk 2.149
 reticle synthesis 5 lutram32 clk 2.205
+reticle area 1 lutram32 clk 2.286
+reticle area 2 lutram32 clk 2.181
+reticle area 3 lutram32 clk 2.373
+reticle area 4 lutram32 clk 2.149
+reticle area 5 lutram32 clk 2.205
 vivado mul18 clk 1.935
 netlist mul18 clk 1.969
 reticle before 1 mul18 clk 2.471
@@ -287,6 +364,11 @@ reticle synthesis 2 mul18 clk 2.299
 reticle synthesis 3 mul18 clk 2.527
 reticle synthesis 4 mul18 clk 2.405
 reticle synthesis 5 mul18 clk 2.294
+reticle area 1 mul18 clk 2.309
+reticle area 2 mul18 clk 2.299
+reticle area 3 mul18 clk 2.527
+reticle area 4 mul18 clk 2.405
+reticle area 5 mul18 clk 2.294
 vivado regfile_alu clk 5.511
 netlist regfile_alu clk 7.223
 reticle before 1 regfile_alu clk 9.491
@@ -304,6 +386,11 @@ reticle synthesis 2 regfile_alu clk 6.395
 reticle synthesis 3 regfile_alu clk 6.964
 reticle synthesis 4 regfile_alu clk 6.161
 reticle synthesis 5 regfile_alu clk 6.306
+reticle area 1 regfile_alu clk 6.336
+reticle area 2 regfile_alu clk 6.314
+reticle area 3 regfile_alu clk 6.388
+reticle area 4 regfile_alu clk 6.275
+reticle area 5 regfile_alu clk 6.407
 vivado sad adc_sampleclk 2.207
 netlist sad adc_sampleclk 4.240
 reticle before 1 sad adc_sampleclk 4.316
@@ -321,6 +408,11 @@ reticle synthesis 2 sad adc_sampleclk 3.414
 reticle synthesis 3 sad adc_sampleclk 3.743
 reticle synthesis 4 sad adc_sampleclk 3.522
 reticle synthesis 5 sad adc_sampleclk 3.752
+reticle area 1 sad adc_sampleclk 3.481
+reticle area 2 sad adc_sampleclk 3.150
+reticle area 3 sad adc_sampleclk 3.181
+reticle area 4 sad adc_sampleclk 3.066
+reticle area 5 sad adc_sampleclk 3.140
 vivado sad clk_usb 1.726
 netlist sad clk_usb 2.649
 reticle before 1 sad clk_usb 3.098
@@ -338,6 +430,11 @@ reticle synthesis 2 sad clk_usb 2.787
 reticle synthesis 3 sad clk_usb 2.538
 reticle synthesis 4 sad clk_usb 2.793
 reticle synthesis 5 sad clk_usb 2.524
+reticle area 1 sad clk_usb 2.405
+reticle area 2 sad clk_usb 2.395
+reticle area 3 sad clk_usb 2.738
+reticle area 4 sad clk_usb 2.631
+reticle area 5 sad clk_usb 2.563
 vivado srl_delay clk 1.645
 netlist srl_delay clk 1.846
 reticle before 1 srl_delay clk 2.089
@@ -355,6 +452,11 @@ reticle synthesis 2 srl_delay clk 2.087
 reticle synthesis 3 srl_delay clk 1.954
 reticle synthesis 4 srl_delay clk 2.027
 reticle synthesis 5 srl_delay clk 2.087
+reticle area 1 srl_delay clk 2.019
+reticle area 2 srl_delay clk 2.087
+reticle area 3 srl_delay clk 1.954
+reticle area 4 srl_delay clk 2.027
+reticle area 5 srl_delay clk 2.087
 vivado widemux clk 2.438
 netlist widemux clk 2.745
 reticle before 1 widemux clk 4.150
@@ -372,3 +474,8 @@ reticle synthesis 2 widemux clk 3.617
 reticle synthesis 3 widemux clk 3.531
 reticle synthesis 4 widemux clk 3.281
 reticle synthesis 5 widemux clk 3.466
+reticle area 1 widemux clk 3.485
+reticle area 2 widemux clk 3.617
+reticle area 3 widemux clk 3.531
+reticle area 4 widemux clk 3.281
+reticle area 5 widemux clk 3.466

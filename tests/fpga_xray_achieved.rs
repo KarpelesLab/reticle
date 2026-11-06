@@ -65,7 +65,7 @@ fn median(values: &[f64]) -> f64 {
 }
 
 /// **Every clock of the corpus has Vivado's figure and five seeds of each
-/// build**, `before`, `after` and `synthesis`. Would catch a design, a clock or a seed lost from a regeneration,
+/// build**, `before`, `after`, `synthesis` and `area`. Would catch a design, a clock or a seed lost from a regeneration,
 /// which would make the table below a median of fewer placements than it says.
 #[test]
 fn every_clock_has_vivados_figure_and_five_seeds_of_each_build() {
@@ -77,7 +77,7 @@ fn every_clock_has_vivados_figure_and_five_seeds_of_each_build() {
     );
     for ((design, clock), (vivado, builds)) in &table {
         assert!(*vivado > 0.0, "{design} {clock}: no Vivado figure");
-        for build in ["before", "after", "synthesis"] {
+        for build in ["before", "after", "synthesis", "area"] {
             let seeds = builds.get(build).map_or(0, Vec::len);
             assert_eq!(seeds, 5, "{design} {clock}: {seeds} seeds of `{build}`");
         }
@@ -146,5 +146,36 @@ fn the_default_synthesis_achieves_a_shorter_period_than_the_legacy_one() {
     assert!(
         synthesis < legacy * 0.95,
         "geometric mean against Vivado's own flow: {synthesis:.3}, legacy {legacy:.3}"
+    );
+}
+
+/// **The default synthesis with "Area against Vivado's" is no slower than
+/// without, over the corpus, and no clock is much worse.** `area` is
+/// `synthesis` with a register's loads read as Vivado does and each `case` a
+/// tree: the geometric mean against Vivado's own flow went from 1.274 to 1.249.
+/// This holds it no higher, and no clock's median more than 5 % over its own
+/// `synthesis`: the worst was `analyser_fifo`'s read clock, 5.248 to 5.352 ns,
+/// inside its seeds' spread. Would catch a regeneration in which the area cost
+/// the period; would not catch the flow losing it since, which needs Vivado.
+#[test]
+fn the_area_synthesis_is_no_slower_than_the_one_before() {
+    let Some(table) = achieved() else { return };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (vivado, builds)) in &table {
+        let synthesis = median(&builds["synthesis"]);
+        let area = median(&builds["area"]);
+        assert!(
+            area <= synthesis * 1.05,
+            "{design} {clock}: {area:.3} ns with the area changes against {synthesis:.3}"
+        );
+        logs[0] += (synthesis / vivado).ln();
+        logs[1] += (area / vivado).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let (synthesis, area) = ((logs[0] / n).exp(), (logs[1] / n).exp());
+    assert!(
+        area <= synthesis,
+        "geometric mean against Vivado's own flow: {area:.3}, before {synthesis:.3}"
     );
 }
