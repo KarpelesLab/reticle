@@ -1001,8 +1001,19 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let Some(e) = d.values.first() else { return };
                 let id = match self.delay_from_expr(e) {
                     Some(delay) => {
+                        // A wait counts the module's units; a fraction of
+                        // one is a real, which the simulator rounds to the
+                        // precision.
                         self.b.span = ctrl.span;
-                        self.b.const_u64(64, delay.value)
+                        let (unit_fs, _) = self.time_unit();
+                        let fs = delay.to_fs();
+                        if unit_fs == 0 || fs.is_multiple_of(unit_fs) {
+                            self.b.const_u64(64, fs / unit_fs.max(1))
+                        } else {
+                            #[allow(clippy::cast_precision_loss, reason = "a delay below 2^53 fs")]
+                            let units = fs as f64 / unit_fs as f64;
+                            self.real_const(units)
+                        }
                     }
                     None => self.expr(e, None, &mut Sink::Proc(out)),
                 };

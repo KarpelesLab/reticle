@@ -828,6 +828,38 @@ fn fpga_writes_the_ultrascale_netlist() {
     assert_eq!(text.matches(" FDRE ").count(), 32, "{text}");
 }
 
+/// **A fractional delay is rounded to the precision, not to the unit**
+/// (IEEE 1364-2005 §19.8), and a unit of ten nanoseconds is ten of them.
+/// The answers are `xsim`'s for the same file. Every delay here used to be
+/// rounded to a whole unit, so `#2.95` waited 30 ns and printed `a` in the
+/// same slot `c` rose in, and `#0.04` and `#0.02` waited nothing; would
+/// catch either back. It would not catch a rounding that is wrong only below
+/// the precision, which `d`'s 40 ps (rounding to nothing) only touches.
+#[test]
+fn sim_rounds_a_fractional_delay_to_the_precision() {
+    let dir = scratch("sim_fractional_delay");
+    let file = dir.join("frac.v");
+    std::fs::write(
+        &file,
+        "`timescale 10ns / 100ps\n\
+         module tb;\n\
+         \x20 reg c = 1'b0;\n\
+         \x20 initial #3 c = 1'b1;\n\
+         \x20 initial begin\n\
+         \x20   #2.95 $display(\"a %b %0d\", c, $time);\n\
+         \x20   #0.04 $display(\"b %b\", c);\n\
+         \x20   #0.02 $display(\"c %b\", c);\n\
+         \x20   #0.004 $display(\"d %b\", c);\n\
+         \x20   $finish;\n\
+         \x20 end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "a 0 3\nb 0\nc 1\nd 1\n", "{stderr}");
+}
+
 #[test]
 fn sim_writes_an_fst_waveform() {
     let dir = scratch("sim_fst");

@@ -1445,31 +1445,69 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         self.delay_from_expr(first)
     }
 
-    /// Converts a delay expression to an IR [`Delay`] in the module's time
-    /// unit.
-    fn delay_from_expr(&mut self, e: &ast::Expr) -> Option<Delay> {
-        let unit = self
-            .b
+    /// The module's time unit, in femtoseconds and as the unit it is written
+    /// in: one nanosecond when no `` `timescale `` gives one.
+    pub(super) fn time_unit(&self) -> (u64, ir::TimeUnit) {
+        self.b
             .module()
             .timescale
-            .map_or(ir::TimeUnit::Ns, |t| t.unit.unit);
-        if let ast::ExprKind::Literal(ast::Literal::Number { text, .. }) = &e.kind
-            && let Some((value, suffix)) = super::constant::time_literal(text)
-            && let Some(u) = ir::TimeUnit::from_name(suffix)
-        {
-            // The rounding is deliberate: the IR holds whole units.
-            let whole = value.round().clamp(0.0, 9.007_199_254_740_992e15);
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "the value is whole, non-negative and below 2^53"
-            )]
-            let v = whole as u64;
-            return Some(Delay::new(v, u));
-        }
-        let v = self.env.probe(|env| Evaluator::new(env).eval_i64(e).ok())?;
-        Some(Delay::new(u64::try_from(v).unwrap_or(0), unit))
+            .map_or((ir::TimeUnit::Ns.in_fs(), ir::TimeUnit::Ns), |t| {
+                (t.unit.to_fs(), t.unit.unit)
+            })
     }
+
+    /// Converts a constant delay expression to an IR [`Delay`]: so many of
+    /// the module's time unit, or of a time literal's own.
+    ///
+    /// A fractional delay is kept to the femtosecond, so that the simulator
+    /// rounds it to the design's *precision* as IEEE 1364-2005 §19.8 has it:
+    /// `#0.5` under `` `timescale 1ns / 1ps `` is 500 ps. It used to be
+    /// rounded to a whole unit here, which made it 1 ns. The unit's own
+    /// magnitude counts too: `#5` under `` `timescale 10ns / 1ns `` is 50 ns.
+    fn delay_from_expr(&mut self, e: &ast::Expr) -> Option<Delay> {
+        let (unit_fs, unit) = self.time_unit();
+        #[allow(clippy::cast_precision_loss, reason = "a unit is a power of ten")]
+        let (value, scale, unit) =
+            if let ast::ExprKind::Literal(ast::Literal::Number { text, .. }) = &e.kind
+                && let Some((value, suffix)) = super::constant::time_literal(text)
+                && let Some(u) = ir::TimeUnit::from_name(suffix)
+            {
+                (value, u.in_fs() as f64, u)
+            } else {
+                let v = self
+                    .env
+                    .probe(|env| Evaluator::new(env).eval_self(e).ok())?;
+                let value = match v {
+                    Value::Real(r) => r,
+                    other => {
+                        let whole = other.as_i64()?;
+                        let fs = u64::try_from(whole).unwrap_or(0).saturating_mul(unit_fs);
+                        return Some(whole_delay(fs, unit));
+                    }
+                };
+                (value, unit_fs as f64, unit)
+            };
+        // The rounding is deliberate: the IR holds whole femtoseconds.
+        let fs = (value * scale).round().clamp(0.0, 9.007_199_254_740_992e15);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the value is whole, non-negative and below 2^53"
+        )]
+        Some(whole_delay(fs as u64, unit))
+    }
+}
+
+/// `fs` femtoseconds as a [`Delay`] in `preferred` when that holds it
+/// exactly, so that `#5` under a nanosecond unit still reads `5 ns`, and in
+/// the coarsest unit that does otherwise.
+fn whole_delay(fs: u64, preferred: ir::TimeUnit) -> Delay {
+    use ir::TimeUnit::{Fs, Ms, Ns, Ps, S, Us};
+    let unit = [preferred, S, Ms, Us, Ns, Ps]
+        .into_iter()
+        .find(|u| fs.is_multiple_of(u.in_fs()))
+        .unwrap_or(Fs);
+    Delay::new(fs / unit.in_fs(), unit)
 }
 
 /// How a driver is described in a multiple-driver diagnostic.

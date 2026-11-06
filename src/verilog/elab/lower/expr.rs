@@ -181,7 +181,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// A real constant. The IR has no real literal, so it is the bits of
     /// the IEEE double through `$bitstoreal`.
-    fn real_const(&mut self, value: f64) -> ExprId {
+    pub(super) fn real_const(&mut self, value: f64) -> ExprId {
         let bits = self.b.const_u64(64, value.to_bits());
         self.b.call("$bitstoreal", vec![bits], Type::Real)
     }
