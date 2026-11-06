@@ -2028,6 +2028,10 @@ there, and the read word's parity two tables deep moved it.
 
 - **`fsm`'s area**: 72 tables to Vivado's 33, the same flip-flops. Vivado re-encodes
   the machine (`inferred FSM for state register`); this flow does not here.
+  *That reading was wrong*: Vivado's log infers the machine and does not re-encode
+  it, and its five flip-flops keep their codes. The 33 tables are the next-state
+  logic as a tree of multiplexers, and this flow's is 38 now; "Area against
+  Vivado's" has both.
 - **`regfile_alu`'s and `sad`'s area**: 504 tables to 351, 1,847 to 1,414, and the
   chains' buffer tables above. `sad`'s 64 orderings of eight and nine bits went onto
   the chain as Vivado's do, and it is larger for it and no faster.
@@ -2043,6 +2047,334 @@ there, and the read word's parity two tables deep moved it.
 - Ordering a table's members by their estimated depth, so that a late one is an
   XOR from the root, was measured and not kept: `bram_fifo` 3.95 to 4.17 ns and
   `regfile_alu` 6.40 to 6.57, every other design the same netlist.
+- None of it has been on a part.
+
+## Area against Vivado's
+
+**Asked: where do the tables go, design by design, between Vivado's synthesised
+netlist and Reticle's, and how much of the difference can be closed without losing
+the depth the section before reached?** Its figures left `fsm` at 72 tables to
+Vivado's 33, `regfile_alu` 504 to 351, `sad` 1,847 to 1,414 and `analyser_fifo` 253 to
+131. Run on 2026-11-07, at `xc7a100tftg256-3`, with Vivado 2026.1. **Everything here
+is Vivado's synthesis and Vivado's timer; nothing has been on a part.**
+
+`tools/vivado-parity/netlist_blame.py` reads a structural netlist — Vivado's, written
+with `write_verilog` after `synth_design`, or Reticle's `x.v` — and charges each table
+to the registers its output reaches through tables, chains and wide multiplexers,
+split evenly where it reaches several (`blame`); `count` has the tables by size and
+the buffers in front of a chain, and `cone` what feeds a cell. Vivado's netlists were
+written flattened (`-flatten_hierarchy full`) for that; their counts are the default
+synthesis's, checked on `analyser_fifo`, `bram_fifo`, `esad` and `sad`.
+
+### What Vivado's log says it did
+
+**Measured**, from the full `synth_design` log and the netlist:
+
+- **`fsm` is not re-encoded.** The log has `INFO: [Synth 8-802] inferred FSM for
+  state register 's_reg' in module 'fsm'` and nothing after it: no encoding table and
+  no `Synth 8-3354 encoded FSM ... using encoding`. The netlist keeps `s_reg` as five
+  flip-flops holding the codes as written: `out_reg[0]` to `out_reg[4]` read
+  `s_reg[0]` to `s_reg[4]` directly, which they could not if the codes had changed,
+  since the design shifts the state itself out. *The section before read "inferred
+  FSM" as the machine being re-encoded, and said that was where `fsm`'s 39 tables
+  more went. That was wrong:* the 33 tables are the same codes' next-state logic, built
+  as a tree of multiplexers over the state's bits (each bit's last table a choice on
+  `s[4:3]` among three subtrees of the low bits and the inputs, and zero for the
+  codes no state has).
+- **When the state is only compared, it is.** The same machine with
+  `out <= {out[14:0], s == 23 || s == 9}`, the state read nowhere else, gets the
+  table and `encoded FSM with state register 's_reg' using encoding 'sequential'`:
+  24 states renumbered in the order it reached them (`00111` is `00001`, `10011` is
+  `00011`, and so on), still five bits, 37 tables. Reticle makes 39 of that one
+  without re-encoding anything (below).
+- No other design of the corpus has a `Synth 8-802` line.
+- **`sad`'s reference samples are shift registers**: eight `SRLC32E` and eight
+  flip-flops for the 32 bytes of `refsamples`, which Reticle had as 256 flip-flops,
+  each behind a table; and 31 `Unused sequential element ... was removed` (`Synth
+  8-6014`), the copies `nextrefsample_r[i]` of `nextrefsample[i+1]`, which Reticle's
+  synthesis merges as well.
+
+### Where the tables went
+
+Charged by `netlist_blame.py blame`, the groups that differ; Reticle's `before` is
+the default synthesis at the start of this section, seed 1's netlist, its tables
+including the ones `xray::legalise_carries` adds in front of a chain:
+
+| design | registers | Vivado | before |
+|---|---|---|---|
+| sad | `refsamples` | 9 | 249 |
+| | `counter_incr` (32 of them) | 512 | 576 |
+| | `sad_counter` | 352 | 384 |
+| | `individual_trigger` | 65 | 96 |
+| esad | `counter_incr` (16) | 256 | 288 |
+| | `sad_counter` | 176 | 208 |
+| | `individual_trigger` | 32 | 48 |
+| analyser_fifo | `prog_empty_q` | 38.5 | 60.5 |
+| | `stored` | 9.5 | 28.5 |
+| | `wptr_inc` | 1.3 | 22.8 |
+| | `dout` | 4 | 22 |
+| | `wptr` | 0.3 | 15 |
+
+And what each is, read off the cells (`cone`):
+
+- **`refsamples`** is a 32-byte shift written as a `for` loop over part selects
+  inside an `if` inside an `if`. Process lowering leaves the register's own bits
+  rearranged by the loop's partial updates in the arm the inner `if` fails, and the
+  enable lifted from the outer `if` already says that arm is never loaded; but it is
+  not the register's `q`, so it was a table on every bit, and the chain was not a
+  shift register.
+- **`counter_incr`**, `decision ? rpr - ref : rmr + ref`, is one adder on the chain
+  both ways. Vivado's is eight lanes, each a `LUT4` propagate and a `LUT3` generate,
+  and `decision` on `CYINIT`. Reticle's is nine: the carry in a lane of its own
+  (`{a, 1} + {~b, 1}`), whose propagate is a constant table — the signal carry in on
+  `CYINIT` that "Not done" of the section before has. Two tables a counter.
+- **`individual_trigger`** is `sad_counter <= threshold && triggerer && ready &&
+  !(triggered && !multiple_triggers)`. Vivado computes the last term once for all 32
+  and is two tables a counter; the cover here is three.
+- **`stored`**, `wptr_r_next != rptr_next` on the chain, is a lane table and then a
+  buffer before each `CARRY4` lane: the chain's generate is a constant zero, which
+  `legalise_carries` takes from `O5` of a table of its own. Vivado's lanes have a
+  constant one there and are the table alone. The same is `counter64`'s 22 `LUT2`s
+  and most of `carry_counter`'s.
+- **`wptr_inc`** is `wptr_inc + 1`, fifteen propagates that are flip-flops' outputs,
+  so fifteen `LUT1` buffers here and none in Vivado's netlist, whose placer makes
+  them route-throughs. **`wptr`** is `wptr <= wptr_next` with `wptr_next = do_write ?
+  wptr_inc : wptr`, a net the flags read too: a hold, but behind a net, so a table a
+  bit where Vivado has the clock enable.
+- **`dout`**, the parity of the memory's word, is eight block RAMs four deep and a
+  read multiplexer before it, where Vivado's nine are 16K x 2 each and need none.
+- **`fsm`** is the `case` of 24 states: decoded, each arm under `s == K` and the
+  arms ORed, which a cut mapper finds nothing to share in.
+- **`regfile_alu`** by pieces, each `regfile_alu` with arms of its `case` replaced
+  (tables, Vivado's and this flow's with this section's changes): the logic alone
+  39 and 39; the arithmetic and the logic 169 and 239; the shifts and the logic 261
+  and 346; `a << b` alone 110 and 126, `a >> b` 98 and 121; and **the two behind one
+  select, 167 and 257: Vivado shares one shifter between them**.
+- `counter64` and `carry_counter` map to 24 and 13 tables against Vivado's 23 and
+  12; the rest, 85 and 42, are `legalise_carries`'s buffers and constants. So are
+  57 of `analyser_fifo`'s, 28 of `bram_fifo`'s, 11 of `gray_cdc`'s, 58 of `esad`'s
+  and 75 of `sad`'s. Vivado's netlist has none; its placer puts route-throughs in the
+  same tables' sites.
+
+Measured and not where the area is, **the mapper**: with no depth bound at all on
+its area recovery, case trees on, `regfile_alu` was 450 tables against 469 bounded,
+`esad` 1,092 against 1,107 and every other design within three; 16 cuts a node
+rather than 8 saved 15 on `regfile_alu` and 4 on `esad`, 32 saved 24 and 24 (before
+the case trees); area flow over estimated references (ABC's `(2 * old + refs) / 3`,
+from each node's fanout) saved 6 on `regfile_alu` and 3 on `crc32`. None of it was
+kept: what is left is in what reaches the mapper.
+
+### What was changed
+
+Both behind `--synthesis vivado`, the 7 series' default; `--synthesis legacy`, the
+ECP5 and the Gowin flows build what they did (the seventeen designs' legacy
+netlists checked byte for byte, and the Husky's bitstreams below).
+
+1. **What a register loads, as Vivado reads it** (`synth::opt::RegisterLoads`,
+   `SynthOptions::register_loads`), two rules `FfOpt` does not have:
+   - *A hold behind a net is an enable*: `d` a net that is `c ? v : q` — a
+     multiplexer cell or a whole-net assignment — with `q` the register's own, is
+     `en = c, d = v`. `analyser_fifo`'s `wptr`.
+   - *What a register loads with its enable low is a don't-care*: a multiplexer in
+     `d`, through concatenations and slices, whose select a conjunct of the enable
+     decides, is that arm. `sad`'s reference samples: the arm goes, the chain is a
+     shift register (`srl::extract`, as before), eight of them from 248
+     flip-flops, as Vivado's. `sad` from 1,847 tables and 1,273 flip-flops to 1,607
+     and 1,025; Vivado's 1,018.
+2. **A `case` as a tree of multiplexers** (`aig::BlastOptions::case_trees`,
+   `MapOptions::case_trees`): a `pmux` each of whose selects is `x == K`, one `x`
+   of up to eight bits and distinct constants of its width naming at least half of
+   its codes, is blasted as a tree over `x`'s bits with the default at every code no
+   arm names, rather than as each arm under its decoded select. `fsm` from 72 tables
+   to 38, three deep as before; `regfile_alu` from 504 to 470, and seven tables deep
+   on its worst path to six, with no `CARRY4` on it, Vivado's own worst path. A
+   sparse `case` (fewer arms than half the codes) stays decoded: with every `case` a
+   tree, `sad` and `esad`, whose register reads are eight bits and nine arms, were
+   five and three tables more.
+
+**What is proved.** Neither changes what any register holds on any cycle, and the
+proofs are of exactly that:
+
+- *Register loads*: the next value of a register with an enable is `en ? d : q`,
+  and both rules leave that function of the inputs and `q` as it was. That is how
+  the post-synthesis check (`synth::verify`, `SynthOptions::verify_equivalence`)
+  reads a register — sequentially, its registers matched by name, by induction from
+  reset — and `tests/synth_register_loads.rs` proves both shapes with it: the
+  for-loop shift of `refsamples` and the analyser's `wptr`. It is not run on every
+  build; the rules are structural (a conjunct of the enable implying a select, read
+  through `and`, `or` and `not` cells and expressions), so the proof is of the rules
+  on their shapes, and the techmap proof of every build's mapping is against the
+  netlist they leave.
+- *Case trees*: combinational. The graph with trees has the same inputs and outputs
+  as the graph blasted without, and whenever the mapping is proved
+  (`--verify`, `FpgaOptions::verify_mapping`) the trees are proved against the
+  `pmux` as blasted before (`verify::check_graphs`), beside the mapping's own proof,
+  so the proof reaches back past the blaster. All seventeen designs prove;
+  `every_block_maps_to_the_logic_it_was_mapped_from` maps the IP library with case
+  trees and register loads in its 7-series variant and proves every block.
+- No state is re-encoded, so there is no sequential argument about encodings to
+  make: Vivado did not re-encode `fsm` either.
+
+Tried and not kept, **measured** on `regfile_alu` over five seeds (Vivado's timer):
+
+- *A `case`'s two-level trees kept for the slice's `MUXF7`*
+  (`muxtree::MIN_LEVELS` at two for a `case`): a bit of the eight operations is a
+  table for each half and a `MUXF7` between them, Vivado's cover in the arithmetic
+  piece (169 tables there, 177 this way). 470 tables to 423, the period 6.336 to
+  6.569 ns (6.82 6.99 6.57 6.55 6.55).
+- *The two shifts sharing one shifter*, as Vivado does: the left arm reads `a`
+  reversed into the right shift and reverses its output, the input chosen by the
+  left arm's select. 423 tables to 302 with the `MUXF7`s, 365 without — fewer than
+  Vivado's 351 — but eight tables deep where it was six, and 6.794 ns (6.79 7.13
+  7.15 6.60 6.65) and 6.795 (6.59 6.70 6.83 6.83 6.79). And it was not proved: the
+  graph check left 1,460 AND nodes of `regfile_alu`'s miter, the shared shifter
+  equal to the two only under the select. A proof would split on the `case`'s
+  subject, where each half folds to the same graph.
+
+### Before and after
+
+Each design's cells (tables / `CARRY4` / flip-flops) and, per clock, the most levels
+of logic on its paths and its worst path's levels as tables + `CARRY4`s, all by
+Vivado's counting (`netlist_qor.sh`); `before` and `after` are seed 1's netlists,
+before this section and with it. The last column is `after`'s tables less
+`legalise_carries`'s buffers and constants, which Vivado's netlist does not have:
+
+| design | Vivado | before | after | after, less the chain's |
+|---|---|---|---|---|
+| adders | 231 / 56 / 481, 9 (1+8) | 231 / 56 / 481, 9 (1+8) | 231 / 56 / 481, 9 (1+8) | 231 |
+| analyser_fifo | 131 / 26 / 221 | 253 / 26 / 213 | 238 / 26 / 213 | 181 |
+| `rd_clk` | 7 (6+1) | 8 (5+3) | 9 (5+4) | |
+| `wr_clk` | 5 (2+2) | 5 (3+2) | 5 (3+2) | |
+| barrel | 103 / 0 / 70, 3 | 87 / 0 / 70, 3 | 87 / 0 / 70, 3 | 87 |
+| bram_fifo | 49 / 3 / 68, 7 (3) | 55 / 12 / 68, 7 (3) | 55 / 12 / 68, 7 (3) | 27 |
+| carry_counter | 12 / 11 / 65, 8 (0+8) | 55 / 11 / 65, 9 (2+3) | 55 / 11 / 65, 9 (2+3) | 13 |
+| counter64 | 23 / 22 / 129, 16 (1+6) | 109 / 22 / 129, 17 (2+6) | 109 / 22 / 129, 17 (2+6) | 24 |
+| crc32 | 129 / 0 / 65, 3 | 191 / 0 / 65, 2 | 191 / 0 / 65, 2 | 191 |
+| esad | 1046 / 68 / 1078 | 1187 / 93 / 1085 | 1187 / 93 / 1085 | 1129 |
+| fir8 | 7 / 0 / 23, 5 | 7 / 0 / 23, 5 | 7 / 0 / 23, 5 | 7 |
+| fsm | 33 / 0 / 30, 3 | 72 / 0 / 30, 3 | **38** / 0 / 30, 3 | 38 |
+| gray_cdc | 15 / 3 / 37 | 26 / 3 / 37 | 26 / 3 / 37 | 15 |
+| lutram32 | 7 / 0 / 70, 2 | 8 / 0 / 70, 2 | 8 / 0 / 70, 2 | 8 |
+| mul18 | 7 / 0 / 36, 2 | 7 / 0 / 36, 2 | 7 / 0 / 36, 2 | 7 |
+| regfile_alu | 351 / 20 / 20, 12 (6+0) | 504 / 20 / 20, 15 (7+7) | **470** / 20 / 20, **12 (6+0)** | 470 |
+| sad | 1414 / 132 / 1018 | 1847 / 174 / 1273 | **1607** / 174 / **1025** | 1532 |
+| srl_delay | 7 / 0 / 34, 2 | 7 / 0 / 34, 2 | 7 / 0 / 34, 2 | 7 |
+| widemux | 275 / 0 / 1049, 4 (2) | 276 / 0 / 1047, 4 (2) | 276 / 0 / 1047, 4 (2) | 276 |
+
+`esad`'s and `sad`'s clocks, and `gray_cdc`'s, are their levels before
+(`adc_sampleclk` 5 (3+0), `clk_usb` 4 (3+1); `gray_cdc` 4 (1+3) and 2) both before and
+after. **No clock's worst path has more tables than before.** `analyser_fifo`'s read
+clock has one more `CARRY4` on its worst path: that nine-level path, from `rptr`
+through `rptr + fetch`, the subtraction and the addition into `prog_empty_q`, is in
+`before`'s netlist too, the same cells, at a slack of −1.533 ns where its worst
+path to that flip-flop, from `wgray_r2`, was eight levels at −1.984; `after`'s worst
+there is the nine at −1.872, the eight having gone faster (Vivado's timer on the
+netlists unplaced, `get_timing_paths -from`). Its median period, below, is 0.10 ns
+longer, inside its seeds' spread both ways.
+
+The period each clock achieves, medians over five seeds, each seed's figure beside
+it (ns); `synthesis` is the `synthesis` build of the section before, rebuilt with
+this tree's starting commit (the same figures, to the picosecond), and `area` with
+this section's changes. "Vivado's, Reticle's netlist" is Vivado's placement and
+routes of `area`'s seed-1 netlist:
+
+| design | clock | Vivado | Vivado's, Reticle's netlist | synthesis | area |
+|---|---|---|---|---|---|
+| adders | clk | 2.042 | 2.238 | 2.337 (2.34 2.33 2.45 2.31 2.53) | 2.337 (2.34 2.33 2.45 2.31 2.53) |
+| analyser_fifo | rd_clk | 3.887 | 5.002 | 5.248 (5.53 5.20 5.62 5.24 5.25) | 5.352 (5.67 5.18 5.35 5.31 5.42) |
+| analyser_fifo | wr_clk | 2.417 | 2.970 | 3.036 (3.26 2.97 3.04 2.95 3.26) | 2.983 (2.91 3.17 3.19 2.91 2.98) |
+| barrel | clk | 2.376 | 2.780 | 2.948 (2.96 2.98 2.75 2.95 2.85) | 2.948 (2.96 2.98 2.75 2.95 2.85) |
+| bram_fifo | clk | 3.388 | 3.598 | 3.945 (3.95 3.93 4.02 3.91 3.94) | 3.945 (3.95 3.93 4.02 3.91 3.94) |
+| carry_counter | clk | 1.855 | 2.352 | 2.385 (2.38 2.38 2.32 2.38 2.44) | 2.385 (2.38 2.38 2.32 2.38 2.44) |
+| counter64 | clk | 3.220 | 3.721 | 4.040 (3.98 4.14 4.04 3.83 4.06) | 4.040 (3.98 4.14 4.04 3.83 4.06) |
+| crc32 | clk | 2.234 | 2.331 | 2.676 (2.75 2.84 2.62 2.65 2.68) | 2.676 (2.75 2.84 2.62 2.65 2.68) |
+| esad | adc_sampleclk | 2.131 | 3.506 | 3.033 (3.16 3.12 2.87 2.96 3.03) | 3.033 (3.16 3.12 2.87 2.96 3.03) |
+| esad | clk_usb | 1.727 | 2.422 | 2.443 (2.43 2.51 2.54 2.44 2.31) | 2.443 (2.43 2.51 2.54 2.44 2.31) |
+| fir8 | clk | 9.142 | 9.164 | 9.247 (9.25 9.16 9.25 9.25 9.16) | 9.247 (9.25 9.16 9.25 9.25 9.16) |
+| fsm | clk | 1.903 | 2.057 | 2.887 (2.96 2.62 2.80 2.89 2.95) | **2.340** (2.37 2.34 2.32 2.35 2.30) |
+| gray_cdc | clk | 1.466 | 1.447 | 1.503 (1.41 1.51 1.50 1.50 1.51) | 1.503 (1.41 1.51 1.50 1.50 1.51) |
+| gray_cdc | clk2 | 1.267 | 1.572 | 1.615 (1.61 1.58 1.85 1.85 1.52) | 1.615 (1.61 1.58 1.85 1.85 1.52) |
+| lutram32 | clk | 1.894 | 1.814 | 2.205 (2.29 2.18 2.37 2.15 2.21) | 2.205 (2.29 2.18 2.37 2.15 2.21) |
+| mul18 | clk | 1.935 | 1.903 | 2.309 (2.31 2.30 2.53 2.40 2.29) | 2.309 (2.31 2.30 2.53 2.40 2.29) |
+| regfile_alu | clk | 5.511 | 5.525 | 6.395 (6.72 6.39 6.96 6.16 6.31) | 6.336 (6.34 6.31 6.39 6.28 6.41) |
+| sad | adc_sampleclk | 2.207 | 3.877 | 3.533 (3.53 3.41 3.74 3.52 3.75) | **3.150** (3.48 3.15 3.18 3.07 3.14) |
+| sad | clk_usb | 1.726 | 2.635 | 2.787 (3.79 2.79 2.54 2.79 2.52) | 2.563 (2.40 2.40 2.74 2.63 2.56) |
+| srl_delay | clk | 1.645 | 1.723 | 2.027 (2.02 2.09 1.95 2.03 2.09) | 2.027 (2.02 2.09 1.95 2.03 2.09) |
+| widemux | clk | 2.438 | 2.709 | 3.485 (3.48 3.62 3.53 3.28 3.47) | 3.485 (3.48 3.62 3.53 3.28 3.47) |
+
+**Over the twenty-one clocks, Reticle's median is 1.249 times Vivado's own figure,
+against 1.274 before.** Vivado placing and routing Reticle's netlist went from 1.187
+times its own flow to 1.175: `regfile_alu` 5.525 ns against its own 5.511, where
+Reticle's netlist had been 5.797; `fsm` 2.444 to 2.057. Better by more than a seed's
+spread: `fsm` (2.89 to 2.34 ns), `sad`'s `adc_sampleclk` (3.53 to 3.15). Worse:
+`analyser_fifo`'s read clock by 0.10, inside the spread. Thirteen designs are the
+same netlist, byte for byte, and so the same figures.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--synthesis legacy`, so neither
+change reaches them, and their bitstreams are byte for byte those before: with this
+tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.** That
+`sad` and `esad` here are the Husky Plus's own pieces is what the measurements above
+say of what the default would do to it; nothing has built it that way.
+
+### Tests
+
+- `tests/synth_register_loads.rs` proves both rules on the shapes they were written
+  for, with the post-synthesis check, and that the pass does not run unless asked;
+  unit tests in `synth::opt::ff_opt` hold each rule (a hold behind a cell and behind
+  an assignment, on either arm; a select a conjunct decides on either side, one an
+  `or` around it does not, and one nothing decides; an `or` select decided by a term
+  of it and not by another) and leave a kept register alone.
+- `aig::blast`'s tests hold a dense `case`, and one over a signed subject, the
+  same function as its `pmux` on every input pattern, and a sparse one, one with a
+  constant narrower than its subject and one naming a code twice blasted as before,
+  node for node; `techmap`'s that a case tree is proved against the graph without
+  trees, a different graph, and only when proving.
+- `tests/fpga_xray_synthesis.rs` pins `fsm` at 38 tables, `regfile_alu` at 470 and
+  six deep and `analyser_fifo` at 180 (the mapper's own counts, without
+  `legalise_carries`'s), every design proved, and the legacy figures as they were.
+  `netlist.txt` and `achieved.txt` gain this section's `area` build, and
+  `tests/fpga_xray_achieved.rs` holds it no slower over the corpus than `synthesis`
+  and no clock more than 5 % over.
+
+**Mutations**, twelve, each made by a script and put back, each failing its test:
+a decided select taking the other arm (the unit tests and the post-synthesis
+proof both), a hold on the then arm read as `c` rather than `!c`, an `or` select
+read as implied whatever its terms, a kept register rewritten, register loads
+not asked for by the flow (the pinned figures), a case tree's leaves paired the
+wrong way round (the blaster's tests, and every design's proof in
+`fpga_xray_synthesis.rs`), a sparse `case` made a tree, a code named twice made
+one, a constant narrower than its subject taken, the trees not proved, the trees
+proved against themselves, and case trees not asked for by the flow. Two first
+passed, and the tests that catch them were written then: the `or` select, whose
+tests had only single-term selects, and the subject's signedness, which the
+constant's own check made redundant — the rule now asks for a constant of the
+subject's width and nothing about signedness, which is what the comparison
+depends on, and no design maps differently for it.
+
+### Not done
+
+- **A signal carry in on `CYINIT`**, still: two tables of each of `sad`'s and
+  `esad`'s 48 shared adders, 96 tables, and Vivado's lane count.
+- **A constant generate of one on the slice's bypass input**, so that an equality's
+  lanes on the chain need no buffer: Vivado's chains compare `!=` with a generate of
+  one, which a bypass input left unrouted reads. Here every constant generate takes
+  a table's `O5` (`legalise_carries`), and whether the bypass may be left to read one
+  is the placer's packing to answer, which is not touched here.
+- **Route-throughs as Vivado's netlist has them**: a propagate that is a
+  flip-flop's output is a `LUT1` cell here and nothing in Vivado's synthesised
+  netlist; the sites are the same. `counter64`'s 85.
+- **`analyser_fifo`'s memory** as Vivado arranges it, nine 16K x 2 block RAMs and no
+  read multiplexer; that is the memory mapping's.
+- **Resource sharing** of the shifts, which is most of `regfile_alu`'s remaining
+  gap, is measured above and not kept: slower on the board's timer and unproved.
+- `crc32`'s 191 tables two deep to Vivado's 129 three deep is the section before's
+  choice, and stays.
+- `individual_trigger`'s shared term and `sad_counter`'s table a counter: not found.
 - None of it has been on a part.
 
 ## Wide multiplexers

@@ -111,6 +111,10 @@ models or IP.
   made of and how deep its logic is, by Vivado's own counting: Vivado's
   `synth_design` of each design, or a Reticle build's netlist linked unplaced;
   `netlist_qor.py table --fixture` writes `testdata/fpga/vivado/qor/netlist.txt`.
+- `netlist_blame.py` reads a structural netlist, Vivado's synthesised one or a Reticle
+  build's `x.v`: its tables by size and the buffers in front of a chain (`count`),
+  each table charged to the registers it reaches (`blame`), and what feeds a cell
+  (`cone`).
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's

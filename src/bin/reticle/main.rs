@@ -255,10 +255,11 @@ Options:
                      measured on a board keeps.
   --synthesis <vivado|legacy>
                      7 series: synthesise as Vivado 2026.1 does (the default):
-                     subtractions and orderings (`<`, `>=`) on the carry chain
-                     from four bits. `legacy` is the netlist before, every
-                     subtraction and ordering in lookup tables, which a build
-                     measured on a board keeps.
+                     subtractions, orderings (`<`, `>=`) and equalities on the
+                     carry chain from Vivado's widths, a register's hold seen
+                     through the net it is behind, and a `case` as a tree of
+                     multiplexers. `legacy` is the netlist before, which a
+                     build measured on a board keeps.
   --delay-model <vivado|legacy>
                      7 series: the delays a timing-driven build places, routes
                      and reports with. `vivado` (the default) is fitted to

@@ -422,7 +422,12 @@ in on `CYINIT` and its carry out off `CO`, and orderings against a constant
 in kept lanes of six bits beside the chain rather than on it. Each threshold
 is what Vivado was measured to do; docs/fpga-vivado-parity.md, "Synthesis
 against Vivado's", has the measurements and what they did to the timing
-corpus.
+corpus. Two more read the design as Vivado's synthesis does, for area: a
+register's hold lifted through the net it is behind, and what it loads with its
+enable low read as a don't-care (`synth::opt::RegisterLoads`); and a `case` as a
+tree of multiplexers over what it compares rather than each arm under its decoded
+select (`MapOptions::case_trees`), proved against the `pmux` it was. "Area against
+Vivado's" there has what each did.
 
 ### The DSP48E1
 
