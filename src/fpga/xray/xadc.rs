@@ -37,6 +37,16 @@
 //! as Vivado set them; they are `XADC.IN_USE` here, a name this module
 //! gives them.
 //!
+//! **That last reading was one image's, and two more refute it** (2026-11-06,
+//! on the XC7A35T: `testdata/fpga/vivado/primitives/` and four variants of its
+//! `xadc_probe` in `docs/fpga-vivado-parity.md`). `25_1613` and `26_1888` are
+//! set by every XADC; `27_1928` only when `DCLK` is a signal, and not with it
+//! tied to zero; and `26_1928`, which NewAE's image does not have, when
+//! `CONVSTCLK` is one, which NewAE's ties to zero. So `XADC.IN_USE` is the
+//! first two, and `XADC.DCLK_USED` and `XADC.CONVSTCLK_USED` (names given
+//! here) the others: the same three bits as before on the Husky's XADC, whose
+//! `DCLK` is a signal.
+//!
 //! What a single image cannot show: a register bit that is zero in all of
 //! Vivado's values. The layout is regular, and it is the PLL's, so it is
 //! taken to hold for those bits too — a reading, not a measurement, until a
@@ -207,7 +217,11 @@ pub(super) fn xadc_bels(tile_type: &str) -> Vec<ExtraBel> {
                 wire: (*wire).to_owned(),
             })
             .collect(),
-        cells: vec![("XADC", vec!["XADC.IN_USE".to_owned()])],
+        cells: vec![
+            ("XADC", vec!["XADC.IN_USE".to_owned()]),
+            ("=DCLK_USED", vec!["XADC.DCLK_USED".to_owned()]),
+            ("=CONVSTCLK_USED", vec!["XADC.CONVSTCLK_USED".to_owned()]),
+        ],
     }]
 }
 
@@ -255,11 +269,17 @@ pub(super) fn derived_features(tile_type: &str) -> Option<Vec<Feature>> {
     }
     out.push(Feature {
         name: "XADC.IN_USE".to_owned(),
-        ones: vec![
-            ConfigBit::new(25, 1613),
-            ConfigBit::new(26, 1888),
-            ConfigBit::new(27, 1928),
-        ],
+        ones: vec![ConfigBit::new(25, 1613), ConfigBit::new(26, 1888)],
+        zeros: Vec::new(),
+    });
+    out.push(Feature {
+        name: "XADC.DCLK_USED".to_owned(),
+        ones: vec![ConfigBit::new(27, 1928)],
+        zeros: Vec::new(),
+    });
+    out.push(Feature {
+        name: "XADC.CONVSTCLK_USED".to_owned(),
+        ones: vec![ConfigBit::new(26, 1928)],
         zeros: Vec::new(),
     });
     Some(out)
@@ -268,6 +288,27 @@ pub(super) fn derived_features(tile_type: &str) -> Option<Vec<Feature>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three bits outside the registers, as four of Vivado's bitstreams
+    /// set them (the module documentation): `IN_USE` the two every XADC sets,
+    /// and each clock's bit alone. Would catch `DCLK`'s bit folded back into
+    /// `IN_USE`, which no build with `DCLK` a signal can see, since the decode
+    /// then names the same features either way; a design with `DCLK` tied
+    /// low, as Vivado writes it, has neither `27_1928` nor `DCLK_USED`.
+    #[test]
+    fn in_use_and_each_clocks_bit_are_apart() {
+        let features = derived_features("MONITOR_BOT").unwrap();
+        let bits = |name: &str| -> Vec<(u32, u32)> {
+            features
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| f.ones.iter().map(|b| (b.row, b.col)).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(bits("XADC.IN_USE"), [(25, 1613), (26, 1888)]);
+        assert_eq!(bits("XADC.DCLK_USED"), [(27, 1928)]);
+        assert_eq!(bits("XADC.CONVSTCLK_USED"), [(26, 1928)]);
+    }
 
     /// The registers the Husky's wizard wrote, with `0x5C` as Vivado wrote
     /// it, placed through this layout, against the positions NewAE's image

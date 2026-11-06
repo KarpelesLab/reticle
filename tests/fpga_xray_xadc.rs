@@ -16,7 +16,9 @@
 //!
 //! It would catch the register bits not reaching the bitstream (they did
 //! not, at first: a two-component feature name was not taken for a site),
-//! the XADC's pins unroutable, and `IN_USE` missing. It would not catch a
+//! the XADC's pins unroutable, and `IN_USE` missing, and since `IN_USE` was
+//! split in two (2026-11-06, `xray::xadc`), the bit of a `DCLK` that is a
+//! signal lost or a `CONVSTCLK`'s set for one tied to zero. It would not catch a
 //! wrong layout for a bit Vivado never sets, which only a second image with
 //! other values can settle; and nothing here has run on a Husky.
 
@@ -134,12 +136,20 @@ fn the_husky_xadc_is_configured_as_vivado_configured_it() {
 
     let mut registers: BTreeMap<String, u64> = BTreeMap::new();
     let mut in_use = false;
+    let mut clocks: Vec<&str> = Vec::new();
     for (tile, feature) in &decoded.features {
         if tile != "MONITOR_BOT_X46Y79" {
             continue;
         }
         if feature == "XADC.IN_USE" {
             in_use = true;
+            continue;
+        }
+        if let Some(clock) = feature
+            .strip_prefix("XADC.")
+            .and_then(|f| f.strip_suffix("_USED"))
+        {
+            clocks.push(clock);
             continue;
         }
         let Some((name, rest)) = feature
@@ -152,6 +162,9 @@ fn the_husky_xadc_is_configured_as_vivado_configured_it() {
         *registers.entry(name.to_owned()).or_default() |= 1 << bit;
     }
     assert!(in_use, "the XADC is not marked in use");
+    // Its `DCLK` is a signal and its `CONVSTCLK` tied to zero, so the one bit
+    // and not the other, as in NewAE's image (`xray::xadc`).
+    assert_eq!(clocks, ["DCLK"]);
     let want: BTreeMap<String, u64> = VIVADO.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect();
     assert_eq!(registers, want);
 }

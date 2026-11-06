@@ -4085,6 +4085,14 @@ fn write_xc7_bitstream(
                     .map(|r| {
                         if role == reticle::fpga::BelRole::MultiRegionBuffer {
                             GridRegion::new(r.x0, r.y0.saturating_sub(9), r.x1, r.y1 + 6)
+                        } else if role == reticle::fpga::BelRole::Sysmon {
+                            // The XADC's pins reach the interconnect up to two
+                            // rows above its tile's own and three columns right
+                            // (`MONITOR_IMUX<n>_<k>` for `k` to 2, by `VFRAME`
+                            // and `INT_INTERFACE_L` to `INT_L`): without them
+                            // a `CONVST` on `MONITOR_IMUX43_1` had no path, and
+                            // the probe built a bitstream with it unrouted.
+                            GridRegion::new(r.x0, r.y0.saturating_sub(2), r.x1 + 3, r.y1)
                         } else {
                             r
                         }

@@ -735,7 +735,7 @@ impl XrayFabric {
             return Ok(out);
         };
         for (index, instance) in netlist.instances.iter().enumerate() {
-            if !PRIMITIVES.contains(&instance.primitive.as_str()) {
+            if !PRIMITIVES.contains(&instance.primitive.as_str()) && instance.primitive != "XADC" {
                 continue;
             }
             let Some(site) = placement.site_of(index) else {
@@ -835,6 +835,25 @@ impl XrayFabric {
                         names.push("=USRCCLKO_OR_USRDONE");
                     }
                     out.startup_clock |= signal("clk");
+                }
+                // A bit of its own for each of its clocks that is a signal,
+                // tied to zero setting neither (`super::xadc`).
+                "XADC" => {
+                    if signal("dclk") {
+                        names.push("=DCLK_USED");
+                    }
+                    if signal("convstclk") {
+                        names.push("=CONVSTCLK_USED");
+                    }
+                    // A register the design leaves at the library's default is
+                    // that default, which is zero for every one but `INIT_42`,
+                    // `16'h0800`: Vivado writes its bit 11 for an XADC that
+                    // sets none (`xadc_probe`, on all three parts), and this
+                    // flow wrote nothing.
+                    if params.and_then(|p| p.get("INIT_42")).is_none() {
+                        bits.set(site.tile, super::xadc::xadc_init_bit(0x42, 11))
+                            .map_err(|e| e.to_string())?;
+                    }
                 }
                 _ => {}
             }
