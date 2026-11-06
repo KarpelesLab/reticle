@@ -64,11 +64,31 @@ use super::super::aig::{Aig, Edge};
 pub struct CutOptions {
     /// Largest number of cuts kept per node, not counting the trivial one.
     pub per_node: usize,
+    /// Keep the shallowest cuts first: half of each node's list goes to the
+    /// cuts whose deepest leaf is shallowest, by the depth the best of each
+    /// leaf's own cuts reaches, before the sizes take their quotas of the
+    /// rest. That is the priority of Mishchenko, Chatterjee and Brayton's
+    /// depth pass, which the size quotas alone are not: a node whose only
+    /// shallow cuts are small was left the large deep ones, and the depth
+    /// pass can choose only among what was kept. Off by default; see
+    /// `techmap`'s module docs for what it did.
+    pub depth_priority: bool,
+    /// When a node is read in both polarities, make its complement a second
+    /// cell over the same leaves with the function inverted, rather than an
+    /// inverter over the first: as many cells, a level less. A carry
+    /// chain's propagate read as the complement of a table something else
+    /// reads too was a table and an inverter in a row before the chain, on
+    /// the Husky Plus analyser's FIFO read clock. Off by default.
+    pub duplicate_complements: bool,
 }
 
 impl Default for CutOptions {
     fn default() -> Self {
-        CutOptions { per_node: 8 }
+        CutOptions {
+            per_node: 8,
+            depth_priority: false,
+            duplicate_complements: false,
+        }
     }
 }
 
@@ -111,13 +131,31 @@ impl Cut {
 /// The cut lists of every node of an AIG.
 pub struct PriorityCuts {
     per_node: Vec<Vec<Cut>>,
+    depth: Vec<u32>,
 }
 
 impl PriorityCuts {
     /// Computes cuts of at most `k` leaves for every node of `aig`.
     pub fn compute(aig: &Aig, k: usize, options: &CutOptions) -> PriorityCuts {
+        Self::compute_from(aig, k, options, None)
+    }
+
+    /// [`PriorityCuts::compute`] with each input at the depth `arrival`
+    /// gives it, by node (`None` is zero for all), which is where the depth
+    /// of [`CutOptions::depth_priority`] and [`PriorityCuts::depths`] starts.
+    pub fn compute_from(
+        aig: &Aig,
+        k: usize,
+        options: &CutOptions,
+        arrival: Option<&[u32]>,
+    ) -> PriorityCuts {
         let n = aig.len();
         let mut per_node: Vec<Vec<Cut>> = vec![Vec::new(); n];
+        // Each node's depth in cells, over the cuts kept: an input's is its
+        // arrival.
+        let mut depth: Vec<u32> = (0..n)
+            .map(|i| arrival.and_then(|a| a.get(i)).copied().unwrap_or(0))
+            .collect();
         for id in 0..u32::try_from(n).expect("node count") {
             let index = id as usize;
             if !aig.is_and(id) {
@@ -152,13 +190,35 @@ impl PriorityCuts {
             }
             // Order deterministically, then select across the sizes.
             merged.sort_by(|x, y| (x.leaves.len(), &x.leaves).cmp(&(y.leaves.len(), &y.leaves)));
-            merged = select(merged, k, options.per_node.max(1));
+            let limit = options.per_node.max(1);
+            let reach = |cut: &Cut| {
+                cut.leaves
+                    .iter()
+                    .map(|&l| depth[l as usize])
+                    .max()
+                    .unwrap_or(0)
+                    + 1
+            };
+            merged = if options.depth_priority && merged.len() > limit {
+                shallowest_first(merged, k, limit, &reach)
+            } else {
+                select(merged, k, limit)
+            };
+            let reached = merged.iter().map(reach).min().unwrap_or(1);
+            depth[index] = reached;
             // The trivial cut always stays, as the merge base for the
             // parents of this node.
             merged.push(trivial(id));
             per_node[index] = merged;
         }
-        PriorityCuts { per_node }
+        PriorityCuts { per_node, depth }
+    }
+
+    /// Each node's depth in cells over the cuts kept: the shallowest a cell
+    /// over any of its cuts reaches, an input's zero. An estimate of what
+    /// the depth pass will make of it, which it is when every cut is kept.
+    pub fn depths(&self) -> &[u32] {
+        &self.depth
     }
 
     /// The cuts of `node`.
@@ -170,6 +230,39 @@ impl PriorityCuts {
     pub fn total(&self) -> usize {
         self.per_node.iter().map(Vec::len).sum()
     }
+}
+
+/// Keeps at most `limit` cuts: the shallowest half by `reach`, the depth a
+/// cell over the cut's leaves reaches (smaller cuts first among equals), and
+/// the rest by [`select`]'s quotas. `cuts` must be sorted by size; the
+/// result keeps that order.
+fn shallowest_first(
+    cuts: Vec<Cut>,
+    k: usize,
+    limit: usize,
+    reach: &dyn Fn(&Cut) -> u32,
+) -> Vec<Cut> {
+    let mut order: Vec<usize> = (0..cuts.len()).collect();
+    // Stable, so equal depths stay in size order.
+    order.sort_by_key(|&i| reach(&cuts[i]));
+    let reserved = limit.div_ceil(2);
+    let mut taken = vec![false; cuts.len()];
+    for &i in order.iter().take(reserved) {
+        taken[i] = true;
+    }
+    let mut out: Vec<Cut> = Vec::with_capacity(limit);
+    let mut rest: Vec<Cut> = Vec::with_capacity(cuts.len());
+    for (cut, keep) in cuts.into_iter().zip(taken) {
+        if keep {
+            out.push(cut);
+        } else {
+            rest.push(cut);
+        }
+    }
+    let left = limit - out.len();
+    out.extend(select(rest, k, left));
+    out.sort_by(|x, y| (x.leaves.len(), &x.leaves).cmp(&(y.leaves.len(), &y.leaves)));
+    out
 }
 
 /// Keeps at most `limit` cuts, giving each cut size a quota so the large
@@ -610,7 +703,14 @@ mod tests {
         let small = PriorityCuts::compute(&g, 2, &CutOptions::default());
         assert!(small.cuts(root.node()).iter().all(|x| x.leaves.len() <= 2));
         // The per-node cap is honoured.
-        let capped = PriorityCuts::compute(&g, 3, &CutOptions { per_node: 1 });
+        let capped = PriorityCuts::compute(
+            &g,
+            3,
+            &CutOptions {
+                per_node: 1,
+                ..CutOptions::default()
+            },
+        );
         // One merged cut plus the trivial one.
         assert_eq!(capped.cuts(root.node()).len(), 2);
         assert!(

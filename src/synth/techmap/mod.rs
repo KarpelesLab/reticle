@@ -30,6 +30,39 @@
 //! from the outputs: it never lengthens a path, but it also declines some
 //! area recovery that slack on a non-critical path would allow.
 //!
+//! # Depth as Vivado's synthesis reaches it
+//!
+//! Options each off by default, and all on for the 7 series under
+//! `reticle fpga`'s default `--synthesis vivado`, close what was measured
+//! between this mapper's covers and Vivado 2026.1's (docs/fpga-vivado-parity.md,
+//! "Synthesis against Vivado's", has the figures; `--synthesis legacy` is the
+//! cover before, byte for byte):
+//!
+//! - [`CutOptions::depth_priority`]: half of each node's cut list goes to its
+//!   shallowest cuts before the size quotas take the rest. The quotas alone
+//!   keep large cuts from being crowded out, which is the area half of the
+//!   priority, and say nothing about depth: a 32-input parity rebuilt as six
+//!   tables of six under one came out three deep, the cut that makes it two
+//!   never kept.
+//! - [`MapOptions::xor_balance`]: the graph's XOR logic collapsed into
+//!   parities of its leaves and rebuilt for `k`-input tables before mapping
+//!   ([`super::aig::xor`]), which the AND balancing of the optimiser cannot do:
+//!   `crc32` of the timing corpus went from seven tables deep to two. The
+//!   mapping is then proved against the graph from before the rebuilding, so
+//!   the proof covers both; the parities' proof is by linear algebra
+//!   (`verify::merge_linear`), which a SAT solver under a conflict limit did
+//!   not finish.
+//! - [`MapOptions::late_hard_outputs`]: an input a hard block drives arrives a
+//!   cell late, in the depth pass and in the XOR rebuilding.
+//! - [`CutOptions::duplicate_complements`]: a node read in both polarities is
+//!   two cells over its leaves rather than one and an inverter.
+//!
+//! Tried and taken out again: area recovery against required times
+//! propagated back from the deepest output through the cover, instead of
+//! each node held to its own arrival from the depth pass, the conservative
+//! stand-in above. It saved a few tables in a thousand and cost a level
+//! before a carry chain, which looks to it like any other output.
+//!
 //! # Wide multiplexers
 //!
 //! A 7-series slice has two more multiplexers behind its lookup tables, with
@@ -122,6 +155,19 @@ pub struct MapOptions<'a> {
     /// tables, so a design with nothing to gain maps exactly as it does
     /// without this. See the module docs.
     pub wide_muxes: bool,
+    /// Balance the graph's XOR trees by level before mapping
+    /// ([`super::aig::xor`]), which the AND balancing of the optimiser cannot
+    /// see through. The mapping is then proved against the graph from before
+    /// it. Off by default.
+    pub xor_balance: bool,
+    /// Take an input of the logic that a hard block drives — a carry chain,
+    /// a multiplier, a memory, any cell the AIG does not absorb that is not
+    /// a register — to arrive one cell late, in the depth pass and in the XOR
+    /// rebuilding. Without it every input arrives at zero, and a carry
+    /// chain's sum, which is late, was taken into a parity's first table as
+    /// readily as a flip-flop's output: the Husky Plus analyser's FIFO read
+    /// clock lost 0.95 ns to that. Off by default.
+    pub late_hard_outputs: bool,
 }
 
 impl Default for MapOptions<'_> {
@@ -132,6 +178,8 @@ impl Default for MapOptions<'_> {
             area_passes: 2,
             cuts: CutOptions::default(),
             wide_muxes: false,
+            xor_balance: false,
+            late_hard_outputs: false,
         }
     }
 }
@@ -423,30 +471,40 @@ pub fn lut_map(aig: &Aig, k: u32) -> LutNetwork {
 
 /// [`lut_map`] with explicit cut limits and area recovery passes.
 pub fn lut_map_with(aig: &Aig, k: u32, options: &CutOptions, area_passes: u32) -> LutNetwork {
-    assert!((2..=8).contains(&k), "LUT size {k} is outside 2..=8");
-    let size = usize::try_from(k).expect("LUT size");
-    let cost = LutCost;
-    let mapping = run(aig, size, options, area_passes, &cost, false);
-    let mut emitter = LutEmitter { luts: Vec::new() };
-    let outputs = mapping.emit(aig, &mut emitter);
-    LutNetwork {
-        luts: emitter.luts,
-        outputs,
-        depth: mapping.depth,
-    }
+    lut_map_arriving(aig, k, options, area_passes, false, None)
 }
 
 /// [`lut_map_with`] with a slice's `MUXF7` and `MUXF8` on offer: see the
 /// module docs.
 pub fn lut_map_wide(aig: &Aig, k: u32, options: &CutOptions, area_passes: u32) -> LutNetwork {
+    lut_map_arriving(aig, k, options, area_passes, true, None)
+}
+
+/// [`lut_map_with`], or [`lut_map_wide`] when `wide`, with each node of
+/// `aig` that is an input arriving at the depth `arrival` gives it, in cells
+/// (indexed by node; `None` is zero for all).
+///
+/// # Panics
+///
+/// If `k` is outside `2..=8`.
+pub fn lut_map_arriving(
+    aig: &Aig,
+    k: u32,
+    options: &CutOptions,
+    area_passes: u32,
+    wide: bool,
+    arrival: Option<&[u32]>,
+) -> LutNetwork {
     assert!((2..=8).contains(&k), "LUT size {k} is outside 2..=8");
     let size = usize::try_from(k).expect("LUT size");
     let cost = LutCost;
-    let mapping = run(aig, size, options, area_passes, &cost, true);
+    let mapping = run(aig, size, options, area_passes, &cost, wide, arrival);
     let mut emitter = LutEmitter { luts: Vec::new() };
     let outputs = mapping.emit(aig, &mut emitter);
     let mut luts = emitter.luts;
-    settle_wide(&mut luts);
+    if wide {
+        settle_wide(&mut luts);
+    }
     LutNetwork {
         luts,
         outputs,
@@ -547,7 +605,7 @@ pub fn gate_map_with(
     );
     let size = library.max_arity().clamp(1, 4);
     let cost = GateCost { library };
-    let mapping = run(aig, size, options, area_passes, &cost, false);
+    let mapping = run(aig, size, options, area_passes, &cost, false, None);
     let mut emitter = GateEmitter {
         library,
         gates: Vec::new(),
@@ -727,6 +785,8 @@ struct Mapping {
     /// [`Mapping::best`] holds that multiplexer's three leaves and cost no
     /// table; empty unless they are on offer.
     wide: Vec<Option<(WideMux, MuxShape)>>,
+    /// [`CutOptions::duplicate_complements`].
+    duplicate_complements: bool,
 }
 
 /// The cut a wide multiplexer reads, the same three nodes [`Mapping::best`]
@@ -865,6 +925,15 @@ impl Mapping {
                 complemented[id as usize] = Some(Signal::Node(index));
                 continue;
             }
+            // Both: the complement a cell of its own over the same leaves,
+            // where the target has one for it, is a level less than an
+            // inverter after the plain one.
+            if self.duplicate_complements
+                && let Some(index) = emitter.cell(&cut.function.not(), &inputs)
+            {
+                complemented[id as usize] = Some(Signal::Node(index));
+                continue;
+            }
             let base = match plain[id as usize] {
                 Some(s) => s,
                 None => {
@@ -947,8 +1016,16 @@ fn run(
     area_passes: u32,
     cost: &dyn Cost,
     wide: bool,
+    arrival: Option<&[u32]>,
 ) -> Mapping {
     let n = aig.len();
+    let inputs: Vec<f64> = (0..n)
+        .map(|i| {
+            arrival
+                .and_then(|a| a.get(i))
+                .map_or(0.0, |&d| f64::from(d))
+        })
+        .collect();
     let shapes: Vec<Option<MuxShape>> = if wide {
         (0..u32::try_from(n).expect("node count"))
             .map(|id| {
@@ -973,11 +1050,21 @@ fn run(
         refs: vec![0; n],
         depth: 0,
         wide: if wide { vec![None; n] } else { Vec::new() },
+        duplicate_complements: options.duplicate_complements,
     };
-    let cuts = PriorityCuts::compute(aig, size, options);
+    let cuts = PriorityCuts::compute_from(aig, size, options, arrival);
 
     // Pass 1: depth, tie-broken on area flow.
-    assign(aig, &cuts, &mut m, cost, Objective::Depth, None, &shapes);
+    assign(
+        aig,
+        &cuts,
+        &mut m,
+        cost,
+        Objective::Depth,
+        None,
+        &shapes,
+        &inputs,
+    );
     // Every node must keep the arrival time the depth pass gave it.
     let required = m.arrival.clone();
 
@@ -997,6 +1084,7 @@ fn run(
             objective,
             Some(&required),
             &shapes,
+            &inputs,
         );
     }
     reference(aig, &mut m);
@@ -1015,7 +1103,9 @@ enum Objective {
     ExactArea,
 }
 
-/// Chooses a cut for every node, in topological order.
+/// Chooses a cut for every node, in topological order; an input arrives at
+/// its figure in `inputs`.
+#[allow(clippy::too_many_arguments)]
 fn assign(
     aig: &Aig,
     cuts: &PriorityCuts,
@@ -1024,10 +1114,11 @@ fn assign(
     objective: Objective,
     required: Option<&[f64]>,
     shapes: &[Option<MuxShape>],
+    inputs: &[f64],
 ) {
     for id in 0..u32::try_from(aig.len()).expect("node count") {
         if !aig.is_and(id) {
-            m.arrival[id as usize] = 0.0;
+            m.arrival[id as usize] = inputs.get(id as usize).copied().unwrap_or(0.0);
             m.area_flow[id as usize] = 0.0;
             continue;
         }
@@ -1241,11 +1332,67 @@ fn wide_network(
     k: u32,
     options: &MapOptions<'_>,
     plain: &LutNetwork,
+    late: Option<&[u32]>,
 ) -> Option<(LutNetwork, Option<Aig>)> {
-    let trees = optimize_around_trees(unoptimized, &options.aig_opt);
+    let mut trees = optimize_around_trees(unoptimized, &options.aig_opt);
+    if options.xor_balance
+        && let Some(trees) = trees.as_mut()
+    {
+        let arrival = late.map(|l| node_arrivals(trees, l));
+        balance_xor_for(trees, k, &options.cuts, arrival.as_deref());
+    }
     let from = trees.as_ref().unwrap_or(optimized);
-    let wide = lut_map_wide(from, k, &options.cuts, options.area_passes);
+    let arrival = late.map(|l| node_arrivals(from, l));
+    let wide = lut_map_arriving(
+        from,
+        k,
+        &options.cuts,
+        options.area_passes,
+        true,
+        arrival.as_deref(),
+    );
     (wide.tables() < plain.tables()).then_some((wide, trees))
+}
+
+/// [`super::aig::xor::balance_xor`] for `k`-input cells, each node's depth
+/// estimated by the cuts `options` enumerates, its inputs arriving at
+/// `arrival`.
+fn balance_xor_for(aig: &mut Aig, k: u32, options: &CutOptions, arrival: Option<&[u32]>) {
+    let k = usize::try_from(k).expect("LUT size");
+    let cuts = PriorityCuts::compute_from(aig, k, options, arrival);
+    let depths = cuts.depths().to_vec();
+    super::aig::xor::balance_xor(aig, k, &depths);
+}
+
+/// Each node's arrival in `aig`: an input's from `late`, by its position
+/// among the inputs, every other node's zero.
+fn node_arrivals(aig: &Aig, late: &[u32]) -> Vec<u32> {
+    let mut out = vec![0; aig.len()];
+    for (pos, &id) in aig.inputs().iter().enumerate() {
+        out[id as usize] = late.get(pos).copied().unwrap_or(0);
+    }
+    out
+}
+
+/// One cell late for each AIG input a hard block drives: a cell the AIG did
+/// not absorb that is a black box, which by the time the 7 series maps its
+/// logic is a carry chain, a multiplier or a memory. A register, a port and
+/// anything else arrive at zero. By the AIG's input positions.
+fn hard_block_arrivals(module: &Module, mapping: &super::aig::blast::Mapping) -> Vec<u32> {
+    let mut hard: std::collections::HashSet<crate::ir::design::NetId> =
+        std::collections::HashSet::new();
+    for (_, cell) in module.cells.iter() {
+        if matches!(cell.kind, CellKind::Blackbox(_)) {
+            for (_, net) in &cell.outputs {
+                hard.insert(*net);
+            }
+        }
+    }
+    mapping
+        .inputs
+        .iter()
+        .map(|bit| u32::from(hard.contains(&bit.net)))
+        .collect()
 }
 
 /// Extracts the combinational logic of `module`, optimises it, maps it and
@@ -1272,6 +1419,9 @@ pub fn map_module_checked(
     verify: Option<&MapVerifyOptions>,
 ) -> (MapStats, Option<MapEquivalence>) {
     let (mut aig, mapping) = super::aig::from_module(module);
+    let late = options
+        .late_hard_outputs
+        .then(|| hard_block_arrivals(module, &mapping));
     let before = aig.stats();
     // What the wide network is mapped from has its multiplexer trees as they
     // were written, and is proved against this.
@@ -1280,6 +1430,19 @@ pub fn map_module_checked(
         _ => None,
     };
     super::aig::optimize(&mut aig, &options.aig_opt);
+    // The graph before XOR balancing, which the mapping is proved against.
+    let unbalanced = if options.xor_balance {
+        let before = verify.map(|_| aig.clone());
+        let k = match options.target {
+            Target::Lut(k) => k,
+            Target::Gates(_) => 2,
+        };
+        let arrival = late.as_deref().map(|l| node_arrivals(&aig, l));
+        balance_xor_for(&mut aig, k, &options.cuts, arrival.as_deref());
+        before
+    } else {
+        None
+    };
     let after = aig.stats();
     let mut stats = MapStats {
         before,
@@ -1289,10 +1452,19 @@ pub fn map_module_checked(
     let equivalence;
     match options.target {
         Target::Lut(k) => {
-            let mut network = lut_map_with(&aig, k, &options.cuts, options.area_passes);
+            let arrival = late.as_deref().map(|l| node_arrivals(&aig, l));
+            let mut network = lut_map_arriving(
+                &aig,
+                k,
+                &options.cuts,
+                options.area_passes,
+                false,
+                arrival.as_deref(),
+            );
             let mut kept_trees = None;
             if let Some(unoptimized) = &unoptimized
-                && let Some((wide, trees)) = wide_network(unoptimized, &aig, k, options, &network)
+                && let Some((wide, trees)) =
+                    wide_network(unoptimized, &aig, k, options, &network, late.as_deref())
             {
                 stats.wide_saved = network.tables() - wide.tables();
                 network = wide;
@@ -1309,7 +1481,10 @@ pub fn map_module_checked(
                 (Some(unoptimized), Some(Some(trees))) => {
                     check_lut_mapping_through(unoptimized, trees, &network, v)
                 }
-                _ => check_lut_mapping(&aig, &network, v),
+                _ => match &unbalanced {
+                    Some(unbalanced) => check_lut_mapping_through(unbalanced, &aig, &network, v),
+                    None => check_lut_mapping(&aig, &network, v),
+                },
             });
             network.to_module(&mapping, module);
         }
@@ -1318,7 +1493,20 @@ pub fn map_module_checked(
             stats.cells = network.len();
             stats.depth = network.depth;
             stats.area = network.area;
-            equivalence = verify.map(|v| check_gate_mapping(&aig, &network, library, v));
+            equivalence = verify.map(|v| {
+                let against = check_gate_mapping(&aig, &network, library, v);
+                match &unbalanced {
+                    // The balancing proved on its own, as `_through` does.
+                    Some(unbalanced) if !against.wrong() => {
+                        match verify::check_graphs(unbalanced, &aig, v) {
+                            wrong @ MapEquivalence::Different { .. } => wrong,
+                            other if against.proved() => other,
+                            _ => against,
+                        }
+                    }
+                    _ => against,
+                }
+            });
             network.to_module(&mapping, module);
         }
     }
@@ -1540,14 +1728,14 @@ mod wide_tests {
         crate::synth::aig::optimize(&mut optimized, &options.aig_opt);
         let plain = lut_map_with(&optimized, 6, &options.cuts, options.area_passes);
         assert_eq!(plain.tables(), 1);
-        assert!(wide_network(&aig, &optimized, 6, &options, &plain).is_none());
+        assert!(wide_network(&aig, &optimized, 6, &options, &plain, None).is_none());
         // And a real one is, against a plain network that has more.
         let real = tree(4);
         let mut optimized = real.clone();
         crate::synth::aig::optimize(&mut optimized, &options.aig_opt);
         let plain = lut_map_with(&optimized, 6, &options.cuts, options.area_passes);
         let (wide, trees) =
-            wide_network(&real, &optimized, 6, &options, &plain).expect("it saves tables");
+            wide_network(&real, &optimized, 6, &options, &plain, None).expect("it saves tables");
         assert!(trees.is_some());
         assert_eq!(wide.tables(), 4);
     }
@@ -1699,6 +1887,56 @@ mod tests {
     }
 
     /// Evaluates a LUT network for one input assignment.
+    /// A four-input AND that is an output in both polarities, as a carry
+    /// chain's propagate is when it is the complement of a table something
+    /// else reads: `y0 = a & b & c & d`, `y1 = !y0`, and a third output
+    /// reading the AND as a leaf.
+    fn read_both_ways() -> Aig {
+        let mut g = Aig::new();
+        let ins: Vec<Edge> = (0..6).map(|_| g.add_input()).collect();
+        let all = g.and_n(&ins[..4]);
+        let y2 = g.xor(all, ins[4]);
+        g.add_output(all);
+        g.add_output(!all);
+        g.add_output(y2);
+        g
+    }
+
+    /// **A node read in both polarities is two tables over its leaves, not a
+    /// table and an inverter**, with [`CutOptions::duplicate_complements`]:
+    /// the same count of tables (the inverter is one), and no table reads
+    /// another's output only to invert it. Mapped onto four-input tables,
+    /// where the AND is a table of its own. Would catch the option ignored
+    /// (an inverter over the AND's table, a level more) and the duplicate
+    /// given the plain function (every pattern of `y1` wrong).
+    #[test]
+    fn a_complement_read_beside_its_node_is_a_table_of_its_own() {
+        let aig = read_both_ways();
+        let inverters = |net: &LutNetwork| {
+            net.luts
+                .iter()
+                .filter(|l| {
+                    l.inputs.len() == 1
+                        && matches!(l.inputs[0], Signal::Node(_))
+                        && l.init == Const::from_u64(0b01, 2)
+                })
+                .count()
+        };
+        let plain = lut_map_with(&aig, 4, &CutOptions::default(), 2);
+        assert_eq!(inverters(&plain), 1, "{:?}", plain.luts);
+        let options = CutOptions {
+            duplicate_complements: true,
+            ..CutOptions::default()
+        };
+        let net = lut_map_with(&aig, 4, &options, 2);
+        assert_eq!(inverters(&net), 0, "{:?}", net.luts);
+        assert_eq!(net.tables(), plain.tables());
+        for pat in 0..64u32 {
+            let ins: Vec<bool> = (0..6).map(|i| (pat >> i) & 1 == 1).collect();
+            assert_eq!(simulate_luts(&net, &ins), aig.eval(&ins), "pattern {pat:b}");
+        }
+    }
+
     pub(super) fn simulate_luts(net: &LutNetwork, inputs: &[bool]) -> Vec<bool> {
         let mut values: Vec<bool> = Vec::with_capacity(net.luts.len());
         let value = |s: Signal, values: &[bool]| match s {

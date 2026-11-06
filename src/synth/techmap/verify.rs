@@ -164,12 +164,17 @@ pub fn check_lut_mapping_through(
     if mapping.wrong() {
         return mapping;
     }
-    let graph = decide(aig, graph_miter(aig, optimized), options);
+    let graph = check_graphs(aig, optimized, options);
     match (mapping, graph) {
         (_, wrong @ MapEquivalence::Different { .. }) => wrong,
         (MapEquivalence::Equivalent, other) => other,
         (undecided, _) => undecided,
     }
+}
+
+/// Checks `other`, a graph with `aig`'s inputs and outputs, against `aig`.
+pub fn check_graphs(aig: &Aig, other: &Aig, options: &MapVerifyOptions) -> MapEquivalence {
+    decide(aig, graph_miter(aig, other), options)
 }
 
 /// The miter of `aig` against another graph with the same inputs and outputs.
@@ -334,8 +339,149 @@ fn truth_to_aig(aig: &mut Aig, inputs: &[Edge], value: impl Fn(usize) -> bool) -
     layer.first().copied().unwrap_or(Edge::constant(false))
 }
 
+/// The most leaves a parity may have and still be compared by
+/// [`merge_linear`]; a larger one is a leaf of the parities above it.
+const MAX_LINEAR_LEAVES: usize = 512;
+
+/// When `node` of `aig` computes `u ^ v ^ parity` of two nodes two levels
+/// under it, those two and the parity: decided by evaluating the node on
+/// the four values of the two, and by nothing else, so that it does not
+/// share a fault with the pass whose result it proves (`aig::xor` reads the
+/// AIG's spelling of an XOR instead).
+fn linear_operands(aig: &Aig, node: u32) -> Option<(u32, u32, bool)> {
+    if !aig.is_and(node) {
+        return None;
+    }
+    let (f0, f1) = aig.fanins(node);
+    if !aig.is_and(f0.node()) || !aig.is_and(f1.node()) {
+        return None;
+    }
+    let (a, b) = aig.fanins(f0.node());
+    let (c, d) = aig.fanins(f1.node());
+    let mut under: Vec<u32> = [a, b, c, d].iter().map(|e| e.node()).collect();
+    under.sort_unstable();
+    under.dedup();
+    let [u, v] = under[..] else {
+        return None;
+    };
+    let mut table = 0u8;
+    for pattern in 0..4u8 {
+        let leaf = |e: Edge| -> bool {
+            let value = if e.node() == u {
+                pattern & 1 == 1
+            } else {
+                pattern & 2 == 2
+            };
+            value ^ e.is_complement()
+        };
+        let gate = |e: Edge| -> bool {
+            let (x, y) = aig.fanins(e.node());
+            (leaf(x) && leaf(y)) ^ e.is_complement()
+        };
+        if gate(f0) && gate(f1) {
+            table |= 1 << pattern;
+        }
+    }
+    match table {
+        0b0110 => Some((u, v, false)),
+        0b1001 => Some((u, v, true)),
+        _ => None,
+    }
+}
+
+/// `aig` rebuilt with every node that is a parity of nodes it has already
+/// made merged into the first node that is the same parity of the same
+/// nodes: a proof by linear algebra over GF(2), which is exact, for what a
+/// SAT solver finds hardest. Two XOR trees over the same leaves associated
+/// differently — a CRC rebuilt for depth (`aig::xor`) against the chain it
+/// was written as, or a six-input parity table against either — are the
+/// same parity; `fraig` was left with 2,092 AND nodes of `crc32` by its
+/// conflict limit. Sound because each step is: a node is taken for a parity
+/// only on its own evaluation ([`linear_operands`]), and two parities of the
+/// same nodes are one function. A parity of more than [`MAX_LINEAR_LEAVES`]
+/// is a node of its own.
+fn merge_linear(aig: &Aig) -> Aig {
+    use std::collections::HashMap;
+    let mut out = Aig::new();
+    let mut map: Vec<Edge> = vec![Edge::FALSE; aig.len()];
+    for &pi in aig.inputs() {
+        map[pi as usize] = out.add_input();
+    }
+    // A node of `out` that is a parity: its leaves, ascending, and whether
+    // it is their complement.
+    let mut forms: HashMap<u32, (Vec<u32>, bool)> = HashMap::new();
+    // The first node of `out` that is each parity, as an edge that is it.
+    let mut first: HashMap<Vec<u32>, Edge> = HashMap::new();
+    for id in 1..u32::try_from(aig.len()).expect("node count") {
+        if !aig.is_and(id) {
+            continue;
+        }
+        let (a, b) = aig.fanins(id);
+        let c = out.and(
+            map[a.index()].xor(a.is_complement()),
+            map[b.index()].xor(b.is_complement()),
+        );
+        map[id as usize] = c;
+        if c.is_const() || forms.contains_key(&c.node()) {
+            continue;
+        }
+        let Some((u, v, parity)) = linear_operands(&out, c.node()) else {
+            continue;
+        };
+        let form = |x: u32| -> (Vec<u32>, bool) {
+            forms.get(&x).cloned().unwrap_or_else(|| (vec![x], false))
+        };
+        let ((fu, pu), (fv, pv)) = (form(u), form(v));
+        let mut leaves: Vec<u32> = Vec::with_capacity(fu.len() + fv.len());
+        let (mut i, mut j) = (0, 0);
+        while i < fu.len() || j < fv.len() {
+            match (fu.get(i), fv.get(j)) {
+                (Some(x), Some(y)) if x == y => {
+                    i += 1;
+                    j += 1;
+                }
+                (Some(x), Some(y)) if x < y => {
+                    leaves.push(*x);
+                    i += 1;
+                }
+                (Some(x), None) => {
+                    leaves.push(*x);
+                    i += 1;
+                }
+                (_, Some(y)) => {
+                    leaves.push(*y);
+                    j += 1;
+                }
+                (None, None) => unreachable!("the loop stops when both are done"),
+            }
+        }
+        if leaves.len() > MAX_LINEAR_LEAVES {
+            continue;
+        }
+        // The node is the parity of `leaves`, complemented by `flip`.
+        let flip = parity ^ pu ^ pv;
+        let value = c.is_complement() ^ flip;
+        match leaves.len() {
+            0 => map[id as usize] = Edge::constant(value),
+            1 => map[id as usize] = Edge::plain(leaves[0]).xor(value),
+            _ => {
+                if let Some(&same) = first.get(&leaves) {
+                    map[id as usize] = same.xor(value);
+                } else {
+                    first.insert(leaves.clone(), Edge::plain(c.node()).xor(flip));
+                    forms.insert(c.node(), (leaves, flip));
+                }
+            }
+        }
+    }
+    for &o in aig.outputs() {
+        out.add_output(map[o.index()].xor(o.is_complement()));
+    }
+    out.rebuild()
+}
+
 /// Decides a miter: simulate for a counter-example, then prove.
-fn decide(aig: &Aig, mut miter: Aig, options: &MapVerifyOptions) -> MapEquivalence {
+fn decide(aig: &Aig, miter: Aig, options: &MapVerifyOptions) -> MapEquivalence {
     let n = aig.inputs().len();
     let outs = aig.outputs().len();
     let words = options.sim_words.max(1);
@@ -368,6 +514,7 @@ fn decide(aig: &Aig, mut miter: Aig, options: &MapVerifyOptions) -> MapEquivalen
             };
         }
     }
+    let mut miter = merge_linear(&miter);
     fraig(&mut miter, &options.fraig);
     if miter.outputs().iter().all(|&o| o == Edge::FALSE) {
         return MapEquivalence::Equivalent;
@@ -382,6 +529,92 @@ mod tests {
     use super::super::tests::{descriptor_rom_cone, simulate_luts};
     use super::super::{MapOptions, gate_map, lut_map};
     use super::*;
+
+    /// A 34-input parity, the widest of `crc32`'s, as a chain against the
+    /// same parity as a balanced tree with its leaves in another order.
+    fn two_parities() -> (Aig, Aig) {
+        let mut chain = Aig::new();
+        let ins: Vec<Edge> = (0..34).map(|_| chain.add_input()).collect();
+        let mut acc = ins[0];
+        for &e in &ins[1..] {
+            acc = chain.xor(acc, e);
+        }
+        chain.add_output(acc);
+        let mut tree = Aig::new();
+        let ins: Vec<Edge> = (0..34).map(|_| tree.add_input()).collect();
+        let mut layer: Vec<Edge> = ins.iter().rev().copied().collect();
+        while layer.len() > 1 {
+            layer = layer
+                .chunks(2)
+                .map(|pair| match pair {
+                    [a, b] => tree.xor(*a, *b),
+                    [a] => *a,
+                    _ => unreachable!("chunks of two"),
+                })
+                .collect();
+        }
+        tree.add_output(layer[0]);
+        (chain, tree)
+    }
+
+    /// **Two parities of the same leaves associated differently are proved
+    /// the same.** A chain of 34 and a tree of them reversed: `fraig` under
+    /// its conflict limit left `crc32`'s like this unproved, and
+    /// [`merge_linear`] folds the miter to nothing. Would catch the merge
+    /// gone (inconclusive again) and a parity's complement lost (a wrong
+    /// verdict is impossible: the simulation tier runs first, and a
+    /// complemented tree is in [`a_parity_and_its_complement_are_not_merged`]).
+    #[test]
+    fn two_associations_of_a_parity_are_proved_the_same() {
+        let (chain, tree) = two_parities();
+        let options = MapVerifyOptions::default();
+        assert_eq!(
+            check_graphs(&chain, &tree, &options),
+            MapEquivalence::Equivalent
+        );
+        let merged = merge_linear(&graph_miter(&chain, &tree));
+        assert!(merged.outputs().iter().all(|&o| o == Edge::FALSE));
+    }
+
+    /// **`merge_linear` merges only what is the same parity.** Its proof is
+    /// what lets a miter fold, so it must not fold one that differs: the
+    /// tree complemented, and an AND beside an XOR of the same two inputs,
+    /// are left as differences with no simulation in front of it. Would
+    /// catch the complement dropped and a node taken for a parity that is
+    /// not one (an AND two levels over its inputs, a four-row table of
+    /// `0b1000`); would not catch a
+    /// parity of more than [`MAX_LINEAR_LEAVES`] wrongly merged, which is
+    /// never merged.
+    #[test]
+    fn a_parity_and_its_complement_are_not_merged() {
+        let (chain, mut tree) = two_parities();
+        let o = tree.outputs()[0];
+        tree.set_output(0, !o);
+        let merged = merge_linear(&graph_miter(&chain, &tree));
+        assert_eq!(merged.outputs()[0], Edge::TRUE, "they always differ");
+        let mut g = Aig::new();
+        let a = g.add_input();
+        let b = g.add_input();
+        let x = g.xor(a, b);
+        let y = g.and(a, b);
+        let d = g.xor(x, y);
+        g.add_output(d);
+        let merged = merge_linear(&g);
+        assert!(!merged.outputs()[0].is_const(), "a ^ b ^ (a & b) is a | b");
+        // An AND two levels over its inputs, `(a & b) & !(!a & b)`: a node
+        // whose cone has two leaves but is no parity of them.
+        let mut g = Aig::new();
+        let a = g.add_input();
+        let b = g.add_input();
+        let t = g.and(a, b);
+        let u = g.and(!a, b);
+        let n = g.and(t, !u);
+        let x = g.xor(a, b);
+        let d = g.xor(n, x);
+        g.add_output(d);
+        let merged = merge_linear(&g);
+        assert!(!merged.outputs()[0].is_const(), "(a & b) ^ a ^ b is a | b");
+    }
 
     /// The check proves a correct LUT mapping, at every width, for the cone
     /// that used to be mapped wrongly.

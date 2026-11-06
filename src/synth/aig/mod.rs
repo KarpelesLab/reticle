@@ -58,6 +58,7 @@ pub(crate) mod muxtree;
 pub mod refactor;
 pub mod rewrite;
 pub mod truth;
+pub mod xor;
 
 pub use blast::{BitRef, Mapping, from_module};
 pub use emit::to_module;
