@@ -443,13 +443,12 @@ const KNOWN: [(&str, &str, &str); 1] = [("datain_with_pad", "controllers 2", "co
 
 /// What Vivado takes and this flow refuses, by the message it refuses with:
 /// an `IDELAY_VALUE` past 31, of which Vivado warns, critically, and which it
-/// takes as 0, on purpose; and a delay of the fabric into a serialiser's
-/// `DDLY`, which this flow's placer would put in another tile than the
-/// serialiser, and which is refused rather than built unrouted.
-const STRICTER: [(&str, &str); 2] = [
-    ("value_32", "is not 0 to 31"),
-    ("ddly_datain", "nothing places the two in one tile"),
-];
+/// takes as 0, on purpose.
+///
+/// A delay of the fabric into a serialiser's `DDLY` (`ddly_datain`) was here
+/// until 2026-11-07, refused because the placer put the two in different
+/// tiles; it is built since, the two in one, and compared below.
+const STRICTER: [(&str, &str); 1] = [("value_32", "is not 0 to 31")];
 
 /// One design against Vivado's answer.
 fn compare(name: &str, theirs: &[String], root: &str) -> Result<usize, String> {
@@ -500,6 +499,7 @@ fn what_reticle_writes_is_what_vivado_wrote() {
         "ddly_sweep",
         "ddly_wide",
         "ddly_none",
+        "ddly_datain",
     ] {
         let Some(Ok(theirs)) = answers.get(name) else {
             wrong.push(format!("{name}: no answer"));

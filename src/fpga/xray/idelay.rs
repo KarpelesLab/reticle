@@ -68,6 +68,14 @@
 //! `BYP_ALT6`, behind `CINVCTRL`, as a hop, and the tie Vivado makes there
 //! could not be made.
 //!
+//! A delay **of the fabric** on `DDLY` (`ddly_datain`) is built since
+//! 2026-11-07, and writes every feature Vivado does. It was refused until
+//! then, because the two were placed apart: the placer's dedicated relation
+//! `DDLY ← DATAOUT` was none, a `_SING` tile's two `ILOGIC`s being declared on
+//! one wire (`place::find_relation` now leaves such twins out), and once the
+//! two were together this module moved the delay away again, its `ILOGIC`
+//! being taken (`delay_site_free` now lets that be the serialiser it feeds).
+//!
 //! # The controller, and how many
 //!
 //! Vivado puts a controller in every clock region a delay of its group is in,
@@ -610,15 +618,24 @@ impl XrayFabric {
                 let here = placement.site_of(index);
                 if here.is_some_and(|s| {
                     region_of(s).is_some_and(|r| regions_served.contains(&r))
-                        && self.delay_site_free(graph, placement, s, Some(index))
+                        && self.delay_site_free(graph, netlist, placement, s, Some(index))
                 }) {
                     continue;
+                }
+                // A delay into a serialiser's `DDLY` is held beside it by the
+                // placer (`place::build_clusters`), and moved alone it would
+                // reach it no more.
+                if ddly_reader(netlist, index).is_some() {
+                    return Err(format!(
+                        "`{name}`: a delay of the fabric into a serialiser's `DDLY`, placed \
+                         where no controller of its group serves"
+                    ));
                 }
                 let target = graph.sites.iter().enumerate().position(|(s, site)| {
                     site.kind == DELAY_KIND
                         && region_of(s).is_some_and(|r| regions_served.contains(&r))
                         && placement.instance_at(s).is_none()
-                        && self.delay_site_free(graph, placement, s, None)
+                        && self.delay_site_free(graph, netlist, placement, s, None)
                 });
                 let Some(target) = target else {
                     return Err(format!(
@@ -671,10 +688,13 @@ impl XrayFabric {
     }
 
     /// True when a delay site's `ILOGIC` and pad hold nothing but `this`, so
-    /// that a delay of the fabric there has the `ILOGIC`'s way out to itself.
+    /// that a delay of the fabric there has the `ILOGIC`'s way out to itself;
+    /// or, in the `ILOGIC`, the serialiser whose `DDLY` `this` drives, which
+    /// is the one site that serialiser can read it from (`ddly_datain`).
     fn delay_site_free(
         &self,
         graph: &RoutingGraph,
+        netlist: &Netlist,
         placement: &Placement,
         site: usize,
         this: Option<usize>,
@@ -682,13 +702,33 @@ impl XrayFabric {
         let at = &graph.sites[site];
         let half = &at.bel[at.bel.len() - 1..];
         let (x, y) = at.tile;
+        let reader = this.and_then(|i| ddly_reader(netlist, i));
         graph.sites.iter().enumerate().all(|(s, other)| {
             let near = other.tile.1 == y && other.tile.0.abs_diff(x) <= 1;
             let same_half =
                 other.bel == format!("ILOGIC_Y{half}") || other.bel == format!("IOB_Y{half}");
-            !(near && same_half) || placement.instance_at(s).is_none_or(|i| Some(i) == this)
+            !(near && same_half)
+                || placement
+                    .instance_at(s)
+                    .is_none_or(|i| Some(i) == this || Some(i) == reader)
         })
     }
+}
+
+/// The instance whose `DDLY` the delay `delay`'s `DATAOUT` drives, if any.
+fn ddly_reader(netlist: &Netlist, delay: usize) -> Option<usize> {
+    let out = netlist.instances[delay]
+        .pins
+        .iter()
+        .map(|p| &netlist.pins[*p])
+        .find(|p| p.role == "dataout")?
+        .signal?;
+    netlist.signals[out]
+        .sinks
+        .iter()
+        .map(|p| &netlist.pins[*p])
+        .find(|p| p.role == "ddly")
+        .map(|p| p.instance)
 }
 
 /// One controller of [`IoDelayPlan`].

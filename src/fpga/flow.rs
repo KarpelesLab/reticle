@@ -1118,41 +1118,22 @@ fn serdes_connections(
     // The delay may still be an instance here or a cell already.
     if let Some(ddly) = net("DDLY") {
         let is_delay = |module: &crate::ir::ModuleRef| matches!(module, crate::ir::ModuleRef::Unresolved(n) if n.as_str() == "IDELAYE2");
-        let delay = m
-            .instances
-            .iter()
-            .find(|(_, i)| {
-                is_delay(&i.module)
-                    && i.connection("DATAOUT").and_then(|e| m.expr(e).as_net()) == Some(ddly)
-            })
-            .map(|(_, i)| &i.params)
-            .or_else(|| {
-                m.cells
-                    .iter()
-                    .find(|(_, c)| {
-                        matches!(&c.kind, crate::ir::CellKind::Blackbox(n) if n.as_str() == "IDELAYE2")
-                            && c.output("DATAOUT") == Some(ddly)
-                    })
-                    .map(|(_, c)| &c.params)
-            });
-        let Some(delay) = delay else {
+        // A delay of the fabric (`DELAY_SRC("DATAIN")`) is one too: Vivado
+        // builds it beside the serialiser (`ddly_datain`), and so does this
+        // flow since 2026-11-07, when the placer learned to put the two in one
+        // tile (`place::find_relation`'s twins, `xray::idelay`'s
+        // `delay_site_free`). It was refused here until then.
+        let from_delay = m.instances.iter().any(|(_, i)| {
+            is_delay(&i.module)
+                && i.connection("DATAOUT").and_then(|e| m.expr(e).as_net()) == Some(ddly)
+        }) || m.cells.iter().any(|(_, c)| {
+            matches!(&c.kind, crate::ir::CellKind::Blackbox(n) if n.as_str() == "IDELAYE2")
+                && c.output("DATAOUT") == Some(ddly)
+        });
+        if !from_delay {
             return Err(
                 "`DDLY` from anything but an `IDELAYE2`'s `DATAOUT`, which is the one road to \
                  it; Vivado cannot route it either (Route 35-7)"
-                    .to_owned(),
-            );
-        };
-        // A delay of the fabric has no pad to put it and the serialiser
-        // beside, and this flow's placer puts the two apart; Vivado builds it
-        // (`ddly_datain`).
-        if delay
-            .get("DELAY_SRC")
-            .and_then(crate::ir::AttrValue::as_str)
-            .is_some_and(|s| s.eq_ignore_ascii_case("DATAIN"))
-        {
-            return Err(
-                "`DDLY` from a delay of the fabric (`DELAY_SRC(\"DATAIN\")`), which Vivado \
-                 builds and this flow does not: nothing places the two in one tile"
                     .to_owned(),
             );
         }

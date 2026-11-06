@@ -364,18 +364,22 @@ fn regenerate(root: &str) {
 /// | `mem32x8r2`, `r3`, `r4` | a read port's two `RAM32X1D` and another's in one slice, all four tables | a slice each pair |
 /// | `mem128x4r2` | two read ports' `RAM64X1D` in one slice | a slice each |
 /// | `mem64x8`, `r2`, `r3` | a `RAM64M` whose unused `DIC` is `DID`'s, so `CLUT.DI1MUX.CI` is clear | the mux set, its input a constant |
-/// | `mem32x8` | its two `RAM32X1D` in one slice, the `C` and `D` tables' upper halves and lower | a slice each |
 ///
 /// `mem32x8` was Vivado's line for line until 2026-11-06, and nothing put
 /// its two `RAM32X1D` in one slice but the anneal: no rule of the placer asks
 /// for it. When `--synthesis vivado` mapped the XOR of its read word in two
 /// tables deep where it had been three, the placement moved and the two went
-/// a slice each. The cells are still Vivado's.
+/// a slice each, and it was listed here. Since 2026-11-07 it is Vivado's line
+/// for line again, and again by the anneal: a RAM's registers go in its slice
+/// now (`place::registered_tables`), which moved the placement. A rule that
+/// put two `RAM32X1D` of one address in one slice was written, measured over
+/// ten seeds and taken out, since it cost the clock where Vivado's timer asked
+/// (`docs/fpga-vivado-parity.md`, "Packing against Vivado's"); so a placement
+/// that moves may put `mem32x8` back here, and that is no fault of its cells.
 ///
 /// The cells are Vivado's in all of them ([`each_design_gets_the_cells_vivado_gave_it`]).
 const PACKED: &[&str] = &[
     "mem128x4r2",
-    "mem32x8",
     "mem32x8r2",
     "mem32x8r3",
     "mem32x8r4",

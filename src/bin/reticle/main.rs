@@ -4274,6 +4274,9 @@ fn write_xc7_bitstream(
     // A regional clock's buffer and loads stay in its region: see
     // `PlaceOptions::regional_sites`.
     options.regional_sites = fabric.regional_sites(&graph);
+    // A distributed RAM's registered outputs in its slice, as Vivado packs
+    // them; not under `--memories legacy`. See `PlaceOptions::memory_packing`.
+    options.memory_packing = !memories_legacy(args).map_err(|e| e.to_string())?;
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let delay_model = delay_model(args).map_err(|e| e.to_string())?;

@@ -1322,6 +1322,13 @@ pub struct PlaceOptions {
     /// ([`clock_regions`](PlaceOptions::clock_regions)' numbers): empty for a
     /// family without them. See `confine_regional_clocks`.
     pub regional_sites: BTreeMap<usize, u16>,
+    /// Packs a distributed RAM's registered outputs into its slice, as Vivado
+    /// does: a flip-flop that reads a RAM's output and nothing else of its
+    /// slice disagrees with joins the RAM's group on the flip-flop site that
+    /// output reaches inside the tile (`registered_tables`). Off by default,
+    /// and off under `--memories legacy`, whose one `RAM64X1D` shape writes on
+    /// its own `WE` pin and was placed without it on a board.
+    pub memory_packing: bool,
 }
 
 /// [`PlaceOptions::clock_regions`] for a tile in none.
@@ -1356,6 +1363,7 @@ impl Default for PlaceOptions {
             clock_regions: Vec::new(),
             clock_region_lines: 0,
             regional_sites: BTreeMap::new(),
+            memory_packing: false,
         }
     }
 }
@@ -1986,6 +1994,40 @@ fn shares_a_slice_with_shift_register(netlist: &Netlist, srl: usize, ff: usize) 
         && match signal(ff, "en") {
             None => true,
             enable => enable == signal(srl, "ce"),
+        }
+}
+
+/// Whether `kind` is a distributed RAM's: `lutram` or `lutram_<shape>`.
+fn is_lut_ram(kind: &str) -> bool {
+    kind == "lutram" || kind.starts_with("lutram_")
+}
+
+/// Whether a flip-flop may be packed with the distributed RAM whose output it
+/// registers: the `SLICEM`'s flip-flops take its clock, `wclk`, and its
+/// `CLKINV`, and their enable is the RAM's write enable or none
+/// (`xray::lutram`'s `WEMUX.CE`). A macro of the two that broke one of these
+/// could never be placed.
+fn shares_a_slice_with_ram(netlist: &Netlist, ram: usize, ff: usize) -> bool {
+    let inverted = |i: usize| netlist.gate_inverted.get(i).copied().unwrap_or(false);
+    if !modes_agree(
+        slice_mode(&netlist.instances[ram].primitive, inverted(ram)),
+        slice_mode(&netlist.instances[ff].primitive, inverted(ff)),
+    ) {
+        return false;
+    }
+    let signal = |instance: usize, role: &str| {
+        netlist.instances[instance]
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|pin| pin.role == role)
+            .and_then(|p| p.signal)
+    };
+    signal(ram, "wclk").is_some()
+        && signal(ram, "wclk") == signal(ff, "clk")
+        && match signal(ff, "en") {
+            None => true,
+            enable => enable == signal(ram, "we"),
         }
 }
 
@@ -3161,7 +3203,14 @@ pub fn place(
         confine_to_input_budget(netlist, graph, &sites_by_kind, &mut info, timing);
     }
     let mut macros = build_macros(netlist, constraints, &mut info);
-    let clusters = build_clusters(netlist, graph, &sites_by_kind, &mut info, macros.len());
+    let clusters = build_clusters(
+        netlist,
+        graph,
+        &sites_by_kind,
+        &mut info,
+        macros.len(),
+        options.memory_packing,
+    );
     report.dedicated = clusters.len();
     macros.extend(clusters);
     report.macros = (
@@ -4351,11 +4400,26 @@ fn control_set(netlist: &Netlist, ff: usize) -> Vec<(String, Option<usize>)> {
 /// set/reset and primitive, since one slice has one of each. An `O5` that
 /// also leaves the tile is left alone: its one way out is the output mux
 /// the five-input flip-flop's `Q` needs.
+///
+/// With `memories` a distributed RAM's outputs are such tables too
+/// ([`PlaceOptions::memory_packing`]): Vivado registers a RAM's read word
+/// in the RAM's own slice (`lutram32`, six of each slice's `q_reg` beside
+/// its `RAM32M`), and this flow had the flip-flops a slice away, the RAM's
+/// output to the interconnect and back: the latest path of `lutram32` was
+/// that connection, 0.51 ns of route where Vivado's is none. A flip-flop
+/// joins only on the RAM's write clock and with its write enable or none,
+/// since a `SLICEM`'s flip-flops share both with it
+/// ([`shares_a_slice_with_ram`]).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the cluster search's whole state"
+)]
 fn registered_tables(
     netlist: &Netlist,
     graph: &RoutingGraph,
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     info: &[Placeable],
+    memories: bool,
     relations: &mut BTreeMap<(String, String, String, String), Option<Rc<Relation>>>,
     links: &mut Vec<(usize, usize, Rc<Relation>)>,
 ) {
@@ -4374,10 +4438,13 @@ fn registered_tables(
         };
         let dpin = &netlist.pins[driver];
         let x = dpin.instance;
-        if !matches!(
-            netlist.instances[x].kind.as_str(),
-            "lut" | "srl32" | "srl16"
-        ) || (netlist.instances[x].kind != lut && dpin.role != "q")
+        let ram = memories && is_lut_ram(&netlist.instances[x].kind);
+        if !(ram
+            || matches!(
+                netlist.instances[x].kind.as_str(),
+                "lut" | "srl32" | "srl16"
+            ))
+            || (netlist.instances[x].kind != lut && !ram && dpin.role != "q")
             || !free(x)
             || (dpin.role == "o5" && signal.sinks.len() != 1)
         {
@@ -4394,7 +4461,11 @@ fn registered_tables(
             {
                 continue;
             }
-            if netlist.instances[x].kind != lut
+            if ram {
+                if !shares_a_slice_with_ram(netlist, x, y) {
+                    continue;
+                }
+            } else if netlist.instances[x].kind != lut
                 && !shares_a_slice_with_shift_register(netlist, x, y)
             {
                 continue;
@@ -4592,6 +4663,7 @@ fn build_clusters(
     sites_by_kind: &BTreeMap<String, Vec<usize>>,
     info: &mut [Placeable],
     first_index: usize,
+    memory_packing: bool,
 ) -> Vec<Macro> {
     let free =
         |i: usize, info: &[Placeable]| info[i].fixed.is_none() && info[i].macro_index.is_none();
@@ -4654,6 +4726,7 @@ fn build_clusters(
         graph,
         sites_by_kind,
         info,
+        memory_packing,
         &mut relations,
         &mut links,
     );
@@ -4788,6 +4861,16 @@ fn build_clusters(
 /// or `None` when that connection is not dedicated: some site of the sink's
 /// kind is fed from the general interconnect, or can be reached from more
 /// than one site of the driver's kind, or two sinks share one driver site.
+///
+/// **Two sinks on one wire are one site seen twice**, and are left out
+/// rather than taken for a connection that is not dedicated. A 7-series
+/// `_SING` IO tile has one pad and is declared with both halves' `ILOGIC`s
+/// on the same wires (`xray::iologic`), so both reach the one delay its
+/// `DDLY` comes from; that pair made the whole `DDLY ← DATAOUT` relation
+/// none, and a delay of the fabric was placed apart from the serialiser it
+/// feeds, with no way between them (`ddly_datain`). Leaving the twins out
+/// is the conservative reading: a group that needs the connection does not
+/// sit in that tile at all.
 fn find_relation(
     graph: &RoutingGraph,
     pins_at: &HashMap<NodeId, Vec<(usize, String)>>,
@@ -4795,7 +4878,8 @@ fn find_relation(
     key: &(String, String, String, String),
 ) -> Option<Rc<Relation>> {
     let (sink_kind, sink_role, driver_kind, driver_role) = key;
-    let mut relation = Relation::default();
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut sinks_of: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for site in sites_by_kind.get(sink_kind)? {
         if graph.sites[*site].pin(sink_role).is_none() {
             continue;
@@ -4805,13 +4889,28 @@ fn find_relation(
         match drivers.as_slice() {
             [] => {}
             [one] => {
-                if relation.sink_of.insert(*one, *site).is_some() {
-                    return None;
-                }
-                relation.driver_of.insert(*site, *one);
+                pairs.push((*site, *one));
+                sinks_of.entry(*one).or_default().push(*site);
             }
             _ => return None,
         }
+    }
+    let wires = |site: usize| -> Vec<NodeId> { graph.sites[site].pin_nodes(sink_role).collect() };
+    let mut twins: BTreeSet<usize> = BTreeSet::new();
+    for (_, sinks) in sinks_of.iter().filter(|(_, sinks)| sinks.len() > 1) {
+        let first = wires(sinks[0]);
+        if sinks[1..].iter().any(|s| wires(*s) != first) {
+            return None;
+        }
+        twins.extend(sinks.iter().copied());
+    }
+    let mut relation = Relation::default();
+    for (sink, driver) in pairs {
+        if twins.contains(&sink) {
+            continue;
+        }
+        relation.sink_of.insert(driver, sink);
+        relation.driver_of.insert(sink, driver);
     }
     (!relation.driver_of.is_empty()).then(|| Rc::new(relation))
 }
@@ -12418,7 +12517,7 @@ mod tests {
                     soft: false,
                 })
                 .collect();
-            build_clusters(&netlist, &graph, &sites_by_kind, &mut info, 0)
+            build_clusters(&netlist, &graph, &sites_by_kind, &mut info, 0, false)
                 .iter()
                 .map(|m| {
                     let mut members: Vec<usize> = m.members.iter().map(|(i, _, _)| *i).collect();
@@ -12430,6 +12529,288 @@ mod tests {
         assert_eq!(members(2, false), vec![vec![0, 1, 2]]);
         assert_eq!(members(3, false), vec![vec![0, 1]]);
         assert_eq!(members(2, true), vec![vec![0, 1]]);
+    }
+
+    /// One instance for [`netlist_of`]: its kind, primitive and pins.
+    type Spec<'a> = (&'a str, &'a str, &'a [(&'a str, usize, bool)]);
+
+    /// A netlist of `instances`, each `(kind, primitive, pins)` with each pin
+    /// `(role, signal, whether the instance drives it)`, over `signals`
+    /// signals.
+    fn netlist_of(signals: usize, instances: &[Spec<'_>]) -> Netlist {
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: (0..signals)
+                .map(|n| Signal {
+                    name: format!("s{n}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        for (instance, (kind, primitive, pins)) in instances.iter().enumerate() {
+            let mut own = Vec::new();
+            for (role, signal, output) in *pins {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+                if *output {
+                    netlist.signals[*signal].driver = Some(pin);
+                } else {
+                    netlist.signals[*signal].sinks.push(pin);
+                }
+                own.push(pin);
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("{kind}{instance}"),
+                primitive: (*primitive).to_owned(),
+                kind: (*kind).to_owned(),
+                pins: own,
+                pin: None,
+            });
+        }
+        netlist
+    }
+
+    /// Every site of `graph` by kind, as `place` builds it.
+    fn kinds_of(graph: &RoutingGraph) -> BTreeMap<String, Vec<usize>> {
+        let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, site) in graph.sites.iter().enumerate() {
+            sites_by_kind
+                .entry(site.kind.clone())
+                .or_default()
+                .push(index);
+        }
+        sites_by_kind
+    }
+
+    /// The members of each group `build_clusters` makes of `netlist`, sorted.
+    fn clusters_of(netlist: &Netlist, graph: &RoutingGraph, memories: bool) -> Vec<Vec<usize>> {
+        let mut info: Vec<Placeable> = (0..netlist.instances.len())
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+                soft: false,
+            })
+            .collect();
+        build_clusters(netlist, graph, &kinds_of(graph), &mut info, 0, memories)
+            .iter()
+            .map(|m| {
+                let mut members: Vec<usize> = m.members.iter().map(|(i, _, _)| *i).collect();
+                members.sort_unstable();
+                members
+            })
+            .collect()
+    }
+
+    /// The kind of a `RAM32X1D`'s places, as `xray::lutram` declares them.
+    const RAM_KIND: &str = "lutram_d32";
+
+    /// A `SLICEM` reduced to two `RAM32X1D` places and their flip-flops: the
+    /// upper place's output `o6` reaches `ffa`'s `d` inside the tile and the
+    /// lower's `o5` `ffb`'s, as a 7-series `C` table's `O6` reaches `CFF` and
+    /// its `O5` `C5FF`; both places read the one write address and clock, and
+    /// either `d` can come from the tile to the east too. Two tiles.
+    fn ram_lane() -> (Arch, RoutingGraph) {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clbm", "logic_tile", 8, 8);
+        for name in ["o6", "o5", "da", "db", "clk", "wa", "track"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for (from, to) in [
+            (WireRef::local("o6"), WireRef::local("da")),
+            (WireRef::local("o5"), WireRef::local("db")),
+            (WireRef::at("track", 1, 0), WireRef::local("da")),
+            (WireRef::at("track", 1, 0), WireRef::local("db")),
+            (WireRef::at("track", 1, 0), WireRef::local("wa")),
+            (WireRef::local("o6"), WireRef::local("track")),
+            (WireRef::local("o5"), WireRef::local("track")),
+        ] {
+            tile.pips.push(PipDecl {
+                from,
+                to,
+                bits: Vec::new(),
+            });
+        }
+        for (name, out) in [("ram", "o6"), ("ram_lo", "o5")] {
+            let mut ram = BelDecl::new(name, RAM_KIND);
+            ram.pins.push(("dout".to_owned(), WireRef::local(out)));
+            ram.pins.push(("wclk".to_owned(), WireRef::local("clk")));
+            ram.pins.push(("waddr0".to_owned(), WireRef::local("wa")));
+            tile.bels.push(ram);
+        }
+        for (name, d) in [("ffa", "da"), ("ffb", "db")] {
+            let mut ff = BelDecl::new(name, "ff");
+            ff.pins.push(("d".to_owned(), WireRef::local(d)));
+            ff.pins.push(("clk".to_owned(), WireRef::local("clk")));
+            tile.bels.push(ff);
+        }
+        arch.tile_types.push(tile);
+        for x in 0..2 {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        (arch, graph)
+    }
+
+    /// **A distributed RAM takes the flip-flop it registers into, with
+    /// `memory_packing` only.** Signals: 0 and 1 the RAMs' outputs, 2 the
+    /// clock, 3 the address, 4 another clock. Would catch `registered_tables`
+    /// not offered a RAM (no group with the option on), offered one without
+    /// the option (a group with it off, which is what `--memories legacy` and
+    /// the Husky's builds must not see), and a flip-flop on another clock than
+    /// the RAM's write clock joined (a group no slice holds, since its
+    /// flip-flops take that clock). And that the two RAMs, which share their
+    /// address, are not made one group: putting a slice's two `RAM32X1D` in
+    /// one, as Vivado does, was measured and cost the clock (see
+    /// `docs/fpga-vivado-parity.md`, "Packing against Vivado's"). Would not
+    /// catch the RAM's write enable unchecked against the flip-flop's, which
+    /// this lane has no wire for; the lutram suite's
+    /// `a_rams_write_enable_does_not_enable_its_slices_flip_flops` builds it.
+    #[test]
+    fn a_ram_takes_the_flip_flops_it_registers_when_memories_are_packed() {
+        let (_, graph) = ram_lane();
+        let ram = |out: usize| {
+            vec![
+                ("dout", out, true),
+                ("wclk", 2, false),
+                ("waddr0", 3, false),
+            ]
+        };
+        let build = |ff_clock: usize, memories: bool| {
+            let (r0, r1) = (ram(0), ram(1));
+            let f0 = [("d", 0, false), ("clk", ff_clock, false)];
+            let f1 = [("d", 1, false), ("clk", 2, false)];
+            let netlist = netlist_of(
+                5,
+                &[
+                    (RAM_KIND, "RAM32X1D", &r0),
+                    (RAM_KIND, "RAM32X1D", &r1),
+                    ("ff", "FDRE", &f0),
+                    ("ff", "FDRE", &f1),
+                ],
+            );
+            clusters_of(&netlist, &graph, memories)
+        };
+        assert_eq!(build(2, false), Vec::<Vec<usize>>::new());
+        assert_eq!(build(2, true), vec![vec![0, 2], vec![1, 3]]);
+        assert_eq!(build(4, true), vec![vec![1, 3]]);
+    }
+
+    /// Two tiles with a delay feeding a serialiser's `ddly`: the first tile's
+    /// two serialiser places on **one wire**, as a 7-series `_SING` IO tile
+    /// declares both halves' `ILOGIC`s on its one half's wires
+    /// (`xray::iologic`), and the second's on one each. With `apart` the
+    /// first tile's two are on two wires that still reach the one delay.
+    fn ddly_tiles(apart: bool) -> RoutingGraph {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        for (index, twin) in [true, false].into_iter().enumerate() {
+            let mut tile = TileType::new(format!("ioi{index}"), "io_tile", 8, 8);
+            for name in ["out", "ddly0", "ddly1"] {
+                tile.wires.push(WireDecl {
+                    name: name.to_owned(),
+                    dx: 0,
+                    dy: 0,
+                });
+            }
+            let mut delay = BelDecl::new("delay", "iodelay");
+            delay
+                .pins
+                .push(("dataout".to_owned(), WireRef::local("out")));
+            tile.bels.push(delay);
+            let (first, second) = if twin && !apart {
+                ("ddly0", "ddly0")
+            } else {
+                ("ddly0", "ddly1")
+            };
+            for (name, wire) in [("ilogic0", first), ("ilogic1", second)] {
+                let mut ilogic = BelDecl::new(name, "ddr_in");
+                ilogic.pins.push(("ddly".to_owned(), WireRef::local(wire)));
+                tile.bels.push(ilogic);
+            }
+            tile.pips.push(PipDecl {
+                from: WireRef::local("out"),
+                to: WireRef::local("ddly0"),
+                bits: Vec::new(),
+            });
+            if twin {
+                tile.pips.push(PipDecl {
+                    from: WireRef::local("out"),
+                    to: WireRef::local("ddly1"),
+                    bits: Vec::new(),
+                });
+            }
+            arch.tile_types.push(tile);
+            arch.set_tile(u32::try_from(index).unwrap_or(0), 0, index);
+        }
+        arch.build_graph()
+    }
+
+    /// **Two sinks on one wire are one site seen twice, not a connection
+    /// fed from two places.** In `ddly_tiles` the second tile's first
+    /// serialiser place is reached from its delay alone; the first tile's
+    /// two places are twins. Would catch the twins making the whole relation
+    /// none, which placed a delay of the fabric in one IO tile and the
+    /// serialiser it feeds in another, unroutable (`ddly_datain`), and the
+    /// twins taken into the relation, either of which would let a group sit
+    /// on a place whose twin something else may hold. The second case is
+    /// the rule as it was: two places on two wires that reach one delay are
+    /// no dedicated connection, and stay none. Would not catch a `_SING`
+    /// tile declared another way; `tests/fpga_xray_idelay.rs` builds
+    /// `ddly_datain` on the part's own tiles.
+    #[test]
+    fn two_sinks_on_one_wire_are_one_site_seen_twice() {
+        let key = (
+            "ddr_in".to_owned(),
+            "ddly".to_owned(),
+            "iodelay".to_owned(),
+            "dataout".to_owned(),
+        );
+        let relation = |graph: &RoutingGraph| {
+            let mut pins_at: HashMap<NodeId, Vec<(usize, String)>> = HashMap::new();
+            for (index, site) in graph.sites.iter().enumerate() {
+                for (role, node) in &site.pins {
+                    pins_at
+                        .entry(*node)
+                        .or_default()
+                        .push((index, role.clone()));
+                }
+            }
+            find_relation(graph, &pins_at, &kinds_of(graph), &key)
+        };
+        let graph = ddly_tiles(false);
+        let found = relation(&graph).expect("the second tile's connection is dedicated");
+        let name = |site: Option<usize>| site.map(|s| graph.sites[s].name.clone());
+        let in_tile = |tile: (u32, u32), bel: &str| {
+            (0..graph.sites.len())
+                .find(|s| graph.sites[*s].tile == tile && graph.sites[*s].bel == bel)
+                .unwrap()
+        };
+        let (twin0, twin1) = (in_tile((0, 0), "ilogic0"), in_tile((0, 0), "ilogic1"));
+        let (second, delay) = (in_tile((1, 0), "ilogic0"), in_tile((1, 0), "delay"));
+        assert_eq!(name(found.driver_of.get(second)), name(Some(delay)));
+        assert_eq!(name(found.sink_of.get(delay)), name(Some(second)));
+        assert_eq!(found.driver_of.get(twin0), None);
+        assert_eq!(found.driver_of.get(twin1), None);
+        assert!(relation(&ddly_tiles(true)).is_none());
     }
 
     /// A lookup table, a flip-flop and a carry, each pin `(role, signal,

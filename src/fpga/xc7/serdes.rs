@@ -24,8 +24,9 @@
 //! A delay on `DDLY` is otherwise built in every `IOBDELAY`, `NONE` included,
 //! and writes the delay's features and the serialiser's as each writes them
 //! alone (`testdata/fpga/vivado/idelay/`, `ddly_*`). A delay of the fabric on
-//! `DDLY` Vivado builds and this flow refuses: nothing places the two in one
-//! tile.
+//! `DDLY` Vivado builds, and so does this flow since 2026-11-07, the two in
+//! one tile and every feature Vivado's (`ddly_datain`); it was refused before,
+//! when nothing placed the two together.
 //!
 //! **`PDRC-26` is a fit, and here is what it fits.** Of the 70 combinations
 //! of `CLKB` (`~CLK`, `CLK`, unconnected, a second clock), `IS_CLK_INVERTED`,
