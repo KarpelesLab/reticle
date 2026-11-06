@@ -3514,6 +3514,19 @@ pub const CLAIM_INPUTS: f64 = 0.3;
 /// seeds before and five after, as `docs/fpga-vivado-parity.md` says.
 pub const CRITICAL_ASTAR_WEIGHT: f64 = 1.0;
 
+/// Under the fitted model, `--pair-tables related` leaves alone a lookup table
+/// on a chain of tables at least this many percent as long as the longest
+/// ([`PairOptions::spare_deep`]).
+///
+/// On `qor/adders.v`, whose subtractions are ripples of fifteen tables, the
+/// median achieved period over five seeds under Vivado's timer went from 7.47
+/// ns to 6.45, `crc32` from 5.50 to 4.61 and `analyser_fifo`'s read clock from
+/// 7.36 to 6.37; pairing none (`--pair-tables needed` on these small designs)
+/// did as well within a seed's spread, and sparing from 50 % no better. The
+/// ChipWhisperer-Husky Plus, which pairing was made for, builds with the legacy
+/// model and pairs as before. Measured on 2026-11-06.
+pub const SPARE_DEEP_PERCENT: u32 = 75;
+
 /// What [`XrayDatabase::node_delays`] charges a programmable pip prjxray
 /// gives no delay for, in picoseconds: the median of those it does, over
 /// every tile type of `artix7/` at 0a0adde (0.175 ns).

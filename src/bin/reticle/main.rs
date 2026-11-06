@@ -3150,13 +3150,21 @@ fn route_passes(args: &Args) -> Result<u32, String> {
 }
 
 /// `--pair-tables`: which lookup tables a 7-series build pairs, given the
-/// lookup-table sites of the region it loaded.
-fn pair_options(args: &Args, lut_sites: usize) -> Result<reticle::fpga::xray::PairOptions, String> {
+/// lookup-table sites of the region it loaded and the delay model it times
+/// with: under the fitted one, `related` leaves the tables of the longest
+/// chains alone (`xray::SPARE_DEEP_PERCENT`).
+fn pair_options(
+    args: &Args,
+    lut_sites: usize,
+    model: reticle::fpga::xray::DelayModel,
+) -> Result<reticle::fpga::xray::PairOptions, String> {
     let all = reticle::fpga::xray::PairOptions::default();
     match args.option("pair-tables") {
         Some("all") => Ok(all),
         None | Some("related") => Ok(reticle::fpga::xray::PairOptions {
             min_shared: 2,
+            spare_deep: (model == reticle::fpga::xray::DelayModel::Vivado)
+                .then_some(reticle::fpga::xray::SPARE_DEEP_PERCENT),
             ..all
         }),
         Some("needed") => Ok(reticle::fpga::xray::PairOptions {
@@ -4179,7 +4187,11 @@ fn write_xc7_bitstream(
         &mut design,
         top,
         device,
-        &pair_options(args, lut_sites)?,
+        &pair_options(
+            args,
+            lut_sites,
+            delay_model(args).map_err(|e| e.to_string())?,
+        )?,
     )?;
     laps.lap("pair the lookup tables");
     // Said now rather than with the rest: a design that then does not fit

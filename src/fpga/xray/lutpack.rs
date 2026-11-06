@@ -123,6 +123,10 @@ pub struct PairOptions {
     /// inputs, and never with one that shares none. Zero lets a table
     /// that shares nothing with any other take the narrowest one left.
     pub min_shared: usize,
+    /// Leave a table alone when the longest chain of lookup tables through
+    /// it is at least this many percent of the longest chain anywhere: see
+    /// `deep_tables`. `None` pairs whatever the depth.
+    pub spare_deep: Option<u32>,
 }
 
 /// One lookup table as the pass sees it.
@@ -352,6 +356,16 @@ pub fn pack_lut_pairs(
         }
     }
 
+    // Tables on the longest chains stay alone, when the options say so.
+    let deep: HashSet<usize> = match options.spare_deep {
+        Some(percent) => deep_tables(
+            &tables,
+            &design.modules[module],
+            device,
+            f64::from(percent) / 100.0,
+        )?,
+        None => HashSet::new(),
+    };
     // Pairs, greedily: the widest tables first, each with the partner that
     // shares most of its inputs; a table no partner shares anything with
     // takes the narrowest one left.
@@ -394,7 +408,7 @@ pub fn pack_lut_pairs(
         report.lanes += 1;
     }
     for (i, t) in tables.iter().enumerate() {
-        if lane_tables.contains(&t.out_bit) {
+        if lane_tables.contains(&t.out_bit) || deep.contains(&i) {
             taken[i] = true;
         }
         if taken[i] {
@@ -521,6 +535,151 @@ pub fn pack_lut_pairs(
         m.cells.retain(|id, _| !removed.contains(&id));
     }
     Ok(report)
+}
+
+/// The tables of `tables` ([`pack_lut_pairs`]'s candidates) on a chain of
+/// lookup tables at least `share` as long as the longest in `module`.
+///
+/// A pair's two functions share `A1` to `A5` and give up `A6`, which under
+/// Vivado's timer is the input that costs nothing past its `IMUX` where `A1`
+/// costs 0.39 ns; and the two are one site, placed between both
+/// neighbourhoods. On the longest paths that is what the clock is made of:
+/// `qor/adders.v`'s subtraction is a ripple of fifteen tables, each paired,
+/// at 0.3 ns a step where Vivado, given the same netlist with its halves free
+/// to part, takes 0.2. Before placement nothing is known of the wires, so a
+/// table's chain is counted in tables: every lookup table of the module, a
+/// candidate or not, is a step, and anything else ends the chain. A loop is
+/// cut where it is met.
+fn deep_tables(
+    tables: &[Table],
+    m: &crate::ir::Module,
+    device: &Device,
+    share: f64,
+) -> Result<HashSet<usize>, String> {
+    let Some(lut) = device.bel(BelRole::Lut) else {
+        return Ok(HashSet::new());
+    };
+    let view = BitView::new(m).map_err(|e| e.to_string())?;
+    // Every lookup table's output bits and input bits, of LUT and LUT6_2
+    // cells alike (a lane's pair is already one).
+    let mut outputs: Vec<Vec<SigBit>> = Vec::new();
+    let mut inputs: Vec<Vec<SigBit>> = Vec::new();
+    for (_, cell) in m.cells.iter() {
+        let CellKind::Blackbox(name) = &cell.kind else {
+            continue;
+        };
+        if name.as_str() != lut.name && name.as_str() != DUAL {
+            continue;
+        }
+        let mut o: Vec<SigBit> = Vec::new();
+        for (_, net) in &cell.outputs {
+            if let Ok(bits) = view.net_bits(*net, cell.span) {
+                o.extend(bits.iter().map(|b| view.canonical(*b)));
+            }
+        }
+        let mut i: Vec<SigBit> = Vec::new();
+        for (_, e) in &cell.inputs {
+            if let Ok(bits) = view.expr_bits(*e) {
+                i.extend(
+                    bits.iter()
+                        .map(|b| view.canonical(*b))
+                        .filter(|b| matches!(b, SigBit::Slot(_))),
+                );
+            }
+        }
+        outputs.push(o);
+        inputs.push(i);
+    }
+    let n = outputs.len();
+    let mut driver: HashMap<SigBit, usize> = HashMap::new();
+    for (k, o) in outputs.iter().enumerate() {
+        for b in o {
+            driver.insert(*b, k);
+        }
+    }
+    // Each table's drivers among the tables, and its readers.
+    let mut from: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut to: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (k, ins) in inputs.iter().enumerate() {
+        for b in ins {
+            if let Some(&d) = driver.get(b)
+                && d != k
+                && !from[k].contains(&d)
+            {
+                from[k].push(d);
+                to[d].push(k);
+            }
+        }
+    }
+    // Kahn's order, a loop cut at the first table still waiting.
+    let mut waiting: Vec<usize> = from.iter().map(Vec::len).collect();
+    let mut done = vec![false; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    for k in 0..n {
+        if waiting[k] == 0 {
+            done[k] = true;
+            order.push(k);
+        }
+    }
+    let mut next = 0;
+    loop {
+        while next < order.len() {
+            let k = order[next];
+            next += 1;
+            for r in &to[k] {
+                waiting[*r] = waiting[*r].saturating_sub(1);
+                if waiting[*r] == 0 && !done[*r] {
+                    done[*r] = true;
+                    order.push(*r);
+                }
+            }
+        }
+        let Some(stuck) = (0..n).find(|k| !done[*k]) else {
+            break;
+        };
+        done[stuck] = true;
+        order.push(stuck);
+    }
+    let mut position = vec![0usize; n];
+    for (at, k) in order.iter().enumerate() {
+        position[*k] = at;
+    }
+    // Tables up to and including each, from a start; and from each to an
+    // end. A driver later in the order is the far side of a cut loop.
+    let mut before = vec![1usize; n];
+    for &k in &order {
+        for d in &from[k] {
+            if position[*d] < position[k] {
+                before[k] = before[k].max(before[*d] + 1);
+            }
+        }
+    }
+    let mut after = vec![1usize; n];
+    for &k in order.iter().rev() {
+        for r in &to[k] {
+            if position[*r] > position[k] {
+                after[k] = after[k].max(after[*r] + 1);
+            }
+        }
+    }
+    let through: Vec<usize> = (0..n).map(|k| before[k] + after[k] - 1).collect();
+    let longest = through.iter().copied().max().unwrap_or(0);
+    let mut deep = HashSet::new();
+    if longest < 2 {
+        return Ok(deep);
+    }
+    #[allow(clippy::cast_precision_loss, reason = "a count of tables")]
+    let floor = share * longest as f64;
+    for (i, t) in tables.iter().enumerate() {
+        if let Some(&k) = driver.get(&t.out_bit) {
+            #[allow(clippy::cast_precision_loss, reason = "a count of tables")]
+            let chain = through[k] as f64;
+            if chain >= floor {
+                deep.insert(i);
+            }
+        }
+    }
+    Ok(deep)
 }
 
 #[cfg(test)]
@@ -775,6 +934,90 @@ mod tests {
         assert_eq!(pairs(Some(6)), 0);
         assert_eq!(pairs(Some(100)), 0);
         assert_eq!(pairs(Some(0)), all);
+    }
+
+    /// **A table on the longest chain stays alone when `spare_deep` says
+    /// so.** Four tables in a row, each reading the last and `x0` and `x1`,
+    /// and two more that read only `x0` and `x1`: related pairing pairs the
+    /// row among itself, every two sharing two inputs. Spared from 75 % of the
+    /// longest chain, the row's four (each on the chain of four) stay alone and
+    /// the two shallow ones pair with each other. Would catch the depth counted
+    /// wrong (from one end only, the first of the row is on a chain of one), the
+    /// spared tables still offered as partners, or the option ignored; would
+    /// not catch a chain through a cell other than a lookup table, which this
+    /// does not count.
+    #[test]
+    fn a_table_on_the_longest_chain_is_spared_its_partner() {
+        let device = target("xc7a35t-ftg256").unwrap();
+        let build = || {
+            let mut map = SourceMap::new();
+            let file = map.add("t", "").unwrap();
+            let mut b = ModuleBuilder::new("row", Span::new(file, 0, 0));
+            let x0 = b.input("x0", Type::bit());
+            let x1 = b.input("x1", Type::bit());
+            let mut last = b.input("x2", Type::bit());
+            for n in 0..4 {
+                let y = if n == 3 {
+                    b.output("y", Type::bit())
+                } else {
+                    b.add_net(format!("r{n}"), Type::bit())
+                };
+                let inputs = vec![
+                    (Name::new("I0"), b.net(last)),
+                    (Name::new("I1"), b.net(x0)),
+                    (Name::new("I2"), b.net(x1)),
+                ];
+                b.cell(
+                    format!("row{n}"),
+                    CellKind::Blackbox(Name::new("LUT6")),
+                    inputs,
+                    vec![(Name::new("O"), y)],
+                );
+                last = y;
+            }
+            for n in 0..2 {
+                let y = b.output(format!("s{n}"), Type::bit());
+                let inputs = vec![(Name::new("I0"), b.net(x0)), (Name::new("I1"), b.net(x1))];
+                b.cell(
+                    format!("side{n}"),
+                    CellKind::Blackbox(Name::new("LUT6")),
+                    inputs,
+                    vec![(Name::new("O"), y)],
+                );
+            }
+            let mut module = b.finish();
+            for (_, cell) in module.cells.iter_mut() {
+                cell.params.set(
+                    "INIT",
+                    AttrValue::Const(Const::from_u64(0x9669_6996_9669_6996, 64)),
+                );
+            }
+            let mut design = Design::new();
+            let top = design.add_module(module);
+            design.top = Some(top);
+            (design, top)
+        };
+        let pack = |spare_deep| {
+            let (mut design, top) = build();
+            let options = PairOptions {
+                min_shared: 2,
+                spare_deep,
+                ..PairOptions::default()
+            };
+            let report = pack_lut_pairs(&mut design, top, device, &options).unwrap();
+            let duals: Vec<String> = design.modules[top]
+                .cells
+                .iter()
+                .filter(|(_, c)| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == DUAL))
+                .map(|(_, c)| c.name.to_string())
+                .collect();
+            (report.pairs, duals)
+        };
+        let (all, _) = pack(None);
+        assert_eq!(all, 3, "related pairing pairs the row and the side");
+        let (spared, duals) = pack(Some(75));
+        assert_eq!(spared, 1);
+        assert!(duals[0].starts_with("side"), "{duals:?}");
     }
 
     /// With `min_shared`, a table pairs only with one that shares that
