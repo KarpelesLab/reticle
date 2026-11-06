@@ -146,6 +146,27 @@ enum Shape {
     /// Verilog makes of `presample_counter == presample_i - 2` (the `2`
     /// is 32 bits wide) in NewAE's capture.
     EqualWidened,
+    /// `y = a < b`, `a <= b`, `a > b` or `a >= b`, one bit, the operands
+    /// signed or not: what `primitives` compares on the chain in lanes of
+    /// two bits at [`MapOptions::min_magnitude_carry_width`] bits and more.
+    Order { op: Order, signed: bool },
+    /// `y = a OP k`, `k` a constant of the operand's width and type: what
+    /// `primitives` compares in kept lanes of a table's inputs each at
+    /// [`MapOptions::min_constant_ordering_lane_width`] bits and more.
+    OrderConst { op: Order, signed: bool, k: u64 },
+}
+
+/// Which ordering a [`Shape::Order`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl Order {
+    const ALL: [Order; 4] = [Order::Lt, Order::Le, Order::Gt, Order::Ge];
 }
 
 impl Shape {
@@ -230,6 +251,46 @@ impl Shape {
                 let le = b.net(less);
                 b.cell2("same", CellKind::Eq, za, le, y);
             }
+            Shape::Order { op, signed } => {
+                let ty = if signed {
+                    Type::sbits(width)
+                } else {
+                    Type::bits(width)
+                };
+                let a = b.input("a", ty.clone());
+                let bn = b.input("b", ty);
+                let y = b.output("y", Type::bit());
+                let (ae, be) = (b.net(a), b.net(bn));
+                let kind = match op {
+                    Order::Lt => CellKind::Lt,
+                    Order::Le => CellKind::Le,
+                    Order::Gt => CellKind::Gt,
+                    Order::Ge => CellKind::Ge,
+                };
+                b.cell2("order", kind, ae, be, y);
+            }
+            Shape::OrderConst { op, signed, k } => {
+                let ty = if signed {
+                    Type::sbits(width)
+                } else {
+                    Type::bits(width)
+                };
+                let a = b.input("a", ty.clone());
+                let y = b.output("y", Type::bit());
+                let ae = b.net(a);
+                let mut value = reticle::ir::Const::from_u64(k, width);
+                if signed {
+                    value = value.with_signed(true);
+                }
+                let ke = b.constant(value);
+                let kind = match op {
+                    Order::Lt => CellKind::Lt,
+                    Order::Le => CellKind::Le,
+                    Order::Gt => CellKind::Gt,
+                    Order::Ge => CellKind::Ge,
+                };
+                b.cell2("order", kind, ae, ke, y);
+            }
             Shape::Constant(k) => {
                 let a = b.input("a", Type::bits(width));
                 let y = b.output("y", Type::bits(width));
@@ -280,7 +341,9 @@ impl Shape {
         match self {
             Shape::Widened => width + 1,
             Shape::SubtractWidened => width * 3,
-            Shape::Equal | Shape::EqualWidened => 1,
+            Shape::Equal | Shape::EqualWidened | Shape::Order { .. } | Shape::OrderConst { .. } => {
+                1
+            }
             _ => width,
         }
     }
@@ -292,6 +355,7 @@ impl Shape {
         let at = |i: usize| values.get(i).copied().unwrap_or(0);
         let (a, b, cin) = match self {
             Shape::Constant(_) => (at(0), 0, 0),
+            Shape::OrderConst { k, .. } => (at(0), k & mask(width), 0),
             _ => (at(0), at(1), at(2)),
         };
         match self {
@@ -319,13 +383,31 @@ impl Shape {
             Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
             Shape::Equal => u64::from(a == (b + 1) & mask(width)),
             Shape::EqualWidened => u64::from(a == b.wrapping_sub(2) & mask(width * 3)),
+            Shape::Order { op, signed } | Shape::OrderConst { op, signed, .. } => {
+                // Each operand as the number it is: sign-extended from its
+                // own top bit when signed.
+                let value = |x: u64| -> i128 {
+                    if signed && (x >> (width - 1)) & 1 == 1 {
+                        i128::from(x) - (1i128 << width)
+                    } else {
+                        i128::from(x)
+                    }
+                };
+                let (x, y) = (value(a), value(b));
+                u64::from(match op {
+                    Order::Lt => x < y,
+                    Order::Le => x <= y,
+                    Order::Gt => x > y,
+                    Order::Ge => x >= y,
+                })
+            }
         }
     }
 
     /// The input ports, in the order the exhaustive loop counts them.
     fn inputs(self, width: u32) -> Vec<(&'static str, u32)> {
         match self {
-            Shape::Constant(_) => vec![("a", width)],
+            Shape::Constant(_) | Shape::OrderConst { .. } => vec![("a", width)],
             Shape::CarryIn | Shape::SubtractThenCarryIn => {
                 vec![("a", width), ("b", width), ("cin", 1)]
             }
@@ -349,17 +431,36 @@ fn mapped(
     device_name: &str,
     map: MapOptions,
 ) -> (Design, ModuleId, fpga::FlowReport) {
+    let options = FpgaOptions {
+        map,
+        ..FpgaOptions::default()
+    };
+    mapped_with(shape, width, device_name, &options)
+}
+
+/// The flow's options as `reticle fpga` gives them to the 7 series by
+/// default: [`FpgaOptions::vivado_synthesis`] on.
+fn vivado() -> FpgaOptions {
+    FpgaOptions {
+        vivado_synthesis: true,
+        ..FpgaOptions::default()
+    }
+}
+
+/// [`mapped`] with the whole of the flow's options.
+fn mapped_with(
+    shape: Shape,
+    width: u32,
+    device_name: &str,
+    options: &FpgaOptions,
+) -> (Design, ModuleId, fpga::FlowReport) {
     let mut design = Design::new();
     let top = design.add_module(shape.module("top", width));
     design.top = Some(top);
     let device = fpga::target(device_name).expect("a built-in device");
     let constraints = Constraints::default();
     let mut diags = Diagnostics::new();
-    let options = FpgaOptions {
-        map,
-        ..FpgaOptions::default()
-    };
-    let report = fpga::synthesize_for(&mut design, top, device, &constraints, &options, &mut diags)
+    let report = fpga::synthesize_for(&mut design, top, device, &constraints, options, &mut diags)
         .expect("the flow finished");
     assert!(
         !diags.has_errors(),
@@ -744,11 +845,27 @@ fn check_packed(shape: Shape, width: u32) {
 /// `width` bits for `device`, legalise the chain for a slice if asked,
 /// pair its lookup tables if asked, then evaluate every input combination.
 fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise: bool, pack: bool) {
+    let options = FpgaOptions {
+        map,
+        ..FpgaOptions::default()
+    };
+    check_full_with(shape, width, device, &options, legalise, pack);
+}
+
+/// [`check_full`] with the whole of the flow's options.
+fn check_full_with(
+    shape: Shape,
+    width: u32,
+    device: &str,
+    options: &FpgaOptions,
+    legalise: bool,
+    pack: bool,
+) {
     assert!(
         !legalise || device == XC7,
         "`legalise_carries` is the 7 series' own pass and there is nothing to ask it on {device}"
     );
-    let (mut design, top, report) = mapped(shape, width, device, map);
+    let (mut design, top, report) = mapped_with(shape, width, device, options);
     if legalise {
         let device = fpga::target(device).expect("a built-in device");
         fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
@@ -1087,6 +1204,136 @@ fn an_equality_in_kept_lanes_is_right() {
     for width in [4, 5] {
         check_exhaustively(Shape::EqualWidened, width, lanes.clone());
     }
+}
+
+/// **An ordering compared on the chain is right, signed or not, once
+/// legalised and paired.** Under `--synthesis vivado` (the 7 series'
+/// default), `a < b` and its three siblings from seven bits are lanes of
+/// two bits, each lane's `>` the generate and its `>=` the other operand
+/// of an addition whose carry out is the answer, `>=` starting from a one
+/// on `CYINIT`. Every input at 7, 8 and 9 bits (a short top lane, a whole
+/// `CARRY4`, and one lane into a second), each of the four, signed and
+/// unsigned, mapped, legalised and paired into `LUT6_2` as the bitstream
+/// is built.
+///
+/// Would catch: the operands of `<` not swapped (every answer of `<` and
+/// `>` exchanged), `>=` started from zero (every equal pair wrong), the
+/// sign bits left unflipped (every pair of opposite signs wrong), a lane
+/// of the wrong two bits, and the carry out read off the wrong lane of the
+/// last `CARRY4` or off a sum. Would not catch an ordering of twenty bits
+/// and more wrong in a way these widths cannot show, which `mod proofs`
+/// proves at 16 and 32.
+#[test]
+fn an_ordering_goes_onto_the_chain_and_is_still_right() {
+    for op in Order::ALL {
+        for signed in [false, true] {
+            let shape = Shape::Order { op, signed };
+            for width in [7, 8, 9] {
+                check_full_with(shape, width, XC7, &vivado(), true, true);
+                let (_, _, report) = mapped_with(shape, width, XC7, &vivado());
+                assert_eq!(
+                    report.count("CARRY4"),
+                    usize::try_from(width.div_ceil(2).div_ceil(4)).unwrap(),
+                    "{shape:?} at {width} bits: a CARRY4 for each four lanes of two bits"
+                );
+            }
+            // Below the threshold, and with the legacy synthesis, tables.
+            check_full_with(shape, 6, XC7, &vivado(), true, false);
+            let (_, _, report) = mapped_with(shape, 6, XC7, &vivado());
+            assert_eq!(report.count("CARRY4"), 0, "{shape:?} at 6 bits");
+            let (_, _, report) = mapped(shape, 16, XC7, MapOptions::default());
+            assert_eq!(report.count("CARRY4"), 0, "{shape:?}, legacy");
+        }
+    }
+}
+
+/// **An ordering against a constant compared in lanes is right.** Under
+/// `--synthesis vivado`, `a < k` and its siblings from seven bits are lanes
+/// of six bits, each lane's `>` and equality a kept table, and the chain
+/// over the lanes; no `CARRY4`. Every input at 7, 12, 13 and 16 bits, each
+/// of the four, signed and not, against constants at the edges of the range
+/// and inside it, then the depth: sixteen bits against a constant, two
+/// tables. Would catch the operands of `<` not swapped, the lowest lane's
+/// `>=` taken for `>` (every equal input wrong), a lane of the wrong bits,
+/// the sign bits unflipped and the chain over the lanes in the wrong order;
+/// `mod proofs` proves 32 bits.
+#[test]
+fn an_ordering_against_a_constant_is_right_in_lanes() {
+    for op in Order::ALL {
+        for signed in [false, true] {
+            for (width, k) in [
+                (7, 0),
+                (7, 127),
+                (12, 0x5a5),
+                (13, 1),
+                (16, 6),
+                (16, 0xfffe),
+            ] {
+                let shape = Shape::OrderConst { op, signed, k };
+                check_full_with(shape, width, XC7, &vivado(), true, false);
+                let (_, _, report) = mapped_with(shape, width, XC7, &vivado());
+                assert_eq!(report.count("CARRY4"), 0, "{shape:?} at {width} bits");
+            }
+        }
+        let shape = Shape::OrderConst {
+            op,
+            signed: false,
+            k: 6,
+        };
+        let (_, _, report) = mapped_with(shape, 16, XC7, &vivado());
+        assert_eq!(report.lut_depth, 2, "{shape:?} at 16 bits");
+        let (_, _, report) = mapped(shape, 16, XC7, MapOptions::default());
+        assert_eq!(report.lut_depth, 3, "{shape:?} at 16 bits, legacy");
+    }
+}
+
+/// **Every shape is still right with its carry in on `CYINIT` and its
+/// carry out off `CO`.** `--synthesis vivado` takes a constant low bit both
+/// operands share (a subtraction's `+ 1`, a `>=`'s) as the first
+/// `CARRY4`'s carry in, and the top sum of `{0, a} + {0, b}` off
+/// the last lane's carry out, so neither is a lane of its own. Every input
+/// of each shape, mapped, legalised and, where the chain has generate
+/// tables to share, paired; and the counts that say the lanes went.
+///
+/// Would catch: the carry in left on a lane as well (every sum off by
+/// it), the shared bit's zero sum dropped from the result (every bit one
+/// place low), the carry out of the wrong lane, and a shared carry in that
+/// is a signal put on `CYINIT` (the shared adders' is, and
+/// `legalise_carries` refuses it beside bit 0's generate on the one `AX`).
+/// Would not catch `PRECYINIT` taking its constant other than as prjxray's
+/// fuzzer says (`C1`), quoted, as `CARRY4.<L>CY0` is.
+#[test]
+fn a_chain_takes_its_carry_in_and_out_on_its_own_pins() {
+    let shapes = [
+        (Shape::Plain, 8, false),
+        (Shape::Widened, 4, false),
+        (Shape::Widened, 8, false),
+        (Shape::Subtract, 6, false),
+        (Shape::Subtract, 8, false),
+        (Shape::SubtractWidened, 4, false),
+        (Shape::SubtractThenCarryIn, 6, false),
+        (Shape::Equal, 9, false),
+        (Shape::EqualWidened, 4, false),
+        (Shape::CarryIn, 5, false),
+    ];
+    for (shape, width, pack) in shapes {
+        check_full_with(shape, width, XC7, &vivado(), true, pack);
+    }
+    for low_sub in [false, true] {
+        for high_sub in [false, true] {
+            let shape = Shape::Chosen { low_sub, high_sub };
+            check_full_with(shape, 4, XC7, &vivado(), true, true);
+        }
+    }
+    // The lanes that went: a carry in and a carry out are no CARRY4 of
+    // their own. Eight bits of difference are eight lanes, two CARRY4s,
+    // where `{a, 1} + {~b, 1}` with the one a lane was nine and three.
+    let (_, _, report) = mapped_with(Shape::Subtract, 8, XC7, &vivado());
+    assert_eq!(report.count("CARRY4"), 2, "an 8-bit difference");
+    let (_, _, report) = mapped_with(Shape::Widened, 8, XC7, &vivado());
+    assert_eq!(report.count("CARRY4"), 2, "an 8-bit sum and its carry out");
+    let (_, _, report) = mapped(Shape::Widened, 8, XC7, MapOptions::default());
+    assert_eq!(report.count("CARRY4"), 3, "legacy: the carry out is a lane");
 }
 
 // ---------------------------------------------------------------------------
@@ -1529,6 +1776,66 @@ mod proofs {
             "{shape:?} at {width} bits is not proved equivalent:\n{}",
             report.render("mapped", "reference")
         );
+    }
+
+    /// Proves the netlist the 7 series' default synthesis maps.
+    fn prove_vivado(shape: Shape, width: u32) {
+        let (design, top, _) = mapped_with(shape, width, XC7, &vivado());
+        let modelled = model_primitives(design.module(top).clone());
+        let mut proof = Design::new();
+        let mut reference = shape.module("reference", width);
+        reference.name = Name::new("reference");
+        let a = proof.add_module(modelled);
+        let b = proof.add_module(reference);
+        let report = check_equivalent(&proof, a, b, &EquivOptions::default());
+        assert!(
+            matches!(report.outcome, EquivOutcome::Equivalent(_)),
+            "{shape:?} at {width} bits under --synthesis vivado is not proved equivalent:\n{}",
+            report.render("mapped", "reference")
+        );
+    }
+
+    /// **The orderings, and every shape with its carry ends on the
+    /// `CARRY4`'s own pins, proved** at the widths simulation cannot
+    /// enumerate: 16 and 32 bits of each ordering, signed and not, and the
+    /// shapes whose carry in or out moved. Would catch what
+    /// `an_ordering_goes_onto_the_chain_and_is_still_right` would, at any
+    /// width; would not catch what that test says it would not, the
+    /// slice's own reading of its pins.
+    #[test]
+    fn orderings_and_carry_ends_are_proved_equivalent() {
+        for op in Order::ALL {
+            for signed in [false, true] {
+                for width in [16, 32] {
+                    prove_vivado(Shape::Order { op, signed }, width);
+                }
+            }
+        }
+        for width in [13, 32] {
+            prove_vivado(Shape::Subtract, width);
+            prove_vivado(Shape::Widened, width);
+            prove_vivado(Shape::Plain, width);
+        }
+        prove_vivado(Shape::SubtractThenCarryIn, 13);
+        for op in Order::ALL {
+            for signed in [false, true] {
+                prove_vivado(
+                    Shape::OrderConst {
+                        op,
+                        signed,
+                        k: 0x8000_1234,
+                    },
+                    32,
+                );
+            }
+        }
+        prove_vivado(Shape::Equal, 16);
+        prove_vivado(Shape::CarryIn, 16);
+        for low_sub in [false, true] {
+            for high_sub in [false, true] {
+                prove_vivado(Shape::Chosen { low_sub, high_sub }, 13);
+            }
+        }
     }
 
     /// The widths exhaustive simulation cannot reach.

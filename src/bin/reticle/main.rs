@@ -253,6 +253,12 @@ Options:
                      `RAM64X1D` shape on the slice's `WE` pin, `RAMB18E1`
                      alone and block RAM from 256 bits, which a build
                      measured on a board keeps.
+  --synthesis <vivado|legacy>
+                     7 series: synthesise as Vivado 2026.1 does (the default):
+                     subtractions and orderings (`<`, `>=`) on the carry chain
+                     from four bits. `legacy` is the netlist before, every
+                     subtraction and ordering in lookup tables, which a build
+                     measured on a board keeps.
   --delay-model <vivado|legacy>
                      7 series: the delays a timing-driven build places, routes
                      and reports with. `vivado` (the default) is fitted to
@@ -855,6 +861,7 @@ fn spec_for(usage: &str) -> Spec {
                 "regional-clocks",
                 "memories",
                 "delay-model",
+                "synthesis",
                 "place-fixed-cooling",
                 "place-start-acceptance",
                 "place-start-window",
@@ -1090,6 +1097,20 @@ fn memories_legacy(args: &Args) -> Result<bool, ArgError> {
         Some("legacy") => Ok(true),
         Some(other) => Err(ArgError::BadValue {
             option: "memories".to_owned(),
+            value: other.to_owned(),
+            expected: "`vivado` or `legacy`",
+        }),
+    }
+}
+
+/// Whether `--synthesis legacy` asked for the netlist from before Vivado's
+/// synthesis was measured; see the usage text.
+fn synthesis_legacy(args: &Args) -> Result<bool, ArgError> {
+    match args.option("synthesis") {
+        None | Some("vivado") => Ok(false),
+        Some("legacy") => Ok(true),
+        Some(other) => Err(ArgError::BadValue {
+            option: "synthesis".to_owned(),
             value: other.to_owned(),
             expected: "`vivado` or `legacy`",
         }),
@@ -2596,6 +2617,7 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
         }
     }
     options.map.vivado_memories = vivado_memories && device.family == "xc7";
+    options.vivado_synthesis = !synthesis_legacy(args)? && device.family == "xc7";
     // **The 7-series places a hard multiplier; no other backend here
     // does**, so for their bitstreams a multiply stays in lookup tables,
     // which are slower and correct. `fpga::trellis::dsp` says why for the

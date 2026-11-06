@@ -245,6 +245,46 @@ pub struct MapOptions {
     /// build whatever it changed: the stand-in slow FIFOs' read, since
     /// given two cycles, was what those had in common.
     pub min_compare_lane_width: u32,
+    /// The narrowest ordering (`<`, `<=`, `>`, `>=`) compared on the carry
+    /// chain, on a family whose chain is a wide element
+    /// (`magnitude_on_the_chain`); `u32::MAX`, the default, puts none there
+    /// and leaves every one to lookup tables, as it always was.
+    ///
+    /// Vivado puts them there: two bits of each operand to a lane, the lane's
+    /// equality its propagate and its `>` its generate, so that a 32-bit
+    /// `a < b` is sixteen lanes and one level of tables in front of four or
+    /// five `CARRY4`s, where in tables alone it is a tree several deep.
+    /// `reticle fpga` asks for it on the 7 series unless `--synthesis legacy`.
+    pub min_magnitude_carry_width: u32,
+    /// Take a carry chain's carry in on the first `CARRY4`'s `CYINIT` and
+    /// its carry out off the last one's `CO`, where the adder spells them
+    /// as lanes of its own: a low bit both operands share (`{x, c} + {y, c}`,
+    /// which is how a subtraction's `+ 1` and the shared adders' carry in
+    /// are written, when it is a constant) and a top bit both have zero
+    /// (`{0, x} + {0, y}`, whose
+    /// top sum is the carry out). Off, each is a lane of the chain, which
+    /// can be a `CARRY4` of its own: an 8-bit `a > b` was two where Vivado
+    /// has one. `reticle fpga` asks for it on the 7 series unless
+    /// `--synthesis legacy`.
+    pub carry_ends: bool,
+    /// Compare on the chain at [`MapOptions::min_compare_carry_width`] any
+    /// equality between two signals, as Vivado does, and not only one
+    /// against a sum or a difference. Neither ever takes an equality with a
+    /// constant there. Off by default; `reticle fpga` asks for it on the 7
+    /// series unless `--synthesis legacy`.
+    pub compare_any_on_the_chain: bool,
+    /// The narrowest ordering against a constant (`a < 1000` and the rest)
+    /// compared in kept lanes of a lookup table's inputs each, their `>` and
+    /// their equality, and a small tree over the lanes
+    /// (`ordering_in_lanes`); `u32::MAX`, the default, leaves every one to
+    /// the optimiser and the mapper, as it always was.
+    ///
+    /// Left to them, a 16-bit `a <= 6` is a chain of ANDs and ORs that the
+    /// AND balancing cannot see through, and three tables deep where two
+    /// are enough: the Husky Plus analyser's FIFO ends its read clock's
+    /// latest path in `rused_next <= PROG_EMPTY` so. `reticle fpga` asks for
+    /// it on the 7 series unless `--synthesis legacy`.
+    pub min_constant_ordering_lane_width: u32,
 }
 
 impl Default for MapOptions {
@@ -268,6 +308,10 @@ impl Default for MapOptions {
             min_subtract_carry_width: u32::MAX,
             min_compare_carry_width: u32::MAX,
             min_compare_lane_width: 16,
+            min_magnitude_carry_width: u32::MAX,
+            carry_ends: false,
+            compare_any_on_the_chain: false,
+            min_constant_ordering_lane_width: u32::MAX,
         }
     }
 }
@@ -978,6 +1022,58 @@ struct SignedPlan {
     a: SignedOperand,
     /// What goes on the `b` port.
     b: SignedOperand,
+}
+
+/// The constant low bit both operands of an adder hold, as the last part of
+/// each one's concatenation. Then the sum's low bit is zero and the carry
+/// out of it is that bit, which is how a carry in is written as an adder.
+///
+/// **A constant only.** A signal there would go on the first `CARRY4`'s
+/// `CYINIT`, which a slice feeds from its `AX` input, and bit 0's generate
+/// takes `AX` too unless it comes from the table's `O5`:
+/// `xray::legalise_carries` refuses the two on one pin, and the shared
+/// adders' carry in (`s ? c - d : a + b`) is such a signal. Vivado puts it
+/// there; that would take the generate onto `O5` first.
+fn shared_low_bit(module: &Module, a: ExprId, b: ExprId) -> Option<ExprId> {
+    let low = |e: ExprId| match module.exprs.get(e).map(|x| &x.kind) {
+        Some(ExprKind::Concat(parts)) => parts
+            .last()
+            .copied()
+            .filter(|&p| expr_width(module, p) == 1),
+        _ => None,
+    };
+    let (x, y) = (low(a)?, low(b)?);
+    let constant = |e: ExprId| match module.exprs.get(e).map(|x| &x.kind) {
+        Some(ExprKind::Const(c)) => c.to_u64(),
+        _ => None,
+    };
+    match (constant(x), constant(y)) {
+        (Some(p), Some(q)) if p == q => Some(x),
+        _ => None,
+    }
+}
+
+/// True when the top bit of `e`, `width` bits wide, is the constant zero: as
+/// the first part of a concatenation, the top lane of `{0, x} + {0, y}`, or
+/// above the operand a zero extension widened.
+fn top_bit_zero(module: &Module, e: ExprId, width: u32) -> bool {
+    if expr_width(module, e) != width {
+        return false;
+    }
+    let (_, bits, sign_extended) = significant_operand(module, e);
+    if bits < width && !sign_extended {
+        return true;
+    }
+    let Some(ExprKind::Concat(parts)) = module.exprs.get(e).map(|x| &x.kind) else {
+        return false;
+    };
+    parts.first().is_some_and(|&p| {
+        expr_width(module, p) == 1
+            && matches!(
+                module.exprs.get(p).map(|x| &x.kind),
+                Some(ExprKind::Const(c)) if c.to_u64() == Some(0)
+            )
+    })
 }
 
 /// The value an operand was widened from.
@@ -3898,6 +3994,8 @@ impl Mapper<'_> {
         if bel.operand_carry().is_none() && bel.wide_carry().is_some() {
             self.share_muxed_adders(module);
             self.subtract_on_the_chain(module);
+            self.magnitude_on_the_chain(module);
+            self.ordering_in_lanes(module);
             self.compare_on_the_chain(module);
             self.compare_in_lanes(module);
         }
@@ -3929,8 +4027,7 @@ impl Mapper<'_> {
                     lanes.div_ceil(shape.width)
                 }
                 (None, Some(shape)) => {
-                    self.emit_wide_carry(module, &bel, shape, &name, a, b, y, width, span);
-                    width.div_ceil(shape.width)
+                    self.emit_wide_carry(module, &bel, shape, &name, a, b, y, width, span)
                 }
                 (None, None) => {
                     self.emit_carry(module, &bel, &name, a, b, y, width, span);
@@ -3947,6 +4044,314 @@ impl Mapper<'_> {
         }
         if !removed.is_empty() {
             module.cells.retain(|id, _| !removed.contains(&id));
+        }
+    }
+
+    /// Compares each wide ordering on the carry chain, in lanes of two bits.
+    ///
+    /// Lane `i` holds bits `2i` and `2i + 1` of each operand. Its propagate is
+    /// their equality and its generate their `>`, so the carry out of lane `i`
+    /// is `a > b` over every bit up to the lane's when nothing was carried
+    /// into the lowest, and `a >= b` when a one was: an equal lane passes on
+    /// what reached it, an unequal one answers for everything below it. As an
+    /// addition, the carry element's only shape, lane `i` adds `x = gt` to
+    /// `y = ge`: `x ^ y` is the lane's equality, and where they agree the
+    /// carry is `x`, its `>`. The carry out of the top lane is read as the
+    /// sum of one more lane of zeros, and the one `>=` starts from rides in
+    /// an extra low lane as in [`Self::share_muxed_adders`].
+    ///
+    /// `a < b` is `b > a` and `a <= b` is `b >= a`; a signed ordering is the
+    /// unsigned one with each operand's sign bit flipped, which is what makes
+    /// the most negative number the smallest.
+    ///
+    /// For a wide carry element only, at
+    /// [`MapOptions::min_magnitude_carry_width`] bits and more, and never
+    /// against a constant; operands of different widths are extended to the
+    /// wider as the comparison would extend them.
+    fn magnitude_on_the_chain(&mut self, module: &mut Module) {
+        let orderings: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    CellKind::Lt | CellKind::Le | CellKind::Gt | CellKind::Ge
+                )
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let mut removed: Vec<CellId> = Vec::new();
+        for ordering in orderings {
+            let cell = &module.cells[ordering];
+            let (Some(a), Some(b), Some(y)) = (cell.input("a"), cell.input("b"), cell.output("y"))
+            else {
+                continue;
+            };
+            let width = expr_width(module, a).max(expr_width(module, b));
+            // Against a constant each lane is a function of two bits, and
+            // Vivado leaves the whole of it to tables: a 32-bit `a < 1000` is
+            // seven of them and no chain.
+            let constant = |e: ExprId| {
+                module
+                    .exprs
+                    .get(e)
+                    .is_some_and(|x| matches!(x.kind, ExprKind::Const(_)))
+            };
+            if width < self.options.min_magnitude_carry_width.max(2)
+                || net_width(module, y) != 1
+                || constant(a)
+                || constant(b)
+            {
+                continue;
+            }
+            let signed_of = |e: ExprId| module.exprs.get(e).is_some_and(|x| x.ty.is_signed());
+            let signed = signed_of(a) && signed_of(b);
+            let (kind, span, name) = (cell.kind.clone(), cell.span, cell.name.as_str().to_owned());
+            // `x > z` or `x >= z`, with the operands in that order.
+            let (x, z, or_equal) = match kind {
+                CellKind::Gt => (a, b, false),
+                CellKind::Ge => (a, b, true),
+                CellKind::Lt => (b, a, false),
+                _ => (b, a, true),
+            };
+            // Each operand at the full width, extended as the comparison
+            // extends it, and its sign bit flipped for a signed one.
+            let operand = |module: &mut Module, e: ExprId, which: &str| -> ExprId {
+                let e = if expr_width(module, e) < width {
+                    expr(
+                        module,
+                        ExprKind::Resize {
+                            expr: e,
+                            width,
+                            signed,
+                        },
+                        span,
+                    )
+                } else {
+                    e
+                };
+                if !signed {
+                    return e;
+                }
+                let label = format!("{name}$flip{which}");
+                let net = add_net(module, &label, Type::bits(width), span);
+                let mut sign = Const::zero(width);
+                sign.set_bit(width - 1, crate::logic::Bit::One);
+                let sign = const_expr(module, sign, span);
+                add_cell(
+                    module,
+                    &label,
+                    CellKind::Xor,
+                    vec![(Name::new("a"), e), (Name::new("b"), sign)],
+                    vec![(Name::new("y"), net)],
+                    span,
+                );
+                net_expr(module, net, span)
+            };
+            let x = operand(module, x, "a");
+            let z = operand(module, z, "b");
+            let lanes = width.div_ceil(2);
+            let (mut gts, mut ges): (Vec<ExprId>, Vec<ExprId>) = (Vec::new(), Vec::new());
+            for lane in 0..lanes {
+                let lo = lane * 2;
+                let hi = (lo + 1).min(width - 1);
+                let (px, pz) = (
+                    slice_expr(module, x, hi, lo, span),
+                    slice_expr(module, z, hi, lo, span),
+                );
+                for (kind, label, into) in [
+                    (CellKind::Gt, "gt", &mut gts),
+                    (CellKind::Ge, "ge", &mut ges),
+                ] {
+                    let label = format!("{name}${label}{lane}");
+                    let bit = add_net(module, &label, Type::bit(), span);
+                    add_cell(
+                        module,
+                        &label,
+                        kind,
+                        vec![(Name::new("a"), px), (Name::new("b"), pz)],
+                        vec![(Name::new("y"), bit)],
+                        span,
+                    );
+                    into.push(net_expr(module, bit, span));
+                }
+            }
+            // Most significant first: `{0, L[lanes-1], ..., L[0]}`, and the
+            // carry in below them for `>=`.
+            let mut sides = Vec::new();
+            for mut parts in [gts, ges] {
+                parts.reverse();
+                parts.insert(0, const_expr(module, Const::zero(1), span));
+                if or_equal {
+                    parts.push(const_expr(module, Const::ones(1), span));
+                }
+                sides.push(expr(module, ExprKind::Concat(parts), span));
+            }
+            let sum_width = lanes + 1 + u32::from(or_equal);
+            let label = format!("{name}$chain");
+            let sum = add_net(module, &label, Type::bits(sum_width), span);
+            add_cell(
+                module,
+                &label,
+                CellKind::Add,
+                vec![(Name::new("a"), sides[0]), (Name::new("b"), sides[1])],
+                vec![(Name::new("y"), sum)],
+                span,
+            );
+            let sum = net_expr(module, sum, span);
+            let top = slice_expr(module, sum, sum_width - 1, sum_width - 1, span);
+            add_assign(module, y, top, span);
+            removed.push(ordering);
+        }
+        if !removed.is_empty() {
+            let count = removed.len();
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!("{count} ordering(s) compared on the carry chain"));
+        }
+    }
+
+    /// Compares each wide ordering against a constant in lanes of as many
+    /// bits as a lookup table has inputs, each lane's `>` and equality a net
+    /// marked `keep`, so that each is one table, and the ordering the chain
+    /// `g[n] | e[n] & (g[n-1] | e[n-1] & (... g[0]))` over them, where the
+    /// lowest lane's `g` is its `>=` for an ordering that holds when equal.
+    /// Sixteen bits of a six-input table are three lanes, five signals and
+    /// one table over them: two deep.
+    ///
+    /// `a < k` is `k > a`, a signed ordering the unsigned one with the sign
+    /// bits flipped, as on the chain ([`Self::magnitude_on_the_chain`]).
+    ///
+    /// At [`MapOptions::min_constant_ordering_lane_width`] bits and more,
+    /// for an ordering one operand of which is a constant and that the chain
+    /// has not taken.
+    fn ordering_in_lanes(&mut self, module: &mut Module) {
+        let lane = self.device.lut_size.max(2);
+        let orderings: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| {
+                matches!(
+                    c.kind,
+                    CellKind::Lt | CellKind::Le | CellKind::Gt | CellKind::Ge
+                )
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let mut removed: Vec<CellId> = Vec::new();
+        for ordering in orderings {
+            let cell = &module.cells[ordering];
+            let (Some(a), Some(b), Some(y)) = (cell.input("a"), cell.input("b"), cell.output("y"))
+            else {
+                continue;
+            };
+            let width = expr_width(module, a).max(expr_width(module, b));
+            let constant = |e: ExprId| {
+                module
+                    .exprs
+                    .get(e)
+                    .is_some_and(|x| matches!(x.kind, ExprKind::Const(_)))
+            };
+            if width < self.options.min_constant_ordering_lane_width.max(lane + 1)
+                || net_width(module, y) != 1
+                || !(constant(a) || constant(b))
+            {
+                continue;
+            }
+            let signed_of = |e: ExprId| module.exprs.get(e).is_some_and(|x| x.ty.is_signed());
+            let signed = signed_of(a) && signed_of(b);
+            let (kind, span, name) = (cell.kind.clone(), cell.span, cell.name.as_str().to_owned());
+            let (x, z, or_equal) = match kind {
+                CellKind::Gt => (a, b, false),
+                CellKind::Ge => (a, b, true),
+                CellKind::Lt => (b, a, false),
+                _ => (b, a, true),
+            };
+            let operand = |module: &mut Module, e: ExprId, which: &str| -> ExprId {
+                let e = if expr_width(module, e) < width {
+                    expr(
+                        module,
+                        ExprKind::Resize {
+                            expr: e,
+                            width,
+                            signed,
+                        },
+                        span,
+                    )
+                } else {
+                    e
+                };
+                if !signed {
+                    return e;
+                }
+                let label = format!("{name}$flip{which}");
+                let net = add_net(module, &label, Type::bits(width), span);
+                let mut sign = Const::zero(width);
+                sign.set_bit(width - 1, crate::logic::Bit::One);
+                let sign = const_expr(module, sign, span);
+                add_cell(
+                    module,
+                    &label,
+                    CellKind::Xor,
+                    vec![(Name::new("a"), e), (Name::new("b"), sign)],
+                    vec![(Name::new("y"), net)],
+                    span,
+                );
+                net_expr(module, net, span)
+            };
+            let x = operand(module, x, "a");
+            let z = operand(module, z, "b");
+            let lanes = width.div_ceil(lane);
+            // One kept bit of `kind` over lane `i`'s slices.
+            let kept = |module: &mut Module, kind: CellKind, i: u32, what: &str| -> ExprId {
+                let lo = i * lane;
+                let hi = (lo + lane - 1).min(width - 1);
+                let (px, pz) = (
+                    slice_expr(module, x, hi, lo, span),
+                    slice_expr(module, z, hi, lo, span),
+                );
+                let label = format!("{name}${what}{i}");
+                let bit = add_net(module, &label, Type::bit(), span);
+                module.nets[bit].attrs.set("keep", "true");
+                add_cell(
+                    module,
+                    &label,
+                    kind,
+                    vec![(Name::new("a"), px), (Name::new("b"), pz)],
+                    vec![(Name::new("y"), bit)],
+                    span,
+                );
+                net_expr(module, bit, span)
+            };
+            let gate = |module: &mut Module, kind: CellKind, a: ExprId, b: ExprId| {
+                let label = format!("{name}$lanes");
+                let bit = add_net(module, &label, Type::bit(), span);
+                add_cell(
+                    module,
+                    &label,
+                    kind,
+                    vec![(Name::new("a"), a), (Name::new("b"), b)],
+                    vec![(Name::new("y"), bit)],
+                    span,
+                );
+                net_expr(module, bit, span)
+            };
+            let first = if or_equal { CellKind::Ge } else { CellKind::Gt };
+            let mut acc = kept(module, first, 0, "g");
+            for i in 1..lanes {
+                let g = kept(module, CellKind::Gt, i, "g");
+                let e = kept(module, CellKind::Eq, i, "e");
+                let held = gate(module, CellKind::And, e, acc);
+                acc = gate(module, CellKind::Or, g, held);
+            }
+            add_assign(module, y, acc, span);
+            removed.push(ordering);
+        }
+        if !removed.is_empty() {
+            let count = removed.len();
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!(
+                "{count} ordering(s) against a constant compared in kept lanes"
+            ));
         }
     }
 
@@ -4010,7 +4415,15 @@ impl Mapper<'_> {
                     .and_then(Expr::as_net)
                     .is_some_and(|net| arithmetic.contains(&net))
             };
-            if !summed(a) && !summed(b) {
+            let constant = |e: ExprId| {
+                module
+                    .exprs
+                    .get(e)
+                    .is_some_and(|x| matches!(x.kind, ExprKind::Const(_)))
+            };
+            // Vivado's rule leaves an equality with a constant to tables.
+            let any = self.options.compare_any_on_the_chain;
+            if !(summed(a) || summed(b) || any) || (any && (constant(a) || constant(b))) {
                 continue;
             }
             let equal = cell.kind == CellKind::Eq;
@@ -4535,6 +4948,12 @@ impl Mapper<'_> {
     /// inputs and their outputs are not read: a lane with propagate 0 and
     /// generate 0 answers carry out 0, so nothing downstream sees them
     /// either.
+    ///
+    /// With [`MapOptions::carry_ends`], a constant low bit both operands
+    /// share is no lane: its sum is zero, and its carry out is the bit
+    /// itself, which goes on the first instance's carry in. Nor is a top bit
+    /// both operands hold at zero: its sum is the carry into it, which is
+    /// the carry out of the lane below. Returns the instances emitted.
     #[allow(clippy::too_many_arguments)]
     fn emit_wide_carry(
         &mut self,
@@ -4547,13 +4966,31 @@ impl Mapper<'_> {
         y: NetId,
         width: u32,
         span: Span,
-    ) {
+    ) -> u32 {
         let lanes = shape.width;
-        let blocks = width.div_ceil(lanes);
+        // The carry in riding in the low bit, and whether the top bit is
+        // the carry out; the chain's own lanes are the bits between.
+        let carry_in = if self.options.carry_ends && width > 1 {
+            shared_low_bit(module, a, b)
+        } else {
+            None
+        };
+        let low = u32::from(carry_in.is_some());
+        let carry_out = self.options.carry_ends
+            && width > low + 1
+            && top_bit_zero(module, a, width)
+            && top_bit_zero(module, b, width);
+        let high = if carry_out { width - 1 } else { width };
+        let blocks = (high - low).div_ceil(lanes);
         // Sum bits, least significant first; reversed into a concat at
         // the end, which is how the one-bit path builds its result too.
         let mut sums: Vec<ExprId> = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
-        // The carry into the next instance, from the one below it.
+        if carry_in.is_some() {
+            // `x + x` with nothing carried in is `x` carried and no sum.
+            sums.push(const_expr(module, Const::zero(1), span));
+        }
+        // The carry into the next instance, from the one below it; into the
+        // first, the shared low bit's.
         let mut chain: Option<ExprId> = None;
         for block in 0..blocks {
             // `Concat` is most significant first, so the lanes are walked
@@ -4561,8 +4998,8 @@ impl Mapper<'_> {
             let mut propagate = Vec::with_capacity(usize::try_from(lanes).unwrap_or(0));
             let mut data = Vec::with_capacity(usize::try_from(lanes).unwrap_or(0));
             for lane in (0..lanes).rev() {
-                let bit = block * lanes + lane;
-                if bit >= width {
+                let bit = low + block * lanes + lane;
+                if bit >= high {
                     propagate.push(const_expr(module, Const::zero(1), span));
                     data.push(const_expr(module, Const::zero(1), span));
                     continue;
@@ -4605,7 +5042,9 @@ impl Mapper<'_> {
                 (Some(ci), None) => (ci, None),
                 (None, None) => unreachable!("a wide carry has at least one carry input"),
             };
-            let carry = chain.unwrap_or_else(|| const_expr(module, Const::zero(1), span));
+            let carry = chain
+                .or(carry_in)
+                .unwrap_or_else(|| const_expr(module, Const::zero(1), span));
             inputs.push((Name::new(driven), carry));
             if let Some(tied) = tied {
                 let zero = const_expr(module, Const::zero(1), span);
@@ -4624,16 +5063,22 @@ impl Mapper<'_> {
             );
             let sum_expr = net_expr(module, sum_net, span);
             for lane in 0..lanes {
-                if block * lanes + lane < width {
+                if low + block * lanes + lane < high {
                     sums.push(slice_expr(module, sum_expr, lane, lane, span));
                 }
             }
             let carry_expr = net_expr(module, carry_net, span);
+            if carry_out && block + 1 == blocks {
+                // The top lane's carry out is the top bit's sum.
+                let last = (high - low - 1) % lanes;
+                sums.push(slice_expr(module, carry_expr, last, last, span));
+            }
             chain = Some(slice_expr(module, carry_expr, lanes - 1, lanes - 1, span));
         }
         sums.reverse();
         let value = expr(module, ExprKind::Concat(sums), span);
         add_assign(module, y, value, span);
+        blocks
     }
 
     /// The same adder onto an [`OperandCarry`] element: a chain of

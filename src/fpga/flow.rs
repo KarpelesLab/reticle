@@ -355,7 +355,37 @@ pub struct FpgaOptions {
     /// ([`super::srl::extract`]); 0 for none, and for the netlist from before
     /// that existed. Only a device that declares one does anything with it.
     pub srl_min_length: u32,
+    /// Synthesise arithmetic and logic as Vivado 2026.1's synthesis does on
+    /// a 7-series part, over what [`Self::map`] asks:
+    /// subtractions on the carry chain from [`VIVADO_MIN_SUBTRACT_CARRY_WIDTH`]
+    /// bits, orderings between two signals from
+    /// [`VIVADO_MIN_ORDERING_CARRY_WIDTH`] and equalities between two from
+    /// [`VIVADO_MIN_EQUALITY_CARRY_WIDTH`], each chain's carry in and out
+    /// on the `CARRY4`'s own pins. Off by default, which is the
+    /// netlist every build before had; `reticle fpga` turns it on for the 7
+    /// series unless `--synthesis legacy` asks for that netlist.
+    pub vivado_synthesis: bool,
 }
+
+/// The narrowest subtraction [`FpgaOptions::vivado_synthesis`] puts on the
+/// carry chain. Vivado 2026.1's synthesis, asked of a registered `a - b` at
+/// each width (`synth_design -mode out_of_context`, `xc7a100tftg256-3`):
+/// tables at 3 to 5 bits, a chain at 6 and above. Measured;
+/// docs/fpga-vivado-parity.md, "Synthesis against Vivado's".
+pub const VIVADO_MIN_SUBTRACT_CARRY_WIDTH: u32 = 6;
+
+/// The narrowest ordering (`a < b` and the rest, neither operand a constant)
+/// [`FpgaOptions::vivado_synthesis`] puts on the carry chain. Vivado, asked
+/// the same way: tables at 3 to 6 bits, a chain of two-bit lanes at 7 and
+/// above, and against a constant tables at every width. Measured, as above.
+pub const VIVADO_MIN_ORDERING_CARRY_WIDTH: u32 = 7;
+
+/// The narrowest equality between two signals (`a == b`, `a != b`)
+/// [`FpgaOptions::vivado_synthesis`] compares on the carry chain, three bits a
+/// lane. Vivado, asked the same way: tables at 3 to 8 bits, a chain at 9 to
+/// 12, 16, 24 and 32, and against a constant tables at every width.
+/// Measured, as above.
+pub const VIVADO_MIN_EQUALITY_CARRY_WIDTH: u32 = 9;
 
 #[cfg(feature = "synth")]
 impl Default for FpgaOptions {
@@ -370,6 +400,7 @@ impl Default for FpgaOptions {
             verify_mapping: None,
             wide_muxes: true,
             srl_min_length: super::srl::DEFAULT_MIN_LENGTH,
+            vivado_synthesis: false,
         }
     }
 }
@@ -580,13 +611,33 @@ pub fn synthesize_for(
     // 2. What the device does in hard logic, while the shapes that say so
     // are still recognisable.
     super::techcells::shape_latches(&mut design.modules[module], device);
-    report.primitives =
-        super::primitives::map(design, module, device, constraints, &options.map, diags);
+    let mut map = options.map.clone();
+    if options.vivado_synthesis {
+        map.min_subtract_carry_width = map
+            .min_subtract_carry_width
+            .min(VIVADO_MIN_SUBTRACT_CARRY_WIDTH);
+        map.min_magnitude_carry_width = map
+            .min_magnitude_carry_width
+            .min(VIVADO_MIN_ORDERING_CARRY_WIDTH);
+        map.min_compare_carry_width = map
+            .min_compare_carry_width
+            .min(VIVADO_MIN_EQUALITY_CARRY_WIDTH);
+        map.compare_any_on_the_chain = true;
+        map.min_constant_ordering_lane_width = map
+            .min_constant_ordering_lane_width
+            .min(VIVADO_MIN_ORDERING_CARRY_WIDTH);
+        map.carry_ends = true;
+    }
+    report.primitives = super::primitives::map(design, module, device, constraints, &map, diags);
 
     // 3. Everything else onto LUTs.
     let k = options.lut_size.unwrap_or(device.lut_size).clamp(2, 8);
     let mut techmap = TechMapOptions::lut(k);
     techmap.area_passes = options.area_passes;
+    techmap.cuts.depth_priority = options.vivado_synthesis;
+    techmap.cuts.duplicate_complements = options.vivado_synthesis;
+    techmap.xor_balance = options.vivado_synthesis;
+    techmap.late_hard_outputs = options.vivado_synthesis;
     techmap.wide_muxes = options.wide_muxes
         && options.device_cells
         && device.bel(super::device::BelRole::Mux7).is_some()

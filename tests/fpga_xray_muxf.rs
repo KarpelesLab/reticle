@@ -384,6 +384,7 @@ const SAME_COVER: &[&str] = &[
     "f8_ff",
     "f8_out",
     "mux16",
+    "mux32",
     "mux64",
     "mux8",
 ];
@@ -486,13 +487,17 @@ fn vivados_selects_are_on_those_bypass_inputs() {
 /// | `f8_from_ff` | `MUXF8` and four route-through tables, selects grounded | one table |
 /// | `f8_half` | `MUXF8`, a `MUXF7`, two tables and route-throughs | a `MUXF7`, three tables |
 /// | `f7_shared` | the shared table copied, two `MUXF7` | one `MUXF7`, a three-input table |
-/// | `mux32` | nine tables and four `MUXF7` | nine tables, four `MUXF7`, two `MUXF8` |
 /// | `tie` | no `MUXF7` either, four tables, with a `LUT5` over the two: logic it was not told was a cell | the same |
 /// | `f7_pair` | a `MUXF7` over `LUT3`s, the unread half of each table holding something else, so a count of ones is no comparison | a `MUXF7` over narrow tables |
 /// | `f7_carry` | keeps the `MUXF7`, a table feeding it and a carry's propagate | a table for the `MUXF7`, as the placer holds a carry lane's table to it |
 ///
 /// In every row the table count is Vivado's or lower, sites counted as
 /// `vivado.txt`'s are; route-through tables are sites too.
+///
+/// `mux32` was a row: nine tables, four `MUXF7` and two `MUXF8` where Vivado
+/// has no `MUXF8`. With the cuts kept shallowest first (`--synthesis
+/// vivado`, the default since 2026-11-06) it is Vivado's cover, and is in
+/// [`SAME_COVER`].
 #[test]
 fn where_the_cover_differs_it_differs_as_written() {
     let Some(built) = built() else { return };
@@ -512,7 +517,6 @@ fn where_the_cover_differs_it_differs_as_written() {
         ("f8_from_ff", 1, 0, 0),
         ("f8_half", 3, 1, 0),
         ("f7_shared", 5, 1, 0),
-        ("mux32", 9, 4, 2),
         ("f7_carry", 12, 0, 0),
         ("f7_pair", 6, 1, 0),
         ("tie", 4, 0, 0),

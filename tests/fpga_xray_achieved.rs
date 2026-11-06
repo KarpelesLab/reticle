@@ -65,7 +65,7 @@ fn median(values: &[f64]) -> f64 {
 }
 
 /// **Every clock of the corpus has Vivado's figure and five seeds of each
-/// build.** Would catch a design, a clock or a seed lost from a regeneration,
+/// build**, `before`, `after` and `synthesis`. Would catch a design, a clock or a seed lost from a regeneration,
 /// which would make the table below a median of fewer placements than it says.
 #[test]
 fn every_clock_has_vivados_figure_and_five_seeds_of_each_build() {
@@ -77,7 +77,7 @@ fn every_clock_has_vivados_figure_and_five_seeds_of_each_build() {
     );
     for ((design, clock), (vivado, builds)) in &table {
         assert!(*vivado > 0.0, "{design} {clock}: no Vivado figure");
-        for build in ["before", "after"] {
+        for build in ["before", "after", "synthesis"] {
             let seeds = builds.get(build).map_or(0, Vec::len);
             assert_eq!(seeds, 5, "{design} {clock}: {seeds} seeds of `{build}`");
         }
@@ -112,5 +112,39 @@ fn the_build_after_achieves_a_shorter_period_than_the_one_before() {
     assert!(
         after < before * 0.95,
         "geometric mean against Vivado's own flow: {after:.3} after, {before:.3} before"
+    );
+}
+
+/// **The default synthesis achieves a shorter period than the legacy one over
+/// the corpus, and no clock is much worse.** `synthesis` is `after` with
+/// `--synthesis vivado` (docs/fpga-vivado-parity.md, "Synthesis against
+/// Vivado's"): the geometric mean against Vivado's own flow went from 1.437
+/// to 1.274. This holds it at least 5 % under, and no clock's median more
+/// than 10 % over its own `after`: the worst were `srl_delay`, 1.871 to
+/// 2.027 ns on a netlist of Vivado's own seven tables two deep, a placement's
+/// wires, and `sad`'s `clk_usb`, 2.588 to 2.787, one seed of five at 3.79.
+/// Would catch a regeneration in which the improvement was lost or a clock
+/// went far wrong; would not catch the flow losing it since, which needs
+/// Vivado.
+#[test]
+fn the_default_synthesis_achieves_a_shorter_period_than_the_legacy_one() {
+    let Some(table) = achieved() else { return };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (vivado, builds)) in &table {
+        let legacy = median(&builds["after"]);
+        let synthesis = median(&builds["synthesis"]);
+        assert!(
+            synthesis <= legacy * 1.10,
+            "{design} {clock}: {synthesis:.3} ns with the default synthesis against {legacy:.3}"
+        );
+        logs[0] += (legacy / vivado).ln();
+        logs[1] += (synthesis / vivado).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let (legacy, synthesis) = ((logs[0] / n).exp(), (logs[1] / n).exp());
+    assert!(
+        synthesis < legacy * 0.95,
+        "geometric mean against Vivado's own flow: {synthesis:.3}, legacy {legacy:.3}"
     );
 }

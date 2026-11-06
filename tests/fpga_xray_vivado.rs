@@ -178,21 +178,23 @@ fn a_carry_chain_is_timed_as_vivado_times_it() {
     }
 }
 
-/// **Target, not yet met: the analyser's FIFO is as fast as Vivado makes
-/// it.** `analyser_fifo.v` is the Husky Plus analyser's FIFO stand-in alone,
-/// written at 400 MHz and read at 96. Vivado routes the write-side count
-/// into `wused_q[14]` in 1.929 ns, putting `wptr - rptr_w` on the carry
-/// chain (a `LUT2` and four `CARRY4`s); `stored` in 4.147 ns; and the word
-/// read out, folded into `dout`, in 4.251 ns.
+/// **The analyser's FIFO is as fast as Vivado makes it.** `analyser_fifo.v`
+/// is the Husky Plus analyser's FIFO stand-in alone, written at 400 MHz and
+/// read at 96. Vivado routes the write-side count into `wused_q[14]` in
+/// 1.929 ns, putting `wptr - rptr_w` on the carry chain (a `LUT2` and four
+/// `CARRY4`s); `stored` in 4.147 ns; and the word read out, folded into
+/// `dout`, in 4.251 ns. Checks each of the three is within 1.35 times
+/// Vivado's.
 ///
-/// On 2026-11-02 Reticle's estimate of the first was 3.9 ns, a ripple of
-/// seven lookup tables, because subtractions are kept off the carry chain
+/// It was a target until 2026-11-06, `#[ignore]`d: on 2026-11-02 Reticle's
+/// estimate of the first was 3.9 ns, a ripple of seven lookup tables,
+/// because subtractions were kept off the carry chain
 /// (`PrimitiveOptions::min_subtract_carry_width`, off for an unexplained
-/// failure on the part). Checks each of the three is within 1.35 times
-/// Vivado's. `cargo test -- --ignored` runs it; it passes when the gap is
-/// closed, and would then catch it opening again.
+/// failure on the part). The 7 series' default synthesis (`--synthesis
+/// vivado`, docs/fpga-vivado-parity.md, "Synthesis against Vivado's") puts
+/// them there, and it passes; it catches the gap opening again. `--synthesis
+/// legacy` would still fail it.
 #[test]
-#[ignore = "target: subtractions are not on the carry chain, so the FIFO's flags are slower than Vivado's"]
 fn the_analyser_fifo_is_as_fast_as_vivado_makes_it() {
     let Some(root) = chipdb() else { return };
     let Some(dir) = fixtures() else { return };

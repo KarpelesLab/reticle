@@ -34,6 +34,13 @@
 # places and routes this design differently. Every build of it measured on
 # a board was made with the legacy model, and this one is that build byte for
 # byte; see docs/fpga-vivado-parity.md.
+# `--synthesis legacy` for the same reason once more: the default synthesises
+# as Vivado does, subtractions, orderings and equalities on the carry chain and
+# the logic mapped for depth, which is a different netlist, and none of it has
+# been on a board. Subtractions on the chain are the one change of this kind
+# that has been, and the Husky Plus's captures went wrong with them for a reason
+# not found (`MapOptions::min_subtract_carry_width`); see
+# docs/fpga-vivado-parity.md, "Synthesis against Vivado's".
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -44,7 +51,7 @@ reticle=${RETICLE:-reticle}
 
 mkdir -p "$out"
 exec "$reticle" fpga \
-    --wide-muxes off --memories legacy --delay-model legacy \
+    --wide-muxes off --memories legacy --delay-model legacy --synthesis legacy \
     --srl-min 0 \
     --device xc7a35t-ftg256 \
     --top cwhusky_top \
