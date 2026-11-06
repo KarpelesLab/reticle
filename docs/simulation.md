@@ -140,6 +140,36 @@ design whose IP sources had been left off the command line. Reticle has no
 library search path, so the fix is always to name the file that defines the
 module. `docs/ir.md` has the rest of the line.
 
+## Vendor cells: `--device`
+
+A design that instantiates a 7-series primitive by name runs with
+`--device` and any 7-series part:
+
+```sh
+reticle sim --device xc7a35t-cpg236 --top tb tb.v design.v
+```
+
+A module the design names and declares nothing of then comes from the
+part's cell library: first `src/fpga/devices/xc7_cells.v`, the slice cells
+a build also reads (lookup tables, flip-flops, latches, shift registers,
+distributed memories), and then `src/fpga/devices/xc7_sim.v`, models of the
+hard blocks that only a simulator reads — `IDDR`, `ODDR`, `OSERDESE2`,
+`ISERDESE2`, `RAMB18E1`, `RAMB36E1`, `DSP48E1`, the global and regional
+clock buffers, `PLLE2_*`, `MMCME2_*` and the IO buffers. A design's own
+module of the same name always wins. Without `--device` such an instance is
+refused, as above.
+
+Each model was written from the user guides and then held to what
+`xsim` prints with Vivado's own models for a testbench written here, byte
+for byte; `testdata/sim/xc7/` has those testbenches and answers, and
+`docs/fpga-vivado-parity.md` (*Simulating the hard blocks*) lists what each
+covers, what the comparison found, and what is not checked or not modelled
+(`IDELAYE2` and the FIFOs, among others). One behaviour every model
+shares, because `xsim` has it: for the first 100 ns, `glbl`'s global
+reset holds each block at its initial value and ignores its clocks, so a
+testbench that clocks a block from time zero sees nothing happen until
+then. The slice cells do not model it.
+
 ## Driving a simulation from Rust
 
 ```rust
@@ -458,6 +488,8 @@ not the order of magnitude a compiled simulator is supposed to be worth:
   event side counts as a divergence, not an excuse. It also keeps
   `testdata/sim/compiled_eligibility.txt`, a golden census of which
   corpus module qualifies and, for the rest, exactly why not.
+- `tests/sim_xc7_primitives.rs` runs each testbench of `testdata/sim/xc7/`
+  with `--device` and holds its output to what `xsim` printed.
 
 ## Not yet here
 

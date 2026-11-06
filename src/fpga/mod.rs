@@ -271,6 +271,55 @@ pub fn cell_source(family: &str, names: &[String]) -> Option<String> {
         "xc7" => include_str!("devices/xc7_cells.v"),
         _ => return None,
     };
+    modules_named(library, names)
+}
+
+/// The source of the cells named in `names` that a *simulation* of a
+/// `family` design may take: [`cell_source`]'s library first, and then the
+/// models of the hard blocks in `devices/xc7_sim.v` (block RAM, DSP, IO
+/// logic and buffers, clock buffers and clock managers).
+///
+/// The second library is for a simulator only, and a build never reads it: a
+/// hard block a design names is the device's own primitive, and a behavioural
+/// model in its place would be mapped onto logic. Nor does a simulation leave
+/// out what [`retarget`] maps to the slice's own cell, since a simulator
+/// needs every cell's behaviour whatever silicon it becomes.
+///
+/// ```
+/// let source = reticle::fpga::simulation_source("xc7", &["IDDR".to_owned()]).unwrap();
+/// assert!(source.contains("module IDDR "));
+/// assert!(reticle::fpga::cell_source("xc7", &["IDDR".to_owned()]).is_none());
+/// assert!(reticle::fpga::simulation_source("ecp5", &["IDDR".to_owned()]).is_none());
+/// ```
+#[must_use]
+pub fn simulation_source(family: &str, names: &[String]) -> Option<String> {
+    let (cells, hard) = match family {
+        "xc7" => (
+            include_str!("devices/xc7_cells.v"),
+            include_str!("devices/xc7_sim.v"),
+        ),
+        _ => return None,
+    };
+    // A model of the hard block replaces the cell library's way of building
+    // that name out of the device's primitives (`BUFGMUX_1` is a `BUFGMUX`
+    // to a build, and a clock parked high to a simulator).
+    let from_cells: Vec<String> = names
+        .iter()
+        .filter(|name| modules_named(hard, std::slice::from_ref(name)).is_none())
+        .cloned()
+        .collect();
+    let mut out = modules_named(cells, &from_cells).unwrap_or_default();
+    if let Some(models) = modules_named(hard, names) {
+        // The models' delays (the global reset's 100 ns, a clock manager's
+        // lock time) are written in picoseconds.
+        out.push_str("`timescale 1ps / 1ps\n");
+        out.push_str(&models);
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The modules of `library` whose names `names` holds, in the library's order.
+fn modules_named(library: &str, names: &[String]) -> Option<String> {
     let mut out = String::new();
     for block in library.split_inclusive("endmodule\n") {
         // At the start of a line: the file's header says the word too.

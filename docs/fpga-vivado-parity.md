@@ -38,6 +38,62 @@ registers do not; each has a section of its own. Nor do the distributed RAMs Viv
 puts on a `SLICEM` ([Distributed RAM](#distributed-ram)), with `--memories legacy`
 the exception to that.
 
+## Simulating the hard blocks
+
+`src/fpga/devices/xc7_sim.v` holds models of the hard blocks for a simulator alone:
+`reticle sim --device <7-series part>` takes from it, after `xc7_cells.v`, a module a
+design names and declares nothing of, and a build never reads it, so a `RAMB18E1` a
+design names is still the block in a bitstream. `docs/simulation.md` says how to use it.
+
+**Checked:** each testbench in `testdata/sim/xc7/` prints under Reticle's simulator what
+it printed under `xsim` with Vivado's `unisims_ver`, `secureip` and `glbl`, byte for
+byte (`tests/sim_xc7_primitives.rs`; `tools/vivado-parity/gen_sim_xc7.sh` asks `xsim`):
+
+| Testbench | What it drives |
+|---|---|
+| `iddr`, `iddr_global_reset` | `IDDR` in each `DDR_CLK_EDGE`, both `SRTYPE`s, the inversions, CE, R and S at random; the global reset |
+| `oddr`, `oddr_same_edge`, `oddr_same_edge_inverted` | `ODDR` likewise, and CE held low across whole cycles in `SAME_EDGE` |
+| `oserdese2`, `oserdese2_reset` | `OSERDESE2` at SDR 2 to 8 and DDR 4, 6, 8, OQ and TQ; eight moments of coming out of reset |
+| `iserdese2`, `iserdese2_reset` | `ISERDESE2` in `NETWORKING` at SDR 2 to 8 and DDR 4, 6, 8, all eight Q; eight moments of coming out of reset |
+| `ramb18e1`, `ramb36e1` | `TDP` and `SDP`, every width, mixed widths on a port, each write mode, the output registers, both resets and their priority, byte enables, parity, `INIT_xx`/`INITP_xx`, inversions |
+| `bufg`, `bufg_switches`, `bufgctrl` | `BUFG`, `BUFGCE` (both `CE_TYPE`s), `BUFGCE_1`, `BUFGMUX`, `BUFGMUX_1`, `BUFGMUX_CTRL`, `BUFGP`; 80 switches and 140 `BUFGCTRL` experiments, one control at a time at each phase of two clocks |
+| `bufr` | `BUFR` at every divide with CE and CLR, `BUFH`, `BUFHCE`, `BUFIO`, `BUFMR`, `BUFMRCE` |
+| `clock_managers` | `PLLE2_ADV`, `MMCME2_ADV` and both `_BASE`s: first edges, lock, period, high time and phase of every output, and a second reset |
+| `dsp48e1_global_reset` | the `DSP48E1` model that was `testdata/fpga/vivado/dsp/dsp48e1_model.v`, through the global reset; the 52 settings of `dsp/vectors/` still hold it otherwise |
+| `io_buffers` | every input, output, tristate, bidirectional and differential buffer the ledger builds, the disables, `PULLUP` and `PULLDOWN` |
+
+What the first runs found, each a model written from the documentation and wrong:
+xsim holds every block at its initial value for 100 ns (`glbl`'s global reset) and
+ignores its clocks; a 9-bit block RAM port's parity bit is bit 8 of `INIT_A`, not 16;
+an `ODDR` in `SAME_EDGE` loads its falling edge only if CE was high at the rising edge
+before; a `SAME_EDGE` `IDDR` resets each register at its own edge; the global reset
+holds a clock buffer low whatever its `INIT_OUT`, and xsim's `BUFHCE` ignores
+`INIT_OUT` altogether; `OSERDESE2` holds OQ at `SRVAL_OQ` for three `CLK` cycles after
+the first `CLKDIV` edge out of reset; a PLL's outputs run half a VCO period early, and
+an MMCM's and a PLL's lock take `3*M*D + 15` and `+ 17` input cycles. The latencies of
+`OSERDESE2` are UG471's table, and xsim's; `ISERDESE2`'s Q1 is the newest sample, Q2 to
+Q8 older ones even beyond the width, a reset empties the samples, and its lag is 2, 2, 4,
+6, 8, 10, 12 half periods of `CLK` for SDR 2 to 8 and 3, 3, 5 for DDR 4, 6, 8.
+
+The simulator had four faults these found, each fixed with a test of its own:
+a fractional delay rounded to the unit and not the precision; `m[i][j]` read element
+`j` of `m` (and `mem[a][7:0] <= d` was dropped, which is how `ib_1024x32_bytes` came
+to be built wrongly: see [Block RAM](#block-ram)); an integer division inside a real
+expression was divided as reals; a function's `real` argument was one bit wide.
+
+**Not checked against xsim, or known to differ:** `BUFGCTRL` with its selects and
+enables changing faster than a switch completes; `OSERDESE2` with OCE or TCE moving in
+the middle of a word, DATA_WIDTH 10 and 14, and SHIFTIN/SHIFTOUT; a clock manager's
+fractional multiplier (xsim locks it much later), a VCO period that is not a whole
+picosecond, an MMCM with D above 1 and M odd, `CLKOUT4_CASCADE`'s phase, the DRP and
+the phase shift; `ISERDESE2`'s `BITSLIP`, its `MEMORY` and `OVERSAMPLE` modes and CE
+low; a block RAM's address collisions (xsim prints a warning and reads x),
+cascades and ECC; a differential input at x or z on one side; `KEEPER`, and a pull on
+a net something else drives, which need strengths. **Not modelled at all:**
+`IDELAYE2`, `IDELAYCTRL`, `FIFO18E1`, `FIFO36E1`, and the configuration
+blocks (`BSCANE2`, `ICAPE2`, `STARTUPE2`, `FRAME_ECCE2`, `XADC`, `DCIRESET`); a design
+naming one is refused at elaboration as before.
+
 ## Which primitives build
 
 `testdata/fpga/vivado/primitives/` has one design per 7-series primitive, 146 of
@@ -654,7 +710,9 @@ a fixed end, could move an instance only where a site of the kind lacks the pin,
 the delay is not built. **No simulation model**: `src/fpga/devices/xc7_cells.v` is what
 elaboration takes for a cell nothing declares, so a model there would replace the hard block
 in every build, as it would an `IDDR`'s, which has none either; a model for simulation alone
-would need a library elaboration does not read, which this flow has not got. A `PHASER`'s
+would need a library elaboration does not read, which this flow has not got. (Since
+2026-11-06 it has one: [Simulating the hard blocks](#simulating-the-hard-blocks). `IDDR`
+and `ODDR` are in it, checked against `xsim`; `IDELAYE2` is not yet.) A `PHASER`'s
 clocks into `CLKDIVP` and `OCLK`, the `MEMORY_DDR3` and `MEMORY_QDR` interfaces' purpose,
 which this part's flow does not build. Nothing here has been on a part.
 
@@ -2233,7 +2291,9 @@ these (`run_placed.sh`), and nothing here has run on a part. No simulation model
 added to `src/fpga/devices/xc7_cells.v`: a `RAMB18E1` has none either, and a FIFO's
 flags on two clocks are the vendor model's synchronisers, which a model written here
 would have to match cycle for cycle to be worth a vector; Vivado's own models are what
-the simulation above runs on.
+the simulation above runs on. (A `RAMB18E1` and a `RAMB36E1` have one now, in the
+simulation library, [Simulating the hard blocks](#simulating-the-hard-blocks); the FIFOs
+still have none, for the reason given.)
 
 **Bitstreams of other designs.** The FIFO bels are new sites in the Vivado model's
 fabric; the block RAM fixtures and `qor/` were built with this and with the commit
@@ -2559,8 +2619,9 @@ a route at all**, which nothing in the database says.
 
 ### What the block does
 
-`dsp48e1_model.v` is written here from UG479's diagrams and holds none of the
-vendor's model. `tests/fpga_dsp_vivado.rs` holds it to the 52 settings of `vectors/`;
+The `DSP48E1` model, `dsp48e1_model.v` here until the simulation library
+(`src/fpga/devices/xc7_sim.v`) took it in with the global reset added, is written
+here from UG479's diagrams and holds none of the vendor's model. `tests/fpga_dsp_vivado.rs` holds it to the 52 settings of `vectors/`;
 its header lists what it does not cover. The first run agreed in 51, and the other
 was the model's carry out, which it cannot state when `X` and `Y` are both non-zero;
 that setting no longer asks about carries. With it, every multiply is checked

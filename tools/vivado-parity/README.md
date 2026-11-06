@@ -30,6 +30,13 @@ models or IP.
   time, and writes `vectors/` there.
 - `xsim_routed.py` runs a netlist Reticle routed under `xsim` and the vendor's
   models of every cell, against its source. Nothing of that is committed.
+- `gen_sim_xc7.sh` runs each testbench of `testdata/sim/xc7/` under `xsim` with
+  the vendor's `unisims_ver`, `secureip` and `glbl`, and keeps what it printed
+  beside it as `<name>.xsim`; `tests/sim_xc7_primitives.rs` holds the
+  simulation library `src/fpga/devices/xc7_sim.v` to those answers.
+  `gen_sim_clock_switches.py`, `gen_sim_bufgctrl.py` and
+  `gen_sim_clock_managers.py` write three of the testbenches; the others are
+  written by hand.
 - `gen_slice_cells.py` writes small designs around one latch or shift register
   into `testdata/fpga/vivado/slice_cells/`, and `collect_slice_cells.py` keeps
   what Vivado's bitstream for each decodes to (`reticle fpga --decode`), in

@@ -6,8 +6,9 @@
 //! been near a board:
 //!
 //! - **What the block does.** `vectors/` holds what the vendor's model answered
-//!   under `xsim` for 52 settings, and `dsp48e1_model.v`, written here, has to
-//!   give the same answers. It would catch a register, an inverter, a shift or an
+//!   under `xsim` for 52 settings, and the model written here, `DSP48E1` in the
+//!   simulation library `src/fpga/devices/xc7_sim.v`, has to give the same
+//!   answers. It would catch a register, an inverter, a shift or an
 //!   ALU mode modelled wrong. It would not catch a mode no vector sets; the
 //!   model's header lists those.
 //! - **What a netlist does.** Every multiply mapped here, with that model, against
@@ -28,6 +29,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// The part a simulation takes the 7-series models from (`--device`).
+const DEVICE: &str = "xc7a100t-ftg256";
 
 fn manifest() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -75,14 +79,12 @@ fn files_in(dir: &Path, extension: &str) -> Vec<PathBuf> {
 #[test]
 fn the_model_answers_as_the_vendors_does() {
     let Some(dir) = fixtures() else { return };
-    let model = dir.join("dsp48e1_model.v");
     let vectors = files_in(&dir.join("vectors"), "v");
     assert!(vectors.len() >= 50, "{} settings", vectors.len());
     let mut wrong = Vec::new();
     for file in &vectors {
         let run = reticle()
-            .args(["sim", "--top", "tb"])
-            .arg(&model)
+            .args(["sim", "--top", "tb", "--device", DEVICE])
             .arg(file)
             .output()
             .expect("failed to run the reticle binary");
@@ -105,6 +107,9 @@ fn the_model_answers_as_the_vendors_does() {
 /// start unknown and a mapped netlist's at zero. `si` changes a moment after the
 /// edge and not on it: in a netlist the clock arrives through buffers, a delta
 /// later, and a value changed at the edge beats it there and not in the source.
+/// The clock starts after the first 100 ns, the global reset, which holds a
+/// netlist's `DSP48E1` and ignores its clock, in the vendor's models and in the
+/// simulation library alike, and does nothing to the source.
 const SHIFT_TB: &str = r#"
 module tb;
   reg clk = 0;
@@ -114,6 +119,7 @@ module tb;
   TOP dut (.clk(clk), .si(si), .so(so));
   integer n;
   initial begin
+    #120;
     for (n = 0; n < 900; n = n + 1) begin
       #5 clk = 1;
       #1;
@@ -129,7 +135,7 @@ endmodule
 /// The lines a simulation printed, with the simulator's own notes left out.
 fn simulate(files: &[PathBuf]) -> Vec<String> {
     let mut run = reticle();
-    run.args(["sim", "--top", "tb"]);
+    run.args(["sim", "--top", "tb", "--device", DEVICE]);
     for file in files {
         run.arg(file);
     }
@@ -167,13 +173,13 @@ fn map(source: &Path, top: &str, out: &Path) -> PathBuf {
     out.join(format!("{top}.v"))
 }
 
-/// The cells a mapped netlist may name: a library of the small ones, and the model
-/// of this one.
+/// The cells a mapped netlist may name beside the device's own: a library of the
+/// small ones. The model of this one is the simulation library's, which
+/// `--device` brings in.
 fn libraries(dir: &Path) -> Vec<PathBuf> {
     vec![
         manifest().join("examples/husky/sim/xilinx_cells.v"),
         dir.join("more_cells.v"),
-        dir.join("dsp48e1_model.v"),
     ]
 }
 
@@ -384,7 +390,8 @@ fn staged(
 /// The testbench for [`staged`]: operands, enable and reset from a generator, the
 /// result printed whole each cycle after a run that fills every stage. `en` starts
 /// low and rises once before that, since the designs that use it as a clock would
-/// otherwise see an edge at time zero in their source and none in a netlist.
+/// otherwise see an edge at time zero in their source and none in a netlist. It
+/// starts after the global reset, as [`SHIFT_TB`] does and for its reason.
 fn staged_tb(a: u32, b: u32, result: u32) -> String {
     format!(
         r#"
@@ -401,6 +408,7 @@ module tb;
   staged dut (.clk(clk), .en(en), .rst(rst), .a(a), .b(b), .y(y), .x(x));
   integer n;
   initial begin
+    #120;
     for (n = 0; n < 400; n = n + 1) begin
       #5 clk = 1;
       #1;

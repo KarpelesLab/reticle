@@ -75,7 +75,7 @@ SETTINGS = {
     "alu2_c": config(ties={"OPMODE": "7'b0110101", "ALUMODE": "4'b0010"}),
     # No multiplier: A:B and C, with the carries.
     "ab_c": config(ties={"OPMODE": "7'b0110011"}, params={"USE_MULT": '"NONE"'}, carry=True),
-    # Not its carries: see `dsp48e1_model.v`.
+    # Not its carries: see the DSP48E1 model in `src/fpga/devices/xc7_sim.v`.
     "ab_ones": config(ties={"OPMODE": "7'b0001011"}, params={"USE_MULT": '"NONE"'}),
     "ab_c_reg": config({**areg(1), **breg(1), "CREG": 1, "PREG": 1}, ties={"OPMODE": "7'b0110011"}, params={"USE_MULT": '"NONE"'}, carry=True),
     "c_c": config(ties={"OPMODE": "7'b0111100"}, params={"USE_MULT": '"NONE"'}, carry=True),

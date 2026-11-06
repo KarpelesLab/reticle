@@ -483,6 +483,10 @@ Options:
   --sv             Read .v files as SystemVerilog, as `iverilog -g2005-sv` does
   --include-dir <d>
                    Search here for `include files; repeatable
+  --device <name>  Give the cells this device's family has a model of to a
+                   design that names them: for a 7-series part, its slice
+                   cells and its hard blocks (block RAM, DSP, IO logic and
+                   buffers, clock buffers and managers)
   --until <ticks>  Stop at this time (in the design's precision)
   --seed <n>       Seed for $random (default 1)
   --vcd <file>     Write a VCD waveform here
@@ -931,6 +935,7 @@ fn spec_for(usage: &str) -> Spec {
         Spec {
             options: &[
                 "top",
+                "device",
                 "until",
                 "seed",
                 "vcd",
@@ -1116,6 +1121,25 @@ fn load_design_keeping(
     args: &Args,
     kept: &[String],
 ) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
+    load_design_with(args, kept, false)
+}
+
+/// [`load_design`] for a simulator: a cell the design names and does not
+/// declare comes from the device's simulation library
+/// ([`reticle::fpga::simulation_source`]), hard blocks included, and nothing
+/// is left out for being the slice's own cell.
+fn load_design_for_simulation(
+    args: &Args,
+) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
+    load_design_with(args, &[], true)
+}
+
+/// [`load_design_keeping`], reading the simulation library when `simulating`.
+fn load_design_with(
+    args: &Args,
+    kept: &[String],
+    simulating: bool,
+) -> Result<Result<(Design, SourceMap), Outcome>, ArgError> {
     let paths = args.positionals();
     if paths.is_empty() {
         return Ok(Err(Outcome::Usage("no input file given".into())));
@@ -1234,6 +1258,10 @@ fn load_design_keeping(
     let refs: Vec<&reticle::verilog::ast::SourceFile> = files.iter().collect();
     let mut diags = Diagnostics::new();
     let mut design = reticle::verilog::elaborate(&refs, &options, &mut diags);
+    // What the cell library's own sources say. Each elaboration starts its
+    // diagnostics afresh: the round that found a cell missing warned of it,
+    // and the round that took it from the library is the one to report.
+    let mut library_diags = Diagnostics::new();
     // A cell of the target's the design names and does not declare, and
     // that the target's cell library has: that module joins the sources.
     // One round may name another, so this repeats until nothing is added.
@@ -1241,9 +1269,10 @@ fn load_design_keeping(
     let family = device.map(|device| device.family.clone());
     // What the slice has itself stays a primitive, so that mapping sees it.
     let in_silicon = |name: &str| {
-        family
-            .as_deref()
-            .is_some_and(|f| reticle::fpga::retarget(f, name).is_some())
+        !simulating
+            && family
+                .as_deref()
+                .is_some_and(|f| reticle::fpga::retarget(f, name).is_some())
     };
     while let (Some(family), Some(found), false) = (&family, &design, diags.has_errors()) {
         let Some(top) = found.top else { break };
@@ -1260,13 +1289,18 @@ fn load_design_keeping(
             })
             .filter(|name| !kept.contains(name))
             .collect();
-        let Some(source) = reticle::fpga::cell_source(family, &names) else {
+        let source = if simulating {
+            reticle::fpga::simulation_source(family, &names)
+        } else {
+            reticle::fpga::cell_source(family, &names)
+        };
+        let Some(source) = source else {
             break;
         };
         let id = match map.add(format!("{family}_cells.v"), source) {
             Ok(id) => id,
             Err(err) => {
-                diags.push(Diagnostic::error(format!(
+                library_diags.push(Diagnostic::error(format!(
                     "cannot load the {family} cell library: {err}"
                 )));
                 break;
@@ -1278,11 +1312,17 @@ fn load_design_keeping(
             reticle::verilog::Dialect::Verilog2005,
             &mut pre,
             &mut IncludesFrom(String::new(), include_dirs),
-            &mut diags,
+            &mut library_diags,
         ));
+        if library_diags.has_errors() {
+            break;
+        }
         let refs: Vec<&reticle::verilog::ast::SourceFile> = files.iter().collect();
+        diags = Diagnostics::new();
         design = reticle::verilog::elaborate(&refs, &options, &mut diags);
     }
+    library_diags.append(&mut diags);
+    let mut diags = library_diags;
     let failed = report(&mut diags, &map);
     match design {
         Some(design) if !failed => Ok(Ok((design, map))),
@@ -5266,7 +5306,20 @@ fn sim(args: &Args) -> Result<Outcome, ArgError> {
 
     let until = args.u64_option("until")?;
     let seed = args.u64_option("seed")?;
-    let (design, mut map) = match load_design(args)? {
+    if let Some(name) = args.option("device")
+        && reticle::fpga::target(name).is_none()
+    {
+        let known: Vec<&str> = reticle::fpga::builtin_devices()
+            .devices()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        return Ok(Outcome::Usage(format!(
+            "unknown device `{name}`; known devices are {}",
+            known.join(", ")
+        )));
+    }
+    let (design, mut map) = match load_design_for_simulation(args)? {
         Ok(pair) => pair,
         Err(outcome) => return Ok(outcome),
     };
