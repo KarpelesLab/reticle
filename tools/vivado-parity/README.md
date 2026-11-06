@@ -10,7 +10,18 @@ models or IP.
 - `gen_cell_vectors.py` asks `xsim` what each of those cells does, and writes
   `testdata/fpga/vivado/cells/`.
 - `gen_primitives.py` writes one design per 7-series primitive into
-  `testdata/fpga/vivado/primitives/`.
+  `testdata/fpga/vivado/primitives/`, and with a device name (`xc7a35t-cpg236`,
+  `xc7a35t-ftg256`) that part's ledger, and its constraints when its package is not
+  the FTG256, into a directory of its name there. `collect.py` keeps what `run_all.sh`
+  found as `vivado.txt` beside each ledger, and `probe_pads.py` what each bitstream
+  sets in the tiles the constraints pin, as `pads.txt`, for `tests/fpga_xray_probes.rs`.
+- `gen_drp.py` writes the clock managers' and the XADC's probes again with their DRP
+  pins tied each way, and `drp_ecc.py` keeps frames 28 and 29 of each block's tile in
+  Vivado's bitstreams of them, with the block's bits, as
+  `testdata/fpga/vivado/bitstream/drp_ecc.txt`.
+- `gen_clock_rules.py` writes designs that place a clock's buffer and loads on chosen
+  sites of the XC7A35T, and `clock_rules.py` holds decoded bitstreams to the rebuffer
+  enable and `BUFHCLK_USED` rules `docs/fpga-vivado-parity.md` states.
 - `gen_xdc.py` and `xdc_answers.tcl` ask what Vivado makes of each constraints
   file in `testdata/fpga/vivado/xdc/`, and keep the answer beside it.
 - `gen_muxf.py` writes `testdata/fpga/vivado/muxf/`, and `muxf.sh` with
