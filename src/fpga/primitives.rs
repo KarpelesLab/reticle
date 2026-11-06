@@ -6289,10 +6289,26 @@ impl Mapper<'_> {
             })
             // An input delay's `C` and its controller's `REFCLK` too, which
             // Vivado puts on a global buffer (`idelaye2_probe`).
+            // A serialiser's other clocks too, `CLKDIV`, `CLKB`, `OCLK` and
+            // the rest: left on the pad's net while `CLK` moved, an
+            // `OSERDESE2` had its two clocks on two kinds of route, which
+            // Vivado refuses (`REQP-1975`, `oserdese2_probe` under
+            // `run_placed.sh`). A role whose port another role names already
+            // (an `IDDR`'s `clkb` is its `C`) is that port once.
             .flat_map(|b| {
-                ["dclk", "psclk", "clk", "p0_clk", "p1_clk", "c", "refclk"]
-                    .into_iter()
-                    .filter_map(|role| b.port(role).map(|p| (b.name.clone(), p.to_owned())))
+                let mut ports: Vec<(String, String)> =
+                    ["dclk", "psclk", "clk", "p0_clk", "p1_clk", "c", "refclk"]
+                        .into_iter()
+                        .filter_map(|role| b.port(role).map(|p| (b.name.clone(), p.to_owned())))
+                        .collect();
+                for role in ["clkb", "clkdiv", "clkdivp", "oclk", "oclkb"] {
+                    if let Some(p) = b.port(role)
+                        && !ports.iter().any(|(_, q)| q == p)
+                    {
+                        ports.push((b.name.clone(), p.to_owned()));
+                    }
+                }
+                ports
             })
             .collect();
         // Which net each clock pin reads, how many pins that is, and which
