@@ -6976,14 +6976,39 @@ struct Spans {
     columns: Vec<u32>,
     /// Per signal, the same by row, at `signal * height + y`.
     rows: Vec<u32>,
-    /// Per signal, `(x0, x1, y0, y1)`: the lowest and highest occupied
-    /// column and row. Meaningless while `placed` is zero.
-    extent: Vec<(u32, u32, u32, u32)>,
-    /// Per signal, how much its box costs per tile: empty for one each,
-    /// which is a wirelength placement; see [`PlaceTiming`].
-    weight: Vec<u32>,
-    /// Per signal, how many of its pins are on a placed instance.
-    placed: Vec<u32>,
+    /// Per signal, its box, its weight and how many of its pins are
+    /// placed: what every move reads and writes of every signal it
+    /// touches, together, where three arrays were three cache misses.
+    boxes: Vec<SignalBox>,
+}
+
+/// One signal's part of [`Spans`].
+#[derive(Clone, Copy, Debug)]
+struct SignalBox {
+    /// The lowest and highest occupied column and row. Meaningless while
+    /// `placed` is zero.
+    x0: u32,
+    x1: u32,
+    y0: u32,
+    y1: u32,
+    /// How many of its pins are on a placed instance.
+    placed: u32,
+    /// How much its box costs per tile: one each for a wirelength
+    /// placement; see [`PlaceTiming`] and [`Spans::weigh`].
+    weight: u32,
+}
+
+impl Default for SignalBox {
+    fn default() -> Self {
+        SignalBox {
+            x0: 0,
+            x1: 0,
+            y0: 0,
+            y1: 0,
+            placed: 0,
+            weight: 1,
+        }
+    }
 }
 
 impl Spans {
@@ -6997,9 +7022,7 @@ impl Spans {
             height,
             columns: vec![0; signals * width],
             rows: vec![0; signals * height],
-            extent: vec![(0, 0, 0, 0); signals],
-            weight: Vec::new(),
-            placed: vec![0; signals],
+            boxes: vec![SignalBox::default(); signals],
         };
         for (signal, s) in netlist.signals.iter().enumerate() {
             for pin in s.driver.iter().chain(s.sinks.iter()) {
@@ -7025,13 +7048,13 @@ impl Spans {
         let (column, row) = self.slots(signal, x, y);
         self.columns[column] += 1;
         self.rows[row] += 1;
-        if self.placed[signal] == 0 {
-            self.extent[signal] = (x, x, y, y);
+        let b = &mut self.boxes[signal];
+        if b.placed == 0 {
+            (b.x0, b.x1, b.y0, b.y1) = (x, x, y, y);
         } else {
-            let (x0, x1, y0, y1) = self.extent[signal];
-            self.extent[signal] = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+            (b.x0, b.x1, b.y0, b.y1) = (b.x0.min(x), b.x1.max(x), b.y0.min(y), b.y1.max(y));
         }
-        self.placed[signal] += 1;
+        b.placed += 1;
     }
 
     /// Takes one pin of `signal` at `(x, y)` away again.
@@ -7043,7 +7066,8 @@ impl Spans {
         let (column, row) = self.slots(signal, x, y);
         self.columns[column] = self.columns[column].saturating_sub(1);
         self.rows[row] = self.rows[row].saturating_sub(1);
-        self.placed[signal] = self.placed[signal].saturating_sub(1);
+        let b = &mut self.boxes[signal];
+        b.placed = b.placed.saturating_sub(1);
     }
 
     /// Narrows `signal`'s box onto the columns and rows that still hold a
@@ -7053,11 +7077,13 @@ impl Spans {
     /// none above `x1` holds a pin, so this walk only crosses what the box
     /// actually lost and never the width of the die.
     fn settle(&mut self, signal: usize) {
-        if self.placed[signal] == 0 {
-            self.extent[signal] = (0, 0, 0, 0);
+        let b = self.boxes[signal];
+        if b.placed == 0 {
+            let b = &mut self.boxes[signal];
+            (b.x0, b.x1, b.y0, b.y1) = (0, 0, 0, 0);
             return;
         }
-        let (mut x0, mut x1, mut y0, mut y1) = self.extent[signal];
+        let (mut x0, mut x1, mut y0, mut y1) = (b.x0, b.x1, b.y0, b.y1);
         let base = signal * self.width;
         while x0 < x1 && self.columns[base + x0 as usize] == 0 {
             x0 += 1;
@@ -7072,29 +7098,37 @@ impl Spans {
         while y1 > y0 && self.rows[base + y1 as usize] == 0 {
             y1 -= 1;
         }
-        self.extent[signal] = (x0, x1, y0, y1);
+        let b = &mut self.boxes[signal];
+        (b.x0, b.x1, b.y0, b.y1) = (x0, x1, y0, y1);
     }
 
     /// `signal`'s half-perimeter wirelength, in tiles.
     fn hpwl_of(&self, signal: usize) -> u64 {
-        if self.placed[signal] == 0 {
+        let b = &self.boxes[signal];
+        if b.placed == 0 {
             return 0;
         }
-        let (x0, x1, y0, y1) = self.extent[signal];
-        u64::from(x1 - x0) + u64::from(y1 - y0)
+        u64::from(b.x1 - b.x0) + u64::from(b.y1 - b.y0)
     }
 
     /// What `signal`'s box costs the anneal: its wirelength, times its
-    /// weight when there are weights.
+    /// weight.
     fn cost_of(&self, signal: usize) -> u64 {
-        let weight = self.weight.get(signal).copied().unwrap_or(1);
-        self.hpwl_of(signal) * u64::from(weight)
+        self.hpwl_of(signal) * u64::from(self.boxes[signal].weight)
     }
 
     /// Every signal's cost, summed. Unweighted, this is [`hpwl`] by
     /// another route and has to agree with it.
     fn total(&self) -> u64 {
-        (0..self.placed.len()).map(|s| self.cost_of(s)).sum()
+        (0..self.boxes.len()).map(|s| self.cost_of(s)).sum()
+    }
+
+    /// Gives each signal the weight `weights` names, and one each past
+    /// its end: none at all is a wirelength placement.
+    fn weigh(&mut self, weights: &[u32]) {
+        for (signal, b) in self.boxes.iter_mut().enumerate() {
+            b.weight = weights.get(signal).copied().unwrap_or(1);
+        }
     }
 }
 
@@ -7802,7 +7836,7 @@ fn anneal(
     // cost change a move makes *here*.
     let mut samples = Vec::new();
     let mut churn = Churn::new(netlist, graph, placement);
-    churn.spans.weight.clone_from(&weights.nets);
+    churn.spans.weigh(&weights.nets);
     churn.pull = Pull::new(netlist, &weights.pins);
     churn.clocks = ClockLoad::new(
         netlist,
@@ -10966,7 +11000,7 @@ mod tests {
     fn a_moves_cost_change_includes_the_pull() {
         let (graph, netlist, mut placement, _) = timed_chain();
         let mut churn = Churn::new(&netlist, &graph, &placement);
-        churn.spans.weight = vec![16; netlist.signals.len()];
+        churn.spans.weigh(&vec![16; netlist.signals.len()]);
         let mut weight = vec![0; netlist.pins.len()];
         for (index, pin) in netlist.pins.iter().enumerate() {
             if !pin.output {
