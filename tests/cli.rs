@@ -960,6 +960,46 @@ fn sim_passes_a_real_to_a_function() {
     assert_eq!(stdout, "-1 2500\n", "{stderr}");
 }
 
+/// **What the lowering has no form for is refused, not run wrongly.** An
+/// intra-assignment delay that is not a constant (`q <= #(d) v`) used to be
+/// dropped, so the assignment happened at once, where `xsim` waits `d`; and
+/// an array of `real` failed the IR's validation on its first assignment, or
+/// rounded what it held. Would catch either back; it would not catch a later
+/// change that supports them, which should replace this test.
+#[test]
+fn sim_refuses_a_variable_assignment_delay_and_an_array_of_reals() {
+    let dir = scratch("sim_unsupported_real_and_delay");
+    let delay = dir.join("delay.v");
+    std::fs::write(
+        &delay,
+        "module tb;\n\
+         \x20 reg a = 0;\n\
+         \x20 integer d = 3;\n\
+         \x20 initial #1 a <= #(d) 1'b1;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = run(&["sim", "--quiet", delay.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("an intra-assignment delay that is not a constant expression"),
+        "{stderr}"
+    );
+    let reals = dir.join("reals.v");
+    std::fs::write(
+        &reals,
+        "module tb;\n\
+         \x20 real a [0:3];\n\
+         \x20 initial a[1] = 1.75;\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = run(&["sim", "--quiet", reals.to_str().unwrap()]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("an array of `real`"), "{stderr}");
+    assert!(!stderr.contains("internal error"), "{stderr}");
+}
+
 /// **An assignment to a bit of an array element is refused, not
 /// misdirected.** The IR has no target for it, and it used to become a write
 /// of element `j` (`m[i][j] = ..`) or of nothing (`m[i][3:0] = ..`), both

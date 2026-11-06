@@ -603,6 +603,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 .unsupported(span, "multi-dimensional unpacked array");
             return None;
         }
+        // The simulator keeps a memory's elements as vectors: an array of
+        // reals used to fail the IR's validation on its first assignment, or
+        // round what it held to an integer.
+        if matches!(**elem, VType::Real) {
+            self.env.unsupported(span, "an array of `real`");
+            return None;
+        }
         let Some(elem_ir) = elem.ir_type() else {
             self.env.error(
                 codes::TYPE,

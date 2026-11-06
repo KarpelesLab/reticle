@@ -327,6 +327,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             match &t.kind {
                 ast::TimingKind::Delay(d) => {
                     delay = d.values.first().and_then(|e| self.delay_from_expr(e));
+                    // The IR's assignment delay is a constant. One that is
+                    // not used to be dropped without a word, so that
+                    // `q <= #(d) v` assigned at once.
+                    if delay.is_none() && !d.values.is_empty() {
+                        self.env.unsupported(
+                            t.span,
+                            "an intra-assignment delay that is not a constant expression",
+                        );
+                        return;
+                    }
                 }
                 _ => {
                     self.timing(t, out);
