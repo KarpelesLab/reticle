@@ -1107,6 +1107,14 @@ The columns differ by one thing at a time, so what each step costs can be read o
   times**, from 0.98 to 1.17. On these designs the router is the smallest of the
   three, and it is not where to look first.
 
+  **That last reading was half wrong** ([Placement and routing against Vivado's
+  own flow](#placement-and-routing-against-vivados-own-flow)): Vivado routed with
+  the lookup tables' pins locked where Reticle's router had put them, so the
+  comparison left out the router's choice of pin, which is its own. With the pins
+  free, Vivado's router took 1.5 ns off `regfile_alu`'s 10.4 and 0.3 to 0.7 ns off
+  five more designs; which input of a table a connection ends on is part of the
+  routing, and under Vivado's timer it is up to 0.39 ns a level.
+
 ### How far Reticle's estimate is
 
 The estimate's `0.34 ns` out of a flip-flop is grade 3's; grade 1's is `0.518`,
@@ -1521,11 +1529,236 @@ design and asks Vivado.
   their figures are the legacy model's.
 - Clock skew is not modelled; Vivado's is up to 0.18 ns on these designs.
 - The router's own analysis, each pass, does not charge the branches; only the
-  reported estimate and the next placement's do.
+  reported estimate and the next placement's do. **Done since**, under the fitted
+  model (`route::Timing::branch_ps`, below); it moved no clock by more than a
+  seed's spread.
 - One placement each. The fixtures quote runs, and nothing fails when the flow moves
   on but a regeneration.
 - What a build steered by the fitted model does on a part. Nothing here has been on
   one, and no Husky build with it has been made for one.
+
+## Placement and routing against Vivado's own flow
+
+**Asked: what clock does each tool reach on the same design, by the same timer?**
+Vivado's own flow (synthesis to routes) against Reticle's placement and routes,
+both judged by Vivado 2026.1's timer at `xc7a100tftg256-3`, on the seventeen
+designs of "The delay model, fitted to Vivado's timer". A clock's figure is its
+period less the worst setup slack of the paths from it to itself: the period it
+achieved, setup and skew included, paths between clocks left out since Reticle
+times none. Run on 2026-11-06. **Everything here is Vivado's timer; nothing has
+been on a part**, and the Husky is in use elsewhere.
+
+`tools/vivado-parity/achieved.sh` does all of it and `achieved.py table` writes
+the table; `testdata/fpga/vivado/qor/achieved.txt` keeps the figures, and
+`tests/fpga_xray_achieved.rs` holds them. How it is asked:
+
+- **Vivado is asked three times.** Given slack it stops: `adders` at its 5 ns
+  constraint came out at 2.820 ns, at 2.40 at 2.247, and at 1.91 at 2.042. So it
+  runs at the constraint given, at 0.85 of what that achieved, and at 0.85 of the
+  better of the two, and its figure is the best of the three. `synth_design`,
+  `opt_design`, `place_design`, `phys_opt_design`, `route_design`, defaults all.
+- **Reticle is asked once a seed, at five seeds,** on the second set of periods.
+  Its criticality is against the longer of the period and the longest path, so any
+  period it does not meet asks the same of it. One seed moved `counter64` from 4.37
+  to 6.49 ns and `sad`'s `clk_usb` from 2.83 to 4.39, so every figure of Reticle's
+  is a median, with the five beside it.
+- **And Vivado places and routes Reticle's netlist,** `place_design` and
+  `route_design` alone: the column that says how much of the gap is placement and
+  routing rather than the netlist. Without `phys_opt_design`, which rewires lookup
+  tables and is not placement: with it the column was lower by up to 1.6 ns
+  (`adders`, 3.14 against 4.92).
+- A design's clocks are asynchronous to each other in Vivado's constraints. The
+  pads have no input or output delay, so Vivado times none of them.
+
+### Where the time went
+
+Seed 1 of each build, four ways (achieved ns): Reticle's routes; Vivado routing
+Reticle's placement with each lookup table's pins locked where Reticle's router
+put them; the same with the pins free; and Vivado placing and routing Reticle's
+netlist. Before this section's changes (the column `before` below) and after:
+
+| design | clock | Reticle's routes | Vivado's, pins locked | Vivado's, pins free | Vivado places too |
+|---|---|---|---|---|---|
+| adders | clk | 7.233 | 7.341 | 7.218 | 4.924 |
+| crc32 | clk | 5.828 | 5.463 | 5.169 | 3.807 |
+| regfile_alu | clk | 9.650 | 9.601 | 8.812 | 7.223 |
+| widemux | clk | 3.915 | 3.167 | 2.854 | 2.745 |
+| analyser_fifo | rd_clk | 7.281 | 7.564 | 6.771 | 5.589 |
+| fsm | clk | 2.905 | 2.998 | 2.744 | 2.392 |
+| *after:* adders | clk | 6.295 | 6.248 | 6.115 | 5.019 |
+| crc32 | clk | 4.586 | 4.360 | 4.197 | 3.978 |
+| regfile_alu | clk | 8.930 | 8.900 | 8.762 | 7.223 |
+| widemux | clk | 3.402 | 3.062 | 2.802 | 2.772 |
+| analyser_fifo | rd_clk | 6.365 | 6.224 | 6.278 | 5.612 |
+| fsm | clk | 2.752 | 2.718 | 2.662 | 2.598 |
+| esad | adc_sampleclk | 3.575 | 4.545 | 3.674 | 4.431 |
+
+The first rows are not quite `before`: they are a build with the pads untimed, the
+branch charge and a premium on fast inputs that was not kept (the first two changes
+below and the last thing tried), which is where this was asked. So
+the earlier reading that the router is the least of it held only for the routes
+with the pins fixed: **which input of a table a connection ends on was up to 1.5 ns**
+(`regfile_alu`), and after the changes below it is under 0.3 everywhere asked. The
+routes themselves are within 0.25 ns of Vivado's but on `widemux` (0.34), whose
+select is read by 257 pins; and the placement is the rest, 1.1 to 1.5 ns on `adders` and
+`regfile_alu` and 0.6 to 0.8 on `analyser_fifo`. On `esad` and `sad`, the Husky
+Plus's pieces, Reticle's placement and routes are faster than Vivado's own placement
+of the same netlist.
+
+### What was changed
+
+All behind `--delay-model vivado`, the default; `--delay-model legacy` builds as
+before, byte for byte (below). In the order they were measured, each against the
+build before it, medians of the clocks' achieved periods; the geometric mean is of
+each clock's median over Vivado's own flow's figure.
+
+1. **A pad no constraint names is not timed** (`xray::place_timing`), as Vivado's
+   timer times none. Timed in every domain it was the latest path of its round: on
+   `counter64` the output's register at column 52 against its pin at 147, and the
+   anneal spent its pull on paths Vivado never asks about. `counter64` went from
+   6.24 to 4.11 ns (three seeds), `sad`'s `clk_usb` from 3.10 to 2.68, `widemux`
+   4.15 to 3.62; the geometric mean from 1.572 to 1.526. Reticle has no
+   `set_output_delay`, so under the fitted model no output pin is timed.
+2. **Each routing pass charges a branch's load** (`route::Timing::branch_ps`),
+   which the routed report and the next placement already did. Within a seed's
+   spread either way (1.526 to 1.532); kept because the pass's analysis and the
+   report then agree.
+3. **A critical search's estimate is not inflated** (`xray::CRITICAL_ASTAR_WEIGHT`,
+   1.0 for a critical search where the router's 2.0 stays for the rest). At 2.0 a
+   critical connection's estimate is half again its real way, and the search takes
+   the first that heads for the sink: on `widemux` a connection of six tiles went
+   east by five and back. `widemux` 4.12 to 3.58 ns, `sad`'s `adc_sampleclk` 3.94
+   to 3.74; geometric mean 1.532 to 1.496.
+4. **A critical connection may take a table's input another signal holds**
+   (`xray::CLAIM_INPUTS`): from a criticality of 0.3 after the exponent a search may
+   end on a held input of its class, and the negotiation moves the holder.
+   `regfile_alu` 10.34 to 9.16 ns, `esad`'s `adc_sampleclk` 3.25 to 3.04; 1.492 to
+   1.468.
+5. **The first pass starts from the placement's estimate**
+   (`route::Timing::seed_from_placement`): every connection's criticality from the
+   placement's line in tile distance, and the signals in the order of their most
+   critical, so that the first routed are the ones a fast input matters to. 1.468
+   to 1.444.
+6. **The tables on the longest chains stay unpaired** (`xray::SPARE_DEEP_PERCENT`,
+   `PairOptions::spare_deep`). A `LUT6_2` gives up `A6`, the input that costs
+   nothing, and holds both halves in one site; Vivado given the same netlist parts
+   them. A table on a chain of tables at least 75 % as long as the longest is left
+   alone. Against the build before, which still had the premium on fast inputs
+   tried below, the build kept (sparing, no premium): `adders` 7.47 to 6.45 ns,
+   `crc32` 5.50 to 4.61, `analyser_fifo`'s read clock 7.36 to 6.37; 1.444 to 1.437,
+   and 1.435 with the premium kept too.
+
+Tried and not kept, each over three or five seeds, each within a seed's spread of
+the build it was tried on: weighing the anneal's connections again at every
+temperature (VPR's way), 1.578 against 1.532; a fully critical connection's weight
+doubled, 1.544; criticality to the power one rather than three, 1.547; six timing
+rounds rather than three, 1.529; a timing round started wider and hotter (16 tiles,
+40 % acceptance), 1.488 against 1.492; keeping the placement of the round the
+estimate liked best, 1.541 against 1.532, which says the estimate a round ends on is
+no guide to Vivado's figure at this scale; a premium on a table's fast inputs for an
+uncritical connection, 1.514 against 1.532 alone and nothing measurable beside the
+claim (1.435 with, 1.437 without); the claim from 0.1, 1.477; sparing from 50 %, no
+better than 75; and pairing none at all (`--pair-tables needed` on designs this
+small), within a seed of sparing the long chains, which keeps the pairing a dense
+design needs.
+
+### Before and after
+
+Medians over five seeds, each seed's figure beside it (ns). `before` is 04b70219,
+`after` this change; "Vivado's, Reticle's netlist" is `before`'s seed 1:
+
+| design | clock | Vivado | Vivado's, Reticle's netlist | before | after |
+|---|---|---|---|---|---|
+| adders | clk | 2.042 | 4.924 | 7.431 (7.23 8.24 7.43 8.24 7.16) | 6.450 (6.29 6.13 6.53 6.45 6.72) |
+| analyser_fifo | rd_clk | 3.887 | 5.589 | 7.606 (7.91 7.61 7.17 7.35 8.07) | 6.365 (6.37 7.16 6.90 6.10 6.04) |
+| analyser_fifo | wr_clk | 2.417 | 2.740 | 3.745 (3.98 3.67 3.75 3.86 3.73) | 3.782 (3.78 3.71 3.87 3.67 3.92) |
+| barrel | clk | 2.376 | 2.431 | 2.894 (2.96 3.25 2.88 2.89 2.88) | 3.013 (2.87 3.01 3.13 2.76 3.35) |
+| bram_fifo | clk | 3.388 | 3.530 | 4.058 (3.94 4.21 3.80 4.28 4.06) | 4.038 (4.04 4.05 3.90 4.16 3.90) |
+| carry_counter | clk | 1.855 | 1.944 | 2.455 (2.35 2.26 2.55 2.69 2.46) | 2.466 (2.40 2.49 2.48 2.42 2.47) |
+| counter64 | clk | 3.220 | 3.401 | 5.896 (6.24 6.49 4.37 5.90 5.36) | 4.266 (4.10 4.30 4.05 4.66 4.27) |
+| crc32 | clk | 2.234 | 3.807 | 5.405 (5.31 5.41 5.35 5.56 5.55) | 4.612 (4.59 4.79 4.88 4.61 4.52) |
+| esad | adc_sampleclk | 2.131 | 3.788 | 3.334 (3.92 4.15 3.09 3.15 3.33) | 2.974 (3.58 2.97 2.82 3.23 2.91) |
+| esad | clk_usb | 1.727 | 2.523 | 2.972 (2.97 3.25 2.79 2.97 3.00) | 2.499 (2.49 3.14 2.69 2.36 2.50) |
+| fir8 | clk | 9.142 | 9.164 | 9.161 (9.16 9.16 9.16 9.16 9.16) | 9.161 (9.16 9.16 9.16 9.16 9.16) |
+| fsm | clk | 1.903 | 2.392 | 3.031 (3.03 2.98 3.28 3.02 3.08) | 2.947 (2.75 2.96 2.95 2.85 3.23) |
+| gray_cdc | clk | 1.466 | 1.438 | 1.547 (1.55 1.55 1.55 1.50 1.58) | 1.503 (1.41 1.50 1.50 1.43 1.50) |
+| gray_cdc | clk2 | 1.267 | 1.513 | 1.670 (1.67 2.04 1.61 1.73 1.59) | 1.736 (1.54 1.74 1.74 1.60 1.74) |
+| lutram32 | clk | 1.894 | 1.807 | 2.261 (2.38 2.22 2.34 2.26 2.26) | 2.267 (2.31 2.16 2.35 2.25 2.27) |
+| mul18 | clk | 1.935 | 1.969 | 2.421 (2.47 2.27 2.50 2.42 2.38) | 2.484 (2.48 2.27 2.51 2.57 2.47) |
+| regfile_alu | clk | 5.511 | 7.223 | 10.139 (9.49 9.70 10.91 10.48 10.14) | 9.142 (8.93 9.61 9.14 8.85 9.61) |
+| sad | adc_sampleclk | 2.207 | 4.240 | 4.316 (4.32 4.25 4.91 4.31 5.10) | 3.549 (3.55 3.48 3.38 3.67 3.81) |
+| sad | clk_usb | 1.726 | 2.649 | 3.809 (3.10 2.83 4.39 3.81 3.87) | 2.588 (2.52 2.75 2.59 2.62 2.57) |
+| srl_delay | clk | 1.645 | 1.846 | 2.039 (2.09 2.01 2.01 2.05 2.04) | 1.871 (1.87 1.97 2.03 1.81 1.87) |
+| widemux | clk | 2.438 | 2.745 | 4.123 (4.15 4.12 4.22 4.09 3.90) | 3.588 (3.40 4.41 3.59 3.45 3.84) |
+
+**Over the twenty-one clocks, Reticle's median is 1.576 times Vivado's own figure
+before and 1.437 after, and 1.244 times Vivado's placement and routes of the same
+netlist before and 1.134 after.** Better by more than a seed's spread: `adders`,
+`analyser_fifo`'s read clock, `counter64`, `crc32`, `esad` and `sad` both clocks,
+`regfile_alu`, `srl_delay`, `widemux`. Worse, all within their seeds' spread:
+`barrel` (2.89 to 3.01), `gray_cdc`'s `clk2` (1.67 to 1.74), `mul18` (2.42 to 2.48),
+`analyser_fifo`'s write clock (3.75 to 3.78). The clocks the fitted model's first
+placement did worse on than the legacy model's ("What it does to placement") were
+`barrel`, `widemux`, `gray_cdc`'s `clk`, the write clock and `sad`'s `clk_usb`;
+`widemux`, `gray_cdc`'s `clk` and `clk_usb` are better here, the other two not.
+
+The rest of the gap to Vivado's own figure is the netlist: `fir8` is the same
+9.16 ns in both tools' placements, and `adders`, `crc32` and `regfile_alu` have 15,
+6 and 19 levels on their latest paths where Vivado's synthesis makes 8, 3 and 7 to
+11, from subtractions this flow keeps off the carry chain
+(`PrimitiveOptions::min_subtract_carry_width`, for a failure on the part) and its
+own covering.
+
+### The Husky's bitstreams
+
+`examples/husky/build_plus.sh` with this tree writes
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`, seed 4's,
+byte for byte. **Checked.** Each change above is off under `--delay-model legacy`:
+the pads are timed in every domain, the branch charge is zero, the claim never, the
+estimate's weight the router's own, the first pass uncritical and in netlist order,
+and `related` pairs by inputs alone.
+
+### Tests
+
+`tests/fpga_xray_achieved.rs` reads `achieved.txt`: every clock has Vivado's figure
+and five seeds of each build, and after is at least 5 % under before over the corpus
+with no clock more than 5 % worse. That catches a regeneration that lost the result
+and not the flow moving on since, which only `achieved.sh` asks. Unit tests hold
+each change: an unconstrained pad untimed under the fitted model and timed under
+the legacy one (`an_input_delay_launches_its_pad_late_in_its_clocks_domain`); a
+branch charged to the sinks past it (`a_pass_charges_a_branch_to_the_sinks_past_it`);
+a critical connection taking a held fast input, and a slack one not
+(`a_critical_connection_claims_a_held_fast_input`); the order of a pass and the
+estimate's weight (`critical_signals_go_first_and_weigh_their_estimate_as_told`);
+and a chain's tables spared while shallow ones pair
+(`a_table_on_the_longest_chain_is_spared_its_partner`). **Mutations**, eight, each
+made by a script and put back, each failing its test: the claim never made, and
+made by every search; the branch charged to every pip; a chain counted from one end;
+the deep tables offered as partners; the fitted model timing an unconstrained pad;
+the order reversed; and the estimate's weight given to an uncritical search. Swapping
+the fixture's `before` and `after` fails `tests/fpga_xray_achieved.rs`.
+
+### Not done
+
+- **The placement.** It is most of what is left on `adders`, `regfile_alu` and
+  `analyser_fifo` (1.1 to 1.5 ns), and nothing tried on the anneal's weighting moved
+  it beyond a seed. Vivado packs a ripple of tables four to a slice where Reticle
+  puts two to a tile; what the placer would need to know of a slice's own wires for
+  that is not looked at.
+- **`widemux`'s routes**, 0.3 ns from Vivado's on the same placement and pins: a
+  select read by 257 pins.
+- Clock skew is still not modelled; Vivado's is up to 0.18 ns on these designs, as
+  above.
+- The seeding's criticality is the placement's straight line, and is not checked
+  against the first pass's own.
+- Vivado's lookup tables' arcs are 0.097 ns on its own placements of the paths read
+  here and 0.2 to 0.26 on a quarter of Reticle's, by nothing found: over the timing
+  run's 18,000 arcs not the physical pin (a quarter slow on each of `A1` to `A5`, a
+  third on `A6`), the half of a pair, the fanout or the input's own delay, and not
+  the edge, rise and fall being equal; nor what the fit checked before. The model
+  charges the mean, 0.13.
+- None of it has been on a part, and no Husky build has been made with the fitted
+  model.
 
 ## Wide multiplexers
 
