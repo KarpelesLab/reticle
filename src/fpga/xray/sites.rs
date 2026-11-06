@@ -569,6 +569,20 @@ pub(super) fn bel_pins_in(
                 role: "din_n",
                 wire: "IOB_IBUF1".to_owned(),
             });
+            // And the `_N` half's receiver disables, which Vivado drives from
+            // the pair's own `IBUFDISABLE` and `INTERMDISABLE` as it drives
+            // the `_P` half's (`ibufds_ibufdisable_probe` and the other five
+            // with one, under `run_placed.sh`: a second `IMUX` of the same
+            // signal, into the `_N` half's `IOI_IMUX9` or `IOI_IMUX6`). Left
+            // unrouted, that half's disable reads a one.
+            pins.push(BelPin {
+                role: "ibufdisable_n",
+                wire: "IOB_IBUF_DISABLE1".to_owned(),
+            });
+            pins.push(BelPin {
+                role: "intermdisable_n",
+                wire: "LIOB_IN_TERM1".to_owned(),
+            });
         }
         return pins;
     }
@@ -1887,6 +1901,32 @@ mod tests {
             ]
         );
         assert!(!pins.iter().any(|p| p.role == "pad"));
+    }
+
+    /// The `_P` half of a pair, which leads it, also has the `_N` half's
+    /// receiver and disables. Would catch the `_N` half's `IBUFDISABLE` or
+    /// `INTERMDISABLE` lost, which left it unrouted and reading a one beside a
+    /// `_P` half driven by the design (Vivado drives both:
+    /// `ibufds_ibufdisable_probe` under `run_placed.sh`), or put on the
+    /// `_P` half's own wire. It would not catch a design whose buffer does not
+    /// map the role, which is `xc7.dev`'s, and nothing here routes it.
+    #[test]
+    fn a_pairs_leading_buffer_has_the_other_halfs_disables() {
+        let pins = bel_pins("RIOB33", "IOB_Y0", "");
+        let names: Vec<(&str, &str)> = pins.iter().map(|p| (p.role, p.wire.as_str())).collect();
+        assert_eq!(
+            names,
+            vec![
+                ("din", "IOB_IBUF0"),
+                ("dout", "IOB_O0"),
+                ("oe", "IOB_T0"),
+                ("ibufdisable", "IOB_IBUF_DISABLE0"),
+                ("intermdisable", "LIOB_IN_TERM0"),
+                ("din_n", "IOB_IBUF1"),
+                ("ibufdisable_n", "IOB_IBUF_DISABLE1"),
+                ("intermdisable_n", "LIOB_IN_TERM1"),
+            ]
+        );
     }
 
     /// A `_SING` tile's lone buffer sits on the **zero** wires however
