@@ -246,13 +246,19 @@
 #     unrouted and drives both halves from `TM` (`buf_iobufds_diff_out_*`).
 #     The XC7A100T's 37 standards are `xc7::pads`'s, measured there;
 #     `input_free` says an input asks nothing of the bank's supply.
-#   * IO standards: LVCMOS33 is the only one the Basys 3 uses and the
-#     only one the board's banks are wired for. LVCMOS25/18/15/12 are
-#     listed because the part has them. The drive strengths are the
-#     usual 7-series LVCMOS lists; MEDIUM confidence for the exact
-#     numbers per standard, HIGH for the names and for SLEW being SLOW
-#     or FAST. TMDS_33 and LVDS_25 are NOT listed: the Basys 3 has no
-#     differential connector and Reticle cannot check a pin pair.
+#   * IO standards: the die's 37, the same lines as the XC7A35T's FTG256
+#     below, since 2026-11-06. **This said otherwise until then, and was
+#     wrong for the part:** "LVCMOS33 is the only one the Basys 3 uses
+#     and the only one the board's banks are wired for. LVCMOS25/18/15/12
+#     are listed because the part has them ... TMDS_33 and LVDS_25 are NOT
+#     listed: the Basys 3 has no differential connector and Reticle cannot
+#     check a pin pair." That described the board, and the part is what a
+#     device here is: Vivado 2026.1 builds this package's probes of
+#     `LVDS_25` pairs and an `SSTL18_I` input
+#     (`testdata/fpga/vivado/primitives/xc7a35t-cpg236/`), which this file
+#     refused, sixteen of them, and Reticle has checked a pin pair since
+#     `xc7::pads`. Which standard a board's bank can carry is its
+#     constraints file's to say.
 #   * Clock buffer: BUFG, one input, one output. HIGH confidence. The
 #     count of 32 is the number of global clock buffers on a 7-series
 #     die; MEDIUM-HIGH confidence.
@@ -362,12 +368,21 @@
 #     RAMB18E1 (1800 kbit, of which this file uses 1600 kbit of data),
 #     90 DSP48E1 and 5 clock management tiles, from the
 #     Artix-7 datasheet figures for the XC7A35T. HIGH confidence.
-#   * IO banks: the part has several, and this file records ONE
-#     synthetic bank named `io` holding every listed pin, because
-#     Reticle cannot say which package ball is in which bank. Do not
-#     read the bank name as silicon truth. Its `vccio` list is 3.3 only,
-#     which is what the Basys 3 wires its banks to, not what the part
-#     allows.
+#   * IO banks and PIN LIST, since 2026-11-06: COMPLETE, AND TAKEN FROM
+#     THE DATABASE, as the FTG256's below. Every IO ball of the package,
+#     106 of them, with its bank (14, 16, 34 and 35, each allowing every
+#     VCCIO an HR bank takes), transcribed by script from prjxray-db's
+#     `artix7/xc7a35tcpg236-1/package_pins.csv` at commit 0a0adde; a ball
+#     whose function names `MRCC` or `SRCC` is `clock`, and one naming
+#     `VREF` is `vref`. HIGH confidence. The order is the old list's, with
+#     `E18`, the one ball it lacked, at the end. **What these said before,
+#     and why it was replaced:** "the part has several, and this file
+#     records ONE synthetic bank named `io` holding every listed pin,
+#     because Reticle cannot say which package ball is in which bank ...
+#     Its `vccio` list is 3.3 only, which is what the Basys 3 wires its
+#     banks to, not what the part allows." Reticle can say which bank a
+#     ball is in, from the same file the bitstream flow reads, and the
+#     bank's supply is the board's. The old pin list follows, as it was:
 #   * PIN LIST: PARTIAL, AND TAKEN FROM A BOARD FILE, NOT FROM THE
 #     PACKAGE DRAWING. Every pin below is a line of Digilent's published
 #     `Basys-3-Master.xdc` (github.com/Digilent/digilent-xdc), fetched
@@ -384,7 +399,8 @@
 #     cannot check it, and Vivado, which has the real package, decides.
 #     W5 is marked `clock` because the board's oscillator drives it and
 #     Digilent's own file puts a `create_clock` on it; MEDIUM-HIGH
-#     confidence that it is a clock-capable (MRCC/SRCC) ball.
+#     confidence that it is a clock-capable (MRCC/SRCC) ball. (It is:
+#     `IO_L12P_T1_MRCC_34`.)
 #   * THE BASYS 3 HAS NO HDMI OR DVI CONNECTOR. Its video output is VGA
 #     at 12 bits — four bits per channel through a resistor ladder —
 #     on the pins listed below. The `ip/video/dvi_tx` package in this
@@ -565,118 +581,153 @@ device xc7a35t-cpg236
   # input takes a constant, which the backend ties as it ties a block RAM's.
   bel FIFO18E1 other site fifo18 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR
   bel FIFO36E1 other site fifo36 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip,p0_injectdbiterr,p0_injectsbiterr port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_injectdbiterr=INJECTDBITERR p0_injectsbiterr=INJECTSBITERR p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR p0_dbiterr=DBITERR p0_sbiterr=SBITERR p0_eccparity=ECCPARITY outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR,DBITERR,SBITERR,ECCPARITY
+  io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
-  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16,24 slew slow,fast
   io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
   io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
-  bank io vccio 3.3
-  pins partial
-  pin W5 clock bank io
-  pin V17 io bank io vref
-  pin V16 io bank io
-  pin W16 io bank io
-  pin W17 io bank io
-  pin W15 io bank io
-  pin V15 io bank io
-  pin W14 io bank io
-  pin W13 io bank io
-  pin V2 io bank io
-  pin T3 io bank io
-  pin T2 io bank io
-  pin R3 io bank io
-  pin W2 io bank io
-  pin U1 io bank io
-  pin T1 io bank io
-  pin R2 io bank io
-  pin U16 io bank io
-  pin E19 io bank io
-  pin U19 io bank io
-  pin V19 io bank io
-  pin W18 io bank io
-  pin U15 io bank io
-  pin U14 io bank io
-  pin V14 io bank io
-  pin V13 io bank io
-  pin V3 io bank io
-  pin W3 io bank io vref
-  pin U3 io bank io
-  pin P3 io bank io
-  pin N3 io bank io
-  pin P1 io bank io vref
-  pin L1 io bank io vref
-  pin W7 io bank io
-  pin W6 io bank io
-  pin U8 io bank io
-  pin V8 io bank io
-  pin U5 io bank io
-  pin V5 io bank io
-  pin U7 io bank io
-  pin V7 io bank io vref
-  pin U2 io bank io
-  pin U4 io bank io
-  pin V4 io bank io
-  pin W4 io bank io
-  pin U18 io bank io
-  pin T18 io bank io
-  pin W19 io bank io
-  pin T17 io bank io
-  pin U17 io bank io
-  pin J1 io bank io
-  pin L2 io bank io
-  pin J2 io bank io
-  pin G2 io bank io
-  pin H1 io bank io
-  pin K2 io bank io
-  pin H2 io bank io
-  pin G3 io bank io
-  pin A14 io bank io
-  pin A16 io bank io
-  pin B15 io bank io
-  pin B16 io bank io
-  pin A15 io bank io vref
-  pin A17 io bank io
-  pin C15 io bank io
-  pin C16 io bank io
-  pin K17 io bank io
-  pin M18 io bank io
-  pin N17 io bank io
-  pin P18 io bank io
-  pin L17 io bank io
-  pin M19 io bank io
-  pin P17 io bank io
-  pin R18 io bank io
-  pin J3 io bank io
-  pin L3 io bank io
-  pin M2 io bank io
-  pin N2 io bank io
-  pin K3 io bank io
-  pin M3 io bank io
-  pin M1 io bank io
-  pin N1 io bank io
-  pin G19 io bank io
-  pin H19 io bank io
-  pin J19 io bank io vref
-  pin N19 io bank io
-  pin N18 io bank io
-  pin L18 io bank io
-  pin K18 io bank io
-  pin J18 io bank io
-  pin J17 io bank io
-  pin H17 io bank io
-  pin G17 io bank io
-  pin D17 io bank io
-  pin P19 io bank io
-  pin R19 io bank io
-  pin B18 io bank io
-  pin A18 io bank io vref
-  pin C17 io bank io
-  pin B17 io bank io
-  pin D18 io bank io
-  pin D19 io bank io
-  pin G18 io bank io
-  pin F18 io bank io
-  pin K19 io bank io
+  io_standard HSUL_12 vccio 1.2 slew slow,fast input_free
+  io_standard HSTL_I vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_II vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_I_18 vccio 1.8 slew slow,fast input_free
+  io_standard HSTL_II_18 vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_I vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_II vccio 1.8 slew slow,fast input_free
+  io_standard SSTL15 vccio 1.5 slew slow,fast input_free
+  io_standard SSTL15_R vccio 1.5 slew slow,fast input_free
+  io_standard SSTL135 vccio 1.35 slew slow,fast input_free
+  io_standard SSTL135_R vccio 1.35 slew slow,fast input_free
+  io_standard DIFF_HSTL_I vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_I_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_I vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_II vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15 vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15_R vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135 vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135_R vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_HSUL_12 vccio 1.2 slew slow,fast differential input_free
+  io_standard PCI33_3 vccio 3.3
+  io_standard MOBILE_DDR vccio 1.8 slew slow,fast
+  io_standard DIFF_MOBILE_DDR vccio 1.8 slew slow,fast differential
+  io_standard BLVDS_25 vccio 2.5 differential input_free
+  io_standard LVDS_25 vccio 2.5 differential input_free
+  io_standard RSDS_25 vccio 2.5 differential input_free
+  io_standard TMDS_33 vccio 3.3 differential input_free
+  io_standard MINI_LVDS_25 vccio 2.5 differential input_free
+  io_standard PPDS_25 vccio 2.5 differential input_free
+  bank b14 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b16 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b34 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b35 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  pin W5 clock bank b34
+  pin V17 io bank b14 vref
+  pin V16 io bank b14
+  pin W16 io bank b14
+  pin W17 io bank b14
+  pin W15 io bank b14
+  pin V15 io bank b14
+  pin W14 io bank b14
+  pin W13 io bank b14
+  pin V2 io bank b34
+  pin T3 io bank b34
+  pin T2 io bank b34
+  pin R3 io bank b34
+  pin W2 io bank b34
+  pin U1 io bank b34
+  pin T1 io bank b34
+  pin R2 io bank b34
+  pin U16 io bank b14
+  pin E19 io bank b14
+  pin U19 io bank b14
+  pin V19 io bank b14
+  pin W18 io bank b14
+  pin U15 io bank b14
+  pin U14 io bank b14
+  pin V14 io bank b14
+  pin V13 io bank b14
+  pin V3 io bank b34
+  pin W3 io bank b34 vref
+  pin U3 io bank b34
+  pin P3 clock bank b35
+  pin N3 clock bank b35
+  pin P1 io bank b35 vref
+  pin L1 io bank b35 vref
+  pin W7 clock bank b34
+  pin W6 clock bank b34
+  pin U8 clock bank b34
+  pin V8 clock bank b34
+  pin U5 io bank b34
+  pin V5 io bank b34
+  pin U7 io bank b34
+  pin V7 io bank b34 vref
+  pin U2 io bank b34
+  pin U4 clock bank b34
+  pin V4 clock bank b34
+  pin W4 clock bank b34
+  pin U18 io bank b14
+  pin T18 io bank b14
+  pin W19 io bank b14
+  pin T17 io bank b14
+  pin U17 io bank b14
+  pin J1 io bank b35
+  pin L2 io bank b35
+  pin J2 io bank b35
+  pin G2 io bank b35
+  pin H1 io bank b35
+  pin K2 io bank b35
+  pin H2 io bank b35
+  pin G3 io bank b35
+  pin A14 io bank b16
+  pin A16 clock bank b16
+  pin B15 clock bank b16
+  pin B16 clock bank b16
+  pin A15 io bank b16 vref
+  pin A17 clock bank b16
+  pin C15 clock bank b16
+  pin C16 clock bank b16
+  pin K17 clock bank b14
+  pin M18 clock bank b14
+  pin N17 clock bank b14
+  pin P18 clock bank b14
+  pin L17 clock bank b14
+  pin M19 clock bank b14
+  pin P17 clock bank b14
+  pin R18 clock bank b14
+  pin J3 io bank b35
+  pin L3 io bank b35
+  pin M2 io bank b35
+  pin N2 io bank b35
+  pin K3 io bank b35
+  pin M3 io bank b35
+  pin M1 io bank b35
+  pin N1 io bank b35
+  pin G19 io bank b14
+  pin H19 io bank b14
+  pin J19 io bank b14 vref
+  pin N19 io bank b14
+  pin N18 io bank b14
+  pin L18 io bank b14
+  pin K18 io bank b14
+  pin J18 io bank b14
+  pin J17 io bank b14
+  pin H17 io bank b14
+  pin G17 io bank b14
+  pin D17 io bank b14
+  pin P19 io bank b14
+  pin R19 io bank b14
+  pin B18 io bank b16
+  pin A18 io bank b16 vref
+  pin C17 clock bank b16
+  pin B17 clock bank b16
+  pin D18 io bank b14
+  pin D19 io bank b14
+  pin G18 io bank b14
+  pin F18 io bank b14
+  pin K19 io bank b14
+  pin E18 io bank b14
   global_buffers 32
   pll PLLE2_BASE input 19 800 vco 800 1600 outputs 6 count 5 pfd 19 450 feedback vco divide ref DIVCLK_DIVIDE 1 56 divide feedback CLKFBOUT_MULT 2 64 divide out CLKOUT0_DIVIDE 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
   pll MMCME2_BASE input 10 800 vco 600 1200 outputs 7 count 5 pfd 10 450 feedback vco divide ref DIVCLK_DIVIDE 1 106 divide feedback CLKFBOUT_MULT_F 2 64 divide out CLKOUT0_DIVIDE_F 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"

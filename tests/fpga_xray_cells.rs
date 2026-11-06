@@ -103,9 +103,22 @@ fn every_cell_in_the_library_has_vectors() {
     assert!(missing.is_empty(), "no vectors: {}", missing.join(" "));
 }
 
-/// The ledger of probes: `(primitive, status)`, or `None` without fixtures.
-fn ledger() -> Option<Vec<(String, String)>> {
-    let dir = manifest().join("testdata/fpga/vivado/primitives");
+/// Every part the probes were measured on, and the directory of its ledger:
+/// the XC7A100T's beside the designs, each other part's in a directory of its
+/// own name there, with its own constraints when its package is not the
+/// FTG256 (`tools/vivado-parity/gen_primitives.py`).
+const PARTS: [(&str, &str); 3] = [
+    ("xc7a100t-ftg256", ""),
+    ("xc7a35t-ftg256", "xc7a35t-ftg256"),
+    ("xc7a35t-cpg236", "xc7a35t-cpg236"),
+];
+
+/// The ledger of probes on one part: `(primitive, status)`, or `None`
+/// without fixtures.
+fn ledger(part: &str) -> Option<Vec<(String, String)>> {
+    let dir = manifest()
+        .join("testdata/fpga/vivado/primitives")
+        .join(part);
     let Ok(text) = std::fs::read_to_string(dir.join("index.txt")) else {
         eprintln!("skipped: `testdata/` is not in the published crate");
         return None;
@@ -121,64 +134,104 @@ fn ledger() -> Option<Vec<(String, String)>> {
     )
 }
 
-/// Runs `reticle fpga` on one probe, with or without a bitstream, and says
-/// whether it finished.
-fn build_probe(primitive: &str, bitstream: bool) -> bool {
+/// How a probe's build went.
+#[derive(PartialEq, Eq)]
+enum Built {
+    /// It finished, and with a bitstream when one was asked for.
+    Done,
+    /// It finished, and said the design is not fully routed: a bitstream
+    /// that configures less than the design asks for.
+    Unrouted,
+    /// It did not finish.
+    Failed,
+}
+
+/// Runs `reticle fpga` on one probe for one part, with or without a
+/// bitstream. A part whose package is not the FTG256 has constraints of its
+/// own; the designs are the same.
+fn build_probe(device: &str, part: &str, primitive: &str, bitstream: bool) -> Built {
     let dir = manifest().join("testdata/fpga/vivado/primitives");
     let top = format!("{}_probe", primitive.to_ascii_lowercase());
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("probe-{top}"));
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("probe-{device}-{top}"));
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).unwrap();
+    let own = dir.join(part).join(format!("{top}.rcf"));
+    let rcf = if own.is_file() {
+        own
+    } else {
+        dir.join(format!("{top}.rcf"))
+    };
     let mut run = Command::new(env!("CARGO_BIN_EXE_reticle"));
-    run.args([
-        "fpga",
-        "--device",
-        "xc7a100t-ftg256",
-        "--quiet",
-        "--top",
-        &top,
-    ])
-    .arg("--constraints")
-    .arg(dir.join(format!("{top}.rcf")))
-    .arg("--output-dir")
-    .arg(&out)
-    .arg(dir.join(format!("{top}.v")));
+    run.args(["fpga", "--device", device, "--quiet", "--top", &top])
+        .arg("--constraints")
+        .arg(rcf)
+        .arg("--output-dir")
+        .arg(&out)
+        .arg(dir.join(format!("{top}.v")));
     if bitstream {
         run.arg("--bitstream").arg(out.join(format!("{top}.bit")));
     }
-    run.output()
-        .expect("failed to run the reticle binary")
-        .status
-        .success()
+    let run = run.output().expect("failed to run the reticle binary");
+    if !run.status.success() {
+        Built::Failed
+    } else if String::from_utf8_lossy(&run.stderr).contains("NOT FULLY ROUTED") {
+        Built::Unrouted
+    } else {
+        Built::Done
+    }
 }
 
-/// **What the ledger calls `ok` maps.** Vivado takes every one of these
-/// probes; this keeps a primitive Reticle takes from being lost, and needs no
-/// fabric database because it stops short of placing. It would not catch a
-/// probe that maps and then fails to route: the ignored test below builds them.
+/// **What each part's ledger calls `ok` maps**, on that part. Vivado takes
+/// every one of these probes; this keeps a primitive Reticle takes from being
+/// lost, and needs no fabric database because it stops short of placing.
+/// It would catch a part's device file refusing what Vivado builds there:
+/// `xc7a35t-cpg236` refused sixteen probes until 2026-11-06, every `LVDS_25`
+/// pair and both `SSTL18_I` inputs, because its file listed the Basys 3's
+/// five standards. It would not catch a probe that maps and then fails to
+/// route: the ignored test below builds them.
 #[test]
 fn the_primitives_the_ledger_calls_ok_map() {
-    let Some(ledger) = ledger() else { return };
-    let lost: Vec<&str> = ledger
-        .iter()
-        .filter(|(primitive, status)| status == "ok" && !build_probe(primitive, false))
-        .map(|(primitive, _)| primitive.as_str())
-        .collect();
-    assert!(lost.is_empty(), "no longer map: {}", lost.join(" "));
+    for (device, part) in PARTS {
+        let Some(ledger) = ledger(part) else { return };
+        let lost: Vec<&str> = ledger
+            .iter()
+            .filter(|(primitive, status)| {
+                status == "ok" && build_probe(device, part, primitive, false) != Built::Done
+            })
+            .map(|(primitive, _)| primitive.as_str())
+            .collect();
+        assert!(
+            lost.is_empty(),
+            "{device}: no longer map: {}",
+            lost.join(" ")
+        );
+    }
 }
 
-/// **The ledger is exact, to a bitstream**: a primitive it calls `ok` builds
-/// and one it calls `gap` does not, so closing a gap has to say so here. Tens
-/// of minutes on one core, which is why it is ignored; `cargo test -- --ignored`.
+/// **Each part's ledger is exact, to a fully routed bitstream**: a primitive
+/// it calls `ok` builds, with every signal routed, and one it calls `gap`
+/// does not, so closing a gap has to say so here. The routing was not asked
+/// before 2026-11-06, and `XADC` was `ok` on every part with its `CONVST`
+/// unrouted: the fabric loaded around the XADC stopped at its tile's own
+/// row, and that pin reaches the interconnect a row above. Tens of minutes on
+/// one core, which is why it is ignored; `cargo test -- --ignored`.
 #[test]
-#[ignore = "builds every probe to a bitstream, and needs the Project X-Ray database"]
+#[ignore = "builds every probe of three parts to a bitstream, and needs the Project X-Ray database"]
 fn the_ledger_says_what_builds() {
-    let Some(ledger) = ledger() else { return };
-    let wrong: Vec<String> = ledger
-        .iter()
-        .filter(|(primitive, status)| (status == "ok") != build_probe(primitive, true))
-        .map(|(primitive, status)| format!("{primitive}: the ledger says {status}"))
-        .collect();
+    let mut wrong: Vec<String> = Vec::new();
+    for (device, part) in PARTS {
+        let Some(ledger) = ledger(part) else { return };
+        wrong.extend(
+            ledger
+                .iter()
+                .filter(|(primitive, status)| {
+                    (status == "ok") != (build_probe(device, part, primitive, true) == Built::Done)
+                })
+                .map(|(primitive, status)| {
+                    format!("{device} {primitive}: the ledger says {status}")
+                }),
+        );
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -189,7 +242,7 @@ fn the_ledger_says_what_builds() {
 /// `tests/fpga_xray.rs` asks of one; the unnamed lines are not reached here.
 #[test]
 fn decode_reads_a_bitstream_back() {
-    let Some(_) = ledger() else { return };
+    let Some(_) = ledger("") else { return };
     let dir = manifest().join("testdata/fpga/vivado/primitives");
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("probe-decode");
     let _ = std::fs::remove_dir_all(&out);

@@ -817,8 +817,18 @@ fn the_artix7_matches_its_datasheet_figures() {
     assert_eq!((wide.sum, wide.carry_out), ("O", "CO"));
     // No tile grid: Reticle cannot state the SLICE array of this part.
     assert!(device.tile_grid.is_none());
-    // The pin list is the Basys 3's, and it is not the whole package.
-    assert!(device.pins_partial);
+    // The pin list is the whole package's since 2026-11-06, from the
+    // database's `package_pins.csv`: it was the Basys 3's and `pins
+    // partial`, and refused the `LVDS_25` pairs and `SSTL18_I` inputs that
+    // Vivado builds on this package. Every IO ball, each in its bank, the
+    // board's among them.
+    assert!(!device.pins_partial);
+    assert_eq!(device.pins.len(), 106);
+    assert!(
+        device.pin("E18").is_some(),
+        "the one ball the board list lacked"
+    );
+    assert!(device.io_standard("LVDS_25").is_some());
     assert!(device.pin("B18").is_some(), "the UART receive pin");
     assert!(device.pin("A18").is_some(), "the UART transmit pin");
     assert!(device.pin("G19").is_some(), "the first VGA red bit");

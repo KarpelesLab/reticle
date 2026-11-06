@@ -7,7 +7,12 @@ that one design needs a few pins whatever the primitive has. The port lists
 are read from the installed Vivado's own simulation library, and only the
 names and widths are kept: nothing of a vendor's model is written out.
 
-    tools/vivado-parity/gen_primitives.py ~/Xilinx/2026.1/Vivado
+    tools/vivado-parity/gen_primitives.py ~/Xilinx/2026.1/Vivado [device]
+
+The designs and the XC7A100T's ledger are in that directory. Another device
+(`xc7a35t-cpg236`, `xc7a35t-ftg256`) has its own `<device>/index.txt` there, and
+its own constraints when its package is not the FTG256, whose balls are the
+same on every die it is made for.
 """
 import re, os, sys
 
@@ -238,16 +243,28 @@ def probe(prim, ports):
 
 
 # Bank 34 at 3.3 V for single-ended pins, away from the configuration pins; a
-# pair in bank 35 for differential.
+# pair in bank 35 for differential. On the CPG236 each ball is the one bonded to
+# the site the XC7A35T's FTG256 ball is (the same die), so that both packages
+# ask the same of the same pads: the clock is `IOB_X0Y24` and the pair
+# `IOB_X1Y94` and `Y93` on both. `so` and the third single pin are not, since
+# the CPG236 bonds no `IOB_X1Y49`.
+PINS = {
+    "ftg256": dict(clk="N11", si="L4", so="L5", single=["M1", "M2", "M4", "M5"], gclk="N14", near="N12",
+                   diff=("A5", "A4")),
+    "cpg236": dict(clk="N17", si="R2", so="U1", single=["T3", "R3", "T2", "V3"], gclk="L17", near="P17",
+                   diff=("H1", "J1")),
+}
 
 
-def constraints(prim, top):
+def constraints(prim, top, package="ftg256"):
+    pins = PINS[package]
     names = [re.split(r"\s+", t)[-1] for t in top]
-    single = ["M1", "M2", "M4", "M5"]
-    xdc = ["create_clock -period 10 -name clk [get_ports clk]", "set_property PACKAGE_PIN N11 [get_ports clk]",
-           "set_property PACKAGE_PIN L4 [get_ports si]", "set_property PACKAGE_PIN L5 [get_ports so]"]
-    rcf = ["create_clock -name clk -period 10 clk", "set_io -io_standard LVCMOS33 clk N11",
-           "set_io -io_standard LVCMOS33 si L4", "set_io -io_standard LVCMOS33 so L5"]
+    single = list(pins["single"])
+    clk, si, so = pins["clk"], pins["si"], pins["so"]
+    xdc = ["create_clock -period 10 -name clk [get_ports clk]", f"set_property PACKAGE_PIN {clk} [get_ports clk]",
+           f"set_property PACKAGE_PIN {si} [get_ports si]", f"set_property PACKAGE_PIN {so} [get_ports so]"]
+    rcf = ["create_clock -name clk -period 10 clk", f"set_io -io_standard LVCMOS33 clk {clk}",
+           f"set_io -io_standard LVCMOS33 si {si}", f"set_io -io_standard LVCMOS33 so {so}"]
     xdc.append("set_property IOSTANDARD LVCMOS33 [get_ports {clk si so}]")
     diff = any(n[:-4].upper() in DIFFERENTIAL for n in names)
     for n in names:
@@ -255,13 +272,14 @@ def constraints(prim, top):
             continue
         # A clock has to arrive on a pin that can reach a global buffer.
         if prim in ("BUFGP", "BUFIO") and n == "i_pad":
-            pin = "N14"
+            pin = pins["gclk"]
         elif prim == "BUFIO":
-            pin = "N12"
+            pin = pins["near"]
         elif prim in DIFF_STANDARD:
-            xdc += [f"set_property PACKAGE_PIN A5 [get_ports {n}]", f"set_property IOSTANDARD SSTL18_I [get_ports {n}]",
+            p = pins["diff"][0]
+            xdc += [f"set_property PACKAGE_PIN {p} [get_ports {n}]", f"set_property IOSTANDARD SSTL18_I [get_ports {n}]",
                     "set_property INTERNAL_VREF 0.9 [get_iobanks 35]"]
-            rcf.append(f"set_io -io_standard SSTL18_I {n} A5")
+            rcf.append(f"set_io -io_standard SSTL18_I {n} {p}")
             continue
         else:
             pin = single.pop(0)
@@ -269,14 +287,18 @@ def constraints(prim, top):
         rcf.append(f"set_io -io_standard LVCMOS33 {n} {pin}")
     if diff:
         master = names[0]
-        xdc += [f"set_property PACKAGE_PIN A5 [get_ports {master}]", f"set_property IOSTANDARD LVDS_25 [get_ports {{{' '.join(names)}}}]"]
-        rcf += [f"set_io -io_standard LVDS_25 {master} A5", f"set_io -io_standard LVDS_25 {names[1]} A4"]
+        p, q = pins["diff"]
+        xdc += [f"set_property PACKAGE_PIN {p} [get_ports {master}]", f"set_property IOSTANDARD LVDS_25 [get_ports {{{' '.join(names)}}}]"]
+        rcf += [f"set_io -io_standard LVDS_25 {master} {p}", f"set_io -io_standard LVDS_25 {names[1]} {q}"]
     return "\n".join(xdc) + "\n", "\n".join(rcf) + "\n"
 
 
 def main():
     vivado = os.path.expanduser(sys.argv[1])
-    os.makedirs(OUT, exist_ok=True)
+    device = sys.argv[2] if len(sys.argv) > 2 else "xc7a100t-ftg256"
+    package = device.split("-")[1]
+    here = OUT if device == "xc7a100t-ftg256" else os.path.join(OUT, device)
+    os.makedirs(here, exist_ok=True)
     table = []
     for group, names in GROUPS.items():
         for prim in names.split():
@@ -285,17 +307,20 @@ def main():
                 print(f"no ports for {prim}", file=sys.stderr)
                 continue
             text, top = probe(prim, ports)
-            xdc, rcf = constraints(prim, top)
-            for suffix, body in ((".v", text), (".xdc", xdc), (".rcf", rcf)):
-                with open(f"{OUT}/{prim.lower()}_probe{suffix}", "w") as f:
+            xdc, rcf = constraints(prim, top, package)
+            files = [(OUT, ".v", text)]
+            if here == OUT or package != "ftg256":
+                files += [(here, ".xdc", xdc), (here, ".rcf", rcf)]
+            for at, suffix, body in files:
+                with open(f"{at}/{prim.lower()}_probe{suffix}", "w") as f:
                     f.write(body)
             table.append((group, prim))
     # `index.txt` holds a status per primitive by hand, as a test's expectation.
     known = {}
-    if os.path.exists(f"{OUT}/index.txt"):
-        known = {l.split()[1]: l.split()[2] for l in open(f"{OUT}/index.txt") if l[0] != "#"}
-    head = [l for l in open(f"{OUT}/index.txt") if l[0] == "#"] if known else []
-    with open(f"{OUT}/index.txt", "w") as f:
+    if os.path.exists(f"{here}/index.txt"):
+        known = {l.split()[1]: l.split()[2] for l in open(f"{here}/index.txt") if l[0] != "#"}
+    head = [l for l in open(f"{here}/index.txt") if l[0] == "#"] if known else []
+    with open(f"{here}/index.txt", "w") as f:
         f.writelines(head)
         for group, prim in table:
             status = "refused" if prim in NOT_ON_THIS_PART else known.get(prim, "gap")
