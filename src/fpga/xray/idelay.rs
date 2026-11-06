@@ -949,19 +949,40 @@ pub fn io_delay_controllers(
                     .find(|(port, _)| port.as_str() == "RDY")
                     .map(|(_, net)| *net);
                 let span = m.cells[*id].span;
+                // Driven by a lookup table of ones, as mapping drives every
+                // constant a cell's data pin reads
+                // (`techcells::drive_constant_data`), and not by an
+                // assignment: this runs after mapping, and a flip-flop that
+                // read the `RDY` took a constant `D` no pass then built a
+                // driver for. Its data mux was left with neither input chosen
+                // (`idelayctrl_probe`: Vivado set `B5FFMUX.IN_B`, from the
+                // bypass input, which reads one unrouted, and this flow
+                // nothing).
                 if let Some(net) = rdy {
-                    let one = m.add_expr(crate::ir::Expr::new(
-                        crate::ir::ExprKind::Const(crate::ir::Const::ones(1)),
-                        crate::ir::Type::bit(),
+                    let inputs: Vec<(crate::ir::Name, crate::ir::ExprId)> = (0..6)
+                        .map(|i| {
+                            (
+                                crate::ir::Name::new(format!("I{i}")),
+                                super::super::primitives::const_expr(
+                                    m,
+                                    crate::ir::Const::zero(1),
+                                    span,
+                                ),
+                            )
+                        })
+                        .collect();
+                    let lut = super::super::primitives::add_cell(
+                        m,
+                        "rdy$const1$lut",
+                        crate::ir::CellKind::Blackbox(crate::ir::Name::new("LUT6")),
+                        inputs,
+                        vec![(crate::ir::Name::new("O"), net)],
                         span,
-                    ));
-                    m.assigns.push(crate::ir::Assign {
-                        target: crate::ir::Lvalue::Net(net),
-                        value: one,
-                        delay: None,
-                        attrs: crate::ir::Attrs::new(),
-                        span,
-                    });
+                    );
+                    m.cells[lut].params.set(
+                        "INIT",
+                        crate::ir::AttrValue::Const(crate::ir::Const::ones(64)),
+                    );
                 }
                 plan.removed += 1;
             }
