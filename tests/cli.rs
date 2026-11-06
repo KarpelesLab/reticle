@@ -899,6 +899,67 @@ fn sim_reads_a_bit_of_an_array_element() {
     assert_eq!(stdout, xsim);
 }
 
+/// **An integer operator inside a real expression is still an integer's**
+/// (IEEE 1364-2005 §5.5.1): in `(s / 2) * r` the division truncates and only
+/// its quotient becomes real. The answers are `xsim`'s for the same loop. The
+/// whole expression used to be lowered as real arithmetic, so `(1 / 2) * 4.0`
+/// was 2.0, which put every other edge of a clock model's output half a
+/// period out; would catch that back. The constant case was always right,
+/// and is here so that it stays so.
+#[test]
+fn sim_divides_integers_inside_a_real_expression() {
+    let dir = scratch("sim_integer_division_in_real");
+    let file = dir.join("intdiv.v");
+    std::fs::write(
+        &file,
+        "module tb;\n\
+         \x20 parameter real P = (3 / 2) * 2.0;\n\
+         \x20 real r, q;\n\
+         \x20 integer s;\n\
+         \x20 initial begin\n\
+         \x20   r = 4.0;\n\
+         \x20   for (s = 0; s < 4; s = s + 1) begin\n\
+         \x20     q = (s / 2) * r + (s % 2 == 1 ? 0.5 : 0.0) - s / 3;\n\
+         \x20     $display(\"%0d %0d\", s, $rtoi(q * 10.0));\n\
+         \x20   end\n\
+         \x20   q = (3 / 2) * 2.0;\n\
+         \x20   $display(\"%0d %0d\", $rtoi(q * 10.0), $rtoi(P * 10.0));\n\
+         \x20 end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "0 0\n1 5\n2 40\n3 35\n20 20\n", "{stderr}");
+}
+
+/// **A function's `real` argument arrives as a real.** The answer is
+/// `xsim`'s. It used to be made one bit wide, and the lowered design failed
+/// its own validation with an internal error; would catch that back.
+#[test]
+fn sim_passes_a_real_to_a_function() {
+    let dir = scratch("sim_real_argument");
+    let file = dir.join("realarg.v");
+    std::fs::write(
+        &file,
+        "module tb;\n\
+         \x20 real a, b;\n\
+         \x20 function integer ps(input real t);\n\
+         \x20   ps = t < 0.0 ? -1 : $rtoi(t * 1000.0 + 0.5);\n\
+         \x20 endfunction\n\
+         \x20 initial begin\n\
+         \x20   a = -1.0;\n\
+         \x20   b = 2.5;\n\
+         \x20   $display(\"%0d %0d\", ps(a), ps(b));\n\
+         \x20 end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "-1 2500\n", "{stderr}");
+}
+
 /// **An assignment to a bit of an array element is refused, not
 /// misdirected.** The IR has no target for it, and it used to become a write
 /// of element `j` (`m[i][j] = ..`) or of nothing (`m[i][3:0] = ..`), both

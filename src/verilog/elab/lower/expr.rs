@@ -214,17 +214,23 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         {
             return self.real_const(r);
         }
+        // An operator is real only when one of its own operands is: in
+        // `(s / 2) * r` the division is an integer's, and its quotient is
+        // what becomes real (IEEE 1364-2005 §5.5.1). It used to be divided
+        // as a real, so `(1 / 2) * r` was `r / 2`.
+        let real_here = matches!(self.info_of(e), Info::Real);
         match &e.kind {
             ExprKind::Binary { op, lhs, rhs }
-                if matches!(
-                    op,
-                    BinaryOp::Add
-                        | BinaryOp::Sub
-                        | BinaryOp::Mul
-                        | BinaryOp::Div
-                        | BinaryOp::Mod
-                        | BinaryOp::Pow
-                ) =>
+                if real_here
+                    && matches!(
+                        op,
+                        BinaryOp::Add
+                            | BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Div
+                            | BinaryOp::Mod
+                            | BinaryOp::Pow
+                    ) =>
             {
                 let a = self.real(lhs, sink);
                 let b = self.real(rhs, sink);
@@ -1435,7 +1441,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             if let Some(value) = inputs[i] {
                 let w = ty.packed().map_or(1, Packed::width);
                 let signed = ty.packed().is_some_and(|p| p.signed);
-                let v = self.coerce(value, w, signed);
+                // A `real` formal takes the argument as a real: it used to
+                // be made one bit wide, which the IR's validation refused.
+                let v = if ty == VType::Real {
+                    self.real_of(value)
+                } else {
+                    self.coerce(value, w, signed)
+                };
                 out.span = span;
                 out.assign(net, v, AssignKind::Blocking);
                 self.record_driver(net, self.driver, true, span);
@@ -1494,7 +1506,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let value = self.b.net(net);
             let w = self.lvalue_width(&target);
             let signed = ty.packed().is_some_and(|p| p.signed);
-            let v = self.coerce(value, w, signed);
+            let v = if self.target_is_real(&target) {
+                self.real_of(value)
+            } else {
+                self.coerce(value, w, signed)
+            };
             out.span = span;
             out.assign(target.clone(), v, AssignKind::Blocking);
             self.note_assign_drivers(&target, self.driver, span, true);
