@@ -62,9 +62,17 @@
 //! Paths are timed within one clock's domain. A clock is the signal at a
 //! sequential cell's clock pin traced back through the global buffers;
 //! its period is the `create_clock` on it, and a clock no constraint
-//! names is not timed. A package pin starts and ends paths in every
-//! timed domain, which is pessimistic for a pin no clock drives and is
-//! what a design whose bus is synchronous to one clock wants.
+//! names is not timed. Under the legacy model a package pin starts and ends
+//! paths in every timed domain, which is pessimistic for a pin no clock
+//! drives and is what a design whose bus is synchronous to one clock wants.
+//! Under the fitted model a pin is timed only when a constraint puts it in a
+//! clock's domain (an input delay, or the clock it carries), as Vivado's
+//! timer times no unconstrained pad: timed, a pad's path in `qor/counter64.v`
+//! from a register at column 52 to a pin at column 147 was the round's
+//! latest, and untimed the median over seeds of the period Vivado's timer has
+//! that design achieve went from 6.2 ns to 4.1 (`docs/fpga-vivado-parity.md`).
+//! This flow has no `set_output_delay`, so under the fitted model no output pin
+//! is timed.
 //!
 //! The constraints' exceptions are honoured where they name one end: a
 //! `set_false_path -from` or `-to` takes the instances its glob matches
@@ -998,6 +1006,12 @@ pub fn place_timing(
                     .map(|c| (c.name.clone(), c.period_ns));
                 domain[index] = match carried {
                     Some(clock) => domain_of(Some(clock)),
+                    // Under the fitted model a pad no constraint puts in a
+                    // clock's domain is not timed, as Vivado's timer does not
+                    // time one (see the module docs). The legacy model
+                    // times it in every domain, as every measured Husky build
+                    // was placed.
+                    None if model == DelayModel::Vivado => PathDomain::Untimed,
                     None => PathDomain::Every,
                 };
                 for pin in &inst.pins {
@@ -1605,13 +1619,16 @@ mod tests {
     /// two other pads, `rd` and `data`; `rd` alone has an input delay of
     /// a period and two nanoseconds. It launches at that, plus its buffer,
     /// less the clock's arrival, and only in the clock's domain; `data`
-    /// launches at its buffer in every domain, as a pad always did, and the
-    /// clock's own pad in the clock's domain. Would catch the delay ignored,
+    /// launches at its buffer in every domain under the legacy model, as a
+    /// pad always did, and in none under the fitted one; and the clock's own
+    /// pad in the clock's domain. Would catch the delay ignored,
     /// applied to the wrong pad, applied without the clock's arrival taken
     /// off, or left in every domain, or a clock's pad launching in every
     /// domain (as it did), or a maximum delay not moving the launch of the
     /// pad it is from or the capture of the register it is to by its
-    /// difference from the period, or moving another's; would not
+    /// difference from the period, or moving another's, or the fitted model
+    /// timing a pad no constraint names, or not timing one an input delay
+    /// names; would not
     /// catch [`CLOCK_INSERTION`] being the wrong number for a part, which
     /// only a part says.
     #[test]
@@ -1709,6 +1726,14 @@ mod tests {
             (timing.launch[3] - eased.launch[3]).abs() < 1e-9,
             "`data` is untouched"
         );
+
+        // Under the fitted model `data`, which no constraint names, is not
+        // timed at all, as Vivado's timer times no pad without a delay on
+        // it; `rd` and the clock's own pad are timed as before.
+        let (fitted, _) = place_timing(&design, top, &netlist, &constraints, DelayModel::Vivado);
+        assert_eq!(fitted.domain[3], PathDomain::Untimed);
+        assert_eq!(fitted.domain[2], PathDomain::Clock(0));
+        assert_eq!(fitted.domain[0], PathDomain::Clock(0));
     }
 
     /// **What a buffer choosing between two clocks drives is timed at the
