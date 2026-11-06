@@ -193,6 +193,39 @@ pub fn wanted_ecc_without(
     }
 }
 
+/// Whether Vivado leaves the configuration of a tile of this type out of its
+/// frames' ECC, as it leaves a distributed RAM's contents out: `Some(true)`
+/// always, `Some(false)` sometimes, `None` never. Measured on Vivado 2026.1's
+/// bitstreams of the XC7A35T (`docs/fpga-vivado-parity.md`, "The primitives
+/// on the XC7A35T"), with the frames' code recomputed both ways:
+///
+/// - **the XADC's** (`MONITOR_BOT`, its registers in frames 28 and 29),
+///   always when the design has one: the frame's code without them, whether
+///   its `DEN`, `DWE` and `DCLK` are signals or tied to zero. With none, the
+///   bits an option sets there (`XADCPOWERDOWN`'s `INIT_42[5:4]`) are in the
+///   code (`options_probe`);
+/// - **a clock manager's** (`CMT_TOP_*`, the `MMCME2_ADV`'s or `PLLE2_ADV`'s
+///   tile, likewise in frames 28 and 29), when its `DWE` is a signal, the
+///   port that rewrites those registers at run time, and not when `DWE` is
+///   tied to zero, whatever `DEN` and `DCLK` are (eight designs, one pin tied
+///   at a time). The `HCLK_CMT` bits in the same frames are in the code
+///   either way.
+///
+/// **This flow writes the whole frame's code for both**, and so differs from
+/// Vivado in those frames wherever Vivado leaves them out. That is not changed
+/// here, since the ChipWhisperer-Husky's bitstreams, measured on a board, have
+/// an XADC and clock managers whose `DWE` is a signal: `--decode` accepts what
+/// Vivado writes, and says which frames of this flow's are not Vivado's.
+pub fn ecc_leaves_out_tile(tile_type: &str) -> Option<bool> {
+    if tile_type == "MONITOR_BOT" {
+        Some(true)
+    } else if tile_type.starts_with("CMT_TOP_") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// One frame whose ECC bits are not what [`wanted_ecc`] makes them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EccFault {

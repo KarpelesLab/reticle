@@ -1489,6 +1489,10 @@ impl XrayDatabase {
         let mut tiles_touched = 0usize;
         let mut tiles_unnamed: Vec<String> = Vec::new();
         let mut dynamic = super::xc7::DynamicBits::new();
+        // A clock manager's bits, which a frame's code leaves out or not
+        // by whether the design writes its registers: see
+        // `xc7::ecc_leaves_out_tile`.
+        let mut either = super::xc7::DynamicBits::new();
         let mut dynamic_tables: Vec<String> = Vec::new();
         for tile in &tiles {
             // The tile's own bits, in the tile-local coordinates a
@@ -1570,6 +1574,40 @@ impl XrayDatabase {
                     }
                 }
             }
+            // A clock manager's or the XADC's tile, whose frames' ECC leaves
+            // its bits out: see `xc7::ecc_leaves_out_tile`. Its windows
+            // overlap the tiles beside it, so it is the bits its own features
+            // matched, and not every bit seen through them.
+            let matched = |name: &str| {
+                known.features().iter().any(|f| {
+                    f.name == name
+                        && !f.ones.is_empty()
+                        && f.ones.iter().all(|b| ones.contains_key(b))
+                        && !f.zeros.iter().any(|b| ones.contains_key(b))
+                })
+            };
+            // An XADC's, that is, and not its registers' bits an option sets
+            // with no XADC in the design (`XADCPOWERDOWN`'s `INIT_42[5:4]`),
+            // which Vivado writes in the code (`options_probe`).
+            let in_use = tile.tile_type != "MONITOR_BOT" || matched("XADC.IN_USE");
+            if let Some(always) = super::xc7::ecc_leaves_out_tile(&tile.tile_type)
+                && in_use
+            {
+                let into = if always { &mut dynamic } else { &mut either };
+                for feature in known.features() {
+                    // The XADC's registers, and not the bits outside them
+                    // (`XADC.IN_USE` and its clocks', frames 25 to 27), which
+                    // are in the code.
+                    if feature.ones.is_empty()
+                        || !feature.ones.iter().all(|b| ones.contains_key(b))
+                        || feature.zeros.iter().any(|b| ones.contains_key(b))
+                        || (always && !feature.name.starts_with("XADC.INIT_"))
+                    {
+                        continue;
+                    }
+                    into.extend(feature.ones.iter().filter_map(|b| ones.get(b).copied()));
+                }
+            }
             // A distributed RAM's or a shift register's contents, which its
             // frame's ECC leaves out: see `xc7::wanted_ecc_without`.
             for feature in known.features() {
@@ -1623,7 +1661,25 @@ impl XrayDatabase {
             features: out,
             bits: total + ecc_bits,
             ecc_bits,
-            ecc_faults: data.ecc_faults_without(&dynamic),
+            ecc_faults: {
+                // A frame is wrong when it is wrong both ways.
+                let faults = data.ecc_faults_without(&dynamic);
+                if either.is_empty() {
+                    faults
+                } else {
+                    let mut both = dynamic.clone();
+                    both.extend(either.iter().copied());
+                    let other: Vec<_> = data
+                        .ecc_faults_without(&both)
+                        .into_iter()
+                        .map(|f| f.address)
+                        .collect();
+                    faults
+                        .into_iter()
+                        .filter(|f| other.contains(&f.address))
+                        .collect()
+                }
+            },
             unexplained: unexplained.len(),
             leftovers,
             tiles: tiles_touched,

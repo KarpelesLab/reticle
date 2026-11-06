@@ -371,6 +371,77 @@ fn the_frame_ecc_is_exact_on_vivados_frames() {
     assert!(seen_word.iter().all(|s| *s), "{seen_word:?}");
 }
 
+/// **What a clock manager's and an XADC's frames' ECC leaves out**, on
+/// Vivado's frames: `drp_ecc.txt` has frames 28 and 29 of the block's tile in
+/// Vivado's bitstreams of designs that wire its DRP port each way
+/// (`tools/vivado-parity/drp_ecc.py`), with the positions of the block's own
+/// bits. A clock manager's frame has the code of the frame without them when
+/// its `DWE` is a signal, whatever its `DEN` and `DCLK` are, and of the whole
+/// frame when `DWE` is tied low or the cell is a `_BASE`, which has none; an
+/// XADC's has the code without its registers always. That is
+/// `xc7::ecc_leaves_out_tile`'s rule, which `--decode` reads by.
+///
+/// It would catch the rule read off the wrong pin (`DEN` or `DCLK` rather
+/// than `DWE`), the XADC taken for a clock manager or the other way round, or
+/// a block's bit left in the code or another's taken out of it; every frame
+/// here tells the two codes apart. It says nothing of what the part does with
+/// the code: **nothing here has been on a board**, and this flow still writes
+/// the whole frame's code in both (`ecc_leaves_out_tile`).
+#[test]
+fn a_drp_blocks_frames_ecc_is_vivados() {
+    let text = read("drp_ecc.txt");
+    let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let (frame, positions) = line.split_once(" | ").unwrap();
+        let mut fields = frame.split(' ');
+        let design = fields.next().unwrap();
+        let address = fields.next().unwrap();
+        let stored = u32::from_str_radix(fields.next().unwrap(), 16).unwrap();
+        let words: Vec<u32> = fields
+            .map(|w| u32::from_str_radix(w, 16).unwrap())
+            .collect();
+        assert_eq!(words.len(), WORDS_PER_FRAME, "{design} {address}");
+        assert_eq!(words[ECC_WORD] & ECC_MASK, stored, "{design} {address}");
+        let mut without = words.clone();
+        for position in positions.split(' ') {
+            let (word, bit) = position.split_once('.').unwrap();
+            let (word, bit): (usize, u32) = (word.parse().unwrap(), bit.parse().unwrap());
+            without[word] &= !(1 << bit);
+        }
+        let whole = xc7::frame_ecc(&words);
+        let left_out = xc7::frame_ecc(&without);
+        assert_ne!(
+            whole, left_out,
+            "{design} {address}: the frame tells nothing apart"
+        );
+        // The design's DRP, from its name: `gen_primitives.py`'s probes wire
+        // every pin, and the variants tie the pins they name.
+        let kind = if design.starts_with("xadc") {
+            "XADC"
+        } else if design.contains("_base_") {
+            "no DWE"
+        } else if design.contains("drp_off") || design.contains("dwe_off") {
+            "DWE tied low"
+        } else {
+            "DWE a signal"
+        };
+        let wanted = if matches!(kind, "XADC" | "DWE a signal") {
+            left_out
+        } else {
+            whole
+        };
+        assert_eq!(stored, wanted, "{design} {address} ({kind})");
+        *kinds.entry(kind).or_default() += 1;
+    }
+    eprintln!("frames of each kind: {kinds:?}");
+    assert_eq!(kinds.len(), 4, "{kinds:?}");
+    // And the classification the decode uses.
+    assert_eq!(xc7::ecc_leaves_out_tile("MONITOR_BOT"), Some(true));
+    assert_eq!(xc7::ecc_leaves_out_tile("CMT_TOP_L_LOWER_B"), Some(false));
+    assert_eq!(xc7::ecc_leaves_out_tile("CMT_TOP_R_UPPER_T"), Some(false));
+    assert_eq!(xc7::ecc_leaves_out_tile("HCLK_CMT_L"), None);
+}
+
 /// Every frame of the base design, with the ECC taken out and put back: exact.
 #[test]
 fn taking_out_a_frames_ecc_and_filling_it_in_gives_vivados_frames() {
