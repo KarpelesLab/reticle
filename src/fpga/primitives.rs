@@ -1024,16 +1024,19 @@ struct SignedPlan {
     b: SignedOperand,
 }
 
-/// The constant low bit both operands of an adder hold, as the last part of
-/// each one's concatenation. Then the sum's low bit is zero and the carry
-/// out of it is that bit, which is how a carry in is written as an adder.
+/// The low bit both operands of an adder hold, as the last part of each
+/// one's concatenation: one constant, or one signal. Then the sum's low bit
+/// is zero and the carry out of it is that bit, which is how a carry in is
+/// written as an adder.
 ///
-/// **A constant only.** A signal there would go on the first `CARRY4`'s
-/// `CYINIT`, which a slice feeds from its `AX` input, and bit 0's generate
-/// takes `AX` too unless it comes from the table's `O5`:
-/// `xray::legalise_carries` refuses the two on one pin, and the shared
+/// **A constant only, until 2026-11-07.** A signal there goes on the first
+/// `CARRY4`'s `CYINIT`, which a slice feeds from its `AX` input, and bit 0's
+/// generate takes `AX` too unless it comes from the table's `O5`:
+/// `xray::legalise_carries` refused the two on one pin, and the shared
 /// adders' carry in (`s ? c - d : a + b`) is such a signal. Vivado puts it
-/// there; that would take the generate onto `O5` first.
+/// there, the generate on `O5`, and `legalise_carries` does that now (its
+/// `SharedAx`), or gives the carry in a `CARRY4` of its own below when the
+/// two tables do not fit in one.
 fn shared_low_bit(module: &Module, a: ExprId, b: ExprId) -> Option<ExprId> {
     let low = |e: ExprId| match module.exprs.get(e).map(|x| &x.kind) {
         Some(ExprKind::Concat(parts)) => parts
@@ -1049,7 +1052,35 @@ fn shared_low_bit(module: &Module, a: ExprId, b: ExprId) -> Option<ExprId> {
     };
     match (constant(x), constant(y)) {
         (Some(p), Some(q)) if p == q => Some(x),
+        (None, None) if same_signal(module, x, y) => Some(x),
         _ => None,
+    }
+}
+
+/// True when `x` and `y` are one bit of one net, written as a net or a
+/// constant part-select of one.
+fn same_signal(module: &Module, x: ExprId, y: ExprId) -> bool {
+    if x == y {
+        return true;
+    }
+    match (
+        module.exprs.get(x).map(|e| &e.kind),
+        module.exprs.get(y).map(|e| &e.kind),
+    ) {
+        (Some(ExprKind::Net(a)), Some(ExprKind::Net(b))) => a == b,
+        (
+            Some(ExprKind::Slice {
+                base: a,
+                hi: ah,
+                lo: al,
+            }),
+            Some(ExprKind::Slice {
+                base: b,
+                hi: bh,
+                lo: bl,
+            }),
+        ) => ah == bh && al == bl && same_signal(module, *a, *b),
+        _ => false,
     }
 }
 

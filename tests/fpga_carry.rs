@@ -136,6 +136,11 @@ enum Shape {
     /// subtraction needs riding in an extra low lane. NewAE's `esad` is
     /// `decision ? x - r : y + r` in each of 256 counters.
     Chosen { low_sub: bool, high_sub: bool },
+    /// `y = s ? (c ^ e) - d : a + b`, `e` one bit on `c`'s lowest: the
+    /// shared adders again, their carry in a signal (`s`), with bit 0's
+    /// propagate reading six signals (`s`, `a`, `b`, `c`, `d`, `e`), more
+    /// than a `LUT6_2` and its generate can share.
+    ChosenXor,
     /// `y = a == b + 1`, one bit, which `primitives` compares on the chain
     /// at [`MapOptions::min_compare_carry_width`] bits and more, an operand
     /// being a sum: the carry out of `{0, L} + 1`, read as the top lane's
@@ -298,6 +303,7 @@ impl Shape {
                 let ke = b.const_u64(width, k);
                 b.cell2("sum", CellKind::Add, ae, ke, y);
             }
+            Shape::ChosenXor => {}
             Shape::Chosen { low_sub, high_sub } => {
                 let ports: Vec<NetId> = ["a", "b", "c", "d"]
                     .iter()
@@ -324,6 +330,35 @@ impl Shape {
                     vec![(Name::new("y"), y)],
                 );
             }
+        }
+        if self == Shape::ChosenXor {
+            let ports: Vec<NetId> = ["a", "b", "c", "d"]
+                .iter()
+                .map(|n| b.input(*n, Type::bits(width)))
+                .collect();
+            let e = b.input("e", Type::bit());
+            let sel = b.input("s", Type::bit());
+            let y = b.output("y", Type::bits(width));
+            let low = b.add_net("low", Type::bits(width));
+            let high = b.add_net("high", Type::bits(width));
+            let (ae, be) = (b.net(ports[0]), b.net(ports[1]));
+            b.cell2("low", CellKind::Add, ae, be, low);
+            let (ce, ee) = (b.net(ports[2]), b.net(e));
+            let widened = b.zext(ee, width);
+            let flipped = b.xor(ce, widened);
+            let de = b.net(ports[3]);
+            b.cell2("high", CellKind::Sub, flipped, de, high);
+            let (le, he, se) = (b.net(low), b.net(high), b.net(sel));
+            b.cell(
+                "choose",
+                CellKind::Mux,
+                vec![
+                    (Name::new("a"), le),
+                    (Name::new("b"), he),
+                    (Name::new("s"), se),
+                ],
+                vec![(Name::new("y"), y)],
+            );
         }
         let module = b.finish();
         let problems = validate_module(&module);
@@ -374,6 +409,14 @@ impl Shape {
                 };
                 value & mask(width)
             }
+            Shape::ChosenXor => {
+                let value = if at(5) == 1 {
+                    (at(2) ^ at(4)).wrapping_sub(at(3))
+                } else {
+                    a.wrapping_add(b)
+                };
+                value & mask(width)
+            }
             Shape::Plain => a.wrapping_add(b) & mask(width),
             Shape::CarryIn => a.wrapping_add(b).wrapping_add(cin) & mask(width),
             Shape::Widened => (a + b) & mask(width + 1),
@@ -416,6 +459,14 @@ impl Shape {
                 ("b", width),
                 ("c", width),
                 ("d", width),
+                ("s", 1),
+            ],
+            Shape::ChosenXor => vec![
+                ("a", width),
+                ("b", width),
+                ("c", width),
+                ("d", width),
+                ("e", 1),
                 ("s", 1),
             ],
             _ => vec![("a", width), ("b", width)],
@@ -753,6 +804,61 @@ impl<'m> Netlist<'m> {
     }
 }
 
+/// The other part a simulation cannot see: **a carry in from the fabric has
+/// `AX` to itself.** `CYINIT` is reached from `AX` alone, and so is a generate
+/// from the fabric, by the bypass input; simulated, the two are just two nets.
+/// So every `CARRY4` whose `CYINIT` is a signal takes bit 0's generate off the
+/// `O5` of the `LUT6_2` whose `O6` is bit 0's propagate, or a constant, which
+/// comes off `O5` too.
+fn carry_ins_have_ax_to_themselves(module: &Module) {
+    use reticle::ir::emit::{BitView, SigBit};
+    let view = BitView::new(module).expect("the legalised module is structural");
+    let mut driver: std::collections::HashMap<SigBit, (CellId, String)> =
+        std::collections::HashMap::new();
+    for (id, cell) in module.cells.iter() {
+        for (port, net) in &cell.outputs {
+            for bit in view.net_bits(*net, cell.span).expect("a bit vector") {
+                driver.insert(view.canonical(bit), (id, port.as_str().to_owned()));
+            }
+        }
+    }
+    let bits = |e| -> Vec<SigBit> {
+        view.expr_bits(e)
+            .expect("a structural pin")
+            .into_iter()
+            .map(|b| view.canonical(b))
+            .collect()
+    };
+    for (_, cell) in module.cells.iter() {
+        if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == "CARRY4") {
+            continue;
+        }
+        let Some(init) = cell.input("CYINIT") else {
+            continue;
+        };
+        if !matches!(bits(init).first(), Some(SigBit::Slot(_))) {
+            continue;
+        }
+        let s = bits(cell.input("S").expect("`S`"))[0];
+        let di = bits(cell.input("DI").expect("`DI`"))[0];
+        if matches!(di, SigBit::Const(_)) {
+            continue;
+        }
+        let (dual, port) = driver
+            .get(&di)
+            .unwrap_or_else(|| panic!("`{}`'s bit 0 generate has no driver", cell.name));
+        assert!(
+            matches!(&module.cells[*dual].kind, CellKind::Blackbox(n) if n.as_str() == "LUT6_2")
+                && port == "O5"
+                && driver.get(&s) == Some(&(*dual, "O6".to_owned())),
+            "`{}` takes its carry in on `CYINIT` and bit 0's generate from `{}`'s `{port}`, \
+             not its propagate's `O5`: both on `AX`",
+            cell.name,
+            module.cells[*dual].name
+        );
+    }
+}
+
 /// The part of a packed chain a simulation cannot see: **which pin** of a
 /// `LUT6_2` each carry input is wired to. Simulated, a net has its value
 /// whichever output drives it, so a pairing with its halves swapped
@@ -860,15 +966,19 @@ fn check_full_with(
     options: &FpgaOptions,
     legalise: bool,
     pack: bool,
-) {
+) -> Option<fpga::xray::CarryPacking> {
     assert!(
         !legalise || device == XC7,
         "`legalise_carries` is the 7 series' own pass and there is nothing to ask it on {device}"
     );
     let (mut design, top, report) = mapped_with(shape, width, device, options);
+    let mut packing = None;
     if legalise {
         let device = fpga::target(device).expect("a built-in device");
-        fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
+        packing = Some(
+            fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises"),
+        );
+        carry_ins_have_ax_to_themselves(design.module(top));
         if pack {
             let pairing = fpga::xray::pack_lut_pairs(
                 &mut design,
@@ -909,7 +1019,7 @@ fn check_full_with(
             checked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut inputs = BTreeMap::new();
             let mut taken = 0;
-            let mut values = [0u64; 5];
+            let mut values = [0u64; 6];
             for (index, (name, w)) in ports.iter().enumerate() {
                 let mask = (1u64 << w) - 1;
                 let value = (pattern >> taken) & mask;
@@ -943,6 +1053,7 @@ fn check_full_with(
     });
     // The runs cover the range once: none of it was left out.
     assert_eq!(checked.into_inner(), total, "{shape:?} at {width} bits");
+    packing
 }
 
 // ---------------------------------------------------------------------------
@@ -1334,6 +1445,72 @@ fn a_chain_takes_its_carry_in_and_out_on_its_own_pins() {
     assert_eq!(report.count("CARRY4"), 2, "an 8-bit sum and its carry out");
     let (_, _, report) = mapped(Shape::Widened, 8, XC7, MapOptions::default());
     assert_eq!(report.count("CARRY4"), 3, "legacy: the carry out is a lane");
+}
+
+/// **A carry in that is a signal goes on `CYINIT`, bit 0's generate on
+/// `O5`, and both are still right.** The shared adders' carry in
+/// (`s ? c - d : a + b`) is a signal both operands carry as a low bit;
+/// `--synthesis vivado` puts it on the first `CARRY4`'s `CYINIT`, which a
+/// slice reaches from `AX` alone, so bit 0's generate cannot take `AX` too:
+/// `legalise_carries` puts it on the lane's `O5`, one `LUT6_2` with the
+/// propagate, as Vivado does (`SharedAx::Pin`), or, when the two read more
+/// than five signals between them (`Shape::ChosenXor`), the carry in on a
+/// `CARRY4` of its own below (`SharedAx::Below`). Every input of each,
+/// legalised, and paired too.
+///
+/// Would catch: the generate's table folded in wrongly (its half of the
+/// `LUT6_2` the propagate's, or its inputs in another order), the carry in
+/// passed up from the wrong lane of the `CARRY4` below or that lane's
+/// propagate not a zero (every sum off by the carry), either path not taken
+/// where it should be (the counts), and, through
+/// `carry_ins_have_ax_to_themselves` after every legalisation, a carry in
+/// left on `CYINIT` beside a generate that is not its propagate's `O5`,
+/// which is also what catches the chain's own `CYINIT` left on the signal
+/// beside the `CI` from below (that simulates the same, `CI | CYINIT` of
+/// one signal). Would not catch a generate's table folded in
+/// while something else reads it, which simulates the same and would put
+/// two signals on the lane's output mux; nor the `O5` routed to `DI` by
+/// another way than `CARRY4.ACY0`, which `tests/fpga_xray_carry_in_vivado.rs`
+/// compares with Vivado's bits.
+#[test]
+fn a_signal_carry_in_takes_cyinit_and_puts_bit_0s_generate_on_o5() {
+    let mut on_o5 = 0;
+    let mut below = 0;
+    for pack in [false, true] {
+        for low_sub in [false, true] {
+            for high_sub in [false, true] {
+                let shape = Shape::Chosen { low_sub, high_sub };
+                let packing =
+                    check_full_with(shape, 4, XC7, &vivado(), true, pack).expect("legalised");
+                on_o5 += packing.generates_on_o5;
+                below += packing.carries_below;
+            }
+        }
+        let packing =
+            check_full_with(Shape::ChosenXor, 4, XC7, &vivado(), true, pack).expect("legalised");
+        assert_eq!(
+            (packing.generates_on_o5, packing.carries_below),
+            (0, 1),
+            "{packing:?}"
+        );
+    }
+    assert!(
+        on_o5 > 0,
+        "no carry in went on `CYINIT` beside an `O5` generate"
+    );
+    assert_eq!(below, 0, "a shared adder's two tables fit one `LUT6_2`");
+    // Two lanes fewer than with the carry in a lane of its own: an eight-bit
+    // shared adder is two `CARRY4`s where it was three.
+    let (_, _, report) = mapped_with(
+        Shape::Chosen {
+            low_sub: false,
+            high_sub: true,
+        },
+        8,
+        XC7,
+        &vivado(),
+    );
+    assert_eq!(report.count("CARRY4"), 2, "an eight-bit shared adder");
 }
 
 // ---------------------------------------------------------------------------

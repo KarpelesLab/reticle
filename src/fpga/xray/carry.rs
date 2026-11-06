@@ -33,6 +33,16 @@
 //!   netlist so the cell's own model reads the upper half too: the netlist
 //!   says what the silicon does, and a simulator of it agrees.
 //!
+//! - a carry in from the fabric (`CYINIT`, on the slice's `AX`) beside a
+//!   generate from the fabric on bit 0, which would want `AX` too, puts
+//!   the generate on the lane's `O5`: its propagate's table and its
+//!   generate become one `LUT6_2` (the propagate on `O6`, the generate on
+//!   `O5`, `I5` tied high), which is how Vivado builds `a + b + c` with `c`
+//!   on `CYINIT` (see `SharedAx`). When the two need more than five
+//!   inputs between them the carry in goes on a `CARRY4` of its own below
+//!   the chain instead, its top lane passing it up, which costs what
+//!   writing it as a lane did.
+//!
 //! **A lane nothing reads is left alone**, and its two inputs become `x`.
 //! A lane is read when its sum is, when a carry out at or above it is,
 //! or when a sum above it is: the sum of lane `j` is `S ^ CO` of the lane
@@ -77,6 +87,12 @@ pub struct CarryPacking {
     pub generates: usize,
     /// Lanes whose outputs nothing reads.
     pub dead_lanes: usize,
+    /// Chains whose carry in from the fabric shares `AX` with bit 0's
+    /// generate, that generate put on the lane's `O5` (`SharedAx` in this module).
+    pub generates_on_o5: usize,
+    /// Of those, the ones whose two tables need more than five inputs, the
+    /// carry in on a `CARRY4` of its own below the chain instead.
+    pub carries_below: usize,
 }
 
 impl CarryPacking {
@@ -85,8 +101,16 @@ impl CarryPacking {
         format!(
             "carry chains: {} CARRY4, {} propagate bit(s) on their own lookup table, \
              {} buffer and {} constant lookup table(s) added ({} feeding a constant \
-             generate), {} lane(s) nothing reads\n",
-            self.carries, self.kept, self.buffers, self.constants, self.generates, self.dead_lanes
+             generate), {} lane(s) nothing reads, {} carry in(s) from the fabric beside a \
+             generate on `O5` and {} on a `CARRY4` below\n",
+            self.carries,
+            self.kept,
+            self.buffers,
+            self.constants,
+            self.generates,
+            self.dead_lanes,
+            self.generates_on_o5,
+            self.carries_below
         )
     }
 }
@@ -102,6 +126,73 @@ enum Propagate {
     Constant(bool),
     /// Nobody reads the lane: `x`.
     Dead,
+}
+
+/// A function of at most a few signals, as a lookup table computes it:
+/// `inputs` the distinct signals, by where each lives in the module, and
+/// `truth[i]` the value when input `j` is bit `j` of `i`.
+#[derive(Clone, Debug)]
+struct Function {
+    inputs: Vec<(usize, (crate::ir::NetId, u32))>,
+    truth: Vec<bool>,
+    /// The table it is read from, which the packed one replaces, and the
+    /// net that table drives.
+    table: Option<(CellId, crate::ir::NetId)>,
+}
+
+impl Function {
+    /// `I0` of a table, passed through.
+    fn buffer(slot: usize, owner: (crate::ir::NetId, u32)) -> Function {
+        Function {
+            inputs: vec![(slot, owner)],
+            truth: vec![false, true],
+            table: None,
+        }
+    }
+
+    /// A constant.
+    fn constant(value: bool) -> Function {
+        Function {
+            inputs: Vec::new(),
+            truth: vec![value],
+            table: None,
+        }
+    }
+
+    /// Its value over `signals`, a superset of its inputs, at the
+    /// assignment `x` gives them.
+    fn at(&self, signals: &[usize], x: usize) -> bool {
+        let mut i = 0usize;
+        for (k, (slot, _)) in self.inputs.iter().enumerate() {
+            let at = signals.iter().position(|s| s == slot).unwrap_or(0);
+            if (x >> at) & 1 == 1 {
+                i |= 1 << k;
+            }
+        }
+        self.truth[i]
+    }
+}
+
+/// A chain whose carry in comes from the fabric and whose bit 0's generate
+/// does too: the two want the slice's one `AX`, since `CYINIT` is reached
+/// from `AX` alone and a generate from the fabric by the bypass input.
+///
+/// Vivado puts the generate on `O5`: bit 0's propagate on `O6` and the
+/// generate on `O5` of one `LUT6_2`, `CARRY4.ACY0` set (the shared adders,
+/// `s ? c - d : a + b`, and `a + b + c` with `c` on `CYINIT`). That is
+/// [`SharedAx::Pin`], when the two functions read five signals or fewer
+/// between them: the generate's own table is folded in when nothing else
+/// reads it, and it is passed through from `I0`-to-`I4` otherwise. Past
+/// five, [`SharedAx::Below`]: a `CARRY4` of its own under the chain, whose
+/// top lane's carry out is the carry in (propagate a constant zero, the
+/// generate the signal on its bypass input), so that the chain's own
+/// `CYINIT` is a zero and `AX` is the generate's.
+#[derive(Clone, Debug)]
+enum SharedAx {
+    /// Both on one table: the propagate's function and the generate's.
+    Pin { upper: Function, lower: Function },
+    /// The carry in a `CARRY4` below.
+    Below,
 }
 
 /// One lane's plan: what its propagate input becomes, and the constant
@@ -120,10 +211,10 @@ struct Lane {
 ///
 /// # Errors
 ///
-/// A message when the netlist cannot be read bit by bit, or when a
-/// `CARRY4` asks for something one slice cannot give: a carry in from the
-/// fabric *and* a fabric generate on bit 0, which would both need the
-/// slice's one `AX`.
+/// A message when the netlist cannot be read bit by bit, or when a device
+/// with a carry in from the fabric beside a generate from it has no
+/// `LUT6_2` to put the generate on `O5` with and no `CI` to bring the carry
+/// in from below (this module's `SharedAx`).
 pub fn legalise_carries(
     design: &mut Design,
     module: ModuleId,
@@ -161,7 +252,7 @@ pub fn legalise_carries(
     // module again for every chain to ask it was a quadratic, 17 s of the
     // Husky's 1,681 chains.
     type Owners = Vec<Option<(crate::ir::NetId, u32)>>;
-    let mut plans: Vec<(CellId, Vec<Lane>, Owners)> = Vec::new();
+    let mut plans: Vec<(CellId, Vec<Lane>, Owners, Option<SharedAx>)> = Vec::new();
     {
         let view = BitView::new(m).map_err(|e| e.to_string())?;
         let bits = |id: ExprId| -> Result<Vec<SigBit>, String> {
@@ -173,14 +264,16 @@ pub fn legalise_carries(
                 .collect())
         };
 
-        // Which bits anything reads, and who drives each bit.
+        // Which bits anything reads, how often, and who drives each bit.
         let mut read: HashSet<usize> = HashSet::new();
+        let mut reads: HashMap<usize, usize> = HashMap::new();
         let mut driver: HashMap<usize, (CellId, String)> = HashMap::new();
         for (id, cell) in m.cells.iter() {
             for (_, e) in &cell.inputs {
                 for bit in bits(*e)? {
                     if let SigBit::Slot(s) = bit {
                         read.insert(s);
+                        *reads.entry(s).or_default() += 1;
                     }
                 }
             }
@@ -203,9 +296,63 @@ pub fn legalise_carries(
             {
                 if let SigBit::Slot(s) = view.canonical(bit) {
                     read.insert(s);
+                    *reads.entry(s).or_default() += 2;
                 }
             }
         }
+        // A lookup table's function, over the distinct signals it reads, its
+        // constant pins folded in; `None` when it is not one this can read.
+        let table_of = |id: CellId| -> Option<Function> {
+            let cell = &m.cells[id];
+            if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == lut.name) {
+                return None;
+            }
+            let Some(AttrValue::Const(init)) = cell.params.get(init_name.as_str()) else {
+                return None;
+            };
+            let output = cell.output(&lut_output)?;
+            let mut pins: Vec<SigBit> = Vec::with_capacity(6);
+            for name in &lut_inputs {
+                match cell.input(name) {
+                    Some(e) => match bits(e).ok()?.as_slice() {
+                        [b] => pins.push(*b),
+                        _ => return None,
+                    },
+                    None => pins.push(SigBit::Const(Bit::Zero)),
+                }
+            }
+            let mut slots: Vec<usize> = Vec::new();
+            for pin in &pins {
+                match pin {
+                    SigBit::Slot(s) if !slots.contains(s) => slots.push(*s),
+                    SigBit::Slot(_) => {}
+                    SigBit::Const(b) if *b == Bit::Zero || *b == Bit::One => {}
+                    SigBit::Const(_) => return None,
+                }
+            }
+            let mut truth = vec![false; 1 << slots.len()];
+            for (i, value) in truth.iter_mut().enumerate() {
+                let mut index = 0u32;
+                for (j, pin) in pins.iter().enumerate() {
+                    let high = match pin {
+                        SigBit::Const(b) => *b == Bit::One,
+                        SigBit::Slot(s) => {
+                            let k = slots.iter().position(|x| x == s).unwrap_or(0);
+                            (i >> k) & 1 == 1
+                        }
+                    };
+                    if high {
+                        index |= 1 << j;
+                    }
+                }
+                *value = init.bit(index) == Bit::One;
+            }
+            Some(Function {
+                inputs: slots.into_iter().map(|s| (s, view.owner(s))).collect(),
+                truth,
+                table: Some((id, output)),
+            })
+        };
 
         // How many propagate pins each bit feeds, over every chain: a
         // lookup table can be the propagate of one lane of one slice.
@@ -268,6 +415,7 @@ pub fn legalise_carries(
                 .is_some_and(|b| matches!(b.first(), Some(SigBit::Slot(_))));
 
             let mut plan = Vec::with_capacity(lanes);
+            let mut shared_ax = false;
             for lane in 0..lanes {
                 // Read itself, or through its carry: a carry out at or above
                 // it, or a sum above it, which is `S ^ CO` of the lane
@@ -310,11 +458,7 @@ pub fn legalise_carries(
                     SigBit::Const(b) => Some(b == Bit::One),
                 };
                 if generate.is_none() && lane == 0 && fabric_init {
-                    return Err(format!(
-                        "`{}` takes its carry in and bit 0's generate both from the fabric, \
-                         and a slice has one `AX` for the two",
-                        cell.name
-                    ));
+                    shared_ax = true;
                 }
                 let propagate = match s_bits[lane] {
                     SigBit::Const(b) => Propagate::Constant(b == Bit::One),
@@ -342,7 +486,52 @@ pub fn legalise_carries(
                     _ => None,
                 })
                 .collect();
-            plans.push((id, plan, owners));
+            // Bit 0's propagate and generate on one table, or the carry in
+            // below: see `SharedAx`.
+            let shared = if shared_ax {
+                let upper = match plan[0].propagate {
+                    Propagate::Keep => match s_bits[0] {
+                        SigBit::Slot(s) => driver.get(&s).and_then(|(d, _)| table_of(*d)),
+                        SigBit::Const(_) => None,
+                    },
+                    Propagate::Buffer(s) => Some(Function::buffer(s, view.owner(s))),
+                    Propagate::Constant(v) => Some(Function::constant(v)),
+                    Propagate::Dead => None,
+                };
+                let lower = match di_bits[0] {
+                    SigBit::Slot(g) => {
+                        // Its own table, when the generate is all it is for
+                        // and it is not the propagate's.
+                        let own = driver
+                            .get(&g)
+                            .filter(|_| reads.get(&g) == Some(&1))
+                            .and_then(|(d, _)| table_of(*d))
+                            .filter(|f| {
+                                f.table.map(|(c, _)| c)
+                                    != upper.as_ref().and_then(|u| u.table.map(|(c, _)| c))
+                            });
+                        Some(own.unwrap_or_else(|| Function::buffer(g, view.owner(g))))
+                    }
+                    SigBit::Const(_) => None,
+                };
+                Some(match (upper, lower) {
+                    (Some(upper), Some(lower))
+                        if upper.inputs.len()
+                            + lower
+                                .inputs
+                                .iter()
+                                .filter(|(s, _)| !upper.inputs.iter().any(|(u, _)| u == s))
+                                .count()
+                            <= 5 =>
+                    {
+                        SharedAx::Pin { upper, lower }
+                    }
+                    _ => SharedAx::Below,
+                })
+            } else {
+                None
+            };
+            plans.push((id, plan, owners, shared));
         }
     }
 
@@ -350,9 +539,159 @@ pub fn legalise_carries(
     let Some(m) = design.modules.get_mut(module) else {
         return Err("the module is not part of the design".to_owned());
     };
-    for (id, plan, view_owner) in plans {
+    let mut removed: Vec<CellId> = Vec::new();
+    let dual = device.bels.iter().find(|b| b.name == super::lutpack::DUAL);
+    for (id, plan, view_owner, shared) in plans {
         let span = m.cells[id].span;
         let name = m.cells[id].name.as_str().to_owned();
+        // Bit 0's two tables as one, or the carry in below the chain.
+        let mut lane0: Option<(ExprId, ExprId)> = None;
+        match shared {
+            Some(SharedAx::Pin { upper, lower }) => {
+                let Some(dual) = dual else {
+                    return Err(format!(
+                        "`{name}` takes its carry in and bit 0's generate both from the \
+                         fabric, and the device has no `{}` to put the generate on `O5`",
+                        super::lutpack::DUAL
+                    ));
+                };
+                let dual_inputs: Vec<String> = dual
+                    .port_names("i")
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect();
+                let (Some(o6), Some(o5)) = (dual.port("o"), dual.port("o5")) else {
+                    return Err(format!("`{}` has no `O6` and `O5`", dual.name));
+                };
+                let mut signals: Vec<usize> = upper.inputs.iter().map(|(s, _)| *s).collect();
+                let mut owners: Vec<(crate::ir::NetId, u32)> =
+                    upper.inputs.iter().map(|(_, o)| *o).collect();
+                for (slot, owner) in &lower.inputs {
+                    if !signals.contains(slot) {
+                        signals.push(*slot);
+                        owners.push(*owner);
+                    }
+                }
+                let mut init = Const::zero(64);
+                for x in 0..32u32 {
+                    if upper.at(&signals, x as usize) {
+                        init.set_bit(32 + x, Bit::One);
+                    }
+                    if lower.at(&signals, x as usize) {
+                        init.set_bit(x, Bit::One);
+                    }
+                }
+                let mut inputs: Vec<(Name, ExprId)> = Vec::with_capacity(6);
+                for (k, pin) in dual_inputs.iter().enumerate() {
+                    let value = match owners.get(k) {
+                        Some((net, b)) if k < 5 => {
+                            let whole = net_expr(m, *net, span);
+                            slice_expr(m, whole, *b, *b, span)
+                        }
+                        // `I5` is `A6`, high so that `O6` reads the upper half.
+                        _ if k == 5 => const_expr(m, Const::ones(1), span),
+                        _ => const_expr(m, Const::zero(1), span),
+                    };
+                    inputs.push((Name::new(pin.clone()), value));
+                }
+                let out_of = |m: &mut crate::ir::Module, f: &Function, tag: &str| match f.table {
+                    Some((_, net)) => net,
+                    None => add_net(m, &format!("{name}${tag}0"), Type::bit(), span),
+                };
+                let o6_net = out_of(m, &upper, "s");
+                let o5_net = out_of(m, &lower, "g");
+                let cell = add_cell(
+                    m,
+                    &format!("{name}$lane0"),
+                    CellKind::Blackbox(Name::new(dual.name.clone())),
+                    inputs,
+                    vec![(Name::new(o6), o6_net), (Name::new(o5), o5_net)],
+                    span,
+                );
+                m.cells[cell]
+                    .params
+                    .set(Name::new("INIT"), AttrValue::Const(init));
+                removed.extend(upper.table.iter().chain(&lower.table).map(|(c, _)| *c));
+                lane0 = Some((net_expr(m, o6_net, span), net_expr(m, o5_net, span)));
+                report.generates_on_o5 += 1;
+            }
+            Some(SharedAx::Below) => {
+                let (Some(ci), Some(init)) = (shape.carry_in, shape.init) else {
+                    return Err(format!(
+                        "`{name}` takes its carry in and bit 0's generate both from the \
+                         fabric, and the carry has no `CI` to take it from below"
+                    ));
+                };
+                let lanes = shape.width;
+                let carry_in = m.cells[id].input(init).expect("checked in the plan");
+                // The top lane's propagate: a table of zero.
+                let zero = add_net(m, &format!("{name}$cin$s"), Type::bit(), span);
+                let mut table_inputs: Vec<(Name, ExprId)> = Vec::with_capacity(6);
+                for pin in &lut_inputs {
+                    table_inputs
+                        .push((Name::new(pin.clone()), const_expr(m, Const::zero(1), span)));
+                }
+                let table = add_cell(
+                    m,
+                    &format!("{name}$cin$lut"),
+                    CellKind::Blackbox(Name::new(lut.name.clone())),
+                    table_inputs,
+                    vec![(Name::new(lut_output.clone()), zero)],
+                    span,
+                );
+                m.cells[table].params.set(
+                    Name::new(init_name.clone()),
+                    AttrValue::Const(lane_init(Some(false), None)),
+                );
+                report.constants += 1;
+                // `Concat` is most significant first: the top lane, then
+                // three that nothing reads.
+                let x =
+                    |m: &mut crate::ir::Module| const_expr(m, Const::from_bits(&[Bit::X]), span);
+                let mut s_parts = vec![net_expr(m, zero, span)];
+                let mut di_parts = vec![carry_in];
+                for _ in 1..lanes {
+                    s_parts.push(x(m));
+                    di_parts.push(x(m));
+                }
+                let s_expr = expr(m, ExprKind::Concat(s_parts), span);
+                let di_expr = expr(m, ExprKind::Concat(di_parts), span);
+                let sum = add_net(m, &format!("{name}$cin$o"), Type::bits(lanes), span);
+                let carries = add_net(m, &format!("{name}$cin$co"), Type::bits(lanes), span);
+                let low = |m: &mut crate::ir::Module| const_expr(m, Const::zero(1), span);
+                let inputs = vec![
+                    (Name::new(shape.propagate), s_expr),
+                    (Name::new(shape.data), di_expr),
+                    (Name::new(ci), low(m)),
+                    (Name::new(init), low(m)),
+                ];
+                add_cell(
+                    m,
+                    &format!("{name}$cin"),
+                    CellKind::Blackbox(Name::new(carry.name.clone())),
+                    inputs,
+                    vec![
+                        (Name::new(shape.sum), sum),
+                        (Name::new(shape.carry_out), carries),
+                    ],
+                    span,
+                );
+                let whole = net_expr(m, carries, span);
+                let top = slice_expr(m, whole, lanes - 1, lanes - 1, span);
+                let zero_in = low(m);
+                for (port, value) in m.cells[id].inputs.iter_mut() {
+                    if port.as_str() == ci {
+                        *value = top;
+                    } else if port.as_str() == init {
+                        *value = zero_in;
+                    }
+                }
+                report.carries += 1;
+                report.dead_lanes += usize::try_from(lanes - 1).unwrap_or(0);
+                report.carries_below += 1;
+            }
+            None => {}
+        }
         let old_s = m.cells[id]
             .input(shape.propagate)
             .expect("checked in the plan");
@@ -363,6 +702,7 @@ pub fn legalise_carries(
             let bit = u32::try_from(lane).unwrap_or(0);
             let x = || Const::from_bits(&[Bit::X]);
             let (s, di) = match step.propagate {
+                _ if lane == 0 && lane0.is_some() => lane0.expect("just checked"),
                 Propagate::Dead => (const_expr(m, x(), span), const_expr(m, x(), span)),
                 Propagate::Keep => (
                     slice_expr(m, old_s, bit, bit, span),
@@ -419,7 +759,7 @@ pub fn legalise_carries(
                     (net_expr(m, out, span), di)
                 }
             };
-            if step.propagate == Propagate::Keep {
+            if step.propagate == Propagate::Keep && !(lane == 0 && lane0.is_some()) {
                 report.kept += 1;
             }
             s_parts.push(s);
@@ -438,6 +778,11 @@ pub fn legalise_carries(
                 *value = di;
             }
         }
+    }
+    // The tables folded into a lane's `LUT6_2`, taken out last: a cell's id
+    // is its place, which a removal moves.
+    if !removed.is_empty() {
+        m.cells.retain(|id, _| !removed.contains(&id));
     }
     Ok(report)
 }

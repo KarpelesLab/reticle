@@ -1,0 +1,13 @@
+# What Vivado 2026.1 made of each design here, on xc7a100tftg256-3: its own
+# flow (synth_design, opt_design, place_design, phys_opt_design, route_design,
+# write_bitstream), the bitstream decoded through this repository's database
+# (`reticle fpga --decode`), and of each slice holding a CARRY4 the features
+# of its carry, `PRECYINIT.*` and `CARRY4.*`, one line a slice, sorted, the
+# slice's place taken off. `cell` lines are the cells Vivado put on the first
+# CARRY4's lane 0, from its own placement (`get_cells -of [get_sites]`).
+# tests/fpga_xray_carry_in_vivado.rs says how to read it.
+design shared8
+  cell A5LUT LUT3
+  cell A6LUT LUT5
+  slice CARRY4.ACY0 CARRY4.BCY0 CARRY4.CCY0 CARRY4.DCY0 PRECYINIT.AX
+  slice CARRY4.ACY0 CARRY4.BCY0 CARRY4.CCY0 PRECYINIT.CIN
