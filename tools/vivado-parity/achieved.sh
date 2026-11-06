@@ -13,6 +13,8 @@
 #                   longest path, so any period under what it achieves is the
 #                   same request.
 #   netlist/        Vivado's placement and routes of seed 1's netlist.
+# A stage whose result is there and finished is not run again, so a second
+# build's figures can be had in <out> beside the first's own runs.
 # Then `achieved.py table own=<out>/own0,<out>/own1,<out>/own2
 # netlist=<out>/netlist <label>=<out>/reticle` is the table. RETICLE names the
 # binary, RETICLE_ARGS adds to its arguments, DEVICE is Reticle's name for the
@@ -22,6 +24,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 if [ "$1" = --stage ]; then
   # --stage <stage> <stem> <top> <part> <out dir>: one run of achieved.tcl.
   mkdir -p "$6"
+  # A stage that finished before is not asked again, as a seed's build is not.
+  grep -qs '^end' "$6/$4.result" && exit 0
   nice -n 19 ionice -c3 timeout 3000 vivado -mode batch -nojournal -nolog -notrace -tempDir "$6/tmp" \
     -source "$here/achieved.tcl" -tclargs "$2" "$3" "$4" "$5" "$6" > "$6/vivado.log" 2>&1
   rm -rf "$6/tmp"
