@@ -2072,6 +2072,39 @@ mod tests {
         }
     }
 
+    /// **A select that is an `or` is decided by a conjunct in it, and only by
+    /// one in it**: `en = c & e` decides `(c | k) ? v : w` to `v`, `en = e`
+    /// does not. Would catch an `or` taken as implied whatever its terms, which
+    /// the test above, whose selects are single terms, does not reach.
+    #[test]
+    fn an_or_select_is_decided_only_by_a_term_of_it() {
+        for decided in [true, false] {
+            let mut b = ModuleBuilder::new("m", span());
+            let clk = b.input("clk", Type::bit());
+            let c = b.input("c", Type::bit());
+            let e = b.input("e", Type::bit());
+            let k = b.input("k", Type::bit());
+            let v = b.input("v", Type::bits(4));
+            let w = b.input("w", Type::bits(4));
+            let q = b.output("q", Type::bits(4));
+            let (clkn, cn, en_, kn, vn, wn) =
+                (b.net(clk), b.net(c), b.net(e), b.net(k), b.net(v), b.net(w));
+            let en = if decided { b.and(cn, en_) } else { en_ };
+            let either = b.or(cn, kn);
+            let d = b.mux(either, vn, wn);
+            dff(&mut b, "ff", clkn, d, q, Some(en), None);
+            let mut m = b.finish();
+            let stats = run(&RegisterLoads, &mut m);
+            let t = m.to_text();
+            if decided {
+                assert_eq!(stats.get("loads simplified under the enable"), 1, "{t}");
+                assert!(t.contains("d=%v"), "{t}");
+            } else {
+                assert_eq!(stats.get("loads simplified under the enable"), 0, "{t}");
+            }
+        }
+    }
+
     /// A kept register's loads are left as written: the pass is not one of
     /// the canonical rules a kept register still takes.
     #[test]

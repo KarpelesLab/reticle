@@ -107,7 +107,8 @@ const FIXPOINT_WIDTH: u32 = 256;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BlastOptions {
     /// Blast a `pmux` that is a `case` — every select `x == K` for one `x` and
-    /// constants naming at least half of its codes — as a tree of multiplexers
+    /// constants of its width naming at least half of its codes — as a tree of
+    /// multiplexers
     /// over the bits of `x`, the way Vivado's synthesis builds one, rather
     /// than as an OR of each arm under its decoded select. The inputs and
     /// outputs are the same either way, and so is the function; the shape is
@@ -1023,8 +1024,8 @@ impl<'m> Blaster<'m> {
     /// not one, before anything is added to the graph.
     ///
     /// A `case` is a `pmux` each of whose selects is a net an absorbed `eq`
-    /// cell drives, all comparing one unsigned `x` of at most
-    /// [`CASE_TREE_WIDTH`] bits with distinct constants, which name at least
+    /// cell drives, all comparing one `x` of at most [`CASE_TREE_WIDTH`] bits
+    /// with distinct constants of its width, which name at least
     /// half of `x`'s codes. Each code's leaf is its arm, or the default where
     /// no arm names it; then each bit of `x` from the lowest pairs the leaves,
     /// two that are the same being one. With distinct constants at most one
@@ -1066,13 +1067,14 @@ impl<'m> Blaster<'m> {
                 (Some(k), None) => (b, k),
                 _ => return None,
             };
+            // A constant of the subject's own width, so that the comparison is
+            // of the bits as they are, signed or not: a narrower one would be
+            // extended, by its sign if both are signed.
             let w = width_of(&m.exprs[x].ty)?;
             if subject.is_some_and(|y| y != x)
                 || !k.is_fully_known()
                 || w > CASE_TREE_WIDTH
-                || k.width() > w
-                || m.exprs[x].ty.is_signed()
-                || m.exprs[if x == a { b } else { a }].ty.is_signed()
+                || k.width() != w
             {
                 return None;
             }
@@ -1492,8 +1494,13 @@ mod tests {
     }
 
     /// A `case` as process lowering leaves one: `y` a `pmux` of one-bit arms
-    /// `arm<i>` under `x == codes[i]`, its default the input `dflt`.
+    /// `arm<i>` under `x == codes[i]`, its default the input `dflt`, each
+    /// constant `width` bits wide but for `narrow`, one bit narrower.
     fn case_module(width: u32, codes: &[u64], signed: bool) -> Module {
+        case_module_with(width, codes, signed, false)
+    }
+
+    fn case_module_with(width: u32, codes: &[u64], signed: bool, narrow: bool) -> Module {
         let mut b = ModuleBuilder::new("m", span());
         let ty = if signed {
             Type::bits(width).with_signed(true)
@@ -1510,10 +1517,11 @@ mod tests {
             let arm = b.input(format!("arm{i}"), Type::bit());
             arms.push(b.net(arm));
             let e = b.add_net(format!("e{i}"), Type::bit());
+            let kw = if narrow { width - 1 } else { width };
             let k = if signed {
-                b.constant(crate::ir::Const::from_u64(code, width).with_signed(true))
+                b.constant(crate::ir::Const::from_u64(code, kw).with_signed(true))
             } else {
-                b.const_u64(width, code)
+                b.const_u64(kw, code)
             };
             b.cell(
                 format!("eq{i}"),
@@ -1571,18 +1579,29 @@ mod tests {
         assert!(same_everywhere(&plain, &tree));
     }
 
-    /// **A `case` that names too few codes, compares a signed subject, or
-    /// names a code twice is blasted as before**, node for node: two arms of
-    /// eight codes would be a tree mostly of defaults, a signed comparison
-    /// and a constant of another width are not the codes they look like, and
-    /// two arms on one code are both taken by a `pmux`, which a tree cannot
-    /// say. Would catch the density bar, the signedness or the repeat check
+    /// **A `case` that names too few codes, compares with a constant narrower
+    /// than its subject, or names a code twice is blasted as before**, node
+    /// for node: two arms of eight codes would be a tree mostly of defaults, a
+    /// narrower constant is extended — by its sign, both being signed, so
+    /// that `2'sb11` is `-1` and not the code 3 — and two arms on one code are
+    /// both taken by a `pmux`, which a tree cannot say. A signed subject with
+    /// constants of its own width is a tree: equality of the same width is of
+    /// the bits. Would catch the density bar, the width or the repeat check
     /// dropped.
     #[test]
-    fn a_sparse_signed_or_repeated_case_is_left_decoded() {
+    fn a_sparse_narrow_or_repeated_case_is_left_decoded() {
+        let signed = case_module(2, &[0, 1, 2, 3], true);
+        let (plain, _) = from_module(&signed);
+        let (tree, _) = from_module_with(&signed, &BlastOptions { case_trees: true });
+        assert_ne!(plain.len(), tree.len(), "a signed subject is a tree");
+        assert!(same_everywhere(&plain, &tree));
         for (m, what) in [
             (case_module(3, &[1, 6, 7], false), "sparse"),
-            (case_module(2, &[0, 1, 2], true), "signed"),
+            (
+                case_module_with(3, &[0, 1, 2, 3], true, true),
+                "narrow and signed",
+            ),
+            (case_module_with(3, &[0, 1, 2, 3], false, true), "narrow"),
             (case_module(2, &[0, 1, 1, 2], false), "repeated"),
         ] {
             let (plain, _) = from_module(&m);
