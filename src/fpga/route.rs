@@ -1667,7 +1667,11 @@ fn sink_delays(
     sinks: &[Sink],
     node_delay: &[u32],
 ) -> Vec<u64> {
-    let mut delay: HashMap<NodeId, u64> = HashMap::new();
+    // Every signal's every pass, so hashed with `FastMap`; and the sinks
+    // moved to another input of their class looked up in a map of their
+    // own, the first entry for a pin as the scan found it, where a scan for
+    // each sink was quadratic in a wide net's.
+    let mut delay: FastMap<NodeId, u64> = FastMap::default();
     delay.insert(route.source, 0);
     for pip in &route.pips {
         let pip = graph.pip(*pip);
@@ -1675,14 +1679,14 @@ fn sink_delays(
             + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0));
         delay.insert(pip.to, to);
     }
+    let mut moved: FastMap<usize, NodeId> = FastMap::default();
+    for (pin, node) in &route.moved {
+        moved.entry(*pin).or_insert(*node);
+    }
     sinks
         .iter()
         .map(|sink| {
-            let node = route
-                .moved
-                .iter()
-                .find(|(pin, _)| *pin == sink.pin)
-                .map_or(sink.node, |(_, node)| *node);
+            let node = moved.get(&sink.pin).copied().unwrap_or(sink.node);
             delay.get(&node).copied().unwrap_or(0)
         })
         .collect()
@@ -1996,20 +2000,22 @@ fn kept_part(
     terminals: &Terminals,
 ) -> Kept {
     let bad = |node: NodeId| state.usage[state.group[node as usize] as usize].occupancy > 1;
-    let mut parent: HashMap<NodeId, PipId> = HashMap::new();
+    let mut parent: FastMap<NodeId, PipId> = FastMap::default();
     for pip in &route.pips {
         parent.insert(graph.pip(*pip).to, *pip);
     }
-    let mut keep: HashSet<NodeId> = HashSet::new();
+    let mut keep: FastMap<NodeId, ()> = FastMap::default();
     let mut connected = vec![false; terminals.sinks.len()];
     let mut moved = Vec::new();
+    // Where each moved sink ended: the first entry for its pin, as a scan
+    // of the list for each sink found it.
+    let mut ends: FastMap<usize, NodeId> = FastMap::default();
+    for (pin, node) in &route.moved {
+        ends.entry(*pin).or_insert(*node);
+    }
     if !bad(route.source) {
         for (which, sink) in terminals.sinks.iter().enumerate() {
-            let end = route
-                .moved
-                .iter()
-                .find(|(pin, _)| *pin == sink.pin)
-                .map_or(sink.node, |(_, node)| *node);
+            let end = ends.get(&sink.pin).copied().unwrap_or(sink.node);
             let mut path = Vec::new();
             let mut node = end;
             let mut clear = true;
@@ -2029,7 +2035,7 @@ fn kept_part(
             }
             if clear {
                 connected[which] = true;
-                keep.extend(path);
+                keep.extend(path.into_iter().map(|node| (node, ())));
                 if end != sink.node {
                     moved.push((sink.pin, end));
                 }
@@ -2040,7 +2046,7 @@ fn kept_part(
     let mut pips = Vec::new();
     for pip in &route.pips {
         let at = graph.pip(*pip);
-        if keep.contains(&at.to) {
+        if keep.contains_key(&at.to) {
             let delay = tree.get(&at.from).copied().unwrap_or(0.0)
                 + f64::from(geometry[at.to as usize].delay);
             tree.insert(at.to, delay);
