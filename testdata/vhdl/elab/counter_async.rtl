@@ -10,6 +10,7 @@ module counter_async
   port rst in %rst
   port q out %q
   assign %q = %cnt
+  attr vhdl_initial = 1
   process initial
     %cnt = 32'sd0
   end

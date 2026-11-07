@@ -206,6 +206,7 @@ impl<'d> Simulator<'d> {
 
     /// Moves the clock to `t` and unpacks the events scheduled there.
     pub(crate) fn advance_to(&mut self, t: u64) {
+        self.vhdl_end_delta();
         self.now = t;
         let Some(list) = self.timed.remove(&t) else {
             return;
@@ -261,6 +262,7 @@ impl<'d> Simulator<'d> {
                 continue;
             }
             if !self.nba.is_empty() {
+                self.vhdl_end_delta();
                 let items = std::mem::take(&mut self.nba);
                 for (stores, value) in items {
                     self.apply_stores(&stores, &value);
@@ -347,6 +349,9 @@ impl<'d> Simulator<'d> {
 
     /// Notifies everything that depends on `sig` of a change.
     pub(crate) fn propagate(&mut self, sig: SigId, old: &Logic, new: &Logic) {
+        if self.vhdl_has_shadows() {
+            self.vhdl_note_change(sig, old);
+        }
         if self.coverage.is_some() {
             self.cover_toggle(sig, old, new);
         }

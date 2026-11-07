@@ -5,9 +5,11 @@ module tb
   net %clk u1 reg
   net %phase s8 reg
   net %"clocking.i" s32 var
+  attr vhdl_initial = 1
   process initial
     %clk = 1'd0
   end
+  attr vhdl_initial = 1
   process initial
     %phase = 8'sd0
   end

@@ -10,6 +10,7 @@ module enum_encoding
   port sel in %sel
   port ok out %ok
   assign %ok = eq(%colour, 3'd6)
+  attr vhdl_initial = 1
   process initial
     %colour = 3'd3
   end

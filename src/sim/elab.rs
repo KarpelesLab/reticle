@@ -365,6 +365,7 @@ impl<'d> Simulator<'d> {
             breaks: Vec::new(),
             break_hits: Vec::new(),
             next_break: 0,
+            vhdl: Default::default(),
         };
         let top_name = design.modules[top].name.to_string();
         let mut chain = Vec::new();
@@ -380,6 +381,7 @@ impl<'d> Simulator<'d> {
         if sim.options.coverage {
             sim.init_coverage();
         }
+        sim.vhdl_prepare();
         sim.schedule_time_zero();
         Ok(sim)
     }
@@ -1083,13 +1085,17 @@ impl<'d> Simulator<'d> {
         }
         for p in 0..self.procs.len() {
             let kind = &self.procs[p].process.kind;
-            if matches!(
-                kind,
-                ProcessKind::Initial
-                    | ProcessKind::Free
-                    | ProcessKind::Comb
-                    | ProcessKind::Sensitive(_)
-            ) {
+            // A VHDL initial value applied before time zero is done.
+            let applied = self.procs[p].status == ProcStatus::Dead;
+            if !applied
+                && matches!(
+                    kind,
+                    ProcessKind::Initial
+                        | ProcessKind::Free
+                        | ProcessKind::Comb
+                        | ProcessKind::Sensitive(_)
+                )
+            {
                 self.procs[p].status = ProcStatus::Queued;
                 self.active.push_back(Event::Proc(ProcId::at(p)));
             }

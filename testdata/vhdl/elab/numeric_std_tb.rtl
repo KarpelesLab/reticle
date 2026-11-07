@@ -12,6 +12,7 @@ module accum
   port inc in %inc
   port sum out %sum
   assign %sum = %acc
+  attr vhdl_initial = 1
   process initial
     %acc = 8'd0
   end
@@ -36,12 +37,15 @@ module tb
   net %"stimulus.s" s8 var
   net %"stimulus.t" s8 var
   instance uut of accum (clk=%clk, rst=%rst, inc=%inc, sum=%sum)
+  attr vhdl_initial = 1
   process initial
     %clk = 1'd0
   end
+  attr vhdl_initial = 1
   process initial
     %rst = 1'd1
   end
+  attr vhdl_initial = 1
   process initial
     %inc = 8'd0
   end

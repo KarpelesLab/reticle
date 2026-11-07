@@ -20,6 +20,7 @@ module subtype_and_range_attributes
   assign %wide_o[5:0] = %reg
   assign %wide_o[11:6] = %ones
   assign %top_o = %reg[5:5]
+  attr vhdl_initial = 1
   process initial
     %ones = 6'd63
   end

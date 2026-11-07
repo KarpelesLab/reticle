@@ -36,7 +36,8 @@
 //! `minimum` and `maximum`, declared with every scalar type, become a
 //! comparison and a multiplexer.
 
-use crate::ir::{ExprId, ExprKind, Type};
+use crate::ir::builder::BlockBuilder;
+use crate::ir::{ExprId, ExprKind, NetId, Type};
 use crate::logic::Logic;
 use crate::source::Span;
 use crate::vhdl::ast;
@@ -154,12 +155,223 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
+    /// The shadow net of `signal` that keeps `kind` (`event`, `last_value`
+    /// or `last_event`; see the simulator's VHDL runtime), made on first
+    /// use.
+    pub(crate) fn shadow(
+        &mut self,
+        signal: NetId,
+        kind: &'static str,
+        span: Span,
+    ) -> Option<NetId> {
+        if let Some(&s) = self.shadows.get(&(signal, kind)) {
+            return Some(s);
+        }
+        let base_name = self.b.module().nets[signal].name.to_string();
+        let layout = match kind {
+            "event" => self.boolean_layout(),
+            "last_event" => self.physical_layout(),
+            _ => self.net_layout(signal),
+        };
+        let name = self.fresh(&format!("{base_name}${kind}"));
+        let net = self.new_net(name, layout, true, span)?;
+        self.b.module_mut().nets[net].kind = crate::ir::NetKind::Reg;
+        self.b.net_attr(net, "vhdl_shadow", kind);
+        self.b.net_attr(net, "vhdl_shadow_of", base_name);
+        self.shadows.insert((signal, kind), net);
+        self.shadow_base.insert(net, signal);
+        Some(net)
+    }
+
+    /// The net of a name that denotes a whole signal, for its attributes.
+    fn attribute_signal(&mut self, prefix: &'a ast::Name, span: Span) -> Option<NetId> {
+        let net = self.signal_net(prefix);
+        if net.is_none() {
+            self.unsupported(
+                span,
+                "this attribute of something other than a whole signal",
+            );
+        }
+        net
+    }
+
+    /// `rising_edge(s)` or `falling_edge(s)` as a value: `s'event`, with
+    /// `s` now `'1'` and before `'0'` (or the other way round), as IEEE
+    /// 1164 defines them. As the clock condition of a process they are
+    /// recognised before this point and become the process's clock.
+    pub(crate) fn edge_expr(
+        &mut self,
+        n: &'a ast::Name,
+        rising: bool,
+        span: Span,
+    ) -> Option<(ExprId, Layout)> {
+        let net = self.attribute_signal(n, span)?;
+        let event = self.shadow(net, "event", span)?;
+        let last = self.shadow(net, "last_value", span)?;
+        self.b.span = span;
+        let (now_bit, before_bit) = if rising { (true, false) } else { (false, true) };
+        let cur = self.b.net(net);
+        let cur = self.slice_bits(cur, 0, 0);
+        let want_now = self.b.const_bit(now_bit);
+        let is_now = self.b.binary(crate::ir::BinaryOp::CaseEq, cur, want_now);
+        let old = self.b.net(last);
+        let old = self.slice_bits(old, 0, 0);
+        let want_before = self.b.const_bit(before_bit);
+        let was = self.b.binary(crate::ir::BinaryOp::CaseEq, old, want_before);
+        let ev = self.b.net(event);
+        let both = self.b.land(is_now, was);
+        let id = self.b.land(ev, both);
+        Some((id, self.boolean_layout()))
+    }
+
+    /// A signal attribute read as a value: `s'event`, `s'active`,
+    /// `s'last_value`, `s'last_event`, `s'stable` and `s'stable(t)`, and
+    /// `s'delayed(t)`; the bound attributes of an object whose subtype was
+    /// not static, `x'length`, are evaluated here too when they fold.
+    pub(crate) fn signal_attribute(
+        &mut self,
+        prefix: &'a ast::Name,
+        attribute: &str,
+        arg: Option<&'a ast::Expr>,
+        span: Span,
+        sink: &mut Sink<'_>,
+    ) -> Option<(ExprId, Layout)> {
+        let _ = sink;
+        let attr = attribute.to_ascii_lowercase();
+        match attr.as_str() {
+            // There are no transactions without a change here, so an
+            // active signal is one with an event.
+            "event" | "active" => {
+                let net = self.attribute_signal(prefix, span)?;
+                let ev = self.shadow(net, "event", span)?;
+                self.b.span = span;
+                Some((self.b.net(ev), self.boolean_layout()))
+            }
+            "last_value" => {
+                let net = self.attribute_signal(prefix, span)?;
+                let last = self.shadow(net, "last_value", span)?;
+                let layout = self.net_layout(net);
+                self.b.span = span;
+                Some((self.b.net(last), layout))
+            }
+            "last_event" => {
+                let net = self.attribute_signal(prefix, span)?;
+                let at = self.shadow(net, "last_event", span)?;
+                let now = self.now_expr(span);
+                self.b.span = span;
+                let at = self.b.net(at);
+                Some((self.b.sub(now, at), self.physical_layout()))
+            }
+            "stable" | "quiet" => {
+                let net = self.attribute_signal(prefix, span)?;
+                let t = match arg {
+                    Some(t) => self.eval_int(t).and_then(|v| i64::try_from(v).ok()),
+                    None => Some(0),
+                };
+                let Some(t) = t else {
+                    self.unsupported(span, "`'stable` of a time that is not static");
+                    return None;
+                };
+                if t == 0 {
+                    let ev = self.shadow(net, "event", span)?;
+                    self.b.span = span;
+                    let ev = self.b.net(ev);
+                    return Some((self.b.lnot(ev), self.boolean_layout()));
+                }
+                // Stable for `t`: no event in this delta, and the last one
+                // at least `t` ago. Evaluated where it is read, so a
+                // signal assigned from it changes only when something it
+                // reads does.
+                let ev = self.shadow(net, "event", span)?;
+                let at = self.shadow(net, "last_event", span)?;
+                let now = self.now_expr(span);
+                self.b.span = span;
+                let at = self.b.net(at);
+                let since = self.b.sub(now, at);
+                let limit = self.b.constant(Logic::from_i64(t, 64).with_signed(true));
+                let long = self.b.ge(since, limit);
+                let ev = self.b.net(ev);
+                let quiet = self.b.lnot(ev);
+                Some((self.b.land(quiet, long), self.boolean_layout()))
+            }
+            "delayed" => self.delayed(prefix, arg, span),
+            _ => {
+                self.error(
+                    codes::NOT_STATIC,
+                    span,
+                    format!("the attribute `{attribute}` cannot be lowered to the IR"),
+                );
+                None
+            }
+        }
+    }
+
+    /// `s'delayed(t)`: a signal that follows `s` `t` later, by transport
+    /// (LRM 16.2.4), kept by a process of its own.
+    fn delayed(
+        &mut self,
+        prefix: &'a ast::Name,
+        arg: Option<&'a ast::Expr>,
+        span: Span,
+    ) -> Option<(ExprId, Layout)> {
+        let net = self.attribute_signal(prefix, span)?;
+        let fs = match arg {
+            Some(t) => self.eval_int(t).and_then(|v| u64::try_from(v).ok()),
+            None => Some(0),
+        };
+        let Some(fs) = fs else {
+            self.unsupported(span, "`'delayed` of a time that is not static");
+            return None;
+        };
+        if let Some(&d) = self.shadows.get(&(net, "delayed")) {
+            let layout = self.net_layout(net);
+            self.b.span = span;
+            return Some((self.b.net(d), layout));
+        }
+        let layout = self.net_layout(net);
+        let base = self.b.module().nets[net].name.to_string();
+        let name = self.fresh(&format!("{base}$delayed"));
+        let d = self.new_net(name, layout.clone(), true, span)?;
+        self.b.net_attr(d, "vhdl_shadow", "start");
+        self.b.net_attr(d, "vhdl_shadow_of", base);
+        let index = self.b.module().processes.len();
+        let outer = self.driver;
+        self.driver = super::lower::DriverKey::Process(index);
+        self.b.span = span;
+        let mut p = self
+            .b
+            .process(None, crate::ir::ProcessKind::Sensitive(vec![net]));
+        p.span = span;
+        let v = self.b.net(net);
+        if fs == 0 {
+            p.assign(
+                crate::ir::Lvalue::Net(d),
+                v,
+                crate::ir::AssignKind::NonBlocking,
+            );
+        } else {
+            p.assign_after(
+                crate::ir::Lvalue::Net(d),
+                v,
+                crate::ir::AssignKind::NonBlocking,
+                super::stmt::delay_from_fs(fs),
+            );
+        }
+        let pid = self.b.end_process(p);
+        self.record_driver(d, super::lower::DriverSite::Process(pid), true, span);
+        self.driver = outer;
+        self.shadows.insert((net, "delayed"), d);
+        self.b.span = span;
+        Some((self.b.net(d), layout))
+    }
+
     /// A predefined attribute with an argument whose value is only known
     /// at run time: `t'image(x)`, `t'pos(x)`, `t'val(n)`, `t'succ(x)`,
     /// `t'pred(x)`, `t'leftof(x)`, `t'rightof(x)`.
     pub(crate) fn runtime_attribute(
         &mut self,
         p: Predefined,
+        attr_name: Option<&'a ast::Name>,
         args: &'a [ast::AssociationElement],
         span: Span,
         sink: &mut Sink<'_>,
@@ -220,6 +432,16 @@ impl<'a> Lowerer<'a, '_> {
                     self.b.sub(id, one)
                 };
                 Some((id, result.unwrap_or(l)))
+            }
+            Predefined::Stable | Predefined::Quiet | Predefined::Delayed => {
+                let ast::Name::Attribute {
+                    prefix, attribute, ..
+                } = attr_name?
+                else {
+                    self.attribute_not_static(p, span);
+                    return None;
+                };
+                self.signal_attribute(prefix, &attribute.name, Some(arg), span, sink)
             }
             _ => {
                 self.attribute_not_static(p, span);
@@ -395,6 +617,30 @@ impl<'a> Lowerer<'a, '_> {
         let (id, l) = self.build(arg, None, sink)?;
         let id = self.image_of(id, &l, false, span)?;
         Some((id, self.string_layout()))
+    }
+
+    /// A call to a procedure the simulator implements: `std.env.finish`
+    /// and `std.env.stop` (LRM 16.5), with or without a status, which end
+    /// and pause the simulation as `$finish` and `$stop` do. The status is
+    /// not passed on. True when `d` is one of them and was lowered.
+    pub(crate) fn native_procedure(
+        &mut self,
+        d: DeclId,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) -> bool {
+        let d = super::lower::resolve_alias(self.a(), d);
+        if self.bundled_package_of(d).as_deref() != Some("std.env") {
+            return false;
+        }
+        let name = self.a().decl(d).spelling.to_ascii_lowercase();
+        out.span = span;
+        match name.as_str() {
+            "finish" => out.finish_sim(),
+            "stop" => out.stop(),
+            _ => return false,
+        }
+        true
     }
 
     /// `minimum(l, r)` or `maximum(l, r)` of a scalar type.

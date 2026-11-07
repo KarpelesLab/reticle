@@ -579,6 +579,39 @@ and `exit outer` to the one a flag variable written by hand does, byte for
 byte (both compared with `reticle synth`; `--verify` is inconclusive on
 both forms alike, for the memory and for the 32-bit counters).
 
+**Waits, signal history and initial values** (`waits_events_tb.vhd`,
+`src/vhdl/elab/waits.rs`, `src/sim/vhdl_runtime.rs`). The IR's waits are
+Verilog's, and three VHDL ones are not: `wait for 0 ns` resumed in the
+inactive region of the same delta, before the signal updates it is there to
+see; `wait until c` was level-sensitive and resumed at once when `c` already
+held, where LRM 10.2 waits for an event first; and `wait until c for t`
+never timed out. They are now built of an event wait on the signals of the
+condition and a per-process `$wake` signal that a non-blocking assignment
+(`after t` for a timeout) changes, so waking on it is waking in the next
+delta, or at the deadline. `s'event`, `s'last_value`, `s'last_event`,
+`s'active`, `s'stable(t)` and `rising_edge(s)` outside a clock condition
+read *shadow* nets the simulator keeps for the signals that need them; an
+event lasts until the end of its delta. `s'delayed(t)` is a transport copy
+kept by a process. And a VHDL initial value is applied before time zero
+with no event (LRM 14.7.5.1): `signal c1 : std_logic := '1'` made a rising
+edge at time zero, because it lowers to an `initial` assignment and an
+`initial` assignment from `x` is an edge in Verilog; the process is now
+marked `vhdl_initial` and the simulator applies it silently. `std.env.finish`
+and `std.env.stop` end and pause the run (they were "no body to inline");
+xsim also prints `$stop called at time : 0 fs` for the second, which this
+simulator's `$stop` does not.
+
+`'active` is `'event` here, since this simulator has no transaction that does
+not change a value. A `'stable(t)` read by a concurrent assignment is
+re-evaluated when something it reads changes, not when `t` has passed;
+xsim's answer for that case (`stable true bad` in the corpus's
+`vh_signal_attrs`) agrees.
+
+Not done: the chain of concurrent assignments `s1 <= s + 1; s2 <= s1 + 1;`
+settles in one delta here, each being a continuous assignment, where VHDL
+takes a delta per statement; a testbench that counts deltas through such a
+chain sees the difference.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

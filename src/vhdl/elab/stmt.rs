@@ -36,7 +36,7 @@
 use crate::diag::Diagnostic;
 use crate::ir::builder::BlockBuilder;
 use crate::ir::{
-    AssignKind, CaseArm, CaseKind, CaseQualifier, Delay, Edge, ExprId, Lvalue, NetId, ProcessKind,
+    AssignKind, CaseArm, CaseKind, CaseQualifier, Delay, ExprId, Lvalue, NetId, ProcessKind,
     ReportSeverity, TimeUnit,
 };
 use crate::logic::Logic;
@@ -131,47 +131,6 @@ impl<'a> Lowerer<'a, '_> {
     }
 
     // --- individual statements ----------------------------------------------
-
-    fn wait_stmt(
-        &mut self,
-        sensitivity: Option<&'a ast::Sensitivity>,
-        condition: Option<&'a ast::Expr>,
-        timeout: Option<&'a ast::Expr>,
-        span: Span,
-        out: &mut BlockBuilder,
-    ) {
-        out.span = span;
-        if let Some(c) = condition {
-            let cond = self.cond(c, &mut Sink::Proc(out));
-            out.span = span;
-            out.wait_until(cond);
-            return;
-        }
-        if let Some(t) = timeout {
-            let d = self.time_expr(t, out);
-            out.span = span;
-            out.wait_delay(d);
-            return;
-        }
-        if let Some(ast::Sensitivity::Names(names)) = sensitivity {
-            let mut edges = Vec::new();
-            for n in names {
-                if let Some(net) = self.signal_net(n) {
-                    edges.push(Edge::any(net));
-                }
-            }
-            if !edges.is_empty() {
-                out.span = span;
-                out.wait_event(edges);
-                return;
-            }
-        }
-        // A bare `wait;` suspends for ever.
-        self.b.span = span;
-        let never = self.b.const_bit(false);
-        out.span = span;
-        out.wait_until(never);
-    }
 
     fn assertion(&mut self, a: &'a ast::Assertion, out: &mut BlockBuilder) {
         let cond = self.cond(&a.condition, &mut Sink::Proc(out));
@@ -597,7 +556,7 @@ impl<'a> Lowerer<'a, '_> {
     }
 
     /// A time-valued expression, as a femtosecond count.
-    fn time_expr(&mut self, e: &'a ast::Expr, out: &mut BlockBuilder) -> ExprId {
+    pub(crate) fn time_expr(&mut self, e: &'a ast::Expr, out: &mut BlockBuilder) -> ExprId {
         if let Some(fs) = self.eval_int(e).and_then(|v| i64::try_from(v).ok()) {
             self.b.span = e.span();
             return self.b.constant(Logic::from_i64(fs, 64).with_signed(true));
@@ -673,6 +632,9 @@ impl<'a> Lowerer<'a, '_> {
             ast::Name::Call { args, .. } => args.iter().map(Actual::Assoc).collect(),
             _ => Vec::new(),
         };
+        if self.native_procedure(d, span, out) {
+            return;
+        }
         self.inline(d, &args, span, None, out);
     }
 

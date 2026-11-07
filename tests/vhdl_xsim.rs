@@ -97,3 +97,24 @@ fn operators_match_xsim() {
 fn loop_slices_match_xsim() {
     matches_xsim("loop_slices");
 }
+
+/// **Waits, signal history and initial values**: `wait for 0 ns`
+/// (resumed before the delta's update), `wait until c` when `c` already
+/// holds (resumed at once), `wait until c for t` and `wait on s for t`
+/// (never timed out); `rising_edge`/`falling_edge` outside a clock
+/// condition, `wait until rising_edge(clk)` in a process that is not a
+/// clocked one, `'event`, `'active`, `'last_value`, `'last_event`,
+/// `'stable` and `'delayed` (all refused); an edge process on a signal
+/// initialised to its edge's level (fired at time zero); and
+/// `std.env.finish` (refused, "no body to inline").
+///
+/// Would catch a wait resuming a delta early or late, a timeout that fires
+/// when the condition came first, an event that outlives its delta, and
+/// an initial value that makes an event. Would not catch the
+/// one-delta-per-statement chain of concurrent assignments, which this
+/// simulator settles in one delta and xsim in several; nothing here
+/// depends on it.
+#[test]
+fn waits_and_events_match_xsim() {
+    matches_xsim("waits_events");
+}

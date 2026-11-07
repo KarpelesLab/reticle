@@ -1,4 +1,7 @@
-//! The run-time string functions the VHDL frontend lowers to.
+//! What the VHDL frontend needs from the simulator beyond the IR's own
+//! semantics: run-time strings, a signal's history, and initial values.
+//!
+//! # Strings
 //!
 //! A VHDL `report` builds its message at run time far more often than not:
 //! `"n = " & integer'image(n)`, `to_string(v)`, `to_hstring(addr)`. The IR
@@ -35,11 +38,210 @@
 //! vector is sign-extended to a whole number of digits and an unsigned
 //! one zero-extended, as `ieee.numeric_std` does; `std_logic_vector`
 //! counts as unsigned.
+//!
+//! # A signal's history
+//!
+//! `s'event`, `s'last_value` and `s'last_event` (LRM 16.2.4) read what a
+//! signal did, not what it holds, and so does `rising_edge(s)` outside the
+//! clock condition of a process. The frontend gives such a signal a
+//! *shadow* net, marked with two attributes — `vhdl_shadow` names what it
+//! holds (`event`, `last_value` or `last_event`) and `vhdl_shadow_of` the
+//! net it shadows — and the simulator keeps it:
+//!
+//! - `last_value` takes the old value whenever the signal changes;
+//! - `last_event` takes the time of that change, in femtoseconds, and
+//!   starts far in the past, so a signal that never changed has been
+//!   stable for ever;
+//! - `event` is set when the signal changes and cleared when the delta
+//!   cycle ends: before the next batch of non-blocking updates is applied,
+//!   and when time advances;
+//! - `start` only starts with the signal's initial value: `s'delayed(t)`
+//!   is a signal of its own, kept by a process, whose value before `t` has
+//!   passed is the signal's initial one.
+//!
+//! A shadow is updated before the signal's fanout is scheduled, so a
+//! process woken by the change reads the new history. A change made by a
+//! continuous assignment happens in the active region rather than at a
+//! delta boundary, so its `event` stays set until the next one; a process
+//! that runs later in the same region for another reason sees it too.
+//!
+//! # Initial values
+//!
+//! A VHDL signal holds its initial value from the start, with no event
+//! (LRM 14.7.5.1): `signal c : std_logic := '1'` does not rise at time
+//! zero. The frontend writes an initial value as an `initial` process
+//! marked `vhdl_initial`, and the simulator applies such a process before
+//! time zero, silently, when its body is only assignments of constants to
+//! whole nets; anything else runs as an ordinary `initial` process.
 
-use crate::ir::Type;
+use crate::ir::{AttrValue, Type};
 use crate::logic::{Bit, Logic};
 
+use super::Simulator;
+use super::elab::SigId;
 use super::value::Value;
+
+/// What a shadow net holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShadowKind {
+    /// Set while the signal changed in this delta cycle.
+    Event,
+    /// The signal's value before its last change.
+    LastValue,
+    /// The time of the signal's last change, in femtoseconds.
+    LastEvent,
+    /// Nothing kept: the net only starts with the signal's initial value
+    /// (`s'delayed(t)`, which its own process then keeps).
+    Start,
+}
+
+/// The shadows of the design's signals.
+#[derive(Debug, Default)]
+pub(crate) struct VhdlState {
+    /// Every shadow: the signal shadowed, what is kept, the shadow.
+    shadows: Vec<(SigId, ShadowKind, SigId)>,
+    /// The `event` shadows set in the current delta cycle.
+    raised: Vec<SigId>,
+}
+
+impl Simulator<'_> {
+    /// Finds the shadow nets of every instance and applies the initial
+    /// values marked `vhdl_initial`. Runs once, after elaboration and
+    /// before time zero is scheduled.
+    pub(crate) fn vhdl_prepare(&mut self) {
+        // Initial values first, so a shadow starts from them.
+        self.vhdl_initial_values();
+        for i in 0..self.instances.len() {
+            let m = self.instances[i].m;
+            for (id, net) in m.nets.iter() {
+                let (Some(AttrValue::String(kind)), Some(AttrValue::String(of))) = (
+                    net.attrs.get("vhdl_shadow"),
+                    net.attrs.get("vhdl_shadow_of"),
+                ) else {
+                    continue;
+                };
+                let kind = match kind.as_str() {
+                    "event" => ShadowKind::Event,
+                    "last_value" => ShadowKind::LastValue,
+                    "last_event" => ShadowKind::LastEvent,
+                    "start" => ShadowKind::Start,
+                    _ => continue,
+                };
+                let Some(base) = m
+                    .nets
+                    .iter()
+                    .find(|(_, n)| n.name.as_str() == of.as_str())
+                    .map(|(b, _)| b)
+                else {
+                    continue;
+                };
+                let shadow = self.instances[i].nets[id.index()];
+                let base = self.instances[i].nets[base.index()];
+                let start = match kind {
+                    ShadowKind::Event => Logic::zero(1),
+                    ShadowKind::LastValue | ShadowKind::Start => {
+                        self.signals[base.idx()].value.clone()
+                    }
+                    ShadowKind::LastEvent => Logic::from_i64(-(1 << 62), 64).with_signed(true),
+                };
+                self.set_quietly(shadow, start);
+                if kind != ShadowKind::Start {
+                    self.vhdl.shadows.push((base, kind, shadow));
+                }
+            }
+        }
+    }
+
+    /// Applies the `vhdl_initial` processes that only assign constants to
+    /// whole nets, and retires them.
+    fn vhdl_initial_values(&mut self) {
+        for p in 0..self.procs.len() {
+            let proc_ = self.procs[p].process;
+            if !matches!(proc_.kind, crate::ir::ProcessKind::Initial)
+                || proc_.attrs.get("vhdl_initial").is_none()
+            {
+                continue;
+            }
+            let inst = self.procs[p].inst;
+            let m = self.instances[inst.idx()].m;
+            let mut writes = Vec::new();
+            let simple = proc_.body.iter().all(|s| match &s.kind {
+                crate::ir::StmtKind::Assign {
+                    target: crate::ir::Lvalue::Net(n),
+                    value,
+                    delay: None,
+                    ..
+                } => match m.exprs.get(*value).map(|e| &e.kind) {
+                    Some(crate::ir::ExprKind::Const(c)) => {
+                        writes.push((*n, c.clone()));
+                        true
+                    }
+                    _ => false,
+                },
+                _ => false,
+            });
+            if !simple {
+                continue;
+            }
+            for (n, c) in writes {
+                let sig = self.instances[inst.idx()].nets[n.index()];
+                self.set_quietly(sig, c);
+            }
+            self.procs[p].status = super::process::ProcStatus::Dead;
+        }
+    }
+
+    /// Sets a signal's value without an event: before time zero, nothing
+    /// can be waiting on it.
+    fn set_quietly(&mut self, sig: SigId, value: Logic) {
+        let s = &mut self.signals[sig.idx()];
+        let width = s.value.width();
+        let value = if value.width() == width {
+            value
+        } else {
+            value.resize(width)
+        };
+        s.value = value.with_signed(s.value.is_signed());
+    }
+
+    /// Keeps the shadows of `sig`, which just changed from `old`.
+    pub(crate) fn vhdl_note_change(&mut self, sig: SigId, old: &Logic) {
+        let now =
+            i64::try_from(u128::from(self.now) * u128::from(self.precision_fs)).unwrap_or(i64::MAX);
+        let mut writes = Vec::new();
+        for &(base, kind, shadow) in &self.vhdl.shadows {
+            if base != sig {
+                continue;
+            }
+            writes.push(match kind {
+                ShadowKind::Event => (shadow, Logic::from_bool(true)),
+                ShadowKind::LastValue => (shadow, old.clone()),
+                ShadowKind::LastEvent => (shadow, Logic::from_i64(now, 64).with_signed(true)),
+                ShadowKind::Start => continue,
+            });
+            if kind == ShadowKind::Event && !self.vhdl.raised.contains(&shadow) {
+                self.vhdl.raised.push(shadow);
+            }
+        }
+        for (shadow, value) in writes {
+            self.write_signal(shadow, value);
+        }
+    }
+
+    /// Ends a delta cycle for the `event` shadows: what changed in it no
+    /// longer has an event.
+    pub(crate) fn vhdl_end_delta(&mut self) {
+        let raised = std::mem::take(&mut self.vhdl.raised);
+        for shadow in raised {
+            self.write_signal(shadow, Logic::from_bool(false));
+        }
+    }
+
+    /// True when some signal has a shadow.
+    pub(crate) fn vhdl_has_shadows(&self) -> bool {
+        !self.vhdl.shadows.is_empty()
+    }
+}
 
 /// Evaluates one of the run-time string functions, or `None` when `name`
 /// is not one of them.

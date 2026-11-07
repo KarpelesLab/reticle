@@ -212,6 +212,7 @@ mod spans;
 mod stmt;
 mod types;
 mod units;
+mod waits;
 
 use std::collections::{HashMap, HashSet};
 

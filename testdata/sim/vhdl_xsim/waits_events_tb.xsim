@@ -1,0 +1,18 @@
+Note: start
+Note: after a delta s=5
+Note: resumed at 20000 ps other=1 edges 00
+Note: timed out at 27000 ps
+Note: condition at 29000 ps
+Note: wait on timed out at 33000 ps
+Note: no edge at once
+Note: rising edge
+Note: event, last values
+Note: active
+Note: event over a delta later
+Note: no event, stable
+Note: last event 1 ns ago
+Note: delayed still 0
+Note: not stable for 3 ns
+Note: delayed now 1
+Note: falling edge at 37000 ps
+Note: clock rose at 39000 ps

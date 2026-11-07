@@ -186,6 +186,12 @@ pub(crate) struct Lowerer<'a, 'e> {
     /// Statements the interpretation of the outermost static call has
     /// executed, its budget against a body that never terminates.
     pub steps: u32,
+    /// The hidden nets of each process's VHDL waits, by process index.
+    pub wait_hidden: HashMap<usize, super::waits::WaitNets>,
+    /// The shadow nets that keep a signal's history, by signal and kind.
+    pub shadows: HashMap<(NetId, &'static str), NetId>,
+    /// The signal each shadow net shadows.
+    pub shadow_base: HashMap<NetId, NetId>,
 }
 
 impl<'a> LayoutEnv<'a> for Lowerer<'a, '_> {
@@ -242,6 +248,9 @@ pub(crate) fn lower_entity<'a>(
         pending_inits: Vec::new(),
         interp_depth: 0,
         steps: 0,
+        wait_hidden: HashMap::new(),
+        shadows: HashMap::new(),
+        shadow_base: HashMap::new(),
     };
     low.b.span = span;
     // VHDL's time resolution limit is a femtosecond, and `wait for`
@@ -838,6 +847,10 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         self.b.span = span;
         let mut p = self.b.process(None, ProcessKind::Initial);
         p.span = span;
+        // The simulator applies a constant initial value before time zero,
+        // with no event (see `crate::sim`'s VHDL runtime), as LRM
+        // 14.7.5.1 has it; Verilog's initial assignments do make one.
+        p.attrs.set("vhdl_initial", AttrValue::Int(1));
         p.blocking(net, value);
         self.b.end_process(p);
         self.record_driver(net, DriverSite::Fixed, true, span);

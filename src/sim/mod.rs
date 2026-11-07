@@ -289,6 +289,8 @@ pub struct Simulator<'d> {
     breaks: Vec<api::Breakpoint>,
     break_hits: Vec<u32>,
     next_break: u32,
+    /// The VHDL signal shadows (`'event`, `'last_value`).
+    vhdl: vhdl_runtime::VhdlState,
 }
 
 impl std::fmt::Debug for Simulator<'_> {

@@ -453,14 +453,12 @@ impl<'a> Lowerer<'a, '_> {
                 range,
                 span,
             } => self.slice_expr(prefix, range, *span, sink),
-            ast::Name::Attribute { span, .. } => {
-                self.error(
-                    codes::NOT_STATIC,
-                    *span,
-                    "this attribute cannot be lowered to the IR",
-                );
-                None
-            }
+            ast::Name::Attribute {
+                prefix,
+                attribute,
+                span,
+                ..
+            } => self.signal_attribute(prefix, &attribute.name, None, *span, sink),
             ast::Name::External(ext) => {
                 self.unsupported(ext.span, "an external name");
                 None
@@ -569,7 +567,9 @@ impl<'a> Lowerer<'a, '_> {
                 Some((self.convert(id, &from, &to, span), to))
             }
             Some(CallTarget::Subprogram(d)) => self.subprogram_expr(d, args, span, want, sink),
-            Some(CallTarget::Attribute(p)) => self.runtime_attribute(p, args, span, sink),
+            Some(CallTarget::Attribute(p)) => {
+                self.runtime_attribute(p, Some(prefix), args, span, sink)
+            }
             Some(CallTarget::Operator(sym)) => {
                 // An operator written in functional form, `"and"(a, b)`.
                 let mut it = args.iter().filter_map(|a| match &a.actual {
@@ -1501,14 +1501,11 @@ impl<'a> Lowerer<'a, '_> {
                 self.vector_text(&name, arg, false, span, sink)
             }
             "rising_edge" | "falling_edge" => {
-                self.error(
-                    codes::UNSUPPORTED,
-                    span,
-                    format!("`{name}` is only recognised as the clock condition of a process"),
-                );
-                let layout = self.boolean_layout();
-                self.b.span = span;
-                Some((self.b.const_bit(false), layout))
+                let ast::Expr::Name(n) = arg else {
+                    self.unsupported(span, &format!("`{name}` of something other than a signal"));
+                    return None;
+                };
+                self.edge_expr(n, name == "rising_edge", span)
             }
             _ => None,
         }
