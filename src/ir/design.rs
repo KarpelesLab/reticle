@@ -325,6 +325,15 @@ impl Module {
         &self.exprs[id]
     }
 
+    /// The value of a constant offset, read as its type says: signed when
+    /// the expression's type is signed (the offset of an
+    /// [`Lvalue::MemPart`]). `None` when it is not
+    /// a constant, has an `x` or `z` bit, or does not fit an `i64`.
+    pub fn const_offset(&self, id: ExprId) -> Option<i64> {
+        let e = &self.exprs[id];
+        e.as_const()?.clone().with_signed(e.ty.is_signed()).to_i64()
+    }
+
     /// The net with the given name.
     pub fn net_by_name(&self, name: &str) -> Option<NetId> {
         self.nets.find(|n| n.name.as_str() == name)

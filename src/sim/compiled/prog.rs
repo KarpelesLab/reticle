@@ -76,6 +76,26 @@ pub(crate) struct Message {
     pub(crate) newline: bool,
 }
 
+/// The bits of a memory element an [`Op::MemWrite`] reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MemBits {
+    /// The whole element.
+    Whole,
+    /// Bit `k` of the data to bit `offset + k`, as
+    /// [`Lvalue::MemPart`](crate::ir::Lvalue::MemPart) has it: the offset
+    /// is read when the write is queued, signed when its slot is, and what
+    /// falls outside the element is dropped.
+    Part {
+        /// The element bit the data's bit 0 goes to.
+        offset: Slot,
+        /// The number of bits written.
+        width: u32,
+    },
+    /// The bits set in this slot, as wide as the element: a write port
+    /// cell with an enable per bit.
+    Mask(Slot),
+}
+
 /// One operation of the compiled program.
 ///
 /// Every variant names its destination slot first; sources never overlap
@@ -237,6 +257,8 @@ pub(crate) enum Op {
         data: Slot,
         /// Write enable; `None` writes unconditionally.
         en: Option<Slot>,
+        /// Which bits of the element the write reaches.
+        bits: MemBits,
     },
     /// Appends formatted text to the output.
     Display {

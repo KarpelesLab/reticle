@@ -636,7 +636,7 @@ fn remap_memories(module: &mut Module, base: usize) {
 /// Applies `shift` to every memory id an lvalue holds.
 fn lvalue_memories(lvalue: &mut Lvalue, shift: &impl Fn(&mut MemoryId)) {
     match lvalue {
-        Lvalue::MemElem { mem, .. } => shift(mem),
+        Lvalue::MemElem { mem, .. } | Lvalue::MemPart { mem, .. } => shift(mem),
         Lvalue::Concat(parts) => parts.iter_mut().for_each(|p| lvalue_memories(p, shift)),
         Lvalue::Net(_) | Lvalue::Slice { .. } | Lvalue::Index { .. } => {}
     }

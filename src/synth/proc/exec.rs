@@ -30,7 +30,7 @@ use crate::synth::opt::const_fold::simplify;
 use crate::synth::opt::replace_operands;
 use crate::synth::util::{
     add_cell, add_wire, mk, mk_and, mk_binary, mk_bit, mk_concat, mk_const, mk_mux, mk_net, mk_not,
-    mk_or, mk_or_tree, mk_slice, mk_unary, mk_undef,
+    mk_or, mk_or_tree, mk_slice, mk_unary, mk_undef, same_expr,
 };
 
 /// Index of a node in the symbolic-value arena.
@@ -90,7 +90,8 @@ pub(super) struct MemWrite {
     pub addr: ExprId,
     /// Data written.
     pub data: ExprId,
-    /// Single-bit enable.
+    /// The enable: one bit, or one per bit of the element for a write
+    /// of part of it ([`Lvalue::MemPart`]).
     pub en: ExprId,
     /// Where the write was.
     pub span: Span,
@@ -573,8 +574,137 @@ impl<'a> Exec<'a> {
                 let addr = self.subst(*addr);
                 self.mem_write(*mem, addr, value, None, span);
             }
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => {
+                let addr = self.subst(*addr);
+                let offset = self.subst(*offset);
+                self.mem_write_part(*mem, addr, offset, value, *width, span);
+            }
         }
         Ok(())
+    }
+
+    /// `mem[addr][offset +: width] <= value`: a write whose enable is as
+    /// wide as the element, its path condition on the bits written and
+    /// zero on the rest, the value placed at its offset (the bits not
+    /// written are zero, and read by nothing). A constant offset gives an
+    /// enable of constant zeros and copies of the condition, which is
+    /// what a block RAM's byte write enables are read off; one known only
+    /// at run time shifts both into place.
+    fn mem_write_part(
+        &mut self,
+        mem: MemoryId,
+        addr: ExprId,
+        offset: ExprId,
+        value: ExprId,
+        width: u32,
+        span: Span,
+    ) {
+        let ew = self.m.memories[mem].elem.width().unwrap_or(0);
+        if ew == 0 || width == 0 {
+            return;
+        }
+        let path = self.path_cond();
+        let zeros = |m: &mut Module, n: u32| mk_const(m, Const::zero(n), span);
+        let (data, en) = match self.m.const_offset(offset) {
+            Some(lo) => {
+                // Clipped to the element: what falls outside is dropped.
+                let start = lo.max(0);
+                let end = lo.saturating_add(i64::from(width)).min(i64::from(ew));
+                if start >= end {
+                    return;
+                }
+                let (Ok(s), Ok(e), Ok(from)) = (
+                    u32::try_from(start),
+                    u32::try_from(end),
+                    u32::try_from(start - lo),
+                ) else {
+                    return;
+                };
+                let piece = mk_slice(self.m, value, from + (e - s) - 1, from, span);
+                let piece = simplify(self.m, piece);
+                let lanes = mk(
+                    self.m,
+                    ExprKind::Replicate {
+                        expr: path,
+                        count: e - s,
+                    },
+                    span,
+                );
+                let mut data = Vec::new();
+                let mut en = Vec::new();
+                if e < ew {
+                    data.push(zeros(self.m, ew - e));
+                    en.push(zeros(self.m, ew - e));
+                }
+                data.push(piece);
+                en.push(lanes);
+                if s > 0 {
+                    data.push(zeros(self.m, s));
+                    en.push(zeros(self.m, s));
+                }
+                (mk_concat(self.m, data, span), mk_concat(self.m, en, span))
+            }
+            None => {
+                let signed = self.m.expr(offset).ty.is_signed();
+                let v = mk(
+                    self.m,
+                    ExprKind::Resize {
+                        expr: value,
+                        width: ew,
+                        signed: false,
+                    },
+                    span,
+                );
+                let ones = mk_const(self.m, Const::ones(width.min(ew)).resize(ew), span);
+                let place = |m: &mut Module, x: ExprId| {
+                    let up = mk_binary(m, BinaryOp::Shl, x, offset, span);
+                    if !signed {
+                        return up;
+                    }
+                    // Below zero, the select starts under bit 0: what is
+                    // left of it moves down instead.
+                    let ow = m.expr(offset).ty.width().unwrap_or(1).max(1);
+                    let neg = mk_slice(m, offset, ow - 1, ow - 1, span);
+                    let back = mk_unary(m, UnaryOp::Neg, offset, span);
+                    let back = mk(
+                        m,
+                        ExprKind::Resize {
+                            expr: back,
+                            width: ow,
+                            signed: false,
+                        },
+                        span,
+                    );
+                    let down = mk_binary(m, BinaryOp::Shr, x, back, span);
+                    mk_mux(m, neg, down, up, span)
+                };
+                let data = place(self.m, v);
+                let mask = place(self.m, ones);
+                let cond = mk(
+                    self.m,
+                    ExprKind::Replicate {
+                        expr: path,
+                        count: ew,
+                    },
+                    span,
+                );
+                (data, mk_binary(self.m, BinaryOp::And, mask, cond, span))
+            }
+        };
+        let data = simplify(self.m, data);
+        let en = simplify(self.m, en);
+        self.mem_writes.push(MemWrite {
+            mem,
+            addr,
+            data,
+            en,
+            span,
+        });
     }
 
     /// `r[x*S +: P] <= v`, which the Verilog frontend hands over as `P`
@@ -795,6 +925,7 @@ impl<'a> Exec<'a> {
                 total
             }
             Lvalue::MemElem { mem, .. } => self.m.memories[*mem].elem.width().unwrap_or(0),
+            Lvalue::MemPart { width, .. } => *width,
         })
     }
 
@@ -1512,35 +1643,6 @@ pub(super) fn patterns_overlap(a: &Const, b: &Const, wildcard: bool) -> bool {
         let (x, y) = (a.bit(i), b.bit(i));
         !x.is_known() || !y.is_known() || x == y
     })
-}
-
-/// Whether `a` and `b` are the same expression, node for node, looking at
-/// most `depth` levels down; false when that is not enough to tell.
-fn same_expr(m: &Module, a: ExprId, b: ExprId, depth: u32) -> bool {
-    if a == b {
-        return true;
-    }
-    if depth == 0 {
-        return false;
-    }
-    let (x, y) = (m.expr(a), m.expr(b));
-    if x.ty != y.ty {
-        return false;
-    }
-    let (ox, oy) = (operands(&x.kind), operands(&y.kind));
-    // The node itself, with its operands blanked out, must match; then
-    // every operand in turn.
-    let mut kx = x.kind.clone();
-    let mut ky = y.kind.clone();
-    let blank = <ExprId as crate::ir::arena::Id>::from_index(0);
-    replace_operands(&mut kx, &mut |e| *e = blank);
-    replace_operands(&mut ky, &mut |e| *e = blank);
-    kx == ky
-        && ox.len() == oy.len()
-        && ox
-            .iter()
-            .zip(&oy)
-            .all(|(p, q)| same_expr(m, *p, *q, depth - 1))
 }
 
 #[cfg(test)]

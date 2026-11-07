@@ -258,6 +258,29 @@ pub enum Lvalue {
         /// The element address.
         addr: ExprId,
     },
+    /// Some bits of one memory element, `mem[addr][offset +: width]`: the
+    /// byte write of `mem[a][15:8] <= d`, and `mem[a][8 * i +: 8]` with an
+    /// offset known only at run time.
+    ///
+    /// Bit `k` of the value goes to bit `offset + k` of the element,
+    /// counted from its least significant bit; the offset is a signed
+    /// number when its type is signed, an unsigned one otherwise. A bit
+    /// that lands below bit 0 or at or past the element's width is dropped,
+    /// as IEEE 1364-2005 §5.2.1 has a part-select partly out of range
+    /// written (`mem[a][j -: 8]` with `j` 3 writes bits 3 to 0), and the
+    /// whole write is dropped when the offset or the address has an `x` or
+    /// `z` bit or the address is out of range. Every other bit of the
+    /// element keeps its value.
+    MemPart {
+        /// The memory.
+        mem: MemoryId,
+        /// The element address.
+        addr: ExprId,
+        /// The element bit that bit 0 of the value is written to.
+        offset: ExprId,
+        /// The number of bits written; at least one.
+        width: u32,
+    },
 }
 
 impl Lvalue {
@@ -268,7 +291,7 @@ impl Lvalue {
                 vec![*n]
             }
             Lvalue::Concat(parts) => parts.iter().flat_map(Lvalue::nets).collect(),
-            Lvalue::MemElem { .. } => Vec::new(),
+            Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => Vec::new(),
         }
     }
 }

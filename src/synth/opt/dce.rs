@@ -87,7 +87,7 @@ impl Pass for Dce {
 /// The memories an assignment's target writes an element of.
 fn lvalue_memories(target: &Lvalue) -> Vec<MemoryId> {
     match target {
-        Lvalue::MemElem { mem, .. } => vec![*mem],
+        Lvalue::MemElem { mem, .. } | Lvalue::MemPart { mem, .. } => vec![*mem],
         Lvalue::Concat(parts) => parts.iter().flat_map(lvalue_memories).collect(),
         Lvalue::Net(_) | Lvalue::Slice { .. } | Lvalue::Index { .. } => Vec::new(),
     }
@@ -163,7 +163,7 @@ impl Liveness {
                     mem_work.push(mem);
                 }
                 if let crate::ir::StmtKind::Assign {
-                    target: Lvalue::MemElem { mem, .. },
+                    target: Lvalue::MemElem { mem, .. } | Lvalue::MemPart { mem, .. },
                     ..
                 } = s.kind
                 {
@@ -288,7 +288,7 @@ pub(crate) fn map_memories(m: &mut Module, f: impl Fn(MemoryId) -> MemoryId) {
     }
     fn lvalue(lv: &mut Lvalue, f: &dyn Fn(MemoryId) -> MemoryId) {
         match lv {
-            Lvalue::MemElem { mem, .. } => *mem = f(*mem),
+            Lvalue::MemElem { mem, .. } | Lvalue::MemPart { mem, .. } => *mem = f(*mem),
             Lvalue::Concat(parts) => parts.iter_mut().for_each(|p| lvalue(p, f)),
             _ => {}
         }

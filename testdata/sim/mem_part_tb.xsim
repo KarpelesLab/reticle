@@ -1,0 +1,27 @@
+start: m xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+const: m xxxxxx11 xxxxxxxx xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+const2: m 44xx2211 xxxxxxxx xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+bit: m 44xX2211 xxxxxxxx xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+varbit: m 44XX2211 xxxxxxxx xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+xbit: m 44XX2211 xxxxxxxx xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+up-high: m 44XX2211 f0000000 xxxxxxxx xxxxxxxx a xxxx xxxx s xx xx r xx xx
+down-low: m 44XX2211 f0000000 00000005 xxxxxxxx a xxxx xxxx s xx xx r xx xx
+up-neg: m 44XX2211 f0000000 00000005 00000002 a xxxx xxxx s xx xx r xx xx
+up-out: m 44XX2211 f0000000 00000005 00000002 a xxxx xxxx s xx xx r xx xx
+signed: m 44XX2211 f0000000 00000005 00000006 a xxxx xxxx s xx xx r xx xx
+xbase: m 44XX2211 f0000000 00000005 00000006 a xxxx xxxx s xx xx r xx xx
+xaddr: m 44XX2211 f0000000 00000005 00000006 a xxxx xxxx s xx xx r xx xx
+varaddr: m 44XX2211 f0000700 00000005 00000006 a xxxx xxxx s xx xx r xx xx
+asc: m 44XX2211 f0000700 00000005 00000006 a ab00 xxxx s xx xx r xx xx
+asc2: m 44XX2211 f0000700 00000005 00000006 a ab0c e8ff s xx xx r xx xx
+signed2: m 44XX2211 f0000700 00000005 00000006 a ab0c e8ff s 8f 7f r xx xx
+signed: -113 127
+offset: m 44XX2211 f0000700 00000005 00000006 a ab0c e8ff s 8f 7f r 09 0f
+reads: 22 21 70 1010
+nba1: m 00ad00ef ffffffff 00000005 00000006 a ab0c e8ff s 8f 7f r 09 0f
+nba2: m 00ad00ef 01ff45ff 00000005 00000006 a ab0c e8ff s 8f 7f r 09 0f
+nba-xen: m 99ad00ef 01ff45ff 00000005 00000006 a ab0c e8ff s 8f 7f r 09 0f
+nba-xaddr: m 99ad00ef 01ff45ff 00000005 00000006 a ab0c e8ff s 8f 7f r 09 0f
+overlap: m 99ad00ef 01ff45ff 30001221 00000006 a ab0c e8ff s 8f 7f r 09 0f
+before: 12345678
+after: 123456ff

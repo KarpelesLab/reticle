@@ -93,6 +93,15 @@ pub(crate) fn mk_mux(
     mk(m, ExprKind::Ternary { cond, then_, else_ }, span)
 }
 
+/// `(en & a) | (~en & b)`: `a` where a bit of `en` is set and `b` where
+/// it is clear, the per-bit choice of a write with an enable per bit.
+pub(crate) fn mk_blend(m: &mut Module, en: ExprId, a: ExprId, b: ExprId, span: Span) -> ExprId {
+    let take = mk_binary(m, BinaryOp::And, en, a, span);
+    let not = mk_unary(m, UnaryOp::Not, en, span);
+    let keep = mk_binary(m, BinaryOp::And, not, b, span);
+    mk_binary(m, BinaryOp::Or, take, keep, span)
+}
+
 /// A resize node, or the operand itself when its type already matches.
 pub(crate) fn mk_resize(
     m: &mut Module,
@@ -199,6 +208,38 @@ pub(crate) fn mk_or_tree(m: &mut Module, terms: &[ExprId], span: Span) -> ExprId
         level = next;
     }
     level[0]
+}
+
+/// Whether `a` and `b` are the same expression, node for node, looking at
+/// most `depth` levels down; false when that is not enough to tell.
+pub(crate) fn same_expr(m: &Module, a: ExprId, b: ExprId, depth: u32) -> bool {
+    if a == b {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    let (x, y) = (m.expr(a), m.expr(b));
+    if x.ty != y.ty {
+        return false;
+    }
+    let (ox, oy) = (
+        crate::ir::expr::operands(&x.kind),
+        crate::ir::expr::operands(&y.kind),
+    );
+    // The node itself, with its operands blanked out, must match; then
+    // every operand in turn.
+    let mut kx = x.kind.clone();
+    let mut ky = y.kind.clone();
+    let blank = <ExprId as crate::ir::arena::Id>::from_index(0);
+    crate::synth::opt::replace_operands(&mut kx, &mut |e| *e = blank);
+    crate::synth::opt::replace_operands(&mut ky, &mut |e| *e = blank);
+    kx == ky
+        && ox.len() == oy.len()
+        && ox
+            .iter()
+            .zip(&oy)
+            .all(|(p, q)| same_expr(m, *p, *q, depth - 1))
 }
 
 /// The value of a known single-bit constant node.

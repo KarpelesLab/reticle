@@ -50,6 +50,10 @@ pub fn lvalue_exprs(lv: &Lvalue, f: &mut dyn FnMut(ExprId)) {
         Lvalue::Index { index, .. } => f(*index),
         Lvalue::Concat(parts) => parts.iter().for_each(|p| lvalue_exprs(p, f)),
         Lvalue::MemElem { addr, .. } => f(*addr),
+        Lvalue::MemPart { addr, offset, .. } => {
+            f(*addr);
+            f(*offset);
+        }
     }
 }
 
@@ -139,6 +143,10 @@ fn lvalue_expr_slots(lv: &mut Lvalue, f: &mut dyn FnMut(&mut ExprId)) {
         Lvalue::Index { index, .. } => f(index),
         Lvalue::Concat(parts) => parts.iter_mut().for_each(|p| lvalue_expr_slots(p, f)),
         Lvalue::MemElem { addr, .. } => f(addr),
+        Lvalue::MemPart { addr, offset, .. } => {
+            f(addr);
+            f(offset);
+        }
     }
 }
 
@@ -147,7 +155,7 @@ fn lvalue_net_slots(lv: &mut Lvalue, f: &mut dyn FnMut(&mut NetId)) {
     match lv {
         Lvalue::Net(net) | Lvalue::Slice { net, .. } | Lvalue::Index { net, .. } => f(net),
         Lvalue::Concat(parts) => parts.iter_mut().for_each(|p| lvalue_net_slots(p, f)),
-        Lvalue::MemElem { .. } => {}
+        Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => {}
     }
 }
 

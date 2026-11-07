@@ -584,6 +584,10 @@ impl Printer<'_> {
                 let data = self.input(cell, "data")?;
                 let en = self.input(cell, "en")?;
                 let mut name = format!("MEMWR_{}_{}", data.len(), addr.len());
+                if en.len() > 1 {
+                    // An enable per bit is a port of another width.
+                    name.push_str("_BE");
+                }
                 if *clocked {
                     name.push_str("_CLK");
                     let clk = self.input(cell, "clk")?;

@@ -312,6 +312,19 @@ pub(crate) enum Store {
         /// The element index.
         addr: u64,
     },
+    /// Some bits of one memory element: bit `k` of the value goes to bit
+    /// `lo + k` of the element, and what falls outside it nowhere.
+    MemPart {
+        /// The memory.
+        mem: MemId,
+        /// The element index.
+        addr: u64,
+        /// The element bit that the value's bit 0 goes to; below zero
+        /// when the select starts below the element.
+        lo: i64,
+        /// The number of bits stored.
+        width: u32,
+    },
     /// Bits that go nowhere: an out-of-range index or an unknown address.
     Skip {
         /// The number of bits dropped.

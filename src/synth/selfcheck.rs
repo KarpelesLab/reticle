@@ -57,6 +57,8 @@ enum Flow {
 enum Update {
     Net(Lvalue, Const),
     Mem(MemoryId, Const, Const),
+    /// A write of the bits of the element the mask sets.
+    MemBits(MemoryId, Const, Const, Const),
 }
 
 impl<'a> Sim<'a> {
@@ -143,6 +145,58 @@ impl<'a> Sim<'a> {
                 let a = self.value(*addr);
                 self.mem_write(*mem, &a, v);
             }
+            Lvalue::MemPart { .. } => {
+                if let Some((mem, a, v, mask)) = self.part(lv, v) {
+                    self.mem_write_bits(mem, &a, &v, &mask);
+                }
+            }
+        }
+    }
+
+    /// The address, data and mask of a write to part of an element, the
+    /// data and mask as wide as the element; `None` when the offset is
+    /// unknown.
+    fn part(&mut self, target: &Lvalue, v: Const) -> Option<(MemoryId, Const, Const, Const)> {
+        let Lvalue::MemPart {
+            mem,
+            addr,
+            offset,
+            width,
+        } = target
+        else {
+            return None;
+        };
+        let ew = self.m.memories[*mem].elem.width().unwrap_or(0);
+        let a = self.value(*addr);
+        let lo = self
+            .value(*offset)
+            .with_signed(self.m.expr(*offset).ty.is_signed())
+            .to_i64()?;
+        let mut data = Const::zero(ew);
+        let mut mask = Const::zero(ew);
+        for k in 0..*width {
+            let at = lo + i64::from(k);
+            if let Ok(at) = u32::try_from(at)
+                && at < ew
+            {
+                data.set_bit(at, v.bit(k));
+                mask.set_bit(at, Bit::One);
+            }
+        }
+        Some((*mem, a, data, mask))
+    }
+
+    fn mem_write_bits(&mut self, mem: MemoryId, addr: &Const, v: &Const, mask: &Const) {
+        if let Some(a) = addr.to_u64()
+            && let Some(slot) =
+                self.mems[mem.index()].get_mut(usize::try_from(a).unwrap_or(usize::MAX))
+        {
+            let v = v.resize(slot.width());
+            for k in 0..slot.width().min(mask.width()) {
+                if mask.bit(k) == Bit::One {
+                    slot.set_bit(k, v.bit(k));
+                }
+            }
         }
     }
 
@@ -153,6 +207,7 @@ impl<'a> Sim<'a> {
             Lvalue::Index { .. } => 1,
             Lvalue::Concat(parts) => parts.iter().map(|p| self.lvalue_width(p)).sum(),
             Lvalue::MemElem { mem, .. } => self.m.memories[*mem].elem.width().unwrap_or(0),
+            Lvalue::MemPart { width, .. } => *width,
         }
     }
 
@@ -170,6 +225,7 @@ impl<'a> Sim<'a> {
             match u {
                 Update::Net(lv, v) => self.write(&lv, v),
                 Update::Mem(mem, a, v) => self.mem_write(mem, &a, v),
+                Update::MemBits(mem, a, v, mask) => self.mem_write_bits(mem, &a, &v, &mask),
             }
         }
     }
@@ -198,6 +254,11 @@ impl<'a> Sim<'a> {
                     (AssignKind::NonBlocking, Lvalue::MemElem { mem, addr }) => {
                         let a = self.value(*addr);
                         nba.push(Update::Mem(*mem, a, v));
+                    }
+                    (AssignKind::NonBlocking, Lvalue::MemPart { .. }) => {
+                        if let Some((mem, a, v, mask)) = self.part(target, v) {
+                            nba.push(Update::MemBits(mem, a, v, mask));
+                        }
                     }
                     (AssignKind::NonBlocking, _) => nba.push(Update::Net(target.clone(), v)),
                 }
@@ -447,9 +508,12 @@ impl<'a> Sim<'a> {
                         mem,
                         clocked: false,
                     } => {
-                        if self.truth(cell.input("en").expect("en")) == Bit::One {
-                            let a = self.value(cell.input("addr").expect("addr"));
-                            let v = self.value(cell.input("data").expect("data"));
+                        let en = self.value(cell.input("en").expect("en"));
+                        let a = self.value(cell.input("addr").expect("addr"));
+                        let v = self.value(cell.input("data").expect("data"));
+                        if en.width() > 1 {
+                            self.mem_write_bits(*mem, &a, &v, &en);
+                        } else if en.truth() == Bit::One {
                             self.mem_write(*mem, &a, v);
                         }
                     }
@@ -522,12 +586,15 @@ impl<'a> Sim<'a> {
                         ));
                     }
                 }
-                CellKind::MemWrPort { mem, clocked: true }
-                    if self.truth(cell.input("en").expect("en")) == Bit::One =>
-                {
+                CellKind::MemWrPort { mem, clocked: true } => {
+                    let en = self.value(cell.input("en").expect("en"));
                     let a = self.value(cell.input("addr").expect("addr"));
                     let v = self.value(cell.input("data").expect("data"));
-                    mem_writes.push(Update::Mem(*mem, a, v));
+                    if en.width() > 1 {
+                        mem_writes.push(Update::MemBits(*mem, a, v, en));
+                    } else if en.truth() == Bit::One {
+                        mem_writes.push(Update::Mem(*mem, a, v));
+                    }
                 }
                 _ => {}
             }

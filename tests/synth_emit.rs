@@ -165,12 +165,13 @@ fn golden_designs_emit_as_netlists() {
 
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     // `unsynth.rtl` keeps a process on purpose; everything else must
-    // emit. BLIF additionally loses the memory and asynchronous-reset
-    // designs, so it is two short of the others.
+    // emit. BLIF additionally loses the two memory designs
+    // (`ram_regread`, `mem_part_write`) and the asynchronous-reset one,
+    // so it is three short of the others.
     let expected = paths.len() - 1;
     assert_eq!(emitted[0], expected, "JSON");
     assert_eq!(emitted[1], expected, "EDIF");
-    assert_eq!(emitted[2], expected - 2, "BLIF");
+    assert_eq!(emitted[2], expected - 3, "BLIF");
 }
 
 /// The pass really is what makes the difference: with `cellify` off, the

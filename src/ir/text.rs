@@ -615,6 +615,17 @@ impl<'a> Printer<'a> {
             Lvalue::MemElem { mem, addr } => {
                 format!("{}[{}]", self.mem_ref(*mem), self.expr(*addr))
             }
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => format!(
+                "{}[{}][{} +: {width}]",
+                self.mem_ref(*mem),
+                self.expr(*addr),
+                self.expr(*offset)
+            ),
         }
     }
 
@@ -2220,7 +2231,19 @@ impl Parser {
                 self.expect_punct("[")?;
                 let addr = self.expr()?;
                 self.expect_punct("]")?;
-                Ok(Lvalue::MemElem { mem, addr })
+                if !self.eat_punct("[") {
+                    return Ok(Lvalue::MemElem { mem, addr });
+                }
+                let offset = self.expr()?;
+                self.expect_punct("+:")?;
+                let width = self.expect_u32()?;
+                self.expect_punct("]")?;
+                Ok(Lvalue::MemPart {
+                    mem,
+                    addr,
+                    offset,
+                    width,
+                })
             }
             Tok::Punct("{") => {
                 self.bump();

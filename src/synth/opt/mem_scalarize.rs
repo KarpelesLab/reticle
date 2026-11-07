@@ -40,7 +40,7 @@ use crate::source::Span;
 use crate::synth::eval::eval_closed;
 use crate::synth::opt::dce::map_memories;
 use crate::synth::util::{
-    add_cell, add_wire, const_bit, mk_binary, mk_const, mk_mux, mk_net, mk_undef,
+    add_cell, add_wire, const_bit, mk_binary, mk_blend, mk_const, mk_mux, mk_net, mk_undef,
 };
 use crate::synth::{Pass, PassStats};
 
@@ -175,6 +175,8 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
     let mut assigned: Vec<usize> = Vec::new();
     for (i, a) in m.assigns.iter().enumerate() {
         match &a.target {
+            // Part of a word driven as a wire: left as a memory.
+            Lvalue::MemPart { mem: x, .. } if *x == mem => return None,
             Lvalue::MemElem { mem: x, addr } if *x == mem => {
                 let addr = eval_closed(m, *addr)?.to_u64()?;
                 if let Some(word) = usize::try_from(addr).ok().filter(|w| *w < size) {
@@ -253,14 +255,28 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
         }
         let hold = mk_net(m, *net, span);
         let clk = writers.last().and_then(|p| p.clk);
-        let d = match decision_tree(m, &writers, hold, span) {
+        // A write of part of a word has an enable per bit: each bit is
+        // chosen on its own, which the decision tree does not do.
+        let per_bit = writers.iter().any(|p| {
+            p.en.is_some_and(|en| m.expr(en).ty.width().unwrap_or(1) > 1)
+        });
+        let tree = if per_bit {
+            None
+        } else {
+            decision_tree(m, &writers, hold, span)
+        };
+        let d = match tree {
             Some(d) => d,
             None => {
                 // The latest port is the outermost choice, so it wins.
                 let mut d = hold;
                 for port in &writers {
                     if let (Some(en), Some(data)) = (port.en, port.data) {
-                        d = mk_mux(m, en, data, d, span);
+                        d = if m.expr(en).ty.width().unwrap_or(1) > 1 {
+                            mk_blend(m, en, data, d, span)
+                        } else {
+                            mk_mux(m, en, data, d, span)
+                        };
                     }
                 }
                 d
@@ -344,7 +360,7 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
 /// True when any of `parts` writes an element of `mem`.
 fn writes_memory(parts: &[Lvalue], mem: MemoryId) -> bool {
     parts.iter().any(|p| match p {
-        Lvalue::MemElem { mem: x, .. } => *x == mem,
+        Lvalue::MemElem { mem: x, .. } | Lvalue::MemPart { mem: x, .. } => *x == mem,
         Lvalue::Concat(inner) => writes_memory(inner, mem),
         _ => false,
     })

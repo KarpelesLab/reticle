@@ -1,0 +1,45 @@
+top mem_part_write
+
+// A memory written a byte at a time, as `mem[a][i*8 +: 8] <= d[i*8 +: 8]`
+// under `we[i]` reaches synthesis from the Verilog frontend: four writes of
+// part of an element at constant offsets, which lower to write ports whose
+// enable is as wide as the element, its condition on the byte written and
+// zero elsewhere. A fifth write, a nibble at an offset known only at run
+// time, shifts its data and enable into place. The read is registered.
+module mem_part_write
+  net %clk u1 wire
+  net %we u4 wire
+  net %nib u1 wire
+  net %at u3 wire
+  net %waddr u4 wire
+  net %raddr u4 wire
+  net %wdata u32 wire
+  net %rdata u32 reg
+  port clk in %clk
+  port we in %we
+  port nib in %nib
+  port at in %at
+  port waddr in %waddr
+  port raddr in %raddr
+  port wdata in %wdata
+  port rdata out %rdata
+  memory @mem 16 x u32
+  process p seq posedge %clk
+    if %we[0:0]
+      @mem[%waddr][32'sd0 +: 8] <= %wdata[7:0]
+    end
+    if %we[1:1]
+      @mem[%waddr][32'sd8 +: 8] <= %wdata[15:8]
+    end
+    if %we[2:2]
+      @mem[%waddr][32'sd16 +: 8] <= %wdata[23:16]
+    end
+    if %we[3:3]
+      @mem[%waddr][32'sd24 +: 8] <= %wdata[31:24]
+    end
+    if %nib
+      @mem[%raddr][{%at, 2'd0} +: 4] <= %wdata[3:0]
+    end
+    %rdata <= @mem[%raddr]
+  end
+end

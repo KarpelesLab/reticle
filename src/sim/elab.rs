@@ -165,6 +165,17 @@ pub(crate) enum Target {
         /// The address expression.
         addr: ExprId,
     },
+    /// Some bits of a memory element, as [`Lvalue::MemPart`] has them.
+    MemPart {
+        /// The memory.
+        mem: MemId,
+        /// The address expression.
+        addr: ExprId,
+        /// The offset of the value's bit 0 in the element.
+        offset: ExprId,
+        /// The number of bits written.
+        width: u32,
+    },
     /// A concatenation, most significant part first.
     Concat(Vec<Target>),
 }
@@ -174,7 +185,7 @@ impl Target {
     pub(crate) fn sigs(&self, out: &mut Vec<SigId>) {
         match self {
             Target::Sig { sig, .. } | Target::Index { sig, .. } => out.push(*sig),
-            Target::Mem { .. } => {}
+            Target::Mem { .. } | Target::MemPart { .. } => {}
             Target::Concat(parts) => parts.iter().for_each(|p| p.sigs(out)),
         }
     }
@@ -185,6 +196,10 @@ impl Target {
             Target::Sig { .. } => {}
             Target::Index { index, .. } => out.push(*index),
             Target::Mem { addr, .. } => out.push(*addr),
+            Target::MemPart { addr, offset, .. } => {
+                out.push(*addr);
+                out.push(*offset);
+            }
             Target::Concat(parts) => parts.iter().for_each(|p| p.exprs(out)),
         }
     }
@@ -786,6 +801,17 @@ impl<'d> Simulator<'d> {
             Lvalue::MemElem { mem, addr } => Target::Mem {
                 mem: state.mems[mem.index()],
                 addr: *addr,
+            },
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => Target::MemPart {
+                mem: state.mems[mem.index()],
+                addr: *addr,
+                offset: *offset,
+                width: *width,
             },
         }
     }

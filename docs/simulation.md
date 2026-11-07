@@ -459,6 +459,43 @@ not the order of magnitude a compiled simulator is supposed to be worth:
   Generating Rust, or a threaded dispatch table, would remove that, and
   would be the step after the optimiser.
 
+## Writing part of a memory element
+
+`mem[a][7:0] <= d`, `mem[a][j] = b`, `mem[a][j +: 8]` and `mem[a][j -: 8]`, and
+in SystemVerilog `mem[a][k] <= d` on an element that is a packed array of bytes,
+write those bits of that element and leave the rest (the IR's `MemPart`,
+`docs/ir.md`). A select partly outside the element writes the bits inside it, one
+wholly outside nothing, and an `x` in the address, the index or an enable writes
+nothing; two non-blocking writes of one word in one time step each keep what the
+other does not write, the later winning where they overlap. VHDL's
+`mem(a)(15 downto 8) <= d` and `mem(a)(i) <= '1'` are the same, on a signal and
+on a variable, their slice bounds static as any slice target's must be here.
+
+**Measured**: `testdata/sim/mem_part_tb.v` and `mem_part_sv_tb.sv` print every
+one of those cases, and the event simulator prints what xsim 2026.1 printed for
+them, line for line (`.xsim` beside them, `tests/cli.rs`);
+`testdata/sim/mem_part_tb.vhd` holds itself to the values xsim printed for its
+writes. The compiled engine agrees with the event simulator on
+`testdata/synth/mem_part_write.rtl`, in process form and in cell form, whose
+write ports then have an enable per bit.
+
+Before, the frontend took `mem[a]` for `mem` (it names a generate block's
+iteration that way) and wrote element `j` for `mem[a][j] = ..`, or nothing for
+`mem[a][7:0] <= ..`, silently; then refused both. The VHDL frontend refused them
+(`V0701`, a nested slice target).
+
+Not done: a continuous assignment to part of an element (`assign w[0][3:0] =
+..`) is refused, as a word built of pieces of wires; so is a select of a
+bit-select of a vector. A **read** of a part-select partly outside an element
+reads all `x` here, of an element as of any vector, where xsim reads the bits
+inside it and `x` for the rest (`n[j -: 8]` with `j` 4 of a 32-bit `n` is `2X`
+under xsim when `n` is 5, `xx` here); measured, and not changed, since it is the
+reading of every vector's part-select and changing it changes what synthesis
+builds. A VHDL slice whose bounds move with a loop's index
+(`mem(a)(8 * i + 7 downto 8 * i)` in a `for` loop) is refused here for any
+target, so the byte-write loop written that way is not taken;
+one `if` per lane is.
+
 ## Tests
 
 - Unit tests next to the code: the scheduler, the process interpreter, the

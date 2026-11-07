@@ -139,7 +139,19 @@ Edge { net, polarity: Pos | Neg | Any }
 | `Finish`, `Stop`, `Break`, `Continue` | |
 
 `Lvalue`: `Net`, `Slice { net, hi, lo }`, `Index { net, index }`,
-`Concat(Vec<Lvalue>)`, `MemElem { mem, addr }`.
+`Concat(Vec<Lvalue>)`, `MemElem { mem, addr }`, `MemPart { mem, addr, offset,
+width }`.
+
+`MemPart` is part of one memory element: `mem[a][15:8] <= d`, or
+`mem[a][8 * i +: 8]` with an offset known only at run time. Bit `k` of the value
+goes to bit `offset + k` of the element, counted from its least significant bit,
+the offset signed when its type is: a bit that lands below the element or past
+its top is dropped, as IEEE 1364-2005 §5.2.1 has a part-select partly out of range
+written, and the whole write is dropped when the offset or the address has an
+`x` or `z` bit. The rest of the element keeps its value. Both simulators, the
+synthesis and the emitters take it; `testdata/sim/mem_part_tb.v` holds the event
+simulator to what xsim 2026.1 prints for every one of those cases (**measured**,
+line for line).
 
 Time: `Delay { value: u64, unit: TimeUnit }` with `TimeUnit` from `Fs` to
 `S`; a module may carry `Timescale { unit, precision }`.
@@ -159,6 +171,11 @@ Dff { clk_pos, has_enable, reset: Option<Reset { asynchronous, active_high, valu
 Dlatch  MemRdPort { mem, clocked }  MemWrPort { mem, clocked }
 Lut { k, init }  Buf  Tristate  Blackbox(name)
 ```
+
+A `MemWrPort`'s `en` is one bit, or one bit per bit of the element: synthesis
+gives a write of part of an element (`MemPart`) an enable that is the write's
+condition on the bits it writes and zero on the rest, as Yosys's `$memwr` has
+one per bit, so the byte-write loop is four ports at one address, a byte each.
 
 ### Instances
 
@@ -474,7 +491,8 @@ release %<net>
 finish | stop | break | continue
 ```
 
-Lvalues: `%n`, `%n[7:0]`, `%n[<expr>]`, `{<lvalue>, ...}`, `@m[<expr>]`.
+Lvalues: `%n`, `%n[7:0]`, `%n[<expr>]`, `{<lvalue>, ...}`, `@m[<expr>]`,
+`@m[<expr>][<offset> +: <width>]`.
 
 `base` is omitted when it is 0. The file format the memory file
 statements read and write, and their address rules, are in

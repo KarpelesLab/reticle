@@ -964,7 +964,9 @@ fn lvalue_name(m: &Module, lv: &Lvalue) -> String {
         Lvalue::Concat(parts) => parts
             .first()
             .map_or_else(|| "assign".to_owned(), |p| lvalue_name(m, p)),
-        Lvalue::MemElem { mem, .. } => m.memories[*mem].name.to_string(),
+        Lvalue::MemElem { mem, .. } | Lvalue::MemPart { mem, .. } => {
+            m.memories[*mem].name.to_string()
+        }
     }
 }
 

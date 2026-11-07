@@ -1378,6 +1378,38 @@ impl<'a> Printer<'a> {
                     kind_of(&self.module.memories[*mem].elem),
                 )
             }
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => {
+                let memory = &self.module.memories[*mem];
+                let elem = memory.elem.width().unwrap_or(0);
+                let k = kind_of(&memory.elem);
+                let range = self
+                    .module
+                    .const_offset(*offset)
+                    .and_then(|lo| u32::try_from(lo).ok())
+                    .filter(|lo| lo.checked_add(*width).is_some_and(|end| end <= elem));
+                let Some(lo) = range else {
+                    return Err(self.err(
+                        Span::new(self.module.span.file, 0, 0),
+                        "a write to part of a memory element at an offset known only \
+                         at run time, or partly outside it",
+                    ));
+                };
+                let name = self.mem_names[mem.index()].clone();
+                let idx = self.index_text(*addr)?;
+                let hi = lo + width - 1;
+                if hi == lo && k != K::Sl {
+                    (format!("{name}({idx})({lo})"), K::Sl)
+                } else if hi == lo {
+                    (format!("{name}({idx})"), K::Sl)
+                } else {
+                    (format!("{name}({idx})({hi} downto {lo})"), k)
+                }
+            }
         })
     }
 
@@ -1467,6 +1499,7 @@ impl<'a> Printer<'a> {
             Lvalue::Index { .. } => 1,
             Lvalue::Concat(parts) => parts.iter().map(|p| self.lvalue_width(p)).sum(),
             Lvalue::MemElem { mem, .. } => self.module.memories[*mem].elem.width().unwrap_or(0),
+            Lvalue::MemPart { width, .. } => *width,
         }
     }
 
@@ -2205,6 +2238,49 @@ impl<'a> Printer<'a> {
                 let elem_k = kind_of(&self.module.memories[*mem].elem);
                 let data = self.conv(data, elem_k);
                 let en = self.cell_in(cell, "en")?;
+                let per_bit = cell
+                    .input("en")
+                    .and_then(|e| self.module.exprs[e].ty.width())
+                    .filter(|w| *w > 1);
+                if let (Some(width), true) = (per_bit, *clocked) {
+                    // An enable per bit: the enable and the data held in
+                    // variables so that a bit of each can be named.
+                    let elem_ty = self.module.memories[*mem].elem.clone();
+                    let elem_ty = self.type_text(&elem_ty)?;
+                    let en = self.conv(en, K::U);
+                    let clk = self.signal_input(cell, "clk")?;
+                    self.out.line(&format!("{label} : process ({clk})"));
+                    self.out.indent();
+                    self.out.line(&format!(
+                        "variable en_v : unsigned({} downto 0);",
+                        width - 1
+                    ));
+                    self.out.line(&format!("variable d_v : {elem_ty};"));
+                    self.out.dedent();
+                    self.out.line("begin");
+                    self.out.indent();
+                    self.out.line(&format!("if rising_edge({clk}) then"));
+                    self.out.indent();
+                    self.out.line(&format!("en_v := {en};"));
+                    self.out.line(&format!("d_v := {data};"));
+                    self.out.line(&format!("for k in 0 to {} loop", width - 1));
+                    self.out.indent();
+                    self.out.line(&format!(
+                        "if en_v(k) = '1' then {name}({idx})(k) <= d_v(k); end if;"
+                    ));
+                    self.out.dedent();
+                    self.out.line("end loop;");
+                    self.out.dedent();
+                    self.out.line("end if;");
+                    self.out.dedent();
+                    self.out.line("end process;");
+                    return Ok(());
+                }
+                if per_bit.is_some() {
+                    return Err(
+                        self.err(cell.span, "an unclocked write port with an enable per bit")
+                    );
+                }
                 let en = self.conv(en, K::Sl);
                 let write = format!("{name}({idx}) <= {data};");
                 if *clocked {

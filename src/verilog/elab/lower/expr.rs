@@ -1593,8 +1593,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     }
                 }
             }
-            ExprKind::Index { base, .. } if self.refuse_nested_select(base, e.span) => None,
-            ExprKind::Range { base, .. } if self.refuse_nested_select(base, e.span) => None,
+            ExprKind::Index { base, .. } | ExprKind::Range { base, .. }
+                if matches!(base.kind, ExprKind::Index { .. }) =>
+            {
+                match self.mem_part_lvalue(e, procedural) {
+                    Some(target) => target,
+                    None => {
+                        self.refuse_nested_select(base, e.span);
+                        None
+                    }
+                }
+            }
             ExprKind::Index { base, index } => match self.env.probe(|env| env.resolve_path(base)) {
                 Some(Symbol::Memory { mem, .. }) => {
                     // A write to a fixed element the array does not have
@@ -1726,20 +1735,280 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
-    /// Refuses `m[i][j] = ..` and `m[i][3:0] = ..`, a select of something
-    /// already selected, which the IR has no target for. Path resolution
-    /// sees through `m[i]` to `m`, so the select of the element used to
-    /// become a write of element `j`, or of nothing at all.
+    /// Refuses `n[i][j] = ..` on a net, a select of something already
+    /// selected that is not an element of a memory, which the IR has no
+    /// target for. Path resolution sees through `m[i]` to `m`, so the
+    /// select used to become a write of element `j`, or of nothing at all.
     fn refuse_nested_select(&mut self, base: &'ast Expr, span: Span) -> bool {
         if !matches!(base.kind, ExprKind::Index { .. }) {
             return false;
         }
         self.env.unsupported(
             span,
-            "an assignment to a select of an array element or of a bit-select; \
-             assign the whole element",
+            "an assignment to a select of a bit-select or of an element of a \
+             packed array; assign the whole of it",
         );
         true
+    }
+
+    /// `mem[a][j] = ..`, `mem[a][15:8] = ..`, `mem[a][8 * i +: 8] = ..` and
+    /// `mem[a][k][j] = ..` on an element that is a packed array: part of
+    /// one memory element, [`ir::Lvalue::MemPart`]. `None` when the select
+    /// is not of a memory element, for the caller to refuse.
+    ///
+    /// The offset is the bit of the element the selection's lowest bit is,
+    /// counted from bit 0 of the IR's element, and is signed: an indexed
+    /// part-select that starts below the element (`mem[a][j -: 8]` with
+    /// `j` 3) writes the bits that are inside it, as IEEE 1364-2005 §5.2.1
+    /// has a part-select partly out of range written, and one with an `x`
+    /// in its index nothing. A constant select wholly outside the element
+    /// is dropped with a warning, as one of a net is.
+    fn mem_part_lvalue(&mut self, e: &'ast Expr, procedural: bool) -> Option<Option<ir::Lvalue>> {
+        let mut chain = Vec::new();
+        let mut root = e;
+        while let ExprKind::Index { base, .. } | ExprKind::Range { base, .. } = &root.kind {
+            chain.push(root);
+            root = base;
+        }
+        chain.reverse();
+        let ExprKind::Index { index: address, .. } = &chain.first()?.kind else {
+            return None;
+        };
+        let Some(Symbol::Memory { mem, .. }) = self.env.probe(|env| env.resolve_path(root)) else {
+            return None;
+        };
+        if chain.len() < 2 {
+            return None;
+        }
+        if !procedural {
+            self.env.unsupported(
+                e.span,
+                "a continuous assignment to part of an array element; assign the \
+                 whole element, or write it in a process",
+            );
+            return Some(None);
+        }
+        let range = self.mems[mem.index()].range;
+        let constant = self
+            .env
+            .probe(|env| Evaluator::new(env).eval_i64(address).ok());
+        if let Some(i) = constant
+            && range.offset(i).is_none()
+        {
+            self.env.warning(
+                codes::OUT_OF_RANGE,
+                address.span,
+                format!("index {i} is outside {range}; the assignment is dropped"),
+            );
+            return Some(None);
+        }
+        let VType::Packed(mut p) = self.mems[mem.index()].elem.clone() else {
+            self.env.unsupported(
+                e.span,
+                "an assignment to part of an element that is not a vector",
+            );
+            return Some(None);
+        };
+        // The offset so far: a constant number of bits, plus a signed
+        // expression where an index is known only at run time.
+        let mut fixed: i64 = 0;
+        let mut varying: Option<ExprId> = None;
+        let mut width = p.width();
+        let selects = &chain[1..];
+        for (n, sel) in selects.iter().enumerate() {
+            let outer = p.outer();
+            let ew = p.element().width().max(1);
+            let raw = |i: i64| {
+                if outer.is_descending() {
+                    i - outer.right
+                } else {
+                    outer.right - i
+                }
+            };
+            match &sel.kind {
+                ExprKind::Index { index, .. } => {
+                    let constant = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(index).ok());
+                    match constant {
+                        Some(i) if outer.contains(i) => fixed += raw(i) * i64::from(ew),
+                        Some(i) => {
+                            self.env.warning(
+                                codes::OUT_OF_RANGE,
+                                index.span,
+                                format!("index {i} is outside {outer}; the assignment is dropped"),
+                            );
+                            return Some(None);
+                        }
+                        None => {
+                            let off = self.signed_element_offset(index, outer, ew, 0);
+                            varying = Some(self.add_offsets(varying, off));
+                        }
+                    }
+                    width = ew;
+                    p = p.element();
+                }
+                ExprKind::Range {
+                    kind, left, right, ..
+                } => {
+                    if n + 1 != selects.len() {
+                        self.env
+                            .unsupported(sel.span, "a select of a part-select of an array element");
+                        return Some(None);
+                    }
+                    let a = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(left).ok());
+                    let b = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(right).ok());
+                    match (a, b, kind) {
+                        (Some(a), Some(b), _) => {
+                            let (low, high) = match kind {
+                                ast::RangeKind::Fixed => (a.min(b), a.max(b)),
+                                ast::RangeKind::IndexedUp => (a, a + b - 1),
+                                ast::RangeKind::IndexedDown => (a - b + 1, a),
+                            };
+                            let inside = (outer.contains(low), outer.contains(high));
+                            if inside != (true, true) {
+                                let what = if inside == (false, false) {
+                                    "the assignment is dropped"
+                                } else {
+                                    "the bits outside it are dropped"
+                                };
+                                self.env.warning(
+                                    codes::OUT_OF_RANGE,
+                                    sel.span,
+                                    format!(
+                                        "part-select [{high}:{low}] is outside {outer}; {what}"
+                                    ),
+                                );
+                                if inside == (false, false) {
+                                    return Some(None);
+                                }
+                            }
+                            let (ol, oh) = (raw(low), raw(high));
+                            fixed += ol.min(oh) * i64::from(ew);
+                            let count = u32::try_from(ol.abs_diff(oh) + 1).unwrap_or(u32::MAX);
+                            width = count.saturating_mul(ew);
+                        }
+                        (
+                            None,
+                            Some(w),
+                            ast::RangeKind::IndexedUp | ast::RangeKind::IndexedDown,
+                        ) => {
+                            let w = match u32::try_from(w) {
+                                Ok(w) if w > 0 => w,
+                                _ => {
+                                    self.env.error(
+                                        codes::TYPE,
+                                        sel.span,
+                                        format!("a part-select of width {w}"),
+                                    );
+                                    return Some(None);
+                                }
+                            };
+                            // The lowest bit is the base's own, or the one
+                            // `w - 1` elements below it when the selection
+                            // runs the other way from the offsets.
+                            let back =
+                                matches!(kind, ast::RangeKind::IndexedUp) != outer.is_descending();
+                            let shift = if back { i64::from(w) - 1 } else { 0 };
+                            let off = self.signed_element_offset(left, outer, ew, shift);
+                            varying = Some(self.add_offsets(varying, off));
+                            width = w.saturating_mul(ew);
+                        }
+                        _ => {
+                            self.env.unsupported(
+                                sel.span,
+                                "an assignment to a part-select with a non-constant bound",
+                            );
+                            return Some(None);
+                        }
+                    }
+                }
+                _ => unreachable!("the chain holds selects only"),
+            }
+        }
+        let addr = self.mem_address(mem, address, &mut Sink::Cont);
+        self.b.span = e.span;
+        let offset = match varying {
+            None => self
+                .b
+                .constant(Logic::from_i64(fixed, 32).with_signed(true)),
+            Some(v) if fixed == 0 => v,
+            Some(v) => {
+                let w = self.b.module().exprs[v].ty.width().unwrap_or(32);
+                let k = self.b.constant(Logic::from_i64(fixed, w).with_signed(true));
+                self.b.add(v, k)
+            }
+        };
+        Some(Some(ir::Lvalue::MemPart {
+            mem,
+            addr,
+            offset,
+            width,
+        }))
+    }
+
+    /// The bit offset, from the right bound of `range`, of element `index`
+    /// less `shift` elements of `ew` bits each: a signed expression wide
+    /// enough to go below zero for an index below the range rather than
+    /// wrap back into it.
+    fn signed_element_offset(
+        &mut self,
+        index: &'ast Expr,
+        range: Range,
+        ew: u32,
+        shift: i64,
+    ) -> ExprId {
+        let info = self.info_of(index);
+        let bound = range.left.unsigned_abs().max(range.right.unsigned_abs());
+        let w = info.width().max(bits_needed(bound) + 1).clamp(1, 48);
+        let id = self.expr(
+            index,
+            Some(Ctx {
+                width: w,
+                signed: info.is_signed(),
+            }),
+            &mut Sink::Cont,
+        );
+        // Room for the sign, the subtraction and the multiplication.
+        let wide = (w + 2 + bits_needed(u64::from(ew))).min(64);
+        let s = self.b.resize(id, wide, true);
+        let right = self
+            .b
+            .constant(Logic::from_i64(range.right, wide).with_signed(true));
+        let mut off = if range.is_descending() {
+            self.b.sub(s, right)
+        } else {
+            self.b.sub(right, s)
+        };
+        if shift != 0 {
+            let k = self
+                .b
+                .constant(Logic::from_i64(shift, wide).with_signed(true));
+            off = self.b.sub(off, k);
+        }
+        if ew != 1 {
+            let k = self
+                .b
+                .constant(Logic::from_i64(i64::from(ew), wide).with_signed(true));
+            off = self.b.mul(off, k);
+        }
+        off
+    }
+
+    /// The sum of two signed offsets, the first absent at the start.
+    fn add_offsets(&mut self, a: Option<ExprId>, b: ExprId) -> ExprId {
+        let Some(a) = a else {
+            return b;
+        };
+        let wa = self.b.module().exprs[a].ty.width().unwrap_or(1);
+        let wb = self.b.module().exprs[b].ty.width().unwrap_or(1);
+        let w = (wa.max(wb) + 1).min(64);
+        let (a, b) = (self.b.resize(a, w, true), self.b.resize(b, w, true));
+        self.b.add(a, b)
     }
 
     /// `net[base +: width] = ..` or `net[base -: width] = ..` with a base
@@ -1901,6 +2170,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 .elem
                 .packed()
                 .map_or(1, Packed::width),
+            ir::Lvalue::MemPart { width, .. } => *width,
         }
     }
 
@@ -1911,7 +2181,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             | ir::Lvalue::Slice { net: n, .. }
             | ir::Lvalue::Index { net: n, .. } => self.b.module().nets[*n].name.to_string(),
             ir::Lvalue::Concat(_) => "{...}".to_owned(),
-            ir::Lvalue::MemElem { mem, .. } => self.b.module().memories[*mem].name.to_string(),
+            ir::Lvalue::MemElem { mem, .. } | ir::Lvalue::MemPart { mem, .. } => {
+                self.b.module().memories[*mem].name.to_string()
+            }
         }
     }
 
@@ -1933,7 +2205,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     self.note_assign_drivers(p, key, span, _procedural);
                 }
             }
-            ir::Lvalue::MemElem { .. } => {}
+            ir::Lvalue::MemElem { .. } | ir::Lvalue::MemPart { .. } => {}
         }
     }
 }

@@ -543,9 +543,14 @@ impl ModulePrinter<'_> {
                 } else {
                     inp("CLK", vec![SigBit::Const(Bit::X)]);
                 }
-                // Yosys write enables are per bit.
-                let en_bit = en.first().copied().unwrap_or(SigBit::Const(Bit::One));
-                inp("EN", vec![en_bit; data.len()]);
+                // Yosys write enables are per bit, as one of part of an
+                // element is here.
+                if en.len() == data.len() && en.len() > 1 {
+                    inp("EN", en);
+                } else {
+                    let en_bit = en.first().copied().unwrap_or(SigBit::Const(Bit::One));
+                    inp("EN", vec![en_bit; data.len()]);
+                }
                 inp("ADDR", addr);
                 inp("DATA", data);
                 "$memwr".to_owned()

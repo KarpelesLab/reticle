@@ -58,7 +58,9 @@ use crate::sim::value::{elem_count, elem_width, flat_width};
 
 use super::check::{Ineligible, Reason};
 use super::engine::State;
-use super::prog::{MemLayout, Message, MsgArg, Op, Program, ProgramStats, Slot, known_words};
+use super::prog::{
+    MemBits, MemLayout, Message, MsgArg, Op, Program, ProgramStats, Slot, known_words,
+};
 use super::words;
 
 /// An index into the lowerer's value table.
@@ -778,7 +780,7 @@ impl<'d> Lowerer<'d> {
         match target {
             Target::Sig { sig, lo, width } => out.push((*sig, Some((*lo, *width)))),
             Target::Index { sig, .. } => out.push((*sig, None)),
-            Target::Mem { .. } => {}
+            Target::Mem { .. } | Target::MemPart { .. } => {}
             Target::Concat(parts) => parts.iter().for_each(|p| self.target_writes(p, out)),
         }
     }
@@ -1295,7 +1297,7 @@ impl<'d> Lowerer<'d> {
                 // no bit of the net counts as driven and the coverage
                 // check reports the rest as undriven.
             }
-            Target::Mem { .. } => {
+            Target::Mem { .. } | Target::MemPart { .. } => {
                 self.err(ctx.label.clone(), Reason::MemoryOutsideEdge, Some(ctx.span));
             }
             Target::Concat(parts) => {
@@ -1317,6 +1319,7 @@ impl<'d> Lowerer<'d> {
             Target::Sig { width, .. } => *width,
             Target::Index { elem, .. } => *elem,
             Target::Mem { mem, .. } => self.sim.memories[mem.idx()].elem_width,
+            Target::MemPart { width, .. } => *width,
             Target::Concat(parts) => parts.iter().map(|p| self.target_width(p)).sum(),
         }
     }
@@ -1765,11 +1768,20 @@ impl<'d> Lowerer<'d> {
                 let layout = &self.fold_prog.mems[mid.idx()];
                 let (ew, signed) = (layout.elem_width, layout.signed);
                 let data = self.resize(true, data, ew, signed);
+                // An enable per bit is a mask over the element; the write
+                // goes ahead when any bit of it is set.
+                let (en, bits) = if self.slot(en).width > 1 && ew > 1 {
+                    let mask = self.resize(true, en, ew, false);
+                    (en, MemBits::Mask(self.slot(mask)))
+                } else {
+                    (en, MemBits::Whole)
+                };
                 self.seq.push(Op::MemWrite {
                     mem: u32::try_from(mid.idx()).expect("memory index fits"),
                     addr: self.slot(addr),
                     data: self.slot(data),
                     en: Some(self.slot(en)),
+                    bits,
                 });
             }
             _ => {}
@@ -1924,6 +1936,7 @@ impl<'d> Lowerer<'d> {
                     addr: self.slot(a),
                     data: self.slot(v),
                     en: en.map(|g| self.slot(g)),
+                    bits: MemBits::Whole,
                 });
             }
             // The asynchronous-reset prologue re-runs the body with the
@@ -2380,6 +2393,32 @@ impl<'d> Lowerer<'d> {
                     addr: self.slot(a),
                     data: self.slot(v),
                     en: ctx.guard.map(|g| self.slot(g)),
+                    bits: MemBits::Whole,
+                });
+            }
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => {
+                if !ctx.seq {
+                    self.err(ctx.label.clone(), Reason::MemoryOutsideEdge, Some(ctx.span));
+                    return;
+                }
+                let a = self.expr(ctx, *addr);
+                let o = self.expr(ctx, *offset);
+                let mid = self.mem_of(ctx.inst, *mem);
+                let v = self.resize(ctx.seq, value, *width, false);
+                self.seq.push(Op::MemWrite {
+                    mem: u32::try_from(mid.idx()).expect("memory index fits"),
+                    addr: self.slot(a),
+                    data: self.slot(v),
+                    en: ctx.guard.map(|g| self.slot(g)),
+                    bits: MemBits::Part {
+                        offset: self.slot(o),
+                        width: *width,
+                    },
                 });
             }
         }
@@ -2398,6 +2437,7 @@ impl<'d> Lowerer<'d> {
                 let mid = self.mem_of(ctx.inst, *mem);
                 self.sim.memories[mid.idx()].elem_width
             }
+            Lvalue::MemPart { width, .. } => *width,
         }
     }
 

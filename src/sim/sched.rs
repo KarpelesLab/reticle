@@ -432,11 +432,32 @@ impl<'d> Simulator<'d> {
         true
     }
 
+    /// Writes bits of memory element `addr`: bit `k` of `value` to bit
+    /// `lo + k`, what falls outside the element nowhere, the other bits
+    /// kept. Returns false when the address is out of range.
+    pub(crate) fn write_mem_part(&mut self, mem: MemId, addr: u64, lo: i64, value: &Logic) -> bool {
+        let m = &self.memories[mem.idx()];
+        let Some(current) = usize::try_from(addr).ok().and_then(|i| m.data.get(i)) else {
+            return false;
+        };
+        let mut word = current.clone();
+        for k in 0..value.width() {
+            let at = lo.saturating_add(i64::from(k));
+            if let Ok(at) = u32::try_from(at)
+                && at < word.width()
+            {
+                word.set_bit(at, value.bit(k));
+            }
+        }
+        self.write_mem(mem, addr, &word)
+    }
+
     /// The width of one store.
     fn store_width(&self, store: &Store) -> u32 {
         match store {
             Store::Sig { width, .. } | Store::Skip { width } => *width,
             Store::Mem { mem, .. } => self.memories[mem.idx()].elem_width,
+            Store::MemPart { width, .. } => *width,
         }
     }
 
@@ -497,6 +518,27 @@ impl<'d> Simulator<'d> {
                     }),
                 }
             }
+            Target::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => {
+                let a = self.eval_logic(inst, *addr);
+                let lo = index_value(&self.eval_logic(inst, *offset));
+                let size = self.memories[mem.idx()].data.len();
+                match (a.to_u64(), lo) {
+                    (Some(a), Some(lo)) if usize::try_from(a).is_ok_and(|a| a < size) => {
+                        out.push(Store::MemPart {
+                            mem: *mem,
+                            addr: a,
+                            lo,
+                            width: *width,
+                        });
+                    }
+                    _ => out.push(Store::Skip { width: *width }),
+                }
+            }
             Target::Concat(parts) => {
                 for p in parts {
                     self.resolve_into(inst, p, out);
@@ -547,6 +589,9 @@ impl<'d> Simulator<'d> {
                 }
                 Store::Mem { mem, addr } => {
                     self.write_mem(*mem, *addr, &part);
+                }
+                Store::MemPart { mem, addr, lo, .. } => {
+                    self.write_mem_part(*mem, *addr, *lo, &part);
                 }
                 Store::Skip { .. } => {}
             }
@@ -634,6 +679,9 @@ impl<'d> Simulator<'d> {
                 }
                 Store::Mem { mem, addr } => {
                     self.write_mem(*mem, *addr, &part);
+                }
+                Store::MemPart { mem, addr, lo, .. } => {
+                    self.write_mem_part(*mem, *addr, *lo, &part);
                 }
                 Store::Skip { .. } => {}
             }
@@ -880,7 +928,10 @@ impl<'d> Simulator<'d> {
                         return;
                     }
                 }
-                if self.cell_input(c, "en").map(|l| l.truth()) != Some(Bit::One) {
+                let Some(en) = self.cell_input(c, "en") else {
+                    return;
+                };
+                if en.width() <= 1 && en.truth() != Bit::One {
                     return;
                 }
                 let (Some(addr), Some(data)) =
@@ -892,11 +943,44 @@ impl<'d> Simulator<'d> {
                     return;
                 };
                 let mid = self.instances[inst.idx()].mems[mem.index()];
-                if clocked {
-                    self.nba
-                        .push((vec![Store::Mem { mem: mid, addr: a }], data));
-                } else {
-                    self.write_mem(mid, a, &data);
+                if en.width() <= 1 {
+                    if clocked {
+                        self.nba
+                            .push((vec![Store::Mem { mem: mid, addr: a }], data));
+                    } else {
+                        self.write_mem(mid, a, &data);
+                    }
+                    return;
+                }
+                // An enable per bit: each run of bits it enables is a
+                // store of its own, so that what it leaves alone keeps
+                // whatever the time step writes there.
+                let mut k = 0;
+                while k < en.width() {
+                    if en.bit(k) != Bit::One {
+                        k += 1;
+                        continue;
+                    }
+                    let start = k;
+                    while k < en.width() && en.bit(k) == Bit::One {
+                        k += 1;
+                    }
+                    let part = data.resize(en.width()).slice(k - 1, start);
+                    let lo = i64::from(start);
+                    if clocked {
+                        let width = k - start;
+                        self.nba.push((
+                            vec![Store::MemPart {
+                                mem: mid,
+                                addr: a,
+                                lo,
+                                width,
+                            }],
+                            part,
+                        ));
+                    } else {
+                        self.write_mem_part(mid, a, lo, &part);
+                    }
                 }
             }
             _ => {}

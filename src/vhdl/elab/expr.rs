@@ -1358,6 +1358,32 @@ impl<'a> Lowerer<'a, '_> {
                     return Some((Lvalue::MemElem { mem, addr }, arr.elem.clone()));
                 }
                 let (base, layout) = self.lvalue_name(prefix, sink)?;
+                if let Lvalue::MemElem { mem, addr } = base {
+                    // `mem(a)(i)`: one element of the memory element.
+                    let arr = layout.array()?.clone();
+                    let width = arr.elem.width;
+                    let offset = match self.eval_int(idx) {
+                        Some(i) => {
+                            let i = i64::try_from(i).ok()?;
+                            let Some((_, lo)) = arr.bits_of(i) else {
+                                self.error(codes::TYPE, *span, "the index is outside the array");
+                                return None;
+                            };
+                            self.b
+                                .constant(Logic::from_i64(i64::from(lo), 32).with_signed(true))
+                        }
+                        None => self.bit_offset(idx, &arr, sink)?,
+                    };
+                    return Some((
+                        Lvalue::MemPart {
+                            mem,
+                            addr,
+                            offset,
+                            width,
+                        },
+                        arr.elem.clone(),
+                    ));
+                }
                 let Lvalue::Net(net) = base else {
                     self.unsupported(*span, "a nested array target");
                     return None;
@@ -1381,6 +1407,47 @@ impl<'a> Lowerer<'a, '_> {
                 span,
             } => {
                 let (base, layout) = self.lvalue_name(prefix, sink)?;
+                if let Lvalue::MemElem { mem, addr } = base {
+                    // `mem(a)(15 downto 8)`: a slice of the memory element,
+                    // its bounds static as any slice target's.
+                    let arr = layout.array()?.clone();
+                    let Some((l, r)) = self.static_range(range) else {
+                        self.error(
+                            codes::NOT_STATIC,
+                            range.span(),
+                            "a slice assigned to must have bounds that are static after elaboration",
+                        );
+                        return None;
+                    };
+                    let (Some((hi, _)), Some((_, lo))) = (arr.bits_of(l), arr.bits_of(r)) else {
+                        self.error(codes::TYPE, *span, "the slice is outside the array");
+                        return None;
+                    };
+                    let (hi, lo) = if hi >= lo { (hi, lo) } else { (lo, hi) };
+                    let out = match self.layout_at(*span) {
+                        Some(out) => out,
+                        None if arr.elem.width == 1 => Layout {
+                            width: hi - lo + 1,
+                            ..layout
+                        },
+                        None => {
+                            self.unsupported(*span, "this slice of an array of multi-bit elements");
+                            return None;
+                        }
+                    };
+                    let offset = self
+                        .b
+                        .constant(Logic::from_i64(i64::from(lo), 32).with_signed(true));
+                    return Some((
+                        Lvalue::MemPart {
+                            mem,
+                            addr,
+                            offset,
+                            width: hi - lo + 1,
+                        },
+                        out,
+                    ));
+                }
                 let Lvalue::Net(net) = base else {
                     self.unsupported(*span, "a nested slice target");
                     return None;

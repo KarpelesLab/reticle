@@ -1058,7 +1058,7 @@ fn retarget_lvalue(lv: &mut Lvalue, from: NetId, to: NetId) {
                 retarget_lvalue(p, from, to);
             }
         }
-        Lvalue::MemElem { .. } => {}
+        Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => {}
     }
 }
 

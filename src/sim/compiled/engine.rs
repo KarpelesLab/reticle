@@ -31,7 +31,7 @@ use std::cmp::Ordering;
 use crate::ir::{BinaryOp, ReportSeverity, Span, UnaryOp};
 use crate::logic::Logic;
 
-use super::prog::{MemLayout, Op, Program, Slot};
+use super::prog::{MemBits, MemLayout, Op, Program, Slot};
 use super::words;
 
 /// A side effect one op produced, drained by the caller once the edge has
@@ -79,6 +79,18 @@ struct Pending {
     mem: u32,
     index: usize,
     data: Slot,
+    bits: PendingBits,
+}
+
+/// The bits of the element a [`Pending`] write reaches.
+#[derive(Clone, Copy, Debug)]
+enum PendingBits {
+    /// All of them.
+    Whole,
+    /// Bit `k` of the data to bit `lo + k`, what falls outside dropped.
+    Part { lo: i64, width: u32 },
+    /// The bits set in the slot.
+    Mask(Slot),
 }
 
 /// The mutable state of a compiled run.
@@ -238,9 +250,26 @@ impl State {
             }
             let lo = p.index * layout.elem_words;
             let src = p.data.range();
-            for w in 0..layout.elem_words {
-                let word = self.regs.get(src.start + w).copied().unwrap_or(0);
-                self.mems[p.mem as usize][lo + w] = word;
+            match p.bits {
+                PendingBits::Whole => {
+                    for w in 0..layout.elem_words {
+                        let word = self.regs.get(src.start + w).copied().unwrap_or(0);
+                        self.mems[p.mem as usize][lo + w] = word;
+                    }
+                }
+                PendingBits::Part { lo: at, width } => {
+                    let elem = &mut self.mems[p.mem as usize][lo..lo + layout.elem_words];
+                    words::insert_into(elem, layout.elem_width, &self.regs[src], width, at);
+                }
+                PendingBits::Mask(mask) => {
+                    let mask = mask.range();
+                    for w in 0..layout.elem_words {
+                        let word = self.regs.get(src.start + w).copied().unwrap_or(0);
+                        let keep = self.regs.get(mask.start + w).copied().unwrap_or(0);
+                        let old = self.mems[p.mem as usize][lo + w];
+                        self.mems[p.mem as usize][lo + w] = (old & !keep) | (word & keep);
+                    }
+                }
             }
             let last = lo + layout.elem_words - 1;
             self.mems[p.mem as usize][last] &=
@@ -253,6 +282,22 @@ impl State {
                 prog.state_cur,
             );
         }
+    }
+
+    /// A slot's value as a number, negative when the slot is signed and
+    /// its sign is set; saturating where it does not fit an `i64`.
+    fn signed_value(&self, s: Slot) -> i64 {
+        let r = &self.regs[s.range()];
+        if words::sign_of(r, s.width, s.signed) {
+            let low = r.first().copied().unwrap_or(0);
+            let fill = if s.width >= 64 {
+                0
+            } else {
+                u64::MAX << s.width
+            };
+            return (low | fill).cast_signed();
+        }
+        i64::try_from(words::to_u64_saturating(r)).unwrap_or(i64::MAX)
     }
 
     /// True when the guard is absent or non-zero.
@@ -358,6 +403,7 @@ impl State {
                 addr,
                 data,
                 en,
+                bits,
             } => {
                 if !self.guarded(*en) {
                     return;
@@ -365,11 +411,20 @@ impl State {
                 let layout = &prog.mems[*mem as usize];
                 let index = words::to_u64_saturating(&self.regs[addr.range()]);
                 let index = usize::try_from(index).unwrap_or(usize::MAX);
+                let bits = match *bits {
+                    MemBits::Whole => PendingBits::Whole,
+                    MemBits::Part { offset, width } => PendingBits::Part {
+                        lo: self.signed_value(offset),
+                        width,
+                    },
+                    MemBits::Mask(mask) => PendingBits::Mask(mask),
+                };
                 if index < layout.len {
                     self.pending.push(Pending {
                         mem: *mem,
                         index,
                         data: *data,
+                        bits,
                     });
                 }
             }
@@ -1009,6 +1064,7 @@ mod tests {
                 addr,
                 data,
                 en: None,
+                bits: MemBits::Whole,
             },
         );
         st.exec(

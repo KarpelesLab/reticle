@@ -1346,7 +1346,7 @@ fn expr_width(module: &Module, id: ExprId) -> u32 {
 fn assigns_an_element(module: &Module, mem: MemoryId) -> bool {
     fn writes(target: &Lvalue, mem: MemoryId) -> bool {
         match target {
-            Lvalue::MemElem { mem: m, .. } => *m == mem,
+            Lvalue::MemElem { mem: m, .. } | Lvalue::MemPart { mem: m, .. } => *m == mem,
             Lvalue::Concat(parts) => parts.iter().any(|p| writes(p, mem)),
             _ => false,
         }
@@ -1423,6 +1423,7 @@ impl Mapper<'_> {
     // --- block RAM ----------------------------------------------------------
 
     fn block_rams(&mut self, module: &mut Module) {
+        self.split_lanes(module);
         let memories: Vec<MemoryId> = module.memories.ids().collect();
         let mut mapped: Vec<CellId> = Vec::new();
         let mut lowered: Vec<MemoryId> = Vec::new();
@@ -1460,6 +1461,45 @@ impl Mapper<'_> {
             // only references to fix are those of the survivors, wherever
             // they are named: a port, a read expression or an assignment.
             let remap = module.memories.retain(|id, _| !lowered.contains(&id));
+            crate::synth::opt::dce::map_memories(module, |old| {
+                remap.get(old.index()).copied().flatten().unwrap_or(old)
+            });
+        }
+    }
+
+    /// Builds every memory written part of an element at a time as a
+    /// memory per lane ([`super::lanes::split`]), each then mapped as any
+    /// memory is: the mappers below take a write port with one enable. A
+    /// memory that cannot be split is refused here, by name, rather than
+    /// mapped with its byte enables read as one.
+    fn split_lanes(&mut self, module: &mut Module) {
+        let mut gone: Vec<MemoryId> = Vec::new();
+        let memories: Vec<MemoryId> = module.memories.ids().collect();
+        for mem in memories {
+            if !super::lanes::has_lanes(module, mem) {
+                continue;
+            }
+            let memory = &module.memories[mem];
+            let (name, span) = (memory.name.as_str().to_owned(), memory.span);
+            match super::lanes::split(module, mem) {
+                Some(made) => {
+                    self.note(format!(
+                        "memory `{name}` is written part of a word at a time: built as {} \
+                         memories, a lane each",
+                        made.len()
+                    ));
+                    gone.push(mem);
+                }
+                None => self.decline_lowering(
+                    &name,
+                    "it is written part of a word at a time and read other than through a \
+                     port, which neither a block RAM nor the logic fallback can build",
+                    span,
+                ),
+            }
+        }
+        if !gone.is_empty() {
+            let remap = module.memories.retain(|id, _| !gone.contains(&id));
             crate::synth::opt::dce::map_memories(module, |old| {
                 remap.get(old.index()).copied().flatten().unwrap_or(old)
             });

@@ -1113,12 +1113,24 @@ impl<'a> Blaster<'a> {
             let addr = ev.expr(cell.input("addr").expect("memwr has addr"));
             let data = ev.expr(cell.input("data").expect("memwr has data"));
             let en = ev.expr(cell.input("en").expect("memwr has en"));
-            let en = en.first().copied().unwrap_or(ev.cnf.true_lit());
+            let per_bit = en.len() > 1;
+            let one = en.first().copied().unwrap_or(ev.cnf.true_lit());
             for (word, slot) in range.enumerate() {
                 let hit = decode(ev.cnf, &addr, word_index(word));
-                let we = ev.cnf.and(en, hit);
                 let data = fit(ev.cnf, &data, next[slot].len(), false);
-                next[slot] = ite_vec(ev.cnf, we, &data, &next[slot]);
+                if per_bit {
+                    // An enable per bit: each bit of the word on its own.
+                    let mut word = next[slot].clone();
+                    for (k, bit) in word.iter_mut().enumerate() {
+                        let en_k = en.get(k).copied().unwrap_or(ev.cnf.false_lit());
+                        let we = ev.cnf.and(en_k, hit);
+                        *bit = ite_vec(ev.cnf, we, &data[k..=k], &[*bit])[0];
+                    }
+                    next[slot] = word;
+                } else {
+                    let we = ev.cnf.and(one, hit);
+                    next[slot] = ite_vec(ev.cnf, we, &data, &next[slot]);
+                }
             }
         }
         frame.next_state = next;
@@ -1217,7 +1229,7 @@ fn lvalue_nets(lv: &Lvalue, out: &mut Vec<NetId>, mem_write: &mut bool) {
                 lvalue_nets(p, out, mem_write);
             }
         }
-        Lvalue::MemElem { .. } => *mem_write = true,
+        Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => *mem_write = true,
     }
 }
 
@@ -1231,6 +1243,10 @@ fn lvalue_index_exprs(lv: &Lvalue, out: &mut Vec<ExprId>) {
             }
         }
         Lvalue::MemElem { addr, .. } => out.push(*addr),
+        Lvalue::MemPart { addr, offset, .. } => {
+            out.push(*addr);
+            out.push(*offset);
+        }
         Lvalue::Net(_) | Lvalue::Slice { .. } => {}
     }
 }
@@ -1560,7 +1576,7 @@ impl Eval<'_, '_> {
             Lvalue::Slice { hi, lo, .. } => to_usize(hi - lo + 1),
             Lvalue::Index { .. } => 1,
             Lvalue::Concat(parts) => parts.iter().map(|p| self.lvalue_width(p)).sum(),
-            Lvalue::MemElem { .. } => 0,
+            Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => 0,
         }
     }
 
@@ -1581,7 +1597,7 @@ impl Eval<'_, '_> {
                     self.apply_lvalue(p, value, offset, target, bits);
                 }
             }
-            Lvalue::MemElem { .. } => {}
+            Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => {}
             _ => {
                 let w = self.lvalue_width(lv);
                 *offset -= w;

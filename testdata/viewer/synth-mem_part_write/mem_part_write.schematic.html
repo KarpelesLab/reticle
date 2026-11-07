@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mem_part_write schematic</title>
+    <style>
+:root {
+  --bg: #fbfbfa; --fg: #1d2021; --dim: #6b7378; --line: #d6d9dc;
+  --panel: #ffffff; --accent: #1d6fb8; --comb: #eef3f8; --comb-line: #7a9cbb;
+  --seq: #fdf0e0; --seq-line: #c6852a; --port: #e9f4ec; --port-line: #4c8f63;
+  --inst: #f1edf8; --inst-line: #7c6bab; --wire: #7c8790; --hot: #d1440a;
+  --mono: ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'DejaVu Sans', sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16191c; --fg: #e4e6e8; --dim: #97a0a6; --line: #333a40;
+    --panel: #1d2125; --accent: #6db3f2; --comb: #23303b; --comb-line: #5b87ad;
+    --seq: #382b1b; --seq-line: #d29a45; --port: #1e3327; --port-line: #5ea678;
+    --inst: #2a2440; --inst-line: #9385c9; --wire: #79858e; --hot: #ff7a45;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+header.top { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 1rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 2; }
+.crumbs { font-family: var(--mono); font-size: 13px; }
+.crumbs .sep { color: var(--dim); margin: 0 0.35rem; }
+.crumbs .here { font-weight: 600; }
+.brand { color: var(--dim); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+main { padding: 1rem; margin: 0 auto; }
+main.narrow { max-width: 70rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 1.5rem; margin: 0.2rem 0 0.4rem; }
+h2 { font-size: 1.1rem; margin: 1.6rem 0 0.4rem; border-bottom: 1px solid var(--line);
+  padding-bottom: 0.2rem; }
+h1 .kind, .loc { color: var(--dim); font-weight: 400; font-size: 0.8rem; font-family: var(--mono); }
+p.desc { margin: 0.4rem 0 1rem; max-width: 46rem; white-space: pre-wrap; }
+p.none, td.none { color: var(--dim); font-style: italic; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+code, td.mono { font-family: var(--mono); font-size: 13px; }
+ul.tree { list-style: none; padding-left: 1.1rem; margin: 0.2rem 0; border-left: 1px solid var(--line); }
+ul.tree li { padding: 0.1rem 0; font-family: var(--mono); font-size: 13px; }
+.toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.toolbar input { font: inherit; font-size: 13px; padding: 0.25rem 0.5rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); min-width: 14rem; }
+.toolbar button { font: inherit; font-size: 13px; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel);
+  color: var(--fg); cursor: pointer; }
+.toolbar .hint { color: var(--dim); font-size: 12px; }
+.canvas { display: flex; gap: 0.75rem; align-items: stretch; flex-wrap: wrap; }
+.frame { flex: 1 1 28rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); overflow: hidden; }
+svg.schematic { display: block; width: 100%; height: 72vh; touch-action: none; cursor: grab; }
+aside.info { flex: 0 1 17rem; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--panel); padding: 0.6rem 0.8rem; font-size: 13px; overflow: auto;
+  max-height: 72vh; }
+aside.info h3 { margin: 0 0 0.4rem; font-size: 0.95rem; font-family: var(--mono); }
+aside.info dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.6rem; }
+aside.info dt { color: var(--dim); font-size: 12px; }
+aside.info dd { margin: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.legend { display: flex; gap: 0.9rem; flex-wrap: wrap; color: var(--dim); font-size: 12px;
+  margin-top: 0.5rem; }
+.legend span::before { content: ''; display: inline-block; width: 0.7rem; height: 0.7rem;
+  margin-right: 0.3rem; border: 1px solid var(--line); vertical-align: -1px; }
+.legend .l-comb::before { background: var(--comb); border-color: var(--comb-line); }
+.legend .l-seq::before { background: var(--seq); border-color: var(--seq-line); }
+.legend .l-port::before { background: var(--port); border-color: var(--port-line); }
+.legend .l-inst::before { background: var(--inst); border-color: var(--inst-line); }
+.box { fill: var(--comb); stroke: var(--comb-line); stroke-width: 1; }
+.seq .box { fill: var(--seq); stroke: var(--seq-line); stroke-width: 2; }
+.port .box { fill: var(--port); stroke: var(--port-line); }
+.inst .box { fill: var(--inst); stroke: var(--inst-line); stroke-width: 1.5; }
+.kind { fill: var(--fg); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.label { fill: var(--dim); font-family: var(--mono); font-size: 10px; }
+.pinname { fill: var(--dim); font-family: var(--mono); font-size: 9px; }
+.pin { fill: var(--wire); stroke: none; }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.4; stroke-linejoin: round; }
+.wire.bus { stroke-width: 2.6; }
+.clkmark { fill: none; stroke: var(--seq-line); stroke-width: 1.4; }
+.node { cursor: pointer; }
+polyline.hl { stroke: var(--hot); }
+circle.hl { fill: var(--hot); }
+text.hl { fill: var(--hot); }
+.hl-node .box { stroke: var(--hot); }
+.found .box { stroke: var(--hot); stroke-dasharray: 4 2; }
+.sel .box { stroke: var(--accent); stroke-width: 2.5; }
+ol.src { font-family: var(--mono); font-size: 12px; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 0.6rem 0.6rem 0.6rem 4rem;
+  overflow-x: auto; }
+ol.src li { white-space: pre; padding: 0 0.3rem; }
+ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line); }
+
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <nav class="crumbs">
+        <a href="index.html">index</a>
+        <span class="sep">/</span>
+        <span class="here">mem_part_write (schematic)</span>
+      </nav>
+      <span class="brand">reticle viewer</span>
+    </header>
+    <main class="wide"><h1>mem_part_write
+  <span class="kind"> schematic</span>
+</h1>
+<p class="loc">
+  <a href="source/0-mem_part_write.cells.rtl.html#L3">mem_part_write.cells.rtl:3:1</a> · 
+  <a href="mem_part_write.doc.html">documentation</a> · 
+  <a href="index.html">index</a>
+</p>
+<div class="toolbar">
+  <input type="search" id="search" placeholder="find a cell or a net" aria-label="find a cell or a net" />
+  <button type="button" id="zoom-out">−</button>
+  <button type="button" id="zoom-in">+</button>
+  <button type="button" id="zoom-reset">reset</button>
+  <span class="hint">drag to pan, wheel to zoom, hover a wire to trace it, click a cell for its details</span>
+</div>
+<div class="canvas">
+  <div class="frame">
+    <svg class="schematic" id="schematic" viewBox="0 0 970 1346" preserveAspectRatio="xMinYMin meet" role="img">
+      <title>schematic of module mem_part_write</title>
+      <g id="view">
+        <g class="wires">
+          <polyline class="wire bus" points="476,233 498,233 498,375 634,375 634,517 778,517 778,659 806,659" data-net="rdata" />
+          <polyline class="wire bus" points="164,111 188,111 188,233 380,233" data-net="raddr" />
+          <polyline class="wire" points="164,483 224,483 224,251 380,251" data-net="clk" />
+          <polyline class="wire" points="122,39 176,39 176,269 380,269" />
+          <polyline class="wire bus" points="164,987 236,987 236,843 380,843" data-net="waddr" />
+          <polyline class="wire" points="128,535 224,535 224,861 380,861" />
+          <polyline class="wire bus" points="164,651 320,651 320,861 380,861" data-net="wdata" />
+          <polyline class="wire" points="128,579 260,579 260,879 380,879" />
+          <polyline class="wire bus" points="164,907 224,907 224,879 380,879" data-net="we" />
+          <polyline class="wire" points="164,483 272,483 272,897 380,897" data-net="clk" />
+          <polyline class="wire bus" points="164,987 224,987 224,977 380,977" data-net="waddr" />
+          <polyline class="wire" points="128,703 176,703 176,995 380,995" />
+          <polyline class="wire bus" points="164,651 332,651 332,995 380,995" data-net="wdata" />
+          <polyline class="wire" points="122,747 188,747 188,995 380,995" />
+          <polyline class="wire" points="128,791 200,791 200,1013 380,1013" />
+          <polyline class="wire bus" points="164,907 248,907 248,1013 380,1013" data-net="we" />
+          <polyline class="wire" points="122,835 212,835 212,1013 380,1013" />
+          <polyline class="wire" points="164,483 284,483 284,1031 380,1031" data-net="clk" />
+          <polyline class="wire bus" points="164,987 368,987 368,1245 380,1245" data-net="waddr" />
+          <polyline class="wire" points="122,1127 200,1127 200,1263 380,1263" />
+          <polyline class="wire bus" points="164,651 356,651 356,1263 380,1263" data-net="wdata" />
+          <polyline class="wire" points="128,1171 176,1171 176,1263 380,1263" />
+          <polyline class="wire" points="122,1215 188,1215 188,1281 380,1281" />
+          <polyline class="wire bus" points="164,907 272,907 272,1281 380,1281" data-net="we" />
+          <polyline class="wire" points="128,1259 212,1259 212,1281 380,1281" />
+          <polyline class="wire" points="164,483 308,483 308,1299 380,1299" data-net="clk" />
+          <polyline class="wire bus" points="164,987 320,987 320,1111 380,1111" data-net="waddr" />
+          <polyline class="wire bus" points="164,651 344,651 344,1129 380,1129" data-net="wdata" />
+          <polyline class="wire" points="128,1039 176,1039 176,1129 380,1129" />
+          <polyline class="wire bus" points="164,907 260,907 260,1147 380,1147" data-net="we" />
+          <polyline class="wire" points="128,1083 188,1083 188,1147 380,1147" />
+          <polyline class="wire" points="164,483 296,483 296,1165 380,1165" data-net="clk" />
+          <polyline class="wire bus" points="164,651 212,651 212,745 380,745" data-net="wdata" />
+          <polyline class="wire bus" points="164,359 236,359 236,763 380,763" data-net="at" />
+          <polyline class="wire" points="122,411 248,411 248,763 380,763" />
+          <polyline class="wire" points="134,243 188,243 188,647 380,647" />
+          <polyline class="wire bus" points="164,359 200,359 200,665 380,665" data-net="at" />
+          <polyline class="wire" points="122,287 176,287 176,665 380,665" />
+          <polyline class="wire bus" points="486,647 498,647 498,691 526,691" data-net="mem$wr_5$shl_2" />
+          <polyline class="wire" points="164,191 212,191 212,583 510,583 510,709 526,709" data-net="nib" />
+          <polyline class="wire bus" points="164,111 200,111 200,313 510,313 510,467 646,467 646,646 670,646" data-net="raddr" />
+          <polyline class="wire bus" points="476,745 498,745 498,753 646,753 646,664 670,664" data-net="mem$wr_5$shl" />
+          <polyline class="wire bus" points="622,691 658,691 658,682 670,682" data-net="mem$wr_5$and" />
+          <polyline class="wire" points="164,483 260,483 260,555 498,555 498,627 634,627 634,700 670,700" data-net="clk" />
+          <text class="label" x="483" y="228" data-net="rdata">rdata /32</text>
+          <text class="label" x="171" y="106" data-net="raddr">raddr /4</text>
+          <text class="label" x="171" y="478" data-net="clk">clk</text>
+          <text class="label" x="171" y="982" data-net="waddr">waddr /4</text>
+          <text class="label" x="171" y="646" data-net="wdata">wdata /32</text>
+          <text class="label" x="171" y="902" data-net="we">we /4</text>
+          <text class="label" x="171" y="354" data-net="at">at /3</text>
+          <text class="label" x="493" y="642" data-net="mem$wr_5$shl_2">mem$wr_5$shl_2 /32</text>
+          <text class="label" x="171" y="186" data-net="nib">nib</text>
+          <text class="label" x="483" y="740" data-net="mem$wr_5$shl">mem$wr_5$shl /32</text>
+          <text class="label" x="629" y="686" data-net="mem$wr_5$and">mem$…</text>
+        </g>
+        <g class="nodes">
+          <g class="node port" data-detail="0" data-search="clk port in" data-cx="116" data-cy="473">
+            <polygon class="box" points="68,444 153,444 164,473 153,502 68,502" />
+            <text class="kind" x="77" y="461">port in</text>
+            <text class="label" x="77" y="472">clk</text>
+            <circle class="pin" cx="164" cy="483" r="3" data-net="clk" />
+          </g>
+          <g class="node port" data-detail="1" data-search="port in we" data-cx="116" data-cy="897">
+            <polygon class="box" points="68,868 153,868 164,897 153,926 68,926" />
+            <text class="kind" x="77" y="885">port in</text>
+            <text class="label" x="77" y="896">we</text>
+            <circle class="pin" cx="164" cy="907" r="3" data-net="we" />
+          </g>
+          <g class="node port" data-detail="2" data-search="nib port in" data-cx="116" data-cy="181">
+            <polygon class="box" points="68,152 153,152 164,181 153,210 68,210" />
+            <text class="kind" x="77" y="169">port in</text>
+            <text class="label" x="77" y="180">nib</text>
+            <circle class="pin" cx="164" cy="191" r="3" data-net="nib" />
+          </g>
+          <g class="node port" data-detail="3" data-search="at port in" data-cx="116" data-cy="349">
+            <polygon class="box" points="68,320 153,320 164,349 153,378 68,378" />
+            <text class="kind" x="77" y="337">port in</text>
+            <text class="label" x="77" y="348">at</text>
+            <circle class="pin" cx="164" cy="359" r="3" data-net="at" />
+          </g>
+          <g class="node port" data-detail="4" data-search="port in waddr" data-cx="116" data-cy="977">
+            <polygon class="box" points="68,948 153,948 164,977 153,1006 68,1006" />
+            <text class="kind" x="77" y="965">port in</text>
+            <text class="label" x="77" y="976">waddr</text>
+            <circle class="pin" cx="164" cy="987" r="3" data-net="waddr" />
+          </g>
+          <g class="node port" data-detail="5" data-search="port in raddr" data-cx="116" data-cy="101">
+            <polygon class="box" points="68,72 153,72 164,101 153,130 68,130" />
+            <text class="kind" x="77" y="89">port in</text>
+            <text class="label" x="77" y="100">raddr</text>
+            <circle class="pin" cx="164" cy="111" r="3" data-net="raddr" />
+          </g>
+          <g class="node port" data-detail="6" data-search="port in wdata" data-cx="116" data-cy="641">
+            <polygon class="box" points="68,612 153,612 164,641 153,670 68,670" />
+            <text class="kind" x="77" y="629">port in</text>
+            <text class="label" x="77" y="640">wdata</text>
+            <circle class="pin" cx="164" cy="651" r="3" data-net="wdata" />
+          </g>
+          <g class="node port" data-detail="7" data-search="port out rdata" data-cx="854" data-cy="649">
+            <polygon class="box" points="817,620 891,620 902,649 891,678 817,678 806,649" />
+            <text class="kind" x="815" y="637">port out</text>
+            <text class="label" x="815" y="648">rdata</text>
+            <circle class="pin" cx="806" cy="659" r="3" data-net="rdata" />
+          </g>
+          <g class="node seq" data-detail="8" data-search="1&#39;d1 addr clk data en mem$rd memrd raddr rdata" data-cx="428" data-cy="241">
+            <rect class="box" x="380" y="194" width="96" height="94" rx="4" />
+            <text class="kind" x="389" y="211">memrd</text>
+            <text class="label" x="389" y="222">mem$rd</text>
+            <circle class="pin" cx="380" cy="233" r="3" data-net="raddr" />
+            <text class="pinname" x="387" y="236">addr</text>
+            <circle class="pin" cx="380" cy="251" r="3" data-net="clk" />
+            <polyline class="clkmark" points="383,246 390,251 383,256" />
+            <text class="pinname" x="394" y="254">clk</text>
+            <circle class="pin" cx="380" cy="269" r="3" />
+            <text class="pinname" x="387" y="272">en</text>
+            <circle class="pin" cx="476" cy="233" r="3" data-net="rdata" />
+            <text class="pinname" x="469" y="236" text-anchor="end">data</text>
+          </g>
+          <g class="node seq" data-detail="9" data-search="addr clk data en mem$wr memwr waddr {24&#39;d0, wdata[7:0]} {24&#39;d0, {8{we[0]}}}" data-cx="428" data-cy="860">
+            <rect class="box" x="380" y="804" width="96" height="112" rx="4" />
+            <text class="kind" x="389" y="821">memwr</text>
+            <text class="label" x="389" y="832">mem$wr</text>
+            <circle class="pin" cx="380" cy="843" r="3" data-net="waddr" />
+            <text class="pinname" x="387" y="846">addr</text>
+            <circle class="pin" cx="380" cy="861" r="3" />
+            <text class="pinname" x="387" y="864">data</text>
+            <circle class="pin" cx="380" cy="879" r="3" />
+            <text class="pinname" x="387" y="882">en</text>
+            <circle class="pin" cx="380" cy="897" r="3" data-net="clk" />
+            <polyline class="clkmark" points="383,892 390,897 383,902" />
+            <text class="pinname" x="394" y="900">clk</text>
+          </g>
+          <g class="node seq" data-detail="10" data-search="addr clk data en mem$wr_2 memwr waddr {16&#39;d0, wdata[15:8], 8&#39;d0} {16&#39;d0, {8{we[1]}}, 8&#39;d0}" data-cx="428" data-cy="994">
+            <rect class="box" x="380" y="938" width="96" height="112" rx="4" />
+            <text class="kind" x="389" y="955">memwr</text>
+            <text class="label" x="389" y="966">mem$wr_2</text>
+            <circle class="pin" cx="380" cy="977" r="3" data-net="waddr" />
+            <text class="pinname" x="387" y="980">addr</text>
+            <circle class="pin" cx="380" cy="995" r="3" />
+            <text class="pinname" x="387" y="998">data</text>
+            <circle class="pin" cx="380" cy="1013" r="3" />
+            <text class="pinname" x="387" y="1016">en</text>
+            <circle class="pin" cx="380" cy="1031" r="3" data-net="clk" />
+            <polyline class="clkmark" points="383,1026 390,1031 383,1036" />
+            <text class="pinname" x="394" y="1034">clk</text>
+          </g>
+          <g class="node seq" data-detail="11" data-search="addr clk data en mem$wr_3 memwr waddr {8&#39;d0, wdata[23:16], 16&#39;d0} {8&#39;d0, {8{we[2]}}, 16&#39;d0}" data-cx="428" data-cy="1262">
+            <rect class="box" x="380" y="1206" width="96" height="112" rx="4" />
+            <text class="kind" x="389" y="1223">memwr</text>
+            <text class="label" x="389" y="1234">mem$wr_3</text>
+            <circle class="pin" cx="380" cy="1245" r="3" data-net="waddr" />
+            <text class="pinname" x="387" y="1248">addr</text>
+            <circle class="pin" cx="380" cy="1263" r="3" />
+            <text class="pinname" x="387" y="1266">data</text>
+            <circle class="pin" cx="380" cy="1281" r="3" />
+            <text class="pinname" x="387" y="1284">en</text>
+            <circle class="pin" cx="380" cy="1299" r="3" data-net="clk" />
+            <polyline class="clkmark" points="383,1294 390,1299 383,1304" />
+            <text class="pinname" x="394" y="1302">clk</text>
+          </g>
+          <g class="node seq" data-detail="12" data-search="addr clk data en mem$wr_4 memwr waddr {wdata[31:24], 24&#39;d0} {{8{we[3]}}, 24&#39;d0}" data-cx="428" data-cy="1128">
+            <rect class="box" x="380" y="1072" width="96" height="112" rx="4" />
+            <text class="kind" x="389" y="1089">memwr</text>
+            <text class="label" x="389" y="1100">mem$wr_4</text>
+            <circle class="pin" cx="380" cy="1111" r="3" data-net="waddr" />
+            <text class="pinname" x="387" y="1114">addr</text>
+            <circle class="pin" cx="380" cy="1129" r="3" />
+            <text class="pinname" x="387" y="1132">data</text>
+            <circle class="pin" cx="380" cy="1147" r="3" />
+            <text class="pinname" x="387" y="1150">en</text>
+            <circle class="pin" cx="380" cy="1165" r="3" data-net="clk" />
+            <polyline class="clkmark" points="383,1160 390,1165 383,1170" />
+            <text class="pinname" x="394" y="1168">clk</text>
+          </g>
+          <g class="node comb" data-detail="13" data-search="a b mem$wr_5$shl shl wdata[3:0] as u32 y {at, 2&#39;d0}" data-cx="428" data-cy="744">
+            <rect class="box" x="380" y="706" width="96" height="76" rx="4" />
+            <text class="kind" x="389" y="723">shl</text>
+            <text class="label" x="389" y="734">mem$wr_5$shl</text>
+            <circle class="pin" cx="380" cy="745" r="3" />
+            <text class="pinname" x="387" y="748">a</text>
+            <circle class="pin" cx="380" cy="763" r="3" />
+            <text class="pinname" x="387" y="766">b</text>
+            <circle class="pin" cx="476" cy="745" r="3" data-net="mem$wr_5$shl" />
+            <text class="pinname" x="469" y="748" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="14" data-search="32&#39;d15 a b mem$wr_5$shl_2 shl y {at, 2&#39;d0}" data-cx="433" data-cy="646">
+            <rect class="box" x="380" y="608" width="106" height="76" rx="4" />
+            <text class="kind" x="389" y="625">shl</text>
+            <text class="label" x="389" y="636">mem$wr_5$shl_2</text>
+            <circle class="pin" cx="380" cy="647" r="3" />
+            <text class="pinname" x="387" y="650">a</text>
+            <circle class="pin" cx="380" cy="665" r="3" />
+            <text class="pinname" x="387" y="668">b</text>
+            <circle class="pin" cx="486" cy="647" r="3" data-net="mem$wr_5$shl_2" />
+            <text class="pinname" x="479" y="650" text-anchor="end">y</text>
+          </g>
+          <g class="node comb" data-detail="15" data-search="a and b mem$wr_5$and mem$wr_5$shl_2 y {32{nib}}" data-cx="574" data-cy="690">
+            <rect class="box" x="526" y="652" width="96" height="76" rx="4" />
+            <text class="kind" x="535" y="669">and</text>
+            <text class="label" x="535" y="680">mem$wr_5$and</text>
+            <circle class="pin" cx="526" cy="691" r="3" data-net="mem$wr_5$shl_2" />
+            <text class="pinname" x="533" y="694">a</text>
+            <circle class="pin" cx="526" cy="709" r="3" />
+            <text class="pinname" x="533" y="712">b</text>
+            <circle class="pin" cx="622" cy="691" r="3" data-net="mem$wr_5$and" />
+            <text class="pinname" x="615" y="694" text-anchor="end">y</text>
+          </g>
+          <g class="node seq" data-detail="16" data-search="addr clk data en mem$wr_5 mem$wr_5$and mem$wr_5$shl memwr raddr" data-cx="718" data-cy="663">
+            <rect class="box" x="670" y="607" width="96" height="112" rx="4" />
+            <text class="kind" x="679" y="624">memwr</text>
+            <text class="label" x="679" y="635">mem$wr_5</text>
+            <circle class="pin" cx="670" cy="646" r="3" data-net="raddr" />
+            <text class="pinname" x="677" y="649">addr</text>
+            <circle class="pin" cx="670" cy="664" r="3" data-net="mem$wr_5$shl" />
+            <text class="pinname" x="677" y="667">data</text>
+            <circle class="pin" cx="670" cy="682" r="3" data-net="mem$wr_5$and" />
+            <text class="pinname" x="677" y="685">en</text>
+            <circle class="pin" cx="670" cy="700" r="3" data-net="clk" />
+            <polyline class="clkmark" points="673,695 680,700 673,705" />
+            <text class="pinname" x="684" y="703">clk</text>
+          </g>
+          <g class="node konst" data-detail="17" data-search="1&#39;d1" data-cx="95" data-cy="39">
+            <polygon class="box" points="102,28 122,39 102,50" />
+            <text class="kind" x="70" y="43">1&#39;d1</text>
+            <circle class="pin" cx="122" cy="39" r="3" />
+          </g>
+          <g class="node konst" data-detail="18" data-search="24&#39;d0" data-cx="98" data-cy="535">
+            <polygon class="box" points="108,524 128,535 108,546" />
+            <text class="kind" x="70" y="539">24&#39;d0</text>
+            <circle class="pin" cx="128" cy="535" r="3" />
+          </g>
+          <g class="node konst" data-detail="19" data-search="24&#39;d0" data-cx="98" data-cy="579">
+            <polygon class="box" points="108,568 128,579 108,590" />
+            <text class="kind" x="70" y="583">24&#39;d0</text>
+            <circle class="pin" cx="128" cy="579" r="3" />
+          </g>
+          <g class="node konst" data-detail="20" data-search="16&#39;d0" data-cx="98" data-cy="703">
+            <polygon class="box" points="108,692 128,703 108,714" />
+            <text class="kind" x="70" y="707">16&#39;d0</text>
+            <circle class="pin" cx="128" cy="703" r="3" />
+          </g>
+          <g class="node konst" data-detail="21" data-search="8&#39;d0" data-cx="95" data-cy="747">
+            <polygon class="box" points="102,736 122,747 102,758" />
+            <text class="kind" x="70" y="751">8&#39;d0</text>
+            <circle class="pin" cx="122" cy="747" r="3" />
+          </g>
+          <g class="node konst" data-detail="22" data-search="16&#39;d0" data-cx="98" data-cy="791">
+            <polygon class="box" points="108,780 128,791 108,802" />
+            <text class="kind" x="70" y="795">16&#39;d0</text>
+            <circle class="pin" cx="128" cy="791" r="3" />
+          </g>
+          <g class="node konst" data-detail="23" data-search="8&#39;d0" data-cx="95" data-cy="835">
+            <polygon class="box" points="102,824 122,835 102,846" />
+            <text class="kind" x="70" y="839">8&#39;d0</text>
+            <circle class="pin" cx="122" cy="835" r="3" />
+          </g>
+          <g class="node konst" data-detail="24" data-search="8&#39;d0" data-cx="95" data-cy="1127">
+            <polygon class="box" points="102,1116 122,1127 102,1138" />
+            <text class="kind" x="70" y="1131">8&#39;d0</text>
+            <circle class="pin" cx="122" cy="1127" r="3" />
+          </g>
+          <g class="node konst" data-detail="25" data-search="16&#39;d0" data-cx="98" data-cy="1171">
+            <polygon class="box" points="108,1160 128,1171 108,1182" />
+            <text class="kind" x="70" y="1175">16&#39;d0</text>
+            <circle class="pin" cx="128" cy="1171" r="3" />
+          </g>
+          <g class="node konst" data-detail="26" data-search="8&#39;d0" data-cx="95" data-cy="1215">
+            <polygon class="box" points="102,1204 122,1215 102,1226" />
+            <text class="kind" x="70" y="1219">8&#39;d0</text>
+            <circle class="pin" cx="122" cy="1215" r="3" />
+          </g>
+          <g class="node konst" data-detail="27" data-search="16&#39;d0" data-cx="98" data-cy="1259">
+            <polygon class="box" points="108,1248 128,1259 108,1270" />
+            <text class="kind" x="70" y="1263">16&#39;d0</text>
+            <circle class="pin" cx="128" cy="1259" r="3" />
+          </g>
+          <g class="node konst" data-detail="28" data-search="24&#39;d0" data-cx="98" data-cy="1039">
+            <polygon class="box" points="108,1028 128,1039 108,1050" />
+            <text class="kind" x="70" y="1043">24&#39;d0</text>
+            <circle class="pin" cx="128" cy="1039" r="3" />
+          </g>
+          <g class="node konst" data-detail="29" data-search="24&#39;d0" data-cx="98" data-cy="1083">
+            <polygon class="box" points="108,1072 128,1083 108,1094" />
+            <text class="kind" x="70" y="1087">24&#39;d0</text>
+            <circle class="pin" cx="128" cy="1083" r="3" />
+          </g>
+          <g class="node konst" data-detail="30" data-search="2&#39;d0" data-cx="95" data-cy="411">
+            <polygon class="box" points="102,400 122,411 102,422" />
+            <text class="kind" x="70" y="415">2&#39;d0</text>
+            <circle class="pin" cx="122" cy="411" r="3" />
+          </g>
+          <g class="node konst" data-detail="31" data-search="32&#39;d15" data-cx="101" data-cy="243">
+            <polygon class="box" points="114,232 134,243 114,254" />
+            <text class="kind" x="70" y="247">32&#39;d15</text>
+            <circle class="pin" cx="134" cy="243" r="3" />
+          </g>
+          <g class="node konst" data-detail="32" data-search="2&#39;d0" data-cx="95" data-cy="287">
+            <polygon class="box" points="102,276 122,287 102,298" />
+            <text class="kind" x="70" y="291">2&#39;d0</text>
+            <circle class="pin" cx="122" cy="287" r="3" />
+          </g>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <aside class="info" id="info">
+    <p id="info-empty" class="none">Click a cell to see its parameters and where it came from.</p>
+    <div class="detail" id="d0" hidden="hidden">
+      <h3>clk</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>clk</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L15">mem_part_write.cells.rtl:15:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d1" hidden="hidden">
+      <h3>we</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>we</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out we</dt>
+        <dd>we</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L16">mem_part_write.cells.rtl:16:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d2" hidden="hidden">
+      <h3>nib</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>nib</dd>
+        <dt>type</dt>
+        <dd>u1</dd>
+        <dt>out nib</dt>
+        <dd>nib</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L17">mem_part_write.cells.rtl:17:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d3" hidden="hidden">
+      <h3>at</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>at</dd>
+        <dt>type</dt>
+        <dd>u3</dd>
+        <dt>out at</dt>
+        <dd>at</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L18">mem_part_write.cells.rtl:18:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d4" hidden="hidden">
+      <h3>waddr</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>waddr</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out waddr</dt>
+        <dd>waddr</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L19">mem_part_write.cells.rtl:19:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d5" hidden="hidden">
+      <h3>raddr</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>raddr</dd>
+        <dt>type</dt>
+        <dd>u4</dd>
+        <dt>out raddr</dt>
+        <dd>raddr</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L20">mem_part_write.cells.rtl:20:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d6" hidden="hidden">
+      <h3>wdata</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port in</dd>
+        <dt>direction</dt>
+        <dd>in</dd>
+        <dt>net</dt>
+        <dd>wdata</dd>
+        <dt>type</dt>
+        <dd>u32</dd>
+        <dt>out wdata</dt>
+        <dd>wdata</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L21">mem_part_write.cells.rtl:21:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d7" hidden="hidden">
+      <h3>rdata</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>port out</dd>
+        <dt>direction</dt>
+        <dd>out</dd>
+        <dt>net</dt>
+        <dd>rdata</dd>
+        <dt>type</dt>
+        <dd>u32</dd>
+        <dt>in rdata</dt>
+        <dd>rdata</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L22">mem_part_write.cells.rtl:22:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d8" hidden="hidden">
+      <h3>mem$rd</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>memrd</dd>
+        <dt>cell</dt>
+        <dd>memrd</dd>
+        <dt>memory</dt>
+        <dd>mem</dd>
+        <dt>timing</dt>
+        <dd>clocked</dd>
+        <dt>in addr</dt>
+        <dd>raddr</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+        <dt>in en</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out data</dt>
+        <dd>rdata</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L24">mem_part_write.cells.rtl:24:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d9" hidden="hidden">
+      <h3>mem$wr</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>memwr</dd>
+        <dt>cell</dt>
+        <dd>memwr</dd>
+        <dt>memory</dt>
+        <dd>mem</dd>
+        <dt>timing</dt>
+        <dd>clocked</dd>
+        <dt>in addr</dt>
+        <dd>waddr</dd>
+        <dt>in data</dt>
+        <dd>{24&#39;d0, wdata[7:0]}</dd>
+        <dt>in en</dt>
+        <dd>{24&#39;d0, {8{we[0]}}}</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L25">mem_part_write.cells.rtl:25:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d10" hidden="hidden">
+      <h3>mem$wr_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>memwr</dd>
+        <dt>cell</dt>
+        <dd>memwr</dd>
+        <dt>memory</dt>
+        <dd>mem</dd>
+        <dt>timing</dt>
+        <dd>clocked</dd>
+        <dt>in addr</dt>
+        <dd>waddr</dd>
+        <dt>in data</dt>
+        <dd>{16&#39;d0, wdata[15:8], 8&#39;d0}</dd>
+        <dt>in en</dt>
+        <dd>{16&#39;d0, {8{we[1]}}, 8&#39;d0}</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L26">mem_part_write.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d11" hidden="hidden">
+      <h3>mem$wr_3</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>memwr</dd>
+        <dt>cell</dt>
+        <dd>memwr</dd>
+        <dt>memory</dt>
+        <dd>mem</dd>
+        <dt>timing</dt>
+        <dd>clocked</dd>
+        <dt>in addr</dt>
+        <dd>waddr</dd>
+        <dt>in data</dt>
+        <dd>{8&#39;d0, wdata[23:16], 16&#39;d0}</dd>
+        <dt>in en</dt>
+        <dd>{8&#39;d0, {8{we[2]}}, 16&#39;d0}</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L27">mem_part_write.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d12" hidden="hidden">
+      <h3>mem$wr_4</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>memwr</dd>
+        <dt>cell</dt>
+        <dd>memwr</dd>
+        <dt>memory</dt>
+        <dd>mem</dd>
+        <dt>timing</dt>
+        <dd>clocked</dd>
+        <dt>in addr</dt>
+        <dd>waddr</dd>
+        <dt>in data</dt>
+        <dd>{wdata[31:24], 24&#39;d0}</dd>
+        <dt>in en</dt>
+        <dd>{{8{we[3]}}, 24&#39;d0}</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L28">mem_part_write.cells.rtl:28:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d13" hidden="hidden">
+      <h3>mem$wr_5$shl</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>shl</dd>
+        <dt>cell</dt>
+        <dd>shl</dd>
+        <dt>in a</dt>
+        <dd>wdata[3:0] as u32</dd>
+        <dt>in b</dt>
+        <dd>{at, 2&#39;d0}</dd>
+        <dt>out y</dt>
+        <dd>mem$wr_5$shl</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L29">mem_part_write.cells.rtl:29:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d14" hidden="hidden">
+      <h3>mem$wr_5$shl_2</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>shl</dd>
+        <dt>cell</dt>
+        <dd>shl</dd>
+        <dt>in a</dt>
+        <dd>32&#39;d15</dd>
+        <dt>in b</dt>
+        <dd>{at, 2&#39;d0}</dd>
+        <dt>out y</dt>
+        <dd>mem$wr_5$shl_2</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L30">mem_part_write.cells.rtl:30:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d15" hidden="hidden">
+      <h3>mem$wr_5$and</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>and</dd>
+        <dt>cell</dt>
+        <dd>and</dd>
+        <dt>in a</dt>
+        <dd>mem$wr_5$shl_2</dd>
+        <dt>in b</dt>
+        <dd>{32{nib}}</dd>
+        <dt>out y</dt>
+        <dd>mem$wr_5$and</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L31">mem_part_write.cells.rtl:31:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d16" hidden="hidden">
+      <h3>mem$wr_5</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>memwr</dd>
+        <dt>cell</dt>
+        <dd>memwr</dd>
+        <dt>memory</dt>
+        <dd>mem</dd>
+        <dt>timing</dt>
+        <dd>clocked</dd>
+        <dt>in addr</dt>
+        <dd>raddr</dd>
+        <dt>in data</dt>
+        <dd>mem$wr_5$shl</dd>
+        <dt>in en</dt>
+        <dd>mem$wr_5$and</dd>
+        <dt>in clk</dt>
+        <dd>clk</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L32">mem_part_write.cells.rtl:32:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d17" hidden="hidden">
+      <h3>1&#39;d1</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>1&#39;d1</dd>
+        <dt>constant</dt>
+        <dd>1&#39;d1</dd>
+        <dt>out </dt>
+        <dd>1&#39;d1</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L24">mem_part_write.cells.rtl:24:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d18" hidden="hidden">
+      <h3>24&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>24&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>24&#39;d0</dd>
+        <dt>out </dt>
+        <dd>24&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L25">mem_part_write.cells.rtl:25:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d19" hidden="hidden">
+      <h3>24&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>24&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>24&#39;d0</dd>
+        <dt>out </dt>
+        <dd>24&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L25">mem_part_write.cells.rtl:25:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d20" hidden="hidden">
+      <h3>16&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>16&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>16&#39;d0</dd>
+        <dt>out </dt>
+        <dd>16&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L26">mem_part_write.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d21" hidden="hidden">
+      <h3>8&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>8&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>8&#39;d0</dd>
+        <dt>out </dt>
+        <dd>8&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L26">mem_part_write.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d22" hidden="hidden">
+      <h3>16&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>16&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>16&#39;d0</dd>
+        <dt>out </dt>
+        <dd>16&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L26">mem_part_write.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d23" hidden="hidden">
+      <h3>8&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>8&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>8&#39;d0</dd>
+        <dt>out </dt>
+        <dd>8&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L26">mem_part_write.cells.rtl:26:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d24" hidden="hidden">
+      <h3>8&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>8&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>8&#39;d0</dd>
+        <dt>out </dt>
+        <dd>8&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L27">mem_part_write.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d25" hidden="hidden">
+      <h3>16&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>16&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>16&#39;d0</dd>
+        <dt>out </dt>
+        <dd>16&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L27">mem_part_write.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d26" hidden="hidden">
+      <h3>8&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>8&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>8&#39;d0</dd>
+        <dt>out </dt>
+        <dd>8&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L27">mem_part_write.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d27" hidden="hidden">
+      <h3>16&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>16&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>16&#39;d0</dd>
+        <dt>out </dt>
+        <dd>16&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L27">mem_part_write.cells.rtl:27:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d28" hidden="hidden">
+      <h3>24&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>24&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>24&#39;d0</dd>
+        <dt>out </dt>
+        <dd>24&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L28">mem_part_write.cells.rtl:28:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d29" hidden="hidden">
+      <h3>24&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>24&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>24&#39;d0</dd>
+        <dt>out </dt>
+        <dd>24&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L28">mem_part_write.cells.rtl:28:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d30" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L29">mem_part_write.cells.rtl:29:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d31" hidden="hidden">
+      <h3>32&#39;d15</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>32&#39;d15</dd>
+        <dt>constant</dt>
+        <dd>32&#39;d15</dd>
+        <dt>out </dt>
+        <dd>32&#39;d15</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L30">mem_part_write.cells.rtl:30:3</a>
+      </p>
+    </div>
+    <div class="detail" id="d32" hidden="hidden">
+      <h3>2&#39;d0</h3>
+      <dl>
+        <dt>kind</dt>
+        <dd>2&#39;d0</dd>
+        <dt>constant</dt>
+        <dd>2&#39;d0</dd>
+        <dt>out </dt>
+        <dd>2&#39;d0</dd>
+      </dl>
+      <p class="loc">
+        <a href="source/0-mem_part_write.cells.rtl.html#L30">mem_part_write.cells.rtl:30:3</a>
+      </p>
+    </div>
+  </aside>
+</div>
+<p class="legend">
+  <span class="l-comb">combinational</span>
+  <span class="l-seq">state</span>
+  <span class="l-inst">instance or process</span>
+  <span class="l-port">port</span>
+  <span>9 cells, 6 holding state, 44 wires</span>
+</p>
+    </main>
+    <script>
+(function () {
+  var svg = document.getElementById('schematic');
+  if (!svg) { return; }
+  var view = document.getElementById('view');
+  var info = document.getElementById('info');
+  var tx = 0, ty = 0, scale = 1;
+  function apply() {
+    view.setAttribute('transform', 'translate(' + tx.toFixed(2) + ' ' + ty.toFixed(2) +
+      ') scale(' + scale.toFixed(4) + ')');
+  }
+  function zoom(factor, cx, cy) {
+    var next = Math.min(8, Math.max(0.05, scale * factor));
+    factor = next / scale;
+    tx = cx - (cx - tx) * factor;
+    ty = cy - (cy - ty) * factor;
+    scale = next;
+    apply();
+  }
+  function centre() {
+    var r = svg.getBoundingClientRect();
+    return [r.width / 2, r.height / 2];
+  }
+  var down = false, lastX = 0, lastY = 0, moved = 0;
+  svg.addEventListener('pointerdown', function (e) {
+    down = true; moved = 0; lastX = e.clientX; lastY = e.clientY;
+    svg.setPointerCapture(e.pointerId); svg.style.cursor = 'grabbing';
+  });
+  svg.addEventListener('pointermove', function (e) {
+    if (!down) { return; }
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; lastX = e.clientX; lastY = e.clientY;
+    apply();
+  });
+  function release(e) {
+    down = false; svg.style.cursor = 'grab';
+    if (svg.hasPointerCapture(e.pointerId)) { svg.releasePointerCapture(e.pointerId); }
+  }
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var r = svg.getBoundingClientRect();
+    zoom(e.deltaY > 0 ? 1 / 1.12 : 1.12, e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+
+  var netted = svg.querySelectorAll('[data-net]');
+  var nodes = svg.querySelectorAll('.node');
+  for (var i = 0; i !== netted.length; i++) { netted[i].nodeOwner = netted[i].closest('.node'); }
+
+  function highlight(net) {
+    for (var j = 0; j !== nodes.length; j++) { nodes[j].classList.remove('hl-node'); }
+    for (var k = 0; k !== netted.length; k++) {
+      var el = netted[k];
+      if (net !== null && el.getAttribute('data-net') === net) {
+        el.classList.add('hl');
+        if (el.nodeOwner) { el.nodeOwner.classList.add('hl-node'); }
+      } else {
+        el.classList.remove('hl');
+      }
+    }
+  }
+  svg.addEventListener('pointerover', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-net]') : null;
+    highlight(t ? t.getAttribute('data-net') : null);
+  });
+  svg.addEventListener('pointerleave', function () { highlight(null); });
+
+  var selected = null;
+  function select(node) {
+    if (selected) { selected.classList.remove('sel'); }
+    selected = node;
+    var panes = info ? info.querySelectorAll('.detail') : [];
+    for (var j = 0; j !== panes.length; j++) { panes[j].hidden = true; }
+    var empty = document.getElementById('info-empty');
+    if (!node) { if (empty) { empty.hidden = false; } return; }
+    node.classList.add('sel');
+    if (empty) { empty.hidden = true; }
+    var pane = document.getElementById('d' + node.getAttribute('data-detail'));
+    if (pane) { pane.hidden = false; }
+  }
+  svg.addEventListener('click', function (e) {
+    if (moved > 4) { return; }
+    select(e.target.closest ? e.target.closest('.node') : null);
+  });
+
+  var search = document.getElementById('search');
+  if (search) {
+    search.addEventListener('input', function () {
+      var q = search.value.trim().toLowerCase();
+      var first = null;
+      for (var j = 0; j !== nodes.length; j++) {
+        var hay = nodes[j].getAttribute('data-search') || '';
+        var hit = q !== '' && hay.indexOf(q) !== -1;
+        nodes[j].classList.toggle('found', hit);
+        if (hit && first === null) { first = nodes[j]; }
+      }
+      if (first) {
+        var c = centre();
+        tx = c[0] - parseFloat(first.getAttribute('data-cx')) * scale;
+        ty = c[1] - parseFloat(first.getAttribute('data-cy')) * scale;
+        apply();
+      }
+    });
+  }
+  function reset() { tx = 0; ty = 0; scale = 1; apply(); }
+  var zin = document.getElementById('zoom-in');
+  var zout = document.getElementById('zoom-out');
+  var zfit = document.getElementById('zoom-reset');
+  if (zin) { zin.addEventListener('click', function () { var c = centre(); zoom(1.25, c[0], c[1]); }); }
+  if (zout) { zout.addEventListener('click', function () { var c = centre(); zoom(0.8, c[0], c[1]); }); }
+  if (zfit) { zfit.addEventListener('click', reset); }
+  document.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'INPUT') { return; }
+    var c = centre();
+    if (e.key === '+' || e.key === '=') { zoom(1.25, c[0], c[1]); }
+    else if (e.key === '-') { zoom(0.8, c[0], c[1]); }
+    else if (e.key === '0') { reset(); }
+    else if (e.key === 'Escape') { select(null); highlight(null); }
+  });
+  apply();
+})();
+
+    </script>
+  </body>
+</html>

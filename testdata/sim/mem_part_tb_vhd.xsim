@@ -1,0 +1,10 @@
+# What xsim 2026.1 printed for the writes of mem_part_tb.vhd with a report of
+# each value, the values the testbench holds itself to (this simulator does
+# not print a string built with `&`); then what it printed for the testbench
+# as it is.
+Note: start: 00000000 00000000 00000000 | FFFF FFFF
+Note: direct: 44000011 00010008 00000000 | 0FFF BFF5
+Note: lanes: 00AD00EF
+Note: lanes2: 01AD45EF
+Note: variable: 0000AA01 400000C0
+Note: PASS

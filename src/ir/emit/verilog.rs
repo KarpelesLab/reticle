@@ -1441,6 +1441,36 @@ impl<'a> Printer<'a> {
                 let addr = self.cell_in(cell, "addr")?;
                 let data = self.cell_in(cell, "data")?;
                 let en = self.cell_in(cell, "en")?;
+                let per_bit = cell
+                    .input("en")
+                    .and_then(|e| self.module.exprs[e].ty.width())
+                    .filter(|w| *w > 1);
+                if let Some(width) = per_bit {
+                    // An enable per bit, written a bit at a time: Verilog
+                    // selects from no expression, so each bit is shifted
+                    // down to bit 0, and the block is named for its loop.
+                    let edge = match (*clocked, cell.input("clk")) {
+                        (true, Some(_)) => {
+                            format!("posedge {}", paren_unless_atom(&self.cell_in(cell, "clk")?))
+                        }
+                        _ => "*".to_owned(),
+                    };
+                    let op = if *clocked { "<=" } else { "=" };
+                    let label = ident(&format!("{}$bits", cell.name));
+                    self.out.line(&format!("always @({edge}) begin : {label}"));
+                    self.out.indent();
+                    self.out.line("integer k;");
+                    self.out
+                        .line(&format!("for (k = 0; k < {width}; k = k + 1)"));
+                    self.out.indent();
+                    self.out.line(&format!(
+                        "if ((({en}) >> k) & 1'b1) {name}[{addr}][k] {op} ({data}) >> k;"
+                    ));
+                    self.out.dedent();
+                    self.out.dedent();
+                    self.out.line("end");
+                    return Ok(());
+                }
                 if *clocked {
                     let clk = self.cell_in(cell, "clk")?;
                     self.out.line(&format!(
@@ -1607,6 +1637,23 @@ impl<'a> Printer<'a> {
                     "{}[{addr}]",
                     ident(self.module.memories[*mem].name.as_str())
                 )
+            }
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => {
+                let name = ident(self.module.memories[*mem].name.as_str());
+                let addr = self.expr(*addr)?;
+                // The memory is declared `[w-1:0]`, so an offset is the
+                // bit index itself; one known here is written as a
+                // range, one known only at run time as Verilog's own
+                // indexed part-select, which drops what falls outside.
+                match self.module.const_offset(*offset) {
+                    Some(lo) => format!("{name}[{addr}][{}:{lo}]", lo + i64::from(*width) - 1),
+                    None => format!("{name}[{addr}][{} +: {width}]", self.expr(*offset)?),
+                }
             }
         })
     }

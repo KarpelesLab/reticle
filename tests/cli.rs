@@ -1000,13 +1000,17 @@ fn sim_refuses_a_variable_assignment_delay_and_an_array_of_reals() {
     assert!(!stderr.contains("internal error"), "{stderr}");
 }
 
-/// **An assignment to a bit of an array element is refused, not
-/// misdirected.** The IR has no target for it, and it used to become a write
+/// **An assignment to a bit or a part of an array element writes those bits
+/// of that element** (IEEE 1364-2005 §5.2.1), and leaves the rest. The
+/// answers are xsim 2026.1's for the same program. It used to become a write
 /// of element `j` (`m[i][j] = ..`) or of nothing (`m[i][3:0] = ..`), both
-/// silently. Would catch either back; it would not catch a later change that
-/// supports the assignment, which should replace this test.
+/// silently, and then a refusal, since the IR had no target for it; this
+/// test held that refusal and now holds the writes. Would catch the refusal
+/// back, a write of the whole element, a part written at the wrong offset
+/// (`m[i + 1][i -: 2]` is bits 1 and 0 of element 2), or the other bits
+/// lost; `testdata/sim/mem_part_tb.v` covers the rest of the cases.
 #[test]
-fn sim_refuses_an_assignment_to_a_bit_of_an_array_element() {
+fn sim_writes_a_bit_of_an_array_element() {
     let dir = scratch("sim_array_element_bit_write");
     let file = dir.join("write.v");
     std::fs::write(
@@ -1017,20 +1021,103 @@ fn sim_refuses_an_assignment_to_a_bit_of_an_array_element() {
          \x20 initial begin\n\
          \x20   i = 1;\n\
          \x20   m[i][2] = 1'b1;\n\
-         \x20   m[i][3:2] = 2'b11;\n\
+         \x20   $display(\"%b\", m[1]);\n\
+         \x20   m[i][3:2] = 2'b10;\n\
+         \x20   $display(\"%b\", m[1]);\n\
+         \x20   m[i + 1][i -: 2] = 2'b01;\n\
+         \x20   $display(\"%b %b\", m[1], m[2]);\n\
          \x20 end\n\
+         endmodule\n",
+    )
+    .unwrap();
+    let (code, stdout, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "x1xx\n10xx\n10xx xx01\n", "{stderr}");
+}
+
+/// **A write of part of a memory element simulates as xsim simulates it**,
+/// line for line against what xsim 2026.1 printed for the same testbench
+/// (`testdata/sim/mem_part_tb.xsim`, `mem_part_sv_tb.xsim`): constant,
+/// variable and indexed selects, blocking and not, partly and wholly outside
+/// the element, an `x` in the address, the index or an enable, elements
+/// declared descending, ascending, signed and as packed arrays of bytes, a
+/// memory not counted from zero, and the byte-write loop on a clock, with
+/// two writes of one word in one step. Would catch any of those written to
+/// the wrong bits, a part partly outside dropped whole or wrapped round, an
+/// unknown offset or enable writing something, and the bits a write leaves
+/// lost; would not catch a read partly outside an element, which the
+/// testbench leaves out (here it reads all `x`, as of any vector, where
+/// xsim reads the bits inside).
+#[cfg(feature = "sim")]
+#[test]
+fn sim_writes_part_of_a_memory_element_as_xsim_does() {
+    for (tb, xsim) in [
+        (
+            "testdata/sim/mem_part_tb.v",
+            "testdata/sim/mem_part_tb.xsim",
+        ),
+        (
+            "testdata/sim/mem_part_sv_tb.sv",
+            "testdata/sim/mem_part_sv_tb.xsim",
+        ),
+    ] {
+        let (code, stdout, stderr) = run(&["sim", "--quiet", tb]);
+        assert_eq!(code, 0, "{tb}: {stderr}");
+        let want = std::fs::read_to_string(xsim).unwrap();
+        assert_eq!(stdout, want, "{tb}: {stderr}");
+    }
+}
+
+/// **The same in VHDL**: `mem(a)(15 downto 8) <= d` and `mem(a)(i) <= '1'`
+/// on a signal, on a clock, byte by byte under enables, an element of an
+/// ascending type, and on a variable at a constant and a run-time index.
+/// The testbench holds each value to what xsim 2026.1 printed for it
+/// (`mem_part_tb_vhd.xsim`) and says `PASS` when all agree; these targets
+/// were refused (`V0701`, a nested slice target). Would catch any of them
+/// written to the wrong bits or the rest of the element lost; would not
+/// catch a slice whose bounds move with a loop's index, which is refused
+/// here for any target and so is not in it.
+#[cfg(feature = "sim")]
+#[test]
+fn sim_writes_part_of_a_vhdl_array_element_as_xsim_does() {
+    let (code, stdout, stderr) = run(&["sim", "--quiet", "testdata/sim/mem_part_tb.vhd"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("PASS"), "{stdout}\n{stderr}");
+    assert!(
+        !stdout.contains("FAIL") && !stderr.contains("FAIL"),
+        "{stdout}\n{stderr}"
+    );
+    let want = std::fs::read_to_string("testdata/sim/mem_part_tb_vhd.xsim").unwrap();
+    assert!(want.contains("Note: PASS"), "the fixture's own run passed");
+}
+
+/// **What still has no target is refused, not misdirected**: a select of a
+/// bit-select of a vector (`n[1][0] = ..`), and a continuous assignment to
+/// part of an array element, whose word would be a wire built of pieces.
+/// Would catch either becoming a silent write of something else; it would
+/// not catch a later change that supports one, which should replace the
+/// line for it.
+#[test]
+fn sim_refuses_a_select_it_has_no_target_for() {
+    let dir = scratch("sim_array_element_refused");
+    let file = dir.join("refused.v");
+    std::fs::write(
+        &file,
+        "module tb;\n\
+         \x20 reg [3:0] n;\n\
+         \x20 wire [3:0] w [0:1];\n\
+         \x20 assign w[0][1:0] = 2'b11;\n\
+         \x20 initial n[1][0] = 1'b1;\n\
          endmodule\n",
     )
     .unwrap();
     let (code, _, stderr) = run(&["sim", "--quiet", file.to_str().unwrap()]);
     assert_eq!(code, 1, "{stderr}");
-    assert_eq!(
-        stderr
-            .matches("an assignment to a select of an array element")
-            .count(),
-        2,
+    assert!(
+        stderr.contains("a continuous assignment to part of an array element"),
         "{stderr}"
     );
+    assert!(stderr.contains("a select of a bit-select"), "{stderr}");
 }
 
 #[test]

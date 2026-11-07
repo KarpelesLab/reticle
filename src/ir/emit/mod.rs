@@ -993,7 +993,7 @@ impl<'a> BitView<'a> {
                 }
                 Ok(out)
             }
-            Lvalue::MemElem { .. } => Err(EmitError::new(
+            Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => Err(EmitError::new(
                 span,
                 "a memory element cannot be a netlist connection",
             )),

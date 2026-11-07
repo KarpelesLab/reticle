@@ -270,7 +270,7 @@ fn designs() -> Vec<String> {
 /// | Design | Vivado | Here |
 /// |---|---|---|
 /// | `b36_cascade` | two `RAMB36E1` as one 64 kbit block (`RAM_EXTENSION_*`) | refused: a cascade is not built |
-/// | `ib_1024x32_bytes` | none: Vivado's synthesis stopped on it | refused: its byte writes, `mem[a][7:0] <= d`, assign a select of an array element, which the frontend has no target for |
+/// | `ib_1024x32_bytes` | none: Vivado's synthesis aborts on it, an assertion in its block RAM generator (measured again on 2026-11-07) | built: a memory per byte lane, four `RAMB18E1` |
 ///
 /// Four more were here until the memory arrangement of
 /// `testdata/fpga/vivado/memarr/` (`docs/fpga-vivado-parity.md`, "Memories
@@ -284,17 +284,18 @@ fn designs() -> Vec<String> {
 /// `ib_1024x32_bytes` used to be "built", and what was built was wrong: the
 /// frontend read `mem[a]` as `mem` and dropped every byte write without a
 /// word, so the block held a memory nothing wrote. Every check here passed on
-/// it, since nothing here compares what it computes with Vivado's (Vivado
+/// it, since nothing here compared what it computes with Vivado's (Vivado
 /// built nothing) and the mapping was proved against a source already
-/// without its writes. It is refused now, by name, until the frontend has a
-/// target for part of an element.
+/// without its writes. It was refused after that, by name, until the
+/// frontend had a target for part of an element (`Lvalue::MemPart`). It is
+/// built now, and since Vivado has no build of it, its routed netlist is held
+/// to what its source does under xsim, memory and registers zeroed as a
+/// part's are (`xsim.txt`'s line for it), which the build that dropped the
+/// writes would have failed from the first word read.
 const NOT_AS_VIVADO: &[&str] = &["b36_cascade", "ib_1024x32_bytes"];
 
-/// The two this flow refuses, and a word of each refusal.
-const REFUSED: &[(&str, &str)] = &[
-    ("b36_cascade", "a cascade"),
-    ("ib_1024x32_bytes", "a select of an array element"),
-];
+/// The one this flow refuses, and a word of the refusal.
+const REFUSED: &[(&str, &str)] = &[("b36_cascade", "a cascade")];
 
 /// One design through the flow.
 struct Built {
@@ -629,7 +630,7 @@ fn each_design_gets_the_block_rams_vivado_gave_it() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// **What is not built as Vivado builds it says so**: the two refused with
+/// **What is not built as Vivado builds it says so**: the one refused with
 /// a reason. Would catch a refusal turning into a build (a cascade built
 /// without its neighbour's route).
 #[test]
@@ -642,6 +643,19 @@ fn what_is_not_built_says_so() {
             built[*name].log
         );
     }
+}
+
+/// **`ib_1024x32_bytes`'s byte writes are built**, as a memory per lane:
+/// four `RAMB18E1`, one a byte, the report saying why. Would catch the writes
+/// dropped again (the blocks would go, nothing writing them) or a lane lost;
+/// that the four compute what the source does is the simulation's, against
+/// the source's own answer under xsim.
+#[test]
+fn the_byte_writes_are_built() {
+    let Some(built) = built() else { return };
+    let log = &built["ib_1024x32_bytes"].log;
+    assert!(log.contains("built as 4 memories, a lane each"), "{log}");
+    assert!(log.contains("  4 x RAMB18E1"), "{log}");
 }
 
 /// The role of a cell pin, `ADDRARDADDR[3]` or `CLKBWRCLK`, in the device's
@@ -1039,7 +1053,7 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(seen >= 37, "only {seen} simulated");
+    assert!(seen >= 38, "only {seen} simulated");
 }
 
 /// **`--memories legacy` keeps two `RAMB18E1`s** where the Vivado mapping

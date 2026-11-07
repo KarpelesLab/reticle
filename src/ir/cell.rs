@@ -27,7 +27,7 @@
 //! | `Dff`         | `clk`, `d`, \[`en`\], \[`rst`\] | `q` | `d` and `q` same width; `clk` `en` `rst` one bit; reset value width of `q` |
 //! | `Dlatch`      | `en`, `d`            | `q`     | `d` and `q` same width; `en` one bit                  |
 //! | `MemRdPort`   | `addr`, \[`clk`, `en`\] | `data` | `data` is the element type; `clk`/`en` when clocked |
-//! | `MemWrPort`   | `addr`, `data`, `en`, \[`clk`\] | —  | `data` is the element type; `en` one bit           |
+//! | `MemWrPort`   | `addr`, `data`, `en`, \[`clk`\] | —  | `data` is the element type; `en` one bit, or one per bit of the element for a write of part of it |
 //! | `Lut`         | `a`                  | `y`     | `a` has `k` bits, `init` has 2^k bits, `y` one bit    |
 //! | `Tristate`    | `a`, `en`            | `y`     | `y` and `a` same width; `en` one bit; `z` when disabled |
 //! | `Blackbox`    | any                  | any     | not checked                                           |

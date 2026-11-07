@@ -1,0 +1,27 @@
+top mem_part_write
+
+module mem_part_write
+  net %clk u1 wire
+  net %we u4 wire
+  net %nib u1 wire
+  net %at u3 wire
+  net %waddr u4 wire
+  net %raddr u4 wire
+  net %wdata u32 wire
+  net %rdata u32 wire
+  port clk in %clk
+  port we in %we
+  port nib in %nib
+  port at in %at
+  port waddr in %waddr
+  port raddr in %raddr
+  port wdata in %wdata
+  port rdata out %rdata
+  memory @mem 16 x u32
+  cell mem$rd memrd @mem clocked (addr=%raddr, clk=%clk, en=1'd1) -> (data=%rdata)
+  cell mem$wr memwr @mem clocked (addr=%waddr, data={24'd0, %wdata[7:0]}, en={24'd0, {8{%we[0:0]}}}, clk=%clk) -> ()
+  cell mem$wr_2 memwr @mem clocked (addr=%waddr, data={16'd0, %wdata[15:8], 8'd0}, en={16'd0, {8{%we[1:1]}}, 8'd0}, clk=%clk) -> ()
+  cell mem$wr_3 memwr @mem clocked (addr=%waddr, data={8'd0, %wdata[23:16], 16'd0}, en={8'd0, {8{%we[2:2]}}, 16'd0}, clk=%clk) -> ()
+  cell mem$wr_4 memwr @mem clocked (addr=%waddr, data={%wdata[31:24], 24'd0}, en={{8{%we[3:3]}}, 24'd0}, clk=%clk) -> ()
+  cell mem$wr_5 memwr @mem clocked (addr=%raddr, data=shl(resize(%wdata[3:0], u32), {%at, 2'd0}), en=and(shl(32'd15, {%at, 2'd0}), {32{%nib}}), clk=%clk) -> ()
+end

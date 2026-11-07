@@ -41,6 +41,12 @@ models or IP.
   time, and writes `vectors/` there.
 - `xsim_routed.py` runs a netlist Reticle routed under `xsim` and the vendor's
   models of every cell, against its source. Nothing of that is committed.
+- `xsim_source.py` asks `xsim` what a design's own source does under the
+  memarr stimulus, its registers and memories zeroed at time zero as a part's
+  are, and keeps it as the design's line of a fixture's `xsim.txt`: the
+  answer for a design Vivado did not build (`bram/ib_1024x32_bytes`, on which
+  its synthesis aborts). `gen_lutram_vectors.py` rewrites `xsim.txt` without
+  it, so it is run again after.
 - `gen_sim_xc7.sh` runs each testbench of `testdata/sim/xc7/` under `xsim` with
   the vendor's `unisims_ver`, `secureip` and `glbl`, and keeps what it printed
   beside it as `<name>.xsim`; `tests/sim_xc7_primitives.rs` holds the

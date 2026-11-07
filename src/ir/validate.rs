@@ -354,6 +354,29 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            Lvalue::MemPart {
+                mem,
+                addr,
+                offset,
+                width,
+            } => {
+                self.expr_exists(*addr, span);
+                self.expr_exists(*offset, span);
+                self.check_mem_addr(*mem, *addr, span);
+                if self.module.memories.get(*mem).is_none() {
+                    self.error("I0003", span, format!("write to missing memory {mem}"));
+                    return None;
+                }
+                if *width == 0 {
+                    self.error(
+                        "I0004",
+                        span,
+                        "a write of no bits of a memory element".into(),
+                    );
+                    return None;
+                }
+                Some(Type::bits(*width))
+            }
         }
     }
 
@@ -793,7 +816,14 @@ impl<'a> Checker<'a> {
                 let addr = self.cell_input_width(cell, "addr");
                 let en = self.cell_input_width(cell, "en");
                 rule(self, addr.is_some(), "`addr` must be a bit vector");
-                rule(self, one(en), "`en` must be one bit");
+                // One bit, or one per bit of the element: a write of part
+                // of it, `mem[a][15:8] <= d`, enables the bits it writes.
+                let elem = self.module.memories.get(*mem).and_then(|m| m.elem.width());
+                rule(
+                    self,
+                    one(en) || (en.is_some() && en == elem),
+                    "`en` must be one bit or one per bit of the element",
+                );
                 if *clocked {
                     let clk = self.cell_input_width(cell, "clk");
                     rule(self, one(clk), "`clk` must be one bit");

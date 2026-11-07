@@ -1257,7 +1257,7 @@ fn lvalue_width(m: &Module, lv: &Lvalue) -> Option<u32> {
             }
             Some(total)
         }
-        Lvalue::Index { .. } | Lvalue::MemElem { .. } => None,
+        Lvalue::Index { .. } | Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => None,
     }
 }
 
@@ -1289,7 +1289,7 @@ fn decompose_lvalue(m: &Module, lv: &Lvalue, value_lo: u32) -> Option<Vec<Target
             }
             Some(out)
         }
-        Lvalue::Index { .. } | Lvalue::MemElem { .. } => None,
+        Lvalue::Index { .. } | Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => None,
     }
 }
 

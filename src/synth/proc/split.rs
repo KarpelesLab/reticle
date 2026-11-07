@@ -163,7 +163,7 @@ fn record(m: &Module, target: &Lvalue, nonblocking: bool, mine: &mut BTreeMap<Ne
             }
             return;
         }
-        Lvalue::MemElem { .. } => return,
+        Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => return,
         Lvalue::Net(net) => (*net, None),
         Lvalue::Slice { net, hi, lo } => (*net, Some((*lo..=*hi).collect::<Vec<_>>())),
         Lvalue::Index { net, index } => {

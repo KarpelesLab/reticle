@@ -180,6 +180,7 @@ mod dsp_split;
 pub mod ecp5;
 pub mod flow;
 pub mod gowin;
+mod lanes;
 pub mod place;
 pub mod pll;
 pub mod primitives;

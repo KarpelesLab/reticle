@@ -1229,7 +1229,7 @@ impl<'a> Lowerer<'a, '_> {
                 }
                 Some(self.b.concat(ids))
             }
-            Lvalue::Index { .. } | Lvalue::MemElem { .. } => None,
+            Lvalue::Index { .. } | Lvalue::MemElem { .. } | Lvalue::MemPart { .. } => None,
         }
     }
 }
