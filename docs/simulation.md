@@ -644,6 +644,16 @@ written in picoseconds. `time'pos(1 ns)` is 1000 under xsim, a count of its
 picoseconds, and 1000000 here, a count of femtoseconds, this simulator's
 resolution limit; that difference is kept.
 
+**Unconstrained objects** (`unconstrained_tb.vhd`). An object whose subtype
+leaves its bounds open takes them from what it is bound to, as LRM 5.3.2.2
+has it: `'length`, `'left` and `'right` of a `string` constant or generic
+from its value, an unconstrained parameter's from its actual — lowered
+first when it is a literal or an expression, which has no subtype of its
+own to read — and a `v'range` or `v'reverse_range` used as a loop range or
+a constraint from either. A function whose result subtype is unconstrained
+and whose context gives no width (`reverse("1100") = "0011"`) has the width
+of the value it first returns. Each of these was refused.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

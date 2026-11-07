@@ -143,6 +143,10 @@ pub(crate) struct Frame {
     pub result_layout: Option<Layout>,
     /// The net set to 1 once the subprogram has returned.
     pub flag: Option<NetId>,
+    /// A function whose result subtype is unconstrained and which the
+    /// context gives no width: the first `return` makes the result net,
+    /// with the layout of the value it returns.
+    pub lazy_result: bool,
 }
 
 /// Builds one IR module from one entity and architecture.
@@ -202,6 +206,30 @@ impl<'a> LayoutEnv<'a> for Lowerer<'a, '_> {
     fn eval_bound(&mut self, span: Span) -> Option<i128> {
         let e = self.cx.ast.bound(span)?;
         self.eval(e)?.as_int()
+    }
+
+    fn eval_range(&mut self, span: Span) -> Option<(i128, i128, ast::Direction)> {
+        let n = self.cx.ast.range_attribute(span)?;
+        let ast::Name::Attribute {
+            prefix, attribute, ..
+        } = n
+        else {
+            return None;
+        };
+        let reverse = attribute.name.eq_ignore_ascii_case("reverse_range");
+        let (l, r, asc) = self.object_bounds(prefix)?;
+        let dir = |a: bool| {
+            if a {
+                ast::Direction::To
+            } else {
+                ast::Direction::Downto
+            }
+        };
+        Some(if reverse {
+            (r, l, dir(!asc))
+        } else {
+            (l, r, dir(asc))
+        })
     }
 
     fn report(&mut self, diag: Diagnostic) {

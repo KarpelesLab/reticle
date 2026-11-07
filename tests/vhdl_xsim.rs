@@ -168,3 +168,21 @@ fn reals_match_xsim() {
 fn to_string_overloads_match_xsim() {
     matches_xsim("to_string");
 }
+
+/// **Objects whose subtype leaves the bounds open**: `'length`, `'left`
+/// and `'right` of a string constant and generic ("cannot be lowered"); a
+/// port sized by an unconstrained generic's `'range` ("not static after
+/// elaboration"); an unconstrained parameter given a literal, a signal or
+/// a slice, looped over with `'range` and copied into a variable of its
+/// `'reverse_range`; an unconstrained result compared with a literal; and
+/// an unconstrained `signal` parameter of a procedure. All were refused.
+///
+/// Would catch a parameter taking the length of the context rather than
+/// the actual's, a `'reverse_range` constraint keeping the original
+/// direction, and a result whose width is not the returned value's. Would
+/// not catch a function that returns values of different lengths from
+/// different `return`s, which takes the first one's.
+#[test]
+fn unconstrained_objects_match_xsim() {
+    matches_xsim("unconstrained");
+}

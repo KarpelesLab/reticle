@@ -789,6 +789,9 @@ impl<'a> Lowerer<'a, '_> {
             let rr = self.eval_int(right)?;
             return Some((i64::try_from(l).ok()?, i64::try_from(rr).ok()?));
         }
+        if let Some((l, rr, _)) = self.attribute_range(r) {
+            return Some((l, rr));
+        }
         let info = self.a().range_of(r.span()).cloned()?;
         if let Some((l, rr)) = info.bounds.ints() {
             return Some((i64::try_from(l).ok()?, i64::try_from(rr).ok()?));
@@ -803,9 +806,53 @@ impl<'a> Lowerer<'a, '_> {
         if let ast::DiscreteRange::Range(ast::Range::Bounds { direction, .. }) = r {
             return *direction;
         }
+        if let Some((_, _, dir)) = self.attribute_range(r) {
+            return dir;
+        }
         self.a()
             .range_of(r.span())
             .map_or(Direction::To, |i| i.bounds.dir)
+    }
+
+    /// `x'range` and `x'reverse_range` of an object whose subtype does not
+    /// give its bounds — an unconstrained parameter, a `string` constant —
+    /// taken from what it was bound to.
+    fn attribute_range(&mut self, r: &'a ast::DiscreteRange) -> Option<(i64, i64, Direction)> {
+        let ast::DiscreteRange::Range(ast::Range::Attribute(ast::Name::Attribute {
+            prefix,
+            attribute,
+            ..
+        })) = r
+        else {
+            return None;
+        };
+        let reverse = attribute.name.eq_ignore_ascii_case("reverse_range");
+        if !reverse && !attribute.name.eq_ignore_ascii_case("range") {
+            return None;
+        }
+        // A range the analyser knows statically needs none of this.
+        if let Some(info) = self.a().range_of(r.span())
+            && info.bounds.ints().is_some()
+        {
+            return None;
+        }
+        let (l, rr, asc) = self.object_bounds(prefix)?;
+        let (l, rr) = (i64::try_from(l).ok()?, i64::try_from(rr).ok()?);
+        let dir = if asc {
+            Direction::To
+        } else {
+            Direction::Downto
+        };
+        Some(if reverse {
+            let flipped = if asc {
+                Direction::Downto
+            } else {
+                Direction::To
+            };
+            (rr, l, flipped)
+        } else {
+            (l, rr, dir)
+        })
     }
 
     pub(crate) fn bound_value(&mut self, b: &crate::vhdl::sema::Bound) -> Option<i64> {

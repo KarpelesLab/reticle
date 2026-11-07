@@ -390,16 +390,33 @@ impl<'a> Lowerer<'a, '_> {
         let ty = a
             .type_of(prefix.span())
             .or_else(|| a.decl_of(prefix.span()).and_then(|d| a.decl_type(d)))?;
-        let (bounds, index_ty) = if a.is_scalar(ty) {
-            (a.scalar_range(ty)?, ty)
+        let (left, right, ascending, index_ty) = if a.is_scalar(ty) {
+            let bounds = a.scalar_range(ty)?;
+            let left = i128::from(self.bound_value(&bounds.left)?);
+            let right = i128::from(self.bound_value(&bounds.right)?);
+            (left, right, bounds.dir == ast::Direction::To, ty)
         } else {
             let (indices, _) = a.array_info(ty)?;
-            let first = a.index_constraint(ty)?.into_iter().next()?;
-            (first, indices.first().copied()?)
+            let index_ty = indices.first().copied()?;
+            let constrained = a.index_constraint(ty).and_then(|c| c.into_iter().next());
+            let from_type = match constrained {
+                Some(b) => match (self.bound_value(&b.left), self.bound_value(&b.right)) {
+                    (Some(l), Some(r)) => {
+                        Some((i128::from(l), i128::from(r), b.dir == ast::Direction::To))
+                    }
+                    _ => None,
+                },
+                None => None,
+            };
+            // An object of an unconstrained subtype — a `string` generic or
+            // constant, an unconstrained parameter — has the bounds of its
+            // value, or of the actual it was bound to.
+            let (l, r, asc) = match from_type {
+                Some(t) => t,
+                None => self.object_bounds(prefix)?,
+            };
+            (l, r, asc, index_ty)
         };
-        let left = i128::from(self.bound_value(&bounds.left)?);
-        let right = i128::from(self.bound_value(&bounds.right)?);
-        let ascending = bounds.dir == ast::Direction::To;
         let as_value = |i: i128| match self.a().class(index_ty) {
             TypeClass::Enum => u32::try_from(i).ok().map(Value::Enum),
             _ => Some(Value::Int(i)),
@@ -421,6 +438,26 @@ impl<'a> Lowerer<'a, '_> {
             )),
             _ => None,
         }
+    }
+
+    /// The index bounds of an array object whose subtype does not give
+    /// them: from its static value, or from the layout it was bound with.
+    pub(crate) fn object_bounds(&mut self, prefix: &'a ast::Name) -> Option<(i128, i128, bool)> {
+        if let Some(Value::Array(av)) = self.eval_name(prefix) {
+            let asc = av.dir == ast::Direction::To;
+            return Some((av.left, av.right(), asc));
+        }
+        let d = self.a().decl_of(prefix.span())?;
+        let layout = match self.lookup(d)? {
+            Binding::Net { layout, .. }
+            | Binding::Mem { layout, .. }
+            | Binding::Slice { layout, .. } => layout.clone(),
+            Binding::Value { .. } => return None,
+        };
+        let arr = layout.array()?;
+        let left = i128::from(arr.left);
+        let right = i128::from(arr.index_at(arr.len.saturating_sub(1)));
+        Some((left, right, arr.dir == ast::Direction::To))
     }
 
     /// A type conversion between numeric classes.

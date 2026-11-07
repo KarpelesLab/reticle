@@ -78,6 +78,13 @@ pub(crate) trait LayoutEnv<'a> {
     fn analysis(&self) -> &'a Analysis;
     /// Evaluates the constraint bound whose expression is at `span`.
     fn eval_bound(&mut self, span: Span) -> Option<i128>;
+    /// Evaluates a range attribute used as a constraint, whose span the
+    /// analyser gives as both bounds: its left and right bounds and
+    /// direction, once the object it names is bound.
+    fn eval_range(&mut self, span: Span) -> Option<(i128, i128, Direction)> {
+        let _ = span;
+        None
+    }
     /// Reports a problem.
     fn report(&mut self, diag: Diagnostic);
 }
@@ -427,7 +434,18 @@ fn layout_inner<'a>(
                 );
                 return None;
             };
-            let (left, right) = resolve_bounds(env, &bounds, span)?;
+            let range_attr = match (&bounds.left, &bounds.right) {
+                (Bound::Dynamic(l), Bound::Dynamic(r)) if l == r => env.eval_range(*l),
+                _ => None,
+            };
+            let (left, right, dir) = match range_attr {
+                Some(found) => found,
+                None => {
+                    let (left, right) = resolve_bounds(env, &bounds, span)?;
+                    (left, right, bounds.dir)
+                }
+            };
+            let bounds = Bounds { dir, ..bounds };
             let len = match bounds.dir {
                 Direction::To => right - left + 1,
                 Direction::Downto => left - right + 1,

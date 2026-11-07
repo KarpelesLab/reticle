@@ -622,10 +622,34 @@ impl<'a> Lowerer<'a, '_> {
     }
 
     fn return_stmt(&mut self, e: Option<&'a ast::Expr>, span: Span, out: &mut BlockBuilder) {
-        let Some(frame) = self.frames.last().cloned() else {
+        let Some(mut frame) = self.frames.last().cloned() else {
             self.unsupported(span, "`return` outside a subprogram");
             return;
         };
+        if frame.lazy_result
+            && frame.result.is_none()
+            && let Some(e) = e
+            && let Some((id, layout)) = self.expr(e, &mut Sink::Proc(out))
+        {
+            let name = self.fresh("result");
+            if let Some(net) = self.new_net(name, layout.clone(), false, span) {
+                out.span = span;
+                out.assign(Lvalue::Net(net), id, AssignKind::Blocking);
+                if let Some(top) = self.frames.last_mut() {
+                    top.result = Some(net);
+                    top.result_layout = Some(layout.clone());
+                }
+                frame.result = Some(net);
+                frame.result_layout = Some(layout);
+                if let Some(flag) = frame.flag {
+                    self.b.span = span;
+                    let one = self.b.const_bit(true);
+                    out.span = span;
+                    out.assign(Lvalue::Net(flag), one, AssignKind::Blocking);
+                }
+                return;
+            }
+        }
         if let (Some(e), Some(net), Some(layout)) = (e, frame.result, frame.result_layout.clone()) {
             let value = self.expr_in(e, &layout, &mut Sink::Proc(out));
             out.span = span;
@@ -837,16 +861,27 @@ impl<'a> Lowerer<'a, '_> {
             let mode = mode.unwrap_or(Mode::In);
             let actual = pick_actual(self, args, i, ident);
             // An unconstrained formal (`a : bit_vector`) takes its width
-            // from the actual, as clause 5.3.2.2 prescribes.
+            // and bounds from the actual, as clause 5.3.2.2 prescribes. An
+            // `in` actual is lowered here to learn them — a literal, a
+            // slice or a concatenation has no subtype of its own to read —
+            // and that value is the one passed.
+            let mut prebuilt: Option<(ExprId, Layout)> = None;
             let layout = match self.layout_of_type_quiet(ty, ident.span) {
                 Some(l) => l,
                 None => {
-                    let from_actual = actual
+                    let mut from_actual = actual
                         .and_then(Actual::expr)
-                        .and_then(|e| self.layout_at(e.span()))
-                        .or_else(|| want.cloned());
-                    match from_actual {
-                        Some(l) => l,
+                        .and_then(|e| self.layout_at(e.span()));
+                    if from_actual.is_none()
+                        && matches!(mode, Mode::In)
+                        && let Some(ae) = actual.and_then(Actual::expr)
+                        && let Some((id, l)) = self.build(ae, None, &mut Sink::Proc(out))
+                    {
+                        from_actual = Some(l.clone());
+                        prebuilt = Some((id, l));
+                    }
+                    match from_actual.or_else(|| want.cloned()) {
+                        Some(l) => Layout { ty, ..l },
                         None => {
                             self.layout_of_type(ty, ident.span);
                             continue;
@@ -872,9 +907,10 @@ impl<'a> Lowerer<'a, '_> {
                 continue;
             };
             if is_in {
-                let value = match actual.and_then(Actual::expr) {
-                    Some(ae) => self.expr_in(ae, &layout, &mut Sink::Proc(out)),
-                    None => match &obj.default {
+                let value = match (actual.and_then(Actual::expr), prebuilt.take()) {
+                    (Some(ae), Some((id, from))) => self.coerce(id, &from, &layout, ae.span()),
+                    (Some(ae), None) => self.expr_in(ae, &layout, &mut Sink::Proc(out)),
+                    (None, _) => match &obj.default {
                         Some(def) => self.expr_in(def, &layout, &mut Sink::Proc(out)),
                         None => self.zero_of(&layout),
                     },
@@ -911,6 +947,7 @@ impl<'a> Lowerer<'a, '_> {
         // The result and the "has returned" flag.
         let mut result = None;
         let mut result_layout = None;
+        let mut lazy_result = false;
         if let Some(ret) = ret_type(self, d) {
             let layout = self
                 .layout_of_type_quiet(ret, span)
@@ -923,9 +960,10 @@ impl<'a> Lowerer<'a, '_> {
                         result_layout = Some(layout);
                     }
                 }
-                None => {
-                    self.layout_of_type(ret, span);
-                }
+                // `function reverse (v : std_logic_vector) return
+                // std_logic_vector` compared with a literal: the width is
+                // the returned value's, known at the first `return`.
+                None => lazy_result = true,
             }
         }
         let needs_flag =
@@ -961,9 +999,19 @@ impl<'a> Lowerer<'a, '_> {
             result,
             result_layout: result_layout.clone(),
             flag,
+            lazy_result,
         });
         self.stmts_guarded(&def.statements, out, flag);
-        self.frames.pop();
+        let frame = self.frames.pop();
+        if lazy_result {
+            result = frame.as_ref().and_then(|f| f.result);
+            result_layout = frame.and_then(|f| f.result_layout);
+            if result.is_none()
+                && let Some(ret) = ret_type(self, d)
+            {
+                self.layout_of_type(ret, span);
+            }
+        }
         self.prefix = saved_prefix;
 
         // Copy `out` and `inout` formals back.

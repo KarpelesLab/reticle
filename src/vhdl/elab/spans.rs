@@ -29,6 +29,9 @@ use crate::vhdl::sema::Analysis;
 #[derive(Debug, Default)]
 pub(crate) struct AstIndex<'a> {
     bounds: HashMap<Span, &'a Expr>,
+    /// Range attributes used as constraints (`std_logic_vector(v'range)`),
+    /// whose bounds the analyser records as the attribute's span.
+    range_attributes: HashMap<Span, &'a ast::Name>,
     bodies: HashMap<Span, &'a ast::SubprogramBody>,
     /// Attribute designators used in attribute specifications, in the
     /// order they were first seen, so output stays deterministic.
@@ -52,6 +55,11 @@ impl<'a> AstIndex<'a> {
     /// The expression whose span is `span`, if it is a constraint bound.
     pub(crate) fn bound(&self, span: Span) -> Option<&'a Expr> {
         self.bounds.get(&span).copied()
+    }
+
+    /// The range attribute whose span is `span`, if it is a constraint.
+    pub(crate) fn range_attribute(&self, span: Span) -> Option<&'a ast::Name> {
+        self.range_attributes.get(&span).copied()
     }
 
     /// The subprogram body whose span is `span`.
@@ -248,9 +256,14 @@ impl<'a> AstIndex<'a> {
     }
 
     fn range(&mut self, r: &'a ast::Range) {
-        if let ast::Range::Bounds { left, right, .. } = r {
-            self.bounds.insert(left.span(), left);
-            self.bounds.insert(right.span(), right);
+        match r {
+            ast::Range::Bounds { left, right, .. } => {
+                self.bounds.insert(left.span(), left);
+                self.bounds.insert(right.span(), right);
+            }
+            ast::Range::Attribute(n) => {
+                self.range_attributes.insert(n.span(), n);
+            }
         }
     }
 }
