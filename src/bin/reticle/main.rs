@@ -257,11 +257,11 @@ Options:
                      7 series: let a flip-flop take its data through a lookup
                      table, as Vivado does once the slice's bypass inputs are
                      taken, so that a slice holds eight flip-flops rather than
-                     four: through a table nothing else holds (`empty`, the
-                     default), or beside a table's own function of four inputs
-                     or fewer too (`all`, as Vivado also does; measured slower
-                     here). `off` is the slice before, which a build measured
-                     on a board keeps.
+                     four: through a table nothing else holds (`empty`), or
+                     beside a table's own function of four inputs or fewer
+                     too (`all`, the default, as Vivado also does). `off` is
+                     the slice before, which a build measured on a board
+                     keeps.
   --synthesis <vivado|legacy>
                      7 series: synthesise as Vivado 2026.1 does (the default):
                      subtractions, orderings (`<`, `>=`) and equalities on the
@@ -1115,9 +1115,9 @@ fn memories_legacy(args: &Args) -> Result<bool, ArgError> {
 }
 
 /// Which ways through a lookup table `--route-throughs` leaves a flip-flop's
-/// data (`empty`, the default); see the usage text.
+/// data (`all`, the default); see the usage text.
 fn route_throughs(args: &Args) -> Result<reticle::fpga::xray::RouteThroughMode, ArgError> {
-    let name = args.option("route-throughs").unwrap_or("empty");
+    let name = args.option("route-throughs").unwrap_or("all");
     reticle::fpga::xray::RouteThroughMode::from_name(name).ok_or_else(|| ArgError::BadValue {
         option: "route-throughs".to_owned(),
         value: name.to_owned(),

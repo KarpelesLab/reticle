@@ -25,8 +25,9 @@
 //! site), and in the second a table of two inputs on each of the tile's eight
 //! lanes. Sixteen in a tile is eight in each slice, which neither tool can do
 //! without a way through a table for half of them. The second is built with
-//! `--route-throughs all`, since the way beside a table's function is not this
-//! flow's default (`xray::RouteThroughMode`), and the first with the default.
+//! `--route-throughs all`, the way beside a table's function, and the first with
+//! `empty`, each named so that the default (`xray::RouteThroughMode`) moving
+//! does not move what is compared.
 //!
 //! # What this would and would not catch
 //!
@@ -368,8 +369,7 @@ fn build(root: &str, name: &str) -> Vec<Slice> {
         .arg("--bitstream")
         .arg(&bit)
         .args(["--verify", "--report"])
-        // A way beside a table's own function is not the default: see
-        // `xray::RouteThroughMode`.
+        // Each named, whatever the default: see `xray::RouteThroughMode`.
         .args([
             "--route-throughs",
             if name == "lut2x16" { "all" } else { "empty" },

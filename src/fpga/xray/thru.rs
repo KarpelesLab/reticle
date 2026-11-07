@@ -64,18 +64,21 @@
 //!
 //! # Which are on, and why not both
 //!
-//! [`RouteThroughMode::Empty`], the command line's default, gives a lane the
-//! upper half's way only; [`RouteThroughMode::All`] the lower half's as well.
-//! Measured on the timing corpus by Vivado's timer, the first built it 0.6%
+//! [`RouteThroughMode::Empty`] gives a lane the upper half's way only;
+//! [`RouteThroughMode::All`], the command line's default, the lower half's as
+//! well. Measured on the timing corpus by Vivado's timer, the first built it 0.6%
 //! faster than without ways over ten seeds (geometric mean over Vivado's own,
 //! 1.248 against 1.256), and over five the two together were slower (1.252)
 //! and the lower half's alone slower still (1.255), for about the same slices:
-//! a table beside
-//! a way keeps off `A6`, its fastest input, and a placement that leans on the
-//! way keeps such tables there. `docs/fpga-vivado-parity.md`, "Eight flip-flops
-//! a slice", has the tables. Under `Empty` the lower half's wire and the pips
-//! into it are still declared, with no way on to the flip-flop, so that the
-//! fabric is the one that was measured; the router never enters it.
+//! a table beside a way keeps off `A6`, its fastest input, and a placement that
+//! leans on the way keeps such tables there (`docs/fpga-vivado-parity.md`,
+//! "Eight flip-flops a slice"). **Measured again** once the placer had median
+//! moves, a truthful estimate and the clock's arrival ("Filling slices"), the
+//! two together were the faster, over ten seeds 1.231 against 1.239 with the
+//! upper half's alone, for the same slices; why the two readings differ is not
+//! known. Under `Empty` the lower half's wire and the pips into it are still
+//! declared, with no way on to the flip-flop, so that the fabric is the one that
+//! was measured; the router never enters it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -94,12 +97,14 @@ pub enum RouteThroughMode {
     #[default]
     Off,
     /// The upper half's, through a table no cell holds (`<L>FFMUX.O6` from
-    /// `A6`). The command line's default: measured, it builds the timing
-    /// corpus no slower than without, where [`RouteThroughMode::All`] built it
-    /// slower (`docs/fpga-vivado-parity.md`, "Eight flip-flops a slice").
+    /// `A6`). Measured, it builds the timing corpus no slower than without
+    /// (`docs/fpga-vivado-parity.md`, "Eight flip-flops a slice").
     Empty,
     /// Those and the lower half's beside a cell that leaves it room
-    /// (`<L>FFMUX.O5` from one of `A1` to `A5`), as Vivado has both.
+    /// (`<L>FFMUX.O5` from one of `A1` to `A5`), as Vivado has both. The
+    /// command line's default: measured, it builds the timing corpus faster
+    /// than [`RouteThroughMode::Empty`] (`docs/fpga-vivado-parity.md`,
+    /// "Filling slices").
     All,
 }
 
