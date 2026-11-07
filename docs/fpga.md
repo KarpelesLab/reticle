@@ -246,6 +246,20 @@ ports than a block has is duplicated, one copy per read port, each
 holding the contents, exactly as a written memory with one write port
 is; the copies need no keeping in step.
 
+**On the 7 series with `--memories vivado`, the default, the contents are
+laid out by rule and not by the `mode` lines**, which is the one place
+the statement above does not hold: Vivado's arrangement uses modes with
+parity bits (`RAMB36E1` 36 wide, `RAMB18E1` 18 and 9, and simple dual
+port 36 and 72), whose parity contents are a second series, `INITP_`, the
+`init` layout cannot describe. Bit `j` of word `a` is bit `a * data + j`
+of the `INIT_`s taken as one vector and parity bit `j` bit `a * parity +
+j` of the `INITP_`s (`primitives::linear_contents`). That is UG473's
+layout, quoted; it is the database's own layout, bit for bit, in every
+mode that has one, and Vivado's bitstreams of the memories with contents
+in `testdata/fpga/vivado/memarr/` decode to the same contents as
+Reticle's (`docs/fpga-vivado-parity.md`, "Memories as Vivado arranges
+them").
+
 ## Resource counts, and the part number that has fewer than the die
 
 `bel … count N` and `bram … count N` in a `.dev` file say **how many the

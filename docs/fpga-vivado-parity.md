@@ -2378,8 +2378,10 @@ depends on, and no design maps differently for it.
 - **Route-throughs as Vivado's netlist has them**: a propagate that is a
   flip-flop's output is a `LUT1` cell here and nothing in Vivado's synthesised
   netlist; the sites are the same. `counter64`'s 85.
-- **`analyser_fifo`'s memory** as Vivado arranges it, nine 16K x 2 block RAMs and no
-  read multiplexer; that is the memory mapping's.
+- ~~**`analyser_fifo`'s memory** as Vivado arranges it, nine 16K x 2 block RAMs and no
+  read multiplexer; that is the memory mapping's.~~ *Done in "Memories as Vivado
+  arranges them"*:
+  nine `RAMB36E1` of 16,384 by 2, 26 tables fewer by the mapper's count.
 - **Resource sharing** of the shifts, which is most of `regfile_alu`'s remaining
   gap, is measured above and not kept: slower on the board's timer and unproved.
 - `crc32`'s 191 tables two deep to Vivado's 129 three deep is the section before's
@@ -2619,6 +2621,307 @@ not kept.
   serialiser placed there by its pad is as before.
 - None of it has been on a part.
 
+## Memories as Vivado arranges them
+
+**Asked: how does Vivado lay an inferred memory out over the 7 series' block and
+distributed RAMs, design by design, and where its arrangement is no worse, does
+Reticle's default (`--memories vivado`) now choose the same?** "Area against Vivado's"
+left `analyser_fifo`'s memory as eight `RAMB36E1` of 4,096 by 9, four deep, and a read
+multiplexer, where Vivado has nine of 16,384 by 2 and none. Run on 2026-11-07, with
+Vivado 2026.1, at `xc7a100tftg256-1` for the arrangements and the bitstreams and
+`-3` for the periods. **Everything here is Vivado's synthesis, its bitstreams, its
+simulator and its timer; nothing has been on a part.**
+
+`testdata/fpga/vivado/memarr/` has 108 memories to infer, written here
+(`tools/vivado-parity/gen_memarr.py`), each fed by a shift register from one pin and
+its word folded to one bit: one write port and one read port at 52 sizes from 32 by 31
+to 65,536 by 1, either side of distributed RAM's line, of 18 and 36 kbit, of the
+parity widths and of a power of two (1,000, 1,536, 3,000, 6,000, 12,000, 20,000
+words); at three sizes, a single port read first, written first and unchanged on a
+write, a true dual port, a second read, an enabled read and a read registered twice; a
+read on no clock; read-only memories and memories with initial contents (written as a
+loop over a hash of the address); two written narrow and read wide in the vendor's
+template; and each `ram_style`. Those 96 fold the word read to its parity; twelve
+more, `bits_`, fold it under a mask that changes every cycle, so that a bit read from
+the wrong place shows (two bits swapped leave a parity as it was), for the arrangements
+whose word travels on more than one pin or block. `FIXTURE=memarr
+tools/vivado-parity/lutram.sh` runs them; `lutram_probe.tcl` now writes each block's parameters too (`params`: `RAM_MODE`,
+the four widths, `DO<x>_REG`, the write modes, `RAM_EXTENSION_<x>`), and `vivado.txt`
+keeps them with the cells after routing and each block RAM tile decoded through this
+repository's database. `xsim.txt` is what each does as Vivado built it, under its own
+simulator (`gen_lutram_vectors.py`), and `memarr_table.py` sets Vivado's arrangement
+beside Reticle's from a build's `--report`. Only answers are kept.
+
+### What Vivado does
+
+**Measured**, read off `vivado.txt`'s parameters and the netlists Vivado wrote:
+
+- **Every block holds the whole depth, where one block can.** The depth rounded up to
+  a power of two is each block's, from 1,024 words (a `RAMB18E1` 18 bits wide, a
+  `RAMB36E1` 36) to 32,768 (a `RAMB36E1` one bit wide), and the width is split over
+  blocks side by side: nothing is stacked and nothing is multiplexed on the read.
+  `sdp_16384x18` is nine `RAMB36E1` of 16,384 by 2, which is one block more than the
+  eight of 4,096 by 9 four deep that cost by capacity chose here, and 4 tables against
+  31; `sdp_20000x2` two of 32,768 by 1.
+- **The width is `RAMB36E1`s, low bits first, and a `RAMB18E1` for what they leave
+  when it fits one at that depth**: `sdp_1024x40` is a `RAMB36E1` of 36 and a
+  `RAMB18E1` holding 4, `sdp_2048x24` 18 and 6, `sdp_16384x9` four `RAMB36E1` of 2
+  and a `RAMB18E1` of 1, `sdp_3000x12` 9 and 3; `sdp_1024x20` is one `RAMB36E1`.
+  A width with parity is filled to it: `sdp_4096x16` is 9 bits and 7, bit 8 on the
+  first block's `DIPADIP[0]` (its netlist).
+- **512 words or fewer, written on one port and read on another, are simple dual
+  port**: a `RAMB18E1` read 36 wide (`sdp_512x36`, and `sdp_32x32`, 1,024 bits as
+  Vivado counts them), a `RAMB36E1` 72 wide (`sdp_512x64`, `sdp_512x72`); but what
+  fits 18 bits is a `RAMB18E1` of 1,024 by 18 in true dual port (`sdp_512x18`,
+  `sdp_256x4`, `sdp_128x8`). The word's bits 15:0 are `DIADI`, 31:16 `DIBDI`, 33:32
+  `DIPADIP` and 35:34 `DIPBDIP`, each read alike, and in 72 bits 32 a side; both write
+  modes `READ_FIRST`.
+- **A single port is port A alone**: `READ_WIDTH_B` and `WRITE_WIDTH_B` zero,
+  `WRITE_MODE_A` `READ_FIRST`, `WRITE_FIRST` or `NO_CHANGE` as the description reads
+  (`sp_rf_`, `sp_wf_`, `sp_nc_`), and **`RDADDR_COLLISION_HWCONFIG` `PERFORMANCE`**,
+  which no block Vivado uses both ports of sets. A true dual port is a read and a
+  write at one address on each of A and B, both `READ_FIRST` (`tdp_`). Two reads and a
+  write are a copy each, as here before (`r2_`), and Vivado puts the two `RAMB18E1`s
+  of one in one tile.
+- **A register after the read is the block's own** (`DOB_REG`, `reg_`): 41 flip-flops
+  where this flow had 59. A read-only memory's address register and read go into the
+  block too, `DOA_REG` on port A alone (`rom_16384x2`, the cell named `sr_reg_rep`).
+- **Initial contents do not change the arrangement**: `init_1024x36` is one
+  `RAMB36E1` 36 wide, its parity bits in `INITP_`, where this flow had given a memory
+  with contents only modes without parity, three `RAMB18E1` of 16.
+- **Deeper than 32,768**, two `RAMB36E1` cascade (`RAM_EXTENSION_A` `LOWER` and
+  `UPPER`, `sdp_65536x1`).
+- **Read-only memories of 512 by 36 to 4,096 by 8 are lookup tables**, 174 to 321
+  of them and the multiplexers, where one block holds each (`rom_*`); 16,384 by 2 is a
+  block.
+- **Under a tight clock, Vivado's synthesis chooses distributed RAM for memories it
+  puts in block RAM at 5 ns**: in the timing runs below, at periods of 0.85 of what it
+  had reached, `sdp_32x32`, `sdp_512x36`, `sdp_512x64` and `sp_wf_1024x18` were
+  `RAM32M`s and `RAM64M`s, with `INFO: [Synth 8-5584] The signal ... is implemented as
+  distributed LUT RAM for the following reason(s): The timing constraints suggest that
+  the chosen mapping will yield better timing results.` *The threshold of "Block or
+  distributed" above, 1,024 bits, was measured with a relaxed clock and is what
+  Vivado does there; it is not the whole rule.* This flow does not choose by timing.
+- `ram_style = "registers"` is flip-flops, 1,059 of them for 128 by 8.
+
+### What was changed
+
+All behind `--memories vivado`, the default on the 7 series (`MapOptions::vivado_memories`);
+`--memories legacy`, the ECP5, the Gowin and the iCE40 map as before:
+
+1. **Vivado's arrangement** (`primitives::vivado_columns`, read off the answers
+   above): columns of `RAMB36E1`s and a `RAMB18E1` at the depth that covers the
+   memory, or simple dual port at 512 words; deeper than 32,768, rows of blocks of
+   32,768 and the read multiplexed, as before. A memory's blocks can now be two
+   primitives in two modes (`BramPlan::columns`); the report says so (`2 x RAMB36E1 in
+   36x1024 mode (1 wide, 1 deep, and 1 x RAMB18E1 in 18x1024 mode beside)`).
+2. **Simple dual port inferred** (`Mapper::sdp_wiring`): the mode is the device's true
+   dual port of half the width and twice the depth, its word's address a pin higher,
+   with Vivado's parameters, the read on A and the write on B.
+3. **Contents in every mode, parity included** (`linear_contents`): bit `j` of word
+   `a` at `a * data + j` of the `INIT_`s, a parity bit at `a * parity + j` of the
+   `INITP_`s, the mode's top bits being its parity. That is UG473's layout,
+   **quoted**; the database's layouts of the modes without parity are the same bit for
+   bit (`contents_by_rule_are_the_databases_layouts`), and Vivado's bitstreams of the
+   ten memories with contents and a write are the check, below.
+4. **A read and a write at one address on one port** (`Mapper::pair_ports`): a read on
+   the write's clock that always reads is read first; one enabled by the write's
+   enable complemented is no change; and a read on no clock chosen against the write's
+   data by its enable into a register on its clock (`if (we) q <= d; else q <=
+   mem[a];`, which reaches the mapper so) is written first, the register being the
+   block's read. A port nothing uses has widths of zero and the faster collision mode.
+5. **The register after a read in the block** (`Mapper::output_register`): a
+   flip-flop on the read's clock with no reset, starting at zero, loading the read's
+   whole word with nothing else reading it, is `DO<x>_REG`, its enable `REGCE`, when
+   the read is not multiplexed after the block.
+
+### What it is now
+
+Each design: Vivado's arrangement (`36` a `RAMB36E1`, `18` a `RAMB18E1`, by the
+port's width; `A` one port; `reg` the output register in the block), this flow's
+before (`73334987`, the same as `f8625a1d`) and after, `=` where it is Vivado's; the design's tables, Vivado's,
+before and after; and for the 28 clocks timed (below) the period, Vivado's own flow,
+then the medians of five seeds before and after (ns). **Measured**:
+
+| design | Vivado | before | after | tables V / b / a | period V / b / a |
+|---|---|---|---|---|---|
+| sdp_16384x18 | 9 36 TDP 2 | 8 36 TDP 9 four deep | = | 4 / 31 / 5 | 3.41 / 4.60 / 3.81 |
+| sdp_16384x9 | 4 36 TDP 2, 1 18 TDP 1 | 4 36 TDP 9 four deep | = | 2 / 19 / 2 | 3.04 / 4.08 / 3.58 |
+| sdp_8192x9 | 2 36 TDP 4, 1 18 TDP 2 | 2 36 TDP 9 two deep | = | 2 / 9 / 2 | 3.11 / 3.60 / 3.47 |
+| sdp_20000x2 | 2 36 TDP 1 | 3 18 TDP 2 three deep | = | 1 / 8 / 1 | 2.55 / 3.19 / 2.75 |
+| sdp_12000x3 | 1 36 TDP 2, 1 18 TDP 1 | 3 18 TDP 1 | = | 1 / 1 / 1 | 2.58 / 2.76 / 2.77 |
+| sdp_6000x6 | 1 36 TDP 4, 1 18 TDP 2 | 3 18 TDP 2 | = | 2 / 2 / 2 | 2.94 / 3.13 / 3.21 |
+| sdp_3000x12 | 1 36 TDP 9, 1 18 TDP 4 | 3 18 TDP 4 | = | 3 / 3 / 3 | 3.03 / 3.48 / 3.40 |
+| sdp_2048x24 | 1 36 TDP 18, 1 18 TDP 9 | 3 18 TDP 9 | = | 5 / 5 / 5 | 3.38 / 3.59 / 3.71 |
+| sdp_1024x40 | 1 36 TDP 36, 1 18 TDP 18 | 3 18 TDP 18 | = | 8 / 9 / 9 | 3.53 / 4.03 / 4.05 |
+| sdp_512x72 | 1 36 SDP 72 | 2 36 TDP 36 | = | 15 / 16 / 16 | 3.83 / 4.67 / 4.36 |
+| sdp_512x64 | 1 36 SDP 72 | 2 36 TDP 36 | = | 13 / 14 / 14 | 2.73\* / 4.28 / 4.42 |
+| sdp_512x36 | 1 18 SDP 36 | 1 36 TDP 36 | = | 8 / 8 / 8 | 2.64\* / 4.02 / 4.07 |
+| sdp_32x32 | 1 18 SDP 36 | 1 36 TDP 36 | = | 7 / 7 / 7 | 1.79\* / 4.12 / 3.92 |
+| init_1024x36 | 1 36 TDP 36 | 3 18 TDP 18, 16 bits each | = | 8 / 8 / 8 | 3.53 / 4.07 / 4.09 |
+| init_4096x18 | 2 36 TDP 9 | 5 18 TDP 4 | = | 4 / 5 / 5 | 3.24 / 3.54 / 3.63 |
+| init_16384x9 | 4 36 TDP 2, 1 18 TDP 1 | 9 18 TDP 1 | = | 2 / 2 / 2 | 3.04 / 3.43 / 3.58 |
+| init_1024x40, init_2048x18, init_512x36, init_512x72 | as `sdp_` | modes without parity | = | | |
+| reg_1024x18 | 1 18 TDP 18 reg | the register in a slice | = | 4 / 5 / 5 | 1.99 / 2.66 / 2.26 |
+| reg_4096x18 | 2 36 TDP 9 reg | the same | = | 4 / 5 / 5 | 2.04 / 2.68 / 2.42 |
+| reg_16384x4 | 2 36 TDP 2 reg | the same | = | 1 / 1 / 1 | 1.44 / 2.66 / 1.85 |
+| sp_wf_1024x18 | 1 18 TDP 18 A | 96 `RAM64M` | = | 4 / 112 / 5 | 2.79\* / 4.48 / 3.55 |
+| sp_wf_4096x18 | 2 36 TDP 9 A | 384 `RAM64M` | = | 4 / 421 / 5 | 3.36 / 7.96 / 3.64 |
+| sp_wf_16384x4 | 2 36 TDP 2 A | 256 `RAM64M`, 256 `RAM64X1D` | = | 1 / 551 / 1 | |
+| sp_rf_4096x18, sp_nc_4096x18 | 2 36 TDP 9 A | both ports | = | 4 / 5 or 6 / 5 | 3.17, 3.36 / 3.60, 3.58 / 3.63, 3.64 |
+| sp_rf_, sp_nc_ at 1,024 by 18 and 16,384 by 4 | A | both ports | = | | |
+| tdp_1024x18 | 1 18 TDP 18 | refused | = | 8 / - / 8 | 3.37 / - / 3.94 |
+| tdp_4096x18 | 2 36 TDP 9 | refused | = | 8 / - / 8 | 3.35 / - / 4.13 |
+| tdp_16384x4 | 2 36 TDP 2 | refused | = | 2 / - / 2 | |
+| analyser_fifo | 9 36 TDP 2 | 8 36 TDP 9 four deep | = | 131 / 238 / 212, flip-flops 221 / 213 / 211 | `rd_clk` 3.89 / 5.35 / 5.26, `wr_clk` 2.42 / 2.98 / 3.00 |
+| bits_ (eleven of the twelve) | as the design each is named for | as that design | = | | |
+| the other 49, and `bits_sdp_4096x16` | | = | = | | |
+| sdp_65536x1 | 2 36 TDP 1, cascaded | 2 36 TDP 1 two deep | the same | 4 / 4 / 4 | |
+| rom_512x36 to rom_4096x8 (five) | lookup tables, 174 to 321 | one block | one block | | |
+| rom_16384x2 | 1 36 TDP 2 A reg, its address in the block | 1 36 TDP 2 | 1 36 TDP 2 A | 1 / 1 / 1 | |
+| async_1024x8 | 1 18 TDP 18, its address in the block | 48 `RAM64M` | the same | 2 / 51 / 51 | |
+| asym_4096x8_r32, asym_2048x9_r36 | 4 36 TDP 9, 4 18 TDP 9 | 768, 384 `RAM64M` | the same | 7, 8 / 626, 366 | |
+| style_registers_128x8 | 1,059 flip-flops | 6 `RAM64M` | the same | 410 / 13 / 13 | 3.11 / 2.47 / 2.47 |
+
+\* Vivado's own flow had these in distributed RAM at the periods it was timed at (above);
+its arrangement at 5 ns is the column beside. `analyser_fifo`'s tables are
+`netlist_qor.sh`'s count of each netlist, as the sections before give them; the
+others are the design's whole count of tables, the parity of the word read most of
+them.
+
+**97 of the 108 are Vivado's arrangement, where 50 were.** Of the eleven that are not:
+
+- *`sdp_65536x1`*: no cascade is built (`b36_cascade` is refused, "Block RAM" above),
+  so two blocks of 32,768 are stacked and their read multiplexed.
+- *The five read-only memories Vivado makes of lookup tables* stay a block each: one
+  block against 174 to 321 tables is not worse, and this flow does not time its choices.
+- *`rom_16384x2` and `async_1024x8`*: Vivado takes the address register into the block,
+  which this flow does not ("Block or distributed" above), so the first reads in the
+  block's latch and the second is distributed RAM.
+- *`asym_*`*: the template's loop of part-selects (`q[i * 8 +: 8] <= mem[{a, i}]`)
+  reaches the mapper as four reads on no clock, the register a nest of its own bits,
+  so the memory is distributed RAM; four reads on the clock would be four copies, which
+  is what Vivado's four blocks are. That is the synthesis's, not looked into here.
+- *`style_registers_128x8`*: Vivado's flip-flops are worse than this flow's distributed
+  RAM by Vivado's own timer, 3.11 ns against 2.47 and 410 tables against 13, so the
+  attribute keeps meaning logic of any kind here. Built as Vivado builds it, 4.30 ns
+  (this flow's flip-flops); measured, and not kept.
+
+**Checked, on all 108** (`tests/fpga_xray_memarr_vivado.rs`):
+
+- every memory gets the cells Vivado gave it, block and distributed RAMs by kind and
+  count, but the eleven;
+- **every block RAM tile is Vivado's, site feature for site feature and contents bit
+  for contents bit**: 177 tiles of the 97, the initial contents of the seven `init_`
+  memories, the two `bits_` ones and `rom_r2_1024x16`'s two copies included, so the parity bits in
+  `INITP_`, the halves of a simple dual port and which column holds which bits are
+  Vivado's. Two `RAMB18E1` in one tile are compared as two blocks, since Vivado
+  puts `r2_`'s copies in one tile and the placement here may not;
+- every set bit decodes, none unexplained, and the arcs are the router's and the ties';
+  every mapping is proved;
+- **the routed netlist answers as Vivado's build does**, 2,000 cycles from power-up
+  under Vivado's simulator on Vivado's models, bit for bit, on 106 of the 108: nine of
+  the eleven Reticle arranges otherwise among them, read-only memories and contents
+  included. The two `asym_*` are not simulated: Reticle's 768 `RAM64M` of one had not
+  elaborated after forty minutes.
+
+`tests/fpga_xray_bram_vivado.rs`'s inferred designs are all Vivado's now:
+`ib_512x36` and `ib_512x72` in simple dual port, `ib_1024x36_reg2`'s register in the
+block and `ib_1024x18_tdp`, which was refused, are no longer listed as differing, and
+their tiles, pins and simulation are held as the rest. So are
+`tests/fpga_xray_lutram_vivado.rs`'s `mem32x32` and `mem32x32r2`, a `RAMB18E1` read 36
+wide each, as Vivado's.
+
+### The period
+
+`achieved.sh` on the 26 designs whose arrangement changed and `analyser_fifo`, five
+seeds each, `achieved.txt` there (the table above has the medians). **Over the 26
+clocks both builds have, Reticle's median is 1.193 times Vivado's own figure, against
+1.293 before**; Vivado placing and routing Reticle's netlist, 1.068 against 1.137.
+Faster by more than a seed's spread: `sdp_16384x18` (4.60 to 3.81 ns), `sdp_16384x9`,
+`sdp_20000x2`, the three `reg_` (`reg_16384x4` 2.66 to 1.85, against Vivado's 1.44),
+`sp_wf_` (7.96 to 3.64 at 4,096 by 18). Slower: `init_16384x9` 3.43 to
+3.58 (four `RAMB36E1` and a `RAMB18E1` where it was nine `RAMB18E1`, the same tiles;
+Vivado on the two netlists 2.94 and 3.00), `init_4096x18`, `sdp_2048x24`, `sdp_512x64`
+and `sdp_6000x6` by 3 % or less, inside or at the edge of the seeds' spread, with
+Vivado's placement of each new netlist as fast as or faster than of the old but for
+`sdp_512x64`'s 3.89 to 3.91. `analyser_fifo`'s read clock is 5.35 to 5.26: its worst
+path is the flags' arithmetic and not the memory, and Vivado's placement of the new
+netlist was 5.00 to 5.25 on one seed.
+
+The thirteen designs of `qor/` are the bitstream they were with the default, byte for
+byte (their memories were already Vivado's: `bram_fifo` one `RAMB36E1`, `lutram32` and
+`regfile_alu` distributed RAM), so their figures in the sections before stand.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--memories legacy`, which none of
+this reaches: with this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.** The
+other families' mappings of five memory designs of `testdata/fpga/cynthion/` on the
+ECP5, the Gowin and the iCE40, and the legacy mappings of three of `qor/`,
+`analyser_fifo` and six of `memarr/`, are the files they were, byte for byte. (No
+Trellis or Apicula database is on this machine, so those families' bitstreams were not
+built; their mapped netlists are what changed nowhere.)
+
+### Tests
+
+- `tests/fpga_xray_memarr_vivado.rs`, above; with `RETICLE_MEMARR_BITS` and
+  `UPDATE_EXPECT` it writes `vivado.txt` again from `lutram.sh`'s output. It also holds
+  `--memories legacy` to the arrangement before (sixteen `RAMB18E1` for
+  `sdp_16384x18`, two for `sdp_512x36`, distributed RAM for `sp_wf_1024x18`), and the
+  quoted run of `achieved.txt`: every clock five seeds, the geometric mean 5 % lower
+  after, no clock 5 % slower, and `sdp_16384x18` and `analyser_fifo`'s read clock
+  faster.
+- `vivado_arranges_a_memory_as_its_netlists_say` holds `vivado_columns` to one case
+  per rule above, and `contents_by_rule_are_the_databases_layouts` the contents rule to
+  the database's layouts in every mode without parity, and to `INITP_` in every mode
+  with.
+- `tests/fpga_xray_synthesis.rs` pins `analyser_fifo` at 165 tables under the legacy
+  synthesis and 154 under the default, 29 and 26 fewer: both map memories as Vivado
+  does.
+
+**Mutations**, each made by a script in a copy of the tree and run against the
+library's tests of the mapper and `tests/fpga_xray_memarr_vivado.rs` with Vivado's
+simulator:
+
+| mutation | what failed |
+|---|---|
+| the remainder always a `RAMB36E1`, never a `RAMB18E1` beside | the arrangement's unit test; the cells; the tiles; the legacy test's default rows; the exceptions' |
+| no simple dual port | the cells; the tiles; the legacy test's default rows |
+| a simple dual port's word address where a true dual port's is | the simulation only: the address pins are no tile feature |
+| a simple dual port's halves written the wrong way round | **nothing**, at first: every design folded its word to its parity, which two halves swapped leave alone, and the contents are written by parameter, not by the pins. The twelve `bits_` designs were added for it, and with them the simulation fails, on the three in simple dual port |
+| parity bits in `INIT_` | the contents' unit test; the tiles; the simulation |
+| every depth slice's contents from word 0 | the contents' unit test only: no memory here with contents is two blocks deep |
+| no change read as read first | the tiles; the simulation |
+| written first given `READ_FIRST` | the tiles; the simulation |
+| the register taken and `DO<x>_REG` left at 0 | the tiles; the simulation |
+| an output register's `REGCE` tied low | the simulation only |
+| an unused port's widths left as the mode's | the tiles; the simulation |
+| one port's collision mode left at the default | the tiles; the simulation |
+
+Three are caught by the simulation alone, which needs `RETICLE_VIVADO`: without
+Vivado installed, a simple dual port's address or halves, and an output register that
+never loads, pass every test here.
+
+### Not done
+
+- **A cascade** for a memory deeper than 32,768, and **the address register taken
+  into the block** for a read on no clock or a read-only memory.
+- **Choosing by the clock**: Vivado's synthesis moves memories to distributed RAM
+  when a tight constraint asks; this flow's choice is the same at any period.
+- **Read-only memories as lookup tables**, which Vivado does to 4,096 by 8; not
+  wanted, at the measured cost.
+- **A loop of part-selects reading a memory**, as the vendor's asymmetric template is
+  written, is reads on no clock in the synthesis here.
+- **Byte writes**, still refused by the frontend (`ib_1024x32_bytes`), and so not asked
+  again here.
+- **Placing a memory's two `RAMB18E1` copies in one tile**, as Vivado does: the placer's
+  (not touched here).
+- None of it has been on a part.
+
 ## Wide multiplexers
 
 A slice has a `MUXF7` over each two of its lookup tables and a `MUXF8` over the
@@ -2824,7 +3127,7 @@ except one or two bits, which are `RAM128X1D`s; a copy per read port.
 | | slices the same as Vivado's | cells the same as Vivado's |
 |---|---|---|
 | 22 designs naming a cell | 22 | 22 |
-| 28 designs inferring one | 21 | 26 |
+| 28 designs inferring one | 21 | 26 (28 since the simple dual port, below) |
 
 The seven slices that differ are Vivado packing more than one cell into a slice: two
 read ports' `RAM32X1D` into one slice's four tables, two `RAM64X1D` likewise, and a
@@ -2833,7 +3136,8 @@ slice, but for the two halves of a pair of `RAM32X1D`. The two whose cells diffe
 `mem32x32` and `mem32x32r2`, which Vivado puts in one `RAMB18E1` each port where
 Reticle used two, its 36-bit mode, which the next section is for. Reticle uses one
 `RAMB36E1` now, the same tile, in true dual port: inferring the simple dual port is
-not done.
+not done. *Since done ("Memories as Vivado arranges them"): both are a `RAMB18E1` read
+36 wide each port, as Vivado's, and the cells of all 28 are Vivado's.*
 
 **Checked, on all 50:** every set bit decodes, none unexplained; the arcs selected
 are the arcs the router chose; the mapping is proved; every frame's ECC is what
@@ -2874,6 +3178,11 @@ else registers (`s_async_` in `sweep.txt`), and Reticle's does not, so such a me
 is distributed RAM here however large, up to the flow's limit for building one from
 logic. A read with no register at all is distributed RAM in both (`c_`), but for
 Vivado taking the output register a one-bit read leaves (`c_4096x1`).
+
+**And not the whole rule:** the sweep asked at a relaxed clock. At a tight one Vivado's
+synthesis moves memories it would put in block RAM to distributed RAM, saying the
+timing constraints suggest it (`Synth 8-5584`): `sdp_512x36`, 18 kbit, among them
+("Memories as Vivado arranges them"). This flow's line does not move with the clock.
 
 ### The ECC of a frame holding one
 
@@ -3044,7 +3353,10 @@ write, which the mapper does not pair and refuses; a second read register Vivado
 takes into the block (`DOB_REG`) and Reticle leaves in a slice; 512 words of 36 and
 of 72, which Vivado puts in one block in simple dual port and Reticle in a
 `RAMB36E1` and two, in true dual port; and byte writes, which Vivado's synthesis
-stopped on.
+stopped on. *Four of the six are Vivado's since "Memories as Vivado arranges them":
+the ports that read and write are paired, the second register is the block's
+`DOB_REG`, and the 512 words are simple dual port; their tiles, pins and simulation are
+held with the rest. The cascade and the byte writes are not.*
 
 **Correction, 2026-11-06: `ib_1024x32_bytes` is refused now, and what was built of
 it before was wrong.** Its byte writes, `mem[a][7:0] <= d`, assign a select of an
@@ -3278,8 +3590,9 @@ block RAM tests and `fpga_xray_bram_vivado` run against it with `--no-fail-fast`
 | port A's write enables driven in `SDP` | the unit test of the lanes |
 | `WRITE_FIRST` kept on the port inference writes | the tiles; what is not built; the simulation |
 
-**Not done.** A cascade, error correction, inference of simple dual port, of a register into the
-block, and of a port that both reads and writes. A block's output register named
+**Not done.** A cascade, error correction, ~~inference of simple dual port, of a register into the
+block, and of a port that both reads and writes~~ (those three since done, "Memories as
+Vivado arranges them"). A block's output register named
 with `DO<x>_REG` is clocked as Vivado clocks it, but nothing here has run one on a
 part, nor any block RAM of this section.
 
