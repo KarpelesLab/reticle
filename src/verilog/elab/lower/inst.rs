@@ -395,7 +395,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         one: &'ast ast::Instance,
         item: &'ast Item,
     ) {
-        let overrides = self.build_overrides(params, &name.name);
+        let overrides = self.build_overrides(module, params, &name.name);
         let known = self.env.cx.table.modules.contains_key(module);
         let target = if known {
             super::elaborate_module(self.env.cx, module, overrides, name.span)
@@ -415,7 +415,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let params_for_ir = if known {
             Vec::new()
         } else {
-            self.build_overrides(params, &name.name).all()
+            self.build_overrides(module, params, &name.name).all()
         };
         let ports = target.map(|id| self.port_infos(id));
         self.natural_connections = true;
@@ -520,7 +520,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         one: &'ast ast::Instance,
         item: &'ast Item,
     ) {
-        let overrides = self.build_overrides(params, &name.name);
+        let mut overrides = self.build_overrides(module, params, &name.name);
+        self.interface_overrides(module, one, &mut overrides);
         let known = self.env.cx.table.modules.contains_key(module);
         let target = if known {
             super::elaborate_module(self.env.cx, module, overrides, name.span)
@@ -543,7 +544,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let params_for_ir = if known {
             Vec::new()
         } else {
-            self.build_overrides(params, &name.name).all()
+            self.build_overrides(module, params, &name.name).all()
         };
 
         let ports = target.map(|id| self.port_infos(id));
@@ -627,10 +628,38 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             .collect()
     }
 
+    /// The declared type of `module`'s parameter `name`, or of its
+    /// `index`th when the override is positional, resolved in the current
+    /// scope: `None` for an implicitly typed parameter, or a type only the
+    /// module itself declares.
+    fn param_type(
+        &mut self,
+        module: &str,
+        name: Option<&ast::Ident>,
+        index: usize,
+    ) -> Option<VType> {
+        let decl = self.env.cx.table.modules.get(module).copied()?;
+        let list = decl.def.params.as_ref()?;
+        let mut all = list
+            .iter()
+            .filter(|pd| pd.kind == ast::ParamKind::Parameter && !pd.is_type)
+            .flat_map(|pd| pd.decls.iter().map(move |d| (pd, d)));
+        let (pd, d) = match name {
+            Some(n) => all.find(|(_, d)| d.name.name == n.name)?,
+            None => all.nth(index)?,
+        };
+        if pd.data_type.is_empty() {
+            return None;
+        }
+        self.env
+            .probe(|env| types::resolve(env, &pd.data_type, &d.dims, true))
+    }
+
     /// Evaluates the parameter overrides of an instantiation, including
     /// any `defparam` aimed at it.
     pub(super) fn build_overrides(
         &mut self,
+        module: &str,
         params: &'ast [ast::ParamOverride],
         inst_name: &str,
     ) -> Overrides {
@@ -643,6 +672,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             };
             if let Some(ty) = self.type_override(value) {
                 over.push(name, Override::Type(ty), p.span);
+                continue;
+            }
+            // `.CFG('{a: 4'hC, b: 4'hD})`: a pattern takes its type from
+            // the parameter it overrides, when that type can be read here.
+            if matches!(value.kind, ast::ExprKind::Pattern(_))
+                && let Some(ty) = self.param_type(module, p.name.as_ref(), i)
+                && let Some(v) = self
+                    .env
+                    .probe(|env| Evaluator::new(env).eval_as(value, &ty).ok())
+            {
+                over.push(name, Override::Value(v), p.span);
                 continue;
             }
             let Some(v) = self
@@ -928,7 +968,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     self.env.unsupported(
                         span,
                         &format!(
-                            "an interface port connected to an interface whose parameters                              are not its defaults (`{signal}` is {have} bits here and {want}                              in the port)"
+                            "an interface port whose signal `{signal}` is {have} bits in the \
+                             interface connected and {want} in the port"
                         ),
                     );
                     continue;
@@ -1070,6 +1111,104 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
+    /// For each port of `module` connected to an interface instance whose
+    /// parameters are not the interface's defaults, overrides `port.PARAM`,
+    /// so that the module is elaborated with the interface it is given: an
+    /// interface port used to be made from the interface with its defaults
+    /// whatever the instance connected (`p_if #(.W(4))` into a port of
+    /// `p_if`), and then refused.
+    fn interface_overrides(
+        &mut self,
+        module: &str,
+        one: &'ast ast::Instance,
+        overrides: &mut Overrides,
+    ) {
+        let Some(decl) = self.env.cx.table.modules.get(module).copied() else {
+            return;
+        };
+        let port_names: Vec<String> = match &decl.def.ports {
+            ast::Ports::Ansi(ports) => ports.iter().map(|p| p.name.name.clone()).collect(),
+            _ => Vec::new(),
+        };
+        for (i, conn) in one.conns.iter().enumerate() {
+            let (port, expr) = match &conn.kind {
+                ast::PortConnKind::Named {
+                    name,
+                    conn: ast::NamedConn::Expr(e),
+                } => (name.name.clone(), e),
+                ast::PortConnKind::Positional(Some(e)) => match port_names.get(i) {
+                    Some(n) => (n.clone(), e),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            // `bi` or `bi.modport`.
+            let base = match &expr.kind {
+                ast::ExprKind::Member { base, .. } => {
+                    match self.env.probe(|env| env.resolve_path(expr)) {
+                        Some(Symbol::Iface { .. }) => expr,
+                        _ => &**base,
+                    }
+                }
+                _ => expr,
+            };
+            let Some(Symbol::Iface {
+                scope, name: iface, ..
+            }) = self.env.probe(|env| env.resolve_path(base))
+            else {
+                continue;
+            };
+            let Some(idecl) = self.env.cx.table.modules.get(iface.as_str()).copied() else {
+                continue;
+            };
+            let Some(list) = &idecl.def.params else {
+                continue;
+            };
+            // The defaults, in a scope of their own.
+            let temp = self.env.enter_new(String::new());
+            let mut none = Overrides::new();
+            for pd in list {
+                decls::param(&mut self.env, pd, &mut none);
+            }
+            let mut diffs = Vec::new();
+            for pd in list {
+                for d in &pd.decls {
+                    let name = &d.name.name;
+                    let default = self
+                        .env
+                        .cx
+                        .scopes
+                        .get(temp)
+                        .get(name)
+                        .map(|(s, _)| s.clone());
+                    let given = self
+                        .env
+                        .cx
+                        .scopes
+                        .get(scope)
+                        .get(name)
+                        .map(|(s, _)| s.clone());
+                    if let (
+                        Some(Symbol::Const { value: a, .. }),
+                        Some(Symbol::Const { value: b, .. }),
+                    ) = (default, given)
+                        && a != b
+                    {
+                        diffs.push((name.clone(), b, d.name.span));
+                    }
+                }
+            }
+            self.env.leave();
+            for (name, value, span) in diffs {
+                overrides.push(
+                    format!("{port}.{name}"),
+                    decls::Override::Value(value),
+                    span,
+                );
+            }
+        }
+    }
+
     /// The IR port names of the interface port `port` of the instantiated
     /// module, as `(signal, port name)` pairs.
     ///
@@ -1097,7 +1236,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         name_span: Span,
     ) -> Option<crate::verilog::elab::scope::ScopeId> {
         let module = self.env.cx.table.modules.get(iface).copied()?;
-        let mut overrides = self.build_overrides(&decl.params, name);
+        let mut overrides = self.build_overrides(iface, &decl.params, name);
+        // `reg_if #(16) c ()`: positional overrides name the interface's
+        // parameters in order, as a module's do.
+        super::name_positional(self.env.cx, &module, &mut overrides);
         let scope = self.env.enter_new(format!("{name}."));
         let mut params: Vec<(String, Value)> = Vec::new();
         if let Some(list) = &module.def.params {
@@ -1206,7 +1348,14 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let directions = directions.flatten();
         let scope = self.env.enter_new(format!("{}.", port.name));
         let mut signals: Vec<(String, String)> = Vec::new();
+        // The interface as the instance connected it: its parameters' values
+        // come with the module's variant (`interface_overrides`).
         let mut overrides = Overrides::new();
+        for (p, param, value) in &self.iface_params {
+            if *p == port.name {
+                overrides.push(param.clone(), value.clone(), port.span);
+            }
+        }
         let params: Vec<(String, Value)> = Vec::new();
         if let Some(list) = &module.def.params {
             for pd in list {

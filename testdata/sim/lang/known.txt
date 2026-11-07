@@ -20,8 +20,6 @@ sv/min_dynarray.sv refused: unsupported construct: dynamic array dimension `[]`
 sv/min_func_return_array.sv refused: unsupported construct: an assignment to a whole array from anything but a pattern or an array
 sv/min_func_unpacked_arg.sv refused: unsupported construct: an unpacked array inside a subroutine
 sv/min_hier_child_func.sv refused: hierarchical reference into instance of `child` is not supported
-sv/min_if_param_port.sv refused: unsupported construct: an interface port connected to an interface whose parameters                              are not its defaults (`q` is 4 bits here and 8                              in the port)
-sv/min_keyed_pattern_param.sv refused: unsupported construct: keyed assignment pattern without a target type
 sv/min_queue.sv refused: unsupported construct: queue dimension `[$]`
 sv/sv_array_slice.sv refused: unsupported construct: an assignment to a whole array from anything but a pattern or an array
 sv/sv_display_p.sv line 6: prints `DP6 4660` where xsim prints `DP6 '{1,2,3,4}`
@@ -30,9 +28,6 @@ sv/sv_fork_join.sv refused: unsupported construct: queue dimension `[$]`
 sv/sv_func_args.sv refused: unsupported construct: an unpacked array inside a subroutine
 sv/sv_func_return_agg.sv refused: unsupported construct: an assignment to a whole array from anything but a pattern or an array
 sv/sv_hier_task.sv refused: hierarchical reference into instance of `child` is not supported
-sv/sv_interface_param.sv refused: unsupported construct: an interface port connected to an interface whose parameters                              are not its defaults (`q` is 4 bits here and 8                              in the port)
-sv/sv_interface_param_b.sv refused: unsupported construct: an interface port connected to an interface whose parameters                              are not its defaults (`q` is 4 bits here and 8                              in the port)
-sv/sv_param_types.sv refused: unsupported construct: keyed assignment pattern without a target type
 sv/sv_rtl_fifo.sv refused: unsupported construct: queue dimension `[$]`
 sv/sv_struct_unpacked.sv line 8: prints `U8 '{r:'{a:-1,b:0,c:1'b1},arr:129127208546031632391}` where xsim prints `U8 '{r:'{a:-1,b:0,c:1'b1},arr:'{7,7,7}}`
 sv/sv_timeunit.sv line 6: prints `Timescale of (tb) is 1ns/1ps.` where xsim prints `Timescale of (tb) is 1ns / 1ps.`

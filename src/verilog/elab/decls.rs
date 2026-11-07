@@ -110,6 +110,20 @@ impl Overrides {
             .collect()
     }
 
+    /// The overrides of an interface port's interface parameters, named
+    /// `port.PARAM`: each taken (so the module is a variant of its own for
+    /// them) and given back as `(port, PARAM, value)`.
+    pub(crate) fn take_interface_params(&mut self) -> Vec<(String, String, Override)> {
+        let mut out = Vec::new();
+        for (name, value, _, used) in &mut self.items {
+            if let Some((port, param)) = name.split_once('.') {
+                *used = true;
+                out.push((port.to_owned(), param.to_owned(), value.clone()));
+            }
+        }
+        out
+    }
+
     pub(crate) fn applied(&self) -> Vec<(String, Override)> {
         self.items
             .iter()

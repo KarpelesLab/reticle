@@ -220,7 +220,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         if !self.env.cx.table.modules.contains_key(module) {
             return None;
         }
-        let overrides = self.build_overrides(&inst.params, &path[0]);
+        let overrides = self.build_overrides(module, &inst.params, &path[0]);
         let mut id: ModuleId = super::elaborate_module(self.env.cx, module, overrides, inst_span)?;
         let (last, middle) = path[1..].split_last()?;
         for name in middle {

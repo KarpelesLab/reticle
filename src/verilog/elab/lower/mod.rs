@@ -195,6 +195,9 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     /// The module whose ports `connect` is connecting, for its interface
     /// ports' signals.
     connecting: Option<ModuleId>,
+    /// The parameters the instance gives this module's interface ports'
+    /// interfaces, as `(port, parameter, value)`.
+    iface_params: Vec<(String, String, decls::Override)>,
 }
 
 /// Elaborates every root module of `files` and returns the design.
@@ -436,6 +439,7 @@ pub(crate) fn elaborate_module(
             net_delays: Vec::new(),
             natural_connections: false,
             connecting: None,
+            iface_params: Vec::new(),
         }
     };
     low.b.span = decl.span();
@@ -564,6 +568,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// parameters in declaration order.
     fn run(&mut self, m: &'ast ast::Module, overrides: &mut Overrides) -> Vec<(String, Value)> {
         let mut params: Vec<(String, Value)> = Vec::new();
+        self.iface_params = overrides.take_interface_params();
         decls::import(&mut self.env, &m.imports);
 
         // Header parameter list.
