@@ -34,6 +34,10 @@ use super::types::{self, ArrayLayout, BitKind, Layout, LayoutKind};
 /// The position of `'-'` in `std_ulogic`.
 const DASH: u32 = 8;
 
+/// The most elements of an array of wide elements read or written as one
+/// value.
+const MEM_WHOLE_LIMIT: u32 = 4096;
+
 /// The nine `std_ulogic` positions as four-state bits.
 fn std9_bit(pos: u32) -> Bit {
     Std9::ALL
@@ -108,6 +112,14 @@ impl<'a> Lowerer<'a, '_> {
 
     /// Inserts a `Resize` unless the node already has the wanted type.
     pub(crate) fn coerce(&mut self, id: ExprId, from: &Layout, to: &Layout, span: Span) -> ExprId {
+        // A string value into a constrained string object, which is a
+        // vector of character codes, and back.
+        if matches!(from.kind, LayoutKind::Str) && to.is_bits() {
+            return self.string_to_chars(id, to.width, span);
+        }
+        if matches!(to.kind, LayoutKind::Str) && self.is_char_array(from) {
+            return self.chars_to_string(id, span);
+        }
         if !to.is_bits() || !from.is_bits() {
             return id;
         }
@@ -271,7 +283,15 @@ impl<'a> Lowerer<'a, '_> {
         self.b.span = e.span();
         // Anything the analyser folded, or that folds once the generics
         // are known, becomes one constant node.
-        let layout = self.expr_layout(e, want);
+        let mut layout = self.expr_layout(e, want);
+        // A static string assigned to a constrained string object is that
+        // object's vector of character codes, not a string value.
+        if let (Some(own), Some(w)) = (&layout, want)
+            && matches!(own.kind, LayoutKind::Str)
+            && self.is_char_array(w)
+        {
+            layout = Some(w.clone());
+        }
         if let Some(v) = self.eval(e) {
             if let Some(layout) = &layout {
                 if let LayoutKind::Str = layout.kind
@@ -499,13 +519,9 @@ impl<'a> Lowerer<'a, '_> {
                 let base = self.b.net(net);
                 Some((self.slice_bits(base, hi, lo), layout))
             }
-            Some(Binding::Mem { .. }) => {
-                self.error(
-                    codes::TYPE,
-                    span,
-                    "an array of multi-bit elements can only be read one element at a time",
-                );
-                None
+            Some(Binding::Mem { mem, layout }) => {
+                let arr = layout.array()?.clone();
+                self.mem_elements_value(mem, &layout, &arr, 0, arr.len, span)
             }
             Some(Binding::Value { value, ty }) => {
                 let layout = self.layout_of_type(ty, span)?;
@@ -706,6 +722,125 @@ impl<'a> Lowerer<'a, '_> {
         Some(self.b.binary(BinaryOp::Mul, off, scale))
     }
 
+    /// The elements of a memory from offset `first` (counted from the
+    /// left) for `count` elements, as one value: the leftmost in the most
+    /// significant bits, as a wide array is laid out. This is how a whole
+    /// array of wide elements, or a slice of it, is read: `a = b`,
+    /// `w(2 to 3)`, `report to_string(...)`. (Such a read was "only read
+    /// one element at a time".)
+    fn mem_elements_value(
+        &mut self,
+        mem: crate::ir::MemoryId,
+        layout: &Layout,
+        arr: &ArrayLayout,
+        first: u32,
+        count: u32,
+        span: Span,
+    ) -> Option<(ExprId, Layout)> {
+        if count > MEM_WHOLE_LIMIT {
+            self.error(
+                codes::LIMIT,
+                span,
+                format!(
+                    "this reads {count} elements of an array at once, more than {MEM_WHOLE_LIMIT}"
+                ),
+            );
+            return None;
+        }
+        self.b.span = span;
+        let mut parts = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
+        for o in first..first + count {
+            let addr = arr.index_at(o) - arr.low();
+            let a = self
+                .b
+                .constant(Logic::from_u64(u64::try_from(addr).ok()?, 32));
+            parts.push(self.b.mem_read(mem, a));
+        }
+        let id = self.b.concat(parts);
+        let out = self.mem_slice_layout(layout, arr, first, count);
+        Some((id, out))
+    }
+
+    /// The elements of a memory from offset `first` for `count` elements,
+    /// as an assignment target that writes each of them (`ia := (others =>
+    /// 7)`, `w(0 to 1) <= w(2 to 3)`; "a whole memory cannot be assigned
+    /// at once").
+    fn mem_elements_target(
+        &mut self,
+        mem: crate::ir::MemoryId,
+        layout: &Layout,
+        arr: &ArrayLayout,
+        first: u32,
+        count: u32,
+        span: Span,
+    ) -> Option<(Lvalue, Layout)> {
+        if count > MEM_WHOLE_LIMIT {
+            self.error(
+                codes::LIMIT,
+                span,
+                format!(
+                    "this writes {count} elements of an array at once, more than {MEM_WHOLE_LIMIT}"
+                ),
+            );
+            return None;
+        }
+        self.b.span = span;
+        let mut parts = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
+        for o in first..first + count {
+            let addr = arr.index_at(o) - arr.low();
+            let a = self
+                .b
+                .constant(Logic::from_u64(u64::try_from(addr).ok()?, 32));
+            parts.push(Lvalue::MemElem { mem, addr: a });
+        }
+        let out = self.mem_slice_layout(layout, arr, first, count);
+        Some((Lvalue::Concat(parts), out))
+    }
+
+    /// The layout of `count` elements of an array from offset `first`.
+    fn mem_slice_layout(
+        &self,
+        layout: &Layout,
+        arr: &ArrayLayout,
+        first: u32,
+        count: u32,
+    ) -> Layout {
+        Layout {
+            width: arr.elem.width * count,
+            kind: LayoutKind::Array(Box::new(ArrayLayout {
+                elem: arr.elem.clone(),
+                left: arr.index_at(first),
+                dir: arr.dir,
+                len: count,
+            })),
+            ..layout.clone()
+        }
+    }
+
+    /// The offset of the first element of a static slice of an array and
+    /// the number of elements it has.
+    fn mem_slice_offsets(
+        &mut self,
+        arr: &ArrayLayout,
+        range: &'a ast::DiscreteRange,
+        span: Span,
+    ) -> Option<(u32, u32)> {
+        let Some((l, r)) = self.static_range(range) else {
+            self.error(
+                codes::NOT_STATIC,
+                range.span(),
+                "the bounds of this slice are not static after elaboration",
+            );
+            return None;
+        };
+        let (Some(a), Some(b)) = (arr.offset(l), arr.offset(r)) else {
+            self.error(codes::TYPE, span, "the slice is outside the array");
+            return None;
+        };
+        let (first, last) = if a <= b { (a, b) } else { (b, a) };
+        Some((first, last - first + 1))
+    }
+
     fn slice_expr(
         &mut self,
         prefix: &'a ast::Name,
@@ -713,6 +848,13 @@ impl<'a> Lowerer<'a, '_> {
         span: Span,
         sink: &mut Sink<'_>,
     ) -> Option<(ExprId, Layout)> {
+        if let Some(d) = self.a().decl_of(prefix.span())
+            && let Some(Binding::Mem { mem, layout }) = self.lookup(d).cloned()
+        {
+            let arr = layout.array()?.clone();
+            let (first, count) = self.mem_slice_offsets(&arr, range, span)?;
+            return self.mem_elements_value(mem, &layout, &arr, first, count, span);
+        }
         let (base, layout) = self.name_expr(prefix, None, sink)?;
         let Some(arr) = layout.array().cloned() else {
             self.error(codes::TYPE, span, "this value is not an array");
@@ -1696,13 +1838,9 @@ impl<'a> Lowerer<'a, '_> {
                         lo,
                         layout,
                     }) => Some((Lvalue::Slice { net, hi, lo }, layout)),
-                    Some(Binding::Mem { .. }) => {
-                        self.error(
-                            codes::TYPE,
-                            n.span(),
-                            "a whole memory cannot be assigned at once",
-                        );
-                        None
+                    Some(Binding::Mem { mem, layout }) => {
+                        let arr = layout.array()?.clone();
+                        self.mem_elements_target(mem, &layout, &arr, 0, arr.len, n.span())
                     }
                     _ => {
                         let spelling = self.a().decl(d).spelling.clone();
@@ -1791,6 +1929,13 @@ impl<'a> Lowerer<'a, '_> {
                 range,
                 span,
             } => {
+                if let Some(d) = self.a().decl_of(prefix.span())
+                    && let Some(Binding::Mem { mem, layout }) = self.lookup(d).cloned()
+                {
+                    let arr = layout.array()?.clone();
+                    let (first, count) = self.mem_slice_offsets(&arr, range, *span)?;
+                    return self.mem_elements_target(mem, &layout, &arr, first, count, *span);
+                }
                 let (base, layout) = self.lvalue_name(prefix, sink)?;
                 if let Lvalue::MemElem { mem, addr } = base {
                     // `mem(a)(15 downto 8)`: a slice of the memory element,

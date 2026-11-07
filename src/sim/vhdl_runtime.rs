@@ -261,6 +261,9 @@ pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
         "$vhdl_to_hstring" => digits(&logic_of(args.first()?), 4, signed_arg(args)),
         "$vhdl_to_ostring" => digits(&logic_of(args.first()?), 3, signed_arg(args)),
         "$vhdl_concat" => args.iter().map(text_of).collect(),
+        // The codes of a constrained string object, first character in the
+        // most significant byte.
+        "$vhdl_string_of" => super::value::logic_to_string(&logic_of(args.first()?)),
         "$vhdl_time_in" => time_in(args.first()?, args.get(1)?),
         "$vhdl_real_digits" => {
             let r = args.first().map_or(f64::NAN, real_of);
@@ -293,6 +296,14 @@ pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
 fn real_call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
     let real = |i: usize| args.get(i).map_or(f64::NAN, real_of);
     Some(match name {
+        "$vhdl_chars_of" => {
+            let width = ty.width().unwrap_or(0);
+            let text = match args.first()? {
+                Value::Str(s) => s.clone(),
+                other => text_of(other),
+            };
+            Value::Bits(super::value::string_to_logic(&text).resize(width))
+        }
         "$vhdl_real" => Value::Real(
             args.first()
                 .and_then(|v| v.to_logic().to_u64())

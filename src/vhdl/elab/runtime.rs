@@ -60,6 +60,24 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
+    /// True when the layout is a one-dimensional array of `character`, a
+    /// constrained `string` object.
+    pub(crate) fn is_char_array(&self, l: &Layout) -> bool {
+        l.array().is_some_and(|a| self.is_character(&a.elem))
+    }
+
+    /// A string value as the character codes of a vector `width` bits wide,
+    /// the first character in the most significant byte.
+    pub(crate) fn string_to_chars(&mut self, id: ExprId, width: u32, span: Span) -> ExprId {
+        self.b.span = span;
+        self.b.call("$vhdl_chars_of", vec![id], Type::bits(width))
+    }
+
+    /// The character codes of a constrained string object as a string.
+    pub(crate) fn chars_to_string(&mut self, id: ExprId, span: Span) -> ExprId {
+        self.string_call("$vhdl_string_of", vec![id], span)
+    }
+
     /// True when the layout is the predefined `character` type.
     fn is_character(&self, l: &Layout) -> bool {
         matches!(l.kind, LayoutKind::Enum(_))
@@ -589,6 +607,10 @@ impl<'a> Lowerer<'a, '_> {
             let (id, l) = self.build(leaf, None, sink)?;
             if matches!(l.kind, LayoutKind::Str) || self.is_character(&l) {
                 parts.push(id);
+                continue;
+            }
+            if self.is_char_array(&l) {
+                parts.push(self.chars_to_string(id, leaf.span()));
                 continue;
             }
             self.error(

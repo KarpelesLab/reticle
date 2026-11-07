@@ -186,3 +186,19 @@ fn to_string_overloads_match_xsim() {
 fn unconstrained_objects_match_xsim() {
     matches_xsim("unconstrained");
 }
+
+/// **Arrays of wide elements whole, and string objects**: an aggregate
+/// assigned to an array of integers, one array copied to another and
+/// compared with it, a slice of one assigned from a slice of another
+/// (signal and variable), and a `string(1 to 5)` variable assigned a
+/// constant, indexed, modified, printed and compared. All were refused (a
+/// whole memory "cannot be assigned at once", "can only be read one
+/// element at a time", and the string an internal error).
+///
+/// Would catch elements written to the wrong addresses or in the reverse
+/// order, and a string's characters reversed. Would not catch an array of
+/// more than 4096 elements used whole, which is refused.
+#[test]
+fn whole_arrays_match_xsim() {
+    matches_xsim("whole_arrays");
+}

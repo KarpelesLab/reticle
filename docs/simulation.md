@@ -654,6 +654,16 @@ a constraint from either. A function whose result subtype is unconstrained
 and whose context gives no width (`reverse("1100") = "0011"`) has the width
 of the value it first returns. Each of these was refused.
 
+**Arrays used whole** (`whole_arrays_tb.vhd`). An array of wide elements is
+a memory in the IR, which is read and written one element at a time. Read
+whole or by a static slice, it is now the concatenation of its elements'
+reads, leftmost first, as a wide vector is laid out; assigned whole or by a
+slice, a concatenation of element targets, which synthesis splits back into
+one write per element. Both were refused, so `mem <= (others => (others =>
+'0'))` in a reset did not elaborate; it now synthesises. A constrained
+`string` object is a vector of character codes; a string value assigned to
+one is packed into it, and one read where a string is wanted is unpacked.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.
