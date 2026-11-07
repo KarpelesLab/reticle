@@ -668,7 +668,11 @@ impl<'d> Lowerer<'d> {
             let hit = match &stmt.kind {
                 StmtKind::Wait(_) => true,
                 StmtKind::Assign { delay, .. } => delay.is_some(),
-                StmtKind::Forever { .. } => true,
+                StmtKind::Forever { .. }
+                | StmtKind::Fork { .. }
+                | StmtKind::Disable(_)
+                | StmtKind::DisableFork
+                | StmtKind::WaitFork => true,
                 _ => false,
             };
             if hit && bad.is_none() {
@@ -1985,7 +1989,11 @@ impl<'d> Lowerer<'d> {
                 let guard = ctx.guard.map(|g| self.slot(g));
                 self.side.push(Op::Stop { guard });
             }
-            StmtKind::Wait(WaitKind::Delay(_) | WaitKind::Event(_) | WaitKind::Until(_)) => {
+            StmtKind::Wait(WaitKind::Delay(_) | WaitKind::Event(_) | WaitKind::Until(_))
+            | StmtKind::Fork { .. }
+            | StmtKind::Disable(_)
+            | StmtKind::DisableFork
+            | StmtKind::WaitFork => {
                 self.err(ctx.label.clone(), Reason::TimingControl, Some(stmt.span));
             }
             StmtKind::Forever { .. } => {
@@ -2724,7 +2732,9 @@ impl<'d> Lowerer<'d> {
             } => {
                 let v = self.expr(ctx, *expr);
                 let s = self.slot(v);
-                let resized = self.resize(ctx.seq, v, *width, s.signed);
+                // Sign-extended only when the operand and the result are
+                // both signed (`ir::ExprKind::Resize`), as synthesis does.
+                let resized = self.resize(ctx.seq, v, *width, s.signed && *signed);
                 self.alias(resized, *signed)
             }
             ExprKind::MemRead { mem, addr } => {

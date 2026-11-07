@@ -33,8 +33,8 @@
 
 use crate::diag::Diagnostic;
 use crate::ir::{
-    AssignKind, Block, CaseKind, CaseQualifier, Edge, ExprId, Lvalue, Polarity, Process,
-    ProcessKind, ReportSeverity, Span, Stmt, StmtKind, WaitKind,
+    AssignKind, Block, CaseKind, CaseQualifier, Edge, ExprId, JoinKind, Lvalue, Name, Polarity,
+    Process, ProcessKind, ReportSeverity, Span, Stmt, StmtKind, WaitKind,
 };
 use crate::logic::{Bit, Logic};
 
@@ -58,6 +58,9 @@ pub(crate) enum ProcStatus {
     WaitingEvent,
     /// Suspended in `wait until` until its condition holds.
     WaitingUntil,
+    /// Suspended in a `fork ... join`, `join_any` or `wait fork` until the
+    /// processes it started end.
+    WaitingJoin,
     /// Finished for good (`initial` done, killed, or `$finish`).
     Dead,
 }
@@ -98,6 +101,8 @@ pub(crate) struct Frame<'d> {
     pub(crate) pc: usize,
     /// Loop state, if the frame is a loop body.
     pub(crate) kind: FrameKind<'d>,
+    /// The name of the named block the frame runs, for `disable`.
+    pub(crate) label: Option<&'d Name>,
 }
 
 /// A process and its saved continuation.
@@ -112,6 +117,13 @@ pub(crate) struct ProcState<'d> {
     pub(crate) frames: Vec<Frame<'d>>,
     /// Life-cycle state.
     pub(crate) status: ProcStatus,
+    /// The process whose `fork` started this one, if one did.
+    pub(crate) parent: Option<ProcId>,
+    /// The processes this one started with `fork` and that may still run.
+    pub(crate) children: Vec<ProcId>,
+    /// What a `fork ... join` or `join_any`, or a `wait fork`, is waiting
+    /// for: the kind, and the branches still running.
+    pub(crate) join: Option<(JoinKind, Vec<ProcId>)>,
     /// Incremented on every wait so stale waiter entries are ignored.
     pub(crate) wait_gen: u32,
     /// The edges a `wait on` is blocked on.
@@ -131,6 +143,9 @@ impl<'d> ProcState<'d> {
             process,
             frames: Vec::new(),
             status: ProcStatus::Idle,
+            parent: None,
+            children: Vec::new(),
+            join: None,
             wait_gen: 0,
             wait_edges: Vec::new(),
             until: None,
@@ -189,6 +204,7 @@ impl<'d> Simulator<'d> {
                 block: body,
                 pc: 0,
                 kind: FrameKind::Plain,
+                label: None,
             });
         }
         let mut steps = 0u64;
@@ -219,8 +235,13 @@ impl<'d> Simulator<'d> {
                             block: body,
                             pc: 0,
                             kind: FrameKind::Plain,
+                            label: None,
                         });
                         continue;
+                    }
+                    if p.parent.is_some() {
+                        self.end_forked(pid);
+                        return;
                     }
                     p.status = if matches!(p.process.kind, ProcessKind::Initial) {
                         ProcStatus::Dead
@@ -255,6 +276,123 @@ impl<'d> Simulator<'d> {
                 return;
             }
         }
+    }
+
+    /// `fork`: one process per branch, queued now; the parent waits as
+    /// `join` says.
+    fn fork(&mut self, pid: ProcId, branches: &'d [Block], join: JoinKind) -> Flow<'d> {
+        let inst = self.procs[pid.idx()].inst;
+        let process = self.procs[pid.idx()].process;
+        let base = self.procs[pid.idx()].name.clone();
+        let mut started = Vec::with_capacity(branches.len());
+        for (i, branch) in branches.iter().enumerate() {
+            let id = ProcId::at(self.procs.len());
+            let mut child = ProcState::new(inst, format!("{base}.fork{i}"), process);
+            child.parent = Some(pid);
+            child.frames.push(Frame {
+                block: branch,
+                pc: 0,
+                kind: FrameKind::Plain,
+                label: None,
+            });
+            child.status = ProcStatus::Queued;
+            self.procs.push(child);
+            self.active.push_back(Event::Proc(id));
+            started.push(id);
+        }
+        self.procs[pid.idx()]
+            .children
+            .extend(started.iter().copied());
+        if started.is_empty() || join == JoinKind::None {
+            return Flow::Next;
+        }
+        let p = &mut self.procs[pid.idx()];
+        p.join = Some((join, started));
+        p.status = ProcStatus::WaitingJoin;
+        Flow::Suspend
+    }
+
+    /// A forked process reached the end of its branch, or was ended: it is
+    /// done, and a parent waiting on it may go on.
+    fn end_forked(&mut self, pid: ProcId) {
+        let p = &mut self.procs[pid.idx()];
+        p.status = ProcStatus::Dead;
+        p.frames.clear();
+        p.wait_gen = p.wait_gen.wrapping_add(1);
+        let Some(parent) = p.parent else { return };
+        let q = &mut self.procs[parent.idx()];
+        q.children.retain(|c| *c != pid);
+        let resume = match &mut q.join {
+            Some((kind, waiting)) if waiting.contains(&pid) => {
+                waiting.retain(|c| *c != pid);
+                *kind == JoinKind::Any || waiting.is_empty()
+            }
+            _ => false,
+        };
+        if resume && q.status == ProcStatus::WaitingJoin {
+            q.join = None;
+            q.status = ProcStatus::Queued;
+            self.active.push_back(Event::Proc(parent));
+        }
+    }
+
+    /// Ends `pid` and everything it started (`disable fork`).
+    fn kill(&mut self, pid: ProcId) {
+        let children = std::mem::take(&mut self.procs[pid.idx()].children);
+        for c in children {
+            self.kill(c);
+        }
+        if self.procs[pid.idx()].status == ProcStatus::Dead {
+            return;
+        }
+        if self.procs[pid.idx()].parent.is_some() {
+            self.end_forked(pid);
+        } else {
+            let p = &mut self.procs[pid.idx()];
+            p.status = ProcStatus::Dead;
+            p.frames.clear();
+            p.wait_gen = p.wait_gen.wrapping_add(1);
+        }
+    }
+
+    /// `disable name`: this process leaves its innermost block of that
+    /// name, if it is in one; any other process of the instance in a block
+    /// of that name leaves it and goes on after it.
+    fn disable(&mut self, pid: ProcId, name: &Name) -> Flow<'d> {
+        let inst = self.procs[pid.idx()].inst;
+        let own = self.procs[pid.idx()]
+            .frames
+            .iter()
+            .rposition(|f| f.label == Some(name));
+        for other in 0..self.procs.len() {
+            let oid = ProcId::at(other);
+            if oid == pid
+                || self.procs[other].inst != inst
+                || self.procs[other].status == ProcStatus::Dead
+            {
+                continue;
+            }
+            let Some(at) = self.procs[other]
+                .frames
+                .iter()
+                .rposition(|f| f.label == Some(name))
+            else {
+                continue;
+            };
+            let p = &mut self.procs[other];
+            p.frames.truncate(at);
+            p.until = None;
+            p.pending = None;
+            p.wait_gen = p.wait_gen.wrapping_add(1);
+            if p.status != ProcStatus::Queued && p.status != ProcStatus::Running {
+                p.status = ProcStatus::Queued;
+                self.active.push_back(Event::Proc(oid));
+            }
+        }
+        if let Some(at) = own {
+            self.procs[pid.idx()].frames.truncate(at);
+        }
+        Flow::Next
     }
 
     /// Handles reaching the end of the innermost frame's block.
@@ -352,8 +490,11 @@ impl<'d> Simulator<'d> {
             self.procs[pid.idx()].status = ProcStatus::Queued;
             self.inactive.push_back(Event::Proc(pid));
         } else {
-            self.procs[pid.idx()].status = ProcStatus::Delayed;
-            self.schedule_after(ticks, Timed::Wake(pid));
+            let p = &mut self.procs[pid.idx()];
+            p.status = ProcStatus::Delayed;
+            p.wait_gen = p.wait_gen.wrapping_add(1);
+            let generation = p.wait_gen;
+            self.schedule_after(ticks, Timed::Wake(pid, generation));
         }
     }
 
@@ -447,6 +588,7 @@ impl<'d> Simulator<'d> {
                     block,
                     pc: 0,
                     kind: FrameKind::Plain,
+                    label: None,
                 })
             }
             StmtKind::Case {
@@ -477,6 +619,7 @@ impl<'d> Simulator<'d> {
                         cond: *cond,
                         step: step.as_ref(),
                     },
+                    label: None,
                 })
             }
             StmtKind::While { cond, body } => {
@@ -487,10 +630,21 @@ impl<'d> Simulator<'d> {
                     block: body,
                     pc: 0,
                     kind: FrameKind::While(*cond),
+                    label: None,
                 })
             }
             StmtKind::Repeat { count, body } => {
-                let n = self.eval_logic(inst, *count).to_u64().unwrap_or(0);
+                // A negative count runs the body no times (IEEE 1364-2005
+                // §9.7.2); it used to be read as a large unsigned one. An
+                // `x` or `z` bit counts as 0, which is what xsim does
+                // (`repeat (2'bx1)` runs once there; the standard runs it
+                // no times).
+                let c = self.eval_logic(inst, *count).two_state();
+                let n = if c.is_signed() && c.to_i64().is_some_and(|v| v < 0) {
+                    0
+                } else {
+                    c.to_u64().unwrap_or(0)
+                };
                 if n == 0 {
                     return Flow::Next;
                 }
@@ -498,18 +652,45 @@ impl<'d> Simulator<'d> {
                     block: body,
                     pc: 0,
                     kind: FrameKind::Repeat(n),
+                    label: None,
                 })
             }
             StmtKind::Forever { body } => Flow::Push(Frame {
                 block: body,
                 pc: 0,
                 kind: FrameKind::Forever,
+                label: None,
             }),
-            StmtKind::Block { body, .. } => Flow::Push(Frame {
+            StmtKind::Block { body, name } => Flow::Push(Frame {
                 block: body,
                 pc: 0,
                 kind: FrameKind::Plain,
+                label: name.as_ref(),
             }),
+            StmtKind::Fork { branches, join } => self.fork(pid, branches, *join),
+            StmtKind::Disable(name) => self.disable(pid, name),
+            StmtKind::DisableFork => {
+                let children = std::mem::take(&mut self.procs[pid.idx()].children);
+                for c in children {
+                    self.kill(c);
+                }
+                Flow::Next
+            }
+            StmtKind::WaitFork => {
+                let live: Vec<ProcId> = self.procs[pid.idx()]
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|c| self.procs[c.idx()].status != ProcStatus::Dead)
+                    .collect();
+                if live.is_empty() {
+                    return Flow::Next;
+                }
+                let p = &mut self.procs[pid.idx()];
+                p.join = Some((JoinKind::All, live));
+                p.status = ProcStatus::WaitingJoin;
+                Flow::Suspend
+            }
             StmtKind::Wait(WaitKind::Delay(e)) => {
                 let ticks = self.expr_delay_ticks(inst, *e);
                 self.suspend_for(pid, ticks);
@@ -672,6 +853,7 @@ impl<'d> Simulator<'d> {
                 block,
                 pc: 0,
                 kind: FrameKind::Plain,
+                label: None,
             }),
             None => Flow::Next,
         }

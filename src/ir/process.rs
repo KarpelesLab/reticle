@@ -625,6 +625,57 @@ pub enum StmtKind {
     Break,
     /// Skip to the next iteration of the innermost loop.
     Continue,
+    /// `fork ... join`: each branch runs as a process of its own, started
+    /// in this time step, and the statement waits for all of them, for
+    /// the first, or for none (IEEE 1800-2017 §9.3.2). Simulation only.
+    Fork {
+        /// The branches, each a process.
+        branches: Vec<Block>,
+        /// What the statement waits for.
+        join: JoinKind,
+    },
+    /// `disable name`: the innermost block of that name this process is
+    /// in ends there, and so does a block of that name another process of
+    /// the instance is in (IEEE 1364-2005 §9.6). Simulation only.
+    Disable(Name),
+    /// `disable fork`: every process this one started with a `fork`, and
+    /// every one they started, ends. Simulation only.
+    DisableFork,
+    /// `wait fork`: waits until every process this one started has ended.
+    /// Simulation only.
+    WaitFork,
+}
+
+/// What a `fork` waits for before the statement after it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JoinKind {
+    /// `join`: every branch.
+    All,
+    /// `join_any`: the first branch to end.
+    Any,
+    /// `join_none`: none; the branches run on beside what follows.
+    None,
+}
+
+impl JoinKind {
+    /// The keyword in the text format and in Verilog.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            JoinKind::All => "join",
+            JoinKind::Any => "join_any",
+            JoinKind::None => "join_none",
+        }
+    }
+
+    /// The kind a keyword names.
+    pub fn from_keyword(word: &str) -> Option<JoinKind> {
+        Some(match word {
+            "join" => JoinKind::All,
+            "join_any" => JoinKind::Any,
+            "join_none" => JoinKind::None,
+            _ => return None,
+        })
+    }
 }
 
 /// One statement.
@@ -658,6 +709,7 @@ impl Stmt {
             | StmtKind::Repeat { body, .. }
             | StmtKind::Forever { body }
             | StmtKind::Block { body, .. } => vec![body],
+            StmtKind::Fork { branches, .. } => branches.iter().collect(),
             _ => Vec::new(),
         }
     }
@@ -678,6 +730,7 @@ impl Stmt {
             | StmtKind::Repeat { body, .. }
             | StmtKind::Forever { body }
             | StmtKind::Block { body, .. } => vec![body],
+            StmtKind::Fork { branches, .. } => branches.iter_mut().collect(),
             _ => Vec::new(),
         }
     }

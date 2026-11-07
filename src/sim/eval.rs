@@ -164,7 +164,13 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
             width,
             signed,
         } => {
+            // Sign-extended only when the operand and the result are both
+            // signed (`ir::ExprKind::Resize`), as synthesis does. It used
+            // to follow the operand alone, so a signed value resized to an
+            // unsigned width was simulated sign-extended and built
+            // zero-extended.
             let v = eval(env, *expr).into_logic();
+            let v = if *signed { v } else { v.as_unsigned() };
             Value::Bits(v.resize(*width).with_signed(*signed))
         }
         ExprKind::MemRead { mem, addr } => {
@@ -174,6 +180,11 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
                 Some(a) => env.read_mem(*mem, a),
                 None => None,
             };
+            if node.ty == Type::String {
+                return Value::Str(
+                    elem.map_or_else(String::new, |l| super::value::logic_to_string(&l)),
+                );
+            }
             // An element is stored as its bits; the signedness is the
             // memory's, as a net's is its declaration's (IEEE 1364-2005
             // §4.5.1: `m[i]` of a `reg signed` memory is signed).
@@ -220,6 +231,22 @@ pub(crate) fn binary(op: BinaryOp, a: Value, b: Value) -> Value {
         }
         (Value::Str(x), Value::Str(y)) if matches!(op, BinaryOp::Ne | BinaryOp::CaseNe) => {
             return Value::Bits(Logic::from_bool(x != y));
+        }
+        // Strings order as their characters do, one by one (IEEE
+        // 1800-2017 §6.16): "ab" is before "b", which their bits are not.
+        (Value::Str(x), Value::Str(y))
+            if matches!(
+                op,
+                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+            ) =>
+        {
+            let o = x.as_bytes().cmp(y.as_bytes());
+            return Value::Bits(Logic::from_bool(match op {
+                BinaryOp::Lt => o.is_lt(),
+                BinaryOp::Le => o.is_le(),
+                BinaryOp::Gt => o.is_gt(),
+                _ => o.is_ge(),
+            }));
         }
         (Value::Real(_), _) | (_, Value::Real(_)) => {
             if let Some(v) = real_binary(op, a.to_real(), b.to_real()) {
@@ -327,7 +354,8 @@ impl<'d> Env<'d> for SimEnv<'_, 'd> {
             Type::Real => Value::Real(v.to_u64().map_or(f64::NAN, f64::from_bits)),
             Type::Integer => Value::Bits(v.clone().as_signed()),
             Type::Bits { signed, .. } => Value::Bits(v.clone().with_signed(*signed)),
-            Type::Array { .. } | Type::String => Value::Bits(v.clone()),
+            Type::Array { .. } => Value::Bits(v.clone()),
+            Type::String => Value::Str(super::value::logic_to_string(v)),
         }
     }
 
@@ -346,8 +374,17 @@ impl<'d> Env<'d> for SimEnv<'_, 'd> {
 
     fn read_mem(&mut self, mem: MemoryId, addr: u64) -> Option<Logic> {
         let mid = *self.sim.instances[self.inst.idx()].mems.get(mem.index())?;
-        let index = usize::try_from(addr).ok()?;
-        self.sim.memories[mid.idx()].data.get(index).cloned()
+        let m = &self.sim.memories[mid.idx()];
+        let found = usize::try_from(addr)
+            .ok()
+            .and_then(|i| m.data.get(i).cloned());
+        // An element a two-state array does not have reads 0, its type's
+        // default, where a four-state one's reads `x` (IEEE 1800-2017
+        // §7.4.6).
+        match found {
+            None if m.two_state => Some(Logic::zero(m.elem_width)),
+            other => other,
+        }
     }
 
     fn call(&mut self, name: &str, args: Vec<Value>, ty: &Type, span: Span) -> Value {

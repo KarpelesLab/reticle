@@ -71,6 +71,7 @@
 //! | Code    | Meaning                                                      |
 //! |---------|--------------------------------------------------------------|
 //! | `S0001` | The design is not valid; synthesis did not run               |
+//! | `S0045` | A net has more than one driver (a wire's resolved ones included); synthesis did not run |
 //! | `S0010` .. `S0020` | Process lowering and FSM extraction (see [`proc`], [`fsm`]); `S0018` is a `$readmemh` file that could not be loaded |
 //! | `S0030` | A construct [`cellify`] cannot turn into cells               |
 //! | `S0031` | The post-synthesis equivalence check found a difference      |
@@ -355,6 +356,19 @@ pub fn run(design: &mut Design, options: &SynthOptions, diags: &mut Diagnostics)
             Diagnostic::error("synthesis needs a valid design")
                 .with_code("S0001")
                 .with_note("fix the IR validation errors reported above"),
+        );
+        diags.append(&mut problems);
+        return stats;
+    }
+    // A wire with two continuous assignments, or two tri-state drivers, is
+    // a design a simulator resolves and a circuit cannot have: one net,
+    // one driver, as before the IR let a wire resolve them.
+    let mut problems = crate::ir::validate::single_drivers(design);
+    if problems.has_errors() {
+        diags.push(
+            Diagnostic::error("synthesis needs every net driven from one place")
+                .with_code("S0045")
+                .with_note("a simulator resolves a wire's drivers; a circuit has one"),
         );
         diags.append(&mut problems);
         return stats;

@@ -13,6 +13,7 @@ module mux4
   port c in %c
   port d in %d
   port y out %y
+  attr waits_first = 1
   process comb
     case %sel
       when 2'd0

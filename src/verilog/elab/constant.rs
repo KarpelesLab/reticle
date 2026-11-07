@@ -239,6 +239,9 @@ struct Frame {
     vars: Vec<Var>,
 }
 
+/// How deep constant functions may call one another.
+const MAX_CALL_DEPTH: usize = 200;
+
 /// Control flow out of an interpreted statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Flow {
@@ -257,6 +260,11 @@ pub(crate) struct Evaluator<'e, 'cx, 'ast> {
     frames: Vec<Frame>,
     call_stack: Vec<String>,
     steps: u64,
+    /// Set for exactly one `eval`: the expression is a context-determined
+    /// operand of an unsigned one, so it is computed unsigned whatever
+    /// its own operands are (IEEE 1364-2005 §5.5.1). The lowering does
+    /// the same (`Lowerer::operand`), so the two agree bit for bit.
+    force_unsigned: bool,
 }
 
 /// One formal argument of a function or task.
@@ -427,6 +435,7 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
             frames: Vec::new(),
             call_stack: Vec::new(),
             steps: 0,
+            force_unsigned: false,
         }
     }
 
@@ -503,7 +512,10 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
         match ty {
             VType::Packed(p) => {
                 let l = self.as_logic(v, span)?;
-                Ok(Value::Logic(l.resize(p.width()).with_signed(p.signed)))
+                let l = l.resize(p.width()).with_signed(p.signed);
+                // A two-state type holds 0 for each `x` or `z` (IEEE
+                // 1800-2017 §6.11.2): `int'(4'bx1x0)` is 4.
+                Ok(Value::Logic(if p.four_state { l } else { l.two_state() }))
             }
             VType::Real => match v.to_real() {
                 Some(r) => Ok(Value::Real(r)),
@@ -582,8 +594,26 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
         Ok(l.with_signed(signed).resize(w).with_signed(signed))
     }
 
+    /// Evaluates `e` as a context-determined operand of an unsigned
+    /// expression `ctx` bits wide: computed unsigned, a signed leaf
+    /// extended with zeros.
+    pub(crate) fn eval_unsigned(&mut self, e: &Expr, ctx: Option<u32>) -> EResult<Value> {
+        self.force_unsigned = true;
+        self.eval(e, ctx)
+    }
+
+    /// Evaluates a context-determined operand of an expression of `w`
+    /// bits and signedness `signed`, to exactly that type.
+    fn operand(&mut self, e: &Expr, w: u32, signed: bool) -> EResult<Logic> {
+        self.force_unsigned = !signed;
+        let v = self.eval(e, Some(w));
+        self.force_unsigned = false;
+        self.coerce(v?, w, signed, e.span)
+    }
+
     /// Evaluates `e` in a context of `ctx` bits (`None`: self-determined).
     pub(crate) fn eval(&mut self, e: &Expr, ctx: Option<u32>) -> EResult<Value> {
+        let forced = std::mem::replace(&mut self.force_unsigned, false);
         match &e.kind {
             ExprKind::Literal(lit) => self.literal(lit, ctx, e.span),
             ExprKind::Ident(id) => self.ident(id),
@@ -601,13 +631,13 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
                 left,
                 right,
             } => self.range(e, base, *kind, left, right),
-            ExprKind::Unary { op, operand } => self.unary(e, *op, operand, ctx),
-            ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs, ctx),
+            ExprKind::Unary { op, operand } => self.unary(e, *op, operand, ctx, forced),
+            ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs, ctx, forced),
             ExprKind::Ternary {
                 cond,
                 then_expr,
                 else_expr,
-            } => self.ternary(e, cond, then_expr, else_expr, ctx),
+            } => self.ternary(e, cond, then_expr, else_expr, ctx, forced),
             ExprKind::Concat(parts) => {
                 let mut vals = Vec::with_capacity(parts.len());
                 for p in parts {
@@ -883,7 +913,14 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
         }
     }
 
-    fn unary(&mut self, e: &Expr, op: UnaryOp, operand: &Expr, ctx: Option<u32>) -> EResult<Value> {
+    fn unary(
+        &mut self,
+        e: &Expr,
+        op: UnaryOp,
+        operand: &Expr,
+        ctx: Option<u32>,
+        forced: bool,
+    ) -> EResult<Value> {
         match op {
             UnaryOp::LogicNot => {
                 let v = self.eval(operand, None)?;
@@ -922,8 +959,7 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
                     }
                     Info::Bits { width, signed, .. } => {
                         let w = width.max(ctx.unwrap_or(0));
-                        let v = self.eval(operand, Some(w))?;
-                        let l = self.coerce(v, w, signed, operand.span)?;
+                        let l = self.operand(operand, w, signed && !forced)?;
                         Ok(Value::Logic(match op {
                             UnaryOp::Minus => l.neg(),
                             UnaryOp::Plus => l,
@@ -943,6 +979,7 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
         lhs: &Expr,
         rhs: &Expr,
         ctx: Option<u32>,
+        forced: bool,
     ) -> EResult<Value> {
         use BinaryOp as B;
         match op {
@@ -992,6 +1029,19 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
                 let (Value::Str(a), Value::Str(b)) = (a, b) else {
                     return Err(self.fail(e.span, "string operands expected"));
                 };
+                // Two literals are integers, not strings (IEEE 1364-2005
+                // §3.6): "b" is 8'h62 and "abc" 24'h616263, so "b" < "abc",
+                // where two strings order as their characters do. Only an
+                // order can tell the two apart, and a literal's leading
+                // character is never a NUL, so the longer is the greater.
+                let literals = matches!(lhs.kind, ExprKind::Literal(_))
+                    && matches!(rhs.kind, ExprKind::Literal(_));
+                let (a, b) = if literals && a.len() != b.len() {
+                    let (la, lb) = (a.len(), b.len());
+                    (la.to_string(), lb.to_string())
+                } else {
+                    (a, b)
+                };
                 let r = match op {
                     B::Eq | B::CaseEq => a == b,
                     B::Ne | B::CaseNe => a != b,
@@ -1030,15 +1080,16 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
                 } else {
                     width.max(ctx.unwrap_or(0))
                 };
+                // A comparison's operands take the comparison's own type;
+                // anything else's, the type the context gave it.
+                let signed = signed && (is_cmp || !forced);
                 let self_det_rhs = matches!(op, B::Shl | B::Shr | B::Ashl | B::Ashr | B::Pow);
-                let a = self.eval(lhs, Some(w))?;
-                let a = self.coerce(a, w, signed, lhs.span)?;
+                let a = self.operand(lhs, w, signed)?;
                 let b = if self_det_rhs {
                     let v = self.eval(rhs, None)?;
                     self.as_logic(v, rhs.span)?
                 } else {
-                    let v = self.eval(rhs, Some(w))?;
-                    self.coerce(v, w, signed, rhs.span)?
+                    self.operand(rhs, w, signed)?
                 };
                 Ok(Value::Logic(match op {
                     B::Add => a.add(&b),
@@ -1080,6 +1131,7 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
         then_expr: &Expr,
         else_expr: &Expr,
         ctx: Option<u32>,
+        forced: bool,
     ) -> EResult<Value> {
         let c = self.eval(cond, None)?.truth();
         let Some(info) = self.info(e) else {
@@ -1088,20 +1140,13 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
         match info {
             Info::Bits { width, signed, .. } => {
                 let w = width.max(ctx.unwrap_or(0));
+                let signed = signed && !forced;
                 match c {
-                    Bit::One => {
-                        let v = self.eval(then_expr, Some(w))?;
-                        Ok(Value::Logic(self.coerce(v, w, signed, then_expr.span)?))
-                    }
-                    Bit::Zero => {
-                        let v = self.eval(else_expr, Some(w))?;
-                        Ok(Value::Logic(self.coerce(v, w, signed, else_expr.span)?))
-                    }
+                    Bit::One => Ok(Value::Logic(self.operand(then_expr, w, signed)?)),
+                    Bit::Zero => Ok(Value::Logic(self.operand(else_expr, w, signed)?)),
                     _ => {
-                        let a = self.eval(then_expr, Some(w))?;
-                        let a = self.coerce(a, w, signed, then_expr.span)?;
-                        let b = self.eval(else_expr, Some(w))?;
-                        let b = self.coerce(b, w, signed, else_expr.span)?;
+                        let a = self.operand(then_expr, w, signed)?;
+                        let b = self.operand(else_expr, w, signed)?;
                         Ok(Value::Logic(merge_unknown(&a, &b)))
                     }
                 }
@@ -1493,13 +1538,18 @@ impl<'e, 'cx, 'ast> Evaluator<'e, 'cx, 'ast> {
     /// Interprets a call of the user function `f`.
     fn call_user(&mut self, f: FnRef<'ast>, args: &[Arg], span: Span) -> EResult<Value> {
         let name = f.def.name.name.clone();
-        if self.call_stack.contains(&name) {
+        // A constant function may call itself (IEEE 1800-2017 §13.4.3), as
+        // `fib(n - 1) + fib(n - 2)` does; each call has a frame of its own.
+        // It used to be refused. The depth is bounded, since each level is
+        // a level of this interpreter's own stack.
+        if self.call_stack.len() >= MAX_CALL_DEPTH {
             self.env.report(
-                Diagnostic::error(format!("constant function `{name}` calls itself"))
-                    .with_code(codes::RECURSION)
-                    .with_label(span, "recursive call")
-                    .with_secondary(f.def.name.span, "function declared here")
-                    .with_note("recursion is not supported in constant functions"),
+                Diagnostic::error(format!(
+                    "constant function `{name}` calls itself more than {MAX_CALL_DEPTH} deep"
+                ))
+                .with_code(codes::RECURSION)
+                .with_label(span, "recursive call")
+                .with_secondary(f.def.name.span, "function declared here"),
             );
             return Err(EvalError::Failed);
         }

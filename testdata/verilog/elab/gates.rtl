@@ -29,6 +29,6 @@ module gate_shapes
   assign %y_nand = not(and(%a, %b))
   assign %y_nor = not(or(%a, %b))
   assign %y_xnor = not(xor(%a, %b))
-  assign %y_buf = %a
+  assign %y_buf = xor(%a, 1'd0)
   assign %y_not = not(%a)
 end

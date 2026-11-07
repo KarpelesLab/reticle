@@ -1,0 +1,8 @@
+top const_recursion
+
+module const_recursion
+  param VALUE = 32'sd24
+  net %y u8 wire
+  port y out %y
+  assign %y = 8'd24
+end

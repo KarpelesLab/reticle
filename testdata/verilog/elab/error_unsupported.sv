@@ -1,9 +1,6 @@
-// A construct the IR cannot express.
+// A construct the IR cannot express. It was `fork` / `join`, until the IR
+// had processes started by a `fork`; a queue has nothing yet.
 module error_unsupported(input logic clk, output logic [7:0] q);
-    initial begin
-        fork
-            q = 8'd1;
-            q = 8'd2;
-        join
-    end
+    int pending [$];
+    initial q = 8'd1;
 endmodule

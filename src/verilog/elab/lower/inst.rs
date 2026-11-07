@@ -276,7 +276,46 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let module = inst.module.name.clone();
         if self.env.cx.table.is_interface(&module) {
             for one in &inst.instances {
-                self.interface_instance(&module, inst, one);
+                let Some(name) = &one.name else {
+                    self.env
+                        .unsupported(one.span, "an interface instance without a name");
+                    continue;
+                };
+                if one.dims.is_empty() {
+                    self.interface_instance(&module, inst, one, &name.name, name.span);
+                    continue;
+                }
+                // An array of interfaces: one flattened instance per index,
+                // `ch[0]`, `ch[1]`, reached by indexing `ch` as a generate
+                // loop's iterations are. The elements used to be one and
+                // the same instance.
+                let indices = match one.dims.as_slice() {
+                    [dim] => self.array_indices(dim),
+                    _ => {
+                        self.env.unsupported(
+                            one.span,
+                            "an interface instance array of more than one dimension",
+                        );
+                        None
+                    }
+                };
+                let Some(indices) = indices else { continue };
+                let mut scopes = Vec::with_capacity(indices.len());
+                for i in indices {
+                    let element = format!("{}[{i}]", name.name);
+                    if let Some(scope) =
+                        self.interface_instance(&module, inst, one, &element, name.span)
+                    {
+                        scopes.push((i, scope));
+                    }
+                }
+                let parent = self.env.scope;
+                self.env.cx.scopes.redeclare(
+                    parent,
+                    name.name.clone(),
+                    Symbol::GenArray(scopes),
+                    name.span,
+                );
             }
             return;
         }
@@ -662,6 +701,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         target: Option<ModuleId>,
         inst_name: &ast::Ident,
     ) -> Vec<(Name, ExprId)> {
+        self.connecting = target;
         let mut out: Vec<(Name, ExprId)> = Vec::new();
         let mut connected: Vec<String> = Vec::new();
         let mut wildcard = false;
@@ -818,9 +858,40 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         out: &mut Vec<(Name, ExprId)>,
     ) -> Option<ExprId> {
         // An interface bundle expands into one connection per signal.
-        if let Some(sym) = self.env.probe(|env| env.resolve_path(expr))
-            && let Symbol::Iface { scope, .. } = sym
+        // `bi.slave`: the interface instance `bi` seen through one of its
+        // modports, which the port's own declaration has already applied.
+        let through_modport = match &expr.kind {
+            ast::ExprKind::Member { base, name } => {
+                match self.env.probe(|env| env.resolve_path(base)) {
+                    Some(Symbol::Iface {
+                        scope, name: iface, ..
+                    }) if self
+                        .env
+                        .cx
+                        .table
+                        .modules
+                        .get(iface.as_str())
+                        .is_some_and(|m| modport_directions(m.def, &name.name).is_some()) =>
+                    {
+                        Some(scope)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let bundle = match through_modport
+            .map(Symbol::GenBlock)
+            .or_else(|| self.env.probe(|env| env.resolve_path(expr)))
         {
+            Some(Symbol::Iface { scope, .. }) => Some(scope),
+            // An element of an array of interfaces, `ch[0]`.
+            Some(Symbol::GenBlock(scope)) if !self.iface_signals_for(port).is_empty() => {
+                Some(scope)
+            }
+            _ => None,
+        };
+        if let Some(scope) = bundle {
             let signals: Vec<(String, String)> = ports.map(|_| Vec::new()).unwrap_or_default();
             let _ = signals;
             let target_signals = self.iface_signals_for(port);
@@ -843,6 +914,25 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     );
                     continue;
                 };
+                // The module's port was made from the interface with its
+                // own defaults; an instance of it with other parameters
+                // has other widths, which used to reach the IR validator
+                // as an internal error.
+                let have = self.b.module().nets[net].ty.width();
+                let want = ports
+                    .and_then(|ps| ps.iter().find(|p| p.name == ir_port))
+                    .map(|p| p.width);
+                if let (Some(have), Some(want)) = (have, want)
+                    && have != want
+                {
+                    self.env.unsupported(
+                        span,
+                        &format!(
+                            "an interface port connected to an interface whose parameters                              are not its defaults (`{signal}` is {have} bits here and {want}                              in the port)"
+                        ),
+                    );
+                    continue;
+                }
                 self.b.span = span;
                 let id = self.b.net(net);
                 out.push((Name::new(ir_port), id));
@@ -878,16 +968,73 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let id = self.expr_cont(expr, None);
             let width = self.b.module().expr(id).ty.width().unwrap_or(0);
             if width != info.width {
+                // An output connected to a narrower or a wider net drives
+                // its low bits, as a continuous assignment of the port's
+                // value would (IEEE 1364-2005 §12.3.10): the bits above
+                // the port's are left undriven, those above the net's are
+                // dropped. xsim warns and builds it; it used to be refused.
+                // An `inout` would need the bits to go both ways, and is
+                // still refused.
+                let target = (info.dir == PortDir::Out)
+                    .then(|| self.lvalue(expr, false))
+                    .flatten();
+                let Some(target) = target else {
+                    self.env.report(
+                        Diagnostic::error(format!(
+                            "`{port}` is {} bits wide but is connected to {width} bits",
+                            info.width
+                        ))
+                        .with_code(codes::PORT_WIDTH)
+                        .with_label(span, "width mismatch on an inout connection")
+                        .with_note("an inout connection must match the port exactly"),
+                    );
+                    return None;
+                };
                 self.env.report(
-                    Diagnostic::error(format!(
-                        "`{port}` is {} bits wide but is connected to {width} bits",
+                    Diagnostic::warning(format!(
+                        "output `{port}` is {} bits wide and is connected to {width} bits",
                         info.width
                     ))
                     .with_code(codes::PORT_WIDTH)
-                    .with_label(span, "width mismatch on an output connection")
-                    .with_note("an output connection must match the port exactly"),
+                    .with_label(span, "connected here")
+                    .with_note(if width < info.width {
+                        "the port's bits above the connection's are dropped"
+                    } else {
+                        "the connection's bits above the port's are not driven"
+                    }),
                 );
-                return None;
+                let name = self.fresh(&format!("{port}_out"));
+                let net = self.helper_net(name, info.width, span);
+                self.b.span = span;
+                let value = self.b.net(net);
+                let (target, value) = if width < info.width {
+                    (target, self.b.slice(value, width - 1, 0))
+                } else {
+                    let low = match target {
+                        ir::Lvalue::Net(n) => ir::Lvalue::Slice {
+                            net: n,
+                            hi: info.width - 1,
+                            lo: 0,
+                        },
+                        ir::Lvalue::Slice { net: n, lo, .. } => ir::Lvalue::Slice {
+                            net: n,
+                            hi: lo + info.width - 1,
+                            lo,
+                        },
+                        other => {
+                            self.env.unsupported(
+                                span,
+                                "a wider connection of an output that is not a net or part of one",
+                            );
+                            let _ = other;
+                            return None;
+                        }
+                    };
+                    (low, value)
+                };
+                self.b.assign(target.clone(), value);
+                self.note_assign_drivers(&target, DriverKey::Continuous, span, false);
+                return Some(self.b.net(net));
             }
             // An element of a net array, `.y(d[0])`, is a target an
             // `assign` can write but no expression an instance can drive:
@@ -900,7 +1047,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 && let Some(target) = self.lvalue(expr, false)
             {
                 let name = self.fresh(&format!("{port}_out"));
-                let net = self.b.add_net(name, ir::Type::bits(width));
+                let net = self.helper_net(name, width, span);
                 self.b.span = span;
                 let value = self.b.net(net);
                 self.b.assign(target.clone(), value);
@@ -925,13 +1072,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// The IR port names of the interface port `port` of the instantiated
     /// module, as `(signal, port name)` pairs.
+    ///
+    /// They are the module being connected's own (`connecting`): two
+    /// modules may each have a port `b`, of one interface through two
+    /// modports, and the first module found with one used to answer for
+    /// both, in an order a hash map chose.
     fn iface_signals_for(&self, port: &str) -> Vec<(String, String)> {
-        for ports in self.env.cx.iface_ports.values() {
-            if let Some(p) = ports.iter().find(|p| p.name == port) {
-                return p.signals.clone();
-            }
-        }
-        Vec::new()
+        self.connecting
+            .and_then(|id| self.env.cx.iface_ports.get(&id))
+            .and_then(|ports| ports.iter().find(|p| p.name == port))
+            .map(|p| p.signals.clone())
+            .unwrap_or_default()
     }
 
     // --- interfaces --------------------------------------------------------
@@ -942,17 +1093,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         iface: &str,
         decl: &'ast ast::Instantiation,
         one: &'ast ast::Instance,
-    ) {
-        let Some(name) = &one.name else {
-            self.env
-                .unsupported(one.span, "an interface instance without a name");
-            return;
-        };
-        let Some(module) = self.env.cx.table.modules.get(iface).copied() else {
-            return;
-        };
-        let mut overrides = self.build_overrides(&decl.params, &name.name);
-        let scope = self.env.enter_new(format!("{}.", name.name));
+        name: &str,
+        name_span: Span,
+    ) -> Option<crate::verilog::elab::scope::ScopeId> {
+        let module = self.env.cx.table.modules.get(iface).copied()?;
+        let mut overrides = self.build_overrides(&decl.params, name);
+        let scope = self.env.enter_new(format!("{name}."));
         let mut params: Vec<(String, Value)> = Vec::new();
         if let Some(list) = &module.def.params {
             for pd in list {
@@ -1012,14 +1158,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let parent = self.env.scope;
         self.env.cx.scopes.redeclare(
             parent,
-            name.name.clone(),
+            name.to_owned(),
             Symbol::Iface {
                 scope,
                 name: iface.to_owned(),
                 modport: None,
             },
-            name.span,
+            name_span,
         );
+        Some(scope)
     }
 
     /// Declares an interface port: one IR port per signal of the
@@ -1068,11 +1215,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
         // Interface ports (`interface bus_if(input clk)`) become ports of
         // the enclosing module too.
-        let mut declared: Vec<(String, VType, Span)> = Vec::new();
+        // Each signal, and whether the interface declares it a variable,
+        // which a module may then assign from a procedure through the port
+        // as through the interface itself (`s.v = 1` in an `initial`). The
+        // port's net used to be a net whatever the signal was, and such an
+        // assignment was refused.
+        let mut declared: Vec<(String, VType, Span, bool)> = Vec::new();
         if let ast::Ports::Ansi(ports) = &module.def.ports {
             for p in ports {
                 if let Some(ty) = types::resolve(&mut self.env, &p.data_type, &p.dims, true) {
-                    declared.push((p.name.name.clone(), ty, p.name.span));
+                    declared.push((p.name.name.clone(), ty, p.name.span, false));
                 }
             }
         }
@@ -1083,7 +1235,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         if let Some(ty) =
                             types::resolve(&mut self.env, &vd.data_type, &d.dims, true)
                         {
-                            declared.push((d.name.name.clone(), ty, d.name.span));
+                            declared.push((d.name.name.clone(), ty, d.name.span, true));
                         }
                     }
                 }
@@ -1092,14 +1244,14 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         if let Some(ty) =
                             types::resolve(&mut self.env, &nd.data_type, &d.dims, true)
                         {
-                            declared.push((d.name.name.clone(), ty, d.name.span));
+                            declared.push((d.name.name.clone(), ty, d.name.span, false));
                         }
                     }
                 }
                 _ => {}
             }
         }
-        for (signal, ty, decl_span) in declared {
+        for (signal, ty, decl_span, variable) in declared {
             let dir = match &directions {
                 Some(map) => match map.iter().find(|(n, _)| *n == signal) {
                     Some((_, d)) => *d,
@@ -1108,7 +1260,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 None => PortDir::InOut,
             };
             let ir_name = format!("{}_{}", port.name, signal);
-            let Some(net) = self.new_net(ir_name.clone(), ty.clone(), false, decl_span) else {
+            let variable = variable && dir != PortDir::In;
+            let Some(net) = self.new_net(ir_name.clone(), ty.clone(), variable, decl_span) else {
                 continue;
             };
             self.env
@@ -1138,6 +1291,14 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     // --- gate primitives ---------------------------------------------------
+
+    /// `value` as a gate's output drives it: a `z` bit becomes `x`, which
+    /// an exclusive or with zero does (and synthesis folds away).
+    fn strong(&mut self, value: ExprId) -> ExprId {
+        let w = self.b.module().expr(value).ty.width().unwrap_or(1);
+        let zero = self.b.const_u64(w, 0);
+        self.b.xor(value, zero)
+    }
 
     /// Gate and switch instantiations.
     pub(super) fn gates(&mut self, g: &'ast ast::GateDecl, item: &'ast Item) {
@@ -1229,10 +1390,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                             signed: false,
                         }),
                     );
-                    if kind == G::Not {
-                        self.b.span = one.span;
-                        value = self.b.not(value);
-                    }
+                    self.b.span = one.span;
+                    value = if kind == G::Not {
+                        self.b.not(value)
+                    } else {
+                        // A gate drives `x` for a `z` input (IEEE 1364-2005
+                        // §7.2, table 7-3), where an assignment passes `z`
+                        // on: `buf (y, a)` with `a` at `z` is `x`.
+                        self.strong(value)
+                    };
                     self.b.span = one.span;
                     self.b.assign_after(target.clone(), value, delay);
                     self.note_assign_drivers(&target, DriverKey::Continuous, one.span, false);
@@ -1266,10 +1432,14 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     signed: false,
                 };
                 let mut input = self.expr_cont(&one.conns[1], Some(ctx));
-                if matches!(kind, GateKind::Notif0 | GateKind::Notif1) {
-                    self.b.span = one.span;
-                    input = self.b.not(input);
-                }
+                self.b.span = one.span;
+                input = if matches!(kind, GateKind::Notif0 | GateKind::Notif1) {
+                    self.b.not(input)
+                } else {
+                    // Enabled, a `bufif` drives `x` for a `z` input (table
+                    // 7-4), where `en ? d : 'z` passes `z` on.
+                    self.strong(input)
+                };
                 let mut enable = self.expr_cont(&one.conns[2], None);
                 enable = self.as_bit(enable);
                 if matches!(kind, GateKind::Bufif0 | GateKind::Notif0) {
@@ -1287,8 +1457,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     vec![(Name::new("a"), input), (Name::new("en"), enable)],
                     vec![(Name::new("y"), net)],
                 );
-                let index = self.b.module().cells.len() - 1;
-                self.record_driver(net, DriverKey::Instance(index), true, one.span);
+                // As any tri-state driver, one of several on a bus.
+                self.record_driver(net, DriverKey::Continuous, true, one.span);
             }
             G::Pullup | G::Pulldown => {
                 for target_expr in &one.conns {

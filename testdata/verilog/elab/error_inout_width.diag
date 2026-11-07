@@ -1,0 +1,8 @@
+error[V0005]: `y` is 8 bits wide but is connected to 4 bits
+ --> error_inout_width.v:7:18
+  |
+7 |     eiw_leaf u0 (.y(y));
+  |                  ^^^^^ width mismatch on an inout connection
+  |
+  = note: an inout connection must match the port exactly
+

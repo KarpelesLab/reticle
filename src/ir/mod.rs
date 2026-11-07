@@ -101,7 +101,10 @@ pub mod validate;
 pub mod walk;
 
 pub use arena::{Arena, Id};
-pub use attr::{AttrValue, Attrs, KEEP_ATTRS, KEEP_LOOKALIKES, is_keep_attr, looks_like_keep};
+pub use attr::{
+    AttrValue, Attrs, FINAL_ATTR, INITIALISER_ATTR, KEEP_ATTRS, KEEP_LOOKALIKES, TWO_STATE_ATTR,
+    WAITS_FIRST_ATTR, is_keep_attr, looks_like_keep,
+};
 pub use cell::{Cell, CellId, CellKind, Reset};
 pub use design::{
     Assign, Design, HierRef, Instance, InstanceId, Memory, MemoryId, Module, ModuleId, ModuleRef,
@@ -110,8 +113,9 @@ pub use design::{
 pub use expr::{BinaryOp, Expr, ExprId, ExprKind, TypeError, UnaryOp, infer_type};
 pub use hier::{DedupReport, FlattenOptions, FlattenReport, UniquifyReport};
 pub use process::{
-    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, MemFileOp, Polarity,
-    Process, ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
+    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, JoinKind, Lvalue, MemFileOp,
+    Polarity, Process, ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale,
+    WaitKind,
 };
 pub use types::{Bit, Const, Type};
 

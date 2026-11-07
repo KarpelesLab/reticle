@@ -8,6 +8,7 @@ module truncation
   port narrow out %narrow
   port tiny out %tiny
   assign %narrow = resize(%wide, u8)
+  attr waits_first = 1
   process comb
     %tiny = 4'd15
   end

@@ -51,8 +51,10 @@
 mod expr;
 mod hier;
 mod inst;
+mod patterns;
 mod proc;
 mod stmt;
+mod strings;
 
 use crate::diag::{Diagnostic, Diagnostics, Severity};
 use crate::ir::builder::ModuleBuilder;
@@ -91,8 +93,12 @@ struct NetInfo {
 struct MemInfo {
     /// The element type.
     elem: VType,
-    /// The declared dimension.
+    /// The declared dimension; the first of `dims`.
     range: Range,
+    /// Every unpacked dimension, outermost first: one for `m [0:7]`, two
+    /// for `m [0:3][0:1]`, which is kept as one memory of eight elements,
+    /// the last dimension varying fastest (IEEE 1800-2017 §7.4.2).
+    dims: Vec<Range>,
 }
 
 /// What drives a net, for the multiple-driver check.
@@ -164,6 +170,15 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     defparams: Vec<(Vec<String>, &'ast ast::Expr, Span)>,
     /// Subroutines currently being inlined, innermost last.
     inlining: Vec<String>,
+    /// Set for exactly one `build`: the node is a context-determined
+    /// operand of an unsigned expression, so it is computed unsigned
+    /// whatever its own operands are (IEEE 1364-2005 §5.5.1, §5.5.4).
+    force_unsigned: bool,
+    /// The `iff` of the `always` block being lowered, which guards its body.
+    guard: Option<&'ast ast::Expr>,
+    /// The `wand` and `wor` nets, whose drivers would be resolved by a
+    /// logic function the simulator does not have.
+    wired_logic: Vec<NetId>,
     /// One entry per inlined subroutine: its result net and its "has
     /// returned" flag, when it needs one.
     inline_frames: Vec<(Option<NetId>, Option<NetId>)>,
@@ -173,6 +188,9 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     /// True while an instance array's connections are lowered: each keeps
     /// its own width, to be shared or cut per instance afterwards.
     natural_connections: bool,
+    /// The module whose ports `connect` is connecting, for its interface
+    /// ports' signals.
+    connecting: Option<ModuleId>,
 }
 
 /// Elaborates every root module of `files` and returns the design.
@@ -405,17 +423,53 @@ pub(crate) fn elaborate_module(
             driver: DriverKey::Continuous,
             defparams: Vec::new(),
             inlining: Vec::new(),
+            force_unsigned: false,
+            wired_logic: Vec::new(),
+            guard: None,
             inline_frames: Vec::new(),
             net_inits: Vec::new(),
             natural_connections: false,
+            connecting: None,
         }
     };
     low.b.span = decl.span();
-    if let Some((uv, uu, pv, pu)) = decl.timescale {
-        low.b.module_mut().timescale = Some(ir::Timescale {
-            unit: Delay::new(uv, uu),
-            precision: Delay::new(pv, pu),
-        });
+    let mut timescale = decl
+        .timescale
+        .map(|(uv, uu, pv, pu)| (Delay::new(uv, uu), Delay::new(pv, pu)));
+    // `timeunit` and `timeprecision` inside the module take precedence over
+    // a `` `timescale `` (IEEE 1800-2017 §3.14.2.3). They used to be read
+    // and ignored, so `#2` under `timeunit 10ns` waited 2 ns.
+    for item in &decl.def.items {
+        let (unit, precision) = match &item.kind {
+            ItemKind::Timeunit { unit, precision } => (Some(unit), precision.as_ref()),
+            ItemKind::Timeprecision(p) => (None, Some(p)),
+            _ => continue,
+        };
+        let parse = |lit: &ast::Literal| -> Option<Delay> {
+            let ast::Literal::Number { text, .. } = lit else {
+                return None;
+            };
+            let (value, suffix) = super::constant::time_literal(text)?;
+            let u = ir::TimeUnit::from_name(suffix)?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let v = value.round().max(1.0) as u64;
+            Some(Delay::new(v, u))
+        };
+        let default = (
+            Delay::new(1, ir::TimeUnit::Ns),
+            Delay::new(1, ir::TimeUnit::Ps),
+        );
+        let (mut u, mut p) = timescale.unwrap_or(default);
+        if let Some(d) = unit.and_then(parse) {
+            u = d;
+        }
+        if let Some(d) = precision.and_then(parse) {
+            p = d;
+        }
+        timescale = Some((u, p));
+    }
+    if let Some((unit, precision)) = timescale {
+        low.b.module_mut().timescale = Some(ir::Timescale { unit, precision });
     }
     for attr in &decl.item.attrs {
         let value = low.attr_value(attr);
@@ -530,7 +584,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         // Pass 3: behaviour. A net's initialiser waits for the hierarchical
         // names, which `wire w = U_dut.x;` reads.
         self.collect_defparams(&m.items);
-        self.hier_aliases(&m.items);
+        self.hier_aliases(&m.name.name, &m.items);
         self.lower_net_inits(inits);
         self.items(&m.items);
         params
@@ -550,6 +604,24 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     // --- nets --------------------------------------------------------------
+
+    /// A wire of `width` bits the lowering makes for itself (a tri-state's
+    /// output, an instance's into an array element), with the bookkeeping
+    /// every net has. Made with the builder alone, it left the net tables
+    /// one short, and the next declaration's lookups read past their end:
+    /// a panic, from an instance driving `y[g]` in a `generate` loop with
+    /// a declaration after it.
+    fn helper_net(&mut self, name: String, width: u32, span: Span) -> NetId {
+        let net = self.b.add_net(name, ir::Type::bits(width));
+        debug_assert_eq!(net.index(), self.nets.len());
+        self.nets.push(NetInfo {
+            ty: VType::Packed(Packed::bits(width)),
+            is_var: false,
+            span,
+        });
+        self.drivers.push(Vec::new());
+        net
+    }
 
     /// Creates an IR net of the given declared type.
     fn new_net(&mut self, name: String, ty: VType, is_var: bool, span: Span) -> Option<NetId> {
@@ -573,6 +645,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let kind = if is_var { NetKind::Reg } else { NetKind::Wire };
         let net = self.b.add_net_kind(name, irt, kind);
         debug_assert_eq!(net.index(), self.nets.len());
+        if is_two_state(&ty) {
+            self.b.net_attr(net, ir::TWO_STATE_ATTR, AttrValue::Int(1));
+        }
         // The IR numbers a vector from zero. Vivado's XDC names a bit by the
         // index it was declared with, so a range that says otherwise is kept.
         if let VType::Packed(packed) = &ty
@@ -595,18 +670,32 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// Creates an IR memory for a one-dimensional unpacked array.
     fn new_memory(&mut self, name: String, ty: &VType, span: Span) -> Option<MemoryId> {
-        let VType::Unpacked { elem, range } = ty else {
+        let VType::Unpacked { .. } = ty else {
             return None;
         };
-        if matches!(**elem, VType::Unpacked { .. }) {
-            self.env
-                .unsupported(span, "multi-dimensional unpacked array");
-            return None;
+        // A multi-dimensional array is one memory, its elements in row
+        // order: `m[i][j]` of `m [0:3][0:1]` is element `2 * i + j`. It
+        // used to be refused.
+        let mut dims = Vec::new();
+        let mut inner = ty;
+        while let VType::Unpacked { elem, range } = inner {
+            dims.push(*range);
+            inner = elem;
         }
+        let elem = inner;
+        let range = dims[0];
+        let total = dims
+            .iter()
+            .try_fold(1u64, |acc, d| acc.checked_mul(d.len()));
+        let Some(total) = total.filter(|t| *t <= (1 << 32)) else {
+            self.env
+                .unsupported(span, "an array of more than 2^32 elements");
+            return None;
+        };
         // The simulator keeps a memory's elements as vectors: an array of
         // reals used to fail the IR's validation on its first assignment, or
         // round what it held to an integer.
-        if matches!(**elem, VType::Real) {
+        if matches!(elem, VType::Real) {
             self.env.unsupported(span, "an array of `real`");
             return None;
         }
@@ -619,11 +708,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return None;
         };
         self.b.span = span;
-        let mem = self.b.memory(name, elem_ir, range.len());
+        let mem = self.b.memory(name, elem_ir, total);
         debug_assert_eq!(mem.index(), self.mems.len());
+        if is_two_state(elem) {
+            self.b.module_mut().memories[mem]
+                .attrs
+                .set(ir::TWO_STATE_ATTR, AttrValue::Int(1));
+        }
         self.mems.push(MemInfo {
-            elem: (**elem).clone(),
-            range: *range,
+            elem: elem.clone(),
+            range,
+            dims,
         });
         Some(mem)
     }
@@ -646,6 +741,26 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         if key == DriverKey::Initial {
             self.drivers[net.index()].push(Driver { key, whole, span });
             return;
+        }
+        // A `wand` or `wor` with two drivers resolves them by AND or OR,
+        // which nothing here models; as a plain wire it would read `x`
+        // where they disagree.
+        if self.wired_logic.contains(&net)
+            && let Some(first) = existing
+                .iter()
+                .find(|d| d.key != DriverKey::Initial)
+                .copied()
+        {
+            let name = self.b.module().nets[net].name.clone();
+            self.env.report(
+                Diagnostic::error(format!(
+                    "`{name}` is a `wand` or `wor` with more than one driver"
+                ))
+                .with_code(codes::UNSUPPORTED)
+                .with_label(span, describe_driver(key))
+                .with_secondary(first.span, describe_driver(first.key))
+                .with_note("resolving drivers by AND or OR is not supported; one driver is"),
+            );
         }
         let conflict = existing
             .iter()
@@ -949,6 +1064,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let Some(net) = self.declare_object(&d.name, ty, false, item) else {
                 continue;
             };
+            if matches!(nd.net_type, ast::NetType::Wand | ast::NetType::Wor) {
+                self.wired_logic.push(net);
+            }
             match nd.net_type {
                 ast::NetType::Supply0 | ast::NetType::Supply1 => {
                     let width = self.net_width(net);
@@ -979,12 +1097,29 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let Some(ty) = types::resolve(&mut self.env, &vd.data_type, &d.dims, true) else {
                 continue;
             };
-            if matches!(ty, VType::Event) {
-                self.env
-                    .unsupported(d.span, "an `event` variable (simulation only)");
-                continue;
-            }
+            // A named event is a bit that `->` toggles, so that `@(e)`,
+            // which waits for any change, wakes on each trigger. It starts
+            // at 0 with no event, as a two-state variable does.
+            let ty = if matches!(ty, VType::Event) {
+                if !d.dims.is_empty() {
+                    self.env.unsupported(d.span, "an array of events");
+                    continue;
+                }
+                let mut bit = Packed::bits(1);
+                bit.four_state = false;
+                VType::Packed(bit)
+            } else {
+                ty
+            };
+            let unpacked = matches!(ty, VType::Unpacked { .. });
+            let decl_ty = ty.clone();
             let Some(net) = self.declare_object(&d.name, ty, true, item) else {
+                // An array's initialiser is its contents from the start
+                // (`logic [7:0] m [2] = '{8'h11, 8'h22}`). It used to be
+                // dropped without a word.
+                if unpacked && let Some(init) = &d.init {
+                    self.memory_init(&d.name, &decl_ty, init);
+                }
                 continue;
             };
             if let Some(init) = &d.init {
@@ -992,6 +1127,32 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.initial_value(net, init, d.span);
             }
         }
+    }
+
+    /// Sets the contents of the memory `name` declares from its constant
+    /// initialiser; anything else is refused.
+    fn memory_init(&mut self, name: &ast::Ident, ty: &VType, init: &'ast ast::Expr) {
+        let Some((Symbol::Memory { mem, .. }, _, _)) = self.env.lookup(&name.name) else {
+            return;
+        };
+        let mem = *mem;
+        let value = self
+            .env
+            .probe(|env| Evaluator::new(env).eval_as(init, ty).ok());
+        let Some(value) = value else {
+            self.env.unsupported(
+                init.span,
+                "an array initialiser that is not a constant assignment pattern",
+            );
+            return;
+        };
+        let mut words: Vec<ir::Const> = Vec::new();
+        if !flatten_init(&value, ty, &mut words) {
+            self.env
+                .unsupported(init.span, "an initialiser for an array of this type");
+            return;
+        }
+        self.b.module_mut().memories[mem].init = Some(words);
     }
 
     /// Declares a net, variable or memory, reusing the net of a port that
@@ -1161,9 +1322,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 ItemKind::ContAssign(ca) => self.cont_assign(ca, item),
                 ItemKind::Always(kind, stmt) => self.always(*kind, stmt, item),
                 ItemKind::Initial(stmt) => self.initial(stmt, item),
-                ItemKind::Final(stmt) => {
-                    self.env.unsupported(stmt.span, "`final` block");
-                }
+                ItemKind::Final(stmt) => self.final_block(stmt, item),
                 ItemKind::Instance(inst) => self.instantiation(inst, item),
                 ItemKind::Gate(g) => self.gates(g, item),
                 ItemKind::Generate(items) => self.items(items),
@@ -1228,8 +1387,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 .probe(|env| width::info(&pair.rhs, env, &[]))
                 .filter(|_| !real);
             let signed = target_signed(&target, &self.nets);
+            let string = self.target_is_string(&target);
+            let info = info.filter(|_| !string);
             let value = if real {
                 self.real(&pair.rhs, &mut Sink::Cont)
+            } else if string {
+                self.string_value(&pair.rhs, &mut Sink::Cont)
             } else {
                 self.expr_cont(&pair.rhs, Some(Ctx { width, signed }))
             };
@@ -1262,12 +1425,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     ir::Lvalue::Net(net) => (*net, None),
                     _ => {
                         let name = self.fresh("tri_out");
-                        let net = self.b.add_net(name, ir::Type::bits(width));
+                        let net = self.helper_net(name, width, pair.span);
                         (net, Some(target.clone()))
                     }
                 };
                 let name = self.fresh("tri");
-                let index = self.b.module().cells.len();
                 let cell = self.b.cell(
                     name,
                     ir::CellKind::Tristate,
@@ -1276,7 +1438,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 );
                 let attrs = self.attrs_of(&item.attrs);
                 self.b.module_mut().cells[cell].attrs = attrs;
-                self.record_driver(out, DriverKey::Instance(index), true, pair.span);
+                // A tri-state driver is a continuous assignment, and a wire
+                // resolves any number of them (`ir::validate`, I0011): two
+                // `assign bus = en ? d : 'z` on one bus are a bus.
+                self.record_driver(out, DriverKey::Continuous, true, pair.span);
                 if let Some(into) = into {
                     let read = self.b.net(out);
                     self.b.assign_after(into.clone(), read, None);
@@ -1411,6 +1576,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let signed = self.net_type(net).packed().is_some_and(|p| p.signed);
         let value = if matches!(self.net_type(net), VType::Real) {
             self.real(rhs, &mut Sink::Cont)
+        } else if matches!(self.net_type(net), VType::String) {
+            self.string_value(rhs, &mut Sink::Cont)
         } else {
             self.expr_cont(rhs, Some(Ctx { width, signed }))
         };
@@ -1423,14 +1590,26 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     fn initial_value(&mut self, net: NetId, init: &'ast ast::Expr, span: Span) {
         let width = self.net_width(net);
         let signed = self.net_type(net).packed().is_some_and(|p| p.signed);
-        let value = if matches!(self.net_type(net), VType::Real) {
+        let ty = self.net_type(net).clone();
+        let value = if matches!(init.kind, ast::ExprKind::Pattern(_)) {
+            self.value_as(init, &ty, &mut Sink::Cont)
+        } else if matches!(ty, VType::Real) {
             self.real(init, &mut Sink::Cont)
+        } else if matches!(ty, VType::String) {
+            self.string_value(init, &mut Sink::Cont)
         } else {
             self.expr_cont(init, Some(Ctx { width, signed }))
         };
         self.b.span = span;
         let mut p = self.b.process(None, ProcessKind::Initial);
         p.span = span;
+        // A SystemVerilog initialiser sets the variable before time zero,
+        // with no event (IEEE 1800-2017 §6.8): `logic clk = 0` is no
+        // falling edge. A Verilog-2005 one is an assignment at time zero,
+        // and xsim makes it an event, as a `.v` file still has it here.
+        if self.env.dialect == Dialect::SystemVerilog {
+            p.attrs.set(ir::INITIALISER_ATTR, AttrValue::Int(1));
+        }
         p.blocking(net, value);
         self.b.end_process(p);
         self.record_driver(net, DriverKey::Initial, true, span);
@@ -1524,6 +1703,32 @@ fn describe_driver(key: DriverKey) -> &'static str {
         DriverKey::Process(_) => "driven here by a procedural block",
         DriverKey::Initial => "given an initial value here",
         DriverKey::Instance(_) => "driven here by an instance output",
+    }
+}
+
+/// True for a two-state integral type (`bit`, `int`, `byte`, an enum or
+/// struct made of them), which a simulator holds without `x` or `z`.
+pub(super) fn is_two_state(ty: &VType) -> bool {
+    ty.packed().is_some_and(|p| !p.four_state)
+}
+
+/// The elements of a constant array value of type `ty` (each dimension's
+/// elements lowest index first, as `Evaluator::eval_as` gives them),
+/// appended to `out` in memory order, the last dimension varying fastest.
+/// `false` for a value of another shape.
+fn flatten_init(value: &Value, ty: &VType, out: &mut Vec<ir::Const>) -> bool {
+    match (value, ty) {
+        (Value::Array(items), VType::Unpacked { elem, .. }) => {
+            items.iter().all(|v| flatten_init(v, elem, out))
+        }
+        (v, VType::Packed(p)) => match v.to_logic() {
+            Some(l) => {
+                out.push(l.resize(p.width()));
+                true
+            }
+            None => false,
+        },
+        _ => false,
     }
 }
 

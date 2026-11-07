@@ -163,6 +163,7 @@ pub mod interactive;
 mod process;
 mod random;
 mod sched;
+mod strings;
 mod sys;
 mod value;
 mod vcd;
@@ -279,6 +280,8 @@ pub struct Simulator<'d> {
     strobes: Vec<(elab::InstId, Vec<ExprId>, char)>,
     monitor: Option<sys::Monitor>,
     status: Status,
+    /// Whether the `final` blocks have run.
+    finals_run: bool,
     output: String,
     messages: Diagnostics,
     vcd: Option<VcdWriter>,

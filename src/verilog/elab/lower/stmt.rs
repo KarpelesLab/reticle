@@ -379,13 +379,29 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.block_decl(item);
                 self.block_decl_init(item, out);
             }
-            AstStmt::Foreach(_) => self.env.unsupported(s.span, "`foreach`"),
-            AstStmt::Fork(..) => self
-                .env
-                .unsupported(s.span, "`fork` / `join` (no parallel processes in the IR)"),
-            AstStmt::Disable(_) => self.env.unsupported(s.span, "`disable`"),
-            AstStmt::DisableFork => self.env.unsupported(s.span, "`disable fork`"),
-            AstStmt::WaitFork => self.env.unsupported(s.span, "`wait fork`"),
+            AstStmt::Foreach(f) => self.foreach_stmt(f, s.span, out),
+            AstStmt::Fork(b, join) => self.fork_stmt(b, *join, s.span, out),
+            AstStmt::Disable(target) => {
+                // A block is named by its label; a path to it names the
+                // same block (the simulator looks in this instance).
+                let name = match &target.kind {
+                    ExprKind::Member { name, .. } | ExprKind::Ident(name) => name,
+                    _ => {
+                        self.env.unsupported(target.span, "`disable` of this");
+                        return;
+                    }
+                };
+                out.span = s.span;
+                out.disable(name.name.as_str());
+            }
+            AstStmt::DisableFork => {
+                out.span = s.span;
+                out.push(StmtKind::DisableFork);
+            }
+            AstStmt::WaitFork => {
+                out.span = s.span;
+                out.push(StmtKind::WaitFork);
+            }
             AstStmt::ProcAssign(..) => self
                 .env
                 .unsupported(s.span, "a procedural continuous `assign`"),
@@ -397,7 +413,38 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     out.push(ir::StmtKind::Release { target: net });
                 }
             }
-            AstStmt::Trigger { .. } => self.env.unsupported(s.span, "an event trigger `->`"),
+            AstStmt::Trigger {
+                nonblocking,
+                target,
+            } => {
+                // `-> e` toggles the bit the event is (`var_decl`).
+                let Some(lv) = self.lvalue(target, true) else {
+                    return;
+                };
+                if self.lvalue_width(&lv) != 1 {
+                    self.env
+                        .error(codes::TYPE, target.span, "`->` triggers a named event");
+                    return;
+                }
+                let current = self.expr(
+                    target,
+                    Some(Ctx {
+                        width: 1,
+                        signed: false,
+                    }),
+                    &mut Sink::Proc(out),
+                );
+                self.b.span = s.span;
+                let flipped = self.b.not(current);
+                out.span = s.span;
+                let kind = if *nonblocking {
+                    AssignKind::NonBlocking
+                } else {
+                    AssignKind::Blocking
+                };
+                out.assign(lv.clone(), flipped, kind);
+                self.note_assign_drivers(&lv, self.driver, s.span, true);
+            }
         }
     }
 
@@ -426,14 +473,75 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         match &b.label {
             None => self.stmts(&b.stmts, out),
             Some(label) => {
+                let parent = self.env.scope;
+                let free = self.env.lookup(&label.name).is_none();
                 let scope = self.env.enter_new(format!("{}.", label.name));
-                let _ = scope;
+                // A named block is a scope its variables can be named
+                // through, `blk.v` (IEEE 1364-2005 §12.6), as a generate
+                // block's are.
+                if free {
+                    self.env.cx.scopes.redeclare(
+                        parent,
+                        label.name.clone(),
+                        Symbol::GenBlock(scope),
+                        label.span,
+                    );
+                }
                 let mut inner = self.b.block();
                 inner.span = b.span;
                 self.stmts(&b.stmts, &mut inner);
                 self.env.leave();
                 out.span = b.span;
                 out.nested(Some(&label.name), inner.finish());
+            }
+        }
+    }
+
+    /// `fork ... join`: each statement of the block is a branch, run as a
+    /// process of its own; a declaration in it is the parent's, made
+    /// before the branches start (IEEE 1800-2017 §9.3.2).
+    fn fork_stmt(
+        &mut self,
+        b: &'ast ast::Block,
+        join: ast::JoinKind,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        if let Some(label) = &b.label {
+            let _ = self.env.enter_new(format!("{}.", label.name));
+        }
+        let mut setup = self.b.block();
+        setup.span = b.span;
+        let mut branches = Vec::new();
+        for st in &b.stmts {
+            if let AstStmt::Decl(item) = &st.kind {
+                self.block_decl(item);
+                self.block_decl_init(item, &mut setup);
+                continue;
+            }
+            let mut inner = self.b.block();
+            inner.span = st.span;
+            self.stmt(st, &mut inner);
+            branches.push(inner.finish());
+        }
+        let join = match join {
+            ast::JoinKind::All => ir::JoinKind::All,
+            ast::JoinKind::Any => ir::JoinKind::Any,
+            ast::JoinKind::None => ir::JoinKind::None,
+        };
+        setup.span = span;
+        setup.fork(branches, join);
+        match &b.label {
+            Some(label) => {
+                self.env.leave();
+                out.span = span;
+                out.nested(Some(&label.name), setup.finish());
+            }
+            None => {
+                for stmt in setup.finish() {
+                    out.span = stmt.span;
+                    out.push(stmt.kind);
+                }
             }
         }
     }
@@ -481,9 +589,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 continue;
             };
             let (net, ty) = (*net, ty.clone());
-            let width = ty.packed().map_or(1, Packed::width);
-            let signed = ty.packed().is_some_and(|p| p.signed);
-            let value = self.expr(init, Some(Ctx { width, signed }), &mut Sink::Proc(out));
+            let value = self.value_as(init, &ty, &mut Sink::Proc(out));
             out.span = d.span;
             out.assign(net, value, AssignKind::Blocking);
             self.record_driver(net, self.driver, true, d.span);
@@ -599,6 +705,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// this module, or one below it through a hierarchical name. Part of a
     /// net is not supported.
     fn forced_net(&mut self, target: &'ast Expr, what: &str) -> Option<NetId> {
+        // Path resolution sees through `w[0]` to `w`, so `force w[0] = 0`
+        // used to force the whole of `w`.
+        if matches!(target.kind, ExprKind::Index { .. } | ExprKind::Range { .. }) {
+            self.env.unsupported(
+                target.span,
+                &format!("`{what}` of part of a net or variable"),
+            );
+            return None;
+        }
         match self.env.probe(|env| env.resolve_path(target)) {
             Some(Symbol::Net { net, .. }) => Some(net),
             _ => {
@@ -710,6 +825,26 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         span: Span,
         out: &mut BlockBuilder,
     ) {
+        if delay.is_none() && self.array_assign(lhs, rhs, kind, span, out) {
+            return;
+        }
+        if let ExprKind::Streaming {
+            right_to_left,
+            slice,
+            elems,
+        } = &lhs.kind
+        {
+            self.unstream(
+                *right_to_left,
+                slice.as_deref(),
+                elems,
+                rhs,
+                kind,
+                span,
+                out,
+            );
+            return;
+        }
         let Some(target) = self.lvalue(lhs, true) else {
             return;
         };
@@ -719,8 +854,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             .probe(|env| env.type_of_path(lhs))
             .and_then(|t| t.packed().map(|p| p.signed))
             .unwrap_or(false);
-        let value = if self.target_is_real(&target) {
+        let value = if matches!(rhs.kind, ExprKind::Pattern(_)) {
+            let ty = self
+                .value_type(lhs)
+                .unwrap_or_else(|| VType::Packed(super::super::types::Packed::bits(width)));
+            self.value_as(rhs, &ty, &mut Sink::Proc(out))
+        } else if self.target_is_real(&target) {
             self.real(rhs, &mut Sink::Proc(out))
+        } else if self.target_is_string(&target) {
+            self.string_value(rhs, &mut Sink::Proc(out))
         } else {
             if let Some(info) = self.env.probe(|env| width::info(rhs, env, &[])) {
                 let name = self.lvalue_name(&target);
@@ -733,6 +875,71 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             Some(d) => out.assign_after(target.clone(), value, kind, d),
             None => out.assign(target.clone(), value, kind),
         }
+        self.note_assign_drivers(&target, self.driver, span, true);
+    }
+
+    /// `{<< s {x, y}} = v` or `{>> s {x, y}} = v`: the targets take the
+    /// value's leftmost bits, their slices reversed for `<<` (IEEE
+    /// 1800-2017 §11.4.14.3).
+    #[allow(clippy::too_many_arguments)]
+    fn unstream(
+        &mut self,
+        right_to_left: bool,
+        slice: Option<&'ast Expr>,
+        elems: &'ast [Expr],
+        rhs: &'ast Expr,
+        kind: AssignKind,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        let mut targets = Vec::with_capacity(elems.len());
+        for el in elems {
+            let Some(t) = self.lvalue(el, true) else {
+                return;
+            };
+            targets.push(t);
+        }
+        let target = if targets.len() == 1 {
+            targets.pop().expect("one target")
+        } else {
+            ir::Lvalue::Concat(targets)
+        };
+        let w = self.lvalue_width(&target);
+        let info = self
+            .env
+            .probe(|env| width::info(rhs, env, &[]))
+            .unwrap_or(Info::bits(w, false));
+        let vw = info.width().max(1);
+        let value = self.expr(
+            rhs,
+            Some(Ctx {
+                width: vw,
+                signed: false,
+            }),
+            &mut Sink::Proc(out),
+        );
+        self.b.span = span;
+        // The leftmost `w` bits of the value; a narrower value is a
+        // narrower stream, which the standard calls an error and xsim fills
+        // with zeros on the right.
+        let value = if vw > w {
+            self.b.slice(value, vw - 1, vw - w)
+        } else if vw < w {
+            let pad = self.b.const_u64(w - vw, 0);
+            self.b.concat(vec![value, pad])
+        } else {
+            value
+        };
+        let value = if right_to_left {
+            let Some(size) = self.slice_size(slice) else {
+                return;
+            };
+            self.reverse_slices(value, w, size)
+        } else {
+            value
+        };
+        out.span = span;
+        out.assign(target.clone(), value, kind);
         self.note_assign_drivers(&target, self.driver, span, true);
     }
 
@@ -779,6 +986,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     ) {
         if let ExprKind::SystemIdent(id) = &callee.kind {
             self.system_task(&id.name, args, span, out);
+            return;
+        }
+        if self.string_mutator(callee, args, span, out).is_some() {
             return;
         }
         let Some((f, _)) = self.env.resolve_callee(callee) else {
@@ -1277,9 +1487,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return;
         };
         if let (Some(value), Some(result)) = (value, result) {
-            let width = self.net_width(result);
-            let signed = self.net_type(result).packed().is_some_and(|p| p.signed);
-            let v = self.expr(value, Some(Ctx { width, signed }), &mut Sink::Proc(out));
+            let ty = self.net_type(result).clone();
+            let v = self.value_as(value, &ty, &mut Sink::Proc(out));
             out.span = span;
             out.assign(result, v, AssignKind::Blocking);
             self.record_driver(result, self.driver, true, span);
@@ -1295,8 +1504,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// `case`, `casez`, `casex`.
     fn case_stmt(&mut self, c: &'ast ast::Case, span: Span, out: &mut BlockBuilder) {
         if c.inside {
-            self.env
-                .unsupported(span, "`case ... inside` (use `case` or `if`)");
+            self.case_inside(c, span, out);
             return;
         }
         // Every item is sized with the subject (§12.5).
@@ -1387,6 +1595,117 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         out.case(one, CaseKind::Plain, qualifier, arms, default);
     }
 
+    /// `case (x) inside`: the first arm whose set the subject is `inside`
+    /// (IEEE 1800-2017 §12.5.4), so a range or a wildcard in an item
+    /// matches as `inside` matches it; a chain of `if`s.
+    fn case_inside(&mut self, c: &'ast ast::Case, span: Span, out: &mut BlockBuilder) {
+        let mut tests = Vec::new();
+        let mut default = Vec::new();
+        for item in &c.items {
+            let mut body = self.b.block();
+            body.span = item.span;
+            self.stmt(&item.body, &mut body);
+            let body = body.finish();
+            if item.patterns.is_empty() {
+                if default.is_empty() {
+                    default = body;
+                }
+                continue;
+            }
+            let hit = self.inside(&c.expr, &c.expr, &item.patterns, &mut Sink::Proc(out));
+            tests.push((hit, body));
+        }
+        let mut rest = default;
+        for (hit, body) in tests.into_iter().rev() {
+            let mut b = self.b.block();
+            b.span = span;
+            b.if_(hit, body, rest);
+            rest = b.finish();
+        }
+        for stmt in rest {
+            out.span = stmt.span;
+            out.push(stmt.kind);
+        }
+    }
+
+    /// `foreach (a[i, j]) body`: one loop per named dimension, outermost
+    /// first, each from its left bound to its right (IEEE 1800-2017
+    /// §12.7.3); the unpacked dimensions come before the packed ones.
+    fn foreach_stmt(&mut self, f: &'ast ast::Foreach, span: Span, out: &mut BlockBuilder) {
+        let mut dims = Vec::new();
+        let mut ty = self.value_type(&f.array);
+        while let Some(VType::Unpacked { elem, range }) = ty {
+            dims.push(range);
+            ty = Some(*elem);
+        }
+        if let Some(VType::Packed(p)) = &ty {
+            dims.extend(p.dims.iter().copied());
+        }
+        if f.vars.len() > dims.len() {
+            self.env.error(
+                codes::TYPE,
+                f.array.span,
+                format!(
+                    "`foreach` names {} loop variables and the array has {} dimensions",
+                    f.vars.len(),
+                    dims.len()
+                ),
+            );
+            return;
+        }
+        let loop_name = self.fresh("foreach");
+        self.env.enter_new(format!("{loop_name}."));
+        let mut loops = Vec::new();
+        for (var, range) in f.vars.iter().zip(&dims) {
+            let Some(var) = var else { continue };
+            let ty = VType::integer();
+            let ir_name = self.env.qualified(&var.name);
+            let Some(net) = self.new_var(ir_name, ty.clone(), var.span) else {
+                continue;
+            };
+            self.env
+                .declare(&var.name, Symbol::Net { net, ty }, var.span);
+            loops.push((net, *range));
+        }
+        let mut body = self.b.block();
+        body.span = f.body.span;
+        self.stmt(&f.body, &mut body);
+        let mut inner = body.finish();
+        for (net, range) in loops.into_iter().rev() {
+            self.b.span = span;
+            let start = self.b.const_i64(32, range.left);
+            let end = self.b.const_i64(32, range.right);
+            let i = self.b.net(net);
+            let up = range.left <= range.right;
+            let cond = if up {
+                self.b.binary(ir::BinaryOp::Le, i, end)
+            } else {
+                self.b.binary(ir::BinaryOp::Ge, i, end)
+            };
+            let one = self.b.const_i64(32, 1);
+            let next = if up {
+                self.b.add(i, one)
+            } else {
+                self.b.sub(i, one)
+            };
+            self.record_driver(net, self.driver, true, span);
+            let mut l = self.b.block();
+            l.span = span;
+            l.for_(
+                Some((ir::Lvalue::Net(net), start)),
+                Some(cond),
+                Some((ir::Lvalue::Net(net), next)),
+                inner,
+            );
+            inner = l.finish();
+        }
+        self.env.leave();
+        for stmt in inner {
+            out.span = stmt.span;
+            out.push(stmt.kind);
+        }
+    }
+
     /// `for (init; cond; step) body`.
     fn for_stmt(&mut self, f: &'ast ast::For, span: Span, out: &mut BlockBuilder) {
         // Loop variables declared in the header live in a scope of their
@@ -1416,9 +1735,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                             d.name.span,
                         );
                         let Some(value) = &d.init else { continue };
-                        let width = ty.packed().map_or(1, Packed::width);
-                        let signed = ty.packed().is_some_and(|p| p.signed);
-                        let v = self.expr(value, Some(Ctx { width, signed }), &mut Sink::Proc(out));
+                        let v = self.value_as(value, &ty, &mut Sink::Proc(out));
                         self.record_driver(net, self.driver, true, d.span);
                         let entry = (ir::Lvalue::Net(net), v);
                         if init.is_none() {
@@ -1439,7 +1756,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                             .probe(|env| env.type_of_path(lhs))
                             .and_then(|t| t.packed().map(|p| p.signed))
                             .unwrap_or(false);
-                        let v = self.expr(rhs, Some(Ctx { width, signed }), &mut Sink::Proc(out));
+                        let v = if self.target_is_real(&target) {
+                            self.real(rhs, &mut Sink::Proc(out))
+                        } else if self.target_is_string(&target) {
+                            self.string_value(rhs, &mut Sink::Proc(out))
+                        } else {
+                            self.expr(rhs, Some(Ctx { width, signed }), &mut Sink::Proc(out))
+                        };
                         self.note_assign_drivers(&target, self.driver, e.span, true);
                         if init.is_none() {
                             init = Some((target, v));
@@ -1560,15 +1883,61 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             ast::TimingKind::Event(ev) => {
                 let edges = self.event_edges(ev);
-                out.push(StmtKind::Wait(WaitKind::Event(edges)));
+                let guard = self.event_iff(ev);
+                self.wait_guarded(edges, guard, ctrl.span, out);
             }
             ast::TimingKind::RepeatEvent(count, ev) => {
                 let n = self.expr(count, None, &mut Sink::Proc(out));
                 let edges = self.event_edges(ev);
+                let guard = self.event_iff(ev);
                 let mut inner = self.b.block();
                 inner.span = ctrl.span;
-                inner.push(StmtKind::Wait(WaitKind::Event(edges)));
+                self.wait_guarded(edges, guard, ctrl.span, &mut inner);
+                out.span = ctrl.span;
                 out.repeat(n, inner.finish());
+            }
+        }
+    }
+
+    /// Waits for `edges`, and while `guard` (an `iff`) does not hold, for
+    /// them again: `@(posedge clk iff en)` is an edge at which `en` is 1
+    /// (IEEE 1800-2017 §9.4.2.3).
+    fn wait_guarded(
+        &mut self,
+        edges: Vec<Edge>,
+        guard: Option<&'ast Expr>,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        out.span = span;
+        out.push(StmtKind::Wait(WaitKind::Event(edges.clone())));
+        let Some(cond) = guard else { return };
+        let c = self.expr_bit(cond, &mut Sink::Proc(out));
+        self.b.span = span;
+        let not_yet = self.b.lnot(c);
+        let mut again = self.b.block();
+        again.span = span;
+        again.push(StmtKind::Wait(WaitKind::Event(edges)));
+        out.span = span;
+        out.while_(not_yet, again.finish());
+    }
+
+    /// The `iff` of an event control of one event, or `None` for none; a
+    /// list of several with an `iff` is refused.
+    pub(super) fn event_iff(&mut self, ev: &'ast ast::EventControl) -> Option<&'ast Expr> {
+        let ast::EventControlKind::List(list) = &ev.kind else {
+            return None;
+        };
+        match list.as_slice() {
+            [one] => one.iff.as_ref(),
+            many => {
+                if let Some(item) = many.iter().find(|i| i.iff.is_some()) {
+                    self.env.unsupported(
+                        item.span,
+                        "an `iff` condition in a list of more than one event",
+                    );
+                }
+                None
             }
         }
     }
@@ -1580,10 +1949,6 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             ast::EventControlKind::Any => {}
             ast::EventControlKind::List(list) => {
                 for item in list {
-                    if item.iff.is_some() {
-                        self.env
-                            .unsupported(item.span, "an `iff` condition on an event");
-                    }
                     let polarity = match item.edge {
                         Some(ast::Edge::Posedge) => Polarity::Pos,
                         Some(ast::Edge::Negedge) => Polarity::Neg,
@@ -1638,21 +2003,35 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// The nets an event expression watches.
     fn event_nets(&mut self, e: &'ast Expr) -> Vec<NetId> {
+        let selected = matches!(e.kind, ExprKind::Index { .. } | ExprKind::Range { .. });
         match self.env.probe(|env| env.resolve_path(e)) {
-            Some(Symbol::Net { net, .. }) => vec![net],
+            Some(Symbol::Net { net, .. }) if !selected => vec![net],
             _ => match &e.kind {
-                ExprKind::Index { base, .. } | ExprKind::Range { base, .. } => {
-                    // An edge on a bit of a vector watches the vector.
-                    self.event_nets(base)
-                }
                 ExprKind::Concat(parts) => parts.iter().flat_map(|p| self.event_nets(p)).collect(),
                 _ => {
-                    self.env.error(
-                        codes::UNSUPPORTED,
-                        e.span,
-                        "an event expression must name a signal",
-                    );
-                    Vec::new()
+                    // `@(v[2])` waits for that bit to change, `@(a + b)` for
+                    // the sum to: a net of its own holds the value, and the
+                    // wait is for it. Watching the whole of `v` used to wake
+                    // on a change of any of its bits.
+                    let value = self.expr_cont(e, None);
+                    let Some(width) = self.b.module().expr(value).ty.width().filter(|w| *w > 0)
+                    else {
+                        self.env.error(
+                            codes::UNSUPPORTED,
+                            e.span,
+                            "an event expression must name a signal or compute a value",
+                        );
+                        return Vec::new();
+                    };
+                    let name = format!("event${}", self.b.module().nets.len());
+                    let Some(net) =
+                        self.new_net(name, VType::Packed(Packed::bits(width)), false, e.span)
+                    else {
+                        return Vec::new();
+                    };
+                    self.b.span = e.span;
+                    self.b.assign(net, value);
+                    vec![net]
                 }
             },
         }

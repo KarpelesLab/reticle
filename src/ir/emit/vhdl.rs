@@ -799,12 +799,12 @@ impl<'a> Printer<'a> {
             match m.port_of_net(id) {
                 Some(port) => {
                     let name = self.namer.name(port.name.as_str());
-                    self.attributes(&net.attrs, &name, "signal", true);
+                    self.attributes(&net.attrs.without_simulation(), &name, "signal", true);
                 }
                 None => {
                     let ty = self.type_text(&net.ty)?;
                     self.decls.push(format!("signal {object} : {ty};"));
-                    self.attributes(&net.attrs, &object, "signal", false);
+                    self.attributes(&net.attrs.without_simulation(), &object, "signal", false);
                 }
             }
         }
@@ -845,7 +845,7 @@ impl<'a> Printer<'a> {
                 _ => String::new(),
             };
             self.decls.push(format!("signal {name} : {ty}{init};"));
-            self.attributes(&mem.attrs, &name, "signal", false);
+            self.attributes(&mem.attrs.without_simulation(), &name, "signal", false);
         }
         for assign in &m.assigns {
             let (value, k) = self.expr(assign.value)?;
@@ -1256,7 +1256,7 @@ impl<'a> Printer<'a> {
         let body = body.finish();
 
         if let Some(label) = &label {
-            self.attributes(&process.attrs, label, "label", false);
+            self.attributes(&process.attrs.without_simulation(), label, "label", false);
         }
         let label_text = label.map(|l| format!("{l} : ")).unwrap_or_default();
         let shadows: Vec<(NetId, String)> =
@@ -1660,6 +1660,12 @@ impl<'a> Printer<'a> {
                 Some((label, None)) => self.out.line(&format!("next {label};")),
                 None => return Err(self.err(stmt.span, "`continue` outside a loop")),
             },
+            StmtKind::Fork { .. }
+            | StmtKind::Disable(_)
+            | StmtKind::DisableFork
+            | StmtKind::WaitFork => {
+                return Err(self.err(stmt.span, "VHDL has no `fork`, `disable` or `wait fork`"));
+            }
         }
         Ok(())
     }

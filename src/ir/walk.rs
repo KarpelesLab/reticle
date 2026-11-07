@@ -117,7 +117,11 @@ pub fn stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(ExprId)) {
         | StmtKind::Finish
         | StmtKind::Stop
         | StmtKind::Break
-        | StmtKind::Continue => {}
+        | StmtKind::Continue
+        | StmtKind::Fork { .. }
+        | StmtKind::Disable(_)
+        | StmtKind::DisableFork
+        | StmtKind::WaitFork => {}
     }
 }
 
@@ -218,7 +222,11 @@ fn stmt_expr_slots(stmt: &mut Stmt, f: &mut dyn FnMut(&mut ExprId)) {
         | StmtKind::Finish
         | StmtKind::Stop
         | StmtKind::Break
-        | StmtKind::Continue => {}
+        | StmtKind::Continue
+        | StmtKind::Fork { .. }
+        | StmtKind::Disable(_)
+        | StmtKind::DisableFork
+        | StmtKind::WaitFork => {}
     }
 }
 

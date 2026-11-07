@@ -68,6 +68,37 @@ impl AttrValue {
     }
 }
 
+/// On a net or memory: a two-state variable (SystemVerilog `bit`, `int`,
+/// `byte` and the like, IEEE 1800-2017 §6.11.2), which starts at zero and
+/// holds a `0` for every `x` or `z` written to it. Only a simulator reads
+/// it; to synthesis a two-state variable is a variable.
+pub const TWO_STATE_ATTR: &str = "two_state";
+
+/// On a `Comb` or `Sensitive` process: it waits for its first event rather
+/// than running once at time zero, as a Verilog `always @(a)` or
+/// `always @*` does (IEEE 1364-2005 §9.7.5); a VHDL process and
+/// `always_comb` run at time zero. Only a simulator reads it.
+pub const WAITS_FIRST_ATTR: &str = "waits_first";
+
+/// On an `Initial` process: a SystemVerilog variable's initialiser, which
+/// gives the variable its value before time zero without an event (IEEE
+/// 1800-2017 §6.8), where a Verilog-2005 one is an assignment at time zero.
+/// Only a simulator reads it; to synthesis it is an `initial` block.
+pub const INITIALISER_ATTR: &str = "initialiser";
+
+/// The attributes only a simulator reads; see [`Attrs::without_simulation`].
+pub const SIMULATION_ATTRS: &[&str] = &[
+    TWO_STATE_ATTR,
+    WAITS_FIRST_ATTR,
+    INITIALISER_ATTR,
+    FINAL_ATTR,
+];
+
+/// On an `Initial` process: a SystemVerilog `final` block, which a
+/// simulator runs once when the simulation ends (`$finish`, or no events
+/// left), and not at time zero. Synthesis has no use for one and drops it.
+pub const FINAL_ATTR: &str = "final";
+
 /// The attribute spellings that mean "keep this object in the netlist".
 ///
 /// One intent, six vendors: `keep` is Yosys's and the one Reticle writes
@@ -220,6 +251,22 @@ impl Attrs {
     /// Iterates over `(key, value)` pairs in insertion order.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&Name, &AttrValue)> + ExactSizeIterator {
         self.items.iter().map(|(k, v)| (k, v))
+    }
+
+    /// The attributes less those only a simulator reads (two-state
+    /// storage, an `always` that waits first, an initialiser, a `final`
+    /// block): what a netlist or an emitted design carries, since each of
+    /// those is already said by the construct it is written as, or means
+    /// nothing outside a simulator.
+    pub fn without_simulation(&self) -> Attrs {
+        Attrs {
+            items: self
+                .items
+                .iter()
+                .filter(|(k, _)| !SIMULATION_ATTRS.contains(&k.as_str()))
+                .cloned()
+                .collect(),
+        }
     }
 
     /// Number of attributes.

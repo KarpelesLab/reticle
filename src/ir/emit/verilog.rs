@@ -549,8 +549,8 @@ impl<'a> Printer<'a> {
                 continue;
             }
             let decl = self.net_decl(id, net, port.map(|p| p.dir))?;
-            if self.opts.keep_attrs && !net.attrs.is_empty() {
-                self.out.line(&attrs_text(&net.attrs));
+            if self.opts.keep_attrs && !net.attrs.without_simulation().is_empty() {
+                self.out.line(&attrs_text(&net.attrs.without_simulation()));
             }
             self.out.line(&format!("{decl};"));
         }
@@ -688,8 +688,8 @@ impl<'a> Printer<'a> {
                 PortDir::InOut => "inout",
             };
             let decl = self.net_decl(port.net, net, Some(port.dir))?;
-            let attrs = if self.opts.keep_attrs && !net.attrs.is_empty() {
-                format!("{} ", attrs_text(&net.attrs))
+            let attrs = if self.opts.keep_attrs && !net.attrs.without_simulation().is_empty() {
+                format!("{} ", attrs_text(&net.attrs.without_simulation()))
             } else {
                 String::new()
             };
@@ -762,8 +762,8 @@ impl<'a> Printer<'a> {
             Type::Real => "real".to_owned(),
             _ => format!("reg{signed}{range}"),
         };
-        if self.opts.keep_attrs && !mem.attrs.is_empty() {
-            self.out.line(&attrs_text(&mem.attrs));
+        if self.opts.keep_attrs && !mem.attrs.without_simulation().is_empty() {
+            self.out.line(&attrs_text(&mem.attrs.without_simulation()));
         }
         let name = ident(mem.name.as_str());
         self.out.line(&format!("{base} {name}{dims};"));
@@ -841,8 +841,9 @@ impl<'a> Printer<'a> {
     }
 
     fn process(&mut self, process: &Process) -> Result<(), EmitError> {
-        if self.opts.keep_attrs && !process.attrs.is_empty() {
-            self.out.line(&attrs_text(&process.attrs));
+        if self.opts.keep_attrs && !process.attrs.without_simulation().is_empty() {
+            self.out
+                .line(&attrs_text(&process.attrs.without_simulation()));
         }
         let head = match &process.kind {
             ProcessKind::Comb => "always @*".to_owned(),
@@ -1132,6 +1133,24 @@ impl<'a> Printer<'a> {
                 Some(label) => self.out.line(&format!("disable {label};")),
                 None => return Err(self.err(stmt.span, "`continue` outside a loop")),
             },
+            StmtKind::Fork { branches, join } => {
+                self.out.line("fork");
+                self.out.indent();
+                for branch in branches {
+                    self.out.line("begin");
+                    self.out.indent();
+                    self.block(branch)?;
+                    self.out.dedent();
+                    self.out.line("end");
+                }
+                self.out.dedent();
+                self.out.line(&format!("{};", join.keyword()));
+            }
+            StmtKind::Disable(name) => {
+                self.out.line(&format!("disable {};", ident(name.as_str())));
+            }
+            StmtKind::DisableFork => self.out.line("disable fork;"),
+            StmtKind::WaitFork => self.out.line("wait fork;"),
         }
         Ok(())
     }

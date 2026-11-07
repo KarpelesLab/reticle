@@ -4,10 +4,12 @@ module sv_for_loop
   net %d u8 wire
   net %ones u4 reg
   net %first_set u3 reg
+  attr two_state = 1
   net %"loop$1.i" s32 var
   net %"lowest_set$3.v" u8 var
   net %"lowest_set$3.lowest_set" u3 var
   net %"lowest_set$3.$returned" u1 var
+  attr two_state = 1
   net %"lowest_set$3.loop$4.i" s32 var
   port d in %d
   port ones out %ones

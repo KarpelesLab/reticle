@@ -18,7 +18,7 @@
 //! | `I0008` | An instance connects a port the target module does not have           |
 //! | `I0009` | An instance connects an output or inout port to something that is not a net, slice or concatenation of nets |
 //! | `I0010` | An instance connection's width differs from the target port's         |
-//! | `I0011` | A net has more than one whole-net driver (assigns, cell outputs, instance outputs) |
+//! | `I0011` | A net has more than one whole-net driver (assigns, cell outputs, instance outputs); a wire's assignments and tri-state drivers are resolved and not counted |
 //! | `I0012` | A constant memory address is out of range, or an initialiser is longer than the memory |
 //! | `I0013` | A memory access's data type differs from the element type             |
 //! | `I0014` | The widths of an assignment target and value, or of a case subject and item, differ |
@@ -71,6 +71,20 @@ pub fn validate(design: &Design) -> Diagnostics {
     diags
 }
 
+/// The nets of `design` with more than one driver of any kind, a wire's
+/// resolved assignments and tri-state drivers counted too, as `I0011`
+/// errors: what a circuit cannot have, where a simulation resolves a wire.
+/// Synthesis runs it after [`validate`].
+pub fn single_drivers(design: &Design) -> Diagnostics {
+    let mut diags = Diagnostics::new();
+    for (_, module) in design.modules.iter() {
+        let mut checker = Checker::new(module, Some(design));
+        checker.drivers(false);
+        diags.append(&mut checker.diags);
+    }
+    diags
+}
+
 /// Checks one module in isolation; instance targets are not verified.
 pub fn validate_module(module: &Module) -> Diagnostics {
     let mut checker = Checker::new(module, None);
@@ -111,7 +125,7 @@ impl<'a> Checker<'a> {
         self.check_processes();
         self.check_cells();
         self.check_instances();
-        self.check_drivers();
+        self.drivers(true);
     }
 
     fn check_duplicates<'b>(&mut self, what: &str, items: impl Iterator<Item = (&'b str, Span)>) {
@@ -586,7 +600,11 @@ impl<'a> Checker<'a> {
             | StmtKind::Finish
             | StmtKind::Stop
             | StmtKind::Break
-            | StmtKind::Continue => {}
+            | StmtKind::Continue
+            | StmtKind::Fork { .. }
+            | StmtKind::Disable(_)
+            | StmtKind::DisableFork
+            | StmtKind::WaitFork => {}
         }
     }
 
@@ -969,8 +987,24 @@ impl<'a> Checker<'a> {
 
     /// Every net driven as a whole by assigns, cell outputs and instance
     /// outputs must have exactly one such driver.
-    fn check_drivers(&mut self) {
+    /// `I0011`: more than one driver of a net; `resolve` lets a wire's
+    /// assignments and tri-state drivers count as one.
+    fn drivers(&mut self, resolve: bool) {
+        // A wire takes any number of continuous assignments and tri-state
+        // drivers, whose values it resolves as Verilog's `wire` does; one
+        // of those beside anything else (a cell's or an instance's output),
+        // or two of anything on a register, is a net with two drivers.
+        // Synthesis holds every net to one (`synth::single_drivers`).
+        let module = self.module;
+        let resolved = |net: super::design::NetId| {
+            resolve
+                && module
+                    .nets
+                    .get(net)
+                    .is_some_and(|n| n.kind == super::NetKind::Wire)
+        };
         let mut drivers: Vec<Vec<Span>> = vec![Vec::new(); self.module.nets.len()];
+        let mut weak: Vec<Vec<Span>> = vec![Vec::new(); self.module.nets.len()];
         let mut record = |net: super::design::NetId, span: Span| {
             if let Some(slot) = drivers.get_mut(net.index()) {
                 slot.push(span);
@@ -978,11 +1012,23 @@ impl<'a> Checker<'a> {
         };
         for assign in &self.module.assigns {
             if let Lvalue::Net(net) = assign.target {
-                record(net, assign.span);
+                if resolved(net) {
+                    if let Some(slot) = weak.get_mut(net.index()) {
+                        slot.push(assign.span);
+                    }
+                } else {
+                    record(net, assign.span);
+                }
             }
         }
         for (_, cell) in self.module.cells.iter() {
             for (_, net) in &cell.outputs {
+                if cell.kind == CellKind::Tristate && resolved(*net) {
+                    if let Some(slot) = weak.get_mut(net.index()) {
+                        slot.push(cell.span);
+                    }
+                    continue;
+                }
                 record(*net, cell.span);
             }
         }
@@ -1004,7 +1050,12 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        for (net, spans) in self.module.nets.iter().zip(drivers) {
+        for ((net, mut spans), weak) in self.module.nets.iter().zip(drivers).zip(weak) {
+            // Resolved drivers alone are one driver; beside another, each
+            // counts.
+            if !spans.is_empty() {
+                spans.extend(weak);
+            }
             if spans.len() > 1 {
                 let mut d = Diagnostic::error(format!(
                     "net `{}` has {} drivers in module `{}`",
@@ -1209,6 +1260,31 @@ mod tests {
             vec![(Name::new("a"), an)],
             vec![(Name::new("y"), y)],
         );
+        assert_eq!(codes(&validate_module(&b.finish())), ["I0011"]);
+    }
+
+    /// A wire's continuous assignments and tri-state drivers are resolved,
+    /// as Verilog resolves a `wire` with two `assign`s; a register's two
+    /// are still two drivers. Would catch the relaxation reaching a
+    /// register, or a wire's assignments refused again.
+    #[test]
+    fn i0011_a_wire_resolves_its_assignments() {
+        let mut b = ModuleBuilder::new("m", span());
+        let a = b.input("a", Type::bit());
+        let w = b.add_net_kind("w", Type::bit(), super::super::NetKind::Wire);
+        let an = b.net(a);
+        b.assign(w, an);
+        let one = b.const_bit(true);
+        b.assign(w, one);
+        assert!(codes(&validate_module(&b.finish())).is_empty());
+
+        let mut b = ModuleBuilder::new("m", span());
+        let a = b.input("a", Type::bit());
+        let r = b.add_net_kind("r", Type::bit(), super::super::NetKind::Reg);
+        let an = b.net(a);
+        b.assign(r, an);
+        let one = b.const_bit(true);
+        b.assign(r, one);
         assert_eq!(codes(&validate_module(&b.finish())), ["I0011"]);
     }
 

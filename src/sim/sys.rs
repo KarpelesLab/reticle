@@ -1142,6 +1142,11 @@ impl<'d> Simulator<'d> {
             // No plusargs are ever given, so none is found and
             // `$value$plusargs` leaves its variable as it was.
             "$test$plusargs" | "$value$plusargs" => fit(Logic::zero(1)),
+            method if method.starts_with("string.") => super::strings::method(method, &args)
+                .unwrap_or_else(|| {
+                    self.warn_unknown("function", name, span);
+                    Value::Bits(Logic::x(width.max(1)))
+                }),
             _ => {
                 self.warn_unknown("function", name, span);
                 Value::Bits(Logic::x(width.max(1)))

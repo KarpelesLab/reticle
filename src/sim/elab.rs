@@ -108,6 +108,12 @@ pub(crate) struct MemState {
     pub(crate) name: String,
     /// Width of one element.
     pub(crate) elem_width: u32,
+    /// True for an array of strings, whose elements each hold as many
+    /// characters as they were given rather than `elem_width` bits.
+    pub(crate) strings: bool,
+    /// True for an array of two-state elements, which start at zero and
+    /// hold a `0` for every `x` or `z` written.
+    pub(crate) two_state: bool,
     /// Contents; `x` where uninitialised.
     pub(crate) data: Vec<Logic>,
     /// Consumers to schedule on any write.
@@ -351,6 +357,7 @@ impl<'d> Simulator<'d> {
             strobes: Vec::new(),
             monitor: None,
             status: Status::Running,
+            finals_run: false,
             output: String::new(),
             messages: Diagnostics::new(),
             vcd: None,
@@ -476,7 +483,13 @@ impl<'d> Simulator<'d> {
                 Some(sig) => sig,
                 None => {
                     let full = format!("{path}.{}", net.name);
-                    self.new_signal(full, &net.ty, net.kind, m.name.clone(), net.span)
+                    let sig = self.new_signal(full, &net.ty, net.kind, m.name.clone(), net.span);
+                    if net.attrs.is_set(crate::ir::TWO_STATE_ATTR) {
+                        let s = &mut self.signals[sig.idx()];
+                        s.two_state = true;
+                        s.value = s.value.two_state();
+                    }
+                    sig
                 }
             };
             nets.push(sig);
@@ -485,7 +498,16 @@ impl<'d> Simulator<'d> {
         for (_, mem) in m.memories.iter() {
             let width = flat_width(&mem.elem);
             let size = usize::try_from(mem.size).unwrap_or(usize::MAX);
-            let mut data = vec![Logic::x(width); size];
+            let strings = mem.elem == crate::ir::Type::String;
+            let two_state = mem.attrs.is_set(crate::ir::TWO_STATE_ATTR);
+            let blank = if strings {
+                Logic::zero(0)
+            } else if two_state {
+                Logic::zero(width)
+            } else {
+                Logic::x(width)
+            };
+            let mut data = vec![blank; size];
             if let Some(init) = &mem.init {
                 for (slot, value) in data.iter_mut().zip(init) {
                     *slot = value.resize(width).with_signed(mem.elem.is_signed());
@@ -495,6 +517,8 @@ impl<'d> Simulator<'d> {
             self.memories.push(MemState {
                 name: format!("{path}.{}", mem.name),
                 elem_width: width,
+                strings,
+                two_state,
                 data,
                 fanout: Vec::new(),
             });
@@ -760,6 +784,7 @@ impl<'d> Simulator<'d> {
             kind,
             value: value.with_signed(ty.is_signed()),
             forced: None,
+            two_state: false,
         });
         self.sig_fanout.push(Vec::new());
         self.sig_drivers.push(Vec::new());
@@ -1088,17 +1113,58 @@ impl<'d> Simulator<'d> {
     /// Queues the time-0 work: every driver, then every process that runs
     /// without a trigger.
     fn schedule_time_zero(&mut self) {
+        // A wire something drives reads `x` until its drivers' values reach
+        // it, which for a delayed one is not at time zero (IEEE 1364-2005
+        // §6.1.3: a continuous assignment's driver starts unknown). It used
+        // to read `z`, as a wire nothing drives does.
+        for (s, drivers) in self.sig_drivers.iter().enumerate() {
+            let sig = &mut self.signals[s];
+            if sig.kind == NetKind::Wire && !drivers.is_empty() && sig.ty.is_bits() {
+                let w = sig.value.width();
+                sig.value = Logic::x(w).with_signed(sig.value.is_signed());
+            }
+        }
         for d in 0..self.drivers.len() {
             self.drivers[d].scheduled = true;
             self.active.push_back(Event::Driver(DriverId::at(d)));
         }
+        // A SystemVerilog variable's initialiser sets the variable before
+        // anything runs, and without an event (`ir::INITIALISER_ATTR`).
         for p in 0..self.procs.len() {
-            let kind = &self.procs[p].process.kind;
-            // A VHDL initial value applied before time zero is done.
-            let applied = self.procs[p].status == ProcStatus::Dead;
-            if !applied
+            if self.procs[p]
+                .process
+                .attrs
+                .is_set(crate::ir::INITIALISER_ATTR)
+                && self.initialise_silently(ProcId::at(p))
+            {
+                self.procs[p].status = ProcStatus::Dead;
+            }
+        }
+        // `always_comb` and VHDL processes run once at time zero after the
+        // `initial` and `always` blocks have started (IEEE 1800-2017
+        // §9.2.2.2.2): those are queued first. They used to be queued in
+        // declaration order, so an `always_comb` above an `initial` ran
+        // first.
+        let mut order: Vec<usize> = (0..self.procs.len()).collect();
+        order.sort_by_key(|p| {
+            matches!(
+                self.procs[*p].process.kind,
+                ProcessKind::Comb | ProcessKind::Sensitive(_)
+            )
+        });
+        for p in order {
+            let process = self.procs[p].process;
+            if self.procs[p].status == ProcStatus::Dead {
+                continue;
+            }
+            // `always @(a)` waits for `a` first (`ir::WAITS_FIRST_ATTR`),
+            // and a `final` block for the end (`ir::FINAL_ATTR`).
+            let waits = (matches!(process.kind, ProcessKind::Comb | ProcessKind::Sensitive(_))
+                && process.attrs.is_set(crate::ir::WAITS_FIRST_ATTR))
+                || process.attrs.is_set(crate::ir::FINAL_ATTR);
+            if !waits
                 && matches!(
-                    kind,
+                    process.kind,
                     ProcessKind::Initial
                         | ProcessKind::Free
                         | ProcessKind::Comb
@@ -1109,6 +1175,40 @@ impl<'d> Simulator<'d> {
                 self.active.push_back(Event::Proc(ProcId::at(p)));
             }
         }
+    }
+
+    /// Runs an initialiser's assignments in place, before time zero: each
+    /// value written straight into its variable, so that no process sees
+    /// an event. `false`, having done nothing, for a body that is anything
+    /// but undelayed blocking assignments to variables; it then runs at
+    /// time zero as an `initial` block would.
+    fn initialise_silently(&mut self, pid: ProcId) -> bool {
+        let inst = self.procs[pid.idx()].inst;
+        let body = &self.procs[pid.idx()].process.body;
+        let simple = body.iter().all(|s| {
+            matches!(
+                &s.kind,
+                crate::ir::StmtKind::Assign {
+                    kind: crate::ir::AssignKind::Blocking,
+                    delay: None,
+                    ..
+                }
+            )
+        });
+        if !simple {
+            return false;
+        }
+        for stmt in body {
+            let crate::ir::StmtKind::Assign { target, value, .. } = &stmt.kind else {
+                continue;
+            };
+            let v = self.eval(inst, *value);
+            let target = self.target_from_lvalue(inst, target);
+            let v = self.logic_for_target(&target, v);
+            let stores = self.resolve_target(inst, &target);
+            self.store_silently(&stores, &v);
+        }
+        true
     }
 }
 

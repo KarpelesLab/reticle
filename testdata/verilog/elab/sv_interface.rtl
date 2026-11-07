@@ -1,8 +1,8 @@
 top sv_interface
 
 module producer
-  net %bus_data u8 wire
-  net %bus_valid u1 wire
+  net %bus_data u8 reg
+  net %bus_valid u1 reg
   net %bus_ready u1 wire
   net %d u8 wire
   port bus_data out %bus_data
@@ -16,7 +16,7 @@ end
 module consumer
   net %bus_data u8 wire
   net %bus_valid u1 wire
-  net %bus_ready u1 wire
+  net %bus_ready u1 reg
   net %q u8 reg
   port bus_data in %bus_data
   port bus_valid in %bus_valid

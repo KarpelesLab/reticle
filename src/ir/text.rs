@@ -57,8 +57,8 @@ use super::design::{
 };
 use super::expr::{BinaryOp, Expr, ExprId, ExprKind, UnaryOp, infer_type, operands};
 use super::process::{
-    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, MemFileOp, Polarity,
-    Process, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
+    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, JoinKind, Lvalue, MemFileOp,
+    Polarity, Process, ProcessKind, ReportSeverity, Stmt, StmtKind, TimeUnit, Timescale, WaitKind,
 };
 use super::types::{Const, Type};
 use crate::diag::{Diagnostic, Diagnostics};
@@ -600,6 +600,18 @@ impl<'a> Printer<'a> {
             StmtKind::Stop => self.line("stop"),
             StmtKind::Break => self.line("break"),
             StmtKind::Continue => self.line("continue"),
+            StmtKind::Fork { branches, join } => {
+                self.line(&format!("fork {}", join.keyword()));
+                for branch in branches {
+                    self.line("branch");
+                    self.block(branch);
+                    self.line("end");
+                }
+                self.line("end");
+            }
+            StmtKind::Disable(n) => self.line(&format!("disable {}", name(n))),
+            StmtKind::DisableFork => self.line("disable_fork"),
+            StmtKind::WaitFork => self.line("wait_fork"),
         }
     }
 
@@ -2191,6 +2203,43 @@ impl Parser {
                     "break" => {
                         self.expect_newline()?;
                         StmtKind::Break
+                    }
+                    "fork" => {
+                        let Tok::Word(kind) = self.peek().clone() else {
+                            return self.unexpected("`join`, `join_any` or `join_none`");
+                        };
+                        let Some(join) = JoinKind::from_keyword(&kind) else {
+                            return self.unexpected("`join`, `join_any` or `join_none`");
+                        };
+                        self.bump();
+                        self.expect_newline()?;
+                        let mut branches = Vec::new();
+                        loop {
+                            while matches!(self.peek(), Tok::Newline) {
+                                self.bump();
+                            }
+                            if !self.eat_word("branch") {
+                                break;
+                            }
+                            self.expect_newline()?;
+                            branches.push(self.block_end()?);
+                        }
+                        self.expect_word("end")?;
+                        self.expect_newline()?;
+                        StmtKind::Fork { branches, join }
+                    }
+                    "disable" => {
+                        let n = self.expect_name()?;
+                        self.expect_newline()?;
+                        StmtKind::Disable(n)
+                    }
+                    "disable_fork" => {
+                        self.expect_newline()?;
+                        StmtKind::DisableFork
+                    }
+                    "wait_fork" => {
+                        self.expect_newline()?;
+                        StmtKind::WaitFork
                     }
                     "continue" => {
                         self.expect_newline()?;

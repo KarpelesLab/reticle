@@ -143,7 +143,9 @@ pub(crate) fn string_to_logic(s: &str) -> Logic {
 }
 
 /// Unpacks a bit vector as a string, eight bits per character, dropping
-/// leading NUL bytes and mapping unknown bytes to `?`.
+/// leading NUL bytes and mapping unknown bytes to `?`: what a string
+/// variable holds when an integral value is assigned to it (IEEE 1800-2017
+/// §6.16), not how `%s` prints one (`sys::display_string`).
 pub(crate) fn logic_to_string(l: &Logic) -> String {
     let bytes = l.width().div_ceil(8);
     let mut out = String::new();
@@ -350,6 +352,9 @@ pub(crate) struct Signal {
     pub(crate) value: Logic,
     /// An override from `force`, reported to every reader until released.
     pub(crate) forced: Option<Logic>,
+    /// A two-state variable (`bit`, `int`, ...): it starts at zero and
+    /// holds a `0` for every `x` or `z` written to it.
+    pub(crate) two_state: bool,
 }
 
 impl Signal {
@@ -450,6 +455,7 @@ mod tests {
             kind: NetKind::Wire,
             value: l("4'd3"),
             forced: None,
+            two_state: false,
         };
         assert_eq!(s.effective(), &l("4'd3"));
         s.forced = Some(l("4'd9"));

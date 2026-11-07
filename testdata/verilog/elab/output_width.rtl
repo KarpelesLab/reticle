@@ -1,0 +1,19 @@
+top output_width
+
+module eow_leaf
+  net %a u8 wire
+  net %y u8 wire
+  port a in %a
+  port y out %y
+  assign %y = %a
+end
+
+module output_width
+  net %a u8 wire
+  net %y u4 wire
+  net %y_out$1 u8 wire
+  port a in %a
+  port y out %y
+  instance u0 of eow_leaf (a=%a, y=%y_out$1)
+  assign %y = %y_out$1[3:0]
+end

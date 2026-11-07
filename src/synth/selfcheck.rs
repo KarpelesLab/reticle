@@ -368,7 +368,11 @@ impl<'a> Sim<'a> {
             | StmtKind::Finish
             | StmtKind::Stop
             | StmtKind::Force { .. }
-            | StmtKind::Release { .. } => Flow::Next,
+            | StmtKind::Release { .. }
+            | StmtKind::Fork { .. }
+            | StmtKind::Disable(_)
+            | StmtKind::DisableFork
+            | StmtKind::WaitFork => Flow::Next,
         }
     }
 

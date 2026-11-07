@@ -935,6 +935,22 @@ impl Logic {
         !self.is_fully_known()
     }
 
+    /// The value as a two-state variable holds it: every `x` or `z` bit
+    /// a `0` (IEEE 1800-2017 §6.11.2).
+    pub fn two_state(&self) -> Logic {
+        if self.is_fully_known() {
+            return self.clone();
+        }
+        let value: Vec<u64> = self
+            .value
+            .iter()
+            .zip(self.unknown.iter())
+            .map(|(v, u)| v & !u)
+            .collect();
+        let unknown = vec![0; value.len()];
+        Logic::from_planes(self.width, self.signed, value, unknown)
+    }
+
     /// True when every bit is a known `0`.
     pub fn is_zero(&self) -> bool {
         self.is_fully_known() && is_zero(&self.value)

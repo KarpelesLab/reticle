@@ -7,6 +7,7 @@ module casez_decoder
   port req in %req
   port grant out %grant
   port valid out %valid
+  attr waits_first = 1
   process comb
     %valid = 1'd1
     casez %req

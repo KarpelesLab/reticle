@@ -28,14 +28,45 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// block.
     pub(super) fn always(&mut self, kind: AlwaysKind, stmt: &'ast Stmt, item: &'ast Item) {
         let (process_kind, body, wrap_forever) = self.always_kind(kind, stmt);
-        let attrs = self.attrs_of(&item.attrs);
+        let mut attrs = self.attrs_of(&item.attrs);
+        // `always @(a)` and `always @*` wait before they run; only
+        // `always_comb` and `always_latch` run at time zero. They used to
+        // run once at time zero too, so `always @(a) $display(..)` printed
+        // a line before `a` ever changed.
+        if kind == AlwaysKind::Always
+            && matches!(process_kind, ProcessKind::Comb | ProcessKind::Sensitive(_))
+        {
+            attrs.set(crate::ir::WAITS_FIRST_ATTR, crate::ir::AttrValue::Int(1));
+        }
         let name = stmt.label.as_ref().map(|l| l.name.clone());
+        // `always @(posedge clk iff en)` runs at an edge where `en` is 1: the
+        // body under that condition. Where the header is the first wait of
+        // a free-running loop, the wait itself takes the `iff`.
+        let guard = match &stmt.kind {
+            AstStmt::Timing(ctrl, _) if !wrap_forever => match &ctrl.kind {
+                ast::TimingKind::Event(ev) => self.event_iff(ev),
+                _ => None,
+            },
+            _ => None,
+        };
+        self.guard = guard;
         self.emit_process(name, process_kind, body, wrap_forever, attrs, item);
+        self.guard = None;
     }
 
     /// Lowers an `initial` block.
     pub(super) fn initial(&mut self, stmt: &'ast Stmt, item: &'ast Item) {
         let attrs = self.attrs_of(&item.attrs);
+        let name = stmt.label.as_ref().map(|l| l.name.clone());
+        self.emit_process(name, ProcessKind::Initial, stmt, false, attrs, item);
+    }
+
+    /// Lowers a `final` block: an `initial` block whose body waits for the
+    /// end of the simulation (IEEE 1800-2017 §9.2.3), marked so that the
+    /// simulator runs it then (`ir::FINAL_ATTR`).
+    pub(super) fn final_block(&mut self, stmt: &'ast Stmt, item: &'ast Item) {
+        let mut attrs = self.attrs_of(&item.attrs);
+        attrs.set(crate::ir::FINAL_ATTR, crate::ir::AttrValue::Int(1));
         let name = stmt.label.as_ref().map(|l| l.name.clone());
         self.emit_process(name, ProcessKind::Initial, stmt, false, attrs, item);
     }
@@ -67,6 +98,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.stmt(body, &mut inner);
             p.span = item.span;
             p.forever(inner.finish());
+        } else if let Some(cond) = self.guard.take() {
+            let c = self.expr_bit(cond, &mut super::expr::Sink::Proc(&mut p));
+            let mut inner = self.b.block();
+            inner.span = body.span;
+            self.stmt(body, &mut inner);
+            p.span = item.span;
+            p.if_(c, inner.finish(), Vec::new());
         } else {
             self.stmt(body, &mut p);
         }

@@ -42,8 +42,8 @@ use super::design::{
 };
 use super::expr::{BinaryOp, Expr, ExprId, ExprKind, UnaryOp, infer_type};
 use super::process::{
-    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, Lvalue, MemFileOp, Process,
-    ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, WaitKind,
+    AssignKind, Block, CaseArm, CaseKind, CaseQualifier, Delay, Edge, JoinKind, Lvalue, MemFileOp,
+    Process, ProcessId, ProcessKind, ReportSeverity, Stmt, StmtKind, WaitKind,
 };
 use super::types::{Const, Type};
 use crate::source::Span;
@@ -676,6 +676,16 @@ impl BlockBuilder {
     /// A `forever` loop.
     pub fn forever(&mut self, body: Block) {
         self.push(StmtKind::Forever { body });
+    }
+
+    /// `fork ... join` (see [`StmtKind::Fork`]).
+    pub fn fork(&mut self, branches: Vec<Block>, join: JoinKind) {
+        self.push(StmtKind::Fork { branches, join });
+    }
+
+    /// `disable name`.
+    pub fn disable(&mut self, name: impl Into<Name>) {
+        self.push(StmtKind::Disable(name.into()));
     }
 
     /// A nested block.

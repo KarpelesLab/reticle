@@ -361,9 +361,42 @@ impl<'d> Simulator<'d> {
         }
     }
 
-    /// Runs until `$finish`, `$stop`, a breakpoint or no event is left.
+    /// Runs until `$finish`, `$stop`, a breakpoint or no event is left;
+    /// at the end of the simulation, the `final` blocks.
     pub fn run(&mut self) {
         while self.break_hits.is_empty() && self.step() && self.status == Status::Running {}
+        if self.break_hits.is_empty() && matches!(self.status, Status::Finished | Status::Running) {
+            self.run_final_blocks();
+        }
+    }
+
+    /// Runs every `final` block once (`ir::FINAL_ATTR`), in the time slot
+    /// the simulation ended in, then ends it. Called by [`Self::run`].
+    pub fn run_final_blocks(&mut self) {
+        if self.finals_run {
+            return;
+        }
+        self.finals_run = true;
+        let finals: Vec<usize> = (0..self.procs.len())
+            .filter(|p| self.procs[*p].process.attrs.is_set(crate::ir::FINAL_ATTR))
+            .collect();
+        if finals.is_empty() {
+            return;
+        }
+        let ended = self.status;
+        self.status = Status::Running;
+        for p in finals {
+            self.procs[p].status = super::process::ProcStatus::Queued;
+            self.active
+                .push_back(super::sched::Event::Proc(super::elab::ProcId::at(p)));
+        }
+        self.run_slot();
+        if self.status == Status::Running {
+            self.status = ended;
+        }
+        if self.status == Status::Running {
+            self.status = Status::Finished;
+        }
     }
 
     /// The text produced by `$display` and friends so far.

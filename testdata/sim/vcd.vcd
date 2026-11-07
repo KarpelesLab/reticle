@@ -9,9 +9,8 @@ $enddefinitions $end
 $dumpvars
 x!
 bxx "
-bzz #
-$end
 bxx #
+$end
 0!
 b00 "
 b11 #

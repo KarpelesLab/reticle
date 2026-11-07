@@ -59,8 +59,9 @@ pub(crate) enum Event {
 /// An entry of the time wheel.
 #[derive(Clone, Debug)]
 pub(crate) enum Timed {
-    /// Resume a delayed process.
-    Wake(ProcId),
+    /// Resume a delayed process, if it still sleeps from the suspension
+    /// whose `wait_gen` this is.
+    Wake(ProcId, u32),
     /// A non-blocking assignment whose delay elapsed.
     Nba(Vec<Store>, Logic),
     /// A driver update whose transport delay elapsed.
@@ -213,9 +214,14 @@ impl<'d> Simulator<'d> {
         };
         for ev in list {
             match ev {
-                Timed::Wake(pid) => {
-                    self.procs[pid.idx()].status = ProcStatus::Queued;
-                    self.active.push_back(Event::Proc(pid));
+                Timed::Wake(pid, generation) => {
+                    // A process `disable`d or ended while it slept has
+                    // nothing to wake for.
+                    let p = &mut self.procs[pid.idx()];
+                    if p.status == ProcStatus::Delayed && p.wait_gen == generation {
+                        p.status = ProcStatus::Queued;
+                        self.active.push_back(Event::Proc(pid));
+                    }
                 }
                 Timed::Nba(stores, value) => {
                     if !self.inertial_nba_cancelled(&stores, &value) {
@@ -338,12 +344,17 @@ impl<'d> Simulator<'d> {
     pub(crate) fn write_signal(&mut self, sig: SigId, value: Logic) {
         let s = &mut self.signals[sig.idx()];
         let width = s.value.width();
-        let value = if value.width() == width {
+        let value = if value.width() == width || s.ty == crate::ir::Type::String {
             value
         } else {
             value.resize(width)
         };
         let value = value.with_signed(s.value.is_signed());
+        let value = if s.two_state {
+            value.two_state()
+        } else {
+            value
+        };
         if s.value == value {
             return;
         }
@@ -430,9 +441,18 @@ impl<'d> Simulator<'d> {
         if i >= m.data.len() {
             return false;
         }
-        let value = value
-            .resize(m.elem_width)
-            .with_signed(m.data[i].is_signed());
+        let value = if m.strings {
+            value.clone()
+        } else if m.two_state {
+            value
+                .resize(m.elem_width)
+                .with_signed(m.data[i].is_signed())
+                .two_state()
+        } else {
+            value
+                .resize(m.elem_width)
+                .with_signed(m.data[i].is_signed())
+        };
         if m.data[i] == value {
             return true;
         }
@@ -584,9 +604,56 @@ impl<'d> Simulator<'d> {
         parts
     }
 
+    /// Writes `value` into `stores` with no event: what an initialiser
+    /// does before time zero. A memory element is written as any write
+    /// writes it, since nothing waits on one before time zero.
+    pub(crate) fn store_silently(&mut self, stores: &[Store], value: &Logic) {
+        if let [Store::Sig { sig, .. }] = stores
+            && self.signals[sig.idx()].ty == crate::ir::Type::String
+        {
+            self.signals[sig.idx()].value = value.clone();
+            return;
+        }
+        let parts = self.split_value(stores, value);
+        for (store, part) in stores.iter().zip(parts) {
+            match store {
+                Store::Sig { sig, lo, width } => {
+                    let s = &mut self.signals[sig.idx()];
+                    let new = if *lo == 0 && *width == s.value.width() {
+                        part.resize(s.value.width())
+                    } else {
+                        replace_bits(&s.value, *lo, &part)
+                    };
+                    let new = new.with_signed(s.value.is_signed());
+                    s.value = if s.two_state { new.two_state() } else { new };
+                }
+                Store::Mem { mem, addr } => {
+                    self.write_mem(*mem, *addr, &part);
+                }
+                Store::MemPart { mem, addr, lo, .. } => {
+                    self.write_mem_part(*mem, *addr, *lo, &part);
+                }
+                Store::Skip { .. } => {}
+            }
+        }
+    }
+
     /// Applies a procedural assignment: every store is written as if by a
     /// process (last write wins).
     pub(crate) fn apply_stores(&mut self, stores: &[Store], value: &Logic) {
+        // A string variable holds as many characters as it was given: its
+        // value is the whole of what is written, at whatever width.
+        match stores {
+            [Store::Sig { sig, .. }] if self.signals[sig.idx()].ty == crate::ir::Type::String => {
+                self.write_signal(*sig, value.clone());
+                return;
+            }
+            [Store::Mem { mem, addr }] if self.memories[mem.idx()].strings => {
+                self.write_mem(*mem, *addr, value);
+                return;
+            }
+            _ => {}
+        }
         let parts = self.split_value(stores, value);
         for (store, part) in stores.iter().zip(parts) {
             match store {

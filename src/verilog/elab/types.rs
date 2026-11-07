@@ -262,12 +262,19 @@ impl Packed {
             .get(1..)
             .map(<[Range]>::to_vec)
             .unwrap_or_default();
+        // An element of a packed array of structs or enums is one of them,
+        // with its members or its variants: `a[1].f` of `s_t [1:0] a`.
+        let whole = self.dims.len() >= 2 && dims.len() == 1;
         Packed {
             signed: false,
             four_state: self.four_state,
             dims,
-            fields: None,
-            enumeration: None,
+            fields: if whole { self.fields.clone() } else { None },
+            enumeration: if whole {
+                self.enumeration.clone()
+            } else {
+                None
+            },
             is_unsized: false,
             keyword: None,
         }

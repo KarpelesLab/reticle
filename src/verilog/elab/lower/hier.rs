@@ -55,20 +55,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// starts at one of this module's instances and ends at a net; see the
     /// module documentation. A name that does not resolve is left for the
     /// ordinary resolution to report.
-    pub(super) fn hier_aliases(&mut self, items: &'ast [Item]) {
-        // This module's instances by name, as written at its top level.
-        let mut instances: Vec<(&'ast str, &'ast ast::Instantiation, Span)> = Vec::new();
-        for item in items {
-            if let ItemKind::Instance(inst) = &item.kind {
-                for one in &inst.instances {
-                    if let Some(name) = &one.name
-                        && one.dims.is_empty()
-                    {
-                        instances.push((name.name.as_str(), inst, name.span));
-                    }
-                }
-            }
-        }
+    pub(super) fn hier_aliases(&mut self, module: &str, items: &'ast [Item]) {
+        // This module's instances by the name the IR gives them: as written
+        // at its top level, and `blk.u` for `u` in a named generate block
+        // `blk` (IEEE 1364-2005 §12.4: a generate block names a scope).
+        let mut instances: Vec<(String, &'ast ast::Instantiation, Span)> = Vec::new();
+        self.collect_instances(items, "", &mut instances);
         if instances.is_empty() {
             return;
         }
@@ -140,18 +132,33 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             if self.env.hier.contains_key(&key) {
                 continue;
             }
-            let Some(&(_, inst, inst_span)) = instances.iter().find(|(n, _, _)| *n == path[0])
-            else {
+            // `tb.m.x` inside `tb` is `m.x`: a path may start at the module
+            // it is written in.
+            let from = usize::from(path.len() > 2 && path[0] == module);
+            // The instance is the longest leading part of the path that
+            // names one: `blk.u` before `blk`.
+            let found = (from + 1..path.len()).rev().find_map(|k| {
+                let head = path[from..k].join(".");
+                instances
+                    .iter()
+                    .find(|(n, _, _)| *n == head)
+                    .map(|(n, inst, sp)| (k, n.clone(), *inst, *sp))
+            });
+            let Some((k, head, inst, inst_span)) = found else {
                 continue;
             };
-            let Some((ty, instance_path, net_name)) = self.hier_target(inst, inst_span, &path)
+            let mut rest = vec![head];
+            rest.extend(path[k..].iter().cloned());
+            let Some((ty, instance_path, net_name, var)) = self.hier_target(inst, inst_span, &rest)
             else {
                 continue;
             };
             let Some(vty) = vtype_of(&ty) else {
                 continue;
             };
-            let Some(local) = self.new_net(key.clone(), vty.clone(), false, span) else {
+            // A variable below may be assigned from a procedure here, as a
+            // testbench does through `dut.count = 0`: the alias is one too.
+            let Some(local) = self.new_net(key.clone(), vty.clone(), var, span) else {
                 continue;
             };
             self.b.module_mut().hier_refs.push(ir::HierRef {
@@ -171,7 +178,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         inst: &'ast ast::Instantiation,
         inst_span: Span,
         path: &[String],
-    ) -> Option<(Type, Vec<ir::Name>, ir::Name)> {
+    ) -> Option<(Type, Vec<ir::Name>, ir::Name, bool)> {
         let module = inst.module.name.as_str();
         if !self.env.cx.table.modules.contains_key(module) {
             return None;
@@ -190,10 +197,61 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let m = self.env.cx.design.modules.get(id)?;
         let (_, net) = m.nets.iter().find(|(_, n)| n.name.as_str() == last)?;
         let ty = net.ty.clone();
+        let var = net.kind != ir::NetKind::Wire;
         let instances = path[..path.len() - 1]
             .iter()
             .map(|n| ir::Name::new(n.as_str()))
             .collect();
-        Some((ty, instances, ir::Name::new(last.as_str())))
+        Some((ty, instances, ir::Name::new(last.as_str()), var))
+    }
+
+    /// The module instances in `items` and in its named generate blocks,
+    /// each by its IR name (`prefix` and its own), interfaces left out: an
+    /// interface instance is flattened into this module, so `si.v` names a
+    /// net of its own here, not one below (aliasing it too declared `si.v`
+    /// twice, an internal error).
+    fn collect_instances(
+        &mut self,
+        items: &'ast [Item],
+        prefix: &str,
+        out: &mut Vec<(String, &'ast ast::Instantiation, Span)>,
+    ) {
+        for item in items {
+            match &item.kind {
+                ItemKind::Instance(inst) if !self.env.cx.table.is_interface(&inst.module.name) => {
+                    for one in &inst.instances {
+                        if let Some(name) = &one.name
+                            && one.dims.is_empty()
+                        {
+                            out.push((format!("{prefix}{}", name.name), inst, name.span));
+                        }
+                    }
+                }
+                ItemKind::Generate(inner) => self.collect_instances(inner, prefix, out),
+                ItemKind::GenBlock(b) => self.collect_block(b, prefix, out),
+                ItemKind::GenIf(g) => {
+                    self.collect_block(&g.then_block, prefix, out);
+                    if let Some(e) = &g.else_block {
+                        self.collect_block(e, prefix, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_block(
+        &mut self,
+        b: &'ast ast::GenBlock,
+        prefix: &str,
+        out: &mut Vec<(String, &'ast ast::Instantiation, Span)>,
+    ) {
+        match &b.label {
+            Some(l) => {
+                let inner = format!("{prefix}{}.", l.name);
+                self.collect_instances(&b.items, &inner, out);
+            }
+            None => self.collect_instances(&b.items, prefix, out),
+        }
     }
 }

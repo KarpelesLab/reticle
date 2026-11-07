@@ -1,0 +1,8 @@
+warning[V0005]: output `y` is 8 bits wide and is connected to 4 bits
+ --> output_width.v:9:25
+  |
+9 |     eow_leaf u0 (.a(a), .y(y));
+  |                         ^^^^^ connected here
+  |
+  = note: the port's bits above the connection's are dropped
+

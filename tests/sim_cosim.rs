@@ -403,10 +403,14 @@ module t
     %q = %p
   end
   process initial
-    %p = 1'd0
+    %q = 1'd0
   end
 end
 ";
+    // The `initial` starts the loop by giving `q` a value: the processes
+    // that run at time zero run after it (`always_comb` after `initial`),
+    // and `p = not(q)` of an `x` was `x` again, which settles. It used to
+    // set `p`, which oscillated only because the loop ran first.
     let design = parse(text);
     let opts = SimOptions {
         max_slot_events: 50,

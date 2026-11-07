@@ -253,7 +253,7 @@ impl ModulePrinter<'_> {
                 out.line(&format!("{}: {{", json_string(mem.name.as_str())));
                 out.indent();
                 out.line(&format!("\"hide_name\": {},", hide_name(mem.name.as_str())));
-                attrs_json(out, "attributes", &mem.attrs, false);
+                attrs_json(out, "attributes", &mem.attrs.without_simulation(), false);
                 out.line(&format!("\"width\": {},", mem.elem.width().unwrap_or(0)));
                 out.line("\"start_offset\": 0,");
                 out.line(&format!("\"size\": {}", mem.size));
@@ -274,7 +274,7 @@ impl ModulePrinter<'_> {
             out.indent();
             out.line(&format!("\"hide_name\": {},", hide_name(net.name.as_str())));
             out.line(&format!("\"bits\": {},", self.bits_json(&bits)));
-            attrs_json(out, "attributes", &net.attrs, true);
+            attrs_json(out, "attributes", &net.attrs.without_simulation(), true);
             out.dedent();
             out.line(if i + 1 < n { "}," } else { "}" });
         }

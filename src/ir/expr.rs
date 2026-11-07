@@ -21,15 +21,15 @@
 //! | `And` `Or` `Xor` `Xnor`               | bits of equal width      | same width       |
 //! | `Add` `Sub` `Mul` `Div` `Mod` `Pow`   | bits of equal width      | same width       |
 //! | `Shl` `Shr` `Sshr`                    | bits, any-width amount   | type of the left |
-//! | `Eq` `Ne` `CaseEq` `CaseNe` `WildEq`  | bits of equal width      | `u1`             |
-//! | `Lt` `Le` `Gt` `Ge`                   | bits of equal width      | `u1`             |
+//! | `Eq` `Ne` `CaseEq` `CaseNe` `WildEq`  | bits of equal width, or two strings | `u1`  |
+//! | `Lt` `Le` `Gt` `Ge`                   | bits of equal width, or two strings | `u1`  |
 //! | `LogicAnd` `LogicOr`                  | `u1`, `u1`               | `u1`             |
 //! | `Ternary`                             | `u1`, `T`, `T`           | `T`              |
 //! | `Concat`                              | bits                     | sum of widths    |
 //! | `Replicate`                           | bits                     | count × width    |
 //! | `Slice`, `IndexedSlice`               | bits                     | unsigned, width  |
 //! | `Index`                               | bits or array            | `u1` or element  |
-//! | `Resize`                              | bits or integer          | as requested     |
+//! | `Resize`                              | bits, integer or string  | as requested     |
 //! | `MemRead`                             |                          | element type     |
 //!
 //! A result is signed only when every bit-vector operand is signed, as in
@@ -634,6 +634,9 @@ pub fn infer_type(module: &Module, kind: &ExprKind) -> Result<Type, TypeError> {
                         })
                     }
                 }
+                // Two strings compare (simulation only): equal, unequal,
+                // or in the order of their characters.
+                (Type::String, Type::String) if op.is_predicate() => Ok(Type::bit()),
                 (Type::Integer, Type::Integer) | (Type::Real, Type::Real) => {
                     if op.is_bitwise() {
                         return Err(TypeError::BadOperand {
@@ -688,7 +691,9 @@ pub fn infer_type(module: &Module, kind: &ExprKind) -> Result<Type, TypeError> {
             width,
             signed,
         } => match ty(*expr)? {
-            Type::Bits { .. } | Type::Integer => Ok(Type::Bits {
+            // A string resized is its characters' bits, eight a character
+            // and the last in the low bits, as a literal's are.
+            Type::Bits { .. } | Type::Integer | Type::String => Ok(Type::Bits {
                 width: *width,
                 signed: *signed,
             }),

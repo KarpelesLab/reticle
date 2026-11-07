@@ -1044,6 +1044,12 @@ impl<'a> Exec<'a> {
             StmtKind::Forever { .. } => Err(self.error(span, "`forever` loop in a process")),
             StmtKind::Block { body, .. } => self.exec_block(body),
             StmtKind::Wait(_) => Err(self.error(span, "`wait` in a process")),
+            StmtKind::Fork { .. } | StmtKind::WaitFork => {
+                Err(self.error(span, "`fork` in a process"))
+            }
+            StmtKind::Disable(_) | StmtKind::DisableFork => {
+                Err(self.error(span, "`disable` in a process"))
+            }
             StmtKind::SysCall { .. } => {
                 self.dropped.push((span, "system call"));
                 Ok(Flow::Next)

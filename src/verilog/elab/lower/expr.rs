@@ -76,6 +76,80 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
+    /// Lowers a context-determined operand of an operator whose
+    /// expression has the type `ctx` (IEEE 1364-2005 §5.5.1, §5.5.4):
+    /// the operator's signedness reaches down into the operand. When the
+    /// expression is unsigned, a signed operand is computed unsigned and
+    /// extended with zeros, not with its sign: `s + u`, with `s` a signed
+    /// `-1` of four bits, `u` an unsigned 15 and the sum eight bits wide,
+    /// is 30, not 14. It used to be extended by its own sign, which is
+    /// right only for an expression whose every operand is signed.
+    pub(super) fn operand(&mut self, e: &'ast Expr, ctx: Ctx, sink: &mut Sink<'_>) -> ExprId {
+        // Only an extension can tell the two readings apart: where no
+        // signed value inside the operand is widened, it is lowered as it
+        // always was, which keeps the netlists of designs it does not
+        // change as they were.
+        if ctx.signed || !self.extends_signed(e, ctx.width) {
+            return self.expr(e, Some(ctx), sink);
+        }
+        self.force_unsigned = true;
+        let id = self.build(e, ctx.width, sink);
+        self.force_unsigned = false;
+        if !ctx.signed
+            && let Type::Bits {
+                width,
+                signed: true,
+            } = self.b.module().expr(id).ty
+            && width < ctx.width
+        {
+            // An unsigned resize of a signed value extends it with zeros.
+            if let Some(c) = self.b.module().expr(id).as_const().cloned() {
+                return self.b.constant(c.as_unsigned().resize(ctx.width));
+            }
+            return self.b.resize(id, ctx.width, false);
+        }
+        self.coerce(id, ctx.width, ctx.signed)
+    }
+
+    /// True when lowering `e` at `width` would widen a signed value
+    /// somewhere in it: a signed leaf narrower than `width` reached through
+    /// operators whose operands take the context.
+    fn extends_signed(&mut self, e: &'ast Expr, width: u32) -> bool {
+        let info = self.info_of(e);
+        if !info.is_signed() || matches!(info, Info::Real) {
+            return false;
+        }
+        let w = width.max(info.width());
+        match &e.kind {
+            ExprKind::Unary {
+                op: UnaryOp::Plus | UnaryOp::Minus | UnaryOp::BitNot,
+                operand,
+            } => self.extends_signed(operand, w),
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Mod
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::BitXnor => self.extends_signed(lhs, w) || self.extends_signed(rhs, w),
+                BinaryOp::Shl | BinaryOp::Shr | BinaryOp::Ashl | BinaryOp::Ashr | BinaryOp::Pow => {
+                    self.extends_signed(lhs, w)
+                }
+                _ => false,
+            },
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => self.extends_signed(then_expr, w) || self.extends_signed(else_expr, w),
+            ExprKind::MinTypMax { typ, .. } => self.extends_signed(typ, width),
+            _ => info.width() < width,
+        }
+    }
+
     /// Lowers `e` to a single bit holding its truth value, as `if`, `?:`
     /// and the logical operators need.
     pub(super) fn expr_bit(&mut self, e: &'ast Expr, sink: &mut Sink<'_>) -> ExprId {
@@ -111,11 +185,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         // A literal is resized in place rather than wrapped, which keeps
         // the IR readable; the arithmetic is the same as the node's.
         if let Some(c) = self.b.module().expr(id).as_const().cloned() {
-            let resized = if signed {
-                c.resize(width).with_signed(true)
-            } else {
-                c.as_unsigned().resize(width)
-            };
+            // Extended by its own signedness, as an assignment extends its
+            // value (IEEE 1364-2005 §5.5.4): `operand` is where an
+            // unsigned expression's signed operand is extended with zeros.
+            let resized = c.resize(width).with_signed(signed);
             self.b.span = self.b.module().expr(id).span;
             return self.b.constant(resized);
         }
@@ -140,6 +213,27 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         if ty == Type::Real {
             let rounded = self.real_to_integer(id);
             return self.b.resize(rounded, width, signed);
+        }
+        if ty == Type::String {
+            // A string in an integral context is its characters' bits.
+            return self.b.resize(id, width, signed);
+        }
+        if let Type::Bits {
+            width: from,
+            signed: true,
+        } = ty
+            && !signed
+            && from < width
+        {
+            // A signed value widened into an unsigned place is extended by
+            // its sign, as an assignment extends it (IEEE 1364-2005
+            // §5.5.4): `y = s` with `y` unsigned and wider. An IR resize
+            // to an unsigned width extends with zeros, so the value is
+            // widened signed first and then read as unsigned. It used to
+            // be one unsigned resize, which synthesis built extending with
+            // zeros where the simulator extended by the sign.
+            let wide = self.b.resize(id, width, true);
+            return self.b.resize(wide, width, false);
         }
         if !ty.is_bits() {
             // A value with no integral form at all: a genuine type error
@@ -198,6 +292,49 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
         self.b.span = self.b.module().expr(id).span;
         self.b.call("$itor", vec![id], Type::Real)
+    }
+
+    /// Lowers `e` as a value of type `ty`: a real, a string, or an
+    /// integral value sized to the type.
+    pub(super) fn value_as(&mut self, e: &'ast Expr, ty: &VType, sink: &mut Sink<'_>) -> ExprId {
+        if let ExprKind::Pattern(items) = &e.kind {
+            return match self.pattern_value(items, ty, e.span, sink) {
+                Some(id) => id,
+                None => {
+                    let w = ty.packed().map_or(1, Packed::width);
+                    self.b.span = e.span;
+                    self.b.const_u64(w, 0)
+                }
+            };
+        }
+        match ty {
+            VType::Real => self.real(e, sink),
+            VType::String => self.string_value(e, sink),
+            _ => {
+                let width = ty.packed().map_or(1, Packed::width);
+                let signed = ty.packed().is_some_and(|p| p.signed);
+                self.expr(e, Some(Ctx { width, signed }), sink)
+            }
+        }
+    }
+
+    /// Lowers `e` at its own width and signedness, a real as a real and a
+    /// string as a string.
+    pub(super) fn build_self(&mut self, e: &'ast Expr, sink: &mut Sink<'_>) -> ExprId {
+        if self.is_string_typed(e) {
+            return self.build(e, 0, sink);
+        }
+        match self.info_of(e) {
+            Info::Real => self.real(e, sink),
+            info => self.expr(
+                e,
+                Some(Ctx {
+                    width: info.width().max(1),
+                    signed: info.is_signed(),
+                }),
+                sink,
+            ),
+        }
     }
 
     /// Lowers `e` as a real value: an assignment to a `real`, or an
@@ -287,9 +424,62 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             })
     }
 
+    /// The declared type of what `e` names or computes, when it has one
+    /// beyond a width: a member of a struct or union, an element of an
+    /// array (of structs), a function's result, a cast's type. A member of
+    /// a nested struct, of an array element or of a function's result used
+    /// to lose its type here and read as 0.
+    pub(super) fn value_type(&mut self, e: &'ast Expr) -> Option<VType> {
+        match &e.kind {
+            ExprKind::Ident(_) | ExprKind::Scoped { .. } => {
+                self.env.probe(|env| env.type_of_path(e))
+            }
+            ExprKind::Member { base, name } => {
+                if let Some(t) = self.env.probe(|env| env.type_of_path(e)) {
+                    return Some(t);
+                }
+                let bt = self.value_type(base)?;
+                bt.packed()?.field(&name.name).map(|f| f.ty.clone())
+            }
+            ExprKind::Index { base, .. } => match self.value_type(base)? {
+                VType::Unpacked { elem, .. } => Some(*elem),
+                VType::Packed(p) => Some(VType::Packed(p.element())),
+                VType::String => Some(VType::Packed(Packed::bits(8))),
+                _ => None,
+            },
+            ExprKind::Call { callee, .. } if !matches!(callee.kind, ExprKind::SystemIdent(_)) => {
+                // An enum's `first()`, `last()`, `next()` and `prev()` are of
+                // the enum's type: `e.first().name()`.
+                if let ExprKind::Member { base, name } = &callee.kind
+                    && matches!(name.name.as_str(), "first" | "last" | "next" | "prev")
+                    && let Some(t) = self.value_type(base)
+                    && t.packed().is_some_and(|p| p.enumeration.is_some())
+                {
+                    return Some(t);
+                }
+                let (f, is_task) = self.env.probe(|env| env.resolve_callee(callee))?;
+                let ret = f.def.ret.as_ref().filter(|_| !is_task)?;
+                if ret.is_empty() || ret.kind == ast::DataTypeKind::Void {
+                    return None;
+                }
+                self.env.enter(f.home);
+                let ty = super::super::types::resolve(&mut self.env, ret, &[], true);
+                self.env.leave();
+                ty
+            }
+            ExprKind::Cast {
+                target: CastTarget::Type(dt),
+                ..
+            } => self
+                .env
+                .probe(|env| super::super::types::resolve(env, dt, &[], true)),
+            _ => None,
+        }
+    }
+
     /// The source type of an expression, for selects.
     pub(super) fn type_of(&mut self, e: &'ast Expr) -> VType {
-        if let Some(t) = self.env.probe(|env| env.type_of_path(e)) {
+        if let Some(t) = self.value_type(e) {
             return t;
         }
         match self.info_of(e) {
@@ -307,11 +497,22 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// Builds the node for `e` at `max(self width, want)` with its own
     /// signedness.
     fn build(&mut self, e: &'ast Expr, want: u32, sink: &mut Sink<'_>) -> ExprId {
+        let forced = std::mem::replace(&mut self.force_unsigned, false);
         self.b.span = e.span;
-        if let Some(id) = self.try_const(e, want) {
+        if let Some(id) = self.try_const(e, want, forced) {
             return id;
         }
         self.b.span = e.span;
+        if matches!(
+            e.kind,
+            ExprKind::Concat(_)
+                | ExprKind::Replicate { .. }
+                | ExprKind::Ternary { .. }
+                | ExprKind::Cast { .. }
+        ) && self.is_string_typed(e)
+        {
+            return self.string_value(e, sink);
+        }
         match &e.kind {
             ExprKind::Literal(ast::Literal::Str { value, .. }) => self.b.string(value.clone()),
             ExprKind::Literal(_) => {
@@ -328,8 +529,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 left,
                 right,
             } => self.part_select(e, base, *kind, left, right, sink),
-            ExprKind::Unary { op, operand } => self.unary(e, *op, operand, want, sink),
-            ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs, want, sink),
+            ExprKind::Unary { op, operand } => self.unary(e, *op, operand, want, forced, sink),
+            ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs, want, forced, sink),
             ExprKind::Ternary {
                 cond,
                 then_expr,
@@ -340,10 +541,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     return self.real(e, sink);
                 }
                 let w = eval_width(&info, want, true);
-                let signed = info.is_signed();
+                let signed = info.is_signed() && !forced;
                 let c = self.expr_bit(cond, sink);
-                let t = self.expr(then_expr, Some(Ctx { width: w, signed }), sink);
-                let f = self.expr(else_expr, Some(Ctx { width: w, signed }), sink);
+                let t = self.operand(then_expr, Ctx { width: w, signed }, sink);
+                let f = self.operand(else_expr, Ctx { width: w, signed }, sink);
                 self.b.span = e.span;
                 self.b.mux(c, t, f)
             }
@@ -400,21 +601,57 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             ExprKind::Call { callee, args } => self.call(e, callee, args, want, sink),
             ExprKind::Cast { target, expr } => self.cast(e, target, expr, want, sink),
             ExprKind::Inside { expr, set } => self.inside(e, expr, set, sink),
-            ExprKind::MinTypMax { typ, .. } => self.build(typ, want, sink),
+            ExprKind::MinTypMax { typ, .. } => {
+                self.force_unsigned = forced;
+                self.build(typ, want, sink)
+            }
             ExprKind::Assign { lhs, op, rhs } => {
                 self.assign_expr_sink(lhs, *op, Some(rhs), e.span, sink);
                 self.build(lhs, want, sink)
             }
             ExprKind::IncDec {
-                increment, target, ..
+                increment,
+                prefix,
+                target,
             } => {
                 let op = if *increment {
                     ast::AssignOp::Add
                 } else {
                     ast::AssignOp::Sub
                 };
+                // `i++` is the value before the step (IEEE 1800-2017
+                // §11.4.2): it is held in a variable of its own first. It
+                // used to read the variable after the step, so `j = i++`
+                // gave `j` the new value.
+                let before = match (prefix, &mut *sink) {
+                    (false, Sink::Proc(block)) => {
+                        let ty = self.type_of(target);
+                        let value = self.value_as(target, &ty, &mut Sink::Proc(block));
+                        let name = self.fresh("postfix");
+                        let net = self.new_var(name, ty, e.span);
+                        if let Some(net) = net {
+                            block.span = e.span;
+                            block.assign(net, value, AssignKind::Blocking);
+                            self.record_driver(net, self.driver, true, e.span);
+                        }
+                        net
+                    }
+                    _ => None,
+                };
                 self.assign_expr_sink(target, op, None, e.span, sink);
-                self.build(target, want, sink)
+                match before {
+                    Some(net) => {
+                        self.b.span = e.span;
+                        let id = self.b.net(net);
+                        if self.b.module().expr(id).ty == Type::Real {
+                            return id;
+                        }
+                        let w = want.max(self.expr_width(id));
+                        let signed = self.b.module().expr(id).ty.is_signed();
+                        self.coerce(id, w, signed)
+                    }
+                    None => self.build(target, want, sink),
+                }
             }
             ExprKind::SystemIdent(id) => {
                 let info = self.info_of(e);
@@ -434,10 +671,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     .unsupported(e.span, "an assignment pattern outside a constant");
                 self.b.const_u64(want.max(1), 0)
             }
-            ExprKind::Streaming { .. } => {
-                self.env.unsupported(e.span, "the streaming operator");
-                self.b.const_u64(want.max(1), 0)
-            }
+            ExprKind::Streaming {
+                right_to_left,
+                slice,
+                elems,
+            } => self.stream(e, *right_to_left, slice.as_deref(), elems, want, sink),
             ExprKind::New(_) => {
                 self.env.unsupported(e.span, "`new`");
                 self.b.const_u64(want.max(1), 0)
@@ -453,18 +691,30 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
-    /// Folds `e` when it is constant, sized to `want` bits.
-    fn try_const(&mut self, e: &'ast Expr, want: u32) -> Option<ExprId> {
+    /// Folds `e` when it is constant, sized to `want` bits; `unsigned`
+    /// when it is an operand of an unsigned expression, which it is then
+    /// evaluated as (see [`Self::operand`]).
+    fn try_const(&mut self, e: &'ast Expr, want: u32, unsigned: bool) -> Option<ExprId> {
         if matches!(e.kind, ExprKind::Literal(ast::Literal::Str { .. })) && want == 0 {
             return None;
         }
         let ctx = (want > 0).then_some(want);
-        let value = self
-            .env
-            .probe(|env| Evaluator::new(env).eval(e, ctx).ok())?;
+        let value = self.env.probe(|env| {
+            let mut ev = Evaluator::new(env);
+            if unsigned {
+                ev.eval_unsigned(e, ctx).ok()
+            } else {
+                ev.eval(e, ctx).ok()
+            }
+        })?;
         self.b.span = e.span;
         Some(match value {
             Value::Logic(l) => {
+                let l = if unsigned && l.is_signed() {
+                    l.as_unsigned()
+                } else {
+                    l
+                };
                 let l = if want > 0 { l.resize(want) } else { l };
                 self.b.constant(l)
             }
@@ -476,9 +726,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     self.b.string(s)
                 }
             }
+            // A real constant where nothing asks for a width — an argument
+            // of `$display`, of a system function, a real parameter's
+            // value — stays a real. It used to be rounded to an integer
+            // here, so `$display("%f", 0.25)` printed 0.000000 and a
+            // `parameter real R = 1.5` printed 2.000000.
+            Value::Real(r) if want == 0 => self.real_const(r),
             Value::Real(r) => {
-                // The IR has no real literal; a real constant reaching a
-                // design is rounded to an integer.
+                // A real constant in an integral context is rounded to an
+                // integer.
                 let rounded = Value::Real(r).as_i64().unwrap_or(0);
                 let w = if want > 0 { want } else { 64 };
                 self.b
@@ -548,8 +804,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 }
             };
         }
-        // Otherwise it is a field of a packed struct.
+        // Otherwise it is a field of a packed struct, or a method of an
+        // enum without its parentheses.
         let base_ty = self.type_of(base);
+        if let Some(id) = self.enum_method(e, base, &name.name, &[], sink) {
+            return id;
+        }
         let Some(field) = base_ty.packed().and_then(|p| p.field(&name.name)).cloned() else {
             self.env.resolve_path(e);
             return self.b.const_bit(false);
@@ -562,6 +822,198 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.b.resize(slice, w, true)
         } else {
             slice
+        }
+    }
+
+    /// `{<< s {a, b}}` or `{>> s {a, b}}` as a value (IEEE 1800-2017
+    /// §11.4.14): the elements' bits in order, or their slices of `s` bits
+    /// in the reverse order, the slices counted from the least significant
+    /// bit as xsim counts them (`{<<3{8'b11001010}}` is `8'b01000111`).
+    /// Where the context is wider, the stream is its most significant bits,
+    /// zeros below (`32'({<<{8'h01}})` is `32'h80000000`).
+    fn stream(
+        &mut self,
+        e: &'ast Expr,
+        right_to_left: bool,
+        slice: Option<&'ast Expr>,
+        elems: &'ast [Expr],
+        want: u32,
+        sink: &mut Sink<'_>,
+    ) -> ExprId {
+        let mut parts = Vec::with_capacity(elems.len());
+        for el in elems {
+            let info = self.info_of(el);
+            parts.push(self.expr(
+                el,
+                Some(Ctx {
+                    width: info.width().max(1),
+                    signed: false,
+                }),
+                sink,
+            ));
+        }
+        self.b.span = e.span;
+        let bits = if parts.len() == 1 {
+            parts[0]
+        } else {
+            self.b.concat(parts)
+        };
+        let w = self.expr_width(bits);
+        let ordered = if right_to_left {
+            let Some(size) = self.slice_size(slice) else {
+                return self.b.const_u64(want.max(w).max(1), 0);
+            };
+            self.reverse_slices(bits, w, size)
+        } else {
+            bits
+        };
+        if want > w {
+            self.b.span = e.span;
+            let pad = self.b.const_u64(want - w, 0);
+            return self.b.concat(vec![ordered, pad]);
+        }
+        ordered
+    }
+
+    /// The slice size of a stream: 1 when none is written, a constant
+    /// expression or a type's width otherwise.
+    pub(super) fn slice_size(&mut self, slice: Option<&'ast Expr>) -> Option<u32> {
+        let Some(s) = slice else { return Some(1) };
+        let size = match &s.kind {
+            ExprKind::Type(dt) => self
+                .env
+                .probe(|env| super::super::types::resolve(env, dt, &[], true))
+                .and_then(|t| t.packed().map(Packed::width)),
+            _ => self.env.probe(|env| Evaluator::new(env).eval_u32(s).ok()),
+        };
+        match size.filter(|n| *n > 0) {
+            Some(n) => Some(n),
+            None => {
+                self.env.error(
+                    codes::NOT_CONSTANT,
+                    s.span,
+                    "a stream's slice size must be a positive constant",
+                );
+                None
+            }
+        }
+    }
+
+    /// The `w` bits of `bits` with their slices of `size` bits in the
+    /// reverse order, the slices counted from bit 0.
+    pub(super) fn reverse_slices(&mut self, bits: ExprId, w: u32, size: u32) -> ExprId {
+        if size >= w {
+            return bits;
+        }
+        let mut parts = Vec::new();
+        let mut lo = 0;
+        while lo < w {
+            let hi = (lo + size).min(w) - 1;
+            parts.push(self.b.slice(bits, hi, lo));
+            lo = hi + 1;
+        }
+        // The slice that was lowest is now the most significant.
+        self.b.concat(parts)
+    }
+
+    /// `base.first()`, `.last()`, `.num()`, `.next(n)`, `.prev(n)` and
+    /// `.name()` of an enum (IEEE 1800-2017 §6.19.5), or `None` when `base`
+    /// is not an enum or `method` not one of these. They used to read as 0
+    /// and an empty string without a word, so a loop from `first()` to
+    /// `last()` by `next()` never ran.
+    pub(super) fn enum_method(
+        &mut self,
+        e: &'ast Expr,
+        base: &'ast Expr,
+        method: &str,
+        args: &'ast [ast::Arg],
+        sink: &mut Sink<'_>,
+    ) -> Option<ExprId> {
+        if !matches!(method, "first" | "last" | "num" | "next" | "prev" | "name") {
+            return None;
+        }
+        let ty = self.value_type(base)?;
+        let p = ty.packed()?.clone();
+        let table = p.enumeration.clone()?;
+        let variants = &table.variants;
+        let width = p.width();
+        self.b.span = e.span;
+        if variants.is_empty() {
+            return Some(self.b.constant(Logic::x(width)));
+        }
+        match method {
+            "first" => Some(self.b.constant(variants[0].1.clone())),
+            "last" => Some(self.b.constant(variants[variants.len() - 1].1.clone())),
+            "num" => Some(self.b.constant(
+                Logic::from_u64(u64::try_from(variants.len()).unwrap_or(0), 32).as_signed(),
+            )),
+            "next" | "prev" => {
+                let step = match args.first().and_then(|a| a.value.as_ref()) {
+                    None => 1,
+                    Some(n) => {
+                        let Some(n) = self.env.probe(|env| Evaluator::new(env).eval_u32(n).ok())
+                        else {
+                            self.env.unsupported(
+                                n.span,
+                                "an enum's `next` or `prev` by a count that is not constant",
+                            );
+                            return Some(self.b.constant(Logic::x(width)));
+                        };
+                        n
+                    }
+                };
+                let value = self.expr(
+                    base,
+                    Some(Ctx {
+                        width,
+                        signed: false,
+                    }),
+                    sink,
+                );
+                let n = variants.len();
+                let step = usize::try_from(step).unwrap_or(0) % n;
+                // A value that is no variant gives the type's default, `x`
+                // for a four-state base.
+                self.b.span = e.span;
+                let mut out = self.b.constant(if p.four_state {
+                    Logic::x(width)
+                } else {
+                    Logic::zero(width)
+                });
+                for (i, (_, v)) in variants.iter().enumerate().rev() {
+                    let to = if method == "next" {
+                        (i + step) % n
+                    } else {
+                        (i + n - step) % n
+                    };
+                    let k = self.b.constant(v.clone().as_unsigned());
+                    let hit = self.b.eq(value, k);
+                    let then = self.b.constant(variants[to].1.clone());
+                    out = self.b.mux(hit, then, out);
+                }
+                Some(out)
+            }
+            _ => {
+                // `name()`: the variant's name, or "" for a value that is
+                // none of them.
+                let value = self.expr(
+                    base,
+                    Some(Ctx {
+                        width,
+                        signed: false,
+                    }),
+                    sink,
+                );
+                self.b.span = e.span;
+                let mut out = self.b.string(String::new());
+                for (label, v) in variants.iter().rev() {
+                    let k = self.b.constant(v.clone().as_unsigned());
+                    let hit = self.b.eq(value, k);
+                    let then = self.b.string(label.clone());
+                    out = self.b.mux(hit, then, out);
+                }
+                Some(out)
+            }
         }
     }
 
@@ -587,14 +1039,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// The type of `e`, taking a select's element for `base[i]`: what
     /// [`Self::type_of`] answers there is the type of `base` itself.
     fn select_type(&mut self, e: &'ast Expr) -> VType {
-        let ExprKind::Index { base, .. } = &e.kind else {
-            return self.type_of(e);
-        };
-        match self.select_type(base) {
-            VType::Unpacked { elem, .. } => *elem,
-            VType::Packed(p) => VType::Packed(p.element()),
-            other => other,
-        }
+        self.type_of(e)
     }
 
     /// `base[index]`.
@@ -605,6 +1050,29 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         index: &'ast Expr,
         sink: &mut Sink<'_>,
     ) -> ExprId {
+        if let Some((mem, indices)) = self.mem_indices(e) {
+            let dims = self.mems[mem.index()].dims.clone();
+            if indices.len() < dims.len() {
+                self.env.unsupported(
+                    e.span,
+                    "a part of a multi-dimensional array used as a value; index every \
+                     dimension",
+                );
+                return self.b.const_bit(false);
+            }
+            if dims.len() > 1 {
+                let width = self.mems[mem.index()]
+                    .elem
+                    .packed()
+                    .map_or(1, Packed::width);
+                let Some(addr) = self.mem_address_of(mem, &indices, e.span, "read", sink) else {
+                    self.b.span = e.span;
+                    return self.b.constant(Logic::x(width));
+                };
+                self.b.span = e.span;
+                return self.b.mem_read(mem, addr);
+            }
+        }
         match self.place(base, sink) {
             Place::Mem(mem) => {
                 // A fixed element the array does not have reads x (IEEE
@@ -616,17 +1084,21 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 if let Some(i) = constant
                     && range.offset(i).is_none()
                 {
+                    let elem = self.mems[mem.index()].elem.clone();
+                    let width = elem.packed().map_or(1, Packed::width);
+                    // A two-state element's default is 0, a four-state one's x.
+                    let (value, what) = if super::is_two_state(&elem) {
+                        (Logic::zero(width), "0")
+                    } else {
+                        (Logic::x(width), "x")
+                    };
                     self.env.warning(
                         codes::OUT_OF_RANGE,
                         index.span,
-                        format!("index {i} is outside {range}; the result is always x"),
+                        format!("index {i} is outside {range}; the result is always {what}"),
                     );
-                    let width = self.mems[mem.index()]
-                        .elem
-                        .packed()
-                        .map_or(1, Packed::width);
                     self.b.span = e.span;
-                    return self.b.constant(Logic::x(width));
+                    return self.b.constant(value);
                 }
                 let addr = self.mem_address(mem, index, sink);
                 self.b.span = e.span;
@@ -638,6 +1110,117 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             Place::Value(id, ty) => self.bit_select(id, &ty, index, e.span, sink),
         }
+    }
+
+    /// When `e` is a chain of indices `m[i][j]..` whose root is a memory,
+    /// the memory and its index expressions outermost first; `None`
+    /// otherwise. A chain longer than the memory's dimensions stops at
+    /// them: what is left selects from the element.
+    pub(super) fn mem_indices(&mut self, e: &'ast Expr) -> Option<(MemoryId, Vec<&'ast Expr>)> {
+        let mut indices = Vec::new();
+        let mut root = e;
+        while let ExprKind::Index { base, index } = &root.kind {
+            indices.push(&**index);
+            root = base;
+        }
+        indices.reverse();
+        let Some(Symbol::Memory { mem, .. }) = self.env.probe(|env| env.resolve_path(root)) else {
+            return None;
+        };
+        let k = self.mems[mem.index()].dims.len();
+        if indices.len() > k {
+            return None;
+        }
+        Some((mem, indices))
+    }
+
+    /// The flat address of element `indices` of a multi-dimensional
+    /// memory, the last dimension varying fastest; `None` with a warning
+    /// for a constant index outside its dimension, which reads `x` and
+    /// writes nothing.
+    pub(super) fn mem_address_of(
+        &mut self,
+        mem: MemoryId,
+        indices: &[&'ast Expr],
+        span: Span,
+        what: &str,
+        sink: &mut Sink<'_>,
+    ) -> Option<ExprId> {
+        let dims = self.mems[mem.index()].dims.clone();
+        let size = self.b.module().memories[mem].size;
+        let bits = (bits_needed(size) + 1).clamp(2, 64);
+        let mut addr: Option<ExprId> = None;
+        let mut stride: u64 = size;
+        for (range, index) in dims.iter().zip(indices) {
+            stride /= range.len().max(1);
+            let constant = self
+                .env
+                .probe(|env| Evaluator::new(env).eval_i64(index).ok());
+            if let Some(i) = constant
+                && range.offset(i).is_none()
+            {
+                let effect = if what == "read" {
+                    "the result is always x"
+                } else {
+                    "the assignment is dropped"
+                };
+                self.env.warning(
+                    codes::OUT_OF_RANGE,
+                    index.span,
+                    format!("index {i} is outside {range}; {effect}"),
+                );
+                return None;
+            }
+            let info = self.info_of(index);
+            let w = info.width().max(bits).clamp(1, 64);
+            let id = self.expr(
+                index,
+                Some(Ctx {
+                    width: w,
+                    signed: info.is_signed(),
+                }),
+                sink,
+            );
+            self.b.span = span;
+            // The lowest index is element zero whichever way the range runs;
+            // an index outside it lands outside the whole memory or on an
+            // element of another row, so it is checked against the range.
+            let low = self
+                .b
+                .constant(Logic::from_i64(range.low(), w).with_signed(info.is_signed()));
+            let off = self.b.sub(id, low);
+            let off = self.b.resize(off, bits, info.is_signed());
+            let inside = if constant.is_some() {
+                None
+            } else {
+                let len = self.b.constant(Logic::from_u64(range.len(), bits));
+                let off_u = self.b.resize(off, bits, false);
+                Some(self.b.binary(IrBin::Lt, off_u, len))
+            };
+            let scaled = if stride == 1 {
+                off
+            } else {
+                let k = self.b.constant(Logic::from_u64(stride, bits));
+                self.b.mul(off, k)
+            };
+            let scaled = match inside {
+                // An index outside its dimension reads `x` and writes
+                // nothing, as one outside a one-dimensional array does: the
+                // address is moved past the end.
+                Some(ok) => {
+                    let past = self.b.constant(Logic::ones(bits));
+                    self.b.mux(ok, scaled, past)
+                }
+                None => scaled,
+            };
+            addr = Some(match addr {
+                None => scaled,
+                Some(a) => self.b.add(a, scaled),
+            });
+        }
+        let addr = addr?;
+        self.b.span = span;
+        Some(self.b.resize(addr, bits, false))
     }
 
     /// The IR address expression for `mem[index]`.
@@ -726,6 +1309,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         span: Span,
         sink: &mut Sink<'_>,
     ) -> ExprId {
+        if *ty == VType::String {
+            // `s[i]` reads a character, as `s.getc(i)` does.
+            let i = self.build_self(index, sink);
+            let base = self.string_of(base);
+            self.b.span = span;
+            return self.b.call("string.getc", vec![base, i], Type::bits(8));
+        }
         let VType::Packed(p) = ty else {
             self.env
                 .error(codes::TYPE, span, format!("`{ty}` cannot be indexed"));
@@ -772,6 +1362,34 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         self.b.module().expr(id).ty.width().unwrap_or(1)
     }
 
+    /// Elements `lo..=hi` of `id`, counted from its lowest, `count` of
+    /// which it has, each `ew` bits wide: the bits inside it as they are
+    /// and `x` for each one outside, below or above (IEEE 1364-2005
+    /// §5.2.1). A selection partly outside used to be all `x`.
+    fn partial_slice(&mut self, id: ExprId, lo: i64, hi: i64, ew: u32, count: u64) -> ExprId {
+        let ew64 = i64::from(ew);
+        let top = i64::try_from(count).unwrap_or(i64::MAX) - 1;
+        let width = |n: i64| u32::try_from(n.max(0) * ew64).unwrap_or(u32::MAX);
+        if hi < 0 || lo > top {
+            return self.b.constant(Logic::x(width(hi - lo + 1)));
+        }
+        let (in_lo, in_hi) = (lo.max(0), hi.min(top));
+        let inside = self.b.slice(id, width(in_hi + 1) - 1, width(in_lo));
+        let mut parts = Vec::new();
+        if hi > top {
+            parts.push(self.b.constant(Logic::x(width(hi - top))));
+        }
+        parts.push(inside);
+        if lo < 0 {
+            parts.push(self.b.constant(Logic::x(width(-lo))));
+        }
+        if parts.len() == 1 {
+            inside
+        } else {
+            self.b.concat(parts)
+        }
+    }
+
     /// `base[a:b]`, `base[a +: w]` and `base[a -: w]`.
     fn part_select(
         &mut self,
@@ -815,19 +1433,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     );
                     return self.b.const_bit(false);
                 };
-                let (Some(oa), Some(ob)) = (outer.offset(a), outer.offset(b)) else {
+                let (pa, pb) = (position(outer, a), position(outer, b));
+                if outer.offset(a).is_none() || outer.offset(b).is_none() {
                     self.env.warning(
                         codes::OUT_OF_RANGE,
                         e.span,
                         format!("part-select [{a}:{b}] is outside {outer}"),
                     );
-                    let width = u32::try_from(a.abs_diff(b) + 1).unwrap_or(1) * ew;
-                    return self.b.constant(Logic::x(width));
-                };
-                let (hi, lo) = (oa.max(ob), oa.min(ob));
-                let hi = u32::try_from((hi + 1) * u64::from(ew) - 1).unwrap_or(0);
-                let lo = u32::try_from(lo * u64::from(ew)).unwrap_or(0);
-                self.b.slice(id, hi, lo)
+                }
+                self.b.span = e.span;
+                self.partial_slice(id, pa.min(pb), pa.max(pb), ew, outer.len())
             }
             ast::RangeKind::IndexedUp | ast::RangeKind::IndexedDown => {
                 let Some(w) = hi_const
@@ -857,31 +1472,66 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     } else {
                         low - i64::from(w) + 1
                     };
-                    let (Some(ol), Some(oh)) = (outer.offset(low), outer.offset(high_decl)) else {
+                    if outer.offset(low).is_none() || outer.offset(high_decl).is_none() {
                         self.env.warning(
                             codes::OUT_OF_RANGE,
                             e.span,
                             format!("part-select of {w} bits at {a} is outside {outer}"),
                         );
-                        return self.b.constant(Logic::x(count));
-                    };
-                    let lo = u32::try_from(ol.min(oh) * u64::from(ew)).unwrap_or(0);
-                    return self.b.slice(id, lo + count - 1, lo);
+                    }
+                    let (pl, ph) = (position(outer, low), position(outer, high_decl));
+                    self.b.span = e.span;
+                    return self.partial_slice(id, pl.min(ph), pl.max(ph), ew, outer.len());
                 }
                 let idx_bits = bits_needed(u64::from(p.width())).max(1);
                 let norm = self.normalise_index(left, outer, idx_bits, sink);
                 self.b.span = e.span;
                 let nw = self.expr_width(norm);
-                let base_off = if outer.is_descending() == up {
-                    norm
+                let norm_signed = self.b.module().expr(norm).ty.is_signed();
+                // Where the selection's lowest element is, counted from the
+                // vector's: `norm` itself when the select runs up the bits
+                // from it, `norm - (w - 1)` when it runs down. Either may be
+                // below the vector, and the bits that are inside it are
+                // still read (IEEE 1364-2005 §5.2.1; xsim reads `n[4 -: 8]`
+                // of `32'h5` as `8'b10101xxx`). An unsigned index running
+                // up cannot start below, and is selected as it always was;
+                // otherwise the vector is extended by `w - 1` unknown
+                // elements underneath, so that a start below it is a start
+                // inside, and the offset moved up by as many. A selection
+                // that starts below used to be all `x`, its subtraction
+                // wrapping round to an offset past the top.
+                let runs_down = outer.is_descending() != up;
+                let (id, base_off) = if !runs_down && !norm_signed {
+                    (id, norm)
                 } else {
-                    let k = self.b.const_u64(nw, u64::from(w - 1));
-                    self.b.sub(norm, k)
+                    let pad_bits = (w - 1).saturating_mul(ew);
+                    let id = if pad_bits == 0 {
+                        id
+                    } else {
+                        let pad = self.b.constant(Logic::x(pad_bits));
+                        self.b.concat(vec![id, pad])
+                    };
+                    let off = if runs_down {
+                        norm
+                    } else {
+                        // A signed index: one more bit, so that moving it up
+                        // by `w - 1` cannot overflow.
+                        let wide = self.b.resize(norm, nw + 1, true);
+                        let k = self
+                            .b
+                            .constant(Logic::from_u64(u64::from(w - 1), nw + 1).with_signed(true));
+                        self.b.add(wide, k)
+                    };
+                    (id, off)
                 };
+                let nw = self.expr_width(base_off);
                 let offset = if ew == 1 {
                     base_off
                 } else {
-                    let scale = self.b.const_u64(nw, u64::from(ew));
+                    let signed = self.b.module().expr(base_off).ty.is_signed();
+                    let scale = self
+                        .b
+                        .constant(Logic::from_u64(u64::from(ew), nw).with_signed(signed));
                     self.b.binary(IrBin::Mul, base_off, scale)
                 };
                 // A selection wider than the vector itself — `r[i*8 +: 8]`
@@ -907,6 +1557,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         op: UnaryOp,
         operand: &'ast Expr,
         want: u32,
+        forced: bool,
         sink: &mut Sink<'_>,
     ) -> ExprId {
         match op {
@@ -918,9 +1569,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let w = eval_width(&info, want, true);
                 let ctx = Ctx {
                     width: w,
-                    signed: info.is_signed(),
+                    signed: info.is_signed() && !forced,
                 };
-                let id = self.expr(operand, Some(ctx), sink);
+                let id = self.operand(operand, ctx, sink);
                 self.b.span = e.span;
                 match op {
                     UnaryOp::Plus => id,
@@ -957,6 +1608,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn binary(
         &mut self,
         e: &'ast Expr,
@@ -964,9 +1616,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         lhs: &'ast Expr,
         rhs: &'ast Expr,
         want: u32,
+        forced: bool,
         sink: &mut Sink<'_>,
     ) -> ExprId {
         use BinaryOp as B;
+        if let Some(id) = self.string_compare(e, op, lhs, rhs, sink) {
+            return id;
+        }
+        if matches!(op, B::Eq | B::Ne | B::CaseEq | B::CaseNe)
+            && let Some(id) = self.array_compare(e, lhs, rhs, matches!(op, B::Eq | B::CaseEq), sink)
+        {
+            return id;
+        }
         // Logical connectives: both sides are self-determined truths.
         if matches!(op, B::LogicAnd | B::LogicOr | B::Implies | B::Equiv) {
             let a = self.expr_bit(lhs, sink);
@@ -1018,8 +1679,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 width: c.width().max(1),
                 signed: c.is_signed(),
             };
-            let a = self.expr(lhs, Some(ctx), sink);
-            let b = self.expr(rhs, Some(ctx), sink);
+            let a = self.operand(lhs, ctx, sink);
+            let b = self.operand(rhs, ctx, sink);
             self.b.span = e.span;
             let irop = match op {
                 B::Lt => IrBin::Lt,
@@ -1046,9 +1707,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return self.real(e, sink);
         }
         let w = eval_width(&info, want, truncatable(op));
-        let signed = info.is_signed();
+        let signed = info.is_signed() && !forced;
         let ctx = Ctx { width: w, signed };
-        let a = self.expr(lhs, Some(ctx), sink);
+        let a = self.operand(lhs, ctx, sink);
         // Shift amounts and exponents are self-determined; the IR wants
         // the exponent at the base's width, which preserves its value.
         let b = match op {
@@ -1074,7 +1735,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     sink,
                 )
             }
-            _ => self.expr(rhs, Some(ctx), sink),
+            _ => self.operand(rhs, ctx, sink),
         };
         self.b.span = e.span;
         let irop = match op {
@@ -1140,15 +1801,44 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         .unsupported(e.span, "a cast to a non-integral type");
                     return self.build(inner, want, sink);
                 };
-                let (w, signed) = (p.width(), p.signed);
-                let id = self.build(inner, w, sink);
-                self.coerce(id, w, signed)
+                let (w, signed, two_state) = (p.width(), p.signed, !p.four_state);
+                let id = if matches!(inner.kind, ExprKind::Pattern(_)) {
+                    let ty = VType::Packed(p.clone());
+                    self.value_as(inner, &ty, sink)
+                } else {
+                    self.build(inner, w, sink)
+                };
+                let id = self.coerce(id, w, signed);
+                if !two_state {
+                    return id;
+                }
+                // A cast to a two-state type turns `x` and `z` into 0
+                // (IEEE 1800-2017 §6.24.1): `int'(4'bx1x0)` is 4. A
+                // constant is converted here; anything else goes through a
+                // two-state variable, which a procedure has room for.
+                if let Some(c) = self.b.module().expr(id).as_const().cloned() {
+                    self.b.span = e.span;
+                    return self.b.constant(c.two_state());
+                }
+                let Sink::Proc(block) = sink else {
+                    return id;
+                };
+                let Some(ty) = ty else { return id };
+                let name = self.fresh("cast");
+                let Some(net) = self.new_var(name, ty, e.span) else {
+                    return id;
+                };
+                block.span = e.span;
+                block.assign(net, id, AssignKind::Blocking);
+                self.record_driver(net, self.driver, true, e.span);
+                self.b.span = e.span;
+                self.b.net(net)
             }
         }
     }
 
     /// `expr inside { ... }` as a chain of comparisons.
-    fn inside(
+    pub(super) fn inside(
         &mut self,
         e: &'ast Expr,
         subject: &'ast Expr,
@@ -1162,6 +1852,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     let l = self.info_of(low);
                     let h = self.info_of(high);
                     info = info.combine(&l).combine(&h);
+                }
+                _ if self.whole_array(s).is_some() => {
+                    if let Some((_, VType::Unpacked { elem, .. })) = self.whole_array(s) {
+                        info = info.combine(&width::of_type(&elem));
+                    }
                 }
                 _ => {
                     let i = self.info_of(s);
@@ -1184,6 +1879,25 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     let a = self.b.ge(x, lo);
                     let b = self.b.le(x, hi);
                     self.b.land(a, b)
+                }
+                // An array in the set stands for each of its elements
+                // (IEEE 1800-2017 §11.4.13).
+                _ if self.whole_array(s).is_some() => {
+                    let Some((mem, _)) = self.whole_array(s) else {
+                        continue;
+                    };
+                    let size = self.b.module().memories[mem].size;
+                    let aw = bits_needed(size.saturating_sub(1)).max(1);
+                    self.b.span = s.span;
+                    let mut any = self.b.const_bit(false);
+                    for k in 0..size {
+                        let addr = self.b.constant(Logic::from_u64(k, aw));
+                        let v = self.b.mem_read(mem, addr);
+                        let v = self.coerce(v, ctx.width, ctx.signed);
+                        let hit = self.b.binary(IrBin::WildEq, x, v);
+                        any = self.b.lor(any, hit);
+                    }
+                    any
                 }
                 _ => {
                     let v = self.expr(s, Some(ctx), sink);
@@ -1215,6 +1929,31 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     ) -> ExprId {
         if let ExprKind::SystemIdent(id) = &callee.kind {
             return self.system_call(e, &id.name, args, want, sink);
+        }
+        if let Some(id) = self.string_method(e, callee, args, sink) {
+            return id;
+        }
+        if let ExprKind::Member { base, name } = &callee.kind
+            && let Some(id) = self.enum_method(e, base, &name.name, args, sink)
+        {
+            return id;
+        }
+        // Inside `fact` the name `fact` is its result, so a call of it is
+        // the function calling itself; with an argument known only when it
+        // runs, there is nothing to fold it to, and inlining would not end.
+        if let ExprKind::Ident(id) = &callee.kind
+            && self.inlining.contains(&id.name)
+        {
+            self.env.report(
+                Diagnostic::error(format!("`{}` calls itself", id.name))
+                    .with_code(codes::RECURSION)
+                    .with_label(e.span, "recursive call")
+                    .with_note(
+                        "a recursive function is folded where its arguments are constant; \
+                         with one known only when it runs it cannot be inlined",
+                    ),
+            );
+            return self.b.const_u64(want.max(1), 0);
         }
         let Some((f, is_task)) = self.env.resolve_callee(callee) else {
             return self.b.const_u64(want.max(1), 0);
@@ -1465,9 +2204,15 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let mut inputs: Vec<Option<ExprId>> = Vec::with_capacity(formals.len());
         let mut outputs: Vec<Option<ir::Lvalue>> = Vec::with_capacity(formals.len());
         for (slot, formal) in slots.iter().zip(&formals) {
+            // A `ref` argument is copied in and out: the subroutine sees
+            // the caller's value and the caller its changes. It used to be
+            // copied out only, so the subroutine started from `x`.
             let is_in = matches!(
                 formal.dir,
-                ast::Direction::Input | ast::Direction::Inout | ast::Direction::ConstRef
+                ast::Direction::Input
+                    | ast::Direction::Inout
+                    | ast::Direction::ConstRef
+                    | ast::Direction::Ref
             );
             let is_out = matches!(
                 formal.dir,
@@ -1542,6 +2287,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 // be made one bit wide, which the IR's validation refused.
                 let v = if ty == VType::Real {
                     self.real_of(value)
+                } else if ty == VType::String {
+                    self.string_of(value)
                 } else {
                     self.coerce(value, w, signed)
                 };
@@ -1588,7 +2335,28 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             None
         };
         self.inline_frames.push((result, flag));
-        self.stmts_guarded(&f.def.body, out, flag);
+        // `disable name` inside the task or function `name` returns from
+        // it (IEEE 1364-2005 §9.6): the body is a block of that name.
+        let disables_itself = f.def.body.iter().any(|st| {
+            let mut hit = false;
+            crate::verilog::lint::facts::walk_stmt(st, &mut |s| {
+                if let ast::StmtKind::Disable(t) = &s.kind
+                    && matches!(&t.kind, ExprKind::Ident(id) if id.name == name)
+                {
+                    hit = true;
+                }
+            });
+            hit
+        });
+        if disables_itself {
+            let mut inner = self.b.block();
+            inner.span = span;
+            self.stmts_guarded(&f.def.body, &mut inner, flag);
+            out.span = span;
+            out.nested(Some(&name), inner.finish());
+        } else {
+            self.stmts_guarded(&f.def.body, out, flag);
+        }
         self.inline_frames.pop();
 
         // Copy outputs back.
@@ -1605,6 +2373,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let signed = ty.packed().is_some_and(|p| p.signed);
             let v = if self.target_is_real(&target) {
                 self.real_of(value)
+            } else if self.target_is_string(&target) {
+                self.string_of(value)
             } else {
                 self.coerce(value, w, signed)
             };
@@ -1638,6 +2408,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         self.b.span = span;
         let net = self.b.add_net_kind(name, irt, ir::NetKind::Variable);
         debug_assert_eq!(net.index(), self.nets.len());
+        if super::is_two_state(&ty) {
+            self.b
+                .net_attr(net, ir::TWO_STATE_ATTR, ir::AttrValue::Int(1));
+        }
         self.nets.push(super::NetInfo {
             ty,
             is_var: true,
@@ -1690,13 +2464,44 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     }
                 }
             }
+            ExprKind::Index { .. }
+                if self.mem_indices(e).is_some_and(|(mem, ix)| {
+                    self.mems[mem.index()].dims.len() > 1
+                        && ix.len() == self.mems[mem.index()].dims.len()
+                }) =>
+            {
+                let (mem, indices) = self.mem_indices(e)?;
+                let addr = self.mem_address_of(mem, &indices, e.span, "write", &mut Sink::Cont)?;
+                Some(ir::Lvalue::MemElem { mem, addr })
+            }
             ExprKind::Index { base, .. } | ExprKind::Range { base, .. }
                 if matches!(base.kind, ExprKind::Index { .. }) =>
             {
                 match self.mem_part_lvalue(e, procedural) {
                     Some(target) => target,
+                    None => match self.net_select_lvalue(e, procedural) {
+                        Some(target) => target,
+                        None => {
+                            self.refuse_nested_select(base, e.span);
+                            None
+                        }
+                    },
+                }
+            }
+            // A select of a struct member, `s.f[3] = ..`, `s.f[7:4] = ..`:
+            // a select of the bits the member is. These used to be dropped
+            // without a word.
+            ExprKind::Index { base, .. } | ExprKind::Range { base, .. }
+                if matches!(base.kind, ExprKind::Member { .. })
+                    && !matches!(
+                        self.env.probe(|env| env.resolve_path(base)),
+                        Some(Symbol::Net { .. } | Symbol::Memory { .. })
+                    ) =>
+            {
+                match self.net_select_lvalue(e, procedural) {
+                    Some(target) => target,
                     None => {
-                        self.refuse_nested_select(base, e.span);
+                        self.env.unsupported(e.span, "an assignment to this select");
                         None
                     }
                 }
@@ -1749,20 +2554,21 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         });
                     }
                     if ew != 1 {
-                        self.env.unsupported(
-                            e.span,
-                            "an assignment to a variable element of a packed array",
-                        );
-                        return None;
+                        // A variable element of a packed array, `x[i] = ..`
+                        // of `logic [3:0][7:0] x`: one bit-select per bit.
+                        return self.net_select_lvalue(e, procedural).flatten();
                     }
                     let idx_bits = bits_needed(u64::from(p.width())).max(1);
                     let norm = self.normalise_index(index, outer, idx_bits, &mut Sink::Cont);
                     Some(ir::Lvalue::Index { net, index: norm })
                 }
-                _ => {
-                    self.env.resolve_path(base);
-                    None
-                }
+                _ => match self.net_select_lvalue(e, procedural) {
+                    Some(target) => target,
+                    None => {
+                        self.env.resolve_path(base);
+                        None
+                    }
+                },
             },
             ExprKind::Range {
                 base,
@@ -1772,6 +2578,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             } => {
                 let Some(Symbol::Net { net, ty }) = self.env.probe(|env| env.resolve_path(base))
                 else {
+                    if let Some(target) = self.net_select_lvalue(e, procedural) {
+                        return target;
+                    }
                     self.env.resolve_path(base);
                     return None;
                 };
@@ -1874,21 +2683,60 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let Some(Symbol::Memory { mem, .. }) = self.env.probe(|env| env.resolve_path(root)) else {
             return None;
         };
-        if chain.len() < 2 {
+        let k = self.mems[mem.index()].dims.len();
+        if chain.len() <= k {
+            if chain.len() < k {
+                self.env.unsupported(
+                    e.span,
+                    "an assignment to part of a multi-dimensional array; index every \
+                     dimension",
+                );
+                return Some(None);
+            }
             return None;
         }
+        if k > 1 {
+            // The first `k` selects are the address; the rest select bits
+            // of that element.
+            let mut indices = Vec::with_capacity(k);
+            for sel in &chain[..k] {
+                let ExprKind::Index { index, .. } = &sel.kind else {
+                    self.env
+                        .unsupported(sel.span, "a part-select of an array dimension");
+                    return Some(None);
+                };
+                indices.push(&**index);
+            }
+            return Some(self.mem_part_of_element(e, mem, &indices, &chain[k..], procedural));
+        }
+        Some(self.mem_part_of_element(e, mem, &[&**address], &chain[1..], procedural))
+    }
+
+    /// Bits `selects` choose of the memory element at `indices`: the
+    /// [`ir::Lvalue::MemPart`] of [`Self::mem_part_lvalue`], for a memory of
+    /// any number of dimensions.
+    fn mem_part_of_element(
+        &mut self,
+        e: &'ast Expr,
+        mem: MemoryId,
+        indices: &[&'ast Expr],
+        selects: &[&'ast Expr],
+        procedural: bool,
+    ) -> Option<ir::Lvalue> {
         if !procedural {
             self.env.unsupported(
                 e.span,
                 "a continuous assignment to part of an array element; assign the \
                  whole element, or write it in a process",
             );
-            return Some(None);
+            return None;
         }
         let range = self.mems[mem.index()].range;
+        let address = indices[0];
         let constant = self
             .env
-            .probe(|env| Evaluator::new(env).eval_i64(address).ok());
+            .probe(|env| Evaluator::new(env).eval_i64(address).ok())
+            .filter(|_| indices.len() == 1);
         if let Some(i) = constant
             && range.offset(i).is_none()
         {
@@ -1897,21 +2745,20 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 address.span,
                 format!("index {i} is outside {range}; the assignment is dropped"),
             );
-            return Some(None);
+            return None;
         }
         let VType::Packed(mut p) = self.mems[mem.index()].elem.clone() else {
             self.env.unsupported(
                 e.span,
                 "an assignment to part of an element that is not a vector",
             );
-            return Some(None);
+            return None;
         };
         // The offset so far: a constant number of bits, plus a signed
         // expression where an index is known only at run time.
         let mut fixed: i64 = 0;
         let mut varying: Option<ExprId> = None;
         let mut width = p.width();
-        let selects = &chain[1..];
         for (n, sel) in selects.iter().enumerate() {
             let outer = p.outer();
             let ew = p.element().width().max(1);
@@ -1935,7 +2782,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                                 index.span,
                                 format!("index {i} is outside {outer}; the assignment is dropped"),
                             );
-                            return Some(None);
+                            return None;
                         }
                         None => {
                             let off = self.signed_element_offset(index, outer, ew, 0);
@@ -1951,7 +2798,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     if n + 1 != selects.len() {
                         self.env
                             .unsupported(sel.span, "a select of a part-select of an array element");
-                        return Some(None);
+                        return None;
                     }
                     let a = self
                         .env
@@ -1981,7 +2828,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                                     ),
                                 );
                                 if inside == (false, false) {
-                                    return Some(None);
+                                    return None;
                                 }
                             }
                             let (ol, oh) = (raw(low), raw(high));
@@ -2002,7 +2849,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                                         sel.span,
                                         format!("a part-select of width {w}"),
                                     );
-                                    return Some(None);
+                                    return None;
                                 }
                             };
                             // The lowest bit is the base's own, or the one
@@ -2020,14 +2867,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                                 sel.span,
                                 "an assignment to a part-select with a non-constant bound",
                             );
-                            return Some(None);
+                            return None;
                         }
                     }
                 }
                 _ => unreachable!("the chain holds selects only"),
             }
         }
-        let addr = self.mem_address(mem, address, &mut Sink::Cont);
+        let addr = if indices.len() == 1 {
+            self.mem_address(mem, address, &mut Sink::Cont)
+        } else {
+            self.mem_address_of(mem, indices, e.span, "write", &mut Sink::Cont)?
+        };
         self.b.span = e.span;
         let offset = match varying {
             None => self
@@ -2040,12 +2891,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.b.add(v, k)
             }
         };
-        Some(Some(ir::Lvalue::MemPart {
+        Some(ir::Lvalue::MemPart {
             mem,
             addr,
             offset,
             width,
-        }))
+        })
     }
 
     /// The bit offset, from the right bound of `range`, of element `index`
@@ -2207,12 +3058,274 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 hi: lo + field.lsb + w - 1,
                 lo: lo + field.lsb,
             }),
+            ir::Lvalue::MemElem { mem, addr } => {
+                // A member of an array element of struct type, `st[i].v = ..`:
+                // those bits of the element.
+                if !procedural {
+                    self.env.unsupported(
+                        name.span,
+                        "a continuous assignment to a member of an array element",
+                    );
+                    return None;
+                }
+                self.b.span = name.span;
+                let offset = self
+                    .b
+                    .constant(Logic::from_u64(u64::from(field.lsb), 32).with_signed(true));
+                Some(ir::Lvalue::MemPart {
+                    mem,
+                    addr,
+                    offset,
+                    width: w,
+                })
+            }
+            ir::Lvalue::MemPart {
+                mem, addr, offset, ..
+            } => {
+                self.b.span = name.span;
+                let ow = self.b.module().exprs[offset].ty.width().unwrap_or(32);
+                let k = self
+                    .b
+                    .constant(Logic::from_u64(u64::from(field.lsb), ow).with_signed(true));
+                let offset = self.b.add(offset, k);
+                Some(ir::Lvalue::MemPart {
+                    mem,
+                    addr,
+                    offset,
+                    width: w,
+                })
+            }
             _ => {
                 self.env
                     .unsupported(name.span, "an assignment to this struct member");
                 None
             }
         }
+    }
+
+    /// A select of a select of a net, through struct members, elements of
+    /// packed arrays and a final part-select: `s.f[3]`, `s.f[7:4]`,
+    /// `x[2][3:0]` of a `logic [3:0][7:0] x`, `u.b[1]` of a union member.
+    /// `None` when the root is not a net or a select is of something that
+    /// has no elements, for the caller to refuse.
+    ///
+    /// The bits are found as [`Self::mem_part_lvalue`] finds them in an
+    /// element: a constant offset becomes a slice of the net, clipped with a
+    /// warning where it runs outside; an offset known only at run time
+    /// becomes one bit-select of the net per bit, each dropped when it
+    /// falls outside, as IEEE 1364-2005 §5.2.1 has a part-select partly out
+    /// of range written.
+    fn net_select_lvalue(&mut self, e: &'ast Expr, procedural: bool) -> Option<Option<ir::Lvalue>> {
+        let mut chain = Vec::new();
+        let mut root = e;
+        loop {
+            match &root.kind {
+                ExprKind::Index { base, .. } | ExprKind::Range { base, .. } => {
+                    chain.push(root);
+                    root = base;
+                }
+                ExprKind::Member { base, .. }
+                    if !matches!(
+                        self.env.probe(|env| env.resolve_path(root)),
+                        Some(Symbol::Net { .. })
+                    ) =>
+                {
+                    chain.push(root);
+                    root = base;
+                }
+                _ => break,
+            }
+        }
+        chain.reverse();
+        let Some(Symbol::Net { net, ty }) = self.env.probe(|env| env.resolve_path(root)) else {
+            return None;
+        };
+        let VType::Packed(mut p) = ty else {
+            return None;
+        };
+        self.check_assignable(net, procedural, e.span);
+        let total = i64::from(p.width());
+        let mut fixed: i64 = 0;
+        let mut varying: Option<ExprId> = None;
+        let mut width = p.width();
+        for (n, sel) in chain.iter().enumerate() {
+            if let ExprKind::Member { name, .. } = &sel.kind {
+                let field = p.field(&name.name).cloned()?;
+                let VType::Packed(fp) = field.ty else {
+                    return None;
+                };
+                fixed += i64::from(field.lsb);
+                width = fp.width();
+                p = fp;
+                continue;
+            }
+            if p.dims.is_empty() {
+                // A bit has no bits to select (xsim: "cannot index into
+                // non-array type").
+                return None;
+            }
+            let outer = p.outer();
+            let ew = p.element().width().max(1);
+            let raw = |i: i64| {
+                if outer.is_descending() {
+                    i - outer.right
+                } else {
+                    outer.right - i
+                }
+            };
+            match &sel.kind {
+                ExprKind::Index { index, .. } => {
+                    let constant = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(index).ok());
+                    match constant {
+                        Some(i) if outer.contains(i) => fixed += raw(i) * i64::from(ew),
+                        Some(i) => {
+                            self.env.warning(
+                                codes::OUT_OF_RANGE,
+                                index.span,
+                                format!("index {i} is outside {outer}; the assignment is dropped"),
+                            );
+                            return Some(None);
+                        }
+                        None => {
+                            let off = self.signed_element_offset(index, outer, ew, 0);
+                            varying = Some(self.add_offsets(varying, off));
+                        }
+                    }
+                    width = ew;
+                    p = p.element();
+                }
+                ExprKind::Range {
+                    kind, left, right, ..
+                } => {
+                    if n + 1 != chain.len() {
+                        self.env.unsupported(sel.span, "a select of a part-select");
+                        return Some(None);
+                    }
+                    let a = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(left).ok());
+                    let b = self
+                        .env
+                        .probe(|env| Evaluator::new(env).eval_i64(right).ok());
+                    match (a, b, kind) {
+                        (Some(a), Some(b), _) => {
+                            let (low, high) = match kind {
+                                ast::RangeKind::Fixed => (a.min(b), a.max(b)),
+                                ast::RangeKind::IndexedUp => (a, a + b - 1),
+                                ast::RangeKind::IndexedDown => (a - b + 1, a),
+                            };
+                            let (ol, oh) = (raw(low), raw(high));
+                            fixed += ol.min(oh) * i64::from(ew);
+                            let count = u32::try_from(ol.abs_diff(oh) + 1).unwrap_or(u32::MAX);
+                            width = count.saturating_mul(ew);
+                        }
+                        (
+                            None,
+                            Some(w),
+                            ast::RangeKind::IndexedUp | ast::RangeKind::IndexedDown,
+                        ) => {
+                            let w = match u32::try_from(w) {
+                                Ok(w) if w > 0 => w,
+                                _ => {
+                                    self.env.error(
+                                        codes::TYPE,
+                                        sel.span,
+                                        format!("a part-select of width {w}"),
+                                    );
+                                    return Some(None);
+                                }
+                            };
+                            let back =
+                                matches!(kind, ast::RangeKind::IndexedUp) != outer.is_descending();
+                            let shift = if back { i64::from(w) - 1 } else { 0 };
+                            let off = self.signed_element_offset(left, outer, ew, shift);
+                            varying = Some(self.add_offsets(varying, off));
+                            width = w.saturating_mul(ew);
+                        }
+                        _ => {
+                            self.env.unsupported(
+                                sel.span,
+                                "an assignment to a part-select with a non-constant bound",
+                            );
+                            return Some(None);
+                        }
+                    }
+                }
+                _ => unreachable!("the chain holds selects and members only"),
+            }
+        }
+        self.b.span = e.span;
+        let Some(v) = varying else {
+            // Constant bits: a slice, clipped to the net.
+            let lo = fixed.max(0);
+            let hi = (fixed + i64::from(width) - 1).min(total - 1);
+            if hi < lo {
+                self.env.warning(
+                    codes::OUT_OF_RANGE,
+                    e.span,
+                    "the selection is outside the vector; the assignment is dropped",
+                );
+                return Some(None);
+            }
+            if lo != fixed || hi != fixed + i64::from(width) - 1 {
+                self.env.warning(
+                    codes::OUT_OF_RANGE,
+                    e.span,
+                    "the selection is partly outside the vector; the bits outside are dropped",
+                );
+                // Those bits of the value go nowhere.
+                let mut parts = Vec::new();
+                let above = fixed + i64::from(width) - 1 - hi;
+                let below = lo - fixed;
+                if above > 0 {
+                    let dump = self.discard_net(u32::try_from(above).unwrap_or(1))?;
+                    parts.push(ir::Lvalue::Net(dump));
+                }
+                parts.push(ir::Lvalue::Slice {
+                    net,
+                    hi: u32::try_from(hi).unwrap_or(0),
+                    lo: u32::try_from(lo).unwrap_or(0),
+                });
+                if below > 0 {
+                    let dump = self.discard_net(u32::try_from(below).unwrap_or(1))?;
+                    parts.push(ir::Lvalue::Net(dump));
+                }
+                return Some(Some(ir::Lvalue::Concat(parts)));
+            }
+            let (hi, lo) = (
+                u32::try_from(hi).unwrap_or(0),
+                u32::try_from(lo).unwrap_or(0),
+            );
+            if lo == 0 && i64::from(hi) == total - 1 {
+                return Some(Some(ir::Lvalue::Net(net)));
+            }
+            return Some(Some(ir::Lvalue::Slice { net, hi, lo }));
+        };
+        // Bits at an offset known only when it runs: one bit-select each.
+        let vw = self.b.module().exprs[v].ty.width().unwrap_or(32);
+        let mut parts = Vec::with_capacity(width as usize);
+        for j in (0..width).rev() {
+            let k = self
+                .b
+                .constant(Logic::from_i64(fixed + i64::from(j), vw).with_signed(true));
+            let index = self.b.add(v, k);
+            parts.push(ir::Lvalue::Index { net, index });
+        }
+        Some(Some(if parts.len() == 1 {
+            parts.pop().unwrap_or(ir::Lvalue::Net(net))
+        } else {
+            ir::Lvalue::Concat(parts)
+        }))
+    }
+
+    /// A variable nothing reads, to take the bits of a value that a write
+    /// partly outside its target drops.
+    fn discard_net(&mut self, width: u32) -> Option<NetId> {
+        let name = self.fresh("dropped");
+        let span = self.b.span;
+        self.new_var(name, VType::Packed(Packed::bits(width)), span)
     }
 
     /// Creates an implicit net for an undeclared name used in a
@@ -2255,10 +3368,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         match lv {
             ir::Lvalue::Net(n) => self.net_width(*n),
             ir::Lvalue::Slice { hi, lo, .. } => hi - lo + 1,
-            ir::Lvalue::Index { net, .. } => self
-                .net_type(*net)
-                .packed()
-                .map_or(1, |p| p.element().width()),
+            // The IR's variable select of a vector writes one bit, whatever
+            // the frontend's type of the net is (a variable element of a
+            // packed array is one of these a bit).
+            ir::Lvalue::Index { .. } => 1,
             ir::Lvalue::Concat(parts) => parts
                 .iter()
                 .map(|p| self.lvalue_width(p))
@@ -2341,4 +3454,14 @@ fn truncatable(op: BinaryOp) -> bool {
             | BinaryOp::Shl
             | BinaryOp::Ashl
     )
+}
+
+/// Where declared index `i` of `range` is, counted from its least
+/// significant element: negative below it, past its length above.
+fn position(range: Range, i: i64) -> i64 {
+    if range.is_descending() {
+        i - range.right
+    } else {
+        range.right - i
+    }
 }

@@ -329,10 +329,15 @@ impl Widths<'_, '_, '_> {
                 let ty = types::resolve(self.env, dt, &[], true)?;
                 Some(of_type(&ty))
             }
-            ExprKind::Pattern(_)
-            | ExprKind::Streaming { .. }
-            | ExprKind::New(_)
-            | ExprKind::Default => Some(Info::Other),
+            // A stream is as wide as what it streams, unsigned.
+            ExprKind::Streaming { elems, .. } => {
+                let mut total = 0u32;
+                for el in elems {
+                    total = total.saturating_add(self.info(el)?.width());
+                }
+                Some(Info::bits(total, false))
+            }
+            ExprKind::Pattern(_) | ExprKind::New(_) | ExprKind::Default => Some(Info::Other),
         }
     }
 
@@ -415,6 +420,20 @@ impl Widths<'_, '_, '_> {
     fn call(&mut self, callee: &Expr, args: &[ast::Arg]) -> Option<Info> {
         if let ExprKind::SystemIdent(id) = &callee.kind {
             return Some(self.system_call(&id.name, args));
+        }
+        // A method of a string (IEEE 1800-2017 §6.16).
+        if let ExprKind::Member { base, name } = &callee.kind
+            && matches!(
+                self.env.probe(|env| env.type_of_path(base)),
+                Some(VType::String)
+            )
+        {
+            return Some(match name.name.as_str() {
+                "getc" => Info::bits(8, false),
+                "toupper" | "tolower" | "substr" => Info::Str(8),
+                "atoreal" => Info::Real,
+                _ => Info::bits(32, true),
+            });
         }
         let (f, is_task) = self.env.probe(|env| env.resolve_callee(callee))?;
         if is_task {
