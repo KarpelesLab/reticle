@@ -196,7 +196,8 @@ propagation path sees.
 ## Assertions
 
 Immediate assertions (`assert (expr)`, VHDL `assert ... report`) are IR
-statements and need nothing extra. *Concurrent* assertions are added to a
+statements, or an `if` when a Verilog one has a pass action or a fail
+action other than `$error` (see below), and need nothing extra. *Concurrent* assertions are added to a
 running simulation:
 
 ```rust
@@ -388,8 +389,10 @@ needs one belongs on the event simulator. Three places where the 4-state
 simulator yields `x` have no two-state answer and resolve as zero: a
 select outside its operand, division or remainder by zero, and a `Pmux`
 with several select bits set (which takes the lowest). Immediate
-assertions, `$display`, `$write`, `$finish` and `$stop` do survive, and
-`$display` is formatted by the same code the event simulator uses — but
+assertions, `$display`, `$write`, `$info`, `$warning`, `$error`, `$fatal`,
+`$finish` and `$stop` do survive, a report printing the line the event
+simulator prints, and `$display` is formatted by the same code the event
+simulator uses — but
 they all run once per `step()`, where the event simulator runs the ones
 in a combinational process once per delta cycle the process is triggered
 in, which may be more than once or not at all.
@@ -458,6 +461,178 @@ not the order of magnitude a compiled simulator is supposed to be worth:
   and a few bounds-checked slice indexings into the register file.
   Generating Rust, or a threaded dispatch table, would remove that, and
   would be the step after the optimiser.
+
+## System tasks and functions, against xsim
+
+What `$display` and its relatives print is mostly left to the tool by IEEE
+1364-2005 clause 17 and IEEE 1800-2017 clause 21, and where it is not, a
+reading of the text has been wrong here before. So the answer is what
+xsim 2026.1 prints. Each testbench below was run under xsim and its output
+kept beside it as `.xsim`; `tests/sim_system_tasks.rs` runs Reticle on it
+and wants the same bytes. Everything in this section marked **measured** is
+from those runs; **quoted** is a reading of the standard nothing has
+checked.
+
+| Testbench (`testdata/sim/`) | What it holds |
+|-----------------------------|---------------|
+| `display_format_tb.v` | Padding, leading zeros, unknown bits, signedness, strings and reals under every conversion |
+| `printtimescale_tb.v` | `$printtimescale` with and without an argument |
+| `random_tb.v` | `$random` and the seven `$dist_*` functions, values and seeds |
+| `monitor_tb.v` | When `$monitor` prints |
+| `scope_tb.sv` | `%m` in blocks, tasks and functions; `$test$plusargs` |
+| `bitcount_tb.sv` | `$countones`, `$countbits`, `$onehot`, `$onehot0`, `$isunknown` |
+| `assert_tb.sv` | Immediate assertions' actions; `$info`, `$warning`, `$error`, `$fatal` |
+| `unique_tb.sv` | `unique`, `unique0`, `priority` on `case` and `if` |
+| `typename_tb.sv` | `$typename` |
+| `pattern_tb.sv` | `%p` |
+
+### Formatting (measured)
+
+- **`%h`, `%o`, `%b`.** Without a width the digits fill the operand's
+  width (`%h` of `8'd5` is `05`). Any width, even `%0h`, first drops the
+  leading zeros and then **zero-fills** to the width (`%4h` of `8'h0f` is
+  `000f`, `%3o` of `8'h0x` is `0Xx`), or space-fills on the right after `-`
+  (`%-4h` is `f   `). A width smaller than the digits does not cut them.
+  The standard says only that `%0h` suppresses leading zeros (quoted).
+- **`%X`, `%H`** print lower case, as `%x` does.
+- **Signed `%d`.** The field is as wide as the digits of 2^N - 1, plus
+  one for the sign: 4, 7, 8, 10, 32 and 64 bits give 3, 4, 4, 5, 11 and
+  21 columns. *The reading this replaced* sized it for the most negative
+  value, `-2^(N-1)`, which is how the standard's automatic sizing of a
+  decimal field (§17.1.1.3, as this code read it) was taken; it is one
+  column narrower at 4, 7 and 10 bits, and xsim does not print that.
+- **Unknown bits in `%d`.** All `x` is `x`, all `z` is `z`, some `x` is
+  `X`, some `z` only is `Z` (the standard's rule, quoted, and measured), except that
+  a negative signed value (a known one in the sign bit) with any unknown
+  bit is `x`: `8'sb1000000z` is `x` where `8'b1000000z` is `Z`. An explicit
+  width does not pad an unknown decimal: `%5d` of `8'bx` is `x`, while the
+  default width does (`  x`).
+- **The zero flag**, `%05d`, `%05s`, `%08.2f`, fills with zeros on the left,
+  in front of a sign too: `%05d` of -5 is `000-5`.
+- **`%s` of a vector** prints a NUL byte as a space, so a string literal
+  shorter than its variable is right-justified (`"ab"` in 32 bits is
+  `  ab`), and an unknown bit counts as zero (`16'h41xx` is `A `); `%0s`
+  drops the leading NULs. `-` does not left-justify a string.
+- **Reals.** `%e`, `%f`, `%g` ignore `-`. `%d`, `%h`, `%o`, `%b` of a real
+  convert it to a 32-bit signed integer, rounding halves away from zero, so
+  `%d` prints it in eleven columns; `1e20` becomes -2147483648. A real
+  literal given to a task stays a real (it was rounded to an integer by the
+  frontend: `%f` of `1.5` printed `2.000000`).
+- **`%l`** prints `work.` and the module name; xsim's library is `work`.
+- **`%p`** prints a known vector in decimal, a vector with an unknown bit or
+  a single bit sized in binary (`8'b01x0z001`, `1'b1`), a real as `%g`, a
+  string in quotes, an enum by name (a value no variant has by number), a
+  struct as `'{a:3,b:15}` and under `%0p` as `'{3,15}`, an unpacked array
+  as `'{1,2,255}`. The simulator sees bits only, so the Verilog frontend
+  spells a struct or an array out in the format literal and hands an enum's
+  conversion its variants (`%{RED=0,GRN=1}p`); this is done for the display
+  tasks, not yet for `$sformatf`.
+- **`$strobeh`, `$strobeb`, `$strobeo`, `$monitorh`...** keep their radix
+  for unformatted arguments; the strobes printed decimal.
+
+Two things xsim does are not copied. `%c` of a NUL byte ends xsim's line
+there; Reticle prints the NUL. `%5m` prints `5m` under xsim; Reticle pads
+the scope name to five columns.
+
+### `$printtimescale` (measured)
+
+`Timescale of (tb) is 1ns/1ps.`: with no argument the calling module, by
+its module name (`(sub)` from inside instance `tb.u1`), and with one the
+instance it names, by its path (`$printtimescale(u1)` from `tb` prints
+`(tb.u1)`). It printed nothing. Not copied: xsim prints an argument written
+as a full path, `tb.u1`, as `tb.tb.u1`.
+
+Measuring this found that every module of a file had the file's first
+`` `timescale ``; each has the one written before it now.
+
+### `$random` and `$dist_*` (measured)
+
+The standard prints C source for the generator (quoted: IEEE 1364-2005
+§17.9), so that a seed takes the same values in every simulator.
+`src/sim/random.rs` is that code, and every value its tests and
+`random_tb.v` hold is xsim's: `$random(seed)` from seed 1 is -2147414528
+and leaves 69070 in the seed. Before, `$random` was a xorshift generator,
+the seed was never written back, and `$dist_*` were unknown functions. A
+seed variable is written back by the frontend: the call becomes
+`t = $random$seed(seed, ...)`, the new seed in `t`'s upper half, then
+`seed = t[63:32]`.
+
+`$random` with no seed starts from seed 0, so `--seed` defaults to 0, and
+goes on from the seed the last `$random(seed)` or `$dist_uniform` left in
+its variable; the other distributions leave it alone. Neither is in the
+standard: both were measured. `$urandom` is still a xorshift generator;
+its values were not compared with xsim's.
+
+### `$monitor` (measured)
+
+It prints at the end of a time step in which one of its arguments other
+than `$time`, `$stime` and `$realtime` changed value (quoted, §17.1.3, and
+measured), and at no other: not for activity on other variables, not for a
+variable written with the value it had, not for a change undone within the
+step, not for an operand change that leaves an expression's value
+(`a + b`). It compared the text it would print, which holds `$time`, and so
+printed at every step with any activity. `$monitoron` prints at once only
+if a value changed while it was off. Not copied: a second `$monitor`
+replaces the first, as the standard says; xsim keeps both printing.
+
+### `%m` (measured)
+
+`%m` names the scope the statement is written in: `tb.blk` in a named
+block, `tb.where` in task `where` whatever called it, `tb.u1.sblk.inner`
+nested, `tb.blk.lp` in a loop's named body. The simulator knows instances
+only; the frontend extends `%m` in a display task's or `$sformatf`'s
+format literal with the rest (`"%m"` in `blk` becomes `"%m.blk"`). An
+unnamed generate block is `genblk` here and `genblk1` in xsim (quoted:
+§12.4.3 numbers them; not measured).
+
+`$test$plusargs` and `$value$plusargs` return 0, since no plusargs are ever
+given; they returned `x`.
+
+### Bit counts and `$typename` (measured)
+
+`$countones`, `$countbits`, `$onehot`, `$onehot0` and `$isunknown` compute
+on run-time values (they were unknown functions; only constants folded);
+an `x` or `z` is never a one, and each `$countbits` control is its low bit.
+
+`$typename` is answered by the frontend in xsim's spelling, which IEEE
+1800-2017 §20.6.1 leaves to the tool (quoted): `int unsigned`,
+`logic signed[3:0]`, `logic[7:0]$[0:3]`, `wire[7:0]`,
+`enum logic[1:0] tb.col_t`, `struct tb.ps_t`, `enum bit[2:0] pk::pe_t`,
+and a typedef that is neither by its type (`logic[5:0]`). xsim prints
+`$typename(a8[3:0])` as `logic[7:0]`; Reticle prints the part's type.
+
+### Assertions and reports (measured)
+
+An immediate assertion runs its pass action when the condition is true and
+its fail action when it is false or unknown, never both; with no fail
+action it prints `Error: Assertion violation`. The pass action used to run
+unconditionally after the check, and a fail action other than one severity
+task (`else $display(..)`, `else begin .. end`) was dropped. `$info` prints
+`Info:` and `$fatal` `Fatal:`, without its finish number; VHDL's `note` and
+`failure` keep `Note:` and `Failure:`. xsim follows each report with a
+`Time: ... File: ...` line, which Reticle gives as the diagnostic on
+standard error instead.
+
+After an `$error` xsim exits 0; Reticle exits 1, on purpose: a testbench
+that reports an error should fail the script that runs it.
+
+### `unique` and `priority` (measured)
+
+`unique if`, `unique0 if` and `priority if` take the branch an `if` would,
+and are lowered as `case (1'b1)` with the qualifier, so the simulator
+checks them: a warning when no condition is true and there is no `else`,
+and for `unique` and `unique0` when more than one is. `unique0` with no
+match is silent, on `case` as on `if`. Neither `if` form warned before, and
+`unique0 case` warned when nothing matched. xsim's warnings are
+`WARNING: 0ns : none of the conditions were true for unique if from
+File:<path>:<line>` and `Multiple conditions true` with the two lines in
+conflict; Reticle's go to standard error, worded for both forms, and
+`unique_tb.sv` holds them to name the same statements in the same order.
+
+In three statements tried, xsim reported no `unique if` whose conditions
+were all false when it came directly after a constant assignment deciding
+them (`v = 2'd2; unique if (v == 0) ...`); after a delay it did. Reticle
+reports it either way, as the standard asks (quoted, §12.4.2).
 
 ## Writing part of a memory element
 
@@ -785,6 +960,8 @@ them print what xsim prints, from 18 before this work):
   corpus module qualifies and, for the rest, exactly why not.
 - `tests/sim_xc7_primitives.rs` runs each testbench of `testdata/sim/xc7/`
   with `--device` and holds its output to what `xsim` printed.
+- `tests/sim_system_tasks.rs` does the same for the system task testbenches
+  of the section above.
 
 ## Not yet here
 
