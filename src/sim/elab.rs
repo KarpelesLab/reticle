@@ -114,6 +114,9 @@ pub(crate) struct MemState {
     /// True for an array of two-state elements, which start at zero and
     /// hold a `0` for every `x` or `z` written.
     pub(crate) two_state: bool,
+    /// For an array of elements only some of whose bits are two-state:
+    /// those bits.
+    pub(crate) two_state_bits: Option<Logic>,
     /// True for an array of `real`, whose elements are IEEE 754 doubles.
     pub(crate) real: bool,
     /// Contents; `x` where uninitialised.
@@ -522,10 +525,18 @@ impl<'d> Simulator<'d> {
                         }
                         _ => super::value::Resolution::Wire,
                     };
-                    if net.attrs.is_set(crate::ir::TWO_STATE_ATTR) {
-                        let s = &mut self.signals[sig.idx()];
-                        s.two_state = true;
-                        s.value = s.value.two_state();
+                    match net.attrs.get(crate::ir::TWO_STATE_ATTR) {
+                        Some(crate::ir::AttrValue::Const(mask)) => {
+                            let s = &mut self.signals[sig.idx()];
+                            s.value = s.value.two_state_where(mask);
+                            s.two_state_bits = Some(mask.clone());
+                        }
+                        Some(_) => {
+                            let s = &mut self.signals[sig.idx()];
+                            s.two_state = true;
+                            s.value = s.value.two_state();
+                        }
+                        None => {}
                     }
                     sig
                 }
@@ -537,12 +548,18 @@ impl<'d> Simulator<'d> {
             let width = flat_width(&mem.elem);
             let size = usize::try_from(mem.size).unwrap_or(usize::MAX);
             let strings = mem.elem == crate::ir::Type::String;
-            let two_state = mem.attrs.is_set(crate::ir::TWO_STATE_ATTR);
+            let (two_state, two_state_bits) = match mem.attrs.get(crate::ir::TWO_STATE_ATTR) {
+                Some(crate::ir::AttrValue::Const(mask)) => (false, Some(mask.clone())),
+                Some(_) => (true, None),
+                None => (false, None),
+            };
             let blank = if strings {
                 Logic::zero(0)
             } else if two_state || mem.elem == crate::ir::Type::Real {
                 // A real starts at 0.0, whose encoding is all zeros.
                 Logic::zero(width)
+            } else if let Some(mask) = &two_state_bits {
+                Logic::x(width).two_state_where(mask)
             } else {
                 Logic::x(width)
             };
@@ -558,6 +575,7 @@ impl<'d> Simulator<'d> {
                 elem_width: width,
                 strings,
                 two_state,
+                two_state_bits,
                 real: mem.elem == crate::ir::Type::Real,
                 data,
                 fanout: Vec::new(),
@@ -829,6 +847,7 @@ impl<'d> Simulator<'d> {
             value: value.with_signed(ty.is_signed()),
             forced: None,
             two_state: false,
+            two_state_bits: None,
             resolution: super::value::Resolution::Wire,
         });
         self.sig_fanout.push(Vec::new());

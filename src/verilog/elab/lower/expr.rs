@@ -2429,9 +2429,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         self.b.span = span;
         let net = self.b.add_net_kind(name, irt, ir::NetKind::Variable);
         debug_assert_eq!(net.index(), self.nets.len());
-        if super::is_two_state(&ty) {
-            self.b
-                .net_attr(net, ir::TWO_STATE_ATTR, ir::AttrValue::Int(1));
+        if let Some(v) = super::two_state_attr(&ty) {
+            self.b.net_attr(net, ir::TWO_STATE_ATTR, v);
         }
         self.nets.push(super::NetInfo {
             ty,

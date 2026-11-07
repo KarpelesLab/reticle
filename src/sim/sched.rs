@@ -352,6 +352,8 @@ impl<'d> Simulator<'d> {
         let value = value.with_signed(s.value.is_signed());
         let value = if s.two_state {
             value.two_state()
+        } else if let Some(mask) = &s.two_state_bits {
+            value.two_state_where(mask)
         } else {
             value
         };
@@ -448,6 +450,11 @@ impl<'d> Simulator<'d> {
                 .resize(m.elem_width)
                 .with_signed(m.data[i].is_signed())
                 .two_state()
+        } else if let Some(mask) = &m.two_state_bits {
+            value
+                .resize(m.elem_width)
+                .with_signed(m.data[i].is_signed())
+                .two_state_where(mask)
         } else {
             value
                 .resize(m.elem_width)
@@ -631,7 +638,13 @@ impl<'d> Simulator<'d> {
                         replace_bits(&s.value, *lo, &part)
                     };
                     let new = new.with_signed(s.value.is_signed());
-                    s.value = if s.two_state { new.two_state() } else { new };
+                    s.value = if s.two_state {
+                        new.two_state()
+                    } else if let Some(mask) = &s.two_state_bits {
+                        new.two_state_where(mask)
+                    } else {
+                        new
+                    };
                 }
                 Store::Mem { mem, addr } => {
                     self.write_mem(*mem, *addr, &part);

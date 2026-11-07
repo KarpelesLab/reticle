@@ -193,6 +193,10 @@ pub struct Packed {
     /// The keyword the type was declared with, for messages (`int`,
     /// `logic`); `None` for implicit types.
     pub keyword: Option<&'static str>,
+    /// For an unpacked struct kept as its members' bits: the bits that
+    /// belong to two-state members, which hold no `x` or `z` though the
+    /// rest may (each member of an unpacked struct keeps its own type).
+    pub two_state_bits: Option<Rc<Logic>>,
 }
 
 impl Packed {
@@ -210,6 +214,7 @@ impl Packed {
             enumeration: None,
             is_unsized: false,
             keyword: None,
+            two_state_bits: None,
         }
     }
 
@@ -277,6 +282,7 @@ impl Packed {
             },
             is_unsized: false,
             keyword: None,
+            two_state_bits: None,
         }
     }
 
@@ -828,15 +834,22 @@ fn enum_type(env: &mut ScopeEnv<'_, '_>, e: &ast::EnumType, span: Span) -> Optio
 /// Builds a packed struct or union type with per-field bit offsets
 /// (§7.2.1): the first member occupies the most significant bits.
 fn struct_type(env: &mut ScopeEnv<'_, '_>, s: &ast::StructType, span: Span) -> Option<VType> {
-    if !s.packed {
-        env.unsupported(span, "unpacked struct or union");
+    // An unpacked struct whose members are all integral, or arrays of
+    // integral elements, is kept as its members' bits, as a packed one is:
+    // members read and write as slices, a pattern fills them, two of them
+    // compare member by member. Each member keeps its own type, so the bits
+    // of a two-state member are marked (`two_state_bits`). It used to be
+    // refused.
+    if !s.packed && s.is_union {
+        env.unsupported(span, "an unpacked union");
         return None;
     }
     let mut fields: Vec<Field> = Vec::new();
     let mut widths: Vec<u32> = Vec::new();
     for m in &s.members {
         for d in &m.decls {
-            let ty = resolve(env, &m.data_type, &d.dims, false)?;
+            let ty = resolve(env, &m.data_type, &d.dims, !s.packed)?;
+            let ty = if s.packed { ty } else { as_packed_member(ty) };
             let Some(p) = ty.packed() else {
                 env.error(
                     codes::TYPE,
@@ -880,8 +893,62 @@ fn struct_type(env: &mut ScopeEnv<'_, '_>, s: &ast::StructType, span: Span) -> O
         f.lsb = offset;
     }
     let mut p = Packed::bits(total);
+    if !s.packed {
+        let mut mask = Logic::zero(total);
+        let mut any = false;
+        let mut four = false;
+        for f in &fields {
+            let Some(fp) = f.ty.packed() else { continue };
+            let w = fp.width();
+            let bits: Option<Logic> = if !fp.four_state {
+                Some(Logic::ones(w))
+            } else {
+                fp.two_state_bits.as_deref().cloned()
+            };
+            match bits {
+                Some(b) => {
+                    any = true;
+                    for k in 0..w {
+                        mask.set_bit(f.lsb + k, b.bit(k));
+                    }
+                    if b != Logic::ones(w) {
+                        four = true;
+                    }
+                }
+                None => four = true,
+            }
+        }
+        if !four {
+            p.four_state = false;
+        } else if any {
+            p.two_state_bits = Some(Rc::new(mask));
+        }
+    }
     p.fields = Some(Rc::new(fields));
     Some(VType::Packed(p))
+}
+
+/// A member of an unpacked struct as a packed type: an unpacked array of
+/// integral elements becomes a packed array of them, left bound first.
+fn as_packed_member(ty: VType) -> VType {
+    let mut dims = Vec::new();
+    let mut t = ty.clone();
+    while let VType::Unpacked { elem, range } = t {
+        dims.push(range);
+        t = *elem;
+    }
+    if dims.is_empty() {
+        return ty;
+    }
+    let VType::Packed(mut p) = t else {
+        return ty;
+    };
+    if p.dims.is_empty() {
+        p.dims.push(Range::new(0, 0));
+    }
+    dims.extend(p.dims.iter().copied());
+    p.dims = dims;
+    VType::Packed(p)
 }
 
 #[cfg(test)]

@@ -651,8 +651,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let kind = if is_var { NetKind::Reg } else { NetKind::Wire };
         let net = self.b.add_net_kind(name, irt, kind);
         debug_assert_eq!(net.index(), self.nets.len());
-        if is_two_state(&ty) {
-            self.b.net_attr(net, ir::TWO_STATE_ATTR, AttrValue::Int(1));
+        if let Some(v) = two_state_attr(&ty) {
+            self.b.net_attr(net, ir::TWO_STATE_ATTR, v);
         }
         // The IR numbers a vector from zero. Vivado's XDC names a bit by the
         // index it was declared with, so a range that says otherwise is kept.
@@ -714,10 +714,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         self.b.span = span;
         let mem = self.b.memory(name, elem_ir, total);
         debug_assert_eq!(mem.index(), self.mems.len());
-        if is_two_state(elem) {
+        if let Some(v) = two_state_attr(elem) {
             self.b.module_mut().memories[mem]
                 .attrs
-                .set(ir::TWO_STATE_ATTR, AttrValue::Int(1));
+                .set(ir::TWO_STATE_ATTR, v);
         }
         self.mems.push(MemInfo {
             elem: elem.clone(),
@@ -1737,6 +1737,19 @@ fn describe_driver(key: DriverKey) -> &'static str {
 /// struct made of them), which a simulator holds without `x` or `z`.
 pub(super) fn is_two_state(ty: &VType) -> bool {
     ty.packed().is_some_and(|p| !p.four_state)
+}
+
+/// The two-state attribute of a net or memory of type `ty`: `1` when it is
+/// two-state whole, the mask of its two-state bits when only some members
+/// of an unpacked struct are, `None` otherwise.
+pub(super) fn two_state_attr(ty: &VType) -> Option<AttrValue> {
+    let p = ty.packed()?;
+    if !p.four_state {
+        return Some(AttrValue::Int(1));
+    }
+    p.two_state_bits
+        .as_deref()
+        .map(|m| AttrValue::Const(m.clone()))
 }
 
 /// The elements of a constant array value of type `ty` (each dimension's

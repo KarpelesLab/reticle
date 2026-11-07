@@ -951,6 +951,28 @@ impl Logic {
         Logic::from_planes(self.width, self.signed, value, unknown)
     }
 
+    /// [`Self::two_state`] of the bits `mask` has at 1 alone.
+    pub fn two_state_where(&self, mask: &Logic) -> Logic {
+        if self.is_fully_known() {
+            return self.clone();
+        }
+        let m = mask.resize(self.width);
+        let value: Vec<u64> = self
+            .value
+            .iter()
+            .zip(self.unknown.iter())
+            .zip(m.value.iter())
+            .map(|((v, u), k)| v & !(u & k))
+            .collect();
+        let unknown: Vec<u64> = self
+            .unknown
+            .iter()
+            .zip(m.value.iter())
+            .map(|(u, k)| u & !k)
+            .collect();
+        Logic::from_planes(self.width, self.signed, value, unknown)
+    }
+
     /// True when every bit is a known `0`.
     pub fn is_zero(&self) -> bool {
         self.is_fully_known() && is_zero(&self.value)

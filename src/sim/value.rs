@@ -435,6 +435,9 @@ pub(crate) struct Signal {
     /// A two-state variable (`bit`, `int`, ...): it starts at zero and
     /// holds a `0` for every `x` or `z` written to it.
     pub(crate) two_state: bool,
+    /// For a variable only some of whose bits are two-state (an unpacked
+    /// struct with an `int` member): those bits.
+    pub(crate) two_state_bits: Option<Logic>,
     /// How a wire's drivers combine.
     pub(crate) resolution: Resolution,
 }
@@ -561,6 +564,7 @@ mod tests {
             value: l("4'd3"),
             forced: None,
             two_state: false,
+            two_state_bits: None,
             resolution: Resolution::Wire,
         };
         assert_eq!(s.effective(), &l("4'd3"));
