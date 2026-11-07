@@ -466,7 +466,7 @@ impl Widths<'_, '_, '_> {
             "time" | "stime" | "realtobits" => Info::bits(64, false),
             "realtime" | "itor" | "bitstoreal" => Info::Real,
             name if crate::logic::REAL_FUNCTIONS.contains(&name) => Info::Real,
-            "sformatf" | "psprintf" => Info::Str(8),
+            "sformatf" | "psprintf" | "typename" => Info::Str(8),
             _ => Info::bits(32, true),
         }
     }

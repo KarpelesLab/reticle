@@ -288,7 +288,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     /// The source type of an expression, for selects.
-    fn type_of(&mut self, e: &'ast Expr) -> VType {
+    pub(super) fn type_of(&mut self, e: &'ast Expr) -> VType {
         if let Some(t) = self.env.probe(|env| env.type_of_path(e)) {
             return t;
         }
@@ -1260,6 +1260,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     sink,
                 );
                 self.coerce(id, w, name == "signed")
+            }
+            "typename" => {
+                let text = match args.first().and_then(|a| a.value.as_ref()) {
+                    Some(arg) => self.type_name_of(arg),
+                    None => {
+                        self.env
+                            .error(codes::ARGUMENTS, e.span, "`$typename` takes one argument");
+                        String::new()
+                    }
+                };
+                self.b.span = e.span;
+                self.b.string(text)
             }
             "random" | "dist_uniform" | "dist_normal" | "dist_exponential" | "dist_poisson"
             | "dist_chi_square" | "dist_t" | "dist_erlang"

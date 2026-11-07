@@ -75,6 +75,32 @@ fn qualify(
     }
 }
 
+/// A packed type without its enum or struct, as `$typename` spells it.
+fn packed_name(p: &Packed) -> String {
+    let kw = p.keyword.unwrap_or("logic");
+    match kw {
+        // The integer atoms: their width is the keyword's.
+        "int" | "byte" | "shortint" | "longint" => {
+            if p.signed {
+                kw.to_owned()
+            } else {
+                format!("{kw} unsigned")
+            }
+        }
+        "integer" | "time" => kw.to_owned(),
+        _ => {
+            let mut s = kw.to_owned();
+            if p.signed {
+                s.push_str(" signed");
+            }
+            for d in &p.dims {
+                s.push_str(&d.to_string());
+            }
+            s
+        }
+    }
+}
+
 /// `fmt` with `.suffix` written after each `%m` conversion; `%%` is left
 /// alone.
 fn with_scope(fmt: &str, suffix: &str) -> String {
@@ -851,6 +877,96 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
         self.b.span = v.span;
         Some(self.b.string(with_scope(value, &suffix)))
+    }
+
+    /// What `$typename` returns for an expression or a type, spelled as
+    /// xsim 2026.1 spells it (IEEE 1800-2017 §20.6.1 leaves the details
+    /// to the tool): `int`, `int unsigned`, `logic signed[3:0]`,
+    /// `logic[7:0]$[0:3]` for an unpacked array, `enum logic[1:0] tb.c_t`
+    /// and `struct tb.s_t` with the typedef's scope, `pkg::t` from a
+    /// package. Another typedef is not named: xsim prints its type.
+    pub(super) fn type_name_of(&mut self, arg: &'ast Expr) -> String {
+        let ty = match &arg.kind {
+            ExprKind::Type(dt) => types::resolve(&mut self.env, dt, &[], true),
+            _ => Some(self.type_of(arg)),
+        };
+        let Some(mut ty) = ty else {
+            return String::new();
+        };
+        // A net declared without a data type is a `wire`.
+        if let Some(Symbol::Net { net, .. }) = self.env.probe(|env| env.resolve_path(arg))
+            && self.nets.get(net.index()).is_some_and(|n| !n.is_var)
+            && let VType::Packed(p) = &mut ty
+            && p.keyword.is_none()
+        {
+            p.keyword = Some("wire");
+        }
+        self.type_name(&ty)
+    }
+
+    /// [`Self::type_name_of`] for a resolved type.
+    fn type_name(&self, ty: &VType) -> String {
+        match ty {
+            VType::Packed(p) if p.enumeration.is_some() || p.fields.is_some() => {
+                let mut base = p.clone();
+                base.enumeration = None;
+                let head = if p.enumeration.is_some() {
+                    format!("enum {}", packed_name(&base))
+                } else {
+                    "struct".to_owned()
+                };
+                match self.typedef_name(p) {
+                    Some(name) => format!("{head} {name}"),
+                    None => head,
+                }
+            }
+            VType::Packed(p) => packed_name(p),
+            VType::Unpacked { .. } => {
+                let mut dims = String::new();
+                let mut elem = ty;
+                while let VType::Unpacked { elem: inner, range } = elem {
+                    dims.push_str(&range.to_string());
+                    elem = inner;
+                }
+                format!("{}${dims}", self.type_name(elem))
+            }
+            other => other.to_string(),
+        }
+    }
+
+    /// The name of the typedef that declared enum or struct `p`, found by
+    /// identity in the scopes visible here and the packages: `tb.c_t` for
+    /// one in module `tb`, `pkg::c_t` for one in a package.
+    fn typedef_name(&self, p: &Packed) -> Option<String> {
+        let same = |q: &Packed| match (&p.enumeration, &q.enumeration, &p.fields, &q.fields) {
+            (Some(a), Some(b), _, _) => std::rc::Rc::ptr_eq(a, b),
+            (None, None, Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
+            _ => false,
+        };
+        let find = |scope| {
+            self.env
+                .cx
+                .scopes
+                .get(scope)
+                .names()
+                .find_map(|(name, sym)| match sym {
+                    Symbol::Type(VType::Packed(q)) if same(q) => Some(name.to_owned()),
+                    _ => None,
+                })
+        };
+        for (pkg, scope) in &self.env.cx.packages {
+            if let Some(name) = find(*scope) {
+                return Some(format!("{pkg}::{name}"));
+            }
+        }
+        let mut cur = Some(self.env.scope);
+        while let Some(scope) = cur {
+            if let Some(name) = find(scope) {
+                return Some(format!("{}.{name}", self.b.module().name));
+            }
+            cur = self.env.cx.scopes.get(scope).parent;
+        }
+        None
     }
 
     /// The named scopes between the module and the statement being

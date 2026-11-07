@@ -184,3 +184,18 @@ fn unique_and_priority_warn_where_xsim_does() {
     assert_eq!(xsim_lines.len(), 8, "{xsim}");
     assert_eq!(ours, xsim_lines, "{stderr}");
 }
+
+/// **`$typename` spells a type as xsim does** (`typename_tb.sv`): the
+/// integer atoms with `unsigned` where it is not their default, vectors
+/// with their keyword and ranges, `$` before unpacked ranges, `wire` for a
+/// net, an enum with its base and the typedef's scope, a struct by its
+/// typedef, another typedef by its type. It was an unknown function, so
+/// `%s` printed `????`. Would catch any of those spellings changing, an
+/// enum without a base type that is not `int`, or a package typedef named
+/// by the module; would not catch a type the frontend refuses, such as a
+/// two-dimensional unpacked array, nor `$typename` of a part select, where
+/// xsim prints the whole vector's type and this prints the part's.
+#[test]
+fn typename_spells_types_as_xsim_does() {
+    matches_xsim("typename_tb", "sv", 0);
+}

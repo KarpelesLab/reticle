@@ -754,7 +754,9 @@ fn named_type(
 fn enum_type(env: &mut ScopeEnv<'_, '_>, e: &ast::EnumType, span: Span) -> Option<VType> {
     let base = match &e.base {
         Some(dt) => resolve(env, dt, &[], false)?,
-        None => VType::Packed(Packed::integer()),
+        // With no base type an enum is an `int` (§6.19), two-state, so a
+        // variable of it starts at 0 rather than x.
+        None => VType::Packed(atom(ast::IntegerType::Int)),
     };
     let Some(p) = base.packed().cloned() else {
         env.error(codes::TYPE, span, "an enum base type must be integral");
