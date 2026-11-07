@@ -91,3 +91,18 @@ fn printtimescale_prints_as_xsim_does() {
 fn random_computes_what_xsim_computes() {
     matches_xsim("random_tb", "v", 0);
 }
+
+/// **`$monitor` prints when a monitored value changes, and only then**
+/// (`monitor_tb.v`). It compared the text it would print, which holds
+/// `$time`, so it printed at every step with any activity: an unmonitored
+/// variable written, a monitored one rewritten with its own value. Would
+/// catch a print for a change of the time alone, of an operand that leaves
+/// the expression's value, of a value changed back within the step, or of
+/// an unmonitored variable, and `$monitorh` printing in decimal; would not
+/// catch a second `$monitor`, which xsim runs beside the first where the
+/// standard has it replace it, and which the testbench therefore leaves
+/// out.
+#[test]
+fn monitor_prints_only_on_a_change() {
+    matches_xsim("monitor_tb", "v", 0);
+}

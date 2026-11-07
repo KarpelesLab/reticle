@@ -8,7 +8,7 @@
 //! |------|-----------|
 //! | `$display` `$displayb` `$displayh` `$displayo`, `$write*` | Formatted output (§17.1.1); `$display` appends a newline |
 //! | `$strobe*` | Output at the end of the time slot (§17.1.2) |
-//! | `$monitor*`, `$monitoron`, `$monitoroff` | Output whenever an argument changes, once per slot (§17.1.3) |
+//! | `$monitor*`, `$monitoron`, `$monitoroff` | Output at the end of a slot in which an argument other than `$time`, `$stime` or `$realtime` changed value (§17.1.3) |
 //! | `$finish`, `$stop` | End or pause the run (§17.4) |
 //! | `$fatal` `$error` `$warning` `$info`, `report` | Severity reports; `$fatal` ends the run |
 //! | `$readmemh` `$readmemb` | Load a memory from a [`FileProvider`] (§17.2.9); the IR carries them as [`StmtKind::MemFile`](crate::ir::StmtKind::MemFile), which names the memory itself |
@@ -96,10 +96,23 @@ pub(crate) struct Monitor {
     pub(crate) inst: InstId,
     /// The arguments as given to `$monitor`.
     pub(crate) args: Vec<ExprId>,
-    /// The last text printed, to print only on change.
-    pub(crate) last: Option<String>,
+    /// The radix of unformatted arguments (`$monitorh` prints hex).
+    pub(crate) radix: char,
+    /// The values of the arguments that trigger it when last printed:
+    /// every one but `$time`, `$stime` and `$realtime` (IEEE 1364-2005
+    /// §17.1.3). `None` until the first print.
+    pub(crate) last: Option<Vec<Value>>,
     /// `$monitoroff` suppresses output.
     pub(crate) enabled: bool,
+}
+
+/// True when two monitored values are the same, a NaN equal to itself so
+/// that a real argument holding one does not print at every step.
+fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Real(x), Value::Real(y)) => x.to_bits() == y.to_bits(),
+        _ => a == b,
+    }
 }
 
 /// A parsed `%` conversion.
@@ -608,14 +621,40 @@ impl<'d> Simulator<'d> {
             self.output.push_str(&text);
             self.output.push('\n');
         }
-        if let Some(mon) = self.monitor.take() {
-            let mut mon = mon;
+        if let Some(mut mon) = self.monitor.take() {
             if mon.enabled {
-                let text = self.format_args(mon.inst, &mon.args, 'd');
-                if mon.last.as_deref() != Some(text.as_str()) {
+                // A change of a monitored value prints, and nothing else
+                // does: not a time step with other activity, not a
+                // variable rewritten with the value it had, not a change
+                // of the time alone. The text printed last is not the
+                // test, since `$time` in it changes at every step.
+                let vals: Vec<Value> = mon.args.iter().map(|a| self.eval(mon.inst, *a)).collect();
+                let m = self.instances[mon.inst.idx()].m;
+                let key: Vec<Value> = mon
+                    .args
+                    .iter()
+                    .zip(&vals)
+                    .filter(|(a, _)| {
+                        !matches!(
+                            m.exprs.get(**a).map(|e| &e.kind),
+                            Some(ExprKind::Call { name, .. })
+                                if matches!(name.as_str(), "$time" | "$stime" | "$realtime")
+                        )
+                    })
+                    .map(|(_, v)| v.clone())
+                    .collect();
+                let changed = match &mon.last {
+                    None => true,
+                    Some(last) => {
+                        last.len() != key.len()
+                            || last.iter().zip(&key).any(|(a, b)| !same_value(a, b))
+                    }
+                };
+                if changed {
+                    let text = self.format_values(mon.inst, &vals, mon.radix);
                     self.output.push_str(&text);
                     self.output.push('\n');
-                    mon.last = Some(text);
+                    mon.last = Some(key);
                 }
             }
             self.monitor = Some(mon);
@@ -666,10 +705,13 @@ impl<'d> Simulator<'d> {
             self.strobes.push((inst, args.to_vec(), r));
             return true;
         }
-        if radix_of("$monitor").is_some() {
+        if let Some(r) = radix_of("$monitor") {
+            // A new `$monitor` replaces the one before (§17.1.3); xsim
+            // keeps both printing, which is not copied.
             self.monitor = Some(Monitor {
                 inst,
                 args: args.to_vec(),
+                radix: r,
                 last: None,
                 enabled: true,
             });
@@ -677,6 +719,9 @@ impl<'d> Simulator<'d> {
         }
         match name {
             "$monitoron" | "$monitoroff" => {
+                // `$monitoron` prints at once only if a value changed
+                // while it was off: what was printed last is still the
+                // reference, as xsim keeps it.
                 if let Some(m) = &mut self.monitor {
                     m.enabled = name == "$monitoron";
                 }
