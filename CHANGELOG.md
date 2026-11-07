@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/KarpelesLab/reticle/compare/v0.0.8...v0.0.9) - 2026-11-07
+
+### Added
+
+- *(fpga)* byte write enables, arranged as Vivado arranges them
+- *(ir)* write part of a memory element
+- *(fpga)* both halves' ways through a table by default, measured again
+- *(fpga)* when the clock reaches each register, measured and placed by
+- *(fpga)* median moves, which bring a stranded cell back
+- *(fpga)* a dedicated group's own wires cost nothing in the placement's estimate
+
+### Fixed
+
+- *(fpga)* a flip-flop's setup by how its data arrives, measured
+
+### Other
+
+- *(fpga)* byte writes as Vivado arranges them, measured
+- *(fpga)* filling slices, measured
+
 ## [0.0.8](https://github.com/KarpelesLab/reticle/compare/v0.0.7...v0.0.8) - 2026-11-07
 
 ### Added
