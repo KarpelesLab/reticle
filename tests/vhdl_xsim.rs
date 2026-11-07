@@ -218,3 +218,20 @@ fn whole_arrays_match_xsim() {
 fn nested_targets_match_xsim() {
     matches_xsim("nested_targets");
 }
+
+/// **Inertial delay**: a 2 ns pulse through a 3 ns inertial concurrent
+/// assignment (passed, every delay being transport) and through a
+/// `transport` one (passes), a pulse longer than the delay (passes), a
+/// pending process update cancelled by the next one of another value (was
+/// not), and a waveform of several elements, whose later elements must not
+/// cancel the first.
+///
+/// Would catch inertial delay applied to `transport`, to the later
+/// elements of a waveform, or not at all. Would not catch a `reject` limit
+/// shorter than the delay, which is lowered as transport, nor an
+/// assignment without `after` cancelling pending updates, which is not
+/// done; neither is here.
+#[test]
+fn inertial_delay_matches_xsim() {
+    matches_xsim("inertial");
+}

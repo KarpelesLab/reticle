@@ -442,7 +442,7 @@ module <name> [blackbox]
   memory @<name> <size> x <type>
     init <const> <const> ...     zero or more lines; a bare `init` means "initialised, empty"
   instance <name> of <module> [#(<p>=<v>, ...)] (<port>=<expr>, ...)
-  assign <lvalue> = <expr> [after <n> <unit>]
+  assign <lvalue> = <expr> [after <n> <unit> [inertial]]
   hier %<net> = <instance> / ... / <net name>
   process [<name>] comb|initial|free
   process [<name>] seq [posedge|negedge %clk, ...] [async posedge|negedge %rst, ...]
@@ -455,6 +455,13 @@ end
 
 Attribute and parameter values are a sized literal, a quoted string or an
 integer (`keep = 1`, `ram_style = "block"`, `INIT = 16'h8000`).
+
+A delay is transport unless it says `inertial`: an inertial assignment
+(VHDL's `s <= v after t`, a Verilog continuous assignment's `#t`) removes
+the updates it has already scheduled whose value differs from the new one,
+so a pulse shorter than the delay never reaches the target
+(`Delay::inertial`). The VHDL frontend marks its delays so; the Verilog
+frontend does not yet, and its continuous assignments are still transport.
 
 Cell kinds: the bare keyword (`and`, `add`, `mux`, ...), or
 
@@ -470,7 +477,7 @@ blackbox <name>
 
 ```
 %x = <expr> [after 2 ns]                 blocking
-%x <= <expr> [after 2 ns]                non-blocking
+%x <= <expr> [after 2 ns [inertial]]     non-blocking
 if <expr>  ...  [else ...]  end
 case|casez|casex <expr> [unique|priority]
   when <expr>, <expr>  ...  end

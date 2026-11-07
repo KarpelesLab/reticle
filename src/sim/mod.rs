@@ -20,6 +20,7 @@
 //! | `process.rs`  | Process execution as a resumable frame stack                 |
 //! | `sys.rs`      | System tasks, `$display` formatting, `$random`, `$readmem*`, `$writemem*` |
 //! | `vhdl_runtime.rs` | The `$vhdl_` functions VHDL report messages are built with |
+//! | `inertial.rs` | Inertial delay: the updates an assignment cancels       |
 //! | `vcd.rs`      | VCD waveform writer                                          |
 //! | `api.rs`      | The public co-simulation API                                 |
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
@@ -156,6 +157,7 @@ pub mod coverage;
 mod elab;
 mod eval;
 pub mod fst;
+mod inertial;
 pub mod interactive;
 mod process;
 mod sched;
@@ -291,6 +293,8 @@ pub struct Simulator<'d> {
     next_break: u32,
     /// The VHDL signal shadows (`'event`, `'last_value`).
     vhdl: vhdl_runtime::VhdlState,
+    /// The updates inertial assignments have pending and have cancelled.
+    inertial: inertial::InertialState,
 }
 
 impl std::fmt::Debug for Simulator<'_> {

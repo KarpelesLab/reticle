@@ -184,6 +184,22 @@ impl<'a> Lowerer<'a, '_> {
         let Some((target, layout)) = self.lvalue(&sa.target, &mut Sink::Proc(out)) else {
             return;
         };
+        let outer = self.transport;
+        self.transport = is_transport(sa.delay.as_ref());
+        self.signal_rhs(sa, &target, &layout, kind, out);
+        self.transport = outer;
+    }
+
+    /// The right-hand side of a signal assignment.
+    fn signal_rhs(
+        &mut self,
+        sa: &'a ast::SignalAssignment,
+        target: &Lvalue,
+        layout: &Layout,
+        kind: AssignKind,
+        out: &mut BlockBuilder,
+    ) {
+        let (target, layout) = (target.clone(), layout.clone());
         match &sa.rhs {
             ast::SignalAssignmentRhs::Simple(w) => {
                 self.waveform(&target, &layout, w, kind, sa.span, out);
@@ -222,9 +238,17 @@ impl<'a> Lowerer<'a, '_> {
             // `unaffected` keeps the current value: nothing to emit.
             return;
         };
-        for el in elems {
+        for (i, el) in elems.iter().enumerate() {
             let value = self.expr_in(&el.value, layout, &mut Sink::Proc(out));
-            let delay = el.after.as_ref().and_then(|d| self.delay_of(d));
+            // The first element of a waveform is inertial unless the
+            // assignment says `transport`; the elements after it are
+            // appended to what it scheduled (LRM 10.5.2.2).
+            let inertial = i == 0 && !self.transport;
+            let delay = el
+                .after
+                .as_ref()
+                .and_then(|d| self.delay_of(d))
+                .map(|d| d.with_inertial(inertial));
             out.span = span;
             match delay {
                 Some(d) => out.assign_after(target.clone(), value, kind, d),
@@ -1046,6 +1070,20 @@ enum FormalBinding {
     Alias(NetId, Layout),
     /// A local variable net.
     Local(NetId, Layout),
+}
+
+/// True when a delay mechanism is lowered as transport: `transport`
+/// itself, and `reject t inertial`, whose pulse limit the IR's inertial
+/// delay cannot express. It rejects every pulse shorter than the whole
+/// delay; a shorter limit lets through the pulses longer than it, which
+/// transport does too, and the pulses shorter than it as well, which it
+/// should not.
+pub(crate) fn is_transport(m: Option<&ast::DelayMechanism>) -> bool {
+    match m {
+        Some(ast::DelayMechanism::Transport(_)) => true,
+        Some(ast::DelayMechanism::Inertial { reject, .. }) => reject.is_some(),
+        None => false,
+    }
 }
 
 /// The return type of a subprogram declaration.

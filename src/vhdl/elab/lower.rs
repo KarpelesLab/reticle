@@ -192,6 +192,8 @@ pub(crate) struct Lowerer<'a, 'e> {
     pub steps: u32,
     /// The hidden nets of each process's VHDL waits, by process index.
     pub wait_hidden: HashMap<usize, super::waits::WaitNets>,
+    /// True while the signal assignment being lowered says `transport`.
+    pub transport: bool,
     /// The shadow nets that keep a signal's history, by signal and kind.
     pub shadows: HashMap<(NetId, &'static str), NetId>,
     /// The signal each shadow net shadows.
@@ -277,6 +279,7 @@ pub(crate) fn lower_entity<'a>(
         interp_depth: 0,
         steps: 0,
         wait_hidden: HashMap::new(),
+        transport: false,
         shadows: HashMap::new(),
         shadow_base: HashMap::new(),
     };

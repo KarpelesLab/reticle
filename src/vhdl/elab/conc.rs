@@ -448,7 +448,13 @@ impl<'a> Lowerer<'a, '_> {
             {
                 let el = &elems[0];
                 let value = self.expr_in(&el.value, &layout, &mut Sink::Cont);
-                let delay = el.after.as_ref().and_then(|d| self.delay_of(d));
+                // Inertial unless the assignment says `transport`.
+                let inertial = !super::stmt::is_transport(sa.delay.as_ref());
+                let delay = el
+                    .after
+                    .as_ref()
+                    .and_then(|d| self.delay_of(d))
+                    .map(|d| d.with_inertial(inertial));
                 self.emit_assign(&target, value, delay, sa.span);
             }
             ast::SignalAssignmentRhs::Simple(ast::Waveform::Unaffected(_)) => {}

@@ -167,6 +167,15 @@ fn delay(d: Delay) -> String {
     format!("{} {}", d.value, d.unit.name())
 }
 
+/// The delay of an assignment: its duration, and `inertial` when it is.
+fn after(d: Delay) -> String {
+    if d.inertial {
+        format!("{} inertial", delay(d))
+    } else {
+        delay(d)
+    }
+}
+
 struct Printer<'a> {
     out: &'a mut String,
     indent: usize,
@@ -365,7 +374,7 @@ impl<'a> Printer<'a> {
             self.expr(assign.value)
         );
         if let Some(d) = assign.delay {
-            let _ = write!(line, " after {}", delay(d));
+            let _ = write!(line, " after {}", after(d));
         }
         self.line(&line);
     }
@@ -436,7 +445,7 @@ impl<'a> Printer<'a> {
                 };
                 let mut line = format!("{} {op} {}", self.lvalue(target), self.expr(*value));
                 if let Some(d) = d {
-                    let _ = write!(line, " after {}", delay(*d));
+                    let _ = write!(line, " after {}", after(*d));
                 }
                 self.line(&line);
             }
@@ -1322,13 +1331,15 @@ impl Parser {
     fn expect_delay(&mut self) -> PResult<Delay> {
         let value = self.expect_int()?;
         let unit = self.expect_unit()?;
-        Ok(Delay { value, unit })
+        Ok(Delay::new(value, unit))
     }
 
-    /// `after <delay>` when present.
+    /// `after <delay> [inertial]` when present.
     fn optional_after(&mut self) -> PResult<Option<Delay>> {
         if self.eat_word("after") {
-            Ok(Some(self.expect_delay()?))
+            let d = self.expect_delay()?;
+            let inertial = self.eat_word("inertial");
+            Ok(Some(d.with_inertial(inertial)))
         } else {
             Ok(None)
         }
@@ -2581,7 +2592,7 @@ module \"a b\"
   instance u0 of sub #(W=8, S=\"y\") (a=%a, y=%t)
   instance u1 of sub ()
   assign %t = and(%a, %a)
-  assign %t[3:0] = %a[7:4] after 2 ns
+  assign %t[3:0] = %a[7:4] after 2 ns inertial
   assign {%t[7:4], %t[1:0]} = {%a[0:0], {5{%a[1:1]}}}
   assign @m[%a[3:0]] = %a
   assign %io = mux(%a[%a[2:0]], %a[%a[2:0] +: 1][1'd0], %a[%a[2:0] -: 1][1'd0])

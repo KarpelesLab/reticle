@@ -8,6 +8,6 @@ module delays
   port a in %a
   port y out %y
   port z out %z
-  assign %y = not(%a) after 5 ns
-  assign %z = %a after 2500 ps
+  assign %y = not(%a) after 5 ns inertial
+  assign %z = %a after 2500 ps inertial
 end

@@ -429,6 +429,9 @@ impl<'d> Simulator<'d> {
                     }
                     (AssignKind::NonBlocking, None | Some(0)) => self.nba.push((stores, v)),
                     (AssignKind::NonBlocking, Some(t)) => {
+                        if delay.is_some_and(|d| d.inertial) {
+                            self.inertial_nba_scheduled(pid, &stores, &v, self.now + t);
+                        }
                         self.schedule_after(t, Timed::Nba(stores, v));
                     }
                 }

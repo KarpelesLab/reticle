@@ -217,7 +217,14 @@ impl<'d> Simulator<'d> {
                     self.procs[pid.idx()].status = ProcStatus::Queued;
                     self.active.push_back(Event::Proc(pid));
                 }
-                Timed::Nba(stores, value) => self.nba.push((stores, value)),
+                Timed::Nba(stores, value) => {
+                    if !self.inertial_nba_cancelled(&stores, &value) {
+                        self.nba.push((stores, value));
+                    }
+                }
+                Timed::Driver(d, value, stores) if self.inertial_driver_cancelled(d, &value) => {
+                    let _ = stores;
+                }
                 Timed::Driver(d, value, stores) => {
                     self.active.push_back(Event::DriverApply(d, value, stores));
                 }
@@ -628,6 +635,9 @@ impl<'d> Simulator<'d> {
         };
         let stores = self.resolve_target(inst, &target);
         if delay > 0 {
+            if self.inertial_driver(d) {
+                self.inertial_driver_scheduled(d, &value, self.now + delay);
+            }
             self.schedule_after(delay, Timed::Driver(d, value, stores));
         } else {
             self.apply_driver(d, value, stores);

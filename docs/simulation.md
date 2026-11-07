@@ -670,6 +670,19 @@ x"C"` — narrows what its prefix writes: a slice of a slice of a net, or part
 of a memory element (the IR's `MemPart`). Only a field of a whole net was
 taken before; the rest were "a nested record target".
 
+**Inertial delay** (`inertial_tb.vhd`, `src/sim/inertial.rs`). `s <= v
+after t` is inertial in VHDL unless it says `transport` (LRM 10.5.2.2): a
+new value removes the updates the assignment has pending whose value
+differs, so a pulse shorter than the delay never arrives. Every delay was
+transport here, so a 2 ns pulse passed a 3 ns inertial delay, and `w <= 20
+after 3 ns` did not cancel the `w <= 10 after 2 ns` before it. The IR's
+`Delay` has an `inertial` flag (`after 3 ns inertial` in the text format)
+that either frontend can set; only the first element of a waveform is
+inertial, the rest are appended to it. Two approximations remain: a `reject
+t` limit shorter than the delay is lowered as transport, and an assignment
+with no `after` does not cancel the updates its driver has pending, as LRM
+10.5.2.2 has it.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.
@@ -706,5 +719,8 @@ taken before; the rest were "a nested record target".
 
 ## Not yet here
 
-Inertial delay on continuous assignments (transport delay is used), and a
-waveform from compiled fast mode.
+Inertial delay on Verilog continuous assignments, and a waveform from
+compiled fast mode. (This said "inertial delay on continuous assignments
+(transport delay is used)"; the simulator now applies inertial delay to an
+assignment the IR marks `inertial`, and the VHDL frontend marks its own, but
+the Verilog frontend does not mark a continuous assignment's yet.)

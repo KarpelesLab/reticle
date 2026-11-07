@@ -83,19 +83,45 @@ impl TimeUnit {
     }
 }
 
-/// A fixed duration.
+/// A fixed duration, and how an assignment delayed by it treats the
+/// updates it has already scheduled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Delay {
     /// Number of `unit`s.
     pub value: u64,
     /// The unit.
     pub unit: TimeUnit,
+    /// Inertial rather than transport (LRM 10.5.2.2 for VHDL, IEEE
+    /// 1364-2005 §6.1.3 for a Verilog continuous assignment): scheduling a
+    /// new value removes the updates the same assignment has pending whose
+    /// value differs from it, so a pulse shorter than the delay never
+    /// reaches the target. A transport delay keeps every update. Only
+    /// meaningful on an assignment's delay; written `inertial` after it in
+    /// the text format.
+    pub inertial: bool,
 }
 
 impl Delay {
-    /// Builds a delay.
+    /// Builds a transport delay.
     pub fn new(value: u64, unit: TimeUnit) -> Self {
-        Delay { value, unit }
+        Delay {
+            value,
+            unit,
+            inertial: false,
+        }
+    }
+
+    /// Builds an inertial delay.
+    pub fn inertial(value: u64, unit: TimeUnit) -> Self {
+        Delay {
+            inertial: true,
+            ..Delay::new(value, unit)
+        }
+    }
+
+    /// The same duration, inertial when `inertial` is true.
+    pub fn with_inertial(self, inertial: bool) -> Self {
+        Delay { inertial, ..self }
     }
 
     /// The delay in femtoseconds, saturating on overflow.

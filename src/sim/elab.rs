@@ -366,6 +366,7 @@ impl<'d> Simulator<'d> {
             break_hits: Vec::new(),
             next_break: 0,
             vhdl: Default::default(),
+            inertial: Default::default(),
         };
         let top_name = design.modules[top].name.to_string();
         let mut chain = Vec::new();
@@ -912,6 +913,10 @@ impl<'d> Simulator<'d> {
                 contrib: Vec::new(),
                 scheduled: false,
             });
+            if assign.delay.is_some_and(|d| d.inertial) {
+                self.inertial
+                    .mark_driver(DriverId::at(self.drivers.len() - 1));
+            }
         }
         for (_, cell) in m.cells.iter() {
             self.elaborate_cell(inst, cell, diags);
