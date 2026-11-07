@@ -683,6 +683,12 @@ t` limit shorter than the delay is lowered as transport, and an assignment
 with no `after` does not cancel the updates its driver has pending, as LRM
 10.5.2.2 has it.
 
+**Aggregates of vectors** (`aggregates_tb.vhd`). A positional element of a
+one-dimensional aggregate may be of the array type itself and contribute
+all its elements (VHDL-2008, clause 9.3.3.3): `x := (hi, lo)` was "aggregate
+has 2 element(s) but ... has 8". `integer'value("-42")` folds (the sign was
+not read), and `'0' or v` has the vector's width (it had the scalar's).
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

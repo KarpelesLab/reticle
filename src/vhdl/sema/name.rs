@@ -1871,6 +1871,11 @@ impl Checker<'_> {
         let mut elem_values: Vec<Option<Value>> = Vec::new();
         let mut named = false;
         let mut all_choices_simple = true;
+        // VHDL-2008 lets a positional element of a one-dimensional
+        // aggregate be a value of the array type itself, which contributes
+        // all its elements (clause 9.3.3.3): `(hi, lo)` of two nibbles is
+        // a byte. Such an aggregate does not fold.
+        let mut slices = false;
 
         for (i, el) in agg.elements.iter().enumerate() {
             if el.choices.is_empty() {
@@ -1880,6 +1885,32 @@ impl Checker<'_> {
                         el.span,
                         "a positional element cannot follow a named one",
                     );
+                }
+                if innermost && dims == 1 && mode == Mode::Commit {
+                    let cands = self.infer(&el.value);
+                    if !overload::any_compatible(self.a, &cands, elem)
+                        && overload::any_compatible(self.a, &cands, expected)
+                    {
+                        self.resolve(&el.value, expected);
+                        // Its own length: a static value's, or its
+                        // subtype's when that is not the aggregate's.
+                        let own = match self.a.value_of(el.value.span()) {
+                            Some(Value::Array(av)) => Some(av.elems.len()),
+                            _ => self
+                                .a
+                                .type_of(el.value.span())
+                                .filter(|t| *t != expected)
+                                .and_then(|t| self.a.array_length(t))
+                                .and_then(|n| usize::try_from(n).ok()),
+                        };
+                        match own {
+                            Some(n) => positional += n,
+                            None => all_choices_simple = false,
+                        }
+                        slices = true;
+                        elem_values.push(None);
+                        continue;
+                    }
                 }
                 positional += 1;
             } else {
@@ -1976,6 +2007,7 @@ impl Checker<'_> {
         }
         // Only a one-dimensional aggregate folds to a value.
         if dims == 1
+            && !slices
             && let Some(v) = self.fold_array_aggregate(agg, expected, &elem_values, has_others)
         {
             self.a.set_value(agg.span, v);

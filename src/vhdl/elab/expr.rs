@@ -1133,6 +1133,24 @@ impl<'a> Lowerer<'a, '_> {
         let mut positional = 0usize;
         for el in &ag.elements {
             if el.choices.is_empty() {
+                // A value of the array type itself contributes all its
+                // elements (VHDL-2008): `(hi, lo)`.
+                if let Some(t) = self.a().type_of(el.value.span())
+                    && self.a().same_base(t, layout.ty)
+                    && let Some((id, l)) = self.build(&el.value, None, sink)
+                {
+                    let n = l.width / arr.elem.width.max(1);
+                    for k in 0..n {
+                        if positional < len {
+                            let hi = l.width - 1 - k * arr.elem.width;
+                            let lo = hi + 1 - arr.elem.width;
+                            self.b.span = el.value.span();
+                            values[positional] = Some(self.slice_bits(id, hi, lo));
+                        }
+                        positional += 1;
+                    }
+                    continue;
+                }
                 if positional < len {
                     let v = self.expr_in(&el.value, &arr.elem, sink);
                     values[positional] = Some(v);
@@ -1302,6 +1320,9 @@ impl<'a> Lowerer<'a, '_> {
         let result = match result {
             Some(r) => r,
             None if is_predicate(sym) => self.boolean_layout(),
+            // `'0' or v` is a vector, as wide as `v`; it was the width of
+            // the `'0'`.
+            None if ll.array().is_none() && rl.array().is_some() => rl.clone(),
             None => ll.clone(),
         };
         self.b.span = span;

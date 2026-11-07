@@ -490,9 +490,17 @@ fn value_of_string(a: &Analysis, ty: TypeId, s: &Value) -> Option<Value> {
         .collect::<Option<String>>()?;
     let text = text.trim();
     let base = a.base_type(ty);
+    // A literal has no sign of its own; the image of a negative number
+    // does (`integer'value("-42")`).
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, text),
+    };
     match &a.ty(base).kind {
-        TypeKind::Integer(_) => super::constant::parse_integer_literal(text).map(Value::Int),
-        TypeKind::Real(_) => super::constant::parse_real_literal(text).map(Value::Real),
+        TypeKind::Integer(_) => super::constant::parse_integer_literal(digits)
+            .map(|i| Value::Int(if negative { -i } else { i })),
+        TypeKind::Real(_) => super::constant::parse_real_literal(digits)
+            .map(|r| Value::Real(if negative { -r } else { r })),
         TypeKind::Enum { literals, .. } => {
             let lower = text.to_lowercase();
             literals

@@ -235,3 +235,18 @@ fn nested_targets_match_xsim() {
 fn inertial_delay_matches_xsim() {
     matches_xsim("inertial");
 }
+
+/// **Aggregates of vectors, `'value`, and a scalar against a vector**:
+/// `(hi, lo)`, `('1', hi, "0", lo)` and an aggregate of slices, whose
+/// positional elements are of the array type itself (VHDL-2008; "aggregate
+/// has 2 element(s) but ... has 8"); `integer'value` of a string with a
+/// sign ("not static"); and `'0' or b`, which had the width of the `'0'`.
+///
+/// Would catch an element of the array type taken for one element, the
+/// slices placed in the reverse order, and a negative `'value` parsed as
+/// positive. Would not catch `'value` of a string known only at run time,
+/// which is still refused.
+#[test]
+fn aggregates_of_vectors_match_xsim() {
+    matches_xsim("aggregates");
+}

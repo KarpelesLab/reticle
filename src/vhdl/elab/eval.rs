@@ -238,6 +238,27 @@ impl<'a> Lowerer<'a, '_> {
                     let v = self.eval(ie)?;
                     self.convert_value(&v, t)
                 }
+                // `t'image(c)`, `t'value("42")`, `t'succ(x)` of a value that
+                // is static only once the generics are known (or that the
+                // analyser left unfolded).
+                Some(CallTarget::Attribute(p)) => {
+                    let ast::Name::Attribute { prefix: tm, .. } = prefix.as_ref() else {
+                        return None;
+                    };
+                    let ty =
+                        self.a()
+                            .decl_of(tm.span())
+                            .and_then(|d| match self.a().decl(d).kind {
+                                DeclKind::Type(t) | DeclKind::Subtype(t) => Some(t),
+                                _ => None,
+                            })?;
+                    let arg = args.first()?;
+                    let ast::Actual::Expr(ie) = &arg.actual else {
+                        return None;
+                    };
+                    let v = self.eval(ie)?;
+                    crate::vhdl::sema::attrs::eval_with_arg(self.a(), ty, p, &v)
+                }
                 _ => None,
             },
             ast::Name::Slice {
