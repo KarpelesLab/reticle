@@ -2264,10 +2264,44 @@ pub const REAL_FUNCTIONS: [&str; 21] = [
     "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "pow", "atan2", "hypot",
 ];
 
+/// The text VHDL's `real'image` has, in the form Vivado 2026.1's xsim
+/// writes it: C's `%e` with six digits after the point and an exponent of
+/// at least two digits, `2.500000e+00`, `-1.250000e-01`.
+///
+/// IEEE 1076-2008 clause 16.2.2 leaves the form of a real image to the
+/// implementation beyond its being a literal `'value` reads back; the
+/// form here was measured against xsim, not quoted. NaN and the
+/// infinities, which have no VHDL literal, print as Rust prints them.
+pub fn vhdl_real_image(r: f64) -> String {
+    if !r.is_finite() {
+        return format!("{r}");
+    }
+    let text = format!("{r:.6e}");
+    let Some((mantissa, exp)) = text.split_once('e') else {
+        return text;
+    };
+    let exp: i32 = exp.parse().unwrap_or(0);
+    let sign = if exp < 0 { '-' } else { '+' };
+    format!("{mantissa}e{sign}{:02}", exp.unsigned_abs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use Bit::{One, X, Z, Zero};
+
+    /// Would catch a real image in Rust's own `2.5e0` form or with a
+    /// one-digit exponent; would not catch a rounding difference from C's
+    /// `printf` in the last digit, which Rust and C agree on for these.
+    #[test]
+    fn vhdl_real_images_are_c_exponent_form() {
+        assert_eq!(vhdl_real_image(2.5), "2.500000e+00");
+        assert_eq!(vhdl_real_image(-1.25), "-1.250000e+00");
+        assert_eq!(vhdl_real_image(0.1), "1.000000e-01");
+        assert_eq!(vhdl_real_image(1.0e10), "1.000000e+10");
+        assert_eq!(vhdl_real_image(0.0), "0.000000e+00");
+        assert_eq!(vhdl_real_image(1.0e-100), "1.000000e-100");
+    }
 
     fn v(text: &str) -> Logic {
         Logic::parse_verilog(text).unwrap_or_else(|e| panic!("{text}: {e}"))

@@ -496,8 +496,50 @@ builds. A VHDL slice whose bounds move with a loop's index
 target, so the byte-write loop written that way is not taken;
 one `if` per lane is.
 
+## VHDL against xsim
+
+`tests/vhdl_xsim.rs` runs each testbench of `testdata/sim/vhdl_xsim/` and
+holds what `reticle sim` prints to what Vivado 2026.1's xsim printed for the
+same file (the `.xsim` beside it), byte for byte. Everything in this section
+was **measured** that way unless it says it was quoted.
+
+**Report messages built at run time** (`report_strings_tb.vhd`). A message
+that folds at elaboration is still one string constant; one that does not —
+`"n = " & integer'image(n)`, `to_string(v)`, `to_hstring(addr)` — lowers to
+calls of the simulator's `$vhdl_` string functions (`src/vhdl/elab/runtime.rs`
+for the lowering, `src/sim/vhdl_runtime.rs` for the functions). Their forms
+are xsim's, and where xsim and IEEE 1076-2008 disagree xsim's is kept:
+
+- a `time` image is in picoseconds, `3000 ps`, where clause 16.2.2 *reads*
+  as the primary unit (`3000000 fs`); xsim's resolution limit is a
+  picosecond, and a time finer than that, which xsim cannot hold, is written
+  in femtoseconds here;
+- a `real` image is C's `%e`, `2.500000e+00`;
+- an identifier is in lower case and a character literal as written,
+  `character'image('A')` being `'A'`. An earlier reading lowercased every
+  literal and printed `'a'`; the clause and xsim both keep the case;
+- `to_string` of a character-literal value drops the quotes (`1`, `Q`), and
+  `to_hstring` of a `signed` sign-extends to whole digits (`EA` for
+  `"101010"`);
+- an assertion without `report` prints `Assertion violation`, which the
+  clause leaves to the implementation.
+
+A message is handed to the simulator through `%s`, so a `%` in it prints as
+itself. `minimum`, `maximum` and `to_string` are declared with every scalar
+type (and `to_string` with every array of a character-literal type) as LRM
+5.2.6 and 5.3.2.4 have them, an explicit declaration of the same profile
+hiding them; before, only `std.standard`'s integer, real and time had
+`minimum` and `maximum`, and nothing had `to_string`.
+
+Two differences are kept on purpose. `to_string(5 ns)` of a *literal* is
+`5 ns` under xsim, which keeps the unit it was written in, and `5000 ps`
+here, where the literal has already folded to a count. And xsim prints `g`
+for `color_t'image(maximum(c, red))` when `c` is `green`, one character of
+the right answer; the fixture compares the value instead.
+
 ## Tests
 
+- `tests/vhdl_xsim.rs`, above.
 - Unit tests next to the code: the scheduler, the process interpreter, the
   sequence automaton (every operator, including overlapping attempts),
   coverage accounting and every session command.

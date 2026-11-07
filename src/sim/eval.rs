@@ -351,6 +351,9 @@ impl<'d> Env<'d> for SimEnv<'_, 'd> {
     }
 
     fn call(&mut self, name: &str, args: Vec<Value>, ty: &Type, span: Span) -> Value {
+        if let Some(v) = super::vhdl_runtime::call(name, &args, ty) {
+            return v;
+        }
         self.sim.call_function(self.inst, name, args, ty, span)
     }
 }

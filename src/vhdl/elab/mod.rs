@@ -206,6 +206,7 @@ mod expr;
 mod interp;
 mod lower;
 mod numeric;
+mod runtime;
 mod spans;
 mod stmt;
 mod types;

@@ -25,7 +25,7 @@ use crate::ir::{BinaryOp, Const, ExprId, ExprKind, Lvalue, Type, UnaryOp as IrUn
 use crate::logic::{Bit, Logic, Std9};
 use crate::source::Span;
 use crate::vhdl::ast::{self, Direction};
-use crate::vhdl::sema::{CallTarget, DeclId, DeclKind, TypeId, Value, attrs::Predefined};
+use crate::vhdl::sema::{CallTarget, DeclId, DeclKind, TypeId, Value};
 
 use super::codes;
 use super::lower::{Binding, Lowerer, Sink};
@@ -322,6 +322,12 @@ impl<'a> Lowerer<'a, '_> {
         sink: &mut Sink<'_>,
     ) -> Option<(ExprId, Layout)> {
         match n {
+            ast::Name::Simple(_) | ast::Name::Char { .. } | ast::Name::Operator { .. }
+                if self.names_function(n) =>
+            {
+                let d = self.a().decl_of(n.span())?;
+                self.subprogram_expr(d, &[], n.span(), want, sink)
+            }
             ast::Name::Simple(_) | ast::Name::Char { .. } | ast::Name::Operator { .. } => {
                 self.object_value(n)
             }
@@ -379,6 +385,15 @@ impl<'a> Lowerer<'a, '_> {
                 None
             }
         }
+    }
+
+    /// True when a bare name is a call of a function without parameters,
+    /// `now` or an impure `next_id`, rather than an object.
+    fn names_function(&self, n: &ast::Name) -> bool {
+        self.a().decl_of(n.span()).is_some_and(|d| {
+            let d = super::lower::resolve_alias(self.a(), d);
+            matches!(self.a().decl(d).kind, DeclKind::Subprogram { .. }) && self.lookup(d).is_none()
+        })
     }
 
     /// The value of a name that denotes an object, constant or literal.
@@ -473,10 +488,7 @@ impl<'a> Lowerer<'a, '_> {
                 Some((self.convert(id, &from, &to, span), to))
             }
             Some(CallTarget::Subprogram(d)) => self.subprogram_expr(d, args, span, want, sink),
-            Some(CallTarget::Attribute(p)) => {
-                self.attribute_call(p, span);
-                None
-            }
+            Some(CallTarget::Attribute(p)) => self.runtime_attribute(p, args, span, sink),
             Some(CallTarget::Operator(sym)) => {
                 // An operator written in functional form, `"and"(a, b)`.
                 let mut it = args.iter().filter_map(|a| match &a.actual {
@@ -499,14 +511,6 @@ impl<'a> Lowerer<'a, '_> {
                 None
             }
         }
-    }
-
-    fn attribute_call(&mut self, p: Predefined, span: Span) {
-        self.error(
-            codes::NOT_STATIC,
-            span,
-            format!("the attribute `{p:?}` is not static after elaboration"),
-        );
     }
 
     fn index_expr(
@@ -919,6 +923,13 @@ impl<'a> Lowerer<'a, '_> {
         let Some(lhs) = lhs else {
             return self.unary_op(sym, rhs, span, result, sink);
         };
+        if sym == "&"
+            && result
+                .as_ref()
+                .is_some_and(|l| matches!(l.kind, LayoutKind::Str))
+        {
+            return self.string_concat(lhs, rhs, span, sink);
+        }
         // A predicate's own layout is one bit, so it says nothing about
         // the operands; everything else shares the result's.
         let first = if is_predicate(sym) {
@@ -929,6 +940,12 @@ impl<'a> Lowerer<'a, '_> {
         let (mut l, ll) = self.build(lhs, first.as_ref(), sink)?;
         let second = first.clone().or_else(|| Some(ll.clone()));
         let (mut r, rl) = self.build(rhs, second.as_ref(), sink)?;
+        if matches!(sym, "=" | "/=")
+            && matches!(ll.kind, LayoutKind::Str)
+            && matches!(rl.kind, LayoutKind::Str)
+        {
+            return Some(self.string_compare(sym == "=", l, r, span));
+        }
         if !ll.is_bits() || !rl.is_bits() {
             self.error(codes::TYPE, span, "this operator needs bit-vector operands");
             return None;
@@ -1115,6 +1132,9 @@ impl<'a> Lowerer<'a, '_> {
             return self.numeric_call(pkg, d, args, span, want, sink);
         }
         let actuals: Vec<Actual<'a>> = args.iter().map(|e| Actual::Expr(e)).collect();
+        if let Some(r) = self.native_function(d, &actuals, span, sink) {
+            return r;
+        }
         self.inline_function(d, &actuals, span, want, sink)
     }
 
@@ -1145,6 +1165,9 @@ impl<'a> Lowerer<'a, '_> {
             return self.numeric_assoc_call(pkg, d, args, span, want, sink);
         }
         let actuals: Vec<Actual<'a>> = args.iter().map(Actual::Assoc).collect();
+        if let Some(r) = self.native_function(d, &actuals, span, sink) {
+            return r;
+        }
         self.inline_function(d, &actuals, span, want, sink)
     }
 
@@ -1216,10 +1239,7 @@ impl<'a> Lowerer<'a, '_> {
                 Some((self.b.call("$isunknown", vec![id], Type::bit()), to))
             }
             "to_string" | "to_bstring" | "to_ostring" | "to_hstring" => {
-                let (id, _) = self.build(arg, None, sink)?;
-                let to = self.layout_at(span)?;
-                self.b.span = span;
-                Some((self.b.call(name, vec![id], Type::String), to))
+                self.vector_text(&name, arg, false, span, sink)
             }
             "rising_edge" | "falling_edge" => {
                 self.error(

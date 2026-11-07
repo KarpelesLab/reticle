@@ -395,22 +395,88 @@ pub fn eval_with_arg(a: &Analysis, ty: TypeId, attr: Predefined, arg: &Value) ->
 
 /// `t'image(x)` for a scalar static value.
 pub fn image(a: &Analysis, ty: TypeId, v: &Value) -> Value {
+    let text = image_text(a, ty, v);
+    Value::string(text.chars().map(|c| c as u32))
+}
+
+/// The text of `t'image(x)`, as Vivado 2026.1's xsim writes it.
+///
+/// Clause 16.2.2 has an identifier written in lower case and a character
+/// literal as itself, quotes included: `'A'` stays `'A'`. (An earlier
+/// version lowercased every literal, so `character'image('A')` was `'a'`;
+/// the clause, and xsim, keep the case of a character literal.) A real is
+/// written as xsim writes it, see [`crate::logic::vhdl_real_image`]. A
+/// time is written in picoseconds when it is a whole number of them,
+/// which is what xsim does with its one-picosecond resolution limit, where
+/// the clause would have the primary unit, femtoseconds; another physical
+/// type is written in its primary unit.
+pub fn image_text(a: &Analysis, ty: TypeId, v: &Value) -> String {
     let base = a.base_type(ty);
-    let text = match (&a.ty(base).kind, v) {
+    match (&a.ty(base).kind, v) {
         (TypeKind::Enum { literals, .. }, Value::Enum(p)) => literals
             .get(usize::try_from(*p).unwrap_or(usize::MAX))
-            .map(|d| a.decl(*d).spelling.to_lowercase())
+            .map(|d| literal_image(&a.decl(*d).spelling))
             .unwrap_or_default(),
         (TypeKind::Physical { units, .. }, Value::Int(i)) => {
+            if a.same_base(ty, a.builtins.time) {
+                return time_image(*i);
+            }
             let unit = units
                 .first()
                 .map_or(String::new(), |u| a.decl(*u).spelling.to_lowercase());
             format!("{i} {unit}")
         }
-        (_, Value::Real(r)) => super::format_real(*r),
+        (_, Value::Real(r)) => crate::logic::vhdl_real_image(*r),
         (_, v) => v.to_string(),
-    };
-    Value::string(text.chars().map(|c| c as u32))
+    }
+}
+
+/// The image of one enumeration literal: an identifier in lower case, a
+/// character literal as written.
+pub fn literal_image(spelling: &str) -> String {
+    if spelling.starts_with('\'') {
+        spelling.to_owned()
+    } else {
+        spelling.to_lowercase()
+    }
+}
+
+/// The image of a time held as a femtosecond count: in `ps` when it is a
+/// whole number of picoseconds, as xsim writes it, else in `fs`.
+pub fn time_image(fs: i128) -> String {
+    if fs % 1000 == 0 {
+        format!("{} ps", fs / 1000)
+    } else {
+        format!("{fs} fs")
+    }
+}
+
+/// The text of the predefined `to_string(x)` (clause 5.7): the image,
+/// except that a character literal loses its quotes and a one-dimensional
+/// array of a character-literal type is its elements side by side,
+/// `to_string(bit_vector'("10"))` being `10`.
+pub fn to_string_text(a: &Analysis, ty: TypeId, v: &Value) -> Option<String> {
+    let base = a.base_type(ty);
+    match (&a.ty(base).kind, v) {
+        (TypeKind::Array { element, .. }, Value::Array(arr)) => {
+            let element = *element;
+            let mut out = String::new();
+            for e in &arr.elems {
+                out.push_str(&to_string_text(a, element, e)?);
+            }
+            Some(out)
+        }
+        (TypeKind::Enum { .. }, Value::Enum(_)) => {
+            let text = image_text(a, ty, v);
+            Some(
+                match text.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')) {
+                    Some(inner) if !inner.is_empty() => inner.to_owned(),
+                    _ => text,
+                },
+            )
+        }
+        _ => Some(image_text(a, ty, v)),
+    }
 }
 
 /// `t'value(s)` for a static string: the inverse of `'image` for integer,

@@ -176,7 +176,13 @@ impl<'a> Lowerer<'a, '_> {
         let sev = self.severity_of(a.severity.as_ref(), ReportSeverity::Error);
         let msg = match &a.report {
             Some(m) => self.report_args(m, out),
-            None => Vec::new(),
+            None => {
+                // xsim prints `Assertion violation` for an assertion with
+                // no `report`, which clause 10.3 leaves to the
+                // implementation; measured, not quoted.
+                self.b.span = a.span;
+                vec![self.b.string("Assertion violation")]
+            }
         };
         out.span = a.span;
         out.assert(cond, sev, msg);
@@ -186,7 +192,7 @@ impl<'a> Lowerer<'a, '_> {
     /// string.
     fn report_args(&mut self, e: &'a ast::Expr, out: &mut BlockBuilder) -> Vec<ExprId> {
         match self.expr(e, &mut Sink::Proc(out)) {
-            Some((id, _)) => vec![id],
+            Some((id, _)) => self.message_args(id, e.span()),
             None => Vec::new(),
         }
     }

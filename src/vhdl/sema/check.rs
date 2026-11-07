@@ -347,6 +347,21 @@ impl<'a> Checker<'a> {
             } else {
                 !matches!(ed.kind, DeclKind::Error)
             };
+            if clash
+                && matches!(
+                    ed.kind,
+                    DeclKind::Subprogram {
+                        body: SubprogramBody::Predefined,
+                        ..
+                    }
+                )
+            {
+                // An explicit homograph of a predefined operation hides it
+                // (clause 12.3): `function to_string (s : state_t)` next
+                // to `type state_t` is the one calls resolve to.
+                self.a.hide_decl(self.region, e);
+                continue;
+            }
             if clash {
                 let prev = ed.span;
                 self.push(
@@ -661,6 +676,21 @@ impl<'a> Checker<'a> {
                 "file_open_kind" => b.file_open_kind = t,
                 "file_open_status" => b.file_open_status = t,
                 _ => {}
+            }
+        }
+        // The types of this package were declared before `string` was, so
+        // their predefined `to_string` could not name its result yet.
+        let string = self.a.builtins.string;
+        let error = self.a.builtins.error;
+        let decls = self.a.region(region).decls.clone();
+        for d in decls {
+            if let DeclKind::Subprogram {
+                sig,
+                body: SubprogramBody::Predefined,
+            } = &mut self.a.decl_mut(d).kind
+                && sig.ret == Some(error)
+            {
+                sig.ret = Some(string);
             }
         }
     }
@@ -1854,6 +1884,101 @@ impl<'a> Checker<'a> {
             }
             _ => {}
         }
+        self.implicit_predefined_ops(ty, t.name.span);
+    }
+
+    /// The predefined `minimum`, `maximum` and `to_string` of a scalar
+    /// type (clause 5.2.6), and the `to_string` of a one-dimensional array
+    /// whose elements are a character-literal enumeration such as `bit`
+    /// or `std_ulogic` (clause 5.3.2.4).
+    ///
+    /// They are declared at the type's own span and are not recorded as
+    /// what that span refers to, so a hover or a definition lookup on the
+    /// type name still finds the type.
+    fn implicit_predefined_ops(&mut self, ty: TypeId, span: Span) {
+        let b = self.a.builtins;
+        let class = self.a.class(ty);
+        let scalar = matches!(
+            class,
+            super::TypeClass::Enum
+                | super::TypeClass::Integer
+                | super::TypeClass::Physical
+                | super::TypeClass::Real
+        );
+        let char_array = class == super::TypeClass::Array
+            && self.a.dimensions(ty) == 1
+            && self.a.element_type(ty).is_some_and(|e| {
+                let base = self.a.base_type(e);
+                // `string` has no `to_string`; inside `std.standard` the
+                // builtin `character` is not captured yet, so its name is
+                // what tells.
+                let is_character = self.a.same_base(e, b.character)
+                    || self
+                        .a
+                        .ty(base)
+                        .name
+                        .is_some_and(|n| self.a.name(n).eq_ignore_ascii_case("character"));
+                !is_character
+                    && matches!(
+                        self.a.ty(self.a.base_type(e)).kind,
+                        TypeKind::Enum {
+                            character: true,
+                            ..
+                        }
+                    )
+            });
+        if !scalar && !char_array {
+            return;
+        }
+        let region = self.region;
+        let mk = |c: &mut Checker, name: &str, params: &[&str], ret: TypeId| {
+            let sub_region = c.a.add_region(RegionKind::Subprogram, Some(region));
+            let mut ps = Vec::new();
+            for pn in params {
+                let psym = c.a.interner.intern_ci(pn);
+                let pd = c.a.add_decl(
+                    sub_region,
+                    psym,
+                    *pn,
+                    DeclKind::Object {
+                        class: ObjectClass::Constant,
+                        ty,
+                        mode: Some(Mode::In),
+                        role: ObjectRole::Parameter,
+                        deferred: false,
+                    },
+                    span,
+                );
+                ps.push(Param {
+                    decl: pd,
+                    ty,
+                    mode: Mode::In,
+                    class: ObjectClass::Constant,
+                    has_default: false,
+                });
+            }
+            let sym = c.a.interner.intern_ci(name);
+            c.a.add_decl(
+                region,
+                sym,
+                name,
+                DeclKind::Subprogram {
+                    sig: Signature {
+                        kind: SubprogramKind::Function,
+                        params: ps,
+                        ret: Some(ret),
+                        pure: true,
+                    },
+                    body: SubprogramBody::Predefined,
+                },
+                span,
+            );
+        };
+        if scalar {
+            mk(self, "minimum", &["l", "r"], ty);
+            mk(self, "maximum", &["l", "r"], ty);
+        }
+        mk(self, "to_string", &["value"], b.string);
     }
 
     /// `range l to r`: an integer type when the bounds are integer, a
@@ -2626,7 +2751,7 @@ impl<'a> Checker<'a> {
                             self.region = sub_region;
                             return e;
                         }
-                        SubprogramBody::Implicit => {}
+                        SubprogramBody::Implicit | SubprogramBody::Predefined => {}
                     }
                 }
             }

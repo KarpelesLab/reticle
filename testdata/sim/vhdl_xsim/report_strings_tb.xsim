@@ -1,0 +1,23 @@
+Note: 5
+Note: i=5, n=-42
+Note: b=true t=3000 ps
+Note: ch='Q' sl='1'
+Note: 'A'
+Note: c=green succ=blue
+Note: pos=1 val=blue
+Note: pred=4
+Note: extremes
+Note: 5 true 3000 ps Q
+Note: green 1010 A 1
+Note: u=10100110 h=A6 o=246
+Note: s=EA v=3C 00111100
+Note: abc
+Note: xyzQ
+Note: 100% sure, 3%
+Note: image compares
+Note: to_string compares
+Note: now=0 ps
+Note: now=5000 ps min=-42
+Error: Assertion violation
+Warning: Assertion violation
+Note: with 5

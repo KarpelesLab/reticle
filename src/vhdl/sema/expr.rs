@@ -161,6 +161,24 @@ impl Checker<'_> {
                         out.push(Cand::Ty(ret));
                     }
                 }
+                // `"a" & "b"`, and `"a" & 'b'`, have no concrete type of
+                // their own: like a string literal, they are whatever
+                // one-dimensional character array the context wants, so
+                // `"a" & "b" & "c"` resolves once the outer operator meets
+                // its context.
+                if out.is_empty() && *op == BinaryOp::Concat {
+                    let stringish = |cands: &[Cand], this: &Self| {
+                        cands.iter().any(|c| match c {
+                            Cand::StringLit => true,
+                            Cand::Ty(t) => this.a.is_character_type(*t),
+                            _ => false,
+                        })
+                    };
+                    let lit = |cands: &[Cand]| cands.contains(&Cand::StringLit);
+                    if (lit(&l) || lit(&r)) && stringish(&l, self) && stringish(&r, self) {
+                        out.push(Cand::StringLit);
+                    }
+                }
                 let _ = span;
                 out
             }

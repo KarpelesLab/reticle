@@ -79,20 +79,10 @@ package standard is
   impure function now return delay_length;
   attribute foreign of now : function is "reticle: builtin";
 
-  -- The implicit MINIMUM and MAXIMUM of a scalar type (clause 5.2.6).
-  -- The standard declares these immediately after every scalar type
-  -- declaration; Reticle declares them here for the scalar types this
-  -- package defines, which is what `natural`, `positive` and any other
-  -- integer subtype resolve to. A scalar type declared by user code does
-  -- not get them yet.
-  function minimum (l, r : integer) return integer;
-  function maximum (l, r : integer) return integer;
-  function minimum (l, r : real) return real;
-  function maximum (l, r : real) return real;
-  function minimum (l, r : time) return time;
-  function maximum (l, r : time) return time;
-  attribute foreign of minimum : function is "reticle: builtin";
-  attribute foreign of maximum : function is "reticle: builtin";
+  -- MINIMUM, MAXIMUM and TO_STRING of every scalar type, and TO_STRING
+  -- of every one-dimensional array of `bit` (clause 5.2.6 and 5.3.2.4),
+  -- are not written here: the analyser declares them with each type, as
+  -- the standard does, this package's types included.
 
   subtype natural  is integer range 0 to integer'high;
   subtype positive is integer range 1 to integer'high;
@@ -103,6 +93,15 @@ package standard is
   type integer_vector  is array (natural range <>) of integer;
   type real_vector     is array (natural range <>) of real;
   type time_vector     is array (natural range <>) of time;
+
+  -- The octal, hexadecimal and binary images of a `bit_vector` (clause
+  -- 16.3); its plain TO_STRING is the predefined one.
+  function to_bstring (value : bit_vector) return string;
+  function to_ostring (value : bit_vector) return string;
+  function to_hstring (value : bit_vector) return string;
+  attribute foreign of to_bstring : function is "reticle: builtin";
+  attribute foreign of to_ostring : function is "reticle: builtin";
+  attribute foreign of to_hstring : function is "reticle: builtin";
 
   type file_open_kind is (read_mode, write_mode, append_mode);
 

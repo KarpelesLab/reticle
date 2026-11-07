@@ -298,10 +298,7 @@ impl<'a> Lowerer<'a, '_> {
             "std_match" => self.numeric_match(args, &call, sink),
             "minimum" | "maximum" => self.numeric_extremum(&sym, args, &ptys, &call, sink),
             "to_string" | "to_bstring" | "to_ostring" | "to_hstring" => {
-                let (id, _) = self.build(args[0], None, sink)?;
-                let to = self.layout_at(span)?;
-                self.b.span = span;
-                Some((self.b.call(name, vec![id], Type::String), to))
+                self.vector_text(&sym, args[0], call.signed, span, sink)
             }
             _ => {
                 self.unsupported(span, &format!("`{name}` of a bundled arithmetic package"));

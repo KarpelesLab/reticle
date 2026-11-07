@@ -254,6 +254,12 @@ pub enum SubprogramBody {
     Foreign(String),
     /// Implicitly declared with a type (file operations, `deallocate`).
     Implicit,
+    /// One of the predefined operations clause 5.2.6 and 5.3.2.4 declare
+    /// with every scalar type and every one-dimensional array of a
+    /// character-literal enumeration: `minimum`, `maximum` and
+    /// `to_string`. Elaboration implements them; an explicit declaration
+    /// of a homograph in the same region hides them.
+    Predefined,
 }
 
 /// The kinds of declaration.
@@ -1233,6 +1239,18 @@ impl Analysis {
         r.decls.push(id);
         r.names.entry(name).or_default().push(id);
         id
+    }
+
+    /// Takes `id` out of `region`, as an explicit declaration of a
+    /// homograph does to a predefined operation: it is neither visible by
+    /// name there nor made visible elsewhere by a `use` of the region.
+    pub(crate) fn hide_decl(&mut self, region: RegionId, id: DeclId) {
+        let name = self.decls[id.index()].name;
+        let r = &mut self.regions[region.index()];
+        if let Some(list) = r.names.get_mut(&name) {
+            list.retain(|&d| d != id);
+        }
+        r.decls.retain(|&d| d != id);
     }
 
     /// Adds a declaration that is *not* visible by name.

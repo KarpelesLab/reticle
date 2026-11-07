@@ -19,6 +19,7 @@
 //! | `sched.rs`    | The scheduler: regions, time wheel, signal propagation       |
 //! | `process.rs`  | Process execution as a resumable frame stack                 |
 //! | `sys.rs`      | System tasks, `$display` formatting, `$random`, `$readmem*`, `$writemem*` |
+//! | `vhdl_runtime.rs` | The `$vhdl_` functions VHDL report messages are built with |
 //! | `vcd.rs`      | VCD waveform writer                                          |
 //! | `api.rs`      | The public co-simulation API                                 |
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
@@ -161,6 +162,7 @@ mod sched;
 mod sys;
 mod value;
 mod vcd;
+mod vhdl_runtime;
 
 pub use crate::ir::memfile::{FileProvider, MemoryFiles};
 pub use api::{BreakId, MemHandle, NetHandle};

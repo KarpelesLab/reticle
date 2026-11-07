@@ -108,6 +108,19 @@ impl Checker<'_> {
 
     /// Evaluates a static call to a bundled library function.
     pub(crate) fn builtin_call(&mut self, d: DeclId, args: &[Span], ret: TypeId) -> Option<Value> {
+        if let DeclKind::Subprogram {
+            sig,
+            body: super::SubprogramBody::Predefined,
+        } = &self.a.decl(d).kind
+        {
+            let t = sig.params.first()?.ty;
+            let values: Vec<Value> = args
+                .iter()
+                .map(|s| self.a.value_of(*s).cloned())
+                .collect::<Option<Vec<_>>>()?;
+            let name = self.a.decl(d).spelling.to_lowercase();
+            return self.fold_predefined(&name, &values, t);
+        }
         let pkg = self.bundled_package(d)?;
         let values: Vec<Value> = args
             .iter()
@@ -193,6 +206,28 @@ impl Checker<'_> {
         Some(Value::Real(r))
     }
 
+    /// The predefined `minimum`, `maximum` and `to_string` of a type,
+    /// whichever package declared it.
+    fn fold_predefined(&self, name: &str, v: &[Value], ty: TypeId) -> Option<Value> {
+        match name {
+            "minimum" | "maximum" => {
+                let (a, b) = (v.first()?, v.get(1)?);
+                let ord = a.compare(b)?;
+                let pick = if (name == "minimum") == ord.is_le() {
+                    a
+                } else {
+                    b
+                };
+                Some(pick.clone())
+            }
+            "to_string" => {
+                let text = super::attrs::to_string_text(self.a, ty, v.first()?)?;
+                Some(Value::string(text.chars().map(|c| c as u32)))
+            }
+            _ => None,
+        }
+    }
+
     fn fold_standard(
         &self,
         name: &str,
@@ -215,6 +250,22 @@ impl Checker<'_> {
                 let t = arg_tys.first().copied()?;
                 let text = self.a.describe_value(v.first()?, t);
                 let text = text.trim_matches('"').to_owned();
+                Some(Value::string(text.chars().map(|c| c as u32)))
+            }
+            "to_bstring" | "to_ostring" | "to_hstring" => {
+                let bits = v.first()?.to_bits()?;
+                let elems: Vec<Std9> = bits
+                    .iter()
+                    .map(|b| match b {
+                        Bit::One => Std9::One,
+                        _ => Std9::Zero,
+                    })
+                    .collect();
+                let text = match name {
+                    "to_hstring" => group_digits(&elems, 4),
+                    "to_ostring" => group_digits(&elems, 3),
+                    _ => elems.iter().map(|s| s.to_char()).collect(),
+                };
                 Some(Value::string(text.chars().map(|c| c as u32)))
             }
             _ => {
