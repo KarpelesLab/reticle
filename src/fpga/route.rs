@@ -5495,6 +5495,8 @@ mod tests {
             pin_delays: crate::fpga::place::PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let (_, graph) = line(1, 1);
         let terminals: Vec<Terminals> = (0..5)

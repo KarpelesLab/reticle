@@ -1247,6 +1247,8 @@ pub fn place_timing(
             // inputs (`docs/fpga-vivado-parity.md`, "Filling slices").
             local_wire: (model != DelayModel::Legacy).then_some(0.0),
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         },
         names,
     )
@@ -1356,6 +1358,128 @@ fn own_pin_delays(
     own
 }
 
+/// The grid columns of [`CLOCK_ARRIVAL_PS`]: every column of the
+/// `xc7a100t` with slices.
+const CLOCK_COLUMNS: [u32; 45] = [
+    10, 13, 14, 17, 23, 24, 30, 33, 35, 38, 39, 42, 43, 46, 51, 52, 55, 56, 59, 61, 64, 65, 68, 69,
+    72, 74, 80, 83, 84, 90, 93, 98, 100, 103, 104, 107, 112, 114, 117, 123, 124, 130, 133, 134,
+    137,
+];
+
+/// The `HCLK` rows of the `xc7a100t`, by grid row: each clock region row of
+/// [`CLOCK_ARRIVAL_PS`] is the tiles nearer one than any other.
+const CLOCK_ROWS: [u32; 4] = [26, 78, 130, 182];
+
+/// When a global clock reaches a slice's flip-flop, in picoseconds after it
+/// reaches the earliest, by clock region row (top of the die first) and
+/// column ([`CLOCK_COLUMNS`]), at the row's `HCLK` row: Vivado 2026.1's
+/// interconnect delay of the clock net to the clock pin (`get_net_delays
+/// -interconnect_only`, the slow corner's maximum), **measured**: 700
+/// flip-flops a run, 474 held to every even slice column on three rows of each
+/// region row and the rest where Vivado put them, from a global buffer at each
+/// of `BUFGCTRL_X0Y0`, `X0Y16` and `X0Y31`, which moved none of it by more than
+/// 3 ps; every one of the 2,100 is within 6 ps of the table
+/// (`testdata/fpga/vivado/clock/arrival.txt`, `clock_arrival.py table`). A
+/// region row whose column had no slice there takes its nearest column's
+/// figure. The outer rows are 120 to 150 ps later than the inner two, and the
+/// columns past the outermost block RAM columns 40 to 80 ps later than the
+/// rest.
+const CLOCK_ARRIVAL_PS: [[u8; 45]; 4] = [
+    [
+        232, 232, 230, 230, 170, 171, 170, 170, 170, 170, 169, 169, 169, 169, 167, 165, 165, 163,
+        163, 162, 162, 160, 160, 159, 159, 156, 151, 151, 154, 155, 155, 159, 159, 159, 160, 160,
+        198, 198, 198, 198, 198, 198, 198, 198, 198,
+    ],
+    [
+        80, 80, 79, 79, 19, 19, 19, 19, 19, 19, 19, 19, 16, 16, 16, 14, 14, 12, 12, 11, 11, 9, 9,
+        7, 7, 5, 0, 0, 3, 4, 4, 8, 8, 8, 9, 9, 70, 72, 72, 77, 79, 84, 84, 86, 86,
+    ],
+    [
+        103, 103, 102, 102, 42, 42, 42, 42, 42, 42, 42, 42, 39, 39, 39, 37, 37, 35, 35, 34, 34, 32,
+        32, 30, 30, 28, 23, 23, 26, 27, 27, 31, 31, 31, 32, 32, 93, 95, 95, 100, 102, 107, 107,
+        109, 109,
+    ],
+    [
+        223, 223, 221, 221, 161, 162, 161, 161, 161, 161, 160, 160, 160, 160, 158, 156, 156, 154,
+        154, 153, 153, 151, 151, 150, 150, 147, 142, 142, 145, 146, 146, 150, 150, 150, 151, 153,
+        189, 189, 189, 189, 190, 190, 190, 190, 190,
+    ],
+];
+
+/// How much later the clock reaches a row for each row it is from its
+/// region's `HCLK` row, in picoseconds: 19 ps at a region's edge, 23 rows
+/// out, against its middle, in every column measured.
+const CLOCK_PS_PER_ROW: f64 = 0.83;
+
+/// [`crate::fpga::place::PlaceTiming::clock`] for `graph`, a fabric of the
+/// part `part` whose tile types `arch` gives: per site of a slice, a block
+/// RAM or a `DSP48E1`, when the global clock reaches it
+/// (`CLOCK_ARRIVAL_PS`), and `NaN` for any other site. Empty for any part
+/// but the `xc7a100t`, the one measured, and for a fabric with an `HCLK` row
+/// that part does not have, or with none.
+#[must_use]
+pub fn clock_arrival(part: &str, arch: &crate::fpga::arch::Arch, graph: &RoutingGraph) -> Vec<f32> {
+    if !part.contains("7a100t") {
+        return Vec::new();
+    }
+    let (width, height) = (arch.width, arch.height);
+    let type_at = |x: u32, y: u32| {
+        arch.tiles
+            .get((y * width + x) as usize)
+            .copied()
+            .flatten()
+            .map(|t| arch.tile_types[t].name.as_str())
+    };
+    let mut rows: Vec<u32> = (0..height)
+        .filter(|y| (0..width).any(|x| matches!(type_at(x, *y), Some("HCLK_L" | "HCLK_R"))))
+        .collect();
+    rows.dedup();
+    // A fabric loaded over a region holds only the rows inside it, which
+    // have to be the part's.
+    if rows.is_empty() || rows.iter().any(|row| !CLOCK_ROWS.contains(row)) {
+        return Vec::new();
+    }
+    graph
+        .sites
+        .iter()
+        .map(|site| {
+            let (x, y) = site.tile;
+            let timed = type_at(x, y).is_some_and(|name| {
+                ["CLBLL_", "CLBLM_", "BRAM_", "DSP_"]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+            });
+            if !timed {
+                return f32::NAN;
+            }
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "a quarter of a nanosecond at most, which f32 holds"
+            )]
+            let ns = (clock_arrival_ps(x, y) / 1000.0) as f32;
+            ns
+        })
+        .collect()
+}
+
+/// When the global clock reaches a register in the `xc7a100t`'s tile `(x,
+/// y)` of the grid, in picoseconds after the earliest: `CLOCK_ARRIVAL_PS` of
+/// the clock region row the tile is in (the rows nearer one `HCLK` row of
+/// `CLOCK_ROWS` than any other) and its nearest column of `CLOCK_COLUMNS`,
+/// plus `CLOCK_PS_PER_ROW` for each row it is from its `HCLK` row. What
+/// [`clock_arrival`] gives every site of a fabric of that part.
+#[must_use]
+pub fn clock_arrival_ps(x: u32, y: u32) -> f64 {
+    let band = (0..CLOCK_ROWS.len())
+        .min_by_key(|b| (CLOCK_ROWS[*b].abs_diff(y), *b))
+        .unwrap_or(0);
+    let column = (0..CLOCK_COLUMNS.len())
+        .min_by_key(|c| (CLOCK_COLUMNS[*c].abs_diff(x), *c))
+        .unwrap_or(0);
+    f64::from(CLOCK_ARRIVAL_PS[band][column])
+        + CLOCK_PS_PER_ROW * f64::from(CLOCK_ROWS[band].abs_diff(y))
+}
+
 /// A flip-flop's data input's setup by how its data reaches it, in a `SLICEL`
 /// and a `SLICEM`: from a cell of its own slice, inside the site; through the
 /// lane's bypass pin `<L>X`; and through the lane's lookup table, a way
@@ -1462,6 +1586,94 @@ mod tests {
     use super::*;
     use crate::fpga::place::{Instance, NetPin, Signal};
     use crate::ir::{CellId, Const, Id};
+
+    /// **The clock reaches a site when the table says, for the part it was
+    /// measured on.** A fabric of the `xc7a100t`'s `HCLK` rows, a logic tile
+    /// everywhere else but one pad's: a slice in column 10 on the first
+    /// `HCLK` row takes the table's first figure, four rows below it that
+    /// plus four rows' growth, column 11 its nearest column's (10), the
+    /// third region row its own; the pad's site has none; a fabric loaded
+    /// over a region holding two of the four rows is timed by all four; and
+    /// another part, or one with an `HCLK` row elsewhere, gets no figures.
+    ///
+    /// Would catch the region row or the column looked up wrong, the growth
+    /// away from the `HCLK` row left out or signed wrong, a site of any tile
+    /// timed, and the table applied to a part it was not measured on. Would
+    /// not catch a figure itself being wrong, which only Vivado's timer says
+    /// (`docs/fpga-vivado-parity.md`, "Filling slices").
+    #[test]
+    fn the_clock_reaches_a_site_when_the_table_says() {
+        use crate::fpga::arch::{Arch, BelDecl, TileType, WireDecl, WireRef};
+        let build = |rows: &[u32]| {
+            let mut arch = Arch::new("t", "test", 14, 184);
+            for (name, bel) in [
+                ("CLBLL_L", Some("ff")),
+                ("HCLK_L", None),
+                ("LIOB33", Some("io")),
+            ] {
+                let mut tile = TileType::new(name, "tile", 2, 2);
+                tile.wires.push(WireDecl {
+                    name: "w".to_owned(),
+                    dx: 0,
+                    dy: 0,
+                });
+                if let Some(kind) = bel {
+                    let mut b = BelDecl::new(kind, kind);
+                    b.pins.push(("d".to_owned(), WireRef::local("w")));
+                    tile.bels.push(b);
+                }
+                arch.tile_types.push(tile);
+            }
+            for y in 0..184 {
+                for x in 0..14 {
+                    let kind = if rows.contains(&y) {
+                        1
+                    } else if (x, y) == (12, 40) {
+                        2
+                    } else {
+                        0
+                    };
+                    arch.set_tile(x, y, kind);
+                }
+            }
+            let graph = arch.build_graph();
+            (arch, graph)
+        };
+        let (arch, graph) = build(&CLOCK_ROWS);
+        let arrival = clock_arrival("7a100tftg256", &arch, &graph);
+        assert_eq!(arrival.len(), graph.sites.len());
+        let at = |x: u32, y: u32| {
+            let site = graph.sites.iter().position(|s| s.tile == (x, y)).unwrap();
+            arrival[site]
+        };
+        #[allow(clippy::cast_possible_truncation, reason = "as the table's own")]
+        let ns = |ps: f64| (ps / 1000.0) as f32;
+        assert_eq!(
+            at(10, 27),
+            ns(f64::from(CLOCK_ARRIVAL_PS[0][0]) + CLOCK_PS_PER_ROW)
+        );
+        assert_eq!(
+            at(10, 31),
+            ns(f64::from(CLOCK_ARRIVAL_PS[0][0]) + 5.0 * CLOCK_PS_PER_ROW)
+        );
+        assert_eq!(at(11, 27), at(10, 27), "column 11 is column 10's");
+        assert_eq!(
+            at(10, 131),
+            ns(f64::from(CLOCK_ARRIVAL_PS[2][0]) + CLOCK_PS_PER_ROW)
+        );
+        assert!(at(12, 40).is_nan(), "a pad's site has no figure");
+        assert!(clock_arrival("7a35tcpg236", &arch, &graph).is_empty());
+        let (arch, graph) = build(&[26, 78, 130, 183]);
+        assert!(clock_arrival("7a100tftg256", &arch, &graph).is_empty());
+        // A region holding two of the rows is timed by all four.
+        let (arch, graph) = build(&[78, 130]);
+        let arrival = clock_arrival("7a100tftg256", &arch, &graph);
+        let site = graph.sites.iter().position(|s| s.tile == (10, 27)).unwrap();
+        assert_eq!(
+            arrival[site],
+            ns(f64::from(CLOCK_ARRIVAL_PS[0][0]) + CLOCK_PS_PER_ROW)
+        );
+    }
 
     /// **A flip-flop's setup is the one for how its data reaches it, in its
     /// kind of slice.** Two tiles of a table and three flip-flops, a
@@ -1627,6 +1839,8 @@ mod tests {
             },
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let setups = |model: DelayModel, ways: &[NodeId]| {
             let mut timing = timing.clone();

@@ -3542,12 +3542,27 @@ pub fn place(
     }
     // The timing the rounds estimate with: the options', and which
     // connections the groups above make on the fabric's own wires.
-    let local_timing = options.timing.as_ref().map(|timing| PlaceTiming {
+    let mut local_timing = options.timing.as_ref().map(|timing| PlaceTiming {
         local: report.local.clone(),
         ..timing.clone()
     });
-    if let Some(timing) = &local_timing {
+    if let Some(timing) = local_timing.as_mut() {
         let order = timing_order(netlist, timing);
+        // The clock's arrival in tiles of wire, which is what the pull
+        // weighs a connection's distance in.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a few tiles, which f32 holds"
+        )]
+        let clock_tiles: Vec<f32> = if timing.wire.1 > 0.0 {
+            timing
+                .clock
+                .iter()
+                .map(|t| (f64::from(*t) / timing.wire.1) as f32)
+                .collect()
+        } else {
+            Vec::new()
+        };
         // Each round refines the last: a narrow window and a cool start,
         // so that the weights move the critical cells and the rest stays
         // where the wirelength placement put it.
@@ -3566,6 +3581,7 @@ pub fn place(
             }
         }
         for _ in 0..timing.rounds {
+            timing.skew_from(&placement);
             let (critical, round) = estimate_timing(netlist, graph, &placement, timing, &order);
             report.timing.push(TimingRound {
                 hpwl: hpwl(netlist, graph, &placement),
@@ -3574,6 +3590,7 @@ pub fn place(
             let weights = Weights {
                 nets: vec![16; netlist.signals.len()],
                 pins: connection_weights(&critical.pins, timing),
+                clock: clock_tiles.clone(),
             };
             if options.anneal {
                 let before = placement.clone();
@@ -3601,6 +3618,7 @@ pub fn place(
                 }
             }
         }
+        timing.skew_from(&placement);
         let (_, round) = estimate_timing(netlist, graph, &placement, timing, &order);
         report.timing.push(TimingRound {
             hpwl: hpwl(netlist, graph, &placement),
@@ -7719,6 +7737,10 @@ struct Pull {
     /// weight or no driver. Read off the netlist once, where each pricing
     /// used to walk from the pin to its signal to the driver's pin.
     ends: Vec<(u32, u32)>,
+    /// Per site, [`PlaceTiming::clock`] in tiles of wire, or empty for
+    /// none: a connection from a site the clock reaches later to one it
+    /// reaches earlier costs the difference on top of its distance.
+    clock: Vec<f32>,
 }
 
 /// A set of small integers that empties in constant time: each member is
@@ -7764,6 +7786,8 @@ impl Marks {
 struct Weights {
     nets: Vec<u32>,
     pins: Vec<u32>,
+    /// [`Pull::clock`].
+    clock: Vec<f32>,
 }
 
 impl Pull {
@@ -7813,6 +7837,7 @@ impl Pull {
             touched: Vec::new(),
             seen: Marks::default(),
             ends,
+            clock: Vec::new(),
         }
     }
 
@@ -7826,11 +7851,28 @@ impl Pull {
         let Some((driver, sink)) = self.ends.get(sink).filter(|(d, _)| *d != u32::MAX) else {
             return 0;
         };
-        let tile = |instance: u32| placement.site_of(instance as usize).map(|s| tiles[s]);
-        match (tile(*driver), tile(*sink)) {
-            (Some(a), Some(b)) => u64::from(weight) * manhattan(a, b),
-            _ => 0,
+        let (Some(from), Some(to)) = (
+            placement.site_of(*driver as usize),
+            placement.site_of(*sink as usize),
+        ) else {
+            return 0;
+        };
+        let distance = u64::from(weight) * manhattan(tiles[from], tiles[to]);
+        if self.clock.is_empty() {
+            return distance;
         }
+        let late = |site: usize| self.clock.get(site).copied().filter(|t| t.is_finite());
+        let skew = match (late(from), late(to)) {
+            (Some(a), Some(b)) if a > b => f64::from(weight) * f64::from(a - b),
+            _ => return distance,
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a non-negative cost of a few thousand tiles, rounded"
+        )]
+        let skew = skew.round() as u64;
+        distance + skew
     }
 
     /// Every weighted connection's cost, summed.
@@ -8209,6 +8251,7 @@ fn anneal(
     let mut churn = Churn::new(netlist, graph, placement);
     churn.spans.weigh(&weights.nets);
     churn.pull = Pull::new(netlist, &weights.pins);
+    churn.pull.clock.clone_from(&weights.clock);
     churn.clocks = ClockLoad::new(
         netlist,
         graph,
@@ -9062,6 +9105,19 @@ pub struct PlaceTiming {
     /// [`place`] from the groups it finds, and empty before; a pin past its
     /// end is not.
     pub local: Vec<bool>,
+    /// Per site, when the global clock reaches a register on it, in
+    /// nanoseconds after it reaches the earliest; `NaN` for a site the
+    /// figures do not cover, and empty for a fabric with none. A register's
+    /// clock arrives later in some clock regions than in others, and a path
+    /// from a late one to an early one has that much less of its period.
+    /// See [`PlaceTiming::skew`].
+    pub clock: Vec<f32>,
+    /// Per instance, its clock's arrival on the site it is placed on, from
+    /// [`PlaceTiming::clock`], for an instance in a clock's domain: a path
+    /// it starts launches that much later, and one it ends must settle that
+    /// much later too. Empty, or past its end, is none: before placement,
+    /// and with no figures.
+    pub skew: Vec<f64>,
 }
 
 /// What [`PlaceTiming::pin_delays`] holds: delays of single pins in place of
@@ -9110,6 +9166,7 @@ impl PlaceTiming {
             .copied()
             .flatten()
             .unwrap_or(self.launch[instance])
+            + self.skew.get(instance).copied().unwrap_or(0.0)
     }
 
     /// How long before the clock `pin`, an `End` input of `instance`, must
@@ -9122,6 +9179,29 @@ impl PlaceTiming {
             .copied()
             .flatten()
             .unwrap_or(self.capture[instance])
+            - self.skew.get(instance).copied().unwrap_or(0.0)
+    }
+
+    /// [`PlaceTiming::skew`] for `placement`: each instance in a clock's
+    /// domain takes [`PlaceTiming::clock`] of its site, every other none.
+    /// Left empty when there are no figures.
+    pub fn skew_from(&mut self, placement: &Placement) {
+        self.skew.clear();
+        if self.clock.is_empty() {
+            return;
+        }
+        self.skew = (0..self.domain.len())
+            .map(|instance| {
+                if !matches!(self.domain[instance], PathDomain::Clock(_)) {
+                    return 0.0;
+                }
+                placement
+                    .site_of(instance)
+                    .and_then(|site| self.clock.get(site).copied())
+                    .filter(|t| t.is_finite())
+                    .map_or(0.0, f64::from)
+            })
+            .collect();
     }
 
     /// The delay from `pin`, a `Through` input of `instance`, to its `j`th
@@ -10343,6 +10423,8 @@ mod tests {
             pin_delays: PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         (graph, netlist, placement, timing)
     }
@@ -10428,6 +10510,8 @@ mod tests {
             pin_delays: PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[end] = 5.6;
@@ -10553,6 +10637,8 @@ mod tests {
             pin_delays: PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let wire = vec![0.0; netlist.pins.len()];
         let (_, cut) = path_criticality(&netlist, &timing, &wire);
@@ -10862,6 +10948,8 @@ mod tests {
             pin_delays: PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -10978,6 +11066,8 @@ mod tests {
             pin_delays: PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -12065,6 +12155,73 @@ mod tests {
             let want = if pin == into_third { 0.0 } else { *was };
             assert!((now - want).abs() < 1e-9, "pin {pin}: {now} for {want}");
         }
+    }
+
+    /// **A register the clock reaches later launches later and must settle
+    /// later, and the anneal charges a critical connection from a later
+    /// site to an earlier one.** [`timed_chain`] with the clock 0.1 ns late
+    /// everywhere and 0.3 at its first cell's site: [`PlaceTiming::skew_from`]
+    /// gives the first cell and the last, in the clock's domain, 0.3 and 0.1,
+    /// and the cells between, in none, nothing; the path's end moves 0.2 ns
+    /// later; the clock 0.3 at the last cell instead moves it 0.2 earlier. [`Pull`] charges the connection
+    /// from the first cell to the second, of weight 10, its distance and, with
+    /// the clock 2.5 tiles of wire later at the first cell's site, those 2.5
+    /// tiles; with the clock later at the second cell's, its distance alone.
+    ///
+    /// Would catch the skew left out of the launch or the capture, applied
+    /// with its sign wrong, given to a cell in no clock's domain, or taken
+    /// from the wrong site; and the pull charging the difference both ways or
+    /// not at all. Would not catch the figures being wrong, which are
+    /// Vivado's (`xray::timing::CLOCK_ARRIVAL_PS`).
+    #[test]
+    fn a_later_clock_launches_later_and_the_pull_charges_its_fall() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        let order = timing_order(&netlist, &timing);
+        let end = |timing: &PlaceTiming| {
+            let wire = estimated_wire(&netlist, &graph, &placement, timing);
+            analyse_paths(&netlist, timing, &order, &wire).1.longest_ps[0]
+        };
+        let none = end(&timing);
+        let site = |instance: usize| placement.site_of(instance).unwrap();
+        // Every site 0.1 ns late, the first cell's 0.3.
+        timing.clock = vec![0.1; graph.sites.len()];
+        timing.clock[site(0)] = 0.3;
+        timing.skew_from(&placement);
+        let (late, base) = (f64::from(0.3f32), f64::from(0.1f32));
+        assert_eq!(timing.skew, vec![late, 0.0, 0.0, base]);
+        assert_eq!(end(&timing), none + 200);
+        timing.clock[site(0)] = 0.1;
+        timing.clock[site(3)] = 0.3;
+        timing.skew_from(&placement);
+        assert_eq!(timing.skew, vec![base, 0.0, 0.0, late]);
+        assert_eq!(end(&timing), none - 200);
+        timing.clock.clear();
+        timing.skew_from(&placement);
+        assert!(timing.skew.is_empty(), "no figures, no skew");
+
+        let tiles: Vec<(u32, u32)> = graph.sites.iter().map(|s| s.tile).collect();
+        let into = |instance: usize| {
+            *netlist.instances[instance]
+                .pins
+                .iter()
+                .find(|p| !netlist.pins[**p].output)
+                .unwrap()
+        };
+        let mut weight = vec![0u32; netlist.pins.len()];
+        weight[into(1)] = 10;
+        let mut pull = Pull::new(&netlist, &weight);
+        // The first cell at column 0, the second at 3.
+        assert_eq!(pull.cost_of(&tiles, &placement, into(1)), 30);
+        pull.clock = vec![0.0; graph.sites.len()];
+        pull.clock[site(0)] = 2.5;
+        assert_eq!(pull.cost_of(&tiles, &placement, into(1)), 30 + 25);
+        pull.clock[site(0)] = 0.0;
+        pull.clock[site(1)] = 2.5;
+        assert_eq!(
+            pull.cost_of(&tiles, &placement, into(1)),
+            30,
+            "rising is free"
+        );
     }
 
     /// **A median move brings back a cell an anneal left far from what it
@@ -14602,6 +14759,8 @@ mod tests {
             pin_delays: PinDelays::default(),
             local_wire: None,
             local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {

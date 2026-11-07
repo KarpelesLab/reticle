@@ -4311,8 +4311,14 @@ fn write_xc7_bitstream(
     // builds pass `--delay-model legacy`, and are placed as they were.
     options.median_moves = delay_model == reticle::fpga::xray::DelayModel::Vivado;
     let domains = if args.flag("timing-driven") {
-        let (timing, names) =
+        let (mut timing, names) =
             reticle::fpga::xray::place_timing(design, top, &netlist, constraints, delay_model);
+        // When the clock reaches each site, with the fitted model: see
+        // `PlaceTiming::clock`.
+        if delay_model == reticle::fpga::xray::DelayModel::Vivado {
+            timing.clock =
+                reticle::fpga::xray::clock_arrival(&fabric.part.name, &fabric.arch, &graph);
+        }
         options.timing = Some(timing);
         names
     } else {
@@ -4416,6 +4422,8 @@ fn write_xc7_bitstream(
             // the router's first pass estimates as the placement did
             // (`PlaceTiming::local`).
             timing.local.clone_from(&placement_report.local);
+            // And when the clock reaches each register (`PlaceTiming::skew`).
+            timing.skew_from(&placement);
             reticle::fpga::xray::place_timing_on_sites(
                 timing,
                 delay_model,

@@ -132,6 +132,10 @@ models or IP.
   `slices.py table` sets two such runs side by side (slices, flip-flops a slice,
   registers fed inside their slice) and `slices.py connections` counts each kind of
   connection inside a slice, inside a tile and how far.
+- `clock_arrival.tcl` asks when a global clock reaches every slice column of the
+  `xc7a100t` on three rows of each clock region row, from the global buffer named;
+  `clock_arrival.py fixture` writes `testdata/fpga/vivado/clock/arrival.txt` from such
+  runs and `clock_arrival.py table` the table `xray::timing` keeps.
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's
