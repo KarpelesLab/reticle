@@ -180,6 +180,7 @@ impl<'a> Lowerer<'a, '_> {
                     }
                 }
                 DeclKind::EnumLiteral { pos, .. } => return Some(Value::Enum(pos)),
+                DeclKind::PhysicalUnit { scale, .. } => return Some(Value::Int(scale)),
                 _ => {}
             }
         }

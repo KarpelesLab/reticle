@@ -634,6 +634,16 @@ function called with run-time values are the simulator's `$vhdl_math`.
 a real is computed in real and rounded. Synthesis refuses a `real` object
 (`S0010`), as it did a Verilog one.
 
+**The rest of `std.standard`** (`to_string_tb.vhd`). `to_string(t, unit)`,
+`to_string(r, digits)` and `to_string(r, format)` are declared and lowered;
+`minimum` and `maximum` are declared with every one-dimensional array of a
+discrete type too. Where xsim and the standard part, xsim's form is kept and
+was measured: LRM 5.7 *reads* as writing `to_string(1500 ps, ns)` as `1.5
+ns`, and xsim writes `1 ns`; a unit finer than its picosecond resolution is
+written in picoseconds. `time'pos(1 ns)` is 1000 under xsim, a count of its
+picoseconds, and 1000000 here, a count of femtoseconds, this simulator's
+resolution limit; that difference is kept.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

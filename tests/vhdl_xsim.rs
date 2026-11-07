@@ -151,3 +151,20 @@ fn values_match_xsim() {
 fn reals_match_xsim() {
     matches_xsim("reals");
 }
+
+/// **`to_string` with a second argument, and the rest of `std.standard`'s
+/// predefined operations**: a time in a unit, a real with a number of
+/// digits or a C format; `minimum` and `maximum` of a vector; a unit name
+/// alone as a value (`ps`, "has no value at elaboration"); and a loop over
+/// an enumeration range written with attributes, whose parameter printed
+/// as a number.
+///
+/// Would catch a time in a unit written as a real (`1.5 ns`, which LRM 5.7
+/// reads it as and xsim does not), a unit finer than a picosecond kept
+/// (xsim writes `0 ps` for `to_string(now, fs)`), and `maximum` of vectors
+/// ordered as signed numbers. Would not catch a format with a width
+/// (`"%8.3f"`), which is not here.
+#[test]
+fn to_string_overloads_match_xsim() {
+    matches_xsim("to_string");
+}

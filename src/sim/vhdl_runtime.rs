@@ -261,6 +261,19 @@ pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
         "$vhdl_to_hstring" => digits(&logic_of(args.first()?), 4, signed_arg(args)),
         "$vhdl_to_ostring" => digits(&logic_of(args.first()?), 3, signed_arg(args)),
         "$vhdl_concat" => args.iter().map(text_of).collect(),
+        "$vhdl_time_in" => time_in(args.first()?, args.get(1)?),
+        "$vhdl_real_digits" => {
+            let r = args.first().map_or(f64::NAN, real_of);
+            match logic_of(args.get(1)?).to_u64() {
+                // No digits is the real's image (LRM 5.7).
+                Some(0) | None => crate::logic::vhdl_real_image(r),
+                Some(d) => format!("{r:.*}", usize::try_from(d).unwrap_or(0)),
+            }
+        }
+        "$vhdl_real_format" => real_format(
+            args.first().map_or(f64::NAN, real_of),
+            &text_of(args.get(1)?),
+        ),
         "$vhdl_streq" => {
             let equal = match (args.first(), args.get(1)) {
                 (Some(a), Some(b)) => text_of(a) == text_of(b),
@@ -408,6 +421,72 @@ fn time_image(v: &Value) -> String {
     } else {
         format!("{fs} fs")
     }
+}
+
+/// `to_string(t, unit)`: the time in the unit, followed by the unit's name.
+///
+/// LRM 5.7 has a time that is not a whole number of units written as a
+/// real (`1.5 ns`); xsim writes the whole number of units it holds,
+/// truncated (`1 ns`), and a unit finer than its picosecond resolution as
+/// picoseconds. Both were measured, and both are xsim's here.
+fn time_in(t: &Value, unit: &Value) -> String {
+    let (Some(t), Some(u)) = (
+        logic_of(t).as_signed().to_i64(),
+        logic_of(unit).as_signed().to_i64(),
+    ) else {
+        return "X".to_owned();
+    };
+    let names = [
+        (1, "fs"),
+        (1_000, "ps"),
+        (1_000_000, "ns"),
+        (1_000_000_000, "us"),
+        (1_000_000_000_000, "ms"),
+        (1_000_000_000_000_000, "sec"),
+        (60_000_000_000_000_000, "min"),
+        (3_600_000_000_000_000_000, "hr"),
+    ];
+    let u = u.max(1_000);
+    let Some(&(_, name)) = names.iter().find(|(fs, _)| *fs == u) else {
+        return format!("{} ps", t / 1_000);
+    };
+    format!("{} {name}", t / u)
+}
+
+/// `to_string(r, format)`: one C conversion, `%f`, `%e` or `%g`, with an
+/// optional precision (`"%.3f"`); text around it is kept.
+fn real_format(r: f64, fmt: &str) -> String {
+    let Some(pos) = fmt.find('%') else {
+        return fmt.to_owned();
+    };
+    let (head, rest) = fmt.split_at(pos);
+    let spec: String = rest[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let tail = &rest[1 + spec.len()..];
+    let Some(conv) = tail.chars().next() else {
+        return fmt.to_owned();
+    };
+    let precision = spec
+        .split_once('.')
+        .map_or(6, |(_, p)| p.parse::<usize>().unwrap_or(6));
+    let body = match conv {
+        'f' | 'F' => format!("{r:.precision$}"),
+        'e' | 'E' => {
+            let t = format!("{r:.precision$e}");
+            match t.split_once('e') {
+                Some((m, e)) => {
+                    let e: i32 = e.parse().unwrap_or(0);
+                    let sign = if e < 0 { '-' } else { '+' };
+                    format!("{m}e{sign}{:02}", e.unsigned_abs())
+                }
+                None => t,
+            }
+        }
+        _ => format!("{r}"),
+    };
+    format!("{head}{body}{}", &tail[conv.len_utf8()..])
 }
 
 /// The literal at the position the first argument holds, from the list of

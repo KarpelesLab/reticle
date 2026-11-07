@@ -1871,6 +1871,8 @@ fn is_predicate(sym: &str) -> bool {
 fn constant_value(a: &crate::vhdl::sema::Analysis, d: DeclId) -> Option<Value> {
     match a.decl(d).kind {
         DeclKind::EnumLiteral { pos, .. } => Some(Value::Enum(pos)),
+        // A unit name alone is one of that unit, `ps` in `to_string(t, ps)`.
+        DeclKind::PhysicalUnit { scale, .. } => Some(Value::Int(scale)),
         DeclKind::Object {
             class: crate::vhdl::sema::ObjectClass::Constant,
             ..

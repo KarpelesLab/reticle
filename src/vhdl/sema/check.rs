@@ -1927,7 +1927,15 @@ impl<'a> Checker<'a> {
                         }
                     )
             });
-        if !scalar && !char_array {
+        // A one-dimensional array of a discrete type has `minimum` and
+        // `maximum` too, ordered as its `<` is (clause 5.3.2.4).
+        let discrete_array = class == super::TypeClass::Array
+            && self.a.dimensions(ty) == 1
+            && self
+                .a
+                .element_type(ty)
+                .is_some_and(|e| self.a.is_discrete(e));
+        if !scalar && !char_array && !discrete_array {
             return;
         }
         let region = self.region;
@@ -1974,11 +1982,13 @@ impl<'a> Checker<'a> {
                 span,
             );
         };
-        if scalar {
+        if scalar || discrete_array {
             mk(self, "minimum", &["l", "r"], ty);
             mk(self, "maximum", &["l", "r"], ty);
         }
-        mk(self, "to_string", &["value"], b.string);
+        if scalar || char_array {
+            mk(self, "to_string", &["value"], b.string);
+        }
     }
 
     /// `range l to r`: an integer type when the bounds are integer, a
@@ -2614,8 +2624,12 @@ impl<'a> Checker<'a> {
                 if let Some(v) = &value {
                     self.a.set_attribute_value(d, asym, v.clone());
                 }
+                // `attribute foreign of to_string` names every visible
+                // `to_string`, the predefined ones of the package's types
+                // too; those stay predefined.
                 if asym == self.syms.foreign
                     && let DeclKind::Subprogram { body, .. } = &mut self.a.decl_mut(d).kind
+                    && *body != SubprogramBody::Predefined
                 {
                     let text = value
                         .as_ref()

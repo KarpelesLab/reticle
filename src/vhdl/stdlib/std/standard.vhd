@@ -103,6 +103,13 @@ package standard is
   attribute foreign of to_ostring : function is "reticle: builtin";
   attribute foreign of to_hstring : function is "reticle: builtin";
 
+  -- The TO_STRING overloads with a second argument (clause 5.7): a time in
+  -- a given unit, and a real with a number of digits or a format.
+  function to_string (value : time; unit : time) return string;
+  function to_string (value : real; digits : natural) return string;
+  function to_string (value : real; format : string) return string;
+  attribute foreign of to_string : function is "reticle: builtin";
+
   type file_open_kind is (read_mode, write_mode, append_mode);
 
   type file_open_status is (open_ok, status_error, name_error, mode_error);

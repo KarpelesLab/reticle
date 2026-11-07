@@ -720,8 +720,36 @@ impl<'a> Lowerer<'a, '_> {
             "to_bstring" | "to_ostring" | "to_hstring" => {
                 Some(first.and_then(|arg| self.vector_text(&name, arg, false, span, sink)))
             }
+            "to_string" if args.len() == 2 => Some(self.two_argument_to_string(args, span, sink)),
             _ => None,
         }
+    }
+
+    /// `to_string(t, unit)`, `to_string(r, digits)` and `to_string(r,
+    /// format)` of `std.standard`.
+    fn two_argument_to_string(
+        &mut self,
+        args: &[Actual<'a>],
+        span: Span,
+        sink: &mut Sink<'_>,
+    ) -> Option<(ExprId, Layout)> {
+        let value = args.first().and_then(|a| a.expr())?;
+        let second = args.get(1).and_then(|a| a.expr())?;
+        let (v, vl) = self.build(value, None, sink)?;
+        let (s, _) = self.build(second, None, sink)?;
+        let func = match vl.kind {
+            LayoutKind::Physical => "$vhdl_time_in",
+            LayoutKind::Real => match self.a().type_of(second.span()) {
+                Some(t) if self.a().is_string_type(t) => "$vhdl_real_format",
+                _ => "$vhdl_real_digits",
+            },
+            _ => {
+                self.unsupported(span, "this `to_string` overload");
+                return None;
+            }
+        };
+        let id = self.string_call(func, vec![v, s], span);
+        Some((id, self.string_layout()))
     }
 
     /// The predefined `to_string(x)` of a scalar or of an array of a
