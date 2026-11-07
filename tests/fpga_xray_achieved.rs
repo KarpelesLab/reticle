@@ -46,7 +46,7 @@ fn achieved() -> Option<Table> {
                     .or_default()
                     .push(ns.parse().expect("a figure"));
             }
-            ["netlist", ..] => {}
+            ["netlist", ..] | ["slices", ..] => {}
             other => panic!("a line of achieved.txt this does not know: {other:?}"),
         }
     }
@@ -253,5 +253,87 @@ fn the_ways_through_a_table_cost_the_corpus_no_clock() {
     assert!(
         after <= before,
         "geometric mean against Vivado's own flow: {after:.3} through tables, {before:.3} before"
+    );
+}
+
+/// Per build, its slices by seed, summed over the corpus's designs.
+fn slices() -> Option<BTreeMap<String, BTreeMap<u32, u32>>> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/qor/achieved.txt");
+    let text = std::fs::read_to_string(&path).ok()?;
+    let mut out: BTreeMap<String, BTreeMap<u32, u32>> = BTreeMap::new();
+    let mut designs: BTreeMap<(String, u32), u32> = BTreeMap::new();
+    for line in text.lines() {
+        if let ["slices", build, seed, _design, n] =
+            line.split_whitespace().collect::<Vec<_>>().as_slice()
+        {
+            let seed: u32 = seed.parse().expect("a seed");
+            *out.entry((*build).to_owned())
+                .or_default()
+                .entry(seed)
+                .or_default() += n.parse::<u32>().expect("a count");
+            *designs.entry(((*build).to_owned(), seed)).or_default() += 1;
+        }
+    }
+    for ((build, seed), n) in &designs {
+        assert_eq!(*n, 17, "`{build}` seed {seed}: {n} designs' slices");
+    }
+    Some(out)
+}
+
+/// **Filling slices costs the corpus no clock and a tenth of its slices.**
+/// docs/fpga-vivado-parity.md, "Filling slices": `tree` is the tree before it,
+/// `fill` it with the section's four changes and `fillall` those with
+/// `--route-throughs all`, the default now, ten seeds each. The geometric mean of
+/// each clock's median against Vivado's own flow was 1.247, 1.239 and 1.231; this
+/// holds the default's and the four changes' no higher than the tree's, and no
+/// clock's median more than 6 % over its own before (the worst, `lutram32` and
+/// `esad`'s `clk_usb` by default, 3.8 %); and the slices, summed over the corpus
+/// and the median over the seeds, 1,822 before and 1,629 and 1,600 after, at least
+/// a tenth fewer. Would catch a regeneration that lost the change or mixed the
+/// builds, and a seed or a design lost from the slices; would not catch the flow
+/// losing it since, which needs Vivado.
+#[test]
+fn filling_slices_costs_the_corpus_no_clock_and_a_tenth_of_its_slices() {
+    let Some(table) = achieved() else { return };
+    let mut logs = [0.0f64; 3];
+    for ((design, clock), (vivado, builds)) in &table {
+        let runs: Vec<&Vec<f64>> = ["tree", "fill", "fillall"]
+            .iter()
+            .map(|b| &builds[*b])
+            .collect();
+        for (run, name) in runs.iter().zip(["tree", "fill", "fillall"]) {
+            assert_eq!(run.len(), 10, "{design} {clock}: seeds of `{name}`");
+        }
+        let medians: Vec<f64> = runs.iter().map(|r| median(r)).collect();
+        for (after, name) in medians[1..].iter().zip(["fill", "fillall"]) {
+            assert!(
+                *after <= medians[0] * 1.06,
+                "{design} {clock}: {after:.3} ns `{name}` against {:.3}",
+                medians[0]
+            );
+        }
+        for (log, m) in logs.iter_mut().zip(&medians) {
+            *log += (m / vivado).ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [tree, fill, fillall] = logs.map(|l| (l / n).exp());
+    assert!(
+        fill <= tree && fillall <= tree,
+        "geometric mean against Vivado's own flow: {fill:.3} and {fillall:.3} against {tree:.3}"
+    );
+    let Some(slices) = slices() else { return };
+    let total = |build: &str| {
+        let mut v: Vec<f64> = slices[build].values().map(|n| f64::from(*n)).collect();
+        assert_eq!(v.len(), 10, "ten seeds of `{build}`'s slices");
+        v.sort_by(f64::total_cmp);
+        median(&v)
+    };
+    let (before, fill, fillall) = (total("tree"), total("fill"), total("fillall"));
+    assert!(
+        fill <= before * 0.9 && fillall <= before * 0.9,
+        "slices: {fill} and {fillall} against {before}"
     );
 }

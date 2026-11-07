@@ -132,6 +132,12 @@ models or IP.
   `slices.py table` sets two such runs side by side (slices, flip-flops a slice,
   registers fed inside their slice) and `slices.py connections` counts each kind of
   connection inside a slice, inside a tile and how far.
+- `fill.tcl` loads one Reticle build into Vivado: its placement and routes (`placed`),
+  its netlist placed and routed by Vivado (`netlist`), or its placement routed by
+  Vivado or with its own routes (`connections`, `connections_routes`); `fill.py
+  paths` reads the worst paths' hops, `fill.py setups` every flip-flop's setup by how
+  its data arrives, and `fill.py distance` how each measure of a connection's length
+  predicts its delay.
 - `clock_arrival.tcl` asks when a global clock reaches every slice column of the
   `xc7a100t` on three rows of each clock region row, from the global buffer named;
   `clock_arrival.py fixture` writes `testdata/fpga/vivado/clock/arrival.txt` from such

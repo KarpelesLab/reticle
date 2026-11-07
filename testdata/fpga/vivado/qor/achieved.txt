@@ -21,7 +21,14 @@
 #                                   `bypass` is `packing` again at seeds 6 to 10,
 #                                   and `throughs` the same tree with "Eight
 #                                   flip-flops a slice" (2026-11-07) at seeds 1 to
-#                                   10, the default now, both on 73334987
+#                                   10, both on 73334987; `tree` is 38f812a0 at
+#                                   seeds 1 to 10, `fill` it with the four changes
+#                                   of "Filling slices" (2026-11-07) and `fillall`
+#                                   those with `--route-throughs all`, the default
+#                                   now, each at seeds 1 to 10
+#   slices <build> <seed> <design> <n>
+#                                   the slices that build's placement uses, every
+#                                   site of its --vivado-placement export
 vivado adders clk 2.042
 netlist adders clk 4.924
 reticle before 1 adders clk 7.233
@@ -904,3 +911,1143 @@ reticle throughs 7 widemux clk 3.520
 reticle throughs 8 widemux clk 3.870
 reticle throughs 9 widemux clk 3.662
 reticle throughs 10 widemux clk 3.739
+reticle tree 1 adders clk 2.353
+reticle tree 2 adders clk 2.339
+reticle tree 3 adders clk 2.325
+reticle tree 4 adders clk 2.513
+reticle tree 5 adders clk 2.313
+reticle tree 6 adders clk 2.513
+reticle tree 7 adders clk 2.477
+reticle tree 8 adders clk 2.536
+reticle tree 9 adders clk 2.456
+reticle tree 10 adders clk 2.390
+reticle fill 1 adders clk 2.447
+reticle fill 2 adders clk 2.452
+reticle fill 3 adders clk 2.357
+reticle fill 4 adders clk 2.415
+reticle fill 5 adders clk 2.309
+reticle fill 6 adders clk 2.348
+reticle fill 7 adders clk 2.241
+reticle fill 8 adders clk 2.392
+reticle fill 9 adders clk 2.449
+reticle fill 10 adders clk 2.337
+reticle fillall 1 adders clk 2.368
+reticle fillall 2 adders clk 2.382
+reticle fillall 3 adders clk 2.408
+reticle fillall 4 adders clk 2.336
+reticle fillall 5 adders clk 2.368
+reticle fillall 6 adders clk 2.420
+reticle fillall 7 adders clk 2.508
+reticle fillall 8 adders clk 2.398
+reticle fillall 9 adders clk 2.336
+reticle fillall 10 adders clk 2.431
+reticle tree 1 analyser_fifo rd_clk 5.168
+reticle tree 2 analyser_fifo rd_clk 5.413
+reticle tree 3 analyser_fifo rd_clk 5.360
+reticle tree 4 analyser_fifo rd_clk 5.128
+reticle tree 5 analyser_fifo rd_clk 5.447
+reticle tree 6 analyser_fifo rd_clk 5.173
+reticle tree 7 analyser_fifo rd_clk 5.236
+reticle tree 8 analyser_fifo rd_clk 5.070
+reticle tree 9 analyser_fifo rd_clk 5.365
+reticle tree 10 analyser_fifo rd_clk 5.088
+reticle fill 1 analyser_fifo rd_clk 5.469
+reticle fill 2 analyser_fifo rd_clk 5.266
+reticle fill 3 analyser_fifo rd_clk 5.514
+reticle fill 4 analyser_fifo rd_clk 5.048
+reticle fill 5 analyser_fifo rd_clk 5.320
+reticle fill 6 analyser_fifo rd_clk 5.413
+reticle fill 7 analyser_fifo rd_clk 5.416
+reticle fill 8 analyser_fifo rd_clk 4.986
+reticle fill 9 analyser_fifo rd_clk 5.156
+reticle fill 10 analyser_fifo rd_clk 5.136
+reticle fillall 1 analyser_fifo rd_clk 5.214
+reticle fillall 2 analyser_fifo rd_clk 5.684
+reticle fillall 3 analyser_fifo rd_clk 5.439
+reticle fillall 4 analyser_fifo rd_clk 5.171
+reticle fillall 5 analyser_fifo rd_clk 5.573
+reticle fillall 6 analyser_fifo rd_clk 5.408
+reticle fillall 7 analyser_fifo rd_clk 5.222
+reticle fillall 8 analyser_fifo rd_clk 5.058
+reticle fillall 9 analyser_fifo rd_clk 5.455
+reticle fillall 10 analyser_fifo rd_clk 5.342
+reticle tree 1 analyser_fifo wr_clk 3.163
+reticle tree 2 analyser_fifo wr_clk 3.222
+reticle tree 3 analyser_fifo wr_clk 2.936
+reticle tree 4 analyser_fifo wr_clk 3.090
+reticle tree 5 analyser_fifo wr_clk 3.071
+reticle tree 6 analyser_fifo wr_clk 2.986
+reticle tree 7 analyser_fifo wr_clk 2.887
+reticle tree 8 analyser_fifo wr_clk 2.992
+reticle tree 9 analyser_fifo wr_clk 2.998
+reticle tree 10 analyser_fifo wr_clk 2.960
+reticle fill 1 analyser_fifo wr_clk 3.058
+reticle fill 2 analyser_fifo wr_clk 3.205
+reticle fill 3 analyser_fifo wr_clk 2.990
+reticle fill 4 analyser_fifo wr_clk 3.211
+reticle fill 5 analyser_fifo wr_clk 3.133
+reticle fill 6 analyser_fifo wr_clk 3.232
+reticle fill 7 analyser_fifo wr_clk 3.071
+reticle fill 8 analyser_fifo wr_clk 3.204
+reticle fill 9 analyser_fifo wr_clk 3.064
+reticle fill 10 analyser_fifo wr_clk 3.020
+reticle fillall 1 analyser_fifo wr_clk 3.264
+reticle fillall 2 analyser_fifo wr_clk 2.909
+reticle fillall 3 analyser_fifo wr_clk 2.926
+reticle fillall 4 analyser_fifo wr_clk 3.030
+reticle fillall 5 analyser_fifo wr_clk 3.055
+reticle fillall 6 analyser_fifo wr_clk 2.960
+reticle fillall 7 analyser_fifo wr_clk 3.009
+reticle fillall 8 analyser_fifo wr_clk 3.054
+reticle fillall 9 analyser_fifo wr_clk 2.956
+reticle fillall 10 analyser_fifo wr_clk 2.882
+reticle tree 1 barrel clk 3.012
+reticle tree 2 barrel clk 3.132
+reticle tree 3 barrel clk 2.866
+reticle tree 4 barrel clk 2.953
+reticle tree 5 barrel clk 2.939
+reticle tree 6 barrel clk 2.983
+reticle tree 7 barrel clk 2.929
+reticle tree 8 barrel clk 2.931
+reticle tree 9 barrel clk 2.974
+reticle tree 10 barrel clk 2.789
+reticle fill 1 barrel clk 2.954
+reticle fill 2 barrel clk 2.904
+reticle fill 3 barrel clk 2.783
+reticle fill 4 barrel clk 2.877
+reticle fill 5 barrel clk 2.634
+reticle fill 6 barrel clk 2.969
+reticle fill 7 barrel clk 3.173
+reticle fill 8 barrel clk 3.057
+reticle fill 9 barrel clk 2.766
+reticle fill 10 barrel clk 3.012
+reticle fillall 1 barrel clk 2.931
+reticle fillall 2 barrel clk 2.813
+reticle fillall 3 barrel clk 2.815
+reticle fillall 4 barrel clk 2.808
+reticle fillall 5 barrel clk 3.019
+reticle fillall 6 barrel clk 2.717
+reticle fillall 7 barrel clk 2.953
+reticle fillall 8 barrel clk 2.979
+reticle fillall 9 barrel clk 3.011
+reticle fillall 10 barrel clk 2.997
+reticle tree 1 bram_fifo clk 4.042
+reticle tree 2 bram_fifo clk 3.910
+reticle tree 3 bram_fifo clk 4.129
+reticle tree 4 bram_fifo clk 4.117
+reticle tree 5 bram_fifo clk 3.829
+reticle tree 6 bram_fifo clk 4.167
+reticle tree 7 bram_fifo clk 3.841
+reticle tree 8 bram_fifo clk 4.066
+reticle tree 9 bram_fifo clk 4.166
+reticle tree 10 bram_fifo clk 3.875
+reticle fill 1 bram_fifo clk 4.306
+reticle fill 2 bram_fifo clk 4.157
+reticle fill 3 bram_fifo clk 4.101
+reticle fill 4 bram_fifo clk 3.999
+reticle fill 5 bram_fifo clk 4.250
+reticle fill 6 bram_fifo clk 3.948
+reticle fill 7 bram_fifo clk 3.995
+reticle fill 8 bram_fifo clk 4.186
+reticle fill 9 bram_fifo clk 4.020
+reticle fill 10 bram_fifo clk 3.902
+reticle fillall 1 bram_fifo clk 4.328
+reticle fillall 2 bram_fifo clk 4.047
+reticle fillall 3 bram_fifo clk 3.967
+reticle fillall 4 bram_fifo clk 4.181
+reticle fillall 5 bram_fifo clk 4.003
+reticle fillall 6 bram_fifo clk 3.981
+reticle fillall 7 bram_fifo clk 4.045
+reticle fillall 8 bram_fifo clk 4.067
+reticle fillall 9 bram_fifo clk 3.976
+reticle fillall 10 bram_fifo clk 4.099
+reticle tree 1 carry_counter clk 2.442
+reticle tree 2 carry_counter clk 2.459
+reticle tree 3 carry_counter clk 2.403
+reticle tree 4 carry_counter clk 2.353
+reticle tree 5 carry_counter clk 2.261
+reticle tree 6 carry_counter clk 2.257
+reticle tree 7 carry_counter clk 2.688
+reticle tree 8 carry_counter clk 2.542
+reticle tree 9 carry_counter clk 2.412
+reticle tree 10 carry_counter clk 2.491
+reticle fill 1 carry_counter clk 2.406
+reticle fill 2 carry_counter clk 2.344
+reticle fill 3 carry_counter clk 2.340
+reticle fill 4 carry_counter clk 2.467
+reticle fill 5 carry_counter clk 2.349
+reticle fill 6 carry_counter clk 2.404
+reticle fill 7 carry_counter clk 2.307
+reticle fill 8 carry_counter clk 2.358
+reticle fill 9 carry_counter clk 2.356
+reticle fill 10 carry_counter clk 2.457
+reticle fillall 1 carry_counter clk 2.570
+reticle fillall 2 carry_counter clk 2.271
+reticle fillall 3 carry_counter clk 2.351
+reticle fillall 4 carry_counter clk 2.422
+reticle fillall 5 carry_counter clk 2.352
+reticle fillall 6 carry_counter clk 2.577
+reticle fillall 7 carry_counter clk 2.548
+reticle fillall 8 carry_counter clk 2.498
+reticle fillall 9 carry_counter clk 2.366
+reticle fillall 10 carry_counter clk 2.386
+reticle tree 1 counter64 clk 4.543
+reticle tree 2 counter64 clk 4.027
+reticle tree 3 counter64 clk 3.802
+reticle tree 4 counter64 clk 3.884
+reticle tree 5 counter64 clk 3.939
+reticle tree 6 counter64 clk 3.848
+reticle tree 7 counter64 clk 3.664
+reticle tree 8 counter64 clk 3.977
+reticle tree 9 counter64 clk 3.841
+reticle tree 10 counter64 clk 3.847
+reticle fill 1 counter64 clk 4.038
+reticle fill 2 counter64 clk 3.768
+reticle fill 3 counter64 clk 3.952
+reticle fill 4 counter64 clk 3.964
+reticle fill 5 counter64 clk 3.783
+reticle fill 6 counter64 clk 3.831
+reticle fill 7 counter64 clk 4.029
+reticle fill 8 counter64 clk 4.131
+reticle fill 9 counter64 clk 4.174
+reticle fill 10 counter64 clk 3.852
+reticle fillall 1 counter64 clk 3.856
+reticle fillall 2 counter64 clk 3.732
+reticle fillall 3 counter64 clk 3.760
+reticle fillall 4 counter64 clk 3.936
+reticle fillall 5 counter64 clk 3.796
+reticle fillall 6 counter64 clk 3.882
+reticle fillall 7 counter64 clk 3.921
+reticle fillall 8 counter64 clk 3.763
+reticle fillall 9 counter64 clk 3.889
+reticle fillall 10 counter64 clk 4.001
+reticle tree 1 crc32 clk 2.727
+reticle tree 2 crc32 clk 2.633
+reticle tree 3 crc32 clk 2.542
+reticle tree 4 crc32 clk 2.741
+reticle tree 5 crc32 clk 2.733
+reticle tree 6 crc32 clk 2.551
+reticle tree 7 crc32 clk 2.737
+reticle tree 8 crc32 clk 2.709
+reticle tree 9 crc32 clk 2.585
+reticle tree 10 crc32 clk 2.725
+reticle fill 1 crc32 clk 2.392
+reticle fill 2 crc32 clk 2.561
+reticle fill 3 crc32 clk 2.397
+reticle fill 4 crc32 clk 2.616
+reticle fill 5 crc32 clk 2.638
+reticle fill 6 crc32 clk 2.500
+reticle fill 7 crc32 clk 2.470
+reticle fill 8 crc32 clk 2.702
+reticle fill 9 crc32 clk 2.708
+reticle fill 10 crc32 clk 2.652
+reticle fillall 1 crc32 clk 2.574
+reticle fillall 2 crc32 clk 2.436
+reticle fillall 3 crc32 clk 2.554
+reticle fillall 4 crc32 clk 2.559
+reticle fillall 5 crc32 clk 2.472
+reticle fillall 6 crc32 clk 2.452
+reticle fillall 7 crc32 clk 2.610
+reticle fillall 8 crc32 clk 2.659
+reticle fillall 9 crc32 clk 2.568
+reticle fillall 10 crc32 clk 2.463
+reticle tree 1 esad adc_sampleclk 2.929
+reticle tree 2 esad adc_sampleclk 2.864
+reticle tree 3 esad adc_sampleclk 3.439
+reticle tree 4 esad adc_sampleclk 3.169
+reticle tree 5 esad adc_sampleclk 2.833
+reticle tree 6 esad adc_sampleclk 2.869
+reticle tree 7 esad adc_sampleclk 2.684
+reticle tree 8 esad adc_sampleclk 3.009
+reticle tree 9 esad adc_sampleclk 2.962
+reticle tree 10 esad adc_sampleclk 2.776
+reticle fill 1 esad adc_sampleclk 3.049
+reticle fill 2 esad adc_sampleclk 2.673
+reticle fill 3 esad adc_sampleclk 3.239
+reticle fill 4 esad adc_sampleclk 3.474
+reticle fill 5 esad adc_sampleclk 2.737
+reticle fill 6 esad adc_sampleclk 3.052
+reticle fill 7 esad adc_sampleclk 3.198
+reticle fill 8 esad adc_sampleclk 2.632
+reticle fill 9 esad adc_sampleclk 2.940
+reticle fill 10 esad adc_sampleclk 2.800
+reticle fillall 1 esad adc_sampleclk 2.834
+reticle fillall 2 esad adc_sampleclk 3.190
+reticle fillall 3 esad adc_sampleclk 3.017
+reticle fillall 4 esad adc_sampleclk 3.097
+reticle fillall 5 esad adc_sampleclk 3.022
+reticle fillall 6 esad adc_sampleclk 3.700
+reticle fillall 7 esad adc_sampleclk 3.001
+reticle fillall 8 esad adc_sampleclk 2.783
+reticle fillall 9 esad adc_sampleclk 2.944
+reticle fillall 10 esad adc_sampleclk 2.986
+reticle tree 1 esad clk_usb 2.345
+reticle tree 2 esad clk_usb 2.333
+reticle tree 3 esad clk_usb 2.448
+reticle tree 4 esad clk_usb 2.747
+reticle tree 5 esad clk_usb 2.557
+reticle tree 6 esad clk_usb 2.743
+reticle tree 7 esad clk_usb 2.412
+reticle tree 8 esad clk_usb 2.463
+reticle tree 9 esad clk_usb 2.372
+reticle tree 10 esad clk_usb 2.344
+reticle fill 1 esad clk_usb 2.429
+reticle fill 2 esad clk_usb 2.432
+reticle fill 3 esad clk_usb 2.535
+reticle fill 4 esad clk_usb 2.705
+reticle fill 5 esad clk_usb 2.820
+reticle fill 6 esad clk_usb 2.389
+reticle fill 7 esad clk_usb 2.621
+reticle fill 8 esad clk_usb 2.452
+reticle fill 9 esad clk_usb 2.459
+reticle fill 10 esad clk_usb 2.439
+reticle fillall 1 esad clk_usb 2.460
+reticle fillall 2 esad clk_usb 2.524
+reticle fillall 3 esad clk_usb 2.473
+reticle fillall 4 esad clk_usb 2.564
+reticle fillall 5 esad clk_usb 2.378
+reticle fillall 6 esad clk_usb 2.542
+reticle fillall 7 esad clk_usb 2.616
+reticle fillall 8 esad clk_usb 2.522
+reticle fillall 9 esad clk_usb 2.299
+reticle fillall 10 esad clk_usb 2.557
+reticle tree 1 fir8 clk 9.161
+reticle tree 2 fir8 clk 9.161
+reticle tree 3 fir8 clk 9.161
+reticle tree 4 fir8 clk 9.247
+reticle tree 5 fir8 clk 9.161
+reticle tree 6 fir8 clk 9.161
+reticle tree 7 fir8 clk 9.161
+reticle tree 8 fir8 clk 9.161
+reticle tree 9 fir8 clk 9.161
+reticle tree 10 fir8 clk 9.161
+reticle fill 1 fir8 clk 9.161
+reticle fill 2 fir8 clk 9.161
+reticle fill 3 fir8 clk 9.161
+reticle fill 4 fir8 clk 9.165
+reticle fill 5 fir8 clk 9.161
+reticle fill 6 fir8 clk 9.165
+reticle fill 7 fir8 clk 9.165
+reticle fill 8 fir8 clk 9.161
+reticle fill 9 fir8 clk 9.161
+reticle fill 10 fir8 clk 9.161
+reticle fillall 1 fir8 clk 9.161
+reticle fillall 2 fir8 clk 9.161
+reticle fillall 3 fir8 clk 9.161
+reticle fillall 4 fir8 clk 9.165
+reticle fillall 5 fir8 clk 9.161
+reticle fillall 6 fir8 clk 9.165
+reticle fillall 7 fir8 clk 9.165
+reticle fillall 8 fir8 clk 9.161
+reticle fillall 9 fir8 clk 9.161
+reticle fillall 10 fir8 clk 9.161
+reticle tree 1 fsm clk 2.420
+reticle tree 2 fsm clk 2.341
+reticle tree 3 fsm clk 2.400
+reticle tree 4 fsm clk 2.272
+reticle tree 5 fsm clk 2.277
+reticle tree 6 fsm clk 2.348
+reticle tree 7 fsm clk 2.323
+reticle tree 8 fsm clk 2.465
+reticle tree 9 fsm clk 2.371
+reticle tree 10 fsm clk 2.560
+reticle fill 1 fsm clk 2.593
+reticle fill 2 fsm clk 2.523
+reticle fill 3 fsm clk 2.466
+reticle fill 4 fsm clk 2.210
+reticle fill 5 fsm clk 2.387
+reticle fill 6 fsm clk 2.406
+reticle fill 7 fsm clk 2.256
+reticle fill 8 fsm clk 2.324
+reticle fill 9 fsm clk 2.440
+reticle fill 10 fsm clk 2.168
+reticle fillall 1 fsm clk 2.353
+reticle fillall 2 fsm clk 2.360
+reticle fillall 3 fsm clk 2.481
+reticle fillall 4 fsm clk 2.305
+reticle fillall 5 fsm clk 2.299
+reticle fillall 6 fsm clk 2.451
+reticle fillall 7 fsm clk 2.332
+reticle fillall 8 fsm clk 2.423
+reticle fillall 9 fsm clk 2.544
+reticle fillall 10 fsm clk 2.473
+reticle tree 1 gray_cdc clk 1.414
+reticle tree 2 gray_cdc clk 1.509
+reticle tree 3 gray_cdc clk 1.503
+reticle tree 4 gray_cdc clk 1.503
+reticle tree 5 gray_cdc clk 1.508
+reticle tree 6 gray_cdc clk 1.412
+reticle tree 7 gray_cdc clk 1.413
+reticle tree 8 gray_cdc clk 1.503
+reticle tree 9 gray_cdc clk 1.503
+reticle tree 10 gray_cdc clk 1.507
+reticle fill 1 gray_cdc clk 1.413
+reticle fill 2 gray_cdc clk 1.501
+reticle fill 3 gray_cdc clk 1.413
+reticle fill 4 gray_cdc clk 1.413
+reticle fill 5 gray_cdc clk 1.413
+reticle fill 6 gray_cdc clk 1.404
+reticle fill 7 gray_cdc clk 1.413
+reticle fill 8 gray_cdc clk 1.507
+reticle fill 9 gray_cdc clk 1.413
+reticle fill 10 gray_cdc clk 1.507
+reticle fillall 1 gray_cdc clk 1.413
+reticle fillall 2 gray_cdc clk 1.501
+reticle fillall 3 gray_cdc clk 1.413
+reticle fillall 4 gray_cdc clk 1.413
+reticle fillall 5 gray_cdc clk 1.413
+reticle fillall 6 gray_cdc clk 1.404
+reticle fillall 7 gray_cdc clk 1.413
+reticle fillall 8 gray_cdc clk 1.507
+reticle fillall 9 gray_cdc clk 1.413
+reticle fillall 10 gray_cdc clk 1.507
+reticle tree 1 gray_cdc clk2 1.615
+reticle tree 2 gray_cdc clk2 1.580
+reticle tree 3 gray_cdc clk2 1.850
+reticle tree 4 gray_cdc clk2 1.850
+reticle tree 5 gray_cdc clk2 1.517
+reticle tree 6 gray_cdc clk2 1.714
+reticle tree 7 gray_cdc clk2 1.523
+reticle tree 8 gray_cdc clk2 1.850
+reticle tree 9 gray_cdc clk2 1.850
+reticle tree 10 gray_cdc clk2 1.674
+reticle fill 1 gray_cdc clk2 1.605
+reticle fill 2 gray_cdc clk2 1.491
+reticle fill 3 gray_cdc clk2 1.525
+reticle fill 4 gray_cdc clk2 1.516
+reticle fill 5 gray_cdc clk2 1.731
+reticle fill 6 gray_cdc clk2 1.699
+reticle fill 7 gray_cdc clk2 1.575
+reticle fill 8 gray_cdc clk2 1.534
+reticle fill 9 gray_cdc clk2 1.500
+reticle fill 10 gray_cdc clk2 1.602
+reticle fillall 1 gray_cdc clk2 1.605
+reticle fillall 2 gray_cdc clk2 1.491
+reticle fillall 3 gray_cdc clk2 1.525
+reticle fillall 4 gray_cdc clk2 1.516
+reticle fillall 5 gray_cdc clk2 1.731
+reticle fillall 6 gray_cdc clk2 1.699
+reticle fillall 7 gray_cdc clk2 1.575
+reticle fillall 8 gray_cdc clk2 1.534
+reticle fillall 9 gray_cdc clk2 1.500
+reticle fillall 10 gray_cdc clk2 1.602
+reticle tree 1 lutram32 clk 2.073
+reticle tree 2 lutram32 clk 2.267
+reticle tree 3 lutram32 clk 2.034
+reticle tree 4 lutram32 clk 2.064
+reticle tree 5 lutram32 clk 2.447
+reticle tree 6 lutram32 clk 2.309
+reticle tree 7 lutram32 clk 2.099
+reticle tree 8 lutram32 clk 2.112
+reticle tree 9 lutram32 clk 2.398
+reticle tree 10 lutram32 clk 2.015
+reticle fill 1 lutram32 clk 1.990
+reticle fill 2 lutram32 clk 2.042
+reticle fill 3 lutram32 clk 2.136
+reticle fill 4 lutram32 clk 2.054
+reticle fill 5 lutram32 clk 2.073
+reticle fill 6 lutram32 clk 2.531
+reticle fill 7 lutram32 clk 2.174
+reticle fill 8 lutram32 clk 2.461
+reticle fill 9 lutram32 clk 2.082
+reticle fill 10 lutram32 clk 2.120
+reticle fillall 1 lutram32 clk 1.979
+reticle fillall 2 lutram32 clk 2.459
+reticle fillall 3 lutram32 clk 2.092
+reticle fillall 4 lutram32 clk 2.089
+reticle fillall 5 lutram32 clk 2.363
+reticle fillall 6 lutram32 clk 2.123
+reticle fillall 7 lutram32 clk 2.331
+reticle fillall 8 lutram32 clk 2.209
+reticle fillall 9 lutram32 clk 2.183
+reticle fillall 10 lutram32 clk 2.188
+reticle tree 1 mul18 clk 2.420
+reticle tree 2 mul18 clk 2.223
+reticle tree 3 mul18 clk 2.095
+reticle tree 4 mul18 clk 2.262
+reticle tree 5 mul18 clk 2.499
+reticle tree 6 mul18 clk 2.106
+reticle tree 7 mul18 clk 2.184
+reticle tree 8 mul18 clk 2.083
+reticle tree 9 mul18 clk 2.223
+reticle tree 10 mul18 clk 2.378
+reticle fill 1 mul18 clk 2.199
+reticle fill 2 mul18 clk 2.169
+reticle fill 3 mul18 clk 2.501
+reticle fill 4 mul18 clk 2.187
+reticle fill 5 mul18 clk 2.434
+reticle fill 6 mul18 clk 2.240
+reticle fill 7 mul18 clk 2.098
+reticle fill 8 mul18 clk 2.178
+reticle fill 9 mul18 clk 2.400
+reticle fill 10 mul18 clk 2.431
+reticle fillall 1 mul18 clk 2.199
+reticle fillall 2 mul18 clk 2.169
+reticle fillall 3 mul18 clk 2.501
+reticle fillall 4 mul18 clk 2.187
+reticle fillall 5 mul18 clk 2.434
+reticle fillall 6 mul18 clk 2.240
+reticle fillall 7 mul18 clk 2.098
+reticle fillall 8 mul18 clk 2.178
+reticle fillall 9 mul18 clk 2.400
+reticle fillall 10 mul18 clk 2.431
+reticle tree 1 regfile_alu clk 5.935
+reticle tree 2 regfile_alu clk 6.336
+reticle tree 3 regfile_alu clk 6.020
+reticle tree 4 regfile_alu clk 6.184
+reticle tree 5 regfile_alu clk 6.096
+reticle tree 6 regfile_alu clk 6.096
+reticle tree 7 regfile_alu clk 6.158
+reticle tree 8 regfile_alu clk 6.186
+reticle tree 9 regfile_alu clk 6.339
+reticle tree 10 regfile_alu clk 6.221
+reticle fill 1 regfile_alu clk 6.318
+reticle fill 2 regfile_alu clk 6.205
+reticle fill 3 regfile_alu clk 6.237
+reticle fill 4 regfile_alu clk 6.464
+reticle fill 5 regfile_alu clk 6.175
+reticle fill 6 regfile_alu clk 6.385
+reticle fill 7 regfile_alu clk 6.153
+reticle fill 8 regfile_alu clk 6.435
+reticle fill 9 regfile_alu clk 6.007
+reticle fill 10 regfile_alu clk 6.302
+reticle fillall 1 regfile_alu clk 6.048
+reticle fillall 2 regfile_alu clk 6.133
+reticle fillall 3 regfile_alu clk 6.793
+reticle fillall 4 regfile_alu clk 6.181
+reticle fillall 5 regfile_alu clk 6.303
+reticle fillall 6 regfile_alu clk 5.882
+reticle fillall 7 regfile_alu clk 6.249
+reticle fillall 8 regfile_alu clk 6.312
+reticle fillall 9 regfile_alu clk 6.363
+reticle fillall 10 regfile_alu clk 6.198
+reticle tree 1 sad adc_sampleclk 3.110
+reticle tree 2 sad adc_sampleclk 3.086
+reticle tree 3 sad adc_sampleclk 3.281
+reticle tree 4 sad adc_sampleclk 3.085
+reticle tree 5 sad adc_sampleclk 3.314
+reticle tree 6 sad adc_sampleclk 3.105
+reticle tree 7 sad adc_sampleclk 3.249
+reticle tree 8 sad adc_sampleclk 3.079
+reticle tree 9 sad adc_sampleclk 3.061
+reticle tree 10 sad adc_sampleclk 3.007
+reticle fill 1 sad adc_sampleclk 2.939
+reticle fill 2 sad adc_sampleclk 3.021
+reticle fill 3 sad adc_sampleclk 3.386
+reticle fill 4 sad adc_sampleclk 3.140
+reticle fill 5 sad adc_sampleclk 3.069
+reticle fill 6 sad adc_sampleclk 3.162
+reticle fill 7 sad adc_sampleclk 3.067
+reticle fill 8 sad adc_sampleclk 3.186
+reticle fill 9 sad adc_sampleclk 3.037
+reticle fill 10 sad adc_sampleclk 3.032
+reticle fillall 1 sad adc_sampleclk 3.014
+reticle fillall 2 sad adc_sampleclk 3.058
+reticle fillall 3 sad adc_sampleclk 3.051
+reticle fillall 4 sad adc_sampleclk 2.985
+reticle fillall 5 sad adc_sampleclk 3.229
+reticle fillall 6 sad adc_sampleclk 2.993
+reticle fillall 7 sad adc_sampleclk 2.930
+reticle fillall 8 sad adc_sampleclk 2.907
+reticle fillall 9 sad adc_sampleclk 3.027
+reticle fillall 10 sad adc_sampleclk 3.167
+reticle tree 1 sad clk_usb 2.395
+reticle tree 2 sad clk_usb 2.431
+reticle tree 3 sad clk_usb 3.372
+reticle tree 4 sad clk_usb 2.532
+reticle tree 5 sad clk_usb 2.441
+reticle tree 6 sad clk_usb 2.486
+reticle tree 7 sad clk_usb 2.616
+reticle tree 8 sad clk_usb 2.713
+reticle tree 9 sad clk_usb 2.553
+reticle tree 10 sad clk_usb 2.698
+reticle fill 1 sad clk_usb 2.254
+reticle fill 2 sad clk_usb 2.544
+reticle fill 3 sad clk_usb 2.469
+reticle fill 4 sad clk_usb 2.630
+reticle fill 5 sad clk_usb 2.618
+reticle fill 6 sad clk_usb 2.569
+reticle fill 7 sad clk_usb 2.453
+reticle fill 8 sad clk_usb 2.449
+reticle fill 9 sad clk_usb 2.516
+reticle fill 10 sad clk_usb 2.543
+reticle fillall 1 sad clk_usb 2.452
+reticle fillall 2 sad clk_usb 2.474
+reticle fillall 3 sad clk_usb 2.449
+reticle fillall 4 sad clk_usb 2.695
+reticle fillall 5 sad clk_usb 2.502
+reticle fillall 6 sad clk_usb 2.375
+reticle fillall 7 sad clk_usb 2.661
+reticle fillall 8 sad clk_usb 2.573
+reticle fillall 9 sad clk_usb 2.472
+reticle fillall 10 sad clk_usb 2.503
+reticle tree 1 srl_delay clk 2.237
+reticle tree 2 srl_delay clk 2.179
+reticle tree 3 srl_delay clk 2.179
+reticle tree 4 srl_delay clk 2.272
+reticle tree 5 srl_delay clk 1.889
+reticle tree 6 srl_delay clk 2.160
+reticle tree 7 srl_delay clk 2.033
+reticle tree 8 srl_delay clk 2.124
+reticle tree 9 srl_delay clk 1.873
+reticle tree 10 srl_delay clk 2.279
+reticle fill 1 srl_delay clk 1.998
+reticle fill 2 srl_delay clk 1.920
+reticle fill 3 srl_delay clk 2.077
+reticle fill 4 srl_delay clk 2.117
+reticle fill 5 srl_delay clk 2.132
+reticle fill 6 srl_delay clk 2.092
+reticle fill 7 srl_delay clk 2.141
+reticle fill 8 srl_delay clk 2.077
+reticle fill 9 srl_delay clk 2.176
+reticle fill 10 srl_delay clk 2.056
+reticle fillall 1 srl_delay clk 1.907
+reticle fillall 2 srl_delay clk 2.003
+reticle fillall 3 srl_delay clk 1.852
+reticle fillall 4 srl_delay clk 1.889
+reticle fillall 5 srl_delay clk 1.767
+reticle fillall 6 srl_delay clk 1.796
+reticle fillall 7 srl_delay clk 2.042
+reticle fillall 8 srl_delay clk 2.118
+reticle fillall 9 srl_delay clk 1.970
+reticle fillall 10 srl_delay clk 1.889
+reticle tree 1 widemux clk 3.514
+reticle tree 2 widemux clk 3.370
+reticle tree 3 widemux clk 3.335
+reticle tree 4 widemux clk 3.471
+reticle tree 5 widemux clk 3.750
+reticle tree 6 widemux clk 3.335
+reticle tree 7 widemux clk 3.520
+reticle tree 8 widemux clk 3.870
+reticle tree 9 widemux clk 3.662
+reticle tree 10 widemux clk 3.739
+reticle fill 1 widemux clk 3.701
+reticle fill 2 widemux clk 3.269
+reticle fill 3 widemux clk 3.752
+reticle fill 4 widemux clk 4.257
+reticle fill 5 widemux clk 3.735
+reticle fill 6 widemux clk 3.384
+reticle fill 7 widemux clk 3.526
+reticle fill 8 widemux clk 3.325
+reticle fill 9 widemux clk 3.600
+reticle fill 10 widemux clk 3.677
+reticle fillall 1 widemux clk 3.508
+reticle fillall 2 widemux clk 3.411
+reticle fillall 3 widemux clk 3.632
+reticle fillall 4 widemux clk 3.744
+reticle fillall 5 widemux clk 3.351
+reticle fillall 6 widemux clk 3.383
+reticle fillall 7 widemux clk 3.607
+reticle fillall 8 widemux clk 4.028
+reticle fillall 9 widemux clk 3.494
+reticle fillall 10 widemux clk 3.499
+slices tree 1 adders 139
+slices tree 1 analyser_fifo 114
+slices tree 1 barrel 30
+slices tree 1 bram_fifo 40
+slices tree 1 carry_counter 27
+slices tree 1 counter64 57
+slices tree 1 crc32 70
+slices tree 1 esad 390
+slices tree 1 fir8 19
+slices tree 1 fsm 20
+slices tree 1 gray_cdc 16
+slices tree 1 lutram32 16
+slices tree 1 mul18 12
+slices tree 1 regfile_alu 134
+slices tree 1 sad 448
+slices tree 1 srl_delay 11
+slices tree 1 widemux 260
+slices tree 2 adders 150
+slices tree 2 analyser_fifo 105
+slices tree 2 barrel 28
+slices tree 2 bram_fifo 32
+slices tree 2 carry_counter 28
+slices tree 2 counter64 80
+slices tree 2 crc32 65
+slices tree 2 esad 385
+slices tree 2 fir8 22
+slices tree 2 fsm 22
+slices tree 2 gray_cdc 11
+slices tree 2 lutram32 19
+slices tree 2 mul18 11
+slices tree 2 regfile_alu 140
+slices tree 2 sad 428
+slices tree 2 srl_delay 6
+slices tree 2 widemux 314
+slices tree 3 adders 157
+slices tree 3 analyser_fifo 109
+slices tree 3 barrel 30
+slices tree 3 bram_fifo 42
+slices tree 3 carry_counter 32
+slices tree 3 counter64 63
+slices tree 3 crc32 69
+slices tree 3 esad 391
+slices tree 3 fir8 22
+slices tree 3 fsm 20
+slices tree 3 gray_cdc 11
+slices tree 3 lutram32 22
+slices tree 3 mul18 13
+slices tree 3 regfile_alu 144
+slices tree 3 sad 526
+slices tree 3 srl_delay 6
+slices tree 3 widemux 254
+slices tree 4 adders 153
+slices tree 4 analyser_fifo 110
+slices tree 4 barrel 26
+slices tree 4 bram_fifo 34
+slices tree 4 carry_counter 28
+slices tree 4 counter64 59
+slices tree 4 crc32 63
+slices tree 4 esad 417
+slices tree 4 fir8 23
+slices tree 4 fsm 23
+slices tree 4 gray_cdc 11
+slices tree 4 lutram32 20
+slices tree 4 mul18 14
+slices tree 4 regfile_alu 141
+slices tree 4 sad 432
+slices tree 4 srl_delay 8
+slices tree 4 widemux 265
+slices tree 5 adders 152
+slices tree 5 analyser_fifo 110
+slices tree 5 barrel 32
+slices tree 5 bram_fifo 32
+slices tree 5 carry_counter 24
+slices tree 5 counter64 61
+slices tree 5 crc32 65
+slices tree 5 esad 385
+slices tree 5 fir8 20
+slices tree 5 fsm 22
+slices tree 5 gray_cdc 14
+slices tree 5 lutram32 26
+slices tree 5 mul18 14
+slices tree 5 regfile_alu 143
+slices tree 5 sad 448
+slices tree 5 srl_delay 12
+slices tree 5 widemux 258
+slices tree 6 adders 138
+slices tree 6 analyser_fifo 131
+slices tree 6 barrel 38
+slices tree 6 bram_fifo 34
+slices tree 6 carry_counter 30
+slices tree 6 counter64 54
+slices tree 6 crc32 64
+slices tree 6 esad 388
+slices tree 6 fir8 22
+slices tree 6 fsm 16
+slices tree 6 gray_cdc 15
+slices tree 6 lutram32 24
+slices tree 6 mul18 13
+slices tree 6 regfile_alu 142
+slices tree 6 sad 428
+slices tree 6 srl_delay 14
+slices tree 6 widemux 259
+slices tree 7 adders 159
+slices tree 7 analyser_fifo 122
+slices tree 7 barrel 28
+slices tree 7 bram_fifo 35
+slices tree 7 carry_counter 17
+slices tree 7 counter64 63
+slices tree 7 crc32 61
+slices tree 7 esad 383
+slices tree 7 fir8 23
+slices tree 7 fsm 19
+slices tree 7 gray_cdc 18
+slices tree 7 lutram32 19
+slices tree 7 mul18 12
+slices tree 7 regfile_alu 136
+slices tree 7 sad 455
+slices tree 7 srl_delay 9
+slices tree 7 widemux 257
+slices tree 8 adders 153
+slices tree 8 analyser_fifo 116
+slices tree 8 barrel 29
+slices tree 8 bram_fifo 28
+slices tree 8 carry_counter 23
+slices tree 8 counter64 66
+slices tree 8 crc32 67
+slices tree 8 esad 372
+slices tree 8 fir8 19
+slices tree 8 fsm 20
+slices tree 8 gray_cdc 11
+slices tree 8 lutram32 18
+slices tree 8 mul18 13
+slices tree 8 regfile_alu 135
+slices tree 8 sad 495
+slices tree 8 srl_delay 10
+slices tree 8 widemux 251
+slices tree 9 adders 167
+slices tree 9 analyser_fifo 132
+slices tree 9 barrel 26
+slices tree 9 bram_fifo 32
+slices tree 9 carry_counter 28
+slices tree 9 counter64 58
+slices tree 9 crc32 67
+slices tree 9 esad 385
+slices tree 9 fir8 21
+slices tree 9 fsm 18
+slices tree 9 gray_cdc 11
+slices tree 9 lutram32 21
+slices tree 9 mul18 12
+slices tree 9 regfile_alu 140
+slices tree 9 sad 492
+slices tree 9 srl_delay 15
+slices tree 9 widemux 297
+slices tree 10 adders 149
+slices tree 10 analyser_fifo 120
+slices tree 10 barrel 31
+slices tree 10 bram_fifo 34
+slices tree 10 carry_counter 24
+slices tree 10 counter64 62
+slices tree 10 crc32 63
+slices tree 10 esad 399
+slices tree 10 fir8 17
+slices tree 10 fsm 24
+slices tree 10 gray_cdc 16
+slices tree 10 lutram32 14
+slices tree 10 mul18 10
+slices tree 10 regfile_alu 142
+slices tree 10 sad 424
+slices tree 10 srl_delay 13
+slices tree 10 widemux 239
+slices fill 1 adders 114
+slices fill 1 analyser_fifo 105
+slices fill 1 barrel 24
+slices fill 1 bram_fifo 32
+slices fill 1 carry_counter 22
+slices fill 1 counter64 42
+slices fill 1 crc32 56
+slices fill 1 esad 524
+slices fill 1 fir8 19
+slices fill 1 fsm 14
+slices fill 1 gray_cdc 11
+slices fill 1 lutram32 18
+slices fill 1 mul18 13
+slices fill 1 regfile_alu 126
+slices fill 1 sad 407
+slices fill 1 srl_delay 10
+slices fill 1 widemux 226
+slices fill 2 adders 120
+slices fill 2 analyser_fifo 124
+slices fill 2 barrel 23
+slices fill 2 bram_fifo 31
+slices fill 2 carry_counter 22
+slices fill 2 counter64 43
+slices fill 2 crc32 55
+slices fill 2 esad 360
+slices fill 2 fir8 17
+slices fill 2 fsm 13
+slices fill 2 gray_cdc 11
+slices fill 2 lutram32 15
+slices fill 2 mul18 7
+slices fill 2 regfile_alu 142
+slices fill 2 sad 394
+slices fill 2 srl_delay 8
+slices fill 2 widemux 229
+slices fill 3 adders 106
+slices fill 3 analyser_fifo 113
+slices fill 3 barrel 24
+slices fill 3 bram_fifo 26
+slices fill 3 carry_counter 20
+slices fill 3 counter64 42
+slices fill 3 crc32 52
+slices fill 3 esad 332
+slices fill 3 fir8 13
+slices fill 3 fsm 14
+slices fill 3 gray_cdc 13
+slices fill 3 lutram32 15
+slices fill 3 mul18 6
+slices fill 3 regfile_alu 134
+slices fill 3 sad 383
+slices fill 3 srl_delay 10
+slices fill 3 widemux 233
+slices fill 4 adders 111
+slices fill 4 analyser_fifo 106
+slices fill 4 barrel 25
+slices fill 4 bram_fifo 27
+slices fill 4 carry_counter 21
+slices fill 4 counter64 50
+slices fill 4 crc32 55
+slices fill 4 esad 377
+slices fill 4 fir8 15
+slices fill 4 fsm 15
+slices fill 4 gray_cdc 11
+slices fill 4 lutram32 18
+slices fill 4 mul18 10
+slices fill 4 regfile_alu 131
+slices fill 4 sad 471
+slices fill 4 srl_delay 10
+slices fill 4 widemux 223
+slices fill 5 adders 108
+slices fill 5 analyser_fifo 106
+slices fill 5 barrel 23
+slices fill 5 bram_fifo 24
+slices fill 5 carry_counter 23
+slices fill 5 counter64 41
+slices fill 5 crc32 53
+slices fill 5 esad 321
+slices fill 5 fir8 17
+slices fill 5 fsm 14
+slices fill 5 gray_cdc 13
+slices fill 5 lutram32 18
+slices fill 5 mul18 6
+slices fill 5 regfile_alu 134
+slices fill 5 sad 404
+slices fill 5 srl_delay 10
+slices fill 5 widemux 231
+slices fill 6 adders 146
+slices fill 6 analyser_fifo 112
+slices fill 6 barrel 24
+slices fill 6 bram_fifo 29
+slices fill 6 carry_counter 22
+slices fill 6 counter64 43
+slices fill 6 crc32 60
+slices fill 6 esad 346
+slices fill 6 fir8 22
+slices fill 6 fsm 15
+slices fill 6 gray_cdc 13
+slices fill 6 lutram32 15
+slices fill 6 mul18 9
+slices fill 6 regfile_alu 140
+slices fill 6 sad 394
+slices fill 6 srl_delay 9
+slices fill 6 widemux 228
+slices fill 7 adders 116
+slices fill 7 analyser_fifo 104
+slices fill 7 barrel 24
+slices fill 7 bram_fifo 30
+slices fill 7 carry_counter 39
+slices fill 7 counter64 48
+slices fill 7 crc32 54
+slices fill 7 esad 351
+slices fill 7 fir8 17
+slices fill 7 fsm 16
+slices fill 7 gray_cdc 12
+slices fill 7 lutram32 17
+slices fill 7 mul18 8
+slices fill 7 regfile_alu 129
+slices fill 7 sad 435
+slices fill 7 srl_delay 10
+slices fill 7 widemux 228
+slices fill 8 adders 112
+slices fill 8 analyser_fifo 115
+slices fill 8 barrel 24
+slices fill 8 bram_fifo 27
+slices fill 8 carry_counter 20
+slices fill 8 counter64 47
+slices fill 8 crc32 69
+slices fill 8 esad 380
+slices fill 8 fir8 14
+slices fill 8 fsm 14
+slices fill 8 gray_cdc 12
+slices fill 8 lutram32 13
+slices fill 8 mul18 11
+slices fill 8 regfile_alu 130
+slices fill 8 sad 404
+slices fill 8 srl_delay 8
+slices fill 8 widemux 231
+slices fill 9 adders 119
+slices fill 9 analyser_fifo 108
+slices fill 9 barrel 24
+slices fill 9 bram_fifo 26
+slices fill 9 carry_counter 22
+slices fill 9 counter64 43
+slices fill 9 crc32 57
+slices fill 9 esad 352
+slices fill 9 fir8 17
+slices fill 9 fsm 15
+slices fill 9 gray_cdc 12
+slices fill 9 lutram32 16
+slices fill 9 mul18 7
+slices fill 9 regfile_alu 123
+slices fill 9 sad 388
+slices fill 9 srl_delay 10
+slices fill 9 widemux 232
+slices fill 10 adders 104
+slices fill 10 analyser_fifo 97
+slices fill 10 barrel 24
+slices fill 10 bram_fifo 26
+slices fill 10 carry_counter 21
+slices fill 10 counter64 47
+slices fill 10 crc32 59
+slices fill 10 esad 370
+slices fill 10 fir8 19
+slices fill 10 fsm 16
+slices fill 10 gray_cdc 12
+slices fill 10 lutram32 16
+slices fill 10 mul18 6
+slices fill 10 regfile_alu 126
+slices fill 10 sad 476
+slices fill 10 srl_delay 10
+slices fill 10 widemux 229
+slices fillall 1 adders 106
+slices fillall 1 analyser_fifo 97
+slices fillall 1 barrel 22
+slices fillall 1 bram_fifo 25
+slices fillall 1 carry_counter 17
+slices fillall 1 counter64 44
+slices fillall 1 crc32 54
+slices fillall 1 esad 344
+slices fillall 1 fir8 19
+slices fillall 1 fsm 16
+slices fillall 1 gray_cdc 11
+slices fillall 1 lutram32 21
+slices fillall 1 mul18 13
+slices fillall 1 regfile_alu 127
+slices fillall 1 sad 408
+slices fillall 1 srl_delay 12
+slices fillall 1 widemux 224
+slices fillall 2 adders 106
+slices fillall 2 analyser_fifo 98
+slices fillall 2 barrel 23
+slices fillall 2 bram_fifo 32
+slices fillall 2 carry_counter 23
+slices fillall 2 counter64 45
+slices fillall 2 crc32 53
+slices fillall 2 esad 333
+slices fillall 2 fir8 17
+slices fillall 2 fsm 15
+slices fillall 2 gray_cdc 11
+slices fillall 2 lutram32 15
+slices fillall 2 mul18 7
+slices fillall 2 regfile_alu 130
+slices fillall 2 sad 415
+slices fillall 2 srl_delay 11
+slices fillall 2 widemux 235
+slices fillall 3 adders 102
+slices fillall 3 analyser_fifo 103
+slices fillall 3 barrel 23
+slices fillall 3 bram_fifo 44
+slices fillall 3 carry_counter 22
+slices fillall 3 counter64 43
+slices fillall 3 crc32 52
+slices fillall 3 esad 363
+slices fillall 3 fir8 13
+slices fillall 3 fsm 15
+slices fillall 3 gray_cdc 13
+slices fillall 3 lutram32 14
+slices fillall 3 mul18 6
+slices fillall 3 regfile_alu 127
+slices fillall 3 sad 416
+slices fillall 3 srl_delay 10
+slices fillall 3 widemux 236
+slices fillall 4 adders 106
+slices fillall 4 analyser_fifo 103
+slices fillall 4 barrel 24
+slices fillall 4 bram_fifo 30
+slices fillall 4 carry_counter 22
+slices fillall 4 counter64 42
+slices fillall 4 crc32 52
+slices fillall 4 esad 349
+slices fillall 4 fir8 15
+slices fillall 4 fsm 14
+slices fillall 4 gray_cdc 11
+slices fillall 4 lutram32 19
+slices fillall 4 mul18 10
+slices fillall 4 regfile_alu 128
+slices fillall 4 sad 389
+slices fillall 4 srl_delay 9
+slices fillall 4 widemux 233
+slices fillall 5 adders 133
+slices fillall 5 analyser_fifo 110
+slices fillall 5 barrel 24
+slices fillall 5 bram_fifo 31
+slices fillall 5 carry_counter 26
+slices fillall 5 counter64 50
+slices fillall 5 crc32 54
+slices fillall 5 esad 357
+slices fillall 5 fir8 17
+slices fillall 5 fsm 14
+slices fillall 5 gray_cdc 13
+slices fillall 5 lutram32 17
+slices fillall 5 mul18 6
+slices fillall 5 regfile_alu 128
+slices fillall 5 sad 393
+slices fillall 5 srl_delay 10
+slices fillall 5 widemux 240
+slices fillall 6 adders 112
+slices fillall 6 analyser_fifo 96
+slices fillall 6 barrel 23
+slices fillall 6 bram_fifo 33
+slices fillall 6 carry_counter 19
+slices fillall 6 counter64 42
+slices fillall 6 crc32 56
+slices fillall 6 esad 378
+slices fillall 6 fir8 22
+slices fillall 6 fsm 14
+slices fillall 6 gray_cdc 13
+slices fillall 6 lutram32 14
+slices fillall 6 mul18 9
+slices fillall 6 regfile_alu 124
+slices fillall 6 sad 516
+slices fillall 6 srl_delay 10
+slices fillall 6 widemux 239
+slices fillall 7 adders 135
+slices fillall 7 analyser_fifo 96
+slices fillall 7 barrel 24
+slices fillall 7 bram_fifo 28
+slices fillall 7 carry_counter 22
+slices fillall 7 counter64 46
+slices fillall 7 crc32 55
+slices fillall 7 esad 344
+slices fillall 7 fir8 17
+slices fillall 7 fsm 14
+slices fillall 7 gray_cdc 12
+slices fillall 7 lutram32 14
+slices fillall 7 mul18 8
+slices fillall 7 regfile_alu 126
+slices fillall 7 sad 402
+slices fillall 7 srl_delay 10
+slices fillall 7 widemux 228
+slices fillall 8 adders 117
+slices fillall 8 analyser_fifo 118
+slices fillall 8 barrel 23
+slices fillall 8 bram_fifo 26
+slices fillall 8 carry_counter 25
+slices fillall 8 counter64 44
+slices fillall 8 crc32 52
+slices fillall 8 esad 349
+slices fillall 8 fir8 14
+slices fillall 8 fsm 15
+slices fillall 8 gray_cdc 12
+slices fillall 8 lutram32 15
+slices fillall 8 mul18 11
+slices fillall 8 regfile_alu 123
+slices fillall 8 sad 408
+slices fillall 8 srl_delay 12
+slices fillall 8 widemux 234
+slices fillall 9 adders 124
+slices fillall 9 analyser_fifo 101
+slices fillall 9 barrel 24
+slices fillall 9 bram_fifo 39
+slices fillall 9 carry_counter 25
+slices fillall 9 counter64 48
+slices fillall 9 crc32 56
+slices fillall 9 esad 365
+slices fillall 9 fir8 17
+slices fillall 9 fsm 14
+slices fillall 9 gray_cdc 12
+slices fillall 9 lutram32 16
+slices fillall 9 mul18 7
+slices fillall 9 regfile_alu 124
+slices fillall 9 sad 404
+slices fillall 9 srl_delay 11
+slices fillall 9 widemux 232
+slices fillall 10 adders 118
+slices fillall 10 analyser_fifo 108
+slices fillall 10 barrel 26
+slices fillall 10 bram_fifo 36
+slices fillall 10 carry_counter 25
+slices fillall 10 counter64 39
+slices fillall 10 crc32 53
+slices fillall 10 esad 356
+slices fillall 10 fir8 19
+slices fillall 10 fsm 16
+slices fillall 10 gray_cdc 12
+slices fillall 10 lutram32 15
+slices fillall 10 mul18 6
+slices fillall 10 regfile_alu 128
+slices fillall 10 sad 406
+slices fillall 10 srl_delay 12
+slices fillall 10 widemux 236

@@ -1758,7 +1758,9 @@ the fixture's `before` and `after` fails `tests/fpga_xray_achieved.rs`.
   legacy netlist's, and what is left is flip-flops, eight a slice in Vivado's and four
   in Reticle's.* Vivado packs a ripple of tables four to a slice where Reticle
   puts two to a tile; what the placer would need to know of a slice's own wires for
-  that is not looked at.
+  that is not looked at. *Measured since, in "Filling slices": with today's netlists
+  Reticle's placements routed by Vivado are within about 1 % of Vivado's placement of
+  the same netlist, and the rest is the routes.*
 - **`widemux`'s routes**, 0.3 ns from Vivado's on the same placement and pins: a
   select read by 257 pins.
 - Clock skew is still not modelled; Vivado's is up to 0.18 ns on these designs, as
@@ -2612,7 +2614,9 @@ not kept.
   bitstream's way, in "Eight flip-flops a slice" below.*
 - **Tables four to a slice.** Reticle's tables are spread over half again as many
   slices as Vivado's (`regfile_alu` 153 to 93); nothing in the placer asks for a
-  full slice, and what it would cost or save is not measured.
+  full slice, and what it would cost or save is not measured. *Measured since, in
+  "Filling slices": most of that is the netlist; Vivado's own placement of Reticle's
+  netlist takes 152 slices for `regfile_alu`, and Reticle's 130 now.*
 - **`a + b + c` and a counter that counts on a comparison** (`cin8`, `cnt8`, probes
   of this section not committed) are four and three `CARRY4`s here to Vivado's two
   and one: synthesis writes the first as two adders and the second's carry in as an
@@ -2970,7 +2974,9 @@ those bitstreams decoded, a line a slice and one a lane. **Decoded, so checked**
   about what the slower pin's wire costs in the fitted model (`CLBLL:LL_B4` 198 ps,
   `LL_B6` 2); the setup was -0.058 to -0.067 ns through a table against -0.018 to -0.039
   on the bypass. So a way costs nothing of its own here beyond its pin's wire. Read off
-  the probes' `report_timing`, not committed.
+  the probes' `report_timing`, not committed. *That setup was one edge's: "Filling
+  slices" has the means over every flip-flop of the corpus, 0.122 ns through a table in
+  a `SLICEL` against 0.082 on the bypass.*
 
 ### What was built
 
@@ -3109,16 +3115,341 @@ before.
 ### Not done
 
 - **A placer that asks for full slices**, or weighs a way against the `A6` it takes from
-  the table beside it: the density above is what legality alone gave.
+  the table beside it: the density above is what legality alone gave. *Measured since,
+  in "Filling slices": median moves took the corpus from 1,815 slices to 1,588, under
+  Vivado's 1,668 for the same netlists, with no cost for full slices.*
 - **The lower half's way as a default.** Built and Vivado's, and slower here; whether a
-  cost for the `A6` it takes would change that is not measured.
+  cost for the `A6` it takes would change that is not measured. *Measured again, in
+  "Filling slices": with the placer since, it is the faster, and the default.*
 - **A way through a table to anything but its lane's main flip-flop**: Vivado also
   passes a table's inputs out of the slice, and a five-input flip-flop could take
   `O5` (`<L>5FFMUX.IN_A`) from a way; in these designs it never did.
 - **Reticle's own timing of a way**: its model charges the flip-flop the bypass input's
   setup, 0.079 ns, where Vivado's timer had -0.06 through a table, so its estimate of
   such a path is about 0.13 ns pessimistic. Vivado's timer, not this, is what was
-  measured above.
+  measured above. *Measured since, and wrong: the -0.06 was four probes at one edge;
+  over 1,790 flip-flops through a way Vivado's setup is 0.122 ns in a `SLICEL` and
+  0.083 in a `SLICEM`, the model's 0.079 short of the first, not over it. Each class
+  has its own figure now; "Filling slices".*
+- None of it has been on a part.
+
+## Filling slices
+
+**Asked: what does Vivado's placement do that Reticle's does not, and what does
+making Reticle's do the same do to the clock?** The sections before left four
+things open: the placer has no cost that asks for full slices, nor one that weighs a
+way through a table against the `A6` it takes; `--route-throughs all` matched Vivado
+and was slower, for a reason not known; this flow's own model charged a flip-flop
+through a way the bypass's setup, about 0.13 ns too much; and Vivado's placement and
+routes of Reticle's netlist were better than Reticle's, which was read as the
+placer's to close. Run on 2026-11-07 at `xc7a100tftg256-3` with Vivado 2026.1, on
+the timing corpus of "Placement and routing against Vivado's own flow" and with its
+`achieved.sh`. **Everything here is Vivado's timer, Vivado's placement or Vivado's
+interconnect delays; nothing has been on a part.**
+
+`tools/vivado-parity/fill.tcl` loads one Reticle build into Vivado three ways:
+`placed`, Reticle's placement and routes; `netlist`, Reticle's netlist placed and
+routed by Vivado; `connections`, Reticle's placement routed by Vivado (or, as
+`connections_routes`, with Reticle's routes). It writes what each slice holds, the
+200 worst paths of each clock with every pin's site, every flip-flop's data input
+with the site pin it arrives on and its setup, or every connection between two
+slices with its interconnect delay; `fill.py` reads them (`paths`, `setups`,
+`distance`).
+
+### Where the difference is
+
+Seed 1 of the tree before this section (38f812a0), each clock's achieved period
+(ns): Reticle's placement and routes; the same placement routed by Vivado with each
+table's pins free (`achieved.tcl`'s `placement_free`); and Vivado's placement and
+routes of the same netlist (`netlist`), all three Vivado's timer:
+
+| design | clock | Reticle's routes | Vivado's routes, Reticle's placement | Vivado's placement and routes |
+|---|---|---|---|---|
+| adders | clk | 2.353 | 2.133 | 2.294 |
+| analyser_fifo | rd_clk | 5.168 | 5.105 | 5.256 |
+| analyser_fifo | wr_clk | 3.163 | 2.980 | 2.867 |
+| barrel | clk | 3.012 | 2.564 | 2.684 |
+| bram_fifo | clk | 4.042 | 3.856 | 3.629 |
+| carry_counter | clk | 2.442 | 2.236 | 2.258 |
+| counter64 | clk | 4.543 | 4.137 | 3.730 |
+| crc32 | clk | 2.727 | 2.286 | 2.390 |
+| esad | adc_sampleclk | 2.929 | 3.906 | 3.972 |
+| esad | clk_usb | 2.345 | 2.454 | 2.454 |
+| fir8 | clk | 9.161 | 9.161 | 9.164 |
+| fsm | clk | 2.420 | 2.137 | 1.986 |
+| gray_cdc | clk | 1.414 | 1.414 | 1.447 |
+| gray_cdc | clk2 | 1.615 | 1.623 | 1.572 |
+| lutram32 | clk | 2.073 | 1.879 | 1.788 |
+| mul18 | clk | 2.420 | 1.998 | 1.925 |
+| regfile_alu | clk | 5.935 | 5.926 | 5.610 |
+| sad | adc_sampleclk | 3.110 | 3.925 | 4.358 |
+| sad | clk_usb | 2.395 | 2.592 | 2.497 |
+| srl_delay | clk | 2.237 | 1.888 | 1.644 |
+| widemux | clk | 3.514 | 2.703 | 2.800 |
+
+Against Vivado's own flow, the geometric means of seeds 1, 2 and 3 are 1.253, 1.247
+and 1.266 with Reticle's routes, 1.198, 1.189 and 1.197 with Vivado's on the same
+placements, and 1.185 for Vivado's placement and routes of the netlist. **So of
+what was read as the placer's, about one part in six is the placement and five the
+routes**: Reticle's placements routed by Vivado are within 0.4 to 1.2 % of Vivado's
+own placement of the same netlist, and Vivado's routes are 4 to 6 % faster than
+Reticle's on the same placement, up to 23 % on one clock (`widemux`). The rest of
+the distance to Vivado's own flow, 18 %, is the netlist. The reading in "Placement
+and routing against Vivado's own flow", that the routes are within 0.25 ns of
+Vivado's on the same placement, was of six designs with the legacy netlist and the
+pins locked or free; with today's netlists it is up to 0.81 ns (`widemux`), 0.45
+(`barrel`, `crc32`) and 0.42 (`mul18`).
+
+What the routes lose is at least partly visible. `srl_delay`'s latest path is a
+flip-flop, a table and a table in one tile: Reticle's route from the second table to
+the third goes `LOGIC_OUTS10`, `SE2`, `WL1`, `NL1`, `IMUX2`, 0.80 ns, where Vivado's
+on the same placement goes `LOGIC_OUTS10`, `FAN_ALT5`, `FAN_BOUNCE5`, `IMUX_L11`
+onto another input of the same table, 0.43. And over every connection between two
+slices of fanout four or less in eight of the designs (`fill.py distance`), a
+column of interconnect costs 33 ps on Vivado's routes and 56 on Reticle's, on the
+same placements, where a row costs 34 and 42. Neither is changed here: it is the
+router's, and this section is the placer's.
+
+### What Vivado's placement does
+
+Slices, seed 1 of the same tree: Vivado's own flow (from "Packing against Vivado's"),
+Vivado's placement of Reticle's netlist, and Reticle's, before this section and
+after it (the medians of ten seeds), with the flip-flops a slice holding any:
+
+| design | Vivado | Vivado, Reticle's netlist | before | after | flip-flops a slice, Vivado on the netlist | before | after |
+|---|---|---|---|---|---|---|---|
+| adders | 83 | 84 | 152 | 113 | 5.9 | 3.2 | 4.4 |
+| analyser_fifo | 71 | 101 | 115 | 107 | 2.4 | 2.2 | 2.4 |
+| barrel | 36 | 33 | 30 | 24 | 2.3 | 2.8 | 3.3 |
+| bram_fifo | 21 | 25 | 34 | 27 | 3.2 | 2.5 | 3.4 |
+| carry_counter | 24 | 37 | 28 | 22 | 1.9 | 2.7 | 3.4 |
+| counter64 | 44 | 48 | 62 | 43 | 3.6 | 2.4 | 3.4 |
+| crc32 | 36 | 52 | 65 | 56 | 1.6 | 1.9 | 1.9 |
+| esad | 289 | 388 | 386 | 356 | 3.4 | 3.2 | 3.4 |
+| fir8 | 12 | 12 | 22 | 17 | 2.6 | 1.2 | 1.5 |
+| fsm | 11 | 15 | 20 | 14 | 2.5 | 2.0 | 2.7 |
+| gray_cdc | 9 | 21 | 12 | 12 | 2.3 | 3.0 | 3.2 |
+| lutram32 | 17 | 21 | 20 | 16 | 3.7 | 3.6 | 4.5 |
+| mul18 | 10 | 9 | 12 | 8 | 4.0 | 2.9 | 4.8 |
+| regfile_alu | 104 | 152 | 140 | 130 | 1.5 | 2.0 | 2.0 |
+| sad | 309 | 394 | 448 | 404 | 3.0 | 2.6 | 3.0 |
+| srl_delay | 9 | 10 | 10 | 10 | 3.4 | 3.2 | 3.4 |
+| widemux | 282 | 266 | 258 | 229 | 4.1 | 4.1 | 4.6 |
+| all | 1,367 | 1,668 | 1,815 | 1,588 | | | |
+
+**Measured**: given Reticle's netlist, Vivado's placer takes 1,668 slices, not
+Vivado's own 1,367; most of that difference is the netlist too. Reticle took 1,815,
+8 % more than Vivado on the same netlist, most of it `adders` (152 to 84) and `sad`
+(448 to 394). Where Vivado's is denser the connections say how: on `adders`, 14 % of
+the connections from a flip-flop to a table are inside one slice and 59 % inside one
+tile in Vivado's, none and 42 % in Reticle's, 0.34 tiles long against 0.98
+(`slices.py connections`). The worst paths say the rest (`fill.py paths`, the 20
+worst of each, tiles a hop and tiles a path):
+
+| design | Vivado on the netlist | before | after |
+|---|---|---|---|
+| adders | 0.82, 8.0 | 0.83, 7.9 | 0.83, 7.1 |
+| counter64 | 1.21, 10.9 | 4.14, 29.0 | 1.42, 12.8 |
+| crc32 | 1.55, 4.7 | 2.30, 6.9 | 1.97, 5.9 |
+| regfile_alu | 3.27, 25.6 | 3.40, 23.1 | 2.25, 25.8 |
+
+`counter64`'s is what nothing else showed. Its latest path began at one of `limit`'s
+sixty-four flip-flops, at `SLICE_X14Y108`, forty tiles from both its neighbours in
+the shift register and from the table that reads it; on four seeds of five one of
+them was so stranded. The anneal had sent it there at a hot temperature and its
+window had shrunk to a tile or two before it came back. And the placement's own
+estimate of `counter64` was 10.42 ns where its routes were 4.07: it charged the
+carry chain's cascade from one `CARRY4` to the next, and every table into its carry
+or flip-flop, the line's 0.414 ns, where Vivado's timer has nothing. Every
+criticality of every timing round was against that, and the chains looked critical
+while the real worst paths did not.
+
+The clock is the last of it. Vivado puts `sad` inside one clock region row (its own,
+309 slices in the row of `Y100` to `Y149`; on Reticle's netlist 361 of 394), and
+Reticle spread it over two on most seeds. **Measured**, `clock_arrival.tcl`: one
+global buffer's clock reaches the outer two region rows 120 to 150 ps later than the
+inner two, and the columns past the outermost block RAM columns 40 to 80 ps later
+than the rest (from `BUFGCTRL_X0Y0`, `X0Y16` and `X0Y31` alike, within 3 ps), so a
+path from the top row to the one below loses 0.15 ns of its period. Two seeds of ten
+of `sad`'s adc clock had their latest path across the rows, Vivado's skew -0.245 and
+-0.247 ns where a path inside a row had -0.03 to -0.05; Reticle times none of it.
+
+### What was changed
+
+All four under the fitted delay model, the default; `--delay-model legacy` builds as
+before (below).
+
+1. **A flip-flop's setup by how its data arrives** (`xray::place_timing_on_sites`).
+   Vivado's setup over the 13,224 flip-flops of three seeds of the corpus, classed by
+   the site pin it names (`fill.py setups`):
+
+   | slice | data | flip-flops | setup, mean (ns) |
+   |---|---|---|---|
+   | `SLICEL` | inside the slice | 3,564 | -0.039 |
+   | `SLICEL` | the bypass, `<L>X` | 4,867 | 0.082 |
+   | `SLICEL` | through the table, `<L>6` | 1,317 | 0.122 |
+   | `SLICEM` | inside the slice | 1,400 | -0.082 |
+   | `SLICEM` | the bypass | 1,603 | 0.058 |
+   | `SLICEM` | through the table | 473 | 0.083 |
+
+   The model had -0.050 and 0.079, measured before there were ways, for both slices.
+   It charges each class its mean now, a way's from the ways the router is given.
+   *The reading this replaces*, in "Eight flip-flops a slice", that a flip-flop through
+   a way was charged 0.13 ns too much: that was Vivado's setup on four probes at one
+   edge, -0.06 ns. A pin's setup is one of two figures about 0.1 ns apart (by
+   something not read; the histograms are two humps), and the way's mean is 0.04 over
+   the bypass's in a `SLICEL`, not 0.13 under it. The lower half's way, rarer (54
+   flip-flops in seed 1 of `--route-throughs all`), had 0.11 in a `SLICEL`: the
+   upper half's figure is used for both. Neutral by Vivado's timer, 1.244 against
+   1.243 over five seeds; kept because it is the measured figure.
+2. **A dedicated group's own wires cost nothing in the estimate**
+   (`PlaceTiming::local_wire`, `PlacementReport::local`). `build_clusters` records
+   the sink of each link it makes, and such a connection costs nothing in the timing
+   rounds and in the router's first pass. `counter64`'s first estimate is 5.22 ns.
+   Over five seeds 1.241 against 1.244, inside a seed's spread; kept for the estimate.
+3. **Median moves** (`PlaceOptions::median_moves`, `median_region`). One draw in
+   eight is VPR's median move: the destination drawn from between the lower median of
+   the low edges of the boxes of the cell's signals and the upper median of their
+   high edges, the cell left out of them, wherever that is; for a macro, of its
+   members' signals; signals of more than 64 sinks left out. `counter64`'s worst
+   path is 12.8 tiles long, Vivado's 10.9. Over five seeds 1.242 against 1.241, and
+   1,612 slices against 1,824. A first version, which took the median of both edge
+   lists the same way, was 1.236 and 1,576 slices over five seeds, with `sad`'s adc
+   clock 3.39 ns against 3.11 and four seeds of five across two region rows; the
+   difference between the two is a seed's (`sad`'s adc clock 3.06 in the second).
+4. **When the clock reaches each register** (`xray::timing::CLOCK_ARRIVAL_PS`,
+   `PlaceTiming::clock`, `PlaceTiming::skew`). The probe's 2,100 flip-flops by region
+   row and column, every one within 6 ps of the table
+   (`tests/fpga_xray_clock_arrival.rs`); a register launches and must settle that much
+   later, in the rounds and in the router's analysis, and the pull charges a critical
+   connection from a later site to an earlier one the difference, in tiles of wire, on
+   top of its distance. Only the `xc7a100t` has figures. Over five seeds 1.244 against
+   1.242; over ten, with the three before, none of `sad`'s ten latest paths crosses a
+   region row (the worst skew -0.11 ns), and Reticle's routed estimate is 0.981 of
+   Vivado's figure at the geometric mean, 0.935 to 1.015 from the 5th to the 95th
+   percentile, against 0.979 and 0.927 to 1.022.
+
+Tried and not kept, each over five seeds against the third change's build (1.242):
+a fully critical connection's weight doubled, 1.243; six timing rounds rather than
+three, 1.234, for up to twice the rounds' time; and, against the fourth change's
+build (1.244), keeping the round whose estimate was best rather than the last, 1.241,
+which twelve builds of the 85 took. A
+horizontal tile being cheaper than a vertical one was measured and not tried: over
+connections of fanout four or less a grid column costs 14 ps and a row 33 on Vivado's
+routes, 25 and 40 on Reticle's, where the fitted line charges 36 for either. In
+columns of interconnect the two are the same, 33 and 34, so an isotropic cost in
+those columns would be the way to it.
+
+### Before and after
+
+Medians over ten seeds (ns); `before` is 38f812a0, `after` the four changes above,
+and `default` those with `--route-throughs all` (below), which is the default now:
+
+| design | clock | Vivado | before | after | default |
+|---|---|---|---|---|---|
+| adders | clk | 2.042 | 2.423 | 2.375 | 2.390 |
+| analyser_fifo | rd_clk | 3.887 | 5.204 | 5.293 | 5.375 |
+| analyser_fifo | wr_clk | 2.417 | 2.995 | 3.102 | 2.984 |
+| barrel | clk | 2.376 | 2.946 | 2.929 | 2.942 |
+| bram_fifo | clk | 3.388 | 4.054 | 4.060 | 4.046 |
+| carry_counter | clk | 1.855 | 2.427 | 2.357 | 2.404 |
+| counter64 | clk | 3.220 | 3.866 | 3.958 | 3.869 |
+| crc32 | clk | 2.234 | 2.717 | 2.588 | 2.556 |
+| esad | adc_sampleclk | 2.131 | 2.899 | 2.994 | 3.009 |
+| esad | clk_usb | 1.727 | 2.430 | 2.455 | 2.523 |
+| fir8 | clk | 9.142 | 9.161 | 9.161 | 9.161 |
+| fsm | clk | 1.903 | 2.359 | 2.397 | 2.391 |
+| gray_cdc | clk | 1.466 | 1.503 | 1.413 | 1.413 |
+| gray_cdc | clk2 | 1.267 | 1.694 | 1.554 | 1.554 |
+| lutram32 | clk | 1.894 | 2.106 | 2.101 | 2.186 |
+| mul18 | clk | 1.935 | 2.223 | 2.220 | 2.220 |
+| regfile_alu | clk | 5.511 | 6.171 | 6.269 | 6.223 |
+| sad | adc_sampleclk | 2.207 | 3.095 | 3.068 | 3.021 |
+| sad | clk_usb | 1.726 | 2.542 | 2.530 | 2.488 |
+| srl_delay | clk | 1.645 | 2.170 | 2.085 | 1.898 |
+| widemux | clk | 2.438 | 3.517 | 3.639 | 3.503 |
+
+**Over the twenty-one clocks, Reticle's median is 1.231 times Vivado's own figure
+by default now, 1.239 after the four changes and 1.247 before**; after against
+before, eleven clocks faster and nine slower. One median is past the
+quartile of its own before (`regfile_alu`, 6.171 to 6.269 ns, 1.6 %), and three are
+better past theirs (`gray_cdc`'s two clocks, `sad`'s adc clock). Routed by Vivado (seeds 1 to 3, `placement_free`), the placements after are 1.189
+of Vivado's own flow against 1.194 before, and 1.001 of Vivado's placement and routes
+of the same netlist: on this corpus the placement is Vivado's, and what is left
+between the two tools' implementations of one netlist is the routes. And 1,588
+slices against 1,815.
+
+**`--route-throughs all`, measured again** on the tree after, ten seeds: 1.231 against
+1.239, slices the same (1,589); eleven clocks faster, seven slower, none past its
+quartile and three better past it (`analyser_fifo`'s write clock, `sad`'s adc clock,
+`srl_delay` 2.085 to 1.898 ns). On the tree before "Filling slices" it was 1.252
+against 1.248 over five seeds; why the two differ is not known. Vivado has both halves; so `all` is the default now
+(`xray::RouteThroughMode`), and `empty` and `off` are as they were.
+
+Runtime: counted where it could be, and timed two runs each side by side,
+seed 1. The Husky's builds are the legacy ones and place and route as before (below).
+`counter64` placed and routed in 19.9 and 19.4 s against 26.1 and 22.0 before, its
+anneal 685 thousand moves against 756 (medians of ten seeds). The larger pieces cost
+more: `sad` 51.6 and 57.6 s against 35.2 and 36.2, `esad` 40.2 and 44.5 against 32.6
+and 35.8, `widemux` 29.4 and 30.3 against 27.2 and 24.5; `sad`'s anneal 14.9 million
+moves and 896 million cost pin reads against 11.6 and 597. Any one of the three
+placement changes alone brings most of that (13.5 to 13.9 million moves with one of
+them off, 11.6 with all three): `sad`'s third timing round found nothing to move on
+the estimate before and stopped, and every round moves something now. Routing is
+faster on every one of them (`sad` 3.3 to 4.3 s against 4.8 to 4.9).
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--delay-model legacy` and
+`--route-throughs off`, and build as before: with this tree's release binary
+`build.sh` writes `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd`
+and `build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+Under the legacy model the setups are its one figure, no connection is local
+(`local_wire` is none), there are no median moves and no clock arrival.
+
+### Tests
+
+`a_flip_flops_setup_is_the_one_for_how_its_data_arrives` (`xray::timing`) holds the
+setups on a fabric of two tiles and three flip-flops, each way open and shut;
+`a_dedicated_connection_costs_its_own_figure_in_the_estimate` the marks and the
+estimate, with `a_flip_flop_that_registers_a_carry_joins_its_macro` and
+`a_lookup_table_takes_the_flip_flops_it_feeds_on_one_control_set` the marks of the
+registered groups; `a_median_move_brings_a_stranded_cell_back` a cell ninety-one
+tiles from its nearest neighbour brought back by a cold anneal, which without median moves
+walks it a tile at a time; `a_later_clock_launches_later_and_the_pull_charges_its_fall`
+the skew in the analysis and the pull; `the_clock_reaches_a_site_when_the_table_says`
+the table's lookup, and `tests/fpga_xray_clock_arrival.rs` every flip-flop the probe
+timed within 6 ps of it. `tests/fpga_xray_achieved.rs` reads this section's runs
+(`tree`, `fill` and `fillall` in `achieved.txt`, ten seeds each, and each build's
+slices): the default no slower than the tree before over the corpus, no clock more
+than 6 % over its own before, and a tenth fewer slices.
+
+**Mutations**, seventeen, each made by a script and put back, each failing its test:
+the ways ignored; every open way taken for every flip-flop; the two slices' figures
+swapped; a dedicated link's, a registered table's and a registered carry's sink not
+recorded; the estimate ignoring the mark, and applying it with no figure; median moves
+never drawn; the cell's own pin kept in its boxes; both edges by one median; the
+capture's skew signed wrong; skew given to a cell in no clock's domain; the pull
+charging the difference both ways; the growth from the `HCLK` row left out; the
+region row read from the wrong `HCLK` row; the table applied to any part. **One passed
+the test it was meant for at first**: skew given to a cell in no domain, because the
+fixture's other sites were at zero; the test gives every site 0.1 ns now and catches
+it. And the fixture's builds swapped, `tree` for `fillall` and the slices of `tree`
+for `fill`'s, each fail `tests/fpga_xray_achieved.rs`.
+
+### Not done
+
+- **The router.** Five sixths of the difference between Reticle's implementation and
+  Vivado's placement and routes of the same netlist, by the first table: a column of
+  interconnect is 56 ps on its routes and 33 on Vivado's, and a local route inside a
+  tile goes out and back where Vivado's takes a bounce. Not looked at further.
+- **A cost in columns of interconnect** rather than in grid tiles, which the
+  connection delays above suggest; not tried.
+- **The clock's arrival on any part but the `xc7a100t`**, which needs the probe run
+  on it, and of the block RAM and `DSP48E1` columns, which take their nearest slice
+  column's figure, not measured.
+- **Why the setup has two figures** a pin, about 0.1 ns apart.
 - None of it has been on a part.
 
 ## Wide multiplexers
