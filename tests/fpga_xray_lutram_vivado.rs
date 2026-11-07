@@ -469,10 +469,12 @@ fn memory_cells(counts: &BTreeMap<String, u32>) -> BTreeMap<String, u32> {
 /// kept as that cell, a dual-port one with its second port unread made the
 /// single-port one. Would catch a rule of `vivado_lutram_plan` changed, a
 /// memory under Vivado's threshold sent to block RAM, and a named cell made
-/// logic. The two that differ wait for inference of the block RAM's simple
-/// dual port: Vivado puts 32 words of 32 bits in one `RAMB18E1` read 36 bits
-/// wide, and Reticle in one `RAMB36E1` in true dual port, the same tile. It was
-/// two `RAMB18E1` before `RAMB36E1` was inferred, which is the same tile too.
+/// logic. Two of them, `mem32x32` and `mem32x32r2`, were not Vivado's until
+/// the block RAM's simple dual port was inferred (`docs/fpga-vivado-parity.md`,
+/// "Memories as Vivado arranges them"): Vivado puts 32 words of 32 bits in one
+/// `RAMB18E1` read 36 bits wide, and Reticle had them in one `RAMB36E1` in
+/// true dual port, and two `RAMB18E1` before `RAMB36E1` was inferred. They are
+/// Vivado's now, and held so with the rest.
 #[test]
 fn each_design_gets_the_cells_vivado_gave_it() {
     let Some(built) = built() else { return };
@@ -489,12 +491,7 @@ fn each_design_gets_the_cells_vivado_gave_it() {
             }
         }
         let (ours, theirs) = (memory_cells(&ours), memory_cells(&answer.routed));
-        let expected = match name.as_str() {
-            "mem32x32" => BTreeMap::from([("RAMB36E1".to_owned(), 1)]),
-            "mem32x32r2" => BTreeMap::from([("RAMB36E1".to_owned(), 2)]),
-            _ => theirs.clone(),
-        };
-        if ours != expected {
+        if ours != theirs {
             wrong.push(format!("{name}: ours {ours:?}, Vivado {theirs:?}"));
         }
     }
@@ -754,18 +751,21 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
         .collect();
     let cells = manifest().join("src/fpga/devices/xc7_cells.v");
     let sim = manifest().join("examples/husky/sim");
-    // A design whose memory went to a `RAMB36E1` (`mem32x32`, `mem32x32r2`):
-    // this repository's simulator has no model of one, and
-    // `tests/fpga_xray_bram_vivado.rs` simulates that cell on Vivado's.
+    // A design whose memory went to a block RAM in a mode the Husky's model
+    // does not have (`mem32x32`, `mem32x32r2`, a `RAMB18E1` in simple dual
+    // port; a `RAMB36E1` before that): this repository's simulator has no
+    // model of one, and `tests/fpga_xray_bram_vivado.rs` and
+    // `tests/fpga_xray_memarr_vivado.rs` simulate those on Vivado's.
     let whole: Vec<&String> = built
         .iter()
         .filter(|(_, one)| {
-            std::fs::read_to_string(&one.routed).is_ok_and(|t| t.contains("RAMB36E1 "))
+            std::fs::read_to_string(&one.routed)
+                .is_ok_and(|t| t.contains("RAMB36E1 ") || t.contains(".RAM_MODE(\"SDP\")"))
         })
         .map(|(name, _)| name)
         .collect();
     for name in &whole {
-        eprintln!("not simulated here: `{name}` is a RAMB36E1");
+        eprintln!("not simulated here: `{name}` is a block RAM the model here does not have");
     }
     assert!(whole.len() <= 2, "{whole:?}");
     let results: Vec<(String, Option<String>, String)> = std::thread::scope(|scope| {

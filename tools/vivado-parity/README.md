@@ -79,6 +79,12 @@ models or IP.
   mode and memories to infer as one, and `FIXTURE=bram lutram.sh` asks Vivado the
   same of them; `gen_lutram_vectors.py` simulates them too, and
   `tests/fpga_xray_bram_vivado.rs` decodes the bitstreams into `vivado.txt` there.
+- `gen_memarr.py` writes `testdata/fpga/vivado/memarr/`, 96 memories to infer of every
+  size, port and style asked about, and `FIXTURE=memarr lutram.sh` asks Vivado the same
+  of them (`lutram_probe.tcl` writes each block RAM's arranging parameters, `params`);
+  `gen_lutram_vectors.py` simulates them, `memarr_table.py` sets Vivado's arrangement of
+  each beside a Reticle build's, and `tests/fpga_xray_memarr_vivado.rs` decodes the
+  bitstreams into `vivado.txt` there and holds Reticle to it.
 - `gen_fifo.py` writes `testdata/fpga/vivado/fifo/`, a `FIFO18E1` or `FIFO36E1` by
   name per setting, and `FIXTURE=fifo lutram.sh` asks Vivado the same of them
   (`lutram_probe.tcl` also lists every pin of a FIFO's site and its net);

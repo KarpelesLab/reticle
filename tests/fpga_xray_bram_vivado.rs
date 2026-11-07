@@ -269,12 +269,17 @@ fn designs() -> Vec<String> {
 ///
 /// | Design | Vivado | Here |
 /// |---|---|---|
-/// | `b36_cascade` | two `RAMB36E1` as one 64 kbit block (`RAM_EXTENSION_A`) | refused: a cascade is not built |
-/// | `ib_1024x18_tdp` | one block, each port reading and writing | refused: the mapper gives a read and a write a port each, and has four for two |
-/// | `ib_1024x36_reg2` | the read's second register in the block, `DOB_REG` | the register in a slice |
-/// | `ib_512x36` | one `RAMB18E1` in `SDP`, 36 bits wide | one `RAMB36E1`, 36 bits wide in `TDP` |
-/// | `ib_512x72` | one `RAMB36E1` in `SDP`, 72 bits wide | two `RAMB36E1`s, 36 wide each |
+/// | `b36_cascade` | two `RAMB36E1` as one 64 kbit block (`RAM_EXTENSION_*`) | refused: a cascade is not built |
 /// | `ib_1024x32_bytes` | none: Vivado's synthesis stopped on it | refused: its byte writes, `mem[a][7:0] <= d`, assign a select of an array element, which the frontend has no target for |
+///
+/// Four more were here until the memory arrangement of
+/// `testdata/fpga/vivado/memarr/` (`docs/fpga-vivado-parity.md`, "Memories
+/// as Vivado arranges them"), and are Vivado's now, tile for tile:
+/// `ib_1024x18_tdp`, refused for wanting four ports where the block has two,
+/// is a port each for a read and a write at one address; `ib_1024x36_reg2`'s
+/// second register is the block's `DOB_REG`, where it was in a slice; and
+/// `ib_512x36` and `ib_512x72`, one `RAMB36E1` and two in true dual port,
+/// are a `RAMB18E1` and a `RAMB36E1` in simple dual port, as Vivado's.
 ///
 /// `ib_1024x32_bytes` used to be "built", and what was built was wrong: the
 /// frontend read `mem[a]` as `mem` and dropped every byte write without a
@@ -283,19 +288,11 @@ fn designs() -> Vec<String> {
 /// built nothing) and the mapping was proved against a source already
 /// without its writes. It is refused now, by name, until the frontend has a
 /// target for part of an element.
-const NOT_AS_VIVADO: &[&str] = &[
-    "b36_cascade",
-    "ib_1024x18_tdp",
-    "ib_1024x36_reg2",
-    "ib_512x36",
-    "ib_512x72",
-    "ib_1024x32_bytes",
-];
+const NOT_AS_VIVADO: &[&str] = &["b36_cascade", "ib_1024x32_bytes"];
 
-/// The three this flow refuses, and a word of each refusal.
+/// The two this flow refuses, and a word of each refusal.
 const REFUSED: &[(&str, &str)] = &[
     ("b36_cascade", "a cascade"),
-    ("ib_1024x18_tdp", "it did not become block RAM or logic"),
     ("ib_1024x32_bytes", "a select of an array element"),
 ];
 
@@ -625,12 +622,7 @@ fn each_design_gets_the_block_rams_vivado_gave_it() {
             }
         }
         let (ours, theirs) = (block_rams(&ours), block_rams(&answer.routed));
-        let expected = match name.as_str() {
-            "ib_512x36" => BTreeMap::from([("RAMB36E1".to_owned(), 1)]),
-            "ib_512x72" => BTreeMap::from([("RAMB36E1".to_owned(), 2)]),
-            _ => theirs.clone(),
-        };
-        if ours != expected {
+        if ours != theirs {
             wrong.push(format!("{name}: ours {ours:?}, Vivado {theirs:?}"));
         }
     }
@@ -638,13 +630,11 @@ fn each_design_gets_the_block_rams_vivado_gave_it() {
 }
 
 /// **What is not built as Vivado builds it says so**: the two refused with
-/// a reason, and the others' differences only the ones [`NOT_AS_VIVADO`]
-/// names. Would catch a refusal turning into a build (a cascade built
-/// without its neighbour's route) and a known difference growing.
+/// a reason. Would catch a refusal turning into a build (a cascade built
+/// without its neighbour's route).
 #[test]
 fn what_is_not_built_says_so() {
     let Some(built) = built() else { return };
-    let answers = answers().unwrap();
     for (name, reason) in REFUSED {
         assert!(
             built[*name].log.contains(reason),
@@ -652,19 +642,6 @@ fn what_is_not_built_says_so() {
             built[*name].log
         );
     }
-    // The second register is in a slice: every other feature is Vivado's.
-    let ours = block_ram_tiles(&built["ib_1024x36_reg2"].decoded.as_ref().unwrap().features);
-    let theirs = answers["ib_1024x36_reg2"].tiles.clone();
-    let strip = |line: &str| -> String {
-        line.split(' ')
-            .filter(|f| !f.ends_with(".DOB_REG") && !f.ends_with(".ZINV_REGCLKB"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    assert_eq!(
-        ours.iter().map(|l| strip(l)).collect::<Vec<_>>(),
-        theirs.iter().map(|l| strip(l)).collect::<Vec<_>>()
-    );
 }
 
 /// The role of a cell pin, `ADDRARDADDR[3]` or `CLKBWRCLK`, in the device's

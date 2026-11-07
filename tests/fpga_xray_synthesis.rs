@@ -120,9 +120,13 @@ fn figures(report: &FlowReport) -> Figures {
 
 /// `(design, legacy, vivado)`: the lookup tables, their depth and the
 /// `CARRY4`s of each design, under `--synthesis legacy` and under the default.
+/// Both map memories as Vivado does, so `analyser_fifo`'s memory being nine
+/// `RAMB36E1` side by side with no read multiplexer took 29 and 26 tables off
+/// both (`docs/fpga-vivado-parity.md`, "Memories as Vivado arranges them"):
+/// 194 and 180 before.
 const PINNED: [(&str, Figures, Figures); 15] = [
     ("adders", (289, 15, 40), (231, 2, 56)),
-    ("analyser_fifo", (194, 10, 12), (180, 3, 26)),
+    ("analyser_fifo", (165, 10, 12), (154, 3, 26)),
     ("barrel", (105, 3, 0), (87, 2, 0)),
     ("bram_fifo", (32, 4, 9), (27, 3, 12)),
     ("carry_counter", (18, 4, 8), (13, 1, 11)),
