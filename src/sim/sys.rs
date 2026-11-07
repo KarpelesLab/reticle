@@ -20,6 +20,7 @@
 //! | `$random`, `$dist_uniform` `$dist_normal` `$dist_exponential` `$dist_poisson` `$dist_chi_square` `$dist_t` `$dist_erlang` | The standard's generator (§17.9), in `random.rs`; a seed variable is written back |
 //! | `$urandom` `$urandom_range` | A seeded xorshift generator; deterministic per seed |
 //! | `$clog2` `$bits` `$itor` `$rtoi` `$realtobits` `$bitstoreal` `$sformatf` | Utility functions |
+//! | `$countones` `$countbits` `$onehot` `$onehot0` `$isunknown` | Bit counts (IEEE 1800-2017 §20.9) |
 //!
 //! Formatting understands `%d %i %h %x %o %b %s %c %t %m %l %e %f %g %%`
 //! with an optional `-`, zero flag, width and precision. Where IEEE
@@ -1085,6 +1086,9 @@ impl<'d> Simulator<'d> {
                 .first()
                 .map_or_else(|| Logic::x(1), Value::to_logic)
                 .as_unsigned()),
+            "$countones" | "$onehot" | "$onehot0" | "$isunknown" | "$countbits" => {
+                fit(bit_count(name, &args))
+            }
             "$sformatf" => Value::Str(self.format_values(inst, &args, 'd')),
             // No plusargs are ever given, so none is found and
             // `$value$plusargs` leaves its variable as it was.
@@ -1093,6 +1097,34 @@ impl<'d> Simulator<'d> {
                 self.warn_unknown("function", name, span);
                 Value::Bits(Logic::x(width.max(1)))
             }
+        }
+    }
+}
+
+/// The SystemVerilog bit-counting functions (IEEE 1800-2017 §20.9):
+/// `$countbits(e, c...)` counts the bits of `e` equal to any control
+/// bit, `$countones` the ones, `$onehot` is one when exactly one bit is
+/// one and `$onehot0` when at most one is, `$isunknown` when any bit is
+/// `x` or `z`. An unknown bit is never a one; checked against xsim
+/// 2026.1, which agrees (`$onehot(8'b0000000x)` is 0).
+fn bit_count(name: &str, args: &[Value]) -> Logic {
+    let Some(value) = args.first().map(Value::to_logic) else {
+        return Logic::x(1);
+    };
+    let count = |want: &[Bit]| {
+        let n = value.bits().iter().filter(|b| want.contains(b)).count();
+        u64::try_from(n).unwrap_or(u64::MAX)
+    };
+    let ones = count(&[Bit::One]);
+    match name {
+        "$countones" => Logic::from_u64(ones, 32).as_signed(),
+        "$onehot" => Logic::from_bool(ones == 1),
+        "$onehot0" => Logic::from_bool(ones <= 1),
+        "$isunknown" => Logic::from_bool(value.has_unknown()),
+        _ => {
+            // Each control is its least significant bit (`'1`, `1'bz`).
+            let controls: Vec<Bit> = args[1..].iter().map(|c| c.to_logic().bit(0)).collect();
+            Logic::from_u64(count(&controls), 32).as_signed()
         }
     }
 }
@@ -1250,6 +1282,38 @@ mod tests {
         };
         assert_eq!(tf.format(1_234_500_000), "1234.500 ns");
         assert_eq!(TimeFormat::for_precision(1000).format(5000), "5");
+    }
+
+    /// The bit counts on the values xsim 2026.1 was asked about
+    /// (`8'b1011_0010`, `8'b01x0_z001`). Would catch an `x` or `z` counted
+    /// as a one, `$onehot0` of zero ones false, or a `$countbits` control
+    /// read from the wrong bit; would not catch a control wider than a bit
+    /// that differs in its upper bits, which only its low bit decides.
+    #[test]
+    fn bit_counts_are_xsims() {
+        let v = Value::Bits(l("8'b10110010"));
+        let u = Value::Bits(l("8'b01x0z001"));
+        let q = Value::Bits(l("4'b1x1z"));
+        let bit = |s: &str| Value::Bits(l(s));
+        let n = |name: &str, args: &[Value]| bit_count(name, args).to_u64();
+        assert_eq!(n("$countones", std::slice::from_ref(&v)), Some(4));
+        assert_eq!(n("$countones", std::slice::from_ref(&u)), Some(2));
+        assert_eq!(n("$onehot", std::slice::from_ref(&v)), Some(0));
+        assert_eq!(n("$onehot", &[bit("8'b00010000")]), Some(1));
+        assert_eq!(n("$onehot", &[bit("8'b0000000x")]), Some(0));
+        assert_eq!(n("$onehot0", &[bit("8'b00000000")]), Some(1));
+        assert_eq!(n("$onehot0", &[bit("8'b00010000")]), Some(1));
+        assert_eq!(n("$onehot0", &[bit("8'b0000000x")]), Some(1));
+        assert_eq!(n("$onehot0", std::slice::from_ref(&v)), Some(0));
+        assert_eq!(n("$isunknown", std::slice::from_ref(&u)), Some(1));
+        assert_eq!(n("$isunknown", std::slice::from_ref(&v)), Some(0));
+        assert_eq!(n("$countbits", &[u.clone(), bit("1'b1")]), Some(2));
+        assert_eq!(n("$countbits", &[u.clone(), bit("1'b0")]), Some(4));
+        assert_eq!(n("$countbits", &[u.clone(), bit("1'bx")]), Some(1));
+        assert_eq!(n("$countbits", &[u.clone(), bit("1'bz")]), Some(1));
+        assert_eq!(n("$countbits", &[u, bit("1'b1"), bit("1'bx")]), Some(3));
+        assert_eq!(n("$countbits", &[q, bit("1'b1"), bit("1'bz")]), Some(3));
+        assert_eq!(n("$countbits", &[v, bit("1'b0"), bit("1'b1")]), Some(8));
     }
 
     #[test]

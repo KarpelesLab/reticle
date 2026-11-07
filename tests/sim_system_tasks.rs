@@ -120,3 +120,14 @@ fn monitor_prints_only_on_a_change() {
 fn m_names_the_scope_as_xsim_does() {
     matches_xsim("scope_tb", "sv", 0);
 }
+
+/// **`$countones`, `$countbits`, `$onehot`, `$onehot0` and `$isunknown`
+/// compute on run-time values** (`bitcount_tb.sv`). They were unknown
+/// functions to the simulator, warned about and `x`, and only folded when
+/// their operand was constant. Would catch any of the five returning `x`
+/// again or counting an unknown bit as a one; `bit_counts_are_xsims` in
+/// `sim::sys` pins the same values without the frontend.
+#[test]
+fn bit_counts_compute_as_xsim_does() {
+    matches_xsim("bitcount_tb", "sv", 0);
+}
