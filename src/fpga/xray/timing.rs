@@ -86,9 +86,11 @@
 //! launched that long after the clock's edge less [`CLOCK_INSERTION`], the
 //! clock's own way from its pad to the register the data races.
 
+use std::collections::HashSet;
+
 use super::DelayModel;
 use crate::fpga::Constraints;
-use crate::fpga::arch::RoutingGraph;
+use crate::fpga::arch::{NodeId, RoutingGraph};
 use crate::fpga::constraints::matches_glob;
 use crate::fpga::place::{Netlist, PathDomain, PinDelays, PinTiming, PlaceTiming, Placement};
 use crate::ir::{AttrValue, Design, ModuleId};
@@ -1348,28 +1350,58 @@ fn own_pin_delays(
     own
 }
 
+/// A flip-flop's data input's setup by how its data reaches it, in a `SLICEL`
+/// and a `SLICEM`: from a cell of its own slice, inside the site; through the
+/// lane's bypass pin `<L>X`; and through the lane's lookup table, a way
+/// ([`super::thru`]). See [`place_timing_on_sites`] for where each was read.
+const SETUP_INSIDE: (f64, f64) = (-0.039, -0.082);
+/// See [`SETUP_INSIDE`].
+const SETUP_BYPASS: (f64, f64) = (0.082, 0.058);
+/// See [`SETUP_INSIDE`].
+const SETUP_WAY: (f64, f64) = (0.122, 0.083);
+
 /// What a placement says of the cells' own figures, for a `model` that has
 /// them: a flip-flop's clock to `Q` by its slice and bel, 0.341 ns in a
 /// `SLICEL`'s `AFF` to `DFF` and 0.393 in a `SLICEM`'s, 0.313 and 0.361 in
 /// their `A5FF` to `D5FF` (Vivado 2026.1, grade 3, every flip-flop of the
 /// corpus: `arcs.txt`). And its data input's setup by where the data comes
-/// from: -0.050 ns from a cell of its own slice, which reaches it inside the
-/// site, and 0.079 through the slice's bypass pin from anywhere else, the means
-/// of Vivado's over the corpus's 1,926 and 2,804 flip-flops of each. One figure
-/// for both, the 0.027 before placement, put a register-to-register path's
-/// end 0.05 ns early, and those were the endpoints the estimate was furthest
-/// under Vivado on. Nothing for [`DelayModel::Legacy`], whose one figure is
-/// every flip-flop's.
+/// from, in a `SLICEL` and a `SLICEM`: -0.039 and -0.082 ns from a cell of its
+/// own slice, which reaches it inside the site (`SETUP_INSIDE`); 0.082 and
+/// 0.058 through the slice's bypass pin from anywhere else (`SETUP_BYPASS`);
+/// and 0.122 and 0.083 through the lane's table on one of `ways`, the ways the
+/// router is given ([`crate::fpga::place::route_throughs_needed`];
+/// `SETUP_WAY`). A way ends at the lane's `<L>FF` alone, and is open only
+/// when the lane's signals do not fit without it, so a flip-flop on that bel
+/// fed from elsewhere takes it.
+///
+/// Each is the mean of Vivado's setup over the flip-flops of three seeds of
+/// the timing corpus as this flow placed and routed them, 13,224 in all,
+/// classed by the site pin Vivado says each is reached by
+/// (`docs/fpga-vivado-parity.md`, "Filling slices"). Before, -0.050 from the
+/// slice and 0.079 from anywhere else, measured before there were ways, were
+/// every slice's: a `SLICEM`'s ends were 0.02 to 0.03 ns late and a way's in a
+/// `SLICEL` 0.04 early. A pin's setup is one of two figures about 0.1 ns apart,
+/// by something not read, and these are means over both. One figure
+/// for all, the 0.027 before placement, put a register-to-register path's end
+/// 0.05 ns early, and those were the endpoints the estimate was furthest under
+/// Vivado on. Nothing for [`DelayModel::Legacy`], whose one figure is every
+/// flip-flop's.
 pub fn place_timing_on_sites(
     timing: &mut PlaceTiming,
     model: DelayModel,
     netlist: &Netlist,
     graph: &RoutingGraph,
     placement: &Placement,
+    ways: &[NodeId],
 ) {
     if model == DelayModel::Legacy {
         return;
     }
+    // The data inputs a way open to the router ends on.
+    let through: HashSet<NodeId> = ways
+        .iter()
+        .flat_map(|way| graph.outgoing(*way).iter().map(|pip| graph.pip(*pip).to))
+        .collect();
     for (index, inst) in netlist.instances.iter().enumerate() {
         if inst.kind != "ff" {
             continue;
@@ -1394,6 +1426,10 @@ pub fn place_timing_on_sites(
             (site.tile, &bel[..end])
         };
         let here = slice_of(site);
+        let by_slice = |(l, m): (f64, f64)| if slicem { m } else { l };
+        let way = graph.sites[site]
+            .pin("d")
+            .is_some_and(|d| through.contains(&d));
         for pin in &inst.pins {
             let p = &netlist.pins[*pin];
             if p.role != "d" || timing.pin_delays.capture.len() <= *pin {
@@ -1404,7 +1440,13 @@ pub fn place_timing_on_sites(
                 .and_then(|s| netlist.signals[s].driver)
                 .and_then(|d| placement.site_of(netlist.pins[d].instance))
                 .is_some_and(|d| slice_of(d) == here);
-            timing.pin_delays.capture[*pin] = Some(if inside { -0.050 } else { 0.079 });
+            timing.pin_delays.capture[*pin] = Some(if inside {
+                by_slice(SETUP_INSIDE)
+            } else if way {
+                by_slice(SETUP_WAY)
+            } else {
+                by_slice(SETUP_BYPASS)
+            });
         }
     }
 }
@@ -1414,6 +1456,205 @@ mod tests {
     use super::*;
     use crate::fpga::place::{Instance, NetPin, Signal};
     use crate::ir::{CellId, Const, Id};
+
+    /// **A flip-flop's setup is the one for how its data reaches it, in its
+    /// kind of slice.** Two tiles of a table and three flip-flops, a
+    /// `SLICEL`'s `AFF` and `A5FF` and a `SLICEM`'s `AFF`, each `AFF`'s `D`
+    /// reachable by a way of its own. A flip-flop fed from its own slice's
+    /// table gets [`SETUP_INSIDE`]; one fed from the other tile
+    /// [`SETUP_BYPASS`], or [`SETUP_WAY`] when its lane's way is among those
+    /// open, each the `SLICEL`'s or the `SLICEM`'s figure by its bel; the
+    /// `A5FF` the bypass's whatever is open, as no way reaches it. The legacy
+    /// model sets none.
+    ///
+    /// Would catch the ways ignored, a way taken for one it does not reach,
+    /// the two slices' figures swapped and the slice read from the driver's
+    /// bel. Would not catch a figure itself being wrong: those are Vivado's
+    /// means (`docs/fpga-vivado-parity.md`, "Filling slices"), which only a
+    /// run against Vivado's timer asks, nor the router passing a way by,
+    /// which `route_throughs_needed` opening only what a lane needs rules out.
+    #[test]
+    fn a_flip_flops_setup_is_the_one_for_how_its_data_arrives() {
+        use crate::fpga::arch::{Arch, BelDecl, PipDecl, TileType, WireDecl, WireRef};
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clb", "logic_tile", 8, 8);
+        for name in ["o6", "byp", "way_l", "way_m", "d_l", "d_l5", "d_m", "i"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for (from, to) in [
+            ("o6", "d_l"),
+            ("o6", "byp"),
+            ("byp", "d_l"),
+            ("byp", "d_l5"),
+            ("byp", "d_m"),
+            ("way_l", "d_l"),
+            ("way_m", "d_m"),
+        ] {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: Vec::new(),
+            });
+        }
+        let mut lut = BelDecl::new("SLICEL_X0_A6LUT", "lut");
+        lut.pins.push(("i0".to_owned(), WireRef::local("i")));
+        lut.pins.push(("o".to_owned(), WireRef::local("o6")));
+        tile.bels.push(lut);
+        for (name, d) in [
+            ("SLICEL_X0_AFF", "d_l"),
+            ("SLICEL_X0_A5FF", "d_l5"),
+            ("SLICEM_X0_AFF", "d_m"),
+        ] {
+            let mut ff = BelDecl::new(name, "ff");
+            ff.pins.push(("d".to_owned(), WireRef::local(d)));
+            tile.bels.push(ff);
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        arch.set_tile(1, 0, 0);
+        let graph = arch.build_graph();
+        let site = |x: u32, bel: &str| {
+            (0..graph.sites.len())
+                .find(|s| graph.sites[*s].tile == (x, 0) && graph.sites[*s].bel == bel)
+                .unwrap()
+        };
+        let node = |x: u32, name: &str| {
+            (0..graph.nodes.len())
+                .find(|n| graph.nodes[*n].name == name && graph.nodes[*n].tile == (x, 0))
+                .map(|n| NodeId::try_from(n).unwrap())
+                .unwrap()
+        };
+        // Instances: 0 a table in tile 0, 1 a table in tile 1; then the
+        // flip-flops, 2 in tile 0's `SLICEL` `AFF` reading table 0, and 3, 4
+        // and 5 in tile 1's `AFF`, `A5FF` and `SLICEM` `AFF` reading table 0.
+        type Spec<'a> = (&'a str, &'a [(&'a str, usize, bool)]);
+        let specs: [Spec<'_>; 6] = [
+            ("lut", &[("o", 0, true)]),
+            ("lut", &[("o", 1, true)]),
+            ("ff", &[("d", 0, false)]),
+            ("ff", &[("d", 0, false)]),
+            ("ff", &[("d", 0, false)]),
+            ("ff", &[("d", 0, false)]),
+        ];
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: (0..2)
+                .map(|n| Signal {
+                    name: format!("s{n}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        for (instance, (kind, pins)) in specs.iter().enumerate() {
+            let mut own = Vec::new();
+            for (role, signal, output) in *pins {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+                if *output {
+                    netlist.signals[*signal].driver = Some(pin);
+                } else {
+                    netlist.signals[*signal].sinks.push(pin);
+                }
+                own.push(pin);
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("{kind}{instance}"),
+                primitive: kind.to_uppercase(),
+                kind: (*kind).to_owned(),
+                pins: own,
+                pin: None,
+            });
+        }
+        let mut placement = Placement::new(6, graph.sites.len());
+        for (instance, (x, bel)) in [
+            (0, "SLICEL_X0_A6LUT"),
+            (1, "SLICEL_X0_A6LUT"),
+            (0, "SLICEL_X0_AFF"),
+            (1, "SLICEL_X0_AFF"),
+            (1, "SLICEL_X0_A5FF"),
+            (1, "SLICEM_X0_AFF"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            placement.place(instance, site(*x, bel));
+        }
+        let n = netlist.pins.len();
+        let timing = PlaceTiming {
+            pins: vec![PinTiming::Ignored; n],
+            cell: vec![0.0; 6],
+            launch: vec![0.0; 6],
+            capture: vec![0.0; 6],
+            domain: vec![PathDomain::Untimed; 6],
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            periods: Vec::new(),
+            wire: (0.0, 0.0, 0.0),
+            rounds: 0,
+            weight: 0.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            frozen: Vec::new(),
+            pin_domain: Vec::new(),
+            pin_delays: PinDelays {
+                capture: vec![None; n],
+                ..PinDelays::default()
+            },
+        };
+        let setups = |model: DelayModel, ways: &[NodeId]| {
+            let mut timing = timing.clone();
+            place_timing_on_sites(&mut timing, model, &netlist, &graph, &placement, ways);
+            (2..6)
+                .map(|ff| timing.pin_delays.capture[netlist.instances[ff].pins[0]])
+                .collect::<Vec<_>>()
+        };
+        let (l, m) = (0, 1);
+        let pick = |pair: (f64, f64), which: usize| Some(if which == l { pair.0 } else { pair.1 });
+        assert_eq!(
+            setups(DelayModel::Vivado, &[]),
+            vec![
+                pick(SETUP_INSIDE, l),
+                pick(SETUP_BYPASS, l),
+                pick(SETUP_BYPASS, l),
+                pick(SETUP_BYPASS, m),
+            ]
+        );
+        let ways = [node(1, "way_l"), node(1, "way_m")];
+        assert_eq!(
+            setups(DelayModel::Vivado, &ways),
+            vec![
+                pick(SETUP_INSIDE, l),
+                pick(SETUP_WAY, l),
+                pick(SETUP_BYPASS, l),
+                pick(SETUP_WAY, m),
+            ]
+        );
+        // Tile 0's way is not tile 1's.
+        assert_eq!(
+            setups(DelayModel::Vivado, &[node(0, "way_l")])[1],
+            pick(SETUP_BYPASS, l)
+        );
+        assert_eq!(setups(DelayModel::Legacy, &ways), vec![None; 4]);
+    }
 
     /// **A `LUT6_2`'s inputs reach the half that reads them.** One table,
     /// `O6` and `O5`, `I5` tied high so `O6` is the upper half: the lower

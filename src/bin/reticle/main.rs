@@ -4395,8 +4395,18 @@ fn write_xc7_bitstream(
         let (mut placement, placement_report) =
             place(&netlist, &fabric.arch, &graph, constraints, &options)
                 .map_err(|e| e.to_string())?;
+        // Only the ways through a lookup table this placement needs are open:
+        // a flip-flop takes its bypass input first, as Vivado's do. See
+        // `place::route_throughs_needed`.
+        let needed = reticle::fpga::place::route_throughs_needed(
+            &netlist,
+            &graph,
+            &placement,
+            &options.route_throughs,
+        );
         // The cells' own figures where the placement says them, for the
-        // route and its estimate: see `xray::place_timing_on_sites`.
+        // route and its estimate: see `xray::place_timing_on_sites`, by which a
+        // flip-flop at the end of a way has a setup of its own.
         if let Some(timing) = options.timing.as_mut() {
             reticle::fpga::xray::place_timing_on_sites(
                 timing,
@@ -4404,6 +4414,7 @@ fn write_xc7_bitstream(
                 &netlist,
                 &graph,
                 &placement,
+                &needed,
             );
         }
         // Each delay's controller in the clock row of its region.
@@ -4479,15 +4490,7 @@ fn write_xc7_bitstream(
         // truth table follows them below. See `xray::lutswap`.
         let mut equivalent =
             reticle::fpga::xray::lut_input_classes(design, top, &netlist, &graph, &placement);
-        // Only the ways through a lookup table this placement needs are open:
-        // a flip-flop takes its bypass input first, as Vivado's do. See
-        // `place::route_throughs_needed`.
-        let needed = reticle::fpga::place::route_throughs_needed(
-            &netlist,
-            &graph,
-            &placement,
-            &options.route_throughs,
-        );
+        // The ways `needed` names, and no others.
         fabric.route_through_nodes(&graph, &needed, &mut closed, &mut equivalent);
         let route_options = RouteOptions {
             node_base,
