@@ -38,7 +38,8 @@ pub(crate) struct ModuleDecl<'ast> {
     pub item: &'ast Item,
     /// The dialect the file was parsed in.
     pub dialect: Dialect,
-    /// The `` `timescale `` in effect, if one was seen in the file.
+    /// The `` `timescale `` in effect: the last one before the module in
+    /// its file, or the file's first when none comes before it.
     pub timescale: Option<(u64, crate::ir::TimeUnit, u64, crate::ir::TimeUnit)>,
 }
 
@@ -84,9 +85,17 @@ impl<'ast> Table<'ast> {
     ) -> Self {
         let mut table = Table::default();
         for (file, dialect) in files {
-            let timescale = timescale_of(&file.items);
+            // A module has the `timescale` last seen before it; one before
+            // the file's first directive has that first one.
+            let mut timescale = timescale_of(&file.items);
             for item in &file.items {
                 match &item.kind {
+                    ItemKind::Directive(d) if d.name == "timescale" => {
+                        if let Some(ts) = parse_timescale(&d.args) {
+                            timescale = Some(ts);
+                        }
+                        table.unit_items.push((item, *dialect));
+                    }
                     ItemKind::Module(m) => {
                         let decl = ModuleDecl {
                             def: m,
@@ -258,6 +267,28 @@ mod tests {
         assert!(!table.is_interface("top"));
         assert!(table.packages.contains_key("p"));
         assert_eq!(table.order.len(), 4);
+    }
+
+    /// Each module has the `` `timescale `` written before it, and one
+    /// before any has the file's first. Would catch every module taking
+    /// the file's first directive, which gave a `1ns/1ps` testbench after a
+    /// `1us/10ns` module the microsecond unit; would not catch a directive
+    /// carried from one file into the next, which this does not do.
+    #[test]
+    fn each_module_has_the_timescale_before_it() {
+        let (_, file) = parse(
+            "module early; endmodule\n\
+             `timescale 1us/10ns\n\
+             module sub; endmodule\n\
+             `timescale 1ns/1ps\n\
+             module tb; sub u1(); endmodule\n",
+        );
+        let mut diags = Diagnostics::new();
+        let table = Table::collect(&[(&file, Dialect::SystemVerilog)], &mut diags);
+        use crate::ir::TimeUnit::{Ns, Ps, Us};
+        assert_eq!(table.modules["early"].timescale, Some((1, Us, 10, Ns)));
+        assert_eq!(table.modules["sub"].timescale, Some((1, Us, 10, Ns)));
+        assert_eq!(table.modules["tb"].timescale, Some((1, Ns, 1, Ps)));
     }
 
     #[test]
