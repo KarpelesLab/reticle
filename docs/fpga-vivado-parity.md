@@ -2608,7 +2608,8 @@ not kept.
   route, which the decoded arcs would have to account for), or the placer's (a buffer
   table it may put in front of a flip-flop, as `legalise_carries` puts one in front of
   a chain's propagate); neither is written, and what it would do to the clock is not
-  measured. `srl_delay`'s wires are this.
+  measured. `srl_delay`'s wires are this. *Done since, the router's and the
+  bitstream's way, in "Eight flip-flops a slice" below.*
 - **Tables four to a slice.** Reticle's tables are spread over half again as many
   slices as Vivado's (`regfile_alu` 153 to 93); nothing in the placer asks for a
   full slice, and what it would cost or save is not measured.
@@ -2920,6 +2921,204 @@ never loads, pass every test here.
   again here.
 - **Placing a memory's two `RAMB18E1` copies in one tile**, as Vivado does: the placer's
   (not touched here).
+- None of it has been on a part.
+
+## Eight flip-flops a slice
+
+**Asked: what does Vivado write for a flip-flop that reaches its data through a
+lookup table, and does this flow building slices of eight that way cost the clock?**
+"Packing against Vivado's" left it the largest difference in its table: Vivado's
+slices hold eight flip-flops where they can, four on the bypass inputs `AX` to `DX`
+and four through a table used as a wire, and this flow's four. Run on 2026-11-07 at
+`xc7a100tftg256-3` with Vivado 2026.1. **Nothing here has been on a part.**
+
+### What Vivado writes
+
+`tools/vivado-parity/gen_ffpack.py` writes `testdata/fpga/vivado/ffpack/`: eight
+flip-flops fed from elsewhere held to one slice by `LOC` and `BEL`, in a `SLICEL` and a
+`SLICEM`, beside tables that hold nothing (`free8`, `free8m`), a function of two inputs
+(`lut2x4`), of four (`lut4x4`, `lut4x4m`) or of five (`lut5x4`), of every reset kind
+(`ctrl8`, `async8`), and two Vivado cannot hold there (`mixed_ce`, one of the eight with
+an enable; `two_clocks`, one on another clock). `ffpack.sh` asks Vivado for each held
+slice's cells, site pips, routes and data paths and a bitstream, and `vivado.txt` is
+those bitstreams decoded, a line a slice and one a lane. **Decoded, so checked**:
+
+- **A lane whose table holds nothing**: `<L>FF` reads `O6` (`<L>FFMUX.O6`, site pip
+  `AFFMUX:O6`), the table's `INIT` is `FFFFFFFF00000000`, the upper half, which is `A6`
+  passed on, and the route ends at the slice's `<L>6` pin (`CLBLL_LL_A6`). The same in
+  the `SLICEM`.
+- **A lane whose table holds a function of four inputs or of two**: `<L>FF` reads `O5`
+  (`<L>FFMUX.O5`); the table's lower half passes on one of `A1` to `A5` the function does
+  not read (`F0F0F0F0` for `A3`, `FFFF0000` for `A5`; which one is Vivado's router's,
+  `A3`, `B4`, `C5`, `D2` in one build) and its upper half is the function. `A6` is not
+  routed, and reads one, so `O6` is still the function.
+- **The lane's other flip-flop, `<L>5FF`, takes the bypass input** (`<L>5FFMUX.IN_B`) in
+  every lane of every design; a flip-flop alone in its lane takes it too (`AFFMUX.AX`,
+  `two_clocks`). Vivado goes through a table only for a flip-flop the bypass cannot serve.
+- **Each flip-flop keeps its own initial and reset value**, a five-input one as the other:
+  `ZINI` set for `INIT` 0 and `ZRST` for a reset to 0 (`FDRE`, `FDCE`), the slice's
+  `FFSYNC` set for the synchronous kinds and clear for the asynchronous, `CEUSEDMUX` and
+  `SRUSEDMUX` once for all eight. Given one flip-flop of eight with an enable the others
+  lack (`mixed_ce`) or on another clock (`two_clocks`), Vivado placed the others
+  elsewhere against their `LOC`s: the eight share one clock, enable and reset, which this
+  flow's placer already holds them to (the shared pins of `place::SiteRules`).
+- **Four `LUT5`s beside eight flip-flops** (`lut5x4`): Vivado kept the flip-flops and put
+  the tables elsewhere, so no way beside a table of five inputs; why it dropped those
+  `LOC`s it did not say (`-quiet`), so that is read off the placement, not off a message.
+- **Vivado's timer puts the table in the net.** Through `B6` the net to the flip-flop was
+  0.211 ns where the same hops to the bypass were 0.238, and through `B4` and `O5` 0.413,
+  about what the slower pin's wire costs in the fitted model (`CLBLL:LL_B4` 198 ps,
+  `LL_B6` 2); the setup was -0.058 to -0.067 ns through a table against -0.018 to -0.039
+  on the bypass. So a way costs nothing of its own here beyond its pin's wire. Read off
+  the probes' `report_timing`, not committed.
+
+### What was built
+
+`xray::thru`. Each lane has two wires of its own, `<L>6` to the upper half's way and on to
+`<L>FF`'s `D` with `<L>FFMUX.O6`, and `<L>1`..`<L>5` to the lower half's and on with
+`<L>FFMUX.O5`, each hop a pip carrying the `INIT` bits it needs, so the bitstream takes
+them from the route. The placer counts a way as a wire into the lane that any one signal
+may take, but only while its table lets it: the upper half's while no cell holds the
+table or a site excluding it (a shift register, a RAM), the lower half's beside a table
+of four inputs or fewer that does not read `A6` (`place::RouteThrough`,
+`ControlGroup::gates`); the pool walk stops at a way rather than taking the table's six
+inputs into the flip-flop's budget. After placement, a lane whose signals fit without its
+way does not get it, as Vivado takes the bypass first (`place::route_throughs_needed`),
+and every way not needed is closed to the router. A table beside a way keeps off `A6`
+(it leaves the router's interchangeable inputs) and has only its upper half written.
+
+**What accounts for a way's bits**: it is in no netlist, so after decoding,
+`XrayDatabase::check_route_throughs` reads every table of the fabric back and holds it to
+what was placed and routed there: a way's table exactly `FFFFFFFF00000000` from `A6`, or
+its pass pattern under the cell's upper half, from the input the route arrived on, with
+the lane's `<L>FFMUX` set to the half it took; a cell beside a way not reading `A6`; every
+table cell its own truth table; and a table nothing holds or passes through, nothing. A
+build that fails any of it writes nothing. The interconnect arcs are compared as before
+and are still exactly the router's (a way's pips are a slice's own, which
+`arc_differences` does not count). Run on the variants below before they were right, it
+refused two placements that left a way open to the router the placer had not counted,
+once through a table a `SLICEM`'s RAM held.
+
+**Feature-compared** (`tests/fpga_xray_ffpack_vivado.rs`): `free16` and `lut2x16`,
+sixteen flip-flops in one tile (Vivado's by `LOC`, this flow's by a region of the tile,
+since it cannot fix a cell to a site) and in the second a two-input table in every lane,
+so that both tools need a way for half of them. Every lane of the tile is Vivado's,
+features for features (`<L>FFMUX`, `<L>5FFMUX`, `<L>OUTMUX`, the table's halves, `ZINI` and
+`ZRST`), and so is each slice's own; which lane holds which flip-flop and which free input
+a lower-half way takes are the placer's and the router's, and are left out.
+
+**Mutations**, ten, each made by a script and put back: a way counted whatever its table
+holds; the walk going on past a way; every open way given to the router; `room` read
+for the upper half's way too; the upper half's way from `A5`; the two muxes swapped; a
+cell's lower half left under a way; no table leaving room; a lower-half way's pattern
+for the wrong input. All ten fail a test. **One passed the test it was meant for**: the
+wrong input's pattern passes the Vivado comparison, which sees that a lower half passes
+an input on and not which (the check compares with the same pattern), and fails
+`thru`'s unit test, which holds each pattern to the one Vivado's bits decode to.
+
+### Which ways, measured
+
+Medians of Vivado's timer over the timing corpus, as `achieved.sh` measures it; `before`
+is this tree without ways, which is `achieved.txt`'s `packing` (seeds 1 to 5, rebuilt and
+the same to the picosecond on two designs) and seeds 6 to 10 run here; `empty` is the
+upper half's way alone, the default now, over the same ten seeds; `all` both ways and
+`lower` the lower half's alone, five seeds each (ns):
+
+| design | clock | Vivado | before | empty | all | lower |
+|---|---|---|---|---|---|---|
+| adders | clk | 2.042 | 2.409 | 2.423 | 2.465 | 2.467 |
+| analyser_fifo | rd_clk | 3.887 | 5.330 | 5.316 | 5.365 | 5.365 |
+| analyser_fifo | wr_clk | 2.417 | 3.038 | 3.022 | 3.090 | 3.063 |
+| barrel | clk | 2.376 | 2.923 | 2.946 | 2.873 | 2.989 |
+| bram_fifo | clk | 3.388 | 3.981 | 4.054 | 4.154 | 4.130 |
+| carry_counter | clk | 1.855 | 2.385 | 2.427 | 2.397 | 2.610 |
+| counter64 | clk | 3.220 | 4.008 | 3.866 | 3.921 | 3.925 |
+| crc32 | clk | 2.234 | 2.759 | 2.717 | 2.633 | 2.597 |
+| esad | adc_sampleclk | 2.131 | 3.066 | 2.899 | 3.031 | 3.022 |
+| esad | clk_usb | 1.727 | 2.425 | 2.430 | 2.701 | 2.541 |
+| fir8 | clk | 9.142 | 9.161 | 9.161 | 9.161 | 9.161 |
+| fsm | clk | 1.903 | 2.333 | 2.359 | 2.299 | 2.299 |
+| gray_cdc | clk | 1.466 | 1.503 | 1.503 | 1.503 | 1.503 |
+| gray_cdc | clk2 | 1.267 | 1.694 | 1.694 | 1.615 | 1.615 |
+| lutram32 | clk | 1.894 | 2.140 | 2.106 | 2.286 | 2.270 |
+| mul18 | clk | 1.935 | 2.304 | 2.223 | 2.262 | 2.208 |
+| regfile_alu | clk | 5.511 | 6.348 | 6.171 | 6.104 | 6.104 |
+| sad | adc_sampleclk | 2.207 | 3.203 | 3.095 | 3.105 | 3.158 |
+| sad | clk_usb | 1.726 | 2.553 | 2.542 | 2.612 | 2.612 |
+| srl_delay | clk | 1.645 | 2.057 | 2.170 | 1.938 | 1.949 |
+| widemux | clk | 2.438 | 3.574 | 3.517 | 3.393 | 3.466 |
+
+**Over the twenty-one clocks, `empty` is 1.248 times Vivado's own figure against 1.256
+before: 0.6% faster**, eleven clocks faster, seven slower, three the same. Over the first
+five seeds alone it was 1.242 against 1.249. `all`, as Vivado has it, was 1.252 over five
+seeds and `lower` 1.255: a table beside a way keeps off `A6`, its fastest input, and its
+lane's flip-flop on it, and the placer has no reason to weigh that. So the lower half's
+way is built, decoded and compared but not the default (`--route-throughs all`). The
+worst of `empty` is `srl_delay`, 0.11 ns slower, the design whose wires "Packing against
+Vivado's" read as this; under `all` it was 0.12 faster. Not followed further.
+
+The table was measured on 73334987, before "Memories as Vivado arranges them" reached
+`master`. **Measured again on top of it** (seeds 1 to 5, `--route-throughs off` and the
+default): every design but `analyser_fifo` built the same, seed for seed, as above, with
+ways and without, and `off` the same as `packing`, which says `off` is the flow before.
+`analyser_fifo`, whose memories that section rearranged, went from 5.262 and 3.000 ns
+without ways to 5.360 and 3.090 with them, about a seed's spread. The geometric mean on
+that tree is 1.243 with ways against 1.248 without. `achieved.txt` keeps the run on
+73334987.
+
+Slices used, medians over seeds 6 to 10 of the same builds (every slice holding a cell),
+beside Vivado's own from the first table of "Packing against Vivado's":
+
+| design | Vivado | before | empty | flip-flops a slice, before | empty |
+|---|---|---|---|---|---|
+| adders | 83 | 175 | 153 | 2.8 | 3.2 |
+| analyser_fifo | 71 | 131 | 125 | 2.0 | 2.2 |
+| barrel | 36 | 28 | 29 | 2.7 | 2.8 |
+| bram_fifo | 21 | 33 | 34 | 2.5 | 2.4 |
+| carry_counter | 24 | 26 | 24 | 2.6 | 3.0 |
+| counter64 | 44 | 65 | 62 | 2.2 | 2.4 |
+| crc32 | 36 | 67 | 64 | 1.9 | 1.9 |
+| esad | 289 | 397 | 385 | 3.0 | 3.2 |
+| fir8 | 12 | 21 | 21 | 1.2 | 1.2 |
+| fsm | 11 | 22 | 19 | 1.8 | 2.1 |
+| gray_cdc | 9 | 15 | 15 | 2.5 | 2.5 |
+| lutram32 | 17 | 24 | 19 | 3.0 | 3.7 |
+| mul18 | 10 | 14 | 12 | 2.6 | 3.0 |
+| regfile_alu | 104 | 137 | 140 | 2.0 | 1.8 |
+| sad | 309 | 443 | 455 | 2.6 | 2.5 |
+| srl_delay | 9 | 9 | 13 | 4.2 | 2.6 |
+| widemux | 282 | 347 | 257 | 3.0 | 4.1 |
+
+**1,954 slices to 1,827 over the corpus (Vivado's 1,367), 6.5% fewer**, most of it
+`widemux` (347 to 257, under Vivado's 282) and `adders`; `sad`, `regfile_alu` and
+`srl_delay` took more. The placer packs by wirelength and legality alone, and a way only
+widens what is legal; nothing asks it for full slices, which is why most designs moved
+little and Vivado is still a third smaller. `all` used 1,821 over its own five seeds,
+1 to 5, which are not these.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--route-throughs off`, with a comment
+why: a build with ways packs and routes differently and has not been on a board. With
+this tree's release binary they are byte for byte as before: `build.sh`
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd`, `build_plus.sh` seed 4
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.** Under
+`off` no way is declared and the fabric, the placement and the routes are the ones
+before.
+
+### Not done
+
+- **A placer that asks for full slices**, or weighs a way against the `A6` it takes from
+  the table beside it: the density above is what legality alone gave.
+- **The lower half's way as a default.** Built and Vivado's, and slower here; whether a
+  cost for the `A6` it takes would change that is not measured.
+- **A way through a table to anything but its lane's main flip-flop**: Vivado also
+  passes a table's inputs out of the slice, and a five-input flip-flop could take
+  `O5` (`<L>5FFMUX.IN_A`) from a way; in these designs it never did.
+- **Reticle's own timing of a way**: its model charges the flip-flop the bypass input's
+  setup, 0.079 ns, where Vivado's timer had -0.06 through a table, so its estimate of
+  such a path is about 0.13 ns pessimistic. Vivado's timer, not this, is what was
+  measured above.
 - None of it has been on a part.
 
 ## Wide multiplexers
