@@ -1,0 +1,10 @@
+Note: x=2.500000e+00 y=-1.250000e+00 rs=5.000000e-01
+Note: sum 1.250000e+00 prod -3.125000e+00 quot -2.000000e+00 pow 6.250000e+00
+Note: neg -2.500000e+00 abs 1.250000e+00 mod 5.000000e-01
+Note: comparisons
+Note: sqrt 1.581139e+00 floor -2.000000e+00 ceil -1.000000e+00 round 3.000000e+00
+Note: log2 1.000000e+01 exp 2.718282e+00 sin 1.000000e+00 max 2.500000e+00
+Note: integer(x) 3 integer(y) -1 real(i) 7.000000e+00 to_string 2.500000e+00
+Note: time*real 15000 ps real*time 2500 ps
+Note: waited until 8000 ps
+Note: rs now 1.750000e+00

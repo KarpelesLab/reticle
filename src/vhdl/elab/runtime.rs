@@ -450,6 +450,119 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
+    /// A `real` constant: the IR has no real literal, so it is the
+    /// simulator's `$vhdl_real` of the value's IEEE 754 bits.
+    pub(crate) fn real_const(&mut self, r: f64, span: Span) -> ExprId {
+        self.b.span = span;
+        let bits = self.b.constant(Logic::from_u64(r.to_bits(), 64));
+        self.b.call("$vhdl_real", vec![bits], Type::Real)
+    }
+
+    /// The layout of `real`.
+    pub(crate) fn real_layout(&self) -> Layout {
+        Layout {
+            ty: self.a().builtins.real,
+            kind: LayoutKind::Real,
+            width: 0,
+            signed: true,
+        }
+    }
+
+    /// A value as a `real`: itself when it is one, else the conversion of
+    /// an integer or physical value.
+    pub(crate) fn as_real(&mut self, id: ExprId, l: &Layout, span: Span) -> ExprId {
+        if matches!(l.kind, LayoutKind::Real) {
+            return id;
+        }
+        self.b.span = span;
+        self.b.call("$vhdl_int_to_real", vec![id], Type::Real)
+    }
+
+    /// A `real` rounded to an integer or physical value of `to`'s width.
+    pub(crate) fn real_to_int(&mut self, id: ExprId, to: &Layout, span: Span) -> ExprId {
+        self.b.span = span;
+        self.b
+            .call("$vhdl_real_to_int", vec![id], Type::sbits(to.width.max(1)))
+    }
+
+    /// A binary operator of which an operand is a `real`: the operands are
+    /// converted to `real`, the IR's operator applied to them, and the
+    /// result rounded when its type is not `real` (`period * 1.5` is a
+    /// time). The IR has `real` arithmetic and comparisons; `**` and `mod`
+    /// are the simulator's.
+    pub(crate) fn real_binary(
+        &mut self,
+        sym: &str,
+        (l, ll): (ExprId, &Layout),
+        (r, rl): (ExprId, &Layout),
+        result: &Layout,
+        span: Span,
+    ) -> Option<(ExprId, Layout)> {
+        use crate::ir::BinaryOp as B;
+        if sym == "**" {
+            let x = self.as_real(l, ll, span);
+            let y = self.as_real(r, rl, span);
+            self.b.span = span;
+            let f = self.b.string("**");
+            let id = self.b.call("$vhdl_math", vec![f, x, y], Type::Real);
+            return Some((id, self.real_layout()));
+        }
+        let x = self.as_real(l, ll, span);
+        let y = self.as_real(r, rl, span);
+        self.b.span = span;
+        let op = match sym {
+            "+" => B::Add,
+            "-" => B::Sub,
+            "*" => B::Mul,
+            "/" => B::Div,
+            "=" => B::Eq,
+            "/=" => B::Ne,
+            "<" => B::Lt,
+            "<=" => B::Le,
+            ">" => B::Gt,
+            ">=" => B::Ge,
+            "mod" | "rem" => {
+                let f = self.b.string("mod");
+                let id = self.b.call("$vhdl_math", vec![f, x, y], Type::Real);
+                return Some((id, self.real_layout()));
+            }
+            other => {
+                self.unsupported(span, &format!("the operator `{other}` of `real` operands"));
+                return None;
+            }
+        };
+        let id = self.b.binary(op, x, y);
+        if op.is_predicate() {
+            return Some((id, self.boolean_layout()));
+        }
+        if matches!(result.kind, LayoutKind::Real) {
+            return Some((id, result.clone()));
+        }
+        // A physical or integer result, `t * 1.5`.
+        Some((self.real_to_int(id, result, span), result.clone()))
+    }
+
+    /// A call to an `ieee.math_real` function, at run time.
+    fn math_real(
+        &mut self,
+        name: &str,
+        args: &[Actual<'a>],
+        span: Span,
+        sink: &mut Sink<'_>,
+    ) -> Option<(ExprId, Layout)> {
+        let mut ids = Vec::with_capacity(args.len() + 1);
+        self.b.span = span;
+        ids.push(self.b.string(name));
+        for a in args {
+            let e = a.expr()?;
+            let (id, l) = self.build(e, None, sink)?;
+            ids.push(self.as_real(id, &l, e.span()));
+        }
+        self.b.span = span;
+        let id = self.b.call("$vhdl_math", ids, Type::Real);
+        Some((id, self.real_layout()))
+    }
+
     /// Reports an attribute that has no value here.
     pub(crate) fn attribute_not_static(&mut self, p: Predefined, span: Span) {
         self.error(
@@ -571,7 +684,12 @@ impl<'a> Lowerer<'a, '_> {
         };
         let predefined = matches!(body, SubprogramBody::Predefined);
         let name = self.a().decl(d).spelling.to_ascii_lowercase();
-        let standard = self.bundled_package_of(d).as_deref() == Some("std.standard");
+        let package = self.bundled_package_of(d);
+        if package.as_deref() == Some("ieee.math_real") {
+            let name = name.trim_matches('"').to_owned();
+            return Some(self.math_real(&name, args, span, sink));
+        }
+        let standard = package.as_deref() == Some("std.standard");
         let first = args.first().and_then(|a| a.expr());
         if predefined {
             // Whatever happens to the arguments, the call is this one: a

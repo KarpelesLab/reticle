@@ -1,9 +1,11 @@
 -- top: not_static
 -- The boundary of the native implementations. Almost everything the
 -- arithmetic packages declare lowers to an IR operator, but a rotate by
--- an amount that is not known at elaboration, a search for a bit
--- position, and any `ieee.math_real` call on a signal do not, and each
--- says so rather than failing to find a body to inline.
+-- an amount that is not known at elaboration and a search for a bit
+-- position do not, and each says so rather than failing to find a body
+-- to inline. An `ieee.math_real` call on a signal was the third such
+-- case; it now lowers to the simulator's real functions, so it
+-- elaborates, and synthesis refuses it (S0030).
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;

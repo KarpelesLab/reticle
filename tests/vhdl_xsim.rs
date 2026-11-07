@@ -134,3 +134,20 @@ fn waits_and_events_match_xsim() {
 fn values_match_xsim() {
     matches_xsim("values");
 }
+
+/// **`real` objects**: variables and signals of type `real` ("has no
+/// representation in the IR"), their arithmetic, comparisons, `**`,
+/// `mod`, `abs` and negation, `ieee.math_real` called with values known
+/// only at run time, `integer(r)` and `real(i)`, a time scaled by a real,
+/// and a `wait for` computed from a real constant ("this literal cannot be
+/// evaluated").
+///
+/// Would catch `integer(r)` truncating rather than rounding halves away
+/// from zero, `mod` taking the dividend's sign, and a real image in any
+/// other form than xsim's. Would not catch a `real` that has no exact
+/// binary value printed differently in its last digit, since every value
+/// here is exact or rounds alike.
+#[test]
+fn reals_match_xsim() {
+    matches_xsim("reals");
+}

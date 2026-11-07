@@ -284,6 +284,11 @@ impl<'a> Lowerer<'a, '_> {
                     self.b.span = e.span();
                     return Some((self.b.constant(c), layout.clone()));
                 }
+                if let LayoutKind::Real = layout.kind
+                    && let Some(r) = v.as_real()
+                {
+                    return Some((self.real_const(r, e.span()), layout.clone()));
+                }
             }
             // A static array of an unconstrained type — `x"A6"` compared
             // with an `unsigned`, `"00"` concatenated to a slice — has the
@@ -504,6 +509,15 @@ impl<'a> Lowerer<'a, '_> {
             }
             Some(Binding::Value { value, ty }) => {
                 let layout = self.layout_of_type(ty, span)?;
+                if let (LayoutKind::Real, Some(r)) = (&layout.kind, value.as_real()) {
+                    return Some((self.real_const(r, span), layout));
+                }
+                if let LayoutKind::Str = layout.kind
+                    && let Some(s) = self.string_of(&value)
+                {
+                    self.b.span = span;
+                    return Some((self.b.string(s), layout));
+                }
                 let c = self.const_of(&value, &layout)?;
                 self.b.span = span;
                 Some((self.b.constant(c), layout))
@@ -523,6 +537,9 @@ impl<'a> Lowerer<'a, '_> {
                     {
                         self.b.span = span;
                         return Some((self.b.string(s), layout));
+                    }
+                    if let (LayoutKind::Real, Some(r)) = (&layout.kind, v.as_real()) {
+                        return Some((self.real_const(r, span), layout));
                     }
                 }
                 let spelling = self.a().decl(d).spelling.clone();
@@ -805,6 +822,13 @@ impl<'a> Lowerer<'a, '_> {
 
     /// A VHDL type conversion between closely related types.
     fn convert(&mut self, id: ExprId, from: &Layout, to: &Layout, span: Span) -> ExprId {
+        // `real(i)` and `integer(r)`, which rounds (LRM 9.3.6).
+        match (&from.kind, &to.kind) {
+            (LayoutKind::Real, LayoutKind::Real) => return id,
+            (LayoutKind::Real, _) if to.is_bits() => return self.real_to_int(id, to, span),
+            (_, LayoutKind::Real) if from.is_bits() => return self.as_real(id, from, span),
+            _ => {}
+        }
         if !from.is_bits() || !to.is_bits() {
             return id;
         }
@@ -1075,6 +1099,13 @@ impl<'a> Lowerer<'a, '_> {
         {
             return Some(self.string_compare(sym == "=", l, r, span));
         }
+        if matches!(ll.kind, LayoutKind::Real) || matches!(rl.kind, LayoutKind::Real) {
+            let result = match &result {
+                Some(r) => r.clone(),
+                None => self.real_layout(),
+            };
+            return self.real_binary(sym, (l, &ll), (r, &rl), &result, span);
+        }
         if !ll.is_bits() || !rl.is_bits() {
             self.error(codes::TYPE, span, "this operator needs bit-vector operands");
             return None;
@@ -1314,6 +1345,25 @@ impl<'a> Lowerer<'a, '_> {
         sink: &mut Sink<'_>,
     ) -> Option<(ExprId, Layout)> {
         let (id, ol) = self.build(operand, result.as_ref(), sink)?;
+        if let LayoutKind::Real = ol.kind {
+            return match sym {
+                "+" => Some((id, ol)),
+                "-" => {
+                    let zero = self.real_const(0.0, span);
+                    self.b.span = span;
+                    Some((self.b.binary(BinaryOp::Sub, zero, id), ol))
+                }
+                "abs" => {
+                    self.b.span = span;
+                    let f = self.b.string("abs");
+                    Some((self.b.call("$vhdl_math", vec![f, id], Type::Real), ol))
+                }
+                other => {
+                    self.unsupported(span, &format!("the unary operator `{other}` of a `real`"));
+                    None
+                }
+            };
+        }
         let result = match result {
             Some(r) => r,
             None if matches!(sym, "??" | "and" | "or" | "nand" | "nor" | "xor" | "xnor") => {

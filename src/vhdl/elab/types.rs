@@ -57,8 +57,11 @@
 //!
 //! # What has no representation
 //!
-//! Access, file and protected types, and `real` or `string` *signals*,
-//! have no synthesisable representation; declaring one is `V0707`.
+//! Access, file and protected types, and `string` objects, have no
+//! representation; declaring one is `V0707`. A `real` object is an IR
+//! `real` net, which the simulator holds and synthesis refuses (`S0010`);
+//! it was `V0707` too, which left every testbench with a `real` variable
+//! unable to run.
 
 use crate::diag::Diagnostic;
 use crate::ir::Type;

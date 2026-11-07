@@ -625,6 +625,15 @@ as the target; an alias of a constant was refused; and a `case` choice
 of the range one by one to look for overlaps. Such a `case` now lowers to a
 chain of tests.
 
+**Reals** (`reals_tb.vhd`). A `real` variable or signal was "no
+representation in the IR"; it is now an IR `real` net. The IR has no real
+literal, so a constant is `$vhdl_real` of its bits, and the operators the IR
+has no real form of (`**`, `mod`, `abs`) and every `ieee.math_real`
+function called with run-time values are the simulator's `$vhdl_math`.
+`integer(r)` rounds halves away from zero (LRM 9.3.6), and a time scaled by
+a real is computed in real and rounded. Synthesis refuses a `real` object
+(`S0010`), as it did a Verilog one.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

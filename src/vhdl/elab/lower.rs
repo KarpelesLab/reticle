@@ -393,11 +393,13 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         is_signal: bool,
         span: Span,
     ) -> Option<NetId> {
-        if !layout.is_bits() {
+        // A `real` is an IR `real` net, which the simulator holds; a
+        // `string` object has no net, since the IR's strings are values.
+        if !layout.is_bits() && !matches!(layout.kind, LayoutKind::Real) {
             self.error(
                 codes::TYPE,
                 span,
-                "a `real` or `string` object has no representation in the IR",
+                "a `string` object has no representation in the IR",
             );
             return None;
         }

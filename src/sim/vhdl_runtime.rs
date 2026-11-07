@@ -22,6 +22,9 @@
 //! | `$vhdl_to_ostring` | the same | octal digits |
 //! | `$vhdl_concat` | strings and characters | their concatenation |
 //! | `$vhdl_streq` | two strings | one bit, 1 when they are equal |
+//! | `$vhdl_real` | the 64 bits of an IEEE 754 double | that `real`; the IR has no real literal |
+//! | `$vhdl_int_to_real`, `$vhdl_real_to_int` | a value | `real(i)`, and `integer(r)`, which rounds halves away from zero |
+//! | `$vhdl_math` | a function's name, then its arguments | an `ieee.math_real` function, `**` or `mod` of reals |
 //!
 //! **Time.** IEEE 1076-2008 clause 16.2.2 has `time'image` write the value
 //! in the primary unit, which would be `5000000 fs`. Vivado 2026.1's xsim
@@ -246,7 +249,9 @@ impl Simulator<'_> {
 /// Evaluates one of the run-time string functions, or `None` when `name`
 /// is not one of them.
 pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
-    let _ = ty;
+    if let Some(v) = real_call(name, args, ty) {
+        return Some(v);
+    }
     let text = match name {
         "$vhdl_image_int" => int_image(args.first()?),
         "$vhdl_image_real" => crate::logic::vhdl_real_image(args.first().map_or(0.0, real_of)),
@@ -266,6 +271,89 @@ pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
         _ => return None,
     };
     Some(Value::Str(text))
+}
+
+/// The `real` functions: a constant, the two conversions, and the
+/// subprograms of `ieee.math_real` (LRM 16.12 for the package; the
+/// functions are Rust's `f64` ones). `$vhdl_math` takes the function's
+/// name first.
+fn real_call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
+    let real = |i: usize| args.get(i).map_or(f64::NAN, real_of);
+    Some(match name {
+        "$vhdl_real" => Value::Real(
+            args.first()
+                .and_then(|v| v.to_logic().to_u64())
+                .map_or(f64::NAN, f64::from_bits),
+        ),
+        "$vhdl_int_to_real" => {
+            let l = logic_of(args.first()?).as_signed();
+            #[allow(clippy::cast_precision_loss, reason = "real(i) is inexact past 2^53")]
+            let r = l.to_i64().map_or(f64::NAN, |i| i as f64);
+            Value::Real(r)
+        }
+        "$vhdl_real_to_int" => {
+            // A conversion to an integer type rounds to the nearest,
+            // halves away from zero (LRM 9.3.6), as `f64::round` does.
+            let width = ty.width().unwrap_or(32);
+            let r = real(0).round();
+            if !r.is_finite() {
+                return Some(Value::Bits(Logic::x(width)));
+            }
+            #[allow(clippy::cast_possible_truncation, reason = "saturating is the intent")]
+            let i = r as i64;
+            Value::Bits(Logic::from_i64(i, width).with_signed(true))
+        }
+        "$vhdl_math" => {
+            let Some(Value::Str(f)) = args.first() else {
+                return None;
+            };
+            let x = real(1);
+            let y = real(2);
+            Value::Real(match f.as_str() {
+                "sqrt" => x.sqrt(),
+                "cbrt" => x.cbrt(),
+                "exp" => x.exp(),
+                "log" if args.len() == 2 => x.ln(),
+                "log" => x.ln() / y.ln(),
+                "log2" => x.log2(),
+                "log10" => x.log10(),
+                "sin" => x.sin(),
+                "cos" => x.cos(),
+                "tan" => x.tan(),
+                "arcsin" => x.asin(),
+                "arccos" => x.acos(),
+                "arctan" if args.len() == 2 => x.atan(),
+                "arctan" => x.atan2(y),
+                "sinh" => x.sinh(),
+                "cosh" => x.cosh(),
+                "tanh" => x.tanh(),
+                "arcsinh" => x.asinh(),
+                "arccosh" => x.acosh(),
+                "arctanh" => x.atanh(),
+                "floor" => x.floor(),
+                "ceil" => x.ceil(),
+                "round" => x.round(),
+                "trunc" => x.trunc(),
+                "abs" => x.abs(),
+                "sign" => {
+                    if x > 0.0 {
+                        1.0
+                    } else if x < 0.0 {
+                        -1.0
+                    } else {
+                        0.0
+                    }
+                }
+                "realmax" => x.max(y),
+                "realmin" => x.min(y),
+                "**" => x.powf(y),
+                // `mod` takes the sign of the divisor, as the integer one does.
+                "mod" => x - y * (x / y).floor(),
+                _ => f64::NAN,
+            })
+        }
+        _ => return None,
+    })
 }
 
 /// Whether a vector converted to digits is signed: the second argument
@@ -431,6 +519,39 @@ mod tests {
         assert_eq!(run("$vhdl_to_hstring", &[bits("6'b101010"), flag]), "EA");
         assert_eq!(run("$vhdl_to_ostring", &[bits("6'b101010")]), "52");
         assert_eq!(run("$vhdl_to_hstring", &[bits("8'b1x00zzzz")]), "XZ");
+    }
+
+    /// Would catch a conversion that truncates (`integer(-2.5)` is -3), a
+    /// `real` constant read through the wrong bits, and `mod` with the
+    /// dividend's sign; would not catch a function missing from the
+    /// table, which answers NaN rather than failing.
+    #[test]
+    fn reals() {
+        let r = |name: &str, args: &[Value], ty: &Type| call(name, args, ty);
+        let bits = Value::Bits(Logic::from_u64(2.5f64.to_bits(), 64));
+        assert_eq!(
+            r("$vhdl_real", &[bits], &Type::Real),
+            Some(Value::Real(2.5))
+        );
+        let i = r("$vhdl_real_to_int", &[Value::Real(-2.5)], &Type::sbits(32));
+        assert_eq!(
+            i,
+            Some(Value::Bits(Logic::from_i64(-3, 32).with_signed(true)))
+        );
+        let back = r(
+            "$vhdl_int_to_real",
+            &[Value::Bits(Logic::from_i64(-7, 32))],
+            &Type::Real,
+        );
+        assert_eq!(back, Some(Value::Real(-7.0)));
+        let m = r(
+            "$vhdl_math",
+            &[s("mod"), Value::Real(-1.0), Value::Real(3.0)],
+            &Type::Real,
+        );
+        assert_eq!(m, Some(Value::Real(2.0)));
+        let sq = r("$vhdl_math", &[s("sqrt"), Value::Real(16.0)], &Type::Real);
+        assert_eq!(sq, Some(Value::Real(4.0)));
     }
 
     /// Would catch a character argument concatenated as its decimal code
