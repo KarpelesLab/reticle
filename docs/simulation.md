@@ -664,6 +664,12 @@ one write per element. Both were refused, so `mem <= (others => (others =>
 `string` object is a vector of character codes; a string value assigned to
 one is packed into it, and one read where a string is wanted is unpacked.
 
+**Nested targets** (`nested_targets_tb.vhd`). A target inside a target —
+`o.p.x := 7`, `o.flags(i) := '1'`, `r(1).a <= 9`, `v(2).b(7 downto 4) :=
+x"C"` — narrows what its prefix writes: a slice of a slice of a net, or part
+of a memory element (the IR's `MemPart`). Only a field of a whole net was
+taken before; the rest were "a nested record target".
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

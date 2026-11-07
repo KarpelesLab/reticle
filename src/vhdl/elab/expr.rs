@@ -1772,6 +1772,54 @@ impl<'a> Lowerer<'a, '_> {
 
     // --- lvalues -----------------------------------------------------------
 
+    /// The bits `hi` down to `lo` of a target: of a net, a slice of it; of
+    /// a slice, a narrower one; of a memory element, part of it. This is
+    /// what makes `o.p.x := 7` and `r(1).a <= 5` targets (both were "a
+    /// nested record target").
+    fn narrow_lvalue(&mut self, base: Lvalue, hi: u32, lo: u32, span: Span) -> Option<Lvalue> {
+        match base {
+            Lvalue::Net(net) => Some(Lvalue::Slice { net, hi, lo }),
+            Lvalue::Slice { net, lo: blo, .. } => Some(Lvalue::Slice {
+                net,
+                hi: blo + hi,
+                lo: blo + lo,
+            }),
+            Lvalue::MemElem { mem, addr } => {
+                self.b.span = span;
+                let offset = self
+                    .b
+                    .constant(Logic::from_i64(i64::from(lo), 32).with_signed(true));
+                Some(Lvalue::MemPart {
+                    mem,
+                    addr,
+                    offset,
+                    width: hi - lo + 1,
+                })
+            }
+            Lvalue::MemPart {
+                mem, addr, offset, ..
+            } => {
+                self.b.span = span;
+                let offset = if lo == 0 {
+                    offset
+                } else {
+                    let w = self.b.module().expr(offset).ty.width().unwrap_or(32);
+                    let k = self
+                        .b
+                        .constant(Logic::from_i64(i64::from(lo), w).with_signed(true));
+                    self.b.binary(BinaryOp::Add, offset, k)
+                };
+                Some(Lvalue::MemPart {
+                    mem,
+                    addr,
+                    offset,
+                    width: hi - lo + 1,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Lowers an assignment target.
     pub(crate) fn lvalue(
         &mut self,
@@ -1862,14 +1910,14 @@ impl<'a> Lowerer<'a, '_> {
                     return None;
                 };
                 let (base, layout) = self.lvalue_name(prefix, sink)?;
-                let Lvalue::Net(net) = base else {
-                    self.unsupported(*span, "a nested record target");
-                    return None;
-                };
                 let (hi, lo, fl) = layout
                     .field_bits(&field.name)
                     .map(|(h, l, f)| (h, l, f.clone()))?;
-                Some((Lvalue::Slice { net, hi, lo }, fl))
+                let Some(lv) = self.narrow_lvalue(base, hi, lo, *span) else {
+                    self.unsupported(*span, "a record field of this target");
+                    return None;
+                };
+                Some((lv, fl))
             }
             ast::Name::Call { prefix, args, span } => {
                 let idx = first_expr(args)?;
@@ -1907,22 +1955,42 @@ impl<'a> Lowerer<'a, '_> {
                         arr.elem.clone(),
                     ));
                 }
-                let Lvalue::Net(net) = base else {
-                    self.unsupported(*span, "a nested array target");
-                    return None;
-                };
                 let arr = layout.array()?.clone();
                 if let Some(i) = self.eval_int(idx) {
                     let i = i64::try_from(i).ok()?;
                     let (hi, lo) = arr.bits_of(i)?;
-                    return Some((Lvalue::Slice { net, hi, lo }, arr.elem.clone()));
+                    let Some(lv) = self.narrow_lvalue(base, hi, lo, *span) else {
+                        self.unsupported(*span, "an element of this target");
+                        return None;
+                    };
+                    return Some((lv, arr.elem.clone()));
                 }
                 if arr.elem.width != 1 {
                     self.unsupported(*span, "a dynamic index into an array of multi-bit elements");
                     return None;
                 }
                 let index = self.bit_offset(idx, &arr, sink)?;
-                Some((Lvalue::Index { net, index }, arr.elem.clone()))
+                match base {
+                    Lvalue::Net(net) => Some((Lvalue::Index { net, index }, arr.elem.clone())),
+                    // `r.v(i)`: the bit is counted from the field's.
+                    Lvalue::Slice { net, lo, .. } => {
+                        self.b.span = *span;
+                        let index = if lo == 0 {
+                            index
+                        } else {
+                            let w = self.b.module().expr(index).ty.width().unwrap_or(32);
+                            let k = self
+                                .b
+                                .constant(Logic::from_u64(u64::from(lo), w).with_signed(true));
+                            self.b.binary(BinaryOp::Add, index, k)
+                        };
+                        Some((Lvalue::Index { net, index }, arr.elem.clone()))
+                    }
+                    _ => {
+                        self.unsupported(*span, "a dynamic index into this target");
+                        None
+                    }
+                }
             }
             ast::Name::Slice {
                 prefix,
@@ -1978,10 +2046,6 @@ impl<'a> Lowerer<'a, '_> {
                         out,
                     ));
                 }
-                let Lvalue::Net(net) = base else {
-                    self.unsupported(*span, "a nested slice target");
-                    return None;
-                };
                 let arr = layout.array()?.clone();
                 let Some((l, r)) = self.static_range(range) else {
                     self.error(
@@ -2009,7 +2073,11 @@ impl<'a> Lowerer<'a, '_> {
                         return None;
                     }
                 };
-                Some((Lvalue::Slice { net, hi, lo }, out))
+                let Some(lv) = self.narrow_lvalue(base, hi, lo, *span) else {
+                    self.unsupported(*span, "a slice of this target");
+                    return None;
+                };
+                Some((lv, out))
             }
             ast::Name::Attribute { span, .. } => {
                 self.unsupported(*span, "an attribute as an assignment target");

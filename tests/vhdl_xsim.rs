@@ -202,3 +202,19 @@ fn unconstrained_objects_match_xsim() {
 fn whole_arrays_match_xsim() {
     matches_xsim("whole_arrays");
 }
+
+/// **Nested targets**: a field of a record field (`o.p.x := 7`), an
+/// element and a slice of a record field, at a static and a run-time
+/// index, and a field of an element of an array of records, on a variable
+/// and a signal (`r(1).a <= 9`), with part of that field (`v(2).b(7
+/// downto 4)`). All but the first were "a nested record target" or "a
+/// nested array target".
+///
+/// Would catch a field written at the offset of the record rather than of
+/// the field it is in, and a write that clears the rest of the element.
+/// Would not catch a target whose index is not static inside an array of
+/// records, which is still refused.
+#[test]
+fn nested_targets_match_xsim() {
+    matches_xsim("nested_targets");
+}
