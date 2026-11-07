@@ -250,3 +250,17 @@ fn inertial_delay_matches_xsim() {
 fn aggregates_of_vectors_match_xsim() {
     matches_xsim("aggregates");
 }
+
+/// **`ieee.numeric_std_unsigned`**, which was "not bundled yet" (`V0107`):
+/// arithmetic, comparisons with a vector and a natural and between vectors
+/// of different widths, `to_integer`, `to_slv`, shifts, a rotate,
+/// `resize`, `minimum` and `maximum`, on `std_logic_vector`.
+///
+/// Would catch the vectors taken as signed, a comparison of different
+/// widths made as arrays rather than numbers, and a conversion to the
+/// wrong width. Would not catch `find_leftmost` and `find_rightmost`,
+/// which the package declares and Reticle does not.
+#[test]
+fn numeric_std_unsigned_matches_xsim() {
+    matches_xsim("numeric_std_unsigned");
+}

@@ -1,0 +1,7 @@
+Note: a+b=FF a-b=E1 a+1=F1
+Note: a*b=0E10 a/b=10 a rem 7=02
+Note: comparisons
+Note: different widths compare as numbers
+Note: to_integer=240 to_slv=C8 to_std_logic_vector=0101
+Note: shift F0 3C rotate C3 resize 00F
+Note: min 0F max F0

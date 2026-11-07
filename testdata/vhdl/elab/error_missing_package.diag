@@ -4,5 +4,5 @@ error[V0107]: `ieee.fixed_pkg` is not bundled yet; the fixed-point types are una
 5 | use ieee.fixed_pkg.all;
   |          ^^^^^^^^^ not available in this build
   |
-  = note: Reticle bundles `std.standard`, `std.textio`, `std.env`, `ieee.std_logic_1164`, `ieee.numeric_std`, `ieee.numeric_bit`, `ieee.math_real`, `ieee.std_logic_textio` and the Synopsys `std_logic_arith` / `std_logic_unsigned` / `std_logic_signed`
+  = note: Reticle bundles `std.standard`, `std.textio`, `std.env`, `ieee.std_logic_1164`, `ieee.numeric_std`, `ieee.numeric_bit`, `ieee.numeric_std_unsigned`, `ieee.math_real`, `ieee.std_logic_textio` and the Synopsys `std_logic_arith` / `std_logic_unsigned` / `std_logic_signed`
 

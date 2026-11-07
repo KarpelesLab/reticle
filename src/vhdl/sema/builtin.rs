@@ -94,6 +94,9 @@ impl Checker<'_> {
             (ieee, self.syms.numeric_bit, Pkg::NumericBit),
             (ieee, self.syms.std_logic_arith, Pkg::Arith),
             (ieee, self.syms.std_logic_unsigned, Pkg::SlvUnsigned),
+            // `numeric_std_unsigned` is the same arithmetic on the same
+            // vectors, unsigned by the package's say.
+            (ieee, self.syms.numeric_std_unsigned, Pkg::SlvUnsigned),
             (ieee, self.syms.std_logic_signed, Pkg::SlvSigned),
             (ieee, self.syms.std_logic_1164, Pkg::StdLogic1164),
             (ieee, self.syms.math_real, Pkg::MathReal),
@@ -519,7 +522,15 @@ impl Checker<'_> {
                     i64::try_from(l.to_u64()?).ok()?
                 })))
             }
-            "to_unsigned" | "to_signed" => {
+            // `numeric_std_unsigned`'s conversions of a natural.
+            "to_unsigned"
+            | "to_signed"
+            | "to_slv"
+            | "to_sulv"
+            | "to_stdlogicvector"
+            | "to_std_logic_vector"
+            | "to_stdulogicvector"
+            | "to_std_ulogic_vector" => {
                 let width = self.size_argument(v, arg_tys, 1)?;
                 let x = i64::try_from(v.first()?.as_int()?).ok()?;
                 let l = Logic::from_i64(x, 64).with_signed(true).resize(width);

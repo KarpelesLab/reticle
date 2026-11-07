@@ -67,6 +67,7 @@ pub(crate) struct Syms {
     pub numeric_bit: Symbol,
     pub std_logic_arith: Symbol,
     pub std_logic_unsigned: Symbol,
+    pub numeric_std_unsigned: Symbol,
     pub std_logic_signed: Symbol,
 }
 
@@ -185,6 +186,7 @@ pub(crate) fn run(
             numeric_bit: i.intern_ci("numeric_bit"),
             std_logic_arith: i.intern_ci("std_logic_arith"),
             std_logic_unsigned: i.intern_ci("std_logic_unsigned"),
+            numeric_std_unsigned: i.intern_ci("numeric_std_unsigned"),
             std_logic_signed: i.intern_ci("std_logic_signed"),
         }
     };

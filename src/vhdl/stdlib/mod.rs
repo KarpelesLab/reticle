@@ -56,11 +56,13 @@
 //! | `ieee` | `std_logic_arith` | the Synopsys interface, all `foreign` |
 //! | `ieee` | `std_logic_unsigned` | the Synopsys interface, all `foreign` |
 //! | `ieee` | `std_logic_signed` | the Synopsys interface, all `foreign` |
+//! | `ieee` | `numeric_std_unsigned` | the arithmetic, comparisons, shifts, `resize` and conversions (LRM 16.8.5.3), all `foreign`, on `numeric_std`'s core |
 //!
 //! # What is not bundled yet
 //!
 //! The VHDL-2008 packages that build further on `numeric_std`:
-//! `ieee.fixed_pkg`, `ieee.float_pkg` and `ieee.numeric_std_unsigned`.
+//! `ieee.fixed_pkg` and `ieee.float_pkg`. (`ieee.numeric_std_unsigned`
+//! was listed here, and is bundled now.)
 //! They are listed in [`MISSING`], so a design that names one gets a
 //! single diagnostic from [`super::sema`] saying the package is not
 //! bundled rather than a cascade of unknown-identifier errors; see
@@ -146,6 +148,11 @@ pub const SOURCES: &[Source] = &[
         name: "std_logic_signed.vhd",
         text: include_str!("ieee/std_logic_signed.vhd"),
     },
+    Source {
+        library: "ieee",
+        name: "numeric_std_unsigned.vhd",
+        text: include_str!("ieee/numeric_std_unsigned.vhd"),
+    },
 ];
 
 /// The packages that a design may reasonably expect in `ieee` (or `std`)
@@ -168,11 +175,6 @@ pub const MISSING: &[(&str, &str, &str)] = &[
         "ieee",
         "float_pkg",
         "`ieee.float_pkg` is not bundled yet; the floating-point types are unavailable",
-    ),
-    (
-        "ieee",
-        "numeric_std_unsigned",
-        "`ieee.numeric_std_unsigned` is not bundled yet; `ieee.numeric_std` or `ieee.std_logic_unsigned` covers the same arithmetic",
     ),
 ];
 

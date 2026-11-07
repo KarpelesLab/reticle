@@ -79,6 +79,7 @@
 //! | `ieee` | `std_logic_arith` | the Synopsys interface, all `foreign` |
 //! | `ieee` | `std_logic_unsigned` | the Synopsys interface, all `foreign` |
 //! | `ieee` | `std_logic_signed` | the Synopsys interface, all `foreign` |
+//! | `ieee` | `numeric_std_unsigned` | the VHDL-2008 package, all `foreign`, on `numeric_std`'s core |
 //!
 //! The arithmetic packages ship their *declarations* as VHDL and mark
 //! every subprogram `attribute foreign`; [`builtin`] is the body for a
@@ -86,8 +87,9 @@
 //! not. Both work over [`crate::logic::Logic`], so a folded constant and
 //! a simulated signal agree by construction.
 //!
-//! Not bundled yet: `ieee.fixed_pkg`, `ieee.float_pkg` and
-//! `ieee.numeric_std_unsigned`. A `use` clause naming one of them
+//! Not bundled yet: `ieee.fixed_pkg` and `ieee.float_pkg`
+//! (`ieee.numeric_std_unsigned` was in this list). A `use` clause naming
+//! one of them
 //! produces a single `V0107` error saying the package is not bundled, and
 //! analysis carries on with the rest of the design rather than cascading
 //! into unknown-identifier errors for every name that follows.

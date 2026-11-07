@@ -689,6 +689,13 @@ all its elements (VHDL-2008, clause 9.3.3.3): `x := (hi, lo)` was "aggregate
 has 2 element(s) but ... has 8". `integer'value("-42")` folds (the sign was
 not read), and `'0' or v` has the vector's width (it had the scalar's).
 
+**`ieee.numeric_std_unsigned`** (`numeric_std_unsigned_tb.vhd`) is bundled,
+on the same native core as `numeric_std` and unsigned by the package's say,
+as `std_logic_unsigned` is; it was `V0107`. One xsim defect was found while
+measuring it and is not copied: `boolean'image(a > b)` of two vectors is
+`tru` under xsim 2026.1 (and `fal`), as it is for `numeric_std` operands
+(`vh_numeric_arith` of the corpus).
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

@@ -86,12 +86,14 @@ pub(crate) enum ArithPkg {
 
 impl ArithPkg {
     /// Every package, with the unit name it is looked up by.
-    const ALL: [(ArithPkg, &'static str); 5] = [
+    const ALL: [(ArithPkg, &'static str); 6] = [
         (ArithPkg::NumericStd, "numeric_std"),
         (ArithPkg::NumericBit, "numeric_bit"),
         (ArithPkg::Arith, "std_logic_arith"),
         (ArithPkg::Unsigned, "std_logic_unsigned"),
         (ArithPkg::Signed, "std_logic_signed"),
+        // The same arithmetic, unsigned by the package's say.
+        (ArithPkg::Unsigned, "numeric_std_unsigned"),
     ];
 
     /// The signedness the package imposes whatever its operands' types,
@@ -275,6 +277,12 @@ impl<'a> Lowerer<'a, '_> {
             }
             "to_unsigned"
             | "to_signed"
+            | "to_slv"
+            | "to_sulv"
+            | "to_stdlogicvector"
+            | "to_std_logic_vector"
+            | "to_stdulogicvector"
+            | "to_std_ulogic_vector"
             | "conv_unsigned"
             | "conv_signed"
             | "conv_std_logic_vector"
