@@ -16,6 +16,8 @@
 //! Declarations inside a block (`begin int i; ... end`) create variables
 //! named after the block, so two blocks may declare the same name.
 
+use std::rc::Rc;
+
 use crate::ir::builder::BlockBuilder;
 use crate::ir::{
     self, AssignKind, CaseArm, CaseKind, CaseQualifier, Edge, ExprId, NetId, Polarity,
@@ -28,7 +30,7 @@ use super::super::codes;
 use super::super::constant::Evaluator;
 use super::super::decls;
 use super::super::scope::Symbol;
-use super::super::types::{self, Packed, VType, bits_needed};
+use super::super::types::{self, Enumeration, Packed, Range, VType, bits_needed};
 use super::super::width::{self, Info};
 use super::{Ctx, Lowerer, Sink};
 
@@ -72,6 +74,98 @@ fn qualify(
         }
         Some(ast::Qualifier::Priority) => (CaseQualifier::Priority, default),
         None => (CaseQualifier::None, default),
+    }
+}
+
+/// What `%p` prints of an argument the simulator cannot spell from its
+/// bits alone.
+#[derive(Clone, Debug)]
+enum PShape {
+    /// An enum, printed by the name of its value.
+    Enum(Rc<Enumeration>),
+    /// A packed struct, printed member by member.
+    Struct(Vec<PField>),
+    /// An unpacked array held as a memory, printed element by element
+    /// from its left bound.
+    Array {
+        /// The memory.
+        mem: ir::MemoryId,
+        /// Its declared dimension.
+        range: Range,
+        /// The shape of an element that is not a plain value.
+        elem: Option<Box<PShape>>,
+    },
+}
+
+/// One member of a struct that `%p` prints.
+#[derive(Clone, Debug)]
+struct PField {
+    name: String,
+    lsb: u32,
+    width: u32,
+    signed: bool,
+    shape: Option<PShape>,
+}
+
+/// The `%p` shape of a type, when it has one.
+fn p_shape_of(ty: &VType) -> Option<PShape> {
+    let p = ty.packed()?;
+    if let Some(e) = &p.enumeration {
+        return Some(PShape::Enum(Rc::clone(e)));
+    }
+    let fields = p.fields.as_ref()?;
+    Some(PShape::Struct(
+        fields
+            .iter()
+            .map(|f| PField {
+                name: f.name.clone(),
+                lsb: f.lsb,
+                width: f.ty.packed().map_or(1, Packed::width).max(1),
+                signed: f.ty.packed().is_some_and(|q| q.signed),
+                shape: p_shape_of(&f.ty),
+            })
+            .collect(),
+    ))
+}
+
+/// The conversions that print `shape`; `zero` (`%0p`) leaves the member
+/// names out, as xsim does.
+fn p_text(shape: &PShape, zero: bool) -> String {
+    let leaf = |inner: &Option<PShape>| match inner {
+        Some(s) => p_text(s, zero),
+        None => "%p".to_owned(),
+    };
+    match shape {
+        PShape::Enum(e) => {
+            let names: Vec<String> = e
+                .variants
+                .iter()
+                .filter_map(|(n, v)| v.to_u64().map(|v| format!("{n}={v:x}")))
+                .collect();
+            format!("%{{{}}}p", names.join(","))
+        }
+        PShape::Struct(fields) => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let text = leaf(&f.shape);
+                    if zero {
+                        text
+                    } else {
+                        format!("{}:{text}", f.name)
+                    }
+                })
+                .collect();
+            format!("'{{{}}}", parts.join(","))
+        }
+        PShape::Array { range, elem, .. } => {
+            let one = match elem {
+                Some(s) => p_text(s, zero),
+                None => "%p".to_owned(),
+            };
+            let n = usize::try_from(range.len()).unwrap_or(0);
+            format!("'{{{}}}", vec![one; n].join(","))
+        }
     }
 }
 
@@ -826,16 +920,44 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// name, since the IR has no expression for those. An element of an
     /// array (`mem[1]`) is a value like any other.
     fn syscall_args(&mut self, args: &'ast [ast::Arg], out: &mut BlockBuilder) -> Vec<ExprId> {
+        let values: Vec<&'ast Expr> = args.iter().filter_map(|a| a.value.as_ref()).collect();
+        // Each format literal, with its `%p` of an enum, a struct or an
+        // array spelled out, and the shapes of the arguments those print.
+        let mut texts: Vec<Option<String>> = vec![None; values.len()];
+        let mut shapes: Vec<Option<PShape>> = vec![None; values.len()];
+        let mut k = 0;
+        while k < values.len() {
+            if let ExprKind::Literal(ast::Literal::Str { value, .. }) = &values[k].kind {
+                let (text, found, next) = self.p_rewrite(value, &values, k);
+                for (arg, shape) in found {
+                    shapes[arg] = Some(shape);
+                }
+                texts[k] = Some(text);
+                k = next.max(k + 1);
+            } else {
+                k += 1;
+            }
+        }
         let mut ids = Vec::new();
-        for a in args {
-            let Some(v) = &a.value else { continue };
+        for (k, v) in values.iter().copied().enumerate() {
+            if let Some(text) = texts[k].take() {
+                let text = self.scoped(&text);
+                self.b.span = v.span;
+                ids.push(self.b.string(text));
+                continue;
+            }
+            if let Some(shape) = shapes[k].take() {
+                let value = match shape {
+                    PShape::Array { .. } => None,
+                    _ => Some(self.expr(v, None, &mut Sink::Proc(out))),
+                };
+                self.b.span = v.span;
+                self.p_leaves(value, &shape, &mut ids);
+                continue;
+            }
             if let Some(name) = self.scope_argument(v) {
                 self.b.span = v.span;
                 let id = self.b.string(name);
-                ids.push(id);
-                continue;
-            }
-            if let Some(id) = self.format_literal(v) {
                 ids.push(id);
                 continue;
             }
@@ -868,15 +990,154 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let ExprKind::Literal(ast::Literal::Str { value, .. }) = &v.kind else {
             return None;
         };
-        if !value.contains("%m") {
-            return None;
-        }
-        let suffix = self.scope_suffix();
-        if suffix.is_empty() {
+        let text = self.scoped(value);
+        if text == *value {
             return None;
         }
         self.b.span = v.span;
-        Some(self.b.string(with_scope(value, &suffix)))
+        Some(self.b.string(text))
+    }
+
+    /// `text` with each `%m` extended by the scope, as
+    /// [`Self::format_literal`] does.
+    fn scoped(&self, text: &str) -> String {
+        if !text.contains("%m") {
+            return text.to_owned();
+        }
+        let suffix = self.scope_suffix();
+        if suffix.is_empty() {
+            return text.to_owned();
+        }
+        with_scope(text, &suffix)
+    }
+
+    /// The format literal `values[k]` with each `%p` whose argument is an
+    /// enum, a struct or an unpacked array spelled out, so that the
+    /// simulator, which sees only bits, prints it as xsim does: `'{a:3,b:15}`
+    /// for a struct (`'{3,15}` under `%0p`), `GRN` for an enum, `'{1,2,255}`
+    /// for an array. A struct or array becomes one conversion per member,
+    /// and an enum `%{RED=0,GRN=1}p`, the variants it may name. Returns the
+    /// text, the arguments it rewrote with their shapes, and the index of
+    /// the first argument it does not consume.
+    fn p_rewrite(
+        &mut self,
+        text: &str,
+        values: &[&'ast Expr],
+        k: usize,
+    ) -> (String, Vec<(usize, PShape)>, usize) {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::with_capacity(text.len());
+        let mut found = Vec::new();
+        let mut next = k + 1;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            i += 1;
+            if c != '%' {
+                out.push(c);
+                continue;
+            }
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_ascii_digit() || chars[i] == '-' || chars[i] == '.')
+            {
+                i += 1;
+            }
+            let spec: String = chars[start..i].iter().collect();
+            let Some(&conv) = chars.get(i) else {
+                out.push('%');
+                out.push_str(&spec);
+                break;
+            };
+            i += 1;
+            if matches!(conv, '%' | 'm' | 'l' | 'L') {
+                out.push('%');
+                out.push_str(&spec);
+                out.push(conv);
+                continue;
+            }
+            let arg = next;
+            next += 1;
+            let shape = match values.get(arg) {
+                Some(v) if conv == 'p' => self.p_shape(v),
+                _ => None,
+            };
+            match shape {
+                Some(shape) => {
+                    out.push_str(&p_text(&shape, spec == "0"));
+                    found.push((arg, shape));
+                }
+                None => {
+                    out.push('%');
+                    out.push_str(&spec);
+                    out.push(conv);
+                }
+            }
+        }
+        (out, found, next)
+    }
+
+    /// How `%p` must spell argument `v`, when it is not a plain value.
+    fn p_shape(&mut self, v: &'ast Expr) -> Option<PShape> {
+        if !matches!(v.kind, ExprKind::Index { .. })
+            && let Some(Symbol::Memory { mem, .. }) = self.env.probe(|env| env.resolve_path(v))
+        {
+            let info = &self.mems[mem.index()];
+            return Some(PShape::Array {
+                mem,
+                range: info.range,
+                elem: p_shape_of(&info.elem).map(Box::new),
+            });
+        }
+        // A member's type is its struct's to say.
+        if let ExprKind::Member { base, name } = &v.kind
+            && let Some(PShape::Struct(fields)) = self.p_shape(base)
+        {
+            return fields
+                .into_iter()
+                .find(|f| f.name == name.name)
+                .and_then(|f| f.shape);
+        }
+        p_shape_of(&self.type_of(v))
+    }
+
+    /// The values the conversions [`p_text`] wrote for `shape` print, in
+    /// order: `value` itself for an enum, its fields for a struct, the
+    /// elements for an array (which has no single value).
+    fn p_leaves(&mut self, value: Option<ExprId>, shape: &PShape, ids: &mut Vec<ExprId>) {
+        match shape {
+            PShape::Enum(_) => ids.extend(value),
+            PShape::Struct(fields) => {
+                let Some(value) = value else { return };
+                for f in fields {
+                    let bits = self.b.slice(value, f.lsb + f.width - 1, f.lsb);
+                    let bits = self.coerce(bits, f.width, f.signed);
+                    match &f.shape {
+                        Some(inner) => self.p_leaves(Some(bits), inner, ids),
+                        None => ids.push(bits),
+                    }
+                }
+            }
+            PShape::Array { mem, range, elem } => {
+                let size = self.b.module().memories[*mem].size;
+                let width = bits_needed(size.saturating_sub(1)).max(1);
+                let low = range.low();
+                let step: i64 = if range.left <= range.right { 1 } else { -1 };
+                let mut i = range.left;
+                loop {
+                    let addr = self.b.const_u64(width, i.abs_diff(low));
+                    let read = self.b.mem_read(*mem, addr);
+                    match elem {
+                        Some(inner) => self.p_leaves(Some(read), inner, ids),
+                        None => ids.push(read),
+                    }
+                    if i == range.right {
+                        break;
+                    }
+                    i += step;
+                }
+            }
+        }
     }
 
     /// What `$typename` returns for an expression or a type, spelled as

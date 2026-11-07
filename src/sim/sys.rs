@@ -22,7 +22,7 @@
 //! | `$clog2` `$bits` `$itor` `$rtoi` `$realtobits` `$bitstoreal` `$sformatf` | Utility functions |
 //! | `$countones` `$countbits` `$onehot` `$onehot0` `$isunknown` | Bit counts (IEEE 1800-2017 §20.9) |
 //!
-//! Formatting understands `%d %i %h %x %o %b %s %c %t %m %l %e %f %g %%`
+//! Formatting understands `%d %i %h %x %o %b %s %c %t %m %l %p %e %f %g %%`
 //! with an optional `-`, zero flag, width and precision. Where IEEE
 //! 1364-2005 §17.1.1 leaves room, or where xsim 2026.1 reads it otherwise,
 //! the output is xsim's, measured line by line
@@ -30,7 +30,10 @@
 //! field is as wide as the digits of 2^N - 1 and a sign; any width on
 //! `%h`/`%o`/`%b`, even zero, drops leading zeros and then zero-fills; `%X`
 //! prints lower case; `%s` prints a NUL byte as a space; the real
-//! conversions ignore `-`. `docs/simulation.md` lists each. Unknown tasks
+//! conversions ignore `-`. `%p` prints a plain value; the Verilog frontend
+//! spells out a struct or an array as one conversion per member and gives
+//! an enum's `%p` its variants (`%{RED=0,GRN=1}p`), since the bits alone do
+//! not say them. `docs/simulation.md` lists each. Unknown tasks
 //! are warned about once and ignored; unknown functions return `x` of their
 //! cached type.
 
@@ -124,6 +127,9 @@ struct Spec {
     zero: bool,
     width: Option<usize>,
     precision: Option<usize>,
+    /// The `{...}` a frontend writes before `p` for an enum: its variants
+    /// as `NAME=hex` pairs (`%{RED=0,GRN=1}p`).
+    labels: Option<String>,
     conv: char,
 }
 
@@ -351,6 +357,16 @@ fn real_as_integer(r: f64) -> Logic {
     Logic::from_i64(i64::from(v), 32).as_signed()
 }
 
+/// The enum variant `labels` (`RED=0,GRN=1`) names for `l`, if any; a
+/// value no variant has prints as a number, as xsim prints it.
+fn enum_label(labels: &str, l: &Logic) -> Option<String> {
+    let value = format!("{:x}", l.to_u64()?);
+    labels.split(',').find_map(|pair| {
+        let (name, hex) = pair.split_once('=')?;
+        (hex == value).then(|| name.to_owned())
+    })
+}
+
 /// Pads `text` to `width`.
 fn pad(text: String, width: Option<usize>, left: bool) -> String {
     match width {
@@ -397,6 +413,15 @@ fn parse_spec(rest: &[char]) -> Option<(Spec, usize)> {
         }
         precision = Some(p);
     }
+    let mut labels = None;
+    if rest.get(i) == Some(&'{') {
+        let close = rest[i..].iter().position(|c| *c == '}')? + i;
+        labels = Some(rest[i + 1..close].iter().collect());
+        i = close + 1;
+        if rest.get(i) != Some(&'p') {
+            return None;
+        }
+    }
     let conv = *rest.get(i)?;
     Some((
         Spec {
@@ -404,6 +429,7 @@ fn parse_spec(rest: &[char]) -> Option<(Spec, usize)> {
             zero,
             width,
             precision,
+            labels,
             conv,
         },
         i + 1,
@@ -486,6 +512,15 @@ impl<'d> Simulator<'d> {
                 let text = char::from(u8::try_from(byte).unwrap_or(b'?')).to_string();
                 return pad(text, spec.width, spec.left);
             }
+            'p' => {
+                let named = match (&spec.labels, v) {
+                    (Some(labels), Value::Bits(l)) => enum_label(labels, l),
+                    _ => None,
+                };
+                let text = named.unwrap_or_else(|| self.pattern(inst, v));
+                // `-` does not left-justify it.
+                return pad(text, spec.width.filter(|w| *w > 0), false);
+            }
             't' => {
                 let unit = u128::from(self.instances[inst.idx()].unit_fs);
                 let fs = match v {
@@ -538,6 +573,32 @@ impl<'d> Simulator<'d> {
         // What is left are the real conversions, which xsim right-justifies
         // even after `-` (`%-10.3f` of 3.14159 is `     3.142`).
         fill(text, spec, false)
+    }
+
+    /// `%p` of a value with no structure the frontend spelled out, as
+    /// xsim 2026.1 prints it: a known vector in decimal, signed if it is,
+    /// and with no padding; a vector with an unknown bit, or a single bit,
+    /// sized in binary (`8'b01x0z001`, `1'b1`); a real as `%g`; a string
+    /// in quotes.
+    fn pattern(&self, inst: InstId, v: &Value) -> String {
+        match v {
+            Value::Bits(l) if l.has_unknown() || l.width() == 1 => {
+                format!("{}'b{}", l.width(), radix(l, 1, false))
+            }
+            Value::Bits(l) => decimal(l),
+            Value::Real(_) => {
+                let spec = Spec {
+                    left: false,
+                    zero: false,
+                    width: None,
+                    precision: None,
+                    labels: None,
+                    conv: 'g',
+                };
+                self.format_value(inst, v, &spec)
+            }
+            Value::Str(s) => format!("\"{s}\""),
+        }
     }
 
     /// Expands a format string against `vals`, starting at `next`.
@@ -596,6 +657,7 @@ impl<'d> Simulator<'d> {
                     let spec = Spec {
                         left: false,
                         zero: false,
+                        labels: None,
                         width: None,
                         precision: None,
                         conv: radix,

@@ -199,3 +199,18 @@ fn unique_and_priority_warn_where_xsim_does() {
 fn typename_spells_types_as_xsim_does() {
     matches_xsim("typename_tb", "sv", 0);
 }
+
+/// **`%p` prints a value's structure as xsim does** (`pattern_tb.sv`):
+/// structs with member names (none under `%0p`), nested, enums by name and
+/// by number for a value they do not name, arrays of vectors and of enums
+/// element by element, a member that is itself a struct, and the plain
+/// values' spellings. `%p` was printed as the two characters `%p`. Would
+/// catch any of those spellings changing, the members out of order, an
+/// array read from its wrong end, or a signed member printed unsigned;
+/// would not catch `%p` of a string variable, a dynamic array or a queue,
+/// which are not in it, nor `%p` in `$sformatf`, which prints the plain
+/// value of a struct.
+#[test]
+fn p_prints_structure_as_xsim_does() {
+    matches_xsim("pattern_tb", "sv", 0);
+}
