@@ -1,0 +1,344 @@
+# The clock period each design achieves under Vivado 2026.1's timer at
+# xc7a100tftg256-3, in ns: each clock's period less the worst setup slack from
+# it to itself (tools/vivado-parity/achieved.sh, `achieved.py table --fixture`),
+# for the designs of this directory whose arrangement changed and for
+# testdata/fpga/vivado/analyser_fifo.v. Run on 2026-11-07.
+#   vivado <design> <clock> <ns>    Vivado's own flow, synthesis to routes, the
+#                                   best of three runs at tightening periods
+#   netlist <design> <clock> <ns>   Vivado's placement and routes of the
+#                                   `after` build's netlist, seed 1
+#   reticle <build> <seed> <design> <clock> <ns>
+#                                   Reticle's placement and routes, timed by
+#                                   Vivado: `before` is 73334987 (f8625a1d made the
+#                                   same figures), `after` the arrangement of
+#                                   docs/fpga-vivado-parity.md, "Memories as
+#                                   Vivado arranges them"
+# `tdp_*` has no `before`: it did not build. Vivado's own flow puts
+# `sdp_32x32`, `sdp_512x36`, `sdp_512x64` and `sp_wf_1024x18` in distributed RAM
+# at these periods (`Synth 8-5584`), and in block RAM at 5 ns.
+vivado analyser_fifo rd_clk 3.887
+netlist analyser_fifo rd_clk 5.253
+reticle before 1 analyser_fifo rd_clk 5.669
+reticle before 2 analyser_fifo rd_clk 5.185
+reticle before 3 analyser_fifo rd_clk 5.352
+reticle before 4 analyser_fifo rd_clk 5.307
+reticle before 5 analyser_fifo rd_clk 5.424
+reticle after 1 analyser_fifo rd_clk 5.391
+reticle after 2 analyser_fifo rd_clk 5.391
+reticle after 3 analyser_fifo rd_clk 4.976
+reticle after 4 analyser_fifo rd_clk 5.262
+reticle after 5 analyser_fifo rd_clk 5.071
+vivado analyser_fifo wr_clk 2.417
+netlist analyser_fifo wr_clk 2.983
+reticle before 1 analyser_fifo wr_clk 2.914
+reticle before 2 analyser_fifo wr_clk 3.169
+reticle before 3 analyser_fifo wr_clk 3.188
+reticle before 4 analyser_fifo wr_clk 2.914
+reticle before 5 analyser_fifo wr_clk 2.983
+reticle after 1 analyser_fifo wr_clk 3.155
+reticle after 2 analyser_fifo wr_clk 2.974
+reticle after 3 analyser_fifo wr_clk 3.000
+reticle after 4 analyser_fifo wr_clk 2.939
+reticle after 5 analyser_fifo wr_clk 3.150
+vivado init_1024x36 clk 3.529
+netlist init_1024x36 clk 3.618
+reticle before 1 init_1024x36 clk 4.129
+reticle before 2 init_1024x36 clk 4.195
+reticle before 3 init_1024x36 clk 4.065
+reticle before 4 init_1024x36 clk 3.948
+reticle before 5 init_1024x36 clk 3.983
+reticle after 1 init_1024x36 clk 3.900
+reticle after 2 init_1024x36 clk 4.135
+reticle after 3 init_1024x36 clk 4.092
+reticle after 4 init_1024x36 clk 4.125
+reticle after 5 init_1024x36 clk 3.873
+vivado init_16384x9 clk 3.039
+netlist init_16384x9 clk 3.003
+reticle before 1 init_16384x9 clk 3.476
+reticle before 2 init_16384x9 clk 3.433
+reticle before 3 init_16384x9 clk 3.398
+reticle before 4 init_16384x9 clk 3.568
+reticle before 5 init_16384x9 clk 3.312
+reticle after 1 init_16384x9 clk 3.577
+reticle after 2 init_16384x9 clk 3.687
+reticle after 3 init_16384x9 clk 3.518
+reticle after 4 init_16384x9 clk 3.667
+reticle after 5 init_16384x9 clk 3.501
+vivado init_4096x18 clk 3.237
+netlist init_4096x18 clk 3.231
+reticle before 1 init_4096x18 clk 3.512
+reticle before 2 init_4096x18 clk 3.501
+reticle before 3 init_4096x18 clk 3.549
+reticle before 4 init_4096x18 clk 3.541
+reticle before 5 init_4096x18 clk 3.690
+reticle after 1 init_4096x18 clk 3.572
+reticle after 2 init_4096x18 clk 3.694
+reticle after 3 init_4096x18 clk 3.628
+reticle after 4 init_4096x18 clk 3.698
+reticle after 5 init_4096x18 clk 3.581
+vivado reg_1024x18 clk 1.987
+netlist reg_1024x18 clk 2.121
+reticle before 1 reg_1024x18 clk 2.654
+reticle before 2 reg_1024x18 clk 2.712
+reticle before 3 reg_1024x18 clk 2.651
+reticle before 4 reg_1024x18 clk 2.706
+reticle before 5 reg_1024x18 clk 2.657
+reticle after 1 reg_1024x18 clk 2.270
+reticle after 2 reg_1024x18 clk 2.335
+reticle after 3 reg_1024x18 clk 2.137
+reticle after 4 reg_1024x18 clk 2.208
+reticle after 5 reg_1024x18 clk 2.261
+vivado reg_16384x4 clk 1.442
+netlist reg_16384x4 clk 1.451
+reticle before 1 reg_16384x4 clk 2.631
+reticle before 2 reg_16384x4 clk 2.554
+reticle before 3 reg_16384x4 clk 2.667
+reticle before 4 reg_16384x4 clk 2.667
+reticle before 5 reg_16384x4 clk 2.661
+reticle after 1 reg_16384x4 clk 1.766
+reticle after 2 reg_16384x4 clk 2.021
+reticle after 3 reg_16384x4 clk 1.822
+reticle after 4 reg_16384x4 clk 2.008
+reticle after 5 reg_16384x4 clk 1.846
+vivado reg_4096x18 clk 2.040
+netlist reg_4096x18 clk 2.008
+reticle before 1 reg_4096x18 clk 2.745
+reticle before 2 reg_4096x18 clk 2.680
+reticle before 3 reg_4096x18 clk 2.753
+reticle before 4 reg_4096x18 clk 2.671
+reticle before 5 reg_4096x18 clk 2.660
+reticle after 1 reg_4096x18 clk 2.361
+reticle after 2 reg_4096x18 clk 2.438
+reticle after 3 reg_4096x18 clk 2.417
+reticle after 4 reg_4096x18 clk 2.487
+reticle after 5 reg_4096x18 clk 2.370
+vivado sdp_1024x40 clk 3.533
+netlist sdp_1024x40 clk 3.680
+reticle before 1 sdp_1024x40 clk 4.043
+reticle before 2 sdp_1024x40 clk 4.002
+reticle before 3 sdp_1024x40 clk 3.878
+reticle before 4 sdp_1024x40 clk 4.030
+reticle before 5 sdp_1024x40 clk 4.282
+reticle after 1 sdp_1024x40 clk 3.909
+reticle after 2 sdp_1024x40 clk 4.118
+reticle after 3 sdp_1024x40 clk 4.055
+reticle after 4 sdp_1024x40 clk 3.986
+reticle after 5 sdp_1024x40 clk 4.264
+vivado sdp_12000x3 clk 2.575
+netlist sdp_12000x3 clk 2.635
+reticle before 1 sdp_12000x3 clk 2.814
+reticle before 2 sdp_12000x3 clk 2.764
+reticle before 3 sdp_12000x3 clk 2.732
+reticle before 4 sdp_12000x3 clk 2.664
+reticle before 5 sdp_12000x3 clk 2.801
+reticle after 1 sdp_12000x3 clk 2.692
+reticle after 2 sdp_12000x3 clk 2.785
+reticle after 3 sdp_12000x3 clk 2.773
+reticle after 4 sdp_12000x3 clk 2.773
+reticle after 5 sdp_12000x3 clk 2.700
+vivado sdp_16384x18 clk 3.413
+netlist sdp_16384x18 clk 3.453
+reticle before 1 sdp_16384x18 clk 4.505
+reticle before 2 sdp_16384x18 clk 4.623
+reticle before 3 sdp_16384x18 clk 4.498
+reticle before 4 sdp_16384x18 clk 4.596
+reticle before 5 sdp_16384x18 clk 4.627
+reticle after 1 sdp_16384x18 clk 3.745
+reticle after 2 sdp_16384x18 clk 3.904
+reticle after 3 sdp_16384x18 clk 4.233
+reticle after 4 sdp_16384x18 clk 3.807
+reticle after 5 sdp_16384x18 clk 3.792
+vivado sdp_16384x9 clk 3.039
+netlist sdp_16384x9 clk 3.003
+reticle before 1 sdp_16384x9 clk 4.213
+reticle before 2 sdp_16384x9 clk 4.079
+reticle before 3 sdp_16384x9 clk 4.027
+reticle before 4 sdp_16384x9 clk 4.020
+reticle before 5 sdp_16384x9 clk 4.186
+reticle after 1 sdp_16384x9 clk 3.577
+reticle after 2 sdp_16384x9 clk 3.687
+reticle after 3 sdp_16384x9 clk 3.518
+reticle after 4 sdp_16384x9 clk 3.667
+reticle after 5 sdp_16384x9 clk 3.501
+vivado sdp_20000x2 clk 2.549
+netlist sdp_20000x2 clk 2.544
+reticle before 1 sdp_20000x2 clk 3.077
+reticle before 2 sdp_20000x2 clk 3.202
+reticle before 3 sdp_20000x2 clk 3.189
+reticle before 4 sdp_20000x2 clk 2.945
+reticle before 5 sdp_20000x2 clk 3.237
+reticle after 1 sdp_20000x2 clk 2.749
+reticle after 2 sdp_20000x2 clk 2.688
+reticle after 3 sdp_20000x2 clk 2.749
+reticle after 4 sdp_20000x2 clk 2.773
+reticle after 5 sdp_20000x2 clk 2.749
+vivado sdp_2048x24 clk 3.379
+netlist sdp_2048x24 clk 3.310
+reticle before 1 sdp_2048x24 clk 3.554
+reticle before 2 sdp_2048x24 clk 3.578
+reticle before 3 sdp_2048x24 clk 3.705
+reticle before 4 sdp_2048x24 clk 3.587
+reticle before 5 sdp_2048x24 clk 3.710
+reticle after 1 sdp_2048x24 clk 3.799
+reticle after 2 sdp_2048x24 clk 3.705
+reticle after 3 sdp_2048x24 clk 3.614
+reticle after 4 sdp_2048x24 clk 3.658
+reticle after 5 sdp_2048x24 clk 3.801
+vivado sdp_3000x12 clk 3.027
+netlist sdp_3000x12 clk 3.170
+reticle before 1 sdp_3000x12 clk 3.399
+reticle before 2 sdp_3000x12 clk 3.333
+reticle before 3 sdp_3000x12 clk 3.495
+reticle before 4 sdp_3000x12 clk 3.475
+reticle before 5 sdp_3000x12 clk 3.475
+reticle after 1 sdp_3000x12 clk 3.399
+reticle after 2 sdp_3000x12 clk 3.457
+reticle after 3 sdp_3000x12 clk 3.451
+reticle after 4 sdp_3000x12 clk 3.364
+reticle after 5 sdp_3000x12 clk 3.397
+vivado sdp_32x32 clk 1.789
+netlist sdp_32x32 clk 3.483
+reticle before 1 sdp_32x32 clk 4.116
+reticle before 2 sdp_32x32 clk 4.229
+reticle before 3 sdp_32x32 clk 4.208
+reticle before 4 sdp_32x32 clk 3.777
+reticle before 5 sdp_32x32 clk 3.673
+reticle after 1 sdp_32x32 clk 3.628
+reticle after 2 sdp_32x32 clk 3.630
+reticle after 3 sdp_32x32 clk 3.920
+reticle after 4 sdp_32x32 clk 4.204
+reticle after 5 sdp_32x32 clk 4.157
+vivado sdp_512x36 clk 2.641
+netlist sdp_512x36 clk 3.624
+reticle before 1 sdp_512x36 clk 3.942
+reticle before 2 sdp_512x36 clk 4.017
+reticle before 3 sdp_512x36 clk 4.414
+reticle before 4 sdp_512x36 clk 3.881
+reticle before 5 sdp_512x36 clk 4.090
+reticle after 1 sdp_512x36 clk 3.818
+reticle after 2 sdp_512x36 clk 4.289
+reticle after 3 sdp_512x36 clk 4.069
+reticle after 4 sdp_512x36 clk 4.053
+reticle after 5 sdp_512x36 clk 4.230
+vivado sdp_512x64 clk 2.725
+netlist sdp_512x64 clk 3.914
+reticle before 1 sdp_512x64 clk 4.382
+reticle before 2 sdp_512x64 clk 4.283
+reticle before 3 sdp_512x64 clk 4.236
+reticle before 4 sdp_512x64 clk 4.119
+reticle before 5 sdp_512x64 clk 4.345
+reticle after 1 sdp_512x64 clk 4.387
+reticle after 2 sdp_512x64 clk 4.495
+reticle after 3 sdp_512x64 clk 4.280
+reticle after 4 sdp_512x64 clk 4.455
+reticle after 5 sdp_512x64 clk 4.415
+vivado sdp_512x72 clk 3.831
+netlist sdp_512x72 clk 3.863
+reticle before 1 sdp_512x72 clk 4.281
+reticle before 2 sdp_512x72 clk 4.328
+reticle before 3 sdp_512x72 clk 4.672
+reticle before 4 sdp_512x72 clk 4.764
+reticle before 5 sdp_512x72 clk 4.672
+reticle after 1 sdp_512x72 clk 4.514
+reticle after 2 sdp_512x72 clk 4.364
+reticle after 3 sdp_512x72 clk 4.296
+reticle after 4 sdp_512x72 clk 4.246
+reticle after 5 sdp_512x72 clk 4.487
+vivado sdp_6000x6 clk 2.943
+netlist sdp_6000x6 clk 2.809
+reticle before 1 sdp_6000x6 clk 3.272
+reticle before 2 sdp_6000x6 clk 3.132
+reticle before 3 sdp_6000x6 clk 3.070
+reticle before 4 sdp_6000x6 clk 3.120
+reticle before 5 sdp_6000x6 clk 3.217
+reticle after 1 sdp_6000x6 clk 3.327
+reticle after 2 sdp_6000x6 clk 3.143
+reticle after 3 sdp_6000x6 clk 3.256
+reticle after 4 sdp_6000x6 clk 3.179
+reticle after 5 sdp_6000x6 clk 3.213
+vivado sdp_8192x9 clk 3.112
+netlist sdp_8192x9 clk 2.946
+reticle before 1 sdp_8192x9 clk 3.497
+reticle before 2 sdp_8192x9 clk 3.623
+reticle before 3 sdp_8192x9 clk 3.906
+reticle before 4 sdp_8192x9 clk 3.604
+reticle before 5 sdp_8192x9 clk 3.521
+reticle after 1 sdp_8192x9 clk 3.498
+reticle after 2 sdp_8192x9 clk 3.462
+reticle after 3 sdp_8192x9 clk 3.468
+reticle after 4 sdp_8192x9 clk 3.466
+reticle after 5 sdp_8192x9 clk 3.517
+vivado sp_nc_4096x18 clk 3.357
+netlist sp_nc_4096x18 clk 3.191
+reticle before 1 sp_nc_4096x18 clk 3.609
+reticle before 2 sp_nc_4096x18 clk 3.684
+reticle before 3 sp_nc_4096x18 clk 3.427
+reticle before 4 sp_nc_4096x18 clk 3.581
+reticle before 5 sp_nc_4096x18 clk 3.482
+reticle after 1 sp_nc_4096x18 clk 3.523
+reticle after 2 sp_nc_4096x18 clk 3.601
+reticle after 3 sp_nc_4096x18 clk 3.704
+reticle after 4 sp_nc_4096x18 clk 3.640
+reticle after 5 sp_nc_4096x18 clk 3.802
+vivado sp_rf_4096x18 clk 3.169
+netlist sp_rf_4096x18 clk 3.320
+reticle before 1 sp_rf_4096x18 clk 3.595
+reticle before 2 sp_rf_4096x18 clk 3.543
+reticle before 3 sp_rf_4096x18 clk 3.609
+reticle before 4 sp_rf_4096x18 clk 3.604
+reticle before 5 sp_rf_4096x18 clk 3.580
+reticle after 1 sp_rf_4096x18 clk 3.630
+reticle after 2 sp_rf_4096x18 clk 3.493
+reticle after 3 sp_rf_4096x18 clk 3.609
+reticle after 4 sp_rf_4096x18 clk 3.658
+reticle after 5 sp_rf_4096x18 clk 3.917
+vivado sp_wf_1024x18 clk 2.788
+netlist sp_wf_1024x18 clk 3.458
+reticle before 1 sp_wf_1024x18 clk 4.246
+reticle before 2 sp_wf_1024x18 clk 4.927
+reticle before 3 sp_wf_1024x18 clk 4.511
+reticle before 4 sp_wf_1024x18 clk 4.458
+reticle before 5 sp_wf_1024x18 clk 4.481
+reticle after 1 sp_wf_1024x18 clk 3.546
+reticle after 2 sp_wf_1024x18 clk 3.438
+reticle after 3 sp_wf_1024x18 clk 3.556
+reticle after 4 sp_wf_1024x18 clk 3.362
+reticle after 5 sp_wf_1024x18 clk 3.736
+vivado sp_wf_4096x18 clk 3.357
+netlist sp_wf_4096x18 clk 3.191
+reticle before 1 sp_wf_4096x18 clk 7.711
+reticle before 2 sp_wf_4096x18 clk 8.578
+reticle before 3 sp_wf_4096x18 clk 10.724
+reticle before 4 sp_wf_4096x18 clk 7.956
+reticle before 5 sp_wf_4096x18 clk 7.778
+reticle after 1 sp_wf_4096x18 clk 3.523
+reticle after 2 sp_wf_4096x18 clk 3.601
+reticle after 3 sp_wf_4096x18 clk 3.704
+reticle after 4 sp_wf_4096x18 clk 3.640
+reticle after 5 sp_wf_4096x18 clk 3.802
+vivado style_registers_128x8 clk 3.111
+netlist style_registers_128x8 clk 2.150
+reticle before 1 style_registers_128x8 clk 2.567
+reticle before 2 style_registers_128x8 clk 2.444
+reticle before 3 style_registers_128x8 clk 2.495
+reticle before 4 style_registers_128x8 clk 2.453
+reticle before 5 style_registers_128x8 clk 2.469
+reticle after 1 style_registers_128x8 clk 2.567
+reticle after 2 style_registers_128x8 clk 2.444
+reticle after 3 style_registers_128x8 clk 2.495
+reticle after 4 style_registers_128x8 clk 2.453
+reticle after 5 style_registers_128x8 clk 2.469
+vivado tdp_1024x18 clk 3.371
+netlist tdp_1024x18 clk 3.419
+reticle after 1 tdp_1024x18 clk 3.889
+reticle after 2 tdp_1024x18 clk 3.938
+reticle after 3 tdp_1024x18 clk 3.965
+reticle after 4 tdp_1024x18 clk 4.101
+reticle after 5 tdp_1024x18 clk 3.932
+vivado tdp_4096x18 clk 3.345
+netlist tdp_4096x18 clk 3.577
+reticle after 1 tdp_4096x18 clk 4.035
+reticle after 2 tdp_4096x18 clk 4.071
+reticle after 3 tdp_4096x18 clk 4.127
+reticle after 4 tdp_4096x18 clk 4.325
+reticle after 5 tdp_4096x18 clk 4.188

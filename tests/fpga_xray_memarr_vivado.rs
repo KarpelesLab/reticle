@@ -776,3 +776,88 @@ fn legacy_memories_map_as_before() {
         );
     }
 }
+
+/// Per (design, clock): Vivado's own figure, and each build's by seed, from
+/// `achieved.txt`.
+type Achieved = BTreeMap<(String, String), (f64, BTreeMap<String, Vec<f64>>)>;
+
+fn achieved() -> Option<Achieved> {
+    let Ok(text) = std::fs::read_to_string(fixtures().join("achieved.txt")) else {
+        eprintln!("skipped: `testdata/` is not in the published crate");
+        return None;
+    };
+    let mut table = Achieved::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        match w.as_slice() {
+            ["vivado", design, clock, ns] => {
+                table
+                    .entry(((*design).to_owned(), (*clock).to_owned()))
+                    .or_default()
+                    .0 = ns.parse().expect("a figure");
+            }
+            ["reticle", build, _seed, design, clock, ns] => table
+                .entry(((*design).to_owned(), (*clock).to_owned()))
+                .or_default()
+                .1
+                .entry((*build).to_owned())
+                .or_default()
+                .push(ns.parse().expect("a figure")),
+            ["netlist", ..] => {}
+            other => panic!("a line of achieved.txt this does not know: {other:?}"),
+        }
+    }
+    Some(table)
+}
+
+fn median(values: &[f64]) -> f64 {
+    let mut v = values.to_vec();
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// **Vivado's arrangement achieves a shorter period than the one before**,
+/// under Vivado's timer, in the quoted run of `achieved.txt`: every clock has
+/// Vivado's figure and five seeds of `after`, and five of `before` but where
+/// `before` did not build; over the clocks both have, the geometric mean of
+/// the medians against Vivado's is at least 5 % lower after; no clock's median
+/// is more than 5 % slower (the worst is `init_16384x9`, 4 %), and the two
+/// that a read multiplexer made slow, `sdp_16384x18` and `analyser_fifo`'s
+/// read clock, are faster. Reads the quoted file and runs nothing: it would
+/// catch a regeneration that lost a design or a seed, or one that recorded a
+/// slower arrangement, and not the flow moving on since.
+#[test]
+fn vivados_arrangement_achieves_a_shorter_period_than_the_one_before() {
+    let Some(table) = achieved() else { return };
+    let mut ratios = (Vec::new(), Vec::new());
+    for ((design, clock), (vivado, builds)) in &table {
+        assert!(*vivado > 0.0, "{design} {clock}: no Vivado figure");
+        let after = &builds["after"];
+        assert_eq!(after.len(), 5, "{design} {clock}: after");
+        let Some(before) = builds.get("before") else {
+            assert!(design.starts_with("tdp_"), "{design} {clock}: no before");
+            continue;
+        };
+        assert_eq!(before.len(), 5, "{design} {clock}: before");
+        let (b, a) = (median(before), median(after));
+        assert!(a <= b * 1.05, "{design} {clock}: {b:.3} to {a:.3} ns");
+        ratios.0.push(b / vivado);
+        ratios.1.push(a / vivado);
+    }
+    let geo = |v: &[f64]| (v.iter().map(|x| x.ln()).sum::<f64>() / v.len() as f64).exp();
+    let (before, after) = (geo(&ratios.0), geo(&ratios.1));
+    assert!(after <= before * 0.95, "{before:.3} to {after:.3}");
+    for key in [("sdp_16384x18", "clk"), ("analyser_fifo", "rd_clk")] {
+        let builds = &table[&(key.0.to_owned(), key.1.to_owned())].1;
+        assert!(
+            median(&builds["after"]) < median(&builds["before"]),
+            "{key:?}"
+        );
+    }
+    assert_eq!(table.len(), 28);
+}
