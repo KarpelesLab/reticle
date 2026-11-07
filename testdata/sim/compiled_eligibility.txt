@@ -191,13 +191,13 @@ testdata/synth/keep_reg.synth.rtl
   keep_reg: eligible (3 comb ops, 6 edge ops, 4 registers, 4 bits)
 
 testdata/synth/mem_part_write.cells.rtl
-  mem_part_write: eligible (7 comb ops, 28 edge ops, 1 registers, 32 bits)
+  mem_part_write: eligible (7 comb ops, 14 edge ops, 1 registers, 32 bits)
 
 testdata/synth/mem_part_write.rtl
   mem_part_write: eligible (0 comb ops, 22 edge ops, 1 registers, 32 bits)
 
 testdata/synth/mem_part_write.synth.rtl
-  mem_part_write: eligible (0 comb ops, 35 edge ops, 1 registers, 32 bits)
+  mem_part_write: eligible (0 comb ops, 21 edge ops, 1 registers, 32 bits)
 
 testdata/synth/mem_regs.cells.rtl
   mem_regs: eligible (3 comb ops, 9 edge ops, 6 registers, 48 bits)

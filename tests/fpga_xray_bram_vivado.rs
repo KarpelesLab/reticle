@@ -270,7 +270,7 @@ fn designs() -> Vec<String> {
 /// | Design | Vivado | Here |
 /// |---|---|---|
 /// | `b36_cascade` | two `RAMB36E1` as one 64 kbit block (`RAM_EXTENSION_*`) | refused: a cascade is not built |
-/// | `ib_1024x32_bytes` | none: Vivado's synthesis aborts on it, an assertion in its block RAM generator (measured again on 2026-11-07) | built: a memory per byte lane, four `RAMB18E1` |
+/// | `ib_1024x32_bytes` | none: Vivado's synthesis aborts on it, an assertion in its block RAM generator (measured again on 2026-11-07) | built: one `RAMB36E1` 36 wide, a byte write enable a lane, as Vivado builds the same memory written through a wire for its address (`memarr/bw_sdp_1024x32_b8_const`) |
 ///
 /// Four more were here until the memory arrangement of
 /// `testdata/fpga/vivado/memarr/` (`docs/fpga-vivado-parity.md`, "Memories
@@ -645,17 +645,21 @@ fn what_is_not_built_says_so() {
     }
 }
 
-/// **`ib_1024x32_bytes`'s byte writes are built**, as a memory per lane:
-/// four `RAMB18E1`, one a byte, the report saying why. Would catch the writes
-/// dropped again (the blocks would go, nothing writing them) or a lane lost;
-/// that the four compute what the source does is the simulation's, against
-/// the source's own answer under xsim.
+/// **`ib_1024x32_bytes`'s byte writes are built** with the block's byte
+/// write enables: one `RAMB36E1`, as Vivado builds the same memory written
+/// through a wire for its address (`memarr/bw_sdp_1024x32_b8_const`, whose
+/// tile `tests/fpga_xray_memarr_vivado.rs` holds to Vivado's). Would catch
+/// the writes dropped again (the block would go, nothing writing it) or the
+/// memory built a lane at a time, four `RAMB18E1`; that the block computes
+/// what the source does is the simulation's, against the source's own
+/// answer under xsim.
 #[test]
 fn the_byte_writes_are_built() {
     let Some(built) = built() else { return };
     let log = &built["ib_1024x32_bytes"].log;
-    assert!(log.contains("built as 4 memories, a lane each"), "{log}");
-    assert!(log.contains("  4 x RAMB18E1"), "{log}");
+    assert!(!log.contains("a lane each"), "{log}");
+    assert!(log.contains("  1 x RAMB36E1"), "{log}");
+    assert!(!log.contains("RAMB18E1"), "{log}");
 }
 
 /// The role of a cell pin, `ADDRARDADDR[3]` or `CLKBWRCLK`, in the device's

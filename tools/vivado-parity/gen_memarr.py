@@ -22,6 +22,11 @@ swapped read the same parity. `bits_` designs, after the rest, fold the word
 read under a mask that changes every cycle (`^(q & sr[w-1:0])`), so that a bit
 read from the wrong place shows, for the arrangements whose bits travel on more
 than one pin or block.
+
+`bw_` designs, last again, are written a lane of 8 or 9 bits at a time, each
+lane under its own enable (`bytewise`), read a word at a time and folded under
+the mask: `bw_<kind>_<depth>x<width>_b<lane>`, with `_gen` for a process per
+lane, `_const` for constant bounds and `_init` for initial contents.
 """
 import os
 import random
@@ -165,6 +170,93 @@ def asym(name, comment, narrow, depth, ratio):
         + body + "endmodule\n")
 
 
+def bytewise(name, comment, width, depth, lane, kind="sdp", form="loop", init=False):
+    """A memory written a lane of `lane` bits at a time, each under its own
+    enable, read a whole word at a time, folded under a mask as `bits_` are.
+
+    `form` is how the lanes are written: `loop` a `for` over them in one
+    process (`mem[a][i * lane +: lane] <= d[i * lane +: lane]`), `gen` a
+    process per lane out of a `generate` loop, `const` one `if` per lane with
+    constant bounds (`mem[a][15:8] <= d[15:8]`). `kind` is as `design`'s:
+    `sdp`, `sp_rf`, `sp_wf` (written first lane by lane: a lane written reads
+    what is written, the others what was there), `sp_nc` (read only when no
+    lane is written), `tdp` (two such read-first ports)."""
+    a = abits(depth)
+    lanes = width // lane
+    assert lanes * lane == width, name
+    t = Taps()
+    body = f"  reg [{width - 1}:0] mem [0:{depth - 1}];\n"
+    if init:
+        body += contents(width, depth)
+    body += f"  reg [{width - 1}:0] q0;\n"
+    last = "q0"
+
+    def writes(addr, data, we, var, indent="    "):
+        if form == "const":
+            return "".join(
+                f"{indent}if ({we}[{i}]) mem[{addr}][{(i + 1) * lane - 1}:{i * lane}] <= "
+                f"{data}[{(i + 1) * lane - 1}:{i * lane}];\n" for i in range(lanes))
+        return (f"{indent}for ({var} = 0; {var} < {lanes}; {var} = {var} + 1)\n"
+                f"{indent}  if ({we}[{var}]) mem[{addr}][{var} * {lane} +: {lane}] <= "
+                f"{data}[{var} * {lane} +: {lane}];\n")
+
+    def wires(tag, aw, dw, ww):
+        nonlocal body
+        body += (f"  wire [{a - 1}:0] a{tag} = {aw};\n  wire [{width - 1}:0] d{tag} = {dw};\n"
+                 f"  wire [{lanes - 1}:0] we{tag} = {ww};\n")
+
+    if kind == "sdp":
+        wires("w", t.take(a), t.take(width), t.take(lanes))
+        ra = t.take(a)
+        if form == "gen":
+            body += (f"  genvar g;\n  generate for (g = 0; g < {lanes}; g = g + 1) begin : lane\n"
+                     f"    always @(posedge clk) if (wew[g]) mem[aw][g * {lane} +: {lane}] <= "
+                     f"dw[g * {lane} +: {lane}];\n  end endgenerate\n")
+        else:
+            body += "  integer i;\n  always @(posedge clk) begin\n"
+            body += writes("aw", "dw", "wew", "i") + "  end\n"
+        body += f"  always @(posedge clk) q0 <= mem[{ra}];\n"
+    elif kind in ("sp_rf", "sp_wf", "sp_nc"):
+        wires("w", t.take(a), t.take(width), t.take(lanes))
+        if kind == "sp_wf":
+            body += (f"  integer i;\n  always @(posedge clk)\n"
+                     f"    for (i = 0; i < {lanes}; i = i + 1)\n"
+                     f"      if (wew[i]) begin\n"
+                     f"        mem[aw][i * {lane} +: {lane}] <= dw[i * {lane} +: {lane}];\n"
+                     f"        q0[i * {lane} +: {lane}] <= dw[i * {lane} +: {lane}];\n"
+                     f"      end else q0[i * {lane} +: {lane}] <= mem[aw][i * {lane} +: {lane}];\n")
+        else:
+            read = "    q0 <= mem[aw];\n" if kind == "sp_rf" else "    if (~|wew) q0 <= mem[aw];\n"
+            if form == "gen":
+                body += (f"  genvar g;\n  generate for (g = 0; g < {lanes}; g = g + 1) begin : lane\n"
+                         f"    always @(posedge clk) if (wew[g]) mem[aw][g * {lane} +: {lane}] <= "
+                         f"dw[g * {lane} +: {lane}];\n  end endgenerate\n"
+                         f"  always @(posedge clk) begin\n{read}  end\n")
+            else:
+                body += "  integer i;\n  always @(posedge clk) begin\n"
+                body += writes("aw", "dw", "wew", "i") + read + "  end\n"
+    elif kind == "tdp":
+        wires("a", t.take(a), t.take(width), t.take(lanes))
+        wires("b", t.take(a), t.take(width), t.take(lanes))
+        body += (f"  reg [{width - 1}:0] p0;\n  integer i, j;\n"
+                 f"  always @(posedge clk) begin\n" + writes("aa", "da", "wea", "i")
+                 + "    q0 <= mem[aa];\n  end\n"
+                 f"  always @(posedge clk) begin\n" + writes("ab", "db", "web", "j")
+                 + "    p0 <= mem[ab];\n  end\n")
+        last = "q0 ^ p0"
+    else:
+        raise ValueError(kind)
+    top = t.take(1)
+    n = t.next
+    assert n >= width, name
+    body += f"  always @(posedge clk) so <= ^(({last}) & sr[{width - 1}:0]) ^ {top};\n"
+    return name, (
+        f"// {comment}\n"
+        f"module {name} (\n    input  wire clk,\n    input  wire si,\n    output reg  so\n);\n"
+        f"  reg [{n - 1}:0] sr;\n  always @(posedge clk) sr <= {{sr[{n - 2}:0], si}};\n"
+        + body + "endmodule\n")
+
+
 def designs():
     out = []
     sdp = [
@@ -235,6 +327,46 @@ def designs():
         out.append(design(f"bits_{tag}_{depth}x{width}",
                           f"{depth} words of {width} ({tag}), read under a mask.",
                           width, depth, kind=kind, mask=True, **kw))
+    # Byte writes, `bw_<kind>_<depth>x<width>_b<lane>[_<form>][_init]`: a
+    # lane of 8 or 9 bits under its own enable; last again, so that the
+    # contents above stay what they were.
+    for kind, depth, width, lane, kw in [
+        ("sdp", 1024, 32, 8, {}), ("sdp", 1024, 32, 8, {"form": "gen"}),
+        ("sdp", 1024, 32, 8, {"form": "const"}),
+        ("sdp", 1024, 16, 8, {}), ("sdp", 2048, 16, 8, {}), ("sdp", 4096, 16, 8, {}),
+        ("sdp", 8192, 16, 8, {}), ("sdp", 16384, 16, 8, {}), ("sdp", 2048, 24, 8, {}),
+        ("sdp", 4096, 32, 8, {}), ("sdp", 1024, 40, 8, {}), ("sdp", 1024, 64, 8, {}),
+        ("sdp", 1024, 72, 8, {}), ("sdp", 512, 32, 8, {}), ("sdp", 512, 64, 8, {}),
+        ("sdp", 512, 16, 8, {}), ("sdp", 64, 32, 8, {}), ("sdp", 32, 16, 8, {}),
+        ("sdp", 128, 64, 8, {}),
+        ("sdp", 1024, 18, 9, {}), ("sdp", 1024, 36, 9, {}), ("sdp", 2048, 36, 9, {}),
+        ("sdp", 4096, 18, 9, {}), ("sdp", 512, 36, 9, {}), ("sdp", 512, 72, 9, {}),
+        ("sp_rf", 1024, 32, 8, {}), ("sp_rf", 1024, 32, 8, {"form": "gen"}),
+        ("sp_rf", 1024, 32, 8, {"form": "const"}), ("sp_rf", 4096, 32, 8, {}),
+        ("sp_rf", 2048, 36, 9, {}),
+        ("sp_wf", 1024, 32, 8, {}), ("sp_wf", 2048, 18, 9, {}),
+        ("sp_nc", 1024, 32, 8, {}), ("sp_nc", 2048, 18, 9, {}),
+        ("tdp", 1024, 32, 8, {}), ("tdp", 1024, 36, 9, {}), ("tdp", 4096, 16, 8, {}),
+        ("sdp", 1024, 32, 8, {"init": True}), ("sdp", 4096, 16, 8, {"init": True}),
+        ("sdp", 512, 72, 9, {"init": True}), ("sp_rf", 1024, 36, 9, {"init": True}),
+        # Distributed RAM's side of the line, and lanes of other widths.
+        ("sdp", 32, 32, 8, {}), ("sdp", 64, 16, 8, {}), ("sdp", 16, 32, 8, {}),
+        ("sdp", 32, 24, 8, {}), ("sdp", 64, 18, 9, {}), ("sdp", 32, 36, 9, {}),
+        ("sp_rf", 32, 32, 8, {}), ("sdp", 128, 16, 8, {}),
+        ("sdp", 1024, 32, 16, {}), ("sdp", 1024, 16, 4, {}),
+        # Deeper than a block: Vivado cascades, and the write enables of
+        # blocks stacked are each depth slice's.
+        ("sdp", 65536, 16, 8, {}), ("sp_rf", 65536, 16, 8, {}),
+    ]:
+        form = kw.get("form", "loop")
+        tag = ("" if form == "loop" else f"_{form}") + ("_init" if kw.get("init") else "")
+        name = f"bw_{kind}_{depth}x{width}_b{lane}{tag}"
+        what = {"loop": "a loop over the lanes", "gen": "a process per lane",
+                "const": "constant bounds"}[form]
+        out.append(bytewise(name, f"{depth} words of {width} ({kind}), written {lane} bits at "
+                            f"a time under {width // lane} enables, {what}"
+                            + (", initial contents." if kw.get("init") else "."),
+                            width, depth, lane, kind=kind, **kw))
     return out
 
 

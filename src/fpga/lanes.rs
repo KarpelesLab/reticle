@@ -23,92 +23,12 @@ use crate::ir::{
     Type,
 };
 use crate::source::Span;
-use crate::synth::util::{
-    add_wire, fresh_cell_name, mk, mk_concat, mk_const, mk_net, mk_slice, same_expr,
-};
+use crate::synth::membits::{EnBit, enable_bits, same_bit};
+use crate::synth::util::{add_wire, fresh_cell_name, mk, mk_concat, mk_const, mk_net, mk_slice};
 
 /// The attribute naming, on a memory [`split`] made, the memory it is a
 /// lane of.
 pub(crate) const LANE_OF: &str = "lane_of";
-
-/// What enables one bit of an element, for one write port.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum EnBit {
-    /// Never written by the port.
-    Zero,
-    /// Written whenever the port writes.
-    One,
-    /// Written when this one-bit expression is one.
-    Cond(ExprId),
-    /// Written when bit `k` of this expression is one: an enable the
-    /// lanes cannot be read off, a write at an offset known only at run
-    /// time.
-    Bit(ExprId, u32),
-}
-
-/// The enable of each bit of an element `width` bits wide, least
-/// significant first, as a write port's `en` gives it: a one-bit enable
-/// enables every bit alike.
-pub(crate) fn enable_bits(m: &Module, en: ExprId, width: u32) -> Vec<EnBit> {
-    let w = m.expr(en).ty.width().unwrap_or(1);
-    if w == 1 {
-        let bit = match m.expr(en).as_const().and_then(|c| c.bit(0).to_bool()) {
-            Some(false) => EnBit::Zero,
-            Some(true) => EnBit::One,
-            None => EnBit::Cond(en),
-        };
-        return vec![bit; width as usize];
-    }
-    let mut out = Vec::with_capacity(width as usize);
-    bits_of(m, en, &mut out);
-    out.resize(width as usize, EnBit::Zero);
-    out
-}
-
-/// Appends the enables of `e`'s bits, least significant first.
-fn bits_of(m: &Module, e: ExprId, out: &mut Vec<EnBit>) {
-    let node = m.expr(e);
-    let w = node.ty.width().unwrap_or(1);
-    match &node.kind {
-        ExprKind::Const(c) => {
-            for k in 0..w {
-                out.push(match c.bit(k).to_bool() {
-                    Some(true) => EnBit::One,
-                    _ => EnBit::Zero,
-                });
-            }
-        }
-        ExprKind::Concat(parts) => {
-            for p in parts.iter().rev() {
-                bits_of(m, *p, out);
-            }
-        }
-        ExprKind::Replicate { expr, count } if m.expr(*expr).ty.width() == Some(1) => {
-            let mut one = Vec::new();
-            bits_of(m, *expr, &mut one);
-            let bit = one.first().copied().unwrap_or(EnBit::Zero);
-            for _ in 0..*count {
-                out.push(bit);
-            }
-        }
-        _ if w == 1 => out.push(EnBit::Cond(e)),
-        _ => {
-            for k in 0..w {
-                out.push(EnBit::Bit(e, k));
-            }
-        }
-    }
-}
-
-/// Whether two bits are enabled by the same thing.
-pub(crate) fn same_bit(m: &Module, a: EnBit, b: EnBit) -> bool {
-    match (a, b) {
-        (EnBit::Zero, EnBit::Zero) | (EnBit::One, EnBit::One) => true,
-        (EnBit::Cond(x), EnBit::Cond(y)) => same_expr(m, x, y, 16),
-        (EnBit::Bit(x, i), EnBit::Bit(y, j)) => i == j && same_expr(m, x, y, 16),
-        _ => false,
-    }
-}
 
 /// True when some write port of `mem` has an enable per bit.
 pub(crate) fn has_lanes(m: &Module, mem: MemoryId) -> bool {
@@ -155,6 +75,32 @@ pub(crate) fn lanes(m: &Module, mem: MemoryId) -> Vec<Vec<u32>> {
     groups
 }
 
+/// The width of `mem`'s lanes when they are bytes a block RAM's byte write
+/// enables can take: every lane the same number of adjacent bits, a
+/// multiple of 9 or else of 8, the lanes in order from bit 0. A lane of
+/// sixteen is two bytes under one enable, as Vivado drives `WEA` in pairs
+/// for it (`bw_sdp_1024x32_b16`). Returns 9 or 8; `None` for any other
+/// lanes, a nibble's (`bw_sdp_1024x16_b4`) for one.
+pub(crate) fn byte_lanes(m: &Module, mem: MemoryId) -> Option<u32> {
+    let groups = lanes(m, mem);
+    let size = groups.first()?.len();
+    let mut next = 0u32;
+    for g in &groups {
+        if g.len() != size || g.iter().zip(next..).any(|(b, want)| *b != want) {
+            return None;
+        }
+        next += u32::try_from(g.len()).ok()?;
+    }
+    let size = u32::try_from(size).ok()?;
+    if size % 9 == 0 {
+        Some(9)
+    } else if size % 8 == 0 {
+        Some(8)
+    } else {
+        None
+    }
+}
+
 /// `e`'s bits at `bits` (ascending), as one expression: runs of adjacent
 /// bits as slices, most significant first.
 pub(crate) fn gather(m: &mut Module, e: ExprId, bits: &[u32], span: Span) -> ExprId {
@@ -173,13 +119,21 @@ pub(crate) fn gather(m: &mut Module, e: ExprId, bits: &[u32], span: Span) -> Exp
     mk_concat(m, parts, span)
 }
 
-/// Replaces `mem` with a memory per lane ([`lanes`]); returns them, in
-/// lane order, or `None` having changed nothing when a lane does not
-/// share one enable in some port (which [`lanes`] rules out) or the memory
-/// is read other than through a port. The ports of `mem` are removed;
-/// `mem` itself is left, with no port, for the caller to remove with the
-/// memories it removes.
-pub(crate) fn split(m: &mut Module, mem: MemoryId) -> Option<Vec<MemoryId>> {
+/// What [`split`] made of a memory.
+pub(crate) struct Split {
+    /// The memories, one a lane, in lane order.
+    pub lanes: Vec<MemoryId>,
+    /// The memory's own ports, which nothing needs now: the caller removes
+    /// them, with `mem` itself, when it removes what it has replaced, so
+    /// that every id it holds stays valid until then.
+    pub ports: Vec<CellId>,
+}
+
+/// Builds a memory per lane of `mem` ([`lanes`]), with their ports and the
+/// reads put back together, or returns `None` having changed nothing when
+/// the memory is read other than through a port. `mem` and its ports are
+/// left for the caller to remove ([`Split::ports`]).
+pub(crate) fn split(m: &mut Module, mem: MemoryId) -> Option<Split> {
     let read_directly = m
         .exprs
         .iter()
@@ -299,12 +253,14 @@ pub(crate) fn split(m: &mut Module, mem: MemoryId) -> Option<Vec<MemoryId>> {
             _ => {}
         }
     }
-    m.cells.retain(|id, _| !ports.contains(&id));
     for mut c in added {
         c.name = fresh_cell_name(m, c.name.as_str());
         m.cells.push(c);
     }
-    Some(created)
+    Some(Split {
+        lanes: created,
+        ports,
+    })
 }
 
 /// Replaces the expression on input `port`.
@@ -380,6 +336,8 @@ mod tests {
             vec![(0..8).collect::<Vec<u32>>(), (8..16).collect()]
         );
         let made = split(&mut m, mem).unwrap();
+        m.cells.retain(|id, _| !made.ports.contains(&id));
+        let made = made.lanes;
         assert_eq!(made.len(), 2);
         let lo = &m.memories[made[0]];
         assert_eq!(lo.elem, Type::bits(8));
@@ -425,7 +383,8 @@ mod tests {
         let before = module(text);
         let mut after = before.clone();
         let mem = after.memory_by_name("m").unwrap();
-        split(&mut after, mem).unwrap();
+        let made = split(&mut after, mem).unwrap();
+        after.cells.retain(|id, _| !made.ports.contains(&id));
         mutate(&mut after);
         after.name = Name::new("t_split");
         let mut design = Design::new();
@@ -488,7 +447,8 @@ mod tests {
         let mut m = module(&text);
         let mem = m.memory_by_name("m").unwrap();
         let made = split(&mut m, mem).unwrap();
-        assert_eq!(made.len(), 2);
+        m.cells.retain(|id, _| !made.ports.contains(&id));
+        assert_eq!(made.lanes.len(), 2);
         let writes = m
             .cells
             .values()

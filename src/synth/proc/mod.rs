@@ -48,6 +48,7 @@
 
 mod exec;
 mod split;
+mod write_ports;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -184,6 +185,10 @@ impl Pass for ProcLower {
                 }
             }
         }
+        stats.bump(
+            "memory write ports merged",
+            write_ports::merge_write_ports(m),
+        );
         lower_continuous_mem_reads(m, &mut stats);
         let mut delays = 0u64;
         for a in &mut m.assigns {

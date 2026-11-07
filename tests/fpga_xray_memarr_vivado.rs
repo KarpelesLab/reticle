@@ -9,7 +9,10 @@
 //! port read first, written first or unchanged on a write, a true dual port,
 //! two reads, the read registered twice or enabled or on no clock, initial
 //! contents with and without a write, a memory written narrow and read wide,
-//! and each `ram_style`. `vivado.txt` there keeps what Vivado made of each on
+//! each `ram_style`, and (`bw_`) memories written a byte lane at a time, of
+//! 8 and 9 bits, simple, single and true dual port, read first, written
+//! first and unchanged, with and without contents, in block and distributed
+//! RAM. `vivado.txt` there keeps what Vivado made of each on
 //! `xc7a100tftg256-1` (`FIXTURE=memarr tools/vivado-parity/lutram.sh`): the
 //! cells left after routing, each block's parameters (`params`), and each
 //! block RAM tile of its bitstream decoded through this repository's
@@ -265,10 +268,18 @@ fn designs() -> Vec<String> {
 /// | `rom_16384x2` | the address register taken into the block, and the read into its output register | the read in the block's latch |
 /// | `sdp_65536x1` | two `RAMB36E1` as one through the cascade | two stacked and a multiplexer: no cascade is built |
 /// | `style_registers_128x8` | 1,024 flip-flops | distributed RAM, as before: measured faster and smaller than either flow's flip-flops |
+/// | `bw_sp_rf_32x32_b8` | a single port 32 wide on both ports of a `RAMB18E1`, a half each | one `RAMB36E1` 36 wide on port A: no single port is split over two ports here |
+/// | `bw_sdp_65536x16_b8`, `bw_sp_rf_65536x16_b8` | 32 `RAMB36E1`, cascaded in pairs | 32 `RAMB36E1`, two deep and a read multiplexer: no cascade is built, as for `sdp_65536x1` |
+/// | `bw_sp_wf_*` | a lane read first lane by lane is `RAM256X1S`, single-port distributed RAM | `RAM64M`s, a lane at a time: the read on no clock the lanes' choice leaves, and no single-port distributed RAM here |
 const NOT_AS_VIVADO: &[&str] = &[
     "asym_2048x9_r36",
     "asym_4096x8_r32",
     "async_1024x8",
+    "bw_sdp_65536x16_b8",
+    "bw_sp_rf_32x32_b8",
+    "bw_sp_rf_65536x16_b8",
+    "bw_sp_wf_1024x32_b8",
+    "bw_sp_wf_2048x18_b9",
     "rom_1024x16",
     "rom_1024x18",
     "rom_16384x2",
@@ -341,7 +352,8 @@ fn build_one(root: &str, name: &str) -> Built {
 
 /// When `RETICLE_MEMARR_BITS` and `UPDATE_EXPECT` are set, `vivado.txt` is
 /// made again from `lutram.sh`'s output: never otherwise, so that nothing
-/// here runs Vivado or needs to have.
+/// here runs Vivado or needs to have. A design with no output there keeps
+/// what `vivado.txt` said of it, so a run of the designs added is enough.
 fn regenerate(root: &str) {
     let (Some(bits), true) = (
         std::env::var_os("RETICLE_MEMARR_BITS"),
@@ -350,6 +362,22 @@ fn regenerate(root: &str) {
         return;
     };
     let bits = PathBuf::from(bits);
+    // A design `lutram.sh` was not run on this time keeps what `vivado.txt`
+    // said of it, so that a run over the designs added is enough.
+    let before = std::fs::read_to_string(fixtures().join("vivado.txt")).unwrap_or_default();
+    let mut kept: BTreeMap<String, String> = BTreeMap::new();
+    let mut at = String::new();
+    for line in before.lines() {
+        if let Some(name) = line.strip_prefix("design ") {
+            at = name.to_owned();
+            kept.entry(at.clone()).or_default();
+        } else if line.starts_with("  ")
+            && let Some(lines) = kept.get_mut(&at)
+        {
+            lines.push_str(line);
+            lines.push('\n');
+        }
+    }
     let mut out = String::from(
         "# What Vivado 2026.1 made of each design here, on xc7a100tftg256-1, from\n\
          # `FIXTURE=memarr tools/vivado-parity/lutram.sh`. `routed` is its cell count\n\
@@ -362,6 +390,7 @@ fn regenerate(root: &str) {
         out.push_str(&format!("design {name}\n"));
         let dir = bits.join(&name);
         let Ok(report) = std::fs::read_to_string(dir.join(format!("{name}.cells"))) else {
+            out.push_str(kept.get(&name).map_or("", String::as_str));
             continue;
         };
         for line in report.lines() {
@@ -450,7 +479,7 @@ fn each_memory_gets_the_cells_vivado_gave_it() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(compared >= 97, "only {compared} compared");
+    assert!(compared >= 145, "only {compared} compared");
 }
 
 /// **The block RAM tiles are Vivado's**, site feature for site feature and
@@ -477,7 +506,7 @@ fn each_block_ram_tile_holds_what_vivados_does() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(compared >= 177, "only {compared} tiles compared");
+    assert!(compared >= 252, "only {compared} tiles compared");
 }
 
 /// **What is not arranged as Vivado arranges it is what [`NOT_AS_VIVADO`]
@@ -494,7 +523,18 @@ fn what_is_not_vivados_says_so() {
     assert_eq!(cells("sdp_65536x1"), one("RAMB36E1", 2));
     assert!(built["sdp_65536x1"].log.contains("2 deep"));
     assert_eq!(cells("style_registers_128x8"), one("RAM64M", 6));
-    for name in ["asym_2048x9_r36", "asym_4096x8_r32", "async_1024x8"] {
+    assert_eq!(cells("bw_sp_rf_32x32_b8"), one("RAMB36E1", 1));
+    for name in ["bw_sdp_65536x16_b8", "bw_sp_rf_65536x16_b8"] {
+        assert_eq!(cells(name), one("RAMB36E1", 32), "{name}");
+        assert!(built[name].log.contains("2 deep"), "{name}");
+    }
+    for name in [
+        "asym_2048x9_r36",
+        "asym_4096x8_r32",
+        "async_1024x8",
+        "bw_sp_wf_1024x32_b8",
+        "bw_sp_wf_2048x18_b9",
+    ] {
         let found = cells(name);
         assert!(
             found.keys().all(|c| !c.starts_with("RAMB")) && !found.is_empty(),
@@ -684,7 +724,7 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(runs.len() >= 106, "only {} simulated", runs.len());
+    assert!(runs.len() >= 159, "only {} simulated", runs.len());
 }
 
 /// Each of `jobs`' routed netlists under Vivado's simulator at once, and

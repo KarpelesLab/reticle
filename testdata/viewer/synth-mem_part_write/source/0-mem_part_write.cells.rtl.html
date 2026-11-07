@@ -113,7 +113,7 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
       <span class="brand">reticle viewer</span>
     </header>
     <main class="wide"><h1>mem_part_write.cells.rtl
-  <span class="kind"> 34 lines</span>
+  <span class="kind"> 31 lines</span>
 </h1>
 <ol class="src">
   <li id="L1">top mem_part_write</li>
@@ -140,16 +140,13 @@ ol.src li:target { background: var(--comb); outline: 1px solid var(--comb-line);
   <li id="L22">  port rdata out %rdata</li>
   <li id="L23">  memory @mem 16 x u32</li>
   <li id="L24">  cell mem$rd memrd @mem clocked (addr=%raddr, clk=%clk, en=1&#39;d1) -&gt; (data=%rdata)</li>
-  <li id="L25">  cell mem$wr memwr @mem clocked (addr=%waddr, data={24&#39;d0, %wdata[7:0]}, en={24&#39;d0, {8{%we[0:0]}}}, clk=%clk) -&gt; ()</li>
-  <li id="L26">  cell mem$wr_2 memwr @mem clocked (addr=%waddr, data={16&#39;d0, %wdata[15:8], 8&#39;d0}, en={16&#39;d0, {8{%we[1:1]}}, 8&#39;d0}, clk=%clk) -&gt; ()</li>
-  <li id="L27">  cell mem$wr_3 memwr @mem clocked (addr=%waddr, data={8&#39;d0, %wdata[23:16], 16&#39;d0}, en={8&#39;d0, {8{%we[2:2]}}, 16&#39;d0}, clk=%clk) -&gt; ()</li>
-  <li id="L28">  cell mem$wr_4 memwr @mem clocked (addr=%waddr, data={%wdata[31:24], 24&#39;d0}, en={{8{%we[3:3]}}, 24&#39;d0}, clk=%clk) -&gt; ()</li>
-  <li id="L29">  cell mem$wr_5$shl shl (a=resize(%wdata[3:0], u32), b={%at, 2&#39;d0}) -&gt; (y=%mem$wr_5$shl)</li>
-  <li id="L30">  cell mem$wr_5$shl_2 shl (a=32&#39;d15, b={%at, 2&#39;d0}) -&gt; (y=%mem$wr_5$shl_2)</li>
-  <li id="L31">  cell mem$wr_5$and and (a=%mem$wr_5$shl_2, b={32{%nib}}) -&gt; (y=%mem$wr_5$and)</li>
-  <li id="L32">  cell mem$wr_5 memwr @mem clocked (addr=%raddr, data=%mem$wr_5$shl, en=%mem$wr_5$and, clk=%clk) -&gt; ()</li>
-  <li id="L33">end</li>
-  <li id="L34"></li>
+  <li id="L25">  cell mem$wr memwr @mem clocked (addr=%waddr, data=%wdata, en={{8{%we[3:3]}}, {8{%we[2:2]}}, {8{%we[1:1]}}, {8{%we[0:0]}}}, clk=%clk) -&gt; ()</li>
+  <li id="L26">  cell mem$wr_5$shl shl (a=resize(%wdata[3:0], u32), b={%at, 2&#39;d0}) -&gt; (y=%mem$wr_5$shl)</li>
+  <li id="L27">  cell mem$wr_5$shl_2 shl (a=32&#39;d15, b={%at, 2&#39;d0}) -&gt; (y=%mem$wr_5$shl_2)</li>
+  <li id="L28">  cell mem$wr_5$and and (a=%mem$wr_5$shl_2, b={32{%nib}}) -&gt; (y=%mem$wr_5$and)</li>
+  <li id="L29">  cell mem$wr_5 memwr @mem clocked (addr=%raddr, data=%mem$wr_5$shl, en=%mem$wr_5$and, clk=%clk) -&gt; ()</li>
+  <li id="L30">end</li>
+  <li id="L31"></li>
 </ol>
     </main>
   </body>

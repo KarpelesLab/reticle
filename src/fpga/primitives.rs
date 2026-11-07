@@ -1423,11 +1423,14 @@ impl Mapper<'_> {
     // --- block RAM ----------------------------------------------------------
 
     fn block_rams(&mut self, module: &mut Module) {
-        self.split_lanes(module);
-        let memories: Vec<MemoryId> = module.memories.ids().collect();
+        // A memory written part of a word at a time that the block RAM
+        // mapper does not take with byte write enables is built as a
+        // memory per lane, each mapped as any memory is: the lanes join the
+        // queue behind the memories there are.
+        let mut queue: std::collections::VecDeque<MemoryId> = module.memories.ids().collect();
         let mut mapped: Vec<CellId> = Vec::new();
         let mut lowered: Vec<MemoryId> = Vec::new();
-        for mem in memories {
+        while let Some(mem) = queue.pop_front() {
             if assigns_an_element(module, mem) {
                 // Neither a block RAM nor the logic fallback builds a
                 // continuous `assign w[k] = v`: both read the write
@@ -1447,6 +1450,12 @@ impl Mapper<'_> {
             }
             if let Some(used) = self.block_ram(module, mem) {
                 mapped.extend(used);
+            } else if super::lanes::has_lanes(module, mem) {
+                if let Some(split) = self.split_lanes(module, mem) {
+                    mapped.extend(split.ports);
+                    lowered.push(mem);
+                    queue.extend(split.lanes);
+                }
             } else if let Some(used) = self.lower_memory(module, mem) {
                 mapped.extend(used);
                 lowered.push(mem);
@@ -1467,42 +1476,43 @@ impl Mapper<'_> {
         }
     }
 
-    /// Builds every memory written part of an element at a time as a
-    /// memory per lane ([`super::lanes::split`]), each then mapped as any
-    /// memory is: the mappers below take a write port with one enable. A
-    /// memory that cannot be split is refused here, by name, rather than
-    /// mapped with its byte enables read as one.
-    fn split_lanes(&mut self, module: &mut Module) {
-        let mut gone: Vec<MemoryId> = Vec::new();
-        let memories: Vec<MemoryId> = module.memories.ids().collect();
-        for mem in memories {
-            if !super::lanes::has_lanes(module, mem) {
-                continue;
+    /// Builds a memory written part of an element at a time as a memory
+    /// per lane ([`super::lanes::split`]), what the block RAM mapper does
+    /// not take with byte write enables: each lane is then mapped as any
+    /// memory is, the mappers below taking a write port with one enable. A
+    /// memory that cannot be split is refused, by name, rather than mapped
+    /// with its enables read as one.
+    fn split_lanes(&mut self, module: &mut Module, mem: MemoryId) -> Option<super::lanes::Split> {
+        let memory = &module.memories[mem];
+        let (name, span) = (memory.name.as_str().to_owned(), memory.span);
+        // What the block RAM mapper said of the whole memory is said of
+        // its lanes instead.
+        if let Some(at) = self
+            .report
+            .bram_fallbacks
+            .iter()
+            .rposition(|f| f.memory == name && !f.built)
+        {
+            self.report.bram_fallbacks.remove(at);
+        }
+        match super::lanes::split(module, mem) {
+            Some(split) => {
+                self.note(format!(
+                    "memory `{name}` is written part of a word at a time: built as {} \
+                     memories, a lane each",
+                    split.lanes.len()
+                ));
+                Some(split)
             }
-            let memory = &module.memories[mem];
-            let (name, span) = (memory.name.as_str().to_owned(), memory.span);
-            match super::lanes::split(module, mem) {
-                Some(made) => {
-                    self.note(format!(
-                        "memory `{name}` is written part of a word at a time: built as {} \
-                         memories, a lane each",
-                        made.len()
-                    ));
-                    gone.push(mem);
-                }
-                None => self.decline_lowering(
+            None => {
+                self.decline_lowering(
                     &name,
                     "it is written part of a word at a time and read other than through a \
                      port, which neither a block RAM nor the logic fallback can build",
                     span,
-                ),
+                );
+                None
             }
-        }
-        if !gone.is_empty() {
-            let remap = module.memories.retain(|id, _| !gone.contains(&id));
-            crate::synth::opt::dce::map_memories(module, |old| {
-                remap.get(old.index()).copied().flatten().unwrap_or(old)
-            });
         }
     }
 
@@ -1576,6 +1586,19 @@ impl Mapper<'_> {
             None::<Vec<CellId>>
         };
 
+        // A memory written part of a word at a time is taken with the
+        // block's byte write enables, where Vivado's arrangement has them
+        // and its lanes are bytes; any other is left, saying nothing, for
+        // `block_rams` to build a lane at a time.
+        let lanes = if super::lanes::has_lanes(module, mem) {
+            let arranged = self.options.vivado_memories && self.vivado_block_ram_shapes().is_some();
+            match (arranged, super::lanes::byte_lanes(module, mem)) {
+                (true, Some(lane)) => Some(lane),
+                _ => return None,
+            }
+        } else {
+            None
+        };
         if refused {
             return give_up(
                 self,
@@ -1794,10 +1817,24 @@ impl Mapper<'_> {
                 let sdp = pairs.is_empty()
                     && writes.len() == 1
                     && groups.iter().all(|g| g.reads.len() == 1);
-                let (plan, deep) = vivado_columns(width, depth, sdp);
+                let (plan, deep): (Vec<PlannedColumn>, u32) = match lanes {
+                    Some(lane) => {
+                        let (plan, deep) = vivado_lane_columns(width, depth, sdp, lane);
+                        let plan = plan.into_iter().map(|(c, pins)| (c, Some(pins))).collect();
+                        (plan, deep)
+                    }
+                    None => {
+                        let (plan, deep) = vivado_columns(width, depth, sdp);
+                        (plan.into_iter().map(|c| (c, None)).collect(), deep)
+                    }
+                };
                 let columns: Vec<BramColumnPlan> = plan
                     .iter()
-                    .map(|column| self.vivado_column_plan(shapes, column))
+                    .map(|(column, pins)| {
+                        let mut planned = self.vivado_column_plan(shapes, column);
+                        planned.pins = pins.clone();
+                        planned
+                    })
                     .collect();
                 if columns.iter().any(|c| c.sdp) {
                     for group in &mut groups {
@@ -1823,6 +1860,7 @@ impl Mapper<'_> {
                         lo: w * mode.0,
                         hi: ((w + 1) * mode.0 - 1).min(width.saturating_sub(1)),
                         sdp: false,
+                        pins: None,
                     })
                     .collect();
                 (columns, deep)
@@ -2005,6 +2043,7 @@ impl Mapper<'_> {
             lo: column.lo,
             hi: column.hi,
             sdp: column.sdp,
+            pins: None,
         }
     }
 
@@ -2123,7 +2162,33 @@ impl Mapper<'_> {
                                         if bits(Some(expr)).as_ref() == Some(&wen)
                                 )
                             });
-                            negated.then(|| (PairMode::NoChange, None, Vec::new()))
+                            // A write a lane at a time: the read's enable no
+                            // lane's, `if (~|we) q <= mem[a]`, the `not` of an
+                            // `or` of every lane's enable and nothing else.
+                            let lanes: HashSet<SigBit> = wen
+                                .iter()
+                                .filter(|b| !matches!(b, SigBit::Const(_)))
+                                .copied()
+                                .collect();
+                            let none_of_the_lanes = wen.len() > 1
+                                && !lanes.is_empty()
+                                && module.cells.iter().any(|(_, not)| {
+                                    matches!(not.kind, CellKind::Not)
+                                        && not.output("y").and_then(net_bits).as_ref() == Some(&en)
+                                        && bits(not.input("a")).is_some_and(|any| {
+                                            module.cells.iter().any(|(_, or)| {
+                                                matches!(or.kind, CellKind::ReduceOr)
+                                                    && or.output("y").and_then(net_bits).as_ref()
+                                                        == Some(&any)
+                                                    && bits(or.input("a")).is_some_and(|ins| {
+                                                        ins.iter().copied().collect::<HashSet<_>>()
+                                                            == lanes
+                                                    })
+                                            })
+                                        })
+                                });
+                            (negated || none_of_the_lanes)
+                                .then(|| (PairMode::NoChange, None, Vec::new()))
                         }
                     }
                 } else {
@@ -2648,7 +2713,9 @@ impl Mapper<'_> {
                             let top = net_expr(module, top, span);
                             value = expr(module, ExprKind::Concat(vec![top, value]), span);
                         }
-                        let part = if layout.data_bits.is_empty() {
+                        let part = if let Some(pins) = &column.pins {
+                            from_pins(module, value, pins, span)
+                        } else if layout.data_bits.is_empty() {
                             slice_expr(module, value, hi - lo, 0, span)
                         } else {
                             // Data bit `j` comes off the pin the mode puts
@@ -2696,10 +2763,19 @@ impl Mapper<'_> {
                         // byte; a memory written a whole word at a time
                         // drives every one of them alike. Leaving the
                         // upper bits off would write one byte and drop
-                        // the rest, silently.
+                        // the rest, silently. One written a lane at a time
+                        // drives each with its lane's enable.
                         let bits = map.width("we");
                         let name = Name::new(name);
-                        let value = repeat_bits(module, write_ens[index], bits, span);
+                        let value = match (port.lanes_en, &column.pins) {
+                            // The block's enable holds a depth slice's
+                            // address, its own or the read's that shares
+                            // the port, so the lanes need nothing else.
+                            (Some(lanes), Some(pins)) => {
+                                lane_write_enables(module, lanes, column, pins, bits, span)
+                            }
+                            _ => repeat_bits(module, write_ens[index], bits, span),
+                        };
                         inputs.push((name, value));
                     }
                     if let (false, Some(name)) = (shared, map.signal("ce")) {
@@ -2708,7 +2784,9 @@ impl Mapper<'_> {
                     if let Some(name) = map.signal("din")
                         && let Some(data) = port.data
                     {
-                        let value = if layout.data_bits.is_empty() {
+                        let value = if let Some(pins) = &column.pins {
+                            pin_word(module, data, lo, pins, mode_width, span)
+                        } else if layout.data_bits.is_empty() {
                             let part = slice_expr(module, data, hi, lo, span);
                             self.resize(module, part, mode_width, span)
                         } else {
@@ -2767,7 +2845,21 @@ impl Mapper<'_> {
                     let words = &layout.init;
                     let contents = match (&shape.init_params, words) {
                         (Some(params), _) if vivado && shape.name.starts_with("RAMB") => {
-                            linear_contents(init, params, column, column.mode.1, d)
+                            match &column.pins {
+                                Some(pins) => {
+                                    // The words as the pins hold them, laid
+                                    // out as a column of the whole word.
+                                    let words = pin_contents(init, column, pins);
+                                    let whole = BramColumnPlan {
+                                        lo: 0,
+                                        hi: column.mode.0 - 1,
+                                        pins: None,
+                                        ..column.clone()
+                                    };
+                                    linear_contents(&words, params, &whole, column.mode.1, d)
+                                }
+                                None => linear_contents(init, params, column, column.mode.1, d),
+                            }
                         }
                         (Some(params), Some(words)) => {
                             block_contents(init, width, params, words, column.mode, w, d)
@@ -2949,7 +3041,10 @@ impl Mapper<'_> {
                 pieces.push(net_expr(module, net, span));
             }
             let value = expr(module, ExprKind::Concat(pieces), span);
-            let part = slice_expr(module, value, column.hi - column.lo, 0, span);
+            let part = match &column.pins {
+                Some(pins) => from_pins(module, value, pins, span),
+                None => slice_expr(module, value, column.hi - column.lo, 0, span),
+            };
             if let Some(parts) = row_parts.first_mut() {
                 parts.push(part);
             }
@@ -2964,13 +3059,23 @@ impl Mapper<'_> {
             if let (Some(name), Some(en)) = (b.signal("en"), ports.write_en) {
                 inputs.push((Name::new(name), en));
                 if let Some(we) = b.signal("we") {
-                    let value = repeat_bits(module, en, b.width("we"), span);
+                    let value = match (write.lanes_en, &column.pins) {
+                        (Some(lanes), Some(pins)) => {
+                            lane_write_enables(module, lanes, column, pins, b.width("we"), span)
+                        }
+                        _ => repeat_bits(module, en, b.width("we"), span),
+                    };
                     inputs.push((Name::new(we), value));
                 }
             }
             if let Some(data_in) = write.data {
-                let part = slice_expr(module, data_in, column.hi, column.lo, span);
-                let value = self.resize(module, part, mode_width, span);
+                let value = match &column.pins {
+                    Some(pins) => pin_word(module, data_in, column.lo, pins, mode_width, span),
+                    None => {
+                        let part = slice_expr(module, data_in, column.hi, column.lo, span);
+                        self.resize(module, part, mode_width, span)
+                    }
+                };
                 for (map, role, hi, lo) in [
                     (a, "din", half - 1, 0),
                     (b, "din", data - 1, half),
@@ -3015,12 +3120,30 @@ impl Mapper<'_> {
             }
             _ => None,
         };
+        // An enable per bit enables the block when any bit is enabled; its
+        // write enables take the bits.
+        let (en, lanes_en) = match en {
+            Some(e) if expr_width(module, e) > 1 => {
+                let any = add_net(module, "bram$any", Type::bit(), span);
+                add_cell(
+                    module,
+                    "bram$or",
+                    CellKind::ReduceOr,
+                    vec![(Name::new("a"), e)],
+                    vec![(Name::new("y"), any)],
+                    span,
+                );
+                (Some(net_expr(module, any, span)), Some(e))
+            }
+            other => (other, None),
+        };
         PortWiring {
             low,
             high,
             high_bits: high_count,
             clk,
             en,
+            lanes_en,
             data,
             out,
         }
@@ -3314,9 +3437,13 @@ impl Mapper<'_> {
         let vivado = self.options.vivado_memories && writes.len() == 1 && self.has_vivado_lutram();
         let shape = self.lutram_shape().filter(|_| writes.len() == 1 && !vivado);
         let bits = u64::from(width) * depth;
+        let lane = module.memories[mem]
+            .attrs
+            .get(super::lanes::LANE_OF)
+            .is_some();
         let cells = match &shape {
             _ if vivado => {
-                let (words, pieces) = vivado_lutram_plan(width, depth);
+                let (words, pieces) = vivado_lutram_plan(width, depth, lane);
                 pieces.len() as u64 * depth.div_ceil(words) * reads.len() as u64
             }
             Some(shape) => {
@@ -3387,10 +3514,11 @@ impl Mapper<'_> {
             width,
             rows_wanted,
             init,
+            lane,
         };
         if vivado {
             let cells = self.emit_vivado_lutram(module, &plan, &reads, &writes, write_clk);
-            let names = vivado_lutram_names(width, depth);
+            let names = vivado_lutram_names(width, depth, lane);
             self.record_fallback(&name, "distributed LUT RAM", Some(names), cells);
             let mut replaced = reads;
             replaced.extend(writes);
@@ -3863,7 +3991,7 @@ impl Mapper<'_> {
             .iter()
             .map(|id| self.logic_port(module, *id))
             .collect();
-        let (words, pieces) = vivado_lutram_plan(width, depth);
+        let (words, pieces) = vivado_lutram_plan(width, depth, plan.lane);
         let total = addr_bits(depth);
         let low = addr_bits(words).min(total);
         let high = total - low;
@@ -7914,6 +8042,13 @@ struct BramColumnPlan {
     /// Simple dual port: read on port A, written on port B, a word's halves
     /// on both (`Mapper::sdp_wiring`).
     sdp: bool,
+    /// For a memory written a byte lane at a time ([`vivado_lane_columns`]),
+    /// the pin of the block's word, data pins then parity pins as the
+    /// read's `{DOP, DO}`, that each of the column's bits `lo..=hi` is on:
+    /// a lane's eight bits on the data pins its write enable covers and its
+    /// ninth on the parity pin it covers. `None` for any other memory,
+    /// whose bits are on the pins in order.
+    pins: Option<Vec<u32>>,
 }
 
 /// What [`Mapper::sdp_wiring`] wires a simple-dual-port block to.
@@ -8324,6 +8459,217 @@ fn vivado_columns(width: u32, depth: u64, sdp: bool) -> (Vec<VivadoColumn>, u32)
     (columns, deep.max(1))
 }
 
+/// A column of [`vivado_columns`] or [`vivado_lane_columns`], with the pins
+/// of its bits when its memory is written a lane at a time.
+type PlannedColumn = (VivadoColumn, Option<Vec<u32>>);
+
+/// How Vivado 2026.1 arranges a memory written `lane` bits at a time, each
+/// lane under its own enable (`lane` 8 or 9), with the pin of each column's
+/// bits ([`BramColumnPlan::pins`]); the columns' `lo..=hi` are the memory's
+/// bits. **Measured**, read off its netlists of the `bw_` designs of
+/// `testdata/fpga/vivado/memarr/`:
+///
+/// - **Where a block at the memory's depth is 9 bits wide or more, a lane
+///   is 9 bits of it and the arrangement is [`vivado_columns`]'s of nine
+///   bits a lane**: a byte's eight bits on the eight data pins one write
+///   enable covers, its ninth, when it has one, on the parity pin that
+///   enable covers, a lane of eight leaving that pin unused.
+///   `bw_sdp_1024x32_b8` is one `RAMB36E1` 36 wide, as `sdp_1024x32`;
+///   `bw_sdp_4096x16_b8` two `RAMB36E1` of 9 a byte each, where `sdp_4096x16`
+///   is 9 bits and 7; `bw_sdp_2048x24_b8` a `RAMB36E1` of 18 and a `RAMB18E1`
+///   of 9, a byte in each 9; `bw_sdp_1024x72_b8` two `RAMB36E1` of 36 and a
+///   `RAMB18E1` of 18 for the ninth byte, where `sdp_1024x72` is two
+///   `RAMB36E1`; and simple dual port at 512 words as before, a lane a byte
+///   of `WEBWE` (`bw_sdp_512x64_b8`, `bw_sdp_512x72_b9`). A lane of nine
+///   is bits 0 to 7 on `DIADI[8k+7:8k]` and bit 8 on `DIPADIP[k]`
+///   (`bw_sdp_1024x36_b9`'s netlist).
+/// - **Deeper, each lane is [`vivado_columns`]'s arrangement of one lane**:
+///   `bw_sdp_8192x16_b8` four `RAMB36E1` of 4, two a lane;
+///   `bw_sdp_16384x16_b8` eight of 2.
+fn vivado_lane_columns(
+    width: u32,
+    depth: u64,
+    sdp: bool,
+    lane: u32,
+) -> (Vec<(VivadoColumn, Vec<u32>)>, u32) {
+    let lanes = width / lane;
+    let (probe, _) = vivado_columns(9, depth, sdp);
+    let whole = probe.first().is_some_and(|c| c.width >= 9);
+    let mut out = Vec::new();
+    if whole {
+        let (plan, deep) = vivado_columns(9 * lanes, depth, sdp);
+        for column in plan {
+            let (first, end) = (column.lo / 9, column.hi / 9 + 1);
+            let parity = column.width / 9;
+            let data = column.width - parity;
+            let mut pins = Vec::new();
+            for j in 0..end - first {
+                for t in 0..lane {
+                    pins.push(if t < 8 { 8 * j + t } else { data + j });
+                }
+            }
+            out.push((
+                VivadoColumn {
+                    lo: first * lane,
+                    hi: end * lane - 1,
+                    ..column
+                },
+                pins,
+            ));
+        }
+        return (out, deep);
+    }
+    let (plan, deep) = vivado_columns(lane, depth, false);
+    for at in 0..lanes {
+        for column in &plan {
+            let base = at * lane;
+            out.push((
+                VivadoColumn {
+                    lo: base + column.lo,
+                    hi: base + column.hi,
+                    ..*column
+                },
+                (0..=column.hi - column.lo).collect(),
+            ));
+        }
+    }
+    (out, deep)
+}
+
+/// Bits `lo + j` of `value` on pin `pins[j]` of a word `width` bits wide,
+/// the other pins zero: what a column with [`BramColumnPlan::pins`] is
+/// written.
+fn pin_word(
+    module: &mut Module,
+    value: ExprId,
+    lo: u32,
+    pins: &[u32],
+    width: u32,
+    span: Span,
+) -> ExprId {
+    let mut on: Vec<Option<u32>> = vec![None; width as usize];
+    for (j, pin) in pins.iter().enumerate() {
+        if let Some(slot) = on.get_mut(*pin as usize) {
+            *slot = Some(u32::try_from(j).unwrap_or(0));
+        }
+    }
+    // Most significant pin first, runs of consecutive bits as one slice.
+    let mut parts = Vec::new();
+    let mut pin = width;
+    while pin > 0 {
+        let top = pin - 1;
+        let mut low = top;
+        match on[top as usize] {
+            Some(j) => {
+                while low > 0
+                    && j.checked_sub(top - low + 1).is_some()
+                    && on[(low - 1) as usize] == j.checked_sub(top - low + 1)
+                {
+                    low -= 1;
+                }
+                let bottom = j - (top - low);
+                parts.push(slice_expr(module, value, lo + j, lo + bottom, span));
+            }
+            None => {
+                while low > 0 && on[(low - 1) as usize].is_none() {
+                    low -= 1;
+                }
+                parts.push(const_expr(module, Const::zero(top - low + 1), span));
+            }
+        }
+        pin = low;
+    }
+    if parts.len() == 1 {
+        parts[0]
+    } else {
+        expr(module, ExprKind::Concat(parts), span)
+    }
+}
+
+/// A column's bits read off the block's word `value` (`{DOP, DO}`), bit
+/// `j` from pin `pins[j]`, most significant first.
+fn from_pins(module: &mut Module, value: ExprId, pins: &[u32], span: Span) -> ExprId {
+    let mut parts = Vec::new();
+    let mut j = pins.len();
+    while j > 0 {
+        let top = j - 1;
+        let mut low = top;
+        while low > 0 && pins[low - 1] + 1 == pins[low] {
+            low -= 1;
+        }
+        parts.push(slice_expr(module, value, pins[top], pins[low], span));
+        j = low;
+    }
+    if parts.len() == 1 {
+        parts[0]
+    } else {
+        expr(module, ExprKind::Concat(parts), span)
+    }
+}
+
+/// The write enables of a block holding a column with
+/// [`BramColumnPlan::pins`], `count` of them: enable `k` covers the data
+/// pins `8k..8k+8` and the parity pin `k` of a mode 9 bits wide or more,
+/// and is the enable of the column's bit on one of them; a narrower mode
+/// has one lane and the first enable alone, the others low, as Vivado ties
+/// them (`bw_sdp_16384x16_b8`). The block's enable is what holds a depth
+/// slice's address (`bw_sdp_65536x16_b8`).
+fn lane_write_enables(
+    module: &mut Module,
+    lanes_en: ExprId,
+    column: &BramColumnPlan,
+    pins: &[u32],
+    count: u32,
+    span: Span,
+) -> ExprId {
+    let (width, _) = column.mode;
+    let parity = column.layout.parity.min(width);
+    let data = width - parity;
+    let mut bits = Vec::with_capacity(count as usize);
+    for k in (0..count).rev() {
+        let at = if width >= 9 {
+            pins.iter()
+                .position(|p| (*p < data && *p / 8 == k) || *p == data + k)
+        } else if k == 0 {
+            Some(0)
+        } else {
+            None
+        };
+        let bit = match at {
+            Some(j) => {
+                let b = column.lo + u32::try_from(j).unwrap_or(0);
+                slice_expr(module, lanes_en, b, b, span)
+            }
+            None => const_expr(module, Const::zero(1), span),
+        };
+        bits.push(bit);
+    }
+    if bits.len() == 1 {
+        bits[0]
+    } else {
+        expr(module, ExprKind::Concat(bits), span)
+    }
+}
+
+/// `init`'s words as the pins of a column with [`BramColumnPlan::pins`]
+/// hold them, a word of the mode's width each, for [`linear_contents`] to
+/// lay out as a column of the whole word.
+fn pin_contents(init: &[Const], column: &BramColumnPlan, pins: &[u32]) -> Vec<Const> {
+    let (width, _) = column.mode;
+    init.iter()
+        .map(|word| {
+            let mut out = Const::zero(width);
+            for (j, pin) in pins.iter().enumerate() {
+                let b = column.lo + u32::try_from(j).unwrap_or(0);
+                if let Some(bit) = word.get(b) {
+                    out.set_bit(*pin, bit);
+                }
+            }
+            out
+        })
+        .collect()
+}
+
 /// Why a block RAM shape cannot serve a memory's ports.
 ///
 /// A port serves one access, read or write, so the constraint is the
@@ -8527,9 +8873,23 @@ impl LutRamPiece {
 /// read port gets a copy of its own, as Vivado's three-port 32 by 8 has three
 /// `RAM32M`s and six `RAM32X1D`s. Which of those Vivado would pick for a
 /// shape not in the sweep is this rule's guess.
-fn vivado_lutram_plan(width: u32, depth: u64) -> (u64, Vec<(LutRamPiece, u32)>) {
+///
+/// A `lane` of a memory written part of a word at a time is a `RAM32X1D` a
+/// bit up to 32 words, where the same lane written a word at a time would
+/// be `RAM32M`s: Vivado's `bw_sdp_16x32_b8`, `bw_sdp_32x16_b8` and
+/// `bw_sdp_32x24_b8` of `testdata/fpga/vivado/memarr/` are one `RAM32X1D`
+/// per bit, **measured**. Deeper, a lane is built by the rule above, which
+/// is not measured for one: the byte-write memories there are 1,024 bits
+/// or more, Vivado's block RAM.
+fn vivado_lutram_plan(width: u32, depth: u64, lane: bool) -> (u64, Vec<(LutRamPiece, u32)>) {
     let mut pieces = Vec::new();
     let mut at = 0u32;
+    if lane && depth <= 32 {
+        for bit in 0..width {
+            pieces.push((LutRamPiece::D32, bit));
+        }
+        return (32, pieces);
+    }
     if depth <= 32 {
         while width - at >= 6 {
             pieces.push((LutRamPiece::M32, at));
@@ -8563,8 +8923,8 @@ fn vivado_lutram_plan(width: u32, depth: u64) -> (u64, Vec<(LutRamPiece, u32)>) 
 }
 
 /// The primitives [`vivado_lutram_plan`] uses, for the report: `RAM32M+RAM32X1D`.
-fn vivado_lutram_names(width: u32, depth: u64) -> String {
-    let (_, pieces) = vivado_lutram_plan(width, depth);
+fn vivado_lutram_names(width: u32, depth: u64, lane: bool) -> String {
+    let (_, pieces) = vivado_lutram_plan(width, depth, lane);
     let mut names: Vec<&str> = Vec::new();
     for (piece, _) in pieces {
         if !names.contains(&piece.primitive()) {
@@ -8600,6 +8960,10 @@ struct LogicPlan {
     rows_wanted: usize,
     /// The initial contents, element 0 first; empty when there are none.
     init: Vec<Const>,
+    /// A lane of a memory written part of a word at a time
+    /// (`super::lanes`), which Vivado builds of distributed RAM a bit at a
+    /// time ([`vivado_lutram_plan`]).
+    lane: bool,
 }
 
 impl LogicPlan {
@@ -8641,8 +9005,12 @@ struct PortWiring {
     high_bits: u32,
     /// The clock, for a clocked port.
     clk: Option<ExprId>,
-    /// The enable, if the port has one.
+    /// The enable, if the port has one: for a write port with an enable
+    /// per bit, whether any bit is enabled.
     en: Option<ExprId>,
+    /// A write port's enable per bit, when it has one (a write of part of
+    /// an element): the block's write enables are read off it.
+    lanes_en: Option<ExprId>,
     /// The data written, for a write port.
     data: Option<ExprId>,
     /// The net read, for a read port.
@@ -11050,6 +11418,72 @@ mod tests {
         assert_eq!(div_ceil_u32(8, 4), 2);
     }
 
+    /// **`vivado_lane_columns` is Vivado's arrangement of byte lanes**, one
+    /// case per rule, as its netlists of the `bw_` designs of
+    /// `testdata/fpga/vivado/memarr/` have them: each column as `(RAMB36E1,
+    /// width, simple dual port, lo, hi)` of the memory's bits, and where a
+    /// lane's bits go. Would catch a lane split over two blocks where a
+    /// block holds whole lanes (`bw_sdp_4096x16_b8` as `sdp_4096x16`'s 9 and
+    /// 7), the ninth byte of 72 put beside rather than in a `RAMB18E1`, a
+    /// ninth bit on a data pin rather than its lane's parity pin, and a deep
+    /// memory's lanes not each arranged alone. The tiles and the simulation
+    /// of `tests/fpga_xray_memarr_vivado.rs` hold the rest.
+    #[test]
+    fn vivado_arranges_byte_lanes_as_its_netlists_say() {
+        type Col = (bool, u32, bool, u32, u32);
+        let cols = |width: u32, depth: u64, sdp: bool, lane: u32| -> Vec<Col> {
+            vivado_lane_columns(width, depth, sdp, lane)
+                .0
+                .iter()
+                .map(|(c, _)| (c.big, c.width, c.sdp, c.lo, c.hi))
+                .collect()
+        };
+        // `bw_sdp_1024x32_b8`: one block 36 wide, as `sdp_1024x32`.
+        assert_eq!(cols(32, 1024, true, 8), vec![(true, 36, false, 0, 31)]);
+        // `bw_sdp_4096x16_b8`: a byte a block, 9 wide each.
+        assert_eq!(
+            cols(16, 4096, true, 8),
+            vec![(true, 9, false, 0, 7), (true, 9, false, 8, 15)]
+        );
+        // `bw_sdp_2048x24_b8`: two bytes in 18 and the third in a `RAMB18E1`.
+        assert_eq!(
+            cols(24, 2048, true, 8),
+            vec![(true, 18, false, 0, 15), (false, 9, false, 16, 23)]
+        );
+        // `bw_sdp_1024x72_b8`: four bytes a `RAMB36E1`, the ninth a `RAMB18E1`.
+        assert_eq!(
+            cols(72, 1024, true, 8),
+            vec![
+                (true, 36, false, 0, 31),
+                (true, 36, false, 32, 63),
+                (false, 18, false, 64, 71)
+            ]
+        );
+        // `bw_sdp_512x64_b8` and `bw_sdp_512x16_b8`: simple dual port 72,
+        // and what fits 18 bits a `RAMB18E1` in true dual port.
+        assert_eq!(cols(64, 512, true, 8), vec![(true, 72, true, 0, 63)]);
+        assert_eq!(cols(16, 512, true, 8), vec![(false, 18, false, 0, 15)]);
+        // `bw_sdp_16384x16_b8`: each lane four blocks of 2 bits.
+        let deep = cols(16, 16384, true, 8);
+        assert_eq!(deep.len(), 8);
+        assert_eq!(deep[3], (true, 2, false, 6, 7));
+        assert_eq!(deep[4], (true, 2, false, 8, 9));
+        // Lanes of nine: bit 8 of each on the parity pin its enable covers,
+        // after the data pins (`bw_sdp_1024x36_b9`'s `DIPADIP[k]`), and in a
+        // simple dual port of 72 after its 64 (`bw_sdp_512x72_b9`).
+        let (plan, _) = vivado_lane_columns(36, 1024, true, 9);
+        let pins = &plan[0].1;
+        assert_eq!(&pins[..9], &[0, 1, 2, 3, 4, 5, 6, 7, 32]);
+        assert_eq!(&pins[27..], &[24, 25, 26, 27, 28, 29, 30, 31, 35]);
+        let (plan, _) = vivado_lane_columns(72, 512, true, 9);
+        assert_eq!(plan[0].1[17], 65);
+        assert_eq!(plan[0].1[71], 71);
+        // A lane of eight in a column of 18 leaves the parity pins alone.
+        let (plan, _) = vivado_lane_columns(24, 2048, true, 8);
+        assert_eq!(plan[0].1, (0..16).collect::<Vec<u32>>());
+        assert_eq!(plan[1].1, (0..8).collect::<Vec<u32>>());
+    }
+
     /// **`vivado_columns` is Vivado's arrangement**, one case per rule, as
     /// Vivado's own netlists of `testdata/fpga/vivado/memarr/` have them
     /// (`vivado.txt`'s `params`): each column as `(RAMB36E1, width, depth,
@@ -11169,6 +11603,7 @@ mod tests {
                         lo,
                         hi: (lo + mode_width - 1).min(width - 1),
                         sdp: false,
+                        pins: None,
                     };
                     let ruled = linear_contents(&init, &params, &column, mode_depth, d);
                     match &layout.init {

@@ -8,6 +8,7 @@ models (`<top>.funcsim.v`). This drives each with the stimulus
 200 ns, once the models' global reset is over, and keeps `so` one nanosecond
 after each rising edge, as one character per cycle, in `xsim.txt` there.
 Nothing of the vendor's models or of its netlist is kept; only what came back.
+With `KEEP=1`, the answers already there for designs not in the output stay.
 """
 import os, re, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
@@ -76,7 +77,20 @@ def main():
     with ThreadPoolExecutor(int(os.environ.get("JOBS", "24"))) as pool:
         results = list(pool.map(run, jobs))
     missing = [t for t, bits in results if bits is None]
-    with open(os.path.join(fixture, "xsim.txt"), "w") as f:
+    # With KEEP set, the answers of designs not run this time stay, so that a
+    # run over the designs added is enough.
+    kept = {}
+    path = os.path.join(fixture, "xsim.txt")
+    if os.environ.get("KEEP") and os.path.exists(path):
+        for line in open(path):
+            if not line.startswith("#") and " " in line:
+                top, bits = line.split()
+                kept[top] = bits
+    for top, bits in results:
+        if bits is not None:
+            kept[top] = bits
+    results = sorted(kept.items()) if os.environ.get("KEEP") else results
+    with open(path, "w") as f:
         f.write("# What Vivado 2026.1's xsim says each design here does, as Vivado built it:\n"
                 "# `so` one nanosecond after each rising edge, from 200 ns, under the stimulus\n"
                 "# tools/vivado-parity/gen_lutram_vectors.py writes. One line per design; an `x`\n"

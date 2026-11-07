@@ -90,6 +90,7 @@ pub mod cellify;
 pub mod eval;
 pub mod fsm;
 pub mod keep;
+pub(crate) mod membits;
 pub mod opt;
 pub mod proc;
 pub mod report;
