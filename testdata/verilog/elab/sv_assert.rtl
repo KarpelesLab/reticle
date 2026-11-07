@@ -9,6 +9,6 @@ module sv_assert
   port ack in %ack
   process seq posedge %clk
     assert error lnot(land(%req, %ack)) report "req and ack at the same time"
-    assert error lor(%req, lnot(%ack))
+    assert error lor(%req, lnot(%ack)) report "Assertion violation"
   end
 end

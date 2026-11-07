@@ -131,3 +131,17 @@ fn m_names_the_scope_as_xsim_does() {
 fn bit_counts_compute_as_xsim_does() {
     matches_xsim("bitcount_tb", "sv", 0);
 }
+
+/// **An immediate assertion runs its pass action or its fail action, never
+/// both, and the severity tasks print xsim's words** (`assert_tb.sv`). A
+/// pass action ran unconditionally after the check; a fail action other
+/// than one severity task (`else $display(..)`, `else begin .. end`) was
+/// dropped; a failure with no action printed `Error: ` with nothing after;
+/// `$info` printed `Note:` and `$fatal` `Failure:` with its finish number
+/// in the text. Would catch any of those back, and an unknown condition
+/// passing. The run exits 1, since errors were reported, where xsim exits
+/// 0; that is deliberate, and this pins it.
+#[test]
+fn assertions_and_reports_as_xsim_prints_them() {
+    matches_xsim("assert_tb", "sv", 1);
+}

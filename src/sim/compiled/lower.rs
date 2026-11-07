@@ -1959,6 +1959,8 @@ impl<'d> Lowerer<'d> {
             } => {
                 let c = self.condition(ctx, *cond);
                 let msg = self.message(ctx, message, 'd', false);
+                self.messages[msg as usize].label =
+                    Some(crate::sim::process::severity_label(*severity));
                 let guard = ctx.guard.map(|g| self.slot(g));
                 self.side.push(Op::Assert {
                     guard,
@@ -2026,6 +2028,23 @@ impl<'d> Lowerer<'d> {
                 self.side.push(Op::Stop { guard });
                 return;
             }
+            "$fatal" | "$error" | "$warning" | "$info" => {
+                // A report is an assertion that always fails.
+                let (severity, label) = crate::sim::sys::report_task(name);
+                let skip = crate::sim::sys::fatal_skip(ctx.m, name, args);
+                let msg = self.message(ctx, &args[skip..], 'd', false);
+                self.messages[msg as usize].label = Some(label);
+                let never = self.constant(&Logic::zero(1));
+                let guard = ctx.guard.map(|g| self.slot(g));
+                self.side.push(Op::Assert {
+                    guard,
+                    cond: self.slot(never),
+                    msg,
+                    severity,
+                    span,
+                });
+                return;
+            }
             other => {
                 self.err(
                     ctx.label.clone(),
@@ -2063,6 +2082,7 @@ impl<'d> Lowerer<'d> {
             args: out,
             radix,
             newline,
+            label: None,
         });
         id
     }

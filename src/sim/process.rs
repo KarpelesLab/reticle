@@ -572,7 +572,7 @@ impl<'d> Simulator<'d> {
             } => {
                 if self.eval(inst, *cond).truth() != Bit::One {
                     let text = self.format_args(inst, message, 'd');
-                    self.report(inst, *severity, &text, stmt.span);
+                    self.report(inst, *severity, severity_label(*severity), &text, stmt.span);
                 }
                 Flow::Next
             }
@@ -691,19 +691,19 @@ impl<'d> Simulator<'d> {
     /// Reports an assertion or `$error`-family message with its severity:
     /// text goes to the output, a diagnostic to the messages, and
     /// `Failure` ends the run.
+    ///
+    /// `label` starts the line: the severity's name for an assertion
+    /// ([`severity_label`]), the task's for `$info` (`Info`) and `$fatal`
+    /// (`Fatal`), which xsim 2026.1 prints as `Info:` and `Fatal:` where
+    /// VHDL's `note` and `failure` print `Note:` and `Failure:`.
     pub(crate) fn report(
         &mut self,
         inst: InstId,
         severity: ReportSeverity,
+        label: &str,
         text: &str,
         span: Span,
     ) {
-        let label = match severity {
-            ReportSeverity::Note => "Note",
-            ReportSeverity::Warning => "Warning",
-            ReportSeverity::Error => "Error",
-            ReportSeverity::Failure => "Failure",
-        };
         self.output.push_str(label);
         self.output.push_str(": ");
         self.output.push_str(text);
@@ -722,5 +722,15 @@ impl<'d> Simulator<'d> {
         if severity == ReportSeverity::Failure {
             self.finish();
         }
+    }
+}
+
+/// The word a failing assertion of `severity` starts its line with.
+pub(crate) fn severity_label(severity: ReportSeverity) -> &'static str {
+    match severity {
+        ReportSeverity::Note => "Note",
+        ReportSeverity::Warning => "Warning",
+        ReportSeverity::Error => "Error",
+        ReportSeverity::Failure => "Failure",
     }
 }

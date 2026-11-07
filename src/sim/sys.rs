@@ -738,24 +738,11 @@ impl<'d> Simulator<'d> {
                 false
             }
             "$fatal" | "$error" | "$warning" | "$info" | "report" => {
-                let severity = match name {
-                    "$fatal" => ReportSeverity::Failure,
-                    "$error" => ReportSeverity::Error,
-                    "$warning" => ReportSeverity::Warning,
-                    _ => ReportSeverity::Note,
-                };
-                // `$fatal` may start with a finish number.
+                let (severity, label) = report_task(name);
                 let m = self.instances[inst.idx()].m;
-                let skip = usize::from(
-                    name == "$fatal"
-                        && args.len() >= 2
-                        && !matches!(
-                            m.exprs.get(args[0]).map(|e| &e.kind),
-                            Some(ExprKind::String(_))
-                        ),
-                );
+                let skip = fatal_skip(m, name, args);
                 let text = self.format_args(inst, &args[skip..], 'd');
-                self.report(inst, severity, &text, span);
+                self.report(inst, severity, label, &text, span);
                 true
             }
             "$readmemh" | "$readmemb" | "$writememh" | "$writememb" => {
@@ -1099,6 +1086,31 @@ impl<'d> Simulator<'d> {
             }
         }
     }
+}
+
+/// The severity of a reporting task and the word its line starts with, as
+/// xsim 2026.1 prints them: `Fatal:`, `Error:`, `Warning:`, `Info:`.
+/// VHDL's `report` is a note.
+pub(crate) fn report_task(name: &str) -> (ReportSeverity, &'static str) {
+    match name {
+        "$fatal" => (ReportSeverity::Failure, "Fatal"),
+        "$error" => (ReportSeverity::Error, "Error"),
+        "$warning" => (ReportSeverity::Warning, "Warning"),
+        "$info" => (ReportSeverity::Note, "Info"),
+        _ => (ReportSeverity::Note, "Note"),
+    }
+}
+
+/// How many leading arguments of a reporting task are not its message:
+/// one for `$fatal`'s finish number (IEEE 1800-2017 §20.10), which is any
+/// first argument but a string literal.
+pub(crate) fn fatal_skip(m: &crate::ir::Module, name: &str, args: &[ExprId]) -> usize {
+    usize::from(
+        name == "$fatal"
+            && args.first().is_some_and(|a| {
+                !matches!(m.exprs.get(*a).map(|e| &e.kind), Some(ExprKind::String(_)))
+            }),
+    )
 }
 
 /// The SystemVerilog bit-counting functions (IEEE 1800-2017 §20.9):

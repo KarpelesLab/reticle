@@ -74,6 +74,9 @@ pub(crate) struct Message {
     pub(crate) radix: char,
     /// True to append a newline (`$display` rather than `$write`).
     pub(crate) newline: bool,
+    /// For a report, the word its line starts with (`Error`, `Info`);
+    /// `None` for `$display` and `$write`.
+    pub(crate) label: Option<&'static str>,
 }
 
 /// The bits of a memory element an [`Op::MemWrite`] reaches.

@@ -373,6 +373,14 @@ impl<'d> CompiledSim<'d> {
                 }
                 Effect::Assert(msg, severity, span) => {
                     let text = self.format(*msg);
+                    // The line the event simulator prints for it.
+                    let label = self.plan.prog.messages[*msg as usize]
+                        .label
+                        .unwrap_or("Error");
+                    self.output.push_str(label);
+                    self.output.push_str(": ");
+                    self.output.push_str(&text);
+                    self.output.push('\n');
                     let text = if text.is_empty() {
                         "assertion failed".to_owned()
                     } else {

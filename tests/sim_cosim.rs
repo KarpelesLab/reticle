@@ -448,9 +448,11 @@ end
     let mut sim = load(text);
     sim.run();
     assert!(sim.finished());
+    // `$info` and `$fatal` print xsim's words, `Info:` and `Fatal:`; an
+    // assertion and VHDL's `report` keep their severity's name.
     assert_eq!(
         sim.output(),
-        "Note: a is low\nWarning: warned 5\nError: errored\nNote: info\nWarning: warn\nError: err\nNote: vhdl report\nFailure: fatal 7\n"
+        "Note: a is low\nWarning: warned 5\nError: errored\nInfo: info\nWarning: warn\nError: err\nNote: vhdl report\nFatal: fatal 7\n"
     );
     let msgs = sim.take_messages();
     assert_eq!(msgs.error_count(), 3);

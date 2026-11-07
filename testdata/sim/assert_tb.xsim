@@ -1,0 +1,18 @@
+Error: Assertion violation
+A2 pass
+A3 else1
+A3 else2
+Error: 
+Warning: A6 0
+Info: 
+Error: A8 5 str
+A9 fail
+Error: Assertion violation
+Error: E1
+Warning: W1
+Info: I1
+Error: 
+Warning: 
+Info: 
+after
+Fatal: F1 3

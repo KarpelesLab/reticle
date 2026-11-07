@@ -655,25 +655,6 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         match name {
             "finish" => out.finish_sim(),
             "stop" => out.stop(),
-            "fatal" => {
-                let msg = self.syscall_args(args, out);
-                self.b.span = span;
-                let cond = self.b.const_bit(false);
-                out.span = span;
-                out.assert(cond, ReportSeverity::Failure, msg);
-            }
-            "error" | "warning" | "info" => {
-                let msg = self.syscall_args(args, out);
-                self.b.span = span;
-                let cond = self.b.const_bit(false);
-                let severity = match name {
-                    "error" => ReportSeverity::Error,
-                    "warning" => ReportSeverity::Warning,
-                    _ => ReportSeverity::Note,
-                };
-                out.span = span;
-                out.assert(cond, severity, msg);
-            }
             "printtimescale" => {
                 // The argument names a scope, which the simulator looks up
                 // by its path; it is never a value, and a path into the
@@ -1249,25 +1230,60 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return;
         }
         let c = self.expr_bit(cond, &mut Sink::Proc(out));
-        let mut message = Vec::new();
-        let mut severity = ReportSeverity::Error;
-        if let Some(else_stmt) = &a.else_stmt
-            && let AstStmt::Expr(e) = &else_stmt.kind
-            && let ExprKind::Call { callee, args } = &e.kind
-            && let ExprKind::SystemIdent(id) = &callee.kind
+        // With no pass action and no fail action but `$error`, the
+        // assertion is one statement; the message with none is xsim's.
+        let error_args = match &a.else_stmt {
+            None => Some(None),
+            Some(else_stmt) => match &else_stmt.kind {
+                AstStmt::Expr(e) => match &e.kind {
+                    ExprKind::Call { callee, args } => match &callee.kind {
+                        ExprKind::SystemIdent(id) if id.name == "error" => Some(Some(args)),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            },
+        };
+        if a.then_stmt.is_none()
+            && let Some(args) = error_args
         {
-            severity = match id.name.as_str() {
-                "fatal" => ReportSeverity::Failure,
-                "warning" => ReportSeverity::Warning,
-                "info" | "display" => ReportSeverity::Note,
-                _ => ReportSeverity::Error,
+            let message = match args {
+                Some(args) => self.syscall_args(args, out),
+                None => self.violation(span),
             };
-            message = self.syscall_args(args, out);
+            out.span = span;
+            out.assert(c, ReportSeverity::Error, message);
+            return;
+        }
+        // Otherwise the pass action runs when the condition is true and
+        // the fail action, or the default error, when it is false or
+        // unknown (IEEE 1800-2017 §16.3): never both.
+        let mut pass = self.b.block();
+        if let Some(then_stmt) = &a.then_stmt {
+            pass.span = then_stmt.span;
+            self.stmt(then_stmt, &mut pass);
+        }
+        let mut fail = self.b.block();
+        fail.span = span;
+        match &a.else_stmt {
+            Some(else_stmt) => self.stmt(else_stmt, &mut fail),
+            None => {
+                let message = self.violation(span);
+                self.b.span = span;
+                let never = self.b.const_bit(false);
+                fail.span = span;
+                fail.assert(never, ReportSeverity::Error, message);
+            }
         }
         out.span = span;
-        out.assert(c, severity, message);
-        if let Some(then_stmt) = &a.then_stmt {
-            self.stmt(then_stmt, out);
-        }
+        out.if_(c, pass.finish(), fail.finish());
+    }
+
+    /// The message of a failing assertion that gives none: xsim 2026.1
+    /// prints `Error: Assertion violation`.
+    fn violation(&mut self, span: Span) -> Vec<ExprId> {
+        self.b.span = span;
+        vec![self.b.string("Assertion violation".to_owned())]
     }
 }

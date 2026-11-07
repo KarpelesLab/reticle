@@ -495,6 +495,50 @@ end
     sim.set(a, Logic::from_bool(false));
     sim.step();
     assert_eq!(sim.take_messages().error_count(), 1);
+    assert_eq!(sim.take_output(), "Error: a must hold\n");
+}
+
+/// The reporting tasks print the line the event simulator prints, which
+/// is xsim's (`testdata/sim/assert_tb.sv`): `Info:`, `Warning:`, `Error:`,
+/// and `Fatal:` without `$fatal`'s finish number, which also ends the run.
+/// A Verilog `$info` used to be an assertion of severity note and print
+/// `Note:`, and the compiled mode printed no line at all. Would catch the
+/// label taken from the severity again, the finish number printed, or the
+/// line missing; would not catch a difference in the diagnostics, which
+/// the two engines word differently.
+#[test]
+fn reports_print_what_the_event_simulator_prints() {
+    let design = parse(
+        "\
+module loud
+  net %clk u1 wire
+  net %go u1 wire
+  net %q u8 reg
+  port clk in %clk
+  port go in %go
+  process seq posedge %clk
+    %q <= add(%q, 8'd1)
+    sys $info(\"i=%0d\", %q)
+    if %go
+      sys $warning(\"w\")
+      sys $error()
+      sys $fatal(32'd1, \"f=%0d\", %q)
+    end
+  end
+end
+",
+    );
+    let mut sim = check(&design, options()).unwrap().compile();
+    let go = sim.net("loud.go").unwrap();
+    sim.step();
+    assert_eq!(sim.take_output(), "Info: i=0\n");
+    sim.set(go, Logic::from_bool(true));
+    sim.step();
+    assert_eq!(
+        sim.take_output(),
+        "Info: i=1\nWarning: w\nError: \nFatal: f=1\n"
+    );
+    assert!(sim.finished());
 }
 
 #[test]
