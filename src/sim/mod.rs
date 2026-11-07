@@ -270,7 +270,9 @@ pub struct Simulator<'d> {
     inactive: VecDeque<Event>,
     nba: Vec<(Vec<value::Store>, Logic)>,
     timed: BTreeMap<u64, Vec<Timed>>,
-    strobes: Vec<(elab::InstId, Vec<ExprId>)>,
+    /// Pending `$strobe`s: the instance, the arguments and the radix of
+    /// unformatted arguments (`$strobeh` prints them in hex).
+    strobes: Vec<(elab::InstId, Vec<ExprId>, char)>,
     monitor: Option<sys::Monitor>,
     status: Status,
     output: String,

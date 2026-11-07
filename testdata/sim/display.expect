@@ -1,7 +1,7 @@
 run
 expect-finished
 expect-output
- 10|10|   10|10   |0a|0A|00001010|012|A|str|%
+ 10|10|   10|10   |0a|0a|00001010|012|A|str|%
   -3 fd 11111101
  10 10
 0a

@@ -521,8 +521,11 @@ fn the_line_comes_out_of_the_serial_wire() {
     let text = String::from_utf8(bytes).expect("ASCII from the wire");
     assert_eq!(text, HELLO, "the serial line did not carry the line");
 
-    // The testbench's own receiver agrees, and printed it.
-    assert_eq!(sim.output(), HELLO);
+    // The testbench's own receiver agrees, and printed it: `$display("%s",
+    // line)` of a 64-byte register the line fills from the right, whose
+    // bytes still NUL print as spaces, as xsim 2026.1 prints them.
+    let line = HELLO.trim_end_matches('\n');
+    assert_eq!(sim.output(), format!("{line:>64}\n"));
 
     // `$readmemh` loaded the program, and nothing else was said.
     let messages: Vec<String> = sim.messages().iter().map(|d| d.message.clone()).collect();

@@ -752,7 +752,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 ids.push(id);
                 continue;
             }
-            let id = self.expr(v, None, &mut Sink::Proc(out));
+            // A real stays a real, so `%f` of `1.5` is 1.5 and `%d` of
+            // it rounds as a real does; built as an integer it was 2.
+            let real = matches!(
+                self.env.probe(|env| width::info(v, env, &[])),
+                Some(Info::Real)
+            );
+            let id = if real {
+                self.real(v, &mut Sink::Proc(out))
+            } else {
+                self.expr(v, None, &mut Sink::Proc(out))
+            };
             ids.push(id);
         }
         ids

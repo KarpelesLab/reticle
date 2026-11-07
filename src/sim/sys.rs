@@ -19,11 +19,17 @@
 //! | `$random` `$urandom` `$urandom_range` | A seeded xorshift generator (§17.9.1); deterministic per seed |
 //! | `$clog2` `$bits` `$itor` `$rtoi` `$realtobits` `$bitstoreal` `$sformatf` | Utility functions |
 //!
-//! Formatting understands `%d %i %h %x %o %b %s %c %t %m %e %f %g %%`
-//! with an optional `-`, width and precision; the default widths are the
-//! standard's (decimal digits for the operand width, one hex digit per
-//! nibble, one bit per `%b` character). Unknown tasks are warned about once
-//! and ignored; unknown functions return `x` of their cached type.
+//! Formatting understands `%d %i %h %x %o %b %s %c %t %m %l %e %f %g %%`
+//! with an optional `-`, zero flag, width and precision. Where IEEE
+//! 1364-2005 §17.1.1 leaves room, or where xsim 2026.1 reads it otherwise,
+//! the output is xsim's, measured line by line
+//! (`testdata/sim/display_format_tb.v` and its `.xsim`): a signed `%d`
+//! field is as wide as the digits of 2^N - 1 and a sign; any width on
+//! `%h`/`%o`/`%b`, even zero, drops leading zeros and then zero-fills; `%X`
+//! prints lower case; `%s` prints a NUL byte as a space; the real
+//! conversions ignore `-`. `docs/simulation.md` lists each. Unknown tasks
+//! are warned about once and ignored; unknown functions return `x` of their
+//! cached type.
 
 use std::fmt::Write;
 
@@ -34,7 +40,7 @@ use crate::logic::{Bit, Logic};
 
 use super::Simulator;
 use super::elab::{InstId, ProcId};
-use super::value::{Value, flat_width, logic_to_string};
+use super::value::{Value, flat_width};
 
 /// The `%t` format set by `$timeformat`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,7 +102,10 @@ pub(crate) struct Monitor {
 
 /// A parsed `%` conversion.
 struct Spec {
+    /// `-`: justify to the left.
     left: bool,
+    /// A width written with a leading zero (`%05d`): pad with zeros.
+    zero: bool,
     width: Option<usize>,
     precision: Option<usize>,
     conv: char,
@@ -127,28 +136,30 @@ fn decimal_words(words: &[u64]) -> String {
     digits.iter().rev().collect()
 }
 
-/// The number of decimal digits needed for the largest value of `width`
-/// bits (with a sign for signed values).
+/// The default `%d` field width for a `width`-bit operand: the decimal
+/// digits of its largest unsigned value, `2^width - 1`, plus one for the
+/// sign when it is signed.
+///
+/// This code used to size a signed field for the most negative value,
+/// its reading of IEEE 1364-2005 §17.1.1.3, which is one digit narrower at
+/// 4, 7 or 10 bits; xsim 2026.1 prints `-1` in a 4-bit signed field as
+/// ` -1`, three characters, and this follows what it prints.
 fn decimal_width(width: u32, signed: bool) -> usize {
-    let magnitude = if signed {
-        width.saturating_sub(1)
-    } else {
-        width
-    };
-    if magnitude == 0 {
+    if width == 0 {
         return 1 + usize::from(signed);
     }
-    let digits = if magnitude <= 64 {
-        let max = if magnitude == 64 {
+    let digits = if width <= 64 {
+        let max = if width == 64 {
             u64::MAX
         } else {
-            (1u64 << magnitude) - 1
+            (1u64 << width) - 1
         };
         max.to_string().len()
     } else {
-        // ceil(bits * log10(2)); the product is small and positive.
+        // 2^n is never a power of ten, so 2^n - 1 has as many digits as
+        // 2^n: floor(n * log10(2)) + 1; the product is small and positive.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let d = (f64::from(magnitude) * std::f64::consts::LOG10_2).ceil() as usize;
+        let d = (f64::from(width) * std::f64::consts::LOG10_2).floor() as usize + 1;
         d
     };
     digits + usize::from(signed)
@@ -156,8 +167,15 @@ fn decimal_width(width: u32, signed: bool) -> usize {
 
 /// Formats a value in decimal per §17.1.1.2: `x`/`z` when all bits are
 /// unknown of one kind, `X`/`Z` otherwise.
+///
+/// A signed value whose sign bit is a known one and which has any unknown
+/// bit prints `x`, as xsim prints it: negating it to find the magnitude
+/// makes every bit unknown.
 fn decimal(l: &Logic) -> String {
     if l.has_unknown() {
+        if l.is_signed() && l.msb() == Bit::One {
+            return "x".to_owned();
+        }
         let bits = l.bits();
         let all_x = bits.iter().all(|b| *b == Bit::X);
         let all_z = bits.iter().all(|b| *b == Bit::Z);
@@ -226,6 +244,97 @@ fn exponent_format(v: f64, precision: usize, upper: bool) -> String {
     )
 }
 
+/// The text `%s` prints for a bit vector: eight bits per character, most
+/// significant first, an unknown bit read as zero and a NUL byte printed as
+/// a space, as xsim prints them. `strip` (a `%0s`) drops the leading NUL
+/// bytes instead, which is what a string literal shorter than its
+/// variable is padded with.
+fn display_string(l: &Logic, strip: bool) -> String {
+    let bytes = l.width().div_ceil(8);
+    let mut out = String::new();
+    for i in (0..bytes).rev() {
+        let lo = i * 8;
+        let hi = (lo + 7).min(l.width().saturating_sub(1));
+        let byte = l
+            .slice(hi, lo)
+            .bits()
+            .iter()
+            .rev()
+            .fold(0u8, |acc, b| (acc << 1) | u8::from(*b == Bit::One));
+        if byte == 0 {
+            if !(strip && out.is_empty()) {
+                out.push(' ');
+            }
+        } else {
+            out.push(char::from(byte));
+        }
+    }
+    out
+}
+
+/// Pads the digits of a `%h`, `%o` or `%b` conversion as xsim does.
+///
+/// With no width the digits stand as they are, one per digit position of
+/// the operand. A width, even zero, first drops the leading zeros; the
+/// result is then zero-filled on the left up to the width, or with `-`
+/// space-filled on the right. IEEE 1364-2005 §17.1.1.3 says only that
+/// `%0h` suppresses the leading zeros; that a nonzero width fills with
+/// zeros rather than spaces was measured (`%4h` of `8'h0f` is `000f`).
+fn pad_radix(digits: String, width: Option<usize>, left: bool) -> String {
+    let Some(w) = width else { return digits };
+    let trimmed = digits.trim_start_matches('0');
+    let trimmed = if trimmed.is_empty() { "0" } else { trimmed };
+    let n = trimmed.chars().count();
+    if n >= w {
+        return trimmed.to_owned();
+    }
+    if left {
+        format!("{trimmed}{}", " ".repeat(w - n))
+    } else {
+        format!("{}{trimmed}", "0".repeat(w - n))
+    }
+}
+
+/// Pads `text` to `width` with zeros on the left, as the zero flag asks
+/// (`%05d`, `%05s`, `%08.2f`). xsim puts the zeros before a sign, so `%05d`
+/// of -5 is `000-5`.
+fn pad_zero(text: String, width: usize) -> String {
+    let n = text.chars().count();
+    if n >= width {
+        return text;
+    }
+    format!("{}{text}", "0".repeat(width - n))
+}
+
+/// Pads with spaces, or with zeros under the zero flag when not left
+/// justified.
+fn fill(text: String, spec: &Spec, left: bool) -> String {
+    match spec.width {
+        Some(w) if spec.zero && !left => pad_zero(text, w),
+        width => pad(text, width, left),
+    }
+}
+
+/// A real converted for an integer conversion (`%d`, `%h` of a real): the
+/// nearest 32-bit signed integer, halves away from zero. A value outside
+/// that range, or NaN, becomes the most negative one, which is what xsim
+/// prints for `1e20`.
+fn real_as_integer(r: f64) -> Logic {
+    let rounded = r.round();
+    let v = if rounded.is_finite()
+        && rounded >= f64::from(i32::MIN)
+        && rounded <= f64::from(i32::MAX)
+    {
+        // In range, so the conversion is exact.
+        #[allow(clippy::cast_possible_truncation)]
+        let v = rounded as i32;
+        v
+    } else {
+        i32::MIN
+    };
+    Logic::from_i64(i64::from(v), 32).as_signed()
+}
+
 /// Pads `text` to `width`.
 fn pad(text: String, width: Option<usize>, left: bool) -> String {
     match width {
@@ -250,6 +359,12 @@ fn parse_spec(rest: &[char]) -> Option<(Spec, usize)> {
         left = true;
         i += 1;
     }
+    // A leading zero followed by more digits is the zero flag; `%0d` alone
+    // is a width of zero.
+    let zero = rest.get(i) == Some(&'0') && rest.get(i + 1).is_some_and(char::is_ascii_digit);
+    if zero {
+        i += 1;
+    }
     let mut width = None;
     while let Some(c) = rest.get(i).filter(|c| c.is_ascii_digit()) {
         let d = c.to_digit(10).expect("digit") as usize;
@@ -270,6 +385,7 @@ fn parse_spec(rest: &[char]) -> Option<(Spec, usize)> {
     Some((
         Spec {
             left,
+            zero,
             width,
             precision,
             conv,
@@ -312,36 +428,47 @@ impl<'d> Simulator<'d> {
 
     /// Formats one value for conversion `spec`.
     fn format_value(&self, inst: InstId, v: &Value, spec: &Spec) -> String {
+        // A real for an integer conversion is first rounded to an
+        // `integer`, so it prints in eleven columns like one.
+        let integral = |v: &Value| match v {
+            Value::Real(r) => real_as_integer(*r),
+            other => other.to_logic(),
+        };
         let text = match spec.conv.to_ascii_lowercase() {
             'd' | 'i' => {
-                let l = v.to_logic();
+                let l = integral(v);
                 let text = decimal(&l);
-                let width = match spec.width {
-                    Some(w) => Some(w),
-                    None => Some(decimal_width(l.width(), l.is_signed())),
+                return match spec.width {
+                    None => pad(text, Some(decimal_width(l.width(), l.is_signed())), false),
+                    // An explicit width does not pad an unknown value:
+                    // xsim prints `%5d` of `8'bx` as `x`.
+                    Some(_) if l.has_unknown() => text,
+                    Some(_) => fill(text, spec, spec.left),
                 };
-                return pad(text, width.filter(|w| *w > 0), spec.left);
             }
             'h' | 'x' | 'o' | 'b' => {
-                let l = v.to_logic();
+                let l = integral(v);
                 let bits = match spec.conv.to_ascii_lowercase() {
                     'h' | 'x' => 4,
                     'o' => 3,
                     _ => 1,
                 };
-                let text = radix(&l, bits, spec.conv.is_ascii_uppercase());
-                let default = l.width().div_ceil(bits);
-                let width = spec.width.or(Some(usize::try_from(default).unwrap_or(0)));
-                return pad(text, width.filter(|w| *w > 0), spec.left);
+                // xsim prints `%X` and `%H` in lower case too.
+                return pad_radix(radix(&l, bits, false), spec.width, spec.left);
             }
-            's' => match v {
-                Value::Str(s) => s.clone(),
-                other => logic_to_string(&other.to_logic()),
-            },
+            's' => {
+                let text = match v {
+                    Value::Str(s) => s.clone(),
+                    other => display_string(&other.to_logic(), spec.width == Some(0)),
+                };
+                // xsim right-justifies a string even after `-`.
+                return fill(text, spec, false);
+            }
             'c' => {
                 let l = v.to_logic();
                 let byte = l.resize(8).to_u64().unwrap_or(0);
-                char::from(u8::try_from(byte).unwrap_or(b'?')).to_string()
+                let text = char::from(u8::try_from(byte).unwrap_or(b'?')).to_string();
+                return pad(text, spec.width, spec.left);
             }
             't' => {
                 let unit = u128::from(self.instances[inst.idx()].unit_fs);
@@ -390,9 +517,11 @@ impl<'d> Simulator<'d> {
                     }
                 }
             }
-            _ => format!("%{}", spec.conv),
+            _ => return format!("%{}", spec.conv),
         };
-        pad(text, spec.width, spec.left)
+        // What is left are the real conversions, which xsim right-justifies
+        // even after `-` (`%-10.3f` of 3.14159 is `     3.142`).
+        fill(text, spec, false)
     }
 
     /// Expands a format string against `vals`, starting at `next`.
@@ -420,6 +549,12 @@ impl<'d> Simulator<'d> {
                     spec.width,
                     spec.left,
                 )),
+                // The library and cell; xsim's library is `work`.
+                'l' | 'L' => out.push_str(&pad(
+                    format!("work.{}", self.instances[inst.idx()].m.name),
+                    spec.width,
+                    spec.left,
+                )),
                 _ => {
                     if let Some(v) = vals.get(*next) {
                         *next += 1;
@@ -444,6 +579,7 @@ impl<'d> Simulator<'d> {
                 other => {
                     let spec = Spec {
                         left: false,
+                        zero: false,
                         width: None,
                         precision: None,
                         conv: radix,
@@ -465,8 +601,8 @@ impl<'d> Simulator<'d> {
     /// changed.
     pub(crate) fn monitor_region(&mut self) {
         let strobes = std::mem::take(&mut self.strobes);
-        for (inst, args) in strobes {
-            let text = self.format_args(inst, &args, 'd');
+        for (inst, args, radix) in strobes {
+            let text = self.format_args(inst, &args, radix);
             self.output.push_str(&text);
             self.output.push('\n');
         }
@@ -524,8 +660,8 @@ impl<'d> Simulator<'d> {
             self.output.push_str(&text);
             return true;
         }
-        if radix_of("$strobe").is_some() {
-            self.strobes.push((inst, args.to_vec()));
+        if let Some(r) = radix_of("$strobe") {
+            self.strobes.push((inst, args.to_vec(), r));
             return true;
         }
         if radix_of("$monitor").is_some() {
@@ -885,6 +1021,68 @@ mod tests {
         assert_eq!(decimal_width(64, false), 20);
         assert_eq!(decimal_width(0, false), 1);
         assert_eq!(decimal_width(100, false), 31);
+    }
+
+    /// The field widths and unknown-bit spellings xsim prints, which are
+    /// not the ones IEEE 1364-2005 §17.1.1.3 reads as: a signed field is
+    /// sized from 2^N - 1, not from -2^(N-1), and a negative signed value
+    /// with an unknown bit is `x`. Would catch the standard's narrower
+    /// widths back (4, 7 and 10 bits are where they differ) or the sign
+    /// test dropped; would not catch a wrong width above 65 bits, which
+    /// xsim was not asked.
+    #[test]
+    fn signed_decimal_fields_are_xsims() {
+        let widths: Vec<usize> = [1, 2, 4, 7, 8, 10, 32, 64, 65]
+            .iter()
+            .map(|w| decimal_width(*w, true))
+            .collect();
+        assert_eq!(widths, [2, 2, 3, 4, 4, 5, 11, 21, 21]);
+        assert_eq!(decimal(&l("8'sb1000000z")), "x");
+        assert_eq!(decimal(&l("8'sb1xxxxxxx")), "x");
+        assert_eq!(decimal(&l("8'sb0000000z")), "Z");
+        assert_eq!(decimal(&l("8'sbx0000000")), "X");
+        assert_eq!(decimal(&l("8'b1000000z")), "Z");
+    }
+
+    /// `%h`, `%o` and `%b` with and without widths, `%s` of bit vectors,
+    /// the zero flag and a real in an integer conversion, against what
+    /// xsim printed. Would catch leading zeros kept under `%0h`, spaces
+    /// instead of zeros under `%4h`, a NUL byte dropped or printed as `?`,
+    /// an unknown bit in a character, `-` lost on a zero-filled number, or
+    /// a real out of the 32-bit range wrapped; would not catch how these
+    /// are chosen from the conversion character, which
+    /// `display_formats_as_xsim_does` covers end to end.
+    #[test]
+    fn padding_and_strings_are_xsims() {
+        assert_eq!(pad_radix("05".into(), None, false), "05");
+        assert_eq!(pad_radix("05".into(), Some(0), false), "5");
+        assert_eq!(pad_radix("00000000".into(), Some(0), false), "0");
+        assert_eq!(pad_radix("0f".into(), Some(3), false), "00f");
+        assert_eq!(pad_radix("0f".into(), Some(4), true), "f   ");
+        assert_eq!(pad_radix("017".into(), Some(2), false), "17");
+        assert_eq!(pad_radix("0Xx".into(), Some(0), false), "Xx");
+        assert_eq!(pad_radix("ab".into(), Some(1), false), "ab");
+        assert_eq!(display_string(&l("32'h00006162"), false), "  ab");
+        assert_eq!(display_string(&l("32'h00006162"), true), "ab");
+        assert_eq!(display_string(&l("32'h41004200"), true), "A B ");
+        assert_eq!(display_string(&l("8'bxxxxxxx1"), false), "\u{1}");
+        assert_eq!(display_string(&l("16'h41xx"), false), "A ");
+        assert_eq!(pad_zero("7".into(), 5), "00007");
+        assert_eq!(pad_zero("-5".into(), 5), "000-5");
+        assert_eq!(pad_zero("123".into(), 2), "123");
+        assert_eq!(real_as_integer(2.5), Logic::from_i64(3, 32).as_signed());
+        assert_eq!(real_as_integer(-2.5), Logic::from_i64(-3, 32).as_signed());
+        assert_eq!(real_as_integer(-0.5), Logic::from_i64(-1, 32).as_signed());
+        assert_eq!(
+            real_as_integer(1e20),
+            Logic::from_i64(-(1 << 31), 32).as_signed()
+        );
+        let (spec, _) = parse_spec(&['0', '5', 'd']).unwrap();
+        assert!(spec.zero);
+        assert_eq!(spec.width, Some(5));
+        let (spec, _) = parse_spec(&['0', 'd']).unwrap();
+        assert!(!spec.zero);
+        assert_eq!(spec.width, Some(0));
     }
 
     #[test]
