@@ -31,6 +31,9 @@ use super::codes;
 use super::lower::{Binding, Lowerer, Sink};
 use super::types::{self, ArrayLayout, BitKind, Layout, LayoutKind};
 
+/// The position of `'-'` in `std_ulogic`.
+const DASH: u32 = 8;
+
 /// The nine `std_ulogic` positions as four-state bits.
 fn std9_bit(pos: u32) -> Bit {
     Std9::ALL
@@ -256,18 +259,28 @@ impl<'a> Lowerer<'a, '_> {
         self.b.span = e.span();
         // Anything the analyser folded, or that folds once the generics
         // are known, becomes one constant node.
-        if let Some(layout) = self.expr_layout(e, want)
-            && let Some(v) = self.eval(e)
-        {
-            if let LayoutKind::Str = layout.kind
-                && let Some(s) = self.string_of(&v)
+        let layout = self.expr_layout(e, want);
+        if let Some(v) = self.eval(e) {
+            if let Some(layout) = &layout {
+                if let LayoutKind::Str = layout.kind
+                    && let Some(s) = self.string_of(&v)
+                {
+                    self.b.span = e.span();
+                    return Some((self.b.string(s), layout.clone()));
+                }
+                if let Some(c) = self.const_of(&v, layout) {
+                    self.b.span = e.span();
+                    return Some((self.b.constant(c), layout.clone()));
+                }
+            }
+            // A static array of an unconstrained type — `x"A6"` compared
+            // with an `unsigned`, `"00"` concatenated to a slice — has the
+            // length of its value, whatever the context would like.
+            if let Some(own) = self.value_layout(e, &v)
+                && let Some(c) = self.const_of(&v, &own)
             {
                 self.b.span = e.span();
-                return Some((self.b.string(s), layout));
-            }
-            if let Some(c) = self.const_of(&v, &layout) {
-                self.b.span = e.span();
-                return Some((self.b.constant(c), layout));
+                return Some((self.b.constant(c), own));
             }
         }
         match e {
@@ -305,6 +318,62 @@ impl<'a> Lowerer<'a, '_> {
                 None
             }
             ast::Expr::Error(_) => None,
+        }
+    }
+
+    /// The layout of a static array value of an unconstrained type: the
+    /// type's element, the value's own bounds.
+    fn value_layout(&mut self, e: &'a ast::Expr, v: &Value) -> Option<Layout> {
+        let av = v.as_array()?;
+        let ty = self.a().type_of(e.span())?;
+        if self.a().class(ty) != crate::vhdl::sema::TypeClass::Array || self.a().dimensions(ty) != 1
+        {
+            return None;
+        }
+        let elem_ty = self.a().element_type(ty)?;
+        let elem = self.layout_of_type_quiet(elem_ty, e.span())?;
+        if !elem.is_bits() {
+            return None;
+        }
+        let len = u32::try_from(av.elems.len()).ok()?;
+        Some(Layout {
+            ty,
+            width: elem.width.checked_mul(len)?,
+            signed: types::is_signed_array(self.a(), ty),
+            kind: LayoutKind::Array(Box::new(ArrayLayout {
+                elem,
+                left: i64::try_from(av.left).ok()?,
+                dir: av.dir,
+                len,
+            })),
+        })
+    }
+
+    /// The layout of `l & r` when the result is `result`'s array type:
+    /// the sum of the two lengths, indexed from the left operand's left
+    /// bound in its direction when it is an array (LRM 9.2.5).
+    fn concat_layout(&self, ll: &Layout, rl: &Layout, result: &Layout) -> Layout {
+        let width = ll.width + rl.width;
+        let Some(arr) = result.array() else {
+            return Layout {
+                width,
+                ..result.clone()
+            };
+        };
+        let ew = arr.elem.width.max(1);
+        let (left, dir) = match ll.array() {
+            Some(la) if la.elem.width == arr.elem.width => (la.left, la.dir),
+            _ => (arr.left, arr.dir),
+        };
+        Layout {
+            width,
+            kind: LayoutKind::Array(Box::new(ArrayLayout {
+                elem: arr.elem.clone(),
+                left,
+                dir,
+                len: width / ew,
+            })),
+            ..result.clone()
         }
     }
 
@@ -960,11 +1029,17 @@ impl<'a> Lowerer<'a, '_> {
             // The concatenation's width is the sum, whatever subtype the
             // analyser gave the result; the caller coerces it.
             let id = self.concat_parts(vec![l, r]);
-            let from = Layout {
-                width: ll.width + rl.width,
-                ..result
-            };
+            let from = self.concat_layout(&ll, &rl, &result);
             return Some((id, from));
+        }
+        let is_shift = matches!(sym, "sll" | "srl" | "sla" | "sra" | "rol" | "ror");
+        if is_shift {
+            // The count is an integer, not a scalar to replicate across
+            // the vector; replicating it made every shift of a
+            // `std_logic_vector` or `bit_vector` shift everything out.
+            let id = self.vhdl_shift(sym, l, &ll, r, &rl);
+            let from = self.node_layout(id, &result);
+            return Some((self.coerce(id, &from, &result, span), result));
         }
         // A scalar against a vector (VHDL-2008 `std_logic and slv`)
         // replicates the scalar.
@@ -975,7 +1050,6 @@ impl<'a> Lowerer<'a, '_> {
         }
         let signed = ll.signed || rl.signed;
         let width = ll.width.max(rl.width);
-        let is_shift = matches!(sym, "sll" | "srl" | "sla" | "sra" | "rol" | "ror");
         if !is_shift {
             l = self.widen(l, width, signed);
             r = self.widen(r, width, signed);
@@ -1000,8 +1074,7 @@ impl<'a> Lowerer<'a, '_> {
             "<=" => self.b.binary(BinaryOp::Le, l, r),
             ">" => self.b.binary(BinaryOp::Gt, l, r),
             ">=" => self.b.binary(BinaryOp::Ge, l, r),
-            "?=" => self.b.binary(BinaryOp::CaseEq, l, r),
-            "?/=" => self.b.binary(BinaryOp::CaseNe, l, r),
+            "?=" | "?/=" => self.matching_eq(sym == "?=", lhs, rhs, l, r, width),
             "?<" => self.b.binary(BinaryOp::Lt, l, r),
             "?<=" => self.b.binary(BinaryOp::Le, l, r),
             "?>" => self.b.binary(BinaryOp::Gt, l, r),
@@ -1013,13 +1086,6 @@ impl<'a> Lowerer<'a, '_> {
             "rem" => self.b.binary(BinaryOp::Mod, l, r),
             "mod" => self.vhdl_mod(l, r, width, signed),
             "**" => self.b.binary(BinaryOp::Pow, l, r),
-            "sll" | "sla" => self.b.binary(BinaryOp::Shl, l, r),
-            "srl" => self.b.binary(BinaryOp::Shr, l, r),
-            "sra" => self.b.binary(BinaryOp::Sshr, l, r),
-            "rol" | "ror" => {
-                self.unsupported(span, "the rotate operators");
-                return None;
-            }
             other => {
                 self.unsupported(span, &format!("the operator `{other}`"));
                 return None;
@@ -1027,6 +1093,139 @@ impl<'a> Lowerer<'a, '_> {
         };
         let from = self.node_layout(id, &result);
         Some((self.coerce(id, &from, &result, span), result))
+    }
+
+    /// The predefined shift and rotate operators of a one-dimensional
+    /// array of `bit` or `boolean` (and IEEE 1164's of `std_ulogic`), by a
+    /// count `n` (LRM 9.2.4).
+    ///
+    /// `sll` and `srl` fill with zeros, `sla` with the rightmost element
+    /// and `sra` with the leftmost; `rol` and `ror` rotate by the count
+    /// modulo the length. A static negative count shifts the other way;
+    /// a negative count computed at run time is not reversed.
+    fn vhdl_shift(&mut self, sym: &str, l: ExprId, ll: &Layout, n: ExprId, nl: &Layout) -> ExprId {
+        let w = ll.width.max(1);
+        let mut sym = sym;
+        let mut n = n;
+        if let Some(c) = self.b.module().expr(n).as_const().cloned()
+            && let Some(v) = c.with_signed(nl.signed).to_i64()
+            && v < 0
+        {
+            sym = match sym {
+                "sll" => "srl",
+                "srl" => "sll",
+                "sla" => "sra",
+                "sra" => "sla",
+                "rol" => "ror",
+                _ => "rol",
+            };
+            n = self
+                .b
+                .constant(Logic::from_i64(v.saturating_neg(), 32).with_signed(true));
+        }
+        let n = self.widen(n, 32, true);
+        match sym {
+            "sll" => self.b.binary(BinaryOp::Shl, l, n),
+            "srl" => self.b.binary(BinaryOp::Shr, l, n),
+            "sra" => {
+                let s = self.b.resize(l, w, true);
+                let shifted = self.b.binary(BinaryOp::Sshr, s, n);
+                self.b.resize(shifted, w, ll.signed)
+            }
+            "sla" => {
+                // The vacated low bits take the rightmost element.
+                let shifted = self.b.binary(BinaryOp::Shl, l, n);
+                let ones = self.b.constant(Logic::ones(w));
+                let high = self.b.binary(BinaryOp::Shl, ones, n);
+                let low = self.b.not(high);
+                let lsb = self.slice_bits(l, 0, 0);
+                let fill = self.b.replicate(w, lsb);
+                let fill = self.b.binary(BinaryOp::And, fill, low);
+                self.b.binary(BinaryOp::Or, shifted, fill)
+            }
+            _ => {
+                let width = self
+                    .b
+                    .constant(Logic::from_i64(i64::from(w), 32).with_signed(true));
+                let rot = self.vhdl_mod(n, width, 32, true);
+                let back = self.b.binary(BinaryOp::Sub, width, rot);
+                let (first, second) = if sym == "rol" {
+                    (BinaryOp::Shl, BinaryOp::Shr)
+                } else {
+                    (BinaryOp::Shr, BinaryOp::Shl)
+                };
+                let a = self.b.binary(first, l, rot);
+                let b = self.b.binary(second, l, back);
+                self.b.binary(BinaryOp::Or, a, b)
+            }
+        }
+    }
+
+    /// `l ?= r` (or `?/=` when `equal` is false) of two operands already
+    /// widened to `width` bits.
+    ///
+    /// The IEEE 1164 matching equality is the IR's logical equality — `0`
+    /// on a known difference, `x` when an operand is unknown, `1`
+    /// otherwise — except that `'-'` matches anything. The simulator holds
+    /// four states, so a `'-'` is only known where an operand is a static
+    /// value: those bits are forced to one on both sides. (They were
+    /// compared as `x` by the IR's case equality, so `'0' ?= '-'` was `0`,
+    /// and `'X' ?= 'X'` was `1` where IEEE 1164 has `'X'`.) A `'-'` held by
+    /// a signal at run time is an `x` here and matches nothing.
+    pub(crate) fn matching_eq(
+        &mut self,
+        equal: bool,
+        lhs: &'a ast::Expr,
+        rhs: &'a ast::Expr,
+        mut l: ExprId,
+        mut r: ExprId,
+        width: u32,
+    ) -> ExprId {
+        let mask = match (self.dash_mask(lhs, width), self.dash_mask(rhs, width)) {
+            (Some(a), Some(b)) => Some(a.or(&b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(m) = mask {
+            let m = self.b.constant(m);
+            l = self.b.binary(BinaryOp::Or, l, m);
+            r = self.b.binary(BinaryOp::Or, r, m);
+        }
+        let op = if equal { BinaryOp::Eq } else { BinaryOp::Ne };
+        self.b.binary(op, l, r)
+    }
+
+    /// The bits of a static `std_ulogic` value that are `'-'`, as a mask
+    /// `width` bits wide with the value's last element in bit 0; `None`
+    /// when it has none or is not static.
+    pub(crate) fn dash_mask(&mut self, e: &'a ast::Expr, width: u32) -> Option<Logic> {
+        let v = self.eval(e)?;
+        let elems: Vec<u32> = match &v {
+            Value::Enum(p) => vec![*p],
+            Value::Array(a) => a
+                .elems
+                .iter()
+                .map(Value::as_enum)
+                .collect::<Option<Vec<_>>>()?,
+            _ => return None,
+        };
+        let ty = self.a().type_of(e.span())?;
+        let elem = if self.a().class(ty) == crate::vhdl::sema::TypeClass::Array {
+            self.a().element_type(ty)?
+        } else {
+            ty
+        };
+        if !self.a().is_std_ulogic(elem) || !elems.contains(&DASH) {
+            return None;
+        }
+        let n = u32::try_from(elems.len()).ok()?;
+        let mut m = Logic::zero(n.max(1));
+        for (i, p) in elems.iter().enumerate() {
+            if *p == DASH {
+                let bit = n - 1 - u32::try_from(i).ok()?;
+                m.set_bit(bit, Bit::One);
+            }
+        }
+        Some(m.resize(width))
     }
 
     /// VHDL `mod` takes the sign of the divisor; the IR's `Mod` takes the

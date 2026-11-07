@@ -621,7 +621,7 @@ impl<'a> Lowerer<'a, '_> {
                 default = Some(value);
                 continue;
             }
-            let values = self.choice_values(&arm.choices, &sub_layout);
+            let values = self.choice_values(&arm.choices, &sub_layout, false);
             pairs.push((values, value));
         }
         let mut acc = default.unwrap_or_else(|| self.zero_of(layout));

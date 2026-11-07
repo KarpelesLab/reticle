@@ -46,11 +46,14 @@
 //! Two smaller departures, both where the IR has no node for what the
 //! package says:
 //!
-//! - `?=` and `?/=` become the IR's case equality, which compares `x`
-//!   and `z` as themselves, where the package returns `'X'` whenever
-//!   either operand holds an unknown. The static folding in
-//!   [`crate::vhdl::sema::builtin`] does return `'X'`, and this matches
-//!   how `ieee.std_logic_1164`'s own matching operators already lower.
+//! - `?=` and `?/=` become the IR's logical equality, which is `x` when
+//!   an operand holds an unknown, as the package's `'X'` is, with the
+//!   bits of a static `'-'` forced to match. A `'-'` held at run time is
+//!   an `x` to the four-state simulator and matches nothing. (They were
+//!   the IR's case equality, which compares `x` and `z` as themselves:
+//!   `'X' ?= 'X'` was `'1'` and `'0' ?= '-'` was `'0'`, where IEEE 1164
+//!   has `'X'` and `'1'`; measured against xsim in
+//!   `testdata/sim/vhdl_xsim/operators_tb.vhd`.)
 //! - `sll`, `srl`, `sla` and `sra` reverse direction for a negative
 //!   count, which is honoured for a count known at elaboration but not
 //!   for one computed at run time; a negative count there shifts the
@@ -460,8 +463,7 @@ impl<'a> Lowerer<'a, '_> {
             ">=" | "?>=" => self.b.binary(BinaryOp::Ge, l, r),
             // The matching operators answer with a logic value, so an
             // unknown operand gives an unknown answer rather than `false`.
-            "?=" => self.b.binary(BinaryOp::CaseEq, l, r),
-            "?/=" => self.b.binary(BinaryOp::CaseNe, l, r),
+            "?=" | "?/=" => self.matching_eq(sym == "?=", args[0], args[1], l, r, width),
             _ => return None,
         };
         let to = self

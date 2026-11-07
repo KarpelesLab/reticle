@@ -457,21 +457,25 @@ impl<'a> Lowerer<'a, '_> {
                 _ => None,
             },
             UnaryOp::Not => self.map_logic(v, ty, |b| !b),
-            UnaryOp::Condition => v.as_bool().map(Value::from_bool),
+            // `??` is true for `'1'` and `'H'` only: `?? 'X'` is false.
+            UnaryOp::Condition => {
+                let p = v.as_enum()?;
+                Some(Value::from_bool(decode(self.is_std9(ty), p)?))
+            }
             UnaryOp::And | UnaryOp::Nand => {
-                let bits = self.logic_bits(v)?;
+                let bits = self.logic_bits(v, ty)?;
                 let r = bits.iter().all(|b| *b);
-                Some(Value::from_bool(if op == UnaryOp::And { r } else { !r }))
+                Some(self.logic_value(ty, if op == UnaryOp::And { r } else { !r }))
             }
             UnaryOp::Or | UnaryOp::Nor => {
-                let bits = self.logic_bits(v)?;
+                let bits = self.logic_bits(v, ty)?;
                 let r = bits.iter().any(|b| *b);
-                Some(Value::from_bool(if op == UnaryOp::Or { r } else { !r }))
+                Some(self.logic_value(ty, if op == UnaryOp::Or { r } else { !r }))
             }
             UnaryOp::Xor | UnaryOp::Xnor => {
-                let bits = self.logic_bits(v)?;
+                let bits = self.logic_bits(v, ty)?;
                 let r = bits.iter().filter(|b| **b).count() % 2 == 1;
-                Some(Value::from_bool(if op == UnaryOp::Xor { r } else { !r }))
+                Some(self.logic_value(ty, if op == UnaryOp::Xor { r } else { !r }))
             }
         }
     }
@@ -558,17 +562,20 @@ impl<'a> Lowerer<'a, '_> {
             B::Xor => a != b,
             _ => a == b,
         };
+        let std9 = self.is_std9(lty);
         match (l, r) {
-            (Value::Enum(a), Value::Enum(b)) => Some(Value::from_bool(apply(*a != 0, *b != 0))),
+            (Value::Enum(a), Value::Enum(b)) => {
+                let v = apply(decode(std9, *a)?, decode(std9, *b)?);
+                Some(Value::Enum(encode(std9, v)))
+            }
             (Value::Array(a), Value::Array(b)) if a.elems.len() == b.elems.len() => {
-                let _ = lty;
                 let elems = a
                     .elems
                     .iter()
                     .zip(&b.elems)
                     .map(|(x, y)| {
-                        let (x, y) = (x.as_enum()?, y.as_enum()?);
-                        Some(Value::Enum(u32::from(apply(x != 0, y != 0))))
+                        let (x, y) = (decode(std9, x.as_enum()?)?, decode(std9, y.as_enum()?)?);
+                        Some(Value::Enum(encode(std9, apply(x, y))))
                     })
                     .collect::<Option<Vec<_>>>()?;
                 Some(Value::Array(ArrayValue {
@@ -581,26 +588,52 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
-    /// The bits of a `bit` or `std_ulogic` array value.
-    fn logic_bits(&mut self, v: &Value) -> Option<Vec<bool>> {
+    /// True when the values of `ty`, or its elements, are `std_ulogic`
+    /// positions rather than `bit` or `boolean` ones.
+    ///
+    /// The two encodings differ: `'0'` is position 0 of `bit` and position
+    /// 2 of `std_ulogic`, whose position 0 is `'U'`. Folding a
+    /// `std_logic` operator as if it were `bit`'s took every value for
+    /// `'1'` and answered `'U'` or `'X'`, which is what a function of
+    /// `std_logic_vector` called with constants returned.
+    fn is_std9(&self, ty: TypeId) -> bool {
+        let a = self.a();
+        let elem = if a.class(ty) == crate::vhdl::sema::TypeClass::Array {
+            a.element_type(ty).unwrap_or(ty)
+        } else {
+            ty
+        };
+        a.is_std_ulogic(elem)
+    }
+
+    /// One logic value of `ty`'s element encoding.
+    fn logic_value(&self, ty: TypeId, b: bool) -> Value {
+        Value::Enum(encode(self.is_std9(ty), b))
+    }
+
+    /// The bits of a `bit` or `std_ulogic` array value; `None` when one of
+    /// them is neither a zero nor a one.
+    fn logic_bits(&mut self, v: &Value, ty: TypeId) -> Option<Vec<bool>> {
+        let std9 = self.is_std9(ty);
         let a = v.as_array()?;
-        a.elems.iter().map(|e| e.as_bool()).collect()
+        a.elems.iter().map(|e| decode(std9, e.as_enum()?)).collect()
     }
 
     /// Applies `f` to every bit of a scalar or array logic value.
     fn map_logic(
         &mut self,
         v: &Value,
-        _ty: TypeId,
+        ty: TypeId,
         f: impl Fn(bool) -> bool + Copy,
     ) -> Option<Value> {
+        let std9 = self.is_std9(ty);
         match v {
-            Value::Enum(p) => Some(Value::from_bool(f(*p != 0))),
+            Value::Enum(p) => Some(Value::Enum(encode(std9, f(decode(std9, *p)?)))),
             Value::Array(a) => {
                 let elems = a
                     .elems
                     .iter()
-                    .map(|e| Some(Value::Enum(u32::from(f(e.as_enum()? != 0)))))
+                    .map(|e| Some(Value::Enum(encode(std9, f(decode(std9, e.as_enum()?)?)))))
                     .collect::<Option<Vec<_>>>()?;
                 Some(Value::Array(ArrayValue {
                     left: a.left,
@@ -611,6 +644,25 @@ impl<'a> Lowerer<'a, '_> {
             _ => None,
         }
     }
+}
+
+/// The truth of one logic position: `'0'`/`'L'` and `'1'`/`'H'` of
+/// `std_ulogic`, or the two positions of `bit` and `boolean`; `None` for
+/// a `std_ulogic` value that is neither.
+fn decode(std9: bool, p: u32) -> Option<bool> {
+    if !std9 {
+        return Some(p != 0);
+    }
+    match p {
+        2 | 6 => Some(false),
+        3 | 7 => Some(true),
+        _ => None,
+    }
+}
+
+/// The position of a truth value in the same encoding.
+fn encode(std9: bool, b: bool) -> u32 {
+    u32::from(b) + if std9 { 2 } else { 0 }
 }
 
 /// Rounds a real to an integer the way a VHDL type conversion does,

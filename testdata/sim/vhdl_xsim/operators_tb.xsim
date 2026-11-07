@@ -1,0 +1,16 @@
+Note: literal =
+Note: concat =
+Note: slice & literal 00001100
+Note: slice & chars 00001101
+Note: fv 0A fn F0 fb '1''0'
+Note: ?? X false
+Note: ?? sig X false
+Note: 0 ?= - is '1'
+Note: 1010 ?= 1-1- is '1'
+Note: 1010 ?/= 0--- is '1'
+Note: X ?= X is 'X'
+Note: decq 0246
+Note: select? gives 10
+Note: sll 00001100 srl 00011000 rol 10000111 ror 01111000
+Note: sll -2 00110000 rol by var 00011110
+Note: sra 11101100 sla 10001111 srl 00010110 ror 11011000

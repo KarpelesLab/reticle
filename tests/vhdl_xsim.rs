@@ -58,3 +58,22 @@ fn matches_xsim(name: &str) {
 fn report_strings_match_xsim() {
     matches_xsim("report_strings");
 }
+
+/// **Operators that answered wrongly**: a bit-string literal compared with
+/// an `unsigned` or concatenated to a slice (refused, "this literal cannot
+/// be evaluated"); a `std_logic` function folded with constant arguments
+/// (it answered `'U'` and `'X'`, its logic read through `bit`'s
+/// encoding); `?? 'X'` (true); `'-'` in `?=`, `case?` and `select?`
+/// (compared as an unknown); and every shift and rotate of a
+/// `std_logic_vector` or `bit_vector` (all zeros, the count replicated
+/// across the vector, and the rotates refused).
+///
+/// Would catch any of those back, `sla` filling with zeros rather than the
+/// rightmost bit, a static negative count shifting the wrong way, and a
+/// rotate by more than the length. Would not catch a `'-'` held by a
+/// signal at run time, which the four-state simulator holds as `x` and
+/// which xsim matches: that case is left out because it differs.
+#[test]
+fn operators_match_xsim() {
+    matches_xsim("operators");
+}

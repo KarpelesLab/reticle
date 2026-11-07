@@ -335,7 +335,7 @@ impl<'a> Lowerer<'a, '_> {
                 default = Some(body);
                 continue;
             }
-            let values = self.choice_values(&arm.choices, &sub_layout);
+            let values = self.choice_values(&arm.choices, &sub_layout, matching);
             ir_arms.push(CaseArm { values, body });
         }
         out.span = span;
@@ -389,7 +389,7 @@ impl<'a> Lowerer<'a, '_> {
                         default = Some(body);
                         continue;
                     }
-                    let values = self.choice_values(&arm.choices, &sub_layout);
+                    let values = self.choice_values(&arm.choices, &sub_layout, *matching);
                     ir_arms.push(CaseArm { values, body });
                 }
                 out.span = va.span;
@@ -491,7 +491,7 @@ impl<'a> Lowerer<'a, '_> {
                 default = Some(body);
                 continue;
             }
-            let values = self.choice_values(&arm.choices, &layout);
+            let values = self.choice_values(&arm.choices, &layout, c.matching);
             arms.push(CaseArm { values, body });
         }
         out.span = c.span;
@@ -509,17 +509,38 @@ impl<'a> Lowerer<'a, '_> {
     }
 
     /// The constants a choice list selects.
+    ///
+    /// In a matching `case?` or `select?` (`matching`), a `'-'` of a choice
+    /// matches anything (IEEE 1076-2008 clause 10.9). The statement lowers
+    /// to the IR's `casez`, whose wildcard is `z`, so those bits become
+    /// `z`; before, `'-'` became `x` like every unknown and `"1--"`
+    /// matched nothing (measured against xsim). The one difference left
+    /// is that a `'Z'` in the *subject* is a wildcard to `casez` too.
     pub(crate) fn choice_values(
         &mut self,
         choices: &'a [ast::Choice],
         layout: &Layout,
+        matching: bool,
     ) -> Vec<ExprId> {
         let mut out = Vec::new();
         for c in choices {
             match c {
                 ast::Choice::Others(_) => {}
                 ast::Choice::Expr(e) => {
-                    let id = self.expr_in(e, layout, &mut Sink::Cont);
+                    let mut id = self.expr_in(e, layout, &mut Sink::Cont);
+                    if matching
+                        && let Some(mask) = self.dash_mask(e, layout.width.max(1))
+                        && let Some(c) = self.b.module().expr(id).as_const().cloned()
+                    {
+                        let mut c = c;
+                        for i in 0..mask.width().min(c.width()) {
+                            if mask.bit(i) == crate::logic::Bit::One {
+                                c.set_bit(i, crate::logic::Bit::Z);
+                            }
+                        }
+                        self.b.span = e.span();
+                        id = self.b.constant(c);
+                    }
                     out.push(id);
                 }
                 ast::Choice::Range(r) => {

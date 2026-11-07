@@ -537,6 +537,29 @@ here, where the literal has already folded to a count. And xsim prints `g`
 for `color_t'image(maximum(c, red))` when `c` is `green`, one character of
 the right answer; the fixture compares the value instead.
 
+**Operators** (`operators_tb.vhd`). Each of these printed a wrong value or
+was refused, and each is a change to what synthesis builds for a design that
+used it, checked with `reticle synth --verify`:
+
+- a static array of an unconstrained type has its own length: `u = x"A6"`
+  for an `unsigned`, `(a & a) = x"CC"`, `v(5 downto 0) & "00"` were "this
+  literal cannot be evaluated", the literal taking the other operand's or
+  the target's length;
+- elaboration's folding of the logical operators read `std_logic` values
+  through `bit`'s encoding, where `'0'` is position 0 and not 2, so a
+  function of `std_logic_vector` called with constants returned `'U'`s and
+  `'X'`s;
+- `?? 'X'` was true; `??` of a `std_ulogic` is true for `'1'` and `'H'`;
+- `?=` was the IR's case equality, so `'X' ?= 'X'` was `'1'` (IEEE 1164:
+  `'X'`), and `'-'` in `?=`, `case?` and `select?` compared as an unknown.
+  A static `'-'` now matches anything; a `'-'` held by a signal at run time
+  is still an `x` to the four-state simulator, where xsim matches it;
+- every shift of a `std_logic_vector` or `bit_vector` gave zeros — the count
+  was replicated across the vector like a scalar operand of `and` — and
+  `rol`/`ror` were refused. `sla` fills with the rightmost element and
+  `sra` with the leftmost (LRM 9.2.4), and a static negative count shifts
+  the other way.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

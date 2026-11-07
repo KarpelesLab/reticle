@@ -33,7 +33,7 @@
 //! conversion or an attribute argument.
 
 use crate::diag::Diagnostic;
-use crate::logic::Logic;
+use crate::logic::{Logic, Std9};
 use crate::source::Span;
 use crate::vhdl::ast::{
     self, Actual, BinaryOp, Direction, DiscreteRange, Expr, LiteralKind, Name, UnaryOp,
@@ -1006,6 +1006,15 @@ impl Checker<'_> {
                 _ => None,
             },
             UnaryOp::Not => self.logical_not(&v, oty),
+            // `??` of a `std_ulogic` is true for `'1'` and `'H'` alone
+            // (IEEE 1164-2008); position 1 is `'X'`, which the plain
+            // non-zero test took for true.
+            UnaryOp::Condition if self.a.is_std_ulogic(oty) => v.as_enum().map(|p| {
+                Value::from_bool(matches!(
+                    Std9::ALL.get(usize::try_from(p).unwrap_or(usize::MAX)),
+                    Some(Std9::One | Std9::H)
+                ))
+            }),
             UnaryOp::Condition => v.as_bool().map(Value::from_bool),
             UnaryOp::And
             | UnaryOp::Or
