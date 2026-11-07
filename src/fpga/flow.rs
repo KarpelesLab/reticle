@@ -1241,9 +1241,10 @@ fn primitive_instances(
         }
         // A block RAM a design names is a cell too, when the device says which
         // of its ports are outputs: a `bram` line's `outputs`. A port the
-        // device does not describe -- a cascade's -- may be tied low and is
-        // then nothing; anything else on it would be dropped, so it is
-        // refused, and so is a cascade or error correction asked for by name.
+        // device does not describe -- a `RAMB18E1`'s cascade -- may be tied
+        // low and is then nothing; anything else on it would be dropped, so
+        // it is refused, and so is error correction asked for by name. A
+        // `RAMB36E1`'s cascade is built (`xray::bram`, `RAM_EXTENSION_<x>`).
         if let Some(bram) = device
             .block_rams
             .iter()
@@ -1254,10 +1255,7 @@ fn primitive_instances(
                 diags.push(
                     Diagnostic::error(format!("`{}`: {why}", inst.name))
                         .with_span(inst.span)
-                        .with_note(
-                            "this flow builds one block RAM at a time, without its error \
-                             correction",
-                        ),
+                        .with_note("this flow builds a block RAM without its error correction"),
                 );
                 continue;
             }
@@ -1904,8 +1902,9 @@ fn distributed_ram_cell(cell: &mut crate::ir::Cell, device: &Device) {
 }
 
 /// Why a block RAM named with these parameters is not built here, or `None`:
-/// a cascade (`RAM_EXTENSION_A` or `_B` other than `NONE`) and error
-/// correction (`EN_ECC_READ` or `EN_ECC_WRITE`) are not.
+/// error correction (`EN_ECC_READ` or `EN_ECC_WRITE`) is not. A cascade
+/// (`RAM_EXTENSION_<x>`) is, and its widths are checked where its features are
+/// written (`xray::bram`).
 fn named_block_ram_refusal(primitive: &str, params: &crate::ir::Attrs) -> Option<String> {
     let text = |key: &str| {
         params
@@ -1913,15 +1912,6 @@ fn named_block_ram_refusal(primitive: &str, params: &crate::ir::Attrs) -> Option
             .and_then(crate::ir::AttrValue::as_str)
             .map(str::to_ascii_uppercase)
     };
-    for key in ["RAM_EXTENSION_A", "RAM_EXTENSION_B"] {
-        if let Some(value) = text(key)
-            && value != "NONE"
-        {
-            return Some(format!(
-                "`{key}(\"{value}\")`: a cascade of `{primitive}`s is not built here"
-            ));
-        }
-    }
     for key in ["EN_ECC_READ", "EN_ECC_WRITE"] {
         if text(key).as_deref() == Some("TRUE") {
             return Some(format!(

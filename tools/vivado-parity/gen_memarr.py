@@ -13,7 +13,8 @@ The names say the shape: `sdp_<depth>x<width>` one write port and one read
 port at another address, read on the clock; `sp_rf_`, `sp_wf_`, `sp_nc_` one
 address both read and written, read first, write first and no change; `tdp_`
 two such ports; `r2_` a second read port; `reg_` the read registered twice;
-`en_` a read enable; `async_` a read on no clock; `rom_` initial contents and
+`en_` a read enable; `async_` a read on no clock; `sp_as_` one address written
+on the clock and read on none; `rom_` initial contents and
 no write; `init_` contents and a write; `asym_` written narrow and read wide;
 `style_<kind>_` a `ram_style`.
 
@@ -114,6 +115,11 @@ def design(name, comment, width, depth, kind="sdp", regs=1, style=None, init=Fal
         else:
             body += (f"  always @(posedge clk) begin\n    if ({we}) mem[{ad}] <= {d};\n"
                      f"    else q0 <= mem[{ad}];\n  end\n")
+    elif kind == "sp_as":
+        # One address written on the clock and read on none.
+        ad, d, we = t.take(a), t.take(width), t.take(1)
+        body += (f"  always @(posedge clk) if ({we}) mem[{ad}] <= {d};\n"
+                 f"  always @(*) q0 = mem[{ad}];\n")
     elif kind == "tdp":
         aa, da, wea = t.take(a), t.take(width), t.take(1)
         ab, db, web = t.take(a), t.take(width), t.take(1)
@@ -367,6 +373,36 @@ def designs():
                             f"a time under {width // lane} enables, {what}"
                             + (", initial contents." if kw.get("init") else "."),
                             width, depth, lane, kind=kind, **kw))
+    # Last again, so that every design above keeps its contents: deeper
+    # than one block (the cascade), a single port in distributed RAM, and a
+    # single port a block could split over its two ports.
+    for kind, depth, width, kw in [
+        ("sdp", 40000, 1, {}), ("sdp", 65536, 2, {}),
+        ("sdp", 131072, 1, {}), ("sp_rf", 65536, 1, {}), ("sp_wf", 65536, 1, {}),
+        ("sp_nc", 65536, 1, {}), ("tdp", 65536, 1, {}), ("reg", 65536, 1, {"regs": 2}),
+        ("init", 65536, 1, {"init": True}), ("rom", 65536, 1, {}),
+        ("sp_as", 16, 8, {}), ("sp_as", 32, 1, {}), ("sp_as", 32, 4, {}),
+        ("sp_as", 32, 8, {}), ("sp_as", 64, 1, {}), ("sp_as", 64, 4, {}),
+        ("sp_as", 64, 8, {}), ("sp_as", 128, 1, {}), ("sp_as", 128, 4, {}),
+        ("sp_as", 256, 1, {}), ("sp_as", 256, 2, {}), ("sp_as", 512, 1, {}),
+        ("sp_wf", 32, 8, {}), ("sp_wf", 64, 8, {}), ("sp_wf", 128, 4, {}),
+        ("sp_wf", 256, 2, {}), ("sp_rf", 64, 8, {}), ("sp_rf", 256, 2, {}),
+        ("sp_nc", 64, 8, {}),
+        ("sp_rf", 32, 32, {}), ("sp_rf", 512, 32, {}), ("sp_rf", 512, 36, {}),
+        ("sp_wf", 512, 36, {}), ("sp_nc", 512, 36, {}), ("sp_rf", 256, 24, {}),
+        ("sp_rf", 512, 64, {}), ("sp_rf", 512, 72, {}), ("sp_rf", 1024, 32, {}),
+        ("sp_rf", 512, 18, {}),
+    ]:
+        kind_of = {"init": "sdp", "reg": "sdp"}.get(kind, kind)
+        out.append(design(f"{kind}_{depth}x{width}",
+                          f"{depth} words of {width} ({kind}).", width, depth,
+                          kind=kind_of, **kw))
+    out.append(design("bits_sp_rf_512x36", "512 words of 36 (sp_rf), read under a mask.",
+                      36, 512, kind="sp_rf", mask=True))
+    out.append(design("reg_init_65536x1", "65536 words of 1 with initial contents, the read "
+                      "registered twice.", 1, 65536, regs=2, init=True))
+    out.append(bytewise("bw_sp_rf_512x32_b8", "512 words of 32 (sp_rf), written 8 bits at a "
+                        "time under 4 enables, a loop over the lanes.", 32, 512, 8, kind="sp_rf"))
     return out
 
 

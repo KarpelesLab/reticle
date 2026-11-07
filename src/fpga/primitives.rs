@@ -106,6 +106,17 @@
 //! wherever they say. `docs/fpga-vivado-parity.md`, "Memories as Vivado
 //! arranges them", has the measurements.
 //!
+//! Deeper than 32,768 words a bit is two `RAMB36E1`s cascaded
+//! (`RAM_EXTENSION_<x>`, the lower block's `CASCADEOUT<x>` on the upper's
+//! `CASCADEIN<x>`); a single port of 512 words or fewer, wider than one of
+//! the block's ports, is split over both (`vivado_split_port`); a single port
+//! in distributed RAM is a single-port primitive a bit
+//! (`vivado_single_lutram_words`); a register loaded bit for bit from reads on
+//! no clock makes them reads on its clock (`Mapper::clock_registered_reads`);
+//! and a small memory under a tight clock is distributed RAM
+//! (`Mapper::lutram_by_clock`), each as Vivado builds it: "Deeper than a
+//! block, and single ports, as Vivado builds them" there.
+//!
 //! [`Memory::init`]: crate::ir::Memory::init
 //! [`BramModeLayout`]: super::device::BramModeLayout
 //!
@@ -374,13 +385,27 @@ pub struct BramMapping {
     /// How many registers after a read the blocks took as their own
     /// output registers.
     pub output_registers: u32,
+    /// Each of the `wide` columns is two blocks a row, cascaded as one of
+    /// twice the depth (a 7-series `RAMB36E1`'s `RAM_EXTENSION_<x>`), so that
+    /// `mode` is each block's and a row holds twice its words.
+    pub cascaded: bool,
+    /// A single port split over both ports of its blocks, the low bits of a
+    /// word on port A and the rest on port B at another address of the same
+    /// block, as Vivado builds a single port of 512 words or fewer wider than
+    /// one port.
+    pub split: bool,
 }
 
 impl BramMapping {
     /// Total number of blocks used.
     pub fn blocks(&self) -> u32 {
-        let columns = self.wide + self.others.iter().map(|o| o.2).sum::<u32>();
+        let columns = self.wide * self.per_column() + self.others.iter().map(|o| o.2).sum::<u32>();
         columns * self.deep * self.copies
+    }
+
+    /// The blocks of one column's row: two in a cascade, one otherwise.
+    fn per_column(&self) -> u32 {
+        if self.cascaded { 2 } else { 1 }
     }
 }
 
@@ -588,7 +613,7 @@ impl MapReport {
                     item.memory,
                     item.depth,
                     item.data_width,
-                    item.wide * item.deep * item.copies,
+                    item.wide * item.per_column() * item.deep * item.copies,
                     item.primitive,
                     item.mode.0,
                     item.mode.1,
@@ -603,6 +628,12 @@ impl MapReport {
                         mode.0,
                         mode.1
                     );
+                }
+                if item.cascaded {
+                    out.push_str(", each column two blocks cascaded");
+                }
+                if item.split {
+                    out.push_str(", one port split over both");
                 }
                 if item.simple_dual {
                     out.push_str(", simple dual port");
@@ -1360,6 +1391,34 @@ fn net_width(module: &Module, id: NetId) -> u32 {
 
 /// How many times each net is read, counting every cell input, every
 /// continuous assign and every statement.
+/// A register whose bits reads on no clock load: the register, its clock,
+/// its output, and each read taken with the register's bit each of its bits
+/// loads ([`Mapper::clock_registered_reads`]).
+type RegisteredReads = (CellId, ExprId, NetId, Vec<(usize, Vec<u32>)>);
+
+/// Whether any expression of `module` but `except` (and what it is made of)
+/// reads `net`.
+fn net_read_elsewhere(module: &Module, net: NetId, except: ExprId) -> bool {
+    let mut roots = Vec::new();
+    module.for_each_root_expr(|id| roots.push(id));
+    let mut seen = vec![false; module.exprs.len()];
+    let mut stack: Vec<ExprId> = roots.into_iter().filter(|r| *r != except).collect();
+    while let Some(id) = stack.pop() {
+        let Some(slot) = seen.get_mut(id.index()) else {
+            continue;
+        };
+        if std::mem::replace(slot, true) {
+            continue;
+        }
+        let e = &module.exprs[id];
+        if e.as_net() == Some(net) {
+            return true;
+        }
+        stack.extend(operands(&e.kind));
+    }
+    false
+}
+
 fn net_use_counts(module: &Module) -> Vec<usize> {
     let mut counts = vec![0usize; module.nets.len()];
     let mut roots = Vec::new();
@@ -1422,7 +1481,198 @@ impl Mapper<'_> {
 
     // --- block RAM ----------------------------------------------------------
 
+    /// Makes a read on no clock whose every bit only a register on a clock
+    /// loads, each into a bit of its own, a read on that clock, and those
+    /// bits of the register the read's: what the vendor's template for a
+    /// memory read wider than it is written (`q[i * 8 +: 8] <= mem[{a, i}]`
+    /// in a loop) reaches the mapper as, four reads on no clock and a
+    /// register of their bits, which Vivado builds as four reads on the
+    /// clock, a copy of the memory each (`memarr/asym_4096x8_r32`: four
+    /// `RAMB36E1`). The register must have no enable and no reset and start
+    /// at zero, as a block's read does; its other bits stay a register.
+    ///
+    /// `q <= mem[a]` reads the memory before the edge's writes, as the read
+    /// on the clock does, so the two are the same. Only with
+    /// [`MapOptions::vivado_memories`].
+    fn clock_registered_reads(&mut self, module: &mut Module) {
+        use crate::ir::emit::{BitView, SigBit};
+        let Ok(view) = BitView::new(module) else {
+            return;
+        };
+        let canonical = |bits: Vec<SigBit>| -> Vec<SigBit> {
+            bits.into_iter().map(|b| view.canonical(b)).collect()
+        };
+        // Each read on no clock, by the bits of its data.
+        let mut reads: Vec<(CellId, NetId, Vec<SigBit>)> = Vec::new();
+        for (id, cell) in module.cells.iter() {
+            if !matches!(cell.kind, CellKind::MemRdPort { clocked: false, .. })
+                || cell.input("en").is_some()
+            {
+                continue;
+            }
+            let Some(net) = cell.output("data") else {
+                continue;
+            };
+            let Some(span) = module.nets.get(net).map(|n| n.span) else {
+                continue;
+            };
+            let Ok(bits) = view.net_bits(net, span) else {
+                continue;
+            };
+            reads.push((id, net, canonical(bits)));
+        }
+        if reads.is_empty() {
+            return;
+        }
+        // (register, its clock, its q, and per read taken: the read and the
+        // register's bit each of its bits loads)
+        let mut plans: Vec<RegisteredReads> = Vec::new();
+        for (id, cell) in module.cells.iter() {
+            let CellKind::Dff {
+                clk_pos: true,
+                has_enable: false,
+                reset: None,
+            } = cell.kind
+            else {
+                continue;
+            };
+            let (Some(d), Some(clk), Some(q)) =
+                (cell.input("d"), cell.input("clk"), cell.output("q"))
+            else {
+                continue;
+            };
+            if !starts_at_zero(module, q) {
+                continue;
+            }
+            let Ok(dbits) = view.expr_bits(d) else {
+                continue;
+            };
+            let dbits = canonical(dbits);
+            let mut taken = Vec::new();
+            for (index, (_, net, rbits)) in reads.iter().enumerate() {
+                let mut at = Vec::with_capacity(rbits.len());
+                for bit in rbits {
+                    let found: Vec<usize> = dbits
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| *b == bit)
+                        .map(|(k, _)| k)
+                        .collect();
+                    match (bit, found.as_slice()) {
+                        (SigBit::Slot(_), [k]) => at.push(u32::try_from(*k).unwrap_or(u32::MAX)),
+                        _ => break,
+                    }
+                }
+                if at.len() == rbits.len() && !net_read_elsewhere(module, *net, d) {
+                    taken.push((index, at));
+                }
+            }
+            if !taken.is_empty() {
+                plans.push((id, clk, q, taken));
+            }
+        }
+        let mut gone: Vec<CellId> = Vec::new();
+        for (reg, clk, q, taken) in plans {
+            let span = module.cells[reg].span;
+            let width = net_width(module, q);
+            // Which read bit, if any, each bit of the register is now.
+            let mut source: Vec<Option<(NetId, u32)>> = vec![None; width as usize];
+            for (index, at) in &taken {
+                let (read, net, _) = reads[*index];
+                if let CellKind::MemRdPort { clocked, .. } = &mut module.cells[read].kind {
+                    *clocked = true;
+                }
+                module.cells[read].inputs.push((Name::new("clk"), clk));
+                for (j, k) in at.iter().enumerate() {
+                    if let Some(slot) = source.get_mut(*k as usize) {
+                        *slot = Some((net, u32::try_from(j).unwrap_or(0)));
+                    }
+                }
+            }
+            // The register keeps the bits no read took.
+            let kept: Vec<u32> = (0..width)
+                .filter(|k| source[*k as usize].is_none())
+                .collect();
+            let rest = if kept.is_empty() {
+                gone.push(reg);
+                None
+            } else {
+                let name = format!("{}$kept", module.nets[q].name.as_str());
+                let net = add_net(
+                    module,
+                    &name,
+                    Type::bits(u32::try_from(kept.len()).unwrap_or(u32::MAX)),
+                    span,
+                );
+                let Some(d) = module.cells[reg].input("d") else {
+                    continue;
+                };
+                let parts: Vec<ExprId> = kept
+                    .iter()
+                    .rev()
+                    .map(|k| slice_expr(module, d, *k, *k, span))
+                    .collect();
+                let value = if parts.len() == 1 {
+                    parts[0]
+                } else {
+                    expr(module, ExprKind::Concat(parts), span)
+                };
+                let cell = &mut module.cells[reg];
+                for (port, e) in &mut cell.inputs {
+                    if port.as_str() == "d" {
+                        *e = value;
+                    }
+                }
+                for (port, n) in &mut cell.outputs {
+                    if port.as_str() == "q" {
+                        *n = net;
+                    }
+                }
+                Some(net)
+            };
+            let mut next_kept = 0u32;
+            let mut parts: Vec<ExprId> = (0..width)
+                .map(|k| match source[k as usize] {
+                    Some((net, j)) => {
+                        let whole = net_expr(module, net, span);
+                        slice_expr(module, whole, j, j, span)
+                    }
+                    None => {
+                        let at = next_kept;
+                        next_kept += 1;
+                        match rest {
+                            Some(net) => {
+                                let whole = net_expr(module, net, span);
+                                slice_expr(module, whole, at, at, span)
+                            }
+                            None => const_expr(module, Const::zero(1), span),
+                        }
+                    }
+                })
+                .collect();
+            parts.reverse();
+            let value = if parts.len() == 1 {
+                parts[0]
+            } else {
+                expr(module, ExprKind::Concat(parts), span)
+            };
+            add_assign(module, q, value, span);
+            let names = taken.len();
+            self.note(format!(
+                "register `{}` is loaded from {names} read(s) on no clock, each bit from one: \
+                 those reads are on its clock",
+                module.nets[q].name.as_str()
+            ));
+        }
+        if !gone.is_empty() {
+            module.cells.retain(|id, _| !gone.contains(&id));
+        }
+    }
+
     fn block_rams(&mut self, module: &mut Module) {
+        if self.options.vivado_memories && self.vivado_block_ram_shapes().is_some() {
+            self.clock_registered_reads(module);
+        }
         // A memory written part of a word at a time that the block RAM
         // mapper does not take with byte write enables is built as a
         // memory per lane, each mapped as any memory is: the lanes join the
@@ -1653,6 +1903,13 @@ impl Mapper<'_> {
         if reads.is_empty() && writes.is_empty() {
             return give_up(self, "it has no ports".to_owned(), false);
         }
+        if self.options.vivado_memories
+            && !forced
+            && lanes.is_none()
+            && let Some(why) = self.lutram_by_clock(module, mem, (&reads, &writes), width, depth)
+        {
+            return give_up(self, why, false);
+        }
         // Vivado's arrangement (`vivado_columns`) where the part has its two
         // block RAMs; otherwise the one mode that costs least.
         let vivado_shapes = if self.options.vivado_memories {
@@ -1810,6 +2067,15 @@ impl Mapper<'_> {
 
         // The blocks side by side: Vivado's columns, or `wide` of one mode.
         let shape = shape.clone();
+        // A single port of 512 words or fewer, wider than one port of the
+        // block, is split over both, as Vivado splits it
+        // ([`vivado_split_port`]).
+        let split = match (vivado_shapes, pairs.as_slice()) {
+            (Some(_), [_]) if reads.len() == 1 && writes.len() == 1 && groups.len() == 1 => {
+                vivado_split_port(width, depth, lanes)
+            }
+            _ => None,
+        };
         let (columns, deep) = match vivado_shapes {
             Some(shapes) => {
                 // Simple dual port wants one write and, in each copy, one read
@@ -1817,6 +2083,12 @@ impl Mapper<'_> {
                 let sdp = pairs.is_empty()
                     && writes.len() == 1
                     && groups.iter().all(|g| g.reads.len() == 1);
+                // A split port's columns are those of one port's bits, at the
+                // depth of the block both halves' words fill.
+                let (width, depth) = match split {
+                    Some(bits) => (bits, 1024),
+                    None => (width, depth),
+                };
                 let (plan, deep): (Vec<PlannedColumn>, u32) = match lanes {
                     Some(lane) => {
                         let (plan, deep) = vivado_lane_columns(width, depth, sdp, lane);
@@ -1828,6 +2100,24 @@ impl Mapper<'_> {
                         (plan.into_iter().map(|c| (c, None)).collect(), deep)
                     }
                 };
+                // Vivado's cascade is slower than two blocks stacked and a
+                // read multiplexer, by Vivado's own timer (`sdp_65536x1`:
+                // 3.27 ns cascaded, 2.72 stacked), but where the register
+                // after the read goes into the blocks, which a stack's
+                // multiplexer keeps out (`reg_65536x1`: 1.91 cascaded, 2.75
+                // stacked). So a cascade only there, and only as one row: a
+                // read multiplexed after two rows keeps its register out.
+                let (mut plan, mut deep) = (plan, deep);
+                let registered = !reads.is_empty()
+                    && reads
+                        .iter()
+                        .all(|read| self.output_register(module, *read).is_some());
+                if !(registered && deep == 1) && plan.iter().any(|(c, _)| c.cascade) {
+                    for (column, _) in &mut plan {
+                        column.cascade = false;
+                    }
+                    deep = u32::try_from(depth.div_ceil(32768)).unwrap_or(u32::MAX);
+                }
                 let columns: Vec<BramColumnPlan> = plan
                     .iter()
                     .map(|(column, pins)| {
@@ -1860,6 +2150,7 @@ impl Mapper<'_> {
                         lo: w * mode.0,
                         hi: ((w + 1) * mode.0 - 1).min(width.saturating_sub(1)),
                         sdp: false,
+                        cascade: false,
                         pins: None,
                     })
                     .collect();
@@ -1902,7 +2193,7 @@ impl Mapper<'_> {
                     let first = pairs
                         .iter()
                         .any(|(p, _)| p.read == index && p.out.is_some());
-                    if vivado_shapes.is_none() || deep != 1 || first {
+                    if vivado_shapes.is_none() || deep != 1 || first || split.is_some() {
                         return None;
                     }
                     let (reg, cell) = self.output_register(module, *id)?;
@@ -1912,7 +2203,8 @@ impl Mapper<'_> {
                 .collect();
             let plan = BramPlan {
                 columns: columns.clone(),
-                mode_depth: first.mode.1,
+                // A cascade's row is two blocks deep in words.
+                mode_depth: first.mode.1 * if first.cascade { 2 } else { 1 },
                 deep,
                 read_slots: copy.read_slots.clone(),
                 write_slots: copy.write_slots.clone(),
@@ -1922,6 +2214,7 @@ impl Mapper<'_> {
                 pairs: pairs.iter().map(|(p, _)| p.clone()).collect(),
                 out_regs,
                 single_ports: vivado_shapes.is_some(),
+                split,
             };
             self.emit_bram(module, mem, &plan, &copy.reads, &writes);
         }
@@ -1950,6 +2243,8 @@ impl Mapper<'_> {
             initialised: initialise,
             others,
             simple_dual: first.sdp,
+            cascaded: first.cascade,
+            split: split.is_some(),
             pairs: u32::try_from(pairs.len()).unwrap_or(0),
             output_registers: u32::try_from(
                 absorbed.len() - pairs.iter().map(|(_, c)| c.len()).sum::<usize>(),
@@ -1960,6 +2255,68 @@ impl Mapper<'_> {
         replaced.extend(writes);
         replaced.extend(absorbed);
         Some(replaced)
+    }
+
+    /// Why Vivado 2026.1's synthesis would build this memory of distributed
+    /// RAM under its clock, or `None`: **measured**, with its synthesis of
+    /// `testdata/fpga/vivado/memarr/`'s designs at periods from 5 to 1.4 ns
+    /// (`INFO: [Synth 8-5584] ... The timing constraints suggest that the
+    /// chosen mapping will yield better timing results`):
+    ///
+    /// - one write port and one read port, the read not registered again
+    ///   (`reg_1024x18` stays a block at 1.4 ns), its word 32,768 bits or
+    ///   fewer as Vivado counts them (`sdp_1024x32` moves; `sdp_1024x36`,
+    ///   `sdp_2048x18`, `sdp_4096x9` and `sdp_4096x16` stay at 1.4 ns);
+    /// - up to 1,024 words, at 3.5 ns or less (`sdp_32x32`, `sdp_64x16`,
+    ///   `sdp_128x8`, `sdp_512x8` to `sdp_512x64`, `sdp_1024x18`,
+    ///   `sdp_1024x32`, `sp_wf_1024x18`, `sp_rf_1024x18`: blocks at 4 ns,
+    ///   distributed RAM at 3.5). Vivado moves 2,048 words at 3.2 ns too
+    ///   (`sdp_2048x9`: a block at 3.5, distributed at 3.2), which this does
+    ///   not: measured slower here, by Vivado's timer.
+    ///
+    /// The smallest period of the clocks the constraints declare on the
+    /// ports' clocks decides; a port on a clock they do not declare decides
+    /// nothing. Between the periods measured, the line is a guess.
+    fn lutram_by_clock(
+        &self,
+        module: &Module,
+        mem: MemoryId,
+        (reads, writes): (&[CellId], &[CellId]),
+        width: u32,
+        depth: u64,
+    ) -> Option<String> {
+        let ([read], [write]) = (reads, writes) else {
+            return None;
+        };
+        // Vivado moves 2,048 words at 3.2 ns too (`sdp_2048x9`), and there
+        // its choice is the slower here: by Vivado's timer this flow's
+        // distributed RAM of it reached 3.82 ns where its block reached 3.29.
+        let limit = match depth.max(1).next_power_of_two() {
+            0..=1024 => 3.5,
+            _ => return None,
+        };
+        if self.vivado_bram_bits(module, mem, width, depth) > 32768
+            || self.output_register(module, *read).is_some()
+            || !self.has_vivado_lutram()
+        {
+            return None;
+        }
+        let period = [*read, *write]
+            .iter()
+            .filter_map(|cell| module.cells[*cell].input("clk"))
+            .filter_map(|clk| module.exprs.get(clk).and_then(Expr::as_net))
+            .filter_map(|net| {
+                let name = module.nets.get(net)?.name.as_str();
+                self.constraints.clock_of_net(name).map(|c| c.period_ns)
+            })
+            .filter(|p| *p > 0.0)
+            .min_by(f64::total_cmp)?;
+        (period <= limit).then(|| {
+            format!(
+                "under a clock of {period} ns, at or under the {limit} ns Vivado's synthesis \
+                 builds a memory this size of distributed RAM at"
+            )
+        })
     }
 
     /// The `RAMB36E1` and `RAMB18E1` of a 7-series device, by index into its
@@ -2043,6 +2400,7 @@ impl Mapper<'_> {
             lo: column.lo,
             hi: column.hi,
             sdp: column.sdp,
+            cascade: column.cascade,
             pins: None,
         }
     }
@@ -2522,7 +2880,7 @@ impl Mapper<'_> {
             .collect();
         // The contents, when they go into the blocks: `bram_contents`
         // checked that the database describes where.
-        let init = if plan.initialise {
+        let mut init = if plan.initialise {
             memory.init.clone()
         } else {
             None
@@ -2534,7 +2892,7 @@ impl Mapper<'_> {
             .iter()
             .map(|id| self.port_wiring(module, *id, local_bits, high_bits, span))
             .collect();
-        let write_ports: Vec<PortWiring> = writes
+        let mut write_ports: Vec<PortWiring> = writes
             .iter()
             .map(|id| self.port_wiring(module, *id, local_bits, high_bits, span))
             .collect();
@@ -2556,6 +2914,43 @@ impl Mapper<'_> {
                 port.out = Some(reg.q);
             }
         }
+        // A single port split over both of the block's ports is two pairs,
+        // one a side, each its share of the word at its half of the block's
+        // words; the read joins the two after.
+        let split_plan;
+        let mut split_out: Option<(NetId, [NetId; 2], u32)> = None;
+        let plan = match plan.split {
+            Some(bits) if read_ports.len() == 1 && write_ports.len() == 1 => {
+                let (sides, joined) = self.split_ports(
+                    module,
+                    (&read_ports[0], &write_ports[0]),
+                    (width, bits, mode_depth, total_bits),
+                    &base,
+                    span,
+                );
+                if let (Some(out), Some(nets)) = (read_ports[0].out, joined) {
+                    split_out = Some((out, nets, bits));
+                }
+                init = init.map(|words| split_contents(&words, bits, mode_depth, total_bits));
+                let ([ra, rb], [wa, wb]) = sides;
+                read_ports = vec![ra, rb];
+                write_ports = vec![wa, wb];
+                let mut owned = plan.clone();
+                let pair = |side: usize| PortPair {
+                    read: side,
+                    write: side,
+                    out: None,
+                    ..plan.pairs[0].clone()
+                };
+                owned.pairs = vec![pair(0), pair(1)];
+                owned.read_slots = vec![0, 1];
+                owned.write_slots = vec![0, 1];
+                owned.out_regs = vec![None, None];
+                split_plan = owned;
+                &split_plan
+            }
+            _ => plan,
+        };
 
         // The address a block sees does not depend on which block it is,
         // only on how its mode places a word, so it is built once per port
@@ -2566,7 +2961,9 @@ impl Mapper<'_> {
             let key = (
                 layout.addr_low,
                 layout.addr_pad.clone(),
-                column.shape.addr_width(),
+                // A cascade's pair reads one address bit more, its top
+                // (`ADDR<x>[15]` of a `RAMB36E1`), which picks the block.
+                column.shape.addr_width() + u32::from(column.cascade),
                 column.mode.1,
             );
             let class = match placements.iter().position(|k| *k == key) {
@@ -2584,7 +2981,8 @@ impl Mapper<'_> {
             let Some(at) = class_of.iter().position(|c| *c == class) else {
                 continue;
             };
-            let prim_addr_bits = plan.columns[at].shape.addr_width();
+            let prim_addr_bits =
+                plan.columns[at].shape.addr_width() + u32::from(plan.columns[at].cascade);
             let words = plan.columns[at].mode.1;
             let layout = &layouts[at];
             read_addrs.push(
@@ -2632,245 +3030,322 @@ impl Mapper<'_> {
                     .map_or(mode_width - layout.parity, |top| top + 1);
                 // The mode's top bits on the parity pins, when it has any.
                 let parity = layout.parity;
-                let mut inputs: Vec<(Name, ExprId)> = Vec::new();
-                let mut outputs: Vec<(Name, NetId)> = Vec::new();
-                if column.sdp {
-                    let regce = match plan.out_regs.first() {
-                        Some(Some(reg)) => Some(match reg.en {
-                            Some(en) => en,
-                            None => const_expr(module, Const::ones(1), span),
-                        }),
-                        _ => None,
-                    };
-                    self.sdp_wiring(
-                        module,
-                        column,
-                        &base,
-                        (w, d),
-                        &SdpPorts {
-                            read: read_ports.first(),
-                            write: write_ports.first(),
-                            read_addr: read_addrs[class].first().copied(),
-                            write_addr: write_addrs[class].first().copied(),
-                            read_en: read_ens.first().copied(),
-                            write_en: write_ens.first().copied(),
-                            regce,
-                            span,
-                        },
-                        &mut inputs,
-                        &mut outputs,
-                        &mut row_parts,
-                    );
-                }
-                for (index, port) in read_ports.iter().enumerate() {
+                // A cascaded column is two blocks a row, the lower's
+                // `CASCADEOUT<x>` on the upper's `CASCADEIN<x>` and the read
+                // off the upper alone; any other column is one block.
+                let halves: u32 = if column.cascade { 2 } else { 1 };
+                let mut cascade_nets: Vec<(usize, NetId)> = Vec::new();
+                for half in 0..halves {
+                    let reads_here = half + 1 == halves;
+                    let mut inputs: Vec<(Name, ExprId)> = Vec::new();
+                    let mut outputs: Vec<(Name, NetId)> = Vec::new();
                     if column.sdp {
-                        break;
-                    }
-                    let Some(slot) = plan.read_slots.get(index) else {
-                        continue;
-                    };
-                    let Some(map) = shape.port_map.get(*slot) else {
-                        continue;
-                    };
-                    if let Some(name) = map.signal("addr") {
-                        inputs.push((Name::new(name), read_addrs[class][index]));
-                    }
-                    if let (Some(name), Some(clk)) = (map.signal("clk"), port.clk) {
-                        inputs.push((Name::new(name), clk));
-                    }
-                    if let Some(name) = map.signal("en") {
-                        inputs.push((Name::new(name), read_ens[index]));
-                    }
-                    if let Some(name) = map.signal("ce") {
-                        inputs.push((Name::new(name), read_ens[index]));
-                    }
-                    if let (Some(Some(reg)), Some(name)) =
-                        (plan.out_regs.get(index), map.signal("regce"))
-                    {
-                        let enable = match reg.en {
-                            Some(en) => en,
-                            None => const_expr(module, Const::ones(1), span),
+                        let regce = match plan.out_regs.first() {
+                            Some(Some(reg)) => Some(match reg.en {
+                                Some(en) => en,
+                                None => const_expr(module, Const::ones(1), span),
+                            }),
+                            _ => None,
                         };
-                        inputs.push((Name::new(name), enable));
-                    }
-                    if let Some(name) = map.signal("dout") {
-                        let net = add_net(
+                        self.sdp_wiring(
                             module,
-                            &format!("{base}$rd{index}_w{w}_d{d}"),
-                            Type::bits(data_pins),
-                            span,
+                            column,
+                            &base,
+                            (w, d),
+                            &SdpPorts {
+                                read: read_ports.first(),
+                                write: write_ports.first(),
+                                read_addr: read_addrs[class].first().copied(),
+                                write_addr: write_addrs[class].first().copied(),
+                                read_en: read_ens.first().copied(),
+                                write_en: write_ens.first().copied(),
+                                regce,
+                                span,
+                            },
+                            &mut inputs,
+                            &mut outputs,
+                            &mut row_parts,
                         );
-                        outputs.push((Name::new(name), net));
-                        let mut value = net_expr(module, net, span);
-                        if let (true, Some(name)) = (parity > 0, map.signal("doutp")) {
-                            let top = add_net(
+                    }
+                    for (index, port) in read_ports.iter().enumerate() {
+                        if column.sdp {
+                            break;
+                        }
+                        let Some(slot) = plan.read_slots.get(index) else {
+                            continue;
+                        };
+                        let Some(map) = shape.port_map.get(*slot) else {
+                            continue;
+                        };
+                        if let Some(name) = map.signal("addr") {
+                            inputs.push((Name::new(name), read_addrs[class][index]));
+                        }
+                        if let (Some(name), Some(clk)) = (map.signal("clk"), port.clk) {
+                            inputs.push((Name::new(name), clk));
+                        }
+                        if let Some(name) = map.signal("en") {
+                            inputs.push((Name::new(name), read_ens[index]));
+                        }
+                        if let Some(name) = map.signal("ce") {
+                            inputs.push((Name::new(name), read_ens[index]));
+                        }
+                        if let (Some(Some(reg)), Some(name)) =
+                            (plan.out_regs.get(index), map.signal("regce"))
+                        {
+                            let enable = match reg.en {
+                                Some(en) => en,
+                                None => const_expr(module, Const::ones(1), span),
+                            };
+                            inputs.push((Name::new(name), enable));
+                        }
+                        if let (true, Some(name)) = (reads_here, map.signal("dout")) {
+                            let net = add_net(
                                 module,
-                                &format!("{base}$rdp{index}_w{w}_d{d}"),
-                                Type::bits(parity),
+                                &format!("{base}$rd{index}_w{w}_d{d}"),
+                                Type::bits(data_pins),
                                 span,
                             );
-                            outputs.push((Name::new(name), top));
-                            let top = net_expr(module, top, span);
-                            value = expr(module, ExprKind::Concat(vec![top, value]), span);
-                        }
-                        let part = if let Some(pins) = &column.pins {
-                            from_pins(module, value, pins, span)
-                        } else if layout.data_bits.is_empty() {
-                            slice_expr(module, value, hi - lo, 0, span)
-                        } else {
-                            // Data bit `j` comes off the pin the mode puts
-                            // it on; most significant first.
-                            let bits: Vec<ExprId> = (0..=hi - lo)
-                                .rev()
-                                .map(|j| {
-                                    let pin = layout.data_bit(j);
-                                    slice_expr(module, value, pin, pin, span)
-                                })
-                                .collect();
-                            if bits.len() == 1 {
-                                bits[0]
+                            outputs.push((Name::new(name), net));
+                            let mut value = net_expr(module, net, span);
+                            if let (true, Some(name)) = (parity > 0, map.signal("doutp")) {
+                                let top = add_net(
+                                    module,
+                                    &format!("{base}$rdp{index}_w{w}_d{d}"),
+                                    Type::bits(parity),
+                                    span,
+                                );
+                                outputs.push((Name::new(name), top));
+                                let top = net_expr(module, top, span);
+                                value = expr(module, ExprKind::Concat(vec![top, value]), span);
+                            }
+                            let part = if let Some(pins) = &column.pins {
+                                from_pins(module, value, pins, span)
+                            } else if layout.data_bits.is_empty() {
+                                slice_expr(module, value, hi - lo, 0, span)
                             } else {
-                                expr(module, ExprKind::Concat(bits), span)
-                            }
-                        };
-                        row_parts[index].push(part);
-                    }
-                }
-                for (index, port) in write_ports.iter().enumerate() {
-                    if column.sdp {
-                        break;
-                    }
-                    let Some(slot) = plan.write_slots.get(index) else {
-                        continue;
-                    };
-                    let Some(map) = shape.port_map.get(*slot) else {
-                        continue;
-                    };
-                    // A port a read shares has its address, clock and enable
-                    // from the read already.
-                    let shared = plan.pairs.iter().any(|p| p.write == index);
-                    if let (false, Some(name)) = (shared, map.signal("addr")) {
-                        inputs.push((Name::new(name), write_addrs[class][index]));
-                    }
-                    if let (false, Some(name), Some(clk)) = (shared, map.signal("clk"), port.clk) {
-                        inputs.push((Name::new(name), clk));
-                    }
-                    if let (false, Some(name)) = (shared, map.signal("en")) {
-                        inputs.push((Name::new(name), write_ens[index]));
-                    }
-                    if let Some(name) = map.signal("we") {
-                        // A family with byte write enables has a pin per
-                        // byte; a memory written a whole word at a time
-                        // drives every one of them alike. Leaving the
-                        // upper bits off would write one byte and drop
-                        // the rest, silently. One written a lane at a time
-                        // drives each with its lane's enable.
-                        let bits = map.width("we");
-                        let name = Name::new(name);
-                        let value = match (port.lanes_en, &column.pins) {
-                            // The block's enable holds a depth slice's
-                            // address, its own or the read's that shares
-                            // the port, so the lanes need nothing else.
-                            (Some(lanes), Some(pins)) => {
-                                lane_write_enables(module, lanes, column, pins, bits, span)
-                            }
-                            _ => repeat_bits(module, write_ens[index], bits, span),
-                        };
-                        inputs.push((name, value));
-                    }
-                    if let (false, Some(name)) = (shared, map.signal("ce")) {
-                        inputs.push((Name::new(name), write_ens[index]));
-                    }
-                    if let Some(name) = map.signal("din")
-                        && let Some(data) = port.data
-                    {
-                        let value = if let Some(pins) = &column.pins {
-                            pin_word(module, data, lo, pins, mode_width, span)
-                        } else if layout.data_bits.is_empty() {
-                            let part = slice_expr(module, data, hi, lo, span);
-                            self.resize(module, part, mode_width, span)
-                        } else {
-                            spread_data(module, data, layout, lo, hi, data_pins, span)
-                        };
-                        match (parity > 0, map.signal("dinp")) {
-                            (true, Some(pins)) => {
-                                let low = slice_expr(module, value, data_pins - 1, 0, span);
-                                let top =
-                                    slice_expr(module, value, mode_width - 1, data_pins, span);
-                                inputs.push((Name::new(name), low));
-                                inputs.push((Name::new(pins), top));
-                            }
-                            _ => inputs.push((Name::new(name), value)),
+                                // Data bit `j` comes off the pin the mode puts
+                                // it on; most significant first.
+                                let bits: Vec<ExprId> = (0..=hi - lo)
+                                    .rev()
+                                    .map(|j| {
+                                        let pin = layout.data_bit(j);
+                                        slice_expr(module, value, pin, pin, span)
+                                    })
+                                    .collect();
+                                if bits.len() == 1 {
+                                    bits[0]
+                                } else {
+                                    expr(module, ExprKind::Concat(bits), span)
+                                }
+                            };
+                            row_parts[index].push(part);
                         }
                     }
-                }
-                // Every control input the memory leaves alone, tied low in
-                // the netlist as Vivado's netlist ties it: a read port's
-                // write enable, the resets, the output register's clock
-                // enable and reset. The fabric ties a pin nothing drives
-                // anyway, and these say so to anything that reads the
-                // netlist, a simulation first (`tools/vivado-parity/`: on
-                // Xilinx's models a pin left open floats and writes).
-                if vivado && shape.name.starts_with("RAMB") {
-                    for map in &shape.port_map {
-                        for role in ["we", "rst", "regce", "rstreg"] {
-                            let Some(name) = map.signal(role) else {
+                    for (index, port) in write_ports.iter().enumerate() {
+                        if column.sdp {
+                            break;
+                        }
+                        let Some(slot) = plan.write_slots.get(index) else {
+                            continue;
+                        };
+                        let Some(map) = shape.port_map.get(*slot) else {
+                            continue;
+                        };
+                        // A port a read shares has its address, clock and enable
+                        // from the read already.
+                        let shared = plan.pairs.iter().any(|p| p.write == index);
+                        if let (false, Some(name)) = (shared, map.signal("addr")) {
+                            inputs.push((Name::new(name), write_addrs[class][index]));
+                        }
+                        if let (false, Some(name), Some(clk)) =
+                            (shared, map.signal("clk"), port.clk)
+                        {
+                            inputs.push((Name::new(name), clk));
+                        }
+                        if let (false, Some(name)) = (shared, map.signal("en")) {
+                            inputs.push((Name::new(name), write_ens[index]));
+                        }
+                        if let Some(name) = map.signal("we") {
+                            // A family with byte write enables has a pin per
+                            // byte; a memory written a whole word at a time
+                            // drives every one of them alike. Leaving the
+                            // upper bits off would write one byte and drop
+                            // the rest, silently. One written a lane at a time
+                            // drives each with its lane's enable.
+                            let bits = map.width("we");
+                            let name = Name::new(name);
+                            let value = match (port.lanes_en, &column.pins) {
+                                // The block's enable holds a depth slice's
+                                // address, its own or the read's that shares
+                                // the port, so the lanes need nothing else.
+                                (Some(lanes), Some(pins)) => {
+                                    lane_write_enables(module, lanes, column, pins, bits, span)
+                                }
+                                _ => repeat_bits(module, write_ens[index], bits, span),
+                            };
+                            inputs.push((name, value));
+                        }
+                        if let (false, Some(name)) = (shared, map.signal("ce")) {
+                            inputs.push((Name::new(name), write_ens[index]));
+                        }
+                        if let Some(name) = map.signal("din")
+                            && let Some(data) = port.data
+                        {
+                            let value = if let Some(pins) = &column.pins {
+                                pin_word(module, data, lo, pins, mode_width, span)
+                            } else if layout.data_bits.is_empty() {
+                                let part = slice_expr(module, data, hi, lo, span);
+                                self.resize(module, part, mode_width, span)
+                            } else {
+                                spread_data(module, data, layout, lo, hi, data_pins, span)
+                            };
+                            match (parity > 0, map.signal("dinp")) {
+                                (true, Some(pins)) => {
+                                    let low = slice_expr(module, value, data_pins - 1, 0, span);
+                                    let top =
+                                        slice_expr(module, value, mode_width - 1, data_pins, span);
+                                    inputs.push((Name::new(name), low));
+                                    inputs.push((Name::new(pins), top));
+                                }
+                                _ => inputs.push((Name::new(name), value)),
+                            }
+                        }
+                    }
+                    if column.cascade {
+                        let mut used: Vec<usize> = plan
+                            .read_slots
+                            .iter()
+                            .chain(&plan.write_slots)
+                            .copied()
+                            .collect();
+                        used.sort_unstable();
+                        used.dedup();
+                        for slot in used {
+                            let Some(map) = shape.port_map.get(slot) else {
                                 continue;
                             };
-                            if inputs.iter().any(|(n, _)| n.as_str() == name) {
-                                continue;
-                            }
-                            let zero = const_expr(module, Const::zero(map.width(role)), span);
-                            inputs.push((Name::new(name), zero));
-                        }
-                    }
-                }
-                let cell = add_cell(
-                    module,
-                    &format!("{base}$ram_w{w}_d{d}"),
-                    CellKind::Blackbox(Name::new(shape.name.clone())),
-                    inputs,
-                    outputs,
-                    span,
-                );
-                for (key, value) in &column.params {
-                    module.cells[cell].params.set(key.clone(), value.clone());
-                }
-                if vivado && shape.name.starts_with("RAMB") {
-                    self.vivado_port_params(module, cell, plan, column.sdp);
-                }
-                if let Some(init) = &init {
-                    // Every copy holds the whole contents; this block
-                    // holds its width slice of its depth slice of them.
-                    let words = &layout.init;
-                    let contents = match (&shape.init_params, words) {
-                        (Some(params), _) if vivado && shape.name.starts_with("RAMB") => {
-                            match &column.pins {
-                                Some(pins) => {
-                                    // The words as the pins hold them, laid
-                                    // out as a column of the whole word.
-                                    let words = pin_contents(init, column, pins);
-                                    let whole = BramColumnPlan {
-                                        lo: 0,
-                                        hi: column.mode.0 - 1,
-                                        pins: None,
-                                        ..column.clone()
-                                    };
-                                    linear_contents(&words, params, &whole, column.mode.1, d)
+                            if reads_here {
+                                let found = cascade_nets.iter().find(|(s, _)| *s == slot);
+                                if let (Some(name), Some((_, net))) =
+                                    (map.signal("cascadein"), found)
+                                {
+                                    let value = net_expr(module, *net, span);
+                                    inputs.push((Name::new(name), value));
                                 }
-                                None => linear_contents(init, params, column, column.mode.1, d),
+                            } else if let Some(name) = map.signal("cascadeout") {
+                                let net = add_net(
+                                    module,
+                                    &format!("{base}$casc{slot}_w{w}_d{d}"),
+                                    Type::bit(),
+                                    span,
+                                );
+                                outputs.push((Name::new(name), net));
+                                cascade_nets.push((slot, net));
                             }
                         }
-                        (Some(params), Some(words)) => {
-                            block_contents(init, width, params, words, column.mode, w, d)
-                        }
-                        _ => Vec::new(),
-                    };
-                    for (key, value) in contents {
-                        module.cells[cell].params.set(key, value);
                     }
+                    // Every control input the memory leaves alone, tied low in
+                    // the netlist as Vivado's netlist ties it: a read port's
+                    // write enable, the resets, the output register's clock
+                    // enable and reset. The fabric ties a pin nothing drives
+                    // anyway, and these say so to anything that reads the
+                    // netlist, a simulation first (`tools/vivado-parity/`: on
+                    // Xilinx's models a pin left open floats and writes).
+                    if vivado && shape.name.starts_with("RAMB") {
+                        for map in &shape.port_map {
+                            for role in ["we", "rst", "regce", "rstreg"] {
+                                let Some(name) = map.signal(role) else {
+                                    continue;
+                                };
+                                if inputs.iter().any(|(n, _)| n.as_str() == name) {
+                                    continue;
+                                }
+                                let zero = const_expr(module, Const::zero(map.width(role)), span);
+                                inputs.push((Name::new(name), zero));
+                            }
+                        }
+                    }
+                    let tag = match (column.cascade, reads_here) {
+                        (false, _) => "",
+                        (true, false) => "_lower",
+                        (true, true) => "_upper",
+                    };
+                    let cell = add_cell(
+                        module,
+                        &format!("{base}$ram_w{w}_d{d}{tag}"),
+                        CellKind::Blackbox(Name::new(shape.name.clone())),
+                        inputs,
+                        outputs,
+                        span,
+                    );
+                    for (key, value) in &column.params {
+                        module.cells[cell].params.set(key.clone(), value.clone());
+                    }
+                    if vivado && shape.name.starts_with("RAMB") {
+                        self.vivado_port_params(module, cell, plan, column.sdp);
+                    }
+                    if column.cascade {
+                        let side = if reads_here { "UPPER" } else { "LOWER" };
+                        let mut used: Vec<usize> = plan
+                            .read_slots
+                            .iter()
+                            .chain(&plan.write_slots)
+                            .copied()
+                            .collect();
+                        used.sort_unstable();
+                        used.dedup();
+                        for slot in used {
+                            let letter = if slot == 0 { 'A' } else { 'B' };
+                            module.cells[cell].params.set(
+                                Name::new(format!("RAM_EXTENSION_{letter}")),
+                                AttrValue::String(side.to_owned()),
+                            );
+                        }
+                    }
+                    // Which block of the column's rows this is, counted as the
+                    // contents are: a cascade's lower block first.
+                    let slice = d * halves + half;
+                    if let Some(init) = &init {
+                        // Every copy holds the whole contents; this block
+                        // holds its width slice of its depth slice of them.
+                        let words = &layout.init;
+                        let contents = match (&shape.init_params, words) {
+                            (Some(params), _) if vivado && shape.name.starts_with("RAMB") => {
+                                match &column.pins {
+                                    Some(pins) => {
+                                        // The words as the pins hold them, laid
+                                        // out as a column of the whole word.
+                                        let words = pin_contents(init, column, pins);
+                                        let whole = BramColumnPlan {
+                                            lo: 0,
+                                            hi: column.mode.0 - 1,
+                                            pins: None,
+                                            ..column.clone()
+                                        };
+                                        linear_contents(
+                                            &words,
+                                            params,
+                                            &whole,
+                                            column.mode.1,
+                                            slice,
+                                        )
+                                    }
+                                    None => {
+                                        linear_contents(init, params, column, column.mode.1, slice)
+                                    }
+                                }
+                            }
+                            (Some(params), Some(words)) => {
+                                block_contents(init, width, params, words, column.mode, w, d)
+                            }
+                            _ => Vec::new(),
+                        };
+                        for (key, value) in contents {
+                            module.cells[cell].params.set(key, value);
+                        }
+                    }
+                    module.cells[cell].attrs.set("memory", memory_name.clone());
                 }
-                module.cells[cell].attrs.set("memory", memory_name.clone());
             }
             for (index, parts) in row_parts.into_iter().enumerate() {
                 let mut parts = parts;
@@ -2905,6 +3380,15 @@ impl Mapper<'_> {
             };
             let value = self.mux_tree(module, parts, &select, &out);
             add_assign(module, data_net, value, span);
+        }
+        if let Some((out, [a, b], bits)) = split_out {
+            // Port A's bits, then port B's share of what is left.
+            let rest = width - bits;
+            let low = net_expr(module, a, span);
+            let high = net_expr(module, b, span);
+            let high = slice_expr(module, high, rest - 1, 0, span);
+            let value = expr(module, ExprKind::Concat(vec![high, low]), span);
+            add_assign(module, out, value, span);
         }
 
         if let Some(first) = plan.columns.first() {
@@ -3088,6 +3572,74 @@ impl Mapper<'_> {
                 }
             }
         }
+    }
+
+    /// The two sides of a single port split over both ports of a block
+    /// ([`vivado_split_port`]): reads and writes on port A of the word's
+    /// first `bits` bits, at the block's word `{0, 1.., a}`, and on port B of
+    /// the rest, zero-extended, at `{1, 1.., a}`, the bits between the top
+    /// and the word's address ones, as Vivado ties them; and the two nets a
+    /// side's read lands on, `bits` wide each, when the port reads.
+    #[allow(clippy::type_complexity, reason = "two sides, each a read and a write")]
+    fn split_ports(
+        &mut self,
+        module: &mut Module,
+        (read, write): (&PortWiring, &PortWiring),
+        (width, bits, mode_depth, total_bits): (u32, u32, u32, u32),
+        base: &str,
+        span: Span,
+    ) -> (([PortWiring; 2], [PortWiring; 2]), Option<[NetId; 2]>) {
+        let word_bits = addr_bits(u64::from(mode_depth));
+        let pad = word_bits.saturating_sub(total_bits + 1);
+        let address = |this: &mut Self, module: &mut Module, top: u64, low: Option<ExprId>| {
+            let mut parts = vec![const_expr(module, Const::from_u64(top, 1), span)];
+            if pad > 0 {
+                parts.push(const_expr(module, Const::ones(pad), span));
+            }
+            if let Some(low) = low {
+                parts.push(this.resize(module, low, total_bits, span));
+            }
+            Some(expr(module, ExprKind::Concat(parts), span))
+        };
+        // A side's share of a vector a bit per bit of the word, `bits` wide.
+        let share = |this: &mut Self, module: &mut Module, value: Option<ExprId>, side: u32| {
+            let value = value?;
+            let lo = side * bits;
+            let hi = (lo + bits).min(width) - 1;
+            let part = slice_expr(module, value, hi, lo, span);
+            Some(this.resize(module, part, bits, span))
+        };
+        let nets = read.out.map(|_| {
+            [0, 1].map(|side| {
+                add_net(
+                    module,
+                    &format!("{base}$split{side}"),
+                    Type::bits(bits),
+                    span,
+                )
+            })
+        });
+        let reads = [0u32, 1].map(|side| PortWiring {
+            low: address(self, module, u64::from(side), read.low),
+            high: None,
+            high_bits: 0,
+            clk: read.clk,
+            en: read.en,
+            lanes_en: None,
+            data: None,
+            out: nets.map(|n| n[side as usize]),
+        });
+        let writes = [0u32, 1].map(|side| PortWiring {
+            low: address(self, module, u64::from(side), write.low),
+            high: None,
+            high_bits: 0,
+            clk: write.clk,
+            en: write.en,
+            lanes_en: share(self, module, write.lanes_en, side),
+            data: share(self, module, write.data, side),
+            out: None,
+        });
+        ((reads, writes), nets)
     }
 
     /// The signals of one memory port, in the form the block wiring needs.
@@ -3435,6 +3987,8 @@ impl Mapper<'_> {
         // distributed RAM block per block's worth of words and bits for
         // each read port, which holds as many bits as it has.
         let vivado = self.options.vivado_memories && writes.len() == 1 && self.has_vivado_lutram();
+        // A single port, as Vivado builds one: a single-port primitive a bit.
+        let single = vivado && self.single_port_lutram(module, &reads, &writes);
         let shape = self.lutram_shape().filter(|_| writes.len() == 1 && !vivado);
         let bits = u64::from(width) * depth;
         let lane = module.memories[mem]
@@ -3442,6 +3996,7 @@ impl Mapper<'_> {
             .get(super::lanes::LANE_OF)
             .is_some();
         let cells = match &shape {
+            _ if single => u64::from(width) * depth.div_ceil(vivado_single_lutram_words(depth).0),
             _ if vivado => {
                 let (words, pieces) = vivado_lutram_plan(width, depth, lane);
                 pieces.len() as u64 * depth.div_ceil(words) * reads.len() as u64
@@ -3516,6 +4071,20 @@ impl Mapper<'_> {
             init,
             lane,
         };
+        if single {
+            let cells =
+                self.emit_vivado_single_lutram(module, &plan, reads[0], writes[0], write_clk);
+            let primitive = vivado_single_lutram_words(depth).1;
+            self.record_fallback(
+                &name,
+                "distributed LUT RAM",
+                Some(primitive.to_owned()),
+                cells,
+            );
+            let mut replaced = reads;
+            replaced.extend(writes);
+            return Some(replaced);
+        }
         if vivado {
             let cells = self.emit_vivado_lutram(module, &plan, &reads, &writes, write_clk);
             let names = vivado_lutram_names(width, depth, lane);
@@ -4170,6 +4739,127 @@ impl Mapper<'_> {
             let value = self.mux_high(module, plan, port, index, &row_values, (low, high));
             self.finish_read(module, plan, port, index, value);
         }
+        built
+    }
+
+    /// Whether a memory of one write and one read port is a single port: the
+    /// read at the write's address, bit for bit, and the device has every
+    /// single-port distributed RAM [`vivado_single_lutram_words`] picks from.
+    fn single_port_lutram(&self, module: &Module, reads: &[CellId], writes: &[CellId]) -> bool {
+        use crate::ir::emit::{BitView, SigBit};
+        let ([read], [write]) = (reads, writes) else {
+            return false;
+        };
+        let has = |name: &str| {
+            self.device
+                .bels
+                .iter()
+                .any(|b| b.role == BelRole::LutRam && b.name == name)
+        };
+        if !["RAM32X1S", "RAM64X1S", "RAM128X1S", "RAM256X1S"]
+            .iter()
+            .all(|name| has(name))
+        {
+            return false;
+        }
+        let Ok(view) = BitView::new(module) else {
+            return false;
+        };
+        let bits = |e: Option<ExprId>| -> Option<Vec<SigBit>> {
+            let bits = view.expr_bits(e?).ok()?;
+            Some(bits.into_iter().map(|b| view.canonical(b)).collect())
+        };
+        let raddr = bits(module.cells[*read].input("addr"));
+        raddr.is_some() && raddr == bits(module.cells[*write].input("addr"))
+    }
+
+    /// A single port in distributed RAM as Vivado builds one
+    /// ([`vivado_single_lutram_words`]): a single-port primitive a bit, in
+    /// banks of its depth, the port's address on each, and a multiplexer over
+    /// the banks after them. Initial contents go into each primitive's `INIT`.
+    fn emit_vivado_single_lutram(
+        &mut self,
+        module: &mut Module,
+        plan: &LogicPlan,
+        read: CellId,
+        write: CellId,
+        write_clk: Option<ExprId>,
+    ) -> u32 {
+        let span = plan.span;
+        let width = plan.width;
+        let depth = plan.rows_wanted as u64;
+        let write = self.logic_port(module, write);
+        let port = self.logic_port(module, read);
+        let (words, primitive) = vivado_single_lutram_words(depth);
+        let n = addr_bits(words);
+        let total = addr_bits(depth);
+        let low = n.min(total);
+        let high = total - low;
+        let rows = 1usize << high;
+        let clk = write_clk.unwrap_or_else(|| const_expr(module, Const::zero(1), span));
+        let data_width = write.data.map_or(0, |d| expr_width(module, d));
+        let zero = const_expr(module, Const::zero(1), span);
+        let mut built = 0u32;
+        let mut row_values: Vec<ExprId> = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let we = self.row_hit_high(module, &write, row as u64, high, low, span);
+            let mut bits: Vec<ExprId> = Vec::with_capacity(width as usize);
+            for bit in 0..width {
+                let mut inputs: Vec<(Name, ExprId)> =
+                    vec![(Name::new("WCLK"), clk), (Name::new("WE"), we)];
+                if words == 256 {
+                    let addr = self.addr_vec(module, write.addr, low, n, span);
+                    inputs.push((Name::new("A"), addr));
+                } else {
+                    for i in 0..n {
+                        let a = self.addr_bit_within(module, write.addr, i, low, span);
+                        inputs.push((Name::new(format!("A{i}")), a));
+                    }
+                }
+                let d = match write.data {
+                    Some(d) if bit < data_width => slice_expr(module, d, bit, bit, span),
+                    _ => zero,
+                };
+                inputs.push((Name::new("D"), d));
+                let tag = format!("{}$ls_r{row}_b{bit}", plan.name);
+                let net = add_net(module, &format!("{tag}_o"), Type::bit(), span);
+                let cell = add_cell(
+                    module,
+                    &tag,
+                    CellKind::Blackbox(Name::new(primitive)),
+                    inputs,
+                    vec![(Name::new("O"), net)],
+                    span,
+                );
+                if !plan.init.is_empty() {
+                    let init: Vec<Bit> = (0..words)
+                        .map(|k| {
+                            let one = usize::try_from(row as u64 * words + k)
+                                .ok()
+                                .and_then(|w| plan.init.get(w))
+                                .and_then(|c| c.get(bit))
+                                == Some(Bit::One);
+                            if one { Bit::One } else { Bit::Zero }
+                        })
+                        .collect();
+                    module.cells[cell]
+                        .params
+                        .set("INIT", AttrValue::Const(Const::from_bits(&init)));
+                }
+                module.cells[cell].attrs.set("memory", plan.name.clone());
+                bits.push(net_expr(module, net, span));
+                built += 1;
+            }
+            bits.reverse();
+            let value = if bits.len() == 1 {
+                bits[0]
+            } else {
+                expr(module, ExprKind::Concat(bits), span)
+            };
+            row_values.push(value);
+        }
+        let value = self.mux_high(module, plan, &port, 0, &row_values, (low, high));
+        self.finish_read(module, plan, &port, 0, value);
         built
     }
 
@@ -7994,6 +8684,7 @@ fn starts_at_zero(module: &Module, q: NetId) -> bool {
 }
 
 /// How one memory is laid out over blocks.
+#[derive(Clone)]
 struct BramPlan {
     /// The blocks side by side that carry the width, low bits first.
     columns: Vec<BramColumnPlan>,
@@ -8021,6 +8712,10 @@ struct BramPlan {
     out_regs: Vec<Option<OutReg>>,
     /// A port nothing uses gets widths of zero, as Vivado writes it.
     single_ports: bool,
+    /// The memory's one port pair split over both ports of each block
+    /// ([`vivado_split_port`]): this many of a word's bits on port A, at the
+    /// lower half of the block's words, and the rest on port B at the upper.
+    split: Option<u32>,
 }
 
 /// One column of a memory's blocks: a shape in a mode, holding bits
@@ -8042,6 +8737,10 @@ struct BramColumnPlan {
     /// Simple dual port: read on port A, written on port B, a word's halves
     /// on both (`Mapper::sdp_wiring`).
     sdp: bool,
+    /// Each row a pair of `RAMB36E1`s cascaded through `CASCADEOUT<x>` and
+    /// `CASCADEIN<x>`, the lower holding the first 32,768 words and the upper
+    /// the rest, read off the upper ([`vivado_columns`]).
+    cascade: bool,
     /// For a memory written a byte lane at a time ([`vivado_lane_columns`]),
     /// the pin of the block's word, data pins then parity pins as the
     /// read's `{DOP, DO}`, that each of the column's bits `lo..=hi` is on:
@@ -8290,6 +8989,29 @@ fn block_contents(
         .collect()
 }
 
+/// A split port's contents as its block's words hold them
+/// ([`Mapper::split_ports`]): word `a`'s first `bits` bits at `{0, 1.., a}`
+/// and the rest at `{1, 1.., a}` of `mode_depth` words, the others zero.
+fn split_contents(init: &[Const], bits: u32, mode_depth: u32, total_bits: u32) -> Vec<Const> {
+    let mut words = vec![Const::zero(bits); mode_depth as usize];
+    let half = u64::from(mode_depth / 2);
+    let pad = half - (1u64 << total_bits);
+    let mut put = |at: u64, value: Const| {
+        if let Some(slot) = usize::try_from(at).ok().and_then(|i| words.get_mut(i)) {
+            *slot = value;
+        }
+    };
+    for (a, word) in init.iter().enumerate() {
+        let width = word.width();
+        let a = a as u64;
+        put(pad + a, word.clone().resize(bits));
+        if width > bits {
+            put(half + pad + a, word.slice(width - 1, bits).resize(bits));
+        }
+    }
+    words
+}
+
 /// The contents of the block of `column` at depth slice `d`, written as a
 /// 7-series block RAM holds them in any mode: data bit `j` of local word
 /// `a` at bit `a * data + j` of the `INIT_` parameters taken as one vector,
@@ -8380,6 +9102,10 @@ struct VivadoColumn {
     depth: u32,
     /// Simple dual port, 512 words of 72 or 36.
     sdp: bool,
+    /// Two `RAMB36E1`s of 32,768 by 1 cascaded as one of 65,536
+    /// (`RAM_EXTENSION_<x>`), each `depth` words: a row of the column is the
+    /// pair.
+    cascade: bool,
     /// The memory's lowest bit the column holds.
     lo: u32,
     /// The memory's highest bit the column holds.
@@ -8408,9 +9134,12 @@ struct VivadoColumn {
 ///   (`sdp_512x64`, `sdp_512x36`, `sdp_32x32`), but for what fits 18 bits,
 ///   which is a `RAMB18E1` of 1,024 by 18 in true dual port (`sdp_512x18`,
 ///   `sdp_256x4`). `sdp` says whether the ports allow it.
-/// - **Deeper than 32,768**, Vivado cascades two `RAMB36E1`s
-///   (`RAM_EXTENSION_A`, `sdp_65536x1`), which this flow does not build; it
-///   stacks blocks of 32,768 and multiplexes the read, as it did.
+/// - **Deeper than 32,768, a bit is two `RAMB36E1`s of 32,768 by 1
+///   cascaded** (`RAM_EXTENSION_<x>` `LOWER` and `UPPER`, `CASCADEOUT<x>` to
+///   `CASCADEIN<x>`), one pair a bit: `sdp_40000x1` and `sdp_65536x1` are a
+///   pair, `sdp_65536x4` four, `bw_sdp_65536x16_b8` sixteen. Deeper than
+///   65,536, rows of pairs are stacked and the read multiplexed
+///   (`sdp_131072x1`, two pairs).
 fn vivado_columns(width: u32, depth: u64, sdp: bool) -> (Vec<VivadoColumn>, u32) {
     let rounded = depth.max(1).next_power_of_two();
     let mut columns = Vec::new();
@@ -8421,11 +9150,22 @@ fn vivado_columns(width: u32, depth: u64, sdp: bool) -> (Vec<VivadoColumn>, u32)
             width: port,
             depth: words,
             sdp,
+            cascade: false,
             lo,
             hi: lo + bits - 1,
         });
         lo += bits;
     };
+    if rounded > 32768 {
+        for _ in 0..width {
+            add(true, 1, 32768, false, 1);
+        }
+        for column in &mut columns {
+            column.cascade = true;
+        }
+        let deep = u32::try_from(depth.div_ceil(65536)).unwrap_or(u32::MAX);
+        return (columns, deep.max(1));
+    }
     if sdp && rounded <= 512 {
         let (full, rest) = (width / 72, width % 72);
         for _ in 0..full {
@@ -8457,6 +9197,46 @@ fn vivado_columns(width: u32, depth: u64, sdp: bool) -> (Vec<VivadoColumn>, u32)
     }
     let deep = u32::try_from(depth.div_ceil(u64::from(words))).unwrap_or(u32::MAX);
     (columns, deep.max(1))
+}
+
+/// How many of a word's bits Vivado 2026.1 puts on port A of a block when
+/// it splits a **single port** over both of the block's ports, port A
+/// reading and writing the word's low bits at the lower half of the block's
+/// words and port B the rest at the upper: `None` when it does not.
+/// **Measured**, its netlists of `testdata/fpga/vivado/memarr/`:
+///
+/// - 512 words or fewer, 19 to 36 bits wide, are a `RAMB18E1` in true dual
+///   port 18 bits a side, bits 0 to 17 on A (16 data, 2 parity) and the rest
+///   on B (`sp_rf_32x32`, `sp_rf_256x24` with 6 bits on B, `sp_rf_512x36`,
+///   `sp_wf_512x36` and `sp_nc_512x36` in their write modes on both ports);
+///   37 to 72 a `RAMB36E1` 36 a side (`sp_rf_512x64`, `sp_rf_512x72`).
+/// - The block's top address bit is 0 on A and 1 on B, and the bits between
+///   it and the word's address are ones (`ADDRARDADDR[13]` `<const0>`,
+///   `ADDRBWRADDR[13]` `<const1>`, `[12:9]` both `<const1>` for 32 words).
+/// - Written a byte lane at a time, a side holds two lanes of a `RAMB18E1` or
+///   four of a `RAMB36E1`, a lane's enable on its side's write enable
+///   (`bw_sp_rf_32x32_b8`, `bw_sp_rf_512x32_b8`: `WEA` lanes 0 and 1,
+///   `WEBWE[1:0]` lanes 2 and 3).
+/// - What fits one port is not split (`sp_rf_512x18` is port A alone), nor is
+///   a deeper memory (`sp_rf_1024x32` is a `RAMB36E1` on port A).
+///
+/// Wider than 72 bits, or than eight lanes, is not measured and not split.
+fn vivado_split_port(width: u32, depth: u64, lane: Option<u32>) -> Option<u32> {
+    if !(2..=512).contains(&depth) {
+        return None;
+    }
+    match lane {
+        Some(lane) => match width / lane.max(1) {
+            3..=4 => Some(2 * lane),
+            5..=8 => Some(4 * lane),
+            _ => None,
+        },
+        None => match width {
+            19..=36 => Some(18),
+            37..=72 => Some(36),
+            _ => None,
+        },
+    }
 }
 
 /// A column of [`vivado_columns`] or [`vivado_lane_columns`], with the pins
@@ -8920,6 +9700,27 @@ fn vivado_lutram_plan(width: u32, depth: u64, lane: bool) -> (u64, Vec<(LutRamPi
         _ => {}
     }
     (64, pieces)
+}
+
+/// The words of each single-port distributed RAM Vivado 2026.1 builds a single
+/// port of `depth` words of (read on no clock at the address written, or on
+/// the clock, registered after), and its primitive: **one bit each**, a
+/// `RAM32X1S` up to 32 words, a `RAM64X1S` to 64, a `RAM128X1S` to 128, and
+/// `RAM256X1S`s deeper, in banks of 256 with a multiplexer after them.
+/// **Measured**, its netlists of `testdata/fpga/vivado/memarr/`'s `sp_as_*`
+/// (16 by 8 is eight `RAM32X1S`, 64 by 8 eight `RAM64X1S`, 128 by 4 four
+/// `RAM128X1S`, 512 by 1 two `RAM256X1S`), `sp_rf_64x8`, `sp_wf_32x8`,
+/// `sp_nc_64x8`, and `bw_sp_wf_1024x32_b8`'s 128 `RAM256X1S`, four banks of a
+/// lane's bits. Not one of the multi-bit shapes (`RAM32M`, `RAM64M`) a memory
+/// of two addresses gets: the same 64 by 8 read at another address is three
+/// `RAM64M`s, twelve tables to these eight.
+fn vivado_single_lutram_words(depth: u64) -> (u64, &'static str) {
+    match depth.max(1).next_power_of_two() {
+        0..=32 => (32, "RAM32X1S"),
+        64 => (64, "RAM64X1S"),
+        128 => (128, "RAM128X1S"),
+        _ => (256, "RAM256X1S"),
+    }
 }
 
 /// The primitives [`vivado_lutram_plan`] uses, for the report: `RAM32M+RAM32X1D`.
@@ -11540,8 +12341,12 @@ mod tests {
             (18, 512, true, vec![small(18, 1024, 18)], 1),
             // Read only, or a single port: no simple dual port.
             (36, 512, false, vec![big(36, 1024, 36)], 1),
-            // Vivado cascades; this flow stacks two.
-            (1, 65536, true, vec![big(1, 32768, 1)], 2),
+            // Deeper than 32,768: a cascaded pair a bit, rows of pairs deeper
+            // than 65,536 (`sdp_40000x1`, `sdp_65536x4`, `sdp_131072x1`).
+            (1, 40000, true, vec![big(1, 32768, 1)], 1),
+            (1, 65536, true, vec![big(1, 32768, 1)], 1),
+            (4, 65536, true, vec![big(1, 32768, 1); 4], 1),
+            (1, 131072, true, vec![big(1, 32768, 1)], 2),
         ];
         for (width, depth, sdp, want, deep) in cases {
             let (columns, rows) = vivado_columns(width, depth, sdp);
@@ -11558,6 +12363,63 @@ mod tests {
                 next = c.hi + 1;
             }
             assert_eq!(next, width, "{depth}x{width}");
+            // A cascade is a pair of blocks of 32,768 a bit, and only there.
+            for c in &columns {
+                assert_eq!(c.cascade, depth > 32768, "{depth}x{width}");
+            }
+        }
+    }
+
+    /// **A single port Vivado splits over both ports of a block, and how**
+    /// (`vivado_split_port`), one case per measured design: 19 to 36 bits of
+    /// up to 512 words on a `RAMB18E1`'s 18 a side, 37 to 72 on a `RAMB36E1`'s
+    /// 36, two or four byte lanes a side; and none for what one port holds, a
+    /// deeper memory, or what was not measured. Would catch the line moved, or
+    /// a split asked for of a memory Vivado does not split.
+    #[test]
+    fn vivado_splits_a_single_port_as_its_netlists_say() {
+        for (width, depth, lane, want) in [
+            (32, 32, None, Some(18)),
+            (24, 256, None, Some(18)),
+            (36, 512, None, Some(18)),
+            (64, 512, None, Some(36)),
+            (72, 512, None, Some(36)),
+            (18, 512, None, None),
+            (32, 1024, None, None),
+            (80, 512, None, None),
+            (32, 32, Some(8), Some(16)),
+            (32, 512, Some(8), Some(16)),
+            (16, 512, Some(8), None),
+            (64, 256, Some(8), Some(32)),
+        ] {
+            assert_eq!(
+                vivado_split_port(width, depth, lane),
+                want,
+                "{depth}x{width} {lane:?}"
+            );
+        }
+    }
+
+    /// **A single port in distributed RAM is a primitive a bit**, by depth,
+    /// as Vivado's `sp_as_*` are. Would catch a depth given the wrong
+    /// primitive.
+    #[test]
+    fn a_single_port_in_distributed_ram_is_a_bit_a_primitive() {
+        for (depth, words, primitive) in [
+            (16, 32, "RAM32X1S"),
+            (32, 32, "RAM32X1S"),
+            (33, 64, "RAM64X1S"),
+            (64, 64, "RAM64X1S"),
+            (128, 128, "RAM128X1S"),
+            (256, 256, "RAM256X1S"),
+            (512, 256, "RAM256X1S"),
+            (2048, 256, "RAM256X1S"),
+        ] {
+            assert_eq!(
+                vivado_single_lutram_words(depth),
+                (words, primitive),
+                "{depth}"
+            );
         }
     }
 
@@ -11603,6 +12465,7 @@ mod tests {
                         lo,
                         hi: (lo + mode_width - 1).min(width - 1),
                         sdp: false,
+                        cascade: false,
                         pins: None,
                     };
                     let ruled = linear_contents(&init, &params, &column, mode_depth, d);

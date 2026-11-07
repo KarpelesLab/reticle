@@ -1142,7 +1142,11 @@ pub fn place_timing(
                 };
                 for pin in &inst.pins {
                     let role = netlist.pins[*pin].role.as_str();
-                    pins[*pin] = if is_clock(role) {
+                    // A block RAM cascade's pins are a fixed wire from one
+                    // block to the next, not a path that starts or ends at
+                    // either: the read is the upper block's.
+                    let cascade = role.ends_with("_cascadein") || role.ends_with("_cascadeout");
+                    pins[*pin] = if is_clock(role) || cascade {
                         PinTiming::Ignored
                     } else if netlist.pins[*pin].output {
                         PinTiming::Start

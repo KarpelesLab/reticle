@@ -12,7 +12,9 @@
 //! each `ram_style`, and (`bw_`) memories written a byte lane at a time, of
 //! 8 and 9 bits, simple, single and true dual port, read first, written
 //! first and unchanged, with and without contents, in block and distributed
-//! RAM. `vivado.txt` there keeps what Vivado made of each on
+//! RAM; and memories deeper than a block (40,000 to 131,072 words), a single
+//! port read on no clock (`sp_as_`), and single ports of up to 512 words as
+//! wide as 72 bits. `vivado.txt` there keeps what Vivado made of each on
 //! `xc7a100tftg256-1` (`FIXTURE=memarr tools/vivado-parity/lutram.sh`): the
 //! cells left after routing, each block's parameters (`params`), and each
 //! block RAM tile of its bitstream decoded through this repository's
@@ -43,6 +45,13 @@
 //! port's halves written the wrong way round passed every test here until
 //! the `bits_` designs, which fold it under a mask that changes every cycle,
 //! were added for it.
+//!
+//! A cascade's route is a fixed pip, which no tile feature shows: that the
+//! lower block's `CASCADEOUT<x>` is the upper's `CASCADEIN<x>` is the
+//! simulation's to see, and [`what_is_not_vivados_says_so`]'s, which reads it
+//! off a routed netlist.
+//! [`a_tight_clock_makes_a_small_memory_distributed_ram`] holds the choice by
+//! the clock to Vivado's synthesis at the periods it was measured at.
 //!
 //! None of it has been near a part. Skips without the Project X-Ray
 //! database, as every `fpga_xray` test does.
@@ -262,32 +271,40 @@ fn designs() -> Vec<String> {
 ///
 /// | Design | Vivado | Here |
 /// |---|---|---|
-/// | `asym_*` | written narrow and read wide: four blocks | refused for block RAM, the loop's four reads taken as reads on no clock; distributed RAM |
-/// | `async_1024x8` | the read's address register taken into a `RAMB18E1` | distributed RAM: no block RAM reads on no clock here |
-/// | `rom_512x36` to `rom_4096x8` | lookup tables, 174 to 321 of them | a block RAM, as before: one block is the smaller |
+/// | `async_1024x8` | the read's address register taken into a `RAMB18E1` | distributed RAM: no block RAM reads on no clock here, and Vivado's is not the source's on a write to the word being read (`docs/fpga-vivado-parity.md`) |
+/// | `rom_512x36` to `rom_4096x8`, `rom_65536x1` | lookup tables, 174 to 321 of them, 60 and the multiplexers for 65,536 by 1 | a block RAM, or two cascaded, as before: the blocks are the smaller |
 /// | `rom_16384x2` | the address register taken into the block, and the read into its output register | the read in the block's latch |
-/// | `sdp_65536x1` | two `RAMB36E1` as one through the cascade | two stacked and a multiplexer: no cascade is built |
 /// | `style_registers_128x8` | 1,024 flip-flops | distributed RAM, as before: measured faster and smaller than either flow's flip-flops |
-/// | `bw_sp_rf_32x32_b8` | a single port 32 wide on both ports of a `RAMB18E1`, a half each | one `RAMB36E1` 36 wide on port A: no single port is split over two ports here |
-/// | `bw_sdp_65536x16_b8`, `bw_sp_rf_65536x16_b8` | 32 `RAMB36E1`, cascaded in pairs | 32 `RAMB36E1`, two deep and a read multiplexer: no cascade is built, as for `sdp_65536x1` |
-/// | `bw_sp_wf_*` | a lane read first lane by lane is `RAM256X1S`, single-port distributed RAM | `RAM64M`s, a lane at a time: the read on no clock the lanes' choice leaves, and no single-port distributed RAM here |
+/// | `sdp_40000x1` to `sdp_131072x1`, `sp_*_65536x1`, `tdp_65536x1`, `init_65536x1`, `bw_sdp_65536x16_b8`, `bw_sp_rf_65536x16_b8` | `RAMB36E1`s cascaded in pairs | stacked with a read multiplexer, as before: Vivado's timer finds the cascade slower (`sdp_65536x1` 3.36 ns cascaded here and 3.27 by Vivado, 2.72 stacked); only a read registered again, which the cascade takes into its blocks, is cascaded (`reg_65536x1`, `reg_init_65536x1`) |
+///
+/// Four more were here until "Deeper than a block, and single ports, as
+/// Vivado builds them" (`docs/fpga-vivado-parity.md`): `bw_sp_rf_32x32_b8`,
+/// one `RAMB36E1` on
+/// port A, is a `RAMB18E1`'s two ports a half each; `bw_sp_wf_1024x32_b8` and
+/// `bw_sp_wf_2048x18_b9`, `RAM64M`s, are `RAM256X1S`s; and the two `asym_*`,
+/// distributed RAM read on no clock, are four blocks each, a read on the
+/// clock a copy.
 const NOT_AS_VIVADO: &[&str] = &[
-    "asym_2048x9_r36",
-    "asym_4096x8_r32",
     "async_1024x8",
     "bw_sdp_65536x16_b8",
-    "bw_sp_rf_32x32_b8",
     "bw_sp_rf_65536x16_b8",
-    "bw_sp_wf_1024x32_b8",
-    "bw_sp_wf_2048x18_b9",
+    "init_65536x1",
     "rom_1024x16",
     "rom_1024x18",
     "rom_16384x2",
     "rom_2048x9",
     "rom_4096x8",
     "rom_512x36",
+    "rom_65536x1",
+    "sdp_131072x1",
+    "sdp_40000x1",
     "sdp_65536x1",
+    "sdp_65536x2",
+    "sp_nc_65536x1",
+    "sp_rf_65536x1",
+    "sp_wf_65536x1",
     "style_registers_128x8",
+    "tdp_65536x1",
 ];
 
 /// One design through the flow.
@@ -306,14 +323,22 @@ fn build_all() -> Option<BTreeMap<String, Built>> {
     let root = chipdb()?;
     answers()?;
     let names = designs();
-    let results: Vec<(String, Built)> = std::thread::scope(|scope| {
-        let root = &root;
-        let handles: Vec<_> = names
-            .iter()
-            .map(|name| scope.spawn(move || (name.clone(), build_one(root, name))))
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
-    });
+    // Forty builds at a time: each holds the part's database, nearly two
+    // gigabytes, and two hundred at once is more than a machine may have.
+    let mut results: Vec<(String, Built)> = Vec::new();
+    for chunk in names.chunks(40) {
+        results.extend(std::thread::scope(|scope| {
+            let root = &root;
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|name| scope.spawn(move || (name.clone(), build_one(root, name))))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        }));
+    }
     Some(results.into_iter().collect())
 }
 
@@ -449,7 +474,15 @@ fn memory_cells(counts: &BTreeMap<String, u32>) -> BTreeMap<String, u32> {
             cell.starts_with("RAMB")
                 || matches!(
                     cell.as_str(),
-                    "RAM32M" | "RAM64M" | "RAM32X1D" | "RAM64X1D" | "RAM128X1D"
+                    "RAM32M"
+                        | "RAM64M"
+                        | "RAM32X1D"
+                        | "RAM64X1D"
+                        | "RAM128X1D"
+                        | "RAM32X1S"
+                        | "RAM64X1S"
+                        | "RAM128X1S"
+                        | "RAM256X1S"
                 )
         })
         .map(|(cell, n)| (cell.clone(), *n))
@@ -479,7 +512,7 @@ fn each_memory_gets_the_cells_vivado_gave_it() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(compared >= 145, "only {compared} compared");
+    assert!(compared >= 183, "only {compared} compared");
 }
 
 /// **The block RAM tiles are Vivado's**, site feature for site feature and
@@ -506,50 +539,87 @@ fn each_block_ram_tile_holds_what_vivados_does() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(compared >= 252, "only {compared} tiles compared");
+    assert!(compared >= 277, "only {compared} tiles compared");
 }
 
 /// **What is not arranged as Vivado arranges it is what [`NOT_AS_VIVADO`]
-/// says**: the cascade stacked, the asymmetric memories and the read on no
-/// clock in distributed RAM, the read-only memories Vivado builds of
-/// lookup tables in a block, and the register file Vivado builds of
-/// flip-flops in distributed RAM. Would catch any of them changing without
-/// the list and the document changing with it.
+/// says**: the read on no clock in distributed RAM, the read-only memories
+/// Vivado builds of lookup tables in blocks, and the register file Vivado
+/// builds of flip-flops in distributed RAM; and what left the list is held
+/// to it here by its report: a cascade is said, the split port is said, and
+/// the asymmetric memories are a copy a read. Would catch any of them
+/// changing without the list and the document changing with it.
 #[test]
 fn what_is_not_vivados_says_so() {
     let Some(built) = built() else { return };
     let cells = |name: &str| memory_cells(&netlist_cells(&built[name].log));
     let one = |cell: &str, n: u32| BTreeMap::from([(cell.to_owned(), n)]);
-    assert_eq!(cells("sdp_65536x1"), one("RAMB36E1", 2));
-    assert!(built["sdp_65536x1"].log.contains("2 deep"));
     assert_eq!(cells("style_registers_128x8"), one("RAM64M", 6));
-    assert_eq!(cells("bw_sp_rf_32x32_b8"), one("RAMB36E1", 1));
-    for name in ["bw_sdp_65536x16_b8", "bw_sp_rf_65536x16_b8"] {
-        assert_eq!(cells(name), one("RAMB36E1", 32), "{name}");
-        assert!(built[name].log.contains("2 deep"), "{name}");
-    }
-    for name in [
-        "asym_2048x9_r36",
-        "asym_4096x8_r32",
-        "async_1024x8",
-        "bw_sp_wf_1024x32_b8",
-        "bw_sp_wf_2048x18_b9",
+    let found = cells("async_1024x8");
+    assert!(
+        found.keys().all(|c| !c.starts_with("RAMB")) && !found.is_empty(),
+        "async_1024x8: {found:?}"
+    );
+    for (name, cell, n) in [
+        ("rom_512x36", "RAMB36E1", 1),
+        ("rom_1024x16", "RAMB18E1", 1),
+        ("rom_1024x18", "RAMB18E1", 1),
+        ("rom_2048x9", "RAMB18E1", 1),
+        ("rom_4096x8", "RAMB36E1", 1),
+        ("rom_16384x2", "RAMB36E1", 1),
+        ("rom_65536x1", "RAMB36E1", 2),
     ] {
-        let found = cells(name);
+        assert_eq!(cells(name), one(cell, n), "{name}");
+    }
+    // Stacked, two rows of 32,768 or more and a multiplexer; cascaded only
+    // where the read's register goes into the blocks.
+    for (name, deep) in [
+        ("sdp_65536x1", "2 deep"),
+        ("bw_sdp_65536x16_b8", "2 deep"),
+        ("bw_sp_rf_65536x16_b8", "2 deep"),
+        ("sdp_131072x1", "4 deep"),
+    ] {
+        assert!(built[name].log.contains(deep), "{name}");
+        assert!(!built[name].log.contains("cascaded"), "{name}");
+    }
+    for name in ["reg_65536x1", "reg_init_65536x1"] {
         assert!(
-            found.keys().all(|c| !c.starts_with("RAMB")) && !found.is_empty(),
-            "{name}: {found:?}"
+            built[name].log.contains("each column two blocks cascaded"),
+            "{name}"
+        );
+        assert!(
+            built[name]
+                .log
+                .contains("1 output register(s) in the block"),
+            "{name}"
         );
     }
-    for (name, cell) in [
-        ("rom_512x36", "RAMB36E1"),
-        ("rom_1024x16", "RAMB18E1"),
-        ("rom_1024x18", "RAMB18E1"),
-        ("rom_2048x9", "RAMB18E1"),
-        ("rom_4096x8", "RAMB36E1"),
-        ("rom_16384x2", "RAMB36E1"),
-    ] {
-        assert_eq!(cells(name), one(cell, 1), "{name}");
+    // The cascade is a net from the lower block to the upper on each port
+    // used, which no tile feature shows (a fixed pip): without it the
+    // upper reads nothing of the lower half, which only the simulation
+    // would otherwise see.
+    let routed = std::fs::read_to_string(&built["reg_65536x1"].routed).unwrap();
+    for (port, n) in [("A", "mem$casc0_w0_d0"), ("B", "mem$casc1_w0_d0")] {
+        assert!(
+            routed.contains(&format!(".CASCADEOUT{port}({n})")),
+            "{routed}"
+        );
+        assert!(
+            routed.contains(&format!(".CASCADEIN{port}({n})")),
+            "{routed}"
+        );
+    }
+    for name in ["bw_sp_rf_32x32_b8", "sp_rf_32x32", "sp_rf_512x64"] {
+        assert!(
+            built[name].log.contains("one port split over both"),
+            "{name}"
+        );
+    }
+    for name in ["asym_2048x9_r36", "asym_4096x8_r32"] {
+        assert!(
+            built[name].log.contains("4 copies, one per read port"),
+            "{name}"
+        );
     }
 }
 
@@ -675,15 +745,12 @@ fn answer_of(out: &str) -> Option<String> {
     Some(rest.trim().to_lowercase())
 }
 
-/// The designs not simulated: each is 384 or 768 `RAM64M` here (see
-/// [`NOT_AS_VIVADO`]), and Vivado's elaborator had not finished one of them
-/// after forty minutes, where every other design takes seconds.
-const NOT_SIMULATED: &[&str] = &["asym_2048x9_r36", "asym_4096x8_r32"];
-
 /// **The netlist each bitstream was made from answers as Vivado's build
-/// does**, on Vivado's models under Vivado's simulator, for every design
-/// but [`NOT_SIMULATED`]'s, those [`NOT_AS_VIVADO`] arranges otherwise
-/// included: what a memory computes does not depend on its arrangement.
+/// does**, on Vivado's models under Vivado's simulator, for every design,
+/// those [`NOT_AS_VIVADO`] arranges otherwise included: what a memory
+/// computes does not depend on its arrangement. (The two `asym_*` were left
+/// out while they were 384 and 768 `RAM64M` here, which Vivado's elaborator
+/// had not finished after forty minutes; they are four blocks now.)
 /// See the module docs.
 #[test]
 fn a_routed_netlist_answers_as_vivados_build_does() {
@@ -700,7 +767,6 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
     let jobs: Vec<(&String, &Built)> = built
         .iter()
         .filter(|(name, one)| expected.contains_key(*name) && one.decoded.is_some())
-        .filter(|(name, _)| !NOT_SIMULATED.contains(&name.as_str()))
         .collect();
     // Sixteen simulators at a time: each takes a gigabyte or so.
     let mut runs: Vec<(String, Option<String>)> = Vec::new();
@@ -724,7 +790,7 @@ fn a_routed_netlist_answers_as_vivados_build_does() {
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(runs.len() >= 159, "only {} simulated", runs.len());
+    assert!(runs.len() >= 203, "only {} simulated", runs.len());
 }
 
 /// Each of `jobs`' routed netlists under Vivado's simulator at once, and
@@ -814,6 +880,61 @@ fn legacy_memories_map_as_before() {
             Some(&count),
             "{name} {memories}: {cells:?}"
         );
+    }
+}
+
+/// **Under a tight clock a small memory is distributed RAM, as Vivado's
+/// synthesis makes it**: each case is a design built with its clock's period
+/// changed, and what Vivado's synthesis made of it at that period
+/// (`Synth 8-5584`, measured, "Deeper than a block, and single ports, as
+/// Vivado builds them"): blocks at 4 ns and distributed RAM at 3.5 for up to
+/// 1,024 words, and a block at any period for a read registered again or a
+/// memory over 32 kbit; 2,048 words, which Vivado moves at 3.2 ns and this
+/// flow's timing does not gain by, stay a block. Would catch the line moved,
+/// the clock not found, or a memory moved that Vivado keeps.
+#[test]
+fn a_tight_clock_makes_a_small_memory_distributed_ram() {
+    let Some(root) = chipdb() else { return };
+    if answers().is_none() {
+        return;
+    }
+    for (name, period, block) in [
+        ("sdp_512x36", "4", true),
+        ("sdp_512x36", "3.5", false),
+        ("sp_wf_1024x18", "3.5", false),
+        ("sdp_2048x9", "3.5", true),
+        // Vivado's is distributed RAM here, measured slower: a block still.
+        ("sdp_2048x9", "3.2", true),
+        ("reg_1024x18", "1.4", true),
+        ("sdp_1024x36", "1.4", true),
+    ] {
+        let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join("memarr-clock")
+            .join(format!("{name}-{period}"));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let dir = fixtures();
+        let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf")))
+            .unwrap()
+            .replace("-period 5 ", &format!("-period {period} "));
+        let constraints = out.join("c.rcf");
+        std::fs::write(&constraints, rcf).unwrap();
+        let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args(["fpga", "--device", DEVICE, "--chipdb", &root, "--report"])
+            .args(["--top", name])
+            .arg("--constraints")
+            .arg(&constraints)
+            .arg("--output-dir")
+            .arg(&out)
+            .arg(dir.join(format!("{name}.v")))
+            .output()
+            .expect("the reticle binary runs");
+        let log = String::from_utf8_lossy(&run.stderr);
+        assert!(run.status.success(), "{log}");
+        let cells = memory_cells(&netlist_cells(&log));
+        let blocks = cells.keys().any(|c| c.starts_with("RAMB"));
+        assert_eq!(blocks, block, "{name} at {period} ns: {cells:?}");
+        assert!(!cells.is_empty(), "{name} at {period} ns");
     }
 }
 

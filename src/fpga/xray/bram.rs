@@ -328,6 +328,7 @@ fn is_output(role: &str) -> bool {
         || role.ends_with("_sbiterr")
         || role.contains("_eccparity")
         || role.contains("_rdaddrecc")
+        || role.ends_with("_cascadeout")
 }
 
 /// The pins of the `RAMB36E1` bel of a `BRAM_L` or `BRAM_R` tile, as
@@ -354,8 +355,11 @@ fn is_output(role: &str) -> bool {
 ///
 /// The tile wires behind them are the halves' own: `BRAM_FIFO36_DIADIL0`
 /// and `BRAM_FIFO18_DIADI0` both hang off `BRAM_IMUX16_1`, in the
-/// database's `tile_type_BRAM_L.json`. The cascade and the error-correction
-/// pins are not here: nothing here builds either.
+/// database's `tile_type_BRAM_L.json`. The error correction's pins are named
+/// so that a design may connect them, though nothing here turns it on; the
+/// cascade's, `CASCADEIN<x>` and `CASCADEOUT<x>`, are the site's own wires,
+/// which reach no interconnect: a cascade's one route is the fixed pip from
+/// a block's `CASCADEOUT<x>` to the `CASCADEIN<x>` of the block above.
 pub(super) fn ramb36_pins(tile_type: &str) -> Option<Vec<(String, String)>> {
     if tile_type != "BRAM_L" && tile_type != "BRAM_R" {
         return None;
@@ -437,6 +441,15 @@ pub(super) fn ramb36_pins(tile_type: &str) -> Option<Vec<(String, String)>> {
     }
     for i in 0..9 {
         pin(format!("p0_rdaddrecc{i}"), format!("RDCOUNT{i}"));
+    }
+    // The cascade of two blocks as one of 65,536 bits (`RAM_EXTENSION_<x>`):
+    // a block's `CASCADEOUT<x>` reaches the `CASCADEIN<x>` of the block five
+    // rows above over a fixed pip (`BRAM_FIFO36_CASCADEOUTA_1` and
+    // `tileconn.json`), and nothing else drives that pin, so the placer
+    // holds the pair as dedicated wiring (`place::build_clusters`).
+    for (port, side) in [("p0", 'A'), ("p1", 'B')] {
+        pin(format!("{port}_cascadein"), format!("CASCADEIN{side}"));
+        pin(format!("{port}_cascadeout"), format!("CASCADEOUT{side}"));
     }
     Some(out)
 }
@@ -717,10 +730,14 @@ pub fn tie_policy(role: &str) -> TiePolicy {
         // gives a netlist the pin, and which a flow that skips it does
         // without.
         TiePolicy::One
-    } else if kind == "clk" || kind == "regce" || kind.starts_with("inject") {
+    } else if kind == "clk" || kind == "regce" || kind.starts_with("inject") || kind == "cascadein"
+    {
         // A `RAMB36E1`'s error injection, which only the correction reads:
         // Vivado leaves both pins unconnected on a block it infers
         // (`ib_1024x36`), and grounds them only when a design ties them.
+        // A cascade's input, which only an `UPPER` block reads and which no
+        // interconnect reaches: Vivado's netlist has `<const1>` on the
+        // `LOWER` block's (`memarr/sdp_65536x1`), which is nothing to route.
         TiePolicy::Leave
     } else if kind.starts_with("din") {
         TiePolicy::Idle
@@ -1193,6 +1210,7 @@ pub fn ramb36_features(
             half.insert(name.to_owned(), AttrValue::Int(narrow));
         }
     }
+    own.extend(ramb36_extension(params)?);
     // A word's bits alternate between the halves.
     let split = |name: &str, lower: bool| -> Option<AttrValue> {
         let value = params(name)?;
@@ -1229,6 +1247,52 @@ pub fn ramb36_features(
         // not have (`b36_sdp72` against `b18_sdp36`).
         if sdp && params("READ_WIDTH_A").and_then(|v| v.as_int()) == Some(72) {
             out.push(format!("{prefix}.READ_WIDTH_A_18"));
+        }
+    }
+    Ok(out)
+}
+
+/// The features of a `RAMB36E1`'s cascade: `RAMB36.RAM_EXTENSION_<x>_LOWER`
+/// for a port whose `RAM_EXTENSION_<x>` is `LOWER`, and nothing for `UPPER`
+/// or `NONE`, which the database has as one feature,
+/// `RAM_EXTENSION_<x>_NONE_OR_UPPER`, the bit clear.
+///
+/// **Vivado's**, decoded from its bitstreams: `bram/b36_cascade` and
+/// `memarr/sdp_65536x1` each set `RAM_EXTENSION_A_LOWER` and `_B_LOWER` in
+/// the lower block's tile and no cascade feature in the upper's; a single port
+/// (`memarr/bw_sp_rf_65536x16_b8`) sets port A's alone. Vivado's model of the
+/// cell refuses a cascaded port not 1 bit wide both ways (`RAMB36E1.v`'s
+/// "has to be set to 1"), and so does this.
+///
+/// # Errors
+///
+/// A value other than the three, or a cascaded port of another width.
+fn ramb36_extension(params: &dyn Fn(&str) -> Option<AttrValue>) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for side in ['A', 'B'] {
+        let key = format!("RAM_EXTENSION_{side}");
+        let value = match params(&key) {
+            None => continue,
+            Some(AttrValue::String(text)) => text.to_ascii_uppercase(),
+            Some(other) => return Err(format!("`{key}` is {other:?}")),
+        };
+        match value.as_str() {
+            "NONE" => continue,
+            "LOWER" | "UPPER" => {}
+            other => return Err(format!("`{key}` is `{other}`, not NONE, LOWER or UPPER")),
+        }
+        for width in ["READ_WIDTH_", "WRITE_WIDTH_"] {
+            let name = format!("{width}{side}");
+            let got = params(&name).and_then(|v| v.as_int()).unwrap_or(0);
+            if got != 1 {
+                return Err(format!(
+                    "`{key}` is `{value}`, which a port {got} bits wide (`{name}`) cannot be: \
+                     a cascade is one bit wide"
+                ));
+            }
+        }
+        if value == "LOWER" {
+            out.push(format!("RAMB36.RAM_EXTENSION_{side}_LOWER"));
         }
     }
     Ok(out)
@@ -2121,6 +2185,14 @@ impl XrayFabric {
                 wants.push((TiePolicy::One, instance.name.clone(), role.clone(), *node));
                 continue;
             }
+            // A cascade's input not routed from the block below: no
+            // interconnect reaches it, so a constant on it is nothing to make
+            // (`bram/b36_cascade`'s lower block ties it low; Vivado's netlist
+            // of `memarr/sdp_65536x1` has `<const1>`), and only an `UPPER`
+            // block reads it.
+            if role.ends_with("_cascadein") {
+                continue;
+            }
             // An address bit below the width mode's own range, or a data
             // bit nothing stores or nothing reads, is one that does not matter,
             // whether the netlist gives it a constant or nothing at all,
@@ -2860,6 +2932,41 @@ mod tests {
         assert!(mode_features(&params(&ecc)).unwrap_err().contains("SDP"));
         let wide = [("READ_WIDTH_A", AttrValue::Int(36))];
         assert!(mode_features(&params(&wide)).is_err());
+    }
+
+    /// **A cascade's one feature is the lower block's**: `RAM_EXTENSION_<x>`
+    /// `LOWER` sets `RAMB36.RAM_EXTENSION_<x>_LOWER` and `UPPER` nothing, as
+    /// Vivado's bitstreams of `b36_cascade` and `memarr/sdp_65536x1` decode; a
+    /// port not cascaded nothing; and a cascaded port not one bit wide, or a
+    /// value Vivado's model does not have, is refused. Would catch the feature
+    /// on the upper block, on both, on neither, or a wide port cascaded.
+    #[test]
+    fn a_cascade_sets_the_lower_blocks_extension() {
+        let one = |extension: &str| {
+            [
+                ("READ_WIDTH_A", AttrValue::Int(1)),
+                ("WRITE_WIDTH_A", AttrValue::Int(1)),
+                ("READ_WIDTH_B", AttrValue::Int(1)),
+                ("WRITE_WIDTH_B", AttrValue::Int(1)),
+                ("RAM_EXTENSION_A", AttrValue::String(extension.to_owned())),
+            ]
+        };
+        let cascade = |f: &[String]| -> Vec<String> {
+            f.iter()
+                .filter(|f| f.contains("EXTENSION"))
+                .cloned()
+                .collect()
+        };
+        let lower = ramb36_features(&params(&one("LOWER")), LutRamModel::Vivado, &[]).unwrap();
+        assert_eq!(cascade(&lower), ["RAMB36.RAM_EXTENSION_A_LOWER"]);
+        for value in ["UPPER", "NONE"] {
+            let f = ramb36_features(&params(&one(value)), LutRamModel::Vivado, &[]).unwrap();
+            assert!(cascade(&f).is_empty(), "{value}");
+        }
+        assert!(ramb36_features(&params(&one("MIDDLE")), LutRamModel::Vivado, &[]).is_err());
+        let mut wide = one("LOWER");
+        wide[0].1 = AttrValue::Int(2);
+        assert!(ramb36_features(&params(&wide), LutRamModel::Vivado, &[]).is_err());
     }
 
     /// A `RAMB36E1`'s features are its halves', each half as wide, a word's

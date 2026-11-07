@@ -834,8 +834,25 @@ pub fn vivado_implementation(
                             ]
                         })
                         .collect(),
-                    // Their wide multiplexers are leaves too, and how Vivado
-                    // names those has not been asked.
+                    // With their wide multiplexers, as Vivado names the leaves
+                    // of `memarr/sp_as_128x1` and `sp_as_256x1` placed: only
+                    // counted, since Vivado places the macro by its site.
+                    "RAM128X1S" => [("LOW", "D6LUT"), ("HIGH", "C6LUT"), ("F7", "F7BMUX")]
+                        .map(|(l, b)| (l.to_owned(), b.to_owned()))
+                        .to_vec(),
+                    "RAM256X1S" => [
+                        ("RAMS64E_A", "A6LUT"),
+                        ("RAMS64E_B", "B6LUT"),
+                        ("RAMS64E_C", "C6LUT"),
+                        ("RAMS64E_D", "D6LUT"),
+                        ("F7.A", "F7AMUX"),
+                        ("F7.B", "F7BMUX"),
+                        ("F8", "F8MUX"),
+                    ]
+                    .map(|(l, b)| (l.to_owned(), b.to_owned()))
+                    .to_vec(),
+                    // The others' wide multiplexers are leaves too, and how
+                    // Vivado names those has not been asked.
                     _ => {
                         return fail(format!(
                             "`{}` is a `{primitive}`, which is not written for Vivado yet",
@@ -850,11 +867,16 @@ pub fn vivado_implementation(
                         .set("IS_WCLK_INVERTED", AttrValue::Const(Const::from_u64(1, 1)));
                 }
                 writer.plain(&name, &written, &view, base, &[])?;
-                // Vivado places a `RAM32M`, a `RAM64M` or a `RAM64X2S` by its
-                // site alone, and expands it by its own shape, which is this
-                // fabric's: placed leaf by leaf, it says `Cannot expand macro
-                // instance` (12-1409) on any site, alone in the design.
-                if matches!(base, "RAM32M" | "RAM64M" | "RAM64X2S") {
+                // Vivado places a `RAM32M`, a `RAM64M`, a `RAM64X2S`, a
+                // `RAM128X1S` or a `RAM256X1S` by its site alone, and expands
+                // it by its own shape, which is this fabric's: placed leaf by
+                // leaf, it says `Cannot expand macro instance` (12-1409) on
+                // any site, alone in the design (the last two measured on
+                // `memarr/sp_as_256x2` and `sp_rf_256x24`).
+                if matches!(
+                    base,
+                    "RAM32M" | "RAM64M" | "RAM64X2S" | "RAM128X1S" | "RAM256X1S"
+                ) {
                     writer.placed.push(format!("  {name} {s}"));
                     writer.cells += leaves.len();
                 } else {

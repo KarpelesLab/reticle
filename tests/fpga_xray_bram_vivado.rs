@@ -269,8 +269,12 @@ fn designs() -> Vec<String> {
 ///
 /// | Design | Vivado | Here |
 /// |---|---|---|
-/// | `b36_cascade` | two `RAMB36E1` as one 64 kbit block (`RAM_EXTENSION_*`) | refused: a cascade is not built |
 /// | `ib_1024x32_bytes` | none: Vivado's synthesis aborts on it, an assertion in its block RAM generator (measured again on 2026-11-07) | built: one `RAMB36E1` 36 wide, a byte write enable a lane, as Vivado builds the same memory written through a wire for its address (`memarr/bw_sdp_1024x32_b8_const`) |
+///
+/// `b36_cascade`, two `RAMB36E1` named as one of 64 kbit through the cascade
+/// (`RAM_EXTENSION_*`), was here and refused until the cascade was built
+/// (`docs/fpga-vivado-parity.md`, "Deeper than a block, and single ports, as
+/// Vivado builds them"); its tiles, cells and simulation are Vivado's now.
 ///
 /// Four more were here until the memory arrangement of
 /// `testdata/fpga/vivado/memarr/` (`docs/fpga-vivado-parity.md`, "Memories
@@ -292,10 +296,11 @@ fn designs() -> Vec<String> {
 /// to what its source does under xsim, memory and registers zeroed as a
 /// part's are (`xsim.txt`'s line for it), which the build that dropped the
 /// writes would have failed from the first word read.
-const NOT_AS_VIVADO: &[&str] = &["b36_cascade", "ib_1024x32_bytes"];
+const NOT_AS_VIVADO: &[&str] = &["ib_1024x32_bytes"];
 
-/// The one this flow refuses, and a word of the refusal.
-const REFUSED: &[(&str, &str)] = &[("b36_cascade", "a cascade")];
+/// The designs this flow refuses, and a word of each refusal: none since the
+/// cascade.
+const REFUSED: &[(&str, &str)] = &[];
 
 /// One design through the flow.
 struct Built {
@@ -630,9 +635,13 @@ fn each_design_gets_the_block_rams_vivado_gave_it() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// **What is not built as Vivado builds it says so**: the one refused with
-/// a reason. Would catch a refusal turning into a build (a cascade built
-/// without its neighbour's route).
+/// **What is not built as Vivado builds it says so**: each design refused,
+/// with its reason; and **the cascade named by `b36_cascade` is built**, the
+/// two blocks each a `RAMB36E1` with its `RAM_EXTENSION_*` and the lower's
+/// `CASCADEOUT*` on the upper's `CASCADEIN*` in the routed netlist. Would
+/// catch a refusal coming back for the cascade, and a cascade built with its
+/// pins left open (which every tile feature would still match: the cascade
+/// is a fixed pip, no bit of the tile).
 #[test]
 fn what_is_not_built_says_so() {
     let Some(built) = built() else { return };
@@ -641,6 +650,20 @@ fn what_is_not_built_says_so() {
             built[*name].log.contains(reason),
             "{name}: {}",
             built[*name].log
+        );
+    }
+    let one = &built["b36_cascade"];
+    assert!(one.decoded.is_some(), "{}", one.log);
+    let routed = std::fs::read_to_string(&one.routed).unwrap();
+    for (pin, net) in [
+        ("CASCADEOUTA", "ca"),
+        ("CASCADEINA", "ca"),
+        ("CASCADEOUTB", "cb"),
+        ("CASCADEINB", "cb"),
+    ] {
+        assert!(
+            routed.contains(&format!(".{pin}({net})")),
+            "{pin}: {routed}"
         );
     }
 }
