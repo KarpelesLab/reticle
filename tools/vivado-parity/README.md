@@ -147,6 +147,11 @@ models or IP.
   paths` reads the worst paths' hops, `fill.py setups` every flip-flop's setup by how
   its data arrives, and `fill.py distance` how each measure of a connection's length
   predicts its delay.
+- `routes.tcl` routes one Reticle build's placement with Vivado's router (the lookup
+  tables' pins free) or with Reticle's routes, and writes every net's route, every
+  sink's interconnect delay and each clock's worst paths; `routes.py` compares two such
+  dumps a connection at a time (`summary`, `show`, `pins`) and writes the lines `fill.py
+  distance` reads (`connections`).
 - `clock_arrival.tcl` asks when a global clock reaches every slice column of the
   `xc7a100t` on three rows of each clock region row, from the global buffer named;
   `clock_arrival.py fixture` writes `testdata/fpga/vivado/clock/arrival.txt` from such

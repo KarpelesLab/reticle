@@ -3569,9 +3569,51 @@ pub const CRITICAL_PRESENT_CAP: f64 = 30.0;
 /// a measured optimum.
 pub const CRITICALITY_EXPONENT: i32 = 4;
 
+/// The criticality exponent under the fitted delay model, in place of
+/// [`CRITICALITY_EXPONENT`]'s 4, which the legacy model keeps for the
+/// ChipWhisperer-Husky.
+///
+/// At 4 a connection a tenth short of its domain's longest path weighs delay at
+/// 0.66 and one a third short at 0.20, and the connections Vivado's timer then
+/// found on the latest paths of `testdata/fpga/vivado/qor/` had been routed at
+/// 0.12 to 0.7. On seed 1's placements, over the connections between slices on
+/// paths within 0.3 ns of each clock's latest of Reticle's routes, Reticle's
+/// were 539 ps at the mean and Vivado's routes of the same placements 477, and
+/// 124 of the 448 ended on another input of the table than Vivado's; with this,
+/// [`FITTED_DELAY_WEIGHT`] and `route::Timing::keep_criticality`, 454 against
+/// 442 and 43 of 367. Over ten seeds the corpus's geometric mean under Vivado's
+/// timer went from 1.231 to 1.195 of Vivado's own flow. At 1 it was 1.194, and
+/// its searches visited up to four times the nodes; at 3, with a weight of 1,
+/// 1.216 against 1.202 at 2. Measured on 2026-11-07; `docs/fpga-vivado-parity.md`,
+/// "Routing against Vivado's routes".
+pub const FITTED_CRITICALITY_EXPONENT: i32 = 2;
+
+/// [`route::Timing::reroute_above`](crate::fpga::route::Timing) under the fitted
+/// model: the criticality that 0.9 was at [`CRITICALITY_EXPONENT`], raised to
+/// [`FITTED_CRITICALITY_EXPONENT`] instead (0.9 to the power a half), so that
+/// the same connections are ripped up whole.
+pub const FITTED_REROUTE_ABOVE: f64 = 0.949;
+
+/// [`CLAIM_INPUTS`] under the fitted model, moved the same way: 0.3 to the
+/// power a half.
+pub const FITTED_CLAIM_INPUTS: f64 = 0.548;
+
+/// What a picosecond costs against a node of congestion under the fitted model,
+/// as a multiple of what the fabric's own wires make it
+/// ([`route::Timing::delay_weight`](crate::fpga::route::Timing)): a node of
+/// base cost one against 85 ps, where the part's timed wires make it 170 (their
+/// mean base cost over their mean delay). Over ten seeds of the corpus, with
+/// [`FITTED_CRITICALITY_EXPONENT`], 1.195 at 2 against 1.200 at 1.5, 1.202 at 1
+/// and 1.198 at 3, the searches visiting more nodes the higher it is. Before,
+/// the scale counted the ground fans' base of a million, and one unit of cost
+/// was 2.7 ps on `fir8` and 170 on `crc32`.
+pub const FITTED_DELAY_WEIGHT: f64 = 2.0;
+
 /// The criticality, after [`CRITICALITY_EXPONENT`], from which a connection's
-/// search may end on a lookup table's input another signal holds, under the
-/// fitted delay model ([`route::Timing::claim_inputs`](crate::fpga::route::Timing)).
+/// search may end on a lookup table's input another signal holds
+/// ([`route::Timing::claim_inputs`](crate::fpga::route::Timing)), as it was
+/// measured under the fitted delay model at that exponent; the fitted model
+/// takes [`FITTED_CLAIM_INPUTS`] now, the same connections at its own exponent.
 ///
 /// The router lets a sink end on any free input of its table, and the first
 /// signal routed takes whichever it reaches first, whatever its slack; under

@@ -3445,7 +3445,11 @@ for `fill`'s, each fail `tests/fpga_xray_achieved.rs`.
 - **The router.** Five sixths of the difference between Reticle's implementation and
   Vivado's placement and routes of the same netlist, by the first table: a column of
   interconnect is 56 ps on its routes and 33 on Vivado's, and a local route inside a
-  tile goes out and back where Vivado's takes a bounce. Not looked at further.
+  tile goes out and back where Vivado's takes a bounce. Not looked at further here;
+  taken up in [Routing against Vivado's routes](#routing-against-vivados-routes),
+  where `srl_delay`'s latest connections at seed 1 ended on a slow input of their
+  table whose fast one another connection's route had taken, rather than wanting a
+  bounce.
 - **A cost in columns of interconnect** rather than in grid tiles, which the
   connection delays above suggest; not tried.
 - **The clock's arrival on any part but the `xc7a100t`**, which needs the probe run
@@ -3632,6 +3636,282 @@ address. It is not built.
 - Distributed RAM deeper than 32 words for a lane is built by the rule for a whole
   word, which is not measured for one: every byte-write memory measured deeper than 32
   words is over 1,024 bits, Vivado's block RAM.
+- None of it has been on a part.
+
+## Routing against Vivado's routes
+
+**Asked: on the same placement, which connections does Vivado route faster than
+Reticle, how, and why does Reticle's router not?** "Filling slices" left the routes
+as most of what stands between Reticle's implementation and Vivado's: Reticle's
+placements routed by Vivado were 4 to 6 % faster than with Reticle's routes. Run on
+2026-11-07 and 08 at `xc7a100tftg256-3` with Vivado 2026.1, on the timing corpus and
+with `achieved.sh`, ten seeds where it says so, on the tree of 70f566ad; with
+"Byte writes as Vivado arranges them" under it, seed 1 of seven of the designs
+(those with memories, `sad`, `esad`, `crc32`) builds the same bitstreams. **Everything here is Vivado's timer
+of Vivado's or Reticle's routes; nothing has been on a part.**
+
+`tools/vivado-parity/routes.tcl` loads one build's placement and routes it twice:
+with the lookup tables' pins free and Vivado's router (`vivado`), and with Reticle's
+routes fixed (`reticle`); each writes every net's route, every sink's interconnect
+delay, and each clock's hundred worst paths. `routes.py` sets the two side by side a
+connection at a time: `summary` and `show` over the connections on Reticle's paths
+within 0.3 ns of each clock's latest, `pins` which input of a table each tool ends
+them on, and `connections` the lines `fill.py distance` reads. Since the placement
+does not depend on anything changed here, Vivado's routes of the tree before are
+Vivado's routes of every build after.
+
+### Where the time went
+
+Seed 1, the sixteen designs that time a path between slices, before this section
+(70f566ad): over the 448 connections on Reticle's latest paths, Reticle's routes are
+**539 ps at the mean and Vivado's of the same connections 477**. Of the difference,
+324 connections end on the same input of their table in both and cost Reticle 22 ps
+more each; the other **124 end on another input than Vivado's and cost 164 ps more
+each** (`routes.py summary`). The inputs (`routes.py pins`), connections and mean ps:
+
+| input | Reticle | Vivado |
+|---|---|---|
+| 1 | 53 (834) | 42 (659) |
+| 2 | 48 (806) | 28 (682) |
+| 3 | 23 (520) | 31 (539) |
+| 4 | 47 (658) | 22 (642) |
+| 5 | 36 (696) | 70 (623) |
+| 6 | 19 (511) | 33 (423) |
+
+`A1` and `A2` cost about 390 ps past their `IMUX` where `A6` costs none, and
+Reticle put 101 of the critical connections on them where Vivado put 70. On
+`crc32`, `c9__lut194/I1` took `B2` over `NN6BEG SR1BEG SE2BEG SL1BEG SS2BEG SR1BEG_S
+IMUX`, 1,224 ps, where Vivado went `EL1BEG BYP_ALT BYP_BOUNCE IMUX` to `B5`, 481; on
+`widemux`, the select's fanout of 257 reached `c136__lut352` over ten wires in 1,724
+ps where Vivado's took `NN6BEG NW2BEG IMUX` to `C6`, 719.
+
+**Why, read from the router** (a trace of every pass of those signals, not
+committed). Three things, each measured:
+
+1. **The connections that end on the latest path were routed as slack ones.** At
+   `xray::CRITICALITY_EXPONENT`'s 4, a connection a tenth short of its domain's
+   latest path weighs delay at 0.66 and one a third short at 0.20; `crc32`'s
+   `lut194` input was routed at 0.12 to 0.21 in every pass, and `crc[7]`'s branch to
+   `lut214` at 0.16 in the first pass and, at 0.50 to 0.70 in every pass after, never
+   again: a signal is rerouted when it is congested or when one of its connections
+   is past `reroute_above` (0.9 after the exponent, 0.974 before it), and an
+   incremental reroute keeps every branch that is clear. The latest path is a set of
+   such connections.
+2. **A connection off the latest path for one pass is rerouted as slack.** The
+   latest path moves as connections are rerouted. `crc32`'s branch from `$lut23` to
+   `$lut246`, at 0.50 in pass 2, was 0.22 in pass 4, was rerouted for congestion then
+   from 0.41 ns to 1.04, was 0.70 at the next pass, and was on the latest path when
+   the route ended.
+3. **What a picosecond costs against a wire depended on the design's ties, sixty
+   times over.** `route::delay_scale` turns a delay into a cost: the mean base cost
+   of the timed nodes over their mean delay. It counted the ground fans, which the
+   flow closes with a base cost of a million, and so one unit of cost was, in
+   picoseconds:
+
+   | design | one unit |
+   |---|---|
+   | `adders`, `barrel`, `counter64`, `crc32`, `fsm`, `lutram32`, `widemux` | 170 |
+   | `carry_counter` | 172 |
+   | `bram_fifo` | 41 |
+   | `regfile_alu`, `srl_delay` | 28 |
+   | `sad` | 21 |
+   | `esad` | 17 |
+   | `mul18` | 10 |
+   | `gray_cdc` | 7.9 |
+   | `analyser_fifo` | 4.1 |
+   | `fir8` | 2.7 |
+
+   On `fir8` a critical connection weighed delay sixty times over congestion against
+   `crc32`, and its searches' estimate (`ROUTE_TILE_DELAY_PS` scaled the same way)
+   was as far off. Left out, the timed wires of the part make it 170 ps on every
+   design (169.7 to 172.3). The open item "ground-fan tie wires still weigh 1e6 in
+   `route::delay_scale`" of earlier sections is this; under the legacy model, which
+   the Husky builds with, it still is.
+
+### What was changed
+
+All under the fitted delay model, the default; `--delay-model legacy` routes as
+before (below).
+
+1. **The criticality exponent is 2** (`xray::FITTED_CRITICALITY_EXPONENT`), and the
+   thresholds measured at 4 move with it: `reroute_above` 0.949 and the claim of a
+   held input 0.548 (`FITTED_REROUTE_ABOVE`, `FITTED_CLAIM_INPUTS`), 0.9 and 0.3 to
+   the power a half, so that the same connections are ripped up whole and may take a
+   held input as before.
+2. **A delay is weighed against the fabric's wires, twice** (`route::Timing::delay_weight`,
+   `xray::FITTED_DELAY_WEIGHT`): `delay_scale` leaves out a node of base cost
+   `route::TIE_BASE` (1,000) or more and multiplies what is left by the weight, so a
+   node of base one weighs as 85 ps on every design.
+3. **A connection's criticality is never lowered** (`route::Timing::keep_criticality`):
+   each pass's analysis is the larger of what it finds and what the passes before
+   found.
+
+Each over ten seeds, geometric mean against Vivado's own flow (1.231 before):
+
+| exponent | weight | kept | mean |
+|---|---|---|---|
+| 4 | none | no | 1.231 |
+| 4 | none | yes | 1.214 |
+| 1, thresholds not moved | none | no | 1.217 |
+| 1 | none | no | 1.205 |
+| 1 | none | yes | 1.200 |
+| 4 | 1 | no | 1.259 |
+| 4 | 2 | no | 1.240 |
+| 4 | 4 | no | 1.221 |
+| 1 | 1 | no | 1.206 |
+| 1 | 1 | yes | 1.201 |
+| 1 | 2 | yes | 1.194 |
+| 2 | 1 | yes | 1.202 |
+| 2 | 1.5 | yes | 1.200 |
+| **2** | **2** | **yes** | **1.195** |
+| 2 | 2 | no | 1.207 |
+| 2 | 3 | yes | 1.198 |
+| 3 | 1 | yes | 1.216 |
+
+At exponent 1 with the thresholds moved, `sad`'s route visited 46 to 60 million
+nodes against 5.3 before while the scale still counted the ties, and 7.4 million
+with them left out; the weight alone, at exponent 4, is worse than nothing until it
+is 4. Exponent 1 with a weight of 2 was as good as 2 with 2 and visited up to four
+times the nodes (`crc32` 6.5 million against 1.6).
+
+### Before and after
+
+Medians (ns); `before` and `after` over ten seeds, and Vivado's routes of the same
+placements (`achieved.tcl`'s `placement_free`) and `after` over seeds 1 to 5, from
+figures rounded to 10 ps:
+
+| design | clock | Vivado | Vivado's routes, seeds 1-5 | before | after | after, seeds 1-5 |
+|---|---|---|---|---|---|---|
+| adders | clk | 2.042 | 2.210 | 2.390 | 2.228 | 2.230 |
+| analyser_fifo | rd_clk | 3.887 | 5.210 | 5.375 | 5.144 | 5.210 |
+| analyser_fifo | wr_clk | 2.417 | 3.030 | 2.984 | 3.061 | 3.060 |
+| barrel | clk | 2.376 | 2.510 | 2.942 | 2.677 | 2.690 |
+| bram_fifo | clk | 3.388 | 3.870 | 4.046 | 3.996 | 3.980 |
+| carry_counter | clk | 1.855 | 2.270 | 2.404 | 2.373 | 2.380 |
+| counter64 | clk | 3.220 | 3.730 | 3.869 | 3.821 | 3.810 |
+| crc32 | clk | 2.234 | 2.290 | 2.556 | 2.345 | 2.320 |
+| esad | adc_sampleclk | 2.131 | 3.270 | 3.009 | 3.013 | 3.040 |
+| esad | clk_usb | 1.727 | 2.590 | 2.523 | 2.471 | 2.470 |
+| fir8 | clk | 9.142 | 9.160 | 9.161 | 9.161 | 9.160 |
+| fsm | clk | 1.903 | 2.210 | 2.391 | 2.266 | 2.310 |
+| gray_cdc | clk | 1.466 | 1.410 | 1.413 | 1.413 | 1.410 |
+| gray_cdc | clk2 | 1.267 | 1.610 | 1.554 | 1.582 | 1.570 |
+| lutram32 | clk | 1.894 | 1.970 | 2.186 | 2.122 | 2.110 |
+| mul18 | clk | 1.935 | 2.110 | 2.220 | 2.200 | 2.300 |
+| regfile_alu | clk | 5.511 | 5.850 | 6.223 | 6.050 | 6.060 |
+| sad | adc_sampleclk | 2.207 | 4.050 | 3.021 | 2.989 | 2.990 |
+| sad | clk_usb | 1.726 | 2.590 | 2.488 | 2.510 | 2.500 |
+| srl_delay | clk | 1.645 | 1.760 | 1.898 | 1.906 | 1.910 |
+| widemux | clk | 2.438 | 2.710 | 3.503 | 2.878 | 2.850 |
+| geometric mean | | 1 | 1.194 | 1.231 | 1.195 | 1.198 |
+
+**Over the twenty-one clocks Reticle's median is 1.195 times Vivado's own figure,
+against 1.231**; fourteen clocks faster, five slower, the worst `analyser_fifo`'s
+write clock by 2.6 %. **The geometric means of Reticle's routes and Vivado's on the
+same placements are now within 0.4 %, but that is two clocks' doing**: on `sad`'s
+and `esad`'s ADC clocks Vivado's routes are 1.06 and 0.23 ns slower than Reticle's,
+as they were in "Filling slices". Over the other nineteen, Vivado's routes are 1.152
+of Vivado's own flow, Reticle's 1.203 before and 1.180 after: **this closes 45 % of
+the distance between the two routers**, and Vivado's are still faster on most clocks
+(`barrel`, `bram_fifo`, `lutram32`, `srl_delay`, `widemux` by 0.11 to 0.18 ns).
+
+**Per connection, against Vivado's routes**, seed 1 as above: over the 367
+connections on Reticle's latest paths, Reticle's 454 ps and Vivado's 442 (539 and
+477 before); 43 end on another input than Vivado's (124 of 448), and those cost 55 ps
+more each (164). Inputs 1 and 2 take 35 of the 367 in both. Over every
+connection between slices of fanout four or less (`fill.py distance`, the same
+sixteen designs), a column of interconnect costs 26 ps on Vivado's routes, 47 on
+Reticle's before and 44 after, a row 37, 43 and 42: what is left between the two is
+mostly in connections with slack, which Vivado routes longer (404 ps where the
+distance is nothing, Reticle 375 and 369) and Reticle shorter. *The reading of
+"Filling slices"*, 33 against 56 ps a column, was of eight designs over every seed;
+this is of sixteen at seed 1.
+
+### Runtime
+
+Two runs each of seed 1, side by side on the same machine, the route stage (which
+includes the costs the flow gives the router) and the nodes its searches visited:
+
+| design | before | after | visits before | after |
+|---|---|---|---|---|
+| `counter64` | 1.94, 1.95 s | 2.13, 1.94 s | 0.75 million | 5.16 |
+| `sad` | 3.45, 3.40 s | 2.43, 2.30 s | 5.36 | 5.60 |
+| `widemux` | 2.99, 3.42 s | 2.73, 3.30 s | 6.57 | 10.68 |
+
+The searches do more (`widemux` 63 % more visits, `counter64` seven times and 31
+passes against 13), and the stage is no slower because the commit before this
+section's asks each wire name of the clock patterns once (`XrayFabric::node_costs`,
+0.89 s of `counter64`'s 2.7 s before the router was called, 0.21 s after), which is
+byte for byte the same build.
+
+### Tried and not kept
+
+Each over five or ten seeds against the build it was tried on, by the geometric
+mean:
+
+- **Rerouting more signals whole**: `reroute_above` 0.3 and 0.1 at exponent 4, 1.228
+  and 1.249 against 1.221 (five seeds); four clean-ups rather than two, 1.221. On the
+  build kept, ten seeds: `reroute_above` 0.8, 1.196 against 1.195; four clean-ups,
+  1.192, seven clocks faster and five slower, 3 % more visits. That is inside a
+  seed's spread and was left out: one more setting for a third of a percent.
+- **A connection forced to reroute** when it is critical (from 0.1, 0.2 or 0.4) and
+  slower by a tenth and 30 ps than a search for delay alone finds: 1.234, 1.238 and
+  1.221 against 1.221 at five seeds (from 0.4, 1.228 against 1.231 at ten), and from
+  0.4 with the criticality kept, 1.210 against 1.214. It does what it says (`crc32`'s
+  `lut214` input from 872 ps to 470) and something else is then the latest path. On
+  the build kept, from 0.3: 1.191 against 1.195, for 2.4 times the visits on `sad`
+  and 2.2 on `esad`; not worth them.
+- **A cheaper estimate of a critical search's congestion**, the base cost charged a
+  tile at a half and a quarter: 1.221 and 1.226 against 1.221.
+- **A lookahead table** of the least delay and base cost to a sink, by wire class
+  and offset within eight tiles, from the searches back from eight of the design's
+  sinks: at exponent 1, the critical searches visited two to six times the nodes
+  (`sad` 276 million against 54) with the estimate weighed at 1 to 2, and Reticle's
+  own estimate of the routes was no better on the three designs tried. The per-tile
+  estimate overstates the way near the sink and the table did not, and the search
+  spent the difference.
+- **A critical search's estimate weighed at 1.5** rather than 1 at exponent 1: 1.206
+  against 1.201, fewer visits.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--delay-model legacy`: the
+exponent, the thresholds, the scale and the criticality are as before, and with this
+tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4's `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`.
+**Checked.**
+
+### Tests
+
+`a_weighed_delay_leaves_the_ties_out_and_takes_the_weight` (`route`) holds the
+scale with a tie and without, and a priced node under `TIE_BASE` counted;
+`a_kept_criticality_never_falls` the rule; `tests/fpga_xray_achieved.rs` this
+section's runs (`routed`, ten seeds, and `vroutes`, Vivado's routes of seeds 1 to 5):
+no slower than `fillall` by at least 2 % over the corpus, no clock more than 4 %
+over its own, and seeds 1 to 5 within 1 % of Vivado's routes.
+
+**Mutations**, made by a script and put back: the ties counted when weighed, the
+weight left out, the threshold moved to 100, and the kept criticality taking the
+old figure over a higher new one or ignoring it, each failing its test. **One passed:
+the route not calling the rule**, which no unit test here holds; the corpus under
+Vivado's timer measured it (1.207 without, 1.195 with). In the fixture, `routed`
+swapped with `fillall` and a seed of `routed` lost each fail the corpus's test;
+`vroutes` given `routed`'s own figures passes it, since it only bounds `routed` from
+above.
+
+### Not done
+
+- **The rest of the routers' difference**, 2.3 points of the 5.1 left out of the two
+  ADC clocks. What is left per connection is small on the latest paths (12 ps); a
+  path's other connections, and which paths end up latest, are where to look.
+- **Why Vivado's routes lose a nanosecond on `sad`'s and `esad`'s ADC clocks** on
+  Reticle's placements: not looked at.
+- **The legacy model's scale**, which still counts the ties: changing it changes the
+  Husky's bitstreams, and is the user's to decide once the board is free.
+- **A lookahead that pays for itself**: one that gives the search a tighter estimate
+  than the per-tile figure where it underestimates, without being looser where it
+  overestimates.
 - None of it has been on a part.
 
 ## Wide multiplexers

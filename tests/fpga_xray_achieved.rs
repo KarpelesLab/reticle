@@ -337,3 +337,48 @@ fn filling_slices_costs_the_corpus_no_clock_and_a_tenth_of_its_slices() {
         "slices: {fill} and {fillall} against {before}"
     );
 }
+
+/// **The routes of "Routing against Vivado's routes" make the corpus faster and
+/// close most of the distance to Vivado's own routes of the same placements.**
+/// `routed` is `fillall` with the change, ten seeds each, and `vroutes` is
+/// `fillall`'s placements at seeds 1 to 5 routed by Vivado with the tables' pins
+/// free. The geometric mean against Vivado's own flow went from 1.231 to 1.195;
+/// this holds it at least 2 % under, no clock's median more than 4 % over its own
+/// `fillall` (the worst, `analyser_fifo`'s `wr_clk`, 2.6 %), and over seeds 1 to
+/// 5, where `vroutes` is 1.194, `routed` within 1 % of it (1.198). Would catch a
+/// regeneration that lost the change, swapped `routed` and `fillall` or lost a
+/// seed (each made and caught); would not catch `vroutes` replaced by slower
+/// figures, `routed`'s own among them (made, and passed), nor the flow losing
+/// the change since, which needs Vivado.
+#[test]
+fn the_routes_close_most_of_the_distance_to_vivados_on_the_same_placements() {
+    let Some(table) = achieved() else { return };
+    let mut logs = [0.0f64; 4];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (fill, routed, vroutes) = (&builds["fillall"], &builds["routed"], &builds["vroutes"]);
+        assert_eq!(routed.len(), 10, "{design} {clock}: seeds of `routed`");
+        assert_eq!(vroutes.len(), 5, "{design} {clock}: seeds of `vroutes`");
+        let (before, after) = (median(fill), median(routed));
+        assert!(
+            after <= before * 1.04,
+            "{design} {clock}: {after:.3} ns routed against {before:.3}"
+        );
+        for (log, ns) in logs
+            .iter_mut()
+            .zip([before, after, median(&routed[..5]), median(vroutes)])
+        {
+            *log += (ns / vivado).ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, first, vivados] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 0.98,
+        "geometric mean against Vivado's own flow: {after:.3} routed, {before:.3} before"
+    );
+    assert!(
+        first <= vivados * 1.01,
+        "seeds 1 to 5: {first:.3} routed against {vivados:.3} for Vivado's routes"
+    );
+}

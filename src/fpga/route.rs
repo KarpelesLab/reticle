@@ -538,6 +538,26 @@ pub struct Timing {
     ///
     /// [`place::estimated_wire`]: crate::fpga::place::estimated_wire
     pub seed_from_placement: bool,
+    /// What a unit of delay costs against a node of congestion, as a multiple
+    /// of what the fabric's own wires make it, or zero for the scale as it
+    /// was. The scale (`delay_scale`) is the mean base cost of the timed nodes over
+    /// their mean delay, which counts a node closed by a base of
+    /// [`TIE_BASE`] or more at that base. Above zero such nodes are left out,
+    /// so that the balance between delay and congestion is the fabric's and
+    /// not a count of a design's tied wires, and the scale is multiplied by
+    /// this.
+    pub delay_weight: f64,
+    /// Whether a connection's criticality, once a pass has given it one, is
+    /// never lowered by a later pass: each pass's analysis is the larger of
+    /// what it finds and what the passes before found.
+    ///
+    /// The latest path moves as connections are rerouted, and a connection
+    /// off it for a pass is rerouted for congestion as if it had slack: on
+    /// `crc32` one went from 0.41 ns to 1.04 ns at a criticality of 0.22, was
+    /// 0.70 critical at the next pass, and was on the latest path when the
+    /// route ended. Kept, it is weighed as the critical connection
+    /// it was.
+    pub keep_criticality: bool,
 }
 
 impl Timing {
@@ -567,6 +587,8 @@ impl Timing {
             claim_inputs: f64::INFINITY,
             critical_astar: 0.0,
             seed_from_placement: false,
+            delay_weight: 0.0,
+            keep_criticality: false,
         }
     }
 }
@@ -958,7 +980,8 @@ impl Geometry {
         timing: Option<&Timing>,
     ) -> Vec<Geometry> {
         let delays = timing.map_or(&[][..], |t| &t.node_delay[..]);
-        let scale = delay_scale(graph.nodes.len(), base, closed, delays);
+        let weight = timing.map_or(0.0, |t| t.delay_weight);
+        let scale = delay_scale(graph.nodes.len(), base, closed, delays, weight);
         graph
             .nodes
             .iter()
@@ -1186,6 +1209,7 @@ pub fn route(
                 &options.node_base,
                 &options.closed,
                 &timing.node_delay,
+                timing.delay_weight,
             );
     }
     if let Some(timing) = options.timing.as_ref() {
@@ -1344,7 +1368,10 @@ pub fn route(
             }
         }
         let critical = options.timing.as_ref().map(|timing| {
-            let (sinks, longest) = analyse(netlist, graph, &terminals, &routing, timing);
+            let (mut sinks, longest) = analyse(netlist, graph, &terminals, &routing, timing);
+            if timing.keep_criticality {
+                keep_highest(&mut sinks, &criticality);
+            }
             criticality = sinks;
             longest
         });
@@ -1502,6 +1529,16 @@ const STALL: usize = 10;
 /// clean-ups that converge quickly and stops paying for the rest.
 const CLEANUP_PASSES: u32 = 12;
 
+/// Raises each of `new`'s criticalities to what `old` gave the same sink, where
+/// that was higher: [`Timing::keep_criticality`].
+fn keep_highest(new: &mut [Vec<f64>], old: &[Vec<f64>]) {
+    for (new, old) in new.iter_mut().zip(old) {
+        for (n, o) in new.iter_mut().zip(old) {
+            *n = n.max(*o);
+        }
+    }
+}
+
 /// The signals in the order their most critical sink says, the most critical
 /// first and a tie in netlist order: the order of every pass when
 /// [`Timing::seed_from_placement`] gives the criticality before the first.
@@ -1536,17 +1573,37 @@ fn estimate_weight(criticality: f64, critical: f64, otherwise: f64) -> f64 {
 /// a hundred times dearer on the ChipWhisperer-Husky Plus than its own
 /// wires would. That is what every build of it on a part was measured
 /// with, so it is kept until a build without it has been.
-fn delay_scale(nodes: usize, base: &[f32], closed: &[bool], delays: &[u32]) -> f64 {
+///
+/// With a `weight` above zero ([`Timing::delay_weight`]) a node of base
+/// [`TIE_BASE`] or more is left out as well, and the scale is multiplied by
+/// the weight. Counted, the 7-series ground fans made one unit of cost
+/// anything from 2.7 ps (`fir8`) to 170 ps (a design with no fans) over the
+/// designs of
+/// `testdata/fpga/vivado/qor/`: the same connection weighed delay sixty
+/// times over congestion in one design and not in another.
+fn delay_scale(nodes: usize, base: &[f32], closed: &[bool], delays: &[u32], weight: f64) -> f64 {
     let (mut cost, mut delay) = (0.0, 0.0);
     for node in 0..nodes {
         let d = delays.get(node).copied().unwrap_or(0);
+        let b = base.get(node).copied().unwrap_or(1.0);
+        if weight > 0.0 && b >= TIE_BASE {
+            continue;
+        }
         if d > 0 && !closed.get(node).copied().unwrap_or(false) {
-            cost += f64::from(base.get(node).copied().unwrap_or(1.0));
+            cost += f64::from(b);
             delay += f64::from(d);
         }
     }
-    if delay > 0.0 { cost / delay } else { 0.0 }
+    let scale = if delay > 0.0 { cost / delay } else { 0.0 };
+    if weight > 0.0 { scale * weight } else { scale }
 }
+
+/// The base cost from which `delay_scale`, given a weight, takes a node for
+/// a wire closed by its price rather than a wire anybody pays for: the
+/// 7-series flow closes its ground fans at a million
+/// (`xray::TieWires::close`), and no wire of any fabric here costs more than a
+/// few.
+pub const TIE_BASE: f32 = 1.0e3;
 
 /// Static timing analysis of a routing: every connection's criticality,
 /// by signal in `terminals` order and sink in its order, and the longest
@@ -5813,6 +5870,48 @@ mod tests {
         assert!(shut.verify(&netlist, &graph, &placement).is_empty());
     }
 
+    /// **Given a weight, a tie does not weigh in what a delay costs either,
+    /// and the weight does.** Three timed nodes of 10 ps, one of them a ground
+    /// fan's base of a million: with no weight the scale is the million's, as
+    /// the legacy model has it; with a weight of 2 it is twice the two wires'
+    /// own, 0.2, and a node of the tie's base just under [`TIE_BASE`] still
+    /// counts.
+    ///
+    /// What it would catch: the tie counted when weighed, the weight left out,
+    /// or the threshold moved past a wire that does cost something. What it
+    /// would not catch: a fabric pricing a wire it means to close below
+    /// [`TIE_BASE`], whose delay would then be weighed as before.
+    #[test]
+    fn a_weighed_delay_leaves_the_ties_out_and_takes_the_weight() {
+        let base = [1.0, 1.0, 1.0e6];
+        let delays = [10, 10, 10];
+        assert!(delay_scale(3, &base, &[], &delays, 0.0) > 1.0e4);
+        let weighed = delay_scale(3, &base, &[], &delays, 2.0);
+        assert!(
+            (weighed - 0.2).abs() < 1e-12,
+            "twice 2 over 20 ps: {weighed}"
+        );
+        let under = [1.0, 1.0, TIE_BASE - 1.0];
+        let counted = delay_scale(3, &under, &[], &delays, 1.0);
+        let expected = f64::from(TIE_BASE + 1.0) / 30.0;
+        assert!(
+            (counted - expected).abs() < 1e-9,
+            "{counted} against {expected}"
+        );
+    }
+
+    /// **A kept criticality is the larger of the pass's and the one before.**
+    /// A sink that fell keeps its old figure, one that rose takes its new one.
+    /// What it would catch: the old figure ignored, or taken over a higher
+    /// new one. What it would not catch: the route not calling it, which only
+    /// the corpus under Vivado's timer showed (`docs/fpga-vivado-parity.md`).
+    #[test]
+    fn a_kept_criticality_never_falls() {
+        let mut new = vec![vec![0.2, 0.9], vec![0.5]];
+        keep_highest(&mut new, &[vec![0.7, 0.4], vec![0.5]]);
+        assert_eq!(new, vec![vec![0.7, 0.9], vec![0.5]]);
+    }
+
     /// **A closed node does not weigh in what a delay costs.**
     /// [`delay_scale`] is the mean base cost of the timed nodes over their
     /// mean delay; a node closed by a base of a million, as the 7-series
@@ -5830,12 +5929,12 @@ mod tests {
     fn a_closed_node_is_left_out_of_what_a_delay_costs() {
         let base = [1.0, 1.0, 1.0e6];
         let delays = [10, 10, 10];
-        let open = delay_scale(3, &base, &[], &delays);
+        let open = delay_scale(3, &base, &[], &delays, 0.0);
         assert!(
             open > 1.0e4,
             "a base of a million counts when it is not closed: {open}"
         );
-        let shut = delay_scale(3, &base, &[false, false, true], &delays);
+        let shut = delay_scale(3, &base, &[false, false, true], &delays, 0.0);
         assert!(
             (shut - 0.1).abs() < 1e-12,
             "two nodes of base 1 over 20 ps: {shut}"

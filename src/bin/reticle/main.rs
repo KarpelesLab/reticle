@@ -4585,9 +4585,23 @@ fn write_xc7_bitstream(
                         max_criticality: 0.99,
                         cleanups: 2,
                         tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
-                        exponent: reticle::fpga::xray::CRITICALITY_EXPONENT,
+                        // Under the fitted model the exponent is lower and
+                        // its thresholds move with it, a picosecond is
+                        // weighed against the fabric's own wires and not its
+                        // ties, and a criticality once given is kept: see
+                        // `xray::FITTED_CRITICALITY_EXPONENT`. The legacy
+                        // model, which the Husky builds with, routes as it did.
+                        exponent: if fitted {
+                            reticle::fpga::xray::FITTED_CRITICALITY_EXPONENT
+                        } else {
+                            reticle::fpga::xray::CRITICALITY_EXPONENT
+                        },
                         passes: 4,
-                        reroute_above: 0.9,
+                        reroute_above: if fitted {
+                            reticle::fpga::xray::FITTED_REROUTE_ABOVE
+                        } else {
+                            0.9
+                        },
                         paths: Some(paths),
                         present_cap: reticle::fpga::xray::CRITICAL_PRESENT_CAP,
                         present_cap_run: reticle::fpga::xray::CRITICAL_CAP_RUN,
@@ -4605,7 +4619,7 @@ fn write_xc7_bitstream(
                             0
                         },
                         claim_inputs: if fitted {
-                            reticle::fpga::xray::CLAIM_INPUTS
+                            reticle::fpga::xray::FITTED_CLAIM_INPUTS
                         } else {
                             f64::INFINITY
                         },
@@ -4615,6 +4629,12 @@ fn write_xc7_bitstream(
                             0.0
                         },
                         seed_from_placement: fitted,
+                        delay_weight: if fitted {
+                            reticle::fpga::xray::FITTED_DELAY_WEIGHT
+                        } else {
+                            0.0
+                        },
+                        keep_criticality: fitted,
                     })
             }),
             ..RouteOptions::default()
