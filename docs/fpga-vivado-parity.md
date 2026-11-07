@@ -91,7 +91,9 @@ its `CFGMCLK` is 65 MHz from time zero.
 The simulator had six faults these found, each fixed or refused with a test of its
 own: a fractional delay rounded to the unit and not the precision; `m[i][j]` read
 element `j` of `m` (and `mem[a][7:0] <= d` was dropped, which is how
-`ib_1024x32_bytes` came to be built wrongly: see [Block RAM](#block-ram)); an integer
+`ib_1024x32_bytes` came to be built wrongly: see [Block RAM](#block-ram); it is
+written as xsim writes it since, [Byte writes as Vivado arranges
+them](#byte-writes-as-vivado-arranges-them)); an integer
 division inside a real expression was divided as reals; a function's `real` argument
 was one bit wide; `q <= #(d) v` with `d` a variable assigned at once; and an array of
 `real` failed validation or rounded what it held. The last two are refused now.
@@ -2921,8 +2923,8 @@ never loads, pass every test here.
   wanted, at the measured cost.
 - **A loop of part-selects reading a memory**, as the vendor's asymmetric template is
   written, is reads on no clock in the synthesis here.
-- **Byte writes**, still refused by the frontend (`ib_1024x32_bytes`), and so not asked
-  again here.
+- ~~**Byte writes**, still refused by the frontend (`ib_1024x32_bytes`), and so not asked
+  again here.~~ *Done in "Byte writes as Vivado arranges them", below.*
 - **Placing a memory's two `RAMB18E1` copies in one tile**, as Vivado does: the placer's
   (not touched here).
 - None of it has been on a part.
@@ -3452,6 +3454,186 @@ for `fill`'s, each fail `tests/fpga_xray_achieved.rs`.
 - **Why the setup has two figures** a pin, about 0.1 ns apart.
 - None of it has been on a part.
 
+## Byte writes as Vivado arranges them
+
+**Asked: does a memory written a byte at a time (`mem[a][8*i +: 8] <= d[8*i +: 8]`
+under `we[i]`, the vendor's byte-write template, and its other spellings) simulate
+as xsim simulates it, and is it built as Vivado builds it?** Before, the frontend
+refused it ("Block RAM", the correction there), having first written the wrong
+element or nothing. Run on 2026-11-07, Vivado 2026.1, `xc7a100tftg256-1`.
+**Everything here is Vivado's synthesis, bitstreams and simulator; nothing has been
+on a part.**
+
+### Simulation
+
+The IR has a target for part of an element, `Lvalue::MemPart` (`docs/ir.md`), and
+both simulators take it. **Measured**: `testdata/sim/mem_part_tb.v` and
+`mem_part_sv_tb.sv`, testbenches written here, print every case (a select partly and
+wholly outside the element, an `x` in the address, the index or an enable, elements
+ascending, signed, not counted from zero and packed arrays of bytes, the clocked
+byte-write loop, two non-blocking writes of one word in one step) and Reticle's event
+simulator prints what xsim printed, line for line; `mem_part_tb.vhd` holds itself to
+xsim's values for VHDL's `mem(a)(15 downto 8) <= d`. `docs/simulation.md` has the rest,
+and what is left: a *read* partly outside an element reads all `x` here where xsim
+reads the bits inside, as for any vector.
+
+### What Vivado does
+
+`testdata/fpga/vivado/memarr/` has 53 more designs, `bw_` (`gen_memarr.py`): lanes of
+8 and 9 bits, widths 16 to 72, depths 16 to 65,536, simple, single (read first, written
+first, unchanged) and true dual port, the loop, a process per lane out of a `generate`
+and constant bounds, with and without contents, and lanes of 4 and of 16. **Measured**,
+read off Vivado's netlists (`vivado.txt`'s `params`, and the pins of its `.cells`):
+
+- **The arrangement is a word's, counted in lanes of nine bits, where a block at the
+  depth is 9 bits wide or more.** A lane of eight leaves its ninth, parity, pin unused;
+  a lane of nine puts bits 0 to 7 on `DIADI[8k+7:8k]` and bit 8 on `DIPADIP[k]`
+  (`bw_sdp_1024x36_b9`). So `bw_sdp_1024x32_b8` is one `RAMB36E1` 36 wide, as
+  `sdp_1024x32`; but `bw_sdp_4096x16_b8` is two `RAMB36E1` of 9 a byte each where
+  `sdp_4096x16` is 9 bits and 7, `bw_sdp_2048x24_b8` a `RAMB36E1` of 18 and a
+  `RAMB18E1` of 9, and `bw_sdp_1024x72_b8` two `RAMB36E1` and a `RAMB18E1` for the ninth
+  byte where `sdp_1024x72` is two `RAMB36E1`. Simple dual port at 512 words as before,
+  a lane a bit of `WEBWE`.
+- **Each lane's enable is a write enable**, `WEA[k]` or `WEBWE[k]`; a lane of sixteen
+  drives two (`bw_sdp_1024x32_b16`). Where a block holds one lane (9 bits or fewer)
+  Vivado ties `WEA[0]` high and the others low and puts the lane's enable on `ENARDEN`.
+- **Deeper, each lane is arranged alone**: `bw_sdp_8192x16_b8` four `RAMB36E1` of 4,
+  `bw_sdp_16384x16_b8` eight of 2; at 65,536 words, 32 `RAMB36E1` cascaded in pairs.
+- **Lanes of four are not byte enables**: `bw_sdp_1024x16_b4` is a `RAMB18E1` a lane.
+- **Distributed RAM, up to 32 words, is a `RAM32X1D` a bit** (`bw_sdp_16x32_b8`,
+  `bw_sdp_32x16_b8`, `bw_sdp_32x24_b8`), where a memory written a word at a time is
+  `RAM32M`s; the line between block and distributed is the whole memory's 1,024 bits
+  (`bw_sdp_32x32_b8` and `bw_sdp_64x16_b8` are a `RAMB18E1`).
+- **A single port read only while no lane is written is `NO_CHANGE`**
+  (`bw_sp_nc_*`); read first and true dual port as before.
+- **A single port read first lane by lane is single-port distributed RAM**,
+  `RAM256X1S`, 128 of them for `bw_sp_wf_1024x32_b8`, 32 kbit in lookup tables.
+- **A single port of 32 by 32 is both ports of a `RAMB18E1`, a half each**
+  (`bw_sp_rf_32x32_b8`).
+- The constant-bounds spelling builds; `bram/ib_1024x32_bytes`, the same writes on a
+  shift register's bits directly, crashes `synth_design` ("Block RAM").
+
+### What was changed
+
+1. **The frontends**: `mem[a][j]`, `mem[a][7:0]`, `mem[a][j +: 8]`, `mem[a][j -: 8]` and
+   SystemVerilog's selects of a packed element, and VHDL's static slices and indices of
+   an element, are `MemPart`s. A continuous assignment to part of an element and a VHDL
+   slice whose bounds move with a loop's index are refused.
+2. **Synthesis**: a `MemPart` is a write port whose enable has a bit per bit of the
+   element; ports of one address and clock that follow one another are merged into one
+   (`synth::proc::write_ports`), the later winning a bit two write.
+3. **The mapper**: a memory whose lanes are bytes is mapped with the byte write enables
+   (`primitives::vivado_lane_columns`), its contents through the same pins; one read
+   only when no lane is written is a no-change pair; a lane in distributed RAM is a
+   `RAM32X1D` a bit up to 32 words. Anything else, and the other families and
+   `--memories legacy`, are built a memory per lane (`fpga::lanes`), exactly.
+
+### What it is now
+
+**Measured** (`tests/fpga_xray_memarr_vivado.rs`): of the 53, **48 get Vivado's cells**;
+**all 75 of their block RAM tiles are Vivado's**, site feature for site feature and
+contents bit for contents bit, the four with contents and the nine-bit lanes' parity
+included; every set bit decodes, none unexplained, and every mapping is proved; and
+**every one of the 53 routed netlists answers as Vivado's build does**, 2,000 cycles
+under xsim on Vivado's models. One thing on the pins is not Vivado's and no tile shows
+it: a block holding one lane has the lane's enable on its write enable and the port's
+on `ENARDEN` here, where Vivado ties the write enable high; the simulation is what says
+the two compute alike. The five that are not Vivado's arrangement, each held
+to what it is instead:
+
+- `bw_sp_rf_32x32_b8`: one `RAMB36E1` on port A, where Vivado splits the word over both
+  ports of a `RAMB18E1`. No single port is split here.
+- `bw_sp_wf_1024x32_b8`, `bw_sp_wf_2048x18_b9`: 192 `RAM64M`, where Vivado has 128 and
+  144 `RAM256X1S`; the lane-by-lane choice leaves a read on no clock, and this flow has
+  no single-port distributed RAM.
+- `bw_sdp_65536x16_b8`, `bw_sp_rf_65536x16_b8`: the same 32 `RAMB36E1`, stacked two deep
+  with a read multiplexer, where Vivado cascades them; no cascade is built, as for
+  `sdp_65536x1`. These two are what simulates byte writes into blocks stacked, whose
+  enables, a depth slice's own, are what holds the address there.
+
+`bram/ib_1024x32_bytes` is one `RAMB36E1`, as `bw_sdp_1024x32_b8_const`, and its routed
+netlist answers as its own source does under xsim (memory and registers zeroed as a
+part's are), for all 2,000 cycles.
+
+The 108 designs of the memarr corpus before these, and the rest of `bram/`, are as they
+were: Vivado's cells, tiles and simulation, held by the same tests.
+
+**Nothing else changes.** Every design of `memarr/` before these, of `bram/` but
+`ib_1024x32_bytes`, of `qor/` and `analyser_fifo`, built by this tree's release binary
+and by `origin/master`'s (70f566ad), is the same file byte for byte: 161 bitstreams with
+the default memories, 121 with `--memories legacy`, and 57 mapped netlists each on the
+ECP5, the iCE40 and the Gowin, 453 builds (**checked**; the script is not kept, the
+answer is). No Trellis or Apicula database is here, so those families' bitstreams were
+not built. A byte-write design on them is a memory per lane, mapped as any memory is
+(`bw_sdp_1024x32_b8` is four `DP16KD` on the ECP5 and eight `SB_RAM40_4K` on the
+iCE40, `mapping: equivalent`); on the Gowin, which declares no block RAM, 32 kbit is
+left a memory and refused, as a memory of that size written a word at a time is.
+
+### The Husky's bitstreams
+
+With this tree's release binary (rebased on 70f566ad) `examples/husky/build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`,
+the files they were. **Checked.**
+
+### Tests
+
+- `tests/fpga_xray_memarr_vivado.rs`, above; `regenerate` now keeps what `vivado.txt`
+  says of a design a run of `lutram.sh` did not reach, and `KEEP=1
+  gen_lutram_vectors.py` the answers `xsim.txt` has, so that a run of the designs
+  added is enough.
+- `vivado_arranges_byte_lanes_as_its_netlists_say` holds `vivado_lane_columns` to one
+  case per rule above, pins included; `write_ports`' tests the merge (lanes merge, a
+  port at another address between keeps them apart, the later port wins a bit, a whole
+  word written in part is a word written); `fpga::lanes`' tests the split, with a
+  bounded formal check that a memory split into lanes computes what it did and that the
+  same split with its reads crossed does not.
+- `tests/fpga_xray_bram_vivado.rs` holds `ib_1024x32_bytes` to one `RAMB36E1` and to its
+  source's answer.
+- `tests/cli.rs` holds the simulation to xsim's answers, and the refusals.
+
+**Mutations**, each made by a script in a copy of the tree and run against the unit
+tests named, `tests/fpga_xray_memarr_vivado.rs` with Vivado's simulator and
+`tests/fpga_xray_bram_vivado.rs`'s simulation (the mapper's), or `tests/cli.rs`,
+`tests/sim_compiled.rs`, `tests/synth_golden.rs` and the self-check (the rest):
+
+| mutation | what failed |
+|---|---|
+| the lanes' write enables in the other order | the simulation only: a write enable is no tile feature |
+| a lane's ninth bit on a data pin | the arrangement's unit test; then no build at all |
+| lanes arranged as a word's | the cells; the tiles; the simulation |
+| no merging of one address's ports | the merge's unit tests; the cells; the tiles |
+| the no-change pair of lanes not taken | the tiles only (`bw_sp_nc_*`) |
+| a lane in distributed RAM not a bit at a time | the cells only |
+| contents laid out as a word's, not through the pins | the tiles; the simulation (the two with lanes of nine and contents) |
+| merged, the earlier port winning a bit | the merge's unit test only: no design here writes a bit twice at once |
+| the event simulator writing part of an element at bit 0 | the xsim tests of `tests/cli.rs`; the two engines' agreement |
+| the compiled engine's mask taken from the data | the two engines' agreement only |
+| the frontend's offset on a descending element reversed | the xsim tests of `tests/cli.rs` |
+| synthesis enabling the whole element for part of it | the synthesis golden files; the self-check |
+
+A first run had three more designs failing under two of these, which a rerun did not:
+the machine was building the Husky beside it, and the largest design's build (32 blocks)
+did not finish. A write enable a depth slice's address gated, tried as a mutation,
+changed nothing that any test sees, and rightly: the block's enable already holds the
+address. It is not built.
+
+### Not done
+
+- **A single port split over both ports of a block** (`bw_sp_rf_32x32_b8`), and
+  **single-port distributed RAM** (`RAM256X1S`, `bw_sp_wf_*`).
+- **A cascade**, as before.
+- **Byte write enables on the ECP5** (`DP16KD` has them in its 18 and 36 bit modes) and
+  on the other families: a memory written a lane at a time is a memory per lane there,
+  which is exact but is more blocks.
+- **A VHDL slice whose bounds move with a loop's index**, which the VHDL byte-write
+  loop is written with; one `if` per lane, or a constant slice, is taken.
+- **A read partly outside an element** reads all `x`, as of any vector.
+- Distributed RAM deeper than 32 words for a lane is built by the rule for a whole
+  word, which is not measured for one: every byte-write memory measured deeper than 32
+  words is over 1,024 bits, Vivado's block RAM.
+- None of it has been on a part.
+
 ## Wide multiplexers
 
 A slice has a `MUXF7` over each two of its lookup tables and a `MUXF8` over the
@@ -3897,7 +4079,14 @@ compares what that design computes with an answer Vivado built (Vivado built non
 and its mapping was proved against a source already without its writes. The
 frontend refuses the assignment now (`tests/cli.rs` holds both shapes), so the
 counts of 38 below, measured while it was "built", are one too many. A target for
-part of an element is what it would take to build it.
+part of an element is what it would take to build it. *Since built, with that
+target ("Byte writes as Vivado arranges them"): one `RAMB36E1` and its byte write
+enables, its routed netlist held to what its own source does under xsim, since
+Vivado still builds nothing of it. "Vivado's synthesis stopped on it" was a crash:
+`synth_design` aborts with an assertion in its block RAM generator
+(`HARTGRamGen::genDPBRamBWWE`), measured again on 2026-11-07, where the same memory
+written through wires for its address and data (`memarr/bw_sdp_1024x32_b8_const`)
+builds.*
 
 Ten of the named designs read an `x` from the first cycle under `xsim`,
 the unused outputs of a narrow port or a collision of the two, and for those the
