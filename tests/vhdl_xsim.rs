@@ -118,3 +118,19 @@ fn loop_slices_match_xsim() {
 fn waits_and_events_match_xsim() {
     matches_xsim("waits_events");
 }
+
+/// **Values that came out wrong**: the initial value of an array of
+/// integers indexed `(7 downto 4)` (reversed), an aggregate as the target
+/// of a variable and of a signal assignment (assigned nothing), an alias
+/// whose subtype runs the other way from its target's (indexed as the
+/// target), an alias of a constant (refused), and a `case` choice
+/// `integer'low to -1` (the analysis never finished, recording two
+/// billion values one at a time).
+///
+/// Would catch any of those back, and a wide range lowered to a chain of
+/// tests that takes the wrong alternative. Would not catch an alias of a
+/// slice of a memory element, which is not here.
+#[test]
+fn values_match_xsim() {
+    matches_xsim("values");
+}

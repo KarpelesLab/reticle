@@ -683,8 +683,36 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         let Some(d) = self.cx.object_decl_at(id.span) else {
             return;
         };
+        // An alias of a constant is the constant's value.
+        if let Some(t) = self.a().decl_of(al.target.span())
+            && let Some(Binding::Value { value, ty }) = self.lookup(t).cloned()
+        {
+            self.bind(d, Binding::Value { value, ty });
+            return;
+        }
+        if let Some(t) = self.a().decl_of(al.target.span())
+            && self.lookup(t).is_none()
+            && let Some(value) = self.a().decl_value(t).cloned()
+            && let Some(ty) = self.a().decl_type(t)
+        {
+            self.bind(d, Binding::Value { value, ty });
+            return;
+        }
         let Some((lv, layout)) = self.lvalue_name(&al.target, &mut Sink::Cont) else {
             return;
+        };
+        // The alias's own subtype gives the indices: `alias rev :
+        // std_logic_vector(0 to 7) is w(7 downto 0)` reads `w(7)` as
+        // `rev(0)`. The bits are the same either way, leftmost element in
+        // the most significant bit, so only the layout changes. (The
+        // target's layout was used, so `rev(0)` was `w(0)`.)
+        let layout = match self
+            .a()
+            .decl_type(d)
+            .and_then(|t| self.layout_of_type_quiet(t, al.span))
+        {
+            Some(own) if own.width == layout.width => own,
+            _ => layout,
         };
         match lv {
             Lvalue::Net(net) => self.bind(d, Binding::Net { net, layout }),
@@ -820,10 +848,12 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         let arr = layout.array()?;
         let av = v.as_array()?;
         let mut out = Vec::with_capacity(av.elems.len());
-        // The IR stores element 0 first; VHDL's element 0 is the one at
-        // index 0 of the range, which is `offset` from the left.
+        // The IR's address `a` holds the element at index `low + a`, which
+        // is how every read and write addresses it. (This walked the range
+        // from its left bound instead, so `(1, 2, 3, 4)` as the value of an
+        // array `(7 downto 4)` put 4 at index 7.)
         for o in 0..arr.len {
-            let idx = arr.index_at(o);
+            let idx = arr.low() + i64::from(o);
             let e = av.get(i128::from(idx))?;
             out.push(self.const_of(e, &arr.elem)?);
         }

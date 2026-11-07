@@ -1202,7 +1202,10 @@ impl Checker<'_> {
         if self.a.is_error(ty) {
             return;
         }
-        let mut seen: Vec<(i128, Span)> = Vec::new();
+        // Choices seen so far, as inclusive intervals: a range choice such
+        // as `integer'low to -1` is two billion values, and recording them
+        // one at a time never finished.
+        let mut seen: Vec<(i128, i128, Span)> = Vec::new();
         let mut others: Option<Span> = None;
         let mut non_static = false;
         for (ai, arm) in arms.iter().enumerate() {
@@ -1231,8 +1234,9 @@ impl Checker<'_> {
                         self.resolve(e, ty);
                         match self.a.value_of(e.span()).and_then(Value::as_int) {
                             Some(v) => {
-                                if let Some((_, prev)) = seen.iter().find(|(x, _)| *x == v) {
-                                    let prev = *prev;
+                                if let Some(&(_, _, prev)) =
+                                    seen.iter().find(|(lo, hi, _)| *lo <= v && v <= *hi)
+                                {
                                     let shown = self
                                         .a
                                         .value_of(e.span())
@@ -1247,7 +1251,7 @@ impl Checker<'_> {
                                         .with_secondary(prev, "first used here"),
                                     );
                                 } else {
-                                    seen.push((v, e.span()));
+                                    seen.push((v, v, e.span()));
                                 }
                             }
                             None => {
@@ -1266,20 +1270,20 @@ impl Checker<'_> {
                         let info = self.resolve_discrete_range_in(r, Some(ty));
                         match info.bounds.low_high() {
                             Some((lo, hi)) => {
-                                for v in lo..=hi {
-                                    if let Some((_, prev)) = seen.iter().find(|(x, _)| *x == v) {
-                                        let prev = *prev;
-                                        self.push(
-                                            Diagnostic::error(format!(
-                                                "this range overlaps an earlier choice in this {what}"
-                                            ))
-                                            .with_code("V0408")
-                                            .with_label(r.span(), "overlapping choice")
-                                            .with_secondary(prev, "first used here"),
-                                        );
-                                        break;
-                                    }
-                                    seen.push((v, r.span()));
+                                if let Some(&(_, _, prev)) =
+                                    seen.iter().find(|(a, b, _)| *a <= hi && lo <= *b)
+                                {
+                                    self.push(
+                                        Diagnostic::error(format!(
+                                            "this range overlaps an earlier choice in this {what}"
+                                        ))
+                                        .with_code("V0408")
+                                        .with_label(r.span(), "overlapping choice")
+                                        .with_secondary(prev, "first used here"),
+                                    );
+                                }
+                                if lo <= hi {
+                                    seen.push((lo, hi, r.span()));
                                 }
                             }
                             None => non_static = true,
@@ -1302,7 +1306,7 @@ impl Checker<'_> {
             return;
         }
         let missing: Vec<i128> = (lo..=hi)
-            .filter(|v| !seen.iter().any(|(x, _)| x == v))
+            .filter(|v| !seen.iter().any(|(a, b, _)| a <= v && v <= b))
             .collect();
         if missing.is_empty() {
             return;

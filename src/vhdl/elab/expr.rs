@@ -1565,7 +1565,19 @@ impl<'a> Lowerer<'a, '_> {
                     width += l.width;
                     parts.push(lv);
                 }
-                let layout = self.layout_at(ag.span).map(|l| Layout { width, ..l })?;
+                // The aggregate's type comes from the context, which the
+                // analyser may not have recorded for a target; the parts'
+                // total width is what matters. (With no recorded type the
+                // assignment was dropped without a word.)
+                let layout = match self.layout_at(ag.span) {
+                    Some(l) => Layout { width, ..l },
+                    None => Layout {
+                        ty: self.a().builtins.bit_vector,
+                        kind: LayoutKind::Opaque,
+                        width,
+                        signed: false,
+                    },
+                };
                 Some((Lvalue::Concat(parts), layout))
             }
         }

@@ -612,6 +612,19 @@ settles in one delta here, each being a continuous assignment, where VHDL
 takes a delta per statement; a testbench that counts deltas through such a
 chain sees the difference.
 
+**Values** (`values_tb.vhd`). The initial value of an array of wide elements
+indexed downwards was stored reversed — `(1, 2, 3, 4)` for an array
+`(7 downto 4)` put 4 at index 7 — because the memory's contents were laid
+out from the range's left bound while every read addresses it from its low
+one; this is also the initial contents synthesis gives such a RAM. An
+aggregate target (`(p, q) := v`) assigned nothing when the analyser had
+recorded no type for it; an alias whose subtype runs the other way from its
+target (`alias rev : std_logic_vector(0 to 7) is w(7 downto 0)`) was indexed
+as the target; an alias of a constant was refused; and a `case` choice
+`integer'low to -1` hung the analyser, which recorded the two billion values
+of the range one by one to look for overlaps. Such a `case` now lowers to a
+chain of tests.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

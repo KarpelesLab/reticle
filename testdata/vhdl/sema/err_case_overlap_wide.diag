@@ -1,0 +1,8 @@
+error[V0408]: choice `-5` appears twice in this case
+  --> err_case_overlap_wide.vhd:14:12
+   |
+14 |       when -5 => q <= '1';
+   |            ^^ duplicate choice
+13 |       when integer'low to 0 => q <= '0';
+   |            ---------------- first used here
+

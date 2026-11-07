@@ -437,6 +437,10 @@ impl<'a> Lowerer<'a, '_> {
         let Some((subject, layout)) = self.expr(&c.expr, &mut Sink::Proc(out)) else {
             return;
         };
+        if self.has_wide_range(c) {
+            self.case_as_ifs(c, subject, &layout, out);
+            return;
+        }
         let mut arms = Vec::new();
         let mut default = None;
         for arm in &c.arms {
@@ -467,6 +471,95 @@ impl<'a> Lowerer<'a, '_> {
             arms,
             default,
         );
+    }
+
+    /// True when a choice of `c` is a range of more values than are worth
+    /// listing one by one, `integer'low to -1`.
+    fn has_wide_range(&mut self, c: &'a ast::CaseStatement) -> bool {
+        c.arms
+            .iter()
+            .flat_map(|a| a.choices.iter())
+            .any(|ch| match ch {
+                ast::Choice::Range(r) => self
+                    .static_range(r)
+                    .is_some_and(|(l, rr)| (i128::from(l) - i128::from(rr)).abs() > 1024),
+                _ => false,
+            })
+    }
+
+    /// A `case` with a wide range choice, as a chain of `if`s: the choices
+    /// of a `case` do not overlap, so testing them in order selects the
+    /// same alternative. (Every value of the range was listed as a choice
+    /// before, up to 1024 of them, and more was `V0712`.)
+    fn case_as_ifs(
+        &mut self,
+        c: &'a ast::CaseStatement,
+        subject: crate::ir::ExprId,
+        layout: &Layout,
+        out: &mut BlockBuilder,
+    ) {
+        let mut default: Option<crate::ir::Block> = None;
+        let mut tests: Vec<(crate::ir::ExprId, crate::ir::Block)> = Vec::new();
+        for arm in &c.arms {
+            let mut body = self.b.block();
+            body.span = arm.span;
+            self.stmts(&arm.statements, &mut body);
+            let body = body.finish();
+            let mut cond: Option<crate::ir::ExprId> = None;
+            for ch in &arm.choices {
+                let test = match ch {
+                    ast::Choice::Others(_) => {
+                        default = Some(body.clone());
+                        continue;
+                    }
+                    ast::Choice::Expr(e) => {
+                        let v = self.expr_in(e, layout, &mut Sink::Proc(out));
+                        self.b.span = e.span();
+                        self.b.eq(subject, v)
+                    }
+                    ast::Choice::Range(r) => {
+                        let Some((l, rr)) = self.static_range(r) else {
+                            self.error(
+                                codes::NOT_STATIC,
+                                r.span(),
+                                "a choice range must be static",
+                            );
+                            continue;
+                        };
+                        let (lo, hi) = if l <= rr { (l, rr) } else { (rr, l) };
+                        let w = layout.width.max(1);
+                        self.b.span = r.span();
+                        let lo = self
+                            .b
+                            .constant(Logic::from_i64(lo, w).with_signed(layout.signed));
+                        let hi = self
+                            .b
+                            .constant(Logic::from_i64(hi, w).with_signed(layout.signed));
+                        let above = self.b.ge(subject, lo);
+                        let below = self.b.le(subject, hi);
+                        self.b.land(above, below)
+                    }
+                };
+                cond = Some(match cond {
+                    Some(prev) => self.b.lor(prev, test),
+                    None => test,
+                });
+            }
+            if let Some(cond) = cond {
+                tests.push((cond, body));
+            }
+        }
+        let mut chain = default.unwrap_or_default();
+        for (cond, body) in tests.into_iter().rev() {
+            let mut b = self.b.block();
+            b.span = c.span;
+            b.if_(cond, body, chain);
+            chain = b.finish();
+        }
+        for s in chain {
+            out.span = s.span;
+            out.push(s.kind);
+        }
     }
 
     /// The constants a choice list selects.
