@@ -492,9 +492,10 @@ inside it and `x` for the rest (`n[j -: 8]` with `j` 4 of a 32-bit `n` is `2X`
 under xsim when `n` is 5, `xx` here); measured, and not changed, since it is the
 reading of every vector's part-select and changing it changes what synthesis
 builds. A VHDL slice whose bounds move with a loop's index
-(`mem(a)(8 * i + 7 downto 8 * i)` in a `for` loop) is refused here for any
-target, so the byte-write loop written that way is not taken;
-one `if` per lane is.
+(`mem(a)(8 * i + 7 downto 8 * i)` in a `for` loop) was refused here for any
+target, so the byte-write loop written that way was not taken and one `if`
+per lane was; the loop is now unrolled (below, *VHDL against xsim*), and
+synthesises to the same netlist as the `if` per lane, byte for byte.
 
 ## VHDL against xsim
 
@@ -559,6 +560,24 @@ used it, checked with `reticle synth --verify`:
   `rol`/`ror` were refused. `sla` fills with the rightmost element and
   `sra` with the leftmost (LRM 9.2.4), and a static negative count shifts
   the other way.
+
+**Loops** (`loop_slices_tb.vhd`, `src/vhdl/elab/loops.rs`). A `for` loop
+whose parameter bounds a slice, an aggregate choice or an inner loop's range
+is unrolled, the parameter a constant in each copy, which is what synthesis
+does with every `for` loop and what LRM 10.10 allows; the byte-write loop
+`mem(a)(8*i+7 downto 8*i) <= d(8*i+7 downto 8*i)` is the case that matters,
+on a signal and on a variable. Before, such a slice was refused as a target
+and read as a **silent zero** as an operand, and so did `a(W - 1 downto 0)`
+in an entity with a generic `W`: the slice's own subtype had no layout and
+nothing said so. An expression that cannot be lowered now always reports
+why. `next outer` and `exit outer` set a flag of the loop they name and
+break; the loop around tests it (they were refused). A range known only at
+run time is evaluated when the loop starts. A loop over an enumeration
+keeps its type, so `color_t'image(k)` is a literal and not a number. The
+unrolled byte-write loop synthesises to the netlist an `if` per lane does,
+and `exit outer` to the one a flag variable written by hand does, byte for
+byte (both compared with `reticle synth`; `--verify` is inconclusive on
+both forms alike, for the memory and for the 32-bit counters).
 
 ## Tests
 

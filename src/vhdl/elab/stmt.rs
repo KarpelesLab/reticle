@@ -18,7 +18,9 @@
 //! variable net holding the parameter, so `exit` and `next` stay
 //! expressible as `break` and `continue`; `while` and the bare `loop`
 //! become `While` and `Forever`. The IR's `break` and `continue` leave the
-//! innermost loop only, so `exit`/`next` naming an outer loop is `V0701`.
+//! innermost loop only; `exit`/`next` naming an outer loop goes through a
+//! flag, and a loop whose parameter bounds a slice is unrolled (see
+//! [`super::loops`]). Naming an outer loop used to be `V0701`.
 //!
 //! **Subprograms are inlined.** A call becomes: one variable net per
 //! formal, an assignment of each `in` actual, the body's statements, and a
@@ -34,8 +36,8 @@
 use crate::diag::Diagnostic;
 use crate::ir::builder::BlockBuilder;
 use crate::ir::{
-    AssignKind, CaseArm, CaseKind, CaseQualifier, Delay, Edge, ExprId, Lvalue, NetId, NetKind,
-    ProcessKind, ReportSeverity, TimeUnit,
+    AssignKind, CaseArm, CaseKind, CaseQualifier, Delay, Edge, ExprId, Lvalue, NetId, ProcessKind,
+    ReportSeverity, TimeUnit,
 };
 use crate::logic::Logic;
 use crate::source::Span;
@@ -565,159 +567,6 @@ impl<'a> Lowerer<'a, '_> {
             }
         }
         out
-    }
-
-    fn loop_stmt(
-        &mut self,
-        label: Option<&'a ast::Ident>,
-        l: &'a ast::LoopStatement,
-        out: &mut BlockBuilder,
-    ) {
-        let name = label.map(|i| i.name.clone());
-        match &l.scheme {
-            None => {
-                self.loops.push(name);
-                let mut body = self.b.block();
-                body.span = l.span;
-                self.stmts(&l.statements, &mut body);
-                self.loops.pop();
-                out.span = l.span;
-                out.forever(body.finish());
-            }
-            Some(ast::IterationScheme::While(c)) => {
-                let cond = self.cond(c, &mut Sink::Proc(out));
-                self.loops.push(name);
-                let mut body = self.b.block();
-                body.span = l.span;
-                self.stmts(&l.statements, &mut body);
-                self.loops.pop();
-                out.span = l.span;
-                out.while_(cond, body.finish());
-            }
-            Some(ast::IterationScheme::For { param, range }) => {
-                self.for_loop(name, param, range, &l.statements, l.span, out);
-            }
-        }
-    }
-
-    fn for_loop(
-        &mut self,
-        label: Option<String>,
-        param: &'a ast::Ident,
-        range: &'a ast::DiscreteRange,
-        body: &'a [ast::SequentialStatement],
-        span: Span,
-        out: &mut BlockBuilder,
-    ) {
-        let Some((left, right)) = self.static_range(range) else {
-            self.error(
-                codes::NOT_STATIC,
-                range.span(),
-                "a loop range must be static after elaboration",
-            );
-            return;
-        };
-        let dir = self.range_direction(range);
-        let name = self.qualified(&param.name);
-        let layout = Layout {
-            kind: LayoutKind::Int,
-            width: 32,
-            signed: true,
-            ..self
-                .layout_at(range.span())
-                .unwrap_or_else(|| self.int_layout())
-        };
-        let Some(var) = self.new_net(name, layout.clone(), false, span) else {
-            return;
-        };
-        self.b.module_mut().nets[var].kind = NetKind::Variable;
-        self.push_scope();
-        if let Some(d) = self.cx.object_decl_at(param.span) {
-            self.bind(
-                d,
-                Binding::Net {
-                    net: var,
-                    layout: layout.clone(),
-                },
-            );
-        }
-        self.b.span = span;
-        let start = self.b.constant(Logic::from_i64(left, 32).with_signed(true));
-        let stop = self
-            .b
-            .constant(Logic::from_i64(right, 32).with_signed(true));
-        let v = self.b.net(var);
-        let cond = match dir {
-            ast::Direction::To => self.b.le(v, stop),
-            ast::Direction::Downto => self.b.ge(v, stop),
-        };
-        let one = self.b.constant(Logic::from_i64(1, 32).with_signed(true));
-        let v2 = self.b.net(var);
-        let next = match dir {
-            ast::Direction::To => self.b.add(v2, one),
-            ast::Direction::Downto => self.b.sub(v2, one),
-        };
-        self.loops.push(label);
-        let mut inner = self.b.block();
-        inner.span = span;
-        self.stmts(body, &mut inner);
-        self.loops.pop();
-        self.pop_scope();
-        out.span = span;
-        out.for_(
-            Some((Lvalue::Net(var), start)),
-            Some(cond),
-            Some((Lvalue::Net(var), next)),
-            inner.finish(),
-        );
-    }
-
-    fn jump(
-        &mut self,
-        label: Option<&'a ast::Ident>,
-        condition: Option<&'a ast::Expr>,
-        exit: bool,
-        span: Span,
-        out: &mut BlockBuilder,
-    ) {
-        if let Some(l) = label {
-            let innermost = self.loops.last().cloned().flatten();
-            if innermost
-                .as_deref()
-                .is_none_or(|n| !n.eq_ignore_ascii_case(&l.name))
-            {
-                self.unsupported(
-                    span,
-                    &format!(
-                        "`{}` naming a loop other than the innermost one",
-                        if exit { "exit" } else { "next" }
-                    ),
-                );
-                return;
-            }
-        }
-        let mut body = self.b.block();
-        body.span = span;
-        if exit {
-            body.break_();
-        } else {
-            body.continue_();
-        }
-        match condition {
-            Some(c) => {
-                let cond = self.cond(c, &mut Sink::Proc(out));
-                out.span = span;
-                out.if_(cond, body.finish(), Vec::new());
-            }
-            None => {
-                out.span = span;
-                if exit {
-                    out.break_();
-                } else {
-                    out.continue_();
-                }
-            }
-        }
     }
 
     fn return_stmt(&mut self, e: Option<&'a ast::Expr>, span: Span, out: &mut BlockBuilder) {

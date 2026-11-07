@@ -53,9 +53,21 @@ impl<'a> Lowerer<'a, '_> {
         want: &Layout,
         sink: &mut Sink<'_>,
     ) -> ExprId {
+        let errors = self.cx.diags.error_count();
         match self.build(e, Some(want), sink) {
             Some((id, from)) => self.coerce(id, &from, want, e.span()),
-            None => self.zero_of(want),
+            None => {
+                // An expression that cannot be lowered must say so: a
+                // silent zero in its place is a different design.
+                if self.cx.diags.error_count() == errors {
+                    self.error(
+                        codes::UNSUPPORTED,
+                        e.span(),
+                        "this expression cannot be lowered to the IR",
+                    );
+                }
+                self.zero_of(want)
+            }
         }
     }
 
@@ -685,8 +697,18 @@ impl<'a> Lowerer<'a, '_> {
         sink: &mut Sink<'_>,
     ) -> Option<(ExprId, Layout)> {
         let (base, layout) = self.name_expr(prefix, None, sink)?;
-        let arr = layout.array()?.clone();
-        let (left, right) = self.static_range(range)?;
+        let Some(arr) = layout.array().cloned() else {
+            self.error(codes::TYPE, span, "this value is not an array");
+            return None;
+        };
+        let Some((left, right)) = self.static_range(range) else {
+            self.error(
+                codes::NOT_STATIC,
+                range.span(),
+                "the bounds of this slice are not static after elaboration",
+            );
+            return None;
+        };
         let Some((hi, _)) = arr.bits_of(left) else {
             self.error(codes::TYPE, span, "the slice is outside the array");
             return None;
@@ -696,9 +718,47 @@ impl<'a> Lowerer<'a, '_> {
             return None;
         };
         let (hi, lo) = if hi >= lo { (hi, lo) } else { (lo, hi) };
-        let out = self.layout_at(span)?;
+        let dir = self.range_direction(range);
+        let out = self.slice_layout(span, &layout, &arr, left, dir, hi - lo + 1);
         self.b.span = span;
         Some((self.slice_bits(base, hi, lo), out))
+    }
+
+    /// The layout of a slice `width` bits wide of an array laid out as
+    /// `arr`, starting at index `left` in direction `dir`.
+    ///
+    /// The analyser's subtype for the slice is used when it has a layout of
+    /// the same width. When its bounds came from a generic or a loop
+    /// parameter it has none, and the slice is then the base's element
+    /// type over the bounds just computed. (That case returned no layout
+    /// and no diagnostic either, so the slice read as zero: `a(W - 1
+    /// downto 0)` in an entity with a generic `W` was all zeros, in
+    /// simulation and in synthesis.)
+    pub(crate) fn slice_layout(
+        &mut self,
+        span: Span,
+        base: &Layout,
+        arr: &ArrayLayout,
+        left: i64,
+        dir: Direction,
+        width: u32,
+    ) -> Layout {
+        if let Some(own) = self.layout_at(span)
+            && own.width == width
+        {
+            return own;
+        }
+        let ew = arr.elem.width.max(1);
+        Layout {
+            width,
+            kind: LayoutKind::Array(Box::new(ArrayLayout {
+                elem: arr.elem.clone(),
+                left,
+                dir,
+                len: width / ew,
+            })),
+            ..base.clone()
+        }
     }
 
     /// The static bounds of a discrete range, after elaboration.

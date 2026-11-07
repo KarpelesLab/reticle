@@ -77,3 +77,23 @@ fn report_strings_match_xsim() {
 fn operators_match_xsim() {
     matches_xsim("operators");
 }
+
+/// **Slices that move with a loop, or come from a generic, and jumps out
+/// of nested loops**: `v(8*i+7 downto 8*i)` read and assigned, on a signal
+/// and a variable, and the byte-write loop `mem(a)(8*i+7 downto 8*i) <= d`
+/// on a signal memory and a variable one, all refused before ("must have
+/// bounds that are static after elaboration") or, as a read, a silent
+/// zero; `a(W - 1 downto 0)` in an entity with a generic `W`, which read
+/// as zeros; `next outer` and `exit outer`, refused; a loop range that
+/// depends on another loop's parameter or on a variable, refused; and a
+/// loop over an enumeration, whose parameter printed as a number.
+///
+/// Would catch a byte written to the wrong lane, the rest of a word lost, a
+/// `next` that skips the wrong iteration or an `exit` that leaves the wrong
+/// loop, and a loop bound read again after the variable it came from was
+/// changed (`n` is decremented inside the loop it bounds). Would not catch
+/// a loop with more iterations than the unroll limit, which is refused.
+#[test]
+fn loop_slices_match_xsim() {
+    matches_xsim("loop_slices");
+}

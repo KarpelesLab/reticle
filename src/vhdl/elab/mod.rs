@@ -204,6 +204,7 @@ mod conc;
 mod eval;
 mod expr;
 mod interp;
+mod loops;
 mod lower;
 mod numeric;
 mod runtime;

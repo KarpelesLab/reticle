@@ -169,8 +169,8 @@ pub(crate) struct Lowerer<'a, 'e> {
     pub frames: Vec<Frame>,
     /// Configuration specifications in scope, innermost last.
     pub configs: Vec<&'a ast::ConfigurationSpec>,
-    /// Labels of loops being unrolled, innermost last.
-    pub loops: Vec<Option<String>>,
+    /// The loops being lowered, innermost last.
+    pub loops: Vec<super::loops::LoopFrame>,
     /// The generics, as IR parameters, in declaration order.
     pub params: Vec<(String, AttrValue)>,
     /// Non-zero while layouts are computed speculatively, so a type that

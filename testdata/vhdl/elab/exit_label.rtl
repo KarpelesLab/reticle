@@ -1,0 +1,30 @@
+top exit_label
+
+module exit_label
+  timescale 1 fs / 1 fs
+  net %d u4 wire
+  net %q s32 reg
+  net %count s32 var
+  net %a s32 var
+  net %b s32 var
+  net %outer$exit$1 u1 var
+  port d in %d
+  port q out %q
+  process sensitive %d
+    %count = 32'sd0
+    %outer$exit$1 = 1'd0
+    for %a = 32'sd3; ge(%a, 32'sd0); %a = sub(%a, 32'sd1)
+      for %b = 32'sd0; le(%b, 32'sd1); %b = add(%b, 32'sd1)
+        if eq(%d[%a +: 1], 1'd1)
+          %outer$exit$1 = 1'd1
+          break
+        end
+        %count = add(%count, 32'sd1)
+      end
+      if %outer$exit$1
+        break
+      end
+    end
+    %q <= %count
+  end
+end

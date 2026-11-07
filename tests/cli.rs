@@ -1075,8 +1075,8 @@ fn sim_writes_part_of_a_memory_element_as_xsim_does() {
 /// (`mem_part_tb_vhd.xsim`) and says `PASS` when all agree; these targets
 /// were refused (`V0701`, a nested slice target). Would catch any of them
 /// written to the wrong bits or the rest of the element lost; would not
-/// catch a slice whose bounds move with a loop's index, which is refused
-/// here for any target and so is not in it.
+/// catch a slice whose bounds move with a loop's index, which is not in
+/// it (`tests/vhdl_xsim.rs` holds that one, `loop_slices_tb.vhd`).
 #[cfg(feature = "sim")]
 #[test]
 fn sim_writes_part_of_a_vhdl_array_element_as_xsim_does() {
