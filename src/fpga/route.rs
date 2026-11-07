@@ -5493,6 +5493,8 @@ mod tests {
             frozen: vec![false; 7],
             pin_domain: Vec::new(),
             pin_delays: crate::fpga::place::PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         let (_, graph) = line(1, 1);
         let terminals: Vec<Terminals> = (0..5)

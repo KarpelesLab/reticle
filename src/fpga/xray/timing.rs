@@ -1241,6 +1241,12 @@ pub fn place_timing(
             frozen,
             pin_domain,
             pin_delays,
+            // A dedicated group's own wires: see `PlaceTiming::local_wire`.
+            // Vivado's timer puts nothing on a carry's cascade, a table's
+            // output into its lane's flip-flop or carry, or a multiplexer's
+            // inputs (`docs/fpga-vivado-parity.md`, "Filling slices").
+            local_wire: (model != DelayModel::Legacy).then_some(0.0),
+            local: Vec::new(),
         },
         names,
     )
@@ -1619,6 +1625,8 @@ mod tests {
                 capture: vec![None; n],
                 ..PinDelays::default()
             },
+            local_wire: None,
+            local: Vec::new(),
         };
         let setups = |model: DelayModel, ways: &[NodeId]| {
             let mut timing = timing.clone();

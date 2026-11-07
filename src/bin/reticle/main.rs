@@ -4408,6 +4408,10 @@ fn write_xc7_bitstream(
         // route and its estimate: see `xray::place_timing_on_sites`, by which a
         // flip-flop at the end of a way has a setup of its own.
         if let Some(timing) = options.timing.as_mut() {
+            // The connections the placement made on dedicated wiring, which
+            // the router's first pass estimates as the placement did
+            // (`PlaceTiming::local`).
+            timing.local.clone_from(&placement_report.local);
             reticle::fpga::xray::place_timing_on_sites(
                 timing,
                 delay_model,

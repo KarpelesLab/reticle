@@ -1549,6 +1549,10 @@ pub struct PlacementReport {
     /// Cells the pass after the anneal moved to take a clock out of a
     /// region asked for more than its lines.
     pub clock_moves: usize,
+    /// Per netlist pin, whether it is the sink of a connection one of the
+    /// groups dedicated wiring holds together makes on that wiring:
+    /// [`PlaceTiming::local`], for a timing that was not placed with.
+    pub local: Vec<bool>,
 }
 
 /// One round of [`PlaceOptions::timing`]: the estimate the placement it
@@ -3432,6 +3436,7 @@ pub fn place(
         confine_to_input_budget(netlist, graph, &sites_by_kind, &mut info, timing);
     }
     let mut macros = build_macros(netlist, constraints, &mut info);
+    let mut local = Vec::new();
     let clusters = build_clusters(
         netlist,
         graph,
@@ -3439,7 +3444,12 @@ pub fn place(
         &mut info,
         macros.len(),
         options.memory_packing,
+        &mut local,
     );
+    report.local = vec![false; netlist.pins.len()];
+    for pin in local {
+        report.local[pin] = true;
+    }
     report.dedicated = clusters.len();
     macros.extend(clusters);
     report.macros = (
@@ -3523,7 +3533,13 @@ pub fn place(
         );
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
-    if let Some(timing) = &options.timing {
+    // The timing the rounds estimate with: the options', and which
+    // connections the groups above make on the fabric's own wires.
+    let local_timing = options.timing.as_ref().map(|timing| PlaceTiming {
+        local: report.local.clone(),
+        ..timing.clone()
+    });
+    if let Some(timing) = &local_timing {
         let order = timing_order(netlist, timing);
         // Each round refines the last: a narrow window and a cool start,
         // so that the weights move the critical cells and the rest stays
@@ -4494,6 +4510,7 @@ fn registered_outputs(
     info: &[Placeable],
     relations: &mut BTreeMap<(String, String, String, String), Option<Rc<Relation>>>,
     links: &mut Vec<(usize, usize, Rc<Relation>)>,
+    local: &mut Vec<usize>,
 ) {
     let carry = BelRole::Carry.keyword();
     let (mux7, mux8) = (BelRole::Mux7.keyword(), BelRole::Mux8.keyword());
@@ -4501,7 +4518,9 @@ fn registered_outputs(
     // Only a chain that is a macro already: a carry with no dedicated link
     // is placed on its own, and so is what it drives.
     let in_macro: HashSet<usize> = links.iter().flat_map(|(x, y, _)| [*x, *y]).collect();
-    let mut joining: BTreeMap<usize, Vec<(usize, usize, Rc<Relation>)>> = BTreeMap::new();
+    // Per carry, `(carry, flip-flop, relation, the flip-flop's data pin)`.
+    type Joining = (usize, usize, Rc<Relation>, usize);
+    let mut joining: BTreeMap<usize, Vec<Joining>> = BTreeMap::new();
     for signal in &netlist.signals {
         let Some(driver) = signal.driver else {
             continue;
@@ -4544,7 +4563,7 @@ fn registered_outputs(
                 })
                 .clone();
             if let Some(relation) = relation {
-                joining.entry(x).or_default().push((x, y, relation));
+                joining.entry(x).or_default().push((x, y, relation, *sink));
             }
         }
     }
@@ -4563,14 +4582,14 @@ fn registered_outputs(
             out.sort();
             out
         };
-        candidates.retain(|(_, y, _)| !taken.contains(y));
+        candidates.retain(|(_, y, _, _)| !taken.contains(y));
         // Two outputs of one lane — its sum and its carry — reach the one
         // flip-flop beside it, and two cells cannot both have that site:
         // the macro would fit nowhere. Compared on one carry site, which
         // stands for them all.
         let mut sites: Vec<Option<usize>> = candidates
             .iter()
-            .map(|(_, _, r)| r.sink_of.first())
+            .map(|(_, _, r, _)| r.sink_of.first())
             .collect();
         let all = sites.len();
         sites.sort_unstable();
@@ -4578,17 +4597,17 @@ fn registered_outputs(
         if sites.len() != all || sites.contains(&None) {
             continue;
         }
-        let Some((_, first, _)) = candidates.first() else {
+        let Some((_, first, _, _)) = candidates.first() else {
             continue;
         };
         let (want, primitive) = (control(*first), &netlist.instances[*first].primitive);
-        if candidates
-            .iter()
-            .all(|(_, y, _)| control(*y) == want && netlist.instances[*y].primitive == *primitive)
-        {
-            for (x, y, relation) in candidates {
+        if candidates.iter().all(|(_, y, _, _)| {
+            control(*y) == want && netlist.instances[*y].primitive == *primitive
+        }) {
+            for (x, y, relation, sink) in candidates {
                 if taken.insert(y) {
                     links.push((x, y, relation));
+                    local.push(sink);
                 }
             }
         }
@@ -4651,6 +4670,7 @@ fn registered_tables(
     memories: bool,
     relations: &mut BTreeMap<(String, String, String, String), Option<Rc<Relation>>>,
     links: &mut Vec<(usize, usize, Rc<Relation>)>,
+    local: &mut Vec<usize>,
 ) {
     let lut = BelRole::Lut.keyword();
     let ff = BelRole::Ff.keyword();
@@ -4722,6 +4742,7 @@ fn registered_tables(
                 taken.insert(y);
                 partner.insert(x, y);
                 links.push((x, y, relation));
+                local.push(*sink);
                 break;
             }
         }
@@ -4893,6 +4914,7 @@ fn build_clusters(
     info: &mut [Placeable],
     first_index: usize,
     memory_packing: bool,
+    local: &mut Vec<usize>,
 ) -> Vec<Macro> {
     let free =
         |i: usize, info: &[Placeable]| info[i].fixed.is_none() && info[i].macro_index.is_none();
@@ -4939,6 +4961,7 @@ fn build_clusters(
             }
             if let Some(Some(relation)) = relations.get(&key) {
                 links.push((x, y, Rc::clone(relation)));
+                local.push(*sink);
             }
         }
     }
@@ -4949,6 +4972,7 @@ fn build_clusters(
         info,
         &mut relations,
         &mut links,
+        local,
     );
     registered_tables(
         netlist,
@@ -4958,6 +4982,7 @@ fn build_clusters(
         memory_packing,
         &mut relations,
         &mut links,
+        local,
     );
     // A chain of shift registers inside a slice. Not found above because a lane's
     // data has another way in, from the interconnect; on this path the cell is
@@ -4981,6 +5006,17 @@ fn build_clusters(
                 .clone();
             if let Some(relation) = relation {
                 links.push((x, y, relation));
+                local.extend(netlist.instances[y].pins.iter().copied().filter(|p| {
+                    let pin = &netlist.pins[*p];
+                    !pin.output
+                        && pin.role == "d"
+                        && pin
+                            .signal
+                            .and_then(|s| netlist.signals[s].driver)
+                            .is_some_and(|d| {
+                                netlist.pins[d].instance == x && netlist.pins[d].role == "q31"
+                            })
+                }));
             }
         }
     }
@@ -8867,6 +8903,23 @@ pub struct PlaceTiming {
     /// Single pins' delays in place of their instance's, for a model that
     /// knows them; empty for none anywhere.
     pub pin_delays: PinDelays,
+    /// The delay of a connection the fabric makes inside a group of cells
+    /// its dedicated wiring holds together ([`PlaceTiming::local`]), in
+    /// place of [`PlaceTiming::wire`]'s line; `None` charges such a
+    /// connection the line like any other.
+    ///
+    /// A carry chain's carry from one slice to the next, a lookup table's
+    /// output into its lane's flip-flop or carry and a multiplexer's are
+    /// wires of the slice or of the chain, not of the interconnect, and
+    /// Vivado's timer puts nothing on them. Charged the line's 0.414 ns
+    /// each, `qor/counter64.v`'s sixteen `CARRY4`s came to 10.42 ns in the
+    /// placement's estimate where its routes were 4.07, and every
+    /// criticality was against that.
+    pub local_wire: Option<f64>,
+    /// Per netlist pin, whether it is a sink of such a connection: filled by
+    /// [`place`] from the groups it finds, and empty before; a pin past its
+    /// end is not.
+    pub local: Vec<bool>,
 }
 
 /// What [`PlaceTiming::pin_delays`] holds: delays of single pins in place of
@@ -9165,6 +9218,12 @@ pub fn estimated_wire(
             let Some(to) = tile(netlist.pins[*sink].instance) else {
                 continue;
             };
+            if let Some(local) = timing.local_wire
+                && timing.local.get(*sink).copied().unwrap_or(false)
+            {
+                wire[*sink] = local;
+                continue;
+            }
             let tiles = f64::from(from.0.abs_diff(to.0) + from.1.abs_diff(to.1));
             let (a, b, c) = timing.wire;
             wire[*sink] = a + b * tiles + if wide { c * tiles } else { 0.0 };
@@ -10140,6 +10199,8 @@ mod tests {
             frozen: vec![false; 4],
             pin_domain: Vec::new(),
             pin_delays: PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         (graph, netlist, placement, timing)
     }
@@ -10223,6 +10284,8 @@ mod tests {
             frozen: vec![false; 2],
             pin_domain,
             pin_delays: PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[end] = 5.6;
@@ -10346,6 +10409,8 @@ mod tests {
             frozen: vec![false; 4],
             pin_domain: Vec::new(),
             pin_delays: PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         let wire = vec![0.0; netlist.pins.len()];
         let (_, cut) = path_criticality(&netlist, &timing, &wire);
@@ -10653,6 +10718,8 @@ mod tests {
             frozen: vec![false; 6],
             pin_domain: Vec::new(),
             pin_delays: PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -10767,6 +10834,8 @@ mod tests {
             frozen: vec![false; 4],
             pin_domain: Vec::new(),
             pin_delays: PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -11786,6 +11855,76 @@ mod tests {
         assert_eq!(report.dedicated, 0);
     }
 
+    /// **A connection a dedicated group makes on its own wiring is marked
+    /// local, and the estimate charges it [`PlaceTiming::local_wire`].** On
+    /// [`chained`], every connection of [`carry_chain`] is the fabric's own,
+    /// each table's `o` to its carry's `p0` and each `co3` to the next `ci`,
+    /// so every input pin is local and no output is; the plain chain of
+    /// [`chain`] on [`grid`] has none. In [`timed_chain`], the connection
+    /// from the second cell to the third, a tile apart, costs the line's
+    /// 0.3 ns unmarked, the figure given, nothing, when it is marked local,
+    /// and the line again with no figure, which is the legacy model. A
+    /// flip-flop a table or a carry registers is marked by
+    /// `a_flip_flop_that_registers_a_carry_joins_its_macro` and
+    /// `a_lookup_table_takes_the_flip_flops_it_feeds_on_one_control_set`.
+    ///
+    /// Would catch the links' sink pins not recorded (no pin local), a
+    /// group's every pin marked (the outputs too), a connection through the
+    /// interconnect marked, and the estimate ignoring the mark or applying
+    /// it without a figure. Would not catch a fabric whose dedicated wire
+    /// has a delay of its own: that the 7-series' have none is Vivado's
+    /// timer's reading, `xray::timing`'s.
+    #[test]
+    fn a_dedicated_connection_costs_its_own_figure_in_the_estimate() {
+        let (arch, graph) = chained(4, 6);
+        let netlist = carry_chain(4);
+        let (_, report) = place(
+            &netlist,
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(report.local.len(), netlist.pins.len());
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            assert_eq!(
+                report.local[index], !pin.output,
+                "{}.{}",
+                netlist.instances[pin.instance].name, pin.role
+            );
+        }
+        let (arch, graph) = grid(4, 4);
+        let (_, report) = place(
+            &chain(6),
+            &arch,
+            &graph,
+            &Constraints::new(),
+            &PlaceOptions::default(),
+        )
+        .unwrap();
+        assert!(report.local.iter().all(|local| !local));
+
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        let into_third = *netlist.instances[2]
+            .pins
+            .iter()
+            .find(|p| !netlist.pins[**p].output)
+            .unwrap();
+        let line = estimated_wire(&netlist, &graph, &placement, &timing);
+        assert!((line[into_third] - 0.3).abs() < 1e-9, "{line:?}");
+        timing.local = vec![false; netlist.pins.len()];
+        timing.local[into_third] = true;
+        let unfigured = estimated_wire(&netlist, &graph, &placement, &timing);
+        assert_eq!(unfigured, line, "no figure, the line");
+        timing.local_wire = Some(0.0);
+        let local = estimated_wire(&netlist, &graph, &placement, &timing);
+        for (pin, (was, now)) in line.iter().zip(&local).enumerate() {
+            let want = if pin == into_third { 0.0 } else { *was };
+            assert!((now - want).abs() < 1e-9, "pin {pin}: {now} for {want}");
+        }
+    }
+
     /// [`chained`] with a flip-flop beside each carry that its sum `s0`
     /// reaches through the tile's own `dmux`, and that a `track` the
     /// interconnect drives reaches too: the link is local and preferred,
@@ -11916,6 +12055,11 @@ mod tests {
         let tile = |i: usize| graph.sites[placement.site_of(i).unwrap()].tile;
         for k in 0..4 {
             assert_eq!(tile(8 + k), tile(2 * k + 1), "ff{k} beside cy{k}");
+            // Its data is the slice's own wire, its clock is not.
+            for pin in &netlist.instances[8 + k].pins {
+                let role = netlist.pins[*pin].role.as_str();
+                assert_eq!(report.local[*pin], role == "d", "ff{k}.{role}");
+            }
         }
 
         // A lone carry, which no macro holds: its flip-flop is its own.
@@ -12857,58 +13001,76 @@ mod tests {
                 .or_default()
                 .push(index);
         }
-        // Signals: 0 = o, 1 = o5, 2 and 3 = clocks.
-        let members = |b_clock: usize, o5_elsewhere: bool| -> Vec<Vec<usize>> {
-            let mut netlist = lane_netlist([
-                &[("o", 0, true), ("o5", 1, true)],
-                &[("d", 0, false), ("clk", 2, false)],
-                &[("d", 1, false), ("clk", b_clock, false)],
-            ]);
-            netlist.instances[2].kind = "ff".to_owned();
-            netlist.instances[2].primitive = "FF".to_owned();
-            if o5_elsewhere {
-                // A fourth instance, a lookup table that reads `o5` too.
-                let pin = netlist.pins.len();
-                netlist.pins.push(NetPin {
-                    instance: 3,
-                    port: "I0".to_owned(),
-                    bit: 0,
-                    role: "i0".to_owned(),
-                    output: false,
-                    signal: Some(1),
-                    constant: None,
-                });
-                netlist.signals[1].sinks.push(pin);
-                netlist.instances.push(Instance {
-                    cell: CellId::from_index(3),
-                    name: "reader".to_owned(),
-                    primitive: "LUT".to_owned(),
-                    kind: "lut".to_owned(),
-                    pins: vec![pin],
-                    pin: None,
-                });
-            }
-            let mut info: Vec<Placeable> = (0..netlist.instances.len())
-                .map(|_| Placeable {
-                    fixed: None,
-                    region: None,
-                    macro_index: None,
-                    allowed: None,
-                    soft: false,
-                })
-                .collect();
-            build_clusters(&netlist, &graph, &sites_by_kind, &mut info, 0, false)
+        // Signals: 0 = o, 1 = o5, 2 and 3 = clocks. Each group's members,
+        // and the pins the groups' links end on, as (instance, role).
+        let members =
+            |b_clock: usize, o5_elsewhere: bool| -> (Vec<Vec<usize>>, Vec<(usize, String)>) {
+                let mut netlist = lane_netlist([
+                    &[("o", 0, true), ("o5", 1, true)],
+                    &[("d", 0, false), ("clk", 2, false)],
+                    &[("d", 1, false), ("clk", b_clock, false)],
+                ]);
+                netlist.instances[2].kind = "ff".to_owned();
+                netlist.instances[2].primitive = "FF".to_owned();
+                if o5_elsewhere {
+                    // A fourth instance, a lookup table that reads `o5` too.
+                    let pin = netlist.pins.len();
+                    netlist.pins.push(NetPin {
+                        instance: 3,
+                        port: "I0".to_owned(),
+                        bit: 0,
+                        role: "i0".to_owned(),
+                        output: false,
+                        signal: Some(1),
+                        constant: None,
+                    });
+                    netlist.signals[1].sinks.push(pin);
+                    netlist.instances.push(Instance {
+                        cell: CellId::from_index(3),
+                        name: "reader".to_owned(),
+                        primitive: "LUT".to_owned(),
+                        kind: "lut".to_owned(),
+                        pins: vec![pin],
+                        pin: None,
+                    });
+                }
+                let mut info: Vec<Placeable> = (0..netlist.instances.len())
+                    .map(|_| Placeable {
+                        fixed: None,
+                        region: None,
+                        macro_index: None,
+                        allowed: None,
+                        soft: false,
+                    })
+                    .collect();
+                let mut local = Vec::new();
+                let groups = build_clusters(
+                    &netlist,
+                    &graph,
+                    &sites_by_kind,
+                    &mut info,
+                    0,
+                    false,
+                    &mut local,
+                )
                 .iter()
                 .map(|m| {
                     let mut members: Vec<usize> = m.members.iter().map(|(i, _, _)| *i).collect();
                     members.sort_unstable();
                     members
                 })
-                .collect()
-        };
-        assert_eq!(members(2, false), vec![vec![0, 1, 2]]);
-        assert_eq!(members(3, false), vec![vec![0, 1]]);
-        assert_eq!(members(2, true), vec![vec![0, 1]]);
+                .collect();
+                local.sort_unstable();
+                let local = local
+                    .iter()
+                    .map(|p| (netlist.pins[*p].instance, netlist.pins[*p].role.clone()))
+                    .collect();
+                (groups, local)
+            };
+        let d = |instance: usize| (instance, "d".to_owned());
+        assert_eq!(members(2, false), (vec![vec![0, 1, 2]], vec![d(1), d(2)]));
+        assert_eq!(members(3, false), (vec![vec![0, 1]], vec![d(1)]));
+        assert_eq!(members(2, true), (vec![vec![0, 1]], vec![d(1)]));
     }
 
     /// One instance for [`netlist_of`]: its kind, primitive and pins.
@@ -12987,14 +13149,22 @@ mod tests {
                 soft: false,
             })
             .collect();
-        build_clusters(netlist, graph, &kinds_of(graph), &mut info, 0, memories)
-            .iter()
-            .map(|m| {
-                let mut members: Vec<usize> = m.members.iter().map(|(i, _, _)| *i).collect();
-                members.sort_unstable();
-                members
-            })
-            .collect()
+        build_clusters(
+            netlist,
+            graph,
+            &kinds_of(graph),
+            &mut info,
+            0,
+            memories,
+            &mut Vec::new(),
+        )
+        .iter()
+        .map(|m| {
+            let mut members: Vec<usize> = m.members.iter().map(|(i, _, _)| *i).collect();
+            members.sort_unstable();
+            members
+        })
+        .collect()
     }
 
     /// The kind of a `RAM32X1D`'s places, as `xray::lutram` declares them.
@@ -14211,6 +14381,8 @@ mod tests {
             frozen: vec![false; 7],
             pin_domain: Vec::new(),
             pin_delays: PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {
