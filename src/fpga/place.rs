@@ -1334,6 +1334,12 @@ pub struct PlaceOptions {
     /// every family but the 7 series' and that one under `--route-throughs off`.
     /// See [`RouteThroughs`].
     pub route_throughs: RouteThroughs,
+    /// Whether one move in `DIRECTED_EVERY` is drawn toward the cells a
+    /// cell connects to rather than around where it is (`median_region`).
+    /// Off by default; the 7-series flow turns it on with its fitted delay
+    /// model, and the Husky's measured builds, made without it, keep the
+    /// legacy one.
+    pub median_moves: bool,
 }
 
 /// A way through a bel into a pin beside it, which Vivado calls a
@@ -1404,6 +1410,7 @@ impl Default for PlaceOptions {
             regional_sites: BTreeMap::new(),
             memory_packing: false,
             route_throughs: RouteThroughs::default(),
+            median_moves: false,
         }
     }
 }
@@ -8264,6 +8271,9 @@ fn anneal(
                 &mut rng,
                 placement,
                 reach,
+                options
+                    .median_moves
+                    .then_some((&churn.spans, churn.carried.as_slice())),
             ) else {
                 continue;
             };
@@ -8489,12 +8499,116 @@ fn window_of(
     (rect.x0 <= rect.x1 && rect.y0 <= rect.y1).then_some(rect)
 }
 
+/// What a median move reads: the boxes, and each instance's pins that carry a
+/// signal ([`Churn`]'s).
+type Aim<'a> = (&'a Spans, &'a [Vec<(usize, usize)>]);
+
+/// One draw in this many is a median move, when the anneal makes them
+/// ([`PlaceOptions::median_moves`]).
+const DIRECTED_EVERY: usize = 8;
+
+/// Signals of more sinks than this are left out of a median move's region:
+/// a clock's box is the design's, and says nothing of where a cell belongs.
+const DIRECTED_FANOUT: usize = 64;
+
+/// The region a median move draws from: per axis, from the median of the
+/// low edges of the boxes of the signals `members` carry to the median of
+/// their high edges, as VPR's median move has it (Elgammal, Murray and
+/// Betz, *RLPlace*, 2021). With `exclude`, a single cell's own pin is taken
+/// out of each box first, when it is the box's only pin on that edge, so
+/// that a cell far from everything it connects to is drawn back to them
+/// rather than to boxes it stretches. `None` when no signal says anything.
+///
+/// The window of an anneal shrinks with its acceptance rate, so a cell an
+/// early, hot step sent across the die is left with moves of a tile or two
+/// around where it landed: on `qor/counter64.v` one of `limit`'s
+/// sixty-four flip-flops sat forty tiles from both its neighbours and the
+/// table that reads it through every round, on four seeds of five, and its
+/// connection was the latest path's first.
+fn median_region(
+    spans: &Spans,
+    carried: &[Vec<(usize, usize)>],
+    members: impl Iterator<Item = (usize, (u32, u32))>,
+    exclude: bool,
+) -> Option<Rect> {
+    let mut edges: [Vec<u32>; 4] = Default::default();
+    for (member, (x, y)) in members {
+        for (signal, _) in &carried[member] {
+            let b = spans.boxes[*signal];
+            if b.placed < 2 || b.placed as usize > DIRECTED_FANOUT + 1 {
+                continue;
+            }
+            let (mut x0, mut x1, mut y0, mut y1) = (b.x0, b.x1, b.y0, b.y1);
+            if exclude {
+                let column = |at: u32| spans.columns[*signal * spans.width + at as usize];
+                let row = |at: u32| spans.rows[*signal * spans.height + at as usize];
+                if x == x0 && x0 < x1 && column(x) == 1 {
+                    x0 += 1;
+                    while x0 < x1 && column(x0) == 0 {
+                        x0 += 1;
+                    }
+                }
+                if x == x1 && x0 < x1 && column(x) == 1 {
+                    x1 -= 1;
+                    while x1 > x0 && column(x1) == 0 {
+                        x1 -= 1;
+                    }
+                }
+                if y == y0 && y0 < y1 && row(y) == 1 {
+                    y0 += 1;
+                    while y0 < y1 && row(y0) == 0 {
+                        y0 += 1;
+                    }
+                }
+                if y == y1 && y0 < y1 && row(y) == 1 {
+                    y1 -= 1;
+                    while y1 > y0 && row(y1) == 0 {
+                        y1 -= 1;
+                    }
+                }
+            }
+            edges[0].push(x0);
+            edges[1].push(x1);
+            edges[2].push(y0);
+            edges[3].push(y1);
+        }
+    }
+    if edges[0].is_empty() {
+        return None;
+    }
+    // The lower median of the low edges and the upper of the high ones, so
+    // that two signals, one each side, give the span between them.
+    let mut median = |at: usize, upper: bool| {
+        let v = &mut edges[at];
+        v.sort_unstable();
+        v[if upper {
+            v.len() / 2
+        } else {
+            (v.len() - 1) / 2
+        }]
+    };
+    let (x0, x1) = (median(0, false), median(1, true));
+    let (y0, y1) = (median(2, false), median(3, true));
+    Some(Rect {
+        x0: x0.min(x1),
+        y0: y0.min(y1),
+        x1: x0.max(x1),
+        y1: y0.max(y1),
+    })
+}
+
 /// Proposes a move: a macro relocation, a move to a free site, or a swap.
 ///
 /// `reach` is the range limit in tiles: the destination is drawn from the
 /// square of that half-side around where the cell is now. `u32::MAX`
 /// means the whole die, which is what the start-temperature probe uses
 /// and what [`PlaceOptions::range_limit`] turns off to.
+///
+/// With `aim`, one draw in [`DIRECTED_EVERY`] is a *median move* instead:
+/// the destination is drawn from the region between the medians of the
+/// low and the high edges of the cell's signals' boxes, the cell left out
+/// ([`median_region`]), wherever that is, rather than from the window
+/// around where the cell is now.
 #[allow(clippy::too_many_arguments, reason = "the annealer's whole state")]
 fn draw_move(
     netlist: &Netlist,
@@ -8508,10 +8622,12 @@ fn draw_move(
     rng: &mut Rng,
     placement: &mut Placement,
     reach: u32,
+    aim: Option<Aim<'_>>,
 ) -> Option<Move> {
     let instance = movable[rng.below(movable.len())];
     let here = placement.site_of(instance)?;
     let (hx, hy) = shared.tiles[here];
+    let directed = aim.filter(|_| rng.below(DIRECTED_EVERY) == 0);
     if let Some(index) = info[instance].macro_index {
         let m = &macros[index];
         // A macro moves as a whole, so the window is around its anchor
@@ -8520,7 +8636,18 @@ fn draw_move(
             Some(site) => shared.tiles[site],
             None => (hx, hy),
         };
-        let rect = window_of(graph, None, ax0, ay0, reach)?;
+        let toward = directed.and_then(|(spans, carried)| {
+            let members = m.members.iter().filter_map(|(member, _, _)| {
+                placement
+                    .site_of(*member)
+                    .map(|s| (*member, shared.tiles[s]))
+            });
+            median_region(spans, carried, members, false)
+        });
+        let rect = match toward {
+            Some(rect) => rect,
+            None => window_of(graph, None, ax0, ay0, reach)?,
+        };
         let ax = rect.x0 + u32::try_from(rng.below((rect.x1 - rect.x0 + 1) as usize)).unwrap_or(0);
         let ay = rect.y0 + u32::try_from(rng.below((rect.y1 - rect.y0 + 1) as usize)).unwrap_or(0);
         // The members are taken off the placement while their new sites
@@ -8551,13 +8678,27 @@ fn draw_move(
         }
         return found;
     }
-    let rect = window_of(
-        graph,
-        info[instance].region.as_ref().map(|(rect, _)| rect),
-        hx,
-        hy,
-        reach,
-    )?;
+    let region = info[instance].region.as_ref().map(|(rect, _)| rect);
+    let toward = directed
+        .and_then(|(spans, carried)| {
+            median_region(spans, carried, std::iter::once((instance, (hx, hy))), true)
+        })
+        .and_then(|rect| match region {
+            Some(region) => {
+                let r = Rect {
+                    x0: rect.x0.max(region.x0),
+                    y0: rect.y0.max(region.y0),
+                    x1: rect.x1.min(region.x1),
+                    y1: rect.y1.min(region.y1),
+                };
+                (r.x0 <= r.x1 && r.y0 <= r.y1).then_some(r)
+            }
+            None => Some(rect),
+        });
+    let rect = match toward {
+        Some(rect) => rect,
+        None => window_of(graph, region, hx, hy, reach)?,
+    };
     let target = windows.of(instance)?.pick(rng, rect)?;
     if target == here {
         return None;
@@ -8620,6 +8761,7 @@ fn propose(
         rng,
         placement,
         reach,
+        None,
     )?;
     if info[candidate[0].0].macro_index.is_some() || shared.allows(placement, &candidate) {
         return Some(candidate);
@@ -11923,6 +12065,83 @@ mod tests {
             let want = if pin == into_third { 0.0 } else { *was };
             assert!((now - want).abs() < 1e-9, "pin {pin}: {now} for {want}");
         }
+    }
+
+    /// **A median move brings back a cell an anneal left far from what it
+    /// connects to.** [`chain`] of six on a row of a hundred tiles, its cells
+    /// at columns 0, 2, 4, 8 and 10 but the fourth, which is at 99. A cold
+    /// anneal whose window is a tile and whose moves are few walks that cell
+    /// a few dozen tiles at best; with [`PlaceOptions::median_moves`] one draw
+    /// in [`DIRECTED_EVERY`] is from between its neighbours (4 to 8, the
+    /// lower and upper medians of two boxes), and it ends there. And
+    /// [`median_region`] itself: between the neighbours with the cell left
+    /// out of its boxes, and out to the cell's own column when it is not.
+    ///
+    /// Would catch the median moves never drawn, drawn around the cell, the
+    /// cell's own pin kept in its boxes (the region would reach 99), and the
+    /// median taken of the wrong edges (a region of one column, which holds
+    /// a neighbour, and the move a swap the cold walk refuses). Would not
+    /// catch a share of median moves that helps one design and hurts
+    /// another, which only the corpus's runs against Vivado's timer say.
+    #[test]
+    fn a_median_move_brings_a_stranded_cell_back() {
+        let (_, graph) = grid(100, 1);
+        let netlist = chain(6);
+        let at = |x: u32| graph.sites.iter().position(|s| s.tile == (x, 0)).unwrap();
+        let start = || {
+            let mut placement = Placement::new(6, graph.sites.len());
+            for (instance, x) in [0u32, 2, 4, 99, 8, 10].iter().enumerate() {
+                placement.place(instance, at(*x));
+            }
+            placement
+        };
+        let spans = Spans::new(&netlist, &graph, &start());
+        let churn = Churn::new(&netlist, &graph, &start());
+        let region =
+            median_region(&spans, &churn.carried, std::iter::once((3, (99, 0))), true).unwrap();
+        assert_eq!((region.x0, region.x1), (4, 8));
+        let kept =
+            median_region(&spans, &churn.carried, std::iter::once((3, (99, 0))), false).unwrap();
+        assert_eq!((kept.x0, kept.x1), (4, 99), "out to its own column, kept");
+        let info: Vec<Placeable> = (0..6)
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+                soft: false,
+            })
+            .collect();
+        let shared = SiteRules::find(&netlist, &graph);
+        let column_of = |median_moves: bool| {
+            let options = PlaceOptions {
+                start_window: Some(1),
+                start_acceptance: Some(0.01),
+                max_temperatures: 2,
+                moves_per_temperature: Some(120),
+                stall_limit: 0,
+                median_moves,
+                ..PlaceOptions::default()
+            };
+            let mut placement = start();
+            anneal(
+                &netlist,
+                &graph,
+                &info,
+                &[],
+                &kinds_of(&graph),
+                &shared,
+                &options,
+                &Weights::default(),
+                &mut placement,
+                &mut PlacementReport::default(),
+            );
+            graph.sites[placement.site_of(3).unwrap()].tile.0
+        };
+        let without = column_of(false);
+        assert!(without > 40, "a tile at a time it walked to {without}");
+        let with = column_of(true);
+        assert!((5..=7).contains(&with), "drawn back to {with}");
     }
 
     /// [`chained`] with a flip-flop beside each carry that its sum `s0`

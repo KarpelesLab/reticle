@@ -4306,6 +4306,10 @@ fn write_xc7_bitstream(
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let delay_model = delay_model(args).map_err(|e| e.to_string())?;
+    // Some of the anneal's moves drawn toward a cell's connections, with the
+    // fitted model: see `PlaceOptions::median_moves`. The Husky's measured
+    // builds pass `--delay-model legacy`, and are placed as they were.
+    options.median_moves = delay_model == reticle::fpga::xray::DelayModel::Vivado;
     let domains = if args.flag("timing-driven") {
         let (timing, names) =
             reticle::fpga::xray::place_timing(design, top, &netlist, constraints, delay_model);
