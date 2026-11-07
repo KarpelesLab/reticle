@@ -1261,33 +1261,112 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 );
                 self.coerce(id, w, name == "signed")
             }
-            _ => {
-                let info = self.info_of(e);
-                let mut ids = Vec::new();
-                for a in args {
-                    if let Some(v) = &a.value {
-                        // A real argument stays a real: built as an
-                        // integer, `$realtobits(2.5)` was the bits of 3.0.
-                        let id = if matches!(self.info_of(v), Info::Real) {
-                            self.real(v, sink)
-                        } else {
-                            self.build(v, 0, sink)
-                        };
-                        ids.push(id);
-                    }
+            "random" | "dist_uniform" | "dist_normal" | "dist_exponential" | "dist_poisson"
+            | "dist_chi_square" | "dist_t" | "dist_erlang"
+                if !args.is_empty() =>
+            {
+                if let Some(id) = self.seeded_call(e, name, args, sink) {
+                    return id;
                 }
-                let ty = match info {
-                    Info::Real => Type::Real,
-                    Info::Str(_) => Type::String,
-                    other => Type::Bits {
-                        width: other.width().max(1),
-                        signed: other.is_signed(),
-                    },
+                self.plain_system_call(e, name, args, sink)
+            }
+            _ => self.plain_system_call(e, name, args, sink),
+        }
+    }
+
+    /// `$random(seed)` or a `$dist_*(seed, ...)` whose seed is a variable,
+    /// which the call must leave holding the generator's next seed
+    /// (IEEE 1364-2005 §17.9.1).
+    ///
+    /// The call becomes `t = $random$seed(seed, ...)`, whose 64-bit value
+    /// carries the new seed in its upper half and the result in its lower
+    /// half, then `seed = t[63:32]`; the expression is `t[31:0]`. `None`
+    /// when the seed is not a plain variable or the call is not in a
+    /// procedure, where the value is still right but the seed is not
+    /// written back.
+    fn seeded_call(
+        &mut self,
+        e: &'ast Expr,
+        name: &str,
+        args: &'ast [ast::Arg],
+        sink: &mut Sink<'_>,
+    ) -> Option<ExprId> {
+        let seed_arg = args.first()?.value.as_ref()?;
+        if !matches!(sink, Sink::Proc(_)) || !matches!(seed_arg.kind, ExprKind::Ident(_)) {
+            return None;
+        }
+        let Some(Symbol::Net { net: seed, ty }) = self.env.probe(|env| env.resolve_path(seed_arg))
+        else {
+            return None;
+        };
+        if !self.nets.get(seed.index()).is_some_and(|n| n.is_var) {
+            return None;
+        }
+        let seed_width = ty.packed().map_or(32, Packed::width);
+        let mut ids = Vec::new();
+        for a in args {
+            if let Some(v) = &a.value {
+                let id = if matches!(self.info_of(v), Info::Real) {
+                    self.real(v, sink)
+                } else {
+                    self.build(v, 0, sink)
                 };
-                self.b.span = e.span;
-                self.b.call(format!("${name}"), ids, ty)
+                ids.push(id);
             }
         }
+        let frame = self.fresh(name);
+        let tmp_name = self.qualified(&frame);
+        let tmp = self.new_var(tmp_name, VType::Packed(Packed::bits(64)), e.span)?;
+        self.b.span = e.span;
+        let call = self.b.call(format!("${name}$seed"), ids, Type::bits(64));
+        let Sink::Proc(out) = sink else { return None };
+        out.span = e.span;
+        out.assign(tmp, call, AssignKind::Blocking);
+        self.b.span = e.span;
+        let whole = self.b.net(tmp);
+        let new_seed = self.b.slice(whole, 63, 32);
+        let new_seed = self.coerce(new_seed, seed_width, false);
+        out.span = e.span;
+        out.assign(seed, new_seed, AssignKind::Blocking);
+        self.record_driver(seed, self.driver, true, e.span);
+        self.b.span = e.span;
+        let whole = self.b.net(tmp);
+        let value = self.b.slice(whole, 31, 0);
+        Some(self.coerce(value, 32, true))
+    }
+
+    /// A system function the simulator evaluates from its argument values.
+    fn plain_system_call(
+        &mut self,
+        e: &'ast Expr,
+        name: &str,
+        args: &'ast [ast::Arg],
+        sink: &mut Sink<'_>,
+    ) -> ExprId {
+        let info = self.info_of(e);
+        let mut ids = Vec::new();
+        for a in args {
+            if let Some(v) = &a.value {
+                // A real argument stays a real: built as an
+                // integer, `$realtobits(2.5)` was the bits of 3.0.
+                let id = if matches!(self.info_of(v), Info::Real) {
+                    self.real(v, sink)
+                } else {
+                    self.build(v, 0, sink)
+                };
+                ids.push(id);
+            }
+        }
+        let ty = match info {
+            Info::Real => Type::Real,
+            Info::Str(_) => Type::String,
+            other => Type::Bits {
+                width: other.width().max(1),
+                signed: other.is_signed(),
+            },
+        };
+        self.b.span = e.span;
+        self.b.call(format!("${name}"), ids, ty)
     }
 
     /// Inlines a call of `f`, returning the net holding its result.

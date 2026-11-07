@@ -32,6 +32,7 @@ use crate::ir::{Design, Span};
 use crate::sim::{FileProvider, SimOptions, Simulator};
 
 /// Configuration for [`check`] and [`super::CompiledSim::new`].
+#[derive(Default)]
 pub struct CompileOptions {
     /// The module to instantiate as the root; defaults the same way
     /// [`SimOptions::top`] does.
@@ -45,19 +46,9 @@ pub struct CompileOptions {
     pub zero_init: bool,
     /// Files for `$readmemh` / `$readmemb` in time-zero initialisers.
     pub files: Option<Box<dyn FileProvider>>,
-    /// Seed for `$random` during the time-zero initialisation.
+    /// Seed for `$random` during the time-zero initialisation; the default,
+    /// 0, is the event simulator's ([`SimOptions::seed`]).
     pub seed: u64,
-}
-
-impl Default for CompileOptions {
-    fn default() -> Self {
-        CompileOptions {
-            top: None,
-            zero_init: false,
-            files: None,
-            seed: 1,
-        }
-    }
 }
 
 impl fmt::Debug for CompileOptions {

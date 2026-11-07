@@ -21,6 +21,7 @@
 //! | `sys.rs`      | System tasks, `$display` formatting, `$random`, `$readmem*`, `$writemem*` |
 //! | `vhdl_runtime.rs` | The `$vhdl_` functions VHDL report messages are built with |
 //! | `inertial.rs` | Inertial delay: the updates an assignment cancels       |
+//! | `random.rs`   | `$random` and `$dist_*`: the standard's generator            |
 //! | `vcd.rs`      | VCD waveform writer                                          |
 //! | `api.rs`      | The public co-simulation API                                 |
 //! | `assertion/`  | Concurrent assertions: an SVA / PSL subset as automata       |
@@ -160,6 +161,7 @@ pub mod fst;
 mod inertial;
 pub mod interactive;
 mod process;
+mod random;
 mod sched;
 mod sys;
 mod value;
@@ -195,7 +197,9 @@ pub struct SimOptions {
     /// The module to instantiate as the root; defaults to the design's top
     /// or, failing that, the only module no instance refers to.
     pub top: Option<String>,
-    /// Seed of the `$random` generator.
+    /// Seed of `$random` called without a seed variable (its low 32 bits)
+    /// and of the `$urandom` generator. The default, 0, gives the sequence
+    /// xsim's `$random` starts with.
     pub seed: u64,
     /// Statements one process activation may execute before it is
     /// considered stuck and killed with an error.
@@ -218,7 +222,7 @@ impl Default for SimOptions {
     fn default() -> Self {
         SimOptions {
             top: None,
-            seed: 1,
+            seed: 0,
             max_process_steps: 10_000_000,
             max_slot_events: 1_000_000,
             files: None,
@@ -279,6 +283,10 @@ pub struct Simulator<'d> {
     messages: Diagnostics,
     vcd: Option<VcdWriter>,
     rng: u64,
+    /// The seed `$random` without an argument advances (IEEE 1364-2005
+    /// §17.9.1). A call with a seed variable, and `$dist_uniform`, leave
+    /// their variable's new value here too, as xsim does.
+    random_seed: i32,
     time_format: TimeFormat,
     warned_calls: Vec<String>,
     /// Files saved by `$writememh` / `$writememb`, by name.

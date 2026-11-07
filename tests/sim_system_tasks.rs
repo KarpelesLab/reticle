@@ -76,3 +76,18 @@ fn display_formats_as_xsim_does() {
 fn printtimescale_prints_as_xsim_does() {
     matches_xsim("printtimescale_tb", "v", 0);
 }
+
+/// **`$random` and the `$dist_*` functions compute what xsim computes**
+/// (`random_tb.v`), which is IEEE 1364-2005's own code: their values, the
+/// seed each leaves in its variable, and the sequence of `$random` with no
+/// seed, which goes on from the seed the last `$random(seed)` or
+/// `$dist_uniform` left. Reticle used a xorshift generator and never
+/// wrote a seed back. Would catch any of the seven functions computing
+/// differently, a seed not written back, or the seedless sequence starting
+/// or continuing elsewhere; would not catch the warnings for a mean that is
+/// not positive or an empty `$dist_uniform` range, which the testbench
+/// leaves out because xsim prints them into its output.
+#[test]
+fn random_computes_what_xsim_computes() {
+    matches_xsim("random_tb", "v", 0);
+}

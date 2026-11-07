@@ -17,7 +17,8 @@
 //! | `$printtimescale` | Prints a scope's time unit and precision as xsim does (§17.3.1) |
 //! | `$dumpvars` `$dumpfile` `$dumpon` `$dumpoff` `$dumpall` | `$dumpvars` enables VCD capture; the rest are accepted and ignored |
 //! | `$time` `$stime` `$realtime` | The current time in the module's unit (§17.7) |
-//! | `$random` `$urandom` `$urandom_range` | A seeded xorshift generator (§17.9.1); deterministic per seed |
+//! | `$random`, `$dist_uniform` `$dist_normal` `$dist_exponential` `$dist_poisson` `$dist_chi_square` `$dist_t` `$dist_erlang` | The standard's generator (§17.9), in `random.rs`; a seed variable is written back |
+//! | `$urandom` `$urandom_range` | A seeded xorshift generator; deterministic per seed |
 //! | `$clog2` `$bits` `$itor` `$rtoi` `$realtobits` `$bitstoreal` `$sformatf` | Utility functions |
 //!
 //! Formatting understands `%d %i %h %x %o %b %s %c %t %m %l %e %f %g %%`
@@ -422,7 +423,7 @@ impl<'d> Simulator<'d> {
         fs / unit
     }
 
-    /// The next `$random` value.
+    /// The next `$urandom` value, from a seeded xorshift generator.
     pub(crate) fn random(&mut self) -> u64 {
         xorshift(&mut self.rng)
     }
@@ -912,9 +913,53 @@ impl<'d> Simulator<'d> {
         match name {
             "$time" | "$stime" => fit(Logic::from_u64(self.module_time(inst), 64)),
             "$realtime" => Value::Real(self.module_realtime(inst)),
-            "$random" => {
-                let r = self.random();
-                fit(Logic::from_i64((r & 0xFFFF_FFFF).cast_signed(), 32).as_signed())
+            "$random" if args.is_empty() => {
+                let r = super::random::random(&mut self.random_seed);
+                fit(Logic::from_i64(i64::from(r), 32).as_signed())
+            }
+            seeded if seeded.starts_with("$random") || seeded.starts_with("$dist_") => {
+                // `$random(seed)` and `$dist_*(seed, ...)`. A frontend
+                // that can write the seed back calls the `$seed` form,
+                // which returns the new seed above the value.
+                let (base, write_back) = match seeded.strip_suffix("$seed") {
+                    Some(base) => (base, true),
+                    None => (seeded, false),
+                };
+                let ints: Vec<i32> = args
+                    .iter()
+                    .map(|v| {
+                        let l = match v {
+                            Value::Real(r) => real_as_integer(*r),
+                            other => other.to_logic(),
+                        };
+                        // The low 32 bits, as C's `long` holds them.
+                        #[allow(clippy::cast_possible_truncation)]
+                        let i = l.resize(32).as_signed().to_i64().unwrap_or(0) as i32;
+                        i
+                    })
+                    .collect();
+                let mut seed = ints.first().copied().unwrap_or(0);
+                let Some((value, warning)) =
+                    super::random::dist(base, &mut seed, ints.get(1..).unwrap_or(&[]))
+                else {
+                    self.warn_unknown("function", name, span);
+                    return Value::Bits(Logic::x(width.max(1)));
+                };
+                if let Some(w) = warning {
+                    self.messages.push(Diagnostic::warning(w).with_span(span));
+                }
+                // xsim's seedless `$random` goes on from where the last
+                // `$random(seed)` or `$dist_uniform` left its seed; the
+                // other distributions leave it alone (measured).
+                if matches!(base, "$random" | "$dist_uniform") && warning.is_none() {
+                    self.random_seed = seed;
+                }
+                let value = Logic::from_i64(i64::from(value), 32).as_signed();
+                if write_back {
+                    let seed = Logic::from_i64(i64::from(seed), 32);
+                    return Value::Bits(Logic::concat_all([&seed, &value.as_unsigned()]));
+                }
+                fit(value)
             }
             "$urandom" => fit(Logic::from_u64(self.random() & 0xFFFF_FFFF, 32)),
             "$urandom_range" => {

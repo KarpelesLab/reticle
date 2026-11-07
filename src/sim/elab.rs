@@ -321,6 +321,7 @@ impl<'d> Simulator<'d> {
             .filter(|&fs| fs > 0)
             .min()
             .unwrap_or(1_000);
+        let options_seed = options.seed;
         let rng = if options.seed == 0 {
             0x9E37_79B9_7F4A_7C15
         } else {
@@ -354,6 +355,9 @@ impl<'d> Simulator<'d> {
             messages: Diagnostics::new(),
             vcd: None,
             rng,
+            // The low 32 bits, as a C `long` seed would hold them.
+            #[allow(clippy::cast_possible_truncation)]
+            random_seed: options_seed as i32,
             time_format: super::sys::TimeFormat::for_precision(precision_fs),
             warned_calls: Vec::new(),
             written: std::collections::BTreeMap::new(),

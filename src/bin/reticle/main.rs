@@ -504,7 +504,7 @@ Options:
                    cells and its hard blocks (block RAM, DSP, IO logic and
                    buffers, clock buffers and managers)
   --until <ticks>  Stop at this time (in the design's precision)
-  --seed <n>       Seed for $random (default 1)
+  --seed <n>       Seed for $random and $urandom (default 0)
   --vcd <file>     Write a VCD waveform here
   --fst <file>     Write a GTKWave FST waveform here
   --assert <expr>  Add a concurrent assertion; repeatable via a file with
