@@ -14,6 +14,7 @@
 //! | `$readmemh` `$readmemb` | Load a memory from a [`FileProvider`] (§17.2.9); the IR carries them as [`StmtKind::MemFile`](crate::ir::StmtKind::MemFile), which names the memory itself |
 //! | `$writememh` `$writememb` | Save a memory's contents, which [`Simulator::written_files`] hands back |
 //! | `$timeformat` | Sets the `%t` format (§17.3.2) |
+//! | `$printtimescale` | Prints a scope's time unit and precision as xsim does (§17.3.1) |
 //! | `$dumpvars` `$dumpfile` `$dumpon` `$dumpoff` `$dumpall` | `$dumpvars` enables VCD capture; the rest are accepted and ignored |
 //! | `$time` `$stime` `$realtime` | The current time in the module's unit (§17.7) |
 //! | `$random` `$urandom` `$urandom_range` | A seeded xorshift generator (§17.9.1); deterministic per seed |
@@ -745,13 +746,59 @@ impl<'d> Simulator<'d> {
                 }
                 true
             }
-            "$dumpfile" | "$dumpon" | "$dumpoff" | "$dumpall" | "$dumpflush" | "$fflush"
-            | "$printtimescale" => true,
+            "$printtimescale" => {
+                let text = self.timescale_text(inst, args);
+                self.output.push_str(&text);
+                self.output.push('\n');
+                true
+            }
+            "$dumpfile" | "$dumpon" | "$dumpoff" | "$dumpall" | "$dumpflush" | "$fflush" => true,
             _ => {
                 self.warn_unknown("task", name, span);
                 true
             }
         }
+    }
+
+    /// The line `$printtimescale` prints, in xsim's words: `Timescale of
+    /// (tb) is 1ns/1ps.` (IEEE 1364-2005 §17.3.1 gives no exact text).
+    ///
+    /// With no argument the scope is the calling module, named by its
+    /// module name as xsim names it; an argument names an instance, by a
+    /// path from the calling instance or from the top, and is printed as
+    /// its full path. xsim prints an absolute argument `tb.u1` as
+    /// `tb.tb.u1`, prefixing the caller's scope, which is not copied.
+    fn timescale_text(&mut self, inst: InstId, args: &[ExprId]) -> String {
+        let (label, target) = match args.first() {
+            None => (self.instances[inst.idx()].m.name.to_string(), inst),
+            Some(a) => {
+                let written = match self.eval(inst, *a) {
+                    Value::Str(s) => s,
+                    other => display_string(&other.to_logic(), true),
+                };
+                let relative = format!("{}.{written}", self.instances[inst.idx()].path);
+                let found = self
+                    .instances
+                    .iter()
+                    .position(|i| i.path == relative)
+                    .or_else(|| self.instances.iter().position(|i| i.path == written));
+                match found {
+                    Some(i) => (self.instances[i].path.clone(), InstId::at(i)),
+                    None => (written, inst),
+                }
+            }
+        };
+        let scale = match self.instances[target.idx()].m.timescale {
+            Some(t) => format!(
+                "{}{}/{}{}",
+                t.unit.value,
+                t.unit.unit.name(),
+                t.precision.value,
+                t.precision.unit.name()
+            ),
+            None => "1ns/1ps".to_owned(),
+        };
+        format!("Timescale of ({label}) is {scale}.")
     }
 
     /// `$readmemh`, `$readmemb`, `$writememh` and `$writememb`

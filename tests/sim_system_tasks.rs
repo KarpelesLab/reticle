@@ -64,3 +64,15 @@ fn matches_xsim(name: &str, ext: &str, code: i32) {
 fn display_formats_as_xsim_does() {
     matches_xsim("display_format_tb", "v", 0);
 }
+
+/// **`$printtimescale` prints xsim's line** (`printtimescale_tb.v`): the
+/// calling module by its module name, or the instance an argument names by
+/// its path, each with its own `` `timescale ``. It printed nothing.
+/// Would catch the task ignored again, the wrong module's timescale (the
+/// testbench's two modules differ), or a relative instance name not found;
+/// would not catch an absolute path as an argument, which xsim prints with
+/// the caller's scope in front (`tb.tb.u1`) and Reticle does not copy.
+#[test]
+fn printtimescale_prints_as_xsim_does() {
+    matches_xsim("printtimescale_tb", "v", 0);
+}

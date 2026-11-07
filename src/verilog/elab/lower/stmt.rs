@@ -644,6 +644,26 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 out.span = span;
                 out.assert(cond, severity, msg);
             }
+            "printtimescale" => {
+                // The argument names a scope, which the simulator looks up
+                // by its path; it is never a value, and a path into the
+                // hierarchy from the top is not resolved here.
+                let mut ids = Vec::new();
+                for v in args.iter().filter_map(|a| a.value.as_ref()) {
+                    let Some(path) = super::path_components(v) else {
+                        self.env.error(
+                            codes::ARGUMENTS,
+                            v.span,
+                            "`$printtimescale` takes the name of a module instance",
+                        );
+                        return;
+                    };
+                    self.b.span = v.span;
+                    ids.push(self.b.string(path.join(".")));
+                }
+                out.span = span;
+                out.syscall(format!("${name}"), ids);
+            }
             "readmemh" | "readmemb" | "writememh" | "writememb" => {
                 let op = ir::MemFileOp::from_keyword(name).expect("one of the four tasks");
                 self.mem_file_task(op, args, span, out);
