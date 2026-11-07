@@ -639,31 +639,33 @@ impl<'d> Simulator<'d> {
                 }
             }
         }
-        match qualifier {
-            CaseQualifier::Unique if count > 1 => self.messages.push(
-                Diagnostic::warning(format!(
-                    "unique case: {count} arms match {} at time {}",
-                    subj.to_verilog_literal(),
-                    self.now
-                ))
-                .with_span(span),
-            ),
-            CaseQualifier::Unique | CaseQualifier::Priority if count == 0 && default.is_none() => {
-                self.messages.push(
-                    Diagnostic::warning(format!(
-                        "{} case: no arm matches {} at time {}",
-                        if qualifier == CaseQualifier::Unique {
-                            "unique"
-                        } else {
-                            "priority"
-                        },
-                        subj.to_verilog_literal(),
-                        self.now
-                    ))
-                    .with_span(span),
-                );
+        // A `unique if` or `priority if` chain arrives as `case (1'b1)`,
+        // so the words fit both, and the subject is named only when it is
+        // not a constant. xsim says "none of the conditions were true for
+        // unique case" and "Multiple conditions true".
+        let violation = match qualifier {
+            CaseQualifier::Unique if count > 1 => {
+                Some(format!("`unique`: {count} conditions are true"))
             }
-            _ => {}
+            CaseQualifier::Unique | CaseQualifier::Priority if count == 0 && default.is_none() => {
+                let q = if qualifier == CaseQualifier::Unique {
+                    "unique"
+                } else {
+                    "priority"
+                };
+                Some(format!("`{q}`: none of the conditions is true"))
+            }
+            _ => None,
+        };
+        if let Some(text) = violation {
+            let m = self.instances[inst.idx()].m;
+            let constant = m.exprs.get(subject).is_some_and(|e| e.as_const().is_some());
+            let mut diag =
+                Diagnostic::warning(format!("{text} at time {}", self.now)).with_span(span);
+            if !constant {
+                diag = diag.with_note(format!("the case subject is {}", subj.to_verilog_literal()));
+            }
+            self.messages.push(diag);
         }
         match matched.or(default.as_ref()) {
             Some(block) => Flow::Push(Frame {

@@ -1,0 +1,30 @@
+M1 o=1
+WARNING: 0ns : Multiple conditions true
+	 condition at line:14 conflicts with condtion at line:14
+	 for unique case from File:unique_tb.sv:14
+M2 o=3
+WARNING: 0ns : Multiple conditions true
+	 condition at line:16 conflicts with condtion at line:16
+	 for unique0 case from File:unique_tb.sv:16
+M3 o=5
+WARNING: 0ns : none of the conditions were true for priority case from File:unique_tb.sv:19
+M4 o=5
+M5 o=a
+WARNING: 0ns : Multiple conditions true
+	 condition at line:23 conflicts with condtion at line:23
+	 for unique0 if from File:unique_tb.sv:23
+M6 o=b
+M7 o=b
+M8 o=f
+WARNING: 0ns : none of the conditions were true for unique if from File:unique_tb.sv:30
+M9 o=f
+WARNING: 0ns : none of the conditions were true for unique case from File:unique_tb.sv:32
+M10 o=f
+M11 o=f
+WARNING: 1ns : none of the conditions were true for unique if from File:unique_tb.sv:39
+M12 o=f
+M13 o=9
+WARNING: 1ns : Multiple conditions true
+	 condition at line:43 conflicts with condtion at line:43
+	 for unique if from File:unique_tb.sv:43
+M14 o=b

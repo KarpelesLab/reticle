@@ -7,5 +7,5 @@ in=x010 out=0
 sel=2 y=1
 sel=0 y=1
 end-output
-expect-message unique case: 2 arms match 2'h2
-expect-message unique case: no arm matches 2'h0
+expect-message `unique`: 2 conditions are true
+expect-message `unique`: none of the conditions is true

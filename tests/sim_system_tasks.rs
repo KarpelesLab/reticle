@@ -145,3 +145,42 @@ fn bit_counts_compute_as_xsim_does() {
 fn assertions_and_reports_as_xsim_prints_them() {
     matches_xsim("assert_tb", "sv", 1);
 }
+
+/// **`unique`, `unique0` and `priority` take xsim's branches and warn
+/// where xsim warns** (`unique_tb.sv`): the output without xsim's warning
+/// lines is xsim's, and Reticle's warnings name the same lines in the same
+/// order. `unique if` and `priority if` never warned, and `unique0 case`
+/// warned when nothing matched. Would catch any of those back, a warning
+/// for a chain with an `else`, or an unknown condition counted as true;
+/// would not catch the warnings' wording, which differs on purpose (xsim's
+/// carries the file's path), nor that they go to standard error.
+#[test]
+fn unique_and_priority_warn_where_xsim_does() {
+    let tb = "testdata/sim/unique_tb.sv";
+    let (code, stdout, stderr) = sim(tb);
+    assert_eq!(code, 0, "{stderr}");
+    let xsim = std::fs::read_to_string("testdata/sim/unique_tb.xsim").unwrap();
+    let want: String = xsim
+        .lines()
+        .filter(|l| !l.starts_with("WARNING:") && !l.starts_with('\t'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(stdout, want, "{stderr}");
+    // xsim ends each warning with `from File:unique_tb.sv:<line>`.
+    let xsim_lines: Vec<&str> = xsim
+        .lines()
+        .filter_map(|l| l.split_once("from File:unique_tb.sv:"))
+        .map(|(_, n)| n)
+        .collect();
+    // Reticle points at the statement: `--> testdata/sim/unique_tb.sv:<line>:<col>`.
+    let ours: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| {
+            l.trim_start()
+                .strip_prefix("--> testdata/sim/unique_tb.sv:")
+        })
+        .filter_map(|rest| rest.split(':').next())
+        .collect();
+    assert_eq!(xsim_lines.len(), 8, "{xsim}");
+    assert_eq!(ours, xsim_lines, "{stderr}");
+}

@@ -50,6 +50,31 @@ fn is_plain_return(s: &Stmt) -> bool {
     matches!(s.kind, AstStmt::Return(_))
 }
 
+/// The IR qualifier of a `case` or `if` and its default branch: `unique0`
+/// is `unique` that may match nothing, so it gets an empty default when it
+/// has none, which keeps a match of none silent and leaves a match of two
+/// a warning.
+fn qualify(
+    q: Option<ast::Qualifier>,
+    default: Option<ir::Block>,
+    b: &ir::builder::ModuleBuilder,
+    span: Span,
+) -> (CaseQualifier, Option<ir::Block>) {
+    match q {
+        Some(ast::Qualifier::Unique) => (CaseQualifier::Unique, default),
+        Some(ast::Qualifier::Unique0) => {
+            let default = default.or_else(|| {
+                let mut empty = b.block();
+                empty.span = span;
+                Some(empty.finish())
+            });
+            (CaseQualifier::Unique, default)
+        }
+        Some(ast::Qualifier::Priority) => (CaseQualifier::Priority, default),
+        None => (CaseQualifier::None, default),
+    }
+}
+
 /// `fmt` with `.suffix` written after each `%m` conversion; `%%` is left
 /// alone.
 fn with_scope(fmt: &str, suffix: &str) -> String {
@@ -148,6 +173,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             AstStmt::Block(b) => self.block_stmt(b, out),
             AstStmt::Assign(a) => self.assign_stmt(a, s.span, out),
             AstStmt::Expr(e) => self.expr_stmt(e, s.span, out),
+            AstStmt::If(i) if i.qualifier.is_some() => self.qualified_if(i, s.span, out),
             AstStmt::If(i) => {
                 // A condition fixed at elaboration — a genvar or a parameter,
                 // as in `if (j == 1) count <= 0;` inside a generate loop —
@@ -937,13 +963,51 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             ast::CaseKind::Casez => CaseKind::Z,
             ast::CaseKind::Casex => CaseKind::X,
         };
-        let qualifier = match c.qualifier {
-            Some(ast::Qualifier::Unique | ast::Qualifier::Unique0) => CaseQualifier::Unique,
-            Some(ast::Qualifier::Priority) => CaseQualifier::Priority,
-            None => CaseQualifier::None,
-        };
+        let (qualifier, default) = qualify(c.qualifier, default, &self.b, span);
         out.span = span;
         out.case(subject, kind, qualifier, arms, default);
+    }
+
+    /// `unique if`, `unique0 if` or `priority if` and its `else if` chain,
+    /// as `case (1'b1)` with the same qualifier, which is what they mean
+    /// (IEEE 1800-2017 §12.4.2): the first true condition's branch runs,
+    /// and the simulator warns when none is true and there is no `else`,
+    /// or, for `unique` and `unique0`, when more than one is.
+    fn qualified_if(&mut self, first: &'ast ast::If, span: Span, out: &mut BlockBuilder) {
+        let mut arms = Vec::new();
+        let mut cur = first;
+        let mut last_else = None;
+        loop {
+            let cond = self.expr_bit(&cur.cond, &mut Sink::Proc(out));
+            let mut body = self.b.block();
+            body.span = cur.then_stmt.span;
+            self.stmt(&cur.then_stmt, &mut body);
+            arms.push(CaseArm {
+                values: vec![cond],
+                body: body.finish(),
+            });
+            match &cur.else_stmt {
+                Some(e) => match &e.kind {
+                    AstStmt::If(next) if next.qualifier.is_none() => cur = next,
+                    _ => {
+                        last_else = Some(e);
+                        break;
+                    }
+                },
+                None => break,
+            }
+        }
+        let default = last_else.map(|e| {
+            let mut b = self.b.block();
+            b.span = e.span;
+            self.stmt(e, &mut b);
+            b.finish()
+        });
+        let (qualifier, default) = qualify(first.qualifier, default, &self.b, span);
+        self.b.span = span;
+        let one = self.b.const_bit(true);
+        out.span = span;
+        out.case(one, CaseKind::Plain, qualifier, arms, default);
     }
 
     /// `for (init; cond; step) body`.
