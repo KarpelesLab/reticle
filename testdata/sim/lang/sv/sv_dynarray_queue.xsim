@@ -1,0 +1,9 @@
+D1 size=4 d0=0
+D2 d=100 101 102 103
+D3 size=6 d3=103 d5=0
+D4 size=0
+D5 q size=3 q0=0 q2=2
+D6 pop_front=0 size=2
+D7 pop_back=2 size=1
+D8 q='{42,1}
+D9 q='{42,1,7,8} $=8

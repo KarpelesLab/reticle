@@ -1,0 +1,21 @@
+d1=00 d2=00 wire=00 wand=00 wor=00 triand=0 trior=0
+d1=00 d2=01 wire=0x wand=00 wor=01 triand=0 trior=1
+d1=00 d2=1x wire=xx wand=00 wor=1x triand=0 trior=x
+d1=00 d2=z1 wire=0x wand=00 wor=01 triand=0 trior=1
+d1=01 d2=00 wire=0x wand=00 wor=01 triand=0 trior=1
+d1=01 d2=01 wire=01 wand=01 wor=01 triand=1 trior=1
+d1=01 d2=1x wire=xx wand=0x wor=11 triand=x trior=1
+d1=01 d2=z1 wire=01 wand=01 wor=01 triand=1 trior=1
+d1=1x d2=00 wire=xx wand=00 wor=1x triand=0 trior=x
+d1=1x d2=01 wire=xx wand=0x wor=11 triand=x trior=1
+d1=1x d2=1x wire=1x wand=1x wor=1x triand=x trior=x
+d1=1x d2=z1 wire=1x wand=1x wor=11 triand=x trior=1
+d1=z1 d2=00 wire=0x wand=00 wor=01 triand=0 trior=1
+d1=z1 d2=01 wire=01 wand=01 wor=01 triand=1 trior=1
+d1=z1 d2=1x wire=1x wand=1x wor=11 triand=x trior=1
+d1=z1 d2=z1 wire=z1 wand=z1 wor=z1 triand=1 trior=1
+tri none zz t0=0 t1=1 pu=1 pd=0
+tri e1 10 t0=0 t1=0 pu=0 pd=1
+tri e2 01
+tri both xx
+undriven z multi 0110

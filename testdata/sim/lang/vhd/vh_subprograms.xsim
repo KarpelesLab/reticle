@@ -1,0 +1,13 @@
+Note: defaults ok
+Note: recursion ok
+Note: unconstrained param ok
+Note: unconstrained return ok
+Note: unconstrained return 8 ok
+Note: record return ok
+Note: overload ok
+Note: inout ok
+Note: out params ok
+Note: signal param ok
+Note: wait in procedure ok
+Note: impure ok
+Note: fact(5)=120

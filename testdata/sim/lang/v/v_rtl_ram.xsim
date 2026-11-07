@@ -1,0 +1,8 @@
+156000 rd[0]=deffbeff model=deffbeff  ok
+166000 rd[1]=00000044 model=00000044  ok
+176000 rd[2]=00bbcc00 model=00bbcc00  ok
+186000 rd[3]=12000000 model=12000000  ok
+196000 rd[15]=cafef00d model=cafef00d  ok
+206000 read-during-write rdata=00000000
+226000 rd[5]=0000abcd model=0000abcd  ok
+errors=0

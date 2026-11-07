@@ -1,0 +1,9 @@
+AS1 pass a=5
+AS2 else branch a=5
+AS3 after plain assert
+Error: AS4 error message a=5
+Warning: AS5 warning message a=5
+Info: AS6 info message
+Error: Assertion violation
+AS8 x fail branch
+AS9 errors=1

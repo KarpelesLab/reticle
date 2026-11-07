@@ -1,0 +1,17 @@
+0 got go cnt=1
+0 got done
+1000 got go cnt=2
+1000 got done
+2000 got go cnt=3
+2000 got done
+3000 got go cnt=4
+3000 got done
+10000 waiting flag
+15000 flag seen
+15000 flag already high
+15000 posedge flag
+15000 go or flag
+16000 got go cnt=5
+16000 got done
+16000 never (done already fired)
+17000 final cnt=5

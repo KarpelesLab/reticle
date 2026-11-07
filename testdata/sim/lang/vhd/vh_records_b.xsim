@@ -1,0 +1,10 @@
+Note: positional rec ok
+Note: named rec ok
+Note: nested agg ok
+Note: rec neq ok
+Note: port addr ok
+Note: port nested ok
+Note: port pass ok
+Note: field sig assign ok
+Note: rec array ok
+Note: rec eq ok

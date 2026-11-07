@@ -1,0 +1,3 @@
+write l.val=50
+bump hits=1
+twice 42

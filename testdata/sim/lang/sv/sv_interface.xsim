@@ -1,0 +1,5 @@
+I1 t=6000 data=0 valid=1 ready=1 last=0
+I1 t=16000 data=3 valid=1 ready=1 last=0
+I1 t=26000 data=6 valid=1 ready=1 last=3
+I1 t=36000 data=9 valid=1 ready=1 last=6
+I1 t=46000 data=12 valid=1 ready=1 last=9

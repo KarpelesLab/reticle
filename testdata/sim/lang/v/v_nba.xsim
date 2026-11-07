@@ -1,0 +1,11 @@
+0 before nba a=1 b=2
+0 after #0 a=1 b=2
+1000 after #1 a=2 b=1
+2000 last nba wins c=3
+3000 intra blocking d=20
+5000 intra nba d=10
+5000 clk q1=0 q2=0 q3=0
+8000 b=8
+10000 a=2 (sampled rhs)
+11000 sample q1=1 q2=0 q3=0
+13000 loop a=5

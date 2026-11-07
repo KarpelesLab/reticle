@@ -1,0 +1,30 @@
+Note: 1 ?= 1: '1'
+Note: 1 ?= H: '1'
+Note: 0 ?= -: '1'
+Note: 1 ?= X: 'X'
+Note: 1 ?/= 0: '1'
+Note: v ?= 1-1-: '1'
+Note: v ?= 0-1-: '0'
+Note: v ?/= 1010: '0'
+Note: u ?< 6: '1'
+Note: u ?<= 5: '1'
+Note: u ?> 5: '0'
+Note: u ?>= 5: '1'
+Note: and v: '0'
+Note: or v: '1'
+Note: xor v: '0'
+Note: nand v: '1'
+Note: nor v: '0'
+Note: xnor v: '1'
+Note: and 1111: '1'
+Note: or a(with X): '1'
+Note: xor a: 'X'
+Note: ?? H true
+Note: implicit ?? true
+Note: implicit and true
+Note: implicit not true
+Note: match cond true
+Note: ?? X false
+Note: maximum(3,9)=9
+Note: minimum(3,9)=3
+Note: minimum vec=0011

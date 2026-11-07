@@ -1,0 +1,12 @@
+ia[0]=-2000
+ia[1]=-1000
+ia[2]=0
+ia[3]=1000
+ta 123456789012 246913578024
+sa -300 300 sum 0
+sa cmp 1
+asc 10000001 bit0 1 bit7 1 part 1111
+wa 3c c3
+ia var 0
+ia oob x
+ia rmw -1000

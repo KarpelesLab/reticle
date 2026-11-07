@@ -1,0 +1,11 @@
+Note: sel 00 ok
+Note: tristate bad
+Note: sel 10 ok
+Note: enable bad
+Note: select? ok
+Note: priority when ok
+Note: sel 11 ok
+Note: select? others ok
+Note: seq when var ok
+Note: seq select var ok
+Note: seq when sig bad

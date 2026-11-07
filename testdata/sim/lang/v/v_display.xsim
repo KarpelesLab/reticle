@@ -1,0 +1,37 @@
+d [  5] [5] [    5] [5    |]
+sd [  -5] [-5] [   -5]
+h [05] [5] [deadbeef] [deadbeef] [deadbeef]
+b [00000101] [101] [00000101]
+o [005] [5] [33653337357]
+big 0123456789abcdef    81985529216486895
+int           x -1 ffffffff
+neg int [     -12345] [-12345] [ffffcfc7]
+c Hi!
+s [hello] [     hello] [hello]
+short s [   hi] [hi]
+lit s abc
+m tb
+esc tab	here nl\n q" pct % oct A
+noformat  5
+  5
+  5  -5
+3735928559   5
+a=  5 sa=  -5
+25510
+mix   5 then   5
+05 deadbeef
+00000101
+005
+write1 write2
+  5
+x   x xx xxxxxxxx xxx
+z   z zz zzzzzzzz
+mixed xz X0   Z
+hex part x 0x1
+dec width 1 [1] 16 [    7] 32 [         7] 64 [                   7]
+sdec widths [     7] [    -7] [         -7]
+empty []
+
+
+l work.tb          1
+u last

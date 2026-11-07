@@ -1,0 +1,35 @@
+Note: c=green
+Note: pos(blue)=2
+Note: val(3)=yellow
+Note: succ(red)=green
+Note: pred(yellow)=blue
+Note: left=red
+Note: right=yellow
+Note: high=yellow
+Note: low=red
+Note: value=blue
+Note: rg high=green
+Note: leftof(green)=red
+Note: rightof(green)=blue
+Note: red<blue true
+Note: max=y
+Note: mixed foo=foo
+Note: mixed 'a'='a'
+Note: mixed pos Z=3
+Note: st=idle
+Note: to_string(st)=idle
+Note: bool=true false
+Note: char='x'
+Note: character'pos(A)=65
+Note: character'val(66)='B'
+Note: std_logic'pos('Z')=4
+Note: bit'image='1'
+Note: severity=warning
+Note: loop red
+Note: loop green
+Note: loop blue
+Note: loop yellow
+Note: rloop yellow
+Note: rloop blue
+Note: rloop green
+Note: st=run

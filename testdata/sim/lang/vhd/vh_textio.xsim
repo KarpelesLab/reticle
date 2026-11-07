@@ -1,0 +1,15 @@
+hello from textio
+n=42
+v=00111100
+hex=3C
+oct=074
+bool=TRUE
+char=Z
+time=25 ns
+    42|42    |
+bit_vector=1011
+unsigned=1001
+real=3.250000e+00
+swrite works
+
+at 7 ns

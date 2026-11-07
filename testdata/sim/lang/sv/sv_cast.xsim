@@ -1,0 +1,16 @@
+CA1 signed'(a)=-13 unsigned'(a)=243
+CA2 4'(a)=3 12'(a)=0f3
+CA3 12'(signed'(a))=ff3
+CA4 six_t'(a)=33
+CA5 int'(a)=243 int'(signed'(a))=-13
+CA6 byte'(300)=44 shortint'(i)=-1
+CA7 c=1
+CA8 c=3
+CA9 n=3
+CA10 sum of casts 0
+CA11 bit'(x)=0 logic'(x)=x
+CA12 2-state cast int'(4'bx1x0)=4
+CA13 i=19
+CA14 i=-13
+CA15 real cast int'(2.5)=3 int'(-2.5)=-3 int'(3.7)=4
+CA16 real'(7)/2=3.500000

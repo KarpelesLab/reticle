@@ -1,0 +1,9 @@
+ALU op=0 y=00 zero=1 carry=1 rsp=003
+ALU op=1 y=8a zero=0 carry=0 rsp=228
+ALU op=2 y=01 zero=0 carry=0 rsp=004
+ALU op=3 y=ff zero=0 carry=0 rsp=3fc
+ALU op=4 y=fe zero=0 carry=0 rsp=3f8
+ALU op=5 y=8a zero=0 carry=1 rsp=229
+ALU op=6 y=62 zero=0 carry=0 rsp=188
+ALU op=7 y=01 zero=0 carry=0 rsp=004
+ALU sub-eq y=00 zero=1 carry=0

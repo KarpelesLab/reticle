@@ -1,0 +1,43 @@
+sext fff0    -16
+zext 00f0    240
+sext to u fff0
+mixed add 01e0    480
+signed add fff0    -16
+cmp s<u 0
+cmp s<0 1 0
+cmp s<s 1
+cmp int 1 0
+cmp int2 1
+cmp i 1 0
+signed fn  -16 240
+signed fn ext fff0
+unsigned fn ext 00f0
+concat unsigned 00f0
+concat2 f0f0
+concat3    240
+lit 15  -1 15
+lit2  -1  -8
+i from s4 lit -1
+i from u4 lit 15
+i from s4 -1
+i from n4 15
+i s4+n4 30
+i s4+1 0
+i s4+1'b1 16
+i s4+1'sb1 -2
+i s4*2 -2
+neg s4 1
+neg n4 fff1
+unsized 0000000f 00000008
+unsized neg 4294967291
+unsized fill -1
+x fill xxxxxxxxxxxxxxxx
+z fill zzzzzzzzzzzzzzzz
+x fill4 000000000000xxxx
+pad 0000000000000001
+lit sext ff80
+trunc b
+trunc asg bcde
+sel unsigned 240
+sel ext 00f0
+signed red 1

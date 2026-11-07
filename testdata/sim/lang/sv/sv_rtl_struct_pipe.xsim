@@ -1,0 +1,9 @@
+SP k=0 dout valid=0 id=0 val=2 raw=00002
+SP k=1 dout valid=0 id=0 val=3 raw=00003
+SP k=2 dout valid=1 id=0 val=3 raw=10003
+SP k=3 dout valid=1 id=1 val=203 raw=110cb
+SP k=4 dout valid=1 id=2 val=403 raw=12193
+SP k=5 dout valid=1 id=3 val=603 raw=1325b
+SP drain valid=1 id=4 val=803
+SP drain valid=1 id=5 val=1003
+SP drain valid=0 id=0 val=3

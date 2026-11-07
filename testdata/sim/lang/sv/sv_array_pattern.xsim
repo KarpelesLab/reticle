@@ -1,0 +1,12 @@
+AP1 a=1 2 3 4
+AP2 a=9 9 9 9
+AP3 a=5 -1 7 -1
+AP4 b=a0 b0 c0 d0
+AP5 c=1 2 3 4
+AP6 c=6 6 6 6
+AP7 p=11223344
+AP8 p=5a5a5a5a
+AP9 a=3 3 3 3
+AP10 eq 1
+AP11 '{3,3,3,3}
+AP12 b0=xxxxxxxx

@@ -1,0 +1,19 @@
+random(seed) -2147414528 seed=69070
+random(seed) -1671855048 seed=475628535
+random(seed) 1129920902 seed=-1017563188
+random(seed) -1374483364 seed=772999773
+random(seed) 1730349006 seed=-417135238
+mod -6
+mod 7
+mod 0
+byte 00
+byte 8c
+byte 5a
+urandom-ish 8
+urandom-ish 22
+urandom-ish 82
+dist_uniform 0
+dist_uniform 55
+dist_uniform 37
+seed0 303379748 -1844104698
+seedm1 2147415551 -69068

@@ -1,0 +1,16 @@
+Note: s is not zero
+Warning: s is not zero (warning)
+Error: s is not zero (error)
+Error: s is not zero (default severity)
+Error: Assertion violation
+Warning: Assertion violation
+Note: plain report
+Note: report with note
+Warning: report with warning
+Error: report with error
+Note: 
+Note: multipart message
+Note: quote " inside
+Warning: concurrent: n too large
+Note: before failure
+Failure: fatal failure here

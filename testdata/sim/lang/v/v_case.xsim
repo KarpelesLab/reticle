@@ -1,0 +1,50 @@
+case 0000 -> 0or1
+casez 0000 -> 0z0z
+casex 0000 -> 00xx
+case 0010 -> 2
+casez 0010 -> default
+casex 0010 -> 00xx
+case 0011 -> default
+casez 0011 -> default
+casex 0011 -> 00xx
+case 0101 -> default
+casez 0101 -> 01?1
+casex 0101 -> default
+case 0111 -> default
+casez 0111 -> 01?1
+casex 0111 -> 0?11
+case 1010 -> default
+casez 1010 -> 1???
+casex 1010 -> 1x1x
+case 1111 -> default
+casez 1111 -> 1???
+casex 1111 -> 1x1x
+case 1x00 -> 1x00
+casez 1x00 -> 1???
+casex 1x00 -> default
+case z010 -> default
+casez z010 -> 1???
+casex z010 -> 1x1x
+case 0zz1 -> default
+casez 0zz1 -> 01?1
+casex 0zz1 -> 00xx
+case xxxx -> default
+casez xxxx -> default
+casex xxxx -> 1x1x
+case 01x1 -> default
+casez 01x1 -> 01?1
+casex 01x1 -> 0?11
+case 0100 -> default
+casez 0100 -> 0z0z
+casex 0100 -> default
+onehot k=0 none
+onehot k=1 bit0
+onehot k=2 bit1
+onehot k=3 bit0
+expr item 1+2
+width int item matched
+sign case default
+signed item matched
+mixed item default
+block a
+block b

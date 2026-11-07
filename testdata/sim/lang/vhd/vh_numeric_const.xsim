@@ -1,0 +1,22 @@
+Note: add ok
+Note: sub wrap ok
+Note: mul ok
+Note: div ok
+Note: mod ok
+Note: sdiv ok
+Note: smod ok
+Note: srem ok
+Note: smul ok
+Note: abs ok
+Note: resize s4 ok
+Note: resize s12 ok
+Note: shr s ok
+Note: shr u ok
+Note: rotl ok
+Note: sll ok
+Note: diffwidth eq ok
+Note: sdiffwidth eq ok
+Note: u>int ok
+Note: s<int ok
+Note: lt diffwidth ok
+Note: len16 ok

@@ -1,0 +1,12 @@
+Note: transport passes pulse ok
+Note: inertial swallows ok
+Note: reject 1ns passes 2ns pulse ok
+Note: transport falls ok
+Note: long pulse ok
+Note: wave 1 ok
+Note: wave 2 ok
+Note: wave 3 ok
+Note: inertial cancel ok
+Note: inertial final ok
+Note: transport keep ok
+Note: transport second ok

@@ -1,0 +1,13 @@
+Note: event ok
+Note: last_value ok
+Note: int last_value ok
+Note: active ok
+Note: no event ok
+Note: last_event ok
+Note: rise seen ok
+Note: delayed before ok
+Note: stable false ok
+Note: delayed after ok
+Note: stable true bad
+Note: fall seen ok
+Note: stable now ok

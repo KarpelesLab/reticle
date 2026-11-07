@@ -1,0 +1,18 @@
+add1 6 0
+add1 ctx 0
+fact 1 120 3628800
+fib 55 610
+neg -5 -128
+neg ext 1111111111111111
+W=7 F5=120
+half 1.500000 3.500000
+multi 1000 1110
+old style 7
+early 6 0
+trunc_in bbbb
+nest 4
+loop fact(0)=1
+loop fact(1)=1
+loop fact(2)=2
+loop fact(3)=6
+func in expr 13

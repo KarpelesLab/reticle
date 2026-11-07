@@ -1,0 +1,18 @@
+Note: int(small) ok
+Note: small(int) ok
+Note: slv to u/s ok
+Note: signed to slv ok
+Note: closely related array ok
+Note: back to slv ok
+Note: to_bitvector ok
+Note: to_stdlogicvector ok
+Note: to_bit ok
+Note: qualified unsigned ok
+Note: qualified signed ok
+Note: qualified aggregate ok
+Note: qualified scalar ok
+Note: char pos ok
+Note: bool pos ok
+Note: sl val ok
+Note: concat qualified ok
+Note: real round ok

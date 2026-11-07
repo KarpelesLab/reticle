@@ -1,0 +1,13 @@
+5000 b=1 (event intra blocking)
+5000 c=0 right after
+16000 c=2 (sampled 2)
+26000 d=4 after 1 edge
+36000 d=4 after 2 edges
+39000 e=15
+39000 e=15 before #0 nba
+39000 e=15 after #0
+40000 e=99 after #1
+50000 negedge
+55000 any edge
+85000 after 3 posedges
+87000 real delay                86500

@@ -1,0 +1,15 @@
+SM1 {<<{a}}=01010011
+SM2 {>>{a}}=11001010
+SM3 {<<4{w}}=dcba
+SM4 {<<8{w}}=cdab
+SM5 {>>8{w}}=abcd
+SM6 {<<byte{d}}=78563412
+SM7 {<<16{d}}=56781234
+SM8 {<<2{a}}=10100011
+SM9 {<<3{a}}=01000111
+SM10 concat stream=8053
+SM11 unpack lhs n=1000
+SM12 lhs split x=be y=ef
+SM13 lhs reverse x=34 y=12
+SM14 widened d=80000000
+SM15 cast in display 01010011

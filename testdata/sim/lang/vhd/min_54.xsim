@@ -1,0 +1,3 @@
+Note: signal slice by generic ok
+Note: variable slice by generic ok
+Note: variable slice by constant ok

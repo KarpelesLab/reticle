@@ -1,0 +1,24 @@
+A1 init l8=xxxxxxxx b8=00000000 by=0 si=0 i=0 li=0 ig=x b1=0 l1=x
+A2 l8=x1z01010 b8=01001010
+A3 by=-1 bu=255 by=ff bu=ff
+A4 si=-32768 su=32768
+A5 i=-2 iu=4294967294 i=fffffffe
+A6 li=-9223372036854775808 lu=9223372036854775808
+A7 ig=-5 ig=fffffffb ig=11111111111111111111111111111011
+A8 ig=x ig=xxxxxxxx
+A9 i(2state from x)=0
+A10 b1=0 l1=z
+A11 bits byte=8 shortint=16 int=32 longint=64 integer=32
+A12 byte->int sext i=-1 ffffffff
+A13 byte unsigned->int i=240 000000f0
+A14 by=200 -> -56
+A15 trunc si=-300 -> by=-44 d4
+A16 iu=-1 -> li=4294967295
+A17 i=-1 -> lu=ffffffffffffffff
+A18 r4=1x0z b8=00001000
+A19 wrap by=127
+A20 i/2=3 -i/2=-3 ig%3=1 -ig%3=-1
+A21 int<0? 1 byte<0? 0 bu<0? 0
+A22 x==x l: x, bit compare: 1
+A23 sizes 8 16 64
+A24 su=8000 lu=18446744073709551615

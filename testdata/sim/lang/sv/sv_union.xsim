@@ -1,0 +1,6 @@
+N1 w=beef b1=be b0=ef hi=be lo=ef
+N2 w=be00
+N3 w=1200 s='{hi:18,lo:0}
+N4 bits=16
+N5 x=1234
+N6 y=-128 i=-128

@@ -1,0 +1,9 @@
+WARNING: 0ns : Multiple conditions true
+	 condition at line:9 conflicts with condtion at line:8
+	 for unique case from File:sv_unique_overlap.sv:7
+UO1 overlap unique o=1
+WARNING: 1ns : Multiple conditions true
+	 condition at line:15 conflicts with condtion at line:14
+	 for unique if from File:sv_unique_overlap.sv:14
+UO2 overlap unique if o=8
+UO3 x selector o=f

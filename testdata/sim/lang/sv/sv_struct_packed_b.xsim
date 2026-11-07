@@ -1,0 +1,15 @@
+S1 pr=a5 hi=a lo=5 bits=8
+S3 pr.hi=c pr.lo=3
+S4 pk=f85 111110000101 bits=12
+S5 pk.p.hi=f pk.tag=5 pk[11]=1
+S6 pk=fcd
+S7 flat=fcd
+S8 pk=007
+S8b pk=807 valid=1
+S11 signed struct sp=-16 v=-16
+S12 sp=112 sp.a=7
+S13 pr==8'hC3 1
+S17 pr=83
+S18 member bit write pr=93
+S19 member part write pr=97
+S20 sp.a+sp.b=7 sp.b signed? 0

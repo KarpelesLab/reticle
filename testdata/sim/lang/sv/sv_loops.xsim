@@ -1,0 +1,12 @@
+L1 do-while i=0
+L1 do-while i=1
+L1 do-while i=2
+L2 do-while once i=11
+L3 for break/continue s=13
+L4 multi-var for s=92
+L5 while break n=5
+L6 repeat s=12
+L7 nested continue s=66
+L8 down s=129
+L9 forever break s=7
+L10 byte loop s=10

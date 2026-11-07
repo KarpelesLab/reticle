@@ -1,0 +1,32 @@
+Note: a and b = 42
+Note: a or b = DB
+Note: a xor b = 99
+Note: a nand b = BD
+Note: a nor b = 24
+Note: a xnor b = 66
+Note: not a = 3C
+Note: a & b = C35A
+Note: a(3 downto 0) & '1' = 00111
+Note: slice a(6 downto 2) = 10000
+Note: a sll 2 = 00001100
+Note: a srl 3 = 00011000
+Note: a rol 1 = 10000111
+Note: a ror 2 = 11110000
+Note: a sll -1 = 01100001
+Note: and '1' scalar = 11000011
+Note: '0' or b = 01011010
+Note: v = A3
+Note: u(0) = '1' u(7) = '1'
+Note: u(0 to 3) = 1010
+Note: r = 3C
+Note: w = C35A
+Note: a = b false
+Note: a /= b true
+Note: a > b true
+Note: a < b false
+Note: a >= x80 true
+Note: short < long fal
+Note: eq diff len false
+Note: x string UX01ZWLH-
+Note: o17 001111
+Note: b101 101

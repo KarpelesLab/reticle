@@ -1,0 +1,13 @@
+W1 ==? 1?1? : 1
+W2 ==? 0??? : 0
+W3 !=? 1x1x : 0
+W4 ==? z : 1
+W5 x lhs ==? 1?10 : 1
+W6 x lhs ==? 1010 : x
+W7 x lhs ==? 0?10 : 0
+W8 inside list 1
+W9 inside range 0
+W10 inside mixed 1
+W13 inside wildcard 1
+W14 x inside x
+W15 neg inside 1

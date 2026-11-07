@@ -1,0 +1,7 @@
+AK1 t=0 k_const=x sum_c=xxxx
+AK2 t0 after #0 k_const=7
+AK3 sum_c=7 dep=8 cnt=0 lat=xxxx
+AK4 lat=3
+AK5 lat held=3 sum_c=13
+AK6 cnt=3 t=26000
+AK7 lat=9

@@ -1,0 +1,22 @@
+[ Verilog] [00566572696c6f67]
+trunc [ong] [6f6e67]
+empty [        ] [0000000000000000]
+pad [      ab] [0000000000006162]
+char A  65 41
+char+1 B
+byte 0 = c
+byte 1 = b
+byte 2 = a
+cat [    abcd]
+rep [    xyxy]
+cmp 1 0
+lit 4142
+lit d 65
+esc [     tab	end]
+esc2 [       q"x\y]
+octal [         ABC]
+as s with nulls [   hello]
+embedded nul [ AB C   ]
+s of number [ABCD]
+s of x [ ]
+one and two

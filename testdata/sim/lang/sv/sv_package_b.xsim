@@ -1,0 +1,11 @@
+PK1 WIDTH=12 DEPTH=8 other::WIDTH=4
+PK2 bits data_t=12 bits instr_t=10
+PK3 op=0 alu=0ff
+PK3 op=1 alu=0e1
+PK3 op=2 alu=000
+PK3 op=3 alu=0ff
+PK4 explicit alu=0e1
+PK5 sq=49
+PK6 ins=2ca op=2
+PK7 name=other
+PK8 OP_OR=3

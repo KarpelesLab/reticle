@@ -1,0 +1,19 @@
+mux s=0 a=0 b=0 -> 0
+mux s=0 a=0 b=1 -> 0
+mux s=0 a=1 b=0 -> 1
+mux s=0 a=1 b=1 -> 1
+mux s=1 a=0 b=0 -> 0
+mux s=1 a=0 b=1 -> 1
+mux s=1 a=1 b=0 -> 0
+mux s=1 a=1 b=1 -> 1
+mux sx 11 -> 1
+mux sx 10 -> x
+mux sz 00 -> 0
+latch init x dff init 0 edge init x
+latch en d=1 1
+latch hold 1
+dff posedge d=1 1 edge 1
+dff no edge 1 edge 1
+dff negedge 1 edge 1
+dff posedge d=0 0 edge 0
+dff x->1 x edge x

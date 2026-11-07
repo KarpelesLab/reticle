@@ -1,0 +1,12 @@
+Note: start
+Note: case1 ok
+Note: case2 ok
+Note: case3 ok
+Note: case4 ok
+Note: case5 ok
+Warning: warn msg
+Error: err msg
+Note: assert note
+Warning: assert warning
+Error: Assertion violation
+Note: end

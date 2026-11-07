@@ -1,0 +1,27 @@
+Note: hello, world
+Note: len=5
+Note: char 2=e
+Note: slice=ell
+Note: modified=Jello
+Note: S2 reversed? cba
+Note: char image='Q'
+Note: int image=-42
+Note: bool image=tru
+Note: eq=fal
+Note: lt=tru
+Note: to_string int=123
+Note: to_string bool=false
+Note: to_string char=k
+Note: to_hstring u=A5C
+Note: to_ostring u=5134
+Note: to_string u=101001011100
+Note: to_string v=1100ZX01
+Note: to_hstring v=CX
+Note: to_hstring 5 bits=15
+Note: to_ostring 4 bits=17
+Note: signed hstring=FD
+Note: time string=15 ns
+Note: real string=1.500000e+00
+Note: character array=wz
+Note: integer'image(16#7F#)=127
+Note: nested image: 78

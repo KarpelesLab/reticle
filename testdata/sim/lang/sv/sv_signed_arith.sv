@@ -1,0 +1,53 @@
+`timescale 1ns/1ps
+module tb;
+  logic signed [7:0] sa, sb;
+  logic [7:0] ua, ub;
+  logic signed [15:0] sw;
+  logic [15:0] uw;
+  int i;
+  initial begin
+    sa = -8'sd5; ua = 8'd5;
+    sw = sa;
+    $display("SG1 sext sw=%0d %h", sw, sw);
+    uw = sa;
+    $display("SG2 signed->unsigned wide uw=%h", uw);
+    sw = sa + ua;
+    $display("SG3 mixed sa+ua sw=%h %0d", sw, sw);
+    sw = sa + $signed(ua);
+    $display("SG4 sa+$signed(ua) sw=%0d", sw);
+    sw = sa * 3;
+    $display("SG5 sa*3=%0d", sw);
+    sw = sa * 3'sd3;
+    $display("SG6 sa*3'sd3=%0d", sw);
+    $display("SG7 sa<ua %b sa<0 %b $unsigned(sa)<ua %b", sa < ua, sa < 0, $unsigned(sa) < ua);
+    $display("SG8 sa>>>1=%0d sa>>1=%0d", sa >>> 1, sa >> 1);
+    i = -7;
+    $display("SG9 -7/2=%0d -7%%2=%0d 7/-2=%0d 7%%-2=%0d", i / 2, i % 2, 7 / -2, 7 % -2);
+    sa = -8'sd128;
+    $display("SG10 -(-128)=%0d abs=%0d", -sa, (sa < 0) ? -sa : sa);
+    sb = 8'sd100;
+    sw = sa - sb;
+    $display("SG11 -128-100 16bit=%0d", sw);
+    sa = sa - sb;
+    $display("SG12 -128-100 8bit=%0d", sa);
+    ua = 8'd200; ub = 8'd100;
+    uw = ua + ub;
+    $display("SG13 200+100 16bit=%0d", uw);
+    $display("SG14 (ua+ub)>>1=%0d {ua+ub}>>1 8bit=%0d", (ua + ub) >> 1, 8'(ua + ub) >> 1);
+    sa = -8'sd1;
+    $display("SG15 sa==8'hFF %b sa==-1 %b sa==255 %b", sa == 8'hFF, sa == -1, sa == 255);
+    $display("SG16 power 2**10=%0d (-2)**3=%0d 2**-1=%0d", 2 ** 10, (-2) ** 3, 2 ** -1);
+    sw = {sa, sa};
+    $display("SG17 concat unsigned %0d", sw);
+    i = 8'sb1000_0000;
+    $display("SG18 i=%0d", i);
+    i = 8'b1000_0000;
+    $display("SG19 i=%0d", i);
+    i = -4'sd3 + 4'd2;
+    $display("SG20 mixed literal i=%0d", i);
+    sa = 8'sd7;
+    $display("SG21 ternary sign %0d", (1'b1 ? sa : 8'd0) - 8);
+    $display("SG22 reduction ~&sa=%b |sa=%b ^sa=%b", ~&sa, |sa, ^sa);
+    $finish;
+  end
+endmodule

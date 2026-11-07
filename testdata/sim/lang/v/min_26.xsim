@@ -1,0 +1,4 @@
+force expr w=8
+force expr follows w=6 (want 6)
+force bit w=00001110
+release bit w=00001111

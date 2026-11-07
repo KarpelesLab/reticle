@@ -1,0 +1,31 @@
+m[0]=00 r[0]=80
+m[1]=03 r[1]=81
+m[2]=06 r[2]=82
+m[3]=09 r[3]=83
+m[4]=0c r[4]=84
+m[5]=0f r[5]=85
+m[6]=12 r[6]=86
+m[7]=15 r[7]=87
+oob read xx xx
+oob var read xx
+x addr read xx
+oob write ignored 15 00
+bit of word 1 0
+var bit 1 2
+write bit 86
+write part 0a
+md[0] 00 01
+md[1] 10 11
+md[2] 20 21
+md[3] 30 31
+md oob xx xx
+md bit 1
+m3 1 5 3
+m3 oob x
+signed mem   -5    5
+signed mem cmp 1
+signed mem add -4
+mb 0101
+uninit xx
+sum 89
+copy 03

@@ -1,0 +1,42 @@
+Note: ua+ub=213
+Note: ua-ub=187
+Note: ub-ua=69
+Note: ua*ub=2600
+Note: ua/ub=15
+Note: ua mod ub=5
+Note: ua rem ub=5
+Note: ua+1=201
+Note: ua+60 (wrap)=4
+Note: sa+sb=-93
+Note: sa-sb=-107
+Note: sa*sb=-700
+Note: sa/sb=-14
+Note: sa mod sb=5
+Note: sa rem sb=-2
+Note: sb mod -3=-2
+Note: sb rem -3=1
+Note: abs sa=100
+Note: -sa=100
+Note: abs -128=80
+Note: sa-1=-101
+Note: sa*2 int=-200
+Note: resize u 4=1000
+Note: resize s 4=1100
+Note: resize s 12=111110011100
+Note: resize u 12=000011001000
+Note: to_unsigned(5,3)=101
+Note: to_signed(-5,4)=1011
+Note: signed(slv)=-16
+Note: unsigned(slv)=240
+Note: slv(u)=C8
+Note: u4=5
+Note: ua*ub length=16
+Note: ua > ub tru
+Note: u8 = u4 diff width tru
+Note: u > int tru
+Note: s < int tru
+Note: s vs s diff width tru
+Note: max min 200 -100
+Note: std_match true
+Note: find leftmost 4
+Note: find rightmost 2

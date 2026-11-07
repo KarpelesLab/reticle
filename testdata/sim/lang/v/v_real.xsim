@@ -1,0 +1,40 @@
+f 3.141590 -2.500000
+e 3.141590e+00 -2.500000e+00
+g 3.14159 1e+10 1e-05
+prec 3.14 3      3.142|     3.142|
+prec e 3.142e+00   1.2346e+05
+arith 0.641590 5.641590 -7.853975 -1.256636
+pow 1.414214 8.000000
+cmp 1 1 1
+logic 0 1
+int 2.5 -> 3
+int 3.5 -> 4
+int -2.5 -> -3
+int 2.4999 -> 2
+int -0.5 -> -1
+rtoi 2 -2 1000
+itor -7.000000
+realtobits 3ff0000000000000
+realtobits2 bfc4000000000000
+bitstoreal 3.141593
+int to real 10.000000
+vec to real 255.000000
+signed vec to real -3.000000
+real to vec 201
+real to vec trunc 44
+real to signed vec -4
+third 0.333333 3.333333e-01 0.333333
+underflow 0.000000e+00
+zero 0.000000 0.000000e+00 0
+%d of real           1
+real 123 via int
+realtime 1.500000
+time 3000 realtime 2.500000                 2500
+time var 3
+int div to real 3.000000
+real div 3.500000
+mixed 1.500000
+sci 150.000000 0.250000
+big 100000000000000000000.000000
+g small 0.0001 1e-05
+g big 123456 1.23457e+06

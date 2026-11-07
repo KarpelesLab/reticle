@@ -1,0 +1,26 @@
+clog2(0)=0
+clog2(1)=0
+clog2(2)=1
+clog2(3)=2
+clog2(4)=2
+clog2(5)=3
+clog2(6)=3
+clog2(7)=3
+clog2(8)=3
+clog2(9)=4
+clog2 big 8 9 32
+signed -16
+signed expr -16
+signed expr2 -16
+unsigned 255
+unsigned ctx 00ff
+signed ctx ffff
+signed of 1bit -1
+signed width 1001
+time 3 stime 3 realtime 3.000000
+time arith 7
+realtime/2 1.500000
+rtoi -3 itor 5.000000
+realtobits 3fb999999999999a
+bitstoreal 2.750000
+$test$plusargs 0

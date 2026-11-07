@@ -1,0 +1,16 @@
+Note: clog2 ok
+Note: round half up ok
+Note: round half neg ok
+Note: round ok
+Note: sqrt ok
+Note: floor ok
+Note: ceil ok
+Note: trunc ok
+Note: period ok
+Note: baud ok
+Note: real cmp ok
+Note: real gt ok
+Note: pi ok
+Note: exp ok
+Note: sin ok
+Note: real time ok

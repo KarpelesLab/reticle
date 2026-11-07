@@ -1,0 +1,18 @@
+Note: a+b=35
+Note: a-b=2B
+Note: b-a=D5
+Note: a*b=00F0
+Note: a/b=09
+Note: a mod 7=06
+Note: a+1=31
+Note: to_integer(a)=48
+Note: to_slv(77,8)=4D
+Note: to_stdlogicvector(9,4)=1001
+Note: a > b tru
+Note: a < 100 tru
+Note: x0F vs x00F tru
+Note: shift_left(a,2)=C0
+Note: resize(a,4)=0000
+Note: cnt=FF
+Note: cnt wrap=00
+Note: cnt is zero

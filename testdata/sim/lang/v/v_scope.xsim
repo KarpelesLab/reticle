@@ -1,0 +1,11 @@
+f 5b
+t x=10
+shadow inner x=200
+outer x=10
+b3 q=0
+b3 q=3
+b3 q=6
+cnt 11
+attr 7
+tb
+tb.b6

@@ -1,0 +1,22 @@
+SG1 sext sw=-5 fffb
+SG2 signed->unsigned wide uw=fffb
+SG3 mixed sa+ua sw=0100 256
+SG4 sa+$signed(ua) sw=0
+SG5 sa*3=-15
+SG6 sa*3'sd3=-15
+SG7 sa<ua 0 sa<0 1 $unsigned(sa)<ua 0
+SG8 sa>>>1=-3 sa>>1=125
+SG9 -7/2=-3 -7%2=-1 7/-2=-3 7%-2=1
+SG10 -(-128)=-128 abs=-128
+SG11 -128-100 16bit=-228
+SG12 -128-100 8bit=28
+SG13 200+100 16bit=300
+SG14 (ua+ub)>>1=22 {ua+ub}>>1 8bit=22
+SG15 sa==8'hFF 1 sa==-1 1 sa==255 0
+SG16 power 2**10=1024 (-2)**3=-8 2**-1=0
+SG17 concat unsigned -1
+SG18 i=-128
+SG19 i=128
+SG20 mixed literal i=-1
+SG21 ternary sign 4294967295
+SG22 reduction ~&sa=1 |sa=1 ^sa=1

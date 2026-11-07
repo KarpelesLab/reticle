@@ -1,0 +1,12 @@
+y[0]=5
+y[1]=6
+y[2]=7
+y[3]=8
+par=1100
+blk0.dbl=10 blk3.dbl=0
+SQ 4 9
+tag 3 9
+m1.out=1010
+cs.v=4
+row1.col2.id=12 row0.col1.id=1
+y3=2 dbl3=4 par=1100

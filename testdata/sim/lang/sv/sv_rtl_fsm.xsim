@@ -1,0 +1,17 @@
+SD bit=15 din=1 st=1 hit=0
+SD bit=14 din=0 st=2 hit=0
+SD bit=13 din=1 st=3 hit=0
+SD bit=12 din=1 st=4 hit=1
+SD bit=11 din=0 st=2 hit=0
+SD bit=10 din=1 st=3 hit=0
+SD bit=9 din=1 st=4 hit=1
+SD bit=8 din=0 st=2 hit=0
+SD bit=7 din=1 st=3 hit=0
+SD bit=6 din=1 st=4 hit=1
+SD bit=5 din=0 st=2 hit=0
+SD bit=4 din=1 st=3 hit=0
+SD bit=3 din=1 st=4 hit=1
+SD bit=2 din=0 st=2 hit=0
+SD bit=1 din=1 st=3 hit=0
+SD bit=0 din=1 st=4 hit=1
+SD total hits=5

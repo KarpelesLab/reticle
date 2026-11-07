@@ -1,0 +1,58 @@
+`timescale 1ns/1ps
+module tb;
+  reg [7:0] u;
+  reg signed [7:0] s;
+  reg signed [15:0] sw;
+  reg [15:0] w;
+  integer i;
+  reg [3:0] n4;
+  reg signed [3:0] s4;
+  initial begin
+    u = 8'hf0; s = -8'sd16;
+    sw = s; $display("sext %h %d", sw, sw);
+    sw = u; $display("zext %h %d", sw, sw);
+    w = s; $display("sext to u %h", w);
+    sw = s + u; $display("mixed add %h %d", sw, sw);
+    sw = s + 8'sd0; $display("signed add %h %d", sw, sw);
+    $display("cmp s<u %b", s < u);
+    $display("cmp s<0 %b %b", s < 0, s < 8'd0);
+    $display("cmp s<s %b", s < 8'sd0);
+    $display("cmp int %b %b", -1 < 1, -1 < 1'b1);
+    $display("cmp int2 %b", -1 > 32'd5);
+    i = -1; $display("cmp i %b %b", i < 1, i < 1'b1);
+    $display("signed fn %d %d", $signed(u), $unsigned(s));
+    sw = $signed(u); $display("signed fn ext %h", sw);
+    sw = $unsigned(s); $display("unsigned fn ext %h", sw);
+    sw = {s}; $display("concat unsigned %h", sw);
+    sw = {s, s}; $display("concat2 %h", sw);
+    sw = {8'sd0, s}; $display("concat3 %d", sw);
+    n4 = 4'b1111; s4 = 4'sb1111;
+    $display("lit %d %d %d", 4'b1111, 4'sb1111, -4'd1);
+    $display("lit2 %d %d", -4'sd1, 4'sd8);
+    i = 4'sb1111; $display("i from s4 lit %0d", i);
+    i = 4'b1111; $display("i from u4 lit %0d", i);
+    i = s4; $display("i from s4 %0d", i);
+    i = n4; $display("i from n4 %0d", i);
+    i = s4 + n4; $display("i s4+n4 %0d", i);
+    i = s4 + 1; $display("i s4+1 %0d", i);
+    i = s4 + 1'b1; $display("i s4+1'b1 %0d", i);
+    i = s4 + 1'sb1; $display("i s4+1'sb1 %0d", i);
+    i = s4 * 2; $display("i s4*2 %0d", i);
+    i = -s4; $display("neg s4 %0d", i);
+    w = -n4; $display("neg n4 %h", w);
+    $display("unsized %h %h", 'hf, 'sh8);
+    $display("unsized neg %0d", -'d5);
+    i = 'hffffffff; $display("unsized fill %0d", i);
+    w = 'bx; $display("x fill %b", w);
+    w = 'bz; $display("z fill %b", w);
+    w = 4'bx; $display("x fill4 %b", w);
+    w = 8'b1; $display("pad %b", w);
+    sw = 8'sb1000_0000; $display("lit sext %h", sw);
+    $display("trunc %h", 4'hab);
+    w = 20'habcde; $display("trunc asg %h", w);
+    $display("sel unsigned %d", s[7:0]);
+    sw = s[7:0]; $display("sel ext %h", sw);
+    $display("signed red %b", s[7]);
+    $finish;
+  end
+endmodule

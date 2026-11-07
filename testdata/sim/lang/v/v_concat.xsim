@@ -1,0 +1,24 @@
+cat 5c 01011100
+cat3 50c
+rep 10101010
+rep param 010101010101
+nested 010111010111
+rep1 0101
+cat ext 005c
+rep ext 5555
+cat trunc c5
+lhs 11 01
+lhs3 10 11 010
+lhs trunc 01 10
+lhs ext 00 11
+lhs sel 21
+signed cat 01111
+lit cat 010203
+bit cat 1010
+rep x xxx
+rep expr 0101
+cat in arith 93
+cat cmp 1
+rep cat 55cc
+unsized in cat ok f0
+string cat abcd

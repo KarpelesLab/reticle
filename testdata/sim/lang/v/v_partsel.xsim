@@ -1,0 +1,35 @@
+d[7:0] c3 d[15:8] a5 d[3] 0
+asc[0:7] a5 asc[8:15] c3 asc[3] 0
+nz[15:8] c3 nz[23:16] a5 nz[8] 1
++: c3 5c
+-: a5 5c
+asc +: a5 -: c3
+nz +: c3 -: a
+var +: i=0 3
+var +: i=4 c
+var +: i=8 5
+var +: i=12 a
+var -: i=15 a
+var -: i=11 5
+var -: i=7 c
+var -: i=3 3
+partial oob +: xx10
+partial oob low 11xx
+whole oob xxxx
+x index xxxx x
+bit oob x x
+bit oob var x
+write partial oob c000
+write oob 0000
+write bit oob 0000
+write bit x 0000
+write part x 0000
+write const 00b0
+write +: 0000000000011000
+write -: 0000000000001100
+asc write 1000000000000000
+nz write 0001001000000000
+r 23
+r ext 04
+r x 0000000x
+sel unsigned add 00

@@ -1,0 +1,9 @@
+BS1 w[3:0]=3 w[15:12]=a bw[0:3]=a bw[12:15]=3
+BS2 w[i+:4]=c w[i-:4]=1 bw[i+:4]=5 bw[i-:4]=4
+BS3 part oob w[i+:4]=xx10
+BS4 neg idx w[i]=x
+BS5 x idx w[i]=1
+BS6 write x idx w=a5c2
+BS7 w=a0c2
+BS8 w=a1c2
+BS9 oob write v=ff

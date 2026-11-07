@@ -1,0 +1,15 @@
+Note: shl u ok
+Note: shr u ok
+Note: shr s ok
+Note: rotl ok
+Note: rotr ok
+Note: rotl9 ok
+Note: shr s 10 ok
+Note: srl ok
+Note: sra ok
+Note: sla ok
+Note: ror ok
+Note: shl int ok
+Note: shr neg ok
+Note: bv sra ok
+Note: bv sla bad

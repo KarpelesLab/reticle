@@ -1,0 +1,17 @@
+S1 pr=a5 hi=a lo=5 bits=8
+S2 pr=12
+S3 pr.hi=c pr.lo=3
+S4 pk=f85 111110000101 bits=12
+S5 pk.p.hi=f pk.tag=5 pk[11]=1
+S6 pk=fcd
+S7 flat=fcd
+S8 pk=007
+S9 default0 pk=000
+S10 default1 pk=fff
+S11 signed struct sp=-16 v=-16
+S12 sp=112 sp.a=7
+S13 pr==8'hC3 1
+S14 %p pr='{hi:12,lo:3}
+S15 %p pk='{valid:1'b1,p:'{hi:15,lo:15},tag:7}
+S16 pr=3e
+S17 pr=8e

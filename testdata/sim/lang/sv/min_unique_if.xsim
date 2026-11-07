@@ -1,0 +1,8 @@
+WARNING: 0ns : none of the conditions were true for unique if from File:min_unique_if.sv:6
+M1 o=0
+WARNING: 0ns : none of the conditions were true for priority if from File:min_unique_if.sv:9
+M2 o=0
+WARNING: 0ns : Multiple conditions true
+	 condition at line:14 conflicts with condtion at line:13
+	 for unique if from File:min_unique_if.sv:13
+M3 o=8

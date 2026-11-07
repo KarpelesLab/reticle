@@ -1,0 +1,10 @@
+W=8 r=ff
+MAX 7 10
+SQ 16 9
+STR macro string
+multi line 5
+second line 6
+MODE 1 NOTDEF 42
+elsif branch
+undef worked
+empty`EMPTY macro

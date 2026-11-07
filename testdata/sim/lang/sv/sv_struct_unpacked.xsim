@@ -1,0 +1,9 @@
+U1 init a=0 b=xxxxxxxx c=0
+U2 a=10 b=ab c=1
+U3 r1.a=10 r2.a=20
+U4 eq=0
+U5 eq=1
+U6 '{a:5,b:18,c:1'b0}
+U7 o.r.b=12 arr=1 2 3
+U8 '{r:'{a:-1,b:0,c:1'b1},arr:'{7,7,7}}
+U9 '{a:0,b:0,c:1'b0}

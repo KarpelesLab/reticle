@@ -1,0 +1,17 @@
+t0                    0 0                    0
+t1                 1000 1000
+t2.5                 3000 3000 realtime 2.500000
+t+ps 3000 2.501000
+t+sub-ps 2.501000
+stime 13 time 13
+t var 13 000000000000000d
+i var 13
+tf [   13.000 ns]
+tf real [   12.501 ns]
+tf ps [13000 ps]
+tf us [     0.012501us]
+after 100 [     0.113000us]
+Timescale of (tb) is 1ns/1ps.
+expr delay 0.119000us
+var delay 0.123000us
+real expr delay 0.124000us

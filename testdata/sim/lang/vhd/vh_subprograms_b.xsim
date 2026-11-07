@@ -1,0 +1,9 @@
+Note: defaults ok
+Note: recursion ok
+Note: record return ok
+Note: overload ok
+Note: inout ok
+Note: out params ok
+Note: signal param ok
+Note: wait in procedure ok
+Note: impure ok

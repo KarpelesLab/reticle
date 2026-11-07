@@ -1,0 +1,14 @@
+UP unique case v=1 o=2
+WARNING: 0ns : none of the conditions were true for unique case from File:sv_unique_priority.sv:6
+UP unique case v=3 o=2
+UP priority case v=3 o=a
+WARNING: 0ns : none of the conditions were true for priority case from File:sv_unique_priority.sv:14
+UP priority case v=0 o=a
+UP unique if v=1 o=5
+WARNING: 0ns : none of the conditions were true for unique if from File:sv_unique_priority.sv:21
+UP unique if v=2 o=5
+UP priority if v=1 o=7
+WARNING: 0ns : none of the conditions were true for priority if from File:sv_unique_priority.sv:26
+UP priority if v=0 o=7
+UP unique0 v=0 o=c
+UP unique0 v=3 o=c

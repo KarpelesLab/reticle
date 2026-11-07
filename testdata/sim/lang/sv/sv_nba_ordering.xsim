@@ -1,0 +1,14 @@
+NB pre-NBA t=5000 a=1 b=2 c=3
+NB #0 a=1
+NB post a=2 b=3 c=1 sr=3 0 0
+NB pre-NBA t=15000 a=2 b=3 c=1
+NB #0 a=2
+NB post a=3 b=1 c=2 sr=1 3 0
+NB pre-NBA t=25000 a=3 b=1 c=2
+NB #0 a=3
+NB post a=1 b=2 c=3 sr=2 1 3
+NB pre-NBA t=35000 a=1 b=2 c=3
+NB #0 a=1
+NB post a=2 b=3 c=1 sr=3 2 1
+NB display a=2
+NB strobe a=9

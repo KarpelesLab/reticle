@@ -1,0 +1,13 @@
+FL1 '0=000000000000
+FL2 '1=111111111111 fff
+FL3 'x=xxxxxxxxxxxx
+FL4 'z=zzzzzzzzzzzz
+FL5 signed '1=-1
+FL6 bit 'x=00000000
+FL7 packed md '1=ffff
+FL8 int '1=-1
+FL9 ~'0 v=fff
+FL10 expr '1 v=fff
+FL11 '1 in compare 1
+FL12 partial '1 000011110000
+FL13 '1+1 in 12bit ctx 000

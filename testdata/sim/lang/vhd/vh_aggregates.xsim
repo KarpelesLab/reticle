@@ -1,0 +1,14 @@
+Note: others ok
+Note: named ok
+Note: range choice ok
+Note: positional others ok
+Note: choice list ok
+Note: int agg ok
+Note: int others ok
+Note: var agg target ok
+Note: vec agg target ok
+Note: attr choice ok
+Note: sig agg target ok
+Note: sig vec agg target ok
+Note: concurrent named ok
+Note: vector elements agg ok

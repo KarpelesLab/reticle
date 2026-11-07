@@ -1,0 +1,21 @@
+c1 1010
+c0 1100
+cx 1xx0
+cz 1xx0
+cx same 1010
+cx xin 1x0x
+vec cond 1010
+vec cond2 1xx0
+vec cond3 1100
+nested           2
+width xxxxxxx1
+width2 11110000
+sign 11111101
+unsign 00001101
+sign8 11111101
+x merge 000001x1
+x int 0000000000000000000000000000000x
+real 1.500000
+real2 1.500000
+real3 2.000000
+chain 1

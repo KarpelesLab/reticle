@@ -1,0 +1,25 @@
+Note: and ok
+Note: or ok
+Note: xor ok
+Note: nand ok
+Note: nor ok
+Note: xnor ok
+Note: not ok
+Note: concat ok
+Note: slice ok
+Note: sll ok
+Note: srl ok
+Note: sll neg ok
+Note: scalar and ok
+Note: partial ok
+Note: asc ok
+Note: asc slice ok
+Note: sig r ok
+Note: sig w ok
+Note: ne ok
+Note: gt ok
+Note: lex lt ok
+Note: eq len ok
+Note: const ok
+Note: rol ok
+Note: ror ok

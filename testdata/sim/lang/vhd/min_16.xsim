@@ -1,0 +1,27 @@
+Note: a sll 2 (expect 00001100)
+Note: 0
+Note: 0
+Note: 0
+Note: 0
+Note: 1
+Note: 1
+Note: 0
+Note: 0
+Note: a srl 3 (expect 00011000)
+Note: 0
+Note: 0
+Note: 0
+Note: 1
+Note: 1
+Note: 0
+Note: 0
+Note: 0
+Note: bv sra 2 (expect 11101100)
+Note: 1
+Note: 1
+Note: 1
+Note: 0
+Note: 1
+Note: 1
+Note: 0
+Note: 0

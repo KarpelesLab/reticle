@@ -1,0 +1,10 @@
+R1 init m0=xx a0=0 c0=0000
+R2 m=00 11 22 33
+R3 n=00 11 22 33
+R6 a=-3 -2 -1 0
+R8 c7=a c7[1]=1
+R9 m1=10
+R10 out of range m[i]=xx a[9]=0
+R11 after oob write m=00 10 22 33
+R12 m[1][7]=0
+R13 m[i][i] write m2=26

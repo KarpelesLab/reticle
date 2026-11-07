@@ -1,0 +1,4 @@
+PO inst tb.u4 W=4 W2=8 OFF=3
+PO inst tb.u8 W=8 W2=16 OFF=200
+PO inst tb.u6 W=6 W2=12 OFF=1
+PO1 y4=18 y8=300 y6=64

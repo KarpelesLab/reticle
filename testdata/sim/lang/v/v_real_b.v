@@ -1,0 +1,54 @@
+`timescale 1ns/1ps
+module tb;
+  real r, s;
+  realtime rt;
+  integer i;
+  reg [63:0] bits;
+  reg [7:0] b8;
+  reg signed [7:0] sb8;
+  time t;
+  initial begin
+    r = 3.14159; s = -2.5;
+    $display("f %f %f", r, s);
+    $display("e %e %e", r, s);
+    $display("g %g %g %g", r, 1.0e10, 1.0e-5);
+    $display("prec %.2f %.0f %10.3f|%-10.3f|", r, r, r, r);
+    $display("prec e %.3e %12.4e", r, 123456.789);
+    $display("arith %f %f %f %f", r + s, r - s, r * s, r / s);
+    $display("pow %f %f", 2.0 ** 0.5, 2 ** 3.0);
+    $display("cmp %b %b %b", r > s, r == 3.14159, r != s);
+    $display("logic skipped");
+    i = 2.5; $display("int 2.5 -> %0d", i);
+    i = 3.5; $display("int 3.5 -> %0d", i);
+    i = -2.5; $display("int -2.5 -> %0d", i);
+    i = 2.4999; $display("int 2.4999 -> %0d", i);
+    i = -0.5; $display("int -0.5 -> %0d", i);
+    $display("rtoi %0d %0d %0d", $rtoi(2.9), $rtoi(-2.9), $rtoi(1e3));
+    $display("itor %f", $itor(-7));
+    bits = $realtobits(1.0); $display("realtobits %h", bits);
+    bits = $realtobits(-0.15625); $display("realtobits2 %h", bits);
+    $display("bitstoreal %f", $bitstoreal(64'h4009_21fb_5444_2d18));
+    r = 10; $display("int to real %f", r);
+    r = 8'hff; $display("vec to real %f", r);
+    sb8 = -8'sd3; r = sb8; $display("signed vec to real %f", r);
+    b8 = 200.7; $display("real to vec %0d", b8);
+    b8 = 300.0; $display("real to vec trunc %0d", b8);
+    sb8 = -3.5; $display("real to signed vec %0d", sb8);
+    r = 1.0 / 3.0; $display("third %f %e %g", r, r, r);
+    r = 1e-300 * 1e-300; $display("underflow %e", r);
+    r = 0.0; $display("zero %f %e %g", r, r, r);
+    r = 1.0; $display("%%d of real %d", r);
+    r = 123.456; $display("real %0d via int", $rtoi(r));
+    rt = 1.5; $display("realtime %f", rt);
+    #2.5 $display("time %0t realtime %f %t", $time, $realtime, $realtime);
+    t = $time; $display("time var %0d", t);
+    r = 7 / 2; $display("int div to real %f", r);
+    r = 7 / 2.0; $display("real div %f", r);
+    r = 1 + 0.5; $display("mixed %f", r);
+    $display("sci %f %f", 1.5e2, 2.5E-1);
+    $display("big %f", 1.0e20);
+    $display("g small %g %g", 0.0001, 0.00001);
+    $display("g big %g %g", 123456.0, 1234567.0);
+    $finish;
+  end
+endmodule

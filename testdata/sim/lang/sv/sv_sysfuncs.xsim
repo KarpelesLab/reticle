@@ -1,0 +1,12 @@
+SF1 clog2 0=0 1=0 2=1 3=2 8=3 9=4 1024=10
+SF2 countones=4 onehot=0 onehot0=0
+SF3 countones=1 onehot=1 onehot0=1
+SF4 onehot=0 onehot0=1
+SF5 isunknown=1 countones=2
+SF6 countbits 1=2 0=4 x=1 z=1 xz=2
+SF7 isunknown=0
+SF8 signed=-16 unsigned=255
+SF9 unsigned(i)=4294967276
+SF10 bits=4 clog2(expr)=4
+SF11 high(v)=7 low(v)=0
+SF12 typename int: int

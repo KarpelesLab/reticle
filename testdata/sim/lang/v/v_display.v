@@ -1,0 +1,50 @@
+`timescale 1ns/1ps
+module tb;
+  reg [7:0] a;
+  reg signed [7:0] sa;
+  reg [31:0] w;
+  reg [63:0] big;
+  reg [8*5:1] str;
+  integer i;
+  initial begin
+    a = 8'd5; sa = -8'sd5; w = 32'hdeadbeef; big = 64'h0123456789abcdef;
+    $display("d [%d] [%0d] [%5d] [%-5d|]", a, a, a, a);
+    $display("sd [%d] [%0d] [%5d]", sa, sa, sa);
+    $display("h [%h] [%0h] [%x] [%X] [%H]", a, a, w, w, w);
+    $display("b [%b] [%0b] [%B]", a, a, a);
+    $display("o [%o] [%0o] [%O]", a, a, w);
+    $display("big %h %d", big, big);
+    $display("int %d %0d %h", i, -1, -1);
+    i = -12345; $display("neg int [%d] [%0d] [%h]", i, i, i);
+    $display("c %c%c%c", 8'd72, 8'd105, 8'd33);
+    str = "hello"; $display("s [%s] [%10s] [%0s]", str, str, str);
+    str = "hi"; $display("short s [%s] [%0s]", str, str);
+    $display("lit s %s", "abc");
+    $display("m %m");
+    $display("esc tab\there nl\\n q\" pct %% oct \101");
+    $display("noformat", a);
+    $display(a);
+    $display(a, sa);
+    $display(w, " ", a);
+    $display("a=", a, " sa=", sa);
+    $display(8'hff, 4'b1010);
+    $display("mix %d", a, " then ", a);
+    $displayh(a, " ", w);
+    $displayb(a);
+    $displayo(a);
+    $write("write1 "); $write("write2\n");
+    $write(a); $write("\n");
+    $display("x %d %h %b %o", 8'bx, 8'bx, 8'bx, 8'bx);
+    $display("z %d %h %b", 8'bz, 8'bz, 8'bz);
+    $display("mixed xz %h %d", 8'b0x1z_0000, 8'b0000_1z01);
+    $display("hex part x %h", 12'b0000_xxxx_0001);
+    $display("dec width 1 [%d] 16 [%d] 32 [%d] 64 [%d]", 1'b1, 16'd7, 32'd7, 64'd7);
+    $display("sdec widths [%d] [%d] [%d]", 16'sd7, -16'sd7, -32'sd7);
+    $display("empty []");
+    $display();
+    $display("");
+    $display("l %l", 1);
+    $display("u last");
+    $finish;
+  end
+endmodule

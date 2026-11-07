@@ -1,0 +1,10 @@
+Note: for ok
+Note: downto bad
+Note: null range ok
+Note: while ok
+Note: plain loop exit ok
+Note: next when ok
+Note: labelled ok
+Note: while true exit ok
+Note: enum loop ok
+Note: dependent inner ok

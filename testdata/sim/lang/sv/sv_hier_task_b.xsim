@@ -1,0 +1,5 @@
+HT0 child %m=tb.c1 val=3
+HT0 child %m=tb.c2 val=3
+HT3 %m in tb: tb
+HT4 task %m=tb.where
+HT5 named block %m=tb.named_blk

@@ -1,0 +1,15 @@
+12000 reset q=00
+16000 load q=10110010
+26000 shl q=01100100 sout=0 lfsr=b387
+36000 shl q=11001001 sout=1 lfsr=670f
+46000 shl q=10010010 sout=1 lfsr=ce1e
+56000 shl q=00100101 sout=0 lfsr=9c3c
+66000 shl q=01001010 sout=0 lfsr=3879
+76000 shl q=10010101 sout=1 lfsr=70f2
+86000 sra q=11001010 lfsr=e1e4
+96000 sra q=11100101 lfsr=c3c8
+106000 sra q=11110010 lfsr=8791
+116000 sra q=11111001 lfsr=0f22
+126000 hold q=11111001
+130000 async reset q=00
+errors=0

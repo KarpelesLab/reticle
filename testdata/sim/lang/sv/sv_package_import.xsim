@@ -1,0 +1,5 @@
+PI1 s=0 o=3
+PI2 s=1 o=5
+PI3 s=2 o=7
+PI4 MASK=0f p2::K=100 p1::K=3
+PI5 twice=42

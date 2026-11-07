@@ -1,0 +1,22 @@
+add xxxx sub xxxx mul xxxx
+div xxxx mod xxxx
+neg xxxx
+cmp x 0 1
+eqz x 1
+neq 1 0
+if x else
+if !x else
+if z else
+if vec x else
+if vec 1x taken
+int x           x xxxxxxxx
+int x+1           x
+while done
+repeat x 1
+case x matched
+case z exact
+concat x x1z0
+shiftin 0x00
+red x 0
+pow x xxxx
+cond merge 10xx

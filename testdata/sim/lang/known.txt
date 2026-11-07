@@ -1,0 +1,194 @@
+# Testbenches of this corpus that do not yet print what xsim printed,
+# each with the reason (`tests/sim_lang_xsim.rs`). A `skip` is not run.
+# Reasons that start `refused:` or `line` are what Reticle printed;
+# the rest were written by hand.
+v/min_1.v line 1: prints `a 0e` where xsim prints `a 1e`
+v/min_10.v refused: unsupported construct: `fork` / `join` (no parallel processes in the IR)
+v/min_11.v refused: a `real` value has no truth value
+v/min_13.v line 1: prints `tb initial` where xsim prints `sub initial`
+v/min_2.v line 1: prints `a 11111101` where xsim prints `a 00001101`
+v/min_22.v refused: `tr` is driven from more than one place
+v/min_23.v refused: `pu` is driven from more than one place
+v/min_24.v refused: unsupported construct: net type `triand`
+v/min_25.v line 1: prints `0 a=0 y5=z y6=0 y2=z` where xsim prints `0 a=0 y5=x y6=x y2=x`
+v/min_26.v line 2: prints `force expr follows w=8 (want 6)` where xsim prints `force expr follows w=6 (want 6)`
+v/min_27.v line 1: prints `0 a changed to x` where xsim prints `0 a changed to 1`
+v/min_28.v refused: unsupported construct: a procedural continuous `assign`
+v/min_29.v refused: unsupported construct: an `event` variable (simulation only)
+v/min_30.v line 1: prints `(nothing)` where xsim prints `repeat(-1) ran 0 times`
+v/min_31.v refused: hierarchical reference into instance of `tb` is not supported
+v/min_32.v refused: `l.val` is a net and cannot be assigned from a procedural block
+v/min_33.v refused: `s` is 5 bits wide but is connected to 3 bits
+v/min_35.v line 1: prints `1 0 1` where xsim prints `0 0 1`
+v/min_36.v line 1: prints `5000 continued c=0` where xsim prints `1000 continued c=0`
+v/min_37.v refused: unsupported construct: an array of `real`
+v/min_39.v refused: internal error: lowered IR is invalid: net `t` has 2 drivers in module `tb`
+v/min_4.v line 1: prints `x1 0` where xsim prints `x1 1`
+v/min_40.v refused: unsupported construct: a gate instance array
+v/min_41.v refused: unsupported construct: a user-defined primitive table
+v/min_42.v line 1: prints `buf(z)=z bufif0(z,0)=z bufif1(z,1)=z` where xsim prints `buf(z)=x bufif0(z,0)=x bufif1(z,1)=x`
+v/min_5.v refused: unsupported construct: multi-dimensional unpacked array
+v/min_6.v line 1: prints `(nothing)` where xsim prints `y 6 6`
+v/min_7.v refused: hierarchical reference into instance of `leaf` is not supported
+v/min_8.v refused: this name is not a function or task
+v/min_9.v refused: unsupported construct: `disable`
+v/v_always.v line 1: prints `0 a-or-b a=x b=x` where xsim prints `0 a-or-b a=1 b=2`
+v/v_arrays.v refused: unsupported construct: an array of `real`
+v/v_compare.v line 4: prints `s4==8'hff 1` where xsim prints `s4==8'hff 0`
+v/v_contassign.v line 1: prints `0 a=1 b=2 y1=z y2=z y3=3 y4=3 y5=z y6=2` where xsim prints `0 a=1 b=2 y1=x y2=x y3=3 y4=3 y5=x y6=x`
+v/v_event.v refused: unsupported construct: an `event` variable (simulation only)
+v/v_event_b.v line 10: prints `15000 posedge flag` where xsim prints `15000 flag seen`
+v/v_force.v refused: unsupported construct: a procedural continuous `assign`
+v/v_force_b.v line 7: prints `7000 force expr follows w=40` where xsim prints `7000 force expr follows w=6`
+v/v_function.v refused: constant function `fact` calls itself
+v/v_gates.v refused: unsupported construct: a gate instance array
+v/v_gates_b.v line 1: prints `a=z b=z and=x or=x nand=x nor=x xor=x xnor=x buf=z not=x and` where xsim prints `a=z b=z and=x or=x nand=x nor=x xor=x xnor=x buf=x not=x and`
+v/v_generate.v line 1: prints `(nothing)` where xsim prints `y[0]=5`
+v/v_hier.v refused: `l1.val` is a net and cannot be assigned from a procedural block
+v/v_hier_b.v refused: hierarchical reference into instance of `tb` is not supported
+v/v_intra.v line 2: prints `15000 c=0 right after` where xsim prints `5000 c=0 right after`
+v/v_loops.v refused: unsupported construct: `disable`
+v/v_loops_b.v refused: process `tb.p0` executed 10000000 statements without suspending and was stopped
+v/v_memory.v refused: unsupported construct: multi-dimensional unpacked array
+v/v_ports.v refused: `s` is 5 bits wide but is connected to 3 bits
+v/v_real.v refused: a `real` value has no truth value
+v/v_shift.v line 28: prints `sext ctx ffcb` where xsim prints `sext ctx 004b`
+v/v_sign.v line 4: prints `mixed add 00e0    224` where xsim prints `mixed add 01e0    480`
+v/v_signedmul.v line 3: prints `s*u -63 ffc1` where xsim prints `s*u 2241 08c1`
+v/v_task.v refused: unsupported construct: `disable`
+v/v_ternary.v line 14: prints `unsign 11111101` where xsim prints `unsign 00001101`
+v/v_udp.v refused: unsupported construct: a user-defined primitive table
+v/v_wires.v refused: unsupported construct: net type `triand`
+v/v_wires_b.v refused: internal error: lowered IR is invalid: net `t` has 2 drivers in module `tb`
+v/v_xprop.v line 15: prints `repeat x 0` where xsim prints `repeat x 1`
+sv/min_2state.sv line 1: prints `M1 initial b=x i=x y=x` where xsim prints `M1 initial b=0 i=0 y=0`
+sv/min_array_compare.sv refused: a whole array cannot be used as a value; index it
+sv/min_array_copy.sv refused: unsupported construct: an assignment to a whole array
+sv/min_array_decl_init.sv line 1: prints `M1 m=xx xx` where xsim prints `M1 m=11 22`
+sv/min_array_pattern.sv refused: unsupported construct: an assignment to a whole array
+sv/min_array_slice.sv refused: unsupported construct: an assignment to a whole array
+sv/min_array_struct_member_read.sv line 1: prints `M1 st[0].v=0 st[0].val=0 st[1].val=0 st[i].val=0 st[i-1].v=0` where xsim prints `M1 st[0].v=1 st[0].val=5 st[1].val=3 st[i].val=3 st[i-1].v=1`
+sv/min_array_struct_member_write.sv refused: no member `val` in `struct packed [7:0] [0:1]`
+sv/min_call_member.sv line 1: prints `M1 divmod(100,7).q=0 .r=0 whole=0e02` where xsim prints `M1 divmod(100,7).q=14 .r=2 whole=0e02`
+sv/min_case_inside.sv refused: unsupported construct: `case ... inside` (use `case` or `if`)
+sv/min_comb_t0.sv line 1: prints `M1 t=0 k=0111` where xsim prints `M1 t=0 k=xxxx`
+sv/min_decl_init_edge.sv line 1: prints `M1 ne=1 ed=1 ch=1` where xsim prints `M1 ne=0 ed=0 ch=0`
+sv/min_dynarray.sv refused: unsupported construct: dynamic array dimension `[]`
+sv/min_enum_methods.sv line 1: prints `M1 name=  first=0 last=0 num=0 next=0 prev=0` where xsim prints `M1 name=B first=0 last=2 num=3 next=2 prev=0`
+sv/min_final.sv refused: unsupported construct: `final` block
+sv/min_foreach.sv refused: unsupported construct: `foreach`
+sv/min_fork.sv refused: unsupported construct: `fork` / `join` (no parallel processes in the IR)
+sv/min_func_return_array.sv refused: unsupported construct: an assignment to a whole array
+sv/min_func_unpacked_arg.sv refused: unsupported construct: an unpacked array inside a subroutine
+sv/min_gen_inst_ref.sv refused: hierarchical reference into instance of `leaf` is not supported
+sv/min_gen_panic.sv line 1: prints `(nothing)` where xsim prints `M1 outs0=1 w11=3`
+sv/min_hier_child_func.sv refused: hierarchical reference into instance of `child` is not supported
+sv/min_hier_child_write.sv refused: `c1.val` is a net and cannot be assigned from a procedural block
+sv/min_if_array.sv line 1: prints `M1 ch0=5 ch1=5` where xsim prints `M1 ch0=3 ch1=5`
+sv/min_if_basic.sv refused: internal error: lowered IR is invalid: duplicate net name `si.v` in module `tb`
+sv/min_if_func.sv refused: `c.q` is a net and cannot be assigned from a procedural block
+sv/min_if_internal_assign.sv refused: internal error: lowered IR is invalid: duplicate net name `si.v` in module `tb`
+sv/min_if_internal_init.sv refused: internal error: lowered IR is invalid: duplicate net name `si.v` in module `tb`
+sv/min_if_modport.sv refused: `si.w` is a net and cannot be assigned from a procedural block
+sv/min_if_param.sv refused: internal error: lowered IR is invalid: duplicate net name `a.q` in module `tb`
+sv/min_if_param_port.sv refused: internal error: lowered IR is invalid: instance `da` connects `u4` to port `s_q` of type `u8` in module `tb`
+sv/min_if_port.sv refused: internal error: lowered IR is invalid: duplicate net name `si.v` in module `tb`
+sv/min_if_port_proc.sv refused: `s_v` is a net and cannot be assigned from a procedural block
+sv/min_if_port_read.sv refused: internal error: lowered IR is invalid: duplicate net name `si.v` in module `tb`
+sv/min_if_tb_assign.sv refused: internal error: lowered IR is invalid: duplicate net name `si.v` in module `tb`
+sv/min_if_tb_proc.sv refused: `si.v` is a net and cannot be assigned from a procedural block
+sv/min_iff.sv refused: unsupported construct: an `iff` condition on an event
+sv/min_keyed_pattern_param.sv refused: unsupported construct: keyed assignment pattern without a target type
+sv/min_md_unpacked.sv refused: unsupported construct: multi-dimensional unpacked array
+sv/min_member_bitwrite.sv line 1: prints `M1 bit write pr=80` where xsim prints `M1 bit write pr=90`
+sv/min_mixed_sign.sv line 1: prints `M1 sa+ua (16-bit ctx) = 0000 (xsim expects 0100)` where xsim prints `M1 sa+ua (16-bit ctx) = 0100 (xsim expects 0100)`
+sv/min_nested_member.sv line 1: prints `M1 read pk.p=f0 pk.p.hi=0 pk.p.lo=0` where xsim prints `M1 read pk.p=f0 pk.p.hi=f pk.p.lo=0`
+sv/min_nested_member_write.sv refused: no member `lo` in `[7:0]`
+sv/min_packed_elem_select_write.sv refused: unsupported construct: an assignment to a select of a bit-select or of an element of a packed array; assign the whole of it
+sv/min_packed_var_elem_write.sv refused: unsupported construct: an assignment to a variable element of a packed array
+sv/min_pattern_struct.sv refused: unsupported construct: an assignment pattern outside a constant
+sv/min_postinc.sv line 1: prints `M1 j=i++ j=6 i=6` where xsim prints `M1 j=i++ j=5 i=6`
+sv/min_queue.sv refused: unsupported construct: queue dimension `[$]`
+sv/min_recursive_constfunc.sv refused: constant function `fib` calls itself
+sv/min_recursive_func_rt.sv refused: this name is not a function or task
+sv/min_ref_arg.sv line 1: prints `M1 x=x` where xsim prints `M1 x=15`
+sv/min_stream.sv refused: unsupported construct: the streaming operator
+sv/min_string.sv refused: internal error: lowered IR is invalid: assignment of a `u1` value to a `string` target in module `tb`
+sv/min_string_concat.sv refused: a `string` value cannot be used as a 8-bit vector
+sv/min_string_func.sv refused: internal error: lowered IR is invalid: assignment of a `u1` value to a `string` target in module `tb`
+sv/min_string_init.sv refused: internal error: lowered IR is invalid: assignment of a `u1` value to a `string` target in module `tb`
+sv/min_string_task.sv refused: internal error: lowered IR is invalid: assignment of a `u1` value to a `string` target in module `tb`
+sv/min_timeunit.sv line 1: prints `M1 sub t=2000` where xsim prints `M1 sub t=20000`
+sv/min_union_member.sv line 1: prints `M1 x.b[1]=1 x.b[0]=1` where xsim prints `M1 x.b[1]=be x.b[0]=ef`
+sv/min_union_struct_member.sv line 1: prints `M1 x.s.hi=0 x.s.lo=0 x.s=beef` where xsim prints `M1 x.s.hi=be x.s.lo=ef x.s=beef`
+sv/min_unpacked_struct.sv refused: unsupported construct: unpacked struct or union
+sv/sv_always_kinds.sv line 1: prints `AK1 t=0 k_const=7 sum_c=xxxx` where xsim prints `AK1 t=0 k_const=x sum_c=xxxx`
+sv/sv_array_pattern.sv refused: unsupported construct: multi-dimensional unpacked array
+sv/sv_array_query.sv refused: unsupported construct: multi-dimensional unpacked array
+sv/sv_array_slice.sv refused: unsupported construct: an assignment to a whole array
+sv/sv_assign_ops.sv line 4: prints `AO4 j=i++ j=7 i=7` where xsim prints `AO4 j=i++ j=6 i=7`
+sv/sv_bit_select.sv line 5: prints `BS5 x idx w[i]=x` where xsim prints `BS5 x idx w[i]=1`
+sv/sv_case_inside.sv refused: unsupported construct: `case ... inside` (use `case` or `if`)
+sv/sv_cast.sv line 11: prints `CA11 bit'(x)=x logic'(x)=x` where xsim prints `CA11 bit'(x)=0 logic'(x)=x`
+sv/sv_concat_repl.sv refused: unsupported construct: the streaming operator
+sv/sv_display_p.sv line 6: prints `DP6 4660` where xsim prints `DP6 '{1,2,3,4}`
+sv/sv_dynarray_queue.sv refused: unsupported construct: dynamic array dimension `[]`
+sv/sv_enum.sv line 1: prints `E1 init e1=x e2=xxx e3=x` where xsim prints `E1 init e1=0 e2=xxx e3=0`
+sv/sv_event_iff.sv refused: unsupported construct: an `iff` condition on an event
+sv/sv_event_iff_b.sv line 1: prints `EI1 all=6 en=2 neg=4 edge=13` where xsim prints `EI1 all=6 en=2 neg=4 edge=12`
+sv/sv_fills.sv line 6: prints `FL6 bit 'x=xxxxxxxx` where xsim prints `FL6 bit 'x=00000000`
+sv/sv_final.sv refused: unsupported construct: `final` block
+sv/sv_foreach.sv refused: unsupported construct: multi-dimensional unpacked array
+sv/sv_fork_join.sv refused: unsupported construct: queue dimension `[$]`
+sv/sv_func_args.sv refused: unsupported construct: an unpacked array inside a subroutine
+sv/sv_func_args_b.sv line 8: prints `FA8 tref x=x` where xsim prints `FA8 tref x=15`
+sv/sv_func_return_agg.sv refused: unsupported construct: an assignment to a whole array
+sv/sv_func_return_agg_b.sv line 2: prints `FR2 member of call q=0` where xsim prints `FR2 member of call q=14`
+sv/sv_generate.sv line 1: prints `(nothing)` where xsim prints `G1 outs=1 4 9 16 bits=0101`
+sv/sv_hier_task.sv refused: hierarchical reference into instance of `child` is not supported
+sv/sv_init_decl.sv refused: internal error: lowered IR is invalid: assignment of a `u1` value to a `string` target in module `tb`
+sv/sv_init_decl_b.sv line 2: prints `ID2 m=xx xx st=1` where xsim prints `ID2 m=11 22 st=1`
+sv/sv_interface.sv refused: `b_valid` is a net and cannot be assigned from a procedural block
+sv/sv_interface_array.sv line 1: prints `IA1 ch0=9 ch1=9 ch2=9` where xsim prints `IA1 ch0=3 ch1=6 ch2=9`
+sv/sv_interface_b.sv refused: no member `slave` here
+sv/sv_interface_param.sv refused: `a.q` is a net and cannot be assigned from a procedural block
+sv/sv_interface_param_b.sv refused: internal error: lowered IR is invalid: duplicate net name `a.q` in module `tb`
+sv/sv_package.sv refused: unsupported construct: an assignment pattern outside a constant
+sv/sv_packed_md.sv refused: unsupported construct: an assignment to a select of a bit-select or of an element of a packed array; assign the whole of it
+sv/sv_param_types.sv refused: constant function `fib` calls itself
+sv/sv_rtl_axis_if.sv refused: `m_tvalid` is a net and cannot be assigned from a procedural block
+sv/sv_rtl_axis_if_b.sv refused: internal error: lowered IR is invalid: duplicate net name `a.tdata` in module `tb`
+sv/sv_rtl_fifo.sv refused: unsupported construct: queue dimension `[$]`
+sv/sv_rtl_pkg_alu.sv refused: unsupported construct: an assignment pattern outside a constant
+sv/sv_rtl_struct_pipe.sv refused: no member `val` in `struct packed [16:0] [0:2]`
+sv/sv_rtl_struct_pipe_b.sv line 2: prints `SP k=1 dout valid=0 id=0 val=2 raw=00002` where xsim prints `SP k=1 dout valid=0 id=0 val=3 raw=00003`
+sv/sv_signed_arith.sv line 3: prints `SG3 mixed sa+ua sw=0000 0` where xsim prints `SG3 mixed sa+ua sw=0100 256`
+sv/sv_streaming.sv refused: unsupported construct: the streaming operator
+sv/sv_string.sv refused: a `string` value cannot be used as a 8-bit vector
+sv/sv_string_args.sv refused: a `string` value cannot be used as a 8-bit vector
+sv/sv_struct_packed.sv refused: unsupported construct: an assignment pattern outside a constant
+sv/sv_struct_packed_b.sv line 4: prints `S5 pk.p.hi=0 pk.tag=5 pk[11]=1` where xsim prints `S5 pk.p.hi=f pk.tag=5 pk[11]=1`
+sv/sv_struct_unpacked.sv refused: unsupported construct: unpacked struct or union
+sv/sv_timeunit.sv line 1: prints `TU1 sub t=2000 realtime=2000` where xsim prints `TU3 tb t=5000`
+sv/sv_typedef.sv line 8: prints `T8 c=1  ` where xsim prints `T8 c=1 GREEN`
+sv/sv_types_basic.sv line 1: prints `A1 init l8=xxxxxxxx b8=xxxxxxxx by=x si=x i=x li=x ig=x b1=x` where xsim prints `A1 init l8=xxxxxxxx b8=00000000 by=0 si=0 i=0 li=0 ig=x b1=0`
+sv/sv_union.sv refused: no member `lo` in `[15:0]`
+sv/sv_union_b.sv line 1: prints `N1 w=beef b1=1 b0=1 hi=0 lo=0` where xsim prints `N1 w=beef b1=be b0=ef hi=be lo=ef`
+sv/sv_unpacked_array.sv refused: unsupported construct: multi-dimensional unpacked array
+sv/sv_unpacked_array_b.sv line 1: prints `R1 init m0=xx a0=x c0=xxxx` where xsim prints `R1 init m0=xx a0=0 c0=0000`
+sv/sv_wildcard_inside.sv refused: unsupported construct: an assignment to a whole array
+vhd/min_01.vhd std_logic held in four values: `U`, `X`, `W` and `-` all read as `x` and `H`/`L` as `1`/`0`, where xsim keeps all nine and resolves them by the IEEE 1164 table
+vhd/min_56.vhd std_logic held in four values: `U`, `X`, `W` and `-` all read as `x` and `H`/`L` as `1`/`0`, where xsim keeps all nine and resolves them by the IEEE 1164 table
+vhd/vh_case.vhd an xsim defect, not copied: an ordinary `case` on a vector matches `"1--"` against `"110"`, as only `case?` may
+vhd/vh_case_b.vhd an xsim defect, not copied: an ordinary `case` on a vector matches `"1--"` against `"110"`, as only `case?` may
+vhd/vh_delta.vhd a concurrent assignment is a continuous assignment here and settles in the delta its inputs change in; VHDL takes one delta per statement
+vhd/vh_enum.vhd an xsim defect, not copied: `'image(maximum(...))` of an enumeration prints one character
+vhd/vh_env_stop.vhd `std.env.stop` stops without the line xsim prints, `$stop called at time : 0 fs`
+vhd/vh_numeric_arith.vhd an xsim defect, not copied: `boolean'image` of a comparison of arrays prints `tru`/`fal`
+vhd/vh_numeric_std_unsigned.vhd an xsim defect, not copied: `boolean'image` of a comparison of arrays prints `tru`/`fal`
+vhd/vh_resolution.vhd std_logic held in four values: `U`, `X`, `W` and `-` all read as `x` and `H`/`L` as `1`/`0`, where xsim keeps all nine and resolves them by the IEEE 1164 table
+vhd/vh_resolution_const.vhd std_logic held in four values: `U`, `X`, `W` and `-` all read as `x` and `H`/`L` as `1`/`0`, where xsim keeps all nine and resolves them by the IEEE 1164 table
+vhd/vh_resolution_const_b.vhd std_logic held in four values: `U`, `X`, `W` and `-` all read as `x` and `H`/`L` as `1`/`0`, where xsim keeps all nine and resolves them by the IEEE 1164 table
+vhd/vh_slv_ops.vhd an xsim defect, not copied: `boolean'image` of a comparison of arrays prints `tru`/`fal`
+vhd/vh_strings.vhd an xsim defect, not copied: `boolean'image` of a comparison of arrays prints `tru`/`fal`
+vhd/vh_time.vhd `time'pos` counts femtoseconds here, where xsim counts picoseconds, its resolution

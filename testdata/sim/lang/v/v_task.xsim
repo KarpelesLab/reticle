@@ -1,0 +1,15 @@
+sum 13 diff 7
+sum 13 diff 249
+incr 42
+incr wrap 0
+global f0
+disable cnt 3
+no disable cnt 10
+old aa
+early_ret ran with 3
+trunc_out 0f
+1000 delayed 2
+2000 delayed 3
+3000 delayed 1
+3000 after fork
+outer cnt 13

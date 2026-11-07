@@ -1,0 +1,28 @@
+ovf -2147483648
+unf 2147483647
+mul ovf 0
+mul ovf ctx 4294967296
+mul wide 4294967296
+u 4294967295 ffffffff
+i from u -1
+i/u cmp 0 1
+i/u div 2147483644
+i/i div -3 -1
+hex lit -1
+s hex lit -1
+8'hff 255
+8'shff -1
+-8'shff 1
+b -> i 255
+b + 1 256
+b + 1'b1 256
+b wraps 0
+time max 18446744073709551615
+time neg 18446744073709551615
+time - 18446744073709551611
+time vs int 0
+ops 10 4 21 2 1
+bitops 3 7 4 -8
+shifts 28 15 -4
+pow 343 -343
+cmp 1 0 0

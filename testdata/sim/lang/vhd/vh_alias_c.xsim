@@ -1,0 +1,10 @@
+Note: alias slice ok
+Note: alias field ok
+Note: alias imm ok
+Note: untyped alias ok
+Note: scalar alias ok
+Note: reversed alias ok
+Note: variable alias ok
+Note: write through var alias ok
+Note: write through sig alias ok
+Note: write reversed alias bad

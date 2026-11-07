@@ -1,0 +1,10 @@
+Note: int case ok
+Note: int range case ok
+Note: enum case ok
+Note: slv case bad
+Note: slv case dash literal ok
+Note: case? ok
+Note: case? weak ok
+Note: unsigned case ok
+Note: expr case ok
+Note: char case ok

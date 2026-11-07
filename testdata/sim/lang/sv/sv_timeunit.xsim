@@ -1,0 +1,6 @@
+TU3 tb t=5000
+TU4 tb t=6000 realtime=5500
+TU1 sub t=20000 realtime=20000
+TU2 sub t=40000
+TU5 tb t=46000
+Timescale of (tb) is 1ns / 1ps.

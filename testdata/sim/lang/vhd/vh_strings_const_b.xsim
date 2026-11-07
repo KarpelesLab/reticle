@@ -1,0 +1,11 @@
+Note: hello
+Note: hello there
+Note: static concat of literals
+Note: image of constant 42
+Note: image of constant expr 42
+Note: image of character constant 'A'
+Note: index ok
+Note: slice ok
+Note: eq ok
+Note: lt ok
+Note: image eq ok

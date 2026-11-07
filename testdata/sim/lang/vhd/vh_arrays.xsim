@@ -1,0 +1,22 @@
+Note: index ok
+Note: attr asc ok
+Note: attr desc ok
+Note: desc agg ok
+Note: ascending ok
+Note: range loop ok
+Note: reverse_range bad
+Note: 2d ok
+Note: 2d length ok
+Note: 2d high ok
+Note: subtype others ok
+Note: word arr ok
+Note: arr of vec slice ok
+Note: slice ok
+Note: null array ok
+Note: null slice ok
+Note: slice assign ok
+Note: sig elem ok
+Note: sig slice ok
+Note: loop slice ok
+Note: a(1)=30
+Note: m'length=3

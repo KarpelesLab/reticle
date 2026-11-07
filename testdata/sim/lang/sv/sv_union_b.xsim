@@ -1,0 +1,7 @@
+N1 w=beef b1=be b0=ef hi=be lo=ef
+N3 w=12ef s.hi=12
+N4 bits=16
+N5 x=1234
+N5b x.w=a0b0
+N6 y=-128 i=-128
+N7 y.v as int=254

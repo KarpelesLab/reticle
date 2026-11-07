@@ -1,0 +1,5 @@
+AC1 runs=1 y=xxxxxxxx z=0000xxxx
+AC2 y=3 z=1 runs=2
+AC3 y=11 (function-read b) runs=3
+AC4 rd=12
+AC5 rd after mem write=ee

@@ -1,0 +1,23 @@
+u8>u4 1 u8==u4 0
+s8==s4 1 (both -1 signed)
+s8==u4 0 (mixed)
+s4==8'hff 0
+s4==8'shff 1
+s4<s8 0 s4<=s8 1
+s8<0 1 s8<1'b0 0 s8<1'sb0 1
+s8>u8 1
+i<u8 0 i<$signed(u8) 0
+i==-1 1 i==32'hffffffff 1
+4'b1x==4'b1x x ===1
+x< x x>= x
+z== x z=== 1
+x!==z 1
+width ext == 1 0
+cmp result width 0
+cmp in arith 10
+chain 0
+logic eq 1 1
+signed lit cmp 1 1
+unsigned lit cmp 0
+real cmp 1 1
+string cmp 1 0

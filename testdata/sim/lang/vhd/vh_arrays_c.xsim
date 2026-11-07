@@ -1,0 +1,15 @@
+Note: index ok
+Note: attr asc ok
+Note: attr desc ok
+Note: desc agg ok
+Note: ascending ok
+Note: range loop ok
+Note: reverse_range bad
+Note: subtype others ok
+Note: word arr ok
+Note: arr of vec slice ok
+Note: slice ok
+Note: null array ok
+Note: null slice ok
+Note: sig elem ok
+Note: loop slice ok

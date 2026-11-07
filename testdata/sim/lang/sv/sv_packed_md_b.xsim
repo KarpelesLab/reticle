@@ -1,0 +1,15 @@
+P1 x=deadbeef x[3]=de x[0]=ef x[2][7:4]=a
+P2 x=dead00ef
+P4 x[2:1]=ad00
+P5 y=f00003 bits=24
+P6 y[1]=f00 y[0]=003 y[1][2]=f y[0][0]=3
+P7 z[0]=00 z[3]=11
+P8 x[0]=ef
+P8 x[1]=00
+P8 x[2]=ad
+P8 x[3]=de
+P9 x=01020304
+P11 dims=2 left=3 right=0 size2=8
+P12 x[j][j+:2]=00 x[j+1]=01
+P13 z=00011011 z[1:2]=0110
+P14 x=cafe0304

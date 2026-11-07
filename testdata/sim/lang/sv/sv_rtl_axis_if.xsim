@@ -1,0 +1,5 @@
+AX out data=1 last=0 t=45000
+AX out data=11 last=0 t=65000
+AX out data=31 last=0 t=75000
+AX out data=41 last=1 t=85000
+AX got=4 sum=84

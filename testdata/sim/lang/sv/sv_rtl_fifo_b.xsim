@@ -1,0 +1,13 @@
+FF1 empty=1 full=0 count=0
+FF2 empty=0 full=1 count=8
+FF3 after overflow push count=8
+FF pop ok 03 count=8
+FF pop ok 14 count=7
+FF pop ok 25 count=6
+FF pop ok 36 count=5
+FF pop ok 47 count=4
+FF pop ok 58 count=3
+FF pop ok 69 count=2
+FF pop ok 7a count=1
+FF4 empty=1 full=0 count=0
+FF5 errors=0

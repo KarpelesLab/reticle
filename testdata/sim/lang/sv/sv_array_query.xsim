@@ -1,0 +1,11 @@
+Q1 v: size=8 left=7 right=0 low=0 high=7 inc=1 dim=1 bits=8
+Q2 w: size=16 left=0 right=15 low=0 high=15 inc=-1
+Q3 p: size=4 size2=8 left2=7 dim=2 bits=32
+Q4 u: size=4 left=2 right=5 low=2 high=5 inc=-1
+Q5 u: dim=2 unpacked_dim=1 bits=32
+Q6 q: size=10 high=9
+Q7 m: dim=4 updim=2 bits=72
+Q8 m: size1=3 size2=3 size3=4 size4=2
+Q9 m: left2=3 right2=1 left3=5 right3=2 inc2=1
+Q10 int: bits=32 left=31
+Q11 bits(expr)=8 bits(concat)=24

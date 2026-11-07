@@ -1,0 +1,7 @@
+m.l0.val=1 m.l1.val=10 m.sum=11
+after write m.sum=60
+bump hits=2 val=52
+twice 42
+upward 10
+named.local_r=7
+tb.named.local_r=7

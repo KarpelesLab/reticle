@@ -1,0 +1,13 @@
+FA1 add3(1)=111
+FA2 add3(1,2)=103
+FA3 add3(1,2,3)=6
+FA4 named=13
+FA5 skip=16
+FA6 split h=ab l=cd
+FA7 bump x=5 g=10
+FA8 tref x=15
+FA10 early -1 0 1
+FA11 implicit_ret=7
+FA12 void' x=16
+FA delay_print d=3 t=3000
+FA13 t=3000

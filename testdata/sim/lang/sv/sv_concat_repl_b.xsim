@@ -1,0 +1,9 @@
+CR1 w=a5a5
+CR2 w=aaaa
+CR3 w=a5a5
+CR4 x=ca y=fe
+CR5 w=0000000010101110
+CR6 x=c9 y=6e
+CR8 w=0a05
+CR9 bits of {a,b}=8
+CR10 w=00a6

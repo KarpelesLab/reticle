@@ -1,0 +1,30 @@
+and 10000010 or 11101110 xor 01101100
+xnor 10010011 xnor2 10010011
+not 00110101
+red & 0 | 1 ^ 0
+red ~& 1 ~| 0 ~^ 1
+red ones 1 1
+x and 10xx or 10xx xor 11xx
+x and0 0000 or1 1111
+x not 01xx
+x red & 0 | 1 ^ x
+x red2 0 1
+log && 1 || 1 ! 0
+log0 1 0
+logx x 1 x
+logx2 1 x
+logz x
+width mix 00001010
+ctx 11111010
+ctx not 11110101
+ctx not2 0101
+eq 0 neq 1
+lt 0 0 1 1
+x cmp x 1
+x cmp2 1 1
+x cmp3 0 x
+hex x X x5
+hex z zz Z0
+oct 5xz 77
+dec x   x   z
+dec partx   X   Z

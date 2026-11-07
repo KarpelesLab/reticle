@@ -1,0 +1,13 @@
+1000 w=11 r=1
+2000 forced w=99 r=77
+3000 forced still w=99 r=77
+4000 released w=21 r=77
+5000 r assigned 6
+6000 force expr w=40
+7000 force expr follows w=6
+8000 w=4
+12000 after clk q=03
+14000 force over q=55
+15000 release q=55
+16000 force bit w=00000100
+17000 release bit w=00000100

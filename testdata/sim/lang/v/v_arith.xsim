@@ -1,0 +1,33 @@
+add16   300 012c
+add8  44
+sub   100
+subneg 65436 ff9c 1111111110011100
+mul 20000
+div   2 mod   4
+sdiv   -3 smod   -1
+sdiv2   -3 smod2    1
+sdiv3    3 smod3   -1
+idiv -3 imod -1
+idiv2 -3 imod2 1
+divzero   x xx xxxxxxxx
+idivzero           x
+idivzero2           x
+pow        1024          81           1
+pow neg -8 -1 0
+pow0 1 x
+pow int 9 -27
+pow u 243
+pow sz 8
+unary  56    7
+unary2 ff 11111010
+plus   -7
+ovf   0
+ovf ctx   256
+intovf -2147483648 80000000
+intmin -2147483648
+mul neg -15
+big 0000000000000000
+big2 1fffffffe
+sub unsized -2
+sub sized 14
+mixed 4294967294

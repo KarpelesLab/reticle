@@ -1,0 +1,8 @@
+Note: var immediate ok
+Note: sig deferred ok
+Note: after delta ok
+Note: s1 lags ok
+Note: chain delta 2 ok
+Note: chain delta 3 bad
+Note: last wins ok
+Note: delta events ok

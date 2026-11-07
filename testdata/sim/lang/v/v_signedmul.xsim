@@ -1,0 +1,28 @@
+s*s -63 ffc1
+u*u 2241 08c1
+s*u 2241 08c1
+$signed*s -63
+s*$signed -63
+pos signed 2241
+s/s -3
+s/u 124
+s%s -3
+s%u 1
+neg 7
+part unsigned 2241
+part assign 9
+part to signed -7
+n*n 49
+n*u 18
+sum>>>1 1
+diff>>>1 -8
+concat mult 2241
+chain -126
+pow 49
+pow3 -343
+pow neg exp 0
+pow -1^-1 -1
+pow 0^-1 xxxxxxxxxxxxxxxx
+sext to unsigned fff9
+a+0 fff9
+a+8'd0 00f9

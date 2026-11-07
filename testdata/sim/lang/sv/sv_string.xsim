@@ -1,0 +1,18 @@
+ST1 empty len=0 ''
+ST2 s=Hello len=5
+ST3 u=Hello, World len=12
+ST4 cmp eq=0 ne=1 lt=1 gt=0
+ST5 compare=1 icompare=0
+ST6 substr=World
+ST7 upper=HELLO lower=hello
+ST8 getc=101 e
+ST9 putc s=Jello
+ST10 atoi=1234
+ST11 atohex=255
+ST12 itoa=-56
+ST13 hextoa=ff
+ST14 sformatf=v=10 h=ab b=101
+ST15 rep=ababab
+ST16 s[1]=b
+ST17 string literal to bits 4142
+ST18 empty eq=1

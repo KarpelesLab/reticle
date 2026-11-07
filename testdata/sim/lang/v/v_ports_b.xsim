@@ -1,0 +1,7 @@
+s1=17 s2=17
+y1=11111001 y2=11111000 -8
+o1=f3 y3=1001 y4=1001
+u5.s=xxxxx u5.b=zzzz
+bus off zzzz
+bus on 0101
+hier u1.a=9 u2.s=17 u8.y=f3

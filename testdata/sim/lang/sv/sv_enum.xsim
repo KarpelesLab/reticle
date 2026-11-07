@@ -1,0 +1,23 @@
+E1 init e1=0 e2=xxx e3=0
+E2 e1=2 name=C first=A last=D num=4
+E3 next=D
+E4 wrap next=A
+E5 prev=D
+E6 next(2)=B
+E7 e2=3 011 name=X1 next=X2 prev=X0
+E8 e2 first=1 last=6 num=3
+E9 R=3 P=0 Q=2
+E10 S_DONE=6 bits=4
+E11 cast 2 -> C
+E12 cast invalid -> 2 name=''
+E13 B+1=2
+E14 iter A=0
+E14 iter B=1
+E14 iter C=2
+E15 case default D
+E16 compare C<D=1 A==0=1
+E17 e3=P 0
+E17 e3=Q 2
+E17 e3=R 3
+E17 e3=P 0
+E18 %s e4=S_DONE

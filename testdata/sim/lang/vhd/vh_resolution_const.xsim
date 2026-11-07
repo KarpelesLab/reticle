@@ -1,0 +1,19 @@
+Note: a ok
+Note: b ok
+Note: c ok
+Note: d ok
+Note: e ok
+Note: f ok
+Note: g ok
+Note: h ok
+Note: bus bad
+Note: bus0 H
+Note: bus2 0
+Note: bus3 1
+Note: to_x01 W ok
+Note: to_x01 L ok
+Note: H and 1 ok
+Note: L or Z X ok
+Note: not Z ok
+Note: not U ok
+Note: no edge ok

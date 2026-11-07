@@ -1,0 +1,10 @@
+FJ1 b t=1000
+FJ1 c t=2000
+FJ1 a t=3000
+FJ2 after join t=3000
+FJ3 any fast t=4000
+FJ4 after join_any t=4000
+FJ6 after join_none t=4000
+FJ5 none t=6000
+FJ3 any slow t=8000
+FJ7 end t=14000

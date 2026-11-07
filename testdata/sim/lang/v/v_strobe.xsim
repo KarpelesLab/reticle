@@ -1,0 +1,16 @@
+0 mon a=0 b=0
+1000 mon a=1 b=0
+2000 mon a=1 b=2
+3000 mon a=3 b=3
+4000 disp a=4
+4000 strobe a=5
+4000 mon a=5 b=3
+5000 disp nba a=5
+5000 strobe nba a=6
+5000 mon a=6 b=3
+8000 mon a=7 b=3
+9000 mon a=8 b=3
+08
+00000011
+12000 mon a=10 b=3
+13000 end

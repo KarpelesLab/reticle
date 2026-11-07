@@ -1,0 +1,11 @@
+Note: pkg subtype ok
+Note: deferred ok
+Note: pkg const ok
+Note: pkg func ok
+Note: func in range ok
+Note: pkg lut ok
+Note: pkg enum func ok
+Note: pkg xor ok
+Note: pkg proc ok
+Note: selected name ok
+Note: pkg enum image ok

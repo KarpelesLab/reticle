@@ -1,0 +1,5 @@
+m.l0.val=1 m.l1.val=1 m.sum=2
+after write m.sum=2
+upward 1
+named.local_r=7
+tb.named.local_r=7
