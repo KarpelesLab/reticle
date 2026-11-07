@@ -696,6 +696,16 @@ measuring it and is not copied: `boolean'image(a > b)` of two vectors is
 `tru` under xsim 2026.1 (and `fal`), as it is for `numeric_std` operands
 (`vh_numeric_arith` of the corpus).
 
+**`=` of unknowns** (`unknown_compare_tb.vhd`). VHDL's `=` of `std_logic`
+compares enumeration values, so `'X' = 'X'` is true; the IR's logical
+equality answers `x`. A comparison of two `std_logic` values neither of
+which is a known constant is now the IR's case equality. Against a known
+constant (`rst = '1'`) logical equality is kept: its `x` is false in a
+condition, as VHDL's answer is, and it is what synthesis infers resets and
+state machines from, so nothing synthesis builds changes. That leaves one
+known difference: `v /= "1000"` with `v` holding an unknown is true in VHDL
+and false here.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

@@ -264,3 +264,17 @@ fn aggregates_of_vectors_match_xsim() {
 fn numeric_std_unsigned_matches_xsim() {
     matches_xsim("numeric_std_unsigned");
 }
+
+/// **`=` of `std_logic` values that hold an unknown**: `('1' ?= 'X') =
+/// 'X'`, `x = 'X'`, `z = 'Z'`, `g = "----"` and `v = "10XZ"`, all false
+/// before (the IR's logical equality, which answers `x`).
+///
+/// Would catch `=` of two unknowns going back to logical equality, and a
+/// comparison with a known constant losing a known difference. Would not
+/// catch `v /= "1000"` with `v` holding an unknown, which VHDL has true and
+/// which is false here (logical inequality against a known constant is
+/// kept, for synthesis); it is left out of the fixture for that reason.
+#[test]
+fn unknown_compare_matches_xsim() {
+    matches_xsim("unknown_compare");
+}

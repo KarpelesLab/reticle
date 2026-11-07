@@ -1369,6 +1369,27 @@ impl<'a> Lowerer<'a, '_> {
                 let a = self.b.binary(BinaryOp::Or, l, r);
                 self.b.not(a)
             }
+            // VHDL's predefined `=` compares the enumeration values of
+            // `std_ulogic`, so `'X' = 'X'` is true where the IR's logical
+            // equality answers `x`. A comparison of two `std_logic` values
+            // neither of which is a known constant is therefore the IR's
+            // case equality. (Every `=` was logical equality, so
+            // `('1' ?= 'X') = 'X'` and `v = "10XZ"` were false.) Against a
+            // known constant, `rst = '1'`, logical equality is kept: its
+            // `x` is false in a condition, as VHDL's answer is, and it is
+            // what synthesis infers resets and state machines from. That
+            // leaves `x /= '0'` false where VHDL has it true. With nine
+            // values held in four, `'U' = 'X'` is true here.
+            "=" | "/="
+                if self.is_logic(&ll) && !self.is_known_const(l) && !self.is_known_const(r) =>
+            {
+                let op = if sym == "=" {
+                    BinaryOp::CaseEq
+                } else {
+                    BinaryOp::CaseNe
+                };
+                self.b.binary(op, l, r)
+            }
             "=" => self.b.binary(BinaryOp::Eq, l, r),
             "/=" => self.b.binary(BinaryOp::Ne, l, r),
             "<" => self.b.binary(BinaryOp::Lt, l, r),
@@ -1527,6 +1548,24 @@ impl<'a> Lowerer<'a, '_> {
             }
         }
         Some(m.resize(width))
+    }
+
+    /// True when `id` is a constant with no `x` or `z` bit.
+    fn is_known_const(&self, id: ExprId) -> bool {
+        self.b
+            .module()
+            .expr(id)
+            .as_const()
+            .is_some_and(|c| !c.has_unknown())
+    }
+
+    /// True for `std_ulogic` and its arrays.
+    fn is_logic(&self, l: &Layout) -> bool {
+        match &l.kind {
+            LayoutKind::Bit(BitKind::StdLogic) => true,
+            LayoutKind::Array(a) => matches!(a.elem.kind, LayoutKind::Bit(BitKind::StdLogic)),
+            _ => false,
+        }
     }
 
     /// VHDL `mod` takes the sign of the divisor; the IR's `Mod` takes the
