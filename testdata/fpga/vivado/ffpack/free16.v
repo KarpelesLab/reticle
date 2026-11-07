@@ -1,0 +1,36 @@
+// free16: see tools/vivado-parity/gen_ffpack.py.
+module free16 (input wire clk, input wire si, output wire [15:0] q);
+  wire [15:0] s;
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f0 (.C(clk), .CE(1'b1), .S(1'b0), .D(si), .Q(s[0]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f1 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[0]), .Q(s[1]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f2 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[1]), .Q(s[2]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f3 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[2]), .Q(s[3]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f4 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[3]), .Q(s[4]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f5 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[4]), .Q(s[5]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f6 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[5]), .Q(s[6]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f7 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[6]), .Q(s[7]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f8 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[7]), .Q(s[8]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f9 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[8]), .Q(s[9]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f10 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[9]), .Q(s[10]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f11 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[10]), .Q(s[11]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f12 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[11]), .Q(s[12]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f13 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[12]), .Q(s[13]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f14 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[13]), .Q(s[14]));
+  (* DONT_TOUCH = "TRUE" *) FDSE #(.INIT(1'b1)) f15 (.C(clk), .CE(1'b1), .S(1'b0), .D(s[14]), .Q(s[15]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r0 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[0]), .Q(q[0]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r1 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[1]), .Q(q[1]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r2 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[2]), .Q(q[2]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r3 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[3]), .Q(q[3]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r4 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[4]), .Q(q[4]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r5 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[5]), .Q(q[5]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r6 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[6]), .Q(q[6]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r7 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[7]), .Q(q[7]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r8 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[8]), .Q(q[8]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r9 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[9]), .Q(q[9]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r10 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[10]), .Q(q[10]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r11 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[11]), .Q(q[11]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r12 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[12]), .Q(q[12]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r13 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[13]), .Q(q[13]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r14 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[14]), .Q(q[14]));
+  (* DONT_TOUCH = "TRUE" *) FDRE #(.INIT(1'b0)) r15 (.C(clk), .CE(1'b1), .R(1'b0), .D(s[15]), .Q(q[15]));
+endmodule

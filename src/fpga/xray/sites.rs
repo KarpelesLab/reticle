@@ -262,7 +262,7 @@ pub(super) fn slice_wire_prefix(tile_type: &str, index: u32) -> Option<&'static 
 ///
 /// A `CLBLM` holds a `SLICEM` at `X`-index 0 and a `SLICEL` at 1, so its
 /// prefixes differ in the type rather than only in the index.
-fn slice_feature_prefix(tile_type: &str, index: u32) -> Option<&'static str> {
+pub(super) fn slice_feature_prefix(tile_type: &str, index: u32) -> Option<&'static str> {
     let pair: [&'static str; 2] = match tile_type {
         "CLBLL_L" | "CLBLL_R" => ["SLICEL_X0", "SLICEL_X1"],
         "CLBLM_L" | "CLBLM_R" => ["SLICEM_X0", "SLICEL_X1"],
@@ -298,7 +298,7 @@ const SLICE_LETTERS: [char; 4] = ['A', 'B', 'C', 'D'];
 /// the lookup table beside the flip-flop and the slice's bypass input
 /// instead of the loader deciding for it. The `_MUX_` infix is not a
 /// prefix any database wire uses, so it cannot collide with one.
-fn ff_data_wire(wires: &str, letter: char) -> String {
+pub(super) fn ff_data_wire(wires: &str, letter: char) -> String {
     format!("{wires}_MUX_{letter}FF_D")
 }
 
@@ -864,7 +864,9 @@ fn slice_pass_throughs_in(tile_type: &str, model: LutRamModel) -> Vec<PassThroug
             // its own table's lower half. Offered, it read as a free source
             // beside every single-function table, the placer filled slices
             // on the strength of it, and the flip-flops it promised went to
-            // the bypass input instead and could not all be routed.
+            // the bypass input instead and could not all be routed. A way
+            // through the table to the flip-flop is `super::thru`'s, a wire
+            // the placer counts only while the table lets it.
             out.push(PassThrough {
                 to: format!("{wires}_{letter}MUX"),
                 from: lut5_wire(wires, letter),

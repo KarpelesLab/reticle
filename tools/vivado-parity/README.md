@@ -48,6 +48,11 @@ models or IP.
   `gen_sim_clock_switches.py`, `gen_sim_bufgctrl.py` and
   `gen_sim_clock_managers.py` write three of the testbenches; the others are
   written by hand.
+- `gen_ffpack.py` writes `testdata/fpga/vivado/ffpack/`, eight flip-flops held to
+  one slice beside free or filled tables, and sixteen to one tile, and `ffpack.sh`
+  with `ffpack_probe.tcl` asks Vivado what it makes of them: the held slices' cells,
+  site pips and routes, each held flip-flop's data path, and a bitstream, which
+  `tests/fpga_xray_ffpack_vivado.rs` decodes into `vivado.txt` there.
 - `gen_slice_cells.py` writes small designs around one latch or shift register
   into `testdata/fpga/vivado/slice_cells/`, and `collect_slice_cells.py` keeps
   what Vivado's bitstream for each decodes to (`reticle fpga --decode`), in

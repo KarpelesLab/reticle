@@ -1329,6 +1329,45 @@ pub struct PlaceOptions {
     /// and off under `--memories legacy`, whose one `RAM64X1D` shape writes on
     /// its own `WE` pin and was placed without it on a board.
     pub memory_packing: bool,
+    /// The ways through a bel no cell needs into a pin beside it, which a
+    /// placement may count on as wires into its tile; empty for none, which is
+    /// every family but the 7 series' and that one under `--route-throughs off`.
+    /// See [`RouteThroughs`].
+    pub route_throughs: RouteThroughs,
+}
+
+/// A way through a bel into a pin beside it, which Vivado calls a
+/// route-through: on a 7-series slice, a lookup table passing one of its
+/// inputs on to the flip-flop of its lane.
+///
+/// `node` is the way's own wire, between the bel's input and the pin it
+/// reaches. It is a wire like the bypass input beside it, which any one signal
+/// may take, but only while the bel it goes through is free: a cell on `site`
+/// shuts it, as does one on any site that excludes `site`, unless `beside` and
+/// the cell leaves the way room ([`RouteThroughs::room`]). The placer counts it
+/// so; the router is told after placement which of them a placement needs
+/// ([`route_throughs_needed`]), and the rest are closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RouteThrough {
+    /// The way's wire.
+    pub node: NodeId,
+    /// The site it goes through.
+    pub site: usize,
+    /// Whether a cell on that site that leaves room may share it.
+    pub beside: bool,
+}
+
+/// Every [`RouteThrough`] of a fabric, and which cells leave one room.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RouteThroughs {
+    /// The ways, in node order.
+    pub nodes: Vec<RouteThrough>,
+    /// Per instance of the netlist, whether a cell of it on a site leaves a
+    /// `beside` way through that site open; empty for none. On a 7-series
+    /// slice, a lookup table of four inputs or fewer that does not read `A6`
+    /// leaves its lower half to pass a fifth input on to the flip-flop
+    /// (`<L>FFMUX.O5`), as Vivado has it.
+    pub room: Vec<bool>,
 }
 
 /// [`PlaceOptions::clock_regions`] for a tile in none.
@@ -1364,6 +1403,7 @@ impl Default for PlaceOptions {
             clock_region_lines: 0,
             regional_sites: BTreeMap::new(),
             memory_packing: false,
+            route_throughs: RouteThroughs::default(),
         }
     }
 }
@@ -1858,6 +1898,12 @@ struct SiteRules {
     site_group: Vec<u32>,
     /// One per tile that has a contended pool at all.
     groups: Vec<ControlGroup>,
+    /// Per site, the pools `(group, pool)` with a [`RouteThrough`] that a cell
+    /// on it opens or shuts: the site the way goes through and every site
+    /// that excludes that one. Empty when the fabric has no such way.
+    gated: Vec<Vec<(u32, u32)>>,
+    /// Per instance, [`RouteThroughs::room`]; empty for none.
+    room: Vec<bool>,
     /// Per site, its tile: `graph.sites[site].tile`, eight bytes a site
     /// where an [`ArchSite`](super::arch::ArchSite) is a hundred and
     /// more with three strings in it. The legaliser's search for the
@@ -1894,6 +1940,11 @@ struct ControlGroup {
     /// of it)`: [`SiteRules::captive`] turned round, so that a check of one
     /// pool reads its own handful of pins and not every pin of the tile.
     entries: Vec<Vec<(usize, u32, u32)>>,
+    /// Per pool, its wires that are a [`RouteThrough`], as `(which wire, the
+    /// site it goes through, whether a cell that leaves room may share it)`:
+    /// a wire any one signal may take while that site lets it, and none
+    /// otherwise. Empty for a pool with none.
+    gates: Vec<Vec<(u32, usize, bool)>>,
 }
 
 /// How many wires a pool may hold, and how far the walk that finds one may
@@ -2046,7 +2097,17 @@ fn shares_a_slice_with_ram(netlist: &Netlist, ram: usize, ff: usize) -> bool {
 /// crosses exactly one of its wires, which is what lets the caller treat
 /// it as a budget. Returning `None` is always safe — it says only that
 /// this pin adds no constraint.
-fn captive_pool(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<Vec<NodeId>> {
+///
+/// A wire in `through` is a [`RouteThrough`]'s and is not walked past: it is
+/// fed from the inputs of the bel it goes through, which are the tile's own
+/// wires too, and walking on would make the pool those six inputs, every
+/// lookup table input of the lane a wire of the flip-flop's budget.
+fn captive_pool(
+    graph: &RoutingGraph,
+    tile: (u32, u32),
+    pin: NodeId,
+    through: &HashSet<NodeId>,
+) -> Option<Vec<NodeId>> {
     let local = |node: NodeId| {
         let wire = graph.wire(node);
         !wire.global && wire.tile == tile
@@ -2059,7 +2120,9 @@ fn captive_pool(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<V
     for _ in 0..MAX_POOL {
         let next = set.iter().position(|node| {
             let ways = graph.incoming(*node);
-            !ways.is_empty() && ways.iter().all(|pip| local(graph.pip(*pip).from))
+            !through.contains(node)
+                && !ways.is_empty()
+                && ways.iter().all(|pip| local(graph.pip(*pip).from))
         });
         let Some(at) = next else { return Some(set) };
         let node = set.remove(at);
@@ -2143,7 +2206,16 @@ impl SiteRules {
     /// local. The pool walk is bounded by [`MAX_POOL`] and gives up on the
     /// first wire that can be reached from outside the tile, which is
     /// every interconnect wire, so it costs one look at most pins.
+    #[cfg(test)]
     fn find(netlist: &Netlist, graph: &RoutingGraph) -> SiteRules {
+        SiteRules::find_with(netlist, graph, &RouteThroughs::default())
+    }
+
+    /// [`SiteRules::find`] on a fabric with `throughs`: each is a wire of the
+    /// pool it is in that the cells on its site open or shut
+    /// ([`ControlGroup::gates`]).
+    fn find_with(netlist: &Netlist, graph: &RoutingGraph, throughs: &RouteThroughs) -> SiteRules {
+        let through: HashSet<NodeId> = throughs.nodes.iter().map(|t| t.node).collect();
         let mut out = SiteRules {
             tiles: graph.sites.iter().map(|site| site.tile).collect(),
             per_site: vec![Vec::new(); graph.sites.len()],
@@ -2168,6 +2240,8 @@ impl SiteRules {
             contained: Vec::new(),
             site_group: vec![u32::MAX; graph.sites.len()],
             groups: Vec::new(),
+            gated: Vec::new(),
+            room: throughs.room.clone(),
         };
         // The blocks a cell makes unusable two tiles away, which is a
         // rule between *tiles* and not inside one: an ECP5 `DP16KD` in
@@ -2328,7 +2402,7 @@ impl SiteRules {
             let mut drawn: Vec<(usize, &str, Vec<NodeId>)> = Vec::new();
             for site in sites {
                 for (role, node) in &graph.sites[*site].pins {
-                    let Some(pool) = captive_pool(graph, *tile, *node) else {
+                    let Some(pool) = captive_pool(graph, *tile, *node, &through) else {
                         continue;
                     };
                     // A role naming several wires is one connection, and
@@ -2407,7 +2481,39 @@ impl SiteRules {
                         .fold(0u32, |mask, (bit, _)| mask | 1 << bit)
                 })
                 .collect();
+            // The ways through a bel among each pool's wires.
+            group.gates = group
+                .pools
+                .iter()
+                .map(|pool| {
+                    pool.iter()
+                        .enumerate()
+                        .filter_map(|(bit, node)| {
+                            let at = throughs.nodes.binary_search_by_key(node, |t| t.node).ok()?;
+                            let way = throughs.nodes[at];
+                            Some((u32::try_from(bit).unwrap_or(u32::MAX), way.site, way.beside))
+                        })
+                        .collect()
+                })
+                .collect();
             let index = u32::try_from(out.groups.len()).unwrap_or(u32::MAX);
+            if group.gates.iter().any(|g| !g.is_empty()) {
+                if out.gated.is_empty() {
+                    out.gated = vec![Vec::new(); graph.sites.len()];
+                }
+                for (pool, gates) in group.gates.iter().enumerate() {
+                    let key = (index, u32::try_from(pool).unwrap_or(u32::MAX));
+                    for (_, site, _) in gates {
+                        let sites =
+                            std::iter::once(*site).chain(out.excludes[*site].iter().copied());
+                        for at in sites {
+                            if !out.gated[at].contains(&key) {
+                                out.gated[at].push(key);
+                            }
+                        }
+                    }
+                }
+            }
             for (site, role, pool) in &drawn {
                 let which = group
                     .pools
@@ -2699,11 +2805,18 @@ impl SiteRules {
         let mut count_touched = 0usize;
         for site in moving.iter().map(|(_, s)| *s).chain(left) {
             let group = self.site_group[site];
-            if group == u32::MAX {
+            // And every pool whose way through a bel a cell here opens or
+            // shuts, which a shift register on the table it goes through is
+            // without drawing on the pool itself.
+            let gated = self.gated.get(site).map_or(&[][..], Vec::as_slice);
+            if group == u32::MAX && gated.is_empty() {
                 continue;
             }
-            for (_, pool, _) in &self.captive[site] {
-                let key = (group, *pool);
+            let own = self.captive[site]
+                .iter()
+                .filter(|_| group != u32::MAX)
+                .map(|(_, pool, _)| (group, *pool));
+            for key in own.chain(gated.iter().copied()) {
                 if touched[..count_touched].contains(&key) {
                     continue;
                 }
@@ -2903,12 +3016,128 @@ impl SiteRules {
         } else {
             &heap[..]
         };
+        // A way through a bel that its site shuts carries nothing, as a
+        // source carries only its own driver's signal.
         fits(
             wanted,
-            group.sources[pool as usize],
+            group.sources[pool as usize] | self.shut(group, pool, after, &[]),
             group.pools[pool as usize].len(),
         )
     }
+
+    /// The wires of one pool that are a [`RouteThrough`] its site shuts once
+    /// `after` has happened, one bit per wire, and every wire of `also` too:
+    /// a cell on the site, or on one excluding it, shuts it, unless the way is
+    /// `beside` and the cell on the site leaves it room.
+    fn shut(
+        &self,
+        group: &ControlGroup,
+        pool: u32,
+        after: &impl Fn(usize) -> Option<usize>,
+        also: &[u32],
+    ) -> u32 {
+        let Some(gates) = group.gates.get(pool as usize) else {
+            return 0;
+        };
+        let mut out = 0u32;
+        for (bit, site, beside) in gates {
+            let open = match after(*site) {
+                None => true,
+                Some(cell) => *beside && self.room.get(cell).copied().unwrap_or(false),
+            } && self.excludes[*site]
+                .iter()
+                .all(|other| after(*other).is_none());
+            if !open || also.contains(bit) {
+                out |= 1 << bit;
+            }
+        }
+        out
+    }
+
+    /// Whether one pool fits once `after` has happened with the wires of
+    /// `shut` taken away as well: [`SiteRules::pool_fits`] asked again with
+    /// some of its ways through a bel closed.
+    fn pool_fits_without(
+        &self,
+        group: &ControlGroup,
+        pool: u32,
+        after: &impl Fn(usize) -> Option<usize>,
+        shut: &[u32],
+    ) -> bool {
+        let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
+        for (site, role, mask) in &group.entries[pool as usize] {
+            let Some(instance) = after(*site) else {
+                continue;
+            };
+            let Some((signal, drives)) = self.signal_driven(instance, *role) else {
+                continue;
+            };
+            let (sinks, driven) = if drives {
+                (u32::MAX, *mask)
+            } else {
+                (*mask, 0)
+            };
+            if let Some((_, allowed, on)) = wanted.iter_mut().find(|(s, _, _)| *s == signal) {
+                *allowed &= sinks;
+                *on |= driven;
+            } else {
+                wanted.push((signal, sinks, driven));
+            }
+        }
+        fits(
+            &wanted,
+            group.sources[pool as usize] | self.shut(group, pool, after, shut),
+            group.pools[pool as usize].len(),
+        )
+    }
+}
+
+/// Which of `throughs` a placement needs: for each pool of a tile's wires
+/// with a way through a bel open, whether its signals can be given wires
+/// without it. A pool that fits with its ways shut needs none of them, and the
+/// router is not offered them, as Vivado takes a flip-flop's bypass input
+/// before a lookup table; one that does not is given the first way that makes
+/// it fit, a way no cell may share before one beside a cell. The nodes come
+/// back sorted.
+///
+/// The question is the placer's own (`SiteRules`), asked of the placement
+/// it made, so a way it counted on is a way the router is given.
+#[must_use]
+pub fn route_throughs_needed(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    throughs: &RouteThroughs,
+) -> Vec<NodeId> {
+    if throughs.nodes.is_empty() {
+        return Vec::new();
+    }
+    let rules = SiteRules::find_with(netlist, graph, throughs);
+    let after = |site: usize| placement.instance_at(site);
+    let mut out = Vec::new();
+    for group in &rules.groups {
+        for (pool, gates) in group.gates.iter().enumerate() {
+            if gates.is_empty() {
+                continue;
+            }
+            let pool = u32::try_from(pool).unwrap_or(u32::MAX);
+            let all: Vec<u32> = gates.iter().map(|(bit, _, _)| *bit).collect();
+            if rules.pool_fits_without(group, pool, &after, &all) {
+                continue;
+            }
+            let mut order: Vec<&(u32, usize, bool)> = gates.iter().collect();
+            order.sort_by_key(|(bit, _, beside)| (*beside, *bit));
+            for (bit, _, _) in order {
+                let others: Vec<u32> = all.iter().copied().filter(|b| b != bit).collect();
+                if rules.pool_fits_without(group, pool, &after, &others) {
+                    out.push(group.pools[pool as usize][*bit as usize]);
+                    break;
+                }
+            }
+        }
+    }
+    out.sort_unstable();
+    out
 }
 
 /// Whether each of `wanted`'s signals, as `(signal, the wires every pin
@@ -3219,7 +3448,7 @@ pub fn place(
     );
 
     let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
-    let mut shared = SiteRules::find(netlist, graph);
+    let mut shared = SiteRules::find_with(netlist, graph, &options.route_throughs);
     shared.contain(netlist, &info, &macros);
     let mut positions = solve_analytic(netlist, graph, &info, options);
     let dense = dense_kinds(netlist, graph, &info, &macros, &sites_by_kind, &shared);
@@ -12405,6 +12634,157 @@ mod tests {
         }
         let graph = arch.build_graph();
         (arch, graph)
+    }
+
+    /// A 7-series lane with its ways through the table, one tile of it on
+    /// each of two columns: a table (`i0` on `a1`, `i5` on `a6`, `o` on
+    /// `o6`), a flip-flop whose `d` reads `o6`, the bypass `ax` or either way
+    /// (`thru6` from `a6`, `thru5` from `a1`), and a second whose `d5` reads
+    /// `ax` alone, as `<L>FF` and `<L>5FF` do. Every input comes from the
+    /// other column.
+    fn through_lane() -> (RoutingGraph, RouteThroughs) {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clb", "logic_tile", 8, 8);
+        for name in ["a1", "a6", "o6", "ax", "thru5", "thru6", "d", "d5", "track"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for (from, to) in [
+            ("o6", "d"),
+            ("ax", "d"),
+            ("ax", "d5"),
+            ("a6", "thru6"),
+            ("a1", "thru5"),
+            ("thru6", "d"),
+            ("thru5", "d"),
+        ] {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(from),
+                to: WireRef::local(to),
+                bits: Vec::new(),
+            });
+        }
+        for to in ["ax", "a1", "a6"] {
+            tile.pips.push(PipDecl {
+                from: WireRef::at("track", 1, 0),
+                to: WireRef::local(to),
+                bits: Vec::new(),
+            });
+        }
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("i0".to_owned(), WireRef::local("a1")));
+        lut.pins.push(("i5".to_owned(), WireRef::local("a6")));
+        lut.pins.push(("o".to_owned(), WireRef::local("o6")));
+        tile.bels.push(lut);
+        for (name, d) in [("ffa", "d"), ("ffb", "d5")] {
+            let mut ff = BelDecl::new(name, "ff");
+            ff.pins.push(("d".to_owned(), WireRef::local(d)));
+            tile.bels.push(ff);
+        }
+        arch.tile_types.push(tile);
+        for x in 0..2 {
+            arch.set_tile(x, 0, 0);
+        }
+        let graph = arch.build_graph();
+        let site = (0..graph.sites.len())
+            .find(|s| graph.sites[*s].tile == (0, 0) && graph.sites[*s].kind == "lut")
+            .unwrap();
+        let node = |name: &str| {
+            (0..graph.nodes.len())
+                .find(|n| graph.nodes[*n].name == name && graph.nodes[*n].tile == (0, 0))
+                .map(|n| NodeId::try_from(n).unwrap())
+                .unwrap()
+        };
+        let mut nodes = vec![
+            RouteThrough {
+                node: node("thru6"),
+                site,
+                beside: false,
+            },
+            RouteThrough {
+                node: node("thru5"),
+                site,
+                beside: true,
+            },
+        ];
+        nodes.sort_by_key(|t| t.node);
+        (
+            graph,
+            RouteThroughs {
+                nodes,
+                room: Vec::new(),
+            },
+        )
+    }
+
+    /// **A way through a table is a wire into the lane while the table lets
+    /// it.** Two flip-flops fed from elsewhere in one lane have the bypass
+    /// for one and need a way for the other: with the table free the upper
+    /// half's, beside a table that leaves room the lower half's, and beside
+    /// one that does not, none. `route_throughs_needed` gives the router the
+    /// way the placement counted on, the upper half's first, and none to a
+    /// lane the bypass alone serves.
+    ///
+    /// Would catch the walk going on past a way (the pool its six inputs, no
+    /// constraint at all: two flip-flops beside a full table would fit), a
+    /// way counted whatever its table holds, `room` ignored or read for the
+    /// upper half's way, and a way given to the router where the bypass
+    /// serves, which Vivado does not do. Would not catch a fabric declaring
+    /// its ways wrongly, which is `xray::thru`'s and its Vivado comparison's.
+    #[test]
+    fn a_way_through_a_table_counts_only_while_the_table_lets_it() {
+        let (graph, mut throughs) = through_lane();
+        let site = |bel: &str| {
+            (0..graph.sites.len())
+                .find(|s| graph.sites[*s].tile == (0, 0) && graph.sites[*s].bel == bel)
+                .unwrap()
+        };
+        let (lut, ffa, ffb) = (site("lut"), site("ffa"), site("ffb"));
+        let six = throughs.nodes.iter().find(|t| !t.beside).unwrap().node;
+        let five = throughs.nodes.iter().find(|t| t.beside).unwrap().node;
+        // Instances: 0 and 1 the flip-flops, 2 a table whose output goes
+        // elsewhere; signals 0 and 1 their data, 2 the table's output and 3
+        // its input.
+        let netlist = netlist_of(
+            4,
+            &[
+                ("ff", "FDRE", &[("d", 0, false)]),
+                ("ff", "FDRE", &[("d", 1, false)]),
+                ("lut", "LUT6", &[("o", 2, true), ("i0", 3, false)]),
+            ],
+        );
+        let ask = |throughs: &RouteThroughs, table: bool| -> (bool, Vec<NodeId>) {
+            let rules = SiteRules::find_with(&netlist, &graph, throughs);
+            let mut placement = Placement::new(3, graph.sites.len());
+            if table {
+                placement.place(2, lut);
+            }
+            placement.place(0, ffa);
+            let allowed = rules.allows(&placement, &[(1, ffb)]);
+            placement.place(1, ffb);
+            let needed = route_throughs_needed(&netlist, &graph, &placement, throughs);
+            (allowed, needed)
+        };
+        // The table free: the upper half's way.
+        assert_eq!(ask(&throughs, false), (true, vec![six]));
+        // Beside a table with no room, none.
+        throughs.room = vec![false; 3];
+        assert!(
+            !ask(&throughs, true).0,
+            "a way through a table a cell fills"
+        );
+        // Beside one that leaves room, the lower half's.
+        throughs.room[2] = true;
+        assert_eq!(ask(&throughs, true), (true, vec![five]));
+        // One flip-flop alone takes the bypass and no way.
+        let rules = SiteRules::find_with(&netlist, &graph, &throughs);
+        let mut placement = Placement::new(3, graph.sites.len());
+        placement.place(0, ffa);
+        assert!(rules.allows(&placement, &[(2, lut)]));
+        assert!(route_throughs_needed(&netlist, &graph, &placement, &throughs).is_empty());
     }
 
     /// One lookup table and two flip-flops a tile, sharing one clock: the

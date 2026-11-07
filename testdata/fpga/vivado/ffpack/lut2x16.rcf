@@ -1,0 +1,31 @@
+create_clock -name clk -period 4 clk
+set_io -io_standard LVCMOS33 clk N11
+set_io -io_standard LVCMOS33 si L4
+set_io -io_standard LVCMOS33 q[0] L5
+set_io -io_standard LVCMOS33 q[1] M1
+set_io -io_standard LVCMOS33 q[2] M2
+set_io -io_standard LVCMOS33 q[3] M4
+set_io -io_standard LVCMOS33 q[4] M5
+set_io -io_standard LVCMOS33 q[5] N1
+set_io -io_standard LVCMOS33 q[6] N2
+set_io -io_standard LVCMOS33 q[7] N3
+set_io -io_standard LVCMOS33 q[8] P1
+set_io -io_standard LVCMOS33 q[9] P3
+set_io -io_standard LVCMOS33 q[10] P4
+set_io -io_standard LVCMOS33 q[11] P5
+set_io -io_standard LVCMOS33 q[12] R1
+set_io -io_standard LVCMOS33 q[13] R2
+set_io -io_standard LVCMOS33 q[14] R3
+set_io -io_standard LVCMOS33 q[15] A2
+set_io -io_standard LVCMOS33 si2 A3
+set_io -io_standard LVCMOS33 o[0] A4
+set_io -io_standard LVCMOS33 o[1] A5
+set_io -io_standard LVCMOS33 o[2] A7
+set_io -io_standard LVCMOS33 o[3] B1
+set_io -io_standard LVCMOS33 o[4] B2
+set_io -io_standard LVCMOS33 o[5] B4
+set_io -io_standard LVCMOS33 o[6] B5
+set_io -io_standard LVCMOS33 o[7] B6
+region slices 14 155 14 155
+assign r* region slices
+assign ?lut* region slices

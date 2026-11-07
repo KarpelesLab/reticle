@@ -1,0 +1,127 @@
+# What Vivado 2026.1 made of each design here, on xc7a100tftg256-3, from
+# tools/vivado-parity/ffpack.sh: each slice holding a held flip-flop (`r*`),
+# its bitstream decoded through this repository's database. `slice` is the
+# site's type and its features of no lane; `lane` lines are its four lanes,
+# A to D. tests/fpga_xray_ffpack_vivado.rs says how to read one.
+design async8
+  slice SLICEL CEUSEDMUX SRUSEDMUX
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zrst,ff5.zini
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zrst,ff5.zini
+design ctrl8
+  slice SLICEL CEUSEDMUX FFSYNC SRUSEDMUX
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zrst,ff5.zini
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini
+design free16
+  slice SLICEL FFSYNC
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+  slice SLICEL FFSYNC
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design free8
+  slice SLICEL FFSYNC
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design free8m
+  slice SLICEM FFSYNC
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design lut2x16
+  slice SLICEL FFSYNC
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+  slice SLICEL FFSYNC
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design lut2x4
+  slice SLICEL FFSYNC
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+2 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design lut4x4
+  slice SLICEL FFSYNC
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design lut4x4m
+  slice SLICEM FFSYNC
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O5 ff5=IN_B out=L5Q lut=through5+4 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design lut5x4
+  slice SLICEL FFSYNC
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+design mixed_ce
+  slice SLICEL CEUSEDMUX FFSYNC
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+  slice SLICEM FFSYNC
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+  slice SLICEM FFSYNC
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+  slice SLICEM FFSYNC
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+  slice SLICEM FFSYNC
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+  slice SLICEM FFSYNC
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=IN_B out=L5Q lut=- init=ff5.zini,ff5.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+  slice SLICEM FFSYNC
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+  slice SLICEM FFSYNC
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=IN_B out=L5Q lut=- init=ff5.zini,ff5.zrst
+design two_clocks
+  slice SLICEL FFSYNC
+    lane ff=LX ff5=- out=- lut=- init=ff.zini,ff.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+    lane ff=O6 ff5=IN_B out=L5Q lut=through6 init=ff.zini,ff.zrst,ff5.zini,ff5.zrst
+  slice SLICEL FFSYNC
+    lane ff=- ff5=IN_B out=L5Q lut=- init=ff5.zini,ff5.zrst
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-
+    lane ff=- ff5=- out=- lut=- init=-

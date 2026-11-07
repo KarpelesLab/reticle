@@ -253,6 +253,15 @@ Options:
                      `RAM64X1D` shape on the slice's `WE` pin, `RAMB18E1`
                      alone and block RAM from 256 bits, which a build
                      measured on a board keeps.
+  --route-throughs <empty|all|off>
+                     7 series: let a flip-flop take its data through a lookup
+                     table, as Vivado does once the slice's bypass inputs are
+                     taken, so that a slice holds eight flip-flops rather than
+                     four: through a table nothing else holds (`empty`, the
+                     default), or beside a table's own function of four inputs
+                     or fewer too (`all`, as Vivado also does; measured slower
+                     here). `off` is the slice before, which a build measured
+                     on a board keeps.
   --synthesis <vivado|legacy>
                      7 series: synthesise as Vivado 2026.1 does (the default):
                      subtractions, orderings (`<`, `>=`) and equalities on the
@@ -861,6 +870,7 @@ fn spec_for(usage: &str) -> Spec {
                 "wide-muxes",
                 "regional-clocks",
                 "memories",
+                "route-throughs",
                 "delay-model",
                 "synthesis",
                 "place-fixed-cooling",
@@ -1102,6 +1112,17 @@ fn memories_legacy(args: &Args) -> Result<bool, ArgError> {
             expected: "`vivado` or `legacy`",
         }),
     }
+}
+
+/// Which ways through a lookup table `--route-throughs` leaves a flip-flop's
+/// data (`empty`, the default); see the usage text.
+fn route_throughs(args: &Args) -> Result<reticle::fpga::xray::RouteThroughMode, ArgError> {
+    let name = args.option("route-throughs").unwrap_or("empty");
+    reticle::fpga::xray::RouteThroughMode::from_name(name).ok_or_else(|| ArgError::BadValue {
+        option: "route-throughs".to_owned(),
+        value: name.to_owned(),
+        expected: "`empty`, `all` or `off`",
+    })
 }
 
 /// Whether `--synthesis legacy` asked for the netlist from before Vivado's
@@ -3972,6 +3993,8 @@ fn write_xc7_bitstream(
     if memories_legacy(args).map_err(|e| e.to_string())? {
         options.lutram = reticle::fpga::xray::LutRamModel::Legacy;
     }
+    // A flip-flop's way through a lookup table: see `xray::thru`.
+    options.route_throughs = route_throughs(args).map_err(|e| e.to_string())?;
     if let Some(text) = args.option("region") {
         let numbers: Result<Vec<u32>, _> = text.split(',').map(str::parse::<u32>).collect();
         match numbers {
@@ -4277,6 +4300,9 @@ fn write_xc7_bitstream(
     // A distributed RAM's registered outputs in its slice, as Vivado packs
     // them; not under `--memories legacy`. See `PlaceOptions::memory_packing`.
     options.memory_packing = !memories_legacy(args).map_err(|e| e.to_string())?;
+    // A flip-flop may take its data through a lookup table no cell needs, and
+    // the placer counts on it: see `xray::thru` and `PlaceOptions::route_throughs`.
+    options.route_throughs = fabric.route_throughs(design, top, &netlist, &graph);
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let delay_model = delay_model(args).map_err(|e| e.to_string())?;
@@ -4449,6 +4475,20 @@ fn write_xc7_bitstream(
         let fitted = delay_model == reticle::fpga::xray::DelayModel::Vivado;
         let mut closed = Vec::new();
         ties.close(graph.nodes.len(), &mut node_base, &mut network, &mut closed);
+        // A lookup table's inputs are the router's to choose among, and the
+        // truth table follows them below. See `xray::lutswap`.
+        let mut equivalent =
+            reticle::fpga::xray::lut_input_classes(design, top, &netlist, &graph, &placement);
+        // Only the ways through a lookup table this placement needs are open:
+        // a flip-flop takes its bypass input first, as Vivado's do. See
+        // `place::route_throughs_needed`.
+        let needed = reticle::fpga::place::route_throughs_needed(
+            &netlist,
+            &graph,
+            &placement,
+            &options.route_throughs,
+        );
+        fabric.route_through_nodes(&graph, &needed, &mut closed, &mut equivalent);
         let route_options = RouteOptions {
             node_base,
             network,
@@ -4509,11 +4549,7 @@ fn write_xc7_bitstream(
             uncritical_present_cap: reticle::fpga::xray::UNCRITICAL_PRESENT_CAP,
             uncritical_cap_until: reticle::fpga::xray::UNCRITICAL_CAP_UNTIL,
             max_iterations: route_passes(args)?,
-            // A lookup table's inputs are the router's to choose among, and
-            // the truth table follows them below. See `xray::lutswap`.
-            equivalent: reticle::fpga::xray::lut_input_classes(
-                design, top, &netlist, &graph, &placement,
-            ),
+            equivalent,
             // `--timing-driven` routes for time as well: each pass is analysed
             // as the placement was, per clock domain, from each connection's
             // routed delay, and a critical connection weighs delay over
@@ -5108,6 +5144,9 @@ fn write_xc7_bitstream(
         &routing,
     )
     .map_err(|e| e.to_string())?;
+    // A lookup table a flip-flop's data passes through beside the table's own
+    // function keeps that function in its upper half only. See `xray::thru`.
+    fabric.configure_route_throughs(&graph, &placement, &routing, &mut tiles)?;
     // A global clock's rebuffer enables are the one thing no pip carries:
     // they belong to the whole column the track runs down. See
     // `XrayFabric::enable_global_clocks`.
@@ -5230,6 +5269,29 @@ fn write_xc7_bitstream(
             ));
         }
     }
+    // And every lookup table, a way through one included, decodes to what was
+    // placed and routed there: a way is in no netlist, so this is what accounts
+    // for its bits. See `XrayDatabase::check_route_throughs`.
+    let throughs = if failure.is_none() {
+        db.check_route_throughs(
+            &db.tiles(&files).map_err(|e| e.to_string())?,
+            &graph,
+            design,
+            top,
+            &netlist,
+            &placement,
+            &routing,
+            &decoded,
+        )
+        .map_err(|e| {
+            format!(
+                "a lookup table of this bitstream does not decode as it was placed and routed, \
+                 so nothing was written: {e}"
+            )
+        })?
+    } else {
+        Default::default()
+    };
 
     let name = design.modules[top].name.as_str();
     let header = BitHeader::new(
@@ -5310,6 +5372,7 @@ fn write_xc7_bitstream(
         ));
     }
     note.push_str(&block_rams.to_text());
+    note.push_str(&throughs.to_text());
     if let Some(reason) = &failure {
         note.push_str(&format!("warning: the router gave up: {reason}\n"));
     }

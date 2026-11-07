@@ -61,6 +61,11 @@
 # that has been, and the Husky Plus's captures went wrong with them for a reason
 # not found (`MapOptions::min_subtract_carry_width`); see
 # docs/fpga-vivado-parity.md, "Synthesis against Vivado's".
+# `--route-throughs off` for the same reason too: by default a flip-flop may
+# take its data through a lookup table nothing else needs, as Vivado's do, so
+# a slice holds eight rather than four, which packs and routes this design
+# differently, and that has not been on a board; see docs/fpga-vivado-parity.md,
+# "Eight flip-flops a slice".
 set -eu
 
 husky=${1:?usage: build.sh <chipwhisperer-husky-fpga checkout> <output dir>}
@@ -72,7 +77,7 @@ reticle=${RETICLE:-reticle}
 mkdir -p "$out"
 exec "$reticle" fpga \
     --wide-muxes off --memories legacy --delay-model legacy --synthesis legacy \
-    --srl-min 0 \
+    --srl-min 0 --route-throughs off \
     --device xc7a100t-ftg256 \
     --top cwhusky_top \
     --define PLUS --define INTERVAL_MATCHING=1 --define ESAD \

@@ -184,6 +184,7 @@ mod parse;
 mod regional;
 mod sites;
 mod srl;
+mod thru;
 mod timing;
 mod vivado;
 mod xadc;
@@ -231,6 +232,7 @@ pub use regional::{
     RegionalClocks, RegionalError, check_regional_wiring, is_regional_kind, regional_buffers,
 };
 pub use sites::SiteCoverage;
+pub use thru::{RouteThroughMode, RouteThroughReport, route_through_room};
 pub use timing::{place_timing, place_timing_on_sites};
 pub use vivado::{VivadoExportError, VivadoImplementation, vivado_implementation};
 pub use xadc::xadc_init_bit;
@@ -413,6 +415,11 @@ pub struct XrayOptions {
     /// Declare the configuration tile's `DCIRESET` and its joins
     /// (`dcireset`), for a design with one.
     pub dci_reset: bool,
+    /// Which of each slice lane's ways through its lookup table to its
+    /// flip-flop to declare, which Vivado calls route-throughs (`thru`). None
+    /// by default, so that a fabric loaded without asking is the one before
+    /// them; the command line's flow asks for `--route-throughs`'s.
+    pub route_throughs: RouteThroughMode,
 }
 
 /// What a tile type's features are read with beyond the database's: the
@@ -459,6 +466,7 @@ impl Default for XrayOptions {
             config_sites: false,
             io_delays: false,
             dci_reset: false,
+            route_throughs: RouteThroughMode::Off,
         }
     }
 }
@@ -1266,6 +1274,7 @@ impl XrayDatabase {
             options.config_sites,
             options.io_delays,
             options.dci_reset,
+            options.route_throughs,
             &mut stats,
         );
         let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
@@ -2234,6 +2243,7 @@ impl XrayDatabase {
         config_sites: bool,
         io_delays: bool,
         dci_reset: bool,
+        route_throughs: RouteThroughMode,
         stats: &mut XrayStats,
     ) -> Arch {
         let mut width = 0u32;
@@ -2327,6 +2337,7 @@ impl XrayDatabase {
             if dci_reset {
                 passes.extend(dcireset::pass_throughs(name));
             }
+            passes.extend(thru::pass_throughs(name, route_throughs));
             let overridden: HashSet<(&str, &str)> = passes
                 .iter()
                 .map(|p| (p.to.as_str(), p.from.as_str()))
