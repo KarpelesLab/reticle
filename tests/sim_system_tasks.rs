@@ -106,3 +106,17 @@ fn random_computes_what_xsim_computes() {
 fn monitor_prints_only_on_a_change() {
     matches_xsim("monitor_tb", "v", 0);
 }
+
+/// **`%m` names the scope the statement is written in** (`scope_tb.sv`):
+/// a named block, a nested one and a loop's named body, a task and a
+/// function, in the top and in an instance, and in `$sformatf`. It printed
+/// the module instance's path for all of them. And `$test$plusargs` and
+/// `$value$plusargs` find nothing, where they returned `x`. Would catch the
+/// scope dropped, a task named by its caller's scope rather than its own,
+/// a scope Reticle makes for itself showing up in the name, or `%%m`
+/// read as a conversion; would not catch an unnamed generate block, which
+/// xsim calls `genblk1` and Reticle `genblk`, and which is not in it.
+#[test]
+fn m_names_the_scope_as_xsim_does() {
+    matches_xsim("scope_tb", "sv", 0);
+}

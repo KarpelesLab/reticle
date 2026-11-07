@@ -1,0 +1,9 @@
+A tb
+B tb.blk
+F tb.f
+L tb.blk.lp
+P 0 0
+S tb.u1.sblk
+T tb.u1.t1
+I tb.u1.sblk.inner %m tb.u1.sblk.inner
+T tb.u1.t1

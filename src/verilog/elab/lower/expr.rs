@@ -1347,6 +1347,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let mut ids = Vec::new();
         for a in args {
             if let Some(v) = &a.value {
+                if matches!(name, "sformatf" | "psprintf")
+                    && let Some(id) = self.format_literal(v)
+                {
+                    ids.push(id);
+                    continue;
+                }
                 // A real argument stays a real: built as an
                 // integer, `$realtobits(2.5)` was the bits of 3.0.
                 let id = if matches!(self.info_of(v), Info::Real) {

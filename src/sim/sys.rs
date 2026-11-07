@@ -1086,6 +1086,9 @@ impl<'d> Simulator<'d> {
                 .map_or_else(|| Logic::x(1), Value::to_logic)
                 .as_unsigned()),
             "$sformatf" => Value::Str(self.format_values(inst, &args, 'd')),
+            // No plusargs are ever given, so none is found and
+            // `$value$plusargs` leaves its variable as it was.
+            "$test$plusargs" | "$value$plusargs" => fit(Logic::zero(1)),
             _ => {
                 self.warn_unknown("function", name, span);
                 Value::Bits(Logic::x(width.max(1)))

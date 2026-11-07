@@ -50,6 +50,36 @@ fn is_plain_return(s: &Stmt) -> bool {
     matches!(s.kind, AstStmt::Return(_))
 }
 
+/// `fmt` with `.suffix` written after each `%m` conversion; `%%` is left
+/// alone.
+fn with_scope(fmt: &str, suffix: &str) -> String {
+    let mut out = String::with_capacity(fmt.len() + suffix.len());
+    let mut chars = fmt.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c != '%' {
+            continue;
+        }
+        // The flags, width and precision, then the conversion.
+        while let Some(&d) = chars.peek() {
+            if d.is_ascii_digit() || d == '-' || d == '.' {
+                out.push(d);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if let Some(conv) = chars.next() {
+            out.push(conv);
+            if conv == 'm' {
+                out.push('.');
+                out.push_str(suffix);
+            }
+        }
+    }
+    out
+}
+
 /// True when `s` contains a `return` anywhere.
 fn contains_return(s: &Stmt) -> bool {
     match &s.kind {
@@ -772,6 +802,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 ids.push(id);
                 continue;
             }
+            if let Some(id) = self.format_literal(v) {
+                ids.push(id);
+                continue;
+            }
             // A real stays a real, so `%f` of `1.5` is 1.5 and `%d` of
             // it rounds as a real does; built as an integer it was 2.
             let real = matches!(
@@ -786,6 +820,49 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             ids.push(id);
         }
         ids
+    }
+
+    /// A string literal argument of a formatting task or function, with
+    /// each `%m` extended by the scope it is written in; `None` for any
+    /// other argument, or a literal that needs no change.
+    ///
+    /// `%m` names the scope (IEEE 1364-2005 clause 17), which inside a
+    /// named block, a task or a function is below the module instance the
+    /// simulator knows: xsim prints `tb.blk`, `tb.where`. The simulator
+    /// supplies the instance's path and the literal carries the rest, so
+    /// `"%m"` in block `blk` becomes `"%m.blk"`.
+    pub(super) fn format_literal(&mut self, v: &'ast Expr) -> Option<ExprId> {
+        let ExprKind::Literal(ast::Literal::Str { value, .. }) = &v.kind else {
+            return None;
+        };
+        if !value.contains("%m") {
+            return None;
+        }
+        let suffix = self.scope_suffix();
+        if suffix.is_empty() {
+            return None;
+        }
+        self.b.span = v.span;
+        Some(self.b.string(with_scope(value, &suffix)))
+    }
+
+    /// The named scopes between the module and the statement being
+    /// lowered, dotted: named blocks, generate blocks, and the task or
+    /// function an inlined body came from. An unnamed scope the lowering
+    /// made for itself (a `for` loop's own) is not one.
+    fn scope_suffix(&self) -> String {
+        let qualified = self.env.qualified("");
+        let parts: Vec<&str> = qualified
+            .split('.')
+            .filter(|c| !c.is_empty())
+            .filter_map(|c| match c.split_once('$') {
+                // A fresh name: `where$3` is an inlined call of `where`.
+                Some(("loop", _)) => None,
+                Some((base, _)) => Some(base),
+                None => Some(c),
+            })
+            .collect();
+        parts.join(".")
     }
 
     /// The name an argument denotes when it is a scope, an instance or an
