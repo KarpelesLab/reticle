@@ -3135,13 +3135,21 @@ impl XrayFabric {
     /// global buffer drives may enter the network at all.
     #[must_use]
     pub fn clock_node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
-        let mut out = vec![1.0f32; graph.nodes.len()];
-        for (index, wire) in graph.nodes.iter().enumerate() {
-            if self.on_clock_network(&wire.name) || is_clock_input_wire(&wire.name) {
-                out[index] = preference;
-            }
-        }
-        out
+        // A name is asked once: a tile's wires have the same names in every
+        // tile of its type, and asking each node's again was most of a
+        // second of every build on the XC7A100T (`node_costs` 0.89 s of
+        // `counter64`'s 2.7 s route, 0.21 s asked once).
+        let mut asked: super::arch::FastMap<&str, bool> = super::arch::FastMap::default();
+        graph
+            .nodes
+            .iter()
+            .map(|wire| {
+                let clock = *asked.entry(wire.name.as_str()).or_insert_with(|| {
+                    self.on_clock_network(&wire.name) || is_clock_input_wire(&wire.name)
+                });
+                if clock { preference } else { 1.0 }
+            })
+            .collect()
     }
 
     /// [`XrayFabric::clock_node_costs`], and nothing for a node only
@@ -3171,11 +3179,15 @@ impl XrayFabric {
     #[must_use]
     pub fn node_costs(&self, graph: &super::arch::RoutingGraph, preference: f32) -> Vec<f32> {
         let mut out = self.clock_node_costs(graph, preference);
+        let mut roads: super::arch::FastMap<&str, bool> = super::arch::FastMap::default();
         for (node, cost) in out.iter_mut().enumerate() {
             let into = graph.incoming(super::arch::NodeId::try_from(node).unwrap_or(u32::MAX));
+            let name = graph.nodes[node].name.as_str();
             if !into.is_empty()
                 && into.iter().all(|pip| graph.pip_bits(*pip).is_empty())
-                && !is_clock_input_wire(&graph.nodes[node].name)
+                && !*roads
+                    .entry(name)
+                    .or_insert_with(|| is_clock_input_wire(name))
             {
                 *cost = 0.0;
             }
@@ -3285,10 +3297,16 @@ impl XrayFabric {
     /// buffer drives may not enter. See [`XrayFabric::clock_node_costs`].
     #[must_use]
     pub fn clock_network_nodes(&self, graph: &super::arch::RoutingGraph) -> Vec<bool> {
+        // Each name once, as `clock_node_costs` does.
+        let mut asked: super::arch::FastMap<&str, bool> = super::arch::FastMap::default();
         graph
             .nodes
             .iter()
-            .map(|wire| self.on_clock_network(&wire.name))
+            .map(|wire| {
+                *asked
+                    .entry(wire.name.as_str())
+                    .or_insert_with(|| self.on_clock_network(&wire.name))
+            })
             .collect()
     }
 
