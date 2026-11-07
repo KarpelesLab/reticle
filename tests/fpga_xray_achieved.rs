@@ -220,3 +220,38 @@ fn the_packing_costs_no_clock_and_reaches_only_its_designs() {
         "geometric mean against Vivado's own flow: {packing:.3} packed, {area:.3} before"
     );
 }
+
+/// **The ways through a lookup table cost the corpus no clock.** `throughs` is
+/// docs/fpga-vivado-parity.md, "Eight flip-flops a slice", at ten seeds, and the
+/// tree without it is `packing` (seeds 1 to 5) and `bypass` (6 to 10): the
+/// geometric mean of each clock's median against Vivado's own flow went from
+/// 1.256 to 1.248. This holds the mean no higher, ten seeds of each, and no
+/// clock's median more than 6 % over its own before: the worst is
+/// `srl_delay`, 2.057 to 2.170 ns, 5.5 %, the one clock this holds looser than
+/// the sections before. Would catch a regeneration that lost the change or mixed
+/// the builds; would not catch the flow losing it since, which needs Vivado.
+#[test]
+fn the_ways_through_a_table_cost_the_corpus_no_clock() {
+    let Some(table) = achieved() else { return };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (vivado, builds)) in &table {
+        let mut before = builds["packing"].clone();
+        before.extend(&builds["bypass"]);
+        let after = &builds["throughs"];
+        assert_eq!((before.len(), after.len()), (10, 10), "{design} {clock}");
+        let (before, after) = (median(&before), median(after));
+        assert!(
+            after <= before * 1.06,
+            "{design} {clock}: {after:.3} ns through tables against {before:.3}"
+        );
+        logs[0] += (before / vivado).ln();
+        logs[1] += (after / vivado).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let (before, after) = ((logs[0] / n).exp(), (logs[1] / n).exp());
+    assert!(
+        after <= before,
+        "geometric mean against Vivado's own flow: {after:.3} through tables, {before:.3} before"
+    );
+}
