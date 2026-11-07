@@ -18,6 +18,15 @@ route_design -quiet
 set counts [dict create]
 foreach c [get_cells -hier -filter {IS_PRIMITIVE}] { dict incr counts [get_property REF_NAME $c] }
 puts $f "routed [lsort -stride 2 $counts]"
+# Each block RAM's arrangement, as its parameters say it.
+foreach c [lsort [get_cells -hier -filter {IS_PRIMITIVE && REF_NAME =~ RAMB*}]] {
+  set words {}
+  foreach p {RAM_MODE READ_WIDTH_A READ_WIDTH_B WRITE_WIDTH_A WRITE_WIDTH_B DOA_REG DOB_REG
+             WRITE_MODE_A WRITE_MODE_B RAM_EXTENSION_A RAM_EXTENSION_B} {
+    if {[llength [list_property $c $p]]} { lappend words "$p=[get_property $p $c]" }
+  }
+  puts $f "params $c [get_property REF_NAME $c] [join $words " "]"
+}
 foreach c [lsort [get_cells -hier -filter {IS_PRIMITIVE && (REF_NAME =~ RAM* || REF_NAME =~ FIFO*)}]] {
   set parent [get_cells -quiet [get_property PARENT $c]]
   set pref ""
