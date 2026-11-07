@@ -57,7 +57,6 @@ use crate::logic::Logic;
 
 use super::elab::{InstId, MemId, SigId};
 use super::fst::FstCapture;
-use super::value::resolve_all;
 use super::{SimOptions, Simulator, Status};
 
 /// A net of the running simulation, looked up by hierarchical name.
@@ -259,13 +258,13 @@ impl<'d> Simulator<'d> {
         let s = &self.signals[sig.idx()];
         let new = if s.kind == NetKind::Wire && !self.sig_drivers[sig.idx()].is_empty() {
             let contribs = self.sig_drivers[sig.idx()].iter().filter_map(|d| {
-                self.drivers[d.idx()]
-                    .contrib
+                let dr = &self.drivers[d.idx()];
+                dr.contrib
                     .iter()
                     .find(|(x, _)| *x == sig)
-                    .map(|(_, v)| v)
+                    .map(|(_, v)| (v, dr.weak))
             });
-            resolve_all(s.width(), contribs)
+            super::value::resolve_net(s.width(), s.resolution, contribs)
         } else {
             forced.clone()
         };

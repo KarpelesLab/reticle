@@ -2,43 +2,23 @@
 # each with the reason (`tests/sim_lang_xsim.rs`). A `skip` is not run.
 # Reasons that start `refused:` or `line` are what Reticle printed;
 # the rest were written by hand.
-v/min_11.v refused: a `real` value has no truth value
-v/min_13.v line 1: prints `tb initial` where xsim prints `sub initial`
-v/min_23.v line 2: prints `driven x` where xsim prints `driven 0`
-v/min_24.v refused: unsupported construct: net type `triand`
-v/min_25.v line 1: prints `0 a=0 y5=x y6=0 y2=x` where xsim prints `0 a=0 y5=x y6=x y2=x`
+v/min_25.v line 2: prints `1000 a=0 y5=0 y6=x y2=0` where xsim prints `1000 a=0 y5=0 y6=x y2=x`
 v/min_26.v refused: unsupported construct: `force` of part of a net or variable
-v/min_28.v refused: unsupported construct: a procedural continuous `assign`
 v/min_32.v refused: hierarchical reference into instance of `leaf` is not supported
-v/min_33.v refused: hierarchical reference into instance array of `add4` is not supported
-v/min_36.v line 1: prints `5000 continued c=0` where xsim prints `1000 continued c=0`
-v/min_37.v refused: unsupported construct: an array of `real`
-v/min_39.v refused: `wa` is a `wand` or `wor` with more than one driver
-v/min_40.v refused: unsupported construct: a gate instance array
-v/min_41.v refused: unsupported construct: a user-defined primitive table
 v/min_8.v refused: `fact` calls itself
-v/v_arrays.v refused: unsupported construct: an array of `real`
-v/v_contassign.v line 1: prints `0 a=1 b=2 y1=x y2=x y3=3 y4=3 y5=x y6=2` where xsim prints `0 a=1 b=2 y1=x y2=x y3=3 y4=3 y5=x y6=x`
+v/v_contassign.v line 2: prints `1000 a=1 b=2 y1=x y2=0 y3=3 y4=3 y5=1 y6=x` where xsim prints `1000 a=1 b=2 y1=x y2=x y3=3 y4=3 y5=1 y6=x`
 v/v_event.v line 8: prints `15000 posedge flag` where xsim prints `15000 go or flag`
 v/v_event_b.v line 10: prints `15000 posedge flag` where xsim prints `15000 flag seen`
-v/v_force.v refused: unsupported construct: a procedural continuous `assign`
+v/v_force.v refused: unsupported construct: `force` of part of a net or variable
 v/v_force_b.v refused: unsupported construct: `force` of part of a net or variable
 v/v_function.v refused: `fact` calls itself
-v/v_gates.v refused: unsupported construct: a gate instance array
-v/v_generate.v refused: hierarchical reference into instance of `leaf` is not supported
+v/v_gates.v line 17: prints `a=z en=z bufif0=x bufif1=x notif0=x notif1=x nmos=x pmos=x` where xsim prints `a=z en=z bufif0=x bufif1=x notif0=x notif1=x nmos=z pmos=z`
 v/v_hier.v refused: hierarchical reference into instance of `mid` is not supported
-v/v_hier_b.v refused: hierarchical reference into instance of `tb` is not supported
-v/v_intra.v line 2: prints `15000 c=0 right after` where xsim prints `5000 c=0 right after`
-v/v_ports.v refused: hierarchical reference into instance array of `add4` is not supported
-v/v_real.v refused: a `real` value has no truth value
-v/v_udp.v refused: unsupported construct: a user-defined primitive table
-v/v_wires.v refused: unsupported construct: net type `triand`
-v/v_wires_b.v refused: `wa` is a `wand` or `wor` with more than one driver
+v/v_intra.v line 4: prints `26000 d=0 after 1 edge` where xsim prints `26000 d=4 after 1 edge`
 sv/min_array_slice.sv refused: unsupported construct: an assignment to a whole array from anything but a pattern or an array
 sv/min_dynarray.sv refused: unsupported construct: dynamic array dimension `[]`
 sv/min_func_return_array.sv refused: unsupported construct: an assignment to a whole array from anything but a pattern or an array
 sv/min_func_unpacked_arg.sv refused: unsupported construct: an unpacked array inside a subroutine
-sv/min_gen_inst_ref.sv refused: hierarchical reference into instance of `leaf` is not supported
 sv/min_hier_child_func.sv refused: hierarchical reference into instance of `child` is not supported
 sv/min_if_param_port.sv refused: unsupported construct: an interface port connected to an interface whose parameters                              are not its defaults (`q` is 4 bits here and 8                              in the port)
 sv/min_keyed_pattern_param.sv refused: unsupported construct: keyed assignment pattern without a target type
@@ -50,7 +30,6 @@ sv/sv_dynarray_queue.sv refused: unsupported construct: dynamic array dimension 
 sv/sv_fork_join.sv refused: unsupported construct: queue dimension `[$]`
 sv/sv_func_args.sv refused: unsupported construct: an unpacked array inside a subroutine
 sv/sv_func_return_agg.sv refused: unsupported construct: an assignment to a whole array from anything but a pattern or an array
-sv/sv_generate.sv refused: hierarchical reference into instance of `leaf` is not supported
 sv/sv_hier_task.sv refused: hierarchical reference into instance of `child` is not supported
 sv/sv_interface_param.sv refused: unsupported construct: an interface port connected to an interface whose parameters                              are not its defaults (`q` is 4 bits here and 8                              in the port)
 sv/sv_interface_param_b.sv refused: unsupported construct: an interface port connected to an interface whose parameters                              are not its defaults (`q` is 4 bits here and 8                              in the port)

@@ -209,7 +209,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     /// Binds the genvar to `value` inside `scope`.
-    fn bind_genvar(&mut self, scope: ScopeId, name: &str, value: i64, span: Span) {
+    pub(super) fn bind_genvar(&mut self, scope: ScopeId, name: &str, value: i64, span: Span) {
         self.env.cx.scopes.redeclare(
             scope,
             name.to_owned(),
@@ -222,7 +222,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     }
 
     /// Evaluates the step expression of a generate loop.
-    fn step_genvar(&mut self, g: &'ast ast::GenFor, current: i64) -> Option<i64> {
+    pub(super) fn step_genvar(&mut self, g: &'ast ast::GenFor, current: i64) -> Option<i64> {
         match &g.step.kind {
             ast::ExprKind::Assign { rhs, .. } => {
                 self.env.probe(|env| Evaluator::new(env).eval_i64(rhs).ok())
@@ -344,7 +344,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// The indices of an instance array's `[left:right]` or `[n]`, left
     /// first.
-    fn array_indices(&mut self, dim: &'ast ast::Dim) -> Option<Vec<i64>> {
+    pub(super) fn array_indices(&mut self, dim: &'ast ast::Dim) -> Option<Vec<i64>> {
         let (left, right) = match &dim.kind {
             ast::DimKind::Range(l, r) => {
                 let l = Evaluator::new(&mut self.env).eval_i64(l).ok()?;
@@ -1305,11 +1305,109 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let delay = g.delay.as_ref().and_then(|d| self.delay_of(d));
         for one in &g.instances {
             if !one.dims.is_empty() {
-                self.env.unsupported(one.span, "a gate instance array");
+                self.gate_array(g.kind, one, delay);
                 continue;
             }
             self.gate(g.kind, one, delay, item);
         }
+    }
+
+    /// `and g [3:0] (y, a, b)`: one gate per index, each terminal either
+    /// one bit, shared by all, or as many bits as there are gates, the
+    /// rightmost index taking the least significant (IEEE 1364-2005 §7.1.5).
+    /// Every gate of the logic kinds computes its bit of the same bitwise
+    /// function, so the array is that function on the whole vectors.
+    fn gate_array(
+        &mut self,
+        kind: GateKind,
+        one: &'ast ast::GateInstance,
+        delay: Option<ir::Delay>,
+    ) {
+        use GateKind as G;
+        if !matches!(
+            kind,
+            G::And | G::Nand | G::Or | G::Nor | G::Xor | G::Xnor | G::Buf | G::Not
+        ) {
+            self.env
+                .unsupported(one.span, &format!("an array of `{}` gates", kind.as_str()));
+            return;
+        }
+        let n = match one.dims.as_slice() {
+            [dim] => self.array_indices(dim).map(|ix| ix.len()),
+            _ => None,
+        };
+        let Some(n) = n.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0) else {
+            self.env
+                .unsupported(one.span, "a gate array of more than one dimension");
+            return;
+        };
+        if one.conns.len() < 2 {
+            self.env.error(
+                codes::ARGUMENTS,
+                one.span,
+                format!("`{}` needs an output and an input", kind.as_str()),
+            );
+            return;
+        }
+        let Some(target) = self.lvalue(&one.conns[0], false) else {
+            return;
+        };
+        if self.lvalue_width(&target) != n {
+            self.env.error(
+                codes::PORT_WIDTH,
+                one.conns[0].span,
+                format!("an array of {n} gates drives {n} bits"),
+            );
+            return;
+        }
+        // Each input, as wide as the array.
+        let mut values = Vec::new();
+        for input in &one.conns[1..] {
+            let w = self.info_of_pub(input).width();
+            let id = self.expr_cont(
+                input,
+                Some(Ctx {
+                    width: w.max(1),
+                    signed: false,
+                }),
+            );
+            self.b.span = input.span;
+            let v = if w == n {
+                id
+            } else if w == 1 {
+                self.b.replicate(n, id)
+            } else {
+                self.env.error(
+                    codes::PORT_WIDTH,
+                    input.span,
+                    format!("a terminal of an array of {n} gates is 1 or {n} bits, not {w}"),
+                );
+                return;
+            };
+            values.push(v);
+        }
+        self.b.span = one.span;
+        let mut value = match kind {
+            G::Buf | G::Not => values[0],
+            _ => {
+                let mut acc = values[0];
+                for v in &values[1..] {
+                    acc = match kind {
+                        G::And | G::Nand => self.b.and(acc, *v),
+                        G::Or | G::Nor => self.b.or(acc, *v),
+                        _ => self.b.xor(acc, *v),
+                    };
+                }
+                acc
+            }
+        };
+        value = match kind {
+            G::Not | G::Nand | G::Nor | G::Xnor => self.b.not(value),
+            G::Buf => self.strong(value),
+            _ => value,
+        };
+        self.b.assign_after(target.clone(), value, delay);
+        self.note_assign_drivers(&target, DriverKey::Continuous, one.span, false);
     }
 
     /// One gate instance.
@@ -1473,7 +1571,71 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         self.b.constant(crate::logic::Logic::zero(width))
                     };
                     self.b.assign(target.clone(), value);
+                    // A pull is weak: the net takes it only where nothing
+                    // else drives it (IEEE 1364-2005 §7.10), so `pullup (p)`
+                    // beside `assign p = e ? 0 : 'z` reads 1 or 0, not `x`.
+                    if let Some(a) = self.b.module_mut().assigns.last_mut() {
+                        a.attrs.set(ir::WEAK_ATTR, ir::AttrValue::Int(1));
+                    }
                     self.note_assign_drivers(&target, DriverKey::Continuous, one.span, false);
+                }
+            }
+            // A MOS switch passes its data, `z` included, while its gate is
+            // on, and leaves the output undriven while it is off (IEEE
+            // 1364-2005 §7.7): a tri-state driver. An `x` on the gate makes
+            // the output `x` where the standard has `L` or `H`, which has no
+            // strengths here. A `cmos` is an `nmos` and a `pmos` side by
+            // side.
+            G::Nmos | G::Pmos | G::Rnmos | G::Rpmos | G::Cmos | G::Rcmos => {
+                let need = if matches!(kind, G::Cmos | G::Rcmos) {
+                    4
+                } else {
+                    3
+                };
+                if one.conns.len() != need {
+                    self.env.error(
+                        codes::ARGUMENTS,
+                        one.span,
+                        format!("`{}` takes {need} terminals", kind.as_str()),
+                    );
+                    return;
+                }
+                let Some(ir::Lvalue::Net(net)) = self.lvalue(&one.conns[0], false) else {
+                    self.env.unsupported(
+                        one.span,
+                        "a switch driving something other than a whole net",
+                    );
+                    return;
+                };
+                let width = self.net_width(net);
+                let data = self.expr_cont(
+                    &one.conns[1],
+                    Some(Ctx {
+                        width,
+                        signed: false,
+                    }),
+                );
+                let gates: Vec<(&'ast ast::Expr, bool)> = match kind {
+                    G::Nmos | G::Rnmos => vec![(&one.conns[2], true)],
+                    G::Pmos | G::Rpmos => vec![(&one.conns[2], false)],
+                    _ => vec![(&one.conns[2], true), (&one.conns[3], false)],
+                };
+                for (gate, on_high) in gates {
+                    let mut enable = self.expr_cont(gate, None);
+                    enable = self.as_bit(enable);
+                    if !on_high {
+                        self.b.span = one.span;
+                        enable = self.b.lnot(enable);
+                    }
+                    self.b.span = one.span;
+                    let name = self.fresh("switch");
+                    self.b.cell(
+                        name,
+                        CellKind::Tristate,
+                        vec![(Name::new("a"), data), (Name::new("en"), enable)],
+                        vec![(Name::new("y"), net)],
+                    );
+                    self.record_driver(net, DriverKey::Continuous, true, one.span);
                 }
             }
             other => {

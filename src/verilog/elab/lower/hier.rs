@@ -24,7 +24,9 @@ use super::super::types::{Packed, VType};
 use super::Lowerer;
 
 /// A name made only of identifiers joined by `.`, outermost first, with
-/// the span of the whole; `None` for anything else.
+/// the span of the whole; `None` for anything else. An element of a
+/// generate loop or an instance array, `g[2]`, is one part of it, as the IR
+/// names that scope.
 fn dotted(e: &Expr) -> Option<Vec<String>> {
     match &e.kind {
         ExprKind::Ident(id) => Some(vec![id.name.clone()]),
@@ -33,8 +35,36 @@ fn dotted(e: &Expr) -> Option<Vec<String>> {
             path.push(name.name.clone());
             Some(path)
         }
+        ExprKind::Index { base, index } => {
+            let mut path = dotted(base)?;
+            let i = literal_index(index)?;
+            let last = path.last_mut()?;
+            last.push_str(&format!("[{i}]"));
+            Some(path)
+        }
         _ => None,
     }
+}
+
+/// The value of an index written as a decimal number, `2` in `g[2]`.
+pub(crate) fn literal_index(e: &Expr) -> Option<i64> {
+    match &e.kind {
+        ExprKind::Literal(ast::Literal::Number { text, .. })
+            if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit() || b == b'_') =>
+        {
+            text.replace('_', "").parse().ok()
+        }
+        _ => None,
+    }
+}
+
+/// An instance a hierarchical name may start at: its name as the IR has it,
+/// its instantiation, and the generate loop variables it was made with.
+struct Found<'ast> {
+    name: String,
+    inst: &'ast ast::Instantiation,
+    span: Span,
+    genvars: Vec<(String, i64)>,
 }
 
 /// The frontend type of an IR net's type, for the alias that stands for it.
@@ -59,8 +89,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         // This module's instances by the name the IR gives them: as written
         // at its top level, and `blk.u` for `u` in a named generate block
         // `blk` (IEEE 1364-2005 §12.4: a generate block names a scope).
-        let mut instances: Vec<(String, &'ast ast::Instantiation, Span)> = Vec::new();
-        self.collect_instances(items, "", &mut instances);
+        let mut instances: Vec<Found<'ast>> = Vec::new();
+        self.collect_instances(items, "", &[], &mut instances);
         if instances.is_empty() {
             return;
         }
@@ -141,16 +171,23 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let head = path[from..k].join(".");
                 instances
                     .iter()
-                    .find(|(n, _, _)| *n == head)
-                    .map(|(n, inst, sp)| (k, n.clone(), *inst, *sp))
+                    .find(|f| f.name == head)
+                    .map(|f| (k, f.name.clone(), f.inst, f.span, f.genvars.clone()))
             });
-            let Some((k, head, inst, inst_span)) = found else {
+            let Some((k, head, inst, inst_span, genvars)) = found else {
                 continue;
             };
             let mut rest = vec![head];
             rest.extend(path[k..].iter().cloned());
-            let Some((ty, instance_path, net_name, var)) = self.hier_target(inst, inst_span, &rest)
-            else {
+            // An instance in a generate loop is elaborated with the loop's
+            // variables at that iteration's values, as the loop did.
+            let scope = self.env.enter_new(String::new());
+            for (var, value) in &genvars {
+                self.bind_genvar(scope, var, *value, inst_span);
+            }
+            let target = self.hier_target(inst, inst_span, &rest);
+            self.env.leave();
+            let Some((ty, instance_path, net_name, var)) = target else {
                 continue;
             };
             let Some(vty) = vtype_of(&ty) else {
@@ -214,44 +251,111 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         &mut self,
         items: &'ast [Item],
         prefix: &str,
-        out: &mut Vec<(String, &'ast ast::Instantiation, Span)>,
+        genvars: &[(String, i64)],
+        out: &mut Vec<Found<'ast>>,
     ) {
         for item in items {
             match &item.kind {
                 ItemKind::Instance(inst) if !self.env.cx.table.is_interface(&inst.module.name) => {
                     for one in &inst.instances {
-                        if let Some(name) = &one.name
-                            && one.dims.is_empty()
-                        {
-                            out.push((format!("{prefix}{}", name.name), inst, name.span));
+                        let Some(name) = &one.name else { continue };
+                        let mut found = |n: String| {
+                            out.push(Found {
+                                name: n,
+                                inst,
+                                span: name.span,
+                                genvars: genvars.to_vec(),
+                            });
+                        };
+                        match one.dims.as_slice() {
+                            [] => found(format!("{prefix}{}", name.name)),
+                            // An instance array's elements are `ua[0]`...
+                            [dim] => {
+                                for i in self.array_indices(dim).unwrap_or_default() {
+                                    found(format!("{prefix}{}[{i}]", name.name));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
-                ItemKind::Generate(inner) => self.collect_instances(inner, prefix, out),
-                ItemKind::GenBlock(b) => self.collect_block(b, prefix, out),
+                ItemKind::Generate(inner) => self.collect_instances(inner, prefix, genvars, out),
+                ItemKind::GenBlock(b) => self.collect_block(b, prefix, genvars, out),
                 ItemKind::GenIf(g) => {
-                    self.collect_block(&g.then_block, prefix, out);
+                    self.collect_block(&g.then_block, prefix, genvars, out);
                     if let Some(e) = &g.else_block {
-                        self.collect_block(e, prefix, out);
+                        self.collect_block(e, prefix, genvars, out);
                     }
                 }
+                ItemKind::GenFor(g) => self.collect_loop(g, prefix, genvars, out),
                 _ => {}
             }
         }
+    }
+
+    /// The instances of each iteration of a generate loop, `label[i].u`,
+    /// with the loop variable's value there.
+    fn collect_loop(
+        &mut self,
+        g: &'ast ast::GenFor,
+        prefix: &str,
+        genvars: &[(String, i64)],
+        out: &mut Vec<Found<'ast>>,
+    ) {
+        let Some(label) = g.body.label.as_ref().map(|l| l.name.clone()) else {
+            return;
+        };
+        let scope = self.env.enter_new(String::new());
+        for (var, value) in genvars {
+            self.bind_genvar(scope, var, *value, g.var.span);
+        }
+        let start = self.env.probe(|env| {
+            super::super::constant::Evaluator::new(env)
+                .eval_i64(&g.init)
+                .ok()
+        });
+        let mut value = start;
+        let mut count = 0;
+        while let Some(v) = value {
+            self.bind_genvar(scope, &g.var.name, v, g.var.span);
+            let go = self
+                .env
+                .probe(|env| {
+                    super::super::constant::Evaluator::new(env)
+                        .eval_self(&g.cond)
+                        .ok()
+                })
+                .is_some_and(|c| c.truth() == crate::logic::Bit::One);
+            count += 1;
+            if !go || count > 4096 {
+                break;
+            }
+            let mut inner = genvars.to_vec();
+            inner.push((g.var.name.clone(), v));
+            let p = format!("{prefix}{label}[{v}].");
+            self.collect_instances(&g.body.items, &p, &inner, out);
+            let next = self.step_genvar(g, v);
+            if next == Some(v) {
+                break;
+            }
+            value = next;
+        }
+        self.env.leave();
     }
 
     fn collect_block(
         &mut self,
         b: &'ast ast::GenBlock,
         prefix: &str,
-        out: &mut Vec<(String, &'ast ast::Instantiation, Span)>,
+        genvars: &[(String, i64)],
+        out: &mut Vec<Found<'ast>>,
     ) {
         match &b.label {
             Some(l) => {
                 let inner = format!("{prefix}{}.", l.name);
-                self.collect_instances(&b.items, &inner, out);
+                self.collect_instances(&b.items, &inner, genvars, out);
             }
-            None => self.collect_instances(&b.items, prefix, out),
+            None => self.collect_instances(&b.items, prefix, genvars, out),
         }
     }
 }

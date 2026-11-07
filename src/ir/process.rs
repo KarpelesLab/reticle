@@ -602,9 +602,8 @@ pub enum StmtKind {
         message: Vec<ExprId>,
     },
     /// `force net = value;`: the net reads `value` whatever drives it, until
-    /// a `release`. The value is the expression's at the force; a
-    /// simulator that tracked it would be more exact, and the frontend warns
-    /// when it is not constant. Simulation only.
+    /// a `release`, following the expression as it changes (IEEE 1364-2005
+    /// §9.3.2). Simulation only.
     Force {
         /// The whole net forced.
         target: NetId,

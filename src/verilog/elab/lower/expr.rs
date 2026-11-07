@@ -159,6 +159,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// Reduces a node to one bit: non-zero becomes 1.
     pub(super) fn as_bit(&mut self, id: ExprId) -> ExprId {
+        // A real is true when it is not zero (IEEE 1364-2005 §5.1.9):
+        // `if (r)`, `!r`, `r && b`. It used to be refused.
+        if self.b.module().expr(id).ty == Type::Real {
+            self.b.span = self.b.module().expr(id).span;
+            let zero = self.real_const(0.0);
+            return self.b.binary(IrBin::Ne, id, zero);
+        }
         match self.b.module().expr(id).ty.width() {
             Some(1) => id,
             Some(_) => self.b.reduce_or(id),
@@ -410,6 +417,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 self.real_of(id)
             }
         }
+    }
+
+    /// [`Self::info_of`], for the other parts of the lowering.
+    pub(super) fn info_of_pub(&mut self, e: &'ast Expr) -> Info {
+        self.info_of(e)
     }
 
     /// The self-determined width and signedness of `e`, or one unsigned
@@ -1085,6 +1097,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     && range.offset(i).is_none()
                 {
                     let elem = self.mems[mem.index()].elem.clone();
+                    if elem == VType::Real {
+                        self.b.span = e.span;
+                        return self.real_const(0.0);
+                    }
                     let width = elem.packed().map_or(1, Packed::width);
                     // A two-state element's default is 0, a four-state one's x.
                     let (value, what) = if super::is_two_state(&elem) {
@@ -1581,6 +1597,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             UnaryOp::LogicNot => {
                 let id = self.build(operand, 0, sink);
+                let id = if self.b.module().expr(id).ty == Type::Real {
+                    self.as_bit(id)
+                } else {
+                    id
+                };
                 self.b.span = e.span;
                 self.b.lnot(id)
             }
@@ -3360,8 +3381,13 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// True when `lv` is a whole `real` variable, whose value is lowered by
     /// [`Self::real`] rather than sized to a width.
     pub(super) fn target_is_real(&self, lv: &ir::Lvalue) -> bool {
-        matches!(lv, ir::Lvalue::Net(net)
-            if matches!(self.nets.get(net.index()).map(|n| &n.ty), Some(VType::Real)))
+        match lv {
+            ir::Lvalue::Net(net) => {
+                matches!(self.nets.get(net.index()).map(|n| &n.ty), Some(VType::Real))
+            }
+            ir::Lvalue::MemElem { mem, .. } => self.mems[mem.index()].elem == VType::Real,
+            _ => false,
+        }
     }
 
     pub(super) fn lvalue_width(&self, lv: &ir::Lvalue) -> u32 {

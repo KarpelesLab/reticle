@@ -565,8 +565,9 @@ impl<'a> Printer<'a> {
             if self.joins.contains(&index) {
                 continue;
             }
-            if self.opts.keep_attrs && !assign.attrs.is_empty() {
-                self.out.line(&attrs_text(&assign.attrs));
+            if self.opts.keep_attrs && !assign.attrs.without_simulation().is_empty() {
+                self.out
+                    .line(&attrs_text(&assign.attrs.without_simulation()));
             }
             let target = self.lvalue(&assign.target)?;
             let value = self.expr(assign.value)?;

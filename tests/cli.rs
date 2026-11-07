@@ -960,14 +960,16 @@ fn sim_passes_a_real_to_a_function() {
     assert_eq!(stdout, "-1 2500\n", "{stderr}");
 }
 
-/// **What the lowering has no form for is refused, not run wrongly.** An
-/// intra-assignment delay that is not a constant (`q <= #(d) v`) used to be
-/// dropped, so the assignment happened at once, where `xsim` waits `d`; and
-/// an array of `real` failed the IR's validation on its first assignment, or
-/// rounded what it held. Would catch either back; it would not catch a later
-/// change that supports them, which should replace this test.
+/// **What the lowering has no form for is refused, not run wrongly; an array
+/// of reals is run.** An intra-assignment delay that is not a constant (`q <=
+/// #(d) v`) used to be dropped, so the assignment happened at once, where
+/// `xsim` waits `d`. An array of `real` failed the IR's validation on its
+/// first assignment, or rounded what it held, and then was refused; now each
+/// element keeps its double, and an element never written is 0.0, as under
+/// xsim. Would catch the delay dropped again, or an element of a real array
+/// rounded, refused or starting at anything but 0.0.
 #[test]
-fn sim_refuses_a_variable_assignment_delay_and_an_array_of_reals() {
+fn sim_refuses_a_variable_assignment_delay_and_runs_an_array_of_reals() {
     let dir = scratch("sim_unsupported_real_and_delay");
     let delay = dir.join("delay.v");
     std::fs::write(
@@ -990,14 +992,13 @@ fn sim_refuses_a_variable_assignment_delay_and_an_array_of_reals() {
         &reals,
         "module tb;\n\
          \x20 real a [0:3];\n\
-         \x20 initial a[1] = 1.75;\n\
+         \x20 initial begin a[1] = 1.75; $display(\"%f %f\", a[1], a[0]); end\n\
          endmodule\n",
     )
     .unwrap();
-    let (code, _, stderr) = run(&["sim", "--quiet", reals.to_str().unwrap()]);
-    assert_eq!(code, 1, "{stderr}");
-    assert!(stderr.contains("an array of `real`"), "{stderr}");
-    assert!(!stderr.contains("internal error"), "{stderr}");
+    let (code, stdout, stderr) = run(&["sim", "--quiet", reals.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stdout, "1.750000 0.000000\n", "{stderr}");
 }
 
 /// **An assignment to a bit or a part of an array element writes those bits

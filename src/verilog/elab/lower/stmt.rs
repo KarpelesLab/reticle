@@ -402,10 +402,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 out.span = s.span;
                 out.push(StmtKind::WaitFork);
             }
-            AstStmt::ProcAssign(..) => self
-                .env
-                .unsupported(s.span, "a procedural continuous `assign`"),
-            AstStmt::Deassign(_) => self.env.unsupported(s.span, "`deassign`"),
+            // A procedural continuous `assign` holds a variable at a value
+            // until `deassign`, which leaves it there until it is next
+            // assigned (IEEE 1364-2005 §9.3.1): what `force` and `release`
+            // do to a variable, which they are lowered as. A `force` beside
+            // it would win where the standard says it should, too.
+            AstStmt::ProcAssign(target, value) => self.force(target, value, s.span, out),
+            AstStmt::Deassign(target) => {
+                if let Some(net) = self.forced_net(target, "deassign") {
+                    out.span = s.span;
+                    out.push(ir::StmtKind::Release { target: net });
+                }
+            }
             AstStmt::Force(target, value) => self.force(target, value, s.span, out),
             AstStmt::Release(target) => {
                 if let Some(net) = self.forced_net(target, "release") {
@@ -486,6 +494,19 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         Symbol::GenBlock(scope),
                         label.span,
                     );
+                    // A block named in an `initial` or `always` is a scope of
+                    // the module (`tb.blk.v`), not of the process.
+                    if let Some((_, root)) = self.env.own
+                        && root != parent
+                        && self.env.cx.scopes.get(root).get(&label.name).is_none()
+                    {
+                        self.env.cx.scopes.redeclare(
+                            root,
+                            label.name.clone(),
+                            Symbol::GenBlock(scope),
+                            label.span,
+                        );
+                    }
                 }
                 let mut inner = self.b.block();
                 inner.span = b.span;
@@ -620,6 +641,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         return;
                     }
                 }
+                _ if a.op == AssignOp::Blocking || a.op == AssignOp::NonBlocking => {
+                    self.event_assign(a, t, kind, span, out);
+                    return;
+                }
                 _ => {
                     self.timing(t, out);
                 }
@@ -629,6 +654,56 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.do_assign(&a.lhs, &a.rhs, kind, delay, span, out);
         } else {
             self.assign_expr(&a.lhs, a.op, Some(&a.rhs), span, out);
+        }
+    }
+
+    /// `x = @(e) v` and `x <= @(e) v` (and `repeat (n) @(e)`): the value is
+    /// taken now and assigned after the event (IEEE 1364-2005 §9.7.7). The
+    /// blocking form waits where it is; the non-blocking one goes on at
+    /// once, its assignment made by a process of its own that waits for the
+    /// event. Both used to wait first and take the value after, and the
+    /// non-blocking one held up the process that made it.
+    fn event_assign(
+        &mut self,
+        a: &'ast ast::Assign,
+        t: &'ast ast::TimingControl,
+        kind: AssignKind,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        let Some(target) = self.lvalue(&a.lhs, true) else {
+            return;
+        };
+        let width = self.lvalue_width(&target);
+        let ty = self
+            .value_type(&a.lhs)
+            .filter(|t| !matches!(t, VType::Unpacked { .. }))
+            .unwrap_or_else(|| VType::Packed(Packed::bits(width)));
+        let value = self.value_as(&a.rhs, &ty, &mut Sink::Proc(out));
+        let name = self.fresh("intra");
+        let Some(held) = self.new_var(name, ty, span) else {
+            return;
+        };
+        out.span = span;
+        out.assign(held, value, AssignKind::Blocking);
+        self.record_driver(held, self.driver, true, span);
+        let mut later = self.b.block();
+        later.span = span;
+        self.timing(t, &mut later);
+        self.b.span = span;
+        let v = self.b.net(held);
+        later.span = span;
+        later.assign(target.clone(), v, kind);
+        self.note_assign_drivers(&target, self.driver, span, true);
+        let later = later.finish();
+        out.span = span;
+        if kind == AssignKind::NonBlocking {
+            out.fork(vec![later], ir::JoinKind::None);
+        } else {
+            for stmt in later {
+                out.span = stmt.span;
+                out.push(stmt.kind);
+            }
         }
     }
 
@@ -661,32 +736,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             .is_some_and(|i| i.is_signed())
     }
 
-    /// `force net = value;`. The value is sampled when the statement runs
-    /// (see [`ir::StmtKind::Force`]); one that is not constant is warned
-    /// about, since a simulator that tracked it would follow its changes.
+    /// `force net = value;`, which the simulator keeps following the value
+    /// until a `release` (see [`ir::StmtKind::Force`]).
     fn force(&mut self, target: &'ast Expr, value: &'ast Expr, span: Span, out: &mut BlockBuilder) {
         let Some(net) = self.forced_net(target, "force") else {
             return;
         };
-        let constant = self
-            .env
-            .probe(|env| {
-                crate::verilog::elab::constant::Evaluator::new(env)
-                    .eval(value, None)
-                    .ok()
-            })
-            .is_some();
-        if !constant {
-            self.env.report(
-                crate::diag::Diagnostic::warning("this `force` takes its value once, when it runs")
-                    .with_code(codes::UNSUPPORTED)
-                    .with_label(value.span, "not constant")
-                    .with_note(
-                        "Verilog keeps a forced net following its expression until it is \
-                         released; this simulator samples the expression at the `force`",
-                    ),
-            );
-        }
         let v = if matches!(self.net_type(net), crate::verilog::elab::types::VType::Real) {
             self.real(value, &mut Sink::Proc(out))
         } else {

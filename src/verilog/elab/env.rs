@@ -92,6 +92,9 @@ pub(crate) struct ScopeEnv<'cx, 'ast> {
     /// text, and the alias net standing for each; see
     /// `lower::hier`.
     pub hier: std::collections::HashMap<String, (crate::ir::NetId, super::types::VType)>,
+    /// The module being elaborated, by name, and its scope: `tb.blk.v`
+    /// inside `tb` names `blk.v` of this module.
+    pub own: Option<(String, ScopeId)>,
 }
 
 impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
@@ -103,6 +106,7 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
             stack: Vec::new(),
             quiet: 0,
             hier: std::collections::HashMap::new(),
+            own: None,
             dialect,
         }
     }
@@ -316,6 +320,15 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
                         ty: ty.clone(),
                     });
                 }
+                // A path from the module's own name, `tb.blk.v` inside
+                // `tb`, starts at its own scope.
+                if let ExprKind::Ident(id) = &base.kind
+                    && let Some((own, scope)) = &self.own
+                    && *own == id.name
+                {
+                    let scope = *scope;
+                    return self.member_of(Symbol::GenBlock(scope), base.span, name);
+                }
                 let base_sym = self.resolve_path(base)?;
                 self.member_of(base_sym, base.span, name)
             }
@@ -445,6 +458,11 @@ fn dotted_text(e: &Expr) -> Option<String> {
     match &e.kind {
         ExprKind::Ident(id) => Some(id.name.clone()),
         ExprKind::Member { base, name } => Some(format!("{}.{}", dotted_text(base)?, name.name)),
+        ExprKind::Index { base, index } => Some(format!(
+            "{}[{}]",
+            dotted_text(base)?,
+            super::lower::literal_index(index)?
+        )),
         _ => None,
     }
 }

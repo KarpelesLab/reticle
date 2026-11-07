@@ -86,12 +86,26 @@ pub const WAITS_FIRST_ATTR: &str = "waits_first";
 /// Only a simulator reads it; to synthesis it is an `initial` block.
 pub const INITIALISER_ATTR: &str = "initialiser";
 
+/// On a continuous assignment: a weak driver, `pullup`, `pulldown` or the
+/// pull of a `tri0`/`tri1` net, whose value a wire takes only where every
+/// other driver leaves it at `z` (IEEE 1364-2005 §7.10). A simulator reads
+/// it; to synthesis it is the assignment it is.
+pub const WEAK_ATTR: &str = "weak";
+
+/// On a wire: `and` for a `wand`/`triand` and `or` for a `wor`/`trior`,
+/// whose drivers are resolved by that function rather than as a `wire`'s
+/// (IEEE 1364-2005 §4.6.3). Only a simulator reads it; synthesis holds such
+/// a net to one driver as any other.
+pub const WIRED_ATTR: &str = "wired";
+
 /// The attributes only a simulator reads; see [`Attrs::without_simulation`].
 pub const SIMULATION_ATTRS: &[&str] = &[
     TWO_STATE_ATTR,
     WAITS_FIRST_ATTR,
     INITIALISER_ATTR,
     FINAL_ATTR,
+    WEAK_ATTR,
+    WIRED_ATTR,
 ];
 
 /// On an `Initial` process: a SystemVerilog `final` block, which a

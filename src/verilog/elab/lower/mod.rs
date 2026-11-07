@@ -50,11 +50,13 @@
 
 mod expr;
 mod hier;
+pub(crate) use hier::literal_index;
 mod inst;
 mod patterns;
 mod proc;
 mod stmt;
 mod strings;
+mod udp;
 
 use crate::diag::{Diagnostic, Diagnostics, Severity};
 use crate::ir::builder::ModuleBuilder;
@@ -176,15 +178,17 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     force_unsigned: bool,
     /// The `iff` of the `always` block being lowered, which guards its body.
     guard: Option<&'ast ast::Expr>,
-    /// The `wand` and `wor` nets, whose drivers would be resolved by a
-    /// logic function the simulator does not have.
-    wired_logic: Vec<NetId>,
+
     /// One entry per inlined subroutine: its result net and its "has
     /// returned" flag, when it needs one.
     inline_frames: Vec<(Option<NetId>, Option<NetId>)>,
     /// `wire x = expr;` initialisers waiting for the rest of their scope's
     /// declarations; see [`Lowerer::declarations`].
     net_inits: Vec<(NetId, &'ast ast::Expr, Option<Delay>, Span)>,
+    /// The delays declared with nets, `wire #2 y;`, which every continuous
+    /// assignment to the net takes on top of its own (IEEE 1364-2005
+    /// §6.1.3).
+    net_delays: Vec<(NetId, Delay)>,
     /// True while an instance array's connections are lowered: each keeps
     /// its own width, to be shared or cut per instance afterwards.
     natural_connections: bool,
@@ -400,6 +404,7 @@ pub(crate) fn elaborate_module(
     let dialect = decl.dialect;
     let mut low = {
         let mut env = ScopeEnv::new(cx, scope, dialect);
+        env.own = Some((module.to_owned(), scope));
         // The module's own name resolves inside it, so `$dumpvars(0, tb)`
         // and hierarchical references to it work.
         env.declare(
@@ -424,10 +429,11 @@ pub(crate) fn elaborate_module(
             defparams: Vec::new(),
             inlining: Vec::new(),
             force_unsigned: false,
-            wired_logic: Vec::new(),
+
             guard: None,
             inline_frames: Vec::new(),
             net_inits: Vec::new(),
+            net_delays: Vec::new(),
             natural_connections: false,
             connecting: None,
         }
@@ -695,10 +701,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         // The simulator keeps a memory's elements as vectors: an array of
         // reals used to fail the IR's validation on its first assignment, or
         // round what it held to an integer.
-        if matches!(elem, VType::Real) {
-            self.env.unsupported(span, "an array of `real`");
-            return None;
-        }
+        // An array of reals keeps each element's IEEE double; it used to
+        // fail validation, or round what it held, and then was refused.
         let Some(elem_ir) = elem.ir_type() else {
             self.env.error(
                 codes::TYPE,
@@ -741,26 +745,6 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         if key == DriverKey::Initial {
             self.drivers[net.index()].push(Driver { key, whole, span });
             return;
-        }
-        // A `wand` or `wor` with two drivers resolves them by AND or OR,
-        // which nothing here models; as a plain wire it would read `x`
-        // where they disagree.
-        if self.wired_logic.contains(&net)
-            && let Some(first) = existing
-                .iter()
-                .find(|d| d.key != DriverKey::Initial)
-                .copied()
-        {
-            let name = self.b.module().nets[net].name.clone();
-            self.env.report(
-                Diagnostic::error(format!(
-                    "`{name}` is a `wand` or `wor` with more than one driver"
-                ))
-                .with_code(codes::UNSUPPORTED)
-                .with_label(span, describe_driver(key))
-                .with_secondary(first.span, describe_driver(first.key))
-                .with_note("resolving drivers by AND or OR is not supported; one driver is"),
-            );
         }
         let conflict = existing
             .iter()
@@ -1053,6 +1037,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 | ast::NetType::Supply1
                 | ast::NetType::Wand
                 | ast::NetType::Wor
+                | ast::NetType::Triand
+                | ast::NetType::Trior
+                | ast::NetType::Tri0
+                | ast::NetType::Tri1
         ) {
             self.env
                 .unsupported(item.span, &format!("net type `{}`", nd.net_type.as_str()));
@@ -1064,8 +1052,35 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let Some(net) = self.declare_object(&d.name, ty, false, item) else {
                 continue;
             };
-            if matches!(nd.net_type, ast::NetType::Wand | ast::NetType::Wor) {
-                self.wired_logic.push(net);
+            // A `wand`/`triand` resolves its drivers by AND, a `wor`/`trior`
+            // by OR (IEEE 1364-2005 §4.6.3); a `tri0`/`tri1` reads 0 or 1
+            // where nothing drives it, which is a weak driver of its own
+            // (§4.6.4).
+            match nd.net_type {
+                ast::NetType::Wand | ast::NetType::Triand => {
+                    self.b
+                        .net_attr(net, ir::WIRED_ATTR, AttrValue::String("and".into()));
+                }
+                ast::NetType::Wor | ast::NetType::Trior => {
+                    self.b
+                        .net_attr(net, ir::WIRED_ATTR, AttrValue::String("or".into()));
+                }
+                ast::NetType::Tri0 | ast::NetType::Tri1 => {
+                    let width = self.net_width(net);
+                    let value = if nd.net_type == ast::NetType::Tri1 {
+                        crate::logic::Logic::ones(width)
+                    } else {
+                        crate::logic::Logic::zero(width)
+                    };
+                    self.b.span = d.span;
+                    let c = self.b.constant(value);
+                    self.b.assign(net, c);
+                    if let Some(a) = self.b.module_mut().assigns.last_mut() {
+                        a.attrs.set(ir::WEAK_ATTR, AttrValue::Int(1));
+                    }
+                    self.record_driver(net, DriverKey::Continuous, true, d.span);
+                }
+                _ => {}
             }
             match nd.net_type {
                 ast::NetType::Supply0 | ast::NetType::Supply1 => {
@@ -1087,6 +1102,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             if let Some(init) = &d.init {
                 let delay = nd.delay.as_ref().and_then(|dl| self.delay_of(dl));
                 self.net_inits.push((net, init, delay, d.span));
+            } else if let Some(delay) = nd.delay.as_ref().and_then(|dl| self.delay_of(dl)) {
+                // `wire #2 y;`: the delay of the assignments made to it
+                // later. It used to be dropped.
+                self.net_delays.push((net, delay));
             }
         }
     }
@@ -1365,9 +1384,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 ItemKind::PropertyDecl(_) => self
                     .env
                     .unsupported(item.span, "a `property` or `sequence` declaration"),
-                ItemKind::Table(_) => self
-                    .env
-                    .unsupported(item.span, "a user-defined primitive table"),
+                ItemKind::Table(rows) => self.udp_table(rows, item),
             }
         }
     }
@@ -1379,6 +1396,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.b.span = pair.span;
             let Some(target) = self.lvalue(&pair.lhs, false) else {
                 continue;
+            };
+            let delay = match (&target, delay) {
+                (ir::Lvalue::Net(n), own) => match self.net_delays.iter().find(|(m, _)| m == n) {
+                    Some((_, net_delay)) => {
+                        let fs = net_delay.to_fs() + own.map_or(0, |d| d.to_fs());
+                        Some(whole_delay(fs, net_delay.unit))
+                    }
+                    None => own,
+                },
+                (_, own) => own,
             };
             let width = self.lvalue_width(&target);
             let real = self.target_is_real(&target);

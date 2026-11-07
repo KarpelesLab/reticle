@@ -40,7 +40,7 @@ use super::elab::{
 };
 use super::eval::{bits_binary, index_value};
 use super::process::ProcStatus;
-use super::value::{Store, Value, merge_unknown, replace_bits, resolve_all};
+use super::value::{Store, Value, merge_unknown, replace_bits};
 use super::{Simulator, Status};
 
 /// An entry of the active or inactive region.
@@ -502,6 +502,12 @@ impl<'d> Simulator<'d> {
         {
             return Logic::from_u64(r.to_bits(), 64);
         }
+        // An element of an array of reals keeps the encoding too.
+        if let Target::Mem { mem, .. } = target
+            && self.memories[mem.idx()].real
+        {
+            return Logic::from_u64(value.to_real().to_bits(), 64);
+        }
         value.into_logic()
     }
 
@@ -684,6 +690,13 @@ impl<'d> Simulator<'d> {
             (dr.inst, dr.source, dr.target.clone(), dr.delay)
         };
         let value = match source {
+            DriverSource::Force { value, sig, active } => {
+                if active {
+                    let v = self.eval(inst, value).into_logic();
+                    self.force(super::api::NetHandle(sig), v);
+                }
+                return;
+            }
             DriverSource::Expr(e) => {
                 let v = self.eval(inst, e);
                 self.logic_for_target(&target, v)
@@ -722,13 +735,13 @@ impl<'d> Simulator<'d> {
             .iter()
             .filter(|dd| **dd != except)
             .filter_map(|dd| {
-                self.drivers[dd.idx()]
-                    .contrib
+                let dr = &self.drivers[dd.idx()];
+                dr.contrib
                     .iter()
                     .find(|(x, _)| *x == sig)
-                    .map(|(_, v)| v)
+                    .map(|(_, v)| (v, dr.weak))
             });
-        resolve_all(s.width(), contribs)
+        super::value::resolve_net(s.width(), s.resolution, contribs)
     }
 
     /// Applies a driver's value: wires receive a contribution and are
@@ -788,13 +801,13 @@ impl<'d> Simulator<'d> {
             let width = self.signals[sig.idx()].width();
             let resolved = {
                 let contribs = self.sig_drivers[sig.idx()].iter().filter_map(|dd| {
-                    self.drivers[dd.idx()]
-                        .contrib
+                    let dr = &self.drivers[dd.idx()];
+                    dr.contrib
                         .iter()
                         .find(|(s, _)| *s == sig)
-                        .map(|(_, v)| v)
+                        .map(|(_, v)| (v, dr.weak))
                 });
-                resolve_all(width, contribs)
+                super::value::resolve_net(width, self.signals[sig.idx()].resolution, contribs)
             };
             self.write_signal(sig, resolved);
         }
@@ -895,7 +908,10 @@ impl<'d> Simulator<'d> {
                 Some(match en.truth() {
                     Bit::One => a,
                     Bit::Zero => Logic::z(a.width()),
-                    _ => Logic::x(a.width()),
+                    // Unknown: as `en ? a : 'z` is with an unknown `en`
+                    // (IEEE 1364-2005 §5.1.13), `z` where `a` is `z` and `x`
+                    // elsewhere; a switch passing `z` stays undriven.
+                    _ => merge_unknown(&a, &Logic::z(a.width())),
                 })
             }
             CellKind::Dlatch => {

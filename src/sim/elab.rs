@@ -114,6 +114,8 @@ pub(crate) struct MemState {
     /// True for an array of two-state elements, which start at zero and
     /// hold a `0` for every `x` or `z` written.
     pub(crate) two_state: bool,
+    /// True for an array of `real`, whose elements are IEEE 754 doubles.
+    pub(crate) real: bool,
     /// Contents; `x` where uninitialised.
     pub(crate) data: Vec<Logic>,
     /// Consumers to schedule on any write.
@@ -220,6 +222,16 @@ pub(crate) enum DriverSource {
     Sig(SigId),
     /// The function of a combinational cell.
     Cell(CellRef),
+    /// A `force` of `sig` to an expression, which the signal follows while
+    /// it is forced (IEEE 1364-2005 §9.3.2): `active` until a `release`.
+    Force {
+        /// The expression forced.
+        value: ExprId,
+        /// The signal forced.
+        sig: SigId,
+        /// False once released, until forced again.
+        active: bool,
+    },
     /// Bits `lo .. lo + width` of what every driver of `sig` but `except`
     /// puts on it: one side of an `inout` port joined to a part of a
     /// net, which has to see what the other side drives without seeing
@@ -250,6 +262,9 @@ pub(crate) struct Driver {
     pub(crate) contrib: Vec<(SigId, Logic)>,
     /// True while an evaluation is queued in the active region.
     pub(crate) scheduled: bool,
+    /// A weak driver (`ir::WEAK_ATTR`), which a wire takes only where its
+    /// other drivers leave it at `z`.
+    pub(crate) weak: bool,
 }
 
 /// A cell instance.
@@ -480,10 +495,33 @@ impl<'d> Simulator<'d> {
         let mut nets = Vec::with_capacity(m.nets.len());
         for (nid, net) in m.nets.iter() {
             let sig = match aliases.get(nid.index()).copied().flatten() {
-                Some(sig) => sig,
+                // A variable a parent's wire stands for starts as a variable
+                // does, at `x`: an output `reg q` of a primitive read through
+                // the wire it drives used to read `z` until first written.
+                Some(sig) => {
+                    let s = &mut self.signals[sig.idx()];
+                    if net.kind != NetKind::Wire
+                        && !s.two_state
+                        && s.value.width() > 0
+                        && s.value == Logic::z(s.value.width())
+                    {
+                        s.value = Logic::x(s.value.width()).with_signed(s.value.is_signed());
+                    }
+                    sig
+                }
                 None => {
                     let full = format!("{path}.{}", net.name);
                     let sig = self.new_signal(full, &net.ty, net.kind, m.name.clone(), net.span);
+                    self.signals[sig.idx()].resolution = match net.attrs.get(crate::ir::WIRED_ATTR)
+                    {
+                        Some(crate::ir::AttrValue::String(w)) if w == "and" => {
+                            super::value::Resolution::And
+                        }
+                        Some(crate::ir::AttrValue::String(w)) if w == "or" => {
+                            super::value::Resolution::Or
+                        }
+                        _ => super::value::Resolution::Wire,
+                    };
                     if net.attrs.is_set(crate::ir::TWO_STATE_ATTR) {
                         let s = &mut self.signals[sig.idx()];
                         s.two_state = true;
@@ -502,7 +540,8 @@ impl<'d> Simulator<'d> {
             let two_state = mem.attrs.is_set(crate::ir::TWO_STATE_ATTR);
             let blank = if strings {
                 Logic::zero(0)
-            } else if two_state {
+            } else if two_state || mem.elem == crate::ir::Type::Real {
+                // A real starts at 0.0, whose encoding is all zeros.
                 Logic::zero(width)
             } else {
                 Logic::x(width)
@@ -519,6 +558,7 @@ impl<'d> Simulator<'d> {
                 elem_width: width,
                 strings,
                 two_state,
+                real: mem.elem == crate::ir::Type::Real,
                 data,
                 fanout: Vec::new(),
             });
@@ -671,6 +711,7 @@ impl<'d> Simulator<'d> {
                         delay: 0,
                         contrib: Vec::new(),
                         scheduled: false,
+                        weak: false,
                     }),
                     PortDir::InOut if self.join_inout(id, child_sig, width, e) => {}
                     PortDir::Out | PortDir::InOut => match self.target_from_expr(id, e) {
@@ -681,6 +722,7 @@ impl<'d> Simulator<'d> {
                             delay: 0,
                             contrib: Vec::new(),
                             scheduled: false,
+                            weak: false,
                         }),
                         None => diags.push(
                             Diagnostic::warning(format!(
@@ -739,6 +781,7 @@ impl<'d> Simulator<'d> {
             delay: 0,
             contrib: Vec::new(),
             scheduled: false,
+            weak: false,
         });
         self.drivers.push(Driver {
             inst,
@@ -756,6 +799,7 @@ impl<'d> Simulator<'d> {
             delay: 0,
             contrib: Vec::new(),
             scheduled: false,
+            weak: false,
         });
         true
     }
@@ -785,6 +829,7 @@ impl<'d> Simulator<'d> {
             value: value.with_signed(ty.is_signed()),
             forced: None,
             two_state: false,
+            resolution: super::value::Resolution::Wire,
         });
         self.sig_fanout.push(Vec::new());
         self.sig_drivers.push(Vec::new());
@@ -897,6 +942,11 @@ impl<'d> Simulator<'d> {
     }
 
     /// Registers `consumer` on every net and memory `e` reads.
+    /// Wakes the `force` driver `d` on a change of what `value` reads.
+    pub(crate) fn fanout_force(&mut self, inst: InstId, value: ExprId, d: DriverId) {
+        self.fanout_expr(inst, value, Consumer::Driver(d));
+    }
+
     fn fanout_expr(&mut self, inst: InstId, e: ExprId, consumer: Consumer) {
         let m = self.instances[inst.idx()].m;
         let mut nets = BTreeSet::new();
@@ -941,6 +991,7 @@ impl<'d> Simulator<'d> {
                 delay,
                 contrib: Vec::new(),
                 scheduled: false,
+                weak: assign.attrs.is_set(crate::ir::WEAK_ATTR),
             });
             if assign.delay.is_some_and(|d| d.inertial) {
                 self.inertial
@@ -998,7 +1049,9 @@ impl<'d> Simulator<'d> {
                 self.fanout_expr(inst, e, Consumer::Driver(did));
             }
             match source {
-                DriverSource::Expr(e) => self.fanout_expr(inst, e, Consumer::Driver(did)),
+                DriverSource::Expr(e) | DriverSource::Force { value: e, .. } => {
+                    self.fanout_expr(inst, e, Consumer::Driver(did));
+                }
                 DriverSource::Sig(sig) => {
                     self.add_fanout(sig, Consumer::Driver(did), Polarity::Any)
                 }
@@ -1051,6 +1104,7 @@ impl<'d> Simulator<'d> {
                 delay: 0,
                 contrib: Vec::new(),
                 scheduled: false,
+                weak: false,
             });
         };
         match &cell.kind {
@@ -1145,11 +1199,21 @@ impl<'d> Simulator<'d> {
         // §9.2.2.2.2): those are queued first. They used to be queued in
         // declaration order, so an `always_comb` above an `initial` ran
         // first.
+        // Within each group the deepest instances' processes go first: xsim
+        // runs a submodule's `initial` before its parent's (both orders are
+        // the standard's).
         let mut order: Vec<usize> = (0..self.procs.len()).collect();
         order.sort_by_key(|p| {
-            matches!(
-                self.procs[*p].process.kind,
-                ProcessKind::Comb | ProcessKind::Sensitive(_)
+            let depth = self.instances[self.procs[*p].inst.idx()]
+                .path
+                .matches('.')
+                .count();
+            (
+                matches!(
+                    self.procs[*p].process.kind,
+                    ProcessKind::Comb | ProcessKind::Sensitive(_)
+                ),
+                std::cmp::Reverse(depth),
             )
         });
         for p in order {

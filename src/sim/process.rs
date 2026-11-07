@@ -38,7 +38,7 @@ use crate::ir::{
 };
 use crate::logic::{Bit, Logic};
 
-use super::elab::{InstId, ProcId, SigId, Target, expr_reads};
+use super::elab::{Driver, DriverId, DriverSource, InstId, ProcId, SigId, Target, expr_reads};
 use super::sched::{Event, Timed, edge_matches};
 use super::value::{Store, Value};
 use super::{Simulator, Status};
@@ -758,13 +758,13 @@ impl<'d> Simulator<'d> {
                 Flow::Next
             }
             StmtKind::Force { target, value } => {
-                let v = self.eval(inst, *value).into_logic();
                 let sig = self.instances[inst.idx()].nets[target.index()];
-                self.force(super::api::NetHandle(sig), v);
+                self.force_following(inst, sig, *value);
                 Flow::Next
             }
             StmtKind::Release { target } => {
                 let sig = self.instances[inst.idx()].nets[target.index()];
+                self.stop_following(sig);
                 self.release(super::api::NetHandle(sig));
                 Flow::Next
             }
@@ -779,6 +779,58 @@ impl<'d> Simulator<'d> {
             }
             StmtKind::Break => Flow::Break,
             StmtKind::Continue => Flow::Continue,
+        }
+    }
+
+    /// Forces `sig` to `value` and keeps it following the expression until
+    /// a `release`: one driver per forced expression, made the first time
+    /// and woken by what the expression reads. A force used to take the
+    /// expression's value once.
+    fn force_following(&mut self, inst: InstId, sig: SigId, value: ExprId) {
+        self.stop_following(sig);
+        let found = self.drivers.iter().position(|d| {
+            d.inst == inst
+                && matches!(d.source, DriverSource::Force { value: v, sig: s, .. } if v == value && s == sig)
+        });
+        let id = match found {
+            Some(i) => DriverId::at(i),
+            None => {
+                let id = DriverId::at(self.drivers.len());
+                self.drivers.push(Driver {
+                    inst,
+                    source: DriverSource::Force {
+                        value,
+                        sig,
+                        active: true,
+                    },
+                    target: Target::Sig {
+                        sig,
+                        lo: 0,
+                        width: 0,
+                    },
+                    delay: 0,
+                    contrib: Vec::new(),
+                    scheduled: false,
+                    weak: false,
+                });
+                self.fanout_force(inst, value, id);
+                id
+            }
+        };
+        if let DriverSource::Force { active, .. } = &mut self.drivers[id.idx()].source {
+            *active = true;
+        }
+        self.eval_driver(id);
+    }
+
+    /// Ends every `force` of `sig` that follows an expression.
+    fn stop_following(&mut self, sig: SigId) {
+        for d in &mut self.drivers {
+            if let DriverSource::Force { sig: s, active, .. } = &mut d.source
+                && *s == sig
+            {
+                *active = false;
+            }
         }
     }
 

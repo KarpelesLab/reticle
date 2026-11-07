@@ -285,11 +285,91 @@ pub(crate) fn resolve_wire(a: &Logic, b: &Logic) -> Logic {
     Logic::from_planes(a.width(), false, value, unknown)
 }
 
-/// Resolves any number of contributions; no contributions give all `z`.
-pub(crate) fn resolve_all<'a>(width: u32, drivers: impl IntoIterator<Item = &'a Logic>) -> Logic {
-    drivers
-        .into_iter()
-        .fold(Logic::z(width), |acc, d| resolve_wire(&acc, d))
+/// How a wire's drivers combine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Resolution {
+    /// A `wire`: agreeing drivers give their value, disagreeing ones `x`.
+    Wire,
+    /// A `wand`: any driver at 0 gives 0.
+    And,
+    /// A `wor`: any driver at 1 gives 1.
+    Or,
+}
+
+/// `a` and `b` resolved by a wired AND or OR: `z` gives way to the other,
+/// the dominant value (0 for AND, 1 for OR) wins, then `x`.
+fn resolve_wired(a: &Logic, b: &Logic, and: bool) -> Logic {
+    let words = a.value_words().len();
+    let mut value = Vec::with_capacity(words);
+    let mut unknown = Vec::with_capacity(words);
+    for i in 0..words {
+        let (av, au) = (a.value_words()[i], a.unknown_words()[i]);
+        let (bv, bu) = (b.value_words()[i], b.unknown_words()[i]);
+        let az = au & av;
+        let bz = bu & bv;
+        // A known bit at the dominant value.
+        let (ad, bd) = if and {
+            (!au & !av, !bu & !bv)
+        } else {
+            (!au & av, !bu & bv)
+        };
+        let dom = if and { 0 } else { !0u64 };
+        let use_b = az & !bz;
+        let use_a = bz & !az;
+        let both_z = az & bz;
+        let rest = !(az | bz);
+        let wins = rest & (ad | bd);
+        let unknown_rest = rest & !wins & (au | bu);
+        let known_rest = rest & !wins & !(au | bu);
+        let u = (use_b & bu) | (use_a & au) | both_z | unknown_rest;
+        let v = (use_b & bv) | (use_a & av) | both_z | (wins & dom) | (known_rest & av);
+        value.push(v);
+        unknown.push(u);
+    }
+    Logic::from_planes(a.width(), false, value, unknown)
+}
+
+/// A wire's value from its drivers' contributions, each with whether it is
+/// weak: the strong ones resolved by `res`, and the weak ones where the
+/// strong leave the wire at `z`.
+pub(crate) fn resolve_net<'a>(
+    width: u32,
+    res: Resolution,
+    drivers: impl IntoIterator<Item = (&'a Logic, bool)>,
+) -> Logic {
+    let mut strong = Logic::z(width);
+    let mut weak: Option<Logic> = None;
+    for (d, is_weak) in drivers {
+        if is_weak {
+            weak = Some(match weak {
+                None => d.clone(),
+                Some(w) => resolve_wire(&w, d),
+            });
+            continue;
+        }
+        strong = match res {
+            Resolution::Wire => resolve_wire(&strong, d),
+            Resolution::And => resolve_wired(&strong, d, true),
+            Resolution::Or => resolve_wired(&strong, d, false),
+        };
+    }
+    match weak {
+        // `z` bits of the strong value give way to the weak drivers'.
+        Some(w) if strong.has_unknown() => {
+            let words = strong.value_words().len();
+            let mut value = Vec::with_capacity(words);
+            let mut unknown = Vec::with_capacity(words);
+            for i in 0..words {
+                let (sv, su) = (strong.value_words()[i], strong.unknown_words()[i]);
+                let (wv, wu) = (w.value_words()[i], w.unknown_words()[i]);
+                let z = su & sv;
+                value.push((sv & !z) | (wv & z));
+                unknown.push((su & !z) | (wu & z));
+            }
+            Logic::from_planes(width, false, value, unknown)
+        }
+        _ => strong,
+    }
 }
 
 /// Where an assignment lands, after every index has been evaluated.
@@ -355,6 +435,8 @@ pub(crate) struct Signal {
     /// A two-state variable (`bit`, `int`, ...): it starts at zero and
     /// holds a `0` for every `x` or `z` written to it.
     pub(crate) two_state: bool,
+    /// How a wire's drivers combine.
+    pub(crate) resolution: Resolution,
 }
 
 impl Signal {
@@ -383,8 +465,31 @@ mod tests {
         let b = l("8'b0011zx0z");
         // pairs (a,b): 0/0=0, 1/0=x, 0/1=x, 1/1=1, z/z=z, z/x=x, x/0=x, x/z=x
         assert_eq!(resolve_wire(&a, &b), l("8'b0xx1zxxx"));
-        assert_eq!(resolve_all(4, [&l("4'bz1zz"), &l("4'b0z1z")]), l("4'b011z"));
-        assert_eq!(resolve_all(2, []), l("2'bzz"));
+        let wire =
+            |w, ds: &[Logic]| resolve_net(w, Resolution::Wire, ds.iter().map(|d| (d, false)));
+        assert_eq!(wire(4, &[l("4'bz1zz"), l("4'b0z1z")]), l("4'b011z"));
+        assert_eq!(wire(2, &[]), l("2'bzz"));
+    }
+
+    /// A `wand` and a `wor` resolve by their functions, `z` giving way and
+    /// the dominant value beating `x` (IEEE 1364-2005 table 4-3); a weak
+    /// driver shows only where the strong ones leave `z`. Would catch the
+    /// functions swapped, `x` beating the dominant value, or a weak driver
+    /// overriding a strong one.
+    #[test]
+    fn wired_and_weak_resolution() {
+        let a = l("8'b0101zzxx");
+        let b = l("8'b0011zx0z");
+        let and = resolve_net(8, Resolution::And, [(&a, false), (&b, false)]);
+        // 0&0=0 1&0=0 0&1=0 1&1=1 z/z=z z/x=x x&0=0 x/z=x
+        assert_eq!(and, l("8'b0001zx0x"));
+        let or = resolve_net(8, Resolution::Or, [(&a, false), (&b, false)]);
+        // 0|0=0 1|0=1 0|1=1 1|1=1 z/z=z z/x=x x|0=x x/z=x
+        assert_eq!(or, l("8'b0111zxxx"));
+        let pull = l("4'b1111");
+        let strong = l("4'bz0z1");
+        let r = resolve_net(4, Resolution::Wire, [(&strong, false), (&pull, true)]);
+        assert_eq!(r, l("4'b1011"));
     }
 
     #[test]
@@ -456,6 +561,7 @@ mod tests {
             value: l("4'd3"),
             forced: None,
             two_state: false,
+            resolution: Resolution::Wire,
         };
         assert_eq!(s.effective(), &l("4'd3"));
         s.forced = Some(l("4'd9"));

@@ -180,6 +180,12 @@ pub(crate) fn eval<'d, E: Env<'d>>(env: &mut E, id: ExprId) -> Value {
                 Some(a) => env.read_mem(*mem, a),
                 None => None,
             };
+            if node.ty == Type::Real {
+                return Value::Real(
+                    elem.and_then(|l| l.to_u64())
+                        .map_or(f64::NAN, f64::from_bits),
+                );
+            }
             if node.ty == Type::String {
                 return Value::Str(
                     elem.map_or_else(String::new, |l| super::value::logic_to_string(&l)),
@@ -378,11 +384,12 @@ impl<'d> Env<'d> for SimEnv<'_, 'd> {
         let found = usize::try_from(addr)
             .ok()
             .and_then(|i| m.data.get(i).cloned());
-        // An element a two-state array does not have reads 0, its type's
-        // default, where a four-state one's reads `x` (IEEE 1800-2017
-        // §7.4.6).
+        // An element a two-state or a real array does not have reads 0, its
+        // type's default, where a four-state one's reads `x` (IEEE
+        // 1800-2017 §7.4.6).
         match found {
-            None if m.two_state => Some(Logic::zero(m.elem_width)),
+            // A real's default is 0.0, whose encoding is all zeros.
+            None if m.two_state || m.real => Some(Logic::zero(m.elem_width)),
             other => other,
         }
     }
