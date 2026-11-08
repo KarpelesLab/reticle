@@ -724,6 +724,34 @@ in `ieee.std_logic_1164`, as VHDL-2008 has them, and `ieee.std_logic_textio`
 is empty (it declared the same profiles, a homograph of each for a design
 that used both). Reading, and a file other than `output`, are refused.
 
+**What still differs**, measured with a corpus of 140 small testbenches kept
+outside the repository, which the fixtures above were distilled from (125 of
+them print what xsim prints, from 18 before this work):
+
+- *Nine values in four.* A `std_logic` element is one four-state bit here:
+  `'U'`, `'X'`, `'W'` and `'-'` are all `x`, `'L'` is `0` and `'H'` is `1`.
+  So `'U'` prints as `X`, `sh = 'H'` is false after `sh <= 'H'`, a `'-'`
+  held by a signal is no wildcard to `?=`, and two drivers of `'Z'` and
+  `'H'` resolve to `1` where IEEE 1164's table gives `'H'`. Doing this
+  right is a representation change, not a lowering one: `Logic` has two
+  planes (value, unknown) and would need two more (strength, and `U`
+  against `X`/`-`) — four bits per element — in the net storage, every
+  evaluation, the non-blocking queue and the VCD writer, with the 1164
+  resolution table where drivers meet; or the VHDL frontend would lower
+  `std_ulogic` as a four-bit enumeration and every 1164 operator as a
+  table, which synthesis could not take. Neither is done.
+- *A delta per concurrent assignment.* `s1 <= s + 1; s2 <= s1 + 1;` are
+  continuous assignments here and settle in one delta; VHDL takes one per
+  statement, so a testbench counting deltas through such a chain differs.
+- *`time'pos`* counts femtoseconds here and xsim's picoseconds.
+- *xsim defects*, measured and not copied: `boolean'image` of a comparison
+  of two arrays is three characters (`tru`, `fal`); `color_t'image(maximum(c,
+  red))` is one character; `to_string(15 ns)` of a literal keeps the
+  literal's unit where every other time is written in `ps`; and an
+  ordinary `case` matches `"1--"` against `"110"`.
+- `std.env.stop` prints `$stop called at time : 0 fs` under xsim, which
+  this simulator's `$stop` does not print.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.
