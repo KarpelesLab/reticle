@@ -43,6 +43,11 @@
 //!   the chain instead, its top lane passing it up, which costs what
 //!   writing it as a lane did.
 //!
+//! - a carry out the fabric reads from a lane whose sum it reads too, which
+//!   the slice's one output for that lane cannot carry both of, is read off
+//!   the lane above instead, as Vivado does (`move_carry_outs`); this one
+//!   adds a lane, or a `CARRY4` above the chain, but changes no value.
+//!
 //! **A lane nothing reads is left alone**, and its two inputs become `x`.
 //! A lane is read when its sum is, when a carry out at or above it is,
 //! or when a sum above it is: the sum of lane `j` is `S ^ CO` of the lane
@@ -64,7 +69,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::fpga::device::{BelRole, Device};
-use crate::fpga::primitives::{add_cell, add_net, const_expr, expr, net_expr, slice_expr};
+use crate::fpga::primitives::{
+    add_assign, add_cell, add_net, const_expr, expr, net_expr, slice_expr,
+};
 use crate::ir::emit::{BitView, SigBit};
 use crate::ir::{
     AttrValue, Bit, CellId, CellKind, Const, Design, ExprId, ExprKind, ModuleId, Name, PortDir,
@@ -93,6 +100,10 @@ pub struct CarryPacking {
     /// Of those, the ones whose two tables need more than five inputs, the
     /// carry in on a `CARRY4` of its own below the chain instead.
     pub carries_below: usize,
+    /// Carry outs read from the lane above the one whose sum is read too,
+    /// since the two would want one output of the slice
+    /// (`move_carry_outs`).
+    pub carries_out_moved: usize,
 }
 
 impl CarryPacking {
@@ -102,7 +113,8 @@ impl CarryPacking {
             "carry chains: {} CARRY4, {} propagate bit(s) on their own lookup table, \
              {} buffer and {} constant lookup table(s) added ({} feeding a constant \
              generate), {} lane(s) nothing reads, {} carry in(s) from the fabric beside a \
-             generate on `O5` and {} on a `CARRY4` below\n",
+             generate on `O5` and {} on a `CARRY4` below, {} carry out(s) read a lane above \
+             a sum read beside them\n",
             self.carries,
             self.kept,
             self.buffers,
@@ -110,7 +122,8 @@ impl CarryPacking {
             self.generates,
             self.dead_lanes,
             self.generates_on_o5,
-            self.carries_below
+            self.carries_below,
+            self.carries_out_moved
         )
     }
 }
@@ -242,6 +255,7 @@ pub fn legalise_carries(
     if lut_inputs.len() != 6 {
         return Ok(report);
     }
+    report.carries_out_moved = move_carry_outs(design, module, &carry.name, &shape)?;
     let Some(m) = design.modules.get(module) else {
         return Err("the module is not part of the design".to_owned());
     };
@@ -785,6 +799,250 @@ pub fn legalise_carries(
         m.cells.retain(|id, _| !removed.contains(&id));
     }
     Ok(report)
+}
+
+/// Takes each carry out that the fabric reads beside a sum it reads too
+/// off the lane above instead, and returns how many it moved.
+///
+/// A slice has one output per lane for both: lane `k`'s sum and its carry
+/// out leave by `<L>MUX` alone (`<L>OUTMUX.XOR` or `<L>OUTMUX.CY`), so when
+/// the fabric wants both, one of the two has no way out. The router went a
+/// hundred passes over that one wire and gave up, and the flow wrote a
+/// bitstream with nothing routed: the top bit of `{0, a} + {0, b}` is the
+/// carry out (`MapOptions::carry_ends`) and its top sum is the bit below,
+/// and a second adder reading both (`a + b + c`, `vh_adder`'s `gadd`) is all
+/// it takes.
+///
+/// Vivado never reads the two off one lane, and what it does instead was
+/// measured (2026.1, `{co, s} = a + b` for 6, 7 and 8 bits, placed and
+/// routed): the carry out comes off the lane above the top sum, that lane's
+/// propagate a constant one and its generate zero, so that its carry out is
+/// the carry into it. For six bits that is `CO[2]` of the second `CARRY4`
+/// beside `O[1]`; for eight, `CO[0]` of a third `CARRY4` whose `CI` is the
+/// second's `CO[3]` — which Vivado does even when the sums are registered,
+/// though the flip-flop beside the lane could have taken one of them.
+/// This does the same, with the lane above when nothing reads it and with a
+/// `CARRY4` of its own above the chain when the carry out is its top lane's
+/// and nothing continues the chain. A lane above that something reads, or
+/// a chain that goes on, is left as it was: neither has been seen.
+///
+/// The carry out's readers are not touched: the instance's carry outs are
+/// given a net of their own and the old net is assigned from it, the moved
+/// bit from the lane above.
+fn move_carry_outs(
+    design: &mut Design,
+    module: ModuleId,
+    carry: &str,
+    shape: &crate::fpga::device::WideCarry<'_>,
+) -> Result<usize, String> {
+    let lanes = shape.width as usize;
+    // Per instance: the lane whose carry out moves, and whether it moves
+    // into a `CARRY4` of its own above.
+    let mut moves: Vec<(CellId, usize, bool)> = Vec::new();
+    {
+        let Some(m) = design.modules.get(module) else {
+            return Err("the module is not part of the design".to_owned());
+        };
+        let view = BitView::new(m).map_err(|e| e.to_string())?;
+        let bits = |id: ExprId| -> Result<Vec<SigBit>, String> {
+            Ok(view
+                .expr_bits(id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|b| view.canonical(b))
+                .collect())
+        };
+        // Who reads each bit: a cell's pin, or `None` for a port of the
+        // module.
+        let mut readers: HashMap<usize, Vec<Option<(CellId, String)>>> = HashMap::new();
+        for (id, cell) in m.cells.iter() {
+            for (port, e) in &cell.inputs {
+                for bit in bits(*e)? {
+                    if let SigBit::Slot(s) = bit {
+                        readers
+                            .entry(s)
+                            .or_default()
+                            .push(Some((id, port.as_str().to_owned())));
+                    }
+                }
+            }
+        }
+        for port in &m.ports {
+            if port.dir == PortDir::In {
+                continue;
+            }
+            for bit in view
+                .net_bits(port.net, port.span)
+                .map_err(|e| e.to_string())?
+            {
+                if let SigBit::Slot(s) = view.canonical(bit) {
+                    readers.entry(s).or_default().push(None);
+                }
+            }
+        }
+        let is_carry =
+            |id: CellId| matches!(&m.cells[id].kind, CellKind::Blackbox(n) if n.as_str() == carry);
+        for (id, cell) in m.cells.iter() {
+            if !is_carry(id) {
+                continue;
+            }
+            let out_bits = |port: &str| -> Result<Vec<SigBit>, String> {
+                match cell.output(port) {
+                    Some(net) => Ok(view
+                        .net_bits(net, cell.span)
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .map(|b| view.canonical(b))
+                        .collect()),
+                    None => Ok(Vec::new()),
+                }
+            };
+            let sums = out_bits(shape.sum)?;
+            let carries_out = out_bits(shape.carry_out)?;
+            if sums.len() != lanes || carries_out.len() != lanes {
+                continue;
+            }
+            let read_by = |b: &SigBit| -> &[Option<(CellId, String)>] {
+                match b {
+                    SigBit::Slot(s) => readers.get(s).map_or(&[], Vec::as_slice),
+                    SigBit::Const(_) => &[],
+                }
+            };
+            // The top lane's carry out into the next instance's `CI` is
+            // `COUT`, a wire of its own; anything else reads it through
+            // the lane's output.
+            let chained = |r: &Option<(CellId, String)>| matches!(r, Some((c, p)) if is_carry(*c) && Some(p.as_str()) == shape.carry_in);
+            for k in 0..lanes {
+                let fabric = read_by(&carries_out[k])
+                    .iter()
+                    .any(|r| !(k + 1 == lanes && chained(r)));
+                if !fabric || read_by(&sums[k]).is_empty() {
+                    continue;
+                }
+                if k + 1 < lanes {
+                    let above_free = (k + 1..lanes).all(|j| {
+                        read_by(&sums[j]).is_empty() && read_by(&carries_out[j]).is_empty()
+                    });
+                    if above_free {
+                        moves.push((id, k, false));
+                    }
+                } else if !read_by(&carries_out[k]).iter().any(chained) {
+                    moves.push((id, k, true));
+                }
+                // One lane per instance can be the top sum's; a second is
+                // not a shape the mapper writes.
+                break;
+            }
+        }
+    }
+
+    let Some(m) = design.modules.get_mut(module) else {
+        return Err("the module is not part of the design".to_owned());
+    };
+    let width = shape.width;
+    for &(id, k, above) in &moves {
+        let span = m.cells[id].span;
+        let name = m.cells[id].name.as_str().to_owned();
+        let Some(old) = m.cells[id].output(shape.carry_out) else {
+            continue;
+        };
+        let new = add_net(m, &format!("{name}$co"), Type::bits(width), span);
+        for (port, net) in m.cells[id].outputs.iter_mut() {
+            if port.as_str() == shape.carry_out {
+                *net = new;
+            }
+        }
+        let lane = u32::try_from(k).unwrap_or(0);
+        let one = |m: &mut crate::ir::Module| const_expr(m, Const::ones(1), span);
+        let zero = |m: &mut crate::ir::Module| const_expr(m, Const::zero(1), span);
+        let x = |m: &mut crate::ir::Module| const_expr(m, Const::from_bits(&[Bit::X]), span);
+        // The value the moved bit takes: the carry out of the lane above.
+        let moved = if above {
+            // A `CARRY4` above whose bottom lane passes its carry in up:
+            // propagate one, generate zero, and the other lanes nothing.
+            let (Some(ci), init) = (shape.carry_in, shape.init) else {
+                continue;
+            };
+            let mut s_parts = Vec::with_capacity(lanes);
+            let mut di_parts = Vec::with_capacity(lanes);
+            for _ in 1..lanes {
+                s_parts.push(x(m));
+                di_parts.push(x(m));
+            }
+            s_parts.push(one(m));
+            di_parts.push(zero(m));
+            let s = expr(m, ExprKind::Concat(s_parts), span);
+            let di = expr(m, ExprKind::Concat(di_parts), span);
+            let whole = net_expr(m, new, span);
+            let top = slice_expr(m, whole, width - 1, width - 1, span);
+            let mut inputs = vec![
+                (Name::new(shape.propagate), s),
+                (Name::new(shape.data), di),
+                (Name::new(ci), top),
+            ];
+            if let Some(init) = init {
+                inputs.push((Name::new(init), zero(m)));
+            }
+            let sum = add_net(m, &format!("{name}$cout$o"), Type::bits(width), span);
+            let carries = add_net(m, &format!("{name}$cout$co"), Type::bits(width), span);
+            add_cell(
+                m,
+                &format!("{name}$cout"),
+                CellKind::Blackbox(Name::new(carry)),
+                inputs,
+                vec![
+                    (Name::new(shape.sum), sum),
+                    (Name::new(shape.carry_out), carries),
+                ],
+                span,
+            );
+            let whole = net_expr(m, carries, span);
+            slice_expr(m, whole, 0, 0, span)
+        } else {
+            // The lane above, nothing reads, made the same pass-through.
+            let (Some(old_s), Some(old_di)) = (
+                m.cells[id].input(shape.propagate),
+                m.cells[id].input(shape.data),
+            ) else {
+                continue;
+            };
+            let mut s_parts = Vec::with_capacity(lanes);
+            let mut di_parts = Vec::with_capacity(lanes);
+            for j in (0..width).rev() {
+                if j == lane + 1 {
+                    s_parts.push(one(m));
+                    di_parts.push(zero(m));
+                } else {
+                    s_parts.push(slice_expr(m, old_s, j, j, span));
+                    di_parts.push(slice_expr(m, old_di, j, j, span));
+                }
+            }
+            let s = expr(m, ExprKind::Concat(s_parts), span);
+            let di = expr(m, ExprKind::Concat(di_parts), span);
+            for (port, value) in m.cells[id].inputs.iter_mut() {
+                if port.as_str() == shape.propagate {
+                    *value = s;
+                } else if port.as_str() == shape.data {
+                    *value = di;
+                }
+            }
+            let whole = net_expr(m, new, span);
+            slice_expr(m, whole, lane + 1, lane + 1, span)
+        };
+        // The old net, most significant first, the moved bit from above.
+        let mut parts = Vec::with_capacity(lanes);
+        for j in (0..width).rev() {
+            if j == lane {
+                parts.push(moved);
+            } else {
+                let whole = net_expr(m, new, span);
+                parts.push(slice_expr(m, whole, j, j, span));
+            }
+        }
+        let value = expr(m, ExprKind::Concat(parts), span);
+        add_assign(m, old, value, span);
+    }
+    Ok(moves.len())
 }
 
 fn bit_of(value: bool) -> Bit {

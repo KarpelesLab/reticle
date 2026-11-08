@@ -71,7 +71,8 @@ use reticle::fpga::{self, BelRole, Constraints, FpgaOptions, MapOptions};
 use reticle::ir::builder::ModuleBuilder;
 use reticle::ir::validate::validate_module;
 use reticle::ir::{
-    AttrValue, Cell, CellId, CellKind, Design, ExprKind, Module, ModuleId, Name, NetId, Type,
+    AttrValue, Cell, CellId, CellKind, Design, ExprKind, Module, ModuleId, Name, NetId, PortDir,
+    Type,
 };
 use reticle::logic::{Bit, Logic};
 use reticle::source::{SourceMap, Span};
@@ -1129,6 +1130,109 @@ fn legalising_a_chain_for_a_slice_changes_no_sum() {
     for width in [1, 3, 6] {
         check(Shape::Widened, width, one.clone(), true);
     }
+}
+
+/// **No lane of a legalised chain puts out both its sum and its carry.**
+///
+/// A slice has one output per lane for the two, `<L>MUX`, so a lane whose
+/// sum and carry out the fabric both reads cannot be routed: the router
+/// gave up on four of the language corpus's builds for it and the flow
+/// wrote a bitstream with nothing routed. `{0, a} + {0, b}` with its top
+/// bit taken off the carry out (`MapOptions::carry_ends`) is that shape,
+/// since the port reads the top sum too. Vivado takes the carry out off the
+/// lane above, a pass-through (measured: `docs/fpga-vivado-parity.md`), and
+/// so does `legalise_carries` now: from the lane above in the same `CARRY4`
+/// at 5 to 7 bits, and from a `CARRY4` of its own above the chain at 4 and
+/// 8. Every input is simulated after.
+///
+/// Would catch: the carry out left beside its sum (the structural check),
+/// moved onto a lane that does not pass the carry through, or onto the
+/// wrong lane (the simulation). Would not catch: a lane above that
+/// something reads, which is left alone and has not been seen, nor
+/// anything about the slice's output multiplexers themselves.
+#[test]
+fn no_lane_puts_out_both_its_sum_and_its_carry() {
+    let ends = MapOptions {
+        carry_ends: true,
+        min_carry_width: 1,
+        ..MapOptions::default()
+    };
+    for width in [4, 5, 6, 7, 8] {
+        let options = FpgaOptions {
+            map: ends.clone(),
+            ..FpgaOptions::default()
+        };
+        let packing =
+            check_full_with(Shape::Widened, width, XC7, &options, true, false).expect("legalised");
+        assert_eq!(packing.carries_out_moved, 1, "{width} bits: {packing:?}");
+        let (mut design, top, _) = mapped_with(Shape::Widened, width, XC7, &options);
+        let device = fpga::target(XC7).expect("a built-in device");
+        fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises");
+        let blocks = sums_and_carries_apart(design.module(top));
+        assert_eq!(
+            blocks,
+            usize::try_from(width.div_ceil(4) + u32::from(width % 4 == 0)).unwrap(),
+            "{width} bits"
+        );
+    }
+}
+
+/// Fails if any `CARRY4` lane has its sum and its carry out both read by
+/// anything but the next instance's `CI`; answers how many instances.
+fn sums_and_carries_apart(module: &Module) -> usize {
+    use reticle::ir::emit::{BitView, SigBit};
+    let view = BitView::new(module).expect("the legalised module is structural");
+    let canon = |bits: Vec<SigBit>| -> Vec<SigBit> {
+        bits.into_iter().map(|b| view.canonical(b)).collect()
+    };
+    // Who reads each bit: the cell and pin, or `None` for a port.
+    let mut readers: std::collections::HashMap<SigBit, Vec<Option<(CellId, String)>>> =
+        std::collections::HashMap::new();
+    for (id, cell) in module.cells.iter() {
+        for (port, e) in &cell.inputs {
+            for bit in canon(view.expr_bits(*e).expect("a structural pin")) {
+                readers
+                    .entry(bit)
+                    .or_default()
+                    .push(Some((id, port.as_str().to_owned())));
+            }
+        }
+    }
+    for port in &module.ports {
+        if port.dir == PortDir::Out {
+            for bit in canon(view.net_bits(port.net, port.span).expect("a bit vector")) {
+                readers.entry(bit).or_default().push(None);
+            }
+        }
+    }
+    let carry = |id: CellId| matches!(&module.cells[id].kind, CellKind::Blackbox(n) if n.as_str() == "CARRY4");
+    let mut blocks = 0;
+    for (_, cell) in module.cells.iter() {
+        if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == "CARRY4") {
+            continue;
+        }
+        blocks += 1;
+        let out = |port: &str| {
+            canon(
+                view.net_bits(cell.output(port).expect("an output"), cell.span)
+                    .expect("a bit vector"),
+            )
+        };
+        let (sums, carries) = (out("O"), out("CO"));
+        for lane in 0..4 {
+            let sum_read = readers.get(&sums[lane]).is_some_and(|r| !r.is_empty());
+            let carry_out = readers.get(&carries[lane]).is_some_and(|r| {
+                r.iter()
+                    .any(|r| !(lane == 3 && matches!(r, Some((c, p)) if carry(*c) && p == "CI")))
+            });
+            assert!(
+                !(sum_read && carry_out),
+                "`{}` puts out lane {lane}'s sum and its carry both",
+                cell.name
+            );
+        }
+    }
+    blocks
 }
 
 /// **Two adders behind a multiplexer share one chain, and each answer is

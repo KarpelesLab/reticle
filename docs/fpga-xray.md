@@ -6478,6 +6478,25 @@ mux (`<L>OUTMUX.XOR`) to a flip-flop elsewhere. The placer did not pack
 the flip-flops: in the build above five sums take the first way and 27
 the second. That is wire, not a fault.
 
+A lane's carry out leaves by the same output mux (`<L>OUTMUX.CY`), so a
+lane whose sum and carry out the fabric both reads has one way out for
+two signals. `{0, a} + {0, b}`, whose top bit the mapper takes off the
+last lane's carry out (`MapOptions::carry_ends`), is that lane when
+something reads the top sum as well, and a second adder reading both is
+enough: four builds of the language corpus (`docs/fpga-vivado-parity.md`)
+ended with the router giving up on `<L>MUX` after 100 passes. Vivado never
+reads the two off one lane. Built by Vivado 2026.1, `{co, s} = a + b`
+takes `co` off the lane above the top sum, whose propagate is a constant
+one and whose generate is zero: `CO[2]` beside `O[1]` at six bits, and at
+eight bits `CO[0]` of a third `CARRY4` whose `CI` is the second's `CO[3]`.
+It does that at eight bits even when every sum is registered and the
+flip-flop beside the lane could have taken one of them (**measured**,
+2026-11-08, placed and routed, `get_site_pins` of each net).
+`legalise_carries` does the same first (`move_carry_outs`), and
+`tests/fpga_carry.rs::no_lane_puts_out_both_its_sum_and_its_carry` holds
+it at four to eight bits. A lane above that something reads, or a chain
+that goes on above, is left as it was; neither has been seen.
+
 ### Checked, quoted, and not known
 
 **Checked**, against the database or by a test:
