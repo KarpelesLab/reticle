@@ -2658,26 +2658,30 @@ pub fn physical_nodes(graph: &RoutingGraph) -> Vec<NodeId> {
         }
         x
     }
-    for a in 0..n {
-        let a = NodeId::try_from(a).unwrap_or(0);
-        for pip in graph.outgoing(a) {
-            if !graph.pip_bits(*pip).is_empty() {
-                continue;
-            }
-            let b = graph.pip(*pip).to;
-            if b == a {
-                continue;
-            }
-            let back = graph
-                .outgoing(b)
-                .iter()
-                .any(|p| graph.pip(*p).to == a && graph.pip_bits(*p).is_empty());
-            if back {
-                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
-                if ra != rb {
-                    let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
-                    parent[hi as usize] = lo;
-                }
+    // Every free pip in the order the graph holds them, which reads the pips
+    // front to back where walking each node's own read them scattered. The
+    // order the joins are found in changes nothing: a component's root is its
+    // least node, whichever join came first.
+    for (index, pip) in graph.pips.iter().enumerate() {
+        let index = PipId::try_from(index).unwrap_or(PipId::MAX);
+        let (a, b) = (pip.from, pip.to);
+        if b == a || !graph.pip_bits(index).is_empty() {
+            continue;
+        }
+        // Already one piece of metal, so a join back changes nothing, and
+        // looking for the way back is most of the cost.
+        if find(&mut parent, a) == find(&mut parent, b) {
+            continue;
+        }
+        let back = graph
+            .outgoing(b)
+            .iter()
+            .any(|p| graph.pip(*p).to == a && graph.pip_bits(*p).is_empty());
+        if back {
+            let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+            if ra != rb {
+                let (lo, hi) = if ra < rb { (ra, rb) } else { (rb, ra) };
+                parent[hi as usize] = lo;
             }
         }
     }
@@ -2960,25 +2964,35 @@ struct Scratch {
     queue: Queue,
 }
 
-/// A min-queue of `(estimate, node)`, a heap of four children a node.
+/// A min-heap of `(estimate, node)`, four children a node: the part of a
+/// [`Queue`] that holds what is below its floor.
 ///
-/// The expansion's queue: `std`'s `BinaryHeap` is binary, and on the
+/// It was the whole queue once: `std`'s `BinaryHeap` is binary, and on the
 /// ChipWhisperer-Husky Plus the sifting in it was a fifth of the whole
 /// build, half a billion pops of a queue millions long whose every level
-/// is a cache miss. Four children a node is half the levels, and the four
-/// are one cache line. What is popped is the least entry, as it was:
-/// entries are ordered as tuples, and two equal ones are the same entry,
-/// so the order things leave in does not depend on how the heap is laid
-/// out and the routing is the one the binary heap made.
+/// is a cache miss. Four children a node is half the levels. What is popped
+/// is the least entry, as it was: entries are ordered as tuples, and two
+/// equal ones are the same entry, so the order things leave in does not
+/// depend on how the heap is laid out.
+///
+/// Laying it out so that the four children of an entry are always one cache
+/// line, 64-byte aligned blocks of four, gave the same bitstream and no
+/// measurable time on the Husky Plus (1,721 s of route against 1,652 for the
+/// plain vector beside it, 2026-11-09), so it is a plain vector.
 #[derive(Default)]
-struct Queue {
+struct Heap {
     items: Vec<(u64, NodeId)>,
 }
 
-impl Queue {
-    /// Empties the queue, keeping its storage.
+impl Heap {
+    /// Empties the heap, keeping its storage.
     fn clear(&mut self) {
         self.items.clear();
+    }
+
+    /// Whether it holds nothing.
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 
     /// Adds an entry.
@@ -2994,6 +3008,11 @@ impl Queue {
             at = parent;
         }
         self.items[at] = item;
+    }
+
+    /// The least entry, left in.
+    fn peek(&self) -> Option<(u64, NodeId)> {
+        self.items.first().copied()
     }
 
     /// Takes the least entry out.
@@ -3042,6 +3061,136 @@ impl Queue {
         }
         self.items[at] = last;
         Some(top)
+    }
+}
+
+/// The expansion's min-queue of `(estimate, node)`: what is popped is always
+/// the least entry, entries ordered as tuples.
+///
+/// Two equal entries are the same entry, so any structure that pops the least
+/// pops in the same order, and the routing does not depend on which one it
+/// is. This one is a *radix heap* (Ahuja, Mehlhorn, Orlin and Tarjan, 1990,
+/// quoted) with a [`Heap`] beside it. A radix heap files an entry in the
+/// bucket of the highest bit in which it differs from its *floor*, the least
+/// entry it holds once a pop has settled it, so a push is an append and a pop
+/// rarely more than a scan of one bucket; but it needs every entry pushed to
+/// be no less than that floor. An A\* search's estimate is not always that:
+/// the weighted estimate is not consistent, and 14 % of `regfile_alu`'s
+/// pushes were below the entry last popped. Such an entry is below
+/// everything the radix part holds, so it goes on the heap beside it, which
+/// stays small because what is on it is popped next; a pop takes the lesser of
+/// the two parts' least.
+///
+/// It replaced the four-way heap alone, which on the ChipWhisperer-Husky Plus
+/// was a third of the route, a queue millions long whose every level is a
+/// cache miss (2026-11-09).
+#[derive(Default)]
+struct Queue {
+    /// The entries below `floor`.
+    below: Heap,
+    /// No entry of `buckets` is less; see [`Queue::settle`].
+    floor: u128,
+    /// Bucket `b` holds the entries whose highest bit differing from
+    /// `floor` is bit `b - 1`; bucket 0 those equal to it.
+    buckets: Vec<Vec<(u64, NodeId)>>,
+    /// Which buckets hold anything, a bit each.
+    occupied: [u64; 3],
+    /// How many entries the buckets hold.
+    filed: usize,
+}
+
+/// A [`Queue`] entry as one number, ordered as the tuple is.
+fn queue_key(item: (u64, NodeId)) -> u128 {
+    (u128::from(item.0) << 32) | u128::from(item.1)
+}
+
+impl Queue {
+    /// Empties the queue, keeping its storage.
+    fn clear(&mut self) {
+        self.below.clear();
+        for (word, bits) in self.occupied.iter_mut().enumerate() {
+            while *bits != 0 {
+                let bit = bits.trailing_zeros() as usize;
+                *bits &= *bits - 1;
+                self.buckets[word * 64 + bit].clear();
+            }
+        }
+        self.floor = 0;
+        self.filed = 0;
+    }
+
+    /// The bucket of `key`, which is no less than the floor.
+    fn bucket(&self, key: u128) -> usize {
+        128 - (key ^ self.floor).leading_zeros() as usize
+    }
+
+    /// Files an entry no less than the floor in its bucket.
+    fn file(&mut self, item: (u64, NodeId)) {
+        let bucket = self.bucket(queue_key(item));
+        if self.buckets.len() <= bucket {
+            self.buckets.resize_with(129, Vec::new);
+        }
+        self.buckets[bucket].push(item);
+        self.occupied[bucket / 64] |= 1 << (bucket % 64);
+        self.filed += 1;
+    }
+
+    /// Adds an entry.
+    fn push(&mut self, item: (u64, NodeId)) {
+        // With both parts empty the floor may go anywhere, and it goes to the
+        // entry, so that a search starts with an empty heap beside it.
+        if self.filed == 0 && self.below.is_empty() {
+            self.floor = queue_key(item);
+        }
+        if queue_key(item) < self.floor {
+            self.below.push(item);
+        } else {
+            self.file(item);
+        }
+    }
+
+    /// Makes the floor the least entry the buckets hold, and bucket 0 hold it,
+    /// when they hold anything: the lowest bucket that holds anything is
+    /// emptied and its entries filed again against the new floor, each in a
+    /// lower bucket than it was.
+    fn settle(&mut self) {
+        if self.filed == 0 || self.occupied[0] & 1 != 0 {
+            return;
+        }
+        let Some(lowest) = (0..3).find_map(|word| {
+            let bits = self.occupied[word];
+            (bits != 0).then(|| word * 64 + bits.trailing_zeros() as usize)
+        }) else {
+            return;
+        };
+        let entries = std::mem::take(&mut self.buckets[lowest]);
+        self.occupied[lowest / 64] &= !(1 << (lowest % 64));
+        self.filed -= entries.len();
+        if let Some(least) = entries.iter().map(|item| queue_key(*item)).min() {
+            self.floor = least;
+        }
+        for item in &entries {
+            self.file(*item);
+        }
+        // The storage goes back, empty, so the bucket keeps its capacity.
+        let mut entries = entries;
+        entries.clear();
+        self.buckets[lowest] = entries;
+    }
+
+    /// Takes the least entry out.
+    fn pop(&mut self) -> Option<(u64, NodeId)> {
+        self.settle();
+        let below = self.below.peek();
+        if self.filed == 0 || below.is_some_and(|item| queue_key(item) < self.floor) {
+            return self.below.pop();
+        }
+        let item = self.buckets[0].pop()?;
+        self.filed -= 1;
+        if self.buckets[0].is_empty() {
+            self.occupied[0] &= !1;
+        }
+        Some(item)
     }
 }
 
@@ -7035,46 +7184,71 @@ mod tests {
         assert_eq!(report.signals, 1);
     }
 
-    /// **The four-way queue pops what `std`'s binary heap pops**, in the
-    /// same order, over a long random run of pushes and pops with many
-    /// equal estimates and repeated entries — which is what makes swapping
-    /// one for the other leave every routing as it was.
+    /// **The queue pops what `std`'s binary heap pops**, in the same order,
+    /// over a long random run of pushes and pops with many equal estimates
+    /// and repeated entries — which is what makes swapping one for the other
+    /// leave every routing as it was. The estimates are drawn from a few
+    /// values and, for a second run, from values spread over most of a `u64`,
+    /// half of them below the last entry popped, so that the radix part files
+    /// entries in buckets far apart and the heap beside it holds many. The
+    /// four-way [`Heap`] alone is held to the same.
     ///
     /// Would catch a sift that compares the wrong child, stops a level
-    /// early or loses an entry, any of which changes what a search expands
-    /// next. Would not catch a slower queue.
+    /// early or loses an entry, a bucket filed against the wrong floor, or a
+    /// pop that looked at one part only, any of which changes what a search
+    /// expands next. Would not catch a slower queue.
     #[test]
-    fn the_four_way_queue_pops_what_the_binary_heap_pops() {
+    fn the_queue_pops_what_the_binary_heap_pops() {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
-        let mut rng = crate::fpga::place::Rng::new(7);
-        let mut ours = Queue::default();
-        let mut theirs: BinaryHeap<Reverse<(u64, NodeId)>> = BinaryHeap::new();
-        let mut popped = 0;
-        for round in 0..200_000 {
-            if rng.below(5) < 3 {
-                // Few distinct estimates, so ties on the estimate are
-                // common and the node decides; and some entries twice.
-                let item = (
-                    u64::try_from(rng.below(50)).unwrap(),
-                    NodeId::try_from(rng.below(400)).unwrap(),
-                );
-                ours.push(item);
-                theirs.push(Reverse(item));
-            } else {
-                let mine = ours.pop();
-                assert_eq!(mine, theirs.pop().map(|Reverse(item)| item), "pop {round}");
-                popped += usize::from(mine.is_some());
+        for wide in [false, true] {
+            let mut rng = crate::fpga::place::Rng::new(7);
+            let mut ours = Queue::default();
+            let mut heap = Heap::default();
+            let mut theirs: BinaryHeap<Reverse<(u64, NodeId)>> = BinaryHeap::new();
+            let mut popped = 0;
+            let mut last = 0u64;
+            for round in 0..200_000 {
+                if rng.below(5) < 3 {
+                    // Few distinct estimates, so ties on the estimate are
+                    // common and the node decides; and some entries twice.
+                    let estimate = if wide {
+                        let spread = u64::try_from(rng.below(1 << 30)).unwrap() << rng.below(33);
+                        if rng.below(2) == 0 {
+                            last - spread % last.saturating_add(1)
+                        } else {
+                            last.saturating_add(spread)
+                        }
+                    } else {
+                        u64::try_from(rng.below(50)).unwrap()
+                    };
+                    let item = (estimate, NodeId::try_from(rng.below(400)).unwrap());
+                    ours.push(item);
+                    heap.push(item);
+                    theirs.push(Reverse(item));
+                } else {
+                    let mine = ours.pop();
+                    let expected = theirs.pop().map(|Reverse(item)| item);
+                    assert_eq!(mine, expected, "pop {round}");
+                    assert_eq!(heap.pop(), expected, "heap pop {round}");
+                    if let Some((estimate, _)) = mine {
+                        last = estimate;
+                    }
+                    popped += usize::from(mine.is_some());
+                }
+                if round % 50_000 == 0 {
+                    ours.clear();
+                    heap.clear();
+                    theirs.clear();
+                }
             }
-            if round % 50_000 == 0 {
-                ours.clear();
-                theirs.clear();
+            while let Some(Reverse(item)) = theirs.pop() {
+                assert_eq!(ours.pop(), Some(item));
+                assert_eq!(heap.pop(), Some(item));
             }
+            assert_eq!(ours.pop(), None);
+            assert_eq!(heap.pop(), None);
+            assert!(popped > 50_000, "{popped} pops");
         }
-        while let Some(Reverse(item)) = theirs.pop() {
-            assert_eq!(ours.pop(), Some(item));
-        }
-        assert_eq!(ours.pop(), None);
-        assert!(popped > 50_000, "{popped} pops");
     }
 }
