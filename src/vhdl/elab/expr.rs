@@ -238,12 +238,15 @@ impl<'a> Lowerer<'a, '_> {
                 Some(Logic::from_i64(i, layout.width).with_signed(true))
             }
             LayoutKind::Array(arr) => {
-                let av = v.as_array()?;
-                if av.elems.len() != usize::try_from(arr.len).ok()? {
+                // A multi-dimensional value nests one array per dimension;
+                // its elements in row-major order are the flat ones.
+                let mut flat = Vec::new();
+                flatten(v, arr.dims.len().max(1), &mut flat)?;
+                if flat.len() != usize::try_from(arr.len).ok()? {
                     return None;
                 }
-                let mut parts = Vec::with_capacity(av.elems.len());
-                for e in &av.elems {
+                let mut parts = Vec::with_capacity(flat.len());
+                for e in flat {
                     parts.push(self.const_of(e, &arr.elem)?);
                 }
                 Some(Logic::concat_all(parts.iter()))
@@ -382,6 +385,7 @@ impl<'a> Lowerer<'a, '_> {
                 left: i64::try_from(av.left).ok()?,
                 dir: av.dir,
                 len,
+                dims: Vec::new(),
             })),
         })
     }
@@ -409,6 +413,7 @@ impl<'a> Lowerer<'a, '_> {
                 left,
                 dir,
                 len: width / ew,
+                dims: Vec::new(),
             })),
             ..result.clone()
         }
@@ -627,6 +632,107 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
+    /// The flat element offset of `m(i, j, ...)` in a multi-dimensional
+    /// array, a constant when every index is static.
+    fn flat_index(
+        &mut self,
+        indices: &[&'a ast::Expr],
+        arr: &ArrayLayout,
+        span: Span,
+        sink: &mut Sink<'_>,
+    ) -> Option<FlatIndex> {
+        let statics: Option<Vec<i64>> = indices
+            .iter()
+            .map(|e| self.eval_int(e).and_then(|i| i64::try_from(i).ok()))
+            .collect();
+        if let Some(values) = statics {
+            let Some(off) = arr.flat_offset(&values) else {
+                self.error(codes::TYPE, span, "an index is out of range");
+                return None;
+            };
+            return Some(FlatIndex::Static(off));
+        }
+        let mut acc: Option<ExprId> = None;
+        for (k, e) in indices.iter().enumerate() {
+            let (left, dir, _) = *arr.dims.get(k)?;
+            let (id, l) = self.build(e, None, sink)?;
+            let id = self.widen(id, 32, l.signed || matches!(l.kind, LayoutKind::Int));
+            self.b.span = e.span();
+            let left = self.b.constant(Logic::from_i64(left, 32).with_signed(true));
+            let o = match dir {
+                Direction::To => self.b.binary(BinaryOp::Sub, id, left),
+                Direction::Downto => self.b.binary(BinaryOp::Sub, left, id),
+            };
+            let stride = i64::from(arr.stride(k));
+            let o = if stride == 1 {
+                o
+            } else {
+                let s = self
+                    .b
+                    .constant(Logic::from_i64(stride, 32).with_signed(true));
+                self.b.binary(BinaryOp::Mul, o, s)
+            };
+            acc = Some(match acc {
+                Some(a) => self.b.binary(BinaryOp::Add, a, o),
+                None => o,
+            });
+        }
+        acc.map(FlatIndex::Dynamic)
+    }
+
+    /// The bit offset of the element at flat offset `o` of a wide vector:
+    /// the leftmost element is in the most significant bits.
+    fn flat_bit_offset(&mut self, o: ExprId, arr: &ArrayLayout) -> ExprId {
+        let last = self
+            .b
+            .constant(Logic::from_i64(i64::from(arr.len) - 1, 32).with_signed(true));
+        let from_right = self.b.binary(BinaryOp::Sub, last, o);
+        let ew = arr.elem.width;
+        if ew == 1 {
+            return from_right;
+        }
+        let w = self
+            .b
+            .constant(Logic::from_i64(i64::from(ew), 32).with_signed(true));
+        self.b.binary(BinaryOp::Mul, from_right, w)
+    }
+
+    /// `m(i, j)` read from a multi-dimensional array.
+    fn multi_index_expr(
+        &mut self,
+        prefix: &'a ast::Name,
+        indices: &[&'a ast::Expr],
+        span: Span,
+        sink: &mut Sink<'_>,
+    ) -> Option<(ExprId, Layout)> {
+        if let Some(d) = self.a().decl_of(prefix.span())
+            && let Some(Binding::Mem { mem, layout }) = self.lookup(d).cloned()
+        {
+            let arr = layout.array()?.clone();
+            let addr = match self.flat_index(indices, &arr, span, sink)? {
+                FlatIndex::Static(o) => self.b.constant(Logic::from_u64(u64::from(o), 32)),
+                FlatIndex::Dynamic(e) => e,
+            };
+            self.b.span = span;
+            return Some((self.b.mem_read(mem, addr), arr.elem.clone()));
+        }
+        let (base, layout) = self.name_expr(prefix, None, sink)?;
+        let arr = layout.array()?.clone();
+        match self.flat_index(indices, &arr, span, sink)? {
+            FlatIndex::Static(o) => {
+                let (hi, lo) = arr.bits_of(i64::from(o))?;
+                self.b.span = span;
+                Some((self.slice_bits(base, hi, lo), arr.elem.clone()))
+            }
+            FlatIndex::Dynamic(o) => {
+                let off = self.flat_bit_offset(o, &arr);
+                self.b.span = span;
+                let id = self.b.indexed_slice(base, off, arr.elem.width, true);
+                Some((id, arr.elem.clone()))
+            }
+        }
+    }
+
     fn index_expr(
         &mut self,
         prefix: &'a ast::Name,
@@ -634,6 +740,10 @@ impl<'a> Lowerer<'a, '_> {
         span: Span,
         sink: &mut Sink<'_>,
     ) -> Option<(ExprId, Layout)> {
+        let indices = positional_exprs(args);
+        if indices.len() > 1 {
+            return self.multi_index_expr(prefix, &indices, span, sink);
+        }
         let idx = first_expr(args)?;
         // A memory is read through `MemRead`, everything else is a bit
         // select of a wide vector.
@@ -765,7 +875,7 @@ impl<'a> Lowerer<'a, '_> {
     /// as an assignment target that writes each of them (`ia := (others =>
     /// 7)`, `w(0 to 1) <= w(2 to 3)`; "a whole memory cannot be assigned
     /// at once").
-    fn mem_elements_target(
+    pub(crate) fn mem_elements_target(
         &mut self,
         mem: crate::ir::MemoryId,
         layout: &Layout,
@@ -812,6 +922,7 @@ impl<'a> Lowerer<'a, '_> {
                 left: arr.index_at(first),
                 dir: arr.dir,
                 len: count,
+                dims: Vec::new(),
             })),
             ..layout.clone()
         }
@@ -915,6 +1026,7 @@ impl<'a> Lowerer<'a, '_> {
                 left,
                 dir,
                 len: width / ew,
+                dims: Vec::new(),
             })),
             ..base.clone()
         }
@@ -1056,7 +1168,107 @@ impl<'a> Lowerer<'a, '_> {
             );
             return None;
         };
+        if !arr.dims.is_empty() {
+            let parts = self.multi_aggregate_parts(ag, &arr, 0, sink)?;
+            self.b.span = ag.span;
+            return Some((self.concat_parts(parts), layout));
+        }
         self.array_aggregate(ag, &layout, &arr, sink)
+    }
+
+    /// The elements, in row-major order, of an aggregate for dimension
+    /// `k` of a multi-dimensional array: each element of it is an
+    /// aggregate for the next dimension, and the last dimension's are
+    /// element values (LRM 9.3.3.3).
+    fn multi_aggregate_parts(
+        &mut self,
+        ag: &'a ast::Aggregate,
+        arr: &ArrayLayout,
+        k: usize,
+        sink: &mut Sink<'_>,
+    ) -> Option<Vec<ExprId>> {
+        let (left, dir, len) = *arr.dims.get(k)?;
+        let last = k + 1 == arr.dims.len();
+        let n = usize::try_from(len).ok()?;
+        let mut slots: Vec<Option<&'a ast::Expr>> = vec![None; n];
+        let mut others: Option<&'a ast::Expr> = None;
+        let offset = |i: i64| -> Option<usize> {
+            let o = match dir {
+                Direction::To => i.checked_sub(left)?,
+                Direction::Downto => left.checked_sub(i)?,
+            };
+            usize::try_from(o).ok().filter(|o| *o < n)
+        };
+        let mut positional = 0usize;
+        for el in &ag.elements {
+            if el.choices.is_empty() {
+                if positional < n {
+                    slots[positional] = Some(&el.value);
+                }
+                positional += 1;
+                continue;
+            }
+            for c in &el.choices {
+                match c {
+                    ast::Choice::Others(_) => others = Some(&el.value),
+                    ast::Choice::Expr(e) => {
+                        let i = self.eval_int(e).and_then(|i| i64::try_from(i).ok());
+                        match i.and_then(offset) {
+                            Some(o) => slots[o] = Some(&el.value),
+                            None => {
+                                self.error(
+                                    codes::NOT_STATIC,
+                                    e.span(),
+                                    "this choice is not a static index",
+                                );
+                                return None;
+                            }
+                        }
+                    }
+                    ast::Choice::Range(r) => {
+                        let (l, rr) = self.static_range(r)?;
+                        let (lo, hi) = if l <= rr { (l, rr) } else { (rr, l) };
+                        for i in lo..=hi {
+                            if let Some(o) = offset(i) {
+                                slots[o] = Some(&el.value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let stride = usize::try_from(arr.stride(k)).ok()?;
+        let mut out = Vec::with_capacity(n * stride);
+        for slot in slots {
+            let Some(e) = slot.or(others) else {
+                self.error(
+                    codes::TYPE,
+                    ag.span,
+                    "this aggregate does not give every element a value",
+                );
+                return None;
+            };
+            if last {
+                out.push(self.expr_in(e, &arr.elem, sink));
+                continue;
+            }
+            match e {
+                ast::Expr::Aggregate(inner) => {
+                    out.extend(self.multi_aggregate_parts(inner, arr, k + 1, sink)?);
+                }
+                ast::Expr::Paren { inner, .. } if matches!(**inner, ast::Expr::Aggregate(_)) => {
+                    let ast::Expr::Aggregate(inner) = &**inner else {
+                        return None;
+                    };
+                    out.extend(self.multi_aggregate_parts(inner, arr, k + 1, sink)?);
+                }
+                other => {
+                    self.unsupported(other.span(), "this row of a multi-dimensional aggregate");
+                    return None;
+                }
+            }
+        }
+        Some(out)
     }
 
     fn record_aggregate(
@@ -1880,6 +2092,47 @@ impl<'a> Lowerer<'a, '_> {
         }
     }
 
+    /// `m(i, j)` as an assignment target.
+    fn multi_index_target(
+        &mut self,
+        prefix: &'a ast::Name,
+        indices: &[&'a ast::Expr],
+        span: Span,
+        sink: &mut Sink<'_>,
+    ) -> Option<(Lvalue, Layout)> {
+        if let Some(d) = self.a().decl_of(prefix.span())
+            && let Some(Binding::Mem { mem, layout }) = self.lookup(d).cloned()
+        {
+            let arr = layout.array()?.clone();
+            let addr = match self.flat_index(indices, &arr, span, sink)? {
+                FlatIndex::Static(o) => self.b.constant(Logic::from_u64(u64::from(o), 32)),
+                FlatIndex::Dynamic(e) => e,
+            };
+            return Some((Lvalue::MemElem { mem, addr }, arr.elem.clone()));
+        }
+        let (base, layout) = self.lvalue_name(prefix, sink)?;
+        let arr = layout.array()?.clone();
+        match self.flat_index(indices, &arr, span, sink)? {
+            FlatIndex::Static(o) => {
+                let (hi, lo) = arr.bits_of(i64::from(o))?;
+                let lv = self.narrow_lvalue(base, hi, lo, span)?;
+                Some((lv, arr.elem.clone()))
+            }
+            FlatIndex::Dynamic(o) => {
+                let Lvalue::Net(net) = base else {
+                    self.unsupported(span, "a run-time index into this target");
+                    return None;
+                };
+                if arr.elem.width != 1 {
+                    self.unsupported(span, "a dynamic index into an array of multi-bit elements");
+                    return None;
+                }
+                let index = self.flat_bit_offset(o, &arr);
+                Some((Lvalue::Index { net, index }, arr.elem.clone()))
+            }
+        }
+    }
+
     /// Lowers an assignment target.
     pub(crate) fn lvalue(
         &mut self,
@@ -1980,6 +2233,10 @@ impl<'a> Lowerer<'a, '_> {
                 Some((lv, fl))
             }
             ast::Name::Call { prefix, args, span } => {
+                let indices = positional_exprs(args);
+                if indices.len() > 1 {
+                    return self.multi_index_target(prefix, &indices, *span, sink);
+                }
                 let idx = first_expr(args)?;
                 if let Some(d) = self.a().decl_of(prefix.span())
                     && let Some(Binding::Mem { mem, layout }) = self.lookup(d).cloned()
@@ -2199,6 +2456,37 @@ fn constant_value(a: &crate::vhdl::sema::Analysis, d: DeclId) -> Option<Value> {
         } => a.decl_value(d).cloned(),
         _ => None,
     }
+}
+
+/// The elements of a value nested `depth` arrays deep, in row-major order.
+fn flatten<'v>(v: &'v Value, depth: usize, out: &mut Vec<&'v Value>) -> Option<()> {
+    let av = v.as_array()?;
+    if depth <= 1 {
+        out.extend(av.elems.iter());
+        return Some(());
+    }
+    for e in &av.elems {
+        flatten(e, depth - 1, out)?;
+    }
+    Some(())
+}
+
+/// Where an element of a multi-dimensional array is.
+enum FlatIndex {
+    /// At this flat offset.
+    Static(u32),
+    /// At the flat offset this expression computes.
+    Dynamic(ExprId),
+}
+
+/// The positional expressions of an association list, in order.
+fn positional_exprs(args: &[ast::AssociationElement]) -> Vec<&ast::Expr> {
+    args.iter()
+        .filter_map(|a| match &a.actual {
+            ast::Actual::Expr(e) => Some(e),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The first positional expression of an association list.

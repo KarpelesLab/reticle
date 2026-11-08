@@ -136,6 +136,12 @@ pub(crate) struct ArrayLayout {
     pub dir: Direction,
     /// The number of elements.
     pub len: u32,
+    /// For an array of more than one dimension, each dimension's left
+    /// bound, direction and length, the first dimension first; empty for
+    /// one dimension. Such an array is laid out as one dimension of every
+    /// element in row-major order — the last index varying fastest, as
+    /// its aggregate is written — whose flat index runs `0 to len - 1`.
+    pub dims: Vec<(i64, Direction, u32)>,
 }
 
 impl ArrayLayout {
@@ -403,12 +409,7 @@ fn layout_inner<'a>(
         }
         TypeClass::Array => {
             if a.dimensions(ty) != 1 {
-                env.report(
-                    Diagnostic::error("a multi-dimensional array cannot be lowered yet")
-                        .with_code(codes::UNSUPPORTED)
-                        .with_span(span),
-                );
-                return None;
+                return multi_dimensional(env, ty, span, depth);
             }
             let elem_ty = a.element_type(ty)?;
             let is_text = a
@@ -465,6 +466,7 @@ fn layout_inner<'a>(
                     left,
                     dir: bounds.dir,
                     len,
+                    dims: Vec::new(),
                 })),
                 width,
                 signed,
@@ -479,6 +481,91 @@ fn layout_inner<'a>(
             }
             unsupported(env, "this type")
         }
+    }
+}
+
+/// An array of more than one dimension, flattened: every element in
+/// row-major order, the per-dimension bounds kept in
+/// [`ArrayLayout::dims`] for indexing. (Such an array was "cannot be
+/// lowered yet".)
+fn multi_dimensional<'a>(
+    env: &mut dyn LayoutEnv<'a>,
+    ty: TypeId,
+    span: Span,
+    depth: u32,
+) -> Option<Layout> {
+    let a = env.analysis();
+    let elem_ty = a.element_type(ty)?;
+    let Some(constraint) = a.index_constraint(ty) else {
+        let name = env.analysis().describe_type(ty, None);
+        env.report(
+            Diagnostic::error(format!("`{name}` is unconstrained here"))
+                .with_code(codes::NOT_STATIC)
+                .with_span(span)
+                .with_note("give the object an index constraint so its width is known"),
+        );
+        return None;
+    };
+    let mut dims = Vec::with_capacity(constraint.len());
+    let mut total: u32 = 1;
+    for b in &constraint {
+        let (left, right) = resolve_bounds(env, b, span)?;
+        let len = match b.dir {
+            Direction::To => right - left + 1,
+            Direction::Downto => left - right + 1,
+        };
+        let len = u32::try_from(len.max(0)).unwrap_or(0);
+        total = total.saturating_mul(len);
+        dims.push((i64::try_from(left).unwrap_or(0), b.dir, len));
+    }
+    let elem = layout_inner(env, elem_ty, span, depth + 1)?;
+    if !elem.is_bits() {
+        env.report(
+            Diagnostic::error("an array of `real` or `string` has no representation in the IR")
+                .with_code(codes::TYPE)
+                .with_span(span),
+        );
+        return None;
+    }
+    Some(Layout {
+        ty,
+        width: elem.width.saturating_mul(total),
+        signed: false,
+        kind: LayoutKind::Array(Box::new(ArrayLayout {
+            elem,
+            left: 0,
+            dir: Direction::To,
+            len: total,
+            dims,
+        })),
+    })
+}
+
+impl ArrayLayout {
+    /// The flat offset of a multi-dimensional index, each index given as
+    /// its value: `None` when one is outside its dimension.
+    pub(crate) fn flat_offset(&self, indices: &[i64]) -> Option<u32> {
+        if indices.len() != self.dims.len() {
+            return None;
+        }
+        let mut off: u32 = 0;
+        for (&i, &(left, dir, len)) in indices.iter().zip(&self.dims) {
+            let o = match dir {
+                Direction::To => i.checked_sub(left)?,
+                Direction::Downto => left.checked_sub(i)?,
+            };
+            let o = u32::try_from(o).ok().filter(|o| *o < len)?;
+            off = off.checked_mul(len)?.checked_add(o)?;
+        }
+        Some(off)
+    }
+
+    /// How many flat elements one step of dimension `k` moves.
+    pub(crate) fn stride(&self, k: usize) -> u32 {
+        self.dims
+            .iter()
+            .skip(k + 1)
+            .fold(1u32, |acc, (_, _, len)| acc.saturating_mul(*len))
     }
 }
 
@@ -549,6 +636,7 @@ mod tests {
             left: 7,
             dir: Direction::Downto,
             len: 8,
+            dims: Vec::new(),
         };
         assert_eq!(a.offset(7), Some(0));
         assert_eq!(a.offset(0), Some(7));

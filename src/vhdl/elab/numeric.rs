@@ -771,6 +771,7 @@ impl<'a> Lowerer<'a, '_> {
                 left: i64::from(width).saturating_sub(1),
                 dir: ast::Direction::Downto,
                 len: width,
+                dims: Vec::new(),
             })),
             width,
             signed: call.signed,

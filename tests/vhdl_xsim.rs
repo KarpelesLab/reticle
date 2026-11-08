@@ -278,3 +278,20 @@ fn numeric_std_unsigned_matches_xsim() {
 fn unknown_compare_matches_xsim() {
     matches_xsim("unknown_compare");
 }
+
+/// **Arrays of two dimensions**: of integers and of `std_logic`, indexed
+/// upwards and downwards, read and written at static and run-time
+/// indices, initialised by nested aggregates (a constant, a variable and a
+/// signal), and their `'length(n)` and `'high(n)`. They were "a
+/// multi-dimensional array cannot be lowered yet", and the analyser
+/// checked every index against the first dimension.
+///
+/// Would catch a column-major layout, a dimension's direction ignored, and
+/// an initial value that is not applied (one that did not fold was dropped
+/// without a word). Would not catch a string literal as a row of an array
+/// of characters, which the analyser refuses; nor more than two
+/// dimensions, which are laid out the same way but are not here.
+#[test]
+fn two_dimensions_match_xsim() {
+    matches_xsim("two_dimensions");
+}

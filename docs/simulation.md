@@ -706,6 +706,15 @@ state machines from, so nothing synthesis builds changes. That leaves one
 known difference: `v /= "1000"` with `v` holding an unknown is true in VHDL
 and false here.
 
+**Arrays of more than one dimension** (`two_dimensions_tb.vhd`) are laid out
+as one dimension of every element in row-major order, the last index
+varying fastest as the aggregate is written, with each dimension's bounds
+kept for indexing; `m(i, j)` is the element at `i * columns + j`
+(counting each index from its dimension's left bound). They were "cannot be
+lowered yet". An array of wide elements whose initial value does not fold
+is now assigned it when the run starts; it was dropped without a
+diagnostic.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

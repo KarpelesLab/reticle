@@ -1013,9 +1013,9 @@ impl<'a> Lowerer<'a, '_> {
         self.in_subprogram += 1;
         let saved_inits = std::mem::take(&mut self.pending_inits);
         self.declarations(&def.decls);
-        for (net, value, ispan) in std::mem::take(&mut self.pending_inits) {
+        for (target, value, ispan) in std::mem::take(&mut self.pending_inits) {
             out.span = ispan;
-            out.assign(Lvalue::Net(net), value, AssignKind::Blocking);
+            out.assign(target, value, AssignKind::Blocking);
         }
         self.pending_inits = saved_inits;
         self.in_subprogram -= 1;

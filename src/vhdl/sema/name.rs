@@ -697,12 +697,12 @@ impl Checker<'_> {
             return Prefix::Error;
         }
         let mut static_idx = Vec::new();
-        for (arg, idx_ty) in args.iter().zip(&indices) {
+        for (dim, (arg, idx_ty)) in args.iter().zip(&indices).enumerate() {
             match &arg.actual {
                 Actual::Expr(e) => {
                     if mode == Mode::Commit {
                         self.resolve(e, *idx_ty);
-                        self.check_index_bounds(ty, e, *idx_ty, span);
+                        self.check_index_bounds(ty, e, *idx_ty, dim);
                         static_idx.push(self.a.value_of(e.span()).cloned());
                     }
                 }
@@ -792,14 +792,17 @@ impl Checker<'_> {
     }
 
     /// Reports a static index outside a static index range.
-    fn check_index_bounds(&mut self, array: TypeId, e: &Expr, idx_ty: TypeId, _span: Span) {
+    /// Checks a static index against dimension `dim` of the array's
+    /// constraint. (Every index was checked against the first dimension,
+    /// so `m(1, 3)` of an array `(0 to 1, 0 to 3)` was out of range.)
+    fn check_index_bounds(&mut self, array: TypeId, e: &Expr, idx_ty: TypeId, dim: usize) {
         let Some(v) = self.a.value_of(e.span()).and_then(|v| v.as_int()) else {
             return;
         };
         let Some(c) = self
             .a
             .index_constraint(array)
-            .and_then(|c| c.first().cloned())
+            .and_then(|c| c.get(dim).cloned())
         else {
             return;
         };

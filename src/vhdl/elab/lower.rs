@@ -184,7 +184,7 @@ pub(crate) struct Lowerer<'a, 'e> {
     /// are re-initialised on entry rather than once at time zero.
     pub in_subprogram: u32,
     /// Variable initialisers waiting to be emitted into the inlined body.
-    pub pending_inits: Vec<(NetId, crate::ir::ExprId, Span)>,
+    pub pending_inits: Vec<(Lvalue, crate::ir::ExprId, Span)>,
     /// Interpreted calls currently on the stack (see [`super::interp`]).
     pub interp_depth: usize,
     /// Statements the interpretation of the outermost static call has
@@ -857,11 +857,15 @@ impl<'a, 'e> Lowerer<'a, 'e> {
                 return;
             };
             self.apply_attributes(d, AttrTarget::Memory(mem));
-            if let Some(init) = &o.init
-                && let Some(v) = self.eval(init)
-                && let Some(consts) = self.memory_init(&v, &layout)
-            {
-                self.b.module_mut().memories[mem].init = Some(consts);
+            if let Some(init) = &o.init {
+                match self.eval(init).and_then(|v| self.memory_init(&v, &layout)) {
+                    Some(consts) => self.b.module_mut().memories[mem].init = Some(consts),
+                    // An initial value that does not fold — a
+                    // multi-dimensional aggregate, one built of other
+                    // objects — is assigned to every element when the run
+                    // starts. It used to be dropped without a word.
+                    None => self.memory_initial_process(mem, &layout, init, span),
+                }
             }
             self.bind(d, Binding::Mem { mem, layout });
             return;
@@ -874,6 +878,39 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         if let Some(init) = &o.init {
             self.initial_value(net, init, span);
         }
+    }
+
+    /// Assigns a memory its initial value from an `initial` process.
+    fn memory_initial_process(
+        &mut self,
+        mem: MemoryId,
+        layout: &Layout,
+        init: &'a ast::Expr,
+        span: Span,
+    ) {
+        let Some(arr) = layout.array().cloned() else {
+            return;
+        };
+        let Some((target, _)) = self.mem_elements_target(mem, layout, &arr, 0, arr.len, span)
+        else {
+            return;
+        };
+        if self.in_subprogram > 0 {
+            // A subprogram's variable is initialised on every call.
+            let value = self.expr_in(init, layout, &mut Sink::Cont);
+            self.pending_inits.push((target, value, span));
+            return;
+        }
+        let outer = self.driver;
+        self.driver = DriverKey::Initial;
+        self.b.span = span;
+        let mut p = self.b.process(None, ProcessKind::Initial);
+        p.span = span;
+        let value = self.expr_in(init, layout, &mut Sink::Proc(&mut p));
+        p.span = span;
+        p.blocking(target, value);
+        self.b.end_process(p);
+        self.driver = outer;
     }
 
     /// The initial contents of a memory, if the initialiser folds.
@@ -903,7 +940,7 @@ impl<'a, 'e> Lowerer<'a, 'e> {
         if self.in_subprogram > 0 {
             // A subprogram's variables are elaborated afresh on every
             // call, so the initialiser belongs at the top of the body.
-            self.pending_inits.push((net, value, span));
+            self.pending_inits.push((Lvalue::Net(net), value, span));
             self.driver = outer;
             return;
         }
