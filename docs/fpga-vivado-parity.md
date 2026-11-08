@@ -45,7 +45,10 @@ the exception to that.
 `src/fpga/devices/xc7_sim.v` holds models of the hard blocks for a simulator alone:
 `reticle sim --device <7-series part>` takes from it, after `xc7_cells.v`, a module a
 design names and declares nothing of, and a build never reads it, so a `RAMB18E1` a
-design names is still the block in a bitstream. `docs/simulation.md` says how to use it.
+design names is still the block in a bitstream. `docs/simulation.md` says how to use it. It
+has the lookup tables as well, in place of `xc7_cells.v`'s for a simulator, because
+xsim's resolve an unknown input their function ignores and the language's `INIT[index]`
+does not (`docs/simulation.md`, *Vendor cells*).
 
 **Checked:** each testbench in `testdata/sim/xc7/` prints under Reticle's simulator what
 it printed under `xsim` with Vivado's `unisims_ver`, `secureip` and `glbl`, byte for
@@ -66,6 +69,9 @@ byte (`tests/sim_xc7_primitives.rs`; `tools/vivado-parity/gen_sim_xc7.sh` asks `
 | `clock_managers` | `PLLE2_ADV`, `MMCME2_ADV` and both `_BASE`s: first edges, lock, period, high time and phase of every output, and a second reset |
 | `dsp48e1_global_reset` | the `DSP48E1` model that was `testdata/fpga/vivado/dsp/dsp48e1_model.v`, through the global reset; the 52 settings of `dsp/vectors/` still hold it otherwise |
 | `io_buffers` | every input, output, tristate, bidirectional and differential buffer the ledger builds, the disables, `PULLUP` and `PULLDOWN` |
+| `ramb18e1_byte_write` | the `RAMB18E1` Vivado made of the language corpus's byte-enabled memory (`v_ram_b`), as Vivado tied it, through the global reset and after |
+| `dsp48e1_preadd` | the `DSP48E1` Vivado made of `vh_pipeline`'s `(a + b) * a`: pre-adder on, `INMODE = 5'b00100`, `BREG = 2`, no `MREG`, as Vivado tied it, through the global reset and after |
+| `lut_unknown_inputs` | `LUT1` to `LUT6`, their `_L` and `_D` forms and `LUT6_2` with unknown and floating inputs, and a `LUT6_2` whose `O5` reaches its own `I1` |
 
 What the first runs found, each a model written from the documentation and wrong:
 xsim holds every block at its initial value for 100 ns (`glbl`'s global reset) and
@@ -5769,6 +5775,24 @@ test. The answers below are what those runs printed.
   is why "every bit decodes" and the router's own account, not a netlist
   simulation, are the checks that see this. Not fixed here: it is the
   packer's and the router's, which other work owns.
+
+  **Fixed since (2026-11-08), in both halves.** The build of a design that
+  is not fully routed now fails: `reticle fpga` still writes the bitstream,
+  as it always did, for `--decode` and the report to read, and then exits 1
+  with "error: the design is NOT FULLY ROUTED", where it had been a warning
+  on a build that exited 0. The cause was neither the router nor the
+  placer: a lane's sum and its carry out leave a slice by the same `<L>MUX`,
+  and the mapper takes the top bit of `{0, a} + {0, b}` off the last lane's
+  carry out, beside the top sum, so a design reading both (`gadd`'s second
+  adder, `+ c`) asks for one wire twice. What Vivado writes for that was
+  measured (`docs/fpga-xray.md`, the carry chain section): the carry out off
+  the lane above, a pass-through, and at a multiple of four bits a `CARRY4`
+  of its own. `xray::legalise_carries` now does the same. Built again, all
+  nineteen route, every bit of every bitstream decodes, and each of the four
+  has one `CARRY4` and one lookup table more than the table below says
+  (sv_pkg_alu_b 7, `gadd` 10 and 14, `pipe` 3). Under xsim each of their
+  routed netlists still computes what its source does (**measured**, the
+  same testbenches, `GSR` released at once).
 - **Vivado's netlists under Reticle's simulator** compute what the source
   computes for the Verilog and SystemVerilog designs but one: `v_ram_b`,
   where Vivado put the byte-write memory in a `RAMB18E1` and Reticle's model
@@ -5778,9 +5802,36 @@ test. The answers below are what those runs printed.
   are the vendor-cell models', not the language's. The VHDL testbenches
   were not run this way, since Reticle's simulator does not mix a VHDL
   testbench with a Verilog netlist.
+
+  **That reading was wrong, and neither model was.** Reticle's hard-block
+  models hold the global reset for the first 100 ns, as xsim's standard
+  `glbl` does, and both testbenches did their work inside it (the
+  `vh_pipeline` one, a Verilog transcription, finishes at 80 ns); the xsim
+  runs they were held to had `GSR` released at once. Under xsim with the
+  standard `glbl`, Vivado's `v_ram_b` netlist printed exactly the four
+  wrong words Reticle's simulator did. Both configurations, as Vivado wrote
+  them, are now testbenches in `testdata/sim/xc7/` (`ramb18e1_byte_write.v`,
+  `dsp48e1_preadd.v`), driven through the first 100 ns and after, and
+  Reticle prints what xsim with Vivado's `unisims_ver` and `glbl` prints, byte
+  for byte; the two corpus testbenches started after 120 ns print what the
+  source does under Reticle's simulator (**measured**, 2026-11-08). What is
+  left is that Reticle's slice cells do not hold the reset at all
+  (`docs/simulation.md`, *Vendor cells*).
 - **Reticle's simulator on Reticle's own routed netlist** gave all `x` for
   `v_alu`: two lookup tables of one site form a structural loop the
   simulator does not settle. xsim runs the same netlist correctly.
+
+  **Fixed since (2026-11-08); the loop was false.** It is one `LUT6_2`, not
+  two tables: `O5` is bit 7's propagate, `a[7] ^ b[7]` on `I0` and `I3`, it
+  feeds the `CARRY4` lane whose sum `O[3]` comes back on `I1` for `O6`, and
+  `O5`'s truth table (`0x55aa55aa`) does not read `I1`. Nothing loops in the
+  silicon. The cell library writes a table as `INIT[index]`, and an index
+  with an unknown bit reads `x` by the language's rule, so `O5` never left
+  `x`. xsim's tables answer what every entry an unknown index could name
+  agrees on; the simulation library now has tables that do the same
+  (`docs/simulation.md`, *Vendor cells*), held to xsim by
+  `testdata/sim/xc7/lut_unknown_inputs.v`, and the netlist prints what the
+  source does.
 - With xsim's standard `glbl`, which holds the global set/reset for the
   first 100 ns, both tools' netlists lose what the testbenches drive before
   then; every comparison above holds `GSR` released from the start
@@ -5804,13 +5855,13 @@ sites; Vivado's are its `LUT1`–`LUT6` cells):
 | `sv_counter_gen/up_counter` | 6 / 3 | 4 / 4 | 1 / 0 |  | yes |
 | `sv_fifo_b/fifo` | 20 / 16 | 10 / 10 | 1 / 0 | Reticle 2 `RAM32X1D` and 1 `RAM32M`; Vivado 10 `RAMD32`, 2 `RAMS32` | yes |
 | `sv_fsm/seq_detect` | 5 / 5 | 3 / 7 | 0 / 0 |  | yes |
-| `sv_pkg_alu_b/alu` | 74 / 40 | 10 / 10 | 6 / 7 | Vivado 8 `MUXF7` | no |
+| `sv_pkg_alu_b/alu` | 74 / 40 | 10 / 10 | 6 / 7 | Vivado 8 `MUXF7` | no (yes since, with one `CARRY4` more) |
 | `sv_struct_pipe_b/pipe` | 3 / 1 | 51 / 50 | 6 / 3 |  | yes |
-| `vh_adder/gadd_w8` (built again) | 11 / 9 | 10 / 10 | 9 / 3 |  | no |
-| `vh_adder/gadd_w12` (built again) | 15 / 13 | 14 / 14 | 13 / 4 |  | no |
+| `vh_adder/gadd_w8` (built again) | 11 / 9 | 10 / 10 | 9 / 3 |  | no (yes since, with one `CARRY4` more) |
+| `vh_adder/gadd_w12` (built again) | 15 / 13 | 14 / 14 | 13 / 4 |  | no (yes since, with one `CARRY4` more) |
 | `vh_counter_b/counter` | 6 / 3 | 5 / 5 | 1 / 0 |  | yes |
 | `vh_fsm/seqdet` | 4 / 2 | 3 / 3 | 0 / 0 |  | yes |
-| `vh_pipeline/pipe` | 165 / 0 | 77 / 3 | 2 / 0 | Vivado 1 `DSP48E1` | no |
+| `vh_pipeline/pipe` | 165 / 0 | 77 / 3 | 2 / 0 | Vivado 1 `DSP48E1` | no (yes since, with one `CARRY4` more) |
 | `vh_ram/ram` | 1 / 6 | 8 / 8 | 0 / 0 | Reticle 2 `RAM32X1D` and 1 `RAM32M`; Vivado 10 `RAMD32`, 2 `RAMS32` | yes |
 
 Read off the table, not measured further: Reticle builds a counter's

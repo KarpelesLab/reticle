@@ -160,6 +160,24 @@ one clock, `DSP48E1`, the global and regional clock buffers, `PLLE2_*`,
 module of the same name always wins. Without `--device` such an instance is
 refused, as above.
 
+The lookup tables (`LUT1` to `LUT6`, their `_L` and `_D` forms and
+`LUT6_2`) are in both files, and a simulation takes `xc7_sim.v`'s. The cell
+library writes a table as `INIT[index]`, which is what a build maps, and an
+index with an unknown bit reads `x` by the language's rule. xsim's tables
+answer the value every entry such an index could name agrees on, and `x`
+only when they differ; `testdata/sim/xc7/lut_unknown_inputs.v` holds the
+models to what xsim printed. That was found on a routed netlist
+(*The language corpus, synthesised by both*, in `docs/fpga-vivado-parity.md`):
+Reticle's own build of the corpus's `v_alu` gave all `x` under Reticle's
+simulator and ran correctly under xsim. The netlist has no combinational
+loop, but it has a structural one: a `LUT6_2` whose `O5` is a propagate,
+`a[7] ^ b[7]`, on `I0` and `I3`, and whose `O6` reads that propagate's sum,
+`O[3]` of the `CARRY4` it feeds, on `I1`. `O5`'s truth table does not
+depend on `I1`, so the silicon and xsim settle; under the language's rule
+`O5` read `x` because `I1` was, `I1` was `x` because `O5` was, and no event
+ever came to break it. With the models that resolve an unknown index, the
+same netlist prints what the source does.
+
 Each model was written from the user guides and then held to what
 `xsim` prints with Vivado's own models for a testbench written here, byte
 for byte; `testdata/sim/xc7/` has those testbenches and answers, and
@@ -170,6 +188,21 @@ shares, because `xsim` has it: for the first 100 ns, `glbl`'s global
 reset holds each block at its initial value and ignores its clocks, so a
 testbench that clocks a block from time zero sees nothing happen until
 then. The slice cells do not model it.
+
+That difference was once read as two models being wrong. A comparison of
+Vivado's netlists of the language corpus under Reticle's simulator found a
+`RAMB18E1` reading zeros (`v_ram_b`, a memory with a byte enable per byte)
+and a `DSP48E1` giving 0 with its pre-adder on (`vh_pipeline`); the xsim
+runs it was held to released the global reset at time zero, and those two
+testbenches did their work in the first 100 ns. Both configurations, as
+Vivado wrote them, are now testbenches in `testdata/sim/xc7/`
+(`ramb18e1_byte_write.v`, `dsp48e1_preadd.v`), each working through the
+first 100 ns and after it, and Reticle prints what xsim prints with
+Vivado's `glbl`, byte for byte: nothing inside the reset, the right words
+and products after it (**measured**). Started after 120 ns, the two corpus
+testbenches print what their sources do. Neither model was changed. What
+remains is the line above: in the same netlists the flip-flops run from
+time zero, where xsim holds them too.
 
 ## Driving a simulation from Rust
 
