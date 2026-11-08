@@ -98,6 +98,17 @@ pub const WEAK_ATTR: &str = "weak";
 /// a net to one driver as any other.
 pub const WIRED_ATTR: &str = "wired";
 
+/// On a continuous assignment with a delay: its fall delay in femtoseconds,
+/// `assign #(1, 3)`'s `3`, used when the value it goes to has `0` in its
+/// least significant bit; the assignment's own delay is then its rise
+/// delay. Only a simulator reads it.
+pub const FALL_DELAY_ATTR: &str = "fall_delay";
+
+/// On a continuous assignment with a delay: its turn-off delay in
+/// femtoseconds, used when the value it goes to has `z` in its least
+/// significant bit. Only a simulator reads it.
+pub const TURNOFF_DELAY_ATTR: &str = "turnoff_delay";
+
 /// The attributes only a simulator reads; see [`Attrs::without_simulation`].
 pub const SIMULATION_ATTRS: &[&str] = &[
     TWO_STATE_ATTR,
@@ -106,6 +117,8 @@ pub const SIMULATION_ATTRS: &[&str] = &[
     FINAL_ATTR,
     WEAK_ATTR,
     WIRED_ATTR,
+    FALL_DELAY_ATTR,
+    TURNOFF_DELAY_ATTR,
 ];
 
 /// On an `Initial` process: a SystemVerilog `final` block, which a

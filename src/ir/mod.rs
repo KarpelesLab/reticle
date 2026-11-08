@@ -102,8 +102,9 @@ pub mod walk;
 
 pub use arena::{Arena, Id};
 pub use attr::{
-    AttrValue, Attrs, FINAL_ATTR, INITIALISER_ATTR, KEEP_ATTRS, KEEP_LOOKALIKES, TWO_STATE_ATTR,
-    WAITS_FIRST_ATTR, WEAK_ATTR, WIRED_ATTR, is_keep_attr, looks_like_keep,
+    AttrValue, Attrs, FALL_DELAY_ATTR, FINAL_ATTR, INITIALISER_ATTR, KEEP_ATTRS, KEEP_LOOKALIKES,
+    TURNOFF_DELAY_ATTR, TWO_STATE_ATTR, WAITS_FIRST_ATTR, WEAK_ATTR, WIRED_ATTR, is_keep_attr,
+    looks_like_keep,
 };
 pub use cell::{Cell, CellId, CellKind, Reset};
 pub use design::{

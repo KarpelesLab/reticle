@@ -64,7 +64,7 @@ pub(crate) enum Timed {
     Wake(ProcId, u32),
     /// A non-blocking assignment whose delay elapsed.
     Nba(Vec<Store>, Logic),
-    /// A driver update whose transport delay elapsed.
+    /// A driver update whose delay elapsed.
     Driver(DriverId, Logic, Vec<Store>),
 }
 
@@ -404,16 +404,26 @@ impl<'d> Simulator<'d> {
         }
         let waiters = std::mem::take(&mut self.sig_waiters[sig.idx()]);
         let mut keep = Vec::new();
+        let mut woken = Vec::new();
         for (pid, generation) in waiters {
             let p = &self.procs[pid.idx()];
             if p.wait_gen != generation || !p.status.is_waiting() {
                 continue;
             }
             if p.wait_matches(sig, old, new) {
-                self.wake(pid);
+                woken.push(pid);
             } else {
                 keep.push((pid, generation));
             }
+        }
+        // In the order the processes are written, not the order they began
+        // to wait: xsim wakes `wait (flag)`, begun at 10 ns, before
+        // `@(posedge flag)`, begun at 5 ns and written after it
+        // (`v/v_event_b.v`). IEEE 1364-2005 §11.4.2 leaves the order to the
+        // simulator.
+        woken.sort_unstable();
+        for pid in woken {
+            self.wake(pid);
         }
         self.sig_waiters[sig.idx()].extend(keep);
     }
@@ -727,6 +737,7 @@ impl<'d> Simulator<'d> {
             },
         };
         let stores = self.resolve_target(inst, &target);
+        let delay = self.driver_delay(d, delay, &value);
         if delay > 0 {
             if self.inertial_driver(d) {
                 self.inertial_driver_scheduled(d, &value, self.now + delay);
@@ -734,6 +745,27 @@ impl<'d> Simulator<'d> {
             self.schedule_after(delay, Timed::Driver(d, value, stores));
         } else {
             self.apply_driver(d, value, stores);
+        }
+    }
+
+    /// The delay of a driver's change to `value`: with a fall or turn-off
+    /// delay, the one the least significant bit of `value` calls for, `0`
+    /// falling, `z` turning off, `1` rising, and `x` the shortest
+    /// (IEEE 1364-2005 §6.1.3, §7.14). Chosen by that one bit, xsim chose
+    /// the fall delay for `assign #(1, 2) y = a & b` going from `0` to `2`
+    /// (`v/v_contassign.v`), which choosing by the whole value would not.
+    /// With two delays the turn-off delay is the shorter.
+    fn driver_delay(&self, d: DriverId, rise: u64, value: &Logic) -> u64 {
+        let dr = &self.drivers[d.idx()];
+        let Some(fall) = dr.fall else {
+            return rise;
+        };
+        let turnoff = dr.turnoff.unwrap_or(rise.min(fall));
+        match bit0(value) {
+            Bit::Zero => fall,
+            Bit::One => rise,
+            Bit::Z => turnoff,
+            Bit::X => rise.min(fall).min(turnoff),
         }
     }
 
@@ -921,10 +953,17 @@ impl<'d> Simulator<'d> {
                 Some(match en.truth() {
                     Bit::One => a,
                     Bit::Zero => Logic::z(a.width()),
-                    // Unknown: as `en ? a : 'z` is with an unknown `en`
-                    // (IEEE 1364-2005 §5.1.13), `z` where `a` is `z` and `x`
-                    // elsewhere; a switch passing `z` stays undriven.
-                    _ => merge_unknown(&a, &Logic::z(a.width())),
+                    // Unknown: `z` where `a` is `z` and `x` elsewhere, as an
+                    // `nmos` is with its gate at `x` or `z` (IEEE 1364-2005
+                    // §7.7, Table 7-6: data `z` gives `z` whatever the
+                    // control), and as xsim prints it. This read as merging
+                    // `a` with `z`, which made the `z` an `x` too.
+                    _ => Logic::from_bits(
+                        &a.bits()
+                            .into_iter()
+                            .map(|b| if b == Bit::Z { Bit::Z } else { Bit::X })
+                            .collect::<Vec<_>>(),
+                    ),
                 })
             }
             CellKind::Dlatch => {

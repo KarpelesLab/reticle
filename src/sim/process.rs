@@ -812,6 +812,8 @@ impl<'d> Simulator<'d> {
                     contrib: Vec::new(),
                     scheduled: false,
                     weak: false,
+                    fall: None,
+                    turnoff: None,
                 });
                 self.fanout_force(inst, value, id);
                 id

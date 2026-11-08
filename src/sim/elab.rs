@@ -268,6 +268,10 @@ pub(crate) struct Driver {
     /// A weak driver (`ir::WEAK_ATTR`), which a wire takes only where its
     /// other drivers leave it at `z`.
     pub(crate) weak: bool,
+    /// The fall and turn-off delays in ticks, when they are not `delay`
+    /// (`ir::FALL_DELAY_ATTR`, `ir::TURNOFF_DELAY_ATTR`).
+    pub(crate) fall: Option<u64>,
+    pub(crate) turnoff: Option<u64>,
 }
 
 /// A cell instance.
@@ -730,6 +734,8 @@ impl<'d> Simulator<'d> {
                         contrib: Vec::new(),
                         scheduled: false,
                         weak: false,
+                        fall: None,
+                        turnoff: None,
                     }),
                     PortDir::InOut if self.join_inout(id, child_sig, width, e) => {}
                     PortDir::Out | PortDir::InOut => match self.target_from_expr(id, e) {
@@ -741,6 +747,8 @@ impl<'d> Simulator<'d> {
                             contrib: Vec::new(),
                             scheduled: false,
                             weak: false,
+                            fall: None,
+                            turnoff: None,
                         }),
                         None => diags.push(
                             Diagnostic::warning(format!(
@@ -800,6 +808,8 @@ impl<'d> Simulator<'d> {
             contrib: Vec::new(),
             scheduled: false,
             weak: false,
+            fall: None,
+            turnoff: None,
         });
         self.drivers.push(Driver {
             inst,
@@ -818,6 +828,8 @@ impl<'d> Simulator<'d> {
             contrib: Vec::new(),
             scheduled: false,
             weak: false,
+            fall: None,
+            turnoff: None,
         });
         true
     }
@@ -1003,6 +1015,18 @@ impl<'d> Simulator<'d> {
         for assign in &m.assigns {
             let target = self.target_from_lvalue(inst, &assign.target);
             let delay = assign.delay.map_or(0, |d| self.delay_ticks(d));
+            let other = |key: &str| {
+                assign
+                    .attrs
+                    .get(key)
+                    .and_then(crate::ir::AttrValue::as_int)
+                    .and_then(|fs| u64::try_from(fs).ok())
+                    .map(|fs| fs_to_ticks(fs, self.precision_fs))
+            };
+            let (fall, turnoff) = (
+                other(crate::ir::FALL_DELAY_ATTR),
+                other(crate::ir::TURNOFF_DELAY_ATTR),
+            );
             self.drivers.push(Driver {
                 inst,
                 source: DriverSource::Expr(assign.value),
@@ -1011,6 +1035,8 @@ impl<'d> Simulator<'d> {
                 contrib: Vec::new(),
                 scheduled: false,
                 weak: assign.attrs.is_set(crate::ir::WEAK_ATTR),
+                fall,
+                turnoff,
             });
             if assign.delay.is_some_and(|d| d.inertial) {
                 self.inertial
@@ -1124,6 +1150,8 @@ impl<'d> Simulator<'d> {
                 contrib: Vec::new(),
                 scheduled: false,
                 weak: false,
+                fall: None,
+                turnoff: None,
             });
         };
         match &cell.kind {

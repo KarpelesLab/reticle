@@ -497,6 +497,14 @@ pub(crate) fn elaborate_module(
     let applied = overrides.applied();
     let iface_ports = low.iface_ports.clone();
     let mut ir_module = low.b.finish();
+    // Every delay a Verilog continuous assignment, net or gate has is
+    // inertial (IEEE 1364-2005 §6.1.3): `assign #3 y1 = a + b` with `a`
+    // changing every 1 ns takes only the last value, as xsim does. It was a
+    // transport delay, which printed each value in turn. The IR's delay
+    // says which it is (`ir::Delay::inertial`).
+    for a in &mut ir_module.assigns {
+        a.delay = a.delay.map(|d| d.with_inertial(true));
+    }
 
     let cx = low.env.cx;
     // The top keeps its own name whatever its parameters: it is what
@@ -1404,20 +1412,37 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// `assign lhs = rhs, ...;`
     fn cont_assign(&mut self, ca: &'ast ast::ContAssign, item: &'ast Item) {
         let delay = ca.delay.as_ref().and_then(|d| self.delay_of(d));
+        // `#(rise, fall[, turnoff])`, the second and third in femtoseconds.
+        let mut others: Vec<(&str, u64)> = Vec::new();
+        if let Some(d) = &ca.delay {
+            for (key, e) in [ir::FALL_DELAY_ATTR, ir::TURNOFF_DELAY_ATTR]
+                .into_iter()
+                .zip(d.values.iter().skip(1))
+            {
+                if let Some(v) = self.delay_from_expr(e) {
+                    others.push((key, v.to_fs()));
+                }
+            }
+        }
         for pair in &ca.assigns {
             self.b.span = pair.span;
             let Some(target) = self.lvalue(&pair.lhs, false) else {
                 continue;
             };
-            let delay = match (&target, delay) {
-                (ir::Lvalue::Net(n), own) => match self.net_delays.iter().find(|(m, _)| m == n) {
-                    Some((_, net_delay)) => {
-                        let fs = net_delay.to_fs() + own.map_or(0, |d| d.to_fs());
-                        Some(whole_delay(fs, net_delay.unit))
-                    }
-                    None => own,
-                },
-                (_, own) => own,
+            let net_fs = match &target {
+                ir::Lvalue::Net(n) => self
+                    .net_delays
+                    .iter()
+                    .find(|(m, _)| m == n)
+                    .map(|(_, d)| *d),
+                _ => None,
+            };
+            let delay = match (net_fs, delay) {
+                (Some(net_delay), own) => {
+                    let fs = net_delay.to_fs() + own.map_or(0, |d| d.to_fs());
+                    Some(whole_delay(fs, net_delay.unit))
+                }
+                (None, own) => own,
             };
             let width = self.lvalue_width(&target);
             let real = self.target_is_real(&target);
@@ -1504,7 +1529,11 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 continue;
             }
             self.b.assign_after(target.clone(), value, delay);
-            let attrs = self.attrs_of(&item.attrs);
+            let mut attrs = self.attrs_of(&item.attrs);
+            for (key, fs) in &others {
+                let fs = fs + net_fs.map_or(0, |d| d.to_fs());
+                attrs.set(*key, i64::try_from(fs).unwrap_or(i64::MAX));
+            }
             if let Some(a) = self.b.module_mut().assigns.last_mut() {
                 a.attrs = attrs;
             }
