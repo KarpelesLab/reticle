@@ -659,18 +659,131 @@ iteration that way) and wrote element `j` for `mem[a][j] = ..`, or nothing for
 `mem[a][7:0] <= ..`, silently; then refused both. The VHDL frontend refused them
 (`V0701`, a nested slice target).
 
-Not done: a continuous assignment to part of an element (`assign w[0][3:0] =
-..`) is refused, as a word built of pieces of wires; so is a select of a
-bit-select of a vector. A **read** of a part-select partly outside an element
-reads all `x` here, of an element as of any vector, where xsim reads the bits
-inside it and `x` for the rest (`n[j -: 8]` with `j` 4 of a 32-bit `n` is `2X`
-under xsim when `n` is 5, `xx` here); measured, and not changed, since it is the
-reading of every vector's part-select and changing it changes what synthesis
-builds. A VHDL slice whose bounds move with a loop's index
+This said "Not done": a continuous assignment to part of an element
+(`assign w[0][3:0] = ..`) was refused, as a word built of pieces of wires, and
+so was a select of a bit-select of a vector; both are taken now (*The
+language, against xsim*). It also said that a **read** of a part-select
+partly outside an element reads all `x` here, of an element as of any vector,
+where xsim reads the bits inside it and `x` for the rest (`n[j -: 8]` with `j`
+4 of a 32-bit `n` is `2X` under xsim when `n` is 5, `xx` here), and that it was
+not changed because changing it would change what synthesis builds. It is
+changed now, to xsim's reading, which is IEEE 1364-2005 §5.2.1's: the bits
+inside are read and only the ones outside are `x`. The Husky's two builds are
+byte-identical with it (`e57fca47…` and `3fd3e4c8…`). A VHDL slice whose bounds move with a loop's index
 (`mem(a)(8 * i + 7 downto 8 * i)` in a `for` loop) was refused here for any
 target, so the byte-write loop written that way was not taken and one `if`
 per lane was; the loop is now unrolled (below, *VHDL against xsim*), and
 synthesises to the same netlist as the `if` per lane, byte for byte.
+
+## The language, against xsim
+
+`testdata/sim/lang/` is a corpus of small testbenches, one language area
+each, written to find where Reticle's simulator and Vivado 2026.1's xsim
+disagree: Verilog-2005 (`v/`), synthesizable SystemVerilog and its
+testbench constructs (`sv/`) and VHDL-2008 (`vhd/`). The `v_`, `sv_` and
+`vh_` files go through an area case by case; the `min_` files are the
+smallest testbench that showed one difference. Beside each is what xsim
+printed for it (`tools/vivado-parity/xsim_lang.sh` writes them, with the
+paths xsim names cut to the file's name). `tests/sim_lang_xsim.rs` runs
+each under `reticle sim --top tb` and wants xsim's output byte for byte,
+but for xsim's run-time warnings and the tab-indented lines that go on
+with them, which go to its log where Reticle's go to standard error.
+`known.txt` lists the testbenches that still differ, each with the
+reason; the test holds them to differing, so that one that starts to agree
+must leave the list.
+
+Everything in this section was **measured** that way.
+
+| Measured at | Verilog | SystemVerilog | VHDL | All |
+|-------------|---------|---------------|------|-----|
+| 4a5a7b46, before any of this | 21 of 103 | 33 of 166 | 18 of 140 | 72 of 409 |
+| after the system-task commits | 44 of 103 | 50 of 166 | 18 of 140 | 112 of 409 |
+| now | 102 of 105 | 166 of 167 | 125 of 140 | 393 of 412 |
+
+(Three testbenches were added on the way, each recording something the
+corpus had shown: `v/min_intra_repeat.v`, `v/min_force_part.v` and
+`sv/min_queue_ops.sv`.) What changed, by area; each item is held by the
+corpus testbenches its commit names:
+
+- **Values.** A signed operand widened inside an unsigned expression is
+  zero-extended, as the IR's `Resize` says, in the simulator as in
+  synthesis; two-state variables hold `0` for every `x` or `z` written to
+  them and start at `0`, an unpacked struct bit by bit by its members'
+  types; a `real` member of a pattern stays a real; an indexed part-select
+  partly outside its vector reads `x` for the bits outside only.
+- **Strings.** `string` variables hold any length; every method of IEEE
+  1800-2017 §6.16 (`len`, `getc`, `putc`, `substr`, `toupper`, `compare`,
+  `atoi`, `itoa`, `hextoa`, `realtoa`, ...), concatenation, replication and
+  comparison; a task with a `string` argument.
+- **Processes.** `fork` / `join`, `join_any`, `join_none`, `disable fork`,
+  `wait fork`, `disable` of a named block or task; named events, `->` and
+  `@(e)`; `@(x iff c)`; intra-assignment event
+  controls; `final` blocks; `always @(a)` waits for `a` first; an SV
+  variable's initialiser sets it without an event.
+- **Nets.** `wand`/`wor`/`triand`/`trior` resolve their drivers by AND and
+  OR; `pullup`, `pulldown` and `tri0`/`tri1` are weak drivers; MOS switches
+  are tri-state drivers that pass `z`; a wire with drivers starts at `x`;
+  user-defined primitives, combinational and sequential.
+- **Delays.** A continuous assignment's, net's or gate's delay is inertial
+  (IEEE 1364-2005 §6.1.3): `assign #3 y = a + b` with `a` changing every
+  1 ns takes only the last value. `#(rise, fall, turnoff)` chooses its
+  delay by the least significant bit of the new value: xsim took the fall
+  delay for `a & b` going from 0 to 2, which choosing by the whole value,
+  as a reading of §6.1.3 would, does not. The IR marks such a delay on its
+  `Delay`, as VHDL's `after` does.
+- **Order.** Processes woken by one change run in the order they are
+  written, not the order they began to wait (`wait (flag)` begun at 10 ns
+  before `@(posedge flag)` begun at 5 ns and written after it); IEEE
+  1364-2005 §11.4.2 leaves this to the simulator. With a named event among
+  the waits xsim's order is neither (`v/v_event.v`, still listed).
+- **Force.** `force` and `release` of a constant bit- or part-select of a
+  net, the other bits following their drivers; of a variable's, refused, as
+  §9.3.2 and xsim refuse it.
+- **Arrays.** Memories of more than one dimension; assignment patterns of
+  packed and unpacked arrays and structs, keyed and `default:`; whole-array
+  assignment, comparison and `inside`; slices `a[2:5]` on either side;
+  unpacked arrays declared in blocks and subroutines, as arguments (copied
+  in and out) and as function results; `foreach`; streaming operators.
+- **Dynamic arrays and queues** (`lower::dynamic`): a memory of 4096
+  elements and an `int` size. `new[n]`, `new[n](d)`, `size`, `delete`,
+  `push_back`, `push_front`, `insert`, `pop_front`, `pop_back`, `q[$]`,
+  `foreach`, `%p`, and whole assignments from arrays, patterns and
+  concatenations (`q = {q, 7, 8}`). An element the array does not have
+  reads the element type's default whatever the memory still holds.
+  Growing past 4096 elements stops the simulation with a failure.
+- **Hierarchy.** Generate blocks and loops and instance arrays as scopes of
+  hierarchical names; `tb.blk.v` from inside `tb`; a function or task of an
+  instance below (`m.l0.bump`), inlined with the instance's variables it
+  uses aliased; interface arrays, interface ports given the parameters of
+  the interface the instance connects (`reg_if #(.W(4)) a ()` into a port
+  of `reg_if`), and positional overrides of an interface instance.
+- **Parameters.** A pattern given to a struct-typed parameter
+  (`.CFG('{a: 4'hC, b: 4'hD})`) takes the parameter's type.
+- **Subroutines.** A recursive function or task called with an argument
+  known only at run time is inlined again frame within frame (the IR has no
+  calls): 64 frames deep for one that calls itself from one place, and for
+  one calling itself from `k` places the depth whose `k`-fold tree fits 2048
+  frames (11 for `fib`). A call that goes deeper at run time stops the
+  simulation with a failure naming the function; `testdata/sim/recursion_tb.v`
+  holds where. A `?:` whose branch makes such a call runs only the branch
+  chosen. xsim's simulation engine crashed on `wire [31:0] y = sum(n)` with
+  a recursive `sum`, which Reticle runs; that case is not measured.
+- **Time.** `timeunit` and `timeprecision` inside a module.
+
+What still differs, and why (`known.txt` says it per testbench):
+
+- `v/v_intra.v`, `v/min_intra_repeat.v`: xsim counts every change of `clk`
+  for `d <= repeat (2) @(posedge clk) a` (`repeat (3)` lands on a negedge)
+  and posedges only for the blocking form; IEEE 1800-2017 §9.4.5 counts
+  posedges in both, and so does Reticle. An xsim defect, not copied.
+- `v/v_event.v`: the wake order above.
+- `sv/sv_timeunit.sv`: `$printtimescale` of a module given `timeunit`
+  prints `1ns / 1ps` under xsim, with spaces, and `1ns/1ps` for a
+  `` `timescale ``; Reticle prints the second for both.
+- The fifteen VHDL testbenches, in [VHDL against xsim](#vhdl-against-xsim):
+  nine-valued `std_logic` held in four, one delta per concurrent
+  assignment, `time'pos` in femtoseconds, `std.env.stop`'s line, and xsim
+  defects not copied.
 
 ## VHDL against xsim
 
@@ -929,7 +1042,7 @@ them print what xsim prints, from 18 before this work):
 
 ## Tests
 
-- `tests/vhdl_xsim.rs`, above.
+- `tests/sim_lang_xsim.rs` and `tests/vhdl_xsim.rs`, above.
 - Unit tests next to the code: the scheduler, the process interpreter, the
   sequence automaton (every operator, including overlapping attempts),
   coverage accounting and every session command.
@@ -965,8 +1078,8 @@ them print what xsim prints, from 18 before this work):
 
 ## Not yet here
 
-Inertial delay on Verilog continuous assignments, and a waveform from
-compiled fast mode. (This said "inertial delay on continuous assignments
-(transport delay is used)"; the simulator now applies inertial delay to an
-assignment the IR marks `inertial`, and the VHDL frontend marks its own, but
-the Verilog frontend does not mark a continuous assignment's yet.)
+A waveform from compiled fast mode. (This said "inertial delay on
+continuous assignments (transport delay is used)", and then that the
+Verilog frontend did not mark a continuous assignment's delay inertial; it
+does now, as [The language, against xsim](#the-language-against-xsim)
+says.)

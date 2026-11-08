@@ -3477,9 +3477,10 @@ wholly outside the element, an `x` in the address, the index or an enable, eleme
 ascending, signed, not counted from zero and packed arrays of bytes, the clocked
 byte-write loop, two non-blocking writes of one word in one step) and Reticle's event
 simulator prints what xsim printed, line for line; `mem_part_tb.vhd` holds itself to
-xsim's values for VHDL's `mem(a)(15 downto 8) <= d`. `docs/simulation.md` has the rest,
-and what is left: a *read* partly outside an element reads all `x` here where xsim
-reads the bits inside, as for any vector.
+xsim's values for VHDL's `mem(a)(15 downto 8) <= d`. `docs/simulation.md` has the rest.
+This ended "and what is left: a *read* partly outside an element reads all `x` here
+where xsim reads the bits inside, as for any vector"; a read reads the bits inside now,
+as xsim does (`docs/simulation.md`, *The language, against xsim*).
 
 ### What Vivado does
 
@@ -3630,9 +3631,11 @@ address. It is not built.
 - **Byte write enables on the ECP5** (`DP16KD` has them in its 18 and 36 bit modes) and
   on the other families: a memory written a lane at a time is a memory per lane there,
   which is exact but is more blocks.
-- **A VHDL slice whose bounds move with a loop's index**, which the VHDL byte-write
-  loop is written with; one `if` per lane, or a constant slice, is taken.
-- **A read partly outside an element** reads all `x`, as of any vector.
+- ~~**A VHDL slice whose bounds move with a loop's index**~~, which the VHDL
+  byte-write loop is written with: the loop is unrolled now, and builds what one `if`
+  per lane builds.
+- ~~**A read partly outside an element** reads all `x`, as of any vector~~: it reads
+  the bits inside now, as xsim does.
 - Distributed RAM deeper than 32 words for a lane is built by the rule for a whole
   word, which is not measured for one: every byte-write memory measured deeper than 32
   words is over 1,024 bits, Vivado's block RAM.
@@ -5724,3 +5727,97 @@ code changes its bitstreams, and nothing measured on a part says which a part wa
   fewer than eight pins, are clocked from the interconnect. Deliberate in Reticle, and a
   difference.
 - The three distributed RAM macros and the `BUFMRCE` in `--vivado-placement`.
+
+## The language corpus, synthesised by both
+
+### What was asked
+
+Whether what Reticle builds from the language corpus of
+`docs/simulation.md` ("The language, against xsim") computes what Vivado's
+build of the same source computes. Sixteen of the corpus's testbenches have
+a synthesizable design in them; their nineteen modules (with the
+parameters the testbenches give them) were built for the XC7A35T by both
+tools, and each routed netlist was run under xsim with the testbench the
+source came from, its output held to what xsim printed for the source.
+Vivado's netlists were also run under Reticle's simulator with `--device`.
+
+This was a measurement made once, in a scratch directory, with the
+binary of the commit that brought the corpus's Verilog to 71 of 103; the
+netlists are Vivado's output and are not committed, and nothing here is a
+test. The answers below are what those runs printed.
+
+### What was compared, and how it came out (measured)
+
+- **Every bit decodes** in all nineteen of Reticle's bitstreams: no bit
+  unexplained, no tile without a segbits file.
+- **Reticle's routed netlists compute what the source computes** under xsim
+  for eighteen of the nineteen. The nineteenth, `vh_adder`'s `gadd`, built
+  its sum as a constant 0: the VHDL frontend read a slice bounded by a
+  generic, `v(8*i+7 downto 8*i)`, as zeros (`vhd/min_54.vhd`), and Reticle's
+  own simulation of the source showed the same. That was fixed with the
+  VHDL commits under this one ("unroll loops whose parameter bounds a
+  slice"). Built again with this branch's binary, both widths' routed
+  netlists now compute what the source does under xsim, and every bit of
+  their bitstreams decodes.
+- **Four builds exit 0 with a design that is NOT FULLY ROUTED**:
+  `sv_pkg_alu_b`'s `alu`, both `gadd` widths and `vh_pipeline`'s `pipe`
+  (`gadd` still, when built again with this branch's binary).
+  In each the router gave up on two signals that both need one slice's `D`
+  output multiplexer (`CLBLM_L_DMUX`): the last sum bit of a carry chain
+  and its carry out. The flow says so in a warning; the netlist still
+  matched under xsim, because a routed netlist carries no routing, which
+  is why "every bit decodes" and the router's own account, not a netlist
+  simulation, are the checks that see this. Not fixed here: it is the
+  packer's and the router's, which other work owns.
+- **Vivado's netlists under Reticle's simulator** compute what the source
+  computes for the Verilog and SystemVerilog designs but one: `v_ram_b`,
+  where Vivado put the byte-write memory in a `RAMB18E1` and Reticle's model
+  of it read zeros. A separate run found Reticle's `DSP48E1` model giving 0
+  for the pre-adder configuration Vivado chose for `vh_pipeline`
+  (`INMODE = 5'b00100`, `USE_DPORT = "TRUE"`). Neither is fixed here; both
+  are the vendor-cell models', not the language's. The VHDL testbenches
+  were not run this way, since Reticle's simulator does not mix a VHDL
+  testbench with a Verilog netlist.
+- **Reticle's simulator on Reticle's own routed netlist** gave all `x` for
+  `v_alu`: two lookup tables of one site form a structural loop the
+  simulator does not settle. xsim runs the same netlist correctly.
+- With xsim's standard `glbl`, which holds the global set/reset for the
+  first 100 ns, both tools' netlists lose what the testbenches drive before
+  then; every comparison above holds `GSR` released from the start
+  (`ROC` width 0), which is what the testbenches assume.
+
+### Where the builds differ
+
+Cell counts as each tool reported them (Reticle's LUTs are all `LUT6`
+sites; Vivado's are its `LUT1`–`LUT6` cells):
+
+| Design | LUTs, Reticle / Vivado | FFs | CARRY4 | Otherwise | Reticle routed |
+|---|---|---|---|---|---|
+| `v_alu/alu` | 156 / 124 | 10 / 19 | 8 / 13 | Reticle 7 `MUXF7` | yes |
+| `v_counter/counter` | 11 / 6 | 4 / 4 | 1 / 0 |  | yes |
+| `v_fsm/det1011` | 2 / 1 | 2 / 2 | 0 / 0 |  | yes |
+| `v_ram_b/ram_bw` | 5 / 12 | 32 / 0 | 0 / 0 | Reticle 32 `RAM32X1D`, Vivado 1 `RAMB18E1` | yes |
+| `v_shift/shreg` | 9 / 10 | 8 / 8 | 0 / 0 |  | yes |
+| `v_shift/lfsr` | 1 / 1 | 16 / 32 | 0 / 0 |  | yes |
+| `sv_axis_if_b/axis_inc` | 2 / 7 | 10 / 10 | 2 / 0 |  | yes |
+| `sv_counter_gen/chain` | 8 / 4 | 6 / 6 | 0 / 0 |  | yes |
+| `sv_counter_gen/up_counter` | 6 / 3 | 4 / 4 | 1 / 0 |  | yes |
+| `sv_fifo_b/fifo` | 20 / 16 | 10 / 10 | 1 / 0 | Reticle 2 `RAM32X1D` and 1 `RAM32M`; Vivado 10 `RAMD32`, 2 `RAMS32` | yes |
+| `sv_fsm/seq_detect` | 5 / 5 | 3 / 7 | 0 / 0 |  | yes |
+| `sv_pkg_alu_b/alu` | 74 / 40 | 10 / 10 | 6 / 7 | Vivado 8 `MUXF7` | no |
+| `sv_struct_pipe_b/pipe` | 3 / 1 | 51 / 50 | 6 / 3 |  | yes |
+| `vh_adder/gadd_w8` (built again) | 11 / 9 | 10 / 10 | 9 / 3 |  | no |
+| `vh_adder/gadd_w12` (built again) | 15 / 13 | 14 / 14 | 13 / 4 |  | no |
+| `vh_counter_b/counter` | 6 / 3 | 5 / 5 | 1 / 0 |  | yes |
+| `vh_fsm/seqdet` | 4 / 2 | 3 / 3 | 0 / 0 |  | yes |
+| `vh_pipeline/pipe` | 165 / 0 | 77 / 3 | 2 / 0 | Vivado 1 `DSP48E1` | no |
+| `vh_ram/ram` | 1 / 6 | 8 / 8 | 0 / 0 | Reticle 2 `RAM32X1D` and 1 `RAM32M`; Vivado 10 `RAMD32`, 2 `RAMS32` | yes |
+
+Read off the table, not measured further: Reticle builds a counter's
+increment with a carry chain where Vivado uses lookup tables alone; it put
+`v_ram_b`'s 32-word byte-write memory in distributed RAM where Vivado used
+a block; it built `vh_pipeline`'s 9-by-8 multiply in fabric where Vivado
+used a `DSP48E1`; Vivado encoded `seq_detect`'s states one-hot (7
+flip-flops to 3). The `gadd` rows are from the build with this branch's
+binary; the first build, with the slice read as zeros, had two flip-flops
+where the design has ten and fourteen.

@@ -11,10 +11,12 @@
 //!    parameter declared later can call them.
 //! 2. **Declarations, in source order.** Parameters (with the
 //!    instantiation's overrides applied), typedefs, nets, variables,
-//!    non-ANSI port declarations and `` `default_nettype `` directives. A
-//!    one-dimensional unpacked variable becomes an [`crate::ir::Memory`], every
-//!    other declaration becomes an [`crate::ir::Net`] whose [`crate::ir::NetKind`] is
-//!    `Wire` for nets and `Reg` for variables. Ports are bound to their
+//!    non-ANSI port declarations and `` `default_nettype `` directives. An
+//!    unpacked variable becomes an [`crate::ir::Memory`], one of several
+//!    dimensions with its elements in row order, a dynamic array or a queue
+//!    with a size variable beside it (`dynamic`); every other declaration
+//!    becomes an [`crate::ir::Net`] whose [`crate::ir::NetKind`] is `Wire`
+//!    for nets and `Reg` for variables. Ports are bound to their
 //!    nets at the end of this pass, in the order the header wrote them.
 //! 3. **Behaviour.** `defparam`s first (they must reach instances that
 //!    appear earlier in the file), then continuous assignments, `always` /
