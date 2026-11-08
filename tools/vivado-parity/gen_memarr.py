@@ -392,6 +392,9 @@ def designs():
         ("sp_wf", 512, 36, {}), ("sp_nc", 512, 36, {}), ("sp_rf", 256, 24, {}),
         ("sp_rf", 512, 64, {}), ("sp_rf", 512, 72, {}), ("sp_rf", 1024, 32, {}),
         ("sp_rf", 512, 18, {}),
+        # Four bits deeper than a block: the read multiplexer once left
+        # one signal on two pins of a lookup table (`xray::lutswap`).
+        ("sdp", 65536, 4, {}),
     ]:
         kind_of = {"init": "sdp", "reg": "sdp"}.get(kind, kind)
         out.append(design(f"{kind}_{depth}x{width}",

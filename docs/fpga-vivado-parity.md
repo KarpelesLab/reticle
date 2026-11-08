@@ -3677,6 +3677,44 @@ the test's flags it does not build here, with this tree or with `origin/master`'
 lookup tables' pin swap and not of the memory, found and not followed; with
 `achieved.sh`'s timing-driven flags it builds.
 
+**Followed since (2026-11-09), and the reading was half right.** It is kept now,
+answered as above (eight `RAMB36E1` cascaded by Vivado; stacked two deep here, so it
+is in the test's `NOT_AS_VIVADO` with the other cascades). Two things met in it,
+**measured** by printing the table the error named. The read multiplexer's select
+is the read address's top bit registered, and the parity it is folded into reads
+the next bit of the shift register, the same `D` on the same clock: `srl::merge`
+made the two flip-flops one *after* the mapper had given the table both, so the
+table read one signal on `I4` and `I5` (`0xf00f99990ff06666`). That is not wrong,
+but `lutswap` offered both inputs to the router, which ended `I4`'s sink on `A6`,
+`I5`'s own input, not yet in the tree, and then routed `I5` to `A6` as well. So the
+memory's arrangement made the table and the pin swap could not follow it. Both are
+changed: a table reading one bit twice after the merge is folded to read it once,
+the other input tied to zero (`srl::fold_repeated_inputs`), and the second of two
+inputs carrying one signal is never offered to the router
+(`lutswap::movable_inputs`). Either alone builds it; both undone, it fails again.
+**Checked** by undoing them: both undone, the memarr test fails on `sdp_65536x4`
+(`$lut4`) and on `sdp_4096x9` under `--memories legacy` (`$lut10`, now routed by
+`legacy_memories_map_as_before`); the fold undone, or made to read the folded input
+as zero, fails `srl`'s unit test; the second input offered again fails `lutswap`'s.
+
+What else it touched, **measured** by building every design of `memarr/`, `bram/`,
+`qor/` and `lutram/` at the test's flags, `memarr/` again under `--memories legacy`,
+and the language corpus's 25 synthesisable modules (default parameters, and
+`gadd`'s `W` 8 and 12) for the XC7A35T, with the old behaviour and a probe for
+tables reading one signal twice: at the default flags seven `memarr` designs had
+such a table (`sdp_65536x1`, `sdp_65536x2`, `sdp_40000x1`, `init_65536x1`,
+`rom_65536x1`, `bw_sdp_65536x16_b8` and this one), and only this one failed; under
+`--memories legacy` 28 had one and six failed the same way (`sdp_65536x2`,
+`sdp_4096x9`, `sdp_3000x12`, `bits_sdp_16384x9`, `bits_sdp_16384x18`,
+`bw_sdp_4096x32_b8`). No `bram/`, `qor/`, `lutram/` or language-corpus design had
+one. With the change all 35 build, no table reads a signal twice, and every bit
+decodes. The seven default ones' routed netlists answer as Vivado's builds do under
+xsim (`a_routed_netlist_answers_as_vivados_build_does`), and a fold that read the
+folded input as zero made all seven differ, so that test sees the fold; the legacy
+builds were not simulated. The Husky builds pass `--srl-min 0`, so nothing is
+merged and nothing folded, and the Husky design has no table reading a signal twice
+(probed): its bitstream is the one from before byte for byte.
+
 ### What Vivado does
 
 **Measured**, read off `vivado.txt`'s parameters, the probes' cells and Vivado's
@@ -3946,8 +3984,9 @@ not read, and a split port's sides on one half pass every other test here.
   clock and a nest of bits there; it is the mapper that makes them reads on the clock.
   A frontend that wrote `q[i*8 +: 8] <= mem[{a, i}]` as four clocked reads would make
   this unnecessary (`src/synth`, not touched here).
-- **`sdp_65536x4`'s build at the default flags**: `xray::lutswap` refuses it, on master
-  too; not followed.
+- ~~**`sdp_65536x4`'s build at the default flags**: `xray::lutswap` refuses it, on master
+  too; not followed.~~ Done (2026-11-09): a table reading a flip-flop and its merged
+  copy, and the pin swap offering both inputs; see the start of this section.
 - None of it has been on a part.
 
 ## Routing against Vivado's routes

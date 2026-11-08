@@ -90,7 +90,7 @@ models or IP.
   mode and memories to infer as one, and `FIXTURE=bram lutram.sh` asks Vivado the
   same of them; `gen_lutram_vectors.py` simulates them too, and
   `tests/fpga_xray_bram_vivado.rs` decodes the bitstreams into `vivado.txt` there.
-- `gen_memarr.py` writes `testdata/fpga/vivado/memarr/`, 203 memories to infer of every
+- `gen_memarr.py` writes `testdata/fpga/vivado/memarr/`, 204 memories to infer of every
   size, port and style asked about, 54 of them (`bw_`) written a byte lane at a time,
   and `FIXTURE=memarr lutram.sh` asks Vivado the same
   of them (`lutram_probe.tcl` writes each block RAM's arranging parameters, `params`);

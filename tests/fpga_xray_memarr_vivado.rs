@@ -46,6 +46,16 @@
 //! the `bits_` designs, which fold it under a mask that changes every cycle,
 //! were added for it.
 //!
+//! Every design must build at all, and `sdp_65536x4` is here for that:
+//! its read multiplexer's table read one flip-flop on two inputs once its
+//! copy was merged away, the router ended one of the two on the other's
+//! input, and the build stopped (`` `$lut4` has two signals routed to one
+//! input ``, `xray::lutswap`). It builds with either of the two fixes
+//! alone, the table folded (`srl`) or the second input kept where it is
+//! (`lutswap`), so it catches both undone and neither on its own; each has
+//! its own unit test for that. Under `--memories legacy` six more failed
+//! the same way, and [`legacy_memories_map_as_before`] routes one of them.
+//!
 //! A cascade's route is a fixed pip, which no tile feature shows: that the
 //! lower block's `CASCADEOUT<x>` is the upper's `CASCADEIN<x>` is the
 //! simulation's to see, and [`what_is_not_vivados_says_so`]'s, which reads it
@@ -275,7 +285,7 @@ fn designs() -> Vec<String> {
 /// | `rom_512x36` to `rom_4096x8`, `rom_65536x1` | lookup tables, 174 to 321 of them, 60 and the multiplexers for 65,536 by 1 | a block RAM, or two cascaded, as before: the blocks are the smaller |
 /// | `rom_16384x2` | the address register taken into the block, and the read into its output register | the read in the block's latch |
 /// | `style_registers_128x8` | 1,024 flip-flops | distributed RAM, as before: measured faster and smaller than either flow's flip-flops |
-/// | `sdp_40000x1` to `sdp_131072x1`, `sp_*_65536x1`, `tdp_65536x1`, `init_65536x1`, `bw_sdp_65536x16_b8`, `bw_sp_rf_65536x16_b8` | `RAMB36E1`s cascaded in pairs | stacked with a read multiplexer, as before: Vivado's timer finds the cascade slower (`sdp_65536x1` 3.36 ns cascaded here and 3.27 by Vivado, 2.72 stacked); only a read registered again, which the cascade takes into its blocks, is cascaded (`reg_65536x1`, `reg_init_65536x1`) |
+/// | `sdp_40000x1` to `sdp_131072x1`, `sdp_65536x4`, `sp_*_65536x1`, `tdp_65536x1`, `init_65536x1`, `bw_sdp_65536x16_b8`, `bw_sp_rf_65536x16_b8` | `RAMB36E1`s cascaded in pairs | stacked with a read multiplexer, as before: Vivado's timer finds the cascade slower (`sdp_65536x1` 3.36 ns cascaded here and 3.27 by Vivado, 2.72 stacked); only a read registered again, which the cascade takes into its blocks, is cascaded (`reg_65536x1`, `reg_init_65536x1`) |
 ///
 /// Four more were here until "Deeper than a block, and single ports, as
 /// Vivado builds them" (`docs/fpga-vivado-parity.md`): `bw_sp_rf_32x32_b8`,
@@ -300,6 +310,7 @@ const NOT_AS_VIVADO: &[&str] = &[
     "sdp_40000x1",
     "sdp_65536x1",
     "sdp_65536x2",
+    "sdp_65536x4",
     "sp_nc_65536x1",
     "sp_rf_65536x1",
     "sp_wf_65536x1",
@@ -575,6 +586,7 @@ fn what_is_not_vivados_says_so() {
     // where the read's register goes into the blocks.
     for (name, deep) in [
         ("sdp_65536x1", "2 deep"),
+        ("sdp_65536x4", "2 deep"),
         ("bw_sdp_65536x16_b8", "2 deep"),
         ("bw_sp_rf_65536x16_b8", "2 deep"),
         ("sdp_131072x1", "4 deep"),
@@ -841,7 +853,11 @@ fn simulate(
 /// read on no clock. Would catch the arrangement, the pairing or the
 /// output registers leaking into the legacy mapping; that the legacy build
 /// is the one from before byte for byte was measured, on what the document
-/// says, and is not held here.
+/// says, and is not held here. Each is routed to a bitstream, since only
+/// routing reaches `xray::lutswap`: `sdp_4096x9` is one of the six legacy
+/// builds that stopped there (`` `$lut10` has two signals routed to one
+/// input ``) before a table reading a flip-flop and its merged copy was
+/// folded; like `sdp_65536x4` above, it builds with either fix alone.
 #[test]
 fn legacy_memories_map_as_before() {
     let Some(root) = chipdb() else { return };
@@ -855,6 +871,7 @@ fn legacy_memories_map_as_before() {
         ("sdp_512x36", "vivado", "RAMB18E1", 1),
         ("sp_wf_1024x18", "legacy", "RAM64X1D", 288),
         ("sp_wf_1024x18", "vivado", "RAMB18E1", 1),
+        ("sdp_4096x9", "legacy", "RAMB18E1", 2),
     ] {
         let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join("memarr-legacy")
@@ -869,6 +886,8 @@ fn legacy_memories_map_as_before() {
             .arg(dir.join(format!("{name}.rcf")))
             .arg("--output-dir")
             .arg(&out)
+            .arg("--bitstream")
+            .arg(out.join(format!("{name}.bit")))
             .arg(dir.join(format!("{name}.v")))
             .output()
             .expect("the reticle binary runs");
