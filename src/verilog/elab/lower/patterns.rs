@@ -11,10 +11,12 @@
 //!
 //! An unpacked array is a memory here, and a memory has no value as a
 //! whole: an assignment to a whole array is one assignment per element
-//! (from a pattern, or from an array of the same shape), and `==` or `!=`
-//! of two arrays the conjunction of their elements' comparisons. Arrays of
-//! more than [`ELEMENTS`] elements are refused, since each element is a
-//! statement or a comparison of its own.
+//! (from a pattern, from an array of the same shape, or from a function
+//! returning one), and `==` or `!=` of two arrays the conjunction of their
+//! elements' comparisons. A slice `a[2:5]` of an array's first dimension
+//! is an array too, on either side. Arrays of more than [`ELEMENTS`]
+//! elements are refused, since each element is a statement or a comparison
+//! of its own.
 
 use crate::ir::builder::BlockBuilder;
 use crate::ir::{self, AssignKind, ExprId, MemoryId};
@@ -32,6 +34,20 @@ use super::expr::Sink;
 /// The most elements a whole-array assignment or comparison is spelled
 /// out for.
 const ELEMENTS: u64 = 4096;
+
+/// A run of a memory's elements that an expression names as an array: the
+/// whole of it, or a slice of its first dimension.
+#[derive(Clone, Debug)]
+pub(super) struct ArrayView {
+    /// The memory.
+    pub(super) mem: MemoryId,
+    /// The type of the run: the array's, or the slice's, with its bounds.
+    pub(super) ty: VType,
+    /// The first element's address.
+    pub(super) base: u64,
+    /// How many elements.
+    pub(super) count: u64,
+}
 
 impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// The value of the pattern `'{items}` as one of type `ty`, or `None`
@@ -254,8 +270,64 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
-    /// `a = '{..}` or `a = b` for a whole unpacked array `a`: one
-    /// assignment per element. `false` when `lhs` is not a whole array.
+    /// The array `e` names: a whole unpacked array, or a slice `a[2:5]`
+    /// (`a[2+:4]`, `a[5-:4]`) of one's first dimension with constant
+    /// bounds inside it. `None` for anything else.
+    pub(super) fn array_view(&mut self, e: &'ast Expr) -> Option<ArrayView> {
+        if let Some((mem, ty)) = self.whole_array(e) {
+            let count = self.b.module().memories[mem].size;
+            return Some(ArrayView {
+                mem,
+                ty,
+                base: 0,
+                count,
+            });
+        }
+        let ExprKind::Range {
+            base,
+            kind,
+            left,
+            right,
+        } = &e.kind
+        else {
+            return None;
+        };
+        let (mem, ty) = self.whole_array(base)?;
+        let VType::Unpacked { elem, range } = &ty else {
+            return None;
+        };
+        let l = self
+            .env
+            .probe(|env| Evaluator::new(env).eval_i64(left).ok())?;
+        let r = self
+            .env
+            .probe(|env| Evaluator::new(env).eval_i64(right).ok())?;
+        let (l, r) = match kind {
+            ast::RangeKind::Fixed => (l, r),
+            ast::RangeKind::IndexedUp => (l, l.checked_add(r)?.checked_sub(1)?),
+            ast::RangeKind::IndexedDown => (l, l.checked_sub(r)?.checked_add(1)?),
+        };
+        if !range.contains(l) || !range.contains(r) {
+            return None;
+        }
+        let size = self.b.module().memories[mem].size;
+        let stride = size / range.len().max(1);
+        let base = l.min(r).abs_diff(range.low()) * stride;
+        let count = (l.abs_diff(r) + 1) * stride;
+        Some(ArrayView {
+            mem,
+            ty: VType::Unpacked {
+                elem: elem.clone(),
+                range: Range::new(l, r),
+            },
+            base,
+            count,
+        })
+    }
+
+    /// `a = '{..}`, `a = b` or `a = f(..)` for a whole unpacked array or a
+    /// slice of one `a`: one assignment per element. `false` when `lhs` is
+    /// not an array.
     pub(super) fn array_assign(
         &mut self,
         lhs: &'ast Expr,
@@ -264,30 +336,85 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         span: Span,
         out: &mut BlockBuilder,
     ) -> bool {
-        let Some((mem, ty)) = self.whole_array(lhs) else {
+        let Some(view) = self.array_view(lhs) else {
             return false;
         };
-        let size = self.b.module().memories[mem].size;
-        if size > ELEMENTS {
+        self.array_assign_view(&view, rhs, kind, span, out);
+        true
+    }
+
+    /// Assigns `rhs`, element by element, to the elements `view` names.
+    pub(super) fn array_assign_view(
+        &mut self,
+        view: &ArrayView,
+        rhs: &'ast Expr,
+        kind: AssignKind,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        if view.count > ELEMENTS {
             self.env.unsupported(
                 span,
                 &format!("an assignment to a whole array of more than {ELEMENTS} elements"),
             );
-            return true;
+            return;
         }
-        let Some(values) = self.array_elements(rhs, &ty, size, span, out) else {
-            return true;
+        let Some(values) = self.array_elements(rhs, &view.ty, view.count, span, out) else {
+            return;
         };
+        self.store_elements(view, values, kind, span, out);
+    }
+
+    /// Writes `values` to the elements `view` names, in memory order.
+    pub(super) fn store_elements(
+        &mut self,
+        view: &ArrayView,
+        values: Vec<ExprId>,
+        kind: AssignKind,
+        span: Span,
+        out: &mut BlockBuilder,
+    ) {
+        let size = self.b.module().memories[view.mem].size;
         let aw = (super::super::types::bits_needed(size.saturating_sub(1))).max(1);
-        for (k, v) in values.into_iter().enumerate() {
+        for (k, v) in (view.base..).zip(values) {
             self.b.span = span;
-            let addr = self
-                .b
-                .constant(Logic::from_u64(u64::try_from(k).unwrap_or(0), aw));
+            let addr = self.b.constant(Logic::from_u64(k, aw));
             out.span = span;
-            out.assign(ir::Lvalue::MemElem { mem, addr }, v, kind);
+            out.assign(
+                ir::Lvalue::MemElem {
+                    mem: view.mem,
+                    addr,
+                },
+                v,
+                kind,
+            );
         }
-        true
+    }
+
+    /// The values of the elements `view` names, in memory order, each as
+    /// a value of the element type `elem`.
+    pub(super) fn read_elements(
+        &mut self,
+        view: &ArrayView,
+        elem: &VType,
+        span: Span,
+    ) -> Vec<ExprId> {
+        let size = self.b.module().memories[view.mem].size;
+        let aw = (super::super::types::bits_needed(size.saturating_sub(1))).max(1);
+        let w = elem.packed().map_or(1, Packed::width);
+        let signed = elem.packed().is_some_and(|p| p.signed);
+        let mut values = Vec::new();
+        for k in view.base..view.base + view.count {
+            self.b.span = span;
+            let addr = self.b.constant(Logic::from_u64(k, aw));
+            let read = self.b.mem_read(view.mem, addr);
+            values.push(if elem.packed().is_some() {
+                self.coerce(read, w, signed)
+            } else {
+                read
+            });
+        }
+        values
     }
 
     /// The element values, in memory order, of `rhs` as an array of type
@@ -302,8 +429,33 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         out: &mut BlockBuilder,
     ) -> Option<Vec<ExprId>> {
         let elem = innermost(ty);
-        if let Some((src, src_ty)) = self.whole_array(rhs) {
-            if self.b.module().memories[src].size != size || shape(&src_ty) != shape(ty) {
+        let mut src = self.array_view(rhs);
+        // `n = ramp(4'd13)`: a function returning an unpacked array leaves
+        // it in a memory of the call's own.
+        if src.is_none()
+            && let ExprKind::Call { callee, args } = &rhs.kind
+            && !matches!(callee.kind, ExprKind::SystemIdent(_))
+            && let Some((f, false)) = self.env.probe(|env| env.resolve_callee(callee))
+        {
+            self.array_result = None;
+            let _ = self.inline_into(f, args, rhs.span, out);
+            let Some((mem, rty)) = self.array_result.take() else {
+                self.env.unsupported(
+                    rhs.span,
+                    "an assignment to a whole array from a function that returns no array",
+                );
+                return None;
+            };
+            let count = self.b.module().memories[mem].size;
+            src = Some(ArrayView {
+                mem,
+                ty: rty,
+                base: 0,
+                count,
+            });
+        }
+        if let Some(src) = src {
+            if src.count != size || shape(&src.ty) != shape(ty) {
                 self.env.error(
                     codes::TYPE,
                     span,
@@ -311,17 +463,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 );
                 return None;
             }
-            let aw = (super::super::types::bits_needed(size.saturating_sub(1))).max(1);
-            let mut values = Vec::new();
-            for k in 0..size {
-                self.b.span = span;
-                let addr = self.b.constant(Logic::from_u64(k, aw));
-                let read = self.b.mem_read(src, addr);
-                let w = elem.packed().map_or(1, Packed::width);
-                let signed = elem.packed().is_some_and(|p| p.signed);
-                values.push(self.coerce(read, w, signed));
-            }
-            return Some(values);
+            return Some(self.read_elements(&src, &elem, span));
         }
         let ExprKind::Pattern(items) = &rhs.kind else {
             self.env.unsupported(
@@ -426,8 +568,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         equal: bool,
         sink: &mut Sink<'_>,
     ) -> Option<ExprId> {
-        let (a, aty) = self.whole_array(lhs)?;
-        let size = self.b.module().memories[a].size;
+        let a = self.array_view(lhs)?;
+        let aty = a.ty.clone();
+        let size = a.count;
         if size > ELEMENTS {
             self.env.unsupported(
                 e.span,
@@ -437,14 +580,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
         let elem = innermost(&aty);
         let w = elem.packed().map_or(1, Packed::width);
-        let aw = (super::super::types::bits_needed(size.saturating_sub(1))).max(1);
-        let theirs: Vec<ExprId> = match self.whole_array(rhs) {
-            Some((b, bty)) if shape(&bty) == shape(&aty) => (0..size)
-                .map(|k| {
-                    let addr = self.b.constant(Logic::from_u64(k, aw));
-                    self.b.mem_read(b, addr)
-                })
-                .collect(),
+        let theirs: Vec<ExprId> = match self.array_view(rhs) {
+            Some(b) if shape(&b.ty) == shape(&aty) => self.read_elements(&b, &elem, e.span),
             Some(_) => {
                 self.env.error(
                     codes::TYPE,
@@ -467,13 +604,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 values
             }
         };
+        let ours = self.read_elements(&a, &elem, e.span);
         self.b.span = e.span;
         let mut all = self.b.const_bit(true);
-        for (k, b) in theirs.into_iter().enumerate() {
-            let addr = self
-                .b
-                .constant(Logic::from_u64(u64::try_from(k).unwrap_or(0), aw));
-            let x = self.b.mem_read(a, addr);
+        for (x, b) in ours.into_iter().zip(theirs) {
             let x = self.coerce(x, w, false);
             let y = self.coerce(b, w, false);
             let same = self.b.eq(x, y);

@@ -577,6 +577,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                         continue;
                     };
                     let ir_name = self.env.qualified(&d.name.name);
+                    // An unpacked array declared in a block or a subroutine
+                    // is a memory, as one declared in the module is; it
+                    // used to be refused.
+                    if matches!(ty, VType::Unpacked { .. }) {
+                        if let Some(mem) = self.new_memory(ir_name, &ty, d.name.span) {
+                            self.env
+                                .declare(&d.name.name, Symbol::Memory { mem, ty }, d.name.span);
+                        }
+                        continue;
+                    }
                     let Some(net) = self.new_var(ir_name, ty.clone(), d.name.span) else {
                         continue;
                     };
@@ -1541,7 +1551,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 .error(codes::TYPE, span, "`return` outside a function or task");
             return;
         };
-        if let (Some(value), Some(result)) = (value, result) {
+        if let (Some(value), Some(Some((mem, ty)))) = (value, self.array_frames.last().cloned()) {
+            let count = self.b.module().memories[mem].size;
+            let view = super::patterns::ArrayView {
+                mem,
+                ty,
+                base: 0,
+                count,
+            };
+            self.array_assign_view(&view, value, AssignKind::Blocking, span, out);
+        } else if let (Some(value), Some(result)) = (value, result) {
             let ty = self.net_type(result).clone();
             let v = self.value_as(value, &ty, &mut Sink::Proc(out));
             out.span = span;

@@ -2224,6 +2224,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         // frame exists.
         let mut inputs: Vec<Option<ExprId>> = Vec::with_capacity(formals.len());
         let mut outputs: Vec<Option<ir::Lvalue>> = Vec::with_capacity(formals.len());
+        // An unpacked array formal is a memory of the frame's own, copied
+        // in from the actual and, for an output, back out to it.
+        let mut array_actuals: Vec<Option<(&'ast Expr, bool, bool)>> =
+            Vec::with_capacity(formals.len());
         for (slot, formal) in slots.iter().zip(&formals) {
             // A `ref` argument is copied in and out: the subroutine sees
             // the caller's value and the caller its changes. It used to be
@@ -2239,6 +2243,17 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 formal.dir,
                 ast::Direction::Output | ast::Direction::Inout | ast::Direction::Ref
             );
+            let array_formal = self
+                .env
+                .probe(|env| super::super::types::resolve(env, formal.data_type, formal.dims, true))
+                .is_some_and(|t| matches!(t, VType::Unpacked { .. }));
+            if array_formal {
+                array_actuals.push(slot.map(|e| (e, is_in, is_out)));
+                inputs.push(None);
+                outputs.push(None);
+                continue;
+            }
+            array_actuals.push(None);
             match slot {
                 Some(e) => {
                     let value = if is_in {
@@ -2275,6 +2290,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
         // The formals and the result live in nets of the enclosing module.
         let mut result = None;
+        let mut array_frame: Option<(ir::MemoryId, VType)> = None;
         for (i, formal) in formals.iter().enumerate() {
             let ty = if formal.data_type.is_empty() && formal.dims.is_empty() {
                 VType::bit()
@@ -2290,6 +2306,34 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 }
             };
             let ir_name = self.env.qualified(&formal.name.name);
+            if matches!(ty, VType::Unpacked { .. }) {
+                let Some(mem) = self.new_memory(ir_name, &ty, formal.name.span) else {
+                    continue;
+                };
+                self.env.declare(
+                    &formal.name.name,
+                    Symbol::Memory {
+                        mem,
+                        ty: ty.clone(),
+                    },
+                    formal.name.span,
+                );
+                if let Some(Some((actual, true, _))) = array_actuals.get(i).copied() {
+                    let count = self.b.module().memories[mem].size;
+                    let view = super::patterns::ArrayView {
+                        mem,
+                        ty: ty.clone(),
+                        base: 0,
+                        count,
+                    };
+                    // The actual is read in the caller's scope.
+                    let frame_scope = self.env.scope;
+                    self.env.leave();
+                    self.array_assign_view(&view, actual, AssignKind::Blocking, span, out);
+                    self.env.enter(frame_scope);
+                }
+                continue;
+            }
             let Some(net) = self.new_var(ir_name, ty.clone(), formal.name.span) else {
                 continue;
             };
@@ -2328,7 +2372,19 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     .unwrap_or_else(VType::bit)
             };
             let ir_name = self.env.qualified(&name);
-            if let Some(net) = self.new_var(ir_name, ty.clone(), f.def.name.span) {
+            if matches!(ty, VType::Unpacked { .. }) {
+                if let Some(mem) = self.new_memory(ir_name, &ty, f.def.name.span) {
+                    self.env.declare(
+                        &name,
+                        Symbol::Memory {
+                            mem,
+                            ty: ty.clone(),
+                        },
+                        f.def.name.span,
+                    );
+                    array_frame = Some((mem, ty));
+                }
+            } else if let Some(net) = self.new_var(ir_name, ty.clone(), f.def.name.span) {
                 self.env
                     .declare(&name, Symbol::Net { net, ty }, f.def.name.span);
                 result = Some(net);
@@ -2356,6 +2412,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             None
         };
         self.inline_frames.push((result, flag));
+        self.array_frames.push(array_frame.clone());
         // `disable name` inside the task or function `name` returns from
         // it (IEEE 1364-2005 §9.6): the body is a block of that name.
         let disables_itself = f.def.body.iter().any(|st| {
@@ -2379,9 +2436,42 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             self.stmts_guarded(&f.def.body, out, flag);
         }
         self.inline_frames.pop();
+        self.array_frames.pop();
 
-        // Copy outputs back.
+        // Copy outputs back: an array formal element by element.
         for (i, formal) in formals.iter().enumerate() {
+            if let Some(Some((actual, _, true))) = array_actuals.get(i).copied()
+                && let Some((Symbol::Memory { mem, ty }, _, _)) = self.env.lookup(&formal.name.name)
+            {
+                let (mem, ty) = (*mem, ty.clone());
+                let count = self.b.module().memories[mem].size;
+                let from = super::patterns::ArrayView {
+                    mem,
+                    ty: ty.clone(),
+                    base: 0,
+                    count,
+                };
+                let mut elem = &ty;
+                while let VType::Unpacked { elem: e, .. } = elem {
+                    elem = e;
+                }
+                let elem = elem.clone();
+                let values = self.read_elements(&from, &elem, span);
+                let frame_scope = self.env.scope;
+                self.env.leave();
+                match self.array_view(actual) {
+                    Some(to) if to.count == count => {
+                        self.store_elements(&to, values, AssignKind::Blocking, span, out);
+                    }
+                    _ => self.env.error(
+                        codes::TYPE,
+                        actual.span,
+                        "an array argument is copied out to something that is not an array of its size",
+                    ),
+                }
+                self.env.enter(frame_scope);
+                continue;
+            }
             let Some(target) = outputs[i].clone() else {
                 continue;
             };
@@ -2406,6 +2496,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
         self.inlining.pop();
         self.env.leave();
+        if array_frame.is_some() {
+            self.array_result = array_frame;
+            return None;
+        }
         let net = result?;
         self.b.span = span;
         Some(self.b.net(net))

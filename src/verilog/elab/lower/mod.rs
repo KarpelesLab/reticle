@@ -182,6 +182,11 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     /// One entry per inlined subroutine: its result net and its "has
     /// returned" flag, when it needs one.
     inline_frames: Vec<(Option<NetId>, Option<NetId>)>,
+    /// Beside each of `inline_frames`: the memory holding the result of a
+    /// function that returns an unpacked array, with its type.
+    array_frames: Vec<Option<(ir::MemoryId, VType)>>,
+    /// The memory the last inlined call left its array result in.
+    array_result: Option<(ir::MemoryId, VType)>,
     /// `wire x = expr;` initialisers waiting for the rest of their scope's
     /// declarations; see [`Lowerer::declarations`].
     net_inits: Vec<(NetId, &'ast ast::Expr, Option<Delay>, Span)>,
@@ -435,6 +440,8 @@ pub(crate) fn elaborate_module(
 
             guard: None,
             inline_frames: Vec::new(),
+            array_frames: Vec::new(),
+            array_result: None,
             net_inits: Vec::new(),
             net_delays: Vec::new(),
             natural_connections: false,
