@@ -46,7 +46,9 @@
 //! unused kept them until here, since mapping sees a register whole. And the same
 //! flip-flop written twice, the same `D`, clock, enable and reset, is one flip-flop
 //! (`merge`). Vivado does both, and `qor/srl_delay` is 2,081 flip-flops as
-//! written and a chain of 96 with 32 taps once the copies are gone.
+//! written and a chain of 96 with 32 taps once the copies are gone. A table
+//! that read a flip-flop and its copy then reads one bit on two inputs, and
+//! is folded to read it on one (`fold_repeated_inputs`).
 //!
 //! # What this changes
 //!
@@ -385,7 +387,101 @@ fn merge(module: &mut Module, device: &Device, constraints: &Constraints) -> Res
     }
     let gone: HashSet<CellId> = replaced.iter().map(|(cell, _)| *cell).collect();
     module.cells.retain(|id, _| !gone.contains(&id));
+    fold_repeated_inputs(module)?;
     Ok(count)
+}
+
+/// A six-input lookup table's inputs, `A1` first.
+const LUT_INPUTS: [&str; 6] = ["I0", "I1", "I2", "I3", "I4", "I5"];
+
+/// `init` with input `j` read from input `i` instead: at every index, what
+/// `init` holds where bit `j` of the index is bit `i`'s. The table that
+/// returns does not read `j`.
+fn fold_input(init: &Const, i: u32, j: u32) -> Const {
+    let mut out = Const::zero(64);
+    for m in 0..64u32 {
+        let n = if m & (1 << i) != 0 {
+            m | (1 << j)
+        } else {
+            m & !(1 << j)
+        };
+        out.set_bit(m, init.bit(n));
+    }
+    out
+}
+
+/// Makes every `LUT6` that reads one bit on two inputs read it on the first
+/// alone, its truth table folded and the other input tied to zero, as an
+/// unused one is. Returns how many tables it changed.
+///
+/// Merging copies is what makes such a table: one read the flip-flop and its
+/// copy on two inputs, and after [`merge`] both are the one flip-flop.
+/// `sdp_65536x4`'s stacked read multiplexer is one, its select the read
+/// address's top bit registered and the parity it is folded into the next
+/// bit of the shift register, which is the same flip-flop. A table like that
+/// computes the right thing, but it spends an input on nothing, and the
+/// router may move a lookup table's inputs (`xray::lutswap`): it once ended
+/// one of the two on the other's input, which left the table nothing the
+/// flow could follow. (What Vivado does with such a table is not known
+/// here: it cascades `sdp_65536x4`'s blocks, so it has no multiplexer.)
+fn fold_repeated_inputs(module: &mut Module) -> Result<usize, String> {
+    // Per table: its new truth table and the inputs to tie to zero.
+    let mut folds: Vec<(CellId, Const, Vec<usize>)> = Vec::new();
+    {
+        let view = BitView::new(module).map_err(|e| e.to_string())?;
+        for (id, cell) in module.cells.iter() {
+            if !matches!(&cell.kind, CellKind::Blackbox(name) if name.as_str() == "LUT6") {
+                continue;
+            }
+            let Some(AttrValue::Const(init)) = cell.params.get("INIT") else {
+                continue;
+            };
+            if init.width() != 64 {
+                continue;
+            }
+            let bits: Vec<Option<SigBit>> = LUT_INPUTS
+                .iter()
+                .map(|port| one_bit(&view, cell.input(port)))
+                .collect();
+            let mut init = init.clone();
+            let mut tied = Vec::new();
+            for (j, bit) in (0u32..).zip(&bits) {
+                let Some(SigBit::Slot(_)) = bit else {
+                    continue;
+                };
+                if let Some(i) = (0u32..)
+                    .zip(&bits)
+                    .take_while(|(i, _)| *i < j)
+                    .find_map(|(i, earlier)| (earlier == bit).then_some(i))
+                {
+                    init = fold_input(&init, i, j);
+                    tied.push(j as usize);
+                }
+            }
+            if !tied.is_empty() {
+                folds.push((id, init, tied));
+            }
+        }
+    }
+    let changed = folds.len();
+    for (id, init, tied) in folds {
+        let span = module.cells[id].span;
+        for j in tied {
+            let zero = const_expr(module, Const::zero(1), span);
+            let cell = &mut module.cells[id];
+            if let Some(slot) = cell
+                .inputs
+                .iter_mut()
+                .find(|(port, _)| port.as_str() == LUT_INPUTS[j])
+            {
+                slot.1 = zero;
+            }
+        }
+        module.cells[id]
+            .params
+            .set(Name::new("INIT"), AttrValue::Const(init));
+    }
+    Ok(changed)
 }
 
 /// One chain, its stages in order.
@@ -653,4 +749,103 @@ pub fn extract(
         m.cells.retain(|id, _| !gone.contains(&id));
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diag::Diagnostics;
+    use crate::fpga::target;
+    use crate::ir::builder::ModuleBuilder;
+    use crate::source::{SourceMap, Span};
+
+    /// **A table that read a flip-flop and its copy reads the one left
+    /// once.** Two flip-flops of one `D` and clock, and a table of
+    /// `(a0 & !a1) | (a1 & a2)` reading the first on `a0`, the second on
+    /// `a1` and an input on `a2`: once [`merge`] has made them one, the
+    /// table must read it on `I0` alone, `I1` tied to zero and its truth
+    /// table `I0 & I2`, which is what the two inputs equal compute.
+    ///
+    /// Would catch the fold not done (`I1` still the flip-flop, which is
+    /// what `sdp_65536x4` had, and what the router then moved one of onto
+    /// the other's input), and the folded input read as a constant rather
+    /// than as the input it equals (`a0` alone, wrong at index 1). Would
+    /// not catch a table of two copies the router happened to leave alone,
+    /// which is why `xray::lutswap` keeps the second of two such inputs
+    /// where it is as well.
+    #[test]
+    fn a_table_reading_a_flip_flop_and_its_copy_reads_it_once() {
+        let mut map = SourceMap::new();
+        let file = map.add("top.v", "").unwrap();
+        let span = Span::new(file, 0, 0);
+        let mut b = ModuleBuilder::new("top", span);
+        let clk = b.input("clk", Type::bit());
+        let d = b.input("d", Type::bit());
+        let x = b.input("x", Type::bit());
+        let y = b.output("y", Type::bit());
+        let (q1, q2) = (b.add_net("q1", Type::bit()), b.add_net("q2", Type::bit()));
+        for (name, q) in [("r1", q1), ("r2", q2)] {
+            let inputs = vec![(Name::new("clk"), b.net(clk)), (Name::new("d"), b.net(d))];
+            b.cell(
+                name,
+                CellKind::Dff {
+                    clk_pos: true,
+                    has_enable: false,
+                    reset: None,
+                },
+                inputs,
+                vec![(Name::new("q"), q)],
+            );
+        }
+        // Most significant first: a2 = x, a1 = q2, a0 = q1.
+        let parts = vec![b.net(x), b.net(q2), b.net(q1)];
+        let a = b.concat(parts);
+        b.cell(
+            "l",
+            CellKind::Lut {
+                k: 3,
+                init: Const::from_u64(0b1110_0010, 8),
+            },
+            vec![(Name::new("a"), a)],
+            vec![(Name::new("y"), y)],
+        );
+        let mut design = Design::new();
+        let top = design.add_module(b.finish());
+        design.top = Some(top);
+        let device = target("xc7a35t-cpg236").expect("the device");
+        let mut diags = Diagnostics::new();
+        crate::fpga::techcells::map_cells(&mut design, top, device, &mut diags);
+        assert!(!diags.has_errors(), "{}", diags.render(&map));
+        let report = extract(&mut design, top, device, &Constraints::new(), 3).unwrap();
+        assert_eq!(report.merged, 1, "{report:?}");
+
+        let m = &design.modules[top];
+        let blackbox = |cell: &crate::ir::Cell, want: &str| matches!(&cell.kind, CellKind::Blackbox(name) if name.as_str() == want);
+        assert_eq!(
+            m.cells.iter().filter(|(_, c)| blackbox(c, "FDRE")).count(),
+            1
+        );
+        let (_, lut) = m
+            .cells
+            .iter()
+            .find(|(_, c)| blackbox(c, "LUT6"))
+            .expect("the table is a LUT6");
+        let view = BitView::new(m).unwrap();
+        let bit = |port: &str| one_bit(&view, lut.input(port));
+        assert_eq!(bit("I1"), Some(SigBit::Const(Bit::Zero)), "I1 still read");
+        assert!(matches!(bit("I0"), Some(SigBit::Slot(_))));
+        assert!(matches!(bit("I2"), Some(SigBit::Slot(_))));
+        let Some(AttrValue::Const(init)) = lut.params.get("INIT") else {
+            panic!("a LUT6 with no truth table");
+        };
+        // I3 to I5 are tied to zero: the first eight entries are the table.
+        for index in 0..8u32 {
+            let want = index & 1 != 0 && index & 4 != 0;
+            assert_eq!(
+                init.bit(index) == Bit::One,
+                want,
+                "at index {index}: {init:?}"
+            );
+        }
+    }
 }
