@@ -51,6 +51,7 @@
 mod expr;
 mod hier;
 pub(crate) use hier::literal_index;
+mod dynamic;
 mod inst;
 mod patterns;
 mod proc;
@@ -101,6 +102,9 @@ struct MemInfo {
     /// for `m [0:3][0:1]`, which is kept as one memory of eight elements,
     /// the last dimension varying fastest (IEEE 1800-2017 §7.4.2).
     dims: Vec<Range>,
+    /// For a dynamic array or a queue: the variable holding how many
+    /// elements it has (`dynamic`).
+    dynamic: Option<NetId>,
 }
 
 /// What drives a net, for the multiple-driver check.
@@ -720,6 +724,18 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             inner = elem;
         }
         let elem = inner;
+        // `int q [$]`: a memory of the capacity, and its size.
+        let mut dynamic = None;
+        if dims.iter().any(Range::is_dynamic) {
+            if dims.len() > 1 {
+                self.env
+                    .unsupported(span, "a dynamic array or queue of more than one dimension");
+                return None;
+            }
+            dims[0] = Range::new(0, i64::try_from(dynamic::CAPACITY).unwrap_or(i64::MAX) - 1);
+            let size = self.new_var(format!("{name}$size"), dynamic::size_type(), span)?;
+            dynamic = Some(size);
+        }
         let range = dims[0];
         let total = dims
             .iter()
@@ -754,8 +770,19 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             elem: elem.clone(),
             range,
             dims,
+            dynamic,
         });
         Some(mem)
+    }
+
+    /// The type a memory is known by: `ty`, but a dynamic array's
+    /// dimension as its memory's capacity.
+    fn memory_type(&self, mem: ir::MemoryId, ty: VType) -> VType {
+        if self.mems[mem.index()].dynamic.is_some() {
+            Self::capacity_type(self.mems[mem.index()].elem.clone())
+        } else {
+            ty
+        }
     }
 
     /// The declared type of a net.
@@ -1221,6 +1248,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         if let VType::Unpacked { .. } = ty {
             let ir_name = self.qualified(&name.name);
             let mem = self.new_memory(ir_name, &ty, name.span)?;
+            let ty = self.memory_type(mem, ty);
             for attr in &item.attrs {
                 let value = self.attr_value(attr);
                 self.b.module_mut().memories[mem]

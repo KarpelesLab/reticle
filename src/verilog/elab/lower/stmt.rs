@@ -85,6 +85,14 @@ enum PShape {
     Enum(Rc<Enumeration>),
     /// A packed struct, printed member by member.
     Struct(Vec<PField>),
+    /// A dynamic array or a queue, printed as a string built when it runs
+    /// (`dynamic`).
+    Dynamic {
+        /// The memory.
+        mem: ir::MemoryId,
+        /// Its size.
+        size: ir::NetId,
+    },
     /// A packed array of more than one dimension, printed element by
     /// element from its left bound, as a struct without member names:
     /// `logic [3:0][3:0] pk = 16'h1234` is `'{1,2,3,4}`, as xsim prints it.
@@ -198,6 +206,7 @@ fn p_text(shape: &PShape, zero: bool) -> String {
             let parts: Vec<String> = fields.iter().map(|f| leaf(&f.shape)).collect();
             format!("'{{{}}}", parts.join(","))
         }
+        PShape::Dynamic { .. } => "%s".to_owned(),
         PShape::Array { dims, elem, .. } => {
             let mut one = match elem {
                 Some(s) => p_text(s, zero),
@@ -625,6 +634,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     // used to be refused.
                     if matches!(ty, VType::Unpacked { .. }) {
                         if let Some(mem) = self.new_memory(ir_name, &ty, d.name.span) {
+                            let ty = self.memory_type(mem, ty);
                             self.env
                                 .declare(&d.name.name, Symbol::Memory { mem, ty }, d.name.span);
                         }
@@ -968,6 +978,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         span: Span,
         out: &mut BlockBuilder,
     ) {
+        if delay.is_none() && self.dynamic_assign(lhs, rhs, span, out) {
+            return;
+        }
         if delay.is_none() && self.array_assign(lhs, rhs, kind, span, out) {
             return;
         }
@@ -1132,6 +1145,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return;
         }
         if self.string_mutator(callee, args, span, out).is_some() {
+            return;
+        }
+        if self.dynamic_mutator(callee, args, span, out).is_some() {
             return;
         }
         let Some((f, _)) = self.env.resolve_callee(callee) else {
@@ -1299,6 +1315,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 ids.push(self.b.string(text));
                 continue;
             }
+            if let Some(PShape::Dynamic { mem, size }) = shapes[k] {
+                shapes[k] = None;
+                let s = self.dynamic_p_string(mem, size, v.span, out);
+                ids.push(s);
+                continue;
+            }
             if let Some(shape) = shapes[k].take() {
                 let value = match shape {
                     PShape::Array { .. } => None,
@@ -1432,6 +1454,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
 
     /// How `%p` must spell argument `v`, when it is not a plain value.
     fn p_shape(&mut self, v: &'ast Expr) -> Option<PShape> {
+        if let Some((mem, size)) = self.dynamic_of(v) {
+            return Some(PShape::Dynamic { mem, size });
+        }
         if !matches!(v.kind, ExprKind::Index { .. })
             && let Some(Symbol::Memory { mem, .. }) = self.env.probe(|env| env.resolve_path(v))
         {
@@ -1460,6 +1485,8 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     fn p_leaves(&mut self, value: Option<ExprId>, shape: &PShape, ids: &mut Vec<ExprId>) {
         match shape {
             PShape::Enum(_) => ids.extend(value),
+            // Built as a string by `syscall_args`, which needs a block.
+            PShape::Dynamic { .. } => {}
             PShape::Struct(fields) | PShape::Elements(fields) => {
                 let Some(value) = value else { return };
                 for f in fields {
@@ -1820,10 +1847,12 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             );
             return;
         }
+        // A dynamic array's elements are as many as it has.
+        let dynamic = self.dynamic_of(&f.array).map(|(_, size)| size);
         let loop_name = self.fresh("foreach");
         self.env.enter_new(format!("{loop_name}."));
         let mut loops = Vec::new();
-        for (var, range) in f.vars.iter().zip(&dims) {
+        for (k, (var, range)) in f.vars.iter().zip(&dims).enumerate() {
             let Some(var) = var else { continue };
             let ty = VType::integer();
             let ir_name = self.env.qualified(&var.name);
@@ -1832,19 +1861,22 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             };
             self.env
                 .declare(&var.name, Symbol::Net { net, ty }, var.span);
-            loops.push((net, *range));
+            loops.push((net, *range, if k == 0 { dynamic } else { None }));
         }
         let mut body = self.b.block();
         body.span = f.body.span;
         self.stmt(&f.body, &mut body);
         let mut inner = body.finish();
-        for (net, range) in loops.into_iter().rev() {
+        for (net, range, size) in loops.into_iter().rev() {
             self.b.span = span;
             let start = self.b.const_i64(32, range.left);
             let end = self.b.const_i64(32, range.right);
             let i = self.b.net(net);
             let up = range.left <= range.right;
-            let cond = if up {
+            let cond = if let Some(size) = size {
+                let n = self.b.net(size);
+                self.b.binary(ir::BinaryOp::Lt, i, n)
+            } else if up {
                 self.b.binary(ir::BinaryOp::Le, i, end)
             } else {
                 self.b.binary(ir::BinaryOp::Ge, i, end)

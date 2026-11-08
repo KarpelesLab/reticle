@@ -1147,6 +1147,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 return self.b.mem_read(mem, addr);
             }
         }
+        if let Some((mem, size)) = self.dynamic_of(base) {
+            return self.dynamic_read(mem, size, index, e.span, sink);
+        }
         match self.place(base, sink) {
             Place::Mem(mem) => {
                 // A fixed element the array does not have reads x (IEEE
@@ -2016,6 +2019,9 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         if let Some(id) = self.string_method(e, callee, args, sink) {
             return id;
         }
+        if let Some(id) = self.dynamic_method(e, callee, args, sink) {
+            return id;
+        }
         if let ExprKind::Member { base, name } = &callee.kind
             && let Some(id) = self.enum_method(e, base, &name.name, args, sink)
         {
@@ -2418,6 +2424,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let Some(mem) = self.new_memory(ir_name, &ty, formal.name.span) else {
                     continue;
                 };
+                let ty = self.memory_type(mem, ty);
                 self.env.declare(
                     &formal.name.name,
                     Symbol::Memory {

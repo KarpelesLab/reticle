@@ -1,0 +1,10 @@
+Q1 size=4 q='{5,6,7,8}
+Q2 delete(1) q='{5,7,8}
+Q3 insert(2) q='{5,7,99,8} last=8
+Q4 beyond=0
+Q5 empty pop=0 size=0
+Q6 q='{1,2} r='{1,2,3}
+Q7 sum=14
+Q8 lq='{10} beyond=xxxx
+Q9 e='{10,20,30,0,0} size=5
+Q10 r='{1,2,1,2,3}

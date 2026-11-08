@@ -1,6 +1,6 @@
-error[V0013]: unsupported construct: queue dimension `[$]`
- --> error_unsupported.sv:4:17
+error[V0013]: unsupported construct: associative array dimension
+ --> error_unsupported.sv:5:17
   |
-4 |     int pending [$];
-  |                 ^^^ not supported by this version of reticle
+5 |     int pending [string];
+  |                 ^^^^^^^^ not supported by this version of reticle
 

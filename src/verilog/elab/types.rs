@@ -64,6 +64,20 @@ impl Range {
         Range { left, right }
     }
 
+    /// The dimension `[]` or `[$]` stands for until a memory is made for
+    /// it, which gives it its capacity: no written range has these bounds.
+    pub fn dynamic() -> Self {
+        Range {
+            left: i64::MIN,
+            right: i64::MIN,
+        }
+    }
+
+    /// True for [`Range::dynamic`].
+    pub fn is_dynamic(&self) -> bool {
+        *self == Range::dynamic()
+    }
+
     /// The range of a packed `[N]` dimension: `[N-1:0]`.
     pub fn packed_size(n: i64) -> Self {
         Range {
@@ -571,6 +585,9 @@ fn dimension(env: &mut ScopeEnv<'_, '_>, dim: &ast::Dim, packed: bool) -> Option
                 Range::unpacked_size(size)
             })
         }
+        // A dynamic array or a queue: a memory of its own capacity and a
+        // size (`lower::dynamic`). Only an unpacked dimension may be one.
+        ast::DimKind::Unsized | ast::DimKind::Queue(_) if !packed => Some(Range::dynamic()),
         ast::DimKind::Unsized => {
             env.unsupported(dim.span, "dynamic array dimension `[]`");
             None

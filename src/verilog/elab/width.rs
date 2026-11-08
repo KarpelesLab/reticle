@@ -435,6 +435,20 @@ impl Widths<'_, '_, '_> {
                 _ => Info::bits(32, true),
             });
         }
+        // A method of a dynamic array or queue (IEEE 1800-2017 §7.5,
+        // §7.10): `q.size()`, `q.pop_front()`.
+        if let ExprKind::Member { base, name } = &callee.kind
+            && let Some(super::scope::Symbol::Memory {
+                ty: VType::Unpacked { elem, .. },
+                ..
+            }) = self.env.probe(|env| env.resolve_path(base))
+        {
+            match name.name.as_str() {
+                "size" | "num" => return Some(Info::bits(32, true)),
+                "pop_front" | "pop_back" => return Some(of_type(&elem)),
+                _ => {}
+            }
+        }
         let (f, is_task) = self.env.probe(|env| env.resolve_callee(callee))?;
         if is_task {
             return Some(Info::Other);
