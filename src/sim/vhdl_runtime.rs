@@ -264,7 +264,24 @@ pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
         // The codes of a constrained string object, first character in the
         // most significant byte.
         "$vhdl_string_of" => super::value::logic_to_string(&logic_of(args.first()?)),
+        // A `std.textio` line: a vector of codes, the text right-aligned.
+        "$vhdl_line_text" => line_text(&logic_of(args.first()?)),
+        "$vhdl_justify" => {
+            let text = text_of(args.first()?);
+            let left = args.get(1).is_some_and(|v| v.truth() == Bit::One);
+            let width = logic_of(args.get(2)?)
+                .to_u64()
+                .and_then(|w| usize::try_from(w).ok())
+                .unwrap_or(0);
+            let pad = width.saturating_sub(text.chars().count());
+            if left {
+                format!("{text}{}", " ".repeat(pad))
+            } else {
+                format!("{}{text}", " ".repeat(pad))
+            }
+        }
         "$vhdl_time_in" => time_in(args.first()?, args.get(1)?),
+        "$vhdl_time_write" => time_write(args.first()?, args.get(1)?),
         "$vhdl_real_digits" => {
             let r = args.first().map_or(f64::NAN, real_of);
             match logic_of(args.get(1)?).to_u64() {
@@ -296,6 +313,12 @@ pub(crate) fn call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
 fn real_call(name: &str, args: &[Value], ty: &Type) -> Option<Value> {
     let real = |i: usize| args.get(i).map_or(f64::NAN, real_of);
     Some(match name {
+        "$vhdl_line_append" => {
+            let width = ty.width().unwrap_or(0);
+            let mut text = line_text(&logic_of(args.first()?));
+            text.push_str(&text_of(args.get(1)?));
+            Value::Bits(super::value::string_to_logic(&text).resize(width))
+        }
         "$vhdl_chars_of" => {
             let width = ty.width().unwrap_or(0);
             let text = match args.first()? {
@@ -432,6 +455,41 @@ fn time_image(v: &Value) -> String {
     } else {
         format!("{fs} fs")
     }
+}
+
+/// The text a `std.textio` line holds: its known, non-zero codes, first
+/// character in the most significant byte. A line never written is all
+/// unknown and holds nothing.
+fn line_text(l: &Logic) -> String {
+    let bytes = l.width() / 8;
+    let mut out = String::new();
+    for i in (0..bytes).rev() {
+        match l.slice(i * 8 + 7, i * 8).to_u64() {
+            Some(0) | None => {}
+            Some(v) => out.push(char::from(u8::try_from(v).unwrap_or(b'?'))),
+        }
+    }
+    out
+}
+
+/// `std.textio`'s `write` of a time in a unit: a whole number of units, or
+/// a fraction of one (`1.5 ns`), as xsim writes it (measured), where its
+/// `to_string(t, unit)` truncates.
+fn time_write(t: &Value, unit: &Value) -> String {
+    let (Some(t), Some(u)) = (
+        logic_of(t).as_signed().to_i64(),
+        logic_of(unit).as_signed().to_i64(),
+    ) else {
+        return "X".to_owned();
+    };
+    let whole = time_in(&Value::Bits(Logic::from_i64(t, 64)), unit);
+    if u == 0 || t % u == 0 {
+        return whole;
+    }
+    let name = whole.rsplit(' ').next().unwrap_or("fs");
+    #[allow(clippy::cast_precision_loss, reason = "a fraction of a unit")]
+    let r = t as f64 / u as f64;
+    format!("{r} {name}")
 }
 
 /// `to_string(t, unit)`: the time in the unit, followed by the unit's name.

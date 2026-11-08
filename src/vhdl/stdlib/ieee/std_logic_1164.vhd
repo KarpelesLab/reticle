@@ -5,6 +5,8 @@
 -- interface of the standard package; the bodies in `std_logic_1164_body.vhd`
 -- are Reticle's own implementation.
 
+use std.textio.all;
+
 package std_logic_1164 is
 
   -- The nine-state logic value system: uninitialised, forcing unknown,
@@ -159,5 +161,53 @@ package std_logic_1164 is
   function to_bstring (value : std_ulogic_vector) return string;
   function to_ostring (value : std_ulogic_vector) return string;
   function to_hstring (value : std_ulogic_vector) return string;
+
+  ------------------------------------------------------------------------
+  -- VHDL-2008: the `std.textio` reads and writes of the nine-state types,
+  -- which the package `std_logic_textio` held before (it is empty since).
+  ------------------------------------------------------------------------
+
+  procedure read (l : inout line; value : out std_ulogic; good : out boolean);
+  procedure read (l : inout line; value : out std_ulogic);
+  procedure read (l : inout line; value : out std_ulogic_vector; good : out boolean);
+  procedure read (l : inout line; value : out std_ulogic_vector);
+
+  procedure write (l         : inout line;
+                   value     : in std_ulogic;
+                   justified : in side  := right;
+                   field     : in width := 0);
+  procedure write (l         : inout line;
+                   value     : in std_ulogic_vector;
+                   justified : in side  := right;
+                   field     : in width := 0);
+
+  procedure hread (l : inout line; value : out std_ulogic_vector; good : out boolean);
+  procedure hread (l : inout line; value : out std_ulogic_vector);
+  procedure oread (l : inout line; value : out std_ulogic_vector; good : out boolean);
+  procedure oread (l : inout line; value : out std_ulogic_vector);
+  procedure bread (l : inout line; value : out std_ulogic_vector; good : out boolean);
+  procedure bread (l : inout line; value : out std_ulogic_vector);
+
+  procedure hwrite (l         : inout line;
+                    value     : in std_ulogic_vector;
+                    justified : in side  := right;
+                    field     : in width := 0);
+  procedure owrite (l         : inout line;
+                    value     : in std_ulogic_vector;
+                    justified : in side  := right;
+                    field     : in width := 0);
+  procedure bwrite (l         : inout line;
+                    value     : in std_ulogic_vector;
+                    justified : in side  := right;
+                    field     : in width := 0);
+
+  attribute foreign of read   : procedure is "reticle: builtin";
+  attribute foreign of write  : procedure is "reticle: builtin";
+  attribute foreign of hread  : procedure is "reticle: builtin";
+  attribute foreign of oread  : procedure is "reticle: builtin";
+  attribute foreign of bread  : procedure is "reticle: builtin";
+  attribute foreign of hwrite : procedure is "reticle: builtin";
+  attribute foreign of owrite : procedure is "reticle: builtin";
+  attribute foreign of bwrite : procedure is "reticle: builtin";
 
 end package std_logic_1164;

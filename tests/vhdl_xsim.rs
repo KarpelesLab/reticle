@@ -295,3 +295,22 @@ fn unknown_compare_matches_xsim() {
 fn two_dimensions_match_xsim() {
     matches_xsim("two_dimensions");
 }
+
+/// **`std.textio` to the standard output**: `write` of a string, an
+/// integer, a `std_logic_vector` (the overload `ieee.std_logic_1164`
+/// declares in VHDL-2008), a boolean, a character, a bit, a `bit_vector`,
+/// a real with and without `digits`, a time with and without `unit`;
+/// `hwrite`, `owrite`, `swrite`; `justified` and `field`; and `writeline`
+/// of a line written and of an empty one. A `line` was "an access type has
+/// no representation in the IR", `swrite` unknown, and `write` of a
+/// `std_logic_vector` without `ieee.std_logic_textio` had no overload.
+///
+/// Would catch a line not emptied by `writeline`, a value written in
+/// another form than xsim's (`true` for `TRUE`, a time in femtoseconds), a
+/// field padded on the wrong side. Would not catch reading, a file other
+/// than `output`, or a line longer than the 1024 characters a `line` holds
+/// here, none of which is supported.
+#[test]
+fn textio_matches_xsim() {
+    matches_xsim("textio");
+}

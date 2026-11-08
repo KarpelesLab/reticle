@@ -125,7 +125,7 @@
     "result": {
       "contents": {
         "kind": "markdown",
-        "value": "```vhdl\nstd_logic\n```\nsubtype `std_logic` — `std_logic`\n\ndeclared in `<reticle>/ieee/std_logic_1164.vhd` at 19:11"
+        "value": "```vhdl\nstd_logic\n```\nsubtype `std_logic` — `std_logic`\n\ndeclared in `<reticle>/ieee/std_logic_1164.vhd` at 21:11"
       },
       "range": {
         "start": {

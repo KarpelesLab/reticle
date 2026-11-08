@@ -210,6 +210,7 @@ mod numeric;
 mod runtime;
 mod spans;
 mod stmt;
+mod textio;
 mod types;
 mod units;
 mod waits;

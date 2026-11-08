@@ -715,6 +715,15 @@ lowered yet". An array of wide elements whose initial value does not fold
 is now assigned it when the run starts; it was dropped without a
 diagnostic.
 
+**`std.textio`** (`textio_tb.vhd`, `src/vhdl/elab/textio.rs`). `write` and
+its radix forms append to a `line`, and `writeline(output, l)` prints it as
+xsim does, a bare line. A `line` is an access type, which the IR does not
+have, so it is held as a vector of 1024 character codes; a longer line loses
+its first characters. The nine-state `read`/`write` overloads are declared
+in `ieee.std_logic_1164`, as VHDL-2008 has them, and `ieee.std_logic_textio`
+is empty (it declared the same profiles, a homograph of each for a design
+that used both). Reading, and a file other than `output`, are refused.
+
 ## Tests
 
 - `tests/vhdl_xsim.rs`, above.

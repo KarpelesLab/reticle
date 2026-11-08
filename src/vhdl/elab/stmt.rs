@@ -776,6 +776,9 @@ impl<'a> Lowerer<'a, '_> {
         if self.native_procedure(d, span, out) {
             return;
         }
+        if self.textio_procedure(d, &args, span, out).is_some() {
+            return;
+        }
         self.inline(d, &args, span, None, out);
     }
 

@@ -472,6 +472,16 @@ fn layout_inner<'a>(
                 signed,
             })
         }
+        // `std.textio.line`, an access to a string: a vector of character
+        // codes the textio procedures append to (see `super::textio`).
+        TypeClass::Access if a.designated_type(ty).is_some_and(|d| a.is_string_type(d)) => {
+            Some(Layout {
+                ty,
+                kind: LayoutKind::Opaque,
+                width: super::textio::LINE_CHARS * 8,
+                signed: false,
+            })
+        }
         TypeClass::Access => unsupported(env, "an access type"),
         TypeClass::File => unsupported(env, "a file type"),
         TypeClass::Protected => unsupported(env, "a protected type"),

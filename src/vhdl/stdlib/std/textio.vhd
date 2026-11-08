@@ -47,6 +47,13 @@ package textio is
 
   procedure sread (l : inout line; value : out string; strlen : out natural);
 
+  -- VHDL-2008: a string written as it is, whatever overload of `write` a
+  -- string literal would otherwise be ambiguous between.
+  procedure swrite (l         : inout line;
+                    value     : in string;
+                    justified : in side  := right;
+                    field     : in width := 0);
+
   procedure write (l         : inout line;
                    value     : in bit;
                    justified : in side  := right;
@@ -109,6 +116,7 @@ package textio is
   attribute foreign of tee      : procedure is "reticle: builtin";
   attribute foreign of read     : procedure is "reticle: builtin";
   attribute foreign of sread    : procedure is "reticle: builtin";
+  attribute foreign of swrite   : procedure is "reticle: builtin";
   attribute foreign of write    : procedure is "reticle: builtin";
   attribute foreign of hread    : procedure is "reticle: builtin";
   attribute foreign of oread    : procedure is "reticle: builtin";

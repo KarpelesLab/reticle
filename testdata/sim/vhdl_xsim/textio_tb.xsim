@@ -1,0 +1,8 @@
+hello from textio
+n=42 v=00111100 h=3C o=074
+TRUE Z 1011 1 X
+    42|42    |  ab
+3.250000e+00 3.25 1.5 ns 1500 ps
+swrite works
+
+at 7 ns
