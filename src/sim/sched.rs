@@ -361,7 +361,19 @@ impl<'d> Simulator<'d> {
             return;
         }
         let old = std::mem::replace(&mut s.value, value.clone());
-        if s.forced.is_some() {
+        if let Some(forced) = &s.forced {
+            // The bits not forced follow what is written.
+            let Some(mask) = &s.force_mask else {
+                return;
+            };
+            let seen = super::value::merge_masked(&value, forced, mask);
+            if seen == *forced {
+                return;
+            }
+            let before = s.forced.replace(seen.clone());
+            if let Some(before) = before {
+                self.propagate(sig, &before, &seen);
+            }
             return;
         }
         self.propagate(sig, &old, &value);
@@ -713,10 +725,18 @@ impl<'d> Simulator<'d> {
             (dr.inst, dr.source, dr.target.clone(), dr.delay)
         };
         let value = match source {
-            DriverSource::Force { value, sig, active } => {
+            DriverSource::Force {
+                value,
+                sig,
+                part,
+                active,
+            } => {
                 if active {
                     let v = self.eval(inst, value).into_logic();
-                    self.force(super::api::NetHandle(sig), v);
+                    match part {
+                        Some((hi, lo)) => self.force_bits(sig, hi, lo, v),
+                        None => self.force(super::api::NetHandle(sig), v),
+                    }
                 }
                 return;
             }

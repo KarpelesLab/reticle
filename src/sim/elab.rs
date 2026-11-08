@@ -232,6 +232,8 @@ pub(crate) enum DriverSource {
         value: ExprId,
         /// The signal forced.
         sig: SigId,
+        /// The bits forced, `(hi, lo)`; `None` for all of them.
+        part: Option<(u32, u32)>,
         /// False once released, until forced again.
         active: bool,
     },
@@ -858,6 +860,7 @@ impl<'d> Simulator<'d> {
             kind,
             value: value.with_signed(ty.is_signed()),
             forced: None,
+            force_mask: None,
             two_state: false,
             two_state_bits: None,
             resolution: super::value::Resolution::Wire,

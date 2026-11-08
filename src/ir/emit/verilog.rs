@@ -1116,13 +1116,17 @@ impl<'a> Printer<'a> {
                 self.out.line(&format!("if (!({cond})) {call};"));
             }
             StmtKind::Finish => self.out.line("$finish;"),
-            StmtKind::Force { target, value } => {
-                let target = self.lvalue(&crate::ir::Lvalue::Net(*target))?;
+            StmtKind::Force {
+                target,
+                part,
+                value,
+            } => {
+                let target = self.lvalue(&forced(*target, *part))?;
                 let value = self.expr(*value)?;
                 self.out.line(&format!("force {target} = {value};"));
             }
-            StmtKind::Release { target } => {
-                let target = self.lvalue(&crate::ir::Lvalue::Net(*target))?;
+            StmtKind::Release { target, part } => {
+                let target = self.lvalue(&forced(*target, *part))?;
                 self.out.line(&format!("release {target};"));
             }
             StmtKind::Stop => self.out.line("$stop;"),
@@ -2024,6 +2028,18 @@ fn paren_unless_atom(text: &str) -> String {
         text.to_owned()
     } else {
         format!("({text})")
+    }
+}
+
+/// What a `force` or `release` names, as an assignment target.
+fn forced(target: crate::ir::NetId, part: Option<(u32, u32)>) -> crate::ir::Lvalue {
+    match part {
+        Some((hi, lo)) => crate::ir::Lvalue::Slice {
+            net: target,
+            hi,
+            lo,
+        },
+        None => crate::ir::Lvalue::Net(target),
     }
 }
 

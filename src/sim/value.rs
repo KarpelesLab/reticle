@@ -257,6 +257,20 @@ pub(crate) fn merge_unknown(a: &Logic, b: &Logic) -> Logic {
     Logic::from_planes(width, a.is_signed() && b.is_signed(), value, unknown)
 }
 
+/// `forced` where `mask` has a one, `value` elsewhere, as wide as `forced`.
+pub(crate) fn merge_masked(value: &Logic, forced: &Logic, mask: &Logic) -> Logic {
+    let bits: Vec<Bit> = (0..forced.width())
+        .map(|i| {
+            if mask.bit(i) == Bit::One {
+                forced.bit(i)
+            } else {
+                value.get(i).unwrap_or(Bit::X)
+            }
+        })
+        .collect();
+    Logic::from_bits(&bits).with_signed(forced.is_signed())
+}
+
 /// Resolves two driver contributions of equal width with Verilog `wire`
 /// semantics: `z` yields, agreement wins, conflict and `x` give `x`.
 pub(crate) fn resolve_wire(a: &Logic, b: &Logic) -> Logic {
@@ -430,8 +444,12 @@ pub(crate) struct Signal {
     pub(crate) kind: NetKind,
     /// The current resolved value (what drivers and processes produced).
     pub(crate) value: Logic,
-    /// An override from `force`, reported to every reader until released.
+    /// An override from `force`, reported to every reader until released:
+    /// the whole value readers see while any bit is forced.
     pub(crate) forced: Option<Logic>,
+    /// The bits forced, when not all of them are (`force w[0] = 0`); the
+    /// others follow `value`.
+    pub(crate) force_mask: Option<Logic>,
     /// A two-state variable (`bit`, `int`, ...): it starts at zero and
     /// holds a `0` for every `x` or `z` written to it.
     pub(crate) two_state: bool,
@@ -563,6 +581,7 @@ mod tests {
             kind: NetKind::Wire,
             value: l("4'd3"),
             forced: None,
+            force_mask: None,
             two_state: false,
             two_state_bits: None,
             resolution: Resolution::Wire,

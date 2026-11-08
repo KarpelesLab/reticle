@@ -452,16 +452,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             // it would win where the standard says it should, too.
             AstStmt::ProcAssign(target, value) => self.force(target, value, s.span, out),
             AstStmt::Deassign(target) => {
-                if let Some(net) = self.forced_net(target, "deassign") {
+                if let Some((net, part)) = self.forced_net(target, "deassign") {
                     out.span = s.span;
-                    out.push(ir::StmtKind::Release { target: net });
+                    out.push(ir::StmtKind::Release { target: net, part });
                 }
             }
             AstStmt::Force(target, value) => self.force(target, value, s.span, out),
             AstStmt::Release(target) => {
-                if let Some(net) = self.forced_net(target, "release") {
+                if let Some((net, part)) = self.forced_net(target, "release") {
                     out.span = s.span;
-                    out.push(ir::StmtKind::Release { target: net });
+                    out.push(ir::StmtKind::Release { target: net, part });
                 }
             }
             AstStmt::Trigger {
@@ -792,19 +792,24 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// `force net = value;`, which the simulator keeps following the value
     /// until a `release` (see [`ir::StmtKind::Force`]).
     fn force(&mut self, target: &'ast Expr, value: &'ast Expr, span: Span, out: &mut BlockBuilder) {
-        let Some(net) = self.forced_net(target, "force") else {
+        let Some((net, part)) = self.forced_net(target, "force") else {
             return;
         };
         let v = if matches!(self.net_type(net), crate::verilog::elab::types::VType::Real) {
             self.real(value, &mut Sink::Proc(out))
         } else {
-            let width = self.net_width(net);
-            let signed = self.net_type(net).packed().is_some_and(|p| p.signed);
-            self.expr(value, Some(Ctx { width, signed }), &mut Sink::Proc(out))
+            let width = match part {
+                Some((hi, lo)) => hi - lo + 1,
+                None => self.net_width(net),
+            };
+            let signed = part.is_none() && self.net_type(net).packed().is_some_and(|p| p.signed);
+            let v = self.expr(value, Some(Ctx { width, signed }), &mut Sink::Proc(out));
+            self.coerce(v, width, signed)
         };
         out.span = span;
         out.push(ir::StmtKind::Force {
             target: net,
+            part,
             value: v,
         });
     }
@@ -812,18 +817,48 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// The whole net a `force` or `release` names: a net or variable of
     /// this module, or one below it through a hierarchical name. Part of a
     /// net is not supported.
-    fn forced_net(&mut self, target: &'ast Expr, what: &str) -> Option<NetId> {
-        // Path resolution sees through `w[0]` to `w`, so `force w[0] = 0`
-        // used to force the whole of `w`.
+    fn forced_net(
+        &mut self,
+        target: &'ast Expr,
+        what: &str,
+    ) -> Option<(NetId, Option<(u32, u32)>)> {
+        // `force w[0] = 0` and `release w[3:2]`: a constant bit- or
+        // part-select is forced on its own, the other bits following their
+        // drivers (IEEE 1364-2005 §9.3.2). Path resolution sees through
+        // `w[0]` to `w`, so this used to force the whole of `w`, and then
+        // was refused.
         if matches!(target.kind, ExprKind::Index { .. } | ExprKind::Range { .. }) {
-            self.env.unsupported(
-                target.span,
-                &format!("`{what}` of part of a net or variable"),
-            );
-            return None;
+            self.forcing = true;
+            let lvalue = self.lvalue(target, true);
+            self.forcing = false;
+            return match lvalue {
+                // Of a vector net only (IEEE 1364-2005 §9.3.2), as xsim
+                // has it too: a variable's bits are not forced apart.
+                Some(ir::Lvalue::Slice { net, .. }) if self.nets[net.index()].is_var => {
+                    let name = self.b.module().nets[net].name.clone();
+                    self.env.error(
+                        codes::TYPE,
+                        target.span,
+                        format!(
+                            "a bit- or part-select of the variable `{name}` cannot be the \
+                             target of `{what}`; only a net's can"
+                        ),
+                    );
+                    None
+                }
+                Some(ir::Lvalue::Slice { net, hi, lo }) => Some((net, Some((hi, lo)))),
+                Some(ir::Lvalue::Net(net)) => Some((net, None)),
+                _ => {
+                    self.env.unsupported(
+                        target.span,
+                        &format!("`{what}` of a select whose bits are not constant"),
+                    );
+                    None
+                }
+            };
         }
         match self.env.probe(|env| env.resolve_path(target)) {
-            Some(Symbol::Net { net, .. }) => Some(net),
+            Some(Symbol::Net { net, .. }) => Some((net, None)),
             _ => {
                 self.env.unsupported(
                     target.span,

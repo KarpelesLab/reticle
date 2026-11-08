@@ -176,6 +176,14 @@ fn after(d: Delay) -> String {
     }
 }
 
+/// The `[hi:lo]` of a `force` or `release` of part of a net.
+fn part_text(part: Option<(u32, u32)>) -> String {
+    match part {
+        Some((hi, lo)) => format!("[{hi}:{lo}]"),
+        None => String::new(),
+    }
+}
+
 struct Printer<'a> {
     out: &'a mut String,
     indent: usize,
@@ -589,12 +597,21 @@ impl<'a> Printer<'a> {
                 self.line(&line);
             }
             StmtKind::Finish => self.line("finish"),
-            StmtKind::Force { target, value } => {
-                let line = format!("force {} = {}", self.net_ref(*target), self.expr(*value));
+            StmtKind::Force {
+                target,
+                part,
+                value,
+            } => {
+                let line = format!(
+                    "force {}{} = {}",
+                    self.net_ref(*target),
+                    part_text(*part),
+                    self.expr(*value)
+                );
                 self.line(&line);
             }
-            StmtKind::Release { target } => {
-                let line = format!("release {}", self.net_ref(*target));
+            StmtKind::Release { target, part } => {
+                let line = format!("release {}{}", self.net_ref(*target), part_text(*part));
                 self.line(&line);
             }
             StmtKind::Stop => self.line("stop"),
@@ -1385,6 +1402,19 @@ impl Parser {
                 Err(Fail)
             }
         }
+    }
+
+    /// `[hi:lo]` after the net of a `force` or `release`, when present.
+    fn optional_part(&mut self) -> PResult<Option<(u32, u32)>> {
+        if !self.eat_punct("[") {
+            return Ok(None);
+        }
+        let hi = self.expect_int()?;
+        self.expect_punct(":")?;
+        let lo = self.expect_int()?;
+        self.expect_punct("]")?;
+        let bound = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
+        Ok(Some((bound(hi), bound(lo))))
     }
 
     fn expect_net(&mut self) -> PResult<NetId> {
@@ -2186,15 +2216,21 @@ impl Parser {
                     }
                     "force" => {
                         let target = self.expect_net()?;
+                        let part = self.optional_part()?;
                         self.expect_punct("=")?;
                         let value = self.expr()?;
                         self.expect_newline()?;
-                        StmtKind::Force { target, value }
+                        StmtKind::Force {
+                            target,
+                            part,
+                            value,
+                        }
                     }
                     "release" => {
                         let target = self.expect_net()?;
+                        let part = self.optional_part()?;
                         self.expect_newline()?;
-                        StmtKind::Release { target }
+                        StmtKind::Release { target, part }
                     }
                     "stop" => {
                         self.expect_newline()?;
@@ -2680,6 +2716,8 @@ module \"a b\"
   process p3 initial
     force %t = 8'd3
     release %t
+    force %t[1:0] = 2'd1
+    release %t[1:0]
     for %i = resize(8'd0, s64) as int; lt(%i, 8'd4 as int); %i = %i
       break
     end

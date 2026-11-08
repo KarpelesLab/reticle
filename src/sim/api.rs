@@ -243,8 +243,69 @@ impl<'d> Simulator<'d> {
         let value = value.resize(s.width()).with_signed(s.value.is_signed());
         let old = s.effective().clone();
         s.forced = Some(value.clone());
+        s.force_mask = None;
         if old != value {
             self.propagate(sig, &old, &value);
+        }
+    }
+
+    /// Forces bits `hi..=lo` of `sig` to `value`; the others keep
+    /// following their drivers, or keep what is forced of them already.
+    pub(crate) fn force_bits(&mut self, sig: SigId, hi: u32, lo: u32, value: Logic) {
+        let s = &mut self.signals[sig.idx()];
+        let width = s.width();
+        if hi >= width || lo > hi {
+            return;
+        }
+        let old = s.effective().clone();
+        let mut mask = match (&s.forced, &s.force_mask) {
+            (Some(_), None) => Logic::ones(width),
+            (Some(_), Some(m)) => m.clone(),
+            (None, _) => Logic::zero(width),
+        };
+        let mut seen = old.clone();
+        let value = value.resize(hi - lo + 1);
+        for i in lo..=hi {
+            mask.set_bit(i, crate::logic::Bit::One);
+            seen.set_bit(i, value.bit(i - lo));
+        }
+        s.force_mask = if mask.is_fully_known() && mask == Logic::ones(width) {
+            None
+        } else {
+            Some(mask)
+        };
+        s.forced = Some(seen.clone());
+        if old != seen {
+            self.propagate(sig, &old, &seen);
+        }
+    }
+
+    /// Releases bits `hi..=lo` of the wire `sig`, which go back to what its
+    /// drivers give (a variable's bits are not forced apart). Releasing the
+    /// last forced bits releases the net.
+    pub(crate) fn release_bits(&mut self, sig: SigId, hi: u32, lo: u32) {
+        let s = &self.signals[sig.idx()];
+        let width = s.width();
+        let Some(forced) = s.forced.clone() else {
+            return;
+        };
+        if hi >= width || lo > hi {
+            return;
+        }
+        let mut mask = s.force_mask.clone().unwrap_or_else(|| Logic::ones(width));
+        for i in lo..=hi {
+            mask.set_bit(i, crate::logic::Bit::Zero);
+        }
+        if mask.is_zero() {
+            self.release(super::api::NetHandle(sig));
+            return;
+        }
+        let s = &mut self.signals[sig.idx()];
+        let seen = super::value::merge_masked(&s.value, &forced, &mask);
+        s.force_mask = Some(mask);
+        s.forced = Some(seen.clone());
+        if seen != forced {
+            self.propagate(sig, &forced, &seen);
         }
     }
 

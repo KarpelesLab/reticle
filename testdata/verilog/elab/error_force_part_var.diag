@@ -1,0 +1,12 @@
+error[V0025]: a bit- or part-select of the variable `r` cannot be the target of `force`; only a net's can
+ --> error_force_part_var.v:8:15
+  |
+8 |         force r[1] = 1'b0;
+  |               ^^^^
+
+error[V0025]: a bit- or part-select of the variable `r` cannot be the target of `release`; only a net's can
+ --> error_force_part_var.v:9:17
+  |
+9 |         release r[1];
+  |                 ^^^^
+

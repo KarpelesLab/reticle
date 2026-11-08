@@ -605,9 +605,12 @@ pub enum StmtKind {
     /// a `release`, following the expression as it changes (IEEE 1364-2005
     /// §9.3.2). Simulation only.
     Force {
-        /// The whole net forced.
+        /// The net forced.
         target: NetId,
-        /// The value it reads while forced.
+        /// The bits forced, `(hi, lo)`, for `force w[0] = 0`; `None` for
+        /// the whole net.
+        part: Option<(u32, u32)>,
+        /// The value it reads while forced, as wide as the bits forced.
         value: ExprId,
     },
     /// `release net;`: undoes a `force`. A wire returns to its drivers; a
@@ -615,6 +618,8 @@ pub enum StmtKind {
     Release {
         /// The net released.
         target: NetId,
+        /// The bits released, `(hi, lo)`; `None` for the whole net.
+        part: Option<(u32, u32)>,
     },
     /// End the simulation (`$finish`).
     Finish,

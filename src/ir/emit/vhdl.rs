@@ -1641,13 +1641,17 @@ impl<'a> Printer<'a> {
                 ));
             }
             StmtKind::Finish => self.out.line("std.env.finish;"),
-            StmtKind::Force { target, value } => {
+            StmtKind::Force {
+                target,
+                part,
+                value,
+            } => {
                 let (v, _) = self.expr(*value)?;
-                let (name, _) = self.lvalue_text(&crate::ir::Lvalue::Net(*target), true)?;
+                let (name, _) = self.lvalue_text(&forced(*target, *part), true)?;
                 self.out.line(&format!("{name} <= force {v};"));
             }
-            StmtKind::Release { target } => {
-                let (name, _) = self.lvalue_text(&crate::ir::Lvalue::Net(*target), true)?;
+            StmtKind::Release { target, part } => {
+                let (name, _) = self.lvalue_text(&forced(*target, *part), true)?;
                 self.out.line(&format!("{name} <= release;"));
             }
             StmtKind::Stop => self.out.line("std.env.stop;"),
@@ -2902,6 +2906,18 @@ fn contains_direct(block: &Block, pred: &dyn Fn(&StmtKind) -> bool) -> bool {
             _ => stmt.blocks().iter().any(|b| contains_direct(b, pred)),
         }
     })
+}
+
+/// What a `force` or `release` names, as an assignment target.
+fn forced(target: crate::ir::NetId, part: Option<(u32, u32)>) -> crate::ir::Lvalue {
+    match part {
+        Some((hi, lo)) => crate::ir::Lvalue::Slice {
+            net: target,
+            hi,
+            lo,
+        },
+        None => crate::ir::Lvalue::Net(target),
+    }
 }
 
 #[cfg(test)]

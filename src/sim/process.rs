@@ -757,15 +757,22 @@ impl<'d> Simulator<'d> {
                 }
                 Flow::Next
             }
-            StmtKind::Force { target, value } => {
+            StmtKind::Force {
+                target,
+                part,
+                value,
+            } => {
                 let sig = self.instances[inst.idx()].nets[target.index()];
-                self.force_following(inst, sig, *value);
+                self.force_following(inst, sig, *part, *value);
                 Flow::Next
             }
-            StmtKind::Release { target } => {
+            StmtKind::Release { target, part } => {
                 let sig = self.instances[inst.idx()].nets[target.index()];
-                self.stop_following(sig);
-                self.release(super::api::NetHandle(sig));
+                self.stop_following(sig, *part);
+                match part {
+                    Some((hi, lo)) => self.release_bits(sig, *hi, *lo),
+                    None => self.release(super::api::NetHandle(sig)),
+                }
                 Flow::Next
             }
             StmtKind::Finish => {
@@ -786,11 +793,17 @@ impl<'d> Simulator<'d> {
     /// a `release`: one driver per forced expression, made the first time
     /// and woken by what the expression reads. A force used to take the
     /// expression's value once.
-    fn force_following(&mut self, inst: InstId, sig: SigId, value: ExprId) {
-        self.stop_following(sig);
+    fn force_following(
+        &mut self,
+        inst: InstId,
+        sig: SigId,
+        part: Option<(u32, u32)>,
+        value: ExprId,
+    ) {
+        self.stop_following(sig, part);
         let found = self.drivers.iter().position(|d| {
             d.inst == inst
-                && matches!(d.source, DriverSource::Force { value: v, sig: s, .. } if v == value && s == sig)
+                && matches!(d.source, DriverSource::Force { value: v, sig: s, part: p, .. } if v == value && s == sig && p == part)
         });
         let id = match found {
             Some(i) => DriverId::at(i),
@@ -801,6 +814,7 @@ impl<'d> Simulator<'d> {
                     source: DriverSource::Force {
                         value,
                         sig,
+                        part,
                         active: true,
                     },
                     target: Target::Sig {
@@ -825,11 +839,22 @@ impl<'d> Simulator<'d> {
         self.eval_driver(id);
     }
 
-    /// Ends every `force` of `sig` that follows an expression.
-    fn stop_following(&mut self, sig: SigId) {
+    /// Ends every `force` of `sig` that follows an expression and forces
+    /// any of the bits `part` names (all of them for `None`).
+    fn stop_following(&mut self, sig: SigId, part: Option<(u32, u32)>) {
+        let overlaps = |p: Option<(u32, u32)>| match (p, part) {
+            (Some((h1, l1)), Some((h2, l2))) => l1 <= h2 && l2 <= h1,
+            _ => true,
+        };
         for d in &mut self.drivers {
-            if let DriverSource::Force { sig: s, active, .. } = &mut d.source
+            if let DriverSource::Force {
+                sig: s,
+                part: p,
+                active,
+                ..
+            } = &mut d.source
                 && *s == sig
+                && overlaps(*p)
             {
                 *active = false;
             }

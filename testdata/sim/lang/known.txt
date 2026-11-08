@@ -2,12 +2,9 @@
 # each with the reason (`tests/sim_lang_xsim.rs`). A `skip` is not run.
 # Reasons that start `refused:` or `line` are what Reticle printed;
 # the rest were written by hand.
-v/min_26.v refused: unsupported construct: `force` of part of a net or variable
 v/min_8.v refused: `fact` calls itself
 v/min_intra_repeat.v xsim counts every change of `clk` for `d <= repeat (2) @(posedge clk) a` and posedges for `g = repeat (2) @(posedge clk) ...`; IEEE 1800-2017 §9.4.5 counts posedges in both, as Reticle does
 v/v_event.v the order of processes woken in one time slot, which IEEE 1364-2005 §11.4.2 leaves to the simulator: with a named event in the waits, xsim wakes them in an order neither the order they are written in nor the order they began to wait gives
-v/v_force.v refused: unsupported construct: `force` of part of a net or variable
-v/v_force_b.v refused: unsupported construct: `force` of part of a net or variable
 v/v_function.v refused: `fact` calls itself
 v/v_intra.v xsim counts every change of `clk` for `d <= repeat (2) @(posedge clk) a`, not only posedges (measured: `repeat (3)` lands on a negedge), where its own blocking form and IEEE 1800-2017 §9.4.5 count posedges; Reticle counts posedges
 sv/min_dynarray.sv refused: unsupported construct: dynamic array dimension `[]`

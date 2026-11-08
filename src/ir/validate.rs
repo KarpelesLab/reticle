@@ -485,8 +485,20 @@ impl<'a> Checker<'a> {
         let span = stmt.span;
         match &stmt.kind {
             StmtKind::Assign { target, value, .. } => self.check_assignment(target, *value, span),
-            StmtKind::Force { target, value } => {
-                self.check_assignment(&Lvalue::Net(*target), *value, span);
+            StmtKind::Force {
+                target,
+                part,
+                value,
+            } => {
+                let target = match part {
+                    Some((hi, lo)) => Lvalue::Slice {
+                        net: *target,
+                        hi: *hi,
+                        lo: *lo,
+                    },
+                    None => Lvalue::Net(*target),
+                };
+                self.check_assignment(&target, *value, span);
             }
             StmtKind::Release { .. } => {}
             StmtKind::If { cond, .. } => self.check_bit(*cond, "if condition", span),

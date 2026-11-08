@@ -187,6 +187,8 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     array_frames: Vec<Option<(ir::MemoryId, VType)>>,
     /// The memory the last inlined call left its array result in.
     array_result: Option<(ir::MemoryId, VType)>,
+    /// While the target of a `force` or `release` is lowered.
+    forcing: bool,
     /// `wire x = expr;` initialisers waiting for the rest of their scope's
     /// declarations; see [`Lowerer::declarations`].
     net_inits: Vec<(NetId, &'ast ast::Expr, Option<Delay>, Span)>,
@@ -442,6 +444,7 @@ pub(crate) fn elaborate_module(
             inline_frames: Vec::new(),
             array_frames: Vec::new(),
             array_result: None,
+            forcing: false,
             net_inits: Vec::new(),
             net_delays: Vec::new(),
             natural_connections: false,
@@ -786,6 +789,10 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     /// Checks that a procedural assignment targets a variable and a
     /// continuous one a net, per the dialect's rules.
     fn check_assignable(&mut self, net: NetId, procedural: bool, span: Span) {
+        // A `force` or `release` may name a net or a variable alike.
+        if self.forcing {
+            return;
+        }
         let info = &self.nets[net.index()];
         let is_var = info.is_var;
         let decl_span = info.span;
