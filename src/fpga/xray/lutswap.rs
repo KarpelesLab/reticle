@@ -17,7 +17,10 @@
 //! stays where it is: a `LUT6_2`'s `I5` is tied to one so that `O6` reads
 //! the upper half, and is never routed, because an unrouted input reads
 //! one on this fabric — moved, that one would land on a pin a signal had
-//! left and the table would read the signal instead.
+//! left and the table would read the signal instead. Nor does the second
+//! of two inputs carrying one signal: the router could end the first on
+//! it, and the table would have two signals on one input and one on none
+//! (see [`movable_inputs`]).
 
 use std::collections::BTreeMap;
 
@@ -58,19 +61,37 @@ fn reads(init: &Const, k: u32) -> bool {
 /// Which inputs of `instance` the router may move: one that carries a
 /// signal, or one its truth table does not read.
 fn movable(design: &Design, top: ModuleId, netlist: &Netlist, instance: usize) -> [bool; 6] {
-    let mut out = [false; 6];
     let Some(init) = truth_table(design, top, netlist, instance) else {
-        return out;
+        return [false; 6];
     };
-    for (k, role) in INPUTS.iter().enumerate() {
-        let pin = netlist.instances[instance]
+    let signals = INPUTS.map(|role| {
+        netlist.instances[instance]
             .pins
             .iter()
             .map(|p| &netlist.pins[*p])
-            .find(|p| !p.output && p.role == *role);
-        out[k] = match pin {
-            Some(pin) if pin.signal.is_some() => true,
-            _ => !reads(&init, u32::try_from(k).unwrap_or(0)),
+            .find(|p| !p.output && p.role == role)
+            .map(|p| p.signal)
+    });
+    movable_inputs(&init, &signals)
+}
+
+/// [`movable`], of a table whose truth table is `init` and whose input `k`
+/// carries `signals[k]`: `None` for no pin, `Some(None)` for a constant.
+///
+/// **A signal on two inputs moves on the first alone.** The router ends
+/// each sink on a node of its class that no other signal holds and that is
+/// not already in its own tree; the other input of the same signal, not yet
+/// routed, is neither, so the router could end the first sink there, and
+/// then route the second to its own node, already reached. Two sinks on one
+/// input, and nothing for [`apply_lut_moves`] to follow (`sdp_65536x4`,
+/// whose table read its read multiplexer's select twice). Kept where it is,
+/// the second input is in no class and nothing ends on it.
+fn movable_inputs(init: &Const, signals: &[Option<Option<usize>>; 6]) -> [bool; 6] {
+    let mut out = [false; 6];
+    for (k, signal) in signals.iter().enumerate() {
+        out[k] = match signal {
+            Some(Some(signal)) => !signals[..k].contains(&Some(Some(*signal))),
+            Some(None) | None => !reads(init, u32::try_from(k).unwrap_or(0)),
         };
     }
     out
@@ -280,5 +301,54 @@ mod tests {
         }
         assert!(reads(&moved, 3) && reads(&moved, 0));
         assert!(!reads(&moved, 1) && !reads(&moved, 5));
+    }
+
+    /// **A signal on two inputs is offered to the router on the first
+    /// alone.** `sdp_65536x4`'s table, as it reached the router before
+    /// `srl` folded it (`0xf00f99990ff06666`, the read multiplexer's select
+    /// on `I4` and `I5` both): `I5` must stay where it is, every other
+    /// signal move, and a constant the table reads stay too. Would catch
+    /// the second input offered, with which the router once ended `I4` on
+    /// `A6` and `I5` on its own `A6` (`` `$lut4` has two signals routed to
+    /// one input ``); would not catch the router doing that to inputs of
+    /// two different signals, which its own rule (a node another signal
+    /// holds) is for.
+    #[test]
+    fn a_signal_on_two_inputs_moves_on_the_first_alone() {
+        let mut init = Const::zero(64);
+        let table: u64 = 0xf00f_9999_0ff0_6666;
+        for i in 0..64u32 {
+            if table >> i & 1 == 1 {
+                init.set_bit(i, Bit::One);
+            }
+        }
+        let signals = [0, 1, 2, 3, 4, 4].map(|s| Some(Some(s)));
+        assert_eq!(
+            movable_inputs(&init, &signals),
+            [true, true, true, true, true, false]
+        );
+        // The same signal first on I1 and again on I3: I3 stays.
+        let signals = [0, 7, 2, 7, 4, 5].map(|s| Some(Some(s)));
+        assert_eq!(
+            movable_inputs(&init, &signals),
+            [true, true, true, false, true, true]
+        );
+        // A constant the table reads stays; one on no pin it does not read
+        // moves.
+        let mut signals = [0, 1, 2, 3, 4, 5].map(|s| Some(Some(s)));
+        signals[2] = Some(None);
+        assert_eq!(
+            movable_inputs(&init, &signals),
+            [true, true, false, true, true, true]
+        );
+        let mut and = Const::zero(64);
+        for i in (0..64u32).filter(|i| i & 3 == 3) {
+            and.set_bit(i, Bit::One);
+        }
+        let signals = [Some(Some(0)), Some(Some(1)), None, None, None, None];
+        assert_eq!(
+            movable_inputs(&and, &signals),
+            [true, true, true, true, true, true]
+        );
     }
 }

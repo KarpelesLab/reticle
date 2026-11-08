@@ -3362,7 +3362,13 @@ So, in the order they went in:
   connections and the netlist's pins are rewritten, before the route is
   checked or anything written. An input tied to a constant the table
   reads stays — a `LUT6_2`'s `I5` is high because an unrouted input
-  reads one here. Measured on one placement with a first version of it:
+  reads one here. So does the second of two inputs carrying one signal
+  (2026-11-09): the router ends a sink on an input of its class that no
+  other signal holds and that is not in its own tree, and the other
+  input of the same signal, not yet routed, was neither; `sdp_65536x4`'s
+  read multiplexer had the first ended on the second's input and the
+  second on its own, two sinks on one input, and the build stopped
+  (`` `$lut4` has two signals routed to one input ``). Measured on one placement with a first version of it:
   13,731 nodes overused at the thirteenth pass without it, 9,698 with
   it, and the later passes cheaper. Vivado's 3,808 tables that are only
   a wire, a flip-flop's way in through the table's own inputs, are not
