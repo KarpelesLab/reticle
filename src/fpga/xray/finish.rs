@@ -171,10 +171,11 @@ impl XrayDatabase {
         netlist: &Netlist,
         placement: &Placement,
     ) -> Result<String, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let by_position: HashMap<(u32, u32), &XrayTile> =
             tiles.iter().map(|t| ((t.grid_x, t.grid_y), t)).collect();
-        let rows = block_ram_rows(&tiles);
+        let rows = block_ram_rows(tiles);
         let mut lines: Vec<(usize, String)> = Vec::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             let Some(site) = placement.site_of(index) else {
@@ -261,8 +262,9 @@ impl XrayDatabase {
     /// [`XrayError::Malformed`] when the database has neither, which no 7-series
     /// die has been seen to do.
     pub fn config_tiles(&self, files: &dyn FileProvider) -> Result<ConfigTiles, XrayError> {
-        let tiles = self.tiles(files)?;
-        config_tiles_of(&tiles).ok_or_else(|| XrayError::Malformed {
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
+        config_tiles_of(tiles).ok_or_else(|| XrayError::Malformed {
             path: format!("{}/{}", self.root, self.family),
             message: "no CFG_CENTER_MID and MONITOR_BOT tiles in the tile grid".to_owned(),
         })
@@ -282,7 +284,8 @@ impl XrayDatabase {
         frames: &mut FrameData,
         options: &BitstreamOptions,
     ) -> Result<FinishedFrames, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let mut report = FinishedFrames::default();
         let mut sets: HashMap<String, FeatureSet> = HashMap::new();
         let malformed = |message: String| XrayError::Malformed {
@@ -394,7 +397,7 @@ impl XrayDatabase {
         }
 
         // The configuration tiles.
-        let bits = config_tiles_of(&tiles).map_or_else(Vec::new, |t| options.config_tile_bits(t));
+        let bits = config_tiles_of(tiles).map_or_else(Vec::new, |t| options.config_tile_bits(t));
         for (address, word, bit) in bits {
             frames
                 .set(address, word, bit)
@@ -414,7 +417,8 @@ impl XrayDatabase {
         &self,
         files: &dyn FileProvider,
     ) -> Result<Vec<(FrameAddress, usize, u32)>, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let mut sets: HashMap<String, FeatureSet> = HashMap::new();
         let path = format!(
             "{}/{}/{}/package_pins.csv",
@@ -464,7 +468,8 @@ impl XrayDatabase {
         frames: &mut FrameData,
         banks: &[IoBankUse],
     ) -> Result<usize, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let mut sets: HashMap<String, FeatureSet> = HashMap::new();
         let mut count = 0usize;
         let malformed = |message: String| XrayError::Malformed {

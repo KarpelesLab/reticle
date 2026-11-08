@@ -157,8 +157,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
-use super::arch::{Arch, ConfigBit, PipDecl, TileType, WireDecl, WireRef};
+use super::arch::{Arch, ConfigBit, FastMap, PipDecl, TileType, WireDecl, WireRef};
 use super::xc7::{FrameMap, Part, TileBits};
 use crate::ir::memfile::FileProvider;
 use crate::json::Json;
@@ -859,6 +860,52 @@ pub struct XrayDatabase {
     part_dir: String,
     fabric: String,
     device: String,
+    /// The tile grid last parsed: see [`XrayDatabase::tiles_shared`].
+    tile_cache: TileCache,
+}
+
+/// The last `tilegrid.json` an [`XrayDatabase`] parsed, with its text.
+///
+/// Not part of what a database *is*: a clone starts empty and two databases
+/// compare equal whatever either has parsed.
+#[derive(Default)]
+struct TileCache(Mutex<Option<(String, Arc<Vec<XrayTile>>)>>);
+
+impl TileCache {
+    /// The tiles parsed from `text`, if `text` is what was parsed last.
+    fn get(&self, text: &str) -> Option<Arc<Vec<XrayTile>>> {
+        let held = self.0.lock().ok()?;
+        held.as_ref()
+            .filter(|(parsed, _)| parsed == text)
+            .map(|(_, tiles)| Arc::clone(tiles))
+    }
+
+    /// Files `tiles` as what `text` parses to.
+    fn put(&self, text: String, tiles: Arc<Vec<XrayTile>>) {
+        if let Ok(mut held) = self.0.lock() {
+            *held = Some((text, tiles));
+        }
+    }
+}
+
+impl Clone for TileCache {
+    fn clone(&self) -> Self {
+        TileCache::default()
+    }
+}
+
+impl PartialEq for TileCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for TileCache {}
+
+impl fmt::Debug for TileCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TileCache")
+    }
 }
 
 impl XrayDatabase {
@@ -933,6 +980,7 @@ impl XrayDatabase {
             part_dir,
             fabric,
             device: device.to_owned(),
+            tile_cache: TileCache::default(),
         })
     }
 
@@ -1030,8 +1078,26 @@ impl XrayDatabase {
         graph: &super::arch::RoutingGraph,
         model: DelayModel,
     ) -> Result<Vec<u32>, XrayError> {
-        type Delays = HashMap<(String, String), u32>;
-        let mut tables: Vec<Delays> = Vec::with_capacity(arch.tile_types.len());
+        // Every wire name of the graph as a number, read in node order, so that
+        // a pip's lookup below is two numbers and not two strings: hashing the
+        // names of the die's pips, each behind a pointer into its own
+        // allocation, was most of what this cost (2026-11-09).
+        let mut name_ids: FastMap<&str, u32> = FastMap::default();
+        let node_name: Vec<u32> = graph
+            .nodes
+            .iter()
+            .map(|wire| {
+                let next = u32::try_from(name_ids.len()).unwrap_or(u32::MAX);
+                *name_ids.entry(wire.name.as_str()).or_insert(next)
+            })
+            .collect();
+        // Each pip's delay by the names of the wires it joins, from and to. A
+        // name no wire of the graph has can match no pip and is left out.
+        type Delays = FastMap<(u32, u32), u32>;
+        // One table per file, which the tile types split by bit alias share.
+        let mut parsed: FastMap<String, usize> = FastMap::default();
+        let mut unique: Vec<Delays> = Vec::new();
+        let mut tables: Vec<Option<usize>> = Vec::with_capacity(arch.tile_types.len());
         for tile_type in &arch.tile_types {
             // A tile type split by bit alias is `<type>_W<offset>`.
             let name = tile_type.name.as_str();
@@ -1039,9 +1105,13 @@ impl XrayDatabase {
                 .rsplit_once("_W")
                 .filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
                 .map_or(name, |(head, _)| head);
-            let mut table = Delays::new();
+            let mut table = None;
             for candidate in [name, base] {
                 let path = format!("{}/{}/tile_type_{candidate}.json", self.root, self.family);
+                if let Some(index) = parsed.get(&path) {
+                    table = Some(*index);
+                    break;
+                }
                 let Some(text) = files.read_file(&path) else {
                     continue;
                 };
@@ -1049,38 +1119,43 @@ impl XrayDatabase {
                     path: path.clone(),
                     message: e.to_string(),
                 })?;
+                let mut delays = Delays::default();
                 for (from, to, ps) in parse::pip_delays(&json, &path)? {
-                    table.insert((from, to), ps);
+                    if let (Some(from), Some(to)) =
+                        (name_ids.get(from.as_str()), name_ids.get(to.as_str()))
+                    {
+                        delays.insert((*from, *to), ps);
+                    }
                 }
+                parsed.insert(path, unique.len());
+                table = Some(unique.len());
+                unique.push(delays);
                 break;
             }
             tables.push(table);
         }
         let mut out = vec![0u32; graph.nodes.len()];
         // Each wire's class's cost, by tile type and wire name, looked up once.
-        let mut classes: HashMap<(usize, &str), Option<u32>> = HashMap::new();
+        let mut classes: FastMap<(usize, u32), Option<u32>> = FastMap::default();
         for (index, pip) in graph.pips.iter().enumerate() {
             let index = super::arch::PipId::try_from(index).unwrap_or(u32::MAX);
+            let table = arch
+                .tile_index_at(pip.tile.0, pip.tile.1)
+                .and_then(|t| tables.get(t).copied().flatten())
+                .map(|t| &unique[t]);
+            let timed = table
+                .and_then(|t| t.get(&(node_name[pip.from as usize], node_name[pip.to as usize])))
+                .copied();
             // The clock network's untimed pips are its segments, not its
             // stages: see the last paragraph above.
-            let untimed =
+            let untimed = || {
                 if graph.pip_bits(index).is_empty() || is_clock_wire(&graph.wire(pip.to).name) {
                     0
                 } else {
                     UNTIMED_PIP_PS
-                };
-            let table = arch
-                .tile_index_at(pip.tile.0, pip.tile.1)
-                .and_then(|t| tables.get(t));
-            let timed = table
-                .and_then(|t| {
-                    t.get(&(
-                        graph.wire(pip.from).name.clone(),
-                        graph.wire(pip.to).name.clone(),
-                    ))
-                })
-                .copied();
-            let ps = timed.unwrap_or(untimed);
+                }
+            };
+            let ps = timed.unwrap_or_else(untimed);
             let ps = match model {
                 DelayModel::Legacy => ps,
                 DelayModel::Vivado => {
@@ -1088,8 +1163,9 @@ impl XrayDatabase {
                     let tile_type = arch.tile_index_at(pip.tile.0, pip.tile.1);
                     match tile_type {
                         Some(t) if !from.global && !to.global && from.tile == to.tile => {
-                            let class =
-                                *classes.entry((t, to.name.as_str())).or_insert_with(|| {
+                            let class = *classes
+                                .entry((t, node_name[pip.to as usize]))
+                                .or_insert_with(|| {
                                     delay::class_ps(&delay::wire_class(
                                         &arch.tile_types[t].name,
                                         &to.name,
@@ -1131,7 +1207,8 @@ impl XrayDatabase {
             });
         }
         let part = self.part(files)?;
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let mut stats = XrayStats {
             tiles: tiles.len(),
             frames: part.layout.frames(),
@@ -1145,7 +1222,7 @@ impl XrayDatabase {
         let mut width = 0u32;
         let mut height = 0u32;
         let mut types: BTreeSet<&str> = BTreeSet::new();
-        for tile in &tiles {
+        for tile in tiles {
             width = width.max(tile.grid_x + 1);
             height = height.max(tile.grid_y + 1);
             types.insert(&tile.tile_type);
@@ -1161,9 +1238,9 @@ impl XrayDatabase {
         // by `XrayTile::feature_type`, which splits an aliased type into
         // one per alias offset; `representative` holds one tile of each
         // so the alias can be applied.
-        let block_ram_rows = block_ram_rows(&tiles);
+        let block_ram_rows = block_ram_rows(tiles);
         let mut representative: BTreeMap<String, &XrayTile> = BTreeMap::new();
-        for tile in &tiles {
+        for tile in tiles {
             representative.entry(tile.feature_type()).or_insert(tile);
         }
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
@@ -1199,7 +1276,7 @@ impl XrayDatabase {
             };
             fixed.insert((*name).to_owned(), parse::ppips(&text, &path)?);
         }
-        for tile in &tiles {
+        for tile in tiles {
             if let Some(set) = features.get(&tile.feature_type()) {
                 stats.features_die += u64::try_from(set.features().len()).unwrap_or(0);
                 stats.pip_features_die += u64::try_from(set.pip_count()).unwrap_or(0);
@@ -1236,7 +1313,7 @@ impl XrayDatabase {
         }
         let mut wanted = 0usize;
         let mut in_region = 0usize;
-        for tile in &tiles {
+        for tile in tiles {
             if !region.contains(tile.grid_x, tile.grid_y) {
                 continue;
             }
@@ -1262,7 +1339,7 @@ impl XrayDatabase {
         }
 
         let mut arch = self.build_arch(
-            &tiles,
+            tiles,
             &features,
             &fixed,
             &conn,
@@ -1277,7 +1354,7 @@ impl XrayDatabase {
             options.route_throughs,
             &mut stats,
         );
-        let (pinmap, refused) = self.pinmap(files, &tiles, &features, region)?;
+        let (pinmap, refused) = self.pinmap(files, tiles, &features, region)?;
         arch.pinmap = pinmap;
         arch.unplaceable_pins = refused;
         stats.tiles_loaded = in_region;
@@ -1334,8 +1411,9 @@ impl XrayDatabase {
         also: &[super::arch::PipId],
         decoded: &Decoded,
     ) -> Result<(Vec<String>, Vec<String>), XrayError> {
-        let tiles = self.tiles(files)?;
-        let block_ram_rows = block_ram_rows(&tiles);
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
+        let block_ram_rows = block_ram_rows(tiles);
         let at: HashMap<(u32, u32), &XrayTile> =
             tiles.iter().map(|t| ((t.grid_x, t.grid_y), t)).collect();
         let by_name: HashMap<&str, &XrayTile> =
@@ -1446,7 +1524,8 @@ impl XrayDatabase {
         files: &dyn FileProvider,
         data: &super::xc7::FrameData,
     ) -> Result<Decoded, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
 
         // Where the set bits are, by frame address, so a tile only has
         // to look at frames that hold something.
@@ -1492,7 +1571,7 @@ impl XrayDatabase {
             }
         }
 
-        let block_ram_rows = block_ram_rows(&tiles);
+        let block_ram_rows = block_ram_rows(tiles);
         let mut features: HashMap<String, FeatureSet> = HashMap::new();
         let mut out = Vec::new();
         let mut tiles_touched = 0usize;
@@ -1503,7 +1582,7 @@ impl XrayDatabase {
         // `xc7::ecc_leaves_out_tile`.
         let mut either = super::xc7::DynamicBits::new();
         let mut dynamic_tables: Vec<String> = Vec::new();
-        for tile in &tiles {
+        for tile in tiles {
             // The tile's own bits, in the tile-local coordinates a
             // `segbits` line uses, remembering where each came from so
             // a matched feature can strike it off.
@@ -1639,7 +1718,7 @@ impl XrayDatabase {
         // Where the unexplained bits are, in the coordinates a `segbits` line
         // uses: what a feature the database does not name would be made of.
         let mut leftovers = Vec::new();
-        for tile in &tiles {
+        for tile in tiles {
             let mut first_row = 0u32;
             for (_, window) in &tile.bits {
                 let base_row = first_row;
@@ -1872,7 +1951,8 @@ impl XrayDatabase {
         pins: &[String],
         margin: u32,
     ) -> Result<Option<GridRegion>, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let path = format!(
             "{}/{}/{}/package_pins.csv",
             self.root, self.family, self.part_dir
@@ -1886,7 +1966,7 @@ impl XrayDatabase {
             .collect();
 
         let mut region: Option<GridRegion> = None;
-        for tile in &tiles {
+        for tile in tiles {
             if !tile.sites.iter().any(|(name, _)| sites.contains(name)) {
                 continue;
             }
@@ -1927,9 +2007,10 @@ impl XrayDatabase {
         region: GridRegion,
         site_type: &str,
     ) -> Result<Option<GridRegion>, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let mut best: Option<(u64, u32, u32)> = None;
-        for tile in &tiles {
+        for tile in tiles {
             if !tile.sites.iter().any(|(_, kind)| kind == site_type) {
                 continue;
             }
@@ -1977,10 +2058,11 @@ impl XrayDatabase {
         site_type: &str,
         count: usize,
     ) -> Result<Option<GridRegion>, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let mut columns: std::collections::BTreeMap<u32, Vec<(u64, u32, usize)>> =
             std::collections::BTreeMap::new();
-        for tile in &tiles {
+        for tile in tiles {
             let here = tile.sites.iter().filter(|(_, k)| k == site_type).count();
             if here == 0 {
                 continue;
@@ -2064,7 +2146,8 @@ impl XrayDatabase {
         files: &dyn FileProvider,
         region: GridRegion,
     ) -> Result<GridRegion, XrayError> {
-        let tiles = self.tiles(files)?;
+        let shared_tiles = self.tiles_shared(files)?;
+        let tiles: &[XrayTile] = &shared_tiles;
         let rows: BTreeSet<u32> = tiles
             .iter()
             .filter(|tile| matches!(tile.tile_type.as_str(), "HCLK_L" | "HCLK_R"))
@@ -2093,13 +2176,29 @@ impl XrayDatabase {
     ///
     /// [`XrayError::Missing`] and [`XrayError::Malformed`].
     pub fn tiles(&self, files: &dyn FileProvider) -> Result<Vec<XrayTile>, XrayError> {
+        Ok(self.tiles_shared(files)?.as_ref().clone())
+    }
+
+    /// [`XrayDatabase::tiles`], parsed once for as long as the file reads
+    /// the same: a build asks for the tile grid a dozen times, from the
+    /// loader, the region searches, the decoder and the finishing passes,
+    /// and parsing `tilegrid.json` again for each was a quarter of a small
+    /// design's whole build (2026-11-09). The text is read every time and
+    /// compared with the one parsed, so the answer is the file's as it is
+    /// now, whatever provider is asked.
+    fn tiles_shared(&self, files: &dyn FileProvider) -> Result<Arc<Vec<XrayTile>>, XrayError> {
         let path = format!("{}/{}/tilegrid.json", self.root, self.fabric_dir());
         let text = self.read(files, &path, "the tile grid")?;
+        if let Some(tiles) = self.tile_cache.get(&text) {
+            return Ok(tiles);
+        }
         let json = Json::parse(&text).map_err(|e| XrayError::Malformed {
             path: path.clone(),
             message: e.to_string(),
         })?;
-        parse::tilegrid(&json, &path)
+        let tiles = Arc::new(parse::tilegrid(&json, &path)?);
+        self.tile_cache.put(text, Arc::clone(&tiles));
+        Ok(tiles)
     }
 
     /// `tileconn.json`, as (tile type, tile type, delta, wire pairs).
