@@ -4412,12 +4412,7 @@ fn write_xc7_bitstream(
         // Only the ways through a lookup table this placement needs are open:
         // a flip-flop takes its bypass input first, as Vivado's do. See
         // `place::route_throughs_needed`.
-        let needed = reticle::fpga::place::route_throughs_needed(
-            &netlist,
-            &graph,
-            &placement,
-            &options.route_throughs,
-        );
+        let needed = placement_report.route_throughs_needed.clone();
         // The cells' own figures where the placement says them, for the
         // route and its estimate: see `xray::place_timing_on_sites`, by which a
         // flip-flop at the end of a way has a setup of its own.

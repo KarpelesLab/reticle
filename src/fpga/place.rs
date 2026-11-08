@@ -1039,31 +1039,60 @@ fn describe(device: &Device, primitive: &str) -> Option<(String, Vec<(String, St
 // ---------------------------------------------------------------------------
 
 /// Which site every instance sits on.
+///
+/// Both ways round as `u32`s with `UNPLACED` for none, not as
+/// `Option<usize>`: the anneal and its legality checks read `instance_at` for
+/// every site a move touches and every site that shares a pin with one, tens
+/// of millions of times, and four bytes a site keep the table of a die's
+/// sites in a quarter of the cache the sixteen of an `Option<usize>` took.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Placement {
     /// Instance to site index, parallel to [`Netlist::instances`].
-    of_instance: Vec<Option<usize>>,
+    of_instance: Vec<u32>,
     /// Site index to instance, parallel to [`RoutingGraph::sites`].
-    of_site: Vec<Option<usize>>,
+    of_site: Vec<u32>,
+}
+
+/// What [`Placement`] files for an instance on no site or a site with no
+/// instance. Neither count comes near it: a site and an instance are each
+/// numbered below a routing graph's `u32` node ids.
+const UNPLACED: u32 = u32::MAX;
+
+/// `index` as [`Placement`] files it.
+fn placed_index(index: usize) -> u32 {
+    let filed = u32::try_from(index).unwrap_or(UNPLACED);
+    assert!(
+        filed != UNPLACED,
+        "index {index} past what a placement files"
+    );
+    filed
+}
+
+/// What [`Placement`] filed, as an index.
+fn filed_index(filed: u32) -> Option<usize> {
+    (filed != UNPLACED).then_some(filed as usize)
 }
 
 impl Placement {
     /// An empty placement for a netlist and a graph.
     pub fn new(instances: usize, sites: usize) -> Self {
         Placement {
-            of_instance: vec![None; instances],
-            of_site: vec![None; sites],
+            of_instance: vec![UNPLACED; instances],
+            of_site: vec![UNPLACED; sites],
         }
     }
 
     /// The site of an instance.
     pub fn site_of(&self, instance: usize) -> Option<usize> {
-        self.of_instance.get(instance).copied().flatten()
+        self.of_instance
+            .get(instance)
+            .copied()
+            .and_then(filed_index)
     }
 
     /// The instance on a site.
     pub fn instance_at(&self, site: usize) -> Option<usize> {
-        self.of_site.get(site).copied().flatten()
+        self.of_site.get(site).copied().and_then(filed_index)
     }
 
     /// Puts `instance` on `site`, taking it off whatever it was on.
@@ -1072,26 +1101,27 @@ impl Placement {
     /// programming error, which is why this asserts rather than reports.
     pub fn place(&mut self, instance: usize, site: usize) {
         assert!(
-            self.of_site[site].is_none(),
+            self.of_site[site] == UNPLACED,
             "site {site} already holds an instance"
         );
-        if let Some(old) = self.of_instance[instance] {
-            self.of_site[old] = None;
+        if let Some(old) = filed_index(self.of_instance[instance]) {
+            self.of_site[old] = UNPLACED;
         }
-        self.of_instance[instance] = Some(site);
-        self.of_site[site] = Some(instance);
+        self.of_instance[instance] = placed_index(site);
+        self.of_site[site] = placed_index(instance);
     }
 
     /// Takes `instance` off whatever site it is on.
     pub fn unplace(&mut self, instance: usize) {
-        if let Some(site) = self.of_instance[instance].take() {
-            self.of_site[site] = None;
+        let was = std::mem::replace(&mut self.of_instance[instance], UNPLACED);
+        if let Some(site) = filed_index(was) {
+            self.of_site[site] = UNPLACED;
         }
     }
 
     /// How many instances are placed.
     pub fn placed(&self) -> usize {
-        self.of_instance.iter().filter(|s| s.is_some()).count()
+        self.of_instance.iter().filter(|s| **s != UNPLACED).count()
     }
 
     /// The placement as `instance site` lines, sorted by instance name.
@@ -1560,6 +1590,10 @@ pub struct PlacementReport {
     /// groups dedicated wiring holds together makes on that wiring:
     /// [`PlaceTiming::local`], for a timing that was not placed with.
     pub local: Vec<bool>,
+    /// What [`route_throughs_needed`] answers for the placement returned,
+    /// worked out from the rules the placer already holds rather than from
+    /// a second reading of the whole die's sites.
+    pub route_throughs_needed: Vec<NodeId>,
 }
 
 /// One round of [`PlaceOptions::timing`]: the estimate the placement it
@@ -1915,6 +1949,17 @@ struct SiteRules {
     gated: Vec<Vec<(u32, u32)>>,
     /// Per instance, [`RouteThroughs::room`]; empty for none.
     room: Vec<bool>,
+    /// Per group, where its pools start in one numbering of every group's
+    /// pools, for [`SiteRules::judge`]'s list of the pools a move touches.
+    pool_base: Vec<u32>,
+    /// Per pool in that numbering, the judgement that last listed it: a pool
+    /// is listed once a judgement by comparing its mark, where the list was
+    /// searched for each.
+    pool_seen: Vec<Cell<u32>>,
+    /// The current judgement's mark.
+    pool_mark: Cell<u32>,
+    /// The list's storage, kept between judgements.
+    touched: std::cell::RefCell<Vec<(u32, u32)>>,
     /// Per site, its tile: `graph.sites[site].tile`, eight bytes a site
     /// where an [`ArchSite`](super::arch::ArchSite) is a hundred and
     /// more with three strings in it. The legaliser's search for the
@@ -2225,7 +2270,11 @@ impl SiteRules {
     /// [`SiteRules::find`] on a fabric with `throughs`: each is a wire of the
     /// pool it is in that the cells on its site open or shut
     /// ([`ControlGroup::gates`]).
-    fn find_with(netlist: &Netlist, graph: &RoutingGraph, throughs: &RouteThroughs) -> SiteRules {
+    fn find_with<'a>(
+        netlist: &Netlist,
+        graph: &'a RoutingGraph,
+        throughs: &RouteThroughs,
+    ) -> SiteRules {
         let through: HashSet<NodeId> = throughs.nodes.iter().map(|t| t.node).collect();
         let mut out = SiteRules {
             tiles: graph.sites.iter().map(|site| site.tile).collect(),
@@ -2253,6 +2302,10 @@ impl SiteRules {
             groups: Vec::new(),
             gated: Vec::new(),
             room: throughs.room.clone(),
+            pool_base: Vec::new(),
+            pool_seen: Vec::new(),
+            pool_mark: Cell::new(0),
+            touched: std::cell::RefCell::new(Vec::new()),
         };
         // The blocks a cell makes unusable two tiles away, which is a
         // rule between *tiles* and not inside one: an ECP5 `DP16KD` in
@@ -2339,17 +2392,54 @@ impl SiteRules {
             roles.insert(name.to_owned(), id);
             id
         };
+        // A role's id by its name, in front of `out.roles`: the pairs below
+        // ask for one per shared pin of every pair of sites of the die, and a
+        // search of a tree of strings for each was a fifth of this.
+        let mut role_ids: FastMap<&str, u32> = FastMap::default();
+        let mut role_of = |roles: &mut BTreeMap<String, u32>, name: &'a str| -> u32 {
+            *role_ids.entry(name).or_insert_with(|| role_id(roles, name))
+        };
+        // Per tile, which of its sites share a wire with which: a bit per
+        // pair, so that the pins of two sites are compared pin by pin only
+        // when they have a wire in common, which most pairs of a tile's
+        // forty-odd sites do not.
+        let mut on_node: FastMap<NodeId, Vec<usize>> = FastMap::default();
+        let mut sharing: Vec<u64> = Vec::new();
         for (tile, sites) in &by_tile {
+            let width = sites.len();
+            sharing.clear();
+            sharing.resize((width * width).div_ceil(64), 0);
+            on_node.clear();
+            for (i, site) in sites.iter().enumerate() {
+                for (_, node) in &graph.sites[*site].pins {
+                    let list = on_node.entry(*node).or_default();
+                    if list.last() != Some(&i) {
+                        list.push(i);
+                    }
+                }
+            }
+            for list in on_node.values() {
+                for (k, a) in list.iter().enumerate() {
+                    for b in &list[k + 1..] {
+                        let bit = a * width + b;
+                        sharing[bit / 64] |= 1 << (bit % 64);
+                    }
+                }
+            }
             for (i, left) in sites.iter().enumerate() {
-                for right in &sites[i + 1..] {
+                for (j, right) in sites.iter().enumerate().skip(i + 1) {
+                    let bit = i * width + j;
+                    if sharing[bit / 64] >> (bit % 64) & 1 == 0 {
+                        continue;
+                    }
                     let start = out.pairs.len();
                     for (lrole, lnode) in &graph.sites[*left].pins {
                         for (rrole, rnode) in &graph.sites[*right].pins {
                             if lnode != rnode {
                                 continue;
                             }
-                            let l = role_id(&mut out.roles, lrole);
-                            let r = role_id(&mut out.roles, rrole);
+                            let l = role_of(&mut out.roles, lrole);
+                            let r = role_of(&mut out.roles, rrole);
                             out.pairs.push((l, r));
                         }
                     }
@@ -2397,8 +2487,8 @@ impl SiteRules {
                         continue;
                     }
                     let (mine, theirs) = (
-                        role_id(&mut out.roles, role),
-                        role_id(&mut out.roles, theirs),
+                        role_of(&mut out.roles, role),
+                        role_of(&mut out.roles, theirs),
                     );
                     if !out.exits[*site].contains(&(*other, mine, theirs)) {
                         out.exits[*site].push((*other, mine, theirs));
@@ -2412,6 +2502,8 @@ impl SiteRules {
             // tile's own wires, and then the pools those wires form.
             let mut drawn: Vec<(usize, &str, Vec<NodeId>)> = Vec::new();
             for site in sites {
+                // This site's entries, which are the only ones a repeat can be.
+                let mine = drawn.len();
                 for (role, node) in &graph.sites[*site].pins {
                     let Some(pool) = captive_pool(graph, *tile, *node, &through) else {
                         continue;
@@ -2419,7 +2511,7 @@ impl SiteRules {
                     // A role naming several wires is one connection, and
                     // on an ECP5 both of a RAM's `we` wires come off the
                     // same `LSR1`; recording it once is what it is.
-                    if !drawn
+                    if !drawn[mine..]
                         .iter()
                         .any(|(s, r, p)| *s == *site && *r == role && *p == pool)
                     {
@@ -2427,13 +2519,23 @@ impl SiteRules {
                     }
                 }
             }
-            // A wire only one bel can reach is that bel's own business.
+            // A wire only one bel can reach is that bel's own business. An
+            // entry is shared when a wire of its pool is in the pool of an
+            // entry of another site, which is a wire two sites' pools hold:
+            // found from each wire's sites, where comparing every pool with
+            // every other was most of this pass on a die of logic tiles.
+            let mut sites_on: FastMap<NodeId, (usize, bool)> = FastMap::default();
+            for (site, _, pool) in &drawn {
+                for node in pool {
+                    let entry = sites_on.entry(*node).or_insert((*site, false));
+                    entry.1 |= entry.0 != *site;
+                }
+            }
             let shared: Vec<bool> = drawn
                 .iter()
-                .map(|(site, _, pool)| {
-                    drawn.iter().any(|(other, _, theirs)| {
-                        *other != *site && theirs.iter().any(|n| pool.contains(n))
-                    })
+                .map(|(_, _, pool)| {
+                    pool.iter()
+                        .any(|n| sites_on.get(n).is_some_and(|(_, two)| *two))
                 })
                 .collect();
             let mut keep = shared.iter();
@@ -2558,6 +2660,17 @@ impl SiteRules {
                 ..SiteRules::default()
             };
         }
+        let mut base = 0u32;
+        out.pool_base = out
+            .groups
+            .iter()
+            .map(|group| {
+                let at = base;
+                base += u32::try_from(group.pools.len()).unwrap_or(0);
+                at
+            })
+            .collect();
+        out.pool_seen = vec![Cell::new(0); base as usize];
         for pin in &netlist.pins {
             if let Some(signal) = pin.signal
                 && let Some(role) = out.roles.get(pin.role.as_str())
@@ -2811,9 +2924,24 @@ impl SiteRules {
         // arrived at used to be checked, and a whole tile at that — every
         // pool of it, twenty on a 7-series logic tile, for a move that
         // touches two or three.
-        let mut touched: [(u32, u32); 16] = [(0, 0); 16];
-        let mut many: Vec<(u32, u32)> = Vec::new();
-        let mut count_touched = 0usize;
+        //
+        // Each pool is listed once, in the order the cells first touch it,
+        // and asked in that order for the first sixteen and in sorted order
+        // past them, which is the order the list was asked in when it was a
+        // scan of an array of sixteen and a sorted vector for the rest. A
+        // mark a pool replaces the scan, which for a macro of a dozen cells,
+        // each touching a handful of pools, was a fifth of judging it.
+        let mark = self.pool_mark.get().wrapping_add(1);
+        self.pool_mark.set(mark);
+        if mark == 0 {
+            for seen in &self.pool_seen {
+                seen.set(0);
+            }
+            self.pool_mark.set(1);
+        }
+        let mark = self.pool_mark.get();
+        let mut touched = self.touched.take();
+        touched.clear();
         for site in moving.iter().map(|(_, s)| *s).chain(left) {
             let group = self.site_group[site];
             // And every pool whose way through a bel a cell here opens or
@@ -2828,28 +2956,23 @@ impl SiteRules {
                 .filter(|_| group != u32::MAX)
                 .map(|(_, pool, _)| (group, *pool));
             for key in own.chain(gated.iter().copied()) {
-                if touched[..count_touched].contains(&key) {
+                let index = self.pool_base[key.0 as usize] as usize + key.1 as usize;
+                let seen = &self.pool_seen[index];
+                if seen.get() == mark {
                     continue;
                 }
-                if count_touched < touched.len() {
-                    touched[count_touched] = key;
-                    count_touched += 1;
-                } else {
-                    many.push(key);
-                }
+                seen.set(mark);
+                touched.push(key);
             }
         }
-        // Past the first sixteen the pools are deduplicated by sorting, not
-        // by scanning: a macro of a hundred and fifty cells touches hundreds
-        // of pools, and a scan of the list for each was most of what judging
-        // it cost. Which order the pools are asked in changes nothing but
-        // which refusal is found first.
-        many.sort_unstable();
-        many.dedup();
-        touched[..count_touched]
+        if touched.len() > 16 {
+            touched[16..].sort_unstable();
+        }
+        let fits = touched
             .iter()
-            .chain(&many)
-            .all(|(group, pool)| self.pool_fits(&self.groups[*group as usize], *pool, after))
+            .all(|(group, pool)| self.pool_fits(&self.groups[*group as usize], *pool, after));
+        self.touched.replace(touched);
+        fits
     }
 
     /// Whether `instance` on `site` would put a signal on a pin shared
@@ -3123,7 +3246,24 @@ pub fn route_throughs_needed(
     if throughs.nodes.is_empty() {
         return Vec::new();
     }
-    let rules = SiteRules::find_with(netlist, graph, throughs);
+    needed_throughs(
+        &SiteRules::find_with(netlist, graph, throughs),
+        placement,
+        throughs,
+    )
+}
+
+/// [`route_throughs_needed`] with the rules `throughs` gives: the same
+/// [`SiteRules::groups`] whatever [`SiteRules::contain`] has marked since,
+/// since only [`SiteRules::exit_shared`] reads that.
+fn needed_throughs(
+    rules: &SiteRules,
+    placement: &Placement,
+    throughs: &RouteThroughs,
+) -> Vec<NodeId> {
+    if throughs.nodes.is_empty() {
+        return Vec::new();
+    }
     let after = |site: usize| placement.instance_at(site);
     let mut out = Vec::new();
     for group in &rules.groups {
@@ -3667,6 +3807,7 @@ pub fn place(
         }
     }
     report.work = WORK.with(Cell::get);
+    report.route_throughs_needed = needed_throughs(&shared, &placement, &options.route_throughs);
     Ok((placement, report))
 }
 
@@ -13312,6 +13453,9 @@ mod tests {
             let allowed = rules.allows(&placement, &[(1, ffb)]);
             placement.place(1, ffb);
             let needed = route_throughs_needed(&netlist, &graph, &placement, throughs);
+            // The placer answers from the rules it holds, which must be the
+            // same answer (`PlacementReport::route_throughs_needed`).
+            assert_eq!(needed_throughs(&rules, &placement, throughs), needed);
             (allowed, needed)
         };
         // The table free: the upper half's way.
