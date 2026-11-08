@@ -1,4 +1,5 @@
-// 7-series hard blocks, as a simulator sees them.
+// 7-series hard blocks, as a simulator sees them, and the lookup tables
+// again, for what a simulator makes of an input it does not know.
 //
 // For simulation only: `reticle sim --device <7-series part>` takes a module
 // from here when a design names it and declares nothing of that name. A build
@@ -17,6 +18,133 @@
 // and every setup or hold check.
 
 `timescale 1ps / 1ps
+
+// ---------------------------------------------------------- lookup tables
+
+// The lookup tables are in the cell library (xc7_cells.v) too, written as
+// `INIT[index]`, which is what a build maps. A simulator reading that takes
+// the language's rule, that an index with an unknown bit reads x, and xsim
+// does not: it gives the value every entry the index could name agrees on,
+// and x only when they differ (testdata/sim/xc7/lut_unknown_inputs.v). The
+// difference is more than cosmetic. The 7-series flow puts two functions
+// in one LUT6_2, and one can reach the other's input through the fabric:
+// O5 a function of I0 and I3 that the truth table says ignores I1, and I1
+// the sum O5's propagate makes through a CARRY4. Under the language's rule
+// that is a loop no event ever leaves x, and the routed netlist of the
+// language corpus's `v_alu` gave x on every output for it while xsim ran
+// it correctly.
+module xc7_sim_lut #(parameter integer K = 6, parameter [63:0] INIT = 64'h0)
+    (output o, input [K-1:0] i);
+  // Over every entry an index with unknown bits could name.
+  function agree(input [K-1:0] sel);
+    integer j, b;
+    reg seen, value, same, named;
+    begin
+      seen = 1'b0;
+      value = 1'bx;
+      same = 1'b1;
+      for (j = 0; j < (1 << K); j = j + 1) begin
+        named = 1'b1;
+        for (b = 0; b < K; b = b + 1)
+          if (sel[b] === 1'b0 && ((j >> b) & 1) == 1 || sel[b] === 1'b1 && ((j >> b) & 1) == 0)
+            named = 1'b0;
+        if (named) begin
+          if (!seen) value = INIT[j];
+          else if (INIT[j] !== value) same = 1'b0;
+          seen = 1'b1;
+        end
+      end
+      agree = same ? value : 1'bx;
+    end
+  endfunction
+  assign o = ^i === 1'bx ? agree(i) : INIT[i];
+endmodule
+
+module LUT1 #(parameter [1:0] INIT = 2'h0) (output O, input I0);
+  xc7_sim_lut #(.K(1), .INIT(INIT)) l (.o(O), .i(I0));
+endmodule
+
+module LUT1_L #(parameter [1:0] INIT = 2'h0) (output LO, input I0);
+  xc7_sim_lut #(.K(1), .INIT(INIT)) l (.o(LO), .i(I0));
+endmodule
+
+module LUT1_D #(parameter [1:0] INIT = 2'h0) (output O, output LO, input I0);
+  xc7_sim_lut #(.K(1), .INIT(INIT)) l (.o(O), .i(I0));
+  assign LO = O;
+endmodule
+
+module LUT2 #(parameter [3:0] INIT = 4'h0) (output O, input I0, I1);
+  xc7_sim_lut #(.K(2), .INIT(INIT)) l (.o(O), .i({I1, I0}));
+endmodule
+
+module LUT2_L #(parameter [3:0] INIT = 4'h0) (output LO, input I0, I1);
+  xc7_sim_lut #(.K(2), .INIT(INIT)) l (.o(LO), .i({I1, I0}));
+endmodule
+
+module LUT2_D #(parameter [3:0] INIT = 4'h0) (output O, output LO, input I0, I1);
+  xc7_sim_lut #(.K(2), .INIT(INIT)) l (.o(O), .i({I1, I0}));
+  assign LO = O;
+endmodule
+
+module LUT3 #(parameter [7:0] INIT = 8'h0) (output O, input I0, I1, I2);
+  xc7_sim_lut #(.K(3), .INIT(INIT)) l (.o(O), .i({I2, I1, I0}));
+endmodule
+
+module LUT3_L #(parameter [7:0] INIT = 8'h0) (output LO, input I0, I1, I2);
+  xc7_sim_lut #(.K(3), .INIT(INIT)) l (.o(LO), .i({I2, I1, I0}));
+endmodule
+
+module LUT3_D #(parameter [7:0] INIT = 8'h0) (output O, output LO, input I0, I1, I2);
+  xc7_sim_lut #(.K(3), .INIT(INIT)) l (.o(O), .i({I2, I1, I0}));
+  assign LO = O;
+endmodule
+
+module LUT4 #(parameter [15:0] INIT = 16'h0) (output O, input I0, I1, I2, I3);
+  xc7_sim_lut #(.K(4), .INIT(INIT)) l (.o(O), .i({I3, I2, I1, I0}));
+endmodule
+
+module LUT4_L #(parameter [15:0] INIT = 16'h0) (output LO, input I0, I1, I2, I3);
+  xc7_sim_lut #(.K(4), .INIT(INIT)) l (.o(LO), .i({I3, I2, I1, I0}));
+endmodule
+
+module LUT4_D #(parameter [15:0] INIT = 16'h0) (output O, output LO, input I0, I1, I2, I3);
+  xc7_sim_lut #(.K(4), .INIT(INIT)) l (.o(O), .i({I3, I2, I1, I0}));
+  assign LO = O;
+endmodule
+
+module LUT5 #(parameter [31:0] INIT = 32'h0) (output O, input I0, I1, I2, I3, I4);
+  xc7_sim_lut #(.K(5), .INIT(INIT)) l (.o(O), .i({I4, I3, I2, I1, I0}));
+endmodule
+
+module LUT5_L #(parameter [31:0] INIT = 32'h0) (output LO, input I0, I1, I2, I3, I4);
+  xc7_sim_lut #(.K(5), .INIT(INIT)) l (.o(LO), .i({I4, I3, I2, I1, I0}));
+endmodule
+
+module LUT5_D #(parameter [31:0] INIT = 32'h0) (output O, output LO, input I0, I1, I2, I3, I4);
+  xc7_sim_lut #(.K(5), .INIT(INIT)) l (.o(O), .i({I4, I3, I2, I1, I0}));
+  assign LO = O;
+endmodule
+
+module LUT6 #(parameter [63:0] INIT = 64'h0) (output O, input I0, I1, I2, I3, I4, I5);
+  xc7_sim_lut #(.K(6), .INIT(INIT)) l (.o(O), .i({I5, I4, I3, I2, I1, I0}));
+endmodule
+
+module LUT6_L #(parameter [63:0] INIT = 64'h0) (output LO, input I0, I1, I2, I3, I4, I5);
+  xc7_sim_lut #(.K(6), .INIT(INIT)) l (.o(LO), .i({I5, I4, I3, I2, I1, I0}));
+endmodule
+
+module LUT6_D #(parameter [63:0] INIT = 64'h0) (output O, output LO,
+    input I0, I1, I2, I3, I4, I5);
+  xc7_sim_lut #(.K(6), .INIT(INIT)) l (.o(O), .i({I5, I4, I3, I2, I1, I0}));
+  assign LO = O;
+endmodule
+
+// O5 is the lower half alone, whatever I5 is.
+module LUT6_2 #(parameter [63:0] INIT = 64'h0) (output O5, output O6,
+    input I0, I1, I2, I3, I4, I5);
+  xc7_sim_lut #(.K(5), .INIT({32'h0, INIT[31:0]})) l5 (.o(O5), .i({I4, I3, I2, I1, I0}));
+  xc7_sim_lut #(.K(6), .INIT(INIT)) l6 (.o(O6), .i({I5, I4, I3, I2, I1, I0}));
+endmodule
 
 // ---------------------------------------------------------------- IO logic
 

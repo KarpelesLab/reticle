@@ -1,0 +1,21 @@
+000000 | 000000 100000 000000 000000 00
+111111 | 111111 011111 111111 111111 00
+xxxxx1 | 111111 0xxxxx 1xxxxx 1xxxxx xx
+xxxxx0 | 000000 1xxxxx 000000 000000 xx
+zzzzz1 | 111111 0xxxxx 1xxxxx 1xxxxx xx
+1xxxxx | xxxxxx xxxxx1 xxxxxx xxxxxx xx
+0xxxxx | xxxxxx xxxxx0 xxxxx0 xxxxx0 xx
+xxxxxx | xxxxxx xxxxxx xxxxxx xxxxxx xx
+11111x | xxxxxx x11111 xxxxxx xxxxxx x0
+111110 | 000000 111111 000000 000000 10
+0x1x1x | xxxxxx x1x1x0 xxxxx0 xxxxx0 xx
+10x110 | 000000 111x01 000000 000000 x0
+10x01x | xxxxxx x10x01 xx0000 xx0000 x1
+1x10x1 | 111111 0x01x1 1x0000 1x0000 0x
+1x00x0 | 000000 1x00x1 000000 000000 0x
+01x0x1 | 111111 0x0x10 1x0000 1x0000 xx
+00z1x0 | 000000 1x1x00 000000 000000 xx
+loop 0 0 0
+loop 1 1 1
+loop 1 1 0
+loop 0 0 1

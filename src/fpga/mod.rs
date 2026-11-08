@@ -278,7 +278,12 @@ pub fn cell_source(family: &str, names: &[String]) -> Option<String> {
 /// The source of the cells named in `names` that a *simulation* of a
 /// `family` design may take: [`cell_source`]'s library first, and then the
 /// models of the hard blocks in `devices/xc7_sim.v` (block RAM, DSP, IO
-/// logic and buffers, clock buffers and clock managers).
+/// logic and buffers, clock buffers and clock managers). That file has the
+/// lookup tables too, in place of the cell library's: an index with an
+/// unknown bit reads `x` in the language, where xsim's tables answer what
+/// every entry the index could name agrees on, and a table pair whose `O5`
+/// reaches its own input through the fabric is a loop only the second rule
+/// settles.
 ///
 /// The second library is for a simulator only, and a build never reads it: a
 /// hard block a design names is the device's own primitive, and a behavioural
