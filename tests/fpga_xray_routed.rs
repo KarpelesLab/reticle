@@ -173,6 +173,14 @@ fn a_placement_seed_chooses_the_placement() {
 /// retry not made, made with the same seed, or made more often than asked;
 /// would not catch a retry that routes worse than the first try, which
 /// one pass cannot show.
+///
+/// **And a build that gives up fails.** This test asserted that the build
+/// exited 0 after giving up, which is what it did: the "NOT FULLY ROUTED"
+/// was a warning, and four builds of the language corpus that exited 0
+/// that way were taken for built. It now pins an exit status of failure,
+/// with the error saying so, and the bitstream still written for
+/// `--decode` to read. Would catch a failure that exits 0 again, or one
+/// that stops writing the file to look at.
 #[test]
 fn a_route_that_does_not_converge_is_placed_again() {
     let Some(root) = chipdb() else { return };
@@ -213,7 +221,12 @@ fn a_route_that_does_not_converge_is_placed_again() {
         .output()
         .expect("the reticle binary runs");
     let stderr = String::from_utf8_lossy(&done.stderr);
-    assert!(done.status.success(), "{stderr}");
+    assert!(!done.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("error: the design is NOT FULLY ROUTED"),
+        "{stderr}"
+    );
+    assert!(out.join("dut.bit").is_file(), "{stderr}");
     let again: Vec<&str> = stderr
         .lines()
         .filter(|line| line.contains("placing again with seed"))

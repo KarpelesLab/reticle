@@ -2798,9 +2798,13 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             }
         }
         match write_xc7_bitstream(args, &design, top, device, &constraints, path) {
-            Ok(note) => {
+            Ok((note, unrouted)) => {
                 if !args.flag("quiet") {
                     eprint!("{note}");
+                }
+                if let Some(message) = unrouted {
+                    eprintln!("error: {message}");
+                    return Ok(Outcome::Failed);
                 }
             }
             Err(message) => {
@@ -3957,7 +3961,7 @@ fn write_xc7_bitstream(
     device: &reticle::fpga::Device,
     constraints: &reticle::fpga::Constraints,
     path: &str,
-) -> Result<String, String> {
+) -> Result<(String, Option<String>), String> {
     use reticle::fpga::place::place;
     use reticle::fpga::route::{RouteOptions, route};
     use reticle::fpga::xc7::{self, BitHeader};
@@ -5428,21 +5432,30 @@ fn write_xc7_bitstream(
              configuration nobody can account for\n",
         );
     }
-    if routed < routable {
-        note.push_str(
-            "warning: the design is NOT FULLY ROUTED. A signal with no path contributes nothing \
-             to the bitstream, so what was written configures less than the design asks for. \
-             `docs/fpga-xray.md` lists the bel pins and site paths this flow knows about; a \
-             signal that needs one it does not is the usual reason.\n",
-        );
-    }
+    // A design that is not fully routed is a failed build. The bitstream is
+    // still written, as it always was, so that `--decode` and this report
+    // have something to read; but nothing should take it for the design,
+    // and four of the language corpus's designs were taken for built
+    // because this was a warning on a build that exited 0.
+    let unrouted = (routed < routable).then(|| {
+        let why = failure.as_deref().map_or_else(String::new, |reason| {
+            format!(" (the router gave up: {reason})")
+        });
+        format!(
+            "the design is NOT FULLY ROUTED: {routed} of {routable} signal(s) with a reader \
+             routed{why}. A signal with no path contributes nothing to the bitstream, so \
+             `{path}` configures less than the design asks for: it was written to be looked \
+             at, not loaded. `docs/fpga-xray.md` lists the bel pins and site paths this flow \
+             knows about; a signal that needs one it does not is the usual reason."
+        )
+    });
     note.push_str(
         "note: two designs from this flow have been loaded into a part, both on a \
          Basys 3, and a person watched both work: a lookup table and three \
          pins, and a clocked counter. Nothing larger has been tried on a part; \
          a carry chain places and routes but has not. See docs/fpga-xray.md.\n",
     );
-    Ok(note)
+    Ok((note, unrouted))
 }
 
 /// `reticle emit`: write the design in another format.
