@@ -14,7 +14,12 @@
 //! which the first runs did: a `RAMB18E1`'s narrow parity bit is bit 8 of
 //! `INIT_A`, not 16; an `ODDR` in `SAME_EDGE` loads its falling-edge output only
 //! if CE was high at the rising edge before; the global reset holds a clock
-//! buffer low whatever its `INIT_OUT`. It would not catch a behaviour no
+//! buffer low whatever its `INIT_OUT`. It would catch a lookup table that
+//! reads `x` for an unknown input its function ignores, which left the routed
+//! netlist of the language corpus's `v_alu` all `x` (`lut_unknown_inputs`),
+//! and a block RAM's byte enables or a DSP's pre-adder modelled wrong in the
+//! configurations Vivado chose for that corpus (`ramb18e1_byte_write`,
+//! `dsp48e1_preadd`; mutated, each fails). It would not catch a behaviour no
 //! testbench exercises, and each model's comment says which those are.
 
 #![cfg(all(feature = "fpga", feature = "cli"))]
