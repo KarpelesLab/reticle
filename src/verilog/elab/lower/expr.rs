@@ -43,6 +43,31 @@ use super::super::types::{Packed, Range, VType, bits_needed};
 use super::super::width::{self, Info};
 use super::{Ctx, Lowerer};
 
+/// How many frames of one subroutine a recursive call is inlined to, when
+/// it calls itself from one place.
+const MAX_RECURSION_DEPTH: usize = 64;
+
+/// How many recursive frames one outermost call is inlined to, in all: a
+/// subroutine calling itself from `k` places is inlined to the depth whose
+/// `k`-fold tree of frames this holds.
+const MAX_RECURSION_FRAMES: usize = 2048;
+
+/// The depth a subroutine calling itself from `calls` places is inlined to.
+fn recursion_depth(calls: usize) -> usize {
+    if calls <= 1 {
+        return MAX_RECURSION_DEPTH;
+    }
+    let mut depth = 0;
+    let mut frames = 1usize;
+    while let Some(next) = frames.checked_mul(calls)
+        && next <= MAX_RECURSION_FRAMES
+    {
+        frames = next;
+        depth += 1;
+    }
+    depth.max(1)
+}
+
 /// Where statements produced while lowering an expression go.
 pub(crate) enum Sink<'a> {
     /// Into a procedural block.
@@ -555,6 +580,43 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 let w = eval_width(&info, want, true);
                 let signed = info.is_signed() && !forced;
                 let c = self.expr_bit(cond, sink);
+                // `n < 2 ? n : fib(n - 1) + fib(n - 2)` inside `fib`: a
+                // branch that calls a subroutine being inlined runs only
+                // when chosen, or every call would run each level below it
+                // to the inlining's end. An unknown condition takes the
+                // `else` branch then, where a mux would merge the two.
+                if let Sink::Proc(out) = sink
+                    && (self.calls_inlined(then_expr) || self.calls_inlined(else_expr))
+                {
+                    let name = self.fresh("cond");
+                    let ty = VType::Packed(if signed {
+                        Packed::sbits(w)
+                    } else {
+                        Packed::bits(w)
+                    });
+                    if let Some(tmp) = self.new_var(name, ty, e.span) {
+                        let mut then_block = self.b.block();
+                        then_block.span = e.span;
+                        let t = self.operand(
+                            then_expr,
+                            Ctx { width: w, signed },
+                            &mut Sink::Proc(&mut then_block),
+                        );
+                        then_block.assign(tmp, t, AssignKind::Blocking);
+                        let mut else_block = self.b.block();
+                        else_block.span = e.span;
+                        let f = self.operand(
+                            else_expr,
+                            Ctx { width: w, signed },
+                            &mut Sink::Proc(&mut else_block),
+                        );
+                        else_block.assign(tmp, f, AssignKind::Blocking);
+                        out.span = e.span;
+                        out.if_(c, then_block.finish(), else_block.finish());
+                        self.b.span = e.span;
+                        return self.b.net(tmp);
+                    }
+                }
                 let t = self.operand(then_expr, Ctx { width: w, signed }, sink);
                 let f = self.operand(else_expr, Ctx { width: w, signed }, sink);
                 self.b.span = e.span;
@@ -1960,21 +2022,16 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             return id;
         }
         // Inside `fact` the name `fact` is its result, so a call of it is
-        // the function calling itself; with an argument known only when it
-        // runs, there is nothing to fold it to, and inlining would not end.
+        // the function calling itself: it is inlined again, as deep as
+        // `inline_into` allows.
         if let ExprKind::Ident(id) = &callee.kind
-            && self.inlining.contains(&id.name)
+            && let Some(k) = self.inlining.iter().rposition(|n| *n == id.name)
         {
-            self.env.report(
-                Diagnostic::error(format!("`{}` calls itself", id.name))
-                    .with_code(codes::RECURSION)
-                    .with_label(e.span, "recursive call")
-                    .with_note(
-                        "a recursive function is folded where its arguments are constant; \
-                         with one known only when it runs it cannot be inlined",
-                    ),
-            );
-            return self.b.const_u64(want.max(1), 0);
+            let f = self.inlining_fns[k];
+            return match self.inline_call(f, args, e.span, sink) {
+                Some(id) => id,
+                None => self.b.const_u64(want.max(1), 0),
+            };
         }
         let Some((f, is_task)) = self.env.resolve_callee(callee) else {
             return self.b.const_u64(want.max(1), 0);
@@ -2188,6 +2245,21 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
     }
 
+    /// True when `e` calls a subroutine that is being inlined: a recursive
+    /// call, as `fib(n - 1)` is inside `fib`.
+    fn calls_inlined(&self, e: &'ast Expr) -> bool {
+        let mut hit = false;
+        crate::verilog::lint::facts::walk_expr(e, &mut |sub| {
+            if let ExprKind::Call { callee, .. } = &sub.kind
+                && let ExprKind::Ident(id) = &callee.kind
+                && self.inlining.contains(&id.name)
+            {
+                hit = true;
+            }
+        });
+        hit
+    }
+
     /// Inlines a call into an open block.
     pub(super) fn inline_into(
         &mut self,
@@ -2197,15 +2269,50 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         out: &mut BlockBuilder,
     ) -> Option<ExprId> {
         let name = f.def.name.name.clone();
-        if self.inlining.contains(&name) {
-            self.env.report(
-                Diagnostic::error(format!("`{name}` calls itself"))
-                    .with_code(codes::RECURSION)
-                    .with_label(span, "recursive call")
-                    .with_secondary(f.def.name.span, "declared here")
-                    .with_note("recursive functions and tasks cannot be inlined"),
-            );
-            return None;
+        // A recursive call is inlined again, frame within frame, since the
+        // IR has no calls: `fact(n - 1)` inside `fact` with an `n` known
+        // only at run time. It used to be refused. The inlining stops at
+        // `MAX_RECURSION_DEPTH` frames of one subroutine, or
+        // `MAX_RECURSION_FRAMES` recursive frames for one outermost call
+        // (a `fib` calling itself twice doubles at each level), and a call
+        // that reaches that far at run time stops the simulation with a
+        // failure that says so, rather than computing something else.
+        if self.inlining.is_empty() {
+            self.recursion_frames = 0;
+        }
+        let depth = self.inlining.iter().filter(|n| **n == name).count();
+        if depth > 0 {
+            let mut calls = 0;
+            for st in &f.def.body {
+                crate::verilog::lint::facts::walk_stmt(st, &mut |s| {
+                    for e in crate::verilog::lint::facts::stmt_exprs(s) {
+                        crate::verilog::lint::facts::walk_expr(e, &mut |sub| {
+                            if let ExprKind::Call { callee, .. } = &sub.kind
+                                && matches!(&callee.kind, ExprKind::Ident(id) if id.name == name)
+                            {
+                                calls += 1;
+                            }
+                        });
+                    }
+                });
+            }
+            let limit = recursion_depth(calls);
+            if depth >= limit || self.recursion_frames >= MAX_RECURSION_FRAMES {
+                self.b.span = span;
+                let never = self.b.const_bit(false);
+                let message = self.b.string(format!(
+                    "`{name}` recursed deeper than Reticle inlined it ({limit} calls deep, \
+                     or {MAX_RECURSION_FRAMES} recursive calls in all)"
+                ));
+                out.span = span;
+                out.push(ir::StmtKind::Assert {
+                    cond: never,
+                    severity: ir::ReportSeverity::Failure,
+                    message: vec![message],
+                });
+                return None;
+            }
+            self.recursion_frames += 1;
         }
         let formals = constant::formals(f.def);
         let slots = match constant::bind_args(&formals, args) {
@@ -2287,6 +2394,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         let scope = self.env.cx.scopes.push(Some(f.home), format!("{frame}."));
         self.env.enter(scope);
         self.inlining.push(name.clone());
+        self.inlining_fns.push(f);
 
         // The formals and the result live in nets of the enclosing module.
         let mut result = None;
@@ -2495,6 +2603,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
         }
 
         self.inlining.pop();
+        self.inlining_fns.pop();
         self.env.leave();
         if array_frame.is_some() {
             self.array_result = array_frame;

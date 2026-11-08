@@ -172,6 +172,12 @@ pub(crate) struct Lowerer<'cx, 'ast> {
     defparams: Vec<(Vec<String>, &'ast ast::Expr, Span)>,
     /// Subroutines currently being inlined, innermost last.
     inlining: Vec<String>,
+    /// The subroutine of each of `inlining`, for a recursive call made
+    /// where its name is its result.
+    inlining_fns: Vec<crate::verilog::elab::scope::FnRef<'ast>>,
+    /// The recursive frames inlined for the outermost call being inlined;
+    /// see `expr::MAX_RECURSION_FRAMES`.
+    recursion_frames: usize,
     /// Set for exactly one `build`: the node is a context-determined
     /// operand of an unsigned expression, so it is computed unsigned
     /// whatever its own operands are (IEEE 1364-2005 §5.5.1, §5.5.4).
@@ -438,6 +444,8 @@ pub(crate) fn elaborate_module(
             driver: DriverKey::Continuous,
             defparams: Vec::new(),
             inlining: Vec::new(),
+            inlining_fns: Vec::new(),
+            recursion_frames: 0,
             force_unsigned: false,
 
             guard: None,

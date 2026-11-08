@@ -1,16 +1,8 @@
-error[V0012]: `fact` calls itself
- --> error_recursion.v:7:25
+error[V0012]: constant function `down` calls itself more than 200 deep
+ --> error_recursion.v:9:16
   |
-7 |         else fact = k * fact(k - 1);
-  |                         ^^^^^^^^^^^ recursive call
-  |
-  = note: a recursive function is folded where its arguments are constant; with one known only when it runs it cannot be inlined
-
-warning[V0007]: value is truncated from 32 bits to 8 in this assignment
-  --> error_recursion.v:10:12
-   |
-10 |     assign y = fact(n);
-   |            ^^^^^^^^^^^ 32 bits wide
-   |
-   = note: `y` is 8 bits wide
+9 |         down = down(k - 1);
+  |                ^^^^^^^^^^^ recursive call
+8 |     function automatic integer down(input integer k);
+  |                                ---- function declared here
 

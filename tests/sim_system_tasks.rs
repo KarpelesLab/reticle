@@ -214,3 +214,29 @@ fn typename_spells_types_as_xsim_does() {
 fn p_prints_structure_as_xsim_does() {
     matches_xsim("pattern_tb", "sv", 0);
 }
+
+/// **A recursive function called with an argument known only at run time
+/// computes what xsim computes, as deep as Reticle inlines it, and stops
+/// the simulation past that** (`recursion_tb.v`): `sum` calls itself from
+/// one place and `fib` from two, inside a `?:`; both were refused. xsim's
+/// output is the testbench's but for its last line, `sum(100)`, which
+/// needs 101 frames where Reticle inlines 64: there Reticle prints a
+/// failure naming the function and the depth, and exits 1. Would catch the
+/// recursion refused again, a `?:` running both branches (every `fib` call
+/// would then reach the end of the inlining and fail), and a call past the
+/// depth computing a value instead of stopping; would not catch the depth
+/// changing, which only moves where it stops.
+#[test]
+fn recursion_runs_as_deep_as_it_is_inlined() {
+    let tb = "testdata/sim/recursion_tb.v";
+    let (code, stdout, stderr) = sim(tb);
+    assert_eq!(code, 1, "{stderr}");
+    let xsim = std::fs::read_to_string("testdata/sim/recursion_tb.xsim").unwrap();
+    assert!(xsim.ends_with("sum(100)=5050\n"), "{xsim}");
+    let mut want = xsim.trim_end_matches("sum(100)=5050\n").to_owned();
+    want.push_str(
+        "Failure: `sum` recursed deeper than Reticle inlined it \
+         (64 calls deep, or 2048 recursive calls in all)\n",
+    );
+    assert_eq!(stdout, want, "{stderr}");
+}
