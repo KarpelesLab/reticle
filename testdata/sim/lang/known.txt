@@ -4,7 +4,6 @@
 # the rest were written by hand.
 v/min_25.v line 2: prints `1000 a=0 y5=0 y6=x y2=0` where xsim prints `1000 a=0 y5=0 y6=x y2=x`
 v/min_26.v refused: unsupported construct: `force` of part of a net or variable
-v/min_32.v refused: hierarchical reference into instance of `leaf` is not supported
 v/min_8.v refused: `fact` calls itself
 v/v_contassign.v line 2: prints `1000 a=1 b=2 y1=x y2=0 y3=3 y4=3 y5=1 y6=x` where xsim prints `1000 a=1 b=2 y1=x y2=x y3=3 y4=3 y5=1 y6=x`
 v/v_event.v line 8: prints `15000 posedge flag` where xsim prints `15000 go or flag`
@@ -13,14 +12,11 @@ v/v_force.v refused: unsupported construct: `force` of part of a net or variable
 v/v_force_b.v refused: unsupported construct: `force` of part of a net or variable
 v/v_function.v refused: `fact` calls itself
 v/v_gates.v line 17: prints `a=z en=z bufif0=x bufif1=x notif0=x notif1=x nmos=x pmos=x` where xsim prints `a=z en=z bufif0=x bufif1=x notif0=x notif1=x nmos=z pmos=z`
-v/v_hier.v refused: hierarchical reference into instance of `mid` is not supported
 v/v_intra.v line 4: prints `26000 d=0 after 1 edge` where xsim prints `26000 d=4 after 1 edge`
 sv/min_dynarray.sv refused: unsupported construct: dynamic array dimension `[]`
-sv/min_hier_child_func.sv refused: hierarchical reference into instance of `child` is not supported
 sv/min_queue.sv refused: unsupported construct: queue dimension `[$]`
 sv/sv_dynarray_queue.sv refused: unsupported construct: dynamic array dimension `[]`
 sv/sv_fork_join.sv refused: unsupported construct: queue dimension `[$]`
-sv/sv_hier_task.sv refused: hierarchical reference into instance of `child` is not supported
 sv/sv_rtl_fifo.sv refused: unsupported construct: queue dimension `[$]`
 sv/sv_timeunit.sv line 6: prints `Timescale of (tb) is 1ns/1ps.` where xsim prints `Timescale of (tb) is 1ns / 1ps.`
 vhd/min_01.vhd std_logic held in four values: `U`, `X`, `W` and `-` all read as `x` and `H`/`L` as `1`/`0`, where xsim keeps all nine and resolves them by the IEEE 1164 table

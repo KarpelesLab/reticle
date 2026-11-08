@@ -92,6 +92,10 @@ pub(crate) struct ScopeEnv<'cx, 'ast> {
     /// text, and the alias net standing for each; see
     /// `lower::hier`.
     pub hier: std::collections::HashMap<String, (crate::ir::NetId, super::types::VType)>,
+    /// Functions and tasks of instances below the module, by their dotted
+    /// text (`l.twice`): the subroutine, with a home scope in which the
+    /// instance's variables it uses are their aliases; see `lower::hier`.
+    pub hier_subroutines: std::collections::HashMap<String, Symbol<'ast>>,
     /// The module being elaborated, by name, and its scope: `tb.blk.v`
     /// inside `tb` names `blk.v` of this module.
     pub own: Option<(String, ScopeId)>,
@@ -106,6 +110,7 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
             stack: Vec::new(),
             quiet: 0,
             hier: std::collections::HashMap::new(),
+            hier_subroutines: std::collections::HashMap::new(),
             own: None,
             dialect,
         }
@@ -311,14 +316,18 @@ impl<'cx, 'ast> ScopeEnv<'cx, 'ast> {
                 self.resolve_scoped(pkg, name)
             }
             ExprKind::Member { base, name } => {
-                if !self.hier.is_empty()
+                if (!self.hier.is_empty() || !self.hier_subroutines.is_empty())
                     && let Some(text) = dotted_text(e)
-                    && let Some((net, ty)) = self.hier.get(&text)
                 {
-                    return Some(Symbol::Net {
-                        net: *net,
-                        ty: ty.clone(),
-                    });
+                    if let Some((net, ty)) = self.hier.get(&text) {
+                        return Some(Symbol::Net {
+                            net: *net,
+                            ty: ty.clone(),
+                        });
+                    }
+                    if let Some(sym) = self.hier_subroutines.get(&text) {
+                        return Some(sym.clone());
+                    }
                 }
                 // A path from the module's own name, `tb.blk.v` inside
                 // `tb`, starts at its own scope.

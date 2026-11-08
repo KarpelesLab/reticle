@@ -20,6 +20,7 @@ use crate::source::Span;
 use crate::verilog::ast::{self, Expr, ExprKind, Item, ItemKind};
 use crate::verilog::lint::facts::{stmt_exprs, walk_expr, walk_items, walk_stmt};
 
+use super::super::scope::{FnRef, Symbol};
 use super::super::types::{Packed, VType};
 use super::Lowerer;
 
@@ -66,6 +67,17 @@ struct Found<'ast> {
     span: Span,
     genvars: Vec<(String, i64)>,
 }
+
+/// A function or task of an instance below that this module calls: its
+/// dotted name, the instance path, the subroutine, whether it is a task,
+/// and the instance's variables its body names.
+type HierCall<'ast> = (
+    String,
+    Vec<String>,
+    &'ast ast::Subroutine,
+    bool,
+    Vec<String>,
+);
 
 /// The frontend type of an IR net's type, for the alias that stands for it.
 fn vtype_of(ty: &Type) -> Option<VType> {
@@ -157,6 +169,90 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             }
             _ => {}
         });
+        // `l.twice(x)` and `l.bump`: a function or task of an instance is
+        // inlined here, as one of this module's is, with the instance's own
+        // variables it reads or writes (`hits` in `bump`) named through
+        // aliases as `l.hits` would be. It used to be refused.
+        let mut subroutines: Vec<HierCall<'ast>> = Vec::new();
+        for (path, span) in names.clone() {
+            let key = path.join(".");
+            if subroutines.iter().any(|s| s.0 == key) {
+                continue;
+            }
+            let (prefix, last) = path.split_at(path.len() - 1);
+            // The instance this module declares, the longest leading part
+            // that names one, then down through the instances its module
+            // declares at its top level: `m.l0.bump`.
+            let Some((k, found)) = (1..=prefix.len()).rev().find_map(|k| {
+                let head = prefix[..k].join(".");
+                instances.iter().find(|f| f.name == head).map(|f| (k, f))
+            }) else {
+                continue;
+            };
+            let table = &self.env.cx.table;
+            let mut decl = table.modules.get(found.inst.module.name.as_str()).copied();
+            for name in &prefix[k..] {
+                decl = decl.and_then(|d| {
+                    d.def.items.iter().find_map(|item| match &item.kind {
+                        ItemKind::Instance(inst)
+                            if inst.instances.iter().any(|o| {
+                                o.dims.is_empty()
+                                    && o.name.as_ref().is_some_and(|n| n.name == *name)
+                            }) =>
+                        {
+                            table.modules.get(inst.module.name.as_str()).copied()
+                        }
+                        _ => None,
+                    })
+                });
+            }
+            let Some(decl) = decl else {
+                continue;
+            };
+            let sub = decl.def.items.iter().find_map(|item| match &item.kind {
+                ItemKind::Function(f) if f.name.name == last[0] => Some((f, false)),
+                ItemKind::Task(t) if t.name.name == last[0] => Some((t, true)),
+                _ => None,
+            });
+            let Some((sub, is_task)) = sub else { continue };
+            // The instance's variables and nets the body names.
+            let mut declared: Vec<String> = Vec::new();
+            if let ast::Ports::Ansi(ports) = &decl.def.ports {
+                declared.extend(ports.iter().map(|p| p.name.name.clone()));
+            }
+            for item in &decl.def.items {
+                match &item.kind {
+                    ItemKind::Var(v) => {
+                        declared.extend(v.decls.iter().map(|d| d.name.name.clone()))
+                    }
+                    ItemKind::Net(n) => {
+                        declared.extend(n.decls.iter().map(|d| d.name.name.clone()))
+                    }
+                    _ => {}
+                }
+            }
+            let mut used: Vec<String> = Vec::new();
+            for st in &sub.body {
+                walk_stmt(st, &mut |s| {
+                    for e in stmt_exprs(s) {
+                        walk_expr(e, &mut |sub| {
+                            if let ExprKind::Ident(id) = &sub.kind
+                                && declared.contains(&id.name)
+                                && !used.contains(&id.name)
+                            {
+                                used.push(id.name.clone());
+                            }
+                        });
+                    }
+                });
+            }
+            for v in &used {
+                let mut p = prefix.to_vec();
+                p.push(v.clone());
+                names.push((p, span));
+            }
+            subroutines.push((key, prefix.to_vec(), sub, is_task, used));
+        }
         for (path, span) in names {
             let key = path.join(".");
             if self.env.hier.contains_key(&key) {
@@ -204,6 +300,29 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                 net: net_name,
             });
             self.env.hier.insert(key, (local, vty));
+        }
+        let unit = self
+            .env
+            .own
+            .as_ref()
+            .and_then(|(_, s)| self.env.cx.scopes.get(*s).parent);
+        for (key, prefix, sub, is_task, used) in subroutines {
+            let home = self.env.cx.scopes.push(unit, String::new());
+            self.env.enter(home);
+            for v in used {
+                let alias = format!("{}.{v}", prefix.join("."));
+                if let Some((net, ty)) = self.env.hier.get(&alias).cloned() {
+                    self.env.declare(&v, Symbol::Net { net, ty }, sub.name.span);
+                }
+            }
+            self.env.leave();
+            let f = FnRef { def: sub, home };
+            let sym = if is_task {
+                Symbol::Task(f)
+            } else {
+                Symbol::Function(f)
+            };
+            self.env.hier_subroutines.insert(key, sym);
         }
     }
 
