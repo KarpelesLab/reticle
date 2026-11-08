@@ -54,6 +54,8 @@ use std::fmt;
 use super::arch::{FastMap, NodeId, PipId, RoutingGraph};
 use super::place::{Netlist, Placement};
 
+mod refine;
+
 /// Why a design could not be routed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RouteError {
@@ -558,6 +560,17 @@ pub struct Timing {
     /// route ended. Kept, it is weighed as the critical connection
     /// it was.
     pub keep_criticality: bool,
+    /// How many rounds of refinement a legal route ends with, or zero for
+    /// none: each lookup table one of whose inputs is at least
+    /// [`Timing::refine_above`] critical has its inputs given the table's
+    /// pins again, the latest the fastest, over wires no signal holds, and
+    /// every other sink that critical its branch again for delay alone. A
+    /// round that makes any domain's latest path later is put back. Only with
+    /// [`Timing::paths`]. See `route::refine`.
+    pub refine_rounds: u32,
+    /// The criticality, before [`Timing::exponent`], from which a sink is
+    /// refined: see [`Timing::refine_rounds`].
+    pub refine_above: f64,
 }
 
 impl Timing {
@@ -589,6 +602,8 @@ impl Timing {
             seed_from_placement: false,
             delay_weight: 0.0,
             keep_criticality: false,
+            refine_rounds: 0,
+            refine_above: 1.0,
         }
     }
 }
@@ -887,6 +902,9 @@ pub struct RoutingReport {
     /// When a clean-up did not converge within twelve passes, the
     /// pass whose routing, legal, was kept instead.
     pub kept_legal: Option<u32>,
+    /// How many lookup tables and other sinks the refinement
+    /// ([`Timing::refine_rounds`]) gave new routes and kept.
+    pub refined: usize,
 }
 
 impl RoutingReport {
@@ -1426,8 +1444,27 @@ pub fn route(
 
     let (overused, _) = state.overuse();
     if overused > 0
-        && let Some((kept, at, nodes)) = legal
+        && let Some((mut kept, at, nodes)) = legal
     {
+        // The occupancy is the abandoned clean-up's: counted again from the
+        // routing kept, for the refinement.
+        for usage in &mut state.usage {
+            usage.occupancy = 0;
+        }
+        for route in kept.routes() {
+            for root in state.roots(&route.nodes) {
+                state.usage[root as usize].occupancy += 1;
+            }
+        }
+        report.refined = refine_routing(
+            netlist,
+            graph,
+            (&geometry, (&reach_start, &reach)),
+            &terminals,
+            options,
+            (&mut state, &mut scratch),
+            &mut kept,
+        );
         report.kept_legal = Some(at);
         report.signals = kept.routed();
         report.pips = kept.pip_count();
@@ -1482,6 +1519,15 @@ pub fn route(
                 .collect(),
         });
     }
+    report.refined = refine_routing(
+        netlist,
+        graph,
+        (&geometry, (&reach_start, &reach)),
+        &terminals,
+        options,
+        (&mut state, &mut scratch),
+        &mut routing,
+    );
     report.signals = routing.routed();
     report.pips = routing.pip_count();
     report.visited = scratch.visited;
@@ -1489,6 +1535,37 @@ pub fn route(
     report.gave_up = scratch.gave_ups;
     report.nodes = state.usage.iter().filter(|u| u.occupancy > 0).count();
     Ok((routing, report))
+}
+
+/// Each node's run of `(pip, the node it reaches)` in the second slice, by
+/// the first: the expansion's table of the graph, built once a route.
+type Edges<'a> = (&'a [u32], &'a [(PipId, NodeId)]);
+
+/// [`Timing::refine_rounds`] of refinement on a legal `routing`, `state`'s
+/// occupancy in step with it: how many groups it kept. None without timing.
+fn refine_routing(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    (geometry, edges): (&[Geometry], Edges<'_>),
+    terminals: &[Terminals],
+    options: &RouteOptions,
+    (state, scratch): (&mut State, &mut Scratch),
+    routing: &mut Routing,
+) -> usize {
+    let Some(timing) = options.timing.as_ref().filter(|t| t.refine_rounds > 0) else {
+        return 0;
+    };
+    let cx = refine::Context {
+        netlist,
+        graph,
+        geometry,
+        edges,
+        terminals,
+        timing,
+        equivalent: &options.equivalent,
+        network_signals: &options.network_signals,
+    };
+    refine::refine(&cx, state, scratch, routing).groups
 }
 
 /// The most nodes a critical connection's search takes off its queue before
@@ -3817,6 +3894,212 @@ mod tests {
         };
         assert_eq!(ends(f64::INFINITY), (Some(a), Some(b)));
         assert_eq!(ends(0.5), (Some(b), Some(a)));
+    }
+
+    /// **The refinement gives a table's fast input to its latest input**
+    /// ([`Timing::refine_rounds`]). Two registers feed one table's
+    /// interchangeable inputs `a`, which delays nothing, and `b`, which delays
+    /// 300 ps; the first register reaches either directly, the second over a
+    /// wire of 100 ps, and the table drives a third register. Routed in order,
+    /// the first takes `a` and the second `b`, 400 ps, the latest path. The
+    /// refinement gives `a` to the second (100 ps) and `b` to the first (300),
+    /// the table's latest input 300, and the routes it writes are legal: one
+    /// signal a node, and each moved sink where its route ends. With the far
+    /// wire free, swapping the two gains nothing, and nothing is refined. Would
+    /// catch the refinement not run, a moved sink not recorded, and a group
+    /// whose slack is no better kept (it would count the second case); would
+    /// not catch a round that made another path later being kept, which this
+    /// fabric has no other path to show.
+    #[test]
+    fn the_refinement_gives_a_tables_fast_input_to_its_latest_input() {
+        use crate::fpga::place::{PathDomain, PinTiming, PlaceTiming};
+        let mut arch = Arch::new("refine", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["out0", "out1", "far", "a", "b", "lo", "cd"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "ff");
+            src.pins
+                .push(("q".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+        }
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("i0".to_owned(), WireRef::local("a")));
+        lut.pins.push(("i1".to_owned(), WireRef::local("b")));
+        lut.pins.push(("o".to_owned(), WireRef::local("lo")));
+        tile.bels.push(lut);
+        let mut cap = BelDecl::new("cap", "ff");
+        cap.pins.push(("d".to_owned(), WireRef::local("cd")));
+        tile.bels.push(cap);
+        let ways = [
+            ("out0", "a"),
+            ("out0", "b"),
+            ("out1", "far"),
+            ("far", "a"),
+            ("far", "b"),
+            ("lo", "cd"),
+        ];
+        for (k, (from, to)) in ways.iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(*from),
+                to: WireRef::local(*to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut add = |name: &str, kind: &str, pins: &[(&str, bool, usize)]| {
+            let instance = netlist.instances.len();
+            let mut ids = Vec::new();
+            for (role, output, signal) in pins {
+                ids.push(netlist.pins.len());
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: name.to_owned(),
+                primitive: kind.to_uppercase(),
+                kind: kind.to_owned(),
+                pins: ids,
+                pin: None,
+            });
+        };
+        add("src0", "ff", &[("q", true, 0)]);
+        add("src1", "ff", &[("q", true, 1)]);
+        add(
+            "lut",
+            "lut",
+            &[("i0", false, 0), ("i1", false, 1), ("o", true, 2)],
+        );
+        add("cap", "ff", &[("d", false, 2)]);
+        for signal in 0..3 {
+            netlist.signals.push(Signal {
+                name: format!("s{signal}"),
+                driver: netlist
+                    .pins
+                    .iter()
+                    .position(|p| p.output && p.signal == Some(signal)),
+                sinks: (0..netlist.pins.len())
+                    .filter(|p| !netlist.pins[*p].output && netlist.pins[*p].signal == Some(signal))
+                    .collect(),
+            });
+        }
+        let pins: Vec<PinTiming> = netlist
+            .pins
+            .iter()
+            .map(
+                |pin| match (netlist.instances[pin.instance].kind.as_str(), pin.output) {
+                    ("ff", true) => PinTiming::Start,
+                    ("ff", false) => PinTiming::End,
+                    _ => PinTiming::Through,
+                },
+            )
+            .collect();
+        let paths = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.0, 0.1, 0.0],
+            launch: vec![0.0; 4],
+            capture: vec![0.0; 4],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+            ],
+            periods: vec![1.0],
+            wire: (0.0, 0.0, 0.0),
+            rounds: 1,
+            weight: 1.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 4],
+            pin_domain: Vec::new(),
+            pin_delays: crate::fpga::place::PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
+        };
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in ["X0Y0/src0", "X0Y0/src1", "X0Y0/lut", "X0Y0/cap"]
+            .iter()
+            .enumerate()
+        {
+            placement.place(index, graph.site_index(site).expect("site"));
+        }
+        let node = |name: &str| -> NodeId {
+            let index = (0..graph.nodes.len())
+                .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
+                .unwrap_or_else(|| panic!("no node {name}"));
+            NodeId::try_from(index).unwrap_or(0)
+        };
+        let (a, b, far) = (node("X0Y0/a"), node("X0Y0/b"), node("X0Y0/far"));
+        let mut equivalent = vec![u32::MAX; graph.nodes.len()];
+        equivalent[a as usize] = 7;
+        equivalent[b as usize] = 7;
+        let mut delays = vec![0u32; graph.nodes.len()];
+        delays[b as usize] = 300;
+        delays[far as usize] = 100;
+        let ends = |rounds: u32, delays: &[u32]| {
+            let mut timing = Timing::for_netlist(&netlist, delays.to_vec(), 0);
+            timing.paths = Some(paths.clone());
+            timing.refine_rounds = rounds;
+            timing.refine_above = 0.0;
+            let options = RouteOptions {
+                equivalent: equivalent.clone(),
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            let (routing, report) =
+                route(&netlist, &graph, &placement, &options).expect("it routes");
+            assert!(
+                routing.shorts(&netlist, &graph).is_empty(),
+                "no node is shared"
+            );
+            let end = |signal: usize| {
+                let route = routing.route(signal).expect("routed");
+                let end = route.pips.last().map(|p| graph.pip(*p).to);
+                let pin = netlist.signals[signal].sinks[0];
+                let moved = route.moved.iter().find(|(p, _)| *p == pin).map(|(_, n)| *n);
+                let own =
+                    graph.sites[placement.site_of(2).expect("placed")].pin(&netlist.pins[pin].role);
+                assert_eq!(end, moved.or(own), "signal {signal} ends where it says");
+                end
+            };
+            (end(0), end(1), report.refined)
+        };
+        assert_eq!(ends(0, &delays), (Some(a), Some(b), 0));
+        let (first, second, refined) = ends(2, &delays);
+        assert_eq!((first, second), (Some(b), Some(a)));
+        assert!(refined >= 1, "{refined}");
+        delays[far as usize] = 0;
+        assert_eq!(ends(2, &delays), (Some(a), Some(b), 0));
     }
 
     /// **The signals most critical by the placement go first, and a critical

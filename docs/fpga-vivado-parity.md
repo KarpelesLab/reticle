@@ -4256,6 +4256,9 @@ above.
 - **The rest of the routers' difference**, 2.3 points of the 5.1 left out of the two
   ADC clocks. What is left per connection is small on the latest paths (12 ps); a
   path's other connections, and which paths end up latest, are where to look.
+  *Read again in [A table's inputs as Vivado gives them](#a-tables-inputs-as-vivado-gives-them)*:
+  on the five designs furthest behind, at seeds 1 to 3, it was 116 ps a connection,
+  most of it which signal a table's pins were given, and that is closed there.
 - **Why Vivado's routes lose a nanosecond on `sad`'s and `esad`'s ADC clocks** on
   Reticle's placements: not looked at.
 - **The legacy model's scale**, which still counts the ties: changing it changes the
@@ -4263,6 +4266,259 @@ above.
 - **A lookahead that pays for itself**: one that gives the search a tighter estimate
   than the per-tile figure where it underestimates, without being looser where it
   overestimates.
+- None of it has been on a part.
+
+## A table's inputs as Vivado gives them
+
+**Asked: on the designs still furthest behind — `barrel`, `bram_fifo`, `lutram32`,
+`srl_delay` and `widemux` — what does Vivado's router write, in full, for the nets on
+their latest paths, and why does Reticle's not?** "Routing against Vivado's routes"
+left Vivado's routes of Reticle's placements 0.11 to 0.18 ns faster than Reticle's on
+these five. Run on 2026-11-09 at `xc7a100tftg256-3` with Vivado 2026.1, on the timing
+corpus with `achieved.sh`, ten seeds, on aa1420e5, whose own build reproduced
+`routed` of `achieved.txt` seed for seed (all 210 figures); rebased onto a7220e86, the
+change built the same bitstreams at seeds 1 and 5 of all seventeen designs. The placements do not
+depend on anything changed here, so Vivado's routes of the tree before are Vivado's
+routes of the build after. **Everything here is Vivado's timer of Vivado's or
+Reticle's routes; nothing has been on a part.**
+
+### What Vivado writes
+
+`routes.tcl` and `routes.py` (`summary`, `show`, `pins`) over seeds 1 to 3 of the five
+designs, the connections on Reticle's paths within 0.3 ns of each clock's latest:
+**211 connections, Reticle's routes 710 ps at the mean and Vivado's of the same
+connections 594.** 103 end on the same input of their table in both and cost Reticle
+60 ps more each; **108 end on another input and cost 169 ps more each**. The inputs,
+connections and mean ps:
+
+| input | Reticle | Vivado |
+|---|---|---|
+| 1 | 43 (832) | 21 (747) |
+| 2 | 46 (878) | 19 (790) |
+| 3 | 36 (667) | 42 (648) |
+| 4 | 44 (603) | 48 (580) |
+| 5 | 26 (546) | 53 (506) |
+| 6 | 15 (527) | 27 (448) |
+
+Read a table at a time, every input it reads in both routes (a script, not
+committed), the difference is not in the wires to the table but in **which signal is
+given which pin.** `lutram32`'s latest table at seed 1, `c14__lut8`, `SLICE_X89Y97`'s
+`B` table, each input with the pin and the interconnect delay to it:
+
+| input | Reticle | Vivado |
+|---|---|---|
+| `I0` (`q[7]`) | `B1`, 846 ps, `EE4BEG WL1BEG IMUX` | `B2`, 586, `SR1BEG IMUX` |
+| `I1` (`q[6]`) | `B2`, 838, `SE2BEG WL1BEG IMUX` | `B6`, 192, `SL1BEG IMUX` |
+| `I2` (`q[4]`) | `B3`, 351, `IMUX` | `B1`, 587, `NL1BEG_N IMUX` |
+| `I3` (`q[3]`) | `B4`, 300 | `B4`, 300 |
+| `I4` (`q[2]`) | `B5`, 277 | `B5`, 277 |
+| `I5` (`q[5]`) | `B6`, 95, `IMUX` | `B3`, 453, `SR1BEG IMUX` |
+
+**Vivado gives a table's inputs as a matching**: `q[6]`, on the latest path, gets the
+fast `B6`, and `q[5]` and `q[4]`, which have time to spare, are moved to slower pins
+and longer ways — `q[5]` from 95 ps to 453. The table's latest input is 587 ps in
+Vivado's routes and 846 in Reticle's. `srl_delay` at seed 2 (`c11__lut12`: the latest
+input on `B1` over `NE2BEG SL1BEG WL1BEG_N IMUX`, 779 ps, where Vivado put it on
+`B4`, 401, and moved the one there to `B1`, 692) and `bram_fifo` at seed 1
+(`c23__lut15`: a block RAM's `DOBDO23` on `D2`, 1,032 ps, Vivado's on `D4`, 745) are
+the same.
+
+**Why Reticle's router does not**, read from it: PathFinder routes a table's inputs one
+signal at a time, and the first signal to reach a table takes whichever free pin is
+cheapest for it, whatever its slack. A critical search may end on an input another
+signal holds (`Timing::claim_inputs`), but the holder is as near critical — the six
+inputs of a table on a latest path come from registers at much the same distance — and
+takes it back; nothing in the negotiation asks which of them should have it.
+
+### What was changed
+
+**A legal route ends with a refinement** (`route::refine`, `Timing::refine_rounds` and
+`refine_above`, under the fitted delay model only; `--delay-model legacy` routes as
+before). Each round:
+
+1. Analyses the routing as each pass does, and takes every lookup table one of whose
+   inputs is at least `xray::FITTED_REFINE_ABOVE` (0.7) critical before the exponent,
+   the latest first, and every other sink that critical on its own.
+2. For a table: lifts off the routing, for every input it reads, the branch of that
+   signal's tree that serves the input alone, and searches from what is left of each
+   tree, for delay alone and over wires no signal holds, to every pin of the table that
+   is free (one search a signal, all six pins, the least slack first). Each input's new
+   slack is its old one less what its new way costs over its old one, since the table's
+   required time is one for all its inputs.
+3. Gives the pins as the assignment that leaves the table's least slack largest
+   (`best_assignment`, at most 720 of them), and routes them, the tightest first, on the
+   ways found while those are clear. A table whose least slack is not at least 1 ps
+   larger keeps its routes; a sink of one pin is the same with one pin.
+4. Analyses the whole design again, and puts the round back and stops if any domain's
+   latest path is later for it.
+
+Nothing is taken from another signal, so the routing stays legal and needs no
+negotiation after. `xray::FITTED_REFINE_ROUNDS` is 3. Each round still finds tables to
+improve: what one round moves changes which paths are latest for the next.
+
+Each over ten seeds, geometric mean against Vivado's own flow (1.195 before), and the
+route stage of the seventeen designs (the median over the seeds, summed; 39 s before):
+
+| rounds | from | mean | route stage |
+|---|---|---|---|
+| 1 | 0.7 | 1.173 | 57 s |
+| 2 | 0.6 | 1.164 | 79 s |
+| **3** | **0.7** | **1.165** | **60 s** |
+| 4 | 0.8 | 1.167 | 50 s |
+| 4 | 0.85 | 1.170 | 46 s |
+| 6 | 0.8 | 1.167 | 74 s |
+
+The rows' route stages were not run side by side and the machine was shared, so they
+are a guide: those at 57, 79 and 74 s were the first version of the searches, before
+the first two changes under "Runtime" below, which kept every route as it was. The searches' estimate is the
+distance to the table at `xray::ROUTE_TILE_DELAY_PS`'s 25 ps a tile and the least of
+the pins not yet reached's own delay, which any way to one of them pays: without that
+term a search for `A1` (394 ps past its `IMUX`) settled every node of the neighbourhood
+nearer than that first. At 10 ps a tile, which is a bound on every way, three times as
+many searches ran out of their budget and none found better routes.
+
+### Before and after
+
+Medians (ns) over ten seeds, the lowest and highest seed in brackets, Vivado's timer;
+`before` is `routed` of `achieved.txt`, rebuilt the same:
+
+| design | clock | Vivado | before | after |
+|---|---|---|---|---|
+| adders | clk | 2.042 | 2.228 [2.19-2.37] | 2.212 [2.13-2.37] |
+| analyser_fifo | rd_clk | 3.887 | 5.144 [4.97-5.48] | 5.152 [4.90-5.40] |
+| analyser_fifo | wr_clk | 2.417 | 3.061 [2.90-3.39] | 2.936 [2.73-3.16] |
+| **barrel** | clk | 2.376 | 2.677 [2.55-2.81] | **2.479** [2.40-2.62] |
+| **bram_fifo** | clk | 3.388 | 3.996 [3.86-4.15] | **3.878** [3.82-4.00] |
+| carry_counter | clk | 1.855 | 2.373 [2.32-2.64] | 2.367 [2.22-2.49] |
+| counter64 | clk | 3.220 | 3.821 [3.71-3.97] | 3.768 [3.64-3.88] |
+| crc32 | clk | 2.234 | 2.345 [2.29-2.59] | 2.188 [2.11-2.25] |
+| esad | adc_sampleclk | 2.131 | 3.013 [2.79-3.82] | 3.013 [2.78-3.82] |
+| esad | clk_usb | 1.727 | 2.471 [2.30-2.69] | 2.486 [2.30-2.69] |
+| fir8 | clk | 9.142 | 9.161 [9.16-9.16] | 9.161 [9.16-9.16] |
+| fsm | clk | 1.903 | 2.266 [2.14-2.50] | 2.179 [2.09-2.24] |
+| gray_cdc | clk | 1.466 | 1.413 [1.41-1.51] | 1.413 [1.41-1.51] |
+| gray_cdc | clk2 | 1.267 | 1.582 [1.51-1.72] | 1.514 [1.47-1.57] |
+| **lutram32** | clk | 1.894 | 2.122 [2.00-2.48] | **2.064** [1.93-2.11] |
+| mul18 | clk | 1.935 | 2.200 [2.01-2.48] | 2.049 [2.01-2.10] |
+| regfile_alu | clk | 5.511 | 6.050 [5.91-6.47] | 5.860 [5.73-6.55] |
+| sad | adc_sampleclk | 2.207 | 2.989 [2.93-3.17] | 2.987 [2.90-3.17] |
+| sad | clk_usb | 1.726 | 2.510 [2.40-2.67] | 2.491 [2.40-2.67] |
+| **srl_delay** | clk | 1.645 | 1.906 [1.69-2.08] | **1.808** [1.69-1.96] |
+| **widemux** | clk | 2.438 | 2.878 [2.80-3.05] | **2.769** [2.69-2.88] |
+| geometric mean | | 1 | 1.195 | **1.165** |
+
+**Over the twenty-one clocks Reticle's median is 1.165 times Vivado's own figure,
+against 1.195**: sixteen clocks faster, two slower (`esad`'s `clk_usb` by 0.6 % and
+`analyser_fifo`'s read clock by 0.2 %, each inside its seeds' spread), three the same.
+The five designs furthest behind are 0.06 to 0.20 ns faster. **Against Vivado's routes
+of the same placements**, seeds 1 to 5 (`vroutes`): 1.163 against Vivado's 1.194, and
+over the nineteen clocks without the two ADC clocks, where Vivado's routes lose a
+nanosecond, 1.141 against 1.152. Reticle's routes are now faster than Vivado's on these
+placements by the geometric mean; Vivado's are still faster on `lutram32` (1.974 ns
+against 2.056 at seeds 1 to 5), `widemux` (2.710 against 2.836) and, within 0.04 ns,
+on `counter64` and `fsm`.
+
+**Per connection, against Vivado's routes**, the same five designs at seeds 1 to 3: over
+the 121 connections on Reticle's latest paths, Reticle's 574 ps and Vivado's 521 (710
+and 594 before); 37 end on another input than Vivado's (108 of 211), costing 134 ps
+more each, and inputs 1 and 2 take 27 of the 121 (89 of 211 before) where Vivado's
+take 19. What is left is ways Vivado reaches over wires another of Reticle's signals
+holds: `barrel`'s `c74__lut139/I2` at seed 2 is `NW6BEG EL1BEG ER1BEG IMUX` to `A6`, 613
+ps, where Vivado's is `NN2BEG NN2BEG BYP_ALT BYP_BOUNCE IMUX` to the same pin, 439, a
+bounce through the bypass wires; the `NN2BEG`s are another signal's in Reticle's
+routes, and the refinement takes nothing that is held.
+
+*The reading of "Routing against Vivado's routes"*, that what was left per connection
+on the latest paths was small (12 ps), was of the sixteen designs at seed 1. On these
+five at seeds 1 to 3 it was 116 ps, most of it the inputs a table's signals were given.
+
+### Runtime
+
+Two runs each of seed 1, side by side on the same machine, the place and route stages
+(s), and the bitstream the same in both runs of each:
+
+| design | place before | after | route before | after |
+|---|---|---|---|---|
+| `sad` | 43.2, 50.6 | 44.6, 50.3 | 2.44, 2.51 | 5.36, 5.68 |
+| `widemux` | 24.0, 23.3 | 24.7, 22.2 | 2.70, 2.94 | 10.0, 10.5 |
+| `regfile_alu` | 9.36, 9.32 | 9.39, 9.37 | 9.68, 10.06 | 13.65, 13.52 |
+| `barrel` | 5.17, 5.22 | 5.24, 5.19 | 1.41, 1.46 | 2.31, 2.24 |
+| `crc32` | 5.64, 5.72 | 5.66, 5.76 | 1.08, 1.10 | 1.61, 1.68 |
+| `counter64` | 15.6, 15.6 | 15.8, 15.6 | 1.81, 1.82 | 2.00, 2.06 |
+
+**The refinement costs time**: the route stage of `widemux` is 3.6 times what it was and
+its build 25 % longer, `sad`'s 7 %, `regfile_alu`'s 17 %. `widemux`'s select reaches 257
+tables, most of them near its latest paths, and each is searched for again three
+times. Placement is unchanged. Two changes to the searches kept every route the same
+and made them cheaper: the table's members are searched for the least slack first and
+the group given up as soon as one has no way that would leave it more slack than the
+group had (no assignment could then be better), and the ways found are kept for the
+routing that follows rather than searched for again while they are clear (the nodes
+visited fell by 7 to 47 % on the seven designs tried at seed 1); and the searches read the router's own
+table of each node's pips and the nodes they reach rather than the graph's pips
+(`widemux`'s route 16.7 and 18.2 s to 9.9 and 10.7, the same bitstream).
+
+**The placement of `sad`, which "Filling slices" made 50 % slower, was looked at and
+not made faster.** A profile has no one place to take it from: the legality checks of
+the anneal's moves (`SiteRules::judge`, 20 to 25 % of the build) are most of it, and
+the anneal makes 12.6 million moves (11.6 before that section, 14.9 just after it). Three
+changes that kept every placement the same were tried and are not kept, since two
+builds side by side were no faster by more than the machine's noise (`sad`'s place stage
+42.8 to 47.4 s against 42.7 to 46.7): the legality checks' sites of a kind no instance
+has left out of what is asked (the latches of a flip-flop's bels; 1.48 billion steps to
+1.20), a macro's member's site looked up by tile rather than by a scan of every site of
+its kind, and each instance's signal on each shared pin in one table rather than a
+search of its pins (1 % fewer instructions).
+
+### Tried and not kept
+
+- **Routing again whole each late signal of at most eight sinks**, its trunk with it,
+  for delay alone and over free wires, kept when its sinks' least slack was larger:
+  `barrel`'s case above wanted a new trunk. It changed the routed estimate of none of
+  seven designs at seed 1 by more than 0.01 ns: the wires a faster trunk wants are held.
+- **A cap on how much slower a slack input's new way may be** (300 ps), to search less:
+  1.172 against 1.165 over ten seeds, `widemux` 2.857 ns against 2.769.
+- **A smaller search budget** (8,000 nodes against 30,000): `widemux`'s and
+  `bram_fifo`'s routed estimates 0.11 and 0.13 ns later at seed 1.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which
+`Timing::refine_rounds` is zero, and with this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4's `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`.
+**Checked.**
+
+### Tests
+
+`the_refinement_gives_a_tables_fast_input_to_its_latest_input` (`route`) routes two
+registers into one table whose pins delay nothing and 300 ps, the second register over
+a wire of 100: in order the first takes the fast pin and the second ends at 400 ps; the
+refinement swaps them, the latest input then 300, every node one signal's and every
+moved sink recorded where its route ends; with the wire free, swapping gains nothing
+and nothing is refined. `the_latest_input_takes_the_fastest_pin` and
+`a_pin_no_way_reaches_is_never_given` (`route::refine`) hold the assignment.
+`tests/fpga_xray_achieved.rs` reads this section's run (`refined`, ten seeds): at
+least 2 % under `routed` over the corpus, no clock more than 2 % over its own, and seeds
+1 to 5 no slower than Vivado's routes of the same placements.
+
+**Mutations**, each made by a script and put back, each failing a test: the assignment
+blind to slack (the least total delay), a moved sink not recorded, a group kept that is
+no better, and the refinement never run. **Two passed**: the group kept that is no better
+by either one of the two checks, before its routes are made and after, since the other
+then refuses it; with both gone it fails. In the fixture, `refined` swapped with
+`routed` and a seed of `refined` lost each fail the corpus's test.
+
+### Not done
+
+- **Taking a held wire from a slack signal.** What is left between the two routers on
+  the latest paths is ways over wires another of Reticle's signals holds; the
+  refinement takes only free ones. Ripping up the holder and routing it again is the
+  next step, and the route stage is already the cost above.
+- **The route stage's cost** on designs whose late tables are many, `widemux`'s above.
+- **Why Vivado's routes lose a nanosecond on `sad`'s and `esad`'s ADC clocks**: not
+  looked at.
+- **`sad`'s placement time**, above.
 - None of it has been on a part.
 
 ## Wide multiplexers

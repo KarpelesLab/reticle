@@ -382,3 +382,48 @@ fn the_routes_close_most_of_the_distance_to_vivados_on_the_same_placements() {
         "seeds 1 to 5: {first:.3} routed against {vivados:.3} for Vivado's routes"
     );
 }
+
+/// **Giving each late lookup table's inputs as Vivado does makes the corpus
+/// faster, and faster than Vivado's own routes of the same placements.**
+/// `refined` is `routed` with docs/fpga-vivado-parity.md, "A table's inputs as
+/// Vivado gives them", ten seeds each, the placements the same (the tree it was
+/// measured on built `routed` again seed for seed); `vroutes` is Vivado's
+/// routes of seeds 1 to 5. The geometric mean against Vivado's own flow went
+/// from 1.195 to 1.165; this holds it at least 2 % under, no clock's median
+/// more than 2 % over its own `routed` (the worst, `esad`'s `clk_usb`, 0.6 %),
+/// and over seeds 1 to 5, where `vroutes` is 1.194, `refined` (1.163) no slower
+/// than it. Would catch a regeneration that lost the change, swapped `refined`
+/// and `routed`, or lost a seed; would not catch the flow losing the change
+/// since, which needs Vivado.
+#[test]
+fn a_tables_inputs_given_as_vivado_gives_them_make_the_corpus_faster() {
+    let Some(table) = achieved() else { return };
+    let mut logs = [0.0f64; 4];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (routed, refined, vroutes) =
+            (&builds["routed"], &builds["refined"], &builds["vroutes"]);
+        assert_eq!(refined.len(), 10, "{design} {clock}: seeds of `refined`");
+        let (before, after) = (median(routed), median(refined));
+        assert!(
+            after <= before * 1.02,
+            "{design} {clock}: {after:.3} ns refined against {before:.3}"
+        );
+        for (log, ns) in
+            logs.iter_mut()
+                .zip([before, after, median(&refined[..5]), median(vroutes)])
+        {
+            *log += (ns / vivado).ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, first, vivados] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 0.98,
+        "geometric mean against Vivado's own flow: {after:.3} refined, {before:.3} before"
+    );
+    assert!(
+        first <= vivados,
+        "seeds 1 to 5: {first:.3} refined against {vivados:.3} for Vivado's routes"
+    );
+}

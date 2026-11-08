@@ -9472,6 +9472,21 @@ pub fn path_criticality(
     (critical.pins, round.longest_ps)
 }
 
+/// [`path_criticality`], and each sink pin's least slack in nanoseconds
+/// (infinity for a pin no path times): what the router's refinement
+/// (`route::Timing::refine_rounds`) weighs one input of a lookup table
+/// against another by, where a criticality is relative to its domain.
+#[must_use]
+pub fn path_slack(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+) -> (Vec<f64>, Vec<f64>, Vec<u64>) {
+    let order = timing_order(netlist, timing);
+    let (critical, round) = analyse_paths(netlist, timing, &order, wire);
+    (critical.pins, critical.slack, round.longest_ps)
+}
+
 /// The path analysis behind [`estimate_timing`] and [`path_criticality`]:
 /// arrival forwards from every launch, required time backwards from every
 /// capture, per domain, and each connection's criticality from its slack
@@ -9508,6 +9523,7 @@ fn analyse_paths(
     };
     let mut critical = vec![0.0f64; netlist.signals.len()];
     let mut pin_critical = vec![0.0f64; pins];
+    let mut pin_slack = vec![f64::INFINITY; pins];
     let mut longest_ps = Vec::with_capacity(timing.periods.len());
     let pad = |instance: usize| netlist.instances[instance].kind == "io";
     for (domain, period) in timing.periods.iter().enumerate() {
@@ -9633,6 +9649,7 @@ fn analyse_paths(
                     let c = (1.0 - slack / span).clamp(0.0, 1.0);
                     critical[index] = critical[index].max(c);
                     pin_critical[*sink] = pin_critical[*sink].max(c);
+                    pin_slack[*sink] = pin_slack[*sink].min(slack);
                 }
             }
             domain_longest = domain_longest.max(longest);
@@ -9649,7 +9666,13 @@ fn analyse_paths(
         longest_ps,
         hpwl: 0,
     };
-    (Criticality { pins: pin_critical }, round)
+    (
+        Criticality {
+            pins: pin_critical,
+            slack: pin_slack,
+        },
+        round,
+    )
 }
 
 /// Every output pin's arrival in one domain, in nanoseconds, over the
@@ -10043,6 +10066,9 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
 struct Criticality {
     /// Per netlist pin, for a sink; zero for anything else.
     pins: Vec<f64>,
+    /// Per netlist pin, for a sink, its least slack over the domains and
+    /// path groups that time it, in nanoseconds; infinity for anything else.
+    slack: Vec<f64>,
 }
 
 /// Each connection's pull for [`Pull`], by its sink pin, from its

@@ -3609,6 +3609,27 @@ pub const FITTED_CLAIM_INPUTS: f64 = 0.548;
 /// was 2.7 ps on `fir8` and 170 on `crc32`.
 pub const FITTED_DELAY_WEIGHT: f64 = 2.0;
 
+/// How many rounds of refinement a route under the fitted model ends with
+/// (`route::Timing::refine_rounds`): each lookup table near its domain's latest
+/// path given its inputs again, the latest on the fastest pin, as Vivado's
+/// router gives them.
+///
+/// Over ten seeds of `testdata/fpga/vivado/qor/`, with [`FITTED_REFINE_ABOVE`],
+/// the geometric mean under Vivado's timer went from 1.195 of Vivado's own flow
+/// to 1.165 at three rounds; at one, 1.173, and at four from 0.8, 1.167, each
+/// round still finding tables to improve where the one before had moved the
+/// latest path. The route stage of the seventeen designs took 60 s against 39
+/// (medians of the seeds, summed), `widemux` 12.0 s against 3.0. Measured on
+/// 2026-11-09; `docs/fpga-vivado-parity.md`, "A table's inputs as Vivado gives
+/// them".
+pub const FITTED_REFINE_ROUNDS: u32 = 3;
+
+/// The criticality, before the exponent, from which the refinement takes a
+/// lookup table or a sink (`route::Timing::refine_above`): from 0.7, 1.165;
+/// from 0.8 at four rounds, 1.167, and from 0.85, 1.170, for fewer searches
+/// (the route stage 50 and 46 s against 60).
+pub const FITTED_REFINE_ABOVE: f64 = 0.7;
+
 /// The criticality, after [`CRITICALITY_EXPONENT`], from which a connection's
 /// search may end on a lookup table's input another signal holds
 /// ([`route::Timing::claim_inputs`](crate::fpga::route::Timing)), as it was

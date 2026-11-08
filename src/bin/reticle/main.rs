@@ -4639,6 +4639,14 @@ fn write_xc7_bitstream(
                             0.0
                         },
                         keep_criticality: fitted,
+                        // And a legal route's late lookup tables given their
+                        // pins again: see `xray::FITTED_REFINE_ROUNDS`.
+                        refine_rounds: if fitted {
+                            reticle::fpga::xray::FITTED_REFINE_ROUNDS
+                        } else {
+                            0
+                        },
+                        refine_above: reticle::fpga::xray::FITTED_REFINE_ABOVE,
                     })
             }),
             ..RouteOptions::default()
@@ -4687,6 +4695,12 @@ fn write_xc7_bitstream(
                 eprintln!(
                     "note: {} critical search(es) gave up at their budget and were routed for congestion alone",
                     report.gave_up
+                );
+            }
+            if report.refined > 0 {
+                eprintln!(
+                    "note: the refinement gave {} late lookup table(s) and sink(s) new routes",
+                    report.refined
                 );
             }
             if let Some(pass) = report.kept_legal {
