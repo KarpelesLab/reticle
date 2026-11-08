@@ -85,13 +85,17 @@ enum PShape {
     Enum(Rc<Enumeration>),
     /// A packed struct, printed member by member.
     Struct(Vec<PField>),
+    /// A packed array of more than one dimension, printed element by
+    /// element from its left bound, as a struct without member names:
+    /// `logic [3:0][3:0] pk = 16'h1234` is `'{1,2,3,4}`, as xsim prints it.
+    Elements(Vec<PField>),
     /// An unpacked array held as a memory, printed element by element
-    /// from its left bound.
+    /// from its left bound, one `'{...}` per dimension.
     Array {
         /// The memory.
         mem: ir::MemoryId,
-        /// Its declared dimension.
-        range: Range,
+        /// Its unpacked dimensions, outermost first.
+        dims: Vec<Range>,
         /// The shape of an element that is not a plain value.
         elem: Option<Box<PShape>>,
     },
@@ -112,6 +116,38 @@ fn p_shape_of(ty: &VType) -> Option<PShape> {
     let p = ty.packed()?;
     if let Some(e) = &p.enumeration {
         return Some(PShape::Enum(Rc::clone(e)));
+    }
+    if p.fields.is_none() && p.dims.len() >= 2 {
+        // An element of a packed array is unsigned though the array is
+        // signed (IEEE 1800-2017 §7.4.1); an unpacked array of `int`
+        // kept as a struct member's bits keeps its elements' `int`.
+        let elem = Packed {
+            dims: p.dims[1..].to_vec(),
+            signed: p.signed && p.keyword.is_some(),
+            two_state_bits: None,
+            ..p.clone()
+        };
+        let width = elem.width().max(1);
+        let outer = p.dims[0];
+        let elem = VType::Packed(elem);
+        let shape = p_shape_of(&elem);
+        let step: i64 = if outer.left <= outer.right { 1 } else { -1 };
+        let mut fields = Vec::new();
+        let mut i = outer.left;
+        loop {
+            fields.push(PField {
+                name: String::new(),
+                lsb: u32::try_from(i.abs_diff(outer.right)).unwrap_or(0) * width,
+                width,
+                signed: elem.packed().is_some_and(|q| q.signed),
+                shape: shape.clone(),
+            });
+            if i == outer.right {
+                break;
+            }
+            i += step;
+        }
+        return Some(PShape::Elements(fields));
     }
     let fields = p.fields.as_ref()?;
     Some(PShape::Struct(
@@ -158,13 +194,20 @@ fn p_text(shape: &PShape, zero: bool) -> String {
                 .collect();
             format!("'{{{}}}", parts.join(","))
         }
-        PShape::Array { range, elem, .. } => {
-            let one = match elem {
+        PShape::Elements(fields) => {
+            let parts: Vec<String> = fields.iter().map(|f| leaf(&f.shape)).collect();
+            format!("'{{{}}}", parts.join(","))
+        }
+        PShape::Array { dims, elem, .. } => {
+            let mut one = match elem {
                 Some(s) => p_text(s, zero),
                 None => "%p".to_owned(),
             };
-            let n = usize::try_from(range.len()).unwrap_or(0);
-            format!("'{{{}}}", vec![one; n].join(","))
+            for range in dims.iter().rev() {
+                let n = usize::try_from(range.len()).unwrap_or(0);
+                one = format!("'{{{}}}", vec![one; n].join(","));
+            }
+            one
         }
     }
 }
@@ -1360,7 +1403,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
             let info = &self.mems[mem.index()];
             return Some(PShape::Array {
                 mem,
-                range: info.range,
+                dims: info.dims.clone(),
                 elem: p_shape_of(&info.elem).map(Box::new),
             });
         }
@@ -1382,7 +1425,7 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
     fn p_leaves(&mut self, value: Option<ExprId>, shape: &PShape, ids: &mut Vec<ExprId>) {
         match shape {
             PShape::Enum(_) => ids.extend(value),
-            PShape::Struct(fields) => {
+            PShape::Struct(fields) | PShape::Elements(fields) => {
                 let Some(value) = value else { return };
                 for f in fields {
                     let bits = self.b.slice(value, f.lsb + f.width - 1, f.lsb);
@@ -1393,23 +1436,38 @@ impl<'cx, 'ast> Lowerer<'cx, 'ast> {
                     }
                 }
             }
-            PShape::Array { mem, range, elem } => {
+            PShape::Array { mem, dims, elem } => {
                 let size = self.b.module().memories[*mem].size;
                 let width = bits_needed(size.saturating_sub(1)).max(1);
-                let low = range.low();
-                let step: i64 = if range.left <= range.right { 1 } else { -1 };
-                let mut i = range.left;
-                loop {
-                    let addr = self.b.const_u64(width, i.abs_diff(low));
+                // Every element, the last dimension varying fastest, each
+                // from its left bound; the address is as `mem_address_of`
+                // makes it, each index less its dimension's low bound.
+                let mut addrs: Vec<u64> = vec![0];
+                let mut stride = size;
+                for range in dims {
+                    stride /= range.len().max(1);
+                    let step: i64 = if range.left <= range.right { 1 } else { -1 };
+                    let mut offsets = Vec::new();
+                    let mut i = range.left;
+                    loop {
+                        offsets.push(i.abs_diff(range.low()) * stride);
+                        if i == range.right {
+                            break;
+                        }
+                        i += step;
+                    }
+                    addrs = addrs
+                        .iter()
+                        .flat_map(|a| offsets.iter().map(move |o| a + o))
+                        .collect();
+                }
+                for a in addrs {
+                    let addr = self.b.const_u64(width, a);
                     let read = self.b.mem_read(*mem, addr);
                     match elem {
                         Some(inner) => self.p_leaves(Some(read), inner, ids),
                         None => ids.push(read),
                     }
-                    if i == range.right {
-                        break;
-                    }
-                    i += step;
                 }
             }
         }
