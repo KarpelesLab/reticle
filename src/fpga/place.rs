@@ -12198,7 +12198,7 @@ mod tests {
     /// with its sign wrong, given to a cell in no clock's domain, or taken
     /// from the wrong site; and the pull charging the difference both ways or
     /// not at all. Would not catch the figures being wrong, which are
-    /// Vivado's (`xray::timing::CLOCK_ARRIVAL_PS`).
+    /// Vivado's (`xray::timing::XC7A100T_CLOCK` and `XC7A35T_CLOCK`).
     #[test]
     fn a_later_clock_launches_later_and_the_pull_charges_its_fall() {
         let (graph, netlist, placement, mut timing) = timed_chain();

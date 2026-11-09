@@ -152,10 +152,13 @@ models or IP.
   sink's interconnect delay and each clock's worst paths; `routes.py` compares two such
   dumps a connection at a time (`summary`, `show`, `pins`) and writes the lines `fill.py
   distance` reads (`connections`).
-- `clock_arrival.tcl` asks when a global clock reaches every slice column of the
-  `xc7a100t` on three rows of each clock region row, from the global buffer named;
-  `clock_arrival.py fixture` writes `testdata/fpga/vivado/clock/arrival.txt` from such
-  runs and `clock_arrival.py table` the table `xray::timing` keeps.
+- `clock_arrival.tcl` asks when a global clock reaches every even slice column of a
+  part (the `xc7a100t` unless one is named) on three rows of each clock region row,
+  from the global buffer named; `clock_arrival.py fixture` writes
+  `testdata/fpga/vivado/clock/arrival.txt` or `arrival_xc7a35t.txt` from such runs, and
+  `clock_arrival.py table` the table `xray::timing` keeps for that die, of the runs
+  whose part it is given. `timing_table.py compare --part` reads runs of a part other
+  than the `xc7a100t`.
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's

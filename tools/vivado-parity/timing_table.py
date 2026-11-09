@@ -3,7 +3,7 @@
 model is from it, a connection and a clock at a time.
 
     timing_table.py fit <db artix7 dir> <out dir> <run>...
-    timing_table.py compare <db artix7 dir> <name>=<run>...
+    timing_table.py compare <db artix7 dir> [--part <part>] <name>=<run>...
     timing_table.py rust <classes.txt>
 
 A run is what `TIMING=1 run_placed.sh` wrote: for each design,
@@ -26,7 +26,9 @@ endpoints.txt, and x.tcl.
 
 `compare` prints, for each run named, per design: the ratio of Reticle's
 estimate of each connection to Vivado's (median, 5th and 95th percentile,
-lowest, highest), and per clock the worst path of each tool. Only answers come
+lowest, highest), and per clock the worst path of each tool. The runs are of
+xc7a100tftg256-3 unless --part names another (xc7a35tftg256-3), whose die's
+grid, Project X-Ray's (xc7a50t for an xc7a35t), places Reticle's wires. Only answers come
 out: numbers about designs written here, timed on Reticle's routes.
 """
 import collections, json, math, os, re, statistics, sys
@@ -379,7 +381,13 @@ def vivado_key(pin, lock):
 SHORTEST_NS = 0.02
 
 
-def compare(db, named):
+def die_grid(part):
+    """Project X-Ray's grid directory for a part: the xc7a35t is the xc7a50t's."""
+    die = part[:part.index("t") + 1]
+    return "xc7a50t" if die == "xc7a35t" else die
+
+
+def compare(db, named, part="xc7a100tftg256-3"):
     """For each run and design: the ratio of Reticle's estimate to Vivado's,
     a connection and an endpoint at a time, and each clock's worst path.
 
@@ -388,12 +396,12 @@ def compare(db, named):
     `X<x>Y<y>/<wire>` in grid coordinates, and Vivado's sink is a node named by
     its tile and wire. A lookup table's pins are the router's to choose, so a
     cell's pin names do not say which connection is which."""
-    name_at = {xy: name for name, xy in grid(db).items()}
+    name_at = {xy: name for name, xy in grid(db, die_grid(part)).items()}
     print("# Reticle's estimate against Vivado 2026.1's timer on the same routes, at\n"
-          "# xc7a100tftg256-3; tools/vivado-parity/timing_table.py compare. Ratios are\n"
+          f"# {part}; tools/vivado-parity/timing_table.py compare. Ratios are\n"
           "# estimate / Vivado: median, 5th and 95th percentile, lowest, highest.")
     for label, run in named:
-        every = []
+        every, ends = [], []
         for design in designs_of(run):
             nets, _, paths = load(f"{run}/{design}/routes/{design}.timing")
             lock = locks(run, design)
@@ -435,6 +443,7 @@ def compare(db, named):
             if both:
                 ratios = [arrival[k] / vivado[k][0] for k in both if vivado[k][0] > 0]
                 print(f"  endpoints {len(ratios)} {spread(ratios)}")
+                ends += ratios
             for clock in sorted({k[0] for k in both}):
                 mine = [k for k in both if k[0] == clock]
                 worst = max(mine, key=lambda k: vivado[k][0])
@@ -444,6 +453,8 @@ def compare(db, named):
                       f"reticle_worst {ours_worst:.3f}")
         if every:
             print(f"all {label} connections {len(every)} {spread(every)}")
+        if ends:
+            print(f"all {label} endpoints {len(ends)} {spread(ends)}")
 
 
 if __name__ == "__main__":
@@ -457,4 +468,8 @@ if __name__ == "__main__":
             elif w[0] in ("branch", "other"):
                 print(f"// {w[0]} {w[1]}")
     elif sys.argv[1] == "compare":
-        compare(sys.argv[2], [a.split("=", 1) for a in sys.argv[3:]])
+        rest = sys.argv[3:]
+        part = "xc7a100tftg256-3"
+        if rest[:1] == ["--part"]:
+            part, rest = rest[1], rest[2:]
+        compare(sys.argv[2], [a.split("=", 1) for a in rest], part)
