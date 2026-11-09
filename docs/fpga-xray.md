@@ -6106,6 +6106,127 @@ more, 28 recovered and 55 did not, and one that opened at 597 recovered. Stoppin
 sooner was not built. It would save under 3 %, and it changes the bitstream of
 any seed whose clean-up recovers late, with no board to say what that costs.
 
+### The same bitstream, sooner (2026-11-09)
+
+Changes that build every bitstream byte for byte as it was, and take a
+tenth off the Husky Plus and an eighth to a half off the corpus's designs. Each was checked the same way: both Husky builds' bitstreams have
+the hashes they had (`3fd3e4c8…` and, for the Plus at seed 4,
+`e57fca47…`), and the seventeen designs of the timing corpus (`qor/` and
+the four built with it in "Placement and routing against Vivado's own
+flow") at seeds 1 and 5 write the same bitstream, the same Verilog,
+constraints and script, and the same log but for the `timing:` lines. All
+of that is checked, not quoted.
+
+**Where the time went, profiled** (`perf record`, sampled; the Husky Plus at
+49 Hz over its whole build, the corpus at 999 Hz):
+
+- The Husky Plus, 2,003 s: the route 1,582 s, of which the maze expansion was
+  47 % of every sample and its queue's pops 26 %; placement 379 s, about a
+  quarter of it finding a macro move's sites and judging them
+  (`macro_sites`, `SiteRules::allows_lifted`) and most of the rest the
+  random reads of drawing and making a move;
+  synthesis about 36 s, a third of which was picking names (below).
+- A small design, `fsm` at 12.6 s: some 8 s of it is the same for every
+  design. `tilegrid.json` was parsed again for each of its nine or so readers
+  (29 %), `SiteRules::find_with`
+  read the whole die twice (19 %), `node_delays` cloned two strings for every
+  pip (12 %), and `physical_nodes` ran three times (5 %).
+- `sad`: placement, 47 s of 58, a quarter of it judging the legality of its
+  303 carry macros, which is asked before a move is priced because whether
+  the move is made at all decides the random stream (so it cannot be asked
+  after, as a single cell's is).
+- `widemux`: the refinement's three rounds, 2.8 s each, 8.3 s of an 11.9 s
+  route.
+
+**What changed:**
+
+| change | where it showed |
+|---|---|
+| the tile grid parsed once and kept with the text it came from (`XrayDatabase::tiles_shared`) | 3 s of every build |
+| `node_delays` keyed by numbered wire names, each tile-type file parsed once, each clock question asked once a name | 1 s of every build |
+| `find_with` compares the pins of two sites only when they share a wire, caches role ids, finds shared pools from each wire's sites; and its rules, built once, also answer `route_throughs_needed` | about 2 s of every build |
+| `Placement` as `u32`s; `SiteRules::judge` lists the pools a move touches by marking them | placement 10 % on the corpus |
+| the maze's queue a radix heap with a four-way heap beside it for what an inconsistent estimate pushes below its floor (`route::Queue`) | Husky Plus route 8 %, corpus routes 10 % |
+| `physical_nodes` over the pips in order, skipping joins already made | small |
+| new cells and nets named from one index of the module's names (`primitives::Names`, `util::FreshNames`) in the runs that add many | Husky Plus synthesis 36 s to 11 s |
+| `const_fold::propagate` finds every aliased net's readers in one walk | Husky Plus synthesis, with the above |
+
+Every one is the same computation done with less: an index instead of a
+scan, a parse kept instead of repeated, a priority queue that pops the same
+least entry by another route. The queue is held to `std`'s binary heap by a
+test over runs whose estimates are few and runs whose estimates are spread
+and half below the last pop; each name index is held by a test to the scan
+it replaces, the primitives' over names that read as suffixes only through
+`u32`'s parse (`a$01`, `a$+2`).
+
+**Measured**, side by side in one session on a shared machine, all at nice 19.
+The Husky Plus, two pairs of builds (base is `d94956ac`), each pair started
+together:
+
+| | base | after | |
+|---|---|---|---|
+| first pair, total | 2,037 s | 1,844 s | −9.5 % |
+| second pair, total | 2,045 s | 1,812 s | −11.4 % |
+| second pair: place, route | 414 s, 1,575 s | 370 s, 1,419 s | |
+| second pair: before the database is opened | 36 s | 11 s | |
+| peak memory | 5.16 GB | 5.35 GB | |
+
+The Husky (not timing-driven), two pairs: 386 s against 360 s, and 352 s
+against 322 s. The first pair of each is the first three commits (the tile
+grid, the site rules and legality checks, the queue), the second adds the
+names and `const_fold` but not the last two (`mem_scalarize`'s names, and
+the clock questions asked once a name). The corpus, both binaries building it
+at once, twice over, mean of the four builds of each design (seeds 1 and 5),
+with everything but the last commit:
+
+| design | whole build | place | route |
+|---|---|---|---|
+| `fsm` | 16.2 → 8.1 s | 7.3 → 3.5 | 1.5 → 1.5 |
+| `barrel` | 17.6 → 10.2 | 7.5 → 4.0 | 3.0 → 3.1 |
+| `regfile_alu` | 37.2 → 28.2 | 14.1 → 10.5 | 15.8 → 14.6 |
+| `widemux` | 46.8 → 38.2 | 29.3 → 26.3 | 10.3 → 8.9 |
+| `sad` | 71.8 → 62.8 | 58.4 → 54.1 | 5.5 → 5.2 |
+| `esad` | 57.2 → 46.5 | 44.0 → 38.2 | 4.6 → 4.3 |
+| all 17, summed | 934 → 647 s (−31 %) | 551 → 418 | 126 → 121 |
+
+Those builds ran beside two Husky builds, so the seconds are this session's
+and not a benchmark: a design's four builds spread by up to a tenth (a
+route alone by more), and a change smaller than that is not claimed.
+
+**Tried, and not kept:**
+
+- *Routing signals in parallel, speculatively, keeping only what a
+  sequential route would have made.* Each signal of a batch of eight routed
+  against the state at the batch's start, and kept unless an earlier one of
+  the batch had changed a node its search read; the rest routed again in
+  order. That gives the sequential routing at any thread count, so it was
+  simulated before it was built, by recording every search's reads in the
+  sequential router: on `regfile_alu` 75 % of the visits are in searches an
+  earlier member of their batch invalidates (55 % on `barrel`), and with the
+  time of a batch its longest search plus the ones routed again, it would
+  have taken 0.77 times as long as it does now, that is longer (0.95 to 1.0
+  on `sad` and `widemux`). The searches that cost are the long ones, and a
+  long search reads what the others write. Not built.
+- *The heap laid out so that an entry's four children are one 64-byte cache
+  line.* The same bitstream and no faster: 1,721 s of route against 1,652
+  beside it.
+- *The router's per-node records aligned to 32 bytes*, so that none straddles
+  two lines: 1,719 s, no faster.
+- *A node's geometry and its search record in one 64-byte entry*, one line
+  read per relaxed pip where there were two: the corpus's routes 9 % slower,
+  the copy and the larger table costing more than the line saved.
+- *The refinement's search reading ahead*, as the maze does: no difference
+  beyond the spread.
+
+**What is left.** The route is three quarters of the Husky Plus, and in it
+the expansion's reads of each pip's node (its geometry, its physical node's
+use and its search record, each a cache miss into a table of tens of
+millions) and the pops of what is now a smaller heap beside the radix one.
+The placement's own time is random reads of a move's cells and sites. Both
+are the same work done in fewer misses or not at all; neither has an index
+to add. The refinement spends its time in visits, 12 million a round on
+`widemux`, and only fewer of them would change that.
+
 ## What remains before an LED could light
 
 In rough order of how much stands behind each.
