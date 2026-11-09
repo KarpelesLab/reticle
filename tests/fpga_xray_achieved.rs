@@ -631,3 +631,53 @@ fn a_wide_fanout_copied_makes_widemux_faster() {
         }
     }
 }
+/// **Pairing lookup tables only when a design needs it brings `sad`'s and
+/// `esad`'s ADC clocks in, and costs no other clock** (`docs/fpga-vivado-parity.md`,
+/// "The ADC clocks, placed"). Paired, two tables whose flip-flops could not share
+/// the pair's slice sent one output out of it; Vivado, given the halves as two
+/// cells, places them apart. Ten seeds of `unpaired` against `copied`, the
+/// build before: `sad`'s ADC clock 3.072 to 2.587 ns, `esad`'s 2.888 to 2.710,
+/// the corpus 1.110 to 1.089 of Vivado's own flow. This holds both ADC clocks
+/// at least 5 % faster, no clock's median more than 4 % over `copied`'s, the
+/// corpus at least 1.5 %
+/// faster, and ten seeds of `unpaired` and five of its netlist placed by Vivado
+/// on every clock. Would catch a regeneration that lost the change, swapped
+/// the builds or lost a seed or a clock; would not catch the flow losing the
+/// change since, which needs Vivado.
+#[test]
+fn pairing_only_when_needed_brings_the_adc_clocks_in() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (copied, unpaired) = (&builds["copied"], &builds["unpaired"]);
+        assert_eq!(unpaired.len(), 10, "{design} {clock}: seeds of `unpaired`");
+        let (before, after) = (median(copied), median(unpaired));
+        assert!(
+            after <= before * 1.04,
+            "{design} {clock}: {after:.3} ns unpaired against {before:.3}"
+        );
+        if clock == "adc_sampleclk" {
+            assert!(
+                after <= before * 0.95,
+                "{design}'s ADC clock: {after:.3} ns unpaired against {before:.3}"
+            );
+        }
+        let placed = &nets[&(design.clone(), clock.clone())].1;
+        assert_eq!(
+            placed.get("unpaired").map_or(0, Vec::len),
+            5,
+            "{design} {clock}: seeds of `pnr unpaired`"
+        );
+        logs[0] += (before / vivado).ln();
+        logs[1] += (after / vivado).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 0.985,
+        "Reticle's flow against Vivado's: {after:.3} unpaired, {before:.3} copied"
+    );
+}

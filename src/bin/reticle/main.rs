@@ -289,7 +289,9 @@ Options:
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`
-                     (the default) pairs two that share two inputs or more;
+                     (the default) pairs two that share two inputs or more,
+                     and under the fitted delay model only while the tables
+                     would fill more than three quarters of the sites;
                      `all` every two that fit, which a design short of sites
                      may need; `needed` only until the tables fill three
                      quarters of the region's sites. A pair is one site for
@@ -3261,7 +3263,19 @@ fn route_passes(args: &Args) -> Result<u32, String> {
 /// `--pair-tables`: which lookup tables a 7-series build pairs, given the
 /// lookup-table sites of the region it loaded and the delay model it times
 /// with: under the fitted one, `related` leaves the tables of the longest
-/// chains alone (`xray::SPARE_DEEP_PERCENT`).
+/// chains alone (`xray::SPARE_DEEP_PERCENT`) and pairs only while the tables
+/// would fill more than three quarters of the sites.
+///
+/// That last is what Vivado does with the same netlist. Given a pair's two
+/// halves as two cells, it puts each in its own slice beside the flip-flop
+/// it feeds; paired, the two flip-flops of `sad`'s and `esad`'s counters,
+/// with different resets, could not share the pair's slice, and one output
+/// left it for the other's bypass input, 0.36 ns of wire and 0.26 of setup
+/// on the latest path of the ADC clock. Over ten seeds under Vivado's timer
+/// `sad`'s ADC clock went from 3.07 ns to 2.59 and `esad`'s from 2.89 to
+/// 2.71, and the corpus's geometric mean against Vivado's own flow from
+/// 1.110 to 1.089; a design that needs its pairs to fit still has them
+/// (`docs/fpga-vivado-parity.md`, "The ADC clocks, placed").
 fn pair_options(
     args: &Args,
     lut_sites: usize,
@@ -3274,7 +3288,9 @@ fn pair_options(
             min_shared: 2,
             spare_deep: (model == reticle::fpga::xray::DelayModel::Vivado)
                 .then_some(reticle::fpga::xray::SPARE_DEEP_PERCENT),
-            ..all
+            // Under the fitted model, only while the tables would fill more
+            // than three quarters of the sites, as `needed`: see above.
+            budget: (model == reticle::fpga::xray::DelayModel::Vivado).then_some(lut_sites / 4 * 3),
         }),
         Some("needed") => Ok(reticle::fpga::xray::PairOptions {
             budget: Some(lut_sites / 4 * 3),
@@ -4302,7 +4318,8 @@ fn write_xc7_bitstream(
     laps.lap("build the graph");
     // Two functions of five inputs or fewer between them share a lookup
     // table, as `--pair-tables` says: by default only two that share two
-    // inputs or more. See `xray::pack_lut_pairs`.
+    // inputs or more, and under the fitted model only while the tables would
+    // fill more than three quarters of the sites. See `xray::pack_lut_pairs`.
     let lut_sites = graph
         .site_counts()
         .into_iter()

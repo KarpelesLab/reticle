@@ -3804,6 +3804,15 @@ pub const CRITICAL_ASTAR_WEIGHT: f64 = 1.0;
 /// did as well within a seed's spread, and sparing from 50 % no better. The
 /// ChipWhisperer-Husky Plus, which pairing was made for, builds with the legacy
 /// model and pairs as before. Measured on 2026-11-06.
+///
+/// Since 2026-11-09 the fitted model also pairs only while the tables would
+/// fill more than three quarters of the sites, so on a design with room this
+/// leaves alone what pairing would not have touched anyway: two tables whose
+/// flip-flops could not share their pair's slice cost `sad`'s ADC clock 0.6 ns
+/// (`docs/fpga-vivado-parity.md`, "The ADC clocks, placed"). "Pairing none did as
+/// well" above was read at five seeds when `sad`'s and `esad`'s ADC clocks were
+/// 3.7 ns and more and something else was their latest path; measured again on
+/// 2026-11-09 at ten, pairing none is faster on both and the same elsewhere.
 pub const SPARE_DEEP_PERCENT: u32 = 75;
 
 /// What [`XrayDatabase::node_delays`] charges a programmable pip prjxray

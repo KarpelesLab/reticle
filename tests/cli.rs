@@ -2445,6 +2445,95 @@ fn small_functions_share_lookup_tables_and_still_route() {
     assert!(stderr.contains(" 0 bit(s) unexplained"), "{stderr}");
 }
 
+/// **Under the fitted delay model a design with room to spare pairs no
+/// lookup tables but a carry lane's own two; under the legacy model it
+/// pairs as before.** Given two halves of a pair as two cells, Vivado puts
+/// each beside the flip-flop it feeds, and a pair whose flip-flops cannot
+/// share its slice sends one output out of it: `sad`'s ADC clock was 0.6 ns
+/// of wire and setup slower on its latest path for it
+/// (`docs/fpga-vivado-parity.md`, "The ADC clocks, placed"). Here eight
+/// functions of two registers each, which share both their inputs in twos,
+/// under a chain of tables long enough that the longest-chain rule
+/// (`xray::SPARE_DEEP_PERCENT`) leaves them to pair.
+///
+/// Would catch the fitted model pairing them (the budget not applied) and the
+/// legacy model losing its pairs, which the ChipWhisperer-Husky's bitstreams
+/// are built with; would not catch a dense design left unpaired past its
+/// sites, which no design here is big enough to be.
+#[cfg(feature = "fpga")]
+#[test]
+fn the_fitted_model_pairs_tables_only_when_the_design_needs_it() {
+    let dir = scratch("lut_pairs_needed");
+    let v = dir.join("p.v");
+    let deep = (1..31).fold("s[0]".to_owned(), |acc, i| {
+        let op = ["&", "^", "|"][i % 3];
+        format!("({acc} {op} s[{i}])")
+    });
+    std::fs::write(
+        &v,
+        format!(
+            "module p(input wire clk, input wire d, output wire q, output wire z);\n\
+             \x20 reg [31:0] s;\n\
+             \x20 always @(posedge clk) s <= {{s[30:0], d}};\n\
+             \x20 wire [7:0] f = {{s[0]&s[1], s[0]^s[1], s[2]|s[3], s[2]&s[3], \
+             s[4]^s[5], s[4]|s[5], s[6]&s[7], s[6]^s[7]}};\n\
+             \x20 reg [7:0] r;\n\
+             \x20 reg y;\n\
+             \x20 always @(posedge clk) begin r <= f; y <= {deep}; end\n\
+             \x20 assign q = ^r;\n\
+             \x20 assign z = y;\n\
+             endmodule\n"
+        ),
+    )
+    .unwrap();
+    let rcf = dir.join("p.rcf");
+    std::fs::write(
+        &rcf,
+        "create_clock -name clk -period 4.0 clk\n\
+         set_io -io_standard LVCMOS33 clk D4\nset_io -io_standard LVCMOS33 d L2\n\
+         set_io -io_standard LVCMOS33 q G1\nset_io -io_standard LVCMOS33 z G2\n",
+    )
+    .unwrap();
+    let saved = |model: &str| -> Option<String> {
+        let out = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args(["fpga", v.to_str().unwrap(), "--device", "xc7a35t-ftg256"])
+            .args(["--delay-model", model, "--timing-driven"])
+            .arg("--constraints")
+            .arg(&rcf)
+            .arg("--output-dir")
+            .arg(&dir)
+            .arg("--bitstream")
+            .arg(dir.join(format!("p_{model}.bit")))
+            .env("RETICLE_OFFLINE", "1")
+            .output()
+            .expect("failed to run the reticle binary");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        if stderr.contains("needs a chip database") || stderr.contains("not in the cache") {
+            eprintln!("skipped: needs a Project X-Ray database; run `reticle fetch prjxray-db`");
+            return None;
+        }
+        assert_eq!(out.status.code(), Some(0), "{model}: {stderr}");
+        assert!(
+            stderr.contains(" 0 bit(s) unexplained"),
+            "{model}: {stderr}"
+        );
+        let line = stderr
+            .lines()
+            .find(|l| l.contains("share a site with another"))
+            .unwrap_or_else(|| panic!("{model}: no pairing line in\n{stderr}"))
+            .to_owned();
+        Some(line)
+    };
+    let Some(fitted) = saved("vivado") else {
+        return;
+    };
+    let Some(legacy) = saved("legacy") else {
+        return;
+    };
+    assert!(fitted.contains("saving 0 site(s)"), "{fitted}");
+    assert!(!legacy.contains("saving 0 site(s)"), "{legacy}");
+}
+
 /// `--top` names a module before `--param` specialises it: elaboration
 /// names the result after the values (`inv$W_4`), and the commands that
 /// looked `--top` up again afterwards by its own name found nothing and

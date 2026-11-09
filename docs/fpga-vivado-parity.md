@@ -1311,7 +1311,9 @@ Three designs, `analyser_fifo`, `esad` and `sad`, Vivado could not finish routin
 around Reticle's routes (a ground net, `GND CONFLICTS` or `PARTIAL`), so
 `run_placed.tcl` now keeps a checkpoint of an unfinished route too: the nets that are
 routed are Reticle's and are timed. That three of seventeen leave Vivado a ground it
-cannot finish is a finding of its own, **open**.
+cannot finish is a finding of its own, **open**. *Since answered for the ground
+net, in "The ADC clocks, placed": Vivado ties a carry lane's constant generate
+through the lane's bypass input, which Reticle's routes held.*
 
 `timing_table.py fit` fits the model to the run built with the legacy model, and
 `compare` sets Reticle's estimate beside Vivado's figures. Committed, in
@@ -1683,7 +1685,9 @@ uncritical connection, 1.514 against 1.532 alone and nothing measurable beside t
 claim (1.435 with, 1.437 without); the claim from 0.1, 1.477; sparing from 50 %, no
 better than 75; and pairing none at all (`--pair-tables needed` on designs this
 small), within a seed of sparing the long chains, which keeps the pairing a dense
-design needs.
+design needs. *Measured again on 2026-11-09, ten seeds, pairing none is faster:
+`sad`'s ADC clock 3.07 to 2.59 ns, and the default model pairs only when a design
+needs it since; "The ADC clocks, placed" has why this reading missed it.*
 
 ### Before and after
 
@@ -4728,7 +4732,9 @@ the resets (`closing`) 1.119 and 1.034.
 
 **What is left is mostly placement and routes.** `esad`'s and `sad`'s ADC clocks are
 2.19 and 2.26 ns in Vivado's hands and 2.89 and 3.07 in Reticle's: the netlist is within
-5 % of Vivado's there, and the 1.4 times is this flow's placement of it. Over the
+5 % of Vivado's there, and the 1.4 times is this flow's placement of it (*read
+again in "The ADC clocks, placed": most of it was the netlist after all, a pairing of
+two tables Vivado places apart*). Over the
 corpus, 1.119 / 1.034 = 1.082 is placement and routing, and 1.034 the netlist.
 
 **Cells**, by Vivado's counting of seed 1's netlist (`netlist_qor.sh`, tables /
@@ -4805,7 +4811,7 @@ swapped with `refined`, and a seed of `closing` lost, each fail
   terms on one chain": 1.07 times.*
 - **Replicating a register a wide multiplexer's select reads**, as Vivado's `widemux`.
   *Done since, in "A wide fanout copied": Vivado's synthesis does it, by fanout.*
-- **The placement**: 1.082 of the 1.119 is Reticle's placement and routes of its own
+- **The placement** (*taken up in "The ADC clocks, placed"*): 1.082 of the 1.119 is Reticle's placement and routes of its own
   netlist, most of it `esad`'s and `sad`'s ADC clocks.
 - The XC7A35T's netlist figure, measured the old way.
 - None of it has been on a part.
@@ -7690,9 +7696,258 @@ second would have found nothing in `sad`, which had no shared exit to find.
   *The delay model, fitted to Vivado's timer* left **open**, and 12
   nets unrouted after it, the ground among them. One reading, not checked: the
   ties Vivado wants are the carry generates it puts on a bypass input, which
-  Reticle takes from `O5`, so the bypass wires are Reticle's routes.
+  Reticle takes from `O5`, so the bypass wires are Reticle's routes. *Checked
+  since, in "The ADC clocks, placed": right for the ground; the other eleven
+  were not unrouted at all.*
 - The order is measured, not derived: two of Vivado's habits were found by
   their refusals, and a placement shape the corpus does not have (a wide mux
   beside a carry, a shift register's cascade) may find a third.
 - The placer's own exit rule is still the coarse one. The audit would stop a
   build it let through; none did here.
+
+## The ADC clocks, placed
+
+**Asked: "The netlist against Vivado's, placed by Vivado" left Reticle 1.119 times
+Vivado's own flow and its netlist, placed and routed by Vivado, 1.033 times, most of
+the difference `sad`'s and `esad`'s ADC clocks: about 2.2 ns when Vivado places
+Reticle's netlist and 2.9 to 3.1 when Reticle does. Is that placement or routing, and
+does Reticle time and place the clock as Vivado does?** Vivado 2026.1 at
+`xc7a100tftg256-3`, run on 2026-11-09 on a9cd2b9f, whose own build is `closing` of
+`achieved.txt` seed for seed (all 210 figures checked), and the change measured again
+once rebased onto 64b6cd2f ("Before and after"). **Everything here is Vivado's
+timer; nothing has been on a part.**
+
+### Placement or routes
+
+Seeds 1 to 5 of Reticle's netlist three ways, on `cons3`: Reticle's placement and
+routes (`achieved.tcl`'s `routes`), Reticle's placement with Vivado's routes and the
+tables' pins free (`placement_free`), and Vivado's placement and routes (`netlist`).
+Medians, ns, **measured**:
+
+| clock | Vivado places and routes | Reticle places, Vivado routes | Reticle places and routes |
+|---|---|---|---|
+| `sad` `adc_sampleclk` | 2.261 | 3.009 | 3.068 |
+| `esad` `adc_sampleclk` | 2.187 | 2.770 | 2.813 |
+| `sad` `clk_usb` | 1.769 | 1.997 | 2.050 |
+| `esad` `clk_usb` | 1.736 | 1.927 | 1.966 |
+
+**So it is the placement**: Vivado's routes on Reticle's placement are 0.04 to 0.06 ns
+faster than Reticle's own, and Vivado's placement 0.6 to 0.8 ns faster than
+Reticle's. Over each build's fifty latest paths of the ADC clock, the slices a path
+crosses (Manhattan, between consecutive cells) were 6 to 8 in Vivado's placement and
+10 to 22 in Reticle's, with about the same logic delay.
+
+**The clock is not it.** Both ADC clocks come from a pad through an `IBUF` to one
+`BUFGCTRL` and the global network, in Reticle's builds and Vivado's: no `BUFR`,
+`BUFIO` or clock manager, so no regional constraint applies. The skew Vivado reports
+on the latest paths is −0.01 to −0.14 ns in Reticle's placements and −0.04 to −0.08
+in its own. Not looked at further.
+
+### What the latest path was
+
+`sad`'s at seed 1, in Reticle's placement: `counter_incr[2]` → the lane table and
+`CARRY4` of `sad_counter[2] <= ...`'s comparison, one slice over → `CO[3]`, 1.16 ns of
+wire over eleven rows → `$lut1628` → `sad_counter[2]`'s flip-flop. Every one of the 32
+counters was the same shape, the comparison beside the subtraction that feeds it and
+the counter's flip-flops 3 to 15 rows away. In Vivado's placement of the same netlist
+the three sit within two slices of each other.
+
+**The first reading was that the placer weighs time too little against wirelength,
+and it was wrong.** It looked right: the placer's estimate put the domain's latest path
+at 4.54 ns where the routes made 3.01, through wide signals whose line
+(`xray::VIVADO_WIRE`'s third term) it overstates by a third at ten to twenty tiles,
+so every real path was half critical at most; and Vivado's placement has 40 % more
+wirelength than Reticle's (18,520 tiles against 13,081, `sad` seed 1), what a placer
+that trades wirelength for time leaves. But every knob tried, seeds 1 to 5 of both
+designs, landed inside the seeds' spread of the build before (ADC clock medians, ns,
+`esad` / `sad`; before, 2.813 / 3.068):
+
+| tried | `esad` | `sad` |
+|---|---|---|
+| no wide-signal term in the line | 2.867 | 2.928 |
+| the wide term from 32 sinks rather than 4 | 3.044 | 3.015 |
+| a critical connection's weight 16, 32 (8 before) | 3.098, 2.929 | 2.951, 2.991 |
+| criticality to the power 2, 1 (3 before) | 2.964, 3.124 | 2.936, 3.035 |
+| six timing rounds (three before) | 2.813 | 3.068 |
+| the wirelength anneal weighted by the first estimate | 2.961 | 3.054 |
+| the timing rounds started wider and hotter (16 tiles, 50 %) | 3.198 | 3.149 |
+| no wide term with each of weight 32, power 2, the first estimate, all three | 2.876 to 2.913 | 2.958 to 2.994 |
+
+Six rounds building the same placement as three is a finding of its own, **not
+changed**: a timing round after the first starts from a placement already annealed
+to nearly the weights it is given, its walk at 20 % acceptance does not get back
+below where it began before `PlaceOptions::flat_steps` stops it, and the anneal
+returns its best, the start. On `sad` at seed 1 the second round's anneal ran 36
+temperatures and kept nothing.
+
+### Two halves of one table
+
+What Vivado's report of the path says, against Reticle's (**measured**, `sad` seed 1):
+
+| | Reticle's placement | Vivado's |
+|---|---|---|
+| the comparison's `CO[3]` to the counter's table | 1.163 ns, eleven rows | 0.702 ns, three rows |
+| the table to the counter's flip-flop | 0.362 ns of wire, from another slice | none, the lane's own |
+| the flip-flop's setup | −0.191 (through the bypass input) | +0.069 (from its own lane) |
+
+`$lut1628` is a `LUT6_2`: `--pair-tables related` put two functions of the counter's
+inputs in one table, its `O6` the next value of one of `sad_counter[2]`'s flip-flops
+(`ff_0`) and its `O5` of another's (`ff_ff0`). The two have different resets (`ff_0`
+none, `ff_ff0` the `resetter` chain's bit), so they cannot share a slice, and one of the two outputs
+leaves the pair's slice for the other flip-flop's bypass input: 0.36 ns of wire and
+0.26 of setup, 0.6 of the 0.8 ns. **Vivado, given the pair's halves as two cells
+(`xray::vivado` writes them so), puts each half in its own slice beside its flip-flop**
+(**measured**, its placement of `$lut1628`, `$lut1644` and `$lut1652`). That the pair's
+connections, all on one site, are also what held the counters away from their
+comparisons is a reading, not checked; the distances did come down with the pairs
+gone.
+
+Two rules were measured, seeds 1 to 5 (ADC clock medians, `esad` / `sad`):
+
+| | `esad` | `sad` |
+|---|---|---|
+| before | 2.813 | 3.068 |
+| never pair two tables whose flip-flops cannot share a slice | 2.998 | 2.633 |
+| pair only while the tables would fill more than three quarters of the sites (`--pair-tables needed`) | 2.721 | 2.568 |
+
+The first helps `sad` and costs `esad`; the second helps both, both clocks of each,
+and over the corpus at ten seeds it is 1.095 times Vivado's own flow against 1.119
+(on a9cd2b9f, `--pair-tables needed` alone),
+the small designs byte for byte the same (they paired nothing under the longest-chain
+rule anyway). "Placement and routing against Vivado's own flow" had read pairing
+none as within a seed of sparing the long chains; that was at five seeds when these
+two designs' ADC clocks were 3.7 ns and something else was their latest path.
+
+### The ground net
+
+*A placement Vivado refused that was legal* left **open** that Vivado stopped at the
+ground net on `sad` (`Route 35-341`), with 12 nets unrouted after it, and read it,
+unchecked, as the carry generates Vivado ties through a bypass input whose wires
+Reticle's routes hold. **Checked**, `sad` seed 2: the unroutable pin was
+`refsample_shift_count`'s top `CARRY4`'s `DI[1]`, a lane nothing reads, whose `x`
+`--vivado-placement` wrote as a zero; Vivado ties a zero there as it ties its own,
+`GND_WIRE` → `GFAN1` → `BYP_ALT4` → `BYP_L4` → `BX`, and Reticle's route of the
+counter's reset took `BYP_ALT4` → `BYP_BOUNCE4` as a hop to the slice's `SR`. Over
+the corpus at ten seeds 27 builds of 170 stopped at a constant (`sad` 5,
+`analyser_fifo` 9, `carry_counter` 6, `counter64` 6, `lutram32` 1), the first four
+of three kinds:
+
+- **A lane nothing reads, its bypass input free** (`sad`): Reticle's bitstream leaves
+  that lane's generate on `<L>X` undriven. **Changed**: under the fitted model the
+  router is shut out of the wires a ground to it would hold, `<L>X` and the
+  `BYP_ALT`/`BYP` behind it, with the ground fans into them as a block RAM's are
+  (`XrayFabric::unread_lane_ties`), unless a cell of the slice may need that bypass
+  input: lane `A` beside a carry in from the fabric, a flip-flop of the lane whose
+  data does not come from the carry or the lane's table, anything but tables,
+  flip-flops and the carry. *The first version* counted a flip-flop fed from
+  another flip-flop of the same slice as needing nothing, and `analyser_fifo`'s Gray
+  code register, beside the pointer it reads, found no way in.
+- **A lane whose generate is a constant on its table's `O5`** (`analyser_fifo`'s
+  `stored` comparison): the netlist said the constant, and Vivado tied it to the
+  bypass input where Reticle's bitstream reads `O5` (`<L>CY0` set). **Changed**: the
+  export writes the table's lower half as a cell of its own, `<table>__O5`, a constant
+  `LUT1` on the lane's five-input bel, on one of the table's own pins, driving the
+  carry's `DI` (`xray::vivado`'s `generate_halves`). The bitstream is what it was.
+- **A lane nothing reads whose bypass input a flip-flop of the lane is using**
+  (`carry_counter`'s `depth` register beside its equality): the generate reads that
+  flip-flop's data in the bitstream, so the export now writes it so, the signal
+  whose route ends on `<L>X`, rather than the zero (`unread_bypasses`).
+
+After all three, 1 build of 170 stops at a constant, `lutram32` seed 10: a `VCCTerm`
+on a distributed RAM's data input, another kind, **open**. The other "unrouted" nets
+of the old count were never unrouted: Vivado calls them `ANTENNAS`. Each is a
+flip-flop's data through a lookup table's lower half (`xray::thru`), the route ending
+on the input Reticle chose, `B5` say, and Vivado, which picks the table's input for a
+way through itself, routes the signal on to another one, `B1`, and leaves Reticle's
+branch hanging; 1 to 16 a build on `sad` and `esad`. Not changed: which input Vivado
+picks did not follow a rule the few read (`B1` once, `D2` beside `D1` another time).
+
+### What was changed
+
+1. **Under the fitted model, `--pair-tables related` pairs only while the tables
+   would fill more than three quarters of the sites** (`pair_options` in
+   `src/bin/reticle/main.rs`), with its rules as before (two shared inputs, the
+   longest chains left alone) once it does. A carry lane's own two tables are paired
+   as always. The legacy model, the Husky's, pairs as before.
+2. **The router keeps clear of the wires a ground to an unread carry lane would hold**,
+   under the fitted model (`XrayFabric::unread_lane_ties`, above).
+3. **`--vivado-placement` writes a lane's constant generate as its table's `O5`, and an
+   unread lane's as the signal on its bypass input**, where there is one. Export only.
+
+### Before and after
+
+Measured twice. First on a9cd2b9f against `closing`, its own build: the corpus went
+from 1.119 to 1.096 times Vivado's own flow, the same three clocks moving as below
+and `analyser_fifo`'s read clock 0.7 % slower. Master then gained "Three terms on one
+chain" and "A wide fanout copied" (`copied`, 1.110), and this was rebased onto it and
+measured again on 64b6cd2f, whose own build is `copied` (seed 1 checked, all 21
+figures). That second run is `unpaired` in `achieved.txt`.
+
+**Reticle's own flow**, medians over ten seeds by Vivado's timer, the lowest and
+highest in brackets; the clocks not listed are the same figures to the picosecond:
+
+| design | clock | Vivado | `copied` | `unpaired` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 3.887 | 4.426 [4.28-4.61] | 4.473 [4.25-4.68] |
+| `analyser_fifo` | `wr_clk` | 2.417 | 2.654 [2.35-2.82] | **2.513** [2.34-3.02] |
+| `bram_fifo` | `clk` | 3.388 | 3.978 [3.68-4.09] | 4.008 [3.78-4.37] |
+| `counter64` | `clk` | 3.220 | 3.418 [3.35-3.51] | 3.419 [3.34-3.51] |
+| `esad` | `adc_sampleclk` | 2.131 | 2.888 [2.75-3.40] | **2.710** [2.48-2.85] |
+| `esad` | `clk_usb` | 1.727 | 1.944 [1.79-2.08] | **1.805** [1.72-1.91] |
+| `sad` | `adc_sampleclk` | 2.207 | 3.072 [2.90-3.31] | **2.587** [2.38-2.84] |
+| `sad` | `clk_usb` | 1.726 | 2.059 [1.91-2.18] | **1.934** [1.84-2.03] |
+| geometric mean, all 21 | | 1 | 1.110 | **1.089** |
+
+The two slower, `analyser_fifo`'s read clock by 1.1 % and `bram_fifo` by 0.8 %, are
+inside their spreads. `counter64` moved by the router's closed wires alone: it pairs
+the same either way, and its bitstream differs. **The netlist placed and routed by
+Vivado** (`pnr`, seeds 1 to 5): 1.023 times Vivado's netlist against `copied`'s 1.026,
+`sad`'s ADC clock 2.248 ns and `esad`'s 2.227 (2.261 and 2.187 before). So of the
+1.089, 1.023 is the netlist and 1.064 the placement and routes, which were 1.082.
+**Slices**, the sum of each design's median: 1,596 against 1,557 on a9cd2b9f
+(`copied`'s not counted).
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--delay-model legacy`, which
+pairs as before and closes nothing more; the export is not on their path. With this
+tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `the_fitted_model_pairs_tables_only_when_the_design_needs_it` (`tests/cli.rs`):
+  eight functions sharing their inputs in twos under a chain long enough that the
+  longest-chain rule leaves them to pair; none paired under the fitted model, some
+  under the legacy one. Mutation-checked: without the budget it fails.
+- `an_unread_carry_lanes_bypass_is_closed_as_vivados_ground_will_hold_it`
+  (`tests/fpga_xray.rs`): one `CARRY4` by hand on the real fabric; the unread lane's
+  `BX` chain closed with its fans, the tied lane's and the carry in's `AX` not, the
+  flip-flop's lane only when its data comes from the carry, not from outside the slice
+  nor from another flip-flop of it. Mutation-checked: a flip-flop never counted, and
+  every constant lane taken for unread, each fail it.
+- `a_carry_lanes_constant_generate_is_written_as_its_tables_lower_half`
+  (`tests/fpga_xray_vivado.rs`): on `carry_counter`, each `__generate` wire a carry's
+  `DI` driven by one constant `LUT1` on the five-input bel of its table's site, on a
+  pin the table is locked to. No test holds `unread_bypasses`: the `routes` stage of
+  `achieved.sh` is what showed it.
+- `pairing_only_when_needed_brings_the_adc_clocks_in` (`tests/fpga_xray_achieved.rs`)
+  holds `unpaired` against `copied` in the fixture: both ADC clocks at least 5 %
+  faster, no clock more than 4 % slower, the corpus at least 1.5 % faster, ten seeds
+  and five of `pnr`.
+
+### Not done
+
+- **The rest of the placement**: `sad`'s ADC clock is 2.587 ns in Reticle's hands and
+  2.248 in Vivado's, `esad`'s 2.710 and 2.227. The latest paths now are a CDC FIFO's
+  distributed RAM read into a shift register's data, a wide enable into the
+  reference shift registers, and the counters again; not looked at.
+- **The placement's estimate of a wide signal** is a third high at ten to twenty
+  tiles for fanouts of 5 to 32 (measured on `sad` seed 1's routes); taking the term
+  away changed nothing measurable here, and it was left.
+- **The timing rounds after the first do nothing** (above).
+- `lutram32`'s `VCCTerm`, and the ways through a table Vivado routes on to another
+  input.
+- None of it has been on a part.
