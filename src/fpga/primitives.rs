@@ -128,6 +128,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
+use super::arch::FastMap;
 use super::constraints::{Constraints, IoAttrs};
 use super::device::{
     BelKind, BelRole, BramInitLayout, BramInitParams, BramModeLayout, BramShape, Device, DspShape,
@@ -811,6 +812,7 @@ pub fn map(
         report: &mut report,
         diags,
         dsp_blocks: 0,
+        names: None,
     };
     if options.infer_block_ram {
         mapper.block_rams(module);
@@ -868,6 +870,9 @@ struct Mapper<'a> {
     diags: &'a mut Diagnostics,
     /// The blocks the multiplies have taken so far.
     dsp_blocks: usize,
+    /// While the adders are put on the carry chain, the module's names,
+    /// which every net and cell that adds takes its own from: see [`Names`].
+    names: Option<Names>,
 }
 
 // --- small IR helpers -------------------------------------------------------
@@ -959,8 +964,90 @@ fn unique_name(module: &Module, base: &str) -> Name {
     unreachable!("a unique name always exists")
 }
 
+/// The names a module's nets and cells use, for a run of additions that
+/// would otherwise each read them all: [`Names::fresh`] answers what
+/// [`unique_name`] answers, from an index of the names built once.
+///
+/// It is only right while every name the module gains goes through it and
+/// none is removed or renamed, so it lives for one such run:
+/// `techcells::map_flip_flops` splitting a design's registers into a
+/// primitive a bit, which on the ChipWhisperer-Husky Plus was two names for
+/// each of thirty thousand bits, each a scan of every net and cell, and a
+/// third of the time before placement (2026-11-09).
+pub(super) struct Names {
+    /// Every name in use.
+    used: FastMap<String, ()>,
+    /// Per base, the suffixes of the `base$<n>` names in use: `n` as
+    /// [`unique_name`] reads it, everything after the name's last `$`.
+    suffixes: FastMap<String, FastMap<u32, ()>>,
+}
+
+impl Names {
+    /// The names `module` uses now.
+    pub(super) fn of(module: &Module) -> Names {
+        let mut names = Names {
+            used: FastMap::default(),
+            suffixes: FastMap::default(),
+        };
+        for (_, net) in module.nets.iter() {
+            names.note(net.name.as_str());
+        }
+        for (_, cell) in module.cells.iter() {
+            names.note(cell.name.as_str());
+        }
+        names
+    }
+
+    /// Files `name` as used.
+    fn note(&mut self, name: &str) {
+        self.used.insert(name.to_owned(), ());
+        // A name is `base$<n>` for one base at most: `n` parses as a `u32`,
+        // so it has no `$` in it, and the base is everything before the
+        // last one.
+        if let Some((base, digits)) = name.rsplit_once('$')
+            && let Ok(suffix) = digits.parse::<u32>()
+        {
+            self.suffixes
+                .entry(base.to_owned())
+                .or_default()
+                .insert(suffix, ());
+        }
+    }
+
+    /// [`unique_name`]'s answer for `base`, filed as used.
+    pub(super) fn fresh(&mut self, base: &str) -> Name {
+        let name = if self.used.contains_key(base) {
+            let taken = self.suffixes.get(base);
+            let suffix = (1u32..)
+                .find(|k| !taken.is_some_and(|t| t.contains_key(k)))
+                .unwrap_or(u32::MAX);
+            format!("{base}${suffix}")
+        } else {
+            base.to_owned()
+        };
+        self.note(&name);
+        Name::new(name)
+    }
+}
+
 pub(super) fn add_net(module: &mut Module, base: &str, ty: Type, span: Span) -> NetId {
     let name = unique_name(module, base);
+    push_net(module, name, ty, span)
+}
+
+/// [`add_net`], with its name from `names`.
+pub(super) fn add_net_in(
+    module: &mut Module,
+    names: &mut Names,
+    base: &str,
+    ty: Type,
+    span: Span,
+) -> NetId {
+    let name = names.fresh(base);
+    push_net(module, name, ty, span)
+}
+
+fn push_net(module: &mut Module, name: Name, ty: Type, span: Span) -> NetId {
     module.nets.push(Net {
         name,
         ty,
@@ -979,6 +1066,31 @@ pub(super) fn add_cell(
     span: Span,
 ) -> CellId {
     let name = unique_name(module, base);
+    push_cell(module, name, kind, inputs, outputs, span)
+}
+
+/// [`add_cell`], with its name from `names`.
+pub(super) fn add_cell_in(
+    module: &mut Module,
+    names: &mut Names,
+    base: &str,
+    kind: CellKind,
+    inputs: Vec<(Name, ExprId)>,
+    outputs: Vec<(Name, NetId)>,
+    span: Span,
+) -> CellId {
+    let name = names.fresh(base);
+    push_cell(module, name, kind, inputs, outputs, span)
+}
+
+fn push_cell(
+    module: &mut Module,
+    name: Name,
+    kind: CellKind,
+    inputs: Vec<(Name, ExprId)>,
+    outputs: Vec<(Name, NetId)>,
+    span: Span,
+) -> CellId {
     module.cells.push(Cell {
         name,
         kind,
@@ -5682,6 +5794,9 @@ impl Mapper<'_> {
             .map(|(id, _)| id)
             .collect();
         let mut removed = Vec::new();
+        // Each adder's primitives take their names from one index of the
+        // module's, and none is removed until they all are mapped.
+        self.names = Some(Names::of(module));
         for add in adders {
             let cell = &module.cells[add];
             let Some(y) = cell.output("y") else {
@@ -5718,8 +5833,36 @@ impl Mapper<'_> {
             });
             removed.push(add);
         }
+        self.names = None;
         if !removed.is_empty() {
-            module.cells.retain(|id, _| !removed.contains(&id));
+            removed.sort_unstable();
+            module
+                .cells
+                .retain(|id, _| removed.binary_search(&id).is_err());
+        }
+    }
+
+    /// [`add_net`], from [`Mapper::names`] while there are any.
+    fn add_net(&mut self, module: &mut Module, base: &str, ty: Type, span: Span) -> NetId {
+        match self.names.as_mut() {
+            Some(names) => add_net_in(module, names, base, ty, span),
+            None => add_net(module, base, ty, span),
+        }
+    }
+
+    /// [`add_cell`], from [`Mapper::names`] while there are any.
+    fn add_cell(
+        &mut self,
+        module: &mut Module,
+        base: &str,
+        kind: CellKind,
+        inputs: Vec<(Name, ExprId)>,
+        outputs: Vec<(Name, NetId)>,
+        span: Span,
+    ) -> CellId {
+        match self.names.as_mut() {
+            Some(names) => add_cell_in(module, names, base, kind, inputs, outputs, span),
+            None => add_cell(module, base, kind, inputs, outputs, span),
         }
     }
 
@@ -6565,8 +6708,8 @@ impl Mapper<'_> {
             let a_bit = slice_expr(module, a, bit, bit, span);
             let b_bit = slice_expr(module, b, bit, bit, span);
             // sum = a ^ b ^ carry, in two XOR cells the LUT mapper folds.
-            let half = add_net(module, &format!("{name}$h{bit}"), Type::bit(), span);
-            add_cell(
+            let half = self.add_net(module, &format!("{name}$h{bit}"), Type::bit(), span);
+            self.add_cell(
                 module,
                 &format!("{name}$xor{bit}a"),
                 CellKind::Xor,
@@ -6575,8 +6718,8 @@ impl Mapper<'_> {
                 span,
             );
             let half_expr = net_expr(module, half, span);
-            let sum = add_net(module, &format!("{name}$s{bit}"), Type::bit(), span);
-            add_cell(
+            let sum = self.add_net(module, &format!("{name}$s{bit}"), Type::bit(), span);
+            self.add_cell(
                 module,
                 &format!("{name}$xor{bit}b"),
                 CellKind::Xor,
@@ -6586,8 +6729,8 @@ impl Mapper<'_> {
             );
             sums.push(net_expr(module, sum, span));
             if bit + 1 < width {
-                let next = add_net(module, &format!("{name}$c{bit}"), Type::bit(), span);
-                add_cell(
+                let next = self.add_net(module, &format!("{name}$c{bit}"), Type::bit(), span);
+                self.add_cell(
                     module,
                     &format!("{name}$carry{bit}"),
                     CellKind::Blackbox(Name::new(bel.name.clone())),
@@ -6682,8 +6825,8 @@ impl Mapper<'_> {
                 }
                 let a_bit = slice_expr(module, a, bit, bit, span);
                 let b_bit = slice_expr(module, b, bit, bit, span);
-                let p = add_net(module, &format!("{name}$p{bit}"), Type::bit(), span);
-                add_cell(
+                let p = self.add_net(module, &format!("{name}$p{bit}"), Type::bit(), span);
+                self.add_cell(
                     module,
                     &format!("{name}$xor{bit}"),
                     CellKind::Xor,
@@ -6696,8 +6839,9 @@ impl Mapper<'_> {
             }
             let propagate = expr(module, ExprKind::Concat(propagate), span);
             let data = expr(module, ExprKind::Concat(data), span);
-            let sum_net = add_net(module, &format!("{name}$o{block}"), Type::bits(lanes), span);
-            let carry_net = add_net(
+            let sum_net =
+                self.add_net(module, &format!("{name}$o{block}"), Type::bits(lanes), span);
+            let carry_net = self.add_net(
                 module,
                 &format!("{name}$co{block}"),
                 Type::bits(lanes),
@@ -6726,7 +6870,7 @@ impl Mapper<'_> {
                 let zero = const_expr(module, Const::zero(1), span);
                 inputs.push((Name::new(tied), zero));
             }
-            add_cell(
+            self.add_cell(
                 module,
                 &format!("{name}$carry{block}"),
                 CellKind::Blackbox(Name::new(bel.name.clone())),
@@ -6835,7 +6979,7 @@ impl Mapper<'_> {
                 let second = slice_expr(module, b, bit, bit, span);
                 inputs.push((Name::new(first_pins[index]), first));
                 inputs.push((Name::new(second_pins[index]), second));
-                let sum = add_net(
+                let sum = self.add_net(
                     module,
                     &format!("{name}$s{block}_{lane}"),
                     Type::bit(),
@@ -6844,7 +6988,7 @@ impl Mapper<'_> {
                 outputs.push((Name::new(sum_pins[index]), sum));
                 lane_sums.push(net_expr(module, sum, span));
             }
-            let carry_net = add_net(module, &format!("{name}$co{block}"), Type::bit(), span);
+            let carry_net = self.add_net(module, &format!("{name}$co{block}"), Type::bit(), span);
             // The chain, and how it is entered. A family with an `init`
             // pin takes the adder's carry in there — a constant zero,
             // since an `add` cell has none — and the one below on `ci`;
@@ -6859,7 +7003,7 @@ impl Mapper<'_> {
                 (None, None) => {}
             }
             outputs.push((Name::new(shape.carry_out), carry_net));
-            let cell = add_cell(
+            let cell = self.add_cell(
                 module,
                 &format!("{name}$carry{block}"),
                 CellKind::Blackbox(Name::new(bel.name.clone())),
@@ -9832,6 +9976,41 @@ mod tests {
         let file = map.add("top.v", "").unwrap();
         let span = Span::new(file, 0, 0);
         (map, span)
+    }
+
+    /// **An index of a module's names picks the names a scan of them picks**,
+    /// over a run of additions to the same bases and to names that read as
+    /// suffixes only to the scan's own reading: `a$01` and `a$+2` are suffixes
+    /// 1 and 2 of `a` (`u32`'s parse takes a leading zero and a plus), `a$1$2`
+    /// is suffix 2 of `a$1` and none of `a`, and `a$` none at all. Would catch
+    /// an index that matched the suffix as text, split a name at its first
+    /// `$`, or did not file a name it handed out; would not catch a caller
+    /// that added a name behind the index's back, which `Names` says it must
+    /// not.
+    #[test]
+    fn an_index_of_names_picks_what_a_scan_picks() {
+        let (_map, span) = span();
+        let mut module = Module::new("top", span);
+        for name in ["a", "a$01", "a$+2", "a$1$2", "a$", "b$3", "c"] {
+            push_net(&mut module, Name::new(name), Type::bit(), span);
+        }
+        let mut names = Names::of(&module);
+        for base in ["a", "a", "a$1", "b", "b", "b$3", "c", "a$1", "d", "d", "a"] {
+            let scanned = unique_name(&module, base);
+            assert_eq!(names.fresh(base), scanned, "base {base}");
+            if module.nets.len().is_multiple_of(2) {
+                push_net(&mut module, scanned, Type::bit(), span);
+            } else {
+                push_cell(
+                    &mut module,
+                    scanned,
+                    CellKind::Buf,
+                    Vec::new(),
+                    Vec::new(),
+                    span,
+                );
+            }
+        }
     }
 
     /// A design with one memory of `depth` elements of `width` bits, one

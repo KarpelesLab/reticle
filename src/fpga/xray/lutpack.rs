@@ -57,7 +57,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::fpga::device::{BelRole, Device};
-use crate::fpga::primitives::{add_cell, const_expr};
+use crate::fpga::primitives::{Names, add_cell_in, const_expr};
 use crate::ir::emit::{BitView, SigBit};
 use crate::ir::{
     AttrValue, Bit, CellId, CellKind, Const, Design, ExprId, ModuleId, NetId, PortDir,
@@ -466,6 +466,9 @@ pub fn pack_lut_pairs(
     // The packed cells.
     let m = &mut design.modules[module];
     let mut removed: Vec<CellId> = Vec::new();
+    // Every cell this adds takes its name from one index of the module's
+    // names, and nothing is removed until the end: see `Names`.
+    let mut names = Names::of(m);
     for (i, j) in pairs {
         let (a, b) = (&tables[i], &tables[j]);
         let mut signals = a.inputs.clone();
@@ -515,8 +518,9 @@ pub fn pack_lut_pairs(
             cell_inputs.push((crate::ir::Name::new(name.as_str()), e));
         }
         let name = format!("{}$dual", m.cells[a.cell].name);
-        let cell = add_cell(
+        let cell = add_cell_in(
             m,
+            &mut names,
             &name,
             CellKind::Blackbox(crate::ir::Name::new(DUAL)),
             cell_inputs,
@@ -532,7 +536,8 @@ pub fn pack_lut_pairs(
         report.pairs += 1;
     }
     if !removed.is_empty() {
-        m.cells.retain(|id, _| !removed.contains(&id));
+        removed.sort_unstable();
+        m.cells.retain(|id, _| removed.binary_search(&id).is_err());
     }
     Ok(report)
 }

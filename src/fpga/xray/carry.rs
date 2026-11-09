@@ -70,7 +70,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::fpga::device::{BelRole, Device};
 use crate::fpga::primitives::{
-    add_assign, add_cell, add_net, const_expr, expr, net_expr, slice_expr,
+    Names, add_assign, add_cell, add_cell_in, add_net, add_net_in, const_expr, expr, net_expr,
+    slice_expr,
 };
 use crate::ir::emit::{BitView, SigBit};
 use crate::ir::{
@@ -555,6 +556,9 @@ pub fn legalise_carries(
     };
     let mut removed: Vec<CellId> = Vec::new();
     let dual = device.bels.iter().find(|b| b.name == super::lutpack::DUAL);
+    // Every net and cell this adds takes its name from one index of the
+    // module's names, and nothing is removed until the end: see `Names`.
+    let mut names = Names::of(m);
     for (id, plan, view_owner, shared) in plans {
         let span = m.cells[id].span;
         let name = m.cells[id].name.as_str().to_owned();
@@ -608,14 +612,18 @@ pub fn legalise_carries(
                     };
                     inputs.push((Name::new(pin.clone()), value));
                 }
-                let out_of = |m: &mut crate::ir::Module, f: &Function, tag: &str| match f.table {
+                let out_of = |m: &mut crate::ir::Module,
+                              names: &mut Names,
+                              f: &Function,
+                              tag: &str| match f.table {
                     Some((_, net)) => net,
-                    None => add_net(m, &format!("{name}${tag}0"), Type::bit(), span),
+                    None => add_net_in(m, names, &format!("{name}${tag}0"), Type::bit(), span),
                 };
-                let o6_net = out_of(m, &upper, "s");
-                let o5_net = out_of(m, &lower, "g");
-                let cell = add_cell(
+                let o6_net = out_of(m, &mut names, &upper, "s");
+                let o5_net = out_of(m, &mut names, &lower, "g");
+                let cell = add_cell_in(
                     m,
+                    &mut names,
                     &format!("{name}$lane0"),
                     CellKind::Blackbox(Name::new(dual.name.clone())),
                     inputs,
@@ -639,14 +647,15 @@ pub fn legalise_carries(
                 let lanes = shape.width;
                 let carry_in = m.cells[id].input(init).expect("checked in the plan");
                 // The top lane's propagate: a table of zero.
-                let zero = add_net(m, &format!("{name}$cin$s"), Type::bit(), span);
+                let zero = add_net_in(m, &mut names, &format!("{name}$cin$s"), Type::bit(), span);
                 let mut table_inputs: Vec<(Name, ExprId)> = Vec::with_capacity(6);
                 for pin in &lut_inputs {
                     table_inputs
                         .push((Name::new(pin.clone()), const_expr(m, Const::zero(1), span)));
                 }
-                let table = add_cell(
+                let table = add_cell_in(
                     m,
+                    &mut names,
                     &format!("{name}$cin$lut"),
                     CellKind::Blackbox(Name::new(lut.name.clone())),
                     table_inputs,
@@ -670,8 +679,20 @@ pub fn legalise_carries(
                 }
                 let s_expr = expr(m, ExprKind::Concat(s_parts), span);
                 let di_expr = expr(m, ExprKind::Concat(di_parts), span);
-                let sum = add_net(m, &format!("{name}$cin$o"), Type::bits(lanes), span);
-                let carries = add_net(m, &format!("{name}$cin$co"), Type::bits(lanes), span);
+                let sum = add_net_in(
+                    m,
+                    &mut names,
+                    &format!("{name}$cin$o"),
+                    Type::bits(lanes),
+                    span,
+                );
+                let carries = add_net_in(
+                    m,
+                    &mut names,
+                    &format!("{name}$cin$co"),
+                    Type::bits(lanes),
+                    span,
+                );
                 let low = |m: &mut crate::ir::Module| const_expr(m, Const::zero(1), span);
                 let inputs = vec![
                     (Name::new(shape.propagate), s_expr),
@@ -679,8 +700,9 @@ pub fn legalise_carries(
                     (Name::new(ci), low(m)),
                     (Name::new(init), low(m)),
                 ];
-                add_cell(
+                add_cell_in(
                     m,
+                    &mut names,
                     &format!("{name}$cin"),
                     CellKind::Blackbox(Name::new(carry.name.clone())),
                     inputs,
@@ -739,7 +761,8 @@ pub fn legalise_carries(
                     if step.generate.is_some() {
                         report.generates += 1;
                     }
-                    let out = add_net(m, &format!("{name}$s{lane}"), Type::bit(), span);
+                    let out =
+                        add_net_in(m, &mut names, &format!("{name}$s{lane}"), Type::bit(), span);
                     let init = lane_init(constant, step.generate);
                     let split = step.generate.is_some_and(|d| {
                         // The halves differ unless the constant generate
@@ -755,8 +778,9 @@ pub fn legalise_carries(
                         };
                         inputs.push((Name::new(pin.clone()), value));
                     }
-                    let cell = add_cell(
+                    let cell = add_cell_in(
                         m,
+                        &mut names,
                         &format!("{name}$lut{lane}"),
                         CellKind::Blackbox(Name::new(lut.name.clone())),
                         inputs,
@@ -796,7 +820,8 @@ pub fn legalise_carries(
     // The tables folded into a lane's `LUT6_2`, taken out last: a cell's id
     // is its place, which a removal moves.
     if !removed.is_empty() {
-        m.cells.retain(|id, _| !removed.contains(&id));
+        removed.sort_unstable();
+        m.cells.retain(|id, _| removed.binary_search(&id).is_err());
     }
     Ok(report)
 }

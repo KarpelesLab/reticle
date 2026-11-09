@@ -134,7 +134,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use super::device::{BelKind, BelRole, BramShape, Device, FfReset, FfVariant};
-use super::primitives::{add_assign, add_cell, add_net, const_expr, expr, net_expr, slice_expr};
+use super::primitives::{
+    Names, add_assign, add_cell, add_cell_in, add_net, add_net_in, const_expr, expr, net_expr,
+    slice_expr,
+};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::emit::{BitView, SigBit};
 use crate::ir::{
@@ -638,6 +641,7 @@ fn map_flip_flops(
         device,
         lut: device.bel(BelRole::Lut).cloned(),
         inverted: BTreeMap::new(),
+        names: Names::of(module),
         report,
         diags,
     };
@@ -648,7 +652,10 @@ fn map_flip_flops(
         }
     }
     if !replaced.is_empty() {
-        module.cells.retain(|id, _| !replaced.contains(&id));
+        replaced.sort_unstable();
+        module
+            .cells
+            .retain(|id, _| replaced.binary_search(&id).is_err());
     }
 }
 
@@ -666,6 +673,10 @@ struct FfCtx<'a> {
     /// The complement of each net, or constant part of one, that has
     /// one: by net, and by `(hi, lo)` when it is a part.
     inverted: BTreeMap<(NetId, Option<(u32, u32)>), NetId>,
+    /// The names the module uses, which every net and cell added while the
+    /// flip-flops are mapped takes its own from; none is removed until they
+    /// all are.
+    names: Names,
     /// Where the counts, the inversions and the declines go.
     report: &'a mut CellMapReport,
     /// Where the refusals go.
@@ -715,9 +726,10 @@ impl FfCtx<'_> {
             Some((net, Some((hi, lo)))) => format!("{}${hi}_{lo}$n", module.nets[net].name),
             None => "ff$n".to_owned(),
         };
-        let out = add_net(module, &base, Type::bit(), span);
-        let cell = add_cell(
+        let out = add_net_in(module, &mut self.names, &base, Type::bit(), span);
+        let cell = add_cell_in(
             module,
+            &mut self.names,
             &format!("{base}$inv"),
             CellKind::Lut {
                 k: 1,
@@ -929,15 +941,22 @@ fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
         let matched = &matches[usize::try_from(bit).unwrap_or(0)];
         let (en, rst) = ctx.control(module, matched, (en, rst), span);
         let bel = &matched.bel;
-        let net = add_net(module, &format!("{name}$q{bit}"), Type::bit(), span);
+        let net = add_net_in(
+            module,
+            &mut ctx.names,
+            &format!("{name}$q{bit}"),
+            Type::bit(),
+            span,
+        );
         let d_bit = slice_expr(module, d, bit, bit, span);
         let mut inputs = vec![
             (Name::new(bel.port("clk").unwrap_or("C")), clk),
             (Name::new(bel.port("d").unwrap_or("D")), d_bit),
         ];
         connect_control(module, bel, &mut inputs, en, rst, span);
-        let new = add_cell(
+        let new = add_cell_in(
             module,
+            &mut ctx.names,
             &format!("{name}$ff{bit}"),
             CellKind::Blackbox(Name::new(bel.name.clone())),
             inputs,
