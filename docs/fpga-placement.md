@@ -541,6 +541,98 @@ is read as nondeterminism instead — two rounds, one of which is this one.
 Nothing was made rarer here; the condition that produced the message is
 now a test, and the placer refuses it before the router ever sees it.
 
+## Reproducible builds
+
+A build is meant to be the same bytes every time it is run: the
+ChipWhisperer-Husky's byte-identity checks compare bitstreams across builds,
+and a golden file is a claim about every run. On 2026-11-10 one 7-series build
+in 1,360 broke that. `regfile_alu` (`testdata/fpga/vivado/qor/`) at
+`--place-seed 16`, built by `a5a2811f`'s release binary as
+`tools/vivado-parity/achieved.sh` builds it (for the `xc7a100t-ftg256`,
+which is what its log names), panicked in `Placement::place` with *"site 47009
+already holds an instance"*. Seventeen reruns of the same command did not
+(reported by the run that found it, not repeated here).
+
+### What was measured
+
+**CHECKED, 10 November 2026**, with that binary (sha256 `56cc37de…`) and the
+constraints that run was given:
+
+- **Site 47009** is `X124Y100/SLICEL_X1_CARRY4` in that build's graph: one of
+  a carry chain's sites. The build's exported netlist, written before
+  placement, is byte for byte the one every rerun writes, so the run differed
+  in the placer or after the netlist was built, not in synthesis.
+- **The same build repeated**: 8 at once, then 12 at once over every design of
+  the corpus at seeds 3 and 16. Every one wrote the same bitstream, Vivado
+  netlist, placement, routes, timing endpoints and report as the others. Seeds
+  1, 10, 15, 17 and 18 of the run that panicked rebuild to its bitstreams.
+- **Other seeds**: `regfile_alu` at seeds 21 to 400, and every design of the
+  corpus at seeds 21 to 100, with the build after the fix below: no clash,
+  and every build finished.
+- **Every hash order, on purpose.** std's `HashMap` and `HashSet` take random
+  keys per process, so a run is one draw of every iteration order, and a
+  thousand runs a thousand draws of the ones that happen to come up. A
+  scratch build (never committed) made every `HashMap` and `HashSet` in
+  `src/` take its keys from `RETICLE_CHAOS`, first one key for the whole
+  process and then one per map, stepped as std steps them, so that an order
+  can be asked for and asked again. Byte for byte the same outputs, report
+  included, across:
+
+  | what | orders | outputs |
+  |---|---|---|
+  | `regfile_alu`, seed 16 | 480 (one key) + 640 (a key a map) | 1 |
+  | the 17 designs of `qor/`, seeds 1, 2 and 16 | 8 each | 1 each |
+  | the 204 designs of `memarr/`, seed 1 | 4 each | 1 each |
+  | the 412 testbenches of `testdata/sim/lang/`, `reticle sim` | 4 each | 1 each |
+  | the Husky and the Husky Plus (`examples/husky/`), bitstream only | 3 each | 1 each, `3fd3e4c8…` and `e57fca47…` |
+
+  and every one of those outputs is the one the binary without the scratch
+  change writes, for `qor/` and `memarr/` compared file for file.
+- **Every iteration of a std hash map or set in the flow, read**: synthesis,
+  the techmap, the 7-series backend, the placer, the router and the bitstream.
+  One let the order decide something: `confine_to_roads` started its walk
+  from a global buffer's pad in the order of a `HashSet` of the pad's wires,
+  and a wire is marked the first time it is reached, so where a pad has two,
+  the order could change which buffer sites are kept. Asked on the corpus, the
+  pad had one wire every time (21 walks), so it changed nothing measured; the
+  walk now starts in the site's own order. Every other one is a lookup, or a
+  count, or sorted on a key with no ties before anything reads it.
+
+### What is not known
+
+**What made that run different.** Hash order is not ruled out by the above:
+a dependence that shows once in 1,360 runs would go unseen in 1,120 orders
+about four times in ten. Nothing else that differs between two processes was
+found either: the flow has no threads, reads the clock only to print
+`--timing`'s laps and the environment only to find the database, and orders
+and hashes nothing by an address. The machine's
+memory error counters (EDAC) read zero.
+
+### The panic
+
+`Placement::place` asserted that the site was free. It now records the first
+**clash** (`place::Clash`) instead, takes the cell that held the site off it so
+that the two tables stay each other's inverse, and `place` stops after each of
+its stages, and the anneal after the move that made it, with
+`PlaceError::Clash`: *"internal error in the placer, while annealing: `a` was
+put on `S`, which `b` held; the design is not at fault, and another
+`--place-seed` may place it"*. It is still a fault in the placer and not in the
+design; the difference is a report with the cells and the site named, rather
+than a backtrace and no report at all. Nothing that places differently from
+before reaches it: every output measured above is the same bytes with and
+without this.
+
+### The test
+
+`tests/fpga_xray_reproducible.rs` builds `regfile_alu` at seed 16 and
+`bram_fifo` twice at once, in two processes, and holds every file and the
+report to the first run's bytes. It would catch a hash order, an address or
+anything else that differs between processes and reaches the output on most
+runs: with legalisation made to seat its cells in an order drawn from a
+`RandomState`, both of its tests failed. It would not have caught this: two runs are two draws, about one chance
+in 700 at the rate this was seen. What would is the sweep above, which is too
+slow for a gate.
+
 
 ## What was not done, and would be next
 
