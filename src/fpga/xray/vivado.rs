@@ -417,15 +417,23 @@ fn reduce(table: &[bool], connections: &[SigBit]) -> LutHalf {
         .filter(|(pin, bit)| !matches!(bit, SigBit::Const(_)) || depends(*pin))
         .map(|(pin, bit)| (pin, *bit))
         .collect();
-    // A table of no inputs is a constant. A `LUT1` needs one, so it keeps the
-    // first pin, which it ignores, tied high: the mapper ties it low and the
+    // A table of no inputs is a constant. A `LUT1` needs one, so it keeps a
+    // pin, which it ignores, tied high: the mapper ties it low and the
     // router leaves it alone, so on the part it reads the one an input with
     // no pip on it reads, and Vivado leaves a pin tied high just so. Tied
     // low, Vivado routed a ground to it (`IMUX<n>.GFAN<k>` and
     // `GFAN<k>.GND_WIRE`) that Reticle's bitstream does not have, on every
     // probe with a constant in it (`gnd_probe`, `vcc_probe`, `ram16x1s_probe`).
+    //
+    // Of a whole table's six that pin is `A6`, and of a half's five the first.
+    // `A1` was the first of six too, and a flip-flop's data through the same
+    // table's lower half (`xray::thru`) may come in on `A1`, which Vivado then
+    // found carrying that route and its own one, and stopped (`lutram32` seed
+    // 10, `Route 35-341` on `VCCTerm`, 2026-11-10). A way through the lower
+    // half needs `A6` high, as this tie has it, and comes in on `A1` to `A5`.
     if pins.is_empty() {
-        pins.push((0, SigBit::Const(Bit::One)));
+        let pin = if connections.len() == 6 { 5 } else { 0 };
+        pins.push((pin, SigBit::Const(Bit::One)));
     }
     let mut reduced = vec![false; 1 << pins.len()];
     for (m, entry) in reduced.iter_mut().enumerate() {
@@ -1011,7 +1019,13 @@ pub fn vivado_implementation(
                     pins.push(bits.first().copied().unwrap_or(SigBit::Const(Bit::Zero)));
                 }
                 let table = truth_table(cell, k);
-                let half = reduce(&table, &pins);
+                let mut half = reduce(&table, &pins);
+                // A carry lane's constant table whose lower half is the lane's
+                // generate keeps its pin on `A1`, which that half, on a bel
+                // with no `A6`, reads too (below).
+                if halves.contains_key(&index) && half.pins == [(5, SigBit::Const(Bit::One))] {
+                    half.pins = vec![(0, SigBit::Const(Bit::One))];
+                }
                 let output = output_of(&view, cell, "O")?;
                 let Some(output) = output.first() else {
                     return fail(format!("`{}` has no output", instance.name));
@@ -1471,6 +1485,22 @@ mod tests {
             &[SigBit::Const(Bit::Zero), SigBit::Const(Bit::Zero)],
         );
         assert_eq!(half.table, vec![true, true]);
+        assert_eq!(half.pins, vec![(0, SigBit::Const(Bit::One))]);
+    }
+
+    /// **A whole table's constant keeps `A6`, a half's its first pin.** A
+    /// flip-flop's data through the same table's lower half comes in on `A1`
+    /// to `A5`, with `A6` high; the constant's pin on `A1` was the route's pin
+    /// too, and Vivado stopped at the `VCCTerm` it could not route
+    /// (`lutram32` seed 10). Would catch the constant back on `A1`; would not
+    /// catch a way through a table that comes in on `A6`, which none does.
+    #[test]
+    fn a_whole_tables_constant_keeps_a6_and_a_halfs_its_first_pin() {
+        let tied = [SigBit::Const(Bit::Zero); 6];
+        let whole = reduce(&[false; 64], &tied);
+        assert_eq!(whole.pins, vec![(5, SigBit::Const(Bit::One))]);
+        assert_eq!(whole.table, vec![false, false]);
+        let half = reduce(&[true; 32], &tied[..5]);
         assert_eq!(half.pins, vec![(0, SigBit::Const(Bit::One))]);
     }
 
