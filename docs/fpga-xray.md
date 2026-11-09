@@ -216,6 +216,13 @@ network's wire names are the ones these designs used, read off their
 routes; a clock region or an IO clock they never reached may name wires
 `is_clock_wire` does not know.
 
+*Since then*, under the fitted delay model (`--delay-model vivado`, the default),
+the placement and its estimate do compute when the global clock reaches each
+register, from a table measured with Vivado's timer for the `xc7a100t` and the
+`xc7a35t` (`docs/fpga-vivado-parity.md`, "Filling slices" and "The clock's arrival
+on the XC7A35T"). That is Vivado's figure for a global buffer's clock and not a
+measurement on a part, and `--delay-model legacy` still computes none.
+
 ## The 7-series bitstream path never checked its own routing
 
 **CHECKED and FIXED, 8 October 2026.** `reticle fpga --bitstream` went

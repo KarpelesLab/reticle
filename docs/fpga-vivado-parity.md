@@ -3330,13 +3330,15 @@ before (below).
    lists the same way, was 1.236 and 1,576 slices over five seeds, with `sad`'s adc
    clock 3.39 ns against 3.11 and four seeds of five across two region rows; the
    difference between the two is a seed's (`sad`'s adc clock 3.06 in the second).
-4. **When the clock reaches each register** (`xray::timing::CLOCK_ARRIVAL_PS`,
+4. **When the clock reaches each register** (`xray::timing::CLOCK_ARRIVAL_PS`, now `XC7A100T_CLOCK`,
    `PlaceTiming::clock`, `PlaceTiming::skew`). The probe's 2,100 flip-flops by region
    row and column, every one within 6 ps of the table
    (`tests/fpga_xray_clock_arrival.rs`); a register launches and must settle that much
    later, in the rounds and in the router's analysis, and the pull charges a critical
    connection from a later site to an earlier one the difference, in tiles of wire, on
-   top of its distance. Only the `xc7a100t` has figures. Over five seeds 1.244 against
+   top of its distance. Only the `xc7a100t` had figures (the `xc7a35t` has since:
+   [The clock's arrival on the XC7A35T](#the-clocks-arrival-on-the-xc7a35t)). Over
+   five seeds 1.244 against
    1.242; over ten, with the three before, none of `sad`'s ten latest paths crosses a
    region row (the worst skew -0.11 ns), and Reticle's routed estimate is 0.981 of
    Vivado's figure at the geometric mean, 0.935 to 1.015 from the 5th to the 95th
@@ -3465,7 +3467,9 @@ for `fill`'s, each fail `tests/fpga_xray_achieved.rs`.
   connection delays above suggest; not tried.
 - **The clock's arrival on any part but the `xc7a100t`**, which needs the probe run
   on it, and of the block RAM and `DSP48E1` columns, which take their nearest slice
-  column's figure, not measured.
+  column's figure, not measured. **The `xc7a35t` done since**, in both packages
+  ([The clock's arrival on the XC7A35T](#the-clocks-arrival-on-the-xc7a35t)); the
+  block RAM and `DSP48E1` columns are still not measured on either.
 - **Why the setup has two figures** a pin, about 0.1 ns apart.
 - None of it has been on a part.
 
@@ -6331,6 +6335,185 @@ code changes its bitstreams, and nothing measured on a part says which a part wa
   fewer than eight pins, are clocked from the interconnect. Deliberate in Reticle, and a
   difference.
 - The three distributed RAM macros and the `BUFMRCE` in `--vivado-placement`.
+
+## The clock's arrival on the XC7A35T
+
+**Asked: does the fitted delay model time the XC7A35T as it times the XC7A100T, and
+what does the one table that existed only for the XC7A100T, when the global clock
+reaches each register ([Filling slices](#filling-slices), change 4), give it?** Run
+on 2026-11-09 with Vivado 2026.1 at `xc7a35tftg256-3`, on the timing corpus of
+[Placement and routing against Vivado's own flow](#placement-and-routing-against-vivados-own-flow).
+**Everything here is Vivado's timer; nothing has been on a part.**
+
+### What was measured
+
+`clock_arrival.tcl` takes a part and its three balls now, and its rows from the
+part's slices (three a region row of fifty, as the XC7A100T's were). Four runs of
+700 flip-flops, 297 of them held to every even slice column on three rows of each
+region row: from `BUFGCTRL_X0Y0`, `X0Y16` and `X0Y31` at `xc7a35tftg256-3`, and from
+`X0Y0` at `xc7a35tcpg236-3` (balls `N17`, `R2`, `U1`). Vivado's `xc7a35t` has the
+whole of Project X-Ray's `xc7a50t` grid, 8,150 slices in three region rows of two
+columns, which is the grid Reticle loads for both packages
+(`testdata/fpga/vivado/clock/arrival_xc7a35t.txt`):
+
+- **The table** (`xray::timing::XC7A35T_CLOCK`) is the medians of the three FTG256
+  runs, `clock_arrival.py table arrival_xc7a35t.txt xc7a35tftg256`: every one of
+  their 2,100 flip-flops within 6.1 ps of it against their own insertion delay. The
+  top region row is 150 ps later than the middle and the bottom one 23 ps; the
+  columns left of the leftmost block RAM column and right of the rightmost are about
+  60 ps later than the rest; the growth away from a region's `HCLK` row is the
+  XC7A100T's, 0.83 ps a row. **Measured.** The top region row has no slice, block
+  RAM or `DSP48E1` right of grid column 91 (the die's corner is empty), so the
+  table's figures there are column 91's filled in and time nothing.
+- **The package moves nothing.** The CPG236's 700, which the table was not fitted
+  to, are within 5.9 ps of it, and their insertion delay is the FTG256's to 1 ps
+  (1,196 against 1,197 ps). One table serves both, keyed by the die
+  (`clock_table`). **Measured**, on one buffer.
+- **The XC7A100T's table would not do**: against it, 876 of the 2,800 are more than
+  7 ps off, up to 77 ps, in every column of the die. The two grids share their
+  columns up to grid column 56 and not past it, and the XC7A35T's bottom region row,
+  grid row 130, is the die's edge where the XC7A100T's is an inner one.
+- **Speed grade 1 is about 1.26 times slower** to every clock pin: the same probe
+  at `xc7a35tftg256-1`, 332 flip-flops on the same sites as the grade-3 run, 1.254
+  to 1.276 times, and its spread over the die 278 ps against 236. **Measured**, and
+  not applied: the table is grade 3's, as every figure of the fitted model is
+  ([The delay model, fitted to Vivado's timer](#the-delay-model-fitted-to-vivados-timer)),
+  while `xc7.dev` declares both XC7A35T packages speed 1 (the Basys 3's part is
+  `-1`). On a grade-1 part every figure of the fitted model is about a quarter
+  under Vivado's for that part, the clock's as much as the rest; the comparisons
+  below are all at grade 3 so that the table is what differs.
+
+### The fit, before and after
+
+The same comparison as [How it came out](#how-it-came-out), `run_placed.sh` with
+`TIMING=1` and `timing_table.py compare --part xc7a35tftg256-3`, seed 1 of each
+build on the seventeen designs, the tree before (`before`, no clock figures on this
+part) and with the table (`after`). Each estimate / Vivado, median, 5th and 95th
+percentile, lowest and highest:
+
+| | before | after | the XC7A100T, fitted ([above](#how-it-came-out)) |
+|---|---|---|---|
+| connections | 15,654: 1.000 / 0.924 / 1.192, 0.696 to 2.896 | 15,709: 1.000 / 0.924 / 1.105, 0.702 to 2.924 | 18,166: 1.003 / 0.949 / 1.179 |
+| endpoints | 4,856: 0.997 / 0.840 / 1.105, 0.467 to 1.483 | 4,854: 0.989 / 0.849 / 1.097, 0.630 to 1.387 | within 3 % at each design's median |
+| each clock's worst endpoint | 0.88 (`esad` adc) to 1.08 (`srl_delay`) | 0.89 (`esad` adc) to 1.06 (`srl_delay`) | 0.91 to 1.05 |
+
+**The fitted model times the XC7A35T as it times the XC7A100T**, connection by
+connection: its median connection is 1.000 of Vivado's on both builds, which is a
+statement about the class table and not the clock (a connection's delay has no
+clock in it). The two builds are different placements, so the two connection rows
+differ by that and not by the table. **What the table changes is the endpoints of
+designs across two region rows**: `esad`'s highest endpoint ratio went from 1.403 to
+1.186 and its 95th percentile from 1.107 to 1.067, `sad`'s highest from 1.483 to
+1.363, and the lowest of all from 0.467 to 0.630; the designs inside one row move
+by their placement's noise.
+
+And Reticle's routed estimate of each clock against Vivado's figure on the same
+routes (the measure "Filling slices" used, over ten seeds): **0.970 at the geometric
+mean, 0.919 to 1.015 from the 5th to the 95th percentile, before; 0.968, 0.911 to
+1.014, after.** The XC7A100T's was 0.981 and 0.935 to 1.015. The clock it changes is
+the one that crosses rows: `esad`'s adc clock, median 0.945 before and 0.969 after.
+
+### What it does to placement
+
+`achieved.sh` on the XC7A35T, both builds at ten seeds, Vivado's own flow asked three
+times as before (ns; Vivado's figure is its best, Reticle's the median, the ten
+beside it in `clk35`'s runs and not committed):
+
+| design | clock | Vivado | Vivado, Reticle's netlist | before | after |
+|---|---|---|---|---|---|
+| adders | clk | 2.152 | 2.165 | 2.345 | 2.223 |
+| analyser_fifo | rd_clk | 3.840 | 5.198 | 5.172 | 5.276 |
+| analyser_fifo | wr_clk | 2.306 | 3.098 | 2.987 | 2.974 |
+| barrel | clk | 2.311 | 2.646 | 2.502 | 2.486 |
+| bram_fifo | clk | 3.420 | 3.480 | 3.930 | 3.875 |
+| carry_counter | clk | 1.808 | 2.179 | 2.274 | 2.258 |
+| counter64 | clk | 3.198 | 3.722 | 3.735 | 3.774 |
+| crc32 | clk | 2.130 | 2.231 | 2.179 | 2.181 |
+| esad | adc_sampleclk | 2.214 | 3.769 | 3.144 | 3.135 |
+| esad | clk_usb | 1.609 | 2.744 | 2.508 | 2.553 |
+| fir8 | clk | 9.142 | 9.164 | 9.161 | 9.161 |
+| fsm | clk | 1.822 | 1.878 | 2.137 | 2.187 |
+| gray_cdc | clk | 1.466 | 1.447 | 1.413 | 1.413 |
+| gray_cdc | clk2 | 1.402 | 1.578 | 1.514 | 1.514 |
+| lutram32 | clk | 1.895 | 1.884 | 1.984 | 1.990 |
+| mul18 | clk | 1.932 | 1.935 | 2.085 | 2.027 |
+| regfile_alu | clk | 5.514 | 5.494 | 5.915 | 5.957 |
+| sad | adc_sampleclk | 2.236 | 4.573 | 3.164 | 3.162 |
+| sad | clk_usb | 1.644 | 2.476 | 2.460 | 2.543 |
+| srl_delay | clk | 1.699 | 1.670 | 1.867 | 1.777 |
+| widemux | clk | 2.491 | 2.705 | 2.942 | 2.872 |
+
+**Over the twenty-one clocks, Reticle's median is 1.175 times Vivado's own figure
+with the table and 1.179 without; ten clocks faster, eight slower, three the
+same.** That is inside a seed's spread, as the same change was on the XC7A100T
+(1.244 against 1.242 over five seeds there), and is reported as neutral, not as a
+gain. The table is kept because it is Vivado's figure and the estimate is nearer
+Vivado's with it where it matters, as above. Against Vivado's placement and routes
+of the same netlist it is 0.994 and 0.997: on this corpus Reticle's implementation
+of a netlist is Vivado's, and the 18 % between the two tools is the netlist, as on
+the XC7A100T.
+
+**`esad`'s adc clock still crosses region rows**: its latest path has Vivado's skew
+under -0.15 ns on nine seeds of ten before and seven after, and `sad`'s on none and
+two. On the XC7A100T the table kept `sad` inside a row. Why it does not here,
+whether a pad's place pulls the logic across or the pull's charge is too small
+against the rest, has not been looked at.
+
+### What it changes
+
+Under the fitted model only: `clock_arrival` gives an XC7A35T fabric, in either
+package, its table, where it gave it none, so every timing-driven XC7A35T build
+places and routes differently. `--delay-model legacy` has no clock figures on any
+part, and the Husky's two builds pass it: with this tree's release binary
+`build.sh` (the XC7A35T's FTG256) writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked**,
+byte for byte.
+
+### Which 7-series parts have a table
+
+Every 7-series part in Reticle's device list: the `xc7a100t-ftg256`
+(`XC7A100T_CLOCK`, [Filling slices](#filling-slices)) and the `xc7a35t-ftg256` and
+`xc7a35t-cpg236` (`XC7A35T_CLOCK`, the CPG236 measured on one buffer). There is no
+other. Another die would take a device file and Project X-Ray's grid first; then the
+table is four runs of `clock_arrival.tcl`, a few minutes each, one of
+`clock_arrival.py fixture` and `table`, and a `ClockTable` keyed by the die's name
+in `clock_table`. A die whose region rows are not fifty slices tall, or whose rows
+the probe's three per row do not describe, would need the probe looked at first.
+
+### Tests
+
+`every_flip_flop_vivado_timed_on_the_xc7a35t_is_within_its_tables_reach`
+(`tests/fpga_xray_clock_arrival.rs`): all 2,800 within 7 ps of the table against one
+insertion delay (6.8 ps the worst, a CPG236 flip-flop at the die's corner), three
+FTG256 runs and one CPG236, and the CPG236's insertion delay within 2 ps of the
+FTG256's. `the_clock_reaches_a_site_when_the_table_says` (`xray::timing`) now also
+gives a fabric of the XC7A35T's three `HCLK` rows its table under both packages'
+names, not the XC7A100T's, refuses the XC7A35T's table on the XC7A100T's four rows,
+and gives a die nobody measured nothing.
+
+**Mutations**, each made by a script and put back, against both tests:
+the XC7A35T given the XC7A100T's table, or none, or the CPG236 none; the growth a row
+left out; the region rows in the wrong order; the right-hand columns of the middle row
+at the middle's figure; and one figure 10 ps off. Seven of the eight failed the
+integration test, and the four about which table a fabric gets and its rows failed
+the unit test too. **One survived**: the top row's right-hand
+columns 60 ps later, as the lower rows' are. It cannot be caught, since nothing is
+there to time, and it is how the reading that the top row's right-hand columns were
+*not* later was found to be a reading of filler: the first draft of this section said
+so.
+
+### Not done
+
+- **Speed grade 1.** The table and the whole fitted model are grade 3's, and both
+  XC7A35T devices say speed 1. Scaling by the 1.26 measured here for the clock is a
+  reading of one probe and nothing of the rest's; fitting the model at grade 1 is
+  its own run.
+- The block RAM and `DSP48E1` columns, which take their nearest slice column's
+  figure, on this die as on the other.
+- Why `esad`'s adc clock still crosses rows.
+- None of it has been on a part.
 
 ## The language corpus, synthesised by both
 
