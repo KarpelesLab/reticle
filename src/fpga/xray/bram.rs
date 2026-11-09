@@ -1453,15 +1453,30 @@ pub struct BlockRamReport {
     pub dsps: usize,
     /// Features turned on over all of those.
     pub dsp_features: usize,
+    /// `CARRY4` generates tied to zero on their lane's bypass input
+    /// ([`super::tie_bypass_generates`]), over the ground fans as a block
+    /// RAM's zeros are.
+    pub bypass_zeros: usize,
+    /// `CARRY4` generates left at the bypass input's `VCC_WIRE` default.
+    pub bypass_ones: usize,
 }
 
 impl BlockRamReport {
-    /// One line, or nothing when the design has no block RAM.
+    /// One line, or nothing when the design has no block RAM, and one for
+    /// the carry generates tied on a bypass input when there are any.
     pub fn to_text(&self) -> String {
-        if self.rams == 0 {
-            return String::new();
+        let mut out = String::new();
+        if self.bypass_zeros + self.bypass_ones > 0 {
+            out = format!(
+                "note: {} carry generate(s) tied to zero on their lane's bypass input, {} left \
+                 at its VCC default\n",
+                self.bypass_zeros, self.bypass_ones
+            );
         }
-        format!(
+        if self.rams == 0 {
+            return out;
+        }
+        out + &format!(
             "note: {} block RAM(s) configured with {} mode feature(s); {} input(s) tied to zero \
              over {} pip(s), {} left at the interconnect's VCC default, {} idle input(s) \
              left untied\n",
@@ -2579,6 +2594,54 @@ impl XrayFabric {
         TieWires { fans, held }
     }
 
+    /// The wires the ties of the carry generates left on a bypass input
+    /// ([`super::tie_bypass_generates`]) will hold, for the router to keep
+    /// clear: the bypass input and every wire behind it with no switch
+    /// between, `<L>X`, `BYP<n>` and `BYP_ALT<n>`, outright (`held`), and for a
+    /// zero the ground fan that reaches `BYP_ALT<n>` (`fans`), as a block RAM's
+    /// are. A signal through any of them would reach the generate, which the
+    /// bitstream reads off `<L>X` with `<L>CY0` clear; and a one is that input
+    /// undriven, reading `VCC_WIRE`, so nothing may drive it. Measured on
+    /// Vivado's routes: `INT_L.GND_WIRE->>GFAN1`, `GFAN1->>BYP_ALT7`,
+    /// `BYP_ALT7->>BYP_L7`, `CLBLL_L.CLBLL_BYP7->CLBLL_L_DX` for a zero on lane
+    /// `D`, and `VCC_WIRE->>BYP_ALT2`, which has no bit, for a one on lane `C`
+    /// (`docs/fpga-vivado-parity.md`, "A ground on the bypass input").
+    #[must_use]
+    pub fn bypass_tie_wires(
+        &self,
+        graph: &RoutingGraph,
+        netlist: &Netlist,
+        placement: &Placement,
+    ) -> TieWires {
+        let mut held: Vec<NodeId> = Vec::new();
+        let mut fans: Vec<NodeId> = Vec::new();
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        for (bypass, value) in bypass_ties(graph, netlist, placement) {
+            for behind in fixed_chain(graph, bypass) {
+                if seen.insert(behind) {
+                    held.push(behind);
+                }
+                if value != Bit::Zero {
+                    continue;
+                }
+                for pip in graph.incoming(behind) {
+                    if graph.pip_bits(*pip).is_empty() {
+                        continue;
+                    }
+                    let fan = graph.pip(*pip).from;
+                    let grounded = graph.incoming(fan).iter().any(|p| {
+                        !graph.pip_bits(*p).is_empty()
+                            && graph.wire(graph.pip(*p).from).name == "GND_WIRE"
+                    });
+                    if grounded && !fans.contains(&fan) {
+                        fans.push(fan);
+                    }
+                }
+            }
+        }
+        TieWires { fans, held }
+    }
+
     /// Configures every placed `RAMB18E1`: its mode features and a value
     /// on every input the
     /// design does not drive. Run after routing and after
@@ -2756,6 +2819,25 @@ impl XrayFabric {
             }
         }
 
+        // And the carry generates left on a bypass input, over the same fans:
+        // a zero is `GND_WIRE -> GFAN<k> -> BYP_ALT<n>`, and the rest of the
+        // way to `<L>X` has no switch; a one is the input left undriven. See
+        // `bypass_tie_wires`, which kept those wires clear of the routes.
+        for (bypass, value) in bypass_ties(graph, netlist, placement) {
+            let vcc = &self.block_ram.vcc_defaults;
+            tie(&self.arch, graph, vcc, &used, &mut ties, bypass, value).map_err(|message| {
+                BlockRamError {
+                    instance: graph.wire(bypass).full_name(),
+                    message: format!("tying a carry generate to {value:?}: {message}"),
+                }
+            })?;
+            if value == Bit::One {
+                report.bypass_ones += 1;
+            } else {
+                report.bypass_zeros += 1;
+            }
+        }
+
         for pip in &ties.pips {
             let tile = graph.pip(*pip).tile;
             for bit in graph.pip_bits(*pip) {
@@ -2768,6 +2850,43 @@ impl XrayFabric {
         report.tie_pips = ties.pips;
         Ok(report)
     }
+}
+
+/// Each `CARRY4` generate tied on its lane's bypass input
+/// ([`super::bypass_tie`]), as the bypass input's node and the constant: the
+/// generate pin's one source with no bit of its own, `<L>X`, which `<L>CY0`
+/// clear selects.
+fn bypass_ties(
+    graph: &RoutingGraph,
+    netlist: &Netlist,
+    placement: &Placement,
+) -> Vec<(NodeId, Bit)> {
+    let mut out = Vec::new();
+    for (index, instance) in netlist.instances.iter().enumerate() {
+        if instance.primitive != "CARRY4" {
+            continue;
+        }
+        let Some(site) = placement.site_of(index) else {
+            continue;
+        };
+        for pin in &instance.pins {
+            let Some(value) = super::bypass_tie(netlist, *pin) else {
+                continue;
+            };
+            let Some(generate) = graph.sites[site].pin(&netlist.pins[*pin].role) else {
+                continue;
+            };
+            if let Some(bypass) = graph
+                .incoming(generate)
+                .iter()
+                .find(|pip| graph.pip_bits(**pip).is_empty())
+                .map(|pip| graph.pip(*pip).from)
+            {
+                out.push((bypass, value));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

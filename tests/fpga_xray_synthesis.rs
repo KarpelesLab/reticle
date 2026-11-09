@@ -138,14 +138,19 @@ fn figures(report: &FlowReport) -> Figures {
 /// Vivado's own 49 and 3). "Three terms on one chain" moved two:
 /// `analyser_fifo`'s `(wptr_r_next - rptr_next) + out_next` one chain (162
 /// tables and 29 `CARRY4`s to 165 and 25), and `bram_fifo`'s `used + wr - rd`
-/// (47 and 6 to 48 and 3, Vivado's count of `CARRY4`s).
+/// (47 and 6 to 48 and 3, Vivado's count of `CARRY4`s). "A ground on the
+/// bypass input" moved three: equalities in lanes of three again, their
+/// generates tied on the bypass input and their `+ 1` on `CYINIT`
+/// (`carry_counter` 18 tables and 13 `CARRY4`s to 12 and 11, `counter64` 34 and
+/// 25 to 23 and 22, both Vivado's own counts, `analyser_fifo` 165 and 25 to
+/// 156 and 22).
 const PINNED: [(&str, Figures, Figures); 15] = [
     ("adders", (289, 15, 40), (231, 2, 56)),
-    ("analyser_fifo", (165, 10, 12), (165, 3, 25)),
+    ("analyser_fifo", (165, 10, 12), (156, 3, 22)),
     ("barrel", (105, 3, 0), (87, 2, 0)),
     ("bram_fifo", (32, 4, 9), (48, 3, 3)),
-    ("carry_counter", (18, 4, 8), (18, 1, 13)),
-    ("counter64", (35, 5, 16), (34, 1, 25)),
+    ("carry_counter", (18, 4, 8), (12, 1, 11)),
+    ("counter64", (35, 5, 16), (23, 1, 22)),
     ("crc32", (204, 7, 0), (191, 2, 0)),
     ("fir8", (9, 3, 0), (7, 2, 0)),
     ("fsm", (72, 4, 0), (38, 3, 0)),

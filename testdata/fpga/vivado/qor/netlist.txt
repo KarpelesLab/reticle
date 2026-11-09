@@ -20,6 +20,10 @@
 #            "Three terms on one chain" (2026-11-09)
 #   copied   Reticle's netlist of seed 1 of the `copied` build, the default with
 #            "A wide fanout copied" (2026-11-09)
+#   unpaired Reticle's netlist of seed 1 of the `unpaired` build, the default with
+#            "The ADC clocks, placed" (2026-11-10, on a5081379)
+#   tied     Reticle's netlist of seed 1 of the `tied` build, the default with
+#            "A ground on the bypass input" (2026-11-10)
 #   cells <build> <design> <LUT> <CARRY4> <FF> <MUXF7> <MUXF8>
 #   levels <build> <design> <clock> <max> <worst> <tables> <CARRY4s>
 #            the most levels of logic on any of the clock's paths to itself in
@@ -330,3 +334,79 @@ cells copied srl_delay 7 0 34 0 0
 levels copied srl_delay clk 2 2 2 0
 cells copied widemux 276 0 1049 128 64
 levels copied widemux clk 4 4 2 0
+cells unpaired adders 231 56 481 0 0
+levels unpaired adders clk 9 9 1 8
+cells unpaired analyser_fifo 223 25 211 0 0
+levels unpaired analyser_fifo rd_clk 9 8 5 3
+levels unpaired analyser_fifo wr_clk 5 5 2 3
+cells unpaired barrel 87 0 70 16 0
+levels unpaired barrel clk 3 3 3 0
+cells unpaired bram_fifo 50 3 68 0 0
+levels unpaired bram_fifo clk 6 3 3 0
+cells unpaired carry_counter 66 13 65 0 0
+levels unpaired carry_counter clk 9 6 1 5
+cells unpaired counter64 130 25 129 0 0
+levels unpaired counter64 clk 17 10 1 9
+cells unpaired crc32 191 0 65 0 0
+levels unpaired crc32 clk 2 2 2 0
+cells unpaired esad 1175 71 1085 0 0
+levels unpaired esad adc_sampleclk 5 2 2 0
+levels unpaired esad clk_usb 2 2 2 0
+cells unpaired fir8 7 0 23 0 0
+levels unpaired fir8 clk 5 5 0 0
+cells unpaired fsm 38 0 30 0 0
+levels unpaired fsm clk 3 3 3 0
+cells unpaired gray_cdc 26 3 37 0 0
+levels unpaired gray_cdc clk 4 4 1 3
+levels unpaired gray_cdc clk2 2 2 2 0
+cells unpaired lutram32 8 0 70 0 0
+levels unpaired lutram32 clk 2 2 2 0
+cells unpaired mul18 7 0 36 0 0
+levels unpaired mul18 clk 2 2 2 0
+cells unpaired regfile_alu 470 20 20 0 0
+levels unpaired regfile_alu clk 12 7 6 0
+cells unpaired sad 1579 136 1025 0 0
+levels unpaired sad adc_sampleclk 5 2 2 0
+levels unpaired sad clk_usb 2 2 2 0
+cells unpaired srl_delay 7 0 34 0 0
+levels unpaired srl_delay clk 2 2 2 0
+cells unpaired widemux 276 0 1049 128 64
+levels unpaired widemux clk 4 4 2 0
+cells tied adders 231 56 481 0 0
+levels tied adders clk 9 9 1 8
+cells tied analyser_fifo 191 22 211 0 0
+levels tied analyser_fifo rd_clk 8 8 5 3
+levels tied analyser_fifo wr_clk 5 4 2 2
+cells tied barrel 87 0 70 16 0
+levels tied barrel clk 3 3 3 0
+cells tied bram_fifo 48 3 68 0 0
+levels tied bram_fifo clk 6 3 3 0
+cells tied carry_counter 45 11 65 0 0
+levels tied carry_counter clk 9 4 1 3
+cells tied counter64 88 22 129 0 0
+levels tied counter64 clk 17 7 1 6
+cells tied crc32 191 0 65 0 0
+levels tied crc32 clk 2 2 2 0
+cells tied esad 1167 71 1085 0 0
+levels tied esad adc_sampleclk 5 2 2 0
+levels tied esad clk_usb 2 2 2 0
+cells tied fir8 7 0 23 0 0
+levels tied fir8 clk 5 5 0 0
+cells tied fsm 38 0 30 0 0
+levels tied fsm clk 3 3 3 0
+cells tied gray_cdc 26 3 37 0 0
+levels tied gray_cdc clk 4 4 1 3
+levels tied gray_cdc clk2 2 2 2 0
+cells tied lutram32 8 0 70 0 0
+levels tied lutram32 clk 2 2 2 0
+cells tied mul18 7 0 36 0 0
+levels tied mul18 clk 2 2 2 0
+cells tied regfile_alu 470 20 20 0 0
+levels tied regfile_alu clk 12 7 6 0
+cells tied sad 1571 136 1025 0 0
+levels tied sad adc_sampleclk 5 2 2 0
+levels tied sad clk_usb 2 2 2 0
+cells tied srl_delay 7 0 34 0 0
+levels tied srl_delay clk 2 2 2 0
+cells tied widemux 276 0 1049 128 64
+levels tied widemux clk 4 4 2 0

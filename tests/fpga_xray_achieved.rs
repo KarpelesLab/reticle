@@ -681,3 +681,70 @@ fn pairing_only_when_needed_brings_the_adc_clocks_in() {
         "Reticle's flow against Vivado's: {after:.3} unpaired, {before:.3} copied"
     );
 }
+
+/// **A ground on the bypass input, and lanes of three bit pairs, bring the
+/// equalities' netlist to Vivado's and cost the corpus nothing**
+/// (`docs/fpga-vivado-parity.md`, "A ground on the bypass input"). Vivado
+/// placing and routing both netlists, ten seeds, `counter64` went from 3.446
+/// ns (`untied`, a5081379's netlist) to 3.301 (`tied`) against Vivado's own
+/// netlist's 3.304, and the corpus from 1.018 to 1.017 of Vivado's netlist; in
+/// Reticle's own flow the corpus stayed 1.089 of Vivado's own (`unpaired`
+/// against `tied`), the slowest clock `esad`'s `clk_usb` 3.7 % over, whose logic
+/// the change does not touch. This holds `counter64`'s netlist at least 3 %
+/// faster and within 1 % of Vivado's, the netlist's mean no worse, the flow's
+/// mean within 0.5 % of `unpaired`'s, no clock's median more than 4 % over its
+/// own at either level, and ten seeds of `tied` and both netlists on every
+/// clock. Would catch a regeneration that lost the change, swapped the builds
+/// or lost a seed or a clock; would not catch the flow losing the change since,
+/// which needs Vivado.
+#[test]
+fn a_ground_on_the_bypass_brings_the_equalities_netlist_to_vivados() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    let mut logs = [0.0f64; 4];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (unpaired, tied) = (&builds["unpaired"], &builds["tied"]);
+        assert_eq!(tied.len(), 10, "{design} {clock}: seeds of `tied`");
+        let (before, after) = (median(unpaired), median(tied));
+        assert!(
+            after <= before * 1.04,
+            "{design} {clock}: {after:.3} ns tied against {before:.3}"
+        );
+        let (own, placed) = &nets[&(design.clone(), clock.clone())];
+        let (net_before, net_after) = (&placed["untied"], &placed["tied"]);
+        assert_eq!(
+            (net_before.len(), net_after.len()),
+            (10, 10),
+            "{design} {clock}: seeds of `pnr`"
+        );
+        let (nb, na) = (median(net_before), median(net_after));
+        assert!(
+            na <= nb * 1.04,
+            "{design} {clock}: the netlist {na:.3} ns tied against {nb:.3}"
+        );
+        if design == "counter64" {
+            assert!(
+                na <= nb * 0.97 && na <= own * 1.01,
+                "counter64's netlist: {na:.3} ns tied, {nb:.3} untied, Vivado's {own:.3}"
+            );
+        }
+        for (log, ratio) in
+            logs.iter_mut()
+                .zip([before / vivado, after / vivado, nb / own, na / own])
+        {
+            *log += ratio.ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, net_before, net_after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 1.005,
+        "Reticle's flow against Vivado's: {after:.3} tied, {before:.3} unpaired"
+    );
+    assert!(
+        net_after <= net_before,
+        "the netlist against Vivado's: {net_after:.3} tied, {net_before:.3} untied"
+    );
+}

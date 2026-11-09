@@ -571,6 +571,105 @@ fn a_carry_lanes_constant_generate_is_written_as_its_tables_lower_half() {
     assert!(halves > 0, "no constant generate in\n{verilog}");
 }
 
+/// **A carry lane's constant generate is tied on the slice's bypass input as
+/// Vivado ties it.** Vivado's routed `probe`s (2026-11-10,
+/// `docs/fpga-vivado-parity.md`, "A ground on the bypass input"): a zero on a
+/// lane's `DI` is `GND_WIRE -> GFAN<k> -> BYP_ALT<n> -> BYP<n> -> <L>X`, which
+/// decodes to the interconnect's `GFAN<k>.GND_WIRE` and `BYP_ALT<n>.GFAN<k>`
+/// and nothing else, `<L>CY0` clear. On `carry_counter`, whose equality is
+/// compared on the chain in lanes of three bit pairs: the build says how many
+/// generates it tied; the bitstream, decoded, has exactly that many
+/// `BYP_ALT<n>.GFAN<k>` (the design has no other ground tie) and a
+/// `GFAN<k>.GND_WIRE` in each of their tiles; the `CARRY4` that holds them is
+/// written for Vivado with the zero on `DI`; and no generate is folded onto
+/// its table's `O5`.
+///
+/// Would catch the tie not made (the generate then reads the `VCC_WIRE` an
+/// undriven bypass reads, and every check of the flow's own passes: the router
+/// chose no arc there), the generate taken off `O5` again (`<L>CY0` set, a
+/// table's lower half, which in a six-input table is no constant), and a
+/// ground through a fan into anything but a bypass input; would not catch the
+/// tie going to the wrong lane of the slice, which the decoded arcs the flow
+/// checks against the router's would.
+#[test]
+fn a_carry_lanes_constant_generate_is_tied_on_the_bypass_as_vivado_ties_it() {
+    let Some(root) = chipdb() else { return };
+    let Some(dir) = fixtures() else { return };
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("vivado-bypass-ties");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", "--device", "xc7a100t-ftg256", "--chipdb", &root])
+        .args(["--top", "carry_counter", "--report", "--constraints"])
+        .arg(dir.join("carry_counter.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join("carry_counter.bit"))
+        .arg("--vivado-placement")
+        .arg(out.join("x.tcl"))
+        .arg(dir.join("carry_counter.v"))
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{stderr}");
+    let tied: usize = stderr
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("note: ")?
+                .split_once(" carry generate(s) tied to zero")
+                .map(|(n, _)| n.parse().unwrap())
+        })
+        .unwrap_or_else(|| panic!("no generate tied:\n{stderr}"));
+    // Eleven lanes of three bit pairs over 32 bits, the `+ 1` on `CYINIT`.
+    assert_eq!(tied, 11, "{stderr}");
+    assert!(
+        stderr.contains(", 11 constant generate(s) tied on the lane's bypass input")
+            && !stderr.contains("on their propagate's own table"),
+        "the lanes were not left on the bypass, or folded:\n{stderr}"
+    );
+    let decode = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "--device",
+            "xc7a100t-ftg256",
+            "--chipdb",
+            &root,
+            "--decode",
+        ])
+        .arg(out.join("carry_counter.bit"))
+        .output()
+        .expect("failed to run the reticle binary");
+    assert!(decode.status.success());
+    let decoded = String::from_utf8_lossy(&decode.stdout);
+    let features: Vec<(&str, &str)> = decoded.lines().filter_map(|l| l.split_once(' ')).collect();
+    let alts: Vec<&(&str, &str)> = features
+        .iter()
+        .filter(|(_, f)| f.starts_with("BYP_ALT") && f.contains(".GFAN"))
+        .collect();
+    assert_eq!(alts.len(), tied, "{alts:?}");
+    for (tile, feature) in &alts {
+        let fan = feature.split_once('.').unwrap().1;
+        assert!(
+            features.contains(&(tile, &format!("{fan}.GND_WIRE"))),
+            "`{tile}` takes `{feature}` with no ground on `{fan}`"
+        );
+    }
+    // Nothing else of the design reads a ground fan.
+    let fanned = features
+        .iter()
+        .filter(|(_, f)| f.ends_with(".GFAN0") || f.ends_with(".GFAN1"))
+        .count();
+    assert_eq!(fanned, tied, "a ground fan into something else");
+    let verilog = std::fs::read_to_string(out.join("x.v")).unwrap();
+    assert!(
+        verilog
+            .lines()
+            .any(|l| l.trim_start().starts_with("CARRY4") && l.contains(".DI({1'b0, 1'b0, 1'b0")),
+        "no `CARRY4` written with its generates the zero:\n{verilog}"
+    );
+}
+
 /// **A frame's Hamming code names nothing, and is counted apart.** Would catch
 /// the range being wrong at either end: bit 12 of word 50 is the code, and bit
 /// 13 is not. A lone bit of code on an empty frame is the wrong code, so it is

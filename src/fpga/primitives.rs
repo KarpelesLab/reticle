@@ -320,8 +320,10 @@ pub struct MapOptions {
     /// six inputs, and Vivado's lane. Two leaves the lane's table four
     /// inputs, so that the chain's constant generate can come off that
     /// table's own `O5` (`xray::CarryOptions::generates_on_their_tables`)
-    /// rather than off a buffer table in front of it; `reticle fpga` asks for
-    /// two on the 7 series unless `--synthesis legacy`.
+    /// rather than off a buffer table in front of it. `reticle fpga` asks for
+    /// three on the 7 series, the generate tied on the bypass input
+    /// (`xray::CarryOptions::generates_on_the_bypass`), and a caller's fewer
+    /// are kept (`flow::VIVADO_COMPARE_LANE_BITS`).
     pub compare_lane_bits: u32,
     /// Leave in lookup tables the adders Vivado leaves there, rather than
     /// every adder of [`MapOptions::min_carry_width`] bits and more on the
@@ -6372,10 +6374,35 @@ impl Mapper<'_> {
             // Most significant first: `{0, L[lanes-1], ..., L[0]}`.
             parts.reverse();
             parts.insert(0, const_expr(module, Const::from_u64(0, 1), span));
-            let lanes_expr = expr(module, ExprKind::Concat(parts), span);
-            let one = const_expr(module, Const::from_u64(1, lanes + 1), span);
+            // With the chain's ends on its own pins (`carry_ends`), the `+ 1`
+            // is a low bit both operands share, `{0, L, 1} + {0, 1}`, which
+            // goes on `CYINIT`: every lane is then `S = L`, its generate the
+            // zero it amounts to, as Vivado's are. As `{0, L} + 1` lane 0 was
+            // `S = ~L[0]` with `L[0]` on its generate, a second table of the
+            // same inputs, which at three bit pairs a lane shares no table
+            // with the first and came in on the bypass input from another
+            // slice. The top bit is the carry out either way.
+            let shared = self.options.carry_ends;
+            let (lanes_expr, one, top) = if shared {
+                parts.push(const_expr(module, Const::from_u64(1, 1), span));
+                let low = vec![
+                    const_expr(module, Const::from_u64(0, lanes + 1), span),
+                    const_expr(module, Const::from_u64(1, 1), span),
+                ];
+                (
+                    expr(module, ExprKind::Concat(parts), span),
+                    expr(module, ExprKind::Concat(low), span),
+                    lanes + 1,
+                )
+            } else {
+                (
+                    expr(module, ExprKind::Concat(parts), span),
+                    const_expr(module, Const::from_u64(1, lanes + 1), span),
+                    lanes,
+                )
+            };
             let label = format!("{name}$chain");
-            let sum = add_net(module, &label, Type::bits(lanes + 1), span);
+            let sum = add_net(module, &label, Type::bits(top + 1), span);
             add_cell(
                 module,
                 &label,
@@ -6385,7 +6412,7 @@ impl Mapper<'_> {
                 span,
             );
             let sum = net_expr(module, sum, span);
-            let all = slice_expr(module, sum, lanes, lanes, span);
+            let all = slice_expr(module, sum, top, top, span);
             add_cell(
                 module,
                 &format!("{name}$all"),

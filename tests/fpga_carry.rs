@@ -1006,6 +1006,107 @@ fn generates_come_off_their_own_o5(module: &Module) {
     assert!(lanes > 0, "no lane took its generate off `O5`");
 }
 
+/// The other part a simulation cannot see: **where a constant generate comes
+/// from on the slice.** Simulated, a `CARRY4`'s `DI` tied to a constant is
+/// that constant; on the slice it is the lane's bypass input `<L>X` (`<L>CY0`
+/// clear) or its table's `O5` (`<L>CY0` set), and the bitstream takes it from
+/// `O5` unless the lane is marked as tied on the bypass
+/// (`fpga::xray::BYPASS_GENERATES`). So every live lane whose generate is a
+/// constant is either marked, with its propagate a table and not lane `A`
+/// beside a carry in from the fabric, which holds `AX`; or unmarked, with its
+/// propagate's table holding that constant in its lower half. A lane marked
+/// whose generate is a signal, or unmarked whose table's `O5` is anything but
+/// the constant, would simulate right and compute something else on the part.
+fn constant_generates_have_a_source(module: &Module) {
+    use reticle::ir::emit::{BitView, SigBit};
+    let view = BitView::new(module).expect("the legalised module is structural");
+    let mut driver: std::collections::HashMap<SigBit, (CellId, String)> =
+        std::collections::HashMap::new();
+    for (id, cell) in module.cells.iter() {
+        for (port, net) in &cell.outputs {
+            for bit in view.net_bits(*net, cell.span).expect("a bit vector") {
+                driver.insert(view.canonical(bit), (id, port.as_str().to_owned()));
+            }
+        }
+    }
+    let bits = |e| -> Vec<SigBit> {
+        view.expr_bits(e)
+            .expect("a structural pin")
+            .into_iter()
+            .map(|b| view.canonical(b))
+            .collect()
+    };
+    for (_, cell) in module.cells.iter() {
+        if !matches!(&cell.kind, CellKind::Blackbox(n) if n.as_str() == "CARRY4") {
+            continue;
+        }
+        let marked = cell
+            .attrs
+            .get(fpga::xray::BYPASS_GENERATES)
+            .and_then(AttrValue::as_int)
+            .unwrap_or(0);
+        let fabric_init = cell
+            .input("CYINIT")
+            .is_some_and(|e| matches!(bits(e).first(), Some(SigBit::Slot(_))));
+        let s = bits(cell.input("S").expect("`S`"));
+        let di = bits(cell.input("DI").expect("`DI`"));
+        for lane in 0..4 {
+            let tied = marked & (1 << lane) != 0;
+            let constant = match di[lane] {
+                SigBit::Const(b @ (Bit::Zero | Bit::One)) => Some(b),
+                _ => None,
+            };
+            let table = driver.get(&s[lane]);
+            if tied {
+                assert!(
+                    constant.is_some(),
+                    "`{}` lane {lane} is marked as tied on the bypass and its generate is {:?}",
+                    cell.name,
+                    di[lane]
+                );
+                assert!(
+                    !(lane == 0 && fabric_init),
+                    "`{}` ties lane A's generate on `AX`, which its carry in from the fabric holds",
+                    cell.name
+                );
+                assert!(
+                    table.is_some_and(|(t, port)| {
+                        matches!(&module.cells[*t].kind, CellKind::Blackbox(n) if n.as_str().starts_with("LUT"))
+                            && (port == "O" || port == "O6")
+                    }),
+                    "`{}` lane {lane} is tied on the bypass and its propagate is no table's output",
+                    cell.name
+                );
+                continue;
+            }
+            let Some(value) = constant else {
+                continue;
+            };
+            // Unmarked: the propagate's table, its lower half the constant
+            // whatever its inputs, which is what `O5` reads.
+            let Some((t, port)) = table else {
+                continue;
+            };
+            let t = &module.cells[*t];
+            if !matches!(&t.kind, CellKind::Blackbox(n) if n.as_str() == "LUT6" || n.as_str() == "LUT6_2")
+                || !(port == "O" || port == "O6")
+            {
+                continue;
+            }
+            let Some(AttrValue::Const(init)) = t.params.get("INIT") else {
+                panic!("`{}` has no `INIT`", t.name);
+            };
+            assert!(
+                (0..32).all(|i| init.bit(i) == value),
+                "`{}` lane {lane}: the generate is {value:?} and `{}`'s lower half, which `O5` \
+                 reads, is not",
+                cell.name,
+                t.name
+            );
+        }
+    }
+}
+
 /// The net of a port, by name.
 fn port_net(module: &Module, name: &str) -> NetId {
     module
@@ -1052,12 +1153,32 @@ fn check_full(shape: Shape, width: u32, device: &str, map: MapOptions, legalise:
     check_full_with(shape, width, device, &options, legalise, pack);
 }
 
-/// [`check_full`] with the whole of the flow's options.
+/// [`check_full`] with the whole of the flow's options, the chain legalised
+/// as `reticle fpga` legalises it: with Vivado's synthesis, a constant
+/// generate tied on the lane's bypass input, and where that is the carry in's,
+/// on its propagate's own table where it fits.
 fn check_full_with(
     shape: Shape,
     width: u32,
     device: &str,
     options: &FpgaOptions,
+    legalise: bool,
+    pack: bool,
+) -> Option<fpga::xray::CarryPacking> {
+    let carry = fpga::xray::CarryOptions {
+        generates_on_their_tables: options.vivado_synthesis,
+        generates_on_the_bypass: options.vivado_synthesis,
+    };
+    check_full_carry(shape, width, device, options, &carry, legalise, pack)
+}
+
+/// [`check_full_with`], the chain legalised with `carry`.
+fn check_full_carry(
+    shape: Shape,
+    width: u32,
+    device: &str,
+    options: &FpgaOptions,
+    carry: &fpga::xray::CarryOptions,
     legalise: bool,
     pack: bool,
 ) -> Option<fpga::xray::CarryPacking> {
@@ -1069,16 +1190,12 @@ fn check_full_with(
     let mut packing = None;
     if legalise {
         let device = fpga::target(device).expect("a built-in device");
-        // As `reticle fpga` legalises: with Vivado's synthesis, a constant
-        // generate on its propagate's own table where it fits.
-        let carry = fpga::xray::CarryOptions {
-            generates_on_their_tables: options.vivado_synthesis,
-        };
         packing = Some(
-            fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
+            fpga::xray::legalise_carries_with(&mut design, top, device, carry)
                 .expect("the chain legalises"),
         );
         carry_ins_have_ax_to_themselves(design.module(top));
+        constant_generates_have_a_source(design.module(top));
         if pack {
             let pairing = fpga::xray::pack_lut_pairs(
                 &mut design,
@@ -1514,25 +1631,37 @@ fn an_equality_on_the_chain_is_right_once_legalised() {
 /// left low (the lane reads its own constant), and the fold leaking into the
 /// legacy flow; would not catch the slice's `<L>CY0` reading `O5` other than
 /// as the database says, which is quoted.
+///
+/// That was the default until the generates were tied on the bypass input
+/// (`an_equalitys_generates_are_tied_on_the_bypass`); the lanes of two and the
+/// fold are asked for here by name, as a carry in from the fabric still has
+/// the fold for lane `A`.
 #[test]
 fn an_equalitys_generates_go_on_its_lanes_own_tables() {
-    let vivado = vivado();
+    let vivado = FpgaOptions {
+        map: MapOptions {
+            compare_lane_bits: 2,
+            ..MapOptions::default()
+        },
+        ..vivado()
+    };
+    let fold = fpga::xray::CarryOptions {
+        generates_on_their_tables: true,
+        generates_on_the_bypass: false,
+    };
     for width in [9, 10] {
-        let packing = check_full_with(Shape::EqualPlain, width, XC7, &vivado, true, false)
+        let packing = check_full_carry(Shape::EqualPlain, width, XC7, &vivado, &fold, true, false)
             .expect("legalised");
-        // Lane 0 adds the `+ 1` to its own equality, so its generate is that
-        // equality, a signal on the bypass input; every lane above has the
-        // generate zero, and every one is folded, with no buffer.
+        // The `+ 1` is on `CYINIT` (`carry_ends`), so every lane's generate
+        // is the zero it amounts to, and every one is folded, with no buffer.
+        // (Until the `+ 1` went there, lane 0 added it to its own equality,
+        // its generate that equality, a signal on the bypass input.)
         let lanes = usize::try_from(width.div_ceil(2)).unwrap();
-        assert_eq!(
-            packing.generates_folded,
-            lanes - 1,
-            "{width} bits: {packing:?}"
-        );
+        assert_eq!(packing.generates_folded, lanes, "{width} bits: {packing:?}");
         assert_eq!(packing.buffers, 0, "{width} bits: {packing:?}");
     }
-    let packing =
-        check_full_with(Shape::EqualWidened, 4, XC7, &vivado, true, false).expect("legalised");
+    let packing = check_full_carry(Shape::EqualWidened, 4, XC7, &vivado, &fold, true, false)
+        .expect("legalised");
     assert!(packing.generates_folded > 0, "widened: {packing:?}");
     // Legacy: lanes of three, and buffers, as before, even for the top lane
     // of ten bits, one bit pair, whose table would have room.
@@ -1546,6 +1675,125 @@ fn an_equalitys_generates_go_on_its_lanes_own_tables() {
     let packing = check_full_with(Shape::Equal, 10, XC7, &legacy, true, false).expect("legalised");
     assert_eq!(packing.generates_folded, 0, "legacy: {packing:?}");
     assert!(packing.generates > 0, "legacy: {packing:?}");
+}
+
+/// **Under `--synthesis vivado` an equality's lanes are three bit pairs, and
+/// their constant generates are tied on the slice's bypass input, as Vivado
+/// ties them; and it is still right.** Every input of `a == b` at 9 and 10
+/// bits and of the widened shape, mapped by the default synthesis and
+/// legalised as `reticle fpga` legalises it; then the counts: a lane for each
+/// three bit pairs, every lane's generate tied, lane 0's too (the `+ 1` on
+/// `CYINIT`), and no buffer and no fold. And the legacy synthesis, which ties nothing, as it was.
+///
+/// Would catch the lanes of two again (the counts), a tie leaking into the
+/// legacy flow, a lane marked whose generate is a signal or that is lane `A`
+/// beside a carry in from the fabric, and a lane left with its constant on
+/// `DI` and neither marked nor given a table holding it on `O5`
+/// (`constant_generates_have_a_source`: the simulation reads `DI` as the
+/// constant either way). Would not catch the tie itself made wrong on the
+/// fabric, which is the bitstream's business and `tests/fpga_xray.rs`'s.
+#[test]
+fn an_equalitys_generates_are_tied_on_the_bypass() {
+    let vivado = vivado();
+    for width in [9, 10] {
+        let packing = check_full_with(Shape::EqualPlain, width, XC7, &vivado, true, false)
+            .expect("legalised");
+        // The `+ 1` is on `CYINIT`, so every lane is its equality on `S` and
+        // the zero on its generate, and every one is tied: lane 0 too, which
+        // as `{0, L} + 1` was `S = ~L[0]` and `L[0]` on its generate, a table
+        // of its own that came in on the bypass from another slice.
+        let lanes = usize::try_from(width.div_ceil(3)).unwrap();
+        assert_eq!(
+            packing.generates_on_bypass, lanes,
+            "{width} bits: {packing:?}"
+        );
+        assert_eq!(packing.kept, 0, "{width} bits: {packing:?}");
+        assert_eq!(packing.generates_folded, 0, "{width} bits: {packing:?}");
+        assert_eq!(packing.buffers, 0, "{width} bits: {packing:?}");
+    }
+    let packing =
+        check_full_with(Shape::EqualWidened, 4, XC7, &vivado, true, false).expect("legalised");
+    assert!(packing.generates_on_bypass > 0, "widened: {packing:?}");
+    let legacy = FpgaOptions {
+        map: MapOptions {
+            min_compare_carry_width: 4,
+            ..MapOptions::default()
+        },
+        ..FpgaOptions::default()
+    };
+    let packing = check_full_with(Shape::Equal, 10, XC7, &legacy, true, false).expect("legalised");
+    assert_eq!(packing.generates_on_bypass, 0, "legacy: {packing:?}");
+}
+
+/// **Lane `A`'s constant generate is not left on `AX` when a carry in from the
+/// fabric holds `AX`**, which Vivado's own `probe2` showed it does not do
+/// either: it takes that lane's one off `O5` with a table of its own
+/// (`docs/fpga-vivado-parity.md`, "A ground on the bypass input"). One `CARRY4`
+/// by hand, `CYINIT` a port, lane 0's propagate a six-input table and its
+/// generate a zero, `CO[0]` read; legalised with the bypass on, nothing is
+/// tied, the generate goes on a buffer's `O5` (six inputs leave no room on the
+/// table's own), and `constant_generates_have_a_source` holds.
+///
+/// Would catch lane `A` tied whatever the carry in, which no shape the mapper
+/// writes reaches (its carry ins beside a constant generate are constants), and
+/// which would put the tie and the carry in on one wire; would not catch the
+/// placer seating it anyway, which it cannot, both being signals on `AX`.
+#[test]
+fn lane_as_generate_is_not_tied_on_the_carry_ins_ax() {
+    let mut b = ModuleBuilder::new("top", span());
+    let i = b.input("i", Type::bits(6));
+    let c = b.input("c", Type::bit());
+    let y = b.output("y", Type::bit());
+    let s0 = b.add_net("s0", Type::bit());
+    let ie = b.net(i);
+    let pins: Vec<(Name, reticle::ir::ExprId)> = (0..6)
+        .map(|k| (Name::new(format!("I{k}")), b.slice(ie, k, k)))
+        .collect();
+    let table = b.cell(
+        "lane0",
+        CellKind::Blackbox(Name::new("LUT6")),
+        pins,
+        vec![(Name::new("O"), s0)],
+    );
+    b.module_mut().cells[table].params.set(
+        "INIT",
+        AttrValue::Const(reticle::ir::Const::from_u64(0x6996_9669_9669_6996, 64)),
+    );
+    let co = b.add_net("co", Type::bits(4));
+    let o = b.add_net("o", Type::bits(4));
+    let x = b.constant(reticle::ir::Const::from_bits(&[Bit::X; 3]));
+    let s0e = b.net(s0);
+    let s = b.concat(vec![x, s0e]);
+    let di = b.const_u64(4, 0);
+    let ce = b.net(c);
+    let zero = b.const_u64(1, 0);
+    b.cell(
+        "chain",
+        CellKind::Blackbox(Name::new("CARRY4")),
+        vec![
+            (Name::new("S"), s),
+            (Name::new("DI"), di),
+            (Name::new("CI"), zero),
+            (Name::new("CYINIT"), ce),
+        ],
+        vec![(Name::new("O"), o), (Name::new("CO"), co)],
+    );
+    let coe = b.net(co);
+    let first = b.slice(coe, 0, 0);
+    b.assign(y, first);
+    let mut design = Design::new();
+    let top = design.add_module(b.finish());
+    design.top = Some(top);
+    let device = fpga::target(XC7).expect("a built-in device");
+    let carry = fpga::xray::CarryOptions {
+        generates_on_their_tables: true,
+        generates_on_the_bypass: true,
+    };
+    let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
+        .expect("the chain legalises");
+    assert_eq!(packing.generates_on_bypass, 0, "{packing:?}");
+    assert_eq!(packing.buffers, 1, "{packing:?}");
+    constant_generates_have_a_source(design.module(top));
 }
 
 /// **An equality compared in kept lanes is right.** `compare_in_lanes`
@@ -2408,11 +2656,21 @@ mod proofs {
     /// as that model says.
     #[test]
     fn an_equality_with_its_generates_on_its_tables_is_proved() {
+        // The lanes of two and the fold, by name: see
+        // `an_equalitys_generates_go_on_its_lanes_own_tables`.
+        let options = FpgaOptions {
+            map: MapOptions {
+                compare_lane_bits: 2,
+                ..MapOptions::default()
+            },
+            ..vivado()
+        };
         for width in [16, 32] {
-            let (mut design, top, _) = mapped_with(Shape::EqualPlain, width, XC7, &vivado());
+            let (mut design, top, _) = mapped_with(Shape::EqualPlain, width, XC7, &options);
             let device = fpga::target(XC7).expect("a built-in device");
             let carry = fpga::xray::CarryOptions {
                 generates_on_their_tables: true,
+                generates_on_the_bypass: false,
             };
             let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
                 .expect("the chain legalises");
@@ -2427,6 +2685,47 @@ mod proofs {
             assert!(
                 matches!(report.outcome, EquivOutcome::Equivalent(_)),
                 "`a == b` at {width} bits, legalised, is not proved equivalent:\n{}",
+                report.render("legalised", "reference")
+            );
+        }
+    }
+
+    /// **An equality on the chain under `--synthesis vivado`, its lanes of
+    /// three bit pairs and their constant generates tied on the bypass input,
+    /// legalised as `reticle fpga` legalises it, proved** at 16 and 32 bits,
+    /// which simulation cannot enumerate, with every lane's tie checked
+    /// (`constant_generates_have_a_source`). The `CARRY4` reads a tied lane's
+    /// `DI` as the constant, which is what the bitstream's tie gives it. Would
+    /// catch what `an_equalitys_generates_are_tied_on_the_bypass` would, at any
+    /// width; would not catch the tie on the fabric reading other than the
+    /// constant, which the bitstream checks are for.
+    #[test]
+    fn an_equality_with_its_generates_on_the_bypass_is_proved() {
+        for width in [16, 32] {
+            let (mut design, top, _) = mapped_with(Shape::EqualPlain, width, XC7, &vivado());
+            let device = fpga::target(XC7).expect("a built-in device");
+            let carry = fpga::xray::CarryOptions {
+                generates_on_their_tables: true,
+                generates_on_the_bypass: true,
+            };
+            let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
+                .expect("the chain legalises");
+            assert_eq!(
+                packing.generates_on_bypass,
+                usize::try_from(width.div_ceil(3)).unwrap(),
+                "{width} bits: {packing:?}"
+            );
+            constant_generates_have_a_source(design.module(top));
+            let modelled = model_primitives(design.module(top).clone());
+            let mut proof = Design::new();
+            let mut reference = Shape::EqualPlain.module("reference", width);
+            reference.name = Name::new("reference");
+            let a = proof.add_module(modelled);
+            let b = proof.add_module(reference);
+            let report = check_equivalent(&proof, a, b, &EquivOptions::default());
+            assert!(
+                matches!(report.outcome, EquivOutcome::Equivalent(_)),
+                "`a == b` at {width} bits, tied on the bypass, is not proved equivalent:\n{}",
                 report.render("legalised", "reference")
             );
         }

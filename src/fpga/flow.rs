@@ -395,15 +395,18 @@ pub const VIVADO_MIN_ORDERING_CARRY_WIDTH: u32 = 7;
 pub const VIVADO_MIN_EQUALITY_CARRY_WIDTH: u32 = 9;
 
 /// The bit pairs a lane of an equality on the chain takes under
-/// [`FpgaOptions::vivado_synthesis`]. Vivado's lanes take three, a table's
-/// six inputs, and its chain's generate is a constant zero it ties to the
-/// slice's bypass input; this flow takes a constant generate from a table's
-/// `O5`, which a lane of six inputs leaves no room for, so a lane of three
-/// was its table and a buffer table in front of the `CARRY4`. Two leave the
-/// lane's table four inputs and the generate on its own `O5`
-/// (`xray::CarryOptions::generates_on_their_tables`): one table before the
-/// chain, Vivado's depth, for a third more lanes.
-pub const VIVADO_COMPARE_LANE_BITS: u32 = 2;
+/// [`FpgaOptions::vivado_synthesis`]: three, a table's six inputs, as Vivado's
+/// lanes take, with the chain's constant generate tied to the slice's bypass
+/// input as Vivado ties it (`xray::CarryOptions::generates_on_the_bypass`).
+///
+/// It was two while this flow took a constant generate from a table's `O5`,
+/// which a lane of six inputs leaves no room for: a lane of three was then its
+/// table and a buffer table in front of the `CARRY4`, and two left the lane's
+/// table four inputs and the generate on its own `O5`
+/// (`xray::CarryOptions::generates_on_their_tables`), Vivado's depth for a
+/// third more lanes and `CARRY4`s (`docs/fpga-vivado-parity.md`, "A ground on
+/// the bypass input"). A caller's narrower lanes are kept.
+pub const VIVADO_COMPARE_LANE_BITS: u32 = 3;
 
 #[cfg(feature = "synth")]
 impl Default for FpgaOptions {
@@ -663,7 +666,7 @@ pub fn synthesize_for(
             .min_constant_ordering_lane_width
             .min(VIVADO_MIN_ORDERING_CARRY_WIDTH);
         map.carry_ends = true;
-        map.compare_lane_bits = VIVADO_COMPARE_LANE_BITS;
+        map.compare_lane_bits = map.compare_lane_bits.min(VIVADO_COMPARE_LANE_BITS);
         map.vivado_adder_widths = true;
         map.ternary_adders = true;
     }

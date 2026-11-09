@@ -17,7 +17,9 @@
 //! - **A constant generate input has one source.** `DI` comes from the
 //!   slice's bypass input `<L>X` (the default, `CARRY4.<L>CY0` clear) or
 //!   from the lookup table's `O5` (`<L>CY0` set). A bypass input that is
-//!   not routed reads one, so a constant zero has to come from `O5`.
+//!   not routed reads one, so a constant zero comes from `O5`, or from a
+//!   ground the flow ties to the bypass input after routing, as Vivado ties
+//!   it ([`CarryOptions::generates_on_the_bypass`]).
 //!
 //! [`legalise_carries`] closes both, and changes no logic doing it:
 //!
@@ -69,6 +71,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::fpga::device::{BelRole, Device};
+use crate::fpga::place::{Netlist, Signal};
 use crate::fpga::primitives::{
     Names, add_assign, add_cell, add_cell_in, add_net, add_net_in, const_expr, expr, net_expr,
     slice_expr,
@@ -108,6 +111,10 @@ pub struct CarryPacking {
     /// Constant generates put on their propagate table's own `O5`
     /// ([`CarryOptions::generates_on_their_tables`]), with no buffer.
     pub generates_folded: usize,
+    /// Constant generates left on the lane's bypass input, to be tied there
+    /// after routing ([`CarryOptions::generates_on_the_bypass`]), with no
+    /// buffer and nothing in the table.
+    pub generates_on_bypass: usize,
 }
 
 impl CarryPacking {
@@ -115,7 +122,7 @@ impl CarryPacking {
     /// propagate's table are named only when there are any, so that a build
     /// that does not ask for it reports what it always did.
     pub fn to_text(&self) -> String {
-        let folded = if self.generates_folded > 0 {
+        let mut folded = if self.generates_folded > 0 {
             format!(
                 ", {} constant generate(s) on their propagate's own table",
                 self.generates_folded
@@ -123,6 +130,12 @@ impl CarryPacking {
         } else {
             String::new()
         };
+        if self.generates_on_bypass > 0 {
+            folded.push_str(&format!(
+                ", {} constant generate(s) tied on the lane's bypass input",
+                self.generates_on_bypass
+            ));
+        }
         format!(
             "carry chains: {} CARRY4, {} propagate bit(s) on their own lookup table, \
              {} buffer and {} constant lookup table(s) added ({} feeding a constant \
@@ -158,6 +171,12 @@ enum Propagate {
     /// so `A6` is free to choose the half. Only with
     /// [`CarryOptions::generates_on_their_tables`].
     Fold,
+    /// Keep the lookup table that drives it, and leave the lane's constant
+    /// generate on the slice's bypass input `<L>X`, which is tied to the
+    /// constant after routing as Vivado ties it (`GND_WIRE`, a `GFAN`, the
+    /// lane's `BYP_ALT`, for a zero; nothing driven, for a one). Only with
+    /// [`CarryOptions::generates_on_the_bypass`].
+    Tie,
 }
 
 /// What [`legalise_carries_with`] may do beyond what a slice requires.
@@ -171,11 +190,37 @@ pub struct CarryOptions {
     /// generate is a constant zero, was a lane table, a wire and a buffer
     /// before the `CARRY4`. Vivado has no buffer there: it ties the generate
     /// to the slice's bypass input, `GND_WIRE` through a `GFAN` and a
-    /// `BYP_ALT`, which this flow does not route. Off, every constant
-    /// generate takes a buffer as it always did; `reticle fpga` turns it on
-    /// with the default `--synthesis vivado`.
+    /// `BYP_ALT`, which this flow now does too
+    /// ([`CarryOptions::generates_on_the_bypass`]), and this is what is left
+    /// where it cannot: lane `A` beside a carry in from the fabric. Off,
+    /// every constant generate takes a buffer as it always did; `reticle
+    /// fpga` turns it on with the default `--synthesis vivado`.
     pub generates_on_their_tables: bool,
+    /// Leave a lane's constant generate on the slice's bypass input `<L>X`,
+    /// for the flow to tie there after routing, wherever its propagate is a
+    /// lookup table of its own and the bypass is not the carry in's (lane
+    /// `A` beside a carry in from the fabric falls back to
+    /// [`CarryOptions::generates_on_their_tables`] or a buffer). This is
+    /// Vivado's own way: its routed designs ground a constant generate as
+    /// `GND_WIRE` -> `GFAN<k>` -> `BYP_ALT<n>` -> `BYP<n>` -> `<L>X`, with
+    /// `<L>CY0` clear, and give a one the bypass undriven, which reads
+    /// `VCC_WIRE` (`docs/fpga-vivado-parity.md`, "A ground on the bypass
+    /// input"). The table is left as it is, so a lane may read six inputs.
+    ///
+    /// The lanes are marked on the `CARRY4` ([`BYPASS_GENERATES`]); the flow
+    /// gives each such pin a signal nothing drives
+    /// ([`tie_bypass_generates`]), so that the placer keeps every other
+    /// signal off that bypass input, and ties it after routing. `reticle
+    /// fpga` turns it on with the default `--synthesis vivado`.
+    pub generates_on_the_bypass: bool,
 }
+
+/// The attribute [`legalise_carries_with`] marks a `CARRY4` with when some
+/// of its lanes' constant generates are left on the bypass input
+/// ([`CarryOptions::generates_on_the_bypass`]): an integer, bit `n` set for
+/// lane `n`. An attribute rather than a parameter, so that nothing writes it
+/// out: Vivado, given the constant on `DI`, makes the same tie itself.
+pub const BYPASS_GENERATES: &str = "bypass_generates";
 
 /// A function of at most a few signals, as a lookup table computes it:
 /// `inputs` the distinct signals, by where each lives in the module, and
@@ -549,6 +594,12 @@ pub fn legalise_carries_with(
                         let alone = own_lut && propagate_uses.get(&s) == Some(&1);
                         if alone && generate.is_none() {
                             Propagate::Keep
+                        } else if alone
+                            && options.generates_on_the_bypass
+                            && generate.is_some()
+                            && !(lane == 0 && fabric_init)
+                        {
+                            Propagate::Tie
                         } else if let Some(table) = driver
                             .get(&s)
                             .filter(|_| alone && fold_here)
@@ -584,8 +635,9 @@ pub fn legalise_carries_with(
                     },
                     Propagate::Buffer(s) => Some(Function::buffer(s, view.owner(s))),
                     Propagate::Constant(v) => Some(Function::constant(v)),
-                    // A fold has a constant generate, and this a signal one.
-                    Propagate::Dead | Propagate::Fold => None,
+                    // A fold or a tie has a constant generate, and this a
+                    // signal one.
+                    Propagate::Dead | Propagate::Fold | Propagate::Tie => None,
                 };
                 let lower = match di_bits[0] {
                     SigBit::Slot(g) => {
@@ -808,6 +860,8 @@ pub fn legalise_carries_with(
         let old_di = m.cells[id].input(shape.data).expect("checked in the plan");
         let mut s_parts: Vec<ExprId> = Vec::with_capacity(plan.len());
         let mut di_parts: Vec<ExprId> = Vec::with_capacity(plan.len());
+        // The lanes whose generate is left on the bypass input.
+        let mut bypass = 0i64;
         for (lane, step) in plan.iter().enumerate() {
             let bit = u32::try_from(lane).unwrap_or(0);
             let x = || Const::from_bits(&[Bit::X]);
@@ -818,6 +872,19 @@ pub fn legalise_carries_with(
                     slice_expr(m, old_s, bit, bit, span),
                     slice_expr(m, old_di, bit, bit, span),
                 ),
+                Propagate::Tie => {
+                    // The propagate as it was and the generate the constant
+                    // it is, which the flow ties on the lane's bypass input.
+                    let Some(generate) = step.generate else {
+                        return Err(format!("`{name}` lane {lane}: a tie with nothing to tie"));
+                    };
+                    bypass |= 1 << lane;
+                    report.generates_on_bypass += 1;
+                    (
+                        slice_expr(m, old_s, bit, bit, span),
+                        const_expr(m, Const::from_bits(&[bit_of(generate)]), span),
+                    )
+                }
                 Propagate::Fold => {
                     // The propagate's own table made a `LUT6_2`: its function
                     // on `O6`, the upper half over `I0`..`I4` with `I5` tied
@@ -957,6 +1024,9 @@ pub fn legalise_carries_with(
             } else if port.as_str() == shape.data {
                 *value = di;
             }
+        }
+        if bypass != 0 {
+            cell.attrs.set(BYPASS_GENERATES, AttrValue::Int(bypass));
         }
     }
     // The tables folded into a lane's `LUT6_2`, taken out last: a cell's id
@@ -1210,6 +1280,83 @@ fn move_carry_outs(
         add_assign(m, old, value, span);
     }
     Ok(moves.len())
+}
+
+/// Gives each generate [`legalise_carries_with`] left on a `CARRY4`'s bypass
+/// input ([`BYPASS_GENERATES`]) a signal of its own that nothing drives, and
+/// returns how many it gave one.
+///
+/// The pin keeps its constant, which is what the flow ties the bypass input to
+/// after routing (`XrayFabric::configure_block_rams`). The signal is what the
+/// placer reads: a pin with a signal draws on the wires that can reach it,
+/// and a signal that the lane's table does not drive can reach a generate by
+/// the bypass input alone, so no flip-flop of the lane whose data comes from
+/// elsewhere may be put on that input beside it, as for a generate from the
+/// fabric. Each pin has its own signal, so a placer that pulls a signal's pins
+/// together pulls nothing. Nothing routes a signal nothing drives, the
+/// bitstream does not take the pin for a constant on `O5` (`<L>CY0` stays
+/// clear, the bypass's own setting), and the Vivado export, which reads the
+/// cell, writes the constant. Called after the netlist's own check that every
+/// signal read is driven, so that afterwards a `CARRY4` generate whose signal
+/// nothing drives is one of these and nothing else ([`bypass_tie`]).
+pub fn tie_bypass_generates(design: &Design, module: ModuleId, netlist: &mut Netlist) -> usize {
+    let Some(m) = design.modules.get(module) else {
+        return 0;
+    };
+    let mut given = 0;
+    for index in 0..netlist.instances.len() {
+        let instance = &netlist.instances[index];
+        if instance.primitive != "CARRY4" {
+            continue;
+        }
+        let Some(lanes) = m
+            .cells
+            .get(instance.cell)
+            .and_then(|cell| cell.attrs.get(BYPASS_GENERATES))
+            .and_then(AttrValue::as_int)
+        else {
+            continue;
+        };
+        let name = instance.name.clone();
+        let pins = instance.pins.clone();
+        for lane in 0..4 {
+            if lanes & (1 << lane) == 0 {
+                continue;
+            }
+            let role = format!("di{lane}");
+            let Some(pin) = pins.iter().copied().find(|p| {
+                let pin = &netlist.pins[*p];
+                pin.role == role
+                    && pin.signal.is_none()
+                    && matches!(pin.constant, Some(Bit::Zero | Bit::One))
+            }) else {
+                continue;
+            };
+            let signal = netlist.signals.len();
+            netlist.signals.push(Signal {
+                name: format!("{name}.DI[{lane}] on the bypass input"),
+                driver: None,
+                sinks: vec![pin],
+            });
+            netlist.pins[pin].signal = Some(signal);
+            given += 1;
+        }
+    }
+    given
+}
+
+/// The constant a `CARRY4` generate pin is tied to on its lane's bypass input,
+/// when it is one [`tie_bypass_generates`] gave a signal nothing drives.
+pub fn bypass_tie(netlist: &Netlist, pin: usize) -> Option<Bit> {
+    let p = netlist.pins.get(pin)?;
+    if !p.role.starts_with("di") || netlist.instances[p.instance].primitive != "CARRY4" {
+        return None;
+    }
+    let signal = p.signal?;
+    if netlist.signals[signal].driver.is_some() {
+        return None;
+    }
+    p.constant.filter(|b| matches!(b, Bit::Zero | Bit::One))
 }
 
 fn bit_of(value: bool) -> Bit {

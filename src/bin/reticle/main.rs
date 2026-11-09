@@ -4306,10 +4306,13 @@ fn write_xc7_bitstream(
     // beside it, so the mapped netlist is first given a lookup table for
     // every propagate bit that has none. See `xray::legalise_carries`.
     let mut design = design.clone();
-    // With Vivado's synthesis, a constant generate goes on its propagate's own
-    // table where that table has room, as the equality lanes it makes do.
+    // With Vivado's synthesis, a constant generate is tied on the lane's
+    // bypass input as Vivado ties it, and where that input is the carry in's,
+    // goes on its propagate's own table where that table has room.
+    let vivado_synthesis = !synthesis_legacy(args).map_err(|e| e.to_string())?;
     let carry_options = reticle::fpga::xray::CarryOptions {
-        generates_on_their_tables: !synthesis_legacy(args).map_err(|e| e.to_string())?,
+        generates_on_their_tables: vivado_synthesis,
+        generates_on_the_bypass: vivado_synthesis,
     };
     let packing =
         reticle::fpga::xray::legalise_carries_with(&mut design, top, device, &carry_options)?;
@@ -4365,6 +4368,10 @@ fn write_xc7_bitstream(
     check_driverless(&netlist)?;
     reticle::fpga::xray::check_regional_wiring(&netlist)?;
     reticle::fpga::xray::check_serdes_wiring(&netlist)?;
+    // A carry generate left on its lane's bypass input is a signal nothing
+    // drives from here on, so that the placer keeps the input for it, and is
+    // tied after routing. See `xray::tie_bypass_generates`.
+    reticle::fpga::xray::tie_bypass_generates(design, top, &mut netlist);
     let mut options = place_options(args)?;
     // This fabric's anneal effort, unless the command line names one:
     // see `xray::PLACE_EFFORT`.
@@ -4614,6 +4621,14 @@ fn write_xc7_bitstream(
                 &mut closed,
             );
         }
+        // And the wires a carry generate's tie on its bypass input will hold:
+        // see `XrayFabric::bypass_tie_wires`. Nothing without one.
+        fabric.bypass_tie_wires(&graph, &netlist, &placement).close(
+            graph.nodes.len(),
+            &mut node_base,
+            &mut network,
+            &mut closed,
+        );
         // A lookup table's inputs are the router's to choose among, and the
         // truth table follows them below. See `xray::lutswap`.
         let mut equivalent =
