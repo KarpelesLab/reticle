@@ -313,6 +313,16 @@ pub enum PlaceError {
         /// What is wrong, with the rule Vivado refuses it by.
         message: String,
     },
+    /// The finished placement breaks a rule of the fabric's sites: a wire
+    /// two signals need as their only way out of a tile ([`shared_exits`]),
+    /// or a cell its own site's rules refuse beside its neighbours, which is
+    /// the placer's legality asked once more of what it produced. Either is a
+    /// placement no route can finish, or one that routes to the wrong logic,
+    /// so the flow stops here and says which.
+    Illegal {
+        /// Each problem, in words, in netlist order.
+        problems: Vec<String>,
+    },
 }
 
 impl fmt::Display for PlaceError {
@@ -441,6 +451,20 @@ impl fmt::Display for PlaceError {
             }
             PlaceError::Netlist(message) => write!(f, "the netlist cannot be read: {message}"),
             PlaceError::Site { cell, message } => write!(f, "`{cell}`: {message}"),
+            PlaceError::Illegal { problems } => {
+                write!(
+                    f,
+                    "the placement is not one the fabric can hold, {} problem(s):",
+                    problems.len()
+                )?;
+                for problem in problems.iter().take(8) {
+                    write!(f, "\n  {problem}")?;
+                }
+                if problems.len() > 8 {
+                    write!(f, "\n  and {} more", problems.len() - 8)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -2216,6 +2240,17 @@ fn captive_pool(
 /// go are left alone, since either may be read only there: the carry's
 /// sum and the `O5` its lane's generate rides on are such a pair.
 fn exits_of(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<(Vec<NodeId>, bool)> {
+    walk_out(graph, tile, pin).map(|(exits, inside, _)| (exits, inside))
+}
+
+/// [`exits_of`]'s walk, with every wire of the tile it reached as well,
+/// the pin's own included: a reader whose pin is one of those is reached
+/// without leaving the tile. See [`shared_exits`].
+fn walk_out(
+    graph: &RoutingGraph,
+    tile: (u32, u32),
+    pin: NodeId,
+) -> Option<(Vec<NodeId>, bool, Vec<NodeId>)> {
     let local = |node: NodeId| {
         let wire = graph.wire(node);
         !wire.global && wire.tile == tile
@@ -2248,7 +2283,98 @@ fn exits_of(graph: &RoutingGraph, tile: (u32, u32), pin: NodeId) -> Option<(Vec<
         }
     }
     exits.sort_unstable();
-    Some((exits, inside))
+    Some((exits, inside, seen))
+}
+
+/// Two outputs of one tile that both have to leave it by the same wire, and
+/// that wire is the only way out either has: what [`shared_exits`] finds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedExit {
+    /// The wire, as [`Wire::full_name`](super::arch::Wire::full_name) spells it.
+    pub wire: String,
+    /// The two pins, each as `<cell>.<role>`, in netlist order.
+    pub pins: [String; 2],
+    /// The two signals they drive, in the same order.
+    pub signals: [String; 2],
+}
+
+/// Every wire of a finished placement that two signals need as their one way
+/// out of a tile.
+///
+/// This is the rule `SiteRules::exits` holds the placer to, asked again of
+/// the placement that came out, and asked *without* the placer's shortcut. A
+/// 7-series slice's lane has one output mux, `<L>OUTMUX`, and one wire out of
+/// it, `<L>MUX`; the five-input flip-flop's `Q`, a `LUT6_2`'s `O5`, the
+/// carry's sum and carry out and an `F7`/`F8` mux all reach the tile's
+/// interconnect through it alone. Two of those in one lane that each have a
+/// reader outside the slice are a placement no route can finish.
+///
+/// An output needs the wire when one of its readers' pins is not among the
+/// wires the walk from the output reaches inside the tile: a sum read by the
+/// flip-flop of its own lane is not (it goes through `<L>FFMUX`), the same
+/// sum read anywhere else is. The placer asks something coarser, whether
+/// every reader is in the driver's rigid group (`SiteRules::contain`),
+/// because while it moves cells it does not ask where each reader is; here
+/// they have all been placed, so this is the exact question.
+///
+/// An output with more than one way out (a lookup table's `O6`, which has its
+/// own wire as well as the mux) claims nothing: the router takes the other.
+pub fn shared_exits(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+) -> Vec<SharedExit> {
+    let pin_name = |pin: usize| {
+        let pin = &netlist.pins[pin];
+        format!("{}.{}", netlist.instances[pin.instance].name, pin.role)
+    };
+    let mut claims: HashMap<NodeId, (usize, usize)> = HashMap::new();
+    let mut out = Vec::new();
+    for (index, signal) in netlist.signals.iter().enumerate() {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        if signal.sinks.is_empty() {
+            continue;
+        }
+        let pin = &netlist.pins[driver];
+        let Some(site) = placement.site_of(pin.instance) else {
+            continue;
+        };
+        let site = &graph.sites[site];
+        let Some(node) = site.pin(&pin.role) else {
+            continue;
+        };
+        let Some((exits, _, seen)) = walk_out(graph, site.tile, node) else {
+            continue;
+        };
+        let [exit] = exits[..] else {
+            continue;
+        };
+        let leaves = signal.sinks.iter().any(|sink| {
+            let sink = &netlist.pins[*sink];
+            let Some(at) = placement.site_of(sink.instance) else {
+                return false;
+            };
+            let mut nodes = graph.sites[at].pin_nodes(&sink.role).peekable();
+            nodes.peek().is_some() && !nodes.any(|n| seen.contains(&n))
+        });
+        if !leaves {
+            continue;
+        }
+        match claims.get(&exit) {
+            Some((other, other_driver)) if *other != index => out.push(SharedExit {
+                wire: graph.wire(exit).full_name(),
+                pins: [pin_name(*other_driver), pin_name(driver)],
+                signals: [netlist.signals[*other].name.clone(), signal.name.clone()],
+            }),
+            Some(_) => {}
+            None => {
+                claims.insert(exit, (index, driver));
+            }
+        }
+    }
+    out
 }
 
 impl SiteRules {
@@ -3808,7 +3934,58 @@ pub fn place(
     }
     report.work = WORK.with(Cell::get);
     report.route_throughs_needed = needed_throughs(&shared, &placement, &options.route_throughs);
+    let problems = audit(netlist, graph, &placement, &shared, &info);
+    if !problems.is_empty() {
+        return Err(PlaceError::Illegal { problems });
+    }
     Ok((placement, report))
+}
+
+/// Every rule of the fabric's sites the finished `placement` breaks, in
+/// words: [`shared_exits`], then each placed cell put to
+/// [`SiteRules::refusal`] on its own site. Empty for a legal placement.
+/// A cell a constraint put where it is is not asked: a pad is where the
+/// board has it, and the site rules are not what decided it.
+///
+/// Every move the placer makes is judged by the same rules before it is
+/// made, so for the placer's own output this should find nothing. It is
+/// asked anyway because a wrong placement is otherwise found late or not
+/// at all: by the router after a hundred passes over one wire, or by
+/// Vivado, or by nothing, when the route finishes on a wire the rule was
+/// wrong about. And [`shared_exits`] is the exact form of a rule the
+/// placer asks only roughly.
+fn audit(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    shared: &SiteRules,
+    info: &[Placeable],
+) -> Vec<String> {
+    let mut problems: Vec<String> = shared_exits(netlist, graph, placement)
+        .into_iter()
+        .map(|exit| {
+            format!(
+                "`{}` (`{}`) and `{}` (`{}`) both have to leave the tile by `{}`, their \
+                 only way out",
+                exit.pins[0], exit.signals[0], exit.pins[1], exit.signals[1], exit.wire
+            )
+        })
+        .collect();
+    for (instance, cell) in netlist.instances.iter().enumerate() {
+        let Some(site) = placement.site_of(instance) else {
+            continue;
+        };
+        if info[instance].fixed.is_some() {
+            continue;
+        }
+        if let Some(why) = shared.refusal(placement, instance, site) {
+            problems.push(format!(
+                "`{}` on `{}`: {why}",
+                cell.name, graph.sites[site].name
+            ));
+        }
+    }
+    problems
 }
 
 /// Takes clocks out of the clock regions asked for more than their lines
@@ -13617,6 +13794,137 @@ mod tests {
         assert_eq!(members(2, false), (vec![vec![0, 1, 2]], vec![d(1), d(2)]));
         assert_eq!(members(3, false), (vec![vec![0, 1]], vec![d(1)]));
         assert_eq!(members(2, true), (vec![vec![0, 1]], vec![d(1)]));
+    }
+
+    /// One lane's output mux of a 7-series slice, reduced to the exit rule:
+    /// the five-input flip-flop's `q` (on `q5`) and the carry's sum (`o3`, on
+    /// `xor`) both reach `dmux`, the tile's one wire out for either; the sum
+    /// also reaches the lane flip-flop's `d` (`dffd`) without leaving, as
+    /// `DFFMUX.XOR` does. A lookup table's `i0` (`lin`) is fed from `track`,
+    /// which `dmux` drives in the next tile, so a table is a reader outside
+    /// the slice wherever it is. Two tiles of it in a row.
+    fn mux_lane() -> RoutingGraph {
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clb", "logic_tile", 8, 8);
+        for name in ["q5", "xor", "dmux", "dffd", "track", "lin"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for (from, to) in [
+            (WireRef::local("q5"), WireRef::local("dmux")),
+            (WireRef::local("xor"), WireRef::local("dmux")),
+            (WireRef::local("xor"), WireRef::local("dffd")),
+            (WireRef::local("dmux"), WireRef::at("track", 1, 0)),
+            (WireRef::local("track"), WireRef::local("lin")),
+        ] {
+            tile.pips.push(PipDecl {
+                from,
+                to,
+                bits: Vec::new(),
+            });
+        }
+        for (name, kind, role, wire) in [
+            ("five", "ff", "q", "q5"),
+            ("carry", "carry", "o3", "xor"),
+            ("ff", "ff", "d", "dffd"),
+            ("lut", "lut", "i0", "lin"),
+        ] {
+            let mut bel = BelDecl::new(name, kind);
+            bel.pins.push((role.to_owned(), WireRef::local(wire)));
+            tile.bels.push(bel);
+        }
+        arch.tile_types.push(tile);
+        for x in 0..2 {
+            arch.set_tile(x, 0, 0);
+        }
+        arch.build_graph()
+    }
+
+    /// **Two outputs that need one wire out of a tile are found, and a sum
+    /// its own lane's flip-flop reads is not one of them.** `mux_lane` with a
+    /// five-input flip-flop whose `q` a table in the next tile reads, beside
+    /// a carry whose sum the lane's flip-flop reads: legal, the sum never
+    /// leaves the slice, which is what `sad` at seed 2 had and Vivado took
+    /// once its `CARRY4` was placed last. The same sum read by a table as
+    /// well has to leave by `dmux`, which the `q` holds: one shared exit,
+    /// naming both pins and the wire, and the audit reports it. Would catch
+    /// a reader inside the tile counted as leaving (the first case refused,
+    /// as `SiteRules::contain`'s coarser test would refuse it were the
+    /// flip-flop not in the carry's group), a conflict not reported, and the
+    /// audit not asking. Would not catch an output with a second way out made
+    /// to claim the one (no output here has two), nor a fabric whose walk is
+    /// wrong: it reads the graph it is given.
+    #[test]
+    fn two_outputs_that_need_one_wire_out_of_a_tile_are_found() {
+        let graph = mux_lane();
+        let at = |name: &str| {
+            graph
+                .sites
+                .iter()
+                .position(|s| s.name == name)
+                .unwrap_or_else(|| panic!("no site {name}"))
+        };
+        // s0: the five-input flip-flop's q, read by the next tile's table.
+        // s1: the carry's sum, read by the lane's flip-flop, and with
+        // `outside` by this tile's table too.
+        let build = |outside: bool| {
+            let mut specs: Vec<Spec<'_>> = vec![
+                ("ff", "FDRE", &[("q", 0, true)]),
+                ("carry", "CARRY4", &[("o3", 1, true)]),
+                ("ff", "FDRE", &[("d", 1, false)]),
+                ("lut", "LUT1", &[("i0", 0, false)]),
+            ];
+            if outside {
+                specs.push(("lut", "LUT1", &[("i0", 1, false)]));
+            }
+            let netlist = netlist_of(2, &specs);
+            let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+            placement.place(0, at("X0Y0/five"));
+            placement.place(1, at("X0Y0/carry"));
+            placement.place(2, at("X0Y0/ff"));
+            placement.place(3, at("X1Y0/lut"));
+            if outside {
+                placement.place(4, at("X0Y0/lut"));
+            }
+            (netlist, placement)
+        };
+        let (netlist, placement) = build(false);
+        assert_eq!(shared_exits(&netlist, &graph, &placement), Vec::new());
+        let (netlist, placement) = build(true);
+        let found = shared_exits(&netlist, &graph, &placement);
+        assert_eq!(
+            found,
+            vec![SharedExit {
+                wire: "X0Y0/dmux".to_owned(),
+                pins: ["ff0.q".to_owned(), "carry1.o3".to_owned()],
+                signals: ["s0".to_owned(), "s1".to_owned()],
+            }]
+        );
+        let shared = SiteRules::find(&netlist, &graph);
+        let info: Vec<Placeable> = (0..netlist.instances.len())
+            .map(|_| Placeable {
+                fixed: None,
+                region: None,
+                macro_index: None,
+                allowed: None,
+                soft: false,
+            })
+            .collect();
+        let problems = audit(&netlist, &graph, &placement, &shared, &info);
+        assert!(
+            problems
+                .first()
+                .is_some_and(|p| p.contains("`ff0.q`") && p.contains("`X0Y0/dmux`")),
+            "{problems:?}"
+        );
+        let error = PlaceError::Illegal { problems }.to_string();
+        assert!(
+            error.starts_with("the placement is not one the fabric can hold"),
+            "{error}"
+        );
     }
 
     /// One instance for [`netlist_of`]: its kind, primitive and pins.
