@@ -567,6 +567,12 @@ struct Writer<'a> {
     placed: Vec<String>,
     locks: Vec<String>,
     cells: usize,
+    /// Per `CARRY4` cell name and lane, the wire its generate is written as
+    /// in place of the constant: the lane table's `O5`. See
+    /// [`generate_halves`].
+    generates: HashMap<(String, usize), String>,
+    /// Wires the module has no net for, declared with the rest.
+    wires: Vec<String>,
 }
 
 impl Writer<'_> {
@@ -604,6 +610,37 @@ impl Writer<'_> {
         Ok(())
     }
 
+    /// [`Writer::lut`] with its output on `wire`, which the module has no
+    /// net for.
+    fn lut_to(
+        &mut self,
+        name: &str,
+        half: &LutHalf,
+        wire: &str,
+        site: &str,
+        bel: &str,
+    ) -> Result<(), VivadoExportError> {
+        let mut pins = String::new();
+        let mut lock = Vec::new();
+        for (i, (physical, bit)) in half.pins.iter().enumerate() {
+            let _ = write!(pins, ".I{i}({}), ", self.names.bit(*bit));
+            lock.push(format!("I{i}:A{}", physical + 1));
+        }
+        let _ = writeln!(
+            self.verilog,
+            "  LUT{} #(.INIT({})) {name} ({pins}.O({wire}));",
+            half.pins.len(),
+            init_literal(&half.table)
+        );
+        self.placed.push(format!("  {name} {site}/{bel}"));
+        self.locks.push(format!(
+            "set_property LOCK_PINS {{{}}} [get_cells {name}]",
+            lock.join(" ")
+        ));
+        self.cells += 1;
+        Ok(())
+    }
+
     /// One cell as it stands, on one bel.
     fn plain(
         &mut self,
@@ -622,6 +659,21 @@ impl Writer<'_> {
                 .into_iter()
                 .map(|b| view.canonical(b))
                 .collect();
+            if primitive == "CARRY4" && port.as_str() == "DI" {
+                let written: Vec<String> = bits
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .map(|(lane, b)| {
+                        self.generates
+                            .get(&(name.to_owned(), lane))
+                            .cloned()
+                            .unwrap_or_else(|| self.names.bit(*b))
+                    })
+                    .collect();
+                items.push(format!(".{port}({{{}}})", written.join(", ")));
+                continue;
+            }
             items.push(format!(".{port}({})", self.names.bits(&bits)));
         }
         for (port, net) in &cell.outputs {
@@ -646,6 +698,117 @@ impl Writer<'_> {
         );
         Ok(())
     }
+}
+
+/// Each lookup table that holds a carry lane's constant generate in its lower
+/// half, by instance: `(the CARRY4, the lane, the constant)`. A lane's
+/// generate tied to a constant is read off its table's `O5` (`xray::carry`,
+/// `sites::carry_tied`), and the table is the one driving the lane's
+/// propagate.
+fn generate_halves(netlist: &Netlist) -> HashMap<usize, (usize, usize, Bit)> {
+    let mut out = HashMap::new();
+    for (carry, instance) in netlist.instances.iter().enumerate() {
+        if instance.primitive != "CARRY4" {
+            continue;
+        }
+        let pin = |role: &str| {
+            instance
+                .pins
+                .iter()
+                .map(|p| &netlist.pins[*p])
+                .find(|p| p.role == role)
+        };
+        for lane in 0..4 {
+            let Some(value) = pin(&format!("di{lane}"))
+                .filter(|p| p.signal.is_none())
+                .and_then(|p| p.constant)
+                .filter(|b| matches!(b, Bit::Zero | Bit::One))
+            else {
+                continue;
+            };
+            let Some(table) = pin(&format!("p{lane}"))
+                .and_then(|p| p.signal)
+                .and_then(|s| netlist.signals[s].driver)
+                .map(|d| netlist.pins[d].instance)
+                .filter(|t| netlist.instances[*t].primitive == "LUT6")
+            else {
+                continue;
+            };
+            out.insert(table, (carry, lane, value));
+        }
+    }
+    out
+}
+
+/// Each `CARRY4` lane nothing reads whose bypass input a route ends on, with
+/// the bit that route carries: `((the CARRY4, the lane), the bit)`.
+fn unread_bypasses(
+    view: &BitView<'_>,
+    module: &crate::ir::Module,
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    routing: &Routing,
+) -> BTreeMap<(usize, usize), SigBit> {
+    // The bypass inputs wanted, by node.
+    let mut wanted: HashMap<NodeId, (usize, usize)> = HashMap::new();
+    for (carry, instance) in netlist.instances.iter().enumerate() {
+        if instance.primitive != "CARRY4" {
+            continue;
+        }
+        let Some(site) = placement.site_of(carry) else {
+            continue;
+        };
+        for lane in 0..4 {
+            let role = format!("di{lane}");
+            let unread = instance.pins.iter().any(|p| {
+                let pin = &netlist.pins[*p];
+                pin.role == role && pin.signal.is_none() && pin.constant == Some(Bit::X)
+            });
+            if !unread {
+                continue;
+            }
+            let Some(generate) = graph.sites[site].pin(&role) else {
+                continue;
+            };
+            if let Some(bypass) = graph
+                .incoming(generate)
+                .iter()
+                .find(|pip| graph.pip_bits(**pip).is_empty())
+                .map(|pip| graph.pip(*pip).from)
+            {
+                wanted.insert(bypass, (carry, lane));
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    if wanted.is_empty() {
+        return out;
+    }
+    for route in routing.routes() {
+        for node in &route.nodes {
+            let Some(at) = wanted.get(node) else {
+                continue;
+            };
+            // The bit the signal is, read off the cell that drives it.
+            let Some(driver) = netlist.signals[route.signal].driver else {
+                continue;
+            };
+            let pin = &netlist.pins[driver];
+            let cell = &module.cells[netlist.instances[pin.instance].cell];
+            let bit = cell
+                .outputs
+                .iter()
+                .find(|(port, _)| port.as_str() == pin.port)
+                .and_then(|(_, net)| view.net_bits(*net, cell.span).ok())
+                .and_then(|bits| bits.get(pin.bit as usize).copied())
+                .map(|b| view.canonical(b));
+            if let Some(bit) = bit {
+                out.insert(*at, bit);
+            }
+        }
+    }
+    out
 }
 
 /// The cell's truth table of `2^bits` entries, read off its `INIT`.
@@ -786,7 +949,35 @@ pub fn vivado_implementation(
         placed: Vec::new(),
         locks: Vec::new(),
         cells: 0,
+        generates: HashMap::new(),
+        wires: Vec::new(),
     };
+    let halves = generate_halves(netlist);
+    for (lut, (carry, lane, _)) in &halves {
+        writer.generates.insert(
+            (
+                format!("c{carry}_{}", safe(&netlist.instances[*carry].name)),
+                *lane,
+            ),
+            format!("c{lut}__generate"),
+        );
+    }
+    // A lane nothing reads leaves its generate on the lane's bypass input
+    // (`xray::carry`), and where a route of this flow's ends on that input, for
+    // a flip-flop of the lane, the generate reads that signal in the
+    // bitstream: written so, Vivado reads it there too. Written as the `x`'s
+    // zero, Vivado grounded the bypass input the flip-flop had
+    // (`carry_counter`, `Route 35-341`, 2026-11-09). Where no route ends there
+    // the router kept the wires behind it free (`XrayFabric::unread_lane_ties`).
+    for ((carry, lane), bit) in unread_bypasses(&view, module, netlist, graph, placement, routing) {
+        writer.generates.insert(
+            (
+                format!("c{carry}_{}", safe(&netlist.instances[carry].name)),
+                lane,
+            ),
+            writer.names.bit(bit),
+        );
+    }
     for (index, instance) in netlist.instances.iter().enumerate() {
         let cell = &module.cells[instance.cell];
         if !matches!(cell.kind, CellKind::Blackbox(_)) {
@@ -827,6 +1018,38 @@ pub fn vivado_implementation(
                 };
                 let (s, b) = spell(false)?;
                 writer.lut(&name, &half, *output, &s, &b)?;
+                // A carry lane's constant generate, which this flow takes
+                // from the lower half of the lane's table (`xray::carry`):
+                // written as the table's `O5`, a constant on one of its own
+                // pins, so that Vivado reads `<L>CY0` from `O5` as the
+                // bitstream does. Written as the constant itself, Vivado
+                // ties it to the lane's bypass input instead, which a
+                // flip-flop of the lane may be using: `carry_counter`'s
+                // `depth` register, beside its equality's chain, stopped
+                // Vivado at the ground net (`Route 35-341`, 2026-11-09).
+                // The half reads one of the table's own pins, as it reaches
+                // it, and ignores it; the table's lower half is what `O5`
+                // reads whatever `A6` is.
+                if let Some((_, _, value)) = halves.get(&index)
+                    && k == 6
+                    && table[..32].iter().all(|v| *v == (*value == Bit::One))
+                    && let Some((physical, bit)) = half.pins.first()
+                {
+                    let (s5, b5) = spell(true)?;
+                    let wire = format!("c{index}__generate");
+                    let constant = LutHalf {
+                        pins: vec![(*physical, *bit)],
+                        table: vec![*value == Bit::One; 2],
+                    };
+                    writer.lut_to(&format!("{name}__O5"), &constant, &wire, &s5, &b5)?;
+                    writer.wires.push(wire);
+                } else if halves.contains_key(&index) {
+                    return fail(format!(
+                        "`{}` is a carry lane's table, and its lower half is not the lane's \
+                         generate",
+                        instance.name
+                    ));
+                }
             }
             "LUT6_2" => {
                 let mut pins = Vec::with_capacity(6);
@@ -1114,7 +1337,7 @@ pub fn vivado_implementation(
     );
     let _ = writeln!(verilog, "module {} ({});", module.name, header.join(", "));
     verilog.push_str(&port_lines);
-    for wire in &wires {
+    for wire in wires.iter().chain(&writer.wires) {
         let _ = writeln!(verilog, "  wire {wire};");
     }
     verilog.push_str(&writer.verilog);

@@ -2126,3 +2126,155 @@ fn every_global_clock_a_bitstream_distributes_has_a_buffer_driving_it() {
         eprintln!("skipped: neither `examples/` nor the Vivado harness is here");
     }
 }
+
+/// **The bypass input behind a carry lane nothing reads is closed to the
+/// router, with the ground fans that reach it, and only where no cell of the
+/// slice may need it** (`XrayFabric::unread_lane_ties`). `--vivado-placement`
+/// writes such a lane's generate tied low, and Vivado grounds it through
+/// `BYP_ALT<n>` and `<L>X` as it does its own: on `sad` a signal of this
+/// flow's held that `BYP_ALT` as a hop and Vivado stopped at the ground net.
+/// One `CARRY4` by hand: lanes `A`, `B` and `C` read by nothing, `A` beside a
+/// carry in from the fabric, which takes `AX`, and `C` with a flip-flop on
+/// `CFF`; lane `D`'s generate a zero, which comes from its table's `O5` and is
+/// written so for Vivado. Only `BX` may be closed while the flip-flop's data
+/// comes from outside the slice, or from another flip-flop of it (`AFF`),
+/// which both come in on `CX`; with the data the carry's own sum, `CX` too.
+///
+/// Would catch a lane's chain missed or taken from the wrong lane, a tied
+/// lane closed, the carry in's `AX` closed, the flip-flop's bypass closed
+/// under it (the second case is how a first version of this broke
+/// `analyser_fifo`, a register beside the one it reads) or left open when it
+/// does not need it, and the fans left open; would not catch Vivado choosing
+/// another way to ground the lane, which the builds given to Vivado are what
+/// showed.
+#[test]
+fn an_unread_carry_lanes_bypass_is_closed_as_vivados_ground_will_hold_it() {
+    use reticle::fpga::place::{Instance, NetPin, Netlist, Placement, Signal};
+    use reticle::ir::{CellId, Id};
+    use reticle::logic::Bit;
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let fabric = db
+        .load(&DiskFiles, &XrayOptions::new().with_region(small_region()))
+        .unwrap();
+    let graph = fabric.arch.build_graph();
+    let carry = (0..graph.sites.len())
+        .find(|s| graph.sites[*s].kind == "carry")
+        .expect("the region holds a slice");
+    let prefix = graph.sites[carry]
+        .bel
+        .strip_suffix("_CARRY4")
+        .expect("a carry's bel is `<slice>_CARRY4`")
+        .to_owned();
+    let tile = graph.sites[carry].tile;
+    let bel = |name: &str| {
+        (0..graph.sites.len())
+            .find(|s| {
+                graph.sites[*s].tile == tile && graph.sites[*s].bel == format!("{prefix}_{name}")
+            })
+            .unwrap_or_else(|| panic!("the slice has a {name}"))
+    };
+    let pin = |instance: usize,
+               role: &str,
+               output: bool,
+               signal: Option<usize>,
+               constant: Option<Bit>| NetPin {
+        instance,
+        port: role.to_owned(),
+        bit: 0,
+        role: role.to_owned(),
+        output,
+        signal,
+        constant,
+    };
+    let ff = |cell: usize, name: &str, pins: Vec<usize>| Instance {
+        cell: CellId::from_index(cell),
+        name: name.to_owned(),
+        primitive: "FDRE".to_owned(),
+        kind: "ff".to_owned(),
+        pins,
+        pin: None,
+    };
+    // The netlist, with the flip-flop on `CFF` reading signal `feed`: 1 the
+    // carry's sum `s2`, 2 nothing in the slice, 3 the flip-flop on `AFF`.
+    let netlist = |feed: usize| Netlist {
+        instances: vec![
+            Instance {
+                cell: CellId::from_index(0),
+                name: "chain".to_owned(),
+                primitive: "CARRY4".to_owned(),
+                kind: "carry".to_owned(),
+                pins: vec![0, 1, 2, 3, 4, 5],
+                pin: None,
+            },
+            ff(1, "c", vec![6]),
+            ff(2, "a", vec![7]),
+        ],
+        pins: vec![
+            pin(0, "cyinit", false, Some(0), None),
+            pin(0, "di0", false, None, Some(Bit::X)),
+            pin(0, "di1", false, None, Some(Bit::X)),
+            pin(0, "di2", false, None, Some(Bit::X)),
+            pin(0, "di3", false, None, Some(Bit::Zero)),
+            pin(0, "s2", true, Some(1), None),
+            pin(1, "d", false, Some(feed), None),
+            pin(2, "q", true, Some(3), None),
+        ],
+        signals: [
+            ("carry_in", None),
+            ("sum", Some(5)),
+            ("outside", None),
+            ("a", Some(7)),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, driver))| Signal {
+            name: name.to_owned(),
+            driver,
+            sinks: match i {
+                0 => vec![0],
+                _ if i == feed => vec![6],
+                _ => Vec::new(),
+            },
+        })
+        .collect(),
+        off_fabric: Vec::new(),
+        sterilises: Vec::new(),
+        gate_inverted: Vec::new(),
+    };
+    let mut placement = Placement::new(3, graph.sites.len());
+    placement.place(0, carry);
+    placement.place(1, bel("CFF"));
+    placement.place(2, bel("AFF"));
+    let names = |nodes: &[u32]| -> Vec<String> {
+        let mut out: Vec<String> = nodes.iter().map(|n| graph.wire(*n).name.clone()).collect();
+        out.sort();
+        out
+    };
+    for (feed, cx_closed) in [(1, true), (2, false), (3, false)] {
+        let ties = fabric.unread_lane_ties(&graph, &netlist(feed), &placement);
+        let held = names(&ties.held);
+        eprintln!(
+            "flip-flop's data {feed}: held {held:?}, fans {:?}",
+            names(&ties.fans)
+        );
+        let closed = |pin: &str| held.iter().any(|w| w.ends_with(pin));
+        assert!(!closed("_AX"), "the carry in's `AX` closed: {held:?}");
+        assert!(closed("_BX"), "a lane nothing reads left open: {held:?}");
+        assert!(!closed("_DX"), "a lane tied to zero closed: {held:?}");
+        assert_eq!(
+            closed("_CX"),
+            cx_closed,
+            "the flip-flop's lane, its data signal {feed}: {held:?}"
+        );
+        assert_eq!(
+            held.iter().filter(|w| w.starts_with("BYP_ALT")).count(),
+            if cx_closed { 2 } else { 1 },
+            "one interconnect wire a lane closed: {held:?}"
+        );
+        assert!(
+            names(&ties.fans).iter().any(|w| w.starts_with("GFAN")),
+            "the ground fans into them are left open"
+        );
+    }
+}

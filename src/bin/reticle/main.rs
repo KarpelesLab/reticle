@@ -4586,6 +4586,17 @@ fn write_xc7_bitstream(
         let fitted = delay_model == reticle::fpga::xray::DelayModel::Vivado;
         let mut closed = Vec::new();
         ties.close(graph.nodes.len(), &mut node_base, &mut network, &mut closed);
+        // And the wires Vivado's ground to a carry lane nothing reads will
+        // hold, under the fitted model, whose builds are given to Vivado to
+        // time: see `XrayFabric::unread_lane_ties`.
+        if fitted {
+            fabric.unread_lane_ties(&graph, &netlist, &placement).close(
+                graph.nodes.len(),
+                &mut node_base,
+                &mut network,
+                &mut closed,
+            );
+        }
         // A lookup table's inputs are the router's to choose among, and the
         // truth table follows them below. See `xray::lutswap`.
         let mut equivalent =

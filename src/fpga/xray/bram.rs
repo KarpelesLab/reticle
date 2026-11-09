@@ -1393,6 +1393,9 @@ pub struct TieWires {
     pub held: Vec<NodeId>,
 }
 
+/// A slice: its tile and its bel's prefix (`SLICEL_0`).
+type SliceKey<'a> = ((u32, u32), &'a str);
+
 impl TieWires {
     /// Closes these wires in a route's options over `nodes` nodes: each
     /// fan a [`RouteOptions::network`](crate::fpga::route::RouteOptions::network)
@@ -2424,6 +2427,156 @@ impl XrayFabric {
             }
         }
         Ok(TieWires { fans, held })
+    }
+
+    /// The wires Vivado's ground to a carry lane nothing reads will hold: for
+    /// [`RouteOptions::closed`](crate::fpga::route::RouteOptions::closed)
+    /// (`held`) and closed as a block RAM's ground fans are (`fans`).
+    ///
+    /// A lane nothing reads has `x` on its generate and no table of its own
+    /// (`xray::carry`), and its generate's mux is left on the lane's bypass
+    /// input, `<L>X`, which nothing drives, so a route may pass through the
+    /// wires into it. The netlist `--vivado-placement` writes has that
+    /// generate tied low, and Vivado makes the tie as it makes its own: a
+    /// ground fan, `BYP_ALT<n>`, `BYP<n>`, `<L>X` (`docs/fpga-vivado-parity.md`,
+    /// "The netlist against Vivado's, placed by Vivado"). The router here
+    /// took `BYP_ALT<n>` as a hop to a slice's set/reset, and Vivado, given
+    /// every route fixed, stopped at the ground net (`Route 35-341`) on half
+    /// the seeds of `sad` (2026-11-09). A lane whose generate is a constant
+    /// on its table's `O5` is written so for Vivado instead (`xray::vivado`),
+    /// and needs nothing here. A lane whose bypass input a cell of the slice
+    /// may need is left alone: lane `A` when the carry in is a signal (on
+    /// `AX`), a flip-flop of the lane whose data does not come from the carry
+    /// or the lane's table, and anything in the slice but its tables, its
+    /// flip-flops and the carry.
+    #[must_use]
+    pub fn unread_lane_ties(
+        &self,
+        graph: &RoutingGraph,
+        netlist: &Netlist,
+        placement: &Placement,
+    ) -> TieWires {
+        // A slice's sites by its tile and the bel's prefix (`SLICEL_0`).
+        let slice_of = |site: usize| -> Option<((u32, u32), &str, &str)> {
+            let s = &graph.sites[site];
+            let rest = s
+                .bel
+                .strip_prefix("SLICEL_")
+                .or_else(|| s.bel.strip_prefix("SLICEM_"))?;
+            let (index, sub) = rest.split_once('_')?;
+            let prefix = &s.bel[..s.bel.len() - rest.len() + index.len()];
+            Some((s.tile, prefix, sub))
+        };
+        let mut members: HashMap<SliceKey<'_>, Vec<(usize, &str)>> = HashMap::new();
+        for site in 0..graph.sites.len() {
+            if let (Some(instance), Some((tile, prefix, sub))) =
+                (placement.instance_at(site), slice_of(site))
+            {
+                members
+                    .entry((tile, prefix))
+                    .or_default()
+                    .push((instance, sub));
+            }
+        }
+        let mut held: Vec<NodeId> = Vec::new();
+        let mut fans: Vec<NodeId> = Vec::new();
+        let mut seen: HashSet<NodeId> = HashSet::new();
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.primitive != "CARRY4" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let Some((tile, prefix, _)) = slice_of(site) else {
+                continue;
+            };
+            let others = members.get(&(tile, prefix)).map_or(&[][..], Vec::as_slice);
+            for (lane, letter) in ['A', 'B', 'C', 'D'].into_iter().enumerate() {
+                let role = format!("di{lane}");
+                let signal_on = |role: &str| {
+                    instance.pins.iter().any(|p| {
+                        let pin = &netlist.pins[*p];
+                        pin.role == role && pin.signal.is_some()
+                    })
+                };
+                let unread = instance.pins.iter().any(|p| {
+                    let pin = &netlist.pins[*p];
+                    pin.role == role && pin.signal.is_none() && pin.constant == Some(Bit::X)
+                });
+                // `AX` is the carry in's too, when that is a signal.
+                if !unread || (lane == 0 && signal_on("cyinit")) {
+                    continue;
+                }
+                // Whether a flip-flop's data comes from this carry or its
+                // lane's table, which reach it inside the slice. Anything
+                // else, another flip-flop of the slice included, comes in on
+                // the bypass input: `analyser_fifo`'s Gray code register,
+                // beside the pointer it is read from, found no way in when a
+                // flip-flop of the slice counted as inside.
+                let fed_inside = |ff: usize| {
+                    netlist.instances[ff].pins.iter().any(|p| {
+                        let pin = &netlist.pins[*p];
+                        pin.role == "d"
+                            && pin
+                                .signal
+                                .and_then(|s| netlist.signals[s].driver)
+                                .is_some_and(|d| {
+                                    let from = netlist.pins[d].instance;
+                                    from == index
+                                        || others.iter().any(|(o, sub)| {
+                                            *o == from
+                                                && netlist.instances[from].kind == "lut"
+                                                && sub.starts_with(letter)
+                                        })
+                                })
+                    })
+                };
+                let needed = others.iter().any(|(other, sub)| {
+                    *other != index
+                        && match netlist.instances[*other].kind.as_str() {
+                            "lut" => false,
+                            "ff" => sub.starts_with(letter) && !fed_inside(*other),
+                            _ => true,
+                        }
+                });
+                if needed {
+                    continue;
+                }
+                let Some(generate) = graph.sites[site].pin(&role) else {
+                    continue;
+                };
+                // The bypass input: the generate's source with no bit of
+                // its own, the mux's default.
+                let Some(bypass) = graph
+                    .incoming(generate)
+                    .iter()
+                    .find(|pip| graph.pip_bits(**pip).is_empty())
+                    .map(|pip| graph.pip(*pip).from)
+                else {
+                    continue;
+                };
+                for behind in fixed_chain(graph, bypass) {
+                    if seen.insert(behind) {
+                        held.push(behind);
+                    }
+                    for pip in graph.incoming(behind) {
+                        if graph.pip_bits(*pip).is_empty() {
+                            continue;
+                        }
+                        let fan = graph.pip(*pip).from;
+                        let grounded = graph.incoming(fan).iter().any(|p| {
+                            !graph.pip_bits(*p).is_empty()
+                                && graph.wire(graph.pip(*p).from).name == "GND_WIRE"
+                        });
+                        if grounded && !fans.contains(&fan) {
+                            fans.push(fan);
+                        }
+                    }
+                }
+            }
+        }
+        TieWires { fans, held }
     }
 
     /// Configures every placed `RAMB18E1`: its mode features and a value

@@ -467,6 +467,110 @@ fn the_vivado_placement_covers_every_cell_and_net() {
     assert!(nets > 40, "{nets} routes in\n{routes}");
 }
 
+/// **A carry lane's constant generate is written as its table's `O5`.** This
+/// flow takes it from the lower half of the lane's table (`CARRY4.<L>CY0`);
+/// written as the constant itself, Vivado tied it to the lane's bypass input
+/// instead, which a flip-flop of the lane was using, and stopped at the ground
+/// net (`carry_counter`'s equality beside its `depth` register, 2026-11-09).
+/// On `carry_counter`, whose equality has such lanes: each `__generate` wire
+/// is a `CARRY4`'s `DI` and the output of one constant `LUT1`, `<table>__O5`,
+/// on the five-input bel of its table's site, on a pin the table's own cell
+/// is locked to. Would catch the constant written again, the half on another
+/// site or bel, or on a pin of its own, which Vivado would route a second
+/// signal to; would not catch Vivado reading the half otherwise, which only
+/// giving it the build asks (`achieved.sh`'s `routes` stage).
+#[test]
+fn a_carry_lanes_constant_generate_is_written_as_its_tables_lower_half() {
+    let Some(root) = chipdb() else { return };
+    let Some(dir) = fixtures() else { return };
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("vivado-generates");
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", "--device", "xc7a100t-ftg256", "--chipdb", &root])
+        .args(["--top", "carry_counter", "--constraints"])
+        .arg(dir.join("carry_counter.rcf"))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join("carry_counter.bit"))
+        .arg("--vivado-placement")
+        .arg(out.join("x.tcl"))
+        .arg(dir.join("carry_counter.v"))
+        .output()
+        .expect("failed to run the reticle binary");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let read = |name: &str| std::fs::read_to_string(out.join(name)).unwrap();
+    let (verilog, placed) = (read("x.v"), read("x.tcl"));
+    let site_of = |cell: &str| -> String {
+        placed
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("  {cell} ")))
+            .unwrap_or_else(|| panic!("`{cell}` is not placed"))
+            .to_owned()
+    };
+    let locks_of = |cell: &str| -> Vec<String> {
+        placed
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("set_property LOCK_PINS {")
+                    .and_then(|r| r.strip_suffix(&format!("}} [get_cells {cell}]")))
+            })
+            .unwrap_or_else(|| panic!("`{cell}` has no LOCK_PINS"))
+            .split_whitespace()
+            .map(|pair| pair.split_once(':').unwrap().1.to_owned())
+            .collect()
+    };
+    let mut halves = 0;
+    for line in verilog.lines().filter(|l| l.contains("__generate)")) {
+        // `  LUT1 #(.INIT(2'h0)) c<n>_<name>__O5 (.I0(<net>), .O(c<n>__generate));`
+        let words: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(words[0], "LUT1", "a generate's half is one input: {line}");
+        assert!(
+            words[1] == "#(.INIT(2'h0))" || words[1] == "#(.INIT(2'h3))",
+            "a generate's half is a constant: {line}"
+        );
+        let half = words[2];
+        let table = half
+            .strip_suffix("__O5")
+            .expect("the half is `<table>__O5`");
+        let wire = line
+            .rsplit_once(".O(")
+            .and_then(|(_, w)| w.strip_suffix("));"))
+            .unwrap();
+        assert!(
+            verilog.contains(&format!("wire {wire};")),
+            "{wire} undeclared"
+        );
+        assert!(
+            verilog
+                .lines()
+                .any(|l| l.trim_start().starts_with("CARRY4") && l.contains(wire)),
+            "no carry reads `{wire}`"
+        );
+        let (here, upper) = (site_of(half), site_of(table));
+        let (site, bel) = here.split_once('/').unwrap();
+        let (table_site, table_bel) = upper.split_once('/').unwrap();
+        assert_eq!(site, table_site, "`{half}` is not on its table's site");
+        assert_eq!(
+            bel.replace("5LUT", "6LUT"),
+            table_bel,
+            "`{half}` is not the lower half of its table's bel"
+        );
+        let pin = &locks_of(half)[0];
+        assert!(
+            locks_of(table).contains(pin),
+            "`{half}` is on {pin}, which its table does not read"
+        );
+        halves += 1;
+    }
+    assert!(halves > 0, "no constant generate in\n{verilog}");
+}
+
 /// **A frame's Hamming code names nothing, and is counted apart.** Would catch
 /// the range being wrong at either end: bit 12 of word 50 is the code, and bit
 /// 13 is not. A lone bit of code on an empty frame is the wrong code, so it is
