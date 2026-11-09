@@ -5075,6 +5075,28 @@ two exclusions their own, the unreadable pin its own; the last two the flow's.
 - Measured on one design; the Husky Plus under `--synthesis vivado` would have many
   more, its register bus and FIFO enables among them, and is not built that way.
 
+## The other clocks over 1.10, looked at
+
+**Asked: anything cheap left in the netlist on the clocks whose netlist ratio was over
+1.10?** By `closing`'s medians, those were `analyser_fifo`'s read clock (above),
+`fsm` (1.145) and `gray_cdc`'s `clk2` (1.120); `esad`'s and `sad`'s `clk_usb`
+(1.068, 1.087), `carry_counter` (1.021) and `counter64` (1.043) were asked about too.
+Read off both netlists' worst paths and counts (**measured**, `netlist.txt`):
+
+- **`fsm`**: Vivado keeps the state encoding (its log reports no encoding; that the
+  state register is read by `out` is a guess at why, not asked), 33 tables and a `MUXF7` against 38 tables; three
+  tables deep in both. Vivado's own placement of Reticle's netlist is 1.97 to 2.14 ns
+  over five seeds against 1.80 for its own: the wires, not the depth. Nothing cheap.
+- **`gray_cdc` `clk2`**: `^rg` over twelve bits, two tables deep in both, `s1` and `s2`
+  shift registers in both (Vivado's 37 flip-flops, Reticle's 37). 1.30 to 1.48 ns over
+  five seeds against 1.263: placement. Nothing cheap.
+- **`esad` and `sad` `clk_usb`**: two tables deep here, three in Vivado's netlist;
+  within 9 %.
+- **`carry_counter`, `counter64`**: the equalities' lanes are two bit pairs here and
+  three in Vivado's, so 9 `CARRY4`s in a row against 6 on `counter64`'s worst path.
+  That is the ground on the bypass input of "The netlist against Vivado's, placed by
+  Vivado", which needs the router; not cheap.
+
 ## Wide multiplexers
 
 A slice has a `MUXF7` over each two of its lookup tables and a `MUXF8` over the
