@@ -978,6 +978,20 @@ fn propagate(m: &mut Module) -> u64 {
     let nets: Vec<NetId> = alias.keys().copied().collect();
     let mut sorted = nets;
     sorted.sort();
+    // Every reader node `Net(n)` of each net with an alias, in the order a
+    // walk of the module meets them, gathered by one walk: a walk a net was
+    // a pass over the whole module for each, which on a design of a few
+    // thousand such nets was most of synthesis. What the walk reaches does
+    // not change below, since nothing is replaced until the end and a
+    // coercion's new node is not yet read by anything.
+    let mut readers: HashMap<NetId, Vec<ExprId>> = HashMap::new();
+    m.for_each_expr(|id, e| {
+        if let ExprKind::Net(n) = e.kind
+            && alias.contains_key(&n)
+        {
+            readers.entry(n).or_default().push(id);
+        }
+    });
     for n in sorted {
         let Some(target) = resolve(m, n) else {
             continue;
@@ -986,12 +1000,7 @@ fn propagate(m: &mut Module) -> u64 {
         let net_ty = m.nets[n].ty.clone();
         // Every reader node `Net(n)` maps to the target, coerced to the
         // net's type so parents keep their types.
-        let mut nodes = Vec::new();
-        m.for_each_expr(|id, e| {
-            if e.kind == ExprKind::Net(n) {
-                nodes.push(id);
-            }
-        });
+        let nodes = readers.remove(&n).unwrap_or_default();
         let value = if target_ty == net_ty {
             target
         } else {
