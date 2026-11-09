@@ -105,17 +105,30 @@ pub struct CarryPacking {
     /// since the two would want one output of the slice
     /// (`move_carry_outs`).
     pub carries_out_moved: usize,
+    /// Constant generates put on their propagate table's own `O5`
+    /// ([`CarryOptions::generates_on_their_tables`]), with no buffer.
+    pub generates_folded: usize,
 }
 
 impl CarryPacking {
-    /// One line, for a report.
+    /// One line, for a report. The constant generates folded onto their
+    /// propagate's table are named only when there are any, so that a build
+    /// that does not ask for it reports what it always did.
     pub fn to_text(&self) -> String {
+        let folded = if self.generates_folded > 0 {
+            format!(
+                ", {} constant generate(s) on their propagate's own table",
+                self.generates_folded
+            )
+        } else {
+            String::new()
+        };
         format!(
             "carry chains: {} CARRY4, {} propagate bit(s) on their own lookup table, \
              {} buffer and {} constant lookup table(s) added ({} feeding a constant \
              generate), {} lane(s) nothing reads, {} carry in(s) from the fabric beside a \
              generate on `O5` and {} on a `CARRY4` below, {} carry out(s) read a lane above \
-             a sum read beside them\n",
+             a sum read beside them{folded}\n",
             self.carries,
             self.kept,
             self.buffers,
@@ -140,6 +153,28 @@ enum Propagate {
     Constant(bool),
     /// Nobody reads the lane: `x`.
     Dead,
+    /// The lookup table that drives it, rewritten with the lane's constant
+    /// generate in its lower half for `O5`: it reads five signals or fewer,
+    /// so `A6` is free to choose the half. Only with
+    /// [`CarryOptions::generates_on_their_tables`].
+    Fold,
+}
+
+/// What [`legalise_carries_with`] may do beyond what a slice requires.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CarryOptions {
+    /// Put a lane's constant generate on the `O5` of the lookup table that
+    /// is already its propagate, when that table reads five signals or fewer
+    /// and no other propagate, rather than on a buffer table of its own in
+    /// front of it. The buffer is a level of logic and a connection on every
+    /// path through the lane: an equality compared on the chain, whose
+    /// generate is a constant zero, was a lane table, a wire and a buffer
+    /// before the `CARRY4`. Vivado has no buffer there: it ties the generate
+    /// to the slice's bypass input, `GND_WIRE` through a `GFAN` and a
+    /// `BYP_ALT`, which this flow does not route. Off, every constant
+    /// generate takes a buffer as it always did; `reticle fpga` turns it on
+    /// with the default `--synthesis vivado`.
+    pub generates_on_their_tables: bool,
 }
 
 /// A function of at most a few signals, as a lookup table computes it:
@@ -234,6 +269,20 @@ pub fn legalise_carries(
     module: ModuleId,
     device: &Device,
 ) -> Result<CarryPacking, String> {
+    legalise_carries_with(design, module, device, &CarryOptions::default())
+}
+
+/// [`legalise_carries`], with what [`CarryOptions`] allows beyond it.
+///
+/// # Errors
+///
+/// As [`legalise_carries`].
+pub fn legalise_carries_with(
+    design: &mut Design,
+    module: ModuleId,
+    device: &Device,
+    options: &CarryOptions,
+) -> Result<CarryPacking, String> {
     let mut report = CarryPacking::default();
     let Some(carry) = device.bel(BelRole::Carry).cloned() else {
         return Ok(report);
@@ -267,7 +316,16 @@ pub fn legalise_carries(
     // module again for every chain to ask it was a quadratic, 17 s of the
     // Husky's 1,681 chains.
     type Owners = Vec<Option<(crate::ir::NetId, u32)>>;
-    let mut plans: Vec<(CellId, Vec<Lane>, Owners, Option<SharedAx>)> = Vec::new();
+    // Per chain: its lanes, the net and bit each buffer lane reads, bit 0's
+    // shared `AX`, and each folded lane's table.
+    type Plan = (
+        CellId,
+        Vec<Lane>,
+        Owners,
+        Option<SharedAx>,
+        Vec<Option<Function>>,
+    );
+    let mut plans: Vec<Plan> = Vec::new();
     {
         let view = BitView::new(m).map_err(|e| e.to_string())?;
         let bits = |id: ExprId| -> Result<Vec<SigBit>, String> {
@@ -377,6 +435,10 @@ pub fn legalise_carries(
             .filter(|(_, c)| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == carry.name))
             .map(|(id, _)| id)
             .collect();
+        // A constant generate goes on its propagate's own table only when
+        // asked, and only on a device with the `LUT6_2` it takes.
+        let fold_here = options.generates_on_their_tables
+            && device.bels.iter().any(|b| b.name == super::lutpack::DUAL);
         let mut propagate_uses: BTreeMap<usize, usize> = BTreeMap::new();
         for id in &carries {
             if let Some(e) = m.cells[*id].input(shape.propagate) {
@@ -430,6 +492,8 @@ pub fn legalise_carries(
                 .is_some_and(|b| matches!(b.first(), Some(SigBit::Slot(_))));
 
             let mut plan = Vec::with_capacity(lanes);
+            // Each `Propagate::Fold` lane's table, as read.
+            let mut folds: Vec<Option<Function>> = vec![None; lanes];
             let mut shared_ax = false;
             for lane in 0..lanes {
                 // Read itself, or through its carry: a carry out at or above
@@ -482,8 +546,17 @@ pub fn legalise_carries(
                             matches!(&m.cells[*d].kind, CellKind::Blackbox(n) if n.as_str() == lut.name)
                                 && *port == lut_output
                         });
-                        if own_lut && propagate_uses.get(&s) == Some(&1) && generate.is_none() {
+                        let alone = own_lut && propagate_uses.get(&s) == Some(&1);
+                        if alone && generate.is_none() {
                             Propagate::Keep
+                        } else if let Some(table) = driver
+                            .get(&s)
+                            .filter(|_| alone && fold_here)
+                            .and_then(|(d, _)| table_of(*d))
+                            .filter(|f| f.inputs.len() <= 5)
+                        {
+                            folds[lane] = Some(table);
+                            Propagate::Fold
                         } else {
                             Propagate::Buffer(s)
                         }
@@ -511,7 +584,8 @@ pub fn legalise_carries(
                     },
                     Propagate::Buffer(s) => Some(Function::buffer(s, view.owner(s))),
                     Propagate::Constant(v) => Some(Function::constant(v)),
-                    Propagate::Dead => None,
+                    // A fold has a constant generate, and this a signal one.
+                    Propagate::Dead | Propagate::Fold => None,
                 };
                 let lower = match di_bits[0] {
                     SigBit::Slot(g) => {
@@ -546,7 +620,7 @@ pub fn legalise_carries(
             } else {
                 None
             };
-            plans.push((id, plan, owners, shared));
+            plans.push((id, plan, owners, shared, folds));
         }
     }
 
@@ -559,7 +633,7 @@ pub fn legalise_carries(
     // Every net and cell this adds takes its name from one index of the
     // module's names, and nothing is removed until the end: see `Names`.
     let mut names = Names::of(m);
-    for (id, plan, view_owner, shared) in plans {
+    for (id, plan, view_owner, shared, folds) in plans {
         let span = m.cells[id].span;
         let name = m.cells[id].name.as_str().to_owned();
         // Bit 0's two tables as one, or the carry in below the chain.
@@ -744,6 +818,74 @@ pub fn legalise_carries(
                     slice_expr(m, old_s, bit, bit, span),
                     slice_expr(m, old_di, bit, bit, span),
                 ),
+                Propagate::Fold => {
+                    // The propagate's own table made a `LUT6_2`: its function
+                    // on `O6`, the upper half over `I0`..`I4` with `I5` tied
+                    // high, for every reader of its output as before, and the
+                    // constant generate on `O5`, the lower half, which the
+                    // lane's generate now reads as a signal. As `SharedAx`
+                    // builds bit 0's.
+                    let (Some(table), Some(generate)) = (folds[lane].as_ref(), step.generate)
+                    else {
+                        return Err(format!("`{name}` lane {lane}: a fold with nothing to fold"));
+                    };
+                    let Some((old, out)) = table.table else {
+                        return Err(format!("`{name}` lane {lane}: a fold of no table"));
+                    };
+                    let Some(dual) = dual else {
+                        return Err(format!(
+                            "`{name}` lane {lane}: the device has no `{}` to put the generate on",
+                            super::lutpack::DUAL
+                        ));
+                    };
+                    let (Some(o6), Some(o5)) = (dual.port("o"), dual.port("o5")) else {
+                        return Err(format!("`{}` has no `O6` and `O5`", dual.name));
+                    };
+                    let dual_inputs: Vec<String> = dual
+                        .port_names("i")
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
+                    let signals: Vec<usize> = table.inputs.iter().map(|(s, _)| *s).collect();
+                    let mut init = Const::zero(64);
+                    for x in 0..32u32 {
+                        if table.at(&signals, x as usize) {
+                            init.set_bit(32 + x, Bit::One);
+                        }
+                        if generate {
+                            init.set_bit(x, Bit::One);
+                        }
+                    }
+                    let mut inputs: Vec<(Name, ExprId)> = Vec::with_capacity(6);
+                    for (k, pin) in dual_inputs.iter().enumerate() {
+                        let value = match table.inputs.get(k) {
+                            Some((_, (net, b))) if k < 5 => {
+                                let whole = net_expr(m, *net, span);
+                                slice_expr(m, whole, *b, *b, span)
+                            }
+                            _ if k == 5 => const_expr(m, Const::ones(1), span),
+                            _ => const_expr(m, Const::zero(1), span),
+                        };
+                        inputs.push((Name::new(pin.clone()), value));
+                    }
+                    let g =
+                        add_net_in(m, &mut names, &format!("{name}$g{lane}"), Type::bit(), span);
+                    let cell = add_cell_in(
+                        m,
+                        &mut names,
+                        &format!("{name}$fold{lane}"),
+                        CellKind::Blackbox(Name::new(dual.name.clone())),
+                        inputs,
+                        vec![(Name::new(o6), out), (Name::new(o5), g)],
+                        span,
+                    );
+                    m.cells[cell]
+                        .params
+                        .set(Name::new("INIT"), AttrValue::Const(init));
+                    removed.push(old);
+                    report.generates_folded += 1;
+                    (slice_expr(m, old_s, bit, bit, span), net_expr(m, g, span))
+                }
                 Propagate::Buffer(_) | Propagate::Constant(_) => {
                     let input = view_owner[lane].map(|(net, b)| {
                         let whole = net_expr(m, net, span);

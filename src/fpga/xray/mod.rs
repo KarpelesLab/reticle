@@ -195,7 +195,7 @@ pub use bram::{
     mode_features_in, ramb36_features, ramb36_input_roles, tie_policy, write_enable_lanes,
 };
 pub use bufg::GlobalBufferError;
-pub use carry::{CarryPacking, legalise_carries};
+pub use carry::{CarryOptions, CarryPacking, legalise_carries, legalise_carries_with};
 pub use cmt::{
     ClockManagerError, Compensation, Counter, CounterShape, ManagerShapes, MmcmSettings,
     PllSettings, check_manager, counter, mmcm_registers, pll_registers, shaped_counter,

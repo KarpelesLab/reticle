@@ -315,6 +315,22 @@ pub struct MapOptions {
     /// latest path in `rused_next <= PROG_EMPTY` so. `reticle fpga` asks for
     /// it on the 7 series unless `--synthesis legacy`.
     pub min_constant_ordering_lane_width: u32,
+    /// How many bit pairs each lane of an equality compared on the chain
+    /// takes (`compare_on_the_chain`): three by default, a lookup table's
+    /// six inputs, and Vivado's lane. Two leaves the lane's table four
+    /// inputs, so that the chain's constant generate can come off that
+    /// table's own `O5` (`xray::CarryOptions::generates_on_their_tables`)
+    /// rather than off a buffer table in front of it; `reticle fpga` asks for
+    /// two on the 7 series unless `--synthesis legacy`.
+    pub compare_lane_bits: u32,
+    /// Leave in lookup tables the adders Vivado leaves there, rather than
+    /// every adder of [`MapOptions::min_carry_width`] bits and more on the
+    /// chain: `a + 1` to 11 bits, `a + c` of a one-bit `c` to 10, and two
+    /// signals to 5 (`vivado_table_width`). Only for the adders the design
+    /// wrote; the ones this mapping makes of a subtraction, an ordering or an
+    /// equality keep their own widths. Off by default; `reticle fpga` asks for
+    /// it on the 7 series unless `--synthesis legacy`.
+    pub vivado_adder_widths: bool,
 }
 
 impl Default for MapOptions {
@@ -342,6 +358,8 @@ impl Default for MapOptions {
             carry_ends: false,
             compare_any_on_the_chain: false,
             min_constant_ordering_lane_width: u32::MAX,
+            compare_lane_bits: 3,
+            vivado_adder_widths: false,
         }
     }
 }
@@ -1219,6 +1237,47 @@ struct SignedPlan {
     a: SignedOperand,
     /// What goes on the `b` port.
     b: SignedOperand,
+}
+
+/// The widest adder of operands `a` and `b` that Vivado 2026.1's synthesis
+/// leaves in lookup tables (`MapOptions::vivado_adder_widths`). Measured,
+/// a registered `a OP b` at each width from 2 to 32 bits (`synth_design -mode
+/// out_of_context`, `xc7a100tftg256-3`):
+///
+/// - `a + 1`: tables to 11 bits, a chain from 12;
+/// - `a + c`, `c` one bit (a counter's `r + c` too): tables to 10, a chain
+///   from 11;
+/// - `a + b`, two signals: tables to 5, a chain from 6.
+///
+/// Any other constant was not asked, and is taken as two signals.
+fn vivado_table_width(module: &Module, a: ExprId, b: ExprId) -> u32 {
+    let one_bit = |e: ExprId| -> bool {
+        let (_, bits, signed) = significant_operand(module, e);
+        if bits == 1 && !signed && expr_width(module, e) > 1 {
+            return true;
+        }
+        let Some(ExprKind::Concat(parts)) = module.exprs.get(e).map(|x| &x.kind) else {
+            return false;
+        };
+        let Some((last, high)) = parts.split_last() else {
+            return false;
+        };
+        expr_width(module, *last) == 1
+            && const_operand(module, *last).is_none()
+            && high.iter().all(|p| {
+                matches!(
+                    module.exprs.get(*p).map(|x| &x.kind),
+                    Some(ExprKind::Const(c)) if c.to_u64() == Some(0)
+                )
+            })
+    };
+    if const_operand(module, a) == Some(1) || const_operand(module, b) == Some(1) {
+        11
+    } else if one_bit(a) || one_bit(b) {
+        10
+    } else {
+        5
+    }
 }
 
 /// The low bit both operands of an adder hold, as the last part of each
@@ -5779,6 +5838,19 @@ impl Mapper<'_> {
             }
             return;
         }
+        // The adders the design wrote, before the rewrites below add their
+        // own: Vivado's widths for the chain are about those
+        // (`MapOptions::vivado_adder_widths`).
+        let written: HashSet<CellId> = if self.options.vivado_adder_widths {
+            module
+                .cells
+                .iter()
+                .filter(|(_, c)| c.kind == CellKind::Add)
+                .map(|(id, _)| id)
+                .collect()
+        } else {
+            HashSet::new()
+        };
         if bel.operand_carry().is_none() && bel.wide_carry().is_some() {
             self.share_muxed_adders(module);
             self.subtract_on_the_chain(module);
@@ -5809,6 +5881,9 @@ impl Mapper<'_> {
             let (Some(a), Some(b)) = (cell.input("a"), cell.input("b")) else {
                 continue;
             };
+            if written.contains(&add) && width <= vivado_table_width(module, a, b) {
+                continue;
+            }
             let name = cell.name.as_str().to_owned();
             let span = cell.span;
             let primitives = match (bel.operand_carry(), bel.wide_carry()) {
@@ -6247,11 +6322,12 @@ impl Mapper<'_> {
             }
             let equal = cell.kind == CellKind::Eq;
             let (span, name) = (cell.span, cell.name.as_str().to_owned());
-            let lanes = width.div_ceil(3);
+            let per_lane = self.options.compare_lane_bits.clamp(1, 3);
+            let lanes = width.div_ceil(per_lane);
             let mut parts: Vec<ExprId> = Vec::new();
             for lane in 0..lanes {
-                let lo = lane * 3;
-                let hi = (lo + 2).min(width - 1);
+                let lo = lane * per_lane;
+                let hi = (lo + per_lane - 1).min(width - 1);
                 let (pa, pb) = (
                     slice_expr(module, a, hi, lo, span),
                     slice_expr(module, b, hi, lo, span),

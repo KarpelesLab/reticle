@@ -72,10 +72,16 @@ fn synthesise(name: &str, vivado: bool) -> FlowReport {
         .collect::<Vec<_>>()
         .join("\n");
     let constraints_text = std::fs::read_to_string(&rcf).unwrap();
+    synthesise_text(name, text, &constraints_text, vivado)
+}
+
+/// One design, given as its text and its constraints', through the flow, the
+/// mapping proved.
+fn synthesise_text(name: &str, text: String, constraints_text: &str, vivado: bool) -> FlowReport {
     let mut map = SourceMap::new();
     let source = map.add(format!("{name}.v"), text).unwrap();
     let rcf = map
-        .add(format!("{name}.rcf"), constraints_text.clone())
+        .add(format!("{name}.rcf"), constraints_text.to_owned())
         .unwrap();
     let mut diags = Diagnostics::new();
     let ast = reticle::verilog::parse_source(
@@ -94,7 +100,7 @@ fn synthesise(name: &str, vivado: bool) -> FlowReport {
     assert!(!diags.has_errors(), "{}", diags.render(&map));
     let top = design.top.expect("a top module");
     let device = target(DEVICE).expect("a built-in device");
-    let mut constraints = Constraints::parse(&constraints_text, rcf, &mut diags);
+    let mut constraints = Constraints::parse(constraints_text, rcf, &mut diags);
     constraints.merge_attrs(&design, top, &mut diags);
     // As `reticle fpga` maps for the 7 series: memories as Vivado does too.
     let mut options = FpgaOptions {
@@ -123,14 +129,20 @@ fn figures(report: &FlowReport) -> Figures {
 /// Both map memories as Vivado does, so `analyser_fifo`'s memory being nine
 /// `RAMB36E1` side by side with no read multiplexer took 29 and 26 tables off
 /// both (`docs/fpga-vivado-parity.md`, "Memories as Vivado arranges them"):
-/// 194 and 180 before.
+/// 194 and 180 before. "The netlist against Vivado's, placed by Vivado"
+/// moved four of the default's: equalities on the chain in lanes of two
+/// (`carry_counter` 13 tables and 11 `CARRY4`s to 18 and 13, `counter64` 24
+/// and 22 to 34 and 25, `analyser_fifo` 154 and 26 to 162 and 29, every one
+/// a table fewer deep in front of its chain once legalised), and the adders
+/// Vivado keeps in tables kept there (`bram_fifo` 27 and 12 to 47 and 6,
+/// Vivado's own 49 and 3).
 const PINNED: [(&str, Figures, Figures); 15] = [
     ("adders", (289, 15, 40), (231, 2, 56)),
-    ("analyser_fifo", (165, 10, 12), (154, 3, 26)),
+    ("analyser_fifo", (165, 10, 12), (162, 3, 29)),
     ("barrel", (105, 3, 0), (87, 2, 0)),
-    ("bram_fifo", (32, 4, 9), (27, 3, 12)),
-    ("carry_counter", (18, 4, 8), (13, 1, 11)),
-    ("counter64", (35, 5, 16), (24, 1, 22)),
+    ("bram_fifo", (32, 4, 9), (47, 3, 6)),
+    ("carry_counter", (18, 4, 8), (18, 1, 13)),
+    ("counter64", (35, 5, 16), (34, 1, 25)),
     ("crc32", (204, 7, 0), (191, 2, 0)),
     ("fir8", (9, 3, 0), (7, 2, 0)),
     ("fsm", (72, 4, 0), (38, 3, 0)),
@@ -266,5 +278,101 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
             *after <= before,
             "{name} {clock}: {after} tables on the worst path in `{build}`, {before} in `{earlier}`"
         );
+    }
+}
+
+/// **A reset the 7 series' flip-flops have only active high, computed by a
+/// table, takes its inverter into that table under `--synthesis vivado`.**
+/// `if (!(a && b && c)) q <= 0` was a table and an inverter table after it
+/// before the eight reset pins; flipping the reset's polarity before the
+/// mapping (`techcells::flip_reset_polarities`) leaves the one table. A reset
+/// a flip-flop drives keeps its inverter, as Vivado's netlist does: `p`'s
+/// here. Both mappings proved. Would catch the flip gone (two inverters, a
+/// level more); would not catch the flip's own `not` read the wrong way
+/// round, which the proof of the mapping does not reach (it starts after
+/// the flip) and `techcells`' unit test does.
+#[test]
+fn a_computed_reset_takes_its_inverter_into_its_table() {
+    let text = "module resets (input clk, input a, input b, input c, input [7:0] d,
+                   output reg [7:0] q, output reg [7:0] p);
+      reg ra, rb, rc, rz;
+      always @(posedge clk) begin
+        ra <= a; rb <= b; rc <= c; rz <= a;
+        if (!(ra && rb && rc)) q <= 8'd0; else q <= d;
+        if (!rz) p <= 8'd0; else p <= d;
+      end
+    endmodule
+    "
+    .to_owned();
+    let vivado = synthesise_text("resets", text.clone(), "", true);
+    let legacy = synthesise_text("resets", text, "", false);
+    for (which, report) in [("vivado", &vivado), ("legacy", &legacy)] {
+        assert!(
+            matches!(report.mapping, Some(MapEquivalence::Equivalent)),
+            "{which}: the mapping is {:?}",
+            report.mapping
+        );
+    }
+    // Every table: the reset's and `rz`'s inverter, both the mapper's now;
+    // legacy the reset's and an inverter after the mapping for each.
+    let tables = |r: &FlowReport| r.luts + r.device_cells.inverters();
+    assert_eq!(
+        (vivado.luts, vivado.device_cells.inverters()),
+        (2, 0),
+        "{vivado:?}"
+    );
+    assert_eq!(
+        (legacy.luts, legacy.device_cells.inverters()),
+        (1, 2),
+        "{legacy:?}"
+    );
+    assert_eq!(tables(&vivado) + 1, tables(&legacy));
+}
+
+/// **The adders the design wrote stay in tables where Vivado leaves them**
+/// under `--synthesis vivado` (`MapOptions::vivado_adder_widths`): `a + 1` to
+/// eleven bits, `a + c` of a one-bit `c` to ten, two signals to five, each
+/// on the chain one bit wider; and the legacy synthesis's chain from four
+/// bits whatever the operands. Every mapping proved. Would catch a
+/// threshold off by one either way, an operand class read as another (a
+/// one-bit operand taken for two signals puts `a + c` at six bits on the
+/// chain), and the rule leaking into the legacy flow; would not catch an
+/// adder this mapping makes itself (a subtraction's, an equality's) left in
+/// tables, which the pinned figures of the corpus do.
+#[test]
+fn the_adders_vivado_leaves_in_tables_stay_there() {
+    let cases = [
+        ("one", "r + 1'b1", 11),
+        ("bit", "r + cr", 10),
+        ("two", "r + s", 5),
+    ];
+    for (kind, sum, widest) in cases {
+        for width in [widest, widest + 1] {
+            let name = format!("add_{kind}_{width}");
+            let text = format!(
+                "module {name} (input clk, input [{h}:0] a, input [{h}:0] b, input c,
+                               output reg [{h}:0] y);
+                  reg [{h}:0] r, s; reg cr;
+                  always @(posedge clk) begin r <= a; s <= b; cr <= c; y <= {sum}; end
+                endmodule
+                ",
+                h = width - 1
+            );
+            for vivado in [true, false] {
+                let report = synthesise_text(&name, text.clone(), "", vivado);
+                assert!(
+                    matches!(report.mapping, Some(MapEquivalence::Equivalent)),
+                    "{name} (vivado {vivado}): the mapping is {:?}",
+                    report.mapping
+                );
+                let chained = report.count("CARRY4") > 0;
+                let want = !vivado || width > widest;
+                assert_eq!(
+                    chained, want,
+                    "{name}, vivado {vivado}: {:?}",
+                    report.netlist
+                );
+            }
+        }
     }
 }

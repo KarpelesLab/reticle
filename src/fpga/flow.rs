@@ -391,6 +391,17 @@ pub const VIVADO_MIN_ORDERING_CARRY_WIDTH: u32 = 7;
 /// Measured, as above.
 pub const VIVADO_MIN_EQUALITY_CARRY_WIDTH: u32 = 9;
 
+/// The bit pairs a lane of an equality on the chain takes under
+/// [`FpgaOptions::vivado_synthesis`]. Vivado's lanes take three, a table's
+/// six inputs, and its chain's generate is a constant zero it ties to the
+/// slice's bypass input; this flow takes a constant generate from a table's
+/// `O5`, which a lane of six inputs leaves no room for, so a lane of three
+/// was its table and a buffer table in front of the `CARRY4`. Two leave the
+/// lane's table four inputs and the generate on its own `O5`
+/// (`xray::CarryOptions::generates_on_their_tables`): one table before the
+/// chain, Vivado's depth, for a third more lanes.
+pub const VIVADO_COMPARE_LANE_BITS: u32 = 2;
+
 #[cfg(feature = "synth")]
 impl Default for FpgaOptions {
     fn default() -> Self {
@@ -637,8 +648,15 @@ pub fn synthesize_for(
             .min_constant_ordering_lane_width
             .min(VIVADO_MIN_ORDERING_CARRY_WIDTH);
         map.carry_ends = true;
+        map.compare_lane_bits = VIVADO_COMPARE_LANE_BITS;
+        map.vivado_adder_widths = true;
     }
     report.primitives = super::primitives::map(design, module, device, constraints, &map, diags);
+    // A reset the device's flip-flops have only the other way round is
+    // inverted before the mapping, which takes the inverter into a table.
+    if options.vivado_synthesis {
+        super::techcells::flip_reset_polarities(&mut design.modules[module], device);
+    }
 
     // 3. Everything else onto LUTs.
     let k = options.lut_size.unwrap_or(device.lut_size).clamp(2, 8);

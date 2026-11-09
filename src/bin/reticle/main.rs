@@ -4290,7 +4290,13 @@ fn write_xc7_bitstream(
     // beside it, so the mapped netlist is first given a lookup table for
     // every propagate bit that has none. See `xray::legalise_carries`.
     let mut design = design.clone();
-    let packing = reticle::fpga::xray::legalise_carries(&mut design, top, device)?;
+    // With Vivado's synthesis, a constant generate goes on its propagate's own
+    // table where that table has room, as the equality lanes it makes do.
+    let carry_options = reticle::fpga::xray::CarryOptions {
+        generates_on_their_tables: !synthesis_legacy(args).map_err(|e| e.to_string())?,
+    };
+    let packing =
+        reticle::fpga::xray::legalise_carries_with(&mut design, top, device, &carry_options)?;
     laps.lap("legalise the carries");
     let graph = fabric.arch.build_graph();
     laps.lap("build the graph");

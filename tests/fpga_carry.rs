@@ -147,6 +147,10 @@ enum Shape {
     /// being a sum: the carry out of `{0, L} + 1`, read as the top lane's
     /// sum alone.
     Equal,
+    /// `y = a == b`, one bit, two signals: what `--synthesis vivado`
+    /// compares on the chain from `flow::VIVADO_MIN_EQUALITY_CARRY_WIDTH`
+    /// bits, in lanes of `flow::VIVADO_COMPARE_LANE_BITS` bit pairs.
+    EqualPlain,
     /// `y = {0, a} == {0, b} - 2` at three times the inputs' width: an
     /// equality whose upper operand bits are constant, which is what
     /// Verilog makes of `presample_counter == presample_i - 2` (the `2`
@@ -234,6 +238,13 @@ impl Shape {
                 b.cell2("bump", CellKind::Add, be, one, next);
                 let ne = b.net(next);
                 b.cell2("same", CellKind::Eq, ae, ne, y);
+            }
+            Shape::EqualPlain => {
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let y = b.output("y", Type::bit());
+                let (ae, be) = (b.net(a), b.net(bn));
+                b.cell2("same", CellKind::Eq, ae, be, y);
             }
             Shape::SubtractWidened => {
                 let wide = width * 3;
@@ -377,9 +388,11 @@ impl Shape {
         match self {
             Shape::Widened => width + 1,
             Shape::SubtractWidened => width * 3,
-            Shape::Equal | Shape::EqualWidened | Shape::Order { .. } | Shape::OrderConst { .. } => {
-                1
-            }
+            Shape::Equal
+            | Shape::EqualPlain
+            | Shape::EqualWidened
+            | Shape::Order { .. }
+            | Shape::OrderConst { .. } => 1,
             _ => width,
         }
     }
@@ -426,6 +439,7 @@ impl Shape {
             Shape::SubtractWidened => a.wrapping_sub(b) & mask(width * 3),
             Shape::SubtractThenCarryIn => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
             Shape::Equal => u64::from(a == (b + 1) & mask(width)),
+            Shape::EqualPlain => u64::from(a == b),
             Shape::EqualWidened => u64::from(a == b.wrapping_sub(2) & mask(width * 3)),
             Shape::Order { op, signed } | Shape::OrderConst { op, signed, .. } => {
                 // Each operand as the number it is: sign-extended from its
@@ -976,8 +990,14 @@ fn check_full_with(
     let mut packing = None;
     if legalise {
         let device = fpga::target(device).expect("a built-in device");
+        // As `reticle fpga` legalises: with Vivado's synthesis, a constant
+        // generate on its propagate's own table where it fits.
+        let carry = fpga::xray::CarryOptions {
+            generates_on_their_tables: options.vivado_synthesis,
+        };
         packing = Some(
-            fpga::xray::legalise_carries(&mut design, top, device).expect("the chain legalises"),
+            fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
+                .expect("the chain legalises"),
         );
         carry_ins_have_ax_to_themselves(design.module(top));
         if pack {
@@ -1398,6 +1418,55 @@ fn an_equality_on_the_chain_is_right_once_legalised() {
         );
         check_full(Shape::EqualWidened, width, XC7, low.clone(), true, false);
     }
+}
+
+/// **Under `--synthesis vivado` an equality's constant generates go on its
+/// lanes' own tables, and it is still right.** Its lanes are two bit pairs,
+/// a table of four inputs each, so the chain's generate of zero is that
+/// table's `O5` (`xray::CarryOptions::generates_on_their_tables`) and there
+/// is no buffer table between the lane and the `CARRY4`, where with lanes of
+/// three every lane had one. Every input of `a == b` at 9 and 10 bits
+/// (`b` compared as it is) and of the widened shape, legalised; then the
+/// counts: every live lane folded and no buffer carrying a generate; and the
+/// legacy synthesis's lanes of three, which have no room, as they were.
+///
+/// Would catch the constant in the wrong half (every unequal pair read as
+/// equal in a lane's slot: the simulation reads `O5` as the lower half), `I5`
+/// left low (the lane reads its own constant), and the fold leaking into the
+/// legacy flow; would not catch the slice's `<L>CY0` reading `O5` other than
+/// as the database says, which is quoted.
+#[test]
+fn an_equalitys_generates_go_on_its_lanes_own_tables() {
+    let vivado = vivado();
+    for width in [9, 10] {
+        let packing = check_full_with(Shape::EqualPlain, width, XC7, &vivado, true, false)
+            .expect("legalised");
+        // Lane 0 adds the `+ 1` to its own equality, so its generate is that
+        // equality, a signal on the bypass input; every lane above has the
+        // generate zero, and every one is folded, with no buffer.
+        let lanes = usize::try_from(width.div_ceil(2)).unwrap();
+        assert_eq!(
+            packing.generates_folded,
+            lanes - 1,
+            "{width} bits: {packing:?}"
+        );
+        assert_eq!(packing.buffers, 0, "{width} bits: {packing:?}");
+    }
+    let packing =
+        check_full_with(Shape::EqualWidened, 4, XC7, &vivado, true, false).expect("legalised");
+    assert!(packing.generates_folded > 0, "widened: {packing:?}");
+    // Legacy: lanes of three, and buffers, as before, even for the top lane
+    // of ten bits, one bit pair, whose table would have room.
+    let legacy = FpgaOptions {
+        map: MapOptions {
+            min_compare_carry_width: 4,
+            ..MapOptions::default()
+        },
+        ..FpgaOptions::default()
+    };
+    let packing = check_full_with(Shape::Equal, 10, XC7, &legacy, true, false).expect("legalised");
+    assert_eq!(packing.generates_folded, 0, "legacy: {packing:?}");
+    assert!(packing.generates > 0, "legacy: {packing:?}");
 }
 
 /// **An equality compared in kept lanes is right.** `compare_in_lanes`
@@ -1892,6 +1961,46 @@ mod proofs {
                         vec![(Name::new("y"), out)],
                     );
                 }
+                // UG474's two functions of one table: `O6` the whole of it
+                // over `I0`..`I5`, `O5` its lower half over `I0`..`I4`.
+                "LUT6_2" => {
+                    let AttrValue::Const(init) = cell
+                        .params
+                        .get("INIT")
+                        .unwrap_or_else(|| panic!("`{}` has no INIT", cell.name))
+                    else {
+                        panic!("`{}` has a non-constant INIT", cell.name)
+                    };
+                    let init = init.clone();
+                    let mut lower = Const::zero(32);
+                    for bit in 0..32 {
+                        lower.set_bit(bit, init.bit(bit));
+                    }
+                    let pin = |n: &str| {
+                        cell.input(n)
+                            .unwrap_or_else(|| panic!("`{}` has no `{n}`", cell.name))
+                    };
+                    let six: Vec<ExprId> = (0..6).rev().map(|i| pin(&format!("I{i}"))).collect();
+                    let five: Vec<ExprId> = (0..5).rev().map(|i| pin(&format!("I{i}"))).collect();
+                    let six = b.concat(six);
+                    let five = b.concat(five);
+                    if let Some(o6) = cell.output("O6") {
+                        b.cell(
+                            format!("{}$model6", cell.name),
+                            CellKind::Lut { k: 6, init },
+                            vec![(Name::new("a"), six)],
+                            vec![(Name::new("y"), o6)],
+                        );
+                    }
+                    if let Some(o5) = cell.output("O5") {
+                        b.cell(
+                            format!("{}$model5", cell.name),
+                            CellKind::Lut { k: 5, init: lower },
+                            vec![(Name::new("a"), five)],
+                            vec![(Name::new("y"), o5)],
+                        );
+                    }
+                }
                 "CARRY4" => model_carry4(&mut b, &cell),
                 "CCU2C" => model_ccu2c(&mut b, &cell),
                 other => panic!("primitive `{other}` has no model"),
@@ -2074,6 +2183,40 @@ mod proofs {
             "{shape:?} at {width} bits under --synthesis vivado is not proved equivalent:\n{}",
             report.render("mapped", "reference")
         );
+    }
+
+    /// **An equality on the chain, legalised as `reticle fpga` legalises it
+    /// under `--synthesis vivado`, proved** at 16 and 32 bits, which
+    /// simulation cannot enumerate: its lanes' constant generates on their
+    /// tables' `O5` (`xray::CarryOptions::generates_on_their_tables`), the
+    /// `LUT6_2`s modelled from UG474's reading of the table, the `CARRY4` from
+    /// its equations. Would catch what `an_equalitys_generates_go_on_its_lanes_own_tables`
+    /// would, at any width; would not catch the slice reading `O5` other than
+    /// as that model says.
+    #[test]
+    fn an_equality_with_its_generates_on_its_tables_is_proved() {
+        for width in [16, 32] {
+            let (mut design, top, _) = mapped_with(Shape::EqualPlain, width, XC7, &vivado());
+            let device = fpga::target(XC7).expect("a built-in device");
+            let carry = fpga::xray::CarryOptions {
+                generates_on_their_tables: true,
+            };
+            let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
+                .expect("the chain legalises");
+            assert!(packing.generates_folded > 0, "{width} bits: {packing:?}");
+            let modelled = model_primitives(design.module(top).clone());
+            let mut proof = Design::new();
+            let mut reference = Shape::EqualPlain.module("reference", width);
+            reference.name = Name::new("reference");
+            let a = proof.add_module(modelled);
+            let b = proof.add_module(reference);
+            let report = check_equivalent(&proof, a, b, &EquivOptions::default());
+            assert!(
+                matches!(report.outcome, EquivOutcome::Equivalent(_)),
+                "`a == b` at {width} bits, legalised, is not proved equivalent:\n{}",
+                report.render("legalised", "reference")
+            );
+        }
     }
 
     /// **The orderings, and every shape with its carry ends on the

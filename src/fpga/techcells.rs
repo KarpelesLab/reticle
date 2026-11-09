@@ -1158,6 +1158,102 @@ fn emit_latch(
 /// still there to read. The lookup table mapper would otherwise fold them
 /// into a table on the gate.
 ///
+/// Gives every flip-flop whose set or reset the device has only in the other
+/// polarity that polarity now, before the lookup tables are mapped, with a
+/// `not` cell in front of its `rst`; returns how many flip-flops it changed.
+///
+/// [`map_cells`] would do the same after the mapping, with an inverter table
+/// of its own: a level of logic and a wire between the table that computes
+/// the reset and the pin, on every path through it. Before the mapping the
+/// `not` is one more node for the mapper, which takes it into the table that
+/// computes the reset, or into two tables where the reset is read both ways
+/// (`CutOptions::duplicate_complements`). NewAE's `esad` resets its
+/// counters with `if (!(armed && ready && ...))`, which was a table, a
+/// wire and an inverter before 68 reset pins. A reset that a flip-flop
+/// drives still takes an inverter table, as Vivado's netlist has one too.
+///
+/// Only a flip-flop whose every bit `resolve_variant` maps with the reset
+/// inverted and the enable as it is; anything else is left to [`map_cells`].
+pub fn flip_reset_polarities(module: &mut Module, device: &Device) -> usize {
+    if device.bel(BelRole::Lut).is_none() {
+        return 0;
+    }
+    let ffs: Vec<CellId> = module
+        .cells
+        .iter()
+        .filter(|(_, c)| matches!(&c.kind, CellKind::Dff { reset: Some(_), .. }))
+        .map(|(id, _)| id)
+        .collect();
+    let mut names = Names::of(module);
+    let mut inverted: BTreeMap<(NetId, Option<(u32, u32)>), NetId> = BTreeMap::new();
+    let mut flipped = 0usize;
+    for id in ffs {
+        let cell = &module.cells[id];
+        let (Some(rst), Some(q)) = (cell.input("rst"), cell.output("q")) else {
+            continue;
+        };
+        let width = module.nets.get(q).and_then(|n| n.ty.width()).unwrap_or(1);
+        let kind = cell.kind.clone();
+        let every = (0..width).all(|bit| {
+            resolve_variant(device, variant_of(&kind, bit), true)
+                .is_some_and(|m| m.invert_reset && !m.invert_enable)
+        });
+        if !every {
+            continue;
+        }
+        let span = cell.span;
+        let key = match &module.expr(rst).kind {
+            ExprKind::Net(net) => Some((*net, None)),
+            ExprKind::Slice { base, hi, lo } => module
+                .expr(*base)
+                .as_net()
+                .map(|net| (net, Some((*hi, *lo)))),
+            _ => None,
+        };
+        let out = match key.and_then(|key| inverted.get(&key)) {
+            Some(net) => *net,
+            None => {
+                let base = match key {
+                    Some((net, None)) => format!("{}$rn", module.nets[net].name),
+                    Some((net, Some((hi, lo)))) => {
+                        format!("{}${hi}_{lo}$rn", module.nets[net].name)
+                    }
+                    None => "ff$rn".to_owned(),
+                };
+                let out = add_net_in(module, &mut names, &base, Type::bit(), span);
+                add_cell_in(
+                    module,
+                    &mut names,
+                    &format!("{base}$not"),
+                    CellKind::Not,
+                    vec![(Name::new("a"), rst)],
+                    vec![(Name::new("y"), out)],
+                    span,
+                );
+                if let Some(key) = key {
+                    inverted.insert(key, out);
+                }
+                out
+            }
+        };
+        let complement = net_expr(module, out, span);
+        let cell = &mut module.cells[id];
+        if let CellKind::Dff {
+            reset: Some(reset), ..
+        } = &mut cell.kind
+        {
+            reset.active_high = !reset.active_high;
+        }
+        for (port, value) in cell.inputs.iter_mut() {
+            if port.as_str() == "rst" {
+                *value = complement;
+            }
+        }
+        flipped += 1;
+    }
+    flipped
+}
+
 /// Three shapes, each what Vivado's synthesis makes of the same source
 /// (`testdata/fpga/vivado/slice_cells/infer_latch_*`):
 ///
@@ -2216,6 +2312,62 @@ mod tests {
         let value = design.module(top).exprs[ce.1].as_const().unwrap();
         assert_eq!(value.to_u64(), Some(1));
         assert_eq!(cells_named(&design, top, "LUT4"), 1);
+    }
+
+    /// `flip_reset_polarities` gives an active-low reset the 7 series has
+    /// only active high that polarity, reading the complement of the net it
+    /// read through a `not`, so that `map_cells` has nothing left to invert;
+    /// an active-high reset it leaves alone. Would catch the `not` left out or
+    /// put on the wrong signal, the polarity not flipped (`map_cells` would
+    /// invert again) and a reset that needs nothing touched.
+    #[test]
+    fn a_reset_flipped_before_the_mapping_reads_its_complement() {
+        let device = target("xc7a100t-ftg256").unwrap();
+        let low = |active_high: bool| CellKind::Dff {
+            clk_pos: true,
+            has_enable: false,
+            reset: Some(Reset {
+                asynchronous: false,
+                active_high,
+                value: Const::zero(4),
+            }),
+        };
+        let (mut design, top, _map) = design_with(low(false), 4);
+        assert_eq!(flip_reset_polarities(design.module_mut(top), device), 1);
+        let module = design.module(top);
+        let (_, ff) = module
+            .cells
+            .iter()
+            .find(|(_, c)| c.name.as_str() == "r")
+            .expect("the flip-flop");
+        assert!(matches!(
+            &ff.kind,
+            CellKind::Dff { reset: Some(r), .. } if r.active_high
+        ));
+        let rst = module.expr(ff.input("rst").unwrap()).as_net().unwrap();
+        let (_, not) = module
+            .cells
+            .iter()
+            .find(|(_, c)| c.output("y") == Some(rst))
+            .expect("what drives the reset");
+        assert_eq!(not.kind, CellKind::Not);
+        let port = module
+            .ports
+            .iter()
+            .find(|p| p.name.as_str() == "rst")
+            .unwrap();
+        assert_eq!(
+            module.expr(not.input("a").unwrap()).as_net(),
+            Some(port.net)
+        );
+        let mut diags = Diagnostics::new();
+        let report = map_cells(&mut design, top, device, &mut diags);
+        assert_eq!(diags.len(), 0, "{:?}", diags.iter().next());
+        assert_eq!(report.inverters(), 0);
+        assert_eq!(cells_named(&design, top, "FDRE"), 4);
+
+        let (mut design, top, _map) = design_with(low(true), 4);
+        assert_eq!(flip_reset_polarities(design.module_mut(top), device), 0);
     }
 
     #[test]
