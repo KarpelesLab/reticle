@@ -1137,6 +1137,8 @@ impl XrayDatabase {
         let mut out = vec![0u32; graph.nodes.len()];
         // Each wire's class's cost, by tile type and wire name, looked up once.
         let mut classes: FastMap<(usize, u32), Option<u32>> = FastMap::default();
+        // Whether a wire name is the clock network's, by its number.
+        let mut clock_names: FastMap<u32, bool> = FastMap::default();
         for (index, pip) in graph.pips.iter().enumerate() {
             let index = super::arch::PipId::try_from(index).unwrap_or(u32::MAX);
             let table = arch
@@ -1147,9 +1149,14 @@ impl XrayDatabase {
                 .and_then(|t| t.get(&(node_name[pip.from as usize], node_name[pip.to as usize])))
                 .copied();
             // The clock network's untimed pips are its segments, not its
-            // stages: see the last paragraph above.
+            // stages: see the last paragraph above. Each name asked once.
             let untimed = || {
-                if graph.pip_bits(index).is_empty() || is_clock_wire(&graph.wire(pip.to).name) {
+                let to = node_name[pip.to as usize];
+                if graph.pip_bits(index).is_empty()
+                    || *clock_names
+                        .entry(to)
+                        .or_insert_with(|| is_clock_wire(&graph.wire(pip.to).name))
+                {
                     0
                 } else {
                     UNTIMED_PIP_PS
@@ -3347,13 +3354,19 @@ impl XrayFabric {
     /// begins and which general routing is entered from too.
     #[must_use]
     pub fn clock_roads(&self, graph: &super::arch::RoutingGraph) -> Vec<bool> {
+        // Each name once, as `clock_network_nodes` does: a die repeats its
+        // wire names in every tile, and a dozen substring searches a node
+        // was a second of every build.
+        let mut asked: FastMap<&str, bool> = FastMap::default();
         graph
             .nodes
             .iter()
             .map(|wire| {
-                is_clock_input_wire(&wire.name)
-                    || (wire.name.contains("ILOGIC") && wire.name.ends_with("_O"))
-                    || (self.regional && is_regional_road(&wire.name))
+                *asked.entry(wire.name.as_str()).or_insert_with(|| {
+                    is_clock_input_wire(&wire.name)
+                        || (wire.name.contains("ILOGIC") && wire.name.ends_with("_O"))
+                        || (self.regional && is_regional_road(&wire.name))
+                })
             })
             .collect()
     }
