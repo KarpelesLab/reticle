@@ -7218,3 +7218,192 @@ used a `DSP48E1`; Vivado encoded `seq_detect`'s states one-hot (7
 flip-flops to 3). The `gadd` rows are from the build with this branch's
 binary; the first build, with the slice read as zeros, had two flip-flops
 where the design has ten and fourteen.
+
+## A placement Vivado refused that was legal
+
+`achieved.sh` replays Reticle's placement and routes into Vivado. On one build,
+`sad` (the Husky Plus piece, built whole from NewAE's sources, which are not in
+this repository) at seed 2 for the XC7A35T, built by a branch with a speed-grade
+option, Vivado's import stopped at the placement:
+
+```
+ERROR: [Vivado 12-1409] Cannot set LOC and BEL properties on one or more cells.
+c1370_nextrefsample_13_ff_ff2.  to bel D5FF. Routing contention at pips element DOUTMUX
+```
+
+The reading it invites is that Reticle had double-booked a slice's output mux: a
+five-input flip-flop, whose `Q` leaves the slice by `DOUTMUX.D5Q` only, in a lane
+whose `DOUTMUX` something else needed (a carry's sum or carry out, an `O5`, an
+`MC31`). **That reading was wrong.** Every step below is Vivado 2026.1 at
+`xc7a35tftg256-1`, run on 2026-11-09; nothing here has been on a board.
+
+### What Vivado allows
+
+Each mux's values, as `get_site_pips` names them on a `SLICEL` and a `SLICEM`
+(**measured**):
+
+| mux | values |
+|---|---|
+| `DOUTMUX` | `O6`, `O5`, `XOR`, `CY`, `D5Q`, and `MC31` on a `SLICEM` (and `CARRY4_XOR`, `CARRY4_MUX`, by their names the carry's two again; not checked) |
+| `AOUTMUX`, `COUTMUX` / `BOUTMUX` | as `DOUTMUX` with their own `<L>5Q`, and `F7` / `F8`, no `MC31` |
+| `D5FFMUX` | `IN_A` (the table's `O5`), `IN_B` (the bypass `DX`) |
+| `DFFMUX` | `O6`, `O5`, `XOR`, `CY`, `DX`, and `MC31` on a `SLICEM` |
+| `DCY0` | `DX`, `O5` |
+
+So a lane's output mux carries one of those out of the slice, and a five-input
+flip-flop that is used holds it on `D5Q`, whatever feeds the flip-flop. Its `D`
+comes from `O5` or from `DX`, and `DX` is the same wire `DFFMUX.DX` and the
+carry's `DCY0.DX` read. Vivado moved the carry's generate off `DX` when the
+flip-flop took it (**measured**: the `CARRY4` of the refused slice alone gets
+`DCY0:DX`; beside the flip-flop, `DCY0:O5`). Both of those Reticle's placer
+already holds it to: the one exit by `SiteRules::exits`, the one bypass wire by
+its pools.
+
+### What the refused slice held
+
+`SLICE_X37Y118`: a `CARRY4` (bits 0 to 3 of a subtraction of `adc_datain`), its four sums
+each registered in its own lane's flip-flop (`AFF`..`DFF`), its four propagate
+tables, and the refused `D5FF`, fed from the slice to its left on `DX`. Nothing
+of that lane leaves by `DOUTMUX` but the `D5FF`'s `Q`: the sum `O3` is read by
+`DFF` alone, inside the slice. Reticle's bitstream of that build, decoded, has
+`DOUTMUX.D5Q`, `D5FFMUX.IN_B`, `DFFMUX.XOR` and `CARRY4.DCY0` in that slice and no
+other value of any of them.
+
+Vivado took the same cells when asked differently (**measured**): the slice's
+ten cells alone in one `place_cell`; every cell of the design one at a time in
+the file's order, where the `D5FF` was taken (a table elsewhere was refused, the
+`A6` case below); and the whole design's placement in one call with the
+flip-flops first, or in two with the `CARRY4`s last. In the last three the
+finished slice selects `DOUTMUX:D5Q`, `DFFMUX:XOR`, `D5FFMUX:IN_B` and
+`DCY0:O5`, what Reticle's bitstream selects.
+`CCY0`..`ACY0` differ: Vivado took the generate from the bypass, Reticle from
+`O5` with a zero in the table's lower half (`xray::carry` says why: a bypass
+nothing drives reads one). Routed by Vivado from there, the design had no net
+left unrouted.
+
+### Why one call was refused
+
+Placing one `CARRY4` places its whole chain, and Vivado routes every sum of
+the chain out of its slice by `<L>OUTMUX.XOR` until the flip-flop that reads it
+is placed (**measured**: `c250` placed alone put `c251` in `SLICE_X37Y119` too,
+both slices `AOUTMUX:XOR` to `DOUTMUX:XOR`; placing `DFF` then moved that lane
+to `DFFMUX:XOR`). Inside one `place_cell` Vivado does not take the cells in the
+order written: the smallest set beside the two chain slices that made it
+refuse, found by delta debugging, was four flip-flops of a CDC FIFO elsewhere on
+the die, and the cell blamed changed from one subset to another (the `D5FF`, a
+`CARRY4`, a propagate table). The reading, which those two measurements make
+and nothing else checked: whenever a `CARRY4` came before a lane's flip-flop,
+that lane's sum held the mux the `D5FF` needed.
+
+That it is the order and not the placement was then asked of more placements
+(**measured**). The corpus, the thirteen designs of `qor/`, `analyser_fifo`,
+`carry_counter`, `esad` and `sad`, for the XC7A35T and the XC7A100T, seeds 1 to
+5 and 1 to 10 for `esad` and `sad`, is 190 builds from master at `91802be8`,
+and 41 of them have a five-input flip-flop beside a `CARRY4` (104 slices). All
+190 were accepted in one call as written. Each of the 41, its lines shuffled at
+random four times:
+
+| how the cells are given | refused, of 164 |
+|---|---|
+| one `place_cell` | 3 (2 `DOUTMUX` contention, 1 a table's `A6`) |
+| everything, then the `CARRY4`s | 10 (8 a table's `A6` while its `A5LUT` was used, 2 a table after a RAM beside it) |
+| the tables, then everything else, then the `CARRY4`s | 0 |
+
+**The last row was the first fix, and it was wrong.** Master moved on under it
+(`48242e62`, whose synthesis builds a carry's lane as one `LUT6_2`, the
+propagate on `O6` and the generate on `O5`), and over that master's 340 builds
+of the corpus, seeds 1 to 10 throughout, those three calls were refused 28
+times where one call of everything was refused none: each time a `D5FF` or a
+`DFF` beside a `CARRY4`, "Element `SLICE_…`.DFFMUX is not routable". Given in
+seven orders of four classes, one of them (`sad`, seed 1, XC7A35T) was refused
+in exactly the three where the `CARRY4`s came after both the tables and the
+flip-flops. The reading, not checked further: the same thing as before from
+the other side, a `LUT6_2`'s `O5` whose carry is not yet placed routed out of
+the slice by the lane's mux.
+
+Both refusals are a cell placed while a reader of its output in the same slice
+is not, so the order is the slice's readers first: flip-flops, then `CARRY4`s,
+then tables, then the rest (RAM macros, buffers, everything else), each in a
+call of its own and each in the order the file had (**measured**):
+
+| placements | how | refused |
+|---|---|---|
+| master's 340 (`48242e62`) | flip-flops, `CARRY4`s, tables, the rest | 0 of 340 |
+| the 89 with a five-input flip-flop beside a `CARRY4` (47 of those, the 41 above, and the refused one) | the same | 0 of 89 |
+| the same 89, the flip-flops and the `CARRY4`s shuffled within their calls, four times | the same | 0 of 356 |
+| the same 89, all four classes shuffled, four times | the same | 34 of 356 |
+
+The last row is why each call keeps the file's order: shuffled, a `LUT6_2`'s two
+halves part (32, a table's `A6` while its `A5LUT` was used) and a distributed
+RAM's leaves come out of the order Vivado wants (2).
+
+### What was changed
+
+- **The writer.** `--vivado-placement` now writes four `place_cell` calls: a
+  slice's flip-flops, then the `CARRY4`s, then the lookup tables, then
+  everything else, each in the order it had (`xray::vivado`'s
+  `place_cell_calls`). The refused placement, rewritten that way, was accepted,
+  and its routes were all set (1,469 of 1,469); master's 340 builds, rebuilt
+  with this tree and given to Vivado as it writes them, were all accepted.
+- **A legality audit.** The placer now asks its finished placement two
+  questions and refuses it, with every problem named, if either finds one
+  (`PlaceError::Illegal`): `place::shared_exits`, every wire two signals need as
+  their only way out of a tile, which is the double-booked output mux this
+  section went looking for; and each placed cell put to the site rules it was
+  placed by, on its own site, with its neighbours as they ended up. The first
+  is the exact form of a rule the placer asks roughly: `SiteRules::exits` lets a
+  signal share an exit when all its readers are in the driver's rigid group,
+  which says nothing of where in the group they are; the audit asks whether
+  each reader's pin is reached inside the tile. Cells a constraint put where
+  they are are not asked: a pad is where the board has it, and asking found 42
+  pads of `sad` "sharing" a differential pair's input they do not use.
+
+Over the 190 builds and the 340 the audit found nothing, and every bitstream is
+byte for byte what master wrote. **No build in the corpus had the condition**,
+then, and the one refusal was Vivado's order of placement.
+
+### The Husky's bitstreams
+
+Unchanged, byte for byte (**checked**, this tree on `48242e62`):
+`examples/husky/build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` at seed 4
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`, the hashes
+they wrote before. The audit refused neither placement, and the writer is not on
+their path.
+
+### Tests
+
+- `the_carries_are_placed_after_everything_they_feed` (`xray::vivado`): the
+  four calls, their order, a `LUT6_2`'s halves kept together, a RAM macro's line
+  with no bel and a pad's buffer in the last call. Mutation-checked: one call of
+  everything, the three calls of the first fix, the `CARRY4`s before the
+  flip-flops, a five-input flip-flop not taken for a flip-flop, and the order
+  inside a call lost each fail it. It does not hold Vivado to what was
+  measured.
+- `two_outputs_that_need_one_wire_out_of_a_tile_are_found` (`place`): a lane's
+  `q5` and sum both on one exit; legal while the sum is read by its own lane's
+  flip-flop, a shared exit once a table outside reads it too, and the audit and
+  `PlaceError::Illegal` saying so. Mutation-checked: every reader counted as
+  leaving, the conflict not reported, and the audit not asking each fail it. It
+  would not catch an output with a second way out made to claim one (no output
+  in it has two).
+
+The first fails on both writers that were refused; whether Vivado takes what it
+writes now no unit test can say, which is what the builds above are for. The
+second would have found nothing in `sad`, which had no shared exit to find.
+
+### Not done
+
+- **The routes stage still does not finish `sad`.** With the placement taken,
+  Vivado set every one of Reticle's routes and then stopped at the ground net:
+  three pins whose `GNDTerm` a fixed route holds (`Route 35-341`), the finding
+  *The delay model, fitted to Vivado's timer* left **open**, and 12
+  nets unrouted after it, the ground among them. One reading, not checked: the
+  ties Vivado wants are the carry generates it puts on a bypass input, which
+  Reticle takes from `O5`, so the bypass wires are Reticle's routes.
+- The order is measured, not derived: two of Vivado's habits were found by
+  their refusals, and a placement shape the corpus does not have (a wide mux
+  beside a carry, a shift register's cascade) may find a third.
+- The placer's own exit rule is still the coarse one. The audit would stop a
+  build it let through; none did here.
