@@ -5818,8 +5818,16 @@ fn confine_to_roads(
                 .iter()
                 .filter_map(|site| graph.sites[*site].pin(&pin.role).map(|node| (node, *site)))
                 .collect();
-            let mut seen: HashSet<NodeId> = graph.sites[pad].pin_nodes(&driver.role).collect();
-            let mut work: Vec<NodeId> = seen.iter().copied().collect();
+            // The walk starts from the pad's pins in the site's own order: a
+            // node is marked the first time it is reached, and one reached
+            // first over a pip that is neither free nor on a road is not
+            // walked on from, so the order can decide which sites are
+            // reached. It was the set's own, which is a new one each run.
+            let mut seen: HashSet<NodeId> = HashSet::new();
+            let mut work: Vec<NodeId> = graph.sites[pad]
+                .pin_nodes(&driver.role)
+                .filter(|node| seen.insert(*node))
+                .collect();
             let mut reached: Vec<usize> = Vec::new();
             while let Some(node) = work.pop() {
                 for pip in graph.outgoing(node) {
