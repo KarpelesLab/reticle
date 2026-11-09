@@ -6601,8 +6601,14 @@ outputs (`count[i] ^ 0`), so each gets a **buffer lookup table**,
 `INIT = 0xAAAAAAAAAAAAAAAA`, which is a route-through. A lane whose
 generate is a constant gets a table of its own whose lower half is the
 constant, for `O5`, with `I5` tied to one in the netlist so the cell's
-model reads the upper half just as `O6` does with `A6` high. A lane whose
-outputs nothing reads is left alone and its inputs become `x`.
+model reads the upper half just as `O6` does with `A6` high. With the
+default `--synthesis vivado`, a lane whose propagate is already a table of
+five inputs or fewer has the constant put on that table's own `O5` instead,
+the table made a `LUT6_2` (`CarryOptions::generates_on_their_tables`): an
+equality's lanes of two bit pairs are one table before the chain, not two
+(`docs/fpga-vivado-parity.md`, "The netlist against Vivado's, placed by
+Vivado"). A lane whose outputs nothing reads is left alone and its inputs
+become `x`.
 `tests/fpga_carry.rs::legalising_a_chain_for_a_slice_changes_no_sum`
 simulates the legalised netlist exhaustively against the arithmetic.
 

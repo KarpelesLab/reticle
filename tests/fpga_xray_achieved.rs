@@ -46,7 +46,7 @@ fn achieved() -> Option<Table> {
                     .or_default()
                     .push(ns.parse().expect("a figure"));
             }
-            ["netlist", ..] | ["slices", ..] => {}
+            ["netlist", ..] | ["slices", ..] | ["vnetlist", ..] | ["pnr", ..] => {}
             other => panic!("a line of achieved.txt this does not know: {other:?}"),
         }
     }
@@ -425,5 +425,100 @@ fn a_tables_inputs_given_as_vivado_gives_them_make_the_corpus_faster() {
     assert!(
         first <= vivados,
         "seeds 1 to 5: {first:.3} refined against {vivados:.3} for Vivado's routes"
+    );
+}
+
+/// Per (design, clock): Vivado's netlist placed and routed by Vivado
+/// (`vnetlist`), and each build's netlist placed and routed the same way by
+/// seed (`pnr`).
+fn netlists() -> Option<Table> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/qor/achieved.txt");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        eprintln!(
+            "skipped: `{}` is not in the published crate",
+            path.display()
+        );
+        return None;
+    };
+    let mut table = Table::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        match w.as_slice() {
+            ["vnetlist", design, clock, ns] => {
+                let entry = table
+                    .entry(((*design).to_owned(), (*clock).to_owned()))
+                    .or_default();
+                entry.0 = ns.parse().expect("a figure");
+            }
+            ["pnr", build, _seed, design, clock, ns] => {
+                table
+                    .entry(((*design).to_owned(), (*clock).to_owned()))
+                    .or_default()
+                    .1
+                    .entry((*build).to_owned())
+                    .or_default()
+                    .push(ns.parse().expect("a figure"));
+            }
+            _ => {}
+        }
+    }
+    Some(table)
+}
+
+/// **The netlist of "The netlist against Vivado's, placed by Vivado" closes
+/// most of the distance to Vivado's netlist, and Reticle's flow is faster for
+/// it** (`docs/fpga-vivado-parity.md`). Vivado placing and routing both, the
+/// geometric mean of Reticle's netlist against Vivado's went from 1.092
+/// (`refined`) to 1.033 (`closing`), seeds 1 to 5; Reticle's own flow from
+/// 1.165 to 1.119 against Vivado's own, ten seeds, the worst clock `sad`'s ADC
+/// clock 2.8 % over its own. This holds the netlist at least 4 % nearer
+/// Vivado's and within 5 % of it, the flow at least 3 % faster, no clock's
+/// median more than 4 % over its own, and every clock with Vivado's netlist's
+/// figure and five seeds of each netlist. Would catch a regeneration that lost
+/// the change, swapped the builds or lost a seed or a clock; would not catch
+/// the flow losing the change since, which needs Vivado.
+#[test]
+fn the_netlist_closes_on_vivados_own_placement() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    assert_eq!(nets.len(), table.len(), "every clock has its netlists");
+    let mut logs = [0.0f64; 4];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (refined, closing) = (&builds["refined"], &builds["closing"]);
+        assert_eq!(closing.len(), 10, "{design} {clock}: seeds of `closing`");
+        let (before, after) = (median(refined), median(closing));
+        assert!(
+            after <= before * 1.04,
+            "{design} {clock}: {after:.3} ns closing against {before:.3}"
+        );
+        let (own, placed) = &nets[&(design.clone(), clock.clone())];
+        assert!(*own > 0.0, "{design} {clock}: no `vnetlist`");
+        let (net_before, net_after) = (&placed["refined"], &placed["closing"]);
+        assert_eq!(
+            (net_before.len(), net_after.len()),
+            (5, 5),
+            "{design} {clock}: seeds of `pnr`"
+        );
+        for (log, ratio) in logs.iter_mut().zip([
+            before / vivado,
+            after / vivado,
+            median(net_before) / own,
+            median(net_after) / own,
+        ]) {
+            *log += ratio.ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, net_before, net_after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 0.97,
+        "Reticle's flow against Vivado's: {after:.3} closing, {before:.3} refined"
+    );
+    assert!(
+        net_after <= net_before * 0.96 && net_after <= 1.05,
+        "the netlist against Vivado's: {net_after:.3} closing, {net_before:.3} refined"
     );
 }

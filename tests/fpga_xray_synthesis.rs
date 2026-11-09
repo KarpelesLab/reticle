@@ -228,9 +228,13 @@ fn the_gaps_asked_about_are_closed() {
 }
 
 /// `testdata/fpga/vivado/qor/netlist.txt` has every design of the corpus, as
-/// Vivado's synthesis made it and as Reticle's builds before, after and with
-/// "Area against Vivado's" made it, each by Vivado's counting; and in each
-/// build, no clock's worst path has more tables than in the one before it. (Its levels can be more: a subtraction on the chain is
+/// Vivado's synthesis made it and as Reticle's builds before, after, with
+/// "Area against Vivado's" (`area`), on 91802be8 (`refined`) and with "The
+/// netlist against Vivado's, placed by Vivado" (`closing`) made it, each by
+/// Vivado's counting; and in each build, no clock's worst path has more
+/// tables than in the one before it (`closing` against `refined`, whose
+/// equality lanes lost their buffer tables and `esad`'s and `sad`'s worst
+/// paths a table each). (Its levels can be more: a subtraction on the chain is
 /// a `CARRY4` a level where it was none, and `bram_fifo`'s most levels went
 /// from five to seven, Vivado's own count.) Catches a regeneration that lost
 /// a design or a build; not the flow moving on since, which only
@@ -260,7 +264,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
     let mut corpus: Vec<&str> = DESIGNS.to_vec();
     corpus.extend(["esad", "sad"]);
     for name in corpus {
-        for build in ["vivado", "before", "after", "area"] {
+        for build in ["vivado", "before", "after", "area", "refined", "closing"] {
             assert!(
                 cells.contains(&(build.to_owned(), name.to_owned())),
                 "no `{build}` cells of {name}"
@@ -271,6 +275,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
         let earlier = match build.as_str() {
             "after" => "before",
             "area" => "after",
+            "closing" => "refined",
             _ => continue,
         };
         let before = levels[&(earlier.to_owned(), name.clone(), clock.clone())];

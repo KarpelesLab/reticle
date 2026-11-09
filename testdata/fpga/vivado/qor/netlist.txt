@@ -11,6 +11,11 @@
 #   area     Reticle's netlist of seed 1 of the `area` build of achieved.txt, the
 #            default with docs/fpga-vivado-parity.md's "Area against Vivado's"
 #            (2026-11-07)
+#   refined  Reticle's netlist of seed 1 of the `refined` build of achieved.txt,
+#            the default on 91802be8 (2026-11-09)
+#   closing  Reticle's netlist of seed 1 of the `closing` build, the default with
+#            "The netlist against Vivado's, placed by Vivado" (2026-11-09). A
+#            `LUT6_2` is two tables in Vivado's counting, one on the part.
 #   cells <build> <design> <LUT> <CARRY4> <FF> <MUXF7> <MUXF8>
 #   levels <build> <design> <clock> <max> <worst> <tables> <CARRY4s>
 #            the most levels of logic on any of the clock's paths to itself in
@@ -169,3 +174,79 @@ cells after widemux 276 0 1047 128 64
 levels after widemux clk 4 4 2 0
 cells area widemux 276 0 1047 128 64
 levels area widemux clk 4 4 2 0
+cells refined adders 231 56 481 0 0
+levels refined adders clk 9 9 1 8
+cells closing adders 231 56 481 0 0
+levels closing adders clk 9 9 1 8
+cells refined analyser_fifo 212 26 211 0 0
+levels refined analyser_fifo rd_clk 10 10 5 5
+levels refined analyser_fifo wr_clk 5 5 3 2
+cells closing analyser_fifo 230 29 211 0 0
+levels closing analyser_fifo rd_clk 9 9 5 4
+levels closing analyser_fifo wr_clk 5 5 2 3
+cells refined barrel 87 0 70 16 0
+levels refined barrel clk 3 3 3 0
+cells closing barrel 87 0 70 16 0
+levels closing barrel clk 3 3 3 0
+cells refined bram_fifo 55 12 68 0 0
+levels refined bram_fifo clk 7 3 3 0
+cells closing bram_fifo 57 6 68 0 0
+levels closing bram_fifo clk 7 3 3 0
+cells refined carry_counter 55 11 65 0 0
+levels refined carry_counter clk 9 5 2 3
+cells closing carry_counter 65 13 65 0 0
+levels closing carry_counter clk 9 6 1 5
+cells refined counter64 109 22 129 0 0
+levels refined counter64 clk 17 8 2 6
+cells closing counter64 129 25 129 0 0
+levels closing counter64 clk 17 10 1 9
+cells refined crc32 191 0 65 0 0
+levels refined crc32 clk 2 2 2 0
+cells closing crc32 191 0 65 0 0
+levels closing crc32 clk 2 2 2 0
+cells refined esad 1171 77 1085 0 0
+levels refined esad adc_sampleclk 5 3 3 0
+levels refined esad clk_usb 4 4 3 1
+cells closing esad 1175 71 1085 0 0
+levels closing esad adc_sampleclk 5 2 2 0
+levels closing esad clk_usb 2 2 2 0
+cells refined fir8 7 0 23 0 0
+levels refined fir8 clk 5 5 0 0
+cells closing fir8 7 0 23 0 0
+levels closing fir8 clk 5 5 0 0
+cells refined fsm 38 0 30 0 0
+levels refined fsm clk 3 3 3 0
+cells closing fsm 38 0 30 0 0
+levels closing fsm clk 3 3 3 0
+cells refined gray_cdc 26 3 37 0 0
+levels refined gray_cdc clk 4 4 1 3
+levels refined gray_cdc clk2 2 2 2 0
+cells closing gray_cdc 26 3 37 0 0
+levels closing gray_cdc clk 4 4 1 3
+levels closing gray_cdc clk2 2 2 2 0
+cells refined lutram32 8 0 70 0 0
+levels refined lutram32 clk 2 2 2 0
+cells closing lutram32 8 0 70 0 0
+levels closing lutram32 clk 2 2 2 0
+cells refined mul18 7 0 36 0 0
+levels refined mul18 clk 2 2 2 0
+cells closing mul18 7 0 36 0 0
+levels closing mul18 clk 2 2 2 0
+cells refined regfile_alu 470 20 20 0 0
+levels refined regfile_alu clk 12 7 6 0
+cells closing regfile_alu 470 20 20 0 0
+levels closing regfile_alu clk 12 7 6 0
+cells refined sad 1575 142 1025 0 0
+levels refined sad adc_sampleclk 5 3 3 0
+levels refined sad clk_usb 4 4 3 1
+cells closing sad 1579 136 1025 0 0
+levels closing sad adc_sampleclk 5 2 2 0
+levels closing sad clk_usb 2 2 2 0
+cells refined srl_delay 7 0 34 0 0
+levels refined srl_delay clk 2 2 2 0
+cells closing srl_delay 7 0 34 0 0
+levels closing srl_delay clk 2 2 2 0
+cells refined widemux 276 0 1047 128 64
+levels refined widemux clk 4 4 2 0
+cells closing widemux 276 0 1047 128 64
+levels closing widemux clk 4 4 2 0

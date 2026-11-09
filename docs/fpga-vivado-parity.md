@@ -2062,8 +2062,9 @@ again since 2026-11-07, by the anneal again: "Packing against Vivado's".)
   **A signal carry in on `CYINIT`**, for the shared adders: `legalise_carries` would
   need the lane's generate on `O5` first. `esad`'s 256 counters are three `CARRY4`s
   each to Vivado's two.
-- **`a + 1` in tables to eleven bits**, as Vivado keeps it; the adder threshold is
-  still four.
+- *Done since, in "The netlist against Vivado's, placed by Vivado": `a + 1` to eleven
+  bits, `a + c` to ten and `a + b` to five.* **`a + 1` in tables to eleven bits**, as
+  Vivado keeps it; the adder threshold is still four.
 - **A hard block's output arrives one table late whatever it is**; a chain's top sum
   is later than its bottom one.
 - **The logic before a chain has no required time of its own**, which is why the
@@ -2386,8 +2387,12 @@ depends on, and no design maps differently for it.
   `esad`'s 48 shared adders, 96 tables, and Vivado's lane count. *Taken since, in
   "Packing against Vivado's" (change 2): the lanes, `esad` 93 `CARRY4`s to 77 and
   `sad` 174 to 142.*
-- **A constant generate of one on the slice's bypass input**, so that an equality's
-  lanes on the chain need no buffer: Vivado's chains compare `!=` with a generate of
+- *Taken another way since, in "The netlist against Vivado's, placed by Vivado": lanes
+  of two, the constant on the lane's own `O5`. For an `==` Vivado's own generate is a
+  zero, a ground routed to the bypass input (its routed `carry_counter`); the `!=`
+  reading below was not asked again.* **A constant
+  generate of one on the slice's bypass input**, so that an equality's lanes on the
+  chain need no buffer: Vivado's chains compare `!=` with a generate of
   one, which a bypass input left unrouted reads. Here every constant generate takes
   a table's `O5` (`legalise_carries`), and whether the bypass may be left to read one
   is the placer's packing to answer, which is not touched here.
@@ -4531,6 +4536,278 @@ then refuses it; with both gone it fails. In the fixture, `refined` swapped with
 - **`sad`'s placement time**, above.
 - None of it has been on a part.
 
+## The netlist against Vivado's, placed by Vivado
+
+**Asked: with Vivado placing and routing both, so that only the netlist differs,
+how far is Reticle's synthesised netlist from Vivado's, design by design, and what
+does Vivado's netlist do on the paths where the difference is?** "A table's inputs as
+Vivado gives them" left Reticle at 1.165 times Vivado's own flow, and "The clock's
+arrival on the XC7A35T" read Vivado's placement of Reticle's netlist as no better than
+Reticle's own (0.994), the 18 % between the tools being the netlist. Run on
+2026-11-09 at `xc7a100tftg256-3` with Vivado 2026.1, on 91802be8, whose own build is
+`refined` of `achieved.txt` seed for seed (the 105 figures of seeds 1 to 5 checked).
+**Everything here is Vivado's synthesis and Vivado's timer; nothing has been on a
+part.**
+
+### Measuring the netlist alone
+
+`achieved.sh` now asks two more things of each design, both on `cons3`, every clock at
+0.80 of the best Vivado's own flow achieved, the design's clocks asynchronous to each
+other: `vnetlist`, Vivado's `synth_design` then `place_design` and `route_design`
+alone, and `pnr`, Reticle's netlist of a seed (`--vivado-placement`'s `x.v`) placed and
+routed the same way. Beside each other only the netlist differs. `achieved.py
+netlists` is the table. Vivado's netlist placed and routed so is 1.001 of its own
+flow's figure at the geometric mean, `opt_design` and `phys_opt_design` worth nothing
+here once the periods are tight; at `cons1`'s periods it was 1.065.
+
+*The reading before was wrong, and the measurement was why.* The `netlist` stage
+placed Reticle's netlist on Reticle's own constraints, `x.xdc`: `cons1`'s periods, and
+the clocks not declared asynchronous. **Measured**, the geometric mean against Vivado's
+own flow of `refined`'s netlist, the median of seeds 1 to 5 where there are five:
+
+| Reticle's netlist placed and routed by Vivado on | |
+|---|---|
+| `x.xdc`, seed 1 (the `netlist` column until now) | 1.180 |
+| `cons1`, the clocks apart | 1.128 |
+| `cons3`, the clocks apart (`pnr`) | 1.092 |
+
+With the clocks together Vivado worked on paths between clocks Reticle never times
+(`sad`'s worst slack was a `clk_usb` to `adc_sampleclk` path, −2.975 ns), and `sad`'s
+ADC clock came out at 4.455 ns against 2.819 apart; at `cons1`'s periods several
+designs met theirs and Vivado stopped (`esad`'s ADC clock, `gray_cdc`'s `clk2`, the
+same netlist faster on `cons3`). **So of the 1.165, about 1.09 is the netlist, and
+Reticle's placement and routes of it are the rest, 1.165 / 1.092 = 1.067**: Vivado
+places and routes Reticle's netlist faster than Reticle does, which the 0.994 hid. The
+XC7A35T's figure was measured the old way and has not been asked again.
+
+### Where the netlists differ
+
+`pnr` of seed 1 to 5 of `refined` against `vnetlist`, the median, ns, the clocks where
+Reticle's netlist is more than 4 % behind; every other clock of the twenty-one is within
+3 %, and `regfile_alu`, `adders` and `gray_cdc`'s `clk` are faster than Vivado's own
+netlist:
+
+| design | clock | Vivado's netlist | Reticle's | ratio |
+|---|---|---|---|---|
+| `sad` | `clk_usb` | 1.627 | 2.293 | 1.409 |
+| `esad` | `clk_usb` | 1.626 | 2.269 | 1.395 |
+| `analyser_fifo` | `rd_clk` | 4.087 | 5.071 | 1.241 |
+| `carry_counter` | `clk` | 1.842 | 2.270 | 1.232 |
+| `analyser_fifo` | `wr_clk` | 2.370 | 2.855 | 1.205 |
+| `fsm` | `clk` | 1.800 | 2.061 | 1.145 |
+| `counter64` | `clk` | 3.304 | 3.771 | 1.141 |
+| `gray_cdc` | `clk2` | 1.263 | 1.414 | 1.120 |
+| `esad` | `adc_sampleclk` | 2.087 | 2.319 | 1.111 |
+| `sad` | `adc_sampleclk` | 2.139 | 2.338 | 1.093 |
+| `widemux` | `clk` | 2.453 | 2.556 | 1.042 |
+| `bram_fifo` | `clk` | 3.545 | 3.686 | 1.040 |
+
+What each path is, read off both netlists' worst paths and cones (`netlist_blame.py
+cone`) and Vivado's routed slices. **Measured**, unless it says otherwise:
+
+- **An equality on the chain: a buffer table in front of every lane.**
+  `carry_counter`'s `count == depth` was `count[5]` → a `LUT6` (the lane, three bit
+  pairs) → 0.40 ns of wire → a `LUT2` → three `CARRY4`s; Vivado's is the `LUT6` into
+  the `CARRY4`, 0.5 ns less. The `LUT2` is `xray::legalise_carries`'s: the chain's
+  generate is a constant zero, which this flow takes from a table's `O5`, and a lane of
+  six inputs has none free. **What Vivado writes for it**, asked of its routed
+  `carry_counter`: `DI` is `<const0>` on all four lanes, `CARRY4.<L>CY0` reads the
+  bypass input `<L>X`, and the ground's route is `GND_WIRE` → `GFAN0`/`GFAN1` →
+  `BYP_ALT1/3/4/6` → `BYP` → `CLBLM_M_AX` to `DX`, one tie fanned to the four bypass
+  inputs of the slice. `counter64`'s `count == limit`, `analyser_fifo`'s `stored`
+  (`wptr_r_next != rptr_next`) and `full_q` are the same.
+- **`a + c` on the chain where Vivado leaves it in tables.** `esad`'s and `sad`'s
+  `clk_usb` paths end in their CDC FIFOs' `wfull`: `wbin + (wen & ~wfull)`, four bits, a
+  `CARRY4` here, then its Gray code compared, two tables more. Vivado's netlist has no
+  chain there. Asked of a registered sum at each width from 2 to 32 bits (`synth_design
+  -mode out_of_context`): `a + 1` in tables to 11 bits and on the chain from 12; `a + c`
+  of a one-bit `c`, and a counter's `r <= r + c`, to 10 and from 11; `a + b` to 5 and
+  from 6. This flow put every adder of four bits and more on the chain. (`a + 1` to 11
+  was in "Synthesis against Vivado's" "Not done"; there it said 5 to 11 bits, from a
+  narrower sweep.)
+- **An inverter after the table that computes a reset.** `esad`'s
+  `armed_and_ready_sad` → a `LUT2` → a `LUT3` → a `LUT1` → 68 flip-flops' `R`: the
+  counters' `if (!(...)) counter <= 0` is active low, the 7 series' `R` is active high,
+  and `techcells::map_cells` inverts the net after the mapping, with a table of its own.
+  Vivado's netlist has the `LUT3` complemented and no `LUT1`. (A reset a flip-flop
+  drives, `compare_en_r[i]` in the same design, has an inverter table in Vivado's
+  netlist too: `counter_incr[3][7]_i_1`.)
+- **`analyser_fifo`'s read clock**: `rptr + fetch`, then `wptr_r_next - rptr_next`, then
+  `+ held_next`, three chains in a row, the third behind a buffer table; Vivado's is two,
+  the second the difference and the `+ held_next` together, its low lanes' generates
+  functions of `held`, `re` and `stored` rather than an operand. Not changed.
+- **`fsm`, `gray_cdc`'s `clk2`, `widemux`**: the same depth in both netlists, and the
+  difference in the wires (`fsm`'s 0.39 and 0.29 ns between its three tables against
+  Vivado's 0.19 and 0.30). Vivado's `widemux` also replicates two of its select's
+  registers (`in_reg[1028]_rep`, `in_reg[1029]_rep`), which this flow does not; not
+  measured alone.
+
+### What was changed
+
+All three under `--synthesis vivado` alone, the 7 series' default; `--synthesis
+legacy`, the ECP5 and the Gowin flows build what they did.
+
+1. **An equality's lanes are two bit pairs, and its constant generate goes on the lane
+   table's own `O5`** (`flow::VIVADO_COMPARE_LANE_BITS`, `MapOptions::compare_lane_bits`;
+   `xray::CarryOptions::generates_on_their_tables`). A lane of four inputs leaves the
+   table room for the constant: `legalise_carries` makes the propagate's table a
+   `LUT6_2`, its function on `O6` with `I5` tied high and the constant on `O5`, and the
+   lane's generate reads `O5`, as `SharedAx` builds bit 0's. A third more lanes, and no
+   table between the lane and the chain: Vivado's depth, by the other means. Vivado's own
+   means, a ground routed to the bypass input, is a tie this router does not make; the
+   `LUT6_2` is written for Vivado as its two halves (`xray::vivado`), so that Vivado's
+   placer reads `<L>CY0` from `O5` as this flow does. *The first version* left the
+   folded table a `LUT6` with the generate a constant, as the buffer tables are: Vivado,
+   given that netlist, tied the generate to the bypass input as it does its own, found
+   the bypass already taken by a flip-flop this flow had put on it, and refused the
+   placement (`12-1409`, on three designs); the bitstreams were right, the export was not
+   saying what they did.
+2. **The adders the design wrote stay in tables where Vivado leaves them**
+   (`MapOptions::vivado_adder_widths`, `vivado_table_width`): the three widths above.
+   The adders this mapping makes of a subtraction, an ordering or an equality keep
+   their own.
+3. **A reset the device has only the other way round is inverted before the mapping**
+   (`techcells::flip_reset_polarities`): the flip-flop takes the polarity its primitive
+   has and a `not` in front of its `rst`, which the mapper takes into the table that
+   computes the reset (or two tables, where the reset is read both ways). A reset a
+   flip-flop drives still has its inverter table.
+
+The mapping is proved as before (`techmap::verify`), and the flip comes before it, so
+the proof covers the `not` in the table; the flip itself is a rewrite of one cell
+held by a unit test. The chains are simulated and proved after `legalise_carries`, as
+below.
+
+Tried and not kept: nothing; but `analyser_fifo`'s three chains were looked at and
+left, above.
+
+### Before and after
+
+**The netlist alone**, `pnr` against `vnetlist` (ns, medians over seeds 1 to 5, each
+seed beside it in `achieved.txt`), the clocks that moved; every other clock is the same
+netlist byte for byte, and the same figures:
+
+| design | clock | Vivado's netlist | `refined` | `closing` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 4.087 | 5.071 | 5.097 |
+| `analyser_fifo` | `wr_clk` | 2.370 | 2.855 | **2.288** |
+| `bram_fifo` | `clk` | 3.545 | 3.686 | 3.549 |
+| `carry_counter` | `clk` | 1.842 | 2.270 | **1.881** |
+| `counter64` | `clk` | 3.304 | 3.771 | **3.446** |
+| `esad` | `adc_sampleclk` | 2.087 | 2.319 | 2.187 |
+| `esad` | `clk_usb` | 1.626 | 2.269 | **1.736** |
+| `sad` | `adc_sampleclk` | 2.139 | 2.338 | 2.261 |
+| `sad` | `clk_usb` | 1.627 | 2.293 | **1.769** |
+| geometric mean, all 21 | | 1 | 1.092 | **1.033** |
+
+**Reticle's own flow**, medians over ten seeds, the lowest and highest in brackets
+(`refined` is `achieved.txt`'s; `closing` this section's, the default now):
+
+| design | clock | Vivado | `refined` | `closing` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 3.887 | 5.152 [4.90-5.40] | 5.213 [5.01-5.30] |
+| `analyser_fifo` | `wr_clk` | 2.417 | 2.936 [2.73-3.16] | **2.594** [2.46-2.88] |
+| `bram_fifo` | `clk` | 3.388 | 3.878 [3.82-4.00] | 3.945 [3.70-4.17] |
+| `carry_counter` | `clk` | 1.855 | 2.367 [2.22-2.49] | **1.930** [1.85-1.97] |
+| `counter64` | `clk` | 3.220 | 3.768 [3.64-3.88] | **3.418** [3.35-3.51] |
+| `esad` | `adc_sampleclk` | 2.131 | 3.013 [2.78-3.82] | 2.888 [2.75-3.40] |
+| `esad` | `clk_usb` | 1.727 | 2.486 [2.30-2.69] | **1.944** [1.79-2.08] |
+| `sad` | `adc_sampleclk` | 2.207 | 2.987 [2.90-3.17] | 3.072 [2.90-3.31] |
+| `sad` | `clk_usb` | 1.726 | 2.491 [2.40-2.67] | **2.059** [1.91-2.18] |
+| geometric mean, all 21 | | 1 | 1.165 | **1.119** |
+
+**Over the twenty-one clocks Reticle's median is 1.119 times Vivado's own figure,
+against 1.165; its netlist, placed and routed by Vivado, 1.033 times Vivado's netlist
+placed and routed the same way, against 1.092.** Five clocks 9 to 22 % faster
+(`esad`'s and `sad`'s `clk_usb`, `carry_counter`, `analyser_fifo`'s write clock,
+`counter64`) and `esad`'s ADC clock 4 %; slower, `sad`'s ADC clock by 2.8 %, `bram_fifo` by 1.7 % and
+`analyser_fifo`'s read clock by 1.2 %, each inside its spread, and the first two faster
+in Vivado's hands (2.338 to 2.261 ns, 3.686 to 3.549). Each change alone, seeds 1 to 5,
+the geometric means of the full flow and of `pnr` against Vivado's own flow: `refined`
+1.163 and 1.092; the equalities 1.145 and 1.069; with the adders 1.122 and 1.037; with
+the resets (`closing`) 1.119 and 1.034.
+
+**What is left is mostly placement and routes.** `esad`'s and `sad`'s ADC clocks are
+2.19 and 2.26 ns in Vivado's hands and 2.89 and 3.07 in Reticle's: the netlist is within
+5 % of Vivado's there, and the 1.4 times is this flow's placement of it. Over the
+corpus, 1.119 / 1.034 = 1.082 is placement and routing, and 1.034 the netlist.
+
+**Cells**, by Vivado's counting of seed 1's netlist (`netlist_qor.sh`, tables /
+`CARRY4` / flip-flops; `netlist.txt`'s `refined` and `closing`), the designs that moved:
+
+| design | Vivado | `refined` | `closing` | `closing`, the mapper's tables |
+|---|---|---|---|---|
+| `analyser_fifo` | 131 / 26 / 221 | 212 / 26 / 211 | 230 / 29 / 211 | 162 |
+| `bram_fifo` | 49 / 3 / 68 | 55 / 12 / 68 | 57 / 6 / 68 | 47 |
+| `carry_counter` | 12 / 11 / 65 | 55 / 11 / 65 | 65 / 13 / 65 | 18 |
+| `counter64` | 23 / 22 / 129 | 109 / 22 / 129 | 129 / 25 / 129 | 34 |
+| `esad` | 1046 / 68 / 1078 | 1171 / 77 / 1085 | 1175 / 71 / 1085 | |
+| `sad` | 1414 / 132 / 1018 | 1575 / 142 / 1025 | 1579 / 136 / 1025 | |
+
+Vivado counts each half of a `LUT6_2` as a table: a folded lane is two in its count and
+one table on the part, where a buffer was two of both. The flip-flops are the same;
+`esad`'s worst paths went from three tables to two on both clocks, and `sad`'s too.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--synthesis legacy`, so none of the
+three reaches them: the lanes stay three bit pairs, `legalise_carries` folds nothing, the
+adders' widths and the resets' polarities are as before. With this tree's release binary
+`build.sh` writes `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `an_equalitys_generates_go_on_its_lanes_own_tables` (`tests/fpga_carry.rs`)
+  simulates every input of `a == b` at 9 and 10 bits and of the widened shape,
+  legalised as `reticle fpga` legalises them, and counts every live lane but the first
+  folded and no buffer; the legacy synthesis's lanes of three at 10 bits fold nothing,
+  even the top lane of one bit pair. `an_equality_with_its_generates_on_its_tables_is_proved`
+  proves `a == b` legalised at 16 and 32 bits, the `LUT6_2` modelled from UG474's
+  reading of the table. Every test of that file that legalises a chain under the
+  default synthesis now folds as the flow does.
+- `the_adders_vivado_leaves_in_tables_stay_there` (`tests/fpga_xray_synthesis.rs`): each
+  of the three widths in tables and one bit wider on the chain, the legacy chain from
+  four bits, every mapping proved.
+- `a_computed_reset_takes_its_inverter_into_its_table`: a computed active-low reset one
+  table and no inverter, a flip-flop's still inverted, legacy as before, both proved;
+  `a_reset_flipped_before_the_mapping_reads_its_complement` (`techcells`) holds the
+  rewrite itself.
+- `every_design_maps_as_pinned_and_is_proved` pins the four designs that moved
+  (`carry_counter`, `counter64`, `analyser_fifo`, `bram_fifo`), every one proved, the
+  legacy figures as they were.
+- `achieved.txt` gains `closing` at ten seeds, `vnetlist`, and `pnr` of `refined` and
+  `closing` at five; `tests/fpga_xray_achieved.rs` holds `closing` at least 3 % under
+  `refined` over the corpus and no clock more than 4 % over its own, and `pnr` of
+  `closing` at least 3 % under `refined`'s. `netlist.txt` gains both builds' cells and
+  levels, `closing` no deeper in tables on any clock's worst path than `refined`.
+
+**Mutations**, each made by a script and put back: the generate in the lower half
+inverted, the halves swapped, folding never, folding whatever the option, lanes of three,
+`a + 1` to 12 bits, `a + c` to 11, `a + b` to 4, no one-bit operand recognised, the flip
+not asked for, the flip without its `not`, and the flip without the polarity. **Every
+one failed a test**: the first three both of the equality's tests, the next two the
+counts of `an_equalitys_generates_go_on_its_lanes_own_tables` alone (folding whatever
+the option is caught by the legacy flow's top lane of one bit pair, which a nine-bit
+version of that test, three whole lanes, did not have, and the test was made ten bits
+for it), the adders' four the widths test, the flip not asked the reset test, and the
+two flips half done both the reset test and the unit test. In the fixture, `closing`
+swapped with `refined`, and a seed of `closing` lost, each fail
+`the_netlist_closes_on_vivados_own_placement`.
+
+### Not done
+
+- **A ground on the bypass input**, Vivado's way: lanes of three again, a third fewer
+  `CARRY4`s, and no `LUT6_2`. It needs a tie this router makes for a block RAM's pins
+  but not for a slice's, and a claim on the `BYP_ALT` the tie goes through.
+- **`analyser_fifo`'s `(a - b) + c` as one chain**, Vivado's: its read clock is 1.25
+  times Vivado's netlist and the worst of the twenty-one now.
+- **Replicating a register a wide multiplexer's select reads**, as Vivado's `widemux`.
+- **The placement**: 1.082 of the 1.119 is Reticle's placement and routes of its own
+  netlist, most of it `esad`'s and `sad`'s ADC clocks.
+- The XC7A35T's netlist figure, measured the old way.
+- None of it has been on a part.
+
 ## Wide multiplexers
 
 A slice has a `MUXF7` over each two of its lookup tables and a `MUXF8` over the
@@ -6461,7 +6738,12 @@ gain. The table is kept because it is Vivado's figure and the estimate is nearer
 Vivado's with it where it matters, as above. Against Vivado's placement and routes
 of the same netlist it is 0.994 and 0.997: on this corpus Reticle's implementation
 of a netlist is Vivado's, and the 18 % between the two tools is the netlist, as on
-the XC7A100T.
+the XC7A100T. *That reading was wrong, on the XC7A100T at least*: Vivado placed
+Reticle's netlist on Reticle's own constraints, its clocks not declared apart and its
+periods ones it met, and set beside Vivado's own flow. Asked with the clocks apart and
+periods neither meets ("The netlist against Vivado's, placed by Vivado"), Reticle's
+placement and routes of its netlist are 1.067 times Vivado's of the same netlist, and the
+netlist is 1.092 of Vivado's, not 1.18. The XC7A35T has not been asked again.
 
 **`esad`'s adc clock still crosses region rows**: its latest path has Vivado's skew
 under -0.15 ns on nine seeds of ten before and seven after, and `sad`'s on none and
