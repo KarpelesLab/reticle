@@ -83,6 +83,66 @@ fn fail<T>(message: String) -> Result<T, VivadoExportError> {
     Err(VivadoExportError(message))
 }
 
+/// The placement's `place_cell` lines, each `  <cell> <site>/<bel>` or
+/// `  <cell> <site>`, as four `place_cell` calls: a slice's flip-flops
+/// (`AFF`..`DFF`, `A5FF`..`D5FF`), then the `CARRY4`s, then every lookup
+/// table's bel, then everything else. Each call keeps the lines in the order
+/// they came, which keeps a `LUT6_2`'s two halves together and a distributed
+/// RAM's leaves in the order Vivado wants them.
+///
+/// The order is a slice's readers before what they read, and it is there
+/// because Vivado's import refused legal placements without it (Vivado 2026.1;
+/// `docs/fpga-vivado-parity.md`, *A placement Vivado refused that was legal*).
+/// A cell placed while a reader of its output in the same slice is not yet
+/// placed has that output routed out of the slice, through the lane's output
+/// mux, until the reader comes: every sum of a `CARRY4`'s chain, which placing
+/// one `CARRY4` places whole, takes `<L>OUTMUX.XOR`, and a `LUT6_2`'s `O5`
+/// whose carry is not yet placed takes the mux too. A five-input flip-flop of
+/// that lane then finds the mux taken ("Routing contention at pips element
+/// DOUTMUX", or "Element DFFMUX is not routable"). Inside one call Vivado
+/// does not take the cells in the order written, so the order is four calls.
+/// Measured over 530 placements: one call of everything refused one; tables,
+/// the rest, then the carries, which this was first, refused 28 of 340 once
+/// the carry's lanes were `LUT6_2`s; this order refused none of them, nor any
+/// of 356 with the flip-flops and carries shuffled within their calls.
+fn place_cell_calls(placed: &[String]) -> String {
+    let bel = |line: &str| -> String {
+        line.split_whitespace()
+            .nth(1)
+            .and_then(|at| at.rsplit_once('/'))
+            .map_or_else(String::new, |(_, bel)| bel.to_owned())
+    };
+    // `AFF`, `A5FF` .. `DFF`, `D5FF`: a slice's flip-flops and nothing else.
+    let slice_flip_flop = |bel: &str| {
+        let lane = bel.chars().next().is_some_and(|c| matches!(c, 'A'..='D'));
+        lane && matches!(&bel[1..], "FF" | "5FF")
+    };
+    let mut calls: [Vec<&str>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for line in placed {
+        let bel = bel(line);
+        let call = if slice_flip_flop(&bel) {
+            0
+        } else if bel == "CARRY4" {
+            1
+        } else if bel.ends_with("LUT") {
+            2
+        } else {
+            3
+        };
+        calls[call].push(line);
+    }
+    let mut script = String::new();
+    for call in calls.iter().filter(|call| !call.is_empty()) {
+        script.push_str("place_cell {\n");
+        for line in call {
+            script.push_str(line);
+            script.push('\n');
+        }
+        script.push_str("}\n");
+    }
+    script
+}
+
 /// A name with nothing in it that Tcl or a Vivado pattern would read.
 fn safe(name: &str) -> String {
     name.chars()
@@ -1062,12 +1122,7 @@ pub fn vivado_implementation(
 
     let mut script = String::new();
     script.push_str("# Reticle's placement, for a design already linked.\n");
-    script.push_str("place_cell {\n");
-    for line in &writer.placed {
-        script.push_str(line);
-        script.push('\n');
-    }
-    script.push_str("}\n");
+    script.push_str(&place_cell_calls(&writer.placed));
     for line in &writer.locks {
         script.push_str(line);
         script.push('\n');
@@ -1114,6 +1169,50 @@ pub fn vivado_implementation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The placement is four `place_cell` calls: flip-flops, `CARRY4`s,
+    /// lookup tables, the rest, each in the order written.** `sad`'s lines for
+    /// a slice Vivado refused (a five-input flip-flop beside a `CARRY4` whose
+    /// sums its flip-flops read), with a RAM macro's line that names no bel, a
+    /// RAM leaf on a table's bel, and an IO buffer. Would catch the single call
+    /// this was, and the three (tables, rest, carries) it was next, both of
+    /// which Vivado refused legal placements in; a flip-flop after a `CARRY4`
+    /// or a table; a macro line lost or misfiled for having no bel; and the
+    /// order inside a call changed, which would part a `LUT6_2`'s halves.
+    /// Would not catch Vivado changing what it takes: that was measured, and
+    /// the doc above says how.
+    #[test]
+    fn the_carries_are_placed_after_everything_they_feed() {
+        let placed: Vec<String> = [
+            "  c250_carry0 SLICE_X37Y118/CARRY4",
+            "  c1608_fold3__O6 SLICE_X37Y118/D6LUT",
+            "  c1608_fold3__O5 SLICE_X37Y118/D5LUT",
+            "  c779_ff3 SLICE_X37Y118/DFF",
+            "  c1370_ff2 SLICE_X37Y118/D5FF",
+            "  c168_mem SLICE_X36Y110",
+            "  c168_mem/RAMC SLICE_X36Y111/C6LUT",
+            "  c3_pad SLICE_X0Y1/INBUF_EN",
+            "  c251_carry1 SLICE_X37Y119/CARRY4",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert_eq!(
+            place_cell_calls(&placed),
+            "place_cell {\n  c779_ff3 SLICE_X37Y118/DFF\n  c1370_ff2 SLICE_X37Y118/D5FF\n}\n\
+             place_cell {\n  c250_carry0 SLICE_X37Y118/CARRY4\n  c251_carry1 SLICE_X37Y119/CARRY4\n}\n\
+             place_cell {\n  c1608_fold3__O6 SLICE_X37Y118/D6LUT\n  \
+             c1608_fold3__O5 SLICE_X37Y118/D5LUT\n  c168_mem/RAMC SLICE_X36Y111/C6LUT\n}\n\
+             place_cell {\n  c168_mem SLICE_X36Y110\n  c3_pad SLICE_X0Y1/INBUF_EN\n}\n"
+        );
+        // No carries, no call for them; nothing at all, no call.
+        assert_eq!(
+            place_cell_calls(&placed[1..3]),
+            "place_cell {\n  c1608_fold3__O6 SLICE_X37Y118/D6LUT\n  \
+             c1608_fold3__O5 SLICE_X37Y118/D5LUT\n}\n"
+        );
+        assert_eq!(place_cell_calls(&[]), "");
+    }
 
     #[test]
     fn an_input_the_table_ignores_is_left_out_with_the_table_cut_to_match() {
