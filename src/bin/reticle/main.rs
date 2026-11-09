@@ -4313,6 +4313,7 @@ fn write_xc7_bitstream(
     let carry_options = reticle::fpga::xray::CarryOptions {
         generates_on_their_tables: vivado_synthesis,
         generates_on_the_bypass: vivado_synthesis,
+        buffers_on_a6: vivado_synthesis,
     };
     let packing =
         reticle::fpga::xray::legalise_carries_with(&mut design, top, device, &carry_options)?;

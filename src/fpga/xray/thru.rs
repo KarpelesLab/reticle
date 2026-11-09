@@ -318,6 +318,38 @@ fn lanes(graph: &RoutingGraph) -> BTreeMap<NodeId, Lane> {
     out
 }
 
+/// Each placed table a route passes through by its lower half, with the input
+/// the way comes in on: `instance -> k`, `0` for `A1` to `4` for `A5`. What
+/// `xray::vivado` needs to hold Vivado to the same input, which its own site
+/// routing picks otherwise (see there).
+pub(super) fn lower_half_ways(
+    graph: &RoutingGraph,
+    placement: &Placement,
+    routing: &Routing,
+) -> HashMap<usize, usize> {
+    let lanes = lanes(graph);
+    let mut out = HashMap::new();
+    if lanes.is_empty() {
+        return out;
+    }
+    for route in routing.routes() {
+        for pip in &route.pips {
+            let way = graph.pip(*pip);
+            let Some(lane) = lanes.get(&way.to).filter(|l| l.five) else {
+                continue;
+            };
+            let Some(instance) = placement.instance_at(lane.site) else {
+                continue;
+            };
+            let site = &graph.sites[lane.site];
+            if let Some(k) = (0..5).find(|k| site.pin(&format!("i{k}")) == Some(way.from)) {
+                out.insert(instance, k);
+            }
+        }
+    }
+    out
+}
+
 impl XrayFabric {
     /// The ways through a lookup table this fabric was loaded with
     /// ([`super::XrayOptions::route_throughs`]), for the placer: the upper

@@ -21,6 +21,11 @@
 //! of two inputs carrying one signal: the router could end the first on
 //! it, and the table would have two signals on one input and one on none
 //! (see [`movable_inputs`]).
+//!
+//! Nor does a buffer in front of a carry propagate that `legalise_carries`
+//! put on `A6` ([`super::carry::ROUTE_THROUGH`]): that is Vivado's way through
+//! the table, and Vivado, given an empty table and a route to another input,
+//! still goes in on `A6` (`xray::vivado`).
 
 use std::collections::BTreeMap;
 
@@ -116,6 +121,15 @@ pub fn lut_input_classes(
         let Some(site) = placement.site_of(instance) else {
             continue;
         };
+        // A buffer kept on `A6`, a way through to a carry propagate as
+        // Vivado's is: see `CarryOptions::buffers_on_a6`.
+        if design.modules[top]
+            .cells
+            .get(inst.cell)
+            .is_some_and(|c| c.attrs.get(super::carry::ROUTE_THROUGH).is_some())
+        {
+            continue;
+        }
         let free = movable(design, top, netlist, instance);
         // A class of one is no choice.
         if free.iter().filter(|f| **f).count() < 2 {

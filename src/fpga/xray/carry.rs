@@ -25,7 +25,8 @@
 //!
 //! - a propagate bit driven by anything but a lookup table it can have to
 //!   itself gets a **buffer** lookup table, `O = I0`, in front of it — which
-//!   is what Vivado calls a route-through;
+//!   is what Vivado calls a route-through, and makes with no cell, on `A6`
+//!   (`O = I5` here, with [`CarryOptions::buffers_on_a6`]);
 //! - a constant propagate bit gets a lookup table whose output is that
 //!   constant;
 //! - a constant generate bit makes its lane's lookup table one of these
@@ -213,7 +214,26 @@ pub struct CarryOptions {
     /// signal off that bypass input, and ties it after routing. `reticle
     /// fpga` turns it on with the default `--synthesis vivado`.
     pub generates_on_the_bypass: bool,
+    /// Put a buffer in front of a propagate on its table's `A6`, its truth
+    /// table the upper half (`O6 = A6`), and keep it there
+    /// ([`ROUTE_THROUGH`]). That is Vivado's way through the lane's table to
+    /// the propagate, with no cell: its routed `carry_counter` takes each of
+    /// its counter's propagates in on `<L>6`, through `<L>6LUT/A6` to
+    /// `CARRY4/S<k>`, the table's `INIT` the upper half and nothing else of
+    /// the slice set (`docs/fpga-vivado-parity.md`, "A way through to the
+    /// propagate"). A buffer on another input is a table to Vivado, which
+    /// given an empty table goes through it on `A6` whatever the route
+    /// (`xray::vivado`). Not for a buffer whose lower half holds a constant
+    /// generate, which needs `A6` high. `reticle fpga` turns it on with the
+    /// default `--synthesis vivado`.
+    pub buffers_on_a6: bool,
 }
+
+/// The attribute [`legalise_carries_with`] marks a buffer table with when it
+/// puts it on `A6` ([`CarryOptions::buffers_on_a6`]): the router keeps the
+/// signal there (`xray::lut_input_classes`), so that the table is a way through
+/// on the input Vivado's is. An attribute, so that nothing writes it out.
+pub const ROUTE_THROUGH: &str = "route_through";
 
 /// The attribute [`legalise_carries_with`] marks a `CARRY4` with when some
 /// of its lanes' constant generates are left on the bypass input
@@ -972,16 +992,23 @@ pub fn legalise_carries_with(
                     }
                     let out =
                         add_net_in(m, &mut names, &format!("{name}$s{lane}"), Type::bit(), span);
-                    let init = lane_init(constant, step.generate);
+                    let mut init = lane_init(constant, step.generate);
                     let split = step.generate.is_some_and(|d| {
                         // The halves differ unless the constant generate
                         // equals a constant propagate.
                         constant != Some(d)
                     });
+                    // A buffer on `A6`, as Vivado's way through: see
+                    // `CarryOptions::buffers_on_a6`.
+                    let on_a6 = options.buffers_on_a6 && input.is_some() && !split;
+                    if on_a6 {
+                        init = Const::from_u64(0xFFFF_FFFF_0000_0000, 64);
+                    }
+                    let signal_at = if on_a6 { 5 } else { 0 };
                     let mut inputs: Vec<(Name, ExprId)> = Vec::with_capacity(6);
                     for (index, pin) in lut_inputs.iter().enumerate() {
                         let value = match (index, input) {
-                            (0, Some(e)) => e,
+                            (i, Some(e)) if i == signal_at => e,
                             (5, _) if split => const_expr(m, Const::ones(1), span),
                             _ => const_expr(m, Const::zero(1), span),
                         };
@@ -999,6 +1026,9 @@ pub fn legalise_carries_with(
                     m.cells[cell]
                         .params
                         .set(Name::new(init_name.clone()), AttrValue::Const(init));
+                    if on_a6 {
+                        m.cells[cell].attrs.set(ROUTE_THROUGH, AttrValue::Int(1));
+                    }
                     let di = match step.generate {
                         Some(d) => const_expr(m, Const::from_bits(&[bit_of(d)]), span),
                         None => slice_expr(m, old_di, bit, bit, span),

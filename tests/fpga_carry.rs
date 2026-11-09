@@ -1168,6 +1168,7 @@ fn check_full_with(
     let carry = fpga::xray::CarryOptions {
         generates_on_their_tables: options.vivado_synthesis,
         generates_on_the_bypass: options.vivado_synthesis,
+        buffers_on_a6: options.vivado_synthesis,
     };
     check_full_carry(shape, width, device, options, &carry, legalise, pack)
 }
@@ -1648,6 +1649,7 @@ fn an_equalitys_generates_go_on_its_lanes_own_tables() {
     let fold = fpga::xray::CarryOptions {
         generates_on_their_tables: true,
         generates_on_the_bypass: false,
+        buffers_on_a6: false,
     };
     for width in [9, 10] {
         let packing = check_full_carry(Shape::EqualPlain, width, XC7, &vivado, &fold, true, false)
@@ -1725,6 +1727,86 @@ fn an_equalitys_generates_are_tied_on_the_bypass() {
     assert_eq!(packing.generates_on_bypass, 0, "legacy: {packing:?}");
 }
 
+/// **A buffer in front of a propagate is on `A6`, as Vivado's way through the
+/// table is**, and the router is told to keep it there. Vivado's routed
+/// `carry_counter` takes each counter propagate in on `<L>6`, through
+/// `<L>6LUT/A6`, the table's `INIT` the upper half and no cell
+/// (`docs/fpga-vivado-parity.md`, "A way through to the propagate"). `a + 5`,
+/// whose propagates are the port's bits and so each a buffer, at 8 and 16
+/// bits, every input simulated as the flow legalises it: each buffer reads its
+/// signal on `I5` alone, its truth table `O6 = I5`, and carries
+/// `xray::ROUTE_THROUGH`; legalised with `buffers_on_a6` off, every buffer is
+/// as it was, on `I0`, and none is marked.
+///
+/// Would catch the signal left on `I0` beside the upper half's table (the
+/// simulation: the buffer would read a constant), the table left the
+/// buffer's, the mark lost (the router would move the signal off `A6`, and
+/// Vivado, given an empty table, takes `A6`), or the option leaking into the
+/// legacy flow, whose Husky builds must not move. Would not catch the router
+/// moving a marked signal anyway, which `lut_input_classes` is for, nor a
+/// buffer whose lower half holds a constant generate, which keeps `I0` and
+/// `I5` high, being marked: no shape here has one.
+#[test]
+fn a_buffer_in_front_of_a_propagate_is_on_a6() {
+    use reticle::ir::emit::{BitView, SigBit};
+    let vivado = vivado();
+    for width in [8, 16] {
+        for on in [true, false] {
+            let carry = fpga::xray::CarryOptions {
+                generates_on_their_tables: true,
+                generates_on_the_bypass: true,
+                buffers_on_a6: on,
+            };
+            let packing =
+                check_full_carry(Shape::Constant(5), width, XC7, &vivado, &carry, true, false)
+                    .expect("legalised");
+            assert!(packing.buffers > 0, "{width} bits: {packing:?}");
+            let (mut design, top, _) = mapped_with(Shape::Constant(5), width, XC7, &vivado);
+            let device = fpga::target(XC7).expect("a built-in device");
+            fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
+                .expect("the chain legalises");
+            let module = design.module(top);
+            let view = BitView::new(module).expect("structural");
+            let mut marked = 0;
+            for (_, cell) in module.cells.iter() {
+                // `<carry>$lut<lane>`, the tables `legalise_carries` adds.
+                if !cell.name.as_str().find("$lut").is_some_and(|at| at > 0) {
+                    continue;
+                }
+                let signals: Vec<usize> = (0..6)
+                    .filter(|k| {
+                        cell.input(&format!("I{k}")).is_some_and(|e| {
+                            view.expr_bits(e)
+                                .expect("a structural pin")
+                                .iter()
+                                .any(|b| matches!(b, SigBit::Slot(_)))
+                        })
+                    })
+                    .collect();
+                let init = match cell.params.get("INIT") {
+                    Some(AttrValue::Const(c)) => c.to_u64(),
+                    _ => None,
+                };
+                let route_through = cell.attrs.get(fpga::xray::ROUTE_THROUGH).is_some();
+                if route_through {
+                    marked += 1;
+                    assert_eq!(signals, [5], "`{}` is not on `I5`", cell.name);
+                    assert_eq!(init, Some(0xFFFF_FFFF_0000_0000), "`{}`", cell.name);
+                } else if signals == [0] && on {
+                    panic!("`{}`, a buffer, is not on `A6`", cell.name);
+                }
+                assert!(
+                    on || signals != [5],
+                    "`{}` moved with the option off",
+                    cell.name
+                );
+            }
+            let want = if on { packing.buffers } else { 0 };
+            assert_eq!(marked, want, "{width} bits, on {on}: {packing:?}");
+        }
+    }
+}
+
 /// **Lane `A`'s constant generate is not left on `AX` when a carry in from the
 /// fabric holds `AX`**, which Vivado's own `probe2` showed it does not do
 /// either: it takes that lane's one off `O5` with a table of its own
@@ -1788,6 +1870,7 @@ fn lane_as_generate_is_not_tied_on_the_carry_ins_ax() {
     let carry = fpga::xray::CarryOptions {
         generates_on_their_tables: true,
         generates_on_the_bypass: true,
+        buffers_on_a6: true,
     };
     let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
         .expect("the chain legalises");
@@ -2671,6 +2754,7 @@ mod proofs {
             let carry = fpga::xray::CarryOptions {
                 generates_on_their_tables: true,
                 generates_on_the_bypass: false,
+                buffers_on_a6: false,
             };
             let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
                 .expect("the chain legalises");
@@ -2707,6 +2791,7 @@ mod proofs {
             let carry = fpga::xray::CarryOptions {
                 generates_on_their_tables: true,
                 generates_on_the_bypass: true,
+                buffers_on_a6: true,
             };
             let packing = fpga::xray::legalise_carries_with(&mut design, top, device, &carry)
                 .expect("the chain legalises");

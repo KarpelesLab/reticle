@@ -397,6 +397,7 @@ fn differential_of(primitive: &str) -> Option<(&'static str, &'static str, &str)
 
 /// One lookup table function as Vivado will see it: the pins it reads, with
 /// the physical `A<n>` each one is, and its table over just those.
+#[derive(Clone)]
 struct LutHalf {
     /// `(physical input, its connection)`, `I0` first.
     pins: Vec<(usize, SigBit)>,
@@ -448,6 +449,69 @@ fn reduce(table: &[bool], connections: &[SigBit]) -> LutHalf {
     LutHalf {
         pins,
         table: reduced,
+    }
+}
+
+/// The placement script's `reticle_hold <cell> <primitive> <INIT> {<input>...}`:
+/// the lookup table `<cell>` taken out of the linked netlist and put back as
+/// `<primitive>` of that `INIT`, with its connections as they were and each
+/// input named tied high, before anything is placed. See [`hold_the_way`].
+const HOLD_PROC: &str = "\
+proc reticle_hold {cell ref init ties} {
+  set pins {}
+  foreach p [get_pins -of [get_cells $cell]] {
+    lappend pins [list [get_property REF_PIN_NAME $p] [get_nets -of $p]]
+  }
+  remove_cell [get_cells $cell]
+  create_cell -reference $ref $cell
+  set_property INIT $init [get_cells $cell]
+  foreach pn $pins { connect_net -net [lindex $pn 1] -objects [get_pins $cell/[lindex $pn 0]] }
+  if {[llength [get_nets -quiet reticle_hold_one]] == 0} {
+    create_cell -reference VCC reticle_hold_vcc
+    create_net reticle_hold_one
+    connect_net -net reticle_hold_one -objects [get_pins reticle_hold_vcc/P]
+  }
+  foreach t $ties { connect_net -net reticle_hold_one -objects [get_pins $cell/$t] }
+}
+";
+
+/// Leaves a table's lower half one input for the way through it, `A<way + 1>`:
+/// every other input of `A1` to `A5` the table does not read becomes one of
+/// its pins, tied high, which it ignores.
+///
+/// A flip-flop's data through a table's lower half (`xray::thru`) comes in on
+/// an input the table leaves free, and which one is the route's. Vivado has no
+/// cell for the way, and picks the input itself when it places the flip-flop,
+/// whatever route it is given after: on `barrel` seed 3 the route ended on
+/// `B1` beside a table on `A3` to `A5`, Vivado took `B2` and routed a branch of
+/// its own there, and Reticle's hung (`ANTENNAS`; so 40 builds of 170). Placed
+/// again after the routes, with the table's pins locked first, with the
+/// flip-flop placed only once the routes were set, or with the bel's
+/// `CONFIG.EQN` set to `O5=(A1)`, it still took `B2`. Given one free input it
+/// takes that one (`sad`, a `LUT4` on `A1`, `A2`, `A3` and `A5`, the way on
+/// `B4`), and so here it is given one: with the table a `LUT4` whose fourth
+/// input is tied high on `A2`, it took `B1` and finished the net (Vivado
+/// 2026.1, 2026-11-10). An input tied high is no route: an input with no pip
+/// on it reads one, and Vivado leaves it so; the bitstream Vivado wrote of
+/// `barrel` seed 3 so held is Reticle's but for the clock tiles' two known
+/// differences.
+///
+/// **The ties are the placement script's, not the netlist's**
+/// ([`Writer::hold`], `reticle_hold`). Written into the netlist, they were a
+/// table's inputs to Vivado's own placement of it too (`achieved.sh`'s `pnr`):
+/// `sad`'s ADC clock went from 2.235 ns to 2.321, every one of ten seeds
+/// slower, against 2.235 with the netlist as it was. An input tied high left
+/// unconnected does not do: Vivado then counts the input free, and took `B2`
+/// again.
+fn hold_the_way(half: &mut LutHalf, way: usize) {
+    for pin in 0..5 {
+        if pin == way || half.pins.iter().any(|(p, _)| *p == pin) {
+            continue;
+        }
+        half.pins.push((pin, SigBit::Const(Bit::One)));
+        // The new input is the table's most significant: both halves of the
+        // index along it read what the table did.
+        half.table.extend_from_within(..);
     }
 }
 
@@ -504,10 +568,17 @@ struct Names<'a> {
     view: &'a BitView<'a>,
     /// A port bit's name, by slot, since a wire there is the port itself.
     ports: HashMap<usize, String>,
+    /// The output of a table written as a way through it, by slot, and the
+    /// input it passes on, which is written in its place: see
+    /// [`carry_route_throughs`].
+    through: HashMap<usize, SigBit>,
 }
 
 impl Names<'_> {
     fn slot(&self, slot: usize) -> String {
+        if let Some(input) = self.through.get(&slot) {
+            return self.bit(*input);
+        }
         if let Some(port) = self.ports.get(&slot) {
             return port.clone();
         }
@@ -574,6 +645,9 @@ struct Writer<'a> {
     verilog: String,
     placed: Vec<String>,
     locks: Vec<String>,
+    /// `reticle_hold` lines, which rebuild a table with inputs tied high
+    /// before anything is placed: see [`hold_the_way`].
+    holds: Vec<String>,
     cells: usize,
     /// Per `CARRY4` cell name and lane, the wire its generate is written as
     /// in place of the constant: the lane table's `O5`. See
@@ -616,6 +690,39 @@ impl Writer<'_> {
         ));
         self.cells += 1;
         Ok(())
+    }
+
+    /// The table [`Writer::lut`] wrote last, `name`, of `written` inputs,
+    /// rebuilt for Vivado's placement as `held`, whose inputs past those are
+    /// tied high and locked with the rest. Nothing is written when `held` adds
+    /// none. The netlist keeps the table as it is: see [`hold_the_way`].
+    fn hold(&mut self, name: &str, written: usize, held: &LutHalf) {
+        let k = held.pins.len();
+        if k <= written {
+            return;
+        }
+        let ties: Vec<String> = (written..k).map(|i| format!("I{i}")).collect();
+        self.holds.push(format!(
+            "reticle_hold {name} LUT{k} {} {{{}}}",
+            init_literal(&held.table),
+            ties.join(" ")
+        ));
+        let lock: Vec<String> = held
+            .pins
+            .iter()
+            .enumerate()
+            .map(|(i, (physical, _))| format!("I{i}:A{}", physical + 1))
+            .collect();
+        // Locked as it is made, before anything is placed: placed unlocked,
+        // a five-input table took the way's input itself, and Vivado refused
+        // the table its bel (`lutram32` seed 5, 12-1409, "could not find a
+        // physical pin for the route-through"). A cell placed keeps the locks
+        // it has (12-3346), so the table's own line goes.
+        self.locks.pop();
+        self.holds.push(format!(
+            "set_property LOCK_PINS {{{}}} [get_cells {name}]",
+            lock.join(" ")
+        ));
     }
 
     /// [`Writer::lut`] with its output on `wire`, which the module has no
@@ -746,6 +853,88 @@ fn generate_halves(netlist: &Netlist) -> HashMap<usize, (usize, usize, Bit)> {
         }
     }
     out
+}
+
+/// The lookup tables whose one job is to pass the signal on their `A6` to the
+/// carry propagate of their lane, by instance, each with its output's slot and
+/// the input it passes on.
+///
+/// `xray::carry` puts a table in front of every propagate the slice cannot
+/// have straight, a flip-flop's output most often (a counter's), because the
+/// propagate is the lane table's `O6` and nothing else. Vivado routes the
+/// signal through the table with no cell at all: `carry_counter` built by
+/// Vivado 2026.1 (`docs/fpga-vivado-parity.md`, "A way through to the
+/// propagate") has its counter's `S[k]` on the slice's `<L>6` pin, the bel pins
+/// `<L>6LUT/A6` and `CARRY4/S<k>`, and the table's `INIT` the upper half,
+/// `O6 = A6`, which is what this flow's buffer on `A6` writes into its own
+/// bitstream. Written as a cell, the buffer is a table more to Vivado (45
+/// against 12 on `carry_counter`). So such a table is not written: the
+/// `CARRY4` reads its input, and Vivado, given the route that ends on `<L>6`,
+/// goes through the empty table on `A6`.
+///
+/// Only on `A6`. Given a route to `<L>3` and an empty table, Vivado's site
+/// routing, which it does as it places, still took `A6`, routed a branch of
+/// its own there and left this flow's hanging (`ANTENNAS`, 9 nets of
+/// `carry_counter` seed 1): a buffer on another pin stays a cell, locked there.
+fn carry_route_throughs(
+    view: &BitView<'_>,
+    module: &crate::ir::Module,
+    netlist: &Netlist,
+    ports: &HashMap<usize, String>,
+) -> Result<HashMap<usize, (usize, SigBit)>, VivadoExportError> {
+    let mut out = HashMap::new();
+    for (index, instance) in netlist.instances.iter().enumerate() {
+        let Some(k) = instance
+            .primitive
+            .strip_prefix("LUT")
+            .and_then(|k| k.parse::<usize>().ok())
+            .filter(|k| (1..=6).contains(k))
+        else {
+            continue;
+        };
+        // Its output read by one pin alone, a `CARRY4`'s propagate.
+        let read_by_a_propagate = instance
+            .pins
+            .iter()
+            .map(|p| &netlist.pins[*p])
+            .find(|p| p.output && p.role == "o")
+            .and_then(|p| p.signal)
+            .map(|s| &netlist.signals[s].sinks)
+            .is_some_and(|sinks| {
+                matches!(sinks.as_slice(), [sink] if {
+                    let pin = &netlist.pins[*sink];
+                    netlist.instances[pin.instance].primitive == "CARRY4"
+                        && pin.role.len() == 2
+                        && pin.role.starts_with('p')
+                })
+            });
+        if !read_by_a_propagate {
+            continue;
+        }
+        let cell = &module.cells[instance.cell];
+        let mut pins = Vec::with_capacity(k);
+        for i in 0..k {
+            let bits = inputs_of(view, cell, &format!("I{i}"))?;
+            pins.push(bits.first().copied().unwrap_or(SigBit::Const(Bit::Zero)));
+        }
+        let half = reduce(&truth_table(cell, k), &pins);
+        let ([(5, input @ SigBit::Slot(_))], [false, true]) =
+            (half.pins.as_slice(), half.table.as_slice())
+        else {
+            continue;
+        };
+        let Some(SigBit::Slot(output)) = output_of(view, cell, "O")?
+            .first()
+            .map(|b| view.canonical(*b))
+        else {
+            continue;
+        };
+        if ports.contains_key(&output) {
+            continue;
+        }
+        out.insert(index, (output, *input));
+    }
+    Ok(out)
 }
 
 /// Each `CARRY4` lane nothing reads whose bypass input a route ends on, with
@@ -948,14 +1137,20 @@ pub fn vivado_implementation(
 
     // The cell of each instance, and the name each gets. Cells nothing placed
     // cannot be written: the placer holds them all.
+    let throughs = carry_route_throughs(&view, module, netlist, &port_names)?;
+    // Each table a flip-flop's data passes through by its lower half, and the
+    // input it comes in on (`xray::thru`). See the tables below.
+    let ways = super::thru::lower_half_ways(graph, placement, routing);
     let mut writer = Writer {
         names: Names {
             view: &view,
             ports: port_names,
+            through: throughs.values().copied().collect(),
         },
         verilog: String::new(),
         placed: Vec::new(),
         locks: Vec::new(),
+        holds: Vec::new(),
         cells: 0,
         generates: HashMap::new(),
         wires: Vec::new(),
@@ -987,6 +1182,10 @@ pub fn vivado_implementation(
         );
     }
     for (index, instance) in netlist.instances.iter().enumerate() {
+        // A way through to a carry propagate is no cell to Vivado.
+        if throughs.contains_key(&index) {
+            continue;
+        }
         let cell = &module.cells[instance.cell];
         if !matches!(cell.kind, CellKind::Blackbox(_)) {
             return fail(format!("`{}` is not a primitive", instance.name));
@@ -1032,6 +1231,11 @@ pub fn vivado_implementation(
                 };
                 let (s, b) = spell(false)?;
                 writer.lut(&name, &half, *output, &s, &b)?;
+                if let Some(way) = ways.get(&index) {
+                    let mut held = half.clone();
+                    hold_the_way(&mut held, *way);
+                    writer.hold(&name, half.pins.len(), &held);
+                }
                 // A carry lane's constant generate, which this flow takes
                 // from the lower half of the lane's table (`xray::carry`):
                 // written as the table's `O5`, a constant on one of its own
@@ -1338,6 +1542,7 @@ pub fn vivado_implementation(
         if let SigBit::Slot(root) = view.canonical(SigBit::Slot(slot))
             && root == slot
             && !writer.names.ports.contains_key(&slot)
+            && !writer.names.through.contains_key(&slot)
         {
             wires.push(writer.names.slot(slot));
         }
@@ -1359,6 +1564,13 @@ pub fn vivado_implementation(
 
     let mut script = String::new();
     script.push_str("# Reticle's placement, for a design already linked.\n");
+    if !writer.holds.is_empty() {
+        script.push_str(HOLD_PROC);
+        for line in &writer.holds {
+            script.push_str(line);
+            script.push('\n');
+        }
+    }
     script.push_str(&place_cell_calls(&writer.placed));
     for line in &writer.locks {
         script.push_str(line);
@@ -1380,6 +1592,11 @@ pub fn vivado_implementation(
             continue;
         };
         let pin = &netlist.pins[driver];
+        // A way through to a propagate never leaves its slice: its route is
+        // the table's output alone, and Vivado has no net for it.
+        if throughs.contains_key(&pin.instance) {
+            continue;
+        }
         let cell = &module.cells[netlist.instances[pin.instance].cell];
         let bits = output_of(&view, cell, &pin.port)?;
         let Some(bit) = bits.get(pin.bit as usize) else {
@@ -1502,6 +1719,36 @@ mod tests {
         assert_eq!(whole.table, vec![false, false]);
         let half = reduce(&[true; 32], &tied[..5]);
         assert_eq!(half.pins, vec![(0, SigBit::Const(Bit::One))]);
+    }
+
+    /// **A table beside a way through its lower half leaves that way's input
+    /// the only free one of `A1` to `A5`.** A `LUT3` on `A3` to `A5` with the
+    /// way on `A1` takes `A2` tied high and nothing else (not `A6`, which the
+    /// way needs high and an unrouted input is); its table reads what it did
+    /// whatever the tie. A table of one input on `A1` with the way on `A4`
+    /// takes `A2`, `A3` and `A5`. Would catch the way's own input tied, a
+    /// free input left, `A6` tied, and the table not repeated along a new
+    /// input, which would make it read the tie.
+    #[test]
+    fn a_way_through_a_lower_half_is_left_its_input_alone() {
+        let x = SigBit::Slot(7);
+        let mut half = LutHalf {
+            pins: vec![(2, x), (3, SigBit::Slot(8)), (4, SigBit::Slot(9))],
+            table: (0..8).map(|m| m == 5).collect(),
+        };
+        hold_the_way(&mut half, 0);
+        let one = SigBit::Const(Bit::One);
+        assert_eq!(half.pins[3..], [(1, one)]);
+        assert_eq!(half.table.len(), 16);
+        assert!((0..16).all(|m| half.table[m] == (m & 7 == 5)));
+        let mut half = LutHalf {
+            pins: vec![(0, x)],
+            table: vec![false, true],
+        };
+        hold_the_way(&mut half, 3);
+        let tied: Vec<usize> = half.pins[1..].iter().map(|(p, _)| *p).collect();
+        assert_eq!(tied, [1, 2, 4]);
+        assert!((0..16).all(|m| half.table[m] == (m & 1 == 1)));
     }
 
     #[test]

@@ -655,10 +655,16 @@ fn a_carry_lanes_constant_generate_is_tied_on_the_bypass_as_vivado_ties_it() {
             "`{tile}` takes `{feature}` with no ground on `{fan}`"
         );
     }
-    // Nothing else of the design reads a ground fan.
+    // Nothing else of the design reads a ground fan. A fan a signal drives
+    // (`GFAN1.BYP_BOUNCE1`, then `IMUX4.GFAN1`) is a hop of its route: with
+    // the counter's buffers held on `A6`, the router takes it to lane `A`'s.
+    let grounded = |tile: &str, fan: &str| features.contains(&(tile, &format!("{fan}.GND_WIRE")));
     let fanned = features
         .iter()
-        .filter(|(_, f)| f.ends_with(".GFAN0") || f.ends_with(".GFAN1"))
+        .filter(|(t, f)| {
+            f.rsplit_once('.')
+                .is_some_and(|(_, fan)| matches!(fan, "GFAN0" | "GFAN1") && grounded(t, fan))
+        })
         .count();
     assert_eq!(fanned, tied, "a ground fan into something else");
     let verilog = std::fs::read_to_string(out.join("x.v")).unwrap();
@@ -668,6 +674,332 @@ fn a_carry_lanes_constant_generate_is_tied_on_the_bypass_as_vivado_ties_it() {
             .any(|l| l.trim_start().starts_with("CARRY4") && l.contains(".DI({1'b0, 1'b0, 1'b0")),
         "no `CARRY4` written with its generates the zero:\n{verilog}"
     );
+}
+
+/// One cell of an exported netlist: `(primitive, parameters, name,
+/// connections)`, the connections as `(port, what it is wired to)`.
+type NetlistCell = (String, String, String, Vec<(String, String)>);
+
+/// What `--vivado-placement` wrote for one build: the build's messages, the
+/// netlist, the placement script and the routes.
+struct Export {
+    stderr: String,
+    verilog: String,
+    placed: String,
+    routes: String,
+}
+
+/// Builds `source` (`top`, constrained by `rcf`) for the Husky Plus's part
+/// with `extra` arguments, writing what Vivado is given into `out`.
+fn export(root: &str, top: &str, rcf: &Path, source: &Path, extra: &[&str], out: &str) -> Export {
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(out);
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", "--device", "xc7a100t-ftg256", "--chipdb", root])
+        .args(["--top", top, "--report", "--constraints"])
+        .arg(rcf)
+        .args(extra)
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(out.join(format!("{top}.bit")))
+        .arg("--vivado-placement")
+        .arg(out.join("x.tcl"))
+        .arg(source)
+        .output()
+        .expect("failed to run the reticle binary");
+    let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
+    assert!(run.status.success(), "{stderr}");
+    let read = |name: &str| std::fs::read_to_string(out.join(name)).unwrap();
+    Export {
+        stderr,
+        verilog: read("x.v"),
+        placed: read("x.tcl"),
+        routes: read("x.routes.tcl"),
+    }
+}
+
+impl Export {
+    /// Each cell of the netlist: `(primitive, parameters, name, connections)`,
+    /// the connections as `(port, what it is wired to)`.
+    fn cells(&self) -> Vec<NetlistCell> {
+        let mut out = Vec::new();
+        for line in self.verilog.lines() {
+            let line = line.trim();
+            if !line.starts_with(|c: char| c.is_ascii_uppercase()) {
+                continue;
+            }
+            let (head, body) = line.split_once(" (").unwrap();
+            let (kind, rest) = head.split_once(' ').unwrap();
+            let (params, name) = match rest.rsplit_once(' ') {
+                Some((p, n)) => (p.to_owned(), n.to_owned()),
+                None => (String::new(), rest.to_owned()),
+            };
+            let mut ports = Vec::new();
+            let mut rest = body;
+            while let Some(at) = rest.find('.') {
+                rest = &rest[at + 1..];
+                let (port, after) = rest.split_once('(').unwrap();
+                // A concatenation's braces hold no parentheses.
+                let (value, after) = after.split_once(')').unwrap();
+                ports.push((port.to_owned(), value.to_owned()));
+                rest = after;
+            }
+            out.push((kind.to_owned(), params, name, ports));
+        }
+        out
+    }
+
+    /// The `<site>/<bel>` a cell is placed on.
+    fn site_of(&self, cell: &str) -> Option<&str> {
+        self.placed
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("  {cell} ")))
+    }
+
+    /// A lookup table's `LOCK_PINS`, as `(input, pin)` pairs.
+    fn locks_of(&self, cell: &str) -> Vec<(String, String)> {
+        self.placed
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("set_property LOCK_PINS {")
+                    .and_then(|r| r.strip_suffix(&format!("}} [get_cells {cell}]")))
+            })
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(|pair| {
+                let (i, a) = pair.split_once(':').unwrap();
+                (i.to_owned(), a.to_owned())
+            })
+            .collect()
+    }
+
+    /// The wires of the route of `net`, as `<tile>/<wire>`.
+    fn route_of(&self, net: &str) -> Vec<&str> {
+        self.routes
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("reticle_route {{{net}}} ")))
+            .map(|tree| {
+                tree.split_whitespace()
+                    .filter(|w| w.contains('/'))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Each `CARRY4`'s propagate bits, lane 0 first.
+fn propagates(cells: &[NetlistCell]) -> Vec<Vec<String>> {
+    cells
+        .iter()
+        .filter(|(kind, ..)| kind == "CARRY4")
+        .map(|(_, _, _, ports)| {
+            let s = &ports.iter().find(|(p, _)| p == "S").unwrap().1;
+            let mut bits: Vec<String> = s
+                .trim_matches(|c| c == '{' || c == '}')
+                .split(',')
+                .map(|b| b.trim().to_owned())
+                .collect();
+            bits.reverse();
+            bits
+        })
+        .collect()
+}
+
+/// **A way through a lane's table to its carry propagate is no cell to
+/// Vivado.** Vivado's own `carry_counter` (2026.1, routed) takes each counter
+/// propagate on the slice's `<L>6` pin, through `<L>6LUT/A6` to `CARRY4/S<k>`,
+/// with no cell, the table's `INIT` the upper half (`docs/fpga-vivado-parity.md`,
+/// "A way through to the propagate"); this flow's buffer, written as a `LUT1`,
+/// was a table more to Vivado, 45 against its 12. On `carry_counter`: no
+/// `CARRY4` propagate is read off a buffer table, the 31 of its counter read a
+/// flip-flop's output straight, and each of those routes ends on its lane's
+/// `<L>6`. The flow's own check of the bitstream (every table cell decodes to
+/// what was placed) holds the buffer's truth table, a way through on `A6`, in
+/// Reticle's bitstream. With `--synthesis legacy`, whose buffers the router
+/// puts on any input, a buffer off `A6` stays a cell: Vivado, given an empty
+/// table, goes through it on `A6` and leaves a route to another input hanging
+/// (`ANTENNAS` on 9 nets of `carry_counter` seed 1).
+///
+/// Would catch a buffer written as a cell again, a `CARRY4` reading the
+/// buffer's output where no cell drives it, the router moving a buffer off
+/// `A6` under the default synthesis, and a buffer off `A6` written as a way
+/// through; would not catch Vivado taking the way otherwise, which only giving
+/// it the build asks (`achieved.sh`).
+#[test]
+fn a_way_through_to_a_carry_propagate_is_no_cell_to_vivado() {
+    let Some(root) = chipdb() else { return };
+    let Some(dir) = fixtures() else { return };
+    let (rcf, source) = (dir.join("carry_counter.rcf"), dir.join("carry_counter.v"));
+    let built = export(
+        &root,
+        "carry_counter",
+        &rcf,
+        &source,
+        &[],
+        "vivado-way-through",
+    );
+    assert!(
+        built
+            .stderr
+            .contains("decodes to exactly what was placed and routed"),
+        "{}",
+        built.stderr
+    );
+    let cells = built.cells();
+    let driver = |net: &str| {
+        cells.iter().find(|(_, _, _, ports)| {
+            ports
+                .iter()
+                .any(|(p, v)| (p == "O" || p == "Q") && v == net)
+        })
+    };
+    let mut straight = 0;
+    for (carry, bits) in propagates(&cells).iter().enumerate() {
+        for (lane, bit) in bits.iter().enumerate() {
+            let Some((kind, params, name, _)) = driver(bit) else {
+                panic!("CARRY4 {carry} lane {lane} reads `{bit}`, which nothing drives");
+            };
+            assert!(
+                !(kind == "LUT1" && params == "#(.INIT(2'h2))"),
+                "`{name}` is a buffer in front of a propagate"
+            );
+            if kind.starts_with("FD") {
+                straight += 1;
+                let letter = char::from(b'A' + u8::try_from(lane).unwrap());
+                assert!(
+                    built
+                        .route_of(bit)
+                        .iter()
+                        .any(|w| w.ends_with(&format!("_{letter}6"))),
+                    "`{bit}`, lane {letter}'s propagate, is not routed to `{letter}6`"
+                );
+            }
+        }
+    }
+    assert_eq!(straight, 31, "the counter's propagates");
+    let legacy = export(
+        &root,
+        "carry_counter",
+        &rcf,
+        &source,
+        &["--synthesis", "legacy"],
+        "vivado-way-through-legacy",
+    );
+    let cells = legacy.cells();
+    let mut kept = 0;
+    for bits in propagates(&cells) {
+        for bit in bits {
+            if let Some((kind, params, name, _)) = cells
+                .iter()
+                .find(|(_, _, _, ports)| ports.iter().any(|(p, v)| p == "O" && *v == bit))
+                && kind == "LUT1"
+                && params == "#(.INIT(2'h2))"
+            {
+                let locks = legacy.locks_of(name);
+                assert_ne!(locks, [("I0".to_owned(), "A6".to_owned())], "`{name}`");
+                kept += 1;
+            }
+        }
+    }
+    assert!(kept > 0, "no buffer off `A6` in the legacy build");
+}
+
+/// **A flip-flop's way through a table's lower half leaves Vivado the input it
+/// came in on and no other.** Vivado picks that input itself as it places the
+/// flip-flop, whatever route it is given after, and on `barrel` seed 3 took
+/// `B2` where the route ended on `B1` (`ANTENNAS`; 40 builds of 170 had such a
+/// net); given one free input, it takes that one. So the placement script
+/// rebuilds the table, before anything is placed, with every other free input
+/// of `A1` to `A5` tied high, which it ignores (`reticle_hold`, `xray::vivado`'s
+/// `hold_the_way`); the netlist keeps the table as it is, since Vivado's own
+/// placement of the netlist reads the ties too. On `barrel`, which has such
+/// ways: each held table is in the netlist untied with fewer inputs, its held
+/// `INIT` the netlist's repeated along each tie, its locked pins leave exactly
+/// one of `A1` to `A5` free, and a flip-flop of its lane, on `<L>FF`, has its
+/// data routed to that input.
+///
+/// Would catch the ties left out (nothing held), written into the netlist, one
+/// too many or too few (two inputs free, or none), a held table that reads a
+/// tie, and the input left free not the route's; would not catch Vivado
+/// choosing otherwise, which `achieved.sh` asks.
+#[test]
+fn a_flip_flops_way_through_a_tables_lower_half_is_held_to_its_input() {
+    let Some(root) = chipdb() else { return };
+    let Some(dir) = fixtures() else { return };
+    let qor = dir.join("qor");
+    let built = export(
+        &root,
+        "barrel",
+        &qor.join("barrel.rcf"),
+        &qor.join("barrel.v"),
+        &[],
+        "vivado-held-way",
+    );
+    let cells = built.cells();
+    let mut held = 0;
+    for line in built.placed.lines() {
+        // `reticle_hold <cell> LUT<k> <2^k>'h<init> {I<n> ...}`
+        let Some(rest) = line.strip_prefix("reticle_hold ") else {
+            continue;
+        };
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        let (name, kind, init) = (words[0], words[1], words[2]);
+        let ties = rest
+            .split_once('{')
+            .unwrap()
+            .1
+            .trim_end_matches('}')
+            .split_whitespace()
+            .count();
+        let k: u32 = kind[3..].parse().unwrap();
+        let init = u64::from_str_radix(init.split_once("'h").unwrap().1, 16).unwrap();
+        let (written, params, _, ports) = cells
+            .iter()
+            .find(|(_, _, n, _)| n == name)
+            .unwrap_or_else(|| panic!("`{name}` is not in the netlist"));
+        let w: u32 = written[3..].parse().unwrap();
+        assert_eq!(w + u32::try_from(ties).unwrap(), k, "`{name}`: {line}");
+        assert!(
+            !ports.iter().any(|(_, v)| v == "1'b1"),
+            "`{name}` is tied in the netlist"
+        );
+        let netlist = params.split_once("'h").unwrap().1.trim_end_matches("))");
+        let netlist = u64::from_str_radix(netlist, 16).unwrap();
+        assert!(
+            (0..1u64 << k).all(|m| (init >> m) & 1 == (netlist >> (m & ((1 << w) - 1))) & 1),
+            "`{name}` held reads a tie, or is not the netlist's table: {line}"
+        );
+        let locks = built.locks_of(name);
+        assert_eq!(locks.len(), k as usize, "`{name}`: {locks:?}");
+        let used: Vec<&str> = locks.iter().map(|(_, a)| a.as_str()).collect();
+        let free: Vec<String> = (1..=5)
+            .map(|a| format!("A{a}"))
+            .filter(|a| !used.contains(&a.as_str()))
+            .collect();
+        assert_eq!(free.len(), 1, "`{name}` leaves {free:?} free: {locks:?}");
+        let at = built.site_of(name).unwrap();
+        let (site, bel) = at.split_once('/').unwrap();
+        let letter = &bel[..1];
+        let ff = cells
+            .iter()
+            .find(|(kind, _, ff, _)| {
+                kind.starts_with("FD")
+                    && built.site_of(ff) == Some(format!("{site}/{letter}FF").as_str())
+            })
+            .unwrap_or_else(|| panic!("no flip-flop on `{site}/{letter}FF`"));
+        let d = &ff.3.iter().find(|(p, _)| p == "D").unwrap().1;
+        let pin = format!("_{letter}{}", &free[0][1..]);
+        assert!(
+            built.route_of(d).iter().any(|w| w.ends_with(&pin)),
+            "`{}`'s data `{d}` does not reach `{name}` on {}",
+            ff.2,
+            free[0]
+        );
+        held += 1;
+    }
+    assert!(held > 0, "no way through a table's lower half on `barrel`");
 }
 
 /// **A frame's Hamming code names nothing, and is counted apart.** Would catch

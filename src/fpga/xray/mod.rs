@@ -197,7 +197,7 @@ pub use bram::{
 };
 pub use bufg::GlobalBufferError;
 pub use carry::{
-    BYPASS_GENERATES, CarryOptions, CarryPacking, bypass_tie, legalise_carries,
+    BYPASS_GENERATES, CarryOptions, CarryPacking, ROUTE_THROUGH, bypass_tie, legalise_carries,
     legalise_carries_with, tie_bypass_generates,
 };
 pub use cmt::{
