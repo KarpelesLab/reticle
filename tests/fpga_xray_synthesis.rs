@@ -239,9 +239,11 @@ fn the_gaps_asked_about_are_closed() {
 /// Vivado's synthesis made it and as Reticle's builds before, after, with
 /// "Area against Vivado's" (`area`), on 91802be8 (`refined`) and with "The
 /// netlist against Vivado's, placed by Vivado" (`closing`) and "Three terms
-/// on one chain" (`fused`) made it, each by Vivado's counting; and in each
-/// build, no clock's worst path has more tables than in the one before it
-/// (`fused` against `closing`, and `closing` against `refined`, whose
+/// on one chain" (`fused`) and "A way through to the propagate" (`through`)
+/// made it, each by Vivado's counting; and in each build, no clock's worst path
+/// has more tables than in the one before it (`through` against `tied`, whose
+/// buffers in front of a counter's propagates went, `fused` against
+/// `closing`, and `closing` against `refined`, whose
 /// equality lanes lost their buffer tables and `esad`'s and `sad`'s worst
 /// paths a table each). (Its levels can be more: a subtraction on the chain is
 /// a `CARRY4` a level where it was none, and `bram_fifo`'s most levels went
@@ -274,7 +276,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
     corpus.extend(["esad", "sad"]);
     for name in corpus {
         for build in [
-            "vivado", "before", "after", "area", "refined", "closing", "fused", "copied",
+            "vivado", "before", "after", "area", "refined", "closing", "fused", "copied", "through",
         ] {
             assert!(
                 cells.contains(&(build.to_owned(), name.to_owned())),
@@ -289,6 +291,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
             "closing" => "refined",
             "fused" => "closing",
             "copied" => "fused",
+            "through" => "tied",
             _ => continue,
         };
         let before = levels[&(earlier.to_owned(), name.clone(), clock.clone())];
@@ -410,5 +413,48 @@ fn the_adders_vivado_leaves_in_tables_stay_there() {
                 );
             }
         }
+    }
+}
+
+/// **With a way through the lane's table in front of a counter's propagate,
+/// Vivado counts the counters' tables as its own**
+/// (`docs/fpga-vivado-parity.md`, "A way through to the propagate"). Vivado's
+/// counting of seed 1's netlist: `carry_counter` 45 tables in `tied`, 14 in
+/// `through`, against Vivado's 12; `counter64` 88, then 25, against 23;
+/// `gray_cdc` 26, then 15, against 15, with the same `CARRY4`s. This holds each
+/// within two tables of Vivado's in `through`, at least ten over in `tied`, and
+/// no `CARRY4` gained or lost. Catches a regeneration that lost the change or
+/// swapped the builds; not the flow losing it since, which only
+/// `netlist_qor.sh` asks.
+#[test]
+fn a_counters_propagates_through_their_tables_are_no_tables_to_vivado() {
+    let text =
+        std::fs::read_to_string(root().join("testdata/fpga/vivado/qor/netlist.txt")).unwrap();
+    let cells = |build: &str, design: &str| -> (u32, u32) {
+        text.lines()
+            .find_map(|l| l.strip_prefix(&format!("cells {build} {design} ")))
+            .map(|rest| {
+                let w: Vec<u32> = rest
+                    .split_whitespace()
+                    .map(|n| n.parse().unwrap())
+                    .collect();
+                (w[0], w[1])
+            })
+            .unwrap_or_else(|| panic!("no `{build}` cells of {design}"))
+    };
+    for design in ["carry_counter", "counter64", "gray_cdc"] {
+        let (vivado, through, tied) = (
+            cells("vivado", design),
+            cells("through", design),
+            cells("tied", design),
+        );
+        assert!(
+            through.0 <= vivado.0 + 2 && tied.0 >= vivado.0 + 10,
+            "{design}: {} tables through, {} tied, Vivado's {}",
+            through.0,
+            tied.0,
+            vivado.0
+        );
+        assert_eq!(through.1, tied.1, "{design}: CARRY4s");
     }
 }

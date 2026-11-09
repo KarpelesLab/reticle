@@ -7864,6 +7864,8 @@ on the input Reticle chose, `B5` say, and Vivado, which picks the table's input 
 way through itself, routes the signal on to another one, `B1`, and leaves Reticle's
 branch hanging; 1 to 16 a build on `sad` and `esad`. Not changed: which input Vivado
 picks did not follow a rule the few read (`B1` once, `D2` beside `D1` another time).
+*Since found, in "A way through to the propagate": Vivado picks it as it places the
+flip-flop, before any route is set, so no rule of the route's would have shown.*
 
 ### What was changed
 
@@ -8179,8 +8181,253 @@ wire a route holds, nor a fan one does), and the builds here had no such route.
 
 - **Reticle's placement of the six-input lanes**: `counter64` is 3.301 ns in Vivado's
   hands and 3.480 in Reticle's, the registers a lane reads farther from it.
-- **The ways through a table Vivado routes on to another input** (above).
+- **The ways through a table Vivado routes on to another input** (above). *Done
+  since, in "A way through to the propagate": Vivado picks the input as it places,
+  and is now left one.*
 - **A buffer in front of a counter's propagate**: Vivado takes a flip-flop's output
   through the lane's table as a way through, with no cell, where this flow writes a
   `LUT1`; the counts above are most of the difference in tables. Not looked at.
+  *Done since, in "A way through to the propagate".*
+- None of it has been on a part.
+
+## A way through to the propagate
+
+**Asked: Reticle's mapper writes `carry_counter`'s and `counter64`'s tables and
+`CARRY4`s as Vivado does, 12/11 and 23/22, yet Vivado counts 45 and 88 tables in
+Reticle's netlist: a buffer table, a `LUT1`, in front of each counter propagate,
+where Vivado goes through the table with no cell. Where do the buffers come from,
+what does Vivado write for such a slice, and can Reticle do the same; and the
+`ANTENNAS` of "A ground on the bypass input" (40 builds of 170), a flip-flop's way
+through a table's lower half on which Vivado takes another input than Reticle's
+route.** Vivado 2026.1 at `xc7a100tftg256-3`, run on 2026-11-10 on a5a2811f, whose
+own build is `tied` of `achieved.txt` seed for seed (all 210 figures of Reticle's
+flow checked). **Everything here is Vivado's timer, its counting and its
+bitstreams read back through this flow's decoder; nothing has been on a part.**
+
+### Where the buffers come from
+
+`xray::legalise_carries` (`carry.rs`, `Propagate::Buffer`): a propagate driven by
+anything but a table of its own, a counter's flip-flop most often, gets a table
+`O = I0` in front of it, because the slice's propagate is the lane table's `O6` and
+nothing else. **They are cells of Reticle's own netlist, and of its bitstream**: the
+placer seats each on its lane's six-input bel, the router chooses its input among
+the six (`xray::lutswap`), and the bitstream writes its truth table for the input
+chosen. `--vivado-placement` wrote each as the `LUT1` it is. Over seeds 1 and 2 of
+the corpus, 129 of 340 buffers were on `A6`, the rest on `A2`, `A3` or `A5`
+(`counter64` seed 1: 18 on `A6`, 45 elsewhere).
+
+### What Vivado writes
+
+`carry_counter` through Vivado's own flow, every `CARRY4`'s slice read whole
+(cells, bels in use, site pips, each propagate's net with its site and bel pins),
+and the bitstream through `reticle fpga --decode` (every bit explained). **Measured:**
+
+- **No cell.** Each counter propagate `S[k]` is the flip-flop's net itself, on the
+  slice's `<L>6` pin, its bel pins `<L>6LUT/A6` and `CARRY4/S<k>`; the bel
+  `<L>6LUT` is in use with nothing on it, its `CONFIG.EQN` `O6=(A6)`. The site pip
+  `<L>6LUT:A6` exists and is not listed as used: the way is in the pin's site
+  routing.
+- **The bits are the upper half and nothing else**: each such table's `INIT` decodes
+  to bits 32 to 63, `O6 = A6` (`FFFFFFFF00000000`), and the slice has no other bit
+  for it. That is what Reticle's buffer on `A6` writes, `O = A6` being a table cell's
+  truth table. Built by Reticle, and by Vivado from Reticle's placement and routes
+  with the way exported as no cell (below), the two bitstreams of `carry_counter`
+  seed 1 differ in the clock tiles' known classes alone (`compare_bits.py`).
+- The generates are `<const0>` on the bypass input (`ACY0:AX` .. `DCY0:DX`), as "A
+  ground on the bypass input" found, and `CYINIT` `<const0>`.
+- In Vivado's own placements of seven designs (`carry_counter`, `counter64`,
+  `gray_cdc`, `analyser_fifo`, `sad`, `esad`, `barrel`), **no lane with a way
+  through to its propagate held a cell on either half**; and Vivado's own flow does
+  not always take `A6`: `counter64` 52 on `A6` and 11 on `A1`, `A2`, `A3` or `A5`,
+  `analyser_fifo` 31 and 9.
+
+### Slice capacity
+
+**Does not matter, measured.** A way through on `A6` leaves the lower half nothing:
+`O6 = A6 ? upper : lower` is `A6` only with the lower half zero, which is what `O5`
+then reads. Vivado's own placements put nothing beside such a way (above), and over
+seeds 1 to 3 of the corpus no flip-flop of Reticle's went through a buffer's lower
+half (0 of 510 buffer lanes, where the same count over every table of seed 1 found
+50 ways): a counter's lane holds the counter's flip-flop, fed by the sum, and the
+buffer's lower half has no other reader. The buffer is a cell where Vivado has none,
+and costs the same bel.
+
+### What Vivado's import does with a way through
+
+Given `carry_counter` seed 1's netlist with the buffers taken out by hand, each
+`CARRY4` reading the flip-flop's net, and Reticle's placement and routes: **Vivado
+took every way through the empty table and counted 14 tables**, against 45. But on
+**`A6` only**: where Reticle's route ended on `<L>3`, Vivado went in on `A6`
+regardless, routed a branch of its own there, and left Reticle's hanging (9 nets
+`ANTENNAS`, each a buffer that had been on another input). Vivado does its site
+routing as it places a cell, before any route is set, and keeps it.
+
+The flip-flop's way through a lower half is the same mechanism (`barrel` seed 3,
+`n7_in_1`: the route on `B1`, the table on `A3` to `A5`, Vivado on `B2`), and was
+tried every way that keeps the netlist: the table's pins locked before placing,
+the flip-flop placed again after the routes, placed only once the routes were set
+(refused: a route needs its driver placed, and the flip-flop drives another), and the
+bel's `CONFIG.EQN` set to `O5=(A1)` (accepted, and ignored). Every one took `B2`.
+**Given one free input, Vivado takes it**: `sad`, a `LUT4` on `A1`, `A2`, `A3` and
+`A5`, the way on `B4`, as Reticle's; and `barrel`'s table rebuilt as a `LUT4` whose
+fourth input is tied high, locked on `A2`, took `B1` and finished the net. An input
+tied high is no route: Vivado's bitstream of that build is Reticle's but for the
+clock tiles' known classes. Which input Vivado picks among several follows no rule
+of the route's, which is why the few read in "A ground on the bypass input" showed
+none: the same locked pins (`A3`, `A4`) gave `A2` on one lane of `sad` and `A5` on
+another.
+
+### What was changed
+
+1. **A buffer in front of a propagate goes on `A6` and stays there**
+   (`xray::CarryOptions::buffers_on_a6`, on with `--synthesis vivado`): its signal on
+   `I5`, its truth table the upper half, marked `xray::ROUTE_THROUGH`, which
+   `lut_input_classes` gives the router no choice for. Not a buffer whose lower half
+   holds a constant generate, which needs `A6` high. Reticle's bitstream writes the
+   table as Vivado's way through writes it, and every bit decodes to the router's
+   arcs and the tables placed, as before.
+2. **`--vivado-placement` writes a table that only passes its `A6` to its lane's
+   propagate as no cell** (`xray::vivado`'s `carry_route_throughs`): the `CARRY4`
+   reads the table's input, and the table and its one-node route are left out. A
+   buffer on another input (`--synthesis legacy`'s) stays the `LUT1` it is, locked.
+3. **A table beside a flip-flop's way through its lower half is held to that
+   input** (`hold_the_way`, `Writer::hold`): the placement script, before anything is
+   placed, takes the table out of the linked netlist and puts it back with every
+   other free input of `A1` to `A5` tied high and locked (`reticle_hold`), so that
+   Vivado has the route's input alone. *The first version* wrote the ties into the
+   netlist, and Vivado's own placement of the netlist (`pnr`) read them too: `sad`'s
+   ADC clock 2.235 ns to 2.321, every seed slower, `lutram32` 1.792 to 1.848, the
+   netlists' mean 1.026 of Vivado's against 1.021 without them. *The second* rebuilt
+   the table before placing but locked it after, and a five-input table took the
+   way's input itself: Vivado refused it its bel on 4 seeds of `lutram32`
+   (12-1409, "could not find a physical pin for the route-through"). It is locked as
+   it is made now.
+
+The Husky's builds pass `--synthesis legacy`, so no buffer is moved, and the export
+is not on their path. `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`.
+**Checked.**
+
+### Before and after
+
+`base` is a5a2811f (the `tied` build run again: Reticle's flow the same figures,
+its netlists placed by Vivado as `retied` in `achieved.txt`, which differs from
+`tied` on a few seeds), `through` this tree, ten seeds each, medians by Vivado's
+timer.
+
+**Vivado's counting of Reticle's netlist**, tables / `CARRY4`s, the median of ten
+seeds (`netlist_qor.sh`; the export alone is the buffers where the router put them,
+the range over seeds in brackets):
+
+| design | Vivado | `base` | export alone | `through` |
+|---|---|---|---|---|
+| `analyser_fifo` | 131 / 26 | 191 / 22 | 177 [176-180] | 163 / 22 |
+| `carry_counter` | 12 / 11 | 45 / 11 | 20 [18-24] | **14** / 11 |
+| `counter64` | 23 / 22 | 88 / 22 | 68 [66-71] | **25** / 22 |
+| `esad` | 1046 / 68 | 1167 / 71 | 1167 | 1149 / 71 |
+| `gray_cdc` | 15 / 3 | 26 / 3 | 17 [17-18] | **15** / 3 |
+| `sad` | 1414 / 132 | 1571 / 136 | 1571 | 1552 / 136 |
+
+The other eleven designs are as they were, and no count of `base` or `through`
+moved over seeds. The counters' two tables over Vivado's were not looked into.
+
+**`ANTENNAS`**, nets Vivado would not finish on Reticle's routes over the 170 builds
+of the `routes` stage: **374 nets in 40 builds before, 5 nets in 5 builds after**, none
+stopping at a constant either side. The five on `esad` are a flip-flop's way through
+beside a table that reads the same signal on another input: Vivado goes through on
+the input the table already has (`A2`), where Reticle's route came in on the free
+one (`A4`). Not changed.
+
+**Reticle's flow**, Reticle's placement and routes timed by Vivado; the clocks not
+listed are the same figures to the picosecond:
+
+| design | clock | Vivado | `base` | `through` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 3.887 | 4.489 [4.13-4.68] | 4.480 [4.13-4.86] |
+| `analyser_fifo` | `wr_clk` | 2.417 | 2.470 [2.36-2.55] | 2.452 [2.34-2.55] |
+| `carry_counter` | `clk` | 1.855 | 1.964 [1.85-2.00] | 1.968 [1.85-2.00] |
+| `counter64` | `clk` | 3.220 | 3.480 [3.35-3.60] | 3.478 [3.34-3.57] |
+| `esad` | `clk_usb` | 1.727 | 1.872 [1.73-2.23] | 1.821 [1.73-2.23] |
+| `gray_cdc` | `clk2` | 1.267 | 1.514 [1.47-1.57] | 1.515 [1.47-1.57] |
+| geometric mean, all 21 | | 1 | 1.089 | **1.087** |
+
+`esad`'s `clk_usb` is one seed, 3, 1.92 ns to 1.73, its `ANTENNAS` gone: Vivado had
+timed its own branch where Reticle's hung. The other clocks that moved are the
+buffers on `A6`, Reticle's own routes: with the export alone they were `base`'s
+figures. A way through, then, costs Reticle's flow nothing measurable.
+*A first reading* had `lutram32` 2.064 ns to 1.975, and the flow 1.085: four of its
+seeds had not been placed by Vivado (the hold's second version, above), and the
+median was of six. Its ten seeds are `base`'s to the picosecond, the `ANTENNAS` of
+three of them gone with nothing timed through them.
+
+**The netlist placed and routed by Vivado** (`pnr`, `cons3`):
+
+| design | clock | Vivado's netlist | `retied` | `through` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 4.087 | 4.268 | 4.292 |
+| `analyser_fifo` | `wr_clk` | 2.370 | 2.291 | 2.314 |
+| `counter64` | `clk` | 3.304 | 3.301 | 3.335 |
+| `esad` | `adc_sampleclk` | 2.087 | 2.255 | 2.197 |
+| `esad` | `clk_usb` | 1.626 | 1.773 | 1.716 |
+| `gray_cdc` | `clk` | 1.500 | 1.448 | **1.628** |
+| `gray_cdc` | `clk2` | 1.263 | 1.421 | 1.391 |
+| `sad` | `adc_sampleclk` | 2.139 | 2.235 | 2.260 |
+| `sad` | `clk_usb` | 1.627 | 1.717 | 1.740 |
+| geometric mean, all 21 | | 1 | 1.018 | 1.022 |
+
+**The netlist is Vivado's in its tables and 0.4 % slower in Vivado's hands.** `gray_cdc`'s clock is most of it, every seed: its pointer's chain crosses
+from `Y99` to `Y100`, a clock region, where with the buffers it did not (seed 2,
+1.696 ns, 0.119 of skew and 0.648 of wire to `DI[3]`; 1.448 before, Vivado's own
+netlist 1.500). That wire is the one thing Vivado's netlist does not have: Vivado's
+counter generates are `<const0>`, Reticle's the propagate's own signal
+(`S ? CI : S`, which is `S ? CI : 0`), routed to the bypass input.
+
+**Tried and not kept: that zero.** The generate that is its propagate's signal made
+the zero it is, and tied on the bypass input as "A ground on the bypass input" ties
+the others (42 ties on `carry_counter`, every bit decoding). Ten seeds, against this
+section's second version of the hold (whose `lutram32` lacks the same four
+seeds, so the two are like for like): Reticle's flow 1.092 of Vivado's own against
+1.085, `sad`'s ADC clock 2.635 against 2.561, `analyser_fifo`'s write clock 2.515
+against 2.452, and the netlist in Vivado's hands 1.031 against 1.023. Not committed.
+
+### Tests
+
+- `a_buffer_in_front_of_a_propagate_is_on_a6` (`tests/fpga_carry.rs`): `a + 5` at 8
+  and 16 bits, every input simulated as legalised; each buffer on `I5` alone, its
+  table the upper half, marked; with the option off, none marked or moved.
+- `a_way_through_to_a_carry_propagate_is_no_cell_to_vivado`
+  (`tests/fpga_xray_vivado.rs`): `carry_counter` built on the real fabric; no
+  propagate read off a buffer, 31 read off a flip-flop, each routed to its lane's
+  `<L>6`; with `--synthesis legacy`, a buffer off `A6` still a cell.
+- `a_flip_flops_way_through_a_tables_lower_half_is_held_to_its_input`: `barrel`; each
+  held table untied in the netlist, its held `INIT` the netlist's repeated, one of
+  `A1` to `A5` left free, and a flip-flop of its lane routed to that input.
+- `a_way_through_a_lower_half_is_left_its_input_alone` (`xray::vivado`).
+- `a_carry_lanes_constant_generate_is_tied_on_the_bypass_as_vivado_ties_it`
+  rewritten, not weakened: it counted every feature into a `GFAN` as a ground's, and
+  with lane `A`'s buffers held on `A6` the router reaches their `IMUX4` through
+  `GFAN1` from `BYP_BOUNCE1`, a signal's hop. It counts the fans a `GND_WIRE` drives,
+  and still holds them to the ties alone.
+- `a_counters_propagates_through_their_tables_are_no_tables_to_vivado`
+  (`tests/fpga_xray_synthesis.rs`), on `netlist.txt`'s `through`, and
+  `a_way_through_costs_the_flow_nothing` (`tests/fpga_xray_achieved.rs`), on
+  `achieved.txt`'s `through` and `retied`.
+
+**Mutations**, each made by a script and put back: the way through written on any
+input, not written at all, no table held, the way's own input tied, the ties in the
+netlist, the held input off by one, the buffers left off `A6`, the signal left on
+`I0`, the mark not set, and the router allowed to move a marked buffer. **Every one
+failed a test**: the first, second and last `a_way_through_to_a_carry_propagate_is_
+no_cell_to_vivado` (the last because the router then moved buffers off `A6`, which
+stayed cells); the holds `a_flip_flops_way_through_a_tables_lower_half_is_held_to_
+its_input` and the unit test; the buffers' three `a_buffer_in_front_of_a_propagate_
+is_on_a6`, the signal on `I0` by its simulation.
+
+### Not done
+
+- **`esad`'s five ways beside a table reading the same signal** (above).
+- **The counters' generates**: Vivado's are zero; tied so here, the corpus was slower
+  (above).
+- **`gray_cdc`'s chain across a clock region** in Vivado's placement of the netlist.
 - None of it has been on a part.

@@ -748,3 +748,58 @@ fn a_ground_on_the_bypass_brings_the_equalities_netlist_to_vivados() {
         "the netlist against Vivado's: {net_after:.3} tied, {net_before:.3} untied"
     );
 }
+
+/// **A way through the table to a counter's propagate, with no cell, and a
+/// flip-flop's way through a lower half held to its input, cost the corpus
+/// nothing at either level** (`docs/fpga-vivado-parity.md`, "A way through to
+/// the propagate"). Ten seeds: Reticle's flow went from 1.089 of Vivado's own
+/// (`tied`) to 1.087 (`through`), `esad`'s `clk_usb` (one seed's `ANTENNAS`
+/// gone) and `analyser_fifo`'s two the clocks that moved most; Vivado placing
+/// and routing the netlist, 1.018 of Vivado's netlist (`retied`, a5a2811f's
+/// netlist placed again) to 1.022, `gray_cdc`'s `clk` 12 % of it. This holds the flow's mean no worse,
+/// no clock's median more than 1 % over `tied`'s, the netlist's mean within 1 %
+/// of `retied`'s, and ten seeds of each on every clock. Would catch a
+/// regeneration that lost the change, swapped the builds or lost a seed or a
+/// clock; would not catch the flow losing the change since, which needs
+/// Vivado.
+#[test]
+fn a_way_through_costs_the_flow_nothing() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    let mut logs = [0.0f64; 4];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (tied, through) = (&builds["tied"], &builds["through"]);
+        assert_eq!(through.len(), 10, "{design} {clock}: seeds of `through`");
+        let (before, after) = (median(tied), median(through));
+        assert!(
+            after <= before * 1.01,
+            "{design} {clock}: {after:.3} ns through against {before:.3}"
+        );
+        let (own, placed) = &nets[&(design.clone(), clock.clone())];
+        let (net_before, net_after) = (&placed["retied"], &placed["through"]);
+        assert_eq!(
+            (net_before.len(), net_after.len()),
+            (10, 10),
+            "{design} {clock}: seeds of `pnr`"
+        );
+        let (nb, na) = (median(net_before), median(net_after));
+        for (log, ratio) in
+            logs.iter_mut()
+                .zip([before / vivado, after / vivado, nb / own, na / own])
+        {
+            *log += ratio.ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, net_before, net_after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before,
+        "Reticle's flow against Vivado's: {after:.3} through, {before:.3} tied"
+    );
+    assert!(
+        net_after <= net_before * 1.01,
+        "the netlist against Vivado's: {net_after:.3} through, {net_before:.3} retied"
+    );
+}
