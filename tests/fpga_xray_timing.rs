@@ -8,7 +8,9 @@
 
 use std::path::Path;
 
-use reticle::fpga::xray::{DelayModel, GridRegion, UNTIMED_PIP_PS, XrayDatabase, XrayOptions};
+use reticle::fpga::xray::{
+    DelayModel, GridRegion, SpeedGrade, UNTIMED_PIP_PS, XrayDatabase, XrayOptions,
+};
 use reticle::ir::memfile::FileProvider;
 
 /// The part the region is cut from, as `tests/fpga_xray_joins.rs` has it.
@@ -84,7 +86,13 @@ fn a_node_costs_the_delay_of_the_pip_into_it() {
     let fabric = db.load(&DiskFiles, &options).unwrap();
     let graph = fabric.arch.build_graph();
     let delays = db
-        .node_delays(&DiskFiles, &fabric.arch, &graph, DelayModel::Legacy)
+        .node_delays(
+            &DiskFiles,
+            &fabric.arch,
+            &graph,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        )
         .unwrap();
     assert_eq!(delays.len(), graph.nodes.len());
 
@@ -176,11 +184,12 @@ fn a_node_costs_the_delay_of_the_pip_into_it() {
 /// `INT:SL1BEG` and `INT:NN6BEG`; every node of a slice tile's lookup table
 /// input `CLBLL_LL_A3` or `CLBLL_L_A6` costs its own pin's figure, which is not
 /// the same for the two; and an interconnect node only joins enter costs
-/// nothing.
+/// nothing. At grade 3 and at grade 1, each by its own column of the table.
 ///
 /// Would catch the class looked up with the wrong tile type, a side's wires not
 /// matched (`IMUX_L10` against `IMUX10`), a join charged the class of the wire
-/// it continues, or the legacy delays returned for this model; would not catch
+/// it continues, the legacy delays returned for this model, or one grade's
+/// column read for another's (every class is slower at grade 1); would not catch
 /// a figure in the table that is wrong, which `tests/fpga_xray_delay.rs` holds
 /// against Vivado's.
 #[test]
@@ -192,52 +201,156 @@ fn a_node_costs_its_class_under_the_vivado_model() {
     options.region = Some(GridRegion::new(0, 120, 24, 160));
     let fabric = db.load(&DiskFiles, &options).unwrap();
     let graph = fabric.arch.build_graph();
-    let delays = db
-        .node_delays(&DiskFiles, &fabric.arch, &graph, DelayModel::Vivado)
-        .unwrap();
-    let class = |name: &str| delay::class_ps(name).unwrap();
-    assert_ne!(class("CLBLL:LL_A3"), class("CLBLL:L_A6"));
-    let mut seen = std::collections::BTreeMap::new();
-    let mut joins = 0;
-    for (index, wire) in graph.nodes.iter().enumerate() {
-        let Some(t) = fabric.arch.tile_index_at(wire.tile.0, wire.tile.1) else {
-            continue;
-        };
-        let tile_type = fabric.arch.tile_types[t].name.as_str();
-        let id = u32::try_from(index).unwrap();
-        let into = graph.incoming(id);
-        let from_here = into
-            .iter()
-            .any(|p| graph.wire(graph.pip(*p).from).tile == wire.tile);
-        if !into.is_empty() && !from_here && tile_type.starts_with("INT_") {
+    for grade in [SpeedGrade::Three, SpeedGrade::One] {
+        let delays = db
+            .node_delays(&DiskFiles, &fabric.arch, &graph, DelayModel::Vivado, grade)
+            .unwrap();
+        let class = |name: &str| delay::class_ps(name, grade).unwrap();
+        assert_ne!(class("CLBLL:LL_A3"), class("CLBLL:L_A6"));
+        let mut seen = std::collections::BTreeMap::new();
+        let mut joins = 0;
+        for (index, wire) in graph.nodes.iter().enumerate() {
+            let Some(t) = fabric.arch.tile_index_at(wire.tile.0, wire.tile.1) else {
+                continue;
+            };
+            let tile_type = fabric.arch.tile_types[t].name.as_str();
+            let id = u32::try_from(index).unwrap();
+            let into = graph.incoming(id);
+            let from_here = into
+                .iter()
+                .any(|p| graph.wire(graph.pip(*p).from).tile == wire.tile);
+            if !into.is_empty() && !from_here && tile_type.starts_with("INT_") {
+                assert_eq!(
+                    delays[index], 0,
+                    "{tile_type} {:?} {}",
+                    wire.tile, wire.name
+                );
+                joins += 1;
+                continue;
+            }
+            if !from_here {
+                continue;
+            }
+            let stem = wire.name.trim_end_matches(|c: char| c.is_ascii_digit());
+            let want = match (tile_type, stem) {
+                ("INT_L", "IMUX_L") | ("INT_R", "IMUX") => class("INT:IMUX"),
+                ("INT_L" | "INT_R", "SL1BEG") => class("INT:SL1BEG"),
+                ("INT_L" | "INT_R", "NN6BEG") => class("INT:NN6BEG"),
+                ("CLBLL_L" | "CLBLL_R", _) if wire.name == "CLBLL_LL_A3" => class("CLBLL:LL_A3"),
+                ("CLBLL_L" | "CLBLL_R", _) if wire.name == "CLBLL_L_A6" => class("CLBLL:L_A6"),
+                _ => continue,
+            };
             assert_eq!(
-                delays[index], 0,
+                delays[index], want,
                 "{tile_type} {:?} {}",
                 wire.tile, wire.name
             );
-            joins += 1;
-            continue;
+            *seen.entry(format!("{tile_type} {stem}")).or_insert(0) += 1;
         }
-        if !from_here {
-            continue;
-        }
-        let stem = wire.name.trim_end_matches(|c: char| c.is_ascii_digit());
-        let want = match (tile_type, stem) {
-            ("INT_L", "IMUX_L") | ("INT_R", "IMUX") => class("INT:IMUX"),
-            ("INT_L" | "INT_R", "SL1BEG") => class("INT:SL1BEG"),
-            ("INT_L" | "INT_R", "NN6BEG") => class("INT:NN6BEG"),
-            ("CLBLL_L" | "CLBLL_R", _) if wire.name == "CLBLL_LL_A3" => class("CLBLL:LL_A3"),
-            ("CLBLL_L" | "CLBLL_R", _) if wire.name == "CLBLL_L_A6" => class("CLBLL:L_A6"),
-            _ => continue,
-        };
-        assert_eq!(
-            delays[index], want,
-            "{tile_type} {:?} {}",
-            wire.tile, wire.name
-        );
-        *seen.entry(format!("{tile_type} {stem}")).or_insert(0) += 1;
+        assert!(seen.len() >= 8, "{seen:?}");
+        assert!(seen.values().all(|n| *n > 5), "{seen:?}");
+        assert!(joins > 100, "{joins} joined nodes");
     }
-    assert!(seen.len() >= 8, "{seen:?}");
-    assert!(seen.values().all(|n| *n > 5), "{seen:?}");
-    assert!(joins > 100, "{joins} joined nodes");
+}
+
+/// What `reticle fpga` prints of a timing-driven build of the Basys 3's blink
+/// (`examples/basys3/`, a 10 ns clock on the `xc7a35t-cpg236`, whose device
+/// declares grade 1), with `extra` arguments: its standard error.
+fn blink(root: &str, name: &str, extra: &[&str]) -> String {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = std::env::temp_dir().join(format!("reticle_grade_{}_{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args([
+            "fpga",
+            "--device",
+            DEVICE,
+            "--timing-driven",
+            "--offline",
+            "--chipdb",
+            root,
+        ])
+        .args(extra)
+        .arg("--constraints")
+        .arg(manifest.join("examples/basys3/blink.rcf"))
+        .arg("--output-dir")
+        .arg(&dir)
+        .arg("--bitstream")
+        .arg(dir.join("blink.bit"))
+        .arg(manifest.join("examples/basys3/blink.v"))
+        .output()
+        .expect("failed to run the reticle binary");
+    let err = String::from_utf8_lossy(&run.stderr).into_owned();
+    assert!(run.status.success(), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+    err
+}
+
+/// The first placement estimate of `sys` in `err`, ns.
+fn first_estimate(err: &str) -> f64 {
+    let line = err
+        .lines()
+        .find(|l| l.contains("placement timing estimate, round 0"))
+        .unwrap_or_else(|| panic!("no estimate in {err}"));
+    let at = line.find("sys ").unwrap() + 4;
+    line[at..]
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// **A grade-1 part constrained at 10 ns is timed by grade 1's figures against
+/// its 10 ns, and `--speed-grade` changes the figures and not the period; the
+/// legacy model has no grade.** The Basys 3's blink, built at its device's
+/// grade and at `--speed-grade 3`: both are timed against `of 10 ns`, the
+/// first says it is timed at grade 1, and its first placement estimate, of the
+/// same netlist placed the same way before timing steers it, is 1.25 to 1.55
+/// times grade 3's (Vivado's own grade 1 is 1.34 times its grade 3 in a cell
+/// and 1.40 in a connection: `docs/fpga-vivado-parity.md`, "Speed grades").
+/// Under `--delay-model legacy` the two grades' estimates are the same.
+///
+/// Would catch the grade not reaching the model from the command line or the
+/// device (the two estimates equal), the period scaled with the figures, or
+/// the legacy model given a grade, which would move the Husky's measured
+/// builds; would not catch a grade's figures being wrong, which the
+/// comparisons with Vivado's timer are for.
+#[test]
+fn a_grade_one_part_is_timed_by_grade_ones_figures() {
+    let Some(root) = chipdb() else { return };
+    let one = blink(&root, "one", &[]);
+    let three = blink(&root, "three", &["--speed-grade", "3"]);
+    assert!(
+        one.contains("timed at speed grade 1 (the device's)"),
+        "{one}"
+    );
+    assert!(
+        three.contains("timed at speed grade 3 (--speed-grade)"),
+        "{three}"
+    );
+    for err in [&one, &three] {
+        assert!(
+            err.contains("routed timing estimate: sys") && err.contains("of 10 ns"),
+            "{err}"
+        );
+    }
+    let ratio = first_estimate(&one) / first_estimate(&three);
+    assert!(
+        (1.25..=1.55).contains(&ratio),
+        "grade 1 over grade 3: {ratio:.3}"
+    );
+    let legacy_one = blink(
+        &root,
+        "legacy1",
+        &["--delay-model", "legacy", "--speed-grade", "1"],
+    );
+    let legacy_three = blink(
+        &root,
+        "legacy3",
+        &["--delay-model", "legacy", "--speed-grade", "3"],
+    );
+    assert_eq!(first_estimate(&legacy_one), first_estimate(&legacy_three));
+    assert!(!legacy_one.contains("timed at speed grade"), "{legacy_one}");
 }

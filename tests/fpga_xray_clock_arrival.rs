@@ -3,18 +3,27 @@
 //! and `arrival_xc7a35t.txt`, written by `tools/vivado-parity/clock_arrival.tcl`
 //! and `clock_arrival.py fixture`, the clock net's delay to 700 flip-flops a
 //! run over the die from global buffers at three sites, and on the `xc7a35t` a
-//! fourth run in its other package. Vivado is not needed: the fixtures carry
-//! its answers.
+//! fourth run in its other package; and `arrival_grades.txt` and
+//! `arrival_xc7a35t_grades.txt`, the same at speed grades 1 and 2. Vivado is
+//! not needed: the fixtures carry its answers.
 
 #![cfg(feature = "fpga")]
 
 use std::path::PathBuf;
 
+use reticle::fpga::xray::SpeedGrade;
+
 /// Each run's flip-flops of a fixture, as (run, site, Vivado's figure less
 /// the table's), the run being `<part>/<buffer>` or, in the `xc7a100t`'s
-/// fixture, which predates that, the buffer alone, of `default_part`. `None`
-/// when the fixture is not there (the published crate).
-fn differences(file: &str, default_part: &str) -> Option<Vec<(String, String, f64)>> {
+/// fixture, which predates that, the buffer alone, of `default_part`; the
+/// table the one of the part's die at the grade its name ends in, or at
+/// `grade` when one is given. `None` when the fixture is not there (the
+/// published crate).
+fn differences(
+    file: &str,
+    default_part: &str,
+    grade: Option<SpeedGrade>,
+) -> Option<Vec<(String, String, f64)>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("testdata/fpga/vivado/clock")
         .join(file);
@@ -34,7 +43,13 @@ fn differences(file: &str, default_part: &str) -> Option<Vec<(String, String, f6
                 let part = run.split_once('/').map_or(default_part, |(part, _)| part);
                 let (x, y): (u32, u32) = (x.parse().unwrap(), y.parse().unwrap());
                 let ps: f64 = ps.parse().unwrap();
-                let table = reticle::fpga::xray::clock_arrival_ps(part, x, y)
+                let named = part
+                    .rsplit_once('-')
+                    .and_then(|(_, g)| SpeedGrade::from_name(g));
+                let grade = grade
+                    .or(named)
+                    .unwrap_or_else(|| panic!("no grade in `{part}`"));
+                let table = reticle::fpga::xray::clock_arrival_ps(part, grade, x, y)
                     .unwrap_or_else(|| panic!("no table for `{part}`"));
                 out.push(((*run).to_owned(), (*site).to_owned(), ps - table));
             }
@@ -75,7 +90,7 @@ fn within(differences: &[(String, String, f64)], ps: f64) {
 /// `the_clock_reaches_a_site_when_the_table_says` (`xray::timing`) holds.
 #[test]
 fn every_flip_flop_vivado_timed_is_within_six_picoseconds_of_the_table() {
-    let Some(differences) = differences("arrival.txt", "xc7a100tftg256-3") else {
+    let Some(differences) = differences("arrival.txt", "xc7a100tftg256-3", None) else {
         return;
     };
     let runs: std::collections::BTreeSet<&str> = differences.iter().map(|d| d.0.as_str()).collect();
@@ -92,12 +107,14 @@ fn every_flip_flop_vivado_timed_is_within_six_picoseconds_of_the_table() {
 /// `xc7a100t`'s table used for the `xc7a35t` (876 of the 2,800 more than 7 ps
 /// off it, up to 77), a row or column looked up wrong, the growth
 /// left out, and a package whose clock reaches its slices otherwise. Would
-/// not catch a speed grade other than 3: the grade-1 part is about 1.26 times
-/// slower to every pin, which the table, like the rest of the fitted model,
-/// does not scale.
+/// not catch a speed grade other than 3, which the next test is for. (This
+/// said, until the tables of the other grades were measured, that "the
+/// grade-1 part is about 1.26 times slower to every pin, which the table, like
+/// the rest of the fitted model, does not scale"; it is a table of its own at
+/// each grade now.)
 #[test]
 fn every_flip_flop_vivado_timed_on_the_xc7a35t_is_within_its_tables_reach() {
-    let Some(differences) = differences("arrival_xc7a35t.txt", "") else {
+    let Some(differences) = differences("arrival_xc7a35t.txt", "", None) else {
         return;
     };
     let runs: std::collections::BTreeSet<&str> = differences.iter().map(|d| d.0.as_str()).collect();
@@ -131,4 +148,66 @@ fn every_flip_flop_vivado_timed_on_the_xc7a35t_is_within_its_tables_reach() {
         (ftg - cpg).abs() <= 2.0,
         "the FTG256's insertion {ftg:.1} ps, the CPG236's {cpg:.1}"
     );
+}
+
+/// **At speed grades 1 and 2, every flip-flop Vivado timed is within 7 ps of
+/// its grade's table, on both dies and both of the `xc7a35t`'s packages; and
+/// grade 3's table would not do.** Three runs from the same three buffers at
+/// each of `xc7a100tftg256-1` and `-2`, and of `xc7a35tftg256-1` and `-2`, with a
+/// CPG236 run at each grade on the `xc7a35t` that the tables were not fitted
+/// to. Against grade 3's table, the same flip-flops are 21 to 57 ps off at
+/// worst, by grade and die: the clock's spread over the die grows with the
+/// grade, and not by one factor, the outer region rows by more than the inner.
+///
+/// Would catch a grade's table read for another grade, a grade's table
+/// written into the wrong die's slot, the grade in a part's name taken over
+/// the build's, or a table of one grade scaled for another; would not catch a
+/// grade nobody measured, of which there is none among Reticle's devices.
+#[test]
+fn every_flip_flop_vivado_timed_at_the_other_grades_is_within_its_grades_table() {
+    for file in ["arrival_grades.txt", "arrival_xc7a35t_grades.txt"] {
+        let Some(measured) = differences(file, "", None) else {
+            return;
+        };
+        for grade in ["-1/", "-2/"] {
+            let runs: Vec<(String, String, f64)> = measured
+                .iter()
+                .filter(|d| d.0.contains(grade))
+                .cloned()
+                .collect();
+            let parts: std::collections::BTreeSet<&str> =
+                runs.iter().map(|d| d.0.as_str()).collect();
+            assert!(parts.len() >= 3, "{file} {grade}: {parts:?}");
+            for package in ["ftg256", "cpg236"] {
+                let these: Vec<_> = runs
+                    .iter()
+                    .filter(|d| d.0.contains(package))
+                    .cloned()
+                    .collect();
+                if !these.is_empty() {
+                    within(&these, 7.0);
+                }
+            }
+        }
+        // Grade 3's table against the same flip-flops.
+        let Some(as_three) = differences(file, "", Some(SpeedGrade::Three)) else {
+            return;
+        };
+        for grade in ["-1/", "-2/"] {
+            let runs: Vec<(String, String, f64)> = as_three
+                .iter()
+                .filter(|d| d.0.contains(grade) && d.0.contains("ftg256"))
+                .cloned()
+                .collect();
+            let insertion = median(runs.iter().map(|d| d.2).collect());
+            let worst = runs
+                .iter()
+                .map(|d| (d.2 - insertion).abs())
+                .fold(0.0f64, f64::max);
+            assert!(
+                worst > 14.0,
+                "{file} {grade}: grade 3's table within {worst:.1} ps"
+            );
+        }
+    }
 }

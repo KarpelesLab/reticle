@@ -716,6 +716,59 @@ fn fpga_reads_several_constraint_files_the_first_winning() {
     assert!(pcf.contains("set_io clk 21"), "{pcf}");
 }
 
+/// **`--speed-grade` names the part's grade in place of the device's, and is
+/// refused where Vivado has no such part.** The Basys 3's blink on the
+/// `xc7a35t-cpg236`, whose device declares grade 1: its Vivado script names
+/// `xc7a35tcpg236-1` without the option and `xc7a35tcpg236-2L` with `2L`;
+/// `1L`, which Vivado has only for an industrial die of another name, is a
+/// usage error, as is any grade on a family that is not the 7 series. Would
+/// catch the option ignored, the device's grade not replaced where the part is
+/// named, or a grade accepted that no part has; would not catch the delay
+/// model timing at another grade than the one named, which
+/// `docs/fpga-vivado-parity.md` ("Speed grades") measured on Vivado's timer
+/// and `xray::timing`'s tests hold.
+#[test]
+fn fpga_takes_the_speed_grade_it_is_given() {
+    let dir = scratch("fpga_speed_grade");
+    let build = |grade: Option<&str>| {
+        let mut args = vec![
+            "fpga",
+            "--device",
+            "xc7a35t-cpg236",
+            "--constraints",
+            "examples/basys3/blink.rcf",
+            "--output-dir",
+            dir.to_str().unwrap(),
+        ];
+        if let Some(grade) = grade {
+            args.extend(["--speed-grade", grade]);
+        }
+        args.push("examples/basys3/blink.v");
+        let (code, _, stderr) = run(&args);
+        let script = std::fs::read_to_string(dir.join("blink.tcl")).unwrap_or_default();
+        (code, stderr, script)
+    };
+    let (code, stderr, script) = build(None);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(script.contains("-part {xc7a35tcpg236-1}"), "{script}");
+    let (code, stderr, script) = build(Some("2L"));
+    assert_eq!(code, 0, "{stderr}");
+    assert!(script.contains("-part {xc7a35tcpg236-2L}"), "{script}");
+    let (code, stderr, _) = build(Some("1L"));
+    assert_eq!(code, 2);
+    assert!(stderr.contains("--speed-grade 1L"), "{stderr}");
+    let (code, _, stderr) = run(&[
+        "fpga",
+        "--device",
+        "ice40-hx1k-tq144",
+        "--speed-grade",
+        "2",
+        "testdata/fpga/blinky_ice40.rtl",
+    ]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("on a 7-series device"), "{stderr}");
+}
+
 #[test]
 fn fpga_needs_a_known_device() {
     let (code, _, stderr) = run(&["fpga", "testdata/fpga/blinky_ice40.rtl"]);

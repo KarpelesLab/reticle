@@ -272,10 +272,20 @@ Options:
   --delay-model <vivado|legacy>
                      7 series: the delays a timing-driven build places, routes
                      and reports with. `vivado` (the default) is fitted to
-                     Vivado 2026.1's timer at speed grade 3, wire class by wire
-                     class and cell arc by cell arc; `legacy` is prjxray's pip
-                     delays and the cell figures from before, which every build
-                     measured on a board was made with.
+                     Vivado 2026.1's timer, wire class by wire class and cell
+                     arc by cell arc, at speed grades 1, 2 and 3, and times at
+                     the grade --speed-grade or the device names; `legacy` is
+                     prjxray's pip delays and the cell figures from before,
+                     which every build measured on a board was made with, and
+                     has no grade.
+  --speed-grade <1|2|2L|3>
+                     7 series: the part's speed grade, in place of the one the
+                     device declares (--list-devices; the XC7A35T's are 1, the
+                     XC7A100T's 3). The fitted delay model times at it, and a
+                     Vivado script or part name written for the build names
+                     it. 2L times as 2 does, as Vivado has it; Vivado's -1L of
+                     these dies is an industrial part of another name, which
+                     times as 1.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`
@@ -872,6 +882,7 @@ fn spec_for(usage: &str) -> Spec {
                 "memories",
                 "route-throughs",
                 "delay-model",
+                "speed-grade",
                 "synthesis",
                 "place-fixed-cooling",
                 "place-start-acceptance",
@@ -1136,6 +1147,27 @@ fn synthesis_legacy(args: &Args) -> Result<bool, ArgError> {
             value: other.to_owned(),
             expected: "`vivado` or `legacy`",
         }),
+    }
+}
+
+/// The speed grade a 7-series build times at under the fitted model: the
+/// device's `speed`, which `--speed-grade` has replaced when given. A device
+/// whose grade the model has no figures for is refused rather than timed by
+/// another grade's, which would put every estimate a quarter off; the legacy
+/// model has one set of figures for every grade and is not refused.
+fn speed_grade(
+    device: &reticle::fpga::Device,
+    model: reticle::fpga::xray::DelayModel,
+) -> Result<reticle::fpga::xray::SpeedGrade, String> {
+    use reticle::fpga::xray::{DelayModel, SpeedGrade};
+    match (SpeedGrade::from_name(&device.speed_grade), model) {
+        (Some(grade), _) => Ok(grade),
+        (None, DelayModel::Legacy) => Ok(SpeedGrade::Three),
+        (None, DelayModel::Vivado) => Err(format!(
+            "device `{}` declares speed grade `{}`, which the fitted delay model has no figures \
+             for; pass `--speed-grade 1`, `2`, `2L` or `3`, or `--delay-model legacy`",
+            device.name, device.speed_grade
+        )),
     }
 }
 
@@ -2518,6 +2550,35 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
             "unknown device `{device_name}`; known devices are {}",
             known.join(", ")
         )));
+    };
+    // `--speed-grade`: the part's grade in place of the device's, for the
+    // delay model and for anything that names the part. See `speed_grade`.
+    let graded;
+    let device = match args.option("speed-grade") {
+        None => device,
+        Some(name) => {
+            let grade =
+                reticle::fpga::xray::SpeedGrade::from_name(name).filter(|_| device.family == "xc7");
+            let Some(grade) = grade else {
+                return Err(ArgError::BadValue {
+                    option: "speed-grade".to_owned(),
+                    value: name.to_owned(),
+                    expected: "`1`, `2`, `2L` or `3`, on a 7-series device",
+                });
+            };
+            // `2L` is spelled as given, since Vivado's part is `-2L`; it is
+            // timed as `2`.
+            let spelled = if grade == reticle::fpga::xray::SpeedGrade::Two {
+                name.trim_start_matches('-').to_owned()
+            } else {
+                grade.name().to_owned()
+            };
+            graded = reticle::fpga::Device {
+                speed_grade: spelled,
+                ..device.clone()
+            };
+            &graded
+        }
     };
 
     if let Some(path) = args.option("decode") {
@@ -4310,18 +4371,35 @@ fn write_xc7_bitstream(
     // `--timing-driven`: the placement weighs each signal by how critical
     // its estimated delay is in its clock's domain. See `xray::timing`.
     let delay_model = delay_model(args).map_err(|e| e.to_string())?;
+    // And the grade it times at: see `speed_grade`.
+    let grade = speed_grade(device, delay_model)?;
     // Some of the anneal's moves drawn toward a cell's connections, with the
     // fitted model: see `PlaceOptions::median_moves`. The Husky's measured
     // builds pass `--delay-model legacy`, and are placed as they were.
     options.median_moves = delay_model == reticle::fpga::xray::DelayModel::Vivado;
     let domains = if args.flag("timing-driven") {
-        let (mut timing, names) =
-            reticle::fpga::xray::place_timing(design, top, &netlist, constraints, delay_model);
+        let (mut timing, names) = reticle::fpga::xray::place_timing(
+            design,
+            top,
+            &netlist,
+            constraints,
+            delay_model,
+            grade,
+        );
         // When the clock reaches each site, with the fitted model: see
         // `PlaceTiming::clock`.
         if delay_model == reticle::fpga::xray::DelayModel::Vivado {
             timing.clock =
-                reticle::fpga::xray::clock_arrival(&fabric.part.name, &fabric.arch, &graph);
+                reticle::fpga::xray::clock_arrival(&fabric.part.name, grade, &fabric.arch, &graph);
+            eprintln!(
+                "note: timed at speed grade {} ({})",
+                grade.name(),
+                if args.option("speed-grade").is_some() {
+                    "--speed-grade"
+                } else {
+                    "the device's"
+                }
+            );
         }
         options.timing = Some(timing);
         names
@@ -4332,7 +4410,7 @@ fn write_xc7_bitstream(
     // timing-driven build reads the tile types' timing files.
     let node_delay = if options.timing.is_some() {
         Some(
-            db.node_delays(&files, &fabric.arch, &graph, delay_model)
+            db.node_delays(&files, &fabric.arch, &graph, delay_model, grade)
                 .map_err(|e| e.to_string())?,
         )
     } else {
@@ -4426,6 +4504,7 @@ fn write_xc7_bitstream(
             reticle::fpga::xray::place_timing_on_sites(
                 timing,
                 delay_model,
+                grade,
                 &netlist,
                 &graph,
                 &placement,
@@ -4583,7 +4662,13 @@ fn write_xc7_bitstream(
                         clock_roles: Vec::new(),
                         max_criticality: 0.99,
                         cleanups: 2,
-                        tile_delay: reticle::fpga::xray::ROUTE_TILE_DELAY_PS,
+                        // The grade's share of a tile under the fitted model:
+                        // see `xray::route_tile_delay_ps`.
+                        tile_delay: if fitted {
+                            reticle::fpga::xray::route_tile_delay_ps(grade)
+                        } else {
+                            reticle::fpga::xray::ROUTE_TILE_DELAY_PS
+                        },
                         // Under the fitted model the exponent is lower and
                         // its thresholds move with it, a picosecond is
                         // weighed against the fabric's own wires and not its
@@ -4613,7 +4698,7 @@ fn write_xc7_bitstream(
                         // starts from the placement's estimate. See
                         // `route::Timing` and `docs/fpga-vivado-parity.md`.
                         branch_ps: if fitted {
-                            reticle::fpga::xray::delay::BRANCH_PS
+                            reticle::fpga::xray::delay::branch_ps(grade)
                         } else {
                             0
                         },
@@ -4717,7 +4802,7 @@ fn write_xc7_bitstream(
         // fitted model charges and the router's own analysis does not: see
         // `xray::delay`.
         let branch_ps = match delay_model {
-            reticle::fpga::xray::DelayModel::Vivado => reticle::fpga::xray::delay::BRANCH_PS,
+            reticle::fpga::xray::DelayModel::Vivado => reticle::fpga::xray::delay::branch_ps(grade),
             reticle::fpga::xray::DelayModel::Legacy => 0,
         };
         let wire = reticle::fpga::route::connection_delays(

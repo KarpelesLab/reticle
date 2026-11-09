@@ -53,11 +53,21 @@
 //! hundred tiles.
 //!
 //! **All of that is [`DelayModel::Legacy`].** The default,
-//! [`DelayModel::Vivado`], has Vivado 2026.1's own figures at speed grade 3,
-//! measured on Reticle's implementations ([`VIVADO`] says which are measured
-//! and which derived), each connection costed by `xray::delay`'s table fitted
-//! to Vivado's timer, and [`VIVADO_WIRE`] for the placement's line. See
+//! [`DelayModel::Vivado`], has Vivado 2026.1's own figures, measured on
+//! Reticle's implementations ([`VIVADO`] says which are measured and which
+//! derived), each connection costed by `xray::delay`'s table fitted to Vivado's
+//! timer, and [`VIVADO_WIRE`] for the placement's line. See
 //! `docs/fpga-vivado-parity.md`.
+//!
+//! **Those figures are a speed grade's** ([`SpeedGrade`]): [`VIVADO`] grade
+//! 3's, at which the model was fitted, and [`VIVADO_2`] and [`VIVADO_1`] grades
+//! 2's and 1's, the same cells on the same routes timed again at each
+//! (`tools/vivado-parity/regrade.sh`), as are the clock's arrival tables
+//! ([`clock_arrival`]). A build times at the grade its device declares, or the
+//! one `--speed-grade` names. Grade 1 is about 1.34 times grade 3 in a cell and
+//! 1.40 in a connection, grade 2 about 1.11 and 1.14; so a grade-1 part timed
+//! by grade 3's figures, as every build was before, was put a quarter under
+//! Vivado's figure for it.
 //!
 //! Paths are timed within one clock's domain. A clock is the signal at a
 //! sequential cell's clock pin traced back through the global buffers;
@@ -88,7 +98,7 @@
 
 use std::collections::HashSet;
 
-use super::DelayModel;
+use super::{DelayModel, SpeedGrade};
 use crate::fpga::Constraints;
 use crate::fpga::arch::{NodeId, RoutingGraph};
 use crate::fpga::constraints::matches_glob;
@@ -160,8 +170,9 @@ pub(crate) const OUTPUT_BUFFER: f64 = 3.0;
 pub(crate) const WIRE: (f64, f64, f64) = (0.31, 0.048, 0.025);
 
 /// Every figure [`place_timing`] times a cell or a connection with, for one
-/// [`DelayModel`]: [`LEGACY`] holds the constants above, and [`VIVADO`]
-/// Vivado 2026.1's at speed grade 3.
+/// [`DelayModel`] and grade: [`LEGACY`] holds the constants above, and
+/// [`VIVADO`], [`VIVADO_2`] and [`VIVADO_1`] Vivado 2026.1's at speed grades 3,
+/// 2 and 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Figures {
     /// [`LUT`].
@@ -231,6 +242,20 @@ pub(crate) struct Figures {
     /// Each carry chain input's delay to each output, or `None` for
     /// [`Figures::carry`] throughout.
     pub carry_arcs: Option<&'static [(&'static str, [f64; 8])]>,
+    /// A slice flip-flop's clock to `Q` once its bel is known, in a `SLICEL`'s
+    /// `AFF` to `DFF`, its `A5FF` to `D5FF`, and the same two of a `SLICEM`
+    /// ([`place_timing_on_sites`]).
+    pub ff_launch_bels: [f64; 4],
+    /// A flip-flop's data input's setup from a cell of its own slice, in a
+    /// `SLICEL` and a `SLICEM` ([`SETUP_INSIDE`] at grade 3).
+    pub setup_inside: (f64, f64),
+    /// The same through the lane's bypass pin ([`SETUP_BYPASS`] at grade 3).
+    pub setup_bypass: (f64, f64),
+    /// The same through the lane's lookup table ([`SETUP_WAY`] at grade 3).
+    pub setup_way: (f64, f64),
+    /// An `IDELAYE2`'s data to `DATAOUT` at no taps, from `IDATAIN` and from
+    /// `DATAIN` ([`idelay_arc`]).
+    pub idelay: (f64, f64),
 }
 
 /// The figures every build had before [`VIVADO`]'s: [`DelayModel::Legacy`].
@@ -265,6 +290,13 @@ pub(crate) const LEGACY: Figures = Figures {
     output_buffer: OUTPUT_BUFFER,
     wire: WIRE,
     carry_arcs: None,
+    // Not read: the legacy model times every flip-flop by `FF_LAUNCH` and
+    // `FF_SETUP` wherever it is.
+    ff_launch_bels: [FF_LAUNCH; 4],
+    setup_inside: (FF_SETUP, FF_SETUP),
+    setup_bypass: (FF_SETUP, FF_SETUP),
+    setup_way: (FF_SETUP, FF_SETUP),
+    idelay: (0.815, 1.012),
 };
 
 /// Vivado 2026.1's figures at `xc7a100tftg256-3`: [`DelayModel::Vivado`].
@@ -324,6 +356,124 @@ pub(crate) const VIVADO: Figures = Figures {
     output_buffer: 3.151,
     wire: VIVADO_WIRE,
     carry_arcs: Some(CARRY_ARCS),
+    ff_launch_bels: [0.341, 0.313, 0.393, 0.361],
+    setup_inside: SETUP_INSIDE,
+    setup_bypass: SETUP_BYPASS,
+    setup_way: SETUP_WAY,
+    idelay: (0.601, 0.748),
+};
+
+/// [`VIVADO`] at speed grade 2: Vivado 2026.1's figures at `xc7a100tftg256-2`,
+/// the same cells of the same placements and routes as grade 3's
+/// (`tools/vivado-parity/regrade.sh`; `testdata/fpga/vivado/timing/arcs_2.txt`).
+///
+/// **Measured**, each of grade 3's figures that is one of Vivado's arcs (a
+/// flip-flop's clock to `Q` on each bel, a block RAM's clock to output, the
+/// `DSP48E1`'s cascade and its `M` and `P` to `P`, a shift register's and a
+/// distributed RAM's setups, the buffers) as that arc's figure at grade 2 on the
+/// same cells; each that is a mean over arcs or a reading (a lookup table's
+/// 0.13, a flip-flop's setups, the carry chain's fallback, a block RAM's
+/// setups) through the line its class of arc follows from grade 3 to grade 2
+/// over those cells, a few picoseconds from every cell of the class
+/// (`docs/fpga-vivado-parity.md`, "Speed grades"); and the carry chain arc by
+/// arc ([`CARRY_ARCS_2`]). An `IDELAYE2`'s 0.679 and 0.969 ns from Vivado's arc
+/// at `xc7a100tftg256-2` (its tap is the other grades'), and
+/// [`CLOCK_INSERTION`] grade 3's 4.2 times 1.10, how much later the clock
+/// reached `qor/gray_cdc.v`'s registers at grade 2 than at 3.
+///
+/// **Derived, not measured**, as grade 3's are: `dsp_comb`, `dsp_launch_a`,
+/// `dsp_setup_m`, `dsp_setup_p` and `srl_read`, grade 1's figures (which were
+/// measured) times the ratio of grade 2 to grade 1 their class keeps.
+#[allow(
+    clippy::approx_constant,
+    reason = "`dsp_setup_p`, 3.141 ns, is near π by chance"
+)]
+pub(crate) const VIVADO_2: Figures = Figures {
+    lut: 0.144,
+    carry: 0.335,
+    muxf7: 0.192,
+    muxf8: 0.082,
+    ff_launch: 0.383,
+    ff_setup: 0.036,
+    ff_setup_enable: Some((0.246, 0.371)),
+    dsp_comb: 3.259,
+    dsp_launch_a: 3.350,
+    dsp_launch_m: 1.924,
+    dsp_launch_p: 0.370,
+    dsp_setup_reg: 0.437,
+    dsp_setup_m: 1.619,
+    dsp_setup_p: 3.141,
+    dsp_cascade: 1.438,
+    dsp_setup_cascade: 1.174,
+    srl_launch: 1.339,
+    srl_read: 0.234,
+    srl_setup: 0.054,
+    srl_setup_enable: Some(0.418),
+    lutram_setup: 0.189,
+    lutram_setup_pins: Some((0.435, 0.088)),
+    bram_launch: 2.125,
+    bram_setup: 0.512,
+    bram_setup_pins: Some((0.243, 0.423, 0.501)),
+    input_buffer: 1.422,
+    clock_insertion: 4.62,
+    output_buffer: 3.274,
+    wire: (0.474, 0.0402, 0.0271),
+    carry_arcs: Some(CARRY_ARCS_2),
+    ff_launch_bels: [0.379, 0.348, 0.433, 0.398],
+    setup_inside: (-0.040, -0.090),
+    setup_bypass: (0.100, 0.072),
+    setup_way: (0.147, 0.101),
+    idelay: (0.679, 0.969),
+};
+
+/// [`VIVADO`] at speed grade 1, measured as [`VIVADO_2`] is, at
+/// `xc7a100tftg256-1` (`arcs_1.txt`), with Vivado's own `-1` arcs for an
+/// `IDELAYE2` (0.815 and 1.012 ns, which [`LEGACY`] has had since it was
+/// measured) and the clock's insertion 1.255 times grade 3's.
+///
+/// **Measured, not derived**, unlike the other grades': the `DSP48E1`'s
+/// figures nothing in the corpus used and a shift register's address to `Q`,
+/// which are the constants of this module read off Vivado's `report_timing` at
+/// grade 1 ([`DSP_COMB`], [`DSP_LAUNCH_A`], [`DSP_SETUP_M`], [`DSP_SETUP_P`],
+/// [`SRL_READ`]). Where the corpus has the same arc, the two agree: its
+/// `M` to `P` at grade 1 is [`DSP_LAUNCH_M`]'s 2.305, its `P` to `P`
+/// [`DSP_LAUNCH_P`]'s 0.434, its cascade [`DSP_CASCADE`]'s 1.713.
+pub(crate) const VIVADO_1: Figures = Figures {
+    lut: 0.174,
+    carry: 0.405,
+    muxf7: 0.229,
+    muxf8: 0.099,
+    ff_launch: 0.460,
+    ff_setup: 0.057,
+    ff_setup_enable: Some((0.302, 0.454)),
+    dsp_comb: DSP_COMB,
+    dsp_launch_a: DSP_LAUNCH_A,
+    dsp_launch_m: 2.305,
+    dsp_launch_p: 0.434,
+    dsp_setup_reg: 0.535,
+    dsp_setup_m: DSP_SETUP_M,
+    dsp_setup_p: DSP_SETUP_P,
+    dsp_cascade: 1.713,
+    dsp_setup_cascade: 1.4,
+    srl_launch: 1.621,
+    srl_read: SRL_READ,
+    srl_setup: 0.052,
+    srl_setup_enable: Some(0.517),
+    lutram_setup: 0.228,
+    lutram_setup_pins: Some((0.533, 0.119)),
+    bram_launch: 2.454,
+    bram_setup: 0.597,
+    bram_setup_pins: Some((0.280, 0.491, 0.584)),
+    input_buffer: 1.491,
+    clock_insertion: 5.27,
+    output_buffer: 3.529,
+    wire: (0.594, 0.0485, 0.0323),
+    carry_arcs: Some(CARRY_ARCS_1),
+    ff_launch_bels: [0.456, 0.419, 0.518, 0.478],
+    setup_inside: (-0.040, -0.102),
+    setup_bypass: (0.137, 0.102),
+    setup_way: (0.201, 0.139),
+    idelay: (0.815, 1.012),
 };
 
 /// [`WIRE`] for [`VIVADO`]: the same line, fitted to Vivado's interconnect
@@ -363,14 +513,71 @@ pub(crate) const CARRY_ARCS: &[(&str, [f64; 8])] = &[
     ("p3", [NO, NO, NO, 0.187, NO, NO, NO, 0.299]),
 ];
 
+/// [`CARRY_ARCS`] at grade 2: the medians of the same chains' arcs at
+/// `xc7a100tftg256-2` (`arcs_2.txt`), and `cyinit`'s grade 3 figures through
+/// the line the chains' arcs follow from grade 3 to grade 2 (1.120 times, less
+/// 1.5 ps), since they were derived at grade 3 too.
+#[allow(
+    clippy::approx_constant,
+    reason = "a carry arc of 0.318 ns is near 1/π by chance"
+)]
+pub(crate) const CARRY_ARCS_2: &[(&str, [f64; 8])] = &[
+    (
+        "ci",
+        [0.181, 0.265, 0.200, 0.260, 0.216, 0.132, 0.190, 0.098],
+    ),
+    (
+        "cyinit",
+        [0.404, 0.501, 0.489, 0.538, 0.449, 0.414, 0.496, 0.486],
+    ),
+    ("di0", [NO, 0.337, 0.459, 0.508, 0.316, 0.384, 0.446, 0.436]),
+    ("di1", [NO, NO, 0.442, 0.492, NO, 0.366, 0.430, 0.418]),
+    ("di2", [NO, NO, NO, 0.362, NO, NO, 0.295, 0.329]),
+    ("di3", [NO, NO, NO, NO, NO, NO, NO, 0.318]),
+    (
+        "p0",
+        [0.207, 0.343, 0.453, 0.503, 0.304, 0.380, 0.446, 0.440],
+    ),
+    ("p1", [NO, 0.187, 0.481, 0.530, NO, 0.408, 0.475, 0.457]),
+    ("p2", [NO, NO, 0.207, 0.295, NO, NO, 0.261, 0.332]),
+    ("p3", [NO, NO, NO, 0.206, NO, NO, NO, 0.332]),
+];
+
+/// [`CARRY_ARCS`] at grade 1, as [`CARRY_ARCS_2`] is at grade 2
+/// (`arcs_1.txt`; `cyinit` 1.361 times grade 3's, less 3.3 ps).
+pub(crate) const CARRY_ARCS_1: &[(&str, [f64; 8])] = &[
+    (
+        "ci",
+        [0.223, 0.334, 0.239, 0.313, 0.271, 0.157, 0.228, 0.114],
+    ),
+    (
+        "cyinit",
+        [0.489, 0.608, 0.593, 0.652, 0.544, 0.501, 0.601, 0.589],
+    ),
+    ("di0", [NO, 0.407, 0.556, 0.615, 0.379, 0.465, 0.540, 0.526]),
+    ("di1", [NO, NO, 0.537, 0.596, NO, 0.445, 0.520, 0.507]),
+    ("di2", [NO, NO, NO, 0.438, NO, NO, 0.356, 0.398]),
+    ("di3", [NO, NO, NO, NO, NO, NO, NO, 0.385]),
+    (
+        "p0",
+        [0.247, 0.424, 0.547, 0.606, 0.364, 0.457, 0.536, 0.532],
+    ),
+    ("p1", [NO, 0.227, 0.580, 0.640, NO, 0.491, 0.570, 0.550]),
+    ("p2", [NO, NO, 0.248, 0.352, NO, NO, 0.314, 0.398]),
+    ("p3", [NO, NO, NO, 0.248, NO, NO, NO, 0.401]),
+];
+
 /// No path from an input to an output.
 const NO: f64 = f64::NEG_INFINITY;
 
-/// The figures of `model`.
-pub(crate) fn figures(model: DelayModel) -> &'static Figures {
-    match model {
-        DelayModel::Legacy => &LEGACY,
-        DelayModel::Vivado => &VIVADO,
+/// The figures of `model` at `grade`: the legacy model has one set for every
+/// grade, and the fitted model one a grade.
+pub(crate) fn figures(model: DelayModel, grade: SpeedGrade) -> &'static Figures {
+    match (model, grade) {
+        (DelayModel::Legacy, _) => &LEGACY,
+        (DelayModel::Vivado, SpeedGrade::One) => &VIVADO_1,
+        (DelayModel::Vivado, SpeedGrade::Two) => &VIVADO_2,
+        (DelayModel::Vivado, SpeedGrade::Three) => &VIVADO,
     }
 }
 
@@ -380,9 +587,9 @@ pub(crate) const IDELAY_COUNT_LAUNCH: f64 = 0.751;
 
 /// An `IDELAYE2`'s data input to `DATAOUT`, ns, at the delay its parameters
 /// give: Vivado 2026.1's timer, the slow corner's maximum on the XC7A100T,
-/// `Prop_idelaye2_IDATAIN_DATAOUT` or `_DATAIN_DATAOUT`, at speed grade 1 for
-/// [`DelayModel::Legacy`], whose other figures are grade 1's, and grade 3 for
-/// [`DelayModel::Vivado`], whose are grade 3's.
+/// `Prop_idelaye2_IDATAIN_DATAOUT` or `_DATAIN_DATAOUT`, at the grade of `f`:
+/// [`Figures::idelay`], grade 1's for [`DelayModel::Legacy`], whose other
+/// figures are grade 1's, and the build's grade's for [`DelayModel::Vivado`].
 ///
 /// **Fitted to Vivado's figures, not read from a document.** The timer's arc
 /// on 34 delays at grade 1 (`testdata/fpga/vivado/idelay/`'s sweeps, and
@@ -391,7 +598,10 @@ pub(crate) const IDELAY_COUNT_LAUNCH: f64 = 0.751;
 /// of the same at grade 3, is this within 1.2 ps of every one:
 ///
 /// `0.815` from `IDATAIN` (`1.012` from `DATAIN`) at grade 1, `0.601`
-/// (`0.748`) at grade 3, `+ IDELAY_VALUE × tap`, the same tap at both,
+/// (`0.748`) at grade 3, and `0.679` (`0.969`) at grade 2, measured since on
+/// `idelay_sweep` and `ddly_datain` at all three grades,
+/// `+ IDELAY_VALUE × tap`, the same tap at every grade (31 taps 2.975 ns at
+/// each),
 /// where `tap = a / (64 × REFCLK_FREQUENCY) + jitter`, `a` is 1.1132, or
 /// 1.094 in `HIGH_PERFORMANCE_MODE`, and `jitter` is 9 ps a tap for the
 /// `DATA` pattern, 5 ps in `HIGH_PERFORMANCE_MODE`, and none for `CLOCK`.
@@ -402,7 +612,7 @@ pub(crate) const IDELAY_COUNT_LAUNCH: f64 = 0.751;
 /// The timer takes `IDELAY_VALUE` whatever `IDELAY_TYPE` is: a `VAR_LOAD`
 /// delay of 9 is nine taps to it (1.679 ns), though nothing of it loads 9. A
 /// variable delay moves at run time, which no timer sees.
-pub(crate) fn idelay_arc(params: &crate::ir::Attrs, model: DelayModel) -> f64 {
+pub(crate) fn idelay_arc(params: &crate::ir::Attrs, f: &Figures) -> f64 {
     let text = |name: &str, default: &str| {
         params
             .get(name)
@@ -429,12 +639,7 @@ pub(crate) fn idelay_arc(params: &crate::ir::Attrs, model: DelayModel) -> f64 {
         (false, false) => 0.009,
     };
     let tap = margin * 1000.0 / (64.0 * frequency) + jitter;
-    let intercept = match (model, fabric) {
-        (DelayModel::Legacy, false) => 0.815,
-        (DelayModel::Legacy, true) => 1.012,
-        (DelayModel::Vivado, false) => 0.601,
-        (DelayModel::Vivado, true) => 0.748,
-    };
+    let intercept = if fabric { f.idelay.1 } else { f.idelay.0 };
     intercept + value * tap
 }
 
@@ -695,7 +900,9 @@ fn through_muxes(
 /// The timing a placement of `netlist` is driven by, and the name of each
 /// of its domains (the clock's `create_clock` name), in
 /// [`PlaceTiming::periods`] order. `design`'s module `top` is what the
-/// netlist was built from, for the lookup tables' truth tables.
+/// netlist was built from, for the lookup tables' truth tables; `model` and
+/// `grade` choose the figures (`figures`), the periods being the
+/// constraints' whatever the grade.
 #[must_use]
 pub fn place_timing(
     design: &Design,
@@ -703,8 +910,9 @@ pub fn place_timing(
     netlist: &Netlist,
     constraints: &Constraints,
     model: DelayModel,
+    grade: SpeedGrade,
 ) -> (PlaceTiming, Vec<String>) {
-    let f = figures(model);
+    let f = figures(model, grade);
     let n = netlist.instances.len();
     let mut pins = vec![PinTiming::Ignored; netlist.pins.len()];
     let mut cell = vec![0.0; n];
@@ -1075,8 +1283,8 @@ pub fn place_timing(
                 // controls end paths on `C`, at a flip-flop's setup, which
                 // was not measured, and its count starts them.
                 cell[index] = design.modules[top].cells.get(inst.cell).map_or_else(
-                    || idelay_arc(&crate::ir::Attrs::new(), model),
-                    |c| idelay_arc(&c.params, model),
+                    || idelay_arc(&crate::ir::Attrs::new(), f),
+                    |c| idelay_arc(&c.params, f),
                 );
                 (launch[index], capture[index]) = (IDELAY_COUNT_LAUNCH, f.ff_setup);
                 for pin in &inst.pins {
@@ -1380,7 +1588,7 @@ struct ClockTable {
     /// Per region row, top of the die first, and per column of
     /// [`ClockTable::columns`]. A region row whose column had no slice
     /// there takes its nearest column's figure.
-    arrival: &'static [&'static [u8]],
+    arrival: &'static [&'static [u16]],
     /// How much later the clock reaches a row for each row it is from its
     /// region's `HCLK` row.
     ps_per_row: f64,
@@ -1462,28 +1670,162 @@ const XC7A35T_CLOCK: ClockTable = ClockTable {
     ps_per_row: 0.83,
 };
 
-/// The [`ClockTable`] measured for `part`, a part name as the database
-/// gives it (`xc7a35tcpg236-1`, or Reticle's `7a35tcpg236`): by its die,
-/// whatever its package or speed grade. `None` for a die nobody measured.
-fn clock_table(part: &str) -> Option<&'static ClockTable> {
-    if part.contains("7a100t") {
-        Some(&XC7A100T_CLOCK)
+/// [`XC7A100T_CLOCK`] at speed grade 2: the same probe from the same three
+/// buffers at `xc7a100tftg256-2`; every one of the 2,100 flip-flops within
+/// 5.1 ps of it (`testdata/fpga/vivado/clock/arrival_grades.txt`). Not grade
+/// 3's times a factor: the outer region rows are later by more than the inner
+/// ones (`docs/fpga-vivado-parity.md`, "Speed grades").
+const XC7A100T_CLOCK_2: ClockTable = ClockTable {
+    columns: &[
+        10, 13, 14, 17, 23, 24, 30, 33, 35, 38, 39, 42, 43, 46, 51, 52, 55, 56, 59, 61, 64, 65, 68,
+        69, 72, 74, 80, 83, 84, 90, 93, 98, 100, 103, 104, 107, 112, 114, 117, 123, 124, 130, 133,
+        134, 137,
+    ],
+    rows: &[26, 78, 130, 182],
+    arrival: &[
+        &[
+            252, 252, 251, 251, 183, 184, 183, 183, 183, 183, 182, 182, 181, 181, 180, 179, 179,
+            177, 177, 175, 175, 173, 173, 172, 172, 170, 163, 163, 165, 167, 167, 171, 171, 171,
+            172, 172, 214, 214, 214, 214, 215, 215, 215, 215, 215,
+        ],
+        &[
+            89, 89, 86, 86, 19, 20, 20, 20, 20, 20, 20, 20, 16, 16, 16, 14, 14, 12, 12, 11, 11, 10,
+            10, 8, 8, 5, 0, 0, 1, 4, 4, 8, 8, 8, 9, 9, 78, 80, 80, 84, 86, 93, 93, 94, 94,
+        ],
+        &[
+            108, 108, 105, 105, 38, 39, 39, 39, 39, 39, 39, 39, 35, 35, 35, 33, 33, 31, 31, 30, 30,
+            29, 29, 27, 27, 24, 19, 19, 20, 23, 23, 27, 27, 27, 28, 28, 97, 99, 99, 103, 105, 112,
+            112, 113, 113,
+        ],
+        &[
+            252, 252, 251, 251, 184, 184, 184, 184, 184, 184, 182, 182, 181, 181, 180, 179, 179,
+            177, 177, 175, 175, 174, 174, 172, 172, 170, 164, 164, 165, 167, 167, 171, 171, 171,
+            172, 174, 214, 214, 214, 214, 217, 217, 217, 217, 217,
+        ],
+    ],
+    ps_per_row: 0.83,
+};
+
+/// [`XC7A100T_CLOCK`] at speed grade 1: the same probe from the same three
+/// buffers at `xc7a100tftg256-1`; every one of the 2,100 flip-flops within
+/// 3.5 ps of it (`testdata/fpga/vivado/clock/arrival_grades.txt`). Not grade
+/// 3's times a factor: the outer region rows are later by more than the inner
+/// ones (`docs/fpga-vivado-parity.md`, "Speed grades").
+const XC7A100T_CLOCK_1: ClockTable = ClockTable {
+    columns: &[
+        10, 13, 14, 17, 23, 24, 30, 33, 35, 38, 39, 42, 43, 46, 51, 52, 55, 56, 59, 61, 64, 65, 68,
+        69, 72, 74, 80, 83, 84, 90, 93, 98, 100, 103, 104, 107, 112, 114, 117, 123, 124, 130, 133,
+        134, 137,
+    ],
+    rows: &[26, 78, 130, 182],
+    arrival: &[
+        &[
+            284, 284, 283, 283, 205, 205, 205, 205, 204, 204, 203, 203, 203, 203, 200, 200, 200,
+            198, 198, 197, 197, 195, 195, 192, 192, 190, 183, 183, 184, 188, 188, 190, 191, 191,
+            191, 191, 240, 240, 240, 240, 241, 241, 241, 241, 241,
+        ],
+        &[
+            100, 100, 99, 99, 20, 22, 20, 20, 20, 20, 20, 20, 17, 17, 17, 15, 15, 15, 15, 14, 14,
+            10, 10, 9, 9, 7, 0, 0, 0, 5, 5, 7, 7, 7, 7, 7, 90, 92, 92, 95, 99, 105, 105, 107, 107,
+        ],
+        &[
+            116, 116, 115, 115, 37, 38, 37, 37, 37, 37, 37, 37, 33, 33, 33, 32, 32, 31, 31, 30, 30,
+            26, 26, 25, 25, 23, 16, 16, 17, 21, 21, 23, 24, 24, 24, 24, 106, 108, 108, 112, 115,
+            121, 121, 123, 123,
+        ],
+        &[
+            290, 290, 289, 289, 211, 211, 211, 211, 210, 210, 209, 209, 209, 209, 206, 206, 206,
+            204, 204, 203, 203, 201, 201, 198, 198, 196, 189, 189, 190, 194, 194, 196, 197, 197,
+            197, 198, 246, 246, 247, 246, 248, 248, 248, 248, 248,
+        ],
+    ],
+    ps_per_row: 0.91,
+};
+
+/// [`XC7A35T_CLOCK`] at speed grade 2: three runs at `xc7a35tftg256-2`, every
+/// one of their 2,100 flip-flops within 6.1 ps of it, and a fourth at
+/// `xc7a35tcpg236-2` that it was not fitted to
+/// (`testdata/fpga/vivado/clock/arrival_xc7a35t_grades.txt`).
+const XC7A35T_CLOCK_2: ClockTable = ClockTable {
+    columns: &[
+        10, 13, 14, 17, 23, 24, 30, 33, 35, 38, 39, 42, 43, 46, 51, 52, 55, 56, 62, 65, 67, 70, 71,
+        74, 79, 81, 84, 90, 91, 97, 100, 101, 104,
+    ],
+    rows: &[26, 78, 130],
+    arrival: &[
+        &[
+            238, 238, 236, 236, 170, 171, 170, 170, 170, 170, 168, 168, 167, 167, 166, 165, 165,
+            163, 163, 163, 165, 165, 165, 165, 167, 167, 167, 168, 168, 168, 168, 168, 168,
+        ],
+        &[
+            74, 74, 73, 73, 7, 7, 7, 7, 7, 7, 7, 7, 3, 3, 3, 2, 2, 0, 2, 2, 3, 3, 4, 4, 8, 8, 8,
+            10, 10, 73, 73, 75, 75,
+        ],
+        &[
+            93, 93, 92, 92, 26, 26, 26, 26, 26, 26, 26, 26, 22, 22, 22, 21, 21, 19, 21, 21, 22, 22,
+            23, 23, 27, 27, 27, 29, 29, 92, 92, 96, 97,
+        ],
+    ],
+    ps_per_row: 0.83,
+};
+
+/// [`XC7A35T_CLOCK`] at speed grade 1: three runs at `xc7a35tftg256-1`, every
+/// one of their 2,100 flip-flops within 5.1 ps of it, and a fourth at
+/// `xc7a35tcpg236-1` that it was not fitted to
+/// (`testdata/fpga/vivado/clock/arrival_xc7a35t_grades.txt`).
+const XC7A35T_CLOCK_1: ClockTable = ClockTable {
+    columns: &[
+        10, 13, 14, 17, 23, 24, 30, 33, 35, 38, 39, 42, 43, 46, 51, 52, 55, 56, 62, 65, 67, 70, 71,
+        74, 79, 81, 84, 90, 91, 97, 100, 101, 104,
+    ],
+    rows: &[26, 78, 130],
+    arrival: &[
+        &[
+            258, 258, 257, 257, 189, 190, 189, 189, 189, 189, 188, 188, 187, 187, 186, 185, 185,
+            184, 184, 184, 184, 184, 185, 185, 187, 187, 187, 187, 188, 188, 188, 188, 188,
+        ],
+        &[
+            75, 75, 72, 72, 5, 5, 5, 5, 5, 5, 5, 5, 2, 2, 2, 2, 2, 0, 2, 2, 2, 2, 4, 4, 7, 7, 7, 7,
+            7, 74, 74, 75, 75,
+        ],
+        &[
+            91, 91, 88, 88, 22, 22, 22, 22, 22, 22, 22, 22, 19, 19, 19, 18, 18, 17, 18, 18, 19, 19,
+            20, 20, 23, 24, 24, 24, 24, 91, 91, 94, 94,
+        ],
+    ],
+    ps_per_row: 0.91,
+};
+
+/// The [`ClockTable`] measured for `part` at `grade`, `part` a part name as
+/// the database gives it (`xc7a35tcpg236-1`, or Reticle's `7a35tcpg236`): by
+/// its die, whatever its package, and by the grade the build times at, not
+/// the one in the name (the database names every part `-1`). `None` for a die
+/// nobody measured.
+fn clock_table(part: &str, grade: SpeedGrade) -> Option<&'static ClockTable> {
+    let tables: [&'static ClockTable; 3] = if part.contains("7a100t") {
+        [&XC7A100T_CLOCK_1, &XC7A100T_CLOCK_2, &XC7A100T_CLOCK]
     } else if part.contains("7a35t") {
-        Some(&XC7A35T_CLOCK)
+        [&XC7A35T_CLOCK_1, &XC7A35T_CLOCK_2, &XC7A35T_CLOCK]
     } else {
-        None
-    }
+        return None;
+    };
+    Some(tables[grade.index()])
 }
 
 /// [`crate::fpga::place::PlaceTiming::clock`] for `graph`, a fabric of the
 /// part `part` whose tile types `arch` gives: per site of a slice, a block
 /// RAM or a `DSP48E1`, when the global clock reaches it (the die's
-/// `ClockTable`), and `NaN` for any other site. Empty for a part whose die
-/// was not measured, the `xc7a100t` and the `xc7a35t` being, and for a
-/// fabric with an `HCLK` row that die does not have, or with none.
+/// `ClockTable` at `grade`), and `NaN` for any other site. Empty for a part
+/// whose die was not measured, the `xc7a100t` and the `xc7a35t` being, and
+/// for a fabric with an `HCLK` row that die does not have, or with none.
 #[must_use]
-pub fn clock_arrival(part: &str, arch: &crate::fpga::arch::Arch, graph: &RoutingGraph) -> Vec<f32> {
-    let Some(table) = clock_table(part) else {
+pub fn clock_arrival(
+    part: &str,
+    grade: SpeedGrade,
+    arch: &crate::fpga::arch::Arch,
+    graph: &RoutingGraph,
+) -> Vec<f32> {
+    let Some(table) = clock_table(part, grade) else {
         return Vec::new();
     };
     let (width, height) = (arch.width, arch.height);
@@ -1549,18 +1891,19 @@ impl ClockTable {
 }
 
 /// When the global clock reaches a register in tile `(x, y)` of the grid of
-/// `part`'s die, in picoseconds after the earliest, by its `ClockTable`;
-/// what [`clock_arrival`] gives every site of a fabric of that part. `None`
-/// for a die nobody measured.
+/// `part`'s die at `grade`, in picoseconds after the earliest, by its
+/// `ClockTable`; what [`clock_arrival`] gives every site of a fabric of that
+/// part. `None` for a die nobody measured.
 #[must_use]
-pub fn clock_arrival_ps(part: &str, x: u32, y: u32) -> Option<f64> {
-    clock_table(part).map(|table| table.at(x, y))
+pub fn clock_arrival_ps(part: &str, grade: SpeedGrade, x: u32, y: u32) -> Option<f64> {
+    clock_table(part, grade).map(|table| table.at(x, y))
 }
 
 /// A flip-flop's data input's setup by how its data reaches it, in a `SLICEL`
 /// and a `SLICEM`: from a cell of its own slice, inside the site; through the
 /// lane's bypass pin `<L>X`; and through the lane's lookup table, a way
-/// ([`super::thru`]). See [`place_timing_on_sites`] for where each was read.
+/// ([`super::thru`]), at grade 3; [`Figures::setup_inside`] and the others are
+/// each grade's. See [`place_timing_on_sites`] for where each was read.
 const SETUP_INSIDE: (f64, f64) = (-0.039, -0.082);
 /// See [`SETUP_INSIDE`].
 const SETUP_BYPASS: (f64, f64) = (0.082, 0.058);
@@ -1571,7 +1914,8 @@ const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 /// them: a flip-flop's clock to `Q` by its slice and bel, 0.341 ns in a
 /// `SLICEL`'s `AFF` to `DFF` and 0.393 in a `SLICEM`'s, 0.313 and 0.361 in
 /// their `A5FF` to `D5FF` (Vivado 2026.1, grade 3, every flip-flop of the
-/// corpus: `arcs.txt`). And its data input's setup by where the data comes
+/// corpus: `arcs.txt`; `Figures::ff_launch_bels` at the other grades). And
+/// its data input's setup by where the data comes
 /// from, in a `SLICEL` and a `SLICEM`: -0.039 and -0.082 ns from a cell of its
 /// own slice, which reaches it inside the site (`SETUP_INSIDE`); 0.082 and
 /// 0.058 through the slice's bypass pin from anywhere else (`SETUP_BYPASS`);
@@ -1596,6 +1940,7 @@ const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 pub fn place_timing_on_sites(
     timing: &mut PlaceTiming,
     model: DelayModel,
+    grade: SpeedGrade,
     netlist: &Netlist,
     graph: &RoutingGraph,
     placement: &Placement,
@@ -1604,6 +1949,7 @@ pub fn place_timing_on_sites(
     if model == DelayModel::Legacy {
         return;
     }
+    let f = figures(model, grade);
     // The data inputs a way open to the router ends on.
     let through: HashSet<NodeId> = ways
         .iter()
@@ -1619,12 +1965,7 @@ pub fn place_timing_on_sites(
         let bel = graph.sites[site].bel.as_str();
         let slicem = bel.starts_with("SLICEM");
         let five = bel.ends_with("5FF");
-        timing.launch[index] = match (slicem, five) {
-            (false, false) => 0.341,
-            (false, true) => 0.313,
-            (true, false) => 0.393,
-            (true, true) => 0.361,
-        };
+        timing.launch[index] = f.ff_launch_bels[usize::from(slicem) * 2 + usize::from(five)];
         // The slice a bel is in: `SLICEL_X0_AFF` is in `SLICEL_X0`.
         let slice_of = |site: usize| {
             let site = &graph.sites[site];
@@ -1648,11 +1989,11 @@ pub fn place_timing_on_sites(
                 .and_then(|d| placement.site_of(netlist.pins[d].instance))
                 .is_some_and(|d| slice_of(d) == here);
             timing.pin_delays.capture[*pin] = Some(if inside {
-                by_slice(SETUP_INSIDE)
+                by_slice(f.setup_inside)
             } else if way {
-                by_slice(SETUP_WAY)
+                by_slice(f.setup_way)
             } else {
-                by_slice(SETUP_BYPASS)
+                by_slice(f.setup_bypass)
             });
         }
     }
@@ -1722,7 +2063,7 @@ mod tests {
         };
         let big = &XC7A100T_CLOCK;
         let (arch, graph) = build(big.rows);
-        let arrival = clock_arrival("7a100tftg256", &arch, &graph);
+        let arrival = clock_arrival("7a100tftg256", SpeedGrade::Three, &arch, &graph);
         assert_eq!(arrival.len(), graph.sites.len());
         let at = |x: u32, y: u32| {
             let site = graph.sites.iter().position(|s| s.tile == (x, y)).unwrap();
@@ -1745,20 +2086,23 @@ mod tests {
         );
         assert!(at(12, 40).is_nan(), "a pad's site has no figure");
         assert!(
-            clock_arrival("7a35tcpg236", &arch, &graph).is_empty(),
+            clock_arrival("7a35tcpg236", SpeedGrade::Three, &arch, &graph).is_empty(),
             "the xc7a35t has no fourth region row"
         );
-        assert!(clock_arrival("7k325tffg900", &arch, &graph).is_empty());
+        assert!(clock_arrival("7k325tffg900", SpeedGrade::Three, &arch, &graph).is_empty());
         assert_eq!(
-            clock_arrival_ps("xc7a100tftg256-3", 10, 27),
+            clock_arrival_ps("xc7a100tftg256-3", SpeedGrade::Three, 10, 27),
             Some(f64::from(big.arrival[0][0]) + big.ps_per_row)
         );
-        assert_eq!(clock_arrival_ps("xc7z020clg400-1", 10, 27), None);
+        assert_eq!(
+            clock_arrival_ps("xc7z020clg400-1", SpeedGrade::Three, 10, 27),
+            None
+        );
         let (arch, graph) = build(&[26, 78, 130, 183]);
-        assert!(clock_arrival("7a100tftg256", &arch, &graph).is_empty());
+        assert!(clock_arrival("7a100tftg256", SpeedGrade::Three, &arch, &graph).is_empty());
         // A region holding two of the rows is timed by all four.
         let (arch, graph) = build(&[78, 130]);
-        let arrival = clock_arrival("7a100tftg256", &arch, &graph);
+        let arrival = clock_arrival("7a100tftg256", SpeedGrade::Three, &arch, &graph);
         let site = graph.sites.iter().position(|s| s.tile == (10, 27)).unwrap();
         assert_eq!(
             arrival[site],
@@ -1769,7 +2113,7 @@ mod tests {
         let (arch, graph) = build(small.rows);
         let site = |x: u32, y: u32| graph.sites.iter().position(|s| s.tile == (x, y)).unwrap();
         for part in ["7a35tcpg236", "7a35tftg256"] {
-            let arrival = clock_arrival(part, &arch, &graph);
+            let arrival = clock_arrival(part, SpeedGrade::Three, &arch, &graph);
             assert_eq!(arrival.len(), graph.sites.len());
             assert_eq!(
                 arrival[site(10, 27)],
@@ -1785,6 +2129,24 @@ mod tests {
                 "not the xc7a100t's figure"
             );
         }
+        // And at each grade by that grade's table, which is not grade 3's.
+        for (grade, table) in [
+            (SpeedGrade::One, &XC7A35T_CLOCK_1),
+            (SpeedGrade::Two, &XC7A35T_CLOCK_2),
+        ] {
+            let arrival = clock_arrival("7a35tcpg236", grade, &arch, &graph);
+            let figure = ns(f64::from(table.arrival[0][0]) + table.ps_per_row);
+            assert_eq!(arrival[site(10, 27)], figure);
+            assert_ne!(
+                figure,
+                ns(f64::from(small.arrival[0][0]) + small.ps_per_row)
+            );
+        }
+        assert_eq!(
+            clock_arrival_ps("xc7a100tftg256-3", SpeedGrade::One, 10, 27),
+            Some(f64::from(XC7A100T_CLOCK_1.arrival[0][0]) + XC7A100T_CLOCK_1.ps_per_row),
+            "by the grade asked, not the one in the name"
+        );
     }
 
     /// **A flip-flop's setup is the one for how its data reaches it, in its
@@ -1956,7 +2318,15 @@ mod tests {
         };
         let setups = |model: DelayModel, ways: &[NodeId]| {
             let mut timing = timing.clone();
-            place_timing_on_sites(&mut timing, model, &netlist, &graph, &placement, ways);
+            place_timing_on_sites(
+                &mut timing,
+                model,
+                SpeedGrade::Three,
+                &netlist,
+                &graph,
+                &placement,
+                ways,
+            );
             (2..6)
                 .map(|ff| timing.pin_delays.capture[netlist.instances[ff].pins[0]])
                 .collect::<Vec<_>>()
@@ -1988,6 +2358,31 @@ mod tests {
             pick(SETUP_BYPASS, l)
         );
         assert_eq!(setups(DelayModel::Legacy, &ways), vec![None; 4]);
+        // At grade 1 the same ends take grade 1's figures, and the launch too.
+        let mut slow = timing.clone();
+        place_timing_on_sites(
+            &mut slow,
+            DelayModel::Vivado,
+            SpeedGrade::One,
+            &netlist,
+            &graph,
+            &placement,
+            &ways,
+        );
+        let ends: Vec<_> = (2..6)
+            .map(|ff| slow.pin_delays.capture[netlist.instances[ff].pins[0]])
+            .collect();
+        assert_eq!(
+            ends,
+            vec![
+                pick(VIVADO_1.setup_inside, l),
+                pick(VIVADO_1.setup_way, l),
+                pick(VIVADO_1.setup_bypass, l),
+                pick(VIVADO_1.setup_way, m),
+            ]
+        );
+        assert_eq!(slow.launch[2], VIVADO_1.ff_launch_bels[0]);
+        assert_eq!(slow.launch[5], VIVADO_1.ff_launch_bels[2]);
     }
 
     /// **A `LUT6_2`'s inputs reach the half that reads them.** One table,
@@ -2274,8 +2669,14 @@ mod tests {
             "t",
             crate::source::Span::new(file, 0, 0),
         ));
-        let (timing, names) =
-            place_timing(&design, top, &netlist, &constraints, DelayModel::Legacy);
+        let (timing, names) = place_timing(
+            &design,
+            top,
+            &netlist,
+            &constraints,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        );
         assert_eq!(names, vec!["bus".to_owned()]);
         assert!((timing.launch[2] - (INPUT_BUFFER + 12.0 - CLOCK_INSERTION)).abs() < 1e-9);
         assert_eq!(timing.domain[2], PathDomain::Clock(0));
@@ -2294,7 +2695,14 @@ mod tests {
             &mut diags,
         );
         assert!(!diags.has_errors());
-        let (eased, _) = place_timing(&design, top, &netlist, &relaxed, DelayModel::Legacy);
+        let (eased, _) = place_timing(
+            &design,
+            top,
+            &netlist,
+            &relaxed,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        );
         assert!((timing.launch[2] - eased.launch[2] - 5.0).abs() < 1e-9);
         assert!((timing.capture[4] - eased.capture[4] - 5.0).abs() < 1e-9);
         assert!(
@@ -2305,7 +2713,14 @@ mod tests {
         // Under the fitted model `data`, which no constraint names, is not
         // timed at all, as Vivado's timer times no pad without a delay on
         // it; `rd` and the clock's own pad are timed as before.
-        let (fitted, _) = place_timing(&design, top, &netlist, &constraints, DelayModel::Vivado);
+        let (fitted, _) = place_timing(
+            &design,
+            top,
+            &netlist,
+            &constraints,
+            DelayModel::Vivado,
+            SpeedGrade::Three,
+        );
         assert_eq!(fitted.domain[3], PathDomain::Untimed);
         assert_eq!(fitted.domain[2], PathDomain::Clock(0));
         assert_eq!(fitted.domain[0], PathDomain::Clock(0));
@@ -2389,8 +2804,14 @@ mod tests {
             "t",
             crate::source::Span::new(file, 0, 0),
         ));
-        let (timing, names) =
-            place_timing(&design, top, &netlist, &constraints, DelayModel::Legacy);
+        let (timing, names) = place_timing(
+            &design,
+            top,
+            &netlist,
+            &constraints,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        );
         let PathDomain::Clock(d) = timing.domain[4] else {
             panic!("the flip-flop is in no domain: {:?}", timing.domain[4]);
         };
@@ -2487,8 +2908,14 @@ mod tests {
             "t",
             crate::source::Span::new(file, 0, 0),
         ));
-        let (timing, names) =
-            place_timing(&design, top, &netlist, &constraints, DelayModel::Legacy);
+        let (timing, names) = place_timing(
+            &design,
+            top,
+            &netlist,
+            &constraints,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        );
         let bus = names
             .iter()
             .position(|n| n == "bus")
@@ -2604,8 +3031,14 @@ mod tests {
             let mut diags = crate::diag::Diagnostics::new();
             let constraints = Constraints::parse(rcf, file, &mut diags);
             assert!(!diags.has_errors());
-            let (timing, names) =
-                place_timing(&design, top, &netlist, &constraints, DelayModel::Legacy);
+            let (timing, names) = place_timing(
+                &design,
+                top,
+                &netlist,
+                &constraints,
+                DelayModel::Legacy,
+                SpeedGrade::Three,
+            );
             let PathDomain::Clock(d) = timing.domain[instance] else {
                 panic!("{instance} is untimed: {:?}", timing.domain[instance]);
             };
@@ -2691,7 +3124,7 @@ mod tests {
             params.set("IDELAY_TYPE", kind);
             params.set("IDELAY_VALUE", value);
             params.set("DELAY_SRC", source);
-            let ours = idelay_arc(&params, DelayModel::Legacy);
+            let ours = idelay_arc(&params, &LEGACY);
             assert!(
                 (ours - ns).abs() < 0.0015,
                 "{reference} {fast} {pattern} {kind} {value} {source}: {ours:.4} where Vivado \
@@ -2700,7 +3133,7 @@ mod tests {
         }
         // And with nothing said, the defaults: 200 MHz, `DATA`, `IDATAIN`, 0.
         let none = crate::ir::Attrs::new();
-        assert!((idelay_arc(&none, DelayModel::Legacy) - 0.815).abs() < 1e-9);
+        assert!((idelay_arc(&none, &LEGACY) - 0.815).abs() < 1e-9);
         // Grade 3, Vivado's figures for the Vivado model.
         let grade3: [(&str, &str, &str, i64, &str, f64); 7] = [
             ("200.0", "FALSE", "DATA", 0, "IDATAIN", 0.601),
@@ -2718,11 +3151,31 @@ mod tests {
             params.set("SIGNAL_PATTERN", pattern);
             params.set("IDELAY_VALUE", value);
             params.set("DELAY_SRC", source);
-            let ours = idelay_arc(&params, DelayModel::Vivado);
+            let ours = idelay_arc(&params, &VIVADO);
             assert!(
                 (ours - ns).abs() < 0.0015,
                 "grade 3 {reference} {fast} {pattern} {value} {source}: {ours:.4} where \
                  Vivado says {ns}"
+            );
+        }
+        // Grades 2 and 1 for the Vivado model, Vivado's arcs at
+        // `xc7a100tftg256-2` and `-1` on `idelay_sweep` and `ddly_datain`.
+        let graded: [(&Figures, i64, &str, f64); 6] = [
+            (&VIVADO_2, 0, "IDATAIN", 0.679),
+            (&VIVADO_2, 31, "IDATAIN", 3.654),
+            (&VIVADO_2, 0, "DATAIN", 0.969),
+            (&VIVADO_1, 0, "IDATAIN", 0.815),
+            (&VIVADO_1, 31, "IDATAIN", 3.790),
+            (&VIVADO_1, 0, "DATAIN", 1.012),
+        ];
+        for (f, value, source, ns) in graded {
+            let mut params = crate::ir::Attrs::new();
+            params.set("IDELAY_VALUE", value);
+            params.set("DELAY_SRC", source);
+            let ours = idelay_arc(&params, f);
+            assert!(
+                (ours - ns).abs() < 0.0015,
+                "{value} {source}: {ours:.4} where Vivado says {ns}"
             );
         }
     }
@@ -2784,7 +3237,14 @@ mod tests {
             crate::source::Span::new(file, 0, 0),
         ));
         for (model, arc) in [(DelayModel::Legacy, 0.815), (DelayModel::Vivado, 0.601)] {
-            let (timing, _) = place_timing(&design, top, &netlist, &Constraints::new(), model);
+            let (timing, _) = place_timing(
+                &design,
+                top,
+                &netlist,
+                &Constraints::new(),
+                model,
+                SpeedGrade::Three,
+            );
             assert_eq!(timing.pins[1], PinTiming::Through);
             assert_eq!(timing.pins[2], PinTiming::Through);
             assert!((timing.cell[1] - arc).abs() < 1e-9, "{}", timing.cell[1]);

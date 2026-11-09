@@ -201,7 +201,7 @@ pub use cmt::{
     PllSettings, check_manager, counter, mmcm_registers, pll_registers, shaped_counter,
 };
 pub use dcireset::unread_dci_resets;
-pub use delay::DelayModel;
+pub use delay::{DelayModel, SpeedGrade};
 pub use dsp::{DSP_PRIMITIVE, dsp_local_muxes, dsp_pin_wires};
 pub use fifo::{
     Shape as FifoShape, check as fifo_check, features as fifo_features,
@@ -1063,8 +1063,8 @@ impl XrayDatabase {
     ///
     /// **That is [`DelayModel::Legacy`].** With [`DelayModel::Vivado`] a node
     /// a pip in its own tile enters costs what [`delay::wire_ps`] fitted to
-    /// Vivado's timer says of its class, and one a join enters nothing: see
-    /// [`delay`].
+    /// Vivado's timer says of its class at `grade`, and one a join enters
+    /// nothing: see [`delay`]. The legacy model has no grade.
     ///
     /// # Errors
     ///
@@ -1077,6 +1077,7 @@ impl XrayDatabase {
         arch: &Arch,
         graph: &super::arch::RoutingGraph,
         model: DelayModel,
+        grade: SpeedGrade,
     ) -> Result<Vec<u32>, XrayError> {
         // Every wire name of the graph as a number, read in node order, so that
         // a pip's lookup below is two numbers and not two strings: hashing the
@@ -1173,13 +1174,15 @@ impl XrayDatabase {
                             let class = *classes
                                 .entry((t, node_name[pip.to as usize]))
                                 .or_insert_with(|| {
-                                    delay::class_ps(&delay::wire_class(
-                                        &arch.tile_types[t].name,
-                                        &to.name,
-                                    ))
+                                    delay::class_ps(
+                                        &delay::wire_class(&arch.tile_types[t].name, &to.name),
+                                        grade,
+                                    )
                                 });
                             class.unwrap_or_else(|| {
-                                timed.map_or(0, |ps| ps * delay::OTHER_PER_MILLE / 1000)
+                                timed.map_or(0, |ps| {
+                                    ps * delay::OTHER_PER_MILLE[grade.index()] / 1000
+                                })
                             })
                         }
                         // A join between a wire's pieces, which was paid for
@@ -3651,6 +3654,20 @@ pub const CLOCK_PREFERENCE: f32 = 0.05;
 /// 2026-10-22 (48 ps, `timing::WIRE`), which is about what a long line
 /// costs a tile, so that the estimate stays under most journeys.
 pub const ROUTE_TILE_DELAY_PS: u32 = 25;
+
+/// [`ROUTE_TILE_DELAY_PS`] under the fitted model at a speed grade: the same
+/// share of a tile's delay at each, 25 ps times the median a connection is
+/// slower at the grade than at grade 3 on the same routes (1.398 at grade 1,
+/// 1.136 at grade 2: `docs/fpga-vivado-parity.md`, "Speed grades"). The
+/// router weighs a picosecond of delay against the mean of its timed nodes'
+/// (`route::delay_scale`), so with every delay of a grade slower by one factor
+/// and this with them, a route sees what it saw at grade 3; held at 25, a
+/// grade-1 search's estimate of the rest of its way would be a third further
+/// under the truth than grade 3's, and the search wider.
+#[must_use]
+pub fn route_tile_delay_ps(grade: SpeedGrade) -> u32 {
+    [35, 28, ROUTE_TILE_DELAY_PS][grade.index()]
+}
 
 /// The most a timing-driven route charges a critical connection for
 /// congestion, as a present factor (`route::Timing::present_cap`). On the

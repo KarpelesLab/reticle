@@ -1,0 +1,310 @@
+# Reticle's builds of the timing corpus on the XC7A35T FTG256, timed by Vivado at
+# the grade each was built for: `grade1` the device's grade, `grade2` and `grade3`
+# with --speed-grade, and `before` the tree before grades (1e9917f8, grade 3's
+# figures) timed at -1. run_placed.sh with TIMING=1, seed 1, then
+# timing_table.py compare --part xc7a35tftg256-<grade> for each; 2026-11-09.
+# Reticle's estimate against Vivado 2026.1's timer on the same routes, at
+# xc7a35tftg256-1; tools/vivado-parity/timing_table.py compare. Ratios are
+# estimate / Vivado: median, 5th and 95th percentile, lowest, highest.
+design adders grade1
+  connections 486 1.007 0.934 1.429 0.907 1.990
+  endpoints 480 0.986 0.787 1.116 0.643 1.195
+  clock clk vivado 3.418 slack 1.548 at a_6_ff_ff29.d reticle_there 3.373 reticle_worst 3.373
+design analyser_fifo grade1
+  connections 741 0.997 0.911 1.410 0.784 2.306
+  endpoints 206 0.968 0.892 1.073 0.793 1.319
+  clock rd_clk vivado 7.234 slack -6.269 at u_fifo_u_fifo_prog_empty_q_ff.d reticle_there 6.909 reticle_worst 6.909
+  clock wr_clk vivado 4.206 slack -3.241 at u_fifo_u_fifo_full_q_ff.d reticle_there 3.964 reticle_worst 3.964
+design barrel grade1
+  connections 486 1.003 0.958 1.401 0.838 1.778
+  endpoints 69 0.965 0.775 1.135 0.648 1.164
+  clock clk vivado 3.689 slack 1.276 at q_ff_ff2.d reticle_there 3.456 reticle_worst 3.468
+design bram_fifo grade1
+  connections 167 0.988 0.956 1.151 0.875 1.667
+  endpoints 87 1.031 0.831 1.071 0.734 1.143
+  clock clk vivado 5.228 slack -0.263 at so_ff.d reticle_there 5.309 reticle_worst 5.309
+design carry_counter grade1
+  connections 120 0.999 0.978 1.038 0.963 2.917
+  endpoints 64 1.010 0.752 1.067 0.644 1.161
+  clock clk vivado 3.023 slack -2.058 at done_ff.d reticle_there 3.095 reticle_worst 3.095
+design counter64 grade1
+  connections 233 0.995 0.963 1.040 0.920 2.721
+  endpoints 192 0.936 0.845 1.054 0.648 1.165
+  clock clk vivado 5.275 slack -0.310 at count_ff_ff56.rst reticle_there 4.930 reticle_worst 4.930
+design crc32 grade1
+  connections 1066 0.998 0.966 1.199 0.935 2.142
+  endpoints 64 1.011 0.874 1.060 0.778 1.160
+  clock clk vivado 3.472 slack 1.494 at crc_ff_ff17.d reticle_there 3.347 reticle_worst 3.362
+design esad grade1
+  connections 3333 1.000 0.939 1.095 0.858 2.866
+  endpoints 1147 0.984 0.861 1.095 0.648 1.379
+  clock adc_sampleclk vivado 3.726 slack 1.239 at U_refen_cdc_fifo_rempty_ff.d reticle_there 3.646 reticle_worst 3.818
+  clock clk_usb vivado 3.988 slack 5.977 at U_refsamples_cdc_fifo_wfull_ff.d reticle_there 4.066 reticle_worst 4.123
+design fir8 grade1
+  connections 281 0.991 0.968 1.339 0.957 1.638
+  endpoints 22 1.030 0.870 1.095 0.715 1.144
+  clock clk vivado 3.116 slack 1.850 at so_ff.d reticle_there 3.101 reticle_worst 3.101
+design fsm grade1
+  connections 199 0.991 0.965 1.033 0.931 1.669
+  endpoints 29 1.021 0.820 1.076 0.699 1.083
+  clock clk vivado 3.281 slack 1.683 at s_ff_ff2.d reticle_there 3.386 reticle_worst 3.386
+design gray_cdc grade1
+  connections 63 0.992 0.974 1.024 0.959 1.559
+  endpoints 37 1.011 0.979 1.047 0.979 1.053
+  clock clk vivado 2.230 slack 2.735 at wp_ff_ff9.d reticle_there 2.278 reticle_worst 2.278
+  clock clk2 vivado 2.523 slack 4.442 at so_ff.d reticle_there 2.593 reticle_worst 2.593
+design lutram32 grade1
+  connections 196 1.006 0.974 1.128 0.956 1.542
+  endpoints 69 0.967 0.790 1.183 0.644 1.195
+  clock clk vivado 3.089 slack 1.875 at so_ff.d reticle_there 2.988 reticle_worst 2.988
+design mul18 grade1
+  connections 90 0.995 0.830 1.357 0.759 1.676
+  endpoints 35 0.923 0.801 1.112 0.752 1.162
+  clock clk vivado 3.287 slack 1.679 at so_ff.d reticle_there 3.244 reticle_worst 3.244
+design regfile_alu grade1
+  connections 2344 0.980 0.858 1.040 0.744 2.030
+  endpoints 20 0.911 0.815 1.053 0.789 1.073
+  clock clk vivado 8.139 slack -3.175 at so_ff.d reticle_there 7.903 reticle_worst 7.903
+design sad grade1
+  connections 3867 1.003 0.972 1.071 0.891 2.626
+  endpoints 1247 1.007 0.886 1.083 0.701 1.360
+  clock adc_sampleclk vivado 3.797 slack 1.168 at refsamples_ff_ff248_srl0_1.d reticle_there 3.831 reticle_worst 3.950
+  clock clk_usb vivado 4.078 slack 5.888 at U_refen_cdc_fifo_wfull_ff.d reticle_there 4.243 reticle_worst 4.243
+design srl_delay grade1
+  connections 38 1.008 0.989 1.483 0.982 1.685
+  endpoints 35 0.922 0.753 1.153 0.641 1.419
+  clock clk vivado 2.539 slack 2.426 at so_ff.d reticle_there 2.548 reticle_worst 2.548
+design widemux grade1
+  connections 1843 0.994 0.893 1.344 0.776 2.594
+  endpoints 1046 1.034 0.868 1.152 0.648 1.218
+  clock clk vivado 3.954 slack 1.011 at q_ff_ff11.d reticle_there 3.476 reticle_worst 3.516
+all grade1 connections 15553 0.998 0.917 1.185 0.744 2.917
+all grade1 endpoints 4849 0.998 0.862 1.120 0.641 1.419
+design adders before
+  connections 486 0.706 0.639 0.986 0.611 1.267
+  endpoints 480 0.731 0.537 0.770 0.450 0.841
+  clock clk vivado 3.690 slack 1.276 at a_4_ff_ff29.d reticle_there 2.733 reticle_worst 2.737
+design analyser_fifo before
+  connections 746 0.713 0.652 0.827 0.518 1.361
+  endpoints 206 0.716 0.633 0.768 0.515 0.832
+  clock rd_clk vivado 7.226 slack -6.261 at u_fifo_u_fifo_prog_empty_q_ff.d reticle_there 5.168 reticle_worst 5.168
+  clock wr_clk vivado 4.221 slack -3.256 at u_fifo_u_fifo_full_q_ff.d reticle_there 2.863 reticle_worst 2.863
+design barrel before
+  connections 486 0.717 0.658 0.945 0.606 1.112
+  endpoints 69 0.706 0.563 0.778 0.499 0.819
+  clock clk vivado 4.080 slack 0.885 at q_ff_ff24.d reticle_there 2.892 reticle_worst 2.910
+design bram_fifo before
+  connections 167 0.707 0.647 0.777 0.549 0.988
+  endpoints 87 0.746 0.595 0.767 0.496 0.770
+  clock clk vivado 5.472 slack -0.507 at so_ff.d reticle_there 4.069 reticle_worst 4.069
+design carry_counter before
+  connections 120 0.710 0.671 0.760 0.633 1.725
+  endpoints 64 0.738 0.499 0.759 0.456 0.794
+  clock clk vivado 3.060 slack -2.096 at done_ff.d reticle_there 2.243 reticle_worst 2.243
+design counter64 before
+  connections 235 0.707 0.660 0.753 0.634 1.749
+  endpoints 192 0.697 0.571 0.770 0.444 0.797
+  clock clk vivado 5.369 slack -0.404 at count_ff_ff12.rst reticle_there 3.703 reticle_worst 3.703
+design crc32 before
+  connections 1066 0.716 0.660 0.878 0.539 1.347
+  endpoints 64 0.729 0.576 0.767 0.532 0.803
+  clock clk vivado 3.506 slack 1.460 at crc_ff_ff2.d reticle_there 2.506 reticle_worst 2.506
+design esad before
+  connections 3390 0.723 0.664 0.763 0.544 1.849
+  endpoints 1151 0.719 0.610 0.768 0.455 0.832
+  clock adc_sampleclk vivado 4.573 slack 0.391 at decision_7_ff.d reticle_there 3.020 reticle_worst 3.120
+  clock clk_usb vivado 4.993 slack 4.971 at U_refen_cdc_fifo_wfull_ff.d reticle_there 3.602 reticle_worst 3.602
+design fir8 before
+  connections 281 0.712 0.672 0.758 0.654 1.022
+  endpoints 22 0.688 0.518 0.759 0.497 0.760
+  clock clk vivado 3.113 slack 1.853 at so_ff.d reticle_there 2.234 reticle_worst 2.234
+design fsm before
+  connections 199 0.706 0.658 0.742 0.632 1.009
+  endpoints 29 0.724 0.547 0.755 0.514 0.762
+  clock clk vivado 3.581 slack 1.383 at s_ff_ff0.d reticle_there 2.706 reticle_worst 2.706
+design gray_cdc before
+  connections 63 0.702 0.653 0.743 0.646 0.751
+  endpoints 37 0.739 0.721 0.768 0.715 0.772
+  clock clk vivado 2.232 slack 2.733 at wp_ff_ff9.d reticle_there 1.682 reticle_worst 1.686
+  clock clk2 vivado 2.227 slack 4.738 at so_ff.d reticle_there 1.695 reticle_worst 1.695
+design lutram32 before
+  connections 195 0.723 0.670 0.759 0.655 1.041
+  endpoints 69 0.732 0.533 0.815 0.479 0.870
+  clock clk vivado 3.082 slack 1.883 at so_ff.d reticle_there 2.187 reticle_worst 2.187
+design mul18 before
+  connections 90 0.707 0.566 0.749 0.514 0.998
+  endpoints 35 0.640 0.535 0.765 0.487 0.812
+  clock clk vivado 2.872 slack 2.094 at so_ff.d reticle_there 2.081 reticle_worst 2.081
+design regfile_alu before
+  connections 2344 0.698 0.623 0.744 0.530 1.366
+  endpoints 20 0.655 0.514 0.734 0.504 0.736
+  clock clk vivado 8.037 slack -3.072 at so_ff.d reticle_there 5.598 reticle_worst 5.598
+design sad before
+  connections 3961 0.722 0.663 0.821 0.600 1.706
+  endpoints 1248 0.725 0.614 0.771 0.455 1.017
+  clock adc_sampleclk vivado 4.147 slack 0.818 at counter_incr_21_ff_ff7.d reticle_there 3.065 reticle_worst 3.172
+  clock clk_usb vivado 4.149 slack 5.817 at U_refsamples_cdc_fifo_wfull_ff.d reticle_there 3.120 reticle_worst 3.120
+design srl_delay before
+  connections 37 0.735 0.672 0.958 0.670 1.313
+  endpoints 35 0.638 0.484 0.787 0.448 1.066
+  clock clk vivado 3.157 slack 1.808 at so_ff.d reticle_there 2.400 reticle_worst 2.400
+design widemux before
+  connections 1843 0.714 0.662 0.955 0.567 1.343
+  endpoints 1046 0.723 0.601 0.798 0.444 0.837
+  clock clk vivado 5.008 slack -0.043 at q_ff_ff10.d reticle_there 3.462 reticle_worst 3.462
+all before connections 15709 0.715 0.654 0.799 0.514 1.849
+all before endpoints 4854 0.723 0.597 0.780 0.444 1.066
+# Reticle's estimate against Vivado 2026.1's timer on the same routes, at
+# xc7a35tftg256-2; tools/vivado-parity/timing_table.py compare. Ratios are
+# estimate / Vivado: median, 5th and 95th percentile, lowest, highest.
+design adders grade2
+  connections 486 1.000 0.914 1.413 0.890 1.938
+  endpoints 480 0.981 0.755 1.072 0.639 1.174
+  clock clk vivado 2.841 slack 2.124 at a_6_ff_ff29.d reticle_there 2.794 reticle_worst 2.794
+design analyser_fifo grade2
+  connections 745 1.003 0.922 1.400 0.794 2.149
+  endpoints 206 0.998 0.897 1.061 0.826 1.125
+  clock rd_clk vivado 5.740 slack -4.775 at u_fifo_u_fifo_prog_empty_q_ff.d reticle_there 5.902 reticle_worst 5.902
+  clock wr_clk vivado 3.470 slack -2.505 at u_fifo_u_fifo_full_q_ff.d reticle_there 3.297 reticle_worst 3.297
+design barrel grade2
+  connections 486 1.002 0.967 1.413 0.923 1.940
+  endpoints 69 1.002 0.798 1.113 0.759 1.133
+  clock clk vivado 3.265 slack 1.699 at q_ff_ff9.d reticle_there 3.337 reticle_worst 3.337
+design bram_fifo grade2
+  connections 167 0.990 0.947 1.153 0.711 1.488
+  endpoints 87 1.018 0.848 1.055 0.788 1.069
+  clock clk vivado 4.618 slack 0.347 at so_ff.d reticle_there 4.696 reticle_worst 4.696
+design carry_counter grade2
+  connections 120 1.014 0.996 1.068 0.773 2.601
+  endpoints 64 1.019 0.782 1.058 0.735 1.139
+  clock clk vivado 2.625 slack -1.661 at done_ff.d reticle_there 2.591 reticle_worst 2.591
+design counter64 grade2
+  connections 235 1.004 0.973 1.058 0.932 2.620
+  endpoints 192 0.952 0.768 1.036 0.650 1.152
+  clock clk vivado 4.245 slack 0.719 at count_ff_ff56.rst reticle_there 4.048 reticle_worst 4.048
+design crc32 grade2
+  connections 1066 0.994 0.956 1.059 0.910 2.031
+  endpoints 64 1.000 0.866 1.053 0.859 1.135
+  clock clk vivado 2.704 slack 2.260 at crc_ff_ff5.d reticle_there 2.660 reticle_worst 2.717
+design esad grade2
+  connections 3385 1.005 0.961 1.092 0.830 2.879
+  endpoints 1154 0.982 0.868 1.076 0.656 1.393
+  clock adc_sampleclk vivado 3.402 slack 1.563 at U_refsamples_cdc_fifo_rempty_ff.d reticle_there 3.443 reticle_worst 3.443
+  clock clk_usb vivado 3.456 slack 6.508 at U_refsamples_cdc_fifo_wfull_ff.d reticle_there 3.407 reticle_worst 3.407
+design fir8 grade2
+  connections 281 0.989 0.965 1.207 0.924 1.447
+  endpoints 22 0.952 0.859 1.113 0.765 1.120
+  clock clk vivado 2.552 slack 2.413 at so_ff.d reticle_there 2.519 reticle_worst 2.519
+design fsm grade2
+  connections 199 0.989 0.968 1.047 0.950 1.668
+  endpoints 29 0.996 0.810 1.070 0.777 1.136
+  clock clk vivado 2.906 slack 2.060 at s_ff_ff1.d reticle_there 2.823 reticle_worst 2.859
+design gray_cdc grade2
+  connections 63 0.993 0.967 1.033 0.956 1.066
+  endpoints 37 1.001 0.981 1.041 0.981 1.052
+  clock clk vivado 1.846 slack 3.119 at wp_ff_ff9.d reticle_there 1.878 reticle_worst 1.878
+  clock clk2 vivado 1.842 slack 5.123 at so_ff.d reticle_there 1.889 reticle_worst 1.889
+design lutram32 grade2
+  connections 196 1.013 0.976 1.128 0.963 2.443
+  endpoints 69 1.010 0.793 1.334 0.769 1.378
+  clock clk vivado 2.522 slack 2.444 at so_ff.d reticle_there 2.532 reticle_worst 2.532
+design mul18 grade2
+  connections 90 0.995 0.818 1.198 0.750 1.410
+  endpoints 35 0.898 0.648 1.100 0.639 1.164
+  clock clk vivado 2.872 slack 2.093 at so_ff.d reticle_there 2.840 reticle_worst 2.840
+design regfile_alu grade2
+  connections 2344 0.990 0.833 1.151 0.732 1.683
+  endpoints 20 0.930 0.807 1.104 0.743 1.117
+  clock clk vivado 6.625 slack -1.659 at so_ff.d reticle_there 6.426 reticle_worst 6.426
+design sad grade2
+  connections 3882 1.004 0.948 1.082 0.885 2.191
+  endpoints 1247 0.987 0.883 1.071 0.722 1.373
+  clock adc_sampleclk vivado 3.481 slack 1.483 at refsamples_ff_ff250_srl0_1.d reticle_there 3.443 reticle_worst 3.443
+  clock clk_usb vivado 3.670 slack 6.294 at U_refsamples_cdc_fifo_wfull_ff.d reticle_there 3.947 reticle_worst 3.947
+design srl_delay grade2
+  connections 37 1.018 0.990 1.373 0.983 1.991
+  endpoints 35 0.907 0.683 1.134 0.638 1.400
+  clock clk vivado 2.565 slack 2.401 at so_ff.d reticle_there 2.704 reticle_worst 2.704
+design widemux grade2
+  connections 1843 1.004 0.931 1.324 0.805 2.030
+  endpoints 1046 1.006 0.864 1.129 0.651 1.171
+  clock clk vivado 3.619 slack 1.347 at q_ff_ff9.d reticle_there 3.359 reticle_worst 3.497
+all grade2 connections 15625 1.002 0.930 1.228 0.711 2.879
+all grade2 endpoints 4856 0.988 0.851 1.089 0.638 1.400
+# Reticle's estimate against Vivado 2026.1's timer on the same routes, at
+# xc7a35tftg256-3; tools/vivado-parity/timing_table.py compare. Ratios are
+# estimate / Vivado: median, 5th and 95th percentile, lowest, highest.
+design adders grade3
+  connections 486 1.003 0.877 1.355 0.842 1.877
+  endpoints 480 0.984 0.789 1.086 0.639 1.180
+  clock clk vivado 2.768 slack 2.197 at a_4_ff_ff31.d reticle_there 2.737 reticle_worst 2.737
+design analyser_fifo grade3
+  connections 746 0.996 0.912 1.177 0.714 2.028
+  endpoints 206 0.988 0.884 1.047 0.756 1.169
+  clock rd_clk vivado 5.183 slack -4.218 at u_fifo_u_fifo_prog_empty_q_ff.d reticle_there 5.168 reticle_worst 5.168
+  clock wr_clk vivado 2.999 slack -2.034 at u_fifo_u_fifo_full_q_ff.d reticle_there 2.863 reticle_worst 2.863
+design barrel grade3
+  connections 486 1.004 0.952 1.319 0.872 1.625
+  endpoints 69 0.984 0.814 1.100 0.729 1.182
+  clock clk vivado 2.934 slack 2.030 at q_ff_ff24.d reticle_there 2.892 reticle_worst 2.910
+design bram_fifo grade3
+  connections 167 0.985 0.929 1.082 0.752 1.501
+  endpoints 87 1.031 0.860 1.054 0.727 1.103
+  clock clk vivado 4.014 slack 0.951 at so_ff.d reticle_there 4.069 reticle_worst 4.069
+design carry_counter grade3
+  connections 120 1.008 0.984 1.080 0.972 2.693
+  endpoints 64 1.020 0.727 1.055 0.658 1.136
+  clock clk vivado 2.221 slack -1.255 at done_ff.d reticle_there 2.243 reticle_worst 2.243
+design counter64 grade3
+  connections 235 0.994 0.972 1.048 0.951 2.722
+  endpoints 192 0.949 0.808 1.044 0.631 1.145
+  clock clk vivado 3.926 slack 1.039 at count_ff_ff12.rst reticle_there 3.703 reticle_worst 3.703
+design crc32 grade3
+  connections 1066 0.993 0.947 1.230 0.713 1.973
+  endpoints 64 1.000 0.819 1.055 0.782 1.127
+  clock clk vivado 2.545 slack 2.420 at crc_ff_ff2.d reticle_there 2.506 reticle_worst 2.506
+design esad grade3
+  connections 3390 1.005 0.961 1.058 0.766 2.924
+  endpoints 1151 0.983 0.871 1.067 0.646 1.186
+  clock adc_sampleclk vivado 3.386 slack 1.580 at decision_7_ff.d reticle_there 3.020 reticle_worst 3.120
+  clock clk_usb vivado 3.626 slack 6.339 at U_refen_cdc_fifo_wfull_ff.d reticle_there 3.602 reticle_worst 3.602
+design fir8 grade3
+  connections 281 0.989 0.959 1.043 0.941 1.439
+  endpoints 22 0.951 0.759 1.066 0.723 1.074
+  clock clk vivado 2.293 slack 2.672 at so_ff.d reticle_there 2.234 reticle_worst 2.234
+design fsm grade3
+  connections 199 0.982 0.947 1.023 0.888 1.447
+  endpoints 29 1.006 0.793 1.048 0.743 1.060
+  clock clk vivado 2.648 slack 2.316 at s_ff_ff0.d reticle_there 2.706 reticle_worst 2.706
+design gray_cdc grade3
+  connections 63 0.993 0.962 1.030 0.953 1.079
+  endpoints 37 1.000 0.983 1.039 0.977 1.048
+  clock clk vivado 1.660 slack 3.305 at wp_ff_ff11.d reticle_there 1.686 reticle_worst 1.686
+  clock clk2 vivado 1.658 slack 5.306 at so_ff.d reticle_there 1.695 reticle_worst 1.695
+design lutram32 grade3
+  connections 195 1.013 0.979 1.075 0.955 1.465
+  endpoints 69 1.013 0.767 1.151 0.682 1.203
+  clock clk vivado 2.258 slack 2.707 at so_ff.d reticle_there 2.187 reticle_worst 2.187
+design mul18 grade3
+  connections 90 0.989 0.806 1.076 0.725 1.404
+  endpoints 35 0.928 0.781 1.066 0.693 1.164
+  clock clk vivado 2.143 slack 2.822 at so_ff.d reticle_there 2.081 reticle_worst 2.081
+design regfile_alu grade3
+  connections 2344 0.973 0.837 1.048 0.702 2.005
+  endpoints 20 0.902 0.703 1.006 0.688 1.013
+  clock clk vivado 5.821 slack -0.857 at so_ff.d reticle_there 5.598 reticle_worst 5.598
+design sad grade3
+  connections 3961 1.005 0.950 1.120 0.857 2.670
+  endpoints 1248 0.991 0.871 1.062 0.645 1.363
+  clock adc_sampleclk vivado 3.107 slack 1.858 at counter_incr_21_ff_ff7.d reticle_there 3.065 reticle_worst 3.172
+  clock clk_usb vivado 3.043 slack 6.923 at U_refsamples_cdc_fifo_wfull_ff.d reticle_there 3.120 reticle_worst 3.120
+design srl_delay grade3
+  connections 37 1.017 0.991 1.373 0.984 2.005
+  endpoints 35 0.902 0.701 1.137 0.635 1.387
+  clock clk vivado 2.270 slack 2.695 at so_ff.d reticle_there 2.400 reticle_worst 2.400
+design widemux grade3
+  connections 1843 0.994 0.910 1.328 0.775 1.986
+  endpoints 1046 1.007 0.838 1.135 0.630 1.179
+  clock clk vivado 3.693 slack 1.272 at q_ff_ff10.d reticle_there 3.462 reticle_worst 3.462
+all grade3 connections 15709 1.000 0.924 1.105 0.702 2.924
+all grade3 endpoints 4854 0.989 0.849 1.097 0.630 1.387

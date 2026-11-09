@@ -158,7 +158,15 @@ models or IP.
   `testdata/fpga/vivado/clock/arrival.txt` or `arrival_xc7a35t.txt` from such runs, and
   `clock_arrival.py table` the table `xray::timing` keeps for that die, of the runs
   whose part it is given. `timing_table.py compare --part` reads runs of a part other
-  than the `xc7a100t`.
+  than the `xc7a100t`. The same at speed grades 1 and 2 is `arrival_grades.txt` and
+  `arrival_xc7a35t_grades.txt`, a table a grade.
+- `regrade.sh` gives Vivado a `run_placed.sh` run's placements and routes again at
+  other parts, another speed grade, and `timing_dump.tcl` each, without placing or
+  routing anything; `timing_table.py fit --part` fits a grade's table to those, and
+  `timing_table.py rust` prints the three grades' fits as the one table
+  `xray::delay` keeps (`testdata/fpga/vivado/timing/classes_1.txt`, `classes_2.txt`,
+  `arcs_1.txt`, `arcs_2.txt`, `sample_grades.txt`; docs/fpga-vivado-parity.md, "Speed
+  grades").
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's

@@ -2,9 +2,9 @@
 """Fits Reticle's 7-series delay model to Vivado's timer, and says how far each
 model is from it, a connection and a clock at a time.
 
-    timing_table.py fit <db artix7 dir> <out dir> <run>...
+    timing_table.py fit <db artix7 dir> [--part <part>] <out dir> <run>...
     timing_table.py compare <db artix7 dir> [--part <part>] <name>=<run>...
-    timing_table.py rust <classes.txt>
+    timing_table.py rust <classes_1.txt> <classes_2.txt> <classes.txt>
 
 A run is what `TIMING=1 run_placed.sh` wrote: for each design,
 <run>/<design>/routes/<design>.timing (`timing_dump.tcl`), Reticle's own
@@ -22,7 +22,14 @@ endpoints.txt, and x.tcl.
                   branches, and its pips by tile type and wires with prjxray's
                   delay for each, what the test of the table walks
 
-`rust` prints classes.txt as the table `src/fpga/xray/delay.rs` holds.
+`fit --part` names the part the runs were timed at in the files' headers
+(xc7a100tftg256-3 unless given): the same runs given to Vivado again at another
+speed grade (`regrade.sh`) are fitted the same way, a table for each grade.
+
+`rust` prints the three grades' classes files, grade 1's first, as the table
+`src/fpga/xray/delay.rs` holds: each class with its picoseconds at grades 1, 2
+and 3. The three are fits of the same connections, so they name the same
+classes; a class one of them lacks is refused.
 
 `compare` prints, for each run named, per design: the ratio of Reticle's
 estimate of each connection to Vivado's (median, 5th and 95th percentile,
@@ -267,7 +274,7 @@ def wire_line(db, lines):
 WIDE_FANOUT = 4
 
 
-def fit(db, out, runs):
+def fit(db, out, runs, part="xc7a100tftg256-3"):
     samples = []
     lines = []
     at = grid(db)
@@ -305,7 +312,7 @@ def fit(db, out, runs):
     ratios = [sum(x[i] * a for i, a in features.items()) / ps for features, ps in rows if ps > 0]
     os.makedirs(out, exist_ok=True)
     with open(f"{out}/classes.txt", "w") as f:
-        f.write("# Vivado 2026.1's interconnect delays at xc7a100tftg256-3, fitted per class of\n"
+        f.write(f"# Vivado 2026.1's interconnect delays at {part}, fitted per class of\n"
                 "# the wire a pip enters; tools/vivado-parity/timing_table.py fit.\n")
         f.write(f"connections {len(rows)} fitted {spread(ratios)}\n")
         f.write(f"branch {x[branch]:.1f}\n")
@@ -336,7 +343,7 @@ def fit(db, out, runs):
                     frm, to = re.sub(r"\[\d+\]", "", frm), re.sub(r"\[\d+\]", "", to)
                 arcs[(ref, where.get(cell, "-"), frm, to, kind)].append(ns)
     with open(f"{out}/arcs.txt", "w") as f:
-        f.write("# Vivado 2026.1's cell arcs at xc7a100tftg256-3, slow corner's maximum in ns:\n"
+        f.write(f"# Vivado 2026.1's cell arcs at {part}, slow corner's maximum in ns:\n"
                 "# cell, where (slice kind and bel kind, or -), from, to, type, mean, median,\n"
                 "# lowest, highest, count. A block's bus indices are folded together;\n"
                 "# tools/vivado-parity/timing_table.py fit.\n")
@@ -459,14 +466,26 @@ def compare(db, named, part="xc7a100tftg256-3"):
 
 if __name__ == "__main__":
     if sys.argv[1] == "fit":
-        fit(sys.argv[2], sys.argv[3], sys.argv[4:])
+        rest = sys.argv[3:]
+        part = "xc7a100tftg256-3"
+        if rest[:1] == ["--part"]:
+            part, rest = rest[1], rest[2:]
+        fit(sys.argv[2], rest[0], rest[1:], part)
     elif sys.argv[1] == "rust":
-        for line in open(sys.argv[2]):
-            w = line.split()
-            if w[0] == "class":
-                print(f'    ("{w[1]}", {round(float(w[3]))}),')
-            elif w[0] in ("branch", "other"):
-                print(f"// {w[0]} {w[1]}")
+        grades = []
+        for path in sys.argv[2:5]:
+            table = {}
+            for line in open(path):
+                w = line.split()
+                if w[0] == "class":
+                    table[w[1]] = round(float(w[3]))
+                elif w[0] in ("branch", "other", "wire"):
+                    print(f"// {path}: {' '.join(w)}")
+            grades.append(table)
+        if len({tuple(sorted(t)) for t in grades}) != 1:
+            sys.exit("the three fits do not name the same classes")
+        for name in sorted(grades[0]):
+            print(f'    ("{name}", [{", ".join(str(t[name]) for t in grades)}]),')
     elif sys.argv[1] == "compare":
         rest = sys.argv[3:]
         part = "xc7a100tftg256-3"
