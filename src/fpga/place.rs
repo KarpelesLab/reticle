@@ -323,6 +323,19 @@ pub enum PlaceError {
         /// Each problem, in words, in netlist order.
         problems: Vec<String>,
     },
+    /// The placer put a cell on a site another cell held: a fault in the
+    /// placer and not in the design, reported rather than panicked over
+    /// (see [`Clash`]).
+    Clash {
+        /// The cell it put there.
+        cell: String,
+        /// The site.
+        site: String,
+        /// The cell that held the site.
+        occupant: String,
+        /// What the placer was doing.
+        stage: &'static str,
+    },
 }
 
 impl fmt::Display for PlaceError {
@@ -451,6 +464,17 @@ impl fmt::Display for PlaceError {
             }
             PlaceError::Netlist(message) => write!(f, "the netlist cannot be read: {message}"),
             PlaceError::Site { cell, message } => write!(f, "`{cell}`: {message}"),
+            PlaceError::Clash {
+                cell,
+                site,
+                occupant,
+                stage,
+            } => write!(
+                f,
+                "internal error in the placer, while {stage}: `{cell}` was put on `{site}`, \
+                 which `{occupant}` held; the design is not at fault, and another \
+                 `--place-seed` may place it"
+            ),
             PlaceError::Illegal { problems } => {
                 write!(
                     f,
@@ -1075,6 +1099,30 @@ pub struct Placement {
     of_instance: Vec<u32>,
     /// Site index to instance, parallel to [`RoutingGraph::sites`].
     of_site: Vec<u32>,
+    /// The first time [`Placement::place`] was asked to put an instance on
+    /// a site another one held; see [`Clash`].
+    clash: Option<Clash>,
+}
+
+/// An instance put on a site another instance held: what [`Placement::place`]
+/// records rather than panicking, and the placer then reports as
+/// [`PlaceError::Clash`].
+///
+/// Every caller is meant to find its site free first, so this is a fault in
+/// the placer and not in the design. It was an assertion, which one build of
+/// `regfile_alu` at seed 16 in 1,360 hit and no rerun of it has since
+/// (`docs/fpga-placement.md`, "Reproducible builds"): a panic there loses the
+/// build's report and says nothing a person can act on. The occupant is taken
+/// off the site, so that the two tables stay each other's inverse, and the
+/// placer stops at its next check and says which cells and which site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Clash {
+    /// The instance that was put on the site.
+    pub instance: usize,
+    /// The site.
+    pub site: usize,
+    /// The instance that held it, now on no site.
+    pub occupant: usize,
 }
 
 /// What [`Placement`] files for an instance on no site or a site with no
@@ -1103,6 +1151,7 @@ impl Placement {
         Placement {
             of_instance: vec![UNPLACED; instances],
             of_site: vec![UNPLACED; sites],
+            clash: None,
         }
     }
 
@@ -1121,13 +1170,24 @@ impl Placement {
 
     /// Puts `instance` on `site`, taking it off whatever it was on.
     ///
-    /// The site must be free; putting two instances on one site is a
-    /// programming error, which is why this asserts rather than reports.
+    /// The site should be free. One that holds another instance is a fault
+    /// in the caller, which this does not panic over: the instance that
+    /// held it is taken off, and the first such [`Clash`] is kept for
+    /// [`Placement::clash`], which the placer checks and reports as
+    /// [`PlaceError::Clash`]. Putting an instance on the site it is on
+    /// changes nothing.
     pub fn place(&mut self, instance: usize, site: usize) {
-        assert!(
-            self.of_site[site] == UNPLACED,
-            "site {site} already holds an instance"
-        );
+        if let Some(occupant) = filed_index(self.of_site[site])
+            && occupant != instance
+        {
+            self.clash.get_or_insert(Clash {
+                instance,
+                site,
+                occupant,
+            });
+            self.of_instance[occupant] = UNPLACED;
+            self.of_site[site] = UNPLACED;
+        }
         if let Some(old) = filed_index(self.of_instance[instance]) {
             self.of_site[old] = UNPLACED;
         }
@@ -1141,6 +1201,12 @@ impl Placement {
         if let Some(site) = filed_index(was) {
             self.of_site[site] = UNPLACED;
         }
+    }
+
+    /// The first instance put on a site another one held, if any: see
+    /// [`Clash`].
+    pub fn clash(&self) -> Option<Clash> {
+        self.clash
     }
 
     /// How many instances are placed.
@@ -3781,6 +3847,7 @@ pub fn place(
         }
         other => other?,
     };
+    clashed(netlist, graph, &placement, "seating the cells")?;
     report.outside_budget = outside
         .iter()
         .map(|i| netlist.instances[*i].name.clone())
@@ -3804,6 +3871,7 @@ pub fn place(
             &mut placement,
             &mut report,
         );
+        clashed(netlist, graph, &placement, "annealing")?;
         report.hpwl_after = hpwl(netlist, graph, &placement);
     }
     // The timing the rounds estimate with: the options', and which
@@ -3872,6 +3940,7 @@ pub fn place(
                     &mut placement,
                     &mut report,
                 );
+                clashed(netlist, graph, &placement, "annealing for time")?;
                 // A round that leaves every cell where it was found nothing
                 // the next would start from anywhere else: the same
                 // placement, so the same weights. On an Apple II for the
@@ -3904,6 +3973,12 @@ pub fn place(
         );
     }
     seat_buffer_chains(netlist, graph, &sites_by_kind, &info, &mut placement);
+    clashed(
+        netlist,
+        graph,
+        &placement,
+        "relieving clock regions and seating buffer chains",
+    )?;
     if !options.clock_regions.is_empty() {
         let load = ClockLoad::new(
             netlist,
@@ -3939,6 +4014,36 @@ pub fn place(
         return Err(PlaceError::Illegal { problems });
     }
     Ok((placement, report))
+}
+
+/// [`PlaceError::Clash`] for the first cell `placement` was told to put on
+/// a site another held, which it records rather than panicking over: see
+/// [`Clash`]. Asked after each stage of [`place`], so that what the error
+/// names is what the stage did.
+fn clashed(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    placement: &Placement,
+    stage: &'static str,
+) -> Result<(), PlaceError> {
+    let Some(clash) = placement.clash() else {
+        return Ok(());
+    };
+    let name = |instance: usize| {
+        netlist
+            .instances
+            .get(instance)
+            .map_or_else(|| format!("instance {instance}"), |i| i.name.clone())
+    };
+    Err(PlaceError::Clash {
+        cell: name(clash.instance),
+        site: graph
+            .sites
+            .get(clash.site)
+            .map_or_else(|| format!("site {}", clash.site), |s| s.name.clone()),
+        occupant: name(clash.occupant),
+        stage,
+    })
 }
 
 /// Every rule of the fabric's sites the finished `placement` breaks, in
@@ -8600,6 +8705,9 @@ fn anneal(
             probe_reach,
         ) {
             samples.push(apply(&mut churn, placement, &candidate));
+            if placement.clash().is_some() {
+                return;
+            }
             undo(&mut churn, placement);
         }
     }
@@ -8667,6 +8775,13 @@ fn anneal(
             }
             step.tried += 1;
             let delta = apply(&mut churn, placement, &candidate);
+            // A move that put a cell on a site another held is a fault of
+            // the placer's own: stop here, the clash kept for `place` to
+            // report, rather than anneal on from a placement that has lost
+            // a cell. See `Clash`.
+            if placement.clash().is_some() {
+                return;
+            }
             if !passes(delta, temperature, &mut rng) {
                 undo(&mut churn, placement);
                 continue;
@@ -8688,6 +8803,9 @@ fn anneal(
                         continue;
                     };
                     let delta = apply(&mut churn, placement, &evicted);
+                    if placement.clash().is_some() {
+                        return;
+                    }
                     if !passes(delta, temperature, &mut rng) {
                         undo(&mut churn, placement);
                         continue;
@@ -16085,5 +16203,38 @@ mod tests {
         }
         assert!(seen.iter().all(|c| *c > 800), "{seen:?}");
         assert_eq!(Rng::new(7).below(0), 0);
+    }
+
+    /// A cell put on a site another holds is recorded, the occupant taken
+    /// off, and the first clash kept, where it was an assertion that took
+    /// the whole build down (`Clash`). This pins the table's behaviour; it
+    /// would not catch a placer stage that makes a clash and does not ask
+    /// for it, which is what `clashed` after each stage of `place` is for.
+    #[test]
+    fn a_cell_put_on_a_held_site_is_a_clash_and_not_a_panic() {
+        let mut placement = Placement::new(3, 4);
+        placement.place(0, 1);
+        placement.place(1, 2);
+        // On the site it is on already: nothing changes.
+        placement.place(0, 1);
+        assert_eq!(placement.clash(), None);
+        placement.place(2, 1);
+        assert_eq!(
+            placement.clash(),
+            Some(Clash {
+                instance: 2,
+                site: 1,
+                occupant: 0
+            })
+        );
+        // The two tables are still each other's inverse.
+        assert_eq!(placement.site_of(0), None);
+        assert_eq!(placement.instance_at(1), Some(2));
+        assert_eq!(placement.site_of(2), Some(1));
+        assert_eq!(placement.placed(), 2);
+        // A second clash keeps the first.
+        placement.place(1, 1);
+        assert_eq!(placement.clash().map(|c| c.instance), Some(2));
+        assert_eq!(placement.instance_at(2), None);
     }
 }
