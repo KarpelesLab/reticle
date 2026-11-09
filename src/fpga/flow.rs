@@ -361,7 +361,8 @@ pub struct FpgaOptions {
     /// bits, orderings between two signals from
     /// [`VIVADO_MIN_ORDERING_CARRY_WIDTH`] and equalities between two from
     /// [`VIVADO_MIN_EQUALITY_CARRY_WIDTH`], each chain's carry in and out
-    /// on the `CARRY4`'s own pins; a register's hold lifted through the net
+    /// on the `CARRY4`'s own pins, and a sum of three terms on one chain
+    /// (`primitives::MapOptions::ternary_adders`); a register's hold lifted through the net
     /// it is behind, and what it loads with its enable low read as a
     /// don't-care (`synth::SynthOptions::register_loads`); a `case` as a tree
     /// of multiplexers over what it compares
@@ -650,6 +651,7 @@ pub fn synthesize_for(
         map.carry_ends = true;
         map.compare_lane_bits = VIVADO_COMPARE_LANE_BITS;
         map.vivado_adder_widths = true;
+        map.ternary_adders = true;
     }
     report.primitives = super::primitives::map(design, module, device, constraints, &map, diags);
     // A reset the device's flip-flops have only the other way round is

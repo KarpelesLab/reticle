@@ -4801,11 +4801,179 @@ swapped with `refined`, and a seed of `closing` lost, each fail
   `CARRY4`s, and no `LUT6_2`. It needs a tie this router makes for a block RAM's pins
   but not for a slice's, and a claim on the `BYP_ALT` the tie goes through.
 - **`analyser_fifo`'s `(a - b) + c` as one chain**, Vivado's: its read clock is 1.25
-  times Vivado's netlist and the worst of the twenty-one now.
+  times Vivado's netlist and the worst of the twenty-one now. *Done since, in "Three
+  terms on one chain": 1.07 times.*
 - **Replicating a register a wide multiplexer's select reads**, as Vivado's `widemux`.
 - **The placement**: 1.082 of the 1.119 is Reticle's placement and routes of its own
   netlist, most of it `esad`'s and `sad`'s ADC clocks.
 - The XC7A35T's netlist figure, measured the old way.
+- None of it has been on a part.
+
+## Three terms on one chain
+
+**Asked: what does Vivado write for `analyser_fifo`'s read clock, whose netlist was
+1.25 times Vivado's and the worst of the twenty-one, and when does it write it?**
+"The netlist against Vivado's, placed by Vivado" read the path as three chains in a
+row in Reticle's netlist against two in Vivado's, the second "the difference and the
+`+ held_next` together". Run on 2026-11-09 with Vivado 2026.1 at
+`xc7a100tftg256-3`, on 48242e62. **Everything here is Vivado's synthesis and Vivado's
+timer; nothing has been on a part.**
+
+### What Vivado writes for the path
+
+`rused_next = (wptr_r_next - rptr_next) + out_next`, fifteen bits, `out_next` being
+`{5'd0, held_next}`, then `prog_empty_q <= rused_next <= 128`. Read off Vivado's
+synthesised netlist of the design (`synth_design`, `write_verilog`), every table's
+`INIT` decoded against the source's equations by enumeration (**measured**):
+
+- `rptr_next = rptr + fetch` is a chain of its own (`rptr_next_1`), as here.
+- `rused_next` is **one** chain of four `CARRY4`s, `CYINIT` and `CI` of the first a
+  constant zero. Its bit 0 has `S0 = w0 ^ rn0 ^ held_next` and `DI0 = rn0 ^
+  held_next`; its bit 1 `S1 = w1 ^ ~rn1 ^ k` and `DI1 = k`, `k = held_next | ~rn0`;
+  every bit `i` from 2 `S = (w[i] ^ ~rn[i]) ^ g` and `DI = g`, `g = w[i-1] & ~rn[i-1]`.
+  That is `w + ~rn + 1 + held_next` with the `+ 1` and `held_next` added at bit 0 into
+  a sum bit and a carry `k` one bit up, and a carry-save stage over the three terms
+  `w`, `~rn` and `k`: each propagate is the three terms' bit `i` and the carry out of
+  bit `i - 1`, each generate that carry. The binary `w` is decoded from the Gray code
+  in the same tables (`gray_to_binary_return…`).
+- After it, `rused_next <= 128` is a `LUT6` and a `LUT5`.
+
+So Vivado computes a sum of three terms as a sum of two, the three terms' bitwise
+exclusive or and their majority shifted up a bit, on one chain.
+
+### When Vivado does it
+
+Registered sums at 2 to 20, 24 and 32 bits (`synth_design -mode out_of_context`,
+`write_verilog` at 8 and 16), the `CARRY4`s, tables and the worst path's levels of
+each (**measured**):
+
+| written | tables to | one chain from | tables before the chain |
+|---|---|---|---|
+| `a + b + c`, `a - b - c`, `c - (a + b)` | 6 bits (three levels at 6) | 7 | two |
+| `a - b + c`, `a + b - c`, `c - (a - b)`, `a + (b - c)` | 5 | 6 | two |
+| `a - b + c`, `c` three bits | 5 | 6 | two |
+| `a + b + c`, `a - b + c`, `a - b - c`, `a + b - c`, `c` one bit | 5 | 6 | one |
+| `(a - b) + c` with `a - b` read again | 5 | two chains from 6 | |
+| `a + b + c + d` | 5 | 6, one chain | three |
+
+Each, past its threshold, is one chain to 32 bits. With three wide terms the propagate
+table reads the majority table (`S = a ^ b ^ c ^ maj(a, b, c)` of the bit below, the
+majority a `LUT3` of its own and the generate), two levels; at the top bit one `LUT6`
+does both. With a one-bit term the propagate reads four signals and is one level.
+`a + b + c` of a one-bit `c` puts `c` on `CYINIT` and `a - b - c` puts `~c` there:
+`1 - c` is `~c` for one bit, so neither has a carry-save stage at all. Why `k` of one
+subtraction is a bit narrower than none or two was not found; the thresholds are
+quoted as measured.
+
+### What was changed
+
+Under `--synthesis vivado` alone (`MapOptions::ternary_adders`), on a wide carry
+element: two adders or subtractions in a row whose inner sum nothing else reads, every
+term as wide as the result and none a constant, at the widths above
+(`primitives::VIVADO_TERNARY_NARROWEST`), become one adder,
+`primitives::Mapper::ternary_on_the_chain`. Each term is an operand or its complement,
+so the sum is `A + B + C + k`, `k` the terms subtracted (at most two). The adder adds
+`X = A ^ B ^ C` and `Y`, the majority of each bit's three shifted up one with `k`'s
+second one in the bit the shift leaves, and its carry in is `k`'s first, the carry in
+riding in a low bit both operands share as a subtraction's does. A one-bit term that
+`k` absorbs goes on the carry in instead, as Vivado's does. The chain's propagate,
+`X[i] ^ Y[i]`, reads bits `i` and `i - 1` of the three terms, six signals, and the
+mapper makes it **one** table; Vivado's are two. Vivado's own bit-0 arrangement,
+`held_next` and the `+ 1` folded into a carry `k`, is not copied: the carry in is one
+pin, `k`'s second one is the free low bit of `Y`, and the depth is the same.
+
+The rewrite is before the technology mapping, whose proof covers the carry-save
+tables; the chain itself is simulated on every input and proved, below.
+
+### Before and after
+
+**The netlist alone**, `pnr` against `vnetlist` (ns, medians over seeds 1 to 5,
+`achieved.txt`), the clocks whose netlist changed; the other sixteen are the same
+netlist and the same figures seed for seed:
+
+| design | clock | Vivado's netlist | `closing` | `fused` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 4.087 | 5.097 | **4.371** |
+| `analyser_fifo` | `wr_clk` | 2.370 | 2.288 | 2.299 |
+| `bram_fifo` | `clk` | 3.545 | 3.549 | 3.588 |
+| `esad` | `adc_sampleclk` | 2.087 | 2.187 | 2.187 |
+| `esad` | `clk_usb` | 1.626 | 1.736 | 1.751 |
+| geometric mean, all 21 | | 1 | 1.033 | **1.027** |
+
+**Reticle's own flow**, medians over ten seeds, the lowest and highest in brackets:
+
+| design | clock | Vivado | `closing` | `fused` |
+|---|---|---|---|---|
+| `analyser_fifo` | `rd_clk` | 3.887 | 5.213 [5.01-5.30] | **4.426** [4.28-4.61] |
+| `analyser_fifo` | `wr_clk` | 2.417 | 2.594 [2.46-2.88] | 2.654 [2.35-2.82] |
+| `bram_fifo` | `clk` | 3.388 | 3.945 [3.70-4.17] | 3.978 [3.68-4.09] |
+| `esad` | `adc_sampleclk` | 2.131 | 2.888 [2.75-3.40] | 2.888 [2.75-3.40] |
+| `esad` | `clk_usb` | 1.727 | 1.944 [1.79-2.08] | 1.944 [1.79-2.08] |
+| geometric mean, all 21 | | 1 | 1.119 | **1.111** |
+
+**`analyser_fifo`'s read clock is 14 % faster in Vivado's hands (1.25 to 1.07 times
+Vivado's netlist) and 15 % in Reticle's; over the twenty-one clocks the netlist is
+1.027 times Vivado's, against 1.033, and Reticle's flow 1.111 times Vivado's own,
+against 1.119.** The read clock's worst path is now `rptr_next`'s chain, the fused
+chain and two tables, Vivado's shape; it starts at `rrst_sync`, through `fetch`.
+`bram_fifo`'s `used + wr - rd` is one chain where it was two (Vivado's three `CARRY4`s,
+its count), and 1.1 % slower in Vivado's hands and 0.8 % in Reticle's, each inside the
+spread; `analyser_fifo`'s write clock, whose netlist is the same but for the read
+side's, 2.3 % in Reticle's (one seed in ten placements). `esad`'s netlist changed in
+a `clk_usb` path (1.736 to 1.751 in Vivado's hands, the same median in Reticle's).
+
+**Cells**, by Vivado's counting of seed 1's netlist (`netlist.txt`'s `fused`):
+`analyser_fifo` 230 tables, 29 `CARRY4`s to 219 and 25 (Vivado 131 and 26), the read
+clock's worst path five tables and four `CARRY4`s to five and three; `bram_fifo` 57 and
+6 to 49 and 3, Vivado's 49 and 3.
+
+### The Husky's bitstreams
+
+`examples/husky/build.sh` and `build_plus.sh` pass `--synthesis legacy`, which asks for
+none of it. With this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `three_terms_go_onto_one_chain_and_are_still_right` (`tests/fpga_carry.rs`): the
+  eight ways of writing three terms as two adders or subtractions, `c` one bit, three
+  bits and whole, every input simulated at the width each is first fused, legalised
+  as `reticle fpga` legalises it, one `CARRY4` a four bits; a bit narrower not fused,
+  and the legacy synthesis never. `three_terms_on_one_chain_are_proved` proves the 48
+  at 13 and 32 bits against the source's arithmetic, `CARRY4` modelled from its
+  equations. `a_shared_inner_sum_keeps_its_own_chain`: an inner sum read again is not
+  fused, and still right.
+- `every_design_maps_as_pinned_and_is_proved` pins the two designs that moved
+  (`analyser_fifo`, `bram_fifo`), both proved, the legacy figures as they were.
+- `achieved.txt` gains `fused` at ten seeds and its `pnr` at five;
+  `three_terms_on_one_chain_close_the_fifos_read_clock` holds the read clock at least
+  10 % faster at both levels, no clock more than 4 % over `closing`'s, and neither
+  geometric mean worse. `netlist.txt` gains `fused`, no clock's worst path deeper in
+  tables than `closing`'s.
+
+**Mutations**, each made by a script and put back: the inner sum's terms not flipped
+when the outer subtracts it, `k`'s second one lost, the carry in lost, a carried bit
+not complemented, the majority not shifted, the third term left out of the exclusive
+or, no one-bit term carried, the threshold always 6, always 7, and an inner sum read
+again fused. **Every one failed a test**: the first six both
+`three_terms_go_onto_one_chain_and_are_still_right` and the proof (and the lost carry
+in, the unshifted majority and the missing term the proofs of the shapes before too,
+whose `a + b + cin` and `(a - b) + cin` are fused now), the thresholds and the carry
+not taken the first test's counts, and the shared sum its own test. No one-bit term
+carried first survived, being right all the same; the test was given the table counts
+that catch it (Vivado's eight and nine at eight bits). In the fixture, `fused`
+swapped with `closing` and a seed of either `fused` lost each fail
+`three_terms_on_one_chain_close_the_fifos_read_clock`.
+
+### Not done
+
+- **Vivado's tables below the thresholds**: `a + b + c` and `a - b - c` of three wide
+  terms at 6 bits are tables in Vivado's netlist and two chains here, the inner and
+  outer adder each past its own width.
+- **Four terms**: Vivado's `a + b + c + d` is one chain behind three levels of tables;
+  here it is a chain and a fused chain.
+- **A constant term** (`a - b + 1`) was not measured and is not taken.
 - None of it has been on a part.
 
 ## Wide multiplexers

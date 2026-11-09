@@ -331,6 +331,12 @@ pub struct MapOptions {
     /// equality keep their own widths. Off by default; `reticle fpga` asks for
     /// it on the 7 series unless `--synthesis legacy`.
     pub vivado_adder_widths: bool,
+    /// Put a sum of three terms, two adders or subtractions in a row of
+    /// which the inner is read by nothing else, on one carry chain through a
+    /// carry-save stage, as Vivado does (`ternary_on_the_chain`), rather
+    /// than on two chains in a row. Off by default; `reticle fpga` asks for
+    /// it on the 7 series unless `--synthesis legacy`.
+    pub ternary_adders: bool,
 }
 
 impl Default for MapOptions {
@@ -360,6 +366,7 @@ impl Default for MapOptions {
             min_constant_ordering_lane_width: u32::MAX,
             compare_lane_bits: 3,
             vivado_adder_widths: false,
+            ternary_adders: false,
         }
     }
 }
@@ -1251,34 +1258,49 @@ struct SignedPlan {
 ///
 /// Any other constant was not asked, and is taken as two signals.
 fn vivado_table_width(module: &Module, a: ExprId, b: ExprId) -> u32 {
-    let one_bit = |e: ExprId| -> bool {
-        let (_, bits, signed) = significant_operand(module, e);
-        if bits == 1 && !signed && expr_width(module, e) > 1 {
-            return true;
-        }
-        let Some(ExprKind::Concat(parts)) = module.exprs.get(e).map(|x| &x.kind) else {
-            return false;
-        };
-        let Some((last, high)) = parts.split_last() else {
-            return false;
-        };
-        expr_width(module, *last) == 1
-            && const_operand(module, *last).is_none()
-            && high.iter().all(|p| {
-                matches!(
-                    module.exprs.get(*p).map(|x| &x.kind),
-                    Some(ExprKind::Const(c)) if c.to_u64() == Some(0)
-                )
-            })
-    };
     if const_operand(module, a) == Some(1) || const_operand(module, b) == Some(1) {
         11
-    } else if one_bit(a) || one_bit(b) {
+    } else if one_bit_operand(module, a).is_some() || one_bit_operand(module, b).is_some() {
         10
     } else {
         5
     }
 }
+
+/// The one-bit signal operand `e` widens with zeros, when it is one: a zero
+/// extension of a bit, or a concatenation of zeros above one. The bit is
+/// answered as an expression of one bit; a zero extension's may be a
+/// constant, which is how `vivado_table_width` has always read it.
+fn one_bit_operand(module: &Module, e: ExprId) -> Option<ExprId> {
+    let (inner, bits, signed) = significant_operand(module, e);
+    if bits == 1 && !signed && expr_width(module, e) > 1 {
+        return Some(inner);
+    }
+    let Some(ExprKind::Concat(parts)) = module.exprs.get(e).map(|x| &x.kind) else {
+        return None;
+    };
+    let (last, high) = parts.split_last()?;
+    (expr_width(module, *last) == 1
+        && const_operand(module, *last).is_none()
+        && high.iter().all(|p| {
+            matches!(
+                module.exprs.get(*p).map(|x| &x.kind),
+                Some(ExprKind::Const(c)) if c.to_u64() == Some(0)
+            )
+        }))
+    .then_some(*last)
+}
+
+/// The narrowest sum of three terms [`MapOptions::ternary_adders`] puts on one
+/// chain when a term is one bit or exactly one is subtracted; one bit more
+/// when all three are wide and none or two are. Vivado 2026.1's synthesis,
+/// asked of registered `a + b + c`, `a - b + c`, `a + b - c`, `a - b - c`,
+/// `c - (a + b)`, `c - (a - b)` and `a + (b - c)`, of a one-bit `c` in
+/// `a + b + c`, `a - b + c`, `a - b - c` and `a + b - c`, and of a three-bit
+/// one in `a - b + c`, at 2 to 20, 24 and 32 bits (`synth_design -mode
+/// out_of_context`, `xc7a100tftg256-3`). Measured;
+/// docs/fpga-vivado-parity.md, "Three terms on one chain".
+const VIVADO_TERNARY_NARROWEST: u32 = 6;
 
 /// The low bit both operands of an adder hold, as the last part of each
 /// one's concatenation: one constant, or one signal. Then the sum's low bit
@@ -5852,6 +5874,9 @@ impl Mapper<'_> {
             HashSet::new()
         };
         if bel.operand_carry().is_none() && bel.wide_carry().is_some() {
+            if self.options.ternary_adders {
+                self.ternary_on_the_chain(module);
+            }
             self.share_muxed_adders(module);
             self.subtract_on_the_chain(module);
             self.magnitude_on_the_chain(module);
@@ -6630,6 +6655,263 @@ impl Mapper<'_> {
             module.cells.retain(|id, _| !removed.contains(&id));
             self.note(format!(
                 "{shared} pair(s) of adders behind a multiplexer share one carry chain"
+            ));
+        }
+    }
+
+    /// Rewrites a sum of three terms, two adders or subtractions in a row
+    /// (`(a - b) + c`, `a + b + c`, `c - (a + b)` and the rest), as one
+    /// adder that the carry chain maps whole, as Vivado 2026.1 does.
+    ///
+    /// Each term is an operand or its complement, a subtraction's `-x` being
+    /// `~x + 1`, so the sum is `A + B + C + k`, `k` the number of terms
+    /// complemented (never three: one term is always added). A carry-save
+    /// stage makes the three terms two, `X = A ^ B ^ C` and `Y` the majority
+    /// of each bit's three shifted up one, and the chain adds those: bit
+    /// `i`'s propagate `X[i] ^ Y[i]` reads bits `i` and `i - 1` of each
+    /// term, six signals, one table; its generate is `Y[i]`, a table of three.
+    /// `k` is `Y[0]`, which the shift leaves free, and the chain's carry in.
+    ///
+    /// A one-bit term that `k` absorbs needs no carry-save stage at all:
+    /// `a + b + c` is `a + b` with `c` carried in, and `a - b - c` is
+    /// `a + ~b` with `~c` carried in (`1 - c` is `~c` for one bit), the carry
+    /// in riding in an extra low bit as in [`Self::share_muxed_adders`].
+    ///
+    /// **Measured** (registered sums at 2 to 20, 24 and 32 bits,
+    /// `synth_design -mode out_of_context`, `xc7a100tftg256-3`): Vivado puts
+    /// every one of these forms on one chain, a table in front of it where a
+    /// term is narrow and two where all three are wide; from 6 bits when one
+    /// term is one bit or exactly one is subtracted, from 7 when all three
+    /// are wider than a bit and none or two are subtracted. Narrower, its
+    /// sums are tables, which this rewrite leaves to the rest of the mapping.
+    /// An inner sum anything else reads is two chains in Vivado's netlist
+    /// too, and is left alone here. A constant term was not measured and is
+    /// not taken.
+    ///
+    /// For a wide carry element, at [`MapOptions::ternary_adders`], where
+    /// every term is as wide as the result.
+    fn ternary_on_the_chain(&mut self, module: &mut Module) {
+        /// An adder or a subtraction: the cell, its operands, and whether it
+        /// subtracts.
+        type Arith = (CellId, ExprId, ExprId, bool);
+        let uses = net_use_counts(module);
+        let mut driver: std::collections::HashMap<NetId, CellId> = std::collections::HashMap::new();
+        for (id, cell) in module.cells.iter() {
+            if matches!(cell.kind, CellKind::Add | CellKind::Sub)
+                && let Some(y) = cell.output("y")
+            {
+                driver.insert(y, id);
+            }
+        }
+        let outers: Vec<CellId> = module
+            .cells
+            .iter()
+            .filter(|(_, c)| matches!(c.kind, CellKind::Add | CellKind::Sub))
+            .map(|(id, _)| id)
+            .collect();
+        let wide = |module: &Module, e: ExprId, width: u32| expr_width(module, e) == width;
+        // The adder behind `e` when `e` is the whole of a net of `width` bits
+        // that nothing else reads, and its operands are as wide.
+        let inner = |module: &Module, e: ExprId, width: u32| -> Option<Arith> {
+            let net = module.exprs.get(e).and_then(Expr::as_net)?;
+            if uses.get(net.index()).copied() != Some(1) || net_width(module, net) != width {
+                return None;
+            }
+            let id = *driver.get(&net)?;
+            let c = &module.cells[id];
+            let (x, z) = (c.input("a")?, c.input("b")?);
+            (wide(module, x, width) && wide(module, z, width)).then_some((
+                id,
+                x,
+                z,
+                c.kind == CellKind::Sub,
+            ))
+        };
+        let mut removed: Vec<CellId> = Vec::new();
+        let mut fused = 0usize;
+        for outer in outers {
+            if removed.contains(&outer) {
+                continue;
+            }
+            let cell = &module.cells[outer];
+            let (Some(a), Some(b), Some(y)) = (cell.input("a"), cell.input("b"), cell.output("y"))
+            else {
+                continue;
+            };
+            let width = net_width(module, y);
+            if !wide(module, a, width) || !wide(module, b, width) {
+                continue;
+            }
+            let subtracts = cell.kind == CellKind::Sub;
+            let (span, name) = (cell.span, cell.name.as_str().to_owned());
+            // The three terms, each with whether it is subtracted: the inner
+            // adder's two (both flipped when the outer subtracts it) and the
+            // outer's other operand.
+            let (found, terms) = if let Some(i) = inner(module, a, width) {
+                (i.0, [(i.1, false), (i.2, i.3), (b, subtracts)])
+            } else if let Some(i) = inner(module, b, width) {
+                (i.0, [(i.1, subtracts), (i.2, i.3 != subtracts), (a, false)])
+            } else {
+                continue;
+            };
+            if found == outer || removed.contains(&found) {
+                continue;
+            }
+            let constant = |e: ExprId| {
+                const_operand(module, e).is_some()
+                    || one_bit_operand(module, e)
+                        .is_some_and(|b| const_operand(module, b).is_some())
+            };
+            if terms.iter().any(|(e, _)| constant(*e)) {
+                continue;
+            }
+            let k = terms.iter().filter(|(_, sub)| *sub).count();
+            // A one-bit term `k` takes into the carry in: added with nothing
+            // else subtracted, or subtracted beside one other subtraction.
+            let carried = terms.iter().enumerate().find_map(|(i, (e, sub))| {
+                let bit = one_bit_operand(module, *e)?;
+                ((!sub && k == 0) || (*sub && k == 2)).then_some((i, bit, *sub))
+            });
+            let narrow = terms
+                .iter()
+                .any(|(e, _)| one_bit_operand(module, *e).is_some());
+            let least = if narrow || k == 1 {
+                VIVADO_TERNARY_NARROWEST
+            } else {
+                VIVADO_TERNARY_NARROWEST + 1
+            };
+            if width < least.max(self.options.min_carry_width) {
+                continue;
+            }
+            let mut fresh = 0usize;
+            let mut gate =
+                |module: &mut Module, kind: CellKind, inputs: Vec<(&str, ExprId)>, ty: Type| {
+                    fresh += 1;
+                    let label = format!("{name}$ternary${fresh}");
+                    let net = add_net(module, &label, ty, span);
+                    let inputs = inputs.into_iter().map(|(n, e)| (Name::new(n), e)).collect();
+                    add_cell(
+                        module,
+                        &label,
+                        kind,
+                        inputs,
+                        vec![(Name::new("y"), net)],
+                        span,
+                    );
+                    net_expr(module, net, span)
+                };
+            let ty = Type::bits(width);
+            // The two operands of the one adder, and its carry in.
+            let (x, z, cin) = match carried {
+                Some((index, bit, sub)) => {
+                    // The other two terms, the subtracted one complemented.
+                    let mut rest = Vec::with_capacity(2);
+                    for (i, (e, s)) in terms.iter().enumerate() {
+                        if i == index {
+                            continue;
+                        }
+                        rest.push(if *s {
+                            gate(module, CellKind::Not, vec![("a", *e)], ty.clone())
+                        } else {
+                            *e
+                        });
+                    }
+                    let cin = if sub {
+                        gate(module, CellKind::Not, vec![("a", bit)], Type::bit())
+                    } else {
+                        bit
+                    };
+                    (rest[0], rest[1], Some(cin))
+                }
+                None => {
+                    let mut t = Vec::with_capacity(3);
+                    for (e, s) in terms {
+                        t.push(if s {
+                            gate(module, CellKind::Not, vec![("a", e)], ty.clone())
+                        } else {
+                            e
+                        });
+                    }
+                    let half = gate(
+                        module,
+                        CellKind::Xor,
+                        vec![("a", t[0]), ("b", t[1])],
+                        ty.clone(),
+                    );
+                    let xor = gate(
+                        module,
+                        CellKind::Xor,
+                        vec![("a", half), ("b", t[2])],
+                        ty.clone(),
+                    );
+                    let both = gate(
+                        module,
+                        CellKind::And,
+                        vec![("a", t[0]), ("b", t[1])],
+                        ty.clone(),
+                    );
+                    let either = gate(
+                        module,
+                        CellKind::Or,
+                        vec![("a", t[0]), ("b", t[1])],
+                        ty.clone(),
+                    );
+                    let third = gate(
+                        module,
+                        CellKind::And,
+                        vec![("a", t[2]), ("b", either)],
+                        ty.clone(),
+                    );
+                    let majority = gate(
+                        module,
+                        CellKind::Or,
+                        vec![("a", both), ("b", third)],
+                        ty.clone(),
+                    );
+                    // The majority shifted up a bit, `k`'s second one in the
+                    // bit the shift leaves.
+                    let low = const_expr(
+                        module,
+                        if k == 2 {
+                            Const::ones(1)
+                        } else {
+                            Const::zero(1)
+                        },
+                        span,
+                    );
+                    let shifted = if width > 1 {
+                        let kept = slice_expr(module, majority, width - 2, 0, span);
+                        expr(module, ExprKind::Concat(vec![kept, low]), span)
+                    } else {
+                        low
+                    };
+                    let cin = (k > 0).then(|| const_expr(module, Const::ones(1), span));
+                    (shifted, xor, cin)
+                }
+            };
+            let (x, z, sum_width) = match cin {
+                None => (x, z, width),
+                Some(c) => (
+                    expr(module, ExprKind::Concat(vec![x, c]), span),
+                    expr(module, ExprKind::Concat(vec![z, c]), span),
+                    width + 1,
+                ),
+            };
+            let sum = gate(
+                module,
+                CellKind::Add,
+                vec![("a", x), ("b", z)],
+                Type::bits(sum_width),
+            );
+            let sum = slice_expr(module, sum, sum_width - 1, sum_width - width, span);
+            add_assign(module, y, sum, span);
+            removed.extend([outer, found]);
+            fused += 1;
+        }
+        if fused > 0 {
+            module.cells.retain(|id, _| !removed.contains(&id));
+            self.note(format!(
+                "{fused} sum(s) of three terms mapped onto one carry chain each"
             ));
         }
     }

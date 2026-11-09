@@ -16,6 +16,8 @@
 #   closing  Reticle's netlist of seed 1 of the `closing` build, the default with
 #            "The netlist against Vivado's, placed by Vivado" (2026-11-09). A
 #            `LUT6_2` is two tables in Vivado's counting, one on the part.
+#   fused    Reticle's netlist of seed 1 of the `fused` build, the default with
+#            "Three terms on one chain" (2026-11-09)
 #   cells <build> <design> <LUT> <CARRY4> <FF> <MUXF7> <MUXF8>
 #   levels <build> <design> <clock> <max> <worst> <tables> <CARRY4s>
 #            the most levels of logic on any of the clock's paths to itself in
@@ -250,3 +252,41 @@ cells refined widemux 276 0 1047 128 64
 levels refined widemux clk 4 4 2 0
 cells closing widemux 276 0 1047 128 64
 levels closing widemux clk 4 4 2 0
+cells fused adders 231 56 481 0 0
+levels fused adders clk 9 9 1 8
+cells fused analyser_fifo 219 25 211 0 0
+levels fused analyser_fifo rd_clk 9 8 5 3
+levels fused analyser_fifo wr_clk 5 5 2 3
+cells fused barrel 87 0 70 16 0
+levels fused barrel clk 3 3 3 0
+cells fused bram_fifo 49 3 68 0 0
+levels fused bram_fifo clk 6 3 3 0
+cells fused carry_counter 65 13 65 0 0
+levels fused carry_counter clk 9 6 1 5
+cells fused counter64 129 25 129 0 0
+levels fused counter64 clk 17 10 1 9
+cells fused crc32 191 0 65 0 0
+levels fused crc32 clk 2 2 2 0
+cells fused esad 1175 71 1085 0 0
+levels fused esad adc_sampleclk 5 2 2 0
+levels fused esad clk_usb 2 2 2 0
+cells fused fir8 7 0 23 0 0
+levels fused fir8 clk 5 5 0 0
+cells fused fsm 38 0 30 0 0
+levels fused fsm clk 3 3 3 0
+cells fused gray_cdc 26 3 37 0 0
+levels fused gray_cdc clk 4 4 1 3
+levels fused gray_cdc clk2 2 2 2 0
+cells fused lutram32 8 0 70 0 0
+levels fused lutram32 clk 2 2 2 0
+cells fused mul18 7 0 36 0 0
+levels fused mul18 clk 2 2 2 0
+cells fused regfile_alu 470 20 20 0 0
+levels fused regfile_alu clk 12 7 6 0
+cells fused sad 1579 136 1025 0 0
+levels fused sad adc_sampleclk 5 2 2 0
+levels fused sad clk_usb 2 2 2 0
+cells fused srl_delay 7 0 34 0 0
+levels fused srl_delay clk 2 2 2 0
+cells fused widemux 276 0 1047 128 64
+levels fused widemux clk 4 4 2 0

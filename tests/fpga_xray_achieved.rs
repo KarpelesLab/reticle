@@ -522,3 +522,68 @@ fn the_netlist_closes_on_vivados_own_placement() {
         "the netlist against Vivado's: {net_after:.3} closing, {net_before:.3} refined"
     );
 }
+
+/// **Three terms on one chain make `analyser_fifo`'s read clock faster, and
+/// cost the corpus nothing** (`docs/fpga-vivado-parity.md`, "Three terms on
+/// one chain"). `(wptr_r_next - rptr_next) + out_next` was two chains in a row,
+/// and is one: Vivado placing and routing both netlists, the read clock went
+/// from 5.097 ns (`closing`) to 4.371 (`fused`), seeds 1 to 5, against
+/// Vivado's netlist's 4.087; in Reticle's own flow from 5.213 to 4.426, ten
+/// seeds. The geometric means went from 1.033 to 1.027 (the netlist against
+/// Vivado's) and from 1.119 to 1.111 (the flow against Vivado's own). This
+/// holds the read clock at least 10 % faster at both levels, no clock's median
+/// more than 4 % over `closing`'s at either, neither mean worse, and every
+/// clock with ten seeds of `fused` and five of its netlist. Would catch a
+/// regeneration that lost the change, swapped the builds or lost a seed or a
+/// clock; would not catch the flow losing the change since, which needs
+/// Vivado.
+#[test]
+fn three_terms_on_one_chain_close_the_fifos_read_clock() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    let mut logs = [0.0f64; 4];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (closing, fused) = (&builds["closing"], &builds["fused"]);
+        assert_eq!(fused.len(), 10, "{design} {clock}: seeds of `fused`");
+        let (own, placed) = &nets[&(design.clone(), clock.clone())];
+        let (net_closing, net_fused) = (&placed["closing"], &placed["fused"]);
+        assert_eq!(net_fused.len(), 5, "{design} {clock}: seeds of `pnr fused`");
+        let medians = [
+            median(closing),
+            median(fused),
+            median(net_closing),
+            median(net_fused),
+        ];
+        for (before, after, what) in [
+            (medians[0], medians[1], "the flow"),
+            (medians[2], medians[3], "the netlist"),
+        ] {
+            assert!(
+                after <= before * 1.04,
+                "{design} {clock}, {what}: {after:.3} ns fused against {before:.3}"
+            );
+            if design == "analyser_fifo" && clock == "rd_clk" {
+                assert!(
+                    after <= before * 0.90,
+                    "the read clock, {what}: {after:.3} ns fused against {before:.3}"
+                );
+            }
+        }
+        for (log, ratio) in logs.iter_mut().zip([
+            medians[0] / vivado,
+            medians[1] / vivado,
+            medians[2] / own,
+            medians[3] / own,
+        ]) {
+            *log += ratio.ln();
+        }
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, net_before, net_after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before && net_after <= net_before,
+        "fused {after:.3} and {net_after:.3}, closing {before:.3} and {net_before:.3}"
+    );
+}

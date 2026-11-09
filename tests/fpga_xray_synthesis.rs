@@ -135,12 +135,15 @@ fn figures(report: &FlowReport) -> Figures {
 /// and 22 to 34 and 25, `analyser_fifo` 154 and 26 to 162 and 29, every one
 /// a table fewer deep in front of its chain once legalised), and the adders
 /// Vivado keeps in tables kept there (`bram_fifo` 27 and 12 to 47 and 6,
-/// Vivado's own 49 and 3).
+/// Vivado's own 49 and 3). "Three terms on one chain" moved two:
+/// `analyser_fifo`'s `(wptr_r_next - rptr_next) + out_next` one chain (162
+/// tables and 29 `CARRY4`s to 165 and 25), and `bram_fifo`'s `used + wr - rd`
+/// (47 and 6 to 48 and 3, Vivado's count of `CARRY4`s).
 const PINNED: [(&str, Figures, Figures); 15] = [
     ("adders", (289, 15, 40), (231, 2, 56)),
-    ("analyser_fifo", (165, 10, 12), (162, 3, 29)),
+    ("analyser_fifo", (165, 10, 12), (165, 3, 25)),
     ("barrel", (105, 3, 0), (87, 2, 0)),
-    ("bram_fifo", (32, 4, 9), (47, 3, 6)),
+    ("bram_fifo", (32, 4, 9), (48, 3, 3)),
     ("carry_counter", (18, 4, 8), (18, 1, 13)),
     ("counter64", (35, 5, 16), (34, 1, 25)),
     ("crc32", (204, 7, 0), (191, 2, 0)),
@@ -230,9 +233,10 @@ fn the_gaps_asked_about_are_closed() {
 /// `testdata/fpga/vivado/qor/netlist.txt` has every design of the corpus, as
 /// Vivado's synthesis made it and as Reticle's builds before, after, with
 /// "Area against Vivado's" (`area`), on 91802be8 (`refined`) and with "The
-/// netlist against Vivado's, placed by Vivado" (`closing`) made it, each by
-/// Vivado's counting; and in each build, no clock's worst path has more
-/// tables than in the one before it (`closing` against `refined`, whose
+/// netlist against Vivado's, placed by Vivado" (`closing`) and "Three terms
+/// on one chain" (`fused`) made it, each by Vivado's counting; and in each
+/// build, no clock's worst path has more tables than in the one before it
+/// (`fused` against `closing`, and `closing` against `refined`, whose
 /// equality lanes lost their buffer tables and `esad`'s and `sad`'s worst
 /// paths a table each). (Its levels can be more: a subtraction on the chain is
 /// a `CARRY4` a level where it was none, and `bram_fifo`'s most levels went
@@ -264,7 +268,9 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
     let mut corpus: Vec<&str> = DESIGNS.to_vec();
     corpus.extend(["esad", "sad"]);
     for name in corpus {
-        for build in ["vivado", "before", "after", "area", "refined", "closing"] {
+        for build in [
+            "vivado", "before", "after", "area", "refined", "closing", "fused",
+        ] {
             assert!(
                 cells.contains(&(build.to_owned(), name.to_owned())),
                 "no `{build}` cells of {name}"
@@ -276,6 +282,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
             "after" => "before",
             "area" => "after",
             "closing" => "refined",
+            "fused" => "closing",
             _ => continue,
         };
         let before = levels[&(earlier.to_owned(), name.clone(), clock.clone())];

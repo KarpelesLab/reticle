@@ -164,6 +164,22 @@ enum Shape {
     /// `primitives` compares in kept lanes of a table's inputs each at
     /// [`MapOptions::min_constant_ordering_lane_width`] bits and more.
     OrderConst { op: Order, signed: bool, k: u64 },
+    /// Three terms in two adders or subtractions: `(a ± b) ± c`, or with
+    /// `inner_right` `c ± (a ± b)`, `c` of `c_bits` bits widened with zeros
+    /// (a `c_bits` of the width is a whole operand). What `--synthesis
+    /// vivado` puts on one chain through a carry-save stage
+    /// (`MapOptions::ternary_adders`), as Vivado does: `rused_next =
+    /// (wptr_r_next - rptr_next) + out_next` in the Husky Plus's FIFO.
+    Three {
+        inner_sub: bool,
+        outer_sub: bool,
+        inner_right: bool,
+        c_bits: u32,
+    },
+    /// `y = (a - b) + c` with `a - b` read again, by `z = (a - b) ^ c`: an
+    /// inner sum something else reads, which Vivado leaves on a chain of its
+    /// own.
+    ThreeShared,
 }
 
 /// Which ordering a [`Shape::Order`] is.
@@ -316,6 +332,45 @@ impl Shape {
                 b.cell2("sum", CellKind::Add, ae, ke, y);
             }
             Shape::ChosenXor => {}
+            Shape::Three {
+                inner_sub,
+                outer_sub,
+                inner_right,
+                c_bits,
+            } => {
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let c = b.input("c", Type::bits(c_bits));
+                let y = b.output("y", Type::bits(width));
+                let kind = |sub: bool| if sub { CellKind::Sub } else { CellKind::Add };
+                let (ae, be) = (b.net(a), b.net(bn));
+                let inner = b.add_net("inner", Type::bits(width));
+                b.cell2("inner", kind(inner_sub), ae, be, inner);
+                let ie = b.net(inner);
+                let ce = b.net(c);
+                let ce = if c_bits < width {
+                    b.zext(ce, width)
+                } else {
+                    ce
+                };
+                let (x, z) = if inner_right { (ce, ie) } else { (ie, ce) };
+                b.cell2("outer", kind(outer_sub), x, z, y);
+            }
+            Shape::ThreeShared => {
+                let a = b.input("a", Type::bits(width));
+                let bn = b.input("b", Type::bits(width));
+                let c = b.input("c", Type::bits(width));
+                let y = b.output("y", Type::bits(width));
+                let z = b.output("z", Type::bits(width));
+                let (ae, be) = (b.net(a), b.net(bn));
+                let inner = b.add_net("inner", Type::bits(width));
+                b.cell2("inner", CellKind::Sub, ae, be, inner);
+                let (ie, ce) = (b.net(inner), b.net(c));
+                b.cell2("outer", CellKind::Add, ie, ce, y);
+                let ie = b.net(inner);
+                let ce = b.net(c);
+                b.cell2("other", CellKind::Xor, ie, ce, z);
+            }
             Shape::Chosen { low_sub, high_sub } => {
                 let ports: Vec<NetId> = ["a", "b", "c", "d"]
                     .iter()
@@ -431,6 +486,28 @@ impl Shape {
                 };
                 value & mask(width)
             }
+            Shape::Three {
+                inner_sub,
+                outer_sub,
+                inner_right,
+                ..
+            } => {
+                let op = |sub: bool, x: u64, y: u64| {
+                    if sub {
+                        x.wrapping_sub(y)
+                    } else {
+                        x.wrapping_add(y)
+                    }
+                };
+                let inner = op(inner_sub, a, b);
+                let value = if inner_right {
+                    op(outer_sub, cin, inner)
+                } else {
+                    op(outer_sub, inner, cin)
+                };
+                value & mask(width)
+            }
+            Shape::ThreeShared => a.wrapping_sub(b).wrapping_add(cin) & mask(width),
             Shape::Plain => a.wrapping_add(b) & mask(width),
             Shape::CarryIn => a.wrapping_add(b).wrapping_add(cin) & mask(width),
             Shape::Widened => (a + b) & mask(width + 1),
@@ -469,6 +546,8 @@ impl Shape {
             Shape::CarryIn | Shape::SubtractThenCarryIn => {
                 vec![("a", width), ("b", width), ("cin", 1)]
             }
+            Shape::Three { c_bits, .. } => vec![("a", width), ("b", width), ("c", c_bits)],
+            Shape::ThreeShared => vec![("a", width), ("b", width), ("c", width)],
             Shape::Chosen { .. } => vec![
                 ("a", width),
                 ("b", width),
@@ -1686,6 +1765,140 @@ fn a_signal_carry_in_takes_cyinit_and_puts_bit_0s_generate_on_o5() {
     assert_eq!(report.count("CARRY4"), 2, "an eight-bit shared adder");
 }
 
+/// Every way of writing three terms as two adders or subtractions, `c` of
+/// `c_bits` bits: `(a ± b) ± c` and `c ± (a ± b)`.
+fn three_terms(c_bits: u32) -> Vec<Shape> {
+    let mut shapes = Vec::new();
+    for inner_right in [false, true] {
+        for inner_sub in [false, true] {
+            for outer_sub in [false, true] {
+                shapes.push(Shape::Three {
+                    inner_sub,
+                    outer_sub,
+                    inner_right,
+                    c_bits,
+                });
+            }
+        }
+    }
+    shapes
+}
+
+/// The narrowest a [`Shape::Three`] goes on one chain under `--synthesis
+/// vivado`, as measured of Vivado: 6 bits when `c` is one bit or exactly one
+/// term is subtracted, 7 otherwise.
+fn three_terms_narrowest(shape: Shape) -> u32 {
+    let Shape::Three {
+        inner_sub,
+        outer_sub,
+        inner_right,
+        c_bits,
+    } = shape
+    else {
+        unreachable!("not three terms: {shape:?}")
+    };
+    let subtracted = if inner_right {
+        [outer_sub, inner_sub != outer_sub, false]
+    } else {
+        [false, inner_sub, outer_sub]
+    };
+    let k = subtracted.iter().filter(|s| **s).count();
+    if c_bits == 1 || k == 1 { 6 } else { 7 }
+}
+
+/// Whether the mapping put three terms on one chain, by its own note.
+fn fused(report: &fpga::FlowReport) -> bool {
+    report
+        .primitives
+        .notes
+        .iter()
+        .any(|n| n.contains("sum(s) of three terms"))
+}
+
+/// **Three terms go on one chain under `--synthesis vivado`, from the width
+/// Vivado puts them there, and are still right.** Every way of writing them
+/// (`(a ± b) ± c`, `c ± (a ± b)`), `c` one bit, three bits and whole: every
+/// input simulated, legalised for a slice as `reticle fpga` legalises it, at
+/// the narrowest width each is fused, and one `CARRY4` a four bits, one
+/// chain; a bit narrower, not fused; the legacy synthesis never.
+///
+/// Would catch: a term's sign taken wrongly (the inner sum's flipped when the
+/// outer subtracts it, or not), the carry-save stage's majority not shifted
+/// or its constant one lost (`k` of two), the carry in lost or doubled (every
+/// sum off by one), a one-bit term put on the carry in uncomplemented or not
+/// put there at all (the tables), the thresholds (the counts), and an inner
+/// sum something else reads fused all the same
+/// (`a_shared_inner_sum_keeps_its_own_chain`). The SAT proofs in `mod proofs`
+/// take the same shapes to 13 and 32 bits.
+#[test]
+fn three_terms_go_onto_one_chain_and_are_still_right() {
+    for c_bits in [1, 3, 0] {
+        for shape in three_terms(c_bits) {
+            let narrowest = three_terms_narrowest(shape);
+            // `c` whole is as wide as the sum; at seven bits, six of it, so
+            // that every input is still enumerable.
+            let with = |width: u32| match shape {
+                Shape::Three {
+                    inner_sub,
+                    outer_sub,
+                    inner_right,
+                    c_bits,
+                } => Shape::Three {
+                    inner_sub,
+                    outer_sub,
+                    inner_right,
+                    c_bits: if c_bits == 0 { width.min(6) } else { c_bits },
+                },
+                _ => unreachable!(),
+            };
+            let at = with(narrowest);
+            check_full_with(at, narrowest, XC7, &vivado(), true, false);
+            let (_, _, report) = mapped_with(at, narrowest, XC7, &vivado());
+            assert!(
+                fused(&report),
+                "{at:?} at {narrowest} bits: {:?}",
+                report.primitives.notes
+            );
+            assert_eq!(
+                report.count("CARRY4"),
+                usize::try_from(narrowest.div_ceil(4)).unwrap(),
+                "{at:?} at {narrowest} bits is one chain"
+            );
+            let below = with(narrowest - 1);
+            let (_, _, report) = mapped_with(below, narrowest - 1, XC7, &vivado());
+            assert!(!fused(&report), "{below:?} at {} bits", narrowest - 1);
+            let (_, _, report) = mapped(at, narrowest, XC7, MapOptions::default());
+            assert!(!fused(&report), "legacy: {at:?}");
+        }
+    }
+    // A one-bit term the subtractions' ones take goes on the carry in with no
+    // carry-save stage: a table a bit, and one more for `~c` in `a - b - c`,
+    // Vivado's eight and nine at eight bits; `a - b + c` has its majorities.
+    for (inner_sub, outer_sub, tables) in [(false, false, 8), (true, true, 9), (true, false, 15)] {
+        let shape = Shape::Three {
+            inner_sub,
+            outer_sub,
+            inner_right: false,
+            c_bits: 1,
+        };
+        let (_, _, report) = mapped_with(shape, 8, XC7, &vivado());
+        assert_eq!(report.luts, tables, "{shape:?} at 8 bits");
+    }
+}
+
+/// **An inner sum something else reads keeps its own chain**, as in
+/// Vivado's netlist (two chains, `shared` in the sweep): fusing it would
+/// leave the inner sum to be built again beside the fused one. Every input
+/// of `y` simulated at six bits, and two chains at eight. Would catch the
+/// read count not asked, which would fuse it.
+#[test]
+fn a_shared_inner_sum_keeps_its_own_chain() {
+    check_full_with(Shape::ThreeShared, 6, XC7, &vivado(), true, false);
+    let (_, _, report) = mapped_with(Shape::ThreeShared, 8, XC7, &vivado());
+    assert!(!fused(&report), "{:?}", report.primitives.notes);
+    assert_eq!(report.count("CARRY4"), 4, "two chains of eight bits");
+}
+
 // ---------------------------------------------------------------------------
 // What the mapping costs
 // ---------------------------------------------------------------------------
@@ -2258,6 +2471,23 @@ mod proofs {
         for low_sub in [false, true] {
             for high_sub in [false, true] {
                 prove_vivado(Shape::Chosen { low_sub, high_sub }, 13);
+            }
+        }
+    }
+
+    /// **Three terms on one chain, proved** at the widths simulation cannot
+    /// enumerate: every way of writing them, `c` one bit, three bits and
+    /// whole, at 13 and 32 bits under `--synthesis vivado`, which fuses each
+    /// (`three_terms_go_onto_one_chain_and_are_still_right` checks that it
+    /// does). Would catch what that test would, at any width; would not catch
+    /// a sum Vivado fuses and this mapping does not, which is still right.
+    #[test]
+    fn three_terms_on_one_chain_are_proved() {
+        for width in [13, 32] {
+            for c_bits in [1, 3, width] {
+                for shape in three_terms(c_bits) {
+                    prove_vivado(shape, width);
+                }
             }
         }
     }
