@@ -864,6 +864,7 @@ probes of `REFCLK_FREQUENCY` (190, 210, 300 MHz), `HIGH_PERFORMANCE_MODE` and `S
 | taps | `IDELAY_VALUE`, **whatever `IDELAY_TYPE`**: a `VAR_LOAD` of 9 is nine taps to the timer though nothing loads 9 |
 | `C` to `CNTVALUEOUT` | 0.751 ns |
 | at speed grade 3 | the same taps; the intercepts 0.601 and 0.748 ns, checked on 22 of the delays. The legacy delay model takes grade 1's, as its other figures are, and the Vivado model grade 3's |
+| at speed grade 2 | the same taps (31 of them 2.975 ns, as at 1 and 3); the intercepts 0.679 and 0.969 ns, on `idelay_sweep` and `ddly_datain`. The Vivado model takes the build's grade's since [Speed grades](#speed-grades); it took grade 3's at every grade before |
 
 The form is mine: `1 / (64 f)` reads as a tap of a chain calibrated to half the reference
 period over 32 taps, and the 9 and 5 ps as the data pattern's jitter a tap, which is how they
@@ -1284,6 +1285,11 @@ connection is 0.95 to 1.18 and every design's endpoints are within 3 % at the me
 and the Husky scripts keep it, so that their bitstreams are the ones measured on a
 board, byte for byte (checked below). Run on 2026-11-06. **Nothing here has been on
 a board**: it is all Vivado's timer, which is the oracle and not the part.
+
+**Grade 3 only, as written, and every build was timed by it whatever its part's
+grade**: on the XC7A35T, whose devices declare grade 1, that put every estimate about
+28 % under Vivado's figure for the part. Each grade has its own figures since, and a
+build times at its device's ([Speed grades](#speed-grades)).
 
 ### What was asked
 
@@ -6381,7 +6387,11 @@ columns, which is the grid Reticle loads for both packages
   while `xc7.dev` declares both XC7A35T packages speed 1 (the Basys 3's part is
   `-1`). On a grade-1 part every figure of the fitted model is about a quarter
   under Vivado's for that part, the clock's as much as the rest; the comparisons
-  below are all at grade 3 so that the table is what differs.
+  below are all at grade 3 so that the table is what differs. **Applied since**, and
+  not as a factor: the probe run again from all three buffers at `-1` and `-2` on
+  both dies is a table a grade, and grade 3's table times 1.26 is not it (the spread
+  grows by 1.13 on this die and 1.25 on the XC7A100T, the outer rows by more than the
+  inner): [Speed grades](#speed-grades).
 
 ### The fit, before and after
 
@@ -6509,11 +6519,284 @@ so.
 - **Speed grade 1.** The table and the whole fitted model are grade 3's, and both
   XC7A35T devices say speed 1. Scaling by the 1.26 measured here for the clock is a
   reading of one probe and nothing of the rest's; fitting the model at grade 1 is
-  its own run.
+  its own run. **Done since**, at grades 1 and 2: [Speed grades](#speed-grades).
 - The block RAM and `DSP48E1` columns, which take their nearest slice column's
   figure, on this die as on the other.
 - Why `esad`'s adc clock still crosses rows.
 - None of it has been on a part.
+
+## Speed grades
+
+**Asked: the fitted delay model was Vivado's timer at speed grade 3, every figure of
+it, and every XC7A35T device Reticle has declares grade 1; how far off is it on a
+grade-1 part, would one factor a grade put it right, and what does timing at the
+right grade do to a build?** Run on 2026-11-09 with Vivado 2026.1. **Everything here
+is Vivado's timer; nothing has been on a part.**
+
+### How the grade reaches the model
+
+Before: a device file's `speed` (`1` for both XC7A35T packages, `3` for the
+`xc7a100t-ftg256`) went into the part name a Vivado script was written for and
+nowhere else. The fitted model had one set of figures, grade 3's, whatever the part.
+There was no option for it.
+
+Now: `xray::SpeedGrade` (`1`, `2`, `2L` or `3`) is read from the device's `speed`,
+or from `--speed-grade`, which replaces it, part name included (a Vivado script then
+names `xc7a35tcpg236-2L`). Under `--delay-model vivado` the build times at it: the
+wire classes (`xray::delay::CLASSES`, a column a grade), the branch charge, the share
+of prjxray's delay a wire of no class costs, every cell figure
+(`xray::timing::VIVADO`, `VIVADO_2`, `VIVADO_1`), the carry chain's arcs, the
+placement's line, a flip-flop's clock to `Q` by bel and its setups by way, an
+`IDELAYE2`'s intercept, the clock's insertion delay for an input delay, the clock's
+arrival tables, and the router's distance estimate a tile
+(`xray::route_tile_delay_ps`). A timing-driven build says which: `note: timed at speed
+grade 1 (the device's)`. A grade the model has no figures for is refused, not timed
+as another. `--delay-model legacy` has no grade, and builds as before at any.
+
+`-2L` is timed as `-2` and `-1L` as `-1`: **checked**, every figure of the corpus
+below at `xc7a35tftg256-2L` is its `-2`'s and at `xc7a35tiftg256-1L` (the industrial
+die, the only `-1L` Vivado has of these parts) its `-1`'s, connection, arc and
+endpoint alike. `--speed-grade 1L` is refused, since no part Reticle names has it.
+
+### What was measured
+
+The same placements and routes timed again at each grade, so that a grade is the
+only thing that differs: `tools/vivado-parity/regrade.sh` gives Vivado a
+`run_placed.sh` run's routes at other parts and `timing_dump.tcl` each. Three runs:
+
+- the corpus the model was fitted on, the legacy-built seventeen on
+  `xc7a100tftg256`, at `-1` and `-2` (27,016 connections, 18,220 lookup table arcs);
+- the same seventeen as the fitted model built them on `xc7a35tftg256` (the run of
+  [The clock's arrival on the XC7A35T](#the-clocks-arrival-on-the-xc7a35t)), at
+  `-1`, `-2`, `-2L` and the industrial `-1L`;
+- an earlier fitted build on `xc7a100tftg256`, at `-1` and `-2`;
+
+and `clock_arrival.tcl` from the same three buffers at `-1` and `-2` on both dies,
+with a CPG236 run at each on the XC7A35T, and `idelay_sweep` and `ddly_datain` at all
+three grades.
+
+**A grade is the same factor on both dies, and on both builds**: a connection's
+interconnect delay at `-1` is 1.398 times its `-3` at the median on the XC7A35T
+build and 1.403 on the XC7A100T build, at `-2` 1.136 and 1.137; each class of cell arc
+follows the same line from `-3` on both corpora to a few picoseconds. **But it is not
+one factor for everything:**
+
+| at grade 1, over grade 3, same cells and routes (median) | grade 2 | grade 1 |
+|---|---|---|
+| a connection (interconnect) | 1.136 | 1.398, 1.34 to 1.52 from the 5th to the 95th percentile |
+| a slice's output wire (`LOGIC_OUTS`), by the fit | 1.14 to 1.28 | 1.43 to 1.84 |
+| a lookup table's slow input wire (`A1`, `A2`), by the fit | 1.09 to 1.10 | 1.28 to 1.31 |
+| a six-tile line (`NN6BEG`, `SS6BEG`), by the fit | 1.08 | 1.27 |
+| a connection to a slice's bypass, `CE` or `SR` pin | 1.14 to 1.17 | 1.41 to 1.53 |
+| a lookup table (0.097 ns arcs; the 0.21 to 0.25 ns quarter) | 1.08 | 1.28 (1.40) |
+| a flip-flop's clock to `Q` | 1.11 | 1.34 |
+| a carry chain | 1.11 | 1.34 |
+| a block RAM's clock to output; its setups | 1.15; 1.11 | 1.33; 1.28 |
+| a `DSP48E1`'s arcs | 1.14 to 1.17 | 1.35 to 1.43 |
+| the input and output buffers | 1.06, 1.04 | 1.11, 1.12 |
+| the clock's insertion (`qor/gray_cdc.v`'s registers; the probe's) | 1.10 (1.11) | 1.26 (1.28 on the XC7A35T, 1.32 on the XC7A100T) |
+| the clock's spread over the die (the probe) | 1.06 to 1.10 | 1.13 to 1.25 |
+| an `IDELAYE2` at no taps (`IDATAIN`; `DATAIN`) | 1.13; 1.30 | 1.36; 1.35 |
+
+All **measured**, on the runs above; the taps of a delay are the same at every grade
+(31 of them 2.975 ns at each).
+
+### One factor a class, or a table a grade
+
+Asked first: how near would grade 3's figures come, scaled by one factor for each
+class (wires, cells, setup, the clock)? On the same routes, the factor that is each
+class's median, against Vivado's figure at that grade (5th to 95th percentile):
+
+| | grade 2 | grade 1 |
+|---|---|---|
+| a connection, Vivado's own grade-3 figure scaled | 0.979 to 1.033 | 0.957 to 1.088 |
+| an endpoint, logic, route, setup and skew each scaled | 0.978 to 1.011 | 0.944 to 1.029 |
+| an endpoint, one factor for all | 0.988 to 1.020 | 0.967 to 1.050 |
+| a connection, grade 3's class table scaled, on the XC7A35T build | 0.925 to 1.049 | 0.900 to 1.057 |
+| a connection, that grade's own class table, on the same | 0.927 to 1.043 | 0.933 to 1.036 |
+
+(Grade 3's own table on the same is 0.923 to 1.047.) **At grade 2 a factor would do;
+at grade 1 it would not**: the classes slow by 1.17 to 1.84, and the factor leaves the
+slow ones a tenth under and the fast ones over. So each grade has a table of its own,
+fitted as grade 3's was: `timing_table.py fit --part` of the legacy-built corpus at
+`-1` and `-2`, the same 274 classes, 1.002 of Vivado's figure at the median at each,
+0.960 to 1.035 from the 5th to the 95th percentile at grade 1 and 0.955 to 1.041 at
+grade 2, against grade 3's 0.952 to 1.045 (`testdata/fpga/vivado/timing/classes_1.txt`,
+`classes_2.txt`, and the sample's figures at each grade in `sample_grades.txt`). The
+branch charge is 10.1, 9.1 and 8.4 ps at grades 1, 2 and 3, and the line for the
+placement 0.594 + 0.0485 a tile, 0.474 + 0.0402 and 0.414 + 0.0358.
+
+The cells are each grade's too, from `arcs_1.txt` and `arcs_2.txt`: a figure of grade
+3's that is one of Vivado's arcs (a flip-flop's clock to `Q` on each bel, a block RAM's
+clock to output, the `DSP48E1`'s cascade and its `M` and `P` to `P`, the buffers, a
+shift register's and a distributed RAM's setups) is that arc's figure on the same cells
+at the grade, **measured**; one that is a mean or a reading (a lookup table's 0.13 ns, a
+flip-flop's setups, the carry's fallback, a block RAM's setups) goes through the line
+its class's arcs follow from grade 3 to the grade, which every arc of the class is
+within a few picoseconds of (a lookup table's 5th to 95th percentile -6 to +19 ps at
+grade 1, a flip-flop's clock to `Q` ±1.5); the carry chain's arcs are each grade's own
+medians. The figures grade 3's were derived for (`DSP48E1` settings no design used, a
+shift register's address) are at grade 1 the constants read off Vivado's grade-1
+`report_timing` that grade 3's were derived from, and at grade 2 derived from those; where
+the corpus has the same arc, grade 1's measured figure is that constant (`M` to `P`
+2.305 ns, `P` to `P` 0.434, the cascade 1.713). And the clock's arrival is a table a
+grade on each die, every flip-flop within 3.5 to 6.1 ps of it; grade 3's table, set
+against the same flip-flops, is 21 to 57 ps off, the outer region rows slowing by more
+than the inner.
+
+### The fit at each grade
+
+`run_placed.sh` with `TIMING=1` on the XC7A35T FTG256, seed 1, each build timed by
+Vivado at the grade it was built for (`timing_table.py compare --part`), and the tree
+before this change timed at `-1`, which is what a Basys 3 build was. Estimate over
+Vivado, median / 5th / 95th percentile (`testdata/fpga/vivado/timing/summary_grades.txt`):
+
+| | connections | endpoints | each clock's worst endpoint |
+|---|---|---|---|
+| before, at grade 1 (grade 3's figures) | 15,709: 0.715 / 0.654 / 0.799 | 4,854: 0.723 / 0.597 / 0.780 | 0.66 to 0.76 |
+| grade 1 | 15,553: 0.998 / 0.917 / 1.185 | 4,849: 0.998 / 0.862 / 1.120 | 0.88 (`widemux`) to 1.04 |
+| grade 2 (`--speed-grade 2`) | 15,625: 1.002 / 0.930 / 1.228 | 4,856: 0.988 / 0.851 / 1.089 | 0.93 to 1.08 |
+| grade 3 (`--speed-grade 3`) | 15,709: 1.000 / 0.924 / 1.105 | 4,854: 0.989 / 0.849 / 1.097 | 0.89 to 1.06 |
+
+**Before, a grade-1 build was put 28 % under Vivado's figure for it**, connection
+and endpoint alike, and every clock's worst by a quarter to a third; **at its grade
+now, every design's median connection is within 2 % of Vivado's at every grade** and
+the endpoints are where grade 3's were. The grade-3 row is the earlier section's
+`after`, figure for figure (the same build: grade 3's figures are what they were). The
+95th percentile of a connection is 1.19 and 1.23 at grades 1 and 2 against grade 3's
+1.11; what makes those few percent, beyond that they are other builds, has not been
+looked at.
+
+**A design constrained at 10 ns on a grade-1 part** is timed against its 10 ns by
+grade 1's figures: the period is the constraint's whatever the grade, and only the
+figures move. `esad`'s and `sad`'s `clk_usb` are 10 ns clocks: at grade 1, Vivado's
+worst 3.988 and 4.078 ns, Reticle's estimate of the same endpoints 4.066 and 4.243
+(1.02, 1.04), where before it was 3.602 against 4.993 (0.72). `fpga_xray_timing`'s
+`a_grade_one_part_is_timed_by_grade_ones_figures` holds the Basys 3's blink to it:
+`of 10 ns` at both grades, and grade 1's first estimate 1.40 times grade 3's.
+
+### What the placer and router are given
+
+Nothing in the placer or the router compares a delay with a constant of its own but
+three things, each now the grade's: the period, which is the constraint's
+(`PlaceTiming::periods`), against which a domain's criticality is spanned when its
+longest path is shorter, and an input's budget is reckoned from; the router's
+distance estimate a tile, 25 ps at grade 3 (`route_tile_delay_ps`: 35 and 28 at grades
+1 and 2, the same share of a connection's delay); and the branch charge. The rest is
+ratios: criticalities are against the longer of the period and the longest path, and
+the router weighs a picosecond against the mean delay of its timed nodes
+(`route::delay_scale`), so a grade that slowed everything by one factor would route as
+grade 3 does wherever the longest path is over the period. **What changes is a domain
+whose period is longer than its paths at grade 3 and shorter at grade 1**: before, its
+paths looked a quarter shorter than they were and were weighed against the period,
+with less pressure than they needed.
+
+### What it does to placement
+
+`achieved.sh` on the XC7A35T FTG256 at `-1`, ten seeds, Vivado's own flow asked three
+times as before, each clock at 0.85 of Vivado's best; the tree before (grade 3's
+figures) and with this change (grade 1's), both timed by Vivado at `-1`. ns; Vivado's
+figure is its best, Reticle's the median over the seeds (`sad`'s after, over nine:
+seed 2's placement Vivado refused, below):
+
+| design | clock | Vivado | Vivado, Reticle's netlist | before | after |
+|---|---|---|---|---|---|
+| adders | clk | 2.958 | 2.902 | 3.014 | 3.050 |
+| analyser_fifo | rd_clk | 5.351 | 6.892 | 7.239 | 7.180 |
+| analyser_fifo | wr_clk | 3.265 | 3.867 | 4.175 | 4.115 |
+| barrel | clk | 3.283 | 3.511 | 3.442 | 3.444 |
+| bram_fifo | clk | 4.583 | 4.763 | 5.220 | 5.261 |
+| carry_counter | clk | 2.586 | 2.950 | 3.062 | 3.115 |
+| counter64 | clk | 4.309 | 4.963 | 5.177 | 5.193 |
+| crc32 | clk | 2.871 | 3.060 | 3.236 | 2.910 |
+| esad | adc_sampleclk | 2.872 | 4.887 | 4.171 | 4.072 |
+| esad | clk_usb | 2.155 | 3.343 | 3.551 | 3.476 |
+| fir8 | clk | 12.437 | 12.460 | 12.458 | 12.458 |
+| fsm | clk | 2.510 | 2.856 | 2.978 | 2.953 |
+| gray_cdc | clk | 2.006 | 1.963 | 1.940 | 1.940 |
+| gray_cdc | clk2 | 1.875 | 2.025 | 2.099 | 2.046 |
+| lutram32 | clk | 2.318 | 2.419 | 2.720 | 2.735 |
+| mul18 | clk | 2.437 | 2.580 | 2.709 | 2.780 |
+| regfile_alu | clk | 7.690 | 7.411 | 8.056 | 8.101 |
+| sad | adc_sampleclk | 2.938 | 5.906 | 4.373 | 4.356 |
+| sad | clk_usb | 2.263 | 3.451 | 3.578 | 3.483 |
+| srl_delay | clk | 2.101 | 2.204 | 2.532 | 2.492 |
+| widemux | clk | 3.202 | 3.654 | 4.011 | 3.851 |
+
+**Over the twenty-one clocks, Reticle's median is 1.193 times Vivado's own figure at the
+geometric mean with grade 1's figures and 1.205 with grade 3's; 1.016 and 1.027 of
+Vivado's placement and routes of the same netlist. Eleven clocks faster, eight slower,
+two the same.** Most of that is inside a seed's spread, as the clock tables' change
+was; `crc32`, 3.236 to 2.910 ns, is not (every one of the ten seeds after is under every
+one before), and is the case above: at 0.85 of Vivado's best its paths fit the period by
+grade 3's figures and not by grade 1's. Reported as a small gain on this corpus, not as
+a general one.
+
+**The XC7A100T builds nothing differently**: its device declares grade 3, whose figures,
+tables and charges are what they were. **Checked**: every design of this corpus built
+timing-driven on the `xc7a100t-ftg256` by the tree before and by this one writes the
+same bitstream, byte for byte, so `qor/achieved.txt`, measured there at `-3`, stands.
+
+### The Husky's bitstreams
+
+They pass `--delay-model legacy`, which has no grade. With this tree's release binary
+`build.sh` writes `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd`
+and `build_plus.sh` seed 4's
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked**, byte
+for byte.
+
+### Tests
+
+- `xray::delay`'s `a_grade_reads_its_own_column`: the grades as Vivado writes them, `1L`
+  refused, grade 1 the slowest column of every class of 20 ps or more, and each grade's
+  branch charge.
+- `tests/fpga_xray_delay.rs`: the source holds each grade's fit
+  (`the_source_holds_the_table_the_fit_wrote`, now all three); over the sample, each
+  grade's column is within 3 % of Vivado's figure at that grade at the median and 0.9
+  to 1.1 from the 5th to the 95th, and grade 3's column against grade 1's figures is
+  under 0.8 (`at_each_grade_a_connection_is_within_a_few_percent_of_vivados_figure`);
+  and the quoted run of `summary_grades.txt` has every design within 3 % at each grade
+  and every clock's worst within 15 %, and before under 0.8.
+- `tests/fpga_xray_clock_arrival.rs`: every flip-flop at grades 1 and 2 within 7 ps of
+  its grade's table, both dies and both packages, and grade 3's table more than 14 ps
+  off on each.
+- `xray::timing`: a site's clock by the grade asked and not the one in a part's name;
+  a flip-flop's launch and setups at grade 1; an `IDELAYE2` at grades 2 and 1.
+- `tests/fpga_xray_timing.rs`: a node costs its class at grade 1 as at grade 3; and
+  `a_grade_one_part_is_timed_by_grade_ones_figures`, above.
+- `tests/cli.rs`'s `fpga_takes_the_speed_grade_it_is_given`: the Vivado script's part
+  follows `--speed-grade`, and `1L`, or a grade on another family, is a usage error.
+
+**Mutations**, each made by a script and put back, against all of those:
+the class table read in grade 3's column whatever the grade, or grade 1 read in
+grade 3's; one branch charge for every grade; the share of prjxray's delay grade
+3's at every grade; `node_delays` at grade 3 whatever it was asked; grade 1 given
+grade 3's cell figures; the XC7A35T's grade-3 clock table at every grade; the
+XC7A100T's grade-1 and grade-2 tables swapped; a flip-flop's launch looked up by
+the wrong bel; an `IDELAYE2`'s two intercepts swapped, and grade 2's set to grade
+3's; the build timed at grade 3 whatever the device says; the legacy model given
+grade 1's figures; and `--speed-grade` not reaching the part's name. Fourteen of
+fifteen failed a test. **One survived:** one figure of grade 1's cells off by
+itself (a lookup table's 0.174 ns put back to grade 3's 0.13). Nothing in the gate
+holds a cell figure of any grade to `arcs_1.txt`, `arcs_2.txt` or, for grade 3,
+`arcs.txt`; only the quoted runs of `summary_grades.txt` do, which a regeneration
+and not the source would move. That is as grade 3's figures were.
+
+### Not done
+
+- **Grade 1's and 2's figures are fitted on grade 3's corpus, re-timed**, not on
+  builds made at those grades: the same routes, so the table sees what grade 3's saw. A
+  fit on grade-1 builds would see other routes; the comparison above, on builds the
+  tables had not seen, is the check that it does not matter much.
+- The connections' 95th percentile at grades 1 and 2, 1.19 and 1.23 against grade 3's
+  1.11.
+- The clock managers, a pad's register and an IO delay's controller have no figures
+  of Vivado's at any grade, as before.
+- `sad` seed 2 at grade 1: Vivado refused its placement (`Cannot set LOC and BEL
+  properties` on a `D5FF`, "Routing contention at pips element DOUTMUX"), a packing
+  rule the placer broke on that seed. Not looked at; it is the placer's, not the
+  timing model's.
+- None of it has been on a part, at any grade.
 
 ## The language corpus, synthesised by both
 
