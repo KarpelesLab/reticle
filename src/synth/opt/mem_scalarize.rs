@@ -40,7 +40,8 @@ use crate::source::Span;
 use crate::synth::eval::eval_closed;
 use crate::synth::opt::dce::map_memories;
 use crate::synth::util::{
-    add_cell, add_wire, const_bit, mk_binary, mk_blend, mk_const, mk_mux, mk_net, mk_undef,
+    FreshNames, add_cell_in, add_wire_in, const_bit, mk_binary, mk_blend, mk_const, mk_mux, mk_net,
+    mk_undef,
 };
 use crate::synth::{Pass, PassStats};
 
@@ -218,9 +219,12 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
         }
     }
 
-    // The words.
+    // The words. Every net and cell from here to the end takes its name from
+    // one index of the module's, and nothing is removed until then.
+    let mut net_names = FreshNames::nets(m);
+    let mut cell_names = FreshNames::cells(m);
     let words: Vec<NetId> = (0..size)
-        .map(|k| add_wire(m, &format!("{base}${k}"), ty.clone(), span))
+        .map(|k| add_wire_in(m, &mut net_names, &format!("{base}${k}"), ty.clone(), span))
         .collect();
     for (k, net) in words.iter().enumerate() {
         if let Some(value) = init.get(k) {
@@ -283,8 +287,9 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             }
         };
         let Some(clk) = clk else { continue };
-        add_cell(
+        add_cell_in(
             m,
+            &mut cell_names,
             &format!("{base}${k}$ff"),
             CellKind::Dff {
                 clk_pos: true,
@@ -324,8 +329,9 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             if let Some(en) = port.en {
                 inputs.push(("en", en));
             }
-            add_cell(
+            add_cell_in(
                 m,
+                &mut cell_names,
                 &format!("{base}$rd$ff"),
                 CellKind::Dff {
                     clk_pos: true,
@@ -346,8 +352,9 @@ fn scalarize(m: &mut Module, mem: MemoryId) -> Option<u64> {
             });
         }
     }
-    let ports: Vec<CellId> = reads.iter().chain(&writes).map(|p| p.cell).collect();
-    m.cells.retain(|id, _| !ports.contains(&id));
+    let mut ports: Vec<CellId> = reads.iter().chain(&writes).map(|p| p.cell).collect();
+    ports.sort_unstable();
+    m.cells.retain(|id, _| ports.binary_search(&id).is_err());
     let mut index = 0;
     m.assigns.retain(|_| {
         let keep = !assigned.contains(&index);

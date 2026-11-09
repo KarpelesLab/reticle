@@ -278,9 +278,68 @@ fn fresh_name(base: &str, taken: impl Fn(&str) -> bool) -> Name {
     }
 }
 
+/// The names a module's nets, or its cells, use, for a run of additions
+/// that would otherwise each collect them all again: [`FreshNames::fresh`]
+/// answers what [`fresh_net_name`] or [`fresh_cell_name`] answers.
+///
+/// It is only right while every name of its kind the module gains goes
+/// through it and none is removed or renamed, so it lives for one such run:
+/// `mem_scalarize` making a memory a word at a time, which asked for a name
+/// a word and collected every net's name for each.
+pub(crate) struct FreshNames {
+    taken: HashSet<String>,
+}
+
+impl FreshNames {
+    /// The names `m`'s nets use now.
+    pub(crate) fn nets(m: &Module) -> FreshNames {
+        FreshNames {
+            taken: m
+                .nets
+                .values()
+                .map(|n| n.name.as_str().to_owned())
+                .collect(),
+        }
+    }
+
+    /// The names `m`'s cells use now.
+    pub(crate) fn cells(m: &Module) -> FreshNames {
+        FreshNames {
+            taken: m
+                .cells
+                .values()
+                .map(|c| c.name.as_str().to_owned())
+                .collect(),
+        }
+    }
+
+    /// A name derived from `base` that is not taken, filed as taken.
+    pub(crate) fn fresh(&mut self, base: &str) -> Name {
+        let name = fresh_name(base, |n| self.taken.contains(n));
+        self.taken.insert(name.as_str().to_owned());
+        name
+    }
+}
+
 /// Adds a wire with a fresh name derived from `base`.
 pub(crate) fn add_wire(m: &mut Module, base: &str, ty: Type, span: Span) -> NetId {
     let name = fresh_net_name(m, base);
+    push_wire(m, name, ty, span)
+}
+
+/// [`add_wire`], with its name from `names`, which are `m`'s nets'.
+pub(crate) fn add_wire_in(
+    m: &mut Module,
+    names: &mut FreshNames,
+    base: &str,
+    ty: Type,
+    span: Span,
+) -> NetId {
+    let name = names.fresh(base);
+    push_wire(m, name, ty, span)
+}
+
+fn push_wire(m: &mut Module, name: Name, ty: Type, span: Span) -> NetId {
     m.nets.push(Net {
         name,
         ty,
@@ -300,6 +359,31 @@ pub(crate) fn add_cell(
     span: Span,
 ) -> crate::ir::CellId {
     let name = fresh_cell_name(m, base);
+    push_cell(m, name, kind, inputs, outputs, span)
+}
+
+/// [`add_cell`], with its name from `names`, which are `m`'s cells'.
+pub(crate) fn add_cell_in(
+    m: &mut Module,
+    names: &mut FreshNames,
+    base: &str,
+    kind: CellKind,
+    inputs: Vec<(&str, ExprId)>,
+    outputs: Vec<(&str, NetId)>,
+    span: Span,
+) -> crate::ir::CellId {
+    let name = names.fresh(base);
+    push_cell(m, name, kind, inputs, outputs, span)
+}
+
+fn push_cell(
+    m: &mut Module,
+    name: Name,
+    kind: CellKind,
+    inputs: Vec<(&str, ExprId)>,
+    outputs: Vec<(&str, NetId)>,
+    span: Span,
+) -> crate::ir::CellId {
     m.cells.push(Cell {
         name,
         kind,
@@ -342,6 +426,47 @@ mod tests {
         let mut map = SourceMap::new();
         let id = map.add("t", "").unwrap();
         Span::new(id, 0, 0)
+    }
+
+    /// **An index of a module's names picks the names collecting them each
+    /// time picks**, for nets and for cells, over a run of additions to the
+    /// same bases and to a base whose `_2` is taken already. Would catch an
+    /// index that did not file a name it handed out, or mixed nets' and
+    /// cells' names; would not catch a caller that added a name behind its
+    /// back, which `FreshNames` says it must not.
+    #[test]
+    fn an_index_of_names_picks_what_collecting_them_picks() {
+        let span = span();
+        let mut m = Module::new("m", span);
+        add_wire(&mut m, "w", Type::bit(), span);
+        add_wire(&mut m, "w_2", Type::bit(), span);
+        let net = add_wire(&mut m, "q", Type::bit(), span);
+        add_cell(
+            &mut m,
+            "w",
+            CellKind::Buf,
+            Vec::new(),
+            vec![("y", net)],
+            span,
+        );
+        let mut nets = FreshNames::nets(&m);
+        let mut cells = FreshNames::cells(&m);
+        for base in ["w", "w", "q", "x", "x", "w_2"] {
+            let net_name = fresh_net_name(&m, base);
+            let cell_name = fresh_cell_name(&m, base);
+            let wire = add_wire_in(&mut m, &mut nets, base, Type::bit(), span);
+            assert_eq!(m.nets[wire].name, net_name, "net {base}");
+            let cell = add_cell_in(
+                &mut m,
+                &mut cells,
+                base,
+                CellKind::Buf,
+                Vec::new(),
+                Vec::new(),
+                span,
+            );
+            assert_eq!(m.cells[cell].name, cell_name, "cell {base}");
+        }
     }
 
     #[test]
