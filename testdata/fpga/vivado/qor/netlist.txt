@@ -18,6 +18,8 @@
 #            `LUT6_2` is two tables in Vivado's counting, one on the part.
 #   fused    Reticle's netlist of seed 1 of the `fused` build, the default with
 #            "Three terms on one chain" (2026-11-09)
+#   copied   Reticle's netlist of seed 1 of the `copied` build, the default with
+#            "A wide fanout copied" (2026-11-09)
 #   cells <build> <design> <LUT> <CARRY4> <FF> <MUXF7> <MUXF8>
 #   levels <build> <design> <clock> <max> <worst> <tables> <CARRY4s>
 #            the most levels of logic on any of the clock's paths to itself in
@@ -290,3 +292,41 @@ cells fused srl_delay 7 0 34 0 0
 levels fused srl_delay clk 2 2 2 0
 cells fused widemux 276 0 1047 128 64
 levels fused widemux clk 4 4 2 0
+cells copied adders 231 56 481 0 0
+levels copied adders clk 9 9 1 8
+cells copied analyser_fifo 219 25 211 0 0
+levels copied analyser_fifo rd_clk 9 8 5 3
+levels copied analyser_fifo wr_clk 5 5 2 3
+cells copied barrel 87 0 70 16 0
+levels copied barrel clk 3 3 3 0
+cells copied bram_fifo 49 3 68 0 0
+levels copied bram_fifo clk 6 3 3 0
+cells copied carry_counter 65 13 65 0 0
+levels copied carry_counter clk 9 6 1 5
+cells copied counter64 129 25 129 0 0
+levels copied counter64 clk 17 10 1 9
+cells copied crc32 191 0 65 0 0
+levels copied crc32 clk 2 2 2 0
+cells copied esad 1175 71 1085 0 0
+levels copied esad adc_sampleclk 5 2 2 0
+levels copied esad clk_usb 2 2 2 0
+cells copied fir8 7 0 23 0 0
+levels copied fir8 clk 5 5 0 0
+cells copied fsm 38 0 30 0 0
+levels copied fsm clk 3 3 3 0
+cells copied gray_cdc 26 3 37 0 0
+levels copied gray_cdc clk 4 4 1 3
+levels copied gray_cdc clk2 2 2 2 0
+cells copied lutram32 8 0 70 0 0
+levels copied lutram32 clk 2 2 2 0
+cells copied mul18 7 0 36 0 0
+levels copied mul18 clk 2 2 2 0
+cells copied regfile_alu 470 20 20 0 0
+levels copied regfile_alu clk 12 7 6 0
+cells copied sad 1579 136 1025 0 0
+levels copied sad adc_sampleclk 5 2 2 0
+levels copied sad clk_usb 2 2 2 0
+cells copied srl_delay 7 0 34 0 0
+levels copied srl_delay clk 2 2 2 0
+cells copied widemux 276 0 1049 128 64
+levels copied widemux clk 4 4 2 0

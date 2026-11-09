@@ -587,3 +587,47 @@ fn three_terms_on_one_chain_close_the_fifos_read_clock() {
         "fused {after:.3} and {net_after:.3}, closing {before:.3} and {net_before:.3}"
     );
 }
+
+/// **A flip-flop read by more tables than Vivado leaves on one is copied, and
+/// `widemux` is faster for it** (`docs/fpga-vivado-parity.md`, "A wide fanout
+/// copied"). Its select's two bits that each drive 256 tables are two
+/// flip-flops each, as in Vivado's netlist: Vivado placing and routing both
+/// netlists, the clock went from 2.556 ns (`fused`) to 2.495 (`copied`), seeds
+/// 1 to 5, against Vivado's netlist's 2.453; in Reticle's own flow from 2.769
+/// to 2.691, ten seeds. No other design has such a flip-flop, and every other
+/// clock is the same netlist and the same figures. This holds `widemux` at
+/// least 2 % faster at both levels, every other clock's seeds exactly
+/// `fused`'s, and every clock with ten seeds of `copied` and five of its
+/// netlist. Would catch a regeneration that lost the change, swapped the
+/// builds or lost a seed; would not catch the flow losing it since.
+#[test]
+fn a_wide_fanout_copied_makes_widemux_faster() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    for ((design, clock), (_, builds)) in &table {
+        let (fused, copied) = (&builds["fused"], &builds["copied"]);
+        assert_eq!(copied.len(), 10, "{design} {clock}: seeds of `copied`");
+        let (_, placed) = &nets[&(design.clone(), clock.clone())];
+        let (net_fused, net_copied) = (&placed["fused"], &placed["copied"]);
+        assert_eq!(
+            net_copied.len(),
+            5,
+            "{design} {clock}: seeds of `pnr copied`"
+        );
+        if design == "widemux" {
+            for (before, after, what) in [
+                (median(fused), median(copied), "the flow"),
+                (median(net_fused), median(net_copied), "the netlist"),
+            ] {
+                assert!(
+                    after <= before * 0.98,
+                    "widemux, {what}: {after:.3} ns copied against {before:.3}"
+                );
+            }
+        } else {
+            assert_eq!(fused, copied, "{design} {clock}: the flow");
+            assert_eq!(net_fused, net_copied, "{design} {clock}: the netlist");
+        }
+    }
+}

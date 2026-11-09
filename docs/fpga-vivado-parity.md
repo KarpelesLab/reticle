@@ -4804,6 +4804,7 @@ swapped with `refined`, and a seed of `closing` lost, each fail
   times Vivado's netlist and the worst of the twenty-one now. *Done since, in "Three
   terms on one chain": 1.07 times.*
 - **Replicating a register a wide multiplexer's select reads**, as Vivado's `widemux`.
+  *Done since, in "A wide fanout copied": Vivado's synthesis does it, by fanout.*
 - **The placement**: 1.082 of the 1.119 is Reticle's placement and routes of its own
   netlist, most of it `esad`'s and `sad`'s ADC clocks.
 - The XC7A35T's netlist figure, measured the old way.
@@ -4975,6 +4976,104 @@ swapped with `closing` and a seed of either `fused` lost each fail
   here it is a chain and a fused chain.
 - **A constant term** (`a - b + 1`) was not measured and is not taken.
 - None of it has been on a part.
+
+## A wide fanout copied
+
+**Asked: Vivado's `widemux` netlist has two of its select's registers twice
+(`in_reg[1028]_rep`, `in_reg[1029]_rep`); is that its synthesis or its physical
+optimisation, by what rule, and should Reticle do it in synthesis or in placement?**
+Run on 2026-11-09 with Vivado 2026.1 at `xc7a100tftg256-3`. Vivado's synthesis and
+Vivado's timer; nothing on a part.
+
+### What Vivado does (measured)
+
+- **It is `synth_design`'s.** The copies are in the netlist `synth_design` writes, before
+  any `opt_design` or `phys_opt_design`: 1,049 `FDRE`s against the source's 1,047.
+- **By fanout, not by timing.** A register selecting between two registers of `N`
+  bits, so that it drives `N` tables (`synth_design -mode out_of_context`): one
+  flip-flop at `N` = 32 to 220, copied at 222 and 223 and every `N` up to 1,024 that was
+  asked, and the same copies at clock periods of 1, 2, 5 and 100 ns, the last met by
+  97 ns. (221 was not asked.)
+- **How many and how split is not one rule.** 222 to 250 readers were two
+  flip-flops, 255 to 385 three, 448 to 513 five, 640 six, 768 eight, 1,024 nine; the
+  shares were mostly 108 and 144 readers, with the rest on the original. `widemux`'s
+  two bits, each read by 256 tables and one flip-flop, were two each, 128 and 129.
+- **The readers are split by where they lead.** `widemux`'s `in_reg[1028]` feeds the
+  tables of `q[0]` to `q[7]` and its copy those of `q[8]` to `q[15]`.
+- **It is worth something to Vivado.** Vivado's `widemux` netlist with the two copies
+  folded back into their originals, placed and routed with six placer directives:
+  2.444 to 2.523 ns, median 2.514, against 2.397 to 2.464, median 2.450, as Vivado
+  wrote it: 2.6 %.
+
+So the answer to "synthesis or placement" is synthesis, as Vivado's netlist has it.
+
+### What was changed
+
+`xray::replicate_wide_fanout`, under `--synthesis vivado` on the 7 series, after the
+device cells and the shift registers: a flip-flop with more than 220 readers
+(`MOST_READERS`) is one flip-flop for each 129 (`SHARE`, fitted: two for `widemux`'s
+257, two from 222 to 250, three from 300 to 385, and not Vivado's three at 255 to 257
+or five at 448 to 513 for a register read by tables alone). Each reader is followed
+forward to the first flip-flop it leads to, the readers ordered by that flip-flop's
+name with its numbers read as numbers, and cut into runs, the original keeping the
+first. A copy is the same cell, inputs and parameters, so it holds the original's value
+on every cycle; only a reader whose input is that one bit moves. Not copied: a kept
+flip-flop, an `ASYNC_REG` one, one with a clock pin among its readers, or one whose data
+comes from a pad or another clock's flip-flop. In the corpus only `widemux` has one:
+`in[1024]` and `in[1025]`, the two select bits its mapping puts on the tables, each
+read by 256.
+
+### Before and after
+
+| `widemux` `clk`, ns | Vivado | `fused` | `copied` |
+|---|---|---|---|
+| Vivado's netlist and Reticle's, placed and routed by Vivado, seeds 1 to 5 | 2.453 | 2.556 | **2.495** |
+| Reticle's own flow, ten seeds | 2.438 | 2.769 [2.69-2.88] | **2.691** [2.59-2.80] |
+
+Every other clock is the same netlist and the same figures seed for seed. Over the
+twenty-one, the netlist is 1.026 times Vivado's (1.027 before) and Reticle's flow 1.110
+times Vivado's own (1.111). `widemux`'s netlist counts as Vivado's own now: 276 tables,
+128 `MUXF7`, 64 `MUXF8` and 1,049 flip-flops against 275, 128, 64 and 1,049.
+
+### The Husky's bitstreams
+
+`--synthesis legacy`, which the Husky's builds pass, copies nothing. With this tree's
+release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4's `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `replicate`'s unit tests: a select read by 230 tables is two flip-flops, the copy's
+  inputs and parameters its original's, tables 0 to 114 on one and 115 to 229 on the
+  other with none lost; one read by 220, one fed from a pad and one marked `ASYNC_REG`
+  are not copied, one read by 300 is three; a reader through `~sel`, a pin the pass
+  cannot read bit by bit, stays on the original and is no error (the first version
+  refused the flow on a falling-edge flip-flop's `~clk`, which
+  `tests/fpga_dsp_vivado.rs` caught); the counts against Vivado's where the rule
+  agrees; names in their numbers' order.
+- `a_wide_fanout_is_copied_as_vivado_copies_it` (`tests/fpga_xray_synthesis.rs`):
+  `widemux` under the default synthesis has its two copies and Vivado's 1,049
+  flip-flops, under legacy none, the mapping proved either way.
+- `achieved.txt` and `netlist.txt` gain `copied`;
+  `a_wide_fanout_copied_makes_widemux_faster` holds `widemux` at least 2 % faster at
+  both levels and every other clock's seeds `fused`'s exactly.
+
+**Mutations**, each made by a script and put back: the threshold at 230 and at 200,
+the share at 128, a copy without its parameters, a copy without its `D`, the readers
+ordered as text, an `ASYNC_REG` flip-flop copied, one fed from a pad copied, the
+readers left on the original, an unreadable pin an error again, the pass under legacy
+too, and never. **Every one failed
+a test**: the thresholds and the share the counts, and the first two the split or the
+220 too; the copy's parameters and `D`, the order and the readers left the split's; the
+two exclusions their own, the unreadable pin its own; the last two the flow's.
+
+### Not done
+
+- **Vivado's own split**: its shares of 108 and 144 and its counts past 250 readers
+  are not reproduced; nothing in the corpus reaches them.
+- Measured on one design; the Husky Plus under `--synthesis vivado` would have many
+  more, its register bus and FIFO enables among them, and is not built that way.
 
 ## Wide multiplexers
 

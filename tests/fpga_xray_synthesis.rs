@@ -269,7 +269,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
     corpus.extend(["esad", "sad"]);
     for name in corpus {
         for build in [
-            "vivado", "before", "after", "area", "refined", "closing", "fused",
+            "vivado", "before", "after", "area", "refined", "closing", "fused", "copied",
         ] {
             assert!(
                 cells.contains(&(build.to_owned(), name.to_owned())),
@@ -283,6 +283,7 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
             "area" => "after",
             "closing" => "refined",
             "fused" => "closing",
+            "copied" => "fused",
             _ => continue,
         };
         let before = levels[&(earlier.to_owned(), name.clone(), clock.clone())];
@@ -291,6 +292,24 @@ fn the_fixture_has_every_design_and_after_is_no_deeper() {
             "{name} {clock}: {after} tables on the worst path in `{build}`, {before} in `{earlier}`"
         );
     }
+}
+
+/// **`widemux`'s select bits that each drive 256 tables are copied, as in
+/// Vivado's netlist** (`xray::replicate_wide_fanout`): two flip-flops each,
+/// half the tables moved to the copy, under the default synthesis; none under
+/// `--synthesis legacy`, which the Husky's builds use; and the mapping proved
+/// either way (the copies come after it, and `replicate`'s unit tests hold
+/// each copy to its original's inputs and parameters). Would catch the pass
+/// not run, run under legacy, or its threshold or share moved.
+#[test]
+fn a_wide_fanout_is_copied_as_vivado_copies_it() {
+    let vivado = synthesise("widemux", true);
+    let legacy = synthesise("widemux", false);
+    let r = &vivado.replicated;
+    assert_eq!((r.registers, r.copies, r.moved), (2, 2, 256), "{r:?}");
+    assert_eq!(vivado.count("FDRE"), 1049, "Vivado's 1049");
+    assert_eq!(legacy.replicated, Default::default());
+    assert_eq!(legacy.count("FDRE"), 1047);
 }
 
 /// **A reset the 7 series' flip-flops have only active high, computed by a

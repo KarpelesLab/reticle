@@ -362,7 +362,9 @@ pub struct FpgaOptions {
     /// [`VIVADO_MIN_ORDERING_CARRY_WIDTH`] and equalities between two from
     /// [`VIVADO_MIN_EQUALITY_CARRY_WIDTH`], each chain's carry in and out
     /// on the `CARRY4`'s own pins, and a sum of three terms on one chain
-    /// (`primitives::MapOptions::ternary_adders`); a register's hold lifted through the net
+    /// (`primitives::MapOptions::ternary_adders`); a flip-flop read by more
+    /// tables than Vivado leaves on one copied (`xray::replicate_wide_fanout`);
+    /// a register's hold lifted through the net
     /// it is behind, and what it loads with its enable low read as a
     /// don't-care (`synth::SynthOptions::register_loads`); a `case` as a tree
     /// of multiplexers over what it compares
@@ -450,6 +452,10 @@ pub struct FlowReport {
     pub mapping: Option<crate::synth::techmap::MapEquivalence>,
     /// What [`super::srl::extract`] made of the flip-flops.
     pub shift_registers: super::srl::SrlReport,
+    /// The flip-flops copied for their fanout, as Vivado's synthesis copies
+    /// them ([`super::xray::replicate_wide_fanout`]), under
+    /// [`FpgaOptions::vivado_synthesis`] on the 7 series.
+    pub replicated: super::xray::Replication,
 }
 
 impl FlowReport {
@@ -500,6 +506,14 @@ impl FlowReport {
                 "shift registers:\n  {} from {} flip-flop(s) in {} chain(s), {} flip-flop(s) \
                  nothing read and {} that were copies gone",
                 shift.shift_registers, shift.flip_flops, shift.chains, shift.unread, shift.merged
+            );
+        }
+        let copied = &self.replicated;
+        if copied.registers > 0 {
+            let _ = writeln!(
+                out,
+                "fanout:\n  {} flip-flop(s) copied {} time(s), {} reader pin(s) moved to a copy",
+                copied.registers, copied.copies, copied.moved
             );
         }
         if !self.device_cells.inverted.is_empty() {
@@ -708,6 +722,15 @@ pub fn synthesize_for(
                     diags.push(Diagnostic::error(e));
                     FlowError::Synthesis
                 })?;
+        // A flip-flop read by more tables than Vivado's synthesis leaves on
+        // one, copied as it copies it. See `xray::replicate_wide_fanout`.
+        if options.vivado_synthesis && device.family == "xc7" {
+            report.replicated = super::xray::replicate_wide_fanout(&mut design.modules[module])
+                .map_err(|e| {
+                    diags.push(Diagnostic::error(e));
+                    FlowError::Synthesis
+                })?;
+        }
     }
 
     report.netlist = cell_types(design, module);

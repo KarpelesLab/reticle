@@ -183,6 +183,7 @@ pub use lutram::LutRamModel;
 mod lutswap;
 mod parse;
 mod regional;
+mod replicate;
 mod sites;
 mod srl;
 mod thru;
@@ -232,6 +233,7 @@ pub use iologic::{IoLogicError, check_serdes_wiring};
 pub use regional::{
     RegionalClocks, RegionalError, check_regional_wiring, is_regional_kind, regional_buffers,
 };
+pub use replicate::{MOST_READERS, Replication, SHARE, copies, replicate_wide_fanout};
 pub use sites::SiteCoverage;
 pub use thru::{RouteThroughMode, RouteThroughReport, route_through_room};
 pub use timing::{clock_arrival, clock_arrival_ps, place_timing, place_timing_on_sites};
