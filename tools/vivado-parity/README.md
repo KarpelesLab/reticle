@@ -126,7 +126,10 @@ models or IP.
   achieves under Vivado's timer: Vivado's own flow at tightening periods, Reticle's
   placement and routes at several seeds, and Vivado's placement and routes of
   Reticle's netlist, or of its placement with the lookup tables' pins locked or free;
-  `achieved.py table --fixture` writes `testdata/fpga/vivado/qor/achieved.txt`.
+  `achieved.py table --fixture` writes `testdata/fpga/vivado/qor/achieved.txt`. The
+  netlists alone are its `vnetlist` (Vivado's synthesis) and `pnr` (Reticle's) stages,
+  both placed and routed by Vivado on periods neither meets, the clocks apart;
+  `achieved.py netlists` is their table.
 - `netlist_qor.sh`, `netlist_qor.tcl` and `netlist_qor.py` count what a netlist is
   made of and how deep its logic is, by Vivado's own counting: Vivado's
   `synth_design` of each design, or a Reticle build's netlist linked unplaced;

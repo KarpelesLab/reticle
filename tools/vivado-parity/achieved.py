@@ -18,6 +18,12 @@
         with each seed's figure; then each root's geometric mean against the
         first two columns. A root holds s<seed>/<design>/routes/<design>.result.
         With --fixture, the lines testdata/fpga/vivado/qor/achieved.txt holds.
+    achieved.py netlists [--fixture] vnetlist=<dir> <label>=<root>...
+        The netlists alone, each placed and routed by Vivado on cons3: per
+        design and clock, Vivado's own netlist (achieved.sh's vnetlist/) and
+        each root's median over its seeds (pnr/s<seed>/<design>/<design>.result),
+        then each root's geometric mean against Vivado's netlist. With
+        --fixture, achieved.txt's `vnetlist` and `pnr` lines.
 """
 import math, os, re, statistics, sys
 
@@ -139,6 +145,48 @@ def table(args):
                       + (f", {g(b):.3f} of Vivado's on the netlist" if b else ""))
 
 
+def netlists(args):
+    fixture = "--fixture" in args
+    vnet, runs = None, []
+    for a in args:
+        if a == "--fixture":
+            continue
+        k, v = a.split("=", 1)
+        if k == "vnetlist":
+            vnet = v
+        else:
+            runs.append((k, v))
+    designs = sorted(os.listdir(vnet))
+    ratios = {k: [] for k, _ in runs}
+    for d in designs:
+        own = clocks(f"{vnet}/{d}/{d}.result")
+        per = []
+        for _, root in runs:
+            seeds = sorted((s for s in os.listdir(root) if s.startswith("s")), key=lambda s: int(s[1:]))
+            per.append([(s[1:], clocks(f"{root}/{s}/{d}/{d}.result")) for s in seeds])
+        for c in sorted(own):
+            if fixture:
+                print(f"vnetlist {d} {c} {own[c]:.3f}")
+            row = f"| {d} | {c} | {own[c]:.3f} |"
+            for (k, _), p in zip(runs, per):
+                vals = [(s, r[c]) for s, r in p if c in r]
+                if fixture:
+                    for s, v in vals:
+                        print(f"pnr {k} {s} {d} {c} {v:.3f}")
+                if not vals:
+                    row += " - |"
+                    continue
+                med = statistics.median(v for _, v in vals)
+                row += f" {med:.3f} ({' '.join(f'{v:.2f}' for _, v in vals)}) |"
+                ratios[k].append(med / own[c])
+            if not fixture:
+                print(row)
+    if not fixture:
+        for k, r in ratios.items():
+            if r:
+                print(f"{k}: geometric mean {statistics.geometric_mean(r):.3f} of Vivado's netlist")
+
+
 if __name__ == "__main__":
     what = sys.argv[1]
     if what == "constraints":
@@ -147,5 +195,7 @@ if __name__ == "__main__":
         periods(float(sys.argv[2]), sys.argv[3:])
     elif what == "table":
         table(sys.argv[2:])
+    elif what == "netlists":
+        netlists(sys.argv[2:])
     else:
         sys.exit(__doc__)

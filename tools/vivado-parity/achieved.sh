@@ -12,13 +12,25 @@
 #                   criticality is against the longer of the period and the
 #                   longest path, so any period under what it achieves is the
 #                   same request.
-#   netlist/        Vivado's placement and routes of seed 1's netlist.
+#   cons3/          every clock at 0.80 of the best of own0 to own2, which none
+#                   of the two below meets: given slack, Vivado's placer stops.
+#   vnetlist/       Vivado's synthesis of each design on cons3, placed and routed
+#                   by Vivado with place_design and route_design alone.
+#   pnr/s<n>/       Reticle's netlist of each seed of NETLIST_SEEDS (default 1)
+#                   placed and routed the same way on cons3: beside vnetlist,
+#                   only the netlist differs.
 # A stage whose result is there and finished is not run again, so a second
 # build's figures can be had in <out> beside the first's own runs.
-# Then `achieved.py table own=<out>/own0,<out>/own1,<out>/own2
-# netlist=<out>/netlist <label>=<out>/reticle` is the table. RETICLE names the
-# binary, RETICLE_ARGS adds to its arguments, DEVICE is Reticle's name for the
-# part (xc7a100t-ftg256), JOBS how many run at once; all at the lowest priority.
+# Then `achieved.py table own=<out>/own0,<out>/own1,<out>/own2 <label>=<out>/reticle`
+# is the table, and `achieved.py netlists vnetlist=<out>/vnetlist
+# <label>=<out>/pnr` the netlists' own. (Until 2026-11-09 `netlist/` was seed 1's
+# netlist placed and routed on Reticle's own constraints, cons1's periods with
+# the clocks not declared asynchronous: Vivado then worked on paths between
+# clocks Reticle does not time, and stopped at a period met. That measured
+# `sad`'s ADC clock at 4.455 ns against 2.819 with the clocks apart.) RETICLE
+# names the binary, RETICLE_ARGS adds to its arguments, DEVICE is Reticle's name
+# for the part (xc7a100t-ftg256), JOBS how many run at once; all at the lowest
+# priority.
 here=$(cd "$(dirname "$0")" && pwd)
 . "${VIVADO:-$HOME/Xilinx/2026.1/Vivado}/settings64.sh" >/dev/null 2>&1
 if [ "$1" = --stage ]; then
@@ -57,5 +69,12 @@ for s in $seeds; do for d in $designs; do echo "$s $d"; done; done | xargs -P "$
     --constraints '"$out"'/cons1/$d.rcf --output-dir $dir --bitstream $dir/$d.bit \
     --timing-endpoints $dir/endpoints.txt --vivado-placement $dir/x.tcl '"$out"'/cons1/$d.v > $dir/reticle.log 2>&1
   [ ! -f $dir/x.tcl ] || sh '"$self"' --stage routes $dir/x $d '"$part"' $dir/routes'
-for d in $designs; do echo $d; done | xargs -P "$jobs" -I{} sh -c \
-  "[ ! -f '$out/reticle/s1/{}/x.tcl' ] || sh '$self' --stage netlist '$out/reticle/s1/{}/x' {} '$part' '$out/netlist/{}'"
+python3 -I "$here/achieved.py" periods 0.80 "$out/own0" "$out/own1" "$out/own2" > "$out/periods3.txt"
+python3 -I "$here/achieved.py" constraints "$corpus" "$out/cons3" "$out/periods3.txt"
+for d in $designs; do echo $d; done |
+  xargs -P "$jobs" -I{} sh "$self" --stage vnetlist "$out/cons3/{}" {} "$part" "$out/vnetlist/{}"
+for s in ${NETLIST_SEEDS:-1}; do for d in $designs; do echo "$s $d"; done; done | xargs -P "$jobs" -L 1 sh -c '
+  s=$0; d=$1; dir='"$out"'/pnr/s$s/$d
+  [ -f '"$out"'/reticle/s$s/$d/x.v ] || exit 0
+  mkdir -p $dir/in; ln -sf '"$out"'/reticle/s$s/$d/x.v $dir/in/x.v; cp '"$out"'/cons3/$d.xdc $dir/in/x.xdc
+  sh '"$self"' --stage netlist $dir/in/x $d '"$part"' $dir'

@@ -5,6 +5,9 @@
 #                   opt_design, place_design, phys_opt_design, route_design.
 #   netlist:        Reticle's netlist (`reticle fpga --vivado-placement <stem>.tcl`)
 #                   placed and routed by Vivado: place_design and route_design only.
+#   vnetlist:       Vivado's own netlist of <stem>.v placed and routed the same way:
+#                   synth_design, then place_design and route_design only, so that
+#                   beside `netlist` only the netlist differs.
 #   placement:      Reticle's cells where Reticle put them, routed by Vivado with each
 #                   lookup table's pins locked where Reticle's router put them.
 #   placement_free: the same with the pins free, Vivado's router choosing them.
@@ -73,6 +76,12 @@ if {$stage eq "own"} {
   opt_design
   place_design
   phys_opt_design
+  route_design
+} elseif {$stage eq "vnetlist"} {
+  read_verilog $stem.v
+  read_xdc $stem.xdc
+  synth_design -top $top -part $part
+  place_design
   route_design
 } else {
   set_property design_mode GateLvl [current_fileset]
