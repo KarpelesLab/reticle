@@ -888,3 +888,54 @@ fn vivados_router_is_faster_on_reticles_own_placements() {
         "Reticle's placements: {theirs:.3} with Vivado's routes, {ours:.3} with Reticle's"
     );
 }
+
+/// **Routed for each group's latest path, met or not, the corpus is half a
+/// percent faster, and Vivado's router is still faster on the same
+/// placements** (`docs/fpga-vivado-parity.md`, "Routing for the latest path,
+/// met or not"). `longest` is `through` with the router weighing every
+/// connection against its path group's latest path whatever the period: ten
+/// seeds, 0.9925 of `through` over the corpus, which a bootstrap over the seeds
+/// paired by placement puts at 0.988 to 0.998, no clock more than 0.7 % slower,
+/// `lutram32` 5.2 % faster; and `vfree`, Vivado's routes of the same
+/// placements, 0.9915 of it, where it was 0.984 of `through`. This holds the
+/// corpus at least 0.5 % faster than `through`, no clock more than 2 % slower,
+/// both ADC clocks no slower, ten seeds of each clock, and `vfree` still at
+/// least 0.5 % faster than `longest`. Would catch a regeneration that lost the
+/// measurement, swapped the builds or lost a seed; would not catch the router
+/// regressing since, nor closing the rest, which only `achieved.sh` again says.
+#[test]
+fn routing_for_the_latest_path_closes_part_of_the_routers_distance() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let mut logs = [0.0f64; 3];
+    for ((design, clock), (_, builds)) in &table {
+        let (through, longest, vfree) = (&builds["through"], &builds["longest"], &builds["vfree"]);
+        assert_eq!(longest.len(), 10, "{design} {clock}: seeds of `longest`");
+        let (before, after, theirs) = (median(through), median(longest), median(vfree));
+        assert!(
+            after <= before * 1.02,
+            "{design} {clock}: {after:.3} ns for the latest path against {before:.3}"
+        );
+        if clock == "adc_sampleclk" {
+            assert!(
+                after <= before,
+                "{design}'s ADC clock: {after:.3} for the latest path against {before:.3}"
+            );
+        }
+        logs[0] += before.ln();
+        logs[1] += after.ln();
+        logs[2] += theirs.ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after, theirs] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 0.995,
+        "Reticle's flow: {after:.3} for the latest path, {before:.3} through"
+    );
+    assert!(
+        theirs <= after * 0.995,
+        "Reticle's placements: {theirs:.3} with Vivado's routes, {after:.3} with Reticle's"
+    );
+}

@@ -571,6 +571,14 @@ pub struct Timing {
     /// The criticality, before [`Timing::exponent`], from which a sink is
     /// refined: see [`Timing::refine_rounds`].
     pub refine_above: f64,
+    /// Whether each pass's analysis, the first pass's seed and the
+    /// refinement weigh a connection against its path group's longest path
+    /// whether or not the period is met, rather than against the period or
+    /// the longest, whichever is longer. Only with [`Timing::paths`]. See
+    /// [`place::path_slack_against`].
+    ///
+    /// [`place::path_slack_against`]: crate::fpga::place::path_slack_against
+    pub against_longest: bool,
 }
 
 impl Timing {
@@ -604,6 +612,7 @@ impl Timing {
             keep_criticality: false,
             refine_rounds: 0,
             refine_above: 1.0,
+            against_longest: false,
         }
     }
 }
@@ -1266,7 +1275,8 @@ pub fn route(
         && let Some(paths) = &timing.paths
     {
         let wire = crate::fpga::place::estimated_wire(netlist, graph, placement, paths);
-        let (pins, _) = crate::fpga::place::path_criticality(netlist, paths, &wire);
+        let (pins, _, _) =
+            crate::fpga::place::path_slack_against(netlist, paths, &wire, timing.against_longest);
         for (which, terminals) in terminals.iter().enumerate() {
             for (k, sink) in terminals.sinks.iter().enumerate() {
                 criticality[which][k] = pins
@@ -1949,7 +1959,8 @@ fn analyse_paths(
             wire[sink.pin] = wire[sink.pin].max(ns);
         }
     }
-    let (pins, longest) = crate::fpga::place::path_criticality(netlist, paths, &wire);
+    let (pins, _, longest) =
+        crate::fpga::place::path_slack_against(netlist, paths, &wire, timing.against_longest);
     let criticality = terminals
         .iter()
         .map(|terminals| {
@@ -5877,20 +5888,17 @@ mod tests {
         );
     }
 
-    /// **With the placer's model, each clock is timed against its own
-    /// period.** Two clocks: a fast one of 1 ns whose path is one table
-    /// of 0.9 ns between two registers, and a slow one of 100 ns whose
-    /// path is two tables of 2 ns each. Against its period the fast path
-    /// is nearly full and the slow one nearly empty, so the fast path's
-    /// connections are critical and the slow path's are not. The single
-    /// domain of [`Timing::for_netlist`] says the opposite, its longest
-    /// path being the slow one, and so the assertion on it is that it
-    /// does. Would catch [`analyse`] not handing over to the model when
-    /// [`Timing::paths`] is set, or the criticality mapped back to the
-    /// wrong sinks; would not catch the model's own analysis being wrong,
-    /// which `place`'s tests pin.
-    #[test]
-    fn with_the_placers_model_each_clock_is_timed_against_its_own_period() {
+    /// Two clocks, as `with_the_placers_model_each_clock_is_timed_against_its_own_period`
+    /// has them: a fast one of 1 ns whose path is one table of 0.9 ns between two
+    /// registers (signals 0 and 1), and a slow one of 100 ns whose path is two
+    /// tables of 2 ns each (signals 2 to 4); every signal's terminals on one
+    /// node, so that no wire delays anything.
+    fn two_clocks() -> (
+        Netlist,
+        crate::fpga::place::PlaceTiming,
+        RoutingGraph,
+        Vec<Terminals>,
+    ) {
         use crate::fpga::place::{PathDomain, PinTiming, PlaceTiming};
         let mut netlist = Netlist {
             instances: Vec::new(),
@@ -6003,6 +6011,24 @@ mod tests {
                     .collect(),
             })
             .collect();
+        (netlist, paths, graph, terminals)
+    }
+
+    /// **With the placer's model, each clock is timed against its own
+    /// period.** Two clocks: a fast one of 1 ns whose path is one table
+    /// of 0.9 ns between two registers, and a slow one of 100 ns whose
+    /// path is two tables of 2 ns each. Against its period the fast path
+    /// is nearly full and the slow one nearly empty, so the fast path's
+    /// connections are critical and the slow path's are not. The single
+    /// domain of [`Timing::for_netlist`] says the opposite, its longest
+    /// path being the slow one, and so the assertion on it is that it
+    /// does. Would catch [`analyse`] not handing over to the model when
+    /// [`Timing::paths`] is set, or the criticality mapped back to the
+    /// wrong sinks; would not catch the model's own analysis being wrong,
+    /// which `place`'s tests pin.
+    #[test]
+    fn with_the_placers_model_each_clock_is_timed_against_its_own_period() {
+        let (netlist, paths, graph, terminals) = two_clocks();
         let routing = Routing::new(netlist.signals.len());
         let mut timing = Timing::for_netlist(&netlist, Vec::new(), 10);
         let (single, _) = analyse(&netlist, &graph, &terminals, &routing, &timing);
@@ -6018,6 +6044,33 @@ mod tests {
             assert!(
                 if fast { row[0] > 0.9 } else { row[0] < 0.1 },
                 "signal {signal}: {criticality:?}"
+            );
+        }
+    }
+
+    /// **[`Timing::against_longest`]: a period met is weighed against the
+    /// longest path.** The two clocks above: the slow one's path is 4.05 ns of
+    /// its 100, so against its period its connections are near nothing, and
+    /// with the flag every clock's latest path is as critical as the cap
+    /// allows, the slow one's included. Would catch the router's analysis not
+    /// passing the flag on (the slow path stays near nothing); would not catch
+    /// the refinement or the first pass's seed not passing it, which no test
+    /// here routes, nor what it does to a route, which
+    /// `tools/vivado-parity/achieved.sh` measured.
+    #[test]
+    fn the_router_weighs_a_met_period_against_the_longest_path() {
+        let (netlist, paths, graph, terminals) = two_clocks();
+        let routing = Routing::new(netlist.signals.len());
+        let mut timing = Timing::for_netlist(&netlist, Vec::new(), 10);
+        timing.paths = Some(paths);
+        let (period, _) = analyse(&netlist, &graph, &terminals, &routing, &timing);
+        assert!(period[2][0] < 0.1, "{period:?}");
+        timing.against_longest = true;
+        let (longest, _) = analyse(&netlist, &graph, &terminals, &routing, &timing);
+        for (signal, row) in longest.iter().enumerate() {
+            assert!(
+                (row[0] - timing.max_criticality).abs() < 1e-9,
+                "signal {signal}: {longest:?}"
             );
         }
     }

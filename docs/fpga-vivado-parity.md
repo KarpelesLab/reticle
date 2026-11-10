@@ -8866,8 +8866,191 @@ seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Che
 - **Routing the wide resets as Vivado does.** A late sink taking a wire is one sink of a
   net whose 34 latest sinks are routed at 0.49 to 0.60 ns; the
   whole tree's trunk has to be faster, which is a question for the negotiation, not
-  the refinement.
+  the refinement. *Read again in "Routing for the latest path, met or not": that net's
+  tree is no other shape in Vivado's routes (latest sink 562 ps against 597, median
+  424 against 421, 58 wires against 55), and the router had weighed those paths
+  against a period it met in its own model.*
 - **The shift registers' enables and the CDC FIFO's read**, `sad`'s other latest paths,
   not looked at beyond Vivado's `_srlopt`: a shift register's first stage taken out
   into a flip-flop is a netlist change Reticle does not make, and might be one for these
   paths; not tried.
+
+## Routing for the latest path, met or not
+
+**Asked: "The placements, side by side" found Vivado's router 0.984 of Reticle's on
+Reticle's own placements (`vfree` against `through`), about a quarter of what separates
+Reticle's flow from Vivado's. Connection by connection, on the latest paths, what does
+Vivado's router do that Reticle's does not — wires, a table's input, detours, wires
+another signal holds and whether that signal had slack, the negotiation's settings, the
+wide resets' trees, the delay model — and how much does each explain? Then close it.**
+Vivado 2026.1 at `xc7a100tftg256-3`, run on 2026-11-10 on 639b750e, whose builds are
+`through` seed for seed (`sad` seed 1 the same bitstream). **Everything here is Vivado's
+timer of Vivado's or Reticle's routes; nothing has been on a part.**
+
+### Connection by connection (measured)
+
+`routes.tcl` on `through`'s placements at seeds 1 to 3 of seven designs (`sad`, `esad`,
+`lutram32`, `carry_counter`, `counter64`, `crc32`, `widemux`), both ways, on `cons3`'s
+clocks (the `.xdc` swapped as `placement_free` has it): Vivado's routes with each table's
+pins free, and Reticle's fixed. Over the connections on Reticle's paths within 0.05 ns of
+each clock's latest, matched by net and cell (the build's netlist names a table's inputs
+as its pins were given), each set in one class by what Reticle's routes do with the way
+Vivado's took (a script, not committed):
+
+| class | connections | Reticle's over Vivado's, mean | in all |
+|---|---|---|---|
+| the same input and wires | 63 | +3.5 ps | 0.22 ns |
+| the same input, every wire of Vivado's way free in Reticle's routes | 10 | +22.5 | 0.23 |
+| the same input, a wire of Vivado's way held by another signal | 29 | +158.5 | 4.60 |
+| another input, Vivado's free | 3 | +126 | 0.38 |
+| another input, Vivado's held by another signal (in every case read, another input of the table) | 33 | +244.9 | 8.08 |
+
+Of the 29 whose way was held, the holder was on none of the hundred latest paths of any
+clock 24 times: **a signal with slack held the wire a late connection needed**, and the
+router did not take it. By fanout the gap per connection was +77 ps at one sink, +112
+at two to four, +76 at five to sixteen, +140 at 17 to 64 and +65 past 64.
+
+**The wide resets are not routed as another shape.** `sad` seed 1's 68-sink reset net
+from `master_counter_ff_and_2` reaches its latest sink in 597 ps in Reticle's routes and
+562 in Vivado's, its median in 421 and 424, with 55 wires against 58; its latest sink
+is the one "The placements, side by side" names (`SW2 ER1 NR1 NR1 CTRL` against `NR1
+GFAN CTRL`, the `NR1BEG1` held by `ready2trigger_1andup_19`).
+
+**Why a slack signal kept the wire: the router thought the path had slack too.**
+`achieved.sh` gives Reticle `cons1`'s periods, 0.85 of what Vivado's own flow achieved
+at first, and on ten of the twenty-one clocks Reticle's own model of its routes met
+them: at seed 1, `sad`'s `clk_usb` at 1.75 ns of 2.69 and its ADC clock at 2.49 of 3.19,
+`esad`'s 1.81 of 2.17 and 2.63 of 2.73, `lutram32` 1.83 of 2.08, `crc32` 2.05 of 2.77,
+`widemux` 2.34 of 2.89, `adders`, `fsm`, `barrel`, both of `gray_cdc`'s, `analyser_fifo`'s
+write clock. A connection's criticality is `1 - slack / span` with the span the period or
+the longest path, whichever is longer; with the period met, `sad`'s latest `clk_usb`
+path was 0.65 critical and 0.42 after the exponent of 2, no more than a connection with
+a third of the period to spare. Its connection from the CDC FIFO's write address to the
+distributed RAM's `WADR1` took 1,471 ps over `SR1 LH WW4 ER1 EL1 NR1 FAN_ALT FAN_BOUNCE`
+where Vivado's took 881 over `SE2 EE4 WR1`, a way `waddr_1` held part of. The model
+is not Vivado's timer (`lutram32` at 1.83 ns in it was 1.97 under Vivado's), so a period
+met in it is not met.
+
+**Another input of the same table** is not, read path by path, what its 8 ns says. A
+table's latest input is what matters, and Vivado gives the slow input to whichever has
+slack in its timer: on `carry_counter` seed 1 Reticle's routes put the comparison's
+`depth_1` on `A1` in 711 ps and Vivado's on `A4` in 425, but Vivado's put `depth_0` on
+`A1` in 718. Its paths through that table: Reticle's latest -0.500 ns of slack (through
+`A1`), Vivado's -0.420 (through `A1` too); `depth_1` is a `C5FF`, which launches later
+than `depth_0`'s `DFF`, and Vivado's timer gave it the fast input. Reticle's model has the
+launch, and the refinement searches only over wires nobody holds; why its matching did
+not find Vivado's was not traced further.
+
+### What was changed
+
+**Under the fitted model, the router weighs every connection against its path group's
+longest path, whether the period is met or not** (`route::Timing::against_longest`,
+`place::path_slack_against`): each pass's analysis, the first pass's seed from the
+placement and the refinement. The placer, the reports and the legacy model are as they
+were. A design whose model misses its period routes as before, to the picosecond
+(`carry_counter`, `bram_fifo`, `regfile_alu`, `fir8`, `analyser_fifo`'s read clock).
+
+### Before and after (measured)
+
+Medians of Vivado's achieved period over the seeds; the ratio of the twenty-one clocks'
+geometric means, with a bootstrap over the seeds: unpaired, and paired by seed, since
+the router alone changed and each seed's placement is the same in both (checked by
+`x.tcl`, which differs only in the tables' pins):
+
+| | seeds | ratio | unpaired, 5th-95th | paired, 5th-95th | paired, 2.5th-97.5th |
+|---|---|---|---|---|---|
+| `longest` against `through` | 1 to 10 | 0.9925 | 0.9854-1.0005 | 0.9890-0.9974 | 0.9880-0.9981 |
+| the same | 11 to 20 | 0.9963 | 0.9894-1.0056 | 0.9921-1.0029 | 0.9909-1.0041 |
+| the same | 1 to 20 | 0.9945 | 0.9900-1.0005 | 0.9917-0.9987 | 0.9912-0.9995 |
+| `vfree` against `through` | 1 to 10 | 0.9841 | 0.9773-0.9917 | 0.9797-0.9894 | |
+| `vfree` against `longest` | 1 to 10 | 0.9915 | 0.9841-0.9986 | | |
+
+**Half a percent over twenty seeds, beyond their spread paired and at its edge
+unpaired; and of the 1.6 % Vivado's router had on Reticle's placements, about half is
+left.** Per clock over twenty seeds, against `through`: `lutram32` 0.973, `esad`'s
+`clk_usb` 0.978, `widemux` 0.984, `crc32` 0.988, `esad`'s ADC clock 0.990, `mul18` 0.990,
+`barrel` 0.991, `srl_delay` 0.992, `fsm` 0.994, `sad`'s ADC clock 0.997, `counter64`
+0.998, `sad`'s `clk_usb` 1.000, and the slowest `analyser_fifo`'s write clock 1.011. At
+seeds 1 to 10, `sad`'s ADC clock 2.530 ns against 2.561 (Vivado's routes 2.456), `esad`'s
+2.636 against 2.659 (2.591), `sad`'s `clk_usb` 1.829 against 1.868, `esad`'s 1.793
+against 1.821, `lutram32` 1.958 against 2.064 (1.906).
+
+The same seven designs at seeds 1 to 3 again, connection by connection: 133 connections
+on Reticle's latest paths, +81.5 ps a connection over Vivado's (+97.8 before); a held wire
+18 times (+108.9, 15 of the holders slack), 29 before. The latest paths of the clocks,
+slack under Vivado's timer before, after, and Vivado's routes: `lutram32` seed 2 -0.592,
+-0.384, -0.336; `esad`'s `clk_usb` seed 1 -0.613, -0.526, -0.422; `widemux` seed 2 -0.850,
+-0.710, -0.667; and **one worse**, `sad`'s ADC clock seed 1, -0.686 to -0.887, where the
+route's own model also got later (2.49 ns to 2.63): a shift count to a table's `A2` in
+842 ps. The negotiation is a different one when every pass weighs those paths, and not
+every seed comes out ahead.
+
+### Runtime
+
+The route stage summed over the 170 builds: seeds 1 to 10, 436 s before and 617 after;
+seeds 11 to 20, 470 and 593 (26 to 42 % more). Per design, seeds 1 to 10, summed: `crc32`
+17 s to 46, `widemux` 57 to 92, `sad` 28 to 54, `barrel` 19 to 34, `fsm` 12 to 25,
+`lutram32` 10 to 22. The place stage, which nothing here changed and whose placements are
+the same, was 1,326 and 1,440 s and 1,458 and 1,366 s in the four batches, which is the
+machine's load.
+
+### Tried and not kept (measured)
+
+Each over seeds 1 to 10 on top of the change, against it (unpaired 5th-95th):
+
+| tried | against `longest` |
+|---|---|
+| four clean-ups rather than two | 1.0004 (0.9930-1.0078) |
+| eight passes of timing rather than four | 1.0029 (0.9956-1.0104) |
+| six refinement rounds from 0.5 rather than three from 0.7 | 1.0002 (0.9931-1.0078), route 852 s against 617 |
+| a held table input claimed from 0.3 rather than 0.548 | 0.9979 (0.9913-1.0063) |
+| the same from 0.1 | 1.0011 (0.9942-1.0106) |
+| the refinement taking up to three wires from other signals ("The placements, side by side"), 80 ps a wire | 0.9998 (0.9922-1.0071) |
+| exponent 3, its thresholds moved with it (0.924, 0.405) | 1.0079 (1.0006-1.0168) |
+| exponent 1, the same (0.974, 0.74) | 0.9992 (0.9943-1.0093) |
+
+and the claim from 0.3 without the change, 0.9965 of `through` (0.9903-1.0049). None is
+outside the spread; the claim was the closest, and is one more setting for nothing
+measured.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing changed.
+With this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `a_met_period_is_weighed_against_the_longest_path_when_asked` (`place`): a chain of two
+  paths, 1.25 and 1.05 ns at a period of 5, a quarter critical against the period and 1
+  and `1 - 0.2 / 1.25` against the longest, and the period's figures when not asked.
+- `the_router_weighs_a_met_period_against_the_longest_path` (`route`): two clocks, the
+  slow one's path 4.05 ns of its 100, under 0.1 critical against the period and at the
+  cap with the flag. The two clocks are `with_the_placers_model_each_clock_is_timed_against_its_own_period`'s,
+  made a helper of both.
+- `routing_for_the_latest_path_closes_part_of_the_routers_distance`
+  (`tests/fpga_xray_achieved.rs`) holds `longest` against `through` and `vfree`: the
+  corpus at least 0.5 % faster, no clock more than 2 % slower, both ADC clocks no slower,
+  ten seeds of each clock, and Vivado's routes still at least 0.5 % faster.
+
+**Mutations**, made by a script and put back: the flag ignored in `place`'s analysis,
+the longest taken without the flag, the router's analysis passing `false`; in the
+fixture, `through` and `longest` swapped, a seed of `longest` lost, `longest` given
+`through`'s figures and `vfree` given `longest`'s, each failing its test. **Not held by
+a unit test**: the refinement's and the first pass's seed's passing of the flag, and
+the flow's setting it, which the corpus under Vivado's timer measured (and the final
+binary built `sad`, `lutram32`, `crc32`, `widemux`, `esad`, `mul18`, `counter64` and
+`regfile_alu` at seed 3 to the same bitstreams as the measured one).
+
+### Not done
+
+- **The other half of the routers' distance.** What is left on the latest paths at seeds
+  1 to 3 is mostly a table's inputs (38 connections, +228 ps each by the connection, less
+  by the table) and wires a slack signal holds (18, +109); the refinement taking wires
+  from such signals changed nothing measurable on top of this.
+- **Why the refinement's matching does not find Vivado's inputs** for `carry_counter`'s
+  comparison table, whose model knows the `C5FF`'s later launch: not traced.
+- **The placer** weighs its paths against the period still. Whether it should as the
+  router now does was not measured.
+- None of it has been on a part.

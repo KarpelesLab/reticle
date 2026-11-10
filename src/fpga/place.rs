@@ -9926,8 +9926,30 @@ pub fn path_slack(
     timing: &PlaceTiming,
     wire: &[f64],
 ) -> (Vec<f64>, Vec<f64>, Vec<u64>) {
+    path_slack_against(netlist, timing, wire, false)
+}
+
+/// [`path_slack`], and with `against_longest` each connection's criticality
+/// and slack against its path group's longest path whether or not the period
+/// is met: what a timing-driven route weighs connections by
+/// (`route::Timing::against_longest`).
+///
+/// Against the period, a design whose paths meet it in the model has no
+/// connection near one: on `testdata/fpga/vivado/qor/` at the periods
+/// `achieved.sh` asks for, `sad`'s latest `clk_usb` path was 1.75 ns of
+/// 2.69 in the routed estimate, a criticality of 0.65 and 0.42 after the
+/// router's exponent, and a connection on it took a detour of 600 ps that
+/// Vivado's timer counts. The model's figure is not Vivado's, so a period
+/// met in it is not a period met.
+#[must_use]
+pub fn path_slack_against(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    wire: &[f64],
+    against_longest: bool,
+) -> (Vec<f64>, Vec<f64>, Vec<u64>) {
     let order = timing_order(netlist, timing);
-    let (critical, round) = analyse_paths(netlist, timing, &order, wire);
+    let (critical, round) = analyse_paths_against(netlist, timing, &order, wire, against_longest);
     (critical.pins, critical.slack, round.longest_ps)
 }
 
@@ -9941,6 +9963,19 @@ fn analyse_paths(
     timing: &PlaceTiming,
     order: &[Step],
     wire: &[f64],
+) -> (Criticality, TimingRound) {
+    analyse_paths_against(netlist, timing, order, wire, false)
+}
+
+/// [`analyse_paths`], each connection's criticality against its group's
+/// longest path alone when `against_longest` is set: see
+/// [`path_slack_against`].
+fn analyse_paths_against(
+    netlist: &Netlist,
+    timing: &PlaceTiming,
+    order: &[Step],
+    wire: &[f64],
+    against_longest: bool,
 ) -> (Criticality, TimingRound) {
     let pins = netlist.pins.len();
     let wires = wire;
@@ -10034,7 +10069,14 @@ fn analyse_paths(
             // was one of them, weighed as no worse than a path two ns late.
             // Against the longest, the latest path is 1 and the rest in
             // proportion, as VPR has it.
-            let span = period.max(longest);
+            //
+            // Or against the longest alone, met or not, when asked: see
+            // `path_slack_against`.
+            let span = if against_longest && longest > 0.0 {
+                longest
+            } else {
+                period.max(longest)
+            };
             let mut required = vec![f64::INFINITY; pins];
             for (index, inst) in netlist.instances.iter().enumerate() {
                 if !ends(index) {
@@ -11630,6 +11672,57 @@ mod tests {
             "{:?}",
             critical.pins
         );
+    }
+
+    /// **A period met is weighed against the longest path when asked.** The
+    /// chain split as above, 1.25 ns and 1.05, at a period of 5 ns: against
+    /// the period, the latest path's connections are `1 - 3.75 / 5`, a
+    /// quarter, which a router's exponent of 2 makes a sixteenth; with
+    /// `against_longest`, 1 and the second path `1 - 0.2 / 1.25`, as if the
+    /// period were missed. The router asks for it: on the timing corpus a
+    /// design the model said met its period routed its latest `clk_usb` path
+    /// as slack and took a detour of 590 ps that Vivado's timer counts. Would
+    /// catch the flag ignored (a quarter) or applied without being asked (the
+    /// placer's analysis changed); would not catch a router that does not pass
+    /// it, which `the_router_weighs_a_met_period_against_the_longest_path`
+    /// (`route`) holds.
+    #[test]
+    fn a_met_period_is_weighed_against_the_longest_path_when_asked() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        for (index, pin) in netlist.pins.iter().enumerate() {
+            if pin.instance == 2 {
+                timing.pins[index] = if pin.output {
+                    PinTiming::Start
+                } else {
+                    PinTiming::End
+                };
+            }
+        }
+        timing.domain[2] = PathDomain::Clock(0);
+        timing.launch[2] = 0.3;
+        timing.capture[2] = 0.05;
+        timing.periods = vec![5.0];
+        let wire = estimated_wire(&netlist, &graph, &placement, &timing);
+        let into = |instance: usize| {
+            netlist.instances[instance]
+                .pins
+                .iter()
+                .copied()
+                .find(|p| !netlist.pins[*p].output)
+                .unwrap()
+        };
+        let (period, _, longest) = path_slack_against(&netlist, &timing, &wire, false);
+        assert_eq!(longest, vec![1250]);
+        assert!((period[into(1)] - 0.25).abs() < 1e-9, "{period:?}");
+        assert_eq!(path_slack(&netlist, &timing, &wire).0, period);
+        let (against, slack, _) = path_slack_against(&netlist, &timing, &wire, true);
+        assert!((against[into(1)] - 1.0).abs() < 1e-9, "{against:?}");
+        assert!((against[into(2)] - 1.0).abs() < 1e-9, "{against:?}");
+        assert!(
+            (against[into(3)] - (1.0 - 0.2 / 1.25)).abs() < 1e-9,
+            "{against:?}"
+        );
+        assert!(slack[into(1)].abs() < 1e-9, "{slack:?}");
     }
 
     /// **A multicycle path is weighed against its own group's latest.**

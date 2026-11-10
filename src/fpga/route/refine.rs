@@ -174,7 +174,8 @@ fn analysis(
         }
     }
     let ns: Vec<f64> = wire.iter().map(|ps| ps / 1000.0).collect();
-    let (critical, slack, longest) = crate::fpga::place::path_slack(cx.netlist, paths, &ns);
+    let (critical, slack, longest) =
+        crate::fpga::place::path_slack_against(cx.netlist, paths, &ns, cx.timing.against_longest);
     let slack = slack.iter().map(|s| s * 1000.0).collect();
     (wire, critical, slack, longest)
 }

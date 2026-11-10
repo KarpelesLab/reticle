@@ -4777,6 +4777,10 @@ fn write_xc7_bitstream(
                             0
                         },
                         refine_above: reticle::fpga::xray::FITTED_REFINE_ABOVE,
+                        // And every connection weighed against its group's
+                        // latest path, whether the period is met or not: see
+                        // `place::path_slack_against`.
+                        against_longest: fitted,
                     })
             }),
             ..RouteOptions::default()

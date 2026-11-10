@@ -11,7 +11,12 @@
 #                   timed by Vivado (achieved.tcl's `routes`). Reticle's
 #                   criticality is against the longer of the period and the
 #                   longest path, so any period under what it achieves is the
-#                   same request.
+#                   same request. A period it meets is not: until 2026-11-10 the
+#                   router weighed such a design's latest paths as slack (and
+#                   the placer still does); the router's criticality is now
+#                   against the longest path whatever the period
+#                   (docs/fpga-vivado-parity.md, "Routing for the latest path,
+#                   met or not").
 #   cons3/          every clock at 0.80 of the best of own0 to own2, which none
 #                   of the two below meets: given slack, Vivado's placer stops.
 #   vnetlist/       Vivado's synthesis of each design on cons3, placed and routed
