@@ -983,3 +983,49 @@ fn a_flip_flops_mux_output_in_its_launch_makes_the_routes_faster() {
         "Reticle's flow: {after:.3} with the `MUX` output, {before:.3} without"
     );
 }
+
+/// The ratio of `after`'s geometric mean of each clock's median to `before`'s,
+/// twenty seeds of each, with every clock no more than `slower` times
+/// `before`'s median.
+fn twenty_seeds(table: &Table, before: &str, after: &str, slower: f64) -> f64 {
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (_, builds)) in table {
+        let (b, a) = (&builds[before], &builds[after]);
+        assert_eq!(b.len(), 20, "{design} {clock}: seeds of `{before}`");
+        assert_eq!(a.len(), 20, "{design} {clock}: seeds of `{after}`");
+        let (b, a) = (median(b), median(a));
+        assert!(
+            a <= b * slower,
+            "{design} {clock}: {a:.3} ns with `{after}` against {b:.3} with `{before}`"
+        );
+        logs[0] += b.ln();
+        logs[1] += a.ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [b, a] = logs.map(|l| (l / n).exp());
+    a / b
+}
+
+/// **With every `<L>MUX` output charged as Vivado charges it, the routed
+/// estimate is nearer Vivado's and the corpus no slower**
+/// (`docs/fpga-vivado-parity.md`, "The other `MUX` outputs"). `muxall` is
+/// `muxout` with a `MUXF7`'s, a `MUXF8`'s, a distributed RAM's lower half's and
+/// a carry chain's sum's sinks charged, a way's setups split by driver, `DMUX`
+/// no longer charged a last carry out's pip, and only a `DSP48E1` given back a
+/// `<L>5FF`'s cost: the same placements, twenty seeds, 0.9966 of `muxout`,
+/// which a bootstrap over the seeds paired by placement puts at 0.9925 to
+/// 0.9989, no clock more than 1.4 % slower. This holds the corpus at least
+/// 0.1 % faster, no clock more than 2.5 % slower, and twenty seeds of each.
+/// Would catch a regeneration that lost the measurement, swapped the builds or
+/// lost a seed; would not catch the estimate's error, which the fixture does
+/// not hold, nor the model regressing since, which only `achieved.sh` again
+/// says.
+#[test]
+fn the_other_mux_outputs_keep_the_routes_at_least_as_fast() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let ratio = twenty_seeds(&table, "muxout", "muxall", 1.025);
+    assert!(ratio <= 0.999, "`muxall` {ratio:.4} of `muxout`");
+}

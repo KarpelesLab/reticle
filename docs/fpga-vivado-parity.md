@@ -9164,11 +9164,15 @@ placement. Where a figure was a mean over both kinds of driver it is split:
 - **A flip-flop's bypass setup** is the figure from a `<L>Q`, 0.030 ns in a `SLICEL` and
   0.005 in a `SLICEM` at grade 3 (0.037 and 0.009 at 2, 0.055 and 0.022 at 1), where it
   was 0.082 and 0.058; from a `5FF` the launch adds the rest. The way's setups are the
-  old means: this read did not tell a way's flip-flops apart.
+  old means: this read did not tell a way's flip-flops apart. *Split since, the same
+  way ("The other `MUX` outputs").*
 - **A block's one setup** (a `DSP48E1`'s operands, a block RAM's, a distributed RAM's) is
   given the 0.112 back where a `5FF` drives the pin, since its figure was read where most
   drivers were `5FF`s (a `DSP48E1`'s 0.375 against `A`'s 0.362 from a `5FF`); a block
-  read from a `<L>Q` is still charged that figure.
+  read from a `<L>Q` is still charged that figure. *Right for the `DSP48E1` only, read
+  since ("The other `MUX` outputs"): a block RAM's 0.46 and a distributed RAM's write
+  enable's 0.384 are the figures from a `<L>Q` (Vivado's 0.442 and 0.384), so given it
+  back, a `5FF` reaching them was charged 0.11 too little.*
 - **A lookup table** keeps its 0.13 from any input, now 0.03 over Vivado's from a `<L>Q`
   and under it from a `5FF` by the same once `five_out` is added; every input of one
   table is charged it alike, so it ranks no input above another.
@@ -9257,10 +9261,188 @@ the refinement's check on the searches' figures alone; in the fixture, a seed of
   that launches a late path costs that path 0.11 ns under Vivado's timer. Whether the
   placer should keep late launches off the `5FF`s was not measured.
 - **The other `<L>MUX` outputs**: a `MUXF7`'s, a `MUXF8`'s and a distributed RAM's cost
-  their sinks as much, and are charged nothing.
+  their sinks as much, and are charged nothing. *Charged since, with a carry chain's
+  sum's, in "The other `MUX` outputs".*
 - **Wires a slack signal holds**: Vivado's ways for `carry_counter`'s table were held by
   two other `depth` bits. Not tried again here; "Routing for the latest path, met or
   not" tried taking them and measured nothing.
 - **The class counts of "Routing for the latest path, met or not"** were not taken
   again on these routes.
+- None of it has been on a part.
+
+## The other `MUX` outputs
+
+**Asked: "A flip-flop's `MUX` output" left three things. A `MUXF7`'s, a `MUXF8`'s and a
+distributed RAM's `<L>MUX` outputs cost their sinks as a `5FF`'s does and are charged
+nothing; a flip-flop's setup through a way is still the mean over both kinds of driver;
+and the placer times every flip-flop at 0.345 ns and fills the `5FF`s as though one bel
+were as fast as another. Measure the first two against Vivado's timer and charge them,
+checking the routed estimate's error over the corpus; teach the placer the third, and
+measure what it does to the clock.** (The placer is the next commit's.) Vivado 2026.1 at `xc7a100tftg256-3` (and `-2`, `-1`
+for the figures), run on 2026-11-10 on df207592. **Everything here is Vivado's timer of
+Reticle's placements and routes; nothing has been on a part.**
+
+### Each output, every sink (measured)
+
+`get_timing_arcs` of every cell of Reticle's routes of seed 1 of twelve designs (the
+nine of "A flip-flop's `MUX` output" read at every grade, and `barrel`, `regfile_alu`,
+`counter64`), at each of the three grades on the same routes, each input's arc or setup
+less the mean of the same class of sink from a `<L>Q`, a table's own output or a pad (the
+class: the cell, its slice, its pin, the arc's type and output, and for a flip-flop's
+`D` how it arrives), by what drives the `<L>MUX` output the sink is reached from (ns; a
+script, not committed):
+
+| driver | sinks | grade 3 | grade 2 | grade 1 |
+|---|---|---|---|---|
+| `<L>5FF` | 4,783 | 0.111 | 0.133 | 0.173 |
+| `MUXF7` (`barrel`) | 64 | 0.125 | 0.140 | 0.171 |
+| `MUXF8` (`widemux`) | 64 | 0.139 | 0.156 | 0.189 |
+| a distributed RAM's lower half, `<L>5LUT` | 723 | 0.143 | 0.166 | 0.210 |
+| a carry chain's sum, `O` | 207 | 0.125 | 0.142 | 0.176 |
+| a carry chain's `CO3` by `COUT` and `DMUX` | 145 | -0.002 | -0.003 | -0.004 |
+
+**The cost is the driver's and not the sink's**: a `5FF`'s is 0.107 to 0.118 at grade 3
+whatever it reaches, a table, a flip-flop's bypass, way or reset, a carry's `DI`, a
+`DSP48E1`'s `A` and `B`, a block RAM's address and data, a distributed RAM's write
+enable, address and data. A RAM's lower half is the same into a table and into a carry's
+`DI` (0.143, 0.142). No table's own lower half left its slice in these builds, and none of
+a carry's other carries out.
+
+**A block RAM's and a distributed RAM's setups are the figures from a `<L>Q`** (a block
+RAM's address 0.442 ns from one against the model's 0.46, its data 0.197 against 0.22, a
+distributed RAM's write enable 0.384 against 0.384, its data 0.159 against 0.169); a
+`DSP48E1`'s operands' 0.375 is the figure from a `5FF` (`A` 0.362 from one, 0.254 from a
+`<L>Q`). "A flip-flop's `MUX` output" gave all three the `5FF`'s cost back, which was
+right for the `DSP48E1` alone.
+
+### A way's setups (measured)
+
+The same arcs, a flip-flop's `D` through its lane's table, by driver (flip-flops in
+brackets):
+
+| slice, way | from a `<L>Q` or a pad, 3 / 2 / 1 | from a `<L>5FF`, 3 / 2 / 1 |
+|---|---|---|
+| `SLICEL`, `A6` | 0.065 / 0.073 / 0.093 (193) | 0.177 / 0.207 / 0.267 (181) |
+| `SLICEL`, `A1` to `A5` | 0.057 / 0.073 / 0.098 (25) | 0.174 / 0.206 / 0.262 (4) |
+| `SLICEM`, `A6` | 0.027 / 0.031 / 0.045 (120) | 0.138 / 0.164 / 0.219 (103) |
+| `SLICEM`, `A1` to `A5` | 0.033 / 0.041 / 0.062 (6) | none |
+
+**A split of 0.112, the `5FF`'s cost, as the bypass's was.** The model's 0.122 and 0.083
+were the means of "Filling slices" over both drivers: a way from a `<L>Q` was charged
+0.06 too much all along, and one from a `5FF`, whose launch carries its cost since "A
+flip-flop's `MUX` output", 0.06 too much since.
+
+### The `DMUX` wire (measured)
+
+With the outputs above charged, the routed estimate of `analyser_fifo` seed 1's read
+clock came out 4.59 ns where Vivado's timer had 4.457. Vivado's timer of Reticle's own
+latest path, through the same cells (`report_timing -through`, the script not
+committed), stage by stage: every connection within 0.02 ns of Reticle's figure but two,
+from the two carries' sums `s3` to tables, 0.629 and 0.59 ns in Reticle's model where
+Vivado's were 0.433 and 0.401, on the same routes. Both leave by `DMUX`, which the node model charged 192 ps: a node
+costs the dearest pip into it, and `COUT ->> DMUX`, a carry's last carry out leaving its
+slice, is the one pip into a slice's `<L>MUX` prjxray times (0.305 ns, 0.192 at the fitted
+model's share). So every `D5FF`, sum or lower half leaving by `DMUX` paid it.
+
+Each connection's routed figure in Reticle's model (its endpoints file) against
+Vivado's interconnect delay to the same pin (the arcs above), the same twelve builds, by
+the site pin Vivado says the driver leaves by:
+
+| leaves by | connections | Reticle's over Vivado's, mean |
+|---|---|---|
+| `<L>Q` | 4,808 | -0.006 |
+| a table's own output | 3,292 | -0.004 |
+| `AMUX`, `BMUX`, `CMUX` | 2,684 | -0.025 to -0.017 |
+| `DMUX`, from a `D5FF` or a sum | 476 | **+0.189** |
+| `DMUX` and `COUT`, from a `CO3` | 145 | -0.025 |
+
+### What was changed
+
+Under the fitted model (`--delay-model legacy`, which the Husky's builds pass, sets none
+of it):
+
+- **Each sink a `MUXF7`, a `MUXF8`, a distributed RAM's lower half or a carry's sum
+  reaches by its `<L>MUX` output is charged that output's cost**
+  (`Figures::mux_out`, `xray::place_timing_on_sites`): a table's inputs and a block's
+  `Through` pins in their arcs, a flip-flop's and a block's ends in their setups. A sink
+  the output reaches inside its slice, on its own node or by one pip (a `MUXF8` reading a
+  `MUXF7`, the lane's flip-flop reading a sum), is not charged. Which wire is which is
+  `sites::mux_exit`'s, beside the functions that name them.
+- **`DMUX` costs nothing in the node model, and a `CO3`'s sinks pay the pip instead**
+  (`sites::cout_exit`; `MuxOut::carry_co3`, 0.217 ns at grade 3: the 0.192 and the
+  -0.025 above), except the next chain's carry in. Grades 2 and 1 take the pip's figure in
+  the proportion the node model's share gives it at each (0.250, 0.323): derived, not
+  measured.
+- **A way's setups are the figures from a `<L>Q`**, 0.064 and 0.027 at grade 3 (0.073
+  and 0.032 at 2, 0.094 and 0.046 at 1).
+- **Only a `DSP48E1`'s setup gives a `5FF`'s cost back** (and the cost of any other
+  `<L>MUX` output that reaches it, which its figure has too).
+
+### Before and after, the model (measured)
+
+The same placements as `muxout` seed for seed (`x.tcl`'s cells checked on four builds),
+twenty seeds, the ratio of the twenty-one clocks' geometric means of the medians and a
+bootstrap over the seeds; and Reticle's routed estimate less Vivado's figure over the
+420 clocks and seeds (ns):
+
+| build | against `muxout` | paired, 5th-95th | unpaired, 5th-95th | error, mean | mean absolute | root mean square |
+|---|---|---|---|---|---|---|
+| `muxout` | | | | -0.048 | 0.072 | 0.100 |
+| the outputs, the ways and the blocks, `DMUX` as it was | 1.0009 | 0.9979-1.0033 | 0.9952-1.0059 | -0.006 | 0.054 | 0.076 |
+| **and `DMUX`, `muxall`** | **0.9966** | **0.9925-0.9989** | 0.9904-1.0008 | **-0.018** | **0.051** | **0.073** |
+
+Per clock, the estimate's mean error before and after: `widemux` -0.184 to -0.072,
+`counter64` -0.180 to -0.074, `analyser_fifo`'s write clock -0.131 to +0.003 and its read
+clock -0.128 to +0.075 (+0.120 without the `DMUX` change), `regfile_alu` -0.115 to
++0.048 (+0.102 without); worse, `adders` +0.011 to -0.061 and `lutram32` -0.003 to -0.021.
+`mul18` (-0.105) and `fir8` (+0.124) did not move. Per clock under Vivado's timer, paired:
+`sad`'s `clk_usb` 0.965, `carry_counter` 0.985, `barrel` 0.987 (beyond its spread),
+`analyser_fifo`'s read clock 0.992 (beyond), `esad`'s ADC clock 1.014 the slowest; none
+slower beyond its spread.
+
+### Runtime
+
+Summed over the 340 builds: `muxout` place 2,837 s and route 1,212; `muxall` 2,966 and
+1,200. `muxall` ran beside other work on a shared machine, and its place stage, whose
+placements are `muxout`'s, is 5 % over `muxout`'s: the machine's load.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
+applies: the node model is the legacy one and every figure the legacy one. With this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh` seed 4
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `a_cell_reached_by_a_slices_mux_output_pays_it` (`xray::timing`): a `MUXF7`, the
+  `MUXF8` on its node, a carry, a distributed RAM with a lower and an upper half, a table's
+  lower half and the `AFF` a sum reaches by a pip, in one tile; a table, a `DSP48E1`, an
+  `AFF` and a second carry's carry in reading them from the next.
+- `a_flip_flops_setup_is_the_one_for_how_its_data_arrives` (`xray::timing`) now holds a
+  `DSP48E1` given a `5FF`'s cost back and a block RAM not.
+- `a_slices_dmux_costs_nothing_under_the_vivado_model` (`tests/fpga_xray_timing.rs`),
+  against the database: every `DMUX` node free at grades 3 and 1, and at least the pip's
+  0.300 under the legacy model.
+- `the_other_mux_outputs_keep_the_routes_at_least_as_fast`
+  (`tests/fpga_xray_achieved.rs`) holds `muxall` against `muxout`: at least 0.1 % faster,
+  no clock 2.5 % slower, twenty seeds each.
+
+**Mutations**, made by a script and put back, each failing its test: the inside check
+dropped; a sum charged nothing; any lower half charged; a `MUXF7` charged the `MUXF8`'s
+figure; the `DSP48E1`'s give-back dropped, and given to every block; a table's input not
+charged; `MUXF8` unknown to `mux_exit`. In the fixture: a seed of `muxall` lost, its
+figures 1 % slower, `muxall` given `muxout`'s figures. **Not held by a test**:
+the figures themselves, which only Vivado's timer asks.
+
+### Not done
+
+- **A lookup table's 0.13**: now that every `<L>MUX` output's sinks are charged, the
+  figure from anything is 0.097 to 0.099, and the 0.13 overcharges every table 0.03. It
+  is the placer's figure too, so changing it changes every placement; not measured.
+- **A table's own lower half leaving its slice**, and a carry's `CO0` to `CO2`: not seen
+  in these builds, charged nothing.
+- **`mul18` and `fir8`**, whose estimates are 0.10 and 0.12 off either way and did not
+  move: not traced.
+- **The placer**, which still times every flip-flop alike.
 - None of it has been on a part.

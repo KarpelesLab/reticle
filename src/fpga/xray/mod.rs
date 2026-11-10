@@ -1175,6 +1175,9 @@ impl XrayDatabase {
                     let (from, to) = (graph.wire(pip.from), graph.wire(pip.to));
                     let tile_type = arch.tile_index_at(pip.tile.0, pip.tile.1);
                     match tile_type {
+                        // Charged at the carry's sinks instead: see
+                        // `sites::cout_exit`.
+                        Some(_) if sites::cout_exit(&from.name, &to.name) => 0,
                         Some(t) if !from.global && !to.global && from.tile == to.tile => {
                             let class = *classes
                                 .entry((t, node_name[pip.to as usize]))

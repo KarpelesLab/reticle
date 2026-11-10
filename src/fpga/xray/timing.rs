@@ -98,6 +98,7 @@
 
 use std::collections::HashSet;
 
+use super::sites::{self, MuxExit};
 use super::{DelayModel, SpeedGrade};
 use crate::fpga::Constraints;
 use crate::fpga::arch::{NodeId, RoutingGraph};
@@ -253,6 +254,10 @@ pub(crate) struct Figures {
     /// 0.097 at grade 3). Added to a `<L>5FF`'s launch by
     /// [`place_timing_on_sites`], since every one of its sinks pays it.
     pub five_out: f64,
+    /// The same for the other cells that leave a slice by an `<L>MUX` output
+    /// ([`MuxOut`]), charged to each sink outside the driver's slice by
+    /// [`place_timing_on_sites`].
+    pub mux_out: MuxOut,
     /// A flip-flop's data input's setup from a cell of its own slice, in a
     /// `SLICEL` and a `SLICEM` ([`SETUP_INSIDE`] at grade 3).
     pub setup_inside: (f64, f64),
@@ -264,6 +269,43 @@ pub(crate) struct Figures {
     /// `DATAIN` ([`idelay_arc`]).
     pub idelay: (f64, f64),
 }
+
+/// What a cell reached through a slice's `<L>MUX` output pays over one reached
+/// from a flip-flop's `<L>Q` or a lookup table's own output, ns, by what drives
+/// that output: Vivado's timer charges it to the arc or the setup of the cell
+/// it reaches, whatever that cell is, as it does a `<L>5FF`'s
+/// ([`Figures::five_out`]). Each is the mean over every such sink of the
+/// corpus's seed 1 (`docs/fpga-vivado-parity.md`, "The other `MUX` outputs").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MuxOut {
+    /// A `MUXF7`'s output, `F7AMUX` by `AMUX` and `F7BMUX` by `CMUX`, and a
+    /// distributed RAM's read through one.
+    pub f7: f64,
+    /// A `MUXF8`'s, by `BMUX`.
+    pub f8: f64,
+    /// A distributed RAM's read from a table's lower half (`O5`), a
+    /// `RAM32M`'s bit 0 or a `RAM32X1D` on the lower halves.
+    pub ram_o5: f64,
+    /// A carry chain's sum (`O`).
+    pub carry_o: f64,
+    /// Its last carry out, `CO3`, by `DMUX` to anything but the next
+    /// chain's carry in. Not in the cell's arc, as the others are (a table's
+    /// is 0.097 ns from it, against 0.22 from a sum), but in the connection:
+    /// prjxray's pip `COUT ->> DMUX`, which a node's delay cannot carry
+    /// without charging everything else that leaves by `DMUX`
+    /// (`sites::cout_exit`). The other carries out were not seen to leave a
+    /// slice, and are charged nothing.
+    pub carry_co3: f64,
+}
+
+/// No [`MuxOut`]: [`LEGACY`]'s.
+const NO_MUX_OUT: MuxOut = MuxOut {
+    f7: 0.0,
+    f8: 0.0,
+    ram_o5: 0.0,
+    carry_o: 0.0,
+    carry_co3: 0.0,
+};
 
 /// The figures every build had before [`VIVADO`]'s: [`DelayModel::Legacy`].
 pub(crate) const LEGACY: Figures = Figures {
@@ -301,6 +343,7 @@ pub(crate) const LEGACY: Figures = Figures {
     // `FF_SETUP` wherever it is.
     ff_launch_bels: [FF_LAUNCH; 4],
     five_out: 0.0,
+    mux_out: NO_MUX_OUT,
     setup_inside: (FF_SETUP, FF_SETUP),
     setup_bypass: (FF_SETUP, FF_SETUP),
     setup_way: (FF_SETUP, FF_SETUP),
@@ -369,6 +412,7 @@ pub(crate) const VIVADO: Figures = Figures {
     carry_arcs: Some(CARRY_ARCS),
     ff_launch_bels: [0.341, 0.313, 0.393, 0.361],
     five_out: FIVE_OUT,
+    mux_out: MUX_OUT,
     setup_inside: SETUP_INSIDE,
     setup_bypass: SETUP_BYPASS,
     setup_way: SETUP_WAY,
@@ -433,9 +477,16 @@ pub(crate) const VIVADO_2: Figures = Figures {
     carry_arcs: Some(CARRY_ARCS_2),
     ff_launch_bels: [0.379, 0.348, 0.433, 0.398],
     five_out: 0.133,
+    mux_out: MuxOut {
+        f7: 0.140,
+        f8: 0.156,
+        ram_o5: 0.166,
+        carry_o: 0.142,
+        carry_co3: 0.250,
+    },
     setup_inside: (-0.040, -0.090),
     setup_bypass: (0.037, 0.009),
-    setup_way: (0.147, 0.101),
+    setup_way: (0.073, 0.032),
     idelay: (0.679, 0.969),
 };
 
@@ -484,9 +535,16 @@ pub(crate) const VIVADO_1: Figures = Figures {
     carry_arcs: Some(CARRY_ARCS_1),
     ff_launch_bels: [0.456, 0.419, 0.518, 0.478],
     five_out: 0.173,
+    mux_out: MuxOut {
+        f7: 0.171,
+        f8: 0.189,
+        ram_o5: 0.210,
+        carry_o: 0.176,
+        carry_co3: 0.323,
+    },
     setup_inside: (-0.040, -0.102),
     setup_bypass: (0.055, 0.022),
-    setup_way: (0.201, 0.139),
+    setup_way: (0.094, 0.046),
     idelay: (0.815, 1.012),
 };
 
@@ -1929,8 +1987,35 @@ const SETUP_BYPASS: (f64, f64) = (0.030, 0.005);
 /// more (708 setups against 1,019); grade 2's 0.133 and grade 1's 0.173 the same arcs
 /// at those grades (five designs).
 const FIVE_OUT: f64 = 0.112;
-/// See [`SETUP_INSIDE`].
-const SETUP_WAY: (f64, f64) = (0.122, 0.083);
+/// [`Figures::mux_out`] at grade 3: Vivado 2026.1's arcs at `xc7a100tftg256-3`
+/// on Reticle's routes of seed 1 of twelve designs of the timing corpus (and
+/// grades 2 and 1 the same routes at those parts), each sink's arc or setup
+/// from such an output less the mean of its class's from a `<L>Q`, a table's
+/// own output or a pad: a `MUXF7`'s 0.125 ns (64 sinks, `barrel`), a
+/// `MUXF8`'s 0.139 (64, `widemux`), a distributed RAM's lower half's 0.143
+/// (723: tables and carry chains' `DI`, `regfile_alu`, `sad`, `esad`), a carry
+/// chain's sum's 0.125 (207: tables and flip-flops' resets, `analyser_fifo`,
+/// `regfile_alu`, `counter64`). A `<L>5FF`'s, measured the same way over
+/// the same arcs, is 0.111 ([`FIVE_OUT`]). And a last carry out's 0.217,
+/// in its connection: Vivado's interconnect delay to each of 145 sinks a
+/// `CO3` reached by `DMUX` (`regfile_alu`, `sad`, `esad`) over Reticle's own
+/// figure for the same route without `COUT ->> DMUX`. Grades 2 and 1 take it
+/// in the proportion the routes' model gives that pip at each grade
+/// ([`super::delay::OTHER_PER_MILLE`], 0.250 and 0.323): derived, not
+/// measured.
+const MUX_OUT: MuxOut = MuxOut {
+    f7: 0.125,
+    f8: 0.139,
+    ram_o5: 0.143,
+    carry_o: 0.125,
+    carry_co3: 0.217,
+};
+/// See [`SETUP_INSIDE`]: from a flip-flop's `<L>Q`, a pad or a table's own
+/// output, as [`SETUP_BYPASS`] is. *It was 0.122 and 0.083 until 2026-11-10,
+/// the means of "Filling slices" over both kinds of driver, which charged a
+/// way from a `<L>Q` 0.06 ns too much and, once a `<L>5FF`'s launch carried
+/// [`FIVE_OUT`], one from a `<L>5FF` 0.06 too much as well.*
+const SETUP_WAY: (f64, f64) = (0.064, 0.027);
 
 /// What a placement says of the cells' own figures, for a `model` that has
 /// them: a flip-flop's clock to `Q` by its slice and bel, 0.341 ns in a
@@ -1943,7 +2028,7 @@ const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 /// 0.005 through the slice's bypass pin from anything but a `<L>5FF`
 /// (`SETUP_BYPASS`), whose own launch carries the 0.112 more Vivado charges a
 /// setup it reaches (`Figures::five_out`);
-/// and 0.122 and 0.083 through the lane's table on one of `ways`, the ways the
+/// and 0.064 and 0.027 through the lane's table on one of `ways`, the ways the
 /// router is given ([`crate::fpga::place::route_throughs_needed`];
 /// `SETUP_WAY`). A way ends at the lane's `<L>FF` alone, and is open only
 /// when the lane's signals do not fit without it, so a flip-flop on that bel
@@ -1960,8 +2045,11 @@ const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 /// means over both*: the upper is the data from a `<L>5FF` (0.138 to 0.150 in
 /// a `SLICEL` against 0.026 to 0.037 from a `<L>Q`, 1,226 flip-flops of seed 1
 /// of twelve designs; `docs/fpga-vivado-parity.md`, "A flip-flop's `MUX`
-/// output"), which is now in the driver's launch. The way's figures are the
-/// old means still: that read did not tell a way's flip-flops apart. One figure
+/// output"), which is now in the driver's launch. *The way's figures were the
+/// old means still, since that read did not tell a way's flip-flops apart;*
+/// they are split the same way now, 0.065 and 0.027 from a `<L>Q` through the
+/// upper half against 0.177 and 0.137 from a `<L>5FF` (seed 1 of twelve
+/// designs, 632 flip-flops; "The other `MUX` outputs"). One figure
 /// for all, the 0.027 before placement, put a register-to-register path's end
 /// 0.05 ns early, and those were the endpoints the estimate was furthest under
 /// Vivado on. Nothing for [`DelayModel::Legacy`], whose one figure is every
@@ -2027,37 +2115,109 @@ pub fn place_timing_on_sites(
             });
         }
     }
-    // A block's setup (a `DSP48E1`'s operands, a block RAM's or a distributed
-    // RAM's inputs) is one figure for every driver, read where most of its
-    // drivers were `<L>5FF`s; such a driver's launch now carries what its
-    // `<L>MUX` output costs, so the block's figure takes it back off rather
-    // than charge it twice. A `DSP48E1`'s `A` from a `<L>5FF` is 0.362 ns
-    // under Vivado's timer and from a `<L>Q` 0.254, against 0.375 for both.
+    // Every other cell that leaves its slice by an `<L>MUX` output costs each
+    // sink it reaches that way what [`MuxOut`] says, which the sink's own arc
+    // or setup carries: a sink inside the slice, on a wire the output reaches
+    // without the `<L>MUX` (the `MUXF8` reading a `MUXF7`, the lane's
+    // flip-flop reading a sum), pays nothing. A `<L>5FF` is the exception, as
+    // every sink it has pays the same, and its launch carries it.
+    //
+    // A `DSP48E1`'s operands' one setup was read where most of its drivers
+    // were `<L>5FF`s, so it takes [`Figures::five_out`] back off: a
+    // `DSP48E1`'s `A` from a `<L>5FF` is 0.362 ns under Vivado's timer and
+    // from a `<L>Q` 0.254, against 0.375 for both. *That was done for a block
+    // RAM's and a distributed RAM's setups as well until 2026-11-10, read then
+    // as figures taken from `<L>5FF`s too; they are the figures from a `<L>Q`
+    // (a block RAM's address 0.442 ns from one against 0.46, a distributed
+    // RAM's write enable 0.384 against 0.384), and given it back, a `<L>5FF`
+    // reaching them was charged 0.11 too little.*
     let five_ff = |instance: usize| {
         netlist.instances[instance].kind == "ff"
             && placement
                 .site_of(instance)
                 .is_some_and(|site| graph.sites[site].bel.ends_with("5FF"))
     };
+    // What a sink reached by an `<L>MUX` from `driver`, a pin of a placed
+    // cell, pays; none for one reached by its own output's node or a pip
+    // from it.
+    let mux_out = |driver: usize, sink: usize| -> f64 {
+        let d = &netlist.pins[driver];
+        let Some(node) = placement
+            .site_of(d.instance)
+            .and_then(|site| graph.sites[site].pin(&d.role))
+        else {
+            return 0.0;
+        };
+        let lutram = {
+            let kind = netlist.instances[d.instance].kind.as_str();
+            kind == "lutram" || kind.starts_with("lutram_")
+        };
+        // A lookup table's own lower half was not seen to leave a slice in
+        // the corpus, and is charged nothing: not measured.
+        let cost = match sites::mux_exit(&graph.wire(node).name) {
+            Some(MuxExit::F7) => f.mux_out.f7,
+            Some(MuxExit::F8) => f.mux_out.f8,
+            Some(MuxExit::LowerHalf) if lutram => f.mux_out.ram_o5,
+            Some(MuxExit::CarrySum) => f.mux_out.carry_o,
+            // The next chain's carry in is the chain's own wire.
+            Some(MuxExit::CarryOut) => {
+                let s = &netlist.pins[sink];
+                if netlist.instances[s.instance].kind == "carry" && s.role == "ci" {
+                    return 0.0;
+                }
+                f.mux_out.carry_co3
+            }
+            _ => return 0.0,
+        };
+        let s = &netlist.pins[sink];
+        let inside = placement
+            .site_of(s.instance)
+            .and_then(|site| graph.sites[site].pin(&s.role))
+            .is_some_and(|to| {
+                to == node
+                    || graph
+                        .outgoing(node)
+                        .iter()
+                        .any(|pip| graph.pip(*pip).to == to)
+            });
+        if inside { 0.0 } else { cost }
+    };
     for (index, p) in netlist.pins.iter().enumerate() {
-        if p.output
-            || netlist.instances[p.instance].kind == "ff"
-            || !matches!(timing.pins.get(index), Some(PinTiming::End))
+        if p.output {
+            continue;
+        }
+        let Some(driver) = p.signal.and_then(|s| netlist.signals[s].driver) else {
+            continue;
+        };
+        let end = matches!(timing.pins.get(index), Some(PinTiming::End));
+        let mut extra = mux_out(driver, index);
+        if end
+            && netlist.instances[p.instance].kind == "dsp"
+            && (five_ff(netlist.pins[driver].instance) || extra > 0.0)
         {
+            extra -= f.five_out;
+        }
+        if extra == 0.0 {
             continue;
         }
-        let from_five = p
-            .signal
-            .and_then(|s| netlist.signals[s].driver)
-            .is_some_and(|d| five_ff(netlist.pins[d].instance));
-        if !from_five {
-            continue;
+        match timing.pins.get(index) {
+            Some(PinTiming::End) => {
+                if timing.pin_delays.capture.len() < netlist.pins.len() {
+                    timing.pin_delays.capture.resize(netlist.pins.len(), None);
+                }
+                let own = timing.pin_delays.capture[index].unwrap_or(timing.capture[p.instance]);
+                timing.pin_delays.capture[index] = Some(own + extra);
+            }
+            Some(PinTiming::Through) => {
+                let arcs: [f64; 8] =
+                    std::array::from_fn(|j| timing.through_at(p.instance, index, j) + extra);
+                if timing.pin_delays.through.len() < netlist.pins.len() {
+                    timing.pin_delays.through.resize(netlist.pins.len(), None);
+                }
+                timing.pin_delays.through[index] = Some(arcs);
+            }
+            _ => {}
         }
-        if timing.pin_delays.capture.len() < netlist.pins.len() {
-            timing.pin_delays.capture.resize(netlist.pins.len(), None);
-        }
-        let own = timing.pin_delays.capture[index].unwrap_or(timing.capture[p.instance]);
-        timing.pin_delays.capture[index] = Some(own - f.five_out);
     }
 }
 
@@ -2224,8 +2384,10 @@ mod tests {
     /// Would catch the ways ignored, a way taken for one it does not reach,
     /// the two slices' figures swapped, the slice read from the driver's bel,
     /// a `<L>5FF`'s launch without what its `<L>MUX` output costs its sinks
-    /// ([`Figures::five_out`]), and a block's setup charging it a second time
-    /// or given it back for a driver that is no `<L>5FF`. Would not catch a figure itself being wrong: those are Vivado's
+    /// ([`Figures::five_out`]), a `DSP48E1`'s setup charging it a second time
+    /// or given it back for a driver that is no `<L>5FF`, and a block RAM's
+    /// given it back at all (as it was until 2026-11-10). Would not catch a
+    /// figure itself being wrong: those are Vivado's
     /// means (`docs/fpga-vivado-parity.md`, "Filling slices"), which only a
     /// run against Vivado's timer asks, nor the router passing a way by,
     /// which `route_throughs_needed` opening only what a lane needs rules out.
@@ -2288,17 +2450,18 @@ mod tests {
         // flip-flops, 2 in tile 0's `SLICEL` `AFF` reading table 0, and 3, 4
         // and 5 in tile 1's `AFF`, `A5FF` and `SLICEM` `AFF` reading table 0.
         type Spec<'a> = (&'a str, &'a [(&'a str, usize, bool)]);
-        // And 6 and 7, blocks with a setup of their own, reading the `AFF`
-        // and the `A5FF` of tile 1.
-        let specs: [Spec<'_>; 8] = [
+        // And 6 and 7, `DSP48E1`s with a setup of their own, reading the `AFF`
+        // and the `A5FF` of tile 1, and 8 a block RAM reading the `A5FF`.
+        let specs: [Spec<'_>; 9] = [
             ("lut", &[("o", 0, true)]),
             ("lut", &[("o", 1, true)]),
             ("ff", &[("d", 0, false)]),
             ("ff", &[("d", 0, false), ("q", 2, true)]),
             ("ff", &[("d", 0, false), ("q", 3, true)]),
             ("ff", &[("d", 0, false)]),
-            ("blk", &[("d", 2, false)]),
-            ("blk", &[("d", 3, false)]),
+            ("dsp", &[("d", 2, false)]),
+            ("dsp", &[("d", 3, false)]),
+            ("bram", &[("d", 3, false)]),
         ];
         let mut netlist = Netlist {
             instances: Vec::new(),
@@ -2343,7 +2506,7 @@ mod tests {
                 pin: None,
             });
         }
-        let mut placement = Placement::new(8, graph.sites.len());
+        let mut placement = Placement::new(9, graph.sites.len());
         for (instance, (x, bel)) in [
             (0, "SLICEL_X0_A6LUT"),
             (1, "SLICEL_X0_A6LUT"),
@@ -2362,12 +2525,13 @@ mod tests {
         let mut pins = vec![PinTiming::Ignored; n];
         pins[block_pin(6)] = PinTiming::End;
         pins[block_pin(7)] = PinTiming::End;
+        pins[block_pin(8)] = PinTiming::End;
         let timing = PlaceTiming {
             pins,
-            cell: vec![0.0; 8],
-            launch: vec![0.0; 8],
-            capture: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4],
-            domain: vec![PathDomain::Untimed; 8],
+            cell: vec![0.0; 9],
+            launch: vec![0.0; 9],
+            capture: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4, 0.4],
+            domain: vec![PathDomain::Untimed; 9],
             cycles: Vec::new(),
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
@@ -2461,13 +2625,338 @@ mod tests {
             slow.launch[4],
             VIVADO_1.ff_launch_bels[1] + VIVADO_1.five_out
         );
-        // A block's one setup gives it back for the `A5FF`, whose launch
-        // carries it, and not for the `AFF`.
+        // A `DSP48E1`'s one setup gives it back for the `A5FF`, whose launch
+        // carries it, and not for the `AFF`; a block RAM's, which is the
+        // figure from a `<L>Q`, does not.
         assert_eq!(slow.pin_delays.capture[block_pin(6)], None);
         assert_eq!(
             slow.pin_delays.capture[block_pin(7)],
             Some(0.4 - VIVADO_1.five_out)
         );
+        assert_eq!(slow.pin_delays.capture[block_pin(8)], None);
+    }
+
+    /// **A cell reached through a slice's `<L>MUX` output pays what that
+    /// output costs, and one reached inside the slice does not.** Two tiles
+    /// of one type whose wires `sites` names as it names a slice's: in tile
+    /// 0 a `MUXF7`, the `MUXF8` reading it (on its output's own node), a
+    /// carry chain, a distributed RAM with one bit on a lower half and one on
+    /// an upper, a lookup table on a lower half, and the `AFF` its sum reaches
+    /// by a pip; in tile 1 a lookup table reading every one of those outputs,
+    /// a `DSP48E1` reading the `MUXF7` and an `AFF` reading the sum.
+    ///
+    /// And the last carry out (`COUT`) charged at the table, and not at a
+    /// second carry chain's carry in that reads it in tile 1.
+    ///
+    /// Would catch each output charged another's figure or none, the `MUXF8`
+    /// or the `AFF` beside the sum charged though inside, the next chain's
+    /// carry in or a lookup table's own lower half charged, the RAM's upper
+    /// half charged, a `DSP48E1` not given back [`Figures::five_out`], a sink
+    /// charged under the legacy model, and `sites` renaming a wire without
+    /// [`sites::mux_exit`] (the wires here are its namers'). Would not catch
+    /// a figure itself being wrong, which only Vivado's timer asks
+    /// (`docs/fpga-vivado-parity.md`, "The other `MUX` outputs").
+    #[test]
+    fn a_cell_reached_by_a_slices_mux_output_pays_it() {
+        use crate::fpga::arch::{Arch, BelDecl, PipDecl, TileType, WireDecl, WireRef};
+        let f7 = sites::wide_mux_wire("CLBLL_L", "F7A");
+        let f8 = sites::wide_mux_wire("CLBLL_L", "F8");
+        let sum = sites::carry_wire("CLBLL_L", "XOR_A");
+        let ram_lo = sites::lut5_wire("CLBLM_M", 'A');
+        let lut_lo = sites::lut5_wire("CLBLL_L", 'B');
+        let wires: Vec<String> = [
+            f7.as_str(),
+            f8.as_str(),
+            sum.as_str(),
+            "CLBLL_L_COUT",
+            "CLBLL_L_CARRY_CI",
+            ram_lo.as_str(),
+            "CLBLM_M_A",
+            lut_lo.as_str(),
+            "CLBLL_L_FF_A",
+            "CLBLL_L_DSP_A",
+            "CLBLL_L_A1",
+            "CLBLL_L_A2",
+            "CLBLL_L_A3",
+            "CLBLL_L_A4",
+            "CLBLL_L_A5",
+            "CLBLL_L_A6",
+            "CLBLL_L_B1",
+            "CLBLL_L_A",
+        ]
+        .iter()
+        .map(|w| (*w).to_owned())
+        .collect();
+        let mut arch = Arch::new("t", "test", 2, 1);
+        let mut tile = TileType::new("clb", "logic_tile", 8, 8);
+        for name in &wires {
+            tile.wires.push(WireDecl {
+                name: name.clone(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        tile.pips.push(PipDecl {
+            from: WireRef::local(&sum),
+            to: WireRef::local("CLBLL_L_FF_A"),
+            bits: Vec::new(),
+        });
+        let bel = |name: &str, kind: &str, pins: &[(&str, &str)]| {
+            let mut bel = BelDecl::new(name, kind);
+            for (role, wire) in pins {
+                bel.pins.push(((*role).to_owned(), WireRef::local(*wire)));
+            }
+            bel
+        };
+        tile.bels
+            .push(bel("SLICEL_X0_F7AMUX", "mux7", &[("o", f7.as_str())]));
+        tile.bels.push(bel(
+            "SLICEL_X0_F8MUX",
+            "mux8",
+            &[("i1", f7.as_str()), ("o", f8.as_str())],
+        ));
+        tile.bels.push(bel(
+            "SLICEL_X0_CARRY4",
+            "carry",
+            &[
+                ("s0", sum.as_str()),
+                ("co3", "CLBLL_L_COUT"),
+                ("ci", "CLBLL_L_CARRY_CI"),
+            ],
+        ));
+        tile.bels.push(bel(
+            "SLICEM_X0_RAM32M",
+            "lutram_m32",
+            &[("spo0", ram_lo.as_str()), ("spo1", "CLBLM_M_A")],
+        ));
+        tile.bels.push(bel(
+            "SLICEL_X0_B5LUT",
+            "lut",
+            &[("i0", "CLBLL_L_B1"), ("o", lut_lo.as_str())],
+        ));
+        tile.bels
+            .push(bel("SLICEL_X0_AFF", "ff", &[("d", "CLBLL_L_FF_A")]));
+        tile.bels.push(bel(
+            "SLICEL_X0_A6LUT",
+            "lut",
+            &[
+                ("i0", "CLBLL_L_A1"),
+                ("i1", "CLBLL_L_A2"),
+                ("i2", "CLBLL_L_A3"),
+                ("i3", "CLBLL_L_A4"),
+                ("i4", "CLBLL_L_A5"),
+                ("i5", "CLBLL_L_A6"),
+                ("o", "CLBLL_L_A"),
+            ],
+        ));
+        tile.bels
+            .push(bel("DSP48_X0", "dsp", &[("a0", "CLBLL_L_DSP_A")]));
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        arch.set_tile(1, 0, 0);
+        let graph = arch.build_graph();
+        let site = |x: u32, bel: &str| {
+            (0..graph.sites.len())
+                .find(|s| graph.sites[*s].tile == (x, 0) && graph.sites[*s].bel == bel)
+                .unwrap()
+        };
+        // Signals: 0 the `MUXF7`'s, 1 the `MUXF8`'s, 2 the sum, 3 the last
+        // carry out, 4 and 5 the RAM's lower and upper halves, 6 the table's
+        // lower half.
+        type Spec<'a> = (&'a str, u32, &'a str, &'a [(&'a str, usize, bool)]);
+        let specs: [Spec<'_>; 10] = [
+            ("mux7", 0, "SLICEL_X0_F7AMUX", &[("o", 0, true)]),
+            (
+                "mux8",
+                0,
+                "SLICEL_X0_F8MUX",
+                &[("i1", 0, false), ("o", 1, true)],
+            ),
+            (
+                "carry",
+                0,
+                "SLICEL_X0_CARRY4",
+                &[("s0", 2, true), ("co3", 3, true)],
+            ),
+            (
+                "lutram_m32",
+                0,
+                "SLICEM_X0_RAM32M",
+                &[("spo0", 4, true), ("spo1", 5, true)],
+            ),
+            ("ff", 0, "SLICEL_X0_AFF", &[("d", 2, false)]),
+            (
+                "lut",
+                1,
+                "SLICEL_X0_A6LUT",
+                &[
+                    ("i0", 0, false),
+                    ("i1", 1, false),
+                    ("i2", 2, false),
+                    ("i3", 3, false),
+                    ("i4", 4, false),
+                    ("i5", 5, false),
+                ],
+            ),
+            ("dsp", 1, "DSP48_X0", &[("a0", 0, false)]),
+            ("ff", 1, "SLICEL_X0_AFF", &[("d", 2, false)]),
+            ("lut", 0, "SLICEL_X0_B5LUT", &[("o", 6, true)]),
+            ("carry", 1, "SLICEL_X0_CARRY4", &[("ci", 3, false)]),
+        ];
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: (0..7)
+                .map(|n| Signal {
+                    name: format!("s{n}"),
+                    driver: None,
+                    sinks: Vec::new(),
+                })
+                .collect(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut placement = Placement::new(specs.len(), graph.sites.len());
+        for (instance, (kind, x, at, pins)) in specs.iter().enumerate() {
+            let mut own = Vec::new();
+            for (role, signal, output) in *pins {
+                let pin = netlist.pins.len();
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+                if *output {
+                    netlist.signals[*signal].driver = Some(pin);
+                } else {
+                    netlist.signals[*signal].sinks.push(pin);
+                }
+                own.push(pin);
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: format!("{kind}{instance}"),
+                primitive: kind.to_uppercase(),
+                kind: (*kind).to_owned(),
+                pins: own,
+                pin: None,
+            });
+            placement.place(instance, site(*x, at));
+        }
+        // The far table reads signal 6 too, on a pin of its own.
+        let lut_lo_sink = netlist.pins.len();
+        netlist.pins.push(NetPin {
+            instance: 5,
+            port: "I6".to_owned(),
+            bit: 0,
+            role: "i0".to_owned(),
+            output: false,
+            signal: Some(6),
+            constant: None,
+        });
+        netlist.instances[5].pins.push(lut_lo_sink);
+        netlist.signals[6].sinks.push(lut_lo_sink);
+        let n = netlist.pins.len();
+        let mut pins = vec![PinTiming::Ignored; n];
+        for (index, p) in netlist.pins.iter().enumerate() {
+            if !p.output {
+                pins[index] = match netlist.instances[p.instance].kind.as_str() {
+                    "ff" | "dsp" => PinTiming::End,
+                    _ => PinTiming::Through,
+                };
+            }
+        }
+        let timing = PlaceTiming {
+            pins,
+            cell: vec![0.1; specs.len()],
+            launch: vec![0.0; specs.len()],
+            capture: vec![0.4; specs.len()],
+            domain: vec![PathDomain::Untimed; specs.len()],
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            periods: Vec::new(),
+            wire: (0.0, 0.0, 0.0),
+            rounds: 0,
+            weight: 0.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            frozen: Vec::new(),
+            pin_domain: Vec::new(),
+            pin_delays: PinDelays {
+                capture: vec![None; n],
+                ..PinDelays::default()
+            },
+            local_wire: None,
+            local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
+        };
+        let on = |model: DelayModel| {
+            let mut timing = timing.clone();
+            place_timing_on_sites(
+                &mut timing,
+                model,
+                SpeedGrade::Three,
+                &netlist,
+                &graph,
+                &placement,
+                &[],
+            );
+            timing
+        };
+        let pin = |instance: usize, role: &str| {
+            *netlist.instances[instance]
+                .pins
+                .iter()
+                .find(|p| netlist.pins[**p].role == role)
+                .unwrap()
+        };
+        let through = |timing: &PlaceTiming, pin: usize| {
+            timing.pin_delays.through.get(pin).copied().flatten()
+        };
+        let capture = |timing: &PlaceTiming, pin: usize| {
+            timing.pin_delays.capture.get(pin).copied().flatten()
+        };
+        let t = on(DelayModel::Vivado);
+        let m = MUX_OUT;
+        // The far table: each output's figure, and none from the RAM's upper
+        // half or a table's own lower half.
+        let table: Vec<Option<[f64; 8]>> = ["i0", "i1", "i2", "i3", "i4", "i5"]
+            .iter()
+            .map(|role| through(&t, pin(5, role)))
+            .collect();
+        assert_eq!(
+            table,
+            vec![
+                Some([0.1 + m.f7; 8]),
+                Some([0.1 + m.f8; 8]),
+                Some([0.1 + m.carry_o; 8]),
+                Some([0.1 + m.carry_co3; 8]),
+                Some([0.1 + m.ram_o5; 8]),
+                None,
+            ]
+        );
+        assert_eq!(through(&t, lut_lo_sink), None);
+        // The last carry out into the next chain's carry in is the chain's.
+        assert_eq!(through(&t, pin(9, "ci")), None);
+        // Inside the slice: the `MUXF8` on the `MUXF7`'s own node, and the
+        // `AFF` the sum reaches by a pip, which has its setup from inside.
+        assert_eq!(through(&t, pin(1, "i1")), None);
+        assert_eq!(capture(&t, pin(4, "d")), Some(SETUP_INSIDE.0));
+        // Outside: the far `AFF`'s bypass setup and the sum's cost.
+        assert_eq!(capture(&t, pin(7, "d")), Some(SETUP_BYPASS.0 + m.carry_o));
+        // A `DSP48E1`'s setup, a figure from a `<L>5FF`, gives that back.
+        assert_eq!(capture(&t, pin(6, "a0")), Some(0.4 + m.f7 - FIVE_OUT));
+        // The legacy model charges none of it.
+        let legacy = on(DelayModel::Legacy);
+        assert!(legacy.pin_delays.through.iter().all(Option::is_none));
+        assert!(legacy.pin_delays.capture.iter().all(Option::is_none));
     }
 
     /// **A `LUT6_2`'s inputs reach the half that reads them.** One table,

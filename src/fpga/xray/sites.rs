@@ -1030,8 +1030,64 @@ fn wide_mux_bels(tile_type: &str) -> Vec<ExtraBel> {
 /// wire anywhere in `artix7/` contains `_CARRY_` (checked with a `grep`
 /// over every `segbits`, `ppips` and `tileconn` file of the pinned
 /// commit), so the names cannot collide with one.
-fn carry_wire(wires: &str, what: &str) -> String {
+pub(super) fn carry_wire(wires: &str, what: &str) -> String {
     format!("{wires}_CARRY_{what}")
+}
+
+/// What leaves a slice by an `<L>MUX` output from a wire this module invents,
+/// for the timing model, which charges a sink reached so
+/// (`timing::MuxOut`). A `<L>5FF`'s `Q` leaves by one too, and is not here:
+/// every sink it has pays, which its launch carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MuxExit {
+    /// A `MUXF7`'s output ([`wide_mux_wire`]).
+    F7,
+    /// A `MUXF8`'s.
+    F8,
+    /// A table's lower half, `O5` ([`lut5_wire`]).
+    LowerHalf,
+    /// A carry chain's sum, `O` ([`carry_wire`]'s `XOR_<L>`).
+    CarrySum,
+    /// Its last carry out, `CO3`, which leaves by `DMUX` from the
+    /// database's own `COUT` ([`carry_out_wire`]); see [`cout_exit`].
+    CarryOut,
+}
+
+/// Which [`MuxExit`] `wire`, a tile wire's name, is, if any.
+pub(super) fn mux_exit(wire: &str) -> Option<MuxExit> {
+    if ["F7A", "F7B"]
+        .iter()
+        .any(|mux| wire.ends_with(&wide_mux_wire("", mux)))
+    {
+        Some(MuxExit::F7)
+    } else if wire.ends_with(&wide_mux_wire("", "F8")) {
+        Some(MuxExit::F8)
+    } else if SLICE_LETTERS
+        .iter()
+        .any(|letter| wire.ends_with(&lut5_wire("", letter)))
+    {
+        Some(MuxExit::LowerHalf)
+    } else if wire.contains(&carry_wire("", "XOR_")) {
+        Some(MuxExit::CarrySum)
+    } else if wire.ends_with(&carry_out_wire("", 'D')) {
+        Some(MuxExit::CarryOut)
+    } else {
+        None
+    }
+}
+
+/// Whether a pip from the tile wire `from` to `to` is a slice's last carry
+/// out leaving by `DMUX` (`COUT ->> DMUX`): the one pip into a slice's
+/// `<L>MUX` that prjxray times (0.305 ns), and that only a carry's `CO3`
+/// takes. A node's delay is the dearest pip into it, so timed as a pip it
+/// made `DMUX` cost 0.19 ns under the fitted model whatever left by it: a
+/// `D5FF`'s `Q`, a sum, a lower half. Vivado's timer charges a connection
+/// through `DMUX` from those what it charges one through `AMUX` (Reticle's
+/// figure over Vivado's +0.189 ns on 476 connections, against -0.02 by the
+/// other three), and one from `COUT` what the pip says (-0.025, 145); the
+/// timing model charges that at the carry's sinks (`timing::MuxOut`).
+pub(super) fn cout_exit(from: &str, to: &str) -> bool {
+    from.ends_with(&carry_out_wire("", 'D')) && to.ends_with("_DMUX")
 }
 
 /// The pins of a slice's `CARRY4`, in the roles `xc7.dev`'s

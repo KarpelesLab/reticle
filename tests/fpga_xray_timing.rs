@@ -253,6 +253,77 @@ fn a_node_costs_its_class_under_the_vivado_model() {
     }
 }
 
+/// **With the model fitted to Vivado, a slice's `DMUX` costs nothing, as its
+/// `AMUX` does; with the legacy model it costs prjxray's `COUT ->> DMUX`.**
+/// Over the same corner, every node of a slice tile's `DMUX` wire (both
+/// slices, `CLBLL` and `CLBLM`) at grades 3 and 1, and the same nodes under
+/// the legacy model, each at least the pip's 0.305 ns less a picosecond.
+/// The pip is a carry's last carry out leaving its slice, and a node's delay
+/// is the dearest pip into it, so it made `DMUX` cost 0.19 ns at grade 3
+/// whatever left by it: Reticle's figure over Vivado's was +0.189 ns on 476
+/// connections a `D5FF` or a sum drove through `DMUX`, against -0.02 through
+/// the other three (`docs/fpga-vivado-parity.md`, "The other `MUX`
+/// outputs"). The carry's sinks are charged it instead
+/// (`xray::timing::MuxOut::carry_co3`).
+///
+/// Would catch the pip charged to the node again under the fitted model, and
+/// the legacy model's delays changed; would not catch the figure the carry's
+/// sinks are charged being wrong, which only Vivado's timer asks.
+#[test]
+fn a_slices_dmux_costs_nothing_under_the_vivado_model() {
+    let Some(root) = chipdb() else { return };
+    let db = XrayDatabase::open(&DiskFiles, &root, DEVICE, &XrayOptions::new()).unwrap();
+    let mut options = XrayOptions::new();
+    options.region = Some(GridRegion::new(0, 120, 24, 160));
+    let fabric = db.load(&DiskFiles, &options).unwrap();
+    let graph = fabric.arch.build_graph();
+    let dmux: Vec<usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, wire)| {
+            matches!(
+                wire.name.as_str(),
+                "CLBLL_L_DMUX" | "CLBLL_LL_DMUX" | "CLBLM_L_DMUX" | "CLBLM_M_DMUX"
+            )
+        })
+        .map(|(index, _)| index)
+        .collect();
+    let kinds: std::collections::BTreeSet<&str> =
+        dmux.iter().map(|n| graph.nodes[*n].name.as_str()).collect();
+    assert_eq!(kinds.len(), 4, "{kinds:?}");
+    for grade in [SpeedGrade::Three, SpeedGrade::One] {
+        let delays = db
+            .node_delays(&DiskFiles, &fabric.arch, &graph, DelayModel::Vivado, grade)
+            .unwrap();
+        for n in &dmux {
+            assert_eq!(
+                delays[*n], 0,
+                "{:?} {}",
+                graph.nodes[*n].tile, graph.nodes[*n].name
+            );
+        }
+    }
+    let legacy = db
+        .node_delays(
+            &DiskFiles,
+            &fabric.arch,
+            &graph,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        )
+        .unwrap();
+    for n in &dmux {
+        assert!(
+            legacy[*n] >= 299,
+            "{:?} {} {}",
+            graph.nodes[*n].tile,
+            graph.nodes[*n].name,
+            legacy[*n]
+        );
+    }
+}
+
 /// What `reticle fpga` prints of a timing-driven build of the Basys 3's blink
 /// (`examples/basys3/`, a 10 ns clock on the `xc7a35t-cpg236`, whose device
 /// declares grade 1), with `extra` arguments: its standard error.

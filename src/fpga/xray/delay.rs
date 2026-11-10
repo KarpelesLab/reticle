@@ -31,6 +31,10 @@
 //! `_CARRY_`), whose delay Vivado puts in the cell's arc and not in a wire.
 //! Charged as the legacy model's untimed pip, they made a lookup table's
 //! output through its slice's multiplexer 0.11 ns dearer than Vivado has it.
+//! *And `DMUX` too, read since*: the one timed pip into it, a carry's
+//! `COUT ->> DMUX`, made it cost 0.19 ns whatever left by it, where Vivado
+//! charges that only a carry's last carry out; it is charged at that carry's
+//! sinks instead (`sites::cout_exit`).
 //!
 //! Each branch more than one leaving a wire on a connection's way adds
 //! [`BRANCH_PS`]: the load of the other branches, which Vivado charges and a sum
