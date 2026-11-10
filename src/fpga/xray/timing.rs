@@ -178,20 +178,33 @@ pub(crate) const WIRE: (f64, f64, f64) = (0.31, 0.048, 0.025);
 pub(crate) struct Figures {
     /// [`LUT`].
     pub lut: f64,
+    /// What every path's capture is charged over its setup and the clock's
+    /// arrival at its two ends, ns: Vivado's clock uncertainty (0.035 at every
+    /// grade on these parts) and the clock's pessimism its common path does
+    /// not remove ([`CLOCK_MARGIN`]). None for [`LEGACY`].
+    pub clock_margin: f64,
     /// [`CARRY`], for a pin pair [`Figures::carry_arcs`] has no figure for.
     pub carry: f64,
     /// [`MUXF7`].
     pub muxf7: f64,
     /// [`MUXF8`].
     pub muxf8: f64,
+    /// A `MUXF7`'s and a `MUXF8`'s select to output, under
+    /// [`DelayModel::Vivado`]: [`Figures::muxf7`] and [`Figures::muxf8`] are
+    /// the data inputs'.
+    pub muxf_select: (f64, f64),
     /// [`FF_LAUNCH`].
     pub ff_launch: f64,
     /// [`FF_SETUP`]: the data input's, and every input's without
     /// [`Figures::ff_setup_enable`].
     pub ff_setup: f64,
-    /// A flip-flop's clock enable's setup and its reset's, or `None` for
-    /// [`Figures::ff_setup`].
+    /// A flip-flop's clock enable's setup and its reset's in a `SLICEL`, or
+    /// `None` for [`Figures::ff_setup`]; before placement says the slice, every
+    /// flip-flop's.
     pub ff_setup_enable: Option<(f64, f64)>,
+    /// The same two in a `SLICEM`, which [`place_timing_on_sites`] gives a
+    /// flip-flop placed in one.
+    pub ff_setup_enable_m: (f64, f64),
     /// [`DSP_COMB`].
     pub dsp_comb: f64,
     /// [`DSP_LAUNCH_A`].
@@ -200,8 +213,15 @@ pub(crate) struct Figures {
     pub dsp_launch_m: f64,
     /// [`DSP_LAUNCH_P`].
     pub dsp_launch_p: f64,
-    /// [`DSP_SETUP_REG`].
+    /// [`DSP_SETUP_REG`]: an operand's setup at its own register, `A`'s under
+    /// [`DelayModel::Vivado`], and every input's at the block's input
+    /// registers under [`DelayModel::Legacy`].
     pub dsp_setup_reg: f64,
+    /// `B`'s setup at its own register, under [`DelayModel::Vivado`].
+    pub dsp_setup_b: f64,
+    /// What a block's `PCOUT` takes over its `P` from the `M` register and
+    /// from the `P` register, ns, under [`DelayModel::Vivado`].
+    pub dsp_pcout: (f64, f64),
     /// [`DSP_SETUP_M`].
     pub dsp_setup_m: f64,
     /// [`DSP_SETUP_P`].
@@ -310,17 +330,22 @@ const NO_MUX_OUT: MuxOut = MuxOut {
 /// The figures every build had before [`VIVADO`]'s: [`DelayModel::Legacy`].
 pub(crate) const LEGACY: Figures = Figures {
     lut: LUT,
+    clock_margin: 0.0,
     carry: CARRY,
     muxf7: MUXF7,
     muxf8: MUXF8,
+    muxf_select: (MUXF7, MUXF8),
     ff_launch: FF_LAUNCH,
     ff_setup: FF_SETUP,
     ff_setup_enable: None,
+    ff_setup_enable_m: (FF_SETUP, FF_SETUP),
     dsp_comb: DSP_COMB,
     dsp_launch_a: DSP_LAUNCH_A,
     dsp_launch_m: DSP_LAUNCH_M,
     dsp_launch_p: DSP_LAUNCH_P,
     dsp_setup_reg: DSP_SETUP_REG,
+    dsp_setup_b: DSP_SETUP_REG,
+    dsp_pcout: (0.0, 0.0),
     dsp_setup_m: DSP_SETUP_M,
     dsp_setup_p: DSP_SETUP_P,
     dsp_cascade: DSP_CASCADE,
@@ -355,22 +380,35 @@ pub(crate) const LEGACY: Figures = Figures {
 /// **Measured**, each the mean over every cell of the corpus
 /// `testdata/fpga/vivado/timing/arcs.txt` was written from, on Reticle's own
 /// placements (the slow corner's maximum of `get_timing_arcs`): a lookup
-/// table, 0.13 ns, which is 0.097 on most of its arcs and 0.21 to 0.25 on a
-/// quarter of them (*read then as by nothing this flow could tell apart, not
-/// the pin, the half, the fanout nor the slice; it is the driver: an input
-/// reached from a `<L>5FF`, a `MUXF7`, a `MUXF8` or a distributed RAM's
-/// `<L>MUX` output, which [`FIVE_OUT`] charges a `<L>5FF`'s every sink*); a
+/// table, 0.098 ns, its arcs from a `<L>Q`, a table's own output, a
+/// distributed RAM's or a pad (12,181 of seed 1 of twelve designs, 0.097 to
+/// 0.099 by driver). *It was 0.13 until 2026-11-11, the mean over every arc
+/// when a quarter were 0.21 to 0.25, read then as by nothing this flow could
+/// tell apart, not the pin, the half, the fanout nor the slice; it is the
+/// driver, an input reached from a `<L>5FF`, a `MUXF7`, a `MUXF8` or a
+/// distributed RAM's `<L>MUX` output, which [`FIVE_OUT`] and [`MUX_OUT`]
+/// charge since; and 0.13 then charged every table 0.032 too much
+/// (`docs/fpga-vivado-parity.md`, "The clock's margin, a table's figure and
+/// the `DSP48E1`'s chain").* A
 /// flip-flop's clock to `Q` before its site
 /// is known (0.313 to 0.393 by slice and bel, which
 /// [`place_timing_on_sites`] then applies), its data input's setup, 0.027,
-/// its clock enable's, 0.218, and its reset's, 0.33; `MUXF7` and `MUXF8` from a
-/// data input; a shift register's clock to `Q`, 1.2, its data's setup and its
+/// its clock enable's, 0.150 in a `SLICEL` and 0.119 in a `SLICEM`, and its
+/// reset's, 0.314 and 0.373 (*0.218 and 0.33 for both until 2026-11-11; the
+/// twelve designs' 409 enables and 681 resets not reached by an `<L>MUX`
+/// output are each one figure a slice*); `MUXF7` and `MUXF8` from a data
+/// input, and
+/// from `S` (0.217, 0.201); a shift register's clock to `Q`, 1.2, its data's setup and its
 /// enable's; a distributed RAM's data input's setup, its write enable's and its
 /// write address's; a block RAM's clock to output with no output register,
 /// 1.846, and its address's, data's, enable's and write enable's setups; the
 /// input and output buffers, at `LVCMOS33`; the carry chain, arc by arc
 /// ([`CARRY_ARCS`]); and of a `DSP48E1`, the cascade through its adder, its
-/// cascade input's setup, `M` and `P` to `P`, and an operand's setup.
+/// cascade input's setup, `M` and `P` to `P` and to `PCOUT`, and its
+/// operands' setups from a `<L>Q` (`A` 0.254, `B` 0.324; *one figure, 0.375,
+/// from mostly `<L>5FF`s until 2026-11-11*). A block RAM's setups are the
+/// figures from a `<L>Q`, 0.442, 0.197, 0.348 and 0.437 (*0.46, 0.22, 0.38 and
+/// 0.45 until 2026-11-11, read before the drivers were told apart*).
 ///
 /// **Derived, not measured:** a shift register's address to `Q`, and the
 /// `DSP48E1`'s figures nothing in the corpus used (no register at all, `A`
@@ -380,18 +418,23 @@ pub(crate) const LEGACY: Figures = Figures {
 /// `CLOCK_INSERTION`, 4.2, is Vivado's clock delay to the registers of
 /// `qor/gray_cdc.v` (4.01 to 4.30 ns), one design read off one report.
 pub(crate) const VIVADO: Figures = Figures {
-    lut: 0.13,
+    lut: 0.098,
+    clock_margin: CLOCK_MARGIN,
     carry: CARRY,
     muxf7: 0.175,
     muxf8: 0.074,
+    muxf_select: (0.217, 0.201),
     ff_launch: 0.345,
     ff_setup: 0.027,
-    ff_setup_enable: Some((0.218, 0.33)),
+    ff_setup_enable: Some((0.150, 0.314)),
+    ff_setup_enable_m: (0.119, 0.373),
     dsp_comb: 2.80,
     dsp_launch_a: 2.93,
     dsp_launch_m: 1.671,
     dsp_launch_p: 0.329,
-    dsp_setup_reg: 0.375,
+    dsp_setup_reg: 0.254,
+    dsp_setup_b: 0.324,
+    dsp_pcout: (0.109, 0.106),
     dsp_setup_m: 1.41,
     dsp_setup_p: 2.72,
     dsp_cascade: 1.255,
@@ -403,8 +446,8 @@ pub(crate) const VIVADO: Figures = Figures {
     lutram_setup: 0.169,
     lutram_setup_pins: Some((0.384, 0.07)),
     bram_launch: 1.846,
-    bram_setup: 0.46,
-    bram_setup_pins: Some((0.22, 0.38, 0.45)),
+    bram_setup: 0.442,
+    bram_setup_pins: Some((0.197, 0.348, 0.437)),
     input_buffer: 1.34,
     clock_insertion: 4.2,
     output_buffer: 3.151,
@@ -427,8 +470,9 @@ pub(crate) const VIVADO: Figures = Figures {
 /// flip-flop's clock to `Q` on each bel, a block RAM's clock to output, the
 /// `DSP48E1`'s cascade and its `M` and `P` to `P`, a shift register's and a
 /// distributed RAM's setups, the buffers) as that arc's figure at grade 2 on the
-/// same cells; each that is a mean over arcs or a reading (a lookup table's
-/// 0.13, a flip-flop's setups, the carry chain's fallback, a block RAM's
+/// same cells; each that is a mean over arcs or a reading (*a lookup table's
+/// 0.13 until 2026-11-11, measured since at grade 2 as grade 3's is*, a
+/// flip-flop's setups, the carry chain's fallback, a block RAM's
 /// setups) through the line its class of arc follows from grade 3 to grade 2
 /// over those cells, a few picoseconds from every cell of the class
 /// (`docs/fpga-vivado-parity.md`, "Speed grades"); and the carry chain arc by
@@ -436,6 +480,12 @@ pub(crate) const VIVADO: Figures = Figures {
 /// at `xc7a100tftg256-2` (its tap is the other grades'), and
 /// [`CLOCK_INSERTION`] grade 3's 4.2 times 1.10, how much later the clock
 /// reached `qor/gray_cdc.v`'s registers at grade 2 than at 3.
+///
+/// The figures refitted on 2026-11-11 (a lookup table, a flip-flop's enable
+/// and reset by slice, a `DSP48E1`'s operands' setups and `PCOUT`, a block
+/// RAM's setups, a wide multiplexer's select) are this grade's own arcs of the
+/// same twelve designs, from a `<L>Q` as grade 3's are; [`CLOCK_MARGIN`] is
+/// grade 3's.
 ///
 /// **Derived, not measured**, as grade 3's are: `dsp_comb`, `dsp_launch_a`,
 /// `dsp_setup_m`, `dsp_setup_p` and `srl_read`, grade 1's figures (which were
@@ -445,18 +495,23 @@ pub(crate) const VIVADO: Figures = Figures {
     reason = "`dsp_setup_p`, 3.141 ns, is near π by chance"
 )]
 pub(crate) const VIVADO_2: Figures = Figures {
-    lut: 0.144,
+    lut: 0.107,
+    clock_margin: CLOCK_MARGIN,
     carry: 0.335,
     muxf7: 0.192,
     muxf8: 0.082,
+    muxf_select: (0.240, 0.225),
     ff_launch: 0.383,
     ff_setup: 0.036,
-    ff_setup_enable: Some((0.246, 0.371)),
+    ff_setup_enable: Some((0.168, 0.352)),
+    ff_setup_enable_m: (0.136, 0.423),
     dsp_comb: 3.259,
     dsp_launch_a: 3.350,
     dsp_launch_m: 1.924,
     dsp_launch_p: 0.370,
-    dsp_setup_reg: 0.437,
+    dsp_setup_reg: 0.297,
+    dsp_setup_b: 0.374,
+    dsp_pcout: (0.108, 0.081),
     dsp_setup_m: 1.619,
     dsp_setup_p: 3.141,
     dsp_cascade: 1.438,
@@ -468,8 +523,8 @@ pub(crate) const VIVADO_2: Figures = Figures {
     lutram_setup: 0.189,
     lutram_setup_pins: Some((0.435, 0.088)),
     bram_launch: 2.125,
-    bram_setup: 0.512,
-    bram_setup_pins: Some((0.243, 0.423, 0.501)),
+    bram_setup: 0.490,
+    bram_setup_pins: Some((0.214, 0.387, 0.476)),
     input_buffer: 1.422,
     clock_insertion: 4.62,
     output_buffer: 3.274,
@@ -503,18 +558,23 @@ pub(crate) const VIVADO_2: Figures = Figures {
 /// `M` to `P` at grade 1 is [`DSP_LAUNCH_M`]'s 2.305, its `P` to `P`
 /// [`DSP_LAUNCH_P`]'s 0.434, its cascade [`DSP_CASCADE`]'s 1.713.
 pub(crate) const VIVADO_1: Figures = Figures {
-    lut: 0.174,
+    lut: 0.128,
+    clock_margin: CLOCK_MARGIN,
     carry: 0.405,
     muxf7: 0.229,
     muxf8: 0.099,
+    muxf_select: (0.288, 0.274),
     ff_launch: 0.460,
     ff_setup: 0.057,
-    ff_setup_enable: Some((0.302, 0.454)),
+    ff_setup_enable: Some((0.205, 0.429)),
+    ff_setup_enable_m: (0.169, 0.524),
     dsp_comb: DSP_COMB,
     dsp_launch_a: DSP_LAUNCH_A,
     dsp_launch_m: 2.305,
     dsp_launch_p: 0.434,
-    dsp_setup_reg: 0.535,
+    dsp_setup_reg: 0.362,
+    dsp_setup_b: 0.450,
+    dsp_pcout: (0.106, 0.044),
     dsp_setup_m: DSP_SETUP_M,
     dsp_setup_p: DSP_SETUP_P,
     dsp_cascade: 1.713,
@@ -526,8 +586,8 @@ pub(crate) const VIVADO_1: Figures = Figures {
     lutram_setup: 0.228,
     lutram_setup_pins: Some((0.533, 0.119)),
     bram_launch: 2.454,
-    bram_setup: 0.597,
-    bram_setup_pins: Some((0.280, 0.491, 0.584)),
+    bram_setup: 0.566,
+    bram_setup_pins: Some((0.241, 0.443, 0.532)),
     input_buffer: 1.491,
     clock_insertion: 5.27,
     output_buffer: 3.529,
@@ -730,7 +790,9 @@ struct DspTiming {
 /// A block with `input` registers on the operand with fewer, and `m` and `p`
 /// its multiplier's and output's. The table is `report_timing`'s, per
 /// setting. The enables and resets are read at the same figure as the data,
-/// which is too dear for them, and the two operands at the worse of theirs.
+/// which is too dear for them, and the two operands at the worse of theirs
+/// under [`DelayModel::Legacy`]; under [`DelayModel::Vivado`] at `A`'s, `B`
+/// taking its own ([`dsp_pin_delays`]).
 fn dsp_timing(f: &Figures, input: i64, m: i64, p: i64) -> DspTiming {
     let launch = if p > 0 {
         Some(f.dsp_launch_p)
@@ -774,6 +836,127 @@ fn dsp_pin(role: &str, output: bool, shape: &DspTiming, chained: bool) -> PinTim
         PinTiming::End
     } else {
         PinTiming::Through
+    }
+}
+
+/// A `DSP48E1` pin's own figures under the fitted model, where they are not
+/// its block's: see [`dsp_pin_delays`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct DspPin {
+    /// An input's own setup.
+    capture: Option<f64>,
+    /// An output's own launch, `Start` or `Through`.
+    launch: Option<f64>,
+}
+
+/// What Vivado 2026.1's timer gives one pin of a block whose shape is
+/// `shape`, `input` its operand register (`AREG` or `BREG`, whichever a
+/// path waits for) and `preg` its `PREG`, where that is not the block's one
+/// figure (**measured**, `fir8`'s and `mul18`'s blocks at the three grades;
+/// `docs/fpga-vivado-parity.md`, "The clock's margin, a table's figure and the
+/// `DSP48E1`'s chain"):
+///
+/// - a `PCIN` that ends paths, at the `P` register, its cascade's setup
+///   ([`Figures::dsp_setup_cascade`]) whatever the block's other inputs wait
+///   for;
+/// - `B` at its own register, [`Figures::dsp_setup_b`] (`A`'s is the block's);
+/// - a `PCOUT`, [`Figures::dsp_pcout`] after the `P` beside it: from the `P`
+///   register 0.435 ns at grade 3 against `P`'s 0.329, from `M` 1.780 against
+///   1.671;
+/// - and a block in a chain without its own `P` register, whose outputs follow
+///   its `PCIN` through its adder, still launches from its `M` register (or
+///   its input registers) at its `P` and `PCOUT`: `fir8`'s second block's `M`
+///   at 1.780 ns is the start of its latest path, which a chain timed from its
+///   first block's `P` alone left out. The analysis takes the later of the two
+///   at such an output (`PinDelays::launch`). From the input registers alone
+///   the `PCOUT`'s figure is `M`'s step over `P`: derived, not measured.
+fn dsp_pin_delays(
+    f: &Figures,
+    role: &str,
+    timing: PinTiming,
+    shape: &DspTiming,
+    input: i64,
+    preg: i64,
+) -> DspPin {
+    let bit_of = |prefix: &str| {
+        role.strip_prefix(prefix)
+            .is_some_and(|bit| !bit.is_empty() && bit.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let pcout = role.starts_with("pcout");
+    match timing {
+        PinTiming::End if role.starts_with("pcin") => DspPin {
+            capture: Some(f.dsp_setup_cascade),
+            launch: None,
+        },
+        PinTiming::End if input > 0 && bit_of("b") => DspPin {
+            capture: Some(f.dsp_setup_b),
+            launch: None,
+        },
+        PinTiming::Start if pcout => DspPin {
+            capture: None,
+            launch: shape.launch.map(|l| {
+                l + if preg > 0 {
+                    f.dsp_pcout.1
+                } else {
+                    f.dsp_pcout.0
+                }
+            }),
+        },
+        PinTiming::Through if pcout || bit_of("p") => DspPin {
+            capture: None,
+            launch: shape
+                .launch
+                .map(|l| l + if pcout { f.dsp_pcout.0 } else { 0.0 }),
+        },
+        _ => DspPin::default(),
+    }
+}
+
+/// Which outputs of a distributed RAM each of its addresses reaches, as
+/// [`PlaceTiming::reaches`] wants it: a write address only the port that
+/// reads at it (`SPO`, a `RAM32M`'s `DOD`), a read address only its own port.
+/// Every address reached every output until 2026-11-11, so a `RAM32X1D`
+/// whose `DPO` alone is read was timed from its write address to `DPO`, a
+/// path Vivado's timer does not have: `regfile_alu`'s latest path on seed 1.
+fn lutram_reaches(netlist: &Netlist, instance: usize, out: &mut [u8]) {
+    let inst = &netlist.instances[instance];
+    let outputs: Vec<&str> = inst
+        .pins
+        .iter()
+        .filter(|p| netlist.pins[**p].output)
+        .map(|p| netlist.pins[*p].role.as_str())
+        .collect();
+    for p in &inst.pins {
+        let pin = &netlist.pins[*p];
+        if pin.output {
+            continue;
+        }
+        let role = pin.role.as_str();
+        // The port an address reads: `None` for a write address, which reads
+        // `SPO`, and `Some('.')` for a read address, which reads `DPO`.
+        let port = if role.starts_with("waddr") {
+            None
+        } else if role.starts_with("raddr") {
+            Some('.')
+        } else if let Some(port) = role.strip_prefix("addr").and_then(|r| r.chars().next()) {
+            Some(port)
+        } else {
+            continue;
+        };
+        let reads = |o: &str| match port {
+            None => o.starts_with("spo"),
+            Some('.') => o.starts_with("dout"),
+            Some(port) => o
+                .strip_prefix("do")
+                .is_some_and(|rest| rest.starts_with(port)),
+        };
+        let mut mask = 0u8;
+        for (j, role) in outputs.iter().enumerate() {
+            if j < 8 && reads(role) {
+                mask |= 1 << j;
+            }
+        }
+        out[*p] = mask;
     }
 }
 
@@ -1167,6 +1350,9 @@ pub fn place_timing(
         }
     }
     let mut reaches = vec![u8::MAX; netlist.pins.len()];
+    // A `DSP48E1`'s pins' own figures under the fitted model: see
+    // `dsp_pin_delays`.
+    let mut dsp_own: Vec<DspPin> = vec![DspPin::default(); netlist.pins.len()];
     for (index, inst) in netlist.instances.iter().enumerate() {
         if inst.kind != "lut" {
             continue;
@@ -1181,6 +1367,13 @@ pub fn place_timing(
                 });
         if let Some(init) = init {
             lut_reaches(netlist, index, init, &mut reaches);
+        }
+    }
+    if model == DelayModel::Vivado {
+        for (index, inst) in netlist.instances.iter().enumerate() {
+            if inst.kind == "lutram" || inst.kind.starts_with("lutram_") {
+                lutram_reaches(netlist, index, &mut reaches);
+            }
         }
     }
     for (index, inst) in netlist.instances.iter().enumerate() {
@@ -1315,12 +1508,27 @@ pub fn place_timing(
                         .and_then(AttrValue::as_int)
                         .unwrap_or(1)
                 };
-                let mut shape = dsp_timing(
-                    f,
-                    param("AREG").min(param("BREG")),
-                    param("MREG"),
-                    param("PREG"),
-                );
+                // Under the fitted model an operand none of whose bits has a
+                // signal has no register a path waits for: `fir8`'s
+                // coefficients are constants on `B`, `BREG` 0, and its blocks
+                // were timed as having no input register at all, their `A`
+                // at the multiplier's setup and the chain's last block's
+                // `PCIN` at that, 1.41 ns where Vivado's timer has 1.025.
+                let operand = |prefix: char| {
+                    inst.pins.iter().any(|p| {
+                        let pin = &netlist.pins[*p];
+                        pin.signal.is_some()
+                            && pin.role.strip_prefix(prefix).is_some_and(|bit| {
+                                !bit.is_empty() && bit.bytes().all(|b| b.is_ascii_digit())
+                            })
+                    })
+                };
+                let input = match (model, operand('a'), operand('b')) {
+                    (DelayModel::Vivado, true, false) => param("AREG"),
+                    (DelayModel::Vivado, false, true) => param("BREG"),
+                    _ => param("AREG").min(param("BREG")),
+                };
+                let mut shape = dsp_timing(f, input, param("MREG"), param("PREG"));
                 // A chain of sums: what comes in on `PCIN` goes through this
                 // block's adder to the next, `DSP_CASCADE` a block, and is what
                 // `fir8`'s 10.988 ns is made of. Without a `P` register that is
@@ -1332,7 +1540,7 @@ pub fn place_timing(
                     netlist.pins[*p].role.starts_with("pcin") && netlist.pins[*p].signal.is_some()
                 });
                 let chained = cascade && param("PREG") == 0;
-                if cascade && param("PREG") > 0 {
+                if cascade && param("PREG") > 0 && model == DelayModel::Legacy {
                     shape.capture = shape.capture.map(|c| c.max(f.dsp_setup_cascade));
                 }
                 if chained {
@@ -1344,6 +1552,10 @@ pub fn place_timing(
                 for pin in &inst.pins {
                     let role = netlist.pins[*pin].role.as_str();
                     pins[*pin] = dsp_pin(role, netlist.pins[*pin].output, &shape, chained);
+                    if model == DelayModel::Vivado {
+                        dsp_own[*pin] =
+                            dsp_pin_delays(f, role, pins[*pin], &shape, input, param("PREG"));
+                    }
                 }
                 if let Some(c) = clock {
                     domain[index] = domain_of(clock_of(c));
@@ -1505,7 +1717,21 @@ pub fn place_timing(
             }
         }
     }
-    let pin_delays = own_pin_delays(netlist, &pins, f, model);
+    let mut pin_delays = own_pin_delays(netlist, &pins, f, model);
+    if model == DelayModel::Vivado {
+        // Every path's capture carries the clock's margin, a pin's own setup
+        // as well as an instance's.
+        for c in &mut capture {
+            *c += f.clock_margin;
+        }
+        pin_delays.launch = vec![None; netlist.pins.len()];
+        for (pin, own) in dsp_own.iter().enumerate() {
+            if let Some(setup) = own.capture {
+                pin_delays.capture[pin] = Some(setup + f.clock_margin);
+            }
+            pin_delays.launch[pin] = own.launch;
+        }
+    }
     (
         PlaceTiming {
             pins,
@@ -1597,7 +1823,21 @@ fn own_pin_delays(
                 }
                 _ => None,
             };
-            own.capture[*pin] = setup;
+            own.capture[*pin] = setup.map(|s| s + f.clock_margin);
+        }
+        if kind == "mux7" || kind == "mux8" {
+            // A wide multiplexer's select is slower than its data inputs.
+            let select = if kind == "mux7" {
+                f.muxf_select.0
+            } else {
+                f.muxf_select.1
+            };
+            for pin in &inst.pins {
+                if netlist.pins[*pin].role == "s" && pins[*pin] == PinTiming::Through {
+                    own.through[*pin] = Some([select; 8]);
+                }
+            }
+            continue;
         }
         if kind != "carry" {
             continue;
@@ -1931,11 +2171,21 @@ pub fn clock_arrival(
             if !timed {
                 return f32::NAN;
             }
+            let block = type_at(x, y).map_or(0.0, |name| {
+                let (dsp, bram) = BLOCK_CLOCK_PS[grade.index()];
+                if name.starts_with("DSP_") {
+                    dsp
+                } else if name.starts_with("BRAM_") {
+                    bram
+                } else {
+                    0.0
+                }
+            });
             #[allow(
                 clippy::cast_possible_truncation,
                 reason = "a quarter of a nanosecond at most, which f32 holds"
             )]
-            let ns = (table.at(x, y) / 1000.0) as f32;
+            let ns = ((table.at(x, y) + block) / 1000.0) as f32;
             ns
         })
         .collect()
@@ -1988,6 +2238,28 @@ const SETUP_BYPASS: (f64, f64) = (0.030, 0.005);
 /// more (708 setups against 1,019); grade 2's 0.133 and grade 1's 0.173 the same arcs
 /// at those grades (five designs).
 const FIVE_OUT: f64 = 0.112;
+/// [`Figures::clock_margin`]: what Vivado 2026.1's timer charges a path over
+/// its launch, its setup and the clock's arrival at its two ends as
+/// [`clock_arrival`] has them. **Measured**: Reticle's latest path of each
+/// clock of seeds 1 to 3 of the corpus timed again by Vivado through the same
+/// cells, 34 from a slice's flip-flop to another's data input, the model's
+/// launch and capture together 0.062 ns under Vivado's on average
+/// (`docs/fpga-vivado-parity.md`, "The clock's margin, a table's figure and the
+/// `DSP48E1`'s chain"). Vivado's own term for it, its clock uncertainty
+/// (0.035 ns at every grade) less its skew, is 0.068, 0.070 and 0.068 ns at
+/// grades 3, 2 and 1 on seed 1's eleven such paths, so one figure serves every
+/// grade.
+const CLOCK_MARGIN: f64 = 0.062;
+/// How much later the clock reaches a `DSP48E1`'s and a block RAM's clock pin
+/// than a slice flip-flop's on the same rows, ps, at grades 1, 2 and 3:
+/// Vivado 2026.1's interconnect delay of the clock net to each pin (the slow
+/// corner's maximum; its minimum within 2 ps of it) on Reticle's routes of
+/// seed 1 of `mul18`, `fir8`, `bram_fifo` and `analyser_fifo`, against the
+/// mean of the flip-flops of the same clock within three rows. **Measured** on
+/// nine `DSP48E1` clock pins and 19 block RAM clock pins at grades 3 and 1, and
+/// on `mul18`'s and `bram_fifo`'s alone at grade 2. [`clock_arrival`] adds it
+/// to the column's figure.
+const BLOCK_CLOCK_PS: [(f64, f64); 3] = [(91.0, 35.0), (84.0, 32.0), (79.0, 30.0)];
 /// [`Figures::mux_out`] at grade 3: Vivado 2026.1's arcs at `xc7a100tftg256-3`
 /// on Reticle's routes of seed 1 of twelve designs of the timing corpus (and
 /// grades 2 and 1 the same routes at those parts), each sink's arc or setup
@@ -2136,7 +2408,21 @@ pub fn place_timing_on_sites(
             .is_some_and(|d| through.contains(&d));
         for pin in &inst.pins {
             let p = &netlist.pins[*pin];
-            if p.role != "d" || timing.pin_delays.capture.len() <= *pin {
+            if timing.pin_delays.capture.len() <= *pin {
+                continue;
+            }
+            // A clock enable's and a reset's setups by the slice, which the
+            // figures before placement took as a `SLICEL`'s.
+            if let Some(l) = f
+                .ff_setup_enable
+                .filter(|_| p.role == "en" || p.role == "rst")
+            {
+                let (enable, reset) = if slicem { f.ff_setup_enable_m } else { l };
+                let setup = if p.role == "en" { enable } else { reset };
+                timing.pin_delays.capture[*pin] = Some(setup + f.clock_margin);
+                continue;
+            }
+            if p.role != "d" {
                 continue;
             }
             let inside = p
@@ -2144,13 +2430,16 @@ pub fn place_timing_on_sites(
                 .and_then(|s| netlist.signals[s].driver)
                 .and_then(|d| placement.site_of(netlist.pins[d].instance))
                 .is_some_and(|d| slice_of(d) == here);
-            timing.pin_delays.capture[*pin] = Some(if inside {
-                by_slice(f.setup_inside)
-            } else if way {
-                by_slice(f.setup_way)
-            } else {
-                by_slice(f.setup_bypass)
-            });
+            timing.pin_delays.capture[*pin] = Some(
+                f.clock_margin
+                    + if inside {
+                        by_slice(f.setup_inside)
+                    } else if way {
+                        by_slice(f.setup_way)
+                    } else {
+                        by_slice(f.setup_bypass)
+                    },
+            );
         }
     }
     // Every other cell that leaves its slice by an `<L>MUX` output costs each
@@ -2160,21 +2449,12 @@ pub fn place_timing_on_sites(
     // flip-flop reading a sum), pays nothing. A `<L>5FF` is the exception, as
     // every sink it has pays the same, and its launch carries it.
     //
-    // A `DSP48E1`'s operands' one setup was read where most of its drivers
-    // were `<L>5FF`s, so it takes [`Figures::five_out`] back off: a
-    // `DSP48E1`'s `A` from a `<L>5FF` is 0.362 ns under Vivado's timer and
-    // from a `<L>Q` 0.254, against 0.375 for both. *That was done for a block
-    // RAM's and a distributed RAM's setups as well until 2026-11-10, read then
-    // as figures taken from `<L>5FF`s too; they are the figures from a `<L>Q`
-    // (a block RAM's address 0.442 ns from one against 0.46, a distributed
-    // RAM's write enable 0.384 against 0.384), and given it back, a `<L>5FF`
-    // reaching them was charged 0.11 too little.*
-    let five_ff = |instance: usize| {
-        netlist.instances[instance].kind == "ff"
-            && placement
-                .site_of(instance)
-                .is_some_and(|site| graph.sites[site].bel.ends_with("5FF"))
-    };
+    // *A `DSP48E1`'s operands' one setup, 0.375 ns, was read where most of
+    // its drivers were `<L>5FF`s, and took [`Figures::five_out`] back off
+    // until 2026-11-11; that was done for a block RAM's and a distributed
+    // RAM's setups as well until 2026-11-10. Every such setup is the figure
+    // from a `<L>Q` now (a `DSP48E1`'s `A` 0.254 ns, `B` 0.324), as every
+    // other is, and a `<L>5FF`'s launch carries the rest (`A` 0.362 from one).*
     // What a sink reached by an `<L>MUX` from `driver`, a pin of a placed
     // cell, pays; none for one reached by its own output's node or a pip
     // from it.
@@ -2227,14 +2507,7 @@ pub fn place_timing_on_sites(
         let Some(driver) = p.signal.and_then(|s| netlist.signals[s].driver) else {
             continue;
         };
-        let end = matches!(timing.pins.get(index), Some(PinTiming::End));
-        let mut extra = mux_out(driver, index);
-        if end
-            && netlist.instances[p.instance].kind == "dsp"
-            && (five_ff(netlist.pins[driver].instance) || extra > 0.0)
-        {
-            extra -= f.five_out;
-        }
+        let extra = mux_out(driver, index);
         if extra == 0.0 {
             continue;
         }
@@ -2270,7 +2543,9 @@ mod tests {
     /// everywhere else but one pad's: a slice in column 10 on the first
     /// `HCLK` row takes the table's first figure, four rows below it that
     /// plus four rows' growth, column 11 its nearest column's (10), the
-    /// third region row its own; the pad's site has none; a fabric loaded
+    /// third region row its own; a `DSP48E1`'s site in column 11 its
+    /// column's figure and 79 ps, a block RAM's 30 ps
+    /// ([`BLOCK_CLOCK_PS`]); the pad's site has none; a fabric loaded
     /// over a region holding two of the four rows is timed by all four; and
     /// a die nobody measured, or a fabric with an `HCLK` row elsewhere, gets
     /// no figures. A fabric of the `xc7a35t`'s three rows takes that die's
@@ -2280,7 +2555,8 @@ mod tests {
     /// Would catch the region row or the column looked up wrong, the growth
     /// away from the `HCLK` row left out or signed wrong, a site of any tile
     /// timed, a table applied to a die it was not measured on, and the two
-    /// dies' tables swapped. Would not catch a figure itself being wrong,
+    /// dies' tables swapped, and a block's clock pin taken as a slice's or
+    /// the two blocks' figures swapped. Would not catch a figure itself being wrong,
     /// which only Vivado's timer says (`docs/fpga-vivado-parity.md`,
     /// "Filling slices" and "The clock's arrival on the XC7A35T").
     #[test]
@@ -2292,6 +2568,8 @@ mod tests {
                 ("CLBLL_L", Some("ff")),
                 ("HCLK_L", None),
                 ("LIOB33", Some("io")),
+                ("DSP_L", Some("dsp")),
+                ("BRAM_L", Some("bram")),
             ] {
                 let mut tile = TileType::new(name, "tile", 2, 2);
                 tile.wires.push(WireDecl {
@@ -2312,6 +2590,10 @@ mod tests {
                         1
                     } else if (x, y) == (12, 40) {
                         2
+                    } else if (x, y) == (11, 27) {
+                        3
+                    } else if (x, y) == (11, 31) {
+                        4
                     } else {
                         0
                     };
@@ -2339,7 +2621,17 @@ mod tests {
             at(10, 31),
             ns(f64::from(big.arrival[0][0]) + 5.0 * big.ps_per_row)
         );
-        assert_eq!(at(11, 27), at(10, 27), "column 11 is column 10's");
+        assert_eq!(at(11, 28), at(10, 28), "column 11 is column 10's");
+        // A `DSP48E1`'s and a block RAM's clock pins are later than the
+        // column's flip-flops'.
+        assert_eq!(
+            at(11, 27),
+            ns(f64::from(big.arrival[0][0]) + big.ps_per_row + 79.0)
+        );
+        assert_eq!(
+            at(11, 31),
+            ns(f64::from(big.arrival[0][0]) + 5.0 * big.ps_per_row + 30.0)
+        );
         assert_eq!(
             at(10, 131),
             ns(f64::from(big.arrival[2][0]) + big.ps_per_row)
@@ -2420,11 +2712,12 @@ mod tests {
     /// model sets none.
     ///
     /// Would catch the ways ignored, a way taken for one it does not reach,
-    /// the two slices' figures swapped, the slice read from the driver's bel,
+    /// the two slices' figures swapped (a data input's, an enable's or a
+    /// reset's), the slice read from the driver's bel,
     /// a `<L>5FF`'s launch without what its `<L>MUX` output costs its sinks
-    /// ([`Figures::five_out`]), a `DSP48E1`'s setup charging it a second time
-    /// or given it back for a driver that is no `<L>5FF`, and a block RAM's
-    /// given it back at all (as it was until 2026-11-10). Would not catch a
+    /// ([`Figures::five_out`]), the clock's margin left off a setup, and a
+    /// `DSP48E1`'s or a block RAM's setup given it back (as they were until
+    /// 2026-11-11 and 2026-11-10). Would not catch a
     /// figure itself being wrong: those are Vivado's
     /// means (`docs/fpga-vivado-parity.md`, "Filling slices"), which only a
     /// run against Vivado's timer asks, nor the router passing a way by,
@@ -2494,9 +2787,9 @@ mod tests {
             ("lut", &[("o", 0, true)]),
             ("lut", &[("o", 1, true)]),
             ("ff", &[("d", 0, false)]),
-            ("ff", &[("d", 0, false), ("q", 2, true)]),
+            ("ff", &[("d", 0, false), ("q", 2, true), ("en", 0, false)]),
             ("ff", &[("d", 0, false), ("q", 3, true)]),
-            ("ff", &[("d", 0, false)]),
+            ("ff", &[("d", 0, false), ("rst", 0, false)]),
             ("dsp", &[("d", 2, false)]),
             ("dsp", &[("d", 3, false)]),
             ("bram", &[("d", 3, false)]),
@@ -2607,7 +2900,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let (l, m) = (0, 1);
-        let pick = |pair: (f64, f64), which: usize| Some(if which == l { pair.0 } else { pair.1 });
+        // Each setup carries the clock's margin, the same at every grade.
+        let pick = |pair: (f64, f64), which: usize| {
+            Some(CLOCK_MARGIN + if which == l { pair.0 } else { pair.1 })
+        };
         assert_eq!(
             setups(DelayModel::Vivado, &[]),
             vec![
@@ -2633,6 +2929,21 @@ mod tests {
             pick(SETUP_BYPASS, l)
         );
         assert_eq!(setups(DelayModel::Legacy, &ways), vec![None; 4]);
+        // A clock enable's and a reset's setups are their slice's: the
+        // `SLICEL`'s enable, the `SLICEM`'s reset.
+        let mut fast = timing.clone();
+        place_timing_on_sites(
+            &mut fast,
+            DelayModel::Vivado,
+            SpeedGrade::Three,
+            &netlist,
+            &graph,
+            &placement,
+            &[],
+        );
+        let own = |ff: usize, k: usize| fast.pin_delays.capture[netlist.instances[ff].pins[k]];
+        assert_eq!(own(3, 2), Some(CLOCK_MARGIN + 0.150));
+        assert_eq!(own(5, 1), Some(CLOCK_MARGIN + VIVADO.ff_setup_enable_m.1));
         // At grade 1 the same ends take grade 1's figures, and the launch too.
         let mut slow = timing.clone();
         place_timing_on_sites(
@@ -2664,14 +2975,11 @@ mod tests {
             slow.launch[4],
             VIVADO_1.ff_launch_bels[1] + VIVADO_1.five_out
         );
-        // A `DSP48E1`'s one setup gives it back for the `A5FF`, whose launch
-        // carries it, and not for the `AFF`; a block RAM's, which is the
-        // figure from a `<L>Q`, does not.
+        // A `DSP48E1`'s setup and a block RAM's are the figures from a `<L>Q`,
+        // and the `A5FF`'s launch carries the rest: neither gives it back
+        // (a `DSP48E1`'s did until 2026-11-11).
         assert_eq!(slow.pin_delays.capture[block_pin(6)], None);
-        assert_eq!(
-            slow.pin_delays.capture[block_pin(7)],
-            Some(0.4 - VIVADO_1.five_out)
-        );
+        assert_eq!(slow.pin_delays.capture[block_pin(7)], None);
         assert_eq!(slow.pin_delays.capture[block_pin(8)], None);
         // The placement's rounds see each flip-flop's site launch as this
         // does, and nothing on a table's site or under the legacy model.
@@ -2998,11 +3306,19 @@ mod tests {
         // Inside the slice: the `MUXF8` on the `MUXF7`'s own node, and the
         // `AFF` the sum reaches by a pip, which has its setup from inside.
         assert_eq!(through(&t, pin(1, "i1")), None);
-        assert_eq!(capture(&t, pin(4, "d")), Some(SETUP_INSIDE.0));
+        assert_eq!(
+            capture(&t, pin(4, "d")),
+            Some(CLOCK_MARGIN + SETUP_INSIDE.0)
+        );
         // Outside: the far `AFF`'s bypass setup and the sum's cost.
-        assert_eq!(capture(&t, pin(7, "d")), Some(SETUP_BYPASS.0 + m.carry_o));
-        // A `DSP48E1`'s setup, a figure from a `<L>5FF`, gives that back.
-        assert_eq!(capture(&t, pin(6, "a0")), Some(0.4 + m.f7 - FIVE_OUT));
+        assert_eq!(
+            capture(&t, pin(7, "d")),
+            Some(CLOCK_MARGIN + SETUP_BYPASS.0 + m.carry_o)
+        );
+        // A `DSP48E1`'s setup is the figure from a `<L>Q`, and pays the
+        // `MUXF7`'s cost as any other sink (it gave a `<L>5FF`'s back until
+        // 2026-11-11).
+        assert_eq!(capture(&t, pin(6, "a0")), Some(0.4 + m.f7));
         // The legacy model charges none of it.
         let legacy = on(DelayModel::Legacy);
         assert!(legacy.pin_delays.through.iter().all(Option::is_none));
@@ -3053,12 +3369,255 @@ mod tests {
         assert_eq!(dsp_pin("p3", true, &last, false), PinTiming::Start);
     }
 
+    /// **Under the fitted model a chain of sums is timed as Vivado's timer has
+    /// `fir8`'s.** Three blocks on one clock, their `A` from a flip-flop and
+    /// no `B` (`fir8`'s coefficients are constants), `AREG` 2 and `BREG` 0:
+    /// the first with `P` and no `M`, the second with `M` and no `P` (its
+    /// `PCOUT` the chain's), the last with both. At grade 3: the first block's
+    /// `PCOUT` launches 0.435 ns after the clock (its `P`'s 0.329 and the
+    /// `PCOUT`'s step); the second's `PCOUT` follows its `PCIN` and launches
+    /// itself from `M` at 1.780; the last's `PCIN` sets up at the cascade's
+    /// 1.025 and its `A` at its own register's 0.254, each with the clock's
+    /// margin, the constant `B` waiting for nothing. So with no wire the latest
+    /// path is the second block's `M` through the last block's setup, 1.780 +
+    /// 1.025 + the margin, where through the first block's `P` it is 0.435 +
+    /// 1.255 + 1.025. The legacy model times every input of the last block at
+    /// the multiplier's setup (no input register, `BREG` 0) or the cascade's,
+    /// whichever is later, and nothing launches inside the chain.
+    ///
+    /// Would catch a constant operand taken as one with no register (the last
+    /// block's `PCIN` and `A` at 1.41 ns, as `fir8`'s were), `PCIN` given the
+    /// block's setup, a chained block's `M` left out (2.777 ns), a `PCOUT`
+    /// launched at `P`'s figure, or the legacy model changed; would not catch a
+    /// figure wrong about the part, which only Vivado's timer says
+    /// (`docs/fpga-vivado-parity.md`, "The clock's margin, a table's figure
+    /// and the `DSP48E1`'s chain").
+    #[test]
+    fn a_chain_of_sums_launches_where_vivados_timer_says() {
+        use crate::ir::{Attrs, Cell, CellKind, Name};
+        let pin = |instance: usize, role: &str, output: bool, signal: usize| NetPin {
+            instance,
+            port: role.to_uppercase(),
+            bit: 0,
+            role: role.to_owned(),
+            output,
+            signal: Some(signal),
+            constant: None,
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        let mut cells = Vec::new();
+        for (name, m, p) in [("pad", 0, 0), ("d0", 0, 1), ("d1", 1, 0), ("d2", 1, 1)] {
+            let mut params = Attrs::new();
+            params.set("AREG", 2i64);
+            params.set("BREG", 0i64);
+            params.set("MREG", m);
+            params.set("PREG", p);
+            cells.push(design.modules[top].cells.push(Cell {
+                name: Name::new(name),
+                kind: CellKind::Blackbox(Name::new("DSP48E1")),
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                params,
+                attrs: Attrs::new(),
+                span: crate::source::Span::new(file, 0, 0),
+            }));
+        }
+        let instance = |cell: CellId, name: &str, kind: &str, pins: Vec<usize>| Instance {
+            cell,
+            name: name.to_owned(),
+            primitive: String::new(),
+            kind: kind.to_owned(),
+            pins,
+            pin: None,
+        };
+        // Signals: 0 the clock pad, 1 the buffered clock, 2 the flip-flop's
+        // `Q`, 3 the first block's `PCOUT`, 4 the second's, 5 the last's `P`.
+        let pins = vec![
+            pin(0, "din", true, 0),
+            pin(1, "i", false, 0),
+            pin(1, "o", true, 1),
+            pin(2, "clk", false, 1),
+            pin(2, "q", true, 2),
+            pin(3, "clk", false, 1),
+            pin(3, "a0", false, 2),
+            pin(3, "pcout0", true, 3),
+            pin(4, "clk", false, 1),
+            pin(4, "a0", false, 2),
+            pin(4, "pcin0", false, 3),
+            pin(4, "pcout0", true, 4),
+            pin(5, "clk", false, 1),
+            pin(5, "a0", false, 2),
+            pin(5, "pcin0", false, 4),
+            pin(5, "p0", true, 5),
+        ];
+        let signal = |name: &str, driver: usize, sinks: Vec<usize>| Signal {
+            name: name.to_owned(),
+            driver: Some(driver),
+            sinks,
+        };
+        let netlist = Netlist {
+            instances: vec![
+                instance(cells[0], "clk$io0", "io", vec![0]),
+                instance(cells[0], "clk$gbuf", "gb", vec![1, 2]),
+                instance(cells[0], "q", "ff", vec![3, 4]),
+                instance(cells[1], "d0", "dsp", vec![5, 6, 7]),
+                instance(cells[2], "d1", "dsp", vec![8, 9, 10, 11]),
+                instance(cells[3], "d2", "dsp", vec![12, 13, 14, 15]),
+            ],
+            signals: vec![
+                signal("clk", 0, vec![1]),
+                signal("clk$gb", 2, vec![3, 5, 8, 12]),
+                signal("q", 4, vec![6, 9, 13]),
+                signal("pc0", 7, vec![10]),
+                signal("pc1", 11, vec![14]),
+                signal("p", 15, vec![]),
+            ],
+            pins,
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut diags = crate::diag::Diagnostics::new();
+        let constraints =
+            Constraints::parse("create_clock -name c -period 10 clk\n", file, &mut diags);
+        assert!(!diags.has_errors());
+        let timed = |model: DelayModel| {
+            place_timing(
+                &design,
+                top,
+                &netlist,
+                &constraints,
+                model,
+                SpeedGrade::Three,
+            )
+            .0
+        };
+        let close = |got: f64, want: f64, what: &str| {
+            assert!((got - want).abs() < 1e-9, "{what}: {got} against {want}");
+        };
+        let t = timed(DelayModel::Vivado);
+        assert_eq!(t.pins[7], PinTiming::Start);
+        close(t.launch_at(3, 7), 0.435, "the first block's PCOUT");
+        assert_eq!(t.pins[11], PinTiming::Through);
+        close(
+            t.launch_at(4, 11),
+            1.780,
+            "the second block's M at its PCOUT",
+        );
+        close(t.capture_at(5, 14), 1.025 + CLOCK_MARGIN, "the last PCIN");
+        close(
+            t.capture_at(5, 13),
+            0.254 + CLOCK_MARGIN,
+            "the last block's A",
+        );
+        let wire = vec![0.0; netlist.pins.len()];
+        let (_, longest) = crate::fpga::place::path_criticality(&netlist, &t, &wire);
+        assert_eq!(longest, vec![2867]);
+        let legacy = timed(DelayModel::Legacy);
+        close(
+            legacy.capture_at(5, 14),
+            DSP_SETUP_M,
+            "the legacy model's PCIN",
+        );
+        close(
+            legacy.capture_at(5, 13),
+            DSP_SETUP_M,
+            "the legacy model's A",
+        );
+        assert!(legacy.pin_delays.launch.iter().all(Option::is_none));
+    }
+
+    /// **A distributed RAM's address reaches the port that reads at it, and a
+    /// wide multiplexer's select is its own arc.** A `RAM32X1D`
+    /// (`lutram_d32`) with both outputs, `DPO` (`dout`) before `SPO`: its
+    /// write address reaches `SPO` alone and its read address `DPO` alone; a
+    /// `RAM32M` (`lutram_m32`) with ports `A` and `D`: `ADDRA` reaches `DOA`'s
+    /// two bits and `ADDRD` `DOD`'s. And a `MUXF7` and a `MUXF8`, whose `S` is
+    /// 0.217 and 0.201 ns at grade 3 under the fitted model where their data
+    /// inputs are the instance's. Would catch a write address reaching the
+    /// read port (`regfile_alu`'s latest path through a `RAM32X1D` whose `DPO`
+    /// alone is read, which Vivado's timer does not have), a port's letter
+    /// read wrongly, a select at its data input's figure, or the two
+    /// multiplexers' figures swapped; would not catch a figure wrong about the
+    /// part.
+    #[test]
+    fn a_rams_address_reaches_its_own_port_and_a_select_is_its_own_arc() {
+        let mut pins = Vec::new();
+        let mut instances = Vec::new();
+        for (index, (kind, roles)) in [
+            ("lutram_d32", &["waddr0", "raddr0", "dout", "spo"][..]),
+            (
+                "lutram_m32",
+                &["addra0", "addrd0", "doa0", "doa1", "dod0", "dod1"][..],
+            ),
+            ("mux7", &["i0", "i1", "s", "o"][..]),
+            ("mux8", &["i0", "i1", "s", "o"][..]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut own = Vec::new();
+            for role in roles {
+                own.push(pins.len());
+                pins.push(NetPin {
+                    instance: index,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: (role.starts_with('d') && !role.starts_with("di"))
+                        || *role == "spo"
+                        || *role == "o",
+                    signal: Some(pins.len()),
+                    constant: None,
+                });
+            }
+            instances.push(Instance {
+                cell: CellId::from_index(index),
+                name: kind.to_owned(),
+                primitive: String::new(),
+                kind: kind.to_owned(),
+                pins: own,
+                pin: None,
+            });
+        }
+        let netlist = Netlist {
+            instances,
+            pins,
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut reaches = vec![u8::MAX; netlist.pins.len()];
+        lutram_reaches(&netlist, 0, &mut reaches);
+        lutram_reaches(&netlist, 1, &mut reaches);
+        // `RAM32X1D`: outputs `dout` (bit 0) and `spo` (bit 1).
+        assert_eq!((reaches[0], reaches[1]), (0b10, 0b01));
+        // `RAM32M`: outputs `doa0`, `doa1`, `dod0`, `dod1`.
+        assert_eq!((reaches[4], reaches[5]), (0b0011, 0b1100));
+        let classes: Vec<PinTiming> = netlist.pins.iter().map(|_| PinTiming::Through).collect();
+        let own = own_pin_delays(&netlist, &classes, &VIVADO, DelayModel::Vivado);
+        assert_eq!(own.through[12], Some([0.217; 8]));
+        assert_eq!(own.through[16], Some([0.201; 8]));
+        assert_eq!(own.through[10], None, "a data input is the instance's");
+        let legacy = own_pin_delays(&netlist, &classes, &LEGACY, DelayModel::Legacy);
+        assert_eq!(legacy, PinDelays::default());
+    }
+
     /// **Under the Vivado model a carry chain's arcs and a flip-flop's
     /// enable and reset are their own.** A `CARRY4` with every pin, outputs in
     /// the order the device file gives them (`O` then `CO`), and an `FDRE`:
     /// `CI` reaches `CO3` in 0.089 ns and `S0` in 0.395, `DI1` does not reach
-    /// `O0` at all, and the flip-flop's enable needs 0.218 ns and its reset
-    /// 0.33 where its data input takes the instance's 0.027. The legacy model
+    /// `O0` at all, and the flip-flop's enable needs 0.150 ns and its reset
+    /// 0.314 (a `SLICEL`'s, before placement says the slice; 0.218 and 0.33
+    /// until 2026-11-11), each with the clock's margin, where its data input
+    /// takes the instance's 0.027. The legacy model
     /// has none of it. Would catch the outputs counted in another order, an arc
     /// read from the wrong row or column, a pin's setup given to another, or
     /// the legacy model given the new figures; would not catch a figure wrong
@@ -3140,8 +3699,8 @@ mod tests {
         assert!((arcs("p0")[7] - 0.395).abs() < 1e-9);
         assert!((arcs("p0")[0] - 0.187).abs() < 1e-9);
         assert_eq!(arcs("di1")[0], f64::NEG_INFINITY);
-        assert_eq!(own.capture[pin(1, "en")], Some(0.218));
-        assert_eq!(own.capture[pin(1, "rst")], Some(0.33));
+        assert_eq!(own.capture[pin(1, "en")], Some(0.150 + CLOCK_MARGIN));
+        assert_eq!(own.capture[pin(1, "rst")], Some(0.314 + CLOCK_MARGIN));
         assert_eq!(own.capture[pin(1, "d")], None);
         let legacy = own_pin_delays(&netlist, &classes, &LEGACY, DelayModel::Legacy);
         assert_eq!(legacy, PinDelays::default());

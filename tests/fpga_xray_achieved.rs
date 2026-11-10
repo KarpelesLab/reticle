@@ -1050,3 +1050,29 @@ fn a_placer_that_knows_a_registers_bel_makes_the_corpus_faster() {
     let ratio = twenty_seeds(&table, "muxall", "belff", 1.04);
     assert!(ratio <= 0.996, "`belff` {ratio:.4} of `muxall`");
 }
+
+/// **With a table's figure, the clock's margin and the `DSP48E1`'s chain as
+/// Vivado's timer has them, the corpus is no slower** (`docs/fpga-vivado-parity.md`,
+/// "The clock's margin, a table's figure and the `DSP48E1`'s chain"). `lutfit` is
+/// `belff` with a lookup table at 0.098 ns where it was 0.13, every capture
+/// charged the clock's margin, a block's clock pin later than a slice's, a
+/// flip-flop's enable and reset by its slice, a block's own setups and launches,
+/// and a distributed RAM's addresses reaching only their own port: twenty seeds,
+/// 1.0032 of `belff`, which a bootstrap over the seeds (unpaired, the placements
+/// differ) puts at 0.9966 to 1.0080, the slowest clock `carry_counter` at 1.039.
+/// The model's change is for its estimate, nearer Vivado's in absolute value;
+/// this holds the corpus between 0.2 % faster and 0.6 % slower, no clock more
+/// than 4.5 % slower, and twenty seeds of each. Would catch a regeneration that
+/// lost the measurement, swapped the builds (0.9968) or lost a seed; would not
+/// catch the estimate's error, which the fixture does not hold.
+#[test]
+fn the_refitted_model_keeps_the_corpus_as_fast() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let ratio = twenty_seeds(&table, "belff", "lutfit", 1.045);
+    assert!(
+        (0.998..=1.006).contains(&ratio),
+        "`lutfit` {ratio:.4} of `belff`"
+    );
+}

@@ -9481,10 +9481,207 @@ the figures themselves, which only Vivado's timer asks.
 - **A lookup table's 0.13**: now that every `<L>MUX` output's sinks are charged, the
   figure from anything is 0.097 to 0.099, and the 0.13 overcharges every table 0.03. It
   is the placer's figure too, so changing it changes every placement; not measured.
+  *Refitted since, and measured: "The clock's margin, a table's figure and the
+  `DSP48E1`'s chain".*
 - **A table's own lower half leaving its slice**, and a carry's `CO0` to `CO2`: not seen
   in these builds, charged nothing.
 - **`mul18` and `fir8`**, whose estimates are 0.10 and 0.12 off either way and did not
-  move: not traced.
+  move: not traced. *Traced since (the same section): a block's clock pin is later than
+  a slice's, and `fir8`'s chain was timed from the wrong register to the wrong setup.*
 - **Which half of the placer's charge moved the clock**, the `5FF`'s or a `SLICEM`'s: not
   taken apart, nor its 4.3 % more slices.
+- None of it has been on a part.
+
+## The clock's margin, a table's figure and the `DSP48E1`'s chain
+
+**Asked: "The other `MUX` outputs" left a lookup table's 0.13 ns 0.03 over Vivado's on
+every table, `mul18`'s and `fir8`'s estimates 0.10 and 0.12 ns off and not traced, and
+figures fitted as means before the drivers were told apart that may now be biased.
+Measure, refit, and say what each does to the routed estimate's error and to the clock.**
+Vivado 2026.1 at `xc7a100tftg256-3` (and `-2`, `-1` for the figures), run on 2026-11-11 on
+a473396d. **Everything here is Vivado's timer of Reticle's placements and routes; nothing
+has been on a part.**
+
+### Path by path (measured)
+
+A build of a473396d that prints each clock's latest path whether its period is met or not,
+in picoseconds (a probe, not committed; its builds are `belff`'s bitstream for bitstream,
+`sad` seed 1 and `widemux` seed 2 checked), at seeds 1 to 3 of the corpus; and Vivado's
+timer of the same path (`report_timing -from` its first cell `-through` each of the others
+`-to` its last) and of each clock's worst, on Reticle's routes (scripts not committed).
+Each clock and seed's estimate less Vivado's worst is the printed path less Vivado's figure
+for that path, split into its launch and capture (clock to `Q`, setup, the clock's arrival
+at both ends and Vivado's uncertainty), its cells and its connections, and that path less
+the worst (Reticle's latest is not always Vivado's). Means over the 55 clocks and seeds
+whose path Vivado's timer found (ns):
+
+| | estimate less worst | launch and capture | cells | connections | path less worst |
+|---|---|---|---|---|---|
+| `belff` | -0.012 | **-0.058** | **+0.069** | -0.009 | -0.015 |
+
+The eight not found: paths ending at a `RAM32M`'s pin (Vivado's cell is the macro, not its
+leaf), paths through a carry's route-through table, which Vivado's netlist has not got, and
+`regfile_alu` seed 1's, below. By what was off:
+
+- **Every lookup table, 0.032 ns** (155 tables on the paths, `LUT1` to `LUT6` alike): the
+  0.13 of "Speed grades" against Vivado's arc. Over every arc of seed 1 of the twelve designs
+  of "The other `MUX` outputs" (`longest`'s routes), a table's input from a `<L>Q` is 0.099
+  (9,220 arcs), from another table 0.097 (1,936), a distributed RAM's upper half 0.098
+  (503), a pad 0.097 (502); at grade 2 0.108, 0.105, 0.106, 0.105; at grade 1 0.129, 0.124,
+  0.125, 0.124. A distributed RAM's read, which the model charges the table's figure, is
+  0.098 to 0.107 from its read address at grade 3.
+- **Launch and capture, 0.062 ns under on the 34 paths from a slice's flip-flop to another's
+  data input.** The model has the clock's arrival at each end from its table and nothing
+  else; Vivado's timer adds its uncertainty, 0.035 ns at every grade (`TSJ` 0.071), and its
+  skew on these paths is -0.017 to -0.046 ns even within a clock region: the clock's
+  pessimism its common path does not remove. Its uncertainty less its skew on seed 1's
+  eleven such paths is 0.068, 0.070 and 0.068 ns at grades 3, 2 and 1.
+- **From a `DSP48E1`, 0.167 ns under (`mul18`, all three seeds), and from a block RAM 0.118
+  (`bram_fifo`)**: the clock reaches their clock pins later than a slice's. Vivado's
+  interconnect delay of the clock to each clock pin (`get_net_delays -interconnect_only`, the
+  slow corner's maximum) against the slice flip-flops of the same clock within three rows,
+  seed 1: a `DSP48E1`'s 78 to 80 ps later at grade 3 (`mul18`'s and `fir8`'s nine), 84 at
+  grade 2 (`mul18`'s), 91 to 92 at grade 1; a block RAM's 28 to 31, 32 (`bram_fifo`'s) and
+  34 to 37 (`bram_fifo`'s and `analyser_fifo`'s 19 clock pins). The minimum is within 2 ps
+  of the maximum. `clock_arrival` timed every block as its nearest slice column.
+- **`fir8`, 0.222 ns over at its end and 0.088 under in which path**: the chain's last block
+  timed its `PCIN` at 1.41 ns, the multiplier's setup, where Vivado's timer has the cascade's
+  1.025. Its `B` is a constant (the coefficient) with `BREG` 0, and the block was taken for
+  one with no input register, `min(AREG, BREG)`, so every input waited on `M`. And the chain
+  was timed from its first block's `P` (0.329 ns, though its `PCOUT` is 0.435): a chained
+  block's outputs follow its `PCIN`, so the second block's `M`, which reaches its `PCOUT`
+  1.780 ns after the clock, started nothing. Vivado's worst path starts there.
+- **`regfile_alu` seed 1's latest path is not a path**: from a `RAM32X1D`'s write address to
+  its `DPO`, which reads at the read address. Vivado's timer finds none through those
+  cells. Every distributed RAM's address reached every output; the clock's +0.028 ns mean
+  error was right by it.
+- **Per arc, the twelve designs' seed 1** (`longest`'s routes, every grade): a flip-flop's
+  clock enable's setup 0.150 ns in a `SLICEL` and 0.119 in a `SLICEM` where the model had
+  0.218 for both, its reset's 0.314 and 0.373 against 0.33 (409 enables and 681 resets not
+  reached by an `<L>MUX` output, one figure a slice each); a `DSP48E1`'s `A` 0.254 and `B`
+  0.324 from a `<L>Q` against 0.375; a block RAM's address, data, enable and write enable
+  0.442, 0.197, 0.348 and 0.437 against 0.46, 0.22, 0.38 and 0.45; a `MUXF8`'s select 0.201
+  against its data inputs' 0.074 (64, `widemux`), a `MUXF7`'s 0.217 (its 0.329 from a
+  `<L>5FF` less `five_out`) against 0.175. The carry chain's arcs on the paths are within a
+  picosecond.
+
+### What was changed
+
+Under the fitted model (`--delay-model legacy`, which the Husky's builds pass, sets none of
+it):
+
+- **A lookup table is 0.098 ns at grade 3, 0.107 at 2 and 0.128 at 1** (`Figures::lut`),
+  where it was 0.13, 0.144 and 0.174. It is the placer's figure too.
+- **Every capture is charged the clock's margin, 0.062 ns** (`Figures::clock_margin`,
+  `CLOCK_MARGIN`), the 34 paths' mean, at every grade.
+- **A `DSP48E1`'s clock pin is 79 ps later than its column's slices', a block RAM's 30**
+  (84 and 32 at grade 2, 91 and 35 at grade 1; `BLOCK_CLOCK_PS`, `clock_arrival`).
+- **A `DSP48E1`'s chain** (`dsp_pin_delays`): an operand none of whose pins has a signal has
+  no register a path waits for; a `PCIN` that ends paths sets up at the cascade's figure; `B`
+  at its own register's; a `PCOUT` launches `Figures::dsp_pcout` after its `P` (0.109 from
+  `M`, 0.106 from `P` at grade 3; 0.108 and 0.081 at 2; 0.106 and 0.044 at 1); and a block in
+  a chain without its `P` register launches from its `M` at its `P` and `PCOUT`, which also
+  follow its `PCIN`: **a `Through` output with a launch of its own** (`PinDelays::launch`),
+  whose arrival is the later of the two, and where a path traced back starts when the launch
+  is the later (`place::domain_arrival`, `trace_back`). The operands' setups are the figures
+  from a `<L>Q`, and *no longer give a `<L>5FF`'s cost back*.
+- **A distributed RAM's address reaches only the port that reads at it** (`lutram_reaches`).
+- **A flip-flop's enable and reset by its slice** (`Figures::ff_setup_enable`, the
+  `SLICEL`'s before placement; `ff_setup_enable_m`); **a block RAM's setups** refitted;
+  **a wide multiplexer's select** its own arc (`Figures::muxf_select`).
+
+### Before and after, the estimate (measured)
+
+The same path by path on the new model's own builds of seeds 1 to 3 (57 found):
+
+| | estimate less worst | launch and capture | cells | connections | path less worst |
+|---|---|---|---|---|---|
+| `belff` | -0.012 | -0.058 | +0.069 | -0.009 | -0.015 |
+| `lutfit` | -0.038 | **-0.000** | **+0.002** | -0.020 | -0.019 |
+
+A table is now within 0.002 ns of Vivado's arc on the paths; `fir8`'s launch and capture
+0.001, and its path Vivado's worst (9.165 ns, its estimate 9.17); a `DSP48E1`'s and a block
+RAM's launch to a flip-flop each 0.026 under (from 0.167 and 0.118). **What is left is the
+connections and which path**: by the connection's fanout on the paths, Reticle's less
+Vivado's is -0.001 ns at one sink, -0.011 at two to four, -0.007 at five to sixteen, -0.015
+at 17 to 64 and -0.048 past 64 (the 709 sinks of `widemux`'s seed 1 on such signals, all of
+them, -0.048 too).
+
+Over the 420 clocks and seeds of `achieved.sh` (twenty seeds), Reticle's routed estimate
+less Vivado's figure (ns):
+
+| build | mean | mean absolute | root mean square |
+|---|---|---|---|
+| `belff` | -0.019 | 0.050 | 0.071 |
+| `lutfit` | **-0.034** | **0.044** | **0.066** |
+
+**The error is smaller and its bias larger.** The 0.03 a table and the margin left out had
+cancelled on most clocks, and with each right what the connections and the choice of path
+put under shows. The clocks' mean errors before and after: `fir8` +0.124 to +0.006, `mul18`
+-0.103 to -0.026, `analyser_fifo`'s read clock +0.090 to -0.041, `counter64` -0.070 to
+-0.041, `sad`'s `clk_usb` -0.066 to -0.033; worse, `regfile_alu` +0.028 to -0.154 (the path
+that was not a path had carried it; its latest paths now read a distributed RAM over a
+signal of 125 sinks, 0.12 ns under Vivado's on the path read), `lutram32` +0.005 to
+-0.036, `fsm` +0.010 to -0.026, `barrel` -0.012 to -0.042, `gray_cdc`'s first clock +0.004 to
++0.033.
+
+### Before and after, the clock (measured)
+
+The placements differ (a table's figure is the placer's), so unpaired: twenty seeds, the
+ratio of the twenty-one clocks' geometric means of the medians, **1.0032 of `belff`, 0.9966
+to 1.0080 by a bootstrap over the seeds**, inside the spread. Per clock: `sad`'s ADC clock
+0.981, `esad`'s 0.982, `sad`'s `clk_usb` 0.987, `mul18` 0.992; slower, `carry_counter` 1.039
+(seven seeds of twenty at its 1.85 ns where eleven were, the rest 1.89 to 2.03),
+`srl_delay` 1.028, `adders` 1.021, `analyser_fifo`'s write clock 1.018. **Kept for the
+estimate**, nearer Vivado's in absolute value with every figure changed Vivado's own; the
+clock is no faster.
+
+### Runtime
+
+Summed over the 340 builds: place 3,023 s and route 1,239 (`belff` 3,017 and 1,254); each
+`achieved.sh` 1,203 and 1,206 s of wall clock, on a machine shared with other work.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
+applies. With this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh` seed 4
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `a_chain_of_sums_launches_where_vivados_timer_says` (`xray::timing`): three blocks of a
+  chain, a constant `B`; the first's `PCOUT` at 0.435, the second's `M` at its `PCOUT` at
+  1.780, the last `PCIN` at 1.025 and `A` at 0.254 with the margin, the latest path 2.867 ns;
+  and the legacy model's figures as they were.
+- `a_through_output_with_its_own_launch_takes_the_later` (`place`): a chain's middle output
+  given a launch under and over its input's arrival.
+- `a_rams_address_reaches_its_own_port_and_a_select_is_its_own_arc` (`xray::timing`).
+- `the_clock_reaches_a_site_when_the_table_says` holds a `DSP48E1`'s and a block RAM's site
+  too; `a_flip_flops_setup_is_the_one_for_how_its_data_arrives` the margin on every setup,
+  an enable's and a reset's by slice, and neither a `DSP48E1` nor a block RAM given a
+  `<L>5FF`'s cost back; `a_cell_reached_by_a_slices_mux_output_pays_it` and
+  `a_carry_chains_arcs_and_a_flip_flops_setups_are_their_own` rewritten to the new figures.
+- `the_refitted_model_keeps_the_corpus_as_fast` (`tests/fpga_xray_achieved.rs`) holds
+  `lutfit` against `belff`: between 0.2 % faster and 0.6 % slower, no clock more than 4.5 %
+  slower, twenty seeds of each.
+
+**Mutations**, made by a script and put back, each failing its test: a `PCIN` at the block's
+setup; a constant operand counted; a `Through` output's launch ignored; the trace going on
+past it; a `PCOUT` at `P`'s figure; a write address reaching every output; a select at its
+data inputs' figure; the two blocks' clock figures swapped; the margin left off a placed
+setup; an enable's and a reset's slice ignored. In the fixture: a seed of `lutfit` lost, it
+1 % slower, and the two builds swapped. **Not held by a test**: the figures themselves,
+which only Vivado's timer asks, and the estimate's error, which the fixture does not keep.
+
+### Not done
+
+- **The connections of a wide signal**: 0.048 ns under Vivado's per connection past 64
+  sinks, on the paths and over all of `widemux`'s; not modelled.
+- **Which path**: Reticle's latest path is 0.019 ns under Vivado's worst on average, the
+  router having worked hardest on the paths its model calls latest. Not looked at further.
+- **A block's launch to a flip-flop** is still 0.026 ns under after its clock pin's measured
+  figure, on six paths (`mul18`, `bram_fifo`): not taken apart.
+- **A `RAM32M`'s pins** as Vivado names them (the macro's, not its leaves'): its paths were
+  not compared.
 - None of it has been on a part.

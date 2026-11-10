@@ -9631,7 +9631,10 @@ pub struct PlaceTiming {
 /// for most of its pins.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PinDelays {
-    /// A `Start` output's own launch.
+    /// A `Start` output's own launch; or a `Through` output's, a register
+    /// behind it that starts paths there too, its arrival the later of that
+    /// and its inputs' (a `DSP48E1` in a chain of sums without its own `P`
+    /// register, whose `M` register launches at its `PCOUT`).
     pub launch: Vec<Option<f64>>,
     /// An `End` input's own capture.
     pub capture: Vec<Option<f64>>,
@@ -10268,11 +10271,14 @@ fn domain_arrival(
             continue;
         }
         for pin in &inst.pins {
-            if netlist.pins[*pin].output
-                && class(*pin) == PinTiming::Start
-                && timing.pin_in(index, *pin, domain)
-            {
-                arrival[*pin] = timing.launch_at(index, *pin);
+            if !netlist.pins[*pin].output || !timing.pin_in(index, *pin, domain) {
+                continue;
+            }
+            let own = matches!(timing.pin_delays.launch.get(*pin), Some(Some(_)));
+            match class(*pin) {
+                PinTiming::Start => arrival[*pin] = timing.launch_at(index, *pin),
+                PinTiming::Through if own => arrival[*pin] = timing.launch_at(index, *pin),
+                _ => {}
             }
         }
     }
@@ -10449,22 +10455,26 @@ fn trace_back(
             .filter(|p| netlist.pins[*p].output && class(*p) == PinTiming::Through)
             .collect();
         let j = outputs.iter().position(|p| *p == driver).unwrap_or(0);
+        let through = |p: usize| {
+            input_arrival(netlist, arrival, &wire_of, p) + timing.through_at(instance, p, j)
+        };
         let Some(input) = netlist.instances[instance]
             .pins
             .iter()
             .copied()
             .filter(|p| !netlist.pins[*p].output && class(*p) == PinTiming::Through)
             .filter(|p| reaches_output(timing, *p, j))
-            .max_by(|a, b| {
-                (input_arrival(netlist, arrival, &wire_of, *a) + timing.through_at(instance, *a, j))
-                    .total_cmp(
-                        &(input_arrival(netlist, arrival, &wire_of, *b)
-                            + timing.through_at(instance, *b, j)),
-                    )
-            })
+            .max_by(|a, b| through(*a).total_cmp(&through(*b)))
         else {
             break;
         };
+        // A `Through` output with its own launch starts the path when that
+        // launch is its arrival.
+        if matches!(timing.pin_delays.launch.get(driver), Some(Some(_)))
+            && timing.launch_at(instance, driver) >= through(input)
+        {
+            break;
+        }
         steps.push(PathStep {
             instance,
             pin: input,
@@ -11407,6 +11417,44 @@ mod tests {
             );
         }
         assert!(worst_path(&netlist, &timing, &wire, 1).is_empty());
+    }
+
+    /// **A `Through` output with a launch of its own arrives at the later of
+    /// it and its inputs, and starts the path when the launch is later.** The
+    /// chain with 1.0, 0.5 and 2.0 ns connections, its third cell's output
+    /// given a launch in the clock's domain, as a `DSP48E1` in a chain of sums
+    /// has its `M` register's at its `PCOUT`: at 1.5 ns, under the 2.0 its
+    /// input brings, the chain is timed and traced as before (4.05 ns, six
+    /// pins); at 2.5, the endpoint is 2.5 + 2.0 + 0.05 and the path is that
+    /// output and the endpoint. Would catch the launch ignored (4.05 both
+    /// times), taken in place of a later input (3.55 the first time), or the
+    /// trace going on past it to the first cell; would not catch a block given
+    /// the launch wrongly, which `xray::timing`'s tests hold.
+    #[test]
+    fn a_through_output_with_its_own_launch_takes_the_later() {
+        let (_, netlist, _, mut timing) = timed_chain();
+        let mut wire = vec![0.0; netlist.pins.len()];
+        for (signal, delay) in netlist.signals.iter().zip([1.0, 0.5, 2.0]) {
+            wire[signal.sinks[0]] = delay;
+        }
+        let out = netlist.signals[2].driver.unwrap();
+        timing.domain[2] = PathDomain::Clock(0);
+        timing.pin_delays.launch = vec![None; netlist.pins.len()];
+        timing.pin_delays.launch[out] = Some(1.5);
+        let (_, longest) = path_criticality(&netlist, &timing, &wire);
+        assert_eq!(longest, vec![4050]);
+        assert_eq!(worst_path(&netlist, &timing, &wire, 0).len(), 6);
+        timing.pin_delays.launch[out] = Some(2.5);
+        let (_, longest) = path_criticality(&netlist, &timing, &wire);
+        assert_eq!(longest, vec![4550]);
+        let path = worst_path(&netlist, &timing, &wire, 0);
+        let got: Vec<(usize, bool, f64)> = path
+            .iter()
+            .map(|s| (s.instance, netlist.pins[s.pin].output, s.arrival))
+            .collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[0].0, got[0].1, got[1].0), (2, true, 3), "{got:?}");
+        assert!((got[0].2 - 2.5).abs() < 1e-9 && (got[1].2 - 4.55).abs() < 1e-9);
     }
 
     /// **Late paths are the late endpoints' own.** The chain of 5 ns, in
