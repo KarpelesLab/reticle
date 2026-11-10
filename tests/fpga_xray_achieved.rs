@@ -939,3 +939,47 @@ fn routing_for_the_latest_path_closes_part_of_the_routers_distance() {
         "Reticle's placements: {theirs:.3} with Vivado's routes, {after:.3} with Reticle's"
     );
 }
+
+/// **With a `<L>5FF`'s `<L>MUX` output in its launch the corpus is half a
+/// percent faster** (`docs/fpga-vivado-parity.md`, "A flip-flop's `MUX`
+/// output"). `muxout` is `longest` with Vivado's 0.112 ns more at every sink of
+/// a `<L>5FF` in the router's analysis, and a refinement that keeps a group only
+/// when it is better with its new branch's load: twenty seeds, 0.9947 of
+/// `longest` (`longest` and `longestb`, seeds 1 to 10 and 11 to 20) over the
+/// corpus, which a bootstrap over the seeds paired by placement puts at 0.990
+/// to 0.998, no clock more than 1.9 % slower. This holds the corpus at least
+/// 0.3 % faster, no clock more than 2.5 % slower, and twenty seeds of each.
+/// Would catch a regeneration that lost the measurement, swapped the builds or
+/// lost a seed; would not catch the model or the router regressing since,
+/// which only `achieved.sh` again says.
+#[test]
+fn a_flip_flops_mux_output_in_its_launch_makes_the_routes_faster() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (_, builds)) in &table {
+        let before: Vec<f64> = builds["longest"]
+            .iter()
+            .chain(&builds["longestb"])
+            .copied()
+            .collect();
+        let after = &builds["muxout"];
+        assert_eq!(before.len(), 20, "{design} {clock}: seeds of `longest`");
+        assert_eq!(after.len(), 20, "{design} {clock}: seeds of `muxout`");
+        let (before, after) = (median(&before), median(after));
+        assert!(
+            after <= before * 1.025,
+            "{design} {clock}: {after:.3} ns with the `MUX` output against {before:.3}"
+        );
+        logs[0] += before.ln();
+        logs[1] += after.ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after <= before * 0.997,
+        "Reticle's flow: {after:.3} with the `MUX` output, {before:.3} without"
+    );
+}

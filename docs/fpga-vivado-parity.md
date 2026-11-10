@@ -1355,7 +1355,9 @@ the 95th percentile. That section is left as it was measured.
 - **The cells were grade 1's or prjxray's.** A flip-flop's clock to `Q` is 0.341 ns in
   a `SLICEL` and 0.393 in a `SLICEM`, 0.313 and 0.361 on the `5FF` bels; a lookup
   table 0.097 on most arcs and 0.21 to 0.25 on a quarter, by nothing this flow can
-  tell apart (not the pin, the half, the fanout nor the slice), 0.13 on average; the
+  tell apart (not the pin, the half, the fanout nor the slice), 0.13 on average
+  (*found since: the driver, an input reached by a `<L>MUX` output from a `5FF`, a
+  `MUXF7`, a `MUXF8` or a distributed RAM* ("A flip-flop's `MUX` output")); the
   data input's setup -0.05 from its own slice and 0.079 through a bypass pin, the
   enable's 0.218, the reset's 0.33; a block RAM's clock to output 1.846; a carry
   chain from `CI` to `CO3` 0.089 and from `S0` 0.395, where the legacy model has 0.3
@@ -1790,7 +1792,9 @@ the fixture's `before` and `after` fails `tests/fpga_xray_achieved.rs`.
   run's 18,000 arcs not the physical pin (a quarter slow on each of `A1` to `A5`, a
   third on `A6`), the half of a pair, the fanout or the input's own delay, and not
   the edge, rise and fall being equal; nor what the fit checked before. The model
-  charges the mean, 0.13.
+  charges the mean, 0.13. *Found since* ("A flip-flop's `MUX` output"): *the input's driver. An
+  input reached through a slice's `<L>MUX` output from a `<L>5FF` is 0.21, from a
+  `<L>Q` 0.097.*
 - None of it has been on a part, and no Husky build has been made with the fitted
   model.
 
@@ -3325,7 +3329,8 @@ before (below).
    *The reading this replaces*, in "Eight flip-flops a slice", that a flip-flop through
    a way was charged 0.13 ns too much: that was Vivado's setup on four probes at one
    edge, -0.06 ns. A pin's setup is one of two figures about 0.1 ns apart (by
-   something not read; the histograms are two humps), and the way's mean is 0.04 over
+   something not read; the histograms are two humps; *the driver, read since: from a
+   `<L>5FF` the upper* ("A flip-flop's `MUX` output")), and the way's mean is 0.04 over
    the bypass's in a `SLICEL`, not 0.13 under it. The lower half's way, rarer (54
    flip-flops in seed 1 of `--route-throughs all`), had 0.11 in a `SLICEL`: the
    upper half's figure is used for both. Neutral by Vivado's timer, 1.244 against
@@ -3485,7 +3490,8 @@ for `fill`'s, each fail `tests/fpga_xray_achieved.rs`.
   column's figure, not measured. **The `xc7a35t` done since**, in both packages
   ([The clock's arrival on the XC7A35T](#the-clocks-arrival-on-the-xc7a35t)); the
   block RAM and `DSP48E1` columns are still not measured on either.
-- **Why the setup has two figures** a pin, about 0.1 ns apart.
+- **Why the setup has two figures** a pin, about 0.1 ns apart. *Done since: the
+  upper is the data from a `<L>5FF`* ("A flip-flop's `MUX` output").
 - None of it has been on a part.
 
 ## Byte writes as Vivado arranges them
@@ -9050,7 +9056,211 @@ binary built `sad`, `lutram32`, `crc32`, `widemux`, `esad`, `mul18`, `counter64`
   by the table) and wires a slack signal holds (18, +109); the refinement taking wires
   from such signals changed nothing measurable on top of this.
 - **Why the refinement's matching does not find Vivado's inputs** for `carry_counter`'s
-  comparison table, whose model knows the `C5FF`'s later launch: not traced.
+  comparison table, whose model knows the `C5FF`'s later launch: not traced. *Traced
+  since* ("A flip-flop's `MUX` output"): *the model did not know it. It had the `C5FF` launching 28 ps
+  before a `DFF`, where Vivado charges the table 115 ps more for an input from it.*
 - **The placer** weighs its paths against the period still. Whether it should as the
   router now does was not measured.
+- None of it has been on a part.
+
+## A flip-flop's `MUX` output
+
+**Asked: "Routing for the latest path, met or not" left the largest class of what
+separates the two routers as a table's inputs given otherwise than Vivado gives them,
+and could not say why the refinement's matching did not find Vivado's assignment on
+`carry_counter`'s comparison table, whose model knows the `C5FF`'s later launch. Trace
+it: per input, what each assignment gives the table, what the matching optimises, and
+whether it is the objective, the arrivals, the pins' own delays, the order of matching
+and routing or wires taken before the matching. Then fix it.** Vivado 2026.1 at
+`xc7a100tftg256-3` (and `-2`, `-1` for the figures), run on 2026-11-10 on 75ec9d5f.
+**Everything here is Vivado's timer of Reticle's placements and routes; nothing has
+been on a part.**
+
+### The table, input by input (measured)
+
+`qor/carry_counter.v` seed 1, `c24__lut7`, the comparison's first table: three bits of
+`depth` against three of `count`. Vivado's timer, through each input, of Reticle's
+routes (`report_timing -through`, the scripts not committed): the clock's arrival at
+the source less the pessimism removed, its clock to `Q`, the way to the pin, and the
+table's own arc:
+
+| input | from | Reticle's pin, way | clock to `Q` | table's arc | slack | Vivado's routes: pin, way, slack |
+|---|---|---|---|---|---|---|
+| `depth_1` | `C5FF` (`CMUX`) | `A1`, 712 ps | 0.313 | **0.212** | **-0.500** | `A4`, 425, -0.214 |
+| `count_1` | `BFF`, `SLICEM` (`BQ`) | `A2`, 604 | 0.393 | 0.097 | -0.336 | `A2`, 604, -0.336 |
+| `depth_0` | `DFF` (`DQ`) | `A3`, 585 | 0.341 | 0.097 | -0.286 | `A1`, 718, **-0.420** |
+| `depth_2` | `A5FF` (`AMUX`) | `A4`, 407 | 0.313 | **0.215** | -0.177 | `A5`, 283, -0.053 |
+| `count_0` | `AFF`, `SLICEM` | `A5`, 303 | 0.393 | 0.097 | -0.035 | `A3`, 475, -0.207 |
+| `count_2` | `CFF`, `SLICEM` | `A6`, 225 | 0.393 | 0.097 | 0.043 | `A6`, 215, 0.053 |
+
+**The table's arc is 0.21 ns from the two inputs a `5FF` drives and 0.097 from the
+others, whichever pin each is on**: `depth_1`'s is 0.212 on `A1` in Reticle's routes and
+on `A4` in Vivado's. So each input's launch, as the table sees it, is the source's
+clock to `Q` and that arc: `depth_1` 4.561 ns, `depth_2` 4.543, the `count` bits 4.505,
+`depth_0` 4.474. Under Vivado's timer `depth_1` is the latest input and `depth_0` the
+earliest, and Vivado gave `depth_1` a fast pin and `depth_0` the slowest.
+
+**What the refinement read** (the group's own figures, printed by a probe not
+committed): each input's slack plus its routed delay, which is the time the table
+allows it from its source's launch, is 735 ps for the three `count` bits, 781 for
+`depth_0`, 811 for `depth_1` and 814 for `depth_2` — the `5FF`s *earliest*, since the
+model had their clock to `Q` at 0.313 against 0.341 for a `DFF` and 0.393 in a
+`SLICEM`, and one figure, 0.13, for the table from any input. So:
+
+- **The objective is not it.** `best_assignment` leaves the table's least slack
+  largest, which is what a latest input wants; given the model's figures, it gave
+  `depth_1` (to it the earliest input with room) the 711 ps of `A1`, and that was the
+  best assignment *for the model*.
+- **The pins' own delays are not it.** The searches' delays include each pin's own
+  (`A1` 394 ps past its `IMUX`), and match Vivado's ways within a few picoseconds
+  (`A1` 711 against Vivado's 712).
+- **The arrivals are it**: the model put `depth_1` 76 ps before the `count` bits where
+  Vivado puts it 56 ps after, 132 ps the wrong way.
+- **Wires taken before the matching are the rest.** Vivado's way to `A4` for `depth_1`
+  (`WR1BEG1`, 425 ps) and its way to `A1` for `depth_0` (`WL1BEG2`) are held in
+  Reticle's routes by `depth_7` and `depth_23`, which the refinement does not take, so
+  with the arrivals right its best free way for `depth_1` is `A3` in 462 ps.
+- **And a figure the refinement ignored**: it predicted the group's least slack at 109
+  ps where the analysis then read 101, the 8 ps (`Timing::branch_ps`) its searches leave
+  out for the new branch's load; 101 is what it had before, so each of the three rounds
+  gave the table the same routes again and counted it: the refinement counted 61 groups
+  on this build, and 10 with the check below.
+
+### Every cell a `5FF` drives (measured)
+
+`get_timing_arcs` of every cell of Reticle's routes of seed 1 of twelve designs (`sad`,
+`widemux`, `lutram32`, `crc32`, `regfile_alu`, `esad`, `fsm`, `barrel`, `counter64`,
+`bram_fifo`, `mul18`, `analyser_fifo`; and seeds 2 to 5 of the four with blocks), each
+input classed by the site pin its driver leaves by, the slow corner's maximum (ns):
+
+| arc or setup | from a `<L>Q` | from a `5FF` (`<L>MUX`) |
+|---|---|---|
+| a lookup table's input to `O` | 0.099 (9,345) | 0.209 (3,221) |
+| a flip-flop's `D`, bypass, `SLICEL`, on an `FF` / a `5FF` | 0.037 / 0.026 | 0.150 / 0.138 |
+| the same, `SLICEM` | 0.011 / 0.002 | 0.124 / 0.113 |
+| a flip-flop's reset | 0.323 | 0.437 |
+| a carry chain's `DI` | 0.356 | 0.472 |
+| a `DSP48E1`'s `A` / `B` | 0.254 / 0.324 | 0.362 / 0.433 |
+| a block RAM's `DIADI` | 0.197 | 0.310 |
+
+**0.11 ns on every kind of cell**, and nothing from a table's own output pin (0.097) or
+a pad. It is the `<L>MUX` output and not the `5FF`: a table's input from a `MUXF7` is
+0.224, from a `MUXF8` 0.238, from a distributed RAM's `<L>MUX` 0.242, but from a carry
+chain's `<L>MUX` mostly 0.097 (0.161 mean). At grade 2 the difference is 0.133 (a
+table's 0.241 against 0.108, a setup's the same within 1 ps), at grade 1 0.173 (0.301
+against 0.129). **This is the "0.21 to 0.25 on a quarter, by nothing this flow can tell
+apart" of "Speed grades", and the "two figures about 0.1 ns apart" of "Filling
+slices"'s setups.** Whether Vivado's own paths read 0.097 because its placements put
+few late launches on the `5FF` bels was not checked.
+
+### What was changed
+
+**Under the fitted model, a `<L>5FF`'s launch carries what its `<L>MUX` output costs
+every cell it reaches** (`Figures::five_out`, 0.112 ns at grade 3, 0.133 at 2, 0.173 at
+1; `xray::place_timing_on_sites`), once the placement says which bel each flip-flop is
+on: the placer's own estimate, which knows no bels, is as it was, and so is every
+placement. Where a figure was a mean over both kinds of driver it is split:
+
+- **A flip-flop's bypass setup** is the figure from a `<L>Q`, 0.030 ns in a `SLICEL` and
+  0.005 in a `SLICEM` at grade 3 (0.037 and 0.009 at 2, 0.055 and 0.022 at 1), where it
+  was 0.082 and 0.058; from a `5FF` the launch adds the rest. The way's setups are the
+  old means: this read did not tell a way's flip-flops apart.
+- **A block's one setup** (a `DSP48E1`'s operands, a block RAM's, a distributed RAM's) is
+  given the 0.112 back where a `5FF` drives the pin, since its figure was read where most
+  drivers were `5FF`s (a `DSP48E1`'s 0.375 against `A`'s 0.362 from a `5FF`); a block
+  read from a `<L>Q` is still charged that figure.
+- **A lookup table** keeps its 0.13 from any input, now 0.03 over Vivado's from a `<L>Q`
+  and under it from a `5FF` by the same once `five_out` is added; every input of one
+  table is charged it alike, so it ranks no input above another.
+
+**The refinement keeps a group only if its least slack is better as the analysis will
+read it** (`route::refine::try_group`): each moved sink's delay through `sink_delays`,
+the branches' load with it, after its searches' own figure.
+
+`--delay-model legacy`, which the Husky's builds pass, sets none of it.
+
+### Before and after (measured)
+
+`muxout` against `longest` (seeds 1 to 10 of `achieved.txt`, and `longestb` seeds 11 to
+20, the same build), twenty seeds, the same placements seed for seed (`x.tcl` but for
+the tables' pins). The ratio of the twenty-one clocks' geometric means of the medians,
+with a bootstrap over the seeds:
+
+| build | ratio | paired, 5th-95th | paired, 2.5th-97.5th | unpaired, 5th-95th |
+|---|---|---|---|---|
+| the launch alone, no block given it back | 0.9986 | 0.9935-1.0012 | | 0.9922-1.0026 |
+| the refinement's check alone | 1.0007 | 0.9990-1.0016 | 0.9987-1.0018 | 0.9950-1.0056 |
+| the launch and the check | 0.9967 | 0.9921-0.9998 | 0.9914-1.0004 | 0.9907-1.0011 |
+| **all three, `muxout`** | **0.9947** | **0.9908-0.9984** | **0.9902-0.9993** | 0.9895-1.0000 |
+| `muxout`, seeds 1 to 10 | 0.9981 | 0.9927-1.0033 | 0.9916-1.0043 | 0.9901-1.0058 |
+| `muxout`, seeds 11 to 20 | 0.9930 | 0.9874-0.9971 | 0.9864-0.9980 | 0.9852-0.9999 |
+
+**Half a percent over twenty seeds, beyond their spread paired, at its edge unpaired;
+seeds 11 to 20 alone are beyond their own spread, seeds 1 to 10 alone are not.** Per clock: `srl_delay` 0.976, `widemux` 0.979,
+`crc32` 0.980, `lutram32` 0.986, `carry_counter` 0.987, `fsm` 0.988, `analyser_fifo`'s read
+clock 0.989, `counter64` 0.990; slower `sad`'s `clk_usb` 1.019 (its seeds run from 0.91
+to 1.09 of `longest`'s, eight slower and nine faster), `regfile_alu` 1.004, `esad`'s `clk_usb` 1.004, `adders` 1.002.
+Without the third change `mul18` was 2.5 % slower: its
+`DSP48E1` operands come from `5FF`s and were charged 0.11 twice, and the router spent
+wires on them that its latest path, the product's parity through two tables, wanted
+(twelve of twenty seeds slower); with it `mul18` is 1.001.
+
+`carry_counter` seed 1's table under Vivado's timer, after: `depth_0` on `A1` the
+latest input at -0.420 ns, Vivado's own routes' figure, `depth_1` on `A3` in 471 ps at
+-0.259; the clock's latest path is now the counter's carry (-0.388, 1.968 ns against
+1.980).
+
+**The routed estimate is nearer Vivado's**: over the 420 clocks and seeds, Reticle's
+estimate less Vivado's figure is -0.048 ns on average against -0.088, 0.072 in absolute
+value against 0.104, a root mean square of 0.100 against 0.136.
+
+**Against Vivado's routes of the same placements** (`vfree`, seeds 1 to 10): 0.9934 of
+`muxout`, where it was 0.9915 of `longest`.
+
+### Runtime
+
+The route stage summed over the 170 builds of seeds 1 to 10, and of 11 to 20: 617 and
+593 s before, 625 and 586 after; the place stage, which nothing here changed, 1,440 and
+1,366 before and 1,432 and 1,405 after, which is the machine's load. The refinement's
+groups counted as kept fell from 50,809 and 49,056 to 16,375 and 16,069: most were the
+same routes given again.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
+applies. With this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `a_flip_flops_setup_is_the_one_for_how_its_data_arrives` (`xray::timing`) holds a
+  `5FF`'s launch at its clock to `Q` and `five_out`, and gives two blocks reading an
+  `AFF` and an `A5FF` their own setup and that less `five_out`.
+- `a_group_no_better_once_its_branch_is_loaded_is_not_kept` (`route`): a table's slow
+  input reached through a chain that also feeds a register; the searches find the fast
+  input 100 ps from the chain's middle, which then has two branches. With no load the
+  inputs are swapped; at 300 ps a branch the new way is no better and nothing is kept.
+- `a_flip_flops_mux_output_in_its_launch_makes_the_routes_faster`
+  (`tests/fpga_xray_achieved.rs`) holds `muxout` against `longest` and `longestb`: the
+  corpus at least 0.3 % faster, no clock more than 2.5 % slower, twenty seeds of each.
+
+**Mutations**, made by a script and put back, each failing its test: `five_out` left out
+of the launch, a block given it back whatever its driver, a block not given it back,
+the refinement's check on the searches' figures alone; in the fixture, a seed of
+`muxout` lost and `muxout`'s figures 1 % slower.
+
+### Not done
+
+- **The placer.** It times every flip-flop at 0.345 ns before it knows the bels, and
+  fills the `5FF`s ("Filling slices") as though one were as fast as another; a `5FF`
+  that launches a late path costs that path 0.11 ns under Vivado's timer. Whether the
+  placer should keep late launches off the `5FF`s was not measured.
+- **The other `<L>MUX` outputs**: a `MUXF7`'s, a `MUXF8`'s and a distributed RAM's cost
+  their sinks as much, and are charged nothing.
+- **Wires a slack signal holds**: Vivado's ways for `carry_counter`'s table were held by
+  two other `depth` bits. Not tried again here; "Routing for the latest path, met or
+  not" tried taking them and measured nothing.
+- **The class counts of "Routing for the latest path, met or not"** were not taken
+  again on these routes.
 - None of it has been on a part.

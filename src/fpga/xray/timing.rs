@@ -246,6 +246,13 @@ pub(crate) struct Figures {
     /// `AFF` to `DFF`, its `A5FF` to `D5FF`, and the same two of a `SLICEM`
     /// ([`place_timing_on_sites`]).
     pub ff_launch_bels: [f64; 4],
+    /// What every cell a `<L>5FF` drives pays over what it would pay driven
+    /// by a flip-flop's `<L>Q`, ns: such a flip-flop leaves its slice by the
+    /// lane's `<L>MUX` output, and Vivado's timer charges the arc or the setup
+    /// of the cell it reaches that much more (a lookup table's 0.21 ns against
+    /// 0.097 at grade 3). Added to a `<L>5FF`'s launch by
+    /// [`place_timing_on_sites`], since every one of its sinks pays it.
+    pub five_out: f64,
     /// A flip-flop's data input's setup from a cell of its own slice, in a
     /// `SLICEL` and a `SLICEM` ([`SETUP_INSIDE`] at grade 3).
     pub setup_inside: (f64, f64),
@@ -293,6 +300,7 @@ pub(crate) const LEGACY: Figures = Figures {
     // Not read: the legacy model times every flip-flop by `FF_LAUNCH` and
     // `FF_SETUP` wherever it is.
     ff_launch_bels: [FF_LAUNCH; 4],
+    five_out: 0.0,
     setup_inside: (FF_SETUP, FF_SETUP),
     setup_bypass: (FF_SETUP, FF_SETUP),
     setup_way: (FF_SETUP, FF_SETUP),
@@ -305,8 +313,11 @@ pub(crate) const LEGACY: Figures = Figures {
 /// `testdata/fpga/vivado/timing/arcs.txt` was written from, on Reticle's own
 /// placements (the slow corner's maximum of `get_timing_arcs`): a lookup
 /// table, 0.13 ns, which is 0.097 on most of its arcs and 0.21 to 0.25 on a
-/// quarter of them, by nothing this flow could tell apart (not the pin, the
-/// half, the fanout nor the slice); a flip-flop's clock to `Q` before its site
+/// quarter of them (*read then as by nothing this flow could tell apart, not
+/// the pin, the half, the fanout nor the slice; it is the driver: an input
+/// reached from a `<L>5FF`, a `MUXF7`, a `MUXF8` or a distributed RAM's
+/// `<L>MUX` output, which [`FIVE_OUT`] charges a `<L>5FF`'s every sink*); a
+/// flip-flop's clock to `Q` before its site
 /// is known (0.313 to 0.393 by slice and bel, which
 /// [`place_timing_on_sites`] then applies), its data input's setup, 0.027,
 /// its clock enable's, 0.218, and its reset's, 0.33; `MUXF7` and `MUXF8` from a
@@ -357,6 +368,7 @@ pub(crate) const VIVADO: Figures = Figures {
     wire: VIVADO_WIRE,
     carry_arcs: Some(CARRY_ARCS),
     ff_launch_bels: [0.341, 0.313, 0.393, 0.361],
+    five_out: FIVE_OUT,
     setup_inside: SETUP_INSIDE,
     setup_bypass: SETUP_BYPASS,
     setup_way: SETUP_WAY,
@@ -420,8 +432,9 @@ pub(crate) const VIVADO_2: Figures = Figures {
     wire: (0.474, 0.0402, 0.0271),
     carry_arcs: Some(CARRY_ARCS_2),
     ff_launch_bels: [0.379, 0.348, 0.433, 0.398],
+    five_out: 0.133,
     setup_inside: (-0.040, -0.090),
-    setup_bypass: (0.100, 0.072),
+    setup_bypass: (0.037, 0.009),
     setup_way: (0.147, 0.101),
     idelay: (0.679, 0.969),
 };
@@ -470,8 +483,9 @@ pub(crate) const VIVADO_1: Figures = Figures {
     wire: (0.594, 0.0485, 0.0323),
     carry_arcs: Some(CARRY_ARCS_1),
     ff_launch_bels: [0.456, 0.419, 0.518, 0.478],
+    five_out: 0.173,
     setup_inside: (-0.040, -0.102),
-    setup_bypass: (0.137, 0.102),
+    setup_bypass: (0.055, 0.022),
     setup_way: (0.201, 0.139),
     idelay: (0.815, 1.012),
 };
@@ -1905,8 +1919,16 @@ pub fn clock_arrival_ps(part: &str, grade: SpeedGrade, x: u32, y: u32) -> Option
 /// ([`super::thru`]), at grade 3; [`Figures::setup_inside`] and the others are
 /// each grade's. See [`place_timing_on_sites`] for where each was read.
 const SETUP_INSIDE: (f64, f64) = (-0.039, -0.082);
-/// See [`SETUP_INSIDE`].
-const SETUP_BYPASS: (f64, f64) = (0.082, 0.058);
+/// See [`SETUP_INSIDE`]: from a flip-flop's `<L>Q`, a pad or a table's own
+/// output; from a `<L>5FF`, [`FIVE_OUT`] more, which its launch carries.
+const SETUP_BYPASS: (f64, f64) = (0.030, 0.005);
+/// [`Figures::five_out`] at grade 3: Vivado 2026.1's arcs at
+/// `xc7a100tftg256-3` on Reticle's routes of seed 1 of twelve designs of the
+/// timing corpus, a lookup table's 0.209 ns from a `<L>5FF` (3,221 arcs)
+/// against 0.099 from a `<L>Q` (9,345), and a flip-flop's bypass setup 0.112
+/// more (708 setups against 1,019); grade 2's 0.133 and grade 1's 0.173 the same arcs
+/// at those grades (five designs).
+const FIVE_OUT: f64 = 0.112;
 /// See [`SETUP_INSIDE`].
 const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 
@@ -1917,8 +1939,10 @@ const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 /// corpus: `arcs.txt`; `Figures::ff_launch_bels` at the other grades). And
 /// its data input's setup by where the data comes
 /// from, in a `SLICEL` and a `SLICEM`: -0.039 and -0.082 ns from a cell of its
-/// own slice, which reaches it inside the site (`SETUP_INSIDE`); 0.082 and
-/// 0.058 through the slice's bypass pin from anywhere else (`SETUP_BYPASS`);
+/// own slice, which reaches it inside the site (`SETUP_INSIDE`); 0.030 and
+/// 0.005 through the slice's bypass pin from anything but a `<L>5FF`
+/// (`SETUP_BYPASS`), whose own launch carries the 0.112 more Vivado charges a
+/// setup it reaches (`Figures::five_out`);
 /// and 0.122 and 0.083 through the lane's table on one of `ways`, the ways the
 /// router is given ([`crate::fpga::place::route_throughs_needed`];
 /// `SETUP_WAY`). A way ends at the lane's `<L>FF` alone, and is open only
@@ -1932,7 +1956,12 @@ const SETUP_WAY: (f64, f64) = (0.122, 0.083);
 /// slice and 0.079 from anywhere else, measured before there were ways, were
 /// every slice's: a `SLICEM`'s ends were 0.02 to 0.03 ns late and a way's in a
 /// `SLICEL` 0.04 early. A pin's setup is one of two figures about 0.1 ns apart,
-/// by something not read, and these are means over both. One figure
+/// *read then as by something not read, and the bypass's 0.082 and 0.058 were
+/// means over both*: the upper is the data from a `<L>5FF` (0.138 to 0.150 in
+/// a `SLICEL` against 0.026 to 0.037 from a `<L>Q`, 1,226 flip-flops of seed 1
+/// of twelve designs; `docs/fpga-vivado-parity.md`, "A flip-flop's `MUX`
+/// output"), which is now in the driver's launch. The way's figures are the
+/// old means still: that read did not tell a way's flip-flops apart. One figure
 /// for all, the 0.027 before placement, put a register-to-register path's end
 /// 0.05 ns early, and those were the endpoints the estimate was furthest under
 /// Vivado on. Nothing for [`DelayModel::Legacy`], whose one figure is every
@@ -1965,7 +1994,8 @@ pub fn place_timing_on_sites(
         let bel = graph.sites[site].bel.as_str();
         let slicem = bel.starts_with("SLICEM");
         let five = bel.ends_with("5FF");
-        timing.launch[index] = f.ff_launch_bels[usize::from(slicem) * 2 + usize::from(five)];
+        timing.launch[index] = f.ff_launch_bels[usize::from(slicem) * 2 + usize::from(five)]
+            + if five { f.five_out } else { 0.0 };
         // The slice a bel is in: `SLICEL_X0_AFF` is in `SLICEL_X0`.
         let slice_of = |site: usize| {
             let site = &graph.sites[site];
@@ -1996,6 +2026,38 @@ pub fn place_timing_on_sites(
                 by_slice(f.setup_bypass)
             });
         }
+    }
+    // A block's setup (a `DSP48E1`'s operands, a block RAM's or a distributed
+    // RAM's inputs) is one figure for every driver, read where most of its
+    // drivers were `<L>5FF`s; such a driver's launch now carries what its
+    // `<L>MUX` output costs, so the block's figure takes it back off rather
+    // than charge it twice. A `DSP48E1`'s `A` from a `<L>5FF` is 0.362 ns
+    // under Vivado's timer and from a `<L>Q` 0.254, against 0.375 for both.
+    let five_ff = |instance: usize| {
+        netlist.instances[instance].kind == "ff"
+            && placement
+                .site_of(instance)
+                .is_some_and(|site| graph.sites[site].bel.ends_with("5FF"))
+    };
+    for (index, p) in netlist.pins.iter().enumerate() {
+        if p.output
+            || netlist.instances[p.instance].kind == "ff"
+            || !matches!(timing.pins.get(index), Some(PinTiming::End))
+        {
+            continue;
+        }
+        let from_five = p
+            .signal
+            .and_then(|s| netlist.signals[s].driver)
+            .is_some_and(|d| five_ff(netlist.pins[d].instance));
+        if !from_five {
+            continue;
+        }
+        if timing.pin_delays.capture.len() < netlist.pins.len() {
+            timing.pin_delays.capture.resize(netlist.pins.len(), None);
+        }
+        let own = timing.pin_delays.capture[index].unwrap_or(timing.capture[p.instance]);
+        timing.pin_delays.capture[index] = Some(own - f.five_out);
     }
 }
 
@@ -2160,8 +2222,10 @@ mod tests {
     /// model sets none.
     ///
     /// Would catch the ways ignored, a way taken for one it does not reach,
-    /// the two slices' figures swapped and the slice read from the driver's
-    /// bel. Would not catch a figure itself being wrong: those are Vivado's
+    /// the two slices' figures swapped, the slice read from the driver's bel,
+    /// a `<L>5FF`'s launch without what its `<L>MUX` output costs its sinks
+    /// ([`Figures::five_out`]), and a block's setup charging it a second time
+    /// or given it back for a driver that is no `<L>5FF`. Would not catch a figure itself being wrong: those are Vivado's
     /// means (`docs/fpga-vivado-parity.md`, "Filling slices"), which only a
     /// run against Vivado's timer asks, nor the router passing a way by,
     /// which `route_throughs_needed` opening only what a lane needs rules out.
@@ -2224,18 +2288,22 @@ mod tests {
         // flip-flops, 2 in tile 0's `SLICEL` `AFF` reading table 0, and 3, 4
         // and 5 in tile 1's `AFF`, `A5FF` and `SLICEM` `AFF` reading table 0.
         type Spec<'a> = (&'a str, &'a [(&'a str, usize, bool)]);
-        let specs: [Spec<'_>; 6] = [
+        // And 6 and 7, blocks with a setup of their own, reading the `AFF`
+        // and the `A5FF` of tile 1.
+        let specs: [Spec<'_>; 8] = [
             ("lut", &[("o", 0, true)]),
             ("lut", &[("o", 1, true)]),
             ("ff", &[("d", 0, false)]),
+            ("ff", &[("d", 0, false), ("q", 2, true)]),
+            ("ff", &[("d", 0, false), ("q", 3, true)]),
             ("ff", &[("d", 0, false)]),
-            ("ff", &[("d", 0, false)]),
-            ("ff", &[("d", 0, false)]),
+            ("blk", &[("d", 2, false)]),
+            ("blk", &[("d", 3, false)]),
         ];
         let mut netlist = Netlist {
             instances: Vec::new(),
             pins: Vec::new(),
-            signals: (0..2)
+            signals: (0..4)
                 .map(|n| Signal {
                     name: format!("s{n}"),
                     driver: None,
@@ -2275,7 +2343,7 @@ mod tests {
                 pin: None,
             });
         }
-        let mut placement = Placement::new(6, graph.sites.len());
+        let mut placement = Placement::new(8, graph.sites.len());
         for (instance, (x, bel)) in [
             (0, "SLICEL_X0_A6LUT"),
             (1, "SLICEL_X0_A6LUT"),
@@ -2290,12 +2358,16 @@ mod tests {
             placement.place(instance, site(*x, bel));
         }
         let n = netlist.pins.len();
+        let block_pin = |instance: usize| netlist.instances[instance].pins[0];
+        let mut pins = vec![PinTiming::Ignored; n];
+        pins[block_pin(6)] = PinTiming::End;
+        pins[block_pin(7)] = PinTiming::End;
         let timing = PlaceTiming {
-            pins: vec![PinTiming::Ignored; n],
-            cell: vec![0.0; 6],
-            launch: vec![0.0; 6],
-            capture: vec![0.0; 6],
-            domain: vec![PathDomain::Untimed; 6],
+            pins,
+            cell: vec![0.0; 8],
+            launch: vec![0.0; 8],
+            capture: vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4],
+            domain: vec![PathDomain::Untimed; 8],
             cycles: Vec::new(),
             untimed_from: Vec::new(),
             untimed_to: Vec::new(),
@@ -2383,6 +2455,19 @@ mod tests {
         );
         assert_eq!(slow.launch[2], VIVADO_1.ff_launch_bels[0]);
         assert_eq!(slow.launch[5], VIVADO_1.ff_launch_bels[2]);
+        // A `<L>5FF` leaves its slice by the lane's `<L>MUX`, which every one
+        // of its sinks pays.
+        assert_eq!(
+            slow.launch[4],
+            VIVADO_1.ff_launch_bels[1] + VIVADO_1.five_out
+        );
+        // A block's one setup gives it back for the `A5FF`, whose launch
+        // carries it, and not for the `AFF`.
+        assert_eq!(slow.pin_delays.capture[block_pin(6)], None);
+        assert_eq!(
+            slow.pin_delays.capture[block_pin(7)],
+            Some(0.4 - VIVADO_1.five_out)
+        );
     }
 
     /// **A `LUT6_2`'s inputs reach the half that reads them.** One table,
