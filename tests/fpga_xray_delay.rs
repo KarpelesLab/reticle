@@ -410,3 +410,99 @@ fn at_each_grade_every_design_agrees_with_vivado_at_that_grade() {
         }
     }
 }
+
+/// What `placement.txt`'s fit (`placement_fit.py fit`) predicts for one of its
+/// sampled connections: `c <dx> <dy> <fanout> <driver> <sink> <inputs used>`.
+fn placement_fit_predicts(terms: &std::collections::BTreeMap<String, f64>, words: &[&str]) -> f64 {
+    let term = |name: &str| terms.get(name).copied().unwrap_or(0.0);
+    let mut ns = term("base");
+    for (axis, word) in [("dx", words[0]), ("dy", words[1])] {
+        let n: i64 = word.parse::<i64>().unwrap().abs();
+        for k in 1..=n.min(8) {
+            ns += term(&format!("{axis}>={k}"));
+        }
+        #[allow(clippy::cast_precision_loss, reason = "a few hundred tiles")]
+        let over = |at: i64| (n - at).max(0) as f64;
+        ns += term(&format!("{axis}-8")) * over(8) + term(&format!("{axis}-16")) * over(16);
+    }
+    let fanout: usize = words[2].parse().unwrap();
+    let band = [
+        (4, "2-4"),
+        (8, "5-8"),
+        (16, "9-16"),
+        (32, "17-32"),
+        (64, "33-64"),
+    ]
+    .iter()
+    .find(|(most, _)| fanout <= *most)
+    .map_or("65-", |(_, name)| name);
+    if fanout > 1 {
+        ns += term(&format!("fanout_{band}"));
+    }
+    let sink = if words[4] == "lut.i" {
+        format!("lut.i{}", words[5].parse::<usize>().unwrap().min(6))
+    } else {
+        words[4].to_owned()
+    };
+    ns + term(&format!("driver_{}", words[3])) + term(&format!("sink_{sink}"))
+}
+
+/// **The placement's refitted estimate predicts the routed delay where its
+/// line did not** (`placement.txt`; `docs/fpga-vivado-parity.md`, "The
+/// placement's estimate, refitted"). Over the sample of the corpus's routed
+/// connections, the fit's terms put a connection within 5 % of its routed
+/// delay at the median and under 1.9 times it at the 95th percentile, where
+/// the line (`xray::timing::VIVADO_WIRE`, the placement's estimate in every
+/// build) is over 1.06 and 2.0; at twenty tiles and more within 10 % where the
+/// line is a fifth over; and with a root mean square error under two thirds of
+/// the line's.
+///
+/// What the document claims of the fit, held to the numbers it was read
+/// from. Would catch the fit's file regenerated with a fit that lost that, or
+/// a sample that no longer shows the line's overestimate; would not catch
+/// anything the flow does since, as the fit is not the placement's estimate
+/// (the section says why) and this reads a quoted run.
+#[test]
+fn the_placements_refit_predicts_the_routed_delay_better_than_its_line() {
+    let Some(text) = fixture("placement.txt") else {
+        return;
+    };
+    let terms: std::collections::BTreeMap<String, f64> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("fit "))
+        .map(|l| {
+            let (term, ns) = l.split_once(' ').unwrap();
+            (term.to_owned(), ns.parse().unwrap())
+        })
+        .collect();
+    assert!(terms.len() > 60, "{} terms", terms.len());
+    let (mut fit, mut line, mut far, mut far_line) = (vec![], vec![], vec![], vec![]);
+    let (mut err, mut line_err) = (0.0f64, 0.0f64);
+    for l in text.lines().filter_map(|l| l.strip_prefix("c ")) {
+        let w: Vec<&str> = l.split(' ').collect();
+        let (routed, was): (f64, f64) = (w[6].parse().unwrap(), w[7].parse().unwrap());
+        let ns = placement_fit_predicts(&terms, &w);
+        fit.push(ns / routed);
+        line.push(was / routed);
+        err += (ns - routed).powi(2);
+        line_err += (was - routed).powi(2);
+        let tiles = w[0].parse::<i64>().unwrap().abs() + w[1].parse::<i64>().unwrap().abs();
+        if tiles >= 20 {
+            far.push(ns / routed);
+            far_line.push(was / routed);
+        }
+    }
+    assert!(fit.len() > 5000, "{} connections", fit.len());
+    let (median, p95) = (quantile(&fit, 0.5), quantile(&fit, 0.95));
+    assert!((0.95..1.05).contains(&median), "fit median {median}");
+    assert!(p95 < 1.9, "fit 95th {p95}");
+    let (line_median, line_p95) = (quantile(&line, 0.5), quantile(&line, 0.95));
+    assert!(
+        line_median > 1.06 && line_p95 > 2.0,
+        "line {line_median} {line_p95}"
+    );
+    let (far_median, far_line_median) = (quantile(&far, 0.5), quantile(&far_line, 0.5));
+    assert!((0.9..1.1).contains(&far_median), "fit far {far_median}");
+    assert!(far_line_median > 1.2, "line far {far_line_median}");
+    assert!(err < line_err * 2.0 / 3.0, "{err} {line_err}");
+}

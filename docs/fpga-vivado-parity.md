@@ -7951,7 +7951,9 @@ tree's release binary `build.sh` writes
   reference shift registers, and the counters again; not looked at.
 - **The placement's estimate of a wide signal** is a third high at ten to twenty
   tiles for fanouts of 5 to 32 (measured on `sad` seed 1's routes); taking the term
-  away changed nothing measurable here, and it was left.
+  away changed nothing measurable here, and it was left. *Measured over the corpus
+  since, in "The placement's estimate, refitted": a wide signal costs a fixed amount
+  more, not one a tile; the whole estimate refitted made no clock faster either.*
 - **The timing rounds after the first do nothing** (above).
 - `lutram32`'s `VCCTerm`, and the ways through a table Vivado routes on to another
   input. *The first done since, in "A ground on the bypass input"; the second
@@ -8431,3 +8433,240 @@ is_on_a6`, the signal on `I0` by its simulation.
   (above).
 - **`gray_cdc`'s chain across a clock region** in Vivado's placement of the netlist.
 - None of it has been on a part.
+
+## The placement's estimate, refitted
+
+**Asked: "The ADC clocks, placed" left `sad`'s and `esad`'s ADC clocks at about 2.6 ns
+with Reticle placing and 2.25 with Vivado placing the same netlist, and every
+setting of the anneal and its timing rounds tried there landed inside the seeds'
+spread, while the placement's own estimate of the latest path moved and the
+achieved periods did not. How does the placement estimate a connection before it is
+routed, where does that part from the route and from Vivado's timer, and does an
+estimate that predicts the route make the clocks faster?** Vivado 2026.1 at
+`xc7a100tftg256-3`, run on 2026-11-10 on 5038bf3e, whose own build is `through` of
+`achieved.txt` seed for seed (all 210 figures checked). **Everything here is
+Vivado's timer and Reticle's own models; nothing has been on a part.**
+
+### How the placement estimates
+
+Before routing, a connection is `xray::timing::VIVADO_WIRE`'s line in the Manhattan
+distance between the two ends' tiles: 0.414 ns, 0.0358 a tile, and 0.0244 a tile
+more on a signal of more than four sinks (`place::estimated_wire`). A connection
+inside a dedicated group (a carry's cascade, a table into its lane) is charged
+nothing. The cells' figures are `xray::timing::VIVADO`'s as they are before a site is
+known; after placement `place_timing_on_sites` gives each flip-flop its bel's clock
+to `Q` and its setup through the bypass or its own lane. Both analyses take each
+register's clock arrival from its site (`PlaceTiming::skew_from`). The anneal does
+not see the delays: each timing round weighs a connection by its criticality,
+`1 - slack / max(period, longest path)`, cubed, so the estimate matters only through
+which connections it makes critical. The router's first pass starts from the same
+criticalities (`route::Timing::seed_from_placement`).
+
+`reticle fpga --timing-endpoints` now writes, beside the routed `connection` and
+`endpoint` lines, an `estimate` line for every connection (the placement's estimate
+on the final placement, the routed one by `xray::delay`'s table, the two ends'
+columns and rows apart, the fanout, the placement's criticality and the route's,
+and the two pins' kinds) and an `estimate_endpoint` line for every endpoint (its
+arrival as the placement saw it, as it would be with the cells' own figures on their
+sites, and as routed). `tools/vivado-parity/placement_fit.py compare` reads them,
+and with `timing_dump.tcl` run on `achieved.sh`'s `routes` checkpoints sets them
+beside Vivado's timer, matched by wire and by endpoint as `timing_table.py compare`
+matches.
+
+### Where it parts from the route (measured)
+
+The seventeen designs at ten seeds, 211,820 connections and 64,980 endpoints; ratios
+are the placement's estimate over the routed one, median [5th-95th percentile]:
+
+| | ratio |
+|---|---|
+| connections | 1.080 [0.62-2.10] |
+| endpoints, the placement's cell figures | 1.100 [0.85-1.47] |
+| endpoints, the cells' figures on their sites | 1.107 [0.86-1.44] |
+
+**The cells, the clock and the setup are not it**: the sites' figures move an
+endpoint's ratio by under 1 %, and the clock's arrival is the same table in both
+analyses. **The wire is**, in four ways:
+
+- **A row costs more than a column, and the line costs both alike.** A least-squares
+  line over seeds 1 and 2: 0.360 ns, 0.0317 a column and 0.0574 a row. At ten to
+  forty tiles the line is 1.22 to 1.24 times the route, and past forty 1.49.
+- **A wide signal costs a fixed amount more, not one a tile.** Over the same line, a
+  signal of more than four sinks takes 0.148 ns more and −0.004 a tile, where the
+  line charges it 0.0244 a tile more: at twenty tiles about 0.4 ns over.
+  This is "The ADC clocks, placed"'s reading of the wide term, checked over the
+  corpus.
+- **A pin's kind is a few tenths of a nanosecond either way.** Against the rest of
+  the fit below, a flip-flop's reset, enable or data input is reached 0.14 to 0.17 ns
+  sooner than a table's input, a carry's generate 0.23, a block RAM's write enable
+  0.50, a table's input 0.18 sooner when it is its table's only one; a pad's output
+  1.1 ns later, from a `DSP48E1`'s output 0.19 later.
+- **Which of a table's inputs the router picks**, `A6` at nothing past its
+  multiplexer and `A1` 0.2 to 0.39 ns on ("The delay model, fitted to Vivado's
+  timer"), which nothing before the route knows. Most of the spread left after the
+  three above is this: at no distance the fit below is still 0.58 to 2.40 times the
+  route from the 5th to the 95th percentile.
+
+Against Vivado's timer on the same routes (seeds 1 and 2, 34,565 connections and
+9,666 flip-flop endpoints matched): the placement's estimate is 1.041 [0.62-1.99] a
+connection and 1.074 [0.83-1.37] an endpoint; the routed estimate 0.997 [0.92-1.16]
+and 1.004 [0.86-1.09]. So the route's model is Vivado's and the placement's is not.
+
+**Which paths the placement believes critical**, per clock, the median over ten seeds
+of the placement's latest endpoint, the route's, and how many of the placement's
+twenty latest endpoints are among the route's twenty:
+
+| clock | placement's latest | route's latest | shared of 20 |
+|---|---|---|---|
+| `sad` `adc_sampleclk` | 3.508 | 2.520 | 0.12 |
+| `sad` `clk_usb` | 2.226 | 1.837 | 0.43 |
+| `esad` `adc_sampleclk` | 3.558 | 2.608 | 0.35 |
+| `esad` `clk_usb` | 2.028 | 1.828 | 0.23 |
+| `analyser_fifo` `wr_clk` | 3.250 | 2.338 | 0.43 |
+| `regfile_alu` `clk` | 6.770 | 5.787 | 0.65 |
+| the other fifteen | | | 0.47 to 1.00 |
+
+On `sad` the placement's latest endpoints were the `resetter` chain's resets and the
+counters' data and enables (3.2 to 3.9 ns at seeds 1 to 3, routed 1.8 to 2.6),
+through wide resets and enables it put at twice their routed delay. Vivado's latest
+are the resets from `armed_and_ready_sad` and the reference shift registers' data and
+enables; at Vivado's latest flip-flop endpoint the placement had 2.08 ns where Vivado
+has 2.34 (seeds 1 and 2). **The placement was steering by the wrong paths**: over
+`sad`'s seeds 1 and 2, the 22 connections it held critical (over 0.9) that the
+route did not were 1.98 times their routed delay at the median, wide resets and
+table inputs; on `esad`, the 80 the route held critical and it did not were 0.96.
+
+### The refit
+
+`placement_fit.py fit` fits the routed delay, by least squares over every
+connection of the ten seeds that is neither a clock's nor a dedicated group's, as:
+a base; a table by columns apart, 0 to 8, and slopes past 8 and past 16; the same by
+rows; a figure by fanout (1, 2-4, 5-8, 9-16, 17-32, 33-64, more); and a figure for
+each kind of sink and of driver crossed by a hundred connections or more, a table's
+input by how many of its table's inputs are used. The figures are in
+`testdata/fpga/vivado/timing/placement.txt`, with one connection in forty of the
+data. In short: 0.424 ns; eight columns 0.225 and eight rows 0.436, then 0.036 a
+column and 0.045 a row; 0.05 to 0.29 by fanout; the kinds as above.
+
+Fitted on seeds 1 to 5 and tried on 6 to 10 it is what it is fitted on all ten
+(1.016 [0.64-1.84] against 1.020 [0.64-1.83]), so the table is not the seeds'.
+Fitted on all ten, against the routed estimate:
+
+| | the line | the fit |
+|---|---|---|
+| connections | 1.080 [0.62-2.10] | 1.020 [0.64-1.83] |
+| root mean square error | 0.472 ns | 0.250 ns |
+| 0 tiles / 1-4 / 5-9 / 10-19 / 20-39 / 40 and more | 1.09 / 0.99 / 1.11 / 1.24 / 1.22 / 1.49 | 0.99 / 1.00 / 1.04 / 1.08 / 0.99 / 1.05 |
+
+Put in the placement (a `WireFit` in `PlaceTiming`: `estimated_wire` and the global
+placement's springs from the fit, the legacy model keeping its line, so the Husky's
+builds unchanged), on the builds it placed (`refitted`), **measured**:
+
+| | the line (`through`) | the fit (`refitted`) |
+|---|---|---|
+| connections, against the route | 1.080 [0.62-2.10] | 1.017 [0.64-1.83] |
+| endpoints, against the route | 1.100 [0.85-1.47] | 1.010 [0.79-1.26] |
+| connections, against Vivado (seeds 1, 2) | 1.041 [0.62-1.99] | 1.017 [0.66-1.89] |
+| endpoints, against Vivado (seeds 1, 2) | 1.074 [0.83-1.37] | 0.975 [0.77-1.20] |
+| `sad` ADC: placement's latest, route's, shared of 20 | 3.508, 2.520, 0.12 | 3.112, 2.628, 0.43 |
+| `esad` ADC: the same | 3.558, 2.608, 0.35 | 3.258, 2.670, 0.47 |
+
+The latest endpoint is still a fifth over: the latest of many estimates, each
+spread by the table input the router will choose, is high by construction, and the
+router gives the critical connections the fast inputs.
+
+### What it did to the achieved periods (measured)
+
+Reticle's own flow, medians over ten seeds by Vivado's timer, the lowest and highest
+in brackets:
+
+| design | clock | Vivado | `through` | `refitted` |
+|---|---|---|---|---|
+| `adders` | `clk` | 2.042 | 2.212 [2.13-2.37] | 2.229 [2.10-2.48] |
+| `analyser_fifo` | `rd_clk` | 3.887 | 4.480 [4.13-4.86] | 4.522 [4.25-4.73] |
+| `analyser_fifo` | `wr_clk` | 2.417 | 2.452 [2.34-2.55] | 2.448 [2.40-2.61] |
+| `barrel` | `clk` | 2.376 | 2.479 [2.40-2.62] | 2.480 [2.39-2.61] |
+| `bram_fifo` | `clk` | 3.388 | 4.034 [3.75-4.16] | 4.066 [3.83-4.20] |
+| `carry_counter` | `clk` | 1.855 | 1.968 [1.85-2.00] | 1.923 [1.85-1.99] |
+| `counter64` | `clk` | 3.220 | 3.478 [3.34-3.57] | 3.468 [3.44-3.62] |
+| `crc32` | `clk` | 2.234 | 2.188 [2.11-2.25] | 2.165 [2.11-2.27] |
+| `esad` | `adc_sampleclk` | 2.131 | 2.659 [2.56-2.80] | 2.705 [2.50-3.03] |
+| `esad` | `clk_usb` | 1.727 | 1.821 [1.73-2.23] | 1.884 [1.70-1.98] |
+| `fir8` | `clk` | 9.142 | 9.161 [9.16-9.16] | 9.161 [9.16-9.16] |
+| `fsm` | `clk` | 1.903 | 2.179 [2.09-2.24] | 2.190 [2.09-2.31] |
+| `gray_cdc` | `clk` | 1.466 | 1.413 [1.41-1.51] | 1.413 [1.41-1.51] |
+| `gray_cdc` | `clk2` | 1.267 | 1.515 [1.47-1.57] | 1.522 [1.47-1.69] |
+| `lutram32` | `clk` | 1.894 | 2.064 [1.93-2.11] | 1.956 [1.88-2.07] |
+| `mul18` | `clk` | 1.935 | 2.049 [2.01-2.10] | 2.090 [1.98-2.10] |
+| `regfile_alu` | `clk` | 5.511 | 5.860 [5.73-6.55] | 5.870 [5.77-6.26] |
+| `sad` | `adc_sampleclk` | 2.207 | 2.561 [2.46-2.82] | 2.644 [2.45-2.94] |
+| `sad` | `clk_usb` | 1.726 | 1.868 [1.82-1.97] | 1.926 [1.86-2.10] |
+| `srl_delay` | `clk` | 1.645 | 1.808 [1.69-1.96] | 1.772 [1.74-1.88] |
+| `widemux` | `clk` | 2.438 | 2.691 [2.59-2.80] | 2.724 [2.66-2.84] |
+| geometric mean, all 21 | | 1 | 1.087 | **1.090** |
+
+**No faster.** The corpus is 1.003 of `through`, which a bootstrap over the seeds
+puts at 0.996 to 1.011: noise. `sad`'s ADC clock is 3 % slower and `esad`'s 2 %,
+each inside its spread; `lutram32` 5 % faster. A second variant, the fit in the
+placement only and the router's first pass seeded by the line as before, came to
+1.090 as well (`sad`'s ADC clock 2.655, `esad`'s 2.694). The place and route laps
+summed over the 170 builds were 1,326 and 436 s with the line and 1,308 and 447 s
+with the fit: the same, under the machine's load.
+
+**So the estimate was not what held the ADC clocks.** An estimate right at the
+median per endpoint, sharing more of the latest endpoints with the route (`sad`'s
+0.12 to 0.43), gives the anneal placements no better than a seed apart: the
+criticalities it hands the timing rounds rank the latest paths by differences the
+table input's spread is larger than, and those rounds, as "The ADC clocks, placed"
+found, move little once the wirelength anneal has placed the cells. It costs no time
+and gains nothing measurable, and it would change every fitted-model build, so
+**the fit is not the placement's estimate**: the line stays, and what is committed
+is the measurement, the `estimate` lines, `placement_fit.py`, `placement.txt` and
+`refitted` in `achieved.txt`. The patch was `WireFit` in `place.rs` and its tables in
+`xray::timing`, a few hundred lines with its tests; the figures it needs are
+`placement.txt`'s.
+
+### The Husky's bitstreams
+
+The `estimate` lines are written only into the `--timing-endpoints` file, and the
+note of the routed connections over the placement's estimate now takes
+`place::estimated_wire`, which under the legacy model is the line it computed
+before. `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`.
+**Checked.**
+
+### Tests
+
+- `the_endpoints_file_says_what_the_placement_estimated` (`tests/fpga_xray_vivado.rs`):
+  `carry_counter` built on the real fabric; an `estimate` line for each `connection`
+  line with its routed delay, fanout and wire, each estimate the line's for its
+  distance and fanout, the criticalities between nothing and one, and an
+  `estimate_endpoint` line for each `endpoint` line with its routed arrival.
+  Mutation-checked: the routed column written from the estimate, the columns apart
+  written as nothing, and the endpoints' routed arrival taken from the estimate, each
+  fail it. It cannot tell columns from rows, which the line costs alike.
+- `the_placements_refit_predicts_the_routed_delay_better_than_its_line`
+  (`tests/fpga_xray_delay.rs`): over `placement.txt`'s sample, the fit within 5 % at
+  the median and under 1.9 at the 95th, at twenty tiles and more within 10 %, its
+  error under two thirds of the line's, and the line over 1.06, 2.0 and 1.2 there.
+  Mutation-checked on the fixture: the rows' slope, the base, a few-input table's
+  figures, the fanout's, the flip-flops' and the drivers' figures each zeroed or moved
+  fail it; **the first four columns' steps zeroed survive**, about 0.1 ns on
+  connections a few columns apart, under its margins.
+- `the_placements_refitted_estimate_makes_no_clock_faster`
+  (`tests/fpga_xray_achieved.rs`) holds `refitted` against `through`: the corpus
+  within 1.5 % and not under it by more than 0.5 %, `sad`'s ADC clock no faster, ten
+  seeds of each. Mutation-checked: the two builds swapped fail it.
+
+### Not done
+
+- **What would move the ADC clocks.** Not the estimate, and "The ADC clocks, placed"
+  ruled out the anneal's settings. What is left is the placement itself: Vivado's
+  placement of the same netlist is 0.3 to 0.4 ns faster on these clocks with 40 %
+  more wirelength, which a placer that anneals wirelength first and refines for time
+  after does not reach. Not looked at here.
+- **The table input** a connection will be routed to is most of the estimate's
+  remaining spread; a placement that knew it would have to choose the pins itself.
+- **The fit at the other grades** would have been grade 3's times the median
+  connection's ratio in "Speed grades" (1.136 and 1.398), derived and not measured.

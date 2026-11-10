@@ -803,3 +803,42 @@ fn a_way_through_costs_the_flow_nothing() {
         "the netlist against Vivado's: {net_after:.3} through, {net_before:.3} retied"
     );
 }
+
+/// **The placement's estimate refitted to the routed delay made no clock
+/// faster** (`docs/fpga-vivado-parity.md`, "The placement's estimate,
+/// refitted"). Ten seeds: Reticle's flow 1.087 of Vivado's own with the line
+/// (`through`) and 1.090 with the fit (`refitted`), `sad`'s ADC clock 2.561 ns
+/// and 2.644, inside what a bootstrap over the seeds puts the difference at
+/// (0.996 to 1.011 of `through`); which is why the fit is not the placement's
+/// estimate. This holds that: the refitted flow's mean within 1.5 % of
+/// `through`'s and not under it by more than 0.5 %, `sad`'s ADC clock no faster,
+/// and ten seeds of each clock. Would catch a regeneration that lost the
+/// measurement, swapped the builds or lost a seed; would not catch a refit
+/// that would help, which only placing with it again says.
+#[test]
+fn the_placements_refitted_estimate_makes_no_clock_faster() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (vivado, builds)) in &table {
+        let (through, refitted) = (&builds["through"], &builds["refitted"]);
+        assert_eq!(refitted.len(), 10, "{design} {clock}: seeds of `refitted`");
+        let (before, after) = (median(through), median(refitted));
+        if (design.as_str(), clock.as_str()) == ("sad", "adc_sampleclk") {
+            assert!(
+                after >= before,
+                "sad's ADC clock: {after:.3} against {before:.3}"
+            );
+        }
+        logs[0] += (before / vivado).ln();
+        logs[1] += (after / vivado).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [before, after] = logs.map(|l| (l / n).exp());
+    assert!(
+        after >= before * 0.995 && after <= before * 1.015,
+        "Reticle's flow against Vivado's: {after:.3} refitted, {before:.3} through"
+    );
+}
