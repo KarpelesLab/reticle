@@ -1029,3 +1029,24 @@ fn the_other_mux_outputs_keep_the_routes_at_least_as_fast() {
     let ratio = twenty_seeds(&table, "muxout", "muxall", 1.025);
     assert!(ratio <= 0.999, "`muxall` {ratio:.4} of `muxout`");
 }
+
+/// **A placer that times each register by its bel keeps late launches off the
+/// `<L>5FF`s, and the corpus is 0.7 % faster** (`docs/fpga-vivado-parity.md`,
+/// "The other `MUX` outputs"). `belff` is `muxall` with the placement's timing
+/// rounds launching each register when its site does
+/// (`PlaceTiming::bel_launch`) and its anneal charging a critical connection
+/// from a later site: twenty seeds, 0.9930 of `muxall`, which a bootstrap over
+/// the seeds (unpaired, the placements differ) puts at 0.9879 to 0.9987, no
+/// clock slower beyond its own spread (the slowest, `esad`'s `clk_usb`, 3.5 %).
+/// This holds the corpus at least 0.4 % faster, no clock more than 4 % slower,
+/// and twenty seeds of each. Would catch a regeneration that lost the
+/// measurement, swapped the builds or lost a seed; would not catch the placer
+/// regressing since, which only `achieved.sh` again says.
+#[test]
+fn a_placer_that_knows_a_registers_bel_makes_the_corpus_faster() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let ratio = twenty_seeds(&table, "muxall", "belff", 1.04);
+    assert!(ratio <= 0.996, "`belff` {ratio:.4} of `muxall`");
+}

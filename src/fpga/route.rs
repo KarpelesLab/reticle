@@ -4205,6 +4205,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
         for (index, site) in ["X0Y0/src0", "X0Y0/src1", "X0Y0/lut", "X0Y0/cap"]
@@ -4416,6 +4417,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
         for (index, site) in [
@@ -6208,6 +6210,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let (_, graph) = line(1, 1);
         let terminals: Vec<Terminals> = (0..5)

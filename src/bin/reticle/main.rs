@@ -4422,6 +4422,9 @@ fn write_xc7_bitstream(
         if delay_model == reticle::fpga::xray::DelayModel::Vivado {
             timing.clock =
                 reticle::fpga::xray::clock_arrival(&fabric.part.name, grade, &fabric.arch, &graph);
+            // And when a register launches on each site, which the placement's
+            // rounds time it by: see `PlaceTiming::bel_launch`.
+            timing.bel_launch = reticle::fpga::xray::bel_launch(delay_model, grade, &graph);
             eprintln!(
                 "note: timed at speed grade {} ({})",
                 grade.name(),

@@ -3897,6 +3897,27 @@ pub fn place(
         } else {
             Vec::new()
         };
+        // And each site's register's launch over the earliest's, the same
+        // way: see `PlaceTiming::bel_launch`.
+        let earliest = timing
+            .bel_launch
+            .iter()
+            .copied()
+            .filter(|t| t.is_finite())
+            .fold(f32::INFINITY, f32::min);
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a few tiles, which f32 holds"
+        )]
+        let launch_tiles: Vec<f32> = if timing.wire.1 > 0.0 && earliest.is_finite() {
+            timing
+                .bel_launch
+                .iter()
+                .map(|t| (f64::from(*t - earliest) / timing.wire.1) as f32)
+                .collect()
+        } else {
+            Vec::new()
+        };
         // Each round refines the last: a narrow window and a cool start,
         // so that the weights move the critical cells and the rest stays
         // where the wirelength placement put it.
@@ -3916,6 +3937,7 @@ pub fn place(
         }
         for _ in 0..timing.rounds {
             timing.skew_from(&placement);
+            timing.launch_from(netlist, &placement);
             let (critical, round) = estimate_timing(netlist, graph, &placement, timing, &order);
             report.timing.push(TimingRound {
                 hpwl: hpwl(netlist, graph, &placement),
@@ -3925,6 +3947,7 @@ pub fn place(
                 nets: vec![16; netlist.signals.len()],
                 pins: connection_weights(&critical.pins, timing),
                 clock: clock_tiles.clone(),
+                launch: launch_tiles.clone(),
             };
             if options.anneal {
                 let before = placement.clone();
@@ -3954,6 +3977,7 @@ pub fn place(
             }
         }
         timing.skew_from(&placement);
+        timing.launch_from(netlist, &placement);
         let (_, round) = estimate_timing(netlist, graph, &placement, timing, &order);
         report.timing.push(TimingRound {
             hpwl: hpwl(netlist, graph, &placement),
@@ -8172,6 +8196,10 @@ struct Pull {
     /// none: a connection from a site the clock reaches later to one it
     /// reaches earlier costs the difference on top of its distance.
     clock: Vec<f32>,
+    /// Per site, [`PlaceTiming::bel_launch`] over the least of it, in tiles
+    /// of wire, or empty for none: a connection from a register on a site
+    /// whose register launches later costs that on top of its distance.
+    launch: Vec<f32>,
 }
 
 /// A set of small integers that empties in constant time: each member is
@@ -8219,6 +8247,8 @@ struct Weights {
     pins: Vec<u32>,
     /// [`Pull::clock`].
     clock: Vec<f32>,
+    /// [`Pull::launch`].
+    launch: Vec<f32>,
 }
 
 impl Pull {
@@ -8269,6 +8299,7 @@ impl Pull {
             seen: Marks::default(),
             ends,
             clock: Vec::new(),
+            launch: Vec::new(),
         }
     }
 
@@ -8289,13 +8320,26 @@ impl Pull {
             return 0;
         };
         let distance = u64::from(weight) * manhattan(tiles[from], tiles[to]);
-        if self.clock.is_empty() {
+        // A register on a site that launches later, as the clock's arrival
+        // below: the two are added before they are weighed and rounded, so a
+        // connection with no launch to charge costs what it did before.
+        let launch = self
+            .launch
+            .get(from)
+            .copied()
+            .filter(|t| t.is_finite() && *t > 0.0);
+        if self.clock.is_empty() && launch.is_none() {
             return distance;
         }
         let late = |site: usize| self.clock.get(site).copied().filter(|t| t.is_finite());
         let skew = match (late(from), late(to)) {
-            (Some(a), Some(b)) if a > b => f64::from(weight) * f64::from(a - b),
-            _ => return distance,
+            (Some(a), Some(b)) if a > b => f64::from(a - b),
+            _ => 0.0,
+        };
+        let skew = match launch {
+            Some(t) => f64::from(weight) * (skew + f64::from(t)),
+            None if skew > 0.0 => f64::from(weight) * skew,
+            None => return distance,
         };
         #[allow(
             clippy::cast_possible_truncation,
@@ -8683,6 +8727,7 @@ fn anneal(
     churn.spans.weigh(&weights.nets);
     churn.pull = Pull::new(netlist, &weights.pins);
     churn.pull.clock.clone_from(&weights.clock);
+    churn.pull.launch.clone_from(&weights.launch);
     churn.clocks = ClockLoad::new(
         netlist,
         graph,
@@ -9562,6 +9607,17 @@ pub struct PlaceTiming {
     /// much later too. Empty, or past its end, is none: before placement,
     /// and with no figures.
     pub skew: Vec<f64>,
+    /// Per site, when a register there launches as its sinks see it, in
+    /// nanoseconds after its clock; `NaN` for a site that holds no
+    /// register, and empty for no figures. [`PlaceTiming::launch`] is one
+    /// figure for every register before the placement says where each is,
+    /// where a 7-series slice's `<L>5FF` launches 0.08 ns later than its
+    /// `<L>FF` as its sinks see it (`xray::bel_launch`). The timing rounds of
+    /// [`place`] time each register by its site's
+    /// ([`PlaceTiming::launch_from`]), and their anneal charges a weighted
+    /// connection from a register what its site's figure is over the
+    /// earliest's, in tiles of wire, as it charges the clock's arrival.
+    pub bel_launch: Vec<f32>,
 }
 
 /// What [`PlaceTiming::pin_delays`] holds: delays of single pins in place of
@@ -9646,6 +9702,33 @@ impl PlaceTiming {
                     .map_or(0.0, f64::from)
             })
             .collect();
+    }
+
+    /// [`PinDelays::launch`] of every `Start` output of an instance on a site
+    /// [`PlaceTiming::bel_launch`] has a figure for: that figure. Nothing
+    /// when it is empty, so a model without one is timed as before.
+    pub fn launch_from(&mut self, netlist: &Netlist, placement: &Placement) {
+        if self.bel_launch.is_empty() {
+            return;
+        }
+        for (instance, inst) in netlist.instances.iter().enumerate() {
+            let Some(launch) = placement
+                .site_of(instance)
+                .and_then(|site| self.bel_launch.get(site).copied())
+                .filter(|t| t.is_finite())
+            else {
+                continue;
+            };
+            for pin in &inst.pins {
+                if !matches!(self.pins.get(*pin), Some(PinTiming::Start)) {
+                    continue;
+                }
+                if self.pin_delays.launch.len() < netlist.pins.len() {
+                    self.pin_delays.launch.resize(netlist.pins.len(), None);
+                }
+                self.pin_delays.launch[*pin] = Some(f64::from(launch));
+            }
+        }
     }
 
     /// The delay from `pin`, a `Through` input of `instance`, to its `j`th
@@ -10937,6 +11020,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         (graph, netlist, placement, timing)
     }
@@ -11024,6 +11108,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[end] = 5.6;
@@ -11151,6 +11236,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let wire = vec![0.0; netlist.pins.len()];
         let (_, cut) = path_criticality(&netlist, &timing, &wire);
@@ -11462,6 +11548,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -11580,6 +11667,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -12785,6 +12873,73 @@ mod tests {
             30,
             "rising is free"
         );
+    }
+
+    /// **A register launches when its site says, and the anneal charges a
+    /// critical connection from a site whose register launches later.**
+    /// [`timed_chain`], its first cell launching 0.25 ns after the clock:
+    /// with [`PlaceTiming::bel_launch`] 0.5 at that cell's site and 1.0 at
+    /// the last cell's, [`PlaceTiming::launch_from`] gives the first cell's
+    /// outputs 0.5 and the path's end moves 0.25 ns later, and gives the last
+    /// cell, which starts nothing, nothing; with no figures it gives none.
+    /// [`Pull`] charges the connection from the first cell to the second, of
+    /// weight 10, its distance and 2.5 tiles of later launch at the first
+    /// cell's site, nothing for one at the second's, and the clock's arrival
+    /// on top of the launch.
+    ///
+    /// Would catch the site's figure not used, given to a pin that starts
+    /// nothing, kept with no figures; the pull charging a later launch at the
+    /// sink, not at all, or in place of the clock's. Would not catch the
+    /// figures being wrong (`xray::bel_launch`, Vivado's), nor whether the
+    /// anneal then keeps a late launch off the `<L>5FF`s, which only a
+    /// placement under Vivado's timer measures (`docs/fpga-vivado-parity.md`,
+    /// "The other `MUX` outputs").
+    #[test]
+    fn a_register_launches_as_its_site_says_and_the_pull_charges_a_later_one() {
+        let (graph, netlist, placement, mut timing) = timed_chain();
+        timing.launch[0] = 0.25;
+        let order = timing_order(&netlist, &timing);
+        let end = |timing: &PlaceTiming| {
+            let wire = estimated_wire(&netlist, &graph, &placement, timing);
+            analyse_paths(&netlist, timing, &order, &wire).1.longest_ps[0]
+        };
+        let none = end(&timing);
+        let site = |instance: usize| placement.site_of(instance).unwrap();
+        timing.launch_from(&netlist, &placement);
+        assert!(timing.pin_delays.launch.is_empty(), "no figures, none");
+        timing.bel_launch = vec![f32::NAN; graph.sites.len()];
+        timing.bel_launch[site(0)] = 0.5;
+        timing.bel_launch[site(3)] = 1.0;
+        timing.launch_from(&netlist, &placement);
+        for (pin, p) in netlist.pins.iter().enumerate() {
+            let want = (p.instance == 0).then_some(0.5);
+            assert_eq!(timing.pin_delays.launch[pin], want, "pin {pin}");
+        }
+        assert_eq!(end(&timing), none + 250);
+
+        let tiles: Vec<(u32, u32)> = graph.sites.iter().map(|s| s.tile).collect();
+        let into = |instance: usize| {
+            *netlist.instances[instance]
+                .pins
+                .iter()
+                .find(|p| !netlist.pins[**p].output)
+                .unwrap()
+        };
+        let mut weight = vec![0u32; netlist.pins.len()];
+        weight[into(1)] = 10;
+        let mut pull = Pull::new(&netlist, &weight);
+        pull.launch = vec![0.0; graph.sites.len()];
+        pull.launch[site(1)] = 2.5;
+        assert_eq!(
+            pull.cost_of(&tiles, &placement, into(1)),
+            30,
+            "the sink's site's launch is not this connection's"
+        );
+        pull.launch[site(0)] = 2.5;
+        assert_eq!(pull.cost_of(&tiles, &placement, into(1)), 30 + 25);
+        pull.clock = vec![0.0; graph.sites.len()];
+        pull.clock[site(0)] = 2.5;
+        assert_eq!(pull.cost_of(&tiles, &placement, into(1)), 30 + 50);
     }
 
     /// **A median move brings back a cell an anneal left far from what it
@@ -15458,6 +15613,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {

@@ -9259,7 +9259,8 @@ the refinement's check on the searches' figures alone; in the fixture, a seed of
 - **The placer.** It times every flip-flop at 0.345 ns before it knows the bels, and
   fills the `5FF`s ("Filling slices") as though one were as fast as another; a `5FF`
   that launches a late path costs that path 0.11 ns under Vivado's timer. Whether the
-  placer should keep late launches off the `5FF`s was not measured.
+  placer should keep late launches off the `5FF`s was not measured. *Measured since,
+  and it should: "The other `MUX` outputs".*
 - **The other `<L>MUX` outputs**: a `MUXF7`'s, a `MUXF8`'s and a distributed RAM's cost
   their sinks as much, and are charged nothing. *Charged since, with a carry chain's
   sum's, in "The other `MUX` outputs".*
@@ -9278,7 +9279,7 @@ nothing; a flip-flop's setup through a way is still the mean over both kinds of 
 and the placer times every flip-flop at 0.345 ns and fills the `5FF`s as though one bel
 were as fast as another. Measure the first two against Vivado's timer and charge them,
 checking the routed estimate's error over the corpus; teach the placer the third, and
-measure what it does to the clock.** (The placer is the next commit's.) Vivado 2026.1 at `xc7a100tftg256-3` (and `-2`, `-1`
+measure what it does to the clock.** Vivado 2026.1 at `xc7a100tftg256-3` (and `-2`, `-1`
 for the figures), run on 2026-11-10 on df207592. **Everything here is Vivado's timer of
 Reticle's placements and routes; nothing has been on a part.**
 
@@ -9400,16 +9401,51 @@ clock -0.128 to +0.075 (+0.120 without the `DMUX` change), `regfile_alu` -0.115 
 `analyser_fifo`'s read clock 0.992 (beyond), `esad`'s ADC clock 1.014 the slowest; none
 slower beyond its spread.
 
+### The placer (measured)
+
+**Its timing rounds time each register by its bel, and their anneal charges a critical
+connection from a later one** (`PlaceTiming::bel_launch`, filled by `xray::bel_launch`
+with what `place_timing_on_sites` will charge on each flip-flop site: 0.341 ns on a
+`SLICEL`'s `<L>FF`, 0.425 on its `<L>5FF`, 0.393 and 0.473 in a `SLICEM`;
+`PlaceTiming::launch_from` each round; the anneal's pull with the site's launch over the
+earliest's, in tiles of wire, as it charges the clock's arrival). Packing chooses no
+bel; the anneal moves cells between a slice's bels already.
+
+Twenty seeds, unpaired (the placements differ):
+
+| build | against | ratio | unpaired, 5th-95th |
+|---|---|---|---|
+| the placer on the model without `DMUX` | that model | 0.9911 | 0.9856-0.9966 |
+| **the placer, `belff`** | `muxall` | **0.9930** | **0.9879-0.9987** |
+| `belff` | `muxout` | 0.9896 | 0.9838-0.9946 |
+
+Per clock against `muxall`: `srl_delay` 0.960, `barrel` 0.966, `counter64` 0.970, `fsm`
+0.975, `crc32` 0.983, `analyser_fifo`'s read clock 0.991 (each faster beyond its spread),
+`carry_counter` 0.967 and `lutram32` 0.980 (within); slower, `esad`'s `clk_usb` 1.035
+(0.985 to 1.068), `sad`'s ADC clock 1.022 (0.981 to 1.078), `sad`'s `clk_usb` 1.016,
+`gray_cdc`'s second 1.014, none beyond its spread. The routed estimate's error -0.019,
+0.050 absolute, 0.071 root mean square.
+
+**What it did**: of the 360 latest paths under Vivado's timer that start on a slice
+register, 90 started on a `5FF` and 18 do; of the corpus's 89,960 flip-flops over the
+twenty seeds, 31.1 % were on `5FF`s and 17.0 % are, on 33,390 slices where it was 32,026
+(4.3 % more). The placer charges a `SLICEM`'s `<L>FF` its 0.052 ns over a `SLICEL`'s
+too, since that is the bel's figure; which of the two moved the clock was not taken
+apart.
+
 ### Runtime
 
 Summed over the 340 builds: `muxout` place 2,837 s and route 1,212; `muxall` 2,966 and
-1,200. `muxall` ran beside other work on a shared machine, and its place stage, whose
-placements are `muxout`'s, is 5 % over `muxout`'s: the machine's load.
+1,200; `belff` 3,017 and 1,254. `muxall` and `belff` ran at once on a machine shared
+with other work, and the place stage of `muxall`, whose placements are `muxout`'s, is 5 %
+over it: the machine's load. `belff`'s `fsm` place stage 69 s against 43, `srl_delay` 42
+against 27.
 
 ### The Husky's bitstreams
 
 `build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
-applies: the node model is the legacy one and every figure the legacy one. With this tree's release binary `build.sh` writes
+applies: the node model is the legacy one, `bel_launch` is empty and every figure the
+legacy one. With this tree's release binary `build.sh` writes
 `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh` seed 4
 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
 
@@ -9420,19 +9456,24 @@ applies: the node model is the legacy one and every figure the legacy one. With 
   lower half and the `AFF` a sum reaches by a pip, in one tile; a table, a `DSP48E1`, an
   `AFF` and a second carry's carry in reading them from the next.
 - `a_flip_flops_setup_is_the_one_for_how_its_data_arrives` (`xray::timing`) now holds a
-  `DSP48E1` given a `5FF`'s cost back and a block RAM not.
+  `DSP48E1` given a `5FF`'s cost back and a block RAM not, and `bel_launch` to the
+  launch `place_timing_on_sites` gives each flip-flop.
+- `a_register_launches_as_its_site_says_and_the_pull_charges_a_later_one` (`place`).
 - `a_slices_dmux_costs_nothing_under_the_vivado_model` (`tests/fpga_xray_timing.rs`),
   against the database: every `DMUX` node free at grades 3 and 1, and at least the pip's
   0.300 under the legacy model.
-- `the_other_mux_outputs_keep_the_routes_at_least_as_fast`
-  (`tests/fpga_xray_achieved.rs`) holds `muxall` against `muxout`: at least 0.1 % faster,
-  no clock 2.5 % slower, twenty seeds each.
+- `the_other_mux_outputs_keep_the_routes_at_least_as_fast` and
+  `a_placer_that_knows_a_registers_bel_makes_the_corpus_faster`
+  (`tests/fpga_xray_achieved.rs`) hold `muxall` against `muxout` (at least 0.1 % faster,
+  no clock 2.5 % slower) and `belff` against `muxall` (0.4 %, 4 %), twenty seeds each.
 
 **Mutations**, made by a script and put back, each failing its test: the inside check
 dropped; a sum charged nothing; any lower half charged; a `MUXF7` charged the `MUXF8`'s
 figure; the `DSP48E1`'s give-back dropped, and given to every block; a table's input not
-charged; `MUXF8` unknown to `mux_exit`. In the fixture: a seed of `muxall` lost, its
-figures 1 % slower, `muxall` given `muxout`'s figures. **Not held by a test**:
+charged; `MUXF8` unknown to `mux_exit`; `launch_from` on every pin; the pull's launch
+charged at the sink, and in place of the clock's; `bel_launch` without the `5FF`'s cost,
+and under the legacy model. In the fixture: a seed of `muxall` and of `belff` lost, each
+1 % slower, the two swapped, `muxall` given `muxout`'s figures. **Not held by a test**:
 the figures themselves, which only Vivado's timer asks.
 
 ### Not done
@@ -9444,5 +9485,6 @@ the figures themselves, which only Vivado's timer asks.
   in these builds, charged nothing.
 - **`mul18` and `fir8`**, whose estimates are 0.10 and 0.12 off either way and did not
   move: not traced.
-- **The placer**, which still times every flip-flop alike.
+- **Which half of the placer's charge moved the clock**, the `5FF`'s or a `SLICEM`'s: not
+  taken apart, nor its 4.3 % more slices.
 - None of it has been on a part.

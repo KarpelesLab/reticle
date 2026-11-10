@@ -1533,6 +1533,7 @@ pub fn place_timing(
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         },
         names,
     )
@@ -2017,6 +2018,45 @@ const MUX_OUT: MuxOut = MuxOut {
 /// [`FIVE_OUT`], one from a `<L>5FF` 0.06 too much as well.*
 const SETUP_WAY: (f64, f64) = (0.064, 0.027);
 
+/// A flip-flop's launch on `bel` as its sinks see it: its clock to `Q` there
+/// ([`Figures::ff_launch_bels`]), and on a `<L>5FF` what its `<L>MUX` output
+/// costs every sink ([`Figures::five_out`]).
+fn ff_launch_on(f: &Figures, bel: &str) -> f64 {
+    let slicem = bel.starts_with("SLICEM");
+    let five = bel.ends_with("5FF");
+    f.ff_launch_bels[usize::from(slicem) * 2 + usize::from(five)]
+        + if five { f.five_out } else { 0.0 }
+}
+
+/// [`PlaceTiming::bel_launch`] for `graph` under `model` at `grade`: each
+/// flip-flop's site's launch as [`place_timing_on_sites`] will time a
+/// register there, so the placement's timing rounds see what the route's
+/// will (a `SLICEL`'s `<L>5FF` 0.425 ns at grade 3 against its `<L>FF`'s
+/// 0.341). Empty for [`DelayModel::Legacy`], which times every flip-flop
+/// alike, and `NaN` for every other site.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a fraction of a nanosecond, which f32 holds"
+)]
+pub fn bel_launch(model: DelayModel, grade: SpeedGrade, graph: &RoutingGraph) -> Vec<f32> {
+    if model == DelayModel::Legacy {
+        return Vec::new();
+    }
+    let f = figures(model, grade);
+    graph
+        .sites
+        .iter()
+        .map(|site| {
+            if site.kind == "ff" {
+                ff_launch_on(f, &site.bel) as f32
+            } else {
+                f32::NAN
+            }
+        })
+        .collect()
+}
+
 /// What a placement says of the cells' own figures, for a `model` that has
 /// them: a flip-flop's clock to `Q` by its slice and bel, 0.341 ns in a
 /// `SLICEL`'s `AFF` to `DFF` and 0.393 in a `SLICEM`'s, 0.313 and 0.361 in
@@ -2081,9 +2121,7 @@ pub fn place_timing_on_sites(
         };
         let bel = graph.sites[site].bel.as_str();
         let slicem = bel.starts_with("SLICEM");
-        let five = bel.ends_with("5FF");
-        timing.launch[index] = f.ff_launch_bels[usize::from(slicem) * 2 + usize::from(five)]
-            + if five { f.five_out } else { 0.0 };
+        timing.launch[index] = ff_launch_on(f, bel);
         // The slice a bel is in: `SLICEL_X0_AFF` is in `SLICEL_X0`.
         let slice_of = |site: usize| {
             let site = &graph.sites[site];
@@ -2551,6 +2589,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let setups = |model: DelayModel, ways: &[NodeId]| {
             let mut timing = timing.clone();
@@ -2634,6 +2673,16 @@ mod tests {
             Some(0.4 - VIVADO_1.five_out)
         );
         assert_eq!(slow.pin_delays.capture[block_pin(8)], None);
+        // The placement's rounds see each flip-flop's site launch as this
+        // does, and nothing on a table's site or under the legacy model.
+        let bels = bel_launch(DelayModel::Vivado, SpeedGrade::One, &graph);
+        for ff in 2..6 {
+            #[allow(clippy::cast_possible_truncation, reason = "as `bel_launch` keeps it")]
+            let want = slow.launch[ff] as f32;
+            assert_eq!(bels[placement.site_of(ff).unwrap()], want, "{ff}");
+        }
+        assert!(bels[site(0, "SLICEL_X0_A6LUT")].is_nan());
+        assert!(bel_launch(DelayModel::Legacy, SpeedGrade::One, &graph).is_empty());
     }
 
     /// **A cell reached through a slice's `<L>MUX` output pays what that
@@ -2896,6 +2945,7 @@ mod tests {
             local: Vec::new(),
             clock: Vec::new(),
             skew: Vec::new(),
+            bel_launch: Vec::new(),
         };
         let on = |model: DelayModel| {
             let mut timing = timing.clone();
