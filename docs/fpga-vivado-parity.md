@@ -4435,7 +4435,11 @@ over the nineteen clocks without the two ADC clocks, where Vivado's routes lose 
 nanosecond, 1.141 against 1.152. Reticle's routes are now faster than Vivado's on these
 placements by the geometric mean; Vivado's are still faster on `lutram32` (1.974 ns
 against 2.056 at seeds 1 to 5), `widemux` (2.710 against 2.836) and, within 0.04 ns,
-on `counter64` and `fsm`.
+on `counter64` and `fsm`. *Not so, measured since: these runs had Reticle's own
+constraints, whose periods are met and whose clocks are not set apart, and Vivado's
+router stopped at the period and chased paths between the ADC-side clocks. With the
+clocks apart at a period neither meets, Vivado's routes of Reticle's placements are
+0.984 of Reticle's over the corpus ("The placements, side by side").*
 
 **Per connection, against Vivado's routes**, the same five designs at seeds 1 to 3: over
 the 121 connections on Reticle's latest paths, Reticle's 574 ps and Vivado's 521 (710
@@ -7736,7 +7740,9 @@ Medians, ns, **measured**:
 
 **So it is the placement**: Vivado's routes on Reticle's placement are 0.04 to 0.06 ns
 faster than Reticle's own, and Vivado's placement 0.6 to 0.8 ns faster than
-Reticle's. Over each build's fifty latest paths of the ADC clock, the slices a path
+Reticle's. *At ten seeds of a later tree the routes are 0.07 to 0.10 ns of those clocks,
+and a quarter of the distance over the corpus ("The placements, side by side").* Over
+each build's fifty latest paths of the ADC clock, the slices a path
 crosses (Manhattan, between consecutive cells) were 6 to 8 in Vivado's placement and
 10 to 22 in Reticle's, with about the same logic delay.
 
@@ -8665,8 +8671,203 @@ seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`.
   ruled out the anneal's settings. What is left is the placement itself: Vivado's
   placement of the same netlist is 0.3 to 0.4 ns faster on these clocks with 40 %
   more wirelength, which a placer that anneals wirelength first and refines for time
-  after does not reach. Not looked at here.
+  after does not reach. Not looked at here. *Looked at in "The placements, side by
+  side": Vivado's is a dense rectangle with the carry chains among their lanes, and
+  no knob of the anneal tried reached it.*
 - **The table input** a connection will be routed to is most of the estimate's
   remaining spread; a placement that knew it would have to choose the pins itself.
 - **The fit at the other grades** would have been grade 3's times the median
   connection's ratio in "Speed grades" (1.136 and 1.398), derived and not measured.
+
+## The placements, side by side
+
+**Asked: "The placement's estimate, refitted" left Reticle's flow 1.087 times
+Vivado's own achieved period over the corpus and Reticle's netlist, placed and routed
+by Vivado, 1.022, and on `sad`'s and `esad`'s ADC clocks Vivado placed the same netlist
+0.3 to 0.4 ns faster with about 40 % more wire. What does Vivado's placement do
+differently on those paths: where are the cells against each other, the carry chains,
+the resets, and is it packing, replication or location? Is Reticle's router taking
+detours Vivado's would not on the same placement? And can the placer be made to do
+what Vivado does?** Vivado 2026.1 at `xc7a100tftg256-3`, run on 2026-11-10 on
+639b750e, whose own build is `through` of `achieved.txt` seed for seed (`sad` seed 1
+the same bitstream, and the twenty builds of `sad` and `esad` with every knob below
+off the same figures to the picosecond). **Everything here is Vivado's timer; nothing
+has been on a part.**
+
+### Where the cells are (measured)
+
+`fill.tcl`'s `placed` (Reticle's placement and routes) and `netlist` (Reticle's
+netlist placed and routed by Vivado, `place_design` and `route_design`) on seeds 1 to
+3, both on `cons3`'s clocks; a tile column is two `SLICE_X` columns:
+
+| | Reticle's placement | Vivado's placement |
+|---|---|---|
+| slices, `sad` seeds 1 to 3 | 395, 379, 395 | 339, 341, 346 |
+| slices, `esad` | 480, 348, 349 | 344, 330, 340 |
+| `sad` seed 1, the slices' extent, tile columns by rows | 26 by 42 | 8 by 28 |
+| `sad` seed 1, connections between slices, columns and rows apart summed | 9,006 and 10,490 | 6,502 and 15,268 |
+| a carry's `CO[3]` to the table it drives, rows apart, mean (most), `sad` | 2.7 to 4.2 (11 to 15) | 0.8 to 1.1 (4 to 7) |
+| the same, `esad` | 3.6 to 5.8 (14 to 19) | 0.8 to 1.1 (4 to 5) |
+| the ADC clock's 50 latest paths, hops inside one slice, `sad` | 5 to 41 % | 15 to 48 % |
+| their mean hop, tiles, `sad` / `esad` | 2.2 to 2.9 / 2.3 to 3.4 | 1.1 to 1.8 / 1.3 to 1.6 |
+
+So Vivado's placement is **a dense rectangle, narrow and tall**: 14 % fewer slices in
+a fifth of the bounding area, and more of its wire in rows. The extra wirelength is the
+shape; the critical hops are half as long.
+
+**Where Reticle puts the carry chains is the difference that shows on a map.** Every
+`CARRY4` of `sad`'s 32 lanes (the counter's increment, the comparison against the
+threshold, the decision against the ADC sample) sits in one block about ten tile
+columns by ten rows, against row `Y174` in every one of the ten seeds (why that row
+was not looked into), and each lane's other cells around the block. Vivado spreads the
+chains through its rectangle, each with its lane's tables and flip-flops beside it. One
+lane, `sad` seed 1, lane 25: in Reticle's placement the comparison's `CARRY4` is at
+`Y172` and the counter's flip-flops and their next-value tables at `Y160` and `Y161`,
+twelve rows down, beside the `resetter` chain bit that resets them; in Vivado's they
+are within two rows of the comparison (`Y102` to `Y104`) and the `resetter` bit eleven
+rows away (`Y91`). Vivado gives up the reset's locality, which is a flip-flop to a
+flip-flop with slack, for the comparison's. **Packing and location, hardly
+restructuring**: Vivado's `place_design` copies no cell, and on two of the six builds
+(`sad` seed 1, `esad` seed 2) takes the first stage of 3 and 13 of the reference shift
+registers out into a flip-flop of its own (`<cell>_srlopt`), where a table's output
+meets a flip-flop's short setup rather than a shift register's (a reading, not
+measured); the fourth-latest path
+of `sad` seed 1 in Vivado's placement ends on one.
+
+**But the latest paths of Reticle's flow are mostly not the counters.** `sad`'s ADC
+clock, seeds 1 to 10 of `through`, Vivado's timer on Reticle's routes: seven latest
+paths are `armed_and_ready_sad` through two tables into the resets of the `resetter`
+or `ready2trigger_1andup` flip-flops, the two tables driving 72 and 68 sinks;
+three are the reference shift registers (a shift count into their enables, or the CDC
+FIFO's distributed RAM into their data). At seed 1 the reset path is 2.061 ns, its
+three connections 0.235, 0.641 and 0.598 ns; in Vivado's placement of the same netlist
+1.623, about 0.110, 0.414 and 0.474, the first table beside the flip-flop's own lane,
+the second beside the first, and the resets in seven slices beside that.
+
+### Routes or placement (measured)
+
+`through`'s placements routed by Vivado with each table's pins free (`achieved.tcl`'s
+`placement_free`) on `cons3`'s clocks, ten seeds (`vfree` in `achieved.txt`), against
+Reticle's routes of the same placements and Vivado's placement and routes of the same
+netlists (`pnr` `through`), medians:
+
+| clock | Reticle's placement and routes | Reticle's placement, Vivado's routes | Vivado's placement and routes |
+|---|---|---|---|
+| `sad` `adc_sampleclk` | 2.561 | 2.456 | 2.260 |
+| `esad` `adc_sampleclk` | 2.659 | 2.591 | 2.197 |
+| `sad` `clk_usb` | 1.868 | 1.804 | 1.740 |
+| `esad` `clk_usb` | 1.821 | 1.783 | 1.716 |
+
+Over the corpus Vivado's routes are **0.984 of Reticle's on the same placements**, which
+a bootstrap over the seeds puts at 0.977 to 0.992; the largest, `lutram32` 0.923,
+`carry_counter` 0.953, `counter64` 0.963 and `sad`'s ADC clock 0.959, and the slowest
+`barrel` 1.010. So of what separates Reticle's flow from its netlist in Vivado's hands,
+about 0.065, the routes are a quarter and the placement the rest; on `sad`'s ADC clock
+0.10 of 0.30 ns is the routes, on `esad`'s 0.07 of 0.46.
+
+**That corrects two readings.** "Routing against Vivado's routes" found Reticle's routes
+faster than Vivado's on the same placements (`vroutes`, 1.163 against 1.194), with
+Vivado's losing a nanosecond on the ADC clocks; those runs had Reticle's own
+constraints, which meet their periods and do not set the clocks apart, so Vivado's
+router stopped once each period was met and worked at paths between the two ADC-side
+clocks that no period can meet. Run so again here, `sad`'s and `esad`'s ADC clocks
+were 4.07 and 3.41 ns with Vivado's routes; on `cons3`, 2.456 and 2.591. And "The ADC
+clocks, placed" put Vivado's routes at 0.04 to 0.06 ns faster on those clocks, on
+`cons3`, at seeds 1 to 5 of an earlier tree; at ten seeds of this one it is 0.07 to 0.10.
+
+One of the differences, `sad` seed 1: the 68-sink reset net into the `resetter` flip-flop
+one row above its driver's slice (`SLICE_X40Y161`, `CLBLL_L_SR`) is 597 ps in Reticle's
+routes, `SW2`, `ER1`, `NR1`, `NR1`, `CTRL0`, the branch that serves the driver's own row
+carried on; Vivado's, on the same placement, is 429, `NR1BEG1`, `GFAN1`, `CTRL0`, and
+in Reticle's routes that `NR1BEG1` is held by `ready2trigger_1andup_19`, a flip-flop of
+the same tile. Over that build's nets Vivado's routes are faster at every fanout: the
+mean of a net's latest sink 522 ps against 601 at two to four sinks, 1,107 against
+1,350 past 64.
+
+### What was tried, and not kept (measured)
+
+Each a knob on the placer or the router, `sad` and `esad` at ten seeds against
+`through`, Vivado's timer on Reticle's routes, medians in ns; the ratio is of the
+four clocks' geometric mean, with a bootstrap over the seeds:
+
+| tried | `sad` ADC | `esad` ADC | `sad` USB | `esad` USB | ratio |
+|---|---|---|---|---|---|
+| `through` | 2.561 | 2.659 | 1.868 | 1.821 | 1 |
+| timing in the wirelength anneal, every 5 temperatures | 2.562 | 2.546 | 1.921 | 1.791 | 0.992 [0.968-1.010] |
+| the same, every 20 | 2.673 | 2.611 | 1.935 | 1.836 | 1.017 [0.997-1.064] |
+| every 5, a critical connection's weight 64 (8) | 2.751 | 2.448 | 1.872 | 1.850 | 1.002 [0.980-1.027] |
+| weight 32 in the timing rounds | 2.621 | 2.710 | 1.912 | 1.857 | 1.021 [0.996-1.045] |
+| weight 64 | 2.592 | 2.764 | 1.877 | 1.853 | 1.018 [0.998-1.044] |
+| weight 128 | 2.684 | 2.752 | 1.918 | 1.873 | 1.035 [1.008-1.054] |
+| a macro's move may displace cells onto the sites it leaves | 2.619 | 2.599 | 1.903 | 1.831 | 1.006 [0.981-1.026] |
+| the same, and timing every 5 | 2.655 | 2.587 | 1.881 | 1.845 | 1.007 [0.985-1.030] |
+| a hot, wide start (window 30, acceptance 0.8) | 2.691 | 2.685 | 1.883 | 1.910 | 1.029 [1.005-1.048] |
+| the same, with the displacing moves | 2.587 | 2.621 | 1.909 | 1.886 | 1.013 [0.992-1.045] |
+| the same, and timing every 5 | 2.602 | 2.655 | 1.925 | 1.923 | 1.025 [1.000-1.051] |
+| ten tiles of box charged for each slice held | 2.620 | 2.596 | 1.926 | 1.877 | 1.015 [0.989-1.034] |
+| legalisation seating the macros among the cells | 2.534 | 2.618 | 1.849 | 1.848 | 0.995 [0.975-1.017] |
+| a late sink may take up to three wires from other signals | 2.561 | 2.659 | 1.868 | 1.821 | 1.000 |
+
+**None is outside the seeds' spread.** The legalisation, the one whose four clocks all
+leaned faster, was run over the corpus at ten seeds: 0.997 of `through`, 0.992 to
+1.006 by the bootstrap, `regfile_alu` 2.5 % and `srl_delay` 3.2 % slower, `lutram32`
+3.4 % faster. The router's took wires for one sink of `sad` seed 1 and no clock moved:
+the reset path's latest endpoints are 34 resets of one net routed at 0.49 to 0.60 ns
+each, and making one sink faster leaves the rest.
+
+What they did to the placement, `sad` seed 1 (Reticle's own counts, not timed):
+
+- **The carry block stayed in every one.** Started hot and wide, with displacing moves
+  or with the macros seated among the cells, the chains came out in one block against
+  the same row; the wirelength anneal alone, the timing rounds off, ends with the
+  comparison's `CARRY4` a median 21 tiles from the counter's flip-flops it feeds (19
+  with the macros seated among the cells), which the three timing rounds bring to 3.5.
+  *The first reading* was that the 32 signals of the ADC sample and the threshold, each
+  reaching every lane's chains, pull the chains together: with every box past four
+  sinks weighed down by its sinks, a 64-sink one to a sixteenth, the block was as it
+  was (not timed by Vivado).
+- **The weights move the lanes but not the latest path.** At 64 the counter's flip-flops
+  came to a median of one tile from their comparison, Vivado's figure, and the ADC
+  clocks were no faster: the latest paths are the wide resets and the shift registers' enables, which a
+  connection's pull does not shorten.
+- The slice charge took `sad` seed 1 to 348 slices, near Vivado's 339, in the same shape.
+
+Place and route time are not compared: the machine's load moved between the batches by
+more than any knob (the twenty builds with every knob off took 958 s to place in one
+batch, `through`'s own 600 in another), and none was kept.
+
+### What was changed
+
+Nothing in the flow. `vfree` is added to `achieved.txt`; the knobs above are a patch
+not kept (`timing_every`, `macro_swaps`, `slice_cost`, `wide_boxes` and
+`interleave_macros` in `PlaceOptions`, `refine_steal` in `route::Timing`).
+
+### The Husky's bitstreams
+
+Nothing on their path changed. `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `vivados_router_is_faster_on_reticles_own_placements` (`tests/fpga_xray_achieved.rs`)
+  holds `vfree` against `through`: the corpus at least 1 % faster with Vivado's routes,
+  both ADC clocks faster, no clock more than 3 % slower, ten seeds of each.
+  Mutation-checked on the fixture: the two builds swapped, a seed of one clock dropped,
+  `sad`'s ADC clock with Vivado's routes 1.6 times slower (what Reticle's own
+  constraints gave) and `vfree` made `through`'s figures each fail it. It holds a
+  quoted run: Reticle's router closing the distance since would not fail it, nor
+  would it notice; only `achieved.sh` again would.
+
+### Not done
+
+- **A placer that spreads the chains among their lanes.** Every knob above left the
+  block; what Vivado's global placement does to avoid it is not known here.
+- **Routing the wide resets as Vivado does.** A late sink taking a wire is one sink of a
+  net whose 34 latest sinks are routed at 0.49 to 0.60 ns; the
+  whole tree's trunk has to be faster, which is a question for the negotiation, not
+  the refinement.
+- **The shift registers' enables and the CDC FIFO's read**, `sad`'s other latest paths,
+  not looked at beyond Vivado's `_srlopt`: a shift register's first stage taken out
+  into a flip-flop is a netlist change Reticle does not make, and might be one for these
+  paths; not tried.

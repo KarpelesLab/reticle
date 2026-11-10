@@ -842,3 +842,49 @@ fn the_placements_refitted_estimate_makes_no_clock_faster() {
         "Reticle's flow against Vivado's: {after:.3} refitted, {before:.3} through"
     );
 }
+
+/// **Vivado's router is faster than Reticle's on Reticle's own placements, by
+/// about a quarter of what is left between the two flows**
+/// (`docs/fpga-vivado-parity.md`, "The placements, side by side"). `vfree` is
+/// `through`'s placements routed by Vivado with each table's pins free, every
+/// clock at a period neither meets and the clocks apart (`cons3`), ten seeds:
+/// 0.984 of `through` over the corpus, which a bootstrap over the seeds puts at
+/// 0.977 to 0.992, `sad`'s ADC clock 2.456 ns against 2.561 and `esad`'s 2.591
+/// against 2.659. This holds the corpus at least 1 % faster with Vivado's
+/// routes, both ADC clocks faster, no clock more than 3 % slower (the slowest,
+/// `barrel`, 1.0 %), and ten seeds of each. Would catch a regeneration that lost
+/// the measurement, swapped the builds or lost a seed, and the reading this
+/// corrects (`vroutes`, on Reticle's own constraints, where Vivado's router
+/// stops once the period is met and chases paths between clocks); would not
+/// catch Reticle's router closing the distance since, which needs Vivado.
+#[test]
+fn vivados_router_is_faster_on_reticles_own_placements() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let mut logs = [0.0f64; 2];
+    for ((design, clock), (_, builds)) in &table {
+        let (through, vfree) = (&builds["through"], &builds["vfree"]);
+        assert_eq!(vfree.len(), 10, "{design} {clock}: seeds of `vfree`");
+        let (ours, theirs) = (median(through), median(vfree));
+        assert!(
+            theirs <= ours * 1.03,
+            "{design} {clock}: {theirs:.3} ns with Vivado's routes against {ours:.3}"
+        );
+        if clock == "adc_sampleclk" {
+            assert!(
+                theirs < ours,
+                "{design}'s ADC clock: {theirs:.3} with Vivado's routes against {ours:.3}"
+            );
+        }
+        logs[0] += ours.ln();
+        logs[1] += theirs.ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [ours, theirs] = logs.map(|l| (l / n).exp());
+    assert!(
+        theirs <= ours * 0.99,
+        "Reticle's placements: {theirs:.3} with Vivado's routes, {ours:.3} with Reticle's"
+    );
+}

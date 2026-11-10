@@ -129,7 +129,10 @@ models or IP.
   `achieved.py table --fixture` writes `testdata/fpga/vivado/qor/achieved.txt`. The
   netlists alone are its `vnetlist` (Vivado's synthesis) and `pnr` (Reticle's) stages,
   both placed and routed by Vivado on periods neither meets, the clocks apart;
-  `achieved.py netlists` is their table.
+  `achieved.py netlists` is their table. Ask `placement_free` (`achieved.sh --stage
+  placement_free`) with `cons3`'s `.xdc` beside the build's `x.v` and `x.tcl`, not the
+  build's own `x.xdc`: on that, whose periods are met and whose clocks are not apart,
+  Vivado's router stops at the period and works at paths between clocks.
 - `placement_fit.py` reads the `estimate` lines of those builds' endpoints files,
   the placement's estimate of each connection and endpoint beside the routed one:
   `compare` sets the two side by side, and against Vivado's timer when
