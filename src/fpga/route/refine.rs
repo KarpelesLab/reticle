@@ -696,6 +696,23 @@ fn try_group(
             Some(route.clone()),
         );
     }
+    // And as the analysis will read them: a search leaves out what a branch
+    // loads its node with (`Timing::branch_ps`), and the new branch is one,
+    // so a group the searches found 8 ps better can be no better at all, and
+    // was given the same routes again round after round.
+    for (i, m) in group.iter().enumerate() {
+        let terminals = &cx.terminals[m.which];
+        let delays = sink_delays(
+            cx.graph,
+            &done[i],
+            &terminals.sinks,
+            &cx.timing.node_delay,
+            cx.timing.branch_ps,
+        );
+        #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
+        let s = base[i] - delays[m.sink] as f64;
+        least_done = least_done.min(s);
+    }
     if least_done < before + 1.0 {
         put_back(state, routing);
         return false;

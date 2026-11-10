@@ -4262,6 +4262,220 @@ mod tests {
         assert_eq!(ends(2, &delays), (Some(a), Some(b), 0));
     }
 
+    /// **A group the refinement's searches find better but whose new branch's
+    /// load leaves no better is not kept** ([`Timing::branch_ps`]). As
+    /// [`the_refinement_gives_a_tables_fast_input_to_its_latest_input`], but the
+    /// second register also feeds a register of its own at `cd2`, and reaches
+    /// the table's slow input `b` only through it: `out1 far cd2 b`, a chain
+    /// with no branch, 400 ps. The searches find `a` 100 ps from `far` and give
+    /// it to the second, the first taking `b` in 300; but `far` then has two
+    /// branches, and at 300 ps a branch the new way is 400 ps, no better than
+    /// before. With no load it is kept and counted; with the load it is put
+    /// back and nothing is refined. Would catch the check made on the searches'
+    /// figures alone, which kept such a group and gave it the same routes again
+    /// in every round (`qor/carry_counter.v` seed 1's comparison table, 8 ps a
+    /// branch); would not catch a group that is better by more than its load
+    /// being refused, which the first case here shows is not.
+    #[test]
+    fn a_group_no_better_once_its_branch_is_loaded_is_not_kept() {
+        use crate::fpga::place::{PathDomain, PinTiming, PlaceTiming};
+        let mut arch = Arch::new("refine", "test", 1, 1);
+        let mut tile = TileType::new("t", "t_tile", 8, 8);
+        for name in ["out0", "out1", "far", "cd2", "a", "b", "lo", "cd"] {
+            tile.wires.push(WireDecl {
+                name: name.to_owned(),
+                dx: 0,
+                dy: 0,
+            });
+        }
+        for n in 0..2 {
+            let mut src = BelDecl::new(format!("src{n}"), "ff");
+            src.pins
+                .push(("q".to_owned(), WireRef::local(format!("out{n}"))));
+            tile.bels.push(src);
+        }
+        let mut lut = BelDecl::new("lut", "lut");
+        lut.pins.push(("i0".to_owned(), WireRef::local("a")));
+        lut.pins.push(("i1".to_owned(), WireRef::local("b")));
+        lut.pins.push(("o".to_owned(), WireRef::local("lo")));
+        tile.bels.push(lut);
+        for (name, d) in [("cap", "cd"), ("cap2", "cd2")] {
+            let mut cap = BelDecl::new(name, "ff");
+            cap.pins.push(("d".to_owned(), WireRef::local(d)));
+            tile.bels.push(cap);
+        }
+        let ways = [
+            ("out0", "a"),
+            ("out0", "b"),
+            ("out1", "far"),
+            ("far", "cd2"),
+            ("far", "a"),
+            ("cd2", "b"),
+            ("lo", "cd"),
+        ];
+        for (k, (from, to)) in ways.iter().enumerate() {
+            tile.pips.push(PipDecl {
+                from: WireRef::local(*from),
+                to: WireRef::local(*to),
+                bits: vec![ConfigBit::new(0, u32::try_from(k).unwrap_or(0))],
+            });
+        }
+        arch.tile_types.push(tile);
+        arch.set_tile(0, 0, 0);
+        let graph = arch.build_graph();
+
+        let mut netlist = Netlist {
+            instances: Vec::new(),
+            pins: Vec::new(),
+            signals: Vec::new(),
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut add = |name: &str, kind: &str, pins: &[(&str, bool, usize)]| {
+            let instance = netlist.instances.len();
+            let mut ids = Vec::new();
+            for (role, output, signal) in pins {
+                ids.push(netlist.pins.len());
+                netlist.pins.push(NetPin {
+                    instance,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+            }
+            netlist.instances.push(Instance {
+                cell: CellId::from_index(instance),
+                name: name.to_owned(),
+                primitive: kind.to_uppercase(),
+                kind: kind.to_owned(),
+                pins: ids,
+                pin: None,
+            });
+        };
+        add("src0", "ff", &[("q", true, 0)]);
+        add("src1", "ff", &[("q", true, 1)]);
+        add(
+            "lut",
+            "lut",
+            &[("i0", false, 0), ("i1", false, 1), ("o", true, 2)],
+        );
+        add("cap", "ff", &[("d", false, 2)]);
+        add("cap2", "ff", &[("d", false, 1)]);
+        for signal in 0..3 {
+            netlist.signals.push(Signal {
+                name: format!("s{signal}"),
+                driver: netlist
+                    .pins
+                    .iter()
+                    .position(|p| p.output && p.signal == Some(signal)),
+                sinks: (0..netlist.pins.len())
+                    .filter(|p| !netlist.pins[*p].output && netlist.pins[*p].signal == Some(signal))
+                    .collect(),
+            });
+        }
+        let pins: Vec<PinTiming> = netlist
+            .pins
+            .iter()
+            .map(
+                |pin| match (netlist.instances[pin.instance].kind.as_str(), pin.output) {
+                    ("ff", true) => PinTiming::Start,
+                    ("ff", false) => PinTiming::End,
+                    _ => PinTiming::Through,
+                },
+            )
+            .collect();
+        let paths = PlaceTiming {
+            pins,
+            cell: vec![0.0, 0.0, 0.1, 0.0, 0.0],
+            launch: vec![0.0; 5],
+            capture: vec![0.0; 5],
+            domain: vec![
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+                PathDomain::Untimed,
+                PathDomain::Clock(0),
+                PathDomain::Clock(0),
+            ],
+            periods: vec![1.0],
+            wire: (0.0, 0.0, 0.0),
+            rounds: 1,
+            weight: 1.0,
+            exponent: 1,
+            reaches: Vec::new(),
+            cycles: Vec::new(),
+            untimed_from: Vec::new(),
+            untimed_to: Vec::new(),
+            frozen: vec![false; 5],
+            pin_domain: Vec::new(),
+            pin_delays: crate::fpga::place::PinDelays::default(),
+            local_wire: None,
+            local: Vec::new(),
+            clock: Vec::new(),
+            skew: Vec::new(),
+        };
+        let mut placement = Placement::new(netlist.instances.len(), graph.sites.len());
+        for (index, site) in [
+            "X0Y0/src0",
+            "X0Y0/src1",
+            "X0Y0/lut",
+            "X0Y0/cap",
+            "X0Y0/cap2",
+        ]
+        .iter()
+        .enumerate()
+        {
+            placement.place(index, graph.site_index(site).expect("site"));
+        }
+        let node = |name: &str| -> NodeId {
+            let index = (0..graph.nodes.len())
+                .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
+                .unwrap_or_else(|| panic!("no node {name}"));
+            NodeId::try_from(index).unwrap_or(0)
+        };
+        let (a, b, far) = (node("X0Y0/a"), node("X0Y0/b"), node("X0Y0/far"));
+        let mut equivalent = vec![u32::MAX; graph.nodes.len()];
+        equivalent[a as usize] = 7;
+        equivalent[b as usize] = 7;
+        let mut delays = vec![0u32; graph.nodes.len()];
+        delays[b as usize] = 300;
+        delays[far as usize] = 100;
+        let ends = |branch_ps: u32| {
+            let mut timing = Timing::for_netlist(&netlist, delays.clone(), 0);
+            timing.paths = Some(paths.clone());
+            timing.refine_rounds = 2;
+            timing.refine_above = 0.0;
+            timing.branch_ps = branch_ps;
+            let options = RouteOptions {
+                equivalent: equivalent.clone(),
+                timing: Some(timing),
+                ..RouteOptions::default()
+            };
+            let (routing, report) =
+                route(&netlist, &graph, &placement, &options).expect("it routes");
+            assert!(
+                routing.shorts(&netlist, &graph).is_empty(),
+                "no node is shared"
+            );
+            let end = |signal: usize| {
+                let route = routing.route(signal).expect("routed");
+                let pin = netlist.signals[signal].sinks[0];
+                let moved = route.moved.iter().find(|(p, _)| *p == pin).map(|(_, n)| *n);
+                let own =
+                    graph.sites[placement.site_of(2).expect("placed")].pin(&netlist.pins[pin].role);
+                moved.or(own)
+            };
+            (end(0), end(1), report.refined)
+        };
+        let (first, second, refined) = ends(0);
+        assert_eq!((first, second), (Some(b), Some(a)));
+        assert!(refined >= 1, "{refined}");
+        assert_eq!(ends(300), (Some(a), Some(b), 0));
+    }
+
     /// **The signals most critical by the placement go first, and a critical
     /// search weighs its estimate as it is told.** Three signals whose most
     /// critical sinks are 0.2, 0.9 and 0.9 go in the order 1, 2, 0: the ties in
