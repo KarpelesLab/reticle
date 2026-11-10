@@ -56,7 +56,13 @@ fn fixtures() -> Option<PathBuf> {
 /// Builds `<name>.v` and `extra` for the Husky Plus's part with
 /// `<name>.rcf`, and returns what `--timing-endpoints` wrote.
 fn endpoints(root: &str, dir: &Path, name: &str, extra: &[PathBuf]) -> String {
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vivado-{name}"));
+    endpoints_in(root, dir, name, extra, name)
+}
+
+/// [`endpoints`], built in a directory of `tag`'s, for two tests of one
+/// design to run at once.
+fn endpoints_in(root: &str, dir: &Path, name: &str, extra: &[PathBuf], tag: &str) -> String {
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vivado-{tag}"));
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).unwrap();
     let report = out.join("endpoints.txt");
@@ -1039,4 +1045,80 @@ fn a_frames_own_code_is_not_an_unexplained_bit() {
     assert_eq!(code.ecc_faults.len(), 1);
     let other = image(13);
     assert_eq!((other.ecc_bits, other.unexplained), (0, 1));
+}
+
+/// **The endpoints file says what the placement estimated, beside what the
+/// route made of it** (`estimate` and `estimate_endpoint`, which
+/// `tools/vivado-parity/placement_fit.py` reads). On `carry_counter`: an
+/// `estimate` line for each `connection` line, the same routed delay, fanout
+/// and wire; each placement figure the line `xray::timing::VIVADO_WIRE` gives
+/// its distance and fanout, or nothing on a carry's own cascade or a table's
+/// way into its lane, which the placement charges nothing; each criticality
+/// between nothing and one; and an `estimate_endpoint` line for each
+/// `endpoint` line, its routed arrival the same.
+///
+/// Would catch the placement's estimate written from another model than the
+/// one it placed by, the routed column taken from elsewhere, a connection or
+/// an endpoint left out, or the distances wrong in sum. Would not catch the
+/// columns and rows swapped, which the line, costing a tile alike either way,
+/// cannot tell apart.
+#[test]
+fn the_endpoints_file_says_what_the_placement_estimated() {
+    let Some(root) = chipdb() else { return };
+    let Some(dir) = fixtures() else { return };
+    let report = endpoints_in(&root, &dir, "carry_counter", &[], "estimates");
+    let mut connections: Vec<(String, String, String)> = report
+        .lines()
+        .filter_map(|l| l.strip_prefix("connection "))
+        .map(|l| {
+            let w: Vec<&str> = l.split(' ').collect();
+            (w[0].to_owned(), w[1].to_owned(), w[3].to_owned())
+        })
+        .collect();
+    let mut estimated = Vec::new();
+    for l in report.lines().filter_map(|l| l.strip_prefix("estimate ")) {
+        let w: Vec<&str> = l.split(' ').collect();
+        assert_eq!(w.len(), 12, "{l}");
+        estimated.push((w[1].to_owned(), w[4].to_owned(), w[11].to_owned()));
+        let placed: f64 = w[0].parse().unwrap();
+        let tiles = f64::from(w[2].parse::<i32>().unwrap().unsigned_abs())
+            + f64::from(w[3].parse::<i32>().unwrap().unsigned_abs());
+        let fanout: usize = w[4].parse().unwrap();
+        let line = if w[5] == "1" {
+            0.0
+        } else {
+            0.414 + 0.0358 * tiles + if fanout > 4 { 0.0244 * tiles } else { 0.0 }
+        };
+        assert!(
+            (placed - line).abs() < 1.5e-3,
+            "{l}: the line says {line:.3}"
+        );
+        for c in [w[6], w[7]] {
+            assert!((0.0..=1.0).contains(&c.parse::<f64>().unwrap()), "{l}");
+        }
+    }
+    assert!(connections.len() > 50, "{} connections", connections.len());
+    connections.sort();
+    estimated.sort();
+    assert_eq!(connections, estimated);
+    let mut ends: Vec<(String, String, String)> = report
+        .lines()
+        .filter_map(|l| l.strip_prefix("endpoint "))
+        .map(|l| {
+            let w: Vec<&str> = l.split(' ').collect();
+            (w[0].to_owned(), w[1].to_owned(), w[3].to_owned())
+        })
+        .collect();
+    let mut placed_ends: Vec<(String, String, String)> = report
+        .lines()
+        .filter_map(|l| l.strip_prefix("estimate_endpoint "))
+        .map(|l| {
+            let w: Vec<&str> = l.split(' ').collect();
+            (w[0].to_owned(), w[3].to_owned(), w[5].to_owned())
+        })
+        .collect();
+    assert!(!ends.is_empty());
+    ends.sort();
+    placed_ends.sort();
+    assert_eq!(ends, placed_ends);
 }

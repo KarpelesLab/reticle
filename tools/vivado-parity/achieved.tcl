@@ -117,4 +117,7 @@ foreach clock [get_clocks -quiet] {
   }
 }
 report_timing -max_paths 3 -input_pins -file [file join [pwd] worst.rpt]
+# With KEEP_DCP set, the routes stage keeps its checkpoint for timing_dump.tcl
+# (placement_fit.py compare).
+if {$stage eq "routes" && [info exists ::env(KEEP_DCP)]} { write_checkpoint -force [file join [pwd] $top.dcp] }
 say end

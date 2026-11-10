@@ -4975,8 +4975,8 @@ fn write_xc7_bitstream(
         }
         // The connections the route made slowest against their distance:
         // what a detour looks like, and on which signals, against the
-        // placement's own estimate of each (`timing::WIRE`).
-        let (a, b, c) = paths.wire;
+        // placement's own estimate of each (`place::estimated_wire`).
+        let estimates = reticle::fpga::place::estimated_wire(&netlist, &graph, &placement, paths);
         let mut detours: Vec<(f64, usize, usize, u32, f64)> = Vec::new();
         for (index, signal) in netlist.signals.iter().enumerate() {
             let Some(driver) = signal.driver else {
@@ -4988,7 +4988,6 @@ fn write_xc7_bitstream(
             else {
                 continue;
             };
-            let wide = signal.sinks.len() > reticle::fpga::place::WIDE_FANOUT;
             for sink in &signal.sinks {
                 let Some(to) = placement
                     .site_of(netlist.pins[*sink].instance)
@@ -4997,8 +4996,7 @@ fn write_xc7_bitstream(
                     continue;
                 };
                 let tiles = from.0.abs_diff(to.0) + from.1.abs_diff(to.1);
-                let t = f64::from(tiles);
-                let estimate = a + b * t + if wide { c * t } else { 0.0 };
+                let estimate = estimates[*sink];
                 if wire[*sink] > 0.0 {
                     detours.push((wire[*sink] - estimate, index, *sink, tiles, wire[*sink]));
                 }
@@ -5135,6 +5133,18 @@ fn write_xc7_bitstream(
                         ));
                     }
                 }
+            }
+            // And what the placement believed of each connection and
+            // endpoint, beside what the route made of it: see
+            // `placement_estimate_lines`.
+            if let Some(unplaced) = &unplaced_timing {
+                let placer = reticle::fpga::place::PlaceTiming {
+                    local: placement_report.local.clone(),
+                    ..unplaced.clone()
+                };
+                text.push_str(&placement_estimate_lines(
+                    &netlist, &graph, &placement, &routing, &placer, paths, &wire, &domains,
+                ));
             }
             text.push_str(&io_register_connections(
                 &netlist, &graph, &placement, &wire,
@@ -6155,6 +6165,116 @@ fn verify(args: &Args) -> Result<Outcome, ArgError> {
     } else {
         Outcome::Ok
     })
+}
+
+/// What the placement's estimate made of each connection and endpoint,
+/// beside the routed estimate (`wire`), for `--timing-endpoints`.
+///
+/// `placer` is the timing the placement anneals by, its cells' figures
+/// those it has before a site is known, and `paths` the same with each
+/// cell's figures on its site (`xray::place_timing_on_sites`), which the
+/// route is timed by. One line a connection:
+///
+/// `estimate <placement's ns> <routed ns> <dx> <dy> <fanout> <local>
+/// <placement's criticality> <routed criticality> <driver kind>.<role>
+/// <sink kind>.<role> <sink's inputs used> <the wire the route reached it on>`
+///
+/// and one an endpoint: `estimate_endpoint <clock> <placement's arrival>
+/// <the same with the site's figures> <routed arrival> <required>
+/// <cell>.<role>`, each arrival with its capture.
+#[allow(clippy::too_many_arguments, reason = "a report of one build's pieces")]
+fn placement_estimate_lines(
+    netlist: &reticle::fpga::place::Netlist,
+    graph: &reticle::fpga::arch::RoutingGraph,
+    placement: &reticle::fpga::place::Placement,
+    routing: &reticle::fpga::Routing,
+    placer: &reticle::fpga::place::PlaceTiming,
+    paths: &reticle::fpga::place::PlaceTiming,
+    wire: &[f64],
+    domains: &[String],
+) -> String {
+    use reticle::fpga::place::{endpoint_arrivals, estimated_wire, path_slack};
+    let mut placer = placer.clone();
+    placer.skew_from(placement);
+    let estimate = estimated_wire(netlist, graph, placement, &placer);
+    let (believed, _, _) = path_slack(netlist, &placer, &estimate);
+    let (routed, _, _) = path_slack(netlist, paths, wire);
+    let tile = |instance: usize| placement.site_of(instance).map(|s| graph.sites[s].tile);
+    let mut text = String::new();
+    for (index, signal) in netlist.signals.iter().enumerate() {
+        let Some(driver) = signal.driver else {
+            continue;
+        };
+        let Some(from) = tile(netlist.pins[driver].instance) else {
+            continue;
+        };
+        let route = routing.route(index);
+        let source = &netlist.pins[driver];
+        for sink in &signal.sinks {
+            let pin = &netlist.pins[*sink];
+            let Some(to) = tile(pin.instance) else {
+                continue;
+            };
+            if wire.get(*sink).copied().unwrap_or(0.0) <= 0.0 {
+                continue;
+            }
+            let node = route
+                .and_then(|r| r.moved.iter().find(|(m, _)| m == sink))
+                .map(|(_, node)| *node)
+                .or_else(|| {
+                    placement
+                        .site_of(pin.instance)
+                        .and_then(|site| graph.sites[site].pin(&pin.role))
+                });
+            let used = netlist.instances[pin.instance]
+                .pins
+                .iter()
+                .filter(|p| !netlist.pins[**p].output && netlist.pins[**p].signal.is_some())
+                .count();
+            text.push_str(&format!(
+                "estimate {:.3} {:.3} {} {} {} {} {:.3} {:.3} {}.{} {}.{} {used} {}\n",
+                estimate[*sink],
+                wire[*sink],
+                i64::from(to.0) - i64::from(from.0),
+                i64::from(to.1) - i64::from(from.1),
+                signal.sinks.len(),
+                u8::from(placer.local.get(*sink).copied().unwrap_or(false)),
+                believed.get(*sink).copied().unwrap_or(0.0),
+                routed.get(*sink).copied().unwrap_or(0.0),
+                netlist.instances[source.instance].kind,
+                source.role,
+                netlist.instances[pin.instance].kind,
+                pin.role,
+                node.map_or_else(|| "-".to_owned(), |n| graph.wire(n).full_name())
+            ));
+        }
+    }
+    let key =
+        |(pin, domain, at, required): (usize, usize, f64, f64)| ((domain, pin), (at, required));
+    let site_figures: std::collections::BTreeMap<(usize, usize), (f64, f64)> =
+        endpoint_arrivals(netlist, paths, &estimate)
+            .into_iter()
+            .map(key)
+            .collect();
+    let after: std::collections::BTreeMap<(usize, usize), (f64, f64)> =
+        endpoint_arrivals(netlist, paths, wire)
+            .into_iter()
+            .map(key)
+            .collect();
+    for (pin, domain, at, _) in endpoint_arrivals(netlist, &placer, &estimate) {
+        let (Some((sited, _)), Some((routed, required))) =
+            (site_figures.get(&(domain, pin)), after.get(&(domain, pin)))
+        else {
+            continue;
+        };
+        text.push_str(&format!(
+            "estimate_endpoint {} {at:.3} {sited:.3} {routed:.3} {required:.3} {}.{}\n",
+            domains.get(domain).map_or("?", String::as_str),
+            netlist.instances[netlist.pins[pin].instance].name,
+            netlist.pins[pin].role
+        ));
+    }
+    text
 }
 
 /// The wires a routed connection takes from its driver to sink pin `sink`,

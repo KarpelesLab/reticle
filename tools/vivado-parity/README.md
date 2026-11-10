@@ -130,6 +130,14 @@ models or IP.
   netlists alone are its `vnetlist` (Vivado's synthesis) and `pnr` (Reticle's) stages,
   both placed and routed by Vivado on periods neither meets, the clocks apart;
   `achieved.py netlists` is their table.
+- `placement_fit.py` reads the `estimate` lines of those builds' endpoints files,
+  the placement's estimate of each connection and endpoint beside the routed one:
+  `compare` sets the two side by side, and against Vivado's timer when
+  `timing_dump.tcl` has been run on the `routes` stage's checkpoints (which
+  `achieved.sh` keeps with `KEEP_DCP` set, as `<design>/routes/<design>.dcp`, the
+  dump going beside it as `<design>.timing`); `fit` fits the
+  routed delay by distance, fanout and pin kind and writes
+  `testdata/fpga/vivado/timing/placement.txt`.
 - `netlist_qor.sh`, `netlist_qor.tcl` and `netlist_qor.py` count what a netlist is
   made of and how deep its logic is, by Vivado's own counting: Vivado's
   `synth_design` of each design, or a Reticle build's netlist linked unplaced;
