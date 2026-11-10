@@ -240,7 +240,7 @@ pub use replicate::{MOST_READERS, Replication, SHARE, copies, replicate_wide_fan
 pub use sites::SiteCoverage;
 pub use thru::{RouteThroughMode, RouteThroughReport, route_through_room};
 pub use timing::{
-    bel_launch, clock_arrival, clock_arrival_ps, place_timing, place_timing_on_sites,
+    bel_launch, clock_arrival, clock_arrival_ps, clock_margins, place_timing, place_timing_on_sites,
 };
 pub use vivado::{VivadoExportError, VivadoImplementation, vivado_implementation};
 pub use xadc::xadc_init_bit;

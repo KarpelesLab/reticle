@@ -183,6 +183,11 @@ pub(crate) struct Figures {
     /// grade on these parts) and the clock's pessimism its common path does
     /// not remove ([`CLOCK_MARGIN`]). None for [`LEGACY`].
     pub clock_margin: f64,
+    /// What a capture is charged over [`Figures::clock_margin`] for a path
+    /// launched in the other half of its clock region row, and in another
+    /// region row, ns ([`REGION_MARGIN`]): `PlaceTiming::region_margin`.
+    /// None for [`LEGACY`].
+    pub region_margin: (f64, f64),
     /// [`CARRY`], for a pin pair [`Figures::carry_arcs`] has no figure for.
     pub carry: f64,
     /// [`MUXF7`].
@@ -331,6 +336,7 @@ const NO_MUX_OUT: MuxOut = MuxOut {
 pub(crate) const LEGACY: Figures = Figures {
     lut: LUT,
     clock_margin: 0.0,
+    region_margin: (0.0, 0.0),
     carry: CARRY,
     muxf7: MUXF7,
     muxf8: MUXF8,
@@ -419,7 +425,8 @@ pub(crate) const LEGACY: Figures = Figures {
 /// `qor/gray_cdc.v` (4.01 to 4.30 ns), one design read off one report.
 pub(crate) const VIVADO: Figures = Figures {
     lut: 0.098,
-    clock_margin: CLOCK_MARGIN,
+    clock_margin: CLOCK_MARGIN[2],
+    region_margin: REGION_MARGIN[2],
     carry: CARRY,
     muxf7: 0.175,
     muxf8: 0.074,
@@ -484,8 +491,8 @@ pub(crate) const VIVADO: Figures = Figures {
 /// The figures refitted on 2026-11-11 (a lookup table, a flip-flop's enable
 /// and reset by slice, a `DSP48E1`'s operands' setups and `PCOUT`, a block
 /// RAM's setups, a wide multiplexer's select) are this grade's own arcs of the
-/// same twelve designs, from a `<L>Q` as grade 3's are; [`CLOCK_MARGIN`] is
-/// grade 3's.
+/// same twelve designs, from a `<L>Q` as grade 3's are; [`CLOCK_MARGIN`] and
+/// [`REGION_MARGIN`] this grade's.
 ///
 /// **Derived, not measured**, as grade 3's are: `dsp_comb`, `dsp_launch_a`,
 /// `dsp_setup_m`, `dsp_setup_p` and `srl_read`, grade 1's figures (which were
@@ -496,7 +503,8 @@ pub(crate) const VIVADO: Figures = Figures {
 )]
 pub(crate) const VIVADO_2: Figures = Figures {
     lut: 0.107,
-    clock_margin: CLOCK_MARGIN,
+    clock_margin: CLOCK_MARGIN[1],
+    region_margin: REGION_MARGIN[1],
     carry: 0.335,
     muxf7: 0.192,
     muxf8: 0.082,
@@ -559,7 +567,8 @@ pub(crate) const VIVADO_2: Figures = Figures {
 /// [`DSP_LAUNCH_P`]'s 0.434, its cascade [`DSP_CASCADE`]'s 1.713.
 pub(crate) const VIVADO_1: Figures = Figures {
     lut: 0.128,
-    clock_margin: CLOCK_MARGIN,
+    clock_margin: CLOCK_MARGIN[0],
+    region_margin: REGION_MARGIN[0],
     carry: 0.405,
     muxf7: 0.229,
     muxf8: 0.099,
@@ -711,6 +720,17 @@ pub(crate) fn figures(model: DelayModel, grade: SpeedGrade) -> &'static Figures 
         (DelayModel::Vivado, SpeedGrade::Two) => &VIVADO_2,
         (DelayModel::Vivado, SpeedGrade::Three) => &VIVADO,
     }
+}
+
+/// What `model` at `grade` charges every capture for the clock, and over that
+/// a path between two clock regions (the other half of a region row, another
+/// row), ns: `CLOCK_MARGIN` and `REGION_MARGIN` under the fitted model,
+/// nothing under the legacy one. `PlaceTiming::capture` carries the first and
+/// `PlaceTiming::region_margin` the second.
+#[must_use]
+pub fn clock_margins(model: DelayModel, grade: SpeedGrade) -> (f64, (f64, f64)) {
+    let f = figures(model, grade);
+    (f.clock_margin, f.region_margin)
 }
 
 /// An `IDELAYE2`'s count register, `C` to `CNTVALUEOUT`, ns: Vivado 2026.1's
@@ -1760,6 +1780,9 @@ pub fn place_timing(
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: f.region_margin,
+            region: Vec::new(),
         },
         names,
     )
@@ -2238,18 +2261,46 @@ const SETUP_BYPASS: (f64, f64) = (0.030, 0.005);
 /// more (708 setups against 1,019); grade 2's 0.133 and grade 1's 0.173 the same arcs
 /// at those grades (five designs).
 const FIVE_OUT: f64 = 0.112;
-/// [`Figures::clock_margin`]: what Vivado 2026.1's timer charges a path over
-/// its launch, its setup and the clock's arrival at its two ends as
-/// [`clock_arrival`] has them. **Measured**: Reticle's latest path of each
-/// clock of seeds 1 to 3 of the corpus timed again by Vivado through the same
-/// cells, 34 from a slice's flip-flop to another's data input, the model's
-/// launch and capture together 0.062 ns under Vivado's on average
-/// (`docs/fpga-vivado-parity.md`, "The clock's margin, a table's figure and the
-/// `DSP48E1`'s chain"). Vivado's own term for it, its clock uncertainty
-/// (0.035 ns at every grade) less its skew, is 0.068, 0.070 and 0.068 ns at
-/// grades 3, 2 and 1 on seed 1's eleven such paths, so one figure serves every
-/// grade.
-const CLOCK_MARGIN: f64 = 0.062;
+/// [`Figures::clock_margin`] at grades 1, 2 and 3: what Vivado 2026.1's timer
+/// charges a path with both ends in one clock region over its launch, its
+/// setup and the clock's arrival at its two ends as [`clock_arrival`] has
+/// them, ns: its clock uncertainty, 0.035 ns at every grade, and the clock's
+/// pessimism it keeps at the capture, 33, 36 and 35 ps at grades 1, 2 and 3
+/// (the two dies' means of `testdata/fpga/vivado/clock/pessimism.txt`'s
+/// `one_region`; see [`REGION_MARGIN`] for how it was taken apart).
+/// **Measured.**
+///
+/// *0.062 ns at every grade until 2026-11-11*, the mean of what the model's
+/// launch and capture together were under Vivado's on 34 latest paths of
+/// seeds 1 to 3 (`docs/fpga-vivado-parity.md`, "The clock's margin, a table's
+/// figure and the `DSP48E1`'s chain"): paths of every kind together, those
+/// within one site keeping nothing, those between regions twice the rest, and
+/// the two put on the same figure.
+const CLOCK_MARGIN: [f64; 3] = [0.068, 0.071, 0.070];
+/// [`Figures::region_margin`] at grades 1, 2 and 3: what Vivado 2026.1's timer
+/// keeps of the clock's pessimism at a path's capture when the path launched
+/// in the other half of the capture's clock region row, and in another region
+/// row, over what it keeps when both ends are in one region, ns.
+///
+/// **Measured**, with the timer's own terms: a setup path's launch is timed on
+/// the clock's late delay (the slow corner's maximum) and its capture on the
+/// early one (the slow corner's minimum), and the clock pessimism removal
+/// gives back the difference on the part of the two clock paths they share.
+/// On Reticle's routes of seeds 1 to 3 of the corpus at `xc7a100tftg256-3`,
+/// `-2` and `-1`, each clock's 400 worst setup paths (one an endpoint) and
+/// the global clock's slow maximum and minimum to every clock pin: every
+/// path's skew is its capture's early delay less its launch's late one plus
+/// the credit, to a picosecond; and what the capture keeps, its late less its
+/// early delay less the credit, is 35 ps (25 in the launch's tile column on
+/// its side of the `HCLK` row, 42 elsewhere in the region) with both ends in
+/// one region, 95 in the other half of the row and 103 in another row, at
+/// grade 3; 37, 102 and 110 at grade 2; 34, 112 and 121 at grade 1. Between
+/// rows the credit is the global buffer's alone; between halves 5 ps more.
+/// The in-region part is [`CLOCK_MARGIN`]'s (with the uncertainty, 0.035 ns);
+/// this is the rest, the two dies' (`xc7a100t` and `xc7a35t`) means, each die
+/// within 4 ps of them (`docs/fpga-vivado-parity.md`, "The clock's pessimism
+/// between regions").
+const REGION_MARGIN: [(f64, f64); 3] = [(0.078, 0.085), (0.065, 0.072), (0.060, 0.066)];
 /// How much later the clock reaches a `DSP48E1`'s and a block RAM's clock pin
 /// than a slice flip-flop's on the same rows, ps, at grades 1, 2 and 3:
 /// Vivado 2026.1's interconnect delay of the clock net to each pin (the slow
@@ -2715,7 +2766,8 @@ mod tests {
     /// the two slices' figures swapped (a data input's, an enable's or a
     /// reset's), the slice read from the driver's bel,
     /// a `<L>5FF`'s launch without what its `<L>MUX` output costs its sinks
-    /// ([`Figures::five_out`]), the clock's margin left off a setup, and a
+    /// ([`Figures::five_out`]), the clock's margin left off a setup or another
+    /// grade's taken, and a
     /// `DSP48E1`'s or a block RAM's setup given it back (as they were until
     /// 2026-11-11 and 2026-11-10). Would not catch a
     /// figure itself being wrong: those are Vivado's
@@ -2883,6 +2935,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let setups = |model: DelayModel, ways: &[NodeId]| {
             let mut timing = timing.clone();
@@ -2900,10 +2955,11 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let (l, m) = (0, 1);
-        // Each setup carries the clock's margin, the same at every grade.
-        let pick = |pair: (f64, f64), which: usize| {
-            Some(CLOCK_MARGIN + if which == l { pair.0 } else { pair.1 })
+        // Each setup carries its grade's clock margin.
+        let pick_at = |margin: f64, pair: (f64, f64), which: usize| {
+            Some(margin + if which == l { pair.0 } else { pair.1 })
         };
+        let pick = |pair: (f64, f64), which: usize| pick_at(CLOCK_MARGIN[2], pair, which);
         assert_eq!(
             setups(DelayModel::Vivado, &[]),
             vec![
@@ -2942,8 +2998,11 @@ mod tests {
             &[],
         );
         let own = |ff: usize, k: usize| fast.pin_delays.capture[netlist.instances[ff].pins[k]];
-        assert_eq!(own(3, 2), Some(CLOCK_MARGIN + 0.150));
-        assert_eq!(own(5, 1), Some(CLOCK_MARGIN + VIVADO.ff_setup_enable_m.1));
+        assert_eq!(own(3, 2), Some(CLOCK_MARGIN[2] + 0.150));
+        assert_eq!(
+            own(5, 1),
+            Some(CLOCK_MARGIN[2] + VIVADO.ff_setup_enable_m.1)
+        );
         // At grade 1 the same ends take grade 1's figures, and the launch too.
         let mut slow = timing.clone();
         place_timing_on_sites(
@@ -2961,10 +3020,10 @@ mod tests {
         assert_eq!(
             ends,
             vec![
-                pick(VIVADO_1.setup_inside, l),
-                pick(VIVADO_1.setup_way, l),
-                pick(VIVADO_1.setup_bypass, l),
-                pick(VIVADO_1.setup_way, m),
+                pick_at(CLOCK_MARGIN[0], VIVADO_1.setup_inside, l),
+                pick_at(CLOCK_MARGIN[0], VIVADO_1.setup_way, l),
+                pick_at(CLOCK_MARGIN[0], VIVADO_1.setup_bypass, l),
+                pick_at(CLOCK_MARGIN[0], VIVADO_1.setup_way, m),
             ]
         );
         assert_eq!(slow.launch[2], VIVADO_1.ff_launch_bels[0]);
@@ -3254,6 +3313,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let on = |model: DelayModel| {
             let mut timing = timing.clone();
@@ -3308,12 +3370,12 @@ mod tests {
         assert_eq!(through(&t, pin(1, "i1")), None);
         assert_eq!(
             capture(&t, pin(4, "d")),
-            Some(CLOCK_MARGIN + SETUP_INSIDE.0)
+            Some(CLOCK_MARGIN[2] + SETUP_INSIDE.0)
         );
         // Outside: the far `AFF`'s bypass setup and the sum's cost.
         assert_eq!(
             capture(&t, pin(7, "d")),
-            Some(CLOCK_MARGIN + SETUP_BYPASS.0 + m.carry_o)
+            Some(CLOCK_MARGIN[2] + SETUP_BYPASS.0 + m.carry_o)
         );
         // A `DSP48E1`'s setup is the figure from a `<L>Q`, and pays the
         // `MUXF7`'s cost as any other sink (it gave a `<L>5FF`'s back until
@@ -3383,12 +3445,15 @@ mod tests {
     /// 1.025 + the margin, where through the first block's `P` it is 0.435 +
     /// 1.255 + 1.025. The legacy model times every input of the last block at
     /// the multiplier's setup (no input register, `BREG` 0) or the cascade's,
-    /// whichever is later, and nothing launches inside the chain.
+    /// whichever is later, and nothing launches inside the chain. The timing
+    /// carries grade 3's figures for a path between clock regions, the legacy
+    /// model none.
     ///
     /// Would catch a constant operand taken as one with no register (the last
     /// block's `PCIN` and `A` at 1.41 ns, as `fir8`'s were), `PCIN` given the
     /// block's setup, a chained block's `M` left out (2.777 ns), a `PCOUT`
-    /// launched at `P`'s figure, or the legacy model changed; would not catch a
+    /// launched at `P`'s figure, the regions' figures not handed to the
+    /// analysis, or the legacy model changed; would not catch a
     /// figure wrong about the part, which only Vivado's timer says
     /// (`docs/fpga-vivado-parity.md`, "The clock's margin, a table's figure
     /// and the `DSP48E1`'s chain").
@@ -3510,16 +3575,24 @@ mod tests {
             1.780,
             "the second block's M at its PCOUT",
         );
-        close(t.capture_at(5, 14), 1.025 + CLOCK_MARGIN, "the last PCIN");
+        close(
+            t.capture_at(5, 14),
+            1.025 + CLOCK_MARGIN[2],
+            "the last PCIN",
+        );
         close(
             t.capture_at(5, 13),
-            0.254 + CLOCK_MARGIN,
+            0.254 + CLOCK_MARGIN[2],
             "the last block's A",
         );
         let wire = vec![0.0; netlist.pins.len()];
         let (_, longest) = crate::fpga::place::path_criticality(&netlist, &t, &wire);
-        assert_eq!(longest, vec![2867]);
+        assert_eq!(longest, vec![2875], "1.780 + 1.025 and the margin");
+        // A path between clock regions is charged its grade's figures, which
+        // the analysis reads off the timing (`PlaceTiming::region_margin`).
+        assert_eq!(t.region_margin, REGION_MARGIN[2]);
         let legacy = timed(DelayModel::Legacy);
+        assert_eq!(legacy.region_margin, (0.0, 0.0));
         close(
             legacy.capture_at(5, 14),
             DSP_SETUP_M,
@@ -3699,8 +3772,8 @@ mod tests {
         assert!((arcs("p0")[7] - 0.395).abs() < 1e-9);
         assert!((arcs("p0")[0] - 0.187).abs() < 1e-9);
         assert_eq!(arcs("di1")[0], f64::NEG_INFINITY);
-        assert_eq!(own.capture[pin(1, "en")], Some(0.150 + CLOCK_MARGIN));
-        assert_eq!(own.capture[pin(1, "rst")], Some(0.314 + CLOCK_MARGIN));
+        assert_eq!(own.capture[pin(1, "en")], Some(0.150 + CLOCK_MARGIN[2]));
+        assert_eq!(own.capture[pin(1, "rst")], Some(0.314 + CLOCK_MARGIN[2]));
         assert_eq!(own.capture[pin(1, "d")], None);
         let legacy = own_pin_delays(&netlist, &classes, &LEGACY, DelayModel::Legacy);
         assert_eq!(legacy, PinDelays::default());

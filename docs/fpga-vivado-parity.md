@@ -9862,11 +9862,19 @@ What is left, where it was read:
   and `mul18` are 40 of the 65 (their blocks' rows). Vivado's pessimism grows with the
   uncommon part of a path's two clock paths, which the clock's margin, one figure, does
   not see: **a reading, not measured against Reticle's own figure for each end.**
+  *The count was wrong*: `Y` over 50 is a slice's region row, but a block RAM's
+  `RAMB36` site has ten a row and a `DSP48E1`'s twenty, so every path from or to one of
+  `bram_fifo`'s or `mul18`'s blocks was counted as crossing. With the region Vivado
+  gives each site, 29 cross (26 to another row, 3 to the other half of one), 0.052 ns
+  under against 0.023 for the 391 inside one region; and the pessimism reading holds,
+  measured ("The clock's pessimism between regions").
 - **`regfile_alu`** is under at Vivado's worst on every seed (-0.124 to -0.282 ns on seeds
   1 to 3) and 0.04 over its twenty latest. Seed 1's worst (a `RAM32X1D` read over a
   signal of 33 sinks, then six tables) has 0.032 ns of it in the connections and the
   cells within a few picoseconds; it crosses from `SLICE_X81Y101` to `SLICE_X86Y98`, a
-  region row, with a skew of -0.079 ns. Not read further.
+  region row, with a skew of -0.079 ns. Not read further. *Since*: the connections
+  of the path, not the clock, on the seeds whose path stays in one region ("The clock's
+  pessimism between regions", "`regfile_alu`").
 
 ### The router (measured)
 
@@ -9924,9 +9932,275 @@ the load), which only the report shows.
 ### Not done
 
 - **A path between clock region rows**, 0.025 ns more under than one within a row: the
-  clock's pessimism on the uncommon part of its two paths. Not modelled.
+  clock's pessimism on the uncommon part of its two paths. Not modelled. *Since*:
+  measured and charged ("The clock's pessimism between regions"); 0.029 more under, by
+  Vivado's own regions.
 - **A slice output's branches**, dearer than a wire's of as many: not charged.
 - **`LVB`**, 36 ps over on 384 connections: its class not refitted.
 - **A wide signal's tree as Vivado builds it**, fewer bounces and fewer wires of many
   branches: the router's searches told of the load did not find it.
+- None of it has been on a part.
+
+## The clock's pessimism between regions
+
+**Asked: "A wide signal's connections" left the clocks whose worst path crosses a clock
+region row 0.046 ns under Vivado's figure against 0.021 for the rest, Vivado's skew on
+them -0.125 ns against -0.034, and `regfile_alu` 0.14 under. Measure Vivado's skew and
+what it is made of (each end's clock delay, the pessimism removal, the uncertainty) on
+paths within one region, across a row's two halves and across rows, at each grade and on
+both dies Reticle times; say whether the clock's arrival table is wrong by region or
+the pessimism removal credits only the clock tree's common part; fit what explains it,
+charge it in the analysis the placer, the router and the report share, and say what it
+does to the estimate and to the clock.** Vivado 2026.1 at `xc7a100tftg256` and
+`xc7a35tftg256`, grades 3, 2 and 1, run on 2026-11-11 on 7f45c0f7. **Everything here is
+Vivado's timer of Reticle's placements and routes; nothing has been on a part.**
+
+### The lead, counted again (measured)
+
+The 65 crossing clocks and seeds were counted with a site's `Y` over 50 as its region
+row, which is a slice's and not a block's: a `RAMB36` site has ten a row and a `DSP48E1`
+twenty, so every path from or to `bram_fifo`'s and `mul18`'s blocks was counted as
+crossing. With the region Vivado gives each site (a slice's `X` over 51 the right half,
+its `Y` over 50 the row; a block's by its own grid), over `branchload`'s 420 clocks and
+seeds (ns, Reticle's routed estimate less Vivado's figure):
+
+| Vivado's worst path | clocks and seeds | mean | mean absolute | root mean square | Vivado's skew |
+|---|---|---|---|---|---|
+| inside one region | 391 | -0.023 | 0.036 | 0.059 | -0.041 |
+| the other half of its row | 3 | -0.038 | 0.038 | 0.042 | -0.108 |
+| another row | 26 | -0.054 | 0.061 | 0.073 | -0.170 |
+
+Fourteen of the 420 end at a distributed RAM's write address, which the model does not
+time at all (below); without them, one region is -0.020 / 0.034 / 0.052 and crossing
+-0.052 / 0.058 / 0.070. So the lead stands, on 29 clocks and seeds rather than 65.
+
+### What Vivado's timer does with the clock (measured)
+
+`clock_pessimism.tcl` on Reticle's routes of the corpus, each timed at the three
+grades (`regrade.sh`): `lutfit`'s seeds 1 to 3 at `xc7a100tftg256` (c73761b1's builds),
+and this tree's builds of seeds 1 and 2 for `xc7a35t-ftg256` (`--device`, the same
+constraints). Every global clock pin's interconnect delay at the slow corner's maximum
+(L) and minimum (E), and each clock's 400 worst setup paths, one an endpoint: 21,215
+paths a grade, 63,645 in all (`clock_pessimism.py`,
+`testdata/fpga/vivado/clock/pessimism.txt`).
+
+**How Vivado's timer makes a setup path's skew.** The launch is timed on the clock's
+late delay and the capture on its early one: the report's source clock delay is the pad's
+buffer, its net and the global buffer at their maximum plus L at the launch's pin, and the
+destination's the same at their minimum plus E at the capture's. The pessimism removal
+gives back the difference on what the two clock paths share. Taking the pad and the
+buffer out (common to every path), **every one of the 63,645 paths' skew is E at its
+capture less L at its launch plus the removal's credit on the clock net itself, to a
+picosecond** (the dump's rounding). What the capture keeps, L less E at its pin less
+that credit, is then the pessimism the path pays over its two arrivals; its
+uncertainty is 0.035 ns on every path at every grade.
+
+What the capture keeps, ps, by how the path's two ends relate (mean, and in brackets
+the standard deviation):
+
+| part | one site | one region | other half of the row | another row |
+|---|---|---|---|---|
+| `xc7a100tftg256-3` | 0.5 | 35.3 (9.0) | 95.2 (0.8) | 103.3 (1.8) |
+| `xc7a100tftg256-2` | 0.4 | 36.8 (8.7) | 102.2 (0.8) | 110.4 (1.7) |
+| `xc7a100tftg256-1` | 0.0 | 34.2 (8.4) | 112.2 (0.8) | 120.7 (1.6) |
+| `xc7a35tftg256-3` | 0.1 | 34.2 (8.6) | 94.9 (1.8) | 99.0 (3.4) |
+| `xc7a35tftg256-2` | 0.0 | 35.7 (8.4) | 101.1 (1.7) | 107.0 (3.4) |
+| `xc7a35tftg256-1` | -0.7 | 31.9 (7.3) | 110.8 (1.5) | 115.3 (4.5) |
+
+- **Between rows the credit is the global buffer's alone** (0.5 to 4 ps on the net), so
+  the capture keeps the whole of its own late-less-early, 100 to 125 ps; between the
+  two halves of a row 5 to 14 ps more is shared (the row's spine); inside one region 68
+  to 88 ps on average. Inside one region what is kept is 24 ps in the launch's own tile
+  column on its side of the `HCLK` row (the leaf they share) and 39 to 42 elsewhere
+  (`xc7a100tftg256-3`: 2,434 and 1,723 paths at 24 and 25 ps, 7,450 at 41 and 42).
+- **The table is not wrong by region.** `ClockTable` (`xray::timing::clock_arrival`)
+  is L, measured at the slow maximum (["The clock's arrival on the
+  XC7A35T"](#the-clocks-arrival-on-the-xc7a35t)); its L at the capture less its L at
+  the launch, against Vivado's for the same two pins, is +2.3 ps (standard deviation
+  6.5) between rows and +1.1 (1.2) between halves on the `xc7a100t` at grade 3, -0.2
+  (3.5) and -0.5 (1.7) on the `xc7a35t`, within 3 ps at every grade; inside one region
+  -3.0 to +4.6 ps (12 to 16). **What a crossing path pays more is the pessimism the
+  removal cannot give back** on a clock path the two ends do not share: over one
+  region's, 60 ps (the other half) and 68 (another row) at grade 3 on the
+  `xc7a100t`, 61 and 65 on the `xc7a35t`; 65 and 74, 65 and 71 at grade 2; 78 and 87,
+  79 and 83 at grade 1.
+- **The margin's 0.062 was a mean over paths of every kind**: Vivado charges a path
+  inside one region its 0.035 uncertainty and 35 ps of pessimism, 0.070, one within a
+  site 0.035, one between rows 0.138 (grade 3). The 34 latest paths it was fitted on
+  ("The clock's margin, a table's figure and the `DSP48E1`'s chain") were not told
+  apart by where their ends were.
+
+### What was changed
+
+Under the fitted model (`--delay-model legacy`, which the Husky's builds pass, sets none
+of it):
+
+- **Every capture is charged the uncertainty and what a capture keeps inside one
+  region**, 0.070, 0.071 and 0.068 ns at grades 3, 2 and 1 (`CLOCK_MARGIN`, the two
+  dies' means), where it was 0.062 at every grade.
+- **A path launched in another region than its capture's is charged more**: 0.060 ns
+  from the other half of the row and 0.066 from another row at grade 3, 0.065 and
+  0.072 at 2, 0.078 and 0.085 at 1 (`REGION_MARGIN`, the two dies' means, each die
+  within 4 ps; `PlaceTiming::region_margin`, `xray::clock_margins`).
+- **The analysis takes one view a clock region** (`place::analyse_paths_against`,
+  `worst_path`, `late_paths`, `endpoint_arrivals`): where a path between two regions
+  costs more, each path group's arrivals are found once for each region its endpoints
+  are in, every launch outside that region carrying its charge, and each endpoint reads
+  its own region's, its required times and its connections' slack likewise. A design
+  inside one region is one view, as before; the corpus's registers are in one to three
+  regions (`regions`' builds: 266 of 340 in one, 72 in two, 2 in three). Each
+  instance in a clock's domain takes its site's region (`PlaceTiming::region`, from
+  `PlaceTiming::clock_region`, the fabric's `clock_regions`, set where the clock's
+  arrival is). The placement's timing rounds, the router's passes and refinement and
+  the routed estimate share it, so each sees a path between regions as Vivado's timer
+  does; pads are in no region and are charged nothing.
+
+### Before and after, the estimate (measured)
+
+Over the 420 clocks and seeds of `achieved.sh` (twenty seeds), Reticle's routed
+estimate less Vivado's figure (ns):
+
+| build | mean | mean absolute | root mean square |
+|---|---|---|---|
+| `branchload` | -0.025 | 0.038 | 0.060 |
+| `regions` | **-0.017** | **0.037** | 0.072 |
+| `branchload`, no write address | -0.023 | 0.036 | 0.053 |
+| `regions`, no write address | **-0.012** | **0.033** | 0.052 |
+
+By where Vivado's worst path runs, the write addresses left out:
+
+| | `branchload` | `regions` |
+|---|---|---|
+| inside one region | 377: -0.020 / 0.034 / 0.052 | 378: **-0.014 / 0.033** / 0.053 |
+| between regions | 29: -0.052 / 0.058 / 0.070 | 23: **+0.022 / 0.029 / 0.036** |
+
+**The error is smaller and its bias a third less, and a path between regions is now
+over, not under.** The root mean square over all 420 is larger for one clock and seed:
+`esad`'s `clk_usb` at seed 5, whose worst path is a write address 2.4 ns away in
+Reticle's own estimate of the connection and 0.80 ns under at the clock, because the
+model times no write address (below); without that one it is 0.060 (`branchload`
+0.057). By clock, the mean error: `esad`'s ADC clock -0.024 to +0.019 (the clock that
+crosses rows most), `lutram32` -0.054 to -0.013, `analyser_fifo`'s read clock -0.048 to
+-0.032 and write clock -0.024 to -0.012, `crc32` -0.044 to -0.035, `adders` -0.031 to
+-0.022, `gray_cdc`'s second clock -0.011 to +0.001; worse, `esad`'s `clk_usb` -0.031 to
+-0.075 (write addresses), `sad`'s ADC clock +0.016 to +0.032, `carry_counter` +0.007 to
++0.021, `gray_cdc`'s first clock +0.028 to +0.037.
+
+The placements differ, so these are two sets of placements as well as two models, and
+the fewer crossing worst paths (25 of 420 against 29) are the placements' as much as
+the model's.
+
+### `regfile_alu` (measured)
+
+Vivado's worst path of seeds 1 to 8 of `regions`, timed again with its checkpoint kept,
+each connection's interconnect delay set beside Reticle's routed estimate of the same
+connection (matched by the sink's site pin, `endpoints.txt`'s `connection` lines):
+Reticle's latest less Vivado's worst is -0.133 ns on average, and
+
+- **Reticle's latest endpoint is Vivado's** on every seed (the result register,
+  `so$ff.d`), and every path is inside one region (skew -0.039 to -0.046 ns): **it is
+  not the clock.**
+- **The connections are 0.128 ns of it**, the cells, the launch and the capture 0.005.
+  By connection: a distributed RAM's read data over a signal of 65 or more sinks, -0.045
+  ns each (7 of 8 paths have one); a RAM's read address (33 sinks as Vivado counts its
+  leaves, 18 as Reticle does), -0.028 (8); two to sixteen sinks -0.018 (9); one sink
+  -0.013 (24), the RAM's two the worst of them. *Before*, with 0.062: the same
+  comparison on the eight seeds of a build with the regions and the old margin was -0.200
+  in the connections and +0.049 the rest, on other placements.
+
+Not read further: why a RAM's read data and read address are slower to Vivado than the
+model's classes and branches have them.
+
+### A distributed RAM's write address (measured)
+
+Of the 420, 14 of `branchload`'s and 19 of `regions`' clocks and seeds have Vivado's worst
+path end at a distributed RAM's write address (`WADR`): `sad`'s and `esad`'s `clk_usb`,
+into their clock-crossing FIFOs' memories, and `lutram32`. **The model times no write
+address**: every shape of distributed RAM but one reads at its write address too, so
+`place_timing` takes the pin as a read address (`Through`), and a pin is one or the other
+(`endpoints.txt` of `esad` has the write enable's and the data's, and no `waddr`). Those
+clocks are 0.105 and 0.130 ns under on average, -0.80 at worst. Not changed here.
+
+### The clock (measured)
+
+The placements differ, so unpaired: twenty seeds, the ratio of the twenty-one clocks'
+geometric means of the medians, **0.9978 of `branchload`, 0.9909 to 1.0051 by a bootstrap
+over the seeds (95 %)**, inside the spread. Per clock: `srl_delay` 0.967, `lutram32`
+0.975, `analyser_fifo`'s read clock 0.978, `barrel` 0.985; slower, `esad`'s `clk_usb`
+1.046 (its write addresses), `mul18` 1.033, `carry_counter` 1.029. **Kept for the
+estimate**; the clock is no faster.
+
+*Tried and not kept* (no patch committed):
+
+- **The analysis with the regions and the old margin** (0.062 inside a region, the same
+  figures between): 1.0039 of `branchload`, 0.9973 to 1.0112; its estimate -0.025 /
+  0.039 / 0.061, -0.019 / 0.034 / 0.051 without the write addresses. Kept the measured
+  margin instead, which is nearer on both.
+- **The anneal charging a critical connection between two regions** what a path between
+  them is charged, in tiles of wire, as it charges the clock's arrival: with the old
+  margin 0.9986 of `branchload` (0.9915 to 1.0044), with the new 0.9974 (0.9905 to
+  1.0028) and 0.9996 of `regions` (0.9915 to 1.0057). The crossing worst paths went from
+  25 to 21 (18 with the old margin), the clock no faster: not kept.
+
+### Runtime
+
+Summed over the 340 builds: place 3,297 s and route 1,263 (`branchload` 3,095 and
+1,232); each `achieved.sh` 1,188 to 1,301 s of wall clock (`branchload`'s 944), on a
+machine shared with other work and running three of these at once. The analysis does
+its work once a region its endpoints are in, one to three on the corpus; the four
+variants' place sums ranged 3,011 to 3,297 s for the same work, so the 6 % is not read
+as the change's. Two builds each of four designs whose registers span regions, 7f45c0f7's
+and this tree's interleaved: `esad` seed 2 placed in 33.2 and 32.7 s against 33.6 and
+33.3, 1.5 % slower; `sad`, `adders` and
+`bram_fifo` 30, 20 and 3 % faster, their placements' anneals stopping sooner, which is
+not the analysis.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
+applies; `sad`, `esad`, `widemux`, `regfile_alu`, `bram_fifo` and `mul18` at seed 1
+under it write the same bitstreams as 7f45c0f7's. With this tree's release binary
+`build.sh` writes `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`.
+**Checked.**
+
+### Tests
+
+- `a_path_between_regions_is_charged_the_pessimism_vivado_keeps`
+  (`tests/fpga_xray_clock_arrival.rs`): over `pessimism.txt`, every path's skew is the
+  decomposition's to a picosecond, a path within a site keeps nothing, and at each grade
+  `clock_margins`' figures are the uncertainty and what one region keeps, and what the
+  other half and another row keep over that, the dies' means within a picosecond and
+  each die within four; the legacy model none.
+- `a_path_between_clock_regions_keeps_the_clocks_pessimism` (`place`): a register driving
+  two, one in its region and one moved to the other half of the row and to another row:
+  each end's arrival in `endpoint_arrivals`, the longest path, `worst_path`'s and each
+  connection's slack against the longest, the near one charged nothing throughout.
+- `a_chain_of_sums_launches_where_vivados_timer_says` holds the timing's regions'
+  figures and the new margin; `a_flip_flops_setup_is_the_one_for_how_its_data_arrives`
+  each grade's margin.
+- `the_clocks_pessimism_between_regions_keeps_the_corpus_as_fast`
+  (`tests/fpga_xray_achieved.rs`) holds `regions` against `branchload`: between 0.6 %
+  faster and 0.2 % slower, no clock more than 5 % slower, twenty seeds of each.
+
+**Mutations**, made by a script and put back, each failing its test: the charge left off,
+the row's two figures swapped, the halves taken for rows, one view for every endpoint,
+the views mixed, a launch's region from the wrong site, required times set in every view;
+the grades' figures reversed, the pair swapped, the whole of what is kept charged as the
+figure, the old 0.062, grade 2 given grade 3's, the figures not handed to the analysis;
+in the fixture, the two builds swapped. **Not held by a test**: the regions handed to the
+timing in `main.rs` (`PlaceTiming::clock_region`), which only the report shows, and a
+chain's `Through` output with a launch of its own traced back in another region's view.
+
+### Not done
+
+- **A distributed RAM's write address** is no endpoint: 19 clocks and seeds under by
+  0.13 ns on average, `esad`'s `clk_usb` the most.
+- **`regfile_alu`'s connections**: a RAM's read data and address under Vivado's by 30 to
+  45 ps each on its paths; not read further.
+- **What one region keeps, by column**: 24 ps in the launch's tile column on its side of
+  the `HCLK` row and 41 elsewhere, charged as their mean. Telling them apart is a figure
+  that depends on both ends below a region, which the views do not reach.
+- **The anneal** sees a path between regions only through its connections'
+  criticality; charging the connection itself did not make the clock faster.
 - None of it has been on a part.

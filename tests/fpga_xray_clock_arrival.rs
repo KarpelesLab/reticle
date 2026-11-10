@@ -211,3 +211,135 @@ fn every_flip_flop_vivado_timed_at_the_other_grades_is_within_its_grades_table()
         }
     }
 }
+
+/// `pessimism.txt` by (part, way the two ends relate): see [`pessimism`].
+type Pessimism = std::collections::BTreeMap<(String, String), (u32, f64, f64)>;
+
+/// What `pessimism.txt` says of each part and way a path's two ends relate:
+/// (paths, ps kept at the capture, the decomposition's check in ps); and of
+/// each part's clock uncertainty, as the way `uncertainty`, (0, its ps, 0).
+/// `None` when the fixture is not there (the published crate).
+fn pessimism() -> Option<Pessimism> {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/clock/pessimism.txt");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        eprintln!(
+            "skipped: `{}` is not in the published crate",
+            path.display()
+        );
+        return None;
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let w: Vec<&str> = line.split_whitespace().collect();
+        if let ["uncertainty", part, ps] = w.as_slice() {
+            out.insert(
+                ((*part).to_owned(), "uncertainty".to_owned()),
+                (0, ps.parse().unwrap(), 0.0),
+            );
+            continue;
+        }
+        let [
+            "pessimism",
+            part,
+            kind,
+            "paths",
+            paths,
+            "kept",
+            kept,
+            "sd",
+            _,
+            "credit",
+            _,
+            "late_less_early",
+            _,
+            "late_skew",
+            _,
+            "check",
+            check,
+        ] = w.as_slice()
+        else {
+            panic!("pessimism.txt: `{line}`");
+        };
+        out.insert(
+            ((*part).to_owned(), (*kind).to_owned()),
+            (
+                paths.parse().unwrap(),
+                kept.parse().unwrap(),
+                check.parse().unwrap(),
+            ),
+        );
+    }
+    Some(out)
+}
+
+/// **A path between two clock regions is charged what Vivado's timer keeps
+/// of the clock's pessimism there over what it keeps inside one region, at
+/// each grade, one figure for both dies.** `pessimism.txt`
+/// (`tools/vivado-parity/clock_pessimism.py`): over each clock's 400 worst
+/// setup paths of Reticle's routes of the QoR corpus at `xc7a100tftg256` and
+/// `xc7a35tftg256`, every path's skew is its capture's early clock delay less
+/// its launch's late one plus the pessimism removal's credit on the clock net,
+/// to a picosecond; a path within one site keeps nothing; and what the capture
+/// keeps in the other half of its region row, and in another row, less what it
+/// keeps within one region, is `xray::clock_margins`' second figure, the two
+/// dies' mean within a picosecond and each die within four; and what every
+/// capture is charged, its first figure, is the uncertainty and what the
+/// capture keeps within one region, the dies' mean within a picosecond. The
+/// legacy model charges nothing.
+///
+/// Would catch a grade's figures given another grade (or the old 0.062 ns at
+/// every grade, 6 to 9 ps under), the two figures swapped, either taken as
+/// the whole of what the capture keeps rather than
+/// what it keeps over a region's own, or one die's figure where the two differ
+/// by more than four picoseconds. Would not catch the routes or the probe
+/// being wrong, which only Vivado's timer asks, nor whether the analysis
+/// charges the figure to the right paths, which `place`'s
+/// `a_path_between_clock_regions_keeps_the_clocks_pessimism` holds.
+#[test]
+fn a_path_between_regions_is_charged_the_pessimism_vivado_keeps() {
+    use reticle::fpga::xray::{DelayModel, clock_margins};
+    let Some(fixture) = pessimism() else {
+        return;
+    };
+    for ((_, kind), (paths, _, check)) in &fixture {
+        if kind == "uncertainty" {
+            continue;
+        }
+        assert!(*paths > 50, "{fixture:?}");
+        assert!(
+            *check <= 1.0,
+            "the skew is the decomposition's: {fixture:?}"
+        );
+    }
+    for grade in [SpeedGrade::One, SpeedGrade::Two, SpeedGrade::Three] {
+        let (margin, (half, row)) = clock_margins(DelayModel::Vivado, grade);
+        let mut over = Vec::new();
+        let mut inside_mean = 0.0;
+        for die in ["xc7a100tftg256", "xc7a35tftg256"] {
+            let part = format!("{die}-{}", grade.name());
+            let kept = |kind: &str| fixture[&(part.clone(), kind.to_owned())].1;
+            assert!(kept("same_site").abs() <= 1.0, "{part}");
+            let inside = kept("one_region");
+            inside_mean += (kept("uncertainty") + inside) / 2.0;
+            let these = (kept("other_half") - inside, kept("other_row") - inside);
+            assert!(
+                (these.0 - half * 1000.0).abs() <= 4.0 && (these.1 - row * 1000.0).abs() <= 4.0,
+                "{part}: {these:?} against {half} and {row}"
+            );
+            over.push(these);
+        }
+        let mean = ((over[0].0 + over[1].0) / 2.0, (over[0].1 + over[1].1) / 2.0);
+        assert!(
+            (mean.0 - half * 1000.0).abs() <= 1.0 && (mean.1 - row * 1000.0).abs() <= 1.0,
+            "grade {}: {mean:?} against {half} and {row}",
+            grade.name()
+        );
+        assert!(
+            (inside_mean - margin * 1000.0).abs() <= 1.0,
+            "grade {}: the margin {margin} against {inside_mean:.1} ps",
+            grade.name()
+        );
+        assert_eq!(clock_margins(DelayModel::Legacy, grade), (0.0, (0.0, 0.0)));
+    }
+}

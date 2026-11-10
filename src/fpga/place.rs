@@ -9618,6 +9618,30 @@ pub struct PlaceTiming {
     /// connection from a register what its site's figure is over the
     /// earliest's, in tiles of wire, as it charges the clock's arrival.
     pub bel_launch: Vec<f32>,
+    /// Per site, its clock region, numbered as
+    /// [`PlaceOptions::clock_regions`] numbers them (a region row's two
+    /// halves `2 * row` and `2 * row + 1`), or [`NO_CLOCK_REGION`]; empty
+    /// for none. With [`PlaceTiming::region_margin`], what a path between two
+    /// regions is charged by.
+    pub clock_region: Vec<u16>,
+    /// What a path's capture is charged over its own when the path launched
+    /// in another clock region than the one it ends in: in the other half of
+    /// the same region row, and in another region row, in nanoseconds.
+    ///
+    /// Vivado's timer takes a path's launch on the clock's late delay and its
+    /// capture on its early one, and gives back the difference only on the
+    /// part of the two clock paths they share. Two registers of one region
+    /// share the clock's way to it, and what is left on the capture is a few
+    /// tens of picoseconds, which [`PlaceTiming::capture`] carries; two of
+    /// different region rows share nothing past the global buffer, and the
+    /// whole difference stays, about 0.07 ns more at grade 3. See
+    /// `xray::timing::REGION_MARGIN`.
+    pub region_margin: (f64, f64),
+    /// Per instance, the clock region of its site from
+    /// [`PlaceTiming::clock_region`], for an instance in a clock's domain:
+    /// filled by [`PlaceTiming::skew_from`], and empty, or past its end, or
+    /// [`NO_CLOCK_REGION`], for none.
+    pub region: Vec<u16>,
 }
 
 /// What [`PlaceTiming::pin_delays`] holds: delays of single pins in place of
@@ -9690,6 +9714,20 @@ impl PlaceTiming {
     /// Left empty when there are no figures.
     pub fn skew_from(&mut self, placement: &Placement) {
         self.skew.clear();
+        self.region.clear();
+        if !self.clock_region.is_empty() {
+            self.region = (0..self.domain.len())
+                .map(|instance| {
+                    if !matches!(self.domain[instance], PathDomain::Clock(_)) {
+                        return NO_CLOCK_REGION;
+                    }
+                    placement
+                        .site_of(instance)
+                        .and_then(|site| self.clock_region.get(site).copied())
+                        .unwrap_or(NO_CLOCK_REGION)
+                })
+                .collect();
+        }
         if self.clock.is_empty() {
             return;
         }
@@ -9705,6 +9743,62 @@ impl PlaceTiming {
                     .map_or(0.0, f64::from)
             })
             .collect();
+    }
+
+    /// The clock region `instance` is timed in, from [`PlaceTiming::region`].
+    fn region_of(&self, instance: usize) -> Option<u16> {
+        self.region
+            .get(instance)
+            .copied()
+            .filter(|r| *r != NO_CLOCK_REGION)
+    }
+
+    /// What a path launched at `instance` is charged at a capture in clock
+    /// region `view` over one launched in that region: see
+    /// [`PlaceTiming::region_margin`]. Nothing for no view, or a launch in
+    /// no region.
+    fn launch_offset(&self, instance: usize, view: Option<u16>) -> f64 {
+        match (view, self.region_of(instance)) {
+            (Some(capture), Some(launch)) if capture != launch => {
+                if capture / 2 == launch / 2 {
+                    self.region_margin.0
+                } else {
+                    self.region_margin.1
+                }
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// The clock regions the instances `ends` accepts are timed in, each
+    /// once, a region-less one as `None`: the views an analysis takes, each
+    /// endpoint's arrival the one of its own region's view
+    /// ([`PlaceTiming::launch_offset`]). One view, `None`, when no path is
+    /// charged for its regions.
+    fn views(&self, instances: usize, ends: &dyn Fn(usize) -> bool) -> Vec<Option<u16>> {
+        if self.region.is_empty() || self.region_margin == (0.0, 0.0) {
+            return vec![None];
+        }
+        let mut views: Vec<Option<u16>> = Vec::new();
+        for instance in (0..instances).filter(|i| ends(*i)) {
+            let view = self.region_of(instance);
+            if !views.contains(&view) {
+                views.push(view);
+            }
+        }
+        if views.is_empty() {
+            views.push(None);
+        }
+        views
+    }
+
+    /// Which of `views` an endpoint at `instance` takes its arrival from.
+    fn view_index(&self, views: &[Option<u16>], instance: usize) -> usize {
+        if views.len() == 1 {
+            return 0;
+        }
+        let view = self.region_of(instance);
+        views.iter().position(|v| *v == view).unwrap_or(0)
     }
 
     /// [`PinDelays::launch`] of every `Start` output of an instance on a site
@@ -10122,10 +10216,25 @@ fn analyse_paths_against(
             if !(0..netlist.instances.len()).any(ends) {
                 continue;
             }
-            // Forwards: every output pin's arrival.
-            let arrival = domain_arrival(netlist, timing, order, wires, domain, &|instance| {
-                pad(instance) == from_pad
-            });
+            // Forwards: every output pin's arrival, once for each clock
+            // region the group's endpoints are in when a path between two
+            // regions is charged more than one inside one, each endpoint
+            // reading its own region's (`PlaceTiming::views`).
+            let views = timing.views(netlist.instances.len(), &ends);
+            let arrivals: Vec<Vec<f64>> = views
+                .iter()
+                .map(|view| {
+                    domain_arrival(
+                        netlist,
+                        timing,
+                        order,
+                        wires,
+                        domain,
+                        &|instance| pad(instance) == from_pad,
+                        *view,
+                    )
+                })
+                .collect();
             let input_arrival = |pin: usize, arrival: &[f64]| -> f64 {
                 driver(pin).map_or(f64::NEG_INFINITY, |d| arrival[d] + wire(pin))
             };
@@ -10136,12 +10245,13 @@ fn analyse_paths_against(
                 if !ends(index) {
                     continue;
                 }
+                let arrival = &arrivals[timing.view_index(&views, index)];
                 for pin in &inst.pins {
                     if !netlist.pins[*pin].output
                         && class(*pin) == PinTiming::End
                         && timing.pin_in(index, *pin, domain)
                     {
-                        let at = input_arrival(*pin, &arrival) + timing.capture_at(index, *pin);
+                        let at = input_arrival(*pin, arrival) + timing.capture_at(index, *pin);
                         if at.is_finite() {
                             longest = longest.max(at / cycles_of(index));
                         }
@@ -10163,65 +10273,69 @@ fn analyse_paths_against(
             } else {
                 period.max(longest)
             };
-            let mut required = vec![f64::INFINITY; pins];
-            for (index, inst) in netlist.instances.iter().enumerate() {
-                if !ends(index) {
-                    continue;
-                }
-                for pin in &inst.pins {
-                    if !netlist.pins[*pin].output
-                        && class(*pin) == PinTiming::End
-                        && timing.pin_in(index, *pin, domain)
-                    {
-                        required[*pin] = cycles_of(index) * span - timing.capture_at(index, *pin);
-                    }
-                }
-            }
-            let output_required = |pin: usize, required: &[f64]| -> f64 {
-                let Some(signal) = netlist.pins[pin].signal else {
-                    return f64::INFINITY;
-                };
-                netlist.signals[signal]
-                    .sinks
-                    .iter()
-                    .map(|s| required[*s] - wire(*s))
-                    .fold(f64::INFINITY, f64::min)
-            };
-            for &(index, only) in order.iter().rev() {
-                let inst = &netlist.instances[index];
-                let outputs: Vec<f64> = through_outputs(inst)
-                    .map(|p| output_required(p, &required))
-                    .collect();
-                for pin in &inst.pins {
-                    if netlist.pins[*pin].output || class(*pin) != PinTiming::Through {
+            // Each view's endpoints, against its own arrivals.
+            for (view, arrival) in arrivals.iter().enumerate() {
+                let mut required = vec![f64::INFINITY; pins];
+                for (index, inst) in netlist.instances.iter().enumerate() {
+                    if !ends(index) || timing.view_index(&views, index) != view {
                         continue;
                     }
-                    let earliest = outputs
+                    for pin in &inst.pins {
+                        if !netlist.pins[*pin].output
+                            && class(*pin) == PinTiming::End
+                            && timing.pin_in(index, *pin, domain)
+                        {
+                            required[*pin] =
+                                cycles_of(index) * span - timing.capture_at(index, *pin);
+                        }
+                    }
+                }
+                let output_required = |pin: usize, required: &[f64]| -> f64 {
+                    let Some(signal) = netlist.pins[pin].signal else {
+                        return f64::INFINITY;
+                    };
+                    netlist.signals[signal]
+                        .sinks
                         .iter()
-                        .enumerate()
-                        .filter(|(j, _)| only.is_none_or(|k| k == *j) && reaches(*pin, *j))
-                        .map(|(j, r)| *r - timing.through_at(index, *pin, j))
-                        .fold(f64::INFINITY, f64::min);
-                    if earliest < f64::INFINITY {
-                        required[*pin] = required[*pin].min(earliest);
+                        .map(|s| required[*s] - wire(*s))
+                        .fold(f64::INFINITY, f64::min)
+                };
+                for &(index, only) in order.iter().rev() {
+                    let inst = &netlist.instances[index];
+                    let outputs: Vec<f64> = through_outputs(inst)
+                        .map(|p| output_required(p, &required))
+                        .collect();
+                    for pin in &inst.pins {
+                        if netlist.pins[*pin].output || class(*pin) != PinTiming::Through {
+                            continue;
+                        }
+                        let earliest = outputs
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| only.is_none_or(|k| k == *j) && reaches(*pin, *j))
+                            .map(|(j, r)| *r - timing.through_at(index, *pin, j))
+                            .fold(f64::INFINITY, f64::min);
+                        if earliest < f64::INFINITY {
+                            required[*pin] = required[*pin].min(earliest);
+                        }
                     }
                 }
-            }
-            // Each connection's slack, and from it its criticality.
-            for (index, signal) in netlist.signals.iter().enumerate() {
-                let Some(d) = signal.driver else { continue };
-                if arrival[d] == f64::NEG_INFINITY {
-                    continue;
-                }
-                for sink in &signal.sinks {
-                    if required[*sink] == f64::INFINITY {
+                // Each connection's slack, and from it its criticality.
+                for (index, signal) in netlist.signals.iter().enumerate() {
+                    let Some(d) = signal.driver else { continue };
+                    if arrival[d] == f64::NEG_INFINITY {
                         continue;
                     }
-                    let slack = required[*sink] - (arrival[d] + wire(*sink));
-                    let c = (1.0 - slack / span).clamp(0.0, 1.0);
-                    critical[index] = critical[index].max(c);
-                    pin_critical[*sink] = pin_critical[*sink].max(c);
-                    pin_slack[*sink] = pin_slack[*sink].min(slack);
+                    for sink in &signal.sinks {
+                        if required[*sink] == f64::INFINITY {
+                            continue;
+                        }
+                        let slack = required[*sink] - (arrival[d] + wire(*sink));
+                        let c = (1.0 - slack / span).clamp(0.0, 1.0);
+                        critical[index] = critical[index].max(c);
+                        pin_critical[*sink] = pin_critical[*sink].max(c);
+                        pin_slack[*sink] = pin_slack[*sink].min(slack);
+                    }
                 }
             }
             domain_longest = domain_longest.max(longest);
@@ -10252,6 +10366,8 @@ fn analyse_paths_against(
 /// the domain at its launch time, and each `Through` output at
 /// the latest of the inputs that reach it plus the cell's delay, in
 /// `order`. An output no path of the domain reaches is negative infinity.
+/// With a `view`, each launch carries what a capture in that clock region
+/// is charged for it ([`PlaceTiming::launch_offset`]).
 fn domain_arrival(
     netlist: &Netlist,
     timing: &PlaceTiming,
@@ -10259,6 +10375,7 @@ fn domain_arrival(
     wire: &[f64],
     domain: usize,
     starts: &dyn Fn(usize) -> bool,
+    view: Option<u16>,
 ) -> Vec<f64> {
     let wire = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
     let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
@@ -10275,9 +10392,10 @@ fn domain_arrival(
                 continue;
             }
             let own = matches!(timing.pin_delays.launch.get(*pin), Some(Some(_)));
+            let at = || timing.launch_at(index, *pin) + timing.launch_offset(index, view);
             match class(*pin) {
-                PinTiming::Start => arrival[*pin] = timing.launch_at(index, *pin),
-                PinTiming::Through if own => arrival[*pin] = timing.launch_at(index, *pin),
+                PinTiming::Start => arrival[*pin] = at(),
+                PinTiming::Through if own => arrival[*pin] = at(),
                 _ => {}
             }
         }
@@ -10363,15 +10481,23 @@ pub fn worst_path(
     domain: usize,
 ) -> Vec<PathStep> {
     let order = timing_order(netlist, timing);
-    let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
     let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
     let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
     let here = |instance: usize| timing.touches(netlist, instance, domain);
-    let mut end: Option<(usize, f64)> = None;
+    let ends =
+        |index: usize| here(index) && !timing.untimed_to.get(index).copied().unwrap_or(false);
+    let views = timing.views(netlist.instances.len(), &ends);
+    let arrivals: Vec<Vec<f64>> = views
+        .iter()
+        .map(|view| domain_arrival(netlist, timing, &order, wire, domain, &|_| true, *view))
+        .collect();
+    let mut end: Option<(usize, f64, usize)> = None;
     for (index, inst) in netlist.instances.iter().enumerate() {
-        if !here(index) || timing.untimed_to.get(index).copied().unwrap_or(false) {
+        if !ends(index) {
             continue;
         }
+        let view = timing.view_index(&views, index);
+        let arrival = &arrivals[view];
         for pin in &inst.pins {
             if netlist.pins[*pin].output
                 || class(*pin) != PinTiming::End
@@ -10380,16 +10506,16 @@ pub fn worst_path(
                 continue;
             }
             let at =
-                input_arrival(netlist, &arrival, &wire_of, *pin) + timing.capture_at(index, *pin);
-            if at.is_finite() && end.is_none_or(|(_, latest)| at > latest) {
-                end = Some((*pin, at));
+                input_arrival(netlist, arrival, &wire_of, *pin) + timing.capture_at(index, *pin);
+            if at.is_finite() && end.is_none_or(|(_, latest, _)| at > latest) {
+                end = Some((*pin, at, view));
             }
         }
     }
-    let Some((pin, at)) = end else {
+    let Some((pin, at, view)) = end else {
         return Vec::new();
     };
-    trace_back(netlist, timing, wire, &arrival, pin, at)
+    trace_back(netlist, timing, wire, &arrivals[view], views[view], pin, at)
 }
 
 /// The paths to every endpoint of `domain` later than it is allowed, the
@@ -10403,7 +10529,14 @@ pub fn late_paths(
     limit: usize,
 ) -> Vec<Vec<PathStep>> {
     let order = timing_order(netlist, timing);
-    let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+    let here = |instance: usize| timing.touches(netlist, instance, domain);
+    let ends =
+        |index: usize| here(index) && !timing.untimed_to.get(index).copied().unwrap_or(false);
+    let views = timing.views(netlist.instances.len(), &ends);
+    let arrivals: Vec<Vec<f64>> = views
+        .iter()
+        .map(|view| domain_arrival(netlist, timing, &order, wire, domain, &|_| true, *view))
+        .collect();
     let mut late: Vec<(usize, f64, f64)> = endpoint_arrivals(netlist, timing, wire)
         .into_iter()
         .filter(|(_, d, at, required)| *d == domain && at > required)
@@ -10412,17 +10545,22 @@ pub fn late_paths(
     late.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
     late.truncate(limit);
     late.into_iter()
-        .map(|(pin, at, _)| trace_back(netlist, timing, wire, &arrival, pin, at))
+        .map(|(pin, at, _)| {
+            let view = timing.view_index(&views, netlist.pins[pin].instance);
+            trace_back(netlist, timing, wire, &arrivals[view], views[view], pin, at)
+        })
         .collect()
 }
 
 /// The path back from endpoint `pin`, which the signal reaches at `at`,
-/// through the latest input of each cell; see [`worst_path`].
+/// through the latest input of each cell; see [`worst_path`]. `arrival` is
+/// [`domain_arrival`]'s in `view`, the endpoint's clock region.
 fn trace_back(
     netlist: &Netlist,
     timing: &PlaceTiming,
     wire: &[f64],
     arrival: &[f64],
+    view: Option<u16>,
     mut pin: usize,
     at: f64,
 ) -> Vec<PathStep> {
@@ -10471,7 +10609,8 @@ fn trace_back(
         // A `Through` output with its own launch starts the path when that
         // launch is its arrival.
         if matches!(timing.pin_delays.launch.get(driver), Some(Some(_)))
-            && timing.launch_at(instance, driver) >= through(input)
+            && timing.launch_at(instance, driver) + timing.launch_offset(instance, view)
+                >= through(input)
         {
             break;
         }
@@ -10504,11 +10643,18 @@ pub fn endpoint_arrivals(
     let mut out = Vec::new();
     for (domain, period) in timing.periods.iter().enumerate() {
         let here = |instance: usize| timing.touches(netlist, instance, domain);
-        let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+        let ends =
+            |index: usize| here(index) && !timing.untimed_to.get(index).copied().unwrap_or(false);
+        let views = timing.views(netlist.instances.len(), &ends);
+        let arrivals: Vec<Vec<f64>> = views
+            .iter()
+            .map(|view| domain_arrival(netlist, timing, &order, wire, domain, &|_| true, *view))
+            .collect();
         for (index, inst) in netlist.instances.iter().enumerate() {
-            if !here(index) || timing.untimed_to.get(index).copied().unwrap_or(false) {
+            if !ends(index) {
                 continue;
             }
+            let arrival = &arrivals[timing.view_index(&views, index)];
             for pin in &inst.pins {
                 if netlist.pins[*pin].output
                     || class(*pin) != PinTiming::End
@@ -10516,7 +10662,7 @@ pub fn endpoint_arrivals(
                 {
                     continue;
                 }
-                let at = input_arrival(netlist, &arrival, &wire_of, *pin)
+                let at = input_arrival(netlist, arrival, &wire_of, *pin)
                     + timing.capture_at(index, *pin);
                 if at.is_finite() {
                     out.push((*pin, domain, at, cycles_of(index) * period));
@@ -10578,7 +10724,8 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
             if !starts || flag(&timing.untimed_from, pad) {
                 continue;
             }
-            let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|i| i == pad);
+            let arrival =
+                domain_arrival(netlist, timing, &order, wire, domain, &|i| i == pad, None);
             let mut latest: Option<(f64, f64)> = None;
             for (index, inst) in netlist.instances.iter().enumerate() {
                 if !ends(index) {
@@ -10609,8 +10756,9 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                 });
             }
         }
-        // Out of it: to each pad, from every start.
-        let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true);
+        // Out of it: to each pad, from every start. A pad is in no clock
+        // region, so no launch is charged for its own.
+        let arrival = domain_arrival(netlist, timing, &order, wire, domain, &|_| true, None);
         for &pad in &pads {
             if !ends(pad) {
                 continue;
@@ -11031,6 +11179,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         (graph, netlist, placement, timing)
     }
@@ -11119,6 +11270,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[end] = 5.6;
@@ -11247,6 +11401,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let wire = vec![0.0; netlist.pins.len()];
         let (_, cut) = path_criticality(&netlist, &timing, &wire);
@@ -11597,6 +11754,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -11716,6 +11876,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let mut wire = vec![0.0; netlist.pins.len()];
         wire[netlist.signals[0].sinks[0]] = 0.5;
@@ -12921,6 +13084,123 @@ mod tests {
             30,
             "rising is free"
         );
+    }
+
+    /// **A path between two clock regions is charged the pessimism Vivado's
+    /// timer keeps on it, and a path inside one is not.** A register at
+    /// column 0 of a row of ten drives two registers, at columns 1 and 2;
+    /// the clock regions are 0 at columns 0 and 1, and at column 2 region 0,
+    /// then 1 (the other half of the row), then 2 (another row), with
+    /// [`PlaceTiming::region_margin`] 0.06 and 0.07 ns. The register at
+    /// column 2 arrives 0.75 ns after the clock, 0.81 and 0.82; the one at
+    /// column 1 at 0.65 throughout, in every one of [`endpoint_arrivals`],
+    /// [`analyse_paths`]' longest, [`worst_path`] and the slack
+    /// [`path_slack_against`] gives each connection against the longest:
+    /// 0.17 ns for the near register's beside the far one's 0.82. No margin,
+    /// or no regions, is the arrival with none.
+    ///
+    /// Would catch the margin not charged, charged to a path inside one
+    /// region, the row's two figures swapped, a launch's region taken for its
+    /// capture's, and the views mixed so that an endpoint reads another
+    /// region's arrivals (the near register's slack 0.10). Would not catch
+    /// the figures being wrong, which are Vivado's
+    /// (`xray::timing::REGION_MARGIN`), nor a fabric's regions numbered
+    /// otherwise than `xray::Fabric::clock_regions` numbers them.
+    #[test]
+    fn a_path_between_clock_regions_keeps_the_clocks_pessimism() {
+        let (_, graph) = grid(10, 1);
+        let mut netlist = chain(2);
+        let pin = netlist.pins.len();
+        netlist.pins.push(NetPin {
+            instance: 2,
+            port: "I0".to_owned(),
+            bit: 0,
+            role: "i0".to_owned(),
+            output: false,
+            signal: Some(0),
+            constant: None,
+        });
+        netlist.signals[0].sinks.push(pin);
+        netlist.instances.push(Instance {
+            cell: CellId::from_index(2),
+            name: "lut2".to_owned(),
+            primitive: "L".to_owned(),
+            kind: "lut".to_owned(),
+            pins: vec![pin],
+            pin: None,
+        });
+        let site = |x: u32| graph.sites.iter().position(|s| s.tile == (x, 0)).unwrap();
+        let mut placement = Placement::new(3, graph.sites.len());
+        for x in 0..3u32 {
+            placement.place(x as usize, site(x));
+        }
+        let (_, _, _, mut timing) = timed_chain();
+        timing.pins = netlist
+            .pins
+            .iter()
+            .map(|p| {
+                if p.output {
+                    PinTiming::Start
+                } else {
+                    PinTiming::End
+                }
+            })
+            .collect();
+        timing.cell = vec![0.0; 3];
+        timing.launch = vec![0.3, 0.0, 0.0];
+        timing.capture = vec![0.0, 0.05, 0.05];
+        timing.domain = vec![PathDomain::Clock(0); 3];
+        timing.frozen = vec![false; 3];
+        let order = timing_order(&netlist, &timing);
+        let wire = estimated_wire(&netlist, &graph, &placement, &timing);
+        let into = |instance: usize| netlist.instances[instance].pins[0];
+        let ends = |timing: &PlaceTiming| {
+            let at = endpoint_arrivals(&netlist, timing, &wire);
+            let of = |instance: usize| at.iter().find(|e| e.0 == into(instance)).unwrap().2;
+            let longest = analyse_paths(&netlist, timing, &order, &wire).1.longest_ps[0];
+            let worst = worst_path(&netlist, timing, &wire, 0)
+                .last()
+                .unwrap()
+                .arrival;
+            let (_, slack, _) = path_slack_against(&netlist, timing, &wire, true);
+            (of(1), of(2), longest, worst, slack[into(1)], slack[into(2)])
+        };
+        let close = |got: f64, want: f64, what: &str| {
+            assert!((got - want).abs() < 1e-9, "{what}: {got}, not {want}");
+        };
+        let check = |timing: &PlaceTiming, far: f64, far_ps: u64| {
+            let (near_at, far_at, longest, worst, near_slack, far_slack) = ends(timing);
+            close(near_at, 0.65, "the near register");
+            close(far_at, far, "the far register");
+            assert_eq!(longest, far_ps);
+            close(worst, far, "the worst path's end");
+            close(near_slack, far - 0.65, "the near register's slack");
+            close(far_slack, 0.0, "the far register's slack");
+        };
+        check(&timing, 0.75, 750);
+        timing.region_margin = (0.06, 0.07);
+        timing.clock_region = vec![0; graph.sites.len()];
+        timing.skew_from(&placement);
+        check(&timing, 0.75, 750);
+        timing.clock_region[site(2)] = 1;
+        timing.skew_from(&placement);
+        check(&timing, 0.81, 810);
+        timing.clock_region[site(2)] = 2;
+        timing.skew_from(&placement);
+        check(&timing, 0.82, 820);
+        // The launch in the other row, both captures charged.
+        timing.clock_region[site(0)] = 4;
+        timing.skew_from(&placement);
+        let (near_at, far_at, ..) = ends(&timing);
+        close(near_at, 0.72, "the near register, launched a row away");
+        close(far_at, 0.82, "the far register, launched a row away");
+        timing.region_margin = (0.0, 0.0);
+        check(&timing, 0.75, 750);
+        timing.region_margin = (0.06, 0.07);
+        timing.clock_region.clear();
+        timing.skew_from(&placement);
+        assert!(timing.region.is_empty(), "no regions, none charged");
+        check(&timing, 0.75, 750);
     }
 
     /// **A register launches when its site says, and the anneal charges a
@@ -15662,6 +15942,9 @@ mod tests {
             clock: Vec::new(),
             skew: Vec::new(),
             bel_launch: Vec::new(),
+            clock_region: Vec::new(),
+            region_margin: (0.0, 0.0),
+            region: Vec::new(),
         };
         let mut sites_by_kind: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (index, site) in graph.sites.iter().enumerate() {

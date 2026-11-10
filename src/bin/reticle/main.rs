@@ -4422,6 +4422,24 @@ fn write_xc7_bitstream(
         if delay_model == reticle::fpga::xray::DelayModel::Vivado {
             timing.clock =
                 reticle::fpga::xray::clock_arrival(&fabric.part.name, grade, &fabric.arch, &graph);
+            // And each site's clock region, where the clock's arrival was
+            // measured: a path between two is charged the pessimism Vivado's
+            // timer keeps on it (`PlaceTiming::region_margin`).
+            if !timing.clock.is_empty() && !options.clock_regions.is_empty() {
+                let width = fabric.arch.width;
+                timing.clock_region = graph
+                    .sites
+                    .iter()
+                    .map(|site| {
+                        let (x, y) = site.tile;
+                        options
+                            .clock_regions
+                            .get((y * width + x) as usize)
+                            .copied()
+                            .unwrap_or(reticle::fpga::place::NO_CLOCK_REGION)
+                    })
+                    .collect();
+            }
             // And when a register launches on each site, which the placement's
             // rounds time it by: see `PlaceTiming::bel_launch`.
             timing.bel_launch = reticle::fpga::xray::bel_launch(delay_model, grade, &graph);

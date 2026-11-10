@@ -1,0 +1,37 @@
+# What Vivado 2026.1's timer keeps of the clock's pessimism at a setup path's
+# capture, ps, by how the path's two ends relate, over each clock's 400 worst
+# paths (one an endpoint) of Reticle's routes of the QoR corpus, each timed at
+# grades 3, 2 and 1: seeds 1 to 3 at xc7a100tftg256 (c73761b1's builds) and
+# seeds 1 and 2 at xc7a35tftg256 (7f45c0f7's).
+# tools/vivado-parity/clock_pessimism.py; see docs/fpga-vivado-parity.md,
+# "The clock's pessimism between regions".
+uncertainty xc7a100tftg256-1 35
+uncertainty xc7a100tftg256-2 35
+uncertainty xc7a100tftg256-3 35
+uncertainty xc7a35tftg256-1 35
+uncertainty xc7a35tftg256-2 35
+uncertainty xc7a35tftg256-3 35
+pessimism xc7a100tftg256-1 same_site paths 880 kept 0.0 sd 0.2 credit 120.9 late_less_early 121.0 late_skew +0.0 check 1
+pessimism xc7a100tftg256-1 one_region paths 11637 kept 34.2 sd 8.4 credit 88.3 late_less_early 122.4 late_skew +7.4 check 1
+pessimism xc7a100tftg256-1 other_half paths 67 kept 112.2 sd 0.8 credit 7.5 late_less_early 119.7 late_skew -9.8 check 0
+pessimism xc7a100tftg256-1 other_row paths 145 kept 120.7 sd 1.6 credit 1.0 late_less_early 121.7 late_skew +10.9 check 1
+pessimism xc7a100tftg256-2 same_site paths 865 kept 0.4 sd 0.6 credit 110.2 late_less_early 110.6 late_skew +0.0 check 1
+pessimism xc7a100tftg256-2 one_region paths 11652 kept 36.8 sd 8.7 credit 74.9 late_less_early 111.6 late_skew +6.7 check 1
+pessimism xc7a100tftg256-2 other_half paths 67 kept 102.2 sd 0.8 credit 6.0 late_less_early 108.2 late_skew -8.3 check 1
+pessimism xc7a100tftg256-2 other_row paths 145 kept 110.4 sd 1.7 credit 0.5 late_less_early 110.9 late_skew +9.7 check 1
+pessimism xc7a100tftg256-3 same_site paths 859 kept 0.5 sd 0.5 credit 101.5 late_less_early 102.0 late_skew +0.0 check 1
+pessimism xc7a100tftg256-3 one_region paths 11658 kept 35.3 sd 9.0 credit 67.7 late_less_early 103.0 late_skew +6.4 check 1
+pessimism xc7a100tftg256-3 other_half paths 67 kept 95.2 sd 0.8 credit 5.0 late_less_early 100.2 late_skew -8.3 check 1
+pessimism xc7a100tftg256-3 other_row paths 145 kept 103.3 sd 1.8 credit 0.5 late_less_early 103.8 late_skew +10.5 check 1
+pessimism xc7a35tftg256-1 same_site paths 518 kept -0.7 sd 0.6 credit 119.1 late_less_early 118.4 late_skew +0.0 check 1
+pessimism xc7a35tftg256-1 one_region paths 7185 kept 31.9 sd 7.3 credit 87.8 late_less_early 119.7 late_skew +6.6 check 1
+pessimism xc7a35tftg256-1 other_half paths 482 kept 110.8 sd 1.5 credit 13.7 late_less_early 124.5 late_skew +0.5 check 1
+pessimism xc7a35tftg256-1 other_row paths 301 kept 115.3 sd 4.5 credit 4.1 late_less_early 119.3 late_skew -53.2 check 1
+pessimism xc7a35tftg256-2 same_site paths 507 kept -0.0 sd 0.4 credit 109.4 late_less_early 109.4 late_skew +0.0 check 1
+pessimism xc7a35tftg256-2 one_region paths 7192 kept 35.7 sd 8.4 credit 75.0 late_less_early 110.7 late_skew +5.7 check 1
+pessimism xc7a35tftg256-2 other_half paths 486 kept 101.1 sd 1.7 credit 12.9 late_less_early 114.0 late_skew +0.2 check 1
+pessimism xc7a35tftg256-2 other_row paths 301 kept 107.0 sd 3.4 credit 3.6 late_less_early 110.6 late_skew -48.7 check 1
+pessimism xc7a35tftg256-3 same_site paths 499 kept 0.1 sd 0.3 credit 100.6 late_less_early 100.7 late_skew +0.0 check 1
+pessimism xc7a35tftg256-3 one_region paths 7190 kept 34.2 sd 8.6 credit 67.7 late_less_early 101.9 late_skew +5.5 check 1
+pessimism xc7a35tftg256-3 other_half paths 492 kept 94.9 sd 1.8 credit 10.2 late_less_early 105.1 late_skew +0.3 check 1
+pessimism xc7a35tftg256-3 other_row paths 305 kept 99.0 sd 3.4 credit 2.7 late_less_early 101.7 late_skew -45.1 check 1

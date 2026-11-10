@@ -1100,3 +1100,29 @@ fn a_wires_branches_load_keeps_the_corpus_as_fast() {
         "`branchload` {ratio:.4} of `lutfit`"
     );
 }
+
+/// **With a path between two clock regions charged the clock's pessimism
+/// Vivado's timer keeps on it, the corpus is no slower**
+/// (`docs/fpga-vivado-parity.md`, "The clock's pessimism between regions").
+/// `regions` is `branchload` with every capture charged 0.070 ns of the clock
+/// (0.062 before) and a path from the other half of its region row 0.060 more,
+/// from another row 0.066 (grade 3), in the placement's timing rounds, the
+/// router's passes and the routed estimate: other placements, twenty seeds,
+/// 0.9978 of `branchload`, which a bootstrap over the seeds puts at 0.9909 to
+/// 1.0051 (95 %), the slowest clock `esad`'s `clk_usb` at 1.046. The change is
+/// for the estimate; this holds the corpus between 0.6 % faster and 0.2 %
+/// slower, no clock more than 5 % slower, and twenty seeds of each. Would
+/// catch a regeneration that lost the measurement, swapped the builds (1.0022)
+/// or lost a seed; would not catch the estimate's error, which the fixture
+/// does not hold.
+#[test]
+fn the_clocks_pessimism_between_regions_keeps_the_corpus_as_fast() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let ratio = twenty_seeds(&table, "branchload", "regions", 1.05);
+    assert!(
+        (0.994..=1.002).contains(&ratio),
+        "`regions` {ratio:.4} of `branchload`"
+    );
+}

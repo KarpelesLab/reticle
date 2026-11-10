@@ -174,6 +174,14 @@ models or IP.
   whose part it is given. `timing_table.py compare --part` reads runs of a part other
   than the `xc7a100t`. The same at speed grades 1 and 2 is `arrival_grades.txt` and
   `arrival_xc7a35t_grades.txt`, a table a grade.
+- `clock_pessimism.tcl` asks, of a routed checkpoint (`achieved.sh`'s `routes` stage
+  with `KEEP_DCP`, or `regrade.sh`'s), every global clock pin's delay at the slow
+  corner's maximum and minimum and each clock's 400 worst setup paths with the
+  timer's own clock terms; `clock_pessimism.py` takes each path's skew apart into the
+  clock's late arrival at its launch, its early arrival at its capture and the
+  pessimism removal's credit, and writes what the capture keeps by how the two ends
+  relate (one site, one clock region, the other half of a row, another row), as
+  `testdata/fpga/vivado/clock/pessimism.txt`.
 - `regrade.sh` gives Vivado a `run_placed.sh` run's placements and routes again at
   other parts, another speed grade, and `timing_dump.tcl` each, without placing or
   routing anything; `timing_table.py fit --part` fits a grade's table to those, and
