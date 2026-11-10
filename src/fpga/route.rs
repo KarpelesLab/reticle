@@ -374,6 +374,35 @@ pub struct RouteOptions {
     pub on_iteration: Option<fn(&Iteration)>,
 }
 
+/// What the branches leaving a node load a connection through it with, in
+/// [`Timing::node_delay`]'s unit: nothing for one branch, [`BranchLoad::first`]
+/// for the second and [`BranchLoad::more`] for each after it. A timer that
+/// sees the whole tree charges it (`xray::delay::branch_load`); a sum of the
+/// nodes' own delays does not see it. [`BranchLoad::NONE`] charges nothing,
+/// as `--delay-model legacy` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BranchLoad {
+    /// What the second branch leaving a node adds.
+    pub first: u32,
+    /// What each branch after the second adds.
+    pub more: u32,
+}
+
+impl BranchLoad {
+    /// No charge at all.
+    pub const NONE: BranchLoad = BranchLoad { first: 0, more: 0 };
+
+    /// What a node `branches` pips leave adds to each connection through it.
+    #[must_use]
+    pub fn charge(self, branches: u64) -> u64 {
+        if branches < 2 {
+            0
+        } else {
+            u64::from(self.first) + (branches - 2) * u64::from(self.more)
+        }
+    }
+}
+
 /// What the router needs to weigh delay against congestion.
 ///
 /// This is the criticality of VPR's timing-driven router (Betz, Rose and
@@ -516,13 +545,13 @@ pub struct Timing {
     /// up and is made again as an uncritical one: see
     /// [`CRITICAL_SEARCH_BUDGET`], the default.
     pub search_budget: u64,
-    /// What each branch more than one leaving a node on a connection's way
-    /// adds to its delay, in [`Timing::node_delay`]'s unit: the load of the
-    /// other branches, which Vivado's timer charges
-    /// (`xray::delay::BRANCH_PS`) and [`connection_delays`] with it. Zero
-    /// charges none, as every pass's analysis did before it had the choice
-    /// and as `--delay-model legacy` still does.
-    pub branch_ps: u32,
+    /// What the branches leaving each node on a connection's way add to its
+    /// delay ([`BranchLoad`]): the load of the other branches, which
+    /// Vivado's timer charges (`xray::delay::branch_load`) and
+    /// [`connection_delays`] with it. [`BranchLoad::NONE`] charges none, as
+    /// every pass's analysis did before it had the choice and as
+    /// `--delay-model legacy` still does.
+    pub branch: BranchLoad,
     /// The criticality from which a search may end on an input of its
     /// class ([`RouteOptions::equivalent`]) that another signal holds, so
     /// that a critical connection takes a lookup table's fast input from a
@@ -604,7 +633,7 @@ impl Timing {
             present_cap: f64::INFINITY,
             present_cap_run: u32::MAX,
             search_budget: CRITICAL_SEARCH_BUDGET,
-            branch_ps: 0,
+            branch: BranchLoad::NONE,
             claim_inputs: f64::INFINITY,
             critical_astar: 0.0,
             seed_from_placement: false,
@@ -1732,7 +1761,7 @@ fn analyse(
             route,
             &terminals.sinks,
             &timing.node_delay,
-            timing.branch_ps,
+            timing.branch,
         );
         for (sink, d) in terminals.sinks.iter().zip(delays) {
             wire[sink.pin] = wire[sink.pin].max(d);
@@ -1885,35 +1914,19 @@ fn analyse(
 /// tree, so that the router's analysis saw slack on connections that the
 /// finished route's report then found late.
 ///
-/// `branch_ps` is [`Timing::branch_ps`]: each branch more than one leaving a
-/// node on the sink's way adds that much, as [`connection_delays`] charges it.
+/// `branch` is [`Timing::branch`]: the branches leaving each node on the
+/// sink's way add what it says, as [`connection_delays`] charges them.
 fn sink_delays(
     graph: &RoutingGraph,
     route: &Route,
     sinks: &[Sink],
     node_delay: &[u32],
-    branch_ps: u32,
+    branch: BranchLoad,
 ) -> Vec<u64> {
-    // Every signal's every pass, so hashed with `FastMap`; and the sinks
-    // moved to another input of their class looked up in a map of their
-    // own, the first entry for a pin as the scan found it, where a scan for
-    // each sink was quadratic in a wide net's.
-    let mut branches: FastMap<NodeId, u64> = FastMap::default();
-    if branch_ps > 0 {
-        for pip in &route.pips {
-            *branches.entry(graph.pip(*pip).from).or_default() += 1;
-        }
-    }
-    let mut delay: FastMap<NodeId, u64> = FastMap::default();
-    delay.insert(route.source, 0);
-    for pip in &route.pips {
-        let pip = graph.pip(*pip);
-        let more = branches.get(&pip.from).map_or(0, |n| n.saturating_sub(1));
-        let to = delay.get(&pip.from).copied().unwrap_or(0)
-            + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0))
-            + more * u64::from(branch_ps);
-        delay.insert(pip.to, to);
-    }
+    // The sinks moved to another input of their class looked up in a map of
+    // their own, the first entry for a pin as the scan found it, where a scan
+    // for each sink was quadratic in a wide net's.
+    let delay = tree_delays(graph, route, node_delay, branch);
     let mut moved: FastMap<usize, NodeId> = FastMap::default();
     for (pin, node) in &route.moved {
         moved.entry(*pin).or_insert(*node);
@@ -1925,6 +1938,36 @@ fn sink_delays(
             delay.get(&node).copied().unwrap_or(0)
         })
         .collect()
+}
+
+/// Each node of `route`'s tree and its delay from the source: the sum of
+/// `node_delay` along its branch, the source's own excluded, and what
+/// `branch` charges for the branches leaving each node on the way. What
+/// [`sink_delays`] and [`connection_delays`] both read, every signal's every
+/// pass, so hashed with `FastMap`.
+fn tree_delays(
+    graph: &RoutingGraph,
+    route: &Route,
+    node_delay: &[u32],
+    branch: BranchLoad,
+) -> FastMap<NodeId, u64> {
+    let mut branches: FastMap<NodeId, u64> = FastMap::default();
+    if branch != BranchLoad::NONE {
+        for pip in &route.pips {
+            *branches.entry(graph.pip(*pip).from).or_default() += 1;
+        }
+    }
+    let mut delay: FastMap<NodeId, u64> = FastMap::default();
+    delay.insert(route.source, 0);
+    for pip in &route.pips {
+        let pip = graph.pip(*pip);
+        let load = branch.charge(branches.get(&pip.from).copied().unwrap_or(0));
+        let to = delay.get(&pip.from).copied().unwrap_or(0)
+            + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0))
+            + load;
+        delay.insert(pip.to, to);
+    }
+    delay
 }
 
 /// [`analyse`] with the placer's model of the paths ([`Timing::paths`]):
@@ -1951,7 +1994,7 @@ fn analyse_paths(
             route,
             &terminals.sinks,
             &timing.node_delay,
-            timing.branch_ps,
+            timing.branch,
         );
         for (sink, ps) in terminals.sinks.iter().zip(delays) {
             #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
@@ -1989,36 +2032,20 @@ fn analyse_paths(
 /// [`place::path_criticality`](crate::fpga::place::path_criticality) to
 /// time a finished route, as the router does each pass.
 ///
-/// `branch_ps` is what each branch more than one leaving a node on the
-/// sink's way adds to it: the load of the others, which a timer that sees
-/// the whole tree charges (`xray::delay::BRANCH_PS`). The router's own
-/// analysis does not, and zero is that.
+/// `branch` is what the branches leaving each node on the sink's way add to
+/// it: the load of the others, which a timer that sees the whole tree
+/// charges (`xray::delay::branch_load`). [`BranchLoad::NONE`] charges none.
 pub fn connection_delays(
     netlist: &Netlist,
     graph: &RoutingGraph,
     placement: &Placement,
     routing: &Routing,
     node_delay: &[u32],
-    branch_ps: u32,
+    branch: BranchLoad,
 ) -> Vec<f64> {
     let mut wire = vec![0.0f64; netlist.pins.len()];
     for route in routing.routes() {
-        let mut branches: HashMap<NodeId, u64> = HashMap::new();
-        if branch_ps > 0 {
-            for pip in &route.pips {
-                *branches.entry(graph.pip(*pip).from).or_default() += 1;
-            }
-        }
-        let mut delay: HashMap<NodeId, u64> = HashMap::new();
-        delay.insert(route.source, 0);
-        for pip in &route.pips {
-            let pip = graph.pip(*pip);
-            let more = branches.get(&pip.from).map_or(0, |n| n.saturating_sub(1));
-            let to = delay.get(&pip.from).copied().unwrap_or(0)
-                + u64::from(node_delay.get(pip.to as usize).copied().unwrap_or(0))
-                + more * u64::from(branch_ps);
-            delay.insert(pip.to, to);
-        }
+        let delay = tree_delays(graph, route, node_delay, branch);
         for sink in &netlist.signals[route.signal].sinks {
             let pin = &netlist.pins[*sink];
             let node = route
@@ -3902,19 +3929,24 @@ mod tests {
         (arch, graph)
     }
 
-    /// **Each pass's analysis charges a branch's load past it**
-    /// ([`Timing::branch_ps`]), as the finished route's report
-    /// ([`connection_delays`]) does. A source reaches a track that branches to
-    /// two sinks: with every node one unit, each sink is two; at eight a branch,
-    /// each is ten, the track having one branch more than one; a route that does
-    /// not branch is charged nothing. Would catch the charge left out of the
-    /// passes, given to every pip rather than to the branches past the first,
-    /// or counted from the pip's end rather than the node it leaves; would not
-    /// catch the charge itself being the wrong figure, which
-    /// `xray::delay::BRANCH_PS` is fitted to.
+    /// **Each pass's analysis charges the branches' load past them**
+    /// ([`Timing::branch`]), as the finished route's report
+    /// ([`connection_delays`]) does: nothing for one branch, the first figure
+    /// for the second and the other for each after. A source reaches a track
+    /// that branches three ways, to two sinks of its tile and to the next
+    /// tile's track, which reaches a third: with every node one unit, the
+    /// sinks are two, two and three; at 4 for the second branch and 11 for
+    /// each after, each is 15 more, the track having three; with the third
+    /// branch gone, 4 more; a route that does not branch is charged nothing.
+    /// Would catch the charge left out of the passes, given to every pip
+    /// rather than to the branches past the first, counted from the pip's end
+    /// rather than the node it leaves, or one figure for every branch (8 or
+    /// 22 here, not 15) as it was until "A wide signal's connections"
+    /// (`docs/fpga-vivado-parity.md`); would not catch the figures
+    /// themselves being wrong, which `xray::delay::branch_load` is fitted to.
     #[test]
     fn a_pass_charges_a_branch_to_the_sinks_past_it() {
-        let (_, graph) = line(1, 1);
+        let (_, graph) = line(2, 1);
         let node = |name: &str| -> NodeId {
             let index = (0..graph.nodes.len())
                 .find(|i| graph.wire(NodeId::try_from(*i).unwrap_or(0)).full_name() == name)
@@ -3923,6 +3955,7 @@ mod tests {
         };
         let (out, track) = (node("X0Y0/out0"), node("X0Y0/track0"));
         let (a, b) = (node("X0Y0/in0"), node("X0Y0/in1"));
+        let (next, c) = (node("X1Y0/track0"), node("X1Y0/in0"));
         let pip = |from: NodeId, to: NodeId| {
             *graph
                 .outgoing(from)
@@ -3933,31 +3966,56 @@ mod tests {
         let route = Route {
             signal: 0,
             source: out,
-            pips: vec![pip(out, track), pip(track, a), pip(track, b)],
-            nodes: vec![out, track, a, b],
+            pips: vec![
+                pip(out, track),
+                pip(track, a),
+                pip(track, b),
+                pip(track, next),
+                pip(next, c),
+            ],
+            nodes: vec![out, track, a, b, next, c],
             moved: Vec::new(),
         };
-        let sinks = [
-            Sink {
-                node: a,
-                name: String::new(),
-                pin: 1,
-            },
-            Sink {
-                node: b,
-                name: String::new(),
-                pin: 2,
-            },
-        ];
+        let sink = |node: NodeId, pin: usize| Sink {
+            node,
+            name: String::new(),
+            pin,
+        };
+        let sinks = [sink(a, 1), sink(b, 2), sink(c, 3)];
         let ones = vec![1u32; graph.nodes.len()];
-        assert_eq!(sink_delays(&graph, &route, &sinks, &ones, 0), vec![2, 2]);
-        assert_eq!(sink_delays(&graph, &route, &sinks, &ones, 8), vec![10, 10]);
+        let load = BranchLoad { first: 4, more: 11 };
+        assert_eq!(
+            sink_delays(&graph, &route, &sinks, &ones, BranchLoad::NONE),
+            vec![2, 2, 3]
+        );
+        assert_eq!(
+            sink_delays(&graph, &route, &sinks, &ones, load),
+            vec![17, 17, 18]
+        );
+        let two = Route {
+            pips: vec![
+                pip(out, track),
+                pip(track, a),
+                pip(track, next),
+                pip(next, c),
+            ],
+            nodes: vec![out, track, a, next, c],
+            ..route.clone()
+        };
+        let (ac, single_a) = ([sink(a, 1), sink(c, 3)], [sink(a, 1)]);
+        assert_eq!(sink_delays(&graph, &two, &ac, &ones, load), vec![6, 7]);
         let single = Route {
             pips: vec![pip(out, track), pip(track, a)],
             nodes: vec![out, track, a],
             ..route.clone()
         };
-        assert_eq!(sink_delays(&graph, &single, &sinks[..1], &ones, 8), vec![2]);
+        assert_eq!(
+            sink_delays(&graph, &single, &single_a, &ones, load),
+            vec![2]
+        );
+        assert_eq!(load.charge(0), 0);
+        assert_eq!(load.charge(1), 0);
+        assert_eq!(load.charge(20), 4 + 18 * 11);
     }
 
     /// **A critical connection takes its class's fast input from a slack
@@ -4264,7 +4322,7 @@ mod tests {
     }
 
     /// **A group the refinement's searches find better but whose new branch's
-    /// load leaves no better is not kept** ([`Timing::branch_ps`]). As
+    /// load leaves no better is not kept** ([`Timing::branch`]). As
     /// [`the_refinement_gives_a_tables_fast_input_to_its_latest_input`], but the
     /// second register also feeds a register of its own at `cd2`, and reaches
     /// the table's slow input `b` only through it: `out1 far cd2 b`, a chain
@@ -4445,12 +4503,12 @@ mod tests {
         let mut delays = vec![0u32; graph.nodes.len()];
         delays[b as usize] = 300;
         delays[far as usize] = 100;
-        let ends = |branch_ps: u32| {
+        let ends = |first: u32| {
             let mut timing = Timing::for_netlist(&netlist, delays.clone(), 0);
             timing.paths = Some(paths.clone());
             timing.refine_rounds = 2;
             timing.refine_above = 0.0;
-            timing.branch_ps = branch_ps;
+            timing.branch = BranchLoad { first, more: 0 };
             let options = RouteOptions {
                 equivalent: equivalent.clone(),
                 timing: Some(timing),
@@ -4657,7 +4715,10 @@ mod tests {
                 pin,
             };
             let route = routing.route(signal).unwrap();
-            assert_eq!(sink_delays(&graph, route, &[sink], &ones, 0), vec![1]);
+            assert_eq!(
+                sink_delays(&graph, route, &[sink], &ones, BranchLoad::NONE),
+                vec![1]
+            );
         }
     }
 

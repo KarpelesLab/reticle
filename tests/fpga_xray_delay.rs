@@ -106,7 +106,10 @@ fn holds_the_fit(file: &str, grade: SpeedGrade) {
 /// puts at 20 ps or more), each costed as `xray::delay` costs a route: the
 /// class of every wire it enters, prjxray's delay times
 /// [`delay::OTHER_PER_MILLE`] for a wire of no class, and [`delay::BRANCH_PS`]
-/// a branch. The median of the model over Vivado is within 3 % of one, the 5th
+/// a branch, the charge the classes were fitted beside (`sample.txt` keeps a
+/// connection's branches summed, not by wire, which is what the model's own
+/// charge, [`delay::branch_load`], needs; `branches_sample.txt` has that, and
+/// the tests after these walk it). The median of the model over Vivado is within 3 % of one, the 5th
 /// percentile above 0.9 and the 95th below 1.1. prjxray's pip delays alone,
 /// what the legacy model is made of, are far wider on the same connections, and
 /// that is held too, so that the comparison is known to see a model that is
@@ -155,7 +158,8 @@ fn a_connection_is_within_a_few_percent_of_vivados_figure() {
     assert!(low < 0.5 && high > 1.3, "prjxray's 5th {low}, 95th {high}");
 }
 
-/// What the model costs a connection of `sample.txt` at `grade`: its branches
+/// What the classes cost a connection of `sample.txt` at `grade`: its branches
+/// at [`delay::BRANCH_PS`], the charge they were fitted beside,
 /// and the wire of every pip, as `xray::delay` costs a route.
 fn costed(line: &str, grade: SpeedGrade) -> u32 {
     let words: Vec<&str> = line.split_whitespace().collect();
@@ -242,6 +246,155 @@ fn at_each_grade_a_connection_is_within_a_few_percent_of_vivados_figure() {
         median < 0.8,
         "grade 3's figures against grade 1's: median {median}"
     );
+}
+
+/// **The branches' load in the source is the fit's, at each grade.** Each
+/// `grade` line of `branches.txt` (`timing_table.py branches`): the second
+/// branch's figure and each later one's, rounded to the picosecond, against
+/// [`delay::BRANCH_FIRST_PS`] and [`delay::BRANCH_MORE_PS`], and the charge
+/// the classes were fitted beside against [`delay::BRANCH_PS`]. Would catch a
+/// fit regenerated without the source following it, a figure edited by hand,
+/// or a grade's figures in another's place; would not catch a fit that is
+/// itself wrong, which the next test is for.
+#[test]
+fn the_source_holds_the_branches_fit() {
+    let Some(text) = fixture("branches.txt") else {
+        return;
+    };
+    let mut grades = 0;
+    for line in text.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let [
+            "grade",
+            grade,
+            "connections",
+            _,
+            "first",
+            first,
+            "more",
+            more,
+            "linear",
+            _,
+            "classes",
+            classes,
+        ] = words.as_slice()
+        else {
+            continue;
+        };
+        let grade = SpeedGrade::from_name(grade).unwrap();
+        let near = |fitted: &str, ours: u32| {
+            let fitted: f64 = fitted.parse().unwrap();
+            (fitted - f64::from(ours)).abs() <= 0.5
+        };
+        let load = delay::branch_load(grade);
+        assert!(
+            near(first, load.first),
+            "grade {}: first {first}",
+            grade.name()
+        );
+        assert!(near(more, load.more), "grade {}: more {more}", grade.name());
+        assert!(
+            near(classes, delay::branch_ps(grade)),
+            "grade {}: classes {classes}",
+            grade.name()
+        );
+        grades += 1;
+    }
+    assert_eq!(grades, 3);
+}
+
+/// **A wide signal's connection is charged the load its wires' branches put
+/// on it, as Vivado's timer charges it, at each grade, and one figure a
+/// branch does not.** Over `branches_sample.txt`, one connection in 54 of the
+/// 77,420 of Reticle's own routes of the QoR corpus `branches.txt` was fitted
+/// to, each costed as `xray::delay` costs a route: the class of every wire it
+/// enters, and the branches leaving each node on its way at
+/// [`delay::branch_load`]. On the connections of signals of more than 64
+/// sinks the model is within 6 ps of Vivado's figure on average at each grade;
+/// with [`delay::BRANCH_PS`] a branch, the classes' own charge, it is more than
+/// 10 ps under at each. Over every connection of 20 ps or more the median is
+/// within 3 % of Vivado's and the 5th and 95th percentiles inside 0.9 and 1.1.
+///
+/// Would catch the load charged as one figure a branch again (the 0.045 ns a
+/// connection of a signal of more than 128 sinks was under), the two figures
+/// swapped, a grade's figures taken from another, or a degree read from the
+/// wrong node; would not catch a wire class that is itself wrong, which the
+/// tests of `sample.txt` are for.
+#[test]
+fn a_wide_signals_connection_is_charged_its_branches_load() {
+    let Some(text) = fixture("branches_sample.txt") else {
+        return;
+    };
+    let grades = [SpeedGrade::Three, SpeedGrade::Two, SpeedGrade::One];
+    let mut ratios = [Vec::new(), Vec::new(), Vec::new()];
+    let mut wide = [(0.0f64, 0.0f64, 0u32); 3];
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let fanout: u32 = words[1].parse().unwrap();
+        let vivado: Vec<f64> = words[2..5].iter().map(|w| w.parse().unwrap()).collect();
+        let degrees: Vec<u64> = words[5].split(',').map(|d| d.parse().unwrap()).collect();
+        for (column, grade) in grades.into_iter().enumerate() {
+            let mut wires = 0u32;
+            for pip in &words[6..] {
+                let parts: Vec<&str> = pip.split('.').collect();
+                let [tile_type, to, ps] = parts.as_slice() else {
+                    panic!("`{pip}` is not <tile type>.<wire>.<ps or ->");
+                };
+                wires += delay::wire_ps(tile_type, to, ps.parse().ok(), grade);
+            }
+            let load = delay::branch_load(grade);
+            let charged: u64 = degrees.iter().map(|k| load.charge(*k)).sum();
+            let linear: u64 = degrees
+                .iter()
+                .map(|k| k.saturating_sub(1) * u64::from(delay::branch_ps(grade)))
+                .sum();
+            #[allow(clippy::cast_precision_loss, reason = "picoseconds")]
+            let (ours, theirs) = (
+                (u64::from(wires) + charged) as f64,
+                (u64::from(wires) + linear) as f64,
+            );
+            if vivado[column] >= 20.0 {
+                ratios[column].push(ours / vivado[column]);
+            }
+            if fanout > 64 {
+                wide[column].0 += ours - vivado[column];
+                wide[column].1 += theirs - vivado[column];
+                wide[column].2 += 1;
+            }
+        }
+    }
+    for (column, grade) in grades.into_iter().enumerate() {
+        let (ours, linear, n) = wide[column];
+        assert!(n > 150, "{n} connections of wide signals");
+        let (ours, linear) = (ours / f64::from(n), linear / f64::from(n));
+        assert!(ours.abs() < 6.0, "grade {}: {ours} ps", grade.name());
+        assert!(
+            linear < -10.0,
+            "grade {}: one figure a branch, {linear} ps",
+            grade.name()
+        );
+        let ratio = &ratios[column];
+        assert!(ratio.len() > 1300, "{} connections", ratio.len());
+        let (median, low, high) = (
+            quantile(ratio, 0.5),
+            quantile(ratio, 0.05),
+            quantile(ratio, 0.95),
+        );
+        assert!(
+            (0.97..=1.03).contains(&median),
+            "grade {}: median {median}",
+            grade.name()
+        );
+        assert!(
+            low > 0.9 && high < 1.1,
+            "grade {}: 5th {low}, 95th {high}",
+            grade.name()
+        );
+        eprintln!(
+            "grade {}: wide {n} ours {ours:+.1} linear {linear:+.1}; median {median:.3} 5th {low:.3} 95th {high:.3}",
+            grade.name()
+        );
+    }
 }
 
 /// Each `design` line of `summary.txt` for `model`, with its lines under it.

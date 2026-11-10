@@ -1076,3 +1076,27 @@ fn the_refitted_model_keeps_the_corpus_as_fast() {
         "`lutfit` {ratio:.4} of `belff`"
     );
 }
+
+/// **With a wire's branches loading a connection as Vivado's timer has them,
+/// the corpus is no slower** (`docs/fpga-vivado-parity.md`, "A wide signal's
+/// connections"). `branchload` is `lutfit` with the second branch leaving a
+/// wire charged 4 ps and each after it 11 (grade 3), where every branch past
+/// the first was 8: the same placements, twenty seeds, 0.9966 of `lutfit`,
+/// which a bootstrap over the seeds paired by placement puts at 0.9945 to
+/// 1.0012 (95 %), the slowest clock `lutram32` at 1.010. The change is for the
+/// estimate; this holds the corpus between 0.6 % faster and 0.2 % slower, no
+/// clock more than 2 % slower, and twenty seeds of each. Would catch a
+/// regeneration that lost the measurement, swapped the builds (1.0034) or lost
+/// a seed; would not catch the estimate's error, which the fixture does not
+/// hold.
+#[test]
+fn a_wires_branches_load_keeps_the_corpus_as_fast() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let ratio = twenty_seeds(&table, "lutfit", "branchload", 1.02);
+    assert!(
+        (0.994..=1.002).contains(&ratio),
+        "`branchload` {ratio:.4} of `lutfit`"
+    );
+}

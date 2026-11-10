@@ -165,7 +165,7 @@ fn analysis(
             route,
             &terminals.sinks,
             &cx.timing.node_delay,
-            cx.timing.branch_ps,
+            cx.timing.branch,
         );
         for (sink, ps) in terminals.sinks.iter().zip(delays) {
             #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
@@ -697,7 +697,7 @@ fn try_group(
         );
     }
     // And as the analysis will read them: a search leaves out what a branch
-    // loads its node with (`Timing::branch_ps`), and the new branch is one,
+    // loads its node with (`Timing::branch`), and the new branch is one,
     // so a group the searches found 8 ps better can be no better at all, and
     // was given the same routes again round after round.
     for (i, m) in group.iter().enumerate() {
@@ -707,7 +707,7 @@ fn try_group(
             &done[i],
             &terminals.sinks,
             &cx.timing.node_delay,
-            cx.timing.branch_ps,
+            cx.timing.branch,
         );
         #[allow(clippy::cast_precision_loss, reason = "a delay in picoseconds")]
         let s = base[i] - delays[m.sink] as f64;

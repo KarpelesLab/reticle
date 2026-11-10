@@ -5,6 +5,7 @@ model is from it, a connection and a clock at a time.
     timing_table.py fit <db artix7 dir> [--part <part>] <out dir> <run>...
     timing_table.py compare <db artix7 dir> [--part <part>] <name>=<run>...
     timing_table.py rust <classes_1.txt> <classes_2.txt> <classes.txt>
+    timing_table.py branches <db artix7 dir> <classes dir> <out dir> <regrade out>...
 
 A run is what `TIMING=1 run_placed.sh` wrote: for each design,
 <run>/<design>/routes/<design>.timing (`timing_dump.tcl`), Reticle's own
@@ -30,6 +31,22 @@ speed grade (`regrade.sh`) are fitted the same way, a table for each grade.
 `src/fpga/xray/delay.rs` holds: each class with its picoseconds at grades 1, 2
 and 3. The three are fits of the same connections, so they name the same
 classes; a class one of them lacks is refused.
+
+`branches` fits what the branches leaving a wire load a connection through it
+with, the classes held as `<classes dir>`'s `classes.txt`, `classes_2.txt` and
+`classes_1.txt` have them (rounded as `xray::delay` keeps them): nothing for one
+branch, `first` for the second and `more` for each after. Each <regrade out> is
+what `regrade.sh` wrote for the parts xc7a100tftg256-3, -2 and -1, the same
+routes at each grade. Into <out dir>:
+
+    branches.txt         each grade's fit, the line through the same
+                         connections, and the model's error by the signal's
+                         fanout with the classes' own charge a branch and with
+                         the fit, in ps
+    branches_sample.txt  one connection in BRANCH_SAMPLE_EVERY: its design, its
+                         fanout, Vivado's ps at grades 3, 2 and 1, the degree of
+                         each node it leaves, and its pips as sample.txt has
+                         them; what the test of the fit walks
 
 `compare` prints, for each run named, per design: the ratio of Reticle's
 estimate of each connection to Vivado's (median, 5th and 95th percentile,
@@ -108,6 +125,14 @@ def connections(nets):
 
     `branches` is how many more branches than one leave the nodes on the
     connection's way, its source's included."""
+    for name, pin, ps, chain, degrees, fanout in connection_degrees(nets):
+        yield name, pin, ps, chain, sum(max(0, k - 1) for k in degrees), fanout
+
+
+def connection_degrees(nets):
+    """(net, pin, ps, [pip...], [degree...], fanout) per sink a path reaches:
+    `degrees` is how many branches leave each node the connection's pips
+    leave, its source's first."""
     for name, net in nets.items():
         if not net["src"] or not net["pips"]:
             continue
@@ -126,13 +151,14 @@ def connections(nets):
         for pin, node, ps in net["sinks"]:
             if node not in prev or node == start:
                 continue
-            chain, branches, n = [], 0, node
+            chain, degrees, n = [], [], node
             while prev[n] is not None:
                 n, pip = prev[n]
                 chain.append(pip)
-                branches += max(0, len(down[n]) - 1)
+                degrees.append(len(down[n]))
             chain.reverse()
-            yield name, pin, ps, chain, branches, len(net["sinks"])
+            degrees.reverse()
+            yield name, pin, ps, chain, degrees, len(net["sinks"])
 
 
 def cell_places(run, design, nets):
@@ -353,6 +379,111 @@ def fit(db, out, runs, part="xc7a100tftg256-3"):
     print(f"{len(rows)} connections, {len(named)} classes, fitted {spread(ratios)}")
 
 
+GRADE_PARTS = ("xc7a100tftg256-3", "xc7a100tftg256-2", "xc7a100tftg256-1")
+# branches_sample.txt keeps one connection in this many: their routes are
+# longer than sample.txt's, a wide signal's, so one in twice as many.
+BRANCH_SAMPLE_EVERY = 54
+FANOUT_BUCKETS = ((1, 4), (5, 16), (17, 64), (65, 128), (129, 10 ** 9))
+
+
+def class_table(path):
+    """A classes file as `xray::delay` keeps it: each class's cost rounded to
+    the picosecond, the share of prjxray's delay in thousandths, and the
+    charge a branch the classes were fitted beside."""
+    table, other, branch = {}, 0, 0.0
+    for line in open(path):
+        w = line.split()
+        if w and w[0] == "class":
+            table[w[1]] = round(float(w[3]))
+        elif w and w[0] == "other":
+            other = round(float(w[1]) * 1000)
+        elif w and w[0] == "branch":
+            branch = float(w[1])
+    return table, other, branch
+
+
+def wires_ps(db, table, other, chain):
+    """What `xray::delay` charges a connection's wires: each one's class, or a
+    share of prjxray's delay for the pip into it."""
+    total = 0
+    for ttype, src, dst, _ in chain:
+        cost = table.get(wire_class(ttype, dst))
+        if cost is None:
+            known = prjxray_delays(db, ttype).get((src, dst))
+            cost = known * other // 1000 if known is not None else 0
+        total += cost
+    return total
+
+
+def branches(db, classes_dir, out, regraded):
+    """Fits the branches' load with the classes held, at each grade."""
+    tables = [class_table(f"{classes_dir}/{name}")
+              for name in ("classes.txt", "classes_2.txt", "classes_1.txt")]
+    found = []
+    for root in regraded:
+        for design in designs_of(f"{root}/{GRADE_PARTS[0]}"):
+            by_grade = []
+            for part in GRADE_PARTS:
+                path = f"{root}/{part}/{design}/routes/{design}.timing"
+                if not os.path.isfile(path):
+                    break
+                nets, _, _ = load(path)
+                by_grade.append({(net, pin): (ps, chain, degrees, fanout)
+                                 for net, pin, ps, chain, degrees, fanout in connection_degrees(nets)})
+            if len(by_grade) < 3:
+                continue
+            for key, (ps, chain, degrees, fanout) in sorted(by_grade[0].items()):
+                if ps < 0 or is_clock_net(chain) or any(key not in g for g in by_grade[1:]):
+                    continue
+                found.append((design, fanout, [g[key][0] for g in by_grade],
+                              [split_pip(p) for p in chain], degrees))
+    os.makedirs(out, exist_ok=True)
+    with open(f"{out}/branches.txt", "w") as f:
+        f.write("# Vivado 2026.1's interconnect delays of Reticle's routes at xc7a100tftg256-3,\n"
+                "# -2 and -1, against the classes' own figures: what the branches leaving a\n"
+                "# wire add, nothing for one, `first` for the second and `more` for each after;\n"
+                "# `linear` one figure a branch, fitted to the same connections, and\n"
+                "# `classes` the one the classes were fitted beside. Then the model's error\n"
+                "# (model less Vivado, ps, mean and root mean square) by the signal's fanout,\n"
+                "# with the classes' charge and with the fit. tools/vivado-parity/timing_table.py\n"
+                "# branches.\n")
+        for g, (table, other, classes_branch) in enumerate(tables):
+            grade = 3 - g
+            rows, lines, errors = [], [], []
+            for design, fanout, ps, chain, degrees in found:
+                rest = ps[g] - wires_ps(db, table, other, chain)
+                rows.append(({0: sum(1 for k in degrees if k >= 2), 1: sum(k - 2 for k in degrees if k >= 2)}, rest))
+                lines.append(({0: sum(k - 1 for k in degrees if k >= 2)}, rest))
+                errors.append((fanout, rest, degrees))
+            first, more = solve(rows, 2, ridge=0.0)
+            linear = solve(lines, 1, ridge=0.0)[0]
+            f.write(f"grade {grade} connections {len(rows)} first {first:.1f} more {more:.1f} "
+                    f"linear {linear:.1f} classes {classes_branch:.1f}\n")
+            for lo, hi in FANOUT_BUCKETS:
+                old, new = [], []
+                for fanout, rest, degrees in errors:
+                    if lo <= fanout <= hi:
+                        old.append(classes_branch * sum(k - 1 for k in degrees if k >= 2) - rest)
+                        new.append(sum(first + more * (k - 2) for k in degrees if k >= 2) - rest)
+                if old:
+                    rms = lambda v: math.sqrt(sum(x * x for x in v) / len(v))
+                    f.write(f"error {grade} fanout {lo}-{hi if hi < 10 ** 9 else ''} n {len(old)} "
+                            f"classes {statistics.fmean(old):+.1f} {rms(old):.1f} "
+                            f"fit {statistics.fmean(new):+.1f} {rms(new):.1f}\n")
+    with open(f"{out}/branches_sample.txt", "w") as f:
+        f.write("# One connection in %d of branches.txt's: its design, its signal's fanout,\n"
+                "# Vivado's ps at grades 3, 2 and 1, the branches leaving each node it\n"
+                "# leaves (its source's first), and each pip as <tile type>.<wire it\n"
+                "# enters>.<prjxray's delay for it, or ->; tools/vivado-parity/timing_table.py\n"
+                "# branches.\n" % BRANCH_SAMPLE_EVERY)
+        for i, (design, fanout, ps, chain, degrees) in enumerate(found):
+            if i % BRANCH_SAMPLE_EVERY == 0:
+                pips = [f"{t}.{dst}.{prjxray_delays(db, t).get((src, dst), '-')}" for t, src, dst, _ in chain]
+                f.write(f"{design} {fanout} {ps[0]} {ps[1]} {ps[2]} {','.join(map(str, degrees))} "
+                        + " ".join(pips) + "\n")
+    print(f"{len(found)} connections")
+
+
 # Vivado spells a pin as the cell's; Reticle as the role the device file gives.
 ROLE = {"D": "d", "CE": "en", "R": "rst", "S": "rst", "CLR": "rst", "PRE": "rst"}
 
@@ -486,6 +617,8 @@ if __name__ == "__main__":
             sys.exit("the three fits do not name the same classes")
         for name in sorted(grades[0]):
             print(f'    ("{name}", [{", ".join(str(t[name]) for t in grades)}]),')
+    elif sys.argv[1] == "branches":
+        branches(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:])
     elif sys.argv[1] == "compare":
         rest = sys.argv[3:]
         part = "xc7a100tftg256-3"

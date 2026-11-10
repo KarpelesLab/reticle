@@ -180,7 +180,10 @@ models or IP.
   `timing_table.py rust` prints the three grades' fits as the one table
   `xray::delay` keeps (`testdata/fpga/vivado/timing/classes_1.txt`, `classes_2.txt`,
   `arcs_1.txt`, `arcs_2.txt`, `sample_grades.txt`; docs/fpga-vivado-parity.md, "Speed
-  grades").
+  grades"). `timing_table.py branches` reads `regrade.sh` runs at grades 3, 2 and 1
+  (an `achieved.sh` seed's `reticle/s<n>` will do as the run) and fits what the
+  branches leaving a wire add to a connection, the classes held
+  (`branches.txt`, `branches_sample.txt`; "A wide signal's connections").
 - `bitstream_base.tcl` routes `testdata/fpga/vivado/bitstream/options_probe.v` once;
   `bitstream_options.tcl` writes a `.bit` from that checkpoint per line of
   `xc7a100t.runs.txt` or `xc7a35t.runs.txt` there; `bit_packets.py` prints a stream's

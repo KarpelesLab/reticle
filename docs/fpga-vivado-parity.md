@@ -9677,11 +9677,256 @@ which only Vivado's timer asks, and the estimate's error, which the fixture does
 ### Not done
 
 - **The connections of a wide signal**: 0.048 ns under Vivado's per connection past 64
-  sinks, on the paths and over all of `widemux`'s; not modelled.
+  sinks, on the paths and over all of `widemux`'s; not modelled. *Since*: a wire's
+  branches, not the signal's fanout, and charged ("A wide signal's connections").
 - **Which path**: Reticle's latest path is 0.019 ns under Vivado's worst on average, the
   router having worked hardest on the paths its model calls latest. Not looked at further.
+  *Since*: mostly the model's error, the endpoint it is most under on being the one
+  Vivado puts last ("A wide signal's connections", "Which path").
 - **A block's launch to a flip-flop** is still 0.026 ns under after its clock pin's measured
   figure, on six paths (`mul18`, `bram_fifo`): not taken apart.
 - **A `RAM32M`'s pins** as Vivado names them (the macro's, not its leaves'): its paths were
   not compared.
+- None of it has been on a part.
+
+## A wide signal's connections
+
+**Asked: "The clock's margin, a table's figure and the `DSP48E1`'s chain" left a signal of
+more than 64 sinks 0.048 ns under Vivado's figure a connection, and Reticle's latest path
+0.019 ns under Vivado's worst for being another path. Measure why a wide signal is slower
+to Vivado's timer (the load of a wire's branches, the signal's fanout, its driver, the
+long lines), fit it under the fitted model and charge it in the router's analysis and the
+report; say why the latest path is not Vivado's worst; and see whether the router, seeing
+wide signals as slower, does better on them, and whether Vivado's flow does anything of its
+own with them on Reticle's netlists.** Vivado 2026.1 at `xc7a100tftg256-3` (and `-2`, `-1`
+for the figures), run on 2026-11-11 on c73761b1. **Everything here is Vivado's timer of
+Reticle's placements and routes, and Vivado's own placer and router on Reticle's netlists
+and placements; nothing has been on a part.**
+
+### Connection by connection (measured)
+
+Every connection of `lutfit`'s builds of seeds 1 to 3 of the corpus (`achieved.sh`'s
+`reticle/s<n>`), its routes fixed in Vivado as `achieved.tcl`'s `routes` stage fixes them
+and each sink's interconnect delay asked as `timing_dump.tcl` asks it: 77,420
+connections, 65,538 of them on a wire Reticle's `endpoints.txt` names beside its own
+estimate. Reticle's estimate less Vivado's figure, by the signal's fanout (ps, mean and
+root mean square; scripts not committed):
+
+| sinks | connections | estimate less Vivado |
+|---|---|---|
+| 1 | 4,886 | +2.4 / 20.0 |
+| 2 to 4 | 16,760 | -5.1 / 38.9 |
+| 5 to 16 | 15,448 | -5.8 / 30.6 |
+| 17 to 64 | 17,185 | -1.8 / 38.8 |
+| 65 to 128 | 9,718 | -9.2 / 55.7 |
+| more than 128 | 1,541 | **-54.8 / 56.8** |
+
+**The error follows a wire's branches, not the signal's fanout.** By the most branches
+leaving any one wire on the connection's way it is +2 ps at one and -3 at two, +8 to +10
+at three and four, then falls steadily: -15 at eight, -27 at ten, -55 at seventeen, -63 at
+twenty. The model charged each branch past the first leaving a wire 8 ps (`BRANCH_PS`, the
+figure the classes were fitted beside). Fitted again with every class held, a figure for
+each count of branches (ps, grade 3): 5 for two, 13 for three, then 26, 36, 49, 60, 73, 83
+and 95 for four to ten, 129 to 135 for twelve to fourteen, 189 for sixteen and more.
+**That is not a line**: the second branch costs half the line's figure and every branch
+from the third about 11.5 ps, half as much again. Two figures, the second branch's and each
+later one's, fit as well as a figure for each count (root mean square 26.2 ps against
+26.3 over every connection; the line refitted, 28.2). **The fanout adds nothing once the
+branches are charged**: with the two figures every fanout bucket is within 6 ps of
+Vivado's on average (below), the widest included.
+
+By what the branching wire is: a slice's output (`LOGIC_OUTS`, most of the wires of many
+branches) costs more than an interconnect wire of as many branches, 5 ps more at two and
+13 to 20 at four to six; a figure of its own for the second branch at a slice's output
+took 0.3 ps off the root mean square, and is not charged. The driver (a flip-flop or a
+table behind the output) was not told apart.
+
+The same routes at grades 2 and 1 (`regrade.sh`), fitted the same way with the classes held
+(`timing_table.py branches`, `testdata/fpga/vivado/timing/branches.txt`); the model less
+Vivado, ps, mean / root mean square, with the classes' own charge a branch and with the
+fit:
+
+| grade | second branch | each later | one figure | 65 to 128 sinks, classes' | fit | more than 128, classes' | fit |
+|---|---|---|---|---|---|---|---|
+| 3 | 4.4 | 11.2 | 9.4 | -7.5 / 43.5 | +1.5 / 32.8 | **-45.4** / 47.8 | **-0.8** / 14.7 |
+| 2 | 5.0 | 11.9 | 10.0 | -7.5 / 45.9 | +0.6 / 34.6 | -40.4 / 43.0 | +3.4 / 15.3 |
+| 1 | 6.1 | 12.8 | 11.0 | -8.8 / 48.8 | -0.8 / 37.5 | -33.5 / 36.4 | +9.0 / 17.5 |
+
+Smaller signals barely move: two to four sinks -2.5 ps against 0.0 at grade 3 (the second
+branch cheaper than the line had it), five to sixteen -5.7 against -5.8, seventeen to 64
++1.9 against -0.7.
+
+*A long line, read since*: connections through `LVB`, a long vertical line, were first
+read as 0.22 ns over, as though Vivado charged nothing for it; that was a regression's
+collinearity, the branches not yet charged as Vivado has them. With them charged, the 384
+connections through it (nearly all in `sad` and `esad`) are 36 ps over on average, and its
+class is left as fitted.
+
+### What Vivado does with a wide signal (measured)
+
+- **Its placer does not replicate Reticle's.** Vivado's `place_design` and `route_design`
+  on this tree's netlists of seed 1 (`achieved.sh`'s `netlist` stage on `cons3`): in every
+  one of the seventeen designs its physical synthesis reports `No nets found for
+  high-fanout optimization`, *Very High Fanout* 0 cells and `BUFG insertion identified 0
+  candidate nets`. Its one replication is `analyser_fifo`'s memory write enable (45 sinks),
+  twice, a critical path's; eight of the memory's addresses it considered and left.
+- **Its own flow replicates little.** On its own synthesis of the corpus (`vnetlist`,
+  `place_design` alone) it replicated four of `analyser_fifo`'s memory addresses and
+  nothing else; its full flow's `phys_opt_design` (`own2`) one or two registers on a
+  critical path in each of seven designs (`esad`'s two ADC sample bits twice each; their
+  fanout not read).
+- **Its router builds a wide signal's tree otherwise.** Vivado's router on Reticle's
+  placements of seeds 1 to 3 (the lookup tables' pins free, `cons3`'s periods; the 618
+  signals of 65 sinks or more), against Reticle's routes of the same placements: 103 pips
+  a signal against 111; 34 wires of eleven branches or more against 62; fewer bounce
+  wires (`BYP_BOUNCE` 917 against 2,472, `FAN_BOUNCE` 1,357 against 2,151, `GFAN` 126
+  against 391). Vivado's timer puts a sink of such a signal at 0.956 ns on Vivado's routes
+  and 0.993 on Reticle's on average, but each signal's latest sink later, 1.468 ns
+  against 1.443.
+
+### What was changed
+
+Under the fitted model (`--delay-model legacy`, which the Husky's builds pass, charges no
+branch at all, as before):
+
+- **The branches leaving a wire load a connection through it with nothing for one,
+  `BRANCH_FIRST_PS` for the second and `BRANCH_MORE_PS` for each after**: 4 and 11 ps at
+  grade 3, 5 and 12 at grade 2, 6 and 13 at grade 1 (`xray::delay::branch_load`,
+  `route::BranchLoad`), in each routing pass's analysis, the refinement's and the routed
+  estimate, where each branch past the first was 8, 9 and 10. `BRANCH_PS` is kept as the
+  charge the classes were fitted beside, which the tests of `sample.txt` cost them with.
+- The passes' and the report's timing of a tree (`sink_delays`, `connection_delays`) are
+  one function, `tree_delays`.
+
+### Before and after, the estimate (measured)
+
+Per connection, each build's own routes timed by Vivado (ps, mean / root mean square;
+seeds 1 to 3 are those the figures were fitted on, though the routes are the new build's;
+seeds 4 to 6 are placements the fit never saw):
+
+| | 65 to 128 sinks | more than 128 | every connection |
+|---|---|---|---|
+| `lutfit`, seeds 1 to 3 | -9.2 / 55.7 | -54.8 / 56.8 | -5.6 / 39.6 |
+| `branchload`, seeds 1 to 3 | -0.6 / 39.0 | **-6.1 / 15.5** | -3.0 / 33.9 |
+| `lutfit`, seeds 4 to 6 | -6.7 / 52.3 | -56.8 / 58.3 | -4.4 / 38.1 |
+| `branchload`, seeds 4 to 6 | +4.0 / 40.0 | **-7.1 / 15.1** | -0.8 / 34.3 |
+
+The path by path of "The clock's margin, a table's figure and the `DSP48E1`'s chain" (the
+same probe applied to this tree, not committed; seeds 1 to 3, the paths Vivado's timer
+found):
+
+| | paths | estimate less worst | launch and capture | cells | connections | path less worst |
+|---|---|---|---|---|---|---|
+| `lutfit` | 57 | -0.038 | -0.000 | +0.002 | -0.020 | -0.019 |
+| `branchload` | 55 | **-0.031** | -0.007 | +0.002 | **-0.012** | **-0.014** |
+
+A connection of a signal of more than 64 sinks on those paths is 0.006 ns under Vivado's
+(12 of them), where it was 0.048 under (8).
+
+Over the 420 clocks and seeds of `achieved.sh` (twenty seeds), Reticle's routed estimate
+less Vivado's figure (ns):
+
+| build | mean | mean absolute | root mean square |
+|---|---|---|---|
+| `lutfit` | -0.034 | 0.044 | 0.066 |
+| `branchload` | **-0.025** | **0.038** | **0.060** |
+
+By clock, the mean error: `widemux` -0.048 to -0.002, `sad`'s ADC clock -0.017 to +0.016,
+`esad`'s -0.044 to -0.024, `crc32` -0.065 to -0.044, `fsm` -0.026 to -0.005, `counter64`
+-0.041 to -0.027, `sad`'s `clk_usb` -0.033 to -0.020, `regfile_alu` -0.154 to -0.141;
+worse, `lutram32` -0.036 to -0.054 and `analyser_fifo`'s read clock -0.041 to -0.048.
+
+### Which path (measured)
+
+Each endpoint both tools time, a clock at a time (Vivado's `-nworst 1` path to each, the
+clock's period less its slack, against Reticle's arrival in `endpoints.txt`), seeds 1 to
+3, 63 clocks and seeds:
+
+| | the clock's estimate less Vivado's | error at Vivado's worst endpoint | mean error over Vivado's 20 latest | same endpoint |
+|---|---|---|---|---|
+| `lutfit` | -0.032 | -0.037 | -0.022 | 55 of 63 |
+| `branchload` | -0.028 | -0.033 | -0.017 | 55 of 63 |
+
+**What "path less worst" measured is mostly the model's error, picked out.** The endpoint
+is the same in 55 of 63; where it is not, Vivado's worst is Reticle's third or fourth
+latest (the median rank 2.5). Of many endpoints near the latest, the one Vivado's timer
+puts last is the one Reticle's model is most under on: Vivado's twenty latest are 0.017
+ns under on average and its worst 0.033. No kind of endpoint is singled out; the error of
+each decides which comes last, and the gap shrinks as the model's error does.
+
+What is left, where it was read:
+
+- **A path between two clock region rows.** The 65 of the 420 clocks and seeds whose
+  worst path Vivado starts and ends in different rows (site `Y` over 50) are 0.046 ns
+  under, the others 0.021; Vivado's skew on them is -0.125 ns against -0.034. `bram_fifo`
+  and `mul18` are 40 of the 65 (their blocks' rows). Vivado's pessimism grows with the
+  uncommon part of a path's two clock paths, which the clock's margin, one figure, does
+  not see: **a reading, not measured against Reticle's own figure for each end.**
+- **`regfile_alu`** is under at Vivado's worst on every seed (-0.124 to -0.282 ns on seeds
+  1 to 3) and 0.04 over its twenty latest. Seed 1's worst (a `RAM32X1D` read over a
+  signal of 33 sinks, then six tables) has 0.032 ns of it in the connections and the
+  cells within a few picoseconds; it crosses from `SLICE_X81Y101` to `SLICE_X86Y98`, a
+  region row, with a skew of -0.079 ns. Not read further.
+
+### The router (measured)
+
+The placements are `lutfit`'s (329 of 340 `x.tcl` byte for byte, the other 11 differing
+only in a lookup table's `INIT` for its pins), so the seeds pair: twenty seeds, the ratio
+of the twenty-one clocks' geometric means of the medians, **0.9966 of `lutfit`, 0.9945 to
+1.0012 by a paired bootstrap over the seeds (95 %)**: inside the noise. `esad`'s `clk_usb`
+0.972, `carry_counter` 0.981, `sad`'s ADC clock 0.988, `widemux` 0.990; slower, `lutram32`
+1.010, `barrel` 1.009. **Kept for the estimate**; the router weighing wide signals as
+slower made no clock measurably faster.
+
+*Tried and not kept*: the router's searches charged the same load, a critical sink joining
+its tree at a wire paying what that wire's branches, its own counted, put on it, and the
+tree's delays carrying the loads above (a patch, not committed): 0.9987 of this build,
+0.9951 to 1.0018 paired (95 %). Its route stage was 1,541 s against 1,232, but its place
+stage, the same work, 4,223 against 3,095 on a machine busier with other builds: not read.
+
+### Runtime
+
+Summed over the 340 builds: place 3,095 s and route 1,232 (`lutfit` 3,023 and 1,239); the
+placement is the same work, so its 2 % is the machine, shared with other work.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
+applies; `sad`, `esad`, `widemux` and `regfile_alu` at seed 1 under it write the same
+bitstreams as c73761b1's. With this tree's release binary `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh` seed 4
+`e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `the_source_holds_the_branches_fit` (`tests/fpga_xray_delay.rs`): `branches.txt`'s two
+  figures at each grade, and the classes' own charge, are the source's.
+- `a_wide_signals_connection_is_charged_its_branches_load`: over `branches_sample.txt`
+  (one connection in 54), a connection of a signal of more than 64 sinks within 6 ps of
+  Vivado's on average at each grade (-2.4, +2.7 and +2.7 ps) where one figure a branch is
+  more than 10 under (-18.5, -13.4, -13.4); over every connection of 20 ps or more the
+  median within 3 % and the 5th and 95th percentiles inside 0.9 and 1.1.
+- `a_wires_branches_load_keeps_the_corpus_as_fast` (`tests/fpga_xray_achieved.rs`) holds
+  `branchload` against `lutfit`: between 0.6 % faster and 0.2 % slower, no clock more
+  than 2 % slower, twenty seeds of each.
+- `a_pass_charges_a_branch_to_the_sinks_past_it` (`route`) rewritten to the new charge: a
+  wire of three branches charges 4 + 11, of two 4, of one nothing;
+  `a_grade_reads_its_own_column` (`xray::delay`) holds each grade's two figures.
+
+**Mutations**, made by a script and put back, each failing a test: the load charged as one
+figure a branch (the second's, and the later ones'), branches counted at the node a pip
+enters, the two figures swapped, grade 3's at every grade, the later branches at the
+classes' 8 ps, and the refinement's check without the load. In the fixture: a seed of
+`branchload` lost, and the two builds swapped (1.0034). **Not
+held by a test**: the routed estimate's own call in `main.rs` (`connection_delays` given
+the load), which only the report shows.
+
+### Not done
+
+- **A path between clock region rows**, 0.025 ns more under than one within a row: the
+  clock's pessimism on the uncommon part of its two paths. Not modelled.
+- **A slice output's branches**, dearer than a wire's of as many: not charged.
+- **`LVB`**, 36 ps over on 384 connections: its class not refitted.
+- **A wide signal's tree as Vivado builds it**, fewer bounces and fewer wires of many
+  branches: the router's searches told of the load did not find it.
 - None of it has been on a part.

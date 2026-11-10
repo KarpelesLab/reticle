@@ -4750,10 +4750,10 @@ fn write_xc7_bitstream(
                         // what the rest of its way costs; and the first pass
                         // starts from the placement's estimate. See
                         // `route::Timing` and `docs/fpga-vivado-parity.md`.
-                        branch_ps: if fitted {
-                            reticle::fpga::xray::delay::branch_ps(grade)
+                        branch: if fitted {
+                            reticle::fpga::xray::delay::branch_load(grade)
                         } else {
-                            0
+                            reticle::fpga::route::BranchLoad::NONE
                         },
                         claim_inputs: if fitted {
                             reticle::fpga::xray::FITTED_CLAIM_INPUTS
@@ -4855,15 +4855,16 @@ fn write_xc7_bitstream(
     // What the route made of each domain's paths, by the same model the
     // placement estimate used: the routed counterpart of the line above.
     if let (Some(delays), Some(paths), None) = (&node_delay, &options.timing, &failure) {
-        // And each branch more than one on a connection's way, which the
-        // fitted model charges and the router's own analysis does not: see
-        // `xray::delay`.
-        let branch_ps = match delay_model {
-            reticle::fpga::xray::DelayModel::Vivado => reticle::fpga::xray::delay::branch_ps(grade),
-            reticle::fpga::xray::DelayModel::Legacy => 0,
+        // And the branches' load on a connection's way, which the fitted
+        // model charges and a sum of wires does not: see `xray::delay`.
+        let branch = match delay_model {
+            reticle::fpga::xray::DelayModel::Vivado => {
+                reticle::fpga::xray::delay::branch_load(grade)
+            }
+            reticle::fpga::xray::DelayModel::Legacy => reticle::fpga::route::BranchLoad::NONE,
         };
         let wire = reticle::fpga::route::connection_delays(
-            &netlist, &graph, &placement, &routing, delays, branch_ps,
+            &netlist, &graph, &placement, &routing, delays, branch,
         );
         let (_, longest) = reticle::fpga::place::path_criticality(&netlist, paths, &wire);
         let domains_text: Vec<String> = domains

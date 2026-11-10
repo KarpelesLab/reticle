@@ -47,6 +47,13 @@
 //! **Checked**, against Vivado's numbers, a connection at a time; nothing here
 //! has been on a part.
 //!
+//! *Since, the branches are charged otherwise* ([`branch_load`]): one figure a
+//! branch was a line through a curve, a wire's second branch costing less than
+//! it and each after about twice as much, and a connection of a signal of more
+//! than 128 sinks, whose wires have ten or twenty branches, came out 0.045 ns
+//! under Vivado's figure. The classes are as they were fitted, beside
+//! [`BRANCH_PS`].
+//!
 //! [`DelayModel::Legacy`] is the model before, prjxray's pip delays alone, and
 //! every build of the ChipWhisperer-Husky that was measured on a board was
 //! placed and routed with it.
@@ -71,7 +78,7 @@
 //! one, as those of the industrial `xc7a35tiftg256-1L` are its `-1`'s.
 
 /// A 7-series speed grade: which of the fitted model's figures a build times
-/// with ([`CLASSES`], [`BRANCH_PS`], [`OTHER_PER_MILLE`], and the cells' and the
+/// with ([`CLASSES`], [`branch_load`], [`OTHER_PER_MILLE`], and the cells' and the
 /// clock's in `xray::timing`). Grade 1 is the slowest. [`DelayModel::Legacy`]
 /// has one set of figures for every grade.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,14 +157,56 @@ impl DelayModel {
 
 /// What each branch more than one leaving a wire on a connection's way adds
 /// to it, in picoseconds, at grades 1, 2 and 3 ([`SpeedGrade::index`]): the
-/// fits' 10.1, 9.1 and 8.4.
+/// fits' 10.1, 9.1 and 8.4, **the charge [`CLASSES`] was fitted beside**, one
+/// figure a branch however many leave the wire.
+///
+/// The model no longer charges it ([`branch_load`]): the same fit's error, by
+/// how many branches leave a wire, is a curve and not a line, and its line
+/// put the connections of a signal of more than 128 sinks 0.045 ns under
+/// Vivado's figure (`docs/fpga-vivado-parity.md`, "A wide signal's
+/// connections"). It is kept for the classes, whose fit it was part of.
 pub const BRANCH_PS: [u32; 3] = [10, 9, 8];
+
+/// What the second branch leaving a wire on a connection's way adds to it, in
+/// picoseconds, at grades 1, 2 and 3 ([`branch_load`]): the fits' 6.1, 5.0
+/// and 4.4.
+pub const BRANCH_FIRST_PS: [u32; 3] = [6, 5, 4];
+
+/// What each branch past the second leaving a wire on a connection's way adds
+/// to it, in picoseconds, at grades 1, 2 and 3 ([`branch_load`]): the fits'
+/// 12.8, 11.9 and 11.2.
+pub const BRANCH_MORE_PS: [u32; 3] = [13, 12, 11];
+
+/// **What the branches leaving a wire load a connection through it with** at
+/// `grade`: nothing for one, [`BRANCH_FIRST_PS`] for the second and
+/// [`BRANCH_MORE_PS`] for each after.
+///
+/// Fitted with [`CLASSES`] held, to Vivado's interconnect delay of 77,420
+/// connections of Reticle's own routes of the QoR corpus (`achieved.sh`'s
+/// seventeen designs, seeds 1 to 3), timed again at each grade on the same
+/// routes. A figure for each count of branches fitted on its own is 5, 13, 26,
+/// 36, 49, 60, 73, 83 and 95 ps at grade 3 for two to ten: twice the line's
+/// slope from the third on, and under it for the second. On a signal of more
+/// than 128 sinks a connection is 0.001 ns under Vivado's at grade 3 where the
+/// classes' own 8.4 ps a branch put it 0.045 under, and from 65 to 128 sinks
+/// 0.002 over where it was 0.008 under.
+/// **Checked**, against Vivado's numbers, a connection at a time
+/// (`testdata/fpga/vivado/timing/branches.txt`); nothing here has been on a
+/// part.
+#[must_use]
+pub fn branch_load(grade: SpeedGrade) -> crate::fpga::route::BranchLoad {
+    crate::fpga::route::BranchLoad {
+        first: BRANCH_FIRST_PS[grade.index()],
+        more: BRANCH_MORE_PS[grade.index()],
+    }
+}
 
 /// What a wire of no class in [`CLASSES`] costs, in thousandths of prjxray's
 /// delay for the pip that enters it, at grades 1, 2 and 3.
 pub const OTHER_PER_MILLE: [u32; 3] = [939, 726, 631];
 
-/// [`BRANCH_PS`] at `grade`.
+/// [`BRANCH_PS`] at `grade`: the classes' fit's charge a branch, not the
+/// model's ([`branch_load`]).
 #[must_use]
 pub fn branch_ps(grade: SpeedGrade) -> u32 {
     BRANCH_PS[grade.index()]
@@ -567,8 +616,10 @@ mod tests {
     /// without the dash; `1L`, `4` and nothing are none. Grade 1 is the
     /// slowest of every class of 20 ps or more and grade 3 the fastest, so a
     /// table whose columns were put in the wrong order would time a grade-1
-    /// part as a grade-3 one, and fail here. Would catch the columns swapped, `2L` refused, or a grade
-    /// looked up in another's column; would not catch a figure itself wrong,
+    /// part as a grade-3 one, and fail here. The branches' load reads its
+    /// grade's figures too. Would catch the columns swapped, `2L` refused, or a grade
+    /// looked up in another's column, or [`branch_load`] given another grade's
+    /// figures or its two swapped; would not catch a figure itself wrong,
     /// which `tests/fpga_xray_delay.rs` holds to Vivado's.
     #[test]
     fn a_grade_reads_its_own_column() {
@@ -601,6 +652,18 @@ mod tests {
         );
         assert_eq!(branch_ps(SpeedGrade::One), 10);
         assert_eq!(branch_ps(SpeedGrade::Three), 8);
+        for table in [BRANCH_FIRST_PS, BRANCH_MORE_PS] {
+            assert!(table[0] > table[1] && table[1] > table[2]);
+        }
+        let load = |grade| branch_load(grade);
+        assert_eq!(
+            [
+                load(SpeedGrade::One).charge(4),
+                load(SpeedGrade::Two).charge(4),
+                load(SpeedGrade::Three).charge(4)
+            ],
+            [6 + 2 * 13, 5 + 2 * 12, 4 + 2 * 11]
+        );
     }
 
     /// **A wire of no class costs a share of prjxray's figure, and nothing when

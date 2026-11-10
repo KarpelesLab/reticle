@@ -1,0 +1,26 @@
+# Vivado 2026.1's interconnect delays of Reticle's routes at xc7a100tftg256-3,
+# -2 and -1, against the classes' own figures: what the branches leaving a
+# wire add, nothing for one, `first` for the second and `more` for each after;
+# `linear` one figure a branch, fitted to the same connections, and
+# `classes` the one the classes were fitted beside. Then the model's error
+# (model less Vivado, ps, mean and root mean square) by the signal's fanout,
+# with the classes' charge and with the fit. tools/vivado-parity/timing_table.py
+# branches.
+grade 3 connections 77420 first 4.4 more 11.2 linear 9.4 classes 8.4
+error 3 fanout 1-4 n 30944 classes +0.0 24.7 fit -2.5 25.1
+error 3 fanout 5-16 n 17497 classes -5.8 25.3 fit -5.7 25.3
+error 3 fanout 17-64 n 17656 classes -0.7 28.4 fit +1.9 25.5
+error 3 fanout 65-128 n 9775 classes -7.5 43.5 fit +1.5 32.8
+error 3 fanout 129- n 1548 classes -45.4 47.8 fit -0.8 14.7
+grade 2 connections 77420 first 5.0 more 11.9 linear 10.0 classes 9.1
+error 2 fanout 1-4 n 30944 classes -0.2 26.7 fit -3.0 27.2
+error 2 fanout 5-16 n 17497 classes -5.9 26.6 fit -6.1 26.8
+error 2 fanout 17-64 n 17656 classes +0.2 29.6 fit +2.2 26.9
+error 2 fanout 65-128 n 9775 classes -7.5 45.9 fit +0.6 34.6
+error 2 fanout 129- n 1548 classes -40.4 43.0 fit +3.4 15.3
+grade 1 connections 77420 first 6.1 more 12.8 linear 11.0 classes 10.1
+error 1 fanout 1-4 n 30944 classes -1.0 30.5 fit -3.6 30.9
+error 1 fanout 5-16 n 17497 classes -6.3 28.5 fit -6.4 28.7
+error 1 fanout 17-64 n 17656 classes +0.8 30.9 fit +2.8 28.7
+error 1 fanout 65-128 n 9775 classes -8.8 48.8 fit -0.8 37.5
+error 1 fanout 129- n 1548 classes -33.5 36.4 fit +9.0 17.5
