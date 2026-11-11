@@ -1143,7 +1143,7 @@ fn derived_period(
         };
         param(&name, 1.0)?
     };
-    (mult > 0.0).then(|| input * divclk * divide / mult)
+    (mult > 0.0).then_some(input * divclk * divide / mult)
 }
 
 /// A clock signal's name and period through the global buffers that choose

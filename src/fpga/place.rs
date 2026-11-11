@@ -7457,10 +7457,7 @@ fn no_room(
             // What ran out is what this cell could have taken, so a cell
             // reachability confined counts its own sites and not the
             // part's. See `confine_to_reachable`.
-            let available = info[index]
-                .allowed
-                .as_ref()
-                .map_or_else(|| sites.len(), Vec::len);
+            let available = info[index].allowed.as_ref().map_or(sites.len(), Vec::len);
             if needed <= available || info[index].allowed.is_some() {
                 // Every free site this cell could have had, by the rule
                 // that refused it, most common first.
@@ -15468,8 +15465,8 @@ mod tests {
         for _ in 0..400 {
             // A placement of a random subset of the cells.
             let mut pre = Placement::new(n, graph.sites.len());
-            for instance in 0..n {
-                let sites = of_kind(&netlist.instances[instance].kind);
+            for (instance, inst) in netlist.instances.iter().enumerate() {
+                let sites = of_kind(&inst.kind);
                 let site = sites[rng.below(sites.len())];
                 if rng.below(4) != 0 && pre.instance_at(site).is_none() {
                     pre.place(instance, site);

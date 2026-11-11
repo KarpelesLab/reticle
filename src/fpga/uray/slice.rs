@@ -103,48 +103,6 @@ pub fn read_lut(layout: &[ConfigBit; 64], set: &impl Fn(ConfigBit) -> bool) -> u
         .fold(0u64, |acc, (i, _)| acc | (1 << i))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fpga::xray::Feature;
-
-    fn table(skip: &[u32]) -> TileTypeBits {
-        let mut features = Vec::new();
-        for i in 0..64u32 {
-            if skip.contains(&i) {
-                continue;
-            }
-            features.push(Feature {
-                name: format!("SLICE_X0Y0.A6LUT.INIT[{i}]"),
-                ones: vec![ConfigBit::new(8 + 3 - i % 4, 15 - i / 4)],
-                zeros: Vec::new(),
-            });
-        }
-        TileTypeBits {
-            features,
-            defaults: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn the_two_missing_bits_are_filled_in_from_the_grid() {
-        let layout = lut_init_bits(&table(&[31, 63]), 'A').unwrap();
-        assert_eq!(layout[63], ConfigBit::new(8, 0));
-        assert_eq!(layout[31], ConfigBit::new(8, 8));
-        assert_eq!(layout[0], ConfigBit::new(11, 15));
-        let set = |b: ConfigBit| b == layout[63] || b == layout[31];
-        assert_eq!(read_lut(&layout, &set), UNUSED_LUT_INIT);
-    }
-
-    #[test]
-    fn a_bit_off_the_grid_is_refused() {
-        let mut bits = table(&[31, 63]);
-        bits.features[5].ones = vec![ConfigBit::new(0, 0)];
-        assert!(lut_init_bits(&bits, 'A').is_err());
-        assert!(lut_init_bits(&table(&(1..64).collect::<Vec<_>>()), 'A').is_err());
-    }
-}
-
 /// Which control pins serve which flip-flops.
 ///
 /// A slice has two clocks, four clock enables and two set/resets for its
@@ -160,7 +118,7 @@ mod tests {
 /// resets of the other groups are the reading that follows, and have not
 /// been run.
 pub fn control_pins(letter: char, second: bool) -> (&'static str, &'static str, &'static str) {
-    let upper = matches!(letter, 'E' | 'F' | 'G' | 'H');
+    let upper = matches!(letter, 'E'..='H');
     let clock = if upper { "CLK2" } else { "CLK1" };
     let reset = if upper { "SRST2" } else { "SRST1" };
     let enable = match (upper, second) {
@@ -353,4 +311,46 @@ pub fn slice_model(
         }
     }
     Ok(model)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fpga::xray::Feature;
+
+    fn table(skip: &[u32]) -> TileTypeBits {
+        let mut features = Vec::new();
+        for i in 0..64u32 {
+            if skip.contains(&i) {
+                continue;
+            }
+            features.push(Feature {
+                name: format!("SLICE_X0Y0.A6LUT.INIT[{i}]"),
+                ones: vec![ConfigBit::new(8 + 3 - i % 4, 15 - i / 4)],
+                zeros: Vec::new(),
+            });
+        }
+        TileTypeBits {
+            features,
+            defaults: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_two_missing_bits_are_filled_in_from_the_grid() {
+        let layout = lut_init_bits(&table(&[31, 63]), 'A').unwrap();
+        assert_eq!(layout[63], ConfigBit::new(8, 0));
+        assert_eq!(layout[31], ConfigBit::new(8, 8));
+        assert_eq!(layout[0], ConfigBit::new(11, 15));
+        let set = |b: ConfigBit| b == layout[63] || b == layout[31];
+        assert_eq!(read_lut(&layout, &set), UNUSED_LUT_INIT);
+    }
+
+    #[test]
+    fn a_bit_off_the_grid_is_refused() {
+        let mut bits = table(&[31, 63]);
+        bits.features[5].ones = vec![ConfigBit::new(0, 0)];
+        assert!(lut_init_bits(&bits, 'A').is_err());
+        assert!(lut_init_bits(&table(&(1..64).collect::<Vec<_>>()), 'A').is_err());
+    }
 }

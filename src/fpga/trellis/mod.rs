@@ -1884,15 +1884,15 @@ impl Edge {
     #[must_use]
     pub fn of(col: u32, row: u32, width: u32, height: u32, side: char) -> Option<Edge> {
         if row == 0 {
-            return matches!(side, 'A' | 'B').then_some(Edge::Top);
+            return matches!(side, 'A'..='B').then_some(Edge::Top);
         }
         if row + 1 == height {
-            return matches!(side, 'A' | 'B').then_some(Edge::Bottom);
+            return matches!(side, 'A'..='B').then_some(Edge::Bottom);
         }
-        if col == 0 && matches!(side, 'A' | 'B' | 'C' | 'D') {
+        if col == 0 && matches!(side, 'A'..='D') {
             return Some(Edge::Left);
         }
-        if col + 1 == width && matches!(side, 'A' | 'B' | 'C' | 'D') {
+        if col + 1 == width && matches!(side, 'A'..='D') {
             return Some(Edge::Right);
         }
         None

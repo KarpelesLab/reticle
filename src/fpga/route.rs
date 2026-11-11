@@ -1457,8 +1457,7 @@ pub fn route(
             // A clean-up opens the negotiation again.
             (least, stalled) = (usize::MAX, 0);
         }
-        for node in 0..graph.nodes.len() {
-            let usage = &mut state.usage[node];
+        for usage in &mut state.usage[..graph.nodes.len()] {
             if usage.occupancy > 1 {
                 usage.history += options.history_factor;
                 usage.overused_for += 1;
