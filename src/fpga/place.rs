@@ -9660,7 +9660,10 @@ pub struct PinDelays {
     /// and its inputs' (a `DSP48E1` in a chain of sums without its own `P`
     /// register, whose `M` register launches at its `PCOUT`).
     pub launch: Vec<Option<f64>>,
-    /// An `End` input's own capture.
+    /// An `End` input's own capture; or a `Through` input's, which then ends
+    /// paths as well as passing them on ([`PlaceTiming::ends_at`]): a
+    /// distributed RAM's write address, which in a `SLICEM` is the write
+    /// table's own read address too.
     pub capture: Vec<Option<f64>>,
     /// A `Through` input's delay to each of its instance's `Through`
     /// outputs, the `j`th for the `j`th in the instance's pin order.
@@ -9696,8 +9699,26 @@ impl PlaceTiming {
             + self.skew.get(instance).copied().unwrap_or(0.0)
     }
 
-    /// How long before the clock `pin`, an `End` input of `instance`, must
-    /// settle.
+    /// Whether `pin`, an input, ends paths: an `End` one, or a `Through` one
+    /// with a capture of its own ([`PinDelays::capture`]).
+    ///
+    /// A distributed RAM's write address is both. Every shape but one reads
+    /// at it as well (`SPO`, a `RAM32M`'s `DOD`), since in a `SLICEM` the
+    /// write address is the `D` table's own inputs, and a pin was one or the
+    /// other: taken as the read address it was, no path ended at it, and
+    /// Vivado's timer put the worst path of 19 of the corpus's 420 clocks and
+    /// seeds there, 0.80 ns past the model's latest on one.
+    #[must_use]
+    pub fn ends_at(&self, pin: usize) -> bool {
+        match self.pins.get(pin) {
+            Some(PinTiming::End) => true,
+            Some(PinTiming::Through) => matches!(self.pin_delays.capture.get(pin), Some(Some(_))),
+            _ => false,
+        }
+    }
+
+    /// How long before the clock `pin`, an input of `instance` that ends
+    /// paths ([`PlaceTiming::ends_at`]), must settle.
     #[must_use]
     pub fn capture_at(&self, instance: usize, pin: usize) -> f64 {
         self.pin_delays
@@ -10248,7 +10269,7 @@ fn analyse_paths_against(
                 let arrival = &arrivals[timing.view_index(&views, index)];
                 for pin in &inst.pins {
                     if !netlist.pins[*pin].output
-                        && class(*pin) == PinTiming::End
+                        && timing.ends_at(*pin)
                         && timing.pin_in(index, *pin, domain)
                     {
                         let at = input_arrival(*pin, arrival) + timing.capture_at(index, *pin);
@@ -10282,7 +10303,7 @@ fn analyse_paths_against(
                     }
                     for pin in &inst.pins {
                         if !netlist.pins[*pin].output
-                            && class(*pin) == PinTiming::End
+                            && timing.ends_at(*pin)
                             && timing.pin_in(index, *pin, domain)
                         {
                             required[*pin] =
@@ -10482,7 +10503,6 @@ pub fn worst_path(
 ) -> Vec<PathStep> {
     let order = timing_order(netlist, timing);
     let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
-    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
     let here = |instance: usize| timing.touches(netlist, instance, domain);
     let ends =
         |index: usize| here(index) && !timing.untimed_to.get(index).copied().unwrap_or(false);
@@ -10500,7 +10520,7 @@ pub fn worst_path(
         let arrival = &arrivals[view];
         for pin in &inst.pins {
             if netlist.pins[*pin].output
-                || class(*pin) != PinTiming::End
+                || !timing.ends_at(*pin)
                 || !timing.pin_in(index, *pin, domain)
             {
                 continue;
@@ -10638,7 +10658,6 @@ pub fn endpoint_arrivals(
 ) -> Vec<(usize, usize, f64, f64)> {
     let order = timing_order(netlist, timing);
     let wire_of = |pin: usize| wire.get(pin).copied().unwrap_or(0.0);
-    let class = |pin: usize| timing.pins.get(pin).copied().unwrap_or(PinTiming::Ignored);
     let cycles_of = |index: usize| f64::from(timing.cycles.get(index).copied().unwrap_or(1).max(1));
     let mut out = Vec::new();
     for (domain, period) in timing.periods.iter().enumerate() {
@@ -10657,7 +10676,7 @@ pub fn endpoint_arrivals(
             let arrival = &arrivals[timing.view_index(&views, index)];
             for pin in &inst.pins {
                 if netlist.pins[*pin].output
-                    || class(*pin) != PinTiming::End
+                    || !timing.ends_at(*pin)
                     || !timing.pin_in(index, *pin, domain)
                 {
                     continue;
@@ -10733,7 +10752,7 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
                 }
                 for pin in &inst.pins {
                     if netlist.pins[*pin].output
-                        || class(*pin) != PinTiming::End
+                        || !timing.ends_at(*pin)
                         || !timing.pin_in(index, *pin, domain)
                     {
                         continue;
@@ -10765,7 +10784,7 @@ pub fn pad_paths(netlist: &Netlist, timing: &PlaceTiming, wire: &[f64]) -> Vec<P
             }
             for pin in &netlist.instances[pad].pins {
                 if netlist.pins[*pin].output
-                    || class(*pin) != PinTiming::End
+                    || !timing.ends_at(*pin)
                     || !timing.pin_in(pad, *pin, domain)
                 {
                     continue;
@@ -11612,6 +11631,56 @@ mod tests {
         assert_eq!(got.len(), 2, "{got:?}");
         assert_eq!((got[0].0, got[0].1, got[1].0), (2, true, 3), "{got:?}");
         assert!((got[0].2 - 2.5).abs() < 1e-9 && (got[1].2 - 4.55).abs() < 1e-9);
+    }
+
+    /// **A `Through` input with a setup of its own ends paths too, and still
+    /// passes them on** — a distributed RAM's write address, which its shape
+    /// reads at as well. The chain with 1.0, 0.5 and 2.0 ns connections, its
+    /// third cell clocked and its input given a setup: at 2.5 ns that input is
+    /// the latest endpoint (1.9 + 2.5 = 4.4 ns, four pins traced), the last
+    /// cell's 4.05 still timed through it, and the connection into it has the
+    /// endpoint's slack (5 - 2.5 - 1.9 = 0.6) rather than the path's through
+    /// it (0.95); at 0.1 the last cell's 4.05 is the latest again, the input an
+    /// endpoint at 2.0; with none it is no endpoint. Would catch a `Through`
+    /// pin's own setup ignored (one endpoint, 4.05), taken in place of its
+    /// passing paths on (the last cell's endpoint lost), the required times
+    /// set from one and not the least of the two (0.95), or every `Through`
+    /// input taken for an endpoint; would not catch a RAM's pin given the
+    /// setup wrongly, which `xray::timing`'s tests hold.
+    #[test]
+    fn a_through_input_with_its_own_setup_ends_paths_too() {
+        let (_, netlist, _, mut timing) = timed_chain();
+        let mut wire = vec![0.0; netlist.pins.len()];
+        for (signal, delay) in netlist.signals.iter().zip([1.0, 0.5, 2.0]) {
+            wire[signal.sinks[0]] = delay;
+        }
+        let input = netlist.signals[1].sinks[0];
+        let last = netlist.signals[2].sinks[0];
+        timing.domain[2] = PathDomain::Clock(0);
+        let ends = |timing: &PlaceTiming| -> Vec<(usize, f64)> {
+            endpoint_arrivals(&netlist, timing, &wire)
+                .into_iter()
+                .map(|(pin, _, at, _)| (pin, (at * 1000.0).round() / 1000.0))
+                .collect()
+        };
+        assert!(!timing.ends_at(input));
+        assert_eq!(ends(&timing), vec![(last, 4.05)], "no setup, no endpoint");
+        timing.pin_delays.capture = vec![None; netlist.pins.len()];
+        timing.pin_delays.capture[input] = Some(2.5);
+        assert!(timing.ends_at(input));
+        assert_eq!(ends(&timing), vec![(input, 4.4), (last, 4.05)]);
+        let (_, longest) = path_criticality(&netlist, &timing, &wire);
+        assert_eq!(longest, vec![4400]);
+        let path = worst_path(&netlist, &timing, &wire, 0);
+        assert_eq!(path.len(), 4, "{path:?}");
+        assert_eq!(path.last().map(|s| s.pin), Some(input));
+        let (_, slack, _) = path_slack(&netlist, &timing, &wire);
+        assert!((slack[input] - 0.6).abs() < 1e-9, "{}", slack[input]);
+        timing.pin_delays.capture[input] = Some(0.1);
+        assert_eq!(ends(&timing), vec![(input, 2.0), (last, 4.05)]);
+        let (_, slack, _) = path_slack(&netlist, &timing, &wire);
+        assert!((slack[input] - 0.95).abs() < 1e-9, "{}", slack[input]);
+        assert_eq!(worst_path(&netlist, &timing, &wire, 0).len(), 6);
     }
 
     /// **Late paths are the late endpoints' own.** The chain of 5 ns, in

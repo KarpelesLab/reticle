@@ -10120,6 +10120,8 @@ address**: every shape of distributed RAM but one reads at its write address too
 `place_timing` takes the pin as a read address (`Through`), and a pin is one or the other
 (`endpoints.txt` of `esad` has the write enable's and the data's, and no `waddr`). Those
 clocks are 0.105 and 0.130 ns under on average, -0.80 at worst. Not changed here.
+*Since*: timed, an endpoint and a read address both ("A distributed RAM's write
+address, timed").
 
 ### The clock (measured)
 
@@ -10195,12 +10197,204 @@ chain's `Through` output with a launch of its own traced back in another region'
 ### Not done
 
 - **A distributed RAM's write address** is no endpoint: 19 clocks and seeds under by
-  0.13 ns on average, `esad`'s `clk_usb` the most.
+  0.13 ns on average, `esad`'s `clk_usb` the most. *Since*: timed; the same 19 are
+  0.013 over ("A distributed RAM's write address, timed").
 - **`regfile_alu`'s connections**: a RAM's read data and address under Vivado's by 30 to
-  45 ps each on its paths; not read further.
+  45 ps each on its paths; not read further. *Since*: read, and mostly not the RAM's:
+  `regfile_alu`'s connections of five wires or more are 14 to 31 ps under whatever
+  drives them ("A distributed RAM's write address, timed").
 - **What one region keeps, by column**: 24 ps in the launch's tile column on its side of
   the `HCLK` row and 41 elsewhere, charged as their mean. Telling them apart is a figure
   that depends on both ends below a region, which the views do not reach.
 - **The anneal** sees a path between regions only through its connections'
   criticality; charging the connection itself did not make the clock faster.
+- None of it has been on a part.
+
+## A distributed RAM's write address, timed
+
+**Asked: "The clock's pessimism between regions" left a distributed RAM's write address
+no endpoint, though Vivado's worst path ends at one on 19 of the 420 clocks and seeds
+(`sad`'s and `esad`'s `clk_usb`, `lutram32`), 0.13 ns under on average and `esad`'s
+`clk_usb` seed 5 0.80; and `regfile_alu` 0.13 ns under, mostly in its connections, a
+RAM's read data and read address the worst of them. Measure what Vivado's timer charges
+a write address, a write enable and a RAM's data, add the write address as an endpoint
+the placer's rounds, the router's passes and the routed estimate share, keep the write
+address from reaching the read port, and read `regfile_alu`'s connections.** Vivado
+2026.1 at `xc7a100tftg256-3`, `-2` and `-1`, run on 2026-11-11 on d59ad280.
+**Everything here is Vivado's timer of Reticle's placements and routes; nothing has been
+on a part.**
+
+### What Vivado's timer charges a RAM's inputs (measured)
+
+`regrade.sh` on `regions`' builds of seeds 1, 2, 3 and 5 of `lutram32`, `sad`, `esad` and
+`regfile_alu` (`RAM32M`, `RAM32X1D`) at the three grades, and on a probe of every wider
+shape written for Vivado, by name (`RAM64X1D`, `RAM64X1S`, `RAM64M`, `RAM128X1S`,
+`RAM256X1S`; a `RAM128X1D` is refused, "not written for Vivado yet"), seeds 1 to 3 at the
+three grades and 4 to 9 at grade 3; `timing_dump.tcl`'s setup arcs of every leaf, each
+set beside the site pin its net reaches it by and the site pin its net leaves its driver
+from (scripts and probe not committed). A write address's setup from a `<L>Q` (ns; 3,216
+write-address arcs a grade in the corpus, constants left out):
+
+| pin | grade 3 | grade 2 | grade 1 |
+|---|---|---|---|
+| `A1` (`WADR0`) | -0.066 | -0.062 | -0.060 |
+| `A2` | -0.071 | -0.065 | -0.058 |
+| `A3` | 0.013 | 0.017 | 0.021 |
+| `A4` | 0.058 | 0.067 | 0.082 |
+| `A5` | 0.087 | 0.098 | 0.119 |
+| `A6` (the probe) | 0.174 | 0.195 | 0.236 |
+| `WA7` on `CX` (the probe) | 0.368 | *0.411* | *0.491* |
+| `WA8` on `BX` (the probe) | 0.382 | *0.419* | *0.505* |
+
+- **The figure is the pin's, to the picosecond**: every leaf charges `WADR<k>` the same,
+  a `RAM32X1D`'s `SP` and `DP`, a `RAM32M`'s `RAMA` to `RAMC_D1` and its port `D`'s
+  `RAMS32` (whose `ADR<k>` is its write address), a `RAMD64E`, a `RAMS64E`. All of them
+  read the write address off the `D` table's inputs: Vivado's sink for `DP/WADR0` is the
+  `D1` site pin, the one Reticle's connection to `waddr0` ends at, at the same
+  interconnect delay.
+- **And the driver's**: from a `<L>5FF` every pin is 0.110 to 0.114 ns more at grade 3,
+  0.13 at 2, 0.17 at 1, which is `FIVE_OUT` and which the `5FF`'s launch carries. `WA7` and
+  `WA8` were reached from a `<L>Q` only at grade 3 (seeds 4 to 9); *at grades 2 and 1 the
+  figures are the `5FF`'s less `five_out`, derived and not measured from a `<L>Q`*.
+- **The write enable** is 0.384, 0.435 and 0.533 on every leaf, the model's figures.
+- **The data** by the site pin it enters, from a `<L>Q` at grade 3: `AI` 0.121, `BI` 0.140,
+  `CI` 0.133, `DI` 0.016 or 0.183 (not told apart), `AX` 0.190, `BX` 0.169, `CX` 0.186, `DX`
+  0.154, where the model has one figure, 0.169. Not changed: none of the 420 worst paths
+  ends at a RAM's data.
+
+The model had one address figure, 0.07 at grade 3, and charged it only to a `RAM64X1D`'s
+write address, the one shape it did not take for a read address.
+
+### What was changed
+
+Under the fitted model (`--delay-model legacy`, which the Husky's builds pass, sets none
+of it):
+
+- **An input can pass paths on and end them**: a `Through` input with a setup of its own
+  (`PinDelays::capture`) ends paths too (`PlaceTiming::ends_at`), in every analysis the
+  placer, the router and the report share (`place::analyse_paths_against`, `worst_path`,
+  `late_paths`, `endpoint_arrivals`, `pad_paths`); its required time is the lesser of its
+  own and what the outputs it reaches leave it.
+- **A distributed RAM's write address is such an input**, at its bit's setup with the
+  clock's margin (`LUTRAM_ADDRESS`, `Figures::lutram_setup_pins`, `lutram_write_bit`):
+  `waddr<n>` of every shape, and a `RAM32M`'s or `RAM64M`'s port `D` address. A
+  `RAM64X1D`'s is a read address too now, reaching its `SPO`. The address reaches only the
+  output that reads at it, `SPO` or port `D`'s (`lutram_reaches`), as before: the path
+  from a `RAM32X1D`'s write address to its `DPO`, which Vivado's timer does not have,
+  stays out.
+- **An `<L>MUX` output's cost** (`place_timing_on_sites`) is charged to such a setup as to
+  any other.
+
+### Before and after, the estimate (measured)
+
+Over the 420 clocks and seeds of `achieved.sh` (twenty seeds), Reticle's routed estimate
+less Vivado's figure (ns, mean / mean absolute / root mean square):
+
+| | `regions` | `lutwa` |
+|---|---|---|
+| all 420 | -0.017 / 0.037 / 0.072 | **-0.011 / 0.031 / 0.050** |
+| the 19 whose worst path ended at a write address | -0.130 / 0.135 / 0.239 | **+0.013 / 0.020 / 0.026** |
+| the four RAM clocks (80) | -0.058 / 0.077 / 0.142 | **-0.026 / 0.046 / 0.080** |
+| the other 340 | -0.008 / 0.028 / 0.040 | -0.007 / 0.028 / 0.040 |
+| between regions | 25: -0.017 / 0.063 / 0.166 | 28: +0.021 / 0.028 / 0.033 |
+
+By clock: `esad`'s `clk_usb` -0.075 to +0.014 (its seed 5, -0.802, +0.011), `sad`'s
+`clk_usb` -0.012 to +0.009, `lutram32` -0.013 to -0.006, `regfile_alu` -0.133 to -0.122.
+**No worst path ends at a write address any more**, of 19. The placements of the
+seventeen clocks of designs without a distributed RAM are `regions`' seed for seed (each
+clock's figure the same); the four RAM designs' are not, so these are two sets of their
+placements as well as two models.
+
+Each write address the model now times, its routed arrival less Vivado's latest path to
+that pin (any leaf's), `lutwa`'s seeds 1 to 3 at grade 3 (ns, mean / mean absolute / root
+mean square): `sad` 54 endpoints, -0.000 / 0.005 / 0.007; `esad` 54, -0.009 / 0.016 /
+0.019; `lutram32` 105, +0.001 / 0.019 / 0.032; `regfile_alu` 210, -0.041 / 0.052 / 0.065,
+its write enables the same (-0.042), which is its connections (below). The write enables
+of `regions`' builds, as a control: +0.000 / 0.024 / 0.032 over 132.
+
+### `regfile_alu`'s connections, read (measured)
+
+Every connection of `regions`' builds of the four RAM designs (seeds 1, 2, 3 and 5, grade
+3), Reticle's routed estimate (`endpoints.txt`) beside Vivado's interconnect delay to the
+same site pin: 45,958 connections. Reticle's less Vivado's, ps, a term per design: `sad`
++0.8, `esad` +0.6, `lutram32` +0.4, **`regfile_alu` -16.1**; fitted again with a term for
+each wire class a connection crosses, counted, -17.9. **No class of wire explains it.**
+
+- **Not the RAM's, mostly.** In `regfile_alu`, by what drives the connection: a RAM's
+  lower half through its `<L>MUX` -29.1 (root mean square 47, 2,067 connections), its
+  upper half -9.1 (1,813), a lookup table -10.2 (3,128), a flip-flop's `Q` -17.8 (2,028).
+  A RAM's outputs in `sad` and `esad` are +7 to +18 (32 each).
+- **Its long connections**: three or four wires -1 to -3, five -14, six -22, seven -24,
+  eight or more -28; `sad`'s and `esad`'s -1 to -8 at the same lengths. Not by the sink's
+  pin (`A1` to `A6` -14 to -17), not a clock region row crossed, not the die's area
+  (`lutram32`'s connections at the same columns +0.4).
+
+So `regfile_alu`'s long connections are slower to Vivado's timer than the model has them,
+and a RAM's lower half some 19 ps more again. What makes them slower (a signal's load
+past its branches, say) was not read. Not changed.
+
+### The clock (measured)
+
+The placements differ, so unpaired: twenty seeds, the ratio of the twenty-one clocks'
+geometric means of the medians, **1.0005 of `regions`, 0.9924 to 1.0064 by a bootstrap
+over the seeds (95 %)**, inside the spread. By design: `esad` 0.965 (0.924 to 0.998),
+its `clk_usb` 0.926 (its slowest seed 2.62 ns to 1.99); `sad` 1.035 (0.994 to 1.062),
+its ADC clock 1.044 and `clk_usb` 1.026; `lutram32` 1.017 (0.973 to 1.049);
+`regfile_alu` 0.997 (0.974 to 1.018); the other seventeen clocks 1.000, their
+placements unchanged. **Kept for the estimate**; the corpus is no faster.
+
+### Runtime
+
+Summed over the 340 builds: place 3,107 s and route 1,177 (`regions` 3,297 and 1,263);
+`achieved.sh` 1,210 s of wall clock (1,301). The builds of designs without a RAM, the
+same work, placed in 1,540 s against 1,650: the machine, shared with other work and
+the Husky's builds below, not the change.
+
+### The Husky's bitstreams
+
+`build.sh` and `build_plus.sh` pass `--delay-model legacy`, under which nothing here
+applies; `lutram32`, `regfile_alu`, `sad`, `esad`, `widemux` and `bram_fifo` at seed 1
+under it write the same bitstreams as d59ad280's. With this tree's release binary
+`build.sh` writes `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and
+`build_plus.sh` seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `a_rams_write_address_ends_paths_at_its_own_bits_setup` (`xray::timing`): a
+  `RAM32X1D`'s, a `RAM32M`'s port `D`, a `RAM256X1S`'s `A6`, `WA7` and `WA8` and a
+  `RAM64X1D`'s write addresses each `Through`, ending paths at its bit's figure and the
+  margin, at grade 3 and 1; no read address an endpoint; the write enable and data as
+  they were; the write address's own endpoint and the path through `SPO` both timed; the
+  legacy model as it was.
+- `a_through_input_with_its_own_setup_ends_paths_too` (`place`): a chain's middle input
+  given a setup later and earlier than its path on: each endpoint's arrival, the
+  longest path, the path traced and the connection's slack the lesser of the two.
+- `a_cell_reached_by_a_slices_mux_output_pays_it` holds an `<L>MUX` output's cost on such
+  a setup; `a_rams_address_reaches_its_own_port_and_a_select_is_its_own_arc` still holds
+  a write address to `SPO` alone.
+- `a_rams_write_address_timed_keeps_the_corpus_as_fast` (`tests/fpga_xray_achieved.rs`)
+  holds `lutwa` against `regions`: between 0.4 % faster and 0.5 % slower, no clock more
+  than 5 % slower, twenty seeds of each.
+
+**Mutations**, made by a script and put back, each failing a test: a `Through` input's
+setup ignored, every `Through` input an endpoint, the required time the path's on alone,
+a `RAM32M`'s port `A` address taken for its write address, every bit at bit 0's figure,
+the margin left off, a write address given no setup, a `RAM64X1D`'s write address an
+`End` pin under the fitted model, and a `Through` pin under the legacy one, grade 3 given
+grade 1's figures, the `<L>MUX` output's cost left off the setup, and a write address
+reaching every output; in the fixture, the builds swapped (`esad`'s `clk_usb` 1.08
+slower), a seed lost, and `lutwa` 1 % slower. **Not held by a test**: the figures
+themselves, which only Vivado's timer asks, and the estimate's error, which the fixture
+does not keep.
+
+### Not done
+
+- **A RAM's data by the pin it enters** (0.121 to 0.190 ns at grade 3 against the one
+  0.169): not charged.
+- **`WA7` and `WA8` at grades 2 and 1** are derived, and a `RAM128X1D`'s are not
+  measured, since it is not written for Vivado.
+- **`regfile_alu`'s long connections**, 14 to 31 ps under whatever drives them: not read.
+- **A pad's input budget** (`place::confine_to_input_budget`) still counts only `End`
+  pins as the register a pad must reach: a write address fed straight from a pad with an
+  input delay is not confined.
 - None of it has been on a part.

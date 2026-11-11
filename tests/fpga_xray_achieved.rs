@@ -1126,3 +1126,30 @@ fn the_clocks_pessimism_between_regions_keeps_the_corpus_as_fast() {
         "`regions` {ratio:.4} of `branchload`"
     );
 }
+
+/// **With a distributed RAM's write address timed as the endpoint it is, the
+/// corpus is no slower** (`docs/fpga-vivado-parity.md`, "A distributed RAM's
+/// write address, timed"). `lutwa` is `regions` with every write address an
+/// endpoint at its bit's setup as well as a read address, in the placement's
+/// timing rounds, the router's passes and the routed estimate: the same
+/// placements for the seventeen clocks of designs without one, other
+/// placements for `sad`, `esad`, `lutram32` and `regfile_alu`; twenty seeds,
+/// 1.0005 of `regions`, which a bootstrap over the seeds (unpaired) puts at
+/// 0.9924 to 1.0064 (95 %), `esad`'s `clk_usb` 0.926 and the slowest clock
+/// `sad`'s ADC clock at 1.044. The change is for the estimate; this holds the
+/// corpus between 0.4 % faster and 0.5 % slower, no clock more than 5 %
+/// slower, and twenty seeds of each. Would catch a regeneration that lost the
+/// measurement, lost a seed, or swapped the builds (`esad`'s `clk_usb` 1.08
+/// slower); would not catch the estimate's error, which the fixture does not
+/// hold.
+#[test]
+fn a_rams_write_address_timed_keeps_the_corpus_as_fast() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let ratio = twenty_seeds(&table, "regions", "lutwa", 1.05);
+    assert!(
+        (0.996..=1.005).contains(&ratio),
+        "`lutwa` {ratio:.4} of `regions`"
+    );
+}

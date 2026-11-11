@@ -248,8 +248,10 @@ pub(crate) struct Figures {
     /// A distributed RAM's data input's setup, and its write enable's and
     /// write address's when [`Figures::lutram_setup_pins`] has none.
     pub lutram_setup: f64,
-    /// A distributed RAM's write enable's and write address's setups.
-    pub lutram_setup_pins: Option<(f64, f64)>,
+    /// A distributed RAM's write enable's setup, and its write address's by
+    /// the bit: the write table's inputs `A1` to `A6`, then `WA7` and `WA8`
+    /// ([`LUTRAM_ADDRESS`]).
+    pub lutram_setup_pins: Option<(f64, [f64; 8])>,
     /// [`BRAM_LAUNCH`].
     pub bram_launch: f64,
     /// [`BRAM_SETUP`]: an address's, and every input's without
@@ -451,7 +453,7 @@ pub(crate) const VIVADO: Figures = Figures {
     srl_setup: 0.057,
     srl_setup_enable: Some(0.368),
     lutram_setup: 0.169,
-    lutram_setup_pins: Some((0.384, 0.07)),
+    lutram_setup_pins: Some((0.384, LUTRAM_ADDRESS[2])),
     bram_launch: 1.846,
     bram_setup: 0.442,
     bram_setup_pins: Some((0.197, 0.348, 0.437)),
@@ -529,7 +531,7 @@ pub(crate) const VIVADO_2: Figures = Figures {
     srl_setup: 0.054,
     srl_setup_enable: Some(0.418),
     lutram_setup: 0.189,
-    lutram_setup_pins: Some((0.435, 0.088)),
+    lutram_setup_pins: Some((0.435, LUTRAM_ADDRESS[1])),
     bram_launch: 2.125,
     bram_setup: 0.490,
     bram_setup_pins: Some((0.214, 0.387, 0.476)),
@@ -593,7 +595,7 @@ pub(crate) const VIVADO_1: Figures = Figures {
     srl_setup: 0.052,
     srl_setup_enable: Some(0.517),
     lutram_setup: 0.228,
-    lutram_setup_pins: Some((0.533, 0.119)),
+    lutram_setup_pins: Some((0.533, LUTRAM_ADDRESS[0])),
     bram_launch: 2.454,
     bram_setup: 0.566,
     bram_setup_pins: Some((0.241, 0.443, 0.532)),
@@ -978,6 +980,19 @@ fn lutram_reaches(netlist: &Netlist, instance: usize, out: &mut [u8]) {
         }
         out[*p] = mask;
     }
+}
+
+/// Which bit of a distributed RAM's write address `role` is, as
+/// [`Figures::lutram_setup_pins`] counts them: `waddr<n>` of every shape (a
+/// wide one's seventh and eighth are `WA7` and `WA8`), and a `RAM32M`'s or
+/// `RAM64M`'s port `D`, which is written at its own address. `None` for
+/// anything else, a read address included.
+fn lutram_write_bit(kind: &str, role: &str) -> Option<usize> {
+    let bit = role.strip_prefix("waddr").or_else(|| {
+        role.strip_prefix("addrd")
+            .filter(|_| matches!(kind, "lutram_m32" | "lutram_m64"))
+    })?;
+    bit.parse::<usize>().ok().filter(|b| *b < 8)
 }
 
 /// Whether `role` is a clock pin, which no path ends at.
@@ -1461,8 +1476,12 @@ pub fn place_timing(
             kind if kind == "lutram" || kind.starts_with("lutram_") => {
                 // The read is combinational, the write is clocked. A read
                 // address is any address of a shape that reads at it: every
-                // shape but a `RAM64X1D` with only `DPO` read reads at its
-                // write address too (`SPO`, `DOD`).
+                // shape reads at its write address too (`SPO`, `DOD`), but
+                // the legacy model's one `RAM64X1D`, which has only `DPO`.
+                // Under the fitted model a write address is a read address
+                // and an endpoint both: its own setup in `own_pin_delays`
+                // makes it one (`PlaceTiming::ends_at`), and the outputs it
+                // reaches are `SPO`'s alone (`lutram_reaches`).
                 cell[index] = f.lut;
                 capture[index] = f.lutram_setup;
                 for pin in &inst.pins {
@@ -1472,7 +1491,8 @@ pub fn place_timing(
                     } else if netlist.pins[*pin].output
                         || role.starts_with("raddr")
                         || role.starts_with("addr")
-                        || (role.starts_with("waddr") && kind != "lutram")
+                        || (role.starts_with("waddr")
+                            && (kind != "lutram" || model == DelayModel::Vivado))
                     {
                         PinTiming::Through
                     } else {
@@ -1807,9 +1827,15 @@ fn own_pin_delays(
     own.through = vec![None; netlist.pins.len()];
     for inst in &netlist.instances {
         let kind = inst.kind.as_str();
+        let lutram = kind == "lutram" || kind.starts_with("lutram_");
         for pin in &inst.pins {
             let role = netlist.pins[*pin].role.as_str();
-            if pins[*pin] != PinTiming::End {
+            // A distributed RAM's write address ends paths though it is a read
+            // address too, which is what a setup of its own on a `Through`
+            // input says (`PlaceTiming::ends_at`).
+            let write =
+                lutram && !netlist.pins[*pin].output && lutram_write_bit(kind, role).is_some();
+            if pins[*pin] != PinTiming::End && !(write && pins[*pin] == PinTiming::Through) {
                 continue;
             }
             let setup = match kind {
@@ -1819,17 +1845,13 @@ fn own_pin_delays(
                     _ => None,
                 }),
                 "srl16" | "srl32" => f.srl_setup_enable.filter(|_| role == "ce"),
-                k if k == "lutram" || k.starts_with("lutram_") => {
-                    f.lutram_setup_pins.and_then(|(enable, address)| {
-                        if role == "we" {
-                            Some(enable)
-                        } else if role.starts_with("waddr") || role.starts_with("addr") {
-                            Some(address)
-                        } else {
-                            None
-                        }
-                    })
-                }
+                _ if lutram => f.lutram_setup_pins.and_then(|(enable, address)| {
+                    if role == "we" {
+                        Some(enable)
+                    } else {
+                        lutram_write_bit(kind, role).map(|bit| address[bit])
+                    }
+                }),
                 "bram" | "bram36" | "fifo18" | "fifo36" => {
                     f.bram_setup_pins.and_then(|(data, enable, write)| {
                         let role = role.split_once('_').map_or(role, |(_, r)| r);
@@ -2301,6 +2323,37 @@ const CLOCK_MARGIN: [f64; 3] = [0.068, 0.071, 0.070];
 /// within 4 ps of them (`docs/fpga-vivado-parity.md`, "The clock's pessimism
 /// between regions").
 const REGION_MARGIN: [(f64, f64); 3] = [(0.078, 0.085), (0.065, 0.072), (0.060, 0.066)];
+/// A distributed RAM's write address's setup at grades 1, 2 and 3, by bit:
+/// the write table's inputs `A1` to `A6` (`WADR0` to `WADR5` of every leaf,
+/// on the `D` table's pins), then `WA7` on `CX` and `WA8` on `BX`, from a
+/// `<L>Q`, ns.
+///
+/// **Measured**: Vivado 2026.1's setup arcs on Reticle's routes of seeds 1,
+/// 2, 3 and 5 of `lutram32`, `sad`, `esad` and `regfile_alu` (`RAM32M`,
+/// `RAM32X1D`; 3,216 write-address arcs a grade, constants left out) and of
+/// seeds 1 to 3 of a probe of every wider shape written for Vivado
+/// (`RAM64X1D`, `RAM64X1S`, `RAM64M`, `RAM128X1S`, `RAM256X1S`), at
+/// `xc7a100tftg256-3`, `-2` and `-1`. The figure is the pin's and not the
+/// leaf's: a `RAM32M`'s port `A` and a `RAM32X1D`'s `DP` charge `WADR0` what
+/// port `D` does, all of them reading the write address off the `D` table's
+/// inputs. And it is the driver's: from a `<L>5FF` every pin is
+/// [`FIVE_OUT`] more at grade 3 (0.110 to 0.114 a pin; 0.13 and 0.17 at
+/// grades 2 and 1), which its launch carries, as it does a flip-flop's
+/// setup. `WA7` and `WA8` are 0.368 and 0.382 at grade 3 from a `<L>Q`
+/// (seeds 4 to 9 of the probe); *at grades 2 and 1 they were reached only
+/// from `<L>5FF`s* (0.544 and 0.552, 0.664 and 0.678), and are those less
+/// [`Figures::five_out`]: derived, not measured from a `<L>Q`.
+///
+/// *0.07, 0.088 and 0.119 for every bit until 2026-11-11*, charged only to a
+/// `RAM64X1D`'s write address, the one shape whose write address was not
+/// taken for a read address; no other write address was an endpoint at all
+/// (`docs/fpga-vivado-parity.md`, "A distributed RAM's write address,
+/// timed").
+const LUTRAM_ADDRESS: [[f64; 8]; 3] = [
+    [-0.060, -0.058, 0.021, 0.082, 0.119, 0.236, 0.491, 0.505],
+    [-0.062, -0.065, 0.017, 0.067, 0.098, 0.195, 0.411, 0.419],
+    [-0.066, -0.071, 0.013, 0.058, 0.087, 0.174, 0.368, 0.382],
+];
 /// How much later the clock reaches a `DSP48E1`'s and a block RAM's clock pin
 /// than a slice flip-flop's on the same rows, ps, at grades 1, 2 and 3:
 /// Vivado 2026.1's interconnect delay of the clock net to each pin (the slow
@@ -2577,6 +2630,11 @@ pub fn place_timing_on_sites(
                     timing.pin_delays.through.resize(netlist.pins.len(), None);
                 }
                 timing.pin_delays.through[index] = Some(arcs);
+                // And its setup, for one that ends paths too: a distributed
+                // RAM's write address.
+                if let Some(Some(own)) = timing.pin_delays.capture.get(index).copied() {
+                    timing.pin_delays.capture[index] = Some(own + extra);
+                }
             }
             _ => {}
         }
@@ -3062,13 +3120,15 @@ mod tests {
     /// a `DSP48E1` reading the `MUXF7` and an `AFF` reading the sum.
     ///
     /// And the last carry out (`COUT`) charged at the table, and not at a
-    /// second carry chain's carry in that reads it in tile 1.
+    /// second carry chain's carry in that reads it in tile 1; and a table
+    /// input given a setup of its own, as a distributed RAM's write address
+    /// has, charged on that setup too.
     ///
     /// Would catch each output charged another's figure or none, the `MUXF8`
     /// or the `AFF` beside the sum charged though inside, the next chain's
     /// carry in or a lookup table's own lower half charged, the RAM's upper
-    /// half charged, a `DSP48E1` not given back [`Figures::five_out`], a sink
-    /// charged under the legacy model, and `sites` renaming a wire without
+    /// half charged, a `DSP48E1` not given back [`Figures::five_out`], a write
+    /// address's setup not charged, a sink charged under the legacy model, and `sites` renaming a wire without
     /// [`sites::mux_exit`] (the wires here are its namers'). Would not catch
     /// a figure itself being wrong, which only Vivado's timer asks
     /// (`docs/fpga-vivado-parity.md`, "The other `MUX` outputs").
@@ -3362,6 +3422,26 @@ mod tests {
                 None,
             ]
         );
+        // A `Through` input that ends paths as well, as a distributed RAM's
+        // write address does, pays the output's cost on its setup too.
+        let mut ends = timing.clone();
+        ends.pin_delays.capture[pin(5, "i2")] = Some(0.2);
+        ends.pin_delays.capture[pin(5, "i5")] = Some(0.2);
+        place_timing_on_sites(
+            &mut ends,
+            DelayModel::Vivado,
+            SpeedGrade::Three,
+            &netlist,
+            &graph,
+            &placement,
+            &[],
+        );
+        assert_eq!(capture(&ends, pin(5, "i2")), Some(0.2 + m.carry_o));
+        assert_eq!(
+            capture(&ends, pin(5, "i5")),
+            Some(0.2),
+            "the RAM's upper half"
+        );
         assert_eq!(through(&t, lut_lo_sink), None);
         // The last carry out into the next chain's carry in is the chain's.
         assert_eq!(through(&t, pin(9, "ci")), None);
@@ -3604,6 +3684,213 @@ mod tests {
             "the legacy model's A",
         );
         assert!(legacy.pin_delays.launch.iter().all(Option::is_none));
+    }
+
+    /// **A distributed RAM's write address ends paths at its own bit's setup
+    /// and is still a read address.** A flip-flop driving a `RAM32X1D`'s
+    /// (`lutram_d32`) write address bits 0 and 4 and its read address, a
+    /// `RAM32M`'s (`lutram_m32`) port `A` and port `D` addresses, a
+    /// `RAM256X1S`'s (`lutram_s256`) sixth bit, `WA7` and `WA8`, and a
+    /// `RAM64X1D`'s (`lutram`) write address; the `RAM32X1D`'s `SPO` into
+    /// another flip-flop. Under the fitted model at grade 3 each write address
+    /// is a `Through` pin that ends paths at [`LUTRAM_ADDRESS`]'s figure for its
+    /// bit with the clock's margin, the `RAM64X1D`'s too; no read address ends
+    /// paths; the write enable and data keep their figures; and the path from
+    /// the write address through `SPO` to the second flip-flop is still timed.
+    /// At grade 1 a bit takes grade 1's figure. Under the legacy model the
+    /// `RAM64X1D`'s write address is an `End` pin at the instance's setup and
+    /// the others end nothing, as before. Would catch a write address left
+    /// out as an endpoint, a read address taken for one, port `A`'s address of
+    /// a `RAM32M` taken for its write address, the bits read from the wrong
+    /// column or grade, the margin left off, the write address no longer
+    /// passing paths on to `SPO`, or the legacy model changed; would not catch
+    /// a figure wrong about the part, which only Vivado's timer says.
+    #[test]
+    fn a_rams_write_address_ends_paths_at_its_own_bits_setup() {
+        let mut pins = Vec::new();
+        let mut instances = Vec::new();
+        // Signals: 0 the clock pad, 1 the buffered clock, 2 the flip-flop's
+        // `Q`, 3 the `RAM32X1D`'s `SPO`, 4 the second flip-flop's `Q`; each
+        // pin its role, whether it is an output, and its signal.
+        type Pins<'a> = &'a [(&'a str, bool, usize)];
+        let layout: [(&str, Pins<'_>); 8] = [
+            ("io", &[("din", true, 0)]),
+            ("gb", &[("i", false, 0), ("o", true, 1)]),
+            ("ff", &[("clk", false, 1), ("q", true, 2)]),
+            (
+                "lutram_d32",
+                &[
+                    ("wclk", false, 1),
+                    ("waddr0", false, 2),
+                    ("waddr4", false, 2),
+                    ("raddr0", false, 2),
+                    ("din", false, 2),
+                    ("we", false, 2),
+                    ("dout", true, 5),
+                    ("spo", true, 3),
+                ],
+            ),
+            (
+                "lutram_m32",
+                &[
+                    ("wclk", false, 1),
+                    ("addra0", false, 2),
+                    ("addrd0", false, 2),
+                    ("addrd4", false, 2),
+                    ("doa0", true, 6),
+                    ("dod0", true, 7),
+                ],
+            ),
+            (
+                "lutram_s256",
+                &[
+                    ("wclk", false, 1),
+                    ("waddr5", false, 2),
+                    ("waddr6", false, 2),
+                    ("waddr7", false, 2),
+                    ("spo", true, 8),
+                ],
+            ),
+            (
+                "lutram",
+                &[
+                    ("wclk", false, 1),
+                    ("waddr0", false, 2),
+                    ("raddr0", false, 2),
+                    ("dout", true, 9),
+                ],
+            ),
+            ("ff", &[("clk", false, 1), ("d", false, 3), ("q", true, 4)]),
+        ];
+        let mut at = std::collections::HashMap::new();
+        let mut signals: Vec<Signal> = (0..10)
+            .map(|s| Signal {
+                name: if s == 0 {
+                    "clk".to_owned()
+                } else {
+                    format!("s{s}")
+                },
+                driver: None,
+                sinks: Vec::new(),
+            })
+            .collect();
+        for (index, (kind, roles)) in layout.iter().enumerate() {
+            let mut own = Vec::new();
+            for (role, output, signal) in *roles {
+                let pin = pins.len();
+                own.push(pin);
+                at.insert((index, *role), pin);
+                pins.push(NetPin {
+                    instance: index,
+                    port: role.to_uppercase(),
+                    bit: 0,
+                    role: (*role).to_owned(),
+                    output: *output,
+                    signal: Some(*signal),
+                    constant: None,
+                });
+                if *output {
+                    signals[*signal].driver = Some(pin);
+                } else {
+                    signals[*signal].sinks.push(pin);
+                }
+            }
+            instances.push(Instance {
+                cell: CellId::from_index(0),
+                name: format!("{kind}{index}"),
+                primitive: String::new(),
+                kind: (*kind).to_owned(),
+                pins: own,
+                pin: None,
+            });
+        }
+        let netlist = Netlist {
+            instances,
+            pins,
+            signals,
+            off_fabric: Vec::new(),
+            sterilises: Vec::new(),
+            gate_inverted: Vec::new(),
+        };
+        let mut map = crate::source::SourceMap::new();
+        let file = map.add("t.rcf", "").unwrap();
+        let mut design = Design::new();
+        let top = design.add_module(crate::ir::Module::new(
+            "t",
+            crate::source::Span::new(file, 0, 0),
+        ));
+        let mut diags = crate::diag::Diagnostics::new();
+        let constraints =
+            Constraints::parse("create_clock -name c -period 10 clk\n", file, &mut diags);
+        assert!(!diags.has_errors());
+        let timed = |model: DelayModel, grade: SpeedGrade| {
+            place_timing(&design, top, &netlist, &constraints, model, grade).0
+        };
+        let pin = |instance: usize, role: &str| at[&(instance, role)];
+        let close = |got: f64, want: f64, what: &str| {
+            assert!((got - want).abs() < 1e-9, "{what}: {got} against {want}");
+        };
+        let t = timed(DelayModel::Vivado, SpeedGrade::Three);
+        let address = LUTRAM_ADDRESS[2];
+        for (instance, role, bit) in [
+            (3, "waddr0", 0),
+            (3, "waddr4", 4),
+            (4, "addrd0", 0),
+            (4, "addrd4", 4),
+            (5, "waddr5", 5),
+            (5, "waddr6", 6),
+            (5, "waddr7", 7),
+            (6, "waddr0", 0),
+        ] {
+            let p = pin(instance, role);
+            assert_eq!(t.pins[p], PinTiming::Through, "{instance} {role}");
+            assert!(t.ends_at(p), "{instance} {role}");
+            close(
+                t.capture_at(instance, p),
+                address[bit] + CLOCK_MARGIN[2],
+                role,
+            );
+        }
+        for (instance, role) in [(3, "raddr0"), (4, "addra0"), (6, "raddr0")] {
+            assert!(!t.ends_at(pin(instance, role)), "{instance} {role}");
+        }
+        close(t.capture_at(3, pin(3, "we")), 0.384 + CLOCK_MARGIN[2], "we");
+        close(
+            t.capture_at(3, pin(3, "din")),
+            VIVADO.lutram_setup + CLOCK_MARGIN[2],
+            "din",
+        );
+        // The write address through `SPO` to the second flip-flop, and the
+        // write address's own endpoint, are both timed.
+        let wire = vec![0.0; netlist.pins.len()];
+        let ends = crate::fpga::place::endpoint_arrivals(&netlist, &t, &wire);
+        let arrival = |p: usize| ends.iter().find(|e| e.0 == p).map(|e| e.2);
+        close(
+            arrival(pin(3, "waddr0")).unwrap_or(f64::NAN),
+            VIVADO.ff_launch + address[0] + CLOCK_MARGIN[2],
+            "the write address's own endpoint",
+        );
+        close(
+            arrival(pin(7, "d")).unwrap_or(f64::NAN),
+            VIVADO.ff_launch + VIVADO.lut + VIVADO.ff_setup + CLOCK_MARGIN[2],
+            "the read through SPO",
+        );
+        let one = timed(DelayModel::Vivado, SpeedGrade::One);
+        close(
+            one.capture_at(5, pin(5, "waddr6")),
+            LUTRAM_ADDRESS[0][6] + CLOCK_MARGIN[0],
+            "WA7 at grade 1",
+        );
+        let legacy = timed(DelayModel::Legacy, SpeedGrade::Three);
+        assert_eq!(legacy.pins[pin(6, "waddr0")], PinTiming::End);
+        close(
+            legacy.capture_at(6, pin(6, "waddr0")),
+            LEGACY.lutram_setup,
+            "the legacy model's RAM64X1D",
+        );
+        for (instance, role) in [(3, "waddr0"), (4, "addrd0"), (5, "waddr6")] {
+            assert!(!legacy.ends_at(pin(instance, role)), "{instance} {role}");
+        }
     }
 
     /// **A distributed RAM's address reaches the port that reads at it, and a
