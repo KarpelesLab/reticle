@@ -8769,7 +8769,10 @@ a bootstrap over the seeds puts at 0.977 to 0.992; the largest, `lutram32` 0.923
 `carry_counter` 0.953, `counter64` 0.963 and `sad`'s ADC clock 0.959, and the slowest
 `barrel` 1.010. So of what separates Reticle's flow from its netlist in Vivado's hands,
 about 0.065, the routes are a quarter and the placement the rest; on `sad`'s ADC clock
-0.10 of 0.30 ns is the routes, on `esad`'s 0.07 of 0.46.
+0.10 of 0.30 ns is the routes, on `esad`'s 0.07 of 0.46. *Measured again on 64e445d0
+("The placement's share, measured again"): Vivado's routes are 1.001 of Reticle's on
+Reticle's placements, paired seed for seed, so the routes are none of it now and the
+placement all.*
 
 **That corrects two readings.** "Routing against Vivado's routes" found Reticle's routes
 faster than Vivado's on the same placements (`vroutes`, 1.163 against 1.194), with
@@ -8868,7 +8871,10 @@ seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Che
 ### Not done
 
 - **A placer that spreads the chains among their lanes.** Every knob above left the
-  block; what Vivado's global placement does to avoid it is not known here.
+  block; what Vivado's global placement does to avoid it is not known here. *Tried
+  again on the fitted model in "The placement's share, measured again": the displacing
+  moves and the interleaved legalisation left the chains as far from their sinks, and no
+  clock faster beyond its spread.*
 - **Routing the wide resets as Vivado does.** A late sink taking a wire is one sink of a
   net whose 34 latest sinks are routed at 0.49 to 0.60 ns; the
   whole tree's trunk has to be faster, which is a question for the negotiation, not
@@ -10398,3 +10404,214 @@ does not keep.
   pins as the register a pad must reach: a write address fed straight from a pad with an
   input delay is not confined.
 - None of it has been on a part.
+
+## The placement's share, measured again
+
+**Asked: the placer was tried ten ways in "The placements, side by side" and none moved a
+clock beyond its seeds' spread, but those runs steered by a model since corrected six
+times (the `MUX` outputs, a `<L>5FF`'s launch, a table's figure, a wide signal's
+connections, the clock's margin and a RAM's write address). With the routed estimate now
+within 0.031 ns of Vivado's timer (mean absolute, 420 clock-seeds), how much of the
+distance to Vivado is the placement, and does any of those placers, or a new one, close
+it?** Vivado 2026.1 at `xc7a100tftg256-3`, run on 2026-11-11 on 64e445d0, whose own
+build is `lutwa` of `achieved.txt` (`sad` seed 1 the same bitstream). **Everything here
+is Vivado's timer; nothing has been on a part.**
+
+### The distance, split (measured)
+
+`achieved.sh`'s stages on 64e445d0: Vivado's own flow (the best of `own0` to `own2`),
+Vivado placing and routing its own netlist (`vnetlist`), Vivado placing and routing
+Reticle's netlist (`pnr` `lutwa`, seeds 1 to 10), Vivado routing Reticle's placements with
+each table's pins free (`vlutwa`, `placement_free`, seeds 1 to 10), and Reticle's flow
+(`lutwa`, twenty seeds); medians in ns, the middle three on `cons3`'s clocks and Reticle's
+on `cons1`'s, as before:
+
+| design | clock | Vivado | its netlist | Reticle's netlist, Vivado placing | Reticle placing, Vivado routing | Reticle | Reticle / Vivado placing |
+|---|---|---|---|---|---|---|---|
+| `adders` | `clk` | 2.042 | 2.249 | 2.248 | 2.188 | 2.200 | 0.979 |
+| `analyser_fifo` | `rd_clk` | 3.887 | 4.087 | 4.275 | 4.391 | 4.316 | 1.009 |
+| `analyser_fifo` | `wr_clk` | 2.417 | 2.370 | 2.433 | 2.413 | 2.443 | 1.004 |
+| `barrel` | `clk` | 2.376 | 2.389 | 2.333 | 2.386 | 2.336 | 1.001 |
+| `bram_fifo` | `clk` | 3.388 | 3.545 | 3.527 | 3.886 | 3.954 | 1.121 |
+| `carry_counter` | `clk` | 1.855 | 1.842 | 1.870 | 1.904 | 1.944 | 1.040 |
+| `counter64` | `clk` | 3.220 | 3.304 | 3.353 | 3.309 | 3.357 | 1.001 |
+| `crc32` | `clk` | 2.234 | 2.104 | 2.149 | 2.107 | 2.048 | 0.953 |
+| `esad` | `adc_sampleclk` | 2.131 | 2.087 | 2.226 | 2.634 | 2.643 | 1.187 |
+| `esad` | `clk_usb` | 1.727 | 1.626 | 1.688 | 1.797 | 1.741 | 1.031 |
+| `fir8` | `clk` | 9.142 | 9.142 | 9.164 | 9.163 | 9.163 | 1.000 |
+| `fsm` | `clk` | 1.903 | 1.800 | 1.989 | 2.096 | 2.083 | 1.048 |
+| `gray_cdc` | `clk` | 1.466 | 1.500 | 1.617 | 1.411 | 1.413 | 0.874 |
+| `gray_cdc` | `clk2` | 1.267 | 1.263 | 1.444 | 1.515 | 1.526 | 1.056 |
+| `lutram32` | `clk` | 1.894 | 1.858 | 1.781 | 1.879 | 1.952 | 1.096 |
+| `mul18` | `clk` | 1.935 | 2.008 | 1.937 | 2.073 | 2.078 | 1.073 |
+| `regfile_alu` | `clk` | 5.511 | 5.875 | 5.537 | 5.995 | 5.832 | 1.053 |
+| `sad` | `adc_sampleclk` | 2.207 | 2.139 | 2.276 | 2.458 | 2.649 | 1.164 |
+| `sad` | `clk_usb` | 1.726 | 1.627 | 1.748 | 1.806 | 1.839 | 1.052 |
+| `srl_delay` | `clk` | 1.645 | 1.638 | 1.651 | 1.757 | 1.694 | 1.026 |
+| `widemux` | `clk` | 2.438 | 2.453 | 2.487 | 2.529 | 2.548 | 1.025 |
+| geometric mean, against Vivado | | 1 | 1.001 | 1.026 | 1.060 | 1.062 | |
+
+With a bootstrap over the seeds (95 %): **Reticle's flow is 1.062 of Vivado's own**
+(1.058 to 1.067), the figure the earlier sections chained from ratios, measured directly.
+Vivado placing Reticle's netlist is 1.026 of it (1.020 to 1.031), so the netlist is that
+much; Reticle's flow is 1.036 of Vivado placing the same netlist (1.028 to 1.044).
+**And none of that is the routes**: Vivado's routes on Reticle's placements are 1.001 of
+Reticle's, paired seed for seed over seeds 1 to 10 (0.995 to 1.005), where they were 0.984
+of `through`'s ("The placements, side by side"); the router's and the model's changes
+since closed that. Of the 6.2 %, then, about 2.6 % is the netlist and 3.6 % where Reticle
+puts the cells, and the placement's part is concentrated: `esad`'s ADC clock 1.187,
+`sad`'s 1.164, `bram_fifo` 1.121, `lutram32` 1.096, `mul18` 1.073, `gray_cdc`'s `clk2`
+1.056, `regfile_alu` 1.053, `sad`'s `clk_usb` 1.052.
+
+### Where the placements part (measured)
+
+- **`sad`'s ADC clock is still the wide resets.** Over its twenty seeds, eleven latest
+  paths are `armed_and_ready_sad` through two tables into the resets of the `resetter`,
+  `ready2trigger_1andup` or `master_counter` flip-flops (2.51 to 2.92 ns, the slowest
+  seed's among them), seven the reference shift registers' enables or data (2.38 to
+  2.90), two a counter's increment (2.34 and 2.42). In Vivado's placement of the same
+  netlist the latest are the shift registers' enables and the counters, 2.20 to 2.45 over
+  ten seeds.
+- **The slices.** `sad` takes a median 402 slices over twenty seeds (seed 5 535), where
+  "The placements, side by side" counted 379 to 395 and Vivado 339 to 346; the carry
+  chains' outputs are a mean 7.0 tiles from their sinks (`sad`, ten seeds; `esad` 10.7),
+  where Vivado's `CO[3]` is 0.8 to 1.1 rows from its table.
+- **A connection inside one tile is not one figure.** `bram_fifo` seed 1, the latest path
+  a block RAM's output through three tables into a flip-flop. In Reticle's placement the
+  three tables are in one slice, and its last two connections are 0.487 and 0.307 ns, `D`
+  to `B1` and `B` to `A4`; in Vivado's the second and third share a slice in the tile
+  above the first, at 0.407 and **0.101**, `D` to `C4` and `C` to `B6`. Vivado routing
+  Reticle's placement with the pins free took the same `B1` and `A4`. In the INT tile each
+  slice output reaches six `IMUX` wires by one pip (prjxray's `tile_type_INT_L.json`,
+  read), so which bels two cells sit on decides whether a fast input is one pip away. Over
+  the routed estimate's node delays in the four logic tile types (the fitted model, grade
+  3), the fastest route from any slice output to the best input of a table in its own
+  tile is 98 ps at the least, 229 at the median, 318 at the upper quartile and 449 at the
+  most. In the eight designs below at twenty seeds, the 2,862 table inputs of criticality
+  0.8 or more driven from inside their own tile were routed at a mean 0.355 ns, 24 % of
+  them on `A6`.
+
+### What was tried (measured)
+
+Each a knob on the placer of 64e445d0 (an environment variable of a patch not kept),
+Reticle's flow on `sad`, `esad`, `bram_fifo`, `lutram32`, `mul18`, `regfile_alu`,
+`gray_cdc` and `fsm` (eleven clocks, those farthest from Vivado's placement) at seeds 1
+to 10, against `lutwa`'s same seeds; the ratio of the eleven clocks' geometric means of
+the medians, with an unpaired bootstrap over the seeds (95 %):
+
+| tried | ratio |
+|---|---|
+| timing in the wirelength anneal, every 5 temperatures | 0.9959 [0.980-1.007] |
+| the same, every 10 | 0.9925 [0.973-1.001] |
+| a critical connection's weight 16 (8) | 0.9976 [0.982-1.011] |
+| weight 32 | 0.9971 [0.980-1.010] |
+| criticality squared (cubed) | 0.9982 [0.980-1.011] |
+| six timing rounds (three) | 0.9949 [0.979-1.008] |
+| the rounds' window 16 tiles and acceptance 0.4 (8, 0.2) | 1.0041 [0.988-1.018] |
+| each slice held charged 4 tiles of box | 0.9999 [0.984-1.018] |
+| 10 tiles | 0.9903 [0.975-1.000] |
+| 16 | 0.9895 [0.975-1.003] |
+| **24** | **0.9872 [0.974-1.001]** |
+| 32 | 0.9939 [0.980-1.011] |
+| 48 | 0.9956 [0.978-1.007] |
+| 10 tiles a slice and timing every 10 temperatures | 1.0014 [0.983-1.012] |
+| legalisation seating the macros among the cells | 0.9991 [0.985-1.013] |
+| a macro's move displacing cells onto the sites it leaves | 0.9906 [0.975-1.002] |
+| the same, and timing every 5 | 0.9912 [0.978-1.008] |
+| the same, and the macros seated among the cells | 0.9923 [0.976-1.003] |
+| three solves of a small design with its critical connections' springs (weight 4) | 0.9925 [0.977-1.003] |
+| the same, the springs four times as strong | 0.9940 [0.977-1.006] |
+| the springs with 10 tiles a slice; with timing every 10; with both | 1.0005; 0.9959; 0.9987 |
+| a connection inside a tile charged its bels' route over the tile types' best | **0.9895 [0.973-1.000]** |
+| the same, and leaving the tile charged the line's base over that best | 1.0218 [1.004-1.034] |
+| half of that | 0.9992 [0.984-1.012] |
+| the bels' route as the estimate of a connection inside a tile | 1.0098 [0.990-1.020] |
+| both, and leaving the tile charged | 1.0199 [1.001-1.032] |
+
+The slice charge and the table of bels leaned furthest, and were run again at seeds 11 to
+20 and over the whole corpus at twenty seeds (`slicecost` and `tablebel` in
+`achieved.txt`):
+
+| | the eleven clocks, twenty seeds | the corpus, twenty seeds | clocks beyond their spread |
+|---|---|---|---|
+| 24 tiles a slice (`slicecost`) | 0.9917 [0.983-1.001] | **0.9938 [0.988-1.001]** | `esad` ADC 0.952, `sad` `clk_usb` 0.968; `esad` `clk_usb` 1.052, `analyser_fifo` read 1.029 |
+| the bels' route (`tablebel`) | 0.9892 [0.981-0.999] | **0.9965 [0.991-1.003]** | `lutram32` 0.947, `gray_cdc` 0.994; `analyser_fifo` read 1.042, `srl_delay` 1.037, `esad` `clk_usb` 1.036, `mul18` 1.012 |
+
+**Neither is beyond the corpus's spread, and each costs some clock 3 to 5 %**, so neither
+is kept: the eleven clocks were chosen as the farthest from Vivado, and what they gained
+the other ten did not. What the two did to the placements (Reticle's own counts, not
+timed):
+
+- **The slice charge packs as densely as Vivado and no faster.** At 24 tiles a slice,
+  `sad` takes a median 340.5 slices (Vivado 339 to 346) and `esad` 303 (`lutwa` 368), but
+  the carry chains' outputs are no nearer their sinks (`sad` 10.0 tiles, `esad` 10.6).
+  At 16 tiles one `esad` seed's placement left a 37-sink signal's sinks 51 columns and 28
+  rows from their driver (4.12 ns): a cell alone in its slice cannot leave it for an
+  emptier one without paying for the slice it opens, so a cell misplaced early stays.
+- **The table of bels empties the tiles rather than choosing their bels.** The 2,862
+  critical in-tile table inputs became 719, routed at a mean 0.302 ns, 44 % on `A6`; the
+  rest moved a tile or two away (4,179 such connections became 6,124, at 0.387 and 0.393
+  ns): a slow pair of bels in one tile is no faster than the next tile, and the anneal
+  reaches the next tile more easily than the right bels. Charging the step out of a tile
+  as well, to keep critical pairs together, packed them into tiles at the ADC clocks' cost
+  (`sad`'s 1.068, `esad`'s 1.130). So the 0.1 ns Vivado gets inside a slice comes from
+  choosing which cells share it as well as which bels they take, and moving one cell at a
+  time does not find that.
+- **The chains stayed in their block in every variant**: the carry outputs' mean distance
+  to their sinks on `sad` was 6.0 to 10.0 tiles against `lutwa`'s 7.0, with the displacing
+  moves 7.2, with the macros seated among the cells 6.8.
+
+### Runtime
+
+Not compared: the variants ran three or four at once on a machine shared with other
+work, and the route stage, which none of them changes, rose with the place stage. Summed
+over the corpus's 340 builds, place and route: `lutwa` 3,107 and 1,177 s (its own run,
+an earlier batch the same day), `slicecost` 4,191 and 1,410, `tablebel` 3,962 and 1,360.
+
+### What was changed
+
+Nothing in the flow. `achieved.txt` gains `vlutwa`, `slicecost`, `tablebel` and `pnr`
+`lutwa`; the knobs above are a patch not kept (`PG_EVERY`, `PG_WEIGHT`, `PG_EXP`,
+`PG_ROUNDS`, `PG_TWIN`, `PG_TACC`, `PG_SLICE`, `PG_INTERLEAVE`, `PG_TSOLVE`, `PG_TSW`,
+`PG_LOCAL` and `PG_LOCALEST` in `place::place`, with a `LocalDelays` table built from the
+routed estimate's node delays; and the earlier patch's `macro_swaps`).
+
+### The Husky's bitstreams
+
+Nothing on their path changed. `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `what_is_left_between_reticle_and_vivado_is_the_placement`
+  (`tests/fpga_xray_achieved.rs`) holds `vlutwa` within 1 % of `lutwa` over the corpus,
+  `pnr` `lutwa` at least 2.5 % faster than `lutwa` and 2 % faster than `vlutwa`, and the
+  seeds of each.
+- `neither_a_slice_charge_nor_a_tables_bel_makes_the_corpus_faster` holds `slicecost`
+  and `tablebel` each between 1.5 % faster and 0.5 % slower than `lutwa`, no clock more
+  than 6 % slower, and `esad`'s two clocks under `slicecost` and `lutram32`'s and
+  `analyser_fifo`'s read clock under `tablebel` each at least 3 % faster or slower, as
+  measured.
+
+**Mutations** of the fixture, each put back, each failing one of them: `vlutwa` 2 % slower
+and 2 % faster, `pnr` `lutwa` 3 % slower, a seed of `vlutwa`, of `pnr` `lutwa` and of
+`tablebel` lost, `slicecost` and `tablebel` each swapped with `lutwa`, `slicecost` 1 %
+slower. **Not caught**: `vlutwa` and `lutwa` swapped, a tenth of a percent apart. Both hold
+a quoted run, not the flow.
+
+### Not done
+
+- **Choosing which cells share a slice for their connections.** The 0.1 ns of an in-slice
+  connection on a fast input is most of `bram_fifo`'s distance; a cost per pair of bels
+  moved cells out of tiles instead. A pass after the anneal that permutes the cells of a
+  slice, or of two neighbouring ones, against the table is the next thing to try; not
+  tried.
+- **The wide resets of the ADC clocks**, still most of `sad`'s latest paths: no placer
+  above shortened them. Vivado puts the reset tables beside the flip-flops they reset and
+  gives up the lanes' own locality; replicating the reset tables (a netlist change) was
+  not tried.
+- **The carry chains' block**, untouched by every variant here and in "The placements,
+  side by side".
+- The netlist's 2.6 % (`gray_cdc`'s two clocks, `analyser_fifo`'s read clock, `fsm`) was
+  not looked at here.

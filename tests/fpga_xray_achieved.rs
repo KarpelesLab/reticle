@@ -1153,3 +1153,100 @@ fn a_rams_write_address_timed_keeps_the_corpus_as_fast() {
         "`lutwa` {ratio:.4} of `regions`"
     );
 }
+
+/// **What is left between Reticle's flow and Vivado's is the placement**
+/// (`docs/fpga-vivado-parity.md`, "The placement's share, measured again"). On
+/// 64e445d0, `lutwa` is Reticle's flow at twenty seeds, 1.062 of Vivado's own
+/// over the corpus; `pnr` `lutwa` its netlist placed and routed by Vivado,
+/// seeds 1 to 10, 1.026; `vlutwa` its placements routed by Vivado, seeds 1 to
+/// 10, 1.060, and paired seed for seed 1.001 of Reticle's routes (0.995 to
+/// 1.005 by a bootstrap over the seeds, 95 %). This holds Vivado's routes on
+/// Reticle's placements within 1 % of Reticle's, Vivado's placement of the same
+/// netlist at least 2.5 % faster than Reticle's flow and at least 2 % faster
+/// than Vivado's routes on Reticle's placements, and the seeds of each. Would
+/// catch a regeneration that lost the measurement or a seed, or a router run
+/// that had Vivado's routes faster or slower by a percent; would not catch
+/// `vlutwa` and `lutwa` swapped, which are a tenth of a percent apart, nor the
+/// flow moving since, which only `achieved.sh` again says.
+#[test]
+fn what_is_left_between_reticle_and_vivado_is_the_placement() {
+    let (Some(table), Some(nets)) = (achieved(), netlists()) else {
+        return;
+    };
+    let mut logs = [0.0f64; 3];
+    for ((design, clock), (_, builds)) in &table {
+        let (ours, routed) = (&builds["lutwa"], &builds["vlutwa"]);
+        let placed = &nets[&(design.clone(), clock.clone())].1["lutwa"];
+        assert_eq!(
+            (ours.len(), routed.len(), placed.len()),
+            (20, 10, 10),
+            "{design} {clock}: seeds of `lutwa`, `vlutwa` and `pnr` `lutwa`"
+        );
+        logs[0] += median(ours).ln();
+        logs[1] += median(routed).ln();
+        logs[2] += median(placed).ln();
+    }
+    #[allow(clippy::cast_precision_loss, reason = "twenty-one clocks")]
+    let n = table.len() as f64;
+    let [ours, routed, placed] = logs.map(|l| (l / n).exp());
+    assert!(
+        (0.99..=1.01).contains(&(routed / ours)),
+        "Reticle's placements: {routed:.3} with Vivado's routes, {ours:.3} with Reticle's"
+    );
+    assert!(
+        placed <= ours * 0.975,
+        "Reticle's netlist: {placed:.3} placed by Vivado, {ours:.3} by Reticle"
+    );
+    assert!(
+        placed <= routed * 0.98,
+        "Reticle's netlist: {placed:.3} placed by Vivado, {routed:.3} placed by Reticle and routed by Vivado"
+    );
+}
+
+/// **Neither a charge for each slice held nor a connection's bels inside its
+/// tile made the corpus faster** (`docs/fpga-vivado-parity.md`, "The
+/// placement's share, measured again"), two placers tried and not kept.
+/// `slicecost` charges the anneal 24 tiles of box for each slice it holds:
+/// twenty seeds, 0.9938 of `lutwa`, which a bootstrap over the seeds
+/// (unpaired) puts at 0.988 to 1.001 (95 %), `esad`'s ADC clock 4.8 % faster
+/// and its `clk_usb` 5.2 % slower, each beyond its spread. `tablebel` charges a
+/// connection inside one tile what its two bels' fastest route costs over the
+/// tile's best: 0.9965, 0.991 to 1.003, `lutram32` 5.3 % faster and
+/// `analyser_fifo`'s read clock 4.2 % slower. This holds each corpus between
+/// 1.5 % faster and 0.5 % slower, no clock more than 6 % slower, those four
+/// clocks each at least 3 % faster or slower as measured, and twenty seeds of
+/// each. Would catch a regeneration that lost the measurement or a seed, or
+/// swapped a build with `lutwa`; would not catch the flow moving since.
+#[test]
+fn neither_a_slice_charge_nor_a_tables_bel_makes_the_corpus_faster() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let clock = |design: &str, clock: &str, build: &str| {
+        median(&table[&(design.to_owned(), clock.to_owned())].1[build])
+    };
+    for (build, faster, slower) in [
+        ("slicecost", ("esad", "adc_sampleclk"), ("esad", "clk_usb")),
+        ("tablebel", ("lutram32", "clk"), ("analyser_fifo", "rd_clk")),
+    ] {
+        let ratio = twenty_seeds(&table, "lutwa", build, 1.06);
+        assert!(
+            (0.985..=1.005).contains(&ratio),
+            "`{build}` {ratio:.4} of `lutwa`"
+        );
+        let f = clock(faster.0, faster.1, build) / clock(faster.0, faster.1, "lutwa");
+        let s = clock(slower.0, slower.1, build) / clock(slower.0, slower.1, "lutwa");
+        assert!(
+            f <= 0.97,
+            "`{build}`: {} {} {f:.3} of `lutwa`",
+            faster.0,
+            faster.1
+        );
+        assert!(
+            s >= 1.03,
+            "`{build}`: {} {} {s:.3} of `lutwa`",
+            slower.0,
+            slower.1
+        );
+    }
+}
