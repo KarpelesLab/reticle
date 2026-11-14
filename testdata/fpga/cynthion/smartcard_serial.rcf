@@ -1,0 +1,34 @@
+# Cynthion r1.4 pin map for smartcard_serial.v.
+# Balls from Great Scott Gadgets' cynthion_r1_4.py (aux_phy, the user PMOD and LEDs).
+# PMOD A is C9 B9 D11 C12 C8 D8 D9 C10 for pins 1-8; the card uses 1-4.
+
+set_io -io_standard LVCMOS33 clk A8
+
+# The card contact. VCC is a plain output and powers the card. I/O is open
+# drain with the ball's internal pull-up, the only pull-up on the line.
+set_io -io_standard LVCMOS33 card_vcc C9
+set_io -io_standard LVCMOS33 card_rst B9
+set_io -io_standard LVCMOS33 card_clk D11
+set_io -io_standard LVCMOS33 -pullup yes card_io C12
+
+# AUX ULPI transceiver (no internal pull: the far end is the PHY)
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[0] F16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[1] G15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[2] G16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[3] H15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[4] J15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[5] J16
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[6] K15
+set_io -io_standard LVCMOS33 -slew fast ulpi_data[7] K16
+set_io -io_standard LVCMOS33 -slew fast ulpi_dir   E16
+set_io -io_standard LVCMOS33 -slew fast ulpi_nxt   F15
+set_io -io_standard LVCMOS33 -slew fast ulpi_stp   E15
+set_io -io_standard LVCMOS33 -slew fast ulpi_rst_n J13
+set_io -io_standard LVCMOS33 -slew fast ulpi_clk   D16
+
+set_io -io_standard LVCMOS33 led0_n E13
+set_io -io_standard LVCMOS33 led1_n C13
+set_io -io_standard LVCMOS33 led2_n B14
+set_io -io_standard LVCMOS33 led3_n A15
+set_io -io_standard LVCMOS33 led4_n D12
+set_io -io_standard LVCMOS33 led5_n C11

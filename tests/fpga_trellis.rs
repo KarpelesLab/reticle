@@ -6098,6 +6098,70 @@ fn the_bus_designs_leds_say_what_its_header_says_they_will() {
     );
 }
 
+/// The smart-card bridge's sequencer, `smartcard_seq` in
+/// `testdata/fpga/cynthion/smartcard_serial.v`, held by `smartcard_seq_tb.v`
+/// to the order that keeps a card safe when a logic pin is its supply: VCC
+/// before CLK before RST on the way up, RST then CLK then I/O then VCC on the
+/// way down, every line low whenever VCC is, and 60 MHz / baud rounded for the
+/// bit rate the host asks for.
+///
+/// Mutation-checked by hand: the clock starting with VCC, VCC dropping with
+/// RST, the I/O line released instead of driven low while off, and the divide
+/// truncating instead of rounding each print a `FAIL` line. It does not cover
+/// the character layer or the USB port, which `iso7816_uart` and
+/// `usb_cdc_acm` have tests of their own for, nor whether a pin can carry a
+/// card's current, which only a card can say.
+#[test]
+#[cfg(all(feature = "verilog", feature = "sim"))]
+fn the_smart_card_bridge_powers_a_card_up_and_down_in_order() {
+    use reticle::diag::Diagnostics;
+    use reticle::sim::{SimOptions, Simulator};
+    use reticle::source::SourceMap;
+    use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
+
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let text = std::fs::read_to_string("testdata/fpga/cynthion/smartcard_seq_tb.v")
+        .expect("the testbench is there");
+    let serial = std::fs::read_to_string("testdata/fpga/cynthion/smartcard_serial.v")
+        .expect("the design is there");
+    // Only the sequencer is wanted, so only its module goes in: the rest of
+    // the file instantiates the USB and UART blocks from `ip/`.
+    let start = serial
+        .find("module smartcard_seq #(")
+        .expect("smartcard_serial.v declares smartcard_seq");
+    let mut files = Vec::new();
+    for (name, text) in [
+        ("testdata/fpga/cynthion/smartcard_seq_tb.v", text.as_str()),
+        (
+            "testdata/fpga/cynthion/smartcard_serial.v",
+            &serial[start..],
+        ),
+    ] {
+        let id = map.add(name, text).expect("fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &ElabOptions::new(Dialect::Verilog2005), &mut diags)
+        .expect("the testbench elaborates");
+    assert!(!diags.has_errors(), "{}", diags.render(&map));
+
+    let mut sim = Simulator::new(&design, SimOptions::default()).expect("it simulates");
+    sim.run();
+    assert!(sim.finished(), "the testbench did not reach `$finish`");
+    assert_eq!(
+        sim.output(),
+        "PASS: the card is powered, clocked and released in order, and dropped in reverse\n",
+        "`smartcard_seq_tb.v` disagrees with `smartcard_serial.v`'s header"
+    );
+}
+
 /// The eight-bit bus milestone: `bidir_bus.v`, on the die's **right** edge,
 /// and every claim its header makes about what reaches the part.
 ///
