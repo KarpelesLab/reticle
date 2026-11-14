@@ -99,6 +99,9 @@ use super::device::{BelRole, Device};
 use crate::ir::emit::{BitView, SigBit};
 use crate::ir::{CellId, CellKind, Design, ModuleId, ModuleRef};
 
+mod bels;
+pub use bels::{BelDelays, BelReport};
+
 /// A seeded xorshift generator.
 ///
 /// Reticle has no dependencies, and a placer needs reproducible
@@ -1460,6 +1463,11 @@ pub struct PlaceOptions {
     /// model, and the Husky's measured builds, made without it, keep the
     /// legacy one.
     pub median_moves: bool,
+    /// What [`refine_bels`], the pass after a route that gives the cells on
+    /// late paths other bels of their tiles, times a connection inside a tile
+    /// by; `None` for no such pass, and then [`place_keeping_rules`] keeps no
+    /// [`BelRules`]. The 7-series flow gives it with its fitted delay model.
+    pub bel_delays: Option<BelDelays>,
 }
 
 /// A way through a bel into a pin beside it, which Vivado calls a
@@ -1531,6 +1539,7 @@ impl Default for PlaceOptions {
             memory_packing: false,
             route_throughs: RouteThroughs::default(),
             median_moves: false,
+            bel_delays: None,
         }
     }
 }
@@ -3721,6 +3730,42 @@ pub fn place(
     constraints: &Constraints,
     options: &PlaceOptions,
 ) -> Result<(Placement, PlacementReport), PlaceError> {
+    place_keeping_rules(netlist, arch, graph, constraints, options)
+        .map(|(placement, report, _)| (placement, report))
+}
+
+/// What [`refine_bels`] needs of the placement it refines that [`place`]
+/// found before placing anything: which cells a constraint or dedicated wiring
+/// holds, the rules of the fabric's sites, and the sites by kind. Kept by
+/// [`place_keeping_rules`], since finding them again is a pass over every site
+/// of the die.
+pub struct BelRules {
+    info: Vec<Placeable>,
+    shared: SiteRules,
+    sites_by_kind: BTreeMap<String, Vec<usize>>,
+}
+
+impl fmt::Debug for BelRules {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BelRules")
+            .field("instances", &self.info.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`place`], and with [`PlaceOptions::bel_delays`] the [`BelRules`]
+/// [`refine_bels`] takes.
+///
+/// # Errors
+///
+/// As [`place`].
+pub fn place_keeping_rules(
+    netlist: &Netlist,
+    arch: &Arch,
+    graph: &RoutingGraph,
+    constraints: &Constraints,
+    options: &PlaceOptions,
+) -> Result<(Placement, PlacementReport, Option<BelRules>), PlaceError> {
     let mut report = PlacementReport {
         off_fabric: netlist.off_fabric.len(),
         ..PlacementReport::default()
@@ -4037,7 +4082,72 @@ pub fn place(
     if !problems.is_empty() {
         return Err(PlaceError::Illegal { problems });
     }
-    Ok((placement, report))
+    let rules = options.bel_delays.as_ref().map(|_| BelRules {
+        info,
+        shared,
+        sites_by_kind,
+    });
+    Ok((placement, report, rules))
+}
+
+/// The pass that gives the cells on late paths other bels of their tiles
+/// ([`BelDelays`]), on a placement [`place_keeping_rules`] made and a route of
+/// it: each connection between two tiles taken at `routed`, its routed delay by
+/// sink pin in nanoseconds, and each inside one at its best way. `rules` are
+/// what [`place_keeping_rules`] kept, and `timing` the placement's, as the
+/// route timed it. Returns what the pass did and the ways through a bel the
+/// moved placement needs ([`PlacementReport::route_throughs_needed`]); a pass
+/// with no [`PlaceOptions::bel_delays`] moves nothing.
+///
+/// A cell is moved only where the rules [`place`] placed it by allow.
+///
+/// # Errors
+///
+/// [`PlaceError::Clash`] and [`PlaceError::Illegal`] when the moved placement
+/// breaks a rule the one given did not, which every move is checked against
+/// before it is made.
+pub fn refine_bels(
+    netlist: &Netlist,
+    graph: &RoutingGraph,
+    rules: &BelRules,
+    options: &PlaceOptions,
+    timing: &PlaceTiming,
+    routed: &[f64],
+    placement: &mut Placement,
+) -> Result<(BelReport, Vec<NodeId>), PlaceError> {
+    let BelRules {
+        info,
+        shared,
+        sites_by_kind,
+    } = rules;
+    let mut report = BelReport::default();
+    if let Some(delays) = options.bel_delays.as_ref() {
+        let before = audit(netlist, graph, placement, shared, info);
+        let mut timing = timing.clone();
+        report = bels::detail(
+            netlist,
+            graph,
+            info,
+            shared,
+            sites_by_kind,
+            &mut timing,
+            delays,
+            routed,
+            placement,
+        );
+        clashed(netlist, graph, placement, "giving cells other bels")?;
+        let problems: Vec<String> = audit(netlist, graph, placement, shared, info)
+            .into_iter()
+            .filter(|p| !before.contains(p))
+            .collect();
+        if !problems.is_empty() {
+            return Err(PlaceError::Illegal { problems });
+        }
+    }
+    Ok((
+        report,
+        needed_throughs(shared, placement, &options.route_throughs),
+    ))
 }
 
 /// [`PlaceError::Clash`] for the first cell `placement` was told to put on

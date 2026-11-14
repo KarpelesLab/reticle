@@ -214,7 +214,7 @@ pub use fifo::{
 };
 pub use finish::{FinishedFrames, LogicLocation};
 pub use lutpack::{LutPairing, PairOptions, pack_lut_pairs};
-pub use lutswap::{apply_lut_moves, lut_input_classes};
+pub use lutswap::{apply_lut_moves, lut_input_classes, lut_movable_inputs};
 pub use parse::{Ppip, PpipKind, fabric_of, family_directory, is_pip_feature};
 
 /// Reads one `segbits_<type>.db`: a feature name and its bits per line.

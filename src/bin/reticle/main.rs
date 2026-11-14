@@ -4039,7 +4039,7 @@ fn write_xc7_bitstream(
     constraints: &reticle::fpga::Constraints,
     path: &str,
 ) -> Result<(String, Option<String>), String> {
-    use reticle::fpga::place::place;
+    use reticle::fpga::place::{place_keeping_rules, refine_bels};
     use reticle::fpga::route::{RouteOptions, route};
     use reticle::fpga::xc7::{self, BitHeader};
     use reticle::fpga::xray::{GridRegion, XrayDatabase, XrayOptions};
@@ -4468,6 +4468,17 @@ fn write_xc7_bitstream(
     } else {
         None
     };
+    // With the fitted model, a route's latest paths' cells are given other bels
+    // of their tiles and the placement routed again from that route, the
+    // second route kept if it is faster: see `place::refine_bels`.
+    if delay_model == reticle::fpga::xray::DelayModel::Vivado
+        && let Some(delays) = node_delay.as_ref()
+    {
+        options.bel_delays = Some(reticle::fpga::place::BelDelays {
+            node_delay: std::sync::Arc::from(delays.as_slice()),
+            movable: reticle::fpga::xray::lut_movable_inputs(design, top, &netlist),
+        });
+    }
     // A route that fails says why. Writing the file anyway is the right
     // thing — a partly configured bitstream is still worth looking at —
     // but the reason goes in the report rather than into a shrug.
@@ -4534,11 +4545,38 @@ fn write_xc7_bitstream(
     // What the timing was before a placement said where each cell is, for the
     // next attempt to start from.
     let unplaced_timing = options.timing.clone();
+    // A placement whose cells the pass after its route gave other bels, to be
+    // routed again (`place::refine_bels`), and its first route, kept if the
+    // second is no faster.
+    struct FirstRoute {
+        placement: reticle::fpga::place::Placement,
+        report: reticle::fpga::place::PlacementReport,
+        routed: Result<
+            (reticle::fpga::Routing, reticle::fpga::route::RoutingReport),
+            reticle::fpga::route::RouteError,
+        >,
+        timing: Option<reticle::fpga::place::PlaceTiming>,
+        longest: Vec<u64>,
+    }
+    let mut refined: Option<(
+        reticle::fpga::place::Placement,
+        reticle::fpga::place::PlacementReport,
+    )> = None;
+    let mut first_route: Option<FirstRoute> = None;
     let (placement, placement_report, routed_at) = loop {
         options.timing.clone_from(&unplaced_timing);
-        let (mut placement, placement_report) =
-            place(&netlist, &fabric.arch, &graph, constraints, &options)
-                .map_err(|e| e.to_string())?;
+        let fresh = refined.is_none();
+        let mut rules = None;
+        let (mut placement, placement_report) = match refined.take() {
+            Some(moved) => moved,
+            None => {
+                let (placement, report, kept) =
+                    place_keeping_rules(&netlist, &fabric.arch, &graph, constraints, &options)
+                        .map_err(|e| e.to_string())?;
+                rules = kept;
+                (placement, report)
+            }
+        };
         // Only the ways through a lookup table this placement needs are open:
         // a flip-flop takes its bypass input first, as Vivado's do. See
         // `place::route_throughs_needed`.
@@ -4563,60 +4601,67 @@ fn write_xc7_bitstream(
                 &needed,
             );
         }
-        // Each delay's controller in the clock row of its region.
-        fabric.place_io_delay_controllers(&delays, &netlist, &graph, &mut placement)?;
+        // Each delay's controller in the clock row of its region; a placement
+        // given other bels has them already.
+        if fresh {
+            fabric.place_io_delay_controllers(&delays, &netlist, &graph, &mut placement)?;
+        }
         laps.lap("place");
-        if !placement_report.outside_budget.is_empty() {
-            eprintln!(
-                "warning: {} register(s) held near their pads for an input's budget found no site \
-                 there and were seated farther, so those inputs may be late: {}",
-                placement_report.outside_budget.len(),
-                placement_report.outside_budget.join(", ")
-            );
-        }
-        for (round, estimate) in placement_report.timing.iter().enumerate() {
-            let paths: Vec<String> = domains
-                .iter()
-                .zip(&estimate.longest_ps)
-                .zip(options.timing.iter().flat_map(|t| t.periods.iter()))
-                .map(|((name, ps), period)| {
-                    format!("{name} {:.2} ns of {period} ns", *ps as f64 / 1000.0)
-                })
-                .collect();
-            eprintln!(
-                "note: placement timing estimate, round {round}: {}; {} signal(s) over half critical, wirelength {}",
-                if paths.is_empty() {
-                    "no clock is constrained".to_owned()
-                } else {
-                    paths.join(", ")
-                },
-                estimate.critical,
-                estimate.hpwl
-            );
-        }
-        if let Some((most, over)) = placement_report.clock_regions {
-            eprintln!(
-                "note: clock regions: at most {most} clock(s) asked of one, {over} region(s) past their {} lines",
-                options.clock_region_lines
-            );
-            if placement_report.clock_moves > 0 {
+        // What the placement did, said once: a placement given other bels
+        // after its route is that placement still.
+        if fresh {
+            if !placement_report.outside_budget.is_empty() {
                 eprintln!(
-                    "note: {} cell(s) moved after the anneal to take a clock out of a full clock region",
-                    placement_report.clock_moves
+                    "warning: {} register(s) held near their pads for an input's budget found no site \
+                     there and were seated farther, so those inputs may be late: {}",
+                    placement_report.outside_budget.len(),
+                    placement_report.outside_budget.join(", ")
                 );
             }
-            for (clock, readers) in &placement_report.busiest_region {
-                eprintln!("  the busiest's {clock}: {readers} cell(s)");
+            for (round, estimate) in placement_report.timing.iter().enumerate() {
+                let paths: Vec<String> = domains
+                    .iter()
+                    .zip(&estimate.longest_ps)
+                    .zip(options.timing.iter().flat_map(|t| t.periods.iter()))
+                    .map(|((name, ps), period)| {
+                        format!("{name} {:.2} ns of {period} ns", *ps as f64 / 1000.0)
+                    })
+                    .collect();
+                eprintln!(
+                    "note: placement timing estimate, round {round}: {}; {} signal(s) over half critical, wirelength {}",
+                    if paths.is_empty() {
+                        "no clock is constrained".to_owned()
+                    } else {
+                        paths.join(", ")
+                    },
+                    estimate.critical,
+                    estimate.hpwl
+                );
             }
-        }
-        // As the ECP5 flow does: what legalisation moved and the wirelength
-        // the anneal reached, which is what a route's congestion is read
-        // against, and the schedule when it is asked for.
-        if args.flag("report") {
-            eprint!("{}", placement_report.to_text());
-        }
-        if args.flag("place-schedule") {
-            eprint!("{}", placement_report.schedule_text());
+            if let Some((most, over)) = placement_report.clock_regions {
+                eprintln!(
+                    "note: clock regions: at most {most} clock(s) asked of one, {over} region(s) past their {} lines",
+                    options.clock_region_lines
+                );
+                if placement_report.clock_moves > 0 {
+                    eprintln!(
+                        "note: {} cell(s) moved after the anneal to take a clock out of a full clock region",
+                        placement_report.clock_moves
+                    );
+                }
+                for (clock, readers) in &placement_report.busiest_region {
+                    eprintln!("  the busiest's {clock}: {readers} cell(s)");
+                }
+            }
+            // As the ECP5 flow does: what legalisation moved and the wirelength
+            // the anneal reached, which is what a route's congestion is read
+            // against, and the schedule when it is asked for.
+            if args.flag("report") {
+                eprint!("{}", placement_report.to_text());
+            }
+            if args.flag("place-schedule") {
+                eprint!("{}", placement_report.schedule_text());
+            }
         }
 
         // The ground fans the block RAMs' zero ties will need are closed to
@@ -4717,6 +4762,12 @@ fn write_xc7_bitstream(
             uncritical_present_cap: reticle::fpga::xray::UNCRITICAL_PRESENT_CAP,
             uncritical_cap_until: reticle::fpga::xray::UNCRITICAL_CAP_UNTIL,
             max_iterations: route_passes(args)?,
+            // A placement given other bels after its first route is routed
+            // again from that route: see `RouteOptions::start`.
+            start: first_route
+                .as_ref()
+                .and_then(|first| first.routed.as_ref().ok())
+                .map(|(routing, _)| routing.clone()),
             equivalent,
             // `--timing-driven` routes for time as well: each pass is analysed
             // as the placement was, per clock domain, from each connection's
@@ -4808,6 +4859,58 @@ fn write_xc7_bitstream(
         };
         let routed_at = route(&netlist, &graph, &placement, &route_options);
         laps.lap("route");
+        // The routed estimate's latest path of each domain, for the pass
+        // after the route and for choosing between its two routes.
+        let routed_longest = |routing: &reticle::fpga::Routing,
+                              placement: &reticle::fpga::place::Placement,
+                              timing: Option<&reticle::fpga::place::PlaceTiming>|
+         -> Option<(Vec<f64>, Vec<u64>)> {
+            let (delays, paths) = (node_delay.as_ref()?, timing?);
+            let wire = reticle::fpga::route::connection_delays(
+                &netlist,
+                &graph,
+                placement,
+                routing,
+                delays,
+                reticle::fpga::xray::delay::branch_load(grade),
+            );
+            let (_, longest) = reticle::fpga::place::path_criticality(&netlist, paths, &wire);
+            Some((wire, longest))
+        };
+        if let Some(first) = first_route.take() {
+            // The second route, of the placement given other bels: kept only
+            // if it is whole, its clocks on the network, and its latest paths
+            // earlier by the sum of their logarithms.
+            let longest = match &routed_at {
+                Ok((routing, _))
+                    if fabric
+                        .clock_network_use(&netlist, &placement, &graph, routing)
+                        .off_network
+                        .is_empty() =>
+                {
+                    routed_longest(routing, &placement, options.timing.as_ref()).map(|(_, l)| l)
+                }
+                _ => None,
+            };
+            let faster = longest.is_some_and(|longest| {
+                longest
+                    .iter()
+                    .zip(&first.longest)
+                    .filter(|(a, b)| **a > 0 && **b > 0)
+                    .map(|(a, b)| (*a as f64 / *b as f64).ln())
+                    .sum::<f64>()
+                    < 0.0
+            });
+            if !faster {
+                eprintln!(
+                    "note: the route of the cells given other bels was no faster, and the first is kept"
+                );
+                options.timing = first.timing;
+                break (first.placement, first.report, first.routed);
+            }
+            eprintln!("note: the route of the cells given other bels was faster, and is kept");
+            break (placement, placement_report, routed_at);
+        }
         if let Err(error @ reticle::fpga::route::RouteError::Congested { .. }) = &routed_at
             && attempts_left > 0
         {
@@ -4841,6 +4944,60 @@ fn write_xc7_bitstream(
                 options.seed
             );
             continue;
+        }
+        if let (Some(rules), Ok((routing, _)), Some(timing)) =
+            (rules.as_ref(), &routed_at, options.timing.as_ref())
+            && let Some((wire, longest)) = routed_longest(routing, &placement, Some(timing))
+        {
+            let mut moved = placement.clone();
+            let refined_bels =
+                refine_bels(&netlist, &graph, rules, &options, timing, &wire, &mut moved);
+            laps.lap("give cells other bels");
+            // A pass that broke a rule is a fault in it, and costs the build
+            // nothing: the route it would have bettered stands.
+            let (bels, needed) = match refined_bels {
+                Ok(done) => done,
+                Err(error) => {
+                    eprintln!(
+                        "warning: the cells of late paths were not given other bels ({error}); \
+                         the route stands"
+                    );
+                    break (placement, placement_report, routed_at);
+                }
+            };
+            let said = |ps: &[u64]| {
+                ps.iter()
+                    .map(|p| format!("{:.3}", *p as f64 / 1000.0))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            eprintln!(
+                // Not "latest path": what a log's reader looks for to find the
+                // path the route's report lists (`tests/fpga_xray_muxf.rs`).
+                "note: {} cell(s) on late paths given other bels of their tiles{}: the longest \
+                 {} ns before, {} ns after, with the route's own delays between tiles",
+                bels.moves,
+                if bels.undone {
+                    " and put back, no earlier"
+                } else {
+                    ""
+                },
+                said(&bels.before_ps),
+                said(&bels.after_ps)
+            );
+            if bels.moves > 0 {
+                let mut report = placement_report.clone();
+                report.route_throughs_needed = needed;
+                refined = Some((moved, report));
+                first_route = Some(FirstRoute {
+                    placement,
+                    report: placement_report,
+                    routed: routed_at,
+                    timing: options.timing.clone(),
+                    longest,
+                });
+                continue;
+            }
         }
         break (placement, placement_report, routed_at);
     };

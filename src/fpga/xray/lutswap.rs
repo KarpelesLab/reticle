@@ -147,6 +147,38 @@ pub fn lut_input_classes(
     out
 }
 
+/// Per instance, the inputs of a lookup table [`lut_input_classes`] lets the
+/// router move, bit `k` for `i<k>`, wherever the table is placed: what the
+/// placement's pass over the bels of a tile matches a table's inputs to its
+/// pins by (`place::BelDelays::movable`). Zero for every other instance, and
+/// for a table with fewer than two such inputs or a way through kept on `A6`.
+#[must_use]
+pub fn lut_movable_inputs(design: &Design, top: ModuleId, netlist: &Netlist) -> Vec<u8> {
+    netlist
+        .instances
+        .iter()
+        .enumerate()
+        .map(|(instance, inst)| {
+            if inst.kind != "lut"
+                || design.modules[top]
+                    .cells
+                    .get(inst.cell)
+                    .is_some_and(|c| c.attrs.get(super::carry::ROUTE_THROUGH).is_some())
+            {
+                return 0;
+            }
+            let free = movable(design, top, netlist, instance);
+            if free.iter().filter(|f| **f).count() < 2 {
+                return 0;
+            }
+            free.iter()
+                .enumerate()
+                .filter(|(_, f)| **f)
+                .fold(0u8, |mask, (k, _)| mask | (1 << k))
+        })
+        .collect()
+}
+
 /// `init` with input `k` moved to input `to[k]`: the table that reads at
 /// index `m` what `init` read at the index whose bit `k` is bit `to[k]` of
 /// `m`.

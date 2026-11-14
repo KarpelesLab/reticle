@@ -341,6 +341,17 @@ pub struct RouteOptions {
     /// What makes the router timing-driven, or `None` for a router that
     /// minimises wire alone; see [`Timing`].
     pub timing: Option<Timing>,
+    /// A routing to start from, or `None` to route every signal afresh.
+    ///
+    /// Each signal whose route there still joins its source to every one of
+    /// its sinks — a sink moved to another input of its class
+    /// ([`Route::moved`]) only if that input is still in its pin's class —
+    /// is kept: it is not routed in the first pass, and not ripped up in any
+    /// pass for being critical, only for sharing a node. The rest are routed
+    /// as ever. A placement a few cells of which moved after it was routed
+    /// is routed again so without the rest of the routing changing under it
+    /// (`place::refine_bels`).
+    pub start: Option<Routing>,
     /// The most a search that is not critical pays for a node another
     /// signal holds, as a present factor, while the route is still far
     /// from legal: until a pass ends with fewer than
@@ -667,6 +678,7 @@ impl Default for RouteOptions {
             incremental: false,
             equivalent: Vec::new(),
             timing: None,
+            start: None,
             uncritical_present_cap: f64::INFINITY,
             uncritical_cap_until: 0,
             on_iteration: None,
@@ -1277,6 +1289,39 @@ pub fn route(
     }
     scratch.uncritical_cap = options.uncritical_present_cap;
     let mut routing = Routing::new(netlist.signals.len());
+    // The signals `RouteOptions::start` routes already, kept as they are.
+    let mut pinned = vec![false; netlist.signals.len()];
+    // And the part of a signal's route there that still serves some of its
+    // sinks, to be routed on from in the first pass, in `terminals` order.
+    let mut started: Vec<Option<Kept>> = Vec::new();
+    if let Some(start) = options.start.as_ref() {
+        started = terminals.iter().map(|_| None).collect();
+        for (which, terminals) in terminals.iter().enumerate() {
+            let Some(route) = start.route(terminals.signal) else {
+                continue;
+            };
+            let Some(kept) = start_part(graph, &geometry, options, route, terminals) else {
+                continue;
+            };
+            pinned[terminals.signal] = true;
+            if kept.connected.iter().all(|c| *c) {
+                let mut nodes: Vec<NodeId> = kept.tree.keys().copied().collect();
+                nodes.sort_unstable();
+                for root in state.roots(&nodes) {
+                    state.usage[root as usize].occupancy += 1;
+                }
+                routing.routes[terminals.signal] = Some(Route {
+                    signal: terminals.signal,
+                    source: terminals.source,
+                    pips: kept.pips,
+                    nodes,
+                    moved: kept.moved,
+                });
+            } else {
+                started[which] = Some(kept);
+            }
+        }
+    }
     let mut report = RoutingReport::default();
     let mut present = options.present_factor;
     // The signals a bounded search failed for; see `route_one`.
@@ -1336,12 +1381,22 @@ pub fn route(
         let mut rerouted = 0;
         for &which in &order {
             let terminals = &terminals[which];
-            let critical = options.timing.as_ref().is_some_and(|timing| {
-                (index <= timing.passes || cleaning)
-                    && criticality[which]
-                        .iter()
-                        .any(|c| *c >= timing.reroute_above)
-            });
+            // A signal `RouteOptions::start` routes whole is not routed in the
+            // first pass, and one it routes in part is routed on from there.
+            let mut kept_start = None;
+            if index == 1 && pinned[terminals.signal] {
+                kept_start = started.get_mut(which).and_then(Option::take);
+                if kept_start.is_none() {
+                    continue;
+                }
+            }
+            let critical = !pinned[terminals.signal]
+                && options.timing.as_ref().is_some_and(|timing| {
+                    (index <= timing.passes || cleaning)
+                        && criticality[which]
+                            .iter()
+                            .any(|c| *c >= timing.reroute_above)
+                });
             if index > 1
                 && options.reroute_congested_only
                 && !critical
@@ -1365,7 +1420,7 @@ pub fn route(
                     .as_ref()
                     .map(|r| kept_part(graph, &geometry, &state, r, terminals))
             } else {
-                None
+                kept_start
             };
             rip_up(&mut state, &mut routing, terminals.signal);
             rerouted += 1;
@@ -2327,6 +2382,97 @@ fn kept_part(
         moved,
         connected,
     }
+}
+
+/// What [`RouteOptions::start`] keeps of `route`, a route of the same signal
+/// from a routing of another placement: the branches to the sinks it still
+/// reaches as they are now, each ending on its own node or on the node of its
+/// class it moved to, if that node is still of its pin's class, and crossing no
+/// node `options` closes. `None` when the source is not the route's, or no
+/// sink is reached.
+fn start_part(
+    graph: &RoutingGraph,
+    geometry: &[Geometry],
+    options: &RouteOptions,
+    route: &Route,
+    terminals: &Terminals,
+) -> Option<Kept> {
+    if route.source != terminals.source {
+        return None;
+    }
+    let class = |node: NodeId| {
+        options
+            .equivalent
+            .get(node as usize)
+            .copied()
+            .unwrap_or(u32::MAX)
+    };
+    let closed = |node: NodeId| options.closed.get(node as usize).copied().unwrap_or(false);
+    let mut parent: FastMap<NodeId, PipId> = FastMap::default();
+    for pip in &route.pips {
+        parent.insert(graph.pip(*pip).to, *pip);
+    }
+    let mut keep: FastMap<NodeId, ()> = FastMap::default();
+    let mut connected = vec![false; terminals.sinks.len()];
+    let mut moved = Vec::new();
+    let mut ends: Vec<NodeId> = Vec::new();
+    for (which, sink) in terminals.sinks.iter().enumerate() {
+        let end = match route.moved.iter().find(|(pin, _)| *pin == sink.pin) {
+            Some((_, node)) if class(*node) != u32::MAX && class(*node) == class(sink.node) => {
+                *node
+            }
+            Some(_) => continue,
+            None => sink.node,
+        };
+        if ends.contains(&end) {
+            continue;
+        }
+        let mut path = Vec::new();
+        let mut node = end;
+        let mut clear = true;
+        while node != route.source {
+            if closed(node) {
+                clear = false;
+                break;
+            }
+            path.push(node);
+            match parent.get(&node) {
+                Some(pip) => node = graph.pip(*pip).from,
+                None => {
+                    clear = false;
+                    break;
+                }
+            }
+        }
+        if clear {
+            connected[which] = true;
+            ends.push(end);
+            keep.extend(path.into_iter().map(|node| (node, ())));
+            if end != sink.node {
+                moved.push((sink.pin, end));
+            }
+        }
+    }
+    if !connected.iter().any(|c| *c) {
+        return None;
+    }
+    let mut tree = BTreeMap::from([(route.source, 0.0)]);
+    let mut pips = Vec::new();
+    for pip in &route.pips {
+        let at = graph.pip(*pip);
+        if keep.contains_key(&at.to) {
+            let delay = tree.get(&at.from).copied().unwrap_or(0.0)
+                + f64::from(geometry[at.to as usize].delay);
+            tree.insert(at.to, delay);
+            pips.push(*pip);
+        }
+    }
+    Some(Kept {
+        tree,
+        pips,
+        moved,
+        connected,
+    })
 }
 
 /// How many pips forward [`contention`] looks for the cell pins a wire
@@ -4915,6 +5061,168 @@ mod tests {
         assert_eq!(routing.routes().count(), 1);
         assert!(routing.route(1).is_none());
         assert!(routing.pips(1).is_empty());
+    }
+
+    /// **A routing given to start from is kept where it still serves the
+    /// placement** ([`RouteOptions::start`]). Two pairs on a line of two
+    /// tracks: routed again from its own routing, nothing is routed in the
+    /// first pass and the routing is the same; with the second pair's sink a
+    /// tile nearer, that signal alone is routed again, the first's route
+    /// kept as it was, and the routing is whole.
+    ///
+    /// Would catch the start ignored (both signals routed in the first
+    /// pass), kept for a signal whose sink moved (the route would not reach
+    /// it, and `verify` says so), or a kept signal ripped up all the same.
+    /// Would not catch a kept route that a later pass makes slower, which
+    /// the flow guards by keeping the faster of its two routes.
+    #[test]
+    fn a_start_routing_is_kept_where_it_still_serves() {
+        let (_, graph) = line(6, 2);
+        let netlist = pairs(2);
+        let placement = place_in_order(&netlist, &graph, &[0, 5, 1, 4]);
+        let (first, _) = route(&netlist, &graph, &placement, &RouteOptions::default()).unwrap();
+        let again = RouteOptions {
+            start: Some(first.clone()),
+            ..RouteOptions::default()
+        };
+        let (second, report) = route(&netlist, &graph, &placement, &again).unwrap();
+        assert_eq!(report.iterations[0].rerouted, 0);
+        assert_eq!(second, first);
+        let moved = place_in_order(&netlist, &graph, &[0, 5, 1, 3]);
+        let (third, report) = route(&netlist, &graph, &moved, &again).unwrap();
+        assert_eq!(report.iterations[0].rerouted, 1);
+        assert_eq!(third.route(0), first.route(0));
+        assert!(third.verify(&netlist, &graph, &moved).is_empty());
+    }
+
+    /// **A kept route is not ripped up for being critical.** The two pairs of
+    /// [`a_start_routing_is_kept_where_it_still_serves`], routed for time with
+    /// only congested signals rerouted, as the 7-series flow routes: every
+    /// signal is on the latest path, and each of the timed passes after the
+    /// first reroutes them; routed again from that routing, no pass reroutes
+    /// anything and the routing is the same.
+    ///
+    /// Would catch a kept signal rerouted for its criticality, which is most
+    /// of what made a second route differ from the first where nothing near
+    /// it moved. Would not catch one rerouted for congestion, which it must
+    /// be.
+    #[test]
+    fn a_kept_route_is_not_ripped_up_for_being_critical() {
+        let (_, graph) = line(6, 2);
+        let netlist = pairs(2);
+        let placement = place_in_order(&netlist, &graph, &[0, 5, 1, 4]);
+        let timed = RouteOptions {
+            reroute_congested_only: true,
+            timing: Some(Timing::for_netlist(&netlist, vec![1; graph.nodes.len()], 1)),
+            ..RouteOptions::default()
+        };
+        let (first, report) = route(&netlist, &graph, &placement, &timed).unwrap();
+        assert!(
+            report.iterations.iter().skip(1).any(|i| i.rerouted > 0),
+            "{}",
+            report.to_text()
+        );
+        let again = RouteOptions {
+            start: Some(first.clone()),
+            ..timed
+        };
+        let (second, report) = route(&netlist, &graph, &placement, &again).unwrap();
+        assert!(
+            report.iterations.iter().all(|i| i.rerouted == 0),
+            "{}",
+            report.to_text()
+        );
+        assert_eq!(second, first);
+    }
+
+    /// **A started route is not kept through a node now closed, nor to a
+    /// sink moved to a node no longer of its pin's class.** One pair on a
+    /// line of two tracks, its route on one of them: with a node of that
+    /// track closed, it is routed again, on the other. And with the sink's
+    /// two inputs `in0` and `in1` made one class and the route ending on
+    /// `in1` for the pin of `in0`, it is kept, `in1` and all; with the two in
+    /// classes of their own, so that `in1` is no longer the pin's, it is
+    /// routed again to `in0`.
+    ///
+    /// Would catch a route kept through a closed node (a way through a bel
+    /// a cell holds since), and a sink kept on a node of another class: the
+    /// flow, before it checked, wrote a table's input on a pin of the bel
+    /// the table had left, and refused the bitstream. Would not catch a
+    /// class wrongly drawn, which is `xray::lut_input_classes`' to say.
+    #[test]
+    fn a_started_route_is_not_kept_through_a_closed_node_or_to_another_class() {
+        let (_, graph) = line(6, 2);
+        let netlist = pairs(1);
+        let placement = place_in_order(&netlist, &graph, &[0, 5]);
+        let (first, _) = route(&netlist, &graph, &placement, &RouteOptions::default()).unwrap();
+        let route0 = first.route(0).unwrap();
+        let track = *route0
+            .nodes
+            .iter()
+            .find(|n| graph.wire(**n).name.starts_with("track") && graph.wire(**n).tile.0 == 2)
+            .unwrap();
+        let mut closed = vec![false; graph.nodes.len()];
+        closed[track as usize] = true;
+        let shut = RouteOptions {
+            start: Some(first.clone()),
+            closed,
+            ..RouteOptions::default()
+        };
+        let (second, report) = route(&netlist, &graph, &placement, &shut).unwrap();
+        assert_eq!(report.iterations[0].rerouted, 1);
+        assert!(!second.route(0).unwrap().nodes.contains(&track));
+        assert!(second.verify(&netlist, &graph, &placement).is_empty());
+
+        // The sink's two inputs, and the route ending on `in1` instead.
+        let node = |name: &str| {
+            u32::try_from(
+                graph
+                    .nodes
+                    .iter()
+                    .position(|w| w.name == name && w.tile == (5, 0))
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let (in0, in1) = (node("in0"), node("in1"));
+        let into = |to: NodeId| {
+            *graph
+                .incoming(to)
+                .iter()
+                .find(|p| route0.nodes.contains(&graph.pip(**p).from))
+                .unwrap()
+        };
+        let mut ended = route0.clone();
+        ended.pips.retain(|p| graph.pip(*p).to != in0);
+        ended.pips.push(into(in1));
+        ended.nodes.retain(|n| *n != in0);
+        ended.nodes.push(in1);
+        ended.nodes.sort_unstable();
+        ended.moved = vec![(netlist.signals[0].sinks[0], in1)];
+        let mut start = first.clone();
+        start.routes[0] = Some(ended.clone());
+        let mut one_class = vec![u32::MAX; graph.nodes.len()];
+        one_class[in0 as usize] = 7;
+        one_class[in1 as usize] = 7;
+        let same = RouteOptions {
+            start: Some(start.clone()),
+            equivalent: one_class.clone(),
+            ..RouteOptions::default()
+        };
+        let (kept, report) = route(&netlist, &graph, &placement, &same).unwrap();
+        assert_eq!(report.iterations[0].rerouted, 0);
+        assert_eq!(kept.route(0).unwrap().moved, ended.moved);
+        let mut two_classes = one_class;
+        two_classes[in1 as usize] = 8;
+        let apart = RouteOptions {
+            start: Some(start),
+            equivalent: two_classes,
+            ..RouteOptions::default()
+        };
+        let (again, report) = route(&netlist, &graph, &placement, &apart).unwrap();
+        assert_eq!(report.iterations[0].rerouted, 1);
+        assert!(again.route(0).unwrap().moved.is_empty());
+        assert!(again.route(0).unwrap().nodes.contains(&in0));
     }
 
     #[test]
