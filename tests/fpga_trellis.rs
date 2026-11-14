@@ -1986,7 +1986,7 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
         .collect();
     assert_eq!(
         tiles.len(),
-        80,
+        76,
         "logic tiles the design occupies. **This was 65 before the ECP5 inferred a carry chain**, \
          and the eight it lost are the four FIFOs' pointers: a `cnt + 1` used to be lookup tables \
          and an XOR per bit and is three `CCU2C` plus a share of two constant lookup tables now, \
@@ -2031,7 +2031,14 @@ fn a_distributed_ram_and_two_reset_domains_share_a_die() {
          between `589cbe0` and `d3ac709` by running this test in a worktree at `d3ac709`, \
          where it fails with the same 80 against the same 74. Not attributed to any one of \
          those commits, and not defended: the caveat above has not moved either, and nothing \
-         here has measured what any of the six bought"
+         here has measured what any of the six bought \
+         **14 November 2026:** 76, four tighter, found again by a gate and not by the \
+         change: it fails the same way on `origin/master` at `0791b357` alone, in a worktree, and \
+         the database was only fetched on this machine that day, so it had been skipping here as \
+         well as on CI. Attributed to the placer, router and timing work between `d3ac709` and \
+         `0791b357` -- the Vivado-parity rounds, which change the shared placer -- and not to any \
+         one commit. Narrower for once, and the same caveat: nothing here has measured what the \
+         four tiles cost or bought"
     );
 
     // ---- every bit decodes, and nothing is unexplained ----
