@@ -132,7 +132,11 @@ models or IP.
   `achieved.py netlists` is their table. Ask `placement_free` (`achieved.sh --stage
   placement_free`) with `cons3`'s `.xdc` beside the build's `x.v` and `x.tcl`, not the
   build's own `x.xdc`: on that, whose periods are met and whose clocks are not apart,
-  Vivado's router stops at the period and works at paths between clocks.
+  Vivado's router stops at the period and works at paths between clocks. Each stage
+  also writes each clock's five worst paths, hop by hop (`paths.rpt`), and the site and
+  bel of every cell on them (`paths.bels`); `achieved.py hops` splits the worst path of
+  each clock of the `routes` and `pnr` stages by where each connection's two ends are,
+  one slice, one tile or two.
 - `placement_fit.py` reads the `estimate` lines of those builds' endpoints files,
   the placement's estimate of each connection and endpoint beside the routed one:
   `compare` sets the two side by side, and against Vivado's timer when

@@ -117,6 +117,19 @@ foreach clock [get_clocks -quiet] {
   }
 }
 report_timing -max_paths 3 -input_pins -file [file join [pwd] worst.rpt]
+# Each clock's five worst paths from it to itself, hop by hop, and the site and
+# bel of every cell on them, for `achieved.py hops`: which connections of a
+# path are inside a slice, inside a tile or between tiles.
+set bels [open [file join [pwd] paths.bels] w]
+foreach clock [get_clocks -quiet] {
+  set paths [get_timing_paths -quiet -from $clock -to $clock -max_paths 5 -nworst 1 -setup]
+  if {![llength $paths]} { continue }
+  report_timing -of_objects $paths -input_pins -file [file join [pwd] paths.rpt] -append
+  foreach c [get_cells -quiet -of_objects $paths] {
+    puts $bels "$c [get_property LOC $c] [get_property BEL $c]"
+  }
+}
+close $bels
 # With KEEP_DCP set, the routes stage keeps its checkpoint for timing_dump.tcl
 # (placement_fit.py compare).
 if {$stage eq "routes" && [info exists ::env(KEEP_DCP)]} { write_checkpoint -force [file join [pwd] $top.dcp] }

@@ -24,6 +24,15 @@
         each root's median over its seeds (pnr/s<seed>/<design>/<design>.result),
         then each root's geometric mean against Vivado's netlist. With
         --fixture, achieved.txt's `vnetlist` and `pnr` lines.
+    achieved.py hops <out> [design...]
+        Each clock's worst path (the `paths.rpt` achieved.tcl writes) of
+        Reticle's routes (<out>/reticle/s<n>/<d>/routes) and of Vivado's
+        placement of Reticle's netlist (<out>/pnr/s<n>/<d>), split into the
+        clock's terms (the period achieved less the data path), the cells'
+        delays and the connections' by where their two ends are: one slice,
+        the two slices of one tile, or two tiles. Per clock, the means over
+        the seeds both have; then the means over the clocks, and each kind
+        of connection's mean delay over every worst path.
 """
 import math, os, re, statistics, sys
 
@@ -187,6 +196,106 @@ def netlists(args):
                 print(f"{k}: geometric mean {statistics.geometric_mean(r):.3f} of Vivado's netlist")
 
 
+def where(a, b):
+    """`slice`, `tile` or `far`: where the two ends of a connection are, by
+    their sites. A slice's tile holds `SLICE_X<2k>` and `SLICE_X<2k+1>` of a
+    row; anything not a slice is `far`."""
+    xy = lambda site: re.match(r"SLICE_X(\d+)Y(\d+)$", site or "")
+    if a is None or b is None:
+        return "far"
+    if a == b:
+        return "slice"
+    pa, pb = xy(a), xy(b)
+    if pa and pb and pa[2] == pb[2] and int(pa[1]) // 2 == int(pb[1]) // 2:
+        return "tile"
+    return "far"
+
+
+def paths(rpt):
+    """Each path of a report_timing file: its group, slack, period achieved,
+    data path, and each connection as (delay, where, from site, to site)."""
+    out = []
+    rule = "-------------------------------------------------------------------    -------------------"
+    for block in open(rpt).read().split("\nSlack")[1:]:
+        group = re.search(r"Path Group:\s+(\S+)", block)
+        slack = float(re.match(r"\s*\(\w+\)\s*:\s*(-?[\d.]+)ns", block)[1])
+        req = float(re.search(r"Requirement:\s+([\d.]+)ns", block)[1])
+        data = float(re.search(r"Data Path Delay:\s+([\d.]+)ns", block)[1])
+        sections = block.split(rule)
+        hops, site, pending = [], None, None
+        for line in (sections[2] if len(sections) > 2 else "").splitlines():
+            m = re.match(r"\s+net \(fo=\d+, \w+\)\s+([\d.]+)\s", line)
+            if m:
+                pending = (float(m[1]), site)
+                continue
+            m = re.match(r"\s+(\S+)\s+(?:[A-Z]\w*\s+)?[rf]\s+\S+/\S+$", line.rstrip())
+            if m and pending:
+                hops.append((pending[0], where(pending[1], m[1]), pending[1], m[1]))
+                pending = None
+                continue
+            m = re.match(r"\s+(\S+)\s+\S+ \((Prop|Setup)", line)
+            if m:
+                site = m[1]
+        out.append(dict(group=group[1] if group else "?", slack=slack, achieved=req - slack,
+                        data=data, hops=hops))
+    return out
+
+
+def hops(args):
+    out, only = args[0], set(args[1:])
+    kinds = ("slice", "tile", "far")
+    flows = {"ours": "reticle/s{s}/{d}/routes/paths.rpt", "pnr": "pnr/s{s}/{d}/paths.rpt"}
+    designs = sorted(f[:-2] for f in os.listdir(f"{out}/cons1") if f.endswith(".v"))
+    data = {}
+    for flow, pattern in flows.items():
+        for s in range(1, 21):
+            for d in designs:
+                if only and d not in only:
+                    continue
+                rpt = f"{out}/" + pattern.format(s=s, d=d)
+                if not os.path.exists(rpt):
+                    continue
+                worst = {}
+                for p in paths(rpt):
+                    if p["group"] not in worst or p["slack"] < worst[p["group"]]["slack"]:
+                        worst[p["group"]] = p
+                for c, p in worst.items():
+                    data.setdefault((d, c), {}).setdefault(flow, {})[s] = p
+    mean = lambda xs: sum(xs) / len(xs) if xs else float("nan")
+    rows = []
+    print("| design | clock | flow | seeds | achieved | clock's terms | cells | one slice | one tile | two tiles |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
+    for k in sorted(data):
+        if set(data[k]) != set(flows):
+            continue
+        seeds = sorted(set(data[k]["ours"]) & set(data[k]["pnr"]))
+        if not seeds:
+            continue
+        row = {}
+        for flow in flows:
+            ps = [data[k][flow][s] for s in seeds]
+            route = {w: [sum(h[0] for h in p["hops"] if h[1] == w) for p in ps] for w in kinds}
+            count = {w: [sum(1 for h in p["hops"] if h[1] == w) for p in ps] for w in kinds}
+            r = dict(achieved=mean([p["achieved"] for p in ps]),
+                     clock=mean([p["achieved"] - p["data"] for p in ps]),
+                     cells=mean([p["data"] - sum(h[0] for h in p["hops"]) for p in ps]),
+                     **{w: mean(route[w]) for w in kinds}, **{"n" + w: mean(count[w]) for w in kinds})
+            row[flow] = r
+            print(f"| `{k[0]}` | `{k[1]}` | {flow} | {len(seeds)} | {r['achieved']:.3f} | {r['clock']:.3f} | "
+                  f"{r['cells']:.3f} | " + " | ".join(f"{r[w]:.3f} ({r['n' + w]:.1f})" for w in kinds) + " |")
+        rows.append(row)
+    print()
+    for term in ("achieved", "clock", "cells") + kinds + tuple("n" + w for w in kinds):
+        o, v = mean([r["ours"][term] for r in rows]), mean([r["pnr"][term] for r in rows])
+        print(f"{term}: ours {o:.3f} pnr {v:.3f} difference {o - v:+.3f}")
+    for flow in flows:
+        every = [h for r in data.values() for p in r.get(flow, {}).values() for h in p["hops"]]
+        for w in kinds:
+            hs = [h[0] for h in every if h[1] == w]
+            nz = [x for x in hs if x > 0]
+            print(f"{flow} {w}: {len(hs)} connections, mean {mean(hs):.3f} ns; {len(nz)} not zero, mean {mean(nz):.3f}")
+
+
 if __name__ == "__main__":
     what = sys.argv[1]
     if what == "constraints":
@@ -197,5 +306,7 @@ if __name__ == "__main__":
         table(sys.argv[2:])
     elif what == "netlists":
         netlists(sys.argv[2:])
+    elif what == "hops":
+        hops(sys.argv[2:])
     else:
         sys.exit(__doc__)

@@ -1250,3 +1250,34 @@ fn neither_a_slice_charge_nor_a_tables_bel_makes_the_corpus_faster() {
         );
     }
 }
+
+/// **A route's late cells given other bels of their tiles, and the placement
+/// routed again from that route, make the corpus faster**
+/// (`docs/fpga-vivado-parity.md`, "A tile's bels"). `bels` is `lutwa` with that
+/// pass, the faster of the two routes kept: twenty seeds, 0.9894 of `lutwa`,
+/// which a bootstrap over the seeds (unpaired) puts at 0.983 to 0.996 (95 %),
+/// no clock's median slower. `belshuffle` gives the same cells random legal
+/// bels instead, a control: 0.9932 of `lutwa`; and `bels` is 0.9962 of it,
+/// 0.990 to 1.002 unpaired, 0.994 to 0.999 paired seed for seed, `mul18` 1.4 %
+/// slower. This holds `bels` at least 0.8 % faster than `lutwa`
+/// with no clock's median slower, `belshuffle` between 0.3 % and 1.2 % faster
+/// than `lutwa` with none more than 1 % slower, `bels` at least 0.2 % faster
+/// than `belshuffle`, and twenty seeds of each. Would catch a regeneration that
+/// lost the measurement or a seed, or swapped `bels` with either; would not
+/// catch the flow moving since, nor the share the pass's choice of bels has
+/// in what it gained, which is the control's and is small.
+#[test]
+fn a_routes_late_cells_given_other_bels_make_the_corpus_faster() {
+    let Some(table) = achieved() else {
+        return;
+    };
+    let bels = twenty_seeds(&table, "lutwa", "bels", 1.0);
+    assert!(bels <= 0.992, "`bels` {bels:.4} of `lutwa`");
+    let shuffled = twenty_seeds(&table, "lutwa", "belshuffle", 1.01);
+    assert!(
+        (0.988..=0.997).contains(&shuffled),
+        "`belshuffle` {shuffled:.4} of `lutwa`"
+    );
+    let chosen = twenty_seeds(&table, "belshuffle", "bels", 1.02);
+    assert!(chosen <= 0.998, "`bels` {chosen:.4} of `belshuffle`");
+}

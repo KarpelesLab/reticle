@@ -10606,7 +10606,8 @@ a quoted run, not the flow.
   connection on a fast input is most of `bram_fifo`'s distance; a cost per pair of bels
   moved cells out of tiles instead. A pass after the anneal that permutes the cells of a
   slice, or of two neighbouring ones, against the table is the next thing to try; not
-  tried.
+  tried. *Tried since, after the route rather than the anneal, within a tile: "A tile's
+  bels", 1.1 % over the corpus, two thirds of it from routing twice.*
 - **The wide resets of the ADC clocks**, still most of `sad`'s latest paths: no placer
   above shortened them. Vivado puts the reset tables beside the flip-flops they reset and
   gives up the lanes' own locality; replicating the reset tables (a netlist change) was
@@ -10615,3 +10616,230 @@ a quoted run, not the flow.
   side by side".
 - The netlist's 2.6 % (`gray_cdc`'s two clocks, `analyser_fifo`'s read clock, `fsm`) was
   not looked at here.
+
+## A tile's bels
+
+**Asked: of the 3.6 % that Reticle's placement costs against Vivado's placement of the same
+netlist ("The placement's share, measured again"), how much is which bels two connected
+cells take inside one tile, which lookup table of `A` to `D`, which flip-flop, which slice of
+the two, against where the tiles are; and does a pass after the anneal that gives the cells
+of a late path other bels of their tiles close it?** Vivado 2026.1 at `xc7a100tftg256-3`, on
+28fce472, whose own build is `lutwa` of `achieved.txt` seed for seed (`achieved.py`'s
+table of seeds 1 to 10 the same to the picosecond). **Everything here is Vivado's timer or
+Reticle's routed estimate, each said; nothing has been on a part.**
+
+### The split, path by path (measured)
+
+`achieved.tcl` now writes each clock's five worst paths, hop by hop, and every cell's site
+and bel on them (`paths.rpt`, `paths.bels`), and `achieved.py hops` takes the worst of each
+clock apart: the clock's terms (the period achieved less the data path: skew, uncertainty
+and setup), the cells' delays, and each connection by where its two ends are, one slice,
+the two slices of one tile, or two tiles. Reticle's flow (`lutwa`, its routes, `cons1`'s
+clocks) against Vivado placing and routing Reticle's netlist (`pnr` `lutwa`, `cons3`'s),
+seeds 1 to 10, each term the mean over the seeds of the worst path, Reticle's less Vivado's,
+in ns:
+
+| design | clock | distance | clock's terms | cells | inside a tile | between tiles | connections inside a tile, Reticle / Vivado |
+|---|---|---|---|---|---|---|---|
+| `adders` | `clk` | -0.034 | -0.053 | +0.047 | -0.236 | +0.210 | 2.0 / 2.4 |
+| `analyser_fifo` | `rd_clk` | +0.029 | +0.002 | -0.038 | +0.011 | +0.054 | 4.8 / 5.0 |
+| `analyser_fifo` | `wr_clk` | +0.082 | +0.010 | -0.053 | -0.197 | +0.322 | 2.1 / 2.4 |
+| `barrel` | `clk` | -0.002 | -0.001 | -0.048 | +0.054 | -0.008 | 1.7 / 1.8 |
+| `bram_fifo` | `clk` | +0.364 | +0.023 | -0.001 | +0.519 | -0.177 | 2.9 / 2.2 |
+| `carry_counter` | `clk` | +0.030 | -0.044 | +0.146 | +0.164 | -0.237 | 2.4 / 1.5 |
+| `counter64` | `clk` | -0.010 | -0.065 | -0.019 | -0.093 | +0.167 | 1.0 / 1.2 |
+| `crc32` | `clk` | -0.117 | +0.004 | -0.016 | +0.155 | -0.261 | 1.2 / 1.0 |
+| `esad` | `adc_sampleclk` | +0.438 | +0.140 | -0.057 | +0.162 | +0.193 | 1.6 / 1.3 |
+| `esad` | `clk_usb` | +0.086 | +0.064 | -0.047 | +0.003 | +0.067 | 1.1 / 1.2 |
+| `fir8` | `clk` | -0.001 | -0.001 | +0.000 | +0.000 | +0.000 | 0.0 / 0.0 |
+| `fsm` | `clk` | +0.091 | -0.010 | -0.016 | +0.332 | -0.215 | 2.4 / 1.7 |
+| `gray_cdc` | `clk` | -0.187 | -0.092 | +0.166 | -0.259 | -0.001 | 2.4 / 2.0 |
+| `gray_cdc` | `clk2` | +0.109 | +0.004 | -0.073 | +0.001 | +0.176 | 1.6 / 1.5 |
+| `lutram32` | `clk` | +0.135 | -0.005 | -0.021 | +0.007 | +0.154 | 1.6 / 1.7 |
+| `mul18` | `clk` | +0.159 | +0.031 | +0.000 | +0.311 | -0.182 | 2.0 / 1.5 |
+| `regfile_alu` | `clk` | +0.361 | -0.009 | +0.723 | +0.020 | -0.372 | 2.9 / 2.0 |
+| `sad` | `adc_sampleclk` | +0.314 | +0.138 | -0.107 | +0.130 | +0.153 | 0.9 / 1.1 |
+| `sad` | `clk_usb` | +0.080 | +0.196 | -0.037 | +0.083 | -0.162 | 0.7 / 0.8 |
+| `srl_delay` | `clk` | +0.037 | -0.016 | -0.013 | -0.165 | +0.230 | 1.7 / 2.0 |
+| `widemux` | `clk` | +0.056 | +0.000 | -0.043 | +0.157 | -0.058 | 3.3 / 3.1 |
+| mean of 21 clocks | | **+0.096** | +0.015 | +0.023 | **+0.055** | +0.003 | |
+
+**Of the 0.096 ns by which Reticle's worst paths are later than Vivado's placement of the
+same netlist, 0.055 is connections inside one tile, 0.003 connections between tiles**, 0.015
+the clock's terms (the two ADC clocks' and `sad`'s `clk_usb` between regions: "The clock's
+pessimism between regions") and 0.023 the cells (`regfile_alu`'s worst path in Reticle's
+placement is two tables deeper than in Vivado's). Most of it is how many: a worst path of
+Reticle's has 0.37 connections between the two slices of a tile and Vivado's 0.25, at about
+the same delay (0.476 and 0.520 ns), and connections inside one slice are as many and as
+fast in both (0.425 and 0.396 ns where they are not zero, a flip-flop on its table's own
+lane). So by this account a little over half the placement's distance is inside a tile —
+which pair of bels, which tables share a tile — and very little where the tiles are. **It
+is a split of the worst paths, not a counterfactual**: the two placements' worst paths are
+not the same paths, a clock gains inside a tile what it loses between tiles (`bram_fifo`
++0.519 and -0.177, `regfile_alu` the other way), and each is a mean of ten seeds of a
+spread of 0.2 to 0.5 ns. Which slice of the two, `SLICEL` or `SLICEM`, is inside the "tile"
+column; the table does not tell lanes from slices.
+
+### What was changed
+
+A pass after the route (`place::refine_bels`, `src/fpga/place/bels.rs`), under the fitted
+model alone (`--delay-model vivado`, the default) and only with `--timing-driven`:
+
+1. **Time the routed placement**, each connection between two tiles at its routed delay,
+   and each inside one at the least sum of the nodes' delays (the routed estimate's) over
+   the wires of its tile and its interconnect tile, from the driver's output to the sink's
+   pin, a table's movable inputs (`xray::lut_movable_inputs`, the router's own classes)
+   given its pins latest first, as the router's matching would; a register's bel adds
+   what it launches after the earliest (`PlaceTiming::bel_launch`).
+2. **Move each cell of a late connection** (criticality 0.5 or more against its group's
+   latest path), in turn, to the bel of its kind in its tile, or swap it with the cell
+   there, that most lowers the tile's connections' delays weighed by their criticality to
+   the eighth; a move only where `SiteRules::allows` it, of a cell no pin, region or
+   dedicated wiring holds. Three rounds, each analysed again; put back if the latest
+   paths came out later.
+3. **Route again from the first route** (`RouteOptions::start`): every signal's route is
+   kept where it still reaches its sinks — a sink on another pin of its table only if
+   that pin is still of its class, through no node now closed — and not ripped up for
+   being critical; the branches of a moved cell are routed on from what is kept.
+4. **Keep the faster route**, by the routed estimate's latest paths (the sum of their
+   logarithms over the domains), whole and with its clocks on the network.
+
+`--delay-model legacy`, which the Husky builds pass, gives no `BelDelays` and is placed and
+routed as before, byte for byte (four builds checked, and the Husky's two below).
+
+### What the route made of it (measured)
+
+The pass promises more than a route gives. Over the eleven clocks farthest from Vivado's
+placement ("The placement's share, measured again"), ten seeds, the routed estimate:
+
+- **Before the route**, in the anneal's last placement with its own line for a connection
+  between tiles: 0.9964 of `lutwa` (0.979 to 1.011), noise. The line is the placement's,
+  and the latest paths the pass shortened were not the route's.
+- **After it, routed again from nothing**: the pass's own analysis has the latest paths
+  3.1 % earlier (the mean of their logarithms, 67 builds that moved anything); the second
+  route has them 1.3 % earlier, at a spread of 5.1 % from one build to the next and a
+  correlation of 0.12 with what the pass said. **Inside a tile the pass is right**: on ten
+  builds, the 85 connections at a criticality of 0.9 or more were 206 ps in its account and
+  206 ps routed; of all 2,260 at 0.5 or more, 162 and 197. What moves is the rest of the
+  route: rerouting the moved cells' signals changes the latest paths by as much as the
+  pass gains.
+- **A control: random bels.** Each of the same cells given a random legal bel of its tile
+  instead, one round: the pass's analysis has the paths 0.3 % later, the second route has
+  them 0.4 % earlier, and it is the faster route in 41 of 80 builds, as the timed pass's
+  is in 41 of 67. **Most of what keeping the faster of two routes gains is having two.**
+- Routed again **from the first route**, each signal kept whole where it could be: realised
+  0.95 % (control +0.3 %), at the same spread; with the branches of moved signals kept too
+  (what is committed), 1.1 % (control 0.35 % earlier). Only the late connections moving
+  (criticality 0.8 or 0.95, 1,078 moves where 0.5 makes 13,592): the same.
+
+By Vivado's timer, the corpus at twenty seeds against `lutwa` (unpaired bootstrap over the
+seeds, 95 %), `bels` the change and `belshuffle` the random control, both keeping the faster
+route:
+
+| design | clock | `lutwa` | `bels` | `bels` / `lutwa` | `belshuffle` / `lutwa` |
+|---|---|---|---|---|---|
+| `adders` | `clk` | 2.200 | 2.200 | 1.000 | 1.000 |
+| `analyser_fifo` | `rd_clk` | 4.316 | 4.301 | 0.997 | 1.002 |
+| `analyser_fifo` | `wr_clk` | 2.443 | 2.443 | 1.000 | 1.000 |
+| `barrel` | `clk` | 2.336 | 2.322 | 0.994 | 1.000 |
+| `bram_fifo` | `clk` | 3.954 | 3.881 | 0.982 | 0.990 |
+| `carry_counter` | `clk` | 1.944 | 1.944 | 1.000 | 0.998 |
+| `counter64` | `clk` | 3.357 | 3.345 | 0.996 | 0.998 |
+| `crc32` | `clk` | 2.048 | 2.042 | 0.997 | 1.008 |
+| `esad` | `adc_sampleclk` | 2.643 | 2.631 | 0.995 | 0.994 |
+| `esad` | `clk_usb` | 1.741 | 1.717 | 0.986 | 0.988 |
+| `fir8` | `clk` | 9.163 | 9.163 | 1.000 | 1.000 |
+| `fsm` | `clk` | 2.083 | 2.047 | 0.982 | 0.995 |
+| `gray_cdc` | `clk` | 1.413 | 1.413 | 1.000 | 1.000 |
+| `gray_cdc` | `clk2` | 1.526 | 1.502 | 0.985 | 0.984 |
+| `lutram32` | `clk` | 1.952 | 1.894 | 0.971 | 0.978 |
+| `mul18` | `clk` | 2.078 | 2.030 | 0.977 | 0.963 |
+| `regfile_alu` | `clk` | 5.832 | 5.721 | 0.981 | 0.983 |
+| `sad` | `adc_sampleclk` | 2.649 | 2.614 | 0.987 | 0.997 |
+| `sad` | `clk_usb` | 1.839 | 1.791 | 0.974 | 0.981 |
+| `srl_delay` | `clk` | 1.694 | 1.659 | 0.979 | 0.999 |
+| `widemux` | `clk` | 2.548 | 2.536 | 0.995 | 1.001 |
+| geometric mean | | | | **0.9894** | 0.9932 |
+
+- **`bels` is 0.9894 of `lutwa` (0.983 to 0.996), beyond the seeds' spread, and no clock's
+  median is later.** Seed for seed it is 0.9897 (0.988 to 0.992). Against Vivado's own flow
+  the corpus goes from 1.062 to 1.051, and against Vivado placing Reticle's netlist from
+  1.036 to 1.025.
+- **The control is 0.9932 (0.987 to 0.999)**: random bels and the faster route keep two
+  thirds of it. `bels` is 0.9962 of `belshuffle`, 0.990 to 1.002 unpaired and 0.994 to
+  0.999 seed for seed: the pass's choice of bels is worth about 0.4 %, the second route
+  about 0.7 %. `mul18` is faster under the control (0.963 against 0.977).
+- In the 340 builds, 295 moved something (73,333 moves; 21 were put back by the pass's own
+  analysis and 24 had nothing to move), and the second route was the faster in 141 of the
+  295.
+- An earlier form of the same, each kept signal whole or rerouted whole, on the eleven
+  clocks at ten seeds: 0.9822 of `lutwa` (0.968 to 1.001), its control 0.9871. Two of its
+  builds of `sad` refused their bitstreams, each a kept route's sink left on the pin of a
+  table that had moved, or through a way a moved cell had shut; both are now checked
+  (`RouteOptions::start`), and none of the 680 builds above refused one.
+
+### Runtime
+
+Reticle's builds of the corpus at seeds 1 to 4 (68 each), 28fce472 and this change one after
+the other in one job, the order alternating by seed, eight jobs at once on a machine shared
+with other work, summed (`timing:` lines): the placement 693.4 s and 685.2, the pass 3.5 s
+(the rules it moves by are the placement's own, kept: found again, a pass over every site of
+the die, they were a second a build), the route **286.8 s and 483.1**, and the builds **1,124.5
+s and 1,319.7, 17 % longer**. The second route costs most of what the first does: it keeps
+every route it can, but the moved cells' signals are many — on `widemux` 1,468 cells moved
+and 1,396 signals were routed again in its first pass — and the passes after it negotiate as
+the first route's did. In the 139 builds whose latest paths the pass did not promise to
+shorten, the second route was the faster all the same in 56 and the builds were 0.77 % faster
+by Vivado's timer (each build's clocks' mean against `lutwa`'s same seed); in the 156 it
+did promise, 85 and 1.54 %. Not routing those 139 again would save about two fifths of the
+second routes and give up about a third of the gain; not done.
+
+### The Husky's bitstreams
+
+Nothing on their path changed: they build with `--delay-model legacy`, which gives the
+pass nothing to time with. `build.sh` writes
+`3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` and `build_plus.sh`
+seed 4 `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f`. **Checked.**
+
+### Tests
+
+- `a_late_table_moves_to_the_bel_its_input_reaches_fastest` (`place::bels`): a table
+  beside its driver on a bel 400 ps away is moved to the one 100 ps away, the latest path
+  300 ps earlier in the pass's analysis; held by a constraint, it stays.
+- `a_tables_inputs_take_its_pins_latest_first`: a table's movable inputs given its pins
+  as the router's matching would, by weight, only among the pins that may move, each
+  way the least of its tile's.
+- `a_start_routing_is_kept_where_it_still_serves`,
+  `a_kept_route_is_not_ripped_up_for_being_critical` and
+  `a_started_route_is_not_kept_through_a_closed_node_or_to_another_class` (`route`):
+  `RouteOptions::start` keeps a route that still serves, routes again one whose sink
+  moved, keeps a kept route through the timed passes, and keeps none through a node now
+  closed or to a pin of another class — the two refusals the earlier form met.
+- `a_routes_late_cells_given_other_bels_make_the_corpus_faster`
+  (`tests/fpga_xray_achieved.rs`) holds `bels` at least 0.8 % faster than `lutwa` with no
+  clock's median slower, `belshuffle` between 0.3 % and 1.2 % faster with none more than
+  1 % slower, `bels` at least 0.2 % faster than `belshuffle`, twenty seeds of each.
+
+**Mutations**, each put back, each failing one of them: the pass taking the worse move,
+moving a held cell, matching a table's inputs in pin order, taking every input of a table
+with one movable input as movable, settling a way at its slowest; the route routing a kept
+signal in the first pass, ripping it up for being critical, keeping a sink on a pin of
+another class, keeping a route through a closed node; and of the fixture, `bels` 1 %
+slower, `belshuffle` 1 % faster, `bels` swapped with `belshuffle` and with `lutwa`, a seed
+of either lost. The unit tests hold the pass's mechanics on a fabric of their own, not
+that a move pays on the 7 series, which only the corpus says; and the fixture holds a
+quoted run, not the flow.
+
+### Not done
+
+- **Moving a cell to another tile.** The pass keeps every cell in its tile, so a table
+  whose partner's tile is full stays a tile away; Vivado's placement of `bram_fifo` put the
+  second and third tables in the tile above the first. Charging a connection to another
+  tile is the placement's line, which is what the pass before the route had and what did
+  not survive the route.
+- **Making the route less sensitive to the moves.** The 5 % spread of the second route is
+  most of what the pass's 3 % does not deliver; a route that rerouted only the moved
+  cells' connections and nothing for congestion was not tried.
+- **More than two routes.** Keeping the faster of two is two thirds of the gain; three or
+  more, from two passes or two seeds, would be more of the same at a route's cost each.
+- `SLICEL` against `SLICEM`, and lanes against slices, are not told apart in the split.
