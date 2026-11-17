@@ -95,9 +95,14 @@ module nanos_seph_usb #(
     wire [7:0] u_rx_data; wire u_rx_valid;
     wire [7:0] u_tx_data; wire u_tx_valid, u_tx_ready;
     wire io_oe, io_o;
+    // guard_etu is TC1, the guard *beyond* the mandatory 2 etu, and the ST31's
+    // ATR has no TC1, so 0. It was 2, which leaves the receiver deaf for 4 etu
+    // after our last character: smartcard_serial.v measured that losing a PPS
+    // echo's first byte on the same ST31 (14 November 2026). This bench, which
+    // sends no PPS, was confirmed with 2 and has not been run again with 0.
     iso7816_uart #(.ETU_DIV(ETU_DIV), .PARITY_RETRY(0)) u (
         .clk(clk), .rst_n(rst_n), .active(active),
-        .etu_div(ETU_DIV[15:0]), .guard_etu(8'd2), .convention(1'b0), .wt_etu(24'd4000000),
+        .etu_div(ETU_DIV[15:0]), .guard_etu(8'd0), .convention(1'b0), .wt_etu(24'd4000000),
         .tx_data(u_tx_data), .tx_valid(u_tx_valid), .tx_ready(u_tx_ready), .tx_abort(),
         .rx_data(u_rx_data), .rx_ready(1'b1), .rx_valid(u_rx_valid),
         .rx_parity_error(), .rx_overrun(), .rx_timeout(),
