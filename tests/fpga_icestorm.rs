@@ -984,3 +984,485 @@ fn the_board_designs_build_and_every_bit_decodes() {
         assert_eq!(back.tiles, built.image.tiles, "{name}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// On the board
+// ---------------------------------------------------------------------------
+
+/// The board checks, built with Reticle's own flow, loaded into the
+/// configuration memory and checked over the FT2232H's second channel.
+///
+/// Every test here is `#[ignore]`d, because it needs an iCE40UP5K-SG48
+/// board with an FT2232H whose first channel is wired as `iceprog` expects
+/// and whose second is a serial line to pins 9 (into the FPGA) and 10 (out
+/// of it), with a 12 MHz clock on pin 20:
+///
+/// ```sh
+/// cargo test --all-features --test fpga_icestorm board -- --ignored --test-threads 1
+/// ```
+///
+/// Each skips, saying why, when the database, the FT2232H or its serial
+/// port is absent. The serial port is found through sysfs as interface 1
+/// of the `0403:6010` device, so another adapter's `/dev/ttyUSB1` is never
+/// opened by mistake; `RETICLE_ICE40_TTY` names one instead. The line is
+/// set up with `stty`, which is why these run on Linux only.
+///
+/// Nothing here writes the flash: each test leaves its design running in
+/// the configuration memory, and a power cycle or `reticle program --ice40
+/// --boot` brings the flash's image back.
+#[cfg(all(feature = "verilog", feature = "program"))]
+mod board {
+    use super::{IceFabric, build_board_design, chipdb_5k};
+    use reticle::program::{ProgramError, ftdi, ice40, usb};
+    use std::io::{Read, Write};
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    /// The FT2232H's second channel as a tty, found through sysfs.
+    fn find_tty() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("RETICLE_ICE40_TTY") {
+            return Some(PathBuf::from(path));
+        }
+        let entries = std::fs::read_dir("/sys/class/tty").ok()?;
+        let mut names: Vec<String> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("ttyUSB"))
+            .collect();
+        names.sort();
+        for name in names {
+            let Ok(dev) = std::fs::canonicalize(format!("/sys/class/tty/{name}/device")) else {
+                continue;
+            };
+            let Some(iface) = dev.parent() else { continue };
+            let read = |p: PathBuf| std::fs::read_to_string(p).unwrap_or_default();
+            let number = read(iface.join("bInterfaceNumber"));
+            let Some(usb) = iface.parent() else { continue };
+            if number.trim() == "01"
+                && read(usb.join("idVendor")).trim() == "0403"
+                && read(usb.join("idProduct")).trim() == "6010"
+            {
+                return Some(PathBuf::from(format!("/dev/{name}")));
+            }
+        }
+        None
+    }
+
+    /// What came over the line, with the breaks and framing errors the
+    /// tty marked kept apart from the bytes.
+    #[derive(Debug, Default)]
+    pub(super) struct Received {
+        pub(super) bytes: Vec<u8>,
+        /// Breaks: the line held low for longer than a frame.
+        pub(super) breaks: usize,
+        /// Bytes received with a framing error, not in `bytes`.
+        pub(super) bad_frames: Vec<u8>,
+    }
+
+    /// A serial line at 115200 baud, 8N1, raw, with reads that time out
+    /// after a tenth of a second and breaks marked (`PARMRK`), so a break
+    /// is told apart from a received `0x00`.
+    pub(super) struct Serial {
+        file: std::fs::File,
+        /// Undecoded bytes: a `0xFF` marker split across two reads.
+        pending: Vec<u8>,
+    }
+
+    impl Serial {
+        fn open(path: &PathBuf) -> Option<Serial> {
+            let status = std::process::Command::new("stty")
+                .arg("-F")
+                .arg(path)
+                .args([
+                    "115200", "cs8", "-cstopb", "-parenb", "raw", "-echo", "clocal", "-crtscts",
+                    "-ixon", "-ixoff", "-ignbrk", "-brkint", "-ignpar", "parmrk", "-istrip",
+                    "-inpck", "min", "0", "time", "1",
+                ])
+                .status();
+            match status {
+                Ok(s) if s.success() => {}
+                other => {
+                    eprintln!(
+                        "skipping: `stty` could not set up {}: {other:?}",
+                        path.display()
+                    );
+                    return None;
+                }
+            }
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+            {
+                Ok(file) => Some(Serial {
+                    file,
+                    pending: Vec::new(),
+                }),
+                Err(e) => {
+                    eprintln!("skipping: cannot open {}: {e}", path.display());
+                    None
+                }
+            }
+        }
+
+        pub(super) fn send(&mut self, bytes: &[u8]) {
+            self.file
+                .write_all(bytes)
+                .expect("writing to the serial line");
+        }
+
+        /// Reads into `into` until `done` says so or nothing arrives for
+        /// `quiet`, never past `limit`.
+        pub(super) fn read(
+            &mut self,
+            into: &mut Received,
+            quiet: Duration,
+            limit: Duration,
+            done: impl Fn(&Received) -> bool,
+        ) {
+            let start = Instant::now();
+            let mut last = Instant::now();
+            let mut buf = [0u8; 4096];
+            while start.elapsed() < limit && !done(into) {
+                let n = self.file.read(&mut buf).unwrap_or(0);
+                if n == 0 {
+                    if last.elapsed() >= quiet {
+                        break;
+                    }
+                    continue;
+                }
+                last = Instant::now();
+                self.pending.extend_from_slice(&buf[..n]);
+                self.decode(into);
+            }
+            // A marker left half-read at the end is a byte after all.
+            if self.pending == [0xFF] {
+                into.bytes.push(0xFF);
+                self.pending.clear();
+            }
+        }
+
+        /// `PARMRK` with `ISTRIP` off: `FF FF` is a received `FF`, `FF 00
+        /// 00` a break, `FF 00 x` the byte `x` with a framing error.
+        fn decode(&mut self, into: &mut Received) {
+            let p = std::mem::take(&mut self.pending);
+            let mut i = 0;
+            while i < p.len() {
+                if p[i] != 0xFF {
+                    into.bytes.push(p[i]);
+                    i += 1;
+                    continue;
+                }
+                match (p.get(i + 1), p.get(i + 2)) {
+                    (Some(0xFF), _) => {
+                        into.bytes.push(0xFF);
+                        i += 2;
+                    }
+                    (Some(0), Some(0)) => {
+                        into.breaks += 1;
+                        i += 3;
+                    }
+                    (Some(0), Some(&x)) => {
+                        into.bad_frames.push(x);
+                        i += 3;
+                    }
+                    _ => {
+                        self.pending = p[i..].to_vec();
+                        return;
+                    }
+                }
+            }
+        }
+
+        /// Everything waiting, read and returned.
+        pub(super) fn drain(&mut self) -> Received {
+            let mut got = Received::default();
+            self.read(
+                &mut got,
+                Duration::from_millis(200),
+                Duration::from_secs(5),
+                |_| false,
+            );
+            got
+        }
+    }
+
+    /// Builds `testdata/fpga/ice40up/<name>.v` with Reticle's flow, or
+    /// `None` with the reason printed.
+    pub(super) fn build(name: &str) -> Option<Vec<u8>> {
+        let db = chipdb_5k()?;
+        let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+        let graph = fabric.arch.build_graph();
+        let built = build_board_design(name, &fabric, &graph);
+        assert!(built.decoded.unexplained.is_empty());
+        assert_eq!(built.decoded.arcs.len(), built.chosen);
+        eprintln!(
+            "{name}: {} logic cells, {} set bits, {} arcs, 0 unexplained",
+            built.pack.cells, built.decoded.bits, built.chosen
+        );
+        Some(built.image.to_bin())
+    }
+
+    /// The board, ready: the serial line open and drained, then `bin`
+    /// loaded into the configuration memory. `None`, with the reason
+    /// printed, when either is absent.
+    ///
+    /// The line is opened *before* the load and left open, so whatever the
+    /// FPGA's transmit pin does while it is held in reset and configured is
+    /// read by the first read after this returns.
+    pub(super) fn load(bin: &[u8]) -> Option<Serial> {
+        let Some(tty) = find_tty() else {
+            eprintln!(
+                "skipping: no FT2232H serial port (interface 1 of 0403:6010) in sysfs, and \
+                 RETICLE_ICE40_TTY is not set"
+            );
+            return None;
+        };
+        let cable = match usb::Cable::open(None) {
+            Ok(cable) => cable,
+            Err(ProgramError::NoDevice { .. }) => {
+                eprintln!("skipping: no FT2232H is attached");
+                return None;
+            }
+            Err(err) => panic!("opening the FT2232H: {err}"),
+        };
+        let mut serial = Serial::open(&tty)?;
+        let stale = serial.drain();
+        if !stale.bytes.is_empty() || stale.breaks != 0 {
+            eprintln!("before the load: {stale:?}");
+        }
+        let chip = cable.chip();
+        let divisor = ftdi::divisor_for_chip(chip, ice40::DEFAULT_SPI_HZ);
+        let mut p = ice40::Programmer::new(cable, chip, divisor, ice40::ICEPROG_WIRING)
+            .expect("configuring the MPSSE");
+        let done = p
+            .load_sram(bin, ice40::SramPath::FlashOutput)
+            .expect("loading the configuration memory");
+        assert!(done, "CDONE did not rise after the load");
+        Some(serial)
+    }
+
+    /// `uart_echo.v`: every byte value sent comes back plus one, one byte at
+    /// a time, and nothing else comes back.
+    ///
+    /// What it catches: an IO block's input or output configured wrong
+    /// (nothing comes back), a carry chain, enable or reset that is not the
+    /// silicon's (wrong or no bytes: this is the design that found the reset
+    /// that waited for an enable), and a baud counter off by more than a
+    /// UART tolerates. And it holds the line to saying nothing, not even a
+    /// break, from before the reset until the first byte is sent: the stray
+    /// `0x00` an earlier board showed (`docs/fpga-icestorm.md`) would fail
+    /// it. What it does not: anything the design does not use — RAMs, the
+    /// RGB driver.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn the_echo_answers_every_byte_on_the_board() {
+        let Some(bin) = build("uart_echo") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        // The line was open through the reset and the configuration, so a
+        // transmit pin that floated low then would show as a break here;
+        // the earlier scripts' termios read a break as one `0x00`.
+        let after = serial.drain();
+        eprintln!("after the load: {after:?}");
+        assert!(
+            after.bytes.is_empty() && after.breaks == 0 && after.bad_frames.is_empty(),
+            "the line said something before anything was sent: {after:?}"
+        );
+        let mut wrong = Vec::new();
+        for b in 0..=255u8 {
+            serial.send(&[b]);
+            let mut got = Received::default();
+            serial.read(
+                &mut got,
+                Duration::from_millis(300),
+                Duration::from_secs(1),
+                |r| !r.bytes.is_empty(),
+            );
+            if got.bytes != [b.wrapping_add(1)] || got.breaks != 0 || !got.bad_frames.is_empty() {
+                wrong.push(format!("sent {b:02x}, got {got:?}"));
+            }
+        }
+        serial.send(b"HAL hello");
+        let mut got = Received::default();
+        serial.read(
+            &mut got,
+            Duration::from_millis(300),
+            Duration::from_secs(2),
+            |r| r.bytes.len() >= 9,
+        );
+        assert!(
+            wrong.is_empty(),
+            "{} of 256 byte(s) wrong: {wrong:?}",
+            wrong.len()
+        );
+        assert_eq!(got.bytes, b"IBM!ifmmp", "{got:?}");
+        eprintln!("all 256 byte values came back plus one, and `HAL hello` as `IBM!ifmmp`");
+    }
+
+    /// The four dumps `ram_selftest.v` prints, as its formulas say.
+    fn expected_dumps() -> [(&'static str, String); 4] {
+        let r16: String = (0..256u32)
+            .map(|i| format!("{:02x}{:02x}", (i ^ 0x5a) & 0xff, !i & 0xff))
+            .collect();
+        let r8: String = (0..512u32)
+            .map(|i| {
+                format!(
+                    "{:02x}",
+                    ((i & 0xff) ^ (((i >> 8) & 1) << 7 | ((i >> 2) & 0x7f)) ^ 0xc3) & 0xff
+                )
+            })
+            .collect();
+        let r4: String = (0..1024u32)
+            .map(|i| {
+                format!(
+                    "{:x}",
+                    ((i & 15) ^ ((i >> 4) & 15) ^ (((i >> 8) & 3) << 2 | ((i >> 8) & 3))) & 15
+                )
+            })
+            .collect();
+        let r2: String = (0..2048u32)
+            .map(|i| format!("{:x}", ((i & 3) ^ ((i >> 2) & 3) ^ ((i >> 9) & 3)) & 3))
+            .collect();
+        [("R16", r16), ("R08", r8), ("R04", r4), ("R02", r2)]
+    }
+
+    /// Checks one report of `ram_selftest.v`, returning what was wrong.
+    fn check_report(text: &str) -> Vec<String> {
+        let mut problems = Vec::new();
+        let want = expected_dumps();
+        let mut seen = Vec::new();
+        for line in text.split(['\r', '\n']).filter(|l| !l.is_empty()) {
+            if let Some(rest) = line.strip_prefix("SP:") {
+                seen.push("SP");
+                if line != "SP:PPPP BR:PPPP" {
+                    problems.push(format!("the verdicts read `SP:{rest}`"));
+                }
+            } else if line == "END" {
+                seen.push("END");
+            } else if let Some((key, expect)) = want.iter().find(|(k, _)| line.starts_with(k)) {
+                seen.push(key);
+                let got = line.get(4..).unwrap_or("");
+                if got != expect {
+                    let differ = got
+                        .chars()
+                        .zip(expect.chars())
+                        .filter(|(a, b)| a != b)
+                        .count();
+                    problems.push(format!(
+                        "{key}: {} digit(s) where {} were expected, {differ} differ",
+                        got.len(),
+                        expect.len()
+                    ));
+                }
+            } else {
+                problems.push(format!(
+                    "an unexpected line: {:?}",
+                    line.chars().take(60).collect::<String>()
+                ));
+            }
+        }
+        for key in ["SP", "R16", "R08", "R04", "R02", "END"] {
+            if !seen.contains(&key) {
+                problems.push(format!("no {key} line"));
+            }
+        }
+        problems
+    }
+
+    /// `ram_selftest.v`: all four single-port RAMs and a block RAM of each
+    /// width pass, and every digit of the four read-only block RAMs'
+    /// dumps — contents from `initial` — equals the formula in the RTL,
+    /// on the report printed after power-up and on one asked for by a
+    /// byte.
+    ///
+    /// What it catches: a RAM pin on the wrong wire, a mode in the wrong
+    /// bits, a mask bit swapped, contents in the wrong order or the wrong
+    /// layout for a narrow mode — the two faults `docs/fpga-icestorm.md`
+    /// planted and the board saw (`SP:FFFF`, and 2 560 digits wrong) were
+    /// both invisible to `implement`'s checks. What it does not: the 2-bit
+    /// dump under a reversal of the contents' lines, which its formula
+    /// happens to be symmetric under; the other three dumps are not.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn both_kinds_of_ram_pass_and_dump_their_contents_on_the_board() {
+        let Some(bin) = build("ram_selftest") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let ended = |r: &Received| r.bytes.windows(3).any(|w| w == b"END");
+        // The report it prints on its own, about 87 ms after configuring.
+        let mut first = Received::default();
+        serial.read(
+            &mut first,
+            Duration::from_millis(1500),
+            Duration::from_secs(5),
+            ended,
+        );
+        // A byte asks for another run.
+        serial.send(b"?");
+        let mut second = Received::default();
+        serial.read(
+            &mut second,
+            Duration::from_millis(1500),
+            Duration::from_secs(5),
+            ended,
+        );
+        eprintln!(
+            "after the load: {} byte(s), {} break(s), {} bad frame(s), starting {:02x?}",
+            first.bytes.len(),
+            first.breaks,
+            first.bad_frames.len(),
+            &first.bytes[..first.bytes.len().min(4)]
+        );
+        let mut problems: Vec<String> = check_report(&String::from_utf8_lossy(&first.bytes))
+            .into_iter()
+            .map(|p| format!("after the load: {p}"))
+            .collect();
+        problems.extend(
+            check_report(&String::from_utf8_lossy(&second.bytes))
+                .into_iter()
+                .map(|p| format!("when asked: {p}")),
+        );
+        for (when, got) in [("after the load", &first), ("when asked", &second)] {
+            if got.breaks != 0 || !got.bad_frames.is_empty() {
+                problems.push(format!(
+                    "{when}: {} break(s) and bad frames {:02x?}",
+                    got.breaks, got.bad_frames
+                ));
+            }
+        }
+        assert!(problems.is_empty(), "{problems:#?}");
+        eprintln!("SP:PPPP BR:PPPP and all 4 608 dumped words as the RTL's formulas say, twice");
+    }
+
+    /// The report check itself, with no board: the report the formulas
+    /// predict passes, and one wrong digit, one failed verdict, a missing
+    /// line or a stray byte before the first line each fail it. Without
+    /// this, a check that accepted anything would pass on the board too.
+    #[test]
+    fn the_report_check_rejects_a_wrong_report() {
+        let mut good = String::from("SP:PPPP BR:PPPP\r\n");
+        for (key, digits) in expected_dumps() {
+            good.push_str(&format!("{key}:{digits}\r\n"));
+        }
+        good.push_str("END\r\n");
+        assert_eq!(check_report(&good), Vec::<String>::new());
+        let digit = good.find("R04:").unwrap() + 4 + 100;
+        let mut wrong = good.clone().into_bytes();
+        wrong[digit] = if wrong[digit] == b'0' { b'1' } else { b'0' };
+        for bad in [
+            String::from_utf8(wrong).unwrap(),
+            good.replacen("BR:PPPP", "BR:PPFP", 1),
+            good.replacen("END\r\n", "", 1),
+            format!("\0{good}"),
+        ] {
+            assert!(!check_report(&bad).is_empty(), "accepted: {:?}", &bad[..20]);
+        }
+    }
+}

@@ -269,9 +269,50 @@ written to the flash:
 `ram_selftest` built by this backend is what the board was left booting
 from its flash on 2026-11-18 (written with `--write-flash`, read back and
 compared, then booted again with `--boot`: `CDONE` high and the report
-complete). The first read after a configuration has one `0x00` byte before
-the design's first line — the transmit pin held low while the part
-configures, by the look of it; not investigated.
+complete).
+
+**The board checks are tests now** (`board` in `tests/fpga_icestorm.rs`,
+`#[ignore]`d, run with `--ignored --test-threads 1`): each builds its
+design with Reticle's own flow, loads it into configuration memory and
+checks the serial line. `the_echo_answers_every_byte_on_the_board` sends
+all 256 byte values one at a time and wants each back plus one, then `HAL
+hello` back as `IBM!ifmmp`; `both_kinds_of_ram_pass_and_dump_their_contents_on_the_board`
+wants `SP:PPPP BR:PPPP` and every dumped digit equal to the RTL's formula,
+on the report printed after configuration and again on one a byte asks
+for. Both passed on 2026-11-18 — CHECKED. They skip, saying why, without
+the database, the FT2232H or its serial port, which is found in sysfs as
+interface 1 of the `0403:6010` device rather than assumed to be
+`/dev/ttyUSB1`. What checks the checker, with no board:
+`the_report_check_rejects_a_wrong_report`.
+
+### The stray `0x00`, not reproduced
+
+The first board's first read after a configuration had one `0x00` before
+the design's first line. On the unit attached on 2026-11-18 — a different
+one: its flash answers with another unique ID, and its flash was blank, so
+`ram_selftest` was written to it again — it could not be made to happen:
+
+| Tried | What came over the line |
+|---|---|
+| line open across a load into configuration memory (each board test does this) | nothing until the design spoke; no byte, no break |
+| line opened after the load, three loads, with the earlier scripts' settings | the report, starting `SP:` |
+| line open across a boot from flash | the report, starting `SP:` |
+| line open while the FPGA was held in reset for about three seconds (a flash read) | nothing at all, no break |
+
+So it does not come from the design on this unit: the transmit flip-flop
+starts at zero and the pin drives `~out_n[0]`, high, from the first cycle,
+and in reset the line stays high. The earlier scripts' `termios` had
+`IGNBRK`, `BRKINT` and `PARMRK` all clear, and a tty set up that way
+delivers a **break** — the line held low for longer than a frame — as a
+single `0x00`: exactly what was seen. That fits a line floating low while
+that unit was held in reset, but that unit is not here to confirm it, so
+it is a reading, not a finding. The tests now set `PARMRK`, which tells a
+break (`FF 00 00`) and a framing error (`FF 00 x`) from a received byte,
+and the echo test fails on anything at all before its first byte.
+
+Writing the flash and then loading configuration memory twice left the
+flash's image unchanged, read back byte for byte — CHECKED, because a load
+holds the flash's `/CS` low for the whole bitstream.
 
 **The board check is not a tautology**, and was checked not to be: a build
 with two faults the flow's own checks cannot see — the contents' sixteen
