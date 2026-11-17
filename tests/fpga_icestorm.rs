@@ -62,6 +62,21 @@ fn chipdb_5k() -> Option<ChipDb> {
     Some(ChipDb::parse(&text).expect("the database parses"))
 }
 
+/// The UltraPlus's timing figures, `timings_up5k.txt` beside the chip
+/// database, or `None` with the reason printed.
+#[cfg(feature = "verilog")]
+fn timing_db() -> Option<reticle::fpga::icestorm::timing::TimingDb> {
+    let dir = database_dir()?;
+    let text = match std::fs::read_to_string(dir.join("timings_up5k.txt")) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("skipping: {}: {e}", dir.display());
+            return None;
+        }
+    };
+    Some(reticle::fpga::icestorm::timing::TimingDb::parse(&text).expect("the timing file parses"))
+}
+
 /// The reference `.asc`/`.bin` pairs, or none with the reason printed.
 fn reference_pairs() -> Vec<(String, String, Vec<u8>)> {
     let Ok(dir) = std::env::var("RETICLE_ICE40_REF") else {
@@ -818,6 +833,31 @@ fn implement_source(
     fabric: &IceFabric,
     graph: &reticle::fpga::arch::RoutingGraph,
 ) -> Result<reticle::fpga::icestorm::Implemented, String> {
+    let device = reticle::fpga::target("ice40-up5k-sg48").expect("the device ships");
+    let (design, top, constraints) = synthesize_source(name, source, rcf);
+    reticle::fpga::icestorm::implement(
+        &design,
+        top,
+        device,
+        &constraints,
+        fabric,
+        graph,
+        &reticle::fpga::place::PlaceOptions::default(),
+    )
+}
+
+/// Verilog `source` constrained by `rcf`, synthesized for the
+/// iCE40UP5K-SG48: the design, its top module and the constraints.
+#[cfg(feature = "verilog")]
+fn synthesize_source(
+    name: &str,
+    source: &str,
+    rcf: &str,
+) -> (
+    reticle::ir::Design,
+    reticle::ir::ModuleId,
+    reticle::fpga::Constraints,
+) {
     use reticle::diag::Diagnostics;
     use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
     use reticle::source::SourceMap;
@@ -853,15 +893,7 @@ fn implement_source(
     )
     .expect("the flow");
     assert!(!diags.has_errors(), "{name}: {}", diags.render(&map));
-    reticle::fpga::icestorm::implement(
-        &design,
-        top,
-        device,
-        &constraints,
-        fabric,
-        graph,
-        &reticle::fpga::place::PlaceOptions::default(),
-    )
+    (design, top, constraints)
 }
 
 /// A read-only memory of `ram_selftest.v`: its name, width, depth and words.
@@ -1045,6 +1077,252 @@ fn the_board_designs_build_and_every_bit_decodes() {
         // was checked.
         let back = Image::from_bin(&built.image.to_bin()).unwrap();
         assert_eq!(back.tiles, built.image.tiles, "{name}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Timing
+// ---------------------------------------------------------------------------
+
+/// The static timing analysis (`icestorm::timing::analyse`) of bitstreams
+/// nextpnr placed and routed, against nextpnr's own report of the same
+/// bitstream and against IceStorm's `icetime` run on it.
+///
+/// `RETICLE_ICE40_TIMING_REF` names a directory of `<name>.asc` files with,
+/// beside each, `<name>.npr.log` (nextpnr's log: the last `Max frequency
+/// for clock` line of each clock) and `<name>.icetime` (`icetime -i -t`'s
+/// report: its `Total path delay`), either or both — Reticle's own builds
+/// have only the second. None ship; without them this says so and passes.
+/// icetime is compared on a design of one clock only: it times every path
+/// as one, across clocks too. Each of nextpnr's clocks is matched to the analysis's clock
+/// nearest it in frequency.
+///
+/// What it would catch: a delay model or a graph that disagrees with the
+/// tools the iCE40 world times with — a connection's cell, a logic cell's
+/// arc, a setup, a register not found or a path through one. nextpnr's
+/// model is the one ported (`pip_delay`), so its figures should agree
+/// closely; icetime's chooses cells differently and is the independent
+/// check. What it would not: whether any of the three is the silicon.
+#[cfg(feature = "verilog")]
+#[test]
+fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
+    let Ok(dir) = std::env::var("RETICLE_ICE40_TIMING_REF") else {
+        eprintln!("skipping: RETICLE_ICE40_TIMING_REF names no directory of nextpnr builds");
+        return;
+    };
+    let Some(db) = chipdb_5k() else { return };
+    let Some(tdb) = timing_db() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let mut names: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .expect("the directory reads")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "asc"))
+        .collect();
+    names.sort();
+    let mut worst_npr: f64 = 0.0;
+    let mut worst_icetime: f64 = 0.0;
+    for asc in names {
+        let name = asc.file_stem().unwrap().to_string_lossy().into_owned();
+        let image = Image::from_asc(&std::fs::read_to_string(&asc).unwrap()).unwrap();
+        let report = reticle::fpga::icestorm::timing::analyse(&fabric, &image, &tdb);
+        let ours: Vec<f64> = report.clocks.iter().map(|c| c.fmax_mhz).collect();
+        if let Ok(log) = std::fs::read_to_string(asc.with_extension("npr.log")) {
+            let mut last: std::collections::BTreeMap<String, f64> =
+                std::collections::BTreeMap::new();
+            for line in log
+                .lines()
+                .filter(|l| l.contains("Max frequency for clock"))
+            {
+                let Some(rest) = line.split("clock").nth(1) else {
+                    continue;
+                };
+                let clock = rest.split('\'').nth(1).unwrap_or("").to_owned();
+                let mhz = rest
+                    .split(':')
+                    .nth(1)
+                    .and_then(|r| r.split_whitespace().next())
+                    .and_then(|f| f.parse::<f64>().ok());
+                if let Some(mhz) = mhz {
+                    last.insert(clock, mhz);
+                }
+            }
+            for (clock, theirs) in &last {
+                let mine = ours
+                    .iter()
+                    .copied()
+                    .min_by(|a, b| (a - theirs).abs().total_cmp(&(b - theirs).abs()));
+                let Some(mine) = mine else {
+                    panic!("{name}: nextpnr times `{clock}` and the analysis no clock");
+                };
+                let error = (mine - theirs) / theirs;
+                worst_npr = worst_npr.max(error.abs());
+                eprintln!(
+                    "{name}: `{clock}` nextpnr {theirs:.2} MHz, the analysis {mine:.2} MHz \
+                     ({:+.1} %)",
+                    100.0 * error
+                );
+            }
+        }
+        // icetime times every path as one, whatever its clocks, so only a
+        // design of one clock compares; and it times a DSP block's
+        // multiplier as logic, where nextpnr and this analysis take its
+        // ports for registers, so a design with one is shown and not held
+        // to the bound.
+        let dsp = fabric
+            .decode(&image)
+            .dsps
+            .values()
+            .any(|d| d.params.values().any(|v| *v != 0));
+        if report.clocks.len() == 1
+            && let Ok(text) = std::fs::read_to_string(asc.with_extension("icetime"))
+            && let Some(ns) = text
+                .lines()
+                .find_map(|l| l.strip_prefix("Total path delay: "))
+                .and_then(|r| r.split_whitespace().next())
+                .and_then(|n| n.parse::<f64>().ok())
+        {
+            let mine = report.worst().map_or(0.0, |c| c.delay_ps / 1000.0);
+            let error = (mine - ns) / ns;
+            if !dsp {
+                worst_icetime = worst_icetime.max(error.abs());
+            }
+            eprintln!(
+                "{name}: icetime's longest path {ns:.2} ns, the analysis's {mine:.2} ns ({:+.1} %)",
+                100.0 * error
+            );
+        }
+    }
+    eprintln!(
+        "the largest disagreement: {:.1} % with nextpnr, {:.1} % with icetime (no DSP block)",
+        100.0 * worst_npr,
+        100.0 * worst_icetime
+    );
+    assert!(worst_npr <= 0.05, "{:.1} % from nextpnr", 100.0 * worst_npr);
+    assert!(
+        worst_icetime <= 0.05,
+        "{:.1} % from icetime",
+        100.0 * worst_icetime
+    );
+}
+
+/// A board design built with the timing figures is timed: its one clock
+/// has a longest path, well inside the 83 ns its constraint asks for, and
+/// the path starts at a register and ends at one. Built timing-driven, it
+/// is still legal (every bit explained, the arcs the router's) and timed.
+///
+/// What it would catch: the analysis finding no register or no path, the
+/// timing-driven flow failing to place or route, its build breaking the
+/// two checks. What it would not: whether the figures are right, which
+/// `the_timing_analysis_agrees_with_nextpnr_and_icetime` is for.
+#[cfg(feature = "verilog")]
+#[test]
+fn a_board_design_is_timed() {
+    let Some(db) = chipdb_5k() else { return };
+    let Some(tdb) = timing_db() else { return };
+    let mut fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    fabric.timing = Some(tdb);
+    let graph = fabric.arch.build_graph();
+    for driven in [false, true] {
+        fabric.timing_driven = driven;
+        let built = build_board_design("uart_echo", &fabric, &graph);
+        assert!(built.decoded.unexplained.is_empty());
+        assert_eq!(built.decoded.arcs.len(), built.chosen);
+        let report = built.timing.expect("timed");
+        assert_eq!(report.clocks.len(), 1, "{report:?}");
+        let clock = &report.clocks[0];
+        assert!(clock.fmax_mhz > 12.0 && clock.fmax_mhz < 500.0, "{clock:?}");
+        assert!(clock.nets.len() > 2, "{clock:?}");
+        eprintln!(
+            "uart_echo{}: {:.2} ns, {:.1} MHz over {} nets",
+            if driven { ", timing-driven" } else { "" },
+            clock.delay_ps / 1000.0,
+            clock.fmax_mhz,
+            clock.nets.len()
+        );
+    }
+}
+
+/// What timing-driven placement and routing buy on the iCE40UP5K: each
+/// board design built five ways (five seeds) without and with them, the
+/// slowest clock's frequency by `timing::analyse` printed for each, and
+/// the least, the median and the most of the five. The seeds are the
+/// noise: one build against another of the same flow differs by as much
+/// as the flows might. Ignored, because it builds sixty designs; it
+/// asserts nothing about a speed-up, only that every build is legal and
+/// timed. `docs/fpga-icestorm.md` has its figures.
+#[cfg(feature = "verilog")]
+#[test]
+#[ignore = "builds sixty designs; prints what timing-driven placement and routing buy"]
+fn the_timing_driven_flow_is_faster() {
+    let Some(db) = chipdb_5k() else { return };
+    let Some(tdb) = timing_db() else { return };
+    let mut fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    fabric.timing = Some(tdb);
+    let graph = fabric.arch.build_graph();
+    let device = reticle::fpga::target("ice40-up5k-sg48").expect("the device ships");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/ice40up");
+    let designs = std::env::var("RETICLE_ICE40_TIMING_DESIGNS").unwrap_or_else(|_| {
+        "uart_echo ram_selftest dsp_selftest pll_uart pll2f_uart osc_count".to_owned()
+    });
+    let seeds: Vec<u64> = (1..=5).collect();
+    for name in designs.split_whitespace() {
+        let source = std::fs::read_to_string(dir.join(format!("{name}.v"))).unwrap();
+        let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf"))).unwrap();
+        let (design, top, mut constraints) = synthesize_source(name, &source, &rcf);
+        // `RETICLE_ICE40_TIMING_PERIOD` asks every clock the constraints
+        // name for that period instead, so that a design whose own clock
+        // leaves every path slack still has something to be driven by.
+        if let Some(period) = std::env::var("RETICLE_ICE40_TIMING_PERIOD")
+            .ok()
+            .and_then(|p| p.parse::<f64>().ok())
+        {
+            for clock in &mut constraints.clocks {
+                clock.period_ns = period;
+            }
+        }
+        let mut line = format!("{name}:");
+        for driven in [false, true] {
+            fabric.timing_driven = driven;
+            let mut fmax: Vec<f64> = Vec::new();
+            for &seed in &seeds {
+                let options = reticle::fpga::place::PlaceOptions {
+                    seed,
+                    ..reticle::fpga::place::PlaceOptions::default()
+                };
+                let built = reticle::fpga::icestorm::implement(
+                    &design,
+                    top,
+                    device,
+                    &constraints,
+                    &fabric,
+                    &graph,
+                    &options,
+                )
+                .unwrap_or_else(|e| panic!("{name} seed {seed}: {e}"));
+                let report = built.timing.expect("timed");
+                let worst = report.worst().expect("a path");
+                fmax.push(worst.fmax_mhz);
+            }
+            let mut sorted = fmax.clone();
+            sorted.sort_by(f64::total_cmp);
+            line.push_str(&format!(
+                " {} {:.1}/{:.1}/{:.1} MHz ({})",
+                if driven {
+                    "timing-driven"
+                } else {
+                    "wirelength"
+                },
+                sorted[0],
+                sorted[sorted.len() / 2],
+                sorted[sorted.len() - 1],
+                fmax.iter()
+                    .map(|f| format!("{f:.1}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+        eprintln!("{line}");
     }
 }
 

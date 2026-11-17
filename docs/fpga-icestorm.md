@@ -379,6 +379,104 @@ readback counts the bit, and mapping no longer puts a global buffer behind
 an oscillator either (`global_outputs` on its `bel` line). Like the PLL,
 an oscillator's bel blocks the fabric's buffer onto its network.
 
+## Timing
+
+`reticle fetch icestorm` has always taken `timings_up5k.txt`; it is read
+now. With it beside the chip database, every build reports each clock's
+longest register-to-register path, and `--timing-driven` places and routes
+by it (`src/fpga/icestorm/timing.rs`).
+
+**The figures.** icetime's format: per cell, `IOPATH` arcs and `SETUP`
+lines, each figure `min:typ:max` for rise and fall, in picoseconds. One
+number is kept per arc, the larger `max`, as nextpnr's `chipdb.py` reads
+the file (icetime takes the largest of all six, which is the same number
+here).
+
+**A connection's cell** is not in the database: a multiplexer is a
+`LocalMux`, an `InMux`, a `Span4Mux` and so on by the wires it joins. The
+rule is nextpnr's `pipdelay`, ported line for line — the destination's kind
+decides, and for a span-4 the source's too. icetime chooses differently (a
+span's multiplexer by how far along the span the connection leaves it,
+`Odrv4`/`Odrv12` at a cell's output, a `CascadeMux` on a third input).
+
+**The analysis** (`timing::analyse`) reads the image back — the arcs, each
+logic cell's table, carry and flip-flop, the block RAMs — and finds per
+clock the longest path from a register to a register: clock-to-output,
+routing and logic, then setup (a data input's table delay less 50 ps, as
+nextpnr has it for the UltraPlus; 100 ps for any other register input).
+Paths between clocks and to or from pins are not timed; a DSP block's and
+a single-port RAM's ports are taken for registers, as nextpnr takes them.
+
+**Checked against nextpnr and icetime** on the same bitstreams
+(`the_timing_analysis_agrees_with_nextpnr_and_icetime`, given the files in
+`RETICLE_ICE40_TIMING_REF`): six designs nextpnr placed and routed from
+Reticle's export, and Reticle's own builds of two, plain and timing-driven.
+
+| Bitstream | nextpnr's report, per clock | this analysis | icetime `-i` | this analysis |
+|---|---|---|---|---|
+| `uart_echo`, nextpnr's | 64.66 MHz | 64.41 MHz (−0.4 %) | 15.19 ns | 15.53 ns (+2.2 %) |
+| `ram_selftest`, nextpnr's | 29.72 MHz | 29.71 MHz (−0.0 %) | 33.69 ns | 33.66 ns (−0.1 %) |
+| `dsp_selftest`, nextpnr's | 48.69 MHz | 48.83 MHz (+0.3 %) | 31.78 ns | 20.48 ns (−35.6 %) |
+| `pll_uart`, nextpnr's | 48.69 MHz; `sys` 42.91 | 48.70 (+0.0 %); 42.94 (+0.1 %) | | |
+| `pll2f_uart`, nextpnr's | 48.69; `half` 45.04; `sys` 42.72 | 48.89 (+0.4 %); 45.02 (−0.1 %); 41.62 (−2.6 %) | | |
+| `osc_count`, nextpnr's | 48.69; `hf` 43.94; `lf` 56.32 | 46.92 (−3.6 %); 43.97 (+0.1 %); 56.29 (−0.0 %) | | |
+| `uart_echo`, Reticle's | | | 15.21 ns | 15.61 ns (+2.6 %) |
+| `uart_echo`, Reticle's, timing-driven | | | 13.98 ns | 14.38 ns (+2.8 %) |
+| `ram_selftest`, Reticle's | | | 41.16 ns | 42.25 ns (+2.7 %) |
+| `ram_selftest`, Reticle's, timing-driven | | | 37.13 ns | 37.72 ns (+1.6 %) |
+
+So: within 3.6 % of nextpnr on every clock of six designs, most within
+0.5 % — its model, ported; and within 2.8 % of icetime, an independent
+model, on every single-clock design without a DSP block — CHECKED, the
+bound asserted. Two disagreements are understood and not fixed: icetime
+times a DSP block's multiplier as logic (its `SB_MAC16_*` cells), where
+nextpnr and this analysis take the block's ports for registers, so for
+`dsp_selftest`'s unregistered multipliers icetime's 31.78 ns is the more
+honest figure; and icetime times every path as one whatever its clocks,
+so it is not compared on a design of several. The −3.6 % on `osc_count`'s
+crystal clock and −2.6 % on `pll2f_uart`'s `sys` were not run down. None
+of the three is the silicon: `pll_uart` ran at 48 MHz on the board from a
+build all three time at 41 to 43 MHz, as a slow-corner model should.
+
+**Timing-driven placement and routing** (`--timing-driven`) use the
+machinery the 7-series flow does (`docs/fpga-placement.md`): a
+`PlaceTiming` per netlist pin — a registered cell's output starts paths
+and the table inputs it reads end them, an unregistered one's pass them on
+with each input's own delay to the output and to the carry
+(`timing::place_timing`) — weighs each signal by its criticality over three
+rounds of annealing, and the router weighs delay against congestion per
+connection, from each node's delay by its wire's kind
+(`timing::node_delays`). A connection is estimated before routing at
+`1.76 + 0.12 * tiles` ns (`timing::WIRE`: a `LocalMux` and an `InMux` to the
+next tile, a span's multiplexer every four or twelve).
+
+What it buys, five seeds each (`the_timing_driven_flow_is_faster`, ignored;
+the slowest clock's frequency by the analysis, least / median / most):
+
+| Design | wirelength | timing-driven |
+|---|---|---|
+| `uart_echo`, 12 MHz constraint | 55.0 / 58.4 / 62.6 MHz | 62.1 / 66.4 / 68.4 MHz |
+| `ram_selftest`, 12 MHz | 21.8 / 22.6 / 23.4 | 25.8 / 26.1 / 28.6 |
+| `dsp_selftest`, 12 MHz | 38.5 / 41.0 / 43.6 | 35.9 / 48.0 / 50.3 |
+| `pll_uart`, 48 MHz from the PLL | 39.7 / 42.8 / 45.1 | 46.9 / 48.5 / 48.8 |
+| `pll2f_uart`, 48 and 24 | 34.8 / 36.2 / 38.7 | 28.0 / 40.4 / 43.2 |
+| `osc_count`, 12 MHz and the oscillators | 34.7 / 39.7 / 41.8 | 42.1 / 43.3 / 44.7 |
+| `uart_echo`, every clock asked 10 ns | 55.0 / 58.4 / 62.6 | 64.3 / 66.5 / 69.9 |
+| `ram_selftest`, 10 ns | 21.8 / 22.6 / 23.4 | 26.5 / 28.1 / 28.5 |
+| `dsp_selftest`, 10 ns | 38.5 / 41.0 / 43.6 | 49.5 / 53.2 / 56.1 |
+| `osc_count`, 10 ns | 34.7 / 39.7 / 41.8 | 40.7 / 42.7 / 45.6 |
+
+The median rises on every design, by 7 to 30 %. With the designs' own
+constraints the least does not always: a design whose 12 MHz leaves every
+path slack gives the timing rounds nothing to weigh, and one seed of
+`dsp_selftest` came out slower than any wirelength placement; `pll2f_uart`'s
+28.0 MHz is its 24 MHz clock, which meets its period. Asked for 10 ns, every
+seed of every design is faster than the wirelength placement's median, and
+for three of the four faster than its best. `pll_uart`, which nextpnr
+places at 42.9 MHz and the plain flow at 42.8 in the median, meets its 48
+MHz in timing-driven builds — and one so built ran on the board, every line
+`L1 N400000` (CHECKED, 2026-11-18).
+
 ## The configuration image, and `icepack` ported
 
 `src/fpga/icestorm/image.rs` holds every tile's bitmap, the extra bits and
@@ -669,10 +767,8 @@ board, where the echo's line resynchroniser has no enable and works.
 - a logic tile's flip-flops share one clock-polarity bit, and a design that
   needs both edges in one tile is refused after placement rather than
   placed around;
-- no timing: the router minimises congestion and wirelength, and nothing
-  reads `timings_up5k.txt`. Timing-driven routing would need that file read
-  into delays per multiplexer and per cell, a timing analysis over the
-  placed and routed graph, and criticality fed to the placer and router —
-  the largest of the three, and the one a 12 MHz design does not yet need;
+- the timing analysis does not time paths between clocks, to or from pins,
+  through a DSP block's multiplier, or with the clock network's skew, and
+  the timing-driven flow is not the default;
 - only the 5k is fetched and only `sg48` has been placed; the LP/HX device
   files still use the synthetic fabric.

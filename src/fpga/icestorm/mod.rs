@@ -65,6 +65,7 @@
 pub mod db;
 pub mod image;
 pub mod pack;
+pub mod timing;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -151,6 +152,13 @@ pub struct IceFabric {
     homes: Vec<Home>,
     /// `(x, y, name)` of every net segment to the net.
     segments: HashMap<(u32, u32, String), u32>,
+    /// The part's timing figures, when the caller read them: with them,
+    /// [`implement`] reports each clock's longest path ([`timing::analyse`]).
+    pub timing: Option<timing::TimingDb>,
+    /// Whether [`implement`] drives placement and routing by the timing
+    /// figures too ([`timing::place_timing`]); only with
+    /// [`IceFabric::timing`].
+    pub timing_driven: bool,
 }
 
 impl IceFabric {
@@ -231,6 +239,8 @@ impl IceFabric {
             package: package.to_owned(),
             homes,
             segments,
+            timing: None,
+            timing_driven: false,
         };
         fabric.add_pips();
         fabric.add_logic_bels()?;
@@ -1560,6 +1570,8 @@ pub struct Implemented {
     pub dsps: usize,
     /// The PLL's configuration, read back, when one is placed.
     pub pll: Option<PllConfig>,
+    /// Each clock's longest path, when the fabric has timing figures.
+    pub timing: Option<timing::TimingReport>,
     /// Sites used per kind, as the placer reports them.
     pub usage: Vec<(String, usize, usize)>,
     /// Signals routed, signals in all, pips and wires used.
@@ -1721,12 +1733,30 @@ pub fn implement(
             &kept
         }
     };
+    // Timing-driven: the placement weighs each signal by how critical its
+    // estimated delay is in its clock's domain, and the route each
+    // connection by its routed delay's criticality. See `timing`.
+    let mut route_options = route::RouteOptions::default();
+    let timed_options;
+    let place_options = match (&fabric.timing, fabric.timing_driven) {
+        (Some(db), true) => {
+            let (paths, _) = timing::place_timing(design, top, &netlist, constraints, db);
+            route_options.timing = Some(timing::route_timing(
+                paths.clone(),
+                timing::node_delays(graph, db),
+            ));
+            let mut options = place_options.clone();
+            options.timing = Some(paths);
+            timed_options = options;
+            &timed_options
+        }
+        _ => place_options,
+    };
     let (placement, place_report) =
         place::place(&netlist, &fabric.arch, graph, constraints, place_options)
             .map_err(|e| e.to_string())?;
     let (routing, route_report) =
-        route::route(&netlist, graph, &placement, &route::RouteOptions::default())
-            .map_err(|e| e.to_string())?;
+        route::route(&netlist, graph, &placement, &route_options).map_err(|e| e.to_string())?;
     let problems = routing.verify(&netlist, graph, &placement);
     if !problems.is_empty() {
         return Err(format!(
@@ -1895,6 +1925,10 @@ pub fn implement(
             differ.join("\n  ")
         ));
     }
+    let timing = fabric
+        .timing
+        .as_ref()
+        .map(|db| timing::analyse(fabric, &image, db));
     Ok(Implemented {
         image,
         pack: pack_report,
@@ -1904,6 +1938,7 @@ pub fn implement(
         sprams: configured.sprams.len(),
         dsps: configured.dsps.len(),
         pll: configured.pll.clone(),
+        timing,
         usage: place_report.usage,
         routed: (
             route_report.signals,

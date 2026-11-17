@@ -3495,7 +3495,23 @@ fn write_ice40_bitstream(
     let db = ChipDb::parse(&text).map_err(|e| e.to_string())?;
     drop(text);
     laps.lap("read the database");
-    let fabric = IceFabric::build(db, package).map_err(|e| e.to_string())?;
+    let mut fabric = IceFabric::build(db, package).map_err(|e| e.to_string())?;
+    // The timing figures beside the chip database, when they are there:
+    // with them every build reports each clock's longest path, and
+    // `--timing-driven` places and routes by them. See `icestorm::timing`.
+    let timing_file = root.join(format!("timings_up{die}.txt"));
+    if let Ok(text) = std::fs::read_to_string(&timing_file) {
+        fabric.timing = Some(
+            reticle::fpga::icestorm::timing::TimingDb::parse(&text)
+                .map_err(|e| format!("`{}`: {e}", timing_file.display()))?,
+        );
+        fabric.timing_driven = args.flag("timing-driven");
+    } else if args.flag("timing-driven") {
+        return Err(format!(
+            "`--timing-driven` needs the timing figures, `{}`, which are not there",
+            timing_file.display()
+        ));
+    }
     let graph = fabric.arch.build_graph();
     laps.lap("build the graph");
 
@@ -3539,6 +3555,28 @@ fn write_ice40_bitstream(
             built.rams, decoded.ram_bits, built.sprams
         )
     };
+    let mut timing = String::new();
+    if let Some(report) = &built.timing {
+        for clock in &report.clocks {
+            let (from, to) = (
+                clock.nets.first().map_or("?", |n| n.0.as_str()),
+                clock.nets.last().map_or("?", |n| n.0.as_str()),
+            );
+            timing.push_str(&format!(
+                "note: clock {}: longest register-to-register path {:.2} ns, {:.2} MHz at most \
+                 ({} nets, {from} to {to}){}\n",
+                clock.clock,
+                clock.delay_ps / 1000.0,
+                clock.fmax_mhz,
+                clock.nets.len(),
+                if fabric.timing_driven {
+                    ", placed and routed for time"
+                } else {
+                    ""
+                }
+            ));
+        }
+    }
     let dsps = if built.dsps == 0 {
         String::new()
     } else {
@@ -3560,6 +3598,7 @@ fn write_ice40_bitstream(
          the router chose\n\
          {rams}\
          {dsps}\
+         {timing}\
          note: load it with `reticle program --ice40 {path}`\n",
         bytes.len(),
         image.ones(),
