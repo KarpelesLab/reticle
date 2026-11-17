@@ -177,8 +177,8 @@ written to the flash:
 | a wire, `assign tx = rx` | IO input and output configuration, routing | bytes sent on the FT2232H's second channel come back — CHECKED |
 | one flip-flop between them, on the 12 MHz clock | a logic cell's flip-flop, a clock | the same — CHECKED |
 | `uart_echo.v` | 96 logic cells: carry chains, enables, resets, a state machine | `HAL hello` comes back as `IBM!ifmmp` — CHECKED |
-| `rgb_blink.v` | the RGB LED driver, a 24-bit counter | the LED should step red, green, blue, a second each — **a person's eyes are what checks this; not yet confirmed** |
-| `board_demo.v` (both), written to the flash | boot from flash | after `--write-flash` and a release of `CRESET_B`, `CDONE` rose and the echo answered — CHECKED |
+| `rgb_blink.v` | the RGB LED driver, a 24-bit counter | the LED steps red, green, blue, about a second each — CHECKED, by eye, in `board_demo` below |
+| `board_demo.v` (both), written to the flash | boot from flash | after `--write-flash` and a release of `CRESET_B`, `CDONE` rose and the echo answered — CHECKED; and on 2026-11-17 the user saw the RGB LED step red → green → blue about once a second, booted from the flash — CHECKED **by a person's eyes, not measured**: nothing recorded the colours or the period |
 
 ## Faults found, and how
 
