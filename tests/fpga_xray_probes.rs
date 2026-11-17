@@ -43,11 +43,14 @@
 //! implementation (`docs/fpga-vivado-parity.md`), nor what any of it does on a
 //! part: **nothing here has been on a board**.
 //!
-//! One difference is known and allowed, and said where it is: Vivado drives
-//! an output register's `OCLKM` from the clock that drives its `OCLK`, and this
-//! flow leaves it, on an `ODDR`, an `OSERDESE2` and an `ISERDESE2`'s `OCLK`
-//! alike. Closing it changes every build with an output register, the
-//! ChipWhisperer-Husky's among them.
+//! Until 2026-11-18 one difference was known and allowed: Vivado drives an
+//! output register's `OCLKM` from the clock that drives its `OCLK`, on an
+//! `ODDR`, an `OSERDESE2` and an `ISERDESE2`'s `OCLK` alike, and this flow left
+//! it, because closing it changed the ChipWhisperer-Husky's bitstreams. The
+//! user decided that day that parity with Vivado comes first, and this flow
+//! drives it now (`XrayFabric::drive_output_clock_mirrors`), so nothing is
+//! allowed: with that pass taken out, the `ODDR`, `OSERDESE2` and `ISERDESE2`
+//! probes fail on every part with `Vivado only: ... IOI_OCLKM_# driven`.
 //!
 //! [`every_probe_has_the_pinned_tiles_vivado_wrote`] does the same for every
 //! probe, and is ignored for its time. Skips without the Project X-Ray
@@ -414,12 +417,6 @@ fn reticles(root: &str, device: &str, part: &str, top: &str) -> Result<Vec<Strin
     Ok(reduce(&decoded))
 }
 
-/// The lines Vivado has that this flow is known not to, and why: see the
-/// module documentation.
-fn known(line: &str) -> bool {
-    line.ends_with(" IOI_OCLKM_# driven")
-}
-
 /// The differences on every probe of `groups` (all of them when `None`), on
 /// every part that has its fixtures and its database.
 fn differences(groups: Option<&[&str]>) -> Vec<String> {
@@ -464,7 +461,7 @@ fn differences(groups: Option<&[&str]>) -> Vec<String> {
                                 .and_then(|v| v.get(top).cloned())
                                 .unwrap_or_default();
                             let mut left = ours.clone();
-                            for line in theirs.iter().filter(|l| !known(l)) {
+                            for line in &theirs {
                                 match left.iter().position(|l| l == line) {
                                     Some(i) => {
                                         left.remove(i);

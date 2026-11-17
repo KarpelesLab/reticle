@@ -1423,8 +1423,9 @@ impl XrayDatabase {
     /// choose that a decoding can find. A slice's own muxes are not, since
     /// their features are named for the mux, and nor is what `NOT_ARCS`
     /// names. `also` are pips something other than the router switched on
-    /// — a block RAM's zero ties (`BlockRamReport::tie_pips`) — and count
-    /// as chosen.
+    /// — a block RAM's zero ties (`BlockRamReport::tie_pips`), an IO logic
+    /// site's `OCLKM` ([`XrayFabric::drive_output_clock_mirrors`]) — and
+    /// count as chosen.
     ///
     /// # Errors
     ///

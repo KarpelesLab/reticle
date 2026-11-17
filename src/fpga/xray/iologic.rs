@@ -169,7 +169,7 @@ pub(super) fn measured_features(tile_type: &str) -> Vec<super::Feature> {
     ) {
         return Vec::new();
     }
-    let mut out = Vec::new();
+    let mut out = oclkm_from_interconnect();
     for (name, ones, zeros) in MEASURED {
         for half in 0..2u32 {
             let bits = |list: &[(u32, u32)]| {
@@ -488,6 +488,42 @@ pub(super) fn io_logic_bels(tile_type: &str) -> Vec<ExtraBel> {
         });
     }
     out
+}
+
+/// `IOI_OCLKM_<n>` from the interconnect, which the database leaves out: the
+/// pip from `IOI_IMUX31_<1-n>`, the same input `IOI_OCLK_<n>` takes a clock
+/// on from the interconnect (`IOI_OCLK_0.IOI_IMUX31_1`).
+///
+/// **Read off Vivado's bitstreams, and not fuzzed.** prjxray's `tile_type`
+/// files list the pip (`RIOI3.IOI_IMUX31_0->>IOI_OCLKM_1`) and no `segbits`
+/// file gives it bits. Every `IOI_OCLKM_<n>` option of the database is
+/// `IOI_OCLK_<n>`'s same option with frames 28 and 29 turned into 31 and 30
+/// (`IOI_OCLK_0.IOI_LEAF_GCLK0` is `28_83 28_95 29_88`, `IOI_OCLKM_0`'s
+/// `31_83 31_95 30_88`), which makes `IOI_OCLK_0.IOI_IMUX31_1`'s
+/// `28_83 28_93 29_94` into `31_83 31_93 30_94` here, and half 1 the usual
+/// mirror of half 0. Two of the three bits are what Vivado sets and the
+/// database cannot name on every `ODDR` whose clock comes from the
+/// interconnect: in NewAE's ChipWhisperer-Husky image (`30_94 31_93` beside
+/// its two `IOI_OCLK_0.IOI_IMUX31_1`, `30_34 31_33` beside its
+/// `IOI_OCLK_1.IOI_IMUX31_0`) and in Vivado 2026.1's bitstream of this flow's
+/// placement of the `ODDR` probe (`docs/fpga-vivado-parity.md`). The third is
+/// the bit the database calls `OLOGIC_Y<n>.ODDR_TDDR.IN_USE` (`31_83`,
+/// `30_44`), which is in every `IOI_OCLKM_<n>` option it has: an `ODDR` always
+/// has its `OCLKM` driven, and the fuzzer took the mux's common bit for the
+/// register's. So it is set with an `ODDR` in any case, and a decoding of
+/// either bitstream names all three.
+fn oclkm_from_interconnect() -> Vec<super::Feature> {
+    [
+        ("IOI_OCLKM_0.IOI_IMUX31_1", [(31, 83), (31, 93), (30, 94)]),
+        ("IOI_OCLKM_1.IOI_IMUX31_0", [(30, 44), (30, 34), (31, 33)]),
+    ]
+    .into_iter()
+    .map(|(name, ones)| super::Feature {
+        name: name.to_owned(),
+        ones: ones.iter().map(|&(f, b)| ConfigBit::new(f, b)).collect(),
+        zeros: Vec::new(),
+    })
+    .collect()
 }
 
 /// What a pin of a placed cell is.
@@ -863,6 +899,60 @@ fn oserdes_features(
 }
 
 impl XrayFabric {
+    /// Drives each `IOI_OCLKM_<n>` from the clock its `IOI_OCLK_<n>` takes,
+    /// as Vivado does, and gives the pips that took, which are chosen arcs as
+    /// a tie's are.
+    ///
+    /// # What Vivado writes
+    ///
+    /// An `ODDR`'s, an `OSERDESE2`'s or an `ISERDESE2`'s `OCLK` clock goes to
+    /// the half's `IOI_OCLKM_<n>` as well, the wire that reaches the
+    /// `OLOGIC`'s `CLKB` and the `ILOGIC`'s `OCLKB`, from the same source:
+    /// `IOI_OCLKM_1.IOI_LEAF_GCLK5` beside `IOI_OCLK_1.IOI_LEAF_GCLK5` in
+    /// Vivado 2026.1's own bitstream of the `ODDR` probe, the serialisers'
+    /// likewise, and the pip `iologic::oclkm_from_interconnect` names beside
+    /// `IOI_OCLK_1.IOI_IMUX31_0` when the clock comes from the interconnect,
+    /// in Vivado's bitstream of this flow's placement and in NewAE's
+    /// ChipWhisperer-Husky image. Neither pin is one this flow routes: the
+    /// database gives `CLKB` and `OCLKB` no wire, so this is a pass after the
+    /// router's and not a sink of it. Applied on 2026-11-18; it changes the
+    /// Husky's bitstreams, which have three such `ODDR`s, and had been left
+    /// for that reason until the user decided that parity with Vivado comes
+    /// first. **Not measured on a part.**
+    ///
+    /// # Errors
+    ///
+    /// [`BitstreamError`] when a pip's bits fall outside its tile.
+    pub fn drive_output_clock_mirrors(
+        &self,
+        graph: &RoutingGraph,
+        routing: &crate::fpga::route::Routing,
+        bits: &mut Bitstream,
+    ) -> Result<Vec<crate::fpga::arch::PipId>, BitstreamError> {
+        let mut out = Vec::new();
+        for route in routing.routes() {
+            for id in &route.pips {
+                let pip = graph.pip(*id);
+                let Some(n) = graph.wire(pip.to).name.strip_prefix("IOI_OCLK_") else {
+                    continue;
+                };
+                let mirror = format!("IOI_OCLKM_{n}");
+                let found = graph.outgoing(pip.from).iter().copied().find(|q| {
+                    let q = graph.pip(*q);
+                    q.tile == pip.tile && graph.wire(q.to).name == mirror
+                });
+                let Some(found) = found else { continue };
+                for bit in graph.pip_bits(found) {
+                    bits.set(pip.tile, *bit)?;
+                }
+                out.push(found);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        Ok(out)
+    }
+
     /// Configures every `IDDR` and `ODDR` the placement put on an IO logic
     /// site, and says how many bits that set.
     ///
@@ -1005,6 +1095,45 @@ impl XrayFabric {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `IOI_OCLKM_<n>` from the interconnect: `IOI_OCLK_<n>`'s option from
+    /// `IOI_IMUX31_<1-n>` with frames 28 and 29 turned into 31 and 30, as every
+    /// `OCLKM` option the database has is its `OCLK` option so turned
+    /// (`segbits_rioi3.db`, quoted here), and holding the two bits Vivado sets
+    /// that the database cannot name: `30_94 31_93` on half 0 and `30_34
+    /// 31_33` on half 1, in NewAE's ChipWhisperer-Husky image and in Vivado
+    /// 2026.1's bitstream of this flow's `ODDR` probe, with the third the bit
+    /// the database calls `ODDR_TDDR.IN_USE`. Would catch a bit mistyped, the
+    /// halves swapped, or the third bit left out, so that a decoding of either
+    /// bitstream left it unnamed; would not catch a reading of the swap that
+    /// both this and the feature share, which the observed bits are for.
+    #[test]
+    fn oclkm_from_the_interconnect_is_oclks_turned_round() {
+        let oclk = [
+            ("IOI_OCLKM_0.IOI_IMUX31_1", [(28, 83), (28, 93), (29, 94)]),
+            ("IOI_OCLKM_1.IOI_IMUX31_0", [(28, 33), (29, 34), (29, 44)]),
+        ];
+        let seen = [
+            [(30, 94), (31, 93), (31, 83)],
+            [(30, 34), (31, 33), (30, 44)],
+        ];
+        let features = oclkm_from_interconnect();
+        assert_eq!(features.len(), 2);
+        for ((name, bits), seen) in oclk.iter().zip(seen) {
+            let feature = features.iter().find(|f| f.name == *name).unwrap();
+            let mut turned: Vec<ConfigBit> = bits
+                .iter()
+                .map(|&(f, b)| ConfigBit::new(if f == 28 { 31 } else { 30 }, b))
+                .collect();
+            let mut ones = feature.ones.clone();
+            turned.sort_unstable_by_key(|b| (b.row, b.col));
+            ones.sort_unstable_by_key(|b| (b.row, b.col));
+            assert_eq!(ones, turned, "{name}");
+            for (f, b) in seen {
+                assert!(ones.contains(&ConfigBit::new(f, b)), "{name} {f}_{b}");
+            }
+        }
+    }
 
     /// The Husky's settings, from the module documentation's table, worked
     /// through the two functions. Would catch an `INIT` read the wrong way

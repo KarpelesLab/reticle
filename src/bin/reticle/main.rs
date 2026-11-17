@@ -5740,6 +5740,11 @@ fn write_xc7_bitstream(
     fabric
         .configure_io_logic(design, top, &graph, &netlist, &placement, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // Its `OCLKM` from the clock its `OCLK` takes, as Vivado drives it. See
+    // `XrayFabric::drive_output_clock_mirrors`.
+    let clock_mirrors = fabric
+        .drive_output_clock_mirrors(&graph, &routing, &mut tiles)
+        .map_err(|e| e.to_string())?;
     // A configuration primitive's parameters, and what it asks of the stream,
     // which is then held to what the options ask. See `xray::config`.
     let config_use = fabric
@@ -5802,7 +5807,7 @@ fn write_xc7_bitstream(
                 &fabric.arch,
                 &graph,
                 &routing,
-                &block_rams.tie_pips,
+                &[block_rams.tie_pips.as_slice(), &clock_mirrors].concat(),
                 &decoded,
             )
             .map_err(|e| e.to_string())?;
