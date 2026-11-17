@@ -38,6 +38,14 @@
 //! | `Tristate`                  | `$tribuf`                                               | `WIDTH`                                                   |
 //! | `Blackbox(name)`, instances | the name                                                | the cell's / instance's parameters                        |
 //!
+//! A black box's ports are `input` or `output` as the cell uses them, since
+//! the IR knows no more. A consumer may want more: nextpnr's iCE40 packer
+//! finds the pad of an `SB_IO` only if its `PACKAGE_PIN` is `inout`, as the
+//! iCE Technology Library declares it and Yosys writes it, and refuses an
+//! output buffer whose pad is an `output` ("No wire found for port
+//! PACKAGE_PIN"). [`emit_json_with`] takes the `(cell type, port)` pairs to
+//! write as `inout`.
+//!
 //! Parameter and attribute values are numbers when they are two-state and
 //! at most 32 bits wide, bit strings (`"0x1z"`) otherwise; a string value
 //! that looks like a bit string gets a trailing space, as Yosys does.
@@ -53,6 +61,13 @@ use crate::logic::Bit;
 
 /// Renders every module of `design`.
 pub fn emit_json(design: &Design) -> Result<String, EmitError> {
+    emit_json_with(design, &[])
+}
+
+/// Renders every module of `design`, writing each black-box port named in
+/// `inout` — `(cell type, port)` — as an `inout` whichever way the cell
+/// uses it. See the module documentation for why a consumer needs that.
+pub fn emit_json_with(design: &Design, inout: &[(String, String)]) -> Result<String, EmitError> {
     let mut out = Out::new("  ");
     out.line("{");
     out.indent();
@@ -76,6 +91,7 @@ pub fn emit_json(design: &Design) -> Result<String, EmitError> {
             module,
             view: &view,
             numbers: &numbers,
+            inout,
         };
         out.line(&format!("{}: {{", json_string(module.name.as_str())));
         out.indent();
@@ -153,9 +169,15 @@ struct ModulePrinter<'a> {
     module: &'a Module,
     view: &'a BitView<'a>,
     numbers: &'a [Option<u64>],
+    inout: &'a [(String, String)],
 }
 
 impl ModulePrinter<'_> {
+    /// Whether port `port` of a black box of type `ty` is written `inout`.
+    fn is_inout(&self, ty: &str, port: &str) -> bool {
+        self.inout.iter().any(|(t, p)| t == ty && p == port)
+    }
+
     fn bits_json(&self, bits: &[SigBit]) -> String {
         let items: Vec<String> = bits
             .iter()
@@ -580,11 +602,21 @@ impl ModulePrinter<'_> {
                 }
                 for (port, e) in &cell.inputs {
                     let bits = self.view.expr_bits(*e)?;
-                    inp(port.as_str(), bits);
+                    let dir = if self.is_inout(name.as_str(), port.as_str()) {
+                        "inout"
+                    } else {
+                        "input"
+                    };
+                    ports.push((port.as_str().to_owned(), Some(dir), bits));
                 }
                 for (port, net) in &cell.outputs {
                     let bits = self.view.net_bits(*net, cell.span)?;
-                    ports.push((port.as_str().to_owned(), Some("output"), bits));
+                    let dir = if self.is_inout(name.as_str(), port.as_str()) {
+                        "inout"
+                    } else {
+                        "output"
+                    };
+                    ports.push((port.as_str().to_owned(), Some(dir), bits));
                 }
                 name.as_str().to_owned()
             }

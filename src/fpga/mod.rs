@@ -720,6 +720,7 @@ mod tests {
                             has_enable,
                             enable_active_high: true,
                             reset,
+                            enable_gates_reset: false,
                         };
                         assert!(
                             device.ff_variant(variant).is_some(),
@@ -737,6 +738,7 @@ mod tests {
                     has_enable,
                     enable_active_high: true,
                     reset: None,
+                    enable_gates_reset: false,
                 };
                 assert!(
                     device.ff_variant(plain).is_some(),
@@ -754,8 +756,21 @@ mod tests {
                             }),
                             ..plain
                         };
+                        // An iCE40 has the enable-gated form of a
+                        // synchronous reset with an enable, and only that;
+                        // mapping widens the enable to use it.
+                        let gated = variant
+                            .with_gated_reset()
+                            .and_then(|g| device.ff_variant(g));
+                        assert_eq!(
+                            gated.is_some(),
+                            device.family == "ice40" && has_enable && !asynchronous,
+                            "{}: {}",
+                            device.name,
+                            variant.describe()
+                        );
                         assert!(
-                            device.ff_variant(variant).is_some(),
+                            device.ff_variant(variant).is_some() || gated.is_some(),
                             "{} has no flip-flop with {}",
                             device.name,
                             variant.describe()

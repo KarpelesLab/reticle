@@ -87,8 +87,12 @@ worth knowing here:
 - a constant on a table's input is folded into the truth table, because an
   unrouted input reads zero (CHECKED: `icebox_vlog`'s default for every
   logic input, and every board design here depends on it);
-- **an enable over a synchronous reset becomes `E | R`**, and a register
-  declared to start at one is refused. Both are faults, below.
+- a register declared to start at one is refused (a fault, below).
+
+An enable over a synchronous reset is no longer packing's business: the
+`SB_DFFESR` that reaches packing already has `E | R` on its enable,
+because flip-flop mapping put it there for every consumer of the netlist
+(see "A reset that waited for an enable").
 
 The rigid shapes the carry chain needs are not stated anywhere: the placer
 finds them on its own, because a cell's carry in is a wire only the cell
@@ -98,12 +102,26 @@ iCE40.
 **Equivalence is held across packing**, the same guarantee
 `every_block_maps_to_the_logic_it_was_mapped_from` gives mapping. The
 `packing` tests in `tests/fpga_icestorm.rs` replace every cell of the mapped
-netlist with a model of the library cell as the mapping means it, and every
-packed cell with a model of the *silicon* as `icebox_vlog` decodes it, and
-prove the two equivalent for a counter with enable and reset, a down counter
-with a zero flag, and an adder with its carry out. Removing rule 7, or
-moving a table's inputs without its truth table, makes the counter differ
-at frame 1 (both CHECKED by mutation).
+netlist with a model of the iCE Technology Library cell — as Yosys's
+`techlibs/ice40/cells_sim.v` writes it, so `SB_DFFESR` is `if (E) Q <= R ?
+0 : D` — and every packed cell with a model of the *silicon* as
+`icebox_vlog` decodes it, and prove the two equivalent for a counter with
+enable and reset, a down counter with a zero flag, and an adder with its
+carry out. Moving a table's inputs without its truth table makes the
+counter differ at frame 1 (CHECKED by mutation, before the change below).
+
+**And the mapped netlist is held to the source.** The
+`*_maps_to_the_logic_it_was_written_as` tests prove the mapped netlist,
+read through the same library models, equivalent to the source with only
+its processes lowered, for every flip-flop shape with an enable and a set
+or reset: synchronous over an enable (reset to `0101`, so both
+`SB_DFFESR` and `SB_DFFESS`), active-low, falling-edge, asynchronous with
+an enable, and synchronous with none. Removing the enable widening from
+mapping makes the first three differ at frame 2; widening by the reset's
+wire rather than its active level makes the active-low one differ at
+frame 1 (both CHECKED by mutation). What they do not see: a register's
+power-up value, because the formal engine starts a register that has a
+reset at its reset value whatever the silicon does.
 
 ## The bits a database does not state
 
@@ -152,9 +170,9 @@ round-trip test found it before any board did.
    source)` arcs the bits select must equal the set of arcs, with bits, that
    the router chose.
 
-For the board designs: `rgb_blink` sets 6 496 bits that decode into 252
-arcs, `uart_echo` 7 704 bits into 541, and `board_demo` (both) 8 614, all
-with nothing unexplained and the arcs exactly the router's
+For the board designs: `rgb_blink` sets 6 509 bits that decode into 260
+arcs, `uart_echo` 7 630 bits into 519, and `board_demo` (both) 8 580 into
+821, all with nothing unexplained and the arcs exactly the router's
 (`the_board_designs_build_and_every_bit_decodes`). Breaking the pattern
 order of a multiplexer makes 236 bits of `rgb_blink` unexplained (CHECKED by
 mutation).
@@ -196,12 +214,70 @@ the *library* model passed. The difference was one cell's meaning:
 - the silicon applies a synchronous set/reset **only on an enabled edge**:
   `icebox_vlog` decodes a configured cell as `if (cen) q <= sr ? set : d`.
 
-So a reset asserted while the enable was low was lost. Packing now gives
-such a cell `E | R` as its enable (rule 7), the equivalence test above
-holds it, and the echo works. **This also means the netlist Reticle exports
-to nextpnr for any iCE40 asks for the reset-wins meaning from a cell whose
-library meaning is enable-gated.** That path was not changed here and has
-not been run against nextpnr; it is the next thing to look at.
+So a reset asserted while the enable was low was lost. Packing first gave
+such a cell `E | R` as its enable, and the echo worked. **That fixed only
+this backend**: the netlist Reticle exports to nextpnr asked for the
+reset-wins meaning from a cell whose library meaning is enable-gated, and
+the cell's meaning was not packing's to correct. The library is the
+reference — Yosys's `cells_sim.v` models `SB_DFFESR`, `SB_DFFESS`,
+`SB_DFFNESR` and `SB_DFFNESS` as `if (E) Q <= R ? v : D`, and its
+`ff_map.v` maps only `$_SDFFCE_*` (enable over reset) onto them — so the
+mistake was in mapping, and mapping is where it is fixed:
+
+- the device file says so, `mode posedge,enable,sync_reset,enable_gates_reset`
+  on those four lines (`FfVariant::enable_gates_reset`);
+- flip-flop mapping, finding no reset-wins flip-flop with an enable on the
+  device, takes the gated one and feeds its enable `en | rst` — one
+  lookup table per distinct enable and reset, at the reset's *active*
+  level, shared by every register on them (`techcells::FfCtx::widen`);
+- packing passes `CEN` and `SR` through unchanged. Its own widening is
+  gone, so nothing compensates twice (a second `| R` would have been
+  harmless logically, and a wasted table per pair).
+
+It costs tables: 27 in `seph_mcu` on an HX1K and 34 in `z80`
+(`docs/ip-library.md`), which is what any flow pays on this family; Yosys
+does the same thing through `dfflegalize`.
+
+**The nextpnr path, end to end, on the board** (2026-11-17, nextpnr-ice40
+built from its repository at `1759078`, icepack from IceStorm at
+`00da9c3`): `uart_echo.v` exported as JSON by the build from before the
+change, placed and routed by nextpnr and loaded into configuration memory,
+does not echo `HAL hello` (one stray byte on the first try, then
+silence); the same design exported after it
+answers `IBM!ifmmp`. CHECKED. Two things were found on the way:
+
+- nextpnr refused the export outright — *No wire found for port
+  PACKAGE_PIN on source cell tx$io0* — because the JSON wrote an output
+  `SB_IO`'s pad as an `output`. nextpnr's iCE40 packer finds a pad only
+  through an `inout` `PACKAGE_PIN`, which is how the library declares it.
+  The export now writes every iCE40 IO buffer's pad as `inout`
+  (`emit_json_with`). The before-and-after above both carry that fix, the
+  "before" by editing its JSON by hand, so that they differ in the
+  flip-flops only. So the iCE40 JSON export had never worked with
+  nextpnr: no previous claim here said it had, and none should be read
+  into the `.json` goldens, which are compared byte for byte and not run.
+- ECP5's `TRELLIS_IO` is left writing its pad by direction: nextpnr-ecp5
+  places it that way and a Cynthion runs it.
+
+This backend's own build of `board_demo` after the change (now 8 580 bits,
+above) was loaded into configuration memory and echoes as before —
+CHECKED.
+
+**The other flip-flops, checked for the same class of fault** (each against
+`cells_sim.v`, and each but the last by a proof in `tests/fpga_icestorm.rs`):
+
+| Primitive | Library | Reticle's `dff` | Mismatch? |
+|---|---|---|---|
+| `SB_DFFESR`, `SB_DFFESS`, `SB_DFFNESR`, `SB_DFFNESS` | reset only on an enabled edge | reset wins | **yes — fixed above** |
+| `SB_DFFER`, `SB_DFFES` (and `N`) | `always @(posedge C, posedge R) if (R) Q <= 0; else if (E) Q <= D;` | asynchronous reset wins | no — proved |
+| `SB_DFFSR`, `SB_DFFSS` (and `N`) | `if (R) Q <= 0; else Q <= D;` | the same | no — proved |
+| `SB_DFFR`, `SB_DFFS`, `SB_DFFE`, `SB_DFF` (and `N`) | no enable and reset to disagree about | — | no — read, not separately proved |
+
+The other families' flip-flops with an enable and a synchronous reset let
+the reset win, as Reticle's `dff` does: the 7 series `FDRE`, ECP5's
+`TRELLIS_FF` (Yosys maps `$_SDFFE_*`, reset over enable, onto it with
+`SRMODE="LSR_OVER_CE"`) and Gowin's `DFFRE` (`if (RESET) ... else if (CE)`
+in Yosys's model). QUOTED from those models, not measured here.
 
 ### A register that started at one
 

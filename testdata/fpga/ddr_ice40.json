@@ -23,7 +23,7 @@
             "io_standard": "LVCMOS33"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -41,7 +41,7 @@
             "port": "rx"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "INPUT_CLK": "input",
             "CLOCK_ENABLE": "input",
             "D_IN_0": "output",
@@ -69,7 +69,7 @@
             "D_OUT_1": "input",
             "OUTPUT_CLK": "input",
             "CLOCK_ENABLE": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 7 ],
@@ -93,7 +93,7 @@
             "D_OUT_1": "input",
             "OUTPUT_CLK": "input",
             "CLOCK_ENABLE": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 8 ],

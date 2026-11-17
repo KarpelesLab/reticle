@@ -23,7 +23,7 @@
             "io_standard": "LVCMOS33"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -41,7 +41,7 @@
             "port": "d"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -60,7 +60,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 7 ],

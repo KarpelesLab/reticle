@@ -2785,7 +2785,7 @@ exactly what this table is for.
 | `iso7816_uart` | `iso7816_uart` | PARITY_RETRY=0 | ECP5 45F | 85 x CCU2C, 1 x DCCA, 470 x LUT4, 272 x TRELLIS_FF, 159 x TRELLIS_IO | 8 |
 | `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT4 | 50 x dff, 1071 x lut, 1 x memory 2048x8, 1 x memrd, 1 x memwr | 12 |
 | `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | LUT6 | 50 x dff, 858 x lut, 1 x memory 2048x8, 1 x memrd, 1 x memwr | 9 |
-| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | iCE40 HX1K | 159 x SB_CARRY, 231 x SB_DFFE, 189 x SB_DFFESR, 9 x SB_DFFESS, 1 x SB_DFFSR, 1 x SB_GB, 114 x SB_IO, 1055 x SB_LUT4, 4 x SB_RAM40_4K | 12 |
+| `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | iCE40 HX1K | 159 x SB_CARRY, 231 x SB_DFFE, 189 x SB_DFFESR, 9 x SB_DFFESS, 1 x SB_DFFSR, 1 x SB_GB, 114 x SB_IO, 1082 x SB_LUT4, 4 x SB_RAM40_4K | 12 |
 | `seph_mcu` | `seph_mcu` | MS_CYCLES=112000 | ECP5 45F | 96 x CCU2C, 1 x DCCA, 1 x DP16KD, 983 x LUT4, 428 x TRELLIS_FF, 114 x TRELLIS_IO | 12 |
 | `pwm` | `pwm` | WIDTH=8 | LUT4 | 2 x dff, 23 x lut | 6 |
 | `pwm` | `pwm` | WIDTH=8 | LUT6 | 2 x dff, 17 x lut | 4 |
@@ -2825,11 +2825,11 @@ exactly what this table is for.
 | `mos6502` | `mos6502` | DECIMAL_MODE=0 | ECP5 45F | 83 x CCU2C, 1 x DCCA, 1542 x LUT4, 139 x TRELLIS_FF, 57 x TRELLIS_IO | 16 |
 | `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT4 | 44 x dff, 4318 x lut | 19 |
 | `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | LUT6 | 44 x dff, 3684 x lut | 18 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | iCE40 HX1K | 299 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4240 x SB_LUT4 | 17 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | iCE40 HX1K | 299 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4274 x SB_LUT4 | 17 |
 | `z80` | `z80` | UNDOCUMENTED_FLAGS=1 | ECP5 45F | 184 x CCU2C, 1 x DCCA, 4098 x LUT4, 306 x TRELLIS_FF, 63 x TRELLIS_IO | 17 |
 | `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT4 | 44 x dff, 4272 x lut | 19 |
 | `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | LUT6 | 44 x dff, 3659 x lut | 18 |
-| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | iCE40 HX1K | 292 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4203 x SB_LUT4 | 17 |
+| `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | iCE40 HX1K | 292 x SB_CARRY, 254 x SB_DFFESR, 49 x SB_DFFESS, 2 x SB_DFFSR, 1 x SB_DFFSS, 1 x SB_GB, 63 x SB_IO, 4237 x SB_LUT4 | 17 |
 | `z80` | `z80` | UNDOCUMENTED_FLAGS=0 | ECP5 45F | 179 x CCU2C, 1 x DCCA, 4080 x LUT4, 306 x TRELLIS_FF, 63 x TRELLIS_IO | 17 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT4 | 26 x dff, 314 x lut | 3 |
 | `eth_mac_rmii` | `eth_mac_rmii` | IFG_CYCLES=48 | LUT6 | 26 x dff, 278 x lut | 3 |

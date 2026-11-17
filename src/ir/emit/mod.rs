@@ -53,7 +53,7 @@ pub mod vhdl;
 
 pub use blif::{emit_blif, emit_blif_module};
 pub use edif::emit_edif;
-pub use json::emit_json;
+pub use json::{emit_json, emit_json_with};
 pub use verilog::{VerilogOptions, emit_verilog, emit_verilog_module, emit_verilog_with};
 pub use vhdl::{emit_vhdl, emit_vhdl_module};
 

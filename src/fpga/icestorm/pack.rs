@@ -34,13 +34,16 @@
 //!    *feed-out* cell above it, whose table passes its carry in through.
 //! 6. The flip-flop's enable and set/reset, unconnected, read as one and
 //!    zero; tied to those constants they are left unconnected.
-//! 7. A flip-flop with both an enable and a **synchronous** set/reset gets
-//!    `E | R` as its enable. In Reticle's netlist the reset of an
-//!    `SB_DFFESR` wins over its enable — that is what the mapping proves
-//!    itself equivalent against — while the silicon applies a synchronous
-//!    set/reset only on an enabled edge (`icebox_vlog` decodes the cell as
-//!    `if (cen) q <= sr ? set : d`). Without this a reset asserted while
-//!    the enable is low is lost.
+//! 7. A flip-flop's enable and synchronous set/reset go onto the cell's
+//!    `CEN` and `SR` as they are, because an `SB_DFFESR` means what the
+//!    silicon does: the reset acts only on an enabled edge (the iCE
+//!    Technology Library's `if (E) Q <= R ? 0 : D`; `icebox_vlog` decodes
+//!    the cell as `if (cen) q <= sr ? set : d`). Making a reset-wins
+//!    register out of one is flip-flop mapping's job, which widens the
+//!    enable to `E | R` there (`enable_gates_reset` in
+//!    `devices/ice40.dev`), so that the netlist handed to nextpnr and the
+//!    one packed here are the same and correct. Packing used to do the
+//!    widening itself, for this backend only; see `docs/fpga-icestorm.md`.
 //!
 //! 8. A register **declared to start at one** is refused, naming it: an
 //!    iCE40 flip-flop starts at zero and nothing here inverts one.
@@ -79,8 +82,6 @@ pub struct PackReport {
     pub feed_out: usize,
     /// Whether a cell driving a constant one was made.
     pub vcc: bool,
-    /// Tables made to put an enable over a synchronous set/reset (rule 7).
-    pub enable_or: usize,
 }
 
 /// Why packing failed.
@@ -506,40 +507,6 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
     if !tied_high.is_empty() {
         want_vcc(&mut new_nets);
     }
-    // Rule 7: an enable over a synchronous set/reset. The library's
-    // `SB_DFFESR` as Reticle's mapping writes it lets the reset win over
-    // the enable; the silicon gates the reset by the enable
-    // (`icebox_vlog`: `if (cen) q <= sr ? set : d`). So the cell's enable is
-    // `E | R`, one table per distinct pair, shared by every cell on it.
-    let mut ored: BTreeMap<(SigBit, SigBit), usize> = BTreeMap::new();
-    let mut cen_override: BTreeMap<usize, Pin> = BTreeMap::new();
-    let mut out_override: BTreeMap<usize, usize> = BTreeMap::new();
-    for i in 0..built.len() {
-        let lc = &built[i];
-        let (Some(en), Some(sr)) = (lc.en, lc.sr) else {
-            continue;
-        };
-        if !lc.dff || lc.asynchronous {
-            continue;
-        }
-        let net = match ored.get(&(en, sr)) {
-            Some(&net) => net,
-            None => {
-                new_nets.push(format!("{}$cen", lc.name));
-                let net = new_nets.len() - 1;
-                let mut or = Lc::new(lc.span);
-                or.name = format!("{}$cen_or", lc.name);
-                or.inputs = [Some(en), Some(sr), None, None];
-                or.init = 0xEEEE;
-                extra.push(or);
-                out_override.insert(built.len() + extra.len() - 1, net);
-                ored.insert((en, sr), net);
-                report.enable_or += 1;
-                net
-            }
-        };
-        cen_override.insert(i, Pin::New(net));
-    }
     // Rule 4: a lookup table input tied to a constant.
     for (i, lc) in built.iter_mut().enumerate() {
         for j in 0..4 {
@@ -712,15 +679,7 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
             inputs.push((Name::new("CIN"), e));
         }
         for (port, bit) in [("CLK", lc.clk), ("CEN", lc.en), ("SR", lc.sr)] {
-            let pin = match cen_override.remove(&i) {
-                Some(p) if port == "CEN" => Some(p),
-                Some(p) => {
-                    cen_override.insert(i, p);
-                    bit.map(Pin::Bit)
-                }
-                None => bit.map(Pin::Bit),
-            };
-            if let Some(pin) = pin {
+            if let Some(pin) = bit.map(Pin::Bit) {
                 let e = expr_for(module, &pin);
                 inputs.push((Name::new(port), e));
             }
@@ -728,8 +687,6 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
         let mut outputs: Vec<(Name, NetId)> = Vec::new();
         let out = if Some(i) == vcc_cell {
             vcc.map(|v| new_net_ids[v])
-        } else if let Some(n) = out_override.get(&i) {
-            Some(new_net_ids[*n])
         } else {
             lc.out
         };

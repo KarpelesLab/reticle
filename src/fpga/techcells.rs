@@ -177,6 +177,13 @@ pub struct CellMapReport {
     /// what Lattice's own bitstreams for this board contain. The LUTs
     /// themselves are counted in `primitives` like any other.
     pub constants: Vec<(String, String, Bit)>,
+    /// Clock enables widened to `enable | reset` because the device's
+    /// flip-flop applies its synchronous set/reset only on an enabled edge
+    /// (`enable_gates_reset`, an iCE40's `SB_DFFESR`), as `(enable, reset)`.
+    ///
+    /// One entry per distinct pair, however many flip-flops share it; the
+    /// lookup table computing it is counted in `primitives`.
+    pub widened: Vec<(String, String)>,
 }
 
 impl CellMapReport {
@@ -186,6 +193,7 @@ impl CellMapReport {
             && self.declined.is_empty()
             && self.inverted.is_empty()
             && self.constants.is_empty()
+            && self.widened.is_empty()
     }
 
     /// How many primitive pin bits were given a constant driver, which is
@@ -222,6 +230,12 @@ impl CellMapReport {
         }
         for (net, pin) in &self.inverted {
             let _ = writeln!(out, "  {net} inverted for the {pin} the device has");
+        }
+        for (en, rst) in &self.widened {
+            let _ = writeln!(
+                out,
+                "  enable {en} widened by {rst}, a synchronous reset the device applies only on an enabled edge"
+            );
         }
         for (cell, port, value) in &self.constants {
             let _ = writeln!(out, "  {cell}'s {port} is the constant {value}, now driven");
@@ -641,6 +655,7 @@ fn map_flip_flops(
         device,
         lut: device.bel(BelRole::Lut).cloned(),
         inverted: BTreeMap::new(),
+        widened: BTreeMap::new(),
         names: Names::of(module),
         report,
         diags,
@@ -672,7 +687,10 @@ struct FfCtx<'a> {
     lut: Option<BelKind>,
     /// The complement of each net, or constant part of one, that has
     /// one: by net, and by `(hi, lo)` when it is a part.
-    inverted: BTreeMap<(NetId, Option<(u32, u32)>), NetId>,
+    inverted: BTreeMap<SignalKey, NetId>,
+    /// Each `enable | reset` built so far, by the two signals and the
+    /// reset's active level; see [`FfCtx::widen`].
+    widened: BTreeMap<(SignalKey, SignalKey, bool), NetId>,
     /// The names the module uses, which every net and cell added while the
     /// flip-flops are mapped takes its own from; none is removed until they
     /// all are.
@@ -707,14 +725,7 @@ impl FfCtx<'_> {
         // is one bit of a vector — `compare_en_r[i]` in NewAE's `esad`,
         // read by the eight bits of a counter — was otherwise inverted
         // once per flip-flop, and every bit had a reset net of its own.
-        let key = match &module.expr(signal).kind {
-            ExprKind::Net(net) => Some((*net, None)),
-            ExprKind::Slice { base, hi, lo } => module
-                .expr(*base)
-                .as_net()
-                .map(|net| (net, Some((*hi, *lo)))),
-            _ => None,
-        };
+        let key = signal_key(module, signal);
         if let Some(net) = key.and_then(|key| self.inverted.get(&key)) {
             return net_expr(module, *net, span);
         }
@@ -745,17 +756,77 @@ impl FfCtx<'_> {
         let named = match key {
             Some(key) => {
                 self.inverted.insert(key, out);
-                match key {
-                    (net, None) => module.nets[net].name.as_str().to_owned(),
-                    (net, Some((hi, lo))) if hi == lo => {
-                        format!("{}[{lo}]", module.nets[net].name)
-                    }
-                    (net, Some((hi, lo))) => format!("{}[{hi}:{lo}]", module.nets[net].name),
-                }
+                key_name(module, key)
             }
             None => base,
         };
         self.report.inverted.push((named, pin.to_owned()));
+        net_expr(module, out, span)
+    }
+
+    /// The expression carrying `en | rst` — the clock enable, or the
+    /// set/reset at its active level `rst_active_high` — building the
+    /// lookup table the first time a pair asks for it.
+    ///
+    /// This is what makes a flip-flop whose synchronous reset acts only
+    /// on an enabled edge (`enable_gates_reset`) behave like the
+    /// reset-wins `dff` it is given: with the enable widened, an edge with
+    /// the reset asserted is always an enabled one, so the reset is never
+    /// lost, and an edge with neither holds as before. Both signals are in
+    /// the IR's polarity, so the result is an active-high enable that
+    /// [`FfCtx::control`] then inverts if the primitive wants it low.
+    fn widen(
+        &mut self,
+        module: &mut Module,
+        en: ExprId,
+        rst: ExprId,
+        rst_active_high: bool,
+        span: crate::source::Span,
+    ) -> ExprId {
+        let bel = self
+            .lut
+            .clone()
+            .expect("an enable is only widened when the device has a LUT");
+        let key = signal_key(module, en)
+            .zip(signal_key(module, rst))
+            .map(|(e, r)| (e, r, rst_active_high));
+        if let Some(net) = key.and_then(|key| self.widened.get(&key)) {
+            return net_expr(module, *net, span);
+        }
+        let (en_name, rst_name) = match key {
+            Some((e, r, _)) => (key_name(module, e), key_name(module, r)),
+            None => ("ff_en".to_owned(), "ff_rst".to_owned()),
+        };
+        let base = format!("{en_name}$or${rst_name}").replace(['[', ']', ':'], "_");
+        let out = add_net_in(module, &mut self.names, &base, Type::bit(), span);
+        // Input 0 is the enable and input 1 the reset; bit `i` of the
+        // table is the output for pattern `i`.
+        let mut init = 0u64;
+        for pattern in 0..4u64 {
+            let en_on = pattern & 1 == 1;
+            let rst_on = (pattern >> 1 & 1 == 1) == rst_active_high;
+            if en_on || rst_on {
+                init |= 1 << pattern;
+            }
+        }
+        let a = expr(module, ExprKind::Concat(vec![rst, en]), span);
+        let cell = add_cell_in(
+            module,
+            &mut self.names,
+            &format!("{base}$lut"),
+            CellKind::Lut {
+                k: 2,
+                init: Const::from_u64(init, 4),
+            },
+            vec![(Name::new("a"), a)],
+            vec![(Name::new("y"), out)],
+            span,
+        );
+        map_lut(module, self.device, &bel, cell, self.report, self.diags);
+        if let Some(key) = key {
+            self.widened.insert(key, out);
+        }
+        self.report.widened.push((en_name, rst_name));
         net_expr(module, out, span)
     }
 
@@ -790,29 +861,83 @@ struct FfMatch {
     invert_reset: bool,
     /// True when the clock-enable net must be inverted first.
     invert_enable: bool,
+    /// True when the primitive applies its synchronous set/reset only on
+    /// an enabled edge, so its enable must be `en | rst` for it to behave
+    /// as the reset-wins `dff` it replaces (see [`FfCtx::widen`]).
+    widen_enable: bool,
+}
+
+/// A net, or a constant part of one, as the caches of [`FfCtx`] key it.
+type SignalKey = (NetId, Option<(u32, u32)>);
+
+/// The net, or constant part of one, that `signal` reads, when it is that
+/// simple.
+fn signal_key(module: &Module, signal: ExprId) -> Option<SignalKey> {
+    match &module.expr(signal).kind {
+        ExprKind::Net(net) => Some((*net, None)),
+        ExprKind::Slice { base, hi, lo } => module
+            .expr(*base)
+            .as_net()
+            .map(|net| (net, Some((*hi, *lo)))),
+        _ => None,
+    }
+}
+
+/// How a report names a [`SignalKey`]: `rst`, `bus[3]` or `bus[7:4]`.
+fn key_name(module: &Module, key: SignalKey) -> String {
+    match key {
+        (net, None) => module.nets[net].name.as_str().to_owned(),
+        (net, Some((hi, lo))) if hi == lo => format!("{}[{lo}]", module.nets[net].name),
+        (net, Some((hi, lo))) => format!("{}[{hi}:{lo}]", module.nets[net].name),
+    }
 }
 
 /// The device flip-flop to use for `want`, inverting a set/reset or a
 /// clock enable when that is what it takes.
 ///
 /// Candidates are tried in order of cost: the exact variant first, then
-/// one inversion, then two. The clock edge is never inverted; see the
-/// module docs.
+/// one inversion, then two; and then the same four with the synchronous
+/// set/reset gated by the enable, which costs a lookup table per enable and
+/// reset pair (see [`FfCtx::widen`]). The clock edge is never inverted; see
+/// the module docs.
 fn resolve_variant(device: &Device, want: FfVariant, can_invert: bool) -> Option<FfMatch> {
-    let options: [(Option<FfVariant>, bool, bool); 4] = [
-        (Some(want), false, false),
-        (want.with_flipped_reset(), true, false),
-        (want.with_flipped_enable(), false, true),
+    let gated = want.with_gated_reset();
+    let options: [(Option<FfVariant>, bool, bool, bool); 8] = [
+        (Some(want), false, false, false),
+        (want.with_flipped_reset(), true, false, false),
+        (want.with_flipped_enable(), false, true, false),
         (
             want.with_flipped_reset()
                 .and_then(FfVariant::with_flipped_enable),
             true,
             true,
+            false,
+        ),
+        (gated, false, false, true),
+        (
+            gated.and_then(FfVariant::with_flipped_reset),
+            true,
+            false,
+            true,
+        ),
+        (
+            gated.and_then(FfVariant::with_flipped_enable),
+            false,
+            true,
+            true,
+        ),
+        (
+            gated
+                .and_then(FfVariant::with_flipped_reset)
+                .and_then(FfVariant::with_flipped_enable),
+            true,
+            true,
+            true,
         ),
     ];
-    for (variant, invert_reset, invert_enable) in options {
+    for (variant, invert_reset, invert_enable, widen_enable) in options {
         let Some(variant) = variant else { continue };
-        if (invert_reset || invert_enable) && !can_invert {
+        if (invert_reset || invert_enable || widen_enable) && !can_invert {
             continue;
         }
         if let Some(bel) = device.ff_variant(variant) {
@@ -820,6 +945,7 @@ fn resolve_variant(device: &Device, want: FfVariant, can_invert: bool) -> Option
                 bel: bel.clone(),
                 invert_reset,
                 invert_enable,
+                widen_enable,
             });
         }
     }
@@ -849,6 +975,8 @@ fn variant_of(kind: &CellKind, bit: u32) -> FfVariant {
             sets: r.value.bit(bit) == Bit::One,
             active_high: r.active_high,
         }),
+        // A Reticle `dff`'s synchronous reset wins over its enable.
+        enable_gates_reset: false,
     }
 }
 
@@ -916,9 +1044,25 @@ fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
         }
     }
 
+    // A primitive whose synchronous reset waits for the enable is given
+    // `en | rst` as its enable, built once for the whole register.
+    let wide_en = match (en, rst, &kind) {
+        (
+            Some(e),
+            Some(r),
+            CellKind::Dff {
+                reset: Some(reset), ..
+            },
+        ) if matches.iter().any(|m| m.widen_enable) => {
+            Some(ctx.widen(module, e, r, reset.active_high, span))
+        }
+        _ => None,
+    };
+    let en_for = |matched: &FfMatch| if matched.widen_enable { wide_en } else { en };
+
     if width == 1 {
         let matched = &matches[0];
-        let (en, rst) = ctx.control(module, matched, (en, rst), span);
+        let (en, rst) = ctx.control(module, matched, (en_for(matched), rst), span);
         let bel = &matched.bel;
         let mut inputs = vec![
             (Name::new(bel.port("clk").unwrap_or("C")), clk),
@@ -939,7 +1083,7 @@ fn map_flip_flop(module: &mut Module, ctx: &mut FfCtx<'_>, id: CellId) -> bool {
     let mut bits = Vec::with_capacity(usize::try_from(width).unwrap_or(0));
     for bit in 0..width {
         let matched = &matches[usize::try_from(bit).unwrap_or(0)];
-        let (en, rst) = ctx.control(module, matched, (en, rst), span);
+        let (en, rst) = ctx.control(module, matched, (en_for(matched), rst), span);
         let bel = &matched.bel;
         let net = add_net_in(
             module,

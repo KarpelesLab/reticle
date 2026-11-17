@@ -190,27 +190,40 @@ fn the_5k_fabric_has_the_parts_shape() {
 // Packing computes what the mapped netlist computes
 // ---------------------------------------------------------------------------
 
-/// The packed netlist is proved equivalent to the mapped one it was packed
-/// from, each read through a model of its own cells.
+/// Two proofs, each reading a netlist through a model of its own cells.
 ///
-/// The mapped netlist's models are the iCE Technology Library cells as
-/// Reticle's mapping writes them — the same semantics `--verify` proves
-/// the mapping against, with an `SB_DFFESR`'s reset winning over its
-/// enable. The packed netlist's model of a logic cell is the *silicon's*,
-/// as `icebox_vlog` decodes a configured one: an unconnected input reads
-/// zero, an unconnected enable one, a synchronous set/reset acts only on an
-/// enabled edge, and the output is the flip-flop when `DFF_ENABLE` is set.
-/// So a packing that dropped a carry in, folded a constant the wrong way,
-/// moved a table's inputs without its truth table, or left an enable
-/// gating a reset that the netlist lets win, is a difference found here.
+/// **The mapped netlist computes what the source does.** The netlist
+/// Reticle's mapping writes — the one `reticle fpga` hands nextpnr as JSON,
+/// and the one packing starts from — read through the iCE Technology
+/// Library's own cell semantics (as Yosys's `techlibs/ice40/cells_sim.v`
+/// writes them, where an `SB_DFFESR` is `if (E) Q <= R ? 0 : D`, the reset
+/// waiting for the enable), is proved equivalent to the source after
+/// generic synthesis. The `*_maps_to_the_logic_it_was_written_as` tests do
+/// that, for every flip-flop shape with an enable and a set or reset, on
+/// both edges, set and reset, active high and low, synchronous and not.
+/// They fail with the enable widening of `techcells::FfCtx::widen` removed,
+/// because a reset asserted with the enable low is then lost: that is the
+/// netlist nextpnr was given for any iCE40 until it was found.
 ///
-/// That last one is not hypothetical: it is the fault that made the first
-/// UART echo on a board answer `00` (`docs/fpga-icestorm.md`). This test
-/// fails with rule 7 of `icestorm::pack` removed.
+/// **The packed netlist computes what the mapped one does.** The packed
+/// netlist's model of a logic cell is the *silicon's*, as `icebox_vlog`
+/// decodes a configured one: an unconnected input reads zero, an
+/// unconnected enable one, a synchronous set/reset acts only on an enabled
+/// edge, and the output is the flip-flop when `DFF_ENABLE` is set. So a
+/// packing that dropped a carry in, folded a constant the wrong way, or
+/// moved a table's inputs without its truth table is a difference found
+/// here (`*_packs_to_the_same_logic`). With the library and the silicon
+/// agreeing about the reset, packing passes `CEN` and `SR` through as they
+/// are, and these tests would fail if it widened the enable a second time
+/// in a way that changed the logic — though `E | R | R` is `E | R`, so a
+/// second widening would only cost a table, which the report counts.
 ///
-/// What it would not catch: anything after packing — placement, routing,
-/// the bits. Those are what `every_bit_of_a_built_design_decodes` and the
-/// board check.
+/// What they would not catch: anything after packing — placement, routing,
+/// the bits. Those are what `the_board_designs_build_and_every_bit_decodes`
+/// and the board check. Nor do they run nextpnr, which CI does not have:
+/// the JSON nextpnr reads is the netlist proved here, and that it places,
+/// routes and runs on a board was checked by hand (`docs/fpga-icestorm.md`,
+/// "A reset that waited for an enable").
 #[cfg(all(feature = "formal", feature = "verilog"))]
 mod packing {
     use reticle::diag::Diagnostics;
@@ -220,6 +233,37 @@ mod packing {
     use reticle::ir::builder::ModuleBuilder;
     use reticle::ir::{AttrValue, CellId, CellKind, Const, Design, ExprId, Module, Name, Reset};
     use reticle::source::SourceMap;
+    use reticle::synth::Pass;
+    use reticle::synth::proc::ProcLower;
+
+    /// The source, elaborated and its processes lowered and nothing more —
+    /// the minimal pipeline `synth::verify` trusts, before any pass that
+    /// infers a set/reset — so that its synchronous resets are a
+    /// multiplexer and a register, and its meaning is the HDL's rather than
+    /// any cell's.
+    fn rtl(source: &str) -> Module {
+        let mut map = SourceMap::new();
+        let id = map.add("t.v".to_owned(), source).unwrap();
+        let mut diags = Diagnostics::new();
+        let ast = reticle::verilog::parse_source(
+            &mut map,
+            id,
+            reticle::verilog::Dialect::Verilog2005,
+            &mut reticle::verilog::NoIncludes,
+            &mut diags,
+        );
+        let design = reticle::verilog::elaborate_file(
+            &ast,
+            &reticle::verilog::ElabOptions::default(),
+            &mut diags,
+        )
+        .expect("the design elaborates");
+        let top = design.top.expect("a top module");
+        let mut module = design.modules[top].clone();
+        ProcLower::default().run(&mut module, &mut diags);
+        assert!(!diags.has_errors(), "{}", diags.render(&map));
+        module
+    }
 
     fn mapped(source: &str) -> (Design, reticle::ir::ModuleId) {
         let device = target("ice40-up5k-sg48").expect("the device ships");
@@ -261,8 +305,9 @@ mod packing {
         }
     }
 
-    /// Every cell of `module` replaced by plain IR. `silicon` selects the
-    /// packed cells' model; the library cells always get the mapping's.
+    /// Every cell of `module` replaced by plain IR: an `SB_*` library cell
+    /// by the iCE Technology Library's meaning of it, an `ICESTORM_LC` by
+    /// the silicon's as `icebox_vlog` decodes it.
     fn model(module: Module) -> Module {
         let span = module.cells.iter().next().map(|(_, c)| c.span).unwrap();
         let mut b = ModuleBuilder::from_module(module, span);
@@ -312,6 +357,7 @@ mod packing {
             };
             let dff = |b: &mut ModuleBuilder,
                        tag: &str,
+                       clk_pos: bool,
                        clk: ExprId,
                        d: ExprId,
                        en: Option<ExprId>,
@@ -327,7 +373,7 @@ mod packing {
                 b.cell(
                     format!("{}${tag}", cell.name),
                     CellKind::Dff {
-                        clk_pos: true,
+                        clk_pos,
                         has_enable: en.is_some(),
                         reset: reset.map(|(_, asynchronous, value)| Reset {
                             asynchronous,
@@ -367,10 +413,8 @@ mod packing {
                 }
                 ff if ff.starts_with("SB_DFF") => {
                     let rest = &ff["SB_DFF".len()..];
-                    assert!(
-                        !rest.starts_with('N'),
-                        "the designs here use no falling edge"
-                    );
+                    let clk_pos = !rest.starts_with('N');
+                    let rest = rest.trim_start_matches('N');
                     let has_en = rest.starts_with('E');
                     let rest = rest.trim_start_matches('E');
                     let (asynchronous, set, port) = match rest {
@@ -386,20 +430,29 @@ mod packing {
                     let q = cell.output("Q").unwrap();
                     match port {
                         Some(p) if !asynchronous => {
-                            // A synchronous reset that wins over the enable,
-                            // as the mapping means it, written as logic so
-                            // that both sides start from the same zero.
+                            // The library's synchronous reset: `if (E)
+                            // Q <= R ? v : D` when there is an enable, and
+                            // `Q <= R ? v : D` when there is not. In the
+                            // IR, whose reset wins, that is a reset of
+                            // `E & R`. (A register with a reset starts at
+                            // its reset value in the formal engine, so the
+                            // reset stays a reset, as it is in the source.)
                             let r = input(&mut b, p);
-                            let v = b.const_bit(set);
-                            let d = b.mux(r, v, d);
-                            let en = en.map(|e| b.or(e, r));
-                            dff(&mut b, "ff", clk, d, en, None, q);
+                            let r = match en {
+                                Some(e) => b.and(e, r),
+                                None => r,
+                            };
+                            let reset = Some((r, false, u64::from(set)));
+                            dff(&mut b, "ff", clk_pos, clk, d, en, reset, q);
                         }
                         Some(p) => {
+                            // An asynchronous one acts whatever the enable:
+                            // `always @(posedge C, posedge R) if (R) Q <= 0;
+                            // else if (E) Q <= D;`.
                             let reset = Some((input(&mut b, p), true, u64::from(set)));
-                            dff(&mut b, "ff", clk, d, en, reset, q);
+                            dff(&mut b, "ff", clk_pos, clk, d, en, reset, q);
                         }
-                        None => dff(&mut b, "ff", clk, d, en, None, q),
+                        None => dff(&mut b, "ff", clk_pos, clk, d, en, None, q),
                     }
                 }
                 "ICESTORM_LC" | "ICESTORM_LC_COMB" => {
@@ -421,13 +474,16 @@ mod packing {
                         let sr = input(&mut b, "SR");
                         let set = param(&cell, "SET_NORESET");
                         let q = cell.output("O").unwrap();
+                        let clk_pos = param(&cell, "NEG_CLK") == 0;
                         if param(&cell, "ASYNC_SR") != 0 {
-                            dff(&mut b, "ff", clk, lout, Some(en), Some((sr, true, set)), q);
+                            let reset = Some((sr, true, set));
+                            dff(&mut b, "ff", clk_pos, clk, lout, Some(en), reset, q);
                         } else {
-                            // The silicon: `if (cen) q <= sr ? set : d`.
-                            let v = b.const_bit(set != 0);
-                            let d = b.mux(sr, v, lout);
-                            dff(&mut b, "ff", clk, d, Some(en), None, q);
+                            // The silicon: `if (cen) q <= sr ? set : d`,
+                            // which in the IR is a reset of `cen & sr`.
+                            let r = b.and(en, sr);
+                            let reset = Some((r, false, set));
+                            dff(&mut b, "ff", clk_pos, clk, lout, Some(en), reset, q);
                         }
                     }
                 }
@@ -439,12 +495,9 @@ mod packing {
         b.finish()
     }
 
-    fn prove(name: &str, source: &str) {
-        let (mut design, top) = mapped(source);
-        let mut packed = design.modules[top].clone();
-        let report = pack::pack(&mut packed).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let a = model(design.modules[top].clone());
-        let b = model(packed);
+    /// `a` and `b`, added to `design`, proved to compute the same thing
+    /// from a zero start, or a panic naming `what` differs.
+    fn equivalent(design: &mut Design, a: Module, b: Module, name: &str, what: &str) {
         let ia = design.add_module(a);
         let ib = design.add_module(b);
         let options = EquivOptions {
@@ -454,13 +507,16 @@ mod packing {
             max_k: 12,
             ..EquivOptions::default()
         };
-        let result = check_equivalent(&design, ia, ib, &options);
+        let result = check_equivalent(design, ia, ib, &options);
         match &result.outcome {
             EquivOutcome::Equivalent(_) => {}
             EquivOutcome::Different {
                 frame, properties, ..
             } => {
-                panic!("{name}: the packed netlist differs at frame {frame}: {properties:?}")
+                panic!(
+                    "{name}: {what} differs at frame {frame}: {properties:?}\n{}",
+                    result.render("source", "mapped")
+                )
             }
             EquivOutcome::Unknown { depth } => {
                 // No difference within the bound is still the claim this
@@ -473,9 +529,108 @@ mod packing {
                 );
             }
         }
+    }
+
+    fn prove(name: &str, source: &str) {
+        let (mut design, top) = mapped(source);
+        let mut packed = design.modules[top].clone();
+        let report = pack::pack(&mut packed).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let a = model(design.modules[top].clone());
+        let b = model(packed);
+        equivalent(&mut design, a, b, name, "the packed netlist");
         eprintln!(
             "{name}: {} logic cells packed, no difference found",
             report.cells
+        );
+    }
+
+    /// The mapped netlist, read through the library's cells, proved
+    /// against the source; `cells` are primitives it must contain, so that
+    /// the proof is about the flip-flops it claims to be about.
+    fn prove_mapping(name: &str, source: &str, cells: &[&str]) {
+        let (mut design, top) = mapped(source);
+        for want in cells {
+            let found = design.modules[top]
+                .cells
+                .iter()
+                .any(|(_, c)| matches!(&c.kind, CellKind::Blackbox(n) if n.as_str() == *want));
+            assert!(found, "{name}: the mapping made no {want}");
+        }
+        let a = rtl(source);
+        let b = model(design.modules[top].clone());
+        equivalent(&mut design, a, b, name, "the mapped netlist");
+        // And packing it computes the same again.
+        prove(name, source);
+    }
+
+    #[test]
+    fn a_synchronous_reset_over_an_enable_maps_to_the_logic_it_was_written_as() {
+        // Reset to 0101, so both the reset and the set form are used.
+        prove_mapping(
+            "sync",
+            "module top(input clk, input en, input rst, input [3:0] d, output [3:0] q);\n\
+             reg [3:0] r = 0;\n\
+             always @(posedge clk) if (rst) r <= 4'b0101; else if (en) r <= d;\n\
+             assign q = r;\n\
+             endmodule\n",
+            &["SB_DFFESR", "SB_DFFESS"],
+        );
+    }
+
+    #[test]
+    fn an_active_low_synchronous_reset_maps_to_the_logic_it_was_written_as() {
+        // The reset is inverted for the active-high pin and the enable
+        // widened by the reset's *active* level, not its wire.
+        prove_mapping(
+            "sync_low",
+            "module top(input clk, input en, input rst_n, input [2:0] d, output [2:0] q);\n\
+             reg [2:0] r = 0;\n\
+             always @(posedge clk) if (!rst_n) r <= 3'b100; else if (en) r <= d;\n\
+             assign q = r;\n\
+             endmodule\n",
+            &["SB_DFFESR", "SB_DFFESS"],
+        );
+    }
+
+    #[test]
+    fn a_falling_edge_synchronous_reset_maps_to_the_logic_it_was_written_as() {
+        prove_mapping(
+            "sync_neg",
+            "module top(input clk, input en, input rst, input [1:0] d, output [1:0] q);\n\
+             reg [1:0] r = 0;\n\
+             always @(negedge clk) if (rst) r <= 2'b10; else if (en) r <= d;\n\
+             assign q = r;\n\
+             endmodule\n",
+            &["SB_DFFNESR", "SB_DFFNESS"],
+        );
+    }
+
+    #[test]
+    fn an_asynchronous_reset_with_an_enable_maps_to_the_logic_it_was_written_as() {
+        // Not the same class of fault, and checked to say so: an
+        // asynchronous set/reset acts whatever the enable, in the library
+        // and in the IR alike, so nothing is widened.
+        prove_mapping(
+            "async",
+            "module top(input clk, input en, input rst, input [1:0] d, output [1:0] q);\n\
+             reg [1:0] r = 0;\n\
+             always @(posedge clk or posedge rst) if (rst) r <= 2'b01; else if (en) r <= d;\n\
+             assign q = r;\n\
+             endmodule\n",
+            &["SB_DFFER", "SB_DFFES"],
+        );
+    }
+
+    #[test]
+    fn a_synchronous_reset_with_no_enable_maps_to_the_logic_it_was_written_as() {
+        prove_mapping(
+            "sync_plain",
+            "module top(input clk, input rst, input [1:0] d, output [1:0] q);\n\
+             reg [1:0] r = 0;\n\
+             always @(posedge clk) if (rst) r <= 2'b01; else r <= d;\n\
+             assign q = r;\n\
+             endmodule\n",
+            &["SB_DFFSR", "SB_DFFSS"],
         );
     }
 

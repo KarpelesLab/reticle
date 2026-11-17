@@ -102,7 +102,9 @@ use super::route::{RouteOptions, Routing, RoutingReport};
 use super::techcells::CellMapReport;
 #[cfg(feature = "synth")]
 use crate::diag::{Diagnostic, Diagnostics};
-use crate::ir::emit::{BitView, EmitError, SigBit, VerilogOptions, emit_json, emit_verilog_with};
+use crate::ir::emit::{
+    BitView, EmitError, SigBit, VerilogOptions, emit_json_with, emit_verilog_with,
+};
 use crate::ir::{Bit, CellKind, Design, ModuleId, PortDir};
 
 /// Why an export could not be produced.
@@ -2582,7 +2584,23 @@ pub fn export_nextpnr(
     design.top = Some(module);
     design.remove_unused_modules(module);
     let module = design.top.unwrap_or(module);
-    let json = emit_json(&design)?;
+    // nextpnr's iCE40 packer finds an `SB_IO`'s pad only through an `inout`
+    // `PACKAGE_PIN`, which is how the library declares it, and stops at
+    // routing with "No wire found for port PACKAGE_PIN" on an output buffer
+    // whose pad is written as an output. CHECKED with nextpnr-ice40 on an
+    // UltraPlus (docs/fpga-icestorm.md). ECP5's `TRELLIS_IO` is left as it
+    // was: nextpnr-ecp5 places it either way and a board runs it.
+    let inout: Vec<(String, String)> = if device.family == "ice40" {
+        device
+            .bels
+            .iter()
+            .filter(|b| b.role == super::device::BelRole::Io)
+            .filter_map(|b| Some((b.name.clone(), b.port("pad")?.to_owned())))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let json = emit_json_with(&design, &inout)?;
     let top = design.module(module).name.as_str().to_owned();
     match device.family.as_str() {
         "ice40" => Ok(NextpnrInputs {
@@ -3141,6 +3159,13 @@ mod tests {
         assert!(inputs.json.contains("\"SB_IO\""), "{}", inputs.json);
         assert!(inputs.json.contains("\"SB_GB\""));
         assert!(inputs.json.contains("\"top\": 1"));
+        // Every pad is `inout`, as the library declares it: nextpnr-ice40
+        // refuses an output buffer whose `PACKAGE_PIN` is an `output`
+        // ("No wire found for port PACKAGE_PIN"). This fails if the export
+        // goes back to writing the pad by the way the cell uses it.
+        assert!(inputs.json.contains("\"PACKAGE_PIN\": \"inout\""));
+        assert!(!inputs.json.contains("\"PACKAGE_PIN\": \"output\""));
+        assert!(!inputs.json.contains("\"PACKAGE_PIN\": \"input\""));
         assert!(inputs.pcf_or_lpf.contains("set_io clk 21"));
         assert_eq!(inputs.constraints_name, "blinky.pcf");
         assert_eq!(

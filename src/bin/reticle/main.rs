@@ -3532,9 +3532,8 @@ fn write_ice40_bitstream(
     let (signals, of, pips, wires) = built.routed;
     Ok(format!(
         "note: wrote {path}, {} byte(s), {} configuration bit(s) set; {} logic cell(s) packed \
-         ({} flip-flop(s) through their own table, {} feed-in and {} feed-out carry cell(s), {} \
-         enable(s) widened over a synchronous reset), {pads} IO block(s) and {cells} hard \
-         cell(s) configured, {placed}\n\
+         ({} flip-flop(s) through their own table, {} feed-in and {} feed-out carry cell(s)), \
+         {pads} IO block(s) and {cells} hard cell(s) configured, {placed}\n\
          note: routed {signals} of {of} signal(s) with {pips} pip(s) over {wires} wire(s), and \
          every sink was walked back to its driver\n\
          note: all {} set bit(s) decode back through the database into {} arc(s) and {} \
@@ -3547,7 +3546,6 @@ fn write_ice40_bitstream(
         report.pass_through,
         report.feed_in,
         report.feed_out,
-        report.enable_or,
         decoded.bits,
         decoded.arcs.len(),
         decoded.functions.len(),

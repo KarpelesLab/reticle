@@ -169,7 +169,7 @@
             "io_standard": "LVCMOS33"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -187,7 +187,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -205,7 +205,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -223,7 +223,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -241,7 +241,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -259,7 +259,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -277,7 +277,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -295,7 +295,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -313,7 +313,7 @@
             "port": "a"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -331,7 +331,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -349,7 +349,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -367,7 +367,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -385,7 +385,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -403,7 +403,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -421,7 +421,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -439,7 +439,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -457,7 +457,7 @@
             "port": "b"
           },
           "port_directions": {
-            "PACKAGE_PIN": "input",
+            "PACKAGE_PIN": "inout",
             "D_IN_0": "output"
           },
           "connections": {
@@ -478,7 +478,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 45 ],
@@ -496,7 +496,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 46 ],
@@ -514,7 +514,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 47 ],
@@ -532,7 +532,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 48 ],
@@ -550,7 +550,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 49 ],
@@ -568,7 +568,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 50 ],
@@ -586,7 +586,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 51 ],
@@ -604,7 +604,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 52 ],
@@ -624,7 +624,7 @@
           },
           "port_directions": {
             "D_OUT_0": "input",
-            "PACKAGE_PIN": "output"
+            "PACKAGE_PIN": "inout"
           },
           "connections": {
             "D_OUT_0": [ 61 ],

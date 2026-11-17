@@ -29,7 +29,7 @@
 //!   lut_size 4
 //!   ff enable sync_reset async_reset shared_reset init 0
 //!   bel SB_LUT4 lut port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
-//!   bel SB_DFFESR ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=E rst=R
+//!   bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
 //!   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE
 //!   bram SB_RAM40_4K
 //!     ports 2
@@ -313,11 +313,29 @@ impl FfReset {
 ///
 /// In the `.dev` text this is the `mode` clause, a comma-separated list of
 /// `posedge` / `negedge`, `enable` or `enable_low`, one of `sync_reset` /
-/// `async_reset` / `sync_set` / `async_set`, and `active_low`:
+/// `async_reset` / `sync_set` / `async_set`, `active_low`, and
+/// `enable_gates_reset`:
 ///
 /// ```text
 /// bel SB_DFFER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+/// bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
 /// ```
+///
+/// # Which wins, an enable or a synchronous reset
+///
+/// When a flip-flop has both a clock enable and a *synchronous* set/reset,
+/// families disagree about what happens on an edge with the reset asserted
+/// and the enable low. On most — the 7 series `FDRE`, ECP5's `TRELLIS_FF`,
+/// Gowin's `DFFRE` — the reset wins, and that is also what a Reticle `dff`
+/// with `en` and `srst` means, so it is the default. On an iCE40 the reset
+/// acts **only on an enabled edge**: the iCE Technology Library's
+/// `SB_DFFESR` is `if (E) Q <= R ? 0 : D`, Yosys's `cells_sim.v` models it
+/// that way and maps only `$_SDFFCE_*` (the enable-over-reset cell) onto it,
+/// and IceStorm's `icebox_vlog` decodes a configured logic cell as
+/// `if (cen) q <= sr ? set : d`. `enable_gates_reset` says so, and
+/// [`super::techcells`] then feeds the primitive's enable `en | rst`, which
+/// makes the gated cell behave as the reset-wins one the netlist asked for.
+/// An asynchronous set/reset never waits for an enable, on any family.
 ///
 /// The set or reset pin plays the `rst` port role whether it sets or
 /// resets, since which of the two it does is what the variant states.
@@ -338,6 +356,12 @@ pub struct FfVariant {
     pub enable_active_high: bool,
     /// The set/reset input, or `None` when the primitive has none.
     pub reset: Option<FfReset>,
+    /// True when the synchronous set/reset acts only on an edge where the
+    /// clock enable is active, as on an iCE40; false when it wins over the
+    /// enable, which is what a Reticle `dff` means. Only ever true with a
+    /// clock enable and a synchronous set/reset, so that two variants that
+    /// behave the same compare equal. See "Which wins" above.
+    pub enable_gates_reset: bool,
 }
 
 impl FfVariant {
@@ -348,6 +372,7 @@ impl FfVariant {
             has_enable: false,
             enable_active_high: true,
             reset: None,
+            enable_gates_reset: false,
         }
     }
 
@@ -369,6 +394,9 @@ impl FfVariant {
                 out.push_str(",active_low");
             }
         }
+        if self.enable_gates_reset {
+            out.push_str(",enable_gates_reset");
+        }
         out
     }
 
@@ -382,6 +410,10 @@ impl FfVariant {
     /// assert_eq!(v.flags(), "negedge,enable,async_reset");
     /// assert!(!FfVariant::parse("posedge,enable_low").unwrap().enable_active_high);
     /// assert!(FfVariant::parse("posedge,nonsense").is_none());
+    /// let gated = FfVariant::parse("posedge,enable,sync_reset,enable_gates_reset").unwrap();
+    /// assert!(gated.enable_gates_reset);
+    /// // Without both an enable and a synchronous reset, nothing is gated.
+    /// assert!(FfVariant::parse("posedge,enable,async_reset,enable_gates_reset").is_none());
     /// ```
     pub fn parse(text: &str) -> Option<FfVariant> {
         let mut variant = FfVariant::plain();
@@ -396,13 +428,34 @@ impl FfVariant {
                     variant.enable_active_high = false;
                 }
                 "active_low" => active_low = true,
+                "enable_gates_reset" => variant.enable_gates_reset = true,
                 other => variant.reset = Some(FfReset::from_keyword(other)?),
             }
         }
         if active_low {
             variant.reset.as_mut()?.active_high = false;
         }
+        if variant.enable_gates_reset && !variant.can_gate_reset() {
+            return None;
+        }
         Some(variant)
+    }
+
+    /// True when the variant has what `enable_gates_reset` is about: a clock
+    /// enable and a synchronous set/reset.
+    pub fn can_gate_reset(self) -> bool {
+        self.has_enable && self.reset.is_some_and(|r| !r.asynchronous)
+    }
+
+    /// The same variant with its synchronous set/reset acting only on an
+    /// enabled edge, or `None` when it has no enable and synchronous
+    /// set/reset to gate. [`super::techcells`] asks for it when the device
+    /// declares no reset-wins form, and widens the enable to make up for it.
+    pub fn with_gated_reset(self) -> Option<FfVariant> {
+        self.can_gate_reset().then_some(FfVariant {
+            enable_gates_reset: true,
+            ..self
+        })
     }
 
     /// The same variant with the set/reset input's polarity flipped, or
@@ -456,6 +509,9 @@ impl FfVariant {
                     "synchronous "
                 });
                 out.push_str(if reset.sets { "set" } else { "reset" });
+                if self.enable_gates_reset {
+                    out.push_str(" that acts only on an enabled edge");
+                }
             }
             None => out.push_str(" and no set or reset"),
         }
@@ -2092,8 +2148,14 @@ impl Device {
     ///     has_enable: true,
     ///     enable_active_high: true,
     ///     reset: Some(FfReset { asynchronous: false, sets: false, active_high: true }),
+    ///     enable_gates_reset: false,
     /// };
-    /// assert_eq!(device.ff_variant(variant).unwrap().name, "SB_DFFESR");
+    /// // An iCE40's synchronous reset waits for the enable, so the
+    /// // reset-wins flip-flop is not one it has...
+    /// assert!(device.ff_variant(variant).is_none());
+    /// // ...and `SB_DFFESR` is the gated one.
+    /// let gated = variant.with_gated_reset().unwrap();
+    /// assert_eq!(device.ff_variant(gated).unwrap().name, "SB_DFFESR");
     /// ```
     pub fn ff_variant(&self, variant: FfVariant) -> Option<&BelKind> {
         self.bels
@@ -4676,9 +4738,25 @@ end
                                 active_high,
                                 ..FfReset::from_keyword(word).unwrap()
                             }),
+                            enable_gates_reset: false,
                         };
                         let flags = variant.flags();
                         assert_eq!(FfVariant::parse(&flags), Some(variant), "{flags}");
+                        // The gated form exists exactly when there is an
+                        // enable and a synchronous reset, and round-trips.
+                        let gated = variant.with_gated_reset();
+                        assert_eq!(
+                            gated.is_some(),
+                            has_enable && reset.is_some_and(|w| w.starts_with("sync"))
+                        );
+                        if let Some(gated) = gated {
+                            assert_ne!(gated, variant);
+                            assert_eq!(FfVariant::parse(&gated.flags()), Some(gated));
+                            assert!(gated.describe().contains("only on an enabled edge"));
+                        } else {
+                            let forced = format!("{flags},enable_gates_reset");
+                            assert_eq!(FfVariant::parse(&forced), None, "{forced}");
+                        }
                         assert!(!variant.describe().is_empty());
                         // Flipping a polarity twice is the identity, and
                         // flipping one the variant has not is refused.
