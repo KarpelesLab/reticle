@@ -54,7 +54,8 @@
 //!
 //! 9. Every other cell's input bit **tied to a one** — an IO buffer's, the
 //!    RGB driver's, a block RAM's read enable, a single-port RAM's
-//!    `POWEROFF` or one bit of its `MASKWREN` — is wired to a cell whose
+//!    `POWEROFF` or one bit of its `MASKWREN`, a DSP block's `CE` or any
+//!    bit of its operands — is wired to a cell whose
 //!    table is all ones, because an unrouted input reads zero. A bit tied
 //!    to a zero is left unrouted, except the two a block RAM reads as a
 //!    *one* when nothing drives them, its clock enables `RCLKE` and
@@ -63,7 +64,9 @@
 //!
 //! What it refuses, with a message naming the cell: a clock, an enable of
 //! zero or a set/reset of one tied to a constant, a block RAM clock enable
-//! tied to zero, and an initial one.
+//! tied to zero, a DSP block's `CE` tied to zero or its cascade inputs
+//! (`ACCUMCI`, `SIGNEXTIN`, which have no fabric wire) connected, and an
+//! initial one.
 
 use std::collections::BTreeMap;
 
@@ -303,6 +306,30 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
                     "`{}`'s {port} is tied to zero, so that port of the block RAM never acts; \
                      an undriven {port} reads one, and this flow does not drive a zero onto it",
                     module.cells[s.id].name
+                )));
+            }
+        }
+    }
+    // A DSP block's clock enable gates every register in it, and its
+    // cascade ports have no fabric wire: a zero on the one would need a
+    // driver nothing here makes (nextpnr leaves an undriven `CE` reading
+    // one), and anything on the others would be dropped without a word.
+    for s in others().filter(|s| s.primitive == "SB_MAC16") {
+        let name = &module.cells[s.id].name;
+        if s.inputs.get("CE") == Some(&SigBit::Const(Bit::Zero)) {
+            return Err(PackError(format!(
+                "`{name}`'s CE is tied to zero, so none of the DSP block's registers ever \
+                 loads; tie it to one, or drive it"
+            )));
+        }
+        for port in ["ACCUMCI", "SIGNEXTIN"] {
+            if s.inputs
+                .get(port)
+                .is_some_and(|b| *b != SigBit::Const(Bit::Zero))
+            {
+                return Err(PackError(format!(
+                    "`{name}`'s {port} is connected, but it is the cascade from the DSP block \
+                     below, which this flow does not chain; leave it unconnected or zero"
                 )));
             }
         }

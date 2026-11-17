@@ -29,6 +29,10 @@
 //!   on the `ram/*` wires of both of its tiles, and a **`spram` bel** at each
 //!   of the four places IceStorm's `.extra_cell SPRAM` records give, with
 //!   pins on the IP-connect tiles' wires those records name;
+//! - a **`mac16` bel** for each of the eight DSP blocks, the same way from
+//!   the `.extra_cell MAC16` records, its parameters read back from the
+//!   bits by [`IceFabric::decode`] (see [`DspConfig::as_bits`] for the two
+//!   that IceStorm names after each other);
 //! - and the package's **pin map**.
 //!
 //! The logic cell's flip-flop takes its data from its own lookup table and
@@ -85,6 +89,37 @@ pub const LC_ASYNC_SR: usize = 19;
 /// and DSP tile of an UltraPlus part, as the twenty `LC_<k>` bits in the
 /// database's order: a lookup table passing its third input through.
 pub const IPCON_LC_PATTERN: &str = "11000011001100001100";
+
+/// The one IP-connect tile of the 5k whose cells nextpnr does not set to
+/// pass through, unless a DSP block's carry out leaves through it.
+pub const SKIPPED_IPCON: (u32, u32) = (25, 14);
+
+/// The parameters of an `SB_MAC16` that its configuration bits hold, with
+/// their widths in bits: the list nextpnr's `bitstream.cc` writes, and
+/// the `.extra_cell MAC16` records name a `CBIT` for each bit of each.
+/// `NEG_TRIGGER` is not among them: no bit inverts the block's clock, and
+/// a cell asking for it is refused.
+pub const MAC16_PARAMS: [(&str, u32); 19] = [
+    ("C_REG", 1),
+    ("A_REG", 1),
+    ("B_REG", 1),
+    ("D_REG", 1),
+    ("TOP_8x8_MULT_REG", 1),
+    ("BOT_8x8_MULT_REG", 1),
+    ("PIPELINE_16x16_MULT_REG1", 1),
+    ("PIPELINE_16x16_MULT_REG2", 1),
+    ("TOPOUTPUT_SELECT", 2),
+    ("TOPADDSUB_LOWERINPUT", 2),
+    ("TOPADDSUB_UPPERINPUT", 1),
+    ("TOPADDSUB_CARRYSELECT", 2),
+    ("BOTOUTPUT_SELECT", 2),
+    ("BOTADDSUB_LOWERINPUT", 2),
+    ("BOTADDSUB_UPPERINPUT", 1),
+    ("BOTADDSUB_CARRYSELECT", 2),
+    ("MODE_8x8", 1),
+    ("A_SIGNED", 1),
+    ("B_SIGNED", 1),
+];
 
 /// Why a fabric could not be built.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -484,6 +519,11 @@ impl IceFabric {
     /// and bit, `ADDRESS3` and `WREN0` (`place::describe`); and there are
     /// two per corner, so each bel is named after its index there,
     /// `spram1`..`spram4`.
+    ///
+    /// An `SB_MAC16` is the same shape: a `mac16` bel on each of the eight
+    /// DSP blocks' anchor tiles, its pins its ports bit by bit (`A3`,
+    /// `CLK0`, `O31`) on the five tiles of the block, and its parameters
+    /// `CBIT`s of those tiles, which [`IceFabric::configure_dsps`] writes.
     fn add_extra_cells(&mut self) {
         let cells: Vec<db::ExtraCell> = self.db.extra_cells.clone();
         for cell in cells {
@@ -506,9 +546,13 @@ impl IceFabric {
                     "lfosc",
                     &[("en", "CLKLFEN"), ("pu", "CLKLFPU"), ("o", "CLKLF")],
                 ),
-                "SPRAM" => {
+                "SPRAM" | "MAC16" => {
                     let (ax, ay) = cell.tile;
-                    let mut bel = BelDecl::new(format!("spram{}", cell.z), "spram");
+                    let mut bel = if cell.kind == "SPRAM" {
+                        BelDecl::new(format!("spram{}", cell.z), "spram")
+                    } else {
+                        BelDecl::new("mac16", "mac16")
+                    };
                     for (key, x, y, name) in &cell.entries {
                         let role = match key.rsplit_once('_') {
                             Some((port, bit)) if bit.parse::<u32>().is_ok() => {
@@ -612,11 +656,17 @@ impl IceFabric {
                     );
                 }
             }
-            // Every IP-connect and DSP tile's pass-through cells.
+            // Every IP-connect and DSP tile's pass-through cells, but one:
+            // nextpnr leaves the IP-connect tile at (25, 14) alone ("mystery
+            // bits not set in this one tile", `bitstream.cc`), and sets only
+            // its first cell when the DSP block below uses it for its carry
+            // out, which `configure_dsps` does.
             for y in 0..self.db.height {
                 for x in 0..self.db.width {
                     let kind = self.db.tile(x, y);
-                    if !matches!(kind, TileKind::Ipcon | TileKind::Dsp(_)) {
+                    if !matches!(kind, TileKind::Ipcon | TileKind::Dsp(_))
+                        || (x, y) == SKIPPED_IPCON
+                    {
                         continue;
                     }
                     for k in 0..8 {
@@ -769,6 +819,93 @@ impl IceFabric {
             .map(|(_, x, y, name)| (*x, *y, name.clone()))
     }
 
+    /// The `.extra_cell MAC16` record of the DSP block anchored at `tile`.
+    fn mac16_at(&self, tile: (u32, u32)) -> Option<&db::ExtraCell> {
+        self.db
+            .extra_cells
+            .iter()
+            .find(|c| c.kind == "MAC16" && c.tile == tile)
+    }
+
+    /// Writes each placed DSP block's parameters into the bits its
+    /// `.extra_cell MAC16` record names — each `CBIT_<i>` an `IpConfig`
+    /// bit of one of the block's tiles, as nextpnr's `bitstream.cc` writes
+    /// them — and sets the logic cell its carry out leaves through to pass
+    /// it on, as nextpnr does for the one tile whose cells are otherwise
+    /// left alone ([`SKIPPED_IPCON`]).
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] on another device than the 5k, for a tile with no
+    /// DSP block, or when the database lacks a bit.
+    pub fn configure_dsps(
+        &self,
+        image: &mut image::Image,
+        dsps: &BTreeMap<(u32, u32), DspConfig>,
+    ) -> Result<(), FabricError> {
+        if !dsps.is_empty() && self.db.device != "5k" {
+            return Err(FabricError(format!(
+                "DSP blocks are placed on the 5k only, not on the {}",
+                self.db.device
+            )));
+        }
+        for (&tile, config) in dsps {
+            let cell = self.mac16_at(tile).ok_or_else(|| {
+                FabricError(format!(
+                    "the database has no DSP block at ({}, {})",
+                    tile.0, tile.1
+                ))
+            })?;
+            for (key, x, y, name) in &cell.entries {
+                let Some((param, bit)) = mac16_param_bit(key) else {
+                    continue;
+                };
+                if config.params.get(param).copied().unwrap_or(0) >> bit & 1 == 0 {
+                    continue;
+                }
+                let bits = self
+                    .db
+                    .function_by_suffix(self.db.tile(*x, *y), name)
+                    .ok_or_else(|| {
+                        FabricError(format!(
+                            "the DSP block's `{key}` names `{name}` at ({x}, {y}), which that \
+                             tile does not have"
+                        ))
+                    })?;
+                for b in bits {
+                    image.set(*x, *y, b.row, b.col);
+                }
+            }
+            // The carry out is the first logic cell's output of the tile
+            // above the block (`slf_op_0`), passed through like every
+            // IP-connect tile's cells.
+            if let Some((_, x, y, name)) = cell.entries.iter().find(|(k, ..)| k == "CO")
+                && name == "slf_op_0"
+            {
+                let kind = self.db.tile(*x, *y);
+                let lc = self
+                    .db
+                    .function_bits(kind, "LC_0")
+                    .ok_or_else(|| FabricError(format!("no `LC_0` in the tile at ({x}, {y})")))?;
+                for (b, c) in lc.iter().zip(IPCON_LC_PATTERN.chars()) {
+                    if c == '1' {
+                        image.set(*x, *y, b.row, b.col);
+                    }
+                }
+                let cascade = self.db.tile_bits.get(&kind).and_then(|fs| {
+                    fs.iter()
+                        .find(|(n, _)| n.starts_with("Cascade.") && n.contains("_LC00_"))
+                });
+                if let Some((_, bits)) = cascade {
+                    for b in bits {
+                        image.set(*x, *y, b.row, b.col);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Reads an image back through the database: every multiplexer whose
     /// field is not all zero becomes an arc, every named function bit is
     /// accounted for, and every set bit that is neither is reported. Block
@@ -891,6 +1028,24 @@ impl IceFabric {
                 out.sprams.insert((cell.tile, cell.z));
             }
         }
+        // Every DSP block's parameters, used or not: a block whose bits are
+        // all clear reads back as every parameter zero.
+        for cell in self.db.extra_cells.iter().filter(|c| c.kind == "MAC16") {
+            let mut config = DspConfig::zero();
+            for (key, x, y, name) in &cell.entries {
+                let Some((param, bit)) = mac16_param_bit(key) else {
+                    continue;
+                };
+                let set = self
+                    .db
+                    .function_by_suffix(self.db.tile(*x, *y), name)
+                    .is_some_and(|bits| bits.iter().all(|b| image.get(*x, *y, b.row, b.col)));
+                if set && let Some(v) = config.params.get_mut(param) {
+                    *v |= 1 << bit;
+                }
+            }
+            out.dsps.insert(cell.tile, config);
+        }
         out
     }
 
@@ -972,6 +1127,7 @@ impl IceFabric {
         let mut extra = Vec::new();
         let mut rams: BTreeMap<(u32, u32), RamConfig> = BTreeMap::new();
         let mut sprams: BTreeSet<((u32, u32), u32)> = BTreeSet::new();
+        let mut dsps: BTreeMap<(u32, u32), DspConfig> = BTreeMap::new();
         let mut edges: BTreeMap<(u32, u32), BTreeSet<bool>> = BTreeMap::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             let Some(site) = placement.site_of(index) else {
@@ -1031,6 +1187,9 @@ impl IceFabric {
                 "bram" => {
                     rams.insert(site.tile, RamConfig::of_cell(cell)?);
                 }
+                "mac16" => {
+                    dsps.insert(site.tile, DspConfig::of_cell(cell)?.as_bits(cell)?);
+                }
                 "spram" => {
                     let z = site
                         .bel
@@ -1055,11 +1214,13 @@ impl IceFabric {
         }
         self.configure(image, &ios, &extra)?;
         self.configure_rams(image, &rams, &sprams)?;
+        self.configure_dsps(image, &dsps)?;
         Ok(Configured {
             pads: ios.len(),
             hard_cells: extra.len(),
             rams,
             sprams,
+            dsps,
         })
     }
 
@@ -1103,6 +1264,8 @@ pub struct Configured {
     pub rams: BTreeMap<(u32, u32), RamConfig>,
     /// Single-port RAMs, as `(anchor tile, index)`.
     pub sprams: BTreeSet<((u32, u32), u32)>,
+    /// DSP blocks, by their anchor tile, as their cells ask for them.
+    pub dsps: BTreeMap<(u32, u32), DspConfig>,
 }
 
 /// What [`implement`] built, and the numbers its report prints.
@@ -1119,6 +1282,8 @@ pub struct Implemented {
     pub rams: usize,
     /// Single-port RAMs configured, each read back.
     pub sprams: usize,
+    /// DSP blocks configured, each read back with its parameters.
+    pub dsps: usize,
     /// Sites used per kind, as the placer reports them.
     pub usage: Vec<(String, usize, usize)>,
     /// Signals routed, signals in all, pips and wires used.
@@ -1170,7 +1335,15 @@ pub fn implement(
     for instance in &netlist.instances {
         if !matches!(
             instance.kind.as_str(),
-            "lc" | "lcc" | "io" | "gb" | "rgba_drv" | "hfosc" | "lfosc" | "bram" | "spram"
+            "lc" | "lcc"
+                | "io"
+                | "gb"
+                | "rgba_drv"
+                | "hfosc"
+                | "lfosc"
+                | "bram"
+                | "spram"
+                | "mac16"
         ) {
             return Err(format!(
                 "`{}` is a `{}`, which this flow does not place on an iCE40 yet; nothing was \
@@ -1282,6 +1455,53 @@ pub fn implement(
             decoded.sprams, configured.sprams
         ));
     }
+    // And for the DSP blocks: every block's parameters read back as the
+    // placed cell asked for, and every other block's as all zero.
+    let wanted: BTreeMap<(u32, u32), DspConfig> = decoded
+        .dsps
+        .keys()
+        .map(|t| {
+            (
+                *t,
+                configured
+                    .dsps
+                    .get(t)
+                    .cloned()
+                    .unwrap_or_else(DspConfig::zero),
+            )
+        })
+        .collect();
+    if decoded.dsps != wanted
+        || configured
+            .dsps
+            .keys()
+            .any(|t| !decoded.dsps.contains_key(t))
+    {
+        let differ: Vec<String> = wanted
+            .iter()
+            .filter(|(t, w)| decoded.dsps.get(t) != Some(w))
+            .map(|((x, y), w)| {
+                let got = decoded.dsps.get(&(*x, *y));
+                let params: Vec<String> = w
+                    .params
+                    .iter()
+                    .filter(|(k, v)| got.and_then(|g| g.params.get(*k)) != Some(v))
+                    .map(|(k, v)| {
+                        format!(
+                            "{k} reads {} for {v}",
+                            got.and_then(|g| g.params.get(k)).copied().unwrap_or(0)
+                        )
+                    })
+                    .collect();
+                format!("X{x}Y{y}: {}", params.join(", "))
+            })
+            .collect();
+        return Err(format!(
+            "the DSP blocks this bitstream describes are not the ones placed, so nothing was \
+             written:\n  {}",
+            differ.join("\n  ")
+        ));
+    }
     Ok(Implemented {
         image,
         pack: pack_report,
@@ -1289,6 +1509,7 @@ pub fn implement(
         hard_cells: configured.hard_cells,
         rams: configured.rams.len(),
         sprams: configured.sprams.len(),
+        dsps: configured.dsps.len(),
         usage: place_report.usage,
         routed: (
             route_report.signals,
@@ -1392,4 +1613,137 @@ pub struct Decoded {
     pub ram_bits: usize,
     /// Every single-port RAM enabled, as `(anchor tile, index)`.
     pub sprams: BTreeSet<((u32, u32), u32)>,
+    /// Every DSP block's parameters as its bits hold them, by its anchor
+    /// tile; an unused block reads back as all zero.
+    pub dsps: BTreeMap<(u32, u32), DspConfig>,
+}
+
+/// The `(parameter, bit)` an entry of an `.extra_cell MAC16` record sets,
+/// when it is a parameter bit and not a port: `A_REG` is bit 0 of
+/// `A_REG`, `TOPOUTPUT_SELECT_1` bit 1 of `TOPOUTPUT_SELECT`.
+#[must_use]
+pub fn mac16_param_bit(key: &str) -> Option<(&'static str, u32)> {
+    for (name, width) in MAC16_PARAMS {
+        if key == name && width == 1 {
+            return Some((name, 0));
+        }
+        if let Some(bit) = key
+            .strip_prefix(name)
+            .and_then(|r| r.strip_prefix('_'))
+            .and_then(|r| r.parse::<u32>().ok())
+            && bit < width
+        {
+            return Some((name, bit));
+        }
+    }
+    None
+}
+
+/// One DSP block's configuration: every parameter of [`MAC16_PARAMS`] and
+/// its value, what [`IceFabric::configure_dsps`] writes and
+/// [`IceFabric::decode`] reads back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DspConfig {
+    /// Each parameter's value, all of [`MAC16_PARAMS`] present.
+    pub params: BTreeMap<String, u64>,
+}
+
+impl DspConfig {
+    /// Every parameter zero: an unused block, or a 16 x 16 unsigned
+    /// multiply-and-add with no register.
+    #[must_use]
+    pub fn zero() -> DspConfig {
+        DspConfig {
+            params: MAC16_PARAMS
+                .iter()
+                .map(|(n, _)| ((*n).to_owned(), 0))
+                .collect(),
+        }
+    }
+
+    /// The configuration an `SB_MAC16` cell asks for.
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] for a value wider than its parameter, a value that
+    /// is not a number, or `NEG_TRIGGER` set, which no bit can hold.
+    pub fn of_cell(cell: &crate::ir::Cell) -> Result<DspConfig, FabricError> {
+        use crate::ir::AttrValue;
+        let value = |key: &str| -> Result<u64, FabricError> {
+            let v = match cell.params.get(key) {
+                None => Some(0),
+                Some(AttrValue::Const(c)) => c.to_u64(),
+                Some(AttrValue::String(s)) => {
+                    let digits = s.strip_prefix("0b").unwrap_or(s);
+                    u64::from_str_radix(digits, 2).ok()
+                }
+                Some(other) => other.as_int().and_then(|v| u64::try_from(v).ok()),
+            };
+            v.ok_or_else(|| {
+                FabricError(format!("`{}`'s {key} is not a number", cell.name.as_str()))
+            })
+        };
+        if value("NEG_TRIGGER")? != 0 {
+            return Err(FabricError(format!(
+                "`{}` asks for NEG_TRIGGER, a DSP block clocked on the falling edge, which no \
+                 configuration bit of the iCE40UP5K holds; invert the clock in logic instead",
+                cell.name.as_str()
+            )));
+        }
+        let mut out = DspConfig::zero();
+        for (name, width) in MAC16_PARAMS {
+            let v = value(name)?;
+            if v >> width != 0 {
+                return Err(FabricError(format!(
+                    "`{}`'s {name} is {v}, which does not fit its {width} bit(s)",
+                    cell.name.as_str()
+                )));
+            }
+            out.params.insert(name.to_owned(), v);
+        }
+        Ok(out)
+    }
+
+    /// The configuration as the database names its bits, from the one the
+    /// library's parameters describe (`self`, from [`DspConfig::of_cell`]).
+    ///
+    /// They differ in two names. On the silicon, measured
+    /// (`docs/fpga-icestorm.md`, "Two DSP registers by other names"), the
+    /// bit IceStorm calls `TOP_8x8_MULT_REG` registers the partial product
+    /// `A[15:8] x B[7:0]` and nothing else, and the one it calls
+    /// `PIPELINE_16x16_MULT_REG1` registers both the top product `A[15:8] x
+    /// B[15:8]` — the 8 x 8 split's top output — and `A[7:0] x B[15:8]`. The
+    /// library's `TOP_8x8_MULT_REG` is the top product's register, and its
+    /// `PIPELINE_16x16_MULT_REG1` the two middle products'. So the first is
+    /// written into the bit IceStorm names after the second and the other
+    /// way round; and since one bit holds the top product's register and
+    /// one middle product's, a cell asking for the two differently is
+    /// refused when the 16 x 16 sum `H` reaches an output or an adder, the
+    /// only place the middle products go.
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] for that one configuration, naming `cell`.
+    pub fn as_bits(&self, cell: &crate::ir::Cell) -> Result<DspConfig, FabricError> {
+        let get = |k: &str| self.params.get(k).copied().unwrap_or(0);
+        let (top, pipe) = (get("TOP_8x8_MULT_REG"), get("PIPELINE_16x16_MULT_REG1"));
+        let sum_used = get("TOPOUTPUT_SELECT") == 3
+            || get("BOTOUTPUT_SELECT") == 3
+            || get("TOPADDSUB_LOWERINPUT") == 2
+            || get("BOTADDSUB_LOWERINPUT") == 2;
+        if top != pipe && sum_used {
+            return Err(FabricError(format!(
+                "`{}` asks for TOP_8x8_MULT_REG = {top} and PIPELINE_16x16_MULT_REG1 = {pipe} \
+                 and uses the 16 x 16 product, which an iCE40UP5K cannot hold: one \
+                 configuration bit registers both the top partial product and one of the middle \
+                 two; give the two parameters the same value",
+                cell.name.as_str()
+            )));
+        }
+        let mut out = self.clone();
+        out.params.insert("TOP_8x8_MULT_REG".to_owned(), pipe);
+        out.params
+            .insert("PIPELINE_16x16_MULT_REG1".to_owned(), top);
+        Ok(out)
+    }
 }

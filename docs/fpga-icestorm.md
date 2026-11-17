@@ -68,7 +68,8 @@ under a second.
   bels for the RGB LED driver and the two oscillators, with pins on the
   fabric wires the database's `.extra_cell` records name.
 - A `bram` bel per block RAM and a `spram` bel per single-port RAM: see
-  "Block RAM and single-port RAM" below.
+  "Block RAM and single-port RAM" below; and a `mac16` bel per DSP block,
+  see "DSP blocks".
 
 ## Packing: three cells are one
 
@@ -139,7 +140,21 @@ writes all three:
 | an IO block's input enable (`IE`) and pull-up disable (`REN`) are in *another* block's bits, the one `.ieren` names; on the 5k `IE` set means enabled, and `REN` set means no pull-up | the paired block of the same tile | all four references; and a design that echoes the FT2232H's serial line through the part works |
 | a used IO block also sets `IoCtrl.cf_bit_39` (paired block 0) or `cf_bit_35` (paired block 1) | the same | all four references, input and output alike; meaning not known |
 | every column buffer of every global network enabled, 1 248 bits | every `.colbuf` source tile | all four references, identically, whatever the design |
-| every IP-connect and DSP tile's eight logic cells set to pass their third input through, `11000011001100001100`, with every `Cascade.*` bit beside them | all 60 such tiles | all four references, identically |
+| every IP-connect and DSP tile's eight logic cells set to pass their third input through, `11000011001100001100`, with every `Cascade.*` bit beside them | 59 of the 60 such tiles: not the IP-connect tile at (25, 14), see below | all four references, identically |
+
+**Corrected, 2026-11-18**: that row said "all 60 such tiles", and this
+backend wrote all 60. The references say 59. nextpnr leaves (25, 14) alone
+— "mystery bits not set in this one tile, other than to route through the
+DSP carry out if used", `bitstream.cc` — and sets only that tile's first
+cell when the DSP block below it, at (25, 10), is used, because the block's
+carry out leaves through that cell (`CO 25 14 slf_op_0` in its record).
+A comparison of every IP-connect and DSP tile of `uart_echo` against
+nextpnr's build found the one tile that differed; the earlier check had
+looked at whether the pattern was there, not at where it was not. The
+designs ran either way. The backend now does what nextpnr does, which is 72
+bits fewer in every design, and **the carry out needs that cell**: with it
+left out, `dsp_selftest`'s carry outs read wrong on 19 of 64 lines on the
+board (CHECKED by mutation).
 
 The RGB LED driver's parameters set the bits its `.extra_cell` record names
 (`RGBA_DRV_EN`, `CURRENT_MODE`, `RGB<n>_CURRENT_<i>`), and its three outputs
@@ -209,6 +224,66 @@ RAMs, modes and contents, as Reticle's own build of the same design
 all, is reproduced byte for byte (`icepacks_bytes_are_reproduced`). Both
 CHECKED, by hand on this machine; no reference ships.
 
+## DSP blocks (`SB_MAC16`)
+
+Eight, at the places IceStorm's `.extra_cell MAC16` records give: (0, 5),
+(0, 10), (0, 15), (0, 23) and the same rows at x = 25. Each record names
+every port bit's wire — `A_0` is `lutff_0/in_3` of the block's third tile,
+`O_17` is `mult/O_17` of its third — and every parameter bit as a `CBIT_<i>`
+of one of the block's tiles, so a block is a `mac16` bel on its anchor tile
+like a single-port RAM, with its pins the ports bit by bit (`A3`, `CLK0`,
+`O31`). The cascade ports (`ACCUMCI`, `ACCUMCO`, `SIGNEXTIN`, `SIGNEXTOUT`)
+have no fabric wire; a design connecting an input of them is refused.
+
+Its nineteen parameters are nextpnr's list (`bitstream.cc`), each bit of
+each where the record says (`IceFabric::configure_dsps`), with two
+exceptions found on the board, below. `NEG_TRIGGER` has no bit, and a cell
+asking for it is refused. A constant on a port: a one goes to a cell
+driving one, like every other hard cell's (packing rule 9); a zero is left
+unrouted, because an unrouted DSP input reads zero — QUOTED from nextpnr's
+packer, which does the same, and CHECKED by the board, where the blocks'
+unused holds, loads and adder controls are exactly that; and a `CE` tied to
+zero is refused.
+
+**The third check, extended.** `implement` reads every block's nineteen
+parameters back out of the bits and returns nothing unless each placed
+block's are what its cell asks for and every other block's are zero. A
+block whose parameters are all zero (a plain unregistered 16 x 16 multiply)
+reads back the same as an unused one; nothing in the bits says which.
+CHECKED against nextpnr: the same eight configurations read back from its
+build of `dsp_selftest.v` as from this backend's, but for the two names
+below (`every_bit_of_a_reference_decodes`, given the file).
+
+**The model.** `tests/ice40_mac16` is a model of the cell, cycle by cycle,
+written from Yosys's `techlibs/ice40/cells_sim.v` (`SB_MAC16`): the input
+registers `C`, `A`, `B`, `D`; four 8 x 8 partial products `F` (`A[15:8] x
+B[15:8]`), `J` (`A[7:0] x B[15:8]`), `K` (`A[15:8] x B[7:0]`), `G` (`A[7:0]
+x B[7:0]`) and their registers; their 32-bit sum `L` and its register `H`;
+and the two 16-bit adder/accumulators. Checked by
+`the_dsp_model_multiplies_and_accumulates` against plain arithmetic —
+unsigned and signed 16 x 16 products of the corners, the split's two 8 x 8
+products, an accumulator — and by the board, below.
+
+**On the board**, `dsp_selftest.v` puts all eight blocks to work, each
+configured another way, on one stream of 64 vectors (eight corner cases,
+then a linear-feedback sequence), and prints each step's vector and all
+eight 32-bit outputs and carry outs; the host replays the stream through
+the model with each block's parameters and wiring and wants every digit
+equal (`every_dsp_block_computes_what_the_model_says_on_the_board`). The
+blocks: a 16 x 16 unsigned multiply; a signed one; one signed by unsigned
+with every pipeline register on; the 8 x 8 split, signed by unsigned, its
+top product registered; the split unsigned with each product added to `C`
+or a registered `D`; a 32-bit multiply-accumulate loaded from a registered
+`C`; the same signed, with add/subtract, a hold on `A` and on the bottom
+accumulator, and the carry select's XOR; and a 32-bit adder carrying in
+from the fabric's `CI`. 2026-11-18, every output and carry out of every
+step as the model says, twice — CHECKED. Every bit of every parameter
+changes that report under the model, in at least one block
+(`every_dsp_parameter_bit_shows_in_the_report`), so a bit written into
+the wrong place cannot pass it; planted on the board, `A_SIGNED` and
+`B_SIGNED` swapped both ways — which `implement`'s own check cannot see —
+made two blocks disagree on 40 lines (CHECKED by mutation).
+
 ## The configuration image, and `icepack` ported
 
 `src/fpga/icestorm/image.rs` holds every tile's bitmap, the extra bits and
@@ -235,12 +310,12 @@ RAMs, above):
    source)` arcs the bits select must equal the set of arcs, with bits, that
    the router chose.
 
-For the board designs: `rgb_blink` sets 6 509 bits that decode into 260
-arcs, `uart_echo` 7 630 bits into 519, and `board_demo` (both) 8 580 into
+For the board designs: `rgb_blink` sets 6 437 bits that decode into 260
+arcs, `uart_echo` 7 558 bits into 519, and `board_demo` (both) 8 508 into
 821, all with nothing unexplained and the arcs exactly the router's
 (`the_board_designs_build_and_every_bit_decodes`). Breaking the pattern
 order of a multiplexer makes 236 bits of `rgb_blink` unexplained (CHECKED by
-mutation). `ram_selftest` sets 23 069 bits into 5 911 arcs, with eight
+mutation). `ram_selftest` sets 22 997 bits into 5 911 arcs, with eight
 block RAMs holding 8 192 set content bits and four single-port RAMs, all
 read back as placed (`both_kinds_of_ram_build_and_read_back`).
 
@@ -387,7 +462,7 @@ answers `IBM!ifmmp`. CHECKED. Two things were found on the way:
 - ECP5's `TRELLIS_IO` is left writing its pad by direction: nextpnr-ecp5
   places it that way and a Cynthion runs it.
 
-This backend's own build of `board_demo` after the change (now 8 580 bits,
+This backend's own build of `board_demo` after the change (then 8 580 bits,
 above) was loaded into configuration memory and echoes as before —
 CHECKED.
 
@@ -406,6 +481,43 @@ the reset win, as Reticle's `dff` does: the 7 series `FDRE`, ECP5's
 `TRELLIS_FF` (Yosys maps `$_SDFFE_*`, reset over enable, onto it with
 `SRMODE="LSR_OVER_CE"`) and Gowin's `DFFRE` (`if (RESET) ... else if (CE)`
 in Yosys's model). QUOTED from those models, not measured here.
+
+### Two DSP registers by other names
+
+The first run of `dsp_selftest` on the board agreed with the model on
+seven blocks and on half of the eighth: the split's top product, asked for
+registered (`TOP_8x8_MULT_REG`), came out one step early — not registered.
+nextpnr's build of the same netlist did exactly the same, and its bits read
+back as this backend's, so the two flows agreed with each other and with
+IceStorm's names and not with the model. Four more runs, each block's
+parameters changed to set one register bit alone and its output read
+against every subset of the registers it could have turned on, settled
+which bit does what — CHECKED:
+
+| Bit (anchor tile) | IceStorm's name | Registers, on the silicon | The library's meaning of that name |
+|---|---|---|---|
+| `CBIT_4` | `TOP_8x8_MULT_REG` | `K` only, `A[15:8] x B[7:0]` | `F`, the top product |
+| `CBIT_5` | `BOT_8x8_MULT_REG` | `G` | `G` |
+| `CBIT_6` | `PIPELINE_16x16_MULT_REG1` | `F` and `J` | `J` and `K`, the middle products |
+| `CBIT_7` | `PIPELINE_16x16_MULT_REG2` | `H` | `H` |
+
+So the top product's register is the bit IceStorm calls
+`PIPELINE_16x16_MULT_REG1`, and that bit also registers one middle
+product. A design that sets the two parameters together — every 16 x 16
+pipeline does, and Yosys sets them together whenever it absorbs a register
+— cannot tell, which is presumably why it has lasted. This backend writes
+the library's `TOP_8x8_MULT_REG` into `CBIT_6` and its
+`PIPELINE_16x16_MULT_REG1` into `CBIT_4` (`DspConfig::as_bits`), and
+refuses the two set differently when the 16 x 16 sum reaches an output or
+an adder, since no bitstream holds that
+(`a_dsp_block_the_silicon_cannot_hold_is_refused`). After the change all
+eight blocks agree with the model. A netlist exported to nextpnr still
+gets IceStorm's mapping; that is nextpnr's and IceStorm's to correct, and
+nothing here changes what the export says.
+
+What it took: a model to compare with, and a test that printed every
+block's output rather than a pass or a fail, so the wrong half of one
+word, one step late, was visible as such.
 
 ### A register that started at one
 
@@ -452,18 +564,12 @@ board, where the echo's line resynchroniser has no enable and works.
 
 ## What this does not do yet
 
-- no DSP (`SB_MAC16`) or PLL is placed: a design using one is refused by
-  name, before placement. What each would take, as read off the database
-  and nextpnr, not attempted:
-  - **`SB_MAC16`**: eight `.extra_cell MAC16` records give each block's
-    ports bit by bit and its parameters as `CBIT`s, the same shape as the
-    single-port RAMs, so the bel is the same few lines; the work is the
-    two dozen parameters nextpnr's `bitstream.cc` lists (`A_REG` ..
-    `MODE_8x8`, `TOPOUTPUT_SELECT` and the rest) each onto its bits, and a
-    model of the block to prove anything against. The mapper does not
-    infer it (the device declares no `dsp` block for the part), so a design
-    instantiates it, and a board test is a multiply read back over the
-    serial line;
+- the DSP blocks' cascade (`ACCUMCI`/`ACCUMCO`, `SIGNEXTIN`/`SIGNEXTOUT`)
+  between neighbouring blocks is not chained, and the mapper does not
+  infer a DSP block from a `*`: a design instantiates `SB_MAC16`;
+- no PLL is placed: a design using one is refused by name, before
+  placement. What it would take, as read off the database and nextpnr,
+  not attempted:
   - **`SB_PLL40_CORE`/`_PAD`**: one `.extra_cell PLL` at (12, 31) with its
     divider, filter and feedback parameters as bits, and its output driving
     a global network through a fixed buffer; the `_PAD` form takes over an

@@ -13,6 +13,8 @@
 
 #![cfg(feature = "fpga")]
 
+mod ice40_mac16;
+
 use std::path::PathBuf;
 
 use reticle::fpga::icestorm::IceFabric;
@@ -191,6 +193,38 @@ fn every_bit_of_a_reference_decodes() {
             );
             assert_eq!(decoded.sprams.len(), built.decoded.sprams.len());
             eprintln!("{name}: the same block RAMs, modes and contents as this backend writes");
+        }
+        // And one placed and routed from `dsp_selftest.v` holds the same
+        // eight DSP configurations but for the two parameters nextpnr's
+        // `bitstream.cc` writes under IceStorm's names and this backend
+        // swaps (`DspConfig::as_bits`): nextpnr and this backend agree on
+        // which bit IceStorm names what.
+        #[cfg(feature = "verilog")]
+        if name == "dsp_selftest" {
+            let graph = fabric.arch.build_graph();
+            let built = build_board_design("dsp_selftest", &fabric, &graph);
+            let swapped = |d: &reticle::fpga::icestorm::DspConfig| {
+                let mut p = d.params.clone();
+                let top = p.get("TOP_8x8_MULT_REG").copied().unwrap_or(0);
+                let pipe = p.get("PIPELINE_16x16_MULT_REG1").copied().unwrap_or(0);
+                p.insert("TOP_8x8_MULT_REG".to_owned(), pipe);
+                p.insert("PIPELINE_16x16_MULT_REG1".to_owned(), top);
+                p
+            };
+            let mut theirs: Vec<_> = decoded.dsps.values().map(swapped).collect();
+            let mut ours: Vec<_> = built
+                .decoded
+                .dsps
+                .values()
+                .map(|d| d.params.clone())
+                .collect();
+            theirs.sort();
+            ours.sort();
+            assert_eq!(
+                theirs, ours,
+                "nextpnr's DSP blocks differ from this backend's"
+            );
+            eprintln!("{name}: the same eight DSP configurations as this backend writes");
         }
     }
 }
@@ -752,14 +786,28 @@ fn build_board_design(
     fabric: &IceFabric,
     graph: &reticle::fpga::arch::RoutingGraph,
 ) -> reticle::fpga::icestorm::Implemented {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/ice40up");
+    let source = std::fs::read_to_string(dir.join(format!("{name}.v"))).unwrap();
+    let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf"))).unwrap();
+    implement_source(name, &source, &rcf, fabric, graph).unwrap_or_else(|e| panic!("{name}: {e}"))
+}
+
+/// Builds Verilog `source` constrained by `rcf` through
+/// `icestorm::implement`, returning what `implement` refused with.
+#[cfg(feature = "verilog")]
+fn implement_source(
+    name: &str,
+    source: &str,
+    rcf: &str,
+    fabric: &IceFabric,
+    graph: &reticle::fpga::arch::RoutingGraph,
+) -> Result<reticle::fpga::icestorm::Implemented, String> {
     use reticle::diag::Diagnostics;
     use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
     use reticle::source::SourceMap;
 
     let device = target("ice40-up5k-sg48").expect("the device ships");
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/ice40up");
-    let source = std::fs::read_to_string(dir.join(format!("{name}.v"))).unwrap();
-    let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf"))).unwrap();
+    let (source, rcf) = (source.to_owned(), rcf.to_owned());
     let mut map = SourceMap::new();
     let id = map.add(format!("{name}.v"), source).unwrap();
     let cid = map.add(format!("{name}.rcf"), rcf.clone()).unwrap();
@@ -798,7 +846,6 @@ fn build_board_design(
         graph,
         &reticle::fpga::place::PlaceOptions::default(),
     )
-    .unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 /// A read-only memory of `ram_selftest.v`: its name, width, depth and words.
@@ -983,6 +1030,250 @@ fn the_board_designs_build_and_every_bit_decodes() {
         let back = Image::from_bin(&built.image.to_bin()).unwrap();
         assert_eq!(back.tiles, built.image.tiles, "{name}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The DSP blocks
+// ---------------------------------------------------------------------------
+
+/// A DSP block asking for its top partial product registered and its
+/// middle ones not, while its 16 x 16 product reaches an output, is refused
+/// by name: on the silicon one bit registers the top product and one middle
+/// product together, so no bitstream holds that. The same parameters with
+/// the 16 x 16 product unused build, and so do both registers asked for
+/// together.
+///
+/// What it would catch: the backend quietly writing a configuration the
+/// silicon computes differently from the library cell, as nextpnr does for
+/// this one. What it would not: whether the refusal's reasoning is right,
+/// which is the board's (`docs/fpga-icestorm.md`).
+#[cfg(feature = "verilog")]
+#[test]
+fn a_dsp_block_the_silicon_cannot_hold_is_refused() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let rcf = "set_io a 2\nset_io b 3\nset_io clk 20\nset_io o 4\n";
+    let design = |params: &str| {
+        format!(
+            "module t(input clk, input [15:0] a, input [15:0] b, output o);\n\
+             wire [31:0] p;\n\
+             SB_MAC16 #({params}) m (.CLK(clk), .CE(1'b1), .A(a), .B(b), .O(p));\n\
+             assign o = ^p;\n\
+             endmodule\n"
+        )
+    };
+    // Every pin but the clock is one wide here: four of the operands' bits
+    // are on pins, the rest tied, which is enough to reach the cell.
+    let source = |params: &str| {
+        design(params)
+            .replace("input [15:0] a, input [15:0] b", "input a, input b")
+            .replace(".A(a), .B(b)", ".A({15'd0, a}), .B({15'd0, b})")
+    };
+    let refused = implement_source(
+        "split",
+        &source(".TOP_8x8_MULT_REG(1'b1), .TOPOUTPUT_SELECT(2'd3), .BOTOUTPUT_SELECT(2'd3)"),
+        rcf,
+        &fabric,
+        &graph,
+    );
+    let Err(message) = refused else {
+        panic!("a top product registered alone beside a used 16 x 16 product was built")
+    };
+    assert!(
+        message.contains("TOP_8x8_MULT_REG") && message.contains("`m`"),
+        "{message}"
+    );
+    for params in [
+        ".TOP_8x8_MULT_REG(1'b1), .MODE_8x8(1'b1), .TOPOUTPUT_SELECT(2'd2)",
+        ".TOP_8x8_MULT_REG(1'b1), .PIPELINE_16x16_MULT_REG1(1'b1), .TOPOUTPUT_SELECT(2'd3)",
+    ] {
+        if let Err(e) = implement_source("split", &source(params), rcf, &fabric, &graph) {
+            panic!("{params}: {e}");
+        }
+    }
+}
+
+/// Every bit of every parameter an `SB_MAC16` holds changes something
+/// `dsp_selftest.v` prints, in at least one of its eight blocks, under the
+/// model of the cell: so a bit the silicon holds differently from what the
+/// backend meant — written into the wrong `CBIT`, or two swapped — makes
+/// the board's report differ from the model's, and the board test fails.
+///
+/// This is the mutation check on the board test, run without a board: each
+/// mutant is one block with one parameter bit flipped. What it would not
+/// catch: a fault the model shares with the bits, since the model is the
+/// reference; and it says nothing about the routing, which the board does.
+#[test]
+fn every_dsp_parameter_bit_shows_in_the_report() {
+    use ice40_mac16::{BLOCKS, params, replay, vectors};
+    use reticle::fpga::icestorm::MAC16_PARAMS;
+    let vs = vectors();
+    let mut missed = Vec::new();
+    for (name, width) in MAC16_PARAMS {
+        for bit in 0..width {
+            let seen_by: Vec<&str> = BLOCKS
+                .iter()
+                .filter(|block| {
+                    let p = params(block);
+                    let mut q = p.clone();
+                    *q.entry(name).or_insert(0) ^= 1 << bit;
+                    replay(&p, &block.2, &vs) != replay(&q, &block.2, &vs)
+                })
+                .map(|block| block.0)
+                .collect();
+            if seen_by.is_empty() {
+                missed.push(format!("{name}[{bit}]"));
+            }
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "no block of dsp_selftest.v shows these parameter bits: {missed:?}"
+    );
+}
+
+/// The model itself, on the cases a 16 x 16 multiplier is defined by:
+/// unsigned and signed products of the corners, the 8 x 8 split's two
+/// products, and an accumulator adding two products. Without this the
+/// board test would compare the silicon with a model nobody checked.
+#[test]
+fn the_dsp_model_multiplies_and_accumulates() {
+    use ice40_mac16::{Inputs, Params, State, step};
+    let p = |pairs: &[(&'static str, u64)]| -> Params { pairs.iter().copied().collect() };
+    let mul = p(&[("TOPOUTPUT_SELECT", 3), ("BOTOUTPUT_SELECT", 3)]);
+    let smul = p(&[
+        ("TOPOUTPUT_SELECT", 3),
+        ("BOTOUTPUT_SELECT", 3),
+        ("A_SIGNED", 1),
+        ("B_SIGNED", 1),
+    ]);
+    let split = p(&[
+        ("MODE_8x8", 1),
+        ("TOPOUTPUT_SELECT", 2),
+        ("BOTOUTPUT_SELECT", 2),
+    ]);
+    let at = |p: &Params, a: u16, b: u16| {
+        step(
+            p,
+            &State::default(),
+            &Inputs {
+                a,
+                b,
+                ..Inputs::default()
+            },
+        )
+        .o
+    };
+    for (a, b) in [
+        (0u16, 0u16),
+        (0xffff, 0xffff),
+        (0x8000, 0x8000),
+        (0xffff, 0x8000),
+        (0x7fff, 0x8000),
+        (0x1234, 0xfedc),
+        (0x00ff, 0xff00),
+    ] {
+        assert_eq!(
+            at(&mul, a, b),
+            u32::from(a) * u32::from(b),
+            "{a:04x} * {b:04x}"
+        );
+        let signed = i32::from(a.cast_signed()) * i32::from(b.cast_signed());
+        assert_eq!(
+            at(&smul, a, b),
+            signed.cast_unsigned(),
+            "{a:04x} * {b:04x} signed"
+        );
+        let hi = u32::from(a >> 8) * u32::from(b >> 8);
+        let lo = u32::from(a & 0xff) * u32::from(b & 0xff);
+        assert_eq!(at(&split, a, b), hi << 16 | lo, "{a:04x} x {b:04x} split");
+    }
+    // An accumulator: H's halves into Q and S, the top adding the bottom's
+    // carry.
+    let mac = p(&[
+        ("TOPOUTPUT_SELECT", 1),
+        ("BOTOUTPUT_SELECT", 1),
+        ("TOPADDSUB_LOWERINPUT", 2),
+        ("BOTADDSUB_LOWERINPUT", 2),
+        ("TOPADDSUB_CARRYSELECT", 2),
+    ]);
+    let mut st = State::default();
+    let mut sum = 0u32;
+    for (a, b) in [(0xffffu16, 0xffffu16), (0x8000, 0x0003), (0x1234, 0x5678)] {
+        let s = step(
+            &mac,
+            &st,
+            &Inputs {
+                a,
+                b,
+                ..Inputs::default()
+            },
+        );
+        assert_eq!(s.o, sum, "the accumulator before adding {a:04x} * {b:04x}");
+        sum = sum.wrapping_add(u32::from(a) * u32::from(b));
+        st = s.next;
+    }
+}
+
+/// `dsp_selftest.v` builds with all eight DSP blocks placed, every bit
+/// explained, and each block's parameters read back from the bits as its
+/// instance asks for them: the eight configurations read back are the
+/// eight [`ice40_mac16::BLOCKS`] says the RTL has.
+///
+/// What it would catch: a parameter lost between the RTL's `#(...)` and
+/// the bits (every block would read back as zero, or as another's), a
+/// `CBIT` the database names that the image does not hold, a block that
+/// cannot be placed or routed to. What it would not: a parameter written
+/// into the wrong `CBIT` consistently both ways, which is what the board
+/// test and `every_dsp_parameter_bit_shows_in_the_report` are for.
+#[cfg(feature = "verilog")]
+#[test]
+fn the_dsp_design_builds_and_reads_back() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let built = build_board_design("dsp_selftest", &fabric, &graph);
+    assert!(built.decoded.unexplained.is_empty());
+    assert_eq!(built.decoded.arcs.len(), built.chosen);
+    assert_eq!(built.dsps, 8, "every DSP block");
+    let mut read: Vec<Vec<(String, u64)>> = built
+        .decoded
+        .dsps
+        .values()
+        .map(|d| {
+            d.params
+                .iter()
+                .filter(|(_, v)| **v != 0)
+                .map(|(k, v)| (k.clone(), *v))
+                .collect()
+        })
+        .collect();
+    // The bits IceStorm names `TOP_8x8_MULT_REG` and
+    // `PIPELINE_16x16_MULT_REG1` hold the library's parameters of the other
+    // name (`DspConfig::as_bits`), which only `mul_8` sets differently.
+    let swap = |k: &'static str| match k {
+        "TOP_8x8_MULT_REG" => "PIPELINE_16x16_MULT_REG1",
+        "PIPELINE_16x16_MULT_REG1" => "TOP_8x8_MULT_REG",
+        other => other,
+    };
+    let mut want: Vec<Vec<(String, u64)>> = ice40_mac16::BLOCKS
+        .iter()
+        .map(|b| {
+            let mut v: Vec<(String, u64)> =
+                b.1.iter().map(|(k, v)| (swap(k).to_owned(), *v)).collect();
+            v.sort();
+            v
+        })
+        .collect();
+    read.sort();
+    want.sort();
+    assert_eq!(read, want);
+    eprintln!(
+        "dsp_selftest: {} logic cells, {} set bits, {} arcs, 8 DSP blocks read back, 0 \
+         unexplained",
+        built.pack.cells, built.decoded.bits, built.chosen
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1189,7 +1480,15 @@ mod board {
 
     /// Builds `testdata/fpga/ice40up/<name>.v` with Reticle's flow, or
     /// `None` with the reason printed.
+    ///
+    /// `RETICLE_ICE40_LOAD` names a `.bin` to load instead — another
+    /// flow's build of the same design, nextpnr's say, so that the same
+    /// host check judges both. Run one test at a time with it set.
     pub(super) fn build(name: &str) -> Option<Vec<u8>> {
+        if let Ok(path) = std::env::var("RETICLE_ICE40_LOAD") {
+            eprintln!("{name}: loading {path} instead of building it");
+            return Some(std::fs::read(&path).expect("reading RETICLE_ICE40_LOAD"));
+        }
         let db = chipdb_5k()?;
         let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
         let graph = fabric.arch.build_graph();
@@ -1439,6 +1738,66 @@ mod board {
         }
         assert!(problems.is_empty(), "{problems:#?}");
         eprintln!("SP:PPPP BR:PPPP and all 4 608 dumped words as the RTL's formulas say, twice");
+    }
+
+    /// `dsp_selftest.v`: all eight DSP blocks, each configured another way,
+    /// fed 64 vectors, and every block's 32-bit output and carry out on
+    /// every step equal to what the model of the cell
+    /// (`tests/ice40_mac16`) gives for that block's parameters and wiring —
+    /// 16 x 16 unsigned and signed multiplies, a fully pipelined one, the
+    /// 8 x 8 split, multiply-add, two accumulators and a 32-bit adder —
+    /// after configuration and again when asked.
+    ///
+    /// What it catches: a DSP pin on the wrong wire, a parameter in the
+    /// wrong bit (every bit of every parameter changes the report, which
+    /// `every_dsp_parameter_bit_shows_in_the_report` checks), an unrouted
+    /// input that does not read zero, a register that is not there. What
+    /// it does not: the cascade between blocks, which nothing here uses.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn every_dsp_block_computes_what_the_model_says_on_the_board() {
+        let Some(bin) = build("dsp_selftest") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let ended = |r: &Received| r.bytes.windows(3).any(|w| w == b"END");
+        let mut first = Received::default();
+        serial.read(
+            &mut first,
+            Duration::from_millis(1500),
+            Duration::from_secs(5),
+            ended,
+        );
+        serial.send(b"?");
+        let mut second = Received::default();
+        serial.read(
+            &mut second,
+            Duration::from_millis(1500),
+            Duration::from_secs(5),
+            ended,
+        );
+        let mut problems = Vec::new();
+        for (when, got) in [("after the load", &first), ("when asked", &second)] {
+            if got.breaks != 0 || !got.bad_frames.is_empty() {
+                problems.push(format!("{when}: line errors, {got:?}"));
+            }
+            problems.extend(
+                super::ice40_mac16::check_report(&String::from_utf8_lossy(&got.bytes))
+                    .into_iter()
+                    .map(|p| format!("{when}: {p}")),
+            );
+        }
+        assert!(
+            problems.is_empty(),
+            "{} problem(s): {:#?}",
+            problems.len(),
+            &problems[..problems.len().min(40)]
+        );
+        eprintln!(
+            "all 8 DSP blocks, 64 steps each, every output and carry out as the model says, twice"
+        );
     }
 
     /// The report check itself, with no board: the report the formulas

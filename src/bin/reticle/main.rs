@@ -3539,6 +3539,16 @@ fn write_ice40_bitstream(
             built.rams, decoded.ram_bits, built.sprams
         )
     };
+    let dsps = if built.dsps == 0 {
+        String::new()
+    } else {
+        format!(
+            "note: {} DSP block(s) read back from the bits with exactly the parameters placed, \
+             and the other {} with none\n",
+            built.dsps,
+            decoded.dsps.len().saturating_sub(built.dsps)
+        )
+    };
     Ok(format!(
         "note: wrote {path}, {} byte(s), {} configuration bit(s) set; {} logic cell(s) packed \
          ({} flip-flop(s) through their own table, {} feed-in and {} feed-out carry cell(s)), \
@@ -3549,6 +3559,7 @@ fn write_ice40_bitstream(
          function field(s), with 0 unexplained, and the arcs they select are exactly the {} \
          the router chose\n\
          {rams}\
+         {dsps}\
          note: load it with `reticle program --ice40 {path}`\n",
         bytes.len(),
         image.ones(),

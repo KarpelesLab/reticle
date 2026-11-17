@@ -360,9 +360,17 @@ end
 #     pin's role is its port's name and bit (ADDRESS3, WREN0), which is
 #     what the fabric names its pins. CHECKED on this part: all four
 #     written and read back in full, MASKWREN included.
-#   * SB_MAC16 (eight DSP blocks) is declared with its outputs so a netlist
-#     check knows it, and Reticle's own flow refuses it. MEDIUM: the port
-#     list is the library's, not exercised here.
+#   * SB_MAC16: eight DSP blocks, at the eight fixed places IceStorm's
+#     `.extra_cell MAC16` records give (`site mac16`), which is where a
+#     design's SB_MAC16 goes; the mapper does not infer one, so a design
+#     instantiates it. As for SB_SPRAM256KA no port is declared, and each
+#     pin's role is its port's name and bit (A3, CLK0, O31). ACCUMCI,
+#     ACCUMCO, SIGNEXTIN and SIGNEXTOUT are the cascade between
+#     neighbouring blocks and have no fabric wire. Which bit each parameter
+#     sets is the record's, and the backend reads them back
+#     (src/fpga/icestorm). CHECKED on this part: 16x16 unsigned and
+#     signed multiplies, the 8x8 split and an accumulator, every result
+#     compared on the host with a model of the cell (docs/fpga-icestorm.md).
 #   * SB_PLL40_PAD / SB_PLL40_CORE: the LP/HX ranges are kept, which the
 #     UltraPlus data sheet states the same way. One PLL. The backend does
 #     not place it yet. MEDIUM.
@@ -409,7 +417,7 @@ device ice40-up5k-sg48
   bel SB_HFOSC other site hfosc port en=CLKHFEN pu=CLKHFPU o=CLKHF outputs CLKHF param CLKHF_DIV="0b00"
   bel SB_LFOSC other site lfosc port en=CLKLFEN pu=CLKLFPU o=CLKLF outputs CLKLF
   bel SB_SPRAM256KA other site spram count 4 outputs DATAOUT
-  bel SB_MAC16 other count 8 outputs O,CO,ACCUMCO,SIGNEXTOUT
+  bel SB_MAC16 other site mac16 count 8 outputs O,CO,ACCUMCO,SIGNEXTOUT
   bram SB_RAM40_4K
     ports 2
     mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
