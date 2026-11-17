@@ -10,6 +10,7 @@ transports:
 | Xilinx 7 series | `.bit` | FTDI FT2232H | the rest of this document |
 | Gowin GW2A | `.fs` | FTDI FT2232H | *Gowin* |
 | Lattice ECP5 | `.bit` | a Cynthion's Apollo microcontroller | *A second transport*, and *Configuring an ECP5* |
+| Lattice iCE40 | `.bin` | FTDI FT2232H, as a SPI master | *iCE40: SPI, not JTAG* |
 
 Two of those spell a bitstream `.bit`, so which vendor a file belongs to is
 decided by **the bytes and not the extension**.
@@ -33,7 +34,14 @@ says what to rebuild.
 It writes the part's **volatile configuration memory**. A power cycle
 undoes it, so every attempt is reversible.
 
-It does **not** program the board's QSPI flash, and there is no code in
+**One exception, for one family:** an iCE40 board's configuration flash
+can be written, with `--ice40 --write-flash`, because on an iCE40 board
+the flash is the only way to make a design survive a power cycle and the
+FT2232H is wired to it for exactly that purpose. *iCE40: SPI, not JTAG*
+below says what is and is never sent. Everything in the rest of this
+section is about the JTAG families.
+
+It does **not** program a JTAG board's QSPI flash, and there is no code in
 the crate that could: `src/program` has no flash commands at all, and for
 the ECP5, which reaches its configuration flash through a JTAG instruction
 rather than through a command of its own, `program::lattice::NOT_SHIFTED`
@@ -318,6 +326,144 @@ direction `0x0b`: openFPGALoader's for this board). The status read
 `0x00a0` (edit mode, erased) after the erase, and `0x2020` (`DONE`) after
 loading `examples/primer20k/key_led.v`, which a person then watched
 work. `docs/fpga-gowin.md` has the rest.
+
+## iCE40: SPI, not JTAG
+
+An iCE40 has no JTAG configuration port worth the name. It configures
+itself from a SPI flash at power-up, or takes a bitstream as a SPI slave
+from a host that holds `SPI_SS_B` low while `CRESET_B` rises. A board with
+an FT2232H puts channel A on that bus the way `iceprog` expects, and
+`reticle program --ice40` drives it: `src/program/ice40/` is the sequencer
+(sans-I/O, behind a `Link` trait that `usb::Cable` implements) and
+`src/bin/reticle/program_ice40.rs` the command.
+
+```console
+$ reticle program --ice40 --probe
+FTDI with no serial number (HighSpeed), SPI clock 6000000 Hz
+before: CDONE 1, CRESET_B 1, flash DI floats low (ADBUS 0xfc)
+in reset: CDONE 0, flash DI floats low (ADBUS 0x3c)
+flash: JEDEC EF 40 18 (Winbond, 16384 KiB), unique ID e46570978f571639, status 0x00
+released CRESET_B: CDONE high after 62 1 ms polls (plus USB round trips)
+
+$ reticle program --ice40 design.bin                # configuration memory only
+$ reticle program --ice40 --read-flash backup.bin   # all 16 MiB, with its SHA-256
+$ reticle program --ice40 --write-flash design.bin  # only the sectors that change, then verify
+$ reticle program --ice40 --boot                    # reset; the part boots from its flash
+```
+
+`--probe`, `--read-flash` and `--write-flash` hold the FPGA in reset while
+they use the flash and **boot it from the flash afterwards**, so whatever
+was loaded into its configuration memory is replaced by the flash's image.
+
+### The wiring, and the route a bitstream has to take
+
+| `ADBUS` | MPSSE | Net |
+|---|---|---|
+| 0 | `SK` | `SPI_SCK` and the flash's `CLK` |
+| 1 | `DO` | the flash's `DI` = the FPGA's `SPI_SO` (an output) |
+| 2 | `DI` | the flash's `DO` = the FPGA's `SPI_SI` (an input) |
+| 4 | GPIO | `SPI_SS_B` and the flash's `/CS` |
+| 6 | GPIO in | `CDONE` |
+| 7 | GPIO | `CRESET_B` |
+
+The flash half is ordinary: `CRESET_B` low so the FPGA lets go, then SPI
+mode 0, MSB first (MPSSE opcodes `0x11`, `0x31`, `0x20`, which are the
+JTAG ones with the bit-order flag clear).
+
+The configuration-memory half is not. In slave mode the FPGA reads
+`SPI_SI`, and on a board wired for flash programming that is the **flash's
+output** net, which reaches the FT2232H on `ADBUS2` — the MPSSE's *input*.
+`iceprog -S` shifts the bitstream out of `ADBUS1`, which lands on the
+FPGA's `SPI_SO`; Lattice's breakout boards have jumpers to cross the two
+for that. So the default route (`--sram-via flash-output`) makes `ADBUS2`
+a GPIO output and clocks the bitstream bit by bit with `SET_BITS_LOW`
+commands, six bytes per bit: 5 MB of commands for an UP5K's 104 KB, under
+a second. `ADBUS1` stays an input, so nothing drives the FPGA's `SPI_SO`.
+`--sram-via host-output` is the `iceprog -S` route, for a rewired board.
+
+The flash is selected throughout a slave load (its `/CS` is `SPI_SS_B`)
+and decodes one command byte from whatever its undriven `DI` floats to:
+`0x00` on this board, measured (*probe*, above), which a W25Q ignores. It
+cannot be more than one command, and no erase or program can follow a
+write enable in the same select, so a load cannot change the flash; the
+model in `src/program/ice40/tests.rs` asserts the flash's contents are
+unchanged after one.
+
+### Requests that are never sent
+
+`ice40::SENT` is every flash opcode put on the bus — `03` read, `02` page
+program, `05` read status, `06`/`04` write enable/disable, `20` 4 KiB
+sector erase, `9F` JEDEC ID, `AB` release power-down, `4B` unique ID — and
+the tests' flash model records every opcode it decodes and asserts none is
+outside it. `ice40::NOT_SENT` is the other list, with a test that the two
+never overlap:
+
+| Opcode | What | Why not |
+|---|---|---|
+| `01` `31` `11` | write status registers 1–3 | non-volatile protection, `QE` and the OTP lock bits; `QE` set breaks single-SPI boot |
+| `50` | volatile status-register write enable | only precedes the above |
+| `42` `44` | program / erase security registers | one-time programmable once locked |
+| `36` `7E` `98` | block locks | a protection the next tool has to know to undo |
+| `C7` `60` | chip erase | never what one image needs; sectors are erased instead, and a 16 MiB flash may hold more than one image |
+| `B9` | power-down | a sleeping flash does not answer the FPGA |
+
+A write reads the sectors it covers first and erases **only those whose
+contents must change** and that need a zero turned into a one; a sector
+needing only ones turned into zeros is programmed without an erase, and
+one already right is not touched (`ice40::plan_write`). Then the whole
+range is read back and compared, and a difference is reported with its
+address.
+
+### Checked on hardware, and what was only quoted
+
+On 2026-11-17, an iCE40UP5K-SG48 board with an FT2232H (`0403:6010`,
+bcdDevice `0x0700`, no serial number):
+
+- **CHECKED**: the wiring above. The flash answers `EF 40 18` (a W25Q128,
+  16 MiB) over it; `CDONE` reads high with a design running and low with
+  `CRESET_B` held. The pin table itself was QUOTED from the board's notes
+  and `iceprog`.
+- **CHECKED**: reading. The whole 16 MiB read twice gave the same SHA-256,
+  and the first 104 090 bytes matched the board owner's own build of the
+  image it boots.
+- **CHECKED**: configuration memory over `ADBUS2`. A known-good bitstream
+  loaded this way raised `CDONE` *while the pins were still driven*, and
+  the design then answered on its serial console — so it was running from
+  configuration memory, not from the flash, whose image does not answer.
+  The same file over `ADBUS1` (`iceprog -S`) left `CDONE` low, and so did
+  a copy with one bit flipped (the part's CRC rejected it) over `ADBUS2`.
+- **CHECKED**: writing. A 5 000-byte pattern at `0xF00100` programmed 20
+  pages with no erase (the sectors were blank) and read back exactly;
+  writing its complement over it, then the original 16 MiB backup back
+  over everything, erased exactly the two sectors the pattern had touched,
+  verified, and a fresh full read matched the backup's SHA-256.
+- **QUOTED**: the slave-mode timings (TN1248: at least 1 200 µs after
+  `CRESET_B` before data for the UP5K, at least 49 clocks after it) and the
+  W25Q's erase and program times behind the poll limits. Nothing here
+  measured them; the margins are wide.
+
+### Faults found, and how
+
+- **A release reset the part.** The first version released the pins with
+  `SET_BITS_LOW 0, 0`. Every load "succeeded" — including a corrupted file,
+  half a file, and a file of zeros — because `CDONE` was read after the
+  release, and the release itself rebooted the FPGA from its flash. Reading
+  `CDONE` *before* letting go showed `0` for the bad files and `1` only for
+  the good one, which isolated it: the FT2232H applies a `SET_BITS_LOW`'s
+  **value before its direction**, so writing value `0` pulsed `CRESET_B`
+  low for an instant on its way to becoming an input. Releasing now writes
+  `CRESET_B` and `/CS` high (`ice40::Wiring::released`), `CDONE` is read
+  with the pins still driven, and the bus model applies value then
+  direction, so its slave-load test fails on the old release — checked by
+  putting the zero back. The model's flash holds a valid image of its own
+  in that test, because a part that booted from it would otherwise also
+  look configured.
+- **`iceprog -S` cannot work on this wiring**, as above; that was a reading
+  of the schematic notes first and is now a measurement.
+- **A load also checks that the part did not boot from its flash** before
+  any data is sent: it waits 200 ms after `CRESET_B` rises and refuses if
+  `CDONE` is already high, which is what a part that missed `SPI_SS_B` and
+  went into master mode would do.
 
 ## A second transport: the Cynthion's Apollo debugger
 

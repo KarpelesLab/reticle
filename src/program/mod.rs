@@ -12,6 +12,7 @@
 //! | [`xilinx`] | the UG470 configuration sequence | no |
 //! | [`gowin`] | the Gowin `.fs` container | no |
 //! | [`lattice`] | naming a Lattice part from its `IDCODE` | no |
+//! | [`ice40`] | an iCE40's SPI configuration and its flash, over MPSSE | no |
 //! | [`choose_adapter`] | which transport a serial number belongs to | no |
 //! | [`usb`] | opening, claiming and transfers, over `rawusb` | yes |
 //!
@@ -88,7 +89,10 @@
 //! # What this does and does not do
 //!
 //! It writes the part's **volatile configuration memory** and nothing
-//! else. There is no flash programming here and none is planned in this
+//! else — with one exception, [`ice40`], where the configuration flash is
+//! the FT2232H's own business on every board that has one, and is written
+//! only when asked, with a list of what is never sent. For every JTAG
+//! family there is no flash programming here and none is planned in this
 //! module: a JTAG configuration is undone by a power cycle, so every
 //! attempt is reversible, and a QSPI write is not. It does not touch the
 //! board's mode pins either — JTAG configuration works whatever the mode
@@ -97,6 +101,7 @@
 pub mod apollo;
 pub mod ftdi;
 pub mod gowin;
+pub mod ice40;
 pub mod jtag;
 pub mod lattice;
 pub mod usb;
@@ -416,6 +421,11 @@ pub enum ProgramError {
     Job(jtag::JobError),
     /// The USB layer refused or failed.
     Usb(String),
+    /// An iCE40 board's configuration flash or SPI bus did something it
+    /// should not have, or was asked to: a JEDEC identifier that is not a
+    /// flash, a write past its end, a verify that read back other bytes,
+    /// or a write that never finished. See [`ice40`].
+    Flash(String),
 }
 
 impl fmt::Display for ProgramError {
@@ -500,6 +510,7 @@ impl fmt::Display for ProgramError {
             ),
             ProgramError::Job(err) => write!(f, "{err}"),
             ProgramError::Usb(why) => write!(f, "{why}"),
+            ProgramError::Flash(why) => write!(f, "{why}"),
         }
     }
 }

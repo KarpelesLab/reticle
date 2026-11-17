@@ -25,6 +25,8 @@ mod zip;
 #[cfg(feature = "program")]
 mod program;
 #[cfg(feature = "program")]
+mod program_ice40;
+#[cfg(feature = "program")]
 use program::program_cmd;
 
 use datadir::fetch_cmd;
@@ -611,6 +613,7 @@ Options:
 
 const PROGRAM_USAGE: &str = "\
 Usage: reticle program [options] <design.bit|design.fs>
+       reticle program --ice40 [options] <design.bin>
 
 Loads a bitstream into an attached FPGA over JTAG, through an FTDI
 FT2232 adapter: a Xilinx 7-series .bit (a Digilent Basys 3 has one on
@@ -618,8 +621,9 @@ board), or a Gowin GW2A .fs (so does a Sipeed Tang Primer 20K dock).
 
 The part's IDCODE is read and checked first, and nothing is written if it
 does not match the one the file names. Only the volatile configuration
-memory is written: a power cycle undoes it. This command does not program
-flash and cannot.
+memory is written: a power cycle undoes it. It does not program a JTAG
+part's flash and cannot; the one flash it writes is an iCE40 board's, with
+--ice40 --write-flash, below.
 
 A Great Scott Gadgets Cynthion is reached too, over its Apollo debug
 microcontroller rather than an FTDI part, and it takes `--probe` or a
@@ -654,6 +658,29 @@ Options:
   --capture          With --readback: GCAPTURE first, so every flip-flop's
                      present value is read back in its INIT bit
   --quiet            Do not report progress
+
+iCE40 (an FT2232H on the SPI bus the FPGA shares with its configuration
+flash, wired as iceprog expects):
+  --ice40 <design.bin>
+                     Load the FPGA's configuration memory; the flash is
+                     not written, and a power cycle brings its image back
+  --ice40 --probe    Identify the flash (holding the FPGA in reset), then
+                     boot the FPGA from it again
+  --ice40 --read-flash <file>
+                     Read the flash into a file (all of it, or --offset
+                     and --length) and print its SHA-256
+  --ice40 --write-flash <design.bin>
+                     Write the flash at --offset (default 0), erasing only
+                     the 4 KiB sectors that change, read it back and
+                     compare, then boot the FPGA from it. --raw allows a
+                     file that is not a bitstream, to restore a backup
+  --ice40 --boot     Reset the FPGA so it configures itself from the flash
+  --clock <hz>       With --ice40, the SPI clock (default 6000000)
+  --sram-via <flash-output|host-output>
+                     Which FT2232H pin carries a configuration-memory load
+                     to the FPGA's SPI_SI: ADBUS2 (default; right for a
+                     board wired for flash programming) or ADBUS1 (iceprog
+                     -S, for a board with its jumpers moved)
 
 Needs the `program` feature, which is off by default because it is the
 only one with a dependency. Build it with:
@@ -946,8 +973,18 @@ fn spec_for(usage: &str) -> Spec {
         }
     } else if std::ptr::eq(usage, PROGRAM_USAGE) {
         Spec {
-            options: &["device", "clock", "expect", "readback"],
-            flags: &["list", "probe", "quiet", "capture"],
+            options: &[
+                "device",
+                "clock",
+                "expect",
+                "readback",
+                "read-flash",
+                "write-flash",
+                "offset",
+                "length",
+                "sram-via",
+            ],
+            flags: &["list", "probe", "quiet", "capture", "ice40", "boot", "raw"],
             repeated: &[],
         }
     } else if std::ptr::eq(usage, FETCH_USAGE) {

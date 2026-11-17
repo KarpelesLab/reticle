@@ -358,7 +358,25 @@ impl Cable {
         job: &Job,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Result<Vec<u8>, ProgramError> {
-        let commands = job.commands();
+        self.run_commands(job.commands(), job.read_len(), progress)
+    }
+
+    /// Writes raw MPSSE `commands` and reads back exactly `read_len` bytes
+    /// of what they capture, reporting `(written, total)` as it goes.
+    ///
+    /// [`run`](Self::run) is this for a JTAG [`Job`]; the iCE40's SPI
+    /// sequences in [`super::ice40`] are not JTAG and come here directly,
+    /// through [`super::ice40::Link`].
+    ///
+    /// # Errors
+    ///
+    /// As [`run`](Self::run).
+    pub fn run_commands(
+        &self,
+        commands: &[u8],
+        read_len: usize,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<u8>, ProgramError> {
         let mut written = 0;
         while written < commands.len() {
             let end = (written + WRITE_CHUNK).min(commands.len());
@@ -374,10 +392,10 @@ impl Cable {
             written += n;
             progress(written, commands.len());
         }
-        if job.read_len() == 0 {
+        if read_len == 0 {
             return Ok(Vec::new());
         }
-        self.read_exactly(job.read_len())
+        self.read_exactly(read_len)
     }
 
     /// Reads until `wanted` bytes of MPSSE output have arrived, dropping
@@ -491,6 +509,16 @@ impl Cable {
             .control_write(REQ_TYPE_OUT, request, value, index, &[], TRANSFER_TIMEOUT)
             .map(|_| ())
             .map_err(|e| usb_err(what, &e))
+    }
+}
+
+impl super::ice40::Link for Cable {
+    fn exchange(&mut self, commands: &[u8], read_len: usize) -> Result<Vec<u8>, ProgramError> {
+        self.run_commands(commands, read_len, &mut |_, _| {})
+    }
+
+    fn pause(&mut self, how_long: Duration) {
+        std::thread::sleep(how_long);
     }
 }
 

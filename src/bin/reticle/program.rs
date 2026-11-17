@@ -41,7 +41,12 @@
 //! ECP5 bitstream over a cable is refused, because the plans are
 //! transport-neutral but that pairing has never been run.
 //!
-//! Nothing here can write flash, and nothing here touches the mode pins.
+//! Nothing here can write flash, and nothing here touches the mode pins —
+//! with one exception that has its own file: `--ice40`, for an iCE40 board
+//! whose FT2232H shares the FPGA's configuration SPI bus, where writing
+//! the flash is the ordinary way to make a design stick. That is
+//! `program_ice40.rs`, and it writes the flash only when asked to with
+//! `--write-flash`.
 
 use std::time::Instant;
 
@@ -133,6 +138,16 @@ fn go(args: &Args) -> Result<Outcome, Fault> {
             );
         }
         return Ok(Outcome::Ok);
+    }
+
+    if args.flag("ice40") {
+        // An iCE40 board is not a JTAG target: its FT2232H drives the SPI
+        // bus the FPGA shares with its configuration flash. Nothing below
+        // applies to it.
+        return crate::program_ice40::run(args, &say).map_err(|fault| match fault {
+            crate::program_ice40::Fault::Usage(m) => Fault::Usage(m),
+            crate::program_ice40::Fault::Failed(m) => Fault::Failed(m),
+        });
     }
 
     let readback = match args.option("readback") {

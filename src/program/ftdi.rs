@@ -70,8 +70,26 @@ pub const CMD_TMS_OUT: u8 = WRITE_TMS | BIT_MODE | LSB_FIRST | WRITE_NEG;
 /// Clock 1..8 bits out of TMS, holding TDI, and capture TDO (`0x6B`).
 pub const CMD_TMS_INOUT: u8 = CMD_TMS_OUT | DO_READ;
 
+/// Clock whole bytes out of `DO`, **most-significant bit first**, changing
+/// on the falling edge, no capture (`0x11`).
+///
+/// This and the next two are the SPI flavour of the same bit field: SPI
+/// mode 0 with the clock idling low wants data to change on the falling
+/// edge and be sampled on the rising one, exactly as JTAG does, but a
+/// serial flash shifts each byte **MSB first**, so `LSB_FIRST` is clear.
+/// They are the opcodes `iceprog` uses for the same job.
+pub const CMD_SPI_BYTES_OUT: u8 = WRITE_NEG | DO_WRITE;
+/// Clock whole bytes out of `DO`, MSB first, and capture `DI` on the
+/// rising edge (`0x31`).
+pub const CMD_SPI_BYTES_INOUT: u8 = CMD_SPI_BYTES_OUT | DO_READ;
+/// Clock whole bytes, capturing `DI` on the rising edge, MSB first, while
+/// `DO` holds its last level (`0x20`).
+pub const CMD_SPI_BYTES_IN: u8 = DO_READ;
+
 /// Set the low byte of the data bus (`ADBUS`): value, then direction.
 pub const CMD_SET_BITS_LOW: u8 = 0x80;
+/// Read the low byte of the data bus (`ADBUS`) back: one byte of reply.
+pub const CMD_GET_BITS_LOW: u8 = 0x81;
 /// Set the high byte of the data bus (`ACBUS`): value, then direction.
 pub const CMD_SET_BITS_HIGH: u8 = 0x82;
 /// Turn the internal TDI-to-TDO loopback off.
@@ -107,6 +125,10 @@ pub fn opcode_name(opcode: u8) -> Option<&'static str> {
         CMD_BITS_INOUT => "clock bits in and out",
         CMD_TMS_OUT => "clock TMS out",
         CMD_TMS_INOUT => "clock TMS out and TDO in",
+        CMD_SPI_BYTES_OUT => "clock bytes out, MSB first",
+        CMD_SPI_BYTES_INOUT => "clock bytes in and out, MSB first",
+        CMD_SPI_BYTES_IN => "clock bytes in, MSB first",
+        CMD_GET_BITS_LOW => "read the low data bus",
         CMD_SET_BITS_LOW => "set the low data bus",
         CMD_SET_BITS_HIGH => "set the high data bus",
         CMD_LOOPBACK_OFF => "loopback off",
@@ -307,6 +329,44 @@ impl Mpsse {
             .extend_from_slice(&[CMD_SET_BITS_HIGH, value, direction]);
     }
 
+    /// Reads the low byte of the data bus back: one byte of reply, each
+    /// bit the level on that pin whatever its direction.
+    pub fn get_pins_low(&mut self) {
+        self.opcode(CMD_GET_BITS_LOW);
+        self.read_len += 1;
+    }
+
+    /// Clocks `data` out of `DO`, most-significant bit first, capturing
+    /// nothing: an SPI write. Splits like [`write_bytes`](Self::write_bytes).
+    pub fn spi_write(&mut self, data: &[u8]) {
+        for chunk in data.chunks(MAX_BYTES_PER_COMMAND) {
+            self.byte_command(CMD_SPI_BYTES_OUT, chunk.len());
+            self.bytes.extend_from_slice(chunk);
+        }
+    }
+
+    /// Clocks `count` bytes in from `DI`, most-significant bit first,
+    /// sending nothing new on `DO`: an SPI read.
+    pub fn spi_read(&mut self, count: usize) {
+        let mut left = count;
+        while left > 0 {
+            let take = left.min(MAX_BYTES_PER_COMMAND);
+            self.byte_command(CMD_SPI_BYTES_IN, take);
+            self.read_len += take;
+            left -= take;
+        }
+    }
+
+    /// Clocks `data` out of `DO` and the same number of bytes in from
+    /// `DI`, both most-significant bit first.
+    pub fn spi_exchange(&mut self, data: &[u8]) {
+        for chunk in data.chunks(MAX_BYTES_PER_COMMAND) {
+            self.byte_command(CMD_SPI_BYTES_INOUT, chunk.len());
+            self.bytes.extend_from_slice(chunk);
+            self.read_len += chunk.len();
+        }
+    }
+
     /// Asks the device to flush its capture buffer to the host now
     /// instead of waiting for its latency timer.
     pub fn send_immediate(&mut self) {
@@ -449,6 +509,32 @@ mod tests {
         assert_eq!(CMD_BITS_INOUT, 0x3B);
         assert_eq!(CMD_TMS_OUT, 0x4B);
         assert_eq!(CMD_TMS_INOUT, 0x6B);
+    }
+
+    /// The SPI opcodes are the JTAG ones with the bit order flipped, and
+    /// are the numbers `iceprog` sends: `0x11`, `0x31` and `0x20`.
+    #[test]
+    fn the_spi_opcodes_shift_msb_first() {
+        assert_eq!(CMD_SPI_BYTES_OUT, 0x11);
+        assert_eq!(CMD_SPI_BYTES_INOUT, 0x31);
+        assert_eq!(CMD_SPI_BYTES_IN, 0x20);
+        assert_eq!(CMD_SPI_BYTES_OUT | LSB_FIRST, CMD_BYTES_OUT);
+
+        let mut m = Mpsse::new();
+        m.spi_write(&[0x9F]);
+        m.spi_read(3);
+        m.get_pins_low();
+        assert_eq!(
+            m.commands(),
+            [0x11, 0, 0, 0x9F, 0x20, 2, 0, CMD_GET_BITS_LOW]
+        );
+        assert_eq!(m.read_len(), 4);
+
+        // A read longer than one command splits, and counts every byte.
+        let mut m = Mpsse::new();
+        m.spi_read(MAX_BYTES_PER_COMMAND + 1);
+        assert_eq!(m.commands(), [0x20, 0xFF, 0xFF, 0x20, 0, 0]);
+        assert_eq!(m.read_len(), MAX_BYTES_PER_COMMAND + 1);
     }
 
     /// Byte commands encode N-1 in little-endian, and split at 65 536.
@@ -600,7 +686,7 @@ mod tests {
         // `usb::Cable` that uses this is a narrow filter rather than a
         // broad one.
         let named = (0..=u8::MAX).filter(|b| opcode_name(*b).is_some()).count();
-        assert_eq!(named, 14);
+        assert_eq!(named, 18);
     }
 
     /// Two status bytes come off the head of every packet, not just the
