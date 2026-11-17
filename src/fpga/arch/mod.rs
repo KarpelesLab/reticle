@@ -355,6 +355,10 @@ pub struct BelDecl {
     /// put a lookup table on one of those six would write its truth table
     /// into the RAM's contents and the design would compute nothing.
     ///
+    /// A name with a `/` is another tile's bel, `X<x>Y<y>/<bel>` — an
+    /// iCE40 PLL's global output and the global buffer that drives the
+    /// same network from across the die are one network's two drivers.
+    ///
     /// Exclusion is symmetric whichever way it is declared, and
     /// [`mod@super::place`] enforces it in legalisation and in every annealing
     /// move.
@@ -931,6 +935,9 @@ impl RoutingGraph {
 
         let mut pips: Vec<Pip> = Vec::new();
         let mut sites: Vec<ArchSite> = Vec::new();
+        // `blocks` names of another tile's bel, `X<x>Y<y>/<bel>`, resolved
+        // once every site exists.
+        let mut elsewhere: Vec<(usize, String)> = Vec::new();
         // Per type: a memo for each end of each pip, then one for each bel
         // pin; and each pip's interned bits, filled the first time a tile of
         // the type uses the pip, so the ids come out in the order they
@@ -973,6 +980,10 @@ impl RoutingGraph {
                         .blocks
                         .iter()
                         .filter_map(|name| {
+                            if name.contains('/') {
+                                elsewhere.push((sites.len(), name.clone()));
+                                return None;
+                            }
                             tile.bels
                                 .iter()
                                 .position(|other| other.name == *name)
@@ -1007,6 +1018,20 @@ impl RoutingGraph {
             }
         }
 
+        if !elsewhere.is_empty() {
+            let by_name: HashMap<&str, usize> = sites
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.name.as_str(), i))
+                .collect();
+            let found: Vec<(usize, usize)> = elsewhere
+                .iter()
+                .filter_map(|(site, name)| by_name.get(name.as_str()).map(|o| (*site, *o)))
+                .collect();
+            for (site, other) in found {
+                sites[site].blocks.push(other);
+            }
+        }
         let (out_start, out_pips) = csr(nodes.len(), &pips, |p| p.from);
         let (in_start, in_pips) = csr(nodes.len(), &pips, |p| p.to);
         RoutingGraph {

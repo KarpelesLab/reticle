@@ -62,6 +62,11 @@
 //!    `WCLKE` (`icebox_vlog`'s defaults, and the library's); a zero there
 //!    is refused, since it would make a port that never acts.
 //!
+//! 10. A PLL's `LOCK` is passed on by a cell of its own, whose table
+//!     passes its first input through: the PLL drives it on a neighbour
+//!     wire of one logic tile, which reaches nothing but that tile's table
+//!     inputs, so `implement` confines that cell to that tile.
+//!
 //! What it refuses, with a message naming the cell: a clock, an enable of
 //! zero or a set/reset of one tied to a constant, a block RAM clock enable
 //! tied to zero, a DSP block's `CE` tied to zero or its cascade inputs
@@ -98,6 +103,9 @@ pub struct PackReport {
     pub feed_out: usize,
     /// Whether a cell driving a constant one was made.
     pub vcc: bool,
+    /// The cells made to pass a PLL's `LOCK` on (rule 10), which must sit
+    /// in the one logic tile its wire reaches.
+    pub lock_cells: Vec<String>,
 }
 
 /// Why packing failed.
@@ -885,6 +893,70 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
         }
     }
     report.cells = built.len();
+    // Rule 10: a PLL's `LOCK` reaches the fabric on one neighbour wire of
+    // one logic tile, which feeds only that tile's lookup-table inputs, so
+    // whatever reads it does so through a cell of its own that passes it
+    // on (`16'hAAAA`, its first input), and `implement` keeps that cell in
+    // that tile. nextpnr does the same (`pack_plls`, "LOCK signal ... can
+    // only directly reach LUT inputs").
+    let plls: Vec<CellId> = module
+        .cells
+        .iter()
+        .filter(
+            |(_, c)| matches!(&c.kind, CellKind::Blackbox(p) if p.as_str().starts_with("SB_PLL40")),
+        )
+        .map(|(id, _)| id)
+        .collect();
+    for id in plls {
+        let Some(&(_, lock)) = module.cells[id]
+            .outputs
+            .iter()
+            .find(|(p, _)| p.as_str() == "LOCK")
+        else {
+            continue;
+        };
+        let pll_name = module.cells[id].name.as_str().to_owned();
+        let span = module.cells[id].span;
+        let raw = module.nets.push(Net {
+            name: unique(module, &format!("{pll_name}$lock_raw")),
+            ty: Type::bit(),
+            kind: NetKind::Wire,
+            attrs: Attrs::new(),
+            span,
+        });
+        for (p, net) in &mut module.cells[id].outputs {
+            if p.as_str() == "LOCK" {
+                *net = raw;
+            }
+        }
+        let i0 = net_bit(module, raw, None, span);
+        let mut params = Attrs::new();
+        params.set(
+            Name::new("LUT_INIT"),
+            AttrValue::Const(Const::from_u64(0xAAAA, 16)),
+        );
+        for key in [
+            "CARRY_ENABLE",
+            "DFF_ENABLE",
+            "SET_NORESET",
+            "ASYNC_SR",
+            "NEG_CLK",
+        ] {
+            params.set(Name::new(key), AttrValue::Const(Const::from_u64(0, 1)));
+        }
+        let name = unique(module, &format!("{pll_name}$lock"));
+        report.lock_cells.push(name.as_str().to_owned());
+        module.cells.push(Cell {
+            name,
+            kind: CellKind::Blackbox(Name::new(LC_COMB)),
+            inputs: vec![(Name::new("I0"), i0)],
+            outputs: vec![(Name::new("O"), lock)],
+            params,
+            attrs: Attrs::new(),
+            span,
+        });
+        report.cells += 1;
+    }
     Ok(report)
 }
 

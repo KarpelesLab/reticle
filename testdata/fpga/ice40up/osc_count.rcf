@@ -1,0 +1,5 @@
+# An iCE40UP5K-SG48 board's 12 MHz oscillator and the receive side of its
+# FT2232H's second channel (pin 10, the FPGA's transmit).
+set_io -io_standard LVCMOS33 clk 20
+set_io -io_standard LVCMOS33 tx 10
+create_clock -name ref -period 83.333 clk

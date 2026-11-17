@@ -371,9 +371,17 @@ end
 #     (src/fpga/icestorm). CHECKED on this part: 16x16 unsigned and
 #     signed multiplies, the 8x8 split and an accumulator, every result
 #     compared on the host with a model of the cell (docs/fpga-icestorm.md).
-#   * SB_PLL40_PAD / SB_PLL40_CORE: the LP/HX ranges are kept, which the
-#     UltraPlus data sheet states the same way. One PLL. The backend does
-#     not place it yet. MEDIUM.
+#   * SB_PLL40_CORE / SB_PLL40_2F_CORE / SB_PLL40_PAD: the LP/HX ranges are
+#     kept, which the UltraPlus data sheet states the same way, and the
+#     solver gives the same settings as IceStorm's icepll over 4 667
+#     requests (CHECKED). One PLL. `outglobal`/`outglobalb` are the outputs
+#     that drive a global network themselves (PLLOUTGLOBAL*), so mapping
+#     puts no buffer behind them. The backend places the two CORE forms,
+#     CHECKED on this part: 48 MHz from 12, both outputs of the 2F form,
+#     LOCK read (docs/fpga-icestorm.md). The pad forms are refused there.
+#   * SB_HFOSC / SB_LFOSC drive global networks 4 and 5 themselves
+#     (`global_outputs`). CHECKED on this part: 12.02 MHz with CLKHF_DIV
+#     "0b10", and 9.99 kHz.
 #   * The pin list is the whole package: the 39 IO balls of IceStorm's
 #     `.pins sg48`, CHECKED against the database rather than a board file.
 #     The six that can drive a global network directly (`.gbufpin`) are
@@ -414,8 +422,8 @@ device ice40-up5k-sg48
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bel SB_RGBA_DRV other site rgba_drv port curren=CURREN rgbleden=RGBLEDEN pwm0=RGB0PWM pwm1=RGB1PWM pwm2=RGB2PWM pad0=RGB0 pad1=RGB1 pad2=RGB2 outputs RGB0,RGB1,RGB2 param CURRENT_MODE="0b0" RGB0_CURRENT="0b000000" RGB1_CURRENT="0b000000" RGB2_CURRENT="0b000000"
-  bel SB_HFOSC other site hfosc port en=CLKHFEN pu=CLKHFPU o=CLKHF outputs CLKHF param CLKHF_DIV="0b00"
-  bel SB_LFOSC other site lfosc port en=CLKLFEN pu=CLKLFPU o=CLKLF outputs CLKLF
+  bel SB_HFOSC other site hfosc port en=CLKHFEN pu=CLKHFPU o=CLKHF outputs CLKHF global_outputs CLKHF param CLKHF_DIV="0b00"
+  bel SB_LFOSC other site lfosc port en=CLKLFEN pu=CLKLFPU o=CLKLF outputs CLKLF global_outputs CLKLF
   bel SB_SPRAM256KA other site spram count 4 outputs DATAOUT
   bel SB_MAC16 other site mac16 count 8 outputs O,CO,ACCUMCO,SIGNEXTOUT
   bram SB_RAM40_4K
@@ -475,7 +483,8 @@ device ice40-up5k-sg48
   pin 48 io bank io
   global_buffers 8
   clock_region global 0 0 25 31
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
   grid 26 32
 end

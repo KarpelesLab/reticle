@@ -226,6 +226,22 @@ fn every_bit_of_a_reference_decodes() {
             );
             eprintln!("{name}: the same eight DSP configurations as this backend writes");
         }
+        // And the PLL designs: the same PLL parameters and the same global
+        // networks driven through a pad's input path.
+        #[cfg(feature = "verilog")]
+        if name == "pll_uart" || name == "pll2f_uart" {
+            let graph = fabric.arch.build_graph();
+            let built = build_board_design(&name, &fabric, &graph);
+            assert_eq!(decoded.pll, built.decoded.pll, "nextpnr's PLL differs");
+            assert_eq!(
+                decoded.padin, built.decoded.padin,
+                "nextpnr's global networks"
+            );
+            eprintln!(
+                "{name}: the same PLL parameters and pad-input networks {:?} as this backend",
+                decoded.padin
+            );
+        }
     }
 }
 
@@ -1033,6 +1049,201 @@ fn the_board_designs_build_and_every_bit_decodes() {
 }
 
 // ---------------------------------------------------------------------------
+// The PLL
+// ---------------------------------------------------------------------------
+
+/// Reticle's PLL solver (`fpga::pll::solve`, on the UltraPlus's
+/// `SB_PLL40_CORE` line) against Project IceStorm's own `icepll`, for
+/// every output frequency from 16 to 275 MHz in steps of 0.1 MHz from a 12
+/// MHz reference and of 0.5 MHz from four others: the same DIVR, DIVF,
+/// DIVQ and FILTER_RANGE every time.
+///
+/// `RETICLE_ICEPLL` names an `icepll` binary (built from IceStorm's
+/// `icepll/`); without it this says so and passes. What it would catch: a
+/// range, a field's encoding, a filter band edge or the tie-break between
+/// equally good settings differing from the tool every iCE40 design gets its
+/// settings from. What it would not: whether either is what the silicon
+/// does, which the board test says for one setting.
+#[test]
+fn the_pll_solver_gives_what_icepll_gives() {
+    let Ok(icepll) = std::env::var("RETICLE_ICEPLL") else {
+        eprintln!("skipping: RETICLE_ICEPLL names no icepll binary");
+        return;
+    };
+    let device = reticle::fpga::target("ice40-up5k-sg48").expect("the device ships");
+    let shape = device
+        .clock_resources
+        .plls
+        .iter()
+        .find(|p| p.name == "SB_PLL40_CORE")
+        .expect("the UltraPlus has an SB_PLL40_CORE");
+    let mut compared = 0usize;
+    let mut differ = Vec::new();
+    for (input, step) in [(12.0, 1), (10.0, 5), (25.0, 5), (30.0, 5), (100.0, 5)] {
+        for tenths in (160..=2750).step_by(step) {
+            let out = f64::from(tenths) / 10.0;
+            let run = std::process::Command::new(&icepll)
+                .args(["-i", &format!("{input}"), "-o", &format!("{out}")])
+                .output()
+                .expect("running icepll");
+            let text = String::from_utf8_lossy(&run.stdout).into_owned();
+            let field = |key: &str| -> Option<i64> {
+                text.lines()
+                    .find(|l| l.starts_with(key))?
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse()
+                    .ok()
+            };
+            let theirs = ["DIVR:", "DIVF:", "DIVQ:", "FILTER_RANGE:"].map(field);
+            let ours = reticle::fpga::pll::solve(shape, input, out)
+                .ok()
+                .map(|s| ["DIVR", "DIVF", "DIVQ", "FILTER_RANGE"].map(|k| s.param(k)));
+            let theirs = theirs.iter().all(Option::is_some).then_some(theirs);
+            compared += 1;
+            if theirs != ours {
+                differ.push(format!(
+                    "{input} -> {out}: icepll {theirs:?}, Reticle {ours:?}"
+                ));
+            }
+        }
+    }
+    assert!(
+        differ.is_empty(),
+        "{} of {compared} differ: {:?}",
+        differ.len(),
+        &differ[..differ.len().min(20)]
+    );
+    eprintln!("{compared} frequencies, every setting the same as icepll's");
+}
+
+/// The two PLL designs build with the PLL placed, every bit explained, and
+/// its parameters read back from the bits as the instance asks for them:
+/// `PLLTYPE` 3 for `SB_PLL40_CORE` and 7 for `SB_PLL40_2F_CORE`, `SIMPLE`
+/// feedback (1), DIVR 0, DIVF 63, DIVQ 4, FILTER_RANGE 1, port B
+/// `GENCLK_HALF` (1) in the second; and the global networks the PLL drives
+/// through its outputs' pads, 7 and, for the second output, 2.
+///
+/// What it would catch: a parameter lost or mistranslated between the
+/// RTL's `#(...)` and the bits (a name nextpnr's packer translates, such
+/// as `FEEDBACK_PATH`, read as a number), a pad-input bit missing or
+/// extra, the `LOCK` cell not where its wire reaches (no route). What it
+/// would not: a parameter consistently in the wrong bit both ways, which
+/// the board and nextpnr's build are for.
+#[cfg(feature = "verilog")]
+#[test]
+fn the_pll_designs_build_and_read_back() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    for (name, plltype, select_b, networks) in [
+        ("pll_uart", 3, 0, vec![7]),
+        ("pll2f_uart", 7, 1, vec![2, 7]),
+    ] {
+        let built = build_board_design(name, &fabric, &graph);
+        assert!(built.decoded.unexplained.is_empty());
+        assert_eq!(built.decoded.arcs.len(), built.chosen);
+        let pll = built.pll.as_ref().expect("a PLL was placed");
+        assert_eq!(&built.decoded.pll, pll);
+        let want: Vec<(&str, u64)> = vec![
+            ("PLLTYPE", plltype),
+            ("FEEDBACK_PATH", 1),
+            ("DIVR", 0),
+            ("DIVF", 63),
+            ("DIVQ", 4),
+            ("FILTER_RANGE", 1),
+            ("PLLOUT_SELECT_A", 0),
+            ("PLLOUT_SELECT_B", select_b),
+        ];
+        for (key, value) in want {
+            assert_eq!(pll.params.get(key), Some(&value), "{name}: {key}");
+        }
+        assert_eq!(
+            built.decoded.padin.iter().copied().collect::<Vec<u32>>(),
+            networks,
+            "{name}: the networks the PLL drives"
+        );
+        eprintln!(
+            "{name}: {} logic cells, {} set bits, {} arcs, the PLL read back, 0 unexplained",
+            built.pack.cells, built.decoded.bits, built.chosen
+        );
+    }
+}
+
+/// `osc_count.v` builds with both oscillators placed and each one's clock
+/// on its global network through that network's pad-input bit, 4 for the
+/// high-frequency one and 5 for the low: the bits nextpnr sets for them
+/// (`create_padin_gbuf`), without which neither clock reached anything on
+/// the board.
+///
+/// What it would catch: a pad-input bit dropped or on the wrong network,
+/// or a global buffer put behind an oscillator, which cannot be routed.
+/// What it would not: whether the oscillators run, which the board says.
+#[cfg(feature = "verilog")]
+#[test]
+fn the_oscillators_drive_their_networks() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let built = build_board_design("osc_count", &fabric, &graph);
+    assert!(built.decoded.unexplained.is_empty());
+    assert_eq!(built.decoded.arcs.len(), built.chosen);
+    assert_eq!(
+        built.decoded.padin.iter().copied().collect::<Vec<u32>>(),
+        vec![4, 5]
+    );
+    eprintln!(
+        "osc_count: {} logic cells, {} set bits, {} arcs, networks 4 and 5 from their pads' \
+         input path, 0 unexplained",
+        built.pack.cells, built.decoded.bits, built.chosen
+    );
+}
+
+/// What the PLL refuses, each by name: a pad form (whose reference is the
+/// PLL's own pad, pin 35, which this flow does not take over), and a design
+/// that also wants pin 35 as a pin while the PLL's first output leaves
+/// through that pin's IO block — which the placer refuses before the
+/// backend's own check is reached, because the PLL's `out` and the IO
+/// block's `din` are one wire of one tile.
+#[cfg(feature = "verilog")]
+#[test]
+fn a_pll_the_flow_cannot_place_is_refused() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let pad = "module t(input p, output o);\n\
+               wire c;\n\
+               SB_PLL40_PAD #(.DIVF(7'd63), .DIVQ(3'd4), .FILTER_RANGE(3'd1)) pll \
+               (.PACKAGEPIN(p), .PLLOUTCORE(c), .RESETB(1'b1), .BYPASS(1'b0));\n\
+               reg q = 1'b0; always @(posedge c) q <= ~q; assign o = q;\n\
+               endmodule\n";
+    let refused = implement_source("pad", pad, "set_io p 35\nset_io o 4\n", &fabric, &graph);
+    assert!(
+        matches!(&refused, Err(e) if e.contains("SB_PLL40_PAD") && e.contains("`pll`")),
+        "{:?}",
+        refused.as_ref().err()
+    );
+    let both = "module t(input clk, input p, output o);\n\
+                wire c;\n\
+                SB_PLL40_CORE #(.DIVF(7'd63), .DIVQ(3'd4), .FILTER_RANGE(3'd1)) pll \
+                (.REFERENCECLK(clk), .PLLOUTCORE(c), .RESETB(1'b1), .BYPASS(1'b0));\n\
+                reg q = 1'b0; always @(posedge c) q <= p; assign o = q;\n\
+                endmodule\n";
+    let refused = implement_source(
+        "both",
+        both,
+        "set_io clk 20\nset_io p 35\nset_io o 4\n",
+        &fabric,
+        &graph,
+    );
+    assert!(
+        matches!(&refused, Err(e) if e.contains("`pll`") && e.contains("`out` pin is shared")),
+        "{:?}",
+        refused.as_ref().err()
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The DSP blocks
 // ---------------------------------------------------------------------------
 
@@ -1800,6 +2011,169 @@ mod board {
         );
     }
 
+    /// Checks the lines a PLL design prints, `L<lock> N<count>` and, for
+    /// the two-output one, ` H<count>`: after the first two (the first
+    /// window starts at configuration, and B's count is a window late), at
+    /// least five, every one locked, `N` within two cycles of 0x400000 and
+    /// `H` of 0x200000.
+    fn check_pll_lines(text: &str, second: bool) -> Vec<String> {
+        let lines: Vec<&str> = text.split(['\r', '\n']).filter(|l| !l.is_empty()).collect();
+        let mut problems = Vec::new();
+        if lines.len() < 7 {
+            problems.push(format!("{} line(s), not seven or more", lines.len()));
+        }
+        let near = |field: Option<&str>, prefix: char, want: i64| {
+            field
+                .and_then(|f| f.strip_prefix(prefix))
+                .and_then(|h| i64::from_str_radix(h, 16).ok())
+                .is_some_and(|v| (v - want).abs() <= 2)
+        };
+        for line in lines.iter().skip(2) {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let ok = fields.first() == Some(&"L1")
+                && near(fields.get(1).copied(), 'N', 0x40_0000)
+                && (!second || near(fields.get(2).copied(), 'H', 0x20_0000))
+                && fields.len() == if second { 3 } else { 2 };
+            if !ok {
+                problems.push(format!("the line {line:?}"));
+            }
+        }
+        problems
+    }
+
+    /// `pll_uart.v`: the PLL multiplies the board's 12 MHz by four. Its
+    /// transmitter runs on the PLL's global output at 417 clocks a bit,
+    /// which is 115200 baud at 48 MHz and nothing readable at any other
+    /// frequency, and each line counts the PLL's cycles in 2^20 of the
+    /// reference's: 0x400000, to within resynchronisation, says 48.000 MHz
+    /// against the board's own oscillator. And LOCK, through the cell the
+    /// backend confines to the one tile its wire reaches, reads one.
+    ///
+    /// What it catches: a divider, the filter range or the feedback path in
+    /// the wrong bits (another frequency, or no lock), the global output
+    /// not driving its network (no clock at all), the output's IO block or
+    /// pad-input bit not set, `LOCK` not reaching the fabric, and `BYPASS`
+    /// reading one undriven (the reference itself, 12 MHz). What it does
+    /// not: the other output modes, the phase shifts and delays.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn the_pll_runs_at_48_mhz_and_locks_on_the_board() {
+        let Some(bin) = build("pll_uart") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let mut got = Received::default();
+        serial.read(
+            &mut got,
+            Duration::from_millis(500),
+            Duration::from_secs(2),
+            |r| r.bytes.iter().filter(|b| **b == b'\n').count() >= 12,
+        );
+        let text = String::from_utf8_lossy(&got.bytes).into_owned();
+        let problems = check_pll_lines(&text, false);
+        assert!(problems.is_empty(), "{problems:?} in {text:?}");
+        eprintln!(
+            "{} lines, every one L1 and 0x400000 +- 2 cycles",
+            text.lines().count()
+        );
+    }
+
+    /// `pll2f_uart.v`: the two-output PLL, port A at 48 MHz clocking the
+    /// transmitter and port B at half that, `GENCLK_HALF`, counted in a
+    /// domain of its own: 0x400000 and 0x200000 cycles per window.
+    ///
+    /// What it catches, beyond `the_pll_runs_at_48_mhz_and_locks_on_the_board`:
+    /// port B's output mode, its IO block and its global network's
+    /// pad-input bit, `PLLTYPE` for the dual form.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn both_pll_outputs_run_at_their_frequencies_on_the_board() {
+        let Some(bin) = build("pll2f_uart") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let mut got = Received::default();
+        serial.read(
+            &mut got,
+            Duration::from_millis(500),
+            Duration::from_secs(2),
+            |r| r.bytes.iter().filter(|b| **b == b'\n').count() >= 12,
+        );
+        let text = String::from_utf8_lossy(&got.bytes).into_owned();
+        let problems = check_pll_lines(&text, true);
+        assert!(problems.is_empty(), "{problems:?} in {text:?}");
+        eprintln!(
+            "{} lines, every one L1, A 0x400000 and B 0x200000 +- 2 cycles",
+            text.lines().count()
+        );
+    }
+
+    /// `osc_count.v`: both internal oscillators run, each counted in 2^20
+    /// cycles of the board's 12 MHz crystal oscillator: the high-frequency
+    /// one, divided to a nominal 12 MHz, within the data sheet's 10 % of
+    /// 0x100000, and the low-frequency one within 25 % of its nominal 10
+    /// kHz, 874 cycles. It prints what it measured.
+    ///
+    /// What it catches: an oscillator's clock not reaching its network (a
+    /// count of zero, which is what the first build gave: the pad-input
+    /// bit was missing), its enable or power-up not reaching it, the
+    /// divider in the wrong bits (48, 24 or 6 MHz instead of 12). What it
+    /// does not: the trim inputs, which nothing here drives.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn both_oscillators_run_on_the_board() {
+        let Some(bin) = build("osc_count") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let mut got = Received::default();
+        serial.read(
+            &mut got,
+            Duration::from_millis(500),
+            Duration::from_secs(2),
+            |r| r.bytes.iter().filter(|b| **b == b'\n').count() >= 10,
+        );
+        let text = String::from_utf8_lossy(&got.bytes).into_owned();
+        let lines: Vec<&str> = text.split(['\r', '\n']).filter(|l| !l.is_empty()).collect();
+        assert!(lines.len() >= 7, "{text:?}");
+        let mut hf = Vec::new();
+        let mut lf = Vec::new();
+        for line in lines.iter().skip(2) {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let value = |i: usize, p: char| {
+                fields
+                    .get(i)
+                    .and_then(|f| f.strip_prefix(p))
+                    .and_then(|h| u32::from_str_radix(h, 16).ok())
+            };
+            let (Some(h), Some(l)) = (value(0, 'H'), value(1, 'L')) else {
+                panic!("the line {line:?}");
+            };
+            hf.push(f64::from(h));
+            lf.push(f64::from(l));
+        }
+        let window = f64::from(1u32 << 20) / 12e6;
+        for (what, counts, nominal, tolerance) in
+            [("SB_HFOSC", &hf, 12e6, 0.10), ("SB_LFOSC", &lf, 10e3, 0.25)]
+        {
+            for c in counts {
+                let hz = c / window;
+                assert!(
+                    (hz / nominal - 1.0).abs() <= tolerance,
+                    "{what} at {hz:.0} Hz, not within {tolerance} of {nominal}: {text:?}"
+                );
+            }
+            let mean = counts.iter().sum::<f64>() / counts.len() as f64 / window;
+            eprintln!("{what}: {mean:.1} Hz over {} windows", counts.len());
+        }
+    }
+
     /// The report check itself, with no board: the report the formulas
     /// predict passes, and one wrong digit, one failed verdict, a missing
     /// line or a stray byte before the first line each fail it. Without
@@ -1815,6 +2189,16 @@ mod board {
         let digit = good.find("R04:").unwrap() + 4 + 100;
         let mut wrong = good.clone().into_bytes();
         wrong[digit] = if wrong[digit] == b'0' { b'1' } else { b'0' };
+        let pll = "L1 N3fffff\r\nL1 N400001\r\n".to_owned() + &"L1 N400000\r\n".repeat(6);
+        assert!(check_pll_lines(&pll, false).is_empty());
+        for bad in ["L0 N400000", "L1 N400003", "L1 N3ffffd", "L1 N200000"] {
+            let text = pll.clone() + bad + "\r\n";
+            assert!(!check_pll_lines(&text, false).is_empty(), "accepted {bad}");
+        }
+        assert!(!check_pll_lines("L1 N400000\r\n", false).is_empty());
+        let two = "L1 N400000 H000000\r\n".repeat(2) + &"L1 N400000 H200001\r\n".repeat(6);
+        assert!(check_pll_lines(&two, true).is_empty());
+        assert!(!check_pll_lines(&(two.clone() + "L1 N400000 H400000\r\n"), true).is_empty());
         for bad in [
             String::from_utf8(wrong).unwrap(),
             good.replacen("BR:PPPP", "BR:PPFP", 1),

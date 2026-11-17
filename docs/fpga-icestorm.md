@@ -69,7 +69,7 @@ under a second.
   fabric wires the database's `.extra_cell` records name.
 - A `bram` bel per block RAM and a `spram` bel per single-port RAM: see
   "Block RAM and single-port RAM" below; and a `mac16` bel per DSP block,
-  see "DSP blocks".
+  see "DSP blocks"; and a `pll` bel, see "The PLL and the oscillators".
 
 ## Packing: three cells are one
 
@@ -283,6 +283,101 @@ changes that report under the model, in at least one block
 the wrong place cannot pass it; planted on the board, `A_SIGNED` and
 `B_SIGNED` swapped both ways — which `implement`'s own check cannot see —
 made two blocks disagree on 40 lines (CHECKED by mutation).
+
+## The PLL and the oscillators
+
+**`SB_PLL40_CORE` and `SB_PLL40_2F_CORE`.** One PLL, the `.extra_cell PLL`
+record at (12, 31): a `pll` bel whose inputs are the record's wires
+(`REFERENCECLK` is `fabout` of (10, 31), `LOCK` is `neigh_op_tnl_1` of (1,
+30)) and whose outputs are not wires but IO blocks: `PLLOUT_A 12 31 1`
+means the clock comes out of that block's `D_IN_0` into the fabric
+(`PLLOUTCORE`) and onto the global network the block's pad drives, 7
+(`PLLOUTGLOBAL`); port B the same through (13, 31, 0) and network 2.
+nextpnr's `chipdb.py` (`add_pll_clock_output`) reads them the same way.
+Those two IO blocks are therefore not pins while the PLL is placed (pins 35
+and 37), and the placer refuses a design that wants both.
+
+Its bits, as nextpnr's `bitstream.cc` and `pack.cc` write them: sixteen
+parameters as `PLLCONFIG_<i>` bits of the IO tiles (10..14, 31), the
+library's names translated — `PLLTYPE` 3 for the CORE form and 7 for 2F,
+`FEEDBACK_PATH` `SIMPLE` 1, `PLLOUT_SELECT` `GENCLK` 0 and `GENCLK_HALF` 1,
+a `DYNAMIC` delay its mode bit with the field all ones; each output's IO
+block `PINTYPE_0` (and `PINTYPE_1` with its ICEGATE); and for each output
+driving its network, that network's `padin_glb_netwk` extra bit, the one a
+pad sets. `implement` reads the parameters and the pad-input bits back and
+refuses a bitstream that differs from what was placed (`PllConfig`).
+
+Three things the placer and router had to be told:
+
+- **`LOCK` reaches one tile.** Its wire feeds only the lookup-table inputs
+  of the logic tile at (1, 30), so packing puts a pass-through cell between
+  the PLL and its readers (rule 10) and `implement` confines that cell to
+  that tile with a region constraint. nextpnr does the same.
+- **A network has two drivers.** Network 7 is driven by the PLL through its
+  pad and by the global buffer fed from the fabric at its `.gbufin` tile,
+  (19, 0). The first build put the design's clock on that buffer and the
+  PLL's output on the same network: 2 signals on `glb_netwk_7`. The PLL's
+  bel now blocks those buffers (a `blocks` name may be another tile's bel,
+  `X19Y0/gb7`), and since the placer seats clock buffers before a cell with
+  one site, `implement` confines the design's clock buffers to the largest
+  rectangle of the die holding none of the blocked ones. A placed PLL costs
+  a design one or two of its eight global buffers.
+- **Mapping must not buffer the global output.** It put an `SB_GB` behind
+  `PLLOUTGLOBAL`, which nothing can route to; a `pll` line's `outglobal`
+  port is on the network already, as a buffer's output is.
+
+An instance of a PLL by name is now a cell (it used to stay an instance,
+which nextpnr's JSON check refused too); `BYPASS` tied to zero is left
+unrouted, and reads zero: CHECKED by the board, where a bypassed PLL would
+have run the transmitter at 12 MHz. The pad forms (`SB_PLL40_PAD`,
+`_2_PAD`, `_2F_PAD`) are refused by name: they take the PLL's own pad, pin
+35, as the reference, and the board's oscillator is on pin 20, so nothing
+here could check one.
+
+**The solver.** `fpga::pll::solve` on the UltraPlus's `SB_PLL40_CORE` line
+gives the same DIVR, DIVF, DIVQ and FILTER_RANGE as IceStorm's `icepll`
+(built from its source) for all 4 667 requests tried: every output from 16
+to 275 MHz in steps of 0.1 MHz from 12 MHz, and of 0.5 MHz from 10, 25, 30
+and 100 MHz — CHECKED (`the_pll_solver_gives_what_icepll_gives`, given the
+binary in `RETICLE_ICEPLL`). Both search the same ranges (reference 10..133
+MHz, phase detector 10..133, VCO 533..1066, DIVF up to 127 in `SIMPLE`
+mode, DIVQ 1..6) in the same order with the same strict tie-break, and
+compute `out = in * (DIVF + 1) / ((DIVR + 1) * 2^DIVQ)`, the `SIMPLE`
+feedback equation of Lattice's iCE40 sysCLOCK PLL design guide (TN1251) —
+QUOTED: the guide was not to hand, and icepll's source is what was read
+against; icepll's own comment says the guide's DIVF limit of 63 holds only
+outside `SIMPLE` mode.
+
+**Against nextpnr.** nextpnr places and routes Reticle's export of both PLL
+designs, and its bitstreams decode to the same PLL parameters and the same
+pad-input networks as this backend's (`every_bit_of_a_reference_decodes`,
+given the files). nextpnr also reports their 48 MHz domain at 42.9 MHz
+under its timing model — a design this backend placed with no timing at
+all, which ran on the board at 48; see "Timing" below.
+
+**On the board**, 2026-11-18:
+
+| Design | What it shows | Result |
+|---|---|---|
+| `pll_uart.v` | `SB_PLL40_CORE`, 12 MHz to 48 (DIVR 0, DIVF 63, DIVQ 4, FILTER_RANGE 1, what icepll prints), its global output clocking a transmitter at 417 clocks a bit, which is 115200 baud at 48 MHz and garbage at any other frequency; each line counts the PLL's cycles in 2^20 of the reference's, and reports `LOCK` | every line `L1 N400000`: exactly four times the board's oscillator, locked — CHECKED |
+| `pll2f_uart.v` | `SB_PLL40_2F_CORE`, port A `GENCLK` and port B `GENCLK_HALF`, both global, B counted in a domain of its own | every line `L1 N400000 H200000` — CHECKED |
+| `osc_count.v` | `SB_HFOSC` divided to 12 MHz and `SB_LFOSC`, each clocking a counter, counted against the crystal | 12.022 MHz and 9 989 Hz, within the data sheet's tolerances — CHECKED |
+
+Planted on the board, DIVF's bits 5 and 6 swapped both ways — which
+`implement`'s readback cannot see — turned the PLL's lines into garbage
+(DIVF 95, a 72 MHz clock): CHECKED by mutation.
+
+### The oscillators had never driven anything
+
+`SB_HFOSC` and `SB_LFOSC` had bels from the start, and nothing had run on
+one. The first `osc_count` build counted **zero** cycles of either. Their
+clocks are global networks 4 and 5 themselves (`CLKHF 0 29 glb_netwk_4`),
+reached through each network's pad-input path, and nextpnr's packer puts a
+pad-input global buffer behind each (`create_padin_gbuf`), which sets that
+network's `padin_glb_netwk` bit; this backend set none. It does now, the
+readback counts the bit, and mapping no longer puts a global buffer behind
+an oscillator either (`global_outputs` on its `bel` line). Like the PLL,
+an oscillator's bel blocks the fabric's buffer onto its network.
 
 ## The configuration image, and `icepack` ported
 
@@ -567,15 +662,10 @@ board, where the echo's line resynchroniser has no enable and works.
 - the DSP blocks' cascade (`ACCUMCI`/`ACCUMCO`, `SIGNEXTIN`/`SIGNEXTOUT`)
   between neighbouring blocks is not chained, and the mapper does not
   infer a DSP block from a `*`: a design instantiates `SB_MAC16`;
-- no PLL is placed: a design using one is refused by name, before
-  placement. What it would take, as read off the database and nextpnr,
-  not attempted:
-  - **`SB_PLL40_CORE`/`_PAD`**: one `.extra_cell PLL` at (12, 31) with its
-    divider, filter and feedback parameters as bits, and its output driving
-    a global network through a fixed buffer; the `_PAD` form takes over an
-    IO pin. The device file's PLL solver already chooses the dividers. The
-    risk is in the global network the output claims, and the check is a
-    frequency measured on the board (a baud rate derived from it);
+- the PLL's pad forms are refused, its phase-shift and delay modes
+  (`SHIFTREG_*`, `DELAY`, `PHASE_AND_DELAY`, `EXTERNAL` feedback, dynamic
+  delay) are written as nextpnr writes them and never run, and nothing
+  drives an oscillator's trim inputs;
 - a logic tile's flip-flops share one clock-polarity bit, and a design that
   needs both edges in one tile is refused after placement rather than
   placed around;

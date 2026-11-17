@@ -796,6 +796,11 @@ pub struct BelKind {
     /// outputs apart from its inputs. Empty means the primitive is only
     /// ever made by mapping, which knows.
     pub outputs: Vec<String>,
+    /// The output port names that drive a global clock network themselves,
+    /// written `global_outputs CLKHF`: an iCE40 oscillator's clock is one
+    /// of the die's eight networks, so mapping must not put a global buffer
+    /// behind it, which could not even be reached.
+    pub global_outputs: Vec<String>,
     /// The kind of site the placer puts an instance of it on, written
     /// `site <kind>`, when that is not the role's keyword; `None` for the
     /// role's own.
@@ -832,6 +837,7 @@ impl BelKind {
             io_dirs: Vec::new(),
             absorbs: Vec::new(),
             outputs: Vec::new(),
+            global_outputs: Vec::new(),
             site: None,
         }
     }
@@ -2587,6 +2593,9 @@ fn write_bel(bel: &BelKind) -> String {
     if !bel.outputs.is_empty() {
         line.push_str(&format!(" outputs {}", join(&bel.outputs)));
     }
+    if !bel.global_outputs.is_empty() {
+        line.push_str(&format!(" global_outputs {}", join(&bel.global_outputs)));
+    }
     if let Some(site) = &bel.site {
         line.push_str(&format!(" site {}", quote(site)));
     }
@@ -3283,6 +3292,16 @@ impl<'a> Parser<'a> {
                     index += 1;
                     for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
                         bel.outputs.push(word.to_owned());
+                    }
+                }
+                "global_outputs" => {
+                    let Some(token) = line.get(index) else {
+                        self.error(line.span, "expected port names after `global_outputs`");
+                        break;
+                    };
+                    index += 1;
+                    for word in token.as_str().split(',').filter(|w| !w.is_empty()) {
+                        bel.global_outputs.push(word.to_owned());
                     }
                 }
                 "site" => {

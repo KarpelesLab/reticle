@@ -546,6 +546,12 @@ impl IceFabric {
                     "lfosc",
                     &[("en", "CLKLFEN"), ("pu", "CLKLFPU"), ("o", "CLKLF")],
                 ),
+                "PLL" => {
+                    let bel = self.pll_bel(&cell);
+                    let (ax, ay) = cell.tile;
+                    self.tile_mut(ax, ay).bels.push(bel);
+                    continue;
+                }
                 "SPRAM" | "MAC16" => {
                     let (ax, ay) = cell.tile;
                     let mut bel = if cell.kind == "SPRAM" {
@@ -578,9 +584,82 @@ impl IceFabric {
                 if let Some(wire) = self.named(*x, *y, name, ax, ay) {
                     bel.pins.push(((*role).to_owned(), wire));
                 }
+                // An oscillator's clock is a global network itself, which
+                // the global buffer at that network's `.gbufin` tile
+                // drives too: the two exclude each other, as a PLL's do.
+                if let Some(network) = name
+                    .strip_prefix("glb_netwk_")
+                    .and_then(|n| n.parse::<u32>().ok())
+                    && let Some(&(gx, gy, _)) = self.db.gbufin.iter().find(|g| g.2 == network)
+                {
+                    bel.blocks.push(format!("X{gx}Y{gy}/gb{network}"));
+                }
             }
             self.tile_mut(ax, ay).bels.push(bel);
         }
+    }
+
+    /// The PLL's bel, from its `.extra_cell PLL` record.
+    ///
+    /// Its inputs are the record's wires, with the roles the device file's
+    /// `pll` lines give them (`ref` for `REFERENCECLK`; `resetb` and
+    /// `bypass` for the two it ties) or else the port's name and bit
+    /// (`DYNAMICDELAY3`). Its outputs are not wires in the record but IO
+    /// blocks, `PLLOUT_A 12 31 1`: the PLL's clock comes out of that
+    /// block's `D_IN_0` into the fabric (`out`, or `outb` for the second),
+    /// and onto the global network the block's pad would drive
+    /// (`.gbufpin`), as `outglobal` and `outglobalb` — nextpnr's
+    /// `chipdb.py`, `add_pll_clock_output`, reads them the same way.
+    fn pll_bel(&self, cell: &db::ExtraCell) -> BelDecl {
+        let (ax, ay) = cell.tile;
+        let mut bel = BelDecl::new("pll", "pll");
+        for (key, x, y, name) in &cell.entries {
+            let role = match key.as_str() {
+                "PLLOUT_A" | "PLLOUT_B" => continue,
+                "REFERENCECLK" => "ref".to_owned(),
+                "LOCK" => "lock".to_owned(),
+                "RESETB" => "resetb".to_owned(),
+                "BYPASS" => "bypass".to_owned(),
+                other => match other.rsplit_once('_') {
+                    Some((port, bit)) if bit.parse::<u32>().is_ok() => format!("{port}{bit}"),
+                    _ => format!("{other}0"),
+                },
+            };
+            if let Some(wire) = self.named(*x, *y, name, ax, ay) {
+                bel.pins.push((role, wire));
+            }
+        }
+        for (key, fabric, global) in [
+            ("PLLOUT_A", "out", "outglobal"),
+            ("PLLOUT_B", "outb", "outglobalb"),
+        ] {
+            let Some((x, y, z)) = pll_output_io(cell, key) else {
+                continue;
+            };
+            if let Some(wire) = self.named(x, y, &format!("io_{z}/D_IN_0"), ax, ay) {
+                bel.pins.push((fabric.to_owned(), wire));
+            }
+            if let Some(&(.., network)) = self
+                .db
+                .gbufpin
+                .iter()
+                .find(|g| (g.0, g.1, g.2) == (x, y, z))
+            {
+                bel.pins.push((
+                    global.to_owned(),
+                    WireRef::global(format!("glb_netwk_{network}")),
+                ));
+                // The network has another driver, the global buffer fed
+                // from the fabric at its `.gbufin` tile; a placed PLL takes
+                // that buffer's network whether or not its global output is
+                // used, which costs a design one of eight buffers and keeps
+                // the two from ever being placed together.
+                if let Some(&(gx, gy, _)) = self.db.gbufin.iter().find(|g| g.2 == network) {
+                    bel.blocks.push(format!("X{gx}Y{gy}/gb{network}"));
+                }
+            }
+        }
+        bel
     }
 
     /// The `(x, y, function bits)` of a function of the tile at `(x, y)`.
@@ -819,6 +898,107 @@ impl IceFabric {
             .map(|(_, x, y, name)| (*x, *y, name.clone()))
     }
 
+    /// Writes the PLL's configuration: its parameters into the
+    /// `PLLCONFIG_<i>` bits the `.extra_cell PLL` record names; each
+    /// output's IO block set to pass the clock to the fabric, `PINTYPE_0`
+    /// and, with its ICEGATE enabled, `PINTYPE_1` (nextpnr's
+    /// `bitstream.cc`, "Configure the SB_IO that the clock outputs are
+    /// going through"); and, for each output that drives its global
+    /// network, that network's `padin_glb_netwk` extra bit, the one a pad
+    /// driving the network sets. Returns the networks so driven.
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] when the database lacks the PLL or a bit.
+    pub fn configure_pll(
+        &self,
+        image: &mut image::Image,
+        config: &PllConfig,
+        globals: [bool; 2],
+    ) -> Result<BTreeSet<u32>, FabricError> {
+        let cell = self
+            .db
+            .extra_cells
+            .iter()
+            .find(|c| c.kind == "PLL")
+            .ok_or_else(|| FabricError(format!("the {} database has no PLL", self.db.device)))?;
+        for (key, x, y, name) in &cell.entries {
+            let Some((param, bit)) = pll_param_bit(key) else {
+                continue;
+            };
+            if config.params.get(param).copied().unwrap_or(0) >> bit & 1 == 0 {
+                continue;
+            }
+            let bits = self
+                .db
+                .function_by_suffix(self.db.tile(*x, *y), name)
+                .ok_or_else(|| {
+                    FabricError(format!(
+                        "the PLL's `{key}` names `{name}` at ({x}, {y}), which that tile does not \
+                         have"
+                    ))
+                })?;
+            for b in bits {
+                image.set(*x, *y, b.row, b.col);
+            }
+        }
+        let mut networks = BTreeSet::new();
+        for (i, (key, icegate)) in [
+            ("PLLOUT_A", "ENABLE_ICEGATE_PORTA"),
+            ("PLLOUT_B", "ENABLE_ICEGATE_PORTB"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if i == 1 && !config.dual() {
+                continue;
+            }
+            let (x, y, z) = pll_output_io(cell, key)
+                .ok_or_else(|| FabricError(format!("the PLL record has no `{key}`")))?;
+            let mut names = vec![format!("IOB_{z}.PINTYPE_0")];
+            if config.params.get(icegate).copied().unwrap_or(0) != 0 {
+                names.push(format!("IOB_{z}.PINTYPE_1"));
+            }
+            for name in names {
+                let bits = self
+                    .function(x, y, &name)
+                    .ok_or_else(|| FabricError(format!("no `{name}` in the tile at ({x}, {y})")))?;
+                for b in bits {
+                    image.set(x, y, b.row, b.col);
+                }
+            }
+            if globals[i] {
+                let network = self
+                    .db
+                    .gbufpin
+                    .iter()
+                    .find(|g| (g.0, g.1, g.2) == (x, y, z))
+                    .map(|g| g.3)
+                    .ok_or_else(|| {
+                        FabricError(format!("the IO block at ({x}, {y}, {z}) drives no global"))
+                    })?;
+                self.set_padin(image, network)?;
+                networks.insert(network);
+            }
+        }
+        Ok(networks)
+    }
+
+    /// Sets the extra bit that has global network `network` driven from its
+    /// pad-input path, `padin_glb_netwk.<n>`.
+    fn set_padin(&self, image: &mut image::Image, network: u32) -> Result<(), FabricError> {
+        let (_, bank, x, y) = self
+            .db
+            .extra_bits
+            .iter()
+            .find(|(n, ..)| *n == format!("padin_glb_netwk.{network}"))
+            .ok_or_else(|| FabricError(format!("no `padin_glb_netwk.{network}` extra bit")))?;
+        image
+            .extra_bits
+            .insert((usize::try_from(*bank).unwrap_or(0), *x, *y));
+        Ok(())
+    }
+
     /// The `.extra_cell MAC16` record of the DSP block anchored at `tile`.
     fn mac16_at(&self, tile: (u32, u32)) -> Option<&db::ExtraCell> {
         self.db
@@ -1046,6 +1226,35 @@ impl IceFabric {
             }
             out.dsps.insert(cell.tile, config);
         }
+        // The PLL's parameters, and which global networks a pad (or the
+        // PLL through one) drives.
+        if let Some(cell) = self.db.extra_cells.iter().find(|c| c.kind == "PLL") {
+            let mut config = PllConfig::zero();
+            for (key, x, y, name) in &cell.entries {
+                let Some((param, bit)) = pll_param_bit(key) else {
+                    continue;
+                };
+                let set = self
+                    .db
+                    .function_by_suffix(self.db.tile(*x, *y), name)
+                    .is_some_and(|bits| bits.iter().all(|b| image.get(*x, *y, b.row, b.col)));
+                if set && let Some(v) = config.params.get_mut(param) {
+                    *v |= 1 << bit;
+                }
+            }
+            out.pll = config;
+        }
+        for (name, bank, x, y) in &self.db.extra_bits {
+            if let Some(n) = name
+                .strip_prefix("padin_glb_netwk.")
+                .and_then(|n| n.parse::<u32>().ok())
+                && image
+                    .extra_bits
+                    .contains(&(usize::try_from(*bank).unwrap_or(0), *x, *y))
+            {
+                out.padin.insert(n);
+            }
+        }
         out
     }
 
@@ -1128,6 +1337,8 @@ impl IceFabric {
         let mut rams: BTreeMap<(u32, u32), RamConfig> = BTreeMap::new();
         let mut sprams: BTreeSet<((u32, u32), u32)> = BTreeSet::new();
         let mut dsps: BTreeMap<(u32, u32), DspConfig> = BTreeMap::new();
+        let mut pll: Option<(PllConfig, [bool; 2])> = None;
+        let mut osc_networks: BTreeSet<u32> = BTreeSet::new();
         let mut edges: BTreeMap<(u32, u32), BTreeSet<bool>> = BTreeMap::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             let Some(site) = placement.site_of(index) else {
@@ -1175,20 +1386,52 @@ impl IceFabric {
                     }
                     extra.push(("RGBA_DRV".to_owned(), p));
                 }
-                "hfosc" => {
+                "hfosc" | "lfosc" => {
                     let mut p = BTreeMap::new();
-                    p.insert(
-                        "CLKHF_DIV".to_owned(),
-                        param(cell, "CLKHF_DIV").unwrap_or(0),
-                    );
-                    extra.push(("HFOSC".to_owned(), p));
+                    if instance.kind == "hfosc" {
+                        p.insert(
+                            "CLKHF_DIV".to_owned(),
+                            param(cell, "CLKHF_DIV").unwrap_or(0),
+                        );
+                        extra.push(("HFOSC".to_owned(), p));
+                    } else {
+                        extra.push(("LFOSC".to_owned(), p));
+                    }
+                    // Its clock reaches its global network through that
+                    // network's pad-input path, as nextpnr's packer puts
+                    // a pad-input global buffer behind it
+                    // (`create_padin_gbuf`).
+                    let drives = netlist
+                        .pins
+                        .iter()
+                        .any(|p| p.instance == index && p.role == "o" && p.signal.is_some());
+                    if drives
+                        && let Some(network) = site
+                            .pin("o")
+                            .map(|n| graph.wire(n).name.as_str())
+                            .and_then(|n| n.strip_prefix("glb_netwk_"))
+                            .and_then(|n| n.parse::<u32>().ok())
+                    {
+                        osc_networks.insert(network);
+                    }
                 }
-                "lfosc" => extra.push(("LFOSC".to_owned(), BTreeMap::new())),
                 "bram" => {
                     rams.insert(site.tile, RamConfig::of_cell(cell)?);
                 }
                 "mac16" => {
                     dsps.insert(site.tile, DspConfig::of_cell(cell)?.as_bits(cell)?);
+                }
+                "pll" => {
+                    let used = |role: &str| {
+                        netlist
+                            .pins
+                            .iter()
+                            .any(|p| p.instance == index && p.role == role && p.signal.is_some())
+                    };
+                    pll = Some((
+                        PllConfig::of_cell(cell, &instance.primitive)?,
+                        [used("outglobal"), used("outglobalb")],
+                    ));
                 }
                 "spram" => {
                     let z = site
@@ -1215,12 +1458,39 @@ impl IceFabric {
         self.configure(image, &ios, &extra)?;
         self.configure_rams(image, &rams, &sprams)?;
         self.configure_dsps(image, &dsps)?;
+        let mut padin = BTreeSet::new();
+        if let Some((config, globals)) = &pll {
+            // The PLL's outputs leave through IO blocks, which a design's
+            // own IO cannot use then.
+            if let Some(cell) = self.db.extra_cells.iter().find(|c| c.kind == "PLL") {
+                for (i, key) in ["PLLOUT_A", "PLLOUT_B"].into_iter().enumerate() {
+                    if i == 1 && !config.dual() {
+                        continue;
+                    }
+                    if let Some((x, y, z)) = pll_output_io(cell, key)
+                        && ios.iter().any(|io| (io.0, io.1, io.2) == (x, y, z))
+                    {
+                        return Err(FabricError(format!(
+                            "the PLL's {key} leaves through the IO block at ({x}, {y}, {z}), \
+                             which this design also uses as a pin"
+                        )));
+                    }
+                }
+            }
+            padin = self.configure_pll(image, config, *globals)?;
+        }
+        for network in osc_networks {
+            self.set_padin(image, network)?;
+            padin.insert(network);
+        }
         Ok(Configured {
             pads: ios.len(),
             hard_cells: extra.len(),
             rams,
             sprams,
             dsps,
+            pll: pll.map(|(c, _)| c),
+            padin,
         })
     }
 
@@ -1266,6 +1536,10 @@ pub struct Configured {
     pub sprams: BTreeSet<((u32, u32), u32)>,
     /// DSP blocks, by their anchor tile, as their cells ask for them.
     pub dsps: BTreeMap<(u32, u32), DspConfig>,
+    /// The PLL, as its cell asks for it, when one is placed.
+    pub pll: Option<PllConfig>,
+    /// The global networks the PLL drives through a pad's input path.
+    pub padin: BTreeSet<u32>,
 }
 
 /// What [`implement`] built, and the numbers its report prints.
@@ -1284,6 +1558,8 @@ pub struct Implemented {
     pub sprams: usize,
     /// DSP blocks configured, each read back with its parameters.
     pub dsps: usize,
+    /// The PLL's configuration, read back, when one is placed.
+    pub pll: Option<PllConfig>,
     /// Sites used per kind, as the placer reports them.
     pub usage: Vec<(String, usize, usize)>,
     /// Signals routed, signals in all, pips and wires used.
@@ -1333,6 +1609,16 @@ pub fn implement(
         ));
     }
     for instance in &netlist.instances {
+        if matches!(
+            instance.primitive.as_str(),
+            "SB_PLL40_PAD" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD"
+        ) {
+            return Err(format!(
+                "`{}` is a `{}`, whose reference is the PLL's own pad; this flow places the CORE \
+                 forms, which take it from the fabric, and nothing was written",
+                instance.name, instance.primitive
+            ));
+        }
         if !matches!(
             instance.kind.as_str(),
             "lc" | "lcc"
@@ -1344,6 +1630,7 @@ pub fn implement(
                 | "bram"
                 | "spram"
                 | "mac16"
+                | "pll"
         ) {
             return Err(format!(
                 "`{}` is a `{}`, which this flow does not place on an iCE40 yet; nothing was \
@@ -1352,6 +1639,88 @@ pub fn implement(
             ));
         }
     }
+    // A PLL's `LOCK` reaches one logic tile only, so the cell packing made
+    // to pass it on is confined there (packing's rule 10).
+    let mut confined;
+    let constraints = if pack_report.lock_cells.is_empty() {
+        constraints
+    } else {
+        let (x, y) = fabric
+            .db
+            .extra_cells
+            .iter()
+            .find(|c| c.kind == "PLL")
+            .and_then(|c| c.entries.iter().find(|(k, ..)| k == "LOCK"))
+            .map(|(_, x, y, _)| (*x, *y))
+            .ok_or_else(|| "the database's PLL has no LOCK wire".to_owned())?;
+        confined = constraints.clone();
+        let region = "$ice40$pll_lock".to_owned();
+        let m = &design.modules[top];
+        for name in &pack_report.lock_cells {
+            let span = m
+                .cells
+                .iter()
+                .find(|(_, c)| c.name.as_str() == name)
+                .map(|(_, c)| c.span)
+                .unwrap_or(m.span);
+            if !confined.regions.iter().any(|r| r.name == region) {
+                confined.regions.push(super::constraints::Region {
+                    name: region.clone(),
+                    x0: x,
+                    y0: y,
+                    x1: x,
+                    y1: y,
+                    span,
+                });
+            }
+            confined
+                .region_assignments
+                .push(super::constraints::RegionAssignment {
+                    pattern: name.clone(),
+                    region: region.clone(),
+                    span,
+                    origin: super::constraints::Origin::File,
+                });
+        }
+        &confined
+    };
+    // A placed PLL or oscillator takes the global networks it drives (its
+    // bel blocks the buffers that drive them from the fabric), and the
+    // placer, which seats a design's clock buffers before a cell with one
+    // site, could give a clock one of those buffers and leave the PLL
+    // nowhere. So the clock buffers are confined to the rectangle of the
+    // die holding the most of them and none of the blocked ones.
+    let mut kept;
+    let drivers: Vec<&str> = ["pll", "hfosc", "lfosc"]
+        .into_iter()
+        .filter(|k| netlist.instances.iter().any(|i| i.kind == *k))
+        .collect();
+    let constraints = match gb_region_avoiding(graph, &drivers) {
+        None => constraints,
+        Some((x0, y0, x1, y1)) => {
+            kept = constraints.clone();
+            let m = &design.modules[top];
+            let name = "$ice40$beside_pll".to_owned();
+            for instance in netlist.instances.iter().filter(|i| i.kind == "gb") {
+                kept.region_assignments
+                    .push(super::constraints::RegionAssignment {
+                        pattern: instance.name.clone(),
+                        region: name.clone(),
+                        span: m.span,
+                        origin: super::constraints::Origin::File,
+                    });
+            }
+            kept.regions.push(super::constraints::Region {
+                name,
+                x0,
+                y0,
+                x1,
+                y1,
+                span: m.span,
+            });
+            &kept
+        }
+    };
     let (placement, place_report) =
         place::place(&netlist, &fabric.arch, graph, constraints, place_options)
             .map_err(|e| e.to_string())?;
@@ -1455,6 +1824,30 @@ pub fn implement(
             decoded.sprams, configured.sprams
         ));
     }
+    // And for the PLL: its parameters read back as its cell asked for them
+    // (all zero with none placed), and the pad-input bits it set are the
+    // only ones set.
+    let pll_wanted = configured.pll.clone().unwrap_or_else(PllConfig::zero);
+    if decoded.pll != pll_wanted || decoded.padin != configured.padin {
+        let differ: Vec<String> = pll_wanted
+            .params
+            .iter()
+            .filter(|(k, v)| decoded.pll.params.get(*k) != Some(v))
+            .map(|(k, v)| {
+                format!(
+                    "{k} reads {} for {v}",
+                    decoded.pll.params.get(k).copied().unwrap_or(0)
+                )
+            })
+            .collect();
+        return Err(format!(
+            "the PLL this bitstream describes is not the one placed, so nothing was written: \
+             {}; pad-input networks {:?} for {:?}",
+            differ.join(", "),
+            decoded.padin,
+            configured.padin
+        ));
+    }
     // And for the DSP blocks: every block's parameters read back as the
     // placed cell asked for, and every other block's as all zero.
     let wanted: BTreeMap<(u32, u32), DspConfig> = decoded
@@ -1510,6 +1903,7 @@ pub fn implement(
         rams: configured.rams.len(),
         sprams: configured.sprams.len(),
         dsps: configured.dsps.len(),
+        pll: configured.pll.clone(),
         usage: place_report.usage,
         routed: (
             route_report.signals,
@@ -1520,6 +1914,54 @@ pub fn implement(
         chosen: chosen.len(),
         decoded,
     })
+}
+
+/// A rectangle of the die, `(x0, y0, x1, y1)`, holding as many global
+/// buffer sites as can be had and none of those that a placed site of one
+/// of `kinds` blocks — a PLL's or an oscillator's, which drive those
+/// buffers' networks themselves. Its corners are global buffer sites'
+/// columns and rows, so every candidate is tried. `None` when nothing is
+/// blocked.
+fn gb_region_avoiding(
+    graph: &super::arch::RoutingGraph,
+    kinds: &[&str],
+) -> Option<(u32, u32, u32, u32)> {
+    let blocked: BTreeSet<(u32, u32)> = graph
+        .sites
+        .iter()
+        .filter(|s| kinds.contains(&s.kind.as_str()))
+        .flat_map(|s| s.blocks.iter().map(|b| graph.sites[*b].tile))
+        .collect();
+    if blocked.is_empty() {
+        return None;
+    }
+    let gbs: Vec<(u32, u32)> = graph
+        .sites
+        .iter()
+        .filter(|s| s.kind == "gb")
+        .map(|s| s.tile)
+        .collect();
+    let xs: BTreeSet<u32> = gbs.iter().map(|t| t.0).collect();
+    let ys: BTreeSet<u32> = gbs.iter().map(|t| t.1).collect();
+    let mut best: Option<((u32, u32, u32, u32), usize)> = None;
+    for &x0 in &xs {
+        for &x1 in xs.range(x0..) {
+            for &y0 in &ys {
+                for &y1 in ys.range(y0..) {
+                    let inside =
+                        |t: &(u32, u32)| (x0..=x1).contains(&t.0) && (y0..=y1).contains(&t.1);
+                    if blocked.iter().any(inside) {
+                        continue;
+                    }
+                    let n = gbs.iter().filter(|t| inside(t)).count();
+                    if best.is_none_or(|(_, m)| n > m) {
+                        best = Some(((x0, y0, x1, y1), n));
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(r, _)| r)
 }
 
 /// One block RAM's configuration: what [`IceFabric::configure_rams`]
@@ -1594,7 +2036,7 @@ impl RamConfig {
 }
 
 /// What [`IceFabric::decode`] read out of an image.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Decoded {
     /// Set bits read.
     pub bits: usize,
@@ -1616,6 +2058,239 @@ pub struct Decoded {
     /// Every DSP block's parameters as its bits hold them, by its anchor
     /// tile; an unused block reads back as all zero.
     pub dsps: BTreeMap<(u32, u32), DspConfig>,
+    /// The PLL's parameters as its bits hold them, all zero when unused.
+    pub pll: PllConfig,
+    /// The global networks whose pad-input bit is set.
+    pub padin: BTreeSet<u32>,
+}
+
+/// The IO block a PLL output's entry names, `PLLOUT_A 12 31 1`.
+fn pll_output_io(cell: &db::ExtraCell, key: &str) -> Option<(u32, u32, u32)> {
+    let (_, x, y, z) = cell.entries.iter().find(|(k, ..)| k == key)?;
+    Some((*x, *y, z.parse().ok()?))
+}
+
+/// The parameters of the PLL that its configuration bits hold, with their
+/// widths: the list nextpnr's `bitstream.cc` writes, each bit a
+/// `PLLCONFIG_<i>` of one of the IO tiles beside it, as the `.extra_cell
+/// PLL` record names.
+pub const PLL_PARAMS: [(&str, u32); 16] = [
+    ("DELAY_ADJMODE_FB", 1),
+    ("DELAY_ADJMODE_REL", 1),
+    ("DIVF", 7),
+    ("DIVQ", 3),
+    ("DIVR", 4),
+    ("ENABLE_ICEGATE_PORTA", 1),
+    ("ENABLE_ICEGATE_PORTB", 1),
+    ("FDA_FEEDBACK", 4),
+    ("FDA_RELATIVE", 4),
+    ("FEEDBACK_PATH", 3),
+    ("FILTER_RANGE", 3),
+    ("PLLOUT_SELECT_A", 2),
+    ("PLLOUT_SELECT_B", 2),
+    ("PLLTYPE", 3),
+    ("SHIFTREG_DIV_MODE", 2),
+    ("TEST_MODE", 1),
+];
+
+/// The `(parameter, bit)` an entry of the `.extra_cell PLL` record sets,
+/// when it is a parameter bit.
+#[must_use]
+pub fn pll_param_bit(key: &str) -> Option<(&'static str, u32)> {
+    for (name, width) in PLL_PARAMS {
+        if key == name && width == 1 {
+            return Some((name, 0));
+        }
+        if let Some(bit) = key
+            .strip_prefix(name)
+            .and_then(|r| r.strip_prefix('_'))
+            .and_then(|r| r.parse::<u32>().ok())
+            && bit < width
+        {
+            return Some((name, bit));
+        }
+    }
+    None
+}
+
+/// The PLL's configuration: every parameter of [`PLL_PARAMS`], as
+/// [`IceFabric::configure_pll`] writes them and [`IceFabric::decode`]
+/// reads them back. All zero is a PLL not in use: a placed one always has
+/// a `PLLTYPE`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PllConfig {
+    /// Each parameter's value, all of [`PLL_PARAMS`] present.
+    pub params: BTreeMap<String, u64>,
+}
+
+impl PllConfig {
+    /// Every parameter zero.
+    #[must_use]
+    pub fn zero() -> PllConfig {
+        PllConfig {
+            params: PLL_PARAMS
+                .iter()
+                .map(|(n, _)| ((*n).to_owned(), 0))
+                .collect(),
+        }
+    }
+
+    /// The configuration an `SB_PLL40_CORE` or `SB_PLL40_2F_CORE` cell
+    /// asks for, translated as nextpnr's packer translates the library's
+    /// parameters (`pack.cc`, `pack_plls`): `PLLTYPE` from the primitive
+    /// (3 and 7), `FEEDBACK_PATH` from its name (`DELAY` 0, `SIMPLE` 1,
+    /// `PHASE_AND_DELAY` 2, `EXTERNAL` 6), each output's `PLLOUT_SELECT`
+    /// (`GENCLK` 0, `GENCLK_HALF` 1, `SHIFTREG_90deg` 2, `SHIFTREG_0deg`
+    /// 3), and a `DYNAMIC` delay adjustment as its mode bit with the delay
+    /// field all ones.
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] for the pad forms, which this flow does not place,
+    /// a value that is not one of those names or does not fit its field.
+    pub fn of_cell(cell: &crate::ir::Cell, primitive: &str) -> Result<PllConfig, FabricError> {
+        use crate::ir::AttrValue;
+        let who = cell.name.as_str();
+        let plltype = match primitive {
+            "SB_PLL40_CORE" => 3,
+            "SB_PLL40_2F_CORE" => 7,
+            "SB_PLL40_PAD" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD" => {
+                return Err(FabricError(format!(
+                    "`{who}` is a `{primitive}`, whose reference is the PLL's own pad; this flow \
+                     places the CORE forms, which take it from the fabric"
+                )));
+            }
+            other => return Err(FabricError(format!("`{who}`: `{other}` is not a PLL"))),
+        };
+        let text = |key: &str| -> Option<String> {
+            match cell.params.get(key)? {
+                AttrValue::String(s) => Some(s.trim_matches('"').to_owned()),
+                _ => None,
+            }
+        };
+        let number = |key: &str| -> Result<u64, FabricError> {
+            let v = match cell.params.get(key) {
+                None => Some(0),
+                Some(AttrValue::Const(c)) => c.to_u64(),
+                Some(AttrValue::String(s)) => {
+                    let digits = s.strip_prefix("0b").unwrap_or(s);
+                    u64::from_str_radix(digits, 2).ok()
+                }
+                Some(other) => other.as_int().and_then(|v| u64::try_from(v).ok()),
+            };
+            v.ok_or_else(|| FabricError(format!("`{who}`'s {key} is not a number")))
+        };
+        let named = |key: &str, names: &[(&str, u64)], default: u64| -> Result<u64, FabricError> {
+            match text(key) {
+                Some(s) if s.bytes().all(|b| b.is_ascii_digit()) && !s.is_empty() => s
+                    .parse()
+                    .map_err(|_| FabricError(format!("`{who}`'s {key}"))),
+                Some(s) => names
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&s))
+                    .map(|(_, v)| *v)
+                    .ok_or_else(|| {
+                        FabricError(format!(
+                            "`{who}`'s {key} is \"{s}\", which is none of {}",
+                            names.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+                        ))
+                    }),
+                None if cell.params.get(key).is_some() => number(key),
+                None => Ok(default),
+            }
+        };
+        let select = [
+            ("GENCLK", 0),
+            ("GENCLK_HALF", 1),
+            ("SHIFTREG_90deg", 2),
+            ("SHIFTREG_0deg", 3),
+        ];
+        let mut out = PllConfig::zero();
+        let mut set = |name: &str, v: u64| out.params.insert(name.to_owned(), v);
+        set("PLLTYPE", plltype);
+        set(
+            "FEEDBACK_PATH",
+            named(
+                "FEEDBACK_PATH",
+                &[
+                    ("DELAY", 0),
+                    ("SIMPLE", 1),
+                    ("PHASE_AND_DELAY", 2),
+                    ("EXTERNAL", 6),
+                ],
+                1,
+            )?,
+        );
+        if plltype == 3 {
+            set("PLLOUT_SELECT_A", named("PLLOUT_SELECT", &select, 0)?);
+        } else {
+            set("PLLOUT_SELECT_A", named("PLLOUT_SELECT_PORTA", &select, 0)?);
+            set("PLLOUT_SELECT_B", named("PLLOUT_SELECT_PORTB", &select, 0)?);
+        }
+        for (key, mode, field) in [
+            (
+                "DELAY_ADJUSTMENT_MODE_FEEDBACK",
+                "DELAY_ADJMODE_FB",
+                "FDA_FEEDBACK",
+            ),
+            (
+                "DELAY_ADJUSTMENT_MODE_RELATIVE",
+                "DELAY_ADJMODE_REL",
+                "FDA_RELATIVE",
+            ),
+        ] {
+            let dynamic = named(key, &[("FIXED", 0), ("DYNAMIC", 1)], 0)?;
+            set(mode, dynamic);
+            set(field, if dynamic == 1 { 15 } else { number(field)? });
+        }
+        for key in [
+            "DIVR",
+            "DIVF",
+            "DIVQ",
+            "FILTER_RANGE",
+            "SHIFTREG_DIV_MODE",
+            "ENABLE_ICEGATE_PORTA",
+            "ENABLE_ICEGATE_PORTB",
+            "TEST_MODE",
+        ] {
+            set(key, number(key)?);
+        }
+        for (name, width) in PLL_PARAMS {
+            let v = out.params.get(name).copied().unwrap_or(0);
+            if v >> width != 0 {
+                return Err(FabricError(format!(
+                    "`{who}`'s {name} is {v}, which does not fit its {width} bit(s)"
+                )));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Whether the second output exists in this configuration: the `2F`
+    /// and `2` forms (`PLLTYPE` 4, 6 and 7), as nextpnr's
+    /// `is_sb_pll40_dual`.
+    #[must_use]
+    pub fn dual(&self) -> bool {
+        matches!(self.params.get("PLLTYPE"), Some(4 | 6 | 7))
+    }
+}
+
+impl Default for Decoded {
+    fn default() -> Decoded {
+        Decoded {
+            bits: 0,
+            arcs: BTreeSet::new(),
+            functions: BTreeMap::new(),
+            unexplained: Vec::new(),
+            bad_patterns: Vec::new(),
+            rams: BTreeMap::new(),
+            ram_bits: 0,
+            sprams: BTreeSet::new(),
+            dsps: BTreeMap::new(),
+            pll: PllConfig::zero(),
+            padin: BTreeSet::new(),
+        }
+    }
 }
 
 /// The `(parameter, bit)` an entry of an `.extra_cell MAC16` record sets,

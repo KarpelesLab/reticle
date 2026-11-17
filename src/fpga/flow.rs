@@ -1346,6 +1346,33 @@ fn primitive_instances(
             done.push(id);
             continue;
         }
+        // A clock generator a design names, as an iCE40UP5K's
+        // `SB_PLL40_CORE`: a cell, its outputs the ports its `pll` line
+        // gives an output's role — the generated clocks (`out`, and `outb`,
+        // `outglobal`, `outglobalb` where they exist), `lock`, a feedback
+        // output. Only a line that says which output drives a global
+        // network (`outglobal`) is read this way, which is the one family a
+        // backend places one for; the others' instances stay what they were.
+        if !device.bels.iter().any(|b| b.name == primitive.as_str())
+            && let Some(pll) = device
+                .clock_resources
+                .plls
+                .iter()
+                .find(|p| p.name == primitive.as_str())
+            && pll.ports.iter().any(|(role, _)| role == "outglobal")
+        {
+            let outputs: Vec<String> = pll
+                .ports
+                .iter()
+                .filter(|(role, _)| role.starts_with("out") || role == "lock" || role == "fbout")
+                .map(|(_, port)| port.clone())
+                .collect();
+            if !cell_from_instance(m, &inst, primitive, &outputs, &mut refused, diags) {
+                continue;
+            }
+            done.push(id);
+            continue;
+        }
         let Some(bel) = device.bels.iter().find(|b| b.name == primitive.as_str()) else {
             continue;
         };

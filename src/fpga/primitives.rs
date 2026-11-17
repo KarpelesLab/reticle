@@ -9104,6 +9104,42 @@ impl Mapper<'_> {
             {
                 buffered_already.extend(cell.outputs.iter().map(|(_, net)| *net));
             }
+            // An output its `bel` line says drives a global network itself
+            // (`global_outputs`, an iCE40 oscillator's clock).
+            if let CellKind::Blackbox(primitive) = &cell.kind
+                && let Some(bel) = self
+                    .device
+                    .bels
+                    .iter()
+                    .find(|b| b.name == primitive.as_str() && !b.global_outputs.is_empty())
+            {
+                for (port, net) in &cell.outputs {
+                    if bel.global_outputs.iter().any(|g| g == port.as_str()) {
+                        buffered_already.push(*net);
+                    }
+                }
+            }
+            // A clock generator's output that its `pll` line says drives a
+            // global network itself (`outglobal`, an iCE40 PLL's
+            // `PLLOUTGLOBAL`) is on the network already, as a buffer's is.
+            if let CellKind::Blackbox(primitive) = &cell.kind
+                && let Some(pll) = self
+                    .device
+                    .clock_resources
+                    .plls
+                    .iter()
+                    .find(|p| p.name == primitive.as_str())
+            {
+                for (port, net) in &cell.outputs {
+                    if pll
+                        .ports
+                        .iter()
+                        .any(|(role, p)| role.starts_with("outglobal") && p == port.as_str())
+                    {
+                        buffered_already.push(*net);
+                    }
+                }
+            }
         }
         fanout.retain(|_, entry| !buffered_already.contains(&entry.net));
         // Highest fanout first, ties broken by name so the choice is
