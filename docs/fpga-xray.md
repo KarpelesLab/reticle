@@ -2018,7 +2018,12 @@ the others are tiles the route never enters. `XrayFabric::enable_global_clocks`
 switches those on over the whole column once the routing is known, which
 is nextpnr-xilinx's rule; which of the two enables belongs to which side
 of a cut is measured from all four Vivado harness designs and asserted by
-`the_rebuffer_enables_pair_with_the_ends_vivado_marks`.
+`the_rebuffer_enables_pair_with_the_ends_vivado_marks`. **Since 2026-11-18
+it is Vivado's rule instead** (`xray::clock_rules`): the two ends of each
+live segment of the track and no more, a far end outside the region
+included, as `docs/fpga-vivado-parity.md` ("Vivado's bits beside a clock,
+answered") measured it on 863 of Vivado's bitstreams; the paragraph above is
+how it was until then.
 
 ### The oracle again, on the clock
 
@@ -3704,7 +3709,7 @@ counted once:
 | `BRAM_L`/`BRAM_R` `27_173` | 131, one in each block RAM tile it uses | beside `EN_SYN` and `EN_ECC_READ`; unknown, and not needed for what was measured: a 1024 × 8 block RAM from this flow on the Plus, one clock, read back 512 random bytes of 512 right with the bit and without it |
 | `INT_L` | 2 | unknown |
 | `MONITOR_BOT` | 91 | the XADC, beyond what `xadc` derives |
-| `RIOI3`/`LIOI3` at the three `ODDR` outputs | 6 | inside the `IOI_OCLKM_<n>` pattern, from a source prjxray did not fuzz |
+| `RIOI3`/`LIOI3` at the three `ODDR` outputs | 6 | inside the `IOI_OCLKM_<n>` pattern, from a source prjxray did not fuzz. **Named since 2026-11-18**: `IOI_OCLKM_<n>.IOI_IMUX31_<1-n>`, `OCLK`'s own option from the interconnect with frames 28 and 29 turned into 31 and 30 (`xray::iologic::oclkm_from_interconnect`), which this flow now drives as Vivado does |
 | `CLK_BUFG_TOP_R` | 4 | the cascade enables above: now named |
 | `CMT_*`, `HCLK_CMT*` | 14 | unknown |
 
@@ -6694,7 +6699,7 @@ will have.
 | `src/fpga/xray/lutram.rs` | a `SLICEM`'s distributed RAM: the `RAM64X1D` bel, its pins, its blocks and its bits, with the sources of the quoted part |
 | `src/fpga/xray/carry.rs` | `legalise_carries`: a lookup table for every propagate bit of a `CARRY4` that has none, and the constant generates in `O5` |
 | `src/fpga/xray/sites.rs` | the inside of a site: pin names from UG474 and UG471, the wire each sits on, the orientations the database only implies, the IO recipe read off Vivado's own bitstream, and the clock tables — the `BUFGCTRL`, the `BUFHCE` of a clock row, the wires that cost bits to touch and the rebuffer enables |
-| `XrayFabric::enable_global_clocks` | the one bit that belongs to no pip: a global clock's rebuffer enables, over the whole column, once the routing is known |
+| `src/fpga/xray/clock_rules.rs` | the bits that belong to no pip: a global clock's rebuffer enables at the ends of its live segments, and a clock row's `HCLK_CMT_CK_BUFHCLK<n>_USED` for each `BUFHCE` in use, both by Vivado's rules, once the routing is known (until 2026-11-18, `XrayFabric::enable_global_clocks` set both enables over the whole column) |
 | `src/fpga/xray/xadc.rs` | the XADC: its pins from prjxray's tile JSON, and its register layout, derived from NewAE's Husky image |
 | `src/fpga/xray/iologic.rs` | an `IDDR` on an `ILOGIC` and an `ODDR` on an `OLOGIC`, each configured from its parameters and pins as Vivado configured the Husky's |
 | `src/fpga/xray/io.rs` | a pad per buffer: its standard, drive, slew and pull, and a differential pair across its tile, each recipe checked against NewAE's Husky image |

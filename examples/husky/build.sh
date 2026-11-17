@@ -34,6 +34,14 @@
 # places and routes this design differently. Every build of it measured on
 # a board was made with the legacy model, and this one is that build byte for
 # byte; see docs/fpga-vivado-parity.md.
+# Since 2026-11-18 neither script writes the bitstream that was on a board:
+# the user decided that day that parity with Vivado 2026 comes before a
+# byte-identical build, and the 7-series rules Vivado was seen to follow and
+# that had been left out for the Husky's sake are applied (the clock rows'
+# and rebuffers' bits, an ODDR's OCLKM, a clock manager's CLKIN2 and clock
+# ties, the XADC's frame ECC; docs/fpga-vivado-parity.md, "The
+# Husky-changing rules, applied"). The flags below still keep everything
+# else as it was measured.
 # `--synthesis legacy` for the same reason once more: the default synthesises
 # as Vivado does, subtractions, orderings and equalities on the carry chain and
 # the logic mapped for depth, which is a different netlist, and none of it has

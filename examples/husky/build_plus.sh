@@ -33,9 +33,10 @@
 # each of three runs, failing only `test_fpga_version`, which compares the
 # build time (2026-11-01; NewAE's own bitstream passes 36). Seeds 1 to 5
 # passed 37, 39, 34, 39 and 35 (docs/fpga-xray.md). Built through this
-# script it is that bitstream byte for byte, in 43 minutes beside other
-# work. Seed 3 was chosen before, at 38, 38 and 39, while the analyser
-# FIFO stand-in's flags missed timing; with them fixed it passes 34.
+# script it was that bitstream byte for byte, in 43 minutes beside other
+# work, until 2026-11-18: see below. Seed 3 was chosen before, at 38, 38
+# and 39, while the analyser FIFO stand-in's flags missed timing; with
+# them fixed it passes 34.
 # A change to the sources or to the flow makes a different build of any
 # seed, and the choice has to be measured again.
 # `--wide-muxes off` because a build of this design that uses `MUXF7` and
@@ -54,6 +55,14 @@
 # places and routes this design differently. Every build of it measured on
 # a board was made with the legacy model, and this one is that build byte for
 # byte; see docs/fpga-vivado-parity.md.
+# Since 2026-11-18 neither script writes the bitstream that was on a board:
+# the user decided that day that parity with Vivado 2026 comes before a
+# byte-identical build, and the 7-series rules Vivado was seen to follow and
+# that had been left out for the Husky's sake are applied (the clock rows'
+# and rebuffers' bits, an ODDR's OCLKM, a clock manager's CLKIN2 and clock
+# ties, the XADC's frame ECC; docs/fpga-vivado-parity.md, "The
+# Husky-changing rules, applied"). The flags below still keep everything
+# else as it was measured.
 # `--synthesis legacy` for the same reason once more: the default synthesises
 # as Vivado does, subtractions, orderings and equalities on the carry chain and
 # the logic mapped for depth, which is a different netlist, and none of it has

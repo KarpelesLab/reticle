@@ -639,7 +639,8 @@ alone: it compares the ground ties and where each clock pin's clock comes from n
 **This changes existing bitstreams:** an `ODDR`'s `CLKB` is routed now, as Vivado routes it on
 every `ODDR` here. NewAE's Husky has five, and its build differs by those routes; nothing about
 that has been on a board. Vivado takes `IOI_OCLKM` to `CLKB` and this flow takes `IOI_OCLK`, both
-of which the database offers for that pin; only the ends are compared.
+of which the database offers for that pin; only the ends are compared. Since 2026-11-18 this
+flow drives `IOI_OCLKM` as well, from `OCLK`'s source, as Vivado does ([applied since](#the-husky-changing-rules-applied)).
 
 **Not done:** `ISERDESE2`, `OSERDESE2`, `IDELAYE2` and `IDELAYCTRL`. The database has their
 features (`ISERDES.*`, `OSERDES.DATA_WIDTH.*`, `IDELAY_Y*`), and Vivado's probes of each decode with
@@ -1227,8 +1228,8 @@ every routing pip, on every design. The 18 that are not are all class 1 below.
 | | class | count | designs | what it is | answered? |
 |---|---|---|---|---|---|
 | 1 | Reticle only: `CLK_BUFG_REBUF GCLK<n>_ENABLE_*` on rebuffers with no live segment | 18 | 10 | Deliberate and documented at `XrayFabric::enable_global_clocks`: Reticle sets both enables in each rebuffer of a used column, nextpnr's rule, and Vivado only the ends of each live segment | Quoted, harmless on nextpnr's word |
-| 2 | Vivado only: `CLK_BUFG_REBUF_X78Y142 GCLK0_ENABLE_ABOVE` | 4 | `fir8`, `fsm`, `mul18`, `srl_delay` | **The likeliest wrong bit here.** The far end of the segment the clock row at `Y130` hangs from. Reticle would set it too, but the rule stops at the loaded region and this tile is outside it | **Open**, and the rule now known: Vivado sets both ends of every live segment, on 230 of 231 designs of `clocks/` (below). Nothing measured says the far end is needed, and it was not changed, since loading more of the column changes placement |
-| 3 | Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 23 | 10 | Set in a clock-management tile a horizontal clock row passes through, with no clock manager in use. Reticle has no such rule | **Open**, and the rule now known: one for every `BUFHCE` in use on that side of the row, on all 231 designs of `clocks/` (below). Not applied, since it changes every design's bits |
+| 2 | Vivado only: `CLK_BUFG_REBUF_X78Y142 GCLK0_ENABLE_ABOVE` | 4 | `fir8`, `fsm`, `mul18`, `srl_delay` | **The likeliest wrong bit here.** The far end of the segment the clock row at `Y130` hangs from. Reticle would set it too, but the rule stops at the loaded region and this tile is outside it | **Open**, and the rule now known: Vivado sets both ends of every live segment, on 230 of 231 designs of `clocks/` (below). Nothing measured says the far end is needed, and it was not changed, since loading more of the column changes placement. **Applied 2026-11-18**, without loading the tile: its bit goes straight into the frames ([applied since](#the-husky-changing-rules-applied)) |
+| 3 | Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 23 | 10 | Set in a clock-management tile a horizontal clock row passes through, with no clock manager in use. Reticle has no such rule | **Open**, and the rule now known: one for every `BUFHCE` in use on that side of the row, on all 231 designs of `clocks/` (below). Not applied, since it changes every design's bits. **Applied 2026-11-18** ([applied since](#the-husky-changing-rules-applied)) |
 | 4 | Vivado only: `LIOB33_X0Y93 IOB_Y0` as an input with a pull-up | 30 | 10, and all 13 with `cells.txt` | That site is `IOB_X0Y94`, `IO_L3P_T0_DQS_PUDC_B_14` (`package_pins.csv`): Vivado's treatment of the `PUDC_B` pad, whichever design it is. Nothing here connects it | Named, and whether it matters is open |
 | 5 | Vivado only: `<n>.GND_WIRE`, `BYP_ALT<n>.GFAN1` | 13 | `fir8` | A ground to a `CARRY4`'s `DX`, on seven carries. **Checked:** on all seven, bit 3's `S` and `DI` are constants and its `O` and `CO` have no reader, so nothing sees it. Vivado obeys the netlist and Reticle saves the wire | Harmless |
 | | Vivado only, not features: the low 13 bits of word 50 of each frame | 861 to 8,552 a design | all | **Checked:** on all 23 of Vivado's bitstreams, in all 9464 frames, that is the Hamming code of the frame (`frame_ecc.py`). Reticle's are zero. `--decode` counts them apart now, as `frame_ecc`, which also leaves nothing unnamed in the database's own Basys 3 harness bitstream, a thing `tests/fpga_xray.rs` had taken for what a real configuration needs. Whether a part ever reads them under a plain load is not measured, and Reticle's own bitstreams have loaded with them clear (`docs/fpga-xray.md`) | Named |
@@ -5739,7 +5740,9 @@ times dearer than the fabric's own wires would, and on the default 138 times. Ev
 build of the Plus that has been on a part was routed with it, so taking it out is a
 new build to measure and not part of this. It also means the weight a timing-driven
 route gives delay depends on how many ground fans a design's block RAMs need, which
-is not a thing anyone chose.
+is not a thing anyone chose. **Measured 2026-11-18, and kept**: with the legacy model leaving the ties out as
+well, the achieved periods of `qor/` are 2 % slower and the Husky Plus's estimate several
+nanoseconds longer ([The Husky-changing rules, applied](#the-husky-changing-rules-applied)).
 
 **Mutations of this change.** Each made by hand, against the router's unit tests, the
 block RAM's, and (5 to 8) `fpga_xray_bram_vivado`, `fpga_xray_fifo_vivado`,
@@ -6539,6 +6542,8 @@ rows 0 and 1 rather than 1 and 2, so the far end of the segment its top row hang
 is `CLK_BUFG_REBUF_X60Y142`, the same tile name as the XC7A100T's case for another
 reason. **Still not applied**, for the reason above: the Husky's and the Husky Plus's
 bitstreams change with either, and neither rule has been measured on a part.
+**Applied 2026-11-18**, when the user decided that parity with Vivado 2026 comes before a
+byte-identical Husky build ([applied since](#the-husky-changing-rules-applied)); still not measured on a part.
 
 **Checked by Vivado's router**, `run_placed.sh` on 38 of these designs with Reticle's
 placement and routes as `FIXED_ROUTE`s: every route of the regional buffers, `BUFMR`,
@@ -6549,6 +6554,7 @@ not done: a pad's clock into an MMCM's `CLKIN1` routed through the PLL tile's
 router never takes; an `ODDR`'s `OCLKM`, which Vivado drives with `OCLK` and Reticle
 does not, on a global clock as on a `BUFIO`; and a clock manager's unused DRP and
 `DCLK` inputs, which Vivado ties to ground over `GFAN` and Reticle leaves reading one.
+The last two are done since 2026-11-18 ([applied since](#the-husky-changing-rules-applied)).
 **Nothing here has been on a board.**
 
 ## The configuration primitives
@@ -6820,19 +6826,19 @@ What differs, by class, the same on all three parts unless said:
 
 | class | probes | what it is | |
 |---|---|---|---|
-| Reticle only: `CLK_BUFG_REBUF GCLK<n>_ENABLE_*` | 43 | the rebuffer rule [above](#vivados-bits-beside-a-clock-answered) | **settled, not applied** (the Husky) |
-| Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 50 | likewise | **settled, not applied** |
-| Vivado only: the far `GCLK0_ENABLE_ABOVE` | 2 to 4 | likewise | **settled, not applied** |
-| Vivado only: `IOI_OCLKM_<n>` from the clock leaf | `ISERDESE2`, `OSERDESE2` | Vivado drives an output register's `OCLKM` from its `OCLK`'s clock; Reticle leaves it, as this document already said of an `ODDR` | **open**: closing it changes the Husky, which has `ODDR`s |
-| Vivado only: `? RIOB33 30_34 31_33` and `? RIOI3 30_34 31_33` | `ODDR` | two bits each of the pad's tile and its IO logic's that the database names nothing; also in NewAE's Husky image on every `ODDR` pad. Reticle does not set them | **open**, and Husky-changing |
-| Vivado only: `CLK_BUFG_BUFGCTRL<n>_I1.CLK_BUFG_IMUX<k>_<j>` | `BUFGCE`, `BUFGCE_1` | Vivado ties a `BUFGCE`'s unused `I1` from the interconnect; Reticle leaves it | **open**, and Husky-changing (NewAE's design has eight `BUFGCE`s) |
-| Vivado only: a clock manager's `CLKIN2` and DRP ties, and `CLKOUT1`..`3` output enables on a `_BASE` | the four managers | the ties are [known](#vivados-bits-beside-a-clock-answered); the enables come of Reticle's netlist naming the `_ADV` with those outputs' dividers, and Vivado's own flow on the `_BASE` sets none | the enables an export artefact; the ties **open** |
+| Reticle only: `CLK_BUFG_REBUF GCLK<n>_ENABLE_*` | 43 | the rebuffer rule [above](#vivados-bits-beside-a-clock-answered) | **settled, not applied** (the Husky); **applied 2026-11-18** ([applied since](#the-husky-changing-rules-applied)) |
+| Vivado only: `HCLK_CMT*_CK_BUFHCLK<n>_USED` | 50 | likewise | **settled, not applied**; **applied 2026-11-18** |
+| Vivado only: the far `GCLK0_ENABLE_ABOVE` | 2 to 4 | likewise | **settled, not applied**; **applied 2026-11-18** |
+| Vivado only: `IOI_OCLKM_<n>` from the clock leaf | `ISERDESE2`, `OSERDESE2` | Vivado drives an output register's `OCLKM` from its `OCLK`'s clock; Reticle leaves it, as this document already said of an `ODDR` | **open**: closing it changes the Husky, which has `ODDR`s; **applied 2026-11-18** |
+| Vivado only: `? RIOB33 30_34 31_33` and `? RIOI3 30_34 31_33` | `ODDR` | two bits each of the pad's tile and its IO logic's that the database names nothing; also in NewAE's Husky image on every `ODDR` pad. Reticle does not set them | **open**, and Husky-changing. **Answered 2026-11-18**: they are `OCLKM`'s pip from the interconnect, set where the register's clock comes over the interconnect, which the database leaves out; named, and applied with the row above |
+| Vivado only: `CLK_BUFG_BUFGCTRL<n>_I1.CLK_BUFG_IMUX<k>_<j>` | `BUFGCE`, `BUFGCE_1` | Vivado ties a `BUFGCE`'s unused `I1` from the interconnect; Reticle leaves it | **open**, and Husky-changing (NewAE's design has eight `BUFGCE`s); **applied 2026-11-18**. That count was the source's: NewAE's image, from an older Vivado, ties no `I1` |
+| Vivado only: a clock manager's `CLKIN2` and DRP ties, and `CLKOUT1`..`3` output enables on a `_BASE` | the four managers | the ties are [known](#vivados-bits-beside-a-clock-answered); the enables come of Reticle's netlist naming the `_ADV` with those outputs' dividers, and Vivado's own flow on the `_BASE` sets none | the enables an export artefact; the ties **open**; **applied 2026-11-18**, but for a DRP pin tied low in the source, which mapping still drives from a lookup table |
 | Vivado only: `? HCLK_CMT_L 24_173`, `? HCLK_L 24_13` | the four managers | a clock manager's output into the row, through bits no `segbits` names | **open** |
 | Reticle only: `ILOGIC.CLKDIVP_USED` | `ISERDESE2` | the export leaves `CLKDIVP` off the cell it writes | export artefact |
 | Vivado only: `VREF_BALL` on bank 35's `VREF` balls; Reticle only: `VREF.V_900_MV` | `IBUF_IBUFDISABLE`, `IBUF_INTERMDISABLE` | an `SSTL18_I` input with no `INTERNAL_VREF`: Vivado's `link_design` flow takes the reference from the balls, **its own synthesis flow does not** (a design asking only that, `vref_ext`, on both dies: no `VREF_BALL`, `VREF.V_900_MV`), and Reticle does as the second | Vivado's two flows disagree; unexplained |
 | Vivado only: `PULLTYPE`, `IN` on the `KEEPER` probe's pad | `KEEPER` | Reticle's netlist has an input buffer nothing reads there, which Vivado's own flow does not | export artefact |
 | Reticle only: `HCLK_L ENABLE_BUFFER` where a route crosses | `BUFH`, `BUFHCE`, XC7A100T only | one tile of a horizontal clock's way Reticle enables and Vivado does not, on one placement | **open**, one data point |
-| Reticle only: an XADC frame's ECC (`--decode`'s `!`) | `XADC` | [below](#a-drp-blocks-frame-ecc) | **open**, Husky-changing |
+| Reticle only: an XADC frame's ECC (`--decode`'s `!`) | `XADC` | [below](#a-drp-blocks-frame-ecc) | **open**, Husky-changing; **applied 2026-11-18** |
 
 **Fixed in Reticle**, each found here:
 
@@ -6908,7 +6914,8 @@ database names nothing (`? CMT_TOP_R_LOWER_B 28_1060` and others), so the decode
 cannot leave them out. **Reticle still writes the whole frame's code** for both blocks:
 the Husky has an XADC and clock managers whose `DWE` is a signal, so writing Vivado's
 code changes its bitstreams, and nothing measured on a part says which a part wants.
-`--decode` of Reticle's own XADC build says so, one frame wrong.
+`--decode` of Reticle's own XADC build says so, one frame wrong. **It writes Vivado's
+code since 2026-11-18** ([applied since](#the-husky-changing-rules-applied)), and its XADC builds decode with no frame wrong.
 
 ### Not done
 
@@ -6921,6 +6928,9 @@ code changes its bitstreams, and nothing measured on a part says which a part wa
   support and the Husky's byte-identical builds forbid until a board can say.
 - `OCLKM`, a `BUFGCE`'s `I1`, the `ODDR` pad's unnamed bits, the managers' ties: each
   changes the Husky.
+- **Both done since 2026-11-18**, by the user's decision that parity with Vivado 2026
+  comes before a byte-identical Husky build ([applied since](#the-husky-changing-rules-applied)). A board has
+  still said nothing about any of them.
 - **A clock below the global-buffer threshold** (eight pins) stays on the interconnect,
   where Vivado buffers every pad clock; the `IDDR` and `ODDR` probes, whose clocks drive
   fewer than eight pins, are clocked from the interconnect. Deliberate in Reticle, and a
@@ -10843,3 +10853,116 @@ quoted run, not the flow.
 - **More than two routes.** Keeping the faster of two is two thirds of the gain; three or
   more, from two passes or two seeds, would be more of the same at a route's cost each.
 - `SLICEL` against `SLICEM`, and lanes against slices, are not told apart in the split.
+
+## The Husky-changing rules, applied
+
+**The user decided on 2026-11-18: "parity with Vivado 2026 has priority over a
+byte-identical Husky build using Vivado 2022".** Every 7-series difference from Vivado
+this document had settled and left unapplied only because it changed the two pinned
+ChipWhisperer-Husky bitstreams is applied since, one commit each. **None of it has been on
+a part**: what is known is that Vivado 2026.1 writes these bits, and the Husky boards were
+not touched for this (another project owns them).
+
+| item | commit | what Reticle does now | held by |
+|---|---|---|---|
+| the rebuffer enables and the far `GCLK<k>_ENABLE_ABOVE` | `feat(fpga): set the clock rows' and rebuffers' bits by Vivado's rules` | the two ends of each live segment of a global track, its buffer's and every one between it and each clock row it is used in, and no other (`xray::clock_rules`). A far end outside the loaded region goes straight into the frames, which hold the whole die, so no placement moves | `the_rebuffers_and_clock_rows_are_set_by_vivados_rules` (`tests/fpga_xray_clocks.rs`): every gate design held to both rules, ported from `clock_rules.py` |
+| `HCLK_CMT*_CK_BUFHCLK<n>_USED` | the same | in the row's left or right clock management tile for every `BUFHCE` whose `IN_USE` is set on that side, die-wide | the same test |
+| `IOI_OCLKM_<n>`, and the `ODDR` pad's unnamed `30_34 31_33` | `feat(fpga): drive an IO register's OCLKM from its OCLK's clock` | driven from `IOI_OCLK_<n>`'s source, after routing (`XrayFabric::drive_output_clock_mirrors`). **The unnamed bits were this**: `OCLKM`'s pip from `IOI_IMUX31`, set where the clock comes over the interconnect, which no `segbits` file has; it is `OCLK`'s option with frames 28 and 29 turned into 31 and 30, the third bit being the one prjxray calls `ODDR_TDDR.IN_USE`. Named as `IOI_OCLKM_<n>.IOI_IMUX31_<1-n>` (`iologic::oclkm_from_interconnect`), so NewAE's image and Vivado's bitstreams of Reticle's placements decode with nothing unnamed in their IO logic | `tests/fpga_xray_probes.rs` no longer allows the `OCLKM` line; `oclkm_from_the_interconnect_is_oclks_turned_round` |
+| a `BUFGCE`'s `I1` | `feat(fpga): tie a BUFGCE's I1 to one as Vivado does` | tied to one through `CLK_BUFG_IMUX<24 + n % 4>_<n / 4>` unless `I0` holds that `IMUX`, when Vivado takes the mux's option with no bits and so does this (`TiePolicy::OneOverMux`). A `BUFG` is left alone. Read off eleven `BUFGCE`s, `testdata/fpga/vivado/clocks/bufgce_i1.txt`; NewAE's image, from an older Vivado, ties none | `a_bufgces_i1_is_tied_as_vivado_ties_it` (`tests/fpga_xray_bufg.rs`) |
+| a clock manager's `CLKIN2` and clock ties | `feat(fpga): ground a clock manager's open CLKIN2 and clocks as Vivado does` | `CLKIN2` grounded through `CLK_IN2_INT` over `FAN_BOUNCE5`, `DCLK` and `PSCLK` over a bounce, open DRP pins from a fan (`cmt::wants`), as Vivado's `GND` net is routed on the four manager probes | `an_unused_clkin2_is_grounded_through_the_interconnect` (`tests/fpga_xray_clocks.rs`) |
+| a DRP block's frame ECC | `feat(fpga): write a DRP block's frames with Vivado's ECC` | the writer leaves an XADC's registers, and a manager's bits when its `DWE` is a signal, out of their frames' code, by the rule `--decode` already read by | `a_drp_blocks_frames_carry_vivados_ecc` (`tests/fpga_xray_xadc.rs`), and the Husky's XADC test asks for no frame wrong |
+
+Each test was run against its change taken out, and failed: the far ends left out, the
+`_USED`s left out, a segment's ends swapped, the `OCLKM` pass dropped (the `ODDR`,
+`OSERDESE2` and `ISERDESE2` probes, on all three parts), the `I1` tie dropped, the
+`CLKIN2` tie dropped, and the manager's `DWE` ignored by the ECC rule.
+
+**Left as they were, and why:**
+
+- **A DRP pin tied low in the source** keeps the lookup table of zeros mapping gives any
+  constant; Vivado grounds it from a fan. That is the netlist's constant handling and not a
+  tie, and is not changed here.
+- **`CLKIN2` where its bounce is taken.** The interconnect beside a clock manager has one
+  bounce, `FAN_BOUNCE5`, for both its `CLK` pins, and a `CLKIN1` on the interconnect, as
+  this flow routes a clock of fewer than eight loads, takes it: the `PLLE2_*` probes on
+  this flow's placement. Vivado on the same routes grounds `CLKIN2` through a slice's
+  output; this flow leaves it on the mux's option with no bits, as before.
+- **The legacy delay model's `delay_scale`** still counts the ground fans' base of a
+  million (the Vivado model has left them out since 6783ba68). Measured, under Vivado's
+  timer, `achieved.sh` on the thirteen designs of `qor/` at seeds 1 to 3 with
+  `--delay-model legacy`: the geometric mean of the achieved periods against Vivado's own
+  flow is **1.299 as it is and 1.326 with the ties left out**, seven designs slower and
+  none faster (`counter64` 4.727 to 5.041 ns, `regfile_alu` 7.390 to 7.644, `gray_cdc`
+  1.537 to 1.729; the six with no tie the same to the picosecond). On the Husky Plus,
+  seed 4, Reticle's own routed estimate went from `clk_usb` 16.55, `ADC_clk_fb` 6.87 and
+  the logic analyser's 5.65 ns to 19.34, 8.81 and 6.71 ns (the Husky, not timing-driven,
+  is the same bitstream either way). The tie count makes the legacy model weigh delay more,
+  by accident, and taking it out makes the model less timing-driven; the fitted model takes
+  the ties out *and* weighs delay explicitly (`FITTED_DELAY_WEIGHT`). So the legacy model
+  is left alone: it is not a Vivado-parity setting, and following the Vivado model here
+  only makes it worse. **Measured**, on Vivado's timer and on Reticle's estimate.
+
+### The ledger, before and after
+
+`run_placed.sh` (`STAGES=routes`) on the 141 primitive probes at `xc7a100tftg256-1`, the
+tree before these commits and after, both bitstreams of each decoded by the same
+`reticle fpga --decode` (the one after, which names `OCLKM`'s pip), `compare_bits.py` and
+summed. 135 probes have Vivado's bitstream of Reticle's routes:
+
+| | before | after |
+|---|---|---|
+| the same bitstream, feature for feature | 81 | 124 |
+| features only Reticle sets | 103 | 7 |
+| features only Vivado sets | 118 (121 decoded before `OCLKM`'s pip was named) | 39 |
+
+What is left, after, all classes the XC7A35T table above already has. Only Reticle's:
+`HCLK_L ENABLE_BUFFER` where the `BUFH` and `BUFHCE` probes' rows cross (4, open),
+`VREF.V_900_MV` on the two `IBUF_*DISABLE` probes (2) and `ILOGIC.CLKDIVP_USED` (1, an
+export artefact). Only Vivado's: the managers' `CLKOUT<n>` output enables on a `_BASE` (11,
+an export artefact), `? HCLK_CMT_L 24_173` and `? HCLK_L 24_13` beside a manager (8,
+open), the `SSTL18_I` probes' `VREF_BALL`s and their pads (12, where Vivado's two flows
+disagree), the `KEEPER` probe's pad (1, an export artefact), the `PLLE2_*`s' `CLKIN2` with Vivado's four
+pips round through a slice (6, above), and one `BUFR` probe's `ENABLE_REGIONAL` (1).
+The XC7A35T was not run again.
+
+### The Husky's bitstreams
+
+Both scripts, built with the tree before and after, from the same checkout as every
+build before:
+
+| script | before | after |
+|---|---|---|
+| `build.sh` | `3fd3e4c8df2e8c5ffe9f70c552a4c02a3df0b11eaaff69798b4ffdcad40d30dd` | `e4466c104d7dc4392b9a49c6f86a5bddee0932776f827d745e8bedb1e437f230` |
+| `build_plus.sh`, seed 4 | `e57fca471db9f9ee965f35634770b95e9a53c9edab5aae6190ddba868e4d274f` | `d87f748445f3bb2f486401893b298100425d8b61ea3d67d4539c41b3d34a4fa6` |
+
+The "before" hashes were built again here and are the ones this document has quoted since
+2026-11-06. Both new bitstreams decode with every bit named and no frame's ECC wrong (the
+old ones had two: the XADC's).
+
+**The Husky, decoded and compared**: 1,278,277 features in common, and every one of the
+151 that differ is one of the rules. Only before: 98 rebuffer enables, and the XADC's two
+frames' code. Only after: 33 `HCLK_CMT*_CK_BUFHCLK<n>_USED`, three managers' `CLKIN2`
+from `CLK_IN2_INT` with the four bounce-and-fan ways to ground behind them (twelve
+interconnect features), and three `ODDR`s' `OCLKM`, two from `IOI_IMUX31`. No route and no
+cell moved.
+
+**The Husky Plus** has the same placement, cell for cell, and other routes: 476,918 pips
+only before, 477,161 only after, and every lookup table's `INIT` with them, its inputs being
+where the route put them. Besides those, the same classes as the Husky's.
+**The routes moved because the routing graph did**: built again with everything but
+`OCLKM`'s pip from the interconnect in the graph (`6ce925e0…`), the Plus has 1,559,227
+features in common with the old build and differs by the rules alone, 138 and 53, as the
+Husky does (and drives the one `ODDR` whose clock is on a leaf). That pip adds an edge to
+every IO logic tile, which the router never takes, since `OCLKM` leads nowhere it routes
+to; the timing-driven negotiation still came out another way, as any change to the graph
+can make it. The Husky's build is not timing-driven and did not move. Reticle's own routed
+estimate of the Plus after: `clk_usb` 16.55 ns, `ADC_clk_fb` 6.87, the glitch MMCM's 14.01
+and the logic analyser's 5.65, against 16.55, 6.74, 17.42 and 5.65 before.
+
+### Not done
+
+- The XC7A35T's ledgers were not run again; nothing here depends on the die.
+- `HCLK_L ENABLE_BUFFER` where a route crosses, the managers' unnamed `HCLK_CMT_L 24_173`
+  and `HCLK_L 24_13`, and a DRP pin tied low in the source, as above.
+- `testdata/fpga/vivado/placed/bits.txt` is the 2026-11-06 run of `qor/`, quoted, and was
+  not regenerated: `tests/fpga_xray_vivado.rs` holds the file, not the flow.
