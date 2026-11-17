@@ -1,0 +1,23 @@
+# What Vivado 2026.1 connects to a BUFGCE's I1, which the cell does not have: its
+# VCC net, from an interconnect IMUX left undriven. Read off each design's routed
+# VCC net (get_property ROUTE) and its bitstream decoded by `reticle fpga --decode`,
+# on 2026-11-18, at xc7a100tftg256-1. One line a buffer:
+#   <design> <tile type> <n of BUFGCTRL<n>> <I0's source> <I1's pip, or - for none>
+# `bufgce_probe` and `bufgce_1_probe` are the primitive probes on Vivado's own
+# placement; `bufgce_probe@reticle` the first on Reticle's placement, its routes
+# fixed (tools/vivado-parity/run_placed.sh); `bufgce_sites` eight BUFGCEs fed from
+# flip-flops and placed by hand. A `-` source is the option with no bits, which the
+# decoding cannot show, and which the VCC net's route names: there I0 took
+# CLK_BUFG_IMUX28_0. Where I1's pip is `-` its VCC net reached it through the other
+# IMUX of the pair, IMUX<28 + n % 4>, the mux's option with no bits.
+bufgce_probe CLK_BUFG_BOT_R 1 CLK_BUFG_BOT_R_CK_MUXED2 CLK_BUFG_IMUX25_0
+bufgce_1_probe CLK_BUFG_BOT_R 1 CLK_BUFG_BOT_R_CK_MUXED2 CLK_BUFG_IMUX25_0
+bufgce_probe@reticle CLK_BUFG_BOT_R 0 CLK_BUFG_BOT_R_CK_MUXED0 CLK_BUFG_IMUX24_0
+bufgce_sites CLK_BUFG_BOT_R 2 CLK_BUFG_IMUX26_0 -
+bufgce_sites CLK_BUFG_BOT_R 5 CLK_BUFG_IMUX25_1 -
+bufgce_sites CLK_BUFG_BOT_R 11 CLK_BUFG_IMUX27_2 -
+bufgce_sites CLK_BUFG_BOT_R 15 CLK_BUFG_IMUX27_3 -
+bufgce_sites CLK_BUFG_TOP_R 0 - CLK_BUFG_IMUX24_0
+bufgce_sites CLK_BUFG_TOP_R 7 CLK_BUFG_IMUX27_1 -
+bufgce_sites CLK_BUFG_TOP_R 13 CLK_BUFG_IMUX25_3 -
+bufgce_sites CLK_BUFG_TOP_R 15 CLK_BUFG_IMUX27_3 -

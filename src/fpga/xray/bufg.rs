@@ -112,6 +112,7 @@
 //! there or in the frames' other tiles named them before.
 
 use super::XrayFabric;
+use super::bram::{TiePolicy, Want};
 use crate::fpga::arch::{ConfigEntry, RoutingGraph};
 use crate::fpga::bitstream::{Bitstream, BitstreamError};
 use crate::fpga::place::{Netlist, Placement};
@@ -514,6 +515,44 @@ pub(super) fn cascade_enables(tile_type: &str) -> Vec<super::Feature> {
             zeros: Vec::new(),
         })
         .collect()
+}
+
+/// A `BUFGCE`'s `I1`, which the cell does not have and Vivado ties to one.
+///
+/// **Vivado 2026.1**, on its own placement of the `BUFGCE` and `BUFGCE_1`
+/// probes (`BUFGCTRL_X0Y1`), on this flow's placement of the first
+/// (`BUFGCTRL_X0Y0`), and on eight `BUFGCE`s fed from the fabric and placed
+/// by hand from `BUFGCTRL_X0Y2` to `X0Y31` (`bufgce_sites`): a `BUFGCE`
+/// becomes a `BUFGCTRL` whose `I1` is on its `VCC` net, routed from an
+/// interconnect `IMUX` left undriven, as its `IGNORE1` and `S0` are. Where
+/// `I0` is not on that `IMUX` the mux takes it explicitly, the pip
+/// `CLK_BUFG_BUFGCTRL<n>_I1.CLK_BUFG_IMUX<24 + n % 4>_<n / 4>`, which is the
+/// difference the parity ledger had; where `I0` is, `I1` takes the other
+/// `IMUX`, the option with no bits. A `BUFG` gets none of it, and the
+/// buffers that have an `I1` route it. [`TiePolicy::OneOverMux`] is that tie.
+/// NewAE's image, from an older Vivado, has no such pip on any buffer.
+/// Applied on 2026-11-18, when the user decided that parity with Vivado comes
+/// before an unchanged ChipWhisperer-Husky bitstream. Nothing reads `I1`
+/// while `CE1` and `S1` are low, so this changes no function, and that is a
+/// reading of UG472 and not a measurement.
+pub(super) fn wants(
+    instance: &crate::fpga::place::Instance,
+    site: &crate::fpga::arch::ArchSite,
+    netlist: &Netlist,
+    wants: &mut Vec<Want>,
+) {
+    if instance.primitive != "BUFGCE" || instance.pins.iter().any(|p| netlist.pins[*p].role == "i1")
+    {
+        return;
+    }
+    if let Some(node) = site.pin("i1") {
+        wants.push((
+            TiePolicy::OneOverMux,
+            instance.name.clone(),
+            "i1".to_owned(),
+            node,
+        ));
+    }
 }
 
 #[cfg(test)]

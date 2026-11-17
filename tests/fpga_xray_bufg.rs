@@ -376,3 +376,119 @@ fn a_buffer_cascade_has_its_enable() {
     }
     assert!(cascades > 0, "no buffer feeds another through the cascade");
 }
+
+/// The pip Vivado ties a `BUFGCE`'s `I1` through, given the buffer's index and
+/// where its `I0` comes from (`-` for the mux's option with no bits):
+/// `CLK_BUFG_IMUX<24 + n % 4>_<n / 4>` unless `I0` took that one, and none
+/// then, `I1` reaching the other `IMUX` of the pair by the option with no
+/// bits. `xray::bufg::wants` and `TiePolicy::OneOverMux` are this rule.
+fn i1_tie(n: u32, i0: &str) -> Option<String> {
+    let imux = format!("CLK_BUFG_IMUX{}_{}", 24 + n % 4, n / 4);
+    (i0 != imux).then_some(imux)
+}
+
+/// Builds one primitive probe for the XC7A35T's FTG256, which shares the
+/// XC7A100T's balls, and decodes it.
+fn probe(root: &str, top: &str) -> Vec<(String, String)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/primitives");
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("bufg-{top}"));
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let bit = out.join(format!("{top}.bit"));
+    let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+        .args(["fpga", "--device", "xc7a35t-ftg256", "--chipdb", root])
+        .args(["--top", top, "--constraints"])
+        .arg(dir.join(format!("{top}.rcf")))
+        .arg("--output-dir")
+        .arg(&out)
+        .arg("--bitstream")
+        .arg(&bit)
+        .arg(dir.join(format!("{top}.v")))
+        .output()
+        .expect("the reticle binary runs");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{top}: {stderr}");
+    let db = XrayDatabase::open(&DiskFiles, root, "xc7a35t-ftg256", &XrayOptions::new()).unwrap();
+    let part = db.part(&DiskFiles).unwrap();
+    let read = xc7::read_bit(&std::fs::read(&bit).unwrap()).unwrap();
+    let frames = xc7::FrameData::from_stream(part.layout.clone(), read.frames).unwrap();
+    let decoded = db.decode(&DiskFiles, &frames).unwrap();
+    assert_eq!(decoded.unexplained, 0, "{}", decoded.to_text());
+    decoded.features
+}
+
+/// Each `BUFGCTRL<n>`'s `I0` and `I1` pips in a decoding, by tile and `n`.
+fn buffer_inputs(features: &[(String, String)]) -> BTreeMap<(String, u32), [String; 2]> {
+    let mut out: BTreeMap<(String, u32), [String; 2]> = BTreeMap::new();
+    for (tile, feature) in features {
+        let Some((pin, source)) = feature
+            .strip_prefix("CLK_BUFG_BUFGCTRL")
+            .and_then(|f| f.split_once('.'))
+        else {
+            continue;
+        };
+        let Some((n, input)) = pin.split_once("_I") else {
+            continue;
+        };
+        let (Ok(n), Ok(input)) = (n.parse::<u32>(), input.parse::<usize>()) else {
+            continue;
+        };
+        out.entry((tile.clone(), n))
+            .or_insert_with(|| ["-".to_owned(), "-".to_owned()])[input] = source.to_owned();
+    }
+    out
+}
+
+/// **A `BUFGCE`'s `I1` is tied to one as Vivado ties it.** The rule
+/// ([`i1_tie`]) is first held to every buffer of `bufgce_i1.txt`, eleven
+/// `BUFGCE`s in Vivado 2026.1's bitstreams; then the `BUFGCE` and
+/// `BUFGCE_1` probes built here must follow it, and the `BUFG` probe must not
+/// tie its `I1` at all, as Vivado's does not. Would catch the tie left out,
+/// as it was until 2026-11-18 (Vivado's pip was the parity ledger's "Vivado
+/// only" `CLK_BUFG_BUFGCTRL<n>_I1.CLK_BUFG_IMUX<k>_<j>`), a tie through the
+/// `IMUX` the buffer's `I0` holds, and a tie put on a `BUFG`. Would not catch
+/// the tie's value being wrong, which the bits do not show: Vivado's `VCC` net
+/// is what the fixture quotes. Nothing reads `I1` while `CE1` and `S1` are
+/// low, so this is Vivado's habit followed, and not measured on a part.
+#[test]
+fn a_bufgces_i1_is_tied_as_vivado_ties_it() {
+    let Ok(text) = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/clocks/bufgce_i1.txt"),
+    ) else {
+        eprintln!("skipped: `testdata/` is not in the published crate");
+        return;
+    };
+    let mut lines = 0;
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let [design, _, n, i0, i1] = fields[..] else {
+            panic!("{line}");
+        };
+        let want = i1_tie(n.parse().unwrap(), i0);
+        assert_eq!(
+            want.as_deref().unwrap_or("-"),
+            i1,
+            "{design} BUFGCTRL{n}: the rule against Vivado's"
+        );
+        lines += 1;
+    }
+    assert_eq!(lines, 11);
+
+    let Some(root) = chipdb() else { return };
+    for top in ["bufgce_probe", "bufgce_1_probe", "bufg_probe"] {
+        let inputs = buffer_inputs(&probe(&root, top));
+        assert!(!inputs.is_empty(), "{top}: no buffer");
+        for ((tile, n), [i0, i1]) in &inputs {
+            let want = if top == "bufg_probe" {
+                None
+            } else {
+                i1_tie(*n, i0)
+            };
+            assert_eq!(
+                want.as_deref().unwrap_or("-"),
+                i1,
+                "{top} {tile} BUFGCTRL{n}, I0 from {i0}"
+            );
+        }
+    }
+}

@@ -568,6 +568,12 @@ pub enum TiePolicy {
     /// when [`TiePolicy::Zero`]'s search finds nothing, and left as
     /// [`TiePolicy::Idle`] leaves an input when neither does.
     ClockZero,
+    /// Tied to one through one programmable pip of the pin's own input mux,
+    /// from an interconnect input that reads `VCC_WIRE` undriven, as Vivado
+    /// ties a `BUFGCE`'s `I1` (`CLK_BUFG_BUFGCTRL<n>_I1.CLK_BUFG_IMUX<k>_<j>`,
+    /// `super::bufg::wants`). Left, as [`TiePolicy::Idle`] leaves an input,
+    /// when no such input is free.
+    OneOverMux,
 }
 
 /// Whether `role` is an address bit the block's **width mode does not
@@ -1624,6 +1630,50 @@ fn vcc_source(
         }
     }
     None
+}
+
+/// Ties `pin` to one through one programmable pip of its own input mux, for
+/// [`TiePolicy::OneOverMux`]: the first pip into `pin` with bits whose source's
+/// [`fixed_chain`] carries no signal and no zero, and holds a wire its tile
+/// type's `ppips` file says defaults to `VCC_WIRE`. For a `BUFGCE`'s `I1` that
+/// is `CLK_BUFG_IMUX<24 + n % 4>_<n / 4>`, the interconnect's `IMUX` behind it
+/// left undriven, which is Vivado's choice whenever `I0` does not take that
+/// `IMUX`. When `I0` does, Vivado ties `I1` through the mux's other `IMUX`,
+/// the option with no bits (`bufgce_sites`, eight buffers fed from the
+/// fabric), and this finds nothing free, which writes the same.
+fn tie_one_over_mux(
+    arch: &Arch,
+    graph: &RoutingGraph,
+    vcc_defaults: &BTreeMap<String, BTreeSet<String>>,
+    used: &HashSet<NodeId>,
+    ties: &mut Ties,
+    pin: NodeId,
+) -> Result<(), String> {
+    if used.contains(&pin) || ties.zero.contains(&pin) {
+        return Err("the pin carries a signal or a zero".to_owned());
+    }
+    for pip in graph.incoming(pin) {
+        if graph.pip_bits(*pip).is_empty() {
+            continue;
+        }
+        let behind = fixed_chain(graph, graph.pip(*pip).from);
+        if behind
+            .iter()
+            .any(|n| used.contains(n) || ties.zero.contains(n))
+        {
+            continue;
+        }
+        if behind
+            .iter()
+            .any(|n| reads_vcc(arch, graph, vcc_defaults, *n))
+        {
+            ties.pips.push(*pip);
+            ties.one.insert(pin);
+            ties.one.extend(behind);
+            return Ok(());
+        }
+    }
+    Err("no input of the pin's mux reads one undriven and is free".to_owned())
 }
 
 /// Ties a clock pin's node to zero over a bounce: the first node of its
@@ -2709,6 +2759,8 @@ impl XrayFabric {
                     // A configuration primitive's open and tied inputs, as
                     // Vivado ties them: see `super::config`.
                     super::config::wants(instance, &graph.sites[site], netlist, &mut wants);
+                    // A `BUFGCE`'s `I1`, as Vivado ties it: see `super::bufg`.
+                    super::bufg::wants(instance, &graph.sites[site], netlist, &mut wants);
                 }
                 continue;
             }
@@ -2793,26 +2845,37 @@ impl XrayFabric {
         // The ties that matter first, so that a fan wire the router left
         // free goes to a write enable before it goes to a data bit nobody
         // writes.
-        wants.sort_by_key(|(want, ..)| matches!(want, TiePolicy::Idle | TiePolicy::ClockZero));
+        wants.sort_by_key(|(want, ..)| {
+            matches!(
+                want,
+                TiePolicy::Idle | TiePolicy::ClockZero | TiePolicy::OneOverMux
+            )
+        });
         for (want, instance, role, node) in wants {
             let fail = |message: String| BlockRamError {
                 instance: instance.clone(),
                 message,
             };
             let vcc = &self.block_ram.vcc_defaults;
-            let value = if want == TiePolicy::One {
+            let value = if matches!(want, TiePolicy::One | TiePolicy::OneOverMux) {
                 Bit::One
             } else {
                 Bit::Zero
             };
-            let mut tied = tie(&self.arch, graph, vcc, &used, &mut ties, node, value);
+            let mut tied = if want == TiePolicy::OneOverMux {
+                tie_one_over_mux(&self.arch, graph, vcc, &used, &mut ties, node)
+            } else {
+                tie(&self.arch, graph, vcc, &used, &mut ties, node, value)
+            };
             if want == TiePolicy::ClockZero && tied.is_err() {
                 tied = tie_over_bounce(graph, &used, &mut ties, node);
             }
             match (tied, want) {
-                (Ok(()), TiePolicy::One) => report.ones += 1,
+                (Ok(()), TiePolicy::One | TiePolicy::OneOverMux) => report.ones += 1,
                 (Ok(()), _) => report.zeros += 1,
-                (Err(_), TiePolicy::Idle | TiePolicy::ClockZero) => report.idle_left += 1,
+                (Err(_), TiePolicy::Idle | TiePolicy::ClockZero | TiePolicy::OneOverMux) => {
+                    report.idle_left += 1;
+                }
                 (Err(message), _) => {
                     return Err(fail(format!("tying `{role}` to {value:?}: {message}")));
                 }
