@@ -29,6 +29,7 @@ writes its bitstream, without calling another program.
 | Family | Parts | Route out | Own place and route |
 |--------|-------|-----------|---------------------|
 | `ice40` | `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx8k-ct256` | `nextpnr-ice40` | yes, on a **synthetic** fabric — read the section below |
+| `ice40` | `ice40-up5k-sg48` (iCE40UP5K) | `nextpnr-ice40` | yes, on the **real** fabric, from Project IceStorm's database (`reticle fetch icestorm`), to a `.bin` the part loads — see [`fpga-icestorm.md`](fpga-icestorm.md) |
 | `ecp5` | `ecp5-25f-CABGA381`, `ecp5-12f-CABGA256` (LFE5U-12F, Great Scott Gadgets Cynthion r1.4), `ecp5-45f-CABGA381` | `nextpnr-ecp5` | **pads only**, on the **real** fabric, with a chip database the user supplies — see [`fpga-trellis.md`](fpga-trellis.md) |
 | `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | yes, on the **real** fabric, with a chip database the user supplies — see [`fpga-xray.md`](fpga-xray.md) |
 | `gowin` | `gw2a-18-pg256` (GW2A-18, Sipeed Tang Primer 20K) | none yet | **partly**, on the **real** fabric, with a chip database the user supplies — see [`fpga-gowin.md`](fpga-gowin.md) |
@@ -625,6 +626,14 @@ a VGA path, and the serialiser and TMDS encoder are not.
 
 ## Read this first: the architecture is synthetic
 
+> **Since 2026-11-17 this is true of the LP/HX parts only.** The
+> iCE40UP5K (`ice40-up5k-sg48`) places, routes and writes a bitstream on
+> its *real* fabric, read from Project IceStorm's chip database, and that
+> bitstream has run on a board; [`fpga-icestorm.md`](fpga-icestorm.md) is
+> the account. Everything below still describes the synthetic fabric the
+> other three iCE40 device files use, and the plan the next section lays
+> out was *not* the route taken: see "What was done instead" there.
+
 Placement and routing need to know what wire is where, which
 programmable interconnect point (pip) joins which two of them, and which
 configuration bit switches each one on. For iCE40 that knowledge is
@@ -716,6 +725,29 @@ them, and the bitstream writer does not care either way — it sets
 whatever bits the pip lists.
 
 ## Dropping in a real iCE40 database
+
+### What was done instead (2026-11-17)
+
+The converter this section describes was not written as a `.arch` file
+generator. `src/fpga/icestorm/` reads icebox's chip database into an
+`Arch` in memory, the way `src/fpga/trellis/` does for the ECP5, and it
+differs from the plan below in three ways that each turned out to matter:
+
+- **one tile type per grid position**, not per kind: icebox states every
+  tile's multiplexers separately and the edge tiles are not alike;
+- **a logic cell is one bel**, not a lookup table, a flip-flop and a carry
+  on three: the flip-flop's data *is* its table's output and the carry's
+  operands *are* the table's second and third inputs, so the three are
+  packed into one `ICESTORM_LC` before placement (`icestorm::pack`) — the
+  fourth difference listed under "Read this first" was the one that could
+  not be papered over;
+- the `.asc` is not `Bitstream::write_asc`'s (whose `#` comment line
+  `icepack` refuses) but IceStorm's own, and the `.bin` is packed by
+  Reticle (`icestorm::image`, a port of `icepack`), not left to `icepack`.
+
+The plan is kept below because it was the reading of the problem before
+the database was on the machine.
+
 
 Everything the flow needs is in the format above, so a converter from
 Project IceStorm's chip files replaces the built-in architecture with no

@@ -371,18 +371,23 @@ Options:
   --quiet            Suppress the summary line
 
 Writing a bitstream, from a real chip database (Xilinx 7 series, Gowin
-GW2A and Lattice ECP5):
+GW2A, Lattice ECP5 and the iCE40UP5K):
   --chipdb <dir>     The database: Project X-Ray's (f4pga/prjxray-db) for
                      the 7 series, also read from RETICLE_CHIPDB; Project
                      Apicula's for Gowin, also read from RETICLE_GOWINDB;
                      Project Trellis' (YosysHQ/prjtrellis-db) for the
-                     ECP5. Without either, the copy in ~/.cache/reticle is
+                     ECP5; Project IceStorm's (the directory holding
+                     chipdb-5k.txt, also RETICLE_ICESTORMDB) for the
+                     iCE40UP5K. Without either, the copy in ~/.cache/reticle is
                      used, and downloaded there first if it is missing
                      (see `reticle help fetch`).
   --offline          Never download the database; fail if it is missing.
                      RETICLE_OFFLINE=1 does the same.
   --bitstream <file> Place and route with Reticle's own tools and write a
-                     7-series .bit, a Gowin .fs or an ECP5 .bit here.
+                     7-series .bit, a Gowin .fs, an ECP5 .bit or an iCE40
+                     .bin (an .asc when the name ends in .asc) here. On
+                     an iCE40UP5K board a serial echo has been seen
+                     working (testdata/fpga/ice40up, docs/fpga-icestorm.md).
                      Three designs written this way have been watched
                      working on a board: two on a Basys 3
                      (examples/basys3: a lookup table, and a clocked
@@ -2886,6 +2891,20 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     // outside route, which is why this is behind `--bitstream` rather
     // than a family check the way Gowin's is.
     if let Some(path) = args.option("bitstream") {
+        if ICE40_PARTS.iter().any(|(name, ..)| *name == device.name) {
+            match write_ice40_bitstream(args, &design, top, device, &constraints, path) {
+                Ok(note) => {
+                    if !args.flag("quiet") {
+                        eprint!("{note}");
+                    }
+                    return Ok(Outcome::Ok);
+                }
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return Ok(Outcome::Failed);
+                }
+            }
+        }
         if device.family == "ecp5" {
             match write_ecp5_bitstream(args, &design, top, device, &constraints, path) {
                 Ok(note) => {
@@ -3441,6 +3460,98 @@ fn check_driverless(netlist: &reticle::fpga::place::Netlist) -> Result<(), Strin
             .cloned()
             .collect::<Vec<_>>()
             .join("; ")
+    ))
+}
+
+/// The iCE40 parts Project IceStorm's database is read for: `(device
+/// file name, database device, package)`.
+const ICE40_PARTS: &[(&str, &str, &str)] = &[("ice40-up5k-sg48", "5k", "sg48")];
+
+/// `reticle fpga --bitstream` for an iCE40 on Project IceStorm's database:
+/// pack the logic cells, place, route, configure, and write an icepack
+/// stream (`.bin`), or the `.asc` text when the path ends in `.asc` — with
+/// both checks the backend is held to before anything is written.
+fn write_ice40_bitstream(
+    args: &Args,
+    design: &reticle::ir::Design,
+    top: reticle::ir::ModuleId,
+    device: &reticle::fpga::Device,
+    constraints: &reticle::fpga::Constraints,
+    path: &str,
+) -> Result<String, String> {
+    use reticle::fpga::icestorm::{self, IceFabric, db::ChipDb};
+
+    let mut laps = Laps::new(args.flag("timing"));
+    let Some(&(_, die, package)) = ICE40_PARTS.iter().find(|(name, ..)| *name == device.name)
+    else {
+        return Err(format!("no IceStorm part is known for `{}`", device.name));
+    };
+    let root = datadir::ICESTORM
+        .locate(args.option("chipdb"), args.flag("offline"))
+        .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
+    let file = root.join(format!("chipdb-{die}.txt"));
+    let text = std::fs::read_to_string(&file)
+        .map_err(|e| format!("cannot read `{}`: {e}", file.display()))?;
+    let db = ChipDb::parse(&text).map_err(|e| e.to_string())?;
+    drop(text);
+    laps.lap("read the database");
+    let fabric = IceFabric::build(db, package).map_err(|e| e.to_string())?;
+    let graph = fabric.arch.build_graph();
+    laps.lap("build the graph");
+
+    // Pack, place, route, configure, and the two checks; see
+    // `reticle::fpga::icestorm::implement`.
+    let place_options = place_options(args)?;
+    let built = icestorm::implement(
+        design,
+        top,
+        device,
+        constraints,
+        &fabric,
+        &graph,
+        &place_options,
+    )?;
+    laps.lap("pack, place, route and check");
+    let image = &built.image;
+    let report = &built.pack;
+    let decoded = &built.decoded;
+    let (pads, cells) = (built.pads, built.hard_cells);
+    let bytes = if path.ends_with(".asc") {
+        image.to_asc().into_bytes()
+    } else {
+        image.to_bin()
+    };
+    std::fs::write(path, &bytes).map_err(|e| format!("cannot write `{path}`: {e}"))?;
+    laps.lap("check and write");
+    let placed = built
+        .usage
+        .iter()
+        .map(|(kind, used, total)| format!("{used}/{total} {kind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (signals, of, pips, wires) = built.routed;
+    Ok(format!(
+        "note: wrote {path}, {} byte(s), {} configuration bit(s) set; {} logic cell(s) packed \
+         ({} flip-flop(s) through their own table, {} feed-in and {} feed-out carry cell(s), {} \
+         enable(s) widened over a synchronous reset), {pads} IO block(s) and {cells} hard \
+         cell(s) configured, {placed}\n\
+         note: routed {signals} of {of} signal(s) with {pips} pip(s) over {wires} wire(s), and \
+         every sink was walked back to its driver\n\
+         note: all {} set bit(s) decode back through the database into {} arc(s) and {} \
+         function field(s), with 0 unexplained, and the arcs they select are exactly the {} \
+         the router chose\n\
+         note: load it with `reticle program --ice40 {path}`\n",
+        bytes.len(),
+        image.ones(),
+        report.cells,
+        report.pass_through,
+        report.feed_in,
+        report.feed_out,
+        report.enable_or,
+        decoded.bits,
+        decoded.arcs.len(),
+        decoded.functions.len(),
+        built.chosen,
     ))
 }
 

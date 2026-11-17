@@ -1,0 +1,10 @@
+# An iCE40UP5K-SG48 board with an FT2232H: the 12 MHz oscillator, the
+# FT2232H's second channel (pin 9 its transmit, pin 10 its receive) and the
+# RGB LED.
+set_io -io_standard LVCMOS33 clk 20
+set_io -io_standard LVCMOS33 rx 9
+set_io -io_standard LVCMOS33 tx 10
+set_io led_r 39
+set_io led_g 40
+set_io led_b 41
+create_clock -name sys -period 83.333 clk

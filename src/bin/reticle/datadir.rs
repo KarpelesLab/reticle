@@ -780,7 +780,8 @@ pub(crate) fn fetch_cmd(args: &Args) -> Result<Outcome, ArgError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALL, APICULA, Found, PRJURAY, PRJURAY_2020, PRJXRAY, Source, TRELLIS, parse_manifest,
+        ALL, APICULA, Found, ICESTORM, PRJURAY, PRJURAY_2020, PRJXRAY, Source, TRELLIS,
+        parse_manifest,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -982,6 +983,7 @@ mod tests {
         let trellis_test = include_str!("../../../tests/fpga_trellis.rs");
         let uray = include_str!("../../../tests/fpga_uray.rs");
         let uray_routing = include_str!("../../../tests/uray_board/mod.rs");
+        let icestorm = include_str!("../../../tests/fpga_icestorm.rs");
         for (db, test) in [
             (&PRJXRAY, xray),
             (&PRJXRAY, xray_lutram),
@@ -990,6 +992,7 @@ mod tests {
             (&PRJURAY, uray),
             (&PRJURAY, uray_routing),
             (&PRJURAY_2020, uray_routing),
+            (&ICESTORM, icestorm),
         ] {
             for pinned in [db.name, db.version, db.env] {
                 let quoted = format!("\"{pinned}\"");

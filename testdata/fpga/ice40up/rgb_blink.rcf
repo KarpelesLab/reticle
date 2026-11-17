@@ -1,0 +1,6 @@
+# An iCE40UP5K-SG48 board's 12 MHz oscillator and RGB LED.
+set_io -io_standard LVCMOS33 clk 20
+set_io led_r 39
+set_io led_g 40
+set_io led_b 41
+create_clock -name sys -period 83.333 clk
