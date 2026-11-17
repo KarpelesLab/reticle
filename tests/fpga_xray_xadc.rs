@@ -167,4 +167,87 @@ fn the_husky_xadc_is_configured_as_vivado_configured_it() {
     assert_eq!(clocks, ["DCLK"]);
     let want: BTreeMap<String, u64> = VIVADO.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect();
     assert_eq!(registers, want);
+    // And its frames' ECC is Vivado's, which leaves an XADC's registers out
+    // (`xc7::ecc_leaves_out_tile`): `--decode` reads by that rule.
+    assert!(decoded.ecc_faults.is_empty(), "{:?}", decoded.ecc_faults);
+}
+
+/// **A DRP block's frames carry Vivado's ECC**: the code of the frame without
+/// the block's bits for an XADC, and for a clock manager whose `DWE` is a
+/// signal, and the whole frame's for a manager with no DRP, by the rule
+/// `tests/fpga_xray_bitstream.rs`'s `a_drp_blocks_frames_ecc_is_vivados` holds
+/// to Vivado's frames. Each primitive probe (`testdata/fpga/vivado/primitives/`)
+/// is built here and read back; the frames whose ECC is not the whole frame's
+/// code must be frame 28 or 29 of the block's tile, one at least (a frame the
+/// block sets nothing in has the same code either way), and none for the
+/// `MMCME2_BASE`. Would catch the writer back on the whole frame's code, as it
+/// was until 2026-11-18 (the XADC's and the `MMCME2_ADV`'s frames then hold the
+/// whole code), the manager's bits left out with `DWE` tied, and another frame's
+/// code disturbed. Says nothing of what a part does with either code.
+#[test]
+fn a_drp_blocks_frames_carry_vivados_ecc() {
+    let Some(root) = chipdb() else { return };
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/vivado/primitives");
+    if !dir.join("xadc_probe.v").is_file() {
+        eprintln!("skipped: `testdata/` is not in the published crate");
+        return;
+    }
+    let db = XrayDatabase::open(&DiskFiles, &root, "xc7a35t-ftg256", &XrayOptions::new()).unwrap();
+    let part = db.part(&DiskFiles).unwrap();
+    let tiles = db.tiles(&DiskFiles).unwrap();
+    for (top, block, left_out) in [
+        ("xadc_probe", "XADC.IN_USE", true),
+        ("mmcme2_adv_probe", "MMCME2_ADV.IN_USE", true),
+        ("mmcme2_base_probe", "MMCME2_ADV.IN_USE", false),
+    ] {
+        let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("drp-ecc-{top}"));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let bit = out.join(format!("{top}.bit"));
+        let run = Command::new(env!("CARGO_BIN_EXE_reticle"))
+            .args(["fpga", "--device", "xc7a35t-ftg256", "--chipdb", &root])
+            .args(["--top", top, "--constraints"])
+            .arg(dir.join(format!("{top}.rcf")))
+            .arg("--output-dir")
+            .arg(&out)
+            .arg("--bitstream")
+            .arg(&bit)
+            .arg(dir.join(format!("{top}.v")))
+            .output()
+            .expect("the reticle binary runs");
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(run.status.success(), "{top}: {stderr}");
+        let read = xc7::read_bit(&std::fs::read(&bit).unwrap()).unwrap();
+        let frames = xc7::FrameData::from_stream(part.layout.clone(), read.frames).unwrap();
+        let decoded = db.decode(&DiskFiles, &frames).unwrap();
+        assert!(
+            decoded.ecc_faults.is_empty(),
+            "{top}: {:?}",
+            decoded.ecc_faults
+        );
+        let tile = decoded
+            .features
+            .iter()
+            .find(|(_, f)| f == block)
+            .map(|(t, _)| t.clone())
+            .unwrap_or_else(|| panic!("{top}: no {block}"));
+        let base = tiles
+            .iter()
+            .find(|t| t.name == tile)
+            .and_then(|t| t.bits.first())
+            .map(|(_, w)| w.baseaddr)
+            .unwrap();
+        let mut apart: Vec<u32> = frames
+            .ecc_faults()
+            .iter()
+            .map(|f| f.address.to_u32())
+            .collect();
+        apart.sort_unstable();
+        // A frame where the block sets nothing has the same code either way.
+        assert!(
+            apart.iter().all(|a| [base + 28, base + 29].contains(a))
+                && left_out != apart.is_empty(),
+            "{top}: frames off the whole frame's code, {apart:x?}, beside {tile} at {base:x}"
+        );
+    }
 }

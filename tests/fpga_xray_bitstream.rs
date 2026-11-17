@@ -385,8 +385,9 @@ fn the_frame_ecc_is_exact_on_vivados_frames() {
 /// than `DWE`), the XADC taken for a clock manager or the other way round, or
 /// a block's bit left in the code or another's taken out of it; every frame
 /// here tells the two codes apart. It says nothing of what the part does with
-/// the code: **nothing here has been on a board**, and this flow still writes
-/// the whole frame's code in both (`ecc_leaves_out_tile`).
+/// the code: **nothing here has been on a board**. This flow writes the
+/// same code since 2026-11-18, and `tests/fpga_xray_xadc.rs`'s
+/// `a_drp_blocks_frames_carry_vivados_ecc` holds its bitstreams to it.
 #[test]
 fn a_drp_blocks_frames_ecc_is_vivados() {
     let text = read("drp_ecc.txt");

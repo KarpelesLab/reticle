@@ -211,11 +211,13 @@ pub fn wanted_ecc_without(
 ///   at a time). The `HCLK_CMT` bits in the same frames are in the code
 ///   either way.
 ///
-/// **This flow writes the whole frame's code for both**, and so differs from
-/// Vivado in those frames wherever Vivado leaves them out. That is not changed
-/// here, since the ChipWhisperer-Husky's bitstreams, measured on a board, have
-/// an XADC and clock managers whose `DWE` is a signal: `--decode` accepts what
-/// Vivado writes, and says which frames of this flow's are not Vivado's.
+/// **This flow writes Vivado's code for both since 2026-11-18**
+/// (`XrayFabric::dynamic_table_bits`). Until then it wrote the whole frame's,
+/// and differed from Vivado wherever Vivado leaves them out, because the
+/// ChipWhisperer-Husky's bitstreams, measured on a board, have an XADC and
+/// clock managers whose `DWE` is a signal; the user decided that day that
+/// parity with Vivado comes first. `--decode` accepts either code for a clock
+/// manager's frames and only Vivado's for an XADC's.
 pub fn ecc_leaves_out_tile(tile_type: &str) -> Option<bool> {
     if tile_type == "MONITOR_BOT" {
         Some(true)

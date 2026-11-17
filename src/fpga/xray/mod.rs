@@ -3073,6 +3073,16 @@ impl XrayFabric {
     /// `SRLC32E` of `INIT` `32'h8000_0001`, whose ECC Vivado writes as zero
     /// because nothing else is in them (`ecc_srl`, which this was read as "a
     /// `FRAME_ECCE2` zeroes the ECC" from). `--decode` had the rule right.
+    ///
+    /// **And a DRP block's registers since 2026-11-18**, by the rule
+    /// [`super::xc7::ecc_leaves_out_tile`] states and `--decode` reads by: an
+    /// XADC's `INIT_*` registers always, and every bit of a clock manager's
+    /// tile when its `DWE` is a signal, one that is not a constant's driver.
+    /// The rule was measured and the writer left on the whole frame's code,
+    /// because the ChipWhisperer-Husky has an XADC and clock managers whose
+    /// `DWE` is a signal, until the user decided that day that parity with
+    /// Vivado comes first. Whether a part reads the code under a plain load is
+    /// not measured.
     pub fn dynamic_table_bits(
         &self,
         graph: &super::arch::RoutingGraph,
@@ -3104,6 +3114,44 @@ impl XrayFabric {
                     continue;
                 }
                 if let Some((address, word, bit)) = self.frames.locate(site.tile, *at) {
+                    let word = u32::try_from(word).unwrap_or(u32::MAX);
+                    out.insert((address.to_u32(), word, bit));
+                }
+            }
+        }
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            let manager = matches!(instance.kind.as_str(), "mmcm" | "pll");
+            if !manager && instance.kind != "sysmon" {
+                continue;
+            }
+            if manager && !writes_its_registers(netlist, instance) {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let tile = graph.sites[site].tile;
+            let positions: Vec<ConfigBit> = if manager {
+                bits.format
+                    .tiles
+                    .iter()
+                    .find(|t| t.tile == tile)
+                    .map(|t| {
+                        (0..t.rows)
+                            .flat_map(|row| (0..t.cols).map(move |col| ConfigBit::new(row, col)))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                (0x40..=0x5F_u32)
+                    .flat_map(|r| (0..16).map(move |b| xadc::xadc_init_bit(r, b)))
+                    .collect()
+            };
+            for at in positions {
+                if bits.get(tile, at) != Some(true) {
+                    continue;
+                }
+                if let Some((address, word, bit)) = self.frames.locate(tile, at) {
                     let word = u32::try_from(word).unwrap_or(u32::MAX);
                     out.insert((address.to_u32(), word, bit));
                 }
@@ -3455,6 +3503,29 @@ impl XrayFabric {
         }
         out
     }
+}
+
+/// Whether a clock manager's `DWE` is a signal, which is what makes Vivado
+/// leave its tile's bits out of their frames' ECC
+/// ([`super::xc7::ecc_leaves_out_tile`]): a signal and not the lookup table of
+/// zeros mapping gives a pin tied low, which Vivado sees as a ground.
+fn writes_its_registers(
+    netlist: &super::place::Netlist,
+    instance: &super::place::Instance,
+) -> bool {
+    let constant = |signal: usize| {
+        netlist.signals[signal].driver.is_none_or(|d| {
+            netlist.instances[netlist.pins[d].instance]
+                .pins
+                .iter()
+                .all(|p| netlist.pins[*p].output || netlist.pins[*p].signal.is_none())
+        })
+    };
+    instance
+        .pins
+        .iter()
+        .map(|p| &netlist.pins[*p])
+        .any(|p| p.role == "dwe" && p.signal.is_some_and(|s| !constant(s)))
 }
 
 /// Splits `xc7a35t-cpg236` into its die and its package.
