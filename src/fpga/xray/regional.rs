@@ -843,7 +843,8 @@ impl XrayFabric {
 
     /// The enables Vivado sets for a regional buffer's line in tiles the buffer
     /// is not in: see the module docs. A tile the region did not load has nothing
-    /// to set, as the far rebuffer of a global clock has not.
+    /// to set here. A `BUFHCE`'s `_USED` is set again, die-wide, by
+    /// `super::clock_rules` for every `BUFHCE` in use, which this one is.
     fn mark_regional_line(
         &self,
         site: &crate::fpga::arch::ArchSite,

@@ -1242,7 +1242,11 @@ fn blink(root: &str) -> Option<Blink> {
     let clock_bits = fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .unwrap();
-    let frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
+    let beyond = fabric
+        .clock_rule_bits(&graph, &routing, &mut tiles)
+        .unwrap();
+    let mut frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames).unwrap();
+    fabric.set_beyond_region(&mut frames, &beyond).unwrap();
     let header = BitHeader::new("blink;UserID=0XFFFFFFFF;Version=reticle", "7a35tcpg236");
     let bytes = xc7::write_bit(&header, &fabric.part, &frames).unwrap();
     let back = xc7::read_bit(&bytes).unwrap();
@@ -1344,7 +1348,7 @@ fn the_clock_path_is_the_one_vivado_built() {
     //
     // The harness drives its clock up the column and takes the
     // `TOP` <- `BOT` pip; blink drives it down and takes the other one.
-    // Both enables are on at each rebuffer the track reaches.
+    // Both enables are on at the rebuffer the track crosses.
     let rebuf = ours.features.at("CLK_BUFG_REBUF_X60Y38");
     assert!(rebuf.contains(&"GCLK0_ENABLE_ABOVE"), "{rebuf:?}");
     assert!(rebuf.contains(&"GCLK0_ENABLE_BELOW"), "{rebuf:?}");
@@ -1358,7 +1362,19 @@ fn the_clock_path_is_the_one_vivado_built() {
             .contains(&"CLK_BUFG_REBUF_R_CK_GCLK0_TOP.CLK_BUFG_REBUF_R_CK_GCLK0_BOT"),
         "the harness's clock goes up it"
     );
-    assert!(ours.clock_bits >= 4, "{} enable bit(s)", ours.clock_bits);
+    // Vivado's rule for the segments' ends (`xray::clock_rules`): the track
+    // runs from the buffer at `Y48` down to the row at `Y26`, so its live
+    // segments are `Y38`..`Y65` and `Y13`..`Y38`, and the far ends get one
+    // enable each, whether or not the region loaded their tiles.
+    assert_eq!(
+        ours.features.at("CLK_BUFG_REBUF_X60Y65"),
+        vec!["GCLK0_ENABLE_ABOVE"]
+    );
+    assert_eq!(
+        ours.features.at("CLK_BUFG_REBUF_X60Y13"),
+        vec!["GCLK0_ENABLE_BELOW"]
+    );
+    assert!(ours.clock_bits >= 1, "{} enable bit(s)", ours.clock_bits);
 
     // ---- And the leaves, which are a shape rather than an equality. ----
     //

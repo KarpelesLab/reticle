@@ -1724,11 +1724,10 @@ fn global_clock_enable(wire: &str) -> Option<String> {
 /// The global clock track the rebuffer wire `wire` is one end of: the
 /// number in `CLK_BUFG_REBUF_R_CK_GCLK<n>_TOP`, with the side.
 ///
-/// This is the same reading as [`global_clock_enable`] and exists
-/// separately because [`super::XrayFabric::enable_global_clocks`] needs
-/// the *number* rather than a feature name: the enables have to be
-/// switched on over the whole column, and a route only ever traverses
-/// the one rebuffer it crosses.
+/// This is the reading [`global_clock_enable`] makes of the wire. The
+/// enables of the rebuffers a route does not cross are
+/// `super::clock_rules`'s, which finds a track by its buffer's and its rows'
+/// wires instead.
 pub(super) fn global_clock_track(wire: &str) -> Option<(&str, u32)> {
     let (track, side) = wire.rsplit_once('_')?;
     if side != "TOP" && side != "BOT" {

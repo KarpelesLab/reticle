@@ -5697,9 +5697,8 @@ fn write_xc7_bitstream(
     // A lookup table a flip-flop's data passes through beside the table's own
     // function keeps that function in its upper half only. See `xray::thru`.
     fabric.configure_route_throughs(&graph, &placement, &routing, &mut tiles)?;
-    // A global clock's rebuffer enables are the one thing no pip carries:
-    // they belong to the whole column the track runs down. See
-    // `XrayFabric::enable_global_clocks`.
+    // A global clock's rebuffer enables at the ends of the segments its
+    // route does not cross, which no pip carries. See `xray::clock_rules`.
     let clock_bits = fabric
         .enable_global_clocks(&graph, &routing, &mut tiles)
         .map_err(|e| e.to_string())?;
@@ -5764,7 +5763,16 @@ fn write_xc7_bitstream(
     } else {
         Default::default()
     };
+    // A clock row's `BUFHCLK<n>_USED` for each `BUFHCE` in use, and what of
+    // either clock rule falls in a tile the region did not load. See
+    // `xray::clock_rules`.
+    let beyond = fabric
+        .clock_rule_bits(&graph, &routing, &mut tiles)
+        .map_err(|e| e.to_string())?;
     let mut frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
+        .map_err(|e| e.to_string())?;
+    fabric
+        .set_beyond_region(&mut frames, &beyond)
         .map_err(|e| e.to_string())?;
     // What `write_bitstream` adds that no netlist asks for: pads, configuration
     // tile bits, then each frame's ECC.

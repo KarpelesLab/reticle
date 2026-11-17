@@ -199,6 +199,8 @@ struct Built {
     sites: Vec<String>,
     /// Set bits the database has no name for.
     unnamed: Vec<String>,
+    /// What `--decode` printed of its bitstream.
+    decoded: String,
 }
 
 fn build(root: &str, name: &str) -> Built {
@@ -228,6 +230,7 @@ fn build(root: &str, name: &str) -> Built {
             log,
             sites: Vec::new(),
             unnamed: Vec::new(),
+            decoded: String::new(),
         };
     }
     let decoded = Command::new(env!("CARGO_BIN_EXE_reticle"))
@@ -242,6 +245,7 @@ fn build(root: &str, name: &str) -> Built {
         log,
         sites,
         unnamed,
+        decoded: text,
     }
 }
 
@@ -398,6 +402,159 @@ fn every_design_of_a_built_family() {
     let Some(answers) = answers() else { return };
     let built = build_all(family(&answers, FAMILIES));
     compare(&built, &answers);
+}
+
+/// The XC7A100T's global clock rebuffers, by the `Y` of their tile names
+/// (`CLK_BUFG_REBUF_X78Y<y>`), and the `Y`s of the rows that have a left
+/// (`HCLK_CMT_X8Y<y>`) and a right (`HCLK_CMT_L_X139Y<y>`) clock management
+/// tile: `tilegrid.json`'s, where a clock row's `CLK_HROW_*_X78Y<y>` has the same
+/// `Y` as its clock management tiles.
+const REBUFFERS: [u32; 8] = [13, 38, 65, 90, 117, 142, 169, 194];
+const LEFT_ROWS: [u32; 4] = [26, 78, 130, 182];
+const RIGHT_ROWS: [u32; 2] = [78, 130];
+
+/// The `Y` a tile's name ends with.
+fn name_y(tile: &str) -> u32 {
+    tile.rsplit_once('Y')
+        .and_then(|(_, y)| y.parse().ok())
+        .unwrap_or(0)
+}
+
+/// How a decoded bitstream's rebuffer enables and clock rows'
+/// `HCLK_CMT_CK_BUFHCLK<n>_USED` differ from what Vivado's two rules make of its
+/// own buffers, rows and `BUFHCE`s: `tools/vivado-parity/clock_rules.py`, which
+/// held them to all 863 of Vivado's bitstreams of the probes on three parts,
+/// ported. A global track's live segments are its buffer's and every one between
+/// it and each clock row it is active in; each sets `ENABLE_BELOW` in the
+/// rebuffer at its smaller name `Y` and `ENABLE_ABOVE` in the other, and nothing
+/// else is set. A row's side has `_USED` for each `BUFHCE` in use there.
+fn clock_rule_differences(decoded: &str) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let segment = |at: u32| {
+        let lo = REBUFFERS.iter().copied().filter(|r| *r < at).max();
+        let hi = REBUFFERS.iter().copied().filter(|r| *r > at).min();
+        (lo, hi)
+    };
+    let features: Vec<(&str, &str)> = decoded
+        .lines()
+        .filter(|l| !l.starts_with(['?', '!']) && !l.starts_with("decoded"))
+        .filter_map(|l| l.split_once(' '))
+        .collect();
+    let mut buffers: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut rows: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (tile, feature) in &features {
+        if tile.starts_with("CLK_BUFG_") && !tile.starts_with("CLK_BUFG_REBUF") {
+            if let Some(k) = feature
+                .strip_prefix("CLK_BUFG_CK_GCLK")
+                .and_then(|r| r.split_once(".CLK_BUFG_BUFGCTRL"))
+                .and_then(|(k, _)| k.parse::<u32>().ok())
+            {
+                buffers.insert(k, name_y(tile));
+            }
+        } else if tile.starts_with("CLK_HROW")
+            && let Some(k) = feature
+                .strip_prefix("CLK_HROW_R_CK_GCLK")
+                .and_then(|r| r.strip_suffix("_ACTIVE"))
+                .and_then(|k| k.parse::<u32>().ok())
+        {
+            rows.entry(k).or_default().push(name_y(tile));
+        }
+    }
+    let have: BTreeSet<String> = features
+        .iter()
+        .filter(|(t, f)| t.starts_with("CLK_BUFG_REBUF") && f.contains("_ENABLE_"))
+        .map(|(t, f)| format!("Y{} {f}", name_y(t)))
+        .collect();
+    let mut want = BTreeSet::new();
+    for (k, at) in &buffers {
+        let mut live = BTreeSet::from([segment(*at)]);
+        for row in rows.get(k).map(Vec::as_slice).unwrap_or_default() {
+            live.insert(segment(*row));
+            let (a, b) = if row < at { (*row, *at) } else { (*at, *row) };
+            for r in REBUFFERS.iter().copied().filter(|r| a < *r && *r < b) {
+                live.insert(segment(r - 1));
+                live.insert(segment(r + 1));
+            }
+        }
+        for (lo, hi) in live {
+            if let Some(lo) = lo {
+                want.insert(format!("Y{lo} GCLK{k}_ENABLE_BELOW"));
+            }
+            if let Some(hi) = hi {
+                want.insert(format!("Y{hi} GCLK{k}_ENABLE_ABOVE"));
+            }
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    out.extend(
+        have.difference(&want)
+            .map(|f| format!("rebuffer {f} set, not the rule's")),
+    );
+    out.extend(
+        want.difference(&have)
+            .map(|f| format!("rebuffer {f} the rule's, not set")),
+    );
+    let mut used = BTreeSet::new();
+    for (tile, feature) in &features {
+        let Some((side, n)) = feature
+            .strip_prefix("BUFHCE.BUFHCE_X")
+            .and_then(|r| r.strip_suffix(".IN_USE"))
+            .and_then(|r| r.split_once('Y'))
+        else {
+            continue;
+        };
+        let y = name_y(tile);
+        if !tile.starts_with("CLK_HROW") {
+            continue;
+        }
+        if side == "0" && LEFT_ROWS.contains(&y) {
+            used.insert(format!("HCLK_CMT_X8Y{y} HCLK_CMT_CK_BUFHCLK{n}_USED"));
+        } else if side == "1" && RIGHT_ROWS.contains(&y) {
+            used.insert(format!("HCLK_CMT_L_X139Y{y} HCLK_CMT_CK_BUFHCLK{n}_USED"));
+        }
+    }
+    let marked: BTreeSet<String> = features
+        .iter()
+        .filter(|(_, f)| f.starts_with("HCLK_CMT_CK_BUFHCLK") && f.ends_with("_USED"))
+        .map(|(t, f)| format!("{t} {f}"))
+        .collect();
+    out.extend(
+        marked
+            .difference(&used)
+            .map(|f| format!("{f} set, not the rule's")),
+    );
+    out.extend(
+        used.difference(&marked)
+            .map(|f| format!("{f} the rule's, not set")),
+    );
+    out
+}
+
+/// **The rebuffer enables and the clock rows' `BUFHCLK<n>_USED` are Vivado's**,
+/// by its two rules ([`clock_rule_differences`]), on every design the gate
+/// builds. Would catch the rebuffer rule back as nextpnr-xilinx's (both enables
+/// in every rebuffer of the column a route crossed), the far end of a segment
+/// left out because its tile is outside the region (the rebuffer at `Y142`
+/// above the row at `Y130`), a segment's two ends swapped, and a `BUFHCE` in
+/// use with no `_USED`, or a `_USED` on the wrong side. Every design here failed
+/// it before 2026-11-18, when the rules were known and not applied because they
+/// changed the ChipWhisperer-Husky's bitstreams. It says nothing of what either
+/// bit does on a part, which nobody has measured.
+#[test]
+fn the_rebuffers_and_clock_rows_are_set_by_vivados_rules() {
+    let Some(built) = gate() else { return };
+    let mut wrong = Vec::new();
+    let mut checked = 0;
+    for (name, one) in built.iter().filter(|(_, one)| one.ok) {
+        checked += 1;
+        wrong.extend(
+            clock_rule_differences(&one.decoded)
+                .into_iter()
+                .map(|d| format!("{name}: {d}")),
+        );
+    }
+    assert!(checked > 40, "only {checked} designs built");
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// **Each design in the gate says it was checked.** `reticle fpga` refuses to
