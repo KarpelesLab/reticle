@@ -7445,6 +7445,27 @@ impl Mapper<'_> {
         }
     }
 
+    /// Whether `net` is driven by a cell output the device declares as a
+    /// pad of its own (a role beginning with `pad`, on a primitive that is
+    /// not the IO buffer).
+    fn drives_its_own_pad(&self, module: &Module, net: NetId) -> bool {
+        module.cells.iter().any(|(_, cell)| {
+            let CellKind::Blackbox(primitive) = &cell.kind else {
+                return false;
+            };
+            let Some(bel) = self.device.bel_named(primitive.as_str()) else {
+                return false;
+            };
+            bel.role != BelRole::Io
+                && cell.outputs.iter().any(|(port, out)| {
+                    *out == net
+                        && bel.ports.iter().any(|(role, names)| {
+                            role.starts_with("pad") && names.split(',').any(|n| n == port.as_str())
+                        })
+                })
+        })
+    }
+
     /// One port's IO buffers. `absorbed` collects the cells this took over
     /// — a tri-state driver that became a bidirectional pad's enable — for
     /// the caller to drop once every port is done.
@@ -7473,6 +7494,14 @@ impl Mapper<'_> {
             } else {
                 PortDir::Out
             };
+        }
+        // A port a hard block drives as its own pad: an iCE40 UltraPlus
+        // `SB_RGBA_DRV`'s `RGB0`..`RGB2` *are* the balls of pins 39 to 41,
+        // with no IO buffer between them and nothing else that may be put
+        // there. The device says so by giving such an output a role that
+        // begins with `pad`, as an IO buffer's ball is `pad`.
+        if dir == PortDir::Out && self.drives_its_own_pad(module, net) {
+            return;
         }
         // The second ball of a differential pair the design instantiated:
         // the buffer on the first configures it, and a buffer of its own

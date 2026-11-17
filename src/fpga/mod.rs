@@ -440,6 +440,7 @@ mod tests {
                 "ice40-lp1k-tq144",
                 "ice40-hx1k-tq144",
                 "ice40-hx8k-ct256",
+                "ice40-up5k-sg48",
                 "ecp5-25f-CABGA381",
                 "ecp5-12f-CABGA256",
                 "ecp5-45f-CABGA381",
@@ -459,6 +460,92 @@ mod tests {
         let again = DeviceDb::parse(&text, file, &mut diags);
         assert_eq!(diags.render(&map), "");
         assert_eq!(*db, again);
+    }
+
+    /// The UltraPlus device file says what `src/fpga/devices/ice40.dev`'s
+    /// header claims of it: the data sheet's 5280 logic cells, IceStorm's
+    /// 39 `sg48` balls with the six global-capable ones marked `clock`, the
+    /// packed cells the backend places, and an RGB driver whose outputs are
+    /// pads of their own. Would catch the file drifting from its own
+    /// account; the counts themselves were checked against the chip
+    /// database, which this test does not read.
+    #[test]
+    fn the_ultraplus_device_file_holds_what_it_says() {
+        let device = target("ice40-up5k-sg48").expect("the UltraPlus ships");
+        assert_eq!(device.family, "ice40");
+        let lut = device.bel_named("SB_LUT4").expect("a lookup table");
+        assert_eq!(lut.count, Some(5280));
+        assert_eq!(device.pins.len(), 39);
+        let clocks: Vec<&str> = device
+            .pins
+            .iter()
+            .filter(|p| p.kind == device::PinKind::Clock)
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(clocks, ["20", "23", "35", "37", "41", "44"]);
+        for cell in ["ICESTORM_LC", "ICESTORM_LC_COMB", "SB_HFOSC", "SB_LFOSC"] {
+            assert!(device.bel_named(cell).is_some(), "{cell}");
+        }
+        let rgb = device.bel_named("SB_RGBA_DRV").expect("the RGB driver");
+        assert_eq!(rgb.port("pad0"), Some("RGB0"));
+        assert_eq!(rgb.site_kind(), "rgba_drv");
+    }
+
+    /// A port the RGB driver drives gets no IO buffer, because the driver's
+    /// output *is* the ball; a port beside it still gets one. Would catch
+    /// the `pad` role being ignored (an `SB_IO` on pin 39 as well as the
+    /// driver) or applied to an ordinary output.
+    #[cfg(feature = "verilog")]
+    #[test]
+    fn a_hard_block_that_drives_its_own_pad_gets_no_io_buffer() {
+        let source = "module top(input clk, output led, output other);\n\
+             SB_RGBA_DRV #(.CURRENT_MODE(\"0b1\"), .RGB0_CURRENT(\"0b000001\")) rgb (\n\
+               .CURREN(1'b1), .RGBLEDEN(1'b1), .RGB0PWM(clk), .RGB1PWM(1'b0),\n\
+               .RGB2PWM(1'b0), .RGB0(led));\n\
+             assign other = clk;\n\
+             endmodule\n";
+        let mut map = SourceMap::new();
+        let id = map.add("t.v".to_owned(), source).unwrap();
+        let mut diags = Diagnostics::new();
+        let ast = crate::verilog::parse_source(
+            &mut map,
+            id,
+            crate::verilog::Dialect::Verilog2005,
+            &mut crate::verilog::NoIncludes,
+            &mut diags,
+        );
+        let mut design = crate::verilog::elaborate_file(
+            &ast,
+            &crate::verilog::ElabOptions::default(),
+            &mut diags,
+        )
+        .expect("the design elaborates");
+        let top = design.top.expect("a top module");
+        let device = target("ice40-up5k-sg48").unwrap();
+        flow::synthesize_for(
+            &mut design,
+            top,
+            device,
+            &Constraints::new(),
+            &FpgaOptions::default(),
+            &mut diags,
+        )
+        .expect("the flow");
+        let buffered: Vec<String> = design
+            .module(top)
+            .cells
+            .iter()
+            .filter(|(_, c)| matches!(&c.kind, crate::ir::CellKind::Blackbox(p) if p.as_str() == "SB_IO"))
+            .map(|(_, c)| c.name.as_str().to_owned())
+            .collect();
+        assert!(
+            buffered.iter().any(|n| n.starts_with("other")),
+            "{buffered:?}"
+        );
+        assert!(
+            !buffered.iter().any(|n| n.starts_with("led")),
+            "{buffered:?}"
+        );
     }
 
     #[test]
