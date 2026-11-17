@@ -148,6 +148,15 @@ program = ["dep:rawusb"]
 # file is plain bytes.
 apicula = ["fpga", "dep:compcol"]
 
+# Unpacking Project IceStorm's iCE40 chip database. The database ships as a
+# Debian package (`reticle fetch icestorm`, see src/bin/reticle/datadir.rs),
+# an `ar` archive holding an xz-compressed tar, and the xz is `compcol`'s,
+# exactly as for `apicula` and for the same reason. Only the fetch needs
+# it: `fpga::icestorm` reads the unpacked text and is part of `fpga`, so a
+# build without this feature still places and routes for an iCE40 given a
+# database it did not fetch itself (RETICLE_ICESTORMDB).
+icestorm = ["fpga", "dep:compcol"]
+
 # --- verification & tooling ---
 # Formal: bounded model checking and equivalence checking over the IR, built
 # on an in-crate SAT solver.

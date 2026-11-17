@@ -15,6 +15,7 @@
 mod args;
 mod cache_store;
 mod datadir;
+mod deb;
 mod sha256;
 mod zip;
 
@@ -703,6 +704,8 @@ Databases:
   prjtrellis-db    Project Trellis' Lattice ECP5 database, LFE5U-12F part (6 MB)
   prjuray-db       Project U-Ray's Xilinx UltraScale+ database, ZU7EV die (47 MB)
   prjuray-db-2020  Project U-Ray's 2020 tile types and ZU3EG wiring (104 MB)
+  icestorm         Project IceStorm's iCE40 database, UltraPlus 5k part (8 MB;
+                   unpacking it needs the `icestorm` feature)
   all              All of them
 
 Each is pinned to one upstream version and checked file by file against

@@ -81,6 +81,14 @@ enum Source {
         suffixes: &'static [&'static str],
         license: &'static str,
     },
+    /// A Debian package, checked whole, from whose data archive the files
+    /// `members` names are taken, each saved under the name beside it.
+    Deb {
+        url: &'static str,
+        sha256: &'static str,
+        size: u64,
+        members: &'static [(&'static str, &'static str)],
+    },
 }
 
 /// Project X-Ray's database: the Artix-7 part of it, which is what the
@@ -197,8 +205,51 @@ pub(crate) const PRJURAY_2020: Database = Database {
     },
 };
 
+/// Project IceStorm's Lattice iCE40 database: the UltraPlus 5k part of it,
+/// which is what the iCE40 flow loads and `tests/fpga_icestorm.rs` reads.
+///
+/// IceStorm's `chipdb-*.txt` files are not in its git repository — icebox's
+/// Python generates them at build time — so this is a **prebuilt** copy:
+/// Debian's `fpga-icestorm-chipdb` package, architecture-independent, in
+/// Debian 13 "trixie", built from IceStorm commit `7fbf8c0` (7 February
+/// 2025). The package is checked whole against its SHA-256 and three files
+/// are taken out of it: the 5k database, its timing data, and the
+/// package's `copyright`, which carries IceStorm's ISC licence and is saved
+/// as `LICENSE`. The 1k, 8k and the rest are not taken, because nothing
+/// reads them yet.
+pub(crate) const ICESTORM: Database = Database {
+    name: "icestorm",
+    version: "0~20250207git7fbf8c0+dfsg1-1",
+    what: "Project IceStorm's iCE40 database (Debian fpga-icestorm-chipdb, ISC), UltraPlus 5k part",
+    env: "RETICLE_ICESTORMDB",
+    probe: "chipdb-5k.txt",
+    source: Source::Deb {
+        url: "https://deb.debian.org/debian/pool/main/f/fpga-icestorm/fpga-icestorm-chipdb_0~20250207git7fbf8c0%2Bdfsg1-1_all.deb",
+        sha256: "91a86bbe689374612333fea6f000a229382cd5572e9d2d69cd505b186c24e9f5",
+        size: 8_253_964,
+        members: &[
+            (
+                "usr/share/fpga-icestorm/chipdb/chipdb-5k.txt",
+                "chipdb-5k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_up5k.txt",
+                "timings_up5k.txt",
+            ),
+            ("usr/share/doc/fpga-icestorm-chipdb/copyright", "LICENSE"),
+        ],
+    },
+};
+
 /// Every database, in the order `reticle fetch` lists them.
-pub(crate) const ALL: [&Database; 5] = [&PRJXRAY, &APICULA, &TRELLIS, &PRJURAY, &PRJURAY_2020];
+pub(crate) const ALL: [&Database; 6] = [
+    &PRJXRAY,
+    &APICULA,
+    &TRELLIS,
+    &PRJURAY,
+    &PRJURAY_2020,
+    &ICESTORM,
+];
 
 /// The database called `name`.
 pub(crate) fn by_name(name: &str) -> Option<&'static Database> {
@@ -393,6 +444,13 @@ impl Database {
             Source::Wheel { url, size, .. } => {
                 format!("one wheel, {}, from {}", megabytes(*size), host(url))
             }
+            Source::Deb { url, size, .. } => {
+                format!(
+                    "one Debian package, {}, from {}",
+                    megabytes(*size),
+                    host(url)
+                )
+            }
         }
     }
 
@@ -422,6 +480,12 @@ impl Database {
                 license,
                 ..
             } => fetch_wheel(url, sha256, prefix, suffixes, license, &scratch),
+            Source::Deb {
+                url,
+                sha256,
+                members,
+                ..
+            } => fetch_deb(url, sha256, members, &scratch),
         };
         if let Err(err) = built {
             let _ = fs::remove_dir_all(&scratch);
@@ -578,6 +642,36 @@ fn fetch_wheel(
     Ok(())
 }
 
+/// The package into memory, checked whole, and the files `members` names
+/// out of its data archive into `scratch`.
+fn fetch_deb(
+    url: &str,
+    sha256_hex: &str,
+    members: &[(&str, &str)],
+    scratch: &Path,
+) -> Result<(), String> {
+    let deb_path = beside(scratch, "deb");
+    let ran = curl(
+        scratch,
+        &["--output".as_ref(), deb_path.as_os_str(), url.as_ref()],
+    )
+    .and_then(|()| fs::read(&deb_path).map_err(|e| format!("cannot read the download back: {e}")));
+    let _ = fs::remove_file(&deb_path);
+    let deb = ran?;
+    let got = sha256::hex(&deb);
+    if got != sha256_hex {
+        return Err(format!(
+            "the package's SHA-256 is {got}, not the {sha256_hex} it was pinned to"
+        ));
+    }
+    let paths: Vec<&str> = members.iter().map(|(from, _)| *from).collect();
+    let files = crate::deb::data_files(&deb, &paths)?;
+    for ((_, target), bytes) in members.iter().zip(files) {
+        fs::write(scratch.join(target), bytes).map_err(|e| format!("`{target}`: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Runs `curl` in `dir` with `args`, over HTTPS only, redirects
 /// included, and failing on any HTTP error rather than saving the page.
 fn curl(dir: &Path, args: &[&OsStr]) -> Result<(), String> {
@@ -718,7 +812,7 @@ mod tests {
         let missing = PRJXRAY.missing_files(&dir).unwrap();
         let all = parse_manifest(match &PRJXRAY.source {
             Source::Files { manifest, .. } => manifest,
-            Source::Wheel { .. } => unreachable!(),
+            Source::Wheel { .. } | Source::Deb { .. } => unreachable!(),
         })
         .unwrap();
         // Only the probe is there.
@@ -914,6 +1008,6 @@ mod tests {
                 db.probe
             );
         }
-        assert_eq!(ALL.len(), 5);
+        assert_eq!(ALL.len(), 6);
     }
 }
