@@ -574,6 +574,12 @@ pub enum TiePolicy {
     /// `super::bufg::wants`). Left, as [`TiePolicy::Idle`] leaves an input,
     /// when no such input is free.
     OneOverMux,
+    /// A clock input behind its own input mux tied to zero as Vivado ties a
+    /// clock manager's unused `CLKIN2` (`super::cmt::wants`): the mux's input
+    /// from the interconnect (`CMT_*_CLK_IN2_INT`), and that grounded as
+    /// [`TiePolicy::ClockZero`] grounds a clock pin, over a bounce. Left as
+    /// [`TiePolicy::Idle`] leaves an input when that cannot be had.
+    ClockZeroOverMux,
 }
 
 /// Whether `role` is an address bit the block's **width mode does not
@@ -1676,6 +1682,46 @@ fn tie_one_over_mux(
     Err("no input of the pin's mux reads one undriven and is free".to_owned())
 }
 
+/// Ties `pin` to zero behind its own input mux, for
+/// [`TiePolicy::ClockZeroOverMux`]: the first pip into `pin` with bits from a
+/// `*_IN2_INT` wire, the mux's input from the interconnect, whose source a
+/// ground reaches as [`tie`] or [`tie_over_bounce`] reaches one. Vivado's road
+/// to a clock manager's unused `CLKIN2`: `GND_WIRE`, `GFAN1`, `FAN_ALT5`,
+/// `FAN_BOUNCE5`, `CLK1` of the interconnect beside it, then
+/// `CMT_LR_LOWER_B_MMCM_CLKIN2.CMT_R_LOWER_B_CLK_IN2_INT` (the `MMCME2_BASE`
+/// and `MMCME2_ADV` probes; the `PLLE2_*` likewise, on `CLK0`).
+fn tie_zero_over_mux(
+    arch: &Arch,
+    graph: &RoutingGraph,
+    vcc_defaults: &BTreeMap<String, BTreeSet<String>>,
+    used: &HashSet<NodeId>,
+    ties: &mut Ties,
+    pin: NodeId,
+) -> Result<(), String> {
+    if used.contains(&pin) || ties.one.contains(&pin) {
+        return Err("the pin carries a signal or a one".to_owned());
+    }
+    for pip in graph.incoming(pin) {
+        if graph.pip_bits(*pip).is_empty()
+            || !graph.wire(graph.pip(*pip).from).name.ends_with("IN2_INT")
+        {
+            continue;
+        }
+        let from = graph.pip(*pip).from;
+        if used.contains(&from) || ties.one.contains(&from) {
+            continue;
+        }
+        let tied = tie(arch, graph, vcc_defaults, used, ties, from, Bit::Zero)
+            .or_else(|_| tie_over_bounce(graph, used, ties, from));
+        if tied.is_ok() {
+            ties.pips.push(*pip);
+            ties.zero.insert(pin);
+            return Ok(());
+        }
+    }
+    Err("no input of the pin's mux from the interconnect can be grounded".to_owned())
+}
+
 /// Ties a clock pin's node to zero over a bounce: the first node of its
 /// [`fixed_chain`] that a programmable pip reaches from a `*_BOUNCE*` wire, whose
 /// own fixed chain a programmable pip reaches from a ground fan. Three pips and
@@ -2761,6 +2807,8 @@ impl XrayFabric {
                     super::config::wants(instance, &graph.sites[site], netlist, &mut wants);
                     // A `BUFGCE`'s `I1`, as Vivado ties it: see `super::bufg`.
                     super::bufg::wants(instance, &graph.sites[site], netlist, &mut wants);
+                    // A clock manager's open inputs, likewise: see `super::cmt`.
+                    super::cmt::wants(instance, &graph.sites[site], netlist, &mut wants);
                 }
                 continue;
             }
@@ -2848,7 +2896,10 @@ impl XrayFabric {
         wants.sort_by_key(|(want, ..)| {
             matches!(
                 want,
-                TiePolicy::Idle | TiePolicy::ClockZero | TiePolicy::OneOverMux
+                TiePolicy::Idle
+                    | TiePolicy::ClockZero
+                    | TiePolicy::OneOverMux
+                    | TiePolicy::ClockZeroOverMux
             )
         });
         for (want, instance, role, node) in wants {
@@ -2862,10 +2913,14 @@ impl XrayFabric {
             } else {
                 Bit::Zero
             };
-            let mut tied = if want == TiePolicy::OneOverMux {
-                tie_one_over_mux(&self.arch, graph, vcc, &used, &mut ties, node)
-            } else {
-                tie(&self.arch, graph, vcc, &used, &mut ties, node, value)
+            let mut tied = match want {
+                TiePolicy::OneOverMux => {
+                    tie_one_over_mux(&self.arch, graph, vcc, &used, &mut ties, node)
+                }
+                TiePolicy::ClockZeroOverMux => {
+                    tie_zero_over_mux(&self.arch, graph, vcc, &used, &mut ties, node)
+                }
+                _ => tie(&self.arch, graph, vcc, &used, &mut ties, node, value),
             };
             if want == TiePolicy::ClockZero && tied.is_err() {
                 tied = tie_over_bounce(graph, &used, &mut ties, node);
@@ -2873,7 +2928,13 @@ impl XrayFabric {
             match (tied, want) {
                 (Ok(()), TiePolicy::One | TiePolicy::OneOverMux) => report.ones += 1,
                 (Ok(()), _) => report.zeros += 1,
-                (Err(_), TiePolicy::Idle | TiePolicy::ClockZero | TiePolicy::OneOverMux) => {
+                (
+                    Err(_),
+                    TiePolicy::Idle
+                    | TiePolicy::ClockZero
+                    | TiePolicy::OneOverMux
+                    | TiePolicy::ClockZeroOverMux,
+                ) => {
                     report.idle_left += 1;
                 }
                 (Err(message), _) => {

@@ -557,6 +557,38 @@ fn the_rebuffers_and_clock_rows_are_set_by_vivados_rules() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// **A clock manager's unused `CLKIN2` is grounded as Vivado grounds it**,
+/// through the input mux's way from the interconnect,
+/// `CMT_LR_LOWER_B_MMCM_CLKIN2.CMT_*_LOWER_B_CLK_IN2_INT` or
+/// `CMT_TOP_R_UPPER_T_PLLE2_CLKIN2.CMT_TOP_*_UPPER_T_PLLE2_CLK_IN2_INT`, from
+/// the interconnect's `CLK` pin over a bounce and a ground fan: the route of
+/// Vivado 2026.1's `GND` net on all four manager probes
+/// (`docs/fpga-vivado-parity.md`), and on every manager of the gate here.
+/// Would catch the tie left out, as it was until 2026-11-18, when `CLKIN2`
+/// stayed on the mux's option with no bits (`FREQ_BB3` on an MMCM, `FREQ_BB0` on
+/// a PLL) and read whatever that carried. Would not catch the tie left out
+/// where the bounce is taken, which this flow does not tie and Vivado reaches
+/// through a slice output instead; nor say what the part does with an unused
+/// `CLKIN2`, which nobody has measured.
+#[test]
+fn an_unused_clkin2_is_grounded_through_the_interconnect() {
+    let Some(built) = gate() else { return };
+    let mut seen = 0;
+    for (name, one) in built
+        .iter()
+        .filter(|(name, one)| one.ok && (name.starts_with("mmcm_") || name.starts_with("pll_")))
+    {
+        seen += 1;
+        let ties = one
+            .decoded
+            .lines()
+            .filter(|l| l.contains("_CLKIN2.") && l.ends_with("_CLK_IN2_INT"))
+            .count();
+        assert_eq!(ties, 1, "{name}: CLKIN2 not from the interconnect");
+    }
+    assert!(seen >= 10, "only {seen} clock managers built");
+}
+
 /// **Each design in the gate says it was checked.** `reticle fpga` refuses to
 /// finish when the arcs its bits select are not the ones its router chose, and
 /// [`each_site_holds_what_vivados_does`] already fails on an unnamed bit; this

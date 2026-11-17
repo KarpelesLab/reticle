@@ -1679,6 +1679,71 @@ impl XrayFabric {
     }
 }
 
+/// A clock manager's inputs that are open or tied low, grounded as Vivado
+/// grounds them.
+///
+/// **Vivado 2026.1**, the routes of its `GND` nets on its own placement of the
+/// four manager probes (`MMCME2_ADV`, `MMCME2_BASE`, `PLLE2_ADV`,
+/// `PLLE2_BASE`), 2026-11-18:
+///
+/// | pin | how it is grounded |
+/// |---|---|
+/// | `CLKIN2`, unused | through the mux's input from the interconnect, `CLK_IN2_INT`, from `CLK1` (`CLK0` on a PLL) over `FAN_BOUNCE5`, `FAN_ALT5`, `GFAN1`: [`TiePolicy::ClockZeroOverMux`] |
+/// | `DCLK`, `PSCLK` | a clock pin's way, over `FAN_BOUNCE5`: [`TiePolicy::ClockZero`] |
+/// | `DEN`, `DWE`, `DADDR`, `DI` | from a ground fan, `GFAN0` or `GFAN1`, onto the `IMUX` |
+///
+/// The probes of the `_ADV` cells drive every DRP pin, so only `CLKIN2` is
+/// grounded there; a `_BASE` has none of them, and Vivado grounds all of
+/// them. `RST`, `PWRDWN`, `PSEN` and `PSINCDEC` low, and `CLKINSEL` high, are
+/// on Vivado's `VCC` net from an undriven `IMUX` with the pin's inverter
+/// where it needs one, which is what this flow writes already (the module
+/// documentation's "The reset that reads as one"). `CLKIN2`, `DCLK` and
+/// `PSCLK` used to read one undriven here, and a DRP pin the design leaves open
+/// did too. A DRP pin tied low in the source is not one of these: mapping gives
+/// it a lookup table of zeros, as it gives any constant, and it is routed from
+/// that, where Vivado grounds it from a fan; that difference is still there.
+/// The DRP's are left when no fan is free, rather than refused, since nothing
+/// reads them while `DCLK` has no edge, which is UG472's word and not measured;
+/// Vivado had a free fan for each. And `CLKIN2`'s bounce is the one the
+/// interconnect's other `CLK` pin takes, so a `CLKIN1` routed through it, as a
+/// clock on the interconnect is, leaves `CLKIN2` untied (the `PLLE2_*` probes on
+/// this flow's placement), where Vivado on the same routes grounds it through
+/// a slice's output. Applied on 2026-11-18, when the user decided that parity
+/// with Vivado comes before an unchanged ChipWhisperer-Husky bitstream.
+pub(super) fn wants(
+    instance: &crate::fpga::place::Instance,
+    site: &crate::fpga::arch::ArchSite,
+    netlist: &Netlist,
+    wants: &mut Vec<super::bram::Want>,
+) {
+    use super::bram::TiePolicy;
+    let mmcm = match instance.kind.as_str() {
+        "mmcm" => true,
+        "pll" => false,
+        _ => return,
+    };
+    let low = |role: &str| match pins_of_role(instance, netlist, role) {
+        None => true,
+        Some(pin) => pin.signal.is_none() && pin.constant == Some(Bit::Zero),
+    };
+    let mut tie = |role: &str, policy: TiePolicy| {
+        if !low(role) {
+            return;
+        }
+        if let Some(node) = site.pin(role) {
+            wants.push((policy, instance.name.clone(), role.to_owned(), node));
+        }
+    };
+    tie("clkin2", TiePolicy::ClockZeroOverMux);
+    tie("dclk", TiePolicy::ClockZero);
+    if mmcm {
+        tie("psclk", TiePolicy::ClockZero);
+    }
+    for role in ["den", "dwe"].into_iter().chain(DADDR).chain(DI) {
+        tie(role, TiePolicy::Idle);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
