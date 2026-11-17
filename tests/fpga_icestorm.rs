@@ -157,11 +157,41 @@ fn every_bit_of_a_reference_decodes() {
             decoded.unexplained
         );
         eprintln!(
-            "{name}: {} set bits, {} arcs, {} function fields, 0 unexplained",
+            "{name}: {} set bits, {} arcs, {} function fields, 0 unexplained; {} block RAMs \
+             (read and write modes {:?}) holding {} content bits, {} single-port RAMs",
             decoded.bits,
             decoded.arcs.len(),
-            decoded.functions.len()
+            decoded.functions.len(),
+            decoded.rams.len(),
+            decoded
+                .rams
+                .values()
+                .map(|r| (r.read_mode, r.write_mode))
+                .collect::<Vec<_>>(),
+            decoded.ram_bits,
+            decoded.sprams.len()
         );
+        // A reference nextpnr placed and routed from Reticle's own export of
+        // `ram_selftest.v` holds the same block RAMs, modes and contents
+        // that Reticle's backend writes for it, wherever each one is placed.
+        #[cfg(feature = "verilog")]
+        if name == "ram_selftest" {
+            let graph = fabric.arch.build_graph();
+            let built = build_board_design("ram_selftest", &fabric, &graph);
+            let key = |r: &reticle::fpga::icestorm::RamConfig| {
+                (r.read_mode, r.write_mode, r.contents.clone())
+            };
+            let mut theirs: Vec<_> = decoded.rams.values().map(key).collect();
+            let mut ours: Vec<_> = built.decoded.rams.values().map(key).collect();
+            theirs.sort();
+            ours.sort();
+            assert!(
+                theirs == ours,
+                "nextpnr's block RAMs differ from this backend's"
+            );
+            assert_eq!(decoded.sprams.len(), built.decoded.sprams.len());
+            eprintln!("{name}: the same block RAMs, modes and contents as this backend writes");
+        }
     }
 }
 
@@ -634,6 +664,31 @@ mod packing {
         );
     }
 
+    /// A carry out read by the next carry *and* by other logic, which an
+    /// iCE40 carry cannot hand to both: packing puts a tap cell between the
+    /// two (`icestorm::pack`, rule 5), passing the carry on and giving the
+    /// fabric a copy. This was refused before; `ram_selftest.v` needs it for
+    /// its hex digits. The test fails if the tap's carry does not pass its
+    /// carry in through (its `I1` left at zero makes `CO` a constant) or its
+    /// table reads the wrong input.
+    #[test]
+    fn a_carry_read_inside_and_outside_its_chain_packs_to_the_same_logic() {
+        let source = "module top(input [3:0] v, output [7:0] h);\n\
+                      assign h = v < 4'd10 ? 8'h30 + {4'd0, v} : 8'h57 + {4'd0, v};\n\
+                      endmodule\n";
+        let (design, top) = mapped(source);
+        let mut packed = design.modules[top].clone();
+        pack::pack(&mut packed).expect("packs");
+        assert!(
+            packed
+                .cells
+                .iter()
+                .any(|(_, c)| c.name.as_str().contains("$tap")),
+            "the design no longer needs a tap, so this test proves nothing about one"
+        );
+        prove("tap", source);
+    }
+
     #[test]
     fn a_counter_with_enable_and_reset_packs_to_the_same_logic() {
         prove(
@@ -688,6 +743,180 @@ mod packing {
 /// not: a bit that decodes to a *legal but wrong* configuration — an IO's
 /// input enable in the wrong block, say. That is what the board said, and
 /// what `docs/fpga-icestorm.md` records.
+/// Builds `testdata/fpga/ice40up/<name>.v` (with the `.rcf` beside it)
+/// through `icestorm::implement`, or `None` with the reason printed when
+/// the database is absent.
+#[cfg(feature = "verilog")]
+fn build_board_design(
+    name: &str,
+    fabric: &IceFabric,
+    graph: &reticle::fpga::arch::RoutingGraph,
+) -> reticle::fpga::icestorm::Implemented {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
+    use reticle::source::SourceMap;
+
+    let device = target("ice40-up5k-sg48").expect("the device ships");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/ice40up");
+    let source = std::fs::read_to_string(dir.join(format!("{name}.v"))).unwrap();
+    let rcf = std::fs::read_to_string(dir.join(format!("{name}.rcf"))).unwrap();
+    let mut map = SourceMap::new();
+    let id = map.add(format!("{name}.v"), source).unwrap();
+    let cid = map.add(format!("{name}.rcf"), rcf.clone()).unwrap();
+    let mut diags = Diagnostics::new();
+    let ast = reticle::verilog::parse_source(
+        &mut map,
+        id,
+        reticle::verilog::Dialect::Verilog2005,
+        &mut reticle::verilog::NoIncludes,
+        &mut diags,
+    );
+    let mut design = reticle::verilog::elaborate_file(
+        &ast,
+        &reticle::verilog::ElabOptions::default(),
+        &mut diags,
+    )
+    .expect("the design elaborates");
+    let top = design.top.expect("a top module");
+    let constraints = Constraints::parse(&rcf, cid, &mut diags);
+    synthesize_for(
+        &mut design,
+        top,
+        device,
+        &constraints,
+        &FpgaOptions::default(),
+        &mut diags,
+    )
+    .expect("the flow");
+    assert!(!diags.has_errors(), "{name}: {}", diags.render(&map));
+    reticle::fpga::icestorm::implement(
+        &design,
+        top,
+        device,
+        &constraints,
+        fabric,
+        graph,
+        &reticle::fpga::place::PlaceOptions::default(),
+    )
+    .unwrap_or_else(|e| panic!("{name}: {e}"))
+}
+
+/// A read-only memory of `ram_selftest.v`: its name, width, depth and words.
+#[cfg(feature = "verilog")]
+type Rom = (&'static str, u32, u32, fn(u32) -> u32);
+
+/// The block RAM contents a read-only memory of `depth` words of `width`
+/// bits should have in the `.asc`, word `a` being `word(a)`, laid out as
+/// `docs/fpga.md` ("Block RAM contents") says: the row is the low eight
+/// address bits, the bits above them pick word `s` of the row, and data bit
+/// `j` of word `s` is row bit `(16 / width) * j + s`; row `r` is bits
+/// `16 * (r % 16) ..` of line `r / 16`.
+#[cfg(feature = "verilog")]
+fn expected_contents(width: u32, depth: u32, word: impl Fn(u32) -> u32) -> Vec<[bool; 256]> {
+    let mut lines = vec![[false; 256]; 16];
+    let per = 16 / width;
+    for a in 0..depth {
+        let (row, s) = (a % 256, a / 256);
+        for j in 0..width {
+            if word(a) >> j & 1 != 0 {
+                let bit = per * j + s;
+                lines[(row / 16) as usize][(16 * (row % 16) + bit) as usize] = true;
+            }
+        }
+    }
+    lines
+}
+
+/// The design that exercised both kinds of RAM on a board,
+/// `ram_selftest.v`, builds through `icestorm::implement` with every bit
+/// explained, the connections exactly the router's, and — the third check,
+/// for RAMs — its eight block RAMs and four single-port RAMs read back from
+/// the bitstream exactly as placed. And the four read-only ones hold, in
+/// the `.asc`, exactly the contents the RTL's `initial` loops compute, laid
+/// out as `docs/fpga.md` says, one in each width.
+///
+/// What it would catch: a RAM pin on a wire that is not the RAM's (no
+/// route, or an arc the bits do not explain), a mode written into the wrong
+/// tile or the wrong bits (read back differently), contents dropped or
+/// misplaced on the way from the netlist's `INIT_`s into the image (the
+/// contents comparison), the stream losing them (the round trip), or the
+/// mapping's narrow-mode layout drifting from what the documentation says.
+/// What it would not: a layout that is consistently wrong in the
+/// documentation, the mapping and this test together — the bit order is
+/// what the board is for, and `docs/fpga-icestorm.md` records that it read
+/// back every word.
+#[cfg(feature = "verilog")]
+#[test]
+fn both_kinds_of_ram_build_and_read_back() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let built = build_board_design("ram_selftest", &fabric, &graph);
+    assert!(built.decoded.unexplained.is_empty());
+    assert_eq!(built.decoded.arcs.len(), built.chosen);
+    assert_eq!(
+        built.rams, 8,
+        "a block RAM per width, read-only and written"
+    );
+    assert_eq!(built.sprams, 4, "every single-port RAM");
+    assert_eq!(built.decoded.rams.len(), 8);
+    assert_eq!(built.decoded.sprams.len(), 4);
+    let modes: Vec<(u32, u32)> = built
+        .decoded
+        .rams
+        .values()
+        .map(|r| (r.read_mode, r.write_mode))
+        .collect();
+    for mode in 0..4 {
+        assert_eq!(
+            modes.iter().filter(|m| **m == (mode, mode)).count(),
+            2,
+            "two block RAMs in mode {mode}: {modes:?}"
+        );
+    }
+    let roms: [Rom; 4] = [
+        ("rom16", 16, 256, |i| ((i ^ 0x5a) << 8) | (!i & 0xff)),
+        ("rom8", 8, 512, |i| {
+            (i & 0xff) ^ (((i >> 8) & 1) << 7 | ((i >> 2) & 0x7f)) ^ 0xc3
+        }),
+        ("rom4", 4, 1024, |i| {
+            (i & 15) ^ ((i >> 4) & 15) ^ (((i >> 8) & 3) << 2 | ((i >> 8) & 3))
+        }),
+        ("rom2", 2, 2048, |i| {
+            (i & 3) ^ ((i >> 2) & 3) ^ ((i >> 9) & 3)
+        }),
+    ];
+    for (name, width, depth, word) in &roms {
+        let want = expected_contents(*width, *depth, word);
+        let mode = match width {
+            16 => 0,
+            8 => 1,
+            4 => 2,
+            _ => 3,
+        };
+        let found = built
+            .decoded
+            .rams
+            .values()
+            .any(|r| r.contents == want && r.read_mode == mode);
+        assert!(found, "no block RAM holds {name}'s contents as documented");
+    }
+    // The contents survive the stream.
+    let back = Image::from_bin(&built.image.to_bin()).unwrap();
+    assert_eq!(back.ram_data, built.image.ram_data);
+    assert_eq!(back.tiles, built.image.tiles);
+    eprintln!(
+        "ram_selftest: {} logic cells, {} set bits, {} arcs, {} block RAMs ({} content bits), {} \
+         single-port RAMs, 0 unexplained",
+        built.pack.cells,
+        built.decoded.bits,
+        built.chosen,
+        built.rams,
+        built.decoded.ram_bits,
+        built.sprams
+    );
+}
+
 #[cfg(feature = "verilog")]
 #[test]
 fn the_board_designs_build_and_every_bit_decodes() {

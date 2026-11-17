@@ -31,7 +31,11 @@
 //!    cell, a *feed-in* whose carry operands are that constant, so that its
 //!    carry out is the constant whatever is below it. A chain's last carry
 //!    out read by anything but the chain is handed to the fabric by a
-//!    *feed-out* cell above it, whose table passes its carry in through.
+//!    *feed-out* cell above it, whose table passes its carry in through. A
+//!    carry out read by the next carry *and* by other logic gets a *tap*
+//!    between the two: a feed-out whose carry also passes its carry in on
+//!    (its `I1` a one and `I2` a zero make `CO = CI`), the cells above
+//!    reading the tap's output and the next carry its carry out.
 //! 6. The flip-flop's enable and set/reset, unconnected, read as one and
 //!    zero; tied to those constants they are left unconnected.
 //! 7. A flip-flop's enable and synchronous set/reset go onto the cell's
@@ -48,9 +52,18 @@
 //! 8. A register **declared to start at one** is refused, naming it: an
 //!    iCE40 flip-flop starts at zero and nothing here inverts one.
 //!
+//! 9. Every other cell's input bit **tied to a one** — an IO buffer's, the
+//!    RGB driver's, a block RAM's read enable, a single-port RAM's
+//!    `POWEROFF` or one bit of its `MASKWREN` — is wired to a cell whose
+//!    table is all ones, because an unrouted input reads zero. A bit tied
+//!    to a zero is left unrouted, except the two a block RAM reads as a
+//!    *one* when nothing drives them, its clock enables `RCLKE` and
+//!    `WCLKE` (`icebox_vlog`'s defaults, and the library's); a zero there
+//!    is refused, since it would make a port that never acts.
+//!
 //! What it refuses, with a message naming the cell: a clock, an enable of
-//! zero or a set/reset of one tied to a constant, a carry out read both by
-//! the chain and by the fabric, and an initial one.
+//! zero or a set/reset of one tied to a constant, a block RAM clock enable
+//! tied to zero, and an initial one.
 
 use std::collections::BTreeMap;
 
@@ -195,16 +208,21 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
         id: CellId,
         primitive: String,
         inputs: BTreeMap<String, SigBit>,
+        /// Every input, one-bit or not, as its bits from the lowest.
+        wide: BTreeMap<String, Vec<SigBit>>,
         outputs: BTreeMap<String, (NetId, SigBit)>,
     }
     let mut seen: Vec<Seen> = Vec::new();
-    // How many readers each slot has, counting a top-level output port.
+    // How many readers each slot has, counting a top-level output port;
+    // and how many of those are output ports.
     let mut readers: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut port_reads: BTreeMap<usize, usize> = BTreeMap::new();
     for (id, cell) in module.cells.iter() {
         let CellKind::Blackbox(p) = &cell.kind else {
             continue;
         };
         let mut inputs = BTreeMap::new();
+        let mut wide = BTreeMap::new();
         for (port, e) in &cell.inputs {
             let bits = bits_of(*e)?;
             for b in &bits {
@@ -215,6 +233,10 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
             if let [b] = bits.as_slice() {
                 inputs.insert(port.as_str().to_owned(), view.canonical(*b));
             }
+            wide.insert(
+                port.as_str().to_owned(),
+                bits.iter().map(|b| view.canonical(*b)).collect::<Vec<_>>(),
+            );
         }
         let mut outputs = BTreeMap::new();
         for (port, net) in &cell.outputs {
@@ -229,6 +251,7 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
             id,
             primitive: p.as_str().to_owned(),
             inputs,
+            wide,
             outputs,
         });
     }
@@ -239,28 +262,60 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
             for b in bits {
                 if let SigBit::Slot(s) = view.canonical(b) {
                     *readers.entry(s).or_default() += 1;
+                    *port_reads.entry(s).or_default() += 1;
                 }
             }
         }
     }
 
-    // Inputs of the other cells (the IO buffers, the RGB driver, the
-    // oscillators) tied to a one: an unrouted input reads zero, so these are
-    // wired to a cell that drives a one.
-    let tied_high: Vec<(CellId, String)> = seen
-        .iter()
-        .filter(|s| {
+    // Rule 9: input bits of the other cells (the IO buffers, the RGB
+    // driver, the oscillators, the RAMs) tied to a one. An unrouted input
+    // reads zero, so these are wired to a cell that drives a one.
+    let others = || {
+        seen.iter().filter(|s| {
             !matches!(s.primitive.as_str(), "SB_LUT4" | "SB_CARRY")
                 && ff_kind(&s.primitive).is_none()
         })
+    };
+    let tied_high: Vec<(CellId, String)> = others()
+        .filter(|s| {
+            s.wide.iter().any(|(port, bits)| {
+                port.as_str() != "PACKAGE_PIN" && bits.contains(&SigBit::Const(Bit::One))
+            })
+        })
         .flat_map(|s| {
-            s.inputs
+            s.wide
                 .iter()
-                .filter(|(port, bit)| {
-                    **bit == SigBit::Const(Bit::One) && port.as_str() != "PACKAGE_PIN"
+                .filter(|(port, bits)| {
+                    port.as_str() != "PACKAGE_PIN" && bits.contains(&SigBit::Const(Bit::One))
                 })
                 .map(|(port, _)| (s.id, port.clone()))
                 .collect::<Vec<_>>()
+        })
+        .collect();
+    // The other way round: a block RAM's clock enable reads one undriven,
+    // so a zero on it would need a driver of its own, and would make a port
+    // that never acts. No mapping writes one.
+    for s in others().filter(|s| s.primitive == "SB_RAM40_4K") {
+        for port in ["RCLKE", "WCLKE"] {
+            if s.inputs.get(port) == Some(&SigBit::Const(Bit::Zero)) {
+                return Err(PackError(format!(
+                    "`{}`'s {port} is tied to zero, so that port of the block RAM never acts; \
+                     an undriven {port} reads one, and this flow does not drive a zero onto it",
+                    module.cells[s.id].name
+                )));
+            }
+        }
+    }
+    // Each tied port's bits, from the lowest, for rebuilding it below.
+    let tied_bits: Vec<Vec<SigBit>> = tied_high
+        .iter()
+        .map(|(id, port)| {
+            seen.iter()
+                .find(|s| s.id == *id)
+                .and_then(|s| s.wide.get(port))
+                .cloned()
+                .unwrap_or_default()
         })
         .collect();
     // Rule 8: a flip-flop declared to start at one. An iCE40 flip-flop
@@ -569,18 +624,61 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
         };
         let SigBit::Slot(slot) = co else { continue };
         let next = carry_of_cin.get(&co).copied();
-        let inside = next.map_or(0, |n| {
-            1 + built[n].inputs.iter().filter(|b| **b == Some(co)).count()
-        });
-        let total = readers.get(&slot).copied().unwrap_or(0);
-        if total > inside {
-            if next.is_some() {
-                return Err(PackError(format!(
-                    "the carry out of `{}` is read by the next carry and by other logic; an \
-                     iCE40 carry out reaches only the cell above it, so this flow does not build \
-                     that",
-                    built[i].name
-                )));
+        // Who reads it outside the next cell of the chain: another cell's
+        // table, carry or flip-flop control, a cell that is not a logic
+        // cell, or a port. (Counting the readers *inside* instead, from the
+        // next cell's inputs, went wrong once: that cell had the carry in on
+        // its fourth input with no table of the netlist reading it there,
+        // so a reader elsewhere was not counted and was left on a carry out
+        // the fabric cannot route from.)
+        let total: usize = built
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| Some(*k) != next)
+            .map(|(_, lc)| {
+                lc.inputs.iter().filter(|b| **b == Some(co)).count()
+                    + [lc.cin, lc.clk, lc.en, lc.sr]
+                        .iter()
+                        .filter(|b| **b == Some(co))
+                        .count()
+            })
+            .sum::<usize>()
+            + others()
+                .map(|s| s.wide.values().flatten().filter(|b| **b == co).count())
+                .sum::<usize>()
+            + port_reads.get(&slot).copied().unwrap_or(0);
+        if total > 0 {
+            if let Some(n) = next {
+                // Read by the next carry and by logic: a tap cell goes
+                // between the two, its carry passing the carry in through
+                // (`I1` one and `I2` zero make `CO = CI`) and its table
+                // handing it to the fabric (`I3` is the carry in, `16'hFF00`
+                // passes it), which is nextpnr's way too. The cells above
+                // read it from the tap's output, the next carry from its
+                // carry out.
+                report.feed_out += 1;
+                new_nets.push(format!("{}$co", built[i].name));
+                let raw = new_nets.len() - 1;
+                new_nets.push(format!("{}$co_pass", built[i].name));
+                let pass = new_nets.len() - 1;
+                let old = built[i].cout;
+                cout_override.insert(i, raw);
+                let v = want_vcc(&mut new_nets);
+                extra.push(Lc {
+                    name: format!("{}$tap", built[i].name),
+                    span: built[i].span,
+                    init: 0xFF00,
+                    carry: true,
+                    out: old,
+                    ..Lc::new(span)
+                });
+                let at = built.len() + extra.len() - 1;
+                cin_override.insert(at, Pin::New(raw));
+                pin_override.insert((at, 3), Pin::New(raw));
+                pin_override.insert((at, 1), Pin::New(v));
+                cout_override.insert(at, pass);
+                cin_override.insert(n, Pin::New(pass));
+                continue;
             }
             // The carry gets a fresh net; the feed-out drives the old one.
             report.feed_out += 1;
@@ -729,9 +827,23 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
     }
     if let Some(v) = vcc {
         // `retain` renumbers the cells it keeps, so the tied cells are found
-        // again by name.
-        for (name, port) in &tied_names {
-            let e = net_bit(module, new_net_ids[v], None, span);
+        // again by name. A port is rebuilt bit by bit, its ones taken from
+        // the cell that drives a one and every other bit as it was.
+        for ((name, port), bits) in tied_names.iter().zip(&tied_bits) {
+            let mut parts: Vec<ExprId> = bits
+                .iter()
+                .rev()
+                .map(|b| match b {
+                    SigBit::Const(Bit::One) => expr_for(module, &Pin::New(v)),
+                    other => expr_for(module, &Pin::Bit(*other)),
+                })
+                .collect();
+            let e = if parts.len() == 1 {
+                parts.remove(0)
+            } else {
+                let width = u32::try_from(parts.len()).unwrap_or(u32::MAX);
+                module.add_expr(Expr::new(ExprKind::Concat(parts), Type::bits(width), span))
+            };
             if let Some((_, c)) = module
                 .cells
                 .iter_mut()

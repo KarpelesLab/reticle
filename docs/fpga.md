@@ -29,7 +29,7 @@ writes its bitstream, without calling another program.
 | Family | Parts | Route out | Own place and route |
 |--------|-------|-----------|---------------------|
 | `ice40` | `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx8k-ct256` | `nextpnr-ice40` | yes, on a **synthetic** fabric — read the section below |
-| `ice40` | `ice40-up5k-sg48` (iCE40UP5K) | `nextpnr-ice40` | yes, on the **real** fabric, from Project IceStorm's database (`reticle fetch icestorm`), to a `.bin` the part loads — see [`fpga-icestorm.md`](fpga-icestorm.md) |
+| `ice40` | `ice40-up5k-sg48` (iCE40UP5K) | `nextpnr-ice40` | yes, on the **real** fabric, from Project IceStorm's database (`reticle fetch icestorm`), to a `.bin` the part loads, block RAMs and single-port RAMs included — see [`fpga-icestorm.md`](fpga-icestorm.md) |
 | `ecp5` | `ecp5-25f-CABGA381`, `ecp5-12f-CABGA256` (LFE5U-12F, Great Scott Gadgets Cynthion r1.4), `ecp5-45f-CABGA381` | `nextpnr-ecp5` | **pads only**, on the **real** fabric, with a chip database the user supplies — see [`fpga-trellis.md`](fpga-trellis.md) |
 | `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | yes, on the **real** fabric, with a chip database the user supplies — see [`fpga-xray.md`](fpga-xray.md) |
 | `gowin` | `gw2a-18-pg256` (GW2A-18, Sipeed Tang Primer 20K) | none yet | **partly**, on the **real** fabric, with a chip database the user supplies — see [`fpga-gowin.md`](fpga-gowin.md) |
@@ -223,16 +223,18 @@ the address port and what the pins below it are tied to.
 
 | Family | Layout | Confidence |
 |--------|--------|------------|
-| iCE40 `SB_RAM40_4K` | 256 rows of 16 bits; `INIT_<k>` holds rows 16k..16k+15, row 16k+i in bits 16i+15..16i | high: the iCE Technology Library's definition |
-| iCE40, narrow modes | the row is address bits 7..0; the bits above pick word `s` of the row, whose data bit `j` is row bit (16/width)·j + s; the data are on pins 0,2,..,14 (512x8), 1,5,9,13 (1024x4) and 3,11 (2048x2) | medium-high: what the Yosys simulation model and block RAM mapping of the primitive do |
+| iCE40 `SB_RAM40_4K` | 256 rows of 16 bits; `INIT_<k>` holds rows 16k..16k+15, row 16k+i in bits 16i+15..16i | CHECKED on an iCE40UP5K: every word of a 256x16 block RAM with contents from `initial` read back as stated, through nextpnr and through Reticle's own backend (`docs/fpga-icestorm.md`) |
+| iCE40, narrow modes | the row is address bits 7..0; the bits above pick word `s` of the row, whose data bit `j` is row bit (16/width)·j + s; the data are on pins 0,2,..,14 (512x8), 1,5,9,13 (1024x4) and 3,11 (2048x2) | CHECKED on an iCE40UP5K the same way, all three widths, contents and run-time writes; and it is what Yosys's simulation model of the primitive says (`techlibs/ice40/cells_sim.v`). Not checked on an LP or HX part |
 | ECP5 `DP16KD` | 1024 rows of 18 bits; `INITVAL_<nn>` holds rows 16nn..16nn+15 in 20-bit slots, the top two bits zero; consecutive addresses share a row (9-bit words in bits 8..0 and 17..9); the word address starts at address pin 4, 3, 2, 1, 0 for the 18-, 9-, 4-, 2- and 1-bit modes, and the 18-bit mode's two pins below it, the write byte enables, are tied high | medium-high |
 | ECP5, 4-, 2- and 1-bit modes | the words fill the sixteen row bits that are not the parity bits 8 and 17 | medium: Reticle's reading, not checked against a part |
 
-The parameters reach nextpnr and the vendor exports. Reticle's own
-place and route does not put them into its `.asc`: the synthetic RAM
-bel declares configuration bits for `READ_MODE` and `WRITE_MODE` only,
-since where a real part keeps its block RAM contents in the bitstream
-is exactly what that fabric does not know.
+The parameters reach nextpnr and the vendor exports. On the iCE40UP5K,
+Reticle's own place and route puts them into its `.asc` too, as the
+part's `.ram_data` and `RamConfig` bits read from Project IceStorm
+(`docs/fpga-icestorm.md`). On the LP and HX parts it does not: their
+synthetic RAM bel declares configuration bits for `READ_MODE` and
+`WRITE_MODE` only, since where a real part keeps its block RAM contents
+in the bitstream is exactly what that fabric does not know.
 
 The iCE40 data pins and the ECP5 address alignment are not only about
 contents: they are how the blocks are wired, and a netlist wired to the

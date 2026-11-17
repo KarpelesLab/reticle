@@ -25,6 +25,10 @@
 //!   built out of `SB_LUT4`, `SB_DFF*` and `SB_CARRY` cells;
 //! - an **`io` bel** per IO block, and bels for the RGB LED driver and the
 //!   two oscillators of an UltraPlus part;
+//! - a **`bram` bel** per block RAM, anchored on its `ramb` tile with pins
+//!   on the `ram/*` wires of both of its tiles, and a **`spram` bel** at each
+//!   of the four places IceStorm's `.extra_cell SPRAM` records give, with
+//!   pins on the IP-connect tiles' wires those records name;
 //! - and the package's **pin map**.
 //!
 //! The logic cell's flip-flop takes its data from its own lookup table and
@@ -196,6 +200,7 @@ impl IceFabric {
         fabric.add_pips();
         fabric.add_logic_bels()?;
         fabric.add_io_bels();
+        fabric.add_ram_bels();
         fabric.add_global_buffers();
         fabric.add_extra_cells();
         let pins: Vec<(String, (u32, u32, u32))> = fabric
@@ -417,8 +422,68 @@ impl IceFabric {
         }
     }
 
-    /// The RGB LED driver and the oscillators: bels anchored where the
-    /// database puts the cell, with pins on the wires its entries name.
+    /// A `bram` bel on every `ramb` tile, for an `SB_RAM40_4K`.
+    ///
+    /// A block RAM is two tiles, its `ramb` and the `ramt` above it, and
+    /// which of its wires is in which differs between members of the
+    /// family: on a 1k the write side is in the bottom tile, on the 5k and
+    /// the 8k the read side is (nextpnr's `chipdb.py`, "8K-style
+    /// memories"). Rather than say which, each wire is looked for in both,
+    /// as `icebox_vlog` does; each is in exactly one.
+    ///
+    /// The pin roles are the ones the device file's `port` lines give the
+    /// primitive's ports — the read port first, so `p0_*`, the write port
+    /// `p1_*` — and `MASK0`..`MASK15` for the bit mask, which no `port` line
+    /// names (`place::describe`).
+    fn add_ram_bels(&mut self) {
+        let mut pins: Vec<(String, String)> = vec![
+            ("p0_clk".into(), "RCLK".into()),
+            ("p0_en".into(), "RE".into()),
+            ("p0_ce".into(), "RCLKE".into()),
+            ("p1_clk".into(), "WCLK".into()),
+            ("p1_en".into(), "WE".into()),
+            ("p1_ce".into(), "WCLKE".into()),
+        ];
+        for i in 0..11 {
+            pins.push((format!("p0_addr{i}"), format!("RADDR_{i}")));
+            pins.push((format!("p1_addr{i}"), format!("WADDR_{i}")));
+        }
+        for i in 0..16 {
+            pins.push((format!("p0_dout{i}"), format!("RDATA_{i}")));
+            pins.push((format!("p1_din{i}"), format!("WDATA_{i}")));
+            pins.push((format!("MASK{i}"), format!("MASK_{i}")));
+        }
+        for y in 0..self.db.height {
+            for x in 0..self.db.width {
+                if self.db.tile(x, y) != TileKind::Ramb {
+                    continue;
+                }
+                let mut bel = BelDecl::new("ram", "bram");
+                for (role, name) in &pins {
+                    let wire = format!("ram/{name}");
+                    let found = self
+                        .named(x, y, &wire, x, y)
+                        .or_else(|| self.named(x, y + 1, &wire, x, y));
+                    if let Some(found) = found {
+                        bel.pins.push((role.clone(), found));
+                    }
+                }
+                self.tile_mut(x, y).bels.push(bel);
+            }
+        }
+    }
+
+    /// The RGB LED driver, the oscillators and the single-port RAMs: bels
+    /// anchored where the database puts the cell, with pins on the wires
+    /// its entries name.
+    ///
+    /// An `SB_SPRAM256KA`'s entries are its ports bit by bit (`ADDRESS_3`,
+    /// `WREN`) and one configuration bit (`SPRAM_EN`, a `CBIT` of the
+    /// IP-connect tile, which is not a wire and so gives no pin). The device
+    /// file names none of its ports, so a pin's role is the port's name
+    /// and bit, `ADDRESS3` and `WREN0` (`place::describe`); and there are
+    /// two per corner, so each bel is named after its index there,
+    /// `spram1`..`spram4`.
     fn add_extra_cells(&mut self) {
         let cells: Vec<db::ExtraCell> = self.db.extra_cells.clone();
         for cell in cells {
@@ -441,6 +506,23 @@ impl IceFabric {
                     "lfosc",
                     &[("en", "CLKLFEN"), ("pu", "CLKLFPU"), ("o", "CLKLF")],
                 ),
+                "SPRAM" => {
+                    let (ax, ay) = cell.tile;
+                    let mut bel = BelDecl::new(format!("spram{}", cell.z), "spram");
+                    for (key, x, y, name) in &cell.entries {
+                        let role = match key.rsplit_once('_') {
+                            Some((port, bit)) if bit.parse::<u32>().is_ok() => {
+                                format!("{port}{bit}")
+                            }
+                            _ => format!("{key}0"),
+                        };
+                        if let Some(wire) = self.named(*x, *y, name, ax, ay) {
+                            bel.pins.push((role, wire));
+                        }
+                    }
+                    self.tile_mut(ax, ay).bels.push(bel);
+                    continue;
+                }
                 _ => continue,
             };
             let (ax, ay) = cell.tile;
@@ -597,9 +679,102 @@ impl IceFabric {
         Ok(())
     }
 
+    /// Writes the block RAMs' and single-port RAMs' configuration: for a
+    /// block RAM, `RamConfig.PowerUp` in its `ramb` tile, `WRITE_MODE` and
+    /// `READ_MODE` in `RamConfig.CBIT_0`..`3` of its `ramt` tile, and its
+    /// contents as the image's `.ram_data`; for a single-port RAM, the
+    /// `SPRAM_EN` bit its `.extra_cell` record names.
+    ///
+    /// Which bit is which is nextpnr's `bitstream.cc`, and `icebox_vlog`
+    /// reads them back the same way; on the 5k a set `PowerUp` is a RAM in
+    /// use (on a 1k it is the other way round, which is one reason this
+    /// refuses any device but the 5k).
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] on another device, or when the database lacks a bit.
+    pub fn configure_rams(
+        &self,
+        image: &mut image::Image,
+        rams: &BTreeMap<(u32, u32), RamConfig>,
+        sprams: &BTreeSet<((u32, u32), u32)>,
+    ) -> Result<(), FabricError> {
+        if (!rams.is_empty() || !sprams.is_empty()) && self.db.device != "5k" {
+            return Err(FabricError(format!(
+                "block and single-port RAMs are placed on the 5k only, not on the {}",
+                self.db.device
+            )));
+        }
+        let need = |x: u32, y: u32, name: &str| -> Result<Vec<ConfigBit>, FabricError> {
+            self.function(x, y, name).map(<[_]>::to_vec).ok_or_else(|| {
+                FabricError(format!(
+                    "the database has no `{name}` in the tile at ({x}, {y})"
+                ))
+            })
+        };
+        let set = |image: &mut image::Image, x: u32, y: u32, bits: &[ConfigBit]| {
+            for b in bits {
+                image.set(x, y, b.row, b.col);
+            }
+        };
+        for (&(x, y), ram) in rams {
+            set(image, x, y, &need(x, y, "RamConfig.PowerUp")?);
+            for (bit, on) in [
+                (0, ram.write_mode & 1 != 0),
+                (1, ram.write_mode & 2 != 0),
+                (2, ram.read_mode & 1 != 0),
+                (3, ram.read_mode & 2 != 0),
+            ] {
+                if on {
+                    set(
+                        image,
+                        x,
+                        y + 1,
+                        &need(x, y + 1, &format!("RamConfig.CBIT_{bit}"))?,
+                    );
+                }
+            }
+            if ram.contents.iter().any(|line| line.iter().any(|b| *b)) {
+                image.ram_data.insert((x, y), ram.contents.clone());
+            }
+        }
+        for &(tile, z) in sprams {
+            let (x, y, name) = self.spram_enable(tile, z).ok_or_else(|| {
+                FabricError(format!(
+                    "the database has no SPRAM {z} at ({}, {}) with an `SPRAM_EN`",
+                    tile.0, tile.1
+                ))
+            })?;
+            let bits = self
+                .db
+                .function_by_suffix(self.db.tile(x, y), &name)
+                .ok_or_else(|| FabricError(format!("no `{name}` in the tile at ({x}, {y})")))?
+                .to_vec();
+            set(image, x, y, &bits);
+        }
+        Ok(())
+    }
+
+    /// Where the `SPRAM_EN` bit of the single-port RAM `z` anchored at
+    /// `tile` is: `(x, y, function)`.
+    fn spram_enable(&self, tile: (u32, u32), z: u32) -> Option<(u32, u32, String)> {
+        let cell = self
+            .db
+            .extra_cells
+            .iter()
+            .find(|c| c.kind == "SPRAM" && c.tile == tile && c.z == z)?;
+        cell.entries
+            .iter()
+            .find(|(key, ..)| key == "SPRAM_EN")
+            .map(|(_, x, y, name)| (*x, *y, name.clone()))
+    }
+
     /// Reads an image back through the database: every multiplexer whose
     /// field is not all zero becomes an arc, every named function bit is
-    /// accounted for, and every set bit that is neither is reported.
+    /// accounted for, and every set bit that is neither is reported. Block
+    /// RAMs and single-port RAMs are read back too, configuration and
+    /// contents, and contents for a block RAM that is not in use are
+    /// reported as unexplained.
     #[must_use]
     pub fn decode(&self, image: &image::Image) -> Decoded {
         let mut by_tile: BTreeMap<(u32, u32), Vec<usize>> = BTreeMap::new();
@@ -668,6 +843,54 @@ impl IceFabric {
                 out.unexplained.push(format!("extra bit {bank} {x} {y}"));
             }
         }
+        // The block RAMs: in use when `PowerUp` is set (on the 5k), their
+        // modes from the top tile, their contents from `.ram_data`.
+        let on = |x: u32, y: u32, name: &str| {
+            self.function(x, y, name)
+                .is_some_and(|bits| bits.iter().all(|b| image.get(x, y, b.row, b.col)))
+        };
+        for y in 0..self.db.height {
+            for x in 0..self.db.width {
+                if self.db.tile(x, y) != TileKind::Ramb || !on(x, y, "RamConfig.PowerUp") {
+                    continue;
+                }
+                let cbit = |i: u32| u32::from(on(x, y + 1, &format!("RamConfig.CBIT_{i}")));
+                let contents = image
+                    .ram_data
+                    .get(&(x, y))
+                    .cloned()
+                    .unwrap_or_else(|| vec![[false; 256]; 16]);
+                out.ram_bits += contents
+                    .iter()
+                    .map(|l| l.iter().filter(|b| **b).count())
+                    .sum::<usize>();
+                out.rams.insert(
+                    (x, y),
+                    RamConfig {
+                        write_mode: cbit(0) | cbit(1) << 1,
+                        read_mode: cbit(2) | cbit(3) << 1,
+                        contents,
+                    },
+                );
+            }
+        }
+        for (&(x, y), lines) in &image.ram_data {
+            if !out.rams.contains_key(&(x, y)) && lines.iter().any(|l| l.iter().any(|b| *b)) {
+                out.unexplained.push(format!(
+                    "contents for a block RAM at X{x}Y{y}, which is not one in use"
+                ));
+            }
+        }
+        for cell in self.db.extra_cells.iter().filter(|c| c.kind == "SPRAM") {
+            if let Some((x, y, name)) = self.spram_enable(cell.tile, cell.z)
+                && self
+                    .db
+                    .function_by_suffix(self.db.tile(x, y), &name)
+                    .is_some_and(|bits| bits.iter().all(|b| image.get(x, y, b.row, b.col)))
+            {
+                out.sprams.insert((cell.tile, cell.z));
+            }
+        }
         out
     }
 
@@ -714,13 +937,15 @@ impl IceFabric {
     /// design, then that configuration written into `image`, which already
     /// holds what the pips and the bels' entries set.
     ///
-    /// Returns `(io blocks, extra cells)` configured.
+    /// Returns what was configured, which for the RAMs is also what
+    /// [`IceFabric::decode`] must read back.
     ///
     /// # Errors
     ///
     /// [`FabricError`] when the design mixes clock edges in one logic tile,
-    /// which the tile's single `NegClk` bit cannot hold, or when a bit the
-    /// database should have is missing.
+    /// which the tile's single `NegClk` bit cannot hold, when a RAM's
+    /// parameters are not ones it can hold, or when a bit the database
+    /// should have is missing.
     pub fn configure_placed(
         &self,
         design: &crate::ir::Design,
@@ -729,7 +954,7 @@ impl IceFabric {
         placement: &super::place::Placement,
         graph: &super::arch::RoutingGraph,
         image: &mut image::Image,
-    ) -> Result<(usize, usize), FabricError> {
+    ) -> Result<Configured, FabricError> {
         let m = design
             .modules
             .get(module)
@@ -745,6 +970,8 @@ impl IceFabric {
         };
         let mut ios = Vec::new();
         let mut extra = Vec::new();
+        let mut rams: BTreeMap<(u32, u32), RamConfig> = BTreeMap::new();
+        let mut sprams: BTreeSet<((u32, u32), u32)> = BTreeSet::new();
         let mut edges: BTreeMap<(u32, u32), BTreeSet<bool>> = BTreeMap::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
             let Some(site) = placement.site_of(index) else {
@@ -801,6 +1028,21 @@ impl IceFabric {
                     extra.push(("HFOSC".to_owned(), p));
                 }
                 "lfosc" => extra.push(("LFOSC".to_owned(), BTreeMap::new())),
+                "bram" => {
+                    rams.insert(site.tile, RamConfig::of_cell(cell)?);
+                }
+                "spram" => {
+                    let z = site
+                        .bel
+                        .rsplit('/')
+                        .next()
+                        .and_then(|b| b.strip_prefix("spram"))
+                        .and_then(|z| z.parse::<u32>().ok())
+                        .ok_or_else(|| {
+                            FabricError(format!("`{}` is not a single-port RAM site", site.bel))
+                        })?;
+                    sprams.insert((site.tile, z));
+                }
                 _ => {}
             }
         }
@@ -811,9 +1053,14 @@ impl IceFabric {
                 tile.0, tile.1
             )));
         }
-        let counts = (ios.len(), extra.len());
         self.configure(image, &ios, &extra)?;
-        Ok(counts)
+        self.configure_rams(image, &rams, &sprams)?;
+        Ok(Configured {
+            pads: ios.len(),
+            hard_cells: extra.len(),
+            rams,
+            sprams,
+        })
     }
 
     /// The arcs the router chose that cost bits, as the database's
@@ -845,6 +1092,19 @@ impl IceFabric {
     }
 }
 
+/// What [`IceFabric::configure_placed`] configured.
+#[derive(Clone, Debug, Default)]
+pub struct Configured {
+    /// IO blocks.
+    pub pads: usize,
+    /// Hard cells: the RGB driver, the oscillators.
+    pub hard_cells: usize,
+    /// Block RAMs, by their `ramb` tile, as their cells ask for them.
+    pub rams: BTreeMap<(u32, u32), RamConfig>,
+    /// Single-port RAMs, as `(anchor tile, index)`.
+    pub sprams: BTreeSet<((u32, u32), u32)>,
+}
+
 /// What [`implement`] built, and the numbers its report prints.
 pub struct Implemented {
     /// The configuration image, checked.
@@ -855,6 +1115,10 @@ pub struct Implemented {
     pub pads: usize,
     /// Hard cells (RGB driver, oscillators) configured.
     pub hard_cells: usize,
+    /// Block RAMs configured, each read back with its modes and contents.
+    pub rams: usize,
+    /// Single-port RAMs configured, each read back.
+    pub sprams: usize,
     /// Sites used per kind, as the placer reports them.
     pub usage: Vec<(String, usize, usize)>,
     /// Signals routed, signals in all, pips and wires used.
@@ -906,7 +1170,7 @@ pub fn implement(
     for instance in &netlist.instances {
         if !matches!(
             instance.kind.as_str(),
-            "lc" | "lcc" | "io" | "gb" | "rgba_drv" | "hfosc" | "lfosc"
+            "lc" | "lcc" | "io" | "gb" | "rgba_drv" | "hfosc" | "lfosc" | "bram" | "spram"
         ) {
             return Err(format!(
                 "`{}` is a `{}`, which this flow does not place on an iCE40 yet; nothing was \
@@ -946,7 +1210,7 @@ pub fn implement(
             image.set(format.tile.0, format.tile.1, bit.row, bit.col);
         }
     }
-    let (pads, hard_cells) = fabric
+    let configured = fabric
         .configure_placed(design, top, &netlist, &placement, graph, &mut image)
         .map_err(|e| e.to_string())?;
 
@@ -985,11 +1249,46 @@ pub fn implement(
             extra.chain(lost).take(40).collect::<Vec<_>>().join("\n  ")
         ));
     }
+    // The third check, for the RAMs: the bits and the contents read back
+    // as exactly the RAMs placed, each with the modes and contents its
+    // cell asked for, and no other.
+    if decoded.rams != configured.rams {
+        let placed: BTreeSet<&(u32, u32)> = configured.rams.keys().collect();
+        let read: BTreeSet<&(u32, u32)> = decoded.rams.keys().collect();
+        let differ: Vec<String> = placed
+            .intersection(&read)
+            .filter(|t| decoded.rams.get(t) != configured.rams.get(t))
+            .map(|(x, y)| format!("X{x}Y{y} reads back other modes or contents"))
+            .chain(
+                placed
+                    .difference(&read)
+                    .map(|(x, y)| format!("X{x}Y{y} is placed and reads back unused")),
+            )
+            .chain(
+                read.difference(&placed)
+                    .map(|(x, y)| format!("X{x}Y{y} reads back in use and nothing is placed")),
+            )
+            .collect();
+        return Err(format!(
+            "the block RAMs this bitstream describes are not the ones placed, so nothing was \
+             written:\n  {}",
+            differ.join("\n  ")
+        ));
+    }
+    if decoded.sprams != configured.sprams {
+        return Err(format!(
+            "the single-port RAMs this bitstream enables ({:?}) are not the ones placed ({:?}), \
+             so nothing was written",
+            decoded.sprams, configured.sprams
+        ));
+    }
     Ok(Implemented {
         image,
         pack: pack_report,
-        pads,
-        hard_cells,
+        pads: configured.pads,
+        hard_cells: configured.hard_cells,
+        rams: configured.rams.len(),
+        sprams: configured.sprams.len(),
         usage: place_report.usage,
         routed: (
             route_report.signals,
@@ -1000,6 +1299,77 @@ pub fn implement(
         chosen: chosen.len(),
         decoded,
     })
+}
+
+/// One block RAM's configuration: what [`IceFabric::configure_rams`]
+/// writes and [`IceFabric::decode`] reads back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RamConfig {
+    /// `READ_MODE`: 0 for 256 x 16 through 3 for 2048 x 2.
+    pub read_mode: u32,
+    /// `WRITE_MODE`, likewise.
+    pub write_mode: u32,
+    /// The contents, sixteen lines of 256 bits: bit `i` of line `k` is
+    /// bit `i` of the primitive's `INIT_<k>`.
+    pub contents: Vec<[bool; 256]>,
+}
+
+impl RamConfig {
+    /// The configuration an `SB_RAM40_4K` cell asks for, from its
+    /// `READ_MODE`, `WRITE_MODE` and `INIT_0`..`INIT_F` parameters.
+    ///
+    /// # Errors
+    ///
+    /// [`FabricError`] for a mode out of range or contents that are not
+    /// a number.
+    pub fn of_cell(cell: &crate::ir::Cell) -> Result<RamConfig, FabricError> {
+        use crate::ir::AttrValue;
+        let mode = |key: &str| -> Result<u32, FabricError> {
+            let value = match cell.params.get(key) {
+                None => 0,
+                Some(AttrValue::Const(c)) => c.to_u64().unwrap_or(u64::MAX),
+                Some(other) => other
+                    .as_int()
+                    .and_then(|v| u64::try_from(v).ok())
+                    .unwrap_or(u64::MAX),
+            };
+            u32::try_from(value).ok().filter(|v| *v < 4).ok_or_else(|| {
+                FabricError(format!(
+                    "`{}`'s {key} is not one of 0..3",
+                    cell.name.as_str()
+                ))
+            })
+        };
+        let mut contents = vec![[false; 256]; 16];
+        for (k, line) in contents.iter_mut().enumerate() {
+            let key = format!("INIT_{k:X}");
+            match cell.params.get(&key) {
+                None => {}
+                Some(AttrValue::Const(c)) => {
+                    for (i, slot) in line.iter_mut().enumerate() {
+                        let i = u32::try_from(i).unwrap_or(u32::MAX);
+                        *slot = i < c.width() && c.bit(i) == crate::logic::Bit::One;
+                    }
+                }
+                Some(other) => {
+                    let Some(v) = other.as_int() else {
+                        return Err(FabricError(format!(
+                            "`{}`'s {key} is not a number",
+                            cell.name.as_str()
+                        )));
+                    };
+                    for (i, slot) in line.iter_mut().enumerate().take(64) {
+                        *slot = v >> i & 1 != 0;
+                    }
+                }
+            }
+        }
+        Ok(RamConfig {
+            read_mode: mode("READ_MODE")?,
+            write_mode: mode("WRITE_MODE")?,
+            contents,
+        })
+    }
 }
 
 /// What [`IceFabric::decode`] read out of an image.
@@ -1015,4 +1385,11 @@ pub struct Decoded {
     pub unexplained: Vec<String>,
     /// Multiplexer fields whose pattern is no option.
     pub bad_patterns: Vec<String>,
+    /// Every block RAM in use, by its `ramb` tile.
+    pub rams: BTreeMap<(u32, u32), RamConfig>,
+    /// Set bits of block RAM contents, all of them belonging to a RAM in
+    /// [`Decoded::rams`] (any other is in `unexplained`).
+    pub ram_bits: usize,
+    /// Every single-port RAM enabled, as `(anchor tile, index)`.
+    pub sprams: BTreeSet<((u32, u32), u32)>,
 }

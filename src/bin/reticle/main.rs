@@ -3530,6 +3530,15 @@ fn write_ice40_bitstream(
         .collect::<Vec<_>>()
         .join(", ");
     let (signals, of, pips, wires) = built.routed;
+    let rams = if built.rams + built.sprams == 0 {
+        String::new()
+    } else {
+        format!(
+            "note: {} block RAM(s), with {} set bit(s) of contents, and {} single-port RAM(s) \
+             read back from the bits exactly as placed\n",
+            built.rams, decoded.ram_bits, built.sprams
+        )
+    };
     Ok(format!(
         "note: wrote {path}, {} byte(s), {} configuration bit(s) set; {} logic cell(s) packed \
          ({} flip-flop(s) through their own table, {} feed-in and {} feed-out carry cell(s)), \
@@ -3539,6 +3548,7 @@ fn write_ice40_bitstream(
          note: all {} set bit(s) decode back through the database into {} arc(s) and {} \
          function field(s), with 0 unexplained, and the arcs they select are exactly the {} \
          the router chose\n\
+         {rams}\
          note: load it with `reticle program --ice40 {path}`\n",
         bytes.len(),
         image.ones(),

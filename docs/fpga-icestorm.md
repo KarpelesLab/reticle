@@ -67,6 +67,8 @@ under a second.
 - An `io` bel per IO block, a `gb` bel per global buffer (`.gbufin`), and
   bels for the RGB LED driver and the two oscillators, with pins on the
   fabric wires the database's `.extra_cell` records name.
+- A `bram` bel per block RAM and a `spram` bel per single-port RAM: see
+  "Block RAM and single-port RAM" below.
 
 ## Packing: three cells are one
 
@@ -145,6 +147,68 @@ The RGB LED driver's parameters set the bits its `.extra_cell` record names
 same parameters, `rgb_blink.v` sets exactly the configuration bits a
 reference bitstream sets for its RGB driver.
 
+## Block RAM and single-port RAM
+
+**Block RAM** (`SB_RAM40_4K`, thirty of them). A block RAM is two tiles, a
+`ramb` and the `ramt` above it, and is one `bram` bel anchored on the
+`ramb`. Its pins are the `ram/*` wires of both tiles; which side is in
+which tile differs between family members — on the 5k the read side is in
+the bottom tile, `RADDR`, `RCLK`, `RE`, `RCLKE` and data bits 8 to 15, and
+the write side in the top one (CHECKED against the database; nextpnr's
+`chipdb.py` calls these "8K-style memories") — so each wire is looked for in
+both tiles, as `icebox_vlog` does. The pin roles are the ones the device
+file's `port` lines give the primitive: `p0_*` the read port, `p1_*` the
+write port, and `MASK0`..`MASK15` for the mask no `port` line names.
+
+Its bits, from nextpnr's `bitstream.cc` and read back the same way by
+`icebox_vlog`:
+
+| Bit | Where | Meaning |
+|---|---|---|
+| `RamConfig.PowerUp` | `ramb` | set: the RAM is in use (on the 5k; a 1k has it the other way round, which is one reason only the 5k is supported) |
+| `RamConfig.CBIT_0`, `CBIT_1` | `ramt` | `WRITE_MODE` bits 0 and 1 |
+| `RamConfig.CBIT_2`, `CBIT_3` | `ramt` | `READ_MODE` bits 0 and 1 |
+| `.ram_data X Y` | the `ramb`'s position | the contents: line `k` is `INIT_<k>`, bit `i` of the line bit `i` of the parameter |
+
+`NegClk` in either tile is a clock inverted; no Reticle mapping asks for
+one, and the two sources disagree about which tile holds which clock on
+the 5k (`icebox_vlog` reads the bottom tile as the *write* clock there,
+nextpnr writes the *read* clock into it), so neither is relied on.
+
+An unrouted `RCLKE` or `WCLKE` reads one and every other unrouted RAM input
+zero (`icebox_vlog`'s defaults, QUOTED). So packing (rule 9) wires every
+input bit tied to a one — a read enable, an `MASKWREN` bit — to a cell
+driving one, leaves a zero unrouted, and refuses a clock enable tied to
+zero.
+
+**Single-port RAM** (`SB_SPRAM256KA`, four of 16K x 16). They sit at the four
+places IceStorm's `.extra_cell SPRAM` records give, two in each bottom
+corner, with their ports on wires of the IP-connect tiles above (`ADDRESS_0`
+is `lutff_0/in_1` of the tile at (0, 2), `DATAOUT_0` is `slf_op_0` of (0,
+1)). Each is a `spram` bel there; its one bit is `SPRAM_EN`, which the
+record names as `CBIT_0` or `CBIT_1` of the IP-connect tile at (0, 1) or
+(25, 1). `POWEROFF` is active low, so a design ties it high, and packing
+wires that one to the cell driving one like any other.
+
+**The third check.** `implement` reads the RAMs back out of the bitstream —
+which block RAMs are powered, their modes from the `ramt` bits, their
+contents from `.ram_data`, and which single-port RAMs are enabled — and
+returns nothing unless that is exactly what was placed, each block RAM with
+the modes and contents its cell's parameters ask for. Contents for a block
+RAM that is not powered are an unexplained bit. CHECKED: dropping the
+contents on their way into the image makes it fail; but a fault made the
+same way on the way in and on the way back would not, so the layout is the
+board's to confirm (below), and it did.
+
+**Against nextpnr.** `ram_selftest.v`, exported by Reticle and placed and
+routed by nextpnr, gives an `.asc` that this backend decodes with nothing
+unexplained — RAM bits and contents included — into the same eight block
+RAMs, modes and contents, as Reticle's own build of the same design
+(`every_bit_of_a_reference_decodes`, given the file in
+`RETICLE_ICE40_REF`); and `icepack`'s `.bin` of it, block RAM banks and
+all, is reproduced byte for byte (`icepacks_bytes_are_reproduced`). Both
+CHECKED, by hand on this machine; no reference ships.
+
 ## The configuration image, and `icepack` ported
 
 `src/fpga/icestorm/image.rs` holds every tile's bitmap, the extra bits and
@@ -161,7 +225,8 @@ round-trip test found it before any board did.
 
 ## The two checks
 
-`icestorm::implement` returns nothing that fails either:
+`icestorm::implement` returns nothing that fails either (or the third, for
+RAMs, above):
 
 1. **every set bit decodes**: each multiplexer whose field is not zero must
    hold a pattern that selects a source, and every other set bit must be a
@@ -175,7 +240,9 @@ arcs, `uart_echo` 7 630 bits into 519, and `board_demo` (both) 8 580 into
 821, all with nothing unexplained and the arcs exactly the router's
 (`the_board_designs_build_and_every_bit_decodes`). Breaking the pattern
 order of a multiplexer makes 236 bits of `rgb_blink` unexplained (CHECKED by
-mutation).
+mutation). `ram_selftest` sets 23 069 bits into 5 911 arcs, with eight
+block RAMs holding 8 192 set content bits and four single-port RAMs, all
+read back as placed (`both_kinds_of_ram_build_and_read_back`).
 
 **And the vendor's own decoder agrees.** IceStorm's `icebox_vlog`, run on
 this flow's `.asc`, writes Verilog for what the bits do; that Verilog,
@@ -197,6 +264,26 @@ written to the flash:
 | `uart_echo.v` | 96 logic cells: carry chains, enables, resets, a state machine | `HAL hello` comes back as `IBM!ifmmp` — CHECKED |
 | `rgb_blink.v` | the RGB LED driver, a 24-bit counter | the LED steps red, green, blue, about a second each — CHECKED, by eye, in `board_demo` below |
 | `board_demo.v` (both), written to the flash | boot from flash | after `--write-flash` and a release of `CRESET_B`, `CDONE` rose and the echo answered — CHECKED; and on 2026-11-17 the user saw the RGB LED step red → green → blue about once a second, booted from the flash — CHECKED **by a person's eyes, not measured**: nothing recorded the colours or the period |
+| `ram_selftest.v`, 2026-11-18 | all four single-port RAMs and a block RAM in each width written and read back; four more block RAMs, contents from `initial`, dumped | `SP:PPPP BR:PPPP`, and every one of the 1 024 + 512 + 1 024 + 2 048 words dumped equal to the formula in the RTL — CHECKED, every digit compared on the host with the formulas the RTL states, on every run |
+
+`ram_selftest` built by this backend is what the board was left booting
+from its flash on 2026-11-18 (written with `--write-flash`, read back and
+compared, then booted again with `--boot`: `CDONE` high and the report
+complete). The first read after a configuration has one `0x00` byte before
+the design's first line — the transmit pin held low while the part
+configures, by the look of it; not investigated.
+
+**The board check is not a tautology**, and was checked not to be: a build
+with two faults the flow's own checks cannot see — the contents' sixteen
+lines written in reverse order *and* read back reversed, and the
+single-port RAMs' `MASKWREN` bits 0 and 1 swapped in the fabric — passed
+every check of `implement` (every bit explained, the RAMs read back as
+placed) and on the board printed `SP:FFFF`, and the 16-, 8- and 4-bit
+dumps differed in 512, 1 024 and 1 024 digits. (The 2-bit one happened to
+read the same: its formula is symmetric under that reversal.) The same
+design built through nextpnr from Reticle's export passed the same way as
+Reticle's own build, which is what says the *mapping's* layout of the
+narrow modes — `docs/fpga.md`, "Block RAM contents" — is the silicon's.
 
 ## Faults found, and how
 
@@ -297,6 +384,24 @@ wrong beside a driven one) and wrong for a cell whose flip-flop is unused.
 Rather than change that rule for every family, a cell with no flip-flop is
 an `ICESTORM_LC_COMB` on an `lcc` bel that has no such pins.
 
+### A carry out that two readers wanted
+
+`ram_selftest.v` was refused at first: *the carry out of `ch$add$carry0` is
+read by the next carry and by other logic*. An iCE40 carry out reaches only
+the cell above it. Packing now puts a *tap* between the two, nextpnr's way:
+a cell whose carry passes its carry in through (its `I1` a one, its `I2` a
+zero) and whose table hands it to the fabric. Proved equivalent in
+`a_carry_read_inside_and_outside_its_chain_packs_to_the_same_logic`, which
+fails with the tap's `I1` left at zero (CHECKED by mutation).
+
+The first version of it then failed to *route*: a carry out was still read
+by logic from the carry's own output. Packing had decided whether anything
+outside the chain read a carry out by counting the readers inside — the
+next carry's carry in and its table's inputs — and taking them from the
+total. But the next cell had the carry in on its fourth input without any
+table of the netlist reading it there, so the count came out even with a
+reader outside. It now counts the readers outside directly.
+
 ### The rest, found before a board
 
 The `icepack` CRC (above). And one reading confirmed rather than assumed:
@@ -306,13 +411,31 @@ board, where the echo's line resynchroniser has no enable and works.
 
 ## What this does not do yet
 
-- no block RAM, SPRAM, DSP or PLL is placed: a design using one is refused
-  by name, before placement;
+- no DSP (`SB_MAC16`) or PLL is placed: a design using one is refused by
+  name, before placement. What each would take, as read off the database
+  and nextpnr, not attempted:
+  - **`SB_MAC16`**: eight `.extra_cell MAC16` records give each block's
+    ports bit by bit and its parameters as `CBIT`s, the same shape as the
+    single-port RAMs, so the bel is the same few lines; the work is the
+    two dozen parameters nextpnr's `bitstream.cc` lists (`A_REG` ..
+    `MODE_8x8`, `TOPOUTPUT_SELECT` and the rest) each onto its bits, and a
+    model of the block to prove anything against. The mapper does not
+    infer it (the device declares no `dsp` block for the part), so a design
+    instantiates it, and a board test is a multiply read back over the
+    serial line;
+  - **`SB_PLL40_CORE`/`_PAD`**: one `.extra_cell PLL` at (12, 31) with its
+    divider, filter and feedback parameters as bits, and its output driving
+    a global network through a fixed buffer; the `_PAD` form takes over an
+    IO pin. The device file's PLL solver already chooses the dividers. The
+    risk is in the global network the output claims, and the check is a
+    frequency measured on the board (a baud rate derived from it);
 - a logic tile's flip-flops share one clock-polarity bit, and a design that
   needs both edges in one tile is refused after placement rather than
   placed around;
-- a carry out read both by the next carry and by logic is refused;
 - no timing: the router minimises congestion and wirelength, and nothing
-  reads `timings_up5k.txt`;
+  reads `timings_up5k.txt`. Timing-driven routing would need that file read
+  into delays per multiplexer and per cell, a timing analysis over the
+  placed and routed graph, and criticality fed to the placer and router —
+  the largest of the three, and the one a 12 MHz design does not yet need;
 - only the 5k is fetched and only `sg48` has been placed; the LP/HX device
   files still use the synthetic fabric.

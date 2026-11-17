@@ -43,10 +43,13 @@
 #     and word `s` keeps its data bit `j` in row bit (16/width)*j + s
 #     (`init high ...`). The narrow modes also move the data pins: 512x8
 #     uses WDATA/RDATA 0,2,..,14, 1024x4 uses 1,5,9,13 and 2048x2 uses 3
-#     and 11 (`data ...`). MEDIUM-HIGH confidence for both: they are what
-#     the Yosys simulation model of SB_RAM40_4K and its block RAM mapping
-#     do (write masks selected by WADDR[10:8], data pins spread), read
-#     from memory of those sources, not checked against silicon here.
+#     and 11 (`data ...`). Both were first written from memory of the Yosys
+#     simulation model of SB_RAM40_4K (write masks selected by WADDR[10:8],
+#     data pins spread); that model, read since (techlibs/ice40/cells_sim.v),
+#     says exactly this. CHECKED on an iCE40UP5K, the part with the same
+#     block RAM: every word of a block RAM in each width, contents from
+#     `initial` and written at run time, read back as stated
+#     (docs/fpga-icestorm.md). Not checked on an LP or HX part.
 #   * SB_IO's PIN_TYPE values below (6'b000001 for a plain input,
 #     6'b011001 for a plain output, 6'b101001 for a tristatable one) are
 #     the ones every published iCE40 design uses. Medium-high confidence.
@@ -339,8 +342,11 @@ end
 #     design has no reason to instantiate either.
 #   * SB_IO, SB_GB and SB_RAM40_4K are as above. 30 block RAMs is the data
 #     sheet's count and the database's (thirty ramb/ramt pairs). Reticle's
-#     own flow does not yet place a block RAM on this part: it refuses one,
-#     naming it. HIGH for the declarations.
+#     own flow places them (src/fpga/icestorm), and the `init` and `data`
+#     layouts of the four `mode` lines are CHECKED on this part: a design
+#     reading back a block RAM in each width, contents from `initial`
+#     blocks, returned every word as the layout says, through nextpnr and
+#     through Reticle's own backend alike (docs/fpga-icestorm.md).
 #   * SB_RGBA_DRV, SB_HFOSC and SB_LFOSC: ports and parameters from the iCE
 #     Technology Library's UltraPlus additions, which nextpnr and Yosys use
 #     verbatim; where each port meets the fabric and which bits each
@@ -348,10 +354,15 @@ end
 #     The RGB driver's RGB0..RGB2 are the pads of pins 39, 40 and 41
 #     themselves, which is why they get no IO buffer. HIGH for the ports;
 #     the RGB driver is CHECKED on a board (docs/fpga-icestorm.md).
-#   * SB_SPRAM256KA (four 256-kbit single-port RAMs) and SB_MAC16 (eight
-#     DSP blocks) are declared with their outputs so a netlist check knows
-#     them, and Reticle's own flow refuses both. MEDIUM: the port lists
-#     are the library's, not exercised here.
+#   * SB_SPRAM256KA: four 256-kbit single-port RAMs, at the four fixed
+#     places IceStorm's `.extra_cell SPRAM` records give, which are where a
+#     design's SB_SPRAM256KA goes (`site spram`). No port is declared: each
+#     pin's role is its port's name and bit (ADDRESS3, WREN0), which is
+#     what the fabric names its pins. CHECKED on this part: all four
+#     written and read back in full, MASKWREN included.
+#   * SB_MAC16 (eight DSP blocks) is declared with its outputs so a netlist
+#     check knows it, and Reticle's own flow refuses it. MEDIUM: the port
+#     list is the library's, not exercised here.
 #   * SB_PLL40_PAD / SB_PLL40_CORE: the LP/HX ranges are kept, which the
 #     UltraPlus data sheet states the same way. One PLL. The backend does
 #     not place it yet. MEDIUM.
@@ -397,7 +408,7 @@ device ice40-up5k-sg48
   bel SB_RGBA_DRV other site rgba_drv port curren=CURREN rgbleden=RGBLEDEN pwm0=RGB0PWM pwm1=RGB1PWM pwm2=RGB2PWM pad0=RGB0 pad1=RGB1 pad2=RGB2 outputs RGB0,RGB1,RGB2 param CURRENT_MODE="0b0" RGB0_CURRENT="0b000000" RGB1_CURRENT="0b000000" RGB2_CURRENT="0b000000"
   bel SB_HFOSC other site hfosc port en=CLKHFEN pu=CLKHFPU o=CLKHF outputs CLKHF param CLKHF_DIV="0b00"
   bel SB_LFOSC other site lfosc port en=CLKLFEN pu=CLKLFPU o=CLKLF outputs CLKLF
-  bel SB_SPRAM256KA other count 4 outputs DATAOUT
+  bel SB_SPRAM256KA other site spram count 4 outputs DATAOUT
   bel SB_MAC16 other count 8 outputs O,CO,ACCUMCO,SIGNEXTOUT
   bram SB_RAM40_4K
     ports 2
