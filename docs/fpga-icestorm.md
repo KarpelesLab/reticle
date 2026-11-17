@@ -537,7 +537,10 @@ written to the flash:
 `ram_selftest` built by this backend is what the board was left booting
 from its flash on 2026-11-18 (written with `--write-flash`, read back and
 compared, then booted again with `--boot`: `CDONE` high and the report
-complete).
+complete). The unit attached later that day came with a blank flash; it
+was left the same way, booting `ram_selftest` as this backend builds it
+after the DSP and PLL work (22 997 bits), every digit of its report checked
+after a boot from flash.
 
 **The board checks are tests now** (`board` in `tests/fpga_icestorm.rs`,
 `#[ignore]`d, run with `--ignored --test-threads 1`): each builds its
@@ -577,6 +580,15 @@ that unit was held in reset, but that unit is not here to confirm it, so
 it is a reading, not a finding. The tests now set `PARMRK`, which tells a
 break (`FF 00 00`) and a framing error (`FF 00 x`) from a received byte,
 and the echo test fails on anything at all before its first byte.
+
+Later the same day it was seen once more, on this unit: a reader opened
+with the earlier scripts' settings after a `--write-flash` (which holds the
+part in reset, then boots it) read `00 0a` at once, bytes that had arrived
+while the port was closed. Repeated with `PARMRK` and the port open across
+the same flash write and boot, the line showed no break and no stray byte.
+So it lives in what reaches the host while nobody reads the port, not in
+anything the line does while someone does; the board tests open the port
+before they touch the board, and have never seen it.
 
 Writing the flash and then loading configuration memory twice left the
 flash's image unchanged, read back byte for byte — CHECKED, because a load
