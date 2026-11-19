@@ -139,6 +139,18 @@ pub struct ExtraCell {
     /// `(key, x, y, name)`: a port is wired to wire `name` of tile
     /// `(x, y)`; a parameter bit is the function bit `name` of that tile.
     pub entries: Vec<(String, u32, u32, String)>,
+    /// The packages in which the cell is not available, from its `LOCKED`
+    /// line: the 1k's PLL in the packages too small to bond its pads, the
+    /// 8k's top PLL in the `cm81`.
+    pub locked: Vec<String>,
+}
+
+impl ExtraCell {
+    /// Whether the cell exists in `package`.
+    #[must_use]
+    pub fn available_in(&self, package: &str) -> bool {
+        !self.locked.iter().any(|p| p == package)
+    }
 }
 
 /// A parsed icebox chip database.
@@ -314,6 +326,7 @@ impl ChipDb {
                             z,
                             kind: kind.to_owned(),
                             entries: Vec::new(),
+                            locked: Vec::new(),
                         });
                         Section::ExtraCell(db.extra_cells.len() - 1)
                     }
@@ -386,6 +399,11 @@ impl ChipDb {
                         .map_err(|_| err(format!("a bad pattern in `{line}`")))?;
                     let src = num(1)?;
                     db.muxes[*m].options.push((value, src));
+                }
+                Section::ExtraCell(c) if words[0] == "LOCKED" => {
+                    db.extra_cells[*c]
+                        .locked
+                        .extend(words[1..].iter().map(|w| (*w).to_owned()));
                 }
                 Section::ExtraCell(c) => {
                     let key = words[0].to_owned();
@@ -488,6 +506,10 @@ LC_0 B0[36] B1[36]
 
 .extra_cell 1 1 0 HFOSC
 CLKHF 1 1 glb_netwk_4
+
+.extra_cell 1 0 PLL
+LOCKED qn32 cm36
+LOCK 1 1 lutff_0/in_0
 ";
 
     #[test]
@@ -509,6 +531,12 @@ CLKHF 1 1 glb_netwk_4
             &[ConfigBit::new(0, 36), ConfigBit::new(1, 36)]
         );
         assert_eq!(db.extra_cells[0].kind, "HFOSC");
+        // A `LOCKED` line names the packages a cell is absent from; it is
+        // not an entry.
+        let pll = &db.extra_cells[1];
+        assert_eq!(pll.locked, ["qn32", "cm36"]);
+        assert_eq!(pll.entries.len(), 1);
+        assert!(!pll.available_in("cm36") && pll.available_in("sg48"));
     }
 
     /// A line the parser does not understand is an error with its line

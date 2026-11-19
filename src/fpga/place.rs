@@ -804,7 +804,7 @@ impl Netlist {
             }
             out.sterilises.push(sterilised_by(device, &primitive, cell));
             out.gate_inverted.push(
-                ["IS_G_INVERTED", "IS_CLK_INVERTED"]
+                ["IS_G_INVERTED", "IS_CLK_INVERTED", "NEG_CLK"]
                     .iter()
                     .filter_map(|key| cell.params.get(key))
                     .any(|value| match value {
@@ -2136,8 +2136,16 @@ const MAX_POOL: usize = 8;
 /// through the same `CLKINV` and has no reset. Vivado sets `CLKINV` for a RAM
 /// whose `IS_WCLK_INVERTED` is one (`testdata/fpga/vivado/lutram/`), which the
 /// flow names `<RAM>_1`, so a RAM is a shift register's mode on its edge.
+///
+/// An iCE40 logic tile is the same shape: one `NegClk` bit for its eight
+/// cells' flip-flops, so an `ICESTORM_LC` on a falling edge (`NEG_CLK`, which
+/// reaches here as `gate_inverted`) shares a tile only with others on a
+/// falling edge. A cell whose flip-flop is unused is an `ICESTORM_LC_COMB`
+/// and needs no mode.
 fn slice_mode(primitive: &str, gate_inverted: bool) -> u8 {
     match (primitive, gate_inverted) {
+        ("ICESTORM_LC", false) => return 9,
+        ("ICESTORM_LC", true) => return 10,
         ("LDCE" | "LDPE", false) => return 5,
         ("LDCE" | "LDPE", true) => return 6,
         ("SRLC32E" | "SRL16E" | "SRLC16E", false) => return 7,

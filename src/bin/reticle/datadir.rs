@@ -205,22 +205,25 @@ pub(crate) const PRJURAY_2020: Database = Database {
     },
 };
 
-/// Project IceStorm's Lattice iCE40 database: the UltraPlus 5k part of it,
+/// Project IceStorm's Lattice iCE40 database: every die the package ships,
 /// which is what the iCE40 flow loads and `tests/fpga_icestorm.rs` reads.
 ///
 /// IceStorm's `chipdb-*.txt` files are not in its git repository — icebox's
 /// Python generates them at build time — so this is a **prebuilt** copy:
 /// Debian's `fpga-icestorm-chipdb` package, architecture-independent, in
 /// Debian 13 "trixie", built from IceStorm commit `7fbf8c0` (7 February
-/// 2025). The package is checked whole against its SHA-256 and three files
-/// are taken out of it: the 5k database, its timing data, and the
-/// package's `copyright`, which carries IceStorm's ISC licence and is saved
-/// as `LICENSE`. The 1k, 8k and the rest are not taken, because nothing
-/// reads them yet.
+/// 2025). The package is checked whole against its SHA-256 and every file
+/// of it is taken: the six dice's databases (384, 1k, lm4k, u4k, 5k, 8k),
+/// the seven timing files (an LP and an HX of the 1k and the 8k, the 384,
+/// the u4k and the UltraPlus; nothing for the lm4k), and the package's
+/// `copyright`, which carries IceStorm's ISC licence and is saved as
+/// `LICENSE`. That is 112 MB unpacked from an 8 MB download. Until 19
+/// November 2026 only the 5k's two files were taken; a copy cached then is
+/// completed from the same package the next time it is looked for.
 pub(crate) const ICESTORM: Database = Database {
     name: "icestorm",
     version: "0~20250207git7fbf8c0+dfsg1-1",
-    what: "Project IceStorm's iCE40 database (Debian fpga-icestorm-chipdb, ISC), UltraPlus 5k part",
+    what: "Project IceStorm's iCE40 database (Debian fpga-icestorm-chipdb, ISC), every die",
     env: "RETICLE_ICESTORMDB",
     probe: "chipdb-5k.txt",
     source: Source::Deb {
@@ -229,8 +232,52 @@ pub(crate) const ICESTORM: Database = Database {
         size: 8_253_964,
         members: &[
             (
+                "usr/share/fpga-icestorm/chipdb/chipdb-384.txt",
+                "chipdb-384.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/chipdb-1k.txt",
+                "chipdb-1k.txt",
+            ),
+            (
                 "usr/share/fpga-icestorm/chipdb/chipdb-5k.txt",
                 "chipdb-5k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/chipdb-8k.txt",
+                "chipdb-8k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/chipdb-lm4k.txt",
+                "chipdb-lm4k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/chipdb-u4k.txt",
+                "chipdb-u4k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_hx1k.txt",
+                "timings_hx1k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_hx8k.txt",
+                "timings_hx8k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_lp1k.txt",
+                "timings_lp1k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_lp384.txt",
+                "timings_lp384.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_lp8k.txt",
+                "timings_lp8k.txt",
+            ),
+            (
+                "usr/share/fpga-icestorm/chipdb/timings_u4k.txt",
+                "timings_u4k.txt",
             ),
             (
                 "usr/share/fpga-icestorm/chipdb/timings_up5k.txt",
@@ -357,9 +404,17 @@ impl Database {
         }
     }
 
-    /// The manifest lines of the files `dir` does not hold. Empty for a
-    /// database fetched whole, as a wheel is.
+    /// The manifest lines of the files `dir` does not hold, or for a
+    /// Debian package the names of the members it does not hold. Empty for
+    /// a database fetched whole, as a wheel is.
     pub(crate) fn missing_files(&self, dir: &Path) -> Result<Vec<String>, String> {
+        if let Source::Deb { members, .. } = &self.source {
+            return Ok(members
+                .iter()
+                .filter(|(_, saved)| !dir.join(saved).is_file())
+                .map(|(_, saved)| (*saved).to_owned())
+                .collect());
+        }
         let Source::Files { manifest, .. } = &self.source else {
             return Ok(Vec::new());
         };
@@ -382,12 +437,27 @@ impl Database {
     /// before it did. The version is the same upstream commit either way,
     /// so the files that are there are already right. Offline, nothing is
     /// fetched and the flow that wanted the file says which.
+    ///
+    /// A Debian package is the same: the members a cached copy lacks — the
+    /// iCE40 dice other than the 5k, for a copy filled before they were
+    /// taken — are unpacked from the same package, checked whole again.
     fn top_up(&self, dir: &Path, offline: bool) -> Result<usize, String> {
         let missing = self.missing_files(dir)?;
         if missing.is_empty() {
             return Ok(0);
         }
+        if !offline && let Source::Deb { .. } = &self.source {
+            return self.top_up_deb(dir, &missing);
+        }
         let Source::Files { base, .. } = &self.source else {
+            if offline {
+                eprintln!(
+                    "note: {} in `{}` lacks {} file(s), and fetching is off",
+                    self.name,
+                    dir.display(),
+                    missing.len()
+                );
+            }
             return Ok(0);
         };
         if offline {
@@ -426,6 +496,48 @@ impl Database {
         let _ = fs::remove_dir_all(&scratch);
         fetched.map_err(|err| format!("fetching {} failed: {err}", self.name))?;
         Ok(missing.len())
+    }
+
+    /// [`Database::top_up`] for a Debian package: the members `missing`
+    /// names, unpacked from the package into a scratch directory and moved
+    /// into `dir` once all of them are there.
+    fn top_up_deb(&self, dir: &Path, missing: &[String]) -> Result<usize, String> {
+        let Source::Deb {
+            url,
+            sha256,
+            members,
+            ..
+        } = &self.source
+        else {
+            return Ok(0);
+        };
+        let wanted: Vec<(&'static str, &'static str)> = members
+            .iter()
+            .filter(|(_, saved)| missing.iter().any(|m| m == saved))
+            .copied()
+            .collect();
+        eprintln!(
+            "note: fetching the {} file(s) {} has gained since `{}` was filled ({})",
+            wanted.len(),
+            self.name,
+            dir.display(),
+            self.download_summary()
+        );
+        let parent = dir.parent().ok_or("a cache directory with no parent")?;
+        let scratch = parent.join(format!(".{}.topup-{}", self.version, std::process::id()));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch)
+            .map_err(|e| format!("cannot create `{}`: {e}", scratch.display()))?;
+        let fetched = fetch_deb(url, sha256, &wanted, &scratch).and_then(|()| {
+            for (_, saved) in &wanted {
+                fs::rename(scratch.join(saved), dir.join(saved))
+                    .map_err(|e| format!("cannot move `{saved}` into the cache: {e}"))?;
+            }
+            Ok(())
+        });
+        let _ = fs::remove_dir_all(&scratch);
+        fetched.map_err(|err| format!("fetching {} failed: {err}", self.name))?;
+        Ok(wanted.len())
     }
 
     /// A one-line summary of what a fetch downloads.

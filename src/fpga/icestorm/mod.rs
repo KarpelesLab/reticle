@@ -122,6 +122,93 @@ pub const MAC16_PARAMS: [(&str, u32); 19] = [
     ("B_SIGNED", 1),
 ];
 
+/// One iCE40 part the backend places on: a device file and where its
+/// fabric is in Project IceStorm's data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Part {
+    /// The device file's name (`ice40-hx8k-ct256`).
+    pub device: &'static str,
+    /// The die, the `<die>` of `chipdb-<die>.txt`: `384`, `1k`, `8k`, `u4k`
+    /// or `5k`.
+    pub die: &'static str,
+    /// The chip database's name for the package (`ct256`, `tq144:4k`).
+    pub package: &'static str,
+    /// The timing file nextpnr builds the part's figures from.
+    pub timing: &'static str,
+}
+
+/// Every iCE40 part the backend places on.
+///
+/// The die is the chip database a part is on: an LP and an HX of one size
+/// share a die and differ in their timing, and an HX4K is the 8k die in
+/// packages IceStorm names `<package>:4k`. The timing file is the one
+/// nextpnr builds that part's delays from (its `CMakeLists.txt`):
+/// `timings_hx<n>` for an HX, its `--fast`; `timings_lp<n>` for an LP, its
+/// `--slow`; the 8k's for an HX4K. The lm4k die, which IceStorm also ships,
+/// has no timing file and no nextpnr support, and no part here.
+pub const PARTS: [Part; 9] = [
+    Part {
+        device: "ice40-lp384-qn32",
+        die: "384",
+        package: "qn32",
+        timing: "timings_lp384.txt",
+    },
+    Part {
+        device: "ice40-lp1k-tq144",
+        die: "1k",
+        package: "tq144",
+        timing: "timings_lp1k.txt",
+    },
+    Part {
+        device: "ice40-hx1k-tq144",
+        die: "1k",
+        package: "tq144",
+        timing: "timings_hx1k.txt",
+    },
+    Part {
+        device: "ice40-hx1k-vq100",
+        die: "1k",
+        package: "vq100",
+        timing: "timings_hx1k.txt",
+    },
+    Part {
+        device: "ice40-hx4k-tq144",
+        die: "8k",
+        package: "tq144:4k",
+        timing: "timings_hx8k.txt",
+    },
+    Part {
+        device: "ice40-hx8k-ct256",
+        die: "8k",
+        package: "ct256",
+        timing: "timings_hx8k.txt",
+    },
+    Part {
+        device: "ice40-lp8k-cm81",
+        die: "8k",
+        package: "cm81",
+        timing: "timings_lp8k.txt",
+    },
+    Part {
+        device: "ice40-u4k-sg48",
+        die: "u4k",
+        package: "sg48",
+        timing: "timings_u4k.txt",
+    },
+    Part {
+        device: "ice40-up5k-sg48",
+        die: "5k",
+        package: "sg48",
+        timing: "timings_up5k.txt",
+    },
+];
+
+/// The part a device file describes, if the backend places on it.
+#[must_use]
+pub fn part(device: &str) -> Option<&'static Part> {
+    PARTS.iter().find(|p| p.device == device)
+}
+
 /// Why a fabric could not be built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FabricError(pub String);
@@ -537,6 +624,11 @@ impl IceFabric {
     fn add_extra_cells(&mut self) {
         let cells: Vec<db::ExtraCell> = self.db.extra_cells.clone();
         for cell in cells {
+            // A cell the package does not bond, such as the 1k's PLL in its
+            // smaller packages, is not there at all.
+            if !cell.available_in(&self.package) {
+                continue;
+            }
             let (kind, ports): (&str, &[(&str, &str)]) = match cell.kind.as_str() {
                 "RGBA_DRV" => (
                     "rgba_drv",
@@ -677,12 +769,47 @@ impl IceFabric {
         self.db.function_bits(self.db.tile(x, y), name)
     }
 
+    /// Whether an IO block's input enable is active low on this die: on
+    /// the 1k it is, so a set `IE` bit is an input *disabled* (nextpnr's
+    /// `bitstream.cc`, `set_ie_bit_logical`; `icebox_vlog` reads it the same
+    /// way). On every other die a set bit enables the input.
+    #[must_use]
+    pub fn ie_active_low(&self) -> bool {
+        self.db.device == "1k"
+    }
+
+    /// Whether a block RAM's `RamConfig.PowerUp` bit is set on the RAMs
+    /// *not* in use rather than on those in use: on the 1k it is (nextpnr's
+    /// `bitstream.cc` sets it on every unused RAM of an `LP1K` or `HX1K`
+    /// and on every used RAM of any other part).
+    #[must_use]
+    pub fn ram_powerup_when_unused(&self) -> bool {
+        self.db.device == "1k"
+    }
+
     /// The bits a placed design needs that no bel's configuration entry
     /// and no pip states; see the module documentation. Returns what was
     /// configured, for the report.
     ///
     /// `ios` is every used IO block as `(x, y, z, pin_type, input_used,
-    /// pullup)`; `extra` every extra cell's parameters by kind.
+    /// pullup)`; `reserved` the IO blocks a placed PLL's outputs pass
+    /// through, which are neither a design's pins nor unused; `extra`
+    /// every extra cell's parameters by kind.
+    ///
+    /// Per die, as nextpnr's `bitstream.cc` writes them:
+    ///
+    /// - an IO block's input enable and pull-up are in the block `.ieren`
+    ///   names; on the 1k the input enable is active low, and every IO
+    ///   block nothing uses has its input disabled, which on the 1k is a
+    ///   set bit and on the others no bit at all;
+    /// - on the UltraPlus 5k a used block without a pull-up also sets
+    ///   `IoCtrl.cf_bit_39` (block 0) or `cf_bit_35` (block 1);
+    /// - every column buffer of every global network is enabled, on every
+    ///   die but the 384, where nextpnr enables none: the tiles holding
+    ///   them are the `.colbuf` sources, which on each other die are
+    ///   exactly the rows nextpnr names (`colbuf_rows_are_nextpnrs`);
+    /// - every IP-connect and DSP tile's logic cells pass their third input
+    ///   through, but for the 5k's tile at (25, 14).
     ///
     /// # Errors
     ///
@@ -691,6 +818,7 @@ impl IceFabric {
         &self,
         image: &mut image::Image,
         ios: &[(u32, u32, u32, u32, bool, bool)],
+        reserved: &BTreeSet<db::IoAt>,
         extra: &[(String, BTreeMap<String, u64>)],
     ) -> Result<(), FabricError> {
         let set = |image: &mut image::Image, x: u32, y: u32, bits: &[ConfigBit]| {
@@ -705,6 +833,7 @@ impl IceFabric {
                 ))
             })
         };
+        let active_low = self.ie_active_low();
         for &(x, y, z, pin_type, input, pullup) in ios {
             for i in 0..6 {
                 if pin_type >> i & 1 != 0 {
@@ -717,13 +846,13 @@ impl IceFabric {
                 .iter()
                 .find(|(pio, _)| *pio == (x, y, z))
                 .map_or((x, y, z), |(_, at)| *at);
-            if input {
+            if input != active_low {
                 set(image, ix, iy, &need(ix, iy, &format!("IoCtrl.IE_{iz}"))?);
             }
             if !pullup {
                 set(image, ix, iy, &need(ix, iy, &format!("IoCtrl.REN_{iz}"))?);
             }
-            if self.db.device == "5k" {
+            if self.db.device == "5k" && !pullup {
                 let bit = if iz == 0 {
                     "IoCtrl.cf_bit_39"
                 } else {
@@ -732,7 +861,16 @@ impl IceFabric {
                 set(image, ix, iy, &need(ix, iy, bit)?);
             }
         }
-        if self.db.device == "5k" {
+        if active_low {
+            let used: BTreeSet<db::IoAt> = ios.iter().map(|io| (io.0, io.1, io.2)).collect();
+            for &(pio, (ix, iy, iz)) in &self.db.ieren {
+                if used.contains(&pio) || reserved.contains(&pio) {
+                    continue;
+                }
+                set(image, ix, iy, &need(ix, iy, &format!("IoCtrl.IE_{iz}"))?);
+            }
+        }
+        if self.db.device != "384" {
             // Every column buffer of every network.
             let sources: BTreeSet<(u32, u32)> = self.db.colbuf.iter().map(|(s, _)| *s).collect();
             for (x, y) in sources {
@@ -745,41 +883,41 @@ impl IceFabric {
                     );
                 }
             }
-            // Every IP-connect and DSP tile's pass-through cells, but one:
-            // nextpnr leaves the IP-connect tile at (25, 14) alone ("mystery
-            // bits not set in this one tile", `bitstream.cc`), and sets only
-            // its first cell when the DSP block below uses it for its carry
-            // out, which `configure_dsps` does.
-            for y in 0..self.db.height {
-                for x in 0..self.db.width {
-                    let kind = self.db.tile(x, y);
-                    if !matches!(kind, TileKind::Ipcon | TileKind::Dsp(_))
-                        || (x, y) == SKIPPED_IPCON
-                    {
-                        continue;
-                    }
-                    for k in 0..8 {
-                        let bits = need(x, y, &format!("LC_{k}"))?;
-                        for (b, c) in bits.iter().zip(IPCON_LC_PATTERN.chars()) {
-                            if c == '1' {
-                                image.set(x, y, b.row, b.col);
-                            }
+        }
+        // Every IP-connect and DSP tile's pass-through cells, but one:
+        // nextpnr leaves the 5k's IP-connect tile at (25, 14) alone
+        // ("mystery bits not set in this one tile", `bitstream.cc`), and
+        // sets only its first cell when the DSP block below uses it for its
+        // carry out, which `configure_dsps` does.
+        for y in 0..self.db.height {
+            for x in 0..self.db.width {
+                let kind = self.db.tile(x, y);
+                if !matches!(kind, TileKind::Ipcon | TileKind::Dsp(_))
+                    || (self.db.device == "5k" && (x, y) == SKIPPED_IPCON)
+                {
+                    continue;
+                }
+                for k in 0..8 {
+                    let bits = need(x, y, &format!("LC_{k}"))?;
+                    for (b, c) in bits.iter().zip(IPCON_LC_PATTERN.chars()) {
+                        if c == '1' {
+                            image.set(x, y, b.row, b.col);
                         }
                     }
-                    let cascades: Vec<Vec<ConfigBit>> = self
-                        .db
-                        .tile_bits
-                        .get(&kind)
-                        .map(|fs| {
-                            fs.iter()
-                                .filter(|(n, _)| n.starts_with("Cascade."))
-                                .map(|(_, b)| b.clone())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    for bits in cascades {
-                        set(image, x, y, &bits);
-                    }
+                }
+                let cascades: Vec<Vec<ConfigBit>> = self
+                    .db
+                    .tile_bits
+                    .get(&kind)
+                    .map(|fs| {
+                        fs.iter()
+                            .filter(|(n, _)| n.starts_with("Cascade."))
+                            .map(|(_, b)| b.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for bits in cascades {
+                    set(image, x, y, &bits);
                 }
             }
         }
@@ -825,25 +963,21 @@ impl IceFabric {
     /// `SPRAM_EN` bit its `.extra_cell` record names.
     ///
     /// Which bit is which is nextpnr's `bitstream.cc`, and `icebox_vlog`
-    /// reads them back the same way; on the 5k a set `PowerUp` is a RAM in
-    /// use (on a 1k it is the other way round, which is one reason this
-    /// refuses any device but the 5k).
+    /// reads them back the same way. A set `PowerUp` is a RAM in use on
+    /// every die but the 1k, where it is the other way round: there the bit
+    /// is set on every block RAM *not* in use
+    /// ([`IceFabric::ram_powerup_when_unused`]).
     ///
     /// # Errors
     ///
-    /// [`FabricError`] on another device, or when the database lacks a bit.
+    /// [`FabricError`] when the database lacks a bit, or for a single-port
+    /// RAM on a die that has none.
     pub fn configure_rams(
         &self,
         image: &mut image::Image,
         rams: &BTreeMap<(u32, u32), RamConfig>,
         sprams: &BTreeSet<((u32, u32), u32)>,
     ) -> Result<(), FabricError> {
-        if (!rams.is_empty() || !sprams.is_empty()) && self.db.device != "5k" {
-            return Err(FabricError(format!(
-                "block and single-port RAMs are placed on the 5k only, not on the {}",
-                self.db.device
-            )));
-        }
         let need = |x: u32, y: u32, name: &str| -> Result<Vec<ConfigBit>, FabricError> {
             self.function(x, y, name).map(<[_]>::to_vec).ok_or_else(|| {
                 FabricError(format!(
@@ -856,8 +990,15 @@ impl IceFabric {
                 image.set(x, y, b.row, b.col);
             }
         };
+        let inverted = self.ram_powerup_when_unused();
+        for y in 0..self.db.height {
+            for x in 0..self.db.width {
+                if self.db.tile(x, y) == TileKind::Ramb && rams.contains_key(&(x, y)) != inverted {
+                    set(image, x, y, &need(x, y, "RamConfig.PowerUp")?);
+                }
+            }
+        }
         for (&(x, y), ram) in rams {
-            set(image, x, y, &need(x, y, "RamConfig.PowerUp")?);
             for (bit, on) in [
                 (0, ram.write_mode & 1 != 0),
                 (1, ram.write_mode & 2 != 0),
@@ -917,21 +1058,25 @@ impl IceFabric {
     /// network, that network's `padin_glb_netwk` extra bit, the one a pad
     /// driving the network sets. Returns the networks so driven.
     ///
+    /// `tile` is the PLL's anchor: the 8k has two, at the middle of its
+    /// bottom and top edges.
+    ///
     /// # Errors
     ///
     /// [`FabricError`] when the database lacks the PLL or a bit.
     pub fn configure_pll(
         &self,
         image: &mut image::Image,
+        tile: (u32, u32),
         config: &PllConfig,
         globals: [bool; 2],
     ) -> Result<BTreeSet<u32>, FabricError> {
-        let cell = self
-            .db
-            .extra_cells
-            .iter()
-            .find(|c| c.kind == "PLL")
-            .ok_or_else(|| FabricError(format!("the {} database has no PLL", self.db.device)))?;
+        let cell = self.pll_at(tile).ok_or_else(|| {
+            FabricError(format!(
+                "the {} database has no PLL at ({}, {})",
+                self.db.device, tile.0, tile.1
+            ))
+        })?;
         for (key, x, y, name) in &cell.entries {
             let Some((param, bit)) = pll_param_bit(key) else {
                 continue;
@@ -994,6 +1139,22 @@ impl IceFabric {
         Ok(networks)
     }
 
+    /// The `.extra_cell PLL` record anchored at `tile`, if the package has
+    /// that PLL.
+    #[must_use]
+    pub fn pll_at(&self, tile: (u32, u32)) -> Option<&db::ExtraCell> {
+        self.plls().find(|c| c.tile == tile)
+    }
+
+    /// Every PLL the package has: none on the 384 or in the smaller
+    /// packages of the 1k, two on the 8k in most of its packages.
+    pub fn plls(&self) -> impl Iterator<Item = &db::ExtraCell> {
+        self.db
+            .extra_cells
+            .iter()
+            .filter(|c| c.kind == "PLL" && c.available_in(&self.package))
+    }
+
     /// Sets the extra bit that has global network `network` driven from its
     /// pad-input path, `padin_glb_netwk.<n>`.
     fn set_padin(&self, image: &mut image::Image, network: u32) -> Result<(), FabricError> {
@@ -1026,19 +1187,13 @@ impl IceFabric {
     ///
     /// # Errors
     ///
-    /// [`FabricError`] on another device than the 5k, for a tile with no
-    /// DSP block, or when the database lacks a bit.
+    /// [`FabricError`] for a tile with no DSP block, or when the database
+    /// lacks a bit.
     pub fn configure_dsps(
         &self,
         image: &mut image::Image,
         dsps: &BTreeMap<(u32, u32), DspConfig>,
     ) -> Result<(), FabricError> {
-        if !dsps.is_empty() && self.db.device != "5k" {
-            return Err(FabricError(format!(
-                "DSP blocks are placed on the 5k only, not on the {}",
-                self.db.device
-            )));
-        }
         for (&tile, config) in dsps {
             let cell = self.mac16_at(tile).ok_or_else(|| {
                 FabricError(format!(
@@ -1170,15 +1325,17 @@ impl IceFabric {
                 out.unexplained.push(format!("extra bit {bank} {x} {y}"));
             }
         }
-        // The block RAMs: in use when `PowerUp` is set (on the 5k), their
-        // modes from the top tile, their contents from `.ram_data`.
+        // The block RAMs: in use when `PowerUp` is set (clear, on the 1k),
+        // their modes from the top tile, their contents from `.ram_data`.
         let on = |x: u32, y: u32, name: &str| {
             self.function(x, y, name)
                 .is_some_and(|bits| bits.iter().all(|b| image.get(x, y, b.row, b.col)))
         };
         for y in 0..self.db.height {
             for x in 0..self.db.width {
-                if self.db.tile(x, y) != TileKind::Ramb || !on(x, y, "RamConfig.PowerUp") {
+                if self.db.tile(x, y) != TileKind::Ramb
+                    || on(x, y, "RamConfig.PowerUp") == self.ram_powerup_when_unused()
+                {
                     continue;
                 }
                 let cbit = |i: u32| u32::from(on(x, y + 1, &format!("RamConfig.CBIT_{i}")));
@@ -1236,9 +1393,9 @@ impl IceFabric {
             }
             out.dsps.insert(cell.tile, config);
         }
-        // The PLL's parameters, and which global networks a pad (or the
-        // PLL through one) drives.
-        if let Some(cell) = self.db.extra_cells.iter().find(|c| c.kind == "PLL") {
+        // Each PLL's parameters, and which global networks a pad (or a PLL
+        // through one) drives.
+        for cell in self.plls() {
             let mut config = PllConfig::zero();
             for (key, x, y, name) in &cell.entries {
                 let Some((param, bit)) = pll_param_bit(key) else {
@@ -1252,7 +1409,7 @@ impl IceFabric {
                     *v |= 1 << bit;
                 }
             }
-            out.pll = config;
+            out.plls.insert(cell.tile, config);
         }
         for (name, bank, x, y) in &self.db.extra_bits {
             if let Some(n) = name
@@ -1347,7 +1504,7 @@ impl IceFabric {
         let mut rams: BTreeMap<(u32, u32), RamConfig> = BTreeMap::new();
         let mut sprams: BTreeSet<((u32, u32), u32)> = BTreeSet::new();
         let mut dsps: BTreeMap<(u32, u32), DspConfig> = BTreeMap::new();
-        let mut pll: Option<(PllConfig, [bool; 2])> = None;
+        let mut plls: BTreeMap<(u32, u32), (PllConfig, [bool; 2])> = BTreeMap::new();
         let mut osc_networks: BTreeSet<u32> = BTreeSet::new();
         let mut edges: BTreeMap<(u32, u32), BTreeSet<bool>> = BTreeMap::new();
         for (index, instance) in netlist.instances.iter().enumerate() {
@@ -1438,10 +1595,13 @@ impl IceFabric {
                             .iter()
                             .any(|p| p.instance == index && p.role == role && p.signal.is_some())
                     };
-                    pll = Some((
-                        PllConfig::of_cell(cell, &instance.primitive)?,
-                        [used("outglobal"), used("outglobalb")],
-                    ));
+                    plls.insert(
+                        site.tile,
+                        (
+                            PllConfig::of_cell(cell, &instance.primitive)?,
+                            [used("outglobal"), used("outglobalb")],
+                        ),
+                    );
                 }
                 "spram" => {
                     let z = site
@@ -1458,6 +1618,8 @@ impl IceFabric {
                 _ => {}
             }
         }
+        // The placer keeps the two edges apart (`place::slice_mode`); this
+        // is the check that it did.
         if let Some((tile, _)) = edges.iter().find(|(_, e)| e.len() > 1) {
             return Err(FabricError(format!(
                 "the logic tile at ({}, {}) holds flip-flops on both clock edges; an iCE40 logic \
@@ -1465,29 +1627,34 @@ impl IceFabric {
                 tile.0, tile.1
             )));
         }
-        self.configure(image, &ios, &extra)?;
-        self.configure_rams(image, &rams, &sprams)?;
-        self.configure_dsps(image, &dsps)?;
-        let mut padin = BTreeSet::new();
-        if let Some((config, globals)) = &pll {
-            // The PLL's outputs leave through IO blocks, which a design's
-            // own IO cannot use then.
-            if let Some(cell) = self.db.extra_cells.iter().find(|c| c.kind == "PLL") {
-                for (i, key) in ["PLLOUT_A", "PLLOUT_B"].into_iter().enumerate() {
-                    if i == 1 && !config.dual() {
-                        continue;
-                    }
-                    if let Some((x, y, z)) = pll_output_io(cell, key)
-                        && ios.iter().any(|io| (io.0, io.1, io.2) == (x, y, z))
-                    {
+        // A placed PLL's outputs leave through IO blocks, which a design's
+        // own IO cannot use then, and which are not unused either.
+        let mut reserved: BTreeSet<db::IoAt> = BTreeSet::new();
+        for (&tile, (config, _)) in &plls {
+            let Some(cell) = self.pll_at(tile) else {
+                continue;
+            };
+            for (i, key) in ["PLLOUT_A", "PLLOUT_B"].into_iter().enumerate() {
+                if i == 1 && !config.dual() {
+                    continue;
+                }
+                if let Some((x, y, z)) = pll_output_io(cell, key) {
+                    if ios.iter().any(|io| (io.0, io.1, io.2) == (x, y, z)) {
                         return Err(FabricError(format!(
                             "the PLL's {key} leaves through the IO block at ({x}, {y}, {z}), \
                              which this design also uses as a pin"
                         )));
                     }
+                    reserved.insert((x, y, z));
                 }
             }
-            padin = self.configure_pll(image, config, *globals)?;
+        }
+        self.configure(image, &ios, &reserved, &extra)?;
+        self.configure_rams(image, &rams, &sprams)?;
+        self.configure_dsps(image, &dsps)?;
+        let mut padin = BTreeSet::new();
+        for (&tile, (config, globals)) in &plls {
+            padin.extend(self.configure_pll(image, tile, config, *globals)?);
         }
         for network in osc_networks {
             self.set_padin(image, network)?;
@@ -1499,7 +1666,7 @@ impl IceFabric {
             rams,
             sprams,
             dsps,
-            pll: pll.map(|(c, _)| c),
+            plls: plls.into_iter().map(|(t, (c, _))| (t, c)).collect(),
             padin,
         })
     }
@@ -1546,9 +1713,10 @@ pub struct Configured {
     pub sprams: BTreeSet<((u32, u32), u32)>,
     /// DSP blocks, by their anchor tile, as their cells ask for them.
     pub dsps: BTreeMap<(u32, u32), DspConfig>,
-    /// The PLL, as its cell asks for it, when one is placed.
-    pub pll: Option<PllConfig>,
-    /// The global networks the PLL drives through a pad's input path.
+    /// Each placed PLL, by its anchor tile, as its cell asks for it.
+    pub plls: BTreeMap<(u32, u32), PllConfig>,
+    /// The global networks the PLLs and oscillators drive through a pad's
+    /// input path.
     pub padin: BTreeSet<u32>,
 }
 
@@ -1568,8 +1736,8 @@ pub struct Implemented {
     pub sprams: usize,
     /// DSP blocks configured, each read back with its parameters.
     pub dsps: usize,
-    /// The PLL's configuration, read back, when one is placed.
-    pub pll: Option<PllConfig>,
+    /// Each placed PLL's configuration, read back, by its anchor tile.
+    pub plls: BTreeMap<(u32, u32), PllConfig>,
     /// Each clock's longest path, when the fabric has timing figures.
     pub timing: Option<timing::TimingReport>,
     /// Sites used per kind, as the placer reports them.
@@ -1611,15 +1779,6 @@ pub fn implement(
     let pack_report = pack::pack(module).map_err(|e| e.to_string())?;
     let design = &packed;
     let netlist = place::Netlist::build(design, top, device, graph).map_err(|e| e.to_string())?;
-    let driverless = netlist.driverless();
-    if !driverless.is_empty() {
-        return Err(format!(
-            "nothing drives {} signal(s) that something reads, so nothing was written (an \
-             unrouted input of an iCE40 reads as zero, not as the value the netlist meant): {}",
-            driverless.len(),
-            driverless.join("; ")
-        ));
-    }
     for instance in &netlist.instances {
         if matches!(
             instance.primitive.as_str(),
@@ -1651,30 +1810,48 @@ pub fn implement(
             ));
         }
     }
-    // A PLL's `LOCK` reaches one logic tile only, so the cell packing made
-    // to pass it on is confined there (packing's rule 10).
+    // A cell of a kind this die (or this package of it) has no site for is
+    // refused by name, before anything else is said about it: its pins
+    // reach no wire, so the check below would only report its signals as
+    // undriven.
+    for instance in &netlist.instances {
+        if instance.kind != "pll" && !graph.sites.iter().any(|s| s.kind == instance.kind) {
+            return Err(format!(
+                "`{}` is a `{}`, and the iCE40 {} die has no `{}` site in the `{}` package; \
+                 nothing was written",
+                instance.name, instance.primitive, fabric.db.device, instance.kind, fabric.package
+            ));
+        }
+    }
+    // Each PLL gets its site before placement. A die may have two (the
+    // 8k's, at the middle of its bottom and top edges); the cell packing
+    // made to pass a PLL's `LOCK` on must sit in the one logic tile that
+    // wire reaches (packing's rule 10); and the global networks a PLL drives
+    // must be known before the design's clock buffers are seated.
+    let pll_sites = assign_pll_sites(fabric, &netlist, constraints)?;
+    let driverless = netlist.driverless();
+    if !driverless.is_empty() {
+        return Err(format!(
+            "nothing drives {} signal(s) that something reads, so nothing was written (an \
+             unrouted input of an iCE40 reads as zero, not as the value the netlist meant): {}",
+            driverless.len(),
+            driverless.join("; ")
+        ));
+    }
     let mut confined;
-    let constraints = if pack_report.lock_cells.is_empty() {
+    let constraints = if pll_sites.is_empty() {
         constraints
     } else {
-        let (x, y) = fabric
-            .db
-            .extra_cells
-            .iter()
-            .find(|c| c.kind == "PLL")
-            .and_then(|c| c.entries.iter().find(|(k, ..)| k == "LOCK"))
-            .map(|(_, x, y, _)| (*x, *y))
-            .ok_or_else(|| "the database's PLL has no LOCK wire".to_owned())?;
         confined = constraints.clone();
-        let region = "$ice40$pll_lock".to_owned();
         let m = &design.modules[top];
-        for name in &pack_report.lock_cells {
-            let span = m
-                .cells
+        let span_of = |name: &str| {
+            m.cells
                 .iter()
                 .find(|(_, c)| c.name.as_str() == name)
-                .map(|(_, c)| c.span)
-                .unwrap_or(m.span);
+                .map_or(m.span, |(_, c)| c.span)
+        };
+        let mut confine = |name: &str, region: String, (x, y): (u32, u32)| {
+            let span = span_of(name);
             if !confined.regions.iter().any(|r| r.name == region) {
                 confined.regions.push(super::constraints::Region {
                     name: region.clone(),
@@ -1688,11 +1865,25 @@ pub fn implement(
             confined
                 .region_assignments
                 .push(super::constraints::RegionAssignment {
-                    pattern: name.clone(),
-                    region: region.clone(),
+                    pattern: name.to_owned(),
+                    region,
                     span,
                     origin: super::constraints::Origin::File,
                 });
+        };
+        for (name, tile) in &pll_sites {
+            confine(name, format!("$ice40$pll_X{}Y{}", tile.0, tile.1), *tile);
+        }
+        for (pll, lock) in &pack_report.lock_cells {
+            let Some((_, tile)) = pll_sites.iter().find(|(n, _)| n == pll) else {
+                continue;
+            };
+            let (x, y) = fabric
+                .pll_at(*tile)
+                .and_then(|c| c.entries.iter().find(|(k, ..)| k == "LOCK"))
+                .map(|(_, x, y, _)| (*x, *y))
+                .ok_or_else(|| "the database's PLL has no LOCK wire".to_owned())?;
+            confine(lock, format!("$ice40$pll_lock_X{x}Y{y}"), (x, y));
         }
         &confined
     };
@@ -1703,11 +1894,18 @@ pub fn implement(
     // nowhere. So the clock buffers are confined to the rectangle of the
     // die holding the most of them and none of the blocked ones.
     let mut kept;
-    let drivers: Vec<&str> = ["pll", "hfosc", "lfosc"]
-        .into_iter()
-        .filter(|k| netlist.instances.iter().any(|i| i.kind == *k))
+    let blockers: Vec<usize> = graph
+        .sites
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| match s.kind.as_str() {
+            "hfosc" | "lfosc" => netlist.instances.iter().any(|i| i.kind == s.kind),
+            "pll" => pll_sites.iter().any(|(_, t)| *t == s.tile),
+            _ => false,
+        })
+        .map(|(i, _)| i)
         .collect();
-    let constraints = match gb_region_avoiding(graph, &drivers) {
+    let constraints = match gb_region_avoiding(graph, &blockers) {
         None => constraints,
         Some((x0, y0, x1, y1)) => {
             kept = constraints.clone();
@@ -1854,20 +2052,45 @@ pub fn implement(
             decoded.sprams, configured.sprams
         ));
     }
-    // And for the PLL: its parameters read back as its cell asked for them
-    // (all zero with none placed), and the pad-input bits it set are the
-    // only ones set.
-    let pll_wanted = configured.pll.clone().unwrap_or_else(PllConfig::zero);
-    if decoded.pll != pll_wanted || decoded.padin != configured.padin {
+    // And for the PLLs: each one's parameters read back as its cell asked
+    // for them (all zero with none placed), and the pad-input bits they and
+    // the oscillators set are the only ones set.
+    let pll_wanted: BTreeMap<(u32, u32), PllConfig> = decoded
+        .plls
+        .keys()
+        .map(|t| {
+            (
+                *t,
+                configured
+                    .plls
+                    .get(t)
+                    .cloned()
+                    .unwrap_or_else(PllConfig::zero),
+            )
+        })
+        .collect();
+    if decoded.plls != pll_wanted
+        || configured
+            .plls
+            .keys()
+            .any(|t| !decoded.plls.contains_key(t))
+        || decoded.padin != configured.padin
+    {
         let differ: Vec<String> = pll_wanted
-            .params
             .iter()
-            .filter(|(k, v)| decoded.pll.params.get(*k) != Some(v))
-            .map(|(k, v)| {
-                format!(
-                    "{k} reads {} for {v}",
-                    decoded.pll.params.get(k).copied().unwrap_or(0)
-                )
+            .flat_map(|(t, want)| {
+                let got = decoded.plls.get(t);
+                want.params
+                    .iter()
+                    .filter(move |(k, v)| got.and_then(|g| g.params.get(*k)) != Some(v))
+                    .map(move |(k, v)| {
+                        format!(
+                            "X{}Y{} {k} reads {} for {v}",
+                            t.0,
+                            t.1,
+                            got.and_then(|g| g.params.get(k)).copied().unwrap_or(0)
+                        )
+                    })
             })
             .collect();
         return Err(format!(
@@ -1937,7 +2160,7 @@ pub fn implement(
         rams: configured.rams.len(),
         sprams: configured.sprams.len(),
         dsps: configured.dsps.len(),
-        pll: configured.pll.clone(),
+        plls: configured.plls.clone(),
         timing,
         usage: place_report.usage,
         routed: (
@@ -1951,21 +2174,96 @@ pub fn implement(
     })
 }
 
+/// Cells given a site before placement: `(instance name, anchor tile)`.
+type SiteAssignments = Vec<(String, (u32, u32))>;
+
+/// The PLL site each of the netlist's PLLs is given, as `(instance name,
+/// anchor tile)`: in the order the netlist holds them, the first site the
+/// package has whose output IO blocks — `PLLOUT_A`, and `PLLOUT_B` for a
+/// two-output form — are none of the design's pins.
+///
+/// # Errors
+///
+/// A message naming the PLL when no site is left for it: the die or the
+/// package has no PLL at all (the 384, the 1k in its smaller packages), or
+/// fewer than the design asks for, or every one left would take a pin the
+/// design uses.
+fn assign_pll_sites(
+    fabric: &IceFabric,
+    netlist: &super::place::Netlist,
+    constraints: &super::Constraints,
+) -> Result<SiteAssignments, String> {
+    let pins: BTreeSet<db::IoAt> = constraints
+        .pins
+        .iter()
+        .filter_map(|p| fabric.arch.pinmap.iter().find(|(pin, _)| *pin == p.pin))
+        .filter_map(|(_, site)| io_site(site))
+        .collect();
+    let mut free: Vec<&db::ExtraCell> = fabric.plls().collect();
+    let total = free.len();
+    let mut out = Vec::new();
+    for instance in netlist.instances.iter().filter(|i| i.kind == "pll") {
+        let outputs = if PllConfig::is_dual_primitive(&instance.primitive) {
+            2
+        } else {
+            1
+        };
+        let fits = |cell: &&db::ExtraCell| {
+            ["PLLOUT_A", "PLLOUT_B"]
+                .iter()
+                .take(outputs)
+                .all(|k| pll_output_io(cell, k).is_none_or(|io| !pins.contains(&io)))
+        };
+        let Some(at) = free.iter().position(fits) else {
+            let why = if total == 0 {
+                format!(
+                    "the iCE40 {} die has no PLL in the `{}` package",
+                    fabric.db.device, fabric.package
+                )
+            } else if free.is_empty() {
+                format!(
+                    "the iCE40 {} die has {total} PLL(s) in the `{}` package, and the design \
+                     asks for more",
+                    fabric.db.device, fabric.package
+                )
+            } else {
+                "every PLL left would send its output through an IO block the design uses as \
+                 a pin"
+                    .to_owned()
+            };
+            return Err(format!(
+                "`{}` is a `{}`, and {why}; nothing was written",
+                instance.name, instance.primitive
+            ));
+        };
+        out.push((instance.name.clone(), free.remove(at).tile));
+    }
+    Ok(out)
+}
+
+/// `X12Y31/io1` as an IO block's position.
+fn io_site(site: &str) -> Option<db::IoAt> {
+    let (tile, bel) = site.split_once('/')?;
+    let (x, y) = tile.strip_prefix('X')?.split_once('Y')?;
+    Some((
+        x.parse().ok()?,
+        y.parse().ok()?,
+        bel.strip_prefix("io")?.parse().ok()?,
+    ))
+}
+
 /// A rectangle of the die, `(x0, y0, x1, y1)`, holding as many global
-/// buffer sites as can be had and none of those that a placed site of one
-/// of `kinds` blocks — a PLL's or an oscillator's, which drive those
-/// buffers' networks themselves. Its corners are global buffer sites'
-/// columns and rows, so every candidate is tried. `None` when nothing is
-/// blocked.
+/// buffer sites as can be had and none of those that the sites `blockers`
+/// block — a placed PLL's or oscillator's, which drive those buffers'
+/// networks themselves. Its corners are global buffer sites' columns and
+/// rows, so every candidate is tried. `None` when nothing is blocked.
 fn gb_region_avoiding(
     graph: &super::arch::RoutingGraph,
-    kinds: &[&str],
+    blockers: &[usize],
 ) -> Option<(u32, u32, u32, u32)> {
-    let blocked: BTreeSet<(u32, u32)> = graph
-        .sites
+    let blocked: BTreeSet<(u32, u32)> = blockers
         .iter()
-        .filter(|s| kinds.contains(&s.kind.as_str()))
-        .flat_map(|s| s.blocks.iter().map(|b| graph.sites[*b].tile))
+        .flat_map(|&s| graph.sites[s].blocks.iter().map(|b| graph.sites[*b].tile))
         .collect();
     if blocked.is_empty() {
         return None;
@@ -2071,7 +2369,7 @@ impl RamConfig {
 }
 
 /// What [`IceFabric::decode`] read out of an image.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Decoded {
     /// Set bits read.
     pub bits: usize,
@@ -2093,8 +2391,9 @@ pub struct Decoded {
     /// Every DSP block's parameters as its bits hold them, by its anchor
     /// tile; an unused block reads back as all zero.
     pub dsps: BTreeMap<(u32, u32), DspConfig>,
-    /// The PLL's parameters as its bits hold them, all zero when unused.
-    pub pll: PllConfig,
+    /// Every PLL's parameters as its bits hold them, by its anchor tile,
+    /// all zero when unused.
+    pub plls: BTreeMap<(u32, u32), PllConfig>,
     /// The global networks whose pad-input bit is set.
     pub padin: BTreeSet<u32>,
 }
@@ -2301,30 +2600,22 @@ impl PllConfig {
         Ok(out)
     }
 
+    /// Whether `primitive` is a form of the PLL with two outputs:
+    /// `SB_PLL40_2F_CORE`, `SB_PLL40_2_PAD` or `SB_PLL40_2F_PAD`.
+    #[must_use]
+    pub fn is_dual_primitive(primitive: &str) -> bool {
+        matches!(
+            primitive,
+            "SB_PLL40_2F_CORE" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD"
+        )
+    }
+
     /// Whether the second output exists in this configuration: the `2F`
     /// and `2` forms (`PLLTYPE` 4, 6 and 7), as nextpnr's
     /// `is_sb_pll40_dual`.
     #[must_use]
     pub fn dual(&self) -> bool {
         matches!(self.params.get("PLLTYPE"), Some(4 | 6 | 7))
-    }
-}
-
-impl Default for Decoded {
-    fn default() -> Decoded {
-        Decoded {
-            bits: 0,
-            arcs: BTreeSet::new(),
-            functions: BTreeMap::new(),
-            unexplained: Vec::new(),
-            bad_patterns: Vec::new(),
-            rams: BTreeMap::new(),
-            ram_bits: 0,
-            sprams: BTreeSet::new(),
-            dsps: BTreeMap::new(),
-            pll: PllConfig::zero(),
-            padin: BTreeSet::new(),
-        }
     }
 }
 

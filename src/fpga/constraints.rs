@@ -2960,18 +2960,26 @@ frobnicate
         assert!(text.contains("has no pin named 4242"), "{text}");
 
         // A partial pin list cannot say a pin is missing, only unchecked;
-        // a pin it does not know is still caught when used twice.
-        let text = check("set_io clk T16\n", "ice40-hx8k-ct256");
+        // a pin it does not know is still caught when used twice. (This
+        // was the HX8K's CT256 until its list became the whole package;
+        // the ECP5's CABGA256 list is still ten balls of 256.)
+        let text = check("set_io clk T16\n", "ecp5-12f-CABGA256");
         assert!(
             text.contains("warning[F0202]: pin T16 is not in Reticle's partial pin list"),
             "{text}"
         );
         assert!(!text.contains("error"), "{text}");
-        let text = check("set_io clk T16\nset_io d[0] T16\n", "ice40-hx8k-ct256");
+        let text = check("set_io clk T16\nset_io d[0] T16\n", "ecp5-12f-CABGA256");
         assert!(
             text.contains("pin T16 is assigned to two signals"),
             "{text}"
         );
+        // And the CT256's whole list knows T16 and says nothing of it, and
+        // refuses a ball the package does not have.
+        let text = check("set_io clk T16\n", "ice40-hx8k-ct256");
+        assert_eq!(text, "", "{text}");
+        let text = check("set_io clk T17\n", "ice40-hx8k-ct256");
+        assert!(text.contains("has no pin named T17"), "{text}");
 
         let text = check("set_io clk 99\nset_io d[0] 99\n", "ice40-hx1k-tq144");
         assert!(text.contains("pin 99 is assigned to two signals"), "{text}");

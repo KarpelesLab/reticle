@@ -28,7 +28,7 @@ writes its bitstream, without calling another program.
 
 | Family | Parts | Route out | Own place and route |
 |--------|-------|-----------|---------------------|
-| `ice40` | `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx8k-ct256` | `nextpnr-ice40` | yes, on a **synthetic** fabric — read the section below |
+| `ice40` | `ice40-lp384-qn32`, `ice40-lp1k-tq144`, `ice40-hx1k-tq144`, `ice40-hx1k-vq100`, `ice40-hx4k-tq144`, `ice40-hx8k-ct256`, `ice40-lp8k-cm81`, `ice40-u4k-sg48` | `nextpnr-ice40` | yes, on the **real** fabric from Project IceStorm's database since 2026-11-19: logic, block RAM, the PLLs (both of the 8k's), the u4k's DSP blocks and oscillators, every bit decoding, icepack's bytes reproduced, IceStorm's own decode simulated against the source and nextpnr's builds decoded — but **no LP, HX or iCE40 Ultra part has been on a board**; see [`fpga-icestorm.md`](fpga-icestorm.md), "Every iCE40 part". A library caller of `place_and_route` still gets the synthetic fabric for the 1k parts, below |
 | `ice40` | `ice40-up5k-sg48` (iCE40UP5K) | `nextpnr-ice40` | yes, on the **real** fabric, from Project IceStorm's database (`reticle fetch icestorm`), to a `.bin` the part loads: block RAMs, single-port RAMs, the eight DSP blocks, the PLL (CORE and 2F_CORE) and both oscillators, each checked on a board; a static timing analysis from IceStorm's timing figures and `--timing-driven` placement and routing — see [`fpga-icestorm.md`](fpga-icestorm.md) |
 | `ecp5` | `ecp5-25f-CABGA381`, `ecp5-12f-CABGA256` (LFE5U-12F, Great Scott Gadgets Cynthion r1.4), `ecp5-45f-CABGA381` | `nextpnr-ecp5` | **pads only**, on the **real** fabric, with a chip database the user supplies — see [`fpga-trellis.md`](fpga-trellis.md) |
 | `xc7` | `xc7a35t-cpg236` (Artix-7, Digilent Basys 3) | **Vivado** | yes, on the **real** fabric, with a chip database the user supplies — see [`fpga-xray.md`](fpga-xray.md) |
@@ -316,10 +316,10 @@ are partial, taken from the boards that use the part; a device whose
 list is known to be incomplete says `pins partial`, and a constraint
 naming a pin it does not list is then a warning (`F0202`) that the pin
 is unchecked rather than an error, and `check_nextpnr_json` leaves it to
-nextpnr, which knows the package. `ice40-hx8k-ct256` is one: it lists
-the iCE40-HX8K breakout board's clock, LEDs, serial port (B12, B10) and
-SPI flash, and the CT256 has over two hundred IO balls more. The tq144
-lists stay strict.
+nextpnr, which knows the package. `ice40-hx8k-ct256` was one, listing the
+HX8K breakout board's pins; since 2026-11-19 every iCE40 list is the whole
+package as Project IceStorm's chip database maps it, checked pin for pin
+against it (`every_device_file_is_its_parts_database`).
 
 The `xc7a35t-cpg236` list is partial in the same way and for the same
 reason: it is every line of Digilent's published `Basys-3-Master.xdc`
@@ -628,13 +628,14 @@ a VGA path, and the serialiser and TMDS encoder are not.
 
 ## Read this first: the architecture is synthetic
 
-> **Since 2026-11-17 this is true of the LP/HX parts only.** The
-> iCE40UP5K (`ice40-up5k-sg48`) places, routes and writes a bitstream on
-> its *real* fabric, read from Project IceStorm's chip database, and that
-> bitstream has run on a board; [`fpga-icestorm.md`](fpga-icestorm.md) is
-> the account. Everything below still describes the synthetic fabric the
-> other three iCE40 device files use, and the plan the next section lays
-> out was *not* the route taken: see "What was done instead" there.
+> **Since 2026-11-19 `reticle fpga --bitstream` uses it for no part.**
+> The iCE40UP5K (`ice40-up5k-sg48`) has been on its *real* fabric since
+> 2026-11-17, and every other iCE40 device file since 2026-11-19, read
+> from Project IceStorm's chip database; [`fpga-icestorm.md`](fpga-icestorm.md)
+> is the account. What is below still describes the synthetic fabric,
+> which the library's `place_and_route` keeps serving for the 1k parts,
+> with its tests and goldens; the plan the next section lays out was
+> *not* the route taken: see "What was done instead" there.
 
 Placement and routing need to know what wire is where, which
 programmable interconnect point (pip) joins which two of them, and which

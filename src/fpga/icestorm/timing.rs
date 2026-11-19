@@ -33,9 +33,10 @@
 //! the block RAMs in use — and finds, per clock, the longest path from a
 //! register's output to a register's input: a flip-flop's clock-to-output,
 //! then routing and logic, then its setup, which for a logic cell's data
-//! input is the table's delay from that input less 50 ps (nextpnr's
-//! figure for the UltraPlus, `getPortClockingInfo`) and 100 ps for any
-//! other register input. A path from one clock to another is not timed,
+//! input is the table's delay from that input plus an offset per family —
+//! less 50 ps on the UltraPlus and the iCE40 Ultra, 30 ps more on an LP
+//! part, 20 more on an HX (nextpnr's `getPortClockingInfo`, kept as
+//! [`TimingDb::lut_setup`]) — and 100 ps for any other register input. A path from one clock to another is not timed,
 //! and nor is one from or to a pin. The clock's own network is skew, which
 //! this does not model; between two registers on one global network it is
 //! one `ClkMux` each way and cancels.
@@ -58,6 +59,11 @@ use crate::ir::{Design, ModuleId};
 pub struct TimingDb {
     /// `(cell, from, to)` to the arc's delay.
     paths: HashMap<(String, String, String), f64>,
+    /// What a logic cell's flip-flop needs after its table settles, added
+    /// to the table's delay from a data input to give that input's setup:
+    /// a family's figure, not the file's ([`TimingDb::lut_setup_for`]).
+    /// [`TimingDb::parse`] starts it at the UltraPlus's, -50 ps.
+    pub lut_setup: f64,
 }
 
 /// Why a timing file could not be read.
@@ -80,7 +86,10 @@ impl TimingDb {
     /// [`TimingError`] naming the line, for an arc outside a `CELL` or a
     /// figure that is not a number.
     pub fn parse(text: &str) -> Result<TimingDb, TimingError> {
-        let mut db = TimingDb::default();
+        let mut db = TimingDb {
+            lut_setup: -50.0,
+            ..TimingDb::default()
+        };
         let mut cell: Option<String> = None;
         for (n, line) in text.lines().enumerate() {
             let fields: Vec<&str> = line.split_whitespace().collect();
@@ -114,6 +123,19 @@ impl TimingDb {
             return Err(TimingError("no IOPATH in the timing file".into()));
         }
         Ok(db)
+    }
+
+    /// The offset nextpnr adds to a lookup table's delay for its flip-flop's
+    /// setup (`getPortClockingInfo`), by the speed word of a device file:
+    /// `up` and `u` (UltraPlus, iCE40 Ultra) -50 ps, `lp` +30, `hx` +20.
+    /// Another word gets the UltraPlus's.
+    #[must_use]
+    pub fn lut_setup_for(speed: &str) -> f64 {
+        match speed {
+            "lp" => 30.0,
+            "hx" => 20.0,
+            _ => -50.0,
+        }
     }
 
     /// The delay of `cell`'s arc from `from` to `to`, in picoseconds.
@@ -360,7 +382,7 @@ pub fn analyse(fabric: &IceFabric, image: &Image, db: &TimingDb) -> TimingReport
                     let lut = db.or_zero("LogicCell40", pin, "lcout");
                     if dff {
                         if let Some(clock) = clock {
-                            g.ends.push((i, clock, lut - 50.0));
+                            g.ends.push((i, clock, lut + db.lut_setup));
                         }
                     } else {
                         g.out.entry(i).or_default().push((out, lut));
@@ -797,7 +819,7 @@ pub fn place_timing(
                                 delays[b] = ns(db.or_zero("LogicCell40", from, "carryout"));
                             }
                             if dff && reads(j) {
-                                own_capture[p] = Some(ns(lut(j) - 50.0));
+                                own_capture[p] = Some(ns(lut(j) + db.lut_setup));
                                 pins[p] = if mask != 0 {
                                     PinTiming::Through
                                 } else {

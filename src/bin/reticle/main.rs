@@ -371,14 +371,14 @@ Options:
   --quiet            Suppress the summary line
 
 Writing a bitstream, from a real chip database (Xilinx 7 series, Gowin
-GW2A, Lattice ECP5 and the iCE40UP5K):
+GW2A, Lattice ECP5 and iCE40):
   --chipdb <dir>     The database: Project X-Ray's (f4pga/prjxray-db) for
                      the 7 series, also read from RETICLE_CHIPDB; Project
                      Apicula's for Gowin, also read from RETICLE_GOWINDB;
                      Project Trellis' (YosysHQ/prjtrellis-db) for the
                      ECP5; Project IceStorm's (the directory holding
-                     chipdb-5k.txt, also RETICLE_ICESTORMDB) for the
-                     iCE40UP5K. Without either, the copy in ~/.cache/reticle is
+                     chipdb-5k.txt and the other dice, also
+                     RETICLE_ICESTORMDB) for the iCE40. Without either, the copy in ~/.cache/reticle is
                      used, and downloaded there first if it is missing
                      (see `reticle help fetch`).
   --offline          Never download the database; fail if it is missing.
@@ -709,8 +709,9 @@ Databases:
   prjtrellis-db    Project Trellis' Lattice ECP5 database, LFE5U-12F part (6 MB)
   prjuray-db       Project U-Ray's Xilinx UltraScale+ database, ZU7EV die (47 MB)
   prjuray-db-2020  Project U-Ray's 2020 tile types and ZU3EG wiring (104 MB)
-  icestorm         Project IceStorm's iCE40 database, UltraPlus 5k part (8 MB;
-                   unpacking it needs the `icestorm` feature)
+  icestorm         Project IceStorm's iCE40 database, every die (an 8 MB
+                   download, 112 MB unpacked; unpacking it needs the
+                   `icestorm` feature)
   all              All of them
 
 Each is pinned to one upstream version and checked file by file against
@@ -2891,7 +2892,7 @@ fn fpga(args: &Args) -> Result<Outcome, ArgError> {
     // outside route, which is why this is behind `--bitstream` rather
     // than a family check the way Gowin's is.
     if let Some(path) = args.option("bitstream") {
-        if ICE40_PARTS.iter().any(|(name, ..)| *name == device.name) {
+        if reticle::fpga::icestorm::part(&device.name).is_some() {
             match write_ice40_bitstream(args, &design, top, device, &constraints, path) {
                 Ok(note) => {
                     if !args.flag("quiet") {
@@ -3463,10 +3464,6 @@ fn check_driverless(netlist: &reticle::fpga::place::Netlist) -> Result<(), Strin
     ))
 }
 
-/// The iCE40 parts Project IceStorm's database is read for: `(device
-/// file name, database device, package)`.
-const ICE40_PARTS: &[(&str, &str, &str)] = &[("ice40-up5k-sg48", "5k", "sg48")];
-
 /// `reticle fpga --bitstream` for an iCE40 on Project IceStorm's database:
 /// pack the logic cells, place, route, configure, and write an icepack
 /// stream (`.bin`), or the `.asc` text when the path ends in `.asc` — with
@@ -3482,7 +3479,12 @@ fn write_ice40_bitstream(
     use reticle::fpga::icestorm::{self, IceFabric, db::ChipDb};
 
     let mut laps = Laps::new(args.flag("timing"));
-    let Some(&(_, die, package)) = ICE40_PARTS.iter().find(|(name, ..)| *name == device.name)
+    let Some(&icestorm::Part {
+        die,
+        package,
+        timing: timing_name,
+        ..
+    }) = icestorm::part(&device.name)
     else {
         return Err(format!("no IceStorm part is known for `{}`", device.name));
     };
@@ -3490,8 +3492,13 @@ fn write_ice40_bitstream(
         .locate(args.option("chipdb"), args.flag("offline"))
         .map_err(|err| format!("`--bitstream` needs a chip database: {err}"))?;
     let file = root.join(format!("chipdb-{die}.txt"));
-    let text = std::fs::read_to_string(&file)
-        .map_err(|e| format!("cannot read `{}`: {e}", file.display()))?;
+    let text = std::fs::read_to_string(&file).map_err(|e| {
+        format!(
+            "cannot read `{}`: {e} (a copy fetched before the other iCE40 dice were taken has \
+             only `chipdb-5k.txt`; `reticle fetch icestorm` completes it)",
+            file.display()
+        )
+    })?;
     let db = ChipDb::parse(&text).map_err(|e| e.to_string())?;
     drop(text);
     laps.lap("read the database");
@@ -3499,12 +3506,13 @@ fn write_ice40_bitstream(
     // The timing figures beside the chip database, when they are there:
     // with them every build reports each clock's longest path, and
     // `--timing-driven` places and routes by them. See `icestorm::timing`.
-    let timing_file = root.join(format!("timings_up{die}.txt"));
+    let timing_file = root.join(timing_name);
     if let Ok(text) = std::fs::read_to_string(&timing_file) {
-        fabric.timing = Some(
-            reticle::fpga::icestorm::timing::TimingDb::parse(&text)
-                .map_err(|e| format!("`{}`: {e}", timing_file.display()))?,
-        );
+        let mut timing = reticle::fpga::icestorm::timing::TimingDb::parse(&text)
+            .map_err(|e| format!("`{}`: {e}", timing_file.display()))?;
+        timing.lut_setup =
+            reticle::fpga::icestorm::timing::TimingDb::lut_setup_for(&device.speed_grade);
+        fabric.timing = Some(timing);
         fabric.timing_driven = args.flag("timing-driven");
     } else if args.flag("timing-driven") {
         return Err(format!(

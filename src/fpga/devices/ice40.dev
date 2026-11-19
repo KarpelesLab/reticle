@@ -62,55 +62,123 @@
 #     PIN_TYPE table. MEDIUM-HIGH confidence. The family has no
 #     programmable IO delay, so none is declared and a request for one is
 #     reported.
-#   * SB_PLL40_CORE / SB_PLL40_PAD: the ranges (reference 10-133 MHz,
-#     phase detector 10-133 MHz, VCO 533-1066 MHz), the fields (DIVR 4
-#     bits storing divisor-1, DIVF 7 bits storing divisor-1, DIVQ 1-6
-#     storing a power of two) and the FILTER_RANGE bands by phase-detector
-#     frequency (below 17, 26, 44, 66, 101 MHz, and above) are the ones
-#     Project IceStorm's `icepll` uses for SIMPLE feedback, which is what
-#     every published iCE40 design gets its settings from. HIGH confidence
-#     for the ranges and fields, MEDIUM for the exact band edges.
-#     RESETB is active low and tied high, BYPASS tied low. `count` is the
-#     number of PLLs on the die (one on the 1K parts, two on the 8K); the
-#     CORE and PAD lines are the same block used two ways. The PAD form
-#     takes its reference straight from a package pin rather than from
-#     the fabric, so its reference is recorded as `pad`, not `ref`, and
-#     Reticle — which generates a clock from the fabric-side net — uses
-#     the CORE form.
-#   * Resource counts (1280 logic cells and 16 block RAMs on the 1K parts,
-#     7680 and 32 on the 8K) are the datasheet figures. High confidence.
-#   * The tile grid is the array size used by Project IceStorm's chip
-#     database (0..13 x 0..17 for the 1K dice, 0..33 x 0..33 for the 8K).
-#     It is consistent with the logic-cell counts above, but Reticle only
-#     uses it as a bounding box for placement regions. Medium confidence.
-#   * No DSP blocks: multipliers exist only on the UltraPlus parts.
+#   * SB_PLL40_CORE / SB_PLL40_PAD / SB_PLL40_2F_CORE: the ranges
+#     (reference 10-133 MHz, phase detector 10-133 MHz, VCO 533-1066 MHz),
+#     the fields (DIVR 4 bits storing divisor-1, DIVF 7 bits storing
+#     divisor-1, DIVQ 1-6 storing a power of two) and the FILTER_RANGE bands
+#     by phase-detector frequency (below 17, 26, 44, 66, 101 MHz, and above)
+#     are the ones Project IceStorm's `icepll` uses for SIMPLE feedback, and
+#     the solver gives icepll's settings (CHECKED on the UltraPlus line, the
+#     same arithmetic). RESETB is active low and tied high, BYPASS tied low.
+#     `count` is the number of PLLs the chip database gives the die in that
+#     package — its `LOCKED` lines take the 1k's away in the vq100 and the
+#     8k's top one in the cm81 — so a part with none has no `pll` line. The
+#     PAD form takes its reference straight from a package pin, so its
+#     reference is recorded as `pad`, not `ref`. `outglobal`/`outglobalb`
+#     are the outputs that drive a global network themselves
+#     (PLLOUTGLOBAL*), so mapping puts no buffer behind them.
+#   * Since 19 November 2026 every part below is on the REAL FABRIC: Reticle
+#     places, routes and writes a bitstream for it on Project IceStorm's chip
+#     database (src/fpga/icestorm, docs/fpga-icestorm.md). Every count, pin
+#     and grid in this file is that database's, and
+#     `every_device_file_is_its_parts_database` (tests/fpga_icestorm.rs)
+#     checks each part's file against it. NO LP OR HX PART HAS BEEN ON A
+#     BOARD: what was checked is the bits (every one decodes, the arcs are
+#     the router's), IceStorm's own decode of them simulated against the
+#     source, icepack's bytes and nextpnr's builds of the same designs.
+#     ice40-hx1k-tq144 and ice40-lp1k-tq144 also serve the synthetic
+#     architecture (src/fpga/arch/synthetic.rs), which a library caller of
+#     `place_and_route` still gets and whose tests and goldens are unchanged.
+#   * ICESTORM_LC and ICESTORM_LC_COMB are the packed logic cell, as on the
+#     UltraPlus below; a design has no reason to instantiate either.
+#   * Resource counts — 384 logic cells and no block RAM on the 384, 1280 and
+#     16 on the 1k, 7680 and 32 on the 8k — are the chip database's tiles:
+#     eight logic cells to a logic tile, a block RAM to a `ramb`/`ramt` pair.
+#     CHECKED against it. The HX4K is the 8k die in another package
+#     (IceStorm's `tq144:4k`); Lattice's data sheet gives it 3520 logic cells,
+#     which its own tools enforce, and nextpnr, like this backend, places on
+#     all 7680. QUOTED: no HX4K was on a board.
+#   * The tile grid is the chip database's (8 x 10 for the 384, 14 x 18 for
+#     the 1k, 34 x 34 for the 8k). HIGH, CHECKED.
+#   * No DSP blocks, single-port RAM or oscillators: those exist only on the
+#     UltraPlus and iCE40 Ultra parts, and a design instantiating one is
+#     told no module of that name exists for this part.
 #   * IO: the iCE40 IO buffer has no programmable drive strength or slew
 #     rate, so the standards below carry only a bank voltage. The parts
-#     have four IO banks (0 top, 1 right, 2 bottom, 3 left), but Reticle
-#     cannot state which package pin is in which bank, so a single
-#     synthetic bank named `io` holds every recorded pin. Do not read the
-#     bank name as silicon truth.
-#   * PIN LISTS ARE PARTIAL AND DERIVED FROM BOARD FILES, NOT FROM THE
-#     PACKAGE DRAWINGS. The tq144 entries are the pins the Lattice
-#     iCEstick uses (12 MHz oscillator, the five LEDs, the FTDI UART and
-#     the PMOD header); the ct256 entries are the pins the Lattice iCE40
-#     HX8K Breakout Board uses: the 12 MHz oscillator (J3) and the eight
-#     LEDs, which Lattice's board documentation gives; the FPGA side of
-#     the second channel of the board's FTDI chip, its serial port (B12
-#     transmits from the FPGA, B10 receives), and the SPI flash the part
-#     configures from (R12 select, R11 clock, P12 and P11 data), which
-#     are the pins every published HX8K breakout design constrains them
-#     to (Project IceStorm's examples, PicoRV32's hx8kdemo). HIGH
-#     confidence that these are IO pins of the CT256; the flash pins are
-#     also the configuration pins, which become IO after configuration.
-#     They are enough to constrain the designs those boards run and are
-#     marked `io`/`clock` accordingly. The tq144 lists stay strict: a pin
-#     missing there is reported as unknown (an error). The ct256 list is
-#     marked `pins partial`: the package has over two hundred IO balls
-#     that Reticle cannot list with confidence, so a constraint naming an
-#     unlisted one is a WARNING that the pin is unchecked, and nextpnr,
-#     which has the real package, is the authority on it. Add the rest
-#     from the package's pinout before relying on this list.
+#     have four IO banks (0 top, 1 right, 2 bottom, 3 left), but the chip
+#     database does not say which package pin is in which bank, so a single
+#     synthetic bank named `io` holds every pin. Do not read the bank name
+#     as silicon truth.
+#   * PIN LISTS ARE THE WHOLE PACKAGE, from the chip database's `.pins
+#     <package>` section (CHECKED by the test above, pin for pin): every
+#     ball IceStorm maps to an IO block. The ones that can drive a global
+#     network directly (`.gbufpin`) are marked `clock`. Until 19 November
+#     2026 these lists were the pins of the boards that use the parts (the
+#     iCEstick, the HX8K breakout) and the ct256 one was `pins partial`;
+#     every one of those pins is in the lists now, as the same kind.
+
+device ice40-lp384-qn32
+  family ice40
+  package qn32
+  speed lp
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 384 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 384 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin 1 io bank io
+  pin 2 io bank io
+  pin 5 io bank io
+  pin 6 clock bank io
+  pin 7 io bank io
+  pin 8 clock bank io
+  pin 12 io bank io
+  pin 13 io bank io
+  pin 14 io bank io
+  pin 15 io bank io
+  pin 18 io bank io
+  pin 19 clock bank io
+  pin 20 clock bank io
+  pin 22 io bank io
+  pin 23 io bank io
+  pin 26 io bank io
+  pin 27 io bank io
+  pin 29 clock bank io
+  pin 30 clock bank io
+  pin 31 io bank io
+  pin 32 io bank io
+  global_buffers 8
+  clock_region global 0 0 7 9
+  grid 8 10
+end
 
 device ice40-lp1k-tq144
   family ice40
@@ -140,6 +208,8 @@ device ice40-lp1k-tq144
   bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
   bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
   bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
@@ -158,26 +228,107 @@ device ice40-lp1k-tq144
   io_standard LVCMOS18 vccio 1.8
   io_standard SB_LVDS_INPUT vccio 2.5 differential
   bank io vccio 3.3,2.5,1.8
+  pin 1 io bank io
+  pin 2 io bank io
+  pin 3 io bank io
+  pin 4 io bank io
+  pin 7 io bank io
   pin 8 io bank io
   pin 9 io bank io
+  pin 10 io bank io
+  pin 11 io bank io
+  pin 12 io bank io
+  pin 19 io bank io
+  pin 20 clock bank io
   pin 21 clock bank io
+  pin 22 io bank io
+  pin 23 io bank io
+  pin 24 io bank io
+  pin 25 io bank io
+  pin 26 io bank io
+  pin 28 io bank io
+  pin 29 io bank io
+  pin 31 io bank io
+  pin 32 io bank io
+  pin 33 io bank io
+  pin 34 io bank io
+  pin 37 io bank io
+  pin 38 io bank io
+  pin 39 io bank io
+  pin 41 io bank io
+  pin 42 io bank io
+  pin 43 io bank io
+  pin 44 io bank io
+  pin 45 io bank io
+  pin 47 io bank io
+  pin 48 io bank io
+  pin 49 clock bank io
+  pin 50 clock bank io
+  pin 52 io bank io
+  pin 56 io bank io
+  pin 58 io bank io
+  pin 60 io bank io
+  pin 61 io bank io
+  pin 62 io bank io
+  pin 63 io bank io
+  pin 64 io bank io
+  pin 67 io bank io
+  pin 68 io bank io
+  pin 70 io bank io
+  pin 71 io bank io
+  pin 73 io bank io
+  pin 74 io bank io
+  pin 75 io bank io
+  pin 76 io bank io
   pin 78 io bank io
   pin 79 io bank io
   pin 80 io bank io
   pin 81 io bank io
   pin 87 io bank io
   pin 88 io bank io
-  pin 89 io bank io
   pin 90 io bank io
+  pin 91 io bank io
+  pin 93 clock bank io
+  pin 94 clock bank io
   pin 95 io bank io
   pin 96 io bank io
   pin 97 io bank io
   pin 98 io bank io
   pin 99 io bank io
+  pin 101 io bank io
+  pin 102 io bank io
+  pin 104 io bank io
+  pin 105 io bank io
+  pin 106 io bank io
+  pin 107 io bank io
+  pin 112 io bank io
+  pin 113 io bank io
+  pin 114 io bank io
+  pin 115 io bank io
+  pin 116 io bank io
+  pin 117 io bank io
+  pin 118 io bank io
+  pin 119 io bank io
+  pin 120 io bank io
+  pin 121 io bank io
+  pin 122 io bank io
+  pin 128 clock bank io
+  pin 129 clock bank io
+  pin 134 io bank io
+  pin 135 io bank io
+  pin 136 io bank io
+  pin 137 io bank io
+  pin 138 io bank io
+  pin 139 io bank io
+  pin 141 io bank io
+  pin 142 io bank io
+  pin 143 io bank io
+  pin 144 io bank io
   global_buffers 8
   clock_region global 0 0 13 17
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
   grid 14 18
 end
 
@@ -209,6 +360,8 @@ device ice40-hx1k-tq144
   bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
   bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
   bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
@@ -227,27 +380,396 @@ device ice40-hx1k-tq144
   io_standard LVCMOS18 vccio 1.8
   io_standard SB_LVDS_INPUT vccio 2.5 differential
   bank io vccio 3.3,2.5,1.8
+  pin 1 io bank io
+  pin 2 io bank io
+  pin 3 io bank io
+  pin 4 io bank io
+  pin 7 io bank io
   pin 8 io bank io
   pin 9 io bank io
+  pin 10 io bank io
+  pin 11 io bank io
+  pin 12 io bank io
+  pin 19 io bank io
+  pin 20 clock bank io
   pin 21 clock bank io
+  pin 22 io bank io
+  pin 23 io bank io
+  pin 24 io bank io
+  pin 25 io bank io
+  pin 26 io bank io
+  pin 28 io bank io
+  pin 29 io bank io
+  pin 31 io bank io
+  pin 32 io bank io
+  pin 33 io bank io
+  pin 34 io bank io
+  pin 37 io bank io
+  pin 38 io bank io
+  pin 39 io bank io
+  pin 41 io bank io
+  pin 42 io bank io
+  pin 43 io bank io
+  pin 44 io bank io
+  pin 45 io bank io
+  pin 47 io bank io
+  pin 48 io bank io
+  pin 49 clock bank io
+  pin 50 clock bank io
+  pin 52 io bank io
+  pin 56 io bank io
+  pin 58 io bank io
+  pin 60 io bank io
+  pin 61 io bank io
+  pin 62 io bank io
+  pin 63 io bank io
+  pin 64 io bank io
+  pin 67 io bank io
+  pin 68 io bank io
+  pin 70 io bank io
+  pin 71 io bank io
+  pin 73 io bank io
+  pin 74 io bank io
+  pin 75 io bank io
+  pin 76 io bank io
   pin 78 io bank io
   pin 79 io bank io
   pin 80 io bank io
   pin 81 io bank io
   pin 87 io bank io
   pin 88 io bank io
-  pin 89 io bank io
   pin 90 io bank io
+  pin 91 io bank io
+  pin 93 clock bank io
+  pin 94 clock bank io
   pin 95 io bank io
   pin 96 io bank io
   pin 97 io bank io
   pin 98 io bank io
   pin 99 io bank io
+  pin 101 io bank io
+  pin 102 io bank io
+  pin 104 io bank io
+  pin 105 io bank io
+  pin 106 io bank io
+  pin 107 io bank io
+  pin 112 io bank io
+  pin 113 io bank io
+  pin 114 io bank io
+  pin 115 io bank io
+  pin 116 io bank io
+  pin 117 io bank io
+  pin 118 io bank io
+  pin 119 io bank io
+  pin 120 io bank io
+  pin 121 io bank io
+  pin 122 io bank io
+  pin 128 clock bank io
+  pin 129 clock bank io
+  pin 134 io bank io
+  pin 135 io bank io
+  pin 136 io bank io
+  pin 137 io bank io
+  pin 138 io bank io
+  pin 139 io bank io
+  pin 141 io bank io
+  pin 142 io bank io
+  pin 143 io bank io
+  pin 144 io bank io
   global_buffers 8
   clock_region global 0 0 13 17
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
   grid 14 18
+end
+
+device ice40-hx1k-vq100
+  family ice40
+  package vq100
+  speed hx
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 1280 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 1280 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
+    flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin 1 io bank io
+  pin 2 io bank io
+  pin 3 io bank io
+  pin 4 io bank io
+  pin 7 io bank io
+  pin 8 io bank io
+  pin 9 io bank io
+  pin 10 io bank io
+  pin 12 io bank io
+  pin 13 clock bank io
+  pin 15 clock bank io
+  pin 16 io bank io
+  pin 18 io bank io
+  pin 19 io bank io
+  pin 20 io bank io
+  pin 21 io bank io
+  pin 24 io bank io
+  pin 25 io bank io
+  pin 26 io bank io
+  pin 27 io bank io
+  pin 28 io bank io
+  pin 29 io bank io
+  pin 30 io bank io
+  pin 33 clock bank io
+  pin 34 clock bank io
+  pin 36 io bank io
+  pin 37 io bank io
+  pin 40 io bank io
+  pin 41 io bank io
+  pin 42 io bank io
+  pin 45 io bank io
+  pin 46 io bank io
+  pin 48 io bank io
+  pin 49 io bank io
+  pin 51 io bank io
+  pin 52 io bank io
+  pin 53 io bank io
+  pin 54 io bank io
+  pin 56 io bank io
+  pin 57 io bank io
+  pin 59 io bank io
+  pin 60 io bank io
+  pin 62 clock bank io
+  pin 63 clock bank io
+  pin 64 io bank io
+  pin 65 io bank io
+  pin 66 io bank io
+  pin 68 io bank io
+  pin 69 io bank io
+  pin 71 io bank io
+  pin 72 io bank io
+  pin 73 io bank io
+  pin 74 io bank io
+  pin 78 io bank io
+  pin 79 io bank io
+  pin 80 io bank io
+  pin 81 io bank io
+  pin 82 io bank io
+  pin 83 io bank io
+  pin 85 io bank io
+  pin 86 io bank io
+  pin 87 io bank io
+  pin 89 clock bank io
+  pin 90 clock bank io
+  pin 91 io bank io
+  pin 93 io bank io
+  pin 94 io bank io
+  pin 95 io bank io
+  pin 96 io bank io
+  pin 97 io bank io
+  pin 99 io bank io
+  pin 100 io bank io
+  global_buffers 8
+  clock_region global 0 0 13 17
+  grid 14 18
+end
+
+device ice40-hx4k-tq144
+  family ice40
+  package tq144
+  speed hx
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 7680 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 7680 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
+    flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin 1 io bank io
+  pin 2 io bank io
+  pin 3 io bank io
+  pin 4 io bank io
+  pin 7 io bank io
+  pin 8 io bank io
+  pin 9 io bank io
+  pin 10 io bank io
+  pin 11 io bank io
+  pin 12 io bank io
+  pin 15 io bank io
+  pin 16 io bank io
+  pin 17 io bank io
+  pin 18 io bank io
+  pin 19 io bank io
+  pin 20 clock bank io
+  pin 21 clock bank io
+  pin 22 io bank io
+  pin 23 io bank io
+  pin 24 io bank io
+  pin 25 io bank io
+  pin 26 io bank io
+  pin 28 io bank io
+  pin 29 io bank io
+  pin 31 io bank io
+  pin 32 io bank io
+  pin 33 io bank io
+  pin 34 io bank io
+  pin 37 io bank io
+  pin 38 io bank io
+  pin 39 io bank io
+  pin 41 io bank io
+  pin 42 io bank io
+  pin 43 io bank io
+  pin 44 io bank io
+  pin 45 io bank io
+  pin 47 io bank io
+  pin 48 io bank io
+  pin 49 clock bank io
+  pin 52 clock bank io
+  pin 55 io bank io
+  pin 56 io bank io
+  pin 60 io bank io
+  pin 61 io bank io
+  pin 62 io bank io
+  pin 63 io bank io
+  pin 64 io bank io
+  pin 67 io bank io
+  pin 68 io bank io
+  pin 70 io bank io
+  pin 71 io bank io
+  pin 73 io bank io
+  pin 74 io bank io
+  pin 75 io bank io
+  pin 76 io bank io
+  pin 78 io bank io
+  pin 79 io bank io
+  pin 80 io bank io
+  pin 81 io bank io
+  pin 82 io bank io
+  pin 83 io bank io
+  pin 84 io bank io
+  pin 85 io bank io
+  pin 87 io bank io
+  pin 88 io bank io
+  pin 90 io bank io
+  pin 91 io bank io
+  pin 93 clock bank io
+  pin 94 clock bank io
+  pin 95 io bank io
+  pin 96 io bank io
+  pin 97 io bank io
+  pin 98 io bank io
+  pin 99 io bank io
+  pin 101 io bank io
+  pin 102 io bank io
+  pin 104 io bank io
+  pin 105 io bank io
+  pin 106 io bank io
+  pin 107 io bank io
+  pin 110 io bank io
+  pin 112 io bank io
+  pin 113 io bank io
+  pin 114 io bank io
+  pin 115 io bank io
+  pin 116 io bank io
+  pin 117 io bank io
+  pin 118 io bank io
+  pin 119 io bank io
+  pin 120 io bank io
+  pin 121 io bank io
+  pin 122 io bank io
+  pin 124 io bank io
+  pin 125 io bank io
+  pin 128 clock bank io
+  pin 129 clock bank io
+  pin 130 io bank io
+  pin 134 io bank io
+  pin 135 io bank io
+  pin 136 io bank io
+  pin 137 io bank io
+  pin 138 io bank io
+  pin 139 io bank io
+  pin 141 io bank io
+  pin 142 io bank io
+  pin 143 io bank io
+  pin 144 io bank io
+  global_buffers 8
+  clock_region global 0 0 33 33
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
+  grid 34 34
 end
 
 device ice40-hx8k-ct256
@@ -278,6 +800,8 @@ device ice40-hx8k-ct256
   bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
   bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
   bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
   bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
   bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
   bram SB_RAM40_4K
@@ -296,27 +820,458 @@ device ice40-hx8k-ct256
   io_standard LVCMOS18 vccio 1.8
   io_standard SB_LVDS_INPUT vccio 2.5 differential
   bank io vccio 3.3,2.5,1.8
-  pins partial
   pin A1 io bank io
   pin A2 io bank io
+  pin A5 io bank io
+  pin A6 io bank io
+  pin A7 io bank io
+  pin A9 io bank io
+  pin A10 io bank io
+  pin A11 io bank io
+  pin A15 io bank io
+  pin A16 io bank io
+  pin B1 io bank io
+  pin B2 io bank io
   pin B3 io bank io
   pin B4 io bank io
   pin B5 io bank io
+  pin B6 io bank io
+  pin B7 io bank io
+  pin B8 io bank io
+  pin B9 io bank io
   pin B10 io bank io
+  pin B11 io bank io
   pin B12 io bank io
+  pin B13 io bank io
+  pin B14 io bank io
+  pin B15 io bank io
+  pin B16 io bank io
+  pin C1 io bank io
+  pin C2 io bank io
   pin C3 io bank io
   pin C4 io bank io
   pin C5 io bank io
+  pin C6 io bank io
+  pin C7 io bank io
+  pin C8 clock bank io
+  pin C9 io bank io
+  pin C10 io bank io
+  pin C11 io bank io
+  pin C12 io bank io
+  pin C13 io bank io
+  pin C14 io bank io
+  pin C16 io bank io
+  pin D1 io bank io
+  pin D2 io bank io
+  pin D3 io bank io
+  pin D4 io bank io
+  pin D5 io bank io
+  pin D6 io bank io
+  pin D7 io bank io
+  pin D8 io bank io
+  pin D9 io bank io
+  pin D10 io bank io
+  pin D11 io bank io
+  pin D13 io bank io
+  pin D14 io bank io
+  pin D15 io bank io
+  pin D16 io bank io
+  pin E2 io bank io
+  pin E3 io bank io
+  pin E4 io bank io
+  pin E5 io bank io
+  pin E6 io bank io
+  pin E9 io bank io
+  pin E10 io bank io
+  pin E11 io bank io
+  pin E13 io bank io
+  pin E14 io bank io
+  pin E16 io bank io
+  pin F1 io bank io
+  pin F2 io bank io
+  pin F3 io bank io
+  pin F4 io bank io
+  pin F5 io bank io
+  pin F7 clock bank io
+  pin F9 io bank io
+  pin F11 io bank io
+  pin F12 io bank io
+  pin F13 io bank io
+  pin F14 io bank io
+  pin F15 io bank io
+  pin F16 io bank io
+  pin G1 clock bank io
+  pin G2 io bank io
+  pin G3 io bank io
+  pin G4 io bank io
+  pin G5 io bank io
+  pin G10 io bank io
+  pin G11 io bank io
+  pin G12 io bank io
+  pin G13 io bank io
+  pin G14 io bank io
+  pin G15 io bank io
+  pin G16 io bank io
+  pin H1 io bank io
+  pin H2 io bank io
+  pin H3 io bank io
+  pin H4 io bank io
+  pin H5 io bank io
+  pin H6 io bank io
+  pin H11 clock bank io
+  pin H12 io bank io
+  pin H13 io bank io
+  pin H14 io bank io
+  pin H16 clock bank io
+  pin J1 io bank io
+  pin J2 io bank io
   pin J3 clock bank io
+  pin J4 io bank io
+  pin J5 io bank io
+  pin J10 io bank io
+  pin J11 io bank io
+  pin J12 io bank io
+  pin J13 io bank io
+  pin J14 io bank io
+  pin J15 io bank io
+  pin J16 io bank io
+  pin K1 io bank io
+  pin K3 io bank io
+  pin K4 io bank io
+  pin K5 io bank io
+  pin K9 clock bank io
+  pin K11 io bank io
+  pin K12 io bank io
+  pin K13 io bank io
+  pin K14 io bank io
+  pin K15 io bank io
+  pin K16 io bank io
+  pin L1 io bank io
+  pin L3 io bank io
+  pin L4 io bank io
+  pin L5 io bank io
+  pin L6 io bank io
+  pin L7 io bank io
+  pin L9 io bank io
+  pin L10 io bank io
+  pin L11 io bank io
+  pin L12 io bank io
+  pin L13 io bank io
+  pin L14 io bank io
+  pin L16 io bank io
+  pin M1 io bank io
+  pin M2 io bank io
+  pin M3 io bank io
+  pin M4 io bank io
+  pin M5 io bank io
+  pin M6 io bank io
+  pin M7 io bank io
+  pin M8 io bank io
+  pin M9 io bank io
+  pin M11 io bank io
+  pin M12 io bank io
+  pin M13 io bank io
+  pin M14 io bank io
+  pin M15 io bank io
+  pin M16 io bank io
+  pin N2 io bank io
+  pin N3 io bank io
+  pin N4 io bank io
+  pin N5 io bank io
+  pin N6 io bank io
+  pin N7 io bank io
+  pin N9 io bank io
+  pin N10 io bank io
+  pin N12 io bank io
+  pin N16 io bank io
+  pin P1 io bank io
+  pin P2 io bank io
+  pin P4 io bank io
+  pin P5 io bank io
+  pin P6 io bank io
+  pin P7 io bank io
+  pin P8 io bank io
+  pin P9 io bank io
+  pin P10 io bank io
   pin P11 io bank io
   pin P12 io bank io
+  pin P13 io bank io
+  pin P14 io bank io
+  pin P15 io bank io
+  pin P16 io bank io
+  pin R1 io bank io
+  pin R2 io bank io
+  pin R3 io bank io
+  pin R4 io bank io
+  pin R5 io bank io
+  pin R6 io bank io
+  pin R9 clock bank io
+  pin R10 io bank io
   pin R11 io bank io
   pin R12 io bank io
+  pin R14 io bank io
+  pin R15 io bank io
+  pin R16 io bank io
+  pin T1 io bank io
+  pin T2 io bank io
+  pin T3 io bank io
+  pin T5 io bank io
+  pin T6 io bank io
+  pin T7 io bank io
+  pin T8 io bank io
+  pin T9 io bank io
+  pin T10 io bank io
+  pin T11 io bank io
+  pin T13 io bank io
+  pin T14 io bank io
+  pin T15 io bank io
+  pin T16 io bank io
   global_buffers 8
   clock_region global 0 0 33 33
-  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
-  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 2 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
   grid 34 34
+end
+
+device ice40-lp8k-cm81
+  family ice40
+  package cm81
+  speed lp
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 7680 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 7680 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
+    flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin A1 io bank io
+  pin A2 io bank io
+  pin A3 io bank io
+  pin A4 io bank io
+  pin A6 io bank io
+  pin A7 io bank io
+  pin A8 io bank io
+  pin A9 io bank io
+  pin B1 io bank io
+  pin B2 io bank io
+  pin B3 io bank io
+  pin B4 io bank io
+  pin B5 io bank io
+  pin B6 io bank io
+  pin B7 io bank io
+  pin B8 io bank io
+  pin B9 io bank io
+  pin C1 io bank io
+  pin C2 io bank io
+  pin C3 io bank io
+  pin C4 clock bank io
+  pin C5 clock bank io
+  pin C9 io bank io
+  pin D1 io bank io
+  pin D2 io bank io
+  pin D3 clock bank io
+  pin D5 io bank io
+  pin D6 io bank io
+  pin D7 io bank io
+  pin D8 clock bank io
+  pin D9 io bank io
+  pin E1 io bank io
+  pin E2 io bank io
+  pin E3 clock bank io
+  pin E4 io bank io
+  pin E5 io bank io
+  pin E7 io bank io
+  pin E8 clock bank io
+  pin F1 io bank io
+  pin F3 io bank io
+  pin F7 io bank io
+  pin F8 io bank io
+  pin G1 io bank io
+  pin G2 io bank io
+  pin G3 io bank io
+  pin G4 clock bank io
+  pin G5 io bank io
+  pin G6 io bank io
+  pin G7 io bank io
+  pin G8 io bank io
+  pin G9 io bank io
+  pin H1 io bank io
+  pin H2 io bank io
+  pin H4 clock bank io
+  pin H5 io bank io
+  pin H7 io bank io
+  pin H9 io bank io
+  pin J1 io bank io
+  pin J2 io bank io
+  pin J3 io bank io
+  pin J4 io bank io
+  pin J8 io bank io
+  pin J9 io bank io
+  global_buffers 8
+  clock_region global 0 0 33 33
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
+  grid 34 34
+end
+
+# ---------------------------------------------------------------------
+# iCE40 Ultra: ice40-u4k-sg48
+# ---------------------------------------------------------------------
+#
+# The iCE5LP4K (iCE40 Ultra) in the 48-pin QFN, on Project IceStorm's `u4k`
+# die, which the backend places on like the UltraPlus. It is the UltraPlus
+# line below with what the die lacks taken out, every count from the chip
+# database (CHECKED by `every_device_file_is_its_parts_database`):
+#
+#   * 3520 logic cells (440 logic tiles), 20 block RAMs, four DSP blocks
+#     (`.extra_cell MAC16` at (0, 5), (0, 13), (25, 5), (25, 13)), one PLL,
+#     both oscillators.
+#   * No single-port RAM. And no SB_RGBA_DRV: this die's LED driver is the
+#     older pair, SB_RGB_DRV and SB_LED_DRV_CUR, which the backend does not
+#     place yet, so neither is declared and a design instantiating one is
+#     told that no module of that name exists for this part.
+#   * The DSP blocks' two register bits that IceStorm names after each other
+#     on the UltraPlus (docs/fpga-icestorm.md, "Two DSP registers by other
+#     names") are written the same way here. That is a reading, not a
+#     measurement: no iCE40 Ultra was on a board.
+#   * Speed `u`: nextpnr times the iCE40 Ultra with the UltraPlus's setup
+#     rule ("XXX verify u4k" in its source), and so does this backend.
+
+device ice40-u4k-sg48
+  family ice40
+  package sg48
+  speed u
+  lut_size 4
+  ff enable sync_reset async_reset shared_reset init 0
+  bel SB_LUT4 lut count 3520 port i=I0,I1,I2,I3 o=O param LUT_INIT=16'h0000
+  bel SB_CARRY carry port ci=CI i0=I0 i1=I1 co=CO
+  bel SB_DFF ff count 3520 mode posedge port clk=C d=D q=Q
+  bel SB_DFFSR ff mode posedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFR ff mode posedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFSS ff mode posedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFS ff mode posedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFE ff mode posedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFESR ff mode posedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFER ff mode posedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFESS ff mode posedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFES ff mode posedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFN ff mode negedge port clk=C d=D q=Q
+  bel SB_DFFNSR ff mode negedge,sync_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNR ff mode negedge,async_reset port clk=C d=D q=Q rst=R
+  bel SB_DFFNSS ff mode negedge,sync_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNS ff mode negedge,async_set port clk=C d=D q=Q rst=S
+  bel SB_DFFNE ff mode negedge,enable port clk=C d=D q=Q en=E
+  bel SB_DFFNESR ff mode negedge,enable,sync_reset,enable_gates_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNER ff mode negedge,enable,async_reset port clk=C d=D q=Q en=E rst=R
+  bel SB_DFFNESS ff mode negedge,enable,sync_set,enable_gates_reset port clk=C d=D q=Q en=E rst=S
+  bel SB_DFFNES ff mode negedge,enable,async_set port clk=C d=D q=Q en=E rst=S
+  bel ICESTORM_LC other site lc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O clk=CLK en=CEN rst=SR outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel ICESTORM_LC_COMB other site lcc port i=I0,I1,I2,I3 cin=CIN cout=COUT o=O outputs O,COUT param LUT_INIT=16'h0000 CARRY_ENABLE=1'b0 DFF_ENABLE=1'b0 SET_NORESET=1'b0 ASYNC_SR=1'b0 NEG_CLK=1'b0
+  bel SB_IO io port pad=PACKAGE_PIN din=D_IN_0 dout=D_OUT_0 oe=OUTPUT_ENABLE din1=D_IN_1 dout1=D_OUT_1 iclk=INPUT_CLK oclk=OUTPUT_CLK ce=CLOCK_ENABLE param_in PIN_TYPE=6'b000001 param_out PIN_TYPE=6'b011001 param_inout PIN_TYPE=6'b101001 param_pullup PULLUP=1 param_ddr_in PIN_TYPE=6'b000000 param_ddr_out PIN_TYPE=6'b010000
+  bel SB_GB gb count 8 port i=USER_SIGNAL_TO_GLOBAL_BUFFER o=GLOBAL_BUFFER_OUTPUT
+  bel SB_HFOSC other site hfosc port en=CLKHFEN pu=CLKHFPU o=CLKHF outputs CLKHF global_outputs CLKHF param CLKHF_DIV="0b00"
+  bel SB_LFOSC other site lfosc port en=CLKLFEN pu=CLKLFPU o=CLKLF outputs CLKLF global_outputs CLKLF
+  bel SB_MAC16 other site mac16 count 4 outputs O,CO,ACCUMCO,SIGNEXTOUT
+  bram SB_RAM40_4K
+    ports 2
+    mode 16 256 param READ_MODE=0 WRITE_MODE=0 init high 0-15
+    mode 8 512 param READ_MODE=1 WRITE_MODE=1 data 0,2,4,6,8,10,12,14 init high 0,2,4,6,8,10,12,14 1,3,5,7,9,11,13,15
+    mode 4 1024 param READ_MODE=2 WRITE_MODE=2 data 1,5,9,13 init high 0,4,8,12 1,5,9,13 2,6,10,14 3,7,11,15
+    mode 2 2048 param READ_MODE=3 WRITE_MODE=3 data 3,11 init high 0,8 1,9 2,10 3,11 4,12 5,13 6,14 7,15
+    flags dual_port init
+    init_params INIT_ count 16 digits 1 rows 16 slot 16
+    port read clk=RCLK en=RE addr=RADDR dout=RDATA ce=RCLKE
+    port write clk=WCLK en=WE addr=WADDR din=WDATA ce=WCLKE
+  end
+  io_standard LVCMOS33 vccio 3.3
+  io_standard LVCMOS25 vccio 2.5
+  io_standard LVCMOS18 vccio 1.8
+  io_standard SB_LVDS_INPUT vccio 2.5 differential
+  bank io vccio 3.3,2.5,1.8
+  pin 2 io bank io
+  pin 3 io bank io
+  pin 4 io bank io
+  pin 6 io bank io
+  pin 9 io bank io
+  pin 10 io bank io
+  pin 11 io bank io
+  pin 12 io bank io
+  pin 13 io bank io
+  pin 14 io bank io
+  pin 15 io bank io
+  pin 16 io bank io
+  pin 17 io bank io
+  pin 18 io bank io
+  pin 19 io bank io
+  pin 20 clock bank io
+  pin 21 io bank io
+  pin 23 clock bank io
+  pin 25 io bank io
+  pin 26 io bank io
+  pin 27 io bank io
+  pin 28 io bank io
+  pin 31 io bank io
+  pin 32 io bank io
+  pin 34 io bank io
+  pin 35 clock bank io
+  pin 36 io bank io
+  pin 37 clock bank io
+  pin 38 io bank io
+  pin 39 clock bank io
+  pin 40 io bank io
+  pin 41 io bank io
+  pin 42 io bank io
+  pin 43 io bank io
+  pin 44 clock bank io
+  pin 45 io bank io
+  pin 46 io bank io
+  pin 47 io bank io
+  pin 48 io bank io
+  global_buffers 8
+  clock_region global 0 0 25 21
+  pll SB_PLL40_CORE input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_PAD input 10 133 vco 533 1066 outputs 1 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port pad=PACKAGEPIN out=PLLOUTCORE outglobal=PLLOUTGLOBAL lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT="GENCLK"
+  pll SB_PLL40_2F_CORE input 10 133 vco 533 1066 outputs 2 count 1 pfd 10 133 feedback vco divide ref DIVR 0 15 offset 1 divide feedback DIVF 0 127 offset 1 divide out DIVQ 1 6 pow2 band FILTER_RANGE 17=1 26=2 44=3 66=4 101=5 134=6 port ref=REFERENCECLK out=PLLOUTCOREA outb=PLLOUTCOREB outglobal=PLLOUTGLOBALA outglobalb=PLLOUTGLOBALB lock=LOCK tie RESETB=1 BYPASS=0 param FEEDBACK_PATH="SIMPLE" PLLOUT_SELECT_PORTA="GENCLK" PLLOUT_SELECT_PORTB="GENCLK"
+  grid 26 22
 end
 
 # ---------------------------------------------------------------------

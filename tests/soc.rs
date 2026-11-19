@@ -900,17 +900,18 @@ fn the_hx8k_database_knows_the_breakout_boards_uart_pins() {
     // src/fpga/devices/ice40.dev once listed nine pins for
     // `ice40-hx8k-ct256`, the breakout board's LEDs and clock, so the
     // board's serial port on B12 and B10 was refused (F0202) although
-    // nextpnr takes it. The list now has the serial and flash pins too,
-    // and it is marked `pins partial`: a pin it does not list is a
-    // warning that Reticle cannot check it, not an error, since nextpnr
-    // has the real package.
+    // nextpnr takes it. The list then grew the serial and flash pins and
+    // was marked `pins partial`, a pin it did not list being a warning;
+    // since 2026-11-19 it is the whole package from Project IceStorm's
+    // chip database, so every ball of the CT256 is known and one the
+    // package does not have is an error.
     let design = verilog(
         "module t (input wire a, input wire b, output wire y);\n\
          assign y = a & b;\nendmodule\n",
     );
     let top = design.top.expect("a top");
     let device = fpga::target(DEVICE).expect("the HX8K");
-    assert!(device.pins_partial);
+    assert!(!device.pins_partial);
     let mut map = SourceMap::new();
     let text = "set_io y B12\nset_io a B10\n";
     let file = map.add("pins.rcf", text).expect("fits");
@@ -929,29 +930,28 @@ fn the_hx8k_database_knows_the_breakout_boards_uart_pins() {
     };
     assert_eq!(pin_problems(&constraints), Vec::<String>::new());
 
-    // A ball the list does not have is a warning with the same code, and
-    // nothing downstream refuses it.
+    // T16, which used to be the example of a ball the list lacked, is in
+    // it now and draws nothing; a ball the package does not have is an
+    // error.
     let text = "set_io y B12\nset_io a B10\nset_io b T16\n";
     let file = map.add("more.rcf", text).expect("fits");
     let mut diags = Diagnostics::new();
     let constraints = Constraints::parse(text, file, &mut diags);
     constraints.check(&design, device, &mut diags);
-    let found: Vec<(Severity, &str)> = diags
-        .iter()
-        .map(|d| (d.severity, d.message.as_str()))
-        .collect();
-    assert_eq!(
-        found,
-        [(
-            Severity::Warning,
-            "pin T16 is not in Reticle's partial pin list for `ice40-hx8k-ct256`, so it is \
-             not checked here"
-        )],
-        "{}",
-        diags.render(&map)
-    );
-    assert!(diags.iter().all(|d| d.code == Some("F0202")));
+    assert!(diags.is_empty(), "{}", diags.render(&map));
     assert_eq!(pin_problems(&constraints), Vec::<String>::new());
+    let text = "set_io y B12\nset_io a B10\nset_io b T17\n";
+    let file = map.add("bad.rcf", text).expect("fits");
+    let mut diags = Diagnostics::new();
+    let constraints = Constraints::parse(text, file, &mut diags);
+    constraints.check(&design, device, &mut diags);
+    let errors: Vec<&str> = diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(errors.len(), 1, "{}", diags.render(&map));
+    assert!(errors[0].contains("T17"), "{}", diags.render(&map));
 }
 
 /// The value of initialisation parameter `name` of `cell`, as bits.

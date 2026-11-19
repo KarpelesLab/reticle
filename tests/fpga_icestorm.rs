@@ -5,11 +5,13 @@
 //! message when it is absent:
 //!
 //! - **the chip database**: `RETICLE_ICESTORMDB` names the directory
-//!   holding `chipdb-5k.txt`; unset, the copy `reticle fetch icestorm`
-//!   cached is used;
+//!   holding `chipdb-5k.txt` and the other dice's; unset, the copy
+//!   `reticle fetch icestorm` cached is used. A test that needs a die the
+//!   copy lacks (one fetched before the other dice were taken) skips;
 //! - **reference bitstreams**: `RETICLE_ICE40_REF` names a directory of
-//!   `<name>.asc` / `<name>.bin` pairs that nextpnr and icepack wrote for an
-//!   iCE40UP5K. None ship with Reticle.
+//!   `<name>.asc` / `<name>.bin` pairs that nextpnr and icepack wrote, for
+//!   any iCE40 die: each is decoded on the die its `.device` line names.
+//!   None ship with Reticle.
 
 #![cfg(feature = "fpga")]
 
@@ -51,8 +53,14 @@ fn database_dir() -> Option<PathBuf> {
 }
 
 fn chipdb_5k() -> Option<ChipDb> {
+    chipdb("5k")
+}
+
+/// The chip database of die `die` (`384`, `1k`, `5k`, `8k`, `u4k`,
+/// `lm4k`), or `None` with the reason printed.
+fn chipdb(die: &str) -> Option<ChipDb> {
     let dir = database_dir()?;
-    let text = match std::fs::read_to_string(dir.join(PROBE)) {
+    let text = match std::fs::read_to_string(dir.join(format!("chipdb-{die}.txt"))) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("skipping: {}: {e}", dir.display());
@@ -158,10 +166,16 @@ fn every_bit_of_a_reference_decodes() {
     if pairs.is_empty() {
         return;
     }
-    let Some(db) = chipdb_5k() else { return };
-    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let mut fabrics: std::collections::BTreeMap<String, IceFabric> = Default::default();
     for (name, asc, _) in pairs {
         let image = Image::from_asc(&asc).unwrap();
+        let die = image.layout.device.clone();
+        if !fabrics.contains_key(&die) {
+            let Some(db) = chipdb(&die) else { continue };
+            let fabric = IceFabric::build(db, default_package(&die)).expect("the fabric builds");
+            fabrics.insert(die.clone(), fabric);
+        }
+        let fabric = &fabrics[&die];
         let decoded = fabric.decode(&image);
         assert!(
             decoded.bad_patterns.is_empty(),
@@ -174,8 +188,8 @@ fn every_bit_of_a_reference_decodes() {
             decoded.unexplained
         );
         eprintln!(
-            "{name}: {} set bits, {} arcs, {} function fields, 0 unexplained; {} block RAMs \
-             (read and write modes {:?}) holding {} content bits, {} single-port RAMs",
+            "{name} ({die}): {} set bits, {} arcs, {} function fields, 0 unexplained; {} block \
+             RAMs (read and write modes {:?}) holding {} content bits, {} single-port RAMs",
             decoded.bits,
             decoded.arcs.len(),
             decoded.functions.len(),
@@ -192,9 +206,9 @@ fn every_bit_of_a_reference_decodes() {
         // `ram_selftest.v` holds the same block RAMs, modes and contents
         // that Reticle's backend writes for it, wherever each one is placed.
         #[cfg(feature = "verilog")]
-        if name == "ram_selftest" {
+        if name == "ram_selftest" && die == "5k" {
             let graph = fabric.arch.build_graph();
-            let built = build_board_design("ram_selftest", &fabric, &graph);
+            let built = build_board_design("ram_selftest", fabric, &graph);
             let key = |r: &reticle::fpga::icestorm::RamConfig| {
                 (r.read_mode, r.write_mode, r.contents.clone())
             };
@@ -215,9 +229,9 @@ fn every_bit_of_a_reference_decodes() {
         // swaps (`DspConfig::as_bits`): nextpnr and this backend agree on
         // which bit IceStorm names what.
         #[cfg(feature = "verilog")]
-        if name == "dsp_selftest" {
+        if name == "dsp_selftest" && die == "5k" {
             let graph = fabric.arch.build_graph();
-            let built = build_board_design("dsp_selftest", &fabric, &graph);
+            let built = build_board_design("dsp_selftest", fabric, &graph);
             let swapped = |d: &reticle::fpga::icestorm::DspConfig| {
                 let mut p = d.params.clone();
                 let top = p.get("TOP_8x8_MULT_REG").copied().unwrap_or(0);
@@ -244,10 +258,10 @@ fn every_bit_of_a_reference_decodes() {
         // And the PLL designs: the same PLL parameters and the same global
         // networks driven through a pad's input path.
         #[cfg(feature = "verilog")]
-        if name == "pll_uart" || name == "pll2f_uart" {
+        if (name == "pll_uart" || name == "pll2f_uart") && die == "5k" {
             let graph = fabric.arch.build_graph();
-            let built = build_board_design(&name, &fabric, &graph);
-            assert_eq!(decoded.pll, built.decoded.pll, "nextpnr's PLL differs");
+            let built = build_board_design(&name, fabric, &graph);
+            assert_eq!(decoded.plls, built.decoded.plls, "nextpnr's PLL differs");
             assert_eq!(
                 decoded.padin, built.decoded.padin,
                 "nextpnr's global networks"
@@ -257,6 +271,19 @@ fn every_bit_of_a_reference_decodes() {
                 decoded.padin
             );
         }
+    }
+}
+
+/// The package a reference bitstream of die `die` is decoded in: the one
+/// in which the die has all its PLLs, which is all a package changes about
+/// what the bits can mean.
+fn default_package(die: &str) -> &'static str {
+    match die {
+        "384" => "qn32",
+        "1k" => "tq144",
+        "8k" => "ct256",
+        "lm4k" => "swg25tr",
+        _ => "sg48",
     }
 }
 
@@ -833,8 +860,21 @@ fn implement_source(
     fabric: &IceFabric,
     graph: &reticle::fpga::arch::RoutingGraph,
 ) -> Result<reticle::fpga::icestorm::Implemented, String> {
-    let device = reticle::fpga::target("ice40-up5k-sg48").expect("the device ships");
-    let (design, top, constraints) = synthesize_source(name, source, rcf);
+    implement_source_on("ice40-up5k-sg48", name, source, rcf, fabric, graph)
+}
+
+/// [`implement_source`] on the part the device file `device` describes.
+#[cfg(feature = "verilog")]
+fn implement_source_on(
+    device: &str,
+    name: &str,
+    source: &str,
+    rcf: &str,
+    fabric: &IceFabric,
+    graph: &reticle::fpga::arch::RoutingGraph,
+) -> Result<reticle::fpga::icestorm::Implemented, String> {
+    let device = reticle::fpga::target(device).expect("the device ships");
+    let (design, top, constraints) = synthesize_source_on(device, name, source, rcf);
     reticle::fpga::icestorm::implement(
         &design,
         top,
@@ -858,11 +898,26 @@ fn synthesize_source(
     reticle::ir::ModuleId,
     reticle::fpga::Constraints,
 ) {
+    let device = reticle::fpga::target("ice40-up5k-sg48").expect("the device ships");
+    synthesize_source_on(device, name, source, rcf)
+}
+
+/// [`synthesize_source`] for `device`.
+#[cfg(feature = "verilog")]
+fn synthesize_source_on(
+    device: &reticle::fpga::Device,
+    name: &str,
+    source: &str,
+    rcf: &str,
+) -> (
+    reticle::ir::Design,
+    reticle::ir::ModuleId,
+    reticle::fpga::Constraints,
+) {
     use reticle::diag::Diagnostics;
-    use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
+    use reticle::fpga::{Constraints, FpgaOptions, synthesize_for};
     use reticle::source::SourceMap;
 
-    let device = target("ice40-up5k-sg48").expect("the device ships");
     let (source, rcf) = (source.to_owned(), rcf.to_owned());
     let mut map = SourceMap::new();
     let id = map.add(format!("{name}.v"), source).unwrap();
@@ -1081,6 +1136,389 @@ fn the_board_designs_build_and_every_bit_decodes() {
 }
 
 // ---------------------------------------------------------------------------
+// Every part
+// ---------------------------------------------------------------------------
+
+/// Each part's device file states what its chip database does: every pin of
+/// the package that IceStorm maps to an IO block, and no other, each marked
+/// `clock` exactly when it can drive a global network (`.gbufpin`); the
+/// logic cells (eight a logic tile); whether there is block RAM; the PLLs
+/// the package has (the database's `LOCKED` lines take some away); the DSP
+/// blocks; and the grid.
+///
+/// What it would catch: a pin list copied from a board file rather than the
+/// package (the LP/HX lists were, until the backend reached these parts), a
+/// pin in the wrong package of a die, a `pll` line on a part whose package
+/// does not bond the PLL — which a design would then be refused for only
+/// after synthesis — or a count from a data sheet that disagrees with the
+/// silicon IceStorm mapped. What it would not: that IceStorm's map is the
+/// silicon's, which no board here could check for these parts.
+#[test]
+fn every_device_file_is_its_parts_database() {
+    use reticle::fpga::icestorm::db::TileKind;
+    use std::collections::{BTreeMap, BTreeSet};
+    for part in &reticle::fpga::icestorm::PARTS {
+        let Some(db) = chipdb(part.die) else { return };
+        let device = reticle::fpga::target(part.device).expect("the device ships");
+        let who = part.device;
+        let gbuf: BTreeSet<(u32, u32, u32)> = db.gbufpin.iter().map(|g| (g.0, g.1, g.2)).collect();
+        let want: BTreeMap<String, bool> = db
+            .package(part.package)
+            .unwrap_or_else(|| panic!("{who}: no package {}", part.package))
+            .iter()
+            .filter(|(_, at)| db.tile(at.0, at.1) == TileKind::Io)
+            .map(|(pin, at)| (pin.clone(), gbuf.contains(at)))
+            .collect();
+        let have: BTreeMap<String, bool> = device
+            .pins
+            .iter()
+            .map(|p| {
+                (
+                    p.name.clone(),
+                    p.kind == reticle::fpga::device::PinKind::Clock,
+                )
+            })
+            .collect();
+        assert_eq!(have, want, "{who}: the pins");
+        assert!(!device.pins_partial, "{who}: the whole package is listed");
+        let tiles = |kind: TileKind| db.tiles.iter().filter(|t| **t == kind).count();
+        let lut = device.bel_named("SB_LUT4").expect("a lookup table");
+        assert_eq!(
+            lut.count,
+            Some(u32::try_from(tiles(TileKind::Logic) * 8).unwrap()),
+            "{who}: logic cells"
+        );
+        assert_eq!(
+            device.block_rams.is_empty(),
+            tiles(TileKind::Ramb) == 0,
+            "{who}: block RAM"
+        );
+        let plls = db
+            .extra_cells
+            .iter()
+            .filter(|c| c.kind == "PLL" && c.available_in(part.package))
+            .count();
+        for shape in &device.clock_resources.plls {
+            assert_eq!(
+                shape.count,
+                Some(u32::try_from(plls).unwrap()),
+                "{who}: {}",
+                shape.name
+            );
+        }
+        assert_eq!(
+            device.clock_resources.plls.is_empty(),
+            plls == 0,
+            "{who}: PLL lines"
+        );
+        let macs = db.extra_cells.iter().filter(|c| c.kind == "MAC16").count();
+        assert_eq!(
+            device.bel_named("SB_MAC16").and_then(|b| b.count),
+            (macs > 0).then(|| u32::try_from(macs).unwrap()),
+            "{who}: DSP blocks"
+        );
+        for (cell, kind) in [
+            ("SB_SPRAM256KA", "SPRAM"),
+            ("SB_HFOSC", "HFOSC"),
+            ("SB_LFOSC", "LFOSC"),
+            ("SB_RGBA_DRV", "RGBA_DRV"),
+        ] {
+            let in_db = db.extra_cells.iter().any(|c| c.kind == kind);
+            assert_eq!(device.bel_named(cell).is_some(), in_db, "{who}: {cell}");
+        }
+        let grid = device.tile_grid.expect("a grid");
+        assert_eq!((grid.width, grid.height), (db.width, db.height), "{who}");
+        eprintln!(
+            "{who}: {} pins ({} clock), {} logic cells, {} block RAMs, {plls} PLL(s), {macs} DSP \
+             blocks, {} x {}, as the database says",
+            want.len(),
+            want.values().filter(|c| **c).count(),
+            tiles(TileKind::Logic) * 8,
+            tiles(TileKind::Ramb),
+            db.width,
+            db.height
+        );
+    }
+}
+
+/// The column buffers this backend enables — every one at a `.colbuf`
+/// source of the chip database — are exactly the rows nextpnr's
+/// `bitstream.cc` enables on each die (all their tiles' `ColBufCtrl` bits),
+/// so the two ways of saying it agree. On the 384 nextpnr enables none,
+/// and so does this backend, whatever the database lists.
+///
+/// What it would catch: a die whose `.colbuf` sources are not nextpnr's
+/// rows, which would leave this backend's global networks reaching other
+/// columns than a nextpnr build's. The rows are QUOTED from nextpnr's
+/// source, not measured.
+#[test]
+fn colbuf_rows_are_nextpnrs() {
+    use reticle::fpga::icestorm::db::TileKind;
+    use std::collections::BTreeSet;
+    for (die, rows) in [
+        ("1k", &[4u32, 5, 12, 13][..]),
+        ("8k", &[8, 9, 24, 25][..]),
+        ("u4k", &[4, 5, 16, 17][..]),
+        ("5k", &[4, 5, 14, 15, 26, 27][..]),
+    ] {
+        let Some(db) = chipdb(die) else { return };
+        let sources: BTreeSet<(u32, u32)> = db.colbuf.iter().map(|(s, _)| *s).collect();
+        let mut nextpnr = BTreeSet::new();
+        for y in 0..db.height {
+            for x in 0..db.width {
+                let kind = db.tile(x, y);
+                if kind == TileKind::Empty {
+                    continue;
+                }
+                // On the 1k a block RAM's tiles are one row lower.
+                let in_row = if die == "1k" && matches!(kind, TileKind::Ramb | TileKind::Ramt) {
+                    [3, 5, 11, 13].contains(&y)
+                } else {
+                    rows.contains(&y)
+                };
+                if in_row {
+                    nextpnr.insert((x, y));
+                }
+            }
+        }
+        assert_eq!(sources, nextpnr, "{die}");
+    }
+}
+
+/// The package pins of `part` a test design may use: its first clock pin,
+/// and the others that are neither a clock pin nor an IO block a PLL's
+/// output passes through.
+#[cfg(feature = "verilog")]
+fn test_pins(part: &reticle::fpga::icestorm::Part, db: &ChipDb) -> (String, Vec<String>) {
+    use std::collections::BTreeSet;
+    let gbuf: BTreeSet<(u32, u32, u32)> = db.gbufpin.iter().map(|g| (g.0, g.1, g.2)).collect();
+    let mut pll_ios = BTreeSet::new();
+    for cell in db.extra_cells.iter().filter(|c| c.kind == "PLL") {
+        for (key, x, y, z) in &cell.entries {
+            if key == "PLLOUT_A" || key == "PLLOUT_B" {
+                pll_ios.insert((*x, *y, z.parse::<u32>().unwrap()));
+            }
+        }
+    }
+    let pins = db.package(part.package).unwrap();
+    let io =
+        |at: &(u32, u32, u32)| db.tile(at.0, at.1) == reticle::fpga::icestorm::db::TileKind::Io;
+    let clock = pins
+        .iter()
+        .find(|(_, at)| io(at) && gbuf.contains(at) && !pll_ios.contains(at))
+        .map(|(p, _)| p.clone())
+        .expect("a clock pin");
+    let others = pins
+        .iter()
+        .filter(|(_, at)| io(at) && !gbuf.contains(at) && !pll_ios.contains(at))
+        .map(|(p, _)| p.clone())
+        .collect();
+    (clock, others)
+}
+
+/// A test design: its name, its file under `testdata/fpga`, and its ports
+/// other than the clock with their widths.
+#[cfg(feature = "verilog")]
+type TestDesign = (&'static str, &'static str, &'static [(&'static str, u32)]);
+
+/// Every part builds the designs written for the parts no board here
+/// carries — `testdata/fpga/ice40/ff_zoo.v` (every kind of register, both
+/// edges), `uart_echo.v`, `bram_check.v` (block RAM in two widths, where the
+/// die has any) and both PLL designs (where the package has a PLL) — with
+/// every bit decoding, the arcs exactly the router's, the block RAMs and
+/// PLLs read back as placed, and the stream unpacking to the same image.
+///
+/// What it would catch: a die whose fabric does not build, a bit the
+/// configuration writes that the die's database does not have (the 1k's
+/// input enables and block RAM power-up bits are the other way round from
+/// the UltraPlus's, and both are read back here), a PLL placed where the
+/// package does not bond it, or the two clock edges sharing a logic tile.
+/// What it would not: that the logic is right, which is what IceStorm's
+/// own decode, simulated against the source, was for
+/// (`docs/fpga-icestorm.md`, "Every iCE40 part"); nor anything a board
+/// would, since none was on one.
+#[cfg(feature = "verilog")]
+#[test]
+fn every_part_builds_its_designs_and_every_bit_decodes() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga");
+    let designs: [TestDesign; 5] = [
+        (
+            "ff_zoo",
+            "ice40/ff_zoo.v",
+            &[("rst", 1), ("en", 1), ("d", 1), ("q", 10)],
+        ),
+        ("uart_echo", "ice40up/uart_echo.v", &[("rx", 1), ("tx", 1)]),
+        (
+            "bram_check",
+            "ice40/bram_check.v",
+            &[("we", 1), ("din", 4), ("wide", 16), ("narrow", 8)],
+        ),
+        ("pll_uart", "ice40up/pll_uart.v", &[("tx", 1)]),
+        ("pll2f_uart", "ice40up/pll2f_uart.v", &[("tx", 1)]),
+    ];
+    // One package per die is enough for the fabric; the parts sharing a
+    // die differ in their pins, which the device file test checks.
+    let mut dies_done = std::collections::BTreeSet::new();
+    for part in &reticle::fpga::icestorm::PARTS {
+        if !dies_done.insert(part.die) {
+            continue;
+        }
+        let Some(db) = chipdb(part.die) else { return };
+        let (clock, pins) = test_pins(part, &db);
+        let fabric = IceFabric::build(db, part.package).expect("the fabric builds");
+        let graph = fabric.arch.build_graph();
+        let has_ram = graph.sites.iter().any(|s| s.kind == "bram");
+        let has_pll = graph.sites.iter().any(|s| s.kind == "pll");
+        for (name, file, ports) in designs {
+            if (name == "bram_check" && !has_ram) || (name.starts_with("pll") && !has_pll) {
+                continue;
+            }
+            let source = std::fs::read_to_string(root.join(file)).unwrap();
+            let mut rcf = format!("set_io -io_standard LVCMOS33 clk {clock}\n");
+            let mut free = pins.iter();
+            for (port, width) in ports {
+                for bit in 0..*width {
+                    let signal = if *width == 1 {
+                        (*port).to_owned()
+                    } else {
+                        format!("{port}[{bit}]")
+                    };
+                    let pin = free.next().expect("enough pins");
+                    rcf.push_str(&format!("set_io -io_standard LVCMOS33 {signal} {pin}\n"));
+                }
+            }
+            rcf.push_str("create_clock -name sys -period 83.333 clk\n");
+            let built = implement_source_on(part.device, name, &source, &rcf, &fabric, &graph)
+                .unwrap_or_else(|e| panic!("{} {name}: {e}", part.device));
+            assert!(built.decoded.unexplained.is_empty());
+            assert_eq!(built.decoded.arcs.len(), built.chosen);
+            if name == "bram_check" {
+                assert_eq!(built.rams, 2, "{} {name}", part.device);
+                assert_eq!(built.decoded.rams.len(), 2, "{} {name}", part.device);
+            }
+            if name.starts_with("pll") {
+                assert_eq!(built.plls.len(), 1, "{} {name}", part.device);
+            }
+            let back = Image::from_bin(&built.image.to_bin()).unwrap();
+            assert_eq!(back.tiles, built.image.tiles, "{} {name}", part.device);
+            assert_eq!(
+                back.ram_data, built.image.ram_data,
+                "{} {name}",
+                part.device
+            );
+            eprintln!(
+                "{} {name}: {} logic cells, {} set bits, {} arcs, {} block RAM(s), {} PLL(s), 0 \
+                 unexplained",
+                part.device,
+                built.pack.cells,
+                built.decoded.bits,
+                built.chosen,
+                built.rams,
+                built.plls.len()
+            );
+        }
+    }
+}
+
+/// What a part lacks is refused by name: a PLL on a package that does not
+/// bond one (the HX1K's VQ100), a PLL on a die with none (the 384), and the
+/// UltraPlus's hard blocks on a part without them, which the device file
+/// does not declare, so synthesis names the primitive and the device.
+///
+/// What it would catch: a design built as if the block were there — the
+/// PLL placed on a site the package leaves out, or a DSP block's ports left
+/// as a black box whose outputs then read as nothing.
+#[cfg(feature = "verilog")]
+#[test]
+fn what_a_part_lacks_is_refused_by_name() {
+    use reticle::diag::Diagnostics;
+    use reticle::fpga::{Constraints, FpgaOptions, synthesize_for, target};
+    use reticle::source::SourceMap;
+
+    let pll = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata/fpga/ice40up/pll_uart.v"),
+    )
+    .unwrap();
+    for (device, die, package, clock, tx) in [
+        ("ice40-hx1k-vq100", "1k", "vq100", "13", "2"),
+        ("ice40-lp384-qn32", "384", "qn32", "6", "2"),
+    ] {
+        let Some(db) = chipdb(die) else { return };
+        let fabric = IceFabric::build(db, package).expect("the fabric builds");
+        let graph = fabric.arch.build_graph();
+        let rcf = format!(
+            "set_io clk {clock}\nset_io tx {tx}\ncreate_clock -name ref -period 83.333 clk\n"
+        );
+        // The device file has no `pll` line for these parts, so the
+        // primitive is not even declared for them; synthesized for the
+        // UltraPlus, which declares it, the backend still refuses it by
+        // name on these fabrics. (Both packages have pins of those names.)
+        let device_file = target(device).unwrap();
+        assert!(device_file.clock_resources.plls.is_empty(), "{device}");
+        let refused =
+            implement_source_on("ice40-up5k-sg48", "pll_uart", &pll, &rcf, &fabric, &graph);
+        assert!(
+            matches!(&refused, Err(e) if e.contains("has no PLL in the") && e.contains("`pll`")),
+            "{device}: {refused:?}",
+            refused = refused.as_ref().err()
+        );
+    }
+    for (device, primitive, ports) in [
+        (
+            "ice40-hx8k-ct256",
+            "SB_MAC16",
+            ".CLK(clk), .A(16'd3), .B(16'd5), .O(o)",
+        ),
+        (
+            "ice40-u4k-sg48",
+            "SB_SPRAM256KA",
+            ".CLOCK(clk), .DATAOUT(o)",
+        ),
+        (
+            "ice40-lp1k-tq144",
+            "SB_HFOSC",
+            ".CLKHFEN(1'b1), .CLKHFPU(1'b1), .CLKHF(o[0])",
+        ),
+    ] {
+        let source = format!(
+            "module top(input clk, output [31:0] o);\n{primitive} u ({ports});\nendmodule\n"
+        );
+        let mut map = SourceMap::new();
+        let id = map.add("top.v".to_owned(), source).unwrap();
+        let mut diags = Diagnostics::new();
+        let ast = reticle::verilog::parse_source(
+            &mut map,
+            id,
+            reticle::verilog::Dialect::Verilog2005,
+            &mut reticle::verilog::NoIncludes,
+            &mut diags,
+        );
+        let mut design = reticle::verilog::elaborate_file(
+            &ast,
+            &reticle::verilog::ElabOptions::default(),
+            &mut diags,
+        )
+        .expect("the design elaborates");
+        let top = design.top.expect("a top module");
+        let result = synthesize_for(
+            &mut design,
+            top,
+            target(device).unwrap(),
+            &Constraints::default(),
+            &FpgaOptions::default(),
+            &mut diags,
+        );
+        let rendered = diags.render(&map);
+        assert!(result.is_err(), "{device}: {primitive} was accepted");
+        assert!(
+            rendered.contains(&format!("no module named `{primitive}`"))
+                && rendered.contains(&format!("the device `{device}` declares no primitive")),
+            "{device}: {rendered}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Timing
 // ---------------------------------------------------------------------------
 
@@ -1088,7 +1526,9 @@ fn the_board_designs_build_and_every_bit_decodes() {
 /// nextpnr placed and routed, against nextpnr's own report of the same
 /// bitstream and against IceStorm's `icetime` run on it.
 ///
-/// `RETICLE_ICE40_TIMING_REF` names a directory of `<name>.asc` files with,
+/// `RETICLE_ICE40_TIMING_REF` names a directory of `<name>.asc` files (a
+/// name `<device>--<design>` is timed as that part, with its own figures
+/// and its family's setup; any other as the UltraPlus) with,
 /// beside each, `<name>.npr.log` (nextpnr's log: the last `Max frequency
 /// for clock` line of each clock) and `<name>.icetime` (`icetime -i -t`'s
 /// report: its `Total path delay`), either or both — Reticle's own builds
@@ -1110,9 +1550,12 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
         eprintln!("skipping: RETICLE_ICE40_TIMING_REF names no directory of nextpnr builds");
         return;
     };
-    let Some(db) = chipdb_5k() else { return };
-    let Some(tdb) = timing_db() else { return };
-    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    // A file named `<device>--<name>.asc` is of that part, timed with its
+    // own figures and its family's setup; any other is the UltraPlus's.
+    let mut fabrics: std::collections::BTreeMap<
+        &str,
+        (IceFabric, reticle::fpga::icestorm::timing::TimingDb),
+    > = Default::default();
     let mut names: Vec<PathBuf> = std::fs::read_dir(&dir)
         .expect("the directory reads")
         .filter_map(Result::ok)
@@ -1124,9 +1567,33 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
     let mut worst_icetime: f64 = 0.0;
     for asc in names {
         let name = asc.file_stem().unwrap().to_string_lossy().into_owned();
+        let part = name
+            .split_once("--")
+            .and_then(|(device, _)| reticle::fpga::icestorm::part(device))
+            .or_else(|| reticle::fpga::icestorm::part("ice40-up5k-sg48"))
+            .expect("the UltraPlus is a part");
+        if !fabrics.contains_key(part.device) {
+            let Some(db) = chipdb(part.die) else { return };
+            let Some(dir) = database_dir() else { return };
+            let Ok(text) = std::fs::read_to_string(dir.join(part.timing)) else {
+                eprintln!("skipping: no {}", part.timing);
+                return;
+            };
+            let mut tdb = reticle::fpga::icestorm::timing::TimingDb::parse(&text).unwrap();
+            let device = reticle::fpga::target(part.device).expect("the device ships");
+            tdb.lut_setup =
+                reticle::fpga::icestorm::timing::TimingDb::lut_setup_for(&device.speed_grade);
+            let fabric = IceFabric::build(db, part.package).expect("the fabric builds");
+            fabrics.insert(part.device, (fabric, tdb));
+        }
+        let (fabric, tdb) = &fabrics[part.device];
         let image = Image::from_asc(&std::fs::read_to_string(&asc).unwrap()).unwrap();
-        let report = reticle::fpga::icestorm::timing::analyse(&fabric, &image, &tdb);
+        let report = reticle::fpga::icestorm::timing::analyse(fabric, &image, tdb);
         let ours: Vec<f64> = report.clocks.iter().map(|c| c.fmax_mhz).collect();
+        // Whether any logic tile's flip-flops are on a falling edge.
+        let falling = fabric.decode(&image).functions.keys().any(|((x, y), f)| {
+            f == "NegClk" && fabric.db.tile(*x, *y) == reticle::fpga::icestorm::db::TileKind::Logic
+        });
         if let Ok(log) = std::fs::read_to_string(asc.with_extension("npr.log")) {
             let mut last: std::collections::BTreeMap<String, f64> =
                 std::collections::BTreeMap::new();
@@ -1156,11 +1623,23 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
                     panic!("{name}: nextpnr times `{clock}` and the analysis no clock");
                 };
                 let error = (mine - theirs) / theirs;
-                worst_npr = worst_npr.max(error.abs());
+                // nextpnr times a path from one edge of a clock to the
+                // other as half a period; this analysis does not time it,
+                // so a design on both edges is shown and not held to the
+                // bound.
+                let both_edges = falling;
+                if !both_edges {
+                    worst_npr = worst_npr.max(error.abs());
+                }
                 eprintln!(
                     "{name}: `{clock}` nextpnr {theirs:.2} MHz, the analysis {mine:.2} MHz \
-                     ({:+.1} %)",
-                    100.0 * error
+                     ({:+.1} %){}",
+                    100.0 * error,
+                    if both_edges {
+                        ", both edges: not held"
+                    } else {
+                        ""
+                    }
                 );
             }
         }
@@ -1421,8 +1900,9 @@ fn the_pll_designs_build_and_read_back() {
         let built = build_board_design(name, &fabric, &graph);
         assert!(built.decoded.unexplained.is_empty());
         assert_eq!(built.decoded.arcs.len(), built.chosen);
-        let pll = built.pll.as_ref().expect("a PLL was placed");
-        assert_eq!(&built.decoded.pll, pll);
+        assert_eq!(built.plls.len(), 1, "{name}: one PLL was placed");
+        let (tile, pll) = built.plls.iter().next().expect("a PLL was placed");
+        assert_eq!(built.decoded.plls.get(tile), Some(pll));
         let want: Vec<(&str, u64)> = vec![
             ("PLLTYPE", plltype),
             ("FEEDBACK_PATH", 1),
@@ -1480,9 +1960,11 @@ fn the_oscillators_drive_their_networks() {
 /// What the PLL refuses, each by name: a pad form (whose reference is the
 /// PLL's own pad, pin 35, which this flow does not take over), and a design
 /// that also wants pin 35 as a pin while the PLL's first output leaves
-/// through that pin's IO block — which the placer refuses before the
-/// backend's own check is reached, because the PLL's `out` and the IO
-/// block's `din` are one wire of one tile.
+/// through that pin's IO block. The second used to be refused by the
+/// placer, because the PLL's `out` and the IO block's `din` are one wire
+/// of one tile; since a die may have two PLLs, each PLL is given a site
+/// before placement, and one whose output would take a pin the design uses
+/// is refused there, saying so.
 #[cfg(feature = "verilog")]
 #[test]
 fn a_pll_the_flow_cannot_place_is_refused() {
@@ -1515,7 +1997,8 @@ fn a_pll_the_flow_cannot_place_is_refused() {
         &graph,
     );
     assert!(
-        matches!(&refused, Err(e) if e.contains("`pll`") && e.contains("`out` pin is shared")),
+        matches!(&refused, Err(e) if e.contains("`pll`")
+            && e.contains("through an IO block the design uses as a pin")),
         "{:?}",
         refused.as_ref().err()
     );

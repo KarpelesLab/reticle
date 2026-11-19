@@ -2,7 +2,10 @@
 
 Reticle places, routes and writes a bitstream for the **iCE40UP5K** on its
 real fabric, read from Project IceStorm's chip database, and the bitstream
-loads and runs. This is the account of how that backend is built, what was
+loads and runs. Since 2026-11-19 it does the same for every other iCE40
+die IceStorm maps and nextpnr places — the LP384, the LP and HX 1k and 8k
+(the HX4K included) and the iCE40 Ultra — which no board here carries;
+see "Every iCE40 part". This is the account of how that backend is built, what was
 checked and how, and the faults found on the way. Like
 [`fpga-trellis.md`](fpga-trellis.md), it says of every claim whether it was
 **CHECKED** — measured, against a database, a vendor tool's output or a
@@ -25,9 +28,15 @@ Python writes them when IceStorm is built. So `reticle fetch icestorm`
 takes a **prebuilt** copy — Debian's `fpga-icestorm-chipdb` package,
 version `0~20250207git7fbf8c0+dfsg1-1` (Debian 13), architecture
 independent, built from IceStorm commit `7fbf8c0` — checks the whole
-`.deb` against a pinned SHA-256, and takes three files out of it:
-`chipdb-5k.txt` (27 MB), `timings_up5k.txt`, and the package's `copyright`,
-which carries IceStorm's ISC licence, saved as `LICENSE`.
+`.deb` against a pinned SHA-256, and takes every file out of it: the six
+dice's chip databases (`chipdb-384.txt`, `-1k`, `-lm4k`, `-u4k`, `-5k`,
+`-8k`), the seven timing files (`timings_lp384.txt`, `_lp1k`, `_hx1k`,
+`_lp8k`, `_hx8k`, `_u4k`, `_up5k`), and the package's `copyright`, which
+carries IceStorm's ISC licence, saved as `LICENSE`: an 8 MB download, 112
+MB unpacked. Until 2026-11-19 it took the 5k's two files only; a copy
+cached then is completed from the same package, checked whole again, the
+next time it is looked for (`Database::top_up`, which until then knew only
+the per-file manifests of the other databases).
 
 A `.deb` is an `ar` archive holding an xz-compressed tar. The `ar` and tar
 readers are `src/bin/reticle/deb.rs`; the xz is `compcol`'s, as for
@@ -39,7 +48,151 @@ works in any build.
 Other prebuilt sources were looked at and not taken: oss-cad-suite and apio
 tarballs (hundreds of megabytes for one 27 MB file), and nextpnr's own
 compiled `.bba` databases (not icebox's text, so not what icebox's decoder
-reads back). The timing file is fetched and not yet read.
+reads back).
+
+## Every iCE40 part
+
+Since 2026-11-19 the backend places on every die IceStorm maps that
+nextpnr also supports, and the device files of the LP and HX parts are on
+the real fabric rather than the synthetic one (`docs/fpga.md`, "Read this
+first"):
+
+| Part (device file) | Die | Package | Timing file | Has |
+|---|---|---|---|---|
+| `ice40-lp384-qn32` | 384 | `qn32` | `timings_lp384.txt` | logic only: no block RAM, no PLL |
+| `ice40-lp1k-tq144` | 1k | `tq144` | `timings_lp1k.txt` | 16 block RAMs, one PLL |
+| `ice40-hx1k-tq144` (iCEstick) | 1k | `tq144` | `timings_hx1k.txt` | the same |
+| `ice40-hx1k-vq100` | 1k | `vq100` | `timings_hx1k.txt` | 16 block RAMs; the package does not bond the PLL |
+| `ice40-hx4k-tq144` | 8k | `tq144:4k` | `timings_hx8k.txt` | 32 block RAMs, two PLLs |
+| `ice40-hx8k-ct256` (HX8K breakout) | 8k | `ct256` | `timings_hx8k.txt` | 32 block RAMs, two PLLs |
+| `ice40-lp8k-cm81` | 8k | `cm81` | `timings_lp8k.txt` | 32 block RAMs; one PLL (the `cm81` does not bond the top one) |
+| `ice40-u4k-sg48` (iCE5LP4K) | u4k | `sg48` | `timings_u4k.txt` | 20 block RAMs, four DSP blocks, one PLL, both oscillators |
+| `ice40-up5k-sg48` | 5k | `sg48` | `timings_up5k.txt` | everything above, and the board |
+
+**No LP, HX or iCE40 Ultra part was on a board.** Everything below about
+them was checked against IceStorm's data and tools and against nextpnr,
+never against silicon. The lm4k die IceStorm also ships has no timing
+file, no nextpnr support, and no device file here.
+
+Every pin, count and grid of those device files is the chip database's
+(`every_device_file_is_its_parts_database`): each package's pins are its
+`.pins` section, the ones that can drive a global network marked `clock`.
+The LP/HX lists used to be the pins of the boards that use the parts, the
+CT256 one `pins partial`; every pin they had is in the new lists, as the
+same kind.
+
+### What differs between the dice
+
+Read from nextpnr's `bitstream.cc` and checked by building on each die and
+comparing with nextpnr's and icepack's output (below). QUOTED where the
+only source is nextpnr's code.
+
+| What | 384 | 1k | 8k | u4k | 5k |
+|---|---|---|---|---|---|
+| an IO block's input enable `IE` | set = enabled | **set = disabled**, and every IO block nothing uses has it set | set = enabled | set = enabled | set = enabled |
+| `IoCtrl.cf_bit_39`/`35` beside a used block | — | — | — | — | set when the block has no pull-up |
+| a block RAM's `RamConfig.PowerUp` | no RAM | **set on every RAM *not* used** | set on a used RAM | set on a used RAM | set on a used RAM |
+| column buffers enabled | **none** | the `.colbuf` sources (rows 4, 5, 12, 13; a RAM's 3, 5, 11, 13) | rows 8, 9, 24, 25 | rows 4, 5, 16, 17 | rows 4, 5, 14, 15, 26, 27 |
+| IP-connect and DSP pass-through cells | — | — | — | every such tile | every such tile but (25, 14) |
+| a logic cell's data setup, added to its table's delay | +30 ps (LP) | +30 (LP), +20 (HX) | +30 (LP), +20 (HX) | −50 ps | −50 ps |
+
+The 1k's two inversions are the ones `icebox_vlog` reads the same way, and
+its own input-enable check (`-R`) passes on every 1k build here. That
+check assumes the 1k's polarity on every die — it fails on nextpnr's own
+8k, u4k and 5k builds as on this backend's — so it was run on the 1k only.
+The column-buffer rows are nextpnr's, and on every die but the 384 they
+are exactly the database's `.colbuf` sources, which is what the backend
+reads (`colbuf_rows_are_nextpnrs`); on the 384 nextpnr enables none and
+neither does this backend (QUOTED: no 384 build was ever loaded anywhere).
+The setup offsets are nextpnr's `getPortClockingInfo`.
+
+A **PLL** is per package as well as per die: IceStorm's `.extra_cell PLL`
+record has a `LOCKED` line naming the packages that do not bond it (the
+1k's in six packages, the 8k's top one in the `cm81`), and the database
+reader refused that line until now — the 1k database did not parse. The
+8k has two PLLs, at the middle of its bottom and top edges, so each PLL is
+given its site before placement: the first the package has whose output IO
+blocks are none of the design's pins (`assign_pll_sites`). A PLL on a part
+without one is refused by name, and so is a hard block the part lacks —
+the device file does not declare it, so synthesis names the primitive and
+the device (`what_a_part_lacks_is_refused_by_name`).
+
+### How they were checked
+
+Five designs — `testdata/fpga/ice40/ff_zoo.v` (every kind of register,
+both clock edges, enables, synchronous and asynchronous sets and resets,
+a carry chain), `uart_echo.v`, `testdata/fpga/ice40/bram_check.v` (a
+256 x 16 and a 512 x 8 block RAM, contents from `initial`, written at run
+time, every word read on the pins), and both PLL designs — were built on
+every part that has what they need: 39 builds. For each:
+
+1. **every set bit decodes** and the arcs are exactly the router's, the
+   block RAMs and PLLs read back as placed — `implement` returns nothing
+   else, and `every_part_builds_its_designs_and_every_bit_decodes` builds
+   each design on each die (one package per die);
+2. **icepack's `.bin` of Reticle's `.asc` is Reticle's `.bin`**, byte for
+   byte from the synchronisation word: 39 of 39;
+3. **IceStorm's own decode, simulated against the source**: `icebox_vlog`
+   turned each `.asc` into Verilog, which `reticle sim` ran beside the
+   source on the same stimulus — random inputs every cycle for `ff_zoo`
+   (outputs compared before each edge of the clock), forty serial frames
+   for `uart_echo` (`tx` compared every cycle), 3 000 cycles of random
+   writes for `bram_check` (every word read compared, the decode's block
+   RAMs simulated by a model written from the library's description of
+   the cell): **26 of 26 builds match the source on every cycle compared**
+   — every part's `ff_zoo` and `uart_echo`, every part with block RAM's
+   `bram_check` — and so does every nextpnr build of the same netlists.
+   The PLL designs were not simulated (a PLL has no model here, and
+   `icebox_vlog` stops on the 5k's PLL record, nextpnr's builds and this
+   backend's alike);
+4. **nextpnr's builds of the same netlists decode cleanly**: Reticle's JSON
+   export placed and routed by nextpnr-ice40 (built from its repository at
+   `1759078` with every die), packed by icepack, then read back by this
+   backend's decoder with nothing unexplained
+   (`every_bit_of_a_reference_decodes`, given the files) and icepack's
+   bytes reproduced (`icepacks_bytes_are_reproduced`): 38 of 38 builds,
+   0 bits unexplained in any. nextpnr did not route the 39th, `pll2f_uart`,
+   on the HX4K or the LP8K within ten minutes (it stalls with one or two
+   wires overused; the same netlist routed on the HX8K's CT256): this
+   backend's builds of both decode, pack and simulate where the others do.
+
+All 39 checks CHECKED on 2026-11-19, by hand: none of IceStorm's Python,
+nextpnr or the simulation's testbenches is in CI. The testbenches and
+the scripts are not committed; the designs are.
+
+What the simulation is worth was checked by mutation: one lookup-table
+bit of `uart_echo`'s HX1K build flipped in the `.asc` made the decode
+differ from the source on 21 944 cycles, another on 14 664, and a third,
+a bit of a table input the cell does not read, on none.
+
+The **timing analysis** was held to nextpnr on the same 38 nextpnr builds
+(`the_timing_analysis_agrees_with_nextpnr_and_icetime`, given the files
+named `<device>--<design>.asc`, each part timed with its own figures and
+its family's setup): every clock of every design within 4.0 % of
+nextpnr's report, most within 1 % — CHECKED. `ff_zoo`, the one design on
+both edges of its clock, is shown and not held: nextpnr times a path from
+one edge to the other as half a period, which this analysis does not time,
+and on the 8k it reports 239.6 and 151.8 MHz (HX8K, LP8K) where this
+analysis, which leaves that path out, says 285.8 and 192.4.
+
+### Faults found on the way to the other parts
+
+- **The 1k database did not parse.** Its PLL record has a `LOCKED` line,
+  a list of packages, which the reader took for a port entry and refused.
+  Found by the first load of `chipdb-1k.txt`; `LOCKED` is now kept as the
+  packages the cell is absent from.
+- **Both clock edges in one logic tile were refused after placement.**
+  `ff_zoo` on the HX1K was refused with "holds flip-flops on both clock
+  edges": the placer had no idea that a tile's eight cells share one
+  `NegClk` bit. It does now — an `ICESTORM_LC` on a falling edge has its
+  own tile mode (`place::slice_mode`, the mechanism the 7 series' shared
+  `CLKINV` already used) — and the backend's check stays as the check that
+  it worked. This was in "What this does not do yet".
+- **`cf_bit_39`/`35` were written beside every used UltraPlus IO block.**
+  nextpnr writes them only for a block without a pull-up (with the default
+  100 kΩ pull-up, neither). No board design had a pull-up, so every
+  reference agreed; read in `bitstream.cc` while porting the other dice's
+  rules, and the backend now writes them as nextpnr does. Not measured.
 
 ## What the database becomes
 
@@ -138,7 +291,7 @@ writes all three:
 | What | Where | CHECKED by |
 |---|---|---|
 | an IO block's input enable (`IE`) and pull-up disable (`REN`) are in *another* block's bits, the one `.ieren` names; on the 5k `IE` set means enabled, and `REN` set means no pull-up | the paired block of the same tile | all four references; and a design that echoes the FT2232H's serial line through the part works |
-| a used IO block also sets `IoCtrl.cf_bit_39` (paired block 0) or `cf_bit_35` (paired block 1) | the same | all four references, input and output alike; meaning not known |
+| a used IO block also sets `IoCtrl.cf_bit_39` (paired block 0) or `cf_bit_35` (paired block 1) — when it has no pull-up, as every block of those references had (corrected 2026-11-19, below) | the same | all four references, input and output alike; meaning not known |
 | every column buffer of every global network enabled, 1 248 bits | every `.colbuf` source tile | all four references, identically, whatever the design |
 | every IP-connect and DSP tile's eight logic cells set to pass their third input through, `11000011001100001100`, with every `Cascade.*` bit beside them | 59 of the 60 such tiles: not the IP-connect tile at (25, 14), see below | all four references, identically |
 
@@ -180,7 +333,7 @@ Its bits, from nextpnr's `bitstream.cc` and read back the same way by
 
 | Bit | Where | Meaning |
 |---|---|---|
-| `RamConfig.PowerUp` | `ramb` | set: the RAM is in use (on the 5k; a 1k has it the other way round, which is one reason only the 5k is supported) |
+| `RamConfig.PowerUp` | `ramb` | set: the RAM is in use (on every die but the 1k, which sets it on the RAMs *not* in use: "Every iCE40 part") |
 | `RamConfig.CBIT_0`, `CBIT_1` | `ramt` | `WRITE_MODE` bits 0 and 1 |
 | `RamConfig.CBIT_2`, `CBIT_3` | `ramt` | `READ_MODE` bits 0 and 1 |
 | `.ram_data X Y` | the `ramb`'s position | the contents: line `k` is `INIT_<k>`, bit `i` of the line bit `i` of the parameter |
@@ -776,11 +929,10 @@ board, where the echo's line resynchroniser has no enable and works.
   (`SHIFTREG_*`, `DELAY`, `PHASE_AND_DELAY`, `EXTERNAL` feedback, dynamic
   delay) are written as nextpnr writes them and never run, and nothing
   drives an oscillator's trim inputs;
-- a logic tile's flip-flops share one clock-polarity bit, and a design that
-  needs both edges in one tile is refused after placement rather than
-  placed around;
 - the timing analysis does not time paths between clocks, to or from pins,
   through a DSP block's multiplier, or with the clock network's skew, and
   the timing-driven flow is not the default;
-- only the 5k is fetched and only `sg48` has been placed; the LP/HX device
-  files still use the synthetic fabric.
+- no LP, HX or iCE40 Ultra part has been on a board: their builds are
+  checked against IceStorm and nextpnr only ("Every iCE40 part"), the
+  iCE40 Ultra's LED drivers (`SB_RGB_DRV`, `SB_LED_DRV_CUR`) are not
+  placed, and nothing is done for the lm4k die.

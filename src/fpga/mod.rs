@@ -438,9 +438,14 @@ mod tests {
         assert_eq!(
             db.names(),
             vec![
+                "ice40-lp384-qn32",
                 "ice40-lp1k-tq144",
                 "ice40-hx1k-tq144",
+                "ice40-hx1k-vq100",
+                "ice40-hx4k-tq144",
                 "ice40-hx8k-ct256",
+                "ice40-lp8k-cm81",
+                "ice40-u4k-sg48",
                 "ice40-up5k-sg48",
                 "ecp5-25f-CABGA381",
                 "ecp5-12f-CABGA256",

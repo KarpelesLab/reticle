@@ -104,8 +104,8 @@ pub struct PackReport {
     /// Whether a cell driving a constant one was made.
     pub vcc: bool,
     /// The cells made to pass a PLL's `LOCK` on (rule 10), which must sit
-    /// in the one logic tile its wire reaches.
-    pub lock_cells: Vec<String>,
+    /// in the one logic tile its wire reaches: `(PLL, cell)`, by name.
+    pub lock_cells: Vec<(String, String)>,
 }
 
 /// Why packing failed.
@@ -945,7 +945,9 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
             params.set(Name::new(key), AttrValue::Const(Const::from_u64(0, 1)));
         }
         let name = unique(module, &format!("{pll_name}$lock"));
-        report.lock_cells.push(name.as_str().to_owned());
+        report
+            .lock_cells
+            .push((pll_name.clone(), name.as_str().to_owned()));
         module.cells.push(Cell {
             name,
             kind: CellKind::Blackbox(Name::new(LC_COMB)),
