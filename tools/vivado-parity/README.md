@@ -124,7 +124,11 @@ models or IP.
   how far each model is from it (`compare`), for `testdata/fpga/vivado/timing/`.
   `decode_placed.sh` and `compare_bits.py` compare the bitstreams, feature by
   feature, `frame_ecc.py` checks what those leave over, and `placed_table.py` and
-  `bits_table.py` write `testdata/fpga/vivado/placed/`.
+  `bits_table.py` write `testdata/fpga/vivado/placed/`. On the primitive probes,
+  `placed_features.py` keeps Vivado's decoded bitstream of chosen probes as
+  `primitives/placed.txt`, which `tests/fpga_xray_placed.rs` holds Reticle's own
+  bitstream to, and `ground_paths.tcl` says, of a routed checkpoint, how Vivado
+  reached each ground and power pin, pip by pip.
 - `achieved.sh`, `achieved.tcl` and `achieved.py` ask the clock period each design
   achieves under Vivado's timer: Vivado's own flow at tightening periods, Reticle's
   placement and routes at several seeds, and Vivado's placement and routes of

@@ -71,6 +71,10 @@ pub struct ClockColumn {
     /// A `CLK_HROW` tile type's `BUFHCE.BUFHCE_X<side>Y<n>.IN_USE` bits, by
     /// tile type and then `(side, n)`.
     pub in_use: BTreeMap<String, BTreeMap<(u32, u32), Vec<ConfigBit>>>,
+    /// The row's bit for a manager whose `DWE` is a signal
+    /// (`cmt::DRP_WRITE`), the MMCM's and the PLL's, for the left tile type
+    /// and the right.
+    pub drp_write: [[Vec<ConfigBit>; 2]; 2],
 }
 
 /// One bit of one tile, by the tile's grid position: what the rules set.
@@ -129,6 +133,11 @@ impl ClockColumn {
                 {
                     out.used[side].insert(n, feature.ones.clone());
                 }
+                for (kind, name) in super::cmt::DRP_WRITE.iter().enumerate() {
+                    if feature.name == *name {
+                        out.drp_write[side][kind].clone_from(&feature.ones);
+                    }
+                }
             }
         }
         for tile_type in ROW_TILES {
@@ -171,6 +180,39 @@ impl ClockColumn {
 /// `CLK_HROW_R_CK_GCLK<k>` or `CLK_BUFG_CK_GCLK<k>`.
 fn track_of(wire: &str, prefix: &str) -> Option<u32> {
     wire.strip_prefix(prefix)?.parse().ok()
+}
+
+/// The enables of a clock row's inputs from the interconnect, which no
+/// `segbits` file names: `CLK_HROW_CK_INT_<a>_<b>_ACTIVE` at `<26 + 2a + b>_287`
+/// of a `CLK_HROW_BOT_R`. Named in the shape of the row's other wire enables,
+/// so `sites::wire_enable_features` charges each to every pip that touches its
+/// wire, and a decoding names it.
+///
+/// **Read off Vivado 2026.1**, its routes of this flow's placements of the
+/// `BUFHCE` and `BUFH` probes on both XC7A35T packages (2026-11-19), whose
+/// buffer takes its clock from the interconnect: `26_287` with
+/// `CLK_HROW_CK_MUX_OUT_*.CLK_HROW_CK_INT_0_0`, `28_287` with `..._INT_1_0`,
+/// and, once those were charged and the router went round them, `29_287` with
+/// `..._INT_1_1`; each set by Vivado and by nothing of this flow's before.
+/// `INT_0_1`'s `27_287` is that pattern's, **not seen**, and a
+/// `CLK_HROW_TOP_R`'s are not named at all.
+pub(super) fn fabric_input_enables(tile_type: &str) -> Vec<super::Feature> {
+    if tile_type != "CLK_HROW_BOT_R" {
+        return Vec::new();
+    }
+    [
+        ("CLK_HROW_CK_INT_0_0_ACTIVE", 26),
+        ("CLK_HROW_CK_INT_0_1_ACTIVE", 27),
+        ("CLK_HROW_CK_INT_1_0_ACTIVE", 28),
+        ("CLK_HROW_CK_INT_1_1_ACTIVE", 29),
+    ]
+    .into_iter()
+    .map(|(name, frame)| super::Feature {
+        name: name.to_owned(),
+        ones: vec![ConfigBit::new(frame, 287)],
+        zeros: Vec::new(),
+    })
+    .collect()
 }
 
 /// The rebuffers either side of grid row `at` in one column: the nearest
@@ -351,6 +393,57 @@ impl XrayFabric {
                 .into_iter()
                 .filter(|(tile, _)| self.type_at(*tile).is_none()),
         );
+        Ok(beyond)
+    }
+
+    /// Each clock manager's `cmt::DRP_WRITE` bit, for one whose `DWE` is a
+    /// signal, in the clock management tile of its own row: the one of its
+    /// column nearest it. Those in the region are set in `bits`, and the rest
+    /// returned for [`XrayFabric::set_beyond_region`], as
+    /// [`XrayFabric::clock_rule_bits`] does.
+    ///
+    /// # Errors
+    ///
+    /// [`BitstreamError`] for a bit outside its tile.
+    pub fn clock_manager_row_bits(
+        &self,
+        graph: &RoutingGraph,
+        netlist: &crate::fpga::place::Netlist,
+        placement: &crate::fpga::place::Placement,
+        bits: &mut Bitstream,
+    ) -> Result<Vec<TileBit>, BitstreamError> {
+        let mut beyond = Vec::new();
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            let kind = match instance.kind.as_str() {
+                "mmcm" => 0,
+                "pll" => 1,
+                _ => continue,
+            };
+            if !super::writes_its_registers(netlist, instance) {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let (x, y) = graph.sites[site].tile;
+            let Some((tile, left)) = self
+                .clocks
+                .row_managers
+                .iter()
+                .filter(|(at, _)| at.0 == x)
+                .min_by_key(|(at, _)| at.1.abs_diff(y))
+                .copied()
+            else {
+                continue;
+            };
+            for bit in &self.clocks.drp_write[usize::from(!left)][kind] {
+                if self.type_at(tile).is_some() {
+                    bits.set(tile, *bit)?;
+                } else {
+                    beyond.push((tile, *bit));
+                }
+            }
+        }
         Ok(beyond)
     }
 

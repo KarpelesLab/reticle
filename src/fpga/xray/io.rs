@@ -844,6 +844,28 @@ impl From<BitstreamError> for IoError {
     }
 }
 
+/// Whether `instance`, a pad's buffer, is an input nothing reads: an `IBUF*`
+/// whose output, and whose second output on a `DIFF_OUT` pair, reaches no sink,
+/// and which no pin Vivado leaves unrouted reads (an `IOBUFDS_DIFF_OUT`'s `TS`,
+/// which mapping marks `io_read`). Vivado removes such a buffer and keeps the
+/// pad's direction and pull (`unread_*`), which [`IoRequest::unread`] writes and
+/// `super::vivado` leaves out of the netlist it writes.
+pub(super) fn unread_input(
+    instance: &crate::fpga::place::Instance,
+    cell: &crate::ir::Cell,
+    netlist: &Netlist,
+) -> bool {
+    instance.primitive.starts_with("IBUF")
+        && cell.attrs.get("io_read").is_none()
+        && !instance.pins.iter().any(|p| {
+            let pin = &netlist.pins[*p];
+            (pin.role == "din" || pin.role == "din_n")
+                && pin
+                    .signal
+                    .is_some_and(|s| !netlist.signals[s].sinks.is_empty())
+        })
+}
+
 /// The request a placed buffer makes, from its primitive and attributes.
 fn request(
     primitive: &str,
@@ -1030,18 +1052,7 @@ impl XrayFabric {
                     &instance.primitive,
                     &cell.attrs,
                     &self.io.default_standard,
-                    // Read through either half of a `DIFF_OUT` pair, or by
-                    // a pin Vivado leaves unrouted (an `IOBUFDS_DIFF_OUT`'s
-                    // `TS`), it is read.
-                    instance.primitive.starts_with("IBUF")
-                        && cell.attrs.get("io_read").is_none()
-                        && !instance.pins.iter().any(|p| {
-                            let pin = &netlist.pins[*p];
-                            (pin.role == "din" || pin.role == "din_n")
-                                && pin
-                                    .signal
-                                    .is_some_and(|s| !netlist.signals[s].sinks.is_empty())
-                        }),
+                    unread_input(instance, cell, netlist),
                     &|role| {
                         instance.pins.iter().any(|p| {
                             let pin = &netlist.pins[*p];

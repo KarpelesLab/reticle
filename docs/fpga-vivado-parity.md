@@ -6832,12 +6832,12 @@ What differs, by class, the same on all three parts unless said:
 | Vivado only: `IOI_OCLKM_<n>` from the clock leaf | `ISERDESE2`, `OSERDESE2` | Vivado drives an output register's `OCLKM` from its `OCLK`'s clock; Reticle leaves it, as this document already said of an `ODDR` | **open**: closing it changes the Husky, which has `ODDR`s; **applied 2026-11-18** |
 | Vivado only: `? RIOB33 30_34 31_33` and `? RIOI3 30_34 31_33` | `ODDR` | two bits each of the pad's tile and its IO logic's that the database names nothing; also in NewAE's Husky image on every `ODDR` pad. Reticle does not set them | **open**, and Husky-changing. **Answered 2026-11-18**: they are `OCLKM`'s pip from the interconnect, set where the register's clock comes over the interconnect, which the database leaves out; named, and applied with the row above |
 | Vivado only: `CLK_BUFG_BUFGCTRL<n>_I1.CLK_BUFG_IMUX<k>_<j>` | `BUFGCE`, `BUFGCE_1` | Vivado ties a `BUFGCE`'s unused `I1` from the interconnect; Reticle leaves it | **open**, and Husky-changing (NewAE's design has eight `BUFGCE`s); **applied 2026-11-18**. That count was the source's: NewAE's image, from an older Vivado, ties no `I1` |
-| Vivado only: a clock manager's `CLKIN2` and DRP ties, and `CLKOUT1`..`3` output enables on a `_BASE` | the four managers | the ties are [known](#vivados-bits-beside-a-clock-answered); the enables come of Reticle's netlist naming the `_ADV` with those outputs' dividers, and Vivado's own flow on the `_BASE` sets none | the enables an export artefact; the ties **open**; **applied 2026-11-18**, but for a DRP pin tied low in the source, which mapping still drives from a lookup table |
-| Vivado only: `? HCLK_CMT_L 24_173`, `? HCLK_L 24_13` | the four managers | a clock manager's output into the row, through bits no `segbits` names | **open** |
-| Reticle only: `ILOGIC.CLKDIVP_USED` | `ISERDESE2` | the export leaves `CLKDIVP` off the cell it writes | export artefact |
-| Vivado only: `VREF_BALL` on bank 35's `VREF` balls; Reticle only: `VREF.V_900_MV` | `IBUF_IBUFDISABLE`, `IBUF_INTERMDISABLE` | an `SSTL18_I` input with no `INTERNAL_VREF`: Vivado's `link_design` flow takes the reference from the balls, **its own synthesis flow does not** (a design asking only that, `vref_ext`, on both dies: no `VREF_BALL`, `VREF.V_900_MV`), and Reticle does as the second | Vivado's two flows disagree; unexplained |
-| Vivado only: `PULLTYPE`, `IN` on the `KEEPER` probe's pad | `KEEPER` | Reticle's netlist has an input buffer nothing reads there, which Vivado's own flow does not | export artefact |
-| Reticle only: `HCLK_L ENABLE_BUFFER` where a route crosses | `BUFH`, `BUFHCE`, XC7A100T only | one tile of a horizontal clock's way Reticle enables and Vivado does not, on one placement | **open**, one data point |
+| Vivado only: a clock manager's `CLKIN2` and DRP ties, and `CLKOUT1`..`3` output enables on a `_BASE` | the four managers | the ties are [known](#vivados-bits-beside-a-clock-answered); the enables come of Reticle's netlist naming the `_ADV` with those outputs' dividers, and Vivado's own flow on the `_BASE` sets none | the enables an export artefact; the ties **open**; **applied 2026-11-18**, but for a DRP pin tied low in the source, which mapping still drives from a lookup table; **both [closed 2026-11-19](#the-last-classes-of-the-ledger)**: the DRP's constants are grounded from fans and the outputs nothing reads are written open |
+| Vivado only: `? HCLK_CMT_L 24_173`, `? HCLK_L 24_13` | the four managers | a clock manager's output into the row, through bits no `segbits` names | **open**; **[closed 2026-11-19](#the-last-classes-of-the-ledger)**: not an output at all but one bit seen through two tiles, set when the manager's `DWE` is a signal |
+| Reticle only: `ILOGIC.CLKDIVP_USED` | `ISERDESE2` | the export leaves `CLKDIVP` off the cell it writes | export artefact; **[closed 2026-11-19](#the-last-classes-of-the-ledger)** in the export |
+| Vivado only: `VREF_BALL` on bank 35's `VREF` balls; Reticle only: `VREF.V_900_MV` | `IBUF_IBUFDISABLE`, `IBUF_INTERMDISABLE` | an `SSTL18_I` input with no `INTERNAL_VREF`: Vivado's `link_design` flow takes the reference from the balls, **its own synthesis flow does not** (a design asking only that, `vref_ext`, on both dies: no `VREF_BALL`, `VREF.V_900_MV`), and Reticle does as the second | Vivado's two flows disagree; unexplained; **explained and [closed 2026-11-19](#the-last-classes-of-the-ledger)**: the probe's `.xdc` sets `INTERNAL_VREF` and its `.rcf` does not, and the export now states it |
+| Vivado only: `PULLTYPE`, `IN` on the `KEEPER` probe's pad | `KEEPER` | Reticle's netlist has an input buffer nothing reads there, which Vivado's own flow does not | export artefact; **[closed 2026-11-19](#the-last-classes-of-the-ledger)** in the export |
+| Reticle only: `HCLK_L ENABLE_BUFFER` where a route crosses | `BUFH`, `BUFHCE`, XC7A100T only | one tile of a horizontal clock's way Reticle enables and Vivado does not, on one placement | **open**, one data point; **[closed 2026-11-19](#the-last-classes-of-the-ledger)**: the enable was charged to the joins along the track |
 | Reticle only: an XADC frame's ECC (`--decode`'s `!`) | `XADC` | [below](#a-drp-blocks-frame-ecc) | **open**, Husky-changing; **applied 2026-11-18** |
 
 **Fixed in Reticle**, each found here:
@@ -10966,3 +10966,86 @@ and the logic analyser's 5.65, against 16.55, 6.74, 17.42 and 5.65 before.
   and `HCLK_L 24_13`, and a DRP pin tied low in the source, as above.
 - `testdata/fpga/vivado/placed/bits.txt` is the 2026-11-06 run of `qor/`, quoted, and was
   not regenerated: `tests/fpga_xray_vivado.rs` holds the file, not the flow.
+
+## The last classes of the ledger
+
+**Asked 2026-11-19: of the primitive probes Vivado writes a bitstream of from
+Reticle's own placement and routes, what does each still differ by, and what does
+Vivado write, in full, for each cell?** `run_placed.sh` (`STAGES="placement routes"`)
+on the 141 probes on all three parts, one part after another, four Vivados at a
+time, both bitstreams of each decoded by the same `reticle fpga --decode` and
+compared by `compare_bits.py`. The tree before is `8ac41550`; the XC7A35T's two
+packages had not been run since 2026-11-06.
+
+### The ledger, before and after (measured)
+
+| part | | before | after |
+|---|---|---|---|
+| XC7A100T FTG256 | probes with Vivado's bitstream of Reticle's routes | 135 | 137 |
+| | the same bitstream, feature for feature | 124 | 137 |
+| | features only Reticle sets | 7 | 0 |
+| | features only Vivado sets | 39 | 0 |
+| XC7A35T FTG256 | probes with Vivado's bitstream | 135 | 137 |
+| | the same, feature for feature | 125 | 137 |
+| | only Reticle's | 7 | 0 |
+| | only Vivado's | 42 | 0 |
+| XC7A35T CPG236 | probes with Vivado's bitstream | 135 | 137 |
+| | the same, feature for feature | 125 | 137 |
+| | only Reticle's | 15 | 0 |
+| | only Vivado's | 40 | 0 |
+
+The "after" of 135 is the full run with every fix below but the last two
+(`bufmrce` and `ram128x1d`), which were run again on their own, on all three
+parts, and are the same bitstream too. **Every bit decodes**: Reticle's 140
+bitstreams a part with 0 bits unexplained and no frame's ECC wrong, before and
+after (186,991 bits on the XC7A100T after, 169,577 and 169,559 on the XC7A35T's
+two); Vivado's had 7, 9 and 9 unexplained bits before and 3 on each part after,
+and those three are the `BUFMR` probe's, below.
+
+### Each class, and what was done
+
+| class | probes | what Vivado writes | done |
+|---|---|---|---|
+| a DRP pin tied low in the source, or by a `_BASE` | `MMCME2_BASE`, `PLLE2_BASE` | the pin on `GND`, from a ground fan, a bounce or both (`gen_drp.py`'s seven designs a manager and four more: every tied pin so, none from a table) | `xc7.dev`'s managers absorb a constant on `DEN`, `DWE`, `DADDR` and `DI`, so mapping builds no table for it, and `cmt::wants` grounds it; one tied high is left on its undriven `IMUX` |
+| which ground each DRP pin takes | the same | the pins in the order of their names, `CLKIN2`, `DADDR`, `DCLK`, `DEN`, `DI`, `DWE`, `PSCLK`; an `IMUX` that reaches a bounce a clock pin's tie has grounded already takes it (`IMUX_L1`, `L3`, `L33`, `L35` on `FAN_BOUNCE5`), and one before takes a fan (read off Vivado's `GND` net, pin by pin, by `ground_paths.tcl`) | `cmt::wants` in that order, and `bram`'s `tie` takes a grounded bounce before a fan |
+| `CLKIN2` where `CLKIN1` has the bounce | `PLLE2_*`, and `MMCME2_BASE` on the XC7A35T | `GND` from an empty slice's table: `CLBLM_M_A` (a lookup table nothing configured reads zero), `ER1BEG1.LOGIC_OUTS12`, `CLK_L0.ER1END1`, `CLK_IN2_INT` | `bram::tie_zero_over_slice`, the fewest pips over free wires from a free table's output of a slice nothing is placed in, the way leaving on the wire named first: `LOGIC_OUTS12` before `LOGIC_OUTS8`, Vivado's choice on all six `PLLE2` builds, for no reason known |
+| `? HCLK_CMT_L 24_173`, `? HCLK_L 24_13` | the four managers | **one bit**, frame 24 (an MMCM) or 25 (a PLL), word 50 of the column, which the `HCLK_CMT`'s window and the `HCLK_L`'s three columns in both hold. Set exactly when the manager's `DWE` is a signal: `_drp_on`, `_den_off`, `_dclk_off`, `_den_dclk_off`, `_addr_off` set it, `_drp_off`, `_dwe_off`, `_den_dwe_off`, `_all_off`, `_dclk_only`, `_den_only` and the `_BASE` probes do not, which is the rule the ECC leaves the manager's bits out by. NewAE's Husky image sets it beside each of its four managers | named `HCLK_CMT_MMCM_DRP_WRITE` and `HCLK_CMT_PLL_DRP_WRITE` (`cmt::drp_write_features`) and set in the manager's own row (`XrayFabric::clock_manager_row_bits`); **what it does on a part is not known** |
+| `CLKOUT1`..`4` output enables on a `_BASE` | `MMCME2_BASE`, `PLLE2_BASE` | none on an output nothing reads; the export gave each output a net, and Vivado took a net with no load for an output in use | the export writes a manager's unread outputs open |
+| `HCLK_L ENABLE_BUFFER` along a track | `BUFH`, `BUFHCE`, every part (4, 4 and 12 bits) | `ENABLE_BUFFER.<track>` only in a tile whose leaf takes the track | not charged to the joins along the row any more, only to a pip that taps the track (the leaf, `HCLK_CK_INOUT`). A global track came out right before only because the router found joins without the bits |
+| `ENABLE_REGIONAL` beside a leaf | `BUFR` | in the tile a regional line leaves by for the leaf of the tile beside, through `HCLK_CK_INOUT_<side><4+w>` | charged to that fixed connection too (`regional::leaf_enable_bits`) |
+| `? CLK_HROW_BOT_R 26_287`, `28_287`, then `29_287` | `BUFH`, `BUFHCE` on the XC7A35T | the clock row's input from the interconnect, `CLK_HROW_CK_INT_0_0`, `1_0`, `1_1`: one bit each, set with the pip | named `CLK_HROW_CK_INT_<a>_<b>_ACTIVE` at `<26+2a+b>_287` (`clock_rules::fabric_input_enables`), so a route through one pays for it. `INT_0_1`'s `27_287` is the pattern's and **was not seen**; `CLK_HROW_TOP_R` is not named |
+| `ILOGIC.CLKDIVP_USED` | `ISERDESE2` | set with `CLKDIVP` on `CLKDIV`'s clock | the export writes `CLKDIVP` back on the cell |
+| `VREF_BALL`s and their pads; `VREF.V_900_MV` | `IBUF_IBUFDISABLE`, `IBUF_INTERMDISABLE` | **explained**: the probe's `.xdc`, which Vivado's own flow read, sets `INTERNAL_VREF 0.9` and its `.rcf` does not, so the export gave Vivado no `INTERNAL_VREF`, and without it Vivado's `link_design` flow takes the reference from the balls. Asked of five designs, `SSTL18_I` and `SSTL15`, an `IBUF` and an `IBUF_IBUFDISABLE`, each way: Vivado's own flow writes `VREF.V_<n>_MV` and no ball with or without it, and its routes of Reticle's placement write the same only with it. The row "Vivado's two flows disagree" above is wrong on the two flows: they read two different constraints files | the export states `INTERNAL_VREF` for each bank whose read referenced input Reticle gives the internal reference (`xray::internal_references`) |
+| `PULLTYPE`, `IN` on the `KEEPER` probe's pad | `KEEPER` | no buffer for an input nothing reads, the pad's pull kept | the export writes no cell for an input nothing reads (`io::unread_input`, which `xray::io` already used) and puts its pull on the port; a pull cell alone on the port is gone at `link_design` |
+| no Vivado bitstream: `BUFMRCE` | `BUFMRCE` | refused the export's `BUFR` on a `BUFGCTRL` (12-1409); with it spelt `BUFG`, ties the `BUFMRCE`'s `I1` as a `BUFGCE`'s | the export writes a `BUFR` on a global buffer as `BUFG`, and `bufg::wants` ties such a `BUFMRCE`'s `I1` |
+| no Vivado bitstream: `RAM128X1D` | `RAM128X1D` | the macro placed by its site, as the other wide RAMs are | written, and placed so |
+
+Every one of these is held by `tests/fpga_xray_placed.rs`: the probes above, on
+the XC7A100T and the bits that differed on the XC7A35T on its CPG236, built as
+`run_placed.sh` builds them and held to Vivado's decoded bitstream of the same
+routes, `primitives/placed.txt` (`placed_features.py`), feature for feature; and
+the export's text for the export fixes. **Each fix was taken out, alone or with
+others that touch other probes, and the test failed on it**: fifteen mutations,
+each named in the test's documentation. It is a placement's test too, as the
+documentation says.
+
+`reticle fpga --decode` now also names a set bit no tile's window holds, as
+`? FRAME_<address> <word>_<bit>`. Before, such a bit was counted unexplained and
+never placed. It found the three below.
+
+### What is left
+
+- **The `BUFMR` probe's three bits outside every tile**: Vivado sets
+  `FRAME_0040009C 58_24`, `FRAME_0040009D 58_27` and `59_27` on the XC7A100T, frames
+  28 and 29 of the left clock management column in the words between the
+  `HCLK_CMT`'s window and the `CMT_TOP_R_UPPER_T`'s, which no tile of
+  `tilegrid.json` covers. Reticle sets none. Feature for feature the two bitstreams
+  are the same; bit for bit they are not. Not named: one design says where, and not
+  what or when.
+- **Four probes still have no bitstream of Vivado's** on any part: `RAMB18E1` and
+  `FIFO36E1` (a ground Vivado routes conflicts with a fixed route of Reticle's,
+  `Route 35-341`: the router took the wires behind a block RAM's pin Reticle leaves
+  idle and Vivado grounds, `WEBWE` on the `RAMB18E1`), `RAMB36E1` (two nets with a
+  partial antenna, `RTSTAT-5`) and `FIFO18E1` (`REQP-35` and `REQP-36`: the probe
+  drives `RSTREG` and `REGCE` with `EN_SYN` false, which Vivado's own flow takes
+  out and the export keeps).

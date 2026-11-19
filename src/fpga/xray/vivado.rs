@@ -67,6 +67,67 @@ pub struct VivadoImplementation {
     pub nets: usize,
 }
 
+/// Each bank whose referenced input this flow gives the bank's internal
+/// reference, with the reference in millivolts: a read input (`IBUF*` or
+/// `IOBUF*`) of a standard with a `VREF`, the first of the bank's, by bank
+/// number as a constraint names it (`35`). What `xray::io` writes for it is
+/// `VREF.V_<n>_MV` in the bank's clock row and nothing on its `VREF` balls,
+/// which is Vivado's own flow on such a design whether or not it is given
+/// `INTERNAL_VREF`; Vivado's `link_design` flow without it takes the reference
+/// from the balls instead (`VREF_BALL`, and no `VREF.V_<n>_MV`). So the
+/// constraints written for Vivado beside [`vivado_implementation`] state the
+/// bank's `INTERNAL_VREF` where the design's did not, and Vivado writes this
+/// flow's bits: the two `SSTL18_I` probes, `IBUF_IBUFDISABLE` and
+/// `IBUF_INTERMDISABLE`, and five designs asking it of an `IBUF` and an
+/// `IBUF_IBUFDISABLE`, `SSTL18_I` and `SSTL15`, each way (2026-11-19,
+/// `docs/fpga-vivado-parity.md`).
+pub fn internal_references(
+    design: &Design,
+    top: ModuleId,
+    netlist: &Netlist,
+    device: &crate::fpga::device::Device,
+) -> Vec<(String, u32)> {
+    use crate::fpga::xc7::pads::{Way, standard};
+    let mut out: BTreeMap<String, u32> = BTreeMap::new();
+    let Some(module) = design.modules.get(top) else {
+        return Vec::new();
+    };
+    for instance in &netlist.instances {
+        if instance.kind != "io" {
+            continue;
+        }
+        let way = if instance.primitive.starts_with("IBUF") {
+            Way::In
+        } else if instance.primitive.starts_with("IOBUF") {
+            Way::InOut
+        } else {
+            continue;
+        };
+        let Some(cell) = module.cells.get(instance.cell) else {
+            continue;
+        };
+        if super::io::unread_input(instance, cell, netlist) {
+            continue;
+        }
+        let text = |key: &str| cell.attrs.get(key).and_then(AttrValue::as_str);
+        let Some(vref) = text("io_standard")
+            .and_then(|s| standard(&s.to_ascii_uppercase()))
+            .and_then(|s| s.vref_of(way))
+        else {
+            continue;
+        };
+        let Some(bank) = text("pin")
+            .and_then(|ball| device.pin(ball))
+            .and_then(|pin| pin.bank.as_deref())
+        else {
+            continue;
+        };
+        out.entry(bank.trim_start_matches('b').to_owned())
+            .or_insert(vref);
+    }
+    out.into_iter().collect()
+}
+
 /// Why an implementation could not be written for Vivado.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VivadoExportError(String);
@@ -1352,6 +1413,17 @@ pub fn vivado_implementation(
                     ]
                     .map(|(l, b)| (l.to_owned(), b.to_owned()))
                     .to_vec(),
+                    // Only counted too: placed by its site, as the two above.
+                    "RAM128X1D" => [
+                        ("SP.LOW", "D6LUT"),
+                        ("SP.HIGH", "C6LUT"),
+                        ("DP.LOW", "B6LUT"),
+                        ("DP.HIGH", "A6LUT"),
+                        ("F7.SP", "F7BMUX"),
+                        ("F7.DP", "F7AMUX"),
+                    ]
+                    .map(|(l, b)| (l.to_owned(), b.to_owned()))
+                    .to_vec(),
                     // The others' wide multiplexers are leaves too, and how
                     // Vivado names those has not been asked.
                     _ => {
@@ -1376,7 +1448,7 @@ pub fn vivado_implementation(
                 // `memarr/sp_as_256x2` and `sp_rf_256x24`).
                 if matches!(
                     base,
-                    "RAM32M" | "RAM64M" | "RAM64X2S" | "RAM128X1S" | "RAM256X1S"
+                    "RAM32M" | "RAM64M" | "RAM64X2S" | "RAM128X1S" | "RAM128X1D" | "RAM256X1S"
                 ) {
                     writer.placed.push(format!("  {name} {s}"));
                     writer.cells += leaves.len();
@@ -1398,10 +1470,15 @@ pub fn vivado_implementation(
                 // (`--regional-clocks auto`) is that global buffer to Vivado,
                 // with the same pins: `BUFMRCE` on `BUFGCTRL` is refused
                 // (12-1409).
+                // A `BUFR` there, which does not divide, is always enabled and
+                // never cleared (`super::bufg` refuses one that is not), is a
+                // `BUFG`: placed as a `BUFR` on `BUFGCTRL`, Vivado refuses it
+                // (12-1409, the `BUFMRCE` probe's load).
+                let regional_on_global = site.bel.starts_with("BUFGCTRL_") && primitive == "BUFR";
                 if site.bel.starts_with("BUFGCTRL_") {
                     primitive = match primitive {
                         "BUFMRCE" => "BUFGCE",
-                        "BUFMR" => "BUFG",
+                        "BUFMR" | "BUFR" => "BUFG",
                         other => other,
                     };
                 }
@@ -1460,6 +1537,12 @@ pub fn vivado_implementation(
                 // A serialiser's `DATA_RATE`, which Vivado's design rules
                 // want stated (`ADEF-2`), at the library's default.
                 let mut written = cell.clone();
+                if regional_on_global {
+                    written
+                        .inputs
+                        .retain(|(port, _)| !matches!(port.as_str(), "CE" | "CLR"));
+                    written.params = crate::ir::Attrs::new();
+                }
                 if primitive == "ISERDESE2" && written.params.get("DATA_RATE").is_none() {
                     written
                         .params
@@ -1482,15 +1565,56 @@ pub fn vivado_implementation(
                         }
                     }
                 }
-                let cell = &written;
-                writer.plain(&name, cell, &view, primitive, &extra)?;
-                // A macro is placed by its site and expanded by Vivado.
-                if b.is_empty() {
-                    writer.placed.push(format!("  {name} {s}"));
-                } else {
-                    writer.placed.push(format!("  {name} {s}/{b}"));
+                // `CLKDIVP` on `CLKDIV`'s clock, which `flow` takes off the
+                // cell and marks, since it reaches the pin on `CLKDIV`'s wire:
+                // written back, or Vivado leaves `CLKDIVP_USED` clear where
+                // this flow's bitstream sets it (`iserdese2_probe`).
+                if primitive == "ISERDESE2"
+                    && cell
+                        .attrs
+                        .get(crate::fpga::xc7::serdes::CLKDIVP_ATTR)
+                        .is_some()
+                {
+                    let clkdiv = inputs_of(&view, cell, "CLKDIV")?;
+                    extra.push(format!(".CLKDIVP({})", writer.names.bits(&clkdiv)));
                 }
-                writer.cells += 1;
+                // A clock manager's output nothing reads, written open: one on
+                // a net with no load is an output in use to Vivado, which sets
+                // its `OUTPUT_ENABLE` where this flow, and Vivado's own flow on
+                // the source, set none (`MMCME2_BASE`, `PLLE2_BASE`).
+                if matches!(primitive, "MMCME2_ADV" | "PLLE2_ADV") {
+                    let read: Vec<&str> = instance
+                        .pins
+                        .iter()
+                        .map(|p| &netlist.pins[*p])
+                        .filter(|p| {
+                            p.output
+                                && p.signal
+                                    .is_some_and(|s| !netlist.signals[s].sinks.is_empty())
+                        })
+                        .map(|p| p.port.as_str())
+                        .collect();
+                    written
+                        .outputs
+                        .retain(|(port, _)| read.contains(&port.as_str()));
+                }
+                // An input nothing reads is no cell: Vivado removes it, keeps the
+                // pad's direction and pull, and writes the pad as this flow does
+                // (`super::io::unread_input`). Written, it is read, and Vivado
+                // sets the receiver this flow leaves off (`KEEPER`'s probe).
+                let unread = site.bel.starts_with("IOB_")
+                    && super::io::unread_input(instance, cell, netlist);
+                let cell = &written;
+                if !unread {
+                    writer.plain(&name, cell, &view, primitive, &extra)?;
+                    // A macro is placed by its site and expanded by Vivado.
+                    if b.is_empty() {
+                        writer.placed.push(format!("  {name} {s}"));
+                    } else {
+                        writer.placed.push(format!("  {name} {s}/{b}"));
+                    }
+                    writer.cells += 1;
+                }
                 // A pull the pad's buffer carries, which a `PULLUP`,
                 // `PULLDOWN` or `KEEPER` of the design's, or a constraint,
                 // put there: Vivado's own cell for it, on the pad's `PULL`
@@ -1522,7 +1646,14 @@ pub fn vivado_implementation(
                     } else {
                         output_of(&view, cell, "O")?
                     };
-                    if let (Some(pull), Some(bit)) = (pull, pad.first()) {
+                    if let (Some(pull), Some(bit), true) = (pull, pad.first(), unread) {
+                        // With no buffer, a pull cell alone on the port is gone at
+                        // `link_design`: the port's own `PULLTYPE` says it.
+                        writer.locks.push(format!(
+                            "set_property PULLTYPE {pull} [get_ports {{{}}}]",
+                            writer.names.bit(*bit)
+                        ));
+                    } else if let (Some(pull), Some(bit)) = (pull, pad.first()) {
                         let _ = writeln!(
                             writer.verilog,
                             "  {pull} {name}__pull (.O({}));",

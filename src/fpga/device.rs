@@ -4478,7 +4478,15 @@ end
                     ),
                     ("IDELAYCTRL", vec!["rst"]),
                     ("DCIRESET", vec!["rst"]),
-                    ("PLLE2_ADV", vec!["rst", "pwrdwn", "clkinsel", "clkin2"]),
+                    // A clock manager's DRP pins too, since 2026-11-19: a
+                    // constant on them is grounded from a fan as Vivado
+                    // grounds it, by `xray::cmt`, not driven by a table.
+                    (
+                        "PLLE2_ADV",
+                        vec![
+                            "rst", "pwrdwn", "clkinsel", "clkin2", "den", "dwe", "daddr", "di"
+                        ]
+                    ),
                     ("XADC", vec!["vp", "vn", "vauxp", "vauxn"]),
                     // The configuration primitives' inputs, which
                     // `xray::config` ties as Vivado ties them, over a ground
@@ -4503,7 +4511,10 @@ end
                     ),
                     (
                         "MMCME2_ADV",
-                        vec!["rst", "pwrdwn", "psen", "psincdec", "clkinsel", "clkin2"]
+                        vec![
+                            "rst", "pwrdwn", "psen", "psincdec", "clkinsel", "clkin2", "den",
+                            "dwe", "daddr", "di"
+                        ]
                     ),
                     // A FIFO's inputs, which `xray::bram`'s ties hold as a
                     // block RAM's are held.

@@ -355,8 +355,16 @@ pub(super) const LEAF_ENABLE: &str = "ENABLE_REGIONAL";
 
 /// The bits a pip from wire `from` costs for the regional line it comes off, in
 /// a horizontal clock tile: its [`LEAF_ENABLE`]. Nothing else has any.
+///
+/// A leaf of the tile beside takes the line through this tile's
+/// `HCLK_CK_INOUT_<side><4 + w>`, a fixed connection from `HCLK_CK_BUFRCLK<w>`,
+/// and Vivado sets the enable here for that too: the `BUFR` probe on its own
+/// routes of this flow's placement (XC7A100T, 2026-11-19), the leaf in
+/// `HCLK_R_X22Y78` on `HCLK_CK_OUTIN_R1` and `ENABLE_REGIONAL.HCLK_CK_BUFRCLK1`
+/// in `HCLK_L_X21Y78`, which this flow left clear.
 pub(super) fn leaf_enable_bits(set: &super::FeatureSet, to: &str, from: &str) -> Vec<ConfigBit> {
-    if !to.starts_with("HCLK_LEAF_CLK") || !from.starts_with("HCLK_CK_BUFRCLK") {
+    let tap = to.starts_with("HCLK_LEAF_CLK") || to.starts_with("HCLK_CK_INOUT");
+    if !tap || !from.starts_with("HCLK_CK_BUFRCLK") {
         return Vec::new();
     }
     set.feature(&format!("{LEAF_ENABLE}.{from}"))

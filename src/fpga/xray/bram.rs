@@ -1722,6 +1722,146 @@ fn tie_zero_over_mux(
     Err("no input of the pin's mux from the interconnect can be grounded".to_owned())
 }
 
+/// The direct output (`<A-D>`, the table's `O6`) of each lookup table of every
+/// slice no instance of `netlist` is placed in, and that no route of the design
+/// uses: a table nothing configured holds zeros, so its output reads zero
+/// whatever its inputs do, and the slice has no bit of its own to set for it.
+fn empty_slice_outputs(
+    graph: &RoutingGraph,
+    netlist: &Netlist,
+    placement: &Placement,
+    used: &HashSet<NodeId>,
+) -> HashSet<NodeId> {
+    // `SLICEL_X1` of `SLICEL_X1_ALUT`: the slice a bel is of.
+    let slice_of = |bel: &str| -> Option<String> {
+        let mut parts = bel.splitn(3, '_');
+        let (base, index) = (parts.next()?, parts.next()?);
+        (matches!(base, "SLICEL" | "SLICEM") && index.starts_with('X'))
+            .then(|| format!("{base}_{index}"))
+    };
+    let mut occupied: HashSet<((u32, u32), String)> = HashSet::new();
+    for index in 0..netlist.instances.len() {
+        if let Some(site) = placement.site_of(index) {
+            let site = &graph.sites[site];
+            if let Some(slice) = slice_of(&site.bel) {
+                occupied.insert((site.tile, slice));
+            }
+        }
+    }
+    let mut out = HashSet::new();
+    for site in &graph.sites {
+        let Some(slice) = slice_of(&site.bel) else {
+            continue;
+        };
+        let lut = site.bel.rsplit('_').next().unwrap_or("");
+        if lut.len() != 4 || !lut.ends_with("LUT") || occupied.contains(&(site.tile, slice)) {
+            continue;
+        }
+        if let Some(node) = site.pin("o")
+            && !used.contains(&node)
+        {
+            out.insert(node);
+        }
+    }
+    out
+}
+
+/// Ties a clock input behind its own input mux to zero from an empty slice's
+/// lookup table, for [`TiePolicy::ClockZeroOverMux`] when no bounce reaches a
+/// free ground fan: the first pip into `pin` from a `*_IN2_INT` wire, and the
+/// way to that wire, of at most three pips over free wires, from a node of
+/// `grounds` ([`empty_slice_outputs`]), the fewest pips first.
+///
+/// Vivado's road to a `PLLE2_ADV`'s unused `CLKIN2` where `CLKIN1`, a clock on
+/// the interconnect, has taken the interconnect's one bounce, `FAN_BOUNCE5`
+/// (the `PLLE2_BASE` and `PLLE2_ADV` probes on this flow's placement, XC7A100T,
+/// 2026-11-18): `GND` from `CLBLM_M_A` of an empty `SLICEM` beside it,
+/// `INT_R.ER1BEG1.LOGIC_OUTS12`, `INT_L.CLK_L0.ER1END1` and the mux's
+/// `CLK_IN2_INT`. Until 2026-11-19 this flow left that `CLKIN2` on the mux's
+/// option with no bits.
+fn tie_zero_over_slice(
+    graph: &RoutingGraph,
+    used: &HashSet<NodeId>,
+    grounds: &HashSet<NodeId>,
+    ties: &mut Ties,
+    pin: NodeId,
+) -> Result<(), String> {
+    if used.contains(&pin) || ties.one.contains(&pin) {
+        return Err("the pin carries a signal or a one".to_owned());
+    }
+    // A wire already tied, either way, has its driver: a second would fight it.
+    let free = |ties: &Ties, node: NodeId| {
+        !used.contains(&node) && !ties.one.contains(&node) && !ties.zero.contains(&node)
+    };
+    for into in graph.incoming(pin) {
+        if graph.pip_bits(*into).is_empty()
+            || !graph.wire(graph.pip(*into).from).name.ends_with("IN2_INT")
+        {
+            continue;
+        }
+        let start = graph.pip(*into).from;
+        if !free(ties, start) {
+            continue;
+        }
+        // Backwards, a programmable pip a step and a fixed hop free, to the
+        // first ground: `came` is how each node was reached, the pip from it.
+        let mut came: HashMap<NodeId, PipId> = HashMap::new();
+        let mut seen: HashSet<NodeId> = HashSet::from([start]);
+        let mut level = vec![start];
+        let mut found = None;
+        'search: for _ in 0..=3 {
+            // The level's fixed hops first, which cost nothing.
+            let mut i = 0;
+            while i < level.len() {
+                let node = level[i];
+                i += 1;
+                if grounds.contains(&node) {
+                    found = Some(node);
+                    break 'search;
+                }
+                for pip in graph.incoming(node) {
+                    let from = graph.pip(*pip).from;
+                    if graph.pip_bits(*pip).is_empty() && free(ties, from) && seen.insert(from) {
+                        came.insert(from, *pip);
+                        level.push(from);
+                    }
+                }
+            }
+            let mut next = Vec::new();
+            for node in &level {
+                for pip in graph.incoming(*node) {
+                    let from = graph.pip(*pip).from;
+                    if !graph.pip_bits(*pip).is_empty() && free(ties, from) && seen.insert(from) {
+                        came.insert(from, *pip);
+                        next.push(from);
+                    }
+                }
+            }
+            // By name, so that of two grounds as near, the one whose way leaves
+            // the interconnect on the wire named first is taken: `LOGIC_OUTS12`
+            // (a `SLICEM`'s `A`) before `LOGIC_OUTS8` (the `SLICEL`'s), which
+            // is Vivado's choice on both `PLLE2` probes on all three parts. Why
+            // it chooses so is not known; this only orders the search.
+            next.sort_by(|a, b| graph.wire(*a).name.cmp(&graph.wire(*b).name).then(a.cmp(b)));
+            level = next;
+        }
+        let Some(ground) = found else { continue };
+        let mut node = ground;
+        ties.zero.insert(node);
+        while let Some(pip) = came.get(&node) {
+            if !graph.pip_bits(*pip).is_empty() {
+                ties.pips.push(*pip);
+            }
+            node = graph.pip(*pip).to;
+            ties.zero.insert(node);
+        }
+        ties.pips.push(*into);
+        ties.zero.insert(pin);
+        return Ok(());
+    }
+    Err("no empty slice's table reaches the mux's input from the interconnect".to_owned())
+}
+
 /// Ties a clock pin's node to zero over a bounce: the first node of its
 /// [`fixed_chain`] that a programmable pip reaches from a `*_BOUNCE*` wire, whose
 /// own fixed chain a programmable pip reaches from a ground fan. Three pips and
@@ -1867,6 +2007,24 @@ fn tie(
     if chain.iter().any(|node| ties.zero.contains(node)) {
         ties.zero.extend(chain);
         return Ok(());
+    }
+    // A bounce another tie has grounded already, before a fan: Vivado's
+    // `GND` net takes `FAN_BOUNCE5` onto an `IMUX` that reaches it once a clock
+    // pin's tie has grounded it, and a fan otherwise (a clock manager's DRP
+    // pins, `super::cmt::wants`).
+    for node in &chain {
+        for pip in graph.incoming(*node) {
+            let from = graph.pip(*pip).from;
+            if !graph.pip_bits(*pip).is_empty()
+                && ties.zero.contains(&from)
+                && !used.contains(&from)
+                && graph.wire(from).name.contains("_BOUNCE")
+            {
+                ties.pips.push(*pip);
+                ties.zero.extend(chain);
+                return Ok(());
+            }
+        }
     }
     for node in &chain {
         for pip in graph.incoming(*node) {
@@ -2772,6 +2930,11 @@ impl XrayFabric {
             .collect();
         let mut ties = Ties::default();
         let mut wants: Vec<Want> = Vec::new();
+        // The lookup tables' direct outputs of every slice nothing was placed
+        // in, which read zero: the grounds of last resort, as Vivado's `GND`
+        // net takes one where the interconnect's fans are spent
+        // ([`tie_zero_over_slice`]).
+        let empty_slice_outputs = empty_slice_outputs(graph, netlist, placement, &used);
 
         for (index, instance) in netlist.instances.iter().enumerate() {
             if instance.primitive == super::dsp::DSP_PRIMITIVE {
@@ -2917,9 +3080,12 @@ impl XrayFabric {
                 TiePolicy::OneOverMux => {
                     tie_one_over_mux(&self.arch, graph, vcc, &used, &mut ties, node)
                 }
-                TiePolicy::ClockZeroOverMux => {
-                    tie_zero_over_mux(&self.arch, graph, vcc, &used, &mut ties, node)
-                }
+                TiePolicy::ClockZeroOverMux => tie_zero_over_mux(
+                    &self.arch, graph, vcc, &used, &mut ties, node,
+                )
+                .or_else(|_| {
+                    tie_zero_over_slice(graph, &used, &empty_slice_outputs, &mut ties, node)
+                }),
                 _ => tie(&self.arch, graph, vcc, &used, &mut ties, node, value),
             };
             if want == TiePolicy::ClockZero && tied.is_err() {

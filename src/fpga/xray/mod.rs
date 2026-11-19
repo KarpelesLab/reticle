@@ -244,7 +244,9 @@ pub use thru::{RouteThroughMode, RouteThroughReport, route_through_room};
 pub use timing::{
     bel_launch, clock_arrival, clock_arrival_ps, clock_margins, place_timing, place_timing_on_sites,
 };
-pub use vivado::{VivadoExportError, VivadoImplementation, vivado_implementation};
+pub use vivado::{
+    VivadoExportError, VivadoImplementation, internal_references, vivado_implementation,
+};
 pub use xadc::xadc_init_bit;
 
 /// Why a Project X-Ray database could not be read.
@@ -1772,6 +1774,32 @@ impl XrayDatabase {
                 }
             }
         }
+        // And a bit no tile's window holds, which nothing above can name: by its
+        // frame's address, as `FRAME_<address>` with the word and the bit for
+        // the row and column. Vivado sets three such on the `BUFMR` probe that
+        // a decoding counted and never said where.
+        let mut in_a_window: HashSet<(u32, u32, u32)> = HashSet::new();
+        for tile in tiles {
+            for (_, window) in &tile.bits {
+                for row in 0..window.frames {
+                    let Some(address) = window.baseaddr.checked_add(row) else {
+                        continue;
+                    };
+                    if let Some(here) = set.get(&address) {
+                        for (word, bit) in here {
+                            if *word >= window.offset && *word < window.offset + window.words {
+                                in_a_window.insert((address, *word, *bit));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for at in &unexplained {
+            if !in_a_window.contains(at) {
+                leftovers.push((format!("FRAME_{:08X}", at.0), ConfigBit::new(at.1, at.2)));
+            }
+        }
         leftovers.sort_by(|a, b| (&a.0, a.1.row, a.1.col).cmp(&(&b.0, b.1.row, b.1.col)));
         Ok(Decoded {
             features: out,
@@ -1865,6 +1893,12 @@ impl XrayDatabase {
         }
         // And a `ZHOLD` feedback's code: see `cmt::zhold_features`.
         measured.extend(cmt::zhold_features(tile_type));
+        // And a row's bit for a manager whose registers are written: see
+        // `cmt::drp_write_features`.
+        measured.extend(cmt::drp_write_features(tile_type));
+        // And a clock row's input from the interconnect: see
+        // `clock_rules::fabric_input_enables`.
+        measured.extend(clock_rules::fabric_input_enables(tile_type));
         // And the configuration primitives': see `config::derived_features`.
         if extras.config_sites {
             measured.extend(config::derived_features(tile_type));
@@ -2519,11 +2553,19 @@ impl XrayDatabase {
             // property of the wire and not of the pip.
             // See [`sites::wire_enable_features`].
             let mut enables: HashMap<&str, Vec<ConfigBit>> = HashMap::new();
+            // A horizontal clock tile's `ENABLE_BUFFER.<track>`, which is a
+            // tap's and not the track's: kept off the joins below.
+            let mut taps: HashMap<&str, Vec<ConfigBit>> = HashMap::new();
             for wire in &wires {
                 let mut bits = Vec::new();
                 for name in sites::wire_enable_features(wire) {
                     if let Some(feature) = set.feature(&name) {
                         bits.extend(feature.ones.iter().copied());
+                        if name.starts_with("ENABLE_BUFFER.") {
+                            taps.entry(wire)
+                                .or_default()
+                                .extend(feature.ones.iter().copied());
+                        }
                     }
                 }
                 if !bits.is_empty() {
@@ -2573,10 +2615,11 @@ impl XrayDatabase {
                 {
                     continue;
                 }
-                let bits = enable_bits(&ppip.to, &ppip.from);
+                let mut bits = enable_bits(&ppip.to, &ppip.from);
                 if !bits.is_empty() {
                     stats.coverage.wire_enables += 1;
                 }
+                bits.extend(regional::leaf_enable_bits(set, &ppip.to, &ppip.from));
                 tile_type.pips.push(PipDecl {
                     from: WireRef::local(ppip.from.clone()),
                     to: WireRef::local(ppip.to.clone()),
@@ -2642,7 +2685,20 @@ impl XrayDatabase {
                         // its enable can be charged here; the other end's
                         // belongs to the tile at the other end and is
                         // charged by that type's own joins.
-                        let bits = enables.get(mine.as_str()).cloned().unwrap_or_default();
+                        //
+                        // But not a horizontal clock tile's `ENABLE_BUFFER`:
+                        // Vivado sets that only in a tile whose leaf takes the
+                        // track (`HCLK_LEAF_CLK_*` from `HCLK_CK_BUFHCLK<n>`,
+                        // which charges it), and not in the tiles a track
+                        // crosses on its way there. Charged on the joins, a
+                        // `BUFH`'s track came out enabled in every `HCLK_L` it
+                        // crossed (the `BUFH` and `BUFHCE` probes on all three
+                        // parts, 2026-11-19), where a global track did not only
+                        // because the router found joins without the bits.
+                        let mut bits = enables.get(mine.as_str()).cloned().unwrap_or_default();
+                        if let Some(tap) = taps.get(mine.as_str()) {
+                            bits.retain(|b| !tap.contains(b));
+                        }
                         if !bits.is_empty() {
                             stats.coverage.wire_enables += 2;
                         }
@@ -3509,7 +3565,7 @@ impl XrayFabric {
 /// leave its tile's bits out of their frames' ECC
 /// ([`super::xc7::ecc_leaves_out_tile`]): a signal and not the lookup table of
 /// zeros mapping gives a pin tied low, which Vivado sees as a ground.
-fn writes_its_registers(
+pub(super) fn writes_its_registers(
     netlist: &super::place::Netlist,
     instance: &super::place::Instance,
 ) -> bool {

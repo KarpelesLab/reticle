@@ -541,8 +541,13 @@ pub(super) fn wants(
     netlist: &Netlist,
     wants: &mut Vec<Want>,
 ) {
-    if instance.primitive != "BUFGCE" || instance.pins.iter().any(|p| netlist.pins[*p].role == "i1")
-    {
+    // A `BUFMRCE` this flow built on a global buffer (`--regional-clocks
+    // auto`) is a `BUFGCE` there, and Vivado ties its `I1` the same way: the
+    // `BUFMRCE` probe on this flow's placement (2026-11-19), once the netlist
+    // written for Vivado spelt its `BUFR` as the `BUFG` it is.
+    let gated = instance.primitive == "BUFGCE"
+        || (instance.primitive == "BUFMRCE" && site.bel.starts_with("BUFGCTRL"));
+    if !gated || instance.pins.iter().any(|p| netlist.pins[*p].role == "i1") {
         return;
     }
     if let Some(node) = site.pin("i1") {

@@ -5729,7 +5729,22 @@ fn write_xc7_bitstream(
         };
         write(stem.to_path_buf(), &written.placement)?;
         write(stem.with_extension("v"), &written.verilog)?;
-        write(stem.with_extension("xdc"), &constraints.write_xdc(device))?;
+        // A bank whose referenced input this flow gives the internal reference
+        // says so, or Vivado takes it from the bank's `VREF` balls. See
+        // `xray::internal_references`.
+        let mut xdc = constraints.write_xdc(device);
+        for (bank, millivolts) in
+            reticle::fpga::xray::internal_references(design, top, &netlist, device)
+        {
+            if !constraints.internal_vref.iter().any(|(b, ..)| *b == bank) {
+                xdc.push_str(&format!(
+                    "set_property INTERNAL_VREF {:.3} [get_iobanks {bank}]
+",
+                    f64::from(millivolts) / 1000.0
+                ));
+            }
+        }
+        write(stem.with_extension("xdc"), &xdc)?;
         write(stem.with_extension("routes.tcl"), &written.routes)?;
         eprintln!(
             "note: wrote {path}, its netlist, its constraints and its routes: {} cell(s), {} \
@@ -5825,9 +5840,16 @@ fn write_xc7_bitstream(
     // A clock row's `BUFHCLK<n>_USED` for each `BUFHCE` in use, and what of
     // either clock rule falls in a tile the region did not load. See
     // `xray::clock_rules`.
-    let beyond = fabric
+    let mut beyond = fabric
         .clock_rule_bits(&graph, &routing, &mut tiles)
         .map_err(|e| e.to_string())?;
+    // And a clock manager's row bit for its DRP's writes. See
+    // `XrayFabric::clock_manager_row_bits`.
+    beyond.extend(
+        fabric
+            .clock_manager_row_bits(&graph, &netlist, &placement, &mut tiles)
+            .map_err(|e| e.to_string())?,
+    );
     let mut frames = xc7::frames_from_bitstream(&fabric.part, &tiles, &fabric.frames)
         .map_err(|e| e.to_string())?;
     fabric

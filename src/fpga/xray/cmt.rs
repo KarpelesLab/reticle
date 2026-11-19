@@ -1163,6 +1163,40 @@ pub(super) fn zhold_features(tile_type: &str) -> Vec<super::Feature> {
     }
 }
 
+/// The bit of a clock management row's tile that Vivado sets for a manager
+/// whose `DWE` is a signal, one for an MMCM and one for a PLL: frame 24 or
+/// 25, bit 173 of `HCLK_CMT` or `HCLK_CMT_L`, which no `segbits` file names.
+///
+/// **Read off Vivado 2026.1**, its own flow on `gen_drp.py`'s designs and four
+/// more tying `DADDR` and `DI`, or every DRP pin, or all but `DCLK`, or all but
+/// `DEN` (XC7A100T, 2026-11-19): the bit is set exactly when `DWE` is a signal,
+/// whatever `DEN`, `DCLK`, `DADDR` and `DI` are, which is the rule Vivado leaves
+/// the manager's bits out of their frames' ECC by
+/// ([`super::xc7::ecc_leaves_out_tile`]); `clocks/`'s `mmcm_drp` and `pll_drp`
+/// are the only ones of its 260 designs that set it, and NewAE's Husky image
+/// sets it beside each of its four managers. The tile's window shares its frame
+/// column with the `HCLK_L` or `HCLK_R` three columns in, whose one word is
+/// this word, so an unnamed decoding said `HCLK_L 24_13` beside it: one bit,
+/// seen through two tiles. What it does on the part is not known; the name
+/// says only when Vivado sets it.
+pub(super) const DRP_WRITE: [&str; 2] = ["HCLK_CMT_MMCM_DRP_WRITE", "HCLK_CMT_PLL_DRP_WRITE"];
+
+/// [`DRP_WRITE`]'s two bits as features of a row's clock management tile.
+pub(super) fn drp_write_features(tile_type: &str) -> Vec<super::Feature> {
+    if !matches!(tile_type, "HCLK_CMT" | "HCLK_CMT_L") {
+        return Vec::new();
+    }
+    DRP_WRITE
+        .iter()
+        .zip([24, 25])
+        .map(|(name, frame)| super::Feature {
+            name: (*name).to_owned(),
+            ones: vec![ConfigBit::new(frame, 173)],
+            zeros: Vec::new(),
+        })
+        .collect()
+}
+
 /// See [`zhold_features`].
 pub(super) const ZHOLD_MMCM: &str = "MMCME2_ADV.ZHOLD_CLKFBIN";
 /// See [`zhold_features`].
@@ -1699,9 +1733,14 @@ impl XrayFabric {
 /// where it needs one, which is what this flow writes already (the module
 /// documentation's "The reset that reads as one"). `CLKIN2`, `DCLK` and
 /// `PSCLK` used to read one undriven here, and a DRP pin the design leaves open
-/// did too. A DRP pin tied low in the source is not one of these: mapping gives
-/// it a lookup table of zeros, as it gives any constant, and it is routed from
-/// that, where Vivado grounds it from a fan; that difference is still there.
+/// did too. A DRP pin tied low in the source is one of these since 2026-11-19:
+/// `xc7.dev` says the managers absorb a constant on `DEN`, `DWE`, `DADDR` and
+/// `DI`, so mapping no longer gives it a lookup table of zeros routed to the
+/// pin, and it is grounded from a fan as Vivado grounds it (`gen_drp.py`'s
+/// `_drp_off`, `_den_off`, `_addr_off` and `_all_off` on the XC7A100T, every
+/// tied pin on `GND` from `GFAN<n>`). One tied high is left on the `IMUX`
+/// undriven, which reads one, as Vivado's `VCC` net is
+/// ([`TiePolicy::One`] checks it).
 /// The DRP's are left when no fan is free, rather than refused, since nothing
 /// reads them while `DCLK` has no edge, which is UG472's word and not measured;
 /// Vivado had a free fan for each. And `CLKIN2`'s bounce is the one the
@@ -1722,25 +1761,42 @@ pub(super) fn wants(
         "pll" => false,
         _ => return,
     };
-    let low = |role: &str| match pins_of_role(instance, netlist, role) {
-        None => true,
-        Some(pin) => pin.signal.is_none() && pin.constant == Some(Bit::Zero),
+    let constant = |role: &str| match pins_of_role(instance, netlist, role) {
+        None => Some(Bit::Zero),
+        Some(pin) if pin.signal.is_none() => pin.constant,
+        Some(_) => None,
     };
     let mut tie = |role: &str, policy: TiePolicy| {
-        if !low(role) {
-            return;
-        }
+        let policy = match constant(role) {
+            Some(Bit::Zero) => policy,
+            // A DRP pin tied high, which `xc7.dev` lets the manager absorb:
+            // the `IMUX` left undriven reads one.
+            Some(Bit::One) if policy == TiePolicy::Idle => TiePolicy::One,
+            _ => return,
+        };
         if let Some(node) = site.pin(role) {
             wants.push((policy, instance.name.clone(), role.to_owned(), node));
         }
     };
+    // In the order of the pins' names, which is the order Vivado grounds them
+    // in: a pin after a clock tie in the same interconnect tile takes the
+    // bounce that tie grounded where its `IMUX` reaches it, and one before
+    // takes a fan (the `MMCME2_BASE` probe at `X139Y113`: `DI2`, `DI3`, `DI6`
+    // and `DI7` on `FAN_BOUNCE5` after `DCLK`, and `DADDR1`, `DADDR4` and
+    // `DADDR5` on `GFAN0` before `PSCLK`; `gen_drp.py`'s `_all_off`, the same
+    // four `IMUX`es after `CLKIN2`). See `super::bram`'s `tie`.
     tie("clkin2", TiePolicy::ClockZeroOverMux);
+    for role in DADDR {
+        tie(role, TiePolicy::Idle);
+    }
     tie("dclk", TiePolicy::ClockZero);
+    tie("den", TiePolicy::Idle);
+    for role in DI {
+        tie(role, TiePolicy::Idle);
+    }
+    tie("dwe", TiePolicy::Idle);
     if mmcm {
         tie("psclk", TiePolicy::ClockZero);
-    }
-    for role in ["den", "dwe"].into_iter().chain(DADDR).chain(DI) {
-        tie(role, TiePolicy::Idle);
     }
 }
 
