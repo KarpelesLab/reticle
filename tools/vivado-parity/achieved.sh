@@ -52,7 +52,7 @@ corpus=$(cd "$1" && pwd); part=$2; mkdir -p "$3"; out=$(cd "$3" && pwd); shift 3
 seeds=${*:-1 2 3 4 5}
 bin=${RETICLE:-target/release/reticle}
 bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
-jobs=${JOBS:-6}
+jobs=${JOBS:-4}
 self="$here/achieved.sh"
 designs=$(ls "$corpus" | sed -n 's/\.rcf$//p')
 own() { # <cons dir> <own dir>

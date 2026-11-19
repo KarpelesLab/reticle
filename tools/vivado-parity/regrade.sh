@@ -16,7 +16,7 @@ for part in "$@"; do
   for d in $(ls "$run"); do
     [ -f "$run/$d/x.tcl" ] && echo "$part $d"
   done
-done | xargs -P "${JOBS:-6}" -L 1 sh -c '
+done | xargs -P "${JOBS:-4}" -L 1 sh -c '
   part=$0; d=$1; o='"$out"'/$part/$d; mkdir -p $o
   ln -sf '"$run"'/$d/x.tcl $o/x.tcl
   [ ! -f '"$run"'/$d/endpoints.txt ] || ln -sf '"$run"'/$d/endpoints.txt $o/endpoints.txt

@@ -22,7 +22,7 @@ if [ "$1" = --stage ]; then
   exit 0
 fi
 stage=$1; src=$(cd "$2" && pwd); part=$3; mkdir -p "$4"; out=$(cd "$4" && pwd)
-jobs=${JOBS:-6}
+jobs=${JOBS:-4}
 self="$here/netlist_qor.sh"
 if [ "$stage" = synth ]; then
   ls "$src" | sed -n 's/\.rcf$//p' |

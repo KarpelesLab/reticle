@@ -114,6 +114,9 @@ models or IP.
   packets by `bit_packets.py`, in `vivado.txt` there.
 - `run_all.sh` and `run_vivado.tcl` run a directory of designs through Vivado;
   `run_reticle.sh` does the same with Reticle. Both run at the lowest priority.
+  Every script here runs `$JOBS` at a time, **four** unless it is set: the machine
+  is shared, and one Vivado per job is a lot of it. Run one script at a time, so
+  that four is the most there is.
 - `run_placed.sh` and `run_placed.tcl` give Vivado Reticle's own implementation
   (`reticle fpga --vivado-placement`) to place, route and time, or to time as it
   is; with `TIMING=1`, `timing_dump.tcl` asks Vivado's timer of the routes, element

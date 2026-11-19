@@ -7,7 +7,7 @@ out=$(cd "$1" && pwd); device=$2
 here=$(cd "$(dirname "$0")" && pwd)
 bin=${RETICLE:-target/release/reticle}
 bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
-ls "$out" | xargs -P "${JOBS:-6}" -I{} sh -c "
+ls "$out" | xargs -P "${JOBS:-4}" -I{} sh -c "
   cd $out/{} 2>/dev/null || exit 0
   [ -f {}.bit ] || exit 0
   nice -n 19 ionice -c3 $bin fpga --device $device --decode {}.bit > reticle.features 2> reticle.decode.log

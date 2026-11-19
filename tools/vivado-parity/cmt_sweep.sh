@@ -11,5 +11,5 @@ for kind in mmcm pll; do
   for list in "$out/$kind".*.list; do
     echo "$kind $list"
   done
-done | xargs -P "${JOBS:-8}" -L1 sh -c \
+done | xargs -P "${JOBS:-4}" -L1 sh -c \
   "nice -n 19 ionice -c3 timeout 7200 vivado -mode batch -nojournal -nolog -tempDir \$1.tmp -source $here/cmt_sweep.tcl -tclargs $clocks/\$0_all_outs/\$0_all_outs.dcp \$1 $out/\$0 > \$1.log 2>&1; rm -rf \$1.tmp"

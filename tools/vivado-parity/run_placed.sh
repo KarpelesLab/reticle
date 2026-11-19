@@ -17,7 +17,7 @@ bin=${RETICLE:-target/release/reticle}
 bin=$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")
 . "${VIVADO:-$HOME/Xilinx/2026.1/Vivado}/settings64.sh" >/dev/null 2>&1
 designs=${*:-$(ls "$dir" | sed -n 's/\.v$//p')}
-echo $designs | tr ' ' '\n' | xargs -P "${JOBS:-6}" -I{} sh -c "
+echo $designs | tr ' ' '\n' | xargs -P "${JOBS:-4}" -I{} sh -c "
   mkdir -p $out/{}; cd $out/{}
   [ -f x.tcl ] || nice -n 19 ionice -c3 timeout 900 $bin fpga --device $device --top {} --timing --timing-driven --report \
     --constraints $dir/{}.rcf --output-dir $out/{} --bitstream $out/{}/{}.bit \
