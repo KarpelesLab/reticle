@@ -323,7 +323,18 @@ module usb_ctrl_ep #(
     // 60 MHz ULPI bus, and a four-bit field cannot reach a third of that. A
     // device that is not being heard is worth sweeping across the whole of
     // it rather than across ULPI's 7 to 18.
-    parameter [6:0]  TURNAROUND = 7'd8
+    parameter [6:0]  TURNAROUND = 7'd8,
+    // Bytes of interface and endpoint descriptors this module can index, and
+    // so the largest class descriptor set it can hold. A power of two,
+    // because the blob index is masked to its width (`j` below is
+    // `$clog2(DESC_MAX)` bits). **64 by default**, which with the nine bytes
+    // of the configuration descriptor is room for a `wTotalLength` of 73 — a
+    // CDC ACM set (67) or a HID interface with a few bytes to spare. A
+    // composite device whose class descriptors are longer raises it: a CDC
+    // serial port plus a vendor interface is 81 bytes, so 128. Default-safe:
+    // at 64 `$clog2` is 6, the width `j` has always had, so a design that
+    // does not set it synthesises byte for byte as before.
+    parameter integer DESC_MAX = 64
 ) (
     input  wire       clk,
     input  wire       rst_n,
@@ -423,10 +434,10 @@ module usb_ctrl_ep #(
     // -----------------------------------------------------------------
     // The descriptors, worked out once at elaboration.
     // -----------------------------------------------------------------
-    // Bytes of interface and endpoint descriptors this module can index.
-    // A power of two, because the index is masked to its width rather than
-    // trusted to be in range.
-    localparam integer DESC_MAX = 64;
+    // Bytes of interface and endpoint descriptors this module can index: the
+    // `DESC_MAX` parameter above, a power of two, with `j` below masked to
+    // `$clog2(DESC_MAX)` bits rather than trusted to be in range.
+    localparam integer J_BITS = $clog2(DESC_MAX);
 
     // `IFACE_DESC` with byte 0 in the low eight bits.
     //
@@ -635,7 +646,7 @@ module usb_ctrl_ep #(
         // The offset past the nine bytes this module writes, and that offset
         // **narrowed to the blob's width**.
         //
-        // `j` is six bits because `DESC_MAX` is 64 bytes: an offset into the
+        // `j` is `$clog2(DESC_MAX)` bits — six at the default 64: an offset into the
         // class's descriptors cannot be wider than that whatever `IDX_BITS`
         // is, and giving it exactly those bits is what keeps the part-select
         // below inside `IFACE` without a mask a width checker has to trust.
@@ -648,7 +659,7 @@ module usb_ctrl_ep #(
         // The top of that range is not a byte anybody reads, and a
         // part-select says so where an assignment would only warn.
         reg   [IDX_BITS-1:0]   off;
-        reg   [5:0]            j;
+        reg   [J_BITS-1:0]     j;
         begin
             if (!sel_in) begin
                 case (i)
@@ -695,7 +706,7 @@ module usb_ctrl_ep #(
                 // by a constant as a `mul` cell, which on the ECP5 is a
                 // hard multiplier.
                 off  = i - 9;
-                j    = off[5:0];
+                j    = off[J_BITS-1:0];
                 // One part-select of the whole blob, which is a 64-entry ROM:
                 // eight independent six-input Boolean functions.
                 //
