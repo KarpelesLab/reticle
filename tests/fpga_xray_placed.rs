@@ -34,7 +34,10 @@
 //! - a clock row's input from the interconnect, `CLK_HROW_CK_INT_*_ACTIVE`:
 //!   the `BUFH` and `BUFHCE` probes on the XC7A35T;
 //! - a `BUFMRCE` built on a global buffer having its `I1` tied as a
-//!   `BUFGCE`'s is: the `BUFMRCE` probe.
+//!   `BUFGCE`'s is: the `BUFMRCE` probe;
+//! - a FIFO's `REGCE`, taken off the cell with `EN_SYN` false, left on its
+//!   undriven `IMUX` rather than grounded: the `FIFO18E1` and `FIFO36E1`
+//!   probes.
 //!
 //! It is a placement's test as well: a change to the placer or the router that
 //! moves one of these probes fails it without anything being wrong, and the
@@ -46,11 +49,12 @@
 //! [`the_implementation_written_for_vivado_says_what_the_bitstream_does`] holds
 //! the export fixes, which change nothing of Reticle's own bits and
 //! everything of Vivado's: an `ISERDESE2`'s `CLKDIVP`, an input nothing reads
-//! (with its pull on the port), a clock manager's outputs nothing reads, a
-//! bank's `INTERNAL_VREF`, a `BUFR` on a global buffer written as the `BUFG` it
-//! is there, and a `RAM128X1D` written at all. Each taken out fails it; the
-//! first four made the probe differ under Vivado and the last two left it with
-//! no bitstream of Vivado's (`run_placed.sh`).
+//! (with its pull on the port), a clock manager's outputs nothing reads and a
+//! bank's `INTERNAL_VREF`, each of which made the probe differ under Vivado;
+//! and a FIFO's `REGCE` and `RSTREG` with `EN_SYN` false (the netlist's, so
+//! Reticle's own routes change too), a `BUFR` on a global buffer written as the
+//! `BUFG` it is there, and a `RAM128X1D` written at all, without which Vivado
+//! wrote no bitstream of the probe (`run_placed.sh`). Each taken out fails it.
 //!
 //! Skips without the Project X-Ray database, as every `fpga_xray` test does.
 
@@ -291,6 +295,20 @@ fn the_implementation_written_for_vivado_says_what_the_bitstream_does() {
         "{}",
         bufmrce.verilog
     );
+
+    // A FIFO with `EN_SYN` false has no `REGCE` and a `RSTREG` tied low, as
+    // Vivado's own flow leaves them; connected, Vivado refuses it (`REQP-35`,
+    // `REQP-36`).
+    for name in ["fifo18e1_probe", "fifo36e1_probe"] {
+        let one = get(name);
+        let line = one
+            .verilog
+            .lines()
+            .find(|l| l.contains("FIFO") && l.contains("E1 "))
+            .unwrap();
+        assert!(!line.contains(".REGCE("), "{name}: {line}");
+        assert!(line.contains(".RSTREG(1'b0)"), "{name}: {line}");
+    }
 
     // A `RAM128X1D` is written, and placed by its site as Vivado expands it.
     let ram = get("ram128x1d_probe");

@@ -1870,6 +1870,39 @@ fn primitive_instances(
                 }
             }
         }
+        // A FIFO's output register's enable and reset with `EN_SYN` false,
+        // which UG473 says only work with `EN_SYN` true and `DO_REG` 1 and
+        // Vivado's design rule refuses connected (`REQP-35`, `REQP-36`). Its own
+        // flow takes `REGCE` off the cell and ties `RSTREG` low (`opt_design`
+        // on the `FIFO18E1` probe, 2026-11-19), so this does too, before
+        // anything routes them.
+        if matches!(primitive.as_str(), "FIFO18E1" | "FIFO36E1") {
+            let sync = changed.params.get("EN_SYN").is_some_and(|v| {
+                v.as_str().is_some_and(|s| s.eq_ignore_ascii_case("TRUE"))
+                    || v.as_int().is_some_and(|i| i != 0)
+            });
+            // Tied to the level that does not reset: a one where the pin is
+            // inverted (`f18_inv_async`, which Vivado holds with a one).
+            let inverted = changed
+                .params
+                .get("IS_RSTREG_INVERTED")
+                .and_then(|v| v.as_int())
+                .is_some_and(|v| v != 0);
+            if !sync {
+                connections.retain(|(port, _)| port.as_str() != "REGCE");
+                let idle = if inverted {
+                    crate::ir::Const::ones(1)
+                } else {
+                    crate::ir::Const::zero(1)
+                };
+                let idle = super::primitives::const_expr(m, idle, inst.span);
+                for (port, expr) in &mut connections {
+                    if port.as_str() == "RSTREG" {
+                        *expr = idle;
+                    }
+                }
+            }
+        }
         changed.connections = connections;
         if !cell_from_instance(m, &changed, primitive, &bel.outputs, &mut refused, diags) {
             continue;

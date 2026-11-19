@@ -10984,22 +10984,22 @@ packages had not been run since 2026-11-06.
 
 | part | | before | after |
 |---|---|---|---|
-| XC7A100T FTG256 | probes with Vivado's bitstream of Reticle's routes | 135 | 137 |
-| | the same bitstream, feature for feature | 124 | 137 |
+| XC7A100T FTG256 | probes with Vivado's bitstream of Reticle's routes | 135 | 139 |
+| | the same bitstream, feature for feature | 124 | 139 |
 | | features only Reticle sets | 7 | 0 |
 | | features only Vivado sets | 39 | 0 |
-| XC7A35T FTG256 | probes with Vivado's bitstream | 135 | 137 |
-| | the same, feature for feature | 125 | 137 |
+| XC7A35T FTG256 | probes with Vivado's bitstream | 135 | 139 |
+| | the same, feature for feature | 125 | 139 |
 | | only Reticle's | 7 | 0 |
 | | only Vivado's | 42 | 0 |
-| XC7A35T CPG236 | probes with Vivado's bitstream | 135 | 137 |
-| | the same, feature for feature | 125 | 137 |
+| XC7A35T CPG236 | probes with Vivado's bitstream | 135 | 139 |
+| | the same, feature for feature | 125 | 139 |
 | | only Reticle's | 15 | 0 |
 | | only Vivado's | 40 | 0 |
 
-The "after" of 135 is the full run with every fix below but the last two
-(`bufmrce` and `ram128x1d`), which were run again on their own, on all three
-parts, and are the same bitstream too. **Every bit decodes**: Reticle's 140
+The "after" of 135 is the full run with every fix below but the last three
+rows', whose probes (`bufmrce`, `ram128x1d`, `fifo18e1`, `fifo36e1`) were run again
+on their own, on all three parts, and are the same bitstream too: 139 of 141 a part. **Every bit decodes**: Reticle's 140
 bitstreams a part with 0 bits unexplained and no frame's ECC wrong, before and
 after (186,991 bits on the XC7A100T after, 169,577 and 169,559 on the XC7A35T's
 two); Vivado's had 7, 9 and 9 unexplained bits before and 3 on each part after,
@@ -11022,6 +11022,7 @@ and those three are the `BUFMR` probe's, below.
 | `PULLTYPE`, `IN` on the `KEEPER` probe's pad | `KEEPER` | no buffer for an input nothing reads, the pad's pull kept | the export writes no cell for an input nothing reads (`io::unread_input`, which `xray::io` already used) and puts its pull on the port; a pull cell alone on the port is gone at `link_design` |
 | no Vivado bitstream: `BUFMRCE` | `BUFMRCE` | refused the export's `BUFR` on a `BUFGCTRL` (12-1409); with it spelt `BUFG`, ties the `BUFMRCE`'s `I1` as a `BUFGCE`'s | the export writes a `BUFR` on a global buffer as `BUFG`, and `bufg::wants` ties such a `BUFMRCE`'s `I1` |
 | no Vivado bitstream: `RAM128X1D` | `RAM128X1D` | the macro placed by its site, as the other wide RAMs are | written, and placed so |
+| no Vivado bitstream: the FIFOs | `FIFO18E1`, `FIFO36E1` | `REQP-35`, `REQP-36` on the export (the probe drives `RSTREG` and `REGCE` with `EN_SYN` false), and on the `FIFO36E1` a ground conflicting with them. Vivado's own flow on the probe: `opt_design` takes `REGCE` off the cell and ties `RSTREG` to the level that does not reset, and then leaves `REGCE`'s `IMUX` undriven where it grounds a block RAM's | `flow` does the same before anything routes (a one for an inverted `RSTREG`, which `fifo/`'s `f18_inv_async` held this to when the first version tied it low), and `bram`'s ties leave such a FIFO's `REGCE` alone; the same bitstream on all three parts |
 
 Every one of these is held by `tests/fpga_xray_placed.rs`: the probes above, on
 the XC7A100T and the bits that differed on the XC7A35T on its CPG236, built as
@@ -11029,7 +11030,7 @@ the XC7A100T and the bits that differed on the XC7A35T on its CPG236, built as
 routes, `primitives/placed.txt` (`placed_features.py`), feature for feature; and
 the export's text for the export fixes. **Each fix was taken out, alone or with
 others that touch other probes, and the test failed on it**: fifteen mutations,
-each named in the test's documentation. It is a placement's test too, as the
+and two more for the FIFOs, each named in the test's documentation. It is a placement's test too, as the
 documentation says.
 
 `reticle fpga --decode` now also names a set bit no tile's window holds, as
@@ -11045,13 +11046,13 @@ never placed. It found the three below.
   `tilegrid.json` covers. Reticle sets none. Feature for feature the two bitstreams
   are the same; bit for bit they are not. Not named: one design says where, and not
   what or when.
-- **Four probes still have no bitstream of Vivado's** on any part: `RAMB18E1` and
-  `FIFO36E1` (a ground Vivado routes conflicts with a fixed route of Reticle's,
-  `Route 35-341`: the router took the wires behind a block RAM's pin Reticle leaves
-  idle and Vivado grounds, `WEBWE` on the `RAMB18E1`), `RAMB36E1` (two nets with a
-  partial antenna, `RTSTAT-5`) and `FIFO18E1` (`REQP-35` and `REQP-36`: the probe
-  drives `RSTREG` and `REGCE` with `EN_SYN` false, which Vivado's own flow takes
-  out and the export keeps).
+- **Two probes still have no bitstream of Vivado's** on any part: `RAMB18E1` (a
+  ground Vivado routes conflicts with a fixed route of Reticle's, `Route 35-341`:
+  Vivado grounds the site's `WEBWE4` to `WEBWE7`, which the cell has no port for and
+  so its netlist never names, and the router took a wire behind them as a hop for
+  `WEBWE[0]`'s net) and `RAMB36E1` (two nets with a partial antenna, `RTSTAT-5`).
+  `FIFO18E1` and `FIFO36E1` had none either, and are the same bitstream now
+  (below).
 
 ### `placed/bits.txt` and `cells.txt`, regenerated (measured)
 

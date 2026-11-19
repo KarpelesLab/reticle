@@ -2497,8 +2497,18 @@ impl XrayFabric {
                     // Vivado grounds an output register's clock enable that
                     // nothing drives (`ib_1024x18`: `REGCEAREGCE` and
                     // `REGCEB` on its `<const0>`).
+                    // But not a FIFO's with `EN_SYN` false, which `flow` took
+                    // off the cell as Vivado's `opt_design` does, and which
+                    // Vivado then leaves on its undriven `IMUX` (the
+                    // `FIFO18E1` and `FIFO36E1` probes, 2026-11-19).
                     TiePolicy::Leave
-                        if model == LutRamModel::Vivado && role.ends_with("_regce") =>
+                        if model == LutRamModel::Vivado
+                            && role.ends_with("_regce")
+                            && !(super::fifo::is_fifo(&instance.primitive)
+                                && !matches!(
+                                    params("EN_SYN"),
+                                    Some(AttrValue::String(ref s)) if s.eq_ignore_ascii_case("TRUE")
+                                )) =>
                     {
                         TiePolicy::Zero
                     }
