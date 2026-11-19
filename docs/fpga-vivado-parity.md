@@ -10966,6 +10966,9 @@ and the logic analyser's 5.65, against 16.55, 6.74, 17.42 and 5.65 before.
   and `HCLK_L 24_13`, and a DRP pin tied low in the source, as above.
 - `testdata/fpga/vivado/placed/bits.txt` is the 2026-11-06 run of `qor/`, quoted, and was
   not regenerated: `tests/fpga_xray_vivado.rs` holds the file, not the flow.
+  **Regenerated 2026-11-19** ([below](#placedbitstxt-and-cellstxt-regenerated-measured)).
+- The XC7A35T's ledgers and the three items above: **all run or closed 2026-11-19**
+  ([The last classes of the ledger](#the-last-classes-of-the-ledger)).
 
 ## The last classes of the ledger
 
@@ -11049,3 +11052,24 @@ never placed. It found the three below.
   partial antenna, `RTSTAT-5`) and `FIFO18E1` (`REQP-35` and `REQP-36`: the probe
   drives `RSTREG` and `REGCE` with `EN_SYN` false, which Vivado's own flow takes
   out and the export keeps).
+
+### `placed/bits.txt` and `cells.txt`, regenerated (measured)
+
+`run_placed.sh` (`STAGES="placement routes"`) on the thirteen designs of `qor/` at the
+XC7A100T, with the tree of this section, 2026-11-19, then `decode_placed.sh` and
+`bits_table.py`; both files were the 2026-11-06 run until now, quoted. **All thirteen
+have Vivado's bitstream of Reticle's routes now**, where ten had: `bram_fifo`,
+`lutram32` and `regfile_alu` finish. **Ten are the same bitstream, feature for
+feature**, and the three others differ by eight features of 89,835:
+
+| design | Reticle only | Vivado only | what |
+|---|---|---|---|
+| `bram_fifo`, `counter64` | | `BYP_ALT<n>.GFAN1` and `GFAN1.GND_WIRE` in one interconnect tile | a slice's bypass input Vivado grounds and Reticle leaves undriven: **open** |
+| `fir8` | `CTRL_L0.GFAN0`, `CTRL_L1.GFAN0` | the same from `GFAN1` | a flip-flop's control pins tied low from the other ground fan: **open**, which fan Vivado takes |
+
+`cells.txt` (Reticle's cells on Vivado's routes of Reticle's placement, routing left
+out): 65,430 cell features of Reticle's, every one in Vivado's, and the 75 of Vivado's
+that are not are all `<L>OUTMUX.O6`, its routes leaving a slice, as before. The
+earlier tables' classes (the rebuffers, `BUFHCLK<n>_USED`, the `PUDC_B` pad, the block
+RAMs' inverters and offsets, `WEMUX.CE`) are all gone. `tests/fpga_xray_vivado.rs`
+holds the two files' totals, now 2 and 6, and 0 and 75.

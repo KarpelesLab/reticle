@@ -315,7 +315,7 @@ fn only_known_classes_of_bit_differ_from_vivado() {
         return;
     };
     assert!(new.is_empty(), "{}", new.join("\n"));
-    assert_eq!((ours, theirs), (18, 70), "the file's totals changed");
+    assert_eq!((ours, theirs), (2, 6), "the file's totals changed");
 }
 
 /// **And with only the placement in common, the cells agree too:** the same
@@ -336,7 +336,7 @@ fn only_known_classes_of_cell_differ_from_vivado() {
         return;
     };
     assert!(new.is_empty(), "{}", new.join("\n"));
-    assert_eq!((ours, theirs), (24, 369), "the file's totals changed");
+    assert_eq!((ours, theirs), (0, 75), "the file's totals changed");
 }
 
 /// Reticle's estimate of each connection against Vivado's timer of that same
