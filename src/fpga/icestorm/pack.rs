@@ -67,6 +67,13 @@
 //!     wire of one logic tile, which reaches nothing but that tile's table
 //!     inputs, so `implement` confines that cell to that tile.
 //!
+//! 11. A pad form of the PLL (`SB_PLL40_PAD`, `_2_PAD`, `_2F_PAD`) takes its
+//!     reference from its own pad, which is the IO block its first output
+//!     leaves through: a link in the silicon, not a route. Its `PACKAGEPIN`
+//!     must be read from an input pin's IO buffer and by nothing else, as
+//!     nextpnr requires (`place_plls`); the connection is taken off the
+//!     PLL, and `implement` puts the PLL on the site whose pad that pin is.
+//!
 //! What it refuses, with a message naming the cell: a clock, an enable of
 //! zero or a set/reset of one tied to a constant, a block RAM clock enable
 //! tied to zero, a DSP block's `CE` tied to zero or its cascade inputs
@@ -106,6 +113,120 @@ pub struct PackReport {
     /// The cells made to pass a PLL's `LOCK` on (rule 10), which must sit
     /// in the one logic tile its wire reaches: `(PLL, cell)`, by name.
     pub lock_cells: Vec<(String, String)>,
+    /// Each pad form of the PLL and the top-level port its pad is
+    /// (rule 11): `(PLL, port)`, by name.
+    pub pad_plls: Vec<(String, String)>,
+}
+
+/// Rule 11: each pad form of the PLL, its `PACKAGEPIN` taken off, with the
+/// input IO buffer that read its pad: `(PLL, IO buffer)`, by name.
+///
+/// # Errors
+///
+/// [`PackError`] naming the PLL when its `PACKAGEPIN` is not read straight
+/// from an input IO buffer, or when that buffer's output is read by more.
+fn pad_plls(module: &mut Module) -> Result<Vec<(String, String)>, PackError> {
+    let mut found: Vec<(CellId, CellId, String, String)> = Vec::new();
+    {
+        let view = BitView::new(module).map_err(|e| PackError(e.to_string()))?;
+        let canonical = |bits: Vec<SigBit>| -> Vec<SigBit> {
+            bits.into_iter().map(|b| view.canonical(b)).collect()
+        };
+        for (id, cell) in module.cells.iter() {
+            let CellKind::Blackbox(p) = &cell.kind else {
+                continue;
+            };
+            if !matches!(
+                p.as_str(),
+                "SB_PLL40_PAD" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD"
+            ) {
+                continue;
+            }
+            let name = cell.name.as_str().to_owned();
+            let Some(&(_, pin)) = cell.inputs.iter().find(|(p, _)| p.as_str() == "PACKAGEPIN")
+            else {
+                return Err(PackError(format!(
+                    "`{name}` is a pad form of the PLL with nothing on its PACKAGEPIN"
+                )));
+            };
+            let pin = canonical(view.expr_bits(pin).map_err(|e| PackError(e.to_string()))?);
+            let io = module.cells.iter().find(|(_, c)| {
+                matches!(&c.kind, CellKind::Blackbox(q) if q.as_str() == "SB_IO")
+                    && c.outputs.iter().any(|(q, net)| {
+                        q.as_str() == "D_IN_0"
+                            && view
+                                .net_bits(*net, c.span)
+                                .is_ok_and(|bits| canonical(bits) == pin)
+                    })
+            });
+            let Some((io_id, io_cell)) = io else {
+                return Err(PackError(format!(
+                    "`{name}`'s PACKAGEPIN is not read straight from an input pin's IO buffer, \
+                     which a pad form of the PLL needs: its reference is the PLL's own pad"
+                )));
+            };
+            let shared = module.cells.iter().any(|(other, c)| {
+                other != id
+                    && other != io_id
+                    && c.inputs.iter().any(|(_, e)| {
+                        view.expr_bits(*e)
+                            .is_ok_and(|bits| canonical(bits).iter().any(|b| pin.contains(b)))
+                    })
+            }) || module.ports.iter().any(|port| {
+                port.dir != crate::ir::PortDir::In
+                    && view
+                        .net_bits(port.net, port.span)
+                        .is_ok_and(|bits| canonical(bits).iter().any(|b| pin.contains(b)))
+            });
+            if shared {
+                return Err(PackError(format!(
+                    "`{name}`'s pad is read by more than the PLL, which it cannot be: its IO \
+                     block is where the PLL's first output leaves"
+                )));
+            }
+            // The top-level port the IO buffer's pad is on.
+            let pad_bits: Vec<SigBit> = io_cell
+                .inputs
+                .iter()
+                .filter(|(q, _)| q.as_str() == "PACKAGE_PIN")
+                .filter_map(|(_, e)| view.expr_bits(*e).ok())
+                .chain(
+                    io_cell
+                        .outputs
+                        .iter()
+                        .filter(|(q, _)| q.as_str() == "PACKAGE_PIN")
+                        .filter_map(|(_, net)| view.net_bits(*net, io_cell.span).ok()),
+                )
+                .flat_map(&canonical)
+                .collect();
+            let port = module.ports.iter().find(|port| {
+                view.net_bits(port.net, port.span)
+                    .is_ok_and(|bits| !pad_bits.is_empty() && canonical(bits) == pad_bits)
+            });
+            let Some(port) = port else {
+                return Err(PackError(format!(
+                    "`{name}`'s pad is not a one-bit port of the top module, which a pad form of \
+                     the PLL needs"
+                )));
+            };
+            found.push((id, io_id, name, port.name.as_str().to_owned()));
+        }
+    }
+    // The link comes off whole: the PLL's `PACKAGEPIN`, and the IO buffer,
+    // whose pad is the PLL's own and whose input is the same wire as the
+    // PLL's first output. `implement` configures that IO block as the
+    // PLL's pad, as nextpnr's `bitstream.cc` does (`sb_io_used_by_pll_pad`).
+    let mut out = Vec::new();
+    let mut gone = Vec::new();
+    for (id, io_id, pll, port) in found {
+        module.cells[id]
+            .inputs
+            .retain(|(p, _)| p.as_str() != "PACKAGEPIN");
+        gone.push(io_id);
+        out.push((pll, port));
+    }
+    module.cells.retain(|id, _| !gone.contains(&id));
+    Ok(out)
 }
 
 /// Why packing failed.
@@ -210,6 +331,7 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
     let Some(span) = module.cells.iter().next().map(|(_, c)| c.span) else {
         return Ok(PackReport::default());
     };
+    let pad_plls = pad_plls(module)?;
     let view = BitView::new(module).map_err(|e| PackError(e.to_string()))?;
     let bits_of = |e: ExprId| -> Result<Vec<SigBit>, PackError> {
         view.expr_bits(e).map_err(|err| PackError(err.to_string()))
@@ -959,6 +1081,7 @@ pub fn pack(module: &mut Module) -> Result<PackReport, PackError> {
         });
         report.cells += 1;
     }
+    report.pad_plls = pad_plls;
     Ok(report)
 }
 

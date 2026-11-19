@@ -7466,6 +7466,43 @@ impl Mapper<'_> {
         })
     }
 
+    /// The instance of an IO primitive the device declares, with its own
+    /// `outputs` (so the design may name it), whose `pad` port is on `net`.
+    fn named_buffer(&self, module: &Module, net: NetId) -> Option<CellId> {
+        module
+            .cells
+            .iter()
+            .find_map(|(id, cell)| self.pads_onto(module, cell, net).then_some(id))
+    }
+
+    /// Whether `cell` is an instance of a nameable IO primitive whose `pad`
+    /// port is on `net`.
+    fn pads_onto(&self, module: &Module, cell: &crate::ir::Cell, net: NetId) -> bool {
+        {
+            let CellKind::Blackbox(primitive) = &cell.kind else {
+                return false;
+            };
+            let Some(bel) = self.device.bel_named(primitive.as_str()) else {
+                return false;
+            };
+            let Some(pad) = bel.port("pad") else {
+                return false;
+            };
+            bel.role == BelRole::Io
+                && !bel.outputs.is_empty()
+                && cell
+                    .inputs
+                    .iter()
+                    .any(|(port, e)| port.as_str() == pad && module.expr(*e).as_net() == Some(net))
+                || bel.role == BelRole::Io
+                    && !bel.outputs.is_empty()
+                    && cell
+                        .outputs
+                        .iter()
+                        .any(|(port, out)| port.as_str() == pad && *out == net)
+        }
+    }
+
     /// One port's IO buffers. `absorbed` collects the cells this took over
     /// — a tri-state driver that became a bidirectional pad's enable — for
     /// the caller to drop once every port is done.
@@ -7501,6 +7538,20 @@ impl Mapper<'_> {
         // there. The device says so by giving such an output a role that
         // begins with `pad`, as an IO buffer's ball is `pad`.
         if dir == PortDir::Out && self.drives_its_own_pad(module, net) {
+            return;
+        }
+        // A port the design already gave an IO buffer by name: an iCE40
+        // UltraPlus's `SB_IO_OD` on an open-drain pad or `SB_IO_I3C` on an
+        // I3C one, an instance of an IO primitive whose `pad` port is on
+        // this port. That instance is the buffer.
+        if let Some(cell) = self.named_buffer(module, net) {
+            // It takes the port's pin as an inserted buffer would.
+            let assignment = self.constraints.pin_of(&name, None);
+            let attrs = &mut module.cells[cell].attrs;
+            attrs.set("port", name.clone());
+            if let Some(a) = assignment.filter(|a| !a.pin.is_empty()) {
+                attrs.set("pin", a.pin.clone());
+            }
             return;
         }
         // The second ball of a differential pair the design instantiated:

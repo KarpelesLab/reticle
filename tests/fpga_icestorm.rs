@@ -255,6 +255,21 @@ fn every_bit_of_a_reference_decodes() {
             );
             eprintln!("{name}: the same eight DSP configurations as this backend writes");
         }
+        // And the hard IP designs: the same hard cells, each with the same
+        // configuration bits, as this backend writes.
+        #[cfg(feature = "verilog")]
+        if matches!(name.as_str(), "sbus_probe" | "ledda_breathe") && die == "5k" {
+            let graph = fabric.arch.build_graph();
+            let built = build_board_design(&name, fabric, &graph);
+            assert_eq!(
+                decoded.hard_ip, built.decoded.hard_ip,
+                "nextpnr's hard cells differ from this backend's"
+            );
+            eprintln!(
+                "{name}: the same hard cells and bits as this backend: {:?}",
+                decoded.hard_ip.keys().collect::<Vec<_>>()
+            );
+        }
         // And the PLL designs: the same PLL parameters and the same global
         // networks driven through a pad's input path.
         #[cfg(feature = "verilog")]
@@ -946,7 +961,7 @@ fn synthesize_source_on(
         &FpgaOptions::default(),
         &mut diags,
     )
-    .expect("the flow");
+    .unwrap_or_else(|e| panic!("{name}: the flow: {e:?}\n{}", diags.render(&map)));
     assert!(!diags.has_errors(), "{name}: {}", diags.render(&map));
     (design, top, constraints)
 }
@@ -1590,6 +1605,11 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
         let image = Image::from_asc(&std::fs::read_to_string(&asc).unwrap()).unwrap();
         let report = reticle::fpga::icestorm::timing::analyse(fabric, &image, tdb);
         let ours: Vec<f64> = report.clocks.iter().map(|c| c.fmax_mhz).collect();
+        let dsp = fabric
+            .decode(&image)
+            .dsps
+            .values()
+            .any(|d| d.params.values().any(|v| *v != 0));
         // Whether any logic tile's flip-flops are on a falling edge.
         let falling = fabric.decode(&image).functions.keys().any(|((x, y), f)| {
             f == "NegClk" && fabric.db.tile(*x, *y) == reticle::fpga::icestorm::db::TileKind::Logic
@@ -1628,7 +1648,7 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
                 // so a design on both edges is shown and not held to the
                 // bound.
                 let both_edges = falling;
-                if !both_edges {
+                if !both_edges && !dsp {
                     worst_npr = worst_npr.max(error.abs());
                 }
                 eprintln!(
@@ -1644,15 +1664,12 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
             }
         }
         // icetime times every path as one, whatever its clocks, so only a
-        // design of one clock compares; and it times a DSP block's
-        // multiplier as logic, where nextpnr and this analysis take its
-        // ports for registers, so a design with one is shown and not held
-        // to the bound.
-        let dsp = fabric
-            .decode(&image)
-            .dsps
-            .values()
-            .any(|d| d.params.values().any(|v| *v != 0));
+        // design of one clock compares. A design with a DSP block is shown
+        // and not held to either bound: nextpnr takes every one of the
+        // block's ports for a register, and icetime picks a cell for the
+        // block by a few of its bits, where this analysis times an
+        // unregistered multiply as logic and anything else as registers
+        // (`timing::dsp_arcs`).
         if report.clocks.len() == 1
             && let Ok(text) = std::fs::read_to_string(asc.with_extension("icetime"))
             && let Some(ns) = text
@@ -1683,6 +1700,65 @@ fn the_timing_analysis_agrees_with_nextpnr_and_icetime() {
         "{:.1} % from icetime",
         100.0 * worst_icetime
     );
+}
+
+/// An unregistered DSP multiply is timed as logic: a fabric register,
+/// the 16 x 16 multiplier, and a fabric register again is a path of the
+/// multiplier's own arcs and more, longer than the 9.05 ns icetime's slow
+/// corner gives the multiplier alone; with every register of the block on,
+/// the longest path is a short one.
+///
+/// What it would catch: the analysis taking a DSP block's ports for
+/// registers whatever its configuration, as nextpnr does and as it did,
+/// which the board showed wrong (`docs/fpga-icestorm.md`, "How fast the DSP
+/// multiplier is"): the unregistered build would then time at the
+/// registered one's frequency. What it would not: whether the figures are
+/// the silicon's, which they are not (a slow corner); the board measured
+/// the path at about 10 ns.
+#[cfg(feature = "verilog")]
+#[test]
+fn an_unregistered_dsp_multiply_is_timed_as_logic() {
+    let Some(db) = chipdb_5k() else { return };
+    let Some(tdb) = timing_db() else { return };
+    let mut fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    fabric.timing = Some(tdb);
+    let graph = fabric.arch.build_graph();
+    let source = |pipe: u32| {
+        format!(
+            "module t(input clk, output reg y);\n\
+             reg [31:0] l = 32'd0; reg [15:0] a = 16'd0, b = 16'd0;\n\
+             always @(posedge clk) begin l <= {{l[30:0], ~(l[31] ^ l[21] ^ l[1] ^ l[0])}}; \
+             a <= l[15:0]; b <= l[31:16]; end\n\
+             wire [31:0] o;\n\
+             SB_MAC16 #(.A_REG({pipe}), .B_REG({pipe}), .TOP_8x8_MULT_REG({pipe}), \
+             .BOT_8x8_MULT_REG({pipe}), .PIPELINE_16x16_MULT_REG1({pipe}), \
+             .PIPELINE_16x16_MULT_REG2({pipe}), .TOPOUTPUT_SELECT(2'b11), \
+             .BOTOUTPUT_SELECT(2'b11)) m (.CLK(clk), .CE(1'b1), .A(a), .B(b), .O(o));\n\
+             reg [31:0] p = 32'd0; reg [7:0] f = 8'd0;\n\
+             always @(posedge clk) begin p <= o; \
+             f <= {{^p[31:28], ^p[27:24], ^p[23:20], ^p[19:16], ^p[15:12], ^p[11:8], ^p[7:4], \
+             ^p[3:0]}}; y <= ^f; end\nendmodule\n"
+        )
+    };
+    let worst = |pipe: u32| {
+        let built = implement_source(
+            "dsp",
+            &source(pipe),
+            "set_io clk 20\nset_io y 10\n",
+            &fabric,
+            &graph,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let report = built.timing.expect("timed");
+        report.worst().expect("a path").delay_ps / 1000.0
+    };
+    let (comb, piped) = (worst(0), worst(1));
+    eprintln!("longest path: {comb:.2} ns unregistered, {piped:.2} ns with every register on");
+    assert!(
+        comb > 10.0,
+        "the unregistered multiply is a path: {comb:.2} ns"
+    );
+    assert!(piped < comb - 5.0, "registered: {piped:.2} ns");
 }
 
 /// A board design built with the timing figures is timed: its one clock
@@ -1957,8 +2033,9 @@ fn the_oscillators_drive_their_networks() {
     );
 }
 
-/// What the PLL refuses, each by name: a pad form (whose reference is the
-/// PLL's own pad, pin 35, which this flow does not take over), and a design
+/// What the PLL refuses, each by name: a pad form on a pin that is not the
+/// PLL's own pad (until 2026-11-19 every pad form was refused, pin 35
+/// included), and a design
 /// that also wants pin 35 as a pin while the PLL's first output leaves
 /// through that pin's IO block. The second used to be refused by the
 /// placer, because the PLL's `out` and the IO block's `din` are one wire
@@ -1977,9 +2054,14 @@ fn a_pll_the_flow_cannot_place_is_refused() {
                (.PACKAGEPIN(p), .PLLOUTCORE(c), .RESETB(1'b1), .BYPASS(1'b0));\n\
                reg q = 1'b0; always @(posedge c) q <= ~q; assign o = q;\n\
                endmodule\n";
-    let refused = implement_source("pad", pad, "set_io p 35\nset_io o 4\n", &fabric, &graph);
+    // Pin 35 is the PLL's own pad, so the pad form builds there now
+    // (`the_pll_pad_forms_build_on_every_die`); on pin 20 it is refused.
+    let built = implement_source("pad", pad, "set_io p 35\nset_io o 4\n", &fabric, &graph);
+    assert!(built.is_ok(), "{:?}", built.as_ref().err());
+    let refused = implement_source("pad", pad, "set_io p 20\nset_io o 4\n", &fabric, &graph);
     assert!(
-        matches!(&refused, Err(e) if e.contains("SB_PLL40_PAD") && e.contains("`pll`")),
+        matches!(&refused, Err(e) if e.contains("SB_PLL40_PAD") && e.contains("`pll`")
+            && e.contains("pin(s) 35")),
         "{:?}",
         refused.as_ref().err()
     );
@@ -2002,6 +2084,212 @@ fn a_pll_the_flow_cannot_place_is_refused() {
         "{:?}",
         refused.as_ref().err()
     );
+}
+
+// ---------------------------------------------------------------------------
+// The UltraPlus's other hard IP, and warm boot
+// ---------------------------------------------------------------------------
+
+/// The board designs of the I2C and SPI blocks, the LED dimmer, the
+/// open-drain pads and warm boot build with every bit decoding and the
+/// arcs exactly the router's, and the hard cells' configuration bits read
+/// back as placed: the SPI block on bus address `0b0000` is the one at
+/// (0, 0) with its four enable bits, the I2C block on `0b0001` the one at
+/// (0, 31) with both enables and both SDA delays (on unless an attribute
+/// says otherwise), the RGB driver with the dimmer's currents.
+///
+/// What it would catch: a block on the wrong site for its bus address
+/// (another block's enables set, which the read-back refuses), an enable
+/// written into another tile's bit, a port on a wire that is not the
+/// block's (no route), or an `SB_IO_OD` not on a pad (refused). What it
+/// would not: whether the blocks work, which is the board's
+/// (`docs/fpga-icestorm.md`, "The UltraPlus's other hard IP").
+#[cfg(feature = "verilog")]
+#[test]
+fn the_hard_ip_designs_build_and_read_back() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let key = |kind: &str, x: u32, y: u32| (kind.to_owned(), (x, y));
+    let built = build_board_design("sbus_probe", &fabric, &graph);
+    let spi = built
+        .decoded
+        .hard_ip
+        .get(&key("SPI", 0, 0))
+        .expect("the SPI block");
+    assert_eq!(spi.get("SPI_ENABLE"), Some(&15));
+    let i2c = built
+        .decoded
+        .hard_ip
+        .get(&key("I2C", 0, 31))
+        .expect("the I2C block");
+    assert_eq!(i2c.get("I2C_ENABLE"), Some(&3));
+    assert_eq!(i2c.get("SDA_INPUT_DELAYED"), Some(&1));
+    assert_eq!(i2c.get("SDA_OUTPUT_DELAYED"), Some(&1));
+    assert_eq!(
+        built.decoded.hard_ip.len(),
+        2,
+        "{:?}",
+        built.decoded.hard_ip
+    );
+    let built = build_board_design("ledda_breathe", &fabric, &graph);
+    let rgb = built
+        .decoded
+        .hard_ip
+        .get(&key("RGBA_DRV", 0, 30))
+        .expect("the RGB driver");
+    assert_eq!(rgb.get("RGB0_CURRENT"), Some(&3));
+    assert_eq!(rgb.get("CURRENT_MODE"), Some(&1));
+    assert_eq!(built.hard_cells, 2, "the dimmer and the driver");
+    for name in ["io_od_blink", "warmboot_demo"] {
+        let built = build_board_design(name, &fabric, &graph);
+        assert!(built.decoded.unexplained.is_empty());
+        assert_eq!(built.decoded.arcs.len(), built.chosen);
+        eprintln!(
+            "{name}: {} set bits, {} arcs",
+            built.decoded.bits, built.chosen
+        );
+    }
+}
+
+/// What the hard IP refuses, by name: an `SB_IO_OD` on a pad that is not
+/// one of the three open-drain ones, an `SB_IO_I3C` on a pad that is not
+/// an I3C one, and an I2C block whose bus address is an SPI block's. And an
+/// `SB_IO_I3C` on pin 23, one of the two I3C pads, builds, its pull-up
+/// enables routed to where the `.extra_cell IO_I3C` record says.
+///
+/// What it would catch: a special pad's primitive placed on any IO block,
+/// which would build and, on the silicon, not be open-drain or have no
+/// switchable pull-ups; a bus address mapped to the wrong block.
+#[cfg(feature = "verilog")]
+#[test]
+fn what_the_hard_ip_refuses() {
+    let Some(db) = chipdb_5k() else { return };
+    let fabric = IceFabric::build(db, "sg48").expect("the fabric builds");
+    let graph = fabric.arch.build_graph();
+    let od = "module t(input clk, inout p);\n\
+              SB_IO_OD #(.PIN_TYPE(6'b011001)) o (.PACKAGEPIN(p), .DOUT0(clk));\nendmodule\n";
+    let refused = implement_source("od", od, "set_io clk 20\nset_io p 2\n", &fabric, &graph);
+    assert!(
+        matches!(&refused, Err(e) if e.contains("SB_IO_OD") && e.contains("open-drain")),
+        "{:?}",
+        refused.as_ref().err()
+    );
+    let built = implement_source("od", od, "set_io clk 20\nset_io p 40\n", &fabric, &graph);
+    assert!(built.is_ok(), "{:?}", built.as_ref().err());
+    let i3c = "module t(input clk, input a, input b, inout p);\n\
+               SB_IO_I3C #(.PIN_TYPE(6'b101001)) o (.PACKAGE_PIN(p), .D_OUT_0(clk), \
+               .OUTPUT_ENABLE(a), .PU_ENB(a), .WEAK_PU_ENB(b));\nendmodule\n";
+    let pins = |p: u32| format!("set_io clk 20\nset_io a 2\nset_io b 3\nset_io p {p}\n");
+    let built =
+        implement_source("i3c", i3c, &pins(23), &fabric, &graph).unwrap_or_else(|e| panic!("{e}"));
+    assert!(built.decoded.unexplained.is_empty());
+    let refused = implement_source("i3c", i3c, &pins(4), &fabric, &graph);
+    assert!(
+        matches!(&refused, Err(e) if e.contains("SB_IO_I3C") && e.contains("I3C pad")),
+        "{:?}",
+        refused.as_ref().err()
+    );
+    let bus = "module t(input clk, output o);\n\
+               SB_I2C #(.BUS_ADDR74(\"0b0010\")) i (.SBCLKI(clk), .SBACKO(o));\nendmodule\n";
+    let refused = implement_source("bus", bus, "set_io clk 20\nset_io o 2\n", &fabric, &graph);
+    assert!(
+        matches!(&refused, Err(e) if e.contains("BUS_ADDR74") && e.contains("SB_I2C")),
+        "{:?}",
+        refused.as_ref().err()
+    );
+}
+
+/// The PLL's pad forms on every die with a PLL: an `SB_PLL40_PAD` whose
+/// pad is the pin of its first output's IO block — the PLL's own pad, pin
+/// 35 on the UltraPlus's SG48 — builds with every bit decoding, reads back
+/// as `PLLTYPE` 2, its pad's input enabled, and the two-output forms as 4
+/// and 6; a pad on any other pin is refused, naming the pads there are.
+///
+/// What it would catch: a pad form placed on a PLL whose pad is not the
+/// design's pin (its reference would be a pin nothing drives), the pad's
+/// input left disabled, or the wrong `PLLTYPE`. What it would not: whether
+/// the PLL locks to its pad, which no board here could show — the
+/// oscillator of the one attached is on pin 20, not the PLL's pad.
+#[cfg(feature = "verilog")]
+#[test]
+fn the_pll_pad_forms_build_on_every_die() {
+    let pll = |primitive: &str, second: &str| {
+        format!(
+            "module t(input p, output o, output q);\n\
+             wire c, d;\n\
+             {primitive} #(.FEEDBACK_PATH(\"SIMPLE\"), .DIVR(4'd0), .DIVF(7'd63), .DIVQ(3'd4), \
+             .FILTER_RANGE(3'd1)) pll (.PACKAGEPIN(p), .PLLOUTGLOBAL{second}(c), .RESETB(1'b1), \
+             .BYPASS(1'b0));\n\
+             reg [3:0] n = 4'd0; always @(posedge c) n <= n + 4'd1; assign o = n[3];\n\
+             assign q = 1'b0;\nendmodule\n"
+        )
+    };
+    for (device, die, package) in [
+        ("ice40-up5k-sg48", "5k", "sg48"),
+        ("ice40-hx1k-tq144", "1k", "tq144"),
+        ("ice40-hx8k-ct256", "8k", "ct256"),
+        ("ice40-u4k-sg48", "u4k", "sg48"),
+    ] {
+        let Some(db) = chipdb(die) else { return };
+        let fabric = IceFabric::build(db, package).expect("the fabric builds");
+        let graph = fabric.arch.build_graph();
+        let part = reticle::fpga::icestorm::part(device).unwrap();
+        let (_, others) = test_pins(part, &fabric.db);
+        let pad_pin = |cell: &reticle::fpga::icestorm::db::ExtraCell| {
+            let (_, x, y, z) = cell.entries.iter().find(|(k, ..)| k == "PLLOUT_A")?;
+            let z: u32 = z.parse().ok()?;
+            fabric
+                .arch
+                .pinmap
+                .iter()
+                .find(|(_, s)| *s == format!("X{x}Y{y}/io{z}"))
+                .map(|(p, _)| p.clone())
+        };
+        let pad = fabric.plls().find_map(pad_pin).expect("a PLL pad");
+        let rcf = format!(
+            "set_io p {pad}\nset_io o {}\nset_io q {}\n",
+            others[0], others[1]
+        );
+        for (primitive, second, plltype) in [
+            ("SB_PLL40_PAD", "", 2u64),
+            ("SB_PLL40_2_PAD", "B", 4),
+            ("SB_PLL40_2F_PAD", "A", 6),
+        ] {
+            let source = pll(primitive, second);
+            let built = implement_source_on(device, primitive, &source, &rcf, &fabric, &graph)
+                .unwrap_or_else(|e| panic!("{device} {primitive}: {e}"));
+            assert!(built.decoded.unexplained.is_empty());
+            assert_eq!(built.decoded.arcs.len(), built.chosen);
+            let (_, config) = built.plls.iter().next().expect("a PLL");
+            assert_eq!(
+                config.params.get("PLLTYPE"),
+                Some(&plltype),
+                "{device} {primitive}"
+            );
+            eprintln!(
+                "{device} {primitive} on pin {pad}: {} set bits, {} arcs, PLLTYPE {plltype}",
+                built.decoded.bits, built.chosen
+            );
+        }
+        let rcf = format!(
+            "set_io p {}\nset_io o {}\nset_io q {}\n",
+            others[2], others[0], others[1]
+        );
+        let refused = implement_source_on(
+            device,
+            "pad",
+            &pll("SB_PLL40_PAD", ""),
+            &rcf,
+            &fabric,
+            &graph,
+        );
+        assert!(
+            matches!(&refused, Err(e) if e.contains("no free PLL's own pad") && e.contains(&pad)),
+            "{device}: {:?}",
+            refused.as_ref().err()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2939,6 +3227,154 @@ mod board {
     /// predict passes, and one wrong digit, one failed verdict, a missing
     /// line or a stray byte before the first line each fail it. Without
     /// this, a check that accepted anything would pass on the board too.
+    /// The lines `sbus_probe.v` prints, after the first, as `(registers, acks)`:
+    /// thirty-two register values (SPI 0..15, then I2C 0..15) and their
+    /// acknowledge bits, index `i` at bit `i`.
+    fn sbus_lines(text: &str) -> Vec<(Vec<u8>, u32)> {
+        let mut out = Vec::new();
+        for line in text.lines().skip(1) {
+            let w: Vec<&str> = line.split_whitespace().collect();
+            let (Some(s), Some(i), Some(a)) = (
+                w.first().and_then(|x| x.strip_prefix('S')),
+                w.get(1).and_then(|x| x.strip_prefix('I')),
+                w.get(2).and_then(|x| x.strip_prefix('A')),
+            ) else {
+                continue;
+            };
+            let hex = |t: &str| -> Option<Vec<u8>> {
+                (0..t.len() / 2)
+                    .map(|k| u8::from_str_radix(&t[2 * k..2 * k + 2], 16).ok())
+                    .collect()
+            };
+            let (Some(mut regs), Some(more), Ok(acks)) =
+                (hex(s), hex(i), u32::from_str_radix(a, 16))
+            else {
+                continue;
+            };
+            regs.extend(more);
+            if regs.len() == 32 {
+                out.push((regs, acks));
+            }
+        }
+        out
+    }
+
+    /// `sbus_probe.v`: the hard SPI block on bus address `0b0000` and the
+    /// hard I2C block on `0b0001` answer their system buses. Each of the
+    /// registers that, on 2026-11-19, acknowledged and read back what was
+    /// written — the SPI block's 7 to 11, 13 and 15, the I2C block's 3, 7
+    /// to 11 and 13 — must again, every line, and no register of the
+    /// SPI block's 0 to 5 or the I2C block's 0 to 2 and 4 and 5 may
+    /// acknowledge.
+    ///
+    /// What it catches: a block on the wrong site for its bus address (the
+    /// other block's acknowledges, or none), a bus port on the wrong wire
+    /// (a register reads back another value), an enable bit missing (the
+    /// block silent). What it does not: the blocks' SPI and I2C sides,
+    /// which reach no pin here, nor what each register means.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn the_hard_spi_and_i2c_blocks_answer_their_buses_on_the_board() {
+        let Some(bin) = build("sbus_probe") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let mut got = Received::default();
+        serial.read(
+            &mut got,
+            Duration::from_millis(800),
+            Duration::from_secs(4),
+            |r| r.bytes.iter().filter(|b| **b == b'\n').count() >= 6,
+        );
+        let text = String::from_utf8_lossy(&got.bytes).into_owned();
+        let lines = sbus_lines(&text);
+        assert!(lines.len() >= 3, "{text:?}");
+        let written = |i: usize| {
+            let a = u8::try_from(i % 16).unwrap();
+            (if i < 16 { 0x5A } else { 0xC3 }) ^ (a << 4 | a)
+        };
+        let back: Vec<usize> = [7, 8, 9, 10, 11, 13, 15, 19, 23, 24, 25, 26, 27, 29].to_vec();
+        let silent: Vec<usize> = [0, 1, 2, 3, 4, 5, 16, 17, 18, 20, 21].to_vec();
+        for (regs, acks) in &lines {
+            for &i in &back {
+                assert!(
+                    acks >> i & 1 == 1,
+                    "register {i} did not acknowledge: {text:?}"
+                );
+                assert_eq!(regs[i], written(i), "register {i}: {text:?}");
+            }
+            for &i in &silent {
+                assert!(acks >> i & 1 == 0, "register {i} acknowledged: {text:?}");
+            }
+        }
+        eprintln!(
+            "{} lines, every one as written: {}",
+            lines.len(),
+            text.lines().nth(1).unwrap_or("")
+        );
+    }
+
+    /// `ledda_breathe.v`: the LED dimmer breathes. Over five seconds the red
+    /// output's duty, measured in the fabric each 22 ms, rises from below a
+    /// tenth of its peak to above nine tenths and falls back, more than once,
+    /// with `LEDDON` low only while the duty is zero.
+    ///
+    /// What it catches: the dimmer not running (a constant duty, or none), a
+    /// control-bus port on the wrong wire (registers not written: no
+    /// breathing), its outputs not reaching the RGB driver. What it does
+    /// not: the light itself, which is the driver's and the eye's.
+    #[test]
+    #[ignore = "needs an iCE40UP5K-SG48 board with an FT2232H"]
+    fn the_led_dimmer_breathes_on_the_board() {
+        let Some(bin) = build("ledda_breathe") else {
+            return;
+        };
+        let Some(mut serial) = load(&bin) else {
+            return;
+        };
+        let mut got = Received::default();
+        serial.read(
+            &mut got,
+            Duration::from_millis(800),
+            Duration::from_secs(6),
+            |r| r.bytes.iter().filter(|b| **b == b'\n').count() >= 230,
+        );
+        let text = String::from_utf8_lossy(&got.bytes).into_owned();
+        let samples: Vec<(u32, bool)> = text
+            .lines()
+            .skip(1)
+            .filter_map(|l| {
+                let w: Vec<&str> = l.split_whitespace().collect();
+                let d = u32::from_str_radix(w.first()?.strip_prefix('P')?, 16).ok()?;
+                let on = w.get(1)?.strip_prefix('O')? == "1";
+                Some((d, on))
+            })
+            .collect();
+        assert!(samples.len() > 150, "{text:?}");
+        let peak = samples.iter().map(|s| s.0).max().unwrap_or(0);
+        assert!(peak > 0x1000, "no light: {text:?}");
+        // Count the swings from below a tenth to above nine tenths.
+        let (mut swings, mut low) = (0, false);
+        for &(d, _) in &samples {
+            if d * 10 < peak {
+                low = true;
+            } else if d * 10 > peak * 9 && low {
+                swings += 1;
+                low = false;
+            }
+        }
+        assert!(swings >= 1, "no breath: {text:?}");
+        for &(d, on) in &samples {
+            assert!(on || d == 0, "LEDDON low with the LED lit: {text:?}");
+        }
+        eprintln!(
+            "{} samples, peak {peak:#x}, {swings} breath(s)",
+            samples.len()
+        );
+    }
+
     #[test]
     fn the_report_check_rejects_a_wrong_report() {
         let mut good = String::from("SP:PPPP BR:PPPP\r\n");

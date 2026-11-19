@@ -813,9 +813,118 @@ impl Image {
     }
 }
 
+/// The size of one header of a multi-image flash layout, in bytes.
+pub const MULTIBOOT_HEADER: usize = 32;
+
+/// How many images a multi-image layout's headers can point at: what a
+/// warm boot's `S1`/`S0` select.
+pub const MULTIBOOT_IMAGES: usize = 4;
+
+/// Several bitstreams laid out for a flash the part boots from and warm
+/// boots between, as IceStorm's `icemulti` writes them (ported from
+/// `icemulti.cc`, read from IceStorm's source).
+///
+/// The flash starts with five 32-byte headers: the first is the one the
+/// part reads at power-on and points at image `power_on`; the next four
+/// are what an `SB_WARMBOOT` with `S1 S0` = 0..3 boots, each pointing at
+/// the image of that number. Each header is a short command stream —
+/// synchronisation word, `92 00 00` (no cold-boot selection), `44 03` and
+/// the image's 24-bit address, `82 00 00`, `01 08` (reboot) — padded with
+/// zeros. The images follow at once, each starting on a multiple of
+/// `2^align_bits` bytes, padded with `0xFF`. Fewer than four images are
+/// repeated: a slot with none boots the power-on image, as `icemulti`
+/// does.
+///
+/// Returns `None` for no image, more than four, or `power_on` out of range.
+#[must_use]
+pub fn multiboot(images: &[&[u8]], power_on: usize, align_bits: u32) -> Option<Vec<u8>> {
+    if images.is_empty() || images.len() > MULTIBOOT_IMAGES || power_on >= images.len() {
+        return None;
+    }
+    let align = |offset: usize| {
+        let mask = (1usize << align_bits) - 1;
+        if offset & mask == 0 {
+            offset
+        } else {
+            (offset | mask) + 1
+        }
+    };
+    let mut offsets = Vec::with_capacity(images.len());
+    let mut offset = (MULTIBOOT_IMAGES + 1) * MULTIBOOT_HEADER;
+    for image in images {
+        offsets.push(offset);
+        offset = align(offset + image.len());
+    }
+    let header = |at: usize| -> Vec<u8> {
+        let a = u32::try_from(at).unwrap_or(0);
+        let [_, hi, mid, lo] = a.to_be_bytes();
+        let mut h = vec![
+            0x7E, 0xAA, 0x99, 0x7E, 0x92, 0x00, 0x00, 0x44, 0x03, hi, mid, lo, 0x82, 0x00, 0x00,
+            0x01, 0x08,
+        ];
+        h.resize(MULTIBOOT_HEADER, 0x00);
+        h
+    };
+    let mut out = header(offsets[power_on]);
+    for slot in 0..MULTIBOOT_IMAGES {
+        let index = if slot < images.len() { slot } else { power_on };
+        out.extend(header(offsets[index]));
+    }
+    for (image, at) in images.iter().zip(&offsets) {
+        out.resize(*at, 0xFF);
+        out.extend_from_slice(image);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The layout `icemulti -p0 a.bin b.bin` writes, byte for byte where it
+    /// matters: the five headers, each image's address in them, and the
+    /// images where those addresses say. The bytes were read from
+    /// `icemulti.cc`'s `write_header`; what would catch a misreading of it
+    /// is the board (`docs/fpga-icestorm.md`, "Warm boot"), which this test
+    /// is not.
+    #[test]
+    fn a_multiboot_layout_is_icemultis() {
+        let a = [0x11u8; 100];
+        let b = [0x22u8; 50];
+        let flash = multiboot(&[&a, &b], 0, 0).unwrap();
+        // Five headers, then a at 160 and b straight after it.
+        assert_eq!(flash.len(), 160 + 100 + 50);
+        let address = |flash: &[u8], h: usize| {
+            let at = h * MULTIBOOT_HEADER;
+            assert_eq!(
+                &flash[at..at + 9],
+                &[0x7E, 0xAA, 0x99, 0x7E, 0x92, 0x00, 0x00, 0x44, 0x03]
+            );
+            assert_eq!(&flash[at + 12..at + 17], &[0x82, 0x00, 0x00, 0x01, 0x08]);
+            assert!(flash[at + 17..at + 32].iter().all(|b| *b == 0));
+            usize::from(flash[at + 9]) << 16
+                | usize::from(flash[at + 10]) << 8
+                | usize::from(flash[at + 11])
+        };
+        assert_eq!(address(&flash, 0), 160, "power-on boots image 0");
+        assert_eq!(address(&flash, 1), 160, "warm boot 0 is image 0");
+        assert_eq!(address(&flash, 2), 260, "warm boot 1 is image 1");
+        assert_eq!(
+            address(&flash, 3),
+            160,
+            "a slot with no image boots the power-on one"
+        );
+        assert_eq!(address(&flash, 4), 160);
+        assert!(flash[160..260].iter().all(|b| *b == 0x11));
+        assert!(flash[260..].iter().all(|b| *b == 0x22));
+        // Aligned, image 1 starts on the boundary and the gap is 0xFF.
+        let flash = multiboot(&[&a, &b], 1, 16).unwrap();
+        assert_eq!(address(&flash, 0), 0x1_0000, "power-on boots image 1");
+        assert!(flash[260..0x1_0000].iter().all(|b| *b == 0xFF));
+        let five: [&[u8]; 5] = [&a; 5];
+        assert!(multiboot(&five, 0, 0).is_none());
+        assert!(multiboot(&[&a], 1, 0).is_none());
+    }
 
     /// The CRC is CCITT with an initial value of all ones, and a stream
     /// carries its own CRC so that the check over it comes out zero.

@@ -1753,9 +1753,12 @@ fn primitive_instances(
             }
             continue;
         }
-        // A `CAPTUREE2` is the one primitive with no output at all, and is
-        // instantiated by name all the same.
-        if bel.outputs.is_empty() && bel.role != super::device::BelRole::Capture {
+        // A `CAPTUREE2` is a primitive with no output at all, and is
+        // instantiated by name all the same; so is a hard block the device
+        // gives a site of its own and no output, an iCE40's `SB_WARMBOOT`.
+        let outputless = bel.role == super::device::BelRole::Capture
+            || (bel.role == super::device::BelRole::Other && bel.site.is_some());
+        if bel.outputs.is_empty() && !outputless {
             refused += 1;
             diags.push(
                 Diagnostic::error(format!(

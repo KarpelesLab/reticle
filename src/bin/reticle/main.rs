@@ -680,6 +680,12 @@ flash, wired as iceprog expects):
                      the 4 KiB sectors that change, read it back and
                      compare, then boot the FPGA from it. --raw allows a
                      file that is not a bitstream, to restore a backup
+  --warm-boot <b.bin>[,<c.bin>[,<d.bin>]]
+                     With --write-flash, lay the images out for warm boot
+                     as IceStorm's icemulti does: five headers, then
+                     <design.bin> as image 0 (the one the FPGA boots at
+                     power-on) and these as images 1 to 3, which an
+                     SB_WARMBOOT with S1 S0 = 1..3 loads
   --ice40 --boot     Reset the FPGA so it configures itself from the flash
   --clock <hz>       With --ice40, the SPI clock (default 6000000)
   --sram-via <flash-output|host-output>
@@ -989,6 +995,7 @@ fn spec_for(usage: &str) -> Spec {
                 "readback",
                 "read-flash",
                 "write-flash",
+                "warm-boot",
                 "offset",
                 "length",
                 "sram-via",

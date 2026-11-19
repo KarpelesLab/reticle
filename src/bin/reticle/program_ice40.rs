@@ -11,6 +11,7 @@
 //! | `design.bin` | the FPGA's configuration memory is loaded; the flash is not written |
 //! | `--read-flash out.bin` | as `--probe`, and the flash is read into a file |
 //! | `--write-flash design.bin` | the flash is written (only the sectors that change), read back and compared, and the FPGA booted from it |
+//! | `--write-flash a.bin --warm-boot b.bin,c.bin` | the same, with the images laid out for warm boot (`fpga::icestorm::image::multiboot`): `a` at power-on, `b` and `c` as images 1 and 2 |
 //! | `--boot` | the FPGA is reset and configures itself from the flash |
 //!
 //! Only `--write-flash` writes anything non-volatile, and it says how much
@@ -83,7 +84,41 @@ pub(crate) fn run(args: &Args, say: &dyn Fn(&str)) -> Result<Outcome, Fault> {
     ) {
         (true, None, None, false, []) => Op::Probe,
         (false, Some(out), None, false, []) => Op::Read(out.to_owned()),
-        (false, None, Some(file), false, []) => Op::Write(read_file(file)?),
+        (false, None, Some(file), false, []) => {
+            let first = read_file(file)?;
+            match args.option("warm-boot") {
+                None => Op::Write(first),
+                Some(list) => {
+                    let mut images = vec![first];
+                    for path in list.split(',') {
+                        images.push(read_file(path)?);
+                    }
+                    for (i, image) in images.iter().enumerate() {
+                        if !ice40::looks_like_bitstream(image) {
+                            return Err(Fault::Failed(format!(
+                                "image {i} of the warm-boot layout is not an iCE40 bitstream; \
+                                 nothing was sent to the board"
+                            )));
+                        }
+                    }
+                    let refs: Vec<&[u8]> = images.iter().map(Vec::as_slice).collect();
+                    let flash = reticle::fpga::icestorm::image::multiboot(&refs, 0, 0).ok_or_else(
+                        || {
+                            Fault::Usage(format!(
+                                "--warm-boot takes at most three more images, not {}",
+                                images.len() - 1
+                            ))
+                        },
+                    )?;
+                    say(&format!(
+                        "a warm-boot layout of {} images, {} bytes",
+                        images.len(),
+                        flash.len()
+                    ));
+                    Op::Write(flash)
+                }
+            }
+        }
         (false, None, None, true, []) => Op::Boot,
         (false, None, None, false, [file]) => Op::Sram(read_file(file)?),
         _ => {
@@ -94,6 +129,11 @@ pub(crate) fn run(args: &Args, say: &dyn Fn(&str)) -> Result<Outcome, Fault> {
             ));
         }
     };
+    if args.option("warm-boot").is_some() && !matches!(op, Op::Write(_)) {
+        return Err(Fault::Usage(
+            "--warm-boot lays images out for the flash, so it goes with --write-flash".into(),
+        ));
+    }
     // Check the file before the board is touched.
     if let Op::Sram(bytes) | Op::Write(bytes) = &op
         && !ice40::looks_like_bitstream(bytes)

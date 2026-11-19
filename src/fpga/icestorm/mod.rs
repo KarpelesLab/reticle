@@ -675,6 +675,56 @@ impl IceFabric {
                     self.tile_mut(ax, ay).bels.push(bel);
                     continue;
                 }
+                // The UltraPlus's other hard IP, and the warm-boot block
+                // every die has. Their ports are one bit each in the
+                // library (`SBADRI3` is a port, not bit 3 of one), so a pin's
+                // role is the port's name and bit 0, `SBADRI30`, as
+                // `place::describe` gives a port no `port` line names; an
+                // entry that names a configuration bit rather than a wire
+                // (`I2C_ENABLE_0`) gives no pin.
+                "I2C" | "SPI" | "LEDDA_IP" | "WARMBOOT" => {
+                    let (ax, ay) = cell.tile;
+                    let kind = cell.kind.to_ascii_lowercase();
+                    let mut bel = BelDecl::new(kind.clone(), kind);
+                    for (key, x, y, name) in &cell.entries {
+                        if let Some(wire) = self.named(*x, *y, name, ax, ay) {
+                            bel.pins.push((format!("{key}0"), wire));
+                        }
+                    }
+                    self.tile_mut(ax, ay).bels.push(bel);
+                    continue;
+                }
+                // An IO with switchable pull-ups: the IO block its
+                // `PACKAGE_PIN` names gets the two pull-up enables as pins
+                // of its own, which an `SB_IO_I3C` placed there reaches and
+                // an `SB_IO` leaves alone.
+                "IO_I3C" => {
+                    let Some((_, px, py, pz)) =
+                        cell.entries.iter().find(|(k, ..)| k == "PACKAGE_PIN")
+                    else {
+                        continue;
+                    };
+                    let (px, py) = (*px, *py);
+                    let bel_name = format!("io{pz}");
+                    let pins: Vec<(String, WireRef)> =
+                        [("PU_ENB", "pu_enb"), ("WEAK_PU_ENB", "weak_pu_enb")]
+                            .iter()
+                            .filter_map(|(key, role)| {
+                                let (_, x, y, name) =
+                                    cell.entries.iter().find(|(k, ..)| k == key)?;
+                                Some(((*role).to_owned(), self.named(*x, *y, name, px, py)?))
+                            })
+                            .collect();
+                    if let Some(bel) = self
+                        .tile_mut(px, py)
+                        .bels
+                        .iter_mut()
+                        .find(|b| b.name == bel_name)
+                    {
+                        bel.pins.extend(pins);
+                    }
+                    continue;
+                }
                 _ => continue,
             };
             let (ax, ay) = cell.tile;
@@ -794,7 +844,7 @@ impl IceFabric {
     /// `ios` is every used IO block as `(x, y, z, pin_type, input_used,
     /// pullup)`; `reserved` the IO blocks a placed PLL's outputs pass
     /// through, which are neither a design's pins nor unused; `extra`
-    /// every extra cell's parameters by kind.
+    /// every extra cell's parameters, by kind and anchor tile.
     ///
     /// Per die, as nextpnr's `bitstream.cc` writes them:
     ///
@@ -819,7 +869,7 @@ impl IceFabric {
         image: &mut image::Image,
         ios: &[(u32, u32, u32, u32, bool, bool)],
         reserved: &BTreeSet<db::IoAt>,
-        extra: &[(String, BTreeMap<String, u64>)],
+        extra: &[ExtraConfig],
     ) -> Result<(), FabricError> {
         let set = |image: &mut image::Image, x: u32, y: u32, bits: &[ConfigBit]| {
             for b in bits {
@@ -921,9 +971,17 @@ impl IceFabric {
                 }
             }
         }
-        for (kind, params) in extra {
-            let Some(cell) = self.db.extra_cells.iter().find(|c| &c.kind == kind) else {
-                return Err(FabricError(format!("the database has no `{kind}` cell")));
+        for (kind, tile, params) in extra {
+            let Some(cell) = self
+                .db
+                .extra_cells
+                .iter()
+                .find(|c| &c.kind == kind && c.tile == *tile)
+            else {
+                return Err(FabricError(format!(
+                    "the database has no `{kind}` cell at ({}, {})",
+                    tile.0, tile.1
+                )));
             };
             for (key, x, y, name) in &cell.entries {
                 // A key `NAME_<i>` is bit `i` of parameter `NAME`; a plain
@@ -1170,6 +1228,60 @@ impl IceFabric {
         Ok(())
     }
 
+    /// Refuses an IO buffer that only some pads have on a pad without it:
+    /// an `SB_IO_I3C` anywhere but an IO block an `.extra_cell IO_I3C`
+    /// record names (pins 23 and 25 of the UltraPlus's SG48), whose pull-up
+    /// enables reach the fabric there and nowhere else; and an `SB_IO_OD`
+    /// anywhere but one of the three pads the RGB LED driver can drive, the
+    /// UltraPlus's open-drain pads (IceStorm's `ultraplus.rst`: with the
+    /// driver off, "the pin can be used as an open-drain IO using the
+    /// standard IO cell").
+    fn check_special_io(
+        &self,
+        primitive: &str,
+        cell: &crate::ir::Cell,
+        at: db::IoAt,
+    ) -> Result<(), FabricError> {
+        let pads = |kind: &str, keys: &[&str]| -> Vec<db::IoAt> {
+            self.db
+                .extra_cells
+                .iter()
+                .filter(|c| c.kind == kind)
+                .flat_map(|c| {
+                    c.entries
+                        .iter()
+                        .filter(|(k, ..)| keys.contains(&k.as_str()))
+                        .filter_map(|(_, x, y, z)| Some((*x, *y, z.parse().ok()?)))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        let (allowed, what) = match primitive {
+            "SB_IO_I3C" => (pads("IO_I3C", &["PACKAGE_PIN"]), "an I3C pad"),
+            "SB_IO_OD" => (
+                pads("RGBA_DRV", &["RGB0", "RGB1", "RGB2"]),
+                "one of the open-drain pads the RGB LED driver drives",
+            ),
+            _ => return Ok(()),
+        };
+        if allowed.contains(&at) {
+            return Ok(());
+        }
+        Err(FabricError(format!(
+            "`{}` is an `{primitive}`, which sits only on {what}; the IO block at ({}, {}, {}) is \
+             not one{}",
+            cell.name.as_str(),
+            at.0,
+            at.1,
+            at.2,
+            if allowed.is_empty() {
+                format!(" and the {} die has none", self.db.device)
+            } else {
+                String::new()
+            }
+        )))
+    }
+
     /// The `.extra_cell MAC16` record of the DSP block anchored at `tile`.
     fn mac16_at(&self, tile: (u32, u32)) -> Option<&db::ExtraCell> {
         self.db
@@ -1411,6 +1523,28 @@ impl IceFabric {
             }
             out.plls.insert(cell.tile, config);
         }
+        // Every hard cell's configuration bits: the RGB driver's, the high
+        // frequency oscillator's divider, the I2C and SPI blocks' enables
+        // and delays.
+        for cell in &self.db.extra_cells {
+            if !HARD_IP_KINDS.contains(&cell.kind.as_str()) || !cell.available_in(&self.package) {
+                continue;
+            }
+            let mut params: BTreeMap<String, u64> = BTreeMap::new();
+            for (key, x, y, name) in &cell.entries {
+                let Some(bits) = self.db.function_by_suffix(self.db.tile(*x, *y), name) else {
+                    continue;
+                };
+                if !bits.iter().all(|b| image.get(*x, *y, b.row, b.col)) {
+                    continue;
+                }
+                let (param, bit) = param_and_bit(cell, key);
+                *params.entry(param).or_default() |= 1 << bit;
+            }
+            if !params.is_empty() {
+                out.hard_ip.insert((cell.kind.clone(), cell.tile), params);
+            }
+        }
         for (name, bank, x, y) in &self.db.extra_bits {
             if let Some(n) = name
                 .strip_prefix("padin_glb_netwk.")
@@ -1500,7 +1634,7 @@ impl IceFabric {
             }
         };
         let mut ios = Vec::new();
-        let mut extra = Vec::new();
+        let mut extra: Vec<ExtraConfig> = Vec::new();
         let mut rams: BTreeMap<(u32, u32), RamConfig> = BTreeMap::new();
         let mut sprams: BTreeSet<((u32, u32), u32)> = BTreeSet::new();
         let mut dsps: BTreeMap<(u32, u32), DspConfig> = BTreeMap::new();
@@ -1516,6 +1650,11 @@ impl IceFabric {
             match instance.kind.as_str() {
                 "io" => {
                     let z = u32::from(site.bel.ends_with('1'));
+                    self.check_special_io(
+                        &instance.primitive,
+                        cell,
+                        (site.tile.0, site.tile.1, z),
+                    )?;
                     let input = netlist.pins.iter().any(|p| {
                         p.instance == index
                             && (p.role == "din" || p.role == "din1")
@@ -1551,7 +1690,7 @@ impl IceFabric {
                     ] {
                         p.insert(key.to_owned(), param(cell, key).unwrap_or(0));
                     }
-                    extra.push(("RGBA_DRV".to_owned(), p));
+                    extra.push(("RGBA_DRV".to_owned(), site.tile, p));
                 }
                 "hfosc" | "lfosc" => {
                     let mut p = BTreeMap::new();
@@ -1560,9 +1699,9 @@ impl IceFabric {
                             "CLKHF_DIV".to_owned(),
                             param(cell, "CLKHF_DIV").unwrap_or(0),
                         );
-                        extra.push(("HFOSC".to_owned(), p));
+                        extra.push(("HFOSC".to_owned(), site.tile, p));
                     } else {
-                        extra.push(("LFOSC".to_owned(), p));
+                        extra.push(("LFOSC".to_owned(), site.tile, p));
                     }
                     // Its clock reaches its global network through that
                     // network's pad-input path, as nextpnr's packer puts
@@ -1585,6 +1724,29 @@ impl IceFabric {
                 "bram" => {
                     rams.insert(site.tile, RamConfig::of_cell(cell)?);
                 }
+                // The I2C block's input and output delays on SDA are on
+                // unless an attribute says otherwise, and both of its enable
+                // bits and all four of the SPI block's are set whenever the
+                // block is used: nextpnr's `bitstream.cc`. The LED dimmer and
+                // the warm-boot block have no bit at all.
+                "i2c" => {
+                    let delay = |key: &str| match cell.attrs.get(key) {
+                        None => 1,
+                        Some(v) => u64::from(attr_true(v)),
+                    };
+                    let mut p = BTreeMap::new();
+                    p.insert("I2C_ENABLE".to_owned(), 3);
+                    p.insert("SDA_INPUT_DELAYED".to_owned(), delay("SDA_INPUT_DELAYED"));
+                    p.insert("SDA_OUTPUT_DELAYED".to_owned(), delay("SDA_OUTPUT_DELAYED"));
+                    extra.push(("I2C".to_owned(), site.tile, p));
+                }
+                "spi" => {
+                    let mut p = BTreeMap::new();
+                    p.insert("SPI_ENABLE".to_owned(), 15);
+                    extra.push(("SPI".to_owned(), site.tile, p));
+                }
+                "ledda_ip" => extra.push(("LEDDA_IP".to_owned(), site.tile, BTreeMap::new())),
+                "warmboot" => extra.push(("WARMBOOT".to_owned(), site.tile, BTreeMap::new())),
                 "mac16" => {
                     dsps.insert(site.tile, DspConfig::of_cell(cell)?.as_bits(cell)?);
                 }
@@ -1638,6 +1800,24 @@ impl IceFabric {
                 if i == 1 && !config.dual() {
                     continue;
                 }
+                // A pad form's first output leaves through its own pad,
+                // whose IO buffer is the design's: its input is the PLL's
+                // reference, so it is enabled whatever the fabric reads of
+                // it (nextpnr's `bitstream.cc`, `sb_io_used_by_pll_pad`).
+                if i == 0
+                    && config.pad()
+                    && let Some(at) = pll_output_io(cell, key)
+                {
+                    if ios.iter().any(|io| (io.0, io.1, io.2) == at) {
+                        return Err(FabricError(format!(
+                            "the pad of the PLL at ({}, {}) is also used as a pin of its own",
+                            tile.0, tile.1
+                        )));
+                    }
+                    // Its `PINTYPE` bits are the PLL's, set below.
+                    ios.push((at.0, at.1, at.2, 0, true, false));
+                    continue;
+                }
                 if let Some((x, y, z)) = pll_output_io(cell, key) {
                     if ios.iter().any(|io| (io.0, io.1, io.2) == (x, y, z)) {
                         return Err(FabricError(format!(
@@ -1663,6 +1843,7 @@ impl IceFabric {
         Ok(Configured {
             pads: ios.len(),
             hard_cells: extra.len(),
+            hard_ip: hard_ip_wanted(self, &extra),
             rams,
             sprams,
             dsps,
@@ -1700,13 +1881,93 @@ impl IceFabric {
     }
 }
 
+/// One hard cell's configuration as [`IceFabric::configure`] writes it:
+/// the cell's kind as the chip database names it (`RGBA_DRV`, `I2C`), its
+/// anchor tile, and each parameter's value.
+pub type ExtraConfig = (String, (u32, u32), BTreeMap<String, u64>);
+
+/// The hard cells whose configuration bits [`IceFabric::decode`] reads
+/// back: every one with a bit in its record. The low-frequency oscillator,
+/// the LED dimmer and the warm-boot block have none.
+pub const HARD_IP_KINDS: [&str; 4] = ["RGBA_DRV", "HFOSC", "I2C", "SPI"];
+
+/// The parameter and bit an entry `key` of `cell`'s record is: `NAME_<i>`
+/// is bit `i` of `NAME` when the record has a `NAME_0`, and any other key
+/// is bit 0 of itself (`SDA_INPUT_DELAYED`, `RGBA_DRV_EN`).
+fn param_and_bit(cell: &db::ExtraCell, key: &str) -> (String, u32) {
+    if let Some((name, bit)) = key.rsplit_once('_')
+        && let Ok(bit) = bit.parse::<u32>()
+        && cell.entries.iter().any(|(k, ..)| *k == format!("{name}_0"))
+    {
+        return (name.to_owned(), bit);
+    }
+    (key.to_owned(), 0)
+}
+
+/// What [`IceFabric::decode`] should read back of `extra`: for each cell of
+/// a [`HARD_IP_KINDS`] kind, every parameter not zero, masked to the bits its
+/// record has. A cell with none is absent, as an unused one is.
+fn hard_ip_wanted(
+    fabric: &IceFabric,
+    extra: &[ExtraConfig],
+) -> BTreeMap<(String, (u32, u32)), BTreeMap<String, u64>> {
+    let mut out = BTreeMap::new();
+    for (kind, tile, params) in extra {
+        if !HARD_IP_KINDS.contains(&kind.as_str()) {
+            continue;
+        }
+        let Some(cell) = fabric
+            .db
+            .extra_cells
+            .iter()
+            .find(|c| &c.kind == kind && c.tile == *tile)
+        else {
+            continue;
+        };
+        let mut held: BTreeMap<String, u64> = BTreeMap::new();
+        for (key, x, y, name) in &cell.entries {
+            if fabric
+                .db
+                .function_by_suffix(fabric.db.tile(*x, *y), name)
+                .is_none()
+            {
+                continue;
+            }
+            let (param, bit) = param_and_bit(cell, key);
+            if params.get(&param).is_some_and(|v| v >> bit & 1 != 0) {
+                *held.entry(param).or_default() |= 1 << bit;
+            }
+        }
+        if !held.is_empty() {
+            out.insert((kind.clone(), *tile), held);
+        }
+    }
+    out
+}
+
+/// Whether an attribute's value is true: a number not zero, or a string
+/// that is not `0`, `false` or empty.
+fn attr_true(value: &crate::ir::AttrValue) -> bool {
+    match value {
+        crate::ir::AttrValue::String(s) => {
+            let s = s.trim_matches('"');
+            !(s.is_empty() || s == "0" || s.eq_ignore_ascii_case("false"))
+        }
+        other => other.as_int().is_some_and(|v| v != 0),
+    }
+}
+
 /// What [`IceFabric::configure_placed`] configured.
 #[derive(Clone, Debug, Default)]
 pub struct Configured {
     /// IO blocks.
     pub pads: usize,
-    /// Hard cells: the RGB driver, the oscillators.
+    /// Hard cells: the RGB driver, the oscillators, the I2C and SPI blocks,
+    /// the LED dimmer, the warm-boot block.
     pub hard_cells: usize,
+    /// The configuration bits of every hard cell that has any, by kind and
+    /// anchor tile, as written: what [`Decoded::hard_ip`] must read back.
+    pub hard_ip: BTreeMap<(String, (u32, u32)), BTreeMap<String, u64>>,
     /// Block RAMs, by their `ramb` tile, as their cells ask for them.
     pub rams: BTreeMap<(u32, u32), RamConfig>,
     /// Single-port RAMs, as `(anchor tile, index)`.
@@ -1780,16 +2041,6 @@ pub fn implement(
     let design = &packed;
     let netlist = place::Netlist::build(design, top, device, graph).map_err(|e| e.to_string())?;
     for instance in &netlist.instances {
-        if matches!(
-            instance.primitive.as_str(),
-            "SB_PLL40_PAD" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD"
-        ) {
-            return Err(format!(
-                "`{}` is a `{}`, whose reference is the PLL's own pad; this flow places the CORE \
-                 forms, which take it from the fabric, and nothing was written",
-                instance.name, instance.primitive
-            ));
-        }
         if !matches!(
             instance.kind.as_str(),
             "lc" | "lcc"
@@ -1802,6 +2053,10 @@ pub fn implement(
                 | "spram"
                 | "mac16"
                 | "pll"
+                | "i2c"
+                | "spi"
+                | "ledda_ip"
+                | "warmboot"
         ) {
             return Err(format!(
                 "`{}` is a `{}`, which this flow does not place on an iCE40 yet; nothing was \
@@ -1809,6 +2064,22 @@ pub fn implement(
                 instance.name, instance.primitive
             ));
         }
+    }
+    // An IO buffer only some pads have, on a pin that is not one of them,
+    // is refused by name before the placer finds the pins it lacks.
+    for instance in netlist.instances.iter().filter(|i| i.kind == "io") {
+        let Some(at) = instance
+            .pin
+            .as_deref()
+            .and_then(|pin| fabric.arch.pinmap.iter().find(|(p, _)| p == pin))
+            .and_then(|(_, site)| io_site(site))
+        else {
+            continue;
+        };
+        let cell = &design.modules[top].cells[instance.cell];
+        fabric
+            .check_special_io(&instance.primitive, cell, at)
+            .map_err(|e| e.to_string())?;
     }
     // A cell of a kind this die (or this package of it) has no site for is
     // refused by name, before anything else is said about it: its pins
@@ -1828,7 +2099,10 @@ pub fn implement(
     // made to pass a PLL's `LOCK` on must sit in the one logic tile that
     // wire reaches (packing's rule 10); and the global networks a PLL drives
     // must be known before the design's clock buffers are seated.
-    let pll_sites = assign_pll_sites(fabric, &netlist, constraints)?;
+    let mut pll_sites = assign_pll_sites(fabric, &netlist, constraints, &pack_report.pad_plls)?;
+    // An I2C or SPI block's site is named by its `BUS_ADDR74`, the address
+    // its system bus answers on; they are confined the same way.
+    pll_sites.extend(assign_bus_sites(fabric, &netlist, design, top)?);
     let driverless = netlist.driverless();
     if !driverless.is_empty() {
         return Err(format!(
@@ -1872,7 +2146,7 @@ pub fn implement(
                 });
         };
         for (name, tile) in &pll_sites {
-            confine(name, format!("$ice40$pll_X{}Y{}", tile.0, tile.1), *tile);
+            confine(name, format!("$ice40$site_X{}Y{}", tile.0, tile.1), *tile);
         }
         for (pll, lock) in &pack_report.lock_cells {
             let Some((_, tile)) = pll_sites.iter().find(|(n, _)| n == pll) else {
@@ -2148,6 +2422,31 @@ pub fn implement(
             differ.join("\n  ")
         ));
     }
+    // And for every other hard cell: the bits read back as the parameters
+    // each placed one asked for, and no other cell's bit is set.
+    if decoded.hard_ip != configured.hard_ip {
+        let keys: BTreeSet<&(String, (u32, u32))> = decoded
+            .hard_ip
+            .keys()
+            .chain(configured.hard_ip.keys())
+            .collect();
+        let differ: Vec<String> = keys
+            .into_iter()
+            .filter(|k| decoded.hard_ip.get(*k) != configured.hard_ip.get(*k))
+            .map(|(kind, (x, y))| {
+                format!(
+                    "{kind} at X{x}Y{y} reads back {:?} for {:?}",
+                    decoded.hard_ip.get(&(kind.clone(), (*x, *y))),
+                    configured.hard_ip.get(&(kind.clone(), (*x, *y)))
+                )
+            })
+            .collect();
+        return Err(format!(
+            "the hard cells this bitstream configures are not the ones placed, so nothing was \
+             written:\n  {}",
+            differ.join("\n  ")
+        ));
+    }
     let timing = fabric
         .timing
         .as_ref()
@@ -2178,31 +2477,93 @@ pub fn implement(
 type SiteAssignments = Vec<(String, (u32, u32))>;
 
 /// The PLL site each of the netlist's PLLs is given, as `(instance name,
-/// anchor tile)`: in the order the netlist holds them, the first site the
-/// package has whose output IO blocks — `PLLOUT_A`, and `PLLOUT_B` for a
-/// two-output form — are none of the design's pins.
+/// anchor tile)`. A pad form (`pads`, packing's rule 11) first: the site
+/// whose first output leaves through the IO block of the pin its pad's IO
+/// buffer is on, which is the PLL's own pad. Then each other PLL, in the
+/// order the netlist holds them: the first site left whose output IO
+/// blocks — `PLLOUT_A`, and `PLLOUT_B` for a two-output form — are none of
+/// the design's pins.
 ///
 /// # Errors
 ///
 /// A message naming the PLL when no site is left for it: the die or the
 /// package has no PLL at all (the 384, the 1k in its smaller packages), or
 /// fewer than the design asks for, or every one left would take a pin the
-/// design uses.
+/// design uses; or, for a pad form, when its pad's pin is no PLL's pad.
 fn assign_pll_sites(
     fabric: &IceFabric,
     netlist: &super::place::Netlist,
     constraints: &super::Constraints,
+    pads: &[(String, String)],
 ) -> Result<SiteAssignments, String> {
+    let pin_block = |pin: &str| {
+        fabric
+            .arch
+            .pinmap
+            .iter()
+            .find(|(p, _)| p == pin)
+            .and_then(|(_, site)| io_site(site))
+    };
     let pins: BTreeSet<db::IoAt> = constraints
         .pins
         .iter()
-        .filter_map(|p| fabric.arch.pinmap.iter().find(|(pin, _)| *pin == p.pin))
-        .filter_map(|(_, site)| io_site(site))
+        .filter_map(|p| pin_block(&p.pin))
         .collect();
     let mut free: Vec<&db::ExtraCell> = fabric.plls().collect();
     let total = free.len();
     let mut out = Vec::new();
-    for instance in netlist.instances.iter().filter(|i| i.kind == "pll") {
+    for (pll, port) in pads {
+        let Some(instance) = netlist.instances.iter().find(|i| &i.name == pll) else {
+            continue;
+        };
+        let pin = constraints
+            .pins
+            .iter()
+            .find(|p| &p.port == port)
+            .map(|p| p.pin.clone());
+        let Some(pin) = pin else {
+            return Err(format!(
+                "`{pll}` is a `{}` whose pad, port `{port}`, has no pin constraint; a pad form \
+                 of the PLL needs its pad on the PLL's own pin; nothing was written",
+                instance.primitive
+            ));
+        };
+        let block = pin_block(&pin);
+        let at = free
+            .iter()
+            .position(|c| block.is_some() && pll_output_io(c, "PLLOUT_A") == block);
+        let Some(at) = at else {
+            let own: Vec<String> = fabric
+                .plls()
+                .filter_map(|c| pll_output_io(c, "PLLOUT_A"))
+                .filter_map(|b| {
+                    fabric
+                        .arch
+                        .pinmap
+                        .iter()
+                        .find(|(_, s)| io_site(s) == Some(b))
+                        .map(|(p, _)| p.clone())
+                })
+                .collect();
+            return Err(format!(
+                "`{pll}` is a `{}` whose pad is on pin {pin}, which is no free PLL's own pad: \
+                 in the `{}` package {}; nothing was written",
+                instance.primitive,
+                fabric.package,
+                if own.is_empty() {
+                    "no PLL has one".to_owned()
+                } else {
+                    format!("the PLL pads are pin(s) {}", own.join(", "))
+                }
+            ));
+        };
+        out.push((instance.name.clone(), free.remove(at).tile));
+    }
+    for instance in netlist
+        .instances
+        .iter()
+        .filter(|i| i.kind == "pll" && !pads.iter().any(|(p, _)| *p == i.name))
+    {
         let outputs = if PllConfig::is_dual_primitive(&instance.primitive) {
             2
         } else {
@@ -2237,6 +2598,74 @@ fn assign_pll_sites(
             ));
         };
         out.push((instance.name.clone(), free.remove(at).tile));
+    }
+    Ok(out)
+}
+
+/// The site of each I2C and SPI block, as `(instance name, anchor tile)`,
+/// from its `BUS_ADDR74`: on the UltraPlus, `0b0000` is the SPI block at
+/// (0, 0), `0b0001` the I2C block at (0, 31), `0b0010` the SPI block at
+/// (25, 0) and `0b0011` the I2C block at (25, 31) — nextpnr's `pack.cc`
+/// (`map_ba74`); the default is `0b0001` for an I2C block and `0b0000` for
+/// an SPI one, the library's.
+///
+/// # Errors
+///
+/// A message naming the cell for another value, or on a die without those
+/// blocks there.
+fn assign_bus_sites(
+    fabric: &IceFabric,
+    netlist: &super::place::Netlist,
+    design: &crate::ir::Design,
+    top: crate::ir::ModuleId,
+) -> Result<SiteAssignments, String> {
+    let m = &design.modules[top];
+    let mut out = Vec::new();
+    for instance in netlist
+        .instances
+        .iter()
+        .filter(|i| i.kind == "i2c" || i.kind == "spi")
+    {
+        let cell = &m.cells[instance.cell];
+        let default = if instance.kind == "i2c" { 1 } else { 0 };
+        let value = match cell.params.get("BUS_ADDR74") {
+            None => Some(default),
+            Some(crate::ir::AttrValue::String(s)) => {
+                let s = s.trim_matches('"');
+                u64::from_str_radix(s.strip_prefix("0b").unwrap_or(s), 2).ok()
+            }
+            Some(other) => other.as_int().and_then(|v| u64::try_from(v).ok()),
+        };
+        let tile = match (instance.kind.as_str(), value) {
+            ("spi", Some(0)) => (0, 0),
+            ("i2c", Some(1)) => (0, 31),
+            ("spi", Some(2)) => (25, 0),
+            ("i2c", Some(3)) => (25, 31),
+            _ => {
+                return Err(format!(
+                    "`{}` is a `{}` with BUS_ADDR74 {:?}, which names none of the die's blocks: \
+                     an SPI block answers on 0b0000 or 0b0010, an I2C block on 0b0001 or \
+                     0b0011; nothing was written",
+                    instance.name,
+                    instance.primitive,
+                    value.map_or_else(|| "unreadable".to_owned(), |v| format!("{v:#06b}"))
+                ));
+            }
+        };
+        let kind = instance.kind.to_ascii_uppercase();
+        if !fabric
+            .db
+            .extra_cells
+            .iter()
+            .any(|c| c.kind == kind && c.tile == tile)
+        {
+            return Err(format!(
+                "`{}` is a `{}` for the block at ({}, {}), which the iCE40 {} die does not have \
+                 there; nothing was written",
+                instance.name, instance.primitive, tile.0, tile.1, fabric.db.device
+            ));
+        }
+        out.push((instance.name.clone(), tile));
     }
     Ok(out)
 }
@@ -2396,6 +2825,9 @@ pub struct Decoded {
     pub plls: BTreeMap<(u32, u32), PllConfig>,
     /// The global networks whose pad-input bit is set.
     pub padin: BTreeSet<u32>,
+    /// Every hard cell with a configuration bit set, by kind and anchor
+    /// tile: its parameters as the bits hold them, only those not zero.
+    pub hard_ip: BTreeMap<(String, (u32, u32)), BTreeMap<String, u64>>,
 }
 
 /// The IO block a PLL output's entry names, `PLLOUT_A 12 31 1`.
@@ -2488,12 +2920,9 @@ impl PllConfig {
         let plltype = match primitive {
             "SB_PLL40_CORE" => 3,
             "SB_PLL40_2F_CORE" => 7,
-            "SB_PLL40_PAD" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD" => {
-                return Err(FabricError(format!(
-                    "`{who}` is a `{primitive}`, whose reference is the PLL's own pad; this flow \
-                     places the CORE forms, which take it from the fabric"
-                )));
-            }
+            "SB_PLL40_PAD" => 2,
+            "SB_PLL40_2_PAD" => 4,
+            "SB_PLL40_2F_PAD" => 6,
             other => return Err(FabricError(format!("`{who}`: `{other}` is not a PLL"))),
         };
         let text = |key: &str| -> Option<String> {
@@ -2555,11 +2984,21 @@ impl PllConfig {
                 1,
             )?,
         );
-        if plltype == 3 {
-            set("PLLOUT_SELECT_A", named("PLLOUT_SELECT", &select, 0)?);
-        } else {
-            set("PLLOUT_SELECT_A", named("PLLOUT_SELECT_PORTA", &select, 0)?);
-            set("PLLOUT_SELECT_B", named("PLLOUT_SELECT_PORTB", &select, 0)?);
+        // The one-output forms name their output's selection
+        // `PLLOUT_SELECT`; `SB_PLL40_2_PAD`'s first output is its pad's
+        // signal passed through, so only its second has one; the `2F` forms
+        // name both.
+        match plltype {
+            2 | 3 => {
+                set("PLLOUT_SELECT_A", named("PLLOUT_SELECT", &select, 0)?);
+            }
+            4 => {
+                set("PLLOUT_SELECT_B", named("PLLOUT_SELECT_PORTB", &select, 0)?);
+            }
+            _ => {
+                set("PLLOUT_SELECT_A", named("PLLOUT_SELECT_PORTA", &select, 0)?);
+                set("PLLOUT_SELECT_B", named("PLLOUT_SELECT_PORTB", &select, 0)?);
+            }
         }
         for (key, mode, field) in [
             (
@@ -2608,6 +3047,13 @@ impl PllConfig {
             primitive,
             "SB_PLL40_2F_CORE" | "SB_PLL40_2_PAD" | "SB_PLL40_2F_PAD"
         )
+    }
+
+    /// Whether this is a pad form, whose reference is its own pad
+    /// (`PLLTYPE` 2, 4 and 6), as nextpnr's `is_sb_pll40_pad`.
+    #[must_use]
+    pub fn pad(&self) -> bool {
+        matches!(self.params.get("PLLTYPE"), Some(2 | 4 | 6))
     }
 
     /// Whether the second output exists in this configuration: the `2F`

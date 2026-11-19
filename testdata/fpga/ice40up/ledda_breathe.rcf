@@ -1,0 +1,8 @@
+# An iCE40UP5K-SG48 board whose RGB LED is on pins 39, 40 and 41, its
+# 12 MHz oscillator, and its FT2232H's receive on pin 10.
+set_io -io_standard LVCMOS33 clk 20
+set_io led_r 39
+set_io led_g 40
+set_io led_b 41
+set_io -io_standard LVCMOS33 tx 10
+create_clock -name ref -period 83.333 clk

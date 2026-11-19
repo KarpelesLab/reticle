@@ -459,6 +459,75 @@ pub fn analyse(fabric: &IceFabric, image: &Image, db: &TimingDb) -> TimingReport
             }
         }
     }
+    // The DSP blocks in use (`dsp_arcs`): a multiplier with no register
+    // between an operand and its output is logic, timed with the
+    // multiplier's own arcs; every registered port is a register.
+    for (tile, config) in &decoded.dsps {
+        let Some(cell) = fabric
+            .db
+            .extra_cells
+            .iter()
+            .find(|c| c.kind == "MAC16" && c.tile == *tile)
+        else {
+            continue;
+        };
+        let wire = |key: &str| {
+            cell.entries
+                .iter()
+                .find(|(k, ..)| k == key)
+                .and_then(|(_, x, y, name)| net(*x, *y, name))
+        };
+        let Some(clock) = wire("CLK") else { continue };
+        let clock = (clock, false);
+        let arcs = dsp_arcs(config);
+        for half in 0..2u32 {
+            let (comb_table, launch_table) = arcs.output[half as usize];
+            for j in 16 * half..16 * half + 16 {
+                let Some(o) = wire(&format!("O_{j}")) else {
+                    continue;
+                };
+                match comb_table {
+                    Some(table) => {
+                        for (port, registered) in [("A", arcs.a_reg), ("B", arcs.b_reg)] {
+                            if registered {
+                                continue;
+                            }
+                            for i in 0..16 {
+                                let Some(input) = wire(&format!("{port}_{i}")) else {
+                                    continue;
+                                };
+                                let d =
+                                    db.or_zero(table, &format!("{port}[{i}]"), &format!("O[{j}]"));
+                                if d > 0.0 {
+                                    g.out.entry(input).or_default().push((o, d));
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        if g.out.contains_key(&o) {
+                            let launch =
+                                db.or_zero(launch_table, "posedge:CLK", &format!("O[{j}]"));
+                            g.starts.push((o, clock, launch));
+                        }
+                    }
+                }
+            }
+        }
+        // A registered operand is a register input.
+        for (port, registered) in [("A", arcs.a_reg), ("B", arcs.b_reg)] {
+            if !registered {
+                continue;
+            }
+            for i in 0..16 {
+                if let Some(n) = wire(&format!("{port}_{i}"))
+                    && g.driver.contains_key(&n)
+                {
+                    g.ends.push((n, clock, 100.0));
+                }
+            }
+        }
+    }
     // Each clock pin's net, followed back to the root of its network.
     let root = |mut n: Net| {
         let mut seen = BTreeSet::new();
@@ -552,6 +621,72 @@ pub fn analyse(fabric: &IceFabric, image: &Image, db: &TimingDb) -> TimingReport
         .clocks
         .sort_by(|a, b| b.delay_ps.total_cmp(&a.delay_ps));
     report
+}
+
+/// How a DSP block's ports time, from its configuration as the bits hold
+/// it ([`super::DspConfig`] under IceStorm's names).
+struct DspArcs {
+    /// Whether operand `A` is registered at its port.
+    a_reg: bool,
+    /// The same for `B`.
+    b_reg: bool,
+    /// Per half of `O` (bottom, top): the timing file's cell whose
+    /// operand-to-output arcs time it when it is logic, or `None`, and the
+    /// cell whose clock-to-output arc launches it when it is a register.
+    output: [(Option<&'static str>, &'static str); 2],
+}
+
+/// The timing of a DSP block's ports.
+///
+/// An output half that selects a multiplier product (`*OUTPUT_SELECT` 3,
+/// the 16 x 16 product; 2, the 8 x 8 one) with no register between an
+/// unregistered operand and it is **logic**: the operands' wires reach its
+/// wires through the multiplier, timed with icetime's cells for the
+/// unregistered multiply (`SB_MAC16_MUL_U_16X16_BYPASS`, `_8X8_BYPASS`, the
+/// `_S_` ones for a signed operand). That a 16 x 16 multiply is not free was
+/// measured on a board (`docs/fpga-icestorm.md`, "How fast the DSP
+/// multiplier is"): this used to take every port for a register, as nextpnr
+/// does. Any other output -- registered, or an adder's -- launches from the
+/// block's clock, and a registered operand is a register input. The 8 x 8
+/// top product's register is the bit IceStorm names
+/// `PIPELINE_16x16_MULT_REG1` ("Two DSP registers by other names").
+fn dsp_arcs(config: &super::DspConfig) -> DspArcs {
+    let get = |k: &str| config.params.get(k).copied().unwrap_or(0);
+    let signed = get("A_SIGNED") != 0 || get("B_SIGNED") != 0;
+    let a_reg = get("A_REG") != 0;
+    let b_reg = get("B_REG") != 0;
+    let mult_regs = get("TOP_8x8_MULT_REG") != 0
+        || get("BOT_8x8_MULT_REG") != 0
+        || get("PIPELINE_16x16_MULT_REG1") != 0
+        || get("PIPELINE_16x16_MULT_REG2") != 0;
+    let half = |select: u64, own_8x8_reg: bool| -> (Option<&'static str>, &'static str) {
+        let launch = "SB_MAC16_MUL_U_16X16_ALL_PIPELINE";
+        let comb = match select {
+            3 if !mult_regs => Some(if signed {
+                "SB_MAC16_MUL_S_16X16_BYPASS"
+            } else {
+                "SB_MAC16_MUL_U_16X16_BYPASS"
+            }),
+            2 if !own_8x8_reg => Some(if signed {
+                "SB_MAC16_MUL_S_8X8_BYPASS"
+            } else {
+                "SB_MAC16_MUL_U_8X8_BYPASS"
+            }),
+            _ => None,
+        };
+        (comb.filter(|_| !(a_reg && b_reg)), launch)
+    };
+    DspArcs {
+        a_reg,
+        b_reg,
+        output: [
+            half(get("BOTOUTPUT_SELECT"), get("BOT_8x8_MULT_REG") != 0),
+            half(
+                get("TOPOUTPUT_SELECT"),
+                get("PIPELINE_16x16_MULT_REG1") != 0,
+            ),
+        ],
+    }
 }
 
 /// The nets reachable from `from` over `out`, each before every net it

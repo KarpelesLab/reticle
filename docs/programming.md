@@ -348,6 +348,7 @@ released CRESET_B: CDONE high after 62 1 ms polls (plus USB round trips)
 $ reticle program --ice40 design.bin                # configuration memory only
 $ reticle program --ice40 --read-flash backup.bin   # all 16 MiB, with its SHA-256
 $ reticle program --ice40 --write-flash design.bin  # only the sectors that change, then verify
+$ reticle program --ice40 --write-flash a.bin --warm-boot b.bin  # a, then b, for SB_WARMBOOT
 $ reticle program --ice40 --boot                    # reset; the part boots from its flash
 ```
 

@@ -482,10 +482,27 @@ Three things the placer and router had to be told:
 An instance of a PLL by name is now a cell (it used to stay an instance,
 which nextpnr's JSON check refused too); `BYPASS` tied to zero is left
 unrouted, and reads zero: CHECKED by the board, where a bypassed PLL would
-have run the transmitter at 12 MHz. The pad forms (`SB_PLL40_PAD`,
-`_2_PAD`, `_2F_PAD`) are refused by name: they take the PLL's own pad, pin
-35, as the reference, and the board's oscillator is on pin 20, so nothing
-here could check one.
+have run the transmitter at 12 MHz.
+
+**The pad forms** (`SB_PLL40_PAD`, `_2_PAD`, `_2F_PAD`) take their
+reference from the PLL's own pad, the IO block its first output leaves
+through: pin 35 of the UltraPlus's and the iCE40 Ultra's SG48, 49 of the
+1k's TQ144, R9 of the 8k's CT256. Until 2026-11-19 they were refused; now
+packing takes the link off as nextpnr does (`place_plls`, `pack_plls`):
+the `PACKAGEPIN` must be read from an input pin's IO buffer and nothing
+else, that buffer is removed, the PLL is put on the site whose pad that
+pin is (refused by name on any other pin, naming the pads there are), and
+the pad's IO block is configured as nextpnr's `sb_io_used_by_pll_pad` does,
+input enabled. `PLLTYPE` is 2, 4 and 6. On the UltraPlus, the HX1K's
+TQ144 and the HX8K's CT256, nextpnr's builds of the same netlists decode
+with nothing unexplained, icepack's bytes reproduced, and **every IO
+configuration and `PLLCONFIG` bit of every tile the PLL's record names is
+the same** in this backend's build and nextpnr's — 612, 468 and 936 bits
+for each of `SB_PLL40_PAD` and `SB_PLL40_2F_PAD` — with the same
+pad-input extra bit (CHECKED, 2026-11-19;
+`the_pll_pad_forms_build_on_every_die` builds all three forms on four
+dice). **Not on a board**: the attached one's oscillator is on pin 20,
+not on the PLL's pad.
 
 **The solver.** `fpga::pll::solve` on the UltraPlus's `SB_PLL40_CORE` line
 gives the same DIVR, DIVF, DIVQ and FILTER_RANGE as IceStorm's `icepll`
@@ -557,8 +574,11 @@ logic cell's table, carry and flip-flop, the block RAMs — and finds per
 clock the longest path from a register to a register: clock-to-output,
 routing and logic, then setup (a data input's table delay less 50 ps, as
 nextpnr has it for the UltraPlus; 100 ps for any other register input).
-Paths between clocks and to or from pins are not timed; a DSP block's and
-a single-port RAM's ports are taken for registers, as nextpnr takes them.
+Paths between clocks and to or from pins are not timed; a single-port
+RAM's ports are taken for registers, as nextpnr takes them, and a DSP
+block's were until 2026-11-19 — an unregistered multiply is now logic
+("How fast the DSP multiplier is"), and the `dsp_selftest` rows below were
+measured before that.
 
 **Checked against nextpnr and icetime** on the same bitstreams
 (`the_timing_analysis_agrees_with_nextpnr_and_icetime`, given the files in
@@ -581,11 +601,13 @@ Reticle's export, and Reticle's own builds of two, plain and timing-driven.
 So: within 3.6 % of nextpnr on every clock of six designs, most within
 0.5 % — its model, ported; and within 2.8 % of icetime, an independent
 model, on every single-clock design without a DSP block — CHECKED, the
-bound asserted. Two disagreements are understood and not fixed: icetime
+bound asserted. Two disagreements were understood and not fixed: icetime
 times a DSP block's multiplier as logic (its `SB_MAC16_*` cells), where
-nextpnr and this analysis take the block's ports for registers, so for
-`dsp_selftest`'s unregistered multipliers icetime's 31.78 ns is the more
-honest figure; and icetime times every path as one whatever its clocks,
+nextpnr and this analysis took the block's ports for registers, so for
+`dsp_selftest`'s unregistered multipliers icetime's 31.78 ns was the more
+honest figure — measured on the board since, and the analysis now times
+that path too ("How fast the DSP multiplier is"); and icetime times every
+path as one whatever its clocks,
 so it is not compared on a design of several. The −3.6 % on `osc_count`'s
 crystal clock and −2.6 % on `pll2f_uart`'s `sys` were not run down. None
 of the three is the silicon: `pll_uart` ran at 48 MHz on the board from a
@@ -629,6 +651,106 @@ for three of the four faster than its best. `pll_uart`, which nextpnr
 places at 42.9 MHz and the plain flow at 42.8 in the median, meets its 48
 MHz in timing-driven builds — and one so built ran on the board, every line
 `L1 N400000` (CHECKED, 2026-11-18).
+
+## The UltraPlus's other hard IP, and warm boot
+
+Since 2026-11-19 the backend places every hard block the 5k's database
+records: the two I2C and two SPI blocks, the LED dimmer (`SB_LEDDA_IP`),
+the warm-boot block (`SB_WARMBOOT`, on every die), the open-drain pads
+(`SB_IO_OD`) and the I3C pads (`SB_IO_I3C`). Each is a bel at the place
+its `.extra_cell` record gives, with a pin per port on the wire the record
+names; their ports are one bit each in the library (`SBADRI3` is a port),
+so a pin's role is the port's name and bit 0.
+
+| Block | Site | Bits written | Read back by the decode check |
+|---|---|---|---|
+| `SB_SPI` | by `BUS_ADDR74`: `0b0000` the block at (0, 0), `0b0010` the one at (25, 0) | `SPI_ENABLE_0`..`3`, set when used | yes |
+| `SB_I2C` | `0b0001` the block at (0, 31), `0b0011` the one at (25, 31) | `I2C_ENABLE_0`, `_1`; `SDA_INPUT_DELAYED`, `SDA_OUTPUT_DELAYED` on unless an attribute clears them | yes |
+| `SB_LEDDA_IP` | (0, 31) | none | nothing to read |
+| `SB_WARMBOOT` | (25, 0) on the 5k, (0, 0) on the others | none | nothing to read |
+| `SB_IO_OD` | the IO blocks of pins 39 to 41 only | an IO block's, as `SB_IO` | as an IO block |
+| `SB_IO_I3C` | the IO blocks of pins 23 and 25 only, with its `PU_ENB`, `WEAK_PU_ENB` routed to the record's wires | an IO block's | as an IO block |
+
+The bus addresses and the bits are nextpnr's (`pack.cc`, `map_ba74`;
+`bitstream.cc`), QUOTED. `SB_IO_OD` is the plain IO cell on the pads the
+RGB driver can drive: IceStorm's `ultraplus.rst` says so ("if the LED
+driver is ignored or disabled on a pin then the pin can be used as an
+open-drain IO using the standard IO cell") and so does Lattice's iCE40 LED
+Driver Usage Guide (TN1288, Appendix B, which instantiates it on those
+pins), both QUOTED; nextpnr does not support it. Neither does it support
+`SB_IO_I3C`. Both are refused by name on any other pad
+(`what_the_hard_ip_refuses`), and the device file says that an instance
+of either is the port's IO buffer, so none is inserted beside it. The
+decode check now reads back the configuration bits of every hard cell that
+has any — the RGB driver, the high-frequency oscillator, the I2C and SPI
+blocks — and refuses a bitstream whose bits are not the placed cells'
+(`Decoded::hard_ip`).
+
+**Against nextpnr**: nextpnr's builds of `sbus_probe.v` and
+`ledda_breathe.v` from Reticle's export decode with nothing unexplained,
+icepack's bytes reproduced, to the same hard cells at the same sites with
+the same bits as this backend's builds (`every_bit_of_a_reference_decodes`,
+given the files) — CHECKED, 2026-11-19.
+
+**On the board** (2026-11-19, the iCE40UP5K-SG48 board with an FT2232H):
+
+| Design | What it shows | Result |
+|---|---|---|
+| `sbus_probe.v` | both blocks on their system buses: each of the SPI block's sixteen registers (bus address `0x0_`) and the I2C block's (`0x1_`) written a value of its own, then read back, every line | the SPI block acknowledges registers 6 to 15 and the I2C block 3 and 6 to 15; SPI 7 to 11, 13 and 15 and I2C 3, 7 to 11 and 13 give back exactly what was written, SPI 12 and I2C 12 read `50` and `20` and SPI 14 `BD` (a status and a receive register, as Lattice's register map names those addresses: QUOTED), and no other address answers — CHECKED, every line, `the_hard_spi_and_i2c_blocks_answer_their_buses_on_the_board` |
+| `ledda_breathe.v` | the dimmer, its registers written over its control bus as TN1288's Appendix D lays them out, driving the RGB driver; the fabric measures the red output's duty every 22 ms and prints it | the duty ramps from 0 to `0x1A4C`/16 of 2^18 clocks (about 41 %, for a programmed 0x60/255 = 38 %) over a second, holds, falls, `LEDDON` drops for a second, and again, about every three seconds — CHECKED, `the_led_dimmer_breathes_on_the_board`. **That the LED visibly breathes has not been confirmed by a person.** |
+| `io_od_blink.v` | the three open-drain pads driven as plain IO, each pulsed low for one clock in 64 so that nothing but the pad limits the current, stepping red, green, blue | configured; **not confirmed by a person, and nothing measured it** |
+| `warmboot_demo.v`, twice | a multi-image flash (`reticle program --ice40 --write-flash wb0.bin --warm-boot wb1.bin`, the layout IceStorm's `icemulti` writes, ported as `image::multiboot`): image 0 prints `WB0 0`..`7` and boots image 1, which prints `WB1 0`..`7` and boots image 0 | `WB0 0`..`7`, `WB1 0`..`7`, `WB0 0`.. for as long as it was watched — CHECKED; then the flash was restored from a backup read first, read back identical (SHA-256 `603573a7...`), and booted `ram_selftest` with `SP:PPPP BR:PPPP` |
+
+The I2C and SPI blocks' own sides (SCL, SDA, MOSI ...) reach no pin in
+`sbus_probe`: the board has nothing on an I2C or SPI bus, and its spare
+pins are not wired to each other, so no loopback was possible. What was
+checked of them is the bus, the sites, the bits and nextpnr's agreement.
+The I3C pads are pins 23 and 25, which on this board go to a multiplexer
+whose outputs are not to be driven, so `SB_IO_I3C` was not loaded at all:
+it is checked by the decode and by its refusal elsewhere only.
+
+## How fast the DSP multiplier is
+
+nextpnr takes every port of an `SB_MAC16` for a register, and so did this
+analysis; icetime times an unregistered multiply as logic, through its
+`SB_MAC16_MUL_U_16X16_BYPASS` cell, whose slowest arc (`B[1]` to `O[31]`)
+is 3.36 / 5.87 / 9.05 ns (min / typ / max). The two disagree about any
+design with an unregistered block: nextpnr would pass one at a clock
+icetime says it cannot make. Measured on the board (2026-11-19) with
+`dsp_speed.v`: a fabric register, a DSP block with no register at all
+(16 x 16 unsigned, `*OUTPUT_SELECT` 3), a fabric register; compared every
+cycle, three cycles later, with a block with every register on; the PLL
+stepped, 2^22 cycles each:
+
+| Clock | Unregistered: cycles differing | Every register on (the control) |
+|---|---|---|
+| 24 to 96 MHz, eleven steps | 0 | 0 at 96 |
+| 99 MHz | 1 | |
+| 102 MHz | 1 217 | |
+| 105 MHz | 35 940 | |
+| 108 MHz | 332 819 | 0 |
+| 114 MHz | 6 522 468 | |
+| 120, 132 MHz | | 0 |
+
+So **icetime is right that the path exists** and nextpnr, and this
+analysis as it was, wrong to leave it out: fabric register to fabric
+register through the multiplier is about 10.1 ns at room temperature on
+this unit, while the registered block runs at 132 MHz. And **icetime's
+figure is a slow corner**: its maximum alone is 9.05 ns, and with the
+routing this analysis now gives the whole path 19.6 ns (icetime 17.9) on a
+smaller design of the same shape — about twice what the board does, as
+`pll_uart` ran at 48 MHz from builds all three tools time at 41 to 43.
+
+The analysis now times an output half that selects a multiplier product
+with no register between it and an unregistered operand as logic, with
+icetime's arcs for that multiply (`timing::dsp_arcs`), and any other
+output from the block's clock; a registered operand is a register input
+(`an_unregistered_dsp_multiply_is_timed_as_logic`: 19.6 ns unregistered,
+8.0 with every register on). What it does not do: time an adder's output
+through the multiplier (`*OUTPUT_SELECT` 0 and 1 are taken for registered),
+or change what timing-driven placement weighs, which still takes the ports
+for registers. And the comparison with nextpnr no longer holds a design
+with a DSP block to its bound, since the two now differ on purpose.
 
 ## The configuration image, and `icepack` ported
 
@@ -925,13 +1047,16 @@ board, where the echo's line resynchroniser has no enable and works.
 - the DSP blocks' cascade (`ACCUMCI`/`ACCUMCO`, `SIGNEXTIN`/`SIGNEXTOUT`)
   between neighbouring blocks is not chained, and the mapper does not
   infer a DSP block from a `*`: a design instantiates `SB_MAC16`;
-- the PLL's pad forms are refused, its phase-shift and delay modes
+- the PLL's pad forms have not run on a board, its phase-shift and delay modes
   (`SHIFTREG_*`, `DELAY`, `PHASE_AND_DELAY`, `EXTERNAL` feedback, dynamic
   delay) are written as nextpnr writes them and never run, and nothing
   drives an oscillator's trim inputs;
 - the timing analysis does not time paths between clocks, to or from pins,
-  through a DSP block's multiplier, or with the clock network's skew, and
-  the timing-driven flow is not the default;
+  through a DSP block's adder, between the two edges of one clock, or with
+  the clock network's skew, and the timing-driven flow is not the default;
+- the I2C and SPI blocks' bus sides were checked on the board, their I2C
+  and SPI sides not, and `SB_IO_I3C` not at all; the open-drain pads and
+  the dimmer's light await a person's eyes;
 - no LP, HX or iCE40 Ultra part has been on a board: their builds are
   checked against IceStorm and nextpnr only ("Every iCE40 part"), the
   iCE40 Ultra's LED drivers (`SB_RGB_DRV`, `SB_LED_DRV_CUR`) are not
