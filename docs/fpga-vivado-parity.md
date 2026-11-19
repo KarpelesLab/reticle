@@ -10984,27 +10984,29 @@ packages had not been run since 2026-11-06.
 
 | part | | before | after |
 |---|---|---|---|
-| XC7A100T FTG256 | probes with Vivado's bitstream of Reticle's routes | 135 | 139 |
-| | the same bitstream, feature for feature | 124 | 139 |
+| XC7A100T FTG256 | probes with Vivado's bitstream of Reticle's routes | 135 | 141 |
+| | the same bitstream, feature for feature | 124 | 140 |
 | | features only Reticle sets | 7 | 0 |
-| | features only Vivado sets | 39 | 0 |
-| XC7A35T FTG256 | probes with Vivado's bitstream | 135 | 139 |
-| | the same, feature for feature | 125 | 139 |
+| | features only Vivado sets | 39 | 10 |
+| XC7A35T FTG256 | probes with Vivado's bitstream | 135 | 141 |
+| | the same, feature for feature | 125 | 140 |
 | | only Reticle's | 7 | 0 |
-| | only Vivado's | 42 | 0 |
-| XC7A35T CPG236 | probes with Vivado's bitstream | 135 | 139 |
-| | the same, feature for feature | 125 | 139 |
+| | only Vivado's | 42 | 9 |
+| XC7A35T CPG236 | probes with Vivado's bitstream | 135 | 141 |
+| | the same, feature for feature | 125 | 140 |
 | | only Reticle's | 15 | 0 |
-| | only Vivado's | 40 | 0 |
+| | only Vivado's | 40 | 8 |
 
-The "after" is one full run of the tree with every fix of this section, 2026-11-20,
-all 141 probes on each part (the fixes were first measured one class at a time, on
-the probes each touched). The two left without a bitstream are below. **Every bit
-decodes**, of both tools: Reticle's 141 bitstreams a part with no bit unexplained and
-no frame's ECC wrong (188,041 bits on the XC7A100T, 170,451 and 169,907 on the
-XC7A35T's two), before and after; Vivado's had 7, 9 and 9 bits unexplained before,
-the managers' row bit and the `BUFMR` probe's three outside every window, and none
-after.
+The "after" is one full run of the tree with every fix of this section but the block
+RAMs' last two, 2026-11-20, all 141 probes on each part (the fixes were first measured
+one class at a time, on the probes each touched), with the two block RAM probes run
+again after those: their fixes change no other probe's bitstream by a byte (all 417
+others built again and compared). The one probe not the same bitstream, on each
+part, is the `RAMB36E1`, below. **Every bit decodes**, of both tools: Reticle's 141
+bitstreams a part with no bit unexplained and no frame's ECC wrong (187,623 bits on the
+XC7A100T, 169,597 and 168,593 on the XC7A35T's two), before and after; Vivado's had 7, 9
+and 9 bits unexplained before, the managers' row bit and the `BUFMR` probe's three
+outside every window, and none after.
 
 ### Each class, and what was done
 
@@ -11031,7 +11033,8 @@ the XC7A100T and the bits that differed on the XC7A35T on its CPG236, built as
 routes, `primitives/placed.txt` (`placed_features.py`), feature for feature; and
 the export's text for the export fixes. **Each fix was taken out, alone or with
 others that touch other probes, and the test failed on it**: fifteen mutations,
-and two more each for the FIFOs and for a `BUFMR`'s rows and the `CCIO` joins,
+two more each for the FIFOs and for a `BUFMR`'s rows and the `CCIO` joins, and three
+for the block RAMs (the last, the `RAMB36E1`'s parity, held by a unit test),
 each named in the test's documentation. It is a placement's test too, as the
 documentation says.
 
@@ -11048,13 +11051,27 @@ never placed. It found the three below.
   `tilegrid.json` covers, and Reticle set none: feature for feature the same
   bitstream, bit for bit not. **Answered below** ([A multi-region buffer's
   rows](#a-multi-region-buffers-rows-measured)).
-- **Two probes still have no bitstream of Vivado's** on any part: `RAMB18E1` (a
-  ground Vivado routes conflicts with a fixed route of Reticle's, `Route 35-341`:
-  Vivado grounds the site's `WEBWE4` to `WEBWE7`, which the cell has no port for and
-  so its netlist never names, and the router took a wire behind them as a hop for
-  `WEBWE[0]`'s net) and `RAMB36E1` (two nets with a partial antenna, `RTSTAT-5`).
-  `FIFO18E1` and `FIFO36E1` had none either, and are the same bitstream now
-  (below).
+- **The `RAMB36E1` probe differs by Vivado's ground to two pins** this flow leaves idle,
+  8 to 10 interconnect pips a part from an empty slice's output (`LOGIC_OUTS18`, then
+  five singles and doubles to `IMUX3` and `IMUX42` of the block's interconnect): the
+  tile's two ground fans are spent and this flow's tie gives such a pin up, where Vivado
+  routes its `GND` net from a slice, as it does a manager's `CLKIN2`. **Open**: which
+  way its router takes over five pips is not a rule read off one design.
+- **The block RAM probes had no bitstream of Vivado's**, both `Route 35-341` and
+  `RTSTAT-5` on this flow's routes, and **are answered**: both probes give no width, so
+  both ports are 0 bits wide, the library's default, and Vivado's own flow on the
+  `RAMB18E1` probe holds **every** write enable of both ports low (`IMUX16`, `32`, `17`,
+  `33` from `GFAN0`, `IMUX5`, `21`, `37` and `BYP_ALT3` from `GFAN1`), though the cell's
+  `WEA[0]` and `WEBWE[0]` are signals, where `write_enable_lanes` read a width of 0 as
+  nine or less and gave bit 0 all four pins. A port of width 0 has no lane now, and the
+  netlist written for Vivado writes the enable bits no lane takes low, as Vivado's
+  `opt_design` writes the ones it does not use; without that, Vivado routed them past
+  this flow's ties (34 pips of Vivado's and 17 of this flow's apart on the `RAMB36E1`,
+  against 10 and none). And a `RAMB36E1` port of width 0 gives its parity bits 0 and 1
+  no pin, as one of width 1, 2 or 4 does: wired, Vivado left them partial antennas. The
+  `RAMB18E1` is the same bitstream on all three parts; the `RAMB36E1` has Vivado's
+  bitstream, and differs as above. `FIFO18E1` and `FIFO36E1` had none either, and are
+  the same bitstream (above).
 
 ### `placed/bits.txt` and `cells.txt`, regenerated (measured)
 
@@ -11143,9 +11160,10 @@ this section, one build at a time, from the same checkout as every build before:
 | `build_plus.sh`, seed 4 | `d87f748445f3bb2f486401893b298100425d8b61ea3d67d4539c41b3d34a4fa6` | `451c26c15636991ef97e6c6ed206f669f5ecfd77d4a41ffe8c5c8413df3bb21d` |
 
 Both new bitstreams decode with every bit named and no frame's ECC wrong. The trees
-of the FIFO commit and of the `BUFMR` and `CCIO` one build both files byte for byte as
-the tree before them did: neither design has a FIFO or a `BUFMR`, and its pads'
-roads into the clock backbone keep their `_USED`.
+of the FIFO commit, of the `BUFMR` and `CCIO` one and of the block RAM one build both
+files byte for byte as the tree before them did: neither design has a FIFO or a
+`BUFMR`, its pads' roads into the clock backbone keep their `_USED`, and its block RAMs
+all have a width.
 
 **The Husky, decoded and compared**: 1,277,608 features in common, and its cells the
 same feature for feature but four lookup tables' `INIT` (pins the routes chose). What

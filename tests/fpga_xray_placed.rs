@@ -38,6 +38,9 @@
 //! - a FIFO's `REGCE`, taken off the cell with `EN_SYN` false, left on its
 //!   undriven `IMUX` rather than grounded: the `FIFO18E1` and `FIFO36E1`
 //!   probes;
+//! - a block RAM port of width 0, the library's default, holding all its
+//!   write enables low (`write_enable_lanes`), and its export writing the bits
+//!   no lane takes low: the `RAMB18E1` probe;
 //! - a `BUFMRCE`'s bits in each row it drives, past every tile's window
 //!   (`regional::BUFMR_ROW`): the `BUFMR` probe and three designs of
 //!   `clocks/`, which this builds from there;
@@ -320,6 +323,17 @@ fn the_implementation_written_for_vivado_says_what_the_bitstream_does() {
         assert!(!line.contains(".REGCE("), "{name}: {line}");
         assert!(line.contains(".RSTREG(1'b0)"), "{name}: {line}");
     }
+
+    // A block RAM port of width 0 has no write enable a lane takes: written
+    // low, or Vivado routes them past this flow's ties.
+    let ramb = get("ramb18e1_probe");
+    let line = ramb
+        .verilog
+        .lines()
+        .find(|l| l.contains("RAMB18E1 "))
+        .unwrap();
+    assert!(line.contains(".WEA({1'b0, 1'b0})"), "{line}");
+    assert!(line.contains(".WEBWE({1'b0, 1'b0, 1'b0, 1'b0})"), "{line}");
 
     // A `RAM128X1D` is written, and placed by its site as Vivado expands it.
     let ram = get("ram128x1d_probe");

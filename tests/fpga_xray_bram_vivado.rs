@@ -874,6 +874,9 @@ fn vivados_pins_are_the_fabrics() {
                 let width = param(["WRITE_WIDTH_A", "WRITE_WIDTH_B"][port])
                     .and_then(|v| v.as_int())
                     .unwrap_or(0);
+                // `SDP`'s port A is no port of width 0 (`b36_sdp72`).
+                let sdp = matches!(param("RAM_MODE"), Some(AttrValue::String(m)) if m == "SDP");
+                let width = if sdp && width == 0 { 72 } else { width };
                 ramb36_input_roles(width, &role)
             } else {
                 vec![role.clone()]

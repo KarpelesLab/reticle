@@ -496,7 +496,11 @@ pub fn write_enable_lanes(
         (true, 0) => 8,
         (true, _) => 16,
     };
-    if sdp && port == 0 {
+    // A port of width 0 writes nothing, and Vivado holds all its enables low
+    // whatever the cell connects (`ramb18e1_probe` on its own placement, no
+    // width given: `WEA0` to `WEA3` and `WEBWE0` to `WEBWE3` on `GND`, though
+    // `WEA[0]` and `WEBWE[0]` are signals; 2026-11-20).
+    if (sdp && port == 0) || width == 0 {
         return vec![None; pins];
     }
     let mut out = vec![None; pins];
@@ -2196,7 +2200,12 @@ pub fn ramb36_input_roles(width: i64, role: &str) -> Vec<String> {
         (1, false, 1) => Vec::new(),
         (9, true, 0) => both("dinp"),
         (9, true, 1) => Vec::new(),
-        (1 | 2 | 4, true, 0 | 1) => Vec::new(),
+        // And at width 0, the library's default, as at 1, 2 and 4: Vivado
+        // gives those two parity bits no load (the `RAMB36E1` probe, no width
+        // given: its routes of this flow's placement left `DIPBDIP[0]` and
+        // `[1]` as partial antennas, `RTSTAT-5`, and the other bits loaded;
+        // 2026-11-20).
+        (0 | 1 | 2 | 4, true, 0 | 1) => Vec::new(),
         _ => vec![role.to_owned()],
     }
 }
@@ -2372,6 +2381,11 @@ impl XrayFabric {
                     let width = params(["WRITE_WIDTH_A", "WRITE_WIDTH_B"][port])
                         .and_then(|v| v.as_int())
                         .unwrap_or(0);
+                    // In `SDP` port A's width is 0 and its data pins carry the
+                    // word's upper half (`b36_sdp72`): not a port of width 0.
+                    let sdp =
+                        matches!(params("RAM_MODE"), Some(AttrValue::String(m)) if m == "SDP");
+                    let width = if sdp && width == 0 { 72 } else { width };
                     narrow_ramb36_inputs(netlist, index, port, width);
                 }
             }
@@ -3650,6 +3664,27 @@ mod tests {
         let b = lanes("RAMB36E1", 1, &sdp72);
         assert_eq!(b[7], s(7));
         assert_eq!(b[15], s(7));
+        // A port of width 0, the library's default, holds every enable low,
+        // as Vivado does on the `RAMB18E1` probe; until 2026-11-20 it was read
+        // as nine or less, and the cell's bit 0 reached all four pins.
+        let none = widths(0, 0, "TDP");
+        assert_eq!(lanes("RAMB18E1", 0, &none), [n; 4]);
+        assert_eq!(lanes("RAMB18E1", 1, &none), [n; 8]);
+        assert_eq!(lanes("RAMB36E1", 1, &none), [n; 16]);
+    }
+
+    /// A `RAMB36E1` port of width 0 gives its parity bits 0 and 1 no pin, as
+    /// one of width 1, 2 or 4 does, and its other data bits their own: Vivado's
+    /// routes of the `RAMB36E1` probe on this flow's placement (2026-11-20)
+    /// left those two as partial antennas when they were wired. Would catch
+    /// width 0 read as a width that keeps them.
+    #[test]
+    fn a_ramb36_port_of_width_0_drops_two_parity_bits() {
+        assert!(ramb36_input_roles(0, "p1_dinp0").is_empty());
+        assert!(ramb36_input_roles(0, "p1_dinp1").is_empty());
+        assert_eq!(ramb36_input_roles(0, "p1_dinp2"), ["p1_dinp2"]);
+        assert_eq!(ramb36_input_roles(0, "p1_din0"), ["p1_din0"]);
+        assert_eq!(ramb36_input_roles(36, "p1_dinp0"), ["p1_dinp0"]);
     }
 
     /// One tile shaped like an interconnect tile beside a block RAM pin:

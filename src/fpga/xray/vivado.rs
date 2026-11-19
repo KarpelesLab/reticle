@@ -1578,6 +1578,41 @@ pub fn vivado_implementation(
                     let clkdiv = inputs_of(&view, cell, "CLKDIV")?;
                     extra.push(format!(".CLKDIVP({})", writer.names.bits(&clkdiv)));
                 }
+                // A block RAM's write enable bits no lane takes at its width
+                // (`super::write_enable_lanes`), written low, as Vivado's own
+                // flow ties the ones it does not use (`ramb18e1_probe`: `WEA[1]`
+                // and `WEBWE[3:1]` on `GND`). Connected, Vivado routes them to
+                // pins of its own choosing past this flow's ties: the `RAMB36E1`
+                // probe, both widths 0, had 34 pips of Vivado's and 17 of this
+                // flow's apart with them connected, and 10 and none without.
+                if matches!(primitive, "RAMB18E1" | "RAMB36E1") {
+                    let params = |name: &str| cell.params.get(name).cloned();
+                    for (port, name) in ["WEA", "WEBWE"].into_iter().enumerate() {
+                        let bits = inputs_of(&view, cell, name)?;
+                        if bits.is_empty() {
+                            continue;
+                        }
+                        let used: Vec<u32> = super::write_enable_lanes(primitive, port, &params)
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        let kept: Vec<SigBit> = bits
+                            .iter()
+                            .enumerate()
+                            .map(|(k, b)| {
+                                if used.contains(&u32::try_from(k).unwrap_or(u32::MAX)) {
+                                    *b
+                                } else {
+                                    SigBit::Const(Bit::Zero)
+                                }
+                            })
+                            .collect();
+                        if kept != bits {
+                            written.inputs.retain(|(p, _)| p.as_str() != name);
+                            extra.push(format!(".{name}({})", writer.names.bits(&kept)));
+                        }
+                    }
+                }
                 // A clock manager's output nothing reads, written open: one on
                 // a net with no load is an output in use to Vivado, which sets
                 // its `OUTPUT_ENABLE` where this flow, and Vivado's own flow on
