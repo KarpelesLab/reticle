@@ -10997,13 +10997,14 @@ packages had not been run since 2026-11-06.
 | | only Reticle's | 15 | 0 |
 | | only Vivado's | 40 | 0 |
 
-The "after" of 135 is the full run with every fix below but the last three
-rows', whose probes (`bufmrce`, `ram128x1d`, `fifo18e1`, `fifo36e1`) were run again
-on their own, on all three parts, and are the same bitstream too: 139 of 141 a part. **Every bit decodes**: Reticle's 140
-bitstreams a part with 0 bits unexplained and no frame's ECC wrong, before and
-after (186,991 bits on the XC7A100T after, 169,577 and 169,559 on the XC7A35T's
-two); Vivado's had 7, 9 and 9 unexplained bits before and 3 on each part after,
-and those three are the `BUFMR` probe's, below.
+The "after" is one full run of the tree with every fix of this section, 2026-11-20,
+all 141 probes on each part (the fixes were first measured one class at a time, on
+the probes each touched). The two left without a bitstream are below. **Every bit
+decodes**, of both tools: Reticle's 141 bitstreams a part with no bit unexplained and
+no frame's ECC wrong (188,041 bits on the XC7A100T, 170,451 and 169,907 on the
+XC7A35T's two), before and after; Vivado's had 7, 9 and 9 bits unexplained before,
+the managers' row bit and the `BUFMR` probe's three outside every window, and none
+after.
 
 ### Each class, and what was done
 
@@ -11030,7 +11031,8 @@ the XC7A100T and the bits that differed on the XC7A35T on its CPG236, built as
 routes, `primitives/placed.txt` (`placed_features.py`), feature for feature; and
 the export's text for the export fixes. **Each fix was taken out, alone or with
 others that touch other probes, and the test failed on it**: fifteen mutations,
-and two more for the FIFOs, each named in the test's documentation. It is a placement's test too, as the
+and two more each for the FIFOs and for a `BUFMR`'s rows and the `CCIO` joins,
+each named in the test's documentation. It is a placement's test too, as the
 documentation says.
 
 `reticle fpga --decode` now also names a set bit no tile's window holds, as
@@ -11039,13 +11041,13 @@ never placed. It found the three below.
 
 ### What is left
 
-- **The `BUFMR` probe's three bits outside every tile**: Vivado sets
+- **The `BUFMR` probe's three bits outside every tile**: Vivado set
   `FRAME_0040009C 58_24`, `FRAME_0040009D 58_27` and `59_27` on the XC7A100T, frames
   28 and 29 of the left clock management column in the words between the
   `HCLK_CMT`'s window and the `CMT_TOP_R_UPPER_T`'s, which no tile of
-  `tilegrid.json` covers. Reticle sets none. Feature for feature the two bitstreams
-  are the same; bit for bit they are not. Not named: one design says where, and not
-  what or when.
+  `tilegrid.json` covers, and Reticle set none: feature for feature the same
+  bitstream, bit for bit not. **Answered below** ([A multi-region buffer's
+  rows](#a-multi-region-buffers-rows-measured)).
 - **Two probes still have no bitstream of Vivado's** on any part: `RAMB18E1` (a
   ground Vivado routes conflicts with a fixed route of Reticle's, `Route 35-341`:
   Vivado grounds the site's `WEBWE4` to `WEBWE7`, which the cell has no port for and
@@ -11074,3 +11076,99 @@ that are not are all `<L>OUTMUX.O6`, its routes leaving a slice, as before. The
 earlier tables' classes (the rebuffers, `BUFHCLK<n>_USED`, the `PUDC_B` pad, the block
 RAMs' inverters and offsets, `WEMUX.CE`) are all gone. `tests/fpga_xray_vivado.rs`
 holds the two files' totals, now 2 and 6, and 0 and 75.
+
+### A multi-region buffer's rows (measured)
+
+`--decode` naming the bits no tile's window holds found three on the `BUFMR` probe,
+and Vivado's own flow on the 54 `bufmr*` designs of `clocks/` and the probe
+(2026-11-19) sets such bits on every one of them: in the `BUFMRCE`'s clock management
+column, in frames 28 and 29 of **each row it drives a regional buffer in**, words 58
+and 59, past the `HCLK_CMT`'s window (words 45 to 54). The row is the `BUFR`'s, or,
+driving only `BUFIO`s, its own; and which bits it gets:
+
+| frame, word, bit | when, on all 55 designs | named |
+|---|---|---|
+| 28, 58, 24 and 29, 58, 27 | always | `HCLK_CMT_BUFMR_ROW_USED_A`, `_B` |
+| 28, 59, 27 | the buffer is `BUFMRCE_Y1` | `HCLK_CMT_BUFMR_ROW_FROM_Y1` |
+| 29, 59, 27 | the row is the buffer's own | `HCLK_CMT_BUFMR_ROW_OWN` |
+| 28, 59, 28 | the row is below the buffer's | `HCLK_CMT_BUFMR_ROW_BELOW` |
+
+No design disagrees, across rows above, below and the buffer's own, both
+`BUFMRCE`s, both sides of the die (`bufmr_right_*`) and every `BUFR` of a bank. The
+names say when Vivado sets them; what each does on a part is not known, and whether
+a `BUFMR` of Reticle's worked without them was never measured either.
+`XrayFabric::set_bufmr_row_bits` sets them in the frames, by the rule
+(`regional::BUFMR_ROW`), and `--decode` names them on the row's `HCLK_CMT` tile.
+
+That run also found a class in the same tile: **`HCLK_CMT_CCIO<n>_USED` was set
+where Vivado sets only `_ACTIVE`**, on 38 of the designs, a pad's road into the
+`BUFMRCE`. Vivado sets `_USED` on a pad's road into the clock backbone or the
+managers, the pips into `HCLK_CMT_CK_IN<n>` and `HCLK_CMT_MUX_CLK_<n>`, and `_ACTIVE` on
+any road; this flow had stripped `_USED` from the `BUFMRCE`'s input pip already, but
+still charged it to the joins along the `CCIO` wire. It is charged to those pips now.
+**The first version charged it to `HCLK_CMT_MUX_CLK_<n>` alone**, from the `BUFMR`
+designs, whose global roads all take that pip; `the_clock_path_is_the_one_vivado_built`
+(the Basys 3 harness, Vivado's own, `HCLK_CMT_CK_IN0.HCLK_CMT_CCIO0` with `_USED`) and
+`the_husky_clock_reaches_its_buffer_on_the_clock_pins_own_road` failed on it, and the
+Husky's build lost a `_USED` NewAE's image has. Since this changes what a road along a
+`CCIO` wire costs the router, every probe whose clock is on a `CCIO` ball (all of them:
+`N11`) was built and compared again: the ledger table above is that run, made with the
+first version, and the corrected one builds all 423 of its Reticle bitstreams byte for
+byte the same , so the comparison holds for it.
+
+`run_placed.sh` on all 55 designs at the XC7A100T after both: **the 52 Vivado writes
+a bitstream of are the same bitstream feature for feature**, and Vivado's decode with
+no bit unexplained. The other two, `bufmrce_ce0` and `bufmrce_s0_ce0`, are a `BUFMRCE`
+whose `CE` is tied low, which `--regional-clocks auto` (`run_placed.sh`'s default)
+builds on a `BUFGCTRL`, and the `BUFGCE` the netlist written for Vivado then has both
+enables grounded, which Vivado refuses (`PDCN-1567`); Reticle refuses that of a
+`BUFGCTRL` the design names, and builds this one. **Open**: a buffer that never passes
+a clock, on the global network.
+
+`tests/fpga_xray_placed.rs` holds the `BUFMR` probe and three of these designs
+(`bufmr_x3_r0`, a `BUFMRCE_Y1` driving the row below; `bufmr_x2_r8`, a `BUFMRCE_Y0`
+driving the row above; `bufmr_bufio`, its own row through a `BUFIO`), built from
+`clocks/` with their own constraints; the rule taken out and the `CCIO` joins
+charged again each fail it.
+
+### The Husky's bitstreams, again (measured)
+
+Both scripts, built with origin's tree before this section (`ea5a280a`, whose builds are
+the hashes the section before this one gives, byte for byte) and with the tree of
+this section, one build at a time, from the same checkout as every build before:
+
+| script | before | after |
+|---|---|---|
+| `build.sh` | `e4466c104d7dc4392b9a49c6f86a5bddee0932776f827d745e8bedb1e437f230` | `a6637865e500e1dbde4529ac441c1e6e898695f9bfc4774e4e8a173bbac260a1` |
+| `build_plus.sh`, seed 4 | `d87f748445f3bb2f486401893b298100425d8b61ea3d67d4539c41b3d34a4fa6` | `451c26c15636991ef97e6c6ed206f669f5ecfd77d4a41ffe8c5c8413df3bb21d` |
+
+Both new bitstreams decode with every bit named and no frame's ECC wrong. The trees
+of the FIFO commit and of the `BUFMR` and `CCIO` one build both files byte for byte as
+the tree before them did: neither design has a FIFO or a `BUFMR`, and its pads'
+roads into the clock backbone keep their `_USED`.
+
+**The Husky, decoded and compared**: 1,277,608 features in common, and its cells the
+same feature for feature but four lookup tables' `INIT` (pins the routes chose). What
+differs, by cause:
+
+- **The rules**, six features: five `HCLK_CMT_*_DRP_WRITE` (its managers whose
+  `DWE` is a signal; NewAE's image sets the same bit beside each of its managers) and
+  one `CLK_BUFG_BUFGCTRL8_I1` tie (a `BUFMRCE` built on a global buffer, tied as a
+  `BUFGCE`).
+- **The clock routes**, 601 interconnect pips each way and the horizontal clock tiles'
+  leaves and enables with them: the router chose other tracks once `ENABLE_BUFFER`
+  stopped costing on the joins along a row. **Shown, not assumed**: built with that
+  one change taken out, the Husky differs from before by those six features and
+  nothing else (`e9b0c38e…`).
+
+**The Husky Plus** has the same placement and netlist, cell for cell but its lookup
+tables' `INIT`s (188,922 bits, the pins of other routes), and one rule more: an MMCM's
+unused `CLKIN2` grounded from an empty slice where its bounce was taken
+(`CMT_TOP_L_LOWER_B_X139Y61`). Its routes all moved, as the section before this one
+explains a timing-driven build's do when the graph's costs change. **Shown**: built with
+the three changes to what a pip costs taken out (`ENABLE_BUFFER` on the joins,
+`ENABLE_REGIONAL` on `HCLK_CK_INOUT`, the clock row's inputs from the interconnect),
+it differs from before by ten features, all rules: five `DRP_WRITE`s, the `I1` tie and
+that `CLKIN2`'s four pips (`0c0428ac…`).
+
+Nothing here has been on a part: the Husky boards are another project's.

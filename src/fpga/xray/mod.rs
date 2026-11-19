@@ -1774,6 +1774,27 @@ impl XrayDatabase {
                 }
             }
         }
+        // A multi-region buffer's bits in a row's clock management column, past
+        // its tile's window: named on that tile. See `regional::BUFMR_ROW`.
+        for tile in tiles
+            .iter()
+            .filter(|t| matches!(t.tile_type.as_str(), "HCLK_CMT" | "HCLK_CMT_L"))
+        {
+            let Some((_, window)) = tile.bits.first() else {
+                continue;
+            };
+            for (frame, word, bit, name) in regional::BUFMR_ROW {
+                let Some(address) = window.baseaddr.checked_add(frame) else {
+                    continue;
+                };
+                let at = (address, u32::try_from(word).unwrap_or(u32::MAX), bit);
+                if unexplained.remove(&at) {
+                    out.push((tile.name.clone(), name.to_owned()));
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
         // And a bit no tile's window holds, which nothing above can name: by its
         // frame's address, as `FRAME_<address>` with the word and the bit for
         // the row and column. Vivado sets three such on the `BUFMR` probe that
@@ -2588,9 +2609,18 @@ impl XrayDatabase {
                 }
                 let mut bits = feature.ones.clone();
                 let mut extra = enable_bits(to, from);
-                // A pad's road into a `BUFMRCE` is `ACTIVE` and not `USED`, which
-                // is the global network's: see `regional`.
-                if to.starts_with("HCLK_CMT_BUFMR_INP")
+                // A pad's road through the clock management tile is `ACTIVE`,
+                // and `USED` only on its way into the clock backbone or the
+                // managers, the `HCLK_CMT_CK_IN<n>` and `HCLK_CMT_MUX_CLK_<n>`
+                // pips (the Basys 3 harness's `W5`, Vivado's own): into a
+                // `BUFMRCE` it is not (see `regional`), and nor is it along the
+                // `CCIO` wire's joins, below, which charged it to every `BUFMR`
+                // design of `clocks/` under Vivado's routes of this flow's
+                // placement (2026-11-19).
+                let backbone =
+                    to.starts_with("HCLK_CMT_MUX_CLK") || to.starts_with("HCLK_CMT_CK_IN");
+                if (to.starts_with("HCLK_CMT_BUFMR_INP")
+                    || (from.starts_with("HCLK_CMT_CCIO") && !backbone))
                     && let Some(used) = set.feature(&format!("{from}_USED"))
                 {
                     extra.retain(|bit| !used.ones.contains(bit));
@@ -2698,6 +2728,13 @@ impl XrayDatabase {
                         let mut bits = enables.get(mine.as_str()).cloned().unwrap_or_default();
                         if let Some(tap) = taps.get(mine.as_str()) {
                             bits.retain(|b| !tap.contains(b));
+                        }
+                        // Nor a pad road's `USED`, which only its pip into the
+                        // global network charges (above).
+                        if mine.starts_with("HCLK_CMT_CCIO")
+                            && let Some(used) = set.feature(&format!("{mine}_USED"))
+                        {
+                            bits.retain(|b| !used.ones.contains(b));
                         }
                         if !bits.is_empty() {
                             stats.coverage.wire_enables += 2;

@@ -5855,6 +5855,11 @@ fn write_xc7_bitstream(
     fabric
         .set_beyond_region(&mut frames, &beyond)
         .map_err(|e| e.to_string())?;
+    // A multi-region buffer's bits in each row it drives, which no tile's
+    // window holds. See `XrayFabric::set_bufmr_row_bits`.
+    fabric
+        .set_bufmr_row_bits(&mut frames, &graph, &netlist, &placement)
+        .map_err(|e| e.to_string())?;
     // What `write_bitstream` adds that no netlist asks for: pads, configuration
     // tile bits, then each frame's ECC.
     db.finish_io_banks(

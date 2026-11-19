@@ -37,7 +37,14 @@
 //!   `BUFGCE`'s is: the `BUFMRCE` probe;
 //! - a FIFO's `REGCE`, taken off the cell with `EN_SYN` false, left on its
 //!   undriven `IMUX` rather than grounded: the `FIFO18E1` and `FIFO36E1`
-//!   probes.
+//!   probes;
+//! - a `BUFMRCE`'s bits in each row it drives, past every tile's window
+//!   (`regional::BUFMR_ROW`): the `BUFMR` probe and three designs of
+//!   `clocks/`, which this builds from there;
+//! - `HCLK_CMT_CCIO<n>_USED` only on a pad's road into the clock backbone or
+//!   the managers, not along the `CCIO` wire's joins: the same designs; that
+//!   the road into `HCLK_CMT_CK_IN<n>` keeps it is
+//!   `tests/fpga_xray.rs`'s `the_clock_path_is_the_one_vivado_built`.
 //!
 //! It is a placement's test as well: a change to the placer or the router that
 //! moves one of these probes fails it without anything being wrong, and the
@@ -136,7 +143,11 @@ struct Built {
 }
 
 fn build(root: &str, name: &str, device: &str) -> Built {
-    let dir = primitives();
+    // A probe, or else a design of `clocks/`, which has its own constraints.
+    let mut dir = primitives();
+    if !dir.join(format!("{name}.v")).is_file() {
+        dir = manifest().join("testdata/fpga/vivado/clocks");
+    }
     let rcf = if device == "xc7a35t-cpg236" {
         dir.join(device).join(format!("{name}.rcf"))
     } else {

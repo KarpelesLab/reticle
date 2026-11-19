@@ -347,6 +347,43 @@ pub(super) fn derived_features(tile_type: &str) -> Vec<Feature> {
     }
 }
 
+/// The bits Vivado sets in a clock management column for each row a `BUFMRCE`
+/// drives a regional buffer in, as `(frame, word, bit, name)`: frames 28 and
+/// 29 of the `HCLK_CMT` (`HCLK_CMT_L`) of that row and the `BUFMRCE`'s column,
+/// in words 58 and 59, which are past that tile's window (words 45 to 54) and
+/// in no tile's of `tilegrid.json`. Which of them is [`bufmr_row_bits`]'s
+/// rule.
+///
+/// **Read off Vivado 2026.1**, its own flow on the 54 `bufmr*` designs of
+/// `testdata/fpga/vivado/clocks/` and the `BUFMR` probe (2026-11-19): the
+/// first two in every row a `BUFR` the buffer drives is in (or, driving a
+/// `BUFIO` alone, its own row), the third when the buffer is `BUFMRCE_Y1`,
+/// the fourth when the row is the buffer's own, the fifth when it is the row
+/// below; no design disagrees. Named for when Vivado sets them; what each
+/// does on a part is not known.
+pub(super) const BUFMR_ROW: [(u32, usize, u32, &str); 5] = [
+    (28, 58, 24, "HCLK_CMT_BUFMR_ROW_USED_A"),
+    (29, 58, 27, "HCLK_CMT_BUFMR_ROW_USED_B"),
+    (28, 59, 27, "HCLK_CMT_BUFMR_ROW_FROM_Y1"),
+    (29, 59, 27, "HCLK_CMT_BUFMR_ROW_OWN"),
+    (28, 59, 28, "HCLK_CMT_BUFMR_ROW_BELOW"),
+];
+
+/// Which of [`BUFMR_ROW`]'s bits a row gets: `y1` for a `BUFMRCE_Y1`, `own`
+/// for the buffer's own row, `below` for the row below it.
+fn bufmr_row_bits(y1: bool, own: bool, below: bool) -> impl Iterator<Item = (u32, usize, u32)> {
+    BUFMR_ROW
+        .iter()
+        .enumerate()
+        .filter(move |(i, _)| match i {
+            2 => y1,
+            3 => own,
+            4 => below,
+            _ => true,
+        })
+        .map(|(_, (frame, word, bit, _))| (*frame, *word, *bit))
+}
+
 /// The name of what enables a regional line in a horizontal clock tile. Not
 /// `ENABLE_BUFFER`, since that is charged to every tile a line crosses
 /// (`sites::wire_enable_features`), where Vivado set this one in the tile its
@@ -853,6 +890,75 @@ impl XrayFabric {
     /// is not in: see the module docs. A tile the region did not load has nothing
     /// to set here. A `BUFHCE`'s `_USED` is set again, die-wide, by
     /// `super::clock_rules` for every `BUFHCE` in use, which this one is.
+    /// Sets, in `frames`, `regional::BUFMR_ROW`'s bits for every placed `BUFMRCE` (a
+    /// real one, on a clock management tile's site), for each row it drives a
+    /// `BUFR` or `BUFIO` in, and says how many.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::fpga::xc7::Xc7Error`] for a bit no frame holds.
+    pub fn set_bufmr_row_bits(
+        &self,
+        frames: &mut crate::fpga::xc7::FrameData,
+        graph: &RoutingGraph,
+        netlist: &Netlist,
+        placement: &Placement,
+    ) -> Result<usize, crate::fpga::xc7::Xc7Error> {
+        let mut count = 0usize;
+        for (index, instance) in netlist.instances.iter().enumerate() {
+            if instance.kind != "bufmr" {
+                continue;
+            }
+            let Some(site) = placement.site_of(index) else {
+                continue;
+            };
+            let site = &graph.sites[site];
+            let tile_type = self.arch.tile_types[site.tile_type].name.as_str();
+            if !matches!(tile_type, "HCLK_CMT" | "HCLK_CMT_L") {
+                continue;
+            }
+            let (x, own) = site.tile;
+            let y1 = site.bel.ends_with('1');
+            // The rows of the regional buffers it drives.
+            let mut rows: Vec<u32> = Vec::new();
+            for pin in instance.pins.iter().map(|p| &netlist.pins[*p]) {
+                let Some(signal) = pin.signal.filter(|_| pin.output) else {
+                    continue;
+                };
+                for sink in &netlist.signals[signal].sinks {
+                    let load = netlist.pins[*sink].instance;
+                    if !matches!(netlist.instances[load].kind.as_str(), "bufr" | "bufio") {
+                        continue;
+                    }
+                    // On a bank's clock tile, whose row is its region's; a
+                    // `BUFR` built on a global buffer is no regional load.
+                    if let Some(at) = placement.site_of(load)
+                        && self.arch.tile_types[graph.sites[at].tile_type]
+                            .name
+                            .starts_with("HCLK_IOI")
+                    {
+                        let row = graph.sites[at].tile.1;
+                        if !rows.contains(&row) {
+                            rows.push(row);
+                        }
+                    }
+                }
+            }
+            for row in rows {
+                for (frame, word, bit) in bufmr_row_bits(y1, row == own, row > own) {
+                    let Some((address, _, _)) =
+                        self.frames.locate((x, row), ConfigBit::new(frame, 0))
+                    else {
+                        continue;
+                    };
+                    frames.set(address, word, bit)?;
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
     fn mark_regional_line(
         &self,
         site: &crate::fpga::arch::ArchSite,
