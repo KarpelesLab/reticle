@@ -1003,3 +1003,43 @@ Which of the two is load-bearing cannot be told apart after the fact, and
 nothing rests on the answer. Every identifier read since, including every
 command-line one, has found the board already a debugger and performed no
 handover at all.
+
+### 2026-11-20: `LSC_REFRESH` re-enumerates Apollo mid-load, and is dropped
+
+The configuration sequence in §8 began with `LSC_REFRESH`, which — as "What
+the board is now" records — reloads the part from flash and brings `DONE`
+high before `ISC_ERASE` clears it. On 2026-09-26 that was benign. It is not
+benign when the flash gateware is a **USB** design and the board's Apollo
+tracks the FPGA's online/offline state: bringing the part online and then
+driving it offline at `ISC_ENABLE` makes Apollo **re-enumerate its own USB**,
+and the transfer right after `ISC_ENABLE` fails.
+
+**CHECKED, 2026-11-20, on the attached Cynthion r1.4 (Apollo v1.1.1).** Loading
+`smartcard_serial_mcu.bit` (a composite USB design, 234862 bytes) three times
+failed identically: the status read after `ISC_ENABLE` returned `0x00200f10`
+(`DONE` **and** `ISC_ENABLE`) — `DONE` high confirms `LSC_REFRESH` had just
+reloaded the part online — and the very next `SET_OUT_BUFFER` (`0xB1`) returned
+"no such device". `dmesg` showed the Apollo debugger (`1d50:615c`) disconnect
+and re-enumerate as a fresh device ~0.58 s later, same serial. The part had
+been a stable debugger for twelve minutes before the load; the disconnect
+happened only once `ISC_ENABLE` drove the just-refreshed FPGA offline.
+
+**The fix is to not send `LSC_REFRESH`.** The identifier is already read the
+vendor-neutral way (`Test-Logic-Reset` then 32 bits of DR, no instruction
+shifted) before configuration begins, so the refresh's `READ_ID` confirmed
+nothing the sequence did not already know, and `ISC_ENABLE` + `ISC_ERASE`
+resets the configuration SRAM without it — which is what Apollo's own
+`ecp5.py` does. With the refresh gone the FPGA stays offline through
+`ISC_ENABLE` (no online→offline transition, no re-enumeration), and **the same
+234862-byte bitstream then loaded cleanly: the whole burst shifted in 6.9 s of
+back-to-back control transfers with no disconnect, and `DONE` came up.** So the
+failure was never the burst's rate — it was the refresh-induced online state.
+`reticle program` keeps `lattice::SramPlans::refresh` for a caller that wants a
+flash restart on a part that will not re-enumerate, but the ECP5 load no longer
+runs it.
+
+**Still unverified (2026-11-20):** reprogramming a board whose FPGA is *already*
+running a USB gateware (online) over Apollo. Taking it offline at `ISC_ENABLE`
+will re-enumerate Apollo however the sequence starts, so a robust path has to
+reconnect across the re-enumeration and resume — not yet written or measured.
+The load above worked because the part started offline.

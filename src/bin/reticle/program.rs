@@ -560,18 +560,18 @@ fn load_ecp5(
     let before = ecp5_status(&session)?;
     say(&format!("status before: {before}"));
 
-    // `LSC_REFRESH` restarts configuration. From here the part's volatile
-    // configuration is going; the flash it boots from is not.
-    let (program, replies) = session.run_plan(&plans.refresh)?;
-    let again = program.capture_u32(0, &replies)?;
-    say(&format!("after LSC_REFRESH, IDCODE {again:#010x}"));
-    if !lattice::is_lattice(again) {
-        return Err(Fault::Failed(format!(
-            "after LSC_REFRESH the part answered {again:#010x}, which is not a Lattice \
-             identifier. Nothing has been erased"
-        )));
-    }
-    ecp5_settle(&session, "restarting configuration")?;
+    // **No `LSC_REFRESH`.** It restarts configuration from flash, which on a
+    // Cynthion reloads the analyzer gateware and brings the FPGA *online*
+    // (DONE set) — and Apollo re-enumerates its USB the instant the next
+    // `ISC_ENABLE` drives the part back offline, so the transfer after it
+    // fails with "no such device" and the load aborts mid-sequence
+    // (docs/apollo-protocol.md §7: the firmware watches the out buffer for
+    // `ISC_ENABLE`/`ISC_DISABLE` to track online/offline). The part's
+    // identifier was already read vendor-neutrally before this, so the
+    // refresh's read-back confirmed nothing new; dropping it leaves the FPGA
+    // in whatever state it was and lets `ISC_ENABLE` + `ISC_ERASE` reset the
+    // SRAM, which is what Apollo's own `ecp5.py` does. `plans.refresh` is kept
+    // for a caller that wants a flash restart on a part that will not re-enum.
 
     let (program, replies) = session.run_plan(&plans.enable)?;
     let enabled = lattice::Status(program.capture_u32(0, &replies)?);
