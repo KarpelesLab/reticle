@@ -345,3 +345,65 @@ Not established on hardware at the time of writing: the 1 Mbaud rate. The
 `97` exchange and its loss figures are from `iso7816_burst_tb.v` and the
 card owner's word that the device accepts it; the hardware runs above were
 taken at F/D = 4.
+
+## The Cynthion MCU-flash bridge (`smartcard_serial_mcu.v`)
+
+A different board and a different job from the Basys 3 bench above, but the
+same secure element: a **Cynthion** carries a Ledger Nano S secure element on
+PMOD A and bridges its contact to a host program (`~/projects/ledger_console`)
+that plays the element's MCU over SEPROXYHAL. `testdata/fpga/cynthion/
+smartcard_serial.v` is that bridge; `smartcard_serial_mcu.v` is it with the
+one thing a host over USB cannot do fast enough added in fabric.
+
+**The problem, QUOTED from the element's behaviour.** From firmware 1.4 on the
+element times four random 32-byte reads of the MCU's signed flash at boot
+(UNSEC_CHUNK_READ_EXT, tag `0x33`, kind 2). A real MCU answers 37-41 us after
+the element's status packet; an answer that crosses SE -> bridge -> USB
+(1 ms frames) -> host -> bridge takes 805-2290 us, and the element shows "MCU
+firmware is not genuine". The 37-41 us figure and the `0x33`/`0x60` byte
+formats are QUOTED from `ledger_console` and its capture of a real device, not
+measured here.
+
+**The fix.** An in-fabric responder (`smartcard_mcu_resp.v`) reassembles the
+element's SEPROXYHAL packets from the receive stream and, on a kind-2 read
+immediately followed by the end-of-turn status `60 00 02 00 00`, injects the
+answer toward the card ahead of the host's transmit FIFO: `12 | LL' (2 BE) |
+image[OFF .. OFF+LL']`, `LL' = min(LL, 0x8000 - OFF)`. The 32 KB image lives in
+block RAM (16 `DP16KD`, half the LFE5U-12F's EBRs), uploaded over a second,
+vendor-class USB interface ("smartcard-ctl", class FFh) alongside the unchanged
+CDC serial port. That interface also carries ENABLE, STATUS and CRC requests
+and per-answer NOTICE records; `ip/bus/seph_mcu` is the framing precedent and
+`ledger_console/src/{mcu,seph,bridge}.rs` the host side this is built to.
+
+**What is CHECKED (in simulation, not yet on a part).**
+`smartcard_mcu_resp_tb.v` drives the responder and asserts the exact answer
+bytes read from the image, the end-of-flash clamp (OFF 0x7FF0, LL 0x40 -> 0x10
+bytes), the empty answer for an offset past the image, that a **disabled**
+responder drives nothing (so the host answers, byte-identical to today), that a
+kind-2 read whose status is not the next packet does not answer, and that the
+framer resets on each ATR and locks through the ATR + PPS preamble the host
+strips. `smartcard_mcu_ctrl_tb.v` drives the control interface and asserts the
+CRC32 against **Python's `zlib.crc32`** — an independent implementation — for a
+loaded image (`0x38114b10`), the status field order and the notice packing, the
+refusal of a LOAD while the card is powered (`0x84` error, code `0x01`, image
+untorn), and the USB-reset clear. Both run in CI as
+`tests/fpga_mcu_bridge.rs`. The ECP5 build is clean (`reticle fpga --device
+ecp5-12f-CABGA256`, 16 `DP16KD` + ~4230 LUT4 + ~1710 FF, no width warnings).
+
+**What is NOT yet checked.** Nothing has been on the part. The USB enumeration
+of the composite device (does Linux's `cdc_acm` still bind interfaces 0/1 with
+a third vendor interface present, `bDeviceClass` kept at `0x02`?), the real
+`iso7816_uart` turnaround when the responder takes the line from the host FIFO,
+and the element accepting the in-fabric answers within its deadline are all for
+the bench, coordinated with the `ledger_console` host side. If `cdc_acm` will
+not bind the composite as `0x02`, the fallback is an IAD with `bDeviceClass`
+`0xEF`.
+
+**One shared-IP change.** `ip/usb/usb_device_fs`'s `usb_ctrl_ep` gained a
+`DESC_MAX` parameter (default 64) so the composite's 81-byte descriptor set
+fits; at the default the `j` index is six bits as before, so every existing
+design synthesises byte for byte as it did (the `ip_library` footprint and
+`usb_descriptors_survive_lookup_table_mapping` tests confirm it). The
+"smartcard-ctl" string descriptor is answered on `usb_ctrl_ep`'s class hook,
+which is offered every GET_DESCRIPTOR it does not handle itself, so strings
+needed no core change.
