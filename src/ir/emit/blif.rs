@@ -13,7 +13,7 @@
 //! | `ReduceAnd` `ReduceOr`         | one `.names`                                               |
 //! | `ReduceXor`                    | a chain of two-input `.names`                              |
 //! | `Lut`                          | one `.names` listing the minterms of `init`                |
-//! | `Dff`                          | `.latch d q re|fe clk init`; a synchronous reset or enable becomes a `.names` in front of the latch; asynchronous resets are an error |
+//! | `Dff`                          | `.latch d q re\|fe clk init`; a synchronous reset or enable becomes a `.names` in front of the latch; asynchronous resets are an error |
 //! | `Dlatch`                       | `.latch d q ah en init`                                    |
 //! | `Blackbox`, instances          | `.subckt name port[i]=bit ...`                             |
 //! | arithmetic, comparisons, shifts, memory ports, `Tristate` | error: map to gates or LUTs first |

@@ -14,10 +14,10 @@
 //! |-----------------------------------------------|---------------------|--------------|
 //! | unsized constant                              | 32 (or as written)  | —            |
 //! | sized constant                                | as written          | —            |
-//! | `i` op `j` for `+ - * / % & | ^ ^~ ~^`        | `max(L(i), L(j))`   | context      |
+//! | `i` op `j` for `+ - * / % & \| ^ ^~ ~^`       | `max(L(i), L(j))`   | context      |
 //! | `+i`, `-i`, `~i`                              | `L(i)`              | context      |
 //! | `i op j` for `=== !== == != > >= < <=`        | 1 bit               | self, sized to each other |
-//! | `&i ~&i |i ~|i ^i ~^i !i`, `i && j`, `i || j` | 1 bit               | self         |
+//! | `&i ~&i \|i ~\|i ^i ~^i !i`, `i && j`, `i \|\| j` | 1 bit           | self         |
 //! | `i >> j`, `i << j`, `i ** j`                  | `L(i)`              | `i` context, `j` self |
 //! | `i ? j : k`                                   | `max(L(j), L(k))`   | `j`,`k` context; `i` self |
 //! | `{i, ..}`, `{n{i, ..}}`                       | sum / n × sum       | self         |
