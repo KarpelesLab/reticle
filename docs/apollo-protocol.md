@@ -1043,3 +1043,49 @@ running a USB gateware (online) over Apollo. Taking it offline at `ISC_ENABLE`
 will re-enumerate Apollo however the sequence starts, so a robust path has to
 reconnect across the re-enumeration and resume — not yet written or measured.
 The load above worked because the part started offline.
+
+### 2026-11-20, refined: the re-enumeration is the control-port gateware's, not any offline
+
+A reprogram of the board while it ran a design loaded by Reticle **did not**
+re-enumerate Apollo, which narrows the cause above. **CHECKED, 2026-11-20:** with
+the FPGA running `smartcard_serial_mcu.bit` (a USB design on the Cynthion's AUX
+ULPI port, `1209:0001` on a different host port, DONE high), a fresh
+`reticle program` of the same bitstream ran start to finish — `status before`
+`0x00200100` (DONE), ISC_ENABLE, ISC_ERASE, the 234862-byte burst in 6.9 s,
+DONE high again — with **no disconnect** and the reconnect path never entered.
+
+So the re-enumeration is not "the FPGA went offline". It is specifically **the
+flash analyzer gateware (`1d50:615b`) going offline**: that gateware owns the
+Cynthion's *control* port, the same port Apollo's debugger (`1d50:615c`) is on,
+so taking it offline at ISC_ENABLE tears the USB device Apollo is part of and
+Apollo re-enumerates. `LSC_REFRESH` reloaded exactly that gateware, which is why
+it was the trap. A design on the **AUX** port (its own PHY, its own host port)
+leaves the control port alone, so ISC_ENABLE on it does not disturb Apollo.
+Dropping `LSC_REFRESH` therefore fixes the cases that occur in practice — a part
+that is offline, or running an AUX-port design — and both are CHECKED.
+
+### Reconnecting across the re-enumeration (reasoned, not measured)
+
+One case is left: configuring a **freshly booted** board, whose flash analyzer
+is running on the control port, before anything has displaced it. That first
+ISC_ENABLE would re-enumerate Apollo mid-load. `reticle program` handles it by
+reconnecting: on a transfer that fails with "no such device", it polls for the
+debugger to come back (it re-enumerates with the **same** serial — the
+microcontroller's, not the FPGA's — in under a second), reads the IDCODE to
+confirm the part, and **restarts the whole SRAM sequence from the top**
+(status, ISC_ENABLE, ISC_ERASE, burst, ISC_DISABLE). It is a full restart and
+never a resume: a partially shifted ECP5 cannot be continued, and ISC_ERASE
+clears whatever the aborted attempt left. After the first ISC_ENABLE the part is
+offline, so the restart does not re-enumerate again; the retry is **bounded**
+(`ECP5_RECONNECTS`) so a board that somehow re-enumerated every attempt fails
+rather than looping.
+
+**This path is reasoned, not measured.** It no-ops on the two CHECKED paths
+(offline part, AUX-port design), so it cannot regress what works, but the
+disconnect it recovers from could not be produced on the attached board this
+window — the loaded design is on the AUX port and does not re-enumerate Apollo,
+and deliberately loading the control-port analyzer to force it risks leaving the
+board unreachable. The retry **bookkeeping** is unit-tested
+(`program::tests::reconnect_is_bounded_and_only_for_a_disconnect`: restart only
+on a disconnect, never on success or another error, and at most the bound); the
+re-enumeration itself is not.

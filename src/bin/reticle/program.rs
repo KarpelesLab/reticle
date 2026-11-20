@@ -48,7 +48,7 @@
 //! `program_ice40.rs`, and it writes the flash only when asked to with
 //! `--write-flash`.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::Outcome;
 use crate::args::{ArgError, Args};
@@ -398,7 +398,7 @@ fn cynthion(
         );
     }
 
-    let debugger = usb::Debugger::open(device)?;
+    let mut debugger = usb::Debugger::open(device)?;
     // The serial number reported here is the *microcontroller's*, which is
     // not the one a board in gateware mode reports, so it is printed
     // rather than assumed to be what `--device` was given.
@@ -470,7 +470,45 @@ fn cynthion(
 
     let outcome = match load {
         None => probe_ecp5(&debugger, say),
-        Some(Load::Ecp5 { payload, .. }) => load_ecp5(&debugger, &payload, quiet, say),
+        Some(Load::Ecp5 { payload, .. }) => {
+            // Reprogramming a board whose FPGA is **online** (running a USB
+            // gateware) takes it offline at ISC_ENABLE, and Apollo
+            // re-enumerates its own USB on that transition — the transfer
+            // mid-load then fails with "no such device"
+            // (docs/apollo-protocol.md). The board comes back a fresh
+            // debugger, same serial, with the FPGA now **offline**, so one
+            // reconnect-and-retry loads cleanly: the second attempt starts
+            // offline, ISC_ENABLE causes no transition, and nothing
+            // re-enumerates. Bounded, so a board that re-enumerates every
+            // attempt fails rather than looping.
+            let mut result = load_ecp5(&debugger, &payload, quiet, say);
+            let mut tries = 0;
+            while should_reconnect(&result, tries, ECP5_RECONNECTS) {
+                tries += 1;
+                say(
+                    "Apollo re-enumerated when ISC_ENABLE took the FPGA offline \
+                     (docs/apollo-protocol.md); reconnecting and restarting the load from the top",
+                );
+                debugger = reopen_cynthion(device)?;
+                let idcode = debugger.idcode()?;
+                if let Some(expected) = expected
+                    && idcode != expected
+                {
+                    return Err(ProgramError::IdcodeMismatch {
+                        read: idcode,
+                        expected,
+                    }
+                    .into());
+                }
+                // A full restart of the SRAM sequence — status, ISC_ENABLE,
+                // ISC_ERASE, the burst and ISC_DISABLE — not a resume. A
+                // partially-shifted ECP5 cannot be continued; `load_ecp5`
+                // re-runs the whole thing, and ISC_ERASE clears whatever the
+                // aborted attempt left in the configuration SRAM.
+                result = load_ecp5(&debugger, &payload, quiet, say);
+            }
+            result
+        }
         // `go` refused every other kind before the board was opened.
         Some(_) => unreachable!("only an ECP5 bitstream reaches a Cynthion"),
     };
@@ -490,6 +528,49 @@ fn cynthion(
         }
     }
     outcome
+}
+
+/// How many times to reconnect across an Apollo re-enumeration while
+/// loading an ECP5. One is enough in practice — the first ISC_ENABLE takes
+/// the FPGA offline and the board comes back offline, so the retry does not
+/// re-enumerate — but two leaves margin, and the bound is what stops a board
+/// that re-enumerates on every attempt from looping for ever.
+const ECP5_RECONNECTS: usize = 2;
+
+/// Whether a fault is a USB disconnect, which is what Apollo's
+/// re-enumeration produces mid-transfer. The transport flattens the
+/// underlying `rusb` error to a string (`ProgramError::Usb`), so this
+/// matches rusb's own wording for `LIBUSB_ERROR_NO_DEVICE`.
+fn is_disconnect(fault: &Fault) -> bool {
+    matches!(fault, Fault::Failed(msg) if msg.to_lowercase().contains("no such device"))
+}
+
+/// Whether to reconnect and restart the load after `result`: only on a
+/// disconnect, and only while under the retry bound. Separated from the loop
+/// so the bookkeeping — restart on a disconnect, never on success or any
+/// other error, and at most `max` times — can be unit tested, since the
+/// disconnect itself (an Apollo re-enumeration) cannot be simulated.
+fn should_reconnect(result: &Result<Outcome, Fault>, tries: usize, max: usize) -> bool {
+    tries < max && matches!(result, Err(fault) if is_disconnect(fault))
+}
+
+/// Re-opens the Apollo debugger after it has re-enumerated, polling until
+/// the board comes back. It re-enumerates with the **same** serial number
+/// (it is the microcontroller's, not the FPGA's), reappearing in under a
+/// second on a quiet bus, so the same `--device` value finds it again.
+fn reopen_cynthion(device: Option<&str>) -> Result<usb::Debugger, Fault> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        match usb::Debugger::open(device) {
+            Ok(debugger) => return Ok(debugger),
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(err.into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
 }
 
 /// How many status reads to wait for the ECP5 to stop being busy.
@@ -965,5 +1046,51 @@ mod tests {
         assert!(parse_hex("").is_err());
         assert!(parse_hex("nonsense").is_err());
         assert!(parse_hex("12345678901").is_err());
+    }
+
+    /// The ECP5 reconnect bookkeeping: only a USB disconnect triggers a
+    /// restart, and only within the bound. The disconnect itself — an Apollo
+    /// re-enumeration — cannot be simulated, so this is what is testable of
+    /// it, and it is the part with the logic in it.
+    #[test]
+    fn reconnect_is_bounded_and_only_for_a_disconnect() {
+        let gone = || {
+            Fault::Failed(
+                "filling the JTAG out buffer (0xb1): No such device (it may have been \
+                 disconnected)"
+                    .to_string(),
+            )
+        };
+        assert!(
+            is_disconnect(&gone()),
+            "rusb's NO_DEVICE wording is a disconnect"
+        );
+        assert!(
+            !is_disconnect(&Fault::Failed("the part did not assert DONE".to_string())),
+            "an ordinary configuration failure is not a disconnect"
+        );
+
+        // Restart on a disconnect, never on success or another error.
+        assert!(should_reconnect(&Err(gone()), 0, ECP5_RECONNECTS));
+        let ok: Result<Outcome, Fault> = Ok(Outcome::Ok);
+        assert!(!should_reconnect(&ok, 0, ECP5_RECONNECTS));
+        assert!(!should_reconnect(
+            &Err(Fault::Failed("DONE never came up".to_string())),
+            0,
+            ECP5_RECONNECTS
+        ));
+
+        // Bounded: the last allowed attempt restarts, the one past it does not,
+        // so a board that re-enumerates every time fails rather than loops.
+        assert!(should_reconnect(
+            &Err(gone()),
+            ECP5_RECONNECTS - 1,
+            ECP5_RECONNECTS
+        ));
+        assert!(!should_reconnect(
+            &Err(gone()),
+            ECP5_RECONNECTS,
+            ECP5_RECONNECTS
+        ));
     }
 }
