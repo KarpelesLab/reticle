@@ -1,0 +1,31 @@
+# The ports of `block_ram_never_written.v` on the balls
+# `block_ram_2048.rcf` gives the same names. No board has this design on it.
+
+set_io -io_standard LVCMOS33 clk A2
+set_io -io_standard LVCMOS33 addr[0] A3
+set_io -io_standard LVCMOS33 addr[1] A4
+set_io -io_standard LVCMOS33 addr[2] E4
+set_io -io_standard LVCMOS33 addr[3] D4
+set_io -io_standard LVCMOS33 addr[4] C4
+set_io -io_standard LVCMOS33 addr[5] B4
+set_io -io_standard LVCMOS33 addr[6] E5
+set_io -io_standard LVCMOS33 addr[7] D5
+set_io -io_standard LVCMOS33 addr[8] C5
+set_io -io_standard LVCMOS33 addr[9] B5
+set_io -io_standard LVCMOS33 addr[10] A5
+set_io -io_standard LVCMOS33 wdata[0] A6
+set_io -io_standard LVCMOS33 wdata[1] E6
+set_io -io_standard LVCMOS33 wdata[2] D6
+set_io -io_standard LVCMOS33 wdata[3] C6
+set_io -io_standard LVCMOS33 wdata[4] B6
+set_io -io_standard LVCMOS33 wdata[5] E7
+set_io -io_standard LVCMOS33 wdata[6] D7
+set_io -io_standard LVCMOS33 wdata[7] C7
+set_io -io_standard LVCMOS33 rdata[0] B7
+set_io -io_standard LVCMOS33 rdata[1] A7
+set_io -io_standard LVCMOS33 rdata[2] A8
+set_io -io_standard LVCMOS33 rdata[3] E8
+set_io -io_standard LVCMOS33 rdata[4] D8
+set_io -io_standard LVCMOS33 rdata[5] C8
+set_io -io_standard LVCMOS33 rdata[6] B8
+set_io -io_standard LVCMOS33 rdata[7] B9

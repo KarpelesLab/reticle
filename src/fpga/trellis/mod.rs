@@ -4680,7 +4680,25 @@ impl TrellisFabric {
                 // `EBR<n>.MODE`'s own record wants clear, so writing both
                 // would leave the mode undecodable. `ecppack` writes
                 // `WEAMUX` for no `DP16KD` either.
-                if driven("clk") {
+                //
+                // A port with a clock but neither a write enable nor a data
+                // output is just as unused: it can neither write nor be
+                // read. A write port whose enable the design ties to a
+                // constant zero is that — `seph_mcu`'s injection buffer on
+                // a bench that never injects — and treating it as live put
+                // `WEAMUX = INV` on port A, which is the undecodable pair
+                // above reached by another road. The leftover-bit check
+                // only caught it on `EBR0` and `EBR1`: on `EBR2` and `EBR3`
+                // the tile holding the clash has a `DP16KD` pattern of clear
+                // bits only, so the stray bit read as `WEAMUX = INV`, the
+                // mode quietly failed to match there, and nothing was left
+                // over. `block_ram_never_written.v` is the test for both.
+                let reads = netlist.pins.iter().any(|pin| {
+                    pin.instance == index
+                        && pin.role.starts_with(&format!("p{port}_dout"))
+                        && pin.signal.is_some()
+                });
+                if driven("clk") && (driven("we") || reads) {
                     for (role, field) in BRAM_TIE_LOW_PINS.iter().zip(BRAM_TIE_LOW) {
                         if !driven(role) {
                             set(&field.replace('#', &letter.to_string()), BRAM_INV, bits)?;

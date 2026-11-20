@@ -1384,6 +1384,62 @@ fn a_block_ram_places_routes_and_every_bit_of_it_decodes() {
     );
 }
 
+/// `testdata/fpga/ecp5/block_ram_never_written.v`: a memory whose write
+/// enable the design ties to zero, so its write port has a clock and
+/// nothing else.
+///
+/// `configure_bram` took a clocked port as one in use and held its undriven
+/// write enable low with `WEAMUX = INV`, a bit `EBR<n>.MODE` wants clear for
+/// `DP16KD`. Found building `testdata/fpga/cynthion/nanos_seph_usb.v`, whose
+/// `seph_mcu` injection buffer is never written, when the block landed on
+/// `EBR0` and the leftover-bit check refused the image.
+///
+/// This design lands on an `EBR2` or `EBR3`, where the same fault leaves
+/// **no** bit unexplained: the clashing tile's `DP16KD` pattern is all clear
+/// bits, so the stray bit reads as `WEAMUX = INV` and the mode simply stops
+/// matching there. So the leftover count would not catch it here. What
+/// does is asking whether the mode reads `DP16KD` in both of the block's
+/// tiles and whether any `WEAMUX` is read at all. Both assertions fail on
+/// the code before the fix (one tile, and `WEAMUX = INV`).
+#[test]
+#[cfg(all(feature = "verilog", feature = "synth"))]
+fn a_block_ram_whose_write_enable_is_tied_low_keeps_its_mode() {
+    let Some(fabric) = open() else { return };
+    let (bits, stream, _pads, _report, _io, routed) = compile_all(
+        &fabric,
+        &["testdata/fpga/ecp5/block_ram_never_written.v"],
+        "testdata/fpga/ecp5/block_ram_never_written.rcf",
+    );
+    assert!(routed.overlaps.is_empty(), "{:?}", routed.overlaps);
+    assert_eq!(stream.bram.len(), 1, "the memory is one block RAM");
+    let db = trellis::open(&Disk(chipdb().expect("checked above")), "", PART).unwrap();
+    let decoded = db.decode(&stream.cram);
+    assert_eq!(
+        decoded.unexplained, 0,
+        "bits belonging to no feature the database names: {:?}",
+        decoded.leftovers
+    );
+    assert_eq!(decoded.bits, bits.ones());
+    let modes = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, value)| field.ends_with(".MODE") && value == "DP16KD")
+        .count();
+    assert_eq!(
+        modes, 2,
+        "tiles whose decoding says the block is in `DP16KD` mode; the field is spread over two"
+    );
+    let weamux: Vec<_> = decoded
+        .enums
+        .iter()
+        .filter(|(_, field, _)| field.ends_with(".WEAMUX"))
+        .collect();
+    assert!(
+        weamux.is_empty(),
+        "a port that writes nothing is tied off by its enable, not its write enable: {weamux:?}"
+    );
+}
+
 /// # The narrowest memory takes one block, in a mode a part has been read
 /// back in
 ///
