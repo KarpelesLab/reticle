@@ -390,14 +390,34 @@ untorn), and the USB-reset clear. Both run in CI as
 `tests/fpga_mcu_bridge.rs`. The ECP5 build is clean (`reticle fpga --device
 ecp5-12f-CABGA256`, 16 `DP16KD` + ~4230 LUT4 + ~1710 FF, no width warnings).
 
-**What is NOT yet checked.** Nothing has been on the part. The USB enumeration
-of the composite device (does Linux's `cdc_acm` still bind interfaces 0/1 with
-a third vendor interface present, `bDeviceClass` kept at `0x02`?), the real
-`iso7816_uart` turnaround when the responder takes the line from the host FIFO,
-and the element accepting the in-fabric answers within its deadline are all for
-the bench, coordinated with the `ledger_console` host side. If `cdc_acm` will
-not bind the composite as `0x02`, the fallback is an IAD with `bDeviceClass`
-`0xEF`.
+**CHECKED on the part, 2026-11-20** (Cynthion r1.4, SE 1.4.2, through
+`ledger_console`). The composite enumerates as `1209:0001`: `cdc_acm` binds
+interfaces 0 and 1 (the card stream stays on /dev/ttyACM*, `bDeviceClass` kept
+at `0x02`, no IAD needed) and the vendor interface 2 appears as class FFh. The
+element booted to its PIN screen with the responder answering every MCU-flash
+read in fabric: across MCU images 1.4, 1.5 and 1.6 it cleared the "MCU firmware
+is not genuine" check, and all 142-144 kind-2 reads per boot (4 random probes
+plus the sequential bulk reads to offset 0x7fb8) were answered at a uniform
+latency of 0x30 = 48 clk = **0.8 µs** (a real MCU ~38 µs; the old host path
+805-2290 µs), with `answered == triggers_seen` throughout, zero ERROR records,
+and the CRC intact each run. The clamp, the reframe through ATR/PPS, and the
+kind-2 trigger all held on silicon. MCU 1.7-1.12 show "not genuine" — a
+**signing-key** mismatch (those images are signed with the Nano X's key id
+`f1308974`, which an SE 1.4.2 predates and does not trust), not a probe-timing
+or gateware fault: the element read the whole image first, same notice pattern
+as the passing boots, so it is the signature check failing. Testing those needs
+a newer SE. Reprogramming the board while it ran this (AUX-port) design was
+clean — ISC_ENABLE took it offline without re-enumerating Apollo, so the
+reconnect path of `docs/apollo-protocol.md` was not needed (that path is for a
+control-port gateware, see there).
+
+**Checked in simulation, pending the part.** The "smartcard-ctl" iInterface
+string: the first bring-up read it back as an error (the host fell back to
+class FFh, so nothing was blocked), from a defect where the string selection
+was read combinationally off the SETUP during the data stage, when endpoint 0
+no longer holds it — fixed by latching which string at the SETUP offer
+(`usb_cdc_vendor_answers_the_interface_string` in `tests/ip_library.rs` pins
+it). Its hardware read-back is for the next reprogram window.
 
 **One shared-IP change.** `ip/usb/usb_device_fs`'s `usb_ctrl_ep` gained a
 `DESC_MAX` parameter (default 64) so the composite's 81-byte descriptor set

@@ -179,9 +179,31 @@ module usb_cdc_vendor #(
                    && ((s_vlo == 8'h00) || (s_vlo == 8'h01));
     wire [6:0] str_len = (s_vlo == 8'h00) ? 7'd4 : 7'd28;
 
+    // Which string this transfer is for, LATCHED at the SETUP offer. The data
+    // stage is read a byte at a time through `class_index`, and `class_setup`
+    // (endpoint 0's `dat`) does **not** hold the SETUP any more by then, so a
+    // combinational `str_byte` keyed off `s_vlo` would read the wrong index
+    // and the mux below would fall through to the line coding — which is the
+    // defect the bench's `iInterface 1 (error)` was. `usb_cdc_req` reads stored
+    // state by index for the same reason; this stores which string, once.
+    reg       str_active;   // this transfer is a string descriptor read
+    reg       str_sel;      // 0 = LANGID (index 0), 1 = "smartcard-ctl" (index 1)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            str_active <= 1'b0;
+            str_sel    <= 1'b0;
+        end else if (class_req) begin
+            // One pulse per SETUP endpoint 0 did not claim: latch whether this
+            // one is a string and which, so the data stage does not depend on
+            // the SETUP still being on `class_setup`.
+            str_active <= str_claim;
+            str_sel    <= (s_vlo == 8'h01);
+        end
+    end
+
     reg [7:0] str_byte;
     always @(*) begin
-        if (s_vlo == 8'h00) begin
+        if (!str_sel) begin
             case (class_index)
                 7'd0:    str_byte = 8'd4;      // bLength
                 7'd1:    str_byte = 8'd3;      // STRING
@@ -211,9 +233,12 @@ module usb_cdc_vendor #(
         end
     end
 
+    // `class_claim` and `class_len` are read in the SETUP cycle, when the
+    // combinational `str_claim` is still valid; `class_byte` is read through
+    // the data stage, when only the latched `str_active` is.
     wire        class_claim = cdc_claim | str_claim;
-    wire [6:0]  class_len   = str_claim ? str_len  : cdc_len;
-    wire [7:0]  class_byte  = str_claim ? str_byte : cdc_byte;
+    wire [6:0]  class_len   = str_claim  ? str_len  : cdc_len;
+    wire [7:0]  class_byte  = str_active ? str_byte : cdc_byte;
 
     // -----------------------------------------------------------------
     // SERIAL_STATE, into the notification endpoint (from usb_cdc_acm).

@@ -93,7 +93,7 @@ fn the_control_interface_loads_crcs_and_clears() {
     };
     assert_eq!(
         out.as_str(),
-        "PASS: upload, CRC, status, notices, the powered-LOAD refusal and the USB-reset clear all hold\n",
+        "PASS: upload, CRC, status, notices, the powered-LOAD refusal, the per-LOAD counter reset and the USB-reset clear all hold\n",
         "`smartcard_mcu_ctrl_tb.v` disagrees with `smartcard_mcu_ctrl.v`"
     );
 }

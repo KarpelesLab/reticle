@@ -20569,6 +20569,94 @@ fn cdc_ulpi_design() -> Design {
     )
 }
 
+/// The composite CDC + vendor device of `testdata/fpga/cynthion`, behind the
+/// full-speed line layer, from its explicit sources (it is a design, not an IP
+/// package with a manifest, so it is not reached through `design_of`).
+fn vendor_fs_design() -> Design {
+    let paths = [
+        "testdata/fpga/cynthion/usb_cdc_vendor_fs.v",
+        "testdata/fpga/cynthion/usb_cdc_vendor.v",
+        "ip/usb/usb_device_fs/rtl/usb_ctrl_ep.v",
+        "ip/usb/usb_device_fs/rtl/usb_fs_rx.v",
+        "ip/usb/usb_device_fs/rtl/usb_fs_tx.v",
+        "ip/usb/usb_cdc_acm/rtl/usb_cdc_req.v",
+        "ip/usb/usb_device_ulpi/rtl/usb_ulpi_link.v",
+    ];
+    let mut map = SourceMap::new();
+    let mut diags = Diagnostics::new();
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+        let id = map.add(path, &text).expect("source fits");
+        files.push(parse_source(
+            &mut map,
+            id,
+            Dialect::Verilog2005,
+            &mut NoIncludes,
+            &mut diags,
+        ));
+    }
+    assert!(
+        !diags.has_errors(),
+        "the composite device does not parse:\n{}",
+        diags.render(&map)
+    );
+    let options = ElabOptions::new(Dialect::Verilog2005).with_top("usb_cdc_vendor_fs");
+    let refs: Vec<_> = files.iter().collect();
+    let design = elaborate(&refs, &options, &mut diags);
+    assert!(
+        !diags.has_errors(),
+        "usb_cdc_vendor_fs does not elaborate:\n{}",
+        diags.render(&map)
+    );
+    design.expect("usb_cdc_vendor_fs produced a design")
+}
+
+/// GET_DESCRIPTOR(STRING, `index`) with a language id: bmRequestType 80h,
+/// bRequest 06h, wValueHi 03h (STRING), wValueLo the index, wIndex the
+/// language id, wLength 255.
+fn get_string(index: u8, langid: u16) -> [u8; 8] {
+    let [lo, hi] = langid.to_le_bytes();
+    [0x80, 0x06, index, 0x03, lo, hi, 0xFF, 0x00]
+}
+
+/// The composite device answers the LANGID table (string 0) and the vendor
+/// interface's "smartcard-ctl" string (index 1), which the host finds the
+/// control interface by. A STALL or a short read of either is how the
+/// bench's `iInterface 1 (error)` showed, so this is the regression that
+/// pins the string path.
+#[test]
+fn usb_cdc_vendor_answers_the_interface_string() {
+    let design = vendor_fs_design();
+    let mut host = UsbHost::new(FsPair::new(&design), 0);
+
+    // Enough enumeration to answer descriptor requests: an address, then a
+    // configuration, as a host does before it reads an interface string.
+    host.control_write(0, set_address(6));
+    host.control_write(6, [0x00, 0x09, 0x01, 0, 0, 0, 0, 0]);
+
+    // String 0 is the LANGID list: bLength 4, STRING, US English (0x0409).
+    let langid = host
+        .control_read(6, get_string(0, 0))
+        .expect("the LANGID string descriptor is answered, not stalled");
+    assert_eq!(
+        langid,
+        [0x04, 0x03, 0x09, 0x04],
+        "string 0 is the US-English LANGID descriptor"
+    );
+
+    // String 1 is the vendor interface name, UTF-16LE.
+    let name = host
+        .control_read(6, get_string(1, 0x0409))
+        .expect("the interface string descriptor is answered, not stalled");
+    let mut want = vec![0x1C, 0x03];
+    for ch in "smartcard-ctl".bytes() {
+        want.push(ch);
+        want.push(0x00);
+    }
+    assert_eq!(name, want, "string 1 is \"smartcard-ctl\" in UTF-16LE");
+}
+
 /// SET_LINE_CODING: bmRequestType 21h, bRequest 20h, wIndex the
 /// communications interface, seven bytes of data (PSTN 1.2 §6.3.10).
 const CDC_SET_LINE_CODING: [u8; 8] = [0x21, 0x20, 0x00, 0x00, CDC_COMM_IFACE, 0x00, 0x07, 0x00];

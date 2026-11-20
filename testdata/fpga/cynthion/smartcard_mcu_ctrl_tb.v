@@ -199,8 +199,21 @@ module smartcard_mcu_ctrl_tb;
         running = 1'b1; repeat (4) @(posedge clk);   // next ATR
         chk(!enabled, "the enable did not persist across a DTR power-cycle");
 
+        // ---- a new LOAD resets the answer/trigger counts ----
+        // Make the counts non-zero, then LOAD with the card off and read them
+        // back: a new image is a new session, so both start from zero.
+        @(negedge clk); trig_stb = 1'b1; answered_stb = 1'b1;
+        @(negedge clk); trig_stb = 1'b0; answered_stb = 1'b0;
+        running = 1'b0;
+        repeat (2) @(posedge clk);
+        vb(8'h01); vb(8'h00); vb(8'h03); vb(8'h00); vb(8'h00); vb(8'hBB);   // LOAD 1 byte
+        repeat (4) @(posedge clk);
+        vb(8'h03); vb(8'h00); vb(8'h00);
+        wait_rec(7, 2000);
+        chk(rec_u32(5) !== 32'd0 || rec_u32(9) !== 32'd0, "a new LOAD did not reset answered/triggers");
+
         if (errors == 0)
-            $display("PASS: upload, CRC, status, notices, the powered-LOAD refusal and the USB-reset clear all hold");
+            $display("PASS: upload, CRC, status, notices, the powered-LOAD refusal, the per-LOAD counter reset and the USB-reset clear all hold");
         $finish;
     end
 endmodule

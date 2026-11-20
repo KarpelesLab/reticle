@@ -11,7 +11,9 @@
 //                  83 CRC crc32(4 BE), 84 ERROR code(1)
 //
 // The image and the enable PERSIST across DTR power-cycles and ATRs; only a
-// USB bus reset or a new LOAD clears them. A LOAD while the card is running is
+// USB bus reset or a new LOAD clears them. The answered/triggers counters are
+// per-image: a new LOAD (and a USB reset) zeroes them, so STATUS reads a
+// per-session total rather than a lifetime one. A LOAD while the card is running is
 // refused (0x84 code 0x01) so the image is never torn under a live read. The
 // CRC is zlib crc32 over the whole 32 KB (init/xorout 0xFFFFFFFF, poly
 // 0xEDB88320), which `ledger_console` compares against crc32fast of the
@@ -222,8 +224,15 @@ module mcu_ctrl (
                                     req_err  <= 1'b1;
                                     err_code <= ERR_CARD_ON;
                                 end else begin
-                                    loaded  <= 1'b1;
-                                    enabled <= 1'b0;   // a new LOAD clears enable
+                                    loaded   <= 1'b1;
+                                    enabled  <= 1'b0;   // a new LOAD clears enable
+                                    // A new image is a new session: the answer
+                                    // and trigger counts start from zero, so
+                                    // STATUS reads per-image rather than a
+                                    // lifetime total (the card is off during a
+                                    // LOAD, so nothing is answering to race it).
+                                    answered <= 32'd0;
+                                    triggers <= 32'd0;
                                 end
                             end
                             pstate <= P_TYPE;
