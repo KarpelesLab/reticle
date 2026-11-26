@@ -398,8 +398,8 @@ mod mvmodel {
                     }
                 }
                 tok::SUB_MB_TYPE => {
-                    for i in 0..4 {
-                        self.sub[i] = (d >> (12 - 4 * i)) & 0xF;
+                    for (i, s) in self.sub.iter_mut().enumerate() {
+                        *s = (d >> (12 - 4 * i)) & 0xF;
                     }
                 }
                 tok::REF_IDX => {
