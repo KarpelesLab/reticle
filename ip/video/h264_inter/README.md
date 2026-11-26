@@ -238,24 +238,27 @@ partition's window opens at most four SDRAM rows.
 
 ## Resources
 
-`reticle fpga ... --device xc7a100t-ftg256 --speed-grade 2` (the
-contract's die, at the board's grade -2), each block on its own:
+`reticle fpga ... --device xc7a100t-fgg484` (the board's part, speed grade
+-2), each block on its own; the logic is identical on `xc7a100t-ftg256`,
+where it was first built:
 
 | block | LUTs | of them memory | flip-flops | RAMB36 | DSP48 | routed estimate |
 |---|---|---|---|---|---|---|
-| `h264_mvpred` | 2406 | 24 RAM32 cells (the current macroblock) | 1035 | 1 (line buffer) | 0 | 6.86 ns |
-| `h264_inter` | 5139 | 66 RAM32/RAM64 cells (vectors, request queues, prediction buffer) | 2360 | 10 (8 data, 2 tags) | 0 | 9.31 ns |
+| `h264_mvpred` | 2406 | 24 RAM32 cells (the current macroblock) | 1035 | 1 (line buffer) | 0 | 6.74 ns |
+| `h264_inter` | 5139 | 66 RAM32/RAM64 cells (vectors, request queues, prediction buffer) | 2360 | 10 (8 data, 2 tags) | 0 | 9.15 ns |
 
 The routed figures are the flow's own timing model (`--timing-driven`,
 fitted to Vivado's timer at grade 2), for each block behind a four-pin
 harness that shifts its inputs in and XORs its registered outputs out, so
 they time the block's own register-to-register paths and nothing of a
-real neighbour. Both are under 10 ns. `h264_inter`'s worst path is the
-request queue's count; the previous version failed at 11.18 ns, from
+real neighbour (pins R4, T1, U2, U3 of bank 34). Both are under 10 ns.
+`h264_inter`'s worst paths are the vertical half-sample h and the request
+queue's count; on the FTG256 the same build was 9.31 ns and 6.86 ns. The
+previous version failed at 11.18 ns, from
 the vector RAM through the window arithmetic in one cycle, which is why
-the task generator is two stages. One placement seed of the final version
-left the clock unroutable in the harness's region and another (7) routed
-it; that is the flow and the harness, not the design, but it is why the
+the task generator is two stages. On the FTG256 one placement seed of
+the final version left the clock unroutable in the harness's region and
+another (7) routed it, as it did on the FGG484; that is the flow and the harness, not the design, but it is why the
 seed is written down.
 
 On the XC7A100T (63 400 LUTs, 135 RAMB36, 240 DSP48) the two together
