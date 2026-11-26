@@ -60,7 +60,7 @@ saturated silently: a value the field cannot hold is an `ERROR` token instead.
 | `0x02` | `SLICE_HDR` | `[23:20]` slice_type % 5 (0 P, 1 B, 2 I, 3 SP, 4 SI), `[19]` IdrPicFlag, `[18:17]` nal_ref_idc, `[16]` entropy_coding_mode_flag, `[15]` constrained_intra_pred_flag, `[14]` transform_8x8_mode_flag, `[13]` weighted_pred_flag, `[12:11]` weighted_bipred_idc, `[7:0]` pic_parameter_set_id |
 | `0x06` | `SLICE_FIRST` | `[23:0]` first_mb_in_slice |
 | `0x0A` | `SLICE_POC` | `[23:22]` which: 0 pic_order_cnt_lsb (unsigned), 1 delta_pic_order_cnt_bottom, 2 delta_pic_order_cnt[0], 3 delta_pic_order_cnt[1]; `[21:0]` value, the deltas signed |
-| `0x05` | `SLICE_REF` | `[23:20]` num_ref_idx_l0_active_minus1, `[19:16]` num_ref_idx_l1_active_minus1 (0 unless B), `[15:0]` frame_num |
+| `0x05` | `SLICE_REF` | `[23:20]` num_ref_idx_l0_active_minus1 (0 in I slices), `[19:16]` num_ref_idx_l1_active_minus1 (0 unless B), `[15:0]` frame_num |
 | `0x0B` | `RPLM` | one ref_pic_list_modification operation: `[23]` list (0 or 1), `[22:21]` modification_of_pic_nums_idc (0, 1 or 2; the closing 3 is not emitted), `[16:0]` abs_diff_pic_num_minus1 or long_term_pic_num |
 | `0x0C` | `PWT_DENOM` | `[5:3]` chroma_log2_weight_denom, `[2:0]` luma_log2_weight_denom |
 | `0x0D` | `PWT` | one explicit weight: `[23]` list, `[22:18]` ref_idx, `[17:16]` component (0 Y, 1 Cb, 2 Cr), `[15:8]` weight (signed), `[7:0]` offset (signed). Emitted only where the stream's `luma_weight_lX_flag` / `chroma_weight_lX_flag` is 1; an entry not emitted has the default weight 2^denom and offset 0 |
@@ -113,7 +113,7 @@ whole and emit nothing.
 | `0x18` | `REF_IDX` | `[23]` list, `[22:21]` mbPartIdx, `[4:0]` ref_idx |
 | `0x14` | `MVD` | `[23]` list, `[22:21]` mbPartIdx, `[20:19]` subMbPartIdx (0 outside P_8x8/B_8x8), `[18]` component (0 horizontal, 1 vertical), `[15:0]` mvd (signed, quarter samples) |
 | `0x16` | `MV` | not the parser's: inserted by `h264_mvpred`, see its section |
-| `0x19` | `MB_CBP` | `[8]` transform_size_8x8_flag, `[7:6]` intra_chroma_pred_mode (0 for inter), `[5:0]` coded_block_pattern (`[3:0]` luma, one bit per 8x8; `[5:4]` chroma 0..2) |
+| `0x19` | `MB_CBP` | `[8]` transform_size_8x8_flag, `[7:6]` intra_chroma_pred_mode (0 for inter), `[5:0]` coded_block_pattern (`[3:0]` luma, one bit per 8x8; `[5:4]` chroma 0..2): the one I_16x16's mb_type implies, and 0 for I_PCM and skipped macroblocks |
 | `0x12` | `MB_QP` | `[7:0]` QPY (signed) after mb_qp_delta |
 | `0x3F` | `MB_END` | — |
 
@@ -500,7 +500,10 @@ comment after it is for people, and COEF and PCM tokens have none. The
 nothing the tokens do not.
 
 Where section 1 leaves a choice, the dumps make this one (a parser that
-differs should say so here, and the model will follow):
+differs should say so here, and the model will follow). `h264_parse`
+makes the same ones, and section 1 now states the first three; its own
+tokens match the four committed dumps token for token
+(`tests/ip_h264_parse.rs`):
 
 * `SLICE_REF` of an I slice has both num_ref_idx fields 0.
 * `MB_TYPE`'s partition prediction bits are 0 for P_Skip and B_Skip, as for
