@@ -1,25 +1,48 @@
 # h264_inter — inter prediction for the H.264 decoder: the motion
 # vectors of clause 8.4.1 (`h264_mvpred`, in the token stream) and the
 # prediction samples of clause 8.4.2 (`h264_inter`, behind an SDRAM
-# burst port).
+# burst port, through a reference cache).
 #
-# Written from ITU-T H.264 (06/2026). `README.md` says what is checked
-# bit for bit and against what, and what the reference cache saves.
+# Written from ITU-T H.264 (06/2026) and nothing else. `README.md` says
+# what is checked bit for bit and against what, what the reference cache
+# saves on real 720p streams, and what is not done yet (B slices, weighted
+# prediction, the SDRAM agent's `frame_addr`).
+#
+# `h264_mvpred` is the other block of the package; it has no SDRAM and
+# sits between `h264_parse` and `h264_recon`. Its ports are in its own
+# header.
 name h264_inter
 version 0.1.0
 license MIT
-description "H.264 inter prediction: motion vector prediction in the token stream, and quarter-sample luma / eighth-sample chroma motion compensation from tiled SDRAM through a reference cache"
+description "H.264 inter prediction: motion vector prediction in the token stream, and quarter-sample luma / eighth-sample chroma motion compensation from tiled SDRAM through a sector cache; bit-exact against an independent decoder's dumps"
 
-top h264_mvpred
+top h264_inter
 target xc7
 
+source rtl/h264_frame_addr_stub.v
+source rtl/h264_inter.v
 source rtl/h264_mvpred.v
 
 port clk in
 port rst_n in
-port in_tok in 32
-port in_valid in
-port in_ready out
-port out_tok out 32
-port out_valid out
-port out_ready in
+port tok in 32
+port tok_valid in
+port tok_ready out
+port map_frames in 64
+port map_valid in
+port map_ready out
+port cmd_valid out
+port cmd_ready in
+port cmd_we out
+port cmd_addr out 24
+port cmd_len out 4
+port wr_valid out
+port wr_ready in
+port wr_data out 16
+port wr_be out 2
+port rd_valid in
+port rd_data in 16
+port rd_last in
+port pred_data out 32
+port pred_valid out
+port pred_ready in

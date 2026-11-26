@@ -69,8 +69,8 @@ module h264_mvpred #(
     input  wire        in_valid,
     output wire        in_ready,
 
-    output reg  [31:0] out_tok,
-    output reg         out_valid,
+    output wire [31:0] out_tok,
+    output wire        out_valid,
     input  wire        out_ready
 );
     localparam integer LB_DEPTH = 4 * MAX_WIDTH_MBS;
@@ -339,10 +339,54 @@ module h264_mvpred #(
     // ---------------------------------------------------------------
     // The stream
     // ---------------------------------------------------------------
-    wire       out_free = !out_valid || out_ready;
+    // The output is a two-entry queue, so that `in_ready` is a function
+    // of registers only: a stage behind this one cannot make a
+    // combinational path through it to the stage in front.
+    reg  [31:0] oq0, oq1;
+    reg  [1:0]  oq_n;
+    assign      out_tok   = oq0;
+    assign      out_valid = (oq_n != 2'd0);
+    wire        o_pop     = out_valid && out_ready;
+    wire        out_free  = (oq_n != 2'd2);
+    reg         o_push;
+    reg  [31:0] o_d;
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            oq0 <= 32'd0; oq1 <= 32'd0; oq_n <= 2'd0;
+        end else begin
+            case ({o_push, o_pop})
+                2'b10: begin
+                    if (oq_n == 2'd0) oq0 <= o_d;
+                    else              oq1 <= o_d;
+                    oq_n <= oq_n + 2'd1;
+                end
+                2'b01: begin
+                    oq0  <= oq1;
+                    oq_n <= oq_n - 2'd1;
+                end
+                2'b11: begin
+                    if (oq_n == 2'd1) oq0 <= o_d;
+                    else begin oq0 <= oq1; oq1 <= o_d; end
+                end
+                default: ;
+            endcase
+        end
+    end
+
     assign     in_ready = (state == S_PASS) && out_free;
     wire       take     = in_valid && in_ready;
     wire [7:0] tag      = in_tok[31:24];
+    wire       passes   = !(tag == T_MVD) && !(tag == T_MB_CBP && inter_mb && !emitted);
+    always @* begin
+        o_push = 1'b0;
+        o_d    = in_tok;
+        if (state == S_PASS) begin
+            o_push = take && passes;
+        end else if (state == S_EMIT) begin
+            o_push = out_free;
+            o_d    = e_cnt[5] ? held : e_tok;
+        end
+    end
 
     reg [2:0]  ld_ix;               // line-buffer reads issued
     reg [2:0]  cm_ix;               // line-buffer writes done
@@ -357,8 +401,6 @@ module h264_mvpred #(
     always @(posedge clk) begin
         if (!rst_n) begin
             state       <= S_PASS;
-            out_valid   <= 1'b0;
-            out_tok     <= 32'd0;
             width_mbs   <= {MBX_W{1'b0}};
             mb_x        <= 12'd0;
             mb_y        <= 12'd0;
@@ -403,7 +445,6 @@ module h264_mvpred #(
             for (k = 0; k < 6; k = k + 1) above[k] <= NONE;
         end else begin
             lb_we <= 1'b0;
-            if (out_valid && out_ready) out_valid <= 1'b0;
 
             case (state)
             S_PASS: if (take) begin
@@ -426,9 +467,6 @@ module h264_mvpred #(
                     held  <= in_tok;
                     e_cnt <= 6'd0;
                     state <= S_EMIT;
-                end else begin
-                    out_valid <= 1'b1;
-                    out_tok   <= in_tok;
                 end
 
                 case (tag)
@@ -521,13 +559,10 @@ module h264_mvpred #(
 
             // Thirty-two vectors, then the MB_CBP they were held for.
             S_EMIT: if (out_free) begin
-                out_valid <= 1'b1;
                 if (e_cnt[5]) begin
-                    out_tok <= held;
                     emitted <= 1'b1;
                     state   <= S_PASS;
                 end else begin
-                    out_tok <= e_tok;
                     e_cnt   <= e_cnt + 6'd1;
                 end
             end

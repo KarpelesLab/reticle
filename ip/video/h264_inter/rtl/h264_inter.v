@@ -76,7 +76,10 @@
 //   `frame_addr` with the same ports. `rd_*` has no ready, so every word is
 //   taken as it arrives.
 module h264_inter #(
-    parameter integer FB = 4                         // frame index bits
+    parameter integer FB    = 4,                     // frame index bits
+    // 0: every lookup misses, so each window is fetched whole, word for
+    // word: the same port traffic as no cache at all, for measuring.
+    parameter integer CACHE = 1
 ) (
     input  wire        clk,
     input  wire        rst_n,
@@ -92,11 +95,11 @@ module h264_inter #(
     output wire        map_ready,
 
     // The sdram_burst client port.
-    output wire        cmd_valid,
+    output reg         cmd_valid,
     input  wire        cmd_ready,
     output wire        cmd_we,
-    output wire [23:0] cmd_addr,
-    output wire [3:0]  cmd_len,
+    output reg  [23:0] cmd_addr,
+    output reg  [3:0]  cmd_len,
     output wire        wr_valid,
     input  wire        wr_ready,
     output wire [15:0] wr_data,
@@ -125,7 +128,6 @@ module h264_inter #(
     localparam integer VW = FB + 29;
 
     assign cmd_we   = 1'b0;
-    assign cmd_len  = 4'd3;
     assign wr_valid = 1'b0;
     assign wr_data  = 16'd0;
     assign wr_be    = 2'b00;
@@ -504,10 +506,11 @@ module h264_inter #(
     // ===============================================================
     // The reference cache: index, tags, data
     // ===============================================================
-    // Bank address (11 bits) of line `xl` (eight samples) of row `y`, and
-    // the tag that tells that line from the others sharing its place. The
-    // bank is xl[0]; the tag RAM is indexed by {bank address, bank}. Luma
-    // takes bank addresses 0..1023, Cb 1024..1279 and Cr 1280..1535.
+    // Bank address (11 bits) of line `xl` (eight samples, four SDRAM
+    // words) of row `y`, and the tag that tells that line from the others
+    // sharing its place. The bank is xl[0]; the tag RAM is indexed by
+    // {bank address, bank}. Luma takes bank addresses 0..1023, Cb
+    // 1024..1279 and Cr 1280..1535.
     function [10:0] baddr;
         input [1:0]    plane;
         input [FB-1:0] frame;
@@ -518,41 +521,58 @@ module h264_inter #(
             else               baddr = {2'b10, plane[1], frame[1:0], y[3:0], xl[2:1]};
         end
     endfunction
-    function [12:0] tagof;          // {valid, frame[3:2], row high (6), line high (4)}
+    function [11:0] tagof;          // {frame[3:2], row high (6), line high (4)}
         input [1:0]    plane;
         input [FB-1:0] frame;
         input [10:0]   y;
         input [7:0]    xl;
         begin
-            if (plane == 2'd0) tagof = {1'b1, frame[FB-1:2], y[10:5], xl[7:4]};
-            else               tagof = {1'b1, frame[FB-1:2], y[9:4], xl[6:3]};
+            if (plane == 2'd0) tagof = {frame[FB-1:2], y[10:5], xl[7:4]};
+            else               tagof = {frame[FB-1:2], y[9:4], xl[6:3]};
         end
     endfunction
 
-    reg  [12:0] tagram [0:LINES-1];
-    reg  [12:0] tag_q;
+    // A tag entry is {tag, which of the line's four words are present}:
+    // a sector cache, so that a line is never fetched for words no window
+    // asked for. An entry with no word present is empty.
+    reg  [15:0] tagram [0:LINES-1];
+    reg  [15:0] tag_q;
     wire [11:0] tag_ra;
     reg         tag_we;
     reg  [11:0] tag_wa;
-    reg  [12:0] tag_wd;
+    reg  [15:0] tag_wd;
     always @(posedge clk) begin
         if (tag_we) tagram[tag_wa] <= tag_wd;
         tag_q <= tagram[tag_ra];
     end
 
-    reg  [63:0] dram0 [0:LINES/2-1];    // even lines
-    reg  [63:0] dram1 [0:LINES/2-1];    // odd lines
+    // The data: two banks (even and odd lines), each four 16-bit lanes
+    // (the words of a line), so that one SDRAM word is one write.
+    reg  [15:0] e0 [0:LINES/2-1];
+    reg  [15:0] e1 [0:LINES/2-1];
+    reg  [15:0] e2 [0:LINES/2-1];
+    reg  [15:0] e3 [0:LINES/2-1];
+    reg  [15:0] o0 [0:LINES/2-1];
+    reg  [15:0] o1 [0:LINES/2-1];
+    reg  [15:0] o2 [0:LINES/2-1];
+    reg  [15:0] o3 [0:LINES/2-1];
     reg  [63:0] d0_q, d1_q;
     reg  [10:0] d0_ra, d1_ra;
     reg         d_we;
-    reg         d_wbank;
+    reg  [2:0]  d_wsel;             // {bank, lane}
     reg  [10:0] d_wa;
-    reg  [63:0] d_wd;
+    reg  [15:0] d_wd;
     always @(posedge clk) begin
-        if (d_we && !d_wbank) dram0[d_wa] <= d_wd;
-        if (d_we &&  d_wbank) dram1[d_wa] <= d_wd;
-        d0_q <= dram0[d0_ra];
-        d1_q <= dram1[d1_ra];
+        if (d_we && d_wsel == 3'd0) e0[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd1) e1[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd2) e2[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd3) e3[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd4) o0[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd5) o1[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd6) o2[d_wa] <= d_wd;
+        if (d_we && d_wsel == 3'd7) o3[d_wa] <= d_wd;
+        d0_q <= {e3[d0_ra], e2[d0_ra], e1[d0_ra], e0[d0_ra]};
+        d1_q <= {o3[d1_ra], o2[d1_ra], o1[d1_ra], o0[d1_ra]};
     end
 
     // ===============================================================
@@ -563,11 +583,13 @@ module h264_inter #(
     reg  [FB-1:0] k_frame;
     reg  [10:0] k_y, k_r1;
     reg  [7:0]  k_xl, k_l0, k_l1;
+    reg  [9:0]  k_w0, k_w1;         // the window's first and last SDRAM word
     reg         k_done;             // the last lookup has been issued
     // The lookup in flight: issued last cycle, compared this one.
     reg         k_v;
-    reg  [12:0] k_tag;
+    reg  [11:0] k_tag;
     reg  [11:0] k_idx;
+    reg  [3:0]  k_need;             // the words of the line the window wants
     reg  [10:0] k_vy;
     reg  [7:0]  k_vxl;
     // The rest of the task, for the interpolator.
@@ -578,8 +600,11 @@ module h264_inter #(
     reg  [4:0]  kt_rows;
     reg  [10:0] kt_wmax, kt_hmax;
 
-    // Misses waiting for the command port: {frame, plane, y, xl, index}.
-    localparam integer RQW = FB + 2 + 11 + 8 + 12;
+    // A request: {frame, plane, row, line, first word, words - 1}. The
+    // missing words of consecutive lines of a row are one request while
+    // they are contiguous and inside one 32-sample tile row, so a burst
+    // never leaves its SDRAM row and is as long as the misses allow.
+    localparam integer RQW = FB + 2 + 11 + 8 + 2 + 4;
     reg  [RQW-1:0] rq [0:15];
     reg  [4:0]  rq_n;
     reg  [3:0]  rq_rd, rq_wr;
@@ -588,20 +613,50 @@ module h264_inter #(
     wire        k_room  = (rq_n <= 5'd13);
     wire        k_issue = k_busy && !k_done && k_room;
     assign      t_take  = t_valid && !k_busy;
-    assign      k_idle  = !k_busy && !k_v;
-    wire        k_miss  = k_v && (tag_q != k_tag);
     assign      tag_ra  = {baddr(k_plane, k_frame, k_y, k_xl), k_xl[0]};
 
+    // The words of line k_xl inside [k_w0, k_w1].
+    wire [9:0]  k_lw = {k_xl, 2'b00};
+    wire [3:0]  k_need_n = {(k_lw + 10'd3 >= k_w0) && (k_lw + 10'd3 <= k_w1),
+                            (k_lw + 10'd2 >= k_w0) && (k_lw + 10'd2 <= k_w1),
+                            (k_lw + 10'd1 >= k_w0) && (k_lw + 10'd1 <= k_w1),
+                            (k_lw         >= k_w0) && (k_lw         <= k_w1)};
+
+    // Stage B: what the line lacks, and the run of words to fetch.
+    wire        k_match = (tag_q[15:4] == k_tag) && (tag_q[3:0] != 4'd0);
+    wire [3:0]  k_have  = (CACHE != 0 && k_match) ? tag_q[3:0] : 4'd0;
+    wire [3:0]  k_lack  = k_v ? (k_need & ~k_have) : 4'd0;
+    wire        k_miss  = (k_lack != 4'd0);
+    wire [1:0]  k_first = k_lack[0] ? 2'd0 : k_lack[1] ? 2'd1 : k_lack[2] ? 2'd2 : 2'd3;
+    wire [1:0]  k_last  = k_lack[3] ? 2'd3 : k_lack[2] ? 2'd2 : k_lack[1] ? 2'd1 : 2'd0;
+    wire [9:0]  k_runw  = {k_vxl, k_first};            // first word, in the row
+    wire [4:0]  k_runn  = {3'd0, k_last} - {3'd0, k_first} + 5'd1;
+
+    // The run being gathered.
+    reg         p_valid;
+    reg  [10:0] p_y;
+    reg  [7:0]  p_xl;
+    reg  [1:0]  p_word;
+    reg  [4:0]  p_n;
+    wire [9:0]  p_next = {p_xl, p_word} + {5'd0, p_n}; // the word after it
+    wire        k_join = p_valid && (p_y == k_vy) && (k_runw == p_next) && (k_runw[3:0] != 4'd0);
+    wire        k_endp = k_busy && k_done && !k_v && p_valid;  // the task's last run
+    wire        rq_push = (k_miss && p_valid && !k_join) || k_endp;
+    wire [RQW-1:0] rq_in = {k_frame, k_plane, p_y, p_xl, p_word, p_n[3:0] - 4'd1};
+
+    assign      k_idle  = !k_busy && !k_v;
     reg         i_busy;
     reg         i_wait;             // waiting for its fills
-    wire        k_hand = k_busy && k_done && !k_v && !i_busy;
+    wire        k_hand = k_busy && k_done && !k_v && !p_valid && !i_busy;
 
     always @(posedge clk) begin
         if (!rst_n) begin
             k_busy <= 1'b0; k_done <= 1'b0; k_v <= 1'b0;
             k_plane <= 2'd0; k_frame <= {FB{1'b0}};
             k_y <= 11'd0; k_r1 <= 11'd0; k_xl <= 8'd0; k_l0 <= 8'd0; k_l1 <= 8'd0;
-            k_tag <= 13'd0; k_idx <= 12'd0; k_vy <= 11'd0; k_vxl <= 8'd0;
+            k_w0 <= 10'd0; k_w1 <= 10'd0;
+            k_tag <= 12'd0; k_idx <= 12'd0; k_need <= 4'd0; k_vy <= 11'd0; k_vxl <= 8'd0;
+            p_valid <= 1'b0; p_y <= 11'd0; p_xl <= 8'd0; p_word <= 2'd0; p_n <= 5'd0;
             kt_pbank <= 1'b0; kt_last <= 1'b0; kt_bx <= 2'd0; kt_by <= 2'd0;
             kt_bw <= 3'd0; kt_bh <= 3'd0; kt_xf <= 3'd0; kt_yf <= 3'd0;
             kt_sx0 <= 15'sd0; kt_ry0 <= 15'sd0; kt_rows <= 5'd0;
@@ -613,6 +668,7 @@ module h264_inter #(
                 k_plane <= t_plane; k_frame <= t_frame;
                 k_y <= t_r0; k_r1 <= t_r1;
                 k_xl <= t_c0[10:3]; k_l0 <= t_c0[10:3]; k_l1 <= t_c1[10:3];
+                k_w0 <= t_c0[10:1]; k_w1 <= t_c1[10:1];
                 kt_pbank <= t_pbank; kt_last <= t_last;
                 kt_bx <= t_bx; kt_by <= t_by; kt_bw <= t_bw; kt_bh <= t_bh;
                 kt_xf <= t_xf; kt_yf <= t_yf;
@@ -623,6 +679,7 @@ module h264_inter #(
             if (k_issue) begin
                 k_idx  <= tag_ra;
                 k_tag  <= tagof(k_plane, k_frame, k_y, k_xl);
+                k_need <= k_need_n;
                 k_vy   <= k_y;
                 k_vxl  <= k_xl;
                 if (k_xl == k_l1) begin
@@ -633,19 +690,33 @@ module h264_inter #(
                     k_xl <= k_xl + 8'd1;
                 end
             end
+            // Gather runs: extend the one in hand, or send it and start anew.
+            if (k_miss) begin
+                if (k_join) begin
+                    p_n <= p_n + k_runn;
+                end else begin
+                    p_valid <= 1'b1;
+                    p_y     <= k_vy;
+                    p_xl    <= k_vxl;
+                    p_word  <= k_first;
+                    p_n     <= k_runn;
+                end
+            end else if (k_endp) begin
+                p_valid <= 1'b0;
+            end
             if (k_hand) k_busy <= 1'b0;
         end
     end
 
-    // Tag writes: a miss, or the flush walk.
+    // Tag writes: the words a lookup adds, or the flush walk.
     always @* begin
         tag_we = 1'b0;
         tag_wa = k_idx;
-        tag_wd = k_tag;
+        tag_wd = {k_tag, k_have | k_need};
         if (g_flushing) begin
             tag_we = 1'b1;
             tag_wa = g_fl;
-            tag_wd = 13'd0;
+            tag_wd = 16'd0;
         end else if (k_miss) begin
             tag_we = 1'b1;
         end
@@ -655,70 +726,98 @@ module h264_inter #(
     // Fetch: commands out, data in
     // ===============================================================
     wire [RQW-1:0] rq_head = rq[rq_rd];
-    wire [11:0] h_idx   = rq_head[11:0];
-    wire [7:0]  h_xl    = rq_head[19:12];
-    wire [10:0] h_y     = rq_head[30:20];
-    wire [1:0]  h_plane = rq_head[32:31];
-    wire [FB-1:0] h_frame = rq_head[RQW-1:33];
+    wire [3:0]  h_len   = rq_head[3:0];
+    wire [1:0]  h_word  = rq_head[5:4];
+    wire [7:0]  h_xl    = rq_head[13:6];
+    wire [10:0] h_y     = rq_head[24:14];
+    wire [1:0]  h_plane = rq_head[26:25];
+    wire [FB-1:0] h_frame = rq_head[RQW-1:27];
 
-    // Lines whose command has gone and whose data has not all come back.
-    reg  [11:0] pend [0:15];
+    // Requests whose command has gone and whose data has not all come back.
+    reg  [RQW-1:0] pend [0:15];
     reg  [4:0]  pend_n;
     reg  [3:0]  pend_rd, pend_wr;
 
-    assign cmd_valid = (rq_n != 5'd0) && (pend_n != 5'd16);
-    wire   cmd_go    = cmd_valid && cmd_ready;
+    // The command is a register, loaded from the head of the queue: the
+    // port's outputs come from flip-flops, and the one in it is counted
+    // against the room left for outstanding requests.
+    reg  [RQW-1:0] cmd_req;
+    wire   cmd_go   = cmd_valid && cmd_ready;
+    wire   cmd_load = (!cmd_valid || cmd_go) && (rq_n != 5'd0) &&
+                      (pend_n + {4'd0, cmd_valid} < 5'd15);
+    wire [23:0] h_addr;
     h264_frame_addr_stub #(.FB(FB)) u_addr (
         .frame(h_frame),
         .plane(h_plane),
-        .x({h_xl, 3'b000}),
+        .x({h_xl, h_word, 1'b0}),
         .y(h_y),
-        .addr(cmd_addr)
+        .addr(h_addr)
     );
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            cmd_valid <= 1'b0;
+            cmd_addr  <= 24'd0;
+            cmd_len   <= 4'd0;
+            cmd_req   <= {RQW{1'b0}};
+        end else if (cmd_load) begin
+            cmd_valid <= 1'b1;
+            cmd_addr  <= h_addr;
+            cmd_len   <= h_len;
+            cmd_req   <= rq_head;
+        end else if (cmd_go) begin
+            cmd_valid <= 1'b0;
+        end
+    end
 
-    reg  [47:0] f_acc;
-    reg  [1:0]  f_n;
-    wire        f_done = rd_valid && (f_n == 2'd3);
-    wire [11:0] f_idx  = pend[pend_rd];
+    // Where the next word of the oldest outstanding request goes.
+    wire [RQW-1:0] f_head  = pend[pend_rd];
+    wire [3:0]  f_len   = f_head[3:0];
+    wire [9:0]  f_w0    = {f_head[13:6], f_head[5:4]};
+    wire [10:0] f_y     = f_head[24:14];
+    wire [1:0]  f_plane = f_head[26:25];
+    wire [FB-1:0] f_frame = f_head[RQW-1:27];
+    reg  [3:0]  f_n;                // words of it already in
+    wire [9:0]  f_w     = f_w0 + {6'd0, f_n};
+    wire        f_done  = rd_valid && (f_n == f_len);
     assign      fills_done = (fill_seq == req_seq);
 
     always @(posedge clk) begin
-        if (k_miss) rq[rq_wr] <= {k_frame, k_plane, k_vy, k_vxl, k_idx};
-        if (cmd_go) pend[pend_wr] <= h_idx;
+        if (rq_push) rq[rq_wr] <= rq_in;
+        if (cmd_go) pend[pend_wr] <= cmd_req;
     end
 
+    reg d_last;                     // the write that completes a request
     always @(posedge clk) begin
         if (!rst_n) begin
             rq_n <= 5'd0; rq_rd <= 4'd0; rq_wr <= 4'd0;
             pend_n <= 5'd0; pend_rd <= 4'd0; pend_wr <= 4'd0;
             req_seq <= 6'd0; fill_seq <= 6'd0;
-            f_acc <= 48'd0; f_n <= 2'd0;
-            d_we <= 1'b0; d_wbank <= 1'b0; d_wa <= 11'd0; d_wd <= 64'd0;
+            f_n <= 4'd0;
+            d_we <= 1'b0; d_wsel <= 3'd0; d_wa <= 11'd0; d_wd <= 16'd0; d_last <= 1'b0;
         end else begin
-            if (k_miss) begin
+            if (rq_push) begin
                 rq_wr   <= rq_wr + 4'd1;
                 req_seq <= req_seq + 6'd1;
             end
-            if (cmd_go) begin
-                rq_rd   <= rq_rd + 4'd1;
-                pend_wr <= pend_wr + 4'd1;
-            end
-            rq_n   <= rq_n + {4'd0, k_miss} - {4'd0, cmd_go};
+            if (cmd_load) rq_rd   <= rq_rd + 4'd1;
+            if (cmd_go)   pend_wr <= pend_wr + 4'd1;
+            rq_n   <= rq_n + {4'd0, rq_push} - {4'd0, cmd_load};
             pend_n <= pend_n + {4'd0, cmd_go} - {4'd0, f_done};
-            d_we <= 1'b0;
+            d_we   <= rd_valid;
+            d_last <= f_done;
             if (rd_valid) begin
-                f_n   <= f_n + 2'd1;
-                f_acc <= {rd_data, f_acc[47:16]};
+                d_wsel <= {f_w[2], f_w[1:0]};
+                d_wa   <= baddr(f_plane, f_frame, f_y, f_w[9:2]);
+                d_wd   <= rd_data;
                 if (f_done) begin
-                    d_we    <= 1'b1;
-                    d_wbank <= f_idx[0];
-                    d_wa    <= f_idx[11:1];
-                    d_wd    <= {rd_data, f_acc};
+                    f_n     <= 4'd0;
                     pend_rd <= pend_rd + 4'd1;
+                end else begin
+                    f_n <= f_n + 4'd1;
                 end
             end
-            // A line counts as filled once its data RAM write is done.
-            if (d_we) fill_seq <= fill_seq + 6'd1;
+            // A request counts as filled once its last word is written.
+            if (d_last) fill_seq <= fill_seq + 6'd1;
         end
     end
 

@@ -1059,7 +1059,11 @@ impl<'d> Inter<'d> {
             let mut rv = false;
             let mut rlast = false;
             let mut rdata = 0u16;
-            let head = mem.queue.front().copied().filter(|&(ready, _, _)| now >= ready);
+            let head = mem
+                .queue
+                .front()
+                .copied()
+                .filter(|&(ready, _, _)| now >= ready);
             let go = head.is_some() && !mem.rng.chance(mem.stall);
             if let (true, Some((ready, addr, left))) = (go, head) {
                 rv = true;
@@ -1234,7 +1238,9 @@ fn inter_matches_the_model_on_random_vectors() {
         let mut tokens = Vec::new();
         let mut maps = Vec::new();
         let mut want = Vec::new();
+        let mut fetch = FetchModel::new(true);
         for pic in 0..2 {
+            fetch.flush();
             // One slice per picture; the map is a permutation of the frames.
             let mut map: Vec<usize> = (0..nframes).collect();
             if pic == 1 {
@@ -1271,6 +1277,7 @@ fn inter_matches_the_model_on_random_vectors() {
                         };
                     }
                     want.extend(predict_mb(&frames, mbx, mby, &v));
+                    fetch.mb((wm, hm), mbx, mby, &v);
                 }
             }
             tokens.push(tok::make(tok::SLICE_END, 0));
@@ -1291,6 +1298,13 @@ fn inter_matches_the_model_on_random_vectors() {
                 at % 96
             );
         }
+        // The fetch model is what measures whole streams, so it has to be
+        // the hardware's own traffic, burst for burst.
+        assert_eq!(
+            (run.bursts, run.words),
+            (fetch.bursts, fetch.words),
+            "seed {seed}: the hardware's bursts and words against the fetch model's"
+        );
     }
 }
 
@@ -1428,13 +1442,17 @@ fn read_dump(path: &Path) -> Option<Dump> {
 /// The token stream, maps and expected prediction for a dump, every
 /// picture in SDRAM slot `index % 8`. With `limit`, only the first so many
 /// inter macroblocks of each picture are fed.
-fn dump_stream(d: &Dump, limit: usize) -> (Vec<u32>, Vec<u64>, Vec<u32>, usize) {
+fn dump_stream(
+    d: &Dump,
+    limit: usize,
+    only: Option<usize>,
+) -> (Vec<u32>, Vec<u64>, Vec<u32>, usize) {
     let mut tokens = vec![tok::make(tok::SPS_DIMS, ((d.w as u32) << 12) | d.h as u32)];
     let mut maps = Vec::new();
     let mut want = Vec::new();
     let mut mbs = 0;
     for pic in &d.pics {
-        if pic.mbs.is_empty() {
+        if pic.mbs.is_empty() || only.is_some_and(|i| i != pic.index) {
             continue;
         }
         let mut map = vec![0usize; 16];
@@ -1459,10 +1477,21 @@ fn dump_stream(d: &Dump, limit: usize) -> (Vec<u32>, Vec<u64>, Vec<u32>, usize) 
     (tokens, maps, want, mbs)
 }
 
-/// Every decoded picture of a dump, in its SDRAM slot.
-fn dump_memory(d: &Dump, mem: &mut Sdram) {
+/// The decoded pictures of a dump in their SDRAM slots: all of them, or
+/// only those picture `only` refers to (the stub has eight slots, and a
+/// long dump would put two pictures in one).
+fn dump_memory(d: &Dump, mem: &mut Sdram, only: Option<usize>) {
+    let wanted: Vec<usize> = match only {
+        None => d.pics.iter().map(|p| p.index).collect(),
+        Some(i) => d
+            .pics
+            .iter()
+            .filter(|p| p.index == i)
+            .flat_map(|p| p.mbs.iter().flat_map(|m| m.refpic.iter().map(|e| e.1)))
+            .collect(),
+    };
     for pic in &d.pics {
-        if let Some(f) = &pic.frame {
+        if let Some(f) = pic.frame.as_ref().filter(|_| wanted.contains(&pic.index)) {
             mem.store(pic.index % 8, f);
         }
     }
@@ -1527,11 +1556,11 @@ fn inter_matches_the_model_dump() {
         return;
     };
     model_matches_dump(&d);
-    let (tokens, maps, want, mbs) = dump_stream(&d, usize::MAX);
+    let (tokens, maps, want, mbs) = dump_stream(&d, usize::MAX, None);
     assert!(mbs >= 4, "the dump has {mbs} inter macroblocks");
     let design = inter_design();
     let mut mem = Sdram::new(7, 6, 20);
-    dump_memory(&d, &mut mem);
+    dump_memory(&d, &mut mem, None);
     let mut dut = Inter::new(&design);
     let run = dut.run(&tokens, &maps, &mut mem, want.len(), 10);
     if let Some(diff) = first_difference(&run.pred, &want) {
@@ -1542,5 +1571,469 @@ fn inter_matches_the_model_dump() {
             .position(|(a, b)| a != b)
             .unwrap_or(0);
         panic!("macroblock {} word {}: {diff}", at / 96, at % 96);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The fetch model: what h264_inter asks the SDRAM for
+// ---------------------------------------------------------------------------
+
+/// The rectangles (x, y, w, h in 4x4 blocks) `h264_inter` merges a
+/// macroblock's vectors into, in the order it processes them.
+fn merge_partitions(mv: &[Vec3; 16]) -> Vec<(usize, usize, usize, usize)> {
+    let eq = |ix: &[usize]| ix.iter().all(|&i| mv[i] == mv[ix[0]]);
+    let q = |qx: usize, qy: usize, c: usize, r: usize| (qy + r) * 4 + qx + c;
+    let uni: Vec<bool> = (0..4)
+        .map(|n| {
+            let (qx, qy) = (2 * (n % 2), 2 * (n / 2));
+            eq(&[
+                q(qx, qy, 0, 0),
+                q(qx, qy, 1, 0),
+                q(qx, qy, 0, 1),
+                q(qx, qy, 1, 1),
+            ])
+        })
+        .collect();
+    let all = uni.iter().all(|&u| u);
+    let (q0, q1, q2, q3) = (mv[0], mv[2], mv[8], mv[10]);
+    if all && q0 == q1 && q0 == q2 && q1 == q3 {
+        return vec![(0, 0, 4, 4)];
+    }
+    if all && q0 == q1 && q2 == q3 {
+        return vec![(0, 0, 4, 2), (0, 2, 4, 2)];
+    }
+    if all && q0 == q2 && q1 == q3 {
+        return vec![(0, 0, 2, 4), (2, 0, 2, 4)];
+    }
+    let mut out = Vec::new();
+    for n in 0..4 {
+        let (qx, qy) = (2 * (n % 2), 2 * (n / 2));
+        let t = mv[q(qx, qy, 0, 0)] == mv[q(qx, qy, 1, 0)];
+        let u = mv[q(qx, qy, 0, 1)] == mv[q(qx, qy, 1, 1)];
+        let l = mv[q(qx, qy, 0, 0)] == mv[q(qx, qy, 0, 1)];
+        let r = mv[q(qx, qy, 1, 0)] == mv[q(qx, qy, 1, 1)];
+        if uni[n] {
+            out.push((qx, qy, 2, 2));
+        } else if t && u {
+            out.extend([(qx, qy, 2, 1), (qx, qy + 1, 2, 1)]);
+        } else if l && r {
+            out.extend([(qx, qy, 1, 2), (qx + 1, qy, 1, 2)]);
+        } else {
+            out.extend((0..4).map(|s| (qx + s % 2, qy + s / 2, 1, 1)));
+        }
+    }
+    out
+}
+
+/// The clamped fetch window of one plane of one rectangle: rows and
+/// columns, inclusive, as the generator computes them.
+fn fetch_window(
+    pic: (usize, usize),
+    mbx: usize,
+    mby: usize,
+    part: (usize, usize, usize, usize),
+    v: Vec3,
+    plane: usize,
+) -> ((i64, i64), (i64, i64)) {
+    let (bx, by, bw, bh) = (part.0 as i64, part.1 as i64, part.2 as i64, part.3 as i64);
+    let (wmax, hmax) = if plane == 0 {
+        (16 * pic.0 as i64 - 1, 16 * pic.1 as i64 - 1)
+    } else {
+        (8 * pic.0 as i64 - 1, 8 * pic.1 as i64 - 1)
+    };
+    let (xi, yi, xf, yf, pw, ph, mx, my) = if plane == 0 {
+        (
+            16 * mbx as i64 + 4 * bx + (v.x >> 2),
+            16 * mby as i64 + 4 * by + (v.y >> 2),
+            v.x & 3,
+            v.y & 3,
+            4 * bw,
+            4 * bh,
+            2,
+            3,
+        )
+    } else {
+        (
+            8 * mbx as i64 + 2 * bx + (v.x >> 3),
+            8 * mby as i64 + 2 * by + (v.y >> 3),
+            v.x & 7,
+            v.y & 7,
+            2 * bw,
+            2 * bh,
+            0,
+            1,
+        )
+    };
+    let c0 = if xf != 0 { xi - mx } else { xi };
+    let c1 = xi + pw - 1 + if xf != 0 { my } else { 0 };
+    let r0 = if yf != 0 { yi - mx } else { yi };
+    let r1 = yi + ph - 1 + if yf != 0 { my } else { 0 };
+    let cl = |v: i64, hi: i64| v.clamp(0, hi);
+    ((cl(r0, hmax), cl(r1, hmax)), (cl(c0, wmax), cl(c1, wmax)))
+}
+
+/// The reference cache and the request gathering of `h264_inter`, step
+/// for step, so that a whole 720p stream can be measured without
+/// simulating it. The random test holds the hardware's own counts to it.
+struct FetchModel {
+    cache: bool,
+    tags: Vec<(u16, u8)>,
+    bursts: u64,
+    words: u64,
+    lookups: u64,
+}
+
+impl FetchModel {
+    fn new(cache: bool) -> FetchModel {
+        FetchModel {
+            cache,
+            tags: vec![(0, 0); 3072],
+            bursts: 0,
+            words: 0,
+            lookups: 0,
+        }
+    }
+
+    fn flush(&mut self) {
+        self.tags.iter_mut().for_each(|t| *t = (0, 0));
+    }
+
+    fn index(plane: usize, frame: usize, y: usize, xl: usize) -> (usize, u16) {
+        let (baddr, tag) = if plane == 0 {
+            (
+                (((frame & 3) << 8) | ((y & 31) << 3) | ((xl >> 1) & 7)),
+                ((frame >> 2) << 10) | (((y >> 5) & 63) << 4) | ((xl >> 4) & 15),
+            )
+        } else {
+            (
+                1024 | ((plane >> 1) << 8) | ((frame & 3) << 6) | ((y & 15) << 2) | ((xl >> 1) & 3),
+                ((frame >> 2) << 10) | (((y >> 4) & 63) << 4) | ((xl >> 3) & 15),
+            )
+        };
+        ((baddr << 1) | (xl & 1), tag as u16)
+    }
+
+    fn task(&mut self, plane: usize, frame: usize, rows: (i64, i64), cols: (i64, i64)) {
+        let (w0, w1) = (cols.0 as usize / 2, cols.1 as usize / 2);
+        let mut pending: Option<(usize, usize, usize)> = None; // (row, first word, words)
+        for y in rows.0 as usize..=rows.1 as usize {
+            for xl in cols.0 as usize / 8..=cols.1 as usize / 8 {
+                self.lookups += 1;
+                let need = (0..4)
+                    .filter(|&j| (w0..=w1).contains(&(4 * xl + j)))
+                    .fold(0u8, |m, j| m | (1 << j));
+                let (idx, tag) = FetchModel::index(plane, frame, y, xl);
+                let (t, m) = self.tags[idx];
+                let have = if self.cache && t == tag && m != 0 {
+                    m
+                } else {
+                    0
+                };
+                let lack = need & !have;
+                if lack == 0 {
+                    continue;
+                }
+                self.tags[idx] = (tag, have | need);
+                let first = lack.trailing_zeros() as usize;
+                let last = 7 - lack.leading_zeros() as usize;
+                let (runw, n) = (4 * xl + first, last - first + 1);
+                match pending {
+                    Some((py, pw, pn)) if py == y && runw == pw + pn && runw % 16 != 0 => {
+                        pending = Some((py, pw, pn + n));
+                    }
+                    _ => {
+                        if let Some((_, _, pn)) = pending {
+                            self.bursts += 1;
+                            self.words += pn as u64;
+                        }
+                        pending = Some((y, runw, n));
+                    }
+                }
+            }
+        }
+        if let Some((_, _, pn)) = pending {
+            self.bursts += 1;
+            self.words += pn as u64;
+        }
+    }
+
+    /// One inter macroblock.
+    fn mb(&mut self, pic: (usize, usize), mbx: usize, mby: usize, mv: &[Vec3; 16]) {
+        for part in merge_partitions(mv) {
+            let v = mv[part.1 * 4 + part.0];
+            for plane in 0..3 {
+                let (rows, cols) = fetch_window(pic, mbx, mby, part, v, plane);
+                self.task(plane, v.frame, rows, cols);
+            }
+        }
+    }
+}
+
+/// The vectors of a dump macroblock, as `h264_inter` sees them.
+fn dump_vectors(mb: &DumpMb) -> [Vec3; 16] {
+    std::array::from_fn(|i| {
+        let (r, x, y) = mb.mv[i];
+        let p = mb.refpic.iter().find(|e| e.0 == r).map_or(0, |e| e.1);
+        Vec3 { frame: p % 8, x, y }
+    })
+}
+
+/// What `h264_inter` fetches for a dump, by the fetch model: (words,
+/// bursts, lookups) with the cache and without it, and the number of
+/// macroblocks of the P pictures, inter or not.
+fn dump_traffic(d: &Dump) -> ([u64; 3], [u64; 3], u64) {
+    let mut with = FetchModel::new(true);
+    let mut without = FetchModel::new(false);
+    let mut mbs = 0;
+    for pic in d.pics.iter().filter(|p| !p.mbs.is_empty()) {
+        with.flush();
+        mbs += (d.w * d.h) as u64;
+        for mb in &pic.mbs {
+            let v = dump_vectors(mb);
+            with.mb((d.w, d.h), mb.x, mb.y, &v);
+            without.mb((d.w, d.h), mb.x, mb.y, &v);
+        }
+    }
+    (
+        [with.words, with.bursts, with.lookups],
+        [without.words, without.bursts, without.lookups],
+        mbs,
+    )
+}
+
+/// The traffic and cycles of `h264_inter` on real 720p streams, against
+/// the budget of an SDR SDRAM. Prints a table; asserts nothing about the
+/// numbers, which belong in `README.md`.
+///
+/// `RETICLE_H264_DUMPS` names a directory of `h264_inter_*.txt` dumps
+/// written by `tools/h264_model.py dump` (the streams are too large to
+/// commit). The fetch model gives the bytes for every picture; the
+/// hardware is simulated over the first `RETICLE_H264_MBS` inter
+/// macroblocks (default 400) of each P picture for the cycles, with an
+/// SDRAM that returns a word a cycle after 12 cycles of latency, and with
+/// one that is busy half the time.
+#[test]
+#[ignore = "needs RETICLE_H264_DUMPS and minutes"]
+fn inter_traffic_on_real_streams() {
+    let Some(dir) = std::env::var_os("RETICLE_H264_DUMPS") else {
+        println!("skipped: RETICLE_H264_DUMPS is not set");
+        return;
+    };
+    let limit: usize = std::env::var("RETICLE_H264_MBS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    let mut names: Vec<_> = fs::read_dir(&dir)
+        .expect("the dump directory")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("h264_inter_"))
+        })
+        .collect();
+    names.sort();
+    let with_cache = inter_design();
+    let without_cache = design(
+        &["h264_frame_addr_stub.v", "h264_inter.v"],
+        "h264_inter",
+        &[("CACHE", "0")],
+    );
+    for path in names {
+        let Some(d) = read_dump(&path) else { continue };
+        let (w, wo, mbs) = dump_traffic(&d);
+        let per = |x: u64| x as f64 / mbs as f64;
+        println!(
+            "{}: {} P pictures of {}x{} macroblocks",
+            path.display(),
+            d.pics.iter().filter(|p| !p.mbs.is_empty()).count(),
+            d.w,
+            d.h
+        );
+        println!("  fetch model, every macroblock of every P picture:");
+        println!(
+            "    with the cache     {:7.1} bytes/MB  {:5.1} bursts/MB  {:5.1} lookups/MB",
+            2.0 * per(w[0]),
+            per(w[1]),
+            per(w[2])
+        );
+        println!(
+            "    without            {:7.1} bytes/MB  {:5.1} bursts/MB",
+            2.0 * per(wo[0]),
+            per(wo[1])
+        );
+        let pics: Vec<usize> = d
+            .pics
+            .iter()
+            .filter(|p| !p.mbs.is_empty())
+            .map(|p| p.index)
+            .collect();
+        for (label, des) in [("with the cache", &with_cache), ("without", &without_cache)] {
+            for (sdram, latency, stall) in
+                [("idle SDRAM", 12, 0), ("SDRAM busy half the time", 12, 50)]
+            {
+                let (mut cycles, mut words, mut n) = (0u64, 0u64, 0usize);
+                let t0 = std::time::Instant::now();
+                for &pic in &pics {
+                    let (tokens, maps, want, k) = dump_stream(&d, limit, Some(pic));
+                    let mut mem = Sdram::new(11, latency, stall);
+                    dump_memory(&d, &mut mem, Some(pic));
+                    let mut dut = Inter::new(des);
+                    let run = dut.run(&tokens, &maps, &mut mem, want.len(), 0);
+                    if let Some(diff) = first_difference(&run.pred, &want) {
+                        panic!("{} picture {pic}: {diff}", path.display());
+                    }
+                    cycles += run.cycles;
+                    words += run.words;
+                    n += k;
+                }
+                let secs = t0.elapsed().as_secs_f64();
+                println!(
+                    "  hardware, {n} inter MBs, {label}, {sdram}: {:6.1} cycles/MB, {:6.1} bytes/MB fetched ({:.0} k cycles/s simulated)",
+                    cycles as f64 / n as f64,
+                    2.0 * words as f64 / n as f64,
+                    cycles as f64 / secs / 1000.0
+                );
+            }
+        }
+    }
+}
+
+/// The `tok` words of an `h264_tokens_*.txt` dump.
+fn read_tokens(path: &Path) -> Option<Vec<u32>> {
+    let text = fs::read_to_string(path).ok()?;
+    Some(
+        text.lines()
+            .filter_map(|l| l.strip_prefix("tok "))
+            .map(|l| u32::from_str_radix(&l[..8], 16).expect("a hex token"))
+            .collect(),
+    )
+}
+
+/// Runs a dump's token stream through `h264_mvpred` and holds its output to
+/// the dump: every token but `MVD` through unchanged and in order, and for
+/// every inter macroblock the 32 `MV` tokens carrying exactly the vectors
+/// and reference indices the dump's `mv l0` line gives. Returns how many
+/// macroblocks were compared.
+fn check_mvpred_against_dump(tokens: &[u32], inter: &Dump, pressure: bool) -> usize {
+    let d = design(&["h264_mvpred.v"], "h264_mvpred", &[]);
+    let mut sim = compiled(&d);
+    reset(&mut sim);
+    let mut rng = Rng(0xD0D0);
+    let (got, _) = run_mvpred(&mut sim, tokens, &mut rng, pressure);
+    // Everything that is not a vector, against everything that is not a
+    // difference.
+    let rest: Vec<u32> = got
+        .iter()
+        .copied()
+        .filter(|t| tok::tag(*t) != tok::MV)
+        .collect();
+    let want: Vec<u32> = tokens
+        .iter()
+        .copied()
+        .filter(|t| tok::tag(*t) != tok::MVD)
+        .collect();
+    if let Some(diff) = first_difference(&rest, &want) {
+        panic!("h264_mvpred changed the stream: {diff}");
+    }
+    // The vectors, macroblock by macroblock.
+    let mut mbs = inter.pics.iter().flat_map(|p| p.mbs.iter());
+    let mut pos = (0usize, 0usize);
+    let mut cur: Option<[(u32, i64, i64); 16]> = None;
+    let mut n = 0;
+    for &t in &got {
+        let d = tok::data(t);
+        match tok::tag(t) {
+            tok::MB_START => pos = ((d >> 12) as usize, (d & 0xFFF) as usize),
+            tok::MV => {
+                let blk = ((d >> 19) & 15) as usize;
+                let raster = (((blk >> 3) & 1) * 2 + ((blk >> 1) & 1)) * 4
+                    + ((blk >> 2) & 1) * 2
+                    + (blk & 1);
+                let e = cur.get_or_insert([(0, 0, 0); 16]);
+                if (d >> 18) & 1 == 0 {
+                    e[raster].1 = i64::from((d & 0xFFFF) as u16 as i16);
+                } else {
+                    e[raster].0 = (d >> 13) & 31;
+                    e[raster].2 = i64::from((((d & 0x1FFF) << 3) as u16 as i16) >> 3);
+                }
+            }
+            tok::MB_CBP => {
+                if let Some(e) = cur.take() {
+                    let mb = mbs.next().expect("the dump has this inter macroblock");
+                    assert_eq!((mb.x, mb.y), pos, "macroblock order");
+                    assert_eq!(e, mb.mv, "the vectors of macroblock ({}, {})", pos.0, pos.1);
+                    n += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        mbs.next().is_none(),
+        "the dump has inter macroblocks h264_mvpred gave no vectors"
+    );
+    n
+}
+
+/// `h264_mvpred` against the model agent's dump of a real stream: two P
+/// pictures of P_8x8 macroblocks with sub-partitions over two references,
+/// so median prediction, the C-to-D replacement inside a macroblock and
+/// the picture edges all occur.
+///
+/// What this would catch: a misreading of 8.4.1 that this file's own
+/// model shares with the hardware, since the dump comes from a separately
+/// written decoder checked against ffmpeg's pictures. What it would not:
+/// shapes the stream does not use. Skips, saying so, when either file is
+/// absent.
+#[test]
+fn mvpred_matches_the_model_dump() {
+    let tpath = dump_path("h264_tokens_p_32x32_dump.txt");
+    let ipath = dump_path("h264_inter_p_32x32_dump.txt");
+    let (Some(tokens), Some(inter)) = (read_tokens(&tpath), read_dump(&ipath)) else {
+        println!(
+            "skipped: {} or {} is not there",
+            tpath.display(),
+            ipath.display()
+        );
+        return;
+    };
+    if !tokens.iter().any(|t| tok::tag(*t) == tok::REF_IDX) {
+        println!("skipped: {} predates the REF_IDX token", tpath.display());
+        return;
+    }
+    let n = check_mvpred_against_dump(&tokens, &inter, true);
+    assert!(n >= 4, "only {n} inter macroblocks compared");
+}
+
+/// The same over every pair of `h264_tokens_*` / `h264_inter_*` dumps in
+/// `RETICLE_H264_DUMPS`, for the 720p streams too large to commit.
+#[test]
+#[ignore = "needs RETICLE_H264_DUMPS"]
+fn mvpred_matches_large_dumps() {
+    let Some(dir) = std::env::var_os("RETICLE_H264_DUMPS") else {
+        println!("skipped: RETICLE_H264_DUMPS is not set");
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .expect("the dump directory")
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .strip_prefix("h264_tokens_")
+                .map(str::to_owned)
+        })
+        .collect();
+    names.sort();
+    for name in names {
+        let (Some(tokens), Some(inter)) = (
+            read_tokens(&dir.join(format!("h264_tokens_{name}"))),
+            read_dump(&dir.join(format!("h264_inter_{name}"))),
+        ) else {
+            continue;
+        };
+        let n = check_mvpred_against_dump(&tokens, &inter, false);
+        println!("{name}: {n} inter macroblocks, every vector as the dump has it");
     }
 }
