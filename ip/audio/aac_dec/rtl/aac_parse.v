@@ -117,7 +117,8 @@ module aac_parse (
         S_SPS     = 7'd72,  S_SPE     = 7'd73,  S_SPEP    = 7'd74,
         S_SPEW    = 7'd75,  S_SPO     = 7'd76,  S_SPT     = 7'd77,
         S_SPT2    = 7'd78,  S_ICSEND  = 7'd79,  S_SF5     = 7'd80,
-        S_TNSF4   = 7'd81,  S_CPE2    = 7'd82,  S_SEC5    = 7'd83;
+        S_TNSF4   = 7'd81,  S_CPE2    = 7'd82,  S_SEC5    = 7'd83,
+        S_PULW    = 7'd84,  S_SPTW    = 7'd85;
 
     reg [6:0] state;
     // Ready for a raw_data_block and waiting for `go`: the sequencer takes
@@ -165,6 +166,7 @@ module aac_parse (
     // ------------------------------------------------------------------
     // Frame and element state
     // ------------------------------------------------------------------
+    reg        lost;        // searching for a syncword after losing one
     reg        prot_absent;
     reg [1:0]  nrdb;
     reg [1:0]  rdb_i;
@@ -178,9 +180,9 @@ module aac_parse (
     reg [2:0]  pce_na;
     // The element lists of a PCE: 5 bits a front, side, back or coupling
     // element, 4 an LFE or data element (Table 4.2).
-    wire [15:0] pce_bits = ({12'd0, pce_nf} + {12'd0, pce_ns} + {12'd0, pce_nb} +
-                            {12'd0, pce_nc}) * 16'd5 +
-                           ({14'd0, pce_nl} + {13'd0, pce_na}) * 16'd4;
+    wire [7:0]  pce_n5 = {4'd0, pce_nf} + {4'd0, pce_ns} + {4'd0, pce_nb} + {4'd0, pce_nc};
+    wire [7:0]  pce_n4 = {6'd0, pce_nl} + {5'd0, pce_na};
+    wire [15:0] pce_bits = {6'd0, pce_n5, 2'd0} + {8'd0, pce_n5} + {6'd0, pce_n4, 2'd0};
 
     // The ics_info of the channel being parsed.
     reg [1:0]  ws;
@@ -218,14 +220,15 @@ module aac_parse (
         end
     endfunction
 
-    // Band tables: two lookups, for a band and the next.
+    // Band tables: the offsets of band_a and the next, a cycle after
+    // band_a is set.
     reg  [5:0]  band_a;
     wire [10:0] off_a, off_b;
-    wire [5:0]  num_swb, tns_max, num_swb_b, tns_max_b;
-    aac_swb u_swb_a (.sfi(sfi), .short_win(short_w), .band(band_a),
-                     .offset(off_a), .num_swb(num_swb), .tns_max(tns_max));
-    aac_swb u_swb_b (.sfi(sfi), .short_win(short_w), .band(band_a + 6'd1),
-                     .offset(off_b), .num_swb(num_swb_b), .tns_max(tns_max_b));
+    wire [5:0]  num_swb, tns_max;
+    aac_swb u_swb (.clk(clk), .sfi(sfi), .short_win(short_w),
+                   .band_a(band_a), .band_b(band_a + 6'd1),
+                   .off_a(off_a), .off_b(off_b),
+                   .num_swb(num_swb), .tns_max(tns_max));
 
     // The parser's own copy of each band's codebook and scalefactor.
     reg  [11:0] lb_mem [0:127];
@@ -423,7 +426,7 @@ module aac_parse (
             tc_we <= 1'b0; tc_ch <= 1'b0; tc_addr <= 7'd0; tc_data <= 5'd0;
             c_valid <= 1'b0; c_ch <= 1'b0; c_addr <= 10'd0; c_q <= 15'd0;
             c_sf <= 8'd0; c_zero <= 1'b0;
-            prot_absent <= 1'b1; nrdb <= 2'd0; rdb_i <= 2'd0; chan <= 2'd1;
+            lost <= 1'b0; prot_absent <= 1'b1; nrdb <= 2'd0; rdb_i <= 2'd0; chan <= 2'd1;
             seen_audio <= 1'b0; ch <= 1'b0; cnt8 <= 8'd0; cnt9 <= 9'd0;
             pce_nf <= 4'd0; pce_ns <= 4'd0; pce_nb <= 4'd0; pce_nc <= 4'd0;
             pce_nl <= 2'd0; pce_na <= 3'd0;
@@ -523,18 +526,31 @@ module aac_parse (
             S_SYNC1: begin
                 if (gb_acc[7:0] == 8'hFF)
                     getbits(5'd4, S_SYNC2);
-                else
+                else begin
+                    // Reported once per loss, then searched in silence.
+                    if (!lost) begin
+                        lost <= 1'b1;
+                        blk_err <= 1'b1;
+                        err_code <= 4'd1;
+                    end
                     state <= S_SYNC;
+                end
             end
             S_SYNC2: begin
                 if (gb_acc[3:0] == 4'hF) begin
                     getbits(5'd16, S_HDR1);
                 end else begin
+                    if (!lost) begin
+                        lost <= 1'b1;
+                        blk_err <= 1'b1;
+                        err_code <= 4'd1;
+                    end
                     gb_ret <= S_SYNC;
                     state  <= S_ALIGN;
                 end
             end
             S_HDR1: begin
+                lost <= 1'b0;
                 // ID layer protection_absent profile sfi private channel
                 // original home: 1 2 1 2 4 1 3 1 1.
                 prot_absent <= gb_acc[12];
@@ -958,8 +974,9 @@ module aac_parse (
                 if (gb_acc[5:0] > num_swb)
                     fail(4'd7);
                 else
-                    state <= S_PUL3;
+                    state <= S_PULW;
             end
+            S_PULW: state <= S_PUL3;     // the band table's read
             S_PUL3: begin
                 pul_k <= off_a;
                 getbits(5'd9, S_PUL4);
@@ -1108,7 +1125,7 @@ module aac_parse (
                 if (w0 == nwin) begin
                     win <= 4'd0;
                     band_a <= msfb;
-                    state <= S_SPT;
+                    state <= S_SPTW;
                 end else if (band_a == msfb) begin
                     g <= g + 3'd1;
                     w0 <= w0 + glen;
@@ -1264,6 +1281,7 @@ module aac_parse (
                 end else
                     d <= d + 2'd1;
             end
+            S_SPTW: state <= S_SPT;      // the band table's read
             S_SPT: begin
                 // Everything from max_sfb up, in every window, is zero.
                 if (win == nwin)

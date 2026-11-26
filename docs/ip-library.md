@@ -72,6 +72,11 @@ ip/
     pwm/        reticle.ip  rtl/pwm.v
     timer/      reticle.ip  rtl/timer.v
   audio/
+    aac_dec/     reticle.ip  README.md  rtl/aac_dec.v  rtl/aac_bits.v
+                 rtl/aac_parse.v  rtl/aac_huff.v  rtl/aac_dequant.v
+                 rtl/aac_stereo.v  rtl/aac_tns.v  rtl/aac_synth.v
+                 rtl/aac_pcm_out.v  rtl/aac_ram.v  rtl/aac_glen.v, and
+                 nine tables tools/aac_dec_model.py generates
     adpcm_ima/   reticle.ip  README.md  rtl/adpcm_step.v
                  rtl/adpcm_ima_enc.v  rtl/adpcm_ima_dec.v
   video/
@@ -133,6 +138,7 @@ It is distributed as part of the repository instead.
 | `vga_out` | `vga_out` | VGA output: the same three timings, colour truncated to the board's bits per channel, blanking forced to black, syncs at the mode's polarity | `dvi_tx` |
 | `pattern_gen` | `pattern_gen` | video test patterns as a function of the raster position: colour bars, a greyscale staircase, a checkerboard, a crosshatch, RGB steps, a solid colour, a sweeping bar and full white | — |
 | `mjpeg_enc` | `mjpeg_enc`, `jpeg_fdct`, `jpeg_quant`, `jpeg_entropy` | baseline greyscale JPEG encoder: pixels in and a whole file out, `SOI` to `EOI` — the forward DCT of T.81 A.3.3, quantisation with the zig-zag of A.3.4, the entropy coder of F.1.2, and the markers around them, with the Huffman codes derived from the `DHT` the file carries. Whole files checked against ffmpeg's decoder | — |
+| `aac_dec` | `aac_dec`, `aac_parse`, `aac_huff`, `aac_dequant`, `aac_stereo`, `aac_tns`, `aac_synth`, `aac_pcm_out` | AAC-LC decoder: ADTS or raw access units to 16-bit PCM, mono or stereo up to 48 kHz, every tool of the profile (M/S, intensity, PNS, TNS, pulses, block switching, sine and KBD windows), on DSP slices and block RAM. Bit-exact with its own model, and within one LSB of ffmpeg's decoder, on streams ffmpeg's and faac's encoders made | — |
 | `adpcm_ima` | `adpcm_ima_enc`, `adpcm_ima_dec`, `adpcm_step` | IMA/DVI ADPCM encoder and decoder: four bits a sample at a fixed 4:1, the 89-step table shared, with the predictor and step index a WAV block header carries brought out | — |
 | `eth_mac_rgmii` | `eth_mac_rgmii` | gigabit Ethernet MAC over RGMII: the RMII MAC's frame logic an octet a cycle behind DDR IO, optional IO delays | `eth_mac_rmii` |
 | `usb_device_fs` | `usb_device_fs`, `usb_fs_rx`, `usb_fs_tx`, `usb_dev_core`, `usb_pkt_rx`, `usb_ctrl_ep`, `usb_bulk_ep` | USB full-speed device: NRZI, bit stuffing, SYNC and EOP, CRC5 and CRC16 checked, a control endpoint that enumerates, and a bulk endpoint pair with a byte interface | — |
