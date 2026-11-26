@@ -48,11 +48,10 @@
 //     complete, so the later stages stay in step. Concealment is not
 //     done.
 //
-// The `MV` token (`h264_mvpred`'s) is read as
-//   [23:20] luma4x4BlkIdx, [19] component (0 x, 1 y), [18:14] ref_idx,
-//   [13:0] the vector component, signed, quarter samples
-// until its section of `docs/h264-decoder.md` is written; `mv_*` below
-// is the one place that reads it.
+// The `MV` token is `h264_mvpred`'s (docs/h264-decoder.md): [23] list,
+// [22:19] luma4x4BlkIdx, [18] component; horizontal [15:0], of which the
+// 14 bits Table A-1 allows are kept; vertical [17:13] refIdxL0 and
+// [12:0]. Only list 0 is read.
 module h264_tokin #(
     parameter integer MAX_W_MBS = 80
 ) (
@@ -453,10 +452,14 @@ module h264_tokin #(
                             i16_mode <= data[14:13];
                         end
                         T_I4_MODE: i4_modes[4 * data[7:4] +: 4] <= data[3:0];
-                        T_MV: begin
-                            if (data[19]) mvy[data[23:20]] <= data[13:0];
-                            else          mvx[data[23:20]] <= data[13:0];
-                            mref[data[23:20]] <= data[18:14];
+                        // List 0 only: list 1 is B's.
+                        T_MV: if (!data[23]) begin
+                            if (data[18]) begin
+                                mvy[data[22:19]]  <= {data[12], data[12:0]};
+                                mref[data[22:19]] <= data[17:13];
+                            end else begin
+                                mvx[data[22:19]] <= data[13:0];
+                            end
                         end
                         T_MB_CBP: begin
                             t8x8   <= data[8];

@@ -148,11 +148,8 @@ Tokens read: `SPS_DIMS`, `SLICE_HDR` (constrained_intra_pred_flag),
 `SLICE_FIRST`, `SLICE_QP` (both chroma offsets), `SLICE_DBLK`, `MB_START`,
 `MB_TYPE`, `I4_MODE`, `MV`, `MB_CBP` (intra_chroma_pred_mode,
 transform_size_8x8_flag), `MB_QP`, `COEF_BLK`, `COEF`, `PCM`, `MB_END`; the
-rest are passed over. **The `MV` token is read as** `[23:20]`
-luma4x4BlkIdx, `[19]` component (0 horizontal), `[18:14]` ref_idx, `[13:0]`
-the component, signed quarter samples — an assumption until `h264_mvpred`'s
-section of `docs/h264-decoder.md` is written; `h264_tokin`'s `T_MV` case is
-the one place that reads it.
+rest are passed over. `MV` is `h264_mvpred`'s, as its section of
+`docs/h264-decoder.md` gives it; only list 0 is read.
 
 ## Measured
 

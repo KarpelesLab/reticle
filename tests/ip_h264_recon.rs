@@ -2377,8 +2377,8 @@ fn picture_tokens(pic: &PicDesc, rng: &mut Rng) -> Vec<u32> {
             if mb.kind == K_INTER {
                 for (b, &(x, y, r)) in mb.mv.iter().enumerate() {
                     let b = u32::try_from(b).expect("small");
-                    t.push(tok(0x16, (b << 20) | (r << 14) | field(x, 14)));
-                    t.push(tok(0x16, (b << 20) | (1 << 19) | (r << 14) | field(y, 14)));
+                    t.push(tok(0x16, (b << 19) | field(x, 16)));
+                    t.push(tok(0x16, (b << 19) | (1 << 18) | (r << 13) | field(y, 13)));
                 }
             }
             t.push(tok(0x19, mb.c_mode << 6));
