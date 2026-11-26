@@ -1,0 +1,13 @@
+# h264_recon — H.264 reconstruction (work in progress).
+name h264_recon
+version 0.1.0
+license MIT
+description "H.264 reconstruction: dequantisation, inverse transforms, intra prediction and deblocking"
+
+top h264_dbf_filter
+target xc7
+
+source rtl/h264_dbf_tables.v
+source rtl/h264_dbf_filter.v
+source rtl/h264_itrans4.v
+source rtl/h264_residual.v
