@@ -12,3 +12,6 @@
 # delete what they test.
 testdata/verilog/format/crlf.v -text
 testdata/vhdl/format/crlf.vhd -text
+
+# H.264 test streams (testdata/ip/h264/) are binary Annex B byte streams.
+*.264 binary
