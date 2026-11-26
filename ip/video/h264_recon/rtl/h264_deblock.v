@@ -126,22 +126,16 @@ module h264_deblock #(
     // The line buffer: luma rows 12..15 and chroma rows 6..7 of every
     // macroblock of the row above, a word per four samples.
     // -----------------------------------------------------------------
-    localparam integer LW    = MAX_W_MBS * 4;      // luma words a row
-    localparam integer CW    = MAX_W_MBS * 2;      // chroma words a row
-    localparam integer LB_CB = 4 * LW;
-    localparam integer LB_CR = 4 * LW + 2 * CW;
-    localparam integer LB_N  = 4 * LW + 4 * CW;
-    localparam [10:0] LW11    = LW;
-    localparam [10:0] CW11    = CW;
-    localparam [10:0] LB_CB11 = LB_CB;
-    localparam [10:0] LB_CR11 = LB_CR;
-
+    // Rows are 512 words apart (luma) and 256 (chroma), powers of two,
+    // so an address is bits put side by side: up to 128 macroblocks
+    // across, of which a 1280-sample picture uses 80.
+    localparam integer LB_N = 3072;
     reg [31:0] lbuf [0:LB_N-1];
     reg [31:0] lb_q;
     reg        lb_we;
-    reg [10:0] lb_wa;
+    reg [11:0] lb_wa;
     reg [31:0] lb_wd;
-    reg [10:0] lb_ra;             // combinational, like cur_ra and left_ra
+    reg [11:0] lb_ra;             // combinational, like cur_ra and left_ra
 
     integer n;
     initial begin
@@ -156,16 +150,16 @@ module h264_deblock #(
     // Where row `r` of a component of the macroblock at column `x`
     // lives in the line buffer (luma r = 0..3 for rows 12..15, chroma
     // r = 0..1 for rows 6..7), word `w` of it.
-    function [10:0] lb_addr;
+    function [11:0] lb_addr;
         input [1:0] plane;
         input [1:0] r;
         input [6:0] x;
         input [1:0] w;
         begin
             case (plane)
-                2'd0:    lb_addr = {2'd0, r} * LW11 + {2'd0, x, w};
-                2'd1:    lb_addr = LB_CB11 + {10'd0, r[0]} * CW11 + {3'd0, x, w[0]};
-                default: lb_addr = LB_CR11 + {10'd0, r[0]} * CW11 + {3'd0, x, w[0]};
+                2'd0:    lb_addr = {1'b0, r, x, w};
+                2'd1:    lb_addr = {3'b100, r[0], x, w[0]};
+                default: lb_addr = {3'b101, r[0], x, w[0]};
             endcase
         end
     endfunction
@@ -238,13 +232,33 @@ module h264_deblock #(
         end
     endfunction
 
-    // A band word of a band register.
+    // A band word of a band register. A case, not `v[128 * r + 32 * w
+    // +: 32]`: this flow builds a part-select at a computed offset as a
+    // shifter across the whole 512 bits, which for three of these was
+    // most of the block.
     function [31:0] band_word;
         input [511:0] v;
         input [1:0]   r;
         input [1:0]   w;
         begin
-            band_word = v[128 * r + 32 * w +: 32];
+            case ({r, w})
+                4'd0:  band_word = v[31:0];
+                4'd1:  band_word = v[63:32];
+                4'd2:  band_word = v[95:64];
+                4'd3:  band_word = v[127:96];
+                4'd4:  band_word = v[159:128];
+                4'd5:  band_word = v[191:160];
+                4'd6:  band_word = v[223:192];
+                4'd7:  band_word = v[255:224];
+                4'd8:  band_word = v[287:256];
+                4'd9:  band_word = v[319:288];
+                4'd10: band_word = v[351:320];
+                4'd11: band_word = v[383:352];
+                4'd12: band_word = v[415:384];
+                4'd13: band_word = v[447:416];
+                4'd14: band_word = v[479:448];
+                default: band_word = v[511:480];
+            endcase
         end
     endfunction
 
@@ -265,8 +279,13 @@ module h264_deblock #(
     wire [1:0] e_luma = luma ? (op_vert ? op_e : band) : (op_vert ? {op_e[0], 1'b0} : {band[0], 1'b0});
     wire [1:0] seg    = luma ? (op_vert ? band : op_c[3:2])
                              : (op_vert ? {band[0], op_r[1]} : op_c[2:1]);
-    wire [6:0] bs_bit = op_vert ? (7'd3 * {3'd0, e_luma, seg}) : (7'd48 + 7'd3 * {3'd0, e_luma, seg});
-    wire [2:0] op_bs_raw = bs[bs_bit +: 3];
+    reg  [2:0] op_bs_raw;
+    integer bi;
+    always @* begin
+        op_bs_raw = 3'd0;
+        for (bi = 0; bi < 32; bi = bi + 1)
+            if ({!op_vert, e_luma, seg} == bi) op_bs_raw = bs[3 * bi +: 3];
+    end
 
     // Is this edge filtered at all?
     wire mb_edge  = op_vert ? (op_e == 2'd0) : (band == 2'd0);
@@ -294,20 +313,37 @@ module h264_deblock #(
         .alpha(tb_alpha), .beta(tb_beta), .tc0(tb_tc0)
     );
 
-    // The eight samples of the line: a window of a row of {Q, L}, or a
-    // column of P over Q.
-    wire [159:0] xrow = {qb[128 * op_r +: 128], lr[32 * op_r +: 32]};
-    wire [63:0]  vwin = xrow[32 * op_e +: 64];
-    wire [63:0]  hwin = {qb[384 + 8 * op_c +: 8], qb[256 + 8 * op_c +: 8],
-                         qb[128 + 8 * op_c +: 8], qb[8 * op_c +: 8],
-                         pb[384 + 8 * op_c +: 8], pb[256 + 8 * op_c +: 8],
-                         pb[128 + 8 * op_c +: 8], pb[8 * op_c +: 8]};
+    // The eight samples of the line. The registers turn under the
+    // edges rather than the edges reaching into the registers: each
+    // vertical-edge line rotates the rows of Q and L up by one, so the
+    // line is always taken from row 0, and each horizontal-edge line
+    // rotates the columns of P and Q left by one (sixteen of them, or
+    // chroma's eight), so it is always column 0. A pass of 16 (or 8)
+    // lines turns the band all the way round. Picking a line from any
+    // row and any column of 144 bytes, and putting its result back
+    // anywhere, was most of this block's logic when it was written
+    // that way: 17 700 lookup tables, against what this costs.
+    wire [159:0] xrow = {qb[127:0], lr[31:0]};
+    reg  [63:0]  vwin;
+    always @* begin
+        case (op_e)
+            2'd0:    vwin = xrow[63:0];
+            2'd1:    vwin = xrow[95:32];
+            2'd2:    vwin = xrow[127:64];
+            default: vwin = xrow[159:96];
+        endcase
+    end
+    wire [63:0]  hwin = {qb[391:384], qb[263:256], qb[135:128], qb[7:0],
+                         pb[391:384], pb[263:256], pb[135:128], pb[7:0]};
     wire [63:0]  win  = op_vert ? vwin : hwin;     // p3 lowest, q3 highest
+    wire         rot_v = op_issue && op_vert;
+    wire         rot_h = op_issue && !op_vert;
 
     // Stage 1: the line and its thresholds.
     reg        s1_v, s1_vert, s1_chroma;
     reg [1:0]  s1_e, s1_r;
     reg [3:0]  s1_c;
+    reg [1:0]  s1_k;            // rotations since the line was taken
     reg [63:0] s1_win;
     reg [2:0]  s1_bs;
     reg [7:0]  s1_alpha;
@@ -326,6 +362,7 @@ module h264_deblock #(
     reg        s2_v, s2_vert;
     reg [1:0]  s2_e, s2_r;
     reg [3:0]  s2_c;
+    reg [1:0]  s2_k;
     reg [47:0] s2_out;          // p2 lowest .. q2 highest
 
     // -----------------------------------------------------------------
@@ -363,7 +400,7 @@ module h264_deblock #(
     always @* begin
         cur_ra  = 7'd0;
         left_ra = 7'd0;
-        lb_ra   = 11'd0;
+        lb_ra   = 12'd0;
         if (ph == PH_XFER) begin
             cur_ra  = slot_addr(plane, {band, bw_row(luma, t[3:0])}, bw_w(luma, t[3:0]));
             left_ra = slot_addr(plane, {band, t[1:0]}, luma ? 2'd3 : 2'd1);
@@ -382,10 +419,90 @@ module h264_deblock #(
     // -----------------------------------------------------------------
     // The sequence
     // -----------------------------------------------------------------
-    integer j;
-    reg [159:0] xnew;
+    // -----------------------------------------------------------------
+    // The band registers' next values, a word or a byte at a time with
+    // every index a constant: what lands from a read in PH_XFER, and
+    // what an edge's line writes back.
+    // -----------------------------------------------------------------
     reg [511:0] qn, pn;
     reg [127:0] ln;
+    integer r, w, c, j;
+
+    // PH_XFER: band word tm1 lands this cycle.
+    wire       x_land  = (ph == PH_XFER) && (t != 6'd0);
+    wire [1:0] x_row   = bw_row(luma, tm1[3:0]);
+    wire [1:0] x_w     = bw_w(luma, tm1[3:0]);
+    wire       x_lb    = x_land && (band == 2'd0) && has_top && (luma || (tm1 < 6'd4));
+    wire [1:0] x_lbrow = luma ? tm1[3:2] : {1'b1, tm1[1]};
+    wire [1:0] x_lbw   = luma ? tm1[1:0] : {1'b0, tm1[0]};
+    wire       v_wb    = s2_v && s2_vert;
+    wire       h_wb    = s2_v && !s2_vert;
+
+    // Where the line taken k rotations ago is now: row 4 - k, column
+    // 16 - k (8 - k for chroma).
+    wire [1:0] wb_k = s2_k + {1'b0, s2_vert ? rot_v : rot_h};
+    reg [511:0] qr, pr;
+    reg [127:0] lrr;
+
+    always @* begin
+        // Turn.
+        qr  = qb;
+        pr  = pb;
+        lrr = lr;
+        if (rot_v) begin
+            qr  = {qb[127:0], qb[511:128]};
+            lrr = {lr[31:0], lr[127:32]};
+        end
+        if (rot_h) begin
+            for (r = 0; r < 4; r = r + 1) begin
+                if (luma) begin
+                    qr[128 * r +: 128] = {qb[128 * r +: 8], qb[128 * r + 8 +: 120]};
+                    pr[128 * r +: 128] = {pb[128 * r +: 8], pb[128 * r + 8 +: 120]};
+                end else begin
+                    qr[128 * r +: 64] = {qb[128 * r +: 8], qb[128 * r + 8 +: 56]};
+                    pr[128 * r +: 64] = {pb[128 * r +: 8], pb[128 * r + 8 +: 56]};
+                end
+            end
+        end
+        qn = qr;
+        pn = pr;
+        ln = lrr;
+        // Put results back where their line has turned to.
+        for (r = 1; r < 4; r = r + 1) begin
+            for (c = 0; c < 4; c = c + 1) begin
+                for (j = 0; j < 6; j = j + 1) begin
+                    if (v_wb && wb_k == 4 - r && s2_e == c) begin
+                        if (4 * c + 1 + j < 4)
+                            ln[32 * r + 8 * (4 * c + 1 + j) +: 8] = s2_out[8 * j +: 8];
+                        else
+                            qn[128 * r + 8 * (4 * c + j - 3) +: 8] = s2_out[8 * j +: 8];
+                    end
+                end
+            end
+        end
+        for (c = 5; c < 16; c = c + 1) begin
+            if (h_wb && ((luma && c >= 13 && wb_k == 16 - c) ||
+                         (!luma && c >= 5 && c <= 7 && wb_k == 8 - c))) begin
+                for (r = 0; r < 4; r = r + 1) begin
+                    if (r >= 1) pn[128 * r + 8 * c +: 8] = s2_out[8 * (r - 1) +: 8];
+                    if (r <= 2) qn[128 * r + 8 * c +: 8] = s2_out[24 + 8 * r +: 8];
+                end
+            end
+        end
+        // What lands in PH_XFER (no line is in flight then).
+        for (r = 0; r < 4; r = r + 1) begin
+            for (w = 0; w < 4; w = w + 1) begin
+                if (x_land && x_row == r && x_w == w)
+                    qn[128 * r + 32 * w +: 32] = cur_rd;
+                if (x_land && band != 2'd0 && x_row == r && x_w == w)
+                    pn[128 * r + 32 * w +: 32] = qb[128 * r + 32 * w +: 32];
+                if (x_lb && x_lbrow == r && x_lbw == w)
+                    pn[128 * r + 32 * w +: 32] = lb_q;
+            end
+            if (x_land && tm1 < 6'd4 && tm1[1:0] == r)
+                ln[32 * r +: 32] = left_rd;
+        end
+    end
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -393,14 +510,14 @@ module h264_deblock #(
             done <= 1'b0;
             qb <= 512'd0; pb <= 512'd0; lr <= 128'd0;
             s1_v <= 1'b0; s1_vert <= 1'b0; s1_chroma <= 1'b0; s1_e <= 2'd0; s1_r <= 2'd0;
-            s1_c <= 4'd0; s1_win <= 64'd0; s1_bs <= 3'd0; s1_alpha <= 8'd0;
+            s1_c <= 4'd0; s1_k <= 2'd0; s2_k <= 2'd0; s1_win <= 64'd0; s1_bs <= 3'd0; s1_alpha <= 8'd0;
             s1_beta <= 5'd0; s1_tc0 <= 5'd0;
             s2_v <= 1'b0; s2_vert <= 1'b0; s2_e <= 2'd0; s2_r <= 2'd0; s2_c <= 4'd0;
             s2_out <= 48'd0;
             er <= 6'd0; ek <= 3'd0;
             cur_we <= 1'b0; cur_wa <= 7'd0; cur_wd <= 32'd0;
             left_we <= 1'b0; left_wa <= 7'd0; left_wd <= 32'd0;
-            lb_we <= 1'b0; lb_wa <= 11'd0; lb_wd <= 32'd0;
+            lb_we <= 1'b0; lb_wa <= 12'd0; lb_wd <= 32'd0;
             op_valid <= 1'b0; op_data <= 34'd0;
         end else begin
             done     <= 1'b0;
@@ -409,9 +526,6 @@ module h264_deblock #(
             lb_we    <= 1'b0;
             op_valid <= 1'b0;
 
-            qn = qb;
-            pn = pb;
-            ln = lr;
 
             // ---- the edge pipeline ----
             s1_v <= op_issue;
@@ -421,6 +535,7 @@ module h264_deblock #(
                 s1_e      <= op_e;
                 s1_r      <= op_r;
                 s1_c      <= op_c;
+                s1_k      <= 2'd1;
                 s1_win    <= win;
                 s1_bs     <= op_bs;
                 s1_alpha  <= tb_alpha;
@@ -433,26 +548,9 @@ module h264_deblock #(
                 s2_e    <= s1_e;
                 s2_r    <= s1_r;
                 s2_c    <= s1_c;
+                s2_k    <= s1_k + {1'b0, s1_vert ? rot_v : rot_h};
                 s2_out  <= {f_q2, f_q1, f_q0, f_p0, f_p1, f_p2};
             end
-            if (s2_v) begin
-                if (s2_vert) begin
-                    // Bytes 4e+1 .. 4e+6 of the row {Q, L}.
-                    xnew = {qn[128 * s2_r +: 128], ln[32 * s2_r +: 32]};
-                    for (j = 0; j < 6; j = j + 1)
-                        xnew[8 * (4 * s2_e + 1 + j) +: 8] = s2_out[8 * j +: 8];
-                    qn[128 * s2_r +: 128] = xnew[159:32];
-                    ln[32 * s2_r +: 32]   = xnew[31:0];
-                end else begin
-                    pn[128 + 8 * s2_c +: 8] = s2_out[7:0];
-                    pn[256 + 8 * s2_c +: 8] = s2_out[15:8];
-                    pn[384 + 8 * s2_c +: 8] = s2_out[23:16];
-                    qn[8 * s2_c +: 8]       = s2_out[31:24];
-                    qn[128 + 8 * s2_c +: 8] = s2_out[39:32];
-                    qn[256 + 8 * s2_c +: 8] = s2_out[47:40];
-                end
-            end
-
             case (ph)
                 PH_IDLE: if (go) begin
                     ph    <= PH_XFER;
@@ -475,19 +573,6 @@ module h264_deblock #(
                                                 bw_w(luma, tm1[3:0]));
                             cur_wd <= band_word(pb, bw_row(luma, tm1[3:0]), bw_w(luma, tm1[3:0]));
                         end
-                        if (band != 2'd0) begin
-                            pn[128 * bw_row(luma, tm1[3:0]) + 32 * bw_w(luma, tm1[3:0]) +: 32] =
-                                band_word(qb, bw_row(luma, tm1[3:0]), bw_w(luma, tm1[3:0]));
-                        end else if (has_top) begin
-                            if (luma)
-                                pn[32 * tm1[3:0] +: 32] = lb_q;
-                            else if (tm1 < 6'd4)
-                                // Above rows 6 and 7 are P's rows 2 and 3.
-                                pn[256 + 128 * tm1[1] + 32 * tm1[0] +: 32] = lb_q;
-                        end
-                        qn[128 * bw_row(luma, tm1[3:0]) + 32 * bw_w(luma, tm1[3:0]) +: 32] = cur_rd;
-                        if (tm1 < 6'd4)
-                            ln[32 * tm1[1:0] +: 32] = left_rd;
                     end
                     if (t == {1'b0, nwords}) begin
                         ph <= PH_V;
