@@ -49,14 +49,15 @@
 //   1280-wide picture is 320 entries of 38 bits. The above-left block of
 //   a macroblock is not read from the line buffer, because the previous
 //   macroblock's bottom row has already overwritten it there: it is the
-//   previous macroblock's above-right-most block of the row above,
-//   saved before that write.
+//   last of the previous macroblock's four blocks above, saved before
+//   that write.
 //
 // What it does not do (yet)
-//   List 1. `MVD` and `REF_IDX` tokens of list 1 are consumed and
-//   ignored and B macroblocks get no vectors; the token format, the
-//   `list` bit and the `kind` decode leave room for B_8x8, direct and
-//   the second line buffer that will need. MBAFF and field pictures are
+//   List 1. `MVD` tokens of list 1 are consumed and ignored (their
+//   `REF_IDX` passes, as every token but `MVD` does) and B macroblocks
+//   get no vectors; the token format, the `list` bit and the `kind`
+//   decode leave room for B_8x8, direct and the second line buffer that
+//   will need. MBAFF and field pictures are
 //   out (frame_mbs_only_flag = 1 is what the parser accepts).
 module h264_mvpred #(
     // The widest picture, in macroblocks: 80 is 1280 samples.

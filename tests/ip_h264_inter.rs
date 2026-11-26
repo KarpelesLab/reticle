@@ -1224,6 +1224,12 @@ fn inter_design() -> Design {
 #[test]
 fn inter_matches_the_model_on_random_vectors() {
     let d = inter_design();
+    // Which luma fractions and chroma eighths occurred, and whether some
+    // block read entirely outside the picture: a run that never did would
+    // pass without having tested them.
+    let mut luma_frac = [false; 16];
+    let mut chroma_frac = [false; 64];
+    let mut outside = 0;
     for seed in 1..=3u64 {
         let mut rng = Rng(0xC0FF_EE00 ^ seed);
         let (wm, hm) = (2 + rng.below(3) as usize, 2 + rng.below(2) as usize);
@@ -1239,7 +1245,11 @@ fn inter_matches_the_model_on_random_vectors() {
         let mut maps = Vec::new();
         let mut want = Vec::new();
         let mut fetch = FetchModel::new(true);
-        for pic in 0..2 {
+        // Two pictures of random vectors, then one of sixteen 4x4 blocks
+        // a macroblock sweeping every chroma eighth (and so every luma
+        // quarter) in turn.
+        let mut sweep = 0i64;
+        for pic in 0..3 {
             fetch.flush();
             // One slice per picture; the map is a permutation of the frames.
             let mut map: Vec<usize> = (0..nframes).collect();
@@ -1262,7 +1272,20 @@ fn inter_matches_the_model_on_random_vectors() {
                         tokens.push(tok::make(tok::MB_END, 0));
                         continue;
                     }
-                    let (refs, mvs) = random_mb_vectors(&mut rng, nframes as u32, seed == 3);
+                    let (refs, mvs) = if pic < 2 {
+                        random_mb_vectors(&mut rng, nframes as u32, seed == 3)
+                    } else {
+                        let refs: [u32; 16] =
+                            std::array::from_fn(|_| rng.below(nframes as u64) as u32);
+                        let mvs: [(i64, i64); 16] = std::array::from_fn(|_| {
+                            sweep += 1;
+                            (
+                                8 * rng.range(-3, 3) + sweep % 8,
+                                8 * rng.range(-3, 3) + (sweep / 8) % 8,
+                            )
+                        });
+                        (refs, mvs)
+                    };
                     mb_tokens(mbx, mby, &refs, &mvs, &mut tokens);
                     let mut v = [Vec3 {
                         frame: 0,
@@ -1278,6 +1301,15 @@ fn inter_matches_the_model_on_random_vectors() {
                     }
                     want.extend(predict_mb(&frames, mbx, mby, &v));
                     fetch.mb((wm, hm), mbx, mby, &v);
+                    for (i, b) in v.iter().enumerate() {
+                        luma_frac[((b.x & 3) * 4 + (b.y & 3)) as usize] = true;
+                        chroma_frac[((b.x & 7) * 8 + (b.y & 7)) as usize] = true;
+                        let x = (16 * mbx + 4 * (i % 4)) as i64 + (b.x >> 2);
+                        let y = (16 * mby + 4 * (i / 4)) as i64 + (b.y >> 2);
+                        if x + 4 < 0 || y + 4 < 0 || x >= 16 * wm as i64 || y >= 16 * hm as i64 {
+                            outside += 1;
+                        }
+                    }
                 }
             }
             tokens.push(tok::make(tok::SLICE_END, 0));
@@ -1306,6 +1338,15 @@ fn inter_matches_the_model_on_random_vectors() {
             "seed {seed}: the hardware's bursts and words against the fetch model's"
         );
     }
+    assert!(
+        luma_frac.iter().all(|&f| f),
+        "a luma position never occurred: {luma_frac:?}"
+    );
+    assert!(
+        chroma_frac.iter().all(|&f| f),
+        "a chroma position never occurred"
+    );
+    assert!(outside > 0, "no block read from wholly outside the picture");
 }
 
 // ---------------------------------------------------------------------------
@@ -1606,13 +1647,13 @@ fn merge_partitions(mv: &[Vec3; 16]) -> Vec<(usize, usize, usize, usize)> {
         return vec![(0, 0, 2, 4), (2, 0, 2, 4)];
     }
     let mut out = Vec::new();
-    for n in 0..4 {
+    for (n, &whole) in uni.iter().enumerate() {
         let (qx, qy) = (2 * (n % 2), 2 * (n / 2));
         let t = mv[q(qx, qy, 0, 0)] == mv[q(qx, qy, 1, 0)];
         let u = mv[q(qx, qy, 0, 1)] == mv[q(qx, qy, 1, 1)];
         let l = mv[q(qx, qy, 0, 0)] == mv[q(qx, qy, 0, 1)];
         let r = mv[q(qx, qy, 1, 0)] == mv[q(qx, qy, 1, 1)];
-        if uni[n] {
+        if whole {
             out.push((qx, qy, 2, 2));
         } else if t && u {
             out.extend([(qx, qy, 2, 1), (qx, qy + 1, 2, 1)]);
@@ -2035,5 +2076,97 @@ fn mvpred_matches_large_dumps() {
         };
         let n = check_mvpred_against_dump(&tokens, &inter, false);
         println!("{name}: {n} inter macroblocks, every vector as the dump has it");
+    }
+}
+
+/// The input ports `port` depends on combinationally, after synthesis: a
+/// walk back over the timing graph from the output port to the start
+/// points it reaches, as `tests/ip_library.rs` does for the library's
+/// other streams.
+#[cfg(all(feature = "synth", feature = "timing"))]
+fn combinational_inputs(
+    files: &[&str],
+    top: &str,
+    port: &str,
+) -> std::collections::BTreeSet<String> {
+    use reticle::ir::hier::FlattenOptions;
+    use reticle::synth::{SynthOptions, run as synth_run};
+    use reticle::timing::graph::{PinDirection, PointKind, TimingGraph, flatten_for_timing};
+
+    let mut d = design(files, top, &[]);
+    let id = d.top.expect("a top");
+    d.flatten(id, &FlattenOptions::default())
+        .unwrap_or_else(|_| panic!("{top} does not flatten"));
+    d.remove_unused_modules(id);
+    let id = d.top.expect("the top survives");
+    let mut diags = Diagnostics::new();
+    synth_run(&mut d, &SynthOptions::default(), &mut diags);
+    assert!(!diags.has_errors(), "{top} does not synthesise");
+    let module = flatten_for_timing(&d, id).expect("a flat module");
+    let graph = TimingGraph::build(&module);
+    let start = graph
+        .pins
+        .iter()
+        .find(|p| p.port == port && p.cell_type == "port" && p.direction == PinDirection::Input)
+        .unwrap_or_else(|| panic!("{top} has no output port `{port}`"))
+        .name
+        .clone();
+    let start = graph.pin_by_name(&start).expect("the pin names itself");
+    let mut seen = std::collections::BTreeSet::new();
+    let mut queue = vec![start];
+    let mut inputs = std::collections::BTreeSet::new();
+    while let Some(pin) = queue.pop() {
+        if !seen.insert(pin.raw()) {
+            continue;
+        }
+        if pin != start && graph.is_start(pin) {
+            let kind = graph
+                .start_points
+                .iter()
+                .find(|s| s.pin == pin)
+                .map(|s| s.kind);
+            if kind == Some(PointKind::Port) {
+                inputs.insert(graph.pin(pin).owner.clone());
+            }
+            continue;
+        }
+        for arc in graph.fanin(pin) {
+            queue.push(arc.from);
+        }
+    }
+    inputs
+}
+
+/// Every handshake output of both blocks is a function of registers.
+///
+/// `h264_mvpred` sits in the middle of a chain of streams, and a `ready`
+/// that went straight through it would join the timing of `h264_recon`'s
+/// input to `h264_parse`'s output; `h264_inter`'s `tok_ready` is half of
+/// the fork in front of `h264_recon`, the same way. What this would catch:
+/// `in_ready` written as `!out_valid || out_ready` (the first version of
+/// `h264_mvpred` did exactly that, and its output is a two-entry queue
+/// now because of it), or a `cmd_valid` that looks at `cmd_ready`. What it
+/// would not: a slow registered path, which is the routed timing's
+/// business.
+#[cfg(all(feature = "synth", feature = "timing"))]
+#[test]
+fn handshakes_are_functions_of_registers() {
+    for port in ["in_ready", "out_valid"] {
+        let inputs = combinational_inputs(&["h264_mvpred.v"], "h264_mvpred", port);
+        assert!(
+            inputs.is_empty(),
+            "h264_mvpred: `{port}` depends combinationally on {inputs:?}"
+        );
+    }
+    for port in ["tok_ready", "map_ready", "cmd_valid", "pred_valid"] {
+        let inputs = combinational_inputs(
+            &["h264_frame_addr_stub.v", "h264_inter.v"],
+            "h264_inter",
+            port,
+        );
+        assert!(
+            inputs.is_empty(),
+            "h264_inter: `{port}` depends combinationally on {inputs:?}"
+        );
     }
 }

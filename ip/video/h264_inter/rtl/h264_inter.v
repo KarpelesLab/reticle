@@ -41,8 +41,9 @@
 //   vector has a fraction (5 samples for luma, 1 for chroma), clamped.
 //
 //   Check: every 8-sample line of the window is looked up in the reference
-//   cache; a miss writes its tag and queues a four-word burst. Interpolate:
-//   once the task's fills are in, the window is streamed one 9-sample row
+//   cache, and the words it lacks are queued, the lacking words of
+//   consecutive lines of a row as one burst while they are contiguous and
+//   in one tile row. Interpolate: once the task's fills are in, the window is streamed one 9-sample row
 //   segment a cycle through the filters, a column of four outputs at a
 //   time, and the outputs land in a prediction buffer. The check of one
 //   task runs while the previous one interpolates; consecutive tasks are
@@ -53,15 +54,16 @@
 //   sent while the next is computed.
 //
 // The reference cache
-//   Direct mapped, lines of 8 samples (four SDRAM words, one burst), two
-//   banks of 64-bit words so that any 9-sample segment is one read of each.
-//   The index is frame[1:0], the row's low bits and the line's low bits:
-//   luma 32 rows x 16 lines (128 samples wide), each chroma plane 16 rows x
-//   8 lines, for four frames: 24 KB of data, a 13-bit tag a line. A line is
-//   always fetched whole. It is flushed at every picture: a frame index is
-//   reused for a new picture by the DPB, and a cache that outlived a
-//   picture could return a sample of the old one. `README.md` has what it
-//   saves on real streams, which is less than one might hope.
+//   Direct mapped, lines of 8 samples (four SDRAM words), two banks (even
+//   and odd lines) so that any 9-sample segment is one read of each, each
+//   bank four 16-bit lanes so that any SDRAM word is one write. The index
+//   is frame[1:0], the row's low bits and the line's low bits: luma 32 rows
+//   x 16 lines (128 samples wide), each chroma plane 16 rows x 8 lines, for
+//   four frames: 24 KB of data. A tag is 12 bits and a valid bit per word:
+//   a sector cache, because fetching whole lines costs more than it saves
+//   (`README.md` has the numbers). It is flushed at every picture: the DPB
+//   reuses a frame index for a new picture, and a cache that outlived a
+//   picture could return a sample of the old one.
 //
 // The reference map
 //   `map_frames` is sixteen 4-bit frame indices, refIdxL0 0 in bits 3:0.
@@ -364,20 +366,32 @@ module h264_inter #(
     wire signed [15:0] g_mvy = {{3{g_mv[28]}}, g_mv[28:16]};
     wire signed [15:0] g_mvx = g_mv[15:0];
 
+    // Stage G1 -> G2: the rectangle and its vector, registered, so that
+    // the vector RAM's read and the window's arithmetic are two cycles.
+    reg         u_valid;
+    reg  [1:0]  u_plane;
+    reg  [FB-1:0] u_frame;
+    reg  signed [15:0] u_mvx, u_mvy;
+    reg  [1:0]  u_bx, u_by;
+    reg  [2:0]  u_bw, u_bh;
+    reg  [6:0]  u_mbx, u_mby;
+    reg         u_pbank, u_last;
+    reg         t_valid;
+    wire        t_take;
+    wire        u_take = u_valid && (!t_valid || t_take);
+
     // The window of the task, before clamping, in samples of the plane.
-    wire        g_luma = (g_plane == 2'd0);
-    wire [2:0]  g_xf = g_luma ? {1'b0, g_mvx[1:0]} : g_mvx[2:0];
-    wire [2:0]  g_yf = g_luma ? {1'b0, g_mvy[1:0]} : g_mvy[2:0];
-    wire [6:0]  g_mbx = j_x[g_bank];
-    wire [6:0]  g_mby = j_y[g_bank];
+    wire        g_luma = (u_plane == 2'd0);
+    wire [2:0]  g_xf = g_luma ? {1'b0, u_mvx[1:0]} : u_mvx[2:0];
+    wire [2:0]  g_yf = g_luma ? {1'b0, u_mvy[1:0]} : u_mvy[2:0];
     wire signed [14:0] g_xi = g_luma
-        ? $signed({4'd0, g_mbx, p_bx, 2'b00}) + (g_mvx >>> 2)
-        : $signed({5'd0, g_mbx, p_bx, 1'b0}) + (g_mvx >>> 3);
+        ? $signed({4'd0, u_mbx, u_bx, 2'b00}) + (u_mvx >>> 2)
+        : $signed({5'd0, u_mbx, u_bx, 1'b0}) + (u_mvx >>> 3);
     wire signed [14:0] g_yi = g_luma
-        ? $signed({4'd0, g_mby, p_by, 2'b00}) + (g_mvy >>> 2)
-        : $signed({5'd0, g_mby, p_by, 1'b0}) + (g_mvy >>> 3);
-    wire [4:0]  g_pw = g_luma ? {p_bw, 2'b00} : {1'b0, p_bw, 1'b0};
-    wire [4:0]  g_ph = g_luma ? {p_bh, 2'b00} : {1'b0, p_bh, 1'b0};
+        ? $signed({4'd0, u_mby, u_by, 2'b00}) + (u_mvy >>> 2)
+        : $signed({5'd0, u_mby, u_by, 1'b0}) + (u_mvy >>> 3);
+    wire [4:0]  g_pw = g_luma ? {u_bw, 2'b00} : {1'b0, u_bw, 1'b0};
+    wire [4:0]  g_ph = g_luma ? {u_bh, 2'b00} : {1'b0, u_bh, 1'b0};
     wire        g_xfn = (g_xf != 3'd0);
     wire        g_yfn = (g_yf != 3'd0);
     // A segment starts two samples left of the integer column for luma,
@@ -409,7 +423,6 @@ module h264_inter #(
     wire [10:0] g_r1 = clampv(g_fr1, g_hmax);
 
     // The task register between the generator and the check.
-    reg         t_valid;
     reg  [1:0]  t_plane;
     reg  [FB-1:0] t_frame;
     reg         t_pbank;
@@ -421,15 +434,12 @@ module h264_inter #(
     reg  [4:0]  t_rows;
     reg  [10:0] t_c0, t_c1, t_r0, t_r1;
     reg  [10:0] t_wmax, t_hmax;
-    wire        t_take;
 
     wire        k_idle;
     wire        i_idle;
     wire        fills_done;
     wire        pb_done;            // the streamer finished a bank
     wire        pb_done_bank;
-    wire        pb_ready_set;       // the interpolator finished a bank
-    wire        pb_ready_bank;
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -445,9 +455,26 @@ module h264_inter #(
             t_sx0 <= 15'sd0; t_ry0 <= 15'sd0; t_rows <= 5'd0;
             t_c0 <= 11'd0; t_c1 <= 11'd0; t_r0 <= 11'd0; t_r1 <= 11'd0;
             t_wmax <= 11'd0; t_hmax <= 11'd0;
+            u_valid <= 1'b0; u_plane <= 2'd0; u_frame <= {FB{1'b0}};
+            u_mvx <= 16'sd0; u_mvy <= 16'sd0; u_bx <= 2'd0; u_by <= 2'd0;
+            u_bw <= 3'd0; u_bh <= 3'd0; u_mbx <= 7'd0; u_mby <= 7'd0;
+            u_pbank <= 1'b0; u_last <= 1'b0;
         end else begin
             g_release <= 1'b0;
             if (t_take) t_valid <= 1'b0;
+            if (u_take) begin
+                u_valid <= 1'b0;
+                t_valid <= 1'b1;
+                t_plane <= u_plane;
+                t_frame <= u_frame;
+                t_pbank <= u_pbank;
+                t_last  <= u_last;
+                t_bx <= u_bx; t_by <= u_by; t_bw <= u_bw; t_bh <= u_bh;
+                t_xf <= g_xf; t_yf <= g_yf;
+                t_sx0 <= g_sx0; t_ry0 <= g_ry0; t_rows <= g_rows;
+                t_c0 <= g_c0; t_c1 <= g_c1; t_r0 <= g_r0; t_r1 <= g_r1;
+                t_wmax <= g_wmax; t_hmax <= g_hmax;
+            end
             // A prediction-buffer bank is claimed when its macroblock
             // starts and freed when the streamer has sent it.
             if (pb_done) pb_full[pb_done_bank] <= 1'b0;
@@ -460,7 +487,7 @@ module h264_inter #(
             end else if (!g_run) begin
                 if (busy[g_bank] && !g_release && !pb_full[pb_wbank]) begin
                     if (j_flush[g_bank] && !g_flushed) begin
-                        if (!t_valid && k_idle && i_idle && fills_done) begin
+                        if (!u_valid && !t_valid && k_idle && i_idle && fills_done) begin
                             g_flushing <= 1'b1;
                             g_fl       <= 12'd0;
                         end
@@ -470,17 +497,17 @@ module h264_inter #(
                         g_q <= 2'd0; g_s <= 2'd0; g_plane <= 2'd0;
                     end
                 end
-            end else if (!t_valid || t_take) begin
-                t_valid <= 1'b1;
-                t_plane <= g_plane;
-                t_frame <= g_frame;
-                t_pbank <= pb_wbank;
-                t_last  <= p_last && (g_plane == 2'd2);
-                t_bx <= p_bx; t_by <= p_by; t_bw <= p_bw; t_bh <= p_bh;
-                t_xf <= g_xf; t_yf <= g_yf;
-                t_sx0 <= g_sx0; t_ry0 <= g_ry0; t_rows <= g_rows;
-                t_c0 <= g_c0; t_c1 <= g_c1; t_r0 <= g_r0; t_r1 <= g_r1;
-                t_wmax <= g_wmax; t_hmax <= g_hmax;
+            end else if (!u_valid || u_take) begin
+                u_valid <= 1'b1;
+                u_plane <= g_plane;
+                u_frame <= g_frame;
+                u_mvx   <= g_mvx;
+                u_mvy   <= g_mvy;
+                u_bx <= p_bx; u_by <= p_by; u_bw <= p_bw; u_bh <= p_bh;
+                u_mbx   <= j_x[g_bank];
+                u_mby   <= j_y[g_bank];
+                u_pbank <= pb_wbank;
+                u_last  <= p_last && (g_plane == 2'd2);
                 if (g_plane != 2'd2) begin
                     g_plane <= g_plane + 2'd1;
                 end else begin
@@ -1063,7 +1090,8 @@ module h264_inter #(
     // With yFrac 0 the current row is the newest; otherwise it is the
     // third of the six, and the window's first two rows were y-2, y-1.
     wire        c4_yfn = (c4[F_YF +: 3] != 3'd0);
-    wire [31:0] n_G, n_H, n_M, n_b, n_s, n_h, n_m, n_j;
+    wire [31:0] n_G, n_H, n_M, n_b, n_s, n_h, n_m;
+    wire [87:0] n_j1;               // j1 unrounded; j is clipped a stage later
     wire [39:0] hv;
     genvar gh, gq;
     generate
@@ -1079,8 +1107,8 @@ module h264_inter #(
             assign n_s[8*gq +: 8] = clip5(lb3[16*gq +: 16]);
             assign n_h[8*gq +: 8] = hv[8*gq +: 8];
             assign n_m[8*gq +: 8] = hv[8*gq+8 +: 8];
-            assign n_j[8*gq +: 8] = clip10(tap6w(lb0[16*gq +: 16], lb1[16*gq +: 16], lb2[16*gq +: 16],
-                                                 lb3[16*gq +: 16], lb4[16*gq +: 16], lb5[16*gq +: 16]));
+            assign n_j1[22*gq +: 22] = tap6w(lb0[16*gq +: 16], lb1[16*gq +: 16], lb2[16*gq +: 16],
+                                             lb3[16*gq +: 16], lb4[16*gq +: 16], lb5[16*gq +: 16]);
         end
     endgenerate
 
@@ -1100,7 +1128,8 @@ module h264_inter #(
         end
     endgenerate
 
-    reg  [31:0] q_G, q_H, q_M, q_b, q_s, q_h, q_m, q_j, q_c;
+    reg  [31:0] q_G, q_H, q_M, q_b, q_s, q_h, q_m, q_c;
+    reg  [87:0] q_j1;
     always @(posedge clk) begin
         if (!rst_n) begin
             c4 <= {CW{1'b0}}; c5 <= {CW{1'b0}}; c6 <= {CW{1'b0}};
@@ -1110,7 +1139,7 @@ module h264_inter #(
             c6 <= c5;
         end
         q_G <= n_G; q_H <= n_H; q_M <= n_M; q_b <= n_b; q_s <= n_s;
-        q_h <= n_h; q_m <= n_m; q_j <= n_j; q_c <= n_c;
+        q_h <= n_h; q_m <= n_m; q_j1 <= n_j1; q_c <= n_c;
     end
 
     // Stage 5: Table 8-12. Every position is (A + B + 1) >> 1 of two of
@@ -1123,7 +1152,7 @@ module h264_inter #(
         for (gt = 0; gt < 4; gt = gt + 1) begin : g_out
             wire [7:0] G = q_G[8*gt +: 8], H = q_H[8*gt +: 8], M = q_M[8*gt +: 8];
             wire [7:0] b = q_b[8*gt +: 8], s = q_s[8*gt +: 8], h = q_h[8*gt +: 8];
-            wire [7:0] m = q_m[8*gt +: 8], j = q_j[8*gt +: 8];
+            wire [7:0] m = q_m[8*gt +: 8], j = clip10(q_j1[22*gt +: 22]);
             reg  [7:0] pa, pb;
             always @* begin
                 case ({c5_xf, c5_yf})

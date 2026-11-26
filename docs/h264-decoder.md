@@ -285,3 +285,51 @@ carries one it never uses decodes cleanly.
   are spare.
 - Tags `0x50`–`0x7E` are spare for the parser; `0x80`–`0xFF` for later
   stages.
+
+## Inter prediction: `h264_mvpred` and `h264_inter`
+
+Both are in `ip/video/h264_inter`; its `README.md` has the design, what is
+checked against what, and the measured SDRAM traffic.
+
+### The `MV` token (`h264_mvpred`)
+
+`h264_mvpred` passes every token through unchanged and in order **except
+`MVD`, which it consumes**. Each P macroblock (kinds 4..9, P_Skip
+included) gets its final vectors instead: for each 4x4 block in
+luma4x4BlkIdx order, two `MV` tokens, horizontal then vertical, inserted
+**immediately before the macroblock's `MB_CBP`**. Intra macroblocks get
+none, and a B macroblock gets none until list 1 is written.
+
+| tag | name | data |
+|---|---|---|
+| `0x16` | `MV` horizontal | `[23]` list, `[22:19]` luma4x4BlkIdx, `[18]` 0, `[15:0]` mvLX[0] (signed, quarter samples) |
+| `0x16` | `MV` vertical | `[23]` list, `[22:19]` luma4x4BlkIdx, `[18]` 1, `[17:13]` refIdxLX, `[12:0]` mvLX[1] (signed) |
+
+The vertical component is 13 bits because Table A-1 bounds it to
+[-512, +511.75] samples at every level, which is 12; the horizontal one
+reaches [-2048, +2047.75] and needs 14 of its 16. A non-conforming
+vertical vector beyond 13 bits arrives truncated. `REF_IDX` and
+everything else still pass, so a consumer that wants the parser's view
+has it.
+
+### `h264_inter`'s ports
+
+- `tok`, `tok_valid`, `tok_ready`: the stream behind `h264_mvpred`, as a
+  tap. It takes every token and changes nothing, so the integration forks
+  `h264_mvpred`'s output to `h264_recon` and here, a token moving when both
+  are ready. `tok_ready` falls only at a `SLICE_HDR` (below) and when both of
+  its two vector banks are full, which is when the prediction for an
+  earlier macroblock is still waiting for `h264_recon` to take it.
+  The fork cannot deadlock as long as `h264_recon` takes a macroblock's
+  tokens up to its `MB_CBP` without waiting for that macroblock's
+  prediction: the vectors are in front of `MB_CBP`, and the prediction is
+  only needed to add the residual.
+- `map_frames[63:0]`, `map_valid`, `map_ready`: refIdxL0 0..15 to a 4-bit
+  frame index, refIdxL0 0 in bits 3:0. After taking each `SLICE_HDR`,
+  `h264_inter` raises `map_ready` and takes no token until `map_valid`; the
+  DPB logic puts that slice's table on the wires and raises `map_valid`.
+- `cmd_*`, `wr_*`, `rd_*`: one `sdram_burst` client port, reads only, bursts
+  of 1..16 words inside one 32x32 tile row of the contract's layout.
+- `pred_data`, `pred_valid`, `pred_ready`: per inter macroblock, luma 16 rows
+  of 4 words, Cb 8 rows of 2, Cr 8 rows of 2, four samples a word, the
+  leftmost in bits 7:0.
