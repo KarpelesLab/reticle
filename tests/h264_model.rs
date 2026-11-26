@@ -107,6 +107,7 @@ const DUMPS: &[(&str, u32)] = &[
     ("intra_32x32_qp26", 1),
     ("intra_48x32_qp12", 1),
     ("p_32x32_dump", 3),
+    ("craft_pcm", 4),
 ];
 
 #[test]

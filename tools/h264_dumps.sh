@@ -20,3 +20,4 @@ dump() {
 dump intra_32x32_qp26 1 "one IDR picture of 2x2 macroblocks, all Intra_4x4, QP 23"
 dump intra_48x32_qp12 1 "one IDR picture of 3x2 macroblocks, Intra_4x4 and Intra_16x16, QP 12"
 dump p_32x32_dump     3 "an IDR and two P pictures of 2x2 macroblocks, rotating: P_8x8 sub-partitions, two references"
+dump craft_pcm        4 "2x2 macroblocks: an all-I_PCM IDR, I_PCM beside Intra_4x4, I_PCM inside two P pictures"

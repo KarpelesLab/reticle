@@ -1,4 +1,4 @@
-# H.264 model dump: reconstruction per macroblock (h264-model-dump 1).
+# H.264 model dump: reconstruction per macroblock (h264-model-dump 2).
 # Stream p_32x32_dump: an IDR and two P pictures of 2x2 macroblocks, rotating: P_8x8 sub-partitions, two references
 # Made by tools/h264_model.py from testdata/ip/h264/p_32x32_dump.264; the format
 # is in docs/h264-decoder.md, section "Model dumps". Regenerate with

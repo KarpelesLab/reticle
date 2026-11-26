@@ -1,4 +1,4 @@
-# H.264 model dump: reconstruction per macroblock (h264-model-dump 1).
+# H.264 model dump: reconstruction per macroblock (h264-model-dump 2).
 # Stream intra_32x32_qp26: one IDR picture of 2x2 macroblocks, all Intra_4x4, QP 23
 # Made by tools/h264_model.py from testdata/ip/h264/intra_32x32_qp26.264; the format
 # is in docs/h264-decoder.md, section "Model dumps". Regenerate with

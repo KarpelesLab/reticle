@@ -17,25 +17,29 @@ The format is documented in docs/h264-decoder.md, section "Model dumps".
 import os
 import sys
 
-FORMAT = "h264-model-dump 1"
+FORMAT = "h264-model-dump 2"
 
-# Token tags (the contract's v0 set; see docs/h264-decoder.md).
+# Token tags: docs/h264-decoder.md section 1, the parse agent's layout.
 SPS_DIMS, SLICE_HDR, SLICE_QP, SLICE_DBLK, SLICE_REF, SLICE_FIRST = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
-MB_START, MB_TYPE, MB_QP, I4_MODE, MVD, MV = 0x10, 0x11, 0x12, 0x13, 0x14, 0x16
+SPS_INFO, SPS_POC, SPS_CROP, SLICE_POC, RPLM = 0x07, 0x08, 0x09, 0x0A, 0x0B
+PWT_DENOM, PWT, DRPM, MMCO = 0x0C, 0x0D, 0x0E, 0x0F
+MB_START, MB_TYPE, MB_QP, I4_MODE, MVD, SUB_MB_TYPE = 0x10, 0x11, 0x12, 0x13, 0x14, 0x15
+I8_MODE, REF_IDX, MB_CBP = 0x17, 0x18, 0x19
 COEF_BLK, COEF, PCM, MB_END, SLICE_END, PIC_END = 0x20, 0x21, 0x30, 0x3F, 0x40, 0x41
-I8_MODE = 0x15
 
+# MB_TYPE kind (section 1.4).
 KIND_CODE = {
-    "I_NxN": 0, "I8x8": 1, "I_16x16": 2, "I_PCM": 3,
+    "I_NxN": 0, "I_16x16": 1, "I_PCM": 2,
     "P_L0_16x16": 4, "P_L0_L0_16x8": 5, "P_L0_L0_8x16": 6, "P_8x8": 7,
-    "P_8x8ref0": 8, "P_Skip": 9, "B_Skip": 10, "B_Direct_16x16": 11,
-    "B_8x8": 12,
+    "P_8x8ref0": 8, "P_Skip": 9, "B_Direct_16x16": 10, "B_8x8": 14, "B_Skip": 15,
 }
+# COEF_BLK category (section 1.6). CAVLC's four 4x4 parts of an 8x8 block
+# are category 2, as the syntax codes them.
 COEF_CAT = {
-    "Luma4x4": 0, "Intra16x16DC": 1, "Intra16x16AC": 2, "ChromaDCB": 3,
-    "ChromaDCR": 4, "ChromaACB": 5, "ChromaACR": 6, "Luma8x8part": 7,
-    "Luma8x8": 8,
+    "Intra16x16DC": 0, "Intra16x16AC": 1, "Luma4x4": 2, "Luma8x8part": 2,
+    "ChromaDCB": 3, "ChromaDCR": 4, "ChromaACB": 5, "ChromaACR": 6, "Luma8x8": 7,
 }
+PRED_BITS = {"L0": 1, "L1": 2, "Bi": 3}
 
 
 def s_bits(v, n):
@@ -51,15 +55,20 @@ def hexrow(row):
 
 
 def kind_code(mb):
-    if mb.kind == "I8":
-        return KIND_CODE["I8x8"]
     if mb.name.startswith("I_16x16"):
         return KIND_CODE["I_16x16"]
     if mb.name in KIND_CODE:
         return KIND_CODE[mb.name]
     if mb.name.startswith("B_"):
-        return 16 + mb.mb_type  # B macroblock types by their mb_type value
+        return {16: 11, 8: 12}[mb.part_h] if mb.part_w == 16 else 13
     raise ValueError(mb.name)
+
+
+def sub_raw(mb):
+    import h264_model as M
+    table = M.B_SUB if mb.kind == "B" else M.P_SUB
+    names = [s[0] for s in table]
+    return [names.index(s[0]) for s in mb.sub]
 
 
 class Trace:
@@ -69,8 +78,6 @@ class Trace:
         self.recon = []
         self.inter = []
         self.pic_index = -1
-        self.nals = []
-        self.pending_slice_tokens = []
         self.active = True
 
     # -- hooks called by the decoder ---------------------------------------
@@ -87,48 +94,114 @@ class Trace:
         for out in (self.tokens, self.recon, self.inter):
             out.append("")
             out.append(line)
-        sps = h.sps
-        self.emit_tok(self.tokens, tok(SPS_DIMS, (sps.width_mbs << 12) | sps.height_mbs),
-                      "SPS_DIMS %dx%d MBs" % (sps.width_mbs, sps.height_mbs))
 
     def slice(self, dec, h):
         if not self.active:
             return
         pps = h.pps
+        sps = h.sps
         lines = self.tokens
-        lines.append("slice %d type %d qp %d dbk %d %d %d nref %d" % (
+        lines.append("slice %d type %d qp %d dbk %d %d %d nref %d %d" % (
             h.first_mb, h.slice_type, h.qp, h.disable_deblocking, h.alpha_off,
-            h.beta_off, h.num_ref_idx[0]))
-        self.emit_tok(lines, tok(SLICE_HDR, h.slice_type | (h.idr << 4) | (h.nal_ref_idc << 5)),
-                      "SLICE_HDR type %d idr %d nal_ref_idc %d" % (h.slice_type, h.idr, h.nal_ref_idc))
-        self.emit_tok(lines, tok(SLICE_QP, h.qp | (s_bits(pps.chroma_qp_index_offset, 5) << 8)
-                                 | (s_bits(pps.second_chroma_qp_index_offset, 5) << 16)),
-                      "SLICE_QP %d chroma offsets %d %d" % (
-                          h.qp, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset))
-        self.emit_tok(lines, tok(SLICE_DBLK, h.disable_deblocking | (s_bits(h.alpha_off, 5) << 8)
-                                 | (s_bits(h.beta_off, 5) << 16)),
-                      "SLICE_DBLK idc %d A %d B %d" % (h.disable_deblocking, h.alpha_off, h.beta_off))
-        nref = max(h.num_ref_idx[0], 1) - 1
-        self.emit_tok(lines, tok(SLICE_REF, nref | (h.frame_num << 8)),
-                      "SLICE_REF num_ref_idx_l0_active_minus1 %d frame_num %d" % (nref, h.frame_num))
-        self.emit_tok(lines, tok(SLICE_FIRST, h.first_mb), "SLICE_FIRST %d" % h.first_mb)
-        self.last_slice_h = h
+            h.beta_off, h.num_ref_idx[0], h.num_ref_idx[1]))
+        e = self.emit_tok
+        if h.first_mb == 0:
+            e(lines, tok(SPS_DIMS, (sps.width_mbs << 12) | sps.height_mbs),
+              "SPS_DIMS %dx%d MBs" % (sps.width_mbs, sps.height_mbs))
+            e(lines, tok(SPS_INFO, (sps.profile_idc << 16) | (sps.level_idc << 8)
+                         | (sps.max_num_ref_frames << 3) | (sps.frame_mbs_only << 2)
+                         | (sps.direct_8x8_inference << 1) | sps.gaps_allowed),
+              "SPS_INFO profile %d level %d refs %d" % (sps.profile_idc, sps.level_idc,
+                                                         sps.max_num_ref_frames))
+            lsb = sps.log2_max_poc_lsb if sps.poc_type == 0 else 0
+            always0 = getattr(sps, "delta_pic_order_always_zero", 0) if sps.poc_type == 1 else 0
+            e(lines, tok(SPS_POC, (sps.poc_type << 22) | (sps.log2_max_frame_num << 17)
+                         | (lsb << 12) | (sps.chroma_format_idc << 10)
+                         | ((sps.bit_depth_luma - 8) << 7) | ((sps.bit_depth_chroma - 8) << 4)
+                         | (always0 << 3)),
+              "SPS_POC type %d log2_max_frame_num %d log2_max_poc_lsb %d" % (
+                  sps.poc_type, sps.log2_max_frame_num, lsb))
+            cl, cr, ct, cb = sps.crop
+            e(lines, tok(SPS_CROP, (cl << 18) | (cr << 12) | (ct << 6) | cb),
+              "SPS_CROP %d %d %d %d" % sps.crop)
+        e(lines, tok(SLICE_HDR, (h.slice_type << 20) | (h.idr << 19) | (h.nal_ref_idc << 17)
+                     | (pps.entropy_coding_mode << 16) | (pps.constrained_intra_pred << 15)
+                     | (pps.transform_8x8_mode << 14) | (pps.weighted_pred << 13)
+                     | (pps.weighted_bipred_idc << 11) | (h.direct_spatial << 10)
+                     | (h.cabac_init_idc << 8) | pps.pps_id),
+          "SLICE_HDR type %d idr %d nal_ref_idc %d cabac %d" % (
+              h.slice_type, h.idr, h.nal_ref_idc, pps.entropy_coding_mode))
+        e(lines, tok(SLICE_FIRST, h.first_mb), "SLICE_FIRST %d" % h.first_mb)
+        if sps.poc_type == 0:
+            e(lines, tok(SLICE_POC, (0 << 22) | h.poc_lsb), "SLICE_POC lsb %d" % h.poc_lsb)
+            if pps.bottom_field_pic_order_in_frame_present:
+                e(lines, tok(SLICE_POC, (1 << 22) | s_bits(h.delta_poc_bottom, 22)),
+                  "SLICE_POC delta_bottom %d" % h.delta_poc_bottom)
+        if sps.poc_type == 1 and not sps.delta_pic_order_always_zero:
+            e(lines, tok(SLICE_POC, (2 << 22) | s_bits(h.delta_poc[0], 22)),
+              "SLICE_POC delta0 %d" % h.delta_poc[0])
+            if pps.bottom_field_pic_order_in_frame_present:
+                e(lines, tok(SLICE_POC, (3 << 22) | s_bits(h.delta_poc[1], 22)),
+                  "SLICE_POC delta1 %d" % h.delta_poc[1])
+        n0 = max(h.num_ref_idx[0], 1) - 1
+        n1 = max(h.num_ref_idx[1], 1) - 1
+        e(lines, tok(SLICE_REF, (n0 << 20) | (n1 << 16) | h.frame_num),
+          "SLICE_REF l0 %d l1 %d frame_num %d" % (n0, n1, h.frame_num))
+        for lx in (0, 1):
+            for idc, v in h.rplm[lx]:
+                e(lines, tok(RPLM, (lx << 23) | (idc << 21) | v), "RPLM L%d idc %d %d" % (lx, idc, v))
+        if h.wp is not None:
+            wp = h.wp
+            e(lines, tok(PWT_DENOM, (wp.chroma_log2 << 3) | wp.luma_log2),
+              "PWT_DENOM luma %d chroma %d" % (wp.luma_log2, wp.chroma_log2))
+            for lx in (0, 1):
+                for i, (lw, lo, cws, lf, cf) in enumerate(wp.w[lx]):
+                    ents = []
+                    if lf:
+                        ents.append((0, lw, lo))
+                    if cf:
+                        ents += [(1, cws[0][0], cws[0][1]), (2, cws[1][0], cws[1][1])]
+                    for comp, w, o in ents:
+                        e(lines, tok(PWT, (lx << 23) | (i << 18) | (comp << 16)
+                                     | (s_bits(w, 8) << 8) | s_bits(o, 8)),
+                          "PWT L%d ref %d comp %d w %d o %d" % (lx, i, comp, w, o))
+        if h.nal_ref_idc:
+            adaptive = 0 if h.idr else (1 if h.mmco is not None else 0)
+            e(lines, tok(DRPM, (h.no_output_of_prior_pics << 2) | (h.long_term_reference << 1)
+                         | adaptive), "DRPM adaptive %d" % adaptive)
+            for op, a, b in (h.mmco or []):
+                idx = b if op in (3, 6) else (a if op == 4 else 0)
+                num = a if op in (1, 2, 3) else 0
+                e(lines, tok(MMCO, (op << 21) | (idx << 16) | num),
+                  "MMCO %d %d %d" % (op, idx, num))
+        e(lines, tok(SLICE_QP, (s_bits(h.qp, 8) << 16) | (s_bits(pps.chroma_qp_index_offset, 8) << 8)
+                     | s_bits(pps.second_chroma_qp_index_offset, 8)),
+          "SLICE_QP %d chroma offsets %d %d" % (
+              h.qp, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset))
+        e(lines, tok(SLICE_DBLK, (h.disable_deblocking << 22) | (s_bits(h.alpha_off, 8) << 8)
+                     | s_bits(h.beta_off, 8)),
+          "SLICE_DBLK idc %d A %d B %d" % (h.disable_deblocking, h.alpha_off, h.beta_off))
 
     def mb_header(self, sd, mb):
-        """Called after mb_type/mb_pred/cbp/mb_qp_delta (and PCM samples)."""
+        """Called once mb_type, the prediction, coded_block_pattern and QPY
+        are known (and the I_PCM samples read): the tokens up to MB_QP."""
+        from h264_model import BLK_RASTER
         t = mb.tokens
         t.append((tok(MB_START, (mb.mbx << 12) | mb.mby), "MB_START %d %d" % (mb.mbx, mb.mby)))
         kc = kind_code(mb)
-        d = kc | (mb.i16_mode << 6) | (mb.chroma_mode << 8) | (mb.cbp << 10) | (mb.t8 << 16)
-        t.append((tok(MB_TYPE, d), "MB_TYPE %s cbp %d i16 %d chroma %d t8 %d" % (
-            mb.name, mb.cbp, mb.i16_mode, mb.chroma_mode, mb.t8)))
-        t.append((tok(MB_QP, mb.qp), "MB_QP %d" % mb.qp))
-        if mb.kind == "IPCM":
-            s = mb.pcm
-            for i in range(0, 384, 3):
-                t.append((tok(PCM, s[i] | (s[i + 1] << 8) | (s[i + 2] << 16)), "PCM"))
+        p0 = p1 = 0
+        if mb.kind in ("P", "B") and mb.num_parts in (1, 2):
+            p0 = PRED_BITS[mb.part_pred[0]]
+            if mb.num_parts == 2:
+                p1 = PRED_BITS[mb.part_pred[1]]
+        i16 = mb.i16_mode if mb.kind == "I16" else 0
+        t.append((tok(MB_TYPE, (kc << 19) | (p0 << 17) | (p1 << 15) | (i16 << 13)),
+                  "MB_TYPE %s" % mb.name))
+        if mb.kind in ("P", "B") and mb.num_parts == 4:
+            raw = sub_raw(mb)
+            t.append((tok(SUB_MB_TYPE, (raw[0] << 12) | (raw[1] << 8) | (raw[2] << 4) | raw[3]),
+                      "SUB_MB_TYPE %s" % " ".join(s[0] for s in mb.sub)))
         if mb.kind == "I4":
-            from h264_model import BLK_RASTER
             for blk in range(16):
                 m = mb.modes4[BLK_RASTER[blk]]
                 t.append((tok(I4_MODE, (blk << 4) | m), "I4_MODE blk %d mode %d" % (blk, m)))
@@ -137,42 +210,65 @@ class Trace:
                 m = mb.modes8[b8]
                 t.append((tok(I8_MODE, (b8 << 4) | m), "I8_MODE blk %d mode %d" % (b8, m)))
         if mb.kind in ("P", "B"):
-            self.mvd_tokens(mb)
+            self.inter_tokens(mb)
+        chroma = mb.chroma_mode if mb.is_intra and mb.kind != "IPCM" else 0
+        cbp = 0 if mb.kind == "IPCM" else mb.cbp
+        t.append((tok(MB_CBP, (mb.t8 << 8) | (chroma << 6) | cbp),
+                  "MB_CBP cbp %d chroma_pred %d t8 %d" % (cbp, chroma, mb.t8)))
+        t.append((tok(MB_QP, s_bits(mb.qp, 8)), "MB_QP %d" % mb.qp))
+        if mb.kind == "IPCM":
+            s = mb.pcm
+            for i in range(0, 384, 3):
+                t.append((tok(PCM, s[i] | (s[i + 1] << 8) | (s[i + 2] << 16)), "PCM"))
 
-    def mvd_tokens(self, mb):
+    def inter_tokens(self, mb):
         t = mb.tokens
 
-        def one(lx, part, sub, ref, d):
+        def ref(lx, part, v):
+            t.append((tok(REF_IDX, (lx << 23) | (part << 21) | v), "REF_IDX L%d part %d %d" % (lx, part, v)))
+
+        def mvd(lx, part, sub, d):
             for comp in (0, 1):
-                data = (part << 22) | (sub << 20) | (ref << 16) | (comp << 15) | s_bits(d[comp], 15)
-                t.append((tok(MVD, data), "MVD L%d part %d sub %d ref %d %s %d" % (
-                    lx, part, sub, ref, "xy"[comp], d[comp])))
+                data = (lx << 23) | (part << 21) | (sub << 19) | (comp << 18) | s_bits(d[comp], 16)
+                t.append((tok(MVD, data), "MVD L%d part %d sub %d %s %d" % (
+                    lx, part, sub, "xy"[comp], d[comp])))
         if mb.num_parts == 4:
+            for lx in (0, 1):
+                for i in range(4):
+                    if mb.sub[i][4] in ("L%d" % lx, "Bi"):
+                        ref(lx, i, mb.sub_ref[lx][i])
             for lx in (0, 1):
                 for i in range(4):
                     s = mb.sub[i]
                     if s[4] in ("L%d" % lx, "Bi"):
                         for j in range(s[1]):
-                            one(lx, i, j, mb.sub_ref[lx][i], mb.sub_mvd[lx][i][j])
+                            mvd(lx, i, j, mb.sub_mvd[lx][i][j])
         elif mb.num_parts:
             for lx in (0, 1):
                 for i in range(mb.num_parts):
                     if mb.part_pred[i] in ("L%d" % lx, "Bi"):
-                        one(lx, i, 0, mb.part_ref[lx][i], mb.part_mvd[lx][i])
+                        ref(lx, i, mb.part_ref[lx][i])
+            for lx in (0, 1):
+                for i in range(mb.num_parts):
+                    if mb.part_pred[i] in ("L%d" % lx, "Bi"):
+                        mvd(lx, i, 0, mb.part_mvd[lx][i])
 
     def coef(self, sd, mb, cat, idx, coeffs, n):
         t = mb.tokens
         c = COEF_CAT[cat]
-        t.append((tok(COEF_BLK, (c << 16) | (idx << 8) | n), "COEF_BLK %s %d total %d" % (cat, idx, n)))
-        for pos, v in enumerate(coeffs):
+        t.append((tok(COEF_BLK, (c << 20) | (idx << 16) | min(n, 31)),
+                  "COEF_BLK %s %d total %d" % (cat, idx, n)))
+        for pos in range(len(coeffs) - 1, -1, -1):
+            v = coeffs[pos]
             if v:
-                t.append((tok(COEF, (pos << 16) | s_bits(v, 16)), "COEF %d %d" % (pos, v)))
+                t.append((tok(COEF, (pos << 18) | s_bits(v, 16)), "COEF %d %d" % (pos, v)))
 
     def mb_done(self, sd, mb):
         if mb.skip:
             mb.tokens = [(tok(MB_START, (mb.mbx << 12) | mb.mby), "MB_START %d %d" % (mb.mbx, mb.mby)),
-                         (tok(MB_TYPE, kind_code(mb)), "MB_TYPE %s" % mb.name),
-                         (tok(MB_QP, mb.qp), "MB_QP %d" % mb.qp)]
+                         (tok(MB_TYPE, kind_code(mb) << 19), "MB_TYPE %s" % mb.name),
+                         (tok(MB_CBP, 0), "MB_CBP 0"),
+                         (tok(MB_QP, s_bits(mb.qp, 8)), "MB_QP %d" % mb.qp)]
         mb.tokens.append((tok(MB_END, 0), "MB_END"))
         if not self.active:
             return
@@ -185,6 +281,7 @@ class Trace:
                 lines.append("tok %08x" % word)
             else:
                 lines.append("tok %08x %s" % (word, text))
+
 
     def end_slice(self):
         if self.active:

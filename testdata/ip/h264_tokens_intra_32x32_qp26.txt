@@ -1,4 +1,4 @@
-# H.264 model dump: NAL units and the syntax token stream (h264-model-dump 1).
+# H.264 model dump: NAL units and the syntax token stream (h264-model-dump 2).
 # Stream intra_32x32_qp26: one IDR picture of 2x2 macroblocks, all Intra_4x4, QP 23
 # Made by tools/h264_model.py (clean-room, checked bit-exact against ffmpeg)
 # from testdata/ip/h264/intra_32x32_qp26.264; the format is in docs/h264-decoder.md,
@@ -12,17 +12,20 @@ nal 6742c00adc96c044000003000400000300f03c489e
 nal 68ce32c8
 
 pic 0 I poc 0 frame_num 0 ref 1 idr 1
+slice 0 type 2 qp 23 dbk 0 0 0 nref 0 0
 tok 01002002 SPS_DIMS 2x2 MBs
-slice 0 type 2 qp 23 dbk 0 0 0 nref 0
-tok 02000072 SLICE_HDR type 2 idr 1 nal_ref_idc 3
-tok 031e1e17 SLICE_QP 23 chroma offsets -2 -2
-tok 04000000 SLICE_DBLK idc 0 A 0 B 0
-tok 05000000 SLICE_REF num_ref_idx_l0_active_minus1 0 frame_num 0
+tok 07420a06 SPS_INFO profile 66 level 10 refs 0
+tok 08880400 SPS_POC type 2 log2_max_frame_num 4 log2_max_poc_lsb 0
+tok 09000000 SPS_CROP 0 0 0 0
+tok 022e0000 SLICE_HDR type 2 idr 1 nal_ref_idc 3 cabac 0
 tok 06000000 SLICE_FIRST 0
+tok 05000000 SLICE_REF l0 0 l1 0 frame_num 0
+tok 0e000000 DRPM adaptive 0
+tok 0317fefe SLICE_QP 23 chroma offsets -2 -2
+tok 04000000 SLICE_DBLK idc 0 A 0 B 0
 mb 0 0 0 I_NxN
 tok 10000000 MB_START 0 0
-tok 1100bc00 MB_TYPE I_NxN cbp 47 i16 0 chroma 0 t8 0
-tok 12000017 MB_QP 23
+tok 11000000 MB_TYPE I_NxN
 tok 13000002 I4_MODE blk 0 mode 2
 tok 13000011 I4_MODE blk 1 mode 1
 tok 13000020 I4_MODE blk 2 mode 0
@@ -39,284 +42,285 @@ tok 130000c2 I4_MODE blk 12 mode 2
 tok 130000d2 I4_MODE blk 13 mode 2
 tok 130000e2 I4_MODE blk 14 mode 2
 tok 130000f2 I4_MODE blk 15 mode 2
-tok 20000008 COEF_BLK Luma4x4 0 total 8
-tok 2100ffe3
-tok 21010005
-tok 21020005
-tok 2104fffc
-tok 2106ffff
-tok 2109ffff
-tok 210a0001
-tok 210c0001
-tok 20000101 COEF_BLK Luma4x4 1 total 1
-tok 21000001
-tok 20000202 COEF_BLK Luma4x4 2 total 2
-tok 21000001
-tok 2106ffff
-tok 2000030f COEF_BLK Luma4x4 3 total 15
-tok 2100000e
-tok 2101fffa
-tok 2102fff4
-tok 21040004
-tok 2105fffa
-tok 21060002
-tok 21070008
-tok 21080006
-tok 21090004
-tok 210afff8
-tok 210bfffa
-tok 210cffff
-tok 210dfffe
-tok 210e0004
-tok 210f0003
-tok 20000403 COEF_BLK Luma4x4 4 total 3
-tok 21000014
-tok 2102000b
-tok 2109fffc
-tok 20000503 COEF_BLK Luma4x4 5 total 3
-tok 21000012
-tok 2102000a
-tok 2109fffc
-tok 20000610 COEF_BLK Luma4x4 6 total 16
-tok 21000009
-tok 21010002
-tok 2102fffd
-tok 2103fffc
-tok 21040001
-tok 2105fffa
-tok 2106fffe
-tok 21070006
-tok 2108fffd
-tok 21090003
-tok 210a0004
-tok 210bfffc
-tok 210c0002
-tok 210d0001
-tok 210e0002
-tok 210ffffe
-tok 2000070f COEF_BLK Luma4x4 7 total 15
-tok 21000009
-tok 2101fffc
-tok 2102fff7
-tok 21040003
-tok 2105fffb
-tok 21060001
-tok 21070006
-tok 21080004
-tok 21090003
-tok 210afffb
-tok 210bfffb
-tok 210cffff
-tok 210dffff
-tok 210e0003
-tok 210f0002
-tok 20000802 COEF_BLK Luma4x4 8 total 2
-tok 21000002
-tok 21010001
-tok 2000090e COEF_BLK Luma4x4 9 total 14
-tok 21000008
-tok 21010006
-tok 2102fffb
-tok 21040003
-tok 21050002
-tok 2106fff9
-tok 21070004
-tok 21080003
-tok 21090002
-tok 210afffc
-tok 210b0003
-tok 210c0005
-tok 210dffff
-tok 210e0001
-tok 20000a00 COEF_BLK Luma4x4 10 total 0
-tok 20000b0e COEF_BLK Luma4x4 11 total 14
-tok 2100ffff
-tok 2101000c
-tok 2102fffd
-tok 2104000a
-tok 21050002
-tok 2106ffff
-tok 21070004
-tok 2108fffa
-tok 210affff
-tok 210b0003
-tok 210cfffe
-tok 210d0004
-tok 210efffa
-tok 210fffff
-tok 20000c0c COEF_BLK Luma4x4 12 total 12
-tok 21000005
-tok 2101fff2
-tok 2102fffb
-tok 2104fffa
-tok 21050005
-tok 2106000a
-tok 2107fffb
-tok 21090002
-tok 210a0002
-tok 210cfffd
-tok 210e0002
-tok 210f0001
-tok 20000d0c COEF_BLK Luma4x4 13 total 12
-tok 2100fffb
-tok 2101000b
-tok 2102fffc
-tok 21040005
-tok 21050005
-tok 2106fff7
-tok 2107fffc
-tok 21090001
-tok 210afffe
-tok 210c0003
-tok 210e0001
-tok 210fffff
-tok 20000e0a COEF_BLK Luma4x4 14 total 10
-tok 2101fffb
-tok 2104fff0
-tok 2105fffb
-tok 21060002
-tok 21070003
+tok 1900002f MB_CBP cbp 47 chroma_pred 0 t8 0
+tok 12000017 MB_QP 23
+tok 20200008 COEF_BLK Luma4x4 0 total 8
+tok 21300001
+tok 21280001
+tok 2124ffff
+tok 2118ffff
+tok 2110fffc
 tok 21080005
-tok 210b0005
-tok 210c0005
-tok 210dfffe
-tok 210efff9
-tok 20000f0b COEF_BLK Luma4x4 15 total 11
-tok 2100fffd
-tok 21010004
-tok 2104000e
-tok 2105fffb
-tok 2106ffff
-tok 21070003
-tok 2108fffc
-tok 210b0005
+tok 21040005
+tok 2100ffe3
+tok 20210001 COEF_BLK Luma4x4 1 total 1
+tok 21000001
+tok 20220002 COEF_BLK Luma4x4 2 total 2
+tok 2118ffff
+tok 21000001
+tok 2023000f COEF_BLK Luma4x4 3 total 15
+tok 213c0003
+tok 21380004
+tok 2134fffe
+tok 2130ffff
+tok 212cfffa
+tok 2128fff8
+tok 21240004
+tok 21200006
+tok 211c0008
+tok 21180002
+tok 2114fffa
+tok 21100004
+tok 2108fff4
+tok 2104fffa
+tok 2100000e
+tok 20240003 COEF_BLK Luma4x4 4 total 3
+tok 2124fffc
+tok 2108000b
+tok 21000014
+tok 20250003 COEF_BLK Luma4x4 5 total 3
+tok 2124fffc
+tok 2108000a
+tok 21000012
+tok 20260010 COEF_BLK Luma4x4 6 total 16
+tok 213cfffe
+tok 21380002
+tok 21340001
+tok 21300002
+tok 212cfffc
+tok 21280004
+tok 21240003
+tok 2120fffd
+tok 211c0006
+tok 2118fffe
+tok 2114fffa
+tok 21100001
 tok 210cfffc
-tok 210d0001
-tok 210efffa
-tok 20030004 COEF_BLK ChromaDCB 0 total 4
-tok 2100ffe7
-tok 21010020
-tok 21020019
-tok 21030016
-tok 20040004 COEF_BLK ChromaDCR 0 total 4
-tok 2100001d
-tok 2101000e
-tok 2102ffed
-tok 21030004
-tok 2005000e COEF_BLK ChromaACB 0 total 14
-tok 2101000d
-tok 2102000e
-tok 21030004
-tok 2104fff7
-tok 21050006
-tok 21060005
-tok 2107ffff
-tok 21080001
-tok 21090007
-tok 210afffc
-tok 210bfffc
-tok 210cfffd
-tok 210dffff
-tok 210fffff
-tok 2005010e COEF_BLK ChromaACB 1 total 14
-tok 21010004
-tok 2102fff8
-tok 2103fff2
-tok 21040003
-tok 2105fffe
-tok 2106fffe
-tok 21070002
-tok 21080001
-tok 2109fffc
-tok 210a0001
-tok 210bfffe
-tok 210cffff
-tok 210dffff
-tok 210e0001
-tok 2005020c COEF_BLK ChromaACB 2 total 12
-tok 21010004
-tok 2102ffff
-tok 21030001
-tok 2106fff6
-tok 21070003
-tok 21090001
-tok 210afffe
-tok 210bfffe
-tok 210cfffc
-tok 210d0002
-tok 210e0003
-tok 210ffffd
-tok 20050308 COEF_BLK ChromaACB 3 total 8
-tok 21010001
-tok 2102ffff
-tok 21030002
-tok 21050007
-tok 21070006
-tok 21090002
-tok 210bfffc
-tok 210e0006
-tok 2006000c COEF_BLK ChromaACR 0 total 12
-tok 21010002
-tok 21020001
-tok 21030005
-tok 21040001
-tok 21050004
-tok 21060002
-tok 2107fffe
 tok 2108fffd
-tok 21090001
-tok 210a0001
-tok 210dffff
-tok 210effff
-tok 2006010f COEF_BLK ChromaACR 1 total 15
-tok 2101fff4
-tok 2102fff4
-tok 21030001
-tok 2104fff8
-tok 21050003
-tok 21060004
-tok 2107fffd
-tok 2108fffb
-tok 2109fffa
-tok 210afffc
-tok 210b0003
-tok 210c0002
-tok 210d0002
-tok 210efffe
-tok 210f0001
-tok 2006020d COEF_BLK ChromaACR 2 total 13
-tok 21010010
-tok 2102ffff
 tok 21040002
-tok 21050004
-tok 2106000f
-tok 2107fffd
-tok 2109fffd
-tok 210a0004
-tok 210b0002
-tok 210c0003
-tok 210dfffe
-tok 210efffc
-tok 210f0003
-tok 2006030d COEF_BLK ChromaACR 3 total 13
-tok 2101fffc
-tok 21020002
-tok 2103fffd
-tok 2105fff5
-tok 2106ffff
-tok 2107fff8
-tok 2109fffd
-tok 210affff
-tok 210b0005
-tok 210cffff
-tok 210d0001
-tok 210efff8
-tok 210fffff
+tok 21000009
+tok 2027000f COEF_BLK Luma4x4 7 total 15
+tok 213c0002
+tok 21380003
+tok 2134ffff
+tok 2130ffff
+tok 212cfffb
+tok 2128fffb
+tok 21240003
+tok 21200004
+tok 211c0006
+tok 21180001
+tok 2114fffb
+tok 21100003
+tok 2108fff7
+tok 2104fffc
+tok 21000009
+tok 20280002 COEF_BLK Luma4x4 8 total 2
+tok 21040001
+tok 21000002
+tok 2029000e COEF_BLK Luma4x4 9 total 14
+tok 21380001
+tok 2134ffff
+tok 21300005
+tok 212c0003
+tok 2128fffc
+tok 21240002
+tok 21200003
+tok 211c0004
+tok 2118fff9
+tok 21140002
+tok 21100003
+tok 2108fffb
+tok 21040006
+tok 21000008
+tok 202a0000 COEF_BLK Luma4x4 10 total 0
+tok 202b000e COEF_BLK Luma4x4 11 total 14
+tok 213cffff
+tok 2138fffa
+tok 21340004
+tok 2130fffe
+tok 212c0003
+tok 2128ffff
+tok 2120fffa
+tok 211c0004
+tok 2118ffff
+tok 21140002
+tok 2110000a
+tok 2108fffd
+tok 2104000c
+tok 2100ffff
+tok 202c000c COEF_BLK Luma4x4 12 total 12
+tok 213c0001
+tok 21380002
+tok 2130fffd
+tok 21280002
+tok 21240002
+tok 211cfffb
+tok 2118000a
+tok 21140005
+tok 2110fffa
+tok 2108fffb
+tok 2104fff2
+tok 21000005
+tok 202d000c COEF_BLK Luma4x4 13 total 12
+tok 213cffff
+tok 21380001
+tok 21300003
+tok 2128fffe
+tok 21240001
+tok 211cfffc
+tok 2118fff7
+tok 21140005
+tok 21100005
+tok 2108fffc
+tok 2104000b
+tok 2100fffb
+tok 202e000a COEF_BLK Luma4x4 14 total 10
+tok 2138fff9
+tok 2134fffe
+tok 21300005
+tok 212c0005
+tok 21200005
+tok 211c0003
+tok 21180002
+tok 2114fffb
+tok 2110fff0
+tok 2104fffb
+tok 202f000b COEF_BLK Luma4x4 15 total 11
+tok 2138fffa
+tok 21340001
+tok 2130fffc
+tok 212c0005
+tok 2120fffc
+tok 211c0003
+tok 2118ffff
+tok 2114fffb
+tok 2110000e
+tok 21040004
+tok 2100fffd
+tok 20300004 COEF_BLK ChromaDCB 0 total 4
+tok 210c0016
+tok 21080019
+tok 21040020
+tok 2100ffe7
+tok 20400004 COEF_BLK ChromaDCR 0 total 4
+tok 210c0004
+tok 2108ffed
+tok 2104000e
+tok 2100001d
+tok 2050000e COEF_BLK ChromaACB 0 total 14
+tok 213cffff
+tok 2134ffff
+tok 2130fffd
+tok 212cfffc
+tok 2128fffc
+tok 21240007
+tok 21200001
+tok 211cffff
+tok 21180005
+tok 21140006
+tok 2110fff7
+tok 210c0004
+tok 2108000e
+tok 2104000d
+tok 2051000e COEF_BLK ChromaACB 1 total 14
+tok 21380001
+tok 2134ffff
+tok 2130ffff
+tok 212cfffe
+tok 21280001
+tok 2124fffc
+tok 21200001
+tok 211c0002
+tok 2118fffe
+tok 2114fffe
+tok 21100003
+tok 210cfff2
+tok 2108fff8
+tok 21040004
+tok 2052000c COEF_BLK ChromaACB 2 total 12
+tok 213cfffd
+tok 21380003
+tok 21340002
+tok 2130fffc
+tok 212cfffe
+tok 2128fffe
+tok 21240001
+tok 211c0003
+tok 2118fff6
+tok 210c0001
+tok 2108ffff
+tok 21040004
+tok 20530008 COEF_BLK ChromaACB 3 total 8
+tok 21380006
+tok 212cfffc
+tok 21240002
+tok 211c0006
+tok 21140007
+tok 210c0002
+tok 2108ffff
+tok 21040001
+tok 2060000c COEF_BLK ChromaACR 0 total 12
+tok 2138ffff
+tok 2134ffff
+tok 21280001
+tok 21240001
+tok 2120fffd
+tok 211cfffe
+tok 21180002
+tok 21140004
+tok 21100001
+tok 210c0005
+tok 21080001
+tok 21040002
+tok 2061000f COEF_BLK ChromaACR 1 total 15
+tok 213c0001
+tok 2138fffe
+tok 21340002
+tok 21300002
+tok 212c0003
+tok 2128fffc
+tok 2124fffa
+tok 2120fffb
+tok 211cfffd
+tok 21180004
+tok 21140003
+tok 2110fff8
+tok 210c0001
+tok 2108fff4
+tok 2104fff4
+tok 2062000d COEF_BLK ChromaACR 2 total 13
+tok 213c0003
+tok 2138fffc
+tok 2134fffe
+tok 21300003
+tok 212c0002
+tok 21280004
+tok 2124fffd
+tok 211cfffd
+tok 2118000f
+tok 21140004
+tok 21100002
+tok 2108ffff
+tok 21040010
+tok 2063000d COEF_BLK ChromaACR 3 total 13
+tok 213cffff
+tok 2138fff8
+tok 21340001
+tok 2130ffff
+tok 212c0005
+tok 2128ffff
+tok 2124fffd
+tok 211cfff8
+tok 2118ffff
+tok 2114fff5
+tok 210cfffd
+tok 21080002
+tok 2104fffc
 tok 3f000000 MB_END
 mb 1 1 0 I_NxN
 tok 10001000 MB_START 1 0
-tok 1100bc00 MB_TYPE I_NxN cbp 47 i16 0 chroma 0 t8 0
-tok 12000017 MB_QP 23
+tok 11000000 MB_TYPE I_NxN
 tok 13000002 I4_MODE blk 0 mode 2
 tok 13000011 I4_MODE blk 1 mode 1
 tok 13000024 I4_MODE blk 2 mode 4
@@ -333,294 +337,295 @@ tok 130000c8 I4_MODE blk 12 mode 8
 tok 130000d7 I4_MODE blk 13 mode 7
 tok 130000e2 I4_MODE blk 14 mode 2
 tok 130000f5 I4_MODE blk 15 mode 5
-tok 20000003 COEF_BLK Luma4x4 0 total 3
+tok 1900002f MB_CBP cbp 47 chroma_pred 0 t8 0
+tok 12000017 MB_QP 23
+tok 20200003 COEF_BLK Luma4x4 0 total 3
+tok 2124ffff
+tok 21080004
 tok 2100ffd1
-tok 21020004
-tok 2109ffff
-tok 20000108 COEF_BLK Luma4x4 1 total 8
+tok 20210008 COEF_BLK Luma4x4 1 total 8
+tok 21300002
+tok 21280002
+tok 2124fffe
+tok 21180003
+tok 2110fffb
+tok 21080005
+tok 2104fff8
 tok 21000009
-tok 2101fff8
-tok 21020005
-tok 2104fffb
-tok 21060003
-tok 2109fffe
-tok 210a0002
-tok 210c0002
-tok 2000020f COEF_BLK Luma4x4 2 total 15
-tok 2101ffff
-tok 2102fffa
-tok 2103ffff
-tok 2104fffd
-tok 2105fff8
-tok 2106fffd
-tok 21070008
+tok 2022000f COEF_BLK Luma4x4 2 total 15
+tok 213cfffd
+tok 21380004
+tok 21340002
+tok 21300002
+tok 212cfff8
+tok 21280009
+tok 21240005
+tok 2120fffa
+tok 211c0008
+tok 2118fffd
+tok 2114fff8
+tok 2110fffd
+tok 210cffff
 tok 2108fffa
-tok 21090005
-tok 210a0009
-tok 210bfff8
-tok 210c0002
-tok 210d0002
-tok 210e0004
-tok 210ffffd
-tok 20000300 COEF_BLK Luma4x4 3 total 0
-tok 20000400 COEF_BLK Luma4x4 4 total 0
-tok 20000503 COEF_BLK Luma4x4 5 total 3
+tok 2104ffff
+tok 20230000 COEF_BLK Luma4x4 3 total 0
+tok 20240000 COEF_BLK Luma4x4 4 total 0
+tok 20250003 COEF_BLK Luma4x4 5 total 3
+tok 2124fffd
+tok 2108000a
 tok 21000012
-tok 2102000a
-tok 2109fffd
-tok 20000600 COEF_BLK Luma4x4 6 total 0
-tok 2000070f COEF_BLK Luma4x4 7 total 15
+tok 20260000 COEF_BLK Luma4x4 6 total 0
+tok 2027000f COEF_BLK Luma4x4 7 total 15
+tok 213c0002
+tok 21380003
+tok 2134fffe
+tok 2130ffff
+tok 212cfffb
+tok 2128fffa
+tok 21240003
+tok 21200005
+tok 211c0006
+tok 21180002
+tok 2114fffb
+tok 21100003
+tok 2108fff6
+tok 2104fffb
 tok 2100000a
-tok 2101fffb
-tok 2102fff6
-tok 21040003
-tok 2105fffb
-tok 21060002
-tok 21070006
-tok 21080005
-tok 21090003
-tok 210afffa
-tok 210bfffb
-tok 210cffff
-tok 210dfffe
-tok 210e0003
-tok 210f0002
-tok 2000080c COEF_BLK Luma4x4 8 total 12
-tok 21000002
-tok 2101ffef
-tok 2102fffa
-tok 2104fff8
-tok 21050007
-tok 2106000d
-tok 2107fffa
-tok 21090002
-tok 210a0003
-tok 210cfffc
-tok 210e0002
-tok 210f0001
-tok 2000090c COEF_BLK Luma4x4 9 total 12
-tok 21000006
-tok 2101fff8
-tok 21020006
-tok 2104fff9
-tok 21050006
-tok 2106fffd
-tok 21070006
-tok 2109fffe
-tok 210a0002
-tok 210cfffc
-tok 210efffe
-tok 210f0001
-tok 20000a0c COEF_BLK Luma4x4 10 total 12
-tok 2100fffe
-tok 2101fff2
-tok 2102fffc
-tok 2104fff4
-tok 21050002
-tok 21060001
-tok 21070005
-tok 21080008
-tok 210b0003
-tok 210c0002
-tok 210dfffc
-tok 210efff9
-tok 20000b08 COEF_BLK Luma4x4 11 total 8
-tok 21000006
-tok 2101fff9
-tok 2103fffa
-tok 21050006
-tok 2106fffb
-tok 21080008
-tok 210bfffa
-tok 210d0004
-tok 20000c0f COEF_BLK Luma4x4 12 total 15
-tok 2100fffc
-tok 21010002
-tok 2102fffa
-tok 2103fffb
-tok 21040001
-tok 21050005
-tok 21060003
-tok 21070005
-tok 2108ffff
-tok 2109fffc
-tok 210afffe
-tok 210b0001
-tok 210c0003
-tok 210effff
-tok 210fffff
-tok 20000d0f COEF_BLK Luma4x4 13 total 15
-tok 21000008
-tok 21010001
-tok 2102fff8
-tok 21030001
-tok 21040007
-tok 21050006
-tok 2106fff7
-tok 21070001
-tok 21080002
-tok 21090001
-tok 210afffd
-tok 210b0002
-tok 210c0005
-tok 210e0002
-tok 210fffff
-tok 20000e08 COEF_BLK Luma4x4 14 total 8
-tok 2100fffa
-tok 21010008
-tok 2103fffa
-tok 21050006
-tok 21060004
-tok 2108fff8
-tok 210bfffa
-tok 210dfffc
-tok 20000f0b COEF_BLK Luma4x4 15 total 11
-tok 21000001
-tok 2101000c
-tok 2102fffc
-tok 21040008
-tok 21050002
-tok 21070004
+tok 2028000c COEF_BLK Luma4x4 8 total 12
+tok 213c0001
+tok 21380002
+tok 2130fffc
+tok 21280003
+tok 21240002
+tok 211cfffa
+tok 2118000d
+tok 21140007
+tok 2110fff8
 tok 2108fffa
-tok 210b0002
-tok 210cfffe
-tok 210d0003
-tok 210efffb
-tok 20030004 COEF_BLK ChromaDCB 0 total 4
-tok 21000042
-tok 21010007
-tok 21020020
-tok 21030004
-tok 20040004 COEF_BLK ChromaDCR 0 total 4
-tok 2100fff8
-tok 21010002
-tok 2102fff6
-tok 21030002
-tok 2005000d COEF_BLK ChromaACB 0 total 13
-tok 2101ffff
-tok 21020012
-tok 21030007
-tok 21040007
-tok 2105fffc
-tok 21060001
-tok 21070001
-tok 2108fffd
-tok 21090009
-tok 210a0003
-tok 210bfffd
-tok 210c0001
-tok 210f0001
-tok 2005010e COEF_BLK ChromaACB 1 total 14
-tok 21010007
-tok 2102000b
-tok 21030003
-tok 2104fffe
-tok 2105ffff
-tok 2106ffff
-tok 21070002
-tok 21080005
-tok 21090006
-tok 210affff
-tok 210bffff
-tok 210cffff
-tok 210e0001
-tok 210fffff
-tok 2005020e COEF_BLK ChromaACB 2 total 14
-tok 2101fff9
-tok 2102fffe
-tok 21040001
-tok 21050003
-tok 2106000f
-tok 21070005
-tok 21080003
-tok 21090001
-tok 210a0006
-tok 210bfffb
-tok 210c0006
-tok 210dfffd
-tok 210e0004
-tok 210f0006
-tok 2005030d COEF_BLK ChromaACB 3 total 13
-tok 21010009
-tok 2102ffff
-tok 2104ffff
-tok 21050003
-tok 2106fff3
-tok 21070004
-tok 2108fffe
-tok 210afffb
-tok 210bfffb
-tok 210cfffb
-tok 210d0002
-tok 210e0003
-tok 210ffffb
-tok 2006000f COEF_BLK ChromaACR 0 total 15
-tok 2101fffa
-tok 2102fffe
-tok 21030003
+tok 2104ffef
+tok 21000002
+tok 2029000c COEF_BLK Luma4x4 9 total 12
+tok 213c0001
+tok 2138fffe
+tok 2130fffc
+tok 21280002
+tok 2124fffe
+tok 211c0006
+tok 2118fffd
+tok 21140006
+tok 2110fff9
+tok 21080006
 tok 2104fff8
-tok 21050008
-tok 2106fffc
-tok 21070002
-tok 2108ffff
-tok 2109ffff
-tok 210afffc
-tok 210b0004
-tok 210cfffd
-tok 210dffff
-tok 210e0001
-tok 210fffff
-tok 2006010f COEF_BLK ChromaACR 1 total 15
-tok 21010014
-tok 2102fffb
-tok 21030002
-tok 21040011
-tok 21050002
-tok 2106fff8
-tok 2107fffe
-tok 21080007
-tok 2109fffd
-tok 210a0009
-tok 210b0002
-tok 210cfffc
-tok 210dfffc
-tok 210effff
-tok 210ffffe
-tok 2006020d COEF_BLK ChromaACR 2 total 13
-tok 21010002
-tok 21020001
-tok 2104ffff
-tok 2106fff5
-tok 2107fffc
-tok 2108ffff
-tok 2109ffff
-tok 210afffd
-tok 210b0003
-tok 210cfffc
-tok 210d0002
-tok 210efffd
-tok 210ffffc
-tok 2006030f COEF_BLK ChromaACR 3 total 15
-tok 21010004
-tok 21020001
-tok 2103ffff
+tok 21000006
+tok 202a000c COEF_BLK Luma4x4 10 total 12
+tok 2138fff9
+tok 2134fffc
+tok 21300002
+tok 212c0003
+tok 21200008
+tok 211c0005
+tok 21180001
+tok 21140002
+tok 2110fff4
+tok 2108fffc
+tok 2104fff2
+tok 2100fffe
+tok 202b0008 COEF_BLK Luma4x4 11 total 8
+tok 21340004
+tok 212cfffa
+tok 21200008
+tok 2118fffb
+tok 21140006
+tok 210cfffa
+tok 2104fff9
+tok 21000006
+tok 202c000f COEF_BLK Luma4x4 12 total 15
+tok 213cffff
+tok 2138ffff
+tok 21300003
+tok 212c0001
+tok 2128fffe
+tok 2124fffc
+tok 2120ffff
+tok 211c0005
+tok 21180003
+tok 21140005
+tok 21100001
+tok 210cfffb
+tok 2108fffa
+tok 21040002
+tok 2100fffc
+tok 202d000f COEF_BLK Luma4x4 13 total 15
+tok 213cffff
+tok 21380002
+tok 21300005
+tok 212c0002
+tok 2128fffd
+tok 21240001
+tok 21200002
+tok 211c0001
+tok 2118fff7
+tok 21140006
+tok 21100007
+tok 210c0001
+tok 2108fff8
 tok 21040001
-tok 2105fffb
-tok 21060007
-tok 2107fffb
+tok 21000008
+tok 202e0008 COEF_BLK Luma4x4 14 total 8
+tok 2134fffc
+tok 212cfffa
+tok 2120fff8
+tok 21180004
+tok 21140006
+tok 210cfffa
+tok 21040008
+tok 2100fffa
+tok 202f000b COEF_BLK Luma4x4 15 total 11
+tok 2138fffb
+tok 21340003
+tok 2130fffe
+tok 212c0002
+tok 2120fffa
+tok 211c0004
+tok 21140002
+tok 21100008
+tok 2108fffc
+tok 2104000c
+tok 21000001
+tok 20300004 COEF_BLK ChromaDCB 0 total 4
+tok 210c0004
+tok 21080020
+tok 21040007
+tok 21000042
+tok 20400004 COEF_BLK ChromaDCR 0 total 4
+tok 210c0002
+tok 2108fff6
+tok 21040002
+tok 2100fff8
+tok 2050000d COEF_BLK ChromaACB 0 total 13
+tok 213c0001
+tok 21300001
+tok 212cfffd
+tok 21280003
+tok 21240009
+tok 2120fffd
+tok 211c0001
+tok 21180001
+tok 2114fffc
+tok 21100007
+tok 210c0007
+tok 21080012
+tok 2104ffff
+tok 2051000e COEF_BLK ChromaACB 1 total 14
+tok 213cffff
+tok 21380001
+tok 2130ffff
+tok 212cffff
+tok 2128ffff
+tok 21240006
+tok 21200005
+tok 211c0002
+tok 2118ffff
+tok 2114ffff
+tok 2110fffe
+tok 210c0003
+tok 2108000b
+tok 21040007
+tok 2052000e COEF_BLK ChromaACB 2 total 14
+tok 213c0006
+tok 21380004
+tok 2134fffd
+tok 21300006
+tok 212cfffb
+tok 21280006
+tok 21240001
+tok 21200003
+tok 211c0005
+tok 2118000f
+tok 21140003
+tok 21100001
+tok 2108fffe
+tok 2104fff9
+tok 2053000d COEF_BLK ChromaACB 3 total 13
+tok 213cfffb
+tok 21380003
+tok 21340002
+tok 2130fffb
+tok 212cfffb
+tok 2128fffb
+tok 2120fffe
+tok 211c0004
+tok 2118fff3
+tok 21140003
+tok 2110ffff
+tok 2108ffff
+tok 21040009
+tok 2060000f COEF_BLK ChromaACR 0 total 15
+tok 213cffff
+tok 21380001
+tok 2134ffff
+tok 2130fffd
+tok 212c0004
+tok 2128fffc
+tok 2124ffff
+tok 2120ffff
+tok 211c0002
+tok 2118fffc
+tok 21140008
+tok 2110fff8
+tok 210c0003
+tok 2108fffe
+tok 2104fffa
+tok 2061000f COEF_BLK ChromaACR 1 total 15
+tok 213cfffe
+tok 2138ffff
+tok 2134fffc
+tok 2130fffc
+tok 212c0002
+tok 21280009
+tok 2124fffd
+tok 21200007
+tok 211cfffe
+tok 2118fff8
+tok 21140002
+tok 21100011
+tok 210c0002
+tok 2108fffb
+tok 21040014
+tok 2062000d COEF_BLK ChromaACR 2 total 13
+tok 213cfffc
+tok 2138fffd
+tok 21340002
+tok 2130fffc
+tok 212c0003
+tok 2128fffd
+tok 2124ffff
+tok 2120ffff
+tok 211cfffc
+tok 2118fff5
+tok 2110ffff
 tok 21080001
-tok 2109ffff
-tok 210a0004
-tok 210b0004
-tok 210c0005
-tok 210dfffd
-tok 210efffc
-tok 210f0005
+tok 21040002
+tok 2063000f COEF_BLK ChromaACR 3 total 15
+tok 213c0005
+tok 2138fffc
+tok 2134fffd
+tok 21300005
+tok 212c0004
+tok 21280004
+tok 2124ffff
+tok 21200001
+tok 211cfffb
+tok 21180007
+tok 2114fffb
+tok 21100001
+tok 210cffff
+tok 21080001
+tok 21040004
 tok 3f000000 MB_END
 mb 2 0 1 I_NxN
 tok 10000001 MB_START 0 1
-tok 11008c00 MB_TYPE I_NxN cbp 35 i16 0 chroma 0 t8 0
-tok 12000017 MB_QP 23
+tok 11000000 MB_TYPE I_NxN
 tok 13000000 I4_MODE blk 0 mode 0
 tok 13000011 I4_MODE blk 1 mode 1
 tok 13000020 I4_MODE blk 2 mode 0
@@ -637,57 +642,58 @@ tok 130000c0 I4_MODE blk 12 mode 0
 tok 130000d0 I4_MODE blk 13 mode 0
 tok 130000e0 I4_MODE blk 14 mode 0
 tok 130000f0 I4_MODE blk 15 mode 0
-tok 20000000 COEF_BLK Luma4x4 0 total 0
-tok 20000103 COEF_BLK Luma4x4 1 total 3
+tok 19000023 MB_CBP cbp 35 chroma_pred 0 t8 0
+tok 12000017 MB_QP 23
+tok 20200000 COEF_BLK Luma4x4 0 total 0
+tok 20210003 COEF_BLK Luma4x4 1 total 3
+tok 21180001
+tok 2104fffd
 tok 21000004
-tok 2101fffd
-tok 21060001
-tok 20000200 COEF_BLK Luma4x4 2 total 0
-tok 20000300 COEF_BLK Luma4x4 3 total 0
-tok 20000400 COEF_BLK Luma4x4 4 total 0
-tok 20000501 COEF_BLK Luma4x4 5 total 1
+tok 20220000 COEF_BLK Luma4x4 2 total 0
+tok 20230000 COEF_BLK Luma4x4 3 total 0
+tok 20240000 COEF_BLK Luma4x4 4 total 0
+tok 20250001 COEF_BLK Luma4x4 5 total 1
 tok 2100fffb
-tok 20000600 COEF_BLK Luma4x4 6 total 0
-tok 20000700 COEF_BLK Luma4x4 7 total 0
-tok 20030002 COEF_BLK ChromaDCB 0 total 2
+tok 20260000 COEF_BLK Luma4x4 6 total 0
+tok 20270000 COEF_BLK Luma4x4 7 total 0
+tok 20300002 COEF_BLK ChromaDCB 0 total 2
+tok 2104fff9
 tok 21000017
-tok 2101fff9
-tok 20040002 COEF_BLK ChromaDCR 0 total 2
+tok 20400002 COEF_BLK ChromaDCR 0 total 2
+tok 21040009
 tok 2100ffdf
-tok 21010009
-tok 20050003 COEF_BLK ChromaACB 0 total 3
-tok 2101fffc
-tok 2105fffb
-tok 2106fffe
-tok 20050102 COEF_BLK ChromaACB 1 total 2
-tok 21010003
-tok 2106ffff
-tok 20050203 COEF_BLK ChromaACB 2 total 3
-tok 2101fffc
-tok 2105fffb
-tok 2106fffe
-tok 20050302 COEF_BLK ChromaACB 3 total 2
-tok 21010003
-tok 2106ffff
-tok 20060003 COEF_BLK ChromaACR 0 total 3
-tok 21010018
-tok 21050005
-tok 2106000c
-tok 20060102 COEF_BLK ChromaACR 1 total 2
-tok 2101fff9
-tok 21060002
-tok 20060203 COEF_BLK ChromaACR 2 total 3
-tok 21010018
-tok 21050005
-tok 2106000c
-tok 20060302 COEF_BLK ChromaACR 3 total 2
-tok 2101fff9
-tok 21060002
+tok 20500003 COEF_BLK ChromaACB 0 total 3
+tok 2118fffe
+tok 2114fffb
+tok 2104fffc
+tok 20510002 COEF_BLK ChromaACB 1 total 2
+tok 2118ffff
+tok 21040003
+tok 20520003 COEF_BLK ChromaACB 2 total 3
+tok 2118fffe
+tok 2114fffb
+tok 2104fffc
+tok 20530002 COEF_BLK ChromaACB 3 total 2
+tok 2118ffff
+tok 21040003
+tok 20600003 COEF_BLK ChromaACR 0 total 3
+tok 2118000c
+tok 21140005
+tok 21040018
+tok 20610002 COEF_BLK ChromaACR 1 total 2
+tok 21180002
+tok 2104fff9
+tok 20620003 COEF_BLK ChromaACR 2 total 3
+tok 2118000c
+tok 21140005
+tok 21040018
+tok 20630002 COEF_BLK ChromaACR 3 total 2
+tok 21180002
+tok 2104fff9
 tok 3f000000 MB_END
 mb 3 1 1 I_NxN
 tok 10001001 MB_START 1 1
-tok 11008d00 MB_TYPE I_NxN cbp 35 i16 0 chroma 1 t8 0
-tok 12000017 MB_QP 23
+tok 11000000 MB_TYPE I_NxN
 tok 13000001 I4_MODE blk 0 mode 1
 tok 13000010 I4_MODE blk 1 mode 0
 tok 13000020 I4_MODE blk 2 mode 0
@@ -704,51 +710,53 @@ tok 130000c0 I4_MODE blk 12 mode 0
 tok 130000d0 I4_MODE blk 13 mode 0
 tok 130000e0 I4_MODE blk 14 mode 0
 tok 130000f0 I4_MODE blk 15 mode 0
-tok 20000001 COEF_BLK Luma4x4 0 total 1
+tok 19000063 MB_CBP cbp 35 chroma_pred 1 t8 0
+tok 12000017 MB_QP 23
+tok 20200001 COEF_BLK Luma4x4 0 total 1
 tok 2100ffed
-tok 20000101 COEF_BLK Luma4x4 1 total 1
-tok 2101ffff
-tok 20000200 COEF_BLK Luma4x4 2 total 0
-tok 20000300 COEF_BLK Luma4x4 3 total 0
-tok 20000400 COEF_BLK Luma4x4 4 total 0
-tok 20000501 COEF_BLK Luma4x4 5 total 1
+tok 20210001 COEF_BLK Luma4x4 1 total 1
+tok 2104ffff
+tok 20220000 COEF_BLK Luma4x4 2 total 0
+tok 20230000 COEF_BLK Luma4x4 3 total 0
+tok 20240000 COEF_BLK Luma4x4 4 total 0
+tok 20250001 COEF_BLK Luma4x4 5 total 1
 tok 2100fff9
-tok 20000600 COEF_BLK Luma4x4 6 total 0
-tok 20000700 COEF_BLK Luma4x4 7 total 0
-tok 20030002 COEF_BLK ChromaDCB 0 total 2
+tok 20260000 COEF_BLK Luma4x4 6 total 0
+tok 20270000 COEF_BLK Luma4x4 7 total 0
+tok 20300002 COEF_BLK ChromaDCB 0 total 2
+tok 21040007
 tok 21000036
-tok 21010007
-tok 20040002 COEF_BLK ChromaDCR 0 total 2
+tok 20400002 COEF_BLK ChromaDCR 0 total 2
+tok 21040003
 tok 2100fffc
-tok 21010003
-tok 20050003 COEF_BLK ChromaACB 0 total 3
-tok 21010002
-tok 2105ffff
-tok 21060001
-tok 20050102 COEF_BLK ChromaACB 1 total 2
-tok 21010002
-tok 2106ffff
-tok 20050203 COEF_BLK ChromaACB 2 total 3
-tok 21010002
-tok 2105ffff
-tok 21060001
-tok 20050302 COEF_BLK ChromaACB 3 total 2
-tok 21010002
-tok 2106ffff
-tok 20060003 COEF_BLK ChromaACR 0 total 3
-tok 2101fffb
-tok 21050004
-tok 2106fffe
-tok 20060102 COEF_BLK ChromaACR 1 total 2
-tok 2101000e
-tok 2106fffc
-tok 20060203 COEF_BLK ChromaACR 2 total 3
-tok 2101fffb
-tok 21050004
-tok 2106fffe
-tok 20060302 COEF_BLK ChromaACR 3 total 2
-tok 2101000e
-tok 2106fffc
+tok 20500003 COEF_BLK ChromaACB 0 total 3
+tok 21180001
+tok 2114ffff
+tok 21040002
+tok 20510002 COEF_BLK ChromaACB 1 total 2
+tok 2118ffff
+tok 21040002
+tok 20520003 COEF_BLK ChromaACB 2 total 3
+tok 21180001
+tok 2114ffff
+tok 21040002
+tok 20530002 COEF_BLK ChromaACB 3 total 2
+tok 2118ffff
+tok 21040002
+tok 20600003 COEF_BLK ChromaACR 0 total 3
+tok 2118fffe
+tok 21140004
+tok 2104fffb
+tok 20610002 COEF_BLK ChromaACR 1 total 2
+tok 2118fffc
+tok 2104000e
+tok 20620003 COEF_BLK ChromaACR 2 total 3
+tok 2118fffe
+tok 21140004
+tok 2104fffb
+tok 20630002 COEF_BLK ChromaACR 3 total 2
+tok 2118fffc
+tok 2104000e
 tok 3f000000 MB_END
 tok 40000000 SLICE_END
 tok 41000000 PIC_END

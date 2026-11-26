@@ -454,6 +454,7 @@ not exactly what the current model writes. The committed corpora:
 | `intra_32x32_qp26` | 1 IDR, 2x2 MBs, Intra_4x4 | tokens, recon |
 | `intra_48x32_qp12` | 1 IDR, 3x2 MBs, Intra_4x4 and Intra_16x16 | tokens, recon |
 | `p_32x32_dump` | IDR + 2 P, 2x2 MBs, P_8x8 sub-partitions, two references | tokens, recon, inter |
+| `craft_pcm` | 4 pictures, 2x2 MBs: I_PCM alone, beside Intra_4x4, and in P slices | tokens, recon, inter |
 
 Every file is line-oriented: a line starts with a keyword, `#` starts a
 comment, blank lines separate pictures. All numbers are decimal unless they
@@ -477,56 +478,29 @@ Lines common to all three files:
 
     nal HEX        one NAL unit, header byte included, emulation prevention
                    bytes still in: the parser's input, in stream order
-    slice FIRST_MB type T qp SLICEQP dbk IDC A B nref N
+    slice FIRST_MB type T qp SLICEQP dbk IDC A B nref N0 N1
     tok WORD [comment]
 
 `nal` lines come first (every NAL unit of the dumped pictures), then the
 token stream picture by picture. Each `tok` is one 32-bit token, 8 hex
-digits, `{tag[7:0], data[23:0]}`; the comment after it is for people. The
-tags are the contract's v0 set; until the parse agent's layout lands in the
-token section of this file, the data fields are packed as follows (and the
-dumps will follow that layout when it does):
+digits, exactly as section 1 lays it out and in section 1's order; the
+comment after it is for people, and COEF and PCM tokens have none. The
+`pic`, `slice` and `mb` lines are markers for people and tests and carry
+nothing the tokens do not.
 
-| tag | name | data |
-|---|---|---|
-| 01 | SPS_DIMS | `width_mbs[23:12] height_mbs[11:0]` |
-| 02 | SLICE_HDR | `nal_ref_idc[6:5] IdrPicFlag[4] slice_type[3:0]` (slice_type % 5) |
-| 03 | SLICE_QP | `second_chroma_qp_index_offset[20:16] chroma_qp_index_offset[12:8] SliceQPY[5:0]`, offsets two's complement |
-| 04 | SLICE_DBLK | `FilterOffsetB[20:16] FilterOffsetA[12:8] disable_deblocking_filter_idc[1:0]`, offsets two's complement |
-| 05 | SLICE_REF | `frame_num[23:8] num_ref_idx_l0_active_minus1[4:0]` |
-| 06 | SLICE_FIRST | `first_mb_in_slice` |
-| 10 | MB_START | `mb_x[23:12] mb_y[11:0]` |
-| 11 | MB_TYPE | `transform_size_8x8_flag[16] coded_block_pattern[15:10] intra_chroma_pred_mode[9:8] Intra16x16PredMode[7:6] kind[5:0]` |
-| 12 | MB_QP | `QPY` after mb_qp_delta |
-| 13 | I4_MODE | `luma4x4BlkIdx[7:4] Intra4x4PredMode[3:0]`, the final mode, 16 per I_NxN macroblock in block order |
-| 14 | MVD | `mbPartIdx[23:22] subMbPartIdx[21:20] ref_idx[19:16] component[15] mvd[14:0]` (component 0 = x; mvd two's complement) |
-| 20 | COEF_BLK | `category[19:16] block index[15:8] TotalCoeff[4:0]` |
-| 21 | COEF | `scan position[21:16] level[15:0]`, nonzero levels only, level two's complement |
-| 30 | PCM | three I_PCM samples, first in `[7:0]`; 128 per macroblock (256 luma, 64 Cb, 64 Cr) |
-| 3F | MB_END | 0 |
-| 40 | SLICE_END | 0 |
-| 41 | PIC_END | 0 |
+Where section 1 leaves a choice, the dumps make this one (a parser that
+differs should say so here, and the model will follow):
 
-`kind`: 0 I_NxN (Intra_4x4), 1 Intra_8x8, 2 Intra_16x16, 3 I_PCM,
-4 P_L0_16x16, 5 P_L0_L0_16x8, 6 P_L0_L0_8x16, 7 P_8x8, 8 P_8x8ref0,
-9 P_Skip. COEF_BLK `category`: 0 Luma4x4, 1 Intra16x16DCLevel,
-2 Intra16x16ACLevel, 3 ChromaDC Cb, 4 ChromaDC Cr, 5 ChromaAC Cb,
-6 ChromaAC Cr. Its block index is luma4x4BlkIdx for luma and
-chroma4x4BlkIdx for chroma AC (0 for the DC blocks). The scan position is
-the index in the coded (zig-zag) order of the block's own list: for
-Intra16x16ACLevel and ChromaAC it counts from 1, position 0 being the DC
-that the DC block carries.
-
-Per macroblock the order is: MB_START, MB_TYPE, MB_QP, then PCM words, or
-the 16 I4_MODE tokens, or the MVD tokens (all list 0 partitions in order,
-x then y for each, sub-partitions in order inside each sub-macroblock),
-then the coefficient blocks in syntax order (Intra16x16 DC, the 16 luma
-blocks in luma4x4BlkIdx order skipping uncoded 8x8 quadrants, chroma DC
-Cb then Cr, chroma AC Cb blocks 0..3 then Cr 0..3, again only those
-coded), then MB_END. A COEF_BLK is written for every block that is parsed,
-even when TotalCoeff is 0. A P_Skip macroblock is MB_START, MB_TYPE, MB_QP,
-MB_END. SLICE_END follows the last macroblock of a slice and PIC_END the
-last slice of a picture.
+* `SLICE_REF` of an I slice has both num_ref_idx fields 0.
+* `MB_TYPE`'s partition prediction bits are 0 for P_Skip and B_Skip, as for
+  direct: their motion is `h264_mvpred`'s to derive.
+* `MB_CBP` of an I_PCM macroblock is 0; of an I_16x16 one, the
+  coded_block_pattern its mb_type implies.
+* `COEF` tokens are in descending scan position for CABAC blocks too.
+* `COEF_BLK`'s TotalCoeff saturates at 31 for a CABAC 8x8 block (category
+  7), which can have 64; count the `COEF` tokens instead.
+* The SPS tokens come before the `SLICE_HDR` of every slice whose
+  first_mb_in_slice is 0, even when the SPS has not changed.
 
 ### `h264_recon_NAME.txt`: reconstruction
 
