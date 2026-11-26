@@ -57,7 +57,7 @@ saturated silently: a value the field cannot hold is an `ERROR` token instead.
 | `0x07` | `SPS_INFO` | `[23:16]` profile_idc, `[15:8]` level_idc, `[7:3]` max_num_ref_frames (0..16), `[2]` frame_mbs_only_flag, `[1]` direct_8x8_inference_flag, `[0]` gaps_in_frame_num_value_allowed_flag |
 | `0x08` | `SPS_POC` | `[23:22]` pic_order_cnt_type, `[21:17]` log2_max_frame_num (4..16), `[16:12]` log2_max_pic_order_cnt_lsb (4..16; 0 when pic_order_cnt_type ≠ 0), `[11:10]` chroma_format_idc, `[9:7]` bit_depth_luma_minus8, `[6:4]` bit_depth_chroma_minus8, `[3]` delta_pic_order_always_zero_flag |
 | `0x09` | `SPS_CROP` | `[23:18]` frame_crop_left_offset, `[17:12]` right, `[11:6]` top, `[5:0]` bottom, in the crop units of 7.4.2.1.1 (two luma samples each way for 4:2:0 frames); all zero when frame_cropping_flag is 0 |
-| `0x02` | `SLICE_HDR` | `[23:20]` slice_type % 5 (0 P, 1 B, 2 I, 3 SP, 4 SI), `[19]` IdrPicFlag, `[18:17]` nal_ref_idc, `[16]` entropy_coding_mode_flag, `[15]` constrained_intra_pred_flag, `[14]` transform_8x8_mode_flag, `[13]` weighted_pred_flag, `[12:11]` weighted_bipred_idc, `[10]` direct_spatial_mv_pred_flag (0 unless B), `[9:8]` cabac_init_idc (0 unless CABAC), `[7:0]` pic_parameter_set_id |
+| `0x02` | `SLICE_HDR` | `[23:20]` slice_type % 5 (0 P, 1 B, 2 I, 3 SP, 4 SI), `[19]` IdrPicFlag, `[18:17]` nal_ref_idc, `[16]` entropy_coding_mode_flag, `[15]` constrained_intra_pred_flag, `[14]` transform_8x8_mode_flag, `[13]` weighted_pred_flag, `[12:11]` weighted_bipred_idc, `[7:0]` pic_parameter_set_id |
 | `0x06` | `SLICE_FIRST` | `[23:0]` first_mb_in_slice |
 | `0x0A` | `SLICE_POC` | `[23:22]` which: 0 pic_order_cnt_lsb (unsigned), 1 delta_pic_order_cnt_bottom, 2 delta_pic_order_cnt[0], 3 delta_pic_order_cnt[1]; `[21:0]` value, the deltas signed |
 | `0x05` | `SLICE_REF` | `[23:20]` num_ref_idx_l0_active_minus1, `[19:16]` num_ref_idx_l1_active_minus1 (0 unless B), `[15:0]` frame_num |
@@ -67,7 +67,7 @@ saturated silently: a value the field cannot hold is an `ERROR` token instead.
 | `0x0E` | `DRPM` | dec_ref_pic_marking, emitted for every slice with nal_ref_idc ≠ 0: `[2]` no_output_of_prior_pics_flag, `[1]` long_term_reference_flag (IDR only), `[0]` adaptive_ref_pic_marking_mode_flag (non-IDR only) |
 | `0x0F` | `MMCO` | one memory_management_control_operation (1..6): `[23:21]` operation, `[20:16]` long_term_frame_idx (ops 3 and 6) or max_long_term_frame_idx_plus1 (op 4), `[15:0]` difference_of_pic_nums_minus1 (ops 1 and 3) or long_term_pic_num (op 2). The closing 0 is not emitted |
 | `0x03` | `SLICE_QP` | `[23:16]` SliceQPY (signed), `[15:8]` chroma_qp_index_offset (signed), `[7:0]` second_chroma_qp_index_offset (signed; equal to the first when the PPS does not carry it) |
-| `0x04` | `SLICE_DBLK` | `[23:22]` disable_deblocking_filter_idc, `[15:8]` FilterOffsetA (signed, = slice_alpha_c0_offset_div2 << 1), `[7:0]` FilterOffsetB (signed) |
+| `0x04` | `SLICE_DBLK` | `[23:22]` disable_deblocking_filter_idc, `[21]` direct_spatial_mv_pred_flag (0 unless B), `[20:19]` cabac_init_idc (0 unless CABAC), `[15:8]` FilterOffsetA (signed, = slice_alpha_c0_offset_div2 << 1), `[7:0]` FilterOffsetB (signed) |
 | `0x40` | `SLICE_END` | the slice's last macroblock has been sent |
 | `0x41` | `PIC_END` | the picture's last macroblock has been sent; follows that slice's `SLICE_END` |
 
@@ -87,6 +87,13 @@ SLICE_QP SLICE_DBLK
 macroblocks…
 SLICE_END [PIC_END]
 ```
+
+**Why two slice fields sit in `SLICE_DBLK`.** direct_spatial_mv_pred_flag and
+cabac_init_idc follow the variable-length parts of the header (the reference
+list modification, the weights, the marking), so `SLICE_HDR`, which is
+emitted before those, cannot carry them without the parser buffering every
+`RPLM`, `PWT` and `MMCO` of the slice. `SLICE_DBLK` is the last header token
+and the first place both are known.
 
 **A picture starts** at a slice whose first_mb_in_slice is 0: arbitrary slice
 order is outside this decoder, so that is the first slice. **A picture ends**
@@ -279,7 +286,7 @@ carries one it never uses decodes cleanly.
 - **8x8 transform**: `I8_MODE`, `MB_CBP[8]` and category 7 exist now.
 - **B slices**: kinds 10..15, the list-1 bit of every list field, the
   partition prediction bits of `MB_TYPE`, `SUB_MB_TYPE`'s four bits per
-  sub-macroblock (B's go to 12), and `SLICE_HDR[10]` are already in the format.
+  sub-macroblock (B's go to 12), and `SLICE_DBLK[21]` are already in the format.
 - **4:2:2 and 4:4:4**, high bit depth: `SPS_POC` carries chroma_format_idc
   and the bit depths, QP fields are signed for QpBdOffset, categories 8..15
   are spare.
