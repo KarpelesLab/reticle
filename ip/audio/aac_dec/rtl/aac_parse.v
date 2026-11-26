@@ -307,26 +307,42 @@ module aac_parse (
         endcase
     end
 
-    // A coefficient with its pulses (4.6.3.3): each pulse at this address
-    // in order, adding to a positive value and subtracting otherwise.
-    function [14:0] pulse_add;
-        input [14:0] q;
-        input        hit;
-        input [3:0]  amp;
-        begin
-            if (!hit)
-                pulse_add = q;
-            else if (!q[14] && q != 15'd0)
-                pulse_add = q + {11'd0, amp};
-            else
-                pulse_add = q - {11'd0, amp};
-        end
-    endfunction
+    // A coefficient with its pulses (4.6.3.3): each pulse at this address,
+    // in order, adds its amplitude to a positive value and subtracts it
+    // otherwise. A positive value stays positive and anything else becomes
+    // negative or stays zero, so the sign test never changes its answer
+    // after the first pulse, and the pulses at one address can be summed
+    // first: one adder rather than four in a row.
+    //
+    // The FSM emits into c0_*; the pulses go on in the stage after it, which
+    // is c_*, on the address c0_addr already holds (a long window's, the
+    // only kind with pulses, is the coefficient's index).
     wire [10:0] emit_addr = base + {4'd0, bin} + {9'd0, d};
-    wire [14:0] pq0 = pulse_add(vd,  pul_on && pul_cnt > 4'd0 && pul_pos0 == emit_addr, pul_amp0);
-    wire [14:0] pq1 = pulse_add(pq0, pul_on && pul_cnt > 4'd1 && pul_pos1 == emit_addr, pul_amp1);
-    wire [14:0] pq2 = pulse_add(pq1, pul_on && pul_cnt > 4'd2 && pul_pos2 == emit_addr, pul_amp2);
-    wire [14:0] pq3 = pulse_add(pq2, pul_on && pul_cnt > 4'd3 && pul_pos3 == emit_addr, pul_amp3);
+    reg         c0_valid, c0_ch, c0_zero;
+    reg  [9:0]  c0_addr;
+    reg  [14:0] c0_q;
+    reg  [7:0]  c0_sf;
+    wire        ph0 = pul_on && pul_cnt > 4'd0 && pul_pos0 == {1'b0, c0_addr};
+    wire        ph1 = pul_on && pul_cnt > 4'd1 && pul_pos1 == {1'b0, c0_addr};
+    wire        ph2 = pul_on && pul_cnt > 4'd2 && pul_pos2 == {1'b0, c0_addr};
+    wire        ph3 = pul_on && pul_cnt > 4'd3 && pul_pos3 == {1'b0, c0_addr};
+    wire [5:0]  pamp = (ph0 ? {2'd0, pul_amp0} : 6'd0) + (ph1 ? {2'd0, pul_amp1} : 6'd0) +
+                       (ph2 ? {2'd0, pul_amp2} : 6'd0) + (ph3 ? {2'd0, pul_amp3} : 6'd0);
+    wire [14:0] pq3 = (!c0_q[14] && c0_q != 15'd0) ? c0_q + {9'd0, pamp} : c0_q - {9'd0, pamp};
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            c_valid <= 1'b0; c_ch <= 1'b0; c_addr <= 10'd0; c_q <= 15'd0;
+            c_sf <= 8'd0; c_zero <= 1'b0;
+        end else begin
+            c_valid <= c0_valid;
+            c_ch    <= c0_ch;
+            c_addr  <= c0_addr;
+            c_q     <= pq3;
+            c_sf    <= c0_sf;
+            c_zero  <= c0_zero;
+        end
+    end
 
     // Sign extension of a TNS coefficient of res2 bits to four.
     function [3:0] tns_sext;
@@ -424,8 +440,8 @@ module aac_parse (
             ms_we <= 1'b0; ms_addr <= 7'd0; ms_bit <= 1'b0;
             td_we <= 1'b0; td_ch <= 1'b0; td_idx <= 3'd0; td_data <= 20'd0;
             tc_we <= 1'b0; tc_ch <= 1'b0; tc_addr <= 7'd0; tc_data <= 5'd0;
-            c_valid <= 1'b0; c_ch <= 1'b0; c_addr <= 10'd0; c_q <= 15'd0;
-            c_sf <= 8'd0; c_zero <= 1'b0;
+            c0_valid <= 1'b0; c0_ch <= 1'b0; c0_addr <= 10'd0; c0_q <= 15'd0;
+            c0_sf <= 8'd0; c0_zero <= 1'b0;
             lost <= 1'b0; prot_absent <= 1'b1; nrdb <= 2'd0; rdb_i <= 2'd0; chan <= 2'd1;
             seen_audio <= 1'b0; ch <= 1'b0; cnt8 <= 8'd0; cnt9 <= 9'd0;
             pce_nf <= 4'd0; pce_ns <= 4'd0; pce_nb <= 4'd0; pce_nc <= 4'd0;
@@ -456,7 +472,7 @@ module aac_parse (
             ms_we    <= 1'b0;
             td_we    <= 1'b0;
             tc_we    <= 1'b0;
-            c_valid  <= 1'b0;
+            c0_valid <= 1'b0;
             lb_we    <= 1'b0;
 
             // Bit accounting, whoever took the bit.
@@ -1160,8 +1176,8 @@ module aac_parse (
                 end
             end
             S_SPZ: begin
-                c_valid <= 1'b1; c_ch <= ch; c_addr <= emit_addr[9:0];
-                c_q <= 15'd0; c_sf <= cur_sf; c_zero <= 1'b1;
+                c0_valid <= 1'b1; c0_ch <= ch; c0_addr <= emit_addr[9:0];
+                c0_q <= 15'd0; c0_sf <= cur_sf; c0_zero <= 1'b1;
                 if (bin + 7'd1 == width) begin
                     win <= win + 4'd1;
                     state <= S_SPW;
@@ -1267,8 +1283,8 @@ module aac_parse (
             end
             S_SPO: begin
                 // Out, one a cycle.
-                c_valid <= 1'b1; c_ch <= ch; c_addr <= emit_addr[9:0];
-                c_q <= pq3; c_sf <= cur_sf; c_zero <= 1'b0;
+                c0_valid <= 1'b1; c0_ch <= ch; c0_addr <= emit_addr[9:0];
+                c0_q <= vd; c0_sf <= cur_sf; c0_zero <= 1'b0;
                 if ({1'b0, d} == dim - 3'd1) begin
                     d <= 2'd0;
                     if (bin + {4'd0, dim} == width) begin
@@ -1296,9 +1312,9 @@ module aac_parse (
                     win <= win + 4'd1;
                     state <= S_SPT;
                 end else begin
-                    c_valid <= 1'b1; c_ch <= ch;
-                    c_addr <= short_w ? {win[2:0], tail_k[6:0]} : tail_k[9:0];
-                    c_q <= 15'd0; c_sf <= 8'd0; c_zero <= 1'b1;
+                    c0_valid <= 1'b1; c0_ch <= ch;
+                    c0_addr <= short_w ? {win[2:0], tail_k[6:0]} : tail_k[9:0];
+                    c0_q <= 15'd0; c0_sf <= 8'd0; c0_zero <= 1'b1;
                     tail_k <= tail_k + 11'd1;
                 end
             end

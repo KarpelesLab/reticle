@@ -310,17 +310,18 @@ the input never starved:
 | stream | slowest frame |
 |---|---|
 | mono, 48 kHz (`sine_m48`) | 14 600 |
-| stereo with M/S and intensity (`tones_s44`) | 25 400 |
-| stereo with short-window TNS (`corr_s48`) | 30 500 |
-| mono with two long TNS filters of order up to 12 (`craft_tns_m24`) | 37 500 |
+| stereo with M/S and intensity (`tones_s44`) | 25 500 |
+| stereo with short-window TNS (`corr_s48`) | 31 100 |
+| mono with two long TNS filters of order up to 12 (`craft_tns_m24`) | 39 400 |
 
 **The budget**: at 48 kHz a frame is 1024 / 48 000 s, which is 1 066 666
-cycles at 50 MHz. A stereo frame uses about 3 % of it. The worst case
+cycles at 50 MHz and 2 133 333 at 100 MHz. A stereo frame uses about 3 %
+of the first. The worst case
 this design can meet is bounded, not measured: TNS over all 1024
-coefficients of both channels at order 12 is about 2 x 32 000 cycles, the
+coefficients of both channels at order 12 is about 2 x 36 000 cycles, the
 parser at the largest frame the standard allows (6144 bits a channel) about
-15 000, and the rest about 20 000 — about 100 000 cycles, under a tenth of
-the budget at 50 MHz, and under a fifth at 25 MHz.
+15 000, and the rest about 20 000 — about 110 000 cycles, a tenth of the
+budget at 50 MHz and a twentieth at 100 MHz.
 
 **The input must arrive faster than real time.** The parser waits for
 the spectra to be free before it reads a block, so a stream trickled in
@@ -331,21 +332,31 @@ demultiplexer reading memory feeds it — it is idle 95 % of the time.
 ## Resources
 
 `reticle fpga ip/audio/aac_dec/rtl/*.v --top aac_dec --device
-xc7a100t-ftg256 --speed-grade 2` (the XC7A100T die of the target
-`fgg484`):
+xc7a100t-fgg484 --speed-grade 2`, the target part (XC7A100T-2FGG484I):
 
 | | |
 |---|---|
-| LUT6 | 9 199 |
-| flip-flops | 3 586 |
+| LUT6 | 8 279, and 29 lookup-table RAMs (the TNS registers, the M/S flags) |
+| flip-flops | 3 885 |
 | DSP48E1 | 14 (seven 35 x 25 multipliers) |
 | block RAM | 16 RAMB36E1 + 10 RAMB18E1 |
-| logic depth | 11 lookup tables |
+| logic depth | 10 lookup tables |
 
-Of the XC7A100T that is 15 % of the lookup tables, 6 % of the DSP slices
-and 15 % of the block RAM. By unit, mapped alone: `aac_parse` 2 195 LUT,
-`aac_synth` 2 245 (and 8 DSP), `aac_stereo` 1 864, `aac_tns` 1 350,
-`aac_dequant` 796, the rest a few hundred.
+Of the XC7A100T that is 13 % of the lookup tables, 6 % of the DSP slices
+and 15 % of the block RAM. By unit, mapped alone: `aac_parse` 2 045 LUT,
+`aac_synth` 2 070 (and 8 DSP), `aac_stereo` 2 064, `aac_tns` 766,
+`aac_dequant` 742, the rest under a hundred each.
+
+Two changes bought most of that, and both are recorded because the first
+version was the obvious one:
+
+* the scalefactor band tables were a case statement in each of six
+  instances, 400 lookup tables each; as a block RAM read on the clock in
+  each of the three units that use them they cost three RAMB18E1 and
+  2 400 lookup tables less;
+* TNS's twelve lattice states were flip-flops cleared at the start of each
+  filter; with a valid bit per state instead of the clear they fit a
+  lookup-table RAM, 900 lookup tables less.
 
 ### Timing
 
@@ -355,19 +366,23 @@ the 51 pins in banks 34 and 35 and the clock on a clock-capable pin, a
 
 | | |
 |---|---|
-| routed timing estimate, speed grade 2 | **15.4 ns, about 65 MHz** |
-| latest path | `aac_stereo`'s intensity scaling: the product, the rounding add, a 70-bit shift, saturation and a negation, into the write register |
-| the other units' latest | `aac_parse` 13.7 ns, `aac_dequant` 13.6, `aac_synth` 10.9, `aac_tns` 10.6 |
+| routed timing estimate, speed grade 2 | **9.71 ns: 100 MHz closes** |
 | the bitstream | every set bit decodes back through the database, none unexplained, and the arcs they select are the ones the router chose |
 
-So 50 MHz has 4.6 ns to spare and 100 MHz does not close yet. This is
-the flow's delay model, fitted to Vivado's timer, and not a measurement
-on a part.
+The first build of the same logic estimated **15.4 ns**. Its latest paths
+were each a DSP product followed in the same cycle by a wide rounding
+adder, a barrel shift, a saturation and a negation — intensity scaling,
+PNS, dequantisation — plus the pulse logic's four adders in a row in the
+parser and the FFT's rounding feeding its butterfly. Each got a register
+in the middle (and the pulses one adder, since the pulses at one address
+can be summed first), which cost a few cycles a frame and nothing in
+arithmetic: the tests are bit-exact before and after. Note that a product
+registered "in" the DSP slices still has a fabric adder after it joining
+the two slices' halves of a 35 x 25 multiply, so the stage after a
+product wants a register of its own as well.
 
-The scalefactor band tables were a case statement in each of six
-instances, 400 lookup tables each; as a block RAM read on the clock in
-each of the three units that use them, they cost three RAMB18E1 and
-2 400 lookup tables less.
+This is the flow's delay model, fitted to Vivado's timer, and not a
+measurement on a part.
 
 ## What is and is not proved
 
@@ -389,8 +404,8 @@ Proved, by `tests/ip_aac_dec.rs` in simulation:
   them are what the model makes of the stream without them;
 * every codeword of the twelve codebooks decodes through the tree ROM to
   its own index, and the band tables have the standard's shape;
-* the whole package maps for the XC7A100T with the figures above, and
-  places, routes and makes a bitstream every bit of which decodes back.
+* the whole package maps for the XC7A100T-FGG484 with the figures above,
+  and places, routes and makes a bitstream every bit of which decodes back.
 
 That last is the flow's own check and was run by hand; no test repeats
 it, since a place and route of this size takes minutes.

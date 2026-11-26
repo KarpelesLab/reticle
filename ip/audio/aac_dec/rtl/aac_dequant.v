@@ -8,8 +8,8 @@
 // gain. The gain is a Q1.23 mantissa 2^(f/4) and a shift. The result is the
 // decoder's spectral format: 35 bits signed, 7 fractional, saturated.
 //
-// Five stages; the pipeline never stalls, so a coefficient in is a word
-// written to the spectral RAM five cycles later. `tools/aac_dec_model.py`
+// Seven stages; the pipeline never stalls, so a coefficient in is a word
+// written to the spectral RAM seven cycles later. `tools/aac_dec_model.py`
 // (`pow43_fixed`, `scale_gain`) is the arithmetic, bit for bit.
 
 module aac_dequant (
@@ -75,13 +75,25 @@ module aac_dequant (
     reg  [7:0]  s3_e;
     reg  signed [59:0] s3_p;
 
+    // Stage 3b: the product again, after the fabric adder that joins the
+    // two DSP slices' halves.
+    reg         s3b_v, s3b_ch, s3b_neg, s3b_zero;
+    reg  [9:0]  s3b_addr;
+    reg  [7:0]  s3b_e;
+    reg  signed [59:0] s3b_p;
+
     // Stage 4: shift right by 36 - e, rounding half up, saturate, sign.
     // With six bits prepended the shift is 42 - e, which is 0..67.
-    wire [7:0]  sh  = 8'd42 - s3_e;
-    wire [65:0] pe  = {s3_p[58:0], 7'd0} >> 1;               // p << 6
+    wire [7:0]  sh  = 8'd42 - s3b_e;
+    wire [65:0] pe  = {s3b_p[58:0], 7'd0} >> 1;              // p << 6
     wire [65:0] hf  = (sh == 8'd0) ? 66'd0 : (66'd1 << (sh - 8'd1));
     wire [65:0] rs  = (pe + hf) >> sh;
-    wire [33:0] mag = (rs > 66'h3_FFFF_FFFF) ? 34'h3_FFFF_FFFF : rs[33:0];
+
+    // Stage 5: saturate and sign, from the shifted magnitude registered.
+    reg         s4_v, s4_ch, s4_neg, s4_zero, s4_ovf;
+    reg  [9:0]  s4_addr;
+    reg  [33:0] s4_rs;
+    wire [33:0] mag = s4_ovf ? 34'h3_FFFF_FFFF : s4_rs;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -94,6 +106,10 @@ module aac_dequant (
             s2_addr <= 10'd0; s2_e <= 8'd0; s2_a <= 35'sd0; s2_b <= 25'sd0;
             s3_v <= 1'b0; s3_ch <= 1'b0; s3_neg <= 1'b0; s3_zero <= 1'b0;
             s3_addr <= 10'd0; s3_e <= 8'd0; s3_p <= 60'sd0;
+            s3b_v <= 1'b0; s3b_ch <= 1'b0; s3b_neg <= 1'b0; s3b_zero <= 1'b0;
+            s3b_addr <= 10'd0; s3b_e <= 8'd0; s3b_p <= 60'sd0;
+            s4_v <= 1'b0; s4_ch <= 1'b0; s4_neg <= 1'b0; s4_zero <= 1'b0;
+            s4_ovf <= 1'b0; s4_addr <= 10'd0; s4_rs <= 34'd0;
             w_valid <= 1'b0; w_ch <= 1'b0; w_addr <= 10'd0; w_data <= 35'd0;
         end else begin
             s0_v    <= c_valid;
@@ -121,11 +137,20 @@ module aac_dequant (
             s3_neg <= s2_neg; s3_zero <= s2_zero; s3_e <= s2_e;
             s3_p <= s2_a * s2_b;
 
-            w_valid <= s3_v;
-            w_ch    <= s3_ch;
-            w_addr  <= s3_addr;
-            w_data  <= s3_zero ? 35'd0 :
-                       (s3_neg ? 35'd0 - {1'b0, mag} : {1'b0, mag});
+            s3b_v <= s3_v; s3b_ch <= s3_ch; s3b_addr <= s3_addr;
+            s3b_neg <= s3_neg; s3b_zero <= s3_zero; s3b_e <= s3_e;
+            s3b_p <= s3_p;
+
+            s4_v <= s3b_v; s4_ch <= s3b_ch; s4_addr <= s3b_addr;
+            s4_neg <= s3b_neg; s4_zero <= s3b_zero;
+            s4_ovf <= rs[65:34] != 32'd0;
+            s4_rs <= rs[33:0];
+
+            w_valid <= s4_v;
+            w_ch    <= s4_ch;
+            w_addr  <= s4_addr;
+            w_data  <= s4_zero ? 35'd0 :
+                       (s4_neg ? 35'd0 - {1'b0, mag} : {1'b0, mag});
         end
     end
 endmodule

@@ -15,11 +15,11 @@
 // One complex multiplier (four 35 x 25 products) serves every step: a
 // pre-twiddle a cycle, a butterfly every two (it has two words to write),
 // a post-twiddle a cycle and a windowed sample a cycle. Every step goes
-// through the same five-stage pipeline:
+// through the same six-stage pipeline:
 //
 //   0 issue: RAM and ROM addresses       3 the sums, registered
-//   1 operands from the RAMs, registered 4 rounded and saturated: written
-//   2 the four products, registered
+//   1 operands from the RAMs, registered 4 rounded and saturated, registered
+//   2 the four products, registered      5 the butterfly's sums; written
 //
 // The work RAM holds 512 complex words: the FFT, then D in pairs
 // {D[2k], D[M-1-2k]} at address k. `FixedDecoder.imdct` and `.synth` in
@@ -231,6 +231,14 @@ module aac_synth (
     reg  [7:0] n4;
     reg signed [60:0] sre, sim;
     reg signed [34:0] tre4, tim4;
+    // stage 5: rounded and saturated
+    reg        v5;
+    reg  [2:0] k5;
+    reg  [8:0] a5, b5;
+    reg [10:0] p5;
+    reg  [7:0] n5;
+    reg  [34:0] y5r, y5i, y5n;      // re, im, and -im saturated
+    reg signed [34:0] tre5, tim5;
     // the FFT's second write, a cycle later
     reg        bw_v;
     reg  [8:0] bw_a;
@@ -255,11 +263,11 @@ module aac_synth (
     wire [34:0] yr = sat_n(rre);
     wire [34:0] yi = sat_n(rim);
     wire [34:0] yi_neg = (yi == 35'h4_0000_0000) ? 35'h3_FFFF_FFFF : (35'd0 - yi);
-    // butterfly
-    wire signed [35:0] bt_s = {tre4[34], tre4} + {yr[34], yr} + 36'sd1;
-    wire signed [35:0] bt_d = {tre4[34], tre4} - {yr[34], yr} + 36'sd1;
-    wire signed [35:0] bi_s = {tim4[34], tim4} + {yi[34], yi} + 36'sd1;
-    wire signed [35:0] bi_d = {tim4[34], tim4} - {yi[34], yi} + 36'sd1;
+    // butterfly, from stage 5
+    wire signed [35:0] bt_s = {tre5[34], tre5} + {y5r[34], y5r} + 36'sd1;
+    wire signed [35:0] bt_d = {tre5[34], tre5} - {y5r[34], y5r} + 36'sd1;
+    wire signed [35:0] bi_s = {tim5[34], tim5} + {y5i[34], y5i} + 36'sd1;
+    wire signed [35:0] bi_d = {tim5[34], tim5} - {y5i[34], y5i} + 36'sd1;
     // (a + t + 1) >> 1 of two 35-bit values always fits 35 bits
     wire [34:0] top_r = bt_s[35:1];
     wire [34:0] bot_r = bt_d[35:1];
@@ -267,8 +275,8 @@ module aac_synth (
     wire [34:0] bot_i = bi_d[35:1];
 
     // the window stage's z, and the short windows' overlap
-    wire signed [35:0] zsum = {yr[34], yr} + {ov_q[34], ov_q};
-    wire [34:0] zshort = (j == 3'd0) ? yr : sat_n({{26{zsum[35]}}, zsum});
+    wire signed [35:0] zsum = {y5r[34], y5r} + {ov_q[34], ov_q};
+    wire [34:0] zshort = (j == 3'd0) ? y5r : sat_n({{26{zsum[35]}}, zsum});
 
     // overlap-add
     reg         o1_v, o2_v;
@@ -306,6 +314,8 @@ module aac_synth (
             v4 <= 1'b0; k4 <= 3'd0; a4 <= 9'd0; p4 <= 11'd0; n4 <= 8'd0;
             sre <= 61'sd0; sim <= 61'sd0; tre4 <= 35'sd0; tim4 <= 35'sd0;
             bw_v <= 1'b0; bw_a <= 9'd0; bw_d <= 70'd0;
+            v5 <= 1'b0; k5 <= 3'd0; a5 <= 9'd0; b5 <= 9'd0; p5 <= 11'd0; n5 <= 8'd0;
+            y5r <= 35'd0; y5i <= 35'd0; y5n <= 35'd0; tre5 <= 35'sd0; tim5 <= 35'sd0;
             o1_v <= 1'b0; o2_v <= 1'b0; o1_p <= 11'd0; o2_p <= 11'd0;
             o1_z <= 35'd0; o2_z <= 35'd0; o2_tail <= 1'b0;
             pcm_we <= 1'b0; pcm_ch <= 1'b0; pcm_n <= 10'd0; pcm_data <= 16'd0;
@@ -487,7 +497,6 @@ module aac_synth (
 
             // Stage 2 -> 3: products
             v3 <= v2; k3 <= k2; a3 <= a2; b3 <= b2; p3 <= p2; n3 <= n2r;
-            ov_raddr <= n2r[6:0];
             pr1 <= ar * wr;
             pr2 <= ai * wi;
             pr3 <= ar * wi;
@@ -497,45 +506,51 @@ module aac_synth (
             // Stage 3 -> 4: sums. The overlap word of a short window's first
             // half (or of a FLUSH item) is read here, for stage 4.
             v4 <= v3; k4 <= k3; a4 <= a3; b4 <= b3; p4 <= p3; n4 <= n3;
+            ov_raddr <= n3[6:0];
             sre <= {pr1[59], pr1} - {pr2[59], pr2};
             sim <= {pr3[59], pr3} + {pr4[59], pr4};
             tre4 <= tre3; tim4 <= tim3;
 
+            // Stage 4 -> 5: the rounding and saturation registered
+            v5 <= v4; k5 <= k4; a5 <= a4; b5 <= b4; p5 <= p4; n5 <= n4;
+            y5r <= yr; y5i <= yi; y5n <= yi_neg;
+            tre5 <= tre4; tim5 <= tim4;
+
             // ----------------------------------------------------------
-            // Stage 4: write
+            // Stage 5: write
             // ----------------------------------------------------------
             o1_v <= 1'b0;
-            tl_raddr <= {c, p4[9:0]};
+            tl_raddr <= {c, p5[9:0]};
             if (bw_v) begin
                 wk_we <= 1'b1; wk_waddr <= bw_a; wk_wdata <= bw_d;
             end
             bw_v <= 1'b0;
-            if (v4) begin
-                case (k4)
+            if (v5) begin
+                case (k5)
                 K_PRE: begin
-                    wk_we <= 1'b1; wk_waddr <= a4; wk_wdata <= {yr, yi};
+                    wk_we <= 1'b1; wk_waddr <= a5; wk_wdata <= {y5r, y5i};
                 end
                 K_FFT: begin
-                    wk_we <= 1'b1; wk_waddr <= a4; wk_wdata <= {top_r, top_i};
-                    bw_v <= 1'b1; bw_a <= b4; bw_d <= {bot_r, bot_i};
+                    wk_we <= 1'b1; wk_waddr <= a5; wk_wdata <= {top_r, top_i};
+                    bw_v <= 1'b1; bw_a <= b5; bw_d <= {bot_r, bot_i};
                 end
                 K_POST: begin
-                    wk_we <= 1'b1; wk_waddr <= a4; wk_wdata <= {yr, yi_neg};
+                    wk_we <= 1'b1; wk_waddr <= a5; wk_wdata <= {y5r, y5n};
                 end
                 K_WIN: begin
                     if (lng) begin
-                        o1_v <= 1'b1; o1_p <= p4; o1_z <= yr;
-                    end else if (n4 < 8'd128) begin
-                        o1_v <= 1'b1; o1_p <= p4; o1_z <= zshort;
+                        o1_v <= 1'b1; o1_p <= p5; o1_z <= y5r;
+                    end else if (n5 < 8'd128) begin
+                        o1_v <= 1'b1; o1_p <= p5; o1_z <= zshort;
                     end else begin
-                        ov_we <= 1'b1; ov_waddr <= n4[6:0]; ov_wdata <= yr;
+                        ov_we <= 1'b1; ov_waddr <= n5[6:0]; ov_wdata <= y5r;
                     end
                 end
                 K_FLUSH: begin
-                    o1_v <= 1'b1; o1_p <= p4; o1_z <= ov_q;
+                    o1_v <= 1'b1; o1_p <= p5; o1_z <= ov_q;
                 end
                 default: begin  // K_ZERO
-                    o1_v <= 1'b1; o1_p <= p4; o1_z <= 35'd0;
+                    o1_v <= 1'b1; o1_p <= p5; o1_z <= 35'd0;
                 end
                 endcase
             end

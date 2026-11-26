@@ -255,7 +255,7 @@ module aac_dec (
                     go <= 1'b1;
                     q <= Q_IDLE;
                 end else if (blk_done) begin
-                    qdrain <= 4'd8;
+                    qdrain <= 4'd12;
                     q <= Q_DRAIN;
                 end
             end

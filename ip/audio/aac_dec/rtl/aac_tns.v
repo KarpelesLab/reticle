@@ -86,19 +86,33 @@ module aac_tns (
 
     reg  signed [24:0] k  [0:11];
     reg  signed [34:0] gs [0:11];
+    reg  [11:0] gval;      // which gs have been written since the filter began
+    // gs has one write port: g[m] in the second half of a sample, g[0] at
+    // its end.
+    wire        gs_we = (st == N_Q && v3) || st == N_OUT;
+    wire [3:0]  gs_wa = (st == N_OUT) ? 4'd0 : m3;
+    wire [34:0] gs_wd = (st == N_OUT) ? f : g_new;
+    always @(posedge clk)
+        if (gs_we)
+            gs[gs_wa] <= gs_wd;
     reg  signed [34:0] fv [0:11];
     reg  signed [34:0] f;
 
-    // Multiplier, registered in and out: an operand pair issued in cycle t
-    // is a product at the end of t + 1 and used in t + 2.
+    // Multiplier, registered in and out, and its rounding registered: an
+    // operand pair issued in cycle t is a product at the end of t + 1, a
+    // rounded one at the end of t + 2, and used in t + 3.
     reg  signed [34:0] m_a;
     reg  signed [24:0] m_b;
     reg  signed [59:0] m_p;
-    always @(posedge clk) m_p <= m_a * m_b;
+    reg  signed [36:0] prod_r;
+    wire signed [59:0] prod_full = (m_p + 60'sd4194304) >>> 23;
+    always @(posedge clk) begin
+        m_p <= m_a * m_b;
+        prod_r <= prod_full[36:0];
+    end
     reg  [3:0] iss;        // next index m to issue
-    reg  [3:0] m1, m2;     // index of the product in flight, and the one out
-    reg        v1, v2;
-    wire signed [36:0] prod_r = (m_p + 60'sd4194304) >>> 23;
+    reg  [3:0] m1, m2, m3; // index of the product in flight, rounding, out
+    reg        v1, v2, v3;
     function [34:0] sat37;
         input signed [36:0] v;
         begin
@@ -112,14 +126,14 @@ module aac_tns (
     endfunction
     wire signed [36:0] f_sub = {{2{f[34]}}, f} - prod_r;
     wire [34:0] f_new = sat37(f_sub);
-    wire signed [34:0] g_prev = gs[m2 - 4'd1];
+    wire signed [34:0] g_prev = gval[m3 - 4'd1] ? gs[m3 - 4'd1] : 35'sd0;
     wire signed [36:0] g_add = prod_r + {{2{g_prev[34]}}, g_prev};
     wire [34:0] g_new = sat37(g_add);
 
-    integer z;
     // The coefficient and state registers need no reset: every filter
-    // loads k before it runs, clears gs, and writes fv in the first half of
-    // each sample before the second half reads it.
+    // loads k before it runs, reads a g it has not written as zero (gval),
+    // and writes fv in the first half of each sample before the second half
+    // reads it. So each is a small RAM, not flip-flops with a clear.
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -128,7 +142,8 @@ module aac_tns (
             left <= 11'd0; ci <= 5'd0; f <= 35'sd0;
             td_raddr <= 4'd0; tc_raddr <= 8'd0;
             m_a <= 35'sd0; m_b <= 25'sd0; iss <= 4'd0;
-            m1 <= 4'd0; m2 <= 4'd0; v1 <= 1'b0; v2 <= 1'b0;
+            m1 <= 4'd0; m2 <= 4'd0; m3 <= 4'd0; v1 <= 1'b0; v2 <= 1'b0; v3 <= 1'b0;
+            gval <= 12'd0;
             raddr <= 10'd0; we <= 1'b0; waddr <= 10'd0; wdata <= 35'd0;
         end else begin
             done <= 1'b0;
@@ -175,8 +190,7 @@ module aac_tns (
                         addr <= dir ? e0[9:0] - 10'd1 : s0[9:0];
                         left <= e0 - s0;
                     end
-                    for (z = 0; z < 12; z = z + 1)
-                        gs[z] <= 35'sd0;
+                    gval <= 12'd0;     // every g starts at zero
                     st <= N_READ;
                 end
                 ci <= ci + 5'd1;
@@ -192,7 +206,7 @@ module aac_tns (
                 if (ci == 5'd1) begin
                     f <= rdata;
                     iss <= order;
-                    v1 <= 1'b0; v2 <= 1'b0;
+                    v1 <= 1'b0; v2 <= 1'b0; v3 <= 1'b0;
                     st <= N_P;
                 end
             end
@@ -202,16 +216,18 @@ module aac_tns (
                 m1 <= iss;
                 v2 <= v1;
                 m2 <= m1;
+                v3 <= v2;
+                m3 <= m2;
                 if (iss != 4'd0) begin
-                    m_a <= gs[iss - 4'd1];
+                    m_a <= gval[iss - 4'd1] ? gs[iss - 4'd1] : 35'sd0;
                     m_b <= k[iss - 4'd1];
                     iss <= iss - 4'd1;
                 end
-                if (v2) begin
+                if (v3) begin
                     f <= f_new;
-                    fv[m2 - 4'd1] <= f_new;
+                    fv[m3 - 4'd1] <= f_new;
                 end
-                if (iss == 4'd0 && !v1 && !v2) begin
+                if (iss == 4'd0 && !v1 && !v2 && !v3) begin
                     iss <= order - 4'd1;
                     st <= N_Q;
                 end
@@ -222,18 +238,20 @@ module aac_tns (
                 m1 <= iss;
                 v2 <= v1;
                 m2 <= m1;
+                v3 <= v2;
+                m3 <= m2;
                 if (iss != 4'd0) begin
                     m_a <= fv[iss - 4'd1];
                     m_b <= k[iss - 4'd1];
                     iss <= iss - 4'd1;
                 end
-                if (v2)
-                    gs[m2] <= g_new;
-                if (iss == 4'd0 && !v1 && !v2)
+                if (v3)
+                    gval[m3] <= 1'b1;
+                if (iss == 4'd0 && !v1 && !v2 && !v3)
                     st <= N_OUT;
             end
             N_OUT: begin
-                gs[0] <= f;
+                gval[0] <= 1'b1;
                 we <= 1'b1;
                 waddr <= addr;
                 wdata <= f;

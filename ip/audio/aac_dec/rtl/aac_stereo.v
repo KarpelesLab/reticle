@@ -128,7 +128,13 @@ module aac_stereo (
     reg  signed [34:0] m_a;
     reg  signed [24:0] m_b;
     reg  signed [59:0] m_p;
-    always @(posedge clk) m_p <= m_a * m_b;
+    // The product registered twice: once in the DSP slices, and once more
+    // after the adder that joins their two halves, which is fabric.
+    reg  signed [59:0] m_q;
+    always @(posedge clk) begin
+        m_p <= m_a * m_b;
+        m_q <= m_p;
+    end
 
     wire [24:0] gm;
     reg  [1:0]  gm_idx;
@@ -136,34 +142,54 @@ module aac_stereo (
     wire [24:0] isq;
     aac_inv_sqrt u_isq (.idx(width[6:2] - 5'd1), .q(isq));
 
-    // PNS: V = (gm * isq) >> (39 - e), e = nrg >> 2, saturated.
-    reg  [10:0] nsh;       // 39 - e, signed
+    // PNS: V = (gm * isq) >> (39 - e), e = nrg >> 2, saturated: the shift,
+    // its rounding half and the out-of-range cases are fixed for the band
+    // and set up before the product; the shift and the saturation are a
+    // cycle each.
+    reg  [5:0]  vsh;       // 39 - e, where it is 9..47
+    reg  [47:0] vhalf;
+    reg         vsat;      // 39 - e <= 8: the value saturates
+    reg         vzero;     // 39 - e >= 48: the value is zero
+    reg  [47:0] vsh_r;
     reg  [34:0] vval;
-    wire [46:0] vp = m_p[46:0];
-    wire [47:0] vround = {1'b0, vp} + ((nsh[10] || nsh == 11'd0) ? 48'd0 :
-                                       (48'd1 << (nsh[5:0] - 6'd1)));
-    wire [47:0] vshift = vround >> nsh[5:0];
-    wire [34:0] vnext = (nsh[10] || nsh <= 11'd8) ? 35'h3_FFFF_FFFF :
-                        (nsh >= 11'd48) ? 35'd0 :
-                        (vshift > 48'h3_FFFF_FFFF ? 35'h3_FFFF_FFFF : vshift[34:0]);
+    wire [47:0] vshift = ({1'b0, m_q[46:0]} + vhalf) >> vsh;
+    wire [34:0] vnext = vsat ? 35'h3_FFFF_FFFF : vzero ? 35'd0 :
+                        (vsh_r > 48'h3_FFFF_FFFF ? 35'h3_FFFF_FFFF : vsh_r[34:0]);
 
-    // Intensity: r = (l * gm) >> (23 - (gexp >> 2)), gexp = -pos.
-    reg  [10:0] ish;       // 23 - (gexp >> 2), signed
+    // Intensity: r = (l * gm) >> (23 - (gexp >> 2)), gexp = -pos. Likewise
+    // the shift (offset by ten, 0..69) and its half are the band's; p4 shifts
+    // and p5 saturates and signs.
+    reg  [6:0]  is_s;
+    reg  signed [69:0] ihalf;
+    reg         izero;     // the shift is 60 or more: zero
+    reg         isatsh;    // the shift is -11 or less: saturate unless zero
     reg         ineg;
-    wire signed [69:0] ipe = {m_p, 10'd0};
-    wire [6:0]  is_s = ish[6:0] + 7'd10;
-    wire signed [69:0] ihalf = (is_s == 7'd0) ? 70'sd0 : (70'sd1 <<< (is_s - 7'd1));
+    wire signed [69:0] ipe = {m_q, 10'd0};
     wire signed [69:0] ishf = (ipe + ihalf) >>> is_s;
     wire signed [34:0] imax = 35'sh3_FFFF_FFFF;
     wire signed [34:0] imin = -35'sh4_0000_0000;
-    wire signed [34:0] isat = (ishf > $signed({{35{1'b0}}, imax})) ? imax :
-                              (ishf < $signed({{35{1'b1}}, imin})) ? imin : ishf[34:0];
-    wire        l_zero_p = m_p == 60'sd0;
-    wire signed [34:0] ival = (!ish[10] && ish >= 11'd60) ? 35'sd0 :
-                              ($signed(ish) <= -11'sd11) ?
-                                  (l_zero_p ? 35'sd0 : (m_p[59] ? imin : imax)) :
-                              isat;
+    reg  [34:0] i_lo;      // p5: the shift's low bits, whether they overflow,
+    reg         i_ovf;     //     its sign, and the product's sign and zero
+    reg         i_sign;
+    reg         i_pzero;
+    reg         i_psign;
+    wire signed [34:0] ival = izero ? 35'sd0 :
+                              isatsh ? (i_pzero ? 35'sd0 : (i_psign ? imin : imax)) :
+                              i_ovf ? (i_sign ? imin : imax) : $signed(i_lo);
     wire signed [34:0] ineg_v = (ival == imin) ? imax : -ival;
+
+    // The noise value's shift for a band of energy nrg: 39 - (nrg >> 2).
+    task vprep;
+        input [11:0] nrg;
+        reg   [10:0] sh;
+        begin
+            sh = 11'd39 - {nrg[11], nrg[11:2]};
+            vsh <= sh[5:0];
+            vhalf <= (sh[10] || sh == 11'd0) ? 48'd0 : (48'd1 << (sh[5:0] - 6'd1));
+            vsat <= sh[10] || sh <= 11'd8;
+            vzero <= !sh[10] && sh >= 11'd48;
+        end
+    endtask
 
     // M/S sums, saturated.
     wire signed [35:0] msum = {l_rdata[34], l_rdata} + {r_rdata[34], r_rdata};
@@ -184,8 +210,8 @@ module aac_stereo (
     wire        prbs_bit = prbs[30] ^ prbs[27];
 
     // Pipeline of the per-coefficient loops: what was read where.
-    reg  [9:0]  p1_addr, p2_addr, p3_addr, p4_addr;
-    reg         p1_v, p2_v, p3_v, p4_v;
+    reg  [9:0]  p1_addr, p2_addr, p3_addr, p4_addr, p5_addr, p6_addr;
+    reg         p1_v, p2_v, p3_v, p4_v, p5_v, p6_v;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -195,10 +221,15 @@ module aac_stereo (
             cb_l <= 4'd0; cb_r <= 4'd0; val_l <= 12'd0; val_r <= 12'd0; msu <= 1'b0;
             base <= 10'd0; width <= 7'd0; i <= 7'd0; pend <= 4'd0;
             m_a <= 35'sd0; m_b <= 25'sd0; gm_idx <= 2'd0;
-            nsh <= 11'd0; vval <= 35'd0; ish <= 11'd0; ineg <= 1'b0;
+            vval <= 35'd0; ineg <= 1'b0;
             prbs <= 31'd1; prbs_save <= 31'd1;
             p1_addr <= 10'd0; p2_addr <= 10'd0; p3_addr <= 10'd0; p4_addr <= 10'd0;
-            p1_v <= 1'b0; p2_v <= 1'b0; p3_v <= 1'b0; p4_v <= 1'b0;
+            p5_addr <= 10'd0; p6_addr <= 10'd0;
+            p1_v <= 1'b0; p2_v <= 1'b0; p3_v <= 1'b0; p4_v <= 1'b0; p5_v <= 1'b0;
+            p6_v <= 1'b0;
+            vsh <= 6'd0; vhalf <= 48'd0; vsat <= 1'b0; vzero <= 1'b0; vsh_r <= 48'd0;
+            is_s <= 7'd0; ihalf <= 70'sd0; izero <= 1'b0; isatsh <= 1'b0;
+            i_lo <= 35'd0; i_ovf <= 1'b0; i_sign <= 1'b0; i_pzero <= 1'b0; i_psign <= 1'b0;
             l_we <= 1'b0; l_waddr <= 10'd0; l_wdata <= 35'd0; l_raddr <= 10'd0;
             r_we <= 1'b0; r_waddr <= 10'd0; r_wdata <= 35'd0; r_raddr <= 10'd0;
         end else begin
@@ -254,12 +285,12 @@ module aac_stereo (
                 if (step == 2'd0 && noise_l) begin
                     // V for the left (or only) channel.
                     gm_idx <= val_l[1:0];
-                    nsh <= 11'd39 - {{1{val_l[11]}}, val_l[11:2]};
+                    vprep(val_l);
                     prbs_save <= prbs;
                     st <= T_VMUL;
                 end else if (step == 2'd1 && noise_r) begin
                     gm_idx <= val_r[1:0];
-                    nsh <= 11'd39 - {{1{val_r[11]}}, val_r[11:2]};
+                    vprep(val_r);
                     if (noise_l && ms_on)
                         prbs <= prbs_save;
                     st <= T_VMUL;
@@ -267,12 +298,20 @@ module aac_stereo (
                     // gexp = -pos; ish = 23 - (gexp >> 2)
                     begin : isprep
                         reg [12:0] gexp;
+                        reg [10:0] sh;    // 23 - (gexp >> 2), signed
+                        reg [6:0]  s10;
                         gexp = 13'd0 - {val_r[11], val_r};
+                        sh = 11'd23 - gexp[12:2];
+                        s10 = sh[6:0] + 7'd10;
                         gm_idx <= gexp[1:0];
-                        ish <= 11'd23 - gexp[12:2];
+                        is_s <= s10;
+                        ihalf <= (s10 == 7'd0) ? 70'sd0 : (70'sd1 <<< (s10 - 7'd1));
+                        izero <= !sh[10] && sh >= 11'd60;
+                        isatsh <= $signed(sh) <= -11'sd11;
                         ineg <= (cb_r == 4'd14) != (ms_mask == 2'd1 && msu);
                     end
                     p1_v <= 1'b0; p2_v <= 1'b0; p3_v <= 1'b0; p4_v <= 1'b0;
+                    p5_v <= 1'b0; p6_v <= 1'b0;
                     st <= T_LOOP;
                 end else if (step == 2'd3 ||
                              (step == 2'd2 && !(is_r || do_ms))) begin
@@ -289,11 +328,16 @@ module aac_stereo (
             T_VMUL2: begin
                 // m_p is written at the end of this cycle.
                 st <= T_NOISE;
-                pend <= 4'd1;
+                pend <= 4'd3;
             end
             T_NOISE: begin
-                if (pend != 4'd0) begin
-                    pend <= pend - 4'd1;
+                if (pend == 4'd3) begin
+                    pend <= 4'd2;           // m_q is being written
+                end else if (pend == 4'd2) begin
+                    pend <= 4'd1;
+                    vsh_r <= vshift;
+                end else if (pend != 4'd0) begin
+                    pend <= 4'd0;
                     vval <= vnext;
                 end else if (i == width) begin
                     step <= step + 2'd1;
@@ -331,6 +375,15 @@ module aac_stereo (
                 p2_v <= p1_v; p2_addr <= p1_addr;
                 p3_v <= p2_v; p3_addr <= p2_addr;
                 p4_v <= p3_v; p4_addr <= p3_addr;
+                p5_v <= p4_v; p5_addr <= p4_addr;
+                p6_v <= p5_v; p6_addr <= p5_addr;
+                // p5: the product is in m_q; shift it. p6: saturate, sign
+                // and write.
+                i_lo <= ishf[34:0];
+                i_ovf <= !(ishf[69:34] == 36'd0 || ishf[69:34] == {36{1'b1}});
+                i_sign <= ishf[69];
+                i_pzero <= m_q == 60'sd0;
+                i_psign <= m_q[59];
                 if (p2_v) begin
                     if (is_r) begin
                         m_a <= l_rdata;
@@ -340,11 +393,12 @@ module aac_stereo (
                         r_we <= 1'b1; r_waddr <= p2_addr; r_wdata <= sat36(mdif);
                     end
                 end
-                if (is_r && p4_v) begin
-                    r_we <= 1'b1; r_waddr <= p4_addr;
+                if (is_r && p6_v) begin
+                    r_we <= 1'b1; r_waddr <= p6_addr;
                     r_wdata <= ineg ? ineg_v : ival;
                 end
-                if (i == width && !p1_v && !p2_v && !p3_v && !p4_v) begin
+                if (i == width && !p1_v && !p2_v && !p3_v && !p4_v && !p5_v &&
+                    !p6_v) begin
                     step <= 2'd3;
                     st <= T_STEP;
                 end
