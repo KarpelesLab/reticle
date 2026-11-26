@@ -19,10 +19,10 @@ deblocked picture out to SDRAM in the tiled frame layout.
 Everything here was written from ITU-T H.264 (V16, 06/2026). No other
 decoder's source was read. Clause and equation numbers are that edition's.
 
-**Nothing in this package has been run on a board, and nothing has yet
-been compared with a real stream's decode** — see *What is and is not
-checked* below. What is proved is what `tests/ip_h264_recon.rs` checks in
-simulation against a model written from the same Recommendation.
+**Nothing in this package has been run on a board.** In simulation it
+reproduces, sample for sample, every picture of seventeen libx264
+streams as the model agent's decoder (`tools/h264_model.py`, itself
+bit-exact with ffmpeg) decodes them — see *What is and is not checked*.
 
 ## The pipeline
 
@@ -207,7 +207,7 @@ the edges (see its header).
 | every intra mode, availability, constrained intra prediction | whole pictures, three slices, every mode the neighbours allow, all used | **checked** against the model |
 | the deblocking order, slot and line buffer movement, every sample sent once | whole pictures with back-pressure | **checked** against the model |
 | bS derivation, token fields, the stages in step, bursts inside a row | eight pictures end to end through an SDRAM model | **checked** against the model |
-| any of it against a real stream's decode | — | **not yet**: the model agent's dumps (`testdata/ip/h264_*.txt`) had not landed when this was written. Until then a misreading of the Recommendation that this file's model shares would pass. |
+| **every sample of every picture of real streams** | `recon_matches_the_models_dumps_of_real_streams`: the four committed dumps (`testdata/ip/h264_*_{intra_32x32_qp26,intra_48x32_qp12,p_32x32_dump,craft_pcm}.txt`), 9 pictures; `recon_matches_more_of_the_models_dumps` (ignored; `RETICLE_H264_DUMPS`): 13 more streams of `testdata/ip/h264` dumped locally, 41 pictures — QP 1 and 51, Intra_16x16, constrained intra prediction, three slices, FilterOffsets −3/+3 and +6/−6, deblocking off, P_Skip-heavy, four references, P_8x8 sub-partitions, cropping | **checked** against the model's `post` rows, the model being bit-exact with ffmpeg on these streams (`tests/h264_model.rs`). The tokens are the parser's as the model dumps them; the `MV`s and the inter prediction are taken from the model's inter dump, so this is recon alone |
 
 A test that passes against a wrong implementation is worse than none, so
 the tests were checked against deliberate faults: the transform's rounding

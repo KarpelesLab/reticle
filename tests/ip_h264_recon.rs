@@ -10,6 +10,12 @@
 //! |------|----------------|
 //! | `dbf_tables_match_tables_8_16_and_8_17` | all 52 indices of α′, β′ and every bS of t′C0 |
 //! | `dbf_filter_matches_8_7_2_3_and_8_7_2_4` | the edge filter, luma and chroma, every bS, against the equations |
+//! | `residual_matches_8_5_for_every_kind` | scaling, transforms, Hadamard, chroma DC and I_PCM against 8.5 |
+//! | `intra_constructs_pictures_as_8_3_says` | every intra mode, availability and the line buffer over whole pictures |
+//! | `deblock_filters_pictures_as_8_7_says` | the deblocking order, slots, line buffer and output records |
+//! | `recon_decodes_pictures_through_the_sdram_port` | the whole package end to end with every port stalling |
+//! | `recon_keeps_within_the_720p30_budget` | cycles a macroblock in steady state, at most 925 |
+//! | `recon_matches_the_models_dumps_of_real_streams` | every sample of four libx264/crafted streams as the ffmpeg-exact model decodes them |
 
 #![cfg(all(feature = "verilog", feature = "sim"))]
 // The model transcribes the Recommendation's indexed equations, which
@@ -2885,4 +2891,306 @@ fn recon_keeps_within_the_720p30_budget() {
         );
     }
     println!("h264_recon throughput:\n  {}", report.join("\n  "));
+}
+
+// ---------------------------------------------------------------------------
+// Against the model agent's dumps: streams libx264 wrote, ffmpeg decoded
+// ---------------------------------------------------------------------------
+
+/// (ref_idx, mv x, mv y) of one 4x4 block.
+type BlockMv = (u32, i32, i32);
+
+/// One stream of the model's dumps, read for `h264_recon`: its tokens with
+/// `h264_mvpred`'s `MV`s put in, the inter prediction words in macroblock
+/// order, and every picture's deblocked macroblocks.
+struct DumpStream {
+    w: usize,
+    h: usize,
+    tokens: Vec<u32>,
+    preds: Vec<u32>,
+    /// Per picture, per macroblock address: the `post` rows of Y, U, V.
+    post: Vec<Vec<[Vec<u8>; 3]>>,
+}
+
+fn hex_bytes(s: &str) -> Vec<u8> {
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// Reads `testdata/ip/h264_{tokens,recon,inter}_NAME.txt`
+/// (docs/h264-decoder.md, "Model dumps").
+fn read_dump(dir: &Path, name: &str) -> DumpStream {
+    let read = |kind: &str| {
+        fs::read_to_string(dir.join(format!("h264_{kind}_{name}.txt")))
+            .map(|t| t.replace("\r\n", "\n"))
+    };
+    let tokens_txt = read("tokens").expect("a tokens dump");
+    let recon_txt = read("recon").expect("a recon dump");
+    let inter_txt = read("inter").unwrap_or_default();
+    // The inter file: per (picture, macroblock), the vectors and the words.
+    let mut mvs: std::collections::HashMap<(usize, usize), Vec<BlockMv>> =
+        std::collections::HashMap::new();
+    let mut words: std::collections::HashMap<(usize, usize), Vec<u32>> =
+        std::collections::HashMap::new();
+    let (mut pic, mut mb) = (0usize, 0usize);
+    for line in inter_txt.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.first() {
+            Some(&"pic") => pic = f[1].parse().expect("a picture index"),
+            Some(&"mb") => mb = f[1].parse().expect("an address"),
+            Some(&"mv") if f[1] == "l0" => {
+                let v = f[2..]
+                    .iter()
+                    .map(|e| {
+                        let p: Vec<&str> = e.split(':').collect();
+                        if p.len() == 3 {
+                            (
+                                p[0].parse().expect("ref"),
+                                p[1].parse().expect("x"),
+                                p[2].parse().expect("y"),
+                            )
+                        } else {
+                            (0, 0, 0)
+                        }
+                    })
+                    .collect();
+                mvs.insert((pic, mb), v);
+            }
+            Some(&"pred") => {
+                let v = f[1..]
+                    .iter()
+                    .map(|w| u32::from_str_radix(w, 16).expect("a word"))
+                    .collect();
+                words.insert((pic, mb), v);
+            }
+            _ => {}
+        }
+    }
+    // The tokens, with each P macroblock's vectors before its MB_CBP.
+    let mut tokens = Vec::new();
+    let mut preds = Vec::new();
+    let (mut w, mut h) = (0usize, 0usize);
+    let mut pic: Option<usize> = None;
+    let mut mb = 0usize;
+    let mut inter = false;
+    for line in tokens_txt.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.first() {
+            Some(&"stream") => {
+                w = f[2].parse().expect("width");
+                h = f[3].parse().expect("height");
+            }
+            Some(&"pic") => pic = Some(f[1].parse().expect("a picture index")),
+            Some(&"mb") => mb = f[1].parse().expect("an address"),
+            Some(&"tok") => {
+                let t = u32::from_str_radix(f[1], 16).expect("a token");
+                let tag = t >> 24;
+                let p = pic.expect("a picture");
+                if tag == 0x11 {
+                    inter = (4..=9).contains(&((t >> 19) & 31));
+                }
+                if tag == 0x19 && inter {
+                    let v = &mvs[&(p, mb)];
+                    for blk in 0..16 {
+                        let (x, y) = blk_xy(blk);
+                        let (r, mx, my) = v[4 * y + x];
+                        let b = u32::try_from(blk).expect("small");
+                        tokens.push(tok(0x16, (b << 19) | field(mx, 16)));
+                        tokens.push(tok(0x16, (b << 19) | (1 << 18) | (r << 13) | field(my, 13)));
+                    }
+                    preds.extend(&words[&(p, mb)]);
+                }
+                tokens.push(t);
+            }
+            _ => {}
+        }
+    }
+    // The pictures as the model deblocked them.
+    let mut post: Vec<Vec<[Vec<u8>; 3]>> = Vec::new();
+    for line in recon_txt.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.first() {
+            Some(&"pic") => post.push(vec![[Vec::new(), Vec::new(), Vec::new()]; w * h]),
+            Some(&"mb") => mb = f[1].parse().expect("an address"),
+            Some(&"post") => {
+                let c = match f[1] {
+                    "y" => 0,
+                    "u" => 1,
+                    _ => 2,
+                };
+                let rows: Vec<u8> = f[2..].iter().flat_map(|r| hex_bytes(r)).collect();
+                post.last_mut().expect("a picture")[mb][c] = rows;
+            }
+            _ => {}
+        }
+    }
+    DumpStream {
+        w,
+        h,
+        tokens,
+        preds,
+        post,
+    }
+}
+
+/// `h264_recon` against the model agent's dumps of four streams, three of
+/// them written by libx264 — so this is the check against ffmpeg's own
+/// decode: `tools/h264_model.py` is bit-exact with ffmpeg on every
+/// committed stream (`tests/h264_model.rs`), and its `post` rows are the
+/// pictures ffmpeg shows.
+///
+/// The tokens are the parser's as the model dumps them; the `MV`s
+/// `h264_mvpred` would insert and the prediction `h264_inter` would send
+/// are taken from the model's inter dump, so this checks recon alone,
+/// every sample of every picture: Intra_4x4 at QP 23 and Intra_16x16 at
+/// QP 12, P pictures with P_8x8 sub-partitions over two references, and
+/// I_PCM alone, beside Intra_4x4 and inside P slices with P_Skip.
+///
+/// Would catch: any misreading of the Recommendation in this package
+/// that the model does not share — which the tests above, against a
+/// model written by the same hand, cannot.
+#[test]
+fn recon_matches_the_models_dumps_of_real_streams() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/ip");
+    for name in [
+        "intra_32x32_qp26",
+        "intra_48x32_qp12",
+        "p_32x32_dump",
+        "craft_pcm",
+    ] {
+        decode_dump(&dir, name);
+    }
+}
+
+/// More of the model's dumps than are committed: every
+/// `h264_tokens_*.txt` in the directory `RETICLE_H264_DUMPS` names, made
+/// with `python3 tools/h264_model.py dump STREAM.264 DIR --frames N`.
+/// Ignored, and skips when the variable is unset; the streams are
+/// libx264's in `testdata/ip/h264`.
+#[test]
+#[ignore = "needs RETICLE_H264_DUMPS"]
+fn recon_matches_more_of_the_models_dumps() {
+    let Some(dir) = std::env::var_os("RETICLE_H264_DUMPS") else {
+        println!("RETICLE_H264_DUMPS is not set: nothing to compare");
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .expect("a directory")
+        .filter_map(|e| {
+            let f = e.ok()?.file_name().into_string().ok()?;
+            Some(
+                f.strip_prefix("h264_tokens_")?
+                    .strip_suffix(".txt")?
+                    .to_owned(),
+            )
+        })
+        .collect();
+    names.sort();
+    for name in &names {
+        decode_dump(&dir, name);
+    }
+}
+
+/// Decodes one dumped stream through `h264_recon` and compares every
+/// sample of every picture with the model's.
+fn decode_dump(dir: &Path, name: &str) {
+    let design = design("h264_recon");
+    {
+        let d = read_dump(dir, name);
+        let mut b = recon_bench(&design);
+        let mut ti = 0usize;
+        let mut pi = 0usize;
+        let mut done = 0usize;
+        let mut frame_of_next = 1u64;
+        let mut sdram = Sdram {
+            words: std::collections::HashMap::new(),
+            burst: None,
+            bursts: 0,
+        };
+        let start = b.cycles;
+        while done < d.post.len() {
+            let tv = ti < d.tokens.len();
+            b.set("tok_valid", u64::from(tv));
+            b.set("tok", u64::from(d.tokens.get(ti).copied().unwrap_or(0)));
+            b.set("frame_idx", frame_of_next);
+            let pv = pi < d.preds.len();
+            b.set("pred_valid", u64::from(pv));
+            b.set(
+                "pred_data",
+                u64::from(d.preds.get(pi).copied().unwrap_or(0)),
+            );
+            b.set("cmd_ready", 1);
+            b.set("wr_ready", 1);
+            let tok_taken = tv && b.get("tok_ready") == 1;
+            let pred_taken = pv && b.get("pred_ready") == 1;
+            if b.get("cmd_valid") == 1 {
+                let a = u32::try_from(b.get("cmd_addr")).expect("24 bits");
+                let len = u32::try_from(b.get("cmd_len")).expect("small");
+                sdram.burst = Some((a, len, 0));
+            }
+            if b.get("wr_valid") == 1 {
+                let (a, len, k) = sdram.burst.expect("a beat outside a burst");
+                sdram
+                    .words
+                    .insert(a + k, u16::try_from(b.get("wr_data")).expect("16 bits"));
+                sdram.burst = if k == len {
+                    None
+                } else {
+                    Some((a, len, k + 1))
+                };
+            }
+            let pic_done = b.get("pic_done") == 1;
+            b.cycle();
+            if tok_taken {
+                if d.tokens[ti] == tok(0x06, 0) {
+                    frame_of_next += 1;
+                }
+                ti += 1;
+            }
+            if pred_taken {
+                pi += 1;
+            }
+            if pic_done {
+                done += 1;
+            }
+            assert!(
+                b.cycles - start < 2_000_000,
+                "{name}: stalled at token {ti}, {done} pictures"
+            );
+        }
+        assert_eq!(pi, d.preds.len(), "{name}: prediction words left over");
+        for (k, pic) in d.post.iter().enumerate() {
+            let frame = u32::try_from((k + 1) % 8).expect("small");
+            for (addr, mb) in pic.iter().enumerate() {
+                let (mx, my) = (addr % d.w, addr / d.w);
+                for c in 0..3 {
+                    let n = if c == 0 { 16 } else { 8 };
+                    for y in 0..n {
+                        for x in 0..n {
+                            let (px, py) = (mx * n + x, my * n + y);
+                            let wd = sdram.words.get(&frame_word(frame, c, px, py)).copied();
+                            let wd =
+                                wd.unwrap_or_else(|| panic!("{name} picture {k}: never written"));
+                            let got = u8::try_from(if px % 2 == 0 { wd & 0xFF } else { wd >> 8 })
+                                .expect("byte");
+                            assert_eq!(
+                                got,
+                                mb[c][n * y + x],
+                                "{name} picture {k} macroblock {addr} plane {c} ({x}, {y})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "{name}: {} pictures of {}x{} macroblocks match, {} cycles",
+            d.post.len(),
+            d.w,
+            d.h,
+            b.cycles - start
+        );
+    }
 }
