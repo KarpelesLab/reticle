@@ -12,3 +12,4 @@ source rtl/h264_dbf_filter.v
 source rtl/h264_itrans4.v
 source rtl/h264_residual.v
 source rtl/h264_intra.v
+source rtl/h264_deblock.v

@@ -18,7 +18,7 @@ use std::path::Path;
 
 use reticle::diag::Diagnostics;
 use reticle::ir::Design;
-use reticle::logic::Logic;
+use reticle::logic::{Bit, Logic};
 use reticle::sim::{NetHandle, SimOptions, Simulator};
 use reticle::source::SourceMap;
 use reticle::verilog::{Dialect, ElabOptions, NoIncludes, elaborate, parse_source};
@@ -82,6 +82,14 @@ fn design(top: &str) -> Design {
 
 fn word(width: u32, value: u64) -> Logic {
     Logic::from_u64(value, width)
+}
+
+/// A value wider than 64 bits.
+fn logic_u128(width: u32, value: u128) -> Logic {
+    let bits: Vec<Bit> = (0..width)
+        .map(|i| if value >> i & 1 == 1 { Bit::One } else { Bit::Zero })
+        .collect();
+    Logic::from_bits(&bits)
 }
 
 /// A net of the top instance.
@@ -678,6 +686,11 @@ impl<'d> Bench<'d> {
     fn get(&mut self, name: &str) -> u64 {
         self.sim.run_for(1);
         get_u64(&self.sim, self.n[name].0)
+    }
+
+    /// A net up to 64 bits wide, as `get`.
+    fn get_wide(&mut self, name: &str) -> u64 {
+        self.get(name)
     }
 
     fn cycle(&mut self) {
@@ -1644,4 +1657,438 @@ fn intra_constructs_pictures_as_8_3_says() {
     assert!(used_i4.iter().all(|&n| n >= 20), "Intra_4x4 modes {used_i4:?}");
     assert!(used_i16.iter().all(|&n| n >= 3), "Intra_16x16 modes {used_i16:?}");
     assert!(used_c.iter().all(|&n| n >= 3), "chroma modes {used_c:?}");
+}
+
+// ---------------------------------------------------------------------------
+// The model: §8.7, the deblocking filter over a picture
+// ---------------------------------------------------------------------------
+
+/// The QPY the deblocking filter uses for a macroblock: 0 for I_PCM
+/// (8.7.2, "qPz is set to 0").
+fn dbf_qp(mb: &MbDesc) -> i32 {
+    if mb.kind == K_PCM { 0 } else { mb.qp }
+}
+
+/// 8.7.2.1 for the luma samples p0 at `(px, py)` and q0 at `(qx, qy)`
+/// (picture coordinates), for a frame with no field macroblocks.
+fn boundary_strength(pic: &PicDesc, px: usize, py: usize, qx: usize, qy: usize) -> u32 {
+    let w = pic.w;
+    let pa = (py / 16) * w + px / 16;
+    let qa = (qy / 16) * w + qx / 16;
+    let (mp, mq) = (&pic.mbs[pa], &pic.mbs[qa]);
+    let mb_edge = pa != qa;
+    if mp.kind != K_INTER || mq.kind != K_INTER {
+        return if mb_edge { 4 } else { 3 };
+    }
+    let bp = blk_at((px % 16) / 4, (py % 16) / 4);
+    let bq = blk_at((qx % 16) / 4, (qy % 16) / 4);
+    if mp.levels.coded[bp] || mq.levels.coded[bq] {
+        return 2;
+    }
+    let (vp, vq) = (mp.mv[bp], mq.mv[bq]);
+    if vp.2 != vq.2 || (vp.0 - vq.0).abs() >= 4 || (vp.1 - vq.1).abs() >= 4 {
+        return 1;
+    }
+    0
+}
+
+/// §8.7 over a whole picture, in macroblock order, as the clause reads.
+fn deblock_picture(pic: &PicDesc, input: &Planes) -> Planes {
+    let mut s = input.clone();
+    let w = pic.w;
+    for addr in 0..pic.mbs.len() {
+        let (mx, my) = (addr % w, addr / w);
+        let slice = pic.slice_of(addr);
+        let idc = slice.disable_deblocking;
+        let same_slice = |n: usize| n >= slice.first_mb;
+        let filter_left = mx > 0 && idc != 1 && !(idc == 2 && !same_slice(addr - 1));
+        let filter_top = my > 0 && idc != 1 && !(idc == 2 && !same_slice(addr - w));
+        let filter_inner = idc != 1;
+        for comp in 0..3usize {
+            let n = if comp == 0 { 16 } else { 8 };
+            let (x0, y0) = (mx * n, my * n);
+            // The edges, in order: vertical left to right, then horizontal.
+            for vertical in [true, false] {
+                let edges: Vec<usize> = if comp == 0 { vec![0, 4, 8, 12] } else { vec![0, 4] };
+                for &e in &edges {
+                    let on = if e == 0 {
+                        if vertical { filter_left } else { filter_top }
+                    } else {
+                        filter_inner
+                    };
+                    if !on {
+                        continue;
+                    }
+                    for k in 0..n {
+                        // q0's position, then p_i and q_i.
+                        let (qx, qy) = if vertical { (x0 + e, y0 + k) } else { (x0 + k, y0 + e) };
+                        let at = |i: i32| -> (usize, usize) {
+                            if vertical {
+                                (usize::try_from(i32::try_from(qx).expect("fits") + i).expect("inside"), qy)
+                            } else {
+                                (qx, usize::try_from(i32::try_from(qy).expect("fits") + i).expect("inside"))
+                            }
+                        };
+                        // The luma sample pair whose bS this line takes.
+                        let (lqx, lqy) = if comp == 0 { (qx, qy) } else { (2 * qx, 2 * qy) };
+                        let (lpx, lpy) = if vertical { (lqx - 1, lqy) } else { (lqx, lqy - 1) };
+                        let bs = boundary_strength(pic, lpx, lpy, lqx, lqy);
+                        // qPp, qPq.
+                        let pa = (lpy / 16) * w + lpx / 16;
+                        let qa = (lqy / 16) * w + lqx / 16;
+                        let qz = |a: usize| -> i32 {
+                            let q = dbf_qp(&pic.mbs[a]);
+                            if comp == 0 { q } else { chroma_qp(q, slice.chroma_qp_offset) }
+                        };
+                        let qpav = (qz(pa) + qz(qa) + 1) >> 1;
+                        let index_a = usize::try_from((qpav + slice.offset_a).clamp(0, 51)).expect("index");
+                        let index_b = usize::try_from((qpav + slice.offset_b).clamp(0, 51)).expect("index");
+                        let alpha = i32::from(ALPHA[index_a]);
+                        let beta = i32::from(BETA[index_b]);
+                        let tc0 = if (1..=3).contains(&bs) {
+                            i32::from(TC0[usize::try_from(bs - 1).expect("small")][index_a])
+                        } else {
+                            0
+                        };
+                        let mut line = [0i32; 8];
+                        for i in 0..4i32 {
+                            let (x, y) = at(-i - 1);
+                            line[usize::try_from(3 - i).expect("small")] = s.at(comp, x, y);
+                            let (x, y) = at(i);
+                            line[usize::try_from(4 + i).expect("small")] = if comp == 0 || i < 2 {
+                                s.at(comp, x, y)
+                            } else {
+                                // A chroma line reads no further than q1; a
+                                // position past the picture is never read.
+                                let (pw, ph) = (s.w / 2, s.h / 2);
+                                if x < pw && y < ph { s.at(comp, x, y) } else { 0 }
+                            };
+                        }
+                        let out = filter_line(line, bs, comp != 0, alpha, beta, tc0);
+                        for i in 0..3i32 {
+                            let (x, y) = at(-i - 1);
+                            s.put(comp, x, y, out[usize::try_from(3 - i).expect("small")]);
+                            let (x, y) = at(i);
+                            if comp == 0 || i < 2 {
+                                s.put(comp, x, y, out[usize::try_from(4 + i).expect("small")]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    s
+}
+
+/// The deblocking inputs of one macroblock, as `h264_deblock` takes them.
+struct DbfParams {
+    filt_left: bool,
+    filt_top: bool,
+    filt_inner: bool,
+    bs: u128,
+    qp: [i32; 9],
+    off_a: i32,
+    off_b: i32,
+}
+
+/// Works out a macroblock's deblocking inputs with the model's rules.
+fn dbf_params(pic: &PicDesc, addr: usize) -> DbfParams {
+    let w = pic.w;
+    let (mx, my) = (addr % w, addr / w);
+    let slice = pic.slice_of(addr);
+    let idc = slice.disable_deblocking;
+    let same_slice = |n: usize| n >= slice.first_mb;
+    let mut bs = 0u128;
+    let (x0, y0) = (mx * 16, my * 16);
+    for e in 0..4usize {
+        for k in 0..4usize {
+            if mx > 0 || e > 0 {
+                let v = boundary_strength(pic, x0 + 4 * e - 1 + usize::from(e == 0) * 0, y0 + 4 * k, x0 + 4 * e, y0 + 4 * k);
+                bs |= u128::from(v) << (3 * (4 * e + k));
+            }
+            if my > 0 || e > 0 {
+                let v = boundary_strength(pic, x0 + 4 * k, y0 + 4 * e - 1, x0 + 4 * k, y0 + 4 * e);
+                bs |= u128::from(v) << (48 + 3 * (4 * e + k));
+            }
+        }
+    }
+    let q = |a: usize| dbf_qp(&pic.mbs[a]);
+    let off = slice.chroma_qp_offset;
+    let left = if mx > 0 { addr - 1 } else { addr };
+    let top = if my > 0 { addr - w } else { addr };
+    DbfParams {
+        filt_left: mx > 0 && idc != 1 && !(idc == 2 && !same_slice(addr - 1)),
+        filt_top: my > 0 && idc != 1 && !(idc == 2 && !same_slice(addr - w)),
+        filt_inner: idc != 1,
+        bs,
+        qp: [
+            q(addr),
+            q(left),
+            q(top),
+            chroma_qp(q(addr), off),
+            chroma_qp(q(left), off),
+            chroma_qp(q(top), off),
+            chroma_qp(q(addr), off),
+            chroma_qp(q(left), off),
+            chroma_qp(q(top), off),
+        ],
+        off_a: slice.offset_a,
+        off_b: slice.offset_b,
+    }
+}
+
+/// A macroblock of a picture as the 96 words of a slot.
+fn pack_slot(pl: &Planes, mx: usize, my: usize) -> [u32; 96] {
+    let mut slot = [0u32; 96];
+    for y in 0..16 {
+        for w in 0..4 {
+            slot[4 * y + w] = (0..4).fold(0u32, |a, i| {
+                a | (u32::try_from(pl.at(0, mx * 16 + 4 * w + i, my * 16 + y)).expect("byte") << (8 * i))
+            });
+        }
+    }
+    for comp in 1..3 {
+        for y in 0..8 {
+            for w in 0..2 {
+                slot[64 + 16 * (comp - 1) + 2 * y + w] = (0..4).fold(0u32, |a, i| {
+                    a | (u32::try_from(pl.at(comp, mx * 8 + 4 * w + i, my * 8 + y)).expect("byte") << (8 * i))
+                });
+            }
+        }
+    }
+    slot
+}
+
+/// Collects `h264_deblock`'s (or the writer's) row records into a
+/// picture, checking each sample arrives exactly once.
+struct RecordSink {
+    pl: Planes,
+    seen: Vec<Vec<bool>>,
+    header: Option<(usize, usize, usize, usize)>,
+    words_left: usize,
+    word_at: usize,
+    eop: bool,
+}
+
+impl RecordSink {
+    fn new(w: usize, h: usize) -> RecordSink {
+        RecordSink {
+            pl: Planes::new(w, h),
+            seen: vec![vec![false; w * h * 256], vec![false; w * h * 64], vec![false; w * h * 64]],
+            header: None,
+            words_left: 0,
+            word_at: 0,
+            eop: false,
+        }
+    }
+
+    fn take(&mut self, rec: u64) {
+        let kind = rec >> 32;
+        let p = rec & 0xFFFF_FFFF;
+        match kind {
+            1 => {
+                assert_eq!(self.words_left, 0, "a header before the last record ended");
+                let plane = usize::try_from((p >> 26) & 3).expect("small");
+                let y = usize::try_from((p >> 15) & 0x7FF).expect("small");
+                let x = usize::try_from((p >> 4) & 0x7FF).expect("small");
+                let n = usize::try_from(p & 7).expect("small") + 1;
+                self.header = Some((plane, x, y, n));
+                self.words_left = n;
+                self.word_at = 0;
+            }
+            0 => {
+                let (plane, x, y, _) = self.header.expect("a word before any header");
+                assert!(self.words_left > 0, "more words than the header said");
+                for i in 0..4 {
+                    let xx = x + 4 * self.word_at + i;
+                    let v = i32::try_from((p >> (8 * i)) & 0xFF).expect("byte");
+                    let pw = if plane == 0 { self.pl.w } else { self.pl.w / 2 };
+                    let idx = y * pw + xx;
+                    assert!(!self.seen[plane][idx], "plane {plane} ({xx}, {y}) sent twice");
+                    self.seen[plane][idx] = true;
+                    self.pl.put(plane, xx, y, v);
+                }
+                self.word_at += 1;
+                self.words_left -= 1;
+            }
+            _ => {
+                assert_eq!(self.words_left, 0, "the picture ended inside a record");
+                self.eop = true;
+            }
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.seen.iter().all(|p| p.iter().all(|&s| s))
+    }
+}
+
+/// `h264_deblock` against §8.7 over whole pictures, and every sample
+/// sent exactly once.
+///
+/// The pictures are drawn as for the construction test and constructed
+/// by the model, then given to the HDL a macroblock at a time through
+/// four emulated slots, as `h264_recon` will. The boundary strengths
+/// are the model's, so this checks the filtering and the data movement,
+/// not the derivation of bS (which `h264_tokin`'s test does).
+///
+/// Would catch: an edge filtered out of the order §8.7 sets, a band
+/// boundary or the left columns written back to the wrong slot, a
+/// chroma edge given the wrong luma bS, qPav taken across the wrong
+/// edge, FilterOffsetA and B swapped, disable_deblocking_filter_idc 2
+/// filtering across a slice edge, the line buffer holding the wrong
+/// rows, and any sample sent twice, late or never.
+#[test]
+fn deblock_filters_pictures_as_8_7_says() {
+    let design = design("h264_deblock");
+    let mut b = Bench::new(
+        &design,
+        &[
+            ("go", 1),
+            ("mb_x", 7),
+            ("mb_y", 7),
+            ("last_col", 1),
+            ("last_row", 1),
+            ("frame", 4),
+            ("filt_left", 1),
+            ("filt_top", 1),
+            ("filt_inner", 1),
+            ("t8x8", 1),
+            ("bs", 96),
+            ("qp_y", 6),
+            ("qp_y_left", 6),
+            ("qp_y_top", 6),
+            ("qp_cb", 6),
+            ("qp_cb_left", 6),
+            ("qp_cb_top", 6),
+            ("qp_cr", 6),
+            ("qp_cr_left", 6),
+            ("qp_cr_top", 6),
+            ("off_a", 5),
+            ("off_b", 5),
+            ("cur_rd", 32),
+            ("left_rd", 32),
+            ("op_room", 1),
+        ],
+        &[
+            "busy", "done", "cur_ra", "cur_we", "cur_wa", "cur_wd", "left_ra", "left_we", "left_wa",
+            "left_wd", "op_valid", "op_data",
+        ],
+    );
+    let mut rng = Rng(0xDEB1_0003);
+    let mut worst = 0u64;
+    for round in 0..4 {
+        let (w, h) = [(4, 3), (1, 2), (3, 1), (5, 2)][round];
+        let pic = draw_picture(&mut rng, w, h, 1 + round % 3, false);
+        let mut pic = pic;
+        // Real streams code levels; here only `coded` matters, for bS 2.
+        // The content is made smooth, with QPs high enough to filter, or
+        // the thresholds would reject most lines.
+        for mb in pic.mbs.iter_mut() {
+            for k in 0..16 {
+                mb.levels.coded[k] = rng.below(3) == 0;
+            }
+            mb.qp = rng.range(20, 51);
+            if mb.kind == K_INTER {
+                let base = rng.range(40, 200);
+                let slope = rng.range(-2, 2);
+                for (i, v) in mb.pred.iter_mut().enumerate() {
+                    let x = i32::try_from(i % 16).expect("small");
+                    *v = u8::try_from(clip1(base + slope * x + rng.range(-1, 1))).expect("byte");
+                }
+            }
+        }
+        let mut residuals = Vec::new();
+        for mb in &pic.mbs {
+            let mut r = draw_residuals(&mut rng, mb).0;
+            if mb.kind != K_PCM {
+                for blk in r.iter_mut() {
+                    let step = i64::from(rng.range(-8, 8));
+                    for v in blk.iter_mut() {
+                        *v = step + i64::from(rng.range(-1, 1));
+                    }
+                }
+            }
+            residuals.push(r);
+        }
+        let before = construct(&pic, &residuals);
+        let want = deblock_picture(&pic, &before);
+        let changed = (0..3)
+            .map(|c| before.plane(c).0.iter().zip(want.plane(c).0.iter()).filter(|(a, b)| a != b).count())
+            .sum::<usize>();
+        println!("round {round}: {changed} samples changed by the filter");
+        let mut slots = [[0u32; 96]; 4];
+        let mut sink = RecordSink::new(w, h);
+        let frame = u64::try_from(round).expect("small");
+        for addr in 0..pic.mbs.len() {
+            let (mx, my) = (addr % w, addr / w);
+            slots[addr % 4] = pack_slot(&before, mx, my);
+            let prm = dbf_params(&pic, addr);
+            b.set("mb_x", u64::try_from(mx).expect("small"));
+            b.set("mb_y", u64::try_from(my).expect("small"));
+            b.set("last_col", u64::from(mx + 1 == w));
+            b.set("last_row", u64::from(my + 1 == h));
+            b.set("frame", frame);
+            b.set("filt_left", u64::from(prm.filt_left));
+            b.set("filt_top", u64::from(prm.filt_top));
+            b.set("filt_inner", u64::from(prm.filt_inner));
+            b.set("bs", u64::try_from(prm.bs & u128::from(u64::MAX)).expect("low"));
+            // `set` takes 64 bits; the top 32 of `bs` go through a wider Logic.
+            let bs_net = top_net(&b.sim, "bs");
+            b.sim.set(bs_net, logic_u128(96, prm.bs));
+            for (k, name) in [
+                "qp_y", "qp_y_left", "qp_y_top", "qp_cb", "qp_cb_left", "qp_cb_top", "qp_cr", "qp_cr_left",
+                "qp_cr_top",
+            ]
+            .iter()
+            .enumerate()
+            {
+                b.set(name, u64::try_from(prm.qp[k]).expect("qp"));
+            }
+            b.set("off_a", u64::try_from(prm.off_a & 31).expect("small"));
+            b.set("off_b", u64::try_from(prm.off_b & 31).expect("small"));
+            b.set("op_room", 1);
+            b.set("go", 1);
+            b.cycle();
+            b.set("go", 0);
+            let start = b.cycles;
+            let (cur, left) = (addr % 4, (addr + 3) % 4);
+            loop {
+                // Back-pressure now and then.
+                b.set("op_room", u64::from(rng.below(5) != 0));
+                let cra = usize::try_from(b.get("cur_ra")).expect("small");
+                let lra = usize::try_from(b.get("left_ra")).expect("small");
+                if b.get("cur_we") == 1 {
+                    let a = usize::try_from(b.get("cur_wa")).expect("small");
+                    slots[cur][a] = u32::try_from(b.get("cur_wd")).expect("word");
+                }
+                if b.get("left_we") == 1 {
+                    let a = usize::try_from(b.get("left_wa")).expect("small");
+                    slots[left][a] = u32::try_from(b.get("left_wd")).expect("word");
+                }
+                if b.get("op_valid") == 1 {
+                    let rec = b.get_wide("op_data");
+                    sink.take(rec);
+                }
+                let finished = b.get("done") == 1;
+                b.cycle();
+                b.set("cur_rd", u64::from(slots[cur][cra.min(95)]));
+                b.set("left_rd", u64::from(slots[left][lra.min(95)]));
+                if finished {
+                    break;
+                }
+                assert!(b.cycles - start < 20_000, "h264_deblock stalled at macroblock {addr}");
+            }
+            worst = worst.max(b.cycles - start);
+        }
+        assert!(sink.eop, "round {round}: no end of picture");
+        assert!(sink.complete(), "round {round}: samples never sent");
+        assert!(
+            sink.pl == want,
+            "round {round} ({w}x{h}): the deblocked picture differs: {}",
+            first_difference(&sink.pl, &want)
+        );
+    }
+    println!("h264_deblock: at most {worst} cycles a macroblock, with back-pressure");
 }
