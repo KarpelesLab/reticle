@@ -393,6 +393,8 @@ module h264_residual (
 
     wire [79:0] fcb = dc2x2(cdc0, cdc1, cdc2, cdc3);
     wire [79:0] fcr = dc2x2(cdc4, cdc5, cdc6, cdc7);
+    wire [79:0] fsel = pos[2] ? fcr : fcb;
+    wire [19:0] cdc_f = fsel[20 * pos[1:0] +: 20];
 
     integer k;
 
@@ -491,17 +493,15 @@ module h264_residual (
                     if (drain != 4'd0) begin
                         drain <= drain - 4'd1;
                     end else begin
-                        dcc[0] <= scale_dcc(fcb[19:0],  dm_cb);
-                        dcc[1] <= scale_dcc(fcb[39:20], dm_cb);
-                        dcc[2] <= scale_dcc(fcb[59:40], dm_cb);
-                        dcc[3] <= scale_dcc(fcb[79:60], dm_cb);
-                        dcc[4] <= scale_dcc(fcr[19:0],  dm_cr);
-                        dcc[5] <= scale_dcc(fcr[39:20], dm_cr);
-                        dcc[6] <= scale_dcc(fcr[59:40], dm_cr);
-                        dcc[7] <= scale_dcc(fcr[79:60], dm_cr);
-                        blk   <= 5'd0;
-                        pos   <= 4'd0;
-                        state <= S_BLK;
+                        // One a cycle, through one multiplier: Cb's four,
+                        // then Cr's.
+                        dcc[pos[2:0]] <= scale_dcc(cdc_f, pos[2] ? dm_cr : dm_cb);
+                        pos <= pos + 4'd1;
+                        if (pos == 4'd7) begin
+                            blk   <= 5'd0;
+                            pos   <= 4'd0;
+                            state <= S_BLK;
+                        end
                     end
                 end
                 S_BLK: begin
@@ -553,11 +553,13 @@ module h264_residual (
     wire [39:0] pcm_word = {2'b00, cq[7:0], pcm_acc[29:0]};
     wire [39:0] xf_word  = {o_data[69:60], o_data[49:40], o_data[29:20], o_data[9:0]};
 
+    // One write port, so the buffer is one block RAM.
+    wire        rb_we = pcm_w || (o_valid && !o_had);
+    wire [7:0]  rb_wa = pcm_w ? {half, r_blk, r_pos[3:2]} : {half, o_tag[4:0], o_row};
+    wire [39:0] rb_wd = pcm_w ? pcm_word : xf_word;
+
     always @(posedge clk) begin
-        if (pcm_w)
-            rbuf[{half, r_blk, r_pos[3:2]}] <= pcm_word;
-        else if (o_valid && !o_had)
-            rbuf[{half, o_tag[4:0], o_row}] <= xf_word;
+        if (rb_we) rbuf[rb_wa] <= rb_wd;
         rr_data <= rbuf[rr_addr];
     end
 endmodule

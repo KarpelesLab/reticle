@@ -12,6 +12,9 @@
 //! | `dbf_filter_matches_8_7_2_3_and_8_7_2_4` | the edge filter, luma and chroma, every bS, against the equations |
 
 #![cfg(all(feature = "verilog", feature = "sim"))]
+// The model transcribes the Recommendation's indexed equations, which
+// index several arrays by one loop variable; iterators would hide that.
+#![allow(clippy::needless_range_loop)]
 
 use std::fs;
 use std::path::Path;
@@ -78,6 +81,16 @@ fn design(top: &str) -> Design {
         diags.render(&map)
     );
     design.unwrap_or_else(|| panic!("{top} produced no design"))
+}
+
+/// An index from a signed model quantity.
+fn ix(v: i32) -> usize {
+    usize::try_from(v).expect("a non-negative index")
+}
+
+/// A signed model quantity from an index.
+fn si(v: usize) -> i32 {
+    i32::try_from(v).expect("a small index")
 }
 
 fn word(width: u32, value: u64) -> Logic {
@@ -748,7 +761,7 @@ fn residual_load(b: &mut Bench<'_>, half: u64, lv: &Levels, pcm: bool) {
                 b.set("cw_addr", (half << 9) | (blk << 4) | p);
                 b.set(
                     "cw_data",
-                    u64::from(i16::try_from(v).expect("16 bits") as u16),
+                    u64::from(i16::try_from(v).expect("16 bits").cast_unsigned()),
                 );
                 b.cycle();
             }
@@ -1027,7 +1040,7 @@ fn pred_intra4x4(
     av: [bool; 4],
 ) -> [i32; 16] {
     let (bx, by) = blk_xy(blk);
-    let (xo, yo) = (4 * bx as i32, 4 * by as i32);
+    let (xo, yo) = (4 * si(bx), 4 * si(by));
     // p[x, y] for x = -1, y = -1..3 and x = 0..7, y = -1, or None.
     let fetch = |x: i32, y: i32| -> Option<i32> {
         let (xn, yn) = (xo + x, yo + y);
@@ -1046,7 +1059,7 @@ fn pred_intra4x4(
     };
     let mut top: [Option<i32>; 8] = [None; 8];
     for (x, t) in top.iter_mut().enumerate() {
-        *t = fetch(x as i32, -1);
+        *t = fetch(si(x), -1);
     }
     // The substitution of p[3, -1] for p[4..7, -1].
     if top[4].is_none() && top[3].is_some() {
@@ -1059,11 +1072,11 @@ fn pred_intra4x4(
     let corner = fetch(-1, -1);
     let p = |x: i32, y: i32| -> i32 {
         let v = if y == -1 && x >= 0 {
-            top[x as usize]
+            top[ix(x)]
         } else if x == -1 && y == -1 {
             corner
         } else {
-            left[y as usize]
+            left[ix(y)]
         };
         v.unwrap_or_else(|| {
             panic!("mode {mode} of block {blk} reads p[{x}, {y}], which is not available")
@@ -1160,7 +1173,7 @@ fn pred_intra4x4(
                     }
                 }
             };
-            out[(4 * y + x) as usize] = v;
+            out[ix(4 * y + x)] = v;
         }
     }
     out
@@ -1218,8 +1231,8 @@ fn pred_intra16x16(pl: &Planes, mx: usize, my: usize, mode: u32, av: [bool; 4]) 
             let t = top.expect("Plane needs the row above");
             let l = left.expect("Plane needs the column to the left");
             let d = corner.expect("Plane needs the corner");
-            let pt = |x: i32| if x < 0 { d } else { t[x as usize] };
-            let plf = |y: i32| if y < 0 { d } else { l[y as usize] };
+            let pt = |x: i32| if x < 0 { d } else { t[ix(x)] };
+            let plf = |y: i32| if y < 0 { d } else { l[ix(y)] };
             let hh: i32 = (0..8).map(|x| (x + 1) * (pt(8 + x) - pt(6 - x))).sum();
             let vv: i32 = (0..8).map(|y| (y + 1) * (plf(8 + y) - plf(6 - y))).sum();
             let a = 16 * (l[15] + t[15]);
@@ -1227,7 +1240,7 @@ fn pred_intra16x16(pl: &Planes, mx: usize, my: usize, mode: u32, av: [bool; 4]) 
             let c = (5 * vv + 32) >> 6;
             for y in 0..16i32 {
                 for x in 0..16i32 {
-                    out[(16 * y + x) as usize] = clip1((a + b * (x - 7) + c * (y - 7) + 16) >> 5);
+                    out[ix(16 * y + x)] = clip1((a + b * (x - 7) + c * (y - 7) + 16) >> 5);
                 }
             }
         }
@@ -1299,8 +1312,8 @@ fn pred_chroma(
             let t = top.expect("Plane needs the row above");
             let l = left.expect("Plane needs the column to the left");
             let d = corner.expect("Plane needs the corner");
-            let pt = |x: i32| if x < 0 { d } else { t[x as usize] };
-            let plf = |y: i32| if y < 0 { d } else { l[y as usize] };
+            let pt = |x: i32| if x < 0 { d } else { t[ix(x)] };
+            let plf = |y: i32| if y < 0 { d } else { l[ix(y)] };
             let hh: i32 = (0..4).map(|x| (x + 1) * (pt(4 + x) - pt(2 - x))).sum();
             let vv: i32 = (0..4).map(|y| (y + 1) * (plf(4 + y) - plf(2 - y))).sum();
             let a = 16 * (l[7] + t[7]);
@@ -1308,7 +1321,7 @@ fn pred_chroma(
             let c = (34 * vv + 32) >> 6;
             for y in 0..8i32 {
                 for x in 0..8i32 {
-                    out[(8 * y + x) as usize] = clip1((a + b * (x - 3) + c * (y - 3) + 16) >> 5);
+                    out[ix(8 * y + x)] = clip1((a + b * (x - 3) + c * (y - 3) + 16) >> 5);
                 }
             }
         }
@@ -1419,7 +1432,9 @@ fn draw_modes(rng: &mut Rng, mb: &mut MbDesc, av: [bool; 4]) {
                 ok.push(1);
             }
             if a && b && d {
-                ok.push(3);
+                // Plane needs all three neighbours, so it is drawn more
+                // often when it may be, or it would hardly be tested.
+                ok.extend([3, 3]);
             }
             mb.i16_mode = pick(rng, &ok);
         }
@@ -1665,7 +1680,7 @@ fn intra_constructs_pictures_as_8_3_says() {
     let mut used_i4 = [0u32; 9];
     let mut used_i16 = [0u32; 4];
     let mut used_c = [0u32; 4];
-    for round in 0..6 {
+    for round in 0..10 {
         let pic = draw_picture(&mut rng, 5, 4, 1 + round % 3, round % 3 == 0);
         for mb in &pic.mbs {
             match mb.kind {
@@ -1966,13 +1981,7 @@ fn dbf_params(pic: &PicDesc, addr: usize) -> DbfParams {
     for e in 0..4usize {
         for k in 0..4usize {
             if mx > 0 || e > 0 {
-                let v = boundary_strength(
-                    pic,
-                    x0 + 4 * e - 1 + usize::from(e == 0) * 0,
-                    y0 + 4 * k,
-                    x0 + 4 * e,
-                    y0 + 4 * k,
-                );
+                let v = boundary_strength(pic, x0 + 4 * e - 1, y0 + 4 * k, x0 + 4 * e, y0 + 4 * k);
                 bs |= u128::from(v) << (3 * (4 * e + k));
             }
             if my > 0 || e > 0 {
@@ -2434,7 +2443,7 @@ fn picture_tokens(pic: &PicDesc, rng: &mut Rng) -> Vec<u32> {
                             coefs.push((pos, v));
                         }
                     }
-                    coefs.sort_by(|a, c| c.0.cmp(&a.0));
+                    coefs.sort_by_key(|c| std::cmp::Reverse(c.0));
                     t.push(tok(
                         0x20,
                         (cat << 20) | (idx << 16) | u32::try_from(coefs.len()).expect("small"),
@@ -2544,29 +2553,10 @@ struct Sdram {
     bursts: u64,
 }
 
-/// `h264_recon` end to end: pictures in tokens, out of the SDRAM port.
-///
-/// Pictures of several sizes, in one to three slices, with every
-/// macroblock kind (P_Skip, coded inter, Intra_4x4, Intra_16x16, I_PCM),
-/// real coefficient levels drawn inside the bitstream's constraints,
-/// motion vectors and references that exercise every bS, both chroma QP
-/// offsets, every disable_deblocking_filter_idc and both FilterOffsets,
-/// with the SDRAM port and the prediction stream both stalling at
-/// random. The model decodes the same pictures with the functions the
-/// stage tests use; the HDL's are read back out of the SDRAM model.
-///
-/// Would catch: anything any stage gets wrong that reaches a sample,
-/// the stages falling out of step (a descriptor read for the wrong
-/// macroblock, a slot reused too early), the token fields read from the
-/// wrong bits, the boundary strengths derived wrongly, and bursts that
-/// cross an SDRAM row. Would not catch a misreading of the
-/// Recommendation that the model shares — that is what the model
-/// agent's dumps and ffmpeg's pictures are for.
-#[test]
-fn recon_decodes_pictures_through_the_sdram_port() {
-    let design = design("h264_recon");
-    let mut b = Bench::new(
-        &design,
+/// A bench over the whole of `h264_recon`.
+fn recon_bench(design: &Design) -> Bench<'_> {
+    Bench::new(
+        design,
         &[
             ("tok_valid", 1),
             ("tok", 32),
@@ -2591,34 +2581,46 @@ fn recon_decodes_pictures_through_the_sdram_port() {
             "wr_data",
             "wr_be",
         ],
-    );
-    let mut rng = Rng(0x0E2E_0004);
-    // (width, height, slices, intra only, smooth)
-    let shapes = [
-        (3, 2, 1, true, false),
-        (4, 3, 2, false, false),
-        (2, 2, 3, false, true),
-        (5, 2, 1, false, true),
-        (4, 4, 2, true, true),
-        (6, 3, 3, false, true),
-        (1, 3, 1, false, true),
-        (5, 4, 2, false, true),
-    ];
-    let mut pictures = Vec::new();
+    )
+}
+
+/// What a run of `h264_recon` did.
+struct ReconRun {
+    sdram: Sdram,
+    /// Cycles from the first token to the last picture's `pic_done`.
+    cycles: u64,
+    /// The cycle each macroblock left the deblocker, in order.
+    c_done: Vec<u64>,
+}
+
+/// Feeds `pictures` to `h264_recon` — picture k to frame k + 1 — until
+/// every one has signalled `pic_done`. With `stall`, every port
+/// stalls at random; without, every source is always ready, which is
+/// what measures the pipeline itself.
+fn run_recon(
+    b: &mut Bench<'_>,
+    pictures: &[(PicDesc, Planes)],
+    rng: &mut Rng,
+    stall: bool,
+) -> ReconRun {
     let mut tokens: Vec<u32> = Vec::new();
     let mut preds: Vec<u32> = Vec::new();
     let mut mbs = 0usize;
-    for &(w, h, s, intra, smooth) in &shapes {
-        let (pic, want) = draw_coded_picture(&mut rng, w, h, s, intra, smooth);
-        tokens.extend(picture_tokens(&pic, &mut rng));
+    for (pic, _) in pictures {
+        tokens.extend(picture_tokens(pic, rng));
         for mb in &pic.mbs {
             if mb.kind == K_INTER {
                 preds.extend(pred_words(mb));
             }
         }
         mbs += pic.mbs.len();
-        pictures.push((pic, want));
     }
+    let c_cnt = b
+        .sim
+        .net(&format!("{}.c_cnt", b.sim.top_name()))
+        .expect("c_cnt");
+    let mut last_c = get_u64(&b.sim, c_cnt);
+    let mut c_done = Vec::new();
     let mut sdram = Sdram {
         words: std::collections::HashMap::new(),
         burst: None,
@@ -2626,18 +2628,17 @@ fn recon_decodes_pictures_through_the_sdram_port() {
     };
     let (mut ti, mut pi, mut done) = (0usize, 0usize, 0usize);
     let start = b.cycles;
-    // The frame each picture goes to: picture k to frame k + 1.
     let mut frame_of_next = 1u64;
     while done < pictures.len() {
-        let tv = ti < tokens.len() && rng.below(8) != 0;
+        let tv = ti < tokens.len() && (!stall || rng.below(8) != 0);
         b.set("tok_valid", u64::from(tv));
         b.set("tok", u64::from(tokens.get(ti).copied().unwrap_or(0)));
         b.set("frame_idx", frame_of_next);
-        let pv = pi < preds.len() && rng.below(6) != 0;
+        let pv = pi < preds.len() && (!stall || rng.below(6) != 0);
         b.set("pred_valid", u64::from(pv));
         b.set("pred_data", u64::from(preds.get(pi).copied().unwrap_or(0)));
-        let cmd_ready = rng.below(3) != 0;
-        let wr_ready = rng.below(4) != 0;
+        let cmd_ready = !stall || rng.below(3) != 0;
+        let wr_ready = !stall || rng.below(4) != 0;
         b.set("cmd_ready", u64::from(cmd_ready));
         b.set("wr_ready", u64::from(wr_ready));
         let tok_taken = tv && b.get("tok_ready") == 1;
@@ -2669,6 +2670,11 @@ fn recon_decodes_pictures_through_the_sdram_port() {
         }
         let pic_done = b.get("pic_done") == 1;
         b.cycle();
+        let c_now = get_u64(&b.sim, c_cnt);
+        if c_now != last_c {
+            c_done.push(b.cycles - start);
+            last_c = c_now;
+        }
         if tok_taken {
             // The frame index is sampled with SLICE_FIRST 0: move it on
             // once the next picture's has gone.
@@ -2690,9 +2696,19 @@ fn recon_decodes_pictures_through_the_sdram_port() {
             preds.len()
         );
     }
-    let spent = b.cycles - start;
     assert_eq!(ti, tokens.len(), "tokens left over");
     assert_eq!(pi, preds.len(), "prediction words left over");
+    assert_eq!(c_done.len(), mbs, "macroblocks through the deblocker");
+    ReconRun {
+        sdram,
+        cycles: b.cycles - start,
+        c_done,
+    }
+}
+
+/// Reads picture `k` back out of the SDRAM model (frame k + 1) and
+/// compares it with the model's.
+fn check_frames(run: &ReconRun, pictures: &[(PicDesc, Planes)]) {
     for (k, (pic, want)) in pictures.iter().enumerate() {
         let frame = u32::try_from(k + 1).expect("small");
         let mut got = Planes::new(pic.w, pic.h);
@@ -2704,7 +2720,7 @@ fn recon_decodes_pictures_through_the_sdram_port() {
             };
             for y in 0..ph {
                 for x in 0..pw {
-                    let wd = sdram.words.get(&frame_word(frame, c, x, y)).copied();
+                    let wd = run.sdram.words.get(&frame_word(frame, c, x, y)).copied();
                     let wd = wd.unwrap_or_else(|| {
                         panic!("picture {k}: plane {c} ({x}, {y}) never written")
                     });
@@ -2725,9 +2741,148 @@ fn recon_decodes_pictures_through_the_sdram_port() {
             first_difference(&got, want)
         );
     }
+}
+
+/// `h264_recon` end to end: pictures in tokens, out of the SDRAM port.
+///
+/// Pictures of several sizes, in one to three slices, with every
+/// macroblock kind (P_Skip, coded inter, Intra_4x4, Intra_16x16, I_PCM),
+/// real coefficient levels drawn inside the bitstream's constraints,
+/// motion vectors and references that exercise every bS, both chroma QP
+/// offsets, every disable_deblocking_filter_idc and both FilterOffsets,
+/// with the SDRAM port and the prediction stream both stalling at
+/// random. The model decodes the same pictures with the functions the
+/// stage tests use; the HDL's are read back out of the SDRAM model.
+///
+/// Would catch: anything any stage gets wrong that reaches a sample,
+/// the stages falling out of step (a descriptor read for the wrong
+/// macroblock, a slot reused too early), the token fields read from the
+/// wrong bits, the boundary strengths derived wrongly (a motion vector
+/// difference of exactly 4 read as small was caught by it), constrained
+/// intra prediction's rule left off the macroblock above and to the
+/// right (caught too), and bursts that cross an SDRAM row. Would not
+/// catch a misreading of the Recommendation that the model shares —
+/// that is what the model agent's dumps and ffmpeg's pictures are for.
+#[test]
+fn recon_decodes_pictures_through_the_sdram_port() {
+    let design = design("h264_recon");
+    let mut b = recon_bench(&design);
+    let mut rng = Rng(0x0E2E_0004);
+    // (width, height, slices, intra only, smooth)
+    let shapes = [
+        (3, 2, 1, true, false),
+        (4, 3, 2, false, false),
+        (2, 2, 3, false, true),
+        (5, 2, 1, false, true),
+        (4, 4, 2, true, true),
+        (6, 3, 3, false, true),
+        (1, 3, 1, false, true),
+        (5, 4, 2, false, true),
+    ];
+    let pictures: Vec<(PicDesc, Planes)> = shapes
+        .iter()
+        .map(|&(w, h, s, intra, smooth)| draw_coded_picture(&mut rng, w, h, s, intra, smooth))
+        .collect();
+    let run = run_recon(&mut b, &pictures, &mut rng, true);
+    check_frames(&run, &pictures);
+    let mbs: usize = pictures.iter().map(|(p, _)| p.mbs.len()).sum();
     println!(
-        "h264_recon: {mbs} macroblocks in {spent} cycles ({} a macroblock, with every port stalling), {} bursts",
-        spent / u64::try_from(mbs).expect("some"),
-        sdram.bursts
+        "h264_recon: {mbs} macroblocks in {} cycles ({} a macroblock, with every port stalling), {} bursts",
+        run.cycles,
+        run.cycles / u64::try_from(mbs).expect("some"),
+        run.sdram.bursts
     );
+}
+
+/// Cycles a macroblock, with nothing outside stalling: the pipeline's
+/// own rate, for the target's budget of about 925 at 100 MHz
+/// (1280x720 is 3600 macroblocks, 30 times a second).
+///
+/// Measured in steady state — the interval between macroblocks leaving
+/// the deblocker, over the middle row of a 10x3 picture — for three
+/// kinds of content: an I picture of Intra_4x4 and Intra_16x16
+/// macroblocks with every block coded (the most work the residual stage
+/// gets short of I_PCM), a P picture of coded and skipped inter
+/// macroblocks, and one of nothing but P_Skip. The token stream is
+/// assumed to keep up, a token a cycle: on a dense I picture the parser
+/// is the real limit, and its rate is its own.
+///
+/// The bound asserted is the budget itself. These are counts of cycles
+/// of a deterministic simulation, not a measurement of a machine.
+#[test]
+fn recon_keeps_within_the_720p30_budget() {
+    let design = design("h264_recon");
+    let mut b = recon_bench(&design);
+    let mut rng = Rng(0x7EC0_0005);
+    let mut report = Vec::new();
+    for (name, intra, skip_only) in [
+        ("dense I", true, false),
+        ("P", false, false),
+        ("P_Skip", false, true),
+    ] {
+        let mut pic = draw_picture(&mut rng, 10, 3, 1, intra);
+        for addr in 0..pic.mbs.len() {
+            let k = pic.mbs[addr].kind;
+            if k == K_PCM || (!intra && k != K_INTER) {
+                pic.mbs[addr].kind = if intra { K_I16 } else { K_INTER };
+                pic.mbs[addr].pred = (0..384)
+                    .map(|_| u8::try_from(rng.below(256)).expect("byte"))
+                    .collect();
+                let av = pic.avail(addr, pic.mbs[addr].kind != K_INTER);
+                let mut mb = pic.mbs[addr].clone();
+                draw_modes(&mut rng, &mut mb, av);
+                pic.mbs[addr] = mb;
+            }
+        }
+        let mut residuals = Vec::new();
+        for addr in 0..pic.mbs.len() {
+            let slice = pic.slice_of(addr).clone();
+            let mb = &mut pic.mbs[addr];
+            let qpc = [
+                chroma_qp(mb.qp, slice.chroma_qp_offset),
+                chroma_qp(mb.qp, slice.chroma_qp_offset2),
+            ];
+            mb.levels = if skip_only {
+                Levels::zero()
+            } else if intra {
+                // Every block coded: one level at the block's first
+                // position where the draw left it empty.
+                let mut lv = draw_levels_upto(&mut rng, mb.kind, mb.qp, qpc, 60);
+                for blk in 0..27 {
+                    if blk == 24 && mb.kind != K_I16 {
+                        continue;
+                    }
+                    if !lv.coded[blk] {
+                        let ac_only = (mb.kind == K_I16 && blk < 16) || (16..24).contains(&blk);
+                        lv.blocks[blk][usize::from(ac_only)] = 1;
+                        lv.coded[blk] = true;
+                    }
+                }
+                if levels_conform(&lv, mb.kind, mb.qp, qpc) {
+                    lv
+                } else {
+                    draw_levels(&mut rng, mb.kind, mb.qp, qpc)
+                }
+            } else {
+                draw_levels(&mut rng, mb.kind, mb.qp, qpc)
+            };
+            residuals.push(mb_residuals(&mb.levels, mb.kind, mb.qp, qpc));
+        }
+        let before = construct(&pic, &residuals);
+        let after = deblock_picture(&pic, &before);
+        let pictures = vec![(pic, after)];
+        let run = run_recon(&mut b, &pictures, &mut rng, false);
+        check_frames(&run, &pictures);
+        // Steady state: the middle row's macroblocks.
+        let steady = (run.c_done[19] - run.c_done[9]) / 10;
+        report.push(format!(
+            "{name}: {steady} cycles a macroblock in steady state, {} for the picture",
+            run.cycles
+        ));
+        assert!(
+            steady <= 925,
+            "{name}: {steady} cycles a macroblock is over the 720p30 budget"
+        );
+    }
+    println!("h264_recon throughput:\n  {}", report.join("\n  "));
 }

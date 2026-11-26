@@ -425,14 +425,25 @@ module h264_intra #(
         end
     endfunction
 
+    // (x' + 1) * (a difference), the weight a small constant.
+    function signed [19:0] wmul;
+        input integer w;
+        input signed [9:0] d;
+        reg signed [31:0] full;
+        begin
+            full = w * d;
+            wmul = full[19:0];
+        end
+    endfunction
+
     // 8-126 / 8-127.
     reg signed [19:0] h16, v16;
     always @* begin
         h16 = 20'sd0;
         v16 = 20'sd0;
         for (ic = 0; ic < 8; ic = ic + 1) begin
-            h16 = h16 + (ic + 1) * (nb16(colb, dl, 8 + ic) - nb16(colb, dl, 6 - ic));
-            v16 = v16 + (ic + 1) * (nb16(rowr, dl, 8 + ic) - nb16(rowr, dl, 6 - ic));
+            h16 = h16 + wmul(ic + 1, nb16(colb, dl, 8 + ic) - nb16(colb, dl, 6 - ic));
+            v16 = v16 + wmul(ic + 1, nb16(rowr, dl, 8 + ic) - nb16(rowr, dl, 6 - ic));
         end
     end
 
@@ -441,10 +452,10 @@ module h264_intra #(
     always @* begin
         hcb = 20'sd0; vcb = 20'sd0; hcr = 20'sd0; vcr = 20'sd0;
         for (id = 0; id < 4; id = id + 1) begin
-            hcb = hcb + (id + 1) * (nb8(colb_cb, dcb, 4 + id) - nb8(colb_cb, dcb, 2 - id));
-            vcb = vcb + (id + 1) * (nb8(rowr_cb, dcb, 4 + id) - nb8(rowr_cb, dcb, 2 - id));
-            hcr = hcr + (id + 1) * (nb8(colb_cr, dcr, 4 + id) - nb8(colb_cr, dcr, 2 - id));
-            vcr = vcr + (id + 1) * (nb8(rowr_cr, dcr, 4 + id) - nb8(rowr_cr, dcr, 2 - id));
+            hcb = hcb + wmul(id + 1, nb8(colb_cb, dcb, 4 + id) - nb8(colb_cb, dcb, 2 - id));
+            vcb = vcb + wmul(id + 1, nb8(rowr_cb, dcb, 4 + id) - nb8(rowr_cb, dcb, 2 - id));
+            hcr = hcr + wmul(id + 1, nb8(colb_cr, dcr, 4 + id) - nb8(colb_cr, dcr, 2 - id));
+            vcr = vcr + wmul(id + 1, nb8(rowr_cr, dcr, 4 + id) - nb8(rowr_cr, dcr, 2 - id));
         end
     end
 
@@ -530,7 +541,7 @@ module h264_intra #(
     always @* begin
         pred_w = 32'd0;
         for (ie = 0; ie < 4; ie = ie + 1) begin
-            lx = {s1_w, 2'd0} + ie;
+            lx = {s1_w, ie[1:0]};
             if (s1_i4) begin
                 pred_w[8 * ie +: 8] = i4_pick(i4_sel(mode_q, ie, s1_r), e_q, f2_q, f3_q, dc4_q);
             end else if (kind == K_INT) begin
