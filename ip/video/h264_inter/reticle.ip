@@ -1,0 +1,25 @@
+# h264_inter — inter prediction for the H.264 decoder: the motion
+# vectors of clause 8.4.1 (`h264_mvpred`, in the token stream) and the
+# prediction samples of clause 8.4.2 (`h264_inter`, behind an SDRAM
+# burst port).
+#
+# Written from ITU-T H.264 (06/2026). `README.md` says what is checked
+# bit for bit and against what, and what the reference cache saves.
+name h264_inter
+version 0.1.0
+license MIT
+description "H.264 inter prediction: motion vector prediction in the token stream, and quarter-sample luma / eighth-sample chroma motion compensation from tiled SDRAM through a reference cache"
+
+top h264_mvpred
+target xc7
+
+source rtl/h264_mvpred.v
+
+port clk in
+port rst_n in
+port in_tok in 32
+port in_valid in
+port in_ready out
+port out_tok out 32
+port out_valid out
+port out_ready in
