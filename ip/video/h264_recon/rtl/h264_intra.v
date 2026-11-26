@@ -144,19 +144,40 @@ module h264_intra #(
     reg [63:0]  colb_cb, colb_cr;
     reg [63:0]  rowr_cb, rowr_cr, rowr_cb_n, rowr_cr_n;
 
+    // A byte of a vector by a variable index, as a multiplexer: a
+    // part-select at a computed offset (`v[8 * i +: 8]`) is built by this
+    // flow as a shifter across the whole vector, many times the size.
+    integer bk;
     function [7:0] byte16;
         input [127:0] v;
         input [3:0]   i;
+        integer fk;
         begin
-            byte16 = v[8 * i +: 8];
+            byte16 = 8'd0;
+            for (fk = 0; fk < 16; fk = fk + 1)
+                if (i == fk) byte16 = v[8 * fk +: 8];
         end
     endfunction
 
     function [7:0] byte8;
         input [63:0] v;
         input [2:0]  i;
+        integer fk;
         begin
-            byte8 = v[8 * i +: 8];
+            byte8 = 8'd0;
+            for (fk = 0; fk < 8; fk = fk + 1)
+                if (i == fk) byte8 = v[8 * fk +: 8];
+        end
+    endfunction
+
+    function [7:0] byte4;
+        input [31:0] v;
+        input [1:0]  i;
+        integer fk;
+        begin
+            byte4 = 8'd0;
+            for (fk = 0; fk < 4; fk = fk + 1)
+                if (i == fk) byte4 = v[8 * fk +: 8];
         end
     endfunction
 
@@ -265,14 +286,6 @@ module h264_intra #(
     // E[0..14], E[k] at [8k +: 8].
     wire [119:0] e = {t7, t7, t6, t5, t4, t3, t2, t1, t0, cc, l0, l1, l2, l3, l3};
 
-    function [7:0] e_at;
-        input [119:0] v;
-        input [3:0]   k;
-        begin
-            e_at = v[8 * k +: 8];
-        end
-    endfunction
-
     // F2[k] = (E[k] + E[k+1] + 1) >> 1, k = 0..13; F3[k], k = 1..13
     // (F3[0] is never chosen and is left zero).
     reg [111:0] f2_now;
@@ -311,64 +324,156 @@ module h264_intra #(
     reg [1:0]   bx_q, by_q;
 
     // Which of E, F2, F3 or the DC a sample takes: {type[1:0], index[3:0]},
-    // type 0 E, 1 F2, 2 F3, 3 DC.
+    // type 0 E, 1 F2, 2 F3, 3 DC. A table of the 144 (mode, y, x): each
+    // entry is the equation's own index arithmetic worked out —
+    //   0 Vertical (8-46)            E[6 + x]
+    //   1 Horizontal (8-47)          E[4 - y]
+    //   2 DC (8-48 .. 8-51)          the DC
+    //   3 Diagonal_Down_Left         F3[7 + x + y] (8-52 is F3[13], T7 doubled)
+    //   4 Diagonal_Down_Right        F3[5 + x - y]
+    //   5 Vertical_Right, zVR = 2x - y: even >= 0 F2[5 + x - (y >> 1)],
+    //     odd or -1 F3[5 + x - (y >> 1)], -2 and -3 F3[6 - y]
+    //   6 Horizontal_Down, zHD = 2y - x: even >= 0 F2[4 - y + (x >> 1)],
+    //     odd or -1 F3[5 - y + (x >> 1)], -2 and -3 F3[4 + x]
+    //   7 Vertical_Left              y even F2[6 + x + (y >> 1)], odd F3[7 + x + (y >> 1)]
+    //   8 Horizontal_Up, zHU = x + 2y: above 5 E[1] (L3), even F2[3 - y - (x >> 1)],
+    //     odd F3[3 - y - (x >> 1)] (8-69 is F3[1], L3 doubled)
+    // — tabulated rather than computed because this flow, given the
+    // arithmetic, took longer than 40 minutes to map it for the 7 series.
     function [5:0] i4_sel;
         input [3:0] mode;
         input [1:0] x;
         input [1:0] y;
-        reg [3:0] xi, yi, hy, hx;
-        reg signed [4:0] z;
         begin
-            xi = {2'd0, x};
-            yi = {2'd0, y};
-            hy = {3'd0, y[1]};
-            hx = {3'd0, x[1]};
-            case (mode)
-                // 8-46, Vertical.
-                4'd0: i4_sel = {2'd0, 4'd6 + xi};
-                // 8-47, Horizontal.
-                4'd1: i4_sel = {2'd0, 4'd4 - yi};
-                // 8-48 .. 8-51, DC.
-                4'd2: i4_sel = {2'd3, 4'd0};
-                // 8-52, 8-53, Diagonal_Down_Left.
-                4'd3: i4_sel = {2'd2, 4'd7 + xi + yi};
-                // 8-54 .. 8-56, Diagonal_Down_Right.
-                4'd4: i4_sel = {2'd2, 4'd5 + xi - yi};
-                // 8-57 .. 8-60, Vertical_Right: zVR = 2x - y.
-                4'd5: begin
-                    z = $signed({1'b0, xi}) * 5'sd2 - $signed({1'b0, yi});
-                    if (z >= 5'sd0 && !z[0])
-                        i4_sel = {2'd1, 4'd5 + xi - hy};
-                    else if (z >= -5'sd1)
-                        i4_sel = {2'd2, 4'd5 + xi - hy};
-                    else
-                        i4_sel = {2'd2, 4'd6 - yi};
-                end
-                // 8-61 .. 8-64, Horizontal_Down: zHD = 2y - x.
-                4'd6: begin
-                    z = $signed({1'b0, yi}) * 5'sd2 - $signed({1'b0, xi});
-                    if (z >= 5'sd0 && !z[0])
-                        i4_sel = {2'd1, 4'd4 - yi + hx};
-                    else if (z >= -5'sd1)
-                        i4_sel = {2'd2, 4'd5 - yi + hx};
-                    else
-                        i4_sel = {2'd2, 4'd4 + xi};
-                end
-                // 8-65, 8-66, Vertical_Left.
-                4'd7: begin
-                    if (!y[0]) i4_sel = {2'd1, 4'd6 + xi + hy};
-                    else       i4_sel = {2'd2, 4'd7 + xi + hy};
-                end
-                // 8-67 .. 8-70, Horizontal_Up: zHU = x + 2y.
-                4'd8: begin
-                    z = $signed({1'b0, xi}) + $signed({1'b0, yi}) * 5'sd2;
-                    if (z > 5'sd5)
-                        i4_sel = {2'd0, 4'd1};
-                    else if (!z[0])
-                        i4_sel = {2'd1, 4'd3 - yi - hx};
-                    else
-                        i4_sel = {2'd2, 4'd3 - yi - hx};
-                end
+            case ({mode, y, x})
+                {4'd0, 2'd0, 2'd0}: i4_sel = {2'd0, 4'd6};
+                {4'd0, 2'd0, 2'd1}: i4_sel = {2'd0, 4'd7};
+                {4'd0, 2'd0, 2'd2}: i4_sel = {2'd0, 4'd8};
+                {4'd0, 2'd0, 2'd3}: i4_sel = {2'd0, 4'd9};
+                {4'd0, 2'd1, 2'd0}: i4_sel = {2'd0, 4'd6};
+                {4'd0, 2'd1, 2'd1}: i4_sel = {2'd0, 4'd7};
+                {4'd0, 2'd1, 2'd2}: i4_sel = {2'd0, 4'd8};
+                {4'd0, 2'd1, 2'd3}: i4_sel = {2'd0, 4'd9};
+                {4'd0, 2'd2, 2'd0}: i4_sel = {2'd0, 4'd6};
+                {4'd0, 2'd2, 2'd1}: i4_sel = {2'd0, 4'd7};
+                {4'd0, 2'd2, 2'd2}: i4_sel = {2'd0, 4'd8};
+                {4'd0, 2'd2, 2'd3}: i4_sel = {2'd0, 4'd9};
+                {4'd0, 2'd3, 2'd0}: i4_sel = {2'd0, 4'd6};
+                {4'd0, 2'd3, 2'd1}: i4_sel = {2'd0, 4'd7};
+                {4'd0, 2'd3, 2'd2}: i4_sel = {2'd0, 4'd8};
+                {4'd0, 2'd3, 2'd3}: i4_sel = {2'd0, 4'd9};
+                {4'd1, 2'd0, 2'd0}: i4_sel = {2'd0, 4'd4};
+                {4'd1, 2'd0, 2'd1}: i4_sel = {2'd0, 4'd4};
+                {4'd1, 2'd0, 2'd2}: i4_sel = {2'd0, 4'd4};
+                {4'd1, 2'd0, 2'd3}: i4_sel = {2'd0, 4'd4};
+                {4'd1, 2'd1, 2'd0}: i4_sel = {2'd0, 4'd3};
+                {4'd1, 2'd1, 2'd1}: i4_sel = {2'd0, 4'd3};
+                {4'd1, 2'd1, 2'd2}: i4_sel = {2'd0, 4'd3};
+                {4'd1, 2'd1, 2'd3}: i4_sel = {2'd0, 4'd3};
+                {4'd1, 2'd2, 2'd0}: i4_sel = {2'd0, 4'd2};
+                {4'd1, 2'd2, 2'd1}: i4_sel = {2'd0, 4'd2};
+                {4'd1, 2'd2, 2'd2}: i4_sel = {2'd0, 4'd2};
+                {4'd1, 2'd2, 2'd3}: i4_sel = {2'd0, 4'd2};
+                {4'd1, 2'd3, 2'd0}: i4_sel = {2'd0, 4'd1};
+                {4'd1, 2'd3, 2'd1}: i4_sel = {2'd0, 4'd1};
+                {4'd1, 2'd3, 2'd2}: i4_sel = {2'd0, 4'd1};
+                {4'd1, 2'd3, 2'd3}: i4_sel = {2'd0, 4'd1};
+                {4'd3, 2'd0, 2'd0}: i4_sel = {2'd2, 4'd7};
+                {4'd3, 2'd0, 2'd1}: i4_sel = {2'd2, 4'd8};
+                {4'd3, 2'd0, 2'd2}: i4_sel = {2'd2, 4'd9};
+                {4'd3, 2'd0, 2'd3}: i4_sel = {2'd2, 4'd10};
+                {4'd3, 2'd1, 2'd0}: i4_sel = {2'd2, 4'd8};
+                {4'd3, 2'd1, 2'd1}: i4_sel = {2'd2, 4'd9};
+                {4'd3, 2'd1, 2'd2}: i4_sel = {2'd2, 4'd10};
+                {4'd3, 2'd1, 2'd3}: i4_sel = {2'd2, 4'd11};
+                {4'd3, 2'd2, 2'd0}: i4_sel = {2'd2, 4'd9};
+                {4'd3, 2'd2, 2'd1}: i4_sel = {2'd2, 4'd10};
+                {4'd3, 2'd2, 2'd2}: i4_sel = {2'd2, 4'd11};
+                {4'd3, 2'd2, 2'd3}: i4_sel = {2'd2, 4'd12};
+                {4'd3, 2'd3, 2'd0}: i4_sel = {2'd2, 4'd10};
+                {4'd3, 2'd3, 2'd1}: i4_sel = {2'd2, 4'd11};
+                {4'd3, 2'd3, 2'd2}: i4_sel = {2'd2, 4'd12};
+                {4'd3, 2'd3, 2'd3}: i4_sel = {2'd2, 4'd13};
+                {4'd4, 2'd0, 2'd0}: i4_sel = {2'd2, 4'd5};
+                {4'd4, 2'd0, 2'd1}: i4_sel = {2'd2, 4'd6};
+                {4'd4, 2'd0, 2'd2}: i4_sel = {2'd2, 4'd7};
+                {4'd4, 2'd0, 2'd3}: i4_sel = {2'd2, 4'd8};
+                {4'd4, 2'd1, 2'd0}: i4_sel = {2'd2, 4'd4};
+                {4'd4, 2'd1, 2'd1}: i4_sel = {2'd2, 4'd5};
+                {4'd4, 2'd1, 2'd2}: i4_sel = {2'd2, 4'd6};
+                {4'd4, 2'd1, 2'd3}: i4_sel = {2'd2, 4'd7};
+                {4'd4, 2'd2, 2'd0}: i4_sel = {2'd2, 4'd3};
+                {4'd4, 2'd2, 2'd1}: i4_sel = {2'd2, 4'd4};
+                {4'd4, 2'd2, 2'd2}: i4_sel = {2'd2, 4'd5};
+                {4'd4, 2'd2, 2'd3}: i4_sel = {2'd2, 4'd6};
+                {4'd4, 2'd3, 2'd0}: i4_sel = {2'd2, 4'd2};
+                {4'd4, 2'd3, 2'd1}: i4_sel = {2'd2, 4'd3};
+                {4'd4, 2'd3, 2'd2}: i4_sel = {2'd2, 4'd4};
+                {4'd4, 2'd3, 2'd3}: i4_sel = {2'd2, 4'd5};
+                {4'd5, 2'd0, 2'd0}: i4_sel = {2'd1, 4'd5};
+                {4'd5, 2'd0, 2'd1}: i4_sel = {2'd1, 4'd6};
+                {4'd5, 2'd0, 2'd2}: i4_sel = {2'd1, 4'd7};
+                {4'd5, 2'd0, 2'd3}: i4_sel = {2'd1, 4'd8};
+                {4'd5, 2'd1, 2'd0}: i4_sel = {2'd2, 4'd5};
+                {4'd5, 2'd1, 2'd1}: i4_sel = {2'd2, 4'd6};
+                {4'd5, 2'd1, 2'd2}: i4_sel = {2'd2, 4'd7};
+                {4'd5, 2'd1, 2'd3}: i4_sel = {2'd2, 4'd8};
+                {4'd5, 2'd2, 2'd0}: i4_sel = {2'd2, 4'd4};
+                {4'd5, 2'd2, 2'd1}: i4_sel = {2'd1, 4'd5};
+                {4'd5, 2'd2, 2'd2}: i4_sel = {2'd1, 4'd6};
+                {4'd5, 2'd2, 2'd3}: i4_sel = {2'd1, 4'd7};
+                {4'd5, 2'd3, 2'd0}: i4_sel = {2'd2, 4'd3};
+                {4'd5, 2'd3, 2'd1}: i4_sel = {2'd2, 4'd5};
+                {4'd5, 2'd3, 2'd2}: i4_sel = {2'd2, 4'd6};
+                {4'd5, 2'd3, 2'd3}: i4_sel = {2'd2, 4'd7};
+                {4'd6, 2'd0, 2'd0}: i4_sel = {2'd1, 4'd4};
+                {4'd6, 2'd0, 2'd1}: i4_sel = {2'd2, 4'd5};
+                {4'd6, 2'd0, 2'd2}: i4_sel = {2'd2, 4'd6};
+                {4'd6, 2'd0, 2'd3}: i4_sel = {2'd2, 4'd7};
+                {4'd6, 2'd1, 2'd0}: i4_sel = {2'd1, 4'd3};
+                {4'd6, 2'd1, 2'd1}: i4_sel = {2'd2, 4'd4};
+                {4'd6, 2'd1, 2'd2}: i4_sel = {2'd1, 4'd4};
+                {4'd6, 2'd1, 2'd3}: i4_sel = {2'd2, 4'd5};
+                {4'd6, 2'd2, 2'd0}: i4_sel = {2'd1, 4'd2};
+                {4'd6, 2'd2, 2'd1}: i4_sel = {2'd2, 4'd3};
+                {4'd6, 2'd2, 2'd2}: i4_sel = {2'd1, 4'd3};
+                {4'd6, 2'd2, 2'd3}: i4_sel = {2'd2, 4'd4};
+                {4'd6, 2'd3, 2'd0}: i4_sel = {2'd1, 4'd1};
+                {4'd6, 2'd3, 2'd1}: i4_sel = {2'd2, 4'd2};
+                {4'd6, 2'd3, 2'd2}: i4_sel = {2'd1, 4'd2};
+                {4'd6, 2'd3, 2'd3}: i4_sel = {2'd2, 4'd3};
+                {4'd7, 2'd0, 2'd0}: i4_sel = {2'd1, 4'd6};
+                {4'd7, 2'd0, 2'd1}: i4_sel = {2'd1, 4'd7};
+                {4'd7, 2'd0, 2'd2}: i4_sel = {2'd1, 4'd8};
+                {4'd7, 2'd0, 2'd3}: i4_sel = {2'd1, 4'd9};
+                {4'd7, 2'd1, 2'd0}: i4_sel = {2'd2, 4'd7};
+                {4'd7, 2'd1, 2'd1}: i4_sel = {2'd2, 4'd8};
+                {4'd7, 2'd1, 2'd2}: i4_sel = {2'd2, 4'd9};
+                {4'd7, 2'd1, 2'd3}: i4_sel = {2'd2, 4'd10};
+                {4'd7, 2'd2, 2'd0}: i4_sel = {2'd1, 4'd7};
+                {4'd7, 2'd2, 2'd1}: i4_sel = {2'd1, 4'd8};
+                {4'd7, 2'd2, 2'd2}: i4_sel = {2'd1, 4'd9};
+                {4'd7, 2'd2, 2'd3}: i4_sel = {2'd1, 4'd10};
+                {4'd7, 2'd3, 2'd0}: i4_sel = {2'd2, 4'd8};
+                {4'd7, 2'd3, 2'd1}: i4_sel = {2'd2, 4'd9};
+                {4'd7, 2'd3, 2'd2}: i4_sel = {2'd2, 4'd10};
+                {4'd7, 2'd3, 2'd3}: i4_sel = {2'd2, 4'd11};
+                {4'd8, 2'd0, 2'd0}: i4_sel = {2'd1, 4'd3};
+                {4'd8, 2'd0, 2'd1}: i4_sel = {2'd2, 4'd3};
+                {4'd8, 2'd0, 2'd2}: i4_sel = {2'd1, 4'd2};
+                {4'd8, 2'd0, 2'd3}: i4_sel = {2'd2, 4'd2};
+                {4'd8, 2'd1, 2'd0}: i4_sel = {2'd1, 4'd2};
+                {4'd8, 2'd1, 2'd1}: i4_sel = {2'd2, 4'd2};
+                {4'd8, 2'd1, 2'd2}: i4_sel = {2'd1, 4'd1};
+                {4'd8, 2'd1, 2'd3}: i4_sel = {2'd2, 4'd1};
+                {4'd8, 2'd2, 2'd0}: i4_sel = {2'd1, 4'd1};
+                {4'd8, 2'd2, 2'd1}: i4_sel = {2'd2, 4'd1};
+                {4'd8, 2'd2, 2'd2}: i4_sel = {2'd0, 4'd1};
+                {4'd8, 2'd2, 2'd3}: i4_sel = {2'd0, 4'd1};
+                {4'd8, 2'd3, 2'd0}: i4_sel = {2'd0, 4'd1};
+                {4'd8, 2'd3, 2'd1}: i4_sel = {2'd0, 4'd1};
+                {4'd8, 2'd3, 2'd2}: i4_sel = {2'd0, 4'd1};
+                {4'd8, 2'd3, 2'd3}: i4_sel = {2'd0, 4'd1};
                 default: i4_sel = {2'd3, 4'd0};
             endcase
         end
@@ -382,9 +487,9 @@ module h264_intra #(
         input [7:0]   dcv;
         begin
             case (sel[5:4])
-                2'd0:    i4_pick = ev[8 * sel[3:0] +: 8];
-                2'd1:    i4_pick = f2v[8 * sel[3:0] +: 8];
-                2'd2:    i4_pick = f3v[8 * sel[3:0] +: 8];
+                2'd0:    i4_pick = byte16({8'd0, ev}, sel[3:0]);
+                2'd1:    i4_pick = byte16({16'd0, f2v}, sel[3:0]);
+                2'd2:    i4_pick = byte16({16'd0, f3v}, sel[3:0]);
                 default: i4_pick = dcv;
             endcase
         end
@@ -431,7 +536,11 @@ module h264_intra #(
         input signed [9:0] d;
         reg signed [31:0] full;
         begin
-            full = w * d;
+            full = 32'sd0;
+            if (w[0]) full = full + d;
+            if (w[1]) full = full + (d <<< 1);
+            if (w[2]) full = full + (d <<< 2);
+            if (w[3]) full = full + (d <<< 3);
             wmul = full[19:0];
         end
     endfunction
@@ -503,21 +612,37 @@ module h264_intra #(
     reg signed [19:0] cb_b, cb_c, cb_base;
     reg signed [19:0] cr_b, cr_c, cr_base;
 
-    wire signed [19:0] pl_b_now = (h16_q * 20'sd5 + 20'sd32) >>> 6;
-    wire signed [19:0] pl_c_now = (v16_q * 20'sd5 + 20'sd32) >>> 6;
-    wire signed [19:0] cb_b_now = (hcb_q * 20'sd34 + 20'sd32) >>> 6;
-    wire signed [19:0] cb_c_now = (vcb_q * 20'sd34 + 20'sd32) >>> 6;
-    wire signed [19:0] cr_b_now = (hcr_q * 20'sd34 + 20'sd32) >>> 6;
-    wire signed [19:0] cr_c_now = (vcr_q * 20'sd34 + 20'sd32) >>> 6;
-    wire signed [19:0] pl_base_now =
-        20'sd16 * ($signed({12'd0, rowr[127:120]}) + $signed({12'd0, colb[127:120]}))
-        - 20'sd7 * pl_b_now - 20'sd7 * pl_c_now + 20'sd16;
-    wire signed [19:0] cb_base_now =
-        20'sd16 * ($signed({12'd0, rowr_cb[63:56]}) + $signed({12'd0, colb_cb[63:56]}))
-        - 20'sd3 * cb_b_now - 20'sd3 * cb_c_now + 20'sd16;
-    wire signed [19:0] cr_base_now =
-        20'sd16 * ($signed({12'd0, rowr_cr[63:56]}) + $signed({12'd0, colb_cr[63:56]}))
-        - 20'sd3 * cr_b_now - 20'sd3 * cr_c_now + 20'sd16;
+    // Every multiplication by a constant is written as shifts and adds.
+    // The flow folds a multiply and the add after it into a DSP48E1, and
+    // for these it left the adder's outputs undriven; shifts are what a
+    // multiplier by 5, 34, 16, 7 or 3 would be anyway.
+    wire signed [19:0] pl_b_now = ((h16_q <<< 2) + h16_q + 20'sd32) >>> 6;
+    wire signed [19:0] pl_c_now = ((v16_q <<< 2) + v16_q + 20'sd32) >>> 6;
+    wire signed [19:0] cb_b_now = ((hcb_q <<< 5) + (hcb_q <<< 1) + 20'sd32) >>> 6;
+    wire signed [19:0] cb_c_now = ((vcb_q <<< 5) + (vcb_q <<< 1) + 20'sd32) >>> 6;
+    wire signed [19:0] cr_b_now = ((hcr_q <<< 5) + (hcr_q <<< 1) + 20'sd32) >>> 6;
+    wire signed [19:0] cr_c_now = ((vcr_q <<< 5) + (vcr_q <<< 1) + 20'sd32) >>> 6;
+    wire signed [19:0] a16  = ($signed({12'd0, rowr[127:120]}) + $signed({12'd0, colb[127:120]})) <<< 4;
+    wire signed [19:0] acb  = ($signed({12'd0, rowr_cb[63:56]}) + $signed({12'd0, colb_cb[63:56]})) <<< 4;
+    wire signed [19:0] acr  = ($signed({12'd0, rowr_cr[63:56]}) + $signed({12'd0, colb_cr[63:56]})) <<< 4;
+    wire signed [19:0] pl_base_now = a16 - ((pl_b_now <<< 3) - pl_b_now) -
+                                     ((pl_c_now <<< 3) - pl_c_now) + 20'sd16;
+    wire signed [19:0] cb_base_now = acb - ((cb_b_now <<< 1) + cb_b_now) -
+                                     ((cb_c_now <<< 1) + cb_c_now) + 20'sd16;
+    wire signed [19:0] cr_base_now = acr - ((cr_b_now <<< 1) + cr_b_now) -
+                                     ((cr_c_now <<< 1) + cr_c_now) + 20'sd16;
+
+    // v * k for k = 0..15, by shifts and adds (see above).
+    function signed [20:0] mul4;
+        input signed [19:0] v;
+        input        [3:0]  k;
+        reg   signed [20:0] w;
+        begin
+            w = {v[19], v};
+            mul4 = (k[0] ? w : 21'sd0) + (k[1] ? (w <<< 1) : 21'sd0) +
+                   (k[2] ? (w <<< 2) : 21'sd0) + (k[3] ? (w <<< 3) : 21'sd0);
+        end
+    endfunction
 
     wire [12:0] dc16_both = {1'b0, s16t} + {1'b0, s16l} + 13'd16;
     wire [11:0] dc16_t    = s16t + 12'd8;
@@ -550,31 +675,28 @@ module h264_intra #(
                 pred_w[8 * ie +: 8] = 8'd0;
             end else if (s1_p == 2'd0) begin
                 case (i16_mode)
-                    2'd0: pred_w[8 * ie +: 8] = colb[8 * lx +: 8];
-                    2'd1: pred_w[8 * ie +: 8] = rowr[8 * s1_y +: 8];
+                    2'd0: pred_w[8 * ie +: 8] = byte16(colb, lx);
+                    2'd1: pred_w[8 * ie +: 8] = byte16(rowr, s1_y);
                     2'd2: pred_w[8 * ie +: 8] = dc16;
                     default: begin
-                        pv = (pl_base + pl_b * $signed({1'b0, lx}) +
-                              pl_c * $signed({1'b0, s1_y})) >>> 5;
+                        pv = (pl_base + mul4(pl_b, lx) + mul4(pl_c, s1_y)) >>> 5;
                         pred_w[8 * ie +: 8] = clip1(pv);
                     end
                 endcase
             end else begin
                 case (c_mode)
                     2'd0: pred_w[8 * ie +: 8] = (s1_p == 2'd1) ?
-                              dcc_cb[8 * {s1_y[2], s1_w[0]} +: 8] :
-                              dcc_cr[8 * {s1_y[2], s1_w[0]} +: 8];
+                              byte4(dcc_cb, {s1_y[2], s1_w[0]}) :
+                              byte4(dcc_cr, {s1_y[2], s1_w[0]});
                     2'd1: pred_w[8 * ie +: 8] = (s1_p == 2'd1) ?
-                              rowr_cb[8 * s1_y[2:0] +: 8] : rowr_cr[8 * s1_y[2:0] +: 8];
+                              byte8(rowr_cb, s1_y[2:0]) : byte8(rowr_cr, s1_y[2:0]);
                     2'd2: pred_w[8 * ie +: 8] = (s1_p == 2'd1) ?
-                              colb_cb[8 * lx[2:0] +: 8] : colb_cr[8 * lx[2:0] +: 8];
+                              byte8(colb_cb, lx[2:0]) : byte8(colb_cr, lx[2:0]);
                     default: begin
                         if (s1_p == 2'd1)
-                            pv = (cb_base + cb_b * $signed({1'b0, lx}) +
-                                  cb_c * $signed({1'b0, s1_y})) >>> 5;
+                            pv = (cb_base + mul4(cb_b, lx) + mul4(cb_c, s1_y)) >>> 5;
                         else
-                            pv = (cr_base + cr_b * $signed({1'b0, lx}) +
-                                  cr_c * $signed({1'b0, s1_y})) >>> 5;
+                            pv = (cr_base + mul4(cr_b, lx) + mul4(cr_c, s1_y)) >>> 5;
                         pred_w[8 * ie +: 8] = clip1(pv);
                     end
                 endcase
@@ -644,16 +766,19 @@ module h264_intra #(
                         lb_wa <= {mbx10[7:0], s1_wa};
                         lb_wd <= rec_w;
                     end
-                    if (s1_wa == 2'd3)
-                        rowr_n[8 * s1_ya +: 8] <= rec_w[31:24];
-                    if (s1_i4) begin
-                        rowr[8 * s1_ya +: 8] <= rec_w[31:24];
-                        if (s1_r == 2'd3) begin
-                            colb[32 * bx_q +: 32] <= rec_w;
-                            if (bx_q != 2'd3 && by_q != 2'd3)
-                                cg[8 * {by_q + 2'd1, bx_q + 2'd1} +: 8] <= rec_w[31:24];
-                        end
+                    // Every index constant: see byte16.
+                    for (bk = 0; bk < 16; bk = bk + 1) begin
+                        if (s1_wa == 2'd3 && s1_ya == bk)
+                            rowr_n[8 * bk +: 8] <= rec_w[31:24];
+                        if (s1_i4 && s1_ya == bk)
+                            rowr[8 * bk +: 8] <= rec_w[31:24];
+                        if (s1_i4 && s1_r == 2'd3 && bx_q != 2'd3 && by_q != 2'd3 &&
+                            {by_q + 2'd1, bx_q + 2'd1} == bk)
+                            cg[8 * bk +: 8] <= rec_w[31:24];
                     end
+                    for (bk = 0; bk < 4; bk = bk + 1)
+                        if (s1_i4 && s1_r == 2'd3 && bx_q == bk)
+                            colb[32 * bk +: 32] <= rec_w;
                 end else begin
                     if (s1_ya[2:0] == 3'd7) begin
                         lb_we <= 1'b1;
@@ -661,9 +786,11 @@ module h264_intra #(
                                  {mbx10[8:0], s1_wa[0]};
                         lb_wd <= rec_w;
                     end
-                    if (s1_wa[0]) begin
-                        if (s1_p == 2'd1) rowr_cb_n[8 * s1_ya[2:0] +: 8] <= rec_w[31:24];
-                        else              rowr_cr_n[8 * s1_ya[2:0] +: 8] <= rec_w[31:24];
+                    for (bk = 0; bk < 8; bk = bk + 1) begin
+                        if (s1_wa[0] && s1_ya[2:0] == bk) begin
+                            if (s1_p == 2'd1) rowr_cb_n[8 * bk +: 8] <= rec_w[31:24];
+                            else              rowr_cr_n[8 * bk +: 8] <= rec_w[31:24];
+                        end
                     end
                 end
             end
@@ -790,7 +917,8 @@ module h264_intra #(
                             f2_q   <= f2_now;
                             f3_q   <= f3_now;
                             dc4_q  <= dc4_now;
-                            mode_q <= i4_modes[4 * s0_k +: 4];
+                            for (bk = 0; bk < 16; bk = bk + 1)
+                                if (s0_k == bk) mode_q <= i4_modes[4 * bk +: 4];
                             bx_q   <= bx;
                             by_q   <= by;
                         end
