@@ -213,7 +213,7 @@ module h264_mvpred #(
     reg        p_skip;
     reg signed [15:0] mvd_x;
     reg signed [15:0] mvd_y;
-    reg [2:0]  p_step;
+    reg [3:0]  p_step;
 
     // Geometry of (p_part, p_sub) in 4x4 units: corner, width, height.
     reg [1:0]  gx, gy;
@@ -257,10 +257,10 @@ module h264_mvpred #(
     // available.
     reg  [2:0] q_xo, q_yo;
     always @* begin
-        case (p_step)
-            3'd0:    begin q_xo = {1'b0, gx};             q_yo = {1'b0, gy} + 3'd1; end  // A
-            3'd1:    begin q_xo = {1'b0, gx} + 3'd1;      q_yo = {1'b0, gy};        end  // B
-            3'd2:    begin q_xo = {1'b0, gx} + gw + 3'd1; q_yo = {1'b0, gy};        end  // C
+        case (p_step[1:0])
+            2'd0:    begin q_xo = {1'b0, gx};             q_yo = {1'b0, gy} + 3'd1; end  // A
+            2'd1:    begin q_xo = {1'b0, gx} + 3'd1;      q_yo = {1'b0, gy};        end  // B
+            2'd2:    begin q_xo = {1'b0, gx} + gw + 3'd1; q_yo = {1'b0, gy};        end  // C
             default: begin q_xo = {1'b0, gx};             q_yo = {1'b0, gy};        end  // D
         endcase
     end
@@ -268,31 +268,46 @@ module h264_mvpred #(
 
     reg [MW:0] na, nb, nc, nd;
 
-    // Step 1: the predictor.
+    // Step 5: which neighbour predicts, 8.4.1.3, registered with the
+    // median's inputs after 8.4.1.3.1's first rule. Step 6: the predictor.
     wire signed [5:0]  ra = na[37:32];
     wire signed [5:0]  rb = nb[37:32];
     wire signed [5:0]  rc = nc[37:32];
     wire               bc_gone = !nb[MW] && !nc[MW] && na[MW];
     wire signed [5:0]  rb2 = bc_gone ? ra : rb;
     wire signed [5:0]  rc2 = bc_gone ? ra : rc;
-    wire [MW-1:0]      mb2 = bc_gone ? na[MW-1:0] : nb[MW-1:0];
-    wire [MW-1:0]      mc2 = bc_gone ? na[MW-1:0] : nc[MW-1:0];
     wire               ma  = (ra  == p_ref);
     wire               mbm = (rb2 == p_ref);
     wire               mcm = (rc2 == p_ref);
-    wire [15:0]        med_y = median3(na[31:16], mb2[31:16], mc2[31:16]);
-    wire [15:0]        med_x = median3(na[15:0],  mb2[15:0],  mc2[15:0]);
+    localparam [2:0] PK_MED = 3'd0, PK_A = 3'd1, PK_B = 3'd2, PK_C = 3'd3,
+                     PK_B2 = 3'd4, PK_C2 = 3'd5;
+    reg  [2:0]         pick;
+    always @* begin
+        if (kind == 5'd5 && p_part == 2'd0 && rb == p_ref)       pick = PK_B;
+        else if (kind == 5'd5 && p_part == 2'd1 && ra == p_ref)  pick = PK_A;
+        else if (kind == 5'd6 && p_part == 2'd0 && ra == p_ref)  pick = PK_A;
+        else if (kind == 5'd6 && p_part == 2'd1 && rc == p_ref)  pick = PK_C;
+        else if (ma && !mbm && !mcm)  pick = PK_A;
+        else if (!ma && mbm && !mcm)  pick = PK_B2;
+        else if (!ma && !mbm && mcm)  pick = PK_C2;
+        else pick = PK_MED;
+    end
+    reg  [2:0]         pick_q;
+    reg  [31:0]        mb2q, mc2q;  // B and C after the first median rule
+    wire [15:0]        med_y = median3(na[31:16], mb2q[31:16], mc2q[31:16]);
+    wire [15:0]        med_x = median3(na[15:0],  mb2q[15:0],  mc2q[15:0]);
     reg  [31:0]        mvp;         // {y, x}
     always @* begin
-        if (kind == 5'd5 && p_part == 2'd0 && rb == p_ref)       mvp = nb[31:0];
-        else if (kind == 5'd5 && p_part == 2'd1 && ra == p_ref)  mvp = na[31:0];
-        else if (kind == 5'd6 && p_part == 2'd0 && ra == p_ref)  mvp = na[31:0];
-        else if (kind == 5'd6 && p_part == 2'd1 && rc == p_ref)  mvp = nc[31:0];
-        else if (ma && !mbm && !mcm)  mvp = na[31:0];
-        else if (!ma && mbm && !mcm)  mvp = mb2[31:0];
-        else if (!ma && !mbm && mcm)  mvp = mc2[31:0];
-        else mvp = {med_y, med_x};
+        case (pick_q)
+            PK_A:    mvp = na[31:0];
+            PK_B:    mvp = nb[31:0];
+            PK_C:    mvp = nc[31:0];
+            PK_B2:   mvp = mb2q;
+            PK_C2:   mvp = mc2q;
+            default: mvp = {med_y, med_x};
+        endcase
     end
+    reg  [31:0]        mvp_q;
 
     // P_Skip's zero rule, 8.4.1.1.
     wire skip_zero = !na[MW] || !nb[MW] ||
@@ -303,7 +318,7 @@ module h264_mvpred #(
     reg [1:0]  w_r, w_c;            // the block being written
 
     always @* begin
-        cur_we = (state == S_PRED) && (p_step == 3'd6);
+        cur_we = (state == S_PRED) && (p_step == 4'd8);
         cur_wa = {gy + w_r, gx + w_c};
         cur_wd = {p_ref, mv_final};
     end
@@ -359,7 +374,7 @@ module h264_mvpred #(
             p_part      <= 2'd0;
             p_sub       <= 2'd0;
             p_skip      <= 1'b0;
-            p_step      <= 3'd0;
+            p_step      <= 4'd0;
             w_r         <= 2'd0;
             w_c         <= 2'd0;
             mvd_x       <= 16'sd0;
@@ -369,6 +384,10 @@ module h264_mvpred #(
             nc          <= {1'b0, NONE};
             nd          <= {1'b0, NONE};
             mv_final    <= 32'd0;
+            mvp_q       <= 32'd0;
+            mb2q        <= 32'd0;
+            mc2q        <= 32'd0;
+            pick_q      <= 3'd0;
             e_cnt       <= 6'd0;
             held        <= 32'd0;
             ld_ix       <= 3'd0;
@@ -399,7 +418,7 @@ module h264_mvpred #(
                             mvd_x <= in_tok[15:0];
                         end else begin
                             mvd_y  <= in_tok[15:0];
-                            p_step <= 3'd0;
+                            p_step <= 4'd0;
                             state  <= S_PRED;
                         end
                     end
@@ -437,7 +456,7 @@ module h264_mvpred #(
                             p_skip <= 1'b1;
                             mvd_x  <= 16'sd0;
                             mvd_y  <= 16'sd0;
-                            p_step <= 3'd0;
+                            p_step <= 4'd0;
                             state  <= S_PRED;
                         end
                     end
@@ -464,16 +483,22 @@ module h264_mvpred #(
             end
 
             S_PRED: begin
-                p_step <= p_step + 3'd1;
+                p_step <= p_step + 4'd1;
                 case (p_step)
-                    3'd0: na <= nb_q;
-                    3'd1: nb <= nb_q;
-                    3'd2: nc <= nb_q;
-                    3'd3: nd <= nb_q;
-                    3'd4: if (!nc[MW]) nc <= nd;
-                    3'd5: begin
+                    4'd0: na <= nb_q;
+                    4'd1: nb <= nb_q;
+                    4'd2: nc <= nb_q;
+                    4'd3: nd <= nb_q;
+                    4'd4: if (!nc[MW]) nc <= nd;
+                    4'd5: begin
+                        pick_q <= pick;
+                        mb2q   <= bc_gone ? na[31:0] : nb[31:0];
+                        mc2q   <= bc_gone ? na[31:0] : nc[31:0];
+                    end
+                    4'd6: mvp_q <= mvp;
+                    4'd7: begin
                         if (p_skip && skip_zero) mv_final <= 32'd0;
-                        else mv_final <= {mvp[31:16] + mvd_y, mvp[15:0] + mvd_x};
+                        else mv_final <= {mvp_q[31:16] + mvd_y, mvp_q[15:0] + mvd_x};
                     end
                     default: begin
                         // One block a cycle, row by row.
