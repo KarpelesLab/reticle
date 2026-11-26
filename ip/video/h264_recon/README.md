@@ -165,8 +165,40 @@ token stream keeps up at a token a cycle; on a dense I picture the parser
 is the real limit. With every port stalling at random,
 `recon_decodes_pictures_through_the_sdram_port` sees 626.
 
-The figures for an `xc7a100t-ftg256 --speed-grade 2` build are in
-*Resources* below.
+## Resources
+
+`reticle fpga ip/video/h264_recon/rtl/*.v --top h264_recon --device
+xc7a100t-fgg484 --speed-grade 2 --memories legacy --report`, measured:
+
+| | used | of the XC7A100T |
+|---|---|---|
+| LUT6 | 24 222, 10 levels deep at most | 63 400 |
+| flip-flops | 6 602 | 126 800 |
+| RAMB18E1 | 23 | 270 |
+| RAM64X1D (distributed RAM) | 353 | |
+| DSP48E1 | 19 | 240 |
+| CARRY4 | 2 082 | |
+
+**`--memories legacy`, because the default does not finish.** With the
+default (`vivado`) memory mapping the flow did not finish `h264_intra`
+in 40 minutes, and the cause was narrowed, by removing one thing at a
+time, to its Intra_4x4 path through the registered two- and three-tap
+averages; with `legacy` the same module maps in 6 seconds. Every other
+module maps either way. That is a fault of the flow on this input, not
+yet found.
+
+**Not measured: the routed delay.** The 10 levels are the mapped
+netlist's; a placed and routed figure needs the package's pins assigned
+in a design around this block, and has not been made. A longest path of
+10 LUT levels with carry chains is plausible at 100 MHz on a -2 part and
+is not a claim.
+
+What changed on the way to these figures, measured on the same flow:
+`h264_deblock` was 205 796 LUTs as first written — every line of an edge
+picked out of any byte of its 144 bytes of band registers, through
+part-selects at computed offsets, which this flow builds as shifters
+across the whole vector — and is 6 432 now that the registers turn under
+the edges (see its header).
 
 ## What is and is not checked
 
