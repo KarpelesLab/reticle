@@ -11,3 +11,4 @@ source rtl/h264_dbf_tables.v
 source rtl/h264_dbf_filter.v
 source rtl/h264_itrans4.v
 source rtl/h264_residual.v
+source rtl/h264_intra.v

@@ -823,3 +823,825 @@ fn residual_matches_8_5_for_every_kind() {
     }
     println!("h264_residual: at most {worst} cycles a macroblock");
 }
+
+// ---------------------------------------------------------------------------
+// The model: §8.3, intra prediction, and §8.5.14, picture construction
+// ---------------------------------------------------------------------------
+
+/// Macroblock kinds as the HDL numbers them.
+const K_I4: u32 = 0;
+const K_I16: u32 = 1;
+const K_INTER: u32 = 2;
+const K_PCM: u32 = 3;
+
+/// One slice's parameters, as far as reconstruction cares.
+#[derive(Clone, Debug)]
+struct SliceDesc {
+    first_mb: usize,
+    chroma_qp_offset: i32,
+    constrained_intra: bool,
+    disable_deblocking: u32,
+    offset_a: i32,
+    offset_b: i32,
+}
+
+/// One macroblock, as the token stream describes it.
+#[derive(Clone)]
+struct MbDesc {
+    kind: u32,
+    i16_mode: u32,
+    c_mode: u32,
+    i4_modes: [u32; 16],
+    qp: i32,
+    levels: Levels,
+    /// Inter prediction: 256 luma, 64 Cb, 64 Cr, each raster.
+    pred: Vec<u8>,
+    /// Per luma4x4BlkIdx: (mv x, mv y, ref_idx).
+    mv: [(i32, i32, u32); 16],
+}
+
+/// A picture: its size in macroblocks, its slices, its macroblocks.
+#[derive(Clone)]
+struct PicDesc {
+    w: usize,
+    h: usize,
+    slices: Vec<SliceDesc>,
+    mbs: Vec<MbDesc>,
+}
+
+impl PicDesc {
+    fn slice_of(&self, addr: usize) -> &SliceDesc {
+        self.slices
+            .iter()
+            .rev()
+            .find(|s| s.first_mb <= addr)
+            .expect("every macroblock is in a slice")
+    }
+
+    fn is_intra(&self, addr: usize) -> bool {
+        self.mbs[addr].kind != K_INTER
+    }
+
+    /// mbAddrA..D as 6.4.9 makes them available (same slice, inside the
+    /// picture) — and, for an intra macroblock under
+    /// constrained_intra_pred_flag, not inter (8.3.1.2 step 3).
+    fn avail(&self, addr: usize, for_intra: bool) -> [bool; 4] {
+        let w = self.w;
+        let (mx, my) = (addr % w, addr / w);
+        let first = self.slice_of(addr).first_mb;
+        let cip = self.slice_of(addr).constrained_intra && for_intra;
+        let ok = |n: usize| n >= first && (!cip || self.is_intra(n));
+        [
+            mx > 0 && ok(addr - 1),
+            my > 0 && ok(addr - w),
+            my > 0 && mx + 1 < w && ok(addr - w + 1),
+            mx > 0 && my > 0 && ok(addr - w - 1),
+        ]
+    }
+}
+
+/// The three sample arrays of a picture.
+#[derive(Clone, PartialEq)]
+struct Planes {
+    w: usize,
+    h: usize,
+    y: Vec<u8>,
+    cb: Vec<u8>,
+    cr: Vec<u8>,
+}
+
+impl Planes {
+    fn new(w_mbs: usize, h_mbs: usize) -> Planes {
+        Planes {
+            w: w_mbs * 16,
+            h: h_mbs * 16,
+            y: vec![0; w_mbs * h_mbs * 256],
+            cb: vec![0; w_mbs * h_mbs * 64],
+            cr: vec![0; w_mbs * h_mbs * 64],
+        }
+    }
+
+    /// Plane 0, 1 or 2, its width.
+    fn plane(&self, c: usize) -> (&Vec<u8>, usize) {
+        match c {
+            0 => (&self.y, self.w),
+            1 => (&self.cb, self.w / 2),
+            _ => (&self.cr, self.w / 2),
+        }
+    }
+
+    fn plane_mut(&mut self, c: usize) -> (&mut Vec<u8>, usize) {
+        let w = self.w;
+        match c {
+            0 => (&mut self.y, w),
+            1 => (&mut self.cb, w / 2),
+            _ => (&mut self.cr, w / 2),
+        }
+    }
+
+    fn at(&self, c: usize, x: usize, y: usize) -> i32 {
+        let (p, w) = self.plane(c);
+        i32::from(p[y * w + x])
+    }
+
+    fn put(&mut self, c: usize, x: usize, y: usize, v: i32) {
+        let (p, w) = self.plane_mut(c);
+        p[y * w + x] = u8::try_from(v).expect("a sample");
+    }
+}
+
+/// Which neighbouring macroblock a location relative to the current one
+/// falls in (6.4.12 for a frame): 0 A, 1 B, 2 C, 3 D, 4 the current one,
+/// 5 none. `maxw` and `maxh` are the component's macroblock size.
+fn neighbour_of(xn: i32, yn: i32, maxw: i32, maxh: i32) -> usize {
+    match (xn, yn) {
+        (x, y) if x < 0 && y < 0 => 3,
+        (x, y) if x < 0 && (0..maxh).contains(&y) => 0,
+        (x, y) if (0..maxw).contains(&x) && y < 0 => 1,
+        (x, y) if (0..maxw).contains(&x) && (0..maxh).contains(&y) => 4,
+        (x, y) if x >= maxw && y < 0 => 2,
+        _ => 5,
+    }
+}
+
+/// 8.3.1.2: the Intra_4x4 prediction of block `blk`, from the picture
+/// as constructed so far.
+fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [bool; 4]) -> [i32; 16] {
+    let (bx, by) = blk_xy(blk);
+    let (xo, yo) = (4 * bx as i32, 4 * by as i32);
+    // p[x, y] for x = -1, y = -1..3 and x = 0..7, y = -1, or None.
+    let fetch = |x: i32, y: i32| -> Option<i32> {
+        let (xn, yn) = (xo + x, yo + y);
+        let n = neighbour_of(xn, yn, 16, 16);
+        let ok = match n {
+            4 => true,
+            5 => false,
+            k => av[k],
+        };
+        if !ok || (x > 3 && (blk == 3 || blk == 11)) {
+            return None;
+        }
+        let gx = usize::try_from(i32::try_from(mx * 16).expect("fits") + xn).expect("inside");
+        let gy = usize::try_from(i32::try_from(my * 16).expect("fits") + yn).expect("inside");
+        Some(pl.at(0, gx, gy))
+    };
+    let mut top: [Option<i32>; 8] = [None; 8];
+    for (x, t) in top.iter_mut().enumerate() {
+        *t = fetch(x as i32, -1);
+    }
+    // The substitution of p[3, -1] for p[4..7, -1].
+    if top[4].is_none() && top[3].is_some() {
+        let t3 = top[3];
+        for t in top.iter_mut().skip(4) {
+            *t = t3;
+        }
+    }
+    let left: [Option<i32>; 4] = [fetch(-1, 0), fetch(-1, 1), fetch(-1, 2), fetch(-1, 3)];
+    let corner = fetch(-1, -1);
+    let p = |x: i32, y: i32| -> i32 {
+        let v = if y == -1 && x >= 0 {
+            top[x as usize]
+        } else if x == -1 && y == -1 {
+            corner
+        } else {
+            left[y as usize]
+        };
+        v.unwrap_or_else(|| panic!("mode {mode} of block {blk} reads p[{x}, {y}], which is not available"))
+    };
+    let mut out = [0i32; 16];
+    for y in 0..4i32 {
+        for x in 0..4i32 {
+            let v = match mode {
+                0 => p(x, -1),
+                1 => p(-1, y),
+                2 => {
+                    let t = top[..4].iter().all(Option::is_some);
+                    let l = left.iter().all(Option::is_some);
+                    let st: i32 = if t { (0..4).map(|k| p(k, -1)).sum() } else { 0 };
+                    let sl: i32 = if l { (0..4).map(|k| p(-1, k)).sum() } else { 0 };
+                    match (t, l) {
+                        (true, true) => (st + sl + 4) >> 3,
+                        (false, true) => (sl + 2) >> 2,
+                        (true, false) => (st + 2) >> 2,
+                        _ => 128,
+                    }
+                }
+                3 => {
+                    if x == 3 && y == 3 {
+                        (p(6, -1) + 3 * p(7, -1) + 2) >> 2
+                    } else {
+                        (p(x + y, -1) + 2 * p(x + y + 1, -1) + p(x + y + 2, -1) + 2) >> 2
+                    }
+                }
+                4 => {
+                    if x > y {
+                        (p(x - y - 2, -1) + 2 * p(x - y - 1, -1) + p(x - y, -1) + 2) >> 2
+                    } else if x < y {
+                        (p(-1, y - x - 2) + 2 * p(-1, y - x - 1) + p(-1, y - x) + 2) >> 2
+                    } else {
+                        (p(0, -1) + 2 * p(-1, -1) + p(-1, 0) + 2) >> 2
+                    }
+                }
+                5 => {
+                    let z = 2 * x - y;
+                    match z {
+                        0 | 2 | 4 | 6 => (p(x - (y >> 1) - 1, -1) + p(x - (y >> 1), -1) + 1) >> 1,
+                        1 | 3 | 5 => {
+                            (p(x - (y >> 1) - 2, -1) + 2 * p(x - (y >> 1) - 1, -1) + p(x - (y >> 1), -1) + 2)
+                                >> 2
+                        }
+                        -1 => (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2,
+                        _ => (p(-1, y - 1) + 2 * p(-1, y - 2) + p(-1, y - 3) + 2) >> 2,
+                    }
+                }
+                6 => {
+                    let z = 2 * y - x;
+                    match z {
+                        0 | 2 | 4 | 6 => (p(-1, y - (x >> 1) - 1) + p(-1, y - (x >> 1)) + 1) >> 1,
+                        1 | 3 | 5 => {
+                            (p(-1, y - (x >> 1) - 2) + 2 * p(-1, y - (x >> 1) - 1) + p(-1, y - (x >> 1)) + 2)
+                                >> 2
+                        }
+                        -1 => (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2,
+                        _ => (p(x - 1, -1) + 2 * p(x - 2, -1) + p(x - 3, -1) + 2) >> 2,
+                    }
+                }
+                7 => {
+                    if y == 0 || y == 2 {
+                        (p(x + (y >> 1), -1) + p(x + (y >> 1) + 1, -1) + 1) >> 1
+                    } else {
+                        (p(x + (y >> 1), -1) + 2 * p(x + (y >> 1) + 1, -1) + p(x + (y >> 1) + 2, -1) + 2) >> 2
+                    }
+                }
+                _ => {
+                    let z = x + 2 * y;
+                    match z {
+                        0 | 2 | 4 => (p(-1, y + (x >> 1)) + p(-1, y + (x >> 1) + 1) + 1) >> 1,
+                        1 | 3 => {
+                            (p(-1, y + (x >> 1)) + 2 * p(-1, y + (x >> 1) + 1) + p(-1, y + (x >> 1) + 2) + 2) >> 2
+                        }
+                        5 => (p(-1, 2) + 3 * p(-1, 3) + 2) >> 2,
+                        _ => p(-1, 3),
+                    }
+                }
+            };
+            out[(4 * y + x) as usize] = v;
+        }
+    }
+    out
+}
+
+/// The neighbours of a whole macroblock of component `c` for 8.3.3 and
+/// 8.3.4: the row above, the column to the left and the corner, each
+/// None when its macroblock is not available.
+fn mb_neighbours(pl: &Planes, c: usize, mx: usize, my: usize, av: [bool; 4]) -> (Option<Vec<i32>>, Option<Vec<i32>>, Option<i32>) {
+    let n = if c == 0 { 16 } else { 8 };
+    let (ox, oy) = (mx * n, my * n);
+    let top = av[1].then(|| (0..n).map(|x| pl.at(c, ox + x, oy - 1)).collect());
+    let left = av[0].then(|| (0..n).map(|y| pl.at(c, ox - 1, oy + y)).collect());
+    let corner = av[3].then(|| pl.at(c, ox - 1, oy - 1));
+    (top, left, corner)
+}
+
+/// 8.3.3: an Intra_16x16 prediction, raster order.
+fn pred_intra16x16(pl: &Planes, mx: usize, my: usize, mode: u32, av: [bool; 4]) -> Vec<i32> {
+    let (top, left, corner) = mb_neighbours(pl, 0, mx, my, av);
+    let mut out = vec![0i32; 256];
+    match mode {
+        0 => {
+            let t = top.expect("Intra_16x16_Vertical needs the row above");
+            for y in 0..16 {
+                for x in 0..16 {
+                    out[16 * y + x] = t[x];
+                }
+            }
+        }
+        1 => {
+            let l = left.expect("Intra_16x16_Horizontal needs the column to the left");
+            for y in 0..16 {
+                for x in 0..16 {
+                    out[16 * y + x] = l[y];
+                }
+            }
+        }
+        2 => {
+            let v = match (&top, &left) {
+                (Some(t), Some(l)) => (t.iter().sum::<i32>() + l.iter().sum::<i32>() + 16) >> 5,
+                (None, Some(l)) => (l.iter().sum::<i32>() + 8) >> 4,
+                (Some(t), None) => (t.iter().sum::<i32>() + 8) >> 4,
+                (None, None) => 128,
+            };
+            out.iter_mut().for_each(|o| *o = v);
+        }
+        _ => {
+            let t = top.expect("Plane needs the row above");
+            let l = left.expect("Plane needs the column to the left");
+            let d = corner.expect("Plane needs the corner");
+            let pt = |x: i32| if x < 0 { d } else { t[x as usize] };
+            let plf = |y: i32| if y < 0 { d } else { l[y as usize] };
+            let hh: i32 = (0..8).map(|x| (x + 1) * (pt(8 + x) - pt(6 - x))).sum();
+            let vv: i32 = (0..8).map(|y| (y + 1) * (plf(8 + y) - plf(6 - y))).sum();
+            let a = 16 * (l[15] + t[15]);
+            let b = (5 * hh + 32) >> 6;
+            let c = (5 * vv + 32) >> 6;
+            for y in 0..16i32 {
+                for x in 0..16i32 {
+                    out[(16 * y + x) as usize] = clip1((a + b * (x - 7) + c * (y - 7) + 16) >> 5);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 8.3.4 for 4:2:0: one chroma component's prediction, raster order.
+fn pred_chroma(pl: &Planes, comp: usize, mx: usize, my: usize, mode: u32, av: [bool; 4]) -> Vec<i32> {
+    let (top, left, corner) = mb_neighbours(pl, comp, mx, my, av);
+    let mut out = vec![0i32; 64];
+    match mode {
+        0 => {
+            for blk in 0..4usize {
+                let (xo, yo) = (4 * (blk % 2), 4 * (blk / 2));
+                let st = top.as_ref().map(|t| t[xo..xo + 4].iter().sum::<i32>());
+                let sl = left.as_ref().map(|l| l[yo..yo + 4].iter().sum::<i32>());
+                let v = if (xo, yo) == (0, 0) || (xo > 0 && yo > 0) {
+                    match (st, sl) {
+                        (Some(t), Some(l)) => (t + l + 4) >> 3,
+                        (None, Some(l)) => (l + 2) >> 2,
+                        (Some(t), None) => (t + 2) >> 2,
+                        _ => 128,
+                    }
+                } else if xo > 0 {
+                    match (st, sl) {
+                        (Some(t), _) => (t + 2) >> 2,
+                        (None, Some(l)) => (l + 2) >> 2,
+                        _ => 128,
+                    }
+                } else {
+                    match (st, sl) {
+                        (_, Some(l)) => (l + 2) >> 2,
+                        (Some(t), None) => (t + 2) >> 2,
+                        _ => 128,
+                    }
+                };
+                for y in 0..4 {
+                    for x in 0..4 {
+                        out[8 * (yo + y) + xo + x] = v;
+                    }
+                }
+            }
+        }
+        1 => {
+            let l = left.expect("Intra_Chroma_Horizontal needs the left");
+            for y in 0..8 {
+                for x in 0..8 {
+                    out[8 * y + x] = l[y];
+                }
+            }
+        }
+        2 => {
+            let t = top.expect("Intra_Chroma_Vertical needs the top");
+            for y in 0..8 {
+                for x in 0..8 {
+                    out[8 * y + x] = t[x];
+                }
+            }
+        }
+        _ => {
+            let t = top.expect("Plane needs the row above");
+            let l = left.expect("Plane needs the column to the left");
+            let d = corner.expect("Plane needs the corner");
+            let pt = |x: i32| if x < 0 { d } else { t[x as usize] };
+            let plf = |y: i32| if y < 0 { d } else { l[y as usize] };
+            let hh: i32 = (0..4).map(|x| (x + 1) * (pt(4 + x) - pt(2 - x))).sum();
+            let vv: i32 = (0..4).map(|y| (y + 1) * (plf(4 + y) - plf(2 - y))).sum();
+            let a = 16 * (l[7] + t[7]);
+            let b = (34 * hh + 32) >> 6;
+            let c = (34 * vv + 32) >> 6;
+            for y in 0..8i32 {
+                for x in 0..8i32 {
+                    out[(8 * y + x) as usize] = clip1((a + b * (x - 3) + c * (y - 3) + 16) >> 5);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// §8.5.14 for a whole picture: each macroblock's prediction plus its
+/// residual (24 blocks as `mb_residuals` gives them), clipped.
+fn construct(pic: &PicDesc, residuals: &[[[i64; 16]; 24]]) -> Planes {
+    let mut pl = Planes::new(pic.w, pic.h);
+    for (addr, mb) in pic.mbs.iter().enumerate() {
+        let (mx, my) = (addr % pic.w, addr / pic.w);
+        let av = pic.avail(addr, mb.kind != K_INTER);
+        let res = &residuals[addr];
+        // Luma.
+        if mb.kind == K_I4 {
+            for blk in 0..16 {
+                let pred = pred_intra4x4(&pl, mx, my, blk, mb.i4_modes[blk], av);
+                let (bx, by) = blk_xy(blk);
+                for i in 0..16 {
+                    let v = clip1(pred[i] + i32::try_from(res[blk][i]).expect("small"));
+                    pl.put(0, mx * 16 + 4 * bx + i % 4, my * 16 + 4 * by + i / 4, v);
+                }
+            }
+        } else {
+            let pred: Vec<i32> = match mb.kind {
+                K_I16 => pred_intra16x16(&pl, mx, my, mb.i16_mode, av),
+                K_INTER => mb.pred[..256].iter().map(|&v| i32::from(v)).collect(),
+                _ => vec![0; 256],
+            };
+            for y in 0..16 {
+                for x in 0..16 {
+                    let blk = blk_at(x / 4, y / 4);
+                    let r = i32::try_from(res[blk][4 * (y % 4) + x % 4]).expect("small");
+                    pl.put(0, mx * 16 + x, my * 16 + y, clip1(pred[16 * y + x] + r));
+                }
+            }
+        }
+        // Chroma.
+        for comp in 1..3usize {
+            let pred: Vec<i32> = match mb.kind {
+                K_I4 | K_I16 => pred_chroma(&pl, comp, mx, my, mb.c_mode, av),
+                K_INTER => mb.pred[256 + 64 * (comp - 1)..256 + 64 * comp]
+                    .iter()
+                    .map(|&v| i32::from(v))
+                    .collect(),
+                _ => vec![0; 64],
+            };
+            for y in 0..8 {
+                for x in 0..8 {
+                    let blk = 16 + 4 * (comp - 1) + 2 * (y / 4) + x / 4;
+                    let r = i32::try_from(res[blk][4 * (y % 4) + x % 4]).expect("small");
+                    pl.put(comp, mx * 8 + x, my * 8 + y, clip1(pred[8 * y + x] + r));
+                }
+            }
+        }
+    }
+    pl
+}
+
+/// luma4x4BlkIdx of the block at (x, y) in 4-sample units.
+fn blk_at(x: usize, y: usize) -> usize {
+    (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2)
+}
+
+// ---------------------------------------------------------------------------
+// Drawing pictures the model and the HDL can both decode
+// ---------------------------------------------------------------------------
+
+/// Draws a prediction mode the stream would be allowed to use given
+/// what is available (the "shall be used only when" of each mode).
+fn draw_modes(rng: &mut Rng, mb: &mut MbDesc, av: [bool; 4]) {
+    let [a, b, _, d] = av;
+    let pick = |rng: &mut Rng, ok: &[u32]| ok[usize::try_from(rng.below(ok.len() as u64)).expect("small")];
+    match mb.kind {
+        K_I4 => {
+            for blk in 0..16 {
+                let (bx, by) = blk_xy(blk);
+                let top = by > 0 || b;
+                let left = bx > 0 || a;
+                let corner = match (bx, by) {
+                    (0, 0) => d,
+                    (0, _) => a,
+                    (_, 0) => b,
+                    _ => true,
+                };
+                let mut ok = vec![2u32];
+                if top {
+                    ok.extend([0, 3, 7]);
+                }
+                if left {
+                    ok.extend([1, 8]);
+                }
+                if top && left && corner {
+                    ok.extend([4, 5, 6]);
+                }
+                mb.i4_modes[blk] = pick(rng, &ok);
+            }
+        }
+        K_I16 => {
+            let mut ok = vec![2u32];
+            if b {
+                ok.push(0);
+            }
+            if a {
+                ok.push(1);
+            }
+            if a && b && d {
+                ok.push(3);
+            }
+            mb.i16_mode = pick(rng, &ok);
+        }
+        _ => {}
+    }
+    if mb.kind == K_I4 || mb.kind == K_I16 {
+        let mut ok = vec![0u32];
+        if a {
+            ok.push(1);
+        }
+        if b {
+            ok.push(2);
+        }
+        if a && b && d {
+            ok.push(3);
+        }
+        mb.c_mode = pick(rng, &ok);
+    }
+}
+
+/// A random macroblock of `kind`, its modes drawn after the fact by
+/// `draw_modes`.
+fn blank_mb(rng: &mut Rng, kind: u32, qp: i32) -> MbDesc {
+    let pred = if kind == K_INTER {
+        (0..384).map(|_| u8::try_from(rng.below(256)).expect("a sample")).collect()
+    } else {
+        Vec::new()
+    };
+    let mut mv = [(0, 0, 0); 16];
+    for m in mv.iter_mut() {
+        *m = (rng.range(-8, 8), rng.range(-8, 8), u32::try_from(rng.below(2)).expect("small"));
+    }
+    MbDesc {
+        kind,
+        i16_mode: 2,
+        c_mode: 0,
+        i4_modes: [2; 16],
+        qp,
+        levels: Levels::zero(),
+        pred,
+        mv,
+    }
+}
+
+/// Draws a picture of `w` x `h` macroblocks in `slices` slices, every
+/// kind of macroblock and every mode its neighbours allow.
+fn draw_picture(rng: &mut Rng, w: usize, h: usize, slices: usize, intra_only: bool) -> PicDesc {
+    let n = w * h;
+    let mut firsts = vec![0usize];
+    while firsts.len() < slices {
+        let f = 1 + usize::try_from(rng.below(u64::try_from(n - 1).expect("fits"))).expect("fits");
+        if !firsts.contains(&f) {
+            firsts.push(f);
+        }
+    }
+    firsts.sort_unstable();
+    let slices: Vec<SliceDesc> = firsts
+        .iter()
+        .map(|&first_mb| SliceDesc {
+            first_mb,
+            chroma_qp_offset: rng.range(-12, 12),
+            constrained_intra: rng.below(2) == 1,
+            disable_deblocking: [0u32, 0, 0, 1, 2][usize::try_from(rng.below(5)).expect("small")],
+            offset_a: 2 * rng.range(-6, 6),
+            offset_b: 2 * rng.range(-6, 6),
+        })
+        .collect();
+    let mut pic = PicDesc {
+        w,
+        h,
+        slices,
+        mbs: Vec::new(),
+    };
+    for addr in 0..n {
+        let kind = if intra_only {
+            [K_I4, K_I4, K_I16, K_I16, K_PCM][usize::try_from(rng.below(5)).expect("small")]
+        } else {
+            [K_I4, K_I16, K_INTER, K_INTER, K_INTER, K_PCM][usize::try_from(rng.below(6)).expect("small")]
+        };
+        let qp = rng.range(0, 51);
+        pic.mbs.push(blank_mb(rng, kind, qp));
+        let av = pic.avail(addr, kind != K_INTER);
+        let mut mb = pic.mbs[addr].clone();
+        draw_modes(rng, &mut mb, av);
+        pic.mbs[addr] = mb;
+    }
+    pic
+}
+
+/// Random residuals for the construction test: small mostly, some
+/// large enough to clip, some blocks all zero, I_PCM's samples.
+fn draw_residuals(rng: &mut Rng, mb: &MbDesc) -> ([[i64; 16]; 24], u32) {
+    let mut r = [[0i64; 16]; 24];
+    let mut zf = 0u32;
+    for (b, blk) in r.iter_mut().enumerate() {
+        if mb.kind == K_PCM {
+            for v in blk.iter_mut() {
+                *v = i64::try_from(rng.below(256)).expect("a sample");
+            }
+            continue;
+        }
+        match rng.below(4) {
+            0 => zf |= 1 << b,
+            1 => {
+                for v in blk.iter_mut() {
+                    *v = i64::from(rng.range(-300, 300));
+                }
+            }
+            _ => {
+                for v in blk.iter_mut() {
+                    *v = i64::from(rng.range(-6, 6));
+                }
+            }
+        }
+    }
+    (r, zf)
+}
+
+/// Packs a block row of four residuals as `h264_residual` stores it.
+fn residual_word(r: &[i64; 16], row: usize) -> u64 {
+    (0..4).fold(0u64, |acc, col| {
+        let v = u64::try_from(r[4 * row + col].rem_euclid(1024)).expect("ten bits");
+        acc | (v << (10 * col))
+    })
+}
+
+/// Unpacks a slot of 96 words into a picture at (mx, my).
+fn unpack_slot(pl: &mut Planes, mx: usize, my: usize, slot: &[u32; 96]) {
+    for y in 0..16 {
+        for x in 0..16 {
+            let w = slot[4 * y + x / 4];
+            pl.put(0, mx * 16 + x, my * 16 + y, i32::try_from((w >> (8 * (x % 4))) & 0xFF).expect("byte"));
+        }
+    }
+    for comp in 1..3 {
+        for y in 0..8 {
+            for x in 0..8 {
+                let w = slot[64 + 16 * (comp - 1) + 2 * y + x / 4];
+                pl.put(comp, mx * 8 + x, my * 8 + y, i32::try_from((w >> (8 * (x % 4))) & 0xFF).expect("byte"));
+            }
+        }
+    }
+}
+
+/// Packs a macroblock's inter prediction as `h264_inter` streams it:
+/// luma 16 rows of 4 words, then Cb 8 rows of 2, then Cr.
+fn pred_words(mb: &MbDesc) -> Vec<u32> {
+    mb.pred
+        .chunks(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// First differing sample of two pictures, for a message.
+fn first_difference(got: &Planes, want: &Planes) -> String {
+    for c in 0..3 {
+        let (g, w) = (got.plane(c), want.plane(c));
+        for (i, (a, b)) in g.0.iter().zip(w.0.iter()).enumerate() {
+            if a != b {
+                let (x, y) = (i % g.1, i / g.1);
+                let n = if c == 0 { 16 } else { 8 };
+                return format!(
+                    "plane {c} ({x}, {y}), macroblock ({}, {}): got {a}, want {b}",
+                    x / n,
+                    y / n
+                );
+            }
+        }
+    }
+    "none".to_owned()
+}
+
+/// `h264_intra` against §8.3 and §8.5.14 over whole pictures.
+///
+/// Every macroblock of a 5x4 picture in three slices, its kind drawn
+/// from all four, its modes from all those its neighbours allow, so the
+/// line buffer, the corner it saves, slice edges, constrained intra
+/// prediction and the right-hand column all carry real data from one
+/// macroblock to the next. Residuals are drawn directly — small, large
+/// enough to clip, or flagged all zero — and the inter prediction is
+/// noise, so what reaches the slot is the prediction's doing.
+///
+/// Would catch: any Intra_4x4 mode wrong at any (x, y), the above-right
+/// substitution of 8.3.1.2 applied to the wrong blocks, a corner taken
+/// before or after the block that writes it, the DC fallbacks of every
+/// mode, plane prediction's rounding, chroma DC's per-block rules, a
+/// left or top neighbour from the wrong macroblock, inter words in the
+/// wrong order, and a residual added to the wrong sample. Would not
+/// catch anything about residuals themselves, which
+/// `residual_matches_8_5_for_every_kind` covers.
+#[test]
+fn intra_constructs_pictures_as_8_3_says() {
+    let design = design("h264_intra");
+    let mut b = Bench::new(
+        &design,
+        &[
+            ("go", 1),
+            ("mb_x", 7),
+            ("kind", 3),
+            ("i16_mode", 2),
+            ("c_mode", 2),
+            ("i4_modes", 64),
+            ("avail_a", 1),
+            ("avail_b", 1),
+            ("avail_c", 1),
+            ("avail_d", 1),
+            ("half", 1),
+            ("rr_data", 40),
+            ("zf", 24),
+            ("pred_valid", 1),
+            ("pred_data", 32),
+        ],
+        &["busy", "done", "rr_addr", "pred_ready", "ow_en", "ow_addr", "ow_data"],
+    );
+    let mut rng = Rng(0x1A7A_0002);
+    let mut worst = [0u64; 4];
+    let mut used_i4 = [0u32; 9];
+    let mut used_i16 = [0u32; 4];
+    let mut used_c = [0u32; 4];
+    for round in 0..6 {
+        let pic = draw_picture(&mut rng, 5, 4, 1 + round % 3, round % 3 == 0);
+        for mb in &pic.mbs {
+            match mb.kind {
+                K_I4 => mb.i4_modes.iter().for_each(|&m| used_i4[m as usize] += 1),
+                K_I16 => used_i16[mb.i16_mode as usize] += 1,
+                _ => {}
+            }
+            if mb.kind == K_I4 || mb.kind == K_I16 {
+                used_c[mb.c_mode as usize] += 1;
+            }
+        }
+        let mut residuals = Vec::new();
+        let mut flags = Vec::new();
+        for mb in &pic.mbs {
+            let (r, z) = draw_residuals(&mut rng, mb);
+            let mut r = r;
+            for (k, blk) in r.iter_mut().enumerate() {
+                if z >> k & 1 == 1 {
+                    *blk = [0; 16];
+                }
+            }
+            residuals.push(r);
+            flags.push(z);
+        }
+        let want = construct(&pic, &residuals);
+        let mut got = Planes::new(pic.w, pic.h);
+        for (addr, mb) in pic.mbs.iter().enumerate() {
+            let (mx, my) = (addr % pic.w, addr / pic.w);
+            let av = pic.avail(addr, mb.kind != K_INTER);
+            let half = u64::try_from(addr % 2).expect("small");
+            b.set("mb_x", u64::try_from(mx).expect("small"));
+            b.set("kind", u64::from(mb.kind));
+            b.set("i16_mode", u64::from(mb.i16_mode));
+            b.set("c_mode", u64::from(mb.c_mode));
+            let modes = mb.i4_modes.iter().enumerate().fold(0u64, |acc, (k, &m)| acc | (u64::from(m) << (4 * k)));
+            b.set("i4_modes", modes);
+            for (k, name) in ["avail_a", "avail_b", "avail_c", "avail_d"].iter().enumerate() {
+                b.set(name, u64::from(av[k]));
+            }
+            b.set("half", half);
+            b.set("zf", u64::from(flags[addr]));
+            let words = pred_words(mb);
+            let mut sent = 0usize;
+            let mut slot = [0u32; 96];
+            b.set("go", 1);
+            b.cycle();
+            b.set("go", 0);
+            let start = b.cycles;
+            loop {
+                let more = sent < words.len();
+                b.set("pred_valid", u64::from(more));
+                b.set("pred_data", u64::from(words.get(sent).copied().unwrap_or(0)));
+                let addr_now = b.get("rr_addr");
+                let took = more && b.get("pred_ready") == 1;
+                if b.get("ow_en") == 1 {
+                    let a = usize::try_from(b.get("ow_addr")).expect("small");
+                    slot[a] = u32::try_from(b.get("ow_data")).expect("32 bits");
+                }
+                let finished = b.get("done") == 1;
+                b.cycle();
+                // The residual buffer answers a cycle after its address.
+                let blk = usize::try_from((addr_now >> 2) & 31).expect("small");
+                let row = usize::try_from(addr_now & 3).expect("small");
+                let data = if blk < 24 { residual_word(&residuals[addr][blk], row) } else { 0 };
+                b.set("rr_data", data);
+                if took {
+                    sent += 1;
+                }
+                if finished {
+                    break;
+                }
+                assert!(b.cycles - start < 2000, "h264_intra stalled at macroblock {addr}");
+            }
+            let spent = b.cycles - start;
+            let k = usize::try_from(mb.kind).expect("small");
+            worst[k] = worst[k].max(spent);
+            if mb.kind == K_INTER {
+                assert_eq!(sent, 96, "macroblock {addr} took {sent} prediction words");
+            }
+            unpack_slot(&mut got, mx, my, &slot);
+        }
+        assert!(
+            got == want,
+            "round {round}: the constructed picture differs: {}",
+            first_difference(&got, &want)
+        );
+    }
+    println!("h264_intra: worst cycles a macroblock, I4 {} I16 {} inter {} PCM {}", worst[0], worst[1], worst[2], worst[3]);
+    println!("modes used: Intra_4x4 {used_i4:?}, Intra_16x16 {used_i16:?}, chroma {used_c:?}");
+    // Every mode, often enough that a wrong one would have shown.
+    assert!(used_i4.iter().all(|&n| n >= 20), "Intra_4x4 modes {used_i4:?}");
+    assert!(used_i16.iter().all(|&n| n >= 3), "Intra_16x16 modes {used_i16:?}");
+    assert!(used_c.iter().all(|&n| n >= 3), "chroma modes {used_c:?}");
+}
