@@ -284,11 +284,12 @@ Options:
   --speed-grade <1|2|2L|3>
                      7 series: the part's speed grade, in place of the one the
                      device declares (--list-devices; the XC7A35T's are 1, the
-                     XC7A100T's 3). The fitted delay model times at it, and a
-                     Vivado script or part name written for the build names
-                     it. 2L times as 2 does, as Vivado has it; Vivado's -1L of
-                     these dies is an industrial part of another name, which
-                     times as 1.
+                     XC7A100T's 3 in FTG256 and 2 in FGG484). The fitted delay
+                     model times at it, and a Vivado script or part name
+                     written for the build names it. 2L times as 2 does, as
+                     Vivado has it; Vivado's -1L of these dies is an
+                     industrial part of another name, which times as 1. The
+                     temperature range is not a grade: a -2I is a 2.
   --pair-tables <related|all|needed>
                      7 series: which lookup tables share a site as a
                      `LUT6_2`, beyond a carry lane's own two. `related`

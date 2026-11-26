@@ -1528,3 +1528,526 @@ device xc7a100t-ftg256
   pll PLLE2_BASE input 19 800 vco 800 1600 outputs 6 count 6 pfd 19 450 feedback vco divide ref DIVCLK_DIVIDE 1 56 divide feedback CLKFBOUT_MULT 2 64 divide out CLKOUT0_DIVIDE 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
   pll MMCME2_BASE input 10 800 vco 600 1200 outputs 7 count 6 pfd 10 450 feedback vco divide ref DIVCLK_DIVIDE 1 106 divide feedback CLKFBOUT_MULT_F 2 64 divide out CLKOUT0_DIVIDE_F 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
 end
+
+# ---------------------------------------------------------------------------
+# The XC7A100T in the FGG484 package. The board this was added for carries
+# an XC7A100T-2FGG484I: speed grade -2, industrial temperature range.
+#
+# Copied from the XC7A100T's FTG256 entry above, and what changed:
+#
+#   * PIN LIST AND BANKS: GENERATED, AND CHECKED. The 285 balls are the
+#     user-I/O rows (`IO_*`) of prjxray-db's
+#     `artix7/xc7a100tfgg484-1/package_pins.csv` at commit 0a0adde (CC0),
+#     the file the bitstream flow reads to put a pin on a site; `clock` and
+#     `vref` follow the same rule as the FTG256 entries (`MRCC`/`SRCC`,
+#     `VREF` in the pin function). Six banks: 13 (35 balls), 14, 15, 16, 34
+#     and 35 (50 each). The 20 transceiver balls of quad 216 and bank 0's
+#     `VP_0`/`VN_0` are not IO and are not listed. CHECKED against Xilinx's
+#     own pinout file `xc7a100tfgg484pkg.txt` (dated 6/6/2012 in its first
+#     line): every one of its 285 `HR` rows is here with the same ball,
+#     bank and pin name, and none of this list is anything else. That file
+#     is not in the repository; docs/fpga-xray.md, "The FGG484 package",
+#     says how the check was made and what else was checked.
+#   * IDCODE: the die's, unchanged. The package's `part.json` differs from
+#     the FTG256's only in naming two more banks' clock-row tiles (13 and
+#     16), which FTG256 does not bond.
+#   * Speed grade 2, the grade of the part on the board. Xilinx's DS181
+#     (v1.27.1) says the temperature range does not change timing ("Except
+#     the operating temperature range or unless otherwise noted, all the DC
+#     and AC electrical parameters are the same for a particular speed
+#     grade"), so the -2I times as the -2 commercial part does. Quoted, not
+#     measured. `--speed-grade 1`, `2L` or `3` names another grade.
+# ---------------------------------------------------------------------------
+device xc7a100t-fgg484
+  family xc7
+  package fgg484
+  speed 2
+  idcode 0x03631093
+  lut_size 6
+  ff enable sync_reset async_reset shared_reset
+  bel LUT6 lut count 63400 port i=I0,I1,I2,I3,I4,I5 o=O param INIT=64'h0000000000000000
+  bel LUT5 lut port i=I0,I1,I2,I3,I4 o=O param INIT=32'h00000000
+  bel LUT4 lut port i=I0,I1,I2,I3 o=O param INIT=16'h0000
+  bel LUT3 lut port i=I0,I1,I2 o=O param INIT=8'h00
+  bel LUT2 lut port i=I0,I1 o=O param INIT=4'h0
+  bel LUT6_2 lut port i=I0,I1,I2,I3,I4,I5 o=O6 o5=O5 param INIT=64'h0000000000000000
+  bel LUT1 lut port i=I0 o=O param INIT=2'h0
+  bel CARRY4 carry width 4 port ci=CI cyinit=CYINIT p=S di=DI s=O co=CO
+  bel MUXF7 mux7 port i0=I0 i1=I1 s=S o=O outputs O
+  bel MUXF8 mux8 port i0=I0 i1=I1 s=S o=O outputs O
+  bel FDRE ff count 126800 mode posedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE ff mode posedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDSE ff mode posedge,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDSE ff mode posedge,enable,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDCE ff mode posedge,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDCE ff mode posedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDPE ff mode posedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel FDPE ff mode posedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel FDRE_1 ff mode negedge port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,enable port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDRE_1 ff mode negedge,enable,sync_reset port clk=C d=D q=Q en=CE rst=R param INIT=1'b0
+  bel FDSE_1 ff mode negedge,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDSE_1 ff mode negedge,enable,sync_set port clk=C d=D q=Q en=CE rst=S param INIT=1'b1
+  bel FDCE_1 ff mode negedge,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDCE_1 ff mode negedge,enable,async_reset port clk=C d=D q=Q en=CE rst=CLR param INIT=1'b0
+  bel FDPE_1 ff mode negedge,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel FDPE_1 ff mode negedge,enable,async_set port clk=C d=D q=Q en=CE rst=PRE param INIT=1'b1
+  bel LDCE latch port clk=G d=D q=Q en=GE rst=CLR param INIT=1'b0 outputs Q
+  bel LDPE latch port clk=G d=D q=Q en=GE rst=PRE param INIT=1'b1 outputs Q
+  bel SRLC32E srl32 port d=D clk=CLK ce=CE a=A q=Q q31=Q31 param INIT=32'h00000000 outputs Q,Q31
+  bel SRL16E srl16 port d=D clk=CLK ce=CE a=A0,A1,A2,A3 q=Q param INIT=16'h0000 outputs Q
+  bel SRLC16E srl16 port d=D clk=CLK ce=CE a=A0,A1,A2,A3 q=Q q31=Q15 param INIT=16'h0000 outputs Q,Q15
+  bel IBUF io for in port pad=I din=O
+  bel IBUFG io for in port pad=I din=O
+  bel IBUFDS io for in port pad=I pad_n=IB din=O
+  bel IBUFGDS io for in port pad=I pad_n=IB din=O
+  bel PULLUP other port o=O
+  bel PULLDOWN other port o=O
+  bel KEEPER other port o=O
+  bel OBUFDS io for out port pad=O pad_n=OB dout=I
+  bel OBUF io for out port pad=O dout=I
+  bel IOBUF io for inout port pad=IO din=O dout=I oen=T
+  bel OBUFT io for out port pad=O dout=I oen=T
+  bel OBUFTDS io for out port pad=O pad_n=OB dout=I oen=T
+  bel IOBUFDS io for inout port pad=IO pad_n=IOB din=O dout=I oen=T
+  bel IBUF_IBUFDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE
+  bel IBUF_INTERMDISABLE io for in port pad=I din=O ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IBUFDS_IBUFDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE ibufdisable_n=IBUFDISABLE
+  bel IBUFDS_INTERMDISABLE io for in port pad=I pad_n=IB din=O ibufdisable=IBUFDISABLE ibufdisable_n=IBUFDISABLE intermdisable=INTERMDISABLE intermdisable_n=INTERMDISABLE
+  bel IOBUF_INTERMDISABLE io for inout port pad=IO din=O dout=I oen=T ibufdisable=IBUFDISABLE intermdisable=INTERMDISABLE
+  bel IOBUFDS_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O dout=I oen=T ibufdisable=IBUFDISABLE ibufdisable_n=IBUFDISABLE intermdisable=INTERMDISABLE intermdisable_n=INTERMDISABLE
+  bel IBUFDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFGDS_DIFF_OUT io for in port pad=I pad_n=IB din=O din_n=OB
+  bel IBUFDS_DIFF_OUT_IBUFDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE ibufdisable_n=IBUFDISABLE
+  bel IBUFDS_DIFF_OUT_INTERMDISABLE io for in port pad=I pad_n=IB din=O din_n=OB ibufdisable=IBUFDISABLE ibufdisable_n=IBUFDISABLE intermdisable=INTERMDISABLE intermdisable_n=INTERMDISABLE
+  bel IOBUFDS_DIFF_OUT io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM
+  bel IOBUFDS_DIFF_OUT_INTERMDISABLE io for inout port pad=IO pad_n=IOB din=O din_n=OB dout=I oen=TM ibufdisable=IBUFDISABLE ibufdisable_n=IBUFDISABLE intermdisable=INTERMDISABLE intermdisable_n=INTERMDISABLE
+  bel BUFG gb count 32 port i=I o=O outputs O
+  bel BUFGCE gb absorbs ce port i=I ce=CE o=O outputs O
+  bel BUFGMUX gb absorbs ce,ce1 port i=I0 i1=I1 ce=S ce1=S o=O outputs O
+  bel BUFGCTRL gb absorbs ce,ce1,s0,s1,ignore0,ignore1 port i=I0 i1=I1 ce=CE0 ce1=CE1 s0=S0 s1=S1 ignore0=IGNORE0 ignore1=IGNORE1 o=O outputs O
+  bel BUFMRCE gb absorbs ce port i=I ce=CE o=O outputs O
+  bel BUFR gb absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
+  bel BUFHCE bufh absorbs ce port i=I ce=CE o=O outputs O
+  bel BUFR_REGION bufr absorbs ce,clr port i=I ce=CE clr=CLR o=O outputs O
+  bel BUFIO bufio port i=I o=O outputs O
+  bel BUFMRCE_REGION bufmr absorbs ce port i=I ce=CE o=O outputs O
+  bel IDDR ddr_in absorbs ce,sr port d=D clk=C clkb=C ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
+  bel IDDR_2CLK ddr_in absorbs ce,sr port d=D clk=C clkb=CB ce=CE sr=R sr=S q1=Q1 q2=Q2 outputs Q1,Q2
+  bel ODDR ddr_out absorbs d1,d2,ce,sr port d1=D1 d2=D2 clk=C clkb=C ce=CE sr=R sr=S q=Q outputs Q
+  bel ISERDESE2 ddr_in absorbs ce,ce2,sr,bitslip,dynclksel,dynclkdivsel port d=D ddly=DDLY ofb=OFB clk=CLK clkb=CLKB clkdiv=CLKDIV clkdivp=CLKDIVP oclk=OCLK oclkb=OCLKB ce=CE1 ce2=CE2 sr=RST bitslip=BITSLIP dynclksel=DYNCLKSEL dynclkdivsel=DYNCLKDIVSEL shiftin1=SHIFTIN1 shiftin2=SHIFTIN2 q1=Q1 q2=Q2 q3=Q3 q4=Q4 q5=Q5 q6=Q6 q7=Q7 q8=Q8 o=O shiftout1=SHIFTOUT1 shiftout2=SHIFTOUT2 outputs Q1,Q2,Q3,Q4,Q5,Q6,Q7,Q8,O,SHIFTOUT1,SHIFTOUT2
+  bel OSERDESE2 ddr_out absorbs d1,d2,d3,d4,d5,d6,d7,d8,t1,t2,t3,t4,ce,tce,sr,tbytein port d1=D1 d2=D2 d3=D3 d4=D4 d5=D5 d6=D6 d7=D7 d8=D8 t1=T1 t2=T2 t3=T3 t4=T4 clk=CLK clkdiv=CLKDIV ce=OCE tce=TCE sr=RST shiftin1=SHIFTIN1 shiftin2=SHIFTIN2 tbytein=TBYTEIN q=OQ tq=TQ ofb=OFB tfb=TFB shiftout1=SHIFTOUT1 shiftout2=SHIFTOUT2 tbyteout=TBYTEOUT outputs OQ,TQ,OFB,TFB,SHIFTOUT1,SHIFTOUT2,TBYTEOUT
+  bel IDELAYE2 iodelay absorbs ce,inc,ld,ldpipeen,regrst,cinvctrl,cntvaluein,datain,c port idatain=IDATAIN datain=DATAIN dataout=DATAOUT c=C ce=CE inc=INC ld=LD ldpipeen=LDPIPEEN regrst=REGRST cinvctrl=CINVCTRL cntvaluein=CNTVALUEIN cntvalueout=CNTVALUEOUT outputs DATAOUT,CNTVALUEOUT
+  bel IDELAYCTRL idelayctrl absorbs rst port refclk=REFCLK rst=RST rdy=RDY outputs RDY
+  bel DCIRESET dcireset absorbs rst port rst=RST locked=LOCKED outputs LOCKED
+  bel PLLE2_ADV pll absorbs rst,pwrdwn,clkinsel,clkin2,den,dwe,daddr,di port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out=CLKOUT0 out1=CLKOUT1 out2=CLKOUT2 out3=CLKOUT3 out4=CLKOUT4 out5=CLKOUT5 fbout=CLKFBOUT lock=LOCKED rst=RST pwrdwn=PWRDWN dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT1,CLKOUT2,CLKOUT3,CLKOUT4,CLKOUT5,CLKFBOUT,LOCKED,DRDY,DO
+  bel XADC sysmon absorbs vp,vn,vauxp,vauxn port vp=VP vn=VN vauxp=VAUXP vauxn=VAUXN dclk=DCLK den=DEN dwe=DWE reset=RESET convst=CONVST convstclk=CONVSTCLK daddr=DADDR di=DI do=DO drdy=DRDY ot=OT busy=BUSY eoc=EOC eos=EOS alm=ALM channel=CHANNEL muxaddr=MUXADDR jtagbusy=JTAGBUSY jtaglocked=JTAGLOCKED jtagmodified=JTAGMODIFIED outputs DO,DRDY,OT,BUSY,EOC,EOS,ALM,CHANNEL,MUXADDR,JTAGBUSY,JTAGLOCKED,JTAGMODIFIED
+  bel BSCANE2 bscan absorbs tdo port capture=CAPTURE drck=DRCK reset=RESET runtest=RUNTEST sel=SEL shift=SHIFT tck=TCK tdi=TDI tms=TMS update=UPDATE tdo=TDO param JTAG_CHAIN=1 DISABLE_JTAG="FALSE" outputs CAPTURE,DRCK,RESET,RUNTEST,SEL,SHIFT,TCK,TDI,TMS,UPDATE
+  bel CAPTUREE2 capture absorbs cap,clk port cap=CAP clk=CLK param ONESHOT="TRUE"
+  bel DNA_PORT dna absorbs clk,din,read,shift port clk=CLK din=DIN read=READ shift=SHIFT dout=DOUT outputs DOUT
+  bel EFUSE_USR efuse port efuseusr=EFUSEUSR outputs EFUSEUSR
+  bel FRAME_ECCE2 frame_ecc port crcerror=CRCERROR eccerror=ECCERROR eccerrorsingle=ECCERRORSINGLE syndromevalid=SYNDROMEVALID syndrome=SYNDROME far=FAR synbit=SYNBIT synword=SYNWORD param FARSRC="EFAR" outputs CRCERROR,ECCERROR,ECCERRORSINGLE,SYNDROMEVALID,SYNDROME,FAR,SYNBIT,SYNWORD
+  bel ICAPE2 icap absorbs clk,csib,rdwrb,i port clk=CLK csib=CSIB rdwrb=RDWRB i=I o=O param ICAP_WIDTH="X32" outputs O
+  bel STARTUPE2 startup absorbs clk,gsr,gts,keyclearb,pack,usrcclko,usrcclkts,usrdoneo,usrdonets port clk=CLK gsr=GSR gts=GTS keyclearb=KEYCLEARB pack=PACK usrcclko=USRCCLKO usrcclkts=USRCCLKTS usrdoneo=USRDONEO usrdonets=USRDONETS cfgclk=CFGCLK cfgmclk=CFGMCLK eos=EOS preq=PREQ param PROG_USR="FALSE" outputs CFGCLK,CFGMCLK,EOS,PREQ
+  bel USR_ACCESSE2 usr_access port cfgclk=CFGCLK datavalid=DATAVALID data=DATA outputs CFGCLK,DATAVALID,DATA
+  bel MMCME2_ADV mmcm absorbs rst,pwrdwn,psen,psincdec,clkinsel,clkin2,den,dwe,daddr,di port ref=CLKIN1 clkin2=CLKIN2 clkinsel=CLKINSEL fb=CLKFBIN out0=CLKOUT0 out0b=CLKOUT0B out1=CLKOUT1 out1b=CLKOUT1B out2=CLKOUT2 out2b=CLKOUT2B out3=CLKOUT3 out3b=CLKOUT3B out4=CLKOUT4 out5=CLKOUT5 out6=CLKOUT6 fbout=CLKFBOUT fboutb=CLKFBOUTB lock=LOCKED clkinstopped=CLKINSTOPPED clkfbstopped=CLKFBSTOPPED rst=RST pwrdwn=PWRDWN psclk=PSCLK psen=PSEN psincdec=PSINCDEC psdone=PSDONE dclk=DCLK den=DEN dwe=DWE drdy=DRDY daddr=DADDR di=DI do=DO outputs CLKOUT0,CLKOUT0B,CLKOUT1,CLKOUT1B,CLKOUT2,CLKOUT2B,CLKOUT3,CLKOUT3B,CLKOUT4,CLKOUT5,CLKOUT6,CLKFBOUT,CLKFBOUTB,LOCKED,CLKINSTOPPED,CLKFBSTOPPED,PSDONE,DRDY,DO
+  dsp DSP48E1 a 25 b 18 p 48 signed count 240 smallest 6 11 outputs ACOUT,BCOUT,CARRYCASCOUT,CARRYOUT,MULTSIGNOUT,OVERFLOW,P,PATTERNBDETECT,PATTERNDETECT,PCOUT,UNDERFLOW port a=A b=B p=P clk=CLK acin=ACIN acout=ACOUT alumode=ALUMODE bcin=BCIN bcout=BCOUT c=C carrycascin=CARRYCASCIN carrycascout=CARRYCASCOUT carryin=CARRYIN carryinsel=CARRYINSEL carryout=CARRYOUT cea1=CEA1 cea2=CEA2 cead=CEAD cealumode=CEALUMODE ceb1=CEB1 ceb2=CEB2 cec=CEC cecarryin=CECARRYIN cectrl=CECTRL ced=CED ceinmode=CEINMODE cem=CEM cep=CEP d=D inmode=INMODE multsignin=MULTSIGNIN multsignout=MULTSIGNOUT opmode=OPMODE overflow=OVERFLOW patternbdetect=PATTERNBDETECT patterndetect=PATTERNDETECT pcin=PCIN pcout=PCOUT rsta=RSTA rstallcarryin=RSTALLCARRYIN rstalumode=RSTALUMODE rstb=RSTB rstc=RSTC rstctrl=RSTCTRL rstd=RSTD rstinmode=RSTINMODE rstm=RSTM rstp=RSTP underflow=UNDERFLOW widths A=30 tie C=48'hffffffffffff D=25'h0000000 CARRYIN=0 INMODE=5'b00000 ALUMODE=4'b0000 OPMODE=7'b0000101 CARRYINSEL=3'b000 ACIN=30'h00000000 BCIN=18'h00000 PCIN=48'h000000000000 CEA1=0 CEA2=0 CEAD=0 CEALUMODE=0 CEB1=0 CEB2=0 CEC=0 CECARRYIN=0 CECTRL=0 CED=0 CEINMODE=0 CEM=0 CEP=0 RSTA=0 RSTALLCARRYIN=0 RSTALUMODE=0 RSTB=0 RSTC=0 RSTCTRL=0 RSTD=0 RSTINMODE=0 RSTM=0 RSTP=0 CLK=0 param ACASCREG=0 ADREG=0 ALUMODEREG=0 AREG=0 BCASCREG=0 BREG=0 CARRYINREG=0 CARRYINSELREG=0 CREG=0 DREG=0 INMODEREG=0 MREG=0 OPMODEREG=0 PREG=0 A_INPUT="DIRECT" B_INPUT="DIRECT" USE_MULT="MULTIPLY" USE_DPORT="FALSE" USE_SIMD="ONE48"
+  bel RAM64X1D lutram outputs DPO,SPO port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4,DPRA5 dout=DPO spo=SPO
+  bel RAM64X1D_1 lutram outputs DPO,SPO port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4,DPRA5 dout=DPO spo=SPO
+  bel RAM32X1D lutram site lutram_d32 outputs DPO,SPO port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4 dout=DPO spo=SPO
+  bel RAM32X1D_1 lutram site lutram_d32 outputs DPO,SPO port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4 din=D raddr=DPRA0,DPRA1,DPRA2,DPRA3,DPRA4 dout=DPO spo=SPO
+  bel RAM64X1S lutram site lutram_s64 outputs O port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D spo=O
+  bel RAM64X1S_1 lutram site lutram_s64 outputs O port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D spo=O
+  bel RAM32X1S lutram site lutram_s32 outputs O port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4 din=D spo=O
+  bel RAM32X1S_1 lutram site lutram_s32 outputs O port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4 din=D spo=O
+  bel RAM64X2S lutram site lutram_s64x2 outputs O0,O1 port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5 din=D0,D1 spo=O0,O1
+  bel RAM32X2S lutram site lutram_s32x2 outputs O0,O1 port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4 din=D0,D1 spo=O0,O1
+  bel RAM128X1S lutram site lutram_s128 outputs O port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5,A6 din=D spo=O
+  bel RAM128X1S_1 lutram site lutram_s128 outputs O port wclk=WCLK we=WE waddr=A0,A1,A2,A3,A4,A5,A6 din=D spo=O
+  bel RAM128X1D lutram site lutram_d128 outputs DPO,SPO port wclk=WCLK we=WE waddr=A din=D raddr=DPRA dout=DPO spo=SPO
+  bel RAM128X1D_1 lutram site lutram_d128 outputs DPO,SPO port wclk=WCLK we=WE waddr=A din=D raddr=DPRA dout=DPO spo=SPO
+  bel RAM256X1S lutram site lutram_s256 outputs O port wclk=WCLK we=WE waddr=A din=D spo=O
+  bel RAM32M lutram site lutram_m32 outputs DOA,DOB,DOC,DOD port wclk=WCLK we=WE addra=ADDRA addrb=ADDRB addrc=ADDRC addrd=ADDRD dia=DIA dib=DIB dic=DIC did=DID doa=DOA dob=DOB doc=DOC dod=DOD
+  bel RAM32M_1 lutram site lutram_m32 outputs DOA,DOB,DOC,DOD port wclk=WCLK we=WE addra=ADDRA addrb=ADDRB addrc=ADDRC addrd=ADDRD dia=DIA dib=DIB dic=DIC did=DID doa=DOA dob=DOB doc=DOC dod=DOD
+  bel RAM64M lutram site lutram_m64 outputs DOA,DOB,DOC,DOD port wclk=WCLK we=WE addra=ADDRA addrb=ADDRB addrc=ADDRC addrd=ADDRD dia=DIA dib=DIB dic=DIC did=DID doa=DOA dob=DOB doc=DOC dod=DOD
+  bel RAM64M_1 lutram site lutram_m64 outputs DOA,DOB,DOC,DOD port wclk=WCLK we=WE addra=ADDRA addrb=ADDRB addrc=ADDRC addrd=ADDRD dia=DIA dib=DIB dic=DIC did=DID doa=DOA dob=DOB doc=DOC dod=DOD
+  bram RAMB18E1
+    ports 2
+    outputs DOADO,DOBDO,DOPADOP,DOPBDOP
+    mode 16 1024 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 init low 0-15
+    mode 8 2048 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 init low 0-7 8-15
+    mode 4 4096 param READ_WIDTH_A=4 WRITE_WIDTH_A=4 READ_WIDTH_B=4 WRITE_WIDTH_B=4 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 2 init low 0-3 4-7 8-11 12-15
+    mode 2 8192 param READ_WIDTH_A=2 WRITE_WIDTH_A=2 READ_WIDTH_B=2 WRITE_WIDTH_B=2 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 1 init low 0,1 2,3 4,5 6,7 8,9 10,11 12,13 14,15
+    mode 1 16384 param READ_WIDTH_A=1 WRITE_WIDTH_A=1 READ_WIDTH_B=1 WRITE_WIDTH_B=1 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" init low 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+    mode 18 1024 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 parity 2
+    mode 9 2048 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 parity 1
+    flags byte_enable dual_port init
+    init_params INIT_ count 64 digits 2 rows 16 slot 16
+    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*2 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP regce=REGCEAREGCE rstreg=RSTREGARSTREG
+    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*4 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP regce=REGCEB rstreg=RSTREGB
+  end
+  # Both halves of a block RAM tile as one 36 kbit block, which only the
+  # Vivado model of block RAM has a bel for (`--memories vivado`, the
+  # default): a legacy build never chooses it. Its widths, contents and
+  # pins are Vivado's, read off its own bitstreams; see
+  # `src/fpga/xray/bram.rs` and `testdata/fpga/vivado/bram/`.
+  bram RAMB36E1
+    ports 2
+    site bram36
+    outputs DOADO,DOBDO,DOPADOP,DOPBDOP,DBITERR,SBITERR,ECCPARITY,RDADDRECC,CASCADEOUTA,CASCADEOUTB
+    mode 32 1024 param READ_WIDTH_A=36 WRITE_WIDTH_A=36 READ_WIDTH_B=36 WRITE_WIDTH_B=36 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 5 init low 0-31
+    mode 16 2048 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 init low 0-15 16-31
+    mode 8 4096 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 init low 0-7 8-15 16-23 24-31
+    mode 4 8192 param READ_WIDTH_A=4 WRITE_WIDTH_A=4 READ_WIDTH_B=4 WRITE_WIDTH_B=4 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 2 init low 0-3 4-7 8-11 12-15 16-19 20-23 24-27 28-31
+    mode 2 16384 param READ_WIDTH_A=2 WRITE_WIDTH_A=2 READ_WIDTH_B=2 WRITE_WIDTH_B=2 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 1 init low 0,1 2,3 4,5 6,7 8,9 10,11 12,13 14,15 16,17 18,19 20,21 22,23 24,25 26,27 28,29 30,31
+    mode 1 32768 param READ_WIDTH_A=1 WRITE_WIDTH_A=1 READ_WIDTH_B=1 WRITE_WIDTH_B=1 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" init low 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+    mode 36 1024 param READ_WIDTH_A=36 WRITE_WIDTH_A=36 READ_WIDTH_B=36 WRITE_WIDTH_B=36 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 5 parity 4
+    mode 18 2048 param READ_WIDTH_A=18 WRITE_WIDTH_A=18 READ_WIDTH_B=18 WRITE_WIDTH_B=18 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 4 parity 2
+    mode 9 4096 param READ_WIDTH_A=9 WRITE_WIDTH_A=9 READ_WIDTH_B=9 WRITE_WIDTH_B=9 RAM_MODE="TDP" DOA_REG=0 DOB_REG=0 SIM_DEVICE="7SERIES" addr 3 parity 1
+    flags byte_enable dual_port init
+    init_params INIT_ count 128 digits 2 rows 8 slot 32
+    port rw clk=CLKARDCLK en=ENARDEN addr=ADDRARDADDR din=DIADI dout=DOADO we=WEA*4 rst=RSTRAMARSTRAM dinp=DIPADIP doutp=DOPADOP regce=REGCEAREGCE rstreg=RSTREGARSTREG dbiterr=DBITERR sbiterr=SBITERR eccparity=ECCPARITY rdaddrecc=RDADDRECC injectdbiterr=INJECTDBITERR injectsbiterr=INJECTSBITERR cascadein=CASCADEINA cascadeout=CASCADEOUTA
+    port rw clk=CLKBWRCLK en=ENBWREN addr=ADDRBWRADDR din=DIBDI dout=DOBDO we=WEBWE*8 rst=RSTRAMB dinp=DIPBDIP doutp=DOPBDOP regce=REGCEB rstreg=RSTREGB cascadein=CASCADEINB cascadeout=CASCADEOUTB
+  end
+  # A FIFO by name, which only the Vivado model of block RAM has a bel for:
+  # a `FIFO18E1` on a tile's lower half and a `FIFO36E1` on both. Its pins
+  # are the block RAM site's, under the roles `src/fpga/xray/fifo.rs` gives
+  # them, read off Vivado's own builds (`testdata/fpga/vivado/fifo/`); every
+  # input takes a constant, which the backend ties as it ties a block RAM's.
+  bel FIFO18E1 other site fifo18 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR
+  bel FIFO36E1 other site fifo36 absorbs p0_en,p1_en,p0_rst,p0_rstreg,p0_regce,fifo_di,fifo_dip,p0_injectdbiterr,p0_injectsbiterr port p0_clk=RDCLK p1_clk=WRCLK p0_en=RDEN p1_en=WREN p0_rst=RST p0_rstreg=RSTREG p0_regce=REGCE fifo_di=DI fifo_dip=DIP p0_injectdbiterr=INJECTDBITERR p0_injectsbiterr=INJECTSBITERR p0_dout=DO p0_doutp=DOP fifo_almostempty=ALMOSTEMPTY fifo_almostfull=ALMOSTFULL fifo_empty=EMPTY fifo_full=FULL fifo_rdcount=RDCOUNT fifo_wrcount=WRCOUNT fifo_rderr=RDERR fifo_wrerr=WRERR p0_dbiterr=DBITERR p0_sbiterr=SBITERR p0_eccparity=ECCPARITY outputs DO,DOP,ALMOSTEMPTY,ALMOSTFULL,EMPTY,FULL,RDCOUNT,WRCOUNT,RDERR,WRERR,DBITERR,SBITERR,ECCPARITY
+  io_standard LVTTL vccio 3.3 drive 4,8,12,16,24 slew slow,fast
+  io_standard LVCMOS33 vccio 3.3 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS25 vccio 2.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS18 vccio 1.8 drive 4,8,12,16,24 slew slow,fast
+  io_standard LVCMOS15 vccio 1.5 drive 4,8,12,16 slew slow,fast
+  io_standard LVCMOS12 vccio 1.2 drive 4,8,12 slew slow,fast
+  io_standard HSUL_12 vccio 1.2 slew slow,fast input_free
+  io_standard HSTL_I vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_II vccio 1.5 slew slow,fast input_free
+  io_standard HSTL_I_18 vccio 1.8 slew slow,fast input_free
+  io_standard HSTL_II_18 vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_I vccio 1.8 slew slow,fast input_free
+  io_standard SSTL18_II vccio 1.8 slew slow,fast input_free
+  io_standard SSTL15 vccio 1.5 slew slow,fast input_free
+  io_standard SSTL15_R vccio 1.5 slew slow,fast input_free
+  io_standard SSTL135 vccio 1.35 slew slow,fast input_free
+  io_standard SSTL135_R vccio 1.35 slew slow,fast input_free
+  io_standard DIFF_HSTL_I vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_I_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_HSTL_II_18 vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_I vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL18_II vccio 1.8 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15 vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL15_R vccio 1.5 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135 vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_SSTL135_R vccio 1.35 slew slow,fast differential input_free
+  io_standard DIFF_HSUL_12 vccio 1.2 slew slow,fast differential input_free
+  io_standard PCI33_3 vccio 3.3
+  io_standard MOBILE_DDR vccio 1.8 slew slow,fast
+  io_standard DIFF_MOBILE_DDR vccio 1.8 slew slow,fast differential
+  io_standard BLVDS_25 vccio 2.5 differential input_free
+  io_standard LVDS_25 vccio 2.5 differential input_free
+  io_standard RSDS_25 vccio 2.5 differential input_free
+  io_standard TMDS_33 vccio 3.3 differential input_free
+  io_standard MINI_LVDS_25 vccio 2.5 differential input_free
+  io_standard PPDS_25 vccio 2.5 differential input_free
+  bank b13 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b14 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b15 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b16 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b34 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  bank b35 vccio 3.3,2.5,1.8,1.5,1.35,1.2
+  pin A1 io bank b35
+  pin A13 io bank b16
+  pin A14 io bank b16
+  pin A15 io bank b16
+  pin A16 io bank b16
+  pin A18 io bank b16
+  pin A19 io bank b16
+  pin A20 io bank b16
+  pin A21 io bank b16
+  pin B1 io bank b35
+  pin B2 io bank b35
+  pin B13 io bank b16
+  pin B15 io bank b16
+  pin B16 io bank b16
+  pin B17 clock bank b16
+  pin B18 clock bank b16
+  pin B20 io bank b16
+  pin B21 io bank b16
+  pin B22 io bank b16
+  pin C2 io bank b35
+  pin C13 io bank b16
+  pin C14 io bank b16
+  pin C15 io bank b16
+  pin C17 clock bank b16
+  pin C18 clock bank b16
+  pin C19 clock bank b16
+  pin C20 io bank b16 vref
+  pin C22 io bank b16
+  pin D1 io bank b35
+  pin D2 io bank b35
+  pin D14 io bank b16
+  pin D15 io bank b16 vref
+  pin D16 io bank b16
+  pin D17 clock bank b16
+  pin D19 clock bank b16
+  pin D20 io bank b16
+  pin D21 io bank b16
+  pin D22 io bank b16
+  pin E1 io bank b35
+  pin E2 io bank b35
+  pin E3 io bank b35 vref
+  pin E13 io bank b16
+  pin E14 io bank b16
+  pin E16 io bank b16
+  pin E17 io bank b16
+  pin E18 io bank b16
+  pin E19 clock bank b16
+  pin E21 io bank b16
+  pin E22 io bank b16
+  pin F1 io bank b35
+  pin F3 io bank b35
+  pin F4 io bank b35
+  pin F13 io bank b16
+  pin F14 io bank b16
+  pin F15 io bank b16
+  pin F16 io bank b16
+  pin F18 io bank b16
+  pin F19 io bank b16
+  pin F20 io bank b16
+  pin F21 io bank b16
+  pin G1 io bank b35
+  pin G2 io bank b35
+  pin G3 clock bank b35
+  pin G4 clock bank b35
+  pin G13 io bank b15
+  pin G15 io bank b15
+  pin G16 io bank b15
+  pin G17 io bank b15
+  pin G18 io bank b15
+  pin G20 io bank b15
+  pin G21 io bank b16
+  pin G22 io bank b16
+  pin H2 io bank b35
+  pin H3 clock bank b35
+  pin H4 clock bank b35
+  pin H5 io bank b35
+  pin H13 io bank b15
+  pin H14 io bank b15
+  pin H15 io bank b15
+  pin H17 io bank b15
+  pin H18 io bank b15 vref
+  pin H19 clock bank b15
+  pin H20 io bank b15
+  pin H22 io bank b15
+  pin J1 io bank b35
+  pin J2 io bank b35
+  pin J4 clock bank b35
+  pin J5 io bank b35
+  pin J6 io bank b35
+  pin J14 io bank b15
+  pin J15 io bank b15
+  pin J16 io bank b15
+  pin J17 io bank b15
+  pin J19 clock bank b15
+  pin J20 clock bank b15
+  pin J21 clock bank b15
+  pin J22 io bank b15
+  pin K1 io bank b35
+  pin K2 io bank b35
+  pin K3 clock bank b35
+  pin K4 clock bank b35
+  pin K6 io bank b35
+  pin K13 io bank b15
+  pin K14 io bank b15 vref
+  pin K16 io bank b15
+  pin K17 io bank b15
+  pin K18 clock bank b15
+  pin K19 clock bank b15
+  pin K21 io bank b15
+  pin K22 io bank b15
+  pin L1 io bank b35
+  pin L3 clock bank b35
+  pin L4 io bank b35
+  pin L5 io bank b35
+  pin L6 io bank b35
+  pin L13 io bank b15
+  pin L14 io bank b15
+  pin L15 io bank b15
+  pin L16 io bank b15
+  pin L18 io bank b15
+  pin L19 clock bank b15
+  pin L20 clock bank b15
+  pin L21 io bank b15
+  pin M1 io bank b35
+  pin M2 io bank b35
+  pin M3 io bank b35
+  pin M5 io bank b35
+  pin M6 io bank b35
+  pin M13 io bank b15
+  pin M15 io bank b15
+  pin M16 io bank b15
+  pin M17 io bank b15
+  pin M18 io bank b15
+  pin M20 io bank b15
+  pin M21 io bank b15
+  pin M22 io bank b15
+  pin N2 io bank b35
+  pin N3 io bank b35 vref
+  pin N4 io bank b35
+  pin N5 io bank b35
+  pin N13 io bank b14
+  pin N14 io bank b14
+  pin N15 io bank b14
+  pin N17 io bank b14
+  pin N18 io bank b15
+  pin N19 io bank b15
+  pin N20 io bank b15
+  pin N22 io bank b15
+  pin P1 io bank b35
+  pin P2 io bank b35
+  pin P4 io bank b35
+  pin P5 io bank b35
+  pin P6 io bank b35
+  pin P14 io bank b14
+  pin P15 io bank b14
+  pin P16 io bank b14
+  pin P17 io bank b14
+  pin P19 io bank b14
+  pin P20 io bank b14
+  pin P21 io bank b14
+  pin P22 io bank b14
+  pin R1 io bank b35
+  pin R2 io bank b34
+  pin R3 io bank b34
+  pin R4 clock bank b34
+  pin R6 io bank b34
+  pin R14 io bank b14 vref
+  pin R16 io bank b14
+  pin R17 io bank b14
+  pin R18 io bank b14
+  pin R19 io bank b14
+  pin R21 io bank b14
+  pin R22 io bank b14
+  pin T1 io bank b34
+  pin T3 io bank b34
+  pin T4 clock bank b34
+  pin T5 clock bank b34
+  pin T6 io bank b34
+  pin T14 io bank b13
+  pin T15 io bank b13
+  pin T16 io bank b13
+  pin T18 io bank b14
+  pin T19 io bank b14
+  pin T20 io bank b14 vref
+  pin T21 io bank b14
+  pin U1 io bank b34
+  pin U2 io bank b34
+  pin U3 io bank b34
+  pin U5 clock bank b34
+  pin U6 io bank b34
+  pin U7 io bank b34
+  pin U15 clock bank b13
+  pin U16 io bank b13
+  pin U17 io bank b14
+  pin U18 io bank b14
+  pin U20 clock bank b14
+  pin U21 io bank b14
+  pin U22 io bank b14
+  pin V2 io bank b34
+  pin V3 io bank b34 vref
+  pin V4 clock bank b34
+  pin V5 io bank b34
+  pin V7 io bank b34
+  pin V8 io bank b34
+  pin V9 io bank b34
+  pin V10 io bank b13
+  pin V13 clock bank b13
+  pin V14 clock bank b13
+  pin V15 clock bank b13
+  pin V17 io bank b14
+  pin V18 clock bank b14
+  pin V19 clock bank b14
+  pin V20 clock bank b14
+  pin V22 io bank b14
+  pin W1 io bank b34
+  pin W2 io bank b34
+  pin W4 clock bank b34
+  pin W5 io bank b34
+  pin W6 io bank b34
+  pin W7 io bank b34 vref
+  pin W9 io bank b34
+  pin W10 io bank b13
+  pin W11 clock bank b13
+  pin W12 clock bank b13
+  pin W14 io bank b13
+  pin W15 io bank b13
+  pin W16 io bank b13
+  pin W17 io bank b14
+  pin W19 clock bank b14
+  pin W20 clock bank b14
+  pin W21 io bank b14
+  pin W22 io bank b14
+  pin Y1 io bank b34
+  pin Y2 io bank b34
+  pin Y3 io bank b34
+  pin Y4 clock bank b34
+  pin Y6 io bank b34
+  pin Y7 io bank b34
+  pin Y8 io bank b34
+  pin Y9 io bank b34
+  pin Y11 clock bank b13
+  pin Y12 clock bank b13
+  pin Y13 io bank b13
+  pin Y14 io bank b13 vref
+  pin Y16 io bank b13
+  pin Y17 io bank b13
+  pin Y18 clock bank b14
+  pin Y19 clock bank b14
+  pin Y21 io bank b14
+  pin Y22 io bank b14
+  pin AA1 io bank b34
+  pin AA3 io bank b34
+  pin AA4 clock bank b34
+  pin AA5 io bank b34
+  pin AA6 io bank b34
+  pin AA8 io bank b34
+  pin AA9 io bank b13
+  pin AA10 io bank b13
+  pin AA11 io bank b13
+  pin AA13 io bank b13
+  pin AA14 io bank b13
+  pin AA15 io bank b13
+  pin AA16 io bank b13
+  pin AA18 io bank b14
+  pin AA19 io bank b14
+  pin AA20 io bank b14
+  pin AA21 io bank b14
+  pin AB1 io bank b34
+  pin AB2 io bank b34
+  pin AB3 io bank b34
+  pin AB5 io bank b34
+  pin AB6 io bank b34
+  pin AB7 io bank b34
+  pin AB8 io bank b34
+  pin AB10 io bank b13
+  pin AB11 io bank b13
+  pin AB12 io bank b13
+  pin AB13 io bank b13
+  pin AB15 io bank b13
+  pin AB16 io bank b13
+  pin AB17 io bank b13
+  pin AB18 io bank b14
+  pin AB20 io bank b14
+  pin AB21 io bank b14
+  pin AB22 io bank b14
+  global_buffers 32
+  pll PLLE2_BASE input 19 800 vco 800 1600 outputs 6 count 6 pfd 19 450 feedback vco divide ref DIVCLK_DIVIDE 1 56 divide feedback CLKFBOUT_MULT 2 64 divide out CLKOUT0_DIVIDE 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
+  pll MMCME2_BASE input 10 800 vco 600 1200 outputs 7 count 6 pfd 10 450 feedback vco divide ref DIVCLK_DIVIDE 1 106 divide feedback CLKFBOUT_MULT_F 2 64 divide out CLKOUT0_DIVIDE_F 1 128 port ref=CLKIN1 out=CLKOUT0 fb=CLKFBIN fbout=CLKFBOUT lock=LOCKED tie RST=0 PWRDWN=0 param STARTUP_WAIT="FALSE" BANDWIDTH="OPTIMIZED"
+end

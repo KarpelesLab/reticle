@@ -453,6 +453,7 @@ mod tests {
                 "xc7a35t-cpg236",
                 "xc7a35t-ftg256",
                 "xc7a100t-ftg256",
+                "xc7a100t-fgg484",
                 "xczu7ev-ffvc1156",
                 "gw2a-18-pg256",
                 "generic",

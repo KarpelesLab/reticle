@@ -1562,9 +1562,11 @@ since been shown to compute the wrong thing.
 
 It is [`f4pga/prjxray-db`](https://github.com/f4pga/prjxray-db), Project
 X-Ray's chip database, **CC0-1.0 — public domain**. It is not in this
-repository and must not be. The whole repository is large; 278 files and
-45 MB of it are needed for the Artix-7: the XC7A35T's fabric, and two of
-its packages, the Basys 3's CPG236 and the ChipWhisperer-Husky's FTG256.
+repository and must not be. The whole repository is large; the part of it
+the manifest names is what is needed for the Artix-7: the XC7A35T's fabric
+and two of its packages, the Basys 3's CPG236 and the ChipWhisperer-Husky's
+FTG256, and the XC7A100T's fabric with its FTG256 (the Husky Plus's) and
+FGG484 packages.
 
 **The command line fetches it by itself.** The first `reticle fpga
 --bitstream` that needs it downloads that part into the per-user cache,
@@ -1602,7 +1604,8 @@ cd prjxray-db
 git sparse-checkout set --no-cone \
     '/artix7/*.db' '/artix7/*.csv' '/artix7/tile_type_*.json' \
     '/artix7/xc7a35tcpg236-1/' '/artix7/xc7a35tftg256-1/' \
-    '/artix7/xc7a100tftg256-1/' '/artix7/xc7a100t/' \
+    '/artix7/xc7a100tftg256-1/' '/artix7/xc7a100tfgg484-1/' \
+    '/artix7/xc7a100t/' \
     '/artix7/xc7a50t/' '/artix7/mapping/' '/artix7/harness/'
 export RETICLE_CHIPDB=$PWD
 ```
@@ -1638,6 +1641,75 @@ The tests find the database the same way, minus the download:
 `RETICLE_CHIPDB`, then the cache. **CI has neither**, and every test
 that needs the database skips with a line saying what is missing. A
 missing database never fails the build, and a test never fetches one.
+
+## The FGG484 package
+
+`--device xc7a100t-fgg484` is the XC7A100T in the 484-ball FGG484 package.
+It was added for a board carrying an **XC7A100T-2FGG484I**: speed grade
+-2, industrial temperature range.
+
+**Where its pins come from.** Project X-Ray has the package: its
+`artix7/xc7a100tfgg484-1/` at the pinned commit holds a `package_pins.csv`
+and a `part.json`, which the manifest did not list until this device was
+added, so the cache did not have them. They are fetched like every other
+database file (three files, 70 KB; a cache filled before is topped up by
+the next run), and nothing of them is committed. The device file's 285
+`pin` lines are generated from that `package_pins.csv`: its `IO_` rows,
+with the bank and the same `clock` (`MRCC`/`SRCC`) and `vref` rules as the
+FTG256 entries. The 20 transceiver balls of quad 216 and bank 0's
+`VP_0`/`VN_0` are not IO and are not listed. The FGG484's `part.json` is
+not the FTG256's: it differs only in its `iobanks` map, which also names
+banks 13 and 16, which the FTG256 does not bond.
+
+The first plan was to derive the sites from Xilinx's pinout file and the
+die's tile grid, because the cached copy had no FGG484 files and it looked
+as if the database had none. It has; it had only never been fetched. That
+leaves Xilinx's file as the thing to check the database against, and not
+as a source.
+
+**What was checked, and against what:**
+
+| Rows | Checked against | How |
+|---|---|---|
+| all 285 user-I/O balls: ball, bank, pad name | Xilinx's ASCII pinout `xc7a100tfgg484pkg.txt` (first line `Device/Package xc7a100tfgg484 6/6/2012 10:06:42`, SHA-256 `b7036db5…760f86`), from `xilinx.com/support/packagefiles/a7packages/` | by a script, on 27 November 2026: every row of the database's file is in Xilinx's with the same pin name and bank, and every one of Xilinx's 285 `HR` rows is in the database's. The other 22 rows of the database's file are Xilinx's 20 `GTP` and 2 `CONFIG` (`VP_0`/`VN_0`). Xilinx's file is not in the repository and no test reads it |
+| the same check on `xc7a100tftg256` | Xilinx's `xc7a100tftg256pkg.txt` | the same script: 170 `HR` rows, all agree. This is what says the method reads Xilinx's file correctly |
+| the 170 pads the FTG256 also bonds: site and tile | the FTG256's `package_pins.csv` | a pad is a die property: all 170 are on the same site and tile in both. `the_pads_fgg484_shares_with_ftg256_are_on_the_same_sites` |
+| all 285: site against pad name | a naming rule fitted on the 446 user-I/O rows of the three other packages in the cache | counted down from the top of a bank's block of fifty rows, `IO_0` is row 0, `IO_25` row 49, pair *n*'s `N` pad row 2*n* and its `P` pad row 2*n*−1; no row of the four files breaks it. `every_fgg484_pad_sits_where_its_name_puts_it` and `the_pad_naming_rule_holds_on_the_other_packages` |
+| all 285: tile and site exist | the die's `tilegrid.json` | each row's tile is an `LIOB33`/`RIOB33` tile holding that site, each bank one column and one block of rows of its own |
+| the device file's 285 `pin` lines | the database's `package_pins.csv` | `the_fgg484_pin_list_is_the_package_files_user_io` |
+
+**What only rests on Project X-Ray.** The 115 pads the FTG256 does not
+bond (banks 13 and 16, and 30 of bank 34's 50) have their sites from
+Project X-Ray's extraction and nothing independent of it: the naming rule
+is consistent with them, but a row wrong in a way that still fits the rule
+would pass. No part in this package has been programmed by this flow.
+
+**Built end to end** (27 November 2026, a 32-bit counter's top eight bits
+on eight pads with its clock on a clock-capable ball): with the pins in
+banks 13, 14, 15 and 16, in banks 34 and 35, and spread over all six, each
+build placed, routed and wrote a bitstream for `7a100tfgg484` in which
+every set bit decoded (`0 bit(s) unexplained, 0 tile(s) with no segbits
+file`) and the arcs selected were exactly the router's. The six-bank one
+needs `--max-pips 70000000`: pins on both sides of the die make the loaded
+region the whole die, 61.6 million pips, past the default limit, which is
+the die's property and not the package's.
+
+**Speed grade.** The device declares grade 2, the grade on the board, as
+the FTG256 XC7A100T declares the Husky Plus's 3. `--speed-grade 1`, `2`,
+`2L` and `3` were each given to the same build, and each was taken: the
+Vivado script names `xc7a100tfgg484-1`, `-2`, `-2L` and `-3`, and the
+fitted model's longest path changes with the grade (2.652, 2.184, 2.184
+and 1.953 ns). The fitted model's clock tables are the die's, so they
+apply to this package as they stand. That the industrial part times as the
+commercial one is **quoted**, from DS181 (v1.27.1, the AC and DC switching
+characteristics): "Except the operating temperature range or unless
+otherwise noted, all the DC and AC electrical parameters are the same for
+a particular speed grade (that is, the timing characteristics of a -1M
+speed grade military device are the same as for a -1C speed grade
+commercial device)". The industrial range is a junction temperature of
+−40 to 100 °C (DS181's Table 2), against the commercial range's 0 to 85.
+Vivado has no separate part name for it: `xc7a100tfgg484-2` is the part
+for both.
 
 ## What each file gives
 

@@ -1004,7 +1004,7 @@ mod tests {
             panic!("prjxray-db is fetched file by file")
         };
         let files = parse_manifest(manifest).expect("every line parses");
-        assert_eq!(files.len(), 412);
+        assert_eq!(files.len(), 415);
         let has = |p: &str| files.iter().any(|f| f.path == p);
         assert!(has("LICENSE"));
         assert!(has(PRJXRAY.probe));
@@ -1014,6 +1014,10 @@ mod tests {
         assert!(has("artix7/xc7a35tftg256-1/package_pins.csv"));
         // The Husky Plus: its part, and the XC7A100T's own fabric.
         assert!(has("artix7/xc7a100tftg256-1/part.json"));
+        // The XC7A100T's FGG484 package, which names banks 13 and 16 as
+        // well, so its `part.json` is not the FTG256's.
+        assert!(has("artix7/xc7a100tfgg484-1/package_pins.csv"));
+        assert!(has("artix7/xc7a100tfgg484-1/part.json"));
         assert!(has("artix7/xc7a100t/tilegrid.json"));
         // Every tile type's pips and their delays, for a timing-driven
         // route: 128 files.

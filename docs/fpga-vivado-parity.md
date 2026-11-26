@@ -6736,7 +6736,8 @@ to.
 
 ## The XC7A35T, in both its packages
 
-Reticle's device list has three 7-series parts: `xc7a100t-ftg256`, everything above,
+Reticle's device list had three 7-series parts then (a fourth, `xc7a100t-fgg484`, the
+same die as the first, came on 27 November 2026): `xc7a100t-ftg256`, everything above,
 and `xc7a35t-ftg256` (the Husky's) and `xc7a35t-cpg236` (the Basys 3's). Project X-Ray
 builds both XC7A35T packages from one die, the XC7A50T's grid (`artix7/xc7a50t`), and
 Vivado 2026.1's installed edition targets all three (`get_parts`: `xc7a35tcpg236-1`,
@@ -7086,7 +7087,9 @@ byte for byte.
 Every 7-series part in Reticle's device list: the `xc7a100t-ftg256`
 (`XC7A100T_CLOCK`, [Filling slices](#filling-slices)) and the `xc7a35t-ftg256` and
 `xc7a35t-cpg236` (`XC7A35T_CLOCK`, the CPG236 measured on one buffer). There is no
-other. Another die would take a device file and Project X-Ray's grid first; then the
+other. The `xc7a100t-fgg484`, added on 27 November 2026, is the same die as the first
+and takes its tables as they stand, since `clock_table` keys on the die; no build of it
+has been measured against Vivado's, so that they carry over is a reading. Another die would take a device file and Project X-Ray's grid first; then the
 table is four runs of `clock_arrival.tcl`, a few minutes each, one of
 `clock_arrival.py fixture` and `table`, and a `ClockTable` keyed by the die's name
 in `clock_table`. A die whose region rows are not fifty slices tall, or whose rows
