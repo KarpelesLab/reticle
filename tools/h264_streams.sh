@@ -23,11 +23,13 @@ if [ "${1:-}" = "--hd" ]; then hd=1; shift; fi
 out=${1:-"$(dirname "$0")/../testdata/ip/h264"}
 mkdir -p "$out"
 
-# Common: Baseline profile, one thread so the slice layout is deterministic.
+# Common: one thread so the slice layout is deterministic; Baseline profile
+# unless $profile says otherwise.
 # The SEI that x264 writes (its version and option string) is stripped
 # with filter_units: the decoder ignores SEI, and the corpus stays smaller.
 base=(-hide_banner -loglevel error -y)
-x264=(-c:v libx264 -profile:v baseline -threads 1 -bsf:v filter_units=remove_types=6)
+profile=baseline
+x264() { echo -c:v libx264 -profile:v "$profile" -threads 1 -bsf:v filter_units=remove_types=6; }
 
 ref() {
     # ref NAME: decode NAME.264 with ffmpeg and write NAME.md5
@@ -42,9 +44,16 @@ enc() {
     # enc NAME SOURCE FRAMES X264PARAMS [extra ffmpeg args...]
     local name=$1 src=$2 frames=$3 params=$4
     shift 4
-    ffmpeg "${base[@]}" -f lavfi -i "$src" -frames:v "$frames" "${x264[@]}" \
+    # shellcheck disable=SC2046
+    ffmpeg "${base[@]}" -f lavfi -i "$src" -frames:v "$frames" $(x264) \
         -x264-params "$params" "$@" -f h264 "$out/$name.264"
     ref "$name"
+}
+
+craft() {
+    # craft NAME: a stream written by tools/h264_craft.py, decoded by ffmpeg
+    python3 "$(dirname "$0")/h264_craft.py" "$1" "$out/$1.264"
+    ref "$1"
 }
 
 # Moving, detailed pictures. testsrc2 moves a few pixels a frame; a zooming
@@ -62,6 +71,9 @@ if [ "$hd" = 1 ]; then
     # Rotating, so every partition shape and fractional position occurs.
     enc hd_1280x720 "testsrc2=s=1280x720:r=30,rotate=a=0.01*n:c=gray" 3 \
         "keyint=60:crf=23:ref=2:partitions=all"
+    profile=high
+    enc hd_1280x720_high "testsrc2=s=1280x720:r=30,rotate=a=0.01*n:c=gray" 5 \
+        "keyint=60:crf=23:ref=3:bframes=2:b-adapt=0:8x8dct=1:partitions=all"
     exit 0
 fi
 
@@ -105,3 +117,41 @@ enc p_64x48_cip       "$(rot 64x48)"   6 "keyint=4:intra-refresh=1:qp=30:partiti
 enc p_32x32_dump      "$(rot 32x32)"   3 "keyint=60:qp=26:partitions=all:subme=9:ref=2"
 # A second IDR inside the stream (keyint=3), with frame_num restarting.
 enc idr_32x32_gop3    "$(rot 32x32)"   7 "keyint=3:min-keyint=1:scenecut=0:qp=28:partitions=all"
+
+# What libx264 never writes, written by tools/h264_craft.py from the syntax
+# of clause 7.3: I_PCM (alone, beside Intra_4x4, inside P slices), every
+# memory_management_control_operation, long-term references, list
+# modification of all three kinds, frame_num wrapping, a non-reference
+# picture, picture order count types 0, 1 and 2, and
+# disable_deblocking_filter_idc 2 with cropping on three sides. (A left
+# crop is avoided on purpose: ffmpeg 6.1.1 does not apply one; it wrote
+# 44-wide frames where the SPS said 42.)
+craft craft_pcm
+craft craft_mmco_poc0
+craft craft_mmco_poc1
+craft craft_mmco_poc2
+craft craft_dbk2_crop
+
+# Main and High: CABAC, B slices, the 8x8 transform, scaling matrices and
+# weighted prediction. b-adapt=0 forces B pictures, which x264's adaptive
+# decision otherwise drops for this much motion; Intra_8x8 needs pictures
+# of 128x96 or so before x264 chooses it.
+profile=main
+enc cabac_i_qp1       "$(noisy 48x32)" 2 "keyint=1:qp=1"
+enc cabac_p_64x48     "$(rot 64x48)"   6 "keyint=60:qp=26:bframes=0:partitions=all:ref=3"
+enc cabac_aq_64x48    "$(noisy 64x48)" 5 "keyint=60:crf=26:aq-mode=2:aq-strength=2:bframes=0"
+enc b_spatial_64x48   "$(rot 64x48)"   8 "keyint=60:qp=26:bframes=2:b-adapt=0:b-pyramid=none:direct=spatial:weightb=0:partitions=all"
+enc b_temporal_64x48  "$(rot 64x48)"   8 "keyint=60:qp=26:bframes=2:b-adapt=0:b-pyramid=none:direct=temporal:weightb=0:partitions=all"
+enc b_pyramid_64x48   "$(rot4 64x48)" 10 "keyint=60:qp=26:bframes=3:b-adapt=0:b-pyramid=normal:direct=auto:weightb=1:partitions=all:ref=3"
+enc b_cavlc_64x48     "$(rot 64x48)"   8 "keyint=60:qp=26:bframes=2:b-adapt=0:cabac=0:direct=spatial:partitions=all"
+enc weightp_64x48     "testsrc2=s=64x48:r=30,fade=t=in:st=0:d=0.3,rotate=a=0.03*n:c=gray" 8 \
+    "keyint=60:qp=26:bframes=0:weightp=2"
+profile=high
+enc high_8x8_64x48    "$(rot4 64x48)"  6 "keyint=60:qp=24:bframes=2:b-adapt=0:8x8dct=1:partitions=all"
+enc high_cqm_64x48    "$(rot4 64x48)"  6 "keyint=60:qp=24:bframes=2:b-adapt=0:8x8dct=1:cqm=jvt:partitions=all"
+enc high_cavlc_64x48  "$(rot4 64x48)"  6 "keyint=60:qp=24:bframes=0:cabac=0:8x8dct=1:partitions=all"
+enc i8_cabac_128x96   "$(mand 128x96)" 2 "keyint=1:qp=30:8x8dct=1"
+enc i8_cavlc_128x96   "cellauto=s=128x96:r=30,format=yuv420p,boxblur=2" 2 "keyint=1:qp=24:8x8dct=1:cabac=0"
+enc i8_cqm_128x96     "cellauto=s=128x96:r=30,format=yuv420p,boxblur=2" 2 "keyint=1:qp=24:8x8dct=1:cqm=jvt"
+enc high_mix_128x96   "mandelbrot=s=128x96:r=30,format=yuv420p,rotate=a=0.02*n" 8 \
+    "keyint=60:qp=26:8x8dct=1:bframes=2:b-adapt=0:partitions=all:ref=3"

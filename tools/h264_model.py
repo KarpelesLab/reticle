@@ -3,18 +3,22 @@
 
 Written from Rec. ITU-T H.264 (V16, 06/2026) and nothing else: no other
 decoder's source was read. Clause numbers in comments are that edition's.
-Standard library only. The tables live in h264_tables.py beside this file.
+Standard library only. The tables live in h264_tables.py and
+h264_cabac_tables.py beside this file.
 
-What it decodes: progressive (frame_mbs_only) 8-bit 4:2:0 streams, one slice
-group, I and P slices with CAVLC (Baseline and Constrained Baseline), and the
-Main/High additions listed in docs/h264-decoder.md ("The software model").
+What it decodes: progressive (frame_mbs_only) 8-bit 4:2:0 streams with one
+slice group: I, P and B slices, CAVLC and CABAC, the 4x4 and 8x8 transforms
+with scaling matrices, Intra_4x4/8x8/16x16 and I_PCM, every partition and
+direct mode (spatial and temporal), default, explicit and implicit weighted
+prediction, the deblocking filter, and reference marking with MMCO and list
+modification. That is Baseline, Main and High for progressive video.
 It is checked byte for byte against ffmpeg's output on every stream in
 testdata/ip/h264/ (tests/h264_model.rs).
 
 Usage:
   h264_model.py decode IN.264 [-o OUT.yuv] [--md5]
   h264_model.py check IN.264 REF.md5          exit status 1 on any difference
-  h264_model.py dump IN.264 OUT.txt [--frames N]
+  h264_model.py dump IN.264 OUTDIR [--frames N] [--name NAME] [--desc TEXT]
   h264_model.py stats IN.264                  which syntax features occur
   h264_model.py selftest
 """
@@ -25,18 +29,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import h264_tables as T  # noqa: E402
-
-
-try:
-    import h264_cabac  # noqa: F401
-    HAVE_CABAC = True
-except ImportError:
-    HAVE_CABAC = False
-try:
-    import h264_bslice  # noqa: F401
-    HAVE_B = True
-except ImportError:
-    HAVE_B = False
 
 
 class DecodeError(Exception):
@@ -421,6 +413,7 @@ class MB:
         self.refpic = [[None] * 16, [None] * 16]
         self.mv = [[(0, 0)] * 16, [(0, 0)] * 16]
         self.mvd = [[(0, 0)] * 16, [(0, 0)] * 16]
+        self.refsyn = [[None] * 16, [None] * 16]  # CABAC: coded ref_idx per 4x4
         self.sub = None
         self.parts = None
         self.direct = [0] * 4     # 8x8 quadrant predicted by direct mode
@@ -660,10 +653,6 @@ class Decoder:
                 st("first_mb_in_slice > 0")
             if h.wp:
                 st("pred_weight_table")
-        if h.pps.entropy_coding_mode and not HAVE_CABAC:
-            raise DecodeError("CABAC is not implemented")
-        if h.slice_type == SLICE_B and not HAVE_B:
-            raise DecodeError("B slices are not implemented")
         self.build_ref_lists(h)
         if self.trace:
             self.trace.slice(self, h)
@@ -798,12 +787,13 @@ class Decoder:
             temp = pic.poc
             pic.top_poc -= temp
             pic.poc = 0
+            pic.frame_num = 0
             self.prev_mmco5_top = pic.top_poc
             self.prev_frame_num_offset = 0
             self.prev_frame_num = 0
             self.prev_ref_frame_num = 0
             self.group += 1
-            pic.group = self.group - 1
+            pic.group = self.group
         else:
             if sps.poc_type != 0:
                 self.prev_frame_num_offset = pic.frame_num_offset
@@ -998,7 +988,7 @@ class Decoder:
 
 
 # ---------------------------------------------------------------------------
-# Slice data: parsing (CAVLC here, CABAC in h264_cabac.py) and reconstruction
+# Slice data: parsing (CAVLC here, CABAC further down) and reconstruction
 
 class SliceDecoder:
     def __init__(self, dec, h, br):
@@ -1037,8 +1027,7 @@ class SliceDecoder:
     def run(self):
         h = self.h
         if h.pps.entropy_coding_mode:
-            import h264_cabac
-            h264_cabac.run_slice(self)
+            self.run_cabac()
             return
         br = self.br
         addr = h.first_mb
@@ -1635,8 +1624,7 @@ def derive_motion(sd, mb):
         mb.parts = [(0, 0, 16, 16)]
         return
     if mb.kind == "BSKIP" or mb.name == "B_Direct_16x16":
-        import h264_bslice
-        h264_bslice.direct_mb(sd, mb, done)
+        direct_mb(sd, mb, done)
         return
     if mb.num_parts != 4:
         n = mb.num_parts
@@ -1662,8 +1650,7 @@ def derive_motion(sd, mb):
         s = mb.sub
         name, n, sw, sh, pred = s[i]
         if name == "B_Direct_8x8":
-            import h264_bslice
-            h264_bslice.direct_8x8(sd, mb, i, done)
+            direct_8x8(sd, mb, i, done)
             mark_done(done, x0, y0, 8, 8)
             mb.parts.extend(mb.direct_parts)
             continue
@@ -1692,6 +1679,157 @@ def set_mvd(mb, x, y, w, h, lx, d):
     for yy in range(y >> 2, (y + h) >> 2):
         for xx in range(x >> 2, (x + w) >> 2):
             mb.mvd[lx][yy * 4 + xx] = d
+
+
+# ---------------------------------------------------------------------------
+# B slices: direct prediction (8.4.1.2) and implicit weights (8.4.2.3.1)
+
+def min_positive(x, y):
+    return min(x, y) if x >= 0 and y >= 0 else max(x, y)
+
+
+def colocated(sd, mb, r):
+    """8.4.1.2.1 for frames: (mvCol, refIdxCol, refPicCol, colPic, isIntra)
+    of the 4x4 block at raster r of the co-located macroblock (r is already
+    the corner block when direct_8x8_inference_flag is 1)."""
+    col_pic = sd.ref_list[1][0]
+    if col_pic is None:
+        raise DecodeError("direct prediction without RefPicList1[0]")
+    cm = col_pic.mbs[mb.addr]
+    if cm.is_intra:
+        return (0, 0), -1, None, col_pic
+    if cm.pred_flag[0][r]:
+        return cm.mv[0][r], cm.ref[0][r], cm.refpic[0][r], col_pic
+    return cm.mv[1][r], cm.ref[1][r], cm.refpic[1][r], col_pic
+
+
+def col_block(sd, r):
+    """The 4x4 block of the co-located macroblock used for raster block r."""
+    if sd.sps.direct_8x8_inference:
+        bx, by = r & 3, r >> 2
+        return (3 if by >= 2 else 0) * 4 + (3 if bx >= 2 else 0)
+    return r
+
+
+def spatial_setup(sd, mb):
+    """The macroblock-wide part of 8.4.1.2.2: reference indices, the
+    predicted vectors and directZeroPredictionFlag."""
+    if getattr(mb, "spatial", None) is not None:
+        return mb.spatial
+    done = [False] * 16
+    refs = []
+    for lx in (0, 1):
+        A = nb_motion(sd, mb, -1, 0, lx, done)
+        B = nb_motion(sd, mb, 0, -1, lx, done)
+        C = nb_motion(sd, mb, 16, -1, lx, done)
+        if not C[0]:
+            C = nb_motion(sd, mb, -1, -1, lx, done)
+        refs.append(min_positive(A[2], min_positive(B[2], C[2])))
+    zero = refs[0] < 0 and refs[1] < 0
+    if zero:
+        refs = [0, 0]
+    mvp = []
+    for lx in (0, 1):
+        if refs[lx] >= 0 and not zero:
+            mvp.append(mv_pred(sd, mb, 0, 0, 16, 16, refs[lx], lx, done))
+        else:
+            mvp.append((0, 0))
+    mb.spatial = (refs, mvp, zero)
+    return mb.spatial
+
+
+def direct_block(sd, mb, r, x, y, w, h):
+    """Direct prediction for the w x h block at (x, y) whose co-located
+    block is decided by raster index r."""
+    h_ = sd.h
+    if h_.direct_spatial:
+        refs, mvp, zero = spatial_setup(sd, mb)
+        mv_col, ref_col, _, col_pic = colocated(sd, mb, col_block(sd, r))
+        col_zero = (sd.ref_list[1][0].ref == "S" and ref_col == 0 and
+                    -1 <= mv_col[0] <= 1 and -1 <= mv_col[1] <= 1)
+        for lx in (0, 1):
+            if refs[lx] < 0:
+                continue
+            if zero or (refs[lx] == 0 and col_zero):
+                mv = (0, 0)
+            else:
+                mv = mvp[lx]
+            set_motion(mb, x, y, w, h, lx, refs[lx], mv, ref_pic(sd, lx, refs[lx]))
+        return
+    # Temporal (8.4.1.2.3)
+    mv_col, ref_col, ref_pic_col, col_pic = colocated(sd, mb, col_block(sd, r))
+    l0 = sd.ref_list[0]
+    if ref_col < 0:
+        ref0 = 0
+    else:
+        ref0 = None
+        for i, p in enumerate(l0):
+            if p is ref_pic_col:
+                ref0 = i
+                break
+        if ref0 is None:
+            raise DecodeError("temporal direct: the co-located reference is not in list 0")
+    pic0 = l0[ref0]
+    pic1 = sd.ref_list[1][0]
+    cur = sd.pic
+    tb = clip3(-128, 127, cur.poc - pic0.poc)
+    td = clip3(-128, 127, pic1.poc - pic0.poc)
+    if pic0.ref == "L" or td == 0:
+        mv0 = mv_col
+        mv1 = (0, 0)
+    else:
+        tx = c_div(16384 + abs(c_div(td, 2)), td)
+        dsf = clip3(-1024, 1023, (tb * tx + 32) >> 6)
+        mv0 = ((dsf * mv_col[0] + 128) >> 8, (dsf * mv_col[1] + 128) >> 8)
+        mv1 = (mv0[0] - mv_col[0], mv0[1] - mv_col[1])
+    set_motion(mb, x, y, w, h, 0, ref0, mv0, pic0)
+    set_motion(mb, x, y, w, h, 1, 0, mv1, pic1)
+
+
+def direct_8x8(sd, mb, i, done):
+    """One 8x8 quadrant predicted in direct mode (B_Skip, B_Direct_16x16 or
+    B_Direct_8x8): sets the motion and mb.direct_parts."""
+    x0, y0 = (i & 1) * 8, (i >> 1) * 8
+    mb.direct_parts = []
+    if sd.sps.direct_8x8_inference:
+        direct_block(sd, mb, (y0 >> 2) * 4 + (x0 >> 2), x0, y0, 8, 8)
+        mb.direct_parts.append((x0, y0, 8, 8))
+    else:
+        for j in range(4):
+            x, y = x0 + 4 * (j & 1), y0 + 4 * (j >> 1)
+            direct_block(sd, mb, (y >> 2) * 4 + (x >> 2), x, y, 4, 4)
+            mb.direct_parts.append((x, y, 4, 4))
+    mark_done(done, x0, y0, 8, 8)
+
+
+def direct_mb(sd, mb, done):
+    mb.parts = []
+    for i in range(4):
+        direct_8x8(sd, mb, i, done)
+        mb.parts.extend(mb.direct_parts)
+
+
+def implicit_weights(sd, mb, r0, r1):
+    """8.4.2.3.1, implicit mode: (w0, w1) for a bi-predicted block."""
+    pic0 = sd.ref_list[0][r0]
+    pic1 = sd.ref_list[1][r1]
+    cur = sd.pic
+    tb = clip3(-128, 127, cur.poc - pic0.poc)
+    td = clip3(-128, 127, pic1.poc - pic0.poc)
+    if pic1.poc - pic0.poc == 0 or pic0.ref == "L" or pic1.ref == "L":
+        return 32, 32
+    tx = c_div(16384 + abs(c_div(td, 2)), td)
+    dsf = clip3(-1024, 1023, (tb * tx + 32) >> 6)
+    if (dsf >> 2) < -64 or (dsf >> 2) > 128:
+        return 32, 32
+    return 64 - (dsf >> 2), dsf >> 2
+
+
+def c_div(a, b):
+    """Integer division with truncation toward zero, the '/' of the
+    Recommendation (5.7)."""
+    q = abs(a) // abs(b)
+    return q if (a >= 0) == (b >= 0) else -q
 
 
 # ---------------------------------------------------------------------------
@@ -1858,8 +1996,7 @@ def weighted(sd, mb, preds, r):
                 explicit2(lu0, lu1, a[2][0][0], b[2][0][0], a[2][0][1], b[2][0][1], wp.chroma_log2),
                 explicit2(lv0, lv1, a[2][1][0], b[2][1][0], a[2][1][1], b[2][1][1], wp.chroma_log2))
     if h.slice_type == SLICE_B and pps.weighted_bipred_idc == 2:
-        import h264_bslice
-        w0, w1 = h264_bslice.implicit_weights(sd, mb, r0, r1, r)
+        w0, w1 = implicit_weights(sd, mb, r0, r1)
         return (explicit2(ly0, ly1, w0, w1, 0, 0, 5),
                 explicit2(lu0, lu1, w0, w1, 0, 0, 5),
                 explicit2(lv0, lv1, w0, w1, 0, 0, 5))
@@ -2891,6 +3028,652 @@ def deblock_picture(dec, pic):
                         else:
                             idx = (cy + 2 * e) * pic.cw + cx + k
                             filter_line(plane, idx, pic.cw, b, alpha, beta, tc0, True)
+
+
+# ---------------------------------------------------------------------------
+# CABAC (9.3)
+
+# Table 9-43, frame coded macroblocks: ctxIdxInc of significant_coeff_flag
+# and last_significant_coeff_flag of an 8x8 block, by levelListIdx.
+SIG8_FRAME = [0, 1, 2, 3, 4, 5, 5, 4, 4, 3, 3, 4, 4, 4, 5, 5, 4, 4, 4, 4, 3, 3, 6, 7,
+              7, 7, 8, 9, 10, 9, 8, 7, 7, 6, 11, 12, 13, 11, 6, 7, 8, 9, 14, 10, 9, 8,
+              6, 11, 12, 13, 11, 6, 9, 14, 10, 9, 11, 12, 13, 11, 14, 10, 12]
+LAST8 = [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
+         2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
+         5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8]
+# Table 9-40, by ctxBlockCat 0..5.
+CBF_CAT_OFF = [0, 4, 8, 12, 16, 0]
+SIG_CAT_OFF = [0, 15, 29, 44, 47, 0]
+ABS_CAT_OFF = [0, 10, 20, 30, 39, 0]
+
+
+class Cabac:
+    """The arithmetic decoding engine (9.3.1.2, 9.3.3.2) and the context
+    variables (9.3.1.1)."""
+
+    def __init__(self, br, slice_qp, init_idc, is_i):
+        import h264_cabac_tables as CT
+        self.CT = CT
+        self.br = br
+        table = CT.CTX_INIT[3 if is_i else init_idc]
+        qp = clip3(0, 51, slice_qp)
+        self.st = [0] * 1024
+        self.mps = [0] * 1024
+        for i, (m, n) in enumerate(table):
+            pre = clip3(1, 126, ((m * qp) >> 4) + n)
+            if pre <= 63:
+                self.st[i] = 63 - pre
+                self.mps[i] = 0
+            else:
+                self.st[i] = pre - 64
+                self.mps[i] = 1
+        self.lps = CT.RANGE_LPS
+        self.tl = CT.TRANS_LPS
+        self.tm = CT.TRANS_MPS
+        self.init_engine()
+
+    def init_engine(self):
+        self.range = 510
+        self.offset = self.br.u(9)
+
+    def decision(self, ctx):
+        s = self.st[ctx]
+        rlps = self.lps[s][(self.range >> 6) & 3]
+        rng = self.range - rlps
+        if self.offset >= rng:
+            b = 1 - self.mps[ctx]
+            self.offset -= rng
+            rng = rlps
+            if s == 0:
+                self.mps[ctx] = 1 - self.mps[ctx]
+            self.st[ctx] = self.tl[s]
+        else:
+            b = self.mps[ctx]
+            self.st[ctx] = self.tm[s]
+        if rng < 256:
+            br = self.br
+            off = self.offset
+            while rng < 256:
+                rng <<= 1
+                off = (off << 1) | br.u1()
+            self.offset = off
+        self.range = rng
+        return b
+
+    def bypass(self):
+        self.offset = (self.offset << 1) | self.br.u1()
+        if self.offset >= self.range:
+            self.offset -= self.range
+            return 1
+        return 0
+
+    def terminate(self):
+        self.range -= 2
+        if self.offset >= self.range:
+            return 1
+        if self.range < 256:
+            br = self.br
+            while self.range < 256:
+                self.range <<= 1
+                self.offset = (self.offset << 1) | br.u1()
+        return 0
+
+
+def run_cabac(sd):
+    """slice_data() with entropy_coding_mode_flag 1 (7.3.4)."""
+    h = sd.h
+    br = sd.br
+    br.byte_align()  # cabac_alignment_one_bit
+    sd.cab = Cabac(br, h.qp, h.cabac_init_idc, h.slice_type == SLICE_I)
+    addr = h.first_mb
+    total = sd.W * sd.H
+    sd.prev_mb = None
+    while True:
+        if addr >= total:
+            raise DecodeError("slice data runs past the picture")
+        if h.slice_type != SLICE_I:
+            mb = sd.new_mb(addr)
+            base = 11 if h.slice_type == SLICE_P else 24
+            inc = sum(1 for n in (mb.mbA, mb.mbB) if n is not None and not n.skip)
+            if sd.cab.decision(base + inc):
+                sd.decode_skip(addr)
+                sd.prev_mb = sd.pic.mbs[addr]
+                if sd.cab.terminate():
+                    break
+                addr += 1
+                continue
+        mb = sd.new_mb(addr)
+        cabac_mb(sd, mb)
+        sd.finish_mb(mb)
+        sd.prev_mb = mb
+        if sd.cab.terminate():
+            break
+        addr += 1
+
+
+def cabac_mb_type_i(sd, mb, cab, base, prefix_ctx):
+    """The I macroblock type bins (Table 9-36). base: ctxIdxOffset of the
+    bins after bin 0 (3 in I slices, 17 or 32 as a suffix); prefix_ctx: the
+    ctxIdx of bin 0."""
+    if not cab.decision(prefix_ctx):
+        return 0
+    if cab.terminate():
+        return 25
+    if base == 3:
+        c_luma, c_chroma, c_c2, c_p0, c_p1 = 3 + 3, 3 + 4, 3 + 5, 3 + 6, 3 + 7
+        luma = cab.decision(c_luma)
+        chroma = cab.decision(c_chroma)
+        if chroma:
+            chroma = 1 + cab.decision(c_c2)
+            p0 = cab.decision(3 + 6)
+            p1 = cab.decision(3 + 7)
+        else:
+            p0 = cab.decision(c_p0)
+            p1 = cab.decision(c_p1)
+    else:
+        luma = cab.decision(base + 1)
+        chroma = cab.decision(base + 2)
+        if chroma:
+            chroma = 1 + cab.decision(base + 2)
+        p0 = cab.decision(base + 3)
+        p1 = cab.decision(base + 3)
+    return 1 + (p0 * 2 + p1) + 4 * chroma + 12 * luma
+
+
+def cabac_mb(sd, mb):
+    cab = sd.cab
+    h = sd.h
+    st = h.slice_type
+    if st == SLICE_I:
+        inc = sum(1 for n in (mb.mbA, mb.mbB) if n is not None and n.kind not in ("I4", "I8"))
+        t = cabac_mb_type_i(sd, mb, cab, 3, 3 + inc)
+        mb.mb_type = t
+        sd.set_i_type(mb, t)
+    elif st == SLICE_P:
+        if cab.decision(14):
+            t = cabac_mb_type_i(sd, mb, cab, 17, 17)
+            mb.mb_type = 5 + t
+            sd.set_i_type(mb, t)
+        else:
+            b1 = cab.decision(15)
+            if b1 == 0:
+                t = 3 if cab.decision(16) else 0
+            else:
+                t = 1 if cab.decision(17) else 2
+            mb.mb_type = t
+            sd.set_p_type(mb, t)
+    else:
+        inc = sum(1 for n in (mb.mbA, mb.mbB)
+                  if n is not None and not n.skip and n.name != "B_Direct_16x16")
+        t = cabac_mb_type_b(cab, inc)
+        if t >= 23:
+            ti = cabac_mb_type_i(sd, mb, cab, 32, 32)
+            mb.mb_type = 23 + ti
+            sd.set_i_type(mb, ti)
+        else:
+            mb.mb_type = t
+            sd.set_b_type(mb, t)
+    if mb.kind == "IPCM":
+        br = sd.br
+        br.byte_align()
+        sd.read_pcm(mb, lambda: br.u(8))
+        cab.init_engine()
+        mb.qp_delta = 0
+        return
+    pps = sd.pps
+    if mb.kind in ("P", "B") and mb.num_parts == 4:
+        cabac_sub_mb_pred(sd, mb)
+    else:
+        if mb.kind == "I4" and pps.transform_8x8_mode:
+            if cab.decision(399 + t8_inc(mb)):
+                mb.kind = "I8"
+                mb.t8 = 1
+        cabac_mb_pred(sd, mb)
+    if mb.kind != "I16":
+        mb.cbp = cabac_cbp(sd, mb)
+        if (mb.cbp & 15) and pps.transform_8x8_mode and not mb.is_intra and sd.no_sub_lt8x8(mb):
+            mb.t8 = cab.decision(399 + t8_inc(mb))
+    mb.qp_delta = 0
+    if (mb.cbp & 15) or (mb.cbp >> 4) or mb.kind == "I16":
+        mb.qp_delta = cabac_qp_delta(sd)
+        if mb.qp_delta < -26 or mb.qp_delta > 25:
+            raise DecodeError("mb_qp_delta out of range")
+    sd.qp = (sd.qp + mb.qp_delta + 52) % 52
+    mb.qp = sd.qp
+    sd.emit_mb_header(mb)
+    cabac_residual(sd, mb)
+
+
+def t8_inc(mb):
+    return sum(1 for n in (mb.mbA, mb.mbB) if n is not None and n.t8)
+
+
+def cabac_mb_type_b(cab, inc):
+    """Table 9-37, B slices: returns 0..22, or 23 for the intra prefix."""
+    if not cab.decision(27 + inc):
+        return 0
+    if not cab.decision(27 + 3):
+        return 1 + cab.decision(27 + 5)
+    b2 = cab.decision(27 + 4)
+    b3 = cab.decision(27 + 5)
+    b4 = cab.decision(27 + 5)
+    b5 = cab.decision(27 + 5)
+    if b2 == 0:
+        return 3 + (b3 << 2 | b4 << 1 | b5)
+    if b3 == 1:
+        if b4 == 1:
+            return 22 if b5 else 11
+        if b5 == 1:
+            return 23
+        return 20 + cab.decision(27 + 5)
+    b6 = cab.decision(27 + 5)
+    return 12 + (b4 << 2 | b5 << 1 | b6)
+
+
+def cabac_sub_type(cab, is_b):
+    if not is_b:
+        if cab.decision(21):
+            return 0
+        if not cab.decision(22):
+            return 1
+        return 2 if cab.decision(23) else 3
+    if not cab.decision(36):
+        return 0
+    if not cab.decision(37):
+        return 1 + cab.decision(39)
+    if not cab.decision(38):
+        b3 = cab.decision(39)
+        b4 = cab.decision(39)
+        return 3 + 2 * b3 + b4
+    if cab.decision(39):
+        return 11 + cab.decision(39)
+    b4 = cab.decision(39)
+    b5 = cab.decision(39)
+    return 7 + 2 * b4 + b5
+
+
+def part_uses(mb, r, lx):
+    """Whether the partition holding raster 4x4 block r of mb predicts from
+    list lx with a coded ref_idx/mvd (predModeEqualFlag, 9.3.3.1.1.6/7)."""
+    if mb.is_intra or mb.skip or mb.name == "B_Direct_16x16":
+        return False
+    return mb.refsyn[lx][r] is not None
+
+
+def cabac_ref_idx(sd, mb, x, y, lx):
+    cab = sd.cab
+    inc = 0
+    for (dx, dy, wgt) in ((-1, 0, 1), (0, -1, 2)):
+        n, xw, yw = sd.nb4(mb, x + dx, y + dy)
+        if n is None:
+            continue
+        r = (yw >> 2) * 4 + (xw >> 2)
+        if part_uses(n, r, lx) and n.refsyn[lx][r] > 0:
+            inc += wgt
+    v = 0
+    ctx = 54 + inc
+    while cab.decision(ctx):
+        v += 1
+        ctx = 54 + (4 if v == 1 else 5)
+        if v > 32:
+            raise DecodeError("ref_idx too large")
+    return v
+
+
+def cabac_mvd(sd, mb, x, y, lx, comp):
+    cab = sd.cab
+    base = 40 if comp == 0 else 47
+    s = 0
+    for (dx, dy) in ((-1, 0), (0, -1)):
+        n, xw, yw = sd.nb4(mb, x + dx, y + dy)
+        if n is None:
+            continue
+        r = (yw >> 2) * 4 + (xw >> 2)
+        if part_uses(n, r, lx):
+            s += abs(n.mvd[lx][r][comp])
+    inc = 0 if s < 3 else (1 if s <= 32 else 2)
+    v = 0
+    if cab.decision(base + inc):
+        v = 1
+        ctx = base + 3
+        while v < 9 and cab.decision(ctx):
+            v += 1
+            if ctx < base + 6:
+                ctx += 1
+        if v >= 9:
+            k = 3
+            while cab.bypass():
+                v += 1 << k
+                k += 1
+                if k > 30:
+                    raise DecodeError("bad mvd suffix")
+            while k:
+                k -= 1
+                v += cab.bypass() << k
+    if v and cab.bypass():
+        v = -v
+    return v
+
+
+def set_syn(mb, x, y, w, h, lx, ref=None, mvd=None):
+    for yy in range(y >> 2, (y + h) >> 2):
+        for xx in range(x >> 2, (x + w) >> 2):
+            r = yy * 4 + xx
+            if ref is not None:
+                mb.refsyn[lx][r] = ref
+            if mvd is not None:
+                mb.mvd[lx][r] = mvd
+
+
+def cabac_mb_pred(sd, mb):
+    cab = sd.cab
+    h = sd.h
+    if mb.kind == "I4":
+        mb.modes4 = [0] * 16
+        for blk in range(16):
+            if cab.decision(68):
+                sd.resolve_intra4(mb, blk, 1, None)
+            else:
+                rem = cab.decision(69) | (cab.decision(69) << 1) | (cab.decision(69) << 2)
+                sd.resolve_intra4(mb, blk, 0, rem)
+    elif mb.kind == "I8":
+        mb.modes8 = [0] * 4
+        for b8 in range(4):
+            if cab.decision(68):
+                sd.resolve_intra8(mb, b8, 1, None)
+            else:
+                rem = cab.decision(69) | (cab.decision(69) << 1) | (cab.decision(69) << 2)
+                sd.resolve_intra8(mb, b8, 0, rem)
+    if mb.is_intra:
+        inc = sum(1 for n in (mb.mbA, mb.mbB)
+                  if n is not None and n.is_intra and n.kind != "IPCM" and n.chroma_mode != 0)
+        v = 0
+        if cab.decision(64 + inc):
+            v = 1
+            if cab.decision(67):
+                v = 2
+                if cab.decision(67):
+                    v = 3
+        mb.chroma_mode = v
+        return
+    n = mb.num_parts
+    mb.part_ref = [[0] * n, [0] * n]
+    mb.part_mvd = [[None] * n, [None] * n]
+    w, hh = mb.part_w, mb.part_h
+    geo = [(0 if w == 16 else 8 * i, 0 if hh == 16 else 8 * i) for i in range(n)]
+    for lx in (0, 1):
+        for i in range(n):
+            if mb.part_pred[i] in ("L" + str(lx), "Bi"):
+                x, y = geo[i]
+                if h.num_ref_idx[lx] > 1:
+                    mb.part_ref[lx][i] = cabac_ref_idx(sd, mb, x, y, lx)
+                set_syn(mb, x, y, w, hh, lx, ref=mb.part_ref[lx][i])
+    for lx in (0, 1):
+        for i in range(n):
+            if mb.part_pred[i] in ("L" + str(lx), "Bi"):
+                x, y = geo[i]
+                dx = cabac_mvd(sd, mb, x, y, lx, 0)
+                dy = cabac_mvd(sd, mb, x, y, lx, 1)
+                mb.part_mvd[lx][i] = (dx, dy)
+                set_syn(mb, x, y, w, hh, lx, mvd=(dx, dy))
+
+
+def sub_geo(i, s, j):
+    x0, y0 = (i & 1) * 8, (i >> 1) * 8
+    sw, sh = s[2], s[3]
+    if sw == 8 and sh == 8:
+        return x0, y0
+    if sw == 8:
+        return x0, y0 + 4 * j
+    if sh == 8:
+        return x0 + 4 * j, y0
+    return x0 + 4 * (j & 1), y0 + 4 * (j >> 1)
+
+
+def cabac_sub_mb_pred(sd, mb):
+    cab = sd.cab
+    h = sd.h
+    is_b = mb.kind == "B"
+    mb.sub = []
+    for i in range(4):
+        t = cabac_sub_type(cab, is_b)
+        mb.sub.append(B_SUB[t] if is_b else P_SUB[t] + ("L0",))
+    mb.sub_ref = [[0] * 4, [0] * 4]
+    for lx in (0, 1):
+        for i in range(4):
+            s = mb.sub[i]
+            if s[4] in ("L" + str(lx), "Bi"):
+                x0, y0 = (i & 1) * 8, (i >> 1) * 8
+                if h.num_ref_idx[lx] > 1:
+                    mb.sub_ref[lx][i] = cabac_ref_idx(sd, mb, x0, y0, lx)
+                set_syn(mb, x0, y0, 8, 8, lx, ref=mb.sub_ref[lx][i])
+    mb.sub_mvd = [[[None] * 4 for _ in range(4)], [[None] * 4 for _ in range(4)]]
+    for lx in (0, 1):
+        for i in range(4):
+            s = mb.sub[i]
+            if s[4] in ("L" + str(lx), "Bi"):
+                for j in range(s[1]):
+                    x, y = sub_geo(i, s, j)
+                    dx = cabac_mvd(sd, mb, x, y, lx, 0)
+                    dy = cabac_mvd(sd, mb, x, y, lx, 1)
+                    mb.sub_mvd[lx][i][j] = (dx, dy)
+                    set_syn(mb, x, y, s[2], s[3], lx, mvd=(dx, dy))
+
+
+def cabac_cbp(sd, mb):
+    cab = sd.cab
+    luma = 0
+    for b8 in range(4):
+        x, y = (b8 & 1) * 8, (b8 >> 1) * 8
+        inc = 0
+        for (dx, dy, wgt) in ((-1, 0, 1), (0, -1, 2)):
+            n, xw, yw = sd.nb4(mb, x + dx, y + dy)
+            k = (yw >> 3) * 2 + (xw >> 3)
+            if n is None or n.kind == "IPCM":
+                cond = 0
+            elif n is not mb:
+                cond = 0 if (not n.skip and (n.cbp >> k) & 1) else 1
+            else:
+                cond = 0 if (luma >> k) & 1 else 1
+            inc += wgt * cond
+        luma |= cab.decision(73 + inc) << b8
+    chroma = 0
+    for b in range(2):
+        inc = 0
+        for n, wgt in ((mb.mbA, 1), (mb.mbB, 2)):
+            if n is not None and n.kind == "IPCM":
+                cond = 1
+            elif n is None or n.skip:
+                cond = 0
+            elif b == 0:
+                cond = 1 if (n.cbp >> 4) != 0 else 0
+            else:
+                cond = 1 if (n.cbp >> 4) == 2 else 0
+            inc += wgt * cond
+        if not cab.decision(77 + inc + (4 if b else 0)):
+            break
+        chroma += 1
+    return luma | (chroma << 4)
+
+
+def cabac_qp_delta(sd):
+    cab = sd.cab
+    p = sd.prev_mb
+    if p is None or p.skip or p.kind == "IPCM" or \
+            (p.kind != "I16" and (p.cbp & 15) == 0 and (p.cbp >> 4) == 0) or p.qp_delta == 0:
+        inc = 0
+    else:
+        inc = 1
+    k = 0
+    ctx = 60 + inc
+    while cab.decision(ctx):
+        k += 1
+        ctx = 62 if k == 1 else 63
+        if k > 104:
+            raise DecodeError("mb_qp_delta too large")
+    return (k + 1) >> 1 if k & 1 else -(k >> 1)
+
+
+def cbf_cond(sd, mb, n, flag):
+    """condTermFlagN of 9.3.3.1.1.9 given neighbour macroblock n and, when
+    the neighbour's transform block exists, its coded_block_flag (else None)."""
+    if n is None:
+        return 1 if mb.is_intra else 0
+    if n.kind == "IPCM":
+        return 1
+    if flag is None:
+        return 0
+    return flag
+
+
+def cabac_residual(sd, mb):
+    mb.coef = [None] * 16
+    mb.coef8 = [None] * 4
+    mb.cbf = {}
+    cbp_l = mb.cbp & 15
+    if mb.kind == "I16":
+        inc = 0
+        for n, wgt in ((mb.mbA, 1), (mb.mbB, 2)):
+            f = n.cbf.get("dc") if n is not None and n.kind == "I16" else None
+            inc += wgt * cbf_cond(sd, mb, n, f)
+        mb.dc16, cnt = residual_block_cabac(sd, mb, 0, 16, inc)
+        mb.cbf["dc"] = 1 if cnt else 0
+        sd.emit_coef(mb, "Intra16x16DC", 0, mb.dc16, cnt)
+    for b8 in range(4):
+        if mb.t8:
+            if cbp_l & (1 << b8):
+                lv, cnt = residual_block_cabac(sd, mb, 5, 64, None)
+                mb.coef8[b8] = lv
+                sd.emit_coef(mb, "Luma8x8", b8, lv, cnt)
+                for b4 in range(4):
+                    r = BLK_RASTER[b8 * 4 + b4]
+                    mb.cbf[("y", r)] = 1
+                    mb.nz[r] = 1 if cnt else 0
+            continue
+        for b4 in range(4):
+            blk = b8 * 4 + b4
+            r = BLK_RASTER[blk]
+            if not cbp_l & (1 << b8):
+                continue
+            x, y = BLK_X[blk], BLK_Y[blk]
+            inc = 0
+            for (dx, dy, wgt) in ((-1, 0, 1), (0, -1, 2)):
+                n, xw, yw = sd.nb4(mb, x + dx, y + dy)
+                f = None
+                if n is not None and not n.skip and n.kind != "IPCM":
+                    rn = (yw >> 2) * 4 + (xw >> 2)
+                    k = (yw >> 3) * 2 + (xw >> 3)
+                    if (n.cbp >> k) & 1:
+                        f = n.cbf.get(("y", rn), 0)
+                inc += wgt * cbf_cond(sd, mb, n, f)
+            if mb.kind == "I16":
+                ac, cnt = residual_block_cabac(sd, mb, 1, 15, inc)
+                mb.coef[r] = [0] + ac
+                sd.emit_coef(mb, "Intra16x16AC", blk, mb.coef[r], cnt)
+            else:
+                mb.coef[r], cnt = residual_block_cabac(sd, mb, 2, 16, inc)
+                sd.emit_coef(mb, "Luma4x4", blk, mb.coef[r], cnt)
+            mb.cbf[("y", r)] = 1 if cnt else 0
+            mb.nz[r] = 1 if cnt else 0
+    cbp_c = mb.cbp >> 4
+    mb.cdc = [[0] * 4, [0] * 4]
+    mb.cac = [[None] * 4, [None] * 4]
+    if cbp_c & 3:
+        for c in range(2):
+            inc = 0
+            for n, wgt in ((mb.mbA, 1), (mb.mbB, 2)):
+                f = None
+                if n is not None and not n.skip and n.kind != "IPCM" and (n.cbp >> 4):
+                    f = n.cbf.get(("cdc", c), 0)
+                inc += wgt * cbf_cond(sd, mb, n, f)
+            mb.cdc[c], cnt = residual_block_cabac(sd, mb, 3, 4, inc)
+            mb.cbf[("cdc", c)] = 1 if cnt else 0
+            sd.emit_coef(mb, "ChromaDC" + "BR"[c], 0, mb.cdc[c], cnt)
+    if cbp_c & 2:
+        for c in range(2):
+            for r in range(4):
+                bx, by = r & 1, r >> 1
+                inc = 0
+                for (n, rn, wgt) in (
+                        (mb if bx else mb.mbA, r - 1 if bx else r + 1, 1),
+                        (mb if by else mb.mbB, r - 2 if by else r + 2, 2)):
+                    f = None
+                    if n is not None and not n.skip and n.kind != "IPCM" and (n.cbp >> 4) == 2:
+                        f = n.cbf.get(("cac", c, rn), 0)
+                    inc += wgt * cbf_cond(sd, mb, n, f)
+                ac, cnt = residual_block_cabac(sd, mb, 4, 15, inc)
+                mb.cac[c][r] = [0] + ac
+                mb.cbf[("cac", c, r)] = 1 if cnt else 0
+                sd.emit_coef(mb, "ChromaAC" + "BR"[c], r, mb.cac[c][r], cnt)
+
+
+def residual_block_cabac(sd, mb, cat, maxnum, cbf_inc):
+    """residual_block_cabac (7.3.5.3.3) for startIdx 0, endIdx maxnum - 1.
+    Returns (levels in scan order, number of nonzero levels)."""
+    cab = sd.cab
+    coeff = [0] * maxnum
+    if cat != 5:
+        if not cab.decision(85 + CBF_CAT_OFF[cat] + cbf_inc):
+            return coeff, 0
+    if cat == 5:
+        sig_base, last_base, abs_base = 402, 417, 426
+    else:
+        sig_base = 105 + SIG_CAT_OFF[cat]
+        last_base = 166 + SIG_CAT_OFF[cat]
+        abs_base = 227 + ABS_CAT_OFF[cat]
+    num = maxnum
+    sig = [0] * maxnum
+    i = 0
+    while i < num - 1:
+        if cat == 5:
+            si, li = SIG8_FRAME[i], LAST8[i]
+        elif cat == 3:
+            si = li = min(i, 2)
+        else:
+            si = li = i
+        if cab.decision(sig_base + si):
+            sig[i] = 1
+            if cab.decision(last_base + li):
+                num = i + 1
+                break
+        i += 1
+    sig[num - 1] = 1
+    eq1 = 0
+    gt1 = 0
+    count = 0
+    gt1_max = 4 - (1 if cat == 3 else 0)
+    for i in range(num - 1, -1, -1):
+        if not sig[i]:
+            continue
+        ctx = abs_base + (0 if gt1 else min(4, 1 + eq1))
+        if not cab.decision(ctx):
+            a = 0
+        else:
+            a = 1
+            ctx = abs_base + 5 + min(gt1_max, gt1)
+            while a < 14 and cab.decision(ctx):
+                a += 1
+            if a >= 14:
+                k = 0
+                while cab.bypass():
+                    a += 1 << k
+                    k += 1
+                    if k > 30:
+                        raise DecodeError("bad coeff_abs_level_minus1 suffix")
+                while k:
+                    k -= 1
+                    a += cab.bypass() << k
+        level = a + 1
+        if level == 1:
+            eq1 += 1
+        else:
+            gt1 += 1
+        coeff[i] = -level if cab.bypass() else level
+        count += 1
+    return coeff, count
+
+
+SliceDecoder.run_cabac = run_cabac
 
 
 # ---------------------------------------------------------------------------

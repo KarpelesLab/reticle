@@ -340,55 +340,68 @@ has it.
 only) from Rec. ITU-T H.264 (V16, 06/2026), downloaded from itu.int. No
 other decoder's source was read: not ffmpeg, x264, openh264 or JM. Clause
 numbers in its comments are that edition's. The tables it needs are in
-`tools/h264_tables.py`, each with its table number; the CAVLC code tables
-were converted from the PDF's text by script and are checked to be
-prefix-free with a Kraft sum of at most 1 (`h264_model.py selftest`).
+`tools/h264_tables.py` and `tools/h264_cabac_tables.py`, each with its table
+number. They were converted from the PDF's text by script: the CAVLC code
+tables are checked to be prefix-free with a Kraft sum of at most 1
+(`h264_model.py selftest`), and the CABAC initialisation tables were
+checked for ctxIdx order, so that the one misprint found -- Table 9-26
+prints the row of ctxIdx 541 as "641" -- was caught rather than silently
+overwriting the real 641 (the correction is recorded in the tables file).
 
 It is the golden reference of the hardware: the corpora in
 `testdata/ip/h264_*.txt` are its dumps. That is worth exactly as much as the
 model is right, so the model is held to ffmpeg, frame by frame:
 
-* **Checked:** every frame of every stream in `testdata/ip/h264/` decodes to
-  the same bytes as ffmpeg 6.1.1's decoder. The `.md5` beside each stream is
-  the md5 of each cropped I420 frame ffmpeg wrote; `tests/h264_model.rs`
-  runs the model on every stream and fails on any frame that differs, on a
-  missing frame, or on an extra one. A deliberately corrupted md5 makes it
-  fail (tried). ffmpeg and libx264 were run only as black boxes, to make
-  streams and reference pictures.
-* **Checked, not committed:** a 1280x720 stream of three frames (an IDR and
-  two P pictures of a rotating test card, two references, every partition
-  shape), made by `tools/h264_streams.sh --hd DIR`, decodes bit-exact too.
-  It is 44 KB and takes the model about 8 s, so it is generated on demand.
+* **Checked:** every frame of every stream in `testdata/ip/h264/` (42
+  streams) decodes to the same bytes as ffmpeg 6.1.1's decoder. The `.md5`
+  beside each stream is the md5 of each cropped I420 frame ffmpeg wrote;
+  `tests/h264_model.rs` runs the model on every stream and fails on any
+  frame that differs, on a missing frame, or on an extra one. A deliberately
+  corrupted md5 makes it fail (tried). ffmpeg and libx264 were run only as
+  black boxes, to make streams and reference pictures.
+* **Checked, not committed:** two 1280x720 streams made by
+  `tools/h264_streams.sh --hd DIR` decode bit-exact too: three Baseline
+  pictures (44 KB) and five High-profile pictures with CABAC, B pictures and
+  the 8x8 transform (59 KB). They take the model seconds to minutes, so they
+  are generated on demand.
+
+**Found by the checks, so worth knowing.** After
+memory_management_control_operation 5 the picture's own frame_num counts as
+0 (7.4.3); the model first kept the coded value, and the crafted MMCO
+streams' last picture, which predicts from that one, differed. And ffmpeg
+6.1.1 does not apply a *left* crop: for an SPS saying 42 samples wide with a
+left offset it wrote 44-wide frames (observed on a crafted stream, so no
+committed stream crops on the left; the model crops as 7.4.2.1.1 says).
 
 ### What it decodes
 
-Progressive 8-bit 4:2:0, one slice group, frame pictures. In detail:
+Progressive 8-bit 4:2:0, one slice group, frame pictures:
 
 | part | status |
 |---|---|
-| NAL units, emulation prevention, SPS, PPS, slice header (7.3) | done; VUI skipped |
-| CAVLC (9.2): coeff_token, levels with every escape, total_zeros, run_before | done, checked |
-| I slices: Intra_4x4 (9 modes), Intra_16x16 (4), chroma (4) | done, checked |
-| I_PCM | implemented, **not checked**: libx264 never wrote one |
-| P slices: every partition, P_8x8 sub-partitions, P_8x8ref0, P_Skip | done, checked |
-| MV prediction (8.4.1.3), quarter-sample luma, eighth-sample chroma | done, checked |
-| multiple reference frames, sliding window marking | done, checked |
-| mb_qp_delta, chroma QP | done, checked |
-| constrained_intra_pred, intra macroblocks in P slices | done, checked |
-| deblocking (8.7): bS, alpha/beta/tC0, offsets, disabled | done, checked |
-| several slices per picture | done, checked |
-| cropping | done, checked |
-| IDR in the middle of a stream, POC types 0 and 2 | done, checked (type 2) |
-| MMCO, reference list modification, long-term references | implemented, **not checked**: libx264 never wrote one for these streams |
-| explicit weighted prediction | implemented, not checked |
-| CABAC, B slices, 8x8 transform | second phase; see below |
-| interlace, MBAFF, FMO/ASO, 4:2:2, 4:4:4, high bit depth, SP/SI | rejected with an error |
+| NAL units, emulation prevention, SPS, PPS, slice header (7.3) | checked; VUI skipped |
+| CAVLC (9.2): coeff_token, every level escape, total_zeros, run_before | checked |
+| CABAC (9.3): engine, context initialisation, every syntax element | checked (I, P, B) |
+| Intra_4x4, Intra_8x8 (with reference filtering), Intra_16x16, chroma; I_PCM (CAVLC and CABAC) | checked |
+| P: every partition and sub-partition, P_8x8ref0, P_Skip | checked |
+| B: every partition, B_8x8 sub-types, B_Skip/B_Direct, spatial and temporal direct | checked |
+| MV prediction (8.4.1.3), quarter-sample luma, eighth-sample chroma | checked |
+| weighted prediction: explicit P, implicit B | checked; explicit B (weighted_bipred_idc 1) is implemented, not checked: libx264 never writes it |
+| 4x4 and 8x8 transforms, scaling matrices (x264's `cqm=jvt`, in the PPS) | checked; SPS-level lists and the fall-back rules are implemented, not checked |
+| mb_qp_delta, chroma QP, constrained_intra_pred, intra MBs in P slices | checked |
+| deblocking (8.7): bS, alpha/beta/tC0, offsets, idc 1 and 2 | checked |
+| several slices per picture, cropping (not on the left: see above) | checked |
+| POC types 0, 1 and 2; IDRs mid-stream | checked |
+| sliding window, every MMCO, long-term references, list modification | checked |
+| output order: by POC within each IDR or MMCO 5 period | checked |
+| gaps in frame_num, interlace, MBAFF, FMO/ASO, 4:2:2, 4:4:4, high bit depth, SP/SI, redundant pictures | rejected with an error |
 
 ### The streams
 
-`tools/h264_streams.sh` holds the exact ffmpeg commands; every stream is
-Baseline profile, one thread, with x264's SEI stripped. What each covers
-(the full tally is `python3 tools/h264_model.py stats STREAM`):
+`tools/h264_streams.sh` holds the exact ffmpeg commands (one thread, x264's
+SEI stripped), and `tools/h264_craft.py` writes the streams libx264 never
+would. What each covers (the full tally is
+`python3 tools/h264_model.py stats STREAM`):
 
 | stream | covers |
 |---|---|
@@ -413,9 +426,21 @@ Baseline profile, one thread, with x264's SEI stripped. What each covers
 | `crop_30x18`, `crop_50x38` | frame cropping, picture sizes that are not multiples of 16 |
 | `idr_32x32_gop3` | an IDR every three pictures, frame_num and POC restarting |
 | `p_32x32_dump` | the source of the P dump corpus |
+| `craft_pcm` | I_PCM alone, beside Intra_4x4, and inside P slices; deblocking across PCM edges |
+| `craft_mmco_poc0/1/2` | MMCO 1..6, long-term references, list modification idc 0/1/2 (with MaxPicNum wrap), frame_num wrapping, a non-reference picture; POC types 0, 1, 2 |
+| `craft_dbk2_crop` | disable_deblocking_filter_idc 2 across a slice edge, cropping right, top and bottom |
+| `cabac_i_qp1`, `cabac_p_64x48`, `cabac_aq_64x48` | CABAC: intra at QP 1, P with three references, mb_qp_delta |
+| `b_spatial_64x48`, `b_temporal_64x48` | B slices, each direct mode, every B partition shape |
+| `b_pyramid_64x48` | B pyramid (reference B pictures), MMCO 1 written by x264, implicit weighted bi-prediction |
+| `b_cavlc_64x48` | B slices with CAVLC |
+| `weightp_64x48` | explicit weighted P prediction (and the list modification x264 writes with it) |
+| `high_8x8_64x48`, `high_cavlc_64x48` | the 8x8 transform in inter macroblocks, CABAC and CAVLC |
+| `high_cqm_64x48`, `i8_cqm_128x96` | scaling matrices (the JVT defaults, sent in the PPS) |
+| `i8_cabac_128x96`, `i8_cavlc_128x96` | all nine Intra_8x8 modes |
+| `high_mix_128x96` | High profile with everything at once |
 
 Across them every boundary strength 0..4 occurs, every mv fraction, and
-every macroblock type of a P slice except I_PCM.
+every macroblock type.
 
 ## Model dumps
 
