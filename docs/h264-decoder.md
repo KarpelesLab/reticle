@@ -106,7 +106,7 @@ whole and emit nothing.
 | tag | name | data |
 |---|---|---|
 | `0x10` | `MB_START` | `[23:12]` mb_x, `[11:0]` mb_y |
-| `0x11` | `MB_TYPE` | `[23:19]` kind (table below), `[18:17]` partition 0 prediction (`bit 0` uses list 0, `bit 1` uses list 1; 0 for intra and direct), `[16:15]` partition 1 prediction (0 unless there are two partitions), `[14:13]` Intra16x16PredMode (0 unless I_16x16) |
+| `0x11` | `MB_TYPE` | `[23:19]` kind (table below), `[18:17]` partition 0 prediction (`bit 0` uses list 0, `bit 1` uses list 1; 0 for intra, direct and skipped macroblocks, and for P_8x8 and B_8x8, whose prediction is per sub-macroblock: Table 7-13 gives their MbPartPredMode as na), `[16:15]` partition 1 prediction (0 unless there are two partitions), `[14:13]` Intra16x16PredMode (0 unless I_16x16) |
 | `0x15` | `SUB_MB_TYPE` | `[15:12]` sub_mb_type[0], `[11:8]` [1], `[7:4]` [2], `[3:0]` [3], the raw values of Tables 7-17 (P) and 7-18 (B) |
 | `0x13` | `I4_MODE` | `[7:4]` luma4x4BlkIdx, `[3:0]` Intra4x4PredMode — the **final** mode |
 | `0x17` | `I8_MODE` | `[5:4]` luma8x8BlkIdx, `[3:0]` Intra8x8PredMode — the final mode |
@@ -271,8 +271,12 @@ Left to later stages:
 | 5 | invalid syntax in slice data: no coeff_token matches, mb_type out of range, TotalCoeff + total_zeros too large, a run longer than the zeros left, a level out of range, a macroblock past the end of the picture |
 | 6 | the slice NAL ended inside a macroblock |
 
-`detail` is the macroblock address for codes 5 and 6 and zero otherwise. An
-`ERROR` ends the slice: nothing more is emitted for it — no `MB_END`,
+`detail` is the macroblock address for codes 5 and 6 and zero otherwise.
+For code 6 the token of the read that ran off the end, if that read emitted
+one, comes out before the `ERROR`, made from bits the NAL unit did not
+have: the parser learns of the shortfall from the bit reader a state later,
+which is what keeps the check off its longest path. An `ERROR` ends the
+slice: nothing more is emitted for it — no `MB_END`,
 `SLICE_END` or `PIC_END` — and the parser resumes at the next NAL unit. A
 consumer resynchronises at the next `SLICE_HDR`. Unsupported SPS and PPS are
 reported when a slice activates them, not when they arrive, so a stream that

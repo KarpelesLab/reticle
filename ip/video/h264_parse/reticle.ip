@@ -1,0 +1,33 @@
+# h264_parse -- the front end of an H.264 decoder: an Annex B byte
+# stream in, the syntax token stream of docs/h264-decoder.md out.
+#
+# Start codes and emulation prevention, a 32-bit bit window, SPS and PPS
+# stored by id, the whole slice header (reference list modification,
+# weights and reference marking surfaced as tokens for the DPB), and CAVLC
+# I and P slice data down to every coefficient, with the intra modes and
+# nC resolved from a block RAM line buffer of neighbours.
+#
+# What it is checked against, and how far: ip/video/h264_parse/README.md.
+name h264_parse
+version 0.1.0
+license MIT
+description "H.264 syntax parser: Annex B bytes in, macroblock and CAVLC coefficient tokens out, with intra modes and nC resolved; CAVLC I and P slices"
+
+top h264_parse
+target xc7
+
+source rtl/h264_vlc.v
+source rtl/h264_nal.v
+source rtl/h264_bits.v
+source rtl/h264_cavlc.v
+source rtl/h264_parse.v
+
+port clk in
+port rst_n in
+port in_byte in 8
+port in_valid in
+port in_last in
+port in_ready out
+port tok out 32
+port tok_valid out
+port tok_ready in
