@@ -665,6 +665,8 @@ module h264_intra #(
     reg signed [20:0] pv;
     always @* begin
         pred_w = 32'd0;
+        lx     = 4'd0;
+        pv     = 21'sd0;
         for (ie = 0; ie < 4; ie = ie + 1) begin
             lx = {s1_w, ie[1:0]};
             if (s1_i4) begin
@@ -709,6 +711,9 @@ module h264_intra #(
     reg signed [20:0] sum;
     reg signed [9:0]  res;
     always @* begin
+        rec_w = 32'd0;
+        sum   = 21'sd0;
+        res   = 10'sd0;
         for (ig = 0; ig < 4; ig = ig + 1) begin
             res = s1_zero ? 10'sd0 : $signed(rr_data[10 * ig +: 10]);
             sum = $signed({13'd0, pred_w[8 * ig +: 8]}) + {{11{res[9]}}, res};

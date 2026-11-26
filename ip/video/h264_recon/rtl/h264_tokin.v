@@ -241,22 +241,23 @@ module h264_tokin #(
     // The row above: one entry per macroblock column.
     reg [79:0] row_intra;
     reg        ul_intra, ul_next;   // the above-left's, saved before it is overwritten
-    reg [9:0]  tinfo [0:MAX_W_MBS-1];   // {qp[5:0], nz bottom row[3:0]}
-    reg [32:0] tmv   [0:4*MAX_W_MBS-1]; // {ref, mvy, mvx} of block (k, 3)
+    // One block RAM: entry 4x + k is {qp[5:0], nz bottom row[3:0]} of
+    // the macroblock (written into all four) and {ref, mvy, mvx} of its
+    // block (k, 3).
+    reg [42:0] tmv   [0:4*MAX_W_MBS-1];
     reg [9:0]  t_info_q;
-    reg [32:0] tmv_q;
+    reg [42:0] tmv_q;
     reg [8:0]  tmv_ra;
     reg        tmv_we;
     reg [8:0]  tmv_wa;
-    reg [32:0] tmv_wd;
+    reg [42:0] tmv_wd;
     reg [13:0] t_mvx [0:3];
     reg [13:0] t_mvy [0:3];
     reg [4:0]  t_ref [0:3];
 
     integer n;
     initial begin
-        for (n = 0; n < MAX_W_MBS; n = n + 1) tinfo[n] = 10'd0;
-        for (n = 0; n < 4 * MAX_W_MBS; n = n + 1) tmv[n] = 33'd0;
+        for (n = 0; n < 4 * MAX_W_MBS; n = n + 1) tmv[n] = 43'd0;
     end
 
     always @(posedge clk) begin
@@ -393,7 +394,7 @@ module h264_tokin #(
             bs <= 96'd0; addr <= 13'd0;
             l_intra <= 1'b0; l_qp <= 6'd0; l_nz <= 4'd0;
             row_intra <= 80'd0; ul_intra <= 1'b0; ul_next <= 1'b0;
-            t_info_q <= 10'd0; tmv_ra <= 9'd0; tmv_we <= 1'b0; tmv_wa <= 9'd0; tmv_wd <= 33'd0;
+            t_info_q <= 10'd0; tmv_ra <= 9'd0; tmv_we <= 1'b0; tmv_wa <= 9'd0; tmv_wd <= 43'd0;
             cw_en <= 1'b0; cw_addr <= 10'd0; cw_data <= 16'd0;
             mw_en <= 1'b0; mw_addr <= 6'd0; mw_mask <= 16'd0;
             clr_en <= 1'b0; clr_half <= 1'b0;
@@ -546,7 +547,7 @@ module h264_tokin #(
                 S_TOP: begin
                     step   <= step + 6'd1;
                     tmv_ra <= {mb_x, step[1:0] + 2'd1};
-                    if (step == 6'd0) t_info_q <= tinfo[mb_x];
+                    if (step == 6'd1) t_info_q <= tmv_q[42:33];
                     if (step != 6'd0) begin
                         t_mvx[step[1:0] - 2'd1] <= tmv_q[13:0];
                         t_mvy[step[1:0] - 2'd1] <= tmv_q[27:14];
@@ -599,7 +600,6 @@ module h264_tokin #(
                         d_off_b    <= off_b;
                         // The row above's entries for this column become
                         // this macroblock's.
-                        tinfo[mb_x] <= {qp_dbf, nz[15], nz[14], nz[11], nz[10]};
                         ul_intra  <= row_intra[mb_x];
                         row_intra[mb_x] <= cur_intra;
                         l_intra   <= cur_intra;
@@ -611,7 +611,8 @@ module h264_tokin #(
                     if (step < 6'd4) begin
                         tmv_we <= 1'b1;
                         tmv_wa <= {mb_x, step[1:0]};
-                        tmv_wd <= {mref[blk_at(step[1:0], 2'd3)], mvy[blk_at(step[1:0], 2'd3)],
+                        tmv_wd <= {qp_dbf, nz[15], nz[14], nz[11], nz[10],
+                                   mref[blk_at(step[1:0], 2'd3)], mvy[blk_at(step[1:0], 2'd3)],
                                    mvx[blk_at(step[1:0], 2'd3)]};
                         l_mvx[step[1:0]] <= mvx[blk_at(2'd3, step[1:0])];
                         l_mvy[step[1:0]] <= mvy[blk_at(2'd3, step[1:0])];
