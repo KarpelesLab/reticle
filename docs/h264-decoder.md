@@ -333,3 +333,215 @@ has it.
 - `pred_data`, `pred_valid`, `pred_ready`: per inter macroblock, luma 16 rows
   of 4 words, Cb 8 rows of 2, Cr 8 rows of 2, four samples a word, the
   leftmost in bits 7:0.
+
+## The software model
+
+`tools/h264_model.py` is a decoder written in Python (standard library
+only) from Rec. ITU-T H.264 (V16, 06/2026), downloaded from itu.int. No
+other decoder's source was read: not ffmpeg, x264, openh264 or JM. Clause
+numbers in its comments are that edition's. The tables it needs are in
+`tools/h264_tables.py`, each with its table number; the CAVLC code tables
+were converted from the PDF's text by script and are checked to be
+prefix-free with a Kraft sum of at most 1 (`h264_model.py selftest`).
+
+It is the golden reference of the hardware: the corpora in
+`testdata/ip/h264_*.txt` are its dumps. That is worth exactly as much as the
+model is right, so the model is held to ffmpeg, frame by frame:
+
+* **Checked:** every frame of every stream in `testdata/ip/h264/` decodes to
+  the same bytes as ffmpeg 6.1.1's decoder. The `.md5` beside each stream is
+  the md5 of each cropped I420 frame ffmpeg wrote; `tests/h264_model.rs`
+  runs the model on every stream and fails on any frame that differs, on a
+  missing frame, or on an extra one. A deliberately corrupted md5 makes it
+  fail (tried). ffmpeg and libx264 were run only as black boxes, to make
+  streams and reference pictures.
+* **Checked, not committed:** a 1280x720 stream of three frames (an IDR and
+  two P pictures of a rotating test card, two references, every partition
+  shape), made by `tools/h264_streams.sh --hd DIR`, decodes bit-exact too.
+  It is 44 KB and takes the model about 8 s, so it is generated on demand.
+
+### What it decodes
+
+Progressive 8-bit 4:2:0, one slice group, frame pictures. In detail:
+
+| part | status |
+|---|---|
+| NAL units, emulation prevention, SPS, PPS, slice header (7.3) | done; VUI skipped |
+| CAVLC (9.2): coeff_token, levels with every escape, total_zeros, run_before | done, checked |
+| I slices: Intra_4x4 (9 modes), Intra_16x16 (4), chroma (4) | done, checked |
+| I_PCM | implemented, **not checked**: libx264 never wrote one |
+| P slices: every partition, P_8x8 sub-partitions, P_8x8ref0, P_Skip | done, checked |
+| MV prediction (8.4.1.3), quarter-sample luma, eighth-sample chroma | done, checked |
+| multiple reference frames, sliding window marking | done, checked |
+| mb_qp_delta, chroma QP | done, checked |
+| constrained_intra_pred, intra macroblocks in P slices | done, checked |
+| deblocking (8.7): bS, alpha/beta/tC0, offsets, disabled | done, checked |
+| several slices per picture | done, checked |
+| cropping | done, checked |
+| IDR in the middle of a stream, POC types 0 and 2 | done, checked (type 2) |
+| MMCO, reference list modification, long-term references | implemented, **not checked**: libx264 never wrote one for these streams |
+| explicit weighted prediction | implemented, not checked |
+| CABAC, B slices, 8x8 transform | second phase; see below |
+| interlace, MBAFF, FMO/ASO, 4:2:2, 4:4:4, high bit depth, SP/SI | rejected with an error |
+
+### The streams
+
+`tools/h264_streams.sh` holds the exact ffmpeg commands; every stream is
+Baseline profile, one thread, with x264's SEI stripped. What each covers
+(the full tally is `python3 tools/h264_model.py stats STREAM`):
+
+| stream | covers |
+|---|---|
+| `intra_32x32_qp26` | all-intra, Intra_4x4 |
+| `intra_48x32_qp1` | QP 1: levels above 255 (level_prefix 15, the longest escape Baseline allows, occurs in 14 streams) |
+| `intra_48x32_qp12` | Intra_4x4 and Intra_16x16 DC, large levels |
+| `intra_64x48_qp38` | all nine Intra_4x4 modes, chroma DC/horizontal/vertical |
+| `intra_64x48_qp51` | QP 51, Intra_16x16 vertical/horizontal/DC |
+| `intra_80x48_i16` | Intra_4x4 at 5x3 macroblocks |
+| `intra_64x48_aq` | mb_qp_delta, Intra_16x16 plane, chroma plane |
+| `p_64x48_parts` | 16x8, 8x16 and every P_8x8 sub-partition, all 16 fractional positions, vectors off the picture |
+| `p_48x32_parts` | sub-partitions with exhaustive motion search, all 16 fractional positions |
+| `p_80x48_skip` | mostly P_Skip, low motion |
+| `p_80x48_pan` | a steady pan: P_Skip whose predicted vector is not zero, P_L0_16x16 |
+| `p_64x48_ref4` | four references, ref_idx 0..3, P_8x8 with a different reference per 8x8, every partition |
+| `p_64x48_aq` | mb_qp_delta in P slices, Intra_16x16 plane in P slices |
+| `p_48x32_nodeblock` | disable_deblocking_filter_idc 1 |
+| `p_48x32_dbk_m3p3` | FilterOffsetA -6, FilterOffsetB +6 |
+| `p_48x32_dbk_p6m6` | FilterOffsetA +12, FilterOffsetB -12 |
+| `p_64x48_slices` | three slices per picture: availability and deblocking across slice edges |
+| `p_64x48_cip` | periodic intra refresh: intra macroblocks in P slices, constrained_intra_pred |
+| `crop_30x18`, `crop_50x38` | frame cropping, picture sizes that are not multiples of 16 |
+| `idr_32x32_gop3` | an IDR every three pictures, frame_num and POC restarting |
+| `p_32x32_dump` | the source of the P dump corpus |
+
+Across them every boundary strength 0..4 occurs, every mv fraction, and
+every macroblock type of a P slice except I_PCM.
+
+## Model dumps
+
+`python3 tools/h264_model.py dump STREAM.264 DIR --frames N` writes up to
+three text files per stream into `DIR`; `tools/h264_dumps.sh` regenerates
+the committed ones, and `tests/h264_model.rs` fails if a committed dump is
+not exactly what the current model writes. The committed corpora:
+
+| stream | pictures | files |
+|---|---|---|
+| `intra_32x32_qp26` | 1 IDR, 2x2 MBs, Intra_4x4 | tokens, recon |
+| `intra_48x32_qp12` | 1 IDR, 3x2 MBs, Intra_4x4 and Intra_16x16 | tokens, recon |
+| `p_32x32_dump` | IDR + 2 P, 2x2 MBs, P_8x8 sub-partitions, two references | tokens, recon, inter |
+
+Every file is line-oriented: a line starts with a keyword, `#` starts a
+comment, blank lines separate pictures. All numbers are decimal unless they
+are said to be hex. Samples are hex, two digits per sample, a row left to
+right; a block is its rows separated by single spaces, top row first.
+Macroblocks appear in decoding order, which for these streams is raster
+order.
+
+Lines common to all three files:
+
+    stream NAME WIDTH_MBS HEIGHT_MBS
+    pic INDEX TYPE poc POC frame_num N ref 0|1 idr 0|1
+    mb ADDR MBX MBY MB_TYPE_NAME [qp QPY]
+
+`INDEX` counts pictures in decoding order from 0; `TYPE` is `I`, `P` or
+`B` (of the first slice). `MB_TYPE_NAME` is the name Table 7-11, 7-13 or
+7-14 gives (`I_NxN`, `I_16x16_<pred>_<cbp chroma>_<cbp luma 0/1>`, `I_PCM`,
+`P_L0_16x16`, `P_8x8ref0`, `P_Skip`, ...).
+
+### `h264_tokens_NAME.txt`: the parser's input and output
+
+    nal HEX        one NAL unit, header byte included, emulation prevention
+                   bytes still in: the parser's input, in stream order
+    slice FIRST_MB type T qp SLICEQP dbk IDC A B nref N
+    tok WORD [comment]
+
+`nal` lines come first (every NAL unit of the dumped pictures), then the
+token stream picture by picture. Each `tok` is one 32-bit token, 8 hex
+digits, `{tag[7:0], data[23:0]}`; the comment after it is for people. The
+tags are the contract's v0 set; until the parse agent's layout lands in the
+token section of this file, the data fields are packed as follows (and the
+dumps will follow that layout when it does):
+
+| tag | name | data |
+|---|---|---|
+| 01 | SPS_DIMS | `width_mbs[23:12] height_mbs[11:0]` |
+| 02 | SLICE_HDR | `nal_ref_idc[6:5] IdrPicFlag[4] slice_type[3:0]` (slice_type % 5) |
+| 03 | SLICE_QP | `second_chroma_qp_index_offset[20:16] chroma_qp_index_offset[12:8] SliceQPY[5:0]`, offsets two's complement |
+| 04 | SLICE_DBLK | `FilterOffsetB[20:16] FilterOffsetA[12:8] disable_deblocking_filter_idc[1:0]`, offsets two's complement |
+| 05 | SLICE_REF | `frame_num[23:8] num_ref_idx_l0_active_minus1[4:0]` |
+| 06 | SLICE_FIRST | `first_mb_in_slice` |
+| 10 | MB_START | `mb_x[23:12] mb_y[11:0]` |
+| 11 | MB_TYPE | `transform_size_8x8_flag[16] coded_block_pattern[15:10] intra_chroma_pred_mode[9:8] Intra16x16PredMode[7:6] kind[5:0]` |
+| 12 | MB_QP | `QPY` after mb_qp_delta |
+| 13 | I4_MODE | `luma4x4BlkIdx[7:4] Intra4x4PredMode[3:0]`, the final mode, 16 per I_NxN macroblock in block order |
+| 14 | MVD | `mbPartIdx[23:22] subMbPartIdx[21:20] ref_idx[19:16] component[15] mvd[14:0]` (component 0 = x; mvd two's complement) |
+| 20 | COEF_BLK | `category[19:16] block index[15:8] TotalCoeff[4:0]` |
+| 21 | COEF | `scan position[21:16] level[15:0]`, nonzero levels only, level two's complement |
+| 30 | PCM | three I_PCM samples, first in `[7:0]`; 128 per macroblock (256 luma, 64 Cb, 64 Cr) |
+| 3F | MB_END | 0 |
+| 40 | SLICE_END | 0 |
+| 41 | PIC_END | 0 |
+
+`kind`: 0 I_NxN (Intra_4x4), 1 Intra_8x8, 2 Intra_16x16, 3 I_PCM,
+4 P_L0_16x16, 5 P_L0_L0_16x8, 6 P_L0_L0_8x16, 7 P_8x8, 8 P_8x8ref0,
+9 P_Skip. COEF_BLK `category`: 0 Luma4x4, 1 Intra16x16DCLevel,
+2 Intra16x16ACLevel, 3 ChromaDC Cb, 4 ChromaDC Cr, 5 ChromaAC Cb,
+6 ChromaAC Cr. Its block index is luma4x4BlkIdx for luma and
+chroma4x4BlkIdx for chroma AC (0 for the DC blocks). The scan position is
+the index in the coded (zig-zag) order of the block's own list: for
+Intra16x16ACLevel and ChromaAC it counts from 1, position 0 being the DC
+that the DC block carries.
+
+Per macroblock the order is: MB_START, MB_TYPE, MB_QP, then PCM words, or
+the 16 I4_MODE tokens, or the MVD tokens (all list 0 partitions in order,
+x then y for each, sub-partitions in order inside each sub-macroblock),
+then the coefficient blocks in syntax order (Intra16x16 DC, the 16 luma
+blocks in luma4x4BlkIdx order skipping uncoded 8x8 quadrants, chroma DC
+Cb then Cr, chroma AC Cb blocks 0..3 then Cr 0..3, again only those
+coded), then MB_END. A COEF_BLK is written for every block that is parsed,
+even when TotalCoeff is 0. A P_Skip macroblock is MB_START, MB_TYPE, MB_QP,
+MB_END. SLICE_END follows the last macroblock of a slice and PIC_END the
+last slice of a picture.
+
+### `h264_recon_NAME.txt`: reconstruction
+
+Per macroblock, after the `mb` line (whose `qp` is QPY, 0 for I_PCM):
+
+    pred y|u|v ROWS     the prediction: intra (as the intra process formed
+                        it, block by block) or inter (after weighting)
+    res y|u|v VALUES    the residual after the inverse transform, decimal,
+                        raster order, 256 or 64 values (r_ij of 8.5.12,
+                        before it is added to the prediction)
+    pre y|u|v ROWS      the macroblock's samples before deblocking
+    post y|u|v ROWS     after deblocking the whole picture
+    bs v|h E0 E1 E2 E3  boundary strengths
+
+I_PCM macroblocks have no `pred` or `res`. `pre` is `Clip1(pred + res)`.
+`post` is the final picture, so it includes the filtering of this
+macroblock's right and bottom edges by its neighbours.
+For `bs`, `v` is the vertical edges (left to right, edge 0 the macroblock's
+left edge) and `h` the horizontal ones (top to bottom); each edge is four
+digits, the bS of its four 4-sample segments top to bottom (vertical) or
+left to right (horizontal); `-` is an edge that is not filtered (picture
+edge, slice edge with disable_deblocking_filter_idc 2, deblocking off, or
+edges 1 and 3 with the 8x8 transform). Chroma edges use the bS of the luma
+edge at twice their position, as 8.7.2 says.
+
+### `h264_inter_NAME.txt`: motion vectors and prediction
+
+Written when the stream has inter macroblocks. Per inter macroblock:
+
+    mv l0 E x 16        per 4x4 block in raster order: REF:MVX:MVY (quarter
+                        samples), or - when the block does not use the list
+    refpic l0 I=P ...   ref_idx I refers to the picture dumped as INDEX P
+    pred W x 96         the prediction as h264_inter sends it to h264_recon:
+                        luma 16 rows of 4 words, Cb 8 rows of 2, Cr 8 rows
+                        of 2; each word 8 hex digits, four samples,
+                        little-endian (the leftmost sample in bits 7:0)
+
+and after the macroblocks of each picture, the whole decoded (deblocked)
+picture, which later pictures predict from:
+
+    frame y|u|v ROWS
+
+P_Skip macroblocks are included: their vector is the predicted one (8.4.1.1).

@@ -21,3 +21,6 @@
 
 # Bench scripts: kept across sessions, never committed. See tools/local/README.md
 /tools/local/
+
+# tools/h264_model.py imports its sibling modules; Python caches them here.
+__pycache__/
