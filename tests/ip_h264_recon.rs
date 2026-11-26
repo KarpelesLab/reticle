@@ -87,7 +87,13 @@ fn word(width: u32, value: u64) -> Logic {
 /// A value wider than 64 bits.
 fn logic_u128(width: u32, value: u128) -> Logic {
     let bits: Vec<Bit> = (0..width)
-        .map(|i| if value >> i & 1 == 1 { Bit::One } else { Bit::Zero })
+        .map(|i| {
+            if value >> i & 1 == 1 {
+                Bit::One
+            } else {
+                Bit::Zero
+            }
+        })
         .collect();
     Logic::from_bits(&bits)
 }
@@ -137,9 +143,9 @@ impl Rng {
 
 /// Table 8-16, α′ by indexA.
 const ALPHA: [u8; 52] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20, 22,
-    25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226, 255,
-    255,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20,
+    22, 25, 28, 32, 36, 40, 45, 50, 56, 63, 71, 80, 90, 101, 113, 127, 144, 162, 182, 203, 226,
+    255, 255,
 ];
 
 /// Table 8-16, β′ by indexB.
@@ -151,16 +157,16 @@ const BETA: [u8; 52] = [
 /// Table 8-17, t′C0 by bS (1..3) and indexA.
 const TC0: [[u8; 52]; 3] = [
     [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 6, 6, 7, 8, 9, 10, 11, 13,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 6, 6, 7, 8, 9, 10, 11, 13,
     ],
     [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 8, 10, 11, 12, 13, 15, 17,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 8, 10, 11, 12, 13, 15, 17,
     ],
     [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2,
-        3, 3, 3, 4, 4, 4, 5, 6, 6, 7, 8, 9, 10, 11, 13, 14, 16, 18, 20, 23, 25,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2,
+        2, 3, 3, 3, 4, 4, 4, 5, 6, 6, 7, 8, 9, 10, 11, 13, 14, 16, 18, 20, 23, 25,
     ],
 ];
 
@@ -178,7 +184,8 @@ fn clip1(v: i32) -> i32 {
 fn filter_line(s: [i32; 8], bs: u32, chroma: bool, alpha: i32, beta: i32, tc0: i32) -> [i32; 8] {
     let [p3, p2, p1, p0, q0, q1, q2, q3] = s;
     // 8-460.
-    let filter = bs != 0 && (p0 - q0).abs() < alpha && (p1 - p0).abs() < beta && (q1 - q0).abs() < beta;
+    let filter =
+        bs != 0 && (p0 - q0).abs() < alpha && (p1 - p0).abs() < beta && (q1 - q0).abs() < beta;
     if !filter {
         return s;
     }
@@ -252,7 +259,12 @@ fn dbf_tables_match_tables_8_16_and_8_17() {
             sim.run_for(1);
             let i = usize::try_from(index).expect("small");
             assert_eq!(get_u64(&sim, alpha), u64::from(ALPHA[i]), "alpha[{index}]");
-            assert_eq!(get_u64(&sim, beta), u64::from(BETA[51 - i]), "beta[{}]", 51 - index);
+            assert_eq!(
+                get_u64(&sim, beta),
+                u64::from(BETA[51 - i]),
+                "beta[{}]",
+                51 - index
+            );
             let want = match b {
                 1..=3 => TC0[usize::try_from(b - 1).expect("small")][i],
                 _ => 0,
@@ -381,7 +393,11 @@ fn qpc_of(qpi: i32) -> i32 {
     const HIGH: [i32; 22] = [
         29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 39, 39,
     ];
-    if qpi < 30 { qpi } else { HIGH[usize::try_from(qpi - 30).expect("30..51")] }
+    if qpi < 30 {
+        qpi
+    } else {
+        HIGH[usize::try_from(qpi - 30).expect("30..51")]
+    }
 }
 
 /// 8-311 and Table 8-15 together: the chroma QP of a luma QP.
@@ -429,7 +445,10 @@ fn pass(x: [i64; 4], hadamard: bool) -> [i64; 4] {
 fn transform_2d(d: &[i64; 16], hadamard: bool) -> [i64; 16] {
     let mut f = [0i64; 16];
     for i in 0..4 {
-        let row = pass([d[4 * i], d[4 * i + 1], d[4 * i + 2], d[4 * i + 3]], hadamard);
+        let row = pass(
+            [d[4 * i], d[4 * i + 1], d[4 * i + 2], d[4 * i + 3]],
+            hadamard,
+        );
         f[4 * i..4 * i + 4].copy_from_slice(&row);
     }
     let mut h = [0i64; 16];
@@ -596,6 +615,11 @@ fn levels_conform(lv: &Levels, kind: u32, qp: i32, qpc: [i32; 2]) -> bool {
 /// non-zero levels in the low frequencies where real streams put them,
 /// thinned until the draw conforms.
 fn draw_levels(rng: &mut Rng, kind: u32, qp: i32, qpc: [i32; 2]) -> Levels {
+    draw_levels_upto(rng, kind, qp, qpc, 60)
+}
+
+/// `draw_levels` with the largest level magnitude to start from.
+fn draw_levels_upto(rng: &mut Rng, kind: u32, qp: i32, qpc: [i32; 2], most: u64) -> Levels {
     if kind == 3 {
         let mut lv = Levels::zero();
         for b in 0..24 {
@@ -606,7 +630,7 @@ fn draw_levels(rng: &mut Rng, kind: u32, qp: i32, qpc: [i32; 2]) -> Levels {
         }
         return lv;
     }
-    let mut amp = 1 + rng.below(60);
+    let mut amp = 1 + rng.below(most);
     loop {
         let mut lv = Levels::zero();
         for b in 0..27 {
@@ -722,7 +746,10 @@ fn residual_load(b: &mut Bench<'_>, half: u64, lv: &Levels, pcm: bool) {
                 mask |= 1 << p;
                 b.set("cw_en", 1);
                 b.set("cw_addr", (half << 9) | (blk << 4) | p);
-                b.set("cw_data", u64::from(i16::try_from(v).expect("16 bits") as u16));
+                b.set(
+                    "cw_data",
+                    u64::from(i16::try_from(v).expect("16 bits") as u16),
+                );
                 b.cycle();
             }
         }
@@ -737,7 +764,13 @@ fn residual_load(b: &mut Bench<'_>, half: u64, lv: &Levels, pcm: bool) {
 
 /// Runs one macroblock through `h264_residual` and reads its residuals
 /// back, with the cycles it took.
-fn residual_run(b: &mut Bench<'_>, half: u64, kind: u32, qp: i32, qpc: [i32; 2]) -> ([[i64; 16]; 24], u64) {
+fn residual_run(
+    b: &mut Bench<'_>,
+    half: u64,
+    kind: u32,
+    qp: i32,
+    qpc: [i32; 2],
+) -> ([[i64; 16]; 24], u64) {
     b.set("half", half);
     b.set("kind", u64::from(kind));
     b.set("qp_y", u64::try_from(qp).expect("qp"));
@@ -769,7 +802,8 @@ fn residual_run(b: &mut Bench<'_>, half: u64, kind: u32, qp: i32, qpc: [i32; 2])
             for col in 0..4u64 {
                 let v = i64::try_from((w >> (10 * col)) & 0x3FF).expect("ten bits");
                 let v = if v >= 512 { v - 1024 } else { v };
-                out[usize::try_from(blk).expect("small")][usize::try_from(4 * row + col).expect("small")] = v;
+                out[usize::try_from(blk).expect("small")]
+                    [usize::try_from(4 * row + col).expect("small")] = v;
             }
         }
     }
@@ -819,7 +853,10 @@ fn residual_matches_8_5_for_every_kind() {
         let kind = case % 4;
         let qp = rng.range(0, 51);
         let offset = rng.range(-12, 12);
-        let qpc = [chroma_qp(qp, offset), chroma_qp(qp, offset + rng.range(-1, 1))];
+        let qpc = [
+            chroma_qp(qp, offset),
+            chroma_qp(qp, offset + rng.range(-1, 1)),
+        ];
         let lv = draw_levels(&mut rng, kind, qp, qpc);
         let half = u64::from(case % 2);
         residual_load(&mut bench, half, &lv, kind == 3);
@@ -852,6 +889,8 @@ const K_PCM: u32 = 3;
 struct SliceDesc {
     first_mb: usize,
     chroma_qp_offset: i32,
+    /// second_chroma_qp_index_offset, for Cr.
+    chroma_qp_offset2: i32,
     constrained_intra: bool,
     disable_deblocking: u32,
     offset_a: i32,
@@ -979,7 +1018,14 @@ fn neighbour_of(xn: i32, yn: i32, maxw: i32, maxh: i32) -> usize {
 
 /// 8.3.1.2: the Intra_4x4 prediction of block `blk`, from the picture
 /// as constructed so far.
-fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [bool; 4]) -> [i32; 16] {
+fn pred_intra4x4(
+    pl: &Planes,
+    mx: usize,
+    my: usize,
+    blk: usize,
+    mode: u32,
+    av: [bool; 4],
+) -> [i32; 16] {
     let (bx, by) = blk_xy(blk);
     let (xo, yo) = (4 * bx as i32, 4 * by as i32);
     // p[x, y] for x = -1, y = -1..3 and x = 0..7, y = -1, or None.
@@ -1019,7 +1065,9 @@ fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [
         } else {
             left[y as usize]
         };
-        v.unwrap_or_else(|| panic!("mode {mode} of block {blk} reads p[{x}, {y}], which is not available"))
+        v.unwrap_or_else(|| {
+            panic!("mode {mode} of block {blk} reads p[{x}, {y}], which is not available")
+        })
     };
     let mut out = [0i32; 16];
     for y in 0..4i32 {
@@ -1060,7 +1108,10 @@ fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [
                     match z {
                         0 | 2 | 4 | 6 => (p(x - (y >> 1) - 1, -1) + p(x - (y >> 1), -1) + 1) >> 1,
                         1 | 3 | 5 => {
-                            (p(x - (y >> 1) - 2, -1) + 2 * p(x - (y >> 1) - 1, -1) + p(x - (y >> 1), -1) + 2)
+                            (p(x - (y >> 1) - 2, -1)
+                                + 2 * p(x - (y >> 1) - 1, -1)
+                                + p(x - (y >> 1), -1)
+                                + 2)
                                 >> 2
                         }
                         -1 => (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2,
@@ -1072,7 +1123,10 @@ fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [
                     match z {
                         0 | 2 | 4 | 6 => (p(-1, y - (x >> 1) - 1) + p(-1, y - (x >> 1)) + 1) >> 1,
                         1 | 3 | 5 => {
-                            (p(-1, y - (x >> 1) - 2) + 2 * p(-1, y - (x >> 1) - 1) + p(-1, y - (x >> 1)) + 2)
+                            (p(-1, y - (x >> 1) - 2)
+                                + 2 * p(-1, y - (x >> 1) - 1)
+                                + p(-1, y - (x >> 1))
+                                + 2)
                                 >> 2
                         }
                         -1 => (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2,
@@ -1083,7 +1137,11 @@ fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [
                     if y == 0 || y == 2 {
                         (p(x + (y >> 1), -1) + p(x + (y >> 1) + 1, -1) + 1) >> 1
                     } else {
-                        (p(x + (y >> 1), -1) + 2 * p(x + (y >> 1) + 1, -1) + p(x + (y >> 1) + 2, -1) + 2) >> 2
+                        (p(x + (y >> 1), -1)
+                            + 2 * p(x + (y >> 1) + 1, -1)
+                            + p(x + (y >> 1) + 2, -1)
+                            + 2)
+                            >> 2
                     }
                 }
                 _ => {
@@ -1091,7 +1149,11 @@ fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [
                     match z {
                         0 | 2 | 4 => (p(-1, y + (x >> 1)) + p(-1, y + (x >> 1) + 1) + 1) >> 1,
                         1 | 3 => {
-                            (p(-1, y + (x >> 1)) + 2 * p(-1, y + (x >> 1) + 1) + p(-1, y + (x >> 1) + 2) + 2) >> 2
+                            (p(-1, y + (x >> 1))
+                                + 2 * p(-1, y + (x >> 1) + 1)
+                                + p(-1, y + (x >> 1) + 2)
+                                + 2)
+                                >> 2
                         }
                         5 => (p(-1, 2) + 3 * p(-1, 3) + 2) >> 2,
                         _ => p(-1, 3),
@@ -1107,7 +1169,13 @@ fn pred_intra4x4(pl: &Planes, mx: usize, my: usize, blk: usize, mode: u32, av: [
 /// The neighbours of a whole macroblock of component `c` for 8.3.3 and
 /// 8.3.4: the row above, the column to the left and the corner, each
 /// None when its macroblock is not available.
-fn mb_neighbours(pl: &Planes, c: usize, mx: usize, my: usize, av: [bool; 4]) -> (Option<Vec<i32>>, Option<Vec<i32>>, Option<i32>) {
+fn mb_neighbours(
+    pl: &Planes,
+    c: usize,
+    mx: usize,
+    my: usize,
+    av: [bool; 4],
+) -> (Option<Vec<i32>>, Option<Vec<i32>>, Option<i32>) {
     let n = if c == 0 { 16 } else { 8 };
     let (ox, oy) = (mx * n, my * n);
     let top = av[1].then(|| (0..n).map(|x| pl.at(c, ox + x, oy - 1)).collect());
@@ -1168,7 +1236,14 @@ fn pred_intra16x16(pl: &Planes, mx: usize, my: usize, mode: u32, av: [bool; 4]) 
 }
 
 /// 8.3.4 for 4:2:0: one chroma component's prediction, raster order.
-fn pred_chroma(pl: &Planes, comp: usize, mx: usize, my: usize, mode: u32, av: [bool; 4]) -> Vec<i32> {
+fn pred_chroma(
+    pl: &Planes,
+    comp: usize,
+    mx: usize,
+    my: usize,
+    mode: u32,
+    av: [bool; 4],
+) -> Vec<i32> {
     let (top, left, corner) = mb_neighbours(pl, comp, mx, my, av);
     let mut out = vec![0i32; 64];
     match mode {
@@ -1308,7 +1383,8 @@ fn blk_at(x: usize, y: usize) -> usize {
 /// what is available (the "shall be used only when" of each mode).
 fn draw_modes(rng: &mut Rng, mb: &mut MbDesc, av: [bool; 4]) {
     let [a, b, _, d] = av;
-    let pick = |rng: &mut Rng, ok: &[u32]| ok[usize::try_from(rng.below(ok.len() as u64)).expect("small")];
+    let pick =
+        |rng: &mut Rng, ok: &[u32]| ok[usize::try_from(rng.below(ok.len() as u64)).expect("small")];
     match mb.kind {
         K_I4 => {
             for blk in 0..16 {
@@ -1368,13 +1444,19 @@ fn draw_modes(rng: &mut Rng, mb: &mut MbDesc, av: [bool; 4]) {
 /// `draw_modes`.
 fn blank_mb(rng: &mut Rng, kind: u32, qp: i32) -> MbDesc {
     let pred = if kind == K_INTER {
-        (0..384).map(|_| u8::try_from(rng.below(256)).expect("a sample")).collect()
+        (0..384)
+            .map(|_| u8::try_from(rng.below(256)).expect("a sample"))
+            .collect()
     } else {
         Vec::new()
     };
     let mut mv = [(0, 0, 0); 16];
     for m in mv.iter_mut() {
-        *m = (rng.range(-8, 8), rng.range(-8, 8), u32::try_from(rng.below(2)).expect("small"));
+        *m = (
+            rng.range(-8, 8),
+            rng.range(-8, 8),
+            u32::try_from(rng.below(2)).expect("small"),
+        );
     }
     MbDesc {
         kind,
@@ -1405,6 +1487,7 @@ fn draw_picture(rng: &mut Rng, w: usize, h: usize, slices: usize, intra_only: bo
         .map(|&first_mb| SliceDesc {
             first_mb,
             chroma_qp_offset: rng.range(-12, 12),
+            chroma_qp_offset2: rng.range(-12, 12),
             constrained_intra: rng.below(2) == 1,
             disable_deblocking: [0u32, 0, 0, 1, 2][usize::try_from(rng.below(5)).expect("small")],
             offset_a: 2 * rng.range(-6, 6),
@@ -1421,7 +1504,8 @@ fn draw_picture(rng: &mut Rng, w: usize, h: usize, slices: usize, intra_only: bo
         let kind = if intra_only {
             [K_I4, K_I4, K_I16, K_I16, K_PCM][usize::try_from(rng.below(5)).expect("small")]
         } else {
-            [K_I4, K_I16, K_INTER, K_INTER, K_INTER, K_PCM][usize::try_from(rng.below(6)).expect("small")]
+            [K_I4, K_I16, K_INTER, K_INTER, K_INTER, K_PCM]
+                [usize::try_from(rng.below(6)).expect("small")]
         };
         let qp = rng.range(0, 51);
         pic.mbs.push(blank_mb(rng, kind, qp));
@@ -1475,14 +1559,24 @@ fn unpack_slot(pl: &mut Planes, mx: usize, my: usize, slot: &[u32; 96]) {
     for y in 0..16 {
         for x in 0..16 {
             let w = slot[4 * y + x / 4];
-            pl.put(0, mx * 16 + x, my * 16 + y, i32::try_from((w >> (8 * (x % 4))) & 0xFF).expect("byte"));
+            pl.put(
+                0,
+                mx * 16 + x,
+                my * 16 + y,
+                i32::try_from((w >> (8 * (x % 4))) & 0xFF).expect("byte"),
+            );
         }
     }
     for comp in 1..3 {
         for y in 0..8 {
             for x in 0..8 {
                 let w = slot[64 + 16 * (comp - 1) + 2 * y + x / 4];
-                pl.put(comp, mx * 8 + x, my * 8 + y, i32::try_from((w >> (8 * (x % 4))) & 0xFF).expect("byte"));
+                pl.put(
+                    comp,
+                    mx * 8 + x,
+                    my * 8 + y,
+                    i32::try_from((w >> (8 * (x % 4))) & 0xFF).expect("byte"),
+                );
             }
         }
     }
@@ -1556,7 +1650,15 @@ fn intra_constructs_pictures_as_8_3_says() {
             ("pred_valid", 1),
             ("pred_data", 32),
         ],
-        &["busy", "done", "rr_addr", "pred_ready", "ow_en", "ow_addr", "ow_data"],
+        &[
+            "busy",
+            "done",
+            "rr_addr",
+            "pred_ready",
+            "ow_en",
+            "ow_addr",
+            "ow_data",
+        ],
     );
     let mut rng = Rng(0x1A7A_0002);
     let mut worst = [0u64; 4];
@@ -1598,9 +1700,16 @@ fn intra_constructs_pictures_as_8_3_says() {
             b.set("kind", u64::from(mb.kind));
             b.set("i16_mode", u64::from(mb.i16_mode));
             b.set("c_mode", u64::from(mb.c_mode));
-            let modes = mb.i4_modes.iter().enumerate().fold(0u64, |acc, (k, &m)| acc | (u64::from(m) << (4 * k)));
+            let modes = mb
+                .i4_modes
+                .iter()
+                .enumerate()
+                .fold(0u64, |acc, (k, &m)| acc | (u64::from(m) << (4 * k)));
             b.set("i4_modes", modes);
-            for (k, name) in ["avail_a", "avail_b", "avail_c", "avail_d"].iter().enumerate() {
+            for (k, name) in ["avail_a", "avail_b", "avail_c", "avail_d"]
+                .iter()
+                .enumerate()
+            {
                 b.set(name, u64::from(av[k]));
             }
             b.set("half", half);
@@ -1615,7 +1724,10 @@ fn intra_constructs_pictures_as_8_3_says() {
             loop {
                 let more = sent < words.len();
                 b.set("pred_valid", u64::from(more));
-                b.set("pred_data", u64::from(words.get(sent).copied().unwrap_or(0)));
+                b.set(
+                    "pred_data",
+                    u64::from(words.get(sent).copied().unwrap_or(0)),
+                );
                 let addr_now = b.get("rr_addr");
                 let took = more && b.get("pred_ready") == 1;
                 if b.get("ow_en") == 1 {
@@ -1627,7 +1739,11 @@ fn intra_constructs_pictures_as_8_3_says() {
                 // The residual buffer answers a cycle after its address.
                 let blk = usize::try_from((addr_now >> 2) & 31).expect("small");
                 let row = usize::try_from(addr_now & 3).expect("small");
-                let data = if blk < 24 { residual_word(&residuals[addr][blk], row) } else { 0 };
+                let data = if blk < 24 {
+                    residual_word(&residuals[addr][blk], row)
+                } else {
+                    0
+                };
                 b.set("rr_data", data);
                 if took {
                     sent += 1;
@@ -1635,7 +1751,10 @@ fn intra_constructs_pictures_as_8_3_says() {
                 if finished {
                     break;
                 }
-                assert!(b.cycles - start < 2000, "h264_intra stalled at macroblock {addr}");
+                assert!(
+                    b.cycles - start < 2000,
+                    "h264_intra stalled at macroblock {addr}"
+                );
             }
             let spent = b.cycles - start;
             let k = usize::try_from(mb.kind).expect("small");
@@ -1651,11 +1770,20 @@ fn intra_constructs_pictures_as_8_3_says() {
             first_difference(&got, &want)
         );
     }
-    println!("h264_intra: worst cycles a macroblock, I4 {} I16 {} inter {} PCM {}", worst[0], worst[1], worst[2], worst[3]);
+    println!(
+        "h264_intra: worst cycles a macroblock, I4 {} I16 {} inter {} PCM {}",
+        worst[0], worst[1], worst[2], worst[3]
+    );
     println!("modes used: Intra_4x4 {used_i4:?}, Intra_16x16 {used_i16:?}, chroma {used_c:?}");
     // Every mode, often enough that a wrong one would have shown.
-    assert!(used_i4.iter().all(|&n| n >= 20), "Intra_4x4 modes {used_i4:?}");
-    assert!(used_i16.iter().all(|&n| n >= 3), "Intra_16x16 modes {used_i16:?}");
+    assert!(
+        used_i4.iter().all(|&n| n >= 20),
+        "Intra_4x4 modes {used_i4:?}"
+    );
+    assert!(
+        used_i16.iter().all(|&n| n >= 3),
+        "Intra_16x16 modes {used_i16:?}"
+    );
     assert!(used_c.iter().all(|&n| n >= 3), "chroma modes {used_c:?}");
 }
 
@@ -1709,7 +1837,11 @@ fn deblock_picture(pic: &PicDesc, input: &Planes) -> Planes {
             let (x0, y0) = (mx * n, my * n);
             // The edges, in order: vertical left to right, then horizontal.
             for vertical in [true, false] {
-                let edges: Vec<usize> = if comp == 0 { vec![0, 4, 8, 12] } else { vec![0, 4] };
+                let edges: Vec<usize> = if comp == 0 {
+                    vec![0, 4, 8, 12]
+                } else {
+                    vec![0, 4]
+                };
                 for &e in &edges {
                     let on = if e == 0 {
                         if vertical { filter_left } else { filter_top }
@@ -1721,28 +1853,54 @@ fn deblock_picture(pic: &PicDesc, input: &Planes) -> Planes {
                     }
                     for k in 0..n {
                         // q0's position, then p_i and q_i.
-                        let (qx, qy) = if vertical { (x0 + e, y0 + k) } else { (x0 + k, y0 + e) };
+                        let (qx, qy) = if vertical {
+                            (x0 + e, y0 + k)
+                        } else {
+                            (x0 + k, y0 + e)
+                        };
                         let at = |i: i32| -> (usize, usize) {
                             if vertical {
-                                (usize::try_from(i32::try_from(qx).expect("fits") + i).expect("inside"), qy)
+                                (
+                                    usize::try_from(i32::try_from(qx).expect("fits") + i)
+                                        .expect("inside"),
+                                    qy,
+                                )
                             } else {
-                                (qx, usize::try_from(i32::try_from(qy).expect("fits") + i).expect("inside"))
+                                (
+                                    qx,
+                                    usize::try_from(i32::try_from(qy).expect("fits") + i)
+                                        .expect("inside"),
+                                )
                             }
                         };
                         // The luma sample pair whose bS this line takes.
-                        let (lqx, lqy) = if comp == 0 { (qx, qy) } else { (2 * qx, 2 * qy) };
-                        let (lpx, lpy) = if vertical { (lqx - 1, lqy) } else { (lqx, lqy - 1) };
+                        let (lqx, lqy) = if comp == 0 {
+                            (qx, qy)
+                        } else {
+                            (2 * qx, 2 * qy)
+                        };
+                        let (lpx, lpy) = if vertical {
+                            (lqx - 1, lqy)
+                        } else {
+                            (lqx, lqy - 1)
+                        };
                         let bs = boundary_strength(pic, lpx, lpy, lqx, lqy);
                         // qPp, qPq.
                         let pa = (lpy / 16) * w + lpx / 16;
                         let qa = (lqy / 16) * w + lqx / 16;
                         let qz = |a: usize| -> i32 {
                             let q = dbf_qp(&pic.mbs[a]);
-                            if comp == 0 { q } else { chroma_qp(q, slice.chroma_qp_offset) }
+                            match comp {
+                                0 => q,
+                                1 => chroma_qp(q, slice.chroma_qp_offset),
+                                _ => chroma_qp(q, slice.chroma_qp_offset2),
+                            }
                         };
                         let qpav = (qz(pa) + qz(qa) + 1) >> 1;
-                        let index_a = usize::try_from((qpav + slice.offset_a).clamp(0, 51)).expect("index");
-                        let index_b = usize::try_from((qpav + slice.offset_b).clamp(0, 51)).expect("index");
+                        let index_a =
+                            usize::try_from((qpav + slice.offset_a).clamp(0, 51)).expect("index");
+                        let index_b =
+                            usize::try_from((qpav + slice.offset_b).clamp(0, 51)).expect("index");
                         let alpha = i32::from(ALPHA[index_a]);
                         let beta = i32::from(BETA[index_b]);
                         let tc0 = if (1..=3).contains(&bs) {
@@ -1761,7 +1919,11 @@ fn deblock_picture(pic: &PicDesc, input: &Planes) -> Planes {
                                 // A chroma line reads no further than q1; a
                                 // position past the picture is never read.
                                 let (pw, ph) = (s.w / 2, s.h / 2);
-                                if x < pw && y < ph { s.at(comp, x, y) } else { 0 }
+                                if x < pw && y < ph {
+                                    s.at(comp, x, y)
+                                } else {
+                                    0
+                                }
                             };
                         }
                         let out = filter_line(line, bs, comp != 0, alpha, beta, tc0);
@@ -1804,7 +1966,13 @@ fn dbf_params(pic: &PicDesc, addr: usize) -> DbfParams {
     for e in 0..4usize {
         for k in 0..4usize {
             if mx > 0 || e > 0 {
-                let v = boundary_strength(pic, x0 + 4 * e - 1 + usize::from(e == 0) * 0, y0 + 4 * k, x0 + 4 * e, y0 + 4 * k);
+                let v = boundary_strength(
+                    pic,
+                    x0 + 4 * e - 1 + usize::from(e == 0) * 0,
+                    y0 + 4 * k,
+                    x0 + 4 * e,
+                    y0 + 4 * k,
+                );
                 bs |= u128::from(v) << (3 * (4 * e + k));
             }
             if my > 0 || e > 0 {
@@ -1815,6 +1983,7 @@ fn dbf_params(pic: &PicDesc, addr: usize) -> DbfParams {
     }
     let q = |a: usize| dbf_qp(&pic.mbs[a]);
     let off = slice.chroma_qp_offset;
+    let off2 = slice.chroma_qp_offset2;
     let left = if mx > 0 { addr - 1 } else { addr };
     let top = if my > 0 { addr - w } else { addr };
     DbfParams {
@@ -1829,9 +1998,9 @@ fn dbf_params(pic: &PicDesc, addr: usize) -> DbfParams {
             chroma_qp(q(addr), off),
             chroma_qp(q(left), off),
             chroma_qp(q(top), off),
-            chroma_qp(q(addr), off),
-            chroma_qp(q(left), off),
-            chroma_qp(q(top), off),
+            chroma_qp(q(addr), off2),
+            chroma_qp(q(left), off2),
+            chroma_qp(q(top), off2),
         ],
         off_a: slice.offset_a,
         off_b: slice.offset_b,
@@ -1844,7 +2013,8 @@ fn pack_slot(pl: &Planes, mx: usize, my: usize) -> [u32; 96] {
     for y in 0..16 {
         for w in 0..4 {
             slot[4 * y + w] = (0..4).fold(0u32, |a, i| {
-                a | (u32::try_from(pl.at(0, mx * 16 + 4 * w + i, my * 16 + y)).expect("byte") << (8 * i))
+                a | (u32::try_from(pl.at(0, mx * 16 + 4 * w + i, my * 16 + y)).expect("byte")
+                    << (8 * i))
             });
         }
     }
@@ -1852,7 +2022,8 @@ fn pack_slot(pl: &Planes, mx: usize, my: usize) -> [u32; 96] {
         for y in 0..8 {
             for w in 0..2 {
                 slot[64 + 16 * (comp - 1) + 2 * y + w] = (0..4).fold(0u32, |a, i| {
-                    a | (u32::try_from(pl.at(comp, mx * 8 + 4 * w + i, my * 8 + y)).expect("byte") << (8 * i))
+                    a | (u32::try_from(pl.at(comp, mx * 8 + 4 * w + i, my * 8 + y)).expect("byte")
+                        << (8 * i))
                 });
             }
         }
@@ -1875,7 +2046,11 @@ impl RecordSink {
     fn new(w: usize, h: usize) -> RecordSink {
         RecordSink {
             pl: Planes::new(w, h),
-            seen: vec![vec![false; w * h * 256], vec![false; w * h * 64], vec![false; w * h * 64]],
+            seen: vec![
+                vec![false; w * h * 256],
+                vec![false; w * h * 64],
+                vec![false; w * h * 64],
+            ],
             header: None,
             words_left: 0,
             word_at: 0,
@@ -1905,7 +2080,10 @@ impl RecordSink {
                     let v = i32::try_from((p >> (8 * i)) & 0xFF).expect("byte");
                     let pw = if plane == 0 { self.pl.w } else { self.pl.w / 2 };
                     let idx = y * pw + xx;
-                    assert!(!self.seen[plane][idx], "plane {plane} ({xx}, {y}) sent twice");
+                    assert!(
+                        !self.seen[plane][idx],
+                        "plane {plane} ({xx}, {y}) sent twice"
+                    );
                     self.seen[plane][idx] = true;
                     self.pl.put(plane, xx, y, v);
                 }
@@ -1972,8 +2150,8 @@ fn deblock_filters_pictures_as_8_7_says() {
             ("op_room", 1),
         ],
         &[
-            "busy", "done", "cur_ra", "cur_we", "cur_wa", "cur_wd", "left_ra", "left_we", "left_wa",
-            "left_wd", "op_valid", "op_data",
+            "busy", "done", "cur_ra", "cur_we", "cur_wa", "cur_wd", "left_ra", "left_we",
+            "left_wa", "left_wd", "op_valid", "op_data",
         ],
     );
     let mut rng = Rng(0xDEB1_0003);
@@ -2015,7 +2193,15 @@ fn deblock_filters_pictures_as_8_7_says() {
         let before = construct(&pic, &residuals);
         let want = deblock_picture(&pic, &before);
         let changed = (0..3)
-            .map(|c| before.plane(c).0.iter().zip(want.plane(c).0.iter()).filter(|(a, b)| a != b).count())
+            .map(|c| {
+                before
+                    .plane(c)
+                    .0
+                    .iter()
+                    .zip(want.plane(c).0.iter())
+                    .filter(|(a, b)| a != b)
+                    .count()
+            })
             .sum::<usize>();
         println!("round {round}: {changed} samples changed by the filter");
         let mut slots = [[0u32; 96]; 4];
@@ -2033,12 +2219,22 @@ fn deblock_filters_pictures_as_8_7_says() {
             b.set("filt_left", u64::from(prm.filt_left));
             b.set("filt_top", u64::from(prm.filt_top));
             b.set("filt_inner", u64::from(prm.filt_inner));
-            b.set("bs", u64::try_from(prm.bs & u128::from(u64::MAX)).expect("low"));
+            b.set(
+                "bs",
+                u64::try_from(prm.bs & u128::from(u64::MAX)).expect("low"),
+            );
             // `set` takes 64 bits; the top 32 of `bs` go through a wider Logic.
             let bs_net = top_net(&b.sim, "bs");
             b.sim.set(bs_net, logic_u128(96, prm.bs));
             for (k, name) in [
-                "qp_y", "qp_y_left", "qp_y_top", "qp_cb", "qp_cb_left", "qp_cb_top", "qp_cr", "qp_cr_left",
+                "qp_y",
+                "qp_y_left",
+                "qp_y_top",
+                "qp_cb",
+                "qp_cb_left",
+                "qp_cb_top",
+                "qp_cr",
+                "qp_cr_left",
                 "qp_cr_top",
             ]
             .iter()
@@ -2078,7 +2274,10 @@ fn deblock_filters_pictures_as_8_7_says() {
                 if finished {
                     break;
                 }
-                assert!(b.cycles - start < 20_000, "h264_deblock stalled at macroblock {addr}");
+                assert!(
+                    b.cycles - start < 20_000,
+                    "h264_deblock stalled at macroblock {addr}"
+                );
             }
             worst = worst.max(b.cycles - start);
         }
@@ -2091,4 +2290,444 @@ fn deblock_filters_pictures_as_8_7_says() {
         );
     }
     println!("h264_deblock: at most {worst} cycles a macroblock, with back-pressure");
+}
+
+// ---------------------------------------------------------------------------
+// The whole package: tokens in, SDRAM out
+// ---------------------------------------------------------------------------
+
+/// A token: `{tag, data}`.
+fn tok(tag: u32, data: u32) -> u32 {
+    (tag << 24) | (data & 0xFF_FFFF)
+}
+
+/// A signed value in `bits` bits of a token field.
+fn field(v: i32, bits: u32) -> u32 {
+    u32::try_from(i64::from(v).rem_euclid(1 << bits)).expect("fits")
+}
+
+/// The scan index of a raster position (the inverse of Table 8-13).
+fn scan_of(raster: usize) -> u32 {
+    u32::try_from(
+        ZIGZAG4
+            .iter()
+            .position(|&p| p == raster)
+            .expect("a position"),
+    )
+    .expect("small")
+}
+
+/// The token stream of `docs/h264-decoder.md` §1 for one picture, as
+/// `h264_parse` and `h264_mvpred` would send it.
+fn picture_tokens(pic: &PicDesc, rng: &mut Rng) -> Vec<u32> {
+    let mut t = Vec::new();
+    for (si, slice) in pic.slices.iter().enumerate() {
+        let end = pic.slices.get(si + 1).map_or(pic.mbs.len(), |s| s.first_mb);
+        if slice.first_mb == 0 {
+            t.push(tok(
+                0x01,
+                (u32::try_from(pic.w).expect("small") << 12) | u32::try_from(pic.h).expect("small"),
+            ));
+        }
+        t.push(tok(0x02, u32::from(slice.constrained_intra) << 15));
+        t.push(tok(0x06, u32::try_from(slice.first_mb).expect("small")));
+        t.push(tok(0x05, 0));
+        t.push(tok(
+            0x03,
+            (field(26, 8) << 16)
+                | (field(slice.chroma_qp_offset, 8) << 8)
+                | field(slice.chroma_qp_offset2, 8),
+        ));
+        t.push(tok(
+            0x04,
+            (slice.disable_deblocking << 22)
+                | (field(slice.offset_a, 8) << 8)
+                | field(slice.offset_b, 8),
+        ));
+        for addr in slice.first_mb..end {
+            let mb = &pic.mbs[addr];
+            let (mx, my) = (addr % pic.w, addr / pic.w);
+            t.push(tok(
+                0x10,
+                (u32::try_from(mx).expect("small") << 12) | u32::try_from(my).expect("small"),
+            ));
+            let any_level = mb.levels.coded.iter().any(|&c| c);
+            let code = match mb.kind {
+                K_I4 => 0,
+                K_I16 => 1,
+                K_PCM => 2,
+                _ if any_level => 4,
+                _ => 9,
+            };
+            t.push(tok(0x11, (code << 19) | (mb.i16_mode << 13)));
+            if mb.kind == K_I4 {
+                for (b, &m) in mb.i4_modes.iter().enumerate() {
+                    t.push(tok(0x13, (u32::try_from(b).expect("small") << 4) | m));
+                }
+            }
+            if mb.kind == K_INTER {
+                for (b, &(x, y, r)) in mb.mv.iter().enumerate() {
+                    let b = u32::try_from(b).expect("small");
+                    t.push(tok(0x16, (b << 20) | (r << 14) | field(x, 14)));
+                    t.push(tok(0x16, (b << 20) | (1 << 19) | (r << 14) | field(y, 14)));
+                }
+            }
+            t.push(tok(0x19, mb.c_mode << 6));
+            t.push(tok(0x12, field(mb.qp, 8)));
+            if mb.kind == K_PCM {
+                let mut samples = Vec::new();
+                for y in 0..16 {
+                    for x in 0..16 {
+                        samples.push(mb.levels.blocks[blk_at(x / 4, y / 4)][4 * (y % 4) + x % 4]);
+                    }
+                }
+                for c in 0..2 {
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            samples.push(
+                                mb.levels.blocks[16 + 4 * c + 2 * (y / 4) + x / 4]
+                                    [4 * (y % 4) + x % 4],
+                            );
+                        }
+                    }
+                }
+                for s3 in samples.chunks(3) {
+                    let v = |i: usize| u32::try_from(s3[i]).expect("a sample");
+                    t.push(tok(0x30, v(0) | (v(1) << 8) | (v(2) << 16)));
+                }
+            } else if code != 9 {
+                // Parse order: luma DC, luma blocks, Cb DC, Cr DC, Cb AC, Cr AC.
+                let mut order: Vec<(usize, u32, u32)> = Vec::new(); // (block, category, index)
+                if mb.kind == K_I16 {
+                    order.push((24, 0, 0));
+                }
+                for b in 0..16 {
+                    order.push((
+                        b,
+                        if mb.kind == K_I16 { 1 } else { 2 },
+                        u32::try_from(b).expect("small"),
+                    ));
+                }
+                order.push((25, 3, 0));
+                order.push((26, 4, 0));
+                for k in 0..4 {
+                    order.push((16 + k, 5, u32::try_from(k).expect("small")));
+                }
+                for k in 0..4 {
+                    order.push((20 + k, 6, u32::try_from(k).expect("small")));
+                }
+                for (b, cat, idx) in order {
+                    let levels = &mb.levels.blocks[b];
+                    // A block the syntax parses but that has no levels gets
+                    // its COEF_BLK with TotalCoeff 0 now and then.
+                    if !mb.levels.coded[b] && !(b == 24 || rng.below(4) == 0) {
+                        continue;
+                    }
+                    let mut coefs: Vec<(u32, i64)> = Vec::new();
+                    for (p, &v) in levels.iter().enumerate() {
+                        if v != 0 {
+                            let pos = if b == 25 || b == 26 {
+                                u32::try_from(p).expect("small")
+                            } else {
+                                scan_of(p)
+                            };
+                            coefs.push((pos, v));
+                        }
+                    }
+                    coefs.sort_by(|a, c| c.0.cmp(&a.0));
+                    t.push(tok(
+                        0x20,
+                        (cat << 20) | (idx << 16) | u32::try_from(coefs.len()).expect("small"),
+                    ));
+                    for (pos, v) in coefs {
+                        t.push(tok(
+                            0x21,
+                            (pos << 18) | field(i32::try_from(v).expect("16 bits"), 16),
+                        ));
+                    }
+                }
+            }
+            t.push(tok(0x3F, 0));
+        }
+        t.push(tok(0x40, 0));
+    }
+    t.push(tok(0x41, 0));
+    t
+}
+
+/// `h264_frame_addr`'s layout, read back.
+fn frame_word(frame: u32, plane: usize, x: usize, y: usize) -> u32 {
+    let x = u32::try_from(x).expect("small");
+    let y = u32::try_from(y).expect("small");
+    let off = if plane == 0 {
+        ((y >> 5) << 15) | ((x >> 5) << 9) | ((y & 31) << 4) | ((x & 31) >> 1)
+    } else {
+        (1 << 20)
+            | (u32::from(plane == 2) << 19)
+            | ((y >> 5) << 14)
+            | ((x >> 5) << 9)
+            | ((y & 31) << 4)
+            | ((x & 31) >> 1)
+    };
+    ((frame & 7) << 21) | off
+}
+
+/// Draws a picture with real coefficient levels and the residuals they
+/// make, the model's whole decode of it.
+///
+/// `smooth` draws small levels, high QPs and gently sloping inter
+/// predictions, which is what real pictures look like to the deblocking
+/// filter: on noise its thresholds reject almost every line, and a test
+/// on noise checks the filter's "no" and little else.
+fn draw_coded_picture(
+    rng: &mut Rng,
+    w: usize,
+    h: usize,
+    slices: usize,
+    intra_only: bool,
+    smooth: bool,
+) -> (PicDesc, Planes) {
+    let mut pic = draw_picture(rng, w, h, slices, intra_only);
+    if smooth {
+        for mb in pic.mbs.iter_mut() {
+            mb.qp = rng.range(22, 51);
+            if mb.kind == K_INTER {
+                let base = rng.range(40, 200);
+                let (sx, sy) = (rng.range(-2, 2), rng.range(-2, 2));
+                for (i, v) in mb.pred.iter_mut().enumerate() {
+                    let (x, y) = if i < 256 {
+                        (
+                            i32::try_from(i % 16).expect("small"),
+                            i32::try_from(i / 16).expect("small"),
+                        )
+                    } else {
+                        (
+                            i32::try_from((i - 256) % 8).expect("small"),
+                            i32::try_from(((i - 256) % 64) / 8).expect("small"),
+                        )
+                    };
+                    *v = u8::try_from(clip1(base + sx * x + sy * y + rng.range(-1, 1)))
+                        .expect("byte");
+                }
+            }
+        }
+    }
+    let mut residuals = Vec::new();
+    for addr in 0..pic.mbs.len() {
+        let slice = pic.slice_of(addr).clone();
+        let mb = &mut pic.mbs[addr];
+        let qpc = [
+            chroma_qp(mb.qp, slice.chroma_qp_offset),
+            chroma_qp(mb.qp, slice.chroma_qp_offset2),
+        ];
+        // A third of inter macroblocks are skipped.
+        mb.levels = if mb.kind == K_INTER && rng.below(3) == 0 {
+            Levels::zero()
+        } else {
+            draw_levels_upto(rng, mb.kind, mb.qp, qpc, if smooth { 2 } else { 60 })
+        };
+        if mb.kind == K_PCM {
+            mb.levels.coded = [false; 27];
+        }
+        residuals.push(mb_residuals(&mb.levels, mb.kind, mb.qp, qpc));
+    }
+    let before = construct(&pic, &residuals);
+    let after = deblock_picture(&pic, &before);
+    (pic, after)
+}
+
+/// The SDRAM end of the port: commands and beats into a word map, with
+/// the port's rules checked as they arrive.
+struct Sdram {
+    words: std::collections::HashMap<u32, u16>,
+    burst: Option<(u32, u32, u32)>, // (address, length, beats so far)
+    bursts: u64,
+}
+
+/// `h264_recon` end to end: pictures in tokens, out of the SDRAM port.
+///
+/// Pictures of several sizes, in one to three slices, with every
+/// macroblock kind (P_Skip, coded inter, Intra_4x4, Intra_16x16, I_PCM),
+/// real coefficient levels drawn inside the bitstream's constraints,
+/// motion vectors and references that exercise every bS, both chroma QP
+/// offsets, every disable_deblocking_filter_idc and both FilterOffsets,
+/// with the SDRAM port and the prediction stream both stalling at
+/// random. The model decodes the same pictures with the functions the
+/// stage tests use; the HDL's are read back out of the SDRAM model.
+///
+/// Would catch: anything any stage gets wrong that reaches a sample,
+/// the stages falling out of step (a descriptor read for the wrong
+/// macroblock, a slot reused too early), the token fields read from the
+/// wrong bits, the boundary strengths derived wrongly, and bursts that
+/// cross an SDRAM row. Would not catch a misreading of the
+/// Recommendation that the model shares — that is what the model
+/// agent's dumps and ffmpeg's pictures are for.
+#[test]
+fn recon_decodes_pictures_through_the_sdram_port() {
+    let design = design("h264_recon");
+    let mut b = Bench::new(
+        &design,
+        &[
+            ("tok_valid", 1),
+            ("tok", 32),
+            ("pred_valid", 1),
+            ("pred_data", 32),
+            ("frame_idx", 4),
+            ("cmd_ready", 1),
+            ("wr_ready", 1),
+            ("rd_valid", 1),
+            ("rd_data", 16),
+            ("rd_last", 1),
+        ],
+        &[
+            "tok_ready",
+            "pred_ready",
+            "pic_done",
+            "cmd_valid",
+            "cmd_we",
+            "cmd_addr",
+            "cmd_len",
+            "wr_valid",
+            "wr_data",
+            "wr_be",
+        ],
+    );
+    let mut rng = Rng(0x0E2E_0004);
+    // (width, height, slices, intra only, smooth)
+    let shapes = [
+        (3, 2, 1, true, false),
+        (4, 3, 2, false, false),
+        (2, 2, 3, false, true),
+        (5, 2, 1, false, true),
+        (4, 4, 2, true, true),
+        (6, 3, 3, false, true),
+        (1, 3, 1, false, true),
+        (5, 4, 2, false, true),
+    ];
+    let mut pictures = Vec::new();
+    let mut tokens: Vec<u32> = Vec::new();
+    let mut preds: Vec<u32> = Vec::new();
+    let mut mbs = 0usize;
+    for &(w, h, s, intra, smooth) in &shapes {
+        let (pic, want) = draw_coded_picture(&mut rng, w, h, s, intra, smooth);
+        tokens.extend(picture_tokens(&pic, &mut rng));
+        for mb in &pic.mbs {
+            if mb.kind == K_INTER {
+                preds.extend(pred_words(mb));
+            }
+        }
+        mbs += pic.mbs.len();
+        pictures.push((pic, want));
+    }
+    let mut sdram = Sdram {
+        words: std::collections::HashMap::new(),
+        burst: None,
+        bursts: 0,
+    };
+    let (mut ti, mut pi, mut done) = (0usize, 0usize, 0usize);
+    let start = b.cycles;
+    // The frame each picture goes to: picture k to frame k + 1.
+    let mut frame_of_next = 1u64;
+    while done < pictures.len() {
+        let tv = ti < tokens.len() && rng.below(8) != 0;
+        b.set("tok_valid", u64::from(tv));
+        b.set("tok", u64::from(tokens.get(ti).copied().unwrap_or(0)));
+        b.set("frame_idx", frame_of_next);
+        let pv = pi < preds.len() && rng.below(6) != 0;
+        b.set("pred_valid", u64::from(pv));
+        b.set("pred_data", u64::from(preds.get(pi).copied().unwrap_or(0)));
+        let cmd_ready = rng.below(3) != 0;
+        let wr_ready = rng.below(4) != 0;
+        b.set("cmd_ready", u64::from(cmd_ready));
+        b.set("wr_ready", u64::from(wr_ready));
+        let tok_taken = tv && b.get("tok_ready") == 1;
+        let pred_taken = pv && b.get("pred_ready") == 1;
+        if b.get("cmd_valid") == 1 && cmd_ready {
+            assert!(sdram.burst.is_none(), "a command inside a burst");
+            assert_eq!(b.get("cmd_we"), 1, "a read command");
+            let a = u32::try_from(b.get("cmd_addr")).expect("24 bits");
+            let len = u32::try_from(b.get("cmd_len")).expect("small");
+            assert!(
+                (a % 512) + len < 512,
+                "a burst at {a:#x} of {} words crosses an SDRAM row",
+                len + 1
+            );
+            sdram.burst = Some((a, len, 0));
+            sdram.bursts += 1;
+        }
+        if b.get("wr_valid") == 1 && wr_ready {
+            let (a, len, k) = sdram.burst.expect("a beat outside a burst");
+            assert_eq!(b.get("wr_be"), 3, "a partial write");
+            sdram
+                .words
+                .insert(a + k, u16::try_from(b.get("wr_data")).expect("16 bits"));
+            sdram.burst = if k == len {
+                None
+            } else {
+                Some((a, len, k + 1))
+            };
+        }
+        let pic_done = b.get("pic_done") == 1;
+        b.cycle();
+        if tok_taken {
+            // The frame index is sampled with SLICE_FIRST 0: move it on
+            // once the next picture's has gone.
+            if tokens[ti] == tok(0x06, 0) {
+                frame_of_next += 1;
+            }
+            ti += 1;
+        }
+        if pred_taken {
+            pi += 1;
+        }
+        if pic_done {
+            done += 1;
+        }
+        assert!(
+            b.cycles - start < 40_000 * u64::try_from(mbs).expect("small"),
+            "stalled: {ti} of {} tokens, {pi} of {} prediction words, {done} pictures",
+            tokens.len(),
+            preds.len()
+        );
+    }
+    let spent = b.cycles - start;
+    assert_eq!(ti, tokens.len(), "tokens left over");
+    assert_eq!(pi, preds.len(), "prediction words left over");
+    for (k, (pic, want)) in pictures.iter().enumerate() {
+        let frame = u32::try_from(k + 1).expect("small");
+        let mut got = Planes::new(pic.w, pic.h);
+        for c in 0..3 {
+            let (pw, ph) = if c == 0 {
+                (got.w, got.h)
+            } else {
+                (got.w / 2, got.h / 2)
+            };
+            for y in 0..ph {
+                for x in 0..pw {
+                    let wd = sdram.words.get(&frame_word(frame, c, x, y)).copied();
+                    let wd = wd.unwrap_or_else(|| {
+                        panic!("picture {k}: plane {c} ({x}, {y}) never written")
+                    });
+                    got.put(
+                        c,
+                        x,
+                        y,
+                        i32::from(if x % 2 == 0 { wd & 0xFF } else { wd >> 8 }),
+                    );
+                }
+            }
+        }
+        assert!(
+            got == *want,
+            "picture {k} ({}x{}): differs: {}",
+            pic.w,
+            pic.h,
+            first_difference(&got, want)
+        );
+    }
+    println!(
+        "h264_recon: {mbs} macroblocks in {spent} cycles ({} a macroblock, with every port stalling), {} bursts",
+        spent / u64::try_from(mbs).expect("some"),
+        sdram.bursts
+    );
 }

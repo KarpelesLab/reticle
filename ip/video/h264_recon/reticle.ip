@@ -4,7 +4,7 @@ version 0.1.0
 license MIT
 description "H.264 reconstruction: dequantisation, inverse transforms, intra prediction and deblocking"
 
-top h264_dbf_filter
+top h264_recon
 target xc7
 
 source rtl/h264_dbf_tables.v
@@ -13,3 +13,7 @@ source rtl/h264_itrans4.v
 source rtl/h264_residual.v
 source rtl/h264_intra.v
 source rtl/h264_deblock.v
+source rtl/h264_tokin.v
+source rtl/h264_frame_addr.v
+source rtl/h264_frame_wr.v
+source rtl/h264_recon.v
