@@ -1,0 +1,97 @@
+# sdram_burst: a burst SDRAM controller for the Winbond W9825G6KH-6
+# (32 MB, x16, four banks) and its peers, with several client ports,
+# bank-level parallelism and a calibrated read capture. `sdram_burst`
+# is the controller and is portable; `sdram_phy_xc7` is its 7-series
+# I/O (ODDR, IDELAYE2, IDDR, IDELAYCTRL) and `sdram_burst_xc7` the two
+# together; `frame_addr` maps a pixel of a tiled frame to the word that
+# holds it. README.md has the port, the frame layout and what was
+# checked.
+#
+# The timings are stated as the datasheet states them: nanoseconds next
+# to the clock in MHz, or cycles where §9.5 gives cycles (T_WR, T_RRD,
+# T_MRD). TRCD to TINIT are derived from them; never override those.
+name sdram_burst
+version 1.0.0
+license MIT
+description "Burst SDRAM controller: full-page bursts of 1 to 16 words, a row open per bank with ACTIVE and PRECHARGE overlapped with transfers, several arbitrated client ports, calibrated read capture, and the tiled frame layout"
+
+top sdram_burst
+target xc7
+
+source rtl/sdram_burst.v
+source rtl/frame_addr.v
+source rtl/sdram_phy_xc7.v
+source rtl/sdram_burst_xc7.v
+
+param NPORTS int 4 1..8
+param PRIO int 8 0..255
+param BATCH int 8 1..15
+param CLK_MHZ int 166 1..200
+param CLK_PS int 6024 5000..1000000
+param CAS_LATENCY int 3 2..3
+param T_INIT_US int 200 1..1000
+param INIT_REFRESHES int 8 1..15
+param T_RCD_NS int 15 1..1000
+param T_RP_NS int 15 1..1000
+param T_RAS_NS int 42 1..1000
+param T_RC_NS int 60 1..1000
+param T_RFC_NS int 60 1..1000
+param T_REFI_NS int 7812 1000..100000
+param T_WR int 2 1..15
+param T_RRD int 2 1..15
+param T_MRD int 2 1..15
+param RD2WR_GAP int 3 1..8
+param PHY_RD_LAT int 4 1..12
+param CAL_EN int 1 0..1
+param CAL_BANK int 3 0..3
+param CAL_ROW int 8191 0..8191
+param DEF_TAP int 0 0..31
+param DEF_EDGE int 0 0..1
+param DEF_LAT int 1 0..3
+param TRCD int 3 1..200
+param TRP int 3 1..200
+param TRAS int 7 1..200
+param TRC int 10 1..200
+param TRFC int 10 1..200
+param TREFI int 1296 1..20000
+param TINIT int 33201 1..200000
+param ADDR_BITS int 96 24..192
+param LEN_BITS int 16 4..32
+param DATA_BITS int 64 16..128
+param BE_BITS int 8 2..16
+
+port clk in
+port rst_n in
+port cmd_valid in NPORTS
+port cmd_ready out NPORTS
+port cmd_we in NPORTS
+port cmd_addr in ADDR_BITS
+port cmd_len in LEN_BITS
+port wr_valid in NPORTS
+port wr_ready out NPORTS
+port wr_data in DATA_BITS
+port wr_be in BE_BITS
+port rd_valid out NPORTS
+port rd_data out DATA_BITS
+port rd_last out NPORTS
+port init_done out
+port cal_req in
+port cal_busy out
+port cal_ok out
+port cal_tap out 5
+port cal_edge out
+port cal_lat out 2
+port sdram_cke out
+port sdram_cs_n out
+port sdram_ras_n out
+port sdram_cas_n out
+port sdram_we_n out
+port sdram_ba out 2
+port sdram_a out 13
+port sdram_dqm out 2
+port sdram_dq_o out 16
+port sdram_dq_oe out
+port dq_rise in 16
+port dq_fall in 16
+port dly_tap out 5
+port dly_ld out

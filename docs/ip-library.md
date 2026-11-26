@@ -41,6 +41,8 @@ ip/
     fifo_sync/      reticle.ip  rtl/fifo_sync.v
     hyperram_ctrl/  reticle.ip  rtl/hyperram_ctrl.v
     ram_wrapper/    reticle.ip  rtl/ram_sp.v  rtl/ram_sdp.v
+    sdram_burst/    reticle.ip  README.md  rtl/sdram_burst.v  rtl/frame_addr.v
+                    rtl/sdram_phy_xc7.v  rtl/sdram_burst_xc7.v
     sdram_ctrl/     reticle.ip  rtl/sdram_ctrl.v
     spiflash_xip/   reticle.ip  rtl/spiflash_xip.v
   net/
@@ -124,6 +126,7 @@ It is distributed as part of the repository instead.
 | `eth_mac_rmii` | `eth_mac_rmii`, `eth_mac_tx`, `eth_mac_rx` | Ethernet MAC over RMII: preamble, frame check sequence, inter-frame gap | — |
 | `spiflash_xip` | `spiflash_xip` | execute-in-place SPI flash reader, read only and cache-less | — |
 | `sdram_ctrl` | `sdram_ctrl` | SDR SDRAM controller for x16 parts: power-up sequence, refresh, open rows per bank, datasheet timings in nanoseconds | — |
+| `sdram_burst` | `sdram_burst`, `sdram_burst_xc7`, `sdram_phy_xc7`, `frame_addr` | burst SDR SDRAM controller for the W9825G6KH: full-page bursts of 1 to 16 words, rows prepared during transfers, arbitrated client ports, calibrated read capture on 7-series pins, and the decoder's tiled frame layout; `ip/memory/sdram_burst/README.md` | — |
 | `hyperram_ctrl` | `hyperram_ctrl` | HyperBus controller: command-address, fixed or variable latency, DDR data and RWDS, register access | — |
 | `dvi_tx` | `dvi_tx`, `tmds_encoder`, `video_timing` | DVI output: 640x480, 800x600 and 1280x720 timings, TMDS 8b/10b with DC balance, 10:1 serialisation through DDR outputs | — |
 | `dvi_tx_pll` | `dvi_tx_pll` | `dvi_tx` with its five-times clock from the device's PLL | `dvi_tx` |
