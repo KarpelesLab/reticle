@@ -72,7 +72,13 @@ if [ "$quick" = "quick" ]; then
 fi
 
 step "Publishable crate"
-cargo package
+# In a target directory of its own: `cargo package` verifies by building the
+# packaged copy, with the default features, into the target directory it is
+# given, and that build replaced `target/debug/reticle` with its own binary,
+# which stayed there until the next cargo command touched it. Measured
+# 2026-11-27: the binary's hash changed under `cargo package` and not under
+# `cargo package --target-dir target/package-verify`.
+cargo package --target-dir target/package-verify
 
 step "MSRV"
 if rustup toolchain list | grep -q '^1\.89'; then
