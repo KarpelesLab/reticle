@@ -1088,7 +1088,8 @@ fn real_param(
 /// `CLKOUTn_DIVIDE`. Each takes the primitive's default when the cell does
 /// not set it (UG472: a multiplier of 5, dividers of 1). The inverted
 /// outputs (`CLKOUTnB`) have their output's period; the feedback output a
-/// divider of one. `None` for a role that is no clock output, or a
+/// divider of one. A PLL's `CLKOUT0` is the role `out`, which until
+/// 2026-11-27 was read as no output, leaving its logic untimed. `None` for a role that is no clock output, or a
 /// parameter that is no number.
 ///
 /// What it says is the period the parameters give. NewAE's software
@@ -1132,10 +1133,18 @@ fn derived_period(
     let divide = if role == "fbout" || role == "fboutb" {
         1.0
     } else {
+        // A PLL's `CLKOUT0` is the role `out` (`xc7.dev`), every family's
+        // name for a generated clock, where an MMCM's is `out0`.
         let n = role
             .strip_prefix("out")
             .map(|r| r.trim_end_matches('b'))
-            .and_then(|r| r.parse::<u32>().ok())?;
+            .and_then(|r| {
+                if r.is_empty() {
+                    Some(0)
+                } else {
+                    r.parse::<u32>().ok()
+                }
+            })?;
         let name = if mmcm && n == 0 {
             "CLKOUT0_DIVIDE_F".to_owned()
         } else {
@@ -4595,6 +4604,38 @@ mod tests {
         close(period_of(rcf, 3), "m.out0", 10.0 * 5.0 / 6.0);
         close(period_of(rcf, 4), "m.out1", 10.0 * 12.0 / 6.0);
         close(period_of("", 3), "m.out0", 5.0 * 5.0 / 6.0);
+
+        // A PLL, as `xc7.dev` declares one: its `CLKOUT0` is the role `out`,
+        // the name every family's generated clock has, and not `out0`. That
+        // role read as no output at all, so logic on a `PLLE2`'s `CLKOUT0`
+        // was in no domain (found on the SDRAM controller, which moved to
+        // `CLKOUT1` to be timed). Would catch `out` going unread again.
+        let mut netlist = netlist;
+        netlist.instances[1].kind = "pll".to_owned();
+        netlist.pins[2].role = "out".to_owned();
+        let pll = design.modules[top].cells.get_mut(cells[1]).unwrap();
+        pll.kind = CellKind::Blackbox(Name::new("PLLE2_ADV"));
+        pll.params = Attrs::new();
+        pll.params.set("CLKFBOUT_MULT", 20i64);
+        pll.params.set("CLKOUT0_DIVIDE", 6i64);
+        pll.params.set("CLKOUT1_DIVIDE", 5i64);
+        let mut diags = crate::diag::Diagnostics::new();
+        let constraints =
+            Constraints::parse("create_clock -name ref -period 20 ref\n", file, &mut diags);
+        let (timing, names) = place_timing(
+            &design,
+            top,
+            &netlist,
+            &constraints,
+            DelayModel::Legacy,
+            SpeedGrade::Three,
+        );
+        for (instance, want_name, want) in [(3, "m.out", 20.0 * 6.0 / 20.0), (4, "m.out1", 5.0)] {
+            let PathDomain::Clock(d) = timing.domain[instance] else {
+                panic!("{instance} is untimed: {:?}", timing.domain[instance]);
+            };
+            close((names[d].clone(), timing.periods[d]), want_name, want);
+        }
     }
 
     /// **An input delay's arc is Vivado's timer's**, within 1.5 ps, on every

@@ -379,7 +379,9 @@ so that it can be fixed rather than rediscovered:
 4. **Logic clocked from a PLLE2's CLKOUT0 is in no domain of the timing
    estimate**: the controller on CLKOUT0 was reported as "clk_in 0.00 ns
    of 20 ns", and moved to CLKOUT1 it is timed. The design uses CLKOUT1
-   and CLKOUT2.
+   and CLKOUT2. *Fixed in the flow since (2026-11-27): a PLL's `CLKOUT0`
+   was a role the timing read as no output (`docs/fpga-xray.md`, "Clocks
+   the managers make").*
 
 ## What is checked and what is only quoted
 

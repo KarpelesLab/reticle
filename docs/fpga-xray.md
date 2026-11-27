@@ -4193,6 +4193,15 @@ timed on its `PSCLK`. On the part, with these, the analyser captured at
 384 MHz where it had left its FIFO empty (NewAE's `scope.LA` with an
 oversampling factor of 4 on `clk_usb`, a manual trigger).
 NewAE's glitch tests still find its FIFO empty in their own settings.
+*"Each is now one" was true of an MMCM's outputs and of a PLL's but its
+first* (found 2026-11-27, by the SDRAM controller, which moved off it to be
+timed): `xc7.dev` gives a `PLLE2_ADV`'s `CLKOUT0` the role `out`, every
+family's name for a generated clock, where an MMCM's is `out0`, and the
+derivation read the output's number after `out`, found none and gave no
+period. Logic on a PLL's `CLKOUT0` was in no domain, reported as nothing
+more than its reference's "0.00 ns of 20 ns". The role `out` is output 0
+now; `a_clock_managers_outputs_are_clocks_of_their_own` holds a PLL's
+`CLKOUT0` to `20 × 6 ÷ 20` ns.
 
 **A subtraction on the chain: proved, simulated, and wrong on the part.**
 Only adders went onto `CARRY4`, so the analyser's `capture_count ==
