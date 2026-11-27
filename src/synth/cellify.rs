@@ -47,6 +47,15 @@
 //! expansion would have produced, only after structural hashing has shared
 //! what it can.
 //!
+//! *That last holds only where the amount is the index itself, or the index
+//! above constant zero bits.* Where the place is arithmetic on indices — a
+//! stride that is not a power of two, a sum such as `128 * r + 32 * w` — the
+//! shifter serves every amount up to the base's width, and the mapper cannot
+//! see that the sum reaches only a few of them: 1,440 lookup tables where a
+//! multiplexer of the element width is 128. Those places are enumerated
+//! instead, when they read few bits (`Cellifier::select_by_stride`,
+//! `Cellifier::select_by_value`).
+//!
 //! The one semantic difference: the IR reads an out-of-range select as
 //! `x`, a shifter reads it as `0`. Synthesis treats `x` as a don't-care
 //! (see the module docs of [`crate::synth`]), so resolving it to `0` is a
@@ -159,6 +168,66 @@ fn strided_index(m: &Module, offset: ExprId) -> Option<(ExprId, u64, u32)> {
         return None;
     }
     Some((narrow, stride, bits))
+}
+
+/// The most bits of index [`Cellifier::select_by_value`] enumerates.
+pub(crate) const VALUE_INDEX_BITS: u32 = 8;
+
+/// True when the values of `bits` index bits name `places` places, at least
+/// half as many as there are values: then a choice per value is the decoder
+/// the place needs. Where many values name one place, `x[a + b]`, the sum the
+/// shifter is given is the smaller decoder: a one-bit write at `a + b` with
+/// two four-bit indices is 49 lookup tables as two shifts and was 199 a value
+/// at a time.
+pub(crate) fn names_distinct_places(places: usize, bits: u32) -> bool {
+    places.saturating_mul(2) >= 1usize << bits
+}
+
+/// True when a variable select at `offset` is left to the shifter: a net, a
+/// net with constant bits below it, or a product the stride path decides
+/// about. A shifter by those is the multiplexer tree already, once the mapper
+/// has seen the amount's constant bits.
+pub(crate) fn shifter_offset(m: &Module, offset: ExprId) -> bool {
+    let mut e = offset;
+    if let ExprKind::Resize {
+        expr,
+        signed: false,
+        ..
+    } = m.expr(e).kind
+    {
+        e = expr;
+    }
+    match &m.expr(e).kind {
+        ExprKind::Net(_) => true,
+        ExprKind::Concat(parts) => parts
+            .iter()
+            .all(|p| matches!(m.expr(*p).kind, ExprKind::Net(_) | ExprKind::Const(_))),
+        _ => strided_index(m, offset).is_some(),
+    }
+}
+
+/// `width` bits of `base` (`reach` wide) from bit `lo`, zeros past its end.
+fn window(
+    m: &mut Module,
+    base: ExprId,
+    lo: u64,
+    width: u32,
+    reach: u32,
+    span: Span,
+) -> Option<ExprId> {
+    let reach = u64::from(reach);
+    if lo >= reach {
+        return Some(mk_const(m, Const::zero(width), span));
+    }
+    let lo32 = u32::try_from(lo).ok()?;
+    if lo + u64::from(width) <= reach {
+        return Some(mk_slice(m, base, lo32 + width - 1, lo32, span));
+    }
+    let have = u32::try_from(reach - lo).ok()?;
+    let top = u32::try_from(reach).ok()? - 1;
+    let part = mk_slice(m, base, top, lo32, span);
+    let pad = mk_const(m, Const::zero(width - have), span);
+    Some(mk(m, ExprKind::Concat(vec![pad, part]), span))
 }
 
 /// The state of one module's rewrite.
@@ -655,6 +724,11 @@ impl<'a> Cellifier<'a> {
             let ty = self.module.expr(id).ty.clone();
             return self.rebuild(id, ExprKind::Index { base: b, index }, &ty, span);
         }
+        if !shifter_offset(self.module, index)
+            && let Some(selected) = self.select_by_value(base, index, 1, true, ctx, span)
+        {
+            return selected;
+        }
         let shifted = self.shift_down(base, index, ctx, span);
         mk_slice(self.module, shifted, 0, 0, span)
     }
@@ -692,6 +766,11 @@ impl<'a> Cellifier<'a> {
             );
         }
         if up && let Some(selected) = self.select_by_stride(base, offset, width, ctx, span) {
+            return selected;
+        }
+        if !shifter_offset(self.module, offset)
+            && let Some(selected) = self.select_by_value(base, offset, width, up, ctx, span)
+        {
             return selected;
         }
         let amount = if up || width <= 1 {
@@ -782,6 +861,99 @@ impl<'a> Cellifier<'a> {
         let i = self.lower(index, ctx);
         for bit in 0..bits {
             let s = mk_slice(self.module, i, bit, bit, span);
+            level = level
+                .chunks(2)
+                .map(|pair| {
+                    self.emit_cell(
+                        Sink::Fresh,
+                        ctx,
+                        CellKind::Mux,
+                        vec![("a", pair[0]), ("b", pair[1]), ("s", s)],
+                        "y",
+                        ty.clone(),
+                        span,
+                    )
+                })
+                .collect();
+        }
+        level.first().copied()
+    }
+
+    /// `base[offset +: width]` (or `-:`) as a tree of multiplexers on the
+    /// bits of the nets `offset` reads, when there are few of them: one leaf
+    /// per value they can take, `offset` worked out for each by
+    /// [`crate::synth::eval`] and the leaf the constant slice it starts.
+    ///
+    /// For an offset that is arithmetic on narrow indices, `128 * r + 32 * w`
+    /// or `8 * i + 8`, a shifter by its value is the wrong structure: the
+    /// amount is a sum the mapper cannot see through, so the shifter serves
+    /// every amount up to the base's width, where the select only ever
+    /// reaches as many places as the indices have values. `h264_deblock` as
+    /// first written picked a line out of a 512-bit register that way and
+    /// was 205,796 lookup tables (`docs/fpga-xray.md`, "A place computed from
+    /// several indices"). A bit or a window
+    /// past either end reads zeros, as the shifter's do and as
+    /// [`crate::synth::aig`] reads the select.
+    #[allow(clippy::too_many_arguments)]
+    fn select_by_value(
+        &mut self,
+        base: ExprId,
+        offset: ExprId,
+        width: u32,
+        up: bool,
+        ctx: &str,
+        span: Span,
+    ) -> Option<ExprId> {
+        let reach = self.module.expr(base).ty.width()?;
+        let leaves = crate::synth::eval::leaves_of(self.module, &[offset])?;
+        let bits = u32::try_from(leaves.len()).ok()?;
+        if bits == 0 || bits > VALUE_INDEX_BITS {
+            return None;
+        }
+        // Only where it is smaller than the shifter: a leaf a value, against a
+        // stage of the base's width per bit of the amount.
+        let stages = u64::from(32 - reach.leading_zeros());
+        let tree = ((1u64 << bits) - 1) * u64::from(width);
+        if tree >= u64::from(reach) * stages {
+            return None;
+        }
+        let mut starts: Vec<Option<u64>> = Vec::with_capacity(1 << bits);
+        for v in 0..1u64 << bits {
+            let mut env = crate::synth::eval::LeafValues::new(self.module, &leaves, v);
+            let off = crate::synth::eval::eval(self.module, offset, &mut env)?.to_u64()?;
+            let start = if up {
+                Some(off)
+            } else {
+                off.checked_sub(u64::from(width - 1))
+            };
+            starts.push(start);
+        }
+        let distinct: HashSet<Option<u64>> = starts.iter().copied().collect();
+        if !names_distinct_places(distinct.len(), bits) {
+            return None;
+        }
+        let b = self.lower(base, ctx);
+        let ty = Type::bits(width);
+        let mut level: Vec<ExprId> = Vec::with_capacity(starts.len());
+        for start in starts {
+            let leaf = match start {
+                Some(lo) => window(self.module, b, lo, width, reach, span)?,
+                None => mk_const(self.module, Const::zero(width), span),
+            };
+            level.push(leaf);
+        }
+        // The select's bits: the first leaf's lowest bit first.
+        let parts: Vec<ExprId> = leaves
+            .iter()
+            .rev()
+            .map(|(net, bit)| {
+                let whole = mk_net(self.module, *net, span);
+                mk_slice(self.module, whole, *bit, *bit, span)
+            })
+            .collect();
+        let select = mk_concat(self.module, parts, span);
+        for bit in 0..bits {
+            let s = mk_slice(self.module, select, bit, bit, span);
             level = level
                 .chunks(2)
                 .map(|pair| {

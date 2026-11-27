@@ -3275,6 +3275,57 @@ lookup tables to 8; inside the Husky's `case` of registers it was 35
 *more*, and in the IP library a dozen fewer on one block and two more on
 another. Not kept.
 
+**A place computed from several indices** (2026-11-27, from the H.264
+decoder's work). `select_by_stride` takes one index times one stride; a
+power-of-two stride it leaves to the shifter, whose amount then has
+constant low bits the mapper sees through. Neither covers a sum:
+`x[128 * r + 32 * w +: 32]` of a 512-bit register was 1,440 lookup
+tables, `x[8 * i + 8 +: 8]` 263, and a *write* at such a place was far
+worse, since the frontend hands `n[o +: P] = d` over as `P` one-bit
+writes, each lowered as two shifts the width of `n`:
+`n[128 * r + 32 * w +: 32] = d` into 512 bits was **49,713**. That is
+what `h264_deblock` was made of when it was first written, at 205,796
+lookup tables, and its author rewrote it to turn its registers under the
+edges instead (6,432). The comment in the commit that did it, "the flow
+builds part-selects at computed offsets as shifters across the whole
+vector", was right.
+
+Now a select (`cellify::select_by_value`) or a run of one-bit writes
+(`proc::exec::assign_bits_by_value`) at a place that reads eight bits of
+nets or fewer enumerates them: the place is worked out with
+`synth::eval` for each value they can take, and a read is a multiplexer
+tree of constant slices, a write a choice per bit of what it held and
+what lands on it. A bit of a net read through a slice counts alone, so
+`s[3:0]` is four bits however wide `s` is. It is taken only where the
+values name at least half as many distinct places as there are values:
+`n[a + b] = d` with two four-bit indices names 31 places with 256 values,
+and two shifts are 49 lookup tables where a choice per value was 199.
+Measured on `xc7a100t-ftg256`, before and after:
+
+| design | before | after |
+|---|---|---|
+| `x[8 * i + 8 +: 8]`, 128 bits | 263 | 32 |
+| `x[8 * i + 7 -: 8]`, 128 bits | 255 | 32 |
+| `x[128 * r + 32 * w +: 32]`, 512 bits | 1,440 | 128 |
+| `n[8 * i + 8 +: 8] = d`, 136 bits | 3,349 | 128 |
+| `n[128 * r + 32 * w +: 32] = d`, 512 bits | 49,713 | 512 |
+| `v[8 * i + 8 +: 8] <= d`, a register | 3,349 | 16 |
+| `h264_deblock` as first written (`9c6ee118`) | 205,796 (its author's figure) | 9,419 |
+
+For a read, the shapes before are left as they were: a plain index, a
+power-of-two stride, a non-power-of-two one, and a sum whose values repeat
+places build exactly what they did. For a write only the aligned one
+(`assign_aligned_part`, `r[x * 8 +: 8]`) is; any other run of one-bit
+writes at places that read eight bits or fewer, `r[i +: 4]` with a plain
+`i` among them, is now enumerated. `tests/fpga_computed_selects.rs` maps each
+row above but the last and simulates the netlist against the source, the
+source through the simulator's own reading of the select. The last row is
+not a test: the deblocker's old source is in the history, not the tree.
+An array element `a[i]` at a computed index is not part of this; a
+register array that is not a memory reached the mapper as a multiplexer
+already (`a[i + 1]` and `a[2 * i + 3]` of sixteen bytes, 217 lookup
+tables with the writes and a reset).
+
 Before the odd stride, with the pairing, 28,523 functions took 22,447
 sites, from 30,855: 69 per cent of the die, from 95. Placement took
 239 s, from 361. With it, 27,158 functions take 21,217 sites.

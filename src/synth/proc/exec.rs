@@ -535,6 +535,11 @@ impl<'a> Exec<'a> {
                     };
                     return self.assign(&lv, value, kind, span);
                 }
+                if !crate::synth::cellify::shifter_offset(self.m, index)
+                    && self.assign_bits_by_value(*net, &[(index, value)], kind, span)?
+                {
+                    return Ok(());
+                }
                 let cur = self.current(*net, kind, span);
                 let one = mk_const(self.m, Const::from_u64(1, width), span);
                 let mask = mk_binary(self.m, BinaryOp::Shl, one, index, span);
@@ -555,6 +560,9 @@ impl<'a> Exec<'a> {
             }
             Lvalue::Concat(parts) => {
                 if self.assign_aligned_part(parts, value, kind, span)? {
+                    return Ok(());
+                }
+                if self.assign_part_by_value(parts, value, kind, span)? {
                     return Ok(());
                 }
                 let total = self.lvalue_width(target, span)?;
@@ -818,6 +826,132 @@ impl<'a> Exec<'a> {
         }
         bits.reverse();
         let new = mk_concat(self.m, bits, span);
+        self.set(net, kind, new, span);
+        Ok(true)
+    }
+
+    /// `r[o +: P] = v` at an offset `assign_aligned_part` does not take, which
+    /// the Verilog frontend hands over as `P` one-bit writes: each bit through
+    /// [`Self::assign_bits_by_value`]. Returns false, having done nothing,
+    /// when the parts are not all one-bit writes of one net at a computed
+    /// place, or the places read too many bits.
+    fn assign_part_by_value(
+        &mut self,
+        parts: &[Lvalue],
+        value: ExprId,
+        kind: AssignKind,
+        span: Span,
+    ) -> Result<bool, Failed> {
+        let mut target = None;
+        let mut writes = Vec::with_capacity(parts.len());
+        let count = u32::try_from(parts.len()).unwrap_or(u32::MAX);
+        for (i, part) in parts.iter().enumerate() {
+            let Lvalue::Index { net, index } = part else {
+                return Ok(false);
+            };
+            if *target.get_or_insert(*net) != *net {
+                return Ok(false);
+            }
+            // The first part takes the value's top bit.
+            let v = count - 1 - u32::try_from(i).unwrap_or(0);
+            let bit = mk_slice(self.m, value, v, v, span);
+            writes.push((*index, bit));
+        }
+        let Some(net) = target else {
+            return Ok(false);
+        };
+        for write in &mut writes {
+            write.0 = self.subst(write.0);
+            if self.m.expr(write.0).as_const().is_some() {
+                return Ok(false);
+            }
+        }
+        self.assign_bits_by_value(net, &writes, kind, span)
+    }
+
+    /// One-bit writes `net[index] = bit`, in order, at places computed from
+    /// a few bits of other nets: every value those bits can take is worked
+    /// out with [`eval`], and each bit of `net` becomes a choice between what
+    /// it held and the bit written to it under the values that name it,
+    /// which a flip-flop's enable or a few lookup tables hold.
+    ///
+    /// Each write lowered alone is two shifts the width of `net`, which the
+    /// mapper cannot shrink when the place is a sum: `n[128 * r + 32 * w +:
+    /// 32] = d` into 512 bits was 49,713 lookup tables, and is 512 this way.
+    /// A place past the end writes nothing, as the shifts do. Returns false,
+    /// having done nothing, when the places read more than
+    /// [`crate::synth::cellify::VALUE_INDEX_BITS`] bits or something
+    /// [`eval`] cannot be given.
+    fn assign_bits_by_value(
+        &mut self,
+        net: NetId,
+        writes: &[(ExprId, ExprId)],
+        kind: AssignKind,
+        span: Span,
+    ) -> Result<bool, Failed> {
+        use crate::synth::cellify::names_distinct_places;
+        use crate::synth::eval::{LeafValues, leaves_of};
+        let Some(width) = self.m.nets[net].ty.width() else {
+            return Ok(false);
+        };
+        let places: Vec<ExprId> = writes.iter().map(|w| w.0).collect();
+        let Some(leaves) = leaves_of(self.m, &places) else {
+            return Ok(false);
+        };
+        let Ok(bits) = u32::try_from(leaves.len()) else {
+            return Ok(false);
+        };
+        if bits == 0 || bits > crate::synth::cellify::VALUE_INDEX_BITS {
+            return Ok(false);
+        }
+        // Per bit of `net`, the values naming it and the write that lands
+        // there last.
+        let mut lands: Vec<BTreeMap<u64, usize>> = vec![BTreeMap::new(); width as usize];
+        let mut firsts = BTreeSet::new();
+        for v in 0..1u64 << bits {
+            for (w, (place, _)) in writes.iter().enumerate() {
+                let mut env = LeafValues::new(self.m, &leaves, v);
+                let Some(at) = eval(self.m, *place, &mut env).and_then(|c| c.to_u64()) else {
+                    return Ok(false);
+                };
+                if w == 0 {
+                    firsts.insert(at);
+                }
+                if at < u64::from(width) {
+                    lands[usize::try_from(at).unwrap_or(usize::MAX)].insert(v, w);
+                }
+            }
+        }
+        if !names_distinct_places(firsts.len(), bits) {
+            return Ok(false);
+        }
+        let parts: Vec<ExprId> = leaves
+            .iter()
+            .rev()
+            .map(|(net, bit)| {
+                let whole = mk_net(self.m, *net, span);
+                mk_slice(self.m, whole, *bit, *bit, span)
+            })
+            .collect();
+        let select = mk_concat(self.m, parts, span);
+        let mut named: HashMap<u64, ExprId> = HashMap::new();
+        let cur = self.current(net, kind, span);
+        let mut out = Vec::with_capacity(width as usize);
+        for (t, land) in lands.iter().enumerate() {
+            let t = u32::try_from(t).unwrap_or(u32::MAX);
+            let mut bit = mk_slice(self.m, cur, t, t, span);
+            for (v, w) in land {
+                let eq = *named.entry(*v).or_insert_with(|| {
+                    let k = mk_const(self.m, Const::from_u64(*v, bits), span);
+                    mk_binary(self.m, BinaryOp::Eq, select, k, span)
+                });
+                bit = mk_mux(self.m, eq, writes[*w].1, bit, span);
+            }
+            out.push(bit);
+        }
+        out.reverse();
+        let new = mk_concat(self.m, out, span);
+        let new = simplify(self.m, new);
         self.set(net, kind, new, span);
         Ok(true)
     }

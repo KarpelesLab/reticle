@@ -201,6 +201,130 @@ pub fn eval_closed(module: &Module, id: ExprId) -> Option<Const> {
     eval(module, id, &mut NoEnv)
 }
 
+/// The bits of nets the expressions `roots` read, each once, in the order
+/// first met: a slice or a constant index of a net reads only its bits, so
+/// `x[8 * s[3:0] +: 8]` reads four bits of `s` however wide `s` is. `None`
+/// when one reads anything [`eval`] cannot be given a value for through
+/// [`LeafValues`] (a memory, a call, a string, a net that is not a bit
+/// vector). What a select at a computed place enumerates.
+pub(crate) fn leaves_of(m: &Module, roots: &[ExprId]) -> Option<Vec<(NetId, u32)>> {
+    fn add(out: &mut Vec<(NetId, u32)>, net: NetId, bits: std::ops::RangeInclusive<u32>) {
+        for bit in bits {
+            if !out.contains(&(net, bit)) {
+                out.push((net, bit));
+            }
+        }
+    }
+    fn walk(
+        m: &Module,
+        e: ExprId,
+        out: &mut Vec<(NetId, u32)>,
+        seen: &mut std::collections::HashSet<ExprId>,
+    ) -> bool {
+        if !seen.insert(e) {
+            return true;
+        }
+        let net_of = |b: ExprId| match m.expr(b).kind {
+            ExprKind::Net(net) if m.nets[net].ty.is_bits() => Some(net),
+            _ => None,
+        };
+        match &m.expr(e).kind {
+            ExprKind::Const(_) => true,
+            ExprKind::Net(net) => match m.nets[*net].ty.width() {
+                Some(w) if m.nets[*net].ty.is_bits() && w > 0 => {
+                    add(out, *net, 0..=w - 1);
+                    true
+                }
+                _ => false,
+            },
+            ExprKind::Slice { base, hi, lo } if net_of(*base).is_some() => {
+                if let Some(net) = net_of(*base) {
+                    add(out, net, *lo..=*hi);
+                }
+                true
+            }
+            ExprKind::Index { base, index }
+                if net_of(*base).is_some() && m.expr(*index).as_const().is_some() =>
+            {
+                let at = m
+                    .expr(*index)
+                    .as_const()
+                    .and_then(Const::to_u64)
+                    .and_then(|i| u32::try_from(i).ok());
+                match (net_of(*base), at) {
+                    (Some(net), Some(i)) => {
+                        add(out, net, i..=i);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            ExprKind::Slice { base, .. }
+            | ExprKind::Replicate { expr: base, .. }
+            | ExprKind::Resize { expr: base, .. }
+            | ExprKind::Unary { expr: base, .. } => walk(m, *base, out, seen),
+            ExprKind::Index { base, index } => {
+                walk(m, *base, out, seen) && walk(m, *index, out, seen)
+            }
+            ExprKind::IndexedSlice { base, offset, .. } => {
+                walk(m, *base, out, seen) && walk(m, *offset, out, seen)
+            }
+            ExprKind::Concat(parts) => parts.iter().all(|p| walk(m, *p, out, seen)),
+            ExprKind::Binary { lhs, rhs, .. } => {
+                walk(m, *lhs, out, seen) && walk(m, *rhs, out, seen)
+            }
+            ExprKind::Ternary { cond, then_, else_ } => {
+                walk(m, *cond, out, seen)
+                    && walk(m, *then_, out, seen)
+                    && walk(m, *else_, out, seen)
+            }
+            ExprKind::String(_) | ExprKind::MemRead { .. } | ExprKind::Call { .. } => false,
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    roots
+        .iter()
+        .all(|root| walk(m, *root, &mut out, &mut seen))
+        .then_some(out)
+}
+
+/// An [`Env`] giving each of `leaves` a value from one bit of a number, the
+/// first leaf its lowest bit; every other bit of a net is `x`.
+pub(crate) struct LeafValues<'a> {
+    module: &'a Module,
+    leaves: &'a [(NetId, u32)],
+    value: u64,
+}
+
+impl<'a> LeafValues<'a> {
+    /// The leaves' values for the number `value`.
+    pub(crate) fn new(module: &'a Module, leaves: &'a [(NetId, u32)], value: u64) -> Self {
+        LeafValues {
+            module,
+            leaves,
+            value,
+        }
+    }
+}
+
+impl Env for LeafValues<'_> {
+    fn net(&mut self, net: NetId) -> Option<Const> {
+        let ty = &self.module.nets.get(net)?.ty;
+        let width = ty.width()?;
+        let mut bits = vec![Bit::X; width as usize];
+        let mut known = false;
+        for (k, (leaf, bit)) in self.leaves.iter().enumerate() {
+            if *leaf == net && *bit < width {
+                let one = self.value.checked_shr(u32::try_from(k).ok()?).unwrap_or(0) & 1 == 1;
+                bits[*bit as usize] = if one { Bit::One } else { Bit::Zero };
+                known = true;
+            }
+        }
+        known.then(|| Const::from_bits(&bits).with_signed(ty.is_signed()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
