@@ -43,8 +43,8 @@
 // Exp-Golomb
 //   ue(v) is decoded in one phase when its code fits the window, which is
 //   every code of 31 bits or fewer: values up to 65534. A longer code
-//   (32..63 bits, values to 2^32 - 2) takes two more states through
-//   `S_LONG1`/`S_LONG2` and returns to the state that asked, which then
+//   (32..63 bits, values to 2^32 - 2) takes three more states through
+//   `S_LONG1` to `S_LONG3` and returns to the state that asked, which then
 //   finds the value in `long_val_q`. No syntax element this parser keeps
 //   is that large in a stream it accepts; the path exists so that the
 //   ones it skips (offset_for_ref_frame, idr_pic_id) are skipped
@@ -104,7 +104,7 @@ module h264_parse #(
     // ======================================================================
     localparam [7:0]
         S_NAL       = 8'd0,   S_DROP      = 8'd1,   S_ERR       = 8'd2,
-        S_LONG1     = 8'd3,   S_LONG2     = 8'd4,
+        S_LONG1     = 8'd3,   S_LONG2     = 8'd4,   S_LONG3     = 8'd5,
         // sequence parameter set
         S_SPS_PROF  = 8'd10,  S_SPS_ID    = 8'd11,  S_SPS_CF    = 8'd12,
         S_SPS_SEP   = 8'd13,  S_SPS_BDY   = 8'd14,  S_SPS_BDC   = 8'd15,
@@ -215,37 +215,14 @@ module h264_parse #(
     reg [31:0] long_sev_q;
     // codeNum + 1 of a long code: the bit before the lz bits S_LONG2 reads.
     wire [31:0] long_p1;
+    reg  [31:0] long_p1_q;
     reg [4:0]  long_n_q;
+    reg [5:0]  long_n1_q;
 
     // The one-cycle ue(v): the lz + 1 bits from the first 1, minus one.
     // The lz + 1 bits from the first 1 are codeNum + 1: one of sixteen
-    // fixed fields of the window, chosen by lz, rather than a shift by an
-    // amount computed from it.
-    function [16:0] ue_field;
-        input [31:0] w;
-        input [3:0]  n;
-        begin
-            case (n)
-            4'd0:  ue_field = {16'd0, w[31]};
-            4'd1:  ue_field = {15'd0, w[30:29]};
-            4'd2:  ue_field = {14'd0, w[29:27]};
-            4'd3:  ue_field = {13'd0, w[28:25]};
-            4'd4:  ue_field = {12'd0, w[27:23]};
-            4'd5:  ue_field = {11'd0, w[26:21]};
-            4'd6:  ue_field = {10'd0, w[25:19]};
-            4'd7:  ue_field = {9'd0,  w[24:17]};
-            4'd8:  ue_field = {8'd0,  w[23:15]};
-            4'd9:  ue_field = {7'd0,  w[22:13]};
-            4'd10: ue_field = {6'd0,  w[21:11]};
-            4'd11: ue_field = {5'd0,  w[20:9]};
-            4'd12: ue_field = {4'd0,  w[19:7]};
-            4'd13: ue_field = {3'd0,  w[18:5]};
-            4'd14: ue_field = {2'd0,  w[17:3]};
-            default: ue_field = {1'b0, w[16:1]};
-            endcase
-        end
-    endfunction
-    wire [16:0] ue_p1   = ue_field(win, lz_c[3:0]);
+    // fixed fields of the window, `ufK` for lz = K, chosen by lz rather
+    // than shifted by an amount computed from it.
     wire        ue_long_c = !long_ok_q && (lz_c > 6'd15);
     // se(v), Table 9-3: codeNum k is (-1)^(k+1) Ceil(k / 2). With p = k + 1
     // that is p / 2 for an even p and -(p / 2) for an odd one, so the value
@@ -253,11 +230,83 @@ module h264_parse #(
     // subtraction of the one before them. The one-cycle code is at most 17
     // bits, so its arithmetic is 17 bits wide; the long path works out both
     // values in S_LONG2, off this path.
-    wire [16:0] p1_half = {1'b0, ue_p1[16:1]};
-    wire [16:0] se_fast = ue_p1[0] ? (17'd0 - p1_half) : p1_half;
-    wire [31:0] uev_c   = long_ok_q ? long_val_q : {15'd0, ue_p1 - 17'd1};
+    // Both values for each of the sixteen code lengths, from the window's
+    // bits directly, in parallel with the leading-zero count; the count
+    // then only selects. A subtraction or a negation after the selection
+    // was the longest path.
+    wire [16:0] uf0 = {16'd0, win[31:31]};
+    wire [16:0] uk0 = uf0 - 17'd1;
+    wire [16:0] sk0 = uf0[0] ? (17'd0 - {1'b0, uf0[16:1]}) : {1'b0, uf0[16:1]};
+    wire [16:0] uf1 = {15'd0, win[30:29]};
+    wire [16:0] uk1 = uf1 - 17'd1;
+    wire [16:0] sk1 = uf1[0] ? (17'd0 - {1'b0, uf1[16:1]}) : {1'b0, uf1[16:1]};
+    wire [16:0] uf2 = {14'd0, win[29:27]};
+    wire [16:0] uk2 = uf2 - 17'd1;
+    wire [16:0] sk2 = uf2[0] ? (17'd0 - {1'b0, uf2[16:1]}) : {1'b0, uf2[16:1]};
+    wire [16:0] uf3 = {13'd0, win[28:25]};
+    wire [16:0] uk3 = uf3 - 17'd1;
+    wire [16:0] sk3 = uf3[0] ? (17'd0 - {1'b0, uf3[16:1]}) : {1'b0, uf3[16:1]};
+    wire [16:0] uf4 = {12'd0, win[27:23]};
+    wire [16:0] uk4 = uf4 - 17'd1;
+    wire [16:0] sk4 = uf4[0] ? (17'd0 - {1'b0, uf4[16:1]}) : {1'b0, uf4[16:1]};
+    wire [16:0] uf5 = {11'd0, win[26:21]};
+    wire [16:0] uk5 = uf5 - 17'd1;
+    wire [16:0] sk5 = uf5[0] ? (17'd0 - {1'b0, uf5[16:1]}) : {1'b0, uf5[16:1]};
+    wire [16:0] uf6 = {10'd0, win[25:19]};
+    wire [16:0] uk6 = uf6 - 17'd1;
+    wire [16:0] sk6 = uf6[0] ? (17'd0 - {1'b0, uf6[16:1]}) : {1'b0, uf6[16:1]};
+    wire [16:0] uf7 = {9'd0, win[24:17]};
+    wire [16:0] uk7 = uf7 - 17'd1;
+    wire [16:0] sk7 = uf7[0] ? (17'd0 - {1'b0, uf7[16:1]}) : {1'b0, uf7[16:1]};
+    wire [16:0] uf8 = {8'd0, win[23:15]};
+    wire [16:0] uk8 = uf8 - 17'd1;
+    wire [16:0] sk8 = uf8[0] ? (17'd0 - {1'b0, uf8[16:1]}) : {1'b0, uf8[16:1]};
+    wire [16:0] uf9 = {7'd0, win[22:13]};
+    wire [16:0] uk9 = uf9 - 17'd1;
+    wire [16:0] sk9 = uf9[0] ? (17'd0 - {1'b0, uf9[16:1]}) : {1'b0, uf9[16:1]};
+    wire [16:0] uf10 = {6'd0, win[21:11]};
+    wire [16:0] uk10 = uf10 - 17'd1;
+    wire [16:0] sk10 = uf10[0] ? (17'd0 - {1'b0, uf10[16:1]}) : {1'b0, uf10[16:1]};
+    wire [16:0] uf11 = {5'd0, win[20:9]};
+    wire [16:0] uk11 = uf11 - 17'd1;
+    wire [16:0] sk11 = uf11[0] ? (17'd0 - {1'b0, uf11[16:1]}) : {1'b0, uf11[16:1]};
+    wire [16:0] uf12 = {4'd0, win[19:7]};
+    wire [16:0] uk12 = uf12 - 17'd1;
+    wire [16:0] sk12 = uf12[0] ? (17'd0 - {1'b0, uf12[16:1]}) : {1'b0, uf12[16:1]};
+    wire [16:0] uf13 = {3'd0, win[18:5]};
+    wire [16:0] uk13 = uf13 - 17'd1;
+    wire [16:0] sk13 = uf13[0] ? (17'd0 - {1'b0, uf13[16:1]}) : {1'b0, uf13[16:1]};
+    wire [16:0] uf14 = {2'd0, win[17:3]};
+    wire [16:0] uk14 = uf14 - 17'd1;
+    wire [16:0] sk14 = uf14[0] ? (17'd0 - {1'b0, uf14[16:1]}) : {1'b0, uf14[16:1]};
+    wire [16:0] uf15 = {1'd0, win[16:1]};
+    wire [16:0] uk15 = uf15 - 17'd1;
+    wire [16:0] sk15 = uf15[0] ? (17'd0 - {1'b0, uf15[16:1]}) : {1'b0, uf15[16:1]};
+    reg  [16:0] ue_sel, se_sel;
+    always @* begin
+        case (lz_c[3:0])
+        4'd0: begin ue_sel = uk0; se_sel = sk0; end
+        4'd1: begin ue_sel = uk1; se_sel = sk1; end
+        4'd2: begin ue_sel = uk2; se_sel = sk2; end
+        4'd3: begin ue_sel = uk3; se_sel = sk3; end
+        4'd4: begin ue_sel = uk4; se_sel = sk4; end
+        4'd5: begin ue_sel = uk5; se_sel = sk5; end
+        4'd6: begin ue_sel = uk6; se_sel = sk6; end
+        4'd7: begin ue_sel = uk7; se_sel = sk7; end
+        4'd8: begin ue_sel = uk8; se_sel = sk8; end
+        4'd9: begin ue_sel = uk9; se_sel = sk9; end
+        4'd10: begin ue_sel = uk10; se_sel = sk10; end
+        4'd11: begin ue_sel = uk11; se_sel = sk11; end
+        4'd12: begin ue_sel = uk12; se_sel = sk12; end
+        4'd13: begin ue_sel = uk13; se_sel = sk13; end
+        4'd14: begin ue_sel = uk14; se_sel = sk14; end
+        4'd15: begin ue_sel = uk15; se_sel = sk15; end
+        default: begin ue_sel = uk0; se_sel = sk0; end
+        endcase
+    end
+    wire [31:0] uev_c   = long_ok_q ? long_val_q : {15'd0, ue_sel};
     wire [5:0]  uelen_c = long_ok_q ? 6'd0 : {lz_c[4:0], 1'b1};
-    wire [31:0] sev_c   = long_ok_q ? long_sev_q : {{15{se_fast[16]}}, se_fast};
+    wire [31:0] sev_c   = long_ok_q ? long_sev_q : {{15{se_sel[16]}}, se_sel};
 
     // The latched decode.
     reg [5:0]  lz;
@@ -265,7 +314,8 @@ module h264_parse #(
     reg [31:0] uev;
     reg [31:0] sev;
     reg [31:0] uval;
-    assign long_p1 = (32'd1 << long_n_q) + uval;
+    // S_LONG2 reads the 1 and the lz bits after it: codeNum + 1 as it stands.
+    assign long_p1 = uval;
     reg        w31_q;
     reg [2:0]  wrem_q;
     reg        ph_q;
@@ -657,15 +707,21 @@ module h264_parse #(
     // The luma block the residual walk or the intra walk is on.
     wire [3:0] rblk   = res_q[3:0] - 4'd1;           // res_q 1..16
     wire [3:0] iblk   = t8_q ? {ip_q[1:0], 2'b00} : ip_q[3:0];
-    wire [3:0] lblk   = (st_q == S_IPRED) ? iblk : ((res_q == 5'd0) ? 4'd0 : rblk);
+    // The intra walk and the residual walk each have their own block, so
+    // that neither neighbour lookup waits on a decode of the state.
+    wire [3:0] lblk   = iblk;
     wire [1:0] lx     = {lblk[2], lblk[0]};
     wire [1:0] ly     = {lblk[3], lblk[1]};
     wire [3:0] lr     = {ly, lx};
+    wire [3:0] rbk    = (res_q == 5'd0) ? 4'd0 : rblk;
+    wire [1:0] rx     = {rbk[2], rbk[0]};
+    wire [1:0] ry     = {rbk[3], rbk[1]};
+    wire [3:0] rr     = {ry, rx};
 
-    wire       na_ok  = (lx != 2'd0) || avail_a;
-    wire       nb_ok  = (ly != 2'd0) || avail_b;
-    wire [4:0] na     = (lx != 2'd0) ? pick5x16(tcy_v, lr - 4'd1) : pick5x4(ltcy_v, ly);
-    wire [4:0] nbv    = (ly != 2'd0) ? pick5x16(tcy_v, lr - 4'd4) : ttcy(lx);
+    wire       na_ok  = (rx != 2'd0) || avail_a;
+    wire       nb_ok  = (ry != 2'd0) || avail_b;
+    wire [4:0] na     = (rx != 2'd0) ? pick5x16(tcy_v, rr - 4'd1) : pick5x4(ltcy_v, ry);
+    wire [4:0] nbv    = (ry != 2'd0) ? pick5x16(tcy_v, rr - 4'd4) : ttcy(rx);
     wire [5:0] nsum   = {1'b0, na} + {1'b0, nbv} + 6'd1;
     wire [4:0] nc_l   = (na_ok && nb_ok) ? nsum[5:1] : na_ok ? na : nb_ok ? nbv : 5'd0;
 
@@ -694,7 +750,8 @@ module h264_parse #(
     wire [3:0] mb     = (ly != 2'd0) ? pick4x16(md_v, lr - 4'd4) : tmd(lx);
     wire [3:0] mpred  = dc_pred ? 4'd2 : ((ma < mb) ? ma : mb);
     wire [2:0] mrem   = wrem_q;
-    wire [3:0] mfinal = w31_q ? mpred : (({1'b0, mrem} < mpred) ? {1'b0, mrem} : {1'b0, mrem} + 4'd1);
+    reg  [3:0] mpred_q;
+    wire [3:0] mfinal = w31_q ? mpred_q : (({1'b0, mrem} < mpred_q) ? {1'b0, mrem} : {1'b0, mrem} + 4'd1);
 
     // ======================================================================
     // Residual walk: which block res_q names, and whether it is coded
@@ -704,7 +761,11 @@ module h264_parse #(
     //   17, 18  chroma DC Cb, Cr
     //   19..26  chroma AC Cb 0..3, Cr 0..3
     reg        r_coded;
-    reg  [2:0] rq_cls;
+    reg  [4:0] rq_nc;
+    reg        rq_dc;
+    wire [2:0] rq_cls = rq_dc ? 3'd4 :
+                        (rq_nc < 5'd2) ? 3'd0 : (rq_nc < 5'd4) ? 3'd1 : (rq_nc < 5'd8) ? 3'd2 : 3'd3;
+    reg  [4:0] r_nc;
     reg  [1:0] rq_kind;
     reg  [3:0] rq_cat;
     reg  [3:0] rq_blk;
@@ -714,7 +775,8 @@ module h264_parse #(
     reg [3:0]  r_blk;
     always @* begin
         r_coded = 1'b0;
-        r_cls   = nc_l_cls;
+        r_cls   = 3'd0;
+        r_nc    = nc_l;
         r_kind  = 2'd0;
         r_cat   = 4'd2;
         r_blk   = rblk;
@@ -734,7 +796,7 @@ module h264_parse #(
             r_blk   = 4'd0;
         end else begin
             r_coded = (cbp_q[5:4] == 2'd2);
-            r_cls   = nc_c_cls;
+            r_nc    = nc_c;
             r_kind  = 2'd1;
             r_cat   = ccr ? 4'd6 : 4'd5;
             r_blk   = {2'd0, cidx};
@@ -840,15 +902,15 @@ module h264_parse #(
         need_win  = 1'b1;
         need_more = 1'b0;
         case (st_q)
-        S_DROP, S_ERR, S_SH_ACT1, S_SH_ACT2, S_SH_ACT3, S_SH_ACT4,
+        S_DROP, S_ERR, S_LONG3, S_SH_ACT1, S_SH_ACT2, S_SH_ACT3, S_SH_ACT4,
         S_SPS_STORE, S_PPS_STORE, S_SD_DIV, S_RES, S_RES2:
             need_win = 1'b0;
         S_PPS_MORE, S_AFTER: begin
             need_win  = 1'b0;
             need_more = 1'b1;
         end
-        S_LONG1:     begin rt = RT_SPEC; rn = lz + 6'd1; end
-        S_LONG2:     begin rt = RT_U; rn = {1'b0, long_n_q}; end
+        S_LONG1:     begin rt = RT_SPEC; rn = lz; end
+        S_LONG2:     begin rt = RT_U; rn = long_n1_q; end
         S_NAL:       begin rt = RT_U; rn = 6'd8; end
         S_SPS_PROF:  begin rt = RT_U; rn = 6'd24; end
         S_SPS_SEP, S_SPS_QPP, S_SPS_SCF, S_SPS_DPOAZ, S_SPS_GAPS, S_SPS_FMO,
@@ -885,16 +947,21 @@ module h264_parse #(
     end
 
     // Whether this state reads the window, and so takes two phases.
-    wire reads = (st_q == S_RESW) ? cav_reads : (rt != RT_NONE);
+    // `resw_q` is `st_q == S_RESW` kept as a register of its own, because
+    // what depends on it -- the CAVLC block's every enable -- is wide.
+    reg  resw_q;
+    wire reads = resw_q ? cav_reads : (rt != RT_NONE);
     // S_DROP needs nothing, and goes on its own: `drop` is then a decode of
     // the state and nothing else, because it reaches the whole bit reader.
+    // A second phase needs only the output slot (the window it decoded is
+    // still there: nothing consumed it); a state that reads nothing needs
+    // the slot, and `more_rbsp_data()` where it asks.
     wire go = (st_q == S_DROP) ||
-              (ofree && (!need_win || win_ok) && (!need_more || more_ok) && (!reads || ph_q) &&
-               !(st_q == S_RESW && cav_hold));
+              (ofree && (ph_q ? !(cons_cav_q && cav_hold) : (!reads && (!need_more || more_ok))));
     // The first phase of a reading state: the window is there to decode.
     wire latch = reads && !ph_q && win_ok;
-    assign cav_go = go && (st_q == S_RESW);
-    assign cav_latch = latch && (st_q == S_RESW);
+    assign cav_go = resw_q && ofree && (ph_q ? !cav_hold : !cav_reads);
+    assign cav_latch = latch && resw_q;
     assign cav_start = go && (st_q == S_RES2);
     assign lb_re = go && (st_q == S_MB_START) && (mby_q < a_h);
     assign lb_we = go && (st_q == S_MB_END);
@@ -905,7 +972,7 @@ module h264_parse #(
     // which `cav_dlen` carries.
     wire [5:0] want_c = (rt == RT_UE) ? (ue_long_c ? 6'd0 : uelen_c) :
                         (st_q == S_IPRED) ? (win[31] ? 6'd1 : 6'd4) :
-                        (st_q == S_LONG1) ? (lz_c + 6'd1) :
+                        (st_q == S_LONG1) ? lz_c :
                         (rt == RT_U || rt == RT_SPEC) ? rn : 6'd0;
     reg  [5:0] want_q;
     // A NAL unit that ends before its syntax does: decided in the first
@@ -948,6 +1015,7 @@ module h264_parse #(
             // A failure can land between a state's two phases; the next
             // state must start at its first.
             ph_q         <= 1'b0;
+            resw_q       <= 1'b0;
         end
     endtask
 
@@ -1026,10 +1094,12 @@ module h264_parse #(
             long_val_q <= 32'd0;
             long_sev_q <= 32'd0;
             long_n_q <= 5'd0;
+            long_n1_q <= 6'd0;
             lz <= 6'd0; ue_long <= 1'b0; uev <= 32'd0;
             sev <= 32'd0; uval <= 32'd0; w31_q <= 1'b0; wrem_q <= 3'd0; ph_q <= 1'b0;
-            want_q <= 6'd0; cons_cav_q <= 1'b0;
-            rq_cls <= 3'd0; rq_kind <= 2'd0; rq_cat <= 4'd0; rq_blk <= 4'd0;
+            want_q <= 6'd0; cons_cav_q <= 1'b0; resw_q <= 1'b0; mpred_q <= 4'd2;
+            long_p1_q <= 32'd0;
+            rq_nc <= 5'd0; rq_dc <= 1'b0; rq_kind <= 2'd0; rq_cat <= 4'd0; rq_blk <= 4'd0;
             s_prof <= 8'd0; s_lvl <= 8'd0; s_id <= 5'd0; s_cf <= 2'd1;
             s_bdy <= 3'd0; s_bdc <= 3'd0; s_scal <= 1'b0; s_bad <= 1'b0;
             s_lmfn <= 5'd4; s_poct <= 2'd0; s_lmpoc <= 5'd0; s_dpoaz <= 1'b0;
@@ -1091,6 +1161,9 @@ module h264_parse #(
                 sev     <= sev_c;
                 uval    <= uval_c;
                 w31_q   <= win[31];
+                // The neighbours' modes are settled by the first phase: the
+                // block before wrote its mode on its own second phase.
+                mpred_q <= mpred;
                 want_q  <= want_c;
                 cons_cav_q <= (st_q == S_RESW);
                 wrem_q  <= win[30:28];
@@ -1131,13 +1204,18 @@ module h264_parse #(
                         fail(E_SYNTAX, addr_q);
                     end else begin
                         long_n_q <= lz[4:0];
+                        long_n1_q <= lz + 6'd1;
                         st_q <= S_LONG2;
                     end
                 end
                 S_LONG2: begin
+                    long_p1_q <= long_p1;
+                    st_q      <= S_LONG3;
+                end
+                S_LONG3: begin
                     // codeNum, and the se(v) of it, from codeNum + 1.
-                    long_val_q <= long_p1 - 32'd1;
-                    long_sev_q <= long_p1[0] ? (32'd0 - {1'b0, long_p1[31:1]}) : {1'b0, long_p1[31:1]};
+                    long_val_q <= long_p1_q - 32'd1;
+                    long_sev_q <= long_p1_q[0] ? (32'd0 - {1'b0, long_p1_q[31:1]}) : {1'b0, long_p1_q[31:1]};
                     long_ok_q  <= 1'b1;
                     st_q       <= ret_q;
                 end
@@ -1880,7 +1958,8 @@ module h264_parse #(
                     else if (r_coded) begin
                         // The nC walk is long: latch its answer, and start
                         // the block from registers a cycle later.
-                        rq_cls  <= r_cls;
+                        rq_nc   <= r_nc;
+                        rq_dc   <= (r_cls == 3'd4);
                         rq_kind <= r_kind;
                         rq_cat  <= r_cat;
                         rq_blk  <= r_blk;
@@ -1888,8 +1967,10 @@ module h264_parse #(
                     end else
                         res_q <= res_q + 5'd1;
                 end
-                S_RES2:
-                    st_q <= S_RESW;
+                S_RES2: begin
+                    st_q   <= S_RESW;
+                    resw_q <= 1'b1;
+                end
                 S_RESW: begin
                     if (cav_tok_we && !cav_err)
                         emit(cav_tok[31:24], cav_tok[23:0]);
@@ -1897,13 +1978,14 @@ module h264_parse #(
                         fail(E_SYNTAX, addr_q);
                     else if (cav_done) begin
                         if (res_q >= 5'd1 && res_q <= 5'd16)
-                            tcy_v <= put5x16(tcy_v, lr, cav_tc);
+                            tcy_v <= put5x16(tcy_v, rr, cav_tc);
                         else if (res_q >= 5'd19 && res_q <= 5'd22)
                             tcb_v <= put5x4(tcb_v, cidx, cav_tc);
                         else if (res_q >= 5'd23)
                             tcr_v <= put5x4(tcr_v, cidx, cav_tc);
-                        res_q <= res_q + 5'd1;
-                        st_q  <= S_RES;
+                        res_q  <= res_q + 5'd1;
+                        st_q   <= S_RES;
+                        resw_q <= 1'b0;
                     end
                 end
                 default:

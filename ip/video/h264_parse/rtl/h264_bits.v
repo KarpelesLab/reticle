@@ -161,7 +161,28 @@ module h264_bits (
 
     // The rotator: the next ring as seen from the next `rd`. Past the bits
     // it holds are the slots consumed before, which are zeros.
-    wire [63:0] rot  = (ring_n << rd_n) | ((rd_n == 6'd0) ? 64'd0 : (ring_n >> (7'd64 - {1'b0, rd_n})));
+    // The ring the window is taken from has the new byte in it but not
+    // this cycle's zeroing: the bytes zeroed are the ones the read pointer
+    // has just passed, which are more than 32 bits behind it, so they are
+    // not in the window, and leaving them out keeps the zeroing off the
+    // path from `consume` to the window.
+    reg [63:0] ring_w;
+    always @* begin
+        ring_w = drop ? 64'd0 : ring_q;
+        if (keep) begin
+            case (drop ? 3'd0 : wr_q)
+                3'd0: ring_w[63:56] = in_byte;
+                3'd1: ring_w[55:48] = in_byte;
+                3'd2: ring_w[47:40] = in_byte;
+                3'd3: ring_w[39:32] = in_byte;
+                3'd4: ring_w[31:24] = in_byte;
+                3'd5: ring_w[23:16] = in_byte;
+                3'd6: ring_w[15:8]  = in_byte;
+                default: ring_w[7:0] = in_byte;
+            endcase
+        end
+    end
+    wire [63:0] rot  = (ring_w << rd_n) | ((rd_n == 6'd0) ? 64'd0 : (ring_w >> (7'd64 - {1'b0, rd_n})));
     reg  [31:0] win_q;
     assign win = win_q;
     assign win_ok  = (avail_q >= 7'd32) || end_q;

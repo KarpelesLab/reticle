@@ -93,7 +93,6 @@ module h264_cavlc (
     reg [1:0]  d_t1;
     reg [2:0]  d_signs;
     reg        d_bad;
-    reg [2:0]  d_sl;
     reg        d_tzv;
     reg [3:0]  d_tz;
     reg        d_rbv;
@@ -216,7 +215,7 @@ module h264_cavlc (
         end
     endfunction
     wire [5:0] lz = clz32(win);
-    wire [31:0] after_pre = win << (lz[4:0] + 5'd1);
+    wire [31:0] after_lz  = win << lz[4:0];
     // A level is decoded in two latched steps: the prefix and the 13 bits
     // after it first, then the suffix and levelCode from those.
     reg        lvl_b;
@@ -240,7 +239,6 @@ module h264_cavlc (
     // levelCode >= 6 << (sl - 1): compared on levelCode, with no adder.
     wire [2:0]  sl1   = (sl_q == 3'd0) ? 3'd1 : sl_q;
     wire [14:0] thr2  = 15'd6 << (sl1 - 3'd1);
-    wire [2:0]  sl2   = (lcode >= thr2 && sl1 < 3'd6) ? sl1 + 3'd1 : sl1;
     // The level from the latched levelCode: (c + 2) >> 1 for an even code
     // and (-c - 1) >> 1, which is ~(c >> 1), for an odd one.
     reg  [14:0] d_lcode;
@@ -262,7 +260,7 @@ module h264_cavlc (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             d_ctv <= 1'b0; d_tc <= 5'd0; d_t1 <= 2'd0; d_signs <= 3'd0;
-            d_bad <= 1'b0; d_lcode <= 15'd0; d_sl <= 3'd0;
+            d_bad <= 1'b0; d_lcode <= 15'd0;
             lvl_b <= 1'b0; d_pre <= 6'd0; d_after <= 13'd0;
             d_tzv <= 1'b0; d_tz <= 4'd0; d_rbv <= 1'b0; d_rb <= 4'd0;
             d_len <= 6'd0;
@@ -271,7 +269,6 @@ module h264_cavlc (
         end else if (lvl_b) begin
             d_bad   <= prefix_bad;
             d_lcode <= lcode;
-            d_sl    <= sl2;
             d_len   <= lvl_len;
             lvl_b   <= 1'b0;
         end else if (latch) begin
@@ -280,7 +277,7 @@ module h264_cavlc (
             d_t1    <= ct_t1;
             d_signs <= signs;
             d_pre   <= lz;
-            d_after <= after_pre[31:19];
+            d_after <= after_lz[30:18];
             lvl_b   <= (st_q == C_LVL);
             d_tzv   <= tz_valid;
             d_tz    <= tz_val;
@@ -312,6 +309,18 @@ module h264_cavlc (
         end else if (abort) begin
             st_q <= C_IDLE;
         end else begin
+            // The levels are written whenever their state is current, not
+            // only on `go`: a write before the decode is in is of a level
+            // that is written again before `i_q` moves, and the 256 bits'
+            // enables are then a decode of the state and not of `go`,
+            // which was this block's longest path by its fan-out.
+            if (st_q == C_TOK) begin
+                lv_v[0 +: 16]  <= d_signs[2] ? 16'hFFFF : 16'd1;
+                lv_v[16 +: 16] <= d_signs[1] ? 16'hFFFF : 16'd1;
+                lv_v[32 +: 16] <= d_signs[0] ? 16'hFFFF : 16'd1;
+            end
+            if (st_q == C_LVL)
+                lv_v <= put16x16(lv_v, i_q[3:0], level);
             case (st_q)
             C_IDLE:
                 if (start) begin
@@ -330,9 +339,6 @@ module h264_cavlc (
                         t1_q <= d_t1;
                         i_q  <= {3'd0, d_t1};
                         sl_q <= (d_tc > 5'd10 && d_t1 != 2'd3) ? 3'd1 : 3'd0;
-                        lv_v[0 +: 16] <= d_signs[2] ? 16'hFFFF : 16'd1;
-                        lv_v[16 +: 16] <= d_signs[1] ? 16'hFFFF : 16'd1;
-                        lv_v[32 +: 16] <= d_signs[0] ? 16'hFFFF : 16'd1;
                         if (d_tc == 5'd0)
                             st_q <= C_IDLE;
                         else if ({3'd0, d_t1} == d_tc)
@@ -346,8 +352,7 @@ module h264_cavlc (
                     if (d_bad) begin
                         st_q <= C_IDLE;
                     end else begin
-                        lv_v <= put16x16(lv_v, i_q[3:0], level);
-                        sl_q <= d_sl;
+                        sl_q <= (d_lcode >= thr2 && sl1 < 3'd6) ? sl1 + 3'd1 : sl1;
                         i_q  <= i_q + 5'd1;
                         if (i_q + 5'd1 == tc_q)
                             st_q <= C_TZ;

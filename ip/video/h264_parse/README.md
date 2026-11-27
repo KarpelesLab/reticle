@@ -198,30 +198,24 @@ header counts them).
 
 ## Timing
 
-**About 10 ns routed, at speed grade 2, and which side of 10 depends on
-the placement**, on `xc7a100t-fgg484` (the target XC7A100T-2FGG484I's own
-device file): `reticle fpga --device xc7a100t-fgg484 --timing-driven
---bitstream`, a 10 ns clock and the 47 ports on banks 34 and 35. The
-committed RTL, measured by Reticle's delay model fitted to Vivado's (not
-by Vivado, and not on a part):
+**9.10 to 9.37 ns routed at speed grade 2, on all three placement seeds
+tried**, on `xc7a100t-fgg484` (the target XC7A100T-2FGG484I's own device
+file): `reticle fpga --device xc7a100t-fgg484 --timing-driven --bitstream`,
+a 10 ns clock and the 47 ports on banks 34 and 35. Measured by Reticle's
+delay model fitted to Vivado's -- not by Vivado, and not on a part:
 
-| `--place-seed` | routed |
-|---|---|
-| 1 (the default) | 10.29 ns |
-| 2 | 10.55 ns |
-| 3 | **9.91 ns** |
+| `--place-seed` | routed | bitstream decoded back |
+|---|---|---|
+| 1 (the default) | **9.37 ns** | 486 476 bits, none unexplained |
+| 2 | **9.10 ns** | 471 432 bits, none unexplained |
+| 3 | **9.12 ns** | 470 688 bits, none unexplained |
 
-So 100 MHz closes with seed 3 and misses by up to half a nanosecond
-without it. The latest path of the default build runs from the state
-register through the decode of `go` to the enables of `h264_cavlc`'s
-registers, with three long hops in it: placement, not depth. The RTL one
-change before the committed one (the `MB_TYPE` prediction bits of P_8x8,
-above) routed at 9.53 ns with seed 1, which is the same spread seen from
-the other side. Every bitstream of these decodes back completely -- the
-seed-3 one is 392 608 bits, none unexplained, and the interconnect they
-select is exactly what the router chose.
+and in each, the interconnect the bits select is exactly what the router
+chose. The latest path of all three is now the fixed-length read of a
+header field: the state register, the field's width, the shift of the
+window by it, into `uval`.
 
-It took six rounds, each found by reading the latest path the router
+It took eight rounds, each found by reading the latest path the router
 reported, and the path to the answer is the useful part:
 
 | round | change | routed |
@@ -231,23 +225,33 @@ reported, and the path to the answer is the useful part:
 | 3 | leading zeros as a tree, not a 32-step priority chain; a CAVLC level in three steps; bytes zeroed as they are consumed instead of a mask on the window | 12.6 ns |
 | 4 | `consume` latched with the decode, so it is a function of registers and the output slot only | 12.9 ns |
 | 5 | a read past a NAL unit's end flagged by the bit reader and reported a state later, instead of compared before consuming | 11.3 ns |
-| 6 | ue(v) by selecting one of sixteen fixed fields rather than shifting; se(v) from codeNum + 1 at 17 bits, the long path's values made in its own state; the nC walk latched a cycle before a block starts | **9.53 ns** (seed 1; the committed RTL: 9.9 to 10.6 by seed) |
+| 6 | ue(v) by selecting one of sixteen fixed fields rather than shifting; se(v) from codeNum + 1 at 17 bits; the nC walk latched a cycle before a block starts | 9.53 ns at seed 1, but 9.9 to 10.6 by seed one commit later |
+| 7 | `S_RESW` kept as a register of its own (`resw_q`), and the CAVLC block's `go` made of it, the phase and the output slot; a second phase's `go` needs nothing else; the 256 bits of levels written whenever their state is current, so their enables no longer hang on `go` | 9.93 / 10.64 / 10.07 ns |
+| 8 | ue(v) and se(v) worked out for every code length in parallel with the leading-zero count, which then only selects; the window rotated from the ring before this cycle's zeroing; the predicted intra mode latched in the first phase; the long Exp-Golomb path's arithmetic in a third state (`S_LONG3`), reading codeNum + 1 whole; the bits after a level's prefix by a shift without an adder; suffixLength updated from the latched levelCode; the residual's neighbour lookup on its own block index; nC latched and its class worked out as the block starts | **9.37 / 9.10 / 9.12 ns** |
 
 Round 4 is not a regression worth worrying about: the path it removed was
-replaced by the next one down, which round 5 then cut. Round 1's path was
-the window rotator, the Exp-Golomb decode, the se(v) adder and the state
-machine's range checks all in one cycle.
+replaced by the next one down, which round 5 then cut. Round 6's number
+was one seed, and the next commit's three seeds showed how far that is
+from a margin: a design within a quarter of a nanosecond of the clock
+moves across it with the placement. Rounds 7 and 8 were judged on three
+seeds each.
 
-That doubled and tripled the cycles a symbol — the throughput table above
-is the final design — and it was cheap, because the one-cycle design was
+The cycles a symbol went from one to two, and three for a level, at
+rounds 2 and 3; rounds 4 to 8 added none, except a third state on the
+long Exp-Golomb path (codes over 31 bits, which no libx264 stream here
+has): the 720p stream is 745 014 cycles after round 8 against 745 080
+before it, and the six committed corpora are the same to the cycle but
+for `pcm`, one more. That was cheap, because the one-cycle design was
 nine times inside the budget on the streams 720p30 actually sends.
 
 ## Resources
 
-On `xc7a100t-fgg484`, from the same build (`--report`): **6 638 LUTs**
-(10.5 % of the part's 63 400), **1 929 flip-flops** (1 885 `FDCE`, 44
-`FDPE`), 194 `CARRY4`, 221 `MUXF7` and 87 `MUXF8`, **3 `RAMB36E1` and 1
-`RAMB18E1`**, no DSP. Mapped logic depth 12.
+On `xc7a100t-fgg484`, from the seed-1 build (`--report`): **7 827 LUTs**
+(12.3 % of the part's 63 400), **1 971 flip-flops** (1 926 `FDCE`, 45
+`FDPE`), 332 `CARRY4`, 380 `MUXF7` and 154 `MUXF8`, **3 `RAMB36E1` and 1
+`RAMB18E1`**, no DSP. Mapped logic depth 10. Round 8 cost about 1 200
+lookup tables, nearly all of it the sixteen parallel Exp-Golomb
+subtractors and negators and the duplicated neighbour lookup.
 
 The block RAMs are the line buffer (one 57-bit word per macroblock column,
 128 columns), the PPS store (256 x 43) and the SPS store (32 x 95). The
@@ -274,7 +278,4 @@ another decoder.
   4:2:2 and 4:4:4, high bit depth, scaling matrices.
 - `level_prefix` 17 to 19, which a High profile stream at very low QP may
   use: the window is 32 bits and the code is up to 36.
-- Timing has no margin: 9.9 to 10.6 ns by placement seed. The next cut
-  is the fan-out of `go` into `h264_cavlc`'s enables, which a registered
-  copy of the S_RESW decode would take off the state register's path.
 - Nothing here has run on a part.
