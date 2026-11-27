@@ -199,9 +199,16 @@ pub(crate) fn shifter_offset(m: &Module, offset: ExprId) -> bool {
     }
     match &m.expr(e).kind {
         ExprKind::Net(_) => true,
-        ExprKind::Concat(parts) => parts
-            .iter()
-            .all(|p| matches!(m.expr(*p).kind, ExprKind::Net(_) | ExprKind::Const(_))),
+        // Whatever is above them, constant low bits are a stride the shifter
+        // sees: `IFACE[{j, 3'b000} +: 8]` keeps the netlist it had.
+        ExprKind::Concat(parts) => {
+            parts
+                .last()
+                .is_some_and(|p| matches!(m.expr(*p).kind, ExprKind::Const(_)))
+                || parts
+                    .iter()
+                    .all(|p| matches!(m.expr(*p).kind, ExprKind::Net(_) | ExprKind::Const(_)))
+        }
         _ => strided_index(m, offset).is_some(),
     }
 }

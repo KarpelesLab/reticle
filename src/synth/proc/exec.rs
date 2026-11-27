@@ -866,6 +866,32 @@ impl<'a> Exec<'a> {
                 return Ok(false);
             }
         }
+        // `r[i +: P]` at a plain `i`: each bit's two shifts are by `i + k`,
+        // which the mapper decodes well enough, and the blocks built on that
+        // (the USB cores among them) keep the netlist they had. Only a place
+        // that is arithmetic on its indices is enumerated.
+        let a_net = |m: &Module, e: ExprId| -> bool {
+            let e = match m.expr(e).kind {
+                ExprKind::Resize {
+                    expr,
+                    signed: false,
+                    ..
+                } => expr,
+                _ => e,
+            };
+            matches!(m.expr(e).kind, ExprKind::Net(_))
+        };
+        let plain = |m: &Module, e: ExprId| -> bool {
+            a_net(m, e)
+                || matches!(
+                    &m.expr(e).kind,
+                    ExprKind::Binary { op: BinaryOp::Add, lhs, rhs }
+                        if m.expr(*rhs).as_const().is_some() && a_net(m, *lhs)
+                )
+        };
+        if writes.iter().any(|(place, _)| plain(self.m, *place)) {
+            return Ok(false);
+        }
         self.assign_bits_by_value(net, &writes, kind, span)
     }
 

@@ -2872,18 +2872,18 @@ exactly what this table is for.
 | `mjpeg_enc` | `jpeg_fdct` | (defaults) | LUT6 | 30 x dff, 1397 x lut, 1 x memory 64x13, 1 x memrd, 1 x memwr | 12 |
 | `mjpeg_enc` | `jpeg_fdct` | (defaults) | iCE40 HX1K | 344 x SB_CARRY, 490 x SB_DFFER, 1 x SB_GB, 26 x SB_IO, 1648 x SB_LUT4, 1 x SB_RAM40_4K | 10 |
 | `mjpeg_enc` | `jpeg_fdct` | (defaults) | ECP5 45F | 189 x CCU2C, 1 x DCCA, 1 x DP16KD, 1423 x LUT4, 490 x TRELLIS_FF, 26 x TRELLIS_IO | 10 |
-| `mjpeg_enc` | `jpeg_quant` | (defaults) | LUT4 | 5 x dff, 314 x lut, 1 x memory 64x12, 1 x memory 64x8, 2 x memrd, 2 x memwr | 18 |
+| `mjpeg_enc` | `jpeg_quant` | (defaults) | LUT4 | 5 x dff, 296 x lut, 1 x memory 64x12, 1 x memory 64x8, 2 x memrd, 2 x memwr | 18 |
 | `mjpeg_enc` | `jpeg_quant` | (defaults) | LUT6 | 5 x dff, 159 x lut, 1 x memory 64x12, 1 x memory 64x8, 2 x memrd, 2 x memwr | 14 |
-| `mjpeg_enc` | `jpeg_quant` | (defaults) | iCE40 HX1K | 40 x SB_CARRY, 38 x SB_DFFER, 1 x SB_GB, 45 x SB_IO, 321 x SB_LUT4, 2 x SB_RAM40_4K | 12 |
-| `mjpeg_enc` | `jpeg_quant` | (defaults) | ECP5 45F | 25 x CCU2C, 1 x DCCA, 2 x DP16KD, 304 x LUT4, 38 x TRELLIS_FF, 45 x TRELLIS_IO | 10 |
+| `mjpeg_enc` | `jpeg_quant` | (defaults) | iCE40 HX1K | 40 x SB_CARRY, 38 x SB_DFFER, 1 x SB_GB, 45 x SB_IO, 315 x SB_LUT4, 2 x SB_RAM40_4K | 11 |
+| `mjpeg_enc` | `jpeg_quant` | (defaults) | ECP5 45F | 25 x CCU2C, 1 x DCCA, 2 x DP16KD, 287 x LUT4, 38 x TRELLIS_FF, 45 x TRELLIS_IO | 10 |
 | `mjpeg_enc` | `jpeg_entropy` | (defaults) | LUT4 | 17 x dff, 685 x lut, 1 x memory 512x21, 1 x memrd, 1 x memwr | 14 |
 | `mjpeg_enc` | `jpeg_entropy` | (defaults) | LUT6 | 17 x dff, 548 x lut, 1 x memory 512x21, 1 x memrd, 1 x memwr | 13 |
 | `mjpeg_enc` | `jpeg_entropy` | (defaults) | iCE40 HX1K | 45 x SB_CARRY, 115 x SB_DFFER, 1 x SB_GB, 59 x SB_IO, 728 x SB_LUT4, 3 x SB_RAM40_4K | 15 |
 | `mjpeg_enc` | `jpeg_entropy` | (defaults) | ECP5 45F | 31 x CCU2C, 1 x DCCA, 3 x DP16KD, 715 x LUT4, 115 x TRELLIS_FF, 59 x TRELLIS_IO | 13 |
-| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | LUT4 | 87 x dff, 3660 x lut, 1 x memory 2048x8, 1 x memory 512x21, 1 x memory 64x12, 1 x memory 64x13, 1 x memory 64x8, 5 x memrd, 5 x memwr | 18 |
-| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | LUT6 | 87 x dff, 2881 x lut, 1 x memory 2048x8, 1 x memory 512x21, 1 x memory 64x12, 1 x memory 64x13, 1 x memory 64x8, 5 x memrd, 5 x memwr | 18 |
-| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | iCE40 HX1K | 672 x SB_CARRY, 2 x SB_DFFE, 880 x SB_DFFER, 2 x SB_DFFES, 4 x SB_DFFR, 1 x SB_GB, 43 x SB_IO, 3473 x SB_LUT4, 10 x SB_RAM40_4K | 19 |
-| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | ECP5 45F | 397 x CCU2C, 1 x DCCA, 7 x DP16KD, 3042 x LUT4, 886 x TRELLIS_FF, 43 x TRELLIS_IO | 14 |
+| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | LUT4 | 87 x dff, 3642 x lut, 1 x memory 2048x8, 1 x memory 512x21, 1 x memory 64x12, 1 x memory 64x13, 1 x memory 64x8, 5 x memrd, 5 x memwr | 18 |
+| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | LUT6 | 87 x dff, 2880 x lut, 1 x memory 2048x8, 1 x memory 512x21, 1 x memory 64x12, 1 x memory 64x13, 1 x memory 64x8, 5 x memrd, 5 x memwr | 18 |
+| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | iCE40 HX1K | 672 x SB_CARRY, 2 x SB_DFFE, 880 x SB_DFFER, 2 x SB_DFFES, 4 x SB_DFFR, 1 x SB_GB, 43 x SB_IO, 3467 x SB_LUT4, 10 x SB_RAM40_4K | 19 |
+| `mjpeg_enc` | `mjpeg_enc` | WIDTH=640, HEIGHT=480 | ECP5 45F | 397 x CCU2C, 1 x DCCA, 7 x DP16KD, 3025 x LUT4, 886 x TRELLIS_FF, 43 x TRELLIS_IO | 14 |
 | `adpcm_ima` | `adpcm_ima_enc` | (defaults) | LUT4 | 10 x dff, 804 x lut | 15 |
 | `adpcm_ima` | `adpcm_ima_enc` | (defaults) | LUT6 | 10 x dff, 640 x lut | 12 |
 | `adpcm_ima` | `adpcm_ima_enc` | (defaults) | iCE40 HX1K | 58 x SB_CARRY, 69 x SB_DFFER, 12 x SB_DFFR, 3 x SB_DFFS, 1 x SB_GB, 73 x SB_IO, 761 x SB_LUT4 | 14 |

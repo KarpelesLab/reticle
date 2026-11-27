@@ -178,6 +178,35 @@ fn simulate(files: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+/// **The reads are proved, where they stay in range.** `reticle synth --verify`
+/// proves the synthesised netlist against the lowering before it, which still
+/// holds the selects as selects, so for a read it is an independent answer;
+/// within range, because a select past the end reads `x` there, a free value,
+/// and a netlist's zeros differ from it (as the shifter's did). For a write the
+/// lowering is where the change is, so this says nothing of writes; the
+/// simulation below is what checks those. Would catch a slice taken at the
+/// wrong place for any index value, which the simulation only samples.
+#[test]
+fn the_reads_are_proved_where_they_stay_in_range() {
+    let dir = scratch("proved");
+    let src = dir.join("reads.v");
+    std::fs::write(
+        &src,
+        "module reads (input wire [5:0] i, input wire [1:0] r, input wire [1:0] w,\n\
+         input wire [511:0] s, output wire [7:0] y, output wire [7:0] z, output wire [31:0] u);\n\
+         assign y = s[8 * (63 - i) +: 8];\n  assign z = s[8 * i + 7 -: 8];\n\
+         assign u = s[128 * r + 32 * w +: 32];\nendmodule\n",
+    )
+    .unwrap();
+    let out = reticle()
+        .args(["synth", "--verify", "--report"])
+        .arg(&src)
+        .output()
+        .expect("failed to run the reticle binary");
+    let log = String::from_utf8_lossy(&out.stderr);
+    assert!(log.contains("synthesis of reads: EQUIVALENT"), "{log}");
+}
+
 /// **Each select and write at a computed place is a multiplexer, and right.**
 #[test]
 fn a_place_computed_from_narrow_indices_is_a_multiplexer() {

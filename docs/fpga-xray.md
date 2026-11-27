@@ -3380,12 +3380,19 @@ Measured on `xc7a100t-ftg256`, before and after:
 | `v[8 * i + 8 +: 8] <= d`, a register | 3,349 | 16 |
 | `h264_deblock` as first written (`9c6ee118`) | 205,796 | 9,419 |
 
-For a read, the shapes before are left as they were: a plain index, a
-power-of-two stride, a non-power-of-two one, and a sum whose values repeat
-places build exactly what they did. For a write only the aligned one
-(`assign_aligned_part`, `r[x * 8 +: 8]`) is; any other run of one-bit
-writes at places that read eight bits or fewer, `r[i +: 4]` with a plain
-`i` among them, is now enumerated. `tests/fpga_computed_selects.rs` maps each
+The shapes before are left as they were, for a read and for a write: a
+plain index, an index above constant zero bits (`IFACE[{j, 3'b000} +: 8]`),
+a power-of-two stride, a non-power-of-two one, a sum whose values repeat
+places, and for a write `r[i +: P]` at a plain `i` and the aligned
+`r[x * 8 +: 8]` (`assign_aligned_part`) build exactly what they did. *The
+first version enumerated those too*, where its indices read eight bits or
+fewer: the gate's footprint table then moved for eleven blocks, the USB
+cores among them, some by a few lookup tables up and some down, with a
+level of depth gained or lost here and there — no gain worth changing
+netlists that have been on a board for, and their synthesis is checked by
+nothing independent of the lowering this changes. Narrowed to arithmetic
+places, the table moves for `jpeg_quant` and `mjpeg_enc` alone (314 to 296
+lookup tables at four inputs; the zig-zag order's read of `blk[nat]`). `tests/fpga_computed_selects.rs` maps each
 row above but the last and simulates the netlist against the source, the
 source through the simulator's own reading of the select. The last row is
 not a test: the deblocker's old source is in the history, not the tree.
