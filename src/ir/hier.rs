@@ -27,12 +27,17 @@
 //! | `In`    | anything else             | `assign <child port net> = <expression>` |
 //! | `Out`   | net, slice or concat      | `assign <connection> = <child port net>` |
 //! | `InOut` | a plain net of equal type | the two nets are merged                  |
+//! | `InOut` | a constant slice or bit of a net, as wide | the port is those bits of the parent's net |
 //!
 //! Merging keeps the parent's net, so a chain of direct connections through
 //! several levels collapses onto the top-level net and adds nothing. An
 //! output connected to an expression that is not an lvalue, and an inout
-//! that is not connected to a plain net, are errors: flattening cannot
-//! express them.
+//! that is not connected to a plain net or a constant slice of one, are
+//! errors: flattening cannot express them. *A slice was an error too* until
+//! an `IOBUF` instantiated on each bit of an inout vector, as Vivado takes
+//! it, met it: the child's reads of its port become reads of the slice and
+//! its assignments assignments to it, unless an assignment indexes it at a
+//! variable place or it is a clock or an event, which stay errors.
 //!
 //! Instances are left in place, under their hierarchical name, when they
 //! are unresolved (a black box the target flow supplies), when their target
@@ -61,7 +66,7 @@
 //! | `I0030` | The module to flatten, or an instance target, is not in the design |
 //! | `I0031` | The hierarchy is recursive and cannot be flattened                 |
 //! | `I0032` | An output port is connected to something that cannot be driven     |
-//! | `I0033` | An inout port is not connected to a plain net of the same type     |
+//! | `I0033` | An inout port is not connected to a plain net or a slice it can share |
 //! | `I0034` | An instance names a module nothing declares                         |
 //!
 //! # Black boxes and missing modules
@@ -95,7 +100,7 @@ use std::collections::{BTreeMap, HashSet};
 use super::Name;
 use super::arena::{Arena, Id};
 use super::attr::Attrs;
-use super::cell::CellKind;
+use super::cell::{CellId, CellKind};
 use super::design::{
     Assign, Design, Instance, InstanceId, MemoryId, Module, ModuleId, ModuleRef, NetId, PortDir,
 };
@@ -397,6 +402,9 @@ impl<'a> Flattener<'a> {
         // with the parent instead of getting a copy of their own.
         let mut net_map: Vec<Option<NetId>> = vec![None; child.nets.len()];
         let mut merged = vec![false; child.ports.len()];
+        // Inout ports that share bits of a wider parent net: (the child's
+        // port net, the lowest bit, the parent net's type).
+        let mut sliced: Vec<(NetId, u32, super::types::Type)> = Vec::new();
         for (i, port) in child.ports.iter().enumerate() {
             let Some(conn) = inst.connection(port.name.as_str()) else {
                 continue;
@@ -413,6 +421,13 @@ impl<'a> Flattener<'a> {
             if matches!(port.dir, PortDir::In | PortDir::InOut) && same_type && free {
                 net_map[port.net.index()] = parent;
                 merged[i] = true;
+            } else if port.dir == PortDir::InOut
+                && free
+                && let Some((net, lo)) = self.bits_of(conn, child, port.net)
+            {
+                net_map[port.net.index()] = Some(net);
+                merged[i] = true;
+                sliced.push((port.net, lo, self.flat.nets[net].ty.clone()));
             } else if port.dir == PortDir::InOut {
                 self.diags.push(
                     Diagnostic::error(format!(
@@ -427,8 +442,16 @@ impl<'a> Flattener<'a> {
             }
         }
 
+        // A private copy of the child, with the sliced ports moved onto the
+        // bits they share; that can add nets, which are copied with the rest.
+        let mut copy = child.clone();
+        for (port, lo, ty) in &sliced {
+            share_bits(&mut copy, *port, *lo, ty);
+        }
+        net_map.resize(copy.nets.len(), None);
+
         // Everything else is copied under the instance path.
-        for (id, net) in child.nets.iter() {
+        for (id, net) in copy.nets.iter() {
             if net_map[id.index()].is_some() {
                 continue;
             }
@@ -448,11 +471,10 @@ impl<'a> Flattener<'a> {
             self.flat.memories.push(copy);
         }
 
-        // Renumber a private copy of the child into the flattened module's
+        // Renumber the copy of the child into the flattened module's
         // id space, then move its contents over. Expressions are copied
         // wholesale, so a child id maps to `expr_base + id`.
         let expr_base = self.flat.exprs.len();
-        let mut copy = child.clone();
         copy.map_nets(|old| net_map.get(old.index()).copied().flatten().unwrap_or(old));
         copy.map_exprs(|old| ExprId::from_index(expr_base + old.index()));
         if mem_base > 0 {
@@ -536,6 +558,64 @@ impl<'a> Flattener<'a> {
             .collect()
     }
 
+    /// The parent net and lowest bit an inout port connected to `conn` can
+    /// share, when `conn` is a constant slice or bit of a net as wide as the
+    /// port and [`share_bits`] can move what the child does with the port
+    /// onto those bits: not an assignment through a variable index, and the
+    /// port no clock or event.
+    fn bits_of(&self, conn: ExprId, child: &Module, port: NetId) -> Option<(NetId, u32)> {
+        let width = child.nets.get(port)?.ty.width()?;
+        if child.nets[port].ty != super::types::Type::bits(width) {
+            return None;
+        }
+        let (net, lo, hi) = match &self.flat.exprs.get(conn)?.kind {
+            ExprKind::Slice { base, hi, lo } => (self.flat.exprs.get(*base)?.as_net()?, *lo, *hi),
+            ExprKind::Index { base, index } => {
+                let at = self.flat.exprs.get(*index)?.as_const()?.to_u64()?;
+                let at = u32::try_from(at).ok()?;
+                (self.flat.exprs.get(*base)?.as_net()?, at, at)
+            }
+            _ => return None,
+        };
+        let parent = self.flat.nets.get(net)?;
+        if !parent.ty.is_bits() || hi < lo || hi - lo + 1 != width || hi >= parent.ty.width()? {
+            return None;
+        }
+        let mut indexed = false;
+        let mut check = |lv: &Lvalue| {
+            let mut stack = vec![lv];
+            while let Some(lv) = stack.pop() {
+                match lv {
+                    Lvalue::Index { net, .. } if *net == port => indexed = true,
+                    Lvalue::Concat(parts) => stack.extend(parts.iter()),
+                    _ => {}
+                }
+            }
+        };
+        for assign in &child.assigns {
+            check(&assign.target);
+        }
+        let mut edge = false;
+        child.for_each_stmt(|stmt| match &stmt.kind {
+            StmtKind::Assign { target, .. } => check(target),
+            StmtKind::For { init, step, .. } => {
+                for (lv, _) in init.iter().chain(step.iter()) {
+                    check(lv);
+                }
+            }
+            StmtKind::Wait(super::process::WaitKind::Event(edges)) => {
+                edge |= edges.iter().any(|e| e.net == port);
+            }
+            _ => {}
+        });
+        for process in child.processes.values() {
+            if let super::process::ProcessKind::Sequential { clocks, resets } = &process.kind {
+                edge |= clocks.iter().chain(resets.iter()).any(|e| e.net == port);
+            }
+        }
+        (!indexed && !edge).then_some((net, lo))
+    }
+
     /// Records the instance path when [`FlattenOptions::annotate_paths`] is
     /// on.
     fn annotate(&self, attrs: &mut Attrs, path: &str) {
@@ -576,6 +656,91 @@ impl<'a> Flattener<'a> {
 /// The lvalue an instance connection denotes, if it denotes one: a net, a
 /// constant slice of one, or a concatenation of those. Nested slices are
 /// composed, so `%a[7:4][1:0]` becomes `%a[5:4]`.
+/// Makes every read and assignment of `port` in `module` one of the bits
+/// `lo ..` of a net of type `ty`, which `port` then becomes: the child of an
+/// inout connected to a slice, before its nets are mapped onto the parent's.
+/// A read `port` is `port[lo + w - 1 : lo]` of the wider net, an assignment
+/// to `port` or to `port[h:l]` one to those bits, and a cell driving `port`
+/// drives a net of its own assigned to them. `Flattener::bits_of` has
+/// checked that nothing else names `port`.
+fn share_bits(module: &mut Module, port: NetId, lo: u32, ty: &super::types::Type) {
+    let Some(width) = module.nets.get(port).and_then(|n| n.ty.width()) else {
+        return;
+    };
+    // A cell's output is a whole net: the cell drives a net of its own, and
+    // an assignment moves it onto the bits.
+    let drivers: Vec<CellId> = module
+        .cells
+        .iter()
+        .filter(|(_, cell)| cell.outputs.iter().any(|(_, n)| *n == port))
+        .map(|(id, _)| id)
+        .collect();
+    for cell in drivers {
+        let mut own = module.nets[port].clone();
+        own.name = Name::new(format!("{}$drive", own.name));
+        let span = own.span;
+        let ty = own.ty.clone();
+        let own = module.nets.push(own);
+        for (_, n) in &mut module.cells[cell].outputs {
+            if *n == port {
+                *n = own;
+            }
+        }
+        let value = module.add_expr(Expr::new(ExprKind::Net(own), ty, span));
+        module.assigns.push(Assign {
+            target: Lvalue::Net(port),
+            value,
+            delay: None,
+            attrs: Attrs::new(),
+            span,
+        });
+    }
+    let reads: Vec<ExprId> = module
+        .exprs
+        .iter()
+        .filter(|(_, e)| e.as_net() == Some(port))
+        .map(|(id, _)| id)
+        .collect();
+    for id in reads {
+        let span = module.exprs[id].span;
+        let base = module.add_expr(Expr::new(ExprKind::Net(port), ty.clone(), span));
+        module.exprs[id].kind = ExprKind::Slice {
+            base,
+            hi: lo + width - 1,
+            lo,
+        };
+    }
+    fn shift(lv: &mut Lvalue, port: NetId, lo: u32, width: u32) {
+        match lv {
+            Lvalue::Net(net) if *net == port => {
+                *lv = Lvalue::Slice {
+                    net: port,
+                    hi: lo + width - 1,
+                    lo,
+                };
+            }
+            Lvalue::Slice { net, hi, lo: low } if *net == port => {
+                *hi += lo;
+                *low += lo;
+            }
+            Lvalue::Concat(parts) => parts.iter_mut().for_each(|p| shift(p, port, lo, width)),
+            _ => {}
+        }
+    }
+    for assign in &mut module.assigns {
+        shift(&mut assign.target, port, lo, width);
+    }
+    module.for_each_stmt_mut(|stmt| match &mut stmt.kind {
+        StmtKind::Assign { target, .. } => shift(target, port, lo, width),
+        StmtKind::For { init, step, .. } => {
+            for (lv, _) in init.iter_mut().chain(step.iter_mut()) {
+                shift(lv, port, lo, width);
+            }
+        }
+        _ => {}
+    });
+}
+
 pub(crate) fn expr_to_lvalue(module: &Module, id: ExprId) -> Option<Lvalue> {
     match &module.exprs.get(id)?.kind {
         ExprKind::Net(net) => Some(Lvalue::Net(*net)),
@@ -1376,7 +1541,10 @@ mod tests {
         assert_eq!(merged.module(top).assigns.len(), 1);
         assert_valid(&merged);
 
-        // An inout connected to a slice cannot be merged.
+        // An inout connected to a slice of a net is that slice: what the
+        // child drives on its port it drives on those bits, and what it reads
+        // it reads from them. This was `I0033` until a design put an
+        // `IOBUF` on each bit of an inout vector, as Vivado takes it.
         let sliced = {
             let module = design.module_mut(top);
             let wide = module.nets.push(crate::ir::Net {
@@ -1394,11 +1562,109 @@ mod tests {
             ))
         };
         design.module_mut(top).instances[InstanceId::from_index(0)].connections[0].1 = sliced;
+        let mut by_slice = design.clone();
+        by_slice.flatten(top, &FlattenOptions::default()).unwrap();
+        let flat = by_slice.module(top);
+        let bus = flat.net_by_name("bus").unwrap();
+        assert_eq!(flat.net_by_name("u0.io"), None);
+        assert!(
+            flat.assigns.iter().any(|a| a.target
+                == Lvalue::Slice {
+                    net: bus,
+                    hi: 0,
+                    lo: 0
+                }),
+            "the pad's drive is not on `bus[0]`"
+        );
+        assert_valid(&by_slice);
+
+        // Anything else still cannot be merged: an inverted net has no bits
+        // to share.
+        let inverted = {
+            let module = design.module_mut(top);
+            let pin = module.net_by_name("pin").unwrap();
+            let base = module.add_expr(Expr::new(ExprKind::Net(pin), Type::bit(), span));
+            module.add_expr(Expr::new(
+                ExprKind::Unary {
+                    op: crate::ir::UnaryOp::Not,
+                    expr: base,
+                },
+                Type::bit(),
+                span,
+            ))
+        };
+        design.module_mut(top).instances[InstanceId::from_index(0)].connections[0].1 = inverted;
         let diags = design.flatten(top, &FlattenOptions::default()).unwrap_err();
         assert_eq!(
             diags.iter().filter_map(|d| d.code).collect::<Vec<_>>(),
             [BAD_INOUT]
         );
+    }
+
+    /// **A cell driving an inout port on a slice drives those bits**: the
+    /// `IOBUF` of the 7-series cell library, synthesised, is a `tristate`
+    /// cell whose output is the port. Its output becomes a net of its own,
+    /// assigned to the bits, and its read is the slice. Would catch the cell
+    /// left on the port, a one-bit cell driving the parent's two bits, and the
+    /// new net left out of the copy, which left it naming whatever parent net
+    /// had its number: both were seen, in the 7-series flow, on the way here,
+    /// and both fail validation.
+    #[test]
+    fn a_cell_driving_an_inout_on_a_slice_drives_those_bits() {
+        let span = span();
+        let mut design = Design::new();
+        let mut pad = ModuleBuilder::new("pad", span);
+        let io = pad.inout("io", Type::bit());
+        let o = pad.output("o", Type::bit());
+        let d = pad.input("d", Type::bit());
+        let en = pad.input("en", Type::bit());
+        let (dv, env, iov) = (pad.net(d), pad.net(en), pad.net(io));
+        pad.cell(
+            "tri",
+            CellKind::Tristate,
+            vec![(Name::new("a"), dv), (Name::new("en"), env)],
+            vec![(Name::new("y"), io)],
+        );
+        pad.assign(o, iov);
+        let pad_id = design.add_module(pad.finish());
+
+        let mut b = ModuleBuilder::new("top", span);
+        let bus = b.inout("bus", Type::bits(2));
+        let q = b.output("q", Type::bit());
+        let src = b.input("src", Type::bit());
+        let oe = b.input("oe", Type::bit());
+        let busv = b.net(bus);
+        let hi = b.slice(busv, 1, 1);
+        let (qv, srcv, oev) = (b.net(q), b.net(src), b.net(oe));
+        b.instance(
+            "u0",
+            ModuleRef::Resolved(pad_id),
+            vec![
+                (Name::new("io"), hi),
+                (Name::new("o"), qv),
+                (Name::new("d"), srcv),
+                (Name::new("en"), oev),
+            ],
+        );
+        let top = design.add_module(b.finish());
+        design.flatten(top, &FlattenOptions::default()).unwrap();
+        assert_valid(&design);
+        let flat = design.module(top);
+        let bus = flat.net_by_name("bus").unwrap();
+        let drive = flat.net_by_name("u0.io$drive").unwrap();
+        let cell = flat
+            .cells
+            .values()
+            .find(|c| c.kind == CellKind::Tristate)
+            .unwrap();
+        assert_eq!(cell.outputs[0].1, drive);
+        assert!(flat.assigns.iter().any(|a| a.target
+            == Lvalue::Slice {
+                net: bus,
+                hi: 1,
+                lo: 1
+            }
+            && flat.exprs[a.value].as_net() == Some(drive)));
     }
 
     #[test]

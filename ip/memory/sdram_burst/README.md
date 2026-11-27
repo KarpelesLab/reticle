@@ -360,7 +360,9 @@ so that it can be fixed rather than rediscovered:
    flattening: `I0033`, "connects inout port `IO` of module `IOBUF` to
    something that is not a net of the port's type". Each DQ bit is an
    inferred three-state buffer instead (`assign dq[i] = t ? 1'bz : o`),
-   which places, routes and keeps its IDELAYE2 on the pad.
+   which places, routes and keeps its IDELAYE2 on the pad. *Fixed in the
+   flow since (2026-11-27, `docs/ir.md`, "Flattening"); the inferred
+   buffers are kept.*
 2. **An ODDR into a buffer's T** (the OLOGIC's three-state register): "no
    path exists from the driver of `g[0].t` to `dq$io0.T[0]`: the
    architecture has no wire joining them". The enable is a fabric

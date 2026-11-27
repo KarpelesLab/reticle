@@ -312,6 +312,16 @@ Port connections become:
 | `in`    | anything else             | `assign <child port net> = <expression>` |
 | `out`   | net, slice or concat      | `assign <connection> = <child port net>` |
 | `inout` | a plain net of equal type | the two nets are merged                  |
+| `inout` | a constant slice or bit of a net, as wide | the port is those bits of the parent's net |
+
+An inout on a slice was `I0033` until the SDRAM controller instantiated an
+`IOBUF` on each bit of its data bus, as Vivado takes it (2026-11-27). The
+child's reads of the port become reads of the slice, its assignments
+assignments to it, and a cell that drives the port (the cell library's
+`IOBUF` is a `tristate` cell once synthesised) drives a net of its own,
+assigned to the slice. An assignment to the port at a variable index, or the
+port used as a clock or an event, still cannot be moved onto the slice and is
+still `I0033`.
 
 Merging keeps the parent's net, so a chain of direct connections collapses
 onto the top-level net and costs nothing. Instances stay in place, under
@@ -328,7 +338,7 @@ diagnostics are returned:
 | `I0030` | The module to flatten, or an instance target, is not in the design |
 | `I0031` | The hierarchy is recursive and cannot be flattened                 |
 | `I0032` | An output port is connected to something that cannot be driven     |
-| `I0033` | An inout port is not connected to a plain net of the same type     |
+| `I0033` | An inout port is not connected to a plain net or a slice it can share |
 
 ### Black boxes and missing modules
 
