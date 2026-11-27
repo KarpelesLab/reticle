@@ -7725,6 +7725,61 @@ impl Mapper<'_> {
         // put it — and a tri-state's data and enable are arbitrary
         // expressions (`bufif1 (bus, data, ~oe_n)`). Naming them here puts
         // the logic in an assignment, which is what LUT mapping consumes.
+        // An `ODDR` on the enable: the 7-series `OLOGIC` has that register,
+        // the `TFF` that makes `TQ` from `T1` and `T2`, but this flow builds
+        // an `ODDR` on its `OQ` path only, whose output reaches the pad's data
+        // and nothing else. Said here, before placing, with the ball, rather
+        // than by a router that finds no wire after it (`docs/fpga-xray.md`,
+        // "An `ODDR` into a buffer's enable").
+        if let Some((_, _, enables)) = &tristate {
+            // Through inversions, as an expression or as a `not` cell: a
+            // tri-state's enable is `~t` for `t ? 1'bz : d`.
+            let ddr_driver = |e: ExprId| -> Option<String> {
+                let mut e = e;
+                for _ in 0..4 {
+                    if let ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        expr: inner,
+                    } = module.exprs.get(e)?.kind
+                    {
+                        e = inner;
+                        continue;
+                    }
+                    let net = module.exprs.get(e)?.as_net()?;
+                    let cell = module
+                        .cells
+                        .values()
+                        .find(|cell| cell.outputs.iter().any(|(_, n)| *n == net))?;
+                    match &cell.kind {
+                        CellKind::Blackbox(p) if p.as_str() == "ODDR" => {
+                            return Some(cell.name.as_str().to_owned());
+                        }
+                        CellKind::Not => e = cell.input("a")?,
+                        _ => return None,
+                    }
+                }
+                None
+            };
+            if let Some(oddr) = enables.iter().find_map(|e| ddr_driver(*e)) {
+                let ball = pin
+                    .as_deref()
+                    .map_or_else(String::new, |p| format!(" (ball {p})"));
+                self.diags.push(
+                    Diagnostic::error(format!(
+                        "the three-state enable of port `{name}`{ball} is the output of the \
+                         `ODDR` `{oddr}`, which this flow cannot build"
+                    ))
+                    .with_span(span)
+                    .with_note(
+                        "the pad's `OLOGIC` has that register (its `TFF`, `TQ` from `T1` and \
+                         `T2`), but this flow places an `ODDR` only on the data path, whose \
+                         output reaches nothing but the pad's data: nothing would join it to \
+                         the enable",
+                    )
+                    .with_note("drive the enable from a flip-flop in the fabric instead"),
+                );
+            }
+        }
         let tristate = tristate.map(|(cells, data, enables)| {
             let drive = add_net(module, &format!("{name}$drive"), Type::bits(width), span);
             add_assign(module, drive, data, span);

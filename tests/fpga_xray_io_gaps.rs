@@ -81,6 +81,46 @@ fn an_iobuf_on_each_bit_of_an_inout_vector_maps() {
     assert_eq!(enables.len(), 2, "one enable for two buffers: {enables:?}");
 }
 
+/// **An `ODDR` on a buffer's three-state enable is refused before placing,
+/// with the port and the ball.** The `OLOGIC` has the register (its `TFF`),
+/// but this flow builds an `ODDR` on the data path only, and the build used to
+/// place, then fail in the router with "no wire joining them". Would catch the
+/// refusal lost through the `not` cell a tri-state's enable is made of, which
+/// is how it first failed to fire, and the ball left out. Would not catch an
+/// `ODDR` on the enable through anything other than inversions.
+#[test]
+fn an_oddr_on_a_three_state_enable_is_refused_with_its_ball() {
+    let source = "module top (input wire clk, input wire en, input wire d, output wire q,\n\
+                  inout wire pad);\n  wire t, o;\n\
+                  ODDR #(.DDR_CLK_EDGE(\"SAME_EDGE\"), .INIT(1'b1)) ot (\n\
+                  .Q(t), .C(clk), .CE(1'b1), .D1(~en), .D2(~en), .R(1'b0), .S(1'b0));\n\
+                  ODDR #(.DDR_CLK_EDGE(\"SAME_EDGE\"), .INIT(1'b0)) od (\n\
+                  .Q(o), .C(clk), .CE(1'b1), .D1(d), .D2(d), .R(1'b0), .S(1'b0));\n\
+                  assign pad = t ? 1'bz : o;\n  assign q = pad;\nendmodule\n";
+    let dir = scratch("oddr-enable");
+    let xdc = dir.join("pins.xdc");
+    std::fs::write(
+        &xdc,
+        "set_property -dict {PACKAGE_PIN D1 IOSTANDARD LVCMOS33} [get_ports pad]\n",
+    )
+    .unwrap();
+    let xdc = xdc.to_string_lossy().into_owned();
+    let (out, _) = fpga(
+        "oddr-enable-build",
+        source,
+        "xc7a100t-fgg484",
+        &["--constraints", &xdc],
+    );
+    let log = text(&out);
+    assert!(!out.status.success(), "{log}");
+    assert!(
+        log.contains(
+            "the three-state enable of port `pad` (ball D1) is the output of the `ODDR` `ot`"
+        ),
+        "{log}"
+    );
+}
+
 /// The Project X-Ray database, or `None` with a line saying what is missing:
 /// `RETICLE_CHIPDB`, then the pinned copy in the per-user cache, as
 /// `tests/fpga_xray_tristate.rs` looks.

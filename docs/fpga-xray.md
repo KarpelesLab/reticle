@@ -1195,6 +1195,27 @@ says anything.
   *both* halves' features on the one wire pair and lets the tile's own
   (already filtered) feature set keep the one it has.
 
+#### An `ODDR` into a buffer's enable (2026-11-27): refused, not built
+
+The SDRAM controller wanted its data bus's enable from an `ODDR`, as its
+data comes, and got "no path exists from the driver of `g[0].t` to
+`dq$io0.T[0]`: the architecture has no wire joining them" after placing.
+**What the fabric offers**, read from the database: every `OLOGIC` has a
+three-state path beside its data path, `IOI_OLOGIC<n>_T1 → <side>_OLOGIC<n>_TQ`
+(a pseudo pip through the site, `tile_type_RIOI3.json`) and
+`<side>_OLOGIC<n>_TQ → <side>_T<n>` to the pad's `T`, in a `_SING` tile too;
+`OSERDES.DATA_RATE_TQ.DDR` among the `OLOGIC`'s features is that path's
+register in DDR mode. So the part can do it. **What this flow builds**: an
+`ODDR` is a bel on the data path alone (`xray::iologic`, pin `q` on `OQ`),
+whose output reaches the pad's data and nothing else, so an `ODDR` on the
+enable has no site that joins it to the pad. Building it means a second
+register on the same `OLOGIC` site, sharing its clock and reset with the
+data path's `ODDR`, and features for the three-state register that no
+Vivado bitstream here has measured (`oserdes_tristate` measured an
+`OSERDESE2`'s, not an `ODDR`'s). Not done; the flow now says so while
+mapping, before placing, naming the port, the ball and the `ODDR`
+(`an_oddr_on_a_three_state_enable_is_refused_with_its_ball`).
+
 #### An `ODDR` on a `_SING` pad (2026-11-27)
 
 The SDRAM controller found that an `ODDR` on `F4` or `L6` (bank 35's

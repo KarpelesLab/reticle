@@ -367,6 +367,9 @@ so that it can be fixed rather than rediscovered:
    path exists from the driver of `g[0].t` to `dq$io0.T[0]`: the
    architecture has no wire joining them". The enable is a fabric
    register, one per pin, and the controller raises it a cycle early.
+   *Still not built (2026-11-27), but refused while mapping now, with the
+   port and the ball: `docs/fpga-xray.md`, "An `ODDR` into a buffer's
+   enable", says what the fabric has.*
 3. **An ODDR on the pad of a single-pad IO tile** (`IO_0` and `IO_25`
    balls; measured on E6, bank 35's `IO_0` in the FTG256): "no path exists from the
    driver of `sclk` to `sclk$io0.I[0]`", for a plain output as much as
